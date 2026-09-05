@@ -6,9 +6,93 @@
 проверки X.509 certificate/CA или физических TLS/mTLS probes. Существующие
 production-controls, binding, immutable packet и runtime не меняются.
 
+**Выбор 2026-09-05: Nginx, подтверждён пользователем.** Read-only `nginx -v/-V`
+на `lk-primary-147` показал `nginx/1.24.0 (Ubuntu)`, `--with-http_ssl_module` и
+`--with-http_v2_module`. Среди отдельно проверенных флагов отсутствуют
+`--with-control-api`, `--without-http_limit_req_module` и
+`--without-http_limit_conn_module`. Это build metadata, не аттестация работающего
+процесса и не security audit Ubuntu package. Конфиги, сертификаты и секреты не читались;
+reload/restart/upgrade не выполнялись. Выбирать Caddy больше не требуется.
+
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.
 [Редактируемая схема границ](assets/partner-game-membership-ingress-evidence.drawio).
+
+## Nginx 1.24: узкий capability preflight
+
+`scripts/partner_game_membership_nginx_preflight.mjs` экспортирует чистую функцию
+`preflightPartnerNginx124`. Нет CLI, shell, файлового/сетевого I/O, генерации конфига
+или вызова production verifier. Проверка не читает host самостоятельно.
+
+Вход — закрытый объект:
+
+- `buildMetadataBytes`: canonical JSON Buffer не более 4096 bytes с exact
+  `formatVersion: 1`, `kind: SANITIZED_NGINX_BUILD_CAPABILITIES`,
+  `version: 1.24.0`, `distribution: Ubuntu`, `inspectedFlags`, `presentFlags`;
+- `inspectedFlags` внутри artifact — в точном порядке все пять флагов из абзаца
+  выше: SSL, HTTP/2, control API, отключение request limit, отключение connection
+  limit. `presentFlags` — уникальное подмножество; неизвестная/неполная наблюдаемая
+  область отклоняется. Полный `nginx -V` с build paths/компиляторными аргументами не
+  включается в публичный artifact;
+- `expectedBuildMetadataSha256`: отдельный pin этих bytes, не доказательство их
+  происхождения; его нельзя превращать в host approval;
+- `controlsBytes`: exact checked-in production-controls Buffer;
+- `sidecarSources`: exact Buffers `core`, `node`, `settings` проверяются по трём
+  reviewed source SHA, зафиксированным в preflight. Даже совпавшие SHA не означают
+  наличие raw-request guard.
+
+Результат всегда `LOCAL_NGINX_124_CAPABILITY_CHECKED_NOT_ACTIVE`, `decision: BLOCKED`.
+`productionVerified`, `configGenerationAllowed`, `deployAuthorized` и
+`activationAuthorized` равны `false`. Каждый элемент routing/transport/request/
+response policy получает owner и `evidence: NOT_PROVEN`; owner обозначает будущую
+ответственность, а не выполненную проверку. Неизвестные input fields, чужая версия,
+source/control drift и попытки передать `PASS`, exec hook, reload receipt или config
+dump отклоняются. Отсутствие SSL, отключённые rate/concurrency modules и необычная
+patched 1.24 build с control API добавляют конкретные blockers.
+
+Три обязательных blocker не снимаются текущими inputs:
+
+1. `RAW_DUPLICATE_HEADERS_GUARD_UNPROVEN`: текущий Node-RED handler передаёт
+   нормализованные `req.headers`, а не проверенный набор `rawHeaders`. Unit-тест
+   дубликатов в core не доказывает поведение всей входной цепочки.
+2. `RAW_DUPLICATE_JSON_GUARD_UNPROVEN`: handler передаёт `msg.payload`, то есть уже
+   разобранное тело. Дубликаты JSON нужно отклонить до стандартного JSON parser;
+   Nginx core и HMAC над разобранным объектом эту проверку не заменяют.
+3. `EFFECTIVE_CONFIG_UNPROVABLE`: Nginx 1.24 не имеет используемого в новых версиях
+   Control API для in-memory config. `nginx -t/-T` не доказывает, что workers применили
+   эти файлы. См. [Nginx CLI](https://nginx.org/en/docs/switches.html) и
+   [Runtime control](https://docs.nginx.com/nginx/admin-guide/basic-functionality/runtime-control/).
+
+Preflight не закрывает ни один из 16 deploy gates. Следующая локальная реализация —
+проверяемый raw-request guard до Node-RED parser и закрытый Nginx generator после
+фиксации exact host/cert/CA/path inputs. Произвольные snippets/includes не принимаются;
+универсальный parser чужих Nginx configs сейчас не вводится.
+
+## Legacy Nginx: предлагаемый live evidence path
+
+Это проект процедуры, **не утверждённый operator и не разрешение на reload**:
+
+1. Fresh challenge и root-owned one-shot collector под общим deployment lock;
+   привязка host/boot, master PID/start time, executable, unit, listeners, exact `-p/-c`.
+2. Exact config/include/certificate closure до изменения; immutable reviewed candidate,
+   заранее проверенный backup/rollback и отсутствие чужих конфликтующих writers.
+3. Только отдельно согласованный `nginx -t`/controlled reload; затем доказанная новая
+   worker generation, отсутствие прежних workers и неизменный closure после reload.
+4. Физические SNI/Host/mTLS/routes/limits/CORS probes с внешней точки и отдельная
+   проверка direct sidecar. Повторный snapshot process/config должен исключить drift.
+5. Receipt связывает fresh challenge, source/config/probe digests, process generation,
+   vantage и collector identity. Подпись не заменяет причинную цепочку наблюдений.
+
+Без этой цепочки итог остаётся `EFFECTIVE_CONFIG_UNPROVABLE`; успешный exit reload или
+caller-supplied signed dump сам по себе недостаточен. Для 1.24 это доказательство
+контролируемого применения, не прямой memory dump. Если потребуется именно memory
+dump, upgrade/instrumentation — отдельный scope, сейчас он не согласован.
+
+У Nginx ошибки клиентского сертификата могут обрабатываться как внутренние коды
+`495/496` после parsing HTTP, а не исключительно TLS alert. Нынешняя generic fixture
+matrix намеренно не расширена до принятия любого HTTP 400: будущий Nginx-specific
+probe должен доказать отказ до upstream и положительный контроль того же пути.
+[Официальная семантика](https://nginx.org/en/docs/http/ngx_http_ssl_module.html#error_processing).
 
 ## Что проверяется сейчас
 
@@ -83,9 +167,10 @@ timeout или неоднозначный reset отклоняется. Даже
 
 ## Следующая реализация: решения по критичности
 
-1. **P0, владелец инфраструктуры:** выбрать ingress, версию и topology: exact host/SNI,
-   место TLS/mTLS termination, proxy chain, service/listeners, shared hostnames.
-   Синтетический путь Caddy в прежних тестах не является этим решением.
+1. **P0, владелец инфраструктуры:** Nginx выбран, build 1.24.0 наблюдался read-only.
+   Осталось закрепить topology: exact host/SNI, место TLS/mTLS termination, proxy
+   chain, service/listeners, shared hostnames. Старый Caddy path в synthetic fixture
+   остаётся только fixture, он не назначает production topology.
 2. **P0, инфраструктура + security:** определить доверенный read-only источник именно
    загруженной конфигурации и runtime generation. Одни файлы, `nginx -T`, `caddy adapt`
    или unit dump недостаточны. При отсутствии доказательства —
@@ -119,8 +204,16 @@ expiry, canonical encoding, размер, file ownership/modes, symlink/hardlink
 Физический TLS, Linux-host collector и production evidence: **NOT_RUN / NOT_IMPLEMENTED**.
 Не следует подменять эту отметку результатом unit-тестов или прошлым зелёным main CI.
 
-Локальная проверка 2026-09-05: Partner suite `131/131`, ESLint, TypeScript и inert
+Первый checkpoint `3e5965a` (до выбора Nginx): Partner suite `131/131`, ESLint, TypeScript и inert
 prod/dev build PASS (macOS, Node 22.13.1); независимые security и release/CI reviews
 не обнаружили P0–P2 для этого ограниченного scope. Новый diff ещё не проверен clean
 Linux exact-head CI. Drawio XML проходит structural validator; PNG export/visual QA
 не выполнены из-за ошибки установленного Electron helper, XML остаётся редактируемым.
+
+После выбора Nginx добавлены 12 capability/negative regressions в существующий suite:
+unknown/duplicate/incomplete metadata, disabled modules, source/control drift,
+непроверенные raw guards и запрет caller claims. Новый combined suite `143/143`,
+full ESLint/TypeScript и inert prod/dev build PASS; scoped security review P0–P2=`0`.
+XML повторно проходит structural validation; PNG/visual QA не повторялись.
+Локальный Docker daemon недоступен;
+его не запускали и не перезапускали. Physical Nginx/Node-RED rehearsal остаётся NOT_RUN.

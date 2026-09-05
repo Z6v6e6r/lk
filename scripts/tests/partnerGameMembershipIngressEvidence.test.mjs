@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { preflightPartnerNginx124 } from "../partner_game_membership_nginx_preflight.mjs";
 import { canonicalJson } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs";
 import {
   PARTNER_INGRESS_REQUIRED_PROBES, evaluateLocalPartnerIngressObservations,
@@ -232,4 +233,105 @@ test("production has no adapter, static-dump fallback or caller-controlled execu
     { adapter: "caddy", readback: "caller-provided", ...Object.fromEntries(PARTNER_INGRESS_REQUIRED_PROBES.map(id => [id, true])) }]) {
     assert.throws(() => verifyPartnerProductionIngress(input), /UNSUPPORTED_INGRESS_ADAPTER/);
   }
+});
+
+function nginxPreflightFixture() {
+  const repoFile = relative => fs.readFileSync(new URL(`../../${relative}`, import.meta.url));
+  const metadata = {
+    formatVersion: 1, kind: "SANITIZED_NGINX_BUILD_CAPABILITIES", version: "1.24.0", distribution: "Ubuntu",
+    inspectedFlags: ["--with-http_ssl_module", "--with-http_v2_module", "--with-control-api",
+      "--without-http_limit_req_module", "--without-http_limit_conn_module"],
+    presentFlags: ["--with-http_ssl_module", "--with-http_v2_module"],
+  };
+  const withMetadata = changes => {
+    const buildMetadataBytes = bytes({ ...metadata, ...changes });
+    return { buildMetadataBytes, expectedBuildMetadataSha256: digest(buildMetadataBytes) };
+  };
+  return { metadata, withMetadata, input: {
+    ...withMetadata({}), controlsBytes: repoFile("scripts/partner_game_membership_production_controls.json"),
+    sidecarSources: {
+      core: repoFile("node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs"),
+      node: repoFile("node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs"),
+      settings: repoFile("scripts/partner_game_membership_sidecar/settings.cjs"),
+    },
+  } };
+}
+
+test("Nginx 1.24 preflight pins current source but BLOCKS unproven raw guards and live configuration", () => {
+  const f = nginxPreflightFixture();
+  const result = preflightPartnerNginx124(f.input);
+  assert.equal(result.state, "LOCAL_NGINX_124_CAPABILITY_CHECKED_NOT_ACTIVE");
+  assert.equal(result.decision, "BLOCKED");
+  assert.deepEqual(result.blockers, ["RAW_DUPLICATE_HEADERS_GUARD_UNPROVEN", "RAW_DUPLICATE_JSON_GUARD_UNPROVEN", "EFFECTIVE_CONFIG_UNPROVABLE"]);
+  for (const field of ["productionVerified", "configGenerationAllowed", "deployAuthorized", "activationAuthorized"]) assert.equal(result[field], false);
+  assert.ok(Object.isFrozen(result) && Object.isFrozen(result.coverage) && Object.isFrozen(result.blockers));
+  assert.ok(result.coverage.every(row => row.evidence === "NOT_PROVEN" && Object.isFrozen(row)));
+  for (const control of ["requestPolicy.duplicateCriticalHeadersRejected", "requestPolicy.duplicateJsonKeysRejected"]) {
+    assert.equal(result.coverage.find(row => row.control === control).owner, "RAW_REQUEST_BEFORE_NODERED_PARSER");
+  }
+  const ingress = JSON.parse(f.input.controlsBytes).ingress;
+  const expected = ["routing", "transport", "requestPolicy", "responsePolicy"]
+    .flatMap(section => Object.keys(ingress[section]).map(key => `${section}.${key}`)).sort();
+  assert.deepEqual(result.coverage.map(row => row.control), expected);
+});
+
+test("Nginx preflight detects missing SSL, disabled limit modules and unreviewed control API", () => {
+  const f = nginxPreflightFixture();
+  for (const [presentFlags, code] of [
+    [[], "NGINX_SSL_MODULE_MISSING"],
+    [["--with-http_ssl_module", "--without-http_limit_req_module"], "NGINX_REQUEST_LIMIT_MODULE_DISABLED"],
+    [["--with-http_ssl_module", "--without-http_limit_conn_module"], "NGINX_CONNECTION_LIMIT_MODULE_DISABLED"],
+    [["--with-http_ssl_module", "--with-control-api"], "NGINX_UNREVIEWED_CONTROL_API_BUILD"],
+  ]) {
+    const result = preflightPartnerNginx124({ ...f.input, ...f.withMetadata({ presentFlags }) });
+    assert.equal(result.decision, "BLOCKED");
+    assert.ok(result.blockers.includes(code));
+    assert.ok(result.blockers.includes("EFFECTIVE_CONFIG_UNPROVABLE"));
+  }
+});
+
+for (const [name, changes] of [
+  ["version", { version: "1.31.5" }], ["vendor", { distribution: "other" }],
+  ["format", { formatVersion: 2 }], ["kind", { kind: "LIVE_VERIFIED" }],
+  ["unknown flag", { presentFlags: ["--with-unknown-auth-module"] }],
+  ["duplicate flag", { presentFlags: ["--with-http_ssl_module", "--with-http_ssl_module"] }],
+  ["incomplete observation", { inspectedFlags: ["--with-http_ssl_module"] }],
+]) {
+  test(`Nginx preflight rejects unsupported metadata: ${name}`, () => {
+    const f = nginxPreflightFixture();
+    assert.throws(() => preflightPartnerNginx124({ ...f.input, ...f.withMetadata(changes) }), /UNSUPPORTED_NGINX_BUILD_METADATA/);
+  });
+}
+
+test("Nginx preflight rejects altered metadata, controls and each sidecar source", () => {
+  const f = nginxPreflightFixture();
+  assert.throws(() => preflightPartnerNginx124({ ...f.input, expectedBuildMetadataSha256: "f".repeat(64) }), /NGINX_BUILD_METADATA_HASH_MISMATCH/);
+  assert.throws(() => preflightPartnerNginx124({ ...f.input, controlsBytes: Buffer.from("{}") }), /NGINX_CONTROLS_DRIFT/);
+  for (const field of Object.keys(f.input.sidecarSources)) {
+    assert.throws(() => preflightPartnerNginx124({ ...f.input, sidecarSources: {
+      ...f.input.sidecarSources, [field]: Buffer.concat([f.input.sidecarSources[field], Buffer.from("\n")]),
+    } }), /NGINX_SIDECAR_SOURCE_DRIFT/);
+  }
+});
+
+test("Nginx preflight refuses caller guard assertions, reload receipts, config dumps and exec hooks", () => {
+  const f = nginxPreflightFixture();
+  for (const extra of [
+    { rawGuardVerified: true }, { productionVerified: true }, { reloadReceipt: {} },
+    { configDump: "ssl_verify_client on;" }, { exec: () => assert.fail("must not execute") },
+    { configGenerationAllowed: true },
+  ]) assert.throws(() => preflightPartnerNginx124({ ...f.input, ...extra }), /INVALID_NGINX_PREFLIGHT_INPUT/);
+  assert.throws(() => preflightPartnerNginx124({ ...f.input, sidecarSources: { ...f.input.sidecarSources, guard: Buffer.from("verified") } }), /INVALID_NGINX_SIDECAR_SOURCES/);
+  assert.throws(() => verifyPartnerProductionIngress({ adapter: "nginx", preflight: preflightPartnerNginx124(f.input) }), /UNSUPPORTED_INGRESS_ADAPTER/);
+});
+
+test("Nginx preflight rejects noncanonical, oversized and malformed artifacts without disclosing bytes", () => {
+  const f = nginxPreflightFixture();
+  for (const buildMetadataBytes of [Buffer.alloc(4097), Buffer.from("not-json"), Buffer.from(" " + f.input.buildMetadataBytes)]) {
+    assert.throws(() => preflightPartnerNginx124({ ...f.input, buildMetadataBytes, expectedBuildMetadataSha256: digest(buildMetadataBytes) }), error => {
+      assert.match(error.message, /^[A-Z_]+$/); return true;
+    });
+  }
+  assert.throws(() => preflightPartnerNginx124({ ...f.input, controlsBytes: Buffer.alloc(65537) }), /INVALID_NGINX_CONTROLS_BYTES/);
+  assert.throws(() => preflightPartnerNginx124({ ...f.input, sidecarSources: { ...f.input.sidecarSources, core: Buffer.alloc(1048577) } }), /INVALID_NGINX_SIDECAR_SOURCE_BYTES/);
 });
