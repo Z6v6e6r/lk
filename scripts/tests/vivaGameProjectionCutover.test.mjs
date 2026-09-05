@@ -13,6 +13,7 @@ import {
   restorePreviousMongoWriteBarrier,
 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import { isAuthorizedFenceGuardianRelease } from "../lib/vivaGameProjectionFenceGuardian.mjs";
+import { validateExactCutoverPacket } from "../lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import {
   buildMongoTargetIdentity,
   buildVivaGameProjectionCutoverPlan,
@@ -36,6 +37,7 @@ import { buildLegacyTenantMigrationPlan } from "../lib/vivaGameProjectionTenantM
 import { prepareVivaGameProjectionCutoverPacket } from "../prepare_viva_game_projection_cutover_packet.mjs";
 import { prepareVivaGameProjectionCutoverPostcheck } from "../prepare_viva_game_projection_cutover_postcheck.mjs";
 import { buildVivaGameProjectionSyncCandidate } from "../prepare_viva_game_projection_sync_candidate.mjs";
+import { recoverVivaGameProjectionMongoWriteBarrier } from "../recover_viva_game_projection_mongo_write_barrier.mjs";
 import {
   createDurableReportJournal,
   ensurePrivateDirectory,
@@ -211,7 +213,7 @@ const controls = (overrides = {}) => ({
     pmArgsSha256: cutoverSha256(canonicalJson([])),
     pmNodeArgsSha256: cutoverSha256(canonicalJson([])),
     restartCount: 3,
-    localHealthUrl: "http://127.0.0.1:1880/",
+    localHealthUrl: "http://127.0.0.1:1880/flows",
     tenantKeySha256: cutoverSha256(tenantKey),
     durableConfigReadback: true,
     restartUsedUpdateEnv: true,
@@ -449,6 +451,193 @@ test("fence guardian rejects malformed or stale release requests without treatin
   }), false);
 });
 
+test("standalone Mongo barrier recovery requires stopped fenced runtime and reconciles its durable unknown journal", async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-barrier-recovery-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const previousConfirmation = process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+  process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1";
+  try {
+    const localUri = "mongodb://127.0.0.1:27017/?directConnection=true";
+    const localMigrationFingerprint = cutoverSha256(localUri);
+    const plan = {
+      formatVersion: 1,
+      kind: "viva-game-projection-tenant-cutover-plan",
+      state: "READY_FOR_SEPARATE_LIVE_APPROVAL",
+      liveMutationAuthorized: false,
+      sourceFlowSha256,
+      candidateSha256,
+      tenantKeySha256: cutoverSha256(tenantKey),
+      production: {
+        hostname: "fixture-host",
+        processName: "node-red",
+        pm2ProcessId: 0,
+        pmExecPath: "/usr/local/bin/node-red",
+        pmCwd: "/root/.node-red",
+        pmArgsSha256: cutoverSha256(canonicalJson([])),
+        pmNodeArgsSha256: cutoverSha256(canonicalJson([])),
+        restartCountAtEvidence: 3,
+      },
+      writerFence: {
+        exactMigrationOperationIds: [scope.operationId],
+        exactWriterNodeIds: ["source-writer"],
+        writerInventorySha256,
+        externalWriterProofSha256: "8".repeat(64),
+        fenceTokenSha256,
+        lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      },
+      mongoTarget: {
+        migrationConnectionFingerprint: localMigrationFingerprint,
+        replicaSetName: "rs-fixture",
+        targetIdentitySha256: mongoTarget.targetIdentitySha256,
+      },
+    };
+    const cutoverPlanPath = path.join(privateRoot, "cutover-plan.json");
+    const cutoverPlanBytes = Buffer.from(canonicalJson(plan));
+    write0600(cutoverPlanPath, cutoverPlanBytes);
+    const cutoverPlanSha256 = cutoverSha256(cutoverPlanBytes);
+    const barrierReceiptOutputPath = path.join(privateRoot, "barrier.json");
+    const artifactPath = `${barrierReceiptOutputPath}.prepared`;
+    const artifactBytes = Buffer.from(canonicalJson({
+      kind: "viva-game-projection-mongo-write-barrier-preparation",
+      cutoverPlanSha256,
+    }));
+    write0600(artifactPath, artifactBytes);
+    const fenceReceiptPath = path.join(privateRoot, "fence.json");
+    const fenceReceiptBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-writer-fence-receipt",
+      state: "HELD",
+      sourceFlowSha256,
+      candidateSha256,
+      tenantKey,
+      operationIds: [scope.operationId],
+      fenceToken,
+      writerInventorySha256,
+      externalWriterProofSha256: "8".repeat(64),
+      lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      host: "lk-primary-147",
+      hostname: "fixture-host",
+      processName: "node-red",
+      pm2ProcessId: 0,
+      nodeRedProcessState: "STOPPED",
+      ingressWriteRoutesBlocked: true,
+      internalSchedulersStopped: true,
+      allLkGamesWritersQuiescent: true,
+      externalMongoWritersBlocked: true,
+      writerNodeIds: ["source-writer"],
+      observedAt: nowIso,
+      expiresAt: new Date(Date.parse(nowIso) + 10 * 60_000).toISOString(),
+    }));
+    write0600(fenceReceiptPath, fenceReceiptBytes);
+    const guardianReceiptPath = path.join(privateRoot, "guardian.json");
+    const guardianReceiptBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-guardian-receipt",
+      state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      fenceTokenSha256,
+      lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      automaticRelease: false,
+    }));
+    write0600(guardianReceiptPath, guardianReceiptBytes);
+    const connectionPath = path.join(privateRoot, "migration.json");
+    const connectionBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-migration-mongo-connection",
+      uri: localUri,
+    }));
+    write0600(connectionPath, connectionBytes);
+    const executionIndexPath = path.join(privateRoot, "execution-index.json");
+    const executionIndexBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-cutover-execution-index",
+      cutoverPlanPath,
+      cutoverPlanSha256,
+      fenceReceiptPath,
+      fenceReceiptSha256: cutoverSha256(fenceReceiptBytes),
+      migrationConnectionFile: connectionPath,
+      migrationConnectionFileSha256: cutoverSha256(connectionBytes),
+      mongoWriteBarrierReceiptOutputPath: barrierReceiptOutputPath,
+      tenantKey,
+    }));
+    write0600(executionIndexPath, executionIndexBytes);
+    let runtimeStatus = "online";
+    let restoreAttempts = 0;
+    const pm2Fixture = () => [{
+      name: "node-red",
+      pm_id: 0,
+      pm2_env: {
+        status: runtimeStatus,
+        restart_time: 4,
+        pm_exec_path: "/usr/local/bin/node-red",
+        pm_cwd: "/root/.node-red",
+        args: [],
+        node_args: [],
+        PADLHUB_PLATFORM_TENANT_KEY: tenantKey,
+        VIVA_GAME_PROJECTION_SYNC_MODE: "SHADOW",
+      },
+    }];
+    const common = {
+      barrierArtifact: artifactPath,
+      expectedBarrierArtifactSha256: cutoverSha256(artifactBytes),
+      cutoverPlan: cutoverPlanPath,
+      expectedCutoverPlanSha256: cutoverPlanSha256,
+      migrationConnectionFile: connectionPath,
+      executionIndex: executionIndexPath,
+      expectedExecutionIndexSha256: cutoverSha256(executionIndexBytes),
+      fenceReceipt: fenceReceiptPath,
+      expectedFenceReceiptSha256: cutoverSha256(fenceReceiptBytes),
+      fenceGuardianReceipt: guardianReceiptPath,
+      expectedFenceGuardianReceiptSha256: cutoverSha256(guardianReceiptBytes),
+    };
+    const dependencies = {
+      getUid: () => 0,
+      allowFixtureHostname: true,
+      nowMs: Date.parse(nowIso),
+      assertExecutorSources: async () => true,
+      assertGuardianLease: async () => ({ sha256: "7".repeat(64) }),
+      readPm2: async () => pm2Fixture(),
+      migrationClient: { db: () => ({ command: async () => ({ setName: "rs-fixture" }) }) },
+      restorePreviousMongoWriteBarrier: async () => {
+        restoreAttempts += 1;
+        if (restoreAttempts === 1) throw new Error("simulated recovery interruption");
+        return { formatVersion: 1, state: "RELEASED_TO_EXACT_PREIMAGE" };
+      },
+    };
+    await assert.rejects(
+      recoverVivaGameProjectionMongoWriteBarrier({ ...common, report: path.join(privateRoot, "online-report.json") }, dependencies),
+      /requires the exact stopped Node-RED runtime/,
+    );
+    assert.equal(restoreAttempts, 0);
+    runtimeStatus = "stopped";
+    const reportPath = path.join(privateRoot, "recovery-report.json");
+    await assert.rejects(
+      recoverVivaGameProjectionMongoWriteBarrier({ ...common, report: reportPath }, dependencies),
+      /simulated recovery interruption/,
+    );
+    assert.equal(fs.existsSync(reportPath), false);
+    assert.equal(fs.existsSync(`${reportPath}.journal`), true);
+    const result = await recoverVivaGameProjectionMongoWriteBarrier({ ...common, report: reportPath }, dependencies);
+    assert.equal(result.state, "RELEASED_TO_EXACT_PREIMAGE");
+    assert.equal(result.reconciledPriorUnknownOutcome, true);
+    assert.equal(restoreAttempts, 2);
+    const phases = fs.readdirSync(`${reportPath}.journal`).sort().map((name) => (
+      JSON.parse(fs.readFileSync(path.join(`${reportPath}.journal`, name), "utf8")).phase
+    ));
+    assert.deepEqual(phases, [
+      "ATTEMPT_STARTED",
+      "BARRIER_RECOVERY_OUTCOME_UNKNOWN",
+      "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY",
+      "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN",
+      "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY",
+      "TERMINAL_RESULT",
+    ]);
+  } finally {
+    if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+    else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
 test("migration apply and restore require exact CAS readback and preserve the full BSON preimage", async () => {
   const plan = executablePlan();
   const planSha256 = "2".repeat(64);
@@ -542,6 +731,7 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
     sourceFlowSha256,
     candidateSha256,
+    candidateCanonicalSha256: "f".repeat(64),
     tenantKey,
     sourceWriters: sourceWriterInventory,
     candidateWriters: candidateWriterInventory,
@@ -555,6 +745,8 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
   assert.equal(result.state, "READY_FOR_SEPARATE_LIVE_APPROVAL");
   assert.deepEqual(result.writerFence.exactWriterNodeIds, ["candidate-writer", "source-writer"]);
   assert.equal(result.liveMutationAuthorized, false);
+  assert.equal(result.migration.futureBoundaryDate, nowIso.slice(0, 10));
+  assert.equal(result.migration.futureBoundaryTimeZone, "UTC");
   assert.equal(result.databaseMutationPerformed, false);
   assert.equal(result.deploymentPerformed, false);
   assert.equal(result.rollback.restoreExactBackupBeforeOldFlow, true);
@@ -597,7 +789,8 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     runtimeTenantReadback: true,
     candidateFlowReadback: true,
     runtimeHealth: {
-      url: "http://127.0.0.1:1880/", statusCode: 200, bodySha256: "a".repeat(64), observedAt: nowIso,
+      url: "http://127.0.0.1:1880/flows", statusCode: 200, bodySha256: "a".repeat(64),
+      bodyCanonicalSha256: "f".repeat(64), observedAt: nowIso,
     },
     fenceTokenSha256,
     fenceReceiptSha256: "9".repeat(64),
@@ -620,6 +813,18 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
   assert.equal(validateVivaGameProjectionCutoverPostcheck(postcheck, result, Date.parse(nowIso), postcheckEvidence), true);
   assert.throws(
     () => validateVivaGameProjectionCutoverPostcheck({ ...postcheck, duplicateIdentityCount: 1 }, result, Date.parse(nowIso), postcheckEvidence),
+    /does not authorize reopening ingress/,
+  );
+  assert.throws(
+    () => validateVivaGameProjectionCutoverPostcheck({
+      ...postcheck, runtimeHealth: { ...postcheck.runtimeHealth, statusCode: 302 },
+    }, result, Date.parse(nowIso), postcheckEvidence),
+    /does not authorize reopening ingress/,
+  );
+  assert.throws(
+    () => validateVivaGameProjectionCutoverPostcheck({
+      ...postcheck, runtimeHealth: { ...postcheck.runtimeHealth, bodyCanonicalSha256: "0".repeat(64) },
+    }, result, Date.parse(nowIso), postcheckEvidence),
     /does not authorize reopening ingress/,
   );
   assert.throws(
@@ -646,6 +851,7 @@ test("cutover plan reports missing CI, tenant, fence, backup, restore and covera
     repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
     sourceFlowSha256,
     candidateSha256,
+    candidateCanonicalSha256: "f".repeat(64),
     tenantKey,
     sourceWriters: sourceWriterInventory,
     candidateWriters: candidateWriterInventory,
@@ -686,6 +892,7 @@ test("claimed PASS controls reject future runtime, backup, restore, coverage, an
       repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
       sourceFlowSha256,
       candidateSha256,
+      candidateCanonicalSha256: "f".repeat(64),
       tenantKey,
       sourceWriters: sourceWriterInventory,
       candidateWriters: candidateWriterInventory,
@@ -705,6 +912,7 @@ test("claimed PASS controls fail closed when evidence is incomplete", () => {
     repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
     sourceFlowSha256,
     candidateSha256,
+    candidateCanonicalSha256: "f".repeat(64),
     tenantKey,
     sourceWriters: sourceWriterInventory,
     candidateWriters: candidateWriterInventory,
@@ -784,6 +992,8 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   assert.ok(coordinatorSource.indexOf("hashLiveFullCollection") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("await runMigration") < coordinatorSource.indexOf("atomicWrite(liveFlowPath"));
   assert.ok(coordinatorSource.indexOf("atomicWrite(liveFlowPath") < coordinatorSource.indexOf("await prepareVivaGameProjectionCutoverPostcheck"));
+  assert.ok(coordinatorSource.indexOf("coordinatorJournal.finalize(result)") < coordinatorSource.indexOf("READY_TO_REOPEN_INGRESS.json"));
+  assert.doesNotMatch(postcheckSource, /READY_TO_REOPEN_INGRESS\.json/);
   assert.match(postcheckSource, /countDocuments\(activeLegacyQuery\)/);
   assert.match(postcheckSource, /assertExclusiveFenceLease[\s\S]+finalNowMs[\s\S]+assertMongoWriteBarrier/);
   assert.match(postcheckSource, /writeFileExclusiveAtomicDurable/);
@@ -1097,7 +1307,7 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       cutoverPlanSha256: cutoverEntry.sha256,
       tenantKey,
       globalLegacyCoverage: {
-        dateFrom: scope.dateFrom,
+        dateFrom: result.plan.migration.futureBoundaryDate,
         mongoIds: [legacyGame()._id.toHexString()],
         mongoIdsSha256: cutoverSha256(canonicalJson([legacyGame()._id.toHexString()])),
       },
@@ -1252,7 +1462,10 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       assertGuardianLease: async () => ({
         bytes: guardianHeartbeatBytes, sha256: cutoverSha256(guardianHeartbeatBytes),
       }),
-      probeRuntimeHealth: async (url) => ({ url, statusCode: 200, bodySha256: "a".repeat(64), observedAt: nowIso }),
+      probeRuntimeHealth: async (url) => ({
+        url, statusCode: 200, bodySha256: "a".repeat(64),
+        bodyCanonicalSha256: result.plan.candidateCanonicalSha256, observedAt: nowIso,
+      }),
       readPm2: async () => [{
         name: "node-red",
         pm_id: 0,
@@ -1272,7 +1485,20 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     });
     assert.equal(postcheck.receipt.state, "PASS");
     assert.equal(postcheck.receipt.ingressReopened, false);
-    assert.equal(fs.existsSync(postcheck.readyMarkerPath), true);
+    assert.equal(fs.existsSync(path.join(privateRoot, "postcheck", "READY_TO_REOPEN_INGRESS.json")), false);
+    assert.match(postcheck.postcheckReceiptSha256, /^[a-f0-9]{64}$/);
+    assert.match(postcheck.postcheckManifestSha256, /^[a-f0-9]{64}$/);
+
+    const copiedProviderEvidencePath = path.join(outputDirectory, result.plan.migration.sourceEvidence[0].providerPath);
+    const copiedProviderEvidenceBytes = fs.readFileSync(copiedProviderEvidencePath);
+    fs.writeFileSync(copiedProviderEvidencePath, Buffer.from(canonicalJson({ tampered: true })), { mode: 0o600 });
+    assert.throws(() => validateExactCutoverPacket({
+      packetRoot: outputDirectory,
+      plan: result.plan,
+      manifest: result.manifest,
+      nowMs: Date.parse(nowIso),
+    }), /packet tree differs from its exact manifest/);
+    fs.writeFileSync(copiedProviderEvidencePath, copiedProviderEvidenceBytes, { mode: 0o600 });
 
     fs.writeFileSync(migrationProviderPath, Buffer.from(canonicalJson({ tampered: true })), { mode: 0o600 });
     assert.throws(() => prepareVivaGameProjectionCutoverPacket({

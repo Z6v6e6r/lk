@@ -32,6 +32,7 @@ import {
 } from "./run_viva_game_projection_tenant_migration.mjs";
 import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
+import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import { writeFileExclusiveAtomicDurable } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -81,7 +82,7 @@ const manifestEntry = (manifest, relativePath, expectedSha256) => {
   }
 };
 
-const readPm2 = () => {
+export const readPm2 = () => {
   const result = spawnSync("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   if (result.status !== 0) fail("Unable to read PM2 state for cutover postcheck");
   let processes;
@@ -89,27 +90,32 @@ const readPm2 = () => {
   return processes;
 };
 
-const envValue = (processEntry, key) => (
+export const envValue = (processEntry, key) => (
   processEntry?.pm2_env?.[key] ?? processEntry?.pm2_env?.env?.[key] ?? null
 );
-const assertNoCutoverEnvironment = (entry) => {
+export const assertNoCutoverEnvironment = (entry) => {
   if (CUTOVER_ONLY_ENV_KEYS.some((key) => String(envValue(entry, key) || "") !== "")) {
     fail("Live PM2 process retained cutover-only credentials or confirmations");
   }
 };
 const pm2ArraySha256 = (value) => sha256(canonicalJson(Array.isArray(value) ? value : (value == null ? [] : [String(value)])));
-const assertPm2RuntimeIdentity = (entry, production) => {
+export const assertPm2RuntimeIdentity = (entry, production) => {
   if (entry?.pm2_env?.pm_exec_path !== production.pmExecPath || entry?.pm2_env?.pm_cwd !== production.pmCwd
     || pm2ArraySha256(entry?.pm2_env?.args) !== production.pmArgsSha256
     || pm2ArraySha256(entry?.pm2_env?.node_args) !== production.pmNodeArgsSha256) {
     fail("PM2 runtime identity differs from the frozen Node-RED service");
   }
 };
-const probeLocalRuntimeHealth = async (url) => {
+const probeLocalRuntimeHealth = async (url, expectedCanonicalSha256) => {
   const response = await fetch(url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(5_000) });
   const body = Buffer.from(await response.arrayBuffer());
-  if (response.status < 200 || response.status >= 400 || body.length > 1024 * 1024) fail("Local Node-RED health probe failed");
-  return { url, statusCode: response.status, bodySha256: sha256(body), observedAt: new Date().toISOString() };
+  let flow;
+  try { flow = JSON.parse(body.toString("utf8")); } catch { fail("Local Node-RED /flows response is invalid JSON"); }
+  const bodyCanonicalSha256 = sha256(canonicalJson(flow));
+  if (response.status !== 200 || body.length > 256 * 1024 * 1024 || bodyCanonicalSha256 !== expectedCanonicalSha256) {
+    fail("Local Node-RED health probe failed");
+  }
+  return { url, statusCode: response.status, bodySha256: sha256(body), bodyCanonicalSha256, observedAt: new Date().toISOString() };
 };
 
 const identitySignals = (document) => {
@@ -292,6 +298,8 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
     : assertLiveFenceGuardian(guardianRead.value, nowMs);
   const packetRoot = fs.realpathSync(path.dirname(options.cutoverPlan));
   if (fs.realpathSync(path.dirname(options.packetManifest)) !== packetRoot) fail("Packet inputs do not share one root");
+  if (dependencies.validateExactCutoverPacket) await dependencies.validateExactCutoverPacket({ packetRoot, plan, manifest });
+  else validateExactCutoverPacket({ packetRoot, plan, manifest, nowMs });
   manifestEntry(manifest, "cutover-plan.json", options.expectedCutoverPlanSha256);
 
   const runtimeFlowRead = readPrivateBytes(options.runtimeFlow, "Runtime flow", MAX_JSON_BYTES);
@@ -340,6 +348,7 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
     || sha256(applyIndexRead.value.tenantKey || "") !== plan.tenantKeySha256
     || !Array.isArray(applyIndexRead.value.items)
     || !/^\d{4}-\d{2}-\d{2}$/.test(String(applyIndexRead.value.globalLegacyCoverage?.dateFrom || ""))
+    || applyIndexRead.value.globalLegacyCoverage?.dateFrom !== plan.migration?.futureBoundaryDate
     || !Array.isArray(applyIndexRead.value.globalLegacyCoverage?.mongoIds)
     || sha256(canonicalJson(applyIndexRead.value.globalLegacyCoverage?.mongoIds || []))
       !== applyIndexRead.value.globalLegacyCoverage?.mongoIdsSha256
@@ -521,9 +530,10 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
     assertPm2RuntimeIdentity(finalMatches[0], plan.production);
     const runtimeHealth = dependencies.probeRuntimeHealth
       ? await dependencies.probeRuntimeHealth(plan.production.localHealthUrl)
-      : await probeLocalRuntimeHealth(plan.production.localHealthUrl);
+      : await probeLocalRuntimeHealth(plan.production.localHealthUrl, plan.candidateCanonicalSha256);
     if (runtimeHealth?.url !== plan.production.localHealthUrl
-      || !Number.isSafeInteger(runtimeHealth?.statusCode) || runtimeHealth.statusCode < 200 || runtimeHealth.statusCode >= 400) {
+      || runtimeHealth?.statusCode !== 200
+      || runtimeHealth?.bodyCanonicalSha256 !== plan.candidateCanonicalSha256) {
       fail("Final Node-RED health proof is not bound to the frozen local endpoint");
     }
 
@@ -612,23 +622,14 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
         .map((entry) => ({ path: path.basename(entry.path), sha256: entry.sha256 })),
     };
     const manifestArtifact = writeEvidence(outputDirectory, "postcheck.manifest.json", outputManifest);
-    const readyMarker = writeEvidence(outputDirectory, "READY_TO_REOPEN_INGRESS.json", {
-      formatVersion: 1,
-      kind: "viva-game-projection-cutover-ready-marker",
-      state: "READY_TO_REOPEN_INGRESS",
+    return {
+      receipt,
+      outputManifest,
+      postcheckReceiptPath: receiptArtifact.path,
       postcheckReceiptSha256: receiptArtifact.sha256,
+      postcheckManifestPath: manifestArtifact.path,
       postcheckManifestSha256: manifestArtifact.sha256,
-      fenceTokenSha256: plan.writerFence.fenceTokenSha256,
-      mongoWriteBarrierReceiptSha256: options.expectedMongoWriteBarrierReceiptSha256,
-      executionIndexSha256: options.expectedExecutionIndexSha256,
-      coordinatorAttemptId: options.coordinatorAttemptId,
-      fenceGuardianReceiptSha256: options.fenceGuardianReceiptSha256,
-      fenceGuardianHeartbeatSha256: guardianLease.sha256,
-      ingressReopenEligible: true,
-      ingressReopened: false,
-      observedAt: new Date(finalNowMs).toISOString(),
-    });
-    return { receipt, outputManifest, readyMarkerPath: readyMarker.path, readyMarkerSha256: readyMarker.sha256 };
+    };
   } finally {
     await ownedClient?.close().catch(() => {});
   }
@@ -657,7 +658,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       coordinatorJournal: values.get("--coordinator-journal"),
     outputDirectory: values.get("--output-directory"),
   }, dependencies);
-  process.stdout.write(`${JSON.stringify({ state: result.receipt.state, readyMarkerSha256: result.readyMarkerSha256 })}\n`);
+  process.stdout.write(`${JSON.stringify({
+    state: result.receipt.state,
+    postcheckReceiptSha256: result.postcheckReceiptSha256,
+    postcheckManifestSha256: result.postcheckManifestSha256,
+    readyMarkerPublished: false,
+  })}\n`);
   return result;
 }
 

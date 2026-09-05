@@ -151,7 +151,7 @@ export function validateCutoverControls(controls, {
       || !HASH_RE.test(String(controls.runtimeTenant.pmArgsSha256 || ""))
       || !HASH_RE.test(String(controls.runtimeTenant.pmNodeArgsSha256 || ""))
       || !Number.isSafeInteger(controls.runtimeTenant.restartCount) || controls.runtimeTenant.restartCount < 0
-      || !/^http:\/\/127\.0\.0\.1:\d{2,5}\/[A-Za-z0-9_/?=&.-]*$/.test(String(controls.runtimeTenant.localHealthUrl || ""))
+      || !/^http:\/\/127\.0\.0\.1:\d{2,5}\/flows$/.test(String(controls.runtimeTenant.localHealthUrl || ""))
       || !isFreshTimestamp(controls.runtimeTenant.restartAt, 30 * 60_000)
       || !isFreshTimestamp(controls.runtimeTenant.readBackAt, 30 * 60_000)
       || Date.parse(controls.runtimeTenant.restartAt) > Date.parse(controls.runtimeTenant.readBackAt)
@@ -286,6 +286,7 @@ export function buildVivaGameProjectionCutoverPlan({
   repository,
   sourceFlowSha256,
   candidateSha256,
+  candidateCanonicalSha256,
   tenantKey,
   sourceWriters,
   candidateWriters,
@@ -301,6 +302,7 @@ export function buildVivaGameProjectionCutoverPlan({
   }
   assertHash(sourceFlowSha256, "Cutover source-flow digest");
   assertHash(candidateSha256, "Cutover candidate digest");
+  assertHash(candidateCanonicalSha256, "Cutover canonical candidate digest");
   assertHash(controlsSha256, "Cutover controls digest");
   assertHash(reviewedFlowContractSha256, "Reviewed-flow contract digest");
   if (!Array.isArray(executorSources) || executorSources.length < 8
@@ -332,6 +334,7 @@ export function buildVivaGameProjectionCutoverPlan({
     repositoryCommit: repository.commit,
     sourceFlowSha256,
     candidateSha256,
+    candidateCanonicalSha256,
     tenantKey,
     writerNodeIds,
     writerInventorySha256,
@@ -352,6 +355,7 @@ export function buildVivaGameProjectionCutoverPlan({
     executorSourcesSha256: sha256(canonicalJson(executorSources)),
     sourceFlowSha256,
     candidateSha256,
+    candidateCanonicalSha256,
     tenantKeySha256: sha256(tenantKey),
     production: isPass(controls.runtimeTenant?.state) ? {
       hostAlias: controls.runtimeTenant.host,
@@ -367,6 +371,8 @@ export function buildVivaGameProjectionCutoverPlan({
       canonicalFlowPath: "/root/.node-red/flows.json",
     } : null,
     migration: {
+      futureBoundaryDate: new Date(Date.parse(generatedAt)).toISOString().slice(0, 10),
+      futureBoundaryTimeZone: "UTC",
       planSha256s: planSummary.planSha256s,
       operationIds: planSummary.operationIds,
       sourceEvidence: plans.map((item, index) => ({
@@ -469,8 +475,9 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     || receipt.candidateFlowReadback !== true
     || receipt.runtimeHealth?.url !== plan.production?.localHealthUrl
     || !Number.isSafeInteger(receipt.runtimeHealth?.statusCode)
-    || receipt.runtimeHealth.statusCode < 200 || receipt.runtimeHealth.statusCode >= 400
+    || receipt.runtimeHealth.statusCode !== 200
     || !HASH_RE.test(String(receipt.runtimeHealth?.bodySha256 || ""))
+    || receipt.runtimeHealth?.bodyCanonicalSha256 !== plan.candidateCanonicalSha256
     || receipt.ingressReopened !== false
     || !HASH_RE.test(String(receipt.fenceReceiptSha256 || ""))
     || !HASH_RE.test(String(receipt.mongoWriteBarrierReceiptSha256 || ""))

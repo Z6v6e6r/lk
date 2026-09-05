@@ -1815,9 +1815,17 @@
   journal, unbounded future legacy-row coverage, and standalone postcheck validation
   of the real execution index, journal order, apply receipts, guardian heartbeat,
   PM2 identity, restart stability, and local health.
+- Live entrypoints now hash the complete packet tree and replay the exact Mongo/Viva
+  capture evidence and deterministic planner. The future boundary is fixed to the
+  fresh packet UTC date. Local health requires exact candidate JSON from `GET /flows`.
+- Standalone postcheck publishes evidence only. The coordinator fsyncs terminal
+  success, repeats all live barriers and runtime checks, and writes READY last with
+  hashes of the terminal report and terminal journal entry.
 - Replaced the validator-only Mongo pause with a distinct-principal ACL barrier plus
   an impossible validator, actual insert/update/delete/drop/rename/`collMod` denial
-  probes, a durable pre-mutation recovery artifact, and an explicit recovery command.
+  probes, a durable pre-mutation recovery artifact, and an explicit recovery command
+  gated by the live guardian and stopped frozen PM2 runtime. Recovery journals the
+  unknown outcome before mutation and reconciles the same journal after interruption.
 - Made the detached host-lock guardian prove its live PID/start/descriptor/inode with
   a fresh durable heartbeat and quarantine malformed release requests. Restore
   rehearsal cleanup now removes only collections protected by an exclusive ownership

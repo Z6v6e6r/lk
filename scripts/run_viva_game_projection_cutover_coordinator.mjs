@@ -12,12 +12,14 @@ import { canonicalJson, sha256 } from "./lib/vivaGameProjectionCutoverContract.m
 import { buildGlobalActiveLegacyTenantQuery } from "./lib/vivaGameProjectionTenantMigration.mjs";
 import { decodeTenantMigrationOperation } from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
+import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import {
   assertLiveFenceGuardian,
   prepareVivaGameProjectionCutoverPostcheck,
 } from "./prepare_viva_game_projection_cutover_postcheck.mjs";
 import {
   assertExclusiveFenceLease,
+  assertNoConcurrentMongoWrites,
   createDurableReportJournal,
   ensurePrivateDirectory,
   main as runMigration,
@@ -114,13 +116,16 @@ const assertNoCutoverEnvironment = (entry) => {
     fail("Node-RED PM2 environment retained cutover-only credentials or confirmations");
   }
 };
-const probeLocalRuntimeHealth = async (url) => {
+const probeLocalRuntimeHealth = async (url, expectedCanonicalSha256) => {
   const response = await fetch(url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(5_000) });
   const body = Buffer.from(await response.arrayBuffer());
-  if (response.status < 200 || response.status >= 400 || body.length > 1024 * 1024) {
+  let flow;
+  try { flow = JSON.parse(body.toString("utf8")); } catch { fail("Local Node-RED /flows response is invalid JSON"); }
+  const bodyCanonicalSha256 = sha256(canonicalJson(flow));
+  if (response.status !== 200 || body.length > 256 * 1024 * 1024 || bodyCanonicalSha256 !== expectedCanonicalSha256) {
     fail("Local Node-RED health probe failed");
   }
-  return { url, statusCode: response.status, bodySha256: sha256(body), observedAt: new Date().toISOString() };
+  return { url, statusCode: response.status, bodySha256: sha256(body), bodyCanonicalSha256, observedAt: new Date().toISOString() };
 };
 
 const protectedOptions = () => ({
@@ -137,6 +142,7 @@ const writePrivate = (filePath, value) => {
 
 export async function executeVivaGameProjectionCutover(options, dependencies = {}) {
   const coordinatorAttemptId = dependencies.attemptId || crypto.randomUUID();
+  const clockNow = () => (typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()));
   if ((dependencies.getUid ? dependencies.getUid() : process.getuid?.()) !== 0) fail("Cutover coordinator requires root");
   if (process.env.VIVA_GAME_PROJECTION_CUTOVER_EXECUTE !== CONFIRMATION) fail("Cutover execution confirmation is absent");
   const executionRead = readPrivateJson(options.executionIndex, "Cutover execution index", MAX_JSON_BYTES);
@@ -171,6 +177,8 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
   else assertExactExecutorSources(plan);
   const packetRoot = fs.realpathSync(path.dirname(execution.cutoverPlanPath));
   if (fs.realpathSync(path.dirname(execution.packetManifestPath)) !== packetRoot) fail("Packet manifest root mismatch");
+  if (dependencies.validateExactCutoverPacket) await dependencies.validateExactCutoverPacket({ packetRoot, plan, manifest: manifestRead.value });
+  else validateExactCutoverPacket({ packetRoot, plan, manifest: manifestRead.value, nowMs: clockNow() });
   const candidatePath = assertPacketFile(packetRoot, execution.candidatePath, "candidate.flow.json", "Candidate flow");
   const contractPath = assertPacketFile(packetRoot, execution.reviewedFlowContractPath, "reviewed-flow.contract.json", "Reviewed-flow contract");
   const liveFlowPath = fs.realpathSync(execution.liveFlowPath);
@@ -187,7 +195,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     externalWriterProofSha256: plan.writerFence?.externalWriterProofSha256,
     fenceTokenSha256: plan.writerFence?.fenceTokenSha256,
     lockPath: plan.writerFence?.lockPath,
-    nowMs: dependencies.nowMs ?? Date.now(),
+    nowMs: clockNow(),
   });
   if (dependencies.assertFenceLease) dependencies.assertFenceLease(fenceRead.value);
   else assertExclusiveFenceLease(fenceRead.value);
@@ -201,13 +209,15 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     || guardian.fenceTokenSha256 !== plan.writerFence.fenceTokenSha256 || guardian.automaticRelease !== false) {
     fail("Persistent fence guardian does not bind the cutover fence");
   }
-  const guardianNowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
+  const guardianNowMs = clockNow();
   if (dependencies.assertGuardianLease) await dependencies.assertGuardianLease(guardian, guardianNowMs);
   else if (!dependencies.guardianReceipt) assertLiveFenceGuardian(guardian, guardianNowMs);
   const guardianReceiptSha256 = dependencies.guardianReceipt
     ? sha256(canonicalJson(guardian)) : sha256(guardianRead.bytes);
   const assertFreshWriterFence = () => {
-    validateHeldWriterFence(fenceRead.value, {
+    const currentFenceRead = readPrivateJson(execution.fenceReceiptPath, "Writer fence receipt", MAX_JSON_BYTES);
+    if (sha256(currentFenceRead.bytes) !== execution.fenceReceiptSha256) fail("Writer fence receipt changed during cutover");
+    validateHeldWriterFence(currentFenceRead.value, {
       sourceFlowSha256: plan.sourceFlowSha256,
       candidateSha256: plan.candidateSha256,
       tenantKey: execution.tenantKey,
@@ -217,10 +227,11 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
       externalWriterProofSha256: plan.writerFence.externalWriterProofSha256,
       fenceTokenSha256: plan.writerFence.fenceTokenSha256,
       lockPath: plan.writerFence.lockPath,
-      nowMs: typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()),
+      nowMs: clockNow(),
     });
-    if (dependencies.assertFenceLease) dependencies.assertFenceLease(fenceRead.value);
-    else assertExclusiveFenceLease(fenceRead.value);
+    if (dependencies.assertFenceLease) dependencies.assertFenceLease(currentFenceRead.value);
+    else assertExclusiveFenceLease(currentFenceRead.value);
+    return currentFenceRead.value;
   };
 
   const expectedPlans = new Set(plan.migration.planSha256s);
@@ -339,10 +350,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         fail("Live games.lk_games state does not exactly match the full backup under the Mongo barrier");
       }
       coordinatorJournal.append("FULL_BACKUP_MATCHED_LIVE_COLLECTION", liveState);
-      const coverageDateFrom = execution.items.map((item) => {
-        const migrationPlan = readPrivateJson(item.planPath, "Migration coverage plan", MAX_JSON_BYTES).value;
-        return String(migrationPlan?.scope?.dateFrom || "");
-      }).sort()[0];
+      const coverageDateFrom = plan.migration.futureBoundaryDate;
       const plannedMongoIds = execution.items.flatMap((item) => {
         const migrationPlan = readPrivateJson(item.planPath, "Migration coverage plan", MAX_JSON_BYTES).value;
         return (migrationPlan.operations || []).map((operation) => decodeTenantMigrationOperation(operation).filter._id.toHexString());
@@ -480,7 +488,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     if (dependencies.waitForRuntimeDwell) await dependencies.waitForRuntimeDwell();
     else await new Promise((resolve) => setTimeout(resolve, 10_000));
     const stablePm2 = dependencies.inspectPm2 ? await dependencies.inspectPm2() : pm2Entry(plan.production.processName);
-    const stableNowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
+    const stableNowMs = clockNow();
     if (stablePm2?.pm_id !== plan.production.pm2ProcessId
       || String(stablePm2?.pm2_env?.status || "").toLowerCase() !== "online"
       || Number(stablePm2?.pm2_env?.restart_time) !== activeRestartCount
@@ -491,9 +499,10 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     assertNoCutoverEnvironment(stablePm2);
     const runtimeHealth = dependencies.probeRuntimeHealth
       ? await dependencies.probeRuntimeHealth(plan.production.localHealthUrl)
-      : await probeLocalRuntimeHealth(plan.production.localHealthUrl);
+      : await probeLocalRuntimeHealth(plan.production.localHealthUrl, plan.candidateCanonicalSha256);
     if (runtimeHealth?.url !== plan.production.localHealthUrl
-      || !Number.isSafeInteger(runtimeHealth?.statusCode) || runtimeHealth.statusCode < 200 || runtimeHealth.statusCode >= 400) {
+      || runtimeHealth?.statusCode !== 200
+      || runtimeHealth?.bodyCanonicalSha256 !== plan.candidateCanonicalSha256) {
       fail("Node-RED health proof is not bound to the frozen local endpoint");
     }
     coordinatorJournal.append("RUNTIME_ONLINE_SHADOW", {
@@ -528,6 +537,10 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
       ...(dependencies.postcheckDependencies || {}),
       assertExecutorSources: dependencies.postcheckDependencies?.assertExecutorSources || dependencies.assertExecutorSources,
     });
+    coordinatorJournal.append("POSTCHECK_EVIDENCE_PASS_READY_PENDING", {
+      postcheckReceiptSha256: postcheckResult.postcheckReceiptSha256,
+      postcheckManifestSha256: postcheckResult.postcheckManifestSha256,
+    });
     const result = {
       formatVersion: 1,
       kind: "viva-game-projection-cutover-coordinator-report",
@@ -535,17 +548,100 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
       cutoverPlanSha256: execution.cutoverPlanSha256,
       applyIndexSha256: applyIndexArtifact.sha256,
       activeFlowSha256: plan.candidateSha256,
-      readyMarkerSha256: postcheckResult.readyMarkerSha256,
+      postcheckReceiptSha256: postcheckResult.postcheckReceiptSha256,
+      postcheckManifestSha256: postcheckResult.postcheckManifestSha256,
       mongoWriteBarrierReceiptSha256: barrierArtifact.sha256,
       mongoWriteBarrierState: "HELD",
       fenceGuardianReceiptSha256: guardianReceiptSha256,
       coordinatorAttemptId,
       ingressReopened: false,
       mutationAttempted: barrierInstallAttempted || appliedItems.length > 0 || candidatePublished,
-      completedAt: new Date(dependencies.nowMs ?? Date.now()).toISOString(),
+      completedAt: new Date(clockNow()).toISOString(),
     };
     coordinatorJournal.finalize(result);
-    return result;
+    const coordinatorReportBytes = readPrivateBytes(coordinatorReportPath, "Coordinator terminal report", MAX_JSON_BYTES);
+    const terminalJournalName = fs.readdirSync(coordinatorJournal.journalDirectory).sort().at(-1);
+    const terminalJournalRead = readPrivateJson(
+      path.join(coordinatorJournal.journalDirectory, terminalJournalName), "Coordinator terminal journal", 1024 * 1024,
+    );
+    if (terminalJournalRead.value?.phase !== "TERMINAL_RESULT"
+      || terminalJournalRead.value?.attemptId !== coordinatorAttemptId
+      || terminalJournalRead.value?.state !== result.state) {
+      fail("Coordinator durable terminal result is not exact");
+    }
+
+    if (dependencies.assertExecutorSources) await dependencies.assertExecutorSources(plan);
+    else assertExactExecutorSources(plan);
+    if (dependencies.validateExactCutoverPacket) await dependencies.validateExactCutoverPacket({ packetRoot, plan, manifest: manifestRead.value });
+    else validateExactCutoverPacket({ packetRoot, plan, manifest: manifestRead.value, nowMs: clockNow() });
+    assertFreshWriterFence();
+    const finalGuardianNowMs = clockNow();
+    const finalGuardianLease = dependencies.assertGuardianLease
+      ? await dependencies.assertGuardianLease(guardian, finalGuardianNowMs)
+      : assertLiveFenceGuardian(guardian, finalGuardianNowMs);
+    const finalPm2 = dependencies.inspectPm2 ? await dependencies.inspectPm2() : pm2Entry(plan.production.processName);
+    if (finalPm2?.pm_id !== plan.production.pm2ProcessId
+      || String(finalPm2?.pm2_env?.status || "").toLowerCase() !== "online"
+      || sha256(String(pm2EnvValue(finalPm2, "PADLHUB_PLATFORM_TENANT_KEY") || "")) !== plan.tenantKeySha256
+      || String(pm2EnvValue(finalPm2, "VIVA_GAME_PROJECTION_SYNC_MODE") || "").toUpperCase() !== "SHADOW"
+      || Number(finalPm2?.pm2_env?.restart_time) !== activeRestartCount
+      || finalGuardianNowMs - Number(finalPm2?.pm2_env?.pm_uptime) < 10_000
+      || sha256(readPrivateBytes(liveFlowPath, "Final candidate flow", MAX_JSON_BYTES)) !== plan.candidateSha256) {
+      fail("Final READY runtime gate failed after coordinator terminal success");
+    }
+    assertPm2RuntimeIdentity(finalPm2, plan.production);
+    assertNoCutoverEnvironment(finalPm2);
+    const finalHealth = dependencies.probeRuntimeHealth
+      ? await dependencies.probeRuntimeHealth(plan.production.localHealthUrl)
+      : await probeLocalRuntimeHealth(plan.production.localHealthUrl, plan.candidateCanonicalSha256);
+    if (finalHealth?.url !== plan.production.localHealthUrl || finalHealth?.statusCode !== 200
+      || finalHealth?.bodyCanonicalSha256 !== plan.candidateCanonicalSha256) {
+      fail("Final READY /flows proof is not the exact candidate");
+    }
+    const finalMigrationConnection = readPrivateMongoConnection(
+      execution.migrationConnectionFile, plan.mongoTarget.migrationConnectionFingerprint,
+    );
+    const finalMongoClient = dependencies.finalizationMongoClient || new MongoClient(finalMigrationConnection.uri, {
+      appName: "PadlHubVivaGameProjectionReadyFinalizer", maxPoolSize: 1,
+      serverSelectionTimeoutMS: 20_000, connectTimeoutMS: 20_000, socketTimeoutMS: 20_000, timeoutMS: 20_000,
+    });
+    try {
+      if (!dependencies.finalizationMongoClient) await finalMongoClient.connect();
+      const finalHello = await finalMongoClient.db("admin").command({ hello: 1 });
+      if (finalHello?.setName !== plan.mongoTarget.replicaSetName) fail("Final READY Mongo replica set changed");
+      const finalBarrierRead = readPrivateJson(barrierReceiptPath, "Final Mongo write-barrier receipt", MAX_JSON_BYTES);
+      if (sha256(finalBarrierRead.bytes) !== barrierArtifact.sha256) fail("Final READY Mongo barrier receipt changed");
+      if (dependencies.assertMongoWriteBarrier) await dependencies.assertMongoWriteBarrier(finalBarrierRead.value);
+      else await assertMongoWriteBarrier(finalMongoClient, finalBarrierRead.value, {
+        fenceTokenSha256: plan.writerFence.fenceTokenSha256,
+        cutoverPlanSha256: execution.cutoverPlanSha256,
+        mongoTargetIdentitySha256: plan.mongoTarget.targetIdentitySha256,
+      });
+      if (dependencies.assertNoConcurrentWrites) await dependencies.assertNoConcurrentWrites();
+      else await assertNoConcurrentMongoWrites(finalMongoClient);
+    } finally {
+      if (!dependencies.finalizationMongoClient) await finalMongoClient.close().catch(() => {});
+    }
+    const readyMarker = writePrivate(path.join(postcheckOutputDirectory, "READY_TO_REOPEN_INGRESS.json"), {
+      formatVersion: 1,
+      kind: "viva-game-projection-cutover-ready-marker",
+      state: "READY_TO_REOPEN_INGRESS",
+      cutoverPlanSha256: execution.cutoverPlanSha256,
+      executionIndexSha256: options.expectedExecutionIndexSha256,
+      coordinatorAttemptId,
+      coordinatorReportSha256: sha256(coordinatorReportBytes),
+      coordinatorTerminalJournalSha256: sha256(terminalJournalRead.bytes),
+      postcheckReceiptSha256: postcheckResult.postcheckReceiptSha256,
+      postcheckManifestSha256: postcheckResult.postcheckManifestSha256,
+      mongoWriteBarrierReceiptSha256: barrierArtifact.sha256,
+      fenceGuardianReceiptSha256: guardianReceiptSha256,
+      fenceGuardianHeartbeatSha256: finalGuardianLease.sha256,
+      runtimeHealth: finalHealth,
+      ingressReopenEligible: true,
+      ingressReopened: false,
+      observedAt: new Date(finalGuardianNowMs).toISOString(),
+    });
+    return { ...result, readyMarkerSha256: readyMarker.sha256 };
   } catch (error) {
     let runtimeStopped = !candidatePublished;
     let stopError = null;
@@ -581,7 +677,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         runtimeStopped,
         ingressReopened: false,
         mutationAttempted: appliedItems.length > 0 || inFlightPlanSha256 !== null || candidatePublished || barrierInstallAttempted,
-        failedAt: new Date(dependencies.nowMs ?? Date.now()).toISOString(),
+        failedAt: new Date(clockNow()).toISOString(),
       });
     } catch { /* per-plan durable journals and the unchanged ingress fence remain authoritative */ }
     if (stopError) fail(`Cutover failed and runtime stop is unproven: ${String(stopError?.message || stopError)}`);

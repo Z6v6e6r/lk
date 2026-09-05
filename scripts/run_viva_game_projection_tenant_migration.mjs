@@ -22,6 +22,7 @@ import {
 import { buildMongoTargetIdentity, canonicalJson } from "./lib/vivaGameProjectionCutoverContract.mjs";
 import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
+import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = fs.realpathSync(path.resolve(path.dirname(SCRIPT_PATH), ".."));
@@ -367,6 +368,7 @@ export async function assertNoConcurrentMongoWrites(client) {
 }
 
 async function run({ mode, values }, dependencies = {}) {
+  const clockNow = () => (typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()));
   const expectedPlanSha256 = values.get("--expected-plan-sha256");
   const expectedSourceFlowSha256 = values.get("--expected-source-flow-sha256");
   const expectedRuntimeFlowSha256 = values.get("--expected-runtime-flow-sha256");
@@ -375,7 +377,7 @@ async function run({ mode, values }, dependencies = {}) {
     expectedPlanSha256,
     planBytes,
     expectedSourceFlowSha256,
-    nowMs: dependencies.nowMs ?? Date.now(),
+    nowMs: clockNow(),
   });
   const cutoverRead = readPrivateJson(values.get("--cutover-plan"), "Cutover plan", MAX_PACKET_BYTES);
   const manifestRead = readPrivateJson(values.get("--packet-manifest"), "Packet manifest", MAX_PACKET_BYTES);
@@ -394,6 +396,9 @@ async function run({ mode, values }, dependencies = {}) {
   if (dependencies.assertExecutorSources) await dependencies.assertExecutorSources(cutoverPlan);
   else assertExactExecutorSources(cutoverPlan);
   validatePacketBinding({ values, planBytes, plan, cutoverPlanBytes: cutoverRead.bytes, cutoverPlan, manifestBytes: manifestRead.bytes, manifest: manifestRead.value });
+  const packetRoot = fs.realpathSync(path.dirname(values.get("--packet-manifest")));
+  if (dependencies.validateExactCutoverPacket) await dependencies.validateExactCutoverPacket({ packetRoot, plan: cutoverPlan, manifest: manifestRead.value });
+  else validateExactCutoverPacket({ packetRoot, plan: cutoverPlan, manifest: manifestRead.value, nowMs: clockNow() });
   if ((mode === "verify" || mode === "apply" || mode === "reconcile")
     && expectedRuntimeFlowSha256 !== expectedSourceFlowSha256) fail("Verify/apply/reconcile require the frozen source flow to remain active on disk");
   if (new Set(["restore", "reconcile-restore"]).has(mode)
@@ -419,7 +424,7 @@ async function run({ mode, values }, dependencies = {}) {
   };
   const readFence = (expensive) => {
     const receipt = readPrivateJson(fencePath, "Writer fence receipt", 1024 * 1024).value;
-    validateHeldWriterFence(receipt, { ...fenceExpected, nowMs: dependencies.nowMs ?? Date.now() });
+    validateHeldWriterFence(receipt, { ...fenceExpected, nowMs: clockNow() });
     if (expensive && dependencies.assertSystemFenceLease) dependencies.assertSystemFenceLease(receipt, cutoverPlan);
     else if (expensive) {
       assertProductionHost(values, cutoverPlan, receipt);

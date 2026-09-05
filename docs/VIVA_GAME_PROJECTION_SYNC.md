@@ -208,6 +208,9 @@ directory. The packet manifest binds the exact commit, source, deterministically
 rebuilt candidate, controls, reviewed-flow contract, plans, source evidence,
 and every runtime/preparer executor source file. Packet preparation rejects a
 dirty or different checkout whose executor bytes do not match the exact commit.
+The coordinator, migration executor, and postcheck independently hash the full
+packet tree and replay source validation, capture-receipt validation, freshness,
+and deterministic plan reconstruction before any live transition.
 
 The packet enumerates every `mongodb4` writer to `lk_games` in both the source
 and candidate graphs. `aggregate` is conservatively classified as a writer,
@@ -251,12 +254,20 @@ migration principal must remain distinct and must prove a transactionally
 aborted validator bypass. The previous roles and validator/options are stored
 in the preparation and final private barrier receipts. A failed installation is
 recovered only with the exact artifact and explicit
-`npm run mongo:viva-game-projection-sync:barrier-recover` confirmation. This
+`npm run mongo:viva-game-projection-sync:barrier-recover` confirmation. Recovery
+also requires the exact execution index, fresh writer-fence and guardian receipts, a live
+guardian heartbeat holding the canonical lock inode, the frozen runtime in
+`stopped`/`SHADOW`, and the exact clean executor commit. It durably records an
+outcome-unknown entry before restoring Mongo state; retrying the same report
+path reconciles that journal and completes the exact preimage. The validator is
+restored before application roles are returned. This
 Mongo barrier survives coordinator and guardian-process failure. The coordinator then rereads
 the packet's complete EJSON backup and requires its document count and canonical
 full-collection state hash to equal a fresh live scan under the barrier before
 any tenant migration. It also requires the frozen plan ObjectIds to equal every
-active legacy row from the earliest plan date without an upper date bound.
+active legacy row from the packet generation date in UTC, without an upper date
+bound. The boundary is generated independently of migration-plan ranges and is
+revalidated against the fresh packet clock at every live entrypoint.
 
 The executor accepts canonical EJSON ObjectIds and verifies the separately
 pinned packet-manifest, cutover-plan, migration-plan, flow, tenant, host, and
@@ -307,13 +318,18 @@ passes only the required runtime values into `pm2 restart --update-env`, while
 clearing all cutover tokens, paths, descriptors, PIDs, and confirmation phrases.
 The frozen PM2 ID, executable, cwd, arguments, Node arguments, and restart count
 must remain exact through a ten-second stability dwell and a bounded local
-loopback health probe. It hashes the actual evidence bytes and atomically writes the
-postcheck receipt, manifest, and `READY_TO_REOPEN_INGRESS.json`. The standalone
-receipt validator refuses synthetic hash strings without those exact bytes.
+`GET /flows` probe. The probe requires status 200 and the exact canonical hash
+of the reviewed candidate flow. It hashes the actual evidence bytes and
+atomically writes only the postcheck receipt and manifest. The standalone
+postcheck never writes `READY_TO_REOPEN_INGRESS.json` and refuses synthetic hash
+strings without the exact bytes.
 Immediately before READY publication it repeats the current-time lease check,
 exclusive-flock probe, Mongo barrier check, PM2 environment/status readback, and
-candidate-flow hash. READY binds the exact execution-index SHA, coordinator
-attempt UUID, barrier receipt, and guardian receipt.
+candidate-flow hash. The coordinator first fsyncs its terminal success report
+and terminal journal entry, then repeats the packet, writer fence, guardian,
+Mongo barrier, PM2, and exact `/flows` gates. READY is written last and binds the
+terminal report/journal hashes, exact execution-index SHA, coordinator attempt
+UUID, barrier receipt, guardian receipt, and final guardian heartbeat.
 The coordinator reports `POSTCHECK_PASS_INGRESS_STILL_BLOCKED`; it never opens
 ingress. A failed postcheck emits no READY marker. If the candidate was already
 published, the coordinator must prove PM2 `stopped`; a stop failure is reported
