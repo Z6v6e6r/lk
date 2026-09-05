@@ -286,6 +286,14 @@ guardian process still owns its copy of the descriptor. After successful
 recovery, the guardian independently checks the terminal report, terminal
 journal, takeover receipt, fresh heartbeat, PID/start identity, descriptor, and
 lock inode, then exits and transfers sole release custody to that takeover.
+If that exact takeover dies after the terminal report is durable but before the
+handoff, the still-live guardian proves the old PID/start identity is dead,
+rereads the same receipt, report, and terminal journal, and advertises
+`HOLDING_TERMINAL_RECOVERY_FALLBACK` in its heartbeat. It keeps the canonical
+flock, rejects another recovery child and generic release, and accepts only the
+same terminal-bound release contract that the takeover would have accepted.
+Live, reused-PID-with-lock, partial, or otherwise ambiguous keeper evidence
+never enables fallback.
 The takeover receipt durably records `custodyState=TAKEOVER_ESTABLISHED` before
 the request is accepted. The child announces that exact receipt to the guardian,
 which immediately blocks READY, generic release, and every different recovery
@@ -296,7 +304,8 @@ PID/start identity proves that process is dead; incomplete or ambiguous evidence
 never starts a second keeper.
 Early invalid release requests are quarantined while the takeover keeps the
 flock. A completed recovery report is reusable only while that exact takeover
-receipt and live heartbeat still prove lock custody. A recovery CLI retry
+receipt and live heartbeat prove lock custody, or while a fresh exact guardian
+heartbeat proves terminal fallback custody after the keeper's confirmed death. A recovery CLI retry
 reuses the exact accepted request ID, refreshes only its authorization time,
 and adopts the existing live takeover before it reconciles the same journal; it
 cannot create a second keeper. It also reconciles an existing pending request or

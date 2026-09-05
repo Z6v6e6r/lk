@@ -496,10 +496,39 @@ const readCompletedRecoveryWithLiveTakeover = async ({
     releaseRequestPath: guardian.releaseRequestPath,
     recoveryReportPath: options.report,
   };
-  const lease = dependencies.assertTakeoverLease
-    ? await dependencies.assertTakeoverLease(takeoverRead.value, expected, nowMs)
-    : assertLiveRecoveryFenceTakeover(takeoverRead.value, expected, nowMs);
-  if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Recovery takeover lacks a fresh heartbeat digest");
+  let lease = null;
+  try {
+    lease = dependencies.assertTakeoverLease
+      ? await dependencies.assertTakeoverLease(takeoverRead.value, expected, nowMs)
+      : assertLiveRecoveryFenceTakeover(takeoverRead.value, expected, nowMs);
+  } catch { /* the live guardian may have established terminal fallback custody */ }
+  if (lease) {
+    if (!HASH_RE.test(String(lease.sha256 || ""))) fail("Recovery takeover lacks a fresh heartbeat digest");
+    return completed;
+  }
+  let guardianLease = null;
+  try {
+    guardianLease = dependencies.assertGuardianLease
+      ? await dependencies.assertGuardianLease(guardian, nowMs)
+      : assertLiveFenceGuardian(guardian, nowMs);
+  } catch { fail("Completed recovery lacks a live takeover or terminal guardian fallback"); }
+  const fallback = guardianLease?.heartbeat?.recoveryTerminalGuardianFallback;
+  const terminalNames = fs.readdirSync(journal.journalDirectory).filter((name) => !name.startsWith(".")).sort();
+  const terminalRead = readPrivateJson(
+    path.join(journal.journalDirectory, terminalNames.at(-1) || ""),
+    "Recovery terminal journal", 16 * 1024 * 1024,
+  );
+  if (fallback?.state !== "HOLDING_TERMINAL_RECOVERY_FALLBACK"
+    || fallback?.recoveryRequestId !== completedRequestId
+    || fallback?.recoveryReportPath !== options.report
+    || fallback?.recoveryReportSha256 !== sha256(Buffer.from(canonicalJson(completed)))
+    || fallback?.recoveryTerminalJournalSha256 !== sha256(terminalRead.bytes)
+    || fallback?.recoveryFenceTakeoverReceiptSha256 !== sha256(takeoverRead.bytes)
+    || terminalRead.value?.phase !== "TERMINAL_RESULT"
+    || terminalRead.value?.reportSha256 !== fallback.recoveryReportSha256
+    || canonicalJson(terminalRead.value?.report) !== canonicalJson(completed)) {
+    fail("Completed recovery guardian fallback does not bind its exact terminal evidence");
+  }
   return completed;
 };
 
