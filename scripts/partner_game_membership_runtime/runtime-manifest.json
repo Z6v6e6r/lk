@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "deploymentId": "partner-game-membership-api-v02",
   "state": "SECURITY_AUDIT_PASS",
-  "sourceBaseCommit": "c92e432a9d0319cfebcd2c37b7967aef118f2f41",
+  "sourceBaseCommit": "26f90b6d5f54fa3ae6f51f77e70391957b44b781",
   "runtime": {
     "platform": "linux",
     "architecture": "x64",
@@ -14,10 +14,11 @@
   "closure": {
     "packageJsonSha256": "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     "packageLockSha256": "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
-    "dependencyTreeSha256": "1bd9dbdc7115710836ec31c2e3d3d6a51446c5cc84b65924d12ac3501e41449e",
-    "auditReportSha256": "94da0446b0c7aa5e9f99848f55350188f36edeb94fc16ba8610e5e84e2baf96c",
-    "functionalRehearsalSha256": "74fa75ffd6e5a7ea84c8c13c5f34875cc92c292d3c658234e8bac7c4676255fc",
-    "customNodeReleaseSha256": "9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398"
+    "dependencyTreeSha256": "2d8fe65584d879ed60cb6bd1271314ea26bf7a2f4fef9af009fc88b79e55578e",
+    "auditReportSha256": "e4cb6bf40d078bce3822754954af2a7b439876c0960475e1e39c66fc12603c8a",
+    "functionalRehearsalSha256": "9a3f38ddf5531eb371e1f612dc57ffbb9552abd20a1ccde3477a6f5540164d7f",
+    "customNodeReleaseSha256": "90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d",
+    "containerReceiptSha256": "e1c68bdcfd64d3a20a53b7942660dec77622ed71db669af505a938b1f951c7e7"
   },
   "installation": {
     "command": "npm ci --ignore-scripts --no-fund --no-audit",
@@ -25,7 +26,7 @@
     "exitCode": 0
   },
   "dependencyTree": {
-    "capturedAt": "2026-09-04T12:30:15.506Z",
+    "capturedAt": "2026-09-05T06:35:56.269Z",
     "command": "npm ls --all --json --omit=dev",
     "packageOccurrenceCount": 838,
     "invalidPackageCount": 0,
@@ -33,7 +34,7 @@
     "exitCode": 0
   },
   "audit": {
-    "capturedAt": "2026-09-04T12:30:33.751Z",
+    "capturedAt": "2026-09-05T06:35:59.436Z",
     "command": "npm audit --omit=dev --json",
     "affectedPackages": {
       "critical": 0,

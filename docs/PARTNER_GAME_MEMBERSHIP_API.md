@@ -238,7 +238,10 @@ Bearer берётся только из server-side Node-RED global context
 `vivacrm_access_token` и принимается лишь когда `vivacrm_token_expires_at` остаётся
 больше чем на 30 секунд вперед. Caller не может передать token, Viva client ID, booking ID,
 `paymentType` или API base. Base pinned к `https://api.vivacrm.ru/api/v1`; redirect
-запрещён, timeout ограничен 1–30 секундами, mutation не повторяется автоматически.
+запрещён, timeout ограничен 1–30 секундами и действует до полного чтения ответа,
+mutation не повторяется автоматически. Response читается потоково с жёстким пределом
+`1 000 000` байт: завышенный `Content-Length` отклоняется до чтения, а chunked response
+останавливается и отменяется сразу при превышении лимита.
 
 Текущий provider contract основан на существующих repository integrations и остаётся
 **provisional до письменного подтверждения Viva**:

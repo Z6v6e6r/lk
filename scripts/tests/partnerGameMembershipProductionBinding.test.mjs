@@ -13,7 +13,11 @@ import { validatePartnerProductionBinding } from "../validate_partner_game_membe
 const controlsBytes = fs.readFileSync(new URL("../partner_game_membership_production_controls.json", import.meta.url));
 const controls = JSON.parse(controlsBytes.toString("utf8"));
 const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
-const capturedAt = "2026-09-04T12:40:00.000Z";
+// Anchor the synthetic clock to the checked evidence, not a historical wall-clock date.
+const capturedAt = new Date(Math.max(
+  Date.parse(controls.runtime.immutableClosure.auditCapturedAt),
+  Date.parse(controls.runtime.immutableClosure.functionalRehearsalCapturedAt),
+) + 5 * 60_000).toISOString();
 const now = Date.parse(capturedAt);
 const hostIdentityBytes = Buffer.from("fixture-machine-identity\n", "utf8");
 const actualHostname = "fixture-host";
@@ -147,7 +151,7 @@ function validBinding(packet) {
       targetDirectory: packet.root,
       directoryMode: "0700",
       fileMode: "0600",
-      retentionUntil: "2026-09-11T12:40:00.000Z",
+      retentionUntil: new Date(now + 7 * 24 * 60 * 60_000).toISOString(),
       custodyOwner: "role:release-owner",
       deletionOwner: "role:release-owner",
       incidentOwner: "role:security-owner",
@@ -218,7 +222,7 @@ test("private production binding rejects controls drift and stale audit evidence
   assert.throws(() => validate(wrongControls, packet), /exact production-controls bytes/);
 
   const stale = validBinding(packet);
-  stale.runtime.auditCapturedAt = "2026-09-03T10:00:00.000Z";
+  stale.runtime.auditCapturedAt = new Date(now - 25 * 60 * 60_000).toISOString();
   assert.throws(() => validate(stale, packet), /audit is stale/);
 
   const closureDrift = validBinding(packet);
@@ -230,7 +234,7 @@ test("private production binding rejects controls drift and stale audit evidence
   assert.throws(() => validate(architectureDrift, packet), /runtime audit policy/);
 
   const futureRehearsal = validBinding(packet);
-  futureRehearsal.runtime.functionalRehearsalCapturedAt = "2026-09-04T12:45:00.000Z";
+  futureRehearsal.runtime.functionalRehearsalCapturedAt = new Date(now + 5 * 60_000).toISOString();
   assert.throws(() => validate(futureRehearsal, packet), /functional rehearsal is newer/);
 });
 

@@ -43,6 +43,7 @@ secret change, migration, deploy, activation или real provider mutation.
 | Runtime readiness | Любой Viva gate/token отсутствует | `503` до operation/membership/provider call + durable rejected audit |
 | Viva create contract | Готовый adapter получает add | Один POST, pinned base/path/body, auth/idempotency/correlation headers |
 | Viva ambiguity | Network/timeout/5xx/invalid binding | `202 UNKNOWN`, ровно один mutation call, без retry |
+| Viva slow/oversized response | Body не завершается либо `Content-Length`/chunked body больше `1 000 000` байт | Общий timeout остаётся активным до конца body; reader отменяется; лишний chunk не запрашивается; mutation становится `202 UNKNOWN` |
 | Viva removal | Cancel probe не подтверждает cancellation-only | PUT не вызывается; definite contract mismatch |
 | Viva read-back | Duplicate/противоречивые identity, state или collection aliases | `VIVA_READBACK_AMBIGUOUS`, local completion запрещён |
 | Synthetic isolation | Не-loopback или production env/DB | Synthetic provider запрещён |

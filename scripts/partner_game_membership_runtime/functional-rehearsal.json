@@ -1,11 +1,11 @@
 {
   "formatVersion": 1,
   "deploymentId": "partner-game-membership-api-v02",
-  "capturedAt": "2026-09-04T12:27:45.000Z",
+  "capturedAt": "2026-09-05T06:49:04.000Z",
   "clockSource": "node-red-container-log",
   "evidenceScope": "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
-  "sourceBaseCommit": "c92e432a9d0319cfebcd2c37b7967aef118f2f41",
-  "customNodeReleaseSha256": "9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398",
+  "sourceBaseCommit": "26f90b6d5f54fa3ae6f51f77e70391957b44b781",
+  "customNodeReleaseSha256": "90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d",
   "runtime": {
     "platform": "linux",
     "architecture": "x64",
@@ -21,7 +21,7 @@
   },
   "candidate": {
     "sourceFlowSha256": "ea9b6a5e1b783327a5e4785e8ef6656ee2c3ea3c8523bf46c63599ae0580a2b2",
-    "candidateFlowSha256": "65b540a925f731fa9ce7967cd46ec8fe25e8b11c5a1aa3291ff7e6c801088dd2",
+    "candidateFlowSha256": "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
     "audienceEnvironmentVariable": "LK_PARTNER_GAME_API_AUDIENCE",
     "signatureVersion": "v2"
   },
@@ -55,5 +55,54 @@
     "temporaryDirectoriesRemoved": true
   },
   "decision": "FUNCTIONAL_COMPATIBILITY_PASS_SECURITY_AUDIT_PASS",
-  "productionTouched": false
+  "productionTouched": false,
+  "containerReceipt": {
+    "formatVersion": 1,
+    "evidenceScope": "LOCAL_CONTAINER_CLI_READBACK",
+    "containerId": "9f02ba07c9d6528863548acea8526aa3c11b69436bce4d94546cbfde5ca81603",
+    "imageReference": "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+    "containerImageId": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+    "platformImageId": "sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96",
+    "imageRepoDigests": [
+      "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
+    ],
+    "platform": "linux",
+    "architecture": "amd64",
+    "networkMode": "none",
+    "publishedPortCount": 0,
+    "mounts": [
+      {
+        "sourceRelativePath": ".tmp/partner-viva-p2-sidecar",
+        "target": "/input/flows",
+        "readOnly": true
+      },
+      {
+        "sourceRelativePath": ".tmp/partner-viva-rehearse.mjs",
+        "target": "/input/rehearse.mjs",
+        "readOnly": true
+      },
+      {
+        "sourceRelativePath": ".tmp/partner-viva-p2-runtime",
+        "target": "/input/runtime",
+        "readOnly": true
+      },
+      {
+        "sourceRelativePath": "scripts/partner_game_membership_sidecar",
+        "target": "/input/sidecar",
+        "readOnly": true
+      },
+      {
+        "sourceRelativePath": ".tmp/partner-viva-p2-output",
+        "target": "/output",
+        "readOnly": false
+      }
+    ],
+    "orchestratorSha256": "0f774b59663581309fa311a8fa008a920f54d858f740be81ca2752c0f9c66ea7",
+    "inspectedAt": "2026-09-05T06:48:59.076Z",
+    "finishedAt": "2026-09-05T06:49:07.864180793Z",
+    "exitCode": 0,
+    "cleanupCapturedAt": "2026-09-05T06:49:08.451Z",
+    "containerPresentAfterCleanup": false,
+    "hostListenerPresentAfterCleanup": false
+  }
 }

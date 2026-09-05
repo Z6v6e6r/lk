@@ -1,9 +1,10 @@
 import { PartnerProviderError } from "./partner-game-membership-core.mjs";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, TextDecoder } from "node:util";
 
 export const PARTNER_VIVA_ADMIN_API_BASE = "https://api.vivacrm.ru/api/v1";
 export const PARTNER_VIVA_CONTRACT_REVISION = "padlhub-viva-technical-booking-v1";
 export const PARTNER_VIVA_PAYMENT_TYPE = "ON_PLACE";
+export const PARTNER_VIVA_RESPONSE_MAX_BYTES = 1_000_000;
 
 const TOKEN_PATTERN = /^[A-Za-z0-9._~-]{16,8192}$/;
 const TERMINAL_BOOKING_STATES = new Set([
@@ -52,6 +53,84 @@ const providerError = (code, message, options = {}) => {
   }
   if (options.terminal !== undefined) normalized.terminal = options.terminal === true;
   return new PartnerProviderError(code, message, normalized);
+};
+
+const awaitWithAbort = async (pending, signal) => {
+  if (signal.aborted) throw signal.reason || new Error("Viva request aborted");
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(signal.reason || new Error("Viva request aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([Promise.resolve(pending), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+};
+
+const cancelReader = (reader, reason) => {
+  try {
+    Promise.resolve(reader.cancel(reason)).catch(() => {});
+  } catch {
+    // Preserve the response error that required cancellation.
+  }
+};
+
+const cancelResponseBody = (response, reason) => {
+  if (!response?.body || typeof response.body.cancel !== "function") return;
+  try {
+    Promise.resolve(response.body.cancel(reason)).catch(() => {});
+  } catch {
+    // The response status remains authoritative when its body is not needed.
+  }
+};
+
+const readBoundedResponseText = async (response, signal) => {
+  const contentLength = toText(response?.headers?.get?.("content-length"));
+  if (/^\d+$/.test(contentLength)
+    && Number(contentLength) > PARTNER_VIVA_RESPONSE_MAX_BYTES) {
+    cancelResponseBody(response, "Viva response exceeds the accepted limit");
+    throw providerError(
+      "VIVA_RESPONSE_TOO_LARGE",
+      "Viva response exceeds the accepted limit",
+      { ambiguous: true },
+    );
+  }
+  if (response?.body === null) return "";
+  if (!response?.body || typeof response.body.getReader !== "function") {
+    throw new TypeError("Viva response body is not a web stream");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const textChunks = [];
+  let receivedBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await awaitWithAbort(reader.read(), signal);
+      if (done) break;
+      if (!(value instanceof Uint8Array)) {
+        throw new TypeError("Viva response stream returned a non-byte chunk");
+      }
+      receivedBytes += value.byteLength;
+      if (receivedBytes > PARTNER_VIVA_RESPONSE_MAX_BYTES) {
+        throw providerError(
+          "VIVA_RESPONSE_TOO_LARGE",
+          "Viva response exceeds the accepted limit",
+          { ambiguous: true },
+        );
+      }
+      textChunks.push(decoder.decode(value, { stream: true }));
+    }
+    textChunks.push(decoder.decode());
+    return textChunks.join("");
+  } catch (error) {
+    cancelReader(reader, error);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 };
 
 const exactAlias = (values, label) => {
@@ -218,52 +297,59 @@ export class VivaAdminTechnicalUserProvider {
     const token = await this.resolveToken();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response;
     try {
-      response = await this.fetchImpl(`${this.apiBase}${path}`, {
-        method,
-        redirect: "error",
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-          ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
-          ...(correlationId ? { "X-Correlation-ID": correlationId } : {}),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-    } catch {
-      throw providerError(outcomeCode, "Viva request outcome is ambiguous", { ambiguous: true });
+      let response;
+      try {
+        response = await awaitWithAbort(this.fetchImpl(`${this.apiBase}${path}`, {
+          method,
+          redirect: "error",
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+            ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+            ...(correlationId ? { "X-Correlation-ID": correlationId } : {}),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }), controller.signal);
+      } catch {
+        throw providerError(outcomeCode, "Viva request outcome is ambiguous", { ambiguous: true });
+      }
+
+      if (allowNotFound && response.status === 404) {
+        cancelResponseBody(response, "Viva 404 response body is not used");
+        return { status: 404, payload: null };
+      }
+      let text;
+      try {
+        text = await readBoundedResponseText(response, controller.signal);
+      } catch (error) {
+        if (error instanceof PartnerProviderError) throw error;
+        throw providerError(outcomeCode, "Viva request outcome is ambiguous", { ambiguous: true });
+      }
+      let payload = null;
+      try {
+        payload = text ? JSON.parse(text) : null;
+      } catch {
+        throw providerError("VIVA_RESPONSE_INVALID", "Viva response is not valid JSON", {
+          ambiguous: method !== "GET",
+          httpStatus: 502,
+        });
+      }
+      if (response.status >= 500) {
+        throw providerError(outcomeCode, "Viva request outcome is ambiguous", { ambiguous: true });
+      }
+      if (!response.ok) {
+        throw providerError("VIVA_REQUEST_REJECTED", "Viva rejected the partner booking request", {
+          ambiguous: false,
+          httpStatus: response.status === 401 || response.status === 403 ? 503 : 409,
+        });
+      }
+      return { status: response.status, payload };
     } finally {
       clearTimeout(timeout);
     }
-
-    if (allowNotFound && response.status === 404) return { status: 404, payload: null };
-    let payload = null;
-    try {
-      const text = await response.text();
-      if (text.length > 1_000_000) {
-        throw providerError("VIVA_RESPONSE_TOO_LARGE", "Viva response exceeds the accepted limit", { ambiguous: true });
-      }
-      payload = text ? JSON.parse(text) : null;
-    } catch (error) {
-      if (error instanceof PartnerProviderError) throw error;
-      throw providerError("VIVA_RESPONSE_INVALID", "Viva response is not valid JSON", {
-        ambiguous: method !== "GET",
-        httpStatus: 502,
-      });
-    }
-    if (response.status >= 500) {
-      throw providerError(outcomeCode, "Viva request outcome is ambiguous", { ambiguous: true });
-    }
-    if (!response.ok) {
-      throw providerError("VIVA_REQUEST_REJECTED", "Viva rejected the partner booking request", {
-        ambiguous: false,
-        httpStatus: response.status === 401 || response.status === 403 ? 503 : 409,
-      });
-    }
-    return { status: response.status, payload };
   }
 
   async addTechnicalUser(input) {

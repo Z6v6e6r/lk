@@ -7,8 +7,8 @@ fail-closed контракт, но не содержат production hostname, CI
 
 ## Что доказано изолированно
 
-4 сентября 2026 года пакет custom-node с release identity
-`9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398`
+5 сентября 2026 года пакет custom-node с release identity
+`90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d`
 проверен в отдельном minimal sidecar closure на Linux x64, Node `22.23.2`, npm
 `10.9.8` и Node-RED `5.0.6`:
 
@@ -21,6 +21,33 @@ fail-closed контракт, но не содержат production hostname, CI
 | Package + palette-cache quarantine | `404`, Partner palette matches: `0` |
 | Cleanup | test containers: `0`, внешний listener: `0` (`--network none`), package hashes неизменны |
 | Production side effects | `0` |
+
+Повторная проверка 5 сентября закрывает P2 в Viva adapter: deadline включает чтение
+body, ответ ограничивается потоком до `1 000 000` байт, а timeout/overflow сохраняют
+неопределённый результат мутации без автоматического повтора. Provider regressions
+прошли `10/10` на закреплённом Linux/x64 Node `22.23.2`; весь Partner-набор —
+`88/88`. Audit получен `2026-09-05T06:35:59.436Z`, runtime rehearsal —
+`2026-09-05T06:49:04.000Z`. Source base: `26f90b6d5f54fa3ae6f51f77e70391957b44b781`;
+точные изменённые package bytes определяет custom-node release hash выше.
+Functional и sidecar evidence теперь ссылаются на один фактически проверенный
+candidate `5a5aefe3…`; старые пакеты с прежним release hash требуют пересборки.
+
+`functional-rehearsal.json.containerReceipt` сохранён host-orchestrator из Docker
+CLI readback. Квитанция различает запрошенный image reference, container image ID
+и ID platform-specific image; фиксирует RepoDigests, Linux/amd64, network none,
+отсутствие опубликованных портов и точные read-only inputs / writable output.
+После завершения отдельно проверены exit code, удаление exact container ID и
+отсутствие host listener. SHA квитанции и самого orchestrator включены в evidence;
+`containerReceiptSha256` проверяется manifest validator. Негативный тест отклоняет
+ослабление isolation/cleanup даже при пересчёте внутренних хешей.
+Это нормализованная локальная квитанция, а не registry attestation или подтверждение
+production. `temporaryDirectoriesRemoved` утверждается после удаления рабочих
+host-копий runtime/cache/state; сохранённый архив raw proof не является runtime.
+
+Тестовые часы production-binding fixture вычисляются относительно закреплённых
+audit/rehearsal dates. Это позволяет обновлять evidence без устаревшей календарной
+даты в тесте; production freshness-policy и проверки просроченного/будущего
+evidence остаются прежними.
 
 Точные `settings.cjs`, default-off hardened systemd unit и no-network readback
 (`18894`, Partner `503`, admin root `404`, CORS отсутствует, graceful stop) входят в
