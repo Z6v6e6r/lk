@@ -1573,8 +1573,14 @@ export default function TournamentSubscriptionPage({
                   : `${remainingCount} из ${displayTotalLimit}`
             );
           const isOutOfStock = usesTrackedCounter
-            && Boolean(status && !status.unlimited && (status.remainingCount <= 0 || (status.bindingReady && !status.canPurchase)));
+            && Boolean(status && !status.unlimited && status.remainingCount <= 0);
+          const isSaleUnavailable = usesTrackedCounter && Boolean(status && !status.canPurchase);
           const isBindingUnavailable = isGuardedStorefront && (!status || !status.bindingReady);
+          const availabilityMessage = isOutOfStock
+            ? "Лимит исчерпан."
+            : isSaleUnavailable && !isBindingUnavailable
+              ? "Оформление подписки временно недоступно. Попробуйте позже."
+              : null;
           const disableForProfile = isAuthenticated && !loadingProfile && !hasProfilePhone;
           const hasPurchaseBinding = plan.purchaseMode === "tiered_counter"
             ? Boolean(plan.counterKey)
@@ -1586,6 +1592,7 @@ export default function TournamentSubscriptionPage({
             || !hasPurchaseBinding
             || isPlanBusy
             || isOutOfStock
+            || isSaleUnavailable
             || isBindingUnavailable
             || disableForProfile
             || (plan.requiresConsent && !acceptedTermsByDisplayId[plan.id])
@@ -1775,15 +1782,26 @@ export default function TournamentSubscriptionPage({
                   className="tournament-subscription-buy"
                   onClick={() => { handleBuy(plan); }}
                   disabled={buttonDisabled}
+                  aria-describedby={availabilityMessage ? `subscription-availability-${plan.id}` : undefined}
                 >
                   {isBuying
                     ? "Создаем оплату..."
-                    : isOutOfStock
+                    : plan.buttonLabel || (isOutOfStock
                       ? "Лимит исчерпан"
                       : isBindingUnavailable
                         ? "Продажи скоро откроются"
-                        : (plan.buttonLabel || (isGuardedStorefront ? "Записаться и оформить" : "Оформить подписку"))}
+                        : (isGuardedStorefront ? "Записаться и оформить" : "Оформить подписку"))}
                 </button>
+
+                {availabilityMessage && (
+                  <div
+                    id={`subscription-availability-${plan.id}`}
+                    className="tournament-subscription-warning"
+                    role="status"
+                  >
+                    {availabilityMessage}
+                  </div>
+                )}
 
                 {!isAuthenticated && authRequestedDisplayId === plan.id && (
                   <div className="tournament-subscription-info">Для оформления нужна авторизация.</div>

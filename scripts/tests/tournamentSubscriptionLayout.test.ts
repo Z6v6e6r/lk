@@ -77,3 +77,38 @@ test("ab_leto storefront keeps the approved source artwork bytes", () => {
     assert.equal(crypto.createHash("sha256").update(bytes).digest("hex"), expectedSha256, fileName);
   }
 });
+
+test("HUB readiness denial is not sold out and never enables checkout", () => {
+  const start = page.indexOf("const isOutOfStock =");
+  const end = page.indexOf("const disableForProfile =", start);
+  assert.ok(start >= 0 && end > start);
+  const resolveAvailability = new Function("status", "usesTrackedCounter", "isGuardedStorefront", `
+    ${page.slice(start, end)}
+    return { isOutOfStock, isSaleUnavailable, isBindingUnavailable, availabilityMessage };
+  `);
+  const status = { remainingCount: 10, unlimited: false, bindingReady: true, canPurchase: false };
+  const unavailable = resolveAvailability(status, true, true);
+  assert.equal(unavailable.isOutOfStock, false);
+  assert.equal(unavailable.isSaleUnavailable, true);
+  assert.match(unavailable.availabilityMessage, /временно недоступно/);
+  assert.doesNotMatch(unavailable.availabilityMessage, /Лимит исчерпан/);
+
+  const soldOut = resolveAvailability({ ...status, remainingCount: 0 }, true, true);
+  assert.equal(soldOut.isOutOfStock, true);
+  assert.equal(soldOut.isSaleUnavailable, true);
+  assert.equal(soldOut.availabilityMessage, "Лимит исчерпан.");
+
+  const ready = resolveAvailability({ ...status, canPurchase: true }, true, true);
+  assert.equal(ready.isSaleUnavailable, false);
+  assert.equal(ready.availabilityMessage, null);
+  assert.equal(resolveAvailability(null, true, true).isBindingUnavailable, true);
+  assert.equal(resolveAvailability({ ...status, bindingReady: false }, true, true).isBindingUnavailable, true);
+  assert.equal(resolveAvailability({ ...status, unlimited: true }, true, true).isSaleUnavailable, true);
+  assert.equal(resolveAvailability(status, false, false).isSaleUnavailable, false);
+
+  assert.match(page, /const buttonDisabled = Boolean\([\s\S]*?\|\| isSaleUnavailable/);
+  assert.match(page, /const buttonDisabled = Boolean\([\s\S]*?\|\| isBindingUnavailable/);
+  assert.match(page, /: plan\.buttonLabel \|\| \(isOutOfStock/);
+  assert.match(page, /aria-describedby=\{availabilityMessage \?/);
+  assert.match(page, /id=\{`subscription-availability-\$\{plan\.id\}`\}/);
+});
