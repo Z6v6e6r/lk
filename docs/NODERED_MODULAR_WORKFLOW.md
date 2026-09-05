@@ -122,6 +122,14 @@ creation/refresh and atomic live-flow publication fsync both file content and
 the containing directory before the next state transition. This preserves the
 backup-first and recovery contract across host or process crashes.
 
+After an apply exception, recovery classifies the protected live file by its
+exact source/candidate digest, not by whether the atomic-write call returned.
+A directory-fsync error after rename can already have published the candidate;
+that candidate must be restored and the source runtime restarted before the
+lease is released. Unknown or unreadable live bytes, an incomplete restore,
+or an offline runtime retain the lease and report incomplete rollback. A failure
+before rename with exact source bytes and a healthy runtime requires no restart.
+
 This lease is the minimum production soak window. Do not delete or edit it to
 force an unrelated rollout; wait for expiry or roll back the owning deployment.
 Legacy candidate finalization remains a separate R4 live authorization even

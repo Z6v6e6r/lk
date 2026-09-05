@@ -468,6 +468,113 @@ test("remote runtime restores reviewed bytes when candidate restart fails", (t) 
   assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
 });
 
+const failAfterLiveRename = (t, prepared, { failRestore = false, drift = null } = {}) => {
+  const rename = fs.renameSync;
+  const fsync = fs.fsyncSync;
+  let pending = false;
+  let publications = 0;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    rename(from, to);
+    if (to === prepared.liveFlowPath) {
+      pending = true;
+      publications += 1;
+    }
+  });
+  t.mock.method(fs, "fsyncSync", (descriptor) => {
+    if (pending && fs.fstatSync(descriptor).isDirectory()) {
+      pending = false;
+      if (publications === 1 || (publications === 2 && failRestore)) {
+        if (drift === "unknown") fs.writeFileSync(prepared.liveFlowPath, "unknown flow bytes");
+        if (drift === "missing") fs.unlinkSync(prepared.liveFlowPath);
+        throw new Error("synthetic directory fsync failure after live rename");
+      }
+    }
+    return fsync(descriptor);
+  });
+};
+
+for (const offline of [false, true]) {
+  test(`pre-rename failure ${offline ? "retains protection when offline" : "keeps the healthy source without restart"}`, (t) => {
+    const prepared = prepareRuntime(t, { liveMode: 0o644 });
+    const rename = fs.renameSync;
+    t.mock.method(fs, "renameSync", (from, to) => {
+      if (to === prepared.liveFlowPath) {
+        if (offline) prepared.setProcessState({ status: "errored" });
+        throw new Error("synthetic pre-rename failure");
+      }
+      return rename(from, to);
+    });
+    assert.throws(() => prepared.runtime.apply({
+      candidatePath: prepared.candidatePath,
+      contractPath: prepared.contractPath,
+      deploymentId: prepared.contract.deploymentId,
+      stamp: "20260820T120000+0300",
+    }), offline ? /rollback is incomplete and deployment lease remains active/ : /rollback completed/);
+    assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+    assert.deepEqual(prepared.restartPreviousValues, []);
+    assert.equal(fs.existsSync(prepared.deploymentLeasePath), offline);
+  });
+}
+
+test("apply restores a candidate published before a directory fsync failure", (t) => {
+  const prepared = prepareRuntime(t);
+  failAfterLiveRename(t, prepared);
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T120000+0300",
+  }), /rollback completed: synthetic directory fsync failure/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+test("restore fsync failure retains the lease for exact rollback resume", (t) => {
+  const prepared = prepareRuntime(t);
+  failAfterLiveRename(t, prepared, { failRestore: true });
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T120000+0300",
+  }), /rollback is incomplete and deployment lease remains active/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+  assert.equal(JSON.parse(fs.readFileSync(prepared.deploymentLeasePath)).phase, "rollback-restart-required");
+  const result = prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    flowBackup: path.join(prepared.backupDirectory, "flows-pre-subscription-binding-20260820T120000+0300.json"),
+    contractBackup: path.join(prepared.backupDirectory, "contract-subscription-binding-20260820T120000+0300.json"),
+  });
+  assert.equal(result.rollbackMode, "resume-restart");
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+for (const drift of ["unknown", "missing"]) {
+  test(`apply preserves protection for ${drift} live state after publication failure`, (t) => {
+    const prepared = prepareRuntime(t);
+    failAfterLiveRename(t, prepared, { drift });
+    assert.throws(() => prepared.runtime.apply({
+      candidatePath: prepared.candidatePath,
+      contractPath: prepared.contractPath,
+      deploymentId: prepared.contract.deploymentId,
+      stamp: "20260820T120000+0300",
+    }), /rollback is incomplete and deployment lease remains active/);
+    assert.deepEqual(prepared.restartPreviousValues, []);
+    assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+    if (drift === "unknown") assert.equal(fs.readFileSync(prepared.liveFlowPath, "utf8"), "unknown flow bytes");
+    else assert.equal(fs.existsSync(prepared.liveFlowPath), false);
+    prepared.advanceTime(15 * 60 * 1000 + 1);
+    assert.throws(() => prepared.runtime.preflight({
+      candidatePath: prepared.candidatePath,
+      contractPath: prepared.contractPath,
+      deploymentId: prepared.contract.deploymentId,
+    }), /deployment lease is active/);
+  });
+}
+
 test("remote runtime resumes an incomplete automatic rollback under the matching lease", (t) => {
   const prepared = prepareRuntime(t, { restartFailures: 2 });
   assert.throws(() => prepared.runtime.apply({

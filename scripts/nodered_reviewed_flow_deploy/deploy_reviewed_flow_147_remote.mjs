@@ -335,13 +335,13 @@ export function createReviewedFlowRuntime({
     writeFileExclusiveDurable(contractBackup, prepared.contractBytes, protectedFileOptions);
     let deploymentLease = acquireDeploymentLease(prepared.contract);
 
-    let published = false;
+    let restartAttempted = false;
     try {
       if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256) {
         throw new Error("Live flow changed after backup and before publication");
       }
       atomicWrite(liveFlowPath, prepared.candidateBytes, { uid, gid });
-      published = true;
+      restartAttempted = true;
       const processInfo = pm2.restart(beforeProcess.restartCount);
       const activeSha256 = sha256(fs.readFileSync(liveFlowPath));
       if (activeSha256 !== prepared.contract.candidateSha256) {
@@ -364,22 +364,31 @@ export function createReviewedFlowRuntime({
         deploymentLeaseSeconds: deploymentLeaseMs / 1000,
       };
     } catch (error) {
-      let rollbackComplete = !published;
+      let rollbackComplete = false;
       try {
-        if (published) {
+        // rename may have published the candidate even when its directory fsync
+        // threw. Only protected on-disk bytes can establish the recovery state.
+        assertProtectedFileModes(liveFlowPath, { uid, gid, modes: [0o600, 0o644] });
+        const recoverySha256 = sha256(fs.readFileSync(liveFlowPath));
+        const candidateActive = recoverySha256 === prepared.contract.candidateSha256;
+        if (!candidateActive && recoverySha256 !== prepared.contract.sourceSha256) {
+          throw new Error("active flow is neither the reviewed source nor candidate");
+        }
+        if (candidateActive || restartAttempted) {
           deploymentLease = refreshDeploymentLease(
             deploymentLease,
             prepared.contract,
             "rollback-restart-required",
           );
-          atomicWrite(liveFlowPath, prepared.liveBytes, { uid, gid });
+          if (candidateActive) atomicWrite(liveFlowPath, prepared.liveBytes, { uid, gid });
           const rollbackProcess = pm2.inspect();
           pm2.restart(rollbackProcess.restartCount);
-          if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256) {
-            throw new Error("automatic rollback did not restore the reviewed digest");
-          }
-          rollbackComplete = true;
         }
+        if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256) {
+          throw new Error("automatic rollback did not restore the reviewed digest");
+        }
+        pm2.assertOnline();
+        rollbackComplete = true;
       } catch (rollbackError) {
         throw new Error(
           `Candidate failed; reviewed-flow rollback is incomplete and deployment lease remains active: ${rollbackError.message}`,
