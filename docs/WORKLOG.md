@@ -1809,3 +1809,21 @@
   pass the offline packet reconciliation, preventing a seed/legacy-confirm race.
 - This is isolated source-only work. No flow candidate was installed, no Mongo or
   Viva write occurred, and sales or managed usage policy were not activated.
+
+## 2026-09-05 — stopped-launcher test runtime isolation
+
+- Isolated the launcher rehearsal from the ambient Node toolcache permissions by
+  running a private, byte-identical Node copy sealed to `0555`; the shared Node
+  binary is never chmod-ed. Production launcher, installer and bundle contracts
+  are unchanged.
+- Added real-filesystem `0575` and `0557` negative cases that prove the existing
+  runtime-custody guard stops before the locked-execution callback. Existing
+  child-environment and tampered-installer assertions remain in the subprocess.
+- Reproduced CI run `33949480558`'s error against the published baseline using a
+  group-writable Node copy on Linux uid 1001; the corrected test passes with the
+  same ambient runtime. This controlled reproduction does not establish the exact
+  octal mode of the original GitHub runner binary, which its log did not record.
+- The copied runtime needs an executable temporary filesystem. Offline Docker
+  rehearsals use `--tmpfs /tmp:mode=1777,exec`; `noexec` correctly fails with EACCES,
+  not a skipped/PASS test. Fixtures remain private and are removed after each test.
+- This is local test-only correction, not a new CI success, install or activation.
