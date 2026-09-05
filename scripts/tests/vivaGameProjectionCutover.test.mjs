@@ -2593,7 +2593,10 @@ test("the real guardian releases terminal fallback only after the exact takeover
     const takeoverBytes = fs.readFileSync(takeoverReceiptPath);
     const takeoverReceipt = JSON.parse(takeoverBytes.toString("utf8"));
     takeoverPid = takeoverReceipt.pid;
-    process.kill(recoveryPid, "SIGSTOP");
+    for (let poll = 0; poll < 100 && !fs.existsSync(takeoverReceipt.heartbeatPath); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(fs.existsSync(takeoverReceipt.heartbeatPath), true);
     process.kill(takeoverPid, "SIGSTOP");
     const bindings = {
       barrierArtifactSha256: options.expectedBarrierArtifactSha256,
