@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { LK1_ENFORCEMENT_CONTRACT } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
+import {
+  buildLk1EnforcementCandidate,
+  LK1_ENFORCEMENT_CONTRACT,
+} from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
@@ -76,6 +79,8 @@ test("legacy sales builder still rejects invalid source provenance before its re
 });
 
 test("legacy sales retirement records exact Piter amendments without advancing frozen candidate pins", () => {
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateSha256, null);
   const amendments = new Map(LK1_ENFORCEMENT_CONTRACT.unboundSourceAmendments.map(
     (amendment) => [amendment.id, amendment],
   ));
@@ -93,5 +98,36 @@ test("legacy sales retirement records exact Piter amendments without advancing f
     assert.equal(amendment.reason, "PITER_ATOMIC_SALES_NOT_COMPOSED");
     assert.equal(sha256(fs.readFileSync(target.sourceFile)), amendment.sourceSha256);
     assert.notEqual(amendment.sourceSha256, frozenCandidateSha256);
+  }
+});
+
+test("recorded Piter amendments cannot replace frozen pins in candidate construction", () => {
+  const amendments = LK1_ENFORCEMENT_CONTRACT.unboundSourceAmendments.filter(
+    (item) => item.reason === "PITER_ATOMIC_SALES_NOT_COMPOSED",
+  );
+  assert.equal(amendments.length, 3);
+  for (const amendment of amendments) {
+    const target = LK1_ENFORCEMENT_CONTRACT.targets.find((item) => item.id === amendment.id);
+    assert.ok(target);
+    const preimage = "return msg;\n";
+    const flow = [
+      { id: "fixture-tab", type: "tab", label: target.tabLabel, disabled: false },
+      { id: target.id, type: "function", z: "fixture-tab", name: target.name, func: preimage, wires: [] },
+    ];
+    // Isolate the source-pin gate; this synthetic graph is not a production candidate.
+    const contract = {
+      sourceSha256: "fixture-source",
+      nodeCount: flow.length,
+      targets: [{ ...target, preimageSha256: sha256(preimage) }],
+      unboundSourceAmendments: [amendment],
+    };
+    const before = structuredClone(flow);
+    assert.throws(() => buildLk1EnforcementCandidate(
+      flow,
+      contract.sourceSha256,
+      contract,
+      (sourceFile) => fs.readFileSync(path.join(REPO_ROOT, sourceFile), "utf8"),
+    ), new RegExp(`LK1 target ${target.id} tracked source mismatch`));
+    assert.deepEqual(flow, before, `${target.id} must be rejected before mutation`);
   }
 });
