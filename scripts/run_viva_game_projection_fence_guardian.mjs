@@ -118,6 +118,7 @@ let heartbeatSequence = 0;
 let lastRejectedReleaseRequestSha256 = null;
 let lastRejectedRecoveryRequestSha256 = null;
 let lastRejectedReadyRequestSha256 = null;
+let lastRecoveryHandshakeErrorSha256 = null;
 let recoveryChild = null;
 let recoveryRequestId = null;
 let lastRecoveryResult = null;
@@ -144,6 +145,7 @@ const writeHeartbeat = () => {
     lastRejectedReleaseRequestSha256,
     lastRejectedRecoveryRequestSha256,
     lastRejectedReadyRequestSha256,
+    lastRecoveryHandshakeErrorSha256,
     recoveryChildPid: recoveryChild?.pid || null,
     recoveryRequestId: recoveryRequestId || delegatedRecovery?.requestId || null,
     lastRecoveryResult,
@@ -255,6 +257,7 @@ const startRecovery = async (request) => {
   recoveryChild = child;
   recoveryRequestId = request.requestId;
   lastRecoveryResult = null;
+  lastRecoveryHandshakeErrorSha256 = null;
   child.once("error", (error) => {
     lastRecoveryResult = { requestId: request.requestId, exitCode: null, signal: null, errorSha256: sha256(String(error?.message || error)) };
     recoveryChild = null;
@@ -271,6 +274,7 @@ const startRecovery = async (request) => {
       (event) => markRecoveryTakeoverEstablished(request, event),
     );
   } catch (error) {
+    lastRecoveryHandshakeErrorSha256 = sha256(String(error?.message || error));
     try { child.kill("SIGKILL"); } catch { /* child already exited */ }
     if (recoveryTakeoverArtifactsExist(request.requestId) || fs.existsSync(acceptedPath)) {
       try { markRecoveryTakeoverEstablished(request); } catch {

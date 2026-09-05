@@ -2652,6 +2652,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
     const completedHeartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
     assert.equal(completedHeartbeat.lastRecoveryResult?.exitCode, 0, canonicalJson({
       lastRecoveryResult: completedHeartbeat.lastRecoveryResult,
+      lastRecoveryHandshakeErrorSha256: completedHeartbeat.lastRecoveryHandshakeErrorSha256,
       guardianStderr: guardianStderr.slice(-1000),
     }));
     process.kill(takeoverPid, "SIGKILL");
