@@ -2461,6 +2461,18 @@ test("the real guardian releases terminal fallback only after the exact takeover
           return result;
         };
       }
+      if (String(process.argv[1] || "").endsWith("recover_viva_game_projection_mongo_write_barrier.mjs")) {
+        const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+        let terminalPauseReached = false;
+        process.stdout.write = (...args) => {
+          const result = originalStdoutWrite(...args);
+          if (!terminalPauseReached) {
+            terminalPauseReached = true;
+            process.kill(process.pid, "SIGSTOP");
+          }
+          return result;
+        };
+      }
     `));
     guardian = spawn("/bin/bash", [
       "-c",
@@ -2656,19 +2668,22 @@ test("the real guardian releases terminal fallback only after the exact takeover
     }
     assert.equal(fs.existsSync(takeoverReceipt.heartbeatPath), true);
     for (let poll = 0; poll < 250; poll += 1) {
+      const status = fs.readFileSync(`/proc/${recoveryPid}/status`, "utf8");
+      if (/^State:\s+T/m.test(status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.match(
+      fs.readFileSync(`/proc/${recoveryPid}/status`, "utf8"), /^State:\s+T/m, guardianStderr.slice(-1000),
+    );
+    process.kill(takeoverPid, "SIGKILL");
+    process.kill(recoveryPid, "SIGCONT");
+    for (let poll = 0; poll < 250; poll += 1) {
       try { process.kill(recoveryPid, 0); } catch (error) {
         if (error?.code === "ESRCH") break;
         throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    let recoveryAlive = true;
-    try { process.kill(recoveryPid, 0); } catch (error) {
-      if (error?.code === "ESRCH") recoveryAlive = false;
-      else throw error;
-    }
-    assert.equal(recoveryAlive, false, guardianStderr.slice(-1000));
-    process.kill(takeoverPid, "SIGKILL");
     for (let poll = 0; poll < 250; poll += 1) {
       const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
       if (heartbeat.recoveryTerminalGuardianFallback?.state === "HOLDING_TERMINAL_RECOVERY_FALLBACK") break;
