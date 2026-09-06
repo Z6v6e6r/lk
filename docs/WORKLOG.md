@@ -2,6 +2,44 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: BOUND_DEFAULT_OFF startup с независимым root anchor
+
+- Продолжение после `eb607aa`, прежняя ветка/WT; primary — единственный writer.
+  Расширен `guarded-startup.cjs`: fixed external root-owned approved-startup JSON,
+  explicit mode, exact Host/audience/candidate/release directory и независимые
+  approved commit/tree/manifest hash. Сам packet не может одобрить себя; anchor
+  отсутствует/подменён/конфликтует с mode — отказ без downgrade к unbound.
+- Baseline policy, service unit, raw guard/audit, provider flags и egress неизменны.
+  Active mode не добавлен. Проверяются root ownership/modes/ancestors, bounded
+  strict JSON, manifest aggregate/critical paths/actual file bytes и exact installed
+  custom-node symlink `../../partner-package`. Writable state отделён от release.
+- Security review: исправлены два P2 — финальная перепроверка всех ранее прочитанных
+  file/ancestor identities и запрет intermediate symlink hop при совпадающем
+  начальном realpath. Оба исправления получили read-only re-review PASS.
+  Release review: новых code blockers нет; installed root/group-read layout не
+  подменяет private transport packet `0700/0600` для production binding validator.
+- Добавлены 96 bound startup/negative/entrypoint-wiring tests, все PASS в final
+  full run. Legacy startup fixture явно изолирована от реального `/etc` через IO
+  seam; npm Partner test command включает новый файл. Прошли промежуточные
+  targeted232/232 и246/246; финальный полный набор `505 tests: 481 PASS / 24 FAIL /
+  0 skipped` включает последний symlink fix. Те же24 failures: Nginx3, binding11,
+  runtime8, packet2 — stale exact-source proof; новых failure нет, release gate RED.
+- Scoped ESLint PASS; полный `npm run lint` exit0, 0 errors / 387 warnings.
+  XML structural lint: 0 errors / 0 warnings; checked local document links16 PASS.
+  Общая сборка не повторяется: прежний неизменный preflight blocker17missingVITE
+  остаётся; shared Node-RED modular build/validate не запускались без live workspace.
+  Drawio обновлён на существующей startup-странице; PNG/visual QA NOT_RUN из-за
+  ранее доказанной недоступности Electron CLI в sandbox.
+- Обновлены guarded release/deploy/test-plan docs и схема: root metadata tests
+  синтетические, VM dependency wiring не actual Node-RED/systemd. Real root custody,
+  installed dependencies, свежий runtime/guarded proof и private packet всё ещё
+  требуют проверки. Root anchor читается только на startup; это не runtime revoke
+  и не атомарный filesystem snapshot. Trusted installation до require обязательна.
+- Local checkpoint только: без push/PR/merge/CI/SSH/Docker/install/deploy/activation,
+  без реальных anchor/credentials/Mongo/Viva/shared-data изменений. Native Nginx
+  application rehearsal сохраняет `DEFERRED_BY_USER / NOT_RUN`. Следующее source
+  препятствие — production Nginx verifier; live approval и evidence gates не сняты.
+
 ## 2026-09-06 — Partner: автономное получение Viva service token, local source checkpoint
 
 - Продолжение устранения внутренних препятствий после `5907950`, та же ветка/WT.

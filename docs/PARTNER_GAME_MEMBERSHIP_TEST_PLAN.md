@@ -2,7 +2,17 @@
 
 ## Уровни доказательств
 
-Текущее source-изменение 6 сентября:
+Следующее source-дополнение после `eb607aa`:
+[BOUND_DEFAULT_OFF startup](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md#привязанный-запуск-без-активации).
+Это root-anchor/source consistency tests и controlled entrypoint wiring; реальные
+root permissions, installed Node-RED CLI/systemd и production не проверялись.
+Runtime/guarded receipts остаются историческими и требуют фактического refresh.
+Финальный прогон: **505 tests / 481 PASS / 24 FAIL / 0 skipped**; все96новых
+bound startup tests прошли. Те же24 release-fixture failures, что до изменения:
+Nginx3/binding11/runtime8/packet2. Scoped и полный ESLint — exit0; полный сохраняет
+387 warnings. XML lint — 0 errors / 0 warnings. Это не зелёный release gate.
+
+Предыдущее source-изменение 6 сентября:
 [standalone Viva token](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
 Целевые API/provider **80/80 PASS**, полный Partner-набор **385 PASS / 24 FAIL / 0 skipped**
 (409 tests). Все 24 отказа относятся к прежним exact-source release fixtures:
@@ -187,6 +197,9 @@ secret change, migration, deploy, activation или real provider mutation.
 | Token lifecycle | Истечение, смена/удаление credentials, shutdown | Монотонный TTL от начала запроса минус 30s, без продления на cache hit; старый cache не используется; pending abort, late body cancel |
 | Token transport | Redirect/compression/invalid UTF-8/framing/oversize/timeout | Fixed URL, identity encoding, максимум 64 KiB и 5s на весь ответ; elapsed deadline проверяется независимо от callback таймера; redacted 503 |
 | Token failure | Невалидный TTL, 401, исключение credential reader | Нет fallback/retry мутации; 1s cooldown для следующего grant с теми же credentials; секреты отсутствуют в ошибке |
+| Bound startup | Correct independent root anchor + exact manifest/files + installed custom-node link | Host связан с anchor, server audience совпадает; storage immutable, API OFF |
+| Startup trust | Missing/malformed/unreadable/service-owned anchor или writable ancestors | Фиксированный startup refusal; нет fallback к unbound или открытия audit/runtime settings |
+| Startup identity | Самостоятельно resealed packet, late anchor/source replacement или symlink hop | Отказ по independent manifest pin/final identity snapshot/exact installed readlink |
 | Viva create contract | Готовый adapter получает add | Один POST, pinned base/path/body, auth/idempotency/correlation headers |
 | Viva ambiguity | Network/timeout/5xx/invalid binding | `202 UNKNOWN`, ровно один mutation call, без retry |
 | Viva slow/oversized response | Body не завершается либо `Content-Length`/chunked body больше `1 000 000` байт | Общий timeout остаётся активным до конца body; reader отменяется; лишний chunk не запрашивается; mutation становится `202 UNKNOWN` |

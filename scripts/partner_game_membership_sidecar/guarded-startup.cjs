@@ -5,58 +5,167 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { createGuardedPartnerSettings, validatePartnerGuardFlows } = require("./settings-guarded.cjs");
 const { openPartnerRawAudit } = require("./raw-audit.cjs");
+const { parsePartnerRawJson } = require("./raw-request-guard.cjs");
 
 const fail = () => { throw new Error("PARTNER_GUARDED_STARTUP_REFUSED"); };
 const digest = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+const STARTUP_ANCHOR_PATH = "/etc/padlhub/partner-game-membership/approved-startup.json";
+const HASH = /^[a-f0-9]{64}$/;
+const COMMIT = /^[a-f0-9]{40}$/;
+const stableFields = ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode", "nlink", "uid"];
+const exactKeys = (value, keys) => {
+  if (!value || Array.isArray(value) || typeof value !== "object"
+    || Object.keys(value).sort().join(",") !== [...keys].sort().join(",")) fail();
+};
+const within = (parent, file) => {
+  const relative = path.relative(parent, file);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+};
 
-function readPinnedFile(file, maxBytes) {
-  if (!path.isAbsolute(file) || fs.realpathSync(file) !== file) fail();
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-  try {
-    const before = fs.fstatSync(fd);
-    if (!before.isFile() || before.nlink !== 1 || before.size === 0 || before.size > maxBytes
-      || (before.mode & 0o022) !== 0 || ![0, process.getuid()].includes(before.uid)) fail();
-    const bytes = Buffer.alloc(before.size);
-    if (fs.readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) fail();
-    const after = fs.fstatSync(fd);
-    const named = fs.lstatSync(file);
-    for (const field of ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode", "nlink", "uid"]) {
-      if (before[field] !== after[field] || before[field] !== named[field]) fail();
-    }
-    return bytes;
-  } finally { fs.closeSync(fd); }
+function rootAncestors(file, io) {
+  const result = [];
+  for (let directory = path.dirname(file); ; directory = path.dirname(directory)) {
+    const stat = io.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) fail();
+    result.push([directory, stat]);
+    if (path.dirname(directory) === directory) return result;
+  }
 }
 
-function validateGuardedStartup({ sidecarDirectory, argv, env }) {
+function readPinnedFile(file, maxBytes, { io = fs, rootOwned = false, snapshot = [] } = {}) {
+  if (!path.isAbsolute(file) || io.realpathSync(file) !== file) fail();
+  const ancestors = rootOwned ? rootAncestors(file, io) : [];
+  const fd = io.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
-    if (fs.realpathSync(sidecarDirectory) !== sidecarDirectory || !Array.isArray(argv) || argv.length !== 5
+    const before = io.fstatSync(fd);
+    if (!before.isFile() || before.nlink !== 1 || before.size === 0 || before.size > maxBytes
+      || (before.mode & 0o022) !== 0 || !(rootOwned ? before.uid === 0 : [0, process.getuid()].includes(before.uid))) fail();
+    const bytes = Buffer.alloc(before.size);
+    if (io.readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) fail();
+    const after = io.fstatSync(fd);
+    const named = io.lstatSync(file);
+    for (const field of stableFields) {
+      if (before[field] !== after[field] || before[field] !== named[field]) fail();
+    }
+    for (const [directory, stat] of ancestors) {
+      const current = io.lstatSync(directory);
+      for (const field of stableFields) if (stat[field] !== current[field]) fail();
+    }
+    snapshot.push([file, before], ...ancestors);
+    return bytes;
+  } finally { io.closeSync(fd); }
+}
+
+function readStartupAnchor(io, snapshot) {
+  // Missing is distinct from unreadable/malformed. No env/CLI/packet path override.
+  try { if ((io.lstatSync(STARTUP_ANCHOR_PATH).mode & 0o111) !== 0) fail(); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  return parsePartnerRawJson(readPinnedFile(STARTUP_ANCHOR_PATH, 4096, { io, rootOwned: true, snapshot }));
+}
+
+function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, io, snapshot }) {
+  exactKeys(anchor, ["formatVersion", "mode", "expectedHost", "expectedAudience", "candidateFlowSha256",
+    "releaseDirectory", "packetManifestSha256", "approvedCommit", "approvedTree"]);
+  const root = path.dirname(sidecarDirectory);
+  if (anchor.formatVersion !== 1 || anchor.mode !== "BOUND_DEFAULT_OFF"
+    || anchor.releaseDirectory !== root || root === path.parse(root).root
+    || within(root, STARTUP_ANCHOR_PATH)
+    || typeof anchor.expectedHost !== "string" || anchor.expectedHost.length > 253
+    || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(anchor.expectedHost)
+    || anchor.expectedHost === "unbound.invalid"
+    || typeof anchor.expectedAudience !== "string" || !/^[a-z0-9][a-z0-9._:-]{2,127}$/.test(anchor.expectedAudience)
+    || env.LK_PARTNER_GAME_API_AUDIENCE !== anchor.expectedAudience
+    || !HASH.test(anchor.candidateFlowSha256) || digest(candidateBytes) !== anchor.candidateFlowSha256
+    || !HASH.test(anchor.packetManifestSha256) || !COMMIT.test(anchor.approvedCommit) || !COMMIT.test(anchor.approvedTree)) fail();
+  const manifestBytes = readPinnedFile(path.join(root, "packet.manifest.json"), 16384, { io, rootOwned: true, snapshot });
+  if (digest(manifestBytes) !== anchor.packetManifestSha256) fail();
+  const manifest = parsePartnerRawJson(manifestBytes);
+  exactKeys(manifest, ["formatVersion", "deploymentId", "state", "repository", "productionControlsSha256",
+    "customNodeReleaseSha256", "files", "aggregateSha256", "deployAuthorized", "activationAuthorized"]);
+  exactKeys(manifest.repository, ["commit", "tree", "branch"]);
+  if (manifest.formatVersion !== 1 || manifest.deploymentId !== "partner-game-membership-api-v02"
+    || manifest.state !== "COMPLETE_PRIVATE_PACKET" || manifest.deployAuthorized !== false || manifest.activationAuthorized !== false
+    || manifest.repository.commit !== anchor.approvedCommit || manifest.repository.tree !== anchor.approvedTree
+    || typeof manifest.repository.branch !== "string" || !manifest.repository.branch
+    || !HASH.test(manifest.productionControlsSha256) || !HASH.test(manifest.customNodeReleaseSha256)
+    || !Array.isArray(manifest.files) || manifest.files.length > 128
+    || digest(Buffer.from(JSON.stringify(manifest.files))) !== manifest.aggregateSha256) fail();
+  const required = new Set(["candidate.flow.json", "runtime/package.json", "runtime/package-lock.json",
+    ...["settings.cjs", "settings-runtime.cjs", "settings-guarded.cjs", "guarded-startup.cjs", "raw-request-guard.cjs",
+      "raw-audit.cjs", "guarded-runtime-policy.json", "partner-game-membership-sidecar.service"].map(name => `sidecar/${name}`),
+    ...["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs",
+      "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-node.html"]
+      .map(name => `runtime/partner-package/${name}`)]);
+  const seen = new Set();
+  let totalBytes = 0;
+  for (const file of manifest.files) {
+    exactKeys(file, ["relativePath", "sha256", "size", "mode"]);
+    if (typeof file.relativePath !== "string" || !/^[a-zA-Z0-9._/-]+$/.test(file.relativePath)
+      || file.relativePath !== path.posix.normalize(file.relativePath) || path.posix.isAbsolute(file.relativePath)
+      || file.relativePath.split("/").some(part => part === ".." || part === "." || !part)
+      || file.relativePath === "packet.manifest.json" || seen.has(file.relativePath)
+      || !HASH.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > 2 * 1024 * 1024
+      || file.mode !== "0600" || (totalBytes += file.size) > 16 * 1024 * 1024) fail();
+    const bytes = readPinnedFile(path.join(root, file.relativePath), file.size, { io, rootOwned: true, snapshot });
+    if (bytes.length !== file.size || digest(bytes) !== file.sha256) fail();
+    if (file.relativePath === "candidate.flow.json" && !bytes.equals(candidateBytes)) fail();
+    seen.add(file.relativePath); required.delete(file.relativePath);
+  }
+  if (required.size) fail();
+  // npm's reviewed file:./partner-package layout must load exactly the source
+  // closure above, not a second installed package with the same name/version.
+  const installed = path.join(root, "runtime/node_modules/@padlhub/node-red-partner-game-membership-api");
+  const installedStat = io.lstatSync(installed);
+  if (!installedStat.isSymbolicLink() || installedStat.uid !== 0
+    || io.readlinkSync(installed) !== "../../partner-package"
+    || io.realpathSync(installed) !== path.join(root, "runtime/partner-package")) fail();
+  snapshot.push([installed, installedStat], ...rootAncestors(installed, io));
+}
+
+function validateGuardedStartup({ sidecarDirectory, argv, env, io = fs }) {
+  try {
+    if (io.realpathSync(sidecarDirectory) !== sidecarDirectory || !Array.isArray(argv) || argv.length !== 5
       || argv[0] !== "--userDir" || argv[2] !== "--settings") fail();
     const settingsPath = path.join(sidecarDirectory, "settings-runtime.cjs");
     const candidatePath = path.join(sidecarDirectory, "../candidate.flow.json");
     // The installed /current alias can point at a canonical release directory.
     // Resolve the CLI targets to that release; storage below never rereads them.
     if (!path.isAbsolute(argv[3]) || !path.isAbsolute(argv[4])
-      || fs.realpathSync(argv[3]) !== settingsPath || fs.realpathSync(argv[4]) !== candidatePath
-      || fs.realpathSync(settingsPath) !== settingsPath) fail();
+      || io.realpathSync(argv[3]) !== settingsPath || io.realpathSync(argv[4]) !== candidatePath
+      || io.realpathSync(settingsPath) !== settingsPath) fail();
     const userDir = argv[1];
-    const state = fs.lstatSync(userDir);
-    if (!path.isAbsolute(userDir) || fs.realpathSync(userDir) !== userDir || !state.isDirectory()
+    const state = io.lstatSync(userDir);
+    if (!path.isAbsolute(userDir) || io.realpathSync(userDir) !== userDir || !state.isDirectory()
       || state.uid !== process.getuid() || (state.mode & 0o777) !== 0o700) fail();
     for (const name of ["NODE_OPTIONS", "NODE_PATH", "NODE_RED_ENABLE_SAFE_MODE", "NODE_RED_ENABLE_PROJECTS"]) {
       if (env[name] !== undefined && env[name] !== "") fail();
     }
-    // This release is deliberately non-activatable. An approved host/credential
-    // activation path must be a separately reviewed source/binding change.
+    // Both supported startup modes are non-activatable.
     if (env.LK_PARTNER_GAME_API_ENABLED !== "false" || env.LK_PARTNER_GAME_API_PROVIDER_MODE !== "disabled"
       || env.LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED !== "false") fail();
-    const policy = JSON.parse(readPinnedFile(path.join(sidecarDirectory, "guarded-runtime-policy.json"), 4096));
+    const mode = env.LK_PARTNER_GAME_API_STARTUP_MODE === undefined ? "DEFAULT_OFF_UNBOUND" : env.LK_PARTNER_GAME_API_STARTUP_MODE;
+    if (!["DEFAULT_OFF_UNBOUND", "BOUND_DEFAULT_OFF"].includes(mode)) fail();
+    const snapshot = [];
+    const anchor = readStartupAnchor(io, snapshot);
+    const bound = mode === "BOUND_DEFAULT_OFF";
+    if (bound !== (anchor !== null)
+      || (bound && (within(userDir, path.dirname(sidecarDirectory)) || within(path.dirname(sidecarDirectory), userDir)
+        || within(userDir, STARTUP_ANCHOR_PATH)))) fail();
+    const policy = parsePartnerRawJson(readPinnedFile(path.join(sidecarDirectory, "guarded-runtime-policy.json"), 4096, { io, rootOwned: bound, snapshot }));
     if (Object.keys(policy).sort().join(",") !== "candidateFlowSha256,expectedHost,formatVersion,mode"
       || policy.formatVersion !== 1 || policy.mode !== "DEFAULT_OFF_UNBOUND" || policy.expectedHost !== "unbound.invalid"
       || !/^[a-f0-9]{64}$/.test(policy.candidateFlowSha256)) fail();
-    const candidateBytes = readPinnedFile(candidatePath, 64 * 1024);
+    const candidateBytes = readPinnedFile(candidatePath, 64 * 1024, { io, rootOwned: bound, snapshot });
     if (digest(candidateBytes) !== policy.candidateFlowSha256) fail();
     validatePartnerGuardFlows(JSON.parse(candidateBytes));
-    return { candidateBytes, candidatePath, userDir, expectedHost: policy.expectedHost };
+    if (bound) {
+      validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, io, snapshot });
+      for (const [file, stat] of snapshot) {
+        const current = io.lstatSync(file);
+        for (const field of stableFields) if (stat[field] !== current[field]) fail();
+      }
+    }
+    return { candidateBytes, candidatePath, userDir, expectedHost: bound ? anchor.expectedHost : policy.expectedHost };
   } catch { fail(); }
 }
 
@@ -101,4 +210,4 @@ function loadGuardedRuntimeSettings(sidecarDirectory) {
   }
 }
 
-module.exports = { validateGuardedStartup, createPinnedFlowStorage, loadGuardedRuntimeSettings };
+module.exports = { validateGuardedStartup, createPinnedFlowStorage, loadGuardedRuntimeSettings, STARTUP_ANCHOR_PATH };

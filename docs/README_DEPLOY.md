@@ -1018,3 +1018,8 @@ acquisition/refresh/revocation contract; shared Node-RED global context не и�
 не получает боевой токен в тестах и не разрешает activation. Изменившиеся custom-node
 bytes требуют нового runtime/packet proof; исторические квитанции не обновляются
 пересчётом хешей без фактической проверки.
+Локальный `BOUND_DEFAULT_OFF` startup теперь поддерживает независимый root-owned
+anchor для Host/audience/exact release: `docs/PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md`.
+Это не active mode и не готовый installed packet. Service/egress/credentials и
+production binding пока не меняются; установку anchor нельзя подменять записью
+JSON в packet или объявлять выполненной по synthetic filesystem tests.

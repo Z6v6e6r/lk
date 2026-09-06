@@ -26,6 +26,10 @@ function fixture(t) {
   fs.writeFileSync(policy, JSON.stringify({ formatVersion: 1, mode: "DEFAULT_OFF_UNBOUND", expectedHost: "unbound.invalid", candidateFlowSha256: sha(bytes) }));
   return { root, state, sidecar, candidate, bytes, policy,
     input: { sidecarDirectory: sidecar, argv: ["--userDir", state, "--settings", settings, candidate],
+      io: { ...fs, lstatSync: file => {
+        if (file === startup.STARTUP_ANCHOR_PATH) throw Object.assign(new Error("Fixture has no startup anchor"), { code: "ENOENT" });
+        return fs.lstatSync(file);
+      } },
       env: { LK_PARTNER_GAME_API_ENABLED: "false", LK_PARTNER_GAME_API_PROVIDER_MODE: "disabled", LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED: "false" } } };
 }
 const unavailable = (fn) => assert.throws(fn, /^Error: RAW_AUDIT_STORAGE_UNAVAILABLE$/);
