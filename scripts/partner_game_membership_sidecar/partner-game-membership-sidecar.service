@@ -12,7 +12,8 @@ Environment=NODE_ENV=production
 Environment=LK_PARTNER_GAME_API_ENABLED=false
 Environment=LK_PARTNER_GAME_API_PROVIDER_MODE=disabled
 Environment=LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED=false
-ExecStart=/opt/padlhub/partner-game-membership/current/runtime/node_modules/.bin/node-red --userDir /var/lib/padlhub/partner-game-membership --settings /opt/padlhub/partner-game-membership/current/sidecar/settings.cjs /opt/padlhub/partner-game-membership/current/candidate.flow.json
+UnsetEnvironment=NODE_OPTIONS NODE_PATH NODE_RED_ENABLE_SAFE_MODE NODE_RED_ENABLE_PROJECTS
+ExecStart=/opt/padlhub/partner-game-membership/current/runtime/node_modules/.bin/node-red --userDir /var/lib/padlhub/partner-game-membership --settings /opt/padlhub/partner-game-membership/current/sidecar/settings-runtime.cjs /opt/padlhub/partner-game-membership/current/candidate.flow.json
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
