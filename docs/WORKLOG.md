@@ -2,6 +2,37 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner local Nginx candidate / runtime audit refresh
+
+- Анализ: продолжается existing `codex/partner-viva-bounded-response-20260905` от
+  `df03b4ce`; отдельные ветка/PR/worktree не создавались. Пользователь разрешил
+  локальное закрытие Nginx/runtime evidence без merge/deploy. Source ownership
+  подтверждён координатором; тяжёлые проверки используют отдельную ресурсную очередь.
+- Изменение: closed `.invalid`/public-X.509 Nginx 1.24 generator, реальный Node-RED
+  observer fixture без бизнес-узлов/Mongo/Viva, strict complete-HTTP parser,
+  pre-Docker failure cleanup; новый opt-in Linux audit collector. Audit/control pins
+  обновлены фактическими 6 September readbacks, исторические functional/guarded/tree
+  bytes сохранены. Production verifier всё ещё безусловно закрыт.
+- Проверка source: Nginx unit `14/14`, runtime `9/9` (включая 17 resealed tamper cases),
+  runtime/controls validators PASS. Свежий Linux audit: Node 22.23.2/npm 10.9.8/
+  Node-RED 5.0.6, 291 packages, 0 critical/high + 7 moderate, owned-container cleanup
+  подтверждён. Configured workflow secret/PII/binary scan 21 paths PASS;
+  independent security/release re-reviews P0–P2=0 в указанной source области.
+- Physical correction: первые fixture failures `499` (преждевременный TLS half-close)
+  и upstream `404` (HTTP nodes без x/y классифицированы как config nodes) сохранены
+  как FAIL; исправления основаны на actual runtime log. После explicit release A
+  выполнен physical run: 47 PASS + 1 known wildcard blocker, 7 NOT_TESTED, 66 safe
+  log rows, два own containers/keys cleanup, unchanged runtime/source hashes.
+  Полный Partner suite 299/299 PASS, full lint 0 errors / 387 warnings в существующем
+  коде; inert prod/dev build с ci.invalid (включая TypeScript) PASS. Independent
+  physical evidence review подтвердил matrix/log/source hashes без расхождений.
+  Heavy-slot освобождён; лишние повторные Docker/tests/build не запускаются.
+- Документация: новый Nginx/audit runbook, explicit OPEN/NOT_TESTED, обновлённая
+  четвёртая страница existing `.drawio`. drawio-skill structural check 0 errors/
+  0 warnings; PNG export недоступен из-за Electron helper failure, visual QA NOT_RUN.
+- Граница: shared main checkout, опубликованный disabled packet, production Nginx/
+  Node-RED/Mongo/Viva/credentials не менялись; merge/push/deploy/activation `0`.
+
 ## 2026-09-06 — Partner guarded release preparation (изолированно)
 
 - Анализ: сохранены branch/worktree и checkpoint c058a9b; fresh origin/main

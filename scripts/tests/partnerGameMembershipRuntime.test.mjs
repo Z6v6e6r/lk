@@ -127,3 +127,45 @@ test("runtime evidence rejects resealed container isolation or cleanup claims", 
     assert.throws(() => validatePartnerRuntimeEvidence(input), /container receipt/);
   }
 });
+
+test("fresh audit rejects resealed non-Linux identity, image, provenance and isolation claims", () => {
+  for (const mutate of [
+    value => { value.runtime.platform = "darwin"; },
+    value => { value.runtime.architecture = "arm64"; },
+    value => { value.runtime.nodeImageSha256 = "0".repeat(64); },
+    value => { value.runtime.extra = "unreviewed"; },
+    value => { value.capturedAt = "2026-09-07T09:09:03.738Z"; },
+    value => { value.executionEvidence.platformImageId = "sha256:" + "0".repeat(64); },
+    value => { value.executionEvidence.imageReference = "node:22"; },
+    value => { value.executionEvidence.orchestratorSha256 = "0".repeat(64); },
+    value => { value.executionEvidence.observationSha256 = "0".repeat(64); },
+    value => { value.executionEvidence.commands[1].args = ["ci"]; },
+    value => { value.executionEvidence.commands[3].exitCode = 0; },
+    value => { value.executionEvidence.containers[0].mounts[1].writable = true; },
+    value => { value.executionEvidence.containers[0].publishedPorts = 1; },
+    value => { value.executionEvidence.containers[1].nonRootUser = false; },
+    value => { value.executionEvidence.containerPresentAfterCleanup = true; },
+    value => { value.executionEvidence.productionTouched = true; },
+    value => { value.executionEvidence.egressBoundary = "REGISTRY_ONLY_FIREWALL"; },
+  ]) {
+    const input = evidence();
+    input.auditReportBytes = mutateJson(input.auditReportBytes, mutate);
+    const audit = JSON.parse(input.auditReportBytes);
+    input.manifestBytes = mutateJson(input.manifestBytes, value => {
+      value.closure.auditReportSha256 = crypto.createHash("sha256").update(input.auditReportBytes).digest("hex");
+      value.audit.capturedAt = audit.capturedAt;
+    });
+    assert.throws(() => validatePartnerRuntimeEvidence(input), /audit (execution )?evidence/);
+  }
+});
+
+test("fresh audit retains the earlier unchanged functional and dependency-tree observations", () => {
+  const { manifest } = validateCheckedPartnerRuntimeEvidence();
+  assert.equal(manifest.audit.capturedAt, "2026-09-06T09:09:03.738Z");
+  assert.equal(manifest.dependencyTree.capturedAt, "2026-09-05T06:35:56.269Z");
+  assert.equal(manifest.closure.functionalRehearsalSha256, "9a3f38ddf5531eb371e1f612dc57ffbb9552abd20a1ccde3477a6f5540164d7f");
+  const audit = JSON.parse(read("audit-report.json"));
+  assert.equal(audit.executionEvidence.containerPresentAfterCleanup, false);
+  assert.equal(audit.executionEvidence.commands.find(command => command.name === "audit").exitCode, 1);
+  assert.equal(audit.executionEvidence.productionTouched, false);
+});

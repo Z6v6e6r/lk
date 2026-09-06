@@ -54,14 +54,14 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "09eb80f4c307e87ba6d160e10b415b1174e860721696a6085afdd93a011bbff5",
+    runtimeManifestSha256: "bdb3bce1c7b50211ac2070ec143b4d6f3a182490ac86cd78294bee96b96f97a9",
     packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
     dependencyTreeSha256: "2d8fe65584d879ed60cb6bd1271314ea26bf7a2f4fef9af009fc88b79e55578e",
-    auditReportSha256: "e4cb6bf40d078bce3822754954af2a7b439876c0960475e1e39c66fc12603c8a",
+    auditReportSha256: "6d9f6bddd4ac0d8f5cb485a7978c6744849de8091f9547ed9ce14a07c9ed643c",
     functionalRehearsalSha256: "9a3f38ddf5531eb371e1f612dc57ffbb9552abd20a1ccde3477a6f5540164d7f",
     functionalRehearsalCapturedAt: "2026-09-05T06:49:04.000Z",
-    auditCapturedAt: "2026-09-05T06:35:59.436Z",
+    auditCapturedAt: "2026-09-06T09:09:03.738Z",
     dependencyTreeCapturedAt: "2026-09-05T06:35:56.269Z",
     npmCiInstalledPackageCount: 291,
     npmLsPackageOccurrenceCount: 838,

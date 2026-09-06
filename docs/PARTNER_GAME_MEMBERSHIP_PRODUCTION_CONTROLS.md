@@ -7,6 +7,12 @@ fail-closed контракт, но не содержат production hostname, CI
 
 ## Что доказано изолированно
 
+Свежий [Linux runtime audit 6 сентября](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md)
+завершён `2026-09-06T09:09:03.738Z`: 0 critical/high, 7 moderate. Новая квитанция
+сохраняет actual argv, stdout/stderr hashes, index/platform image identities,
+before/after isolation и подтверждённый cleanup. Functional/dependency-tree/guarded
+даты и bytes ниже остаются историческими; это не fresh production readback.
+
 Обновление 6 сентября: [guarded startup release](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md)
 добавлен в отдельную exact sidecar closure: actual CLI/pinned graph/durable audit,
 20 physical probes. Исторические сведения ниже не превращаются в свежий audit или

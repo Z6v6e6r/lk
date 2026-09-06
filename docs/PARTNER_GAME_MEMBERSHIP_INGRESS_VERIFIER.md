@@ -1,6 +1,8 @@
 # Partner API: ingress evidence core
 
 Статус: реализована **общая локальная часть**, не production live-verifier.
+6 сентября добавлен отдельный [локальный Nginx 1.24 generator и audit refresh](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
+Он использует только `.invalid`/synthetic certificate inputs и не открывает production entry.
 Отдельно добавлен [raw-request guard и физическая локальная Nginx-репетиция](PARTNER_GAME_MEMBERSHIP_RAW_GUARD.md).
 Guarded startup включён в [новую source closure пакета](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md);
 это не подтверждение установки/внешнего ingress.

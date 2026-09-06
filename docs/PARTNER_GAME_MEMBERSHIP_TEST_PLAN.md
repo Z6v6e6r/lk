@@ -2,6 +2,13 @@
 
 ## Уровни доказательств
 
+Дополнение 6 сентября: [Nginx candidate и runtime audit](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
+Новый suite проверяет закрытый generator, X.509/SPKI/SAN/time, case-sensitive leaf,
+полноту HTTP framing (включая negative truncation), cleanup при pre-Docker failure.
+Runtime suite отклоняет resealed non-Linux/image/command/time/isolation evidence.
+Физический Nginx runner исполняется отдельно; OPEN/NOT_TESTED перечислены в receipt,
+не превращаются в PASS общего ingress и не запускают Mongo/Viva бизнес-сценарии.
+
 | Уровень | Что доказывает | Что не доказывает |
 | --- | --- | --- |
 | Pure unit | Канонизация, HMAC, timestamp, schema, route parsing | Mongo atomicity, Node-RED, Viva |
