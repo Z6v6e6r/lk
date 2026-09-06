@@ -1982,3 +1982,24 @@
 - Integrated approved task head `408aed547e952741e8b4e07eabca1c4f76ce4727` into frozen local/remote-main baseline `27d13055a791e1713c88d5434fce3635c9c3e90e`. The only conflict was this append-only worklog; both task histories are preserved.
 - Merged-tree checks: fresh exact-source acceptance 36 PASS/0 SKIP; applicable subscription/split/leave/roster/modular regressions 312 PASS/1 existing optional fixture SKIP; scoped ESLint and diff checks PASS. Candidate SHA remains `e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3`.
 - Independent integration review found no blockers. Frontend sources, build configuration, availability helper and lockfile are unchanged from prior validation; full frontend builds were not repeated. This is local integration only, with no push, deploy, booking, debit, or data repair.
+
+## 2026-09-06 — Viva game visibility remediation executor (local stage 1)
+
+- Added a fail-closed version-2 remediation contract for the 15-row legacy
+  visibility repair discovered during production preflight.
+- Bound backup/restore, provider, Mongo, fence, barrier, flow, repository, and
+  executor-source evidence to one held-fence capture session.
+- Added full-BSON CAS apply/reconcile/restore in one snapshot/majority
+  transaction while preserving payment, provider, root game, booking, and
+  dedupe identity fields.
+- Tightened the Mongo barrier to the five observed application roles and an
+  exact least-privilege custom migration principal; replaced `updateUser` role
+  replacement with exact majority `revokeRolesFromUser`/`grantRolesToUser`.
+- Closed independent R4 review findings by parsing and comparing complete backup
+  and restored EJSON state, binding provider tuples to exact Mongo preimages,
+  binding the full writer inventory and tenant chain to the cutover plan, and
+  requiring a separately pinned exact-host migration network allowlist.
+- Made the disposable replica-test resources unique per run and cleanup-owned,
+  so a pre-existing container or volume cannot be removed by a failed test.
+- No production flow, runtime, database, provider, payment, lease, or ingress
+  mutation was performed.

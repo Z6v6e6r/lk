@@ -463,6 +463,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
           replicaSetName: plan.mongoTarget.replicaSetName,
           fenceTokenSha256: plan.writerFence.fenceTokenSha256,
           cutoverPlanSha256: execution.cutoverPlanSha256,
+          expectedMigrationAuthenticationRestrictions: migrationConnection.authenticationRestrictions,
           beforeInstall: async (preparation) => {
             barrierPreparationArtifact = writePrivate(`${barrierReceiptPath}.prepared`, preparation);
             coordinatorJournal.append("MONGO_WRITE_BARRIER_PREPARED", { receiptSha256: barrierPreparationArtifact.sha256 });
@@ -515,6 +516,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         fenceTokenSha256: plan.writerFence.fenceTokenSha256,
         cutoverPlanSha256: execution.cutoverPlanSha256,
         mongoTargetIdentitySha256: plan.mongoTarget.targetIdentitySha256,
+        migrationAuthenticationRestrictions: migrationConnection.authenticationRestrictions,
       });
     } finally {
       if (!dependencies.applicationMongoClient) await applicationClient.close().catch(() => {});

@@ -20,7 +20,10 @@ import {
   validateMigrationBackup,
 } from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { buildMongoTargetIdentity, canonicalJson } from "./lib/vivaGameProjectionCutoverContract.mjs";
-import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
+import {
+  assertMongoWriteBarrier,
+  normalizeMongoAuthenticationRestrictions,
+} from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
 import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import {
@@ -451,10 +454,16 @@ export function readPrivateMongoConnection(filePath, expectedFingerprint) {
   if (!isObject(value) || value.formatVersion !== 1
     || value.kind !== "viva-game-projection-migration-mongo-connection"
     || typeof value.uri !== "string" || !value.uri.trim()
+    || !Array.isArray(value.authenticationRestrictions)
     || sha256(value.uri.trim()) !== expectedFingerprint) {
     fail("Migration Mongo connection file does not match the pinned principal");
   }
-  return { uri: value.uri.trim(), dbName: "games", connectionFingerprint: expectedFingerprint };
+  return {
+    uri: value.uri.trim(),
+    dbName: "games",
+    connectionFingerprint: expectedFingerprint,
+    authenticationRestrictions: normalizeMongoAuthenticationRestrictions(value.authenticationRestrictions),
+  };
 }
 
 function assertManifestEntry(manifest, packetRoot, absolutePath, expectedSha256, expectedRelativePath) {
@@ -724,6 +733,7 @@ async function run({ mode, values }, dependencies = {}) {
         fenceTokenSha256: cutoverPlan.writerFence.fenceTokenSha256,
         cutoverPlanSha256: values.get("--expected-cutover-plan-sha256"),
         mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+        migrationAuthenticationRestrictions: connection.authenticationRestrictions,
       });
     };
     const assertFenceAndWriters = async () => {

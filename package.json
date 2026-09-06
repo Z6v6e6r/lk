@@ -77,6 +77,7 @@
     "nodered:viva-game-projection-sync:ready-finalize": "node scripts/finalize_viva_game_projection_cutover_ready.mjs",
     "mongo:viva-game-projection-sync:barrier-recover": "node scripts/recover_viva_game_projection_mongo_write_barrier.mjs",
     "mongo:viva-game-projection-sync:migration": "bash scripts/run_viva_game_projection_fenced_migration.sh",
+    "mongo:viva-game-projection-sync:remediation": "bash scripts/run_viva_game_projection_fenced_remediation.sh",
     "nodered:split-pricing-recovery:patch": "node scripts/patch_live_split_pricing_recovery.mjs",
     "nodered:game-payment-confirmation:patch": "node scripts/patch_live_game_payment_confirmation.mjs",
     "nodered:viva-token-cache:patch": "node scripts/patch_live_viva_token_cache.mjs",
