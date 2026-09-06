@@ -73,8 +73,11 @@ Runbook для будущего оператора (не выполняется 
   возврат admission/активации — отдельное разрешённое действие.
 
 Audit не защищён от компрометации самого service UID. Если диск недоступен,
-сохранение записи отказа не обещается: гарантируется отсутствие бизнес-dispatch.
-Нужны независимая сигнализация и дальнейшая корреляция ingress/application logs.
+сохранение записи отказа не обещается. Отказ admission audit (`RAW_ACCEPTED` до
+`next()`) запрещает новый business dispatch. Отказ terminal `RAW_REQUEST_DEADLINE`
+audit после dispatch не отменяет уже запущенную операцию: transport закрывается,
+но сохранность terminal event не гарантируется. Нужны независимая сигнализация,
+reconciliation и дальнейшая корреляция ingress/application logs.
 
 ## Воспроизведение и доказательства
 
@@ -91,17 +94,25 @@ Node-RED CLI, но **не systemd**. Все созданные контейне�
 по exact owned IDs; cleanup failure даёт failure, а не PASS. SIGKILL самого
 orchestrator требует ручной проверки retained receipt/IDs, не общего Docker prune.
 
-Startup suite: **54 unit/negative tests**. Весь Partner набор после wildcard fix и
+Исторический wildcard checkpoint: startup suite **54 unit/negative tests**. Весь Partner набор после wildcard fix и
 actual closure refresh: **303/303**. Свежий physical proof от
 `2026-09-06T10:10:11.713Z`: **20/20**, в том числе три business default-off `503`, loopback-only
 listener, admin `404`, duplicate header/JSON `400`, шесть durable audit rows,
 graceful stop/restart и десять startup refusals. Snapshot/symlink swap проверен unit
-тестом; нет заявления о live filesystem race test. Receipt и source hashes закреплены
-в `guarded-sidecar-rehearsal.json`. Raw receipt SHA `76760a3590d7e5a6c2cfe02e417dea388c3f9389d31223d78f2544502d0d241d`.
+тестом; нет заявления о live filesystem race test. На том checkpoint receipt и source
+hashes были закреплены в `guarded-sidecar-rehearsal.json`. Исторический raw receipt SHA
+`76760a3590d7e5a6c2cfe02e417dea388c3f9389d31223d78f2544502d0d241d`.
 Новая Nginx observer matrix **49/49** — отдельное доказательство scrub/ingress,
 не повторный тест service path или HMAC/payment/provider business flow.
 
 ## Что требуется до боевого результата
+
+После response-deadline correction выполнена **новая20/20 CLI репетиция** на
+guard/audit bytes от этого исправления (`2026-09-06T12:37:38.718Z`). Closure и
+raw receipt обновлены только после фактической проверки19copied source files и
+двух exact container absence readbacks. Подробности и границы70-row Nginx/late
+HTTPOut proof — в [deadline evidence](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md).
+Это не systemd/production/Viva proof и не новый опубликованный install packet.
 
 | Приоритет | Владелец | Следующий обязательный результат |
 | --- | --- | --- |

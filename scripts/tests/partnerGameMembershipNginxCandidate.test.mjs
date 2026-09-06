@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { completeHttpResponse } from "./fixtures/partner-http-response.cjs";
-import { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
+import { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
 import { generatePartnerNginx124Candidate } from "../partner_game_membership_nginx_candidate.mjs";
 import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
 import { verifyPartnerProductionIngress } from "../partner_game_membership_ingress_evidence.mjs";
@@ -189,10 +189,37 @@ test("completed drip response beyond the bound confirms a blocker and can never 
 
 test("complete matrix summary cannot drop, duplicate or relabel a remaining boundary", () => {
   const rows = [...Array.from({ length: 49 }, (_, i) => ({ name: `baseline-${i}`, result: "PASS" })), ...BOUNDARY_NAMES.map(name => ({ name, result: "PASS" }))];
-  Object.assign(rows.find(row => row.name === "absolute-request-deadline"), { result: "KNOWN_BLOCKER_CONFIRMED", control: "ABSOLUTE_REQUEST_DEADLINE" });
-  assert.deepEqual(summarizeNginxRows(rows), { passed: 68, confirmedBlockers: ["ABSOLUTE_REQUEST_DEADLINE"], notTested: [] });
+  for (const row of rows.filter(row => ["absolute-request-deadline", "sidecar-late-httpout-after-deadline"].includes(row.name))) {
+    Object.assign(row, { control: "SIDECAR_RESPONSE_DEADLINE", watchdogAudits: 1 });
+  }
+  assert.deepEqual(summarizeNginxRows(rows), { passed: 70, confirmedBlockers: [], notTested: [] });
   assert.throws(() => summarizeNginxRows(rows.slice(1)));
   assert.throws(() => summarizeNginxRows([...rows.slice(1), rows[1]]));
   assert.throws(() => summarizeNginxRows(rows.map(row => row.name === "absent-sni" ? { ...row, name: "unknown" } : row)));
-  assert.throws(() => summarizeNginxRows(rows.map(row => row.result === "KNOWN_BLOCKER_CONFIRMED" ? { ...row, result: "PASS" } : row)));
+  assert.throws(() => summarizeNginxRows(rows.map(row => row.name === "absolute-request-deadline" ? { ...row, result: "KNOWN_BLOCKER_CONFIRMED" } : row)));
+  assert.throws(() => summarizeNginxRows(rows.map(row => row.name === "absolute-request-deadline" ? { ...row, watchdogAudits: 0 } : row)));
+});
+test("deadline transport parser never labels a truncated response complete or accepts arbitrary framing", () => {
+  const prefix = "HTTP/1.1 503 Service Unavailable\r\nTransfer-Encoding: chunked\r\nCache-Control: no-store\r\n\r\n2\r\n{}\r\n";
+  const parse = (bytes, mode = "trickle") => deadlineTransportResponse(Buffer.from(bytes), mode, completeHttpResponse);
+  assert.equal(parse(prefix).outcome, "TRUNCATED_HTTP_RESPONSE");
+  assert.equal(parse(prefix).complete, false);
+  assert.equal(parse("", "late").outcome, "NO_HTTP_RESPONSE");
+  for (const bytes of ["", prefix + "0\r\n\r\n", prefix.slice(0, -1), prefix.replace("chunked", "unknown"), prefix.replace("503", "200")]) assert.throws(() => parse(bytes));
+  assert.throws(() => parse(prefix, "late")); assert.throws(() => parse(prefix, "unknown"));
+});
+test("deadline proof requires trusted same-request watchdog audit, timing, no redispatch and incomplete response", () => {
+  const requestId = "00000000-0000-4000-8000-000000000000";
+  const before = { calls: 0, received: 0, active: 0, audits: [], trickleWrites: 0 };
+  const after = { calls: 1, received: 1, active: 0, trickleWrites: 8,
+    audits: ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"].map(code => ({ code, requestId })) };
+  const response = observedHttp(503, { complete: false, outcome: "TRUNCATED_HTTP_RESPONSE", elapsedMs: 15040, firstByteMs: 25, responseChunks: 9 });
+  assert.equal(deadlineRow("absolute-request-deadline", response, before, after, "trickle").result, "PASS");
+  for (const changes of [{ complete: true }, { outcome: "HTTP_RESPONSE" }, { elapsedMs: 100 }, { elapsedMs: 18000 }, { status: 504 }, { noStore: false }]) {
+    assert.throws(() => deadlineRow("deadline", { ...response, ...changes }, before, after, "trickle"));
+  }
+  for (const changes of [{ calls: 2 }, { received: 2 }, { active: 1 }, { trickleWrites: 10 }, { audits: [] },
+    { audits: [after.audits[0], { ...after.audits[1], requestId: "other" }] }, { audits: [...after.audits, after.audits[1]] }]) {
+    assert.throws(() => deadlineRow("deadline", response, before, { ...after, ...changes }, "trickle"));
+  }
 });

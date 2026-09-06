@@ -1,14 +1,14 @@
 "use strict";
 // Two owned containers share an otherwise network:none namespace. These are
 // physical local probes; direct external reachability is intentionally NOT proven.
-const fs = require("node:fs"), http = require("node:http"), tls = require("node:tls");
+const fs = require("node:fs"), http = require("node:http"), tls = require("node:tls"), net = require("node:net");
 const assert = require("node:assert/strict");
 const { createRequire } = require("node:module");
 const runtimeRequire = createRequire("/runtime/package.json");
 const { createGuardedPartnerSettings } = require("/fixture/settings-guarded.cjs");
 const { SECURITY_HEADERS } = require("/fixture/raw-request-guard.cjs");
 const { completeHttpResponse } = require("/fixture/http-response.cjs");
-const { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
+const { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
 const route = "/lk/integrations/v1/open-games/fixture-game/members";
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const requestHeaders = (body, host = "fixture.invalid", extra = []) => ["Host", host, "Connection", "close", "Content-Length", String(Buffer.byteLength(body)),
@@ -17,18 +17,29 @@ const accessLogs = () => fs.readFileSync("/out/nginx-access.jsonl", "utf8").trim
 
 async function serve() {
   const RED = runtimeRequire("node-red"), express = runtimeRequire("express");
-  const app = express(), state = { received: 0, calls: 0, active: 0, trickleWrites: 0, audits: [], last: null };
+  const app = express(), state = { received: 0, calls: 0, active: 0, trickleWrites: 0, audits: [], last: null,
+    operationsStarted: 0, operationsCompleted: 0, lateHttpOutComplete: 0, lateHttpOutErrors: 0 };
+  const operationTimers = new Set();
   const server = http.createServer((req, res) => { state.received++; app(req, res); });
   const flows = [{ id: "tab", type: "tab", label: "nginx-local-only" },
     ...["post", "get", "delete"].map((method, i) => ({ id: `in-${method}`, type: "http in", z: "tab", method, x: 100, y: 100 + i * 60,
       url: method === "get" ? "/lk/integrations/v1/operations/:operationId" : `/lk/integrations/v1/open-games/:gameId/members${method === "delete" ? "/:membershipId" : ""}`,
       skipBodyParsing: false, upload: false, wires: [["observer"]] })),
-    { id: "observer", type: "fixture-observer", z: "tab", x: 300, y: 100, wires: [] }];
+    { id: "observer", type: "fixture-observer", z: "tab", x: 300, y: 100, wires: [["late-out"]] },
+    { id: "late-out", type: "http response", z: "tab", statusCode: "", headers: {}, wires: [] },
+    { id: "late-complete", type: "complete", z: "tab", scope: ["late-out"], wires: [["completion-counter"]] },
+    { id: "late-catch", type: "catch", z: "tab", scope: ["late-out", "observer"], uncaught: false, wires: [["error-counter"]] },
+    { id: "completion-counter", type: "fixture-counter", z: "tab", counter: "lateHttpOutComplete", wires: [] },
+    { id: "error-counter", type: "fixture-counter", z: "tab", counter: "lateHttpOutErrors", wires: [] }];
   fs.mkdirSync("/tmp/user", { recursive: true }); fs.writeFileSync("/tmp/user/flows.json", JSON.stringify(flows));
   const audit = event => { state.audits.push(event); return true; };
   const settings = createGuardedPartnerSettings({ expectedHost: "fixture.invalid", flows, audit });
   Object.assign(settings, { userDir: "/tmp/user", flowFile: "flows.json", nodesDir: [], logging: { console: { level: "info" } } });
   RED.init(server, settings);
+  RED.nodes.registerType("fixture-counter", function Counter(config) {
+    RED.nodes.createNode(this, config);
+    this.on("input", (_msg, _send, done) => { state[config.counter]++; done(); });
+  });
   RED.nodes.registerType("fixture-observer", function Observer(config) {
     RED.nodes.createNode(this, config);
     this.on("input", msg => {
@@ -39,7 +50,17 @@ async function serve() {
       res.once("close", () => { state.active--; timers.forEach(clearTimeout); });
       const headers = () => res.writeHead(503, { "content-type": "application/json", "cache-control": "public", "access-control-allow-origin": "*" });
       const reply = () => { if (!res.destroyed) { headers(); res.end('{"fixtureOnly":true}'); } };
-      if (msg.payload?.fixtureMode === "trickle") {
+      if (msg.payload?.fixtureMode === "late") {
+        state.operationsStarted++;
+        // Models a dispatched operation: response.close must NOT undo it. The
+        // real locked Node-RED HTTPOut receives its one late result at 18s.
+        const timer = setTimeout(() => {
+          operationTimers.delete(timer); state.operationsCompleted++;
+          msg.statusCode = 200; msg.headers = { "content-type": "application/json" }; msg.payload = { fixtureOnly: true };
+          this.send(msg);
+        }, 18000);
+        operationTimers.add(timer);
+      } else if (msg.payload?.fixtureMode === "trickle") {
         headers(); res.flushHeaders();
         for (let i = 0; i < 10; i++) timers.push(setTimeout(() => {
           if (res.destroyed) return;
@@ -60,7 +81,7 @@ async function serve() {
   const diagnostic = http.createServer((_req, res) => res.end(JSON.stringify(state)));
   await new Promise(resolve => diagnostic.listen(18895, "127.0.0.1", resolve));
   fs.writeFileSync("/tmp/nginx-fixture-ready", "ready");
-  process.on("SIGTERM", async () => { await RED.stop(); server.close(); diagnostic.close(); process.exit(0); });
+  process.on("SIGTERM", async () => { operationTimers.forEach(clearTimeout); await RED.stop(); server.close(); diagnostic.close(); process.exit(0); });
 }
 
 const snapshot = () => new Promise((resolve, reject) => {
@@ -70,21 +91,23 @@ const snapshot = () => new Promise((resolve, reject) => {
   });
   req.setTimeout(2000, () => req.destroy(new Error("SNAPSHOT_TIMEOUT"))); req.on("error", reject);
 });
-function request({ method = "POST", target = route, body = "{}", host = "fixture.invalid", sni = "fixture.invalid", client = "client", extra = [], headers, protocol, localAddress = "127.0.0.1", deadlineMs = 4500, alpn = ["http/1.1"] } = {}) {
+function request({ method = "POST", target = route, body = "{}", host = "fixture.invalid", sni = "fixture.invalid", client = "client", extra = [], headers, protocol, localAddress = "127.0.0.1", deadlineMs = 4500, alpn = ["http/1.1"], deadlineMode = null } = {}) {
   assert.ok([4500, 8000, 23000].includes(deadlineMs));
   assert.ok(["127.0.0.1", "127.0.0.2"].includes(localAddress));
+  assert.ok([null, "trickle", "late"].includes(deadlineMode));
+  if (deadlineMode) { assert.equal(body, JSON.stringify({ fixtureMode: deadlineMode })); assert.equal(deadlineMs, 23000); }
   return new Promise((resolve, reject) => {
     const chunks = [], startedAt = performance.now(); let receivedBytes = 0, firstByteMs = null, serverAuthorized = false, negotiatedProtocol = null, alpnProtocol = null, handled = false;
     const observation = () => ({ serverAuthorized, negotiatedProtocol, alpnProtocol, elapsedMs: Math.round(performance.now() - startedAt), firstByteMs, responseChunks: chunks.length });
-    const socket = tls.connect({ host: "127.0.0.1", port: 8443, localAddress, ...(sni === null ? {} : { servername: sni }),
+    const socket = deadlineMode === "late" ? net.connect({ host: "127.0.0.1", port: 18894 }) : tls.connect({ host: "127.0.0.1", port: 8443, localAddress, ...(sni === null ? {} : { servername: sni }),
       ca: fs.readFileSync("/fixture/ca.crt"), ALPNProtocols: alpn,
       ...(protocol ? { minVersion: protocol, maxVersion: protocol } : {}),
       // Negative clients only; never downgrade the generated Nginx server.
       ...(["TLSv1", "TLSv1.1"].includes(protocol) ? { ciphers: "DEFAULT@SECLEVEL=0" } : {}),
       ...(client ? { cert: fs.readFileSync(`/fixture/${client}.crt`), key: fs.readFileSync(`/fixture/${client}.key`) } : {}) });
     const deadline = setTimeout(() => socket.destroy(new Error("FIXTURE_DEADLINE")), deadlineMs);
-    socket.once("secureConnect", () => {
-      serverAuthorized = socket.authorized; negotiatedProtocol = socket.getProtocol(); alpnProtocol = socket.alpnProtocol || null;
+    socket.once(deadlineMode === "late" ? "connect" : "secureConnect", () => {
+      if (deadlineMode !== "late") { serverAuthorized = socket.authorized; negotiatedProtocol = socket.getProtocol(); alpnProtocol = socket.alpnProtocol || null; }
       const all = headers || requestHeaders(body, host, extra);
       socket.write(`${method} ${target} HTTP/1.1\r\n${all.map((v, i) => i % 2 ? `${v}\r\n` : `${v}: `).join("")}\r\n${body}`);
     });
@@ -99,7 +122,11 @@ function request({ method = "POST", target = route, body = "{}", host = "fixture
     });
     socket.once("close", () => {
       clearTimeout(deadline); if (handled) return;
-      try { resolve({ ...completeHttpResponse(Buffer.concat(chunks), method), outcome: "HTTP_RESPONSE", ...observation() }); }
+      try {
+        const bytes = Buffer.concat(chunks);
+        resolve({ ...(deadlineMode ? deadlineTransportResponse(bytes, deadlineMode, completeHttpResponse)
+          : { ...completeHttpResponse(bytes, method), outcome: "HTTP_RESPONSE" }), ...observation() });
+      }
       catch (error) { reject(error); }
     });
   });
@@ -174,13 +201,31 @@ async function remainingBoundaries(rows) {
   rows.push(concurrencyRow(responses, rejected, before, held, after, accessLogs().slice(logStart)));
   await check("concurrency-slot-recovery", {}, { statuses: [503], dispatch: 1, upstream: 1 });
 
-  await check("upstream-idle-timeout-no-retry", { body: '{"fixtureMode":"idle"}', deadlineMs: 23000 }, {
-    statuses: [504], dispatch: 1, upstream: 1, minElapsedMs: 14000, maxElapsedMs: 21000,
+  // Nginx idle timer and sidecar watchdog can race on silence; this row proves
+  // only the combined bound, not which component owned the cutoff.
+  await check("upstream-silence-bound-no-retry", { body: '{"fixtureMode":"idle"}', deadlineMs: 23000 }, {
+    statuses: [502, 504], dispatch: 1, upstream: 1, minElapsedMs: 14500, maxElapsedMs: 17000,
   });
   const dripBefore = await snapshot();
-  const drip = await request({ body: '{"fixtureMode":"trickle"}', deadlineMs: 23000 });
+  const drip = await request({ body: '{"fixtureMode":"trickle"}', deadlineMs: 23000, deadlineMode: "trickle" });
   const dripAfter = await untilState(state => state.active === 0);
-  rows.push(missingDeadlineRow(drip, dripBefore, dripAfter));
+  rows.push(deadlineRow("absolute-request-deadline", drip, dripBefore, dripAfter, "trickle"));
+  const lateBefore = await snapshot();
+  const late = await request({ body: '{"fixtureMode":"late"}', deadlineMs: 23000, deadlineMode: "late" });
+  const lateClosed = await untilState(state => state.active === 0);
+  const lateRow = deadlineRow("sidecar-late-httpout-after-deadline", late, lateBefore, lateClosed, "late");
+  assert.equal(lateClosed.operationsStarted - lateBefore.operationsStarted, 1);
+  assert.equal(lateClosed.operationsCompleted - lateBefore.operationsCompleted, 0);
+  await wait(3500);
+  const lateAfter = await untilState(state => state.lateHttpOutComplete - lateBefore.lateHttpOutComplete === 1);
+  assert.equal(lateAfter.operationsStarted - lateBefore.operationsStarted, 1);
+  assert.equal(lateAfter.operationsCompleted - lateBefore.operationsCompleted, 1);
+  assert.equal(lateAfter.lateHttpOutErrors - lateBefore.lateHttpOutErrors, 0);
+  assert.equal(lateAfter.calls - lateBefore.calls, 1); assert.equal(lateAfter.active, 0);
+  assert.equal(lateAfter.trickleWrites, dripAfter.trickleWrites);
+  assert.deepEqual(lateAfter.audits, lateClosed.audits);
+  Object.assign(lateRow, { operationsStarted: 1, operationsCompletedAfterClose: 1, lateHttpOutComplete: 1, lateHttpOutErrors: 0 });
+  rows.push(lateRow);
   await check("positive-after-boundaries", {}, { statuses: [503], dispatch: 1, upstream: 1 });
 }
 

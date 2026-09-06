@@ -83,20 +83,55 @@ function missingDeadlineRow(response, before, after) {
   // Never relabel this observed failure of the desired control as PASS.
   return { ...row, result: "KNOWN_BLOCKER_CONFIRMED", control: "ABSOLUTE_REQUEST_DEADLINE", requiredBoundMs: 15000 };
 }
+// Only the two explicit deadline fixtures may observe a deliberately incomplete
+// response. Ordinary probes still require the unchanged complete HTTP parser.
+function deadlineTransportResponse(bytes, mode, parseComplete) {
+  if (mode === "late") {
+    assert.equal(bytes.length, 0);
+    return { status: null, outcome: "NO_HTTP_RESPONSE", complete: false };
+  }
+  assert.equal(mode, "trickle");
+  assert.throws(() => parseComplete(bytes), /INCOMPLETE_OR_AMBIGUOUS/);
+  // Each received chunk must be complete; only the terminal chunk is absent.
+  const parsed = parseComplete(Buffer.concat([bytes, Buffer.from("0\r\n\r\n")]));
+  assert.equal(parsed.status, 503);
+  return { ...parsed, outcome: "TRUNCATED_HTTP_RESPONSE", complete: false };
+}
+function deadlineRow(name, response, before, after, mode) {
+  assert.ok(["trickle", "late"].includes(mode));
+  assert.equal(response.complete, false);
+  assert.equal(response.outcome, mode === "trickle" ? "TRUNCATED_HTTP_RESPONSE" : "NO_HTTP_RESPONSE");
+  assert.ok(response.elapsedMs >= 14500 && response.elapsedMs <= 17000, "15s budget with explicit local scheduler/transport tolerance");
+  assert.equal(after.calls - before.calls, 1); assert.equal(after.received - before.received, 1);
+  assert.equal(after.active, 0);
+  const events = after.audits.slice(before.audits.length);
+  assert.deepEqual(events.map(event => event.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"]);
+  assert.match(events[0].requestId, /^[a-f0-9-]{36}$/);
+  assert.equal(events[0].requestId, events[1].requestId);
+  if (mode === "trickle") {
+    assert.equal(response.serverAuthorized, true); assert.equal(response.noStore, true); assert.equal(response.cors, false);
+    assert.equal(response.status, 503); assert.ok(response.firstByteMs >= 0 && response.firstByteMs < 5000);
+    assert.ok(response.responseChunks >= 2); assert.equal(after.trickleWrites - before.trickleWrites, 8);
+  } else { assert.equal(response.status, null); assert.equal(response.responseChunks, 0); }
+  return { name, ...response, result: "PASS", control: "SIDECAR_RESPONSE_DEADLINE", requiredBoundMs: 15000,
+    observationToleranceMs: 2000, watchdogAudits: 1, observerCalls: 1, upstreamCalls: 1, activeAfter: 0 };
+}
 const BOUNDARY_NAMES = Object.freeze(["reject-TLSv1", "reject-TLSv1.1", "absent-sni", "source-cidr-denial",
   "request-line-2048", "request-line-2049", "header-field-2048", "header-field-2049", "aggregate-header-over-16k",
   "packed-head-post-16384", "packed-head-delete-16384", "packed-head-get-16384", "packed-head-post-16385",
   "header-section-16385", "packed-head-reordered-16384-denied",
-  "client-concurrency", "concurrency-slot-recovery", "upstream-idle-timeout-no-retry", "absolute-request-deadline", "positive-after-boundaries"]);
+  "client-concurrency", "concurrency-slot-recovery", "upstream-silence-bound-no-retry", "absolute-request-deadline",
+  "sidecar-late-httpout-after-deadline", "positive-after-boundaries"]);
 function summarizeNginxRows(rows) {
   assert.equal(rows.length, 49 + BOUNDARY_NAMES.length);
   assert.equal(new Set(rows.map(row => row.name)).size, rows.length);
   for (const name of BOUNDARY_NAMES) assert.ok(rows.some(row => row.name === name), `Missing boundary ${name}`);
   for (const row of rows) {
-    if (row.name === "absolute-request-deadline") {
-      assert.equal(row.result, "KNOWN_BLOCKER_CONFIRMED"); assert.equal(row.control, "ABSOLUTE_REQUEST_DEADLINE");
-    } else assert.equal(row.result, "PASS");
+    assert.equal(row.result, "PASS");
+    if (["absolute-request-deadline", "sidecar-late-httpout-after-deadline"].includes(row.name)) {
+      assert.equal(row.control, "SIDECAR_RESPONSE_DEADLINE"); assert.equal(row.watchdogAudits, 1);
+    }
   }
-  return { passed: rows.length - 1, confirmedBlockers: ["ABSOLUTE_REQUEST_DEADLINE"], notTested: [] };
+  return { passed: rows.length, confirmedBlockers: [], notTested: [] };
 }
-module.exports = { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES };
+module.exports = { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows, BOUNDARY_NAMES };

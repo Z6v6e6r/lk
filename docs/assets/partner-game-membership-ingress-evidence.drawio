@@ -86,4 +86,23 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Response deadline and operation ownership">
+    <mxGraphModel dx="1700" dy="760" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="ВХОД В RAW MIDDLEWARE&#xa;Monotonic clock starts here&#xa;Body ≤5s · response ≤15s&#xa;TLS / edge headers — отдельно" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="HTTP RESPONSE WATCHDOG&#xa;Переживает next() / drip bytes&#xa;finish / close → cleanup&#xa;Deadline → destroy(), без504" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="TRUSTED AUDIT&#xa;RAW_REQUEST_DEADLINE&#xa;Тот же server requestId&#xa;Одна попытка · без PII" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1240" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="НАЧАТАЯ ОПЕРАЦИЯ&#xa;Может продолжиться после15s&#xa;Не cancel / не compensation&#xa;Nonce / ownership сохраняются" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="RECOVERY ПАРТНЁРА&#xa;Operation GET или та же команда&#xa;Тот же Idempotency-Key&#xa;Новая подпись / nonce / timestamp" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="ГРАНИЦА ДОКАЗАТЕЛЬСТВ&#xa;Local tests ≠ Viva / live proof&#xa;Не hard real time&#xa;Production STOP · no deploy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1240" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="независимый lifecycle" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="после закрытия transport" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="dispatch только до deadline" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="2" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="pending / complete / UNKNOWN" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="без второго provider add" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

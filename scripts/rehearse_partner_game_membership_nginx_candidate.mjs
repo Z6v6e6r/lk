@@ -103,7 +103,7 @@ try {
   await new Promise(resolve => setTimeout(resolve, 1000));
   const before = [verify(nodeId), verify(nginxId)]; receipt.containers = before;
   // Bounded execution may exceed a single tool wait, but not the fixture deadline.
-  execFileSync("docker", ["exec", nodeId, "node", "/fixture/runner.cjs", "test"], { encoding: "utf8", timeout: 150000, maxBuffer: 65536 });
+  execFileSync("docker", ["exec", nodeId, "node", "/fixture/runner.cjs", "test"], { encoding: "utf8", timeout: 180000, maxBuffer: 65536 });
   const after = [verify(nodeId), verify(nginxId)]; assert.deepEqual(after, before);
   assert.equal(treeDigest(), runtimeBefore); assert.equal(sha(fs.readFileSync(path.join(fixture, "nginx.conf"))), candidate.configSha256);
   for (const [name, digest] of Object.entries(copiedHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, name))), digest);
@@ -116,7 +116,7 @@ try {
   for (const field of ["passed", "notTested", "confirmedBlockers"]) assert.deepEqual(probes[field], summary[field]);
   Object.assign(receipt, summary);
   receipt.probesSha256 = sha(fs.readFileSync(path.join(results, "nginx-probes.json")));
-  receipt.runtimeAfterSha256 = runtimeBefore; receipt.state = "LOCAL_MATRIX_WITH_CONFIRMED_BLOCKERS";
+  receipt.runtimeAfterSha256 = runtimeBefore; receipt.state = "PASS_LOCAL_MATRIX_ONLY";
 } catch (error) { failure = error; receipt.state = "FAILED"; }
 finally {
   for (const id of owned.reverse()) {

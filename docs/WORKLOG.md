@@ -2,6 +2,41 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner response deadline: local70 + CLI20 PASS
+
+- После `32c0ad6` пользователь одобрил только local15s deadline correction.
+  Сохранены branch/WT/sole writer; Critical lane, два независимых read-only risk
+  reviews. Новых branch/PR, main integration/push/deploy/shared writes не было.
+- Raw guard получил независимый monotonic response watchdog: body≤5s отдельно,
+  response≤15s от middleware entry. `next()`/req.close/drip не снимают watchdog;
+  finish/response.close чистят lifecycle. Expiry — destroy без synthetic error,
+  затем одна попытка fixed audit с тем же trusted requestId. Provider/core/DB и
+  operation/nonce ownership не менялись; late business work может продолжаться.
+- Security P2 закрыт: timer может проснуться раньше budget; remaining recheck,
+  ceil/re-arm и regression предотвращают ранний cutoff. До dispatch после sync
+  audit повторная monotonic проверка. Release P2 закрыт в docs: fail-closed нового
+  dispatch относится к admission audit, не к terminal audit уже начатой операции.
+- Actual physical run `12:33:54.677Z`: **70/70 PASS**, receipt`3afb400b…`,
+  probes`f80b6d05…`. Nginx drip15029ms/incomplete503; direct sidecar15030ms/0bytes;
+  synthetic op после close завершилась один раз через actual HTTPOut/catch0;
+  recovery503. Silence502/15032ms — combined timer race, не Nginx-only proof.
+- Actual guarded CLI `12:37:38.718Z`: **20/20 PASS**,6durable audit rows,
+  10startup refusals; receipt`5c3937eb…`. 19copied sources/current bindings
+  проверены; normalizedproof`23d0a768…`, controls`6226f692…`. Runtime/custom7,
+  service/settings locks unchanged; только guard/audit closure pins refreshed.
+- Два отдельных resource/system admissions; Nginxnetwork:none/ROreusedruntime,
+  CLIexactlockedinstall scriptsOFF затемnetwork:none.4ownedcontainers удалены,
+  обе пары exact-ID absence отдельно подтверждены, synthetic keys/CSRs удалены;
+  чужие Docker/rootWT/общие зависимости нетронуты. Heavy-slot RELEASED.
+- Source: targetedguard+Nginx121, API39; final fullPartner **321/321**, skipped0;
+  lint0errors/387existingwarnings, controls validator/diff/XML PASS. Existing
+  drawio дополнен через drawio-skill; XML-only fallback, сломанный exporter не
+  повторяли. Frontend/modular builds не повторялись на unchangedinputs.
+- [Подробный deadline/recovery/evidence контракт](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md)
+  содержит P0/P1/P2 вопросы. Это не hard realtime/edge TLS-header bound, не proof
+  реального Viva/DB/systemd и не production release. `UNSUPPORTED_INGRESS_ADAPTER`
+  остаётся; historical raw failures/receipts и published disabled packet сохранены.
+
 ## 2026-09-06 — Partner aggregate Nginx cap исправлен; deadline blocker подтверждён
 
 - User одобрил узкий local correction после `c38bc73`. Сохранены same branch/WT,

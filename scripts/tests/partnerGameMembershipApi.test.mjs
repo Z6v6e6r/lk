@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import test from "node:test";
+import { createPartnerRawRequestGuard } from "../partner_game_membership_sidecar/raw-request-guard.cjs";
 
 import {
   DisabledVivaProvider,
@@ -593,6 +595,58 @@ test("concurrent requests with one idempotency key have exactly one mutation own
   const first = await firstPromise;
   assert.equal(first.statusCode, 201);
   assert.equal(provider.addCalls, 1);
+});
+
+test("transport deadline leaves the dispatched operation owned; signed recovery cannot add twice", async () => {
+  let releaseProvider, enteredProvider;
+  const providerGate = new Promise(resolve => { releaseProvider = resolve; });
+  const entered = new Promise(resolve => { enteredProvider = resolve; });
+  class DelayedProvider extends CountingProvider {
+    async addTechnicalUser(input) {
+      this.addCalls++; enteredProvider(); await providerGate;
+      return SyntheticVivaProvider.prototype.addTechnicalUser.call(this, input);
+    }
+  }
+  const provider = new DelayedProvider(), { service, repository } = buildFixture({ provider });
+  const idempotencyKey = crypto.randomUUID(), signed = signedRequest({ idempotencyKey });
+  const req = new PassThrough(), res = new EventEmitter(), events = [];
+  const body = JSON.stringify(signed.body);
+  Object.assign(req, { method: signed.method, url: signed.path, originalUrl: signed.path, complete: true, trailers: {},
+    headers: { host: "fixture.invalid", "content-type": "application/json", "content-length": String(Buffer.byteLength(body)), ...signed.headers } });
+  req.rawHeaders = Object.entries(req.headers).flat();
+  req.headersDistinct = Object.fromEntries(Object.entries(req.headers).map(([name, value]) => [name, [value]]));
+  const closed = new Promise(resolve => res.once("close", resolve));
+  res.destroy = () => { res.destroyed = true; res.emit("close"); };
+  let firstPromise, dispatches = 0;
+  createPartnerRawRequestGuard({ expectedHost: "fixture.invalid", bodyTimeoutMs: 20, requestTimeoutMs: 50,
+    audit: event => { events.push(event); return true; } })(req, res, () => {
+    dispatches++; firstPromise = service.handle({ ...signed, headers: req.headers, body: req.body });
+  });
+  req.end(body);
+  // Ref'd test ceiling only; watchdog remains unref'd in production.
+  let ceiling;
+  try {
+    await Promise.race([Promise.all([entered, closed]), new Promise((_, reject) => {
+      ceiling = setTimeout(() => reject(new Error("TEST_DEADLINE_NOT_OBSERVED")), 1000);
+    })]);
+    assert.equal(provider.addCalls, 1); assert.equal(provider.removeCalls, 0);
+    assert.equal(repository.operations.size, 1); assert.equal(repository.memberships.size, 1);
+    assert.equal([...repository.operations.values()][0].state, "SLOT_RESERVED");
+    assert.deepEqual(events.map(event => event.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"]);
+    assert.equal(events[0].requestId, events[1].requestId);
+    await assert.rejects(service.handle(signed), { code: "REQUEST_REPLAY_DETECTED", httpStatus: 409 });
+    const pending = await service.handle(signedRequest({ idempotencyKey }));
+    assert.equal(pending.statusCode, 202); assert.equal(provider.addCalls, 1);
+    releaseProvider();
+    const first = await firstPromise;
+    assert.equal(first.statusCode, 201); assert.equal(res.destroyed, true); assert.equal(dispatches, 1);
+    const completed = await service.handle(signedRequest({ idempotencyKey }));
+    assert.equal(completed.statusCode, 200); assert.deepEqual(completed.body, first.body);
+    assert.equal(provider.addCalls, 1); assert.equal(provider.removeCalls, 0);
+    assert.equal(repository.games.get(GAME_ID).participants.length, 1);
+    assert.equal(repository.games.get(GAME_ID).payments.length, 1);
+    assert.equal([...repository.operations.values()][0].state, "COMPLETED");
+  } finally { clearTimeout(ceiling); releaseProvider(); await firstPromise; res.destroy(); }
 });
 
 test("same idempotency key with a different signed body is rejected", async () => {

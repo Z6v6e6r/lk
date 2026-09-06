@@ -17,7 +17,7 @@ const { parsePartnerRawJson: parse, createPartnerRawRequestGuard: create, SECURI
 const host = "fixture.invalid";
 const baseHeaders = (body = "{}") => ["Host", host, "Content-Length", String(Buffer.byteLength(body)),
   ...SECURITY_HEADERS.flatMap((name) => [name, name === "content-type" ? "application/json" : "fixture-value"])];
-const call = async ({ body = "{}", method = "POST", url, headers, mutate, action, audit } = {}) => {
+const call = async ({ body = "{}", method = "POST", url, headers, mutate, action, audit, holdResponse = false, requestTimeoutMs = 15000 } = {}) => {
   const req = new PassThrough();
   req.method = method;
   req.originalUrl = req.url = url || (method === "GET" ? "/lk/integrations/v1/operations/fixture-op"
@@ -39,9 +39,12 @@ const call = async ({ body = "{}", method = "POST", url, headers, mutate, action
   let nextCount = 0;
   let resolve;
   const done = new Promise((r) => { resolve = r; });
-  res.end = (bytes, callback) => { res.result = JSON.parse(bytes); callback?.(); resolve(); };
+  res.destroy = () => { res.destroyed = true; res.emit("close"); resolve(); };
+  res.end = (bytes, callback) => { res.result = JSON.parse(bytes); res.emit("finish"); callback?.(); resolve(); };
   mutate?.(req, res);
-  create({ expectedHost: host, bodyTimeoutMs: 20, audit: audit || ((e) => { events.push(e); return true; }) })(req, res, () => { nextCount++; resolve(); });
+  create({ expectedHost: host, bodyTimeoutMs: 20, requestTimeoutMs, audit: audit || ((e) => { events.push(e); return true; }) })(req, res, () => {
+    nextCount++; if (!holdResponse) res.emit("finish"); resolve();
+  });
   if (action) action(req, res);
   else if (!req.destroyed) req.end(body);
   await done;
@@ -209,6 +212,106 @@ test("unexpected error messages never reach response or audit", async () => {
 test("absolute read deadline before first byte and between bytes", async () => {
   denied(await call({ action: () => {} }), "RAW_BODY_TIMEOUT");
   denied(await call({ action: (req) => req.write("{") }), "RAW_BODY_TIMEOUT");
+});
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+test("early timer wakeup re-arms the original monotonic deadline without early cutoff", async context => {
+  const realTimeout = global.setTimeout;
+  let early;
+  context.mock.method(global, "setTimeout", (callback, delay, ...args) => {
+    if (!early) { early = callback; return { unref() {} }; }
+    return realTimeout(callback, delay, ...args);
+  });
+  const out = await call({ holdResponse: true, requestTimeoutMs: 60 });
+  early();
+  assert.equal(out.res.destroyed, undefined);
+  assert.deepEqual(out.events.map(e => e.code), ["RAW_ACCEPTED"]);
+  await wait(85);
+  assert.equal(out.res.destroyed, true);
+  assert.deepEqual(out.events.map(e => e.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"]);
+});
+test("response watchdog survives dispatch and request close, cuts transport exactly once", async () => {
+  const out = await call({ holdResponse: true, requestTimeoutMs: 40 });
+  out.req.emit("close");
+  out.res.headersSent = true; // a drip cannot renew the absolute response budget
+  await wait(70);
+  assert.equal(out.nextCount, 1);
+  assert.equal(out.res.destroyed, true);
+  assert.equal(out.res.result, undefined); // no synthetic HTTP error after dispatch
+  assert.deepEqual(out.events.map(e => e.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"]);
+  assert.equal(out.events[0].requestId, out.events[1].requestId);
+  assert.equal(out.res.listenerCount("close"), 0);
+  assert.equal(out.res.listenerCount("finish"), 0);
+  out.res.emit("close"); out.res.emit("finish");
+  await wait(20);
+  assert.equal(out.events.length, 2);
+});
+test("normal finish, early client close and body rejection clear watchdog without a late audit", async () => {
+  for (const terminal of ["finish", "close"]) {
+    const out = await call({ holdResponse: true, requestTimeoutMs: 40 });
+    out.res.emit(terminal);
+    await wait(60);
+    assert.deepEqual(out.events.map(e => e.code), ["RAW_ACCEPTED"]);
+    assert.equal(out.res.destroyed, undefined);
+    assert.equal(out.res.listenerCount("finish"), 0);
+    assert.equal(out.res.listenerCount("close"), 0);
+  }
+  for (const options of [{ body: '{"x":}' }, { action: () => {} }]) {
+    const out = await call({ ...options, requestTimeoutMs: 40 });
+    await wait(60);
+    assert.equal(out.events.length, 1);
+    assert.equal(out.events.some(e => e.code === "RAW_REQUEST_DEADLINE"), false);
+    assert.equal(out.res.listenerCount("finish"), 0);
+  }
+});
+test("monotonic budget is checked after synchronous audit before dispatch", async () => {
+  const events = [];
+  const out = await call({ requestTimeoutMs: 20, audit: event => {
+    events.push(event);
+    if (event.code === "RAW_ACCEPTED") { const until = performance.now() + 30; while (performance.now() < until) { /* bounded synchronous sink stall */ } }
+    return true;
+  } });
+  assert.equal(out.nextCount, 0);
+  assert.equal(out.res.destroyed, true);
+  assert.deepEqual(events.map(e => e.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"]);
+  assert.equal(events[0].requestId, events[1].requestId);
+});
+test("deadline audit failure cannot retain the connection or emit a second response", async () => {
+  for (const failure of [() => false, () => { throw new Error("DO_NOT_LOG_ME"); }, () => Promise.reject(new Error("DO_NOT_LOG_ME"))]) {
+    let attempts = 0;
+    const out = await call({ holdResponse: true, requestTimeoutMs: 30, audit: event => {
+      if (event.code === "RAW_REQUEST_DEADLINE") { attempts++; return failure(); }
+      return true;
+    } });
+    await wait(50);
+    assert.equal(out.res.destroyed, true);
+    assert.equal(out.res.result, undefined);
+    assert.equal(attempts, 1);
+    assert.equal(out.nextCount, 1);
+  }
+});
+test("real durable sink accepts deadline, later request and reopen without poisoning audit", async () => {
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "partner-deadline-audit-"));
+  fs.chmodSync(directory, 0o700);
+  let sink;
+  try {
+    sink = auditModule.openPartnerRawAudit({ directory });
+    const out = await call({ holdResponse: true, requestTimeoutMs: 30, audit: sink.write });
+    await wait(50);
+    assert.equal(out.res.destroyed, true);
+    assert.equal((await call({ audit: sink.write })).nextCount, 1);
+    sink.close(); sink = auditModule.openPartnerRawAudit({ directory });
+    assert.equal((await call({ audit: sink.write })).nextCount, 1);
+    const bytes = fs.readFileSync(path.join(directory, "raw-requests.audit.jsonl"), "utf8");
+    const rows = bytes.trim().split("\n").map(JSON.parse);
+    assert.deepEqual(rows.map(row => row.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE", "RAW_ACCEPTED", "RAW_ACCEPTED"]);
+    assert.equal(rows[0].requestId, rows[1].requestId);
+    assert.doesNotMatch(bytes, /DO_NOT_LOG_ME|fixture-value|fixture-game/);
+  } finally { sink?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test("trusted factory may only shorten the 15s response budget and cannot outrun body budget", () => {
+  for (const requestTimeoutMs of [0, 19, 15001, 1.5, NaN, "15000"]) {
+    assert.throws(() => create({ expectedHost: host, audit: () => true, bodyTimeoutMs: 20, requestTimeoutMs }), /RAW_GUARD_CONFIGURATION_INVALID/);
+  }
 });
 test("abort, IO error, premature end, oversized streamed body", async () => {
   denied(await call({ action: (req) => req.emit("aborted") }), "RAW_BODY_ABORTED");

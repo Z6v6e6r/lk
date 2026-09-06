@@ -169,6 +169,30 @@ npm run test:partner-game-membership-api
 
 ## Exit criteria ограниченного пилота
 
+### Response deadline: отдельный локальный gate после `32c0ad6`
+
+Контракт и recovery: [15s response watchdog](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md).
+Не путать body read timeout, Nginx idle timeout и время бизнес-операции.
+
+| Проверка | Требуемое доказательство |
+| --- | --- |
+| Finish / early response close / raw rejection | Таймер/listeners сняты; нет позднего deadline audit |
+| Req.close после body и drip ответа | Watchdog остаётся активным после `next()`; bytes не продлевают deadline |
+| Ранний timer callback / blocking sync audit | Повторная monotonic проверка; никакого раннего cutoff или нового dispatch после budget |
+| Ошибка deadline audit / reopen | Transport закрыт несмотря на false/throw/Promise; valid deadline не отравляет durable sink |
+| Подписанный retry после disconnect | Exact replay409; new proof + same key202/200; один add/payment/participant; no cancel |
+| Physical Nginx drip | Неполный503, 8 writes, около15s, один trusted watchdog event с тем же requestId, recovery |
+| Physical direct sidecar + late actual HTTPOut | Закрытие до headers; synthetic operation ещё pending; поздний result через actual Node-RED без catch/error/повторной операции |
+| Guarded CLI closure | Свежий20-row proof на изменённых guard/audit bytes; старый receipt не переименовывается в свежий |
+
+Неполный ответ допускается только в двух explicit deadline probes и не называется
+валидным API response. Client timeout/reset без trusted witness — FAIL. Новый
+combined silence probe допускает502/504, не выдавая timer race за Nginx-only proof.
+Физический результат и статус упаковки публикуются только в evidence-разделе
+deadline документа после завершения соответствующего run.
+
+### Остальные условия пилота
+
 Локальный ingress evidence core имеет отдельную
 [матрицу проверок и ограничений](PARTNER_GAME_MEMBERSHIP_INGRESS_VERIFIER.md).
 Его unit/filesystem tests не закрывают перечисленные ниже live ingress, Mongo или

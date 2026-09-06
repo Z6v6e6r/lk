@@ -6,6 +6,10 @@ deploy/activation остаются `false`. Боевые Nginx, Node-RED, Mongo 
 
 ## Исправление aggregate limit: консервативный бюджет
 
+Раздел ниже — историческое доказательство checkpoint `32c0ad6`. Последующий
+локальный response-deadline gate и его ограничения описаны
+[отдельно](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md); старые receipts сохранены.
+
 После `c38bc73` пользователь одобрил только исправление aggregate limit и локальные
 проверки. Generator сохраняет `client_header_buffer_size 2k`, но меняет дополнительные
 буферы на `large_client_header_buffers 7 2k`. Начальные2KiB учитываются отдельно:
@@ -72,8 +76,10 @@ Deadline матрицы150s зафиксирован до runtime admission; per
 - Heavy-slot RELEASED; после первого подтверждённого deadline blocker — только
   завершение предусмотренного recovery/cleanup и docs/checkpoint, без второго run.
 
-Следующий узкий gate требует отдельного подтверждения: общий15s deadline и его
-recovery/negative tests. Боевой verifier остаётся безусловно unsupported.
+На момент этого checkpoint следующим gate был общий15s deadline и его
+recovery/negative tests. Он выполнен в последующем локальном исправлении
+[response watchdog](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md). Боевой verifier
+остаётся безусловно unsupported.
 
 ## Предыдущая boundary-репетиция: STOP на суммарных заголовках
 
@@ -241,7 +247,7 @@ KNOWN_BLOCKER_CONFIRMED**, receipt `197250e2…`: его результат не
 | NOT PROVEN | Source rate/concurrency независимо от более строгого client limiter; нужны разные допущенные synthetic identities |
 | LOCAL CONSERVATIVE PASS | Aggregate budget2k+7×2k:17562/16385-byte header sections отклонены до upstream; packed positives и ранний отказ при другой упаковке подтверждены |
 | LOCAL PASS | Client concurrency/recovery, upstream idle timeout/no-retry в одном silence scenario; TLS/SNI/CIDR и single-line/field bounds подтверждены |
-| CONFIRMED BLOCKER | Общий15s deadline: completed drip response18048ms; idle timeout не ограничивает полную длительность |
+| LOCAL COMBINED PASS | Sidecar response deadline от middleware entry: в последующем70-row run drip оборван через15029ms; edge TLS/headers и hard realtime сюда не входят. Исторический18.048s blocker сохранён в прежнем receipt |
 | NOT IMPLEMENTED | Controlled production config application/worker-generation collector, external vantage/direct-sidecar proof, production certificate revocation |
 
 Не следует включать `proxy_pass_request_headers off` без нового решения: это может
