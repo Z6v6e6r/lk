@@ -27,10 +27,12 @@ Every five minutes the worker:
    configured tenant and the current Moscow date through the lookahead boundary.
 3. Rejects malformed rows, cross-tenant rows, and rows whose Viva exercise IDs
    disagree across booking, metadata, and dedupe fields.
-4. Reads the VivaCRM Admin exercises endpoint for each date, with page size 200,
-   at most five pages per date, rate limiting of two requests per second, bounded HTTP
-   timeouts, and redirects disabled. Unknown response containers, missing page
-   metadata, and contradictory pagination fail the date closed.
+4. Reads the VivaCRM Admin exercises endpoint for each date, requesting one page
+   of 1,000 rows, with rate limiting of two requests per second, bounded HTTP
+   timeouts, and redirects disabled. The current bounded unpaged array response is
+   accepted only on page zero and only below the requested 1,000-row ceiling. Unknown
+   response containers, missing metadata on paged responses, contradictory pagination,
+   and larger arrays fail the date closed.
 5. Accepts only one exact provider exercise with the same exercise ID, studio,
    date, start time, and end time. Cancelled, missing, duplicate, truncated, or
    ambiguous provider data produces no write.
@@ -87,9 +89,9 @@ offline, dry-run-only plan from three private projected inputs:
 
 - Mongo game rows strictly limited to `_id`, status, tenant/revision state,
   provider identity, slot identity, and timestamps;
-- Viva exercises fetched through the exact configured tenant and grouped by
-  date;
-- a reviewed read-only capture receipt for the tenant-bearing endpoint.
+- Viva exercises fetched with the same tenant-scoped service principal and Admin
+  endpoint used by the runtime worker, grouped by date;
+- a reviewed read-only capture receipt for that Admin endpoint.
 
 The planner rejects unrecognized top-level or nested fields, including
 participant, phone, payment, roster, result, and room data, instead of accepting
@@ -114,6 +116,7 @@ npm run nodered:viva-game-projection-sync:migration-plan -- \
   --tenant-key iSkq6G \
   --expected-flow-sha256 <verified-live-flow-sha256> \
   --expected-provider-receipt-sha256 <reviewed-receipt-sha256> \
+  --expected-provider-service-principal-sha256 <verified-runtime-principal-sha256> \
   --date-from 2026-09-04 \
   --date-to 2026-09-11 \
   --operation-id viva-projection-migration-20260904
@@ -124,8 +127,12 @@ runtime configuration and must equal `--tenant-key`. The expected flow hash
 must come from the frozen live-flow readback and must equal the Mongo
 projection's hash. All three inputs must be current-user-owned, single-link
 regular `0600` files and are opened once; planning and hashes use the same
-bytes. The output parent must be private and current-user-owned. The output
-directory is created without replacement as `0700` and contains `0600`
+bytes. The expected provider principal digest must be obtained independently
+from a fresh runtime authentication readback. It is the SHA-256 of the
+canonical authenticated Viva token subject; the receipt and projection contain
+only that digest, never the subject, username, or token. The output parent must
+be private and current-user-owned. The output directory is created without
+replacement as `0700` and contains `0600`
 `plan.json`, `summary.json`, and a final `READY` marker. Consumers must reject a
 directory without `READY` or whose marker does not equal `summary.planSha256`.
 The summary binds the plan, both projections, and the capture receipt by SHA-256
@@ -137,12 +144,16 @@ pass an unchecked JSON object to the driver.
 The Mongo projection metadata must declare format version 1, source kind
 `live-147-mongo-projection`, host `lk-primary-147`, exact source-flow SHA-256,
 database `games`, collection `lk_games`, and capture time. The Viva projection
-must declare format version 1, source kind `viva-end-user-tenant-projection`,
-exact tenant, and capture time. Its separate read-once receipt must cover every
-requested date exactly once, bind each rows array by SHA-256, report a complete
-HTTP 200 array response, and use the exact tenant-bearing path
-`/end-user/api/v1/{tenant}/exercises?date={date}`. Projected provider rows must
-carry the capture tool's reviewed normalized `active: true`; contradictory IDs,
+must declare format version 1, source kind `viva-admin-service-projection`,
+exact runtime tenant, and capture time. Its separate read-once receipt must use
+source kind `viva-admin-service-capture-receipt`, cover every requested date
+exactly once, bind each rows array by SHA-256, report a complete HTTP 200 array
+response, and use the exact path
+`/api/v1/exercises?date={date}&includeCanceled=false&page=0&size=1000`. Its
+`servicePrincipalSha256` must match the independently read runtime principal
+digest and the cutover control
+`runtimeTenant.vivaServicePrincipalSha256`. Projected provider rows must carry
+the capture tool's reviewed normalized `active: true`; contradictory IDs,
 studios, cancellation flags, and lifecycle states are rejected. The reviewed
 receipt SHA is supplied independently. Both projections expire after 30 minutes
 and may be at most five minutes ahead of the planner clock. These labels and

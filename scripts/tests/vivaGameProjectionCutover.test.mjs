@@ -133,6 +133,7 @@ const providerRows = {
     active: true,
   }],
 };
+const providerServicePrincipalSha256 = cutoverSha256("viva-service-subject");
 
 const write0600 = (filePath, bytes) => {
   fs.writeFileSync(filePath, bytes, { mode: 0o600, flag: "wx" });
@@ -156,6 +157,7 @@ function executablePlan() {
       gamesCapturedAt: nowIso,
       providerCapturedAt: nowIso,
       providerTenantKey: tenantKey,
+      providerServicePrincipalSha256,
     },
     ...built,
   };
@@ -241,6 +243,7 @@ const controls = (overrides = {}) => ({
     restartCount: 3,
     localHealthUrl: "http://127.0.0.1:1880/flows",
     tenantKeySha256: cutoverSha256(tenantKey),
+    vivaServicePrincipalSha256: providerServicePrincipalSha256,
     durableConfigReadback: true,
     restartUsedUpdateEnv: true,
     postRestartReadback: true,
@@ -1778,6 +1781,7 @@ test("claimed PASS controls reject future runtime, backup, restore, coverage, an
   const futureIso = "2026-09-04T12:02:00.000Z";
   for (const mutate of [
     (value) => { value.runtimeTenant.readBackAt = futureIso; },
+    (value) => { value.runtimeTenant.vivaServicePrincipalSha256 = "0".repeat(64); },
     (value) => { value.backup.completedAt = futureIso; },
     (value) => { value.restoreRehearsal.rehearsedAt = futureIso; },
     (value) => { value.coverage.observedAt = futureIso; },
@@ -3119,13 +3123,14 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     const migrationProviderReceiptPath = path.join(privateRoot, "migration-provider-receipt.json");
     const migrationProviderReceiptBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
-      sourceKind: "viva-end-user-tenant-capture-receipt",
+      sourceKind: "viva-admin-service-capture-receipt",
       tenantKey,
+      servicePrincipalSha256: providerServicePrincipalSha256,
       capturedAt: nowIso,
       endpointOrigin: "https://api.vivacrm.ru",
       captures: [{
         date: scope.dateFrom,
-        requestPath: `/end-user/api/v1/${tenantKey}/exercises?date=${scope.dateFrom}`,
+        requestPath: `/api/v1/exercises?date=${scope.dateFrom}&includeCanceled=false&page=0&size=1000`,
         statusCode: 200,
         complete: true,
         responseShape: "array",
@@ -3137,9 +3142,10 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     const migrationProviderPath = path.join(privateRoot, "migration-provider.json");
     const migrationProviderBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
-      sourceKind: "viva-end-user-tenant-projection",
+      sourceKind: "viva-admin-service-projection",
       capturedAt: nowIso,
       tenantKey,
+      servicePrincipalSha256: providerServicePrincipalSha256,
       captureReceiptSha256: cutoverSha256(migrationProviderReceiptBytes),
       rowsByDate: providerRows,
     }, null, 2)}\n`);

@@ -182,6 +182,7 @@ export function validateExecutableTenantMigrationPlan(plan, {
     fail("Migration plan source-flow proof mismatch");
   }
   if (plan.source.providerTenantKey !== plan.scope.tenantKey) fail("Migration plan provider tenant mismatch");
+  assertHash(plan.source.providerServicePrincipalSha256, "Migration provider service-principal digest");
   for (const key of ["gamesSha256", "providerSha256", "providerCaptureReceiptSha256"]) {
     assertHash(plan.source[key], `Migration source ${key}`);
   }

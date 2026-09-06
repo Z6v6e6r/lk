@@ -9,10 +9,14 @@ import {
   buildLegacyTenantMigrationPlan,
   classifyLegacyTenantMigrationGame,
 } from "../lib/vivaGameProjectionTenantMigration.mjs";
-import { prepareVivaGameProjectionTenantMigration } from "../prepare_viva_game_projection_tenant_migration.mjs";
+import {
+  prepareVivaGameProjectionTenantMigration,
+  validateCaptureReceipt,
+} from "../prepare_viva_game_projection_tenant_migration.mjs";
 
 const exerciseId = "11111111-1111-4111-8111-111111111111";
 const scope = { tenantKey: "iSkq6G", dateFrom: "2026-09-04", dateTo: "2026-09-11", operationId: "viva-projection-migration-20260904" };
+const providerServicePrincipalSha256 = crypto.createHash("sha256").update("viva-service-subject").digest("hex");
 const game = (overrides = {}) => ({
   _id: { $oid: "111111111111111111111111" },
   id: `viva_${exerciseId}`,
@@ -103,6 +107,33 @@ test("migration operation is CAS-bound and changes no payment or roster state", 
   assert.equal(Object.keys(operation.update.$set).some((key) => /payment|participant|roster/i.test(key)), false);
 });
 
+test("migration rejects the public End User exercise capture contract", () => {
+  const dates = ["2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"];
+  const rowsByDate = Object.fromEntries(dates.map((date) => [date, []]));
+  const receipt = {
+    formatVersion: 1,
+    sourceKind: "viva-end-user-tenant-capture-receipt",
+    capturedAt: "2026-09-04T08:56:00.000Z",
+    tenantKey: scope.tenantKey,
+    endpointOrigin: "https://api.vivacrm.ru",
+    captures: dates.map((date) => ({
+      date,
+      requestPath: `/end-user/api/v1/${scope.tenantKey}/exercises?date=${date}`,
+      statusCode: 200,
+      complete: true,
+      responseShape: "array",
+      rowCount: 0,
+      rowsSha256: crypto.createHash("sha256").update("[]").digest("hex"),
+    })),
+  };
+  const receiptSha256 = crypto.createHash("sha256").update(JSON.stringify(receipt)).digest("hex");
+  assert.throws(() => validateCaptureReceipt(receipt, receiptSha256, {
+    capturedAt: receipt.capturedAt,
+    captureReceiptSha256: receiptSha256,
+    rowsByDate,
+  }, scope), /Provider capture receipt contract mismatch/);
+});
+
 test("offline preparer writes a private dry-run plan and performs zero writes", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-tenant-migration-")));
   try {
@@ -124,13 +155,14 @@ test("offline preparer writes a private dry-run plan and performs zero writes", 
     const rowsByDate = Object.fromEntries(dates.map((date) => [date, date === "2026-09-05" ? [provider()] : []]));
     const receiptBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
-      sourceKind: "viva-end-user-tenant-capture-receipt",
+      sourceKind: "viva-admin-service-capture-receipt",
       capturedAt: "2026-09-04T08:56:00.000Z",
       tenantKey: scope.tenantKey,
+      servicePrincipalSha256: providerServicePrincipalSha256,
       endpointOrigin: "https://api.vivacrm.ru",
       captures: dates.map((date) => ({
         date,
-        requestPath: `/end-user/api/v1/${scope.tenantKey}/exercises?date=${date}`,
+        requestPath: `/api/v1/exercises?date=${date}&includeCanceled=false&page=0&size=1000`,
         statusCode: 200,
         complete: true,
         responseShape: "array",
@@ -142,16 +174,21 @@ test("offline preparer writes a private dry-run plan and performs zero writes", 
     fs.writeFileSync(receiptFile, receiptBytes, { mode: 0o600 });
     fs.writeFileSync(providerFile, `${JSON.stringify({
       formatVersion: 1,
-      sourceKind: "viva-end-user-tenant-projection",
+      sourceKind: "viva-admin-service-projection",
       capturedAt: "2026-09-04T08:56:00.000Z",
       tenantKey: scope.tenantKey,
+      servicePrincipalSha256: providerServicePrincipalSha256,
       captureReceiptSha256: receiptSha256,
       rowsByDate,
     })}\n`, { mode: 0o600 });
     fs.chmodSync(gamesFile, 0o600);
     fs.chmodSync(providerFile, 0o600);
     fs.chmodSync(receiptFile, 0o600);
-    const custody = { providerCaptureReceiptFile: receiptFile, expectedProviderReceiptSha256: receiptSha256 };
+    const custody = {
+      providerCaptureReceiptFile: receiptFile,
+      expectedProviderReceiptSha256: receiptSha256,
+      expectedProviderServicePrincipalSha256: providerServicePrincipalSha256,
+    };
     const outputDirectory = path.join(root, "plan");
     const summary = prepareVivaGameProjectionTenantMigration({
       gamesFile,
@@ -166,6 +203,7 @@ test("offline preparer writes a private dry-run plan and performs zero writes", 
     assert.equal(summary.eligibleCount, 1);
     assert.equal(summary.writesPerformed, 0);
     assert.equal(summary.dryRunOnly, true);
+    assert.equal(summary.providerServicePrincipalSha256, providerServicePrincipalSha256);
     assert.equal(fs.statSync(outputDirectory).mode & 0o777, 0o700);
     assert.equal(fs.statSync(path.join(outputDirectory, "plan.json")).mode & 0o777, 0o600);
     assert.equal(fs.statSync(path.join(outputDirectory, "summary.json")).mode & 0o777, 0o600);
@@ -174,6 +212,13 @@ test("offline preparer writes a private dry-run plan and performs zero writes", 
     assert.equal(plan.dryRunOnly, true);
     assert.equal(plan.operations.length, 1);
     assert.equal(fs.readFileSync(path.join(outputDirectory, "READY"), "utf8").trim(), summary.planSha256);
+
+    assert.throws(() => prepareVivaGameProjectionTenantMigration({
+      gamesFile, providerFile, ...custody,
+      expectedProviderServicePrincipalSha256: "0".repeat(64),
+      outputDirectory: path.join(root, "principal-mismatch"), scope,
+      configuredTenantKey: scope.tenantKey, expectedSourceFlowSha256: "a".repeat(64), nowIso: "2026-09-04T09:00:00.000Z",
+    }), /does not match the independently verified runtime principal/);
 
     const broadGamesFile = path.join(root, "broad-games.json");
     const broadGames = JSON.parse(fs.readFileSync(gamesFile, "utf8"));

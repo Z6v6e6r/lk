@@ -171,6 +171,9 @@ test("games are grouped into one provider read per date and ambiguous IDs are ex
   }, { globals: { [LEASE_KEY]: lease } });
   assert.equal(result[0].length, 1);
   assert.match(result[0][0].url, /date=2026-09-03/);
+  assert.match(result[0][0].url, /page=0&size=1000/);
+  assert.equal(result[0][0]._vivaProjectionSyncGroup.pageSize, 1000);
+  assert.equal(result[0][0]._vivaProjectionSyncGroup.maxPages, 1);
   assert.equal(result[0][0].headers.Authorization, "Bearer secret-token");
   assert.equal(result[0][0].requestTimeout, 8_000);
   assert.equal(result[0][0].followRedirects, false);
@@ -243,8 +246,8 @@ function runResolver(mode: "SHADOW" | "ENFORCE", payload: unknown) {
     _vivaProjectionSyncGroup: {
       date: "2026-09-03",
       page: 0,
-      pageSize: 200,
-      maxPages: 5,
+      pageSize: 1000,
+      maxPages: 1,
       providerRows: [],
       lastFingerprint: null,
       games: [{
@@ -322,6 +325,26 @@ test("shadow mode reports drift without a Mongo write", () => {
   assert.equal(result[2].payload.writeCount, 0);
 });
 
+test("bounded unpaged Admin array matching the observed response is treated as complete", () => {
+  const payload = [
+    providerRow(),
+    ...Array.from({ length: 356 }, (_unused, index) => providerRow({ id: `unrelated-${index}` })),
+  ];
+  const result = resolve("ENFORCE", payload);
+  assert.equal(result[0].length, 1);
+  assert.equal(result[1], null);
+  assert.equal(result[2].payload.code, "PROVIDER_DATE_RESOLVED");
+  assert.equal(result[2].payload.providerRowCount, 357);
+});
+
+test("unpaged Admin array at the 1,000-row completeness bound fails closed", () => {
+  const result = resolve("ENFORCE", Array.from({ length: 1000 }, () => providerRow()));
+  assert.equal(result[0], null);
+  assert.equal(result[1], null);
+  assert.equal(result[2].payload.code, "PROVIDER_PAGE_TRUNCATED");
+  assert.equal(result[2].payload.providerRowCount, 1000);
+});
+
 test("same room, wrong studio, cancellation and incomplete provider page all fail closed", () => {
   const same = resolve("ENFORCE", {
     content: [providerRow({ room: { id: ids.oldRoom, name: "Court 2" } })],
@@ -344,17 +367,14 @@ test("same room, wrong studio, cancellation and incomplete provider page all fai
   assert.equal(cancelled[0], null);
   assert.equal(cancelled[2].payload.skipped.cancelled, 1);
 
-  const nextPage = resolve("ENFORCE", {
+  const incomplete = resolve("ENFORCE", {
     content: [providerRow()],
     last: false,
     totalPages: 2,
   });
-  assert.equal(nextPage[0], null);
-  assert.match(nextPage[1].url, /page=1&size=200/);
-  assert.equal(nextPage[1].requestTimeout, 8_000);
-  assert.equal(nextPage[1].followRedirects, false);
-  assert.equal(nextPage[1].maxRedirects, 0);
-  assert.equal(nextPage[2], null);
+  assert.equal(incomplete[0], null);
+  assert.equal(incomplete[1], null);
+  assert.equal(incomplete[2].payload.code, "PROVIDER_PAGE_TRUNCATED");
 });
 
 test("provider pagination stops on a repeated page without emitting a write", () => {

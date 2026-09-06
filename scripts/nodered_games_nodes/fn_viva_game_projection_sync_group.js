@@ -1,7 +1,8 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const LEASE_KEY = "lk_viva_game_projection_sync_lease_until";
 const RUN_STATE_KEY = "lk_viva_game_projection_sync_run_state";
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 1000;
+const MAX_PAGES = 1;
 const PROVIDER_REQUEST_TIMEOUT_MS = 8 * 1000;
 
 const isObj = (value) => Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -119,7 +120,7 @@ const requests = [...byDate.entries()].sort(([left], [right]) => left.localeComp
     games,
     page: 0,
     pageSize: PAGE_SIZE,
-    maxPages: 5,
+    maxPages: MAX_PAGES,
     providerRows: [],
     lastFingerprint: null,
   },
