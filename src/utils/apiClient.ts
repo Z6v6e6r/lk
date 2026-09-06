@@ -7850,6 +7850,7 @@ async function writePadelGameRecord(
   for (const candidate of candidates) {
     const response = await request<unknown>(candidate.url, {
       method: candidate.method,
+      auth: true,
       baseUrl,
       retries,
       keepalive,
