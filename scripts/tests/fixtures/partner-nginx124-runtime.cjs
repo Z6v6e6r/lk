@@ -8,12 +8,13 @@ const runtimeRequire = createRequire("/runtime/package.json");
 const { createGuardedPartnerSettings } = require("/fixture/settings-guarded.cjs");
 const { SECURITY_HEADERS } = require("/fixture/raw-request-guard.cjs");
 const { completeHttpResponse } = require("/fixture/http-response.cjs");
+const { boundaryRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
 const route = "/lk/integrations/v1/open-games/fixture-game/members";
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function serve() {
   const RED = runtimeRequire("node-red"), express = runtimeRequire("express");
-  const app = express(), state = { received: 0, calls: 0, audits: [], last: null };
+  const app = express(), state = { received: 0, calls: 0, active: 0, trickleWrites: 0, audits: [], last: null };
   const server = http.createServer((req, res) => { state.received++; app(req, res); });
   const flows = [{ id: "tab", type: "tab", label: "nginx-local-only" },
     ...["post", "get", "delete"].map((method, i) => ({ id: `in-${method}`, type: "http in", z: "tab", method, x: 100, y: 100 + i * 60,
@@ -31,8 +32,20 @@ async function serve() {
       state.calls++;
       state.last = { payload: msg.payload, target: msg.req.url, forwarded: msg.req.headers["forwarded"] ?? null,
         xff: msg.req.headers["x-forwarded-for"] ?? null, arbitraryForwardedPresent: msg.req.headers["x-forwarded-fixture"] !== undefined };
-      const reply = () => { const res = msg.res._res; res.writeHead(503, { "content-type": "application/json", "cache-control": "public", "access-control-allow-origin": "*" }); res.end('{"fixtureOnly":true}'); };
-      if (msg.payload?.hold === true) setTimeout(reply, 1500); else reply();
+      const res = msg.res._res, timers = []; state.active++;
+      res.once("close", () => { state.active--; timers.forEach(clearTimeout); });
+      const headers = () => res.writeHead(503, { "content-type": "application/json", "cache-control": "public", "access-control-allow-origin": "*" });
+      const reply = () => { if (!res.destroyed) { headers(); res.end('{"fixtureOnly":true}'); } };
+      if (msg.payload?.fixtureMode === "trickle") {
+        headers(); res.flushHeaders();
+        for (let i = 0; i < 10; i++) timers.push(setTimeout(() => {
+          if (res.destroyed) return;
+          state.trickleWrites++; res.write(i === 0 ? '{"fixtureOnly":true' : " ");
+          if (i === 9) res.end("}");
+        }, i * 2000));
+      } else if (msg.payload?.fixtureMode === "idle") timers.push(setTimeout(reply, 20000));
+      else if (msg.payload?.hold === true) timers.push(setTimeout(reply, 4000));
+      else reply();
     });
   });
   app.use(RED.httpNode);
@@ -54,35 +67,90 @@ const snapshot = () => new Promise((resolve, reject) => {
   });
   req.setTimeout(2000, () => req.destroy(new Error("SNAPSHOT_TIMEOUT"))); req.on("error", reject);
 });
-function request({ method = "POST", target = route, body = "{}", host = "fixture.invalid", sni = "fixture.invalid", client = "client", extra = [], headers, protocol, alpn = ["http/1.1"] } = {}) {
+function request({ method = "POST", target = route, body = "{}", host = "fixture.invalid", sni = "fixture.invalid", client = "client", extra = [], headers, protocol, localAddress = "127.0.0.1", deadlineMs = 4500, alpn = ["http/1.1"] } = {}) {
+  assert.ok([4500, 8000, 23000].includes(deadlineMs));
+  assert.ok(["127.0.0.1", "127.0.0.2"].includes(localAddress));
   return new Promise((resolve, reject) => {
-    const chunks = []; let receivedBytes = 0, serverAuthorized = false, negotiatedProtocol = null, alpnProtocol = null, handled = false;
-    const socket = tls.connect({ host: "127.0.0.1", port: 8443, servername: sni,
+    const chunks = [], startedAt = performance.now(); let receivedBytes = 0, firstByteMs = null, serverAuthorized = false, negotiatedProtocol = null, alpnProtocol = null, handled = false;
+    const observation = () => ({ serverAuthorized, negotiatedProtocol, alpnProtocol, elapsedMs: Math.round(performance.now() - startedAt), firstByteMs, responseChunks: chunks.length });
+    const socket = tls.connect({ host: "127.0.0.1", port: 8443, localAddress, ...(sni === null ? {} : { servername: sni }),
       ca: fs.readFileSync("/fixture/ca.crt"), ALPNProtocols: alpn,
       ...(protocol ? { minVersion: protocol, maxVersion: protocol } : {}),
+      // Negative clients only; never downgrade the generated Nginx server.
+      ...(["TLSv1", "TLSv1.1"].includes(protocol) ? { ciphers: "DEFAULT@SECLEVEL=0" } : {}),
       ...(client ? { cert: fs.readFileSync(`/fixture/${client}.crt`), key: fs.readFileSync(`/fixture/${client}.key`) } : {}) });
-    const deadline = setTimeout(() => socket.destroy(new Error("FIXTURE_DEADLINE")), 4500);
+    const deadline = setTimeout(() => socket.destroy(new Error("FIXTURE_DEADLINE")), deadlineMs);
     socket.once("secureConnect", () => {
       serverAuthorized = socket.authorized; negotiatedProtocol = socket.getProtocol(); alpnProtocol = socket.alpnProtocol || null;
       const all = headers || ["Host", host, "Connection", "close", "Content-Length", String(Buffer.byteLength(body)),
         ...SECURITY_HEADERS.flatMap(name => [name, name === "content-type" ? "application/json" : "fixture-value"]), ...extra];
       socket.write(`${method} ${target} HTTP/1.1\r\n${all.map((v, i) => i % 2 ? `${v}\r\n` : `${v}: `).join("")}\r\n${body}`);
     });
-    socket.on("data", b => { receivedBytes += b.length; if (receivedBytes > 65536) socket.destroy(new Error("FIXTURE_RESPONSE_SIZE")); else chunks.push(b); });
+    socket.on("data", b => { firstByteMs ??= Math.round(performance.now() - startedAt); receivedBytes += b.length; if (receivedBytes > 65536) socket.destroy(new Error("FIXTURE_RESPONSE_SIZE")); else chunks.push(b); });
     socket.once("error", error => {
       handled = true; clearTimeout(deadline);
       // Explicit server TLS alert only; a client validation failure, timeout,
       // arbitrary reset or local protocol failure cannot masquerade as refusal.
       if (["ERR_SSL_TLSV1_UNRECOGNIZED_NAME", "ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE", "ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION"].includes(error.code)) {
-        resolve({ status: null, outcome: "TLS_ALERT_REJECTED", serverAuthorized, negotiatedProtocol, alpnProtocol });
+        resolve({ status: null, outcome: "TLS_ALERT_REJECTED", tlsAlertCode: error.code, ...observation() });
       } else reject(new Error(`FIXTURE_TRANSPORT_${error.code || "ERROR"}`));
     });
     socket.once("close", () => {
       clearTimeout(deadline); if (handled) return;
-      try { resolve({ ...completeHttpResponse(Buffer.concat(chunks), method), outcome: "HTTP_RESPONSE", serverAuthorized, negotiatedProtocol, alpnProtocol }); }
+      try { resolve({ ...completeHttpResponse(Buffer.concat(chunks), method), outcome: "HTTP_RESPONSE", ...observation() }); }
       catch (error) { reject(error); }
     });
   });
+}
+
+async function untilState(predicate) {
+  const deadline = performance.now() + 2500;
+  while (performance.now() < deadline) { const current = await snapshot(); if (predicate(current)) return current; await wait(25); }
+  throw new Error("FIXTURE_STATE_BARRIER_TIMEOUT");
+}
+
+async function remainingBoundaries(rows) {
+  const check = async (name, options, policy) => {
+    await wait(550); const before = await snapshot(), response = await request(options);
+    const after = await untilState(state => state.active === 0);
+    const row = boundaryRow(name, response, before, after, policy); rows.push(row); return row;
+  };
+  for (const protocol of ["TLSv1", "TLSv1.1"]) await check(`reject-${protocol}`, { protocol }, {
+    statuses: [null], dispatch: 0, upstream: 0, tlsAlertCode: "ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION",
+  });
+  await check("absent-sni", { sni: null }, { statuses: [null], dispatch: 0, upstream: 0, tlsAlertCode: "ERR_SSL_TLSV1_UNRECOGNIZED_NAME" });
+  await check("source-cidr-denial", { localAddress: "127.0.0.2", extra: ["X-Forwarded-For", "127.0.0.1"] }, { statuses: [403], dispatch: 0, upstream: 0 });
+
+  // Whole wire request line (including CRLF) and individual header field bounds.
+  for (const bytes of [2048, 2049]) await check(`request-line-${bytes}`, { target: "/" + "a".repeat(bytes - 17), deadlineMs: 8000 }, { statuses: [bytes === 2048 ? 404 : 414], dispatch: 0, upstream: 0 });
+  for (const bytes of [2048, 2049]) await check(`header-field-${bytes}`, { extra: ["X-Fixture-Pad", "a".repeat(bytes - 17)], deadlineMs: 8000 }, {
+    statuses: [bytes === 2048 ? 503 : 400], dispatch: bytes === 2048 ? 1 : 0, upstream: bytes === 2048 ? 1 : 0,
+  });
+  await check("aggregate-header-over-16k", { extra: Array.from({ length: 17 }, (_, i) => [`X-Pad-${i}`, "a".repeat(1000)]).flat(), deadlineMs: 8000 }, { statuses: [400], dispatch: 0, upstream: 0 });
+
+  // Full headers + four actual upstream handlers are held; the fifth must be
+  // denied by limit_conn, not by rate limiting or an unprocessed TLS socket.
+  await wait(6000);
+  const logs = () => fs.readFileSync("/out/nginx-access.jsonl", "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  const logStart = logs().length, before = await snapshot();
+  const pending = Array.from({ length: 4 }, () => request({ body: '{"hold":true}', deadlineMs: 8000 }));
+  const settled = Promise.allSettled(pending);
+  let held, rejected;
+  try { held = await untilState(state => state.active === 4); rejected = await request(); }
+  finally { await settled; }
+  const responses = (await settled).map(result => { assert.equal(result.status, "fulfilled"); return result.value; });
+  const after = await untilState(state => state.active === 0);
+  rows.push(concurrencyRow(responses, rejected, before, held, after, logs().slice(logStart)));
+  await check("concurrency-slot-recovery", {}, { statuses: [503], dispatch: 1, upstream: 1 });
+
+  await check("upstream-idle-timeout-no-retry", { body: '{"fixtureMode":"idle"}', deadlineMs: 23000 }, {
+    statuses: [504], dispatch: 1, upstream: 1, minElapsedMs: 14000, maxElapsedMs: 21000,
+  });
+  const dripBefore = await snapshot();
+  const drip = await request({ body: '{"fixtureMode":"trickle"}', deadlineMs: 23000 });
+  const dripAfter = await untilState(state => state.active === 0);
+  rows.push(missingDeadlineRow(drip, dripBefore, dripAfter));
+  await check("positive-after-boundaries", {}, { statuses: [503], dispatch: 1, upstream: 1 });
 }
 
 async function probes() {
@@ -137,10 +205,11 @@ async function probes() {
     rows.push({ name: "client-rate", result: "PASS", accepted: rate.filter(r => r.status === 503).length, rejected: rate.filter(r => r.status === 429).length });
     await wait(6000);
     await check("positive-after-negatives", {}, [503], 1);
+    await remainingBoundaries(rows);
     fs.writeFileSync("/out/nginx-probes.json", JSON.stringify({ state: "LOCAL_NGINX_MATRIX_CHECKED_NOT_PRODUCTION", node: process.version,
       nodeRed: runtimeRequire("node-red/package.json").version, platform: process.platform, architecture: process.arch, rows,
       productionVerified: false, externalDirectSidecarProven: false, sourceLimitsIndependentlyProven: false,
-      notTested: ["TLS_BELOW_1_2", "ABSENT_SNI", "CLIENT_CONCURRENCY", "SOURCE_CIDR_DENIAL", "REQUEST_LINE_AND_HEADER_LIMITS", "UPSTREAM_IDLE_TIMEOUT_AND_NO_RETRY", "ABSOLUTE_REQUEST_DEADLINE"] }, null, 2) + "\n");
+      ...summarizeNginxRows(rows) }, null, 2) + "\n");
   } catch (error) {
     const state = await snapshot().catch(() => null);
     fs.writeFileSync("/out/nginx-probes.json", JSON.stringify({ state: "FAILED", rows, error: error.message,

@@ -4,6 +4,63 @@
 Production verifier по-прежнему возвращает `UNSUPPORTED_INGRESS_ADAPTER`;
 deploy/activation остаются `false`. Боевые Nginx, Node-RED, Mongo и Viva не меняются.
 
+## Последняя boundary-репетиция: STOP на суммарных заголовках
+
+Run завершён `2026-09-06T10:37:25.320Z` со статусом **FAILED**: 57 PASS rows
+(49 baseline + 8 новых), затем отказ проверки `aggregate-header-over-16k`.
+Это не полный PASS матрицы и не подтверждение остальных проверок.
+
+| Фактическая проверка | Результат |
+| --- | --- |
+| TLS 1.0 / 1.1 | PASS: explicit server `protocol_version` alert; upstream 0 |
+| Отсутствующий SNI | PASS: `unrecognized_name` alert; upstream 0 |
+| Socket source `127.0.0.2`, valid cert, поддельный allowed XFF | PASS: 403; upstream 0 |
+| Wire request line 2048 / 2049 bytes | PASS: 404 (route rejection) / 414; upstream 0 |
+| Отдельный header field 2048 / 2049 bytes | PASS: 503 observer / 400 ingress rejection |
+| Суммарный header section **17562 bytes**, 29 fields | **FAIL expected ingress control**: Nginx передал запрос upstream; HTTP-парсер Node вернул431 |
+| Client concurrency, idle timeout/no retry, absolute deadline | **NOT_RUN**: остановка произошла раньше |
+
+Expected для aggregate probe: отклонение Nginx до обращения к sidecar (400,
+upstream 0). Observed: последний access-log row `status=431`, `upstream=431`,
+`clientVerified=1`, rate/concurrency `PASSED`. Сумма всех предыдущих request/dispatch
+counters совпадает с final snapshot (42/21): oversized request не вызвал ни HTTP
+request event, ни business observer — его остановил Node parser. Таким образом,
+**обхода бизнес-обработчика не обнаружено**, но Nginx-only aggregate enforcement
+не доказан и фактически не выдержал этот probe. Это не просто спор о коде400/431:
+сменился слой отказа. Existing preflight относит `maxHeaderBytes` к Nginx/host owner.
+
+`large_client_header_buffers 8 2k` ограничивает буферы и размер отдельного поля,
+но его нельзя объявлять точным total16KiB cap без проверки. Сам факт передачи
+17562-byte header section доказан этим run; изменение числа буферов без новых
+boundary/compatibility tests не выполнено. [Nginx buffer semantics](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
+
+- Raw receipt SHA: `98a0577f08b8bfa06bc37cd1a858bc4a1e00ef9313625c7071fe6c719f7ac95c`.
+- Partial probes SHA: `058b0272ec3cca431c41625ec373b821cb42ea8e13229da6021ed6ff78838056`.
+- 73 access-log rows, закрытая metadata schema; последние запросы сопоставлены
+  с порядком serial probes. Неуспешный probe не включён в 57 PASS rows.
+- Оба exact owned containers удалены; synthetic keys/CSRs отсутствуют, финальный
+  Docker absence readback пуст. Девять source hashes совпадают с retained receipt.
+- Post-matrix runtime/config identity checks в collector **не выполнены**, поскольку
+  runner завершился раньше с failure; наличие before hashes не заменяет after proof.
+- Generator, raw guard, service, runtime lock и все production/control pins
+  **не менялись**. Старые49/20/303 receipts/packet не переписаны; повторного run нет.
+
+Добавлены pure evidence assertions и opt-in remaining matrix: planned63rows означают
+62PASS + один **ожидаемый диагностический** deadline blocker только при полном
+фактическом выполнении. Этот итог сейчас **не получен**. `notTested=[]` не выдан.
+Для TLS-negative lowered cipher security применяется только к отдельному synthetic
+клиенту, не к Nginx и не глобально. [Node TLS contexts](https://nodejs.org/docs/latest-v22.x/api/tls.html#openssl-security-level).
+
+После test-only изменений: unit19/19 и полный Partner suite **308/308 PASS**,
+skipped0; full lint0errors/387existingwarnings. Это source tests, не замена FAILED physical run. Full frontend build и
+guarded CLI не повторяются: их inputs не менялись; прежние результаты остаются
+историческими, без новой даты и без заявления о current physical PASS.
+
+Следующий минимальный переход: исправить и проверить **суммарный ingress header
+limit** в том же локальном generator, сохранив duplicate evidence и допустимые
+запросы; затем продолжить оставшиеся probes после нового runtime admission/slot.
+Deadline не объявлен подтверждённым дефектом этим run: drip18s ещё не запускался.
+
 ## Текущий результат: wildcard fix подтверждён локально
 
 После checkpoint `069d3b8` подтверждённый wildcard gap исправлен в existing raw
@@ -111,7 +168,8 @@ KNOWN_BLOCKER_CONFIRMED**, receipt `197250e2…`: его результат не
 | --- | --- |
 | LOCAL COMBINED PASS | Произвольные `X-Forwarded-*` стирает raw guard после duplicate validation; standalone Nginx generator по-прежнему перечисляет `WILDCARD_FORWARDED_HEADERS` как собственное ограничение |
 | NOT PROVEN | Source rate/concurrency независимо от более строгого client limiter; нужны разные допущенные synthetic identities |
-| NOT TESTED | TLS ниже 1.2, absent SNI, client concurrency, source CIDR denial, request-line/header limits, upstream idle timeout/no-retry, absolute request deadline |
+| FAILED | Aggregate header limit на Nginx:17562-byte header section дошёл до Node parser431; см. последний run выше |
+| NOT TESTED | Client concurrency, upstream idle timeout/no-retry, absolute request deadline; TLS/SNI/CIDR и single-line/field bounds уже проверены |
 | NOT IMPLEMENTED | Controlled production config application/worker-generation collector, external vantage/direct-sidecar proof, production certificate revocation |
 
 Не следует включать `proxy_pass_request_headers off` без нового решения: это может
@@ -168,7 +226,7 @@ probes — `network:none`. Это не registry-only firewall и не новый
 
 ## Следующий gate
 
-Verification этого source checkpoint: `npm run test:partner-game-membership-api`
+Историческая verification checkpoint `b9a8a37`: `npm run test:partner-game-membership-api`
 **303/303 PASS**, runtime/controls и actual-receipt closure validators PASS,
 `npm run lint` — 0 errors / 387 warnings в существующем коде.
 `npm run build` — prod/dev PASS, включая TypeScript, с инертными `ci.invalid`

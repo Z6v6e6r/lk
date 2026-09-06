@@ -14,7 +14,30 @@ Runtime suite отклоняет resealed non-Linux/image/command/time/isolation
 actual receipts связаны с новыми guard/audit bytes и обновлённой closure.
 Старые physical receipts/disabled packet сохранены. Полный Partner suite после
 обновления — **303/303**, без skipped. Семь Nginx `NOT_TESTED` и production gates
-остаются открытыми; standalone generator не обеспечивает wildcard scrub без guard.
+оставались открытыми на `b9a8a37`; standalone generator не обеспечивает wildcard scrub без guard.
+
+### Дополнительная physical boundary matrix
+
+Existing Nginx fixture расширен без изменения generator, guard или service.
+Actual run `10:37:25Z`: **57 PASS, затем aggregate header FAIL**. Client concurrency,
+idle timeout и absolute deadline **NOT_RUN**. Planned matrix ниже — не список
+уже пройденных проверок; результат с 63 rows не получен.
+
+| Область | Метод проверки | Что не считается PASS |
+| --- | --- | --- |
+| TLS 1.0/1.1 | Exact legacy version у отдельного synthetic клиента; explicit server protocol-version alert; upstream 0 | Local cipher/protocol failure, reset, произвольный TLS alert |
+| Absent SNI | `servername` отсутствует, default server отвергает handshake; upstream 0 | Только неправильный hostname при переданном SNI |
+| CIDR | Socket source `127.0.0.2` с валидным cert и поддельным allowed XFF; 403/upstream 0 | IP из forwarding header вместо socket peer |
+| Request/header bounds | Wire line и field 2048/2049 bytes, aggregate headers >16 KiB | Один status без upstream count или неполный HTTP response |
+| Concurrency | Четыре реально active upstream handlers; пятый 429; access log `concurrency=REJECTED`; затем recovery | 429 от rate limiter, четыре только TCP/TLS sockets |
+| Idle/no retry | Observer молчит20s; Nginx возвращает504 примерно через15s; один upstream call; закрытие handler | Мгновенный504 или скрытый второй вызов; не доказывает все возможные retry failures |
+| Absolute deadline | Ответ начинается сразу и завершается после18s порциями каждые2s | Поздний полный503 — **KNOWN_BLOCKER_CONFIRMED**, не PASS ограничения15s |
+
+Pure evidence assertions тестируются отдельно: неверный status/count/alert, null
+timestamp, rate/concurrency substitution, missing/duplicate row и relabel blocker
+отклоняются. Общий physical result требует все named rows, а вывод collector явно
+различает завершённую проверку и подтверждённый дефект контроля.
+Фактический итог и receipt — в [Nginx runbook](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
 
 | Уровень | Что доказывает | Что не доказывает |
 | --- | --- | --- |

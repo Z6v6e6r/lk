@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { completeHttpResponse } from "./fixtures/partner-http-response.cjs";
+import { boundaryRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
 import { generatePartnerNginx124Candidate } from "../partner_game_membership_nginx_candidate.mjs";
 import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
 import { verifyPartnerProductionIngress } from "../partner_game_membership_ingress_evidence.mjs";
@@ -102,4 +103,60 @@ test("rate admission uses bound TLS leaf, never caller client-ID or forwarded-IP
   assert.doesNotMatch(configuration, /limit_(req|conn)_zone \$http_/);
   const log = configuration.split("\n").find(line => line.includes("log_format"));
   assert.doesNotMatch(log, /\$request[" ]|\$request_uri|\$remote_addr|\$http_|\$ssl_client_s_dn|\$ssl_client_escaped_cert/);
+});
+
+const observedHttp = (status, extra = {}) => ({ status, outcome: "HTTP_RESPONSE", serverAuthorized: true, noStore: true, cors: false, elapsedMs: 100, ...extra });
+test("boundary proof rejects wrong status, hidden dispatch, insecure response and invalid timing", () => {
+  const before = { calls: 0, received: 0 }, after = { calls: 0, received: 0 };
+  const policy = { statuses: [403], dispatch: 0, upstream: 0 };
+  assert.equal(boundaryRow("source", observedHttp(403), before, after, policy).result, "PASS");
+  for (const response of [observedHttp(503), observedHttp(403, { serverAuthorized: false }), observedHttp(403, { cors: true }),
+    observedHttp(403, { noStore: false }), observedHttp(403, { elapsedMs: NaN }), observedHttp(403, { outcome: "LOCAL_TIMEOUT" })]) {
+    assert.throws(() => boundaryRow("source", response, before, after, policy));
+  }
+  for (const altered of [{ calls: 1, received: 0 }, { calls: 0, received: 1 }]) assert.throws(() => boundaryRow("source", observedHttp(403), before, altered, policy));
+  assert.throws(() => boundaryRow("timeout", observedHttp(504), before, { calls: 1, received: 1 }, { statuses: [504], dispatch: 1, upstream: 1, minElapsedMs: 14000 }));
+  assert.throws(() => boundaryRow("timeout", observedHttp(504, { elapsedMs: 25000 }), before, { calls: 1, received: 1 }, { statuses: [504], dispatch: 1, upstream: 1, maxElapsedMs: 21000 }));
+});
+
+test("legacy TLS proof requires the expected server alert, not any TLS or local error", () => {
+  const state = { calls: 0, received: 0 };
+  const policy = { statuses: [null], dispatch: 0, upstream: 0, tlsAlertCode: "ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION" };
+  const response = { status: null, outcome: "TLS_ALERT_REJECTED", elapsedMs: 30, tlsAlertCode: policy.tlsAlertCode };
+  assert.equal(boundaryRow("legacy", response, state, state, policy).result, "PASS");
+  for (const code of ["ERR_SSL_NO_PROTOCOLS_AVAILABLE", "ERR_SSL_TLSV1_UNRECOGNIZED_NAME", "ECONNRESET", undefined]) {
+    assert.throws(() => boundaryRow("legacy", { ...response, tlsAlertCode: code }, state, state, policy));
+  }
+});
+
+test("concurrency proof requires four active upstream requests and an actual limit_conn denial", () => {
+  const responses = Array.from({ length: 4 }, () => observedHttp(503)), rejected = observedHttp(429);
+  const before = { calls: 0, received: 0 }, held = { active: 4 }, after = { calls: 4, received: 4, active: 0 };
+  const logs = [...Array.from({ length: 4 }, () => ({ status: "503", concurrency: "PASSED", rate: "PASSED" })), { status: "429", concurrency: "REJECTED", rate: "-" }];
+  assert.equal(concurrencyRow(responses, rejected, before, held, after, logs).result, "PASS");
+  assert.throws(() => concurrencyRow(responses, rejected, before, { active: 3 }, after, logs));
+  assert.throws(() => concurrencyRow(responses, rejected, before, held, { ...after, active: 1 }, logs));
+  assert.throws(() => concurrencyRow(responses, rejected, before, held, { ...after, received: 5 }, logs));
+  assert.throws(() => concurrencyRow(responses, rejected, before, held, after, logs.map(row => row.status === "429" ? { ...row, concurrency: "-", rate: "REJECTED" } : row)));
+  assert.throws(() => concurrencyRow(responses, rejected, before, held, after, logs.slice(1)));
+});
+
+test("completed drip response beyond the bound confirms a blocker and can never become PASS", () => {
+  const response = observedHttp(503, { elapsedMs: 18050, firstByteMs: 20, responseChunks: 11 });
+  const before = { calls: 0, received: 0, trickleWrites: 0 }, after = { calls: 1, received: 1, trickleWrites: 10 };
+  assert.equal(missingDeadlineRow(response, before, after).result, "KNOWN_BLOCKER_CONFIRMED");
+  for (const changes of [{ elapsedMs: 14000 }, { elapsedMs: 25000 }, { firstByteMs: 18000 }, { firstByteMs: null }, { responseChunks: 1 }, { status: 504 }]) {
+    assert.throws(() => missingDeadlineRow({ ...response, ...changes }, before, after));
+  }
+  assert.throws(() => missingDeadlineRow(response, before, { ...after, trickleWrites: 1 }));
+});
+
+test("complete matrix summary cannot drop, duplicate or relabel a remaining boundary", () => {
+  const rows = [...Array.from({ length: 49 }, (_, i) => ({ name: `baseline-${i}`, result: "PASS" })), ...BOUNDARY_NAMES.map(name => ({ name, result: "PASS" }))];
+  Object.assign(rows.find(row => row.name === "absolute-request-deadline"), { result: "KNOWN_BLOCKER_CONFIRMED", control: "ABSOLUTE_REQUEST_DEADLINE" });
+  assert.deepEqual(summarizeNginxRows(rows), { passed: 62, confirmedBlockers: ["ABSOLUTE_REQUEST_DEADLINE"], notTested: [] });
+  assert.throws(() => summarizeNginxRows(rows.slice(1)));
+  assert.throws(() => summarizeNginxRows([...rows.slice(1), rows[1]]));
+  assert.throws(() => summarizeNginxRows(rows.map(row => row.name === "absent-sni" ? { ...row, name: "unknown" } : row)));
+  assert.throws(() => summarizeNginxRows(rows.map(row => row.result === "KNOWN_BLOCKER_CONFIRMED" ? { ...row, result: "PASS" } : row)));
 });

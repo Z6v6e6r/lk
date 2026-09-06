@@ -2,6 +2,32 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner remaining Nginx boundaries: STOP
+
+- Анализ: после user «приступай» сохранены same branch/worktree и `b9a8a37`;
+  координатор подтвердил sole ownership и bounded heavy-slot. Разрешены только
+  local checks, без generator/guard/service/controls changes или production.
+- Изменение: existing fixture получил legacy-TLS/absent-SNI/CIDR/size/concurrency/
+  timeout probes; новый pure evidence helper отвергает ложный status/count/timing,
+  rate substitution и relabel known blocker. Collector сохраняет6copied+3source
+  hashes, проверяет полноту planned matrix. Unit19/19 PASS после regression для
+  null timing; security/release source reviews новых P0–P2 не нашли.
+- Physical: actual run `10:37:25.320Z` **FAILED** после57PASS (49baseline+8new).
+  Заголовки17562bytes прошли Nginx, Node parser вернул431; businessdispatch0.
+  Expected aggregate refusal до upstream не выполнен. Это локализованный ingress
+  enforcement gap, не доказанный business bypass. TLS1/1.1,absentSNI,CIDR и
+  отдельные2048/2049line/field probes прошли; concurrency/idle/deadline NOT_RUN.
+  Raw receipt98a0577f…/probes058b0272… сохранены без редактирования.
+- Source verification: полный Partner suite308/308 PASS,skipped0; full lint0errors/
+  387existingwarnings. Прежние
+  frontendbuild/guardedCLI не повторялись при unchangedinputs и не переименованы
+  в новые доказательства. Existing drawio обновлён через drawio-skill,
+  structural0errors/0warnings; PNG/visualQA недоступны в прежней Electron-среде.
+- Cleanup:2ownedcontainers удалены, keys/CSR удалены, freshDockerabsence пуст;
+  heavy-slot RELEASED. После failure не заявляется непройденный post-matrix
+  identity readback. Повторного physical run, main/push/deploy/secret/shareddata нет.
+  Следующий gate — узкое исправление aggregate header limit, не расширенный rollout.
+
 ## 2026-09-06 — Partner wildcard fix: изолированная Linux-репетиция
 
 - Анализ: user подтвердил только isolated Linux gate без deploy. Сохранены existing
