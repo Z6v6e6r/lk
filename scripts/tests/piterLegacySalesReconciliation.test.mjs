@@ -43,12 +43,14 @@ const MONGO_IDENTITY = {
 const MONGO_SHA = sha256(stableJson(MONGO_IDENTITY));
 
 const client = (suffix) => ({ id: `client-${suffix}`, phone: `7999000000${suffix}` });
-const line = () => ({ id: PRODUCT_ID, discount: 3_700_000, cost: 5_680_000 });
+const line = () => ({ id: PRODUCT_ID, discount: 3_700_000, cost: 5_680_000, count: 1 });
 const transaction = (suffix, overrides = {}) => ({
   id: `tx-${suffix}`,
   status: "PAID",
-  toPay: 0,
-  sum: 1_980_000,
+  toPay: 1_980_000,
+  sum: 5_680_000,
+  discount: 3_700_000,
+  paymentDate: "2026-09-01T08:01:00.000Z",
   client: client(suffix),
   products: [line()],
   ...overrides,
@@ -194,6 +196,47 @@ test("reconciliation packet plans only expired UNPAID and exact REFUNDED changes
   assert.equal(text.includes("pay-2"), false);
   assert.equal(text.includes("client-2"), false);
   assert.equal(text.includes("subscription-3"), false);
+});
+
+test("realistic Viva PAID totals and provider-only full-discount issues preserve cash baseline", () => {
+  const data = inputs();
+  data.providerEvidence.transactions.push(transaction("free", {
+    toPay: 0, discount: 5_680_000,
+    products: [{ ...line(), discount: 5_680_000 }],
+  }));
+  data.providerEvidence.pagination.rowCount += 1;
+  const packet = buildPiterLegacyReconciliationPacket(data);
+  assert.equal(packet.expected.paidCountAfter, 1);
+  assert.equal(packet.expected.changeCount, 2);
+  assert.equal(packet.expected.providerOnlyFreeIssueCount, 1);
+  assert.equal(packet.providerOnlyFreeIssues[0].reason, "FULL_DISCOUNT_ZERO_AMOUNT");
+  assert.equal(JSON.stringify(redactPiterLegacyReconciliationPacket(packet)).includes("tx-free"), false);
+  assert.doesNotThrow(() => validatePiterLegacyReconciliationPacket(packet, { now: NOW }));
+  const rows = structuredClone(data.ledgerEvidence.rows);
+  for (const change of packet.changes) Object.assign(rows.find(row => row.transactionId === change.transactionId), change.set);
+  const baseline = derivePiterLegacyBaseline({ ledgerRows: rows, providerTransactions: data.providerEvidence.transactions,
+    productId: PRODUCT_ID, providerCapturedAt: data.providerEvidence.capturedAt, reconciliationReceipt: reconciliationReceipt(packet) });
+  assert.equal(baseline.paidCount, 1);
+  assert.deepEqual(baseline.legacyPaymentRefs, ["pay-1"]);
+});
+
+test("PAID validation rejects old balance interpretation, inconsistent amounts and ambiguous free issues", () => {
+  for (const overrides of [
+    { toPay: 0, sum: 1_980_000 }, { toPay: 0 }, { toPay: null }, { toPay: "1980000" },
+    { sum: 1_980_000 }, { discount: 0 }, { discount: null },
+    { paymentDate: null }, { paymentDate: "invalid" }, { paymentDate: "2026-09-05T00:00:00Z" },
+    { refundSum: -1 }, { refundSum: "1980000" },
+    { products: [{ ...line(), count: 2 }] }, { products: [{ ...line(), cost: 1_980_000 }] },
+    { products: [{ ...line(), refunded: true }] },
+    { clientId: "different-client" }, { clientPhone: "79990000009" },
+    { products: [{ ...line(), productId: "conflicting-product" }] },
+  ]) {
+    const data = inputs(); Object.assign(data.providerEvidence.transactions[0], overrides);
+    assert.throws(() => buildPiterLegacyReconciliationPacket(data), /financial facts mismatch/, JSON.stringify(overrides));
+  }
+  const conflict = inputs();
+  Object.assign(conflict.providerEvidence.transactions[0], { toPay: 0, discount: 5_680_000, products: [{ ...line(), discount: 5_680_000 }] });
+  assert.throws(() => buildPiterLegacyReconciliationPacket(conflict), /free provider issue.*conflicts/);
 });
 
 test("reconciliation fails closed on live UNPAID, client drift, or incomplete refund evidence", () => {

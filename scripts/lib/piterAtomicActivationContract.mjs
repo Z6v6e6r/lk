@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isExactPiterQuotaUpdateDeployment, PITER_QUOTA_UPDATE } from "./piterAtomicQuotaUpdateContract.mjs";
 
 export const PITER_ATOMIC_ACTIVATION = Object.freeze({
   kind: "PADLHUB_PITER_ATOMIC_SALES_ACTIVATION_V1",
@@ -194,6 +195,45 @@ const assertNoRefund = (transaction) => {
   }
 };
 
+// Viva retains the discounted amount in toPay after PAID; it is not an unpaid
+// balance. Keep this exact provider shape shared by reconciliation and activation.
+export function classifyPiterPaidProviderTransaction(transaction, productId, capturedAtMs) {
+  const transactionId = pickTransactionId(transaction);
+  const lines = Array.isArray(transaction?.products) ? transaction.products : [];
+  const line = lines[0];
+  const amount = toInteger(transaction?.toPay);
+  const discount = toInteger(transaction?.discount);
+  const paymentAt = Date.parse(toStr(transaction?.paymentDate) || "");
+  const productIds = [line?.id, line?.uuid, line?.productId, line?.subscriptionId, line?.product?.id, line?.product?.uuid]
+    .map(toStr).filter(Boolean);
+  const aliasesAgree = (values, normalize = toStr) => {
+    const present = values.filter(value => toStr(value) !== null).map(normalize);
+    return present.length === 0 || (present[0] !== null && present.every(value => value === present[0]));
+  };
+  if (!transactionId || !PAID_STATUSES.has(normalizeStatus(transaction?.status || transaction?.state || transaction?.paymentStatus))
+    || lines.length !== 1 || !productLineMatches(line, productId)
+    || productIds.length === 0 || productIds.some(id => id !== productId)
+    || (toStr(transaction?.productId) && toStr(transaction.productId) !== productId)
+    || !aliasesAgree([transaction?.clientId, transaction?.client?.id, transaction?.client?.uuid, transaction?.client?.clientId])
+    || !aliasesAgree([transaction?.clientPhone, transaction?.client?.phone, transaction?.client?.mobile, transaction?.client?.phoneNumber], normalizePhone)
+    || toInteger(transaction?.sum) !== PITER_ATOMIC_ACTIVATION.providerCostMinor
+    || toInteger(line?.cost) !== PITER_ATOMIC_ACTIVATION.providerCostMinor
+    || toInteger(line?.count) !== 1
+    || !Number.isInteger(amount) || amount < 0
+    || !Number.isInteger(discount) || discount < 0
+    || amount + discount !== PITER_ATOMIC_ACTIVATION.providerCostMinor
+    || toInteger(line?.discount) !== discount
+    || (!providerClientId(transaction) && !providerClientPhone(transaction))
+    || (amount === 0 && !providerClientId(transaction))
+    || !Number.isFinite(paymentAt) || !Number.isFinite(capturedAtMs) || paymentAt > capturedAtMs
+    || (transaction?.refundSum != null && toInteger(transaction.refundSum) !== 0)
+    || line?.refunded === true) {
+    fail(`paid provider financial facts mismatch for ${hashId(transactionId)}`);
+  }
+  assertNoRefund(transaction);
+  return amount === 0 ? "FREE_ISSUE" : "PAID";
+}
+
 const toMoscowDate = (timestamp) => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Europe/Moscow",
   year: "numeric",
@@ -253,12 +293,20 @@ const validateCandidateReport = (report) => {
   for (const key of ["sourceSha256", "candidateSha256"]) {
     if (!SHA256_PATTERN.test(String(report[key] || ""))) fail(`candidate report ${key} is invalid`);
   }
+  if (report.updateKind !== undefined && (report.updateKind !== PITER_QUOTA_UPDATE.updateKind
+    || !isExactPiterQuotaUpdateDeployment(report) || report.launchQuotaSchemaVersion !== 2)) {
+    fail("candidate report quota update identity mismatch");
+  }
   if (!Number.isInteger(report.sourceNodeCount) || report.sourceNodeCount < 1
-    || !Number.isInteger(report.candidateNodeCount) || report.candidateNodeCount <= report.sourceNodeCount) {
+    || !Number.isInteger(report.candidateNodeCount)
+    || (report.candidateNodeCount <= report.sourceNodeCount
+      && !(isExactPiterQuotaUpdateDeployment(report)
+        && report.updateKind === PITER_QUOTA_UPDATE.updateKind && report.launchQuotaSchemaVersion === 2))) {
     fail("candidate report node counts are invalid");
   }
   return {
     deploymentId: report.deploymentId,
+    ...(report.updateKind ? { updateKind: report.updateKind } : {}),
     sourceSha256: report.sourceSha256,
     candidateSha256: report.candidateSha256,
     sourceNodeCount: toInteger(report.sourceNodeCount),
@@ -413,13 +461,10 @@ export function derivePiterLegacyBaseline({
       || (toStr(transaction?.productId) && toStr(transaction.productId) !== productId)) {
       fail(`provider transaction ${hashId(transactionId)} product mismatch`);
     }
-    const statusClass = transactionStatusClass(transaction, providerCapturedAtMs);
+    let statusClass = transactionStatusClass(transaction, providerCapturedAtMs);
     if (statusClass === "UNRESOLVED") fail(`provider transaction ${hashId(transactionId)} is nonterminal`);
     if (statusClass === "PAID") {
-      assertNoRefund(transaction);
-      if (toInteger(transaction?.toPay) !== 0) {
-        fail(`paid provider transaction ${hashId(transactionId)} has a nonzero balance`);
-      }
+      statusClass = classifyPiterPaidProviderTransaction(transaction, productId, providerCapturedAtMs);
     }
     providerById.set(transactionId, { transaction, statusClass });
   }
@@ -443,6 +488,7 @@ export function derivePiterLegacyBaseline({
     paymentRefs.add(paymentRef);
     const provider = providerById.get(transactionId);
     if (!provider) fail(`ledger transaction ${hashId(transactionId)} is missing provider evidence`);
+    if (provider.statusClass === "FREE_ISSUE") fail(`free provider issue ${hashId(transactionId)} conflicts with the ledger`);
     const localStatus = normalizeStatus(row.status);
     const localStatusClass = PAID_STATUSES.has(localStatus)
       ? "PAID"
@@ -499,7 +545,9 @@ export function derivePiterLegacyBaseline({
       if ((!clientId && !clientPhone)
         || (clientId && providerId !== clientId)
         || (clientPhone && providerPhone !== clientPhone)
-        || toInteger(provider.transaction?.sum) !== amountMinor
+        || toInteger(provider.transaction?.toPay) !== amountMinor
+        || toInteger(provider.transaction?.sum) !== providerProductCostMinor
+        || toInteger(provider.transaction?.discount) !== discountMinor
         || productLines.length !== 1
         || toInteger(productLines[0]?.discount) !== discountMinor) {
         fail(`paid provider facts mismatch for ${hashId(transactionId)}`);
@@ -558,6 +606,7 @@ export function buildPiterAtomicActivationPacket({
   candidateReport,
   reconciliationPacket = null,
   reconciliationApplyReceipt = null,
+  initialBatchRemaining = null,
   productId,
   createdAt = new Date().toISOString(),
   maxEvidenceAgeMs = PITER_ATOMIC_ACTIVATION.maxEvidenceAgeMs,
@@ -594,6 +643,9 @@ export function buildPiterAtomicActivationPacket({
     fail("evidence snapshots exceed the allowed capture-time skew");
   }
   const candidate = validateCandidateReport(candidateReport);
+  if (isExactPiterQuotaUpdateDeployment(candidate) && initialBatchRemaining !== 50) {
+    fail("quota update candidate requires explicit 50-of-100 launch quota");
+  }
   const reconciliation = validateLegacyReconciliationProof({
     packet: reconciliationPacket,
     applyReceipt: reconciliationApplyReceipt,
@@ -610,6 +662,12 @@ export function buildPiterAtomicActivationPacket({
     providerCapturedAt: provider.capturedAt,
     reconciliationReceipt: reconciliation,
   });
+  let launchQuota = null;
+  if (initialBatchRemaining !== null) {
+    if (initialBatchRemaining !== 50 || candidateReport.launchQuotaSchemaVersion !== 2
+      || baseline.paidCount > 50) fail("50-of-100 launch quota requires a V2 candidate and at most 50 historical paid sales");
+    launchQuota = { initialBatchRemaining: 50, batchSize: 100, adjustment: 50 - baseline.paidCount };
+  }
   const expiresAt = new Date(Math.min(
     Date.parse(ledger.capturedAt),
     Date.parse(provider.capturedAt),
@@ -618,7 +676,7 @@ export function buildPiterAtomicActivationPacket({
   ) + maxEvidenceAgeMs).toISOString();
   if (Date.parse(expiresAt) <= created.timestamp) fail("evidence expires before packet creation");
   const packet = {
-    formatVersion: 1,
+    formatVersion: launchQuota ? 2 : 1,
     kind: PITER_ATOMIC_ACTIVATION.kind,
     createdAt: created.text,
     expiresAt,
@@ -638,6 +696,10 @@ export function buildPiterAtomicActivationPacket({
       bindingCapturedAt: bindings.capturedAt,
       ledgerSnapshotDigest: sha256(stableJson(ledger.rows)),
       providerSnapshotDigest: sha256(stableJson(provider.rows)),
+      providerOnlyFreeIssueCount: provider.rows.filter((transaction) => (
+        transactionStatusClass(transaction, Date.parse(provider.capturedAt)) === "PAID"
+        && classifyPiterPaidProviderTransaction(transaction, expectedProductId, Date.parse(provider.capturedAt)) === "FREE_ISSUE"
+      )).length,
       productSnapshotDigest: sha256(stableJson(products.rows)),
       bindingSnapshotDigest: sha256(stableJson(bindings.rows)),
     },
@@ -648,13 +710,15 @@ export function buildPiterAtomicActivationPacket({
     },
     reconciliation,
     baseline,
+    ...(launchQuota ? { launchQuota } : {}),
   };
   return { ...packet, contractDigest: sha256(stableJson(packet)) };
 }
 
 export function validatePiterAtomicActivationPacket(packet, { now = new Date(), allowExpired = false } = {}) {
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) fail("packet object is required");
-  if (packet.formatVersion !== 1 || packet.kind !== PITER_ATOMIC_ACTIVATION.kind) fail("packet identity mismatch");
+  if (packet.formatVersion !== (packet.launchQuota !== undefined ? 2 : 1)
+    || packet.kind !== PITER_ATOMIC_ACTIVATION.kind) fail("packet identity mismatch");
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(String(now));
   if (!Number.isFinite(nowMs)) fail("validation time is invalid");
   const created = parseIso(packet.createdAt, "packet.createdAt");
@@ -669,8 +733,13 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     || !SHA256_PATTERN.test(String(packet.deployment?.candidateSha256 || ""))
     || !Number.isInteger(packet.deployment?.sourceNodeCount) || packet.deployment.sourceNodeCount < 1
     || !Number.isInteger(packet.deployment?.candidateNodeCount)
-    || packet.deployment.candidateNodeCount <= packet.deployment.sourceNodeCount) {
+    || (packet.deployment.candidateNodeCount <= packet.deployment.sourceNodeCount
+      && !(packet.launchQuota && isExactPiterQuotaUpdateDeployment(packet.deployment)))) {
     fail("packet deployment contract mismatch");
+  }
+  if (packet.deployment.updateKind !== undefined && (packet.deployment.updateKind !== PITER_QUOTA_UPDATE.updateKind
+    || !packet.launchQuota || !isExactPiterQuotaUpdateDeployment(packet.deployment))) {
+    fail("packet deployment contract quota update mismatch");
   }
   const expectedTarget = {
     collection: "lk_tournament_subscription_sales",
@@ -695,6 +764,10 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
   for (const key of ["ledgerSnapshotDigest", "providerSnapshotDigest", "productSnapshotDigest", "bindingSnapshotDigest"]) {
     if (!SHA256_PATTERN.test(String(packet.evidence[key] || ""))) fail(`packet evidence ${key} is invalid`);
   }
+  if (packet.evidence.providerOnlyFreeIssueCount !== undefined
+    && (!Number.isSafeInteger(packet.evidence.providerOnlyFreeIssueCount) || packet.evidence.providerOnlyFreeIssueCount < 0)) {
+    fail("packet provider-only free issue count is invalid");
+  }
   const normalizedProduct = normalizeProduct(packet.product, packet.product?.id, packet.evidence.productCapturedAt);
   if (stableJson(normalizedProduct) !== stableJson(packet.product)) fail("packet product contract mismatch");
   if (stableJson(packet.binding) !== stableJson({
@@ -703,6 +776,10 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
   })) fail("packet Node-RED product binding mismatch");
   const entries = packet.baseline?.entries;
   if (!Array.isArray(entries)) fail("packet baseline entries are required");
+  if (packet.launchQuota !== undefined && stableJson(packet.launchQuota) !== stableJson({
+    initialBatchRemaining: 50, batchSize: 100, adjustment: 50 - entries.length,
+  })) fail("packet launch quota mismatch");
+  if (packet.launchQuota && entries.length > 50) fail("packet launch quota cannot erase historical sales");
   if (!SHA256_PATTERN.test(String(packet.baseline?.legacyLedgerDigest || ""))) {
     fail("packet legacy ledger digest is invalid");
   }
@@ -728,13 +805,16 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     providerTransactions: entries.map((entry) => ({
       id: entry.transactionId,
       status: "PAID",
-      toPay: 0,
-      sum: entry.amountMinor,
+      toPay: entry.amountMinor,
+      sum: entry.providerProductCostMinor,
+      discount: entry.discountMinor,
+      paymentDate: packet.evidence.providerCapturedAt,
       clientId: entry.clientId,
       clientPhone: entry.clientPhone,
-      products: [{ id: entry.productId, discount: entry.discountMinor }],
+      products: [{ id: entry.productId, discount: entry.discountMinor, cost: entry.providerProductCostMinor, count: 1 }],
     })),
     productId: packet.product?.id,
+    providerCapturedAt: packet.evidence.providerCapturedAt,
   });
   const recomputedPaid = { ...recomputed };
   const packetPaid = { ...packet.baseline };
@@ -749,7 +829,8 @@ export function buildPiterAtomicSentinel(packet, createdAt = new Date().toISOStr
   return {
     _id: packet.target.ledgerId,
     documentType: "PITER_ATOMIC_INVENTORY_LEDGER",
-    schemaVersion: 1,
+    schemaVersion: packet.launchQuota ? 2 : 1,
+    ...(packet.launchQuota ? { quotaAdjustment: packet.launchQuota.adjustment } : {}),
     inventoryId: packet.target.inventoryId,
     counterKey: packet.target.counterKey,
     ready: false,
@@ -783,6 +864,8 @@ export function redactPiterAtomicActivationPacket(packet) {
     productCostMinor: packet.product.costMinor,
     paidCount: packet.baseline.paidCount,
     baselineDigest: packet.baseline.digest,
+    launchQuota: packet.launchQuota ?? null,
+    providerOnlyFreeIssueCount: packet.evidence.providerOnlyFreeIssueCount ?? 0,
     legacyPaymentRefHashes: packet.baseline.legacyPaymentRefs.map(hashId),
     contractDigest: packet.contractDigest,
     mutationPerformed: false,

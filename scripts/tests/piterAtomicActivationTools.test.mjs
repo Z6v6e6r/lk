@@ -4,17 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { PITER_QUOTA_UPDATE } from "../lib/piterAtomicQuotaUpdateContract.mjs";
 import {
   PITER_ATOMIC_ACTIVATION,
   buildPiterAtomicActivationPacket,
   buildPiterAtomicSentinel,
   redactPiterAtomicActivationPacket,
+  validatePiterAtomicActivationPacket,
   sha256,
   stableJson,
 } from "../lib/piterAtomicActivationContract.mjs";
 import {
   buildPiterAtomicLedgerPlan,
   deriveLiveLegacyBaseline,
+  validateAtomicLedgerShape,
 } from "../lib/piterAtomicLedgerOperations.mjs";
 import { parseArgs as parsePacketArgs, preparePacket } from "../prepare_piter_atomic_activation_packet.mjs";
 import {
@@ -55,11 +58,13 @@ const paidRow = (overrides = {}) => ({
 const providerTransaction = (overrides = {}) => ({
   id: "tx-1",
   status: "PAID",
-  toPay: 0,
-  sum: 1_980_000,
+  toPay: 1_980_000,
+  sum: 5_680_000,
+  discount: 3_700_000,
+  paymentDate: "2026-09-01T08:01:00.000Z",
   clientId: "client-1",
   clientPhone: ["+7", "9990000000"].join(""),
-  products: [{ id: PRODUCT_ID, discount: 3_700_000 }],
+  products: [{ id: PRODUCT_ID, discount: 3_700_000, cost: 5_680_000, count: 1 }],
   ...overrides,
 });
 
@@ -124,11 +129,16 @@ const evidence = (rows = [paidRow()], transactions = [providerTransaction()]) =>
 
 const packet = () => buildPiterAtomicActivationPacket(evidence());
 
-const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false, now } = {}) => {
+const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false, now,
+  launchQuota = false, postWriteTransform = (document) => document } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "piter-ledger-harness-"));
   const flowBytes = Buffer.from("exact reviewed flow\n");
   const input = evidence();
   input.candidateReport.candidateSha256 = sha256(flowBytes);
+  if (launchQuota) {
+    input.initialBatchRemaining = 50;
+    input.candidateReport.launchQuotaSchemaVersion = 2;
+  }
   const built = buildPiterAtomicActivationPacket(input);
   const packetFile = path.join(root, "activation.packet.json");
   const activeFlowFile = path.join(root, "flows.json");
@@ -142,7 +152,7 @@ const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false
     find() { return { toArray: async () => documents }; },
     async insertOne(document) {
       writeCalls += 1;
-      documents = [...documents, document];
+      documents = [...documents, postWriteTransform(document)];
       if (ambiguousWrite) throw new Error("simulated network timeout after commit");
       return { acknowledged: true, insertedId: document._id };
     },
@@ -226,6 +236,43 @@ test("activation packet fails closed on incomplete, stale, unresolved, refund, o
   }
 });
 
+test("activation accepts Viva gross/discount/net and separately counts free issues", () => {
+  const free = providerTransaction({ id: "free-issue", toPay: 0, discount: 5_680_000,
+    products: [{ id: PRODUCT_ID, discount: 5_680_000, cost: 5_680_000, count: 1 }] });
+  const built = buildPiterAtomicActivationPacket(evidence([paidRow()], [providerTransaction(), free]));
+  assert.equal(built.baseline.paidCount, 1);
+  assert.equal(built.evidence.providerOnlyFreeIssueCount, 1);
+  assert.equal(redactPiterAtomicActivationPacket(built).providerOnlyFreeIssueCount, 1);
+  const seed = buildPiterAtomicLedgerPlan({ action: "seed", packet: built, documents: [paidRow()],
+    activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW });
+  assert.equal(seed.mutation.document.paidCount, 1);
+  assert.deepEqual(seed.mutation.document.legacyPaymentRefs, ["pay-ref-1"]);
+  assert.throws(() => buildPiterAtomicActivationPacket(evidence([paidRow()], [{ ...free, id: "tx-1" }])), /free provider issue.*conflicts/);
+  assert.throws(() => buildPiterAtomicActivationPacket(evidence([], [providerTransaction()])), /missing from the ledger/);
+  assert.throws(() => buildPiterAtomicActivationPacket(evidence([], [free, free])), /duplicate provider/);
+});
+
+test("activation rejects malformed paid and free financial evidence", () => {
+  for (const overrides of [
+    { toPay: 0, sum: 1_980_000 }, { toPay: 0 }, { toPay: -1 }, { toPay: "1980000" },
+    { discount: 0 }, { paymentDate: null }, { paymentDate: "2026-09-05T00:00:00Z" },
+    { refundSum: -1 }, { products: [{ id: PRODUCT_ID, discount: 3_700_000, cost: 5_680_000, count: 2 }] },
+    { client: { id: "different-client" } }, { client: { phone: "79990000001" } },
+    { products: [{ id: PRODUCT_ID, productId: "conflicting-product", discount: 3_700_000, cost: 5_680_000, count: 1 }] },
+  ]) assert.throws(() => buildPiterAtomicActivationPacket(evidence([paidRow()], [providerTransaction(overrides)])), /financial facts mismatch/);
+});
+
+test("activation preserves phone-only V1 packets and validates new free-issue count", () => {
+  const built = buildPiterAtomicActivationPacket(evidence([paidRow({ clientId: null })], [providerTransaction({ clientId: null })]));
+  delete built.evidence.providerOnlyFreeIssueCount;
+  const resign = value => { delete value.contractDigest; value.contractDigest = sha256(stableJson(value)); return value; };
+  assert.doesNotThrow(() => validatePiterAtomicActivationPacket(resign(built), { now: NOW }));
+  for (const count of [null, "1", -1, 0.5]) {
+    const bad = structuredClone(built); bad.evidence.providerOnlyFreeIssueCount = count;
+    assert.throws(() => validatePiterAtomicActivationPacket(resign(bad), { now: NOW }), /free issue count is invalid/);
+  }
+});
+
 test("activation packet requires exact source, pagination, product cost, and activation window", () => {
   assert.throws(() => buildPiterAtomicActivationPacket({
     ...evidence(),
@@ -252,6 +299,60 @@ test("activation packet requires exact source, pagination, product cost, and act
       values: [{ key: PITER_ATOMIC_ACTIVATION.productBindingKey, value: "different-product" }],
     },
   }), /product binding mismatch/);
+});
+
+test("explicit 50-of-100 quota is digest-bound and never fabricates paid records", () => {
+  const data = evidence();
+  const built = buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining: 50,
+    candidateReport: { ...data.candidateReport, launchQuotaSchemaVersion: 2 } });
+  const sentinel = buildPiterAtomicSentinel(built, NOW.toISOString());
+  assert.equal(built.formatVersion, 2);
+  assert.equal(packet().formatVersion, 1);
+  const downgraded = structuredClone(built);
+  downgraded.formatVersion = 1;
+  delete downgraded.contractDigest; downgraded.contractDigest = sha256(stableJson(downgraded));
+  assert.throws(() => validatePiterAtomicActivationPacket(downgraded, { now: NOW }), /identity mismatch/);
+  assert.equal(sentinel.schemaVersion, 2);
+  assert.equal(sentinel.paidCount, 1);
+  assert.equal(sentinel.takenCount, 1);
+  assert.equal(sentinel.quotaAdjustment, 49);
+  assert.equal(sentinel.takenCount + sentinel.quotaAdjustment, 50);
+  assert.deepEqual(sentinel.legacyPaymentRefs, ["pay-ref-1"]);
+  assert.doesNotThrow(() => validateAtomicLedgerShape(sentinel));
+  const plan = buildPiterAtomicLedgerPlan({ action: "activate", packet: built, documents: [paidRow(), sentinel],
+    activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW });
+  assert.equal(plan.mutation.filter.schemaVersion, 2);
+  assert.equal(plan.mutation.filter.quotaAdjustment, 49);
+  assert.equal(plan.mutation.update.$set.ready, true);
+  assert.throws(() => validateAtomicLedgerShape({ ...sentinel, quotaAdjustment: 48 }), /quota invariant/);
+  assert.throws(() => validateAtomicLedgerShape({ ...sentinel, schemaVersion: 1 }), /quota invariant/);
+  assert.throws(() => buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining: 50 }), /V2 candidate/);
+  const tampered = structuredClone(built); tampered.launchQuota.adjustment = 48;
+  delete tampered.contractDigest; tampered.contractDigest = sha256(stableJson(tampered));
+  assert.throws(() => validatePiterAtomicActivationPacket(tampered, { now: NOW }), /launch quota mismatch/);
+  assert.throws(() => buildPiterAtomicLedgerPlan({ action: "activate", packet: built,
+    documents: [paidRow(), { ...sentinel, quotaAdjustment: 48 }], activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW }), /quota|custody/);
+});
+
+test("activation accepts only the exact installed-topology update tuple with explicit quota", () => {
+  const data = evidence();
+  const report = { ...data.candidateReport, ...PITER_QUOTA_UPDATE, launchQuotaSchemaVersion: 2 };
+  const built = buildPiterAtomicActivationPacket({ ...data, candidateReport: report, initialBatchRemaining: 50 });
+  assert.equal(built.formatVersion, 2);
+  assert.equal(built.deployment.candidateNodeCount, built.deployment.sourceNodeCount);
+  assert.doesNotThrow(() => validatePiterAtomicActivationPacket(built, { now: NOW }));
+  assert.throws(() => buildPiterAtomicActivationPacket({ ...data, candidateReport: report }), /explicit 50/);
+  for (const drift of [{ candidateSha256: "c".repeat(64) }, { sourceSha256: "d".repeat(64) },
+    { updateKind: "unknown" }, { launchQuotaSchemaVersion: 1 }, { candidateNodeCount: 4767 },
+    { candidateNodeCount: 4769 }]) {
+    assert.throws(() => buildPiterAtomicActivationPacket({ ...data, candidateReport: { ...report, ...drift }, initialBatchRemaining: 50 }));
+  }
+  const forged = structuredClone(built); forged.deployment.sourceSha256 = "e".repeat(64);
+  delete forged.contractDigest; forged.contractDigest = sha256(stableJson(forged));
+  assert.throws(() => validatePiterAtomicActivationPacket(forged, { now: NOW }), /deployment contract/);
+  const fakeInstall = structuredClone(built); fakeInstall.deployment.candidateNodeCount += 1;
+  delete fakeInstall.contractDigest; fakeInstall.contractDigest = sha256(stableJson(fakeInstall));
+  assert.throws(() => validatePiterAtomicActivationPacket(fakeInstall, { now: NOW }), /deployment contract/);
 });
 
 test("ledger plan seeds inactive, activates by exact CAS, and deactivates without deleting attempts", () => {
@@ -491,7 +592,21 @@ test("guarded seed recovers an ambiguous ACK only from the exact majority readba
   assert.equal(harness.writeCalls, 1);
 });
 
-test("deactivate recovery accepts a valid in-flight confirmation after the stop CAS", async () => {
+test("quota seed refuses ambiguous readback with changed schema or quota", async () => {
+  for (const postWriteTransform of [
+    (doc) => ({ ...doc, schemaVersion: 1, quotaAdjustment: undefined }),
+    (doc) => { const copy = { ...doc }; delete copy.quotaAdjustment; return copy; },
+    (doc) => ({ ...doc, quotaAdjustment: 48 }),
+  ]) {
+    const harness = createSeedApplyHarness({ launchQuota: true, ambiguousWrite: true, postWriteTransform });
+    await assert.rejects(() => runLedgerOperation(harness.options, harness.dependencies));
+    assert.equal(harness.writeCalls, 1);
+  }
+  const exact = createSeedApplyHarness({ launchQuota: true, ambiguousWrite: true });
+  assert.equal((await runLedgerOperation(exact.options, exact.dependencies)).ambiguousWriteRecovered, true);
+});
+
+for (const quotaDrift of [false, true]) test(`deactivate recovery preserves quota custody (drift=${quotaDrift})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "piter-deactivate-race-"));
   const flowBytes = Buffer.from("deactivate reviewed flow\n");
   const input = evidence();
@@ -523,6 +638,7 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
       };
       documents = [{
         ...stopped,
+        ...(quotaDrift ? { schemaVersion: 2, quotaAdjustment: 49 } : {}),
         revision: stopped.revision + 1,
         paidCount: 2,
         reservedCount: 0,
@@ -537,7 +653,7 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
   const client = { db: (name) => name === "admin"
     ? { command: async () => MONGO_IDENTITY }
     : { collection: () => collection } };
-  const result = await runLedgerOperation({
+  const pending = runLedgerOperation({
     action: "deactivate", apply: true, packetFile, activeFlowFile, expectedRevision: 8,
     expectedContractDigest: built.contractDigest, backupDir: path.join(root, "backup"),
     reason: "manual safety stop",
@@ -559,6 +675,11 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
       LK_PITER_ATOMIC_EXPECTED_MONGO_IDENTITY_SHA256: MONGO_IDENTITY_SHA,
     },
   });
+  if (quotaDrift) {
+    await assert.rejects(() => pending, /outcome is unresolved/);
+    return;
+  }
+  const result = await pending;
   assert.equal(result.ambiguousWriteRecovered, true);
   assert.equal(result.postReady, false);
   assert.equal(result.postRevision, 10);

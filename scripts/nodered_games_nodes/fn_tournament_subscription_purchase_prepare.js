@@ -126,6 +126,7 @@ const REGIONAL_FRIENDSHIP_COUNTER_KEYS = new Set(Object.keys(REGIONAL_FRIENDSHIP
 // while managed usage rules remain disabled. HUB/Kotelniki stay fail closed.
 const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
+  "network_friendship",
 ]);
 
 const toStr = (value) => {

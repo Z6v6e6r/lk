@@ -56,6 +56,48 @@
   prod/dev сборка (включая TypeScript) PASS. Production/SSH/secrets/shared data,
   merge/push/deploy/activation не выполнялись; live ingress и binding ещё закрыты.
 
+## 2026-09-05 — Piter: сохранить завершённый параллельный CREATE-preflight
+
+- Перед разрешённой публикацией обнаружен чужой active soak: новые конфликтующие
+  записи остановлены, координатор и владелец уведомлены; операция не прерывалась.
+- После terminal receipt выполнен fresh read-only pull e38f844...; сравнением
+  подтверждены только три заявленные function-правки другого владельца.
+- Локальный Piter tuple обновлён на e38f844... -> 650a76b...; все три чужие
+  функции сохраняются, Piter по-прежнему меняет только status и atomic router.
+  Предыдущий unpublished 777... -> 8cc... больше не допустим.
+- Старые артефакты сохранены как история, lease/сервер/БД не менялись.
+
+## 2026-09-05 — Piter: локальный updater установленного atomic flow
+
+- Добавлен отдельный exact updater fresh source 7775475... -> candidate 8cc76ed...:
+  только status/atomic-router function bodies, 4768 узлов и 215 HTTP inputs сохранены.
+- Initial installer не используется повторно; source/preimage/replacement drift,
+  stale origin и повторная запись output завершаются fail closed.
+- Equal-node activation report разрешён только для pinned update tuple и явной
+  квоты 50; update identity сохраняется в packet. Остальные refund/readiness gates
+  не ослаблены. Документирован новый transitive dependency operator packaging.
+- Exact-graph forward и structural reverse проверены локально; rollback не разрешён.
+  174 теста PASS, 1 Linux-only SKIP; inert prod/dev build PASS, lint 0 errors.
+- Production, lease, Mongo и Viva writes отсутствуют. Сверка возвратов и единое
+  окно/пакет публикации остаются отдельными незакрытыми границами.
+
+## 2026-09-05 — Piter: отдельная стартовая квота, без фиктивных оплат
+
+- Локально добавлен явный старт 50 из 100 через digest-bound activation packet
+  V2 и ledger schema2. Квота отделена от сверенного финансового baseline;
+  сохранены четыре ценовые партии и default-off managed usage.
+- CAS всех стадий и operator postread проверяют точную schema/quota custody;
+  старые packets V1 совместимы, старые операторы отвергают новые packets V2.
+- Локальные regression fixtures покрывают остаток, цену, исчерпание,
+  освобождение резерва, drift и ambiguous ACK. Независимая проверка совместимости
+  и восстановления закрыла найденные замечания. Это не live Mongo concurrency proof.
+- Продажи не активировались. Legacy refund proof остаётся заблокированным:
+  даже canonical read-only ответы провайдера дают несовпадающие временные метки.
+  Нужен подтверждённый контракт времени провайдера, не эвристическая нормализация.
+- Текущий live flow требует отдельного exact update candidate, а не повторного
+  initial installer. Общая публикация координируется с владельцем ab_leto;
+  production/DB/provider writes в этой локальной работе отсутствуют.
+
 ## Правило
 1. До закрытия любой задачи фиксируем каждый значимый шаг: анализ, изменение, проверку, деплой, откат или выпуск weekly-отчета.
 2. Минимум на одну задачу должно быть хотя бы 3 записи: что посмотрели, что поменяли, чем подтвердили результат.

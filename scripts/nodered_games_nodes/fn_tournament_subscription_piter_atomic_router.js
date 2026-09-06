@@ -100,7 +100,7 @@ const intentFingerprint = (ctx) => [
 const ACTIVE_RESERVATION_STATES = ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"];
 const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
   if (!(ledger && typeof ledger.ready === "boolean"
-    && ledger.schemaVersion === 1
+    && (ledger.schemaVersion === 1 || (isPiter(ctx) && ledger.schemaVersion === 2))
     && Number.isInteger(ledger.revision) && ledger.revision >= 0
     && Number.isInteger(ledger.paidCount) && ledger.paidCount >= 0
     && Number.isInteger(ledger.reservedCount) && ledger.reservedCount >= 0
@@ -112,6 +112,11 @@ const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
     && Array.isArray(ledger.legacyPaymentRefs)
     && Array.isArray(ledger.reservations))) return false;
   const legacyRefs = ledger.legacyPaymentRefs.map(toStr);
+  const quotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0;
+  if ((ledger.schemaVersion === 1 && Object.prototype.hasOwnProperty.call(ledger, "quotaAdjustment"))
+    || !Number.isSafeInteger(quotaAdjustment) || quotaAdjustment < 0
+    || (ledger.schemaVersion === 2 && legacyRefs.length + quotaAdjustment !== 50)
+    || ledger.takenCount + quotaAdjustment > totalLimit) return false;
   const reservationRefs = ledger.reservations.map((item) => toStr(item?.paymentRef));
   if (legacyRefs.some((item) => !item) || reservationRefs.some((item) => !item)) return false;
   if (ledger.reservations.some((item) => ![
@@ -268,7 +273,20 @@ const finishConfirmProjection = () => {
   if (ctx.confirmResult?.reconcile === true) return [null, null, null, null, null];
   return response(200, ctx.confirmResult?.response || { ok: true, status: ctx.confirmResult?.nextStatus });
 };
+const quotaCustodyFilter = (ctx) => (ctx.ledgerSchemaVersion === 2
+  && (!isPiter(ctx) || !Number.isSafeInteger(ctx.ledgerQuotaAdjustment) || ctx.ledgerQuotaAdjustment < 0)
+  ? null : {
+  schemaVersion: ctx.ledgerSchemaVersion ?? 1,
+  quotaAdjustment: ctx.ledgerSchemaVersion === 2
+    ? ctx.ledgerQuotaAdjustment : { $exists: false },
+});
+const ledgerQuotaMatches = (ledger, ctx) => ledger?.schemaVersion === (ctx.ledgerSchemaVersion ?? 1)
+  && (ctx.ledgerSchemaVersion === 2
+    ? isPiter(ctx) && ledger.quotaAdjustment === ctx.ledgerQuotaAdjustment
+    : !Object.prototype.hasOwnProperty.call(ledger || {}, "quotaAdjustment"));
 const dispatchClaim = (ctx) => {
+  const custody = quotaCustodyFilter(ctx);
+  if (!custody) return fail(503, "Состояние квоты изменилось", "PITER_ATOMIC_QUOTA_CUSTODY_INVALID");
   ctx.step = "piter_dispatch_ack";
   const nowIso = new Date().toISOString();
   const previousGeneration = dispatchGeneration(ctx.dispatchGeneration);
@@ -277,6 +295,7 @@ const dispatchClaim = (ctx) => {
   ctx.providerAttemptedAt = nowIso;
   return ledgerUpdate(ctx, {
     _id: ledgerId(ctx), ready: true,
+    ...custody,
     reservations: { $elemMatch: {
       paymentRef: ctx.paymentRef,
       requestFingerprint: ctx.requestFingerprint,
@@ -295,11 +314,15 @@ const dispatchClaim = (ctx) => {
   });
 };
 const resetDispatchAfterFence = (ctx) => {
+  if (ctx.ledgerSchemaVersion === undefined) return ledgerFind(ctx, "piter_dispatch_repair_quota_find");
+  const custody = quotaCustodyFilter(ctx);
+  if (!custody) return fail(503, "Состояние квоты изменилось", "PITER_ATOMIC_QUOTA_CUSTODY_INVALID");
   ctx.step = "piter_dispatch_repair_ack";
   const nowIso = new Date().toISOString();
   return ledgerUpdate(ctx, {
     _id: ledgerId(ctx),
     ready: true,
+    ...custody,
     reservations: { $elemMatch: {
       paymentRef: ctx.paymentRef,
       requestFingerprint: ctx.requestFingerprint,
@@ -322,6 +345,17 @@ if (!ctx || (!isPiter(ctx) && !isHub(ctx))) {
   return fail(500, "Regional atomic sale context is missing", "REGIONAL_ATOMIC_CONTEXT_MISSING");
 }
 
+// Keep the live baseline's HUB admission closed, including stale server-side
+// purchase continuations. Do not gate provider results, confirmations or the
+// durable dispatch-repair/projection paths for previously accepted payments.
+if (ctx.counterKey === "network_friendship" && [
+  "piter_reserve_start", "piter_ledger_find", "hub_daily_reset_ack", "piter_reserve_ack",
+  "piter_dispatch_claim", "piter_claimed_sale_ack", "piter_claimed_sale_readback",
+  "piter_dispatch_ack", "piter_dispatch_sale_ack", "piter_dispatch_sale_readback",
+].includes(ctx.step)) {
+  return fail(503, "Новые продажи ХАБ не включены в этот выпуск", "HUB_NEW_SALES_RELEASE_DISABLED");
+}
+
 if (ctx.step === "piter_reserve_start") return ledgerFind(ctx);
 
 if (ctx.step === "piter_ledger_find") {
@@ -329,6 +363,8 @@ if (ctx.step === "piter_ledger_find") {
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit, ctx)) {
     return fail(503, "Продажа Питера ещё не активирована", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
+  ctx.ledgerSchemaVersion = ledger.schemaVersion;
+  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
   if (isHub(ctx) && ledger.dailyDate > ctx.dailyDropDate) {
     return fail(409, "Запрос относится к уже закрытому дневному окну", "HUB_DAILY_CAP_STALE_REQUEST", {
       ledgerDailyDate: ledger.dailyDate,
@@ -339,6 +375,7 @@ if (ctx.step === "piter_ledger_find") {
     ctx.step = "hub_daily_reset_ack";
     return ledgerUpdate(ctx, {
       _id: ledgerId(ctx), ready: true, revision: ledger.revision,
+      schemaVersion: 1, quotaAdjustment: { $exists: false },
       dailyDate: ledger.dailyDate,
       dailyPaidCount: ledger.dailyPaidCount,
       dailyReservedCount: ledger.dailyReservedCount,
@@ -461,9 +498,10 @@ if (ctx.step === "piter_ledger_find") {
   if (!ledgerIsPurchaseReady(ledger, ctx.totalLimit, ctx)) {
     return fail(503, "Продажа Питера остановлена", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
-  if (ledger.takenCount >= ctx.totalLimit) {
+  const quotaTakenCount = ledger.takenCount + (ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0);
+  if (quotaTakenCount >= ctx.totalLimit) {
     return fail(409, "Лимит абонементов исчерпан", "PITER_INVENTORY_EXHAUSTED", {
-      totalLimit: ctx.totalLimit, takenCount: ledger.takenCount,
+      totalLimit: ctx.totalLimit, takenCount: quotaTakenCount,
     });
   }
   if (isHub(ctx)
@@ -476,14 +514,14 @@ if (ctx.step === "piter_ledger_find") {
   }
   const tiers = Array.isArray(ctx.tiers) ? ctx.tiers : [];
   const batchSize = Math.max(1, Math.floor(Number(ctx.batchSize) || 100));
-  const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(ledger.takenCount / batchSize) + 1));
+  const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(quotaTakenCount / batchSize) + 1));
   const activeTier = tiers[batchIndex - 1];
   if (!activeTier || !toStr(activeTier.productId) || !Number.isFinite(Number(activeTier.priceMinor))) {
     return fail(503, "Ценовая партия Питера не настроена", "PITER_ATOMIC_TIER_NOT_READY", { batchIndex });
   }
   ctx.batchSize = batchSize;
   ctx.batchIndex = batchIndex;
-  ctx.batchRemainingBefore = Math.max(0, batchSize - (ledger.takenCount - (batchIndex - 1) * batchSize));
+  ctx.batchRemainingBefore = Math.max(0, batchSize - (quotaTakenCount - (batchIndex - 1) * batchSize));
   const atomicProductId = toStr(activeTier.productId);
   const atomicProviderCostMinor = Math.max(0, Math.round(Number(activeTier.providerProductCostMinor)));
   const validatedProviderCostMinor = Math.max(0, Math.round(Number(ctx.providerProductCostMinor)));
@@ -498,7 +536,7 @@ if (ctx.step === "piter_ledger_find") {
   ctx.productCostMinor = atomicProviderCostMinor;
   ctx.discountMinor = ctx.productCostMinor - ctx.priceMinor;
   providerLine.discount = ctx.discountMinor;
-  ctx.remainingBefore = Math.max(0, ctx.totalLimit - ledger.takenCount);
+  ctx.remainingBefore = Math.max(0, ctx.totalLimit - quotaTakenCount);
   const nowIso = new Date().toISOString();
   ctx.ledgerRevision = ledger.revision;
   ctx.requestFingerprint = requestFingerprint;
@@ -528,6 +566,8 @@ if (ctx.step === "piter_ledger_find") {
   const reserveFilter = {
     _id: ledgerId(ctx), ready: true, revision: ledger.revision,
     takenCount: ledger.takenCount,
+    schemaVersion: ledger.schemaVersion,
+    quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
     $and: [
       { "reservations.paymentRef": { $ne: ctx.paymentRef } },
       { reservations: { $not: { $elemMatch: {
@@ -627,6 +667,21 @@ if (ctx.step === "piter_dispatch_repair_sale_find") {
   }, { upsert: false });
 }
 
+if (ctx.step === "piter_dispatch_repair_quota_find") {
+  const ledger = rows(msg.payload).find((row) => row?._id === ledgerId(ctx));
+  const reservation = ledger?.reservations?.find((item) => item?.paymentRef === ctx.paymentRef);
+  if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || (isHub(ctx) ? 100 : 400), ctx)
+    || !reservation || reservation.requestFingerprint !== ctx.requestFingerprint
+    || reservation.state !== "DISPATCHING"
+    || dispatchGeneration(reservation.dispatchGeneration) !== dispatchGeneration(ctx.dispatchGeneration)
+    || toStr(reservation.providerAttemptedAt) !== toStr(ctx.providerAttemptedAt)) {
+    return fail(503, "Квота попытки оплаты требует сверки", "PITER_DISPATCH_REPAIR_QUOTA_INVALID");
+  }
+  ctx.ledgerSchemaVersion = ledger.schemaVersion;
+  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
+  return resetDispatchAfterFence(ctx);
+}
+
 if (ctx.step === "piter_dispatch_repair_fence_ack") {
   if (!exactUpdateAck(msg.payload)) {
     return saleFind(ctx, "piter_dispatch_repair_fence_readback");
@@ -659,7 +714,7 @@ if (ctx.step === "piter_dispatch_repair_ack") {
 if (ctx.step === "piter_dispatch_repair_ledger_readback") {
   const ledger = rows(msg.payload).find((row) => row?._id === ledgerId(ctx));
   const reservation = ledger?.reservations?.find((item) => item?.paymentRef === ctx.paymentRef);
-  if (!reservation
+  if (!ledgerQuotaMatches(ledger, ctx) || !reservation
     || reservation.requestFingerprint !== ctx.requestFingerprint
     || reservation.state !== "CLAIMED"
     || dispatchGeneration(reservation.dispatchGeneration) !== dispatchGeneration(ctx.dispatchGeneration)
@@ -735,11 +790,14 @@ if (ctx.step === "piter_dispatch_sale_readback") {
 }
 
 if (ctx.step === "piter_provider_result") {
+  const custody = quotaCustodyFilter(ctx);
+  if (!custody) return fail(503, "Состояние квоты изменилось", "PITER_ATOMIC_QUOTA_CUSTODY_INVALID");
   const result = ctx.providerResult || {};
   const nowIso = new Date().toISOString();
   ctx.step = "piter_provider_ledger_ack";
   const resultFilter = {
     _id: ledgerId(ctx),
+    ...custody,
     $and: [{ reservations: { $elemMatch: {
       paymentRef: ctx.paymentRef, requestFingerprint: ctx.requestFingerprint, state: "DISPATCHING",
       dispatchGeneration: dispatchGeneration(ctx.dispatchGeneration),
@@ -841,6 +899,8 @@ if (ctx.step === "piter_confirm_validate") {
       || existing.state === result.nextStatus)) {
     return fail(503, "Atomic ledger не прошёл проверку перед подтверждением", "PITER_CONFIRM_LEDGER_INVALID");
   }
+  ctx.ledgerSchemaVersion = ledger.schemaVersion;
+  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
   const nowIso = new Date().toISOString();
   ctx.step = "piter_confirm_ledger_ack";
   const inc = { revision: 1 };
@@ -861,7 +921,8 @@ if (ctx.step === "piter_confirm_validate") {
   const confirmFilter = {
     _id: ledgerId(ctx),
     ready: ledger.ready,
-    schemaVersion: 1,
+    schemaVersion: ledger.schemaVersion,
+    quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
     revision: ledger.revision,
     paidCount: ledger.paidCount,
     reservedCount: ledger.reservedCount,
@@ -941,6 +1002,7 @@ if (ctx.step === "piter_confirm_replay_find") {
   const ledger = rows(msg.payload).find((row) => row?._id === ledgerId(ctx));
   const existing = ledger?.reservations?.find((item) => item?.paymentRef === ctx.paymentRef);
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || 400, ctx)
+    || !ledgerQuotaMatches(ledger, ctx)
     || !existing
     || existing.requestFingerprint !== ctx.requestFingerprint
     || dispatchGeneration(existing.dispatchGeneration) !== dispatchGeneration(ctx.dispatchGeneration)

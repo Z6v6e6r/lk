@@ -7,6 +7,7 @@ const REGIONAL_FRIENDSHIP_BINDING_LABELS = {
 };
 const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
+  "network_friendship",
 ]);
 const MANAGED_SALE_COMPATIBILITY = {
   adapterId: "LK_REGIONAL_BOOKING_GATEWAY",

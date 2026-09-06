@@ -1,5 +1,6 @@
 import {
   PITER_ATOMIC_ACTIVATION,
+  classifyPiterPaidProviderTransaction,
   digestPiterLegacyLedgerRows,
   hashId,
   projectPiterLegacyLedgerRow,
@@ -134,8 +135,8 @@ const classifyProviderTransaction = (transaction, productId, capturedAtMs) => {
     if ((refund.refundSumMinor !== null && refund.refundSumMinor > 0) || refund.refundedAt) {
       fail(`paid provider transaction ${hashId(transactionId)} contains refund evidence`);
     }
-    if (toInteger(transaction?.toPay) !== 0) fail(`paid provider transaction ${hashId(transactionId)} has a balance`);
-    return { kind: "PAID", status, transactionId, line: lines[0] };
+    const kind = classifyPiterPaidProviderTransaction(transaction, productId, capturedAtMs);
+    return { kind, status, transactionId, line: lines[0] };
   }
   if (REFUNDED_STATUSES.has(status)) {
     if (!Number.isInteger(refund.refundSumMinor) || refund.refundSumMinor <= 0 || !refund.refundedAt
@@ -179,7 +180,9 @@ const validateFinancialAndClientFacts = (row, provider, productId) => {
     || (localPhone && providerPhone !== localPhone)) {
     fail(`ledger/provider client mismatch for ${transactionHash}`);
   }
-  if (provider.kind === "PAID" && toInteger(provider.transaction?.sum) !== amountMinor) {
+  if (provider.kind === "PAID" && (toInteger(provider.transaction?.toPay) !== amountMinor
+    || toInteger(provider.transaction?.sum) !== providerProductCostMinor
+    || toInteger(provider.transaction?.discount) !== discountMinor)) {
     fail(`paid provider amount mismatch for ${transactionHash}`);
   }
   if (provider.kind === "EXPIRED_UNPAID" && toInteger(provider.transaction?.toPay) !== amountMinor) {
@@ -360,6 +363,7 @@ export function buildPiterLegacyReconciliationPacket({
   for (const [transactionId, row] of ledgerById) {
     const providerTransaction = providerById.get(transactionId);
     if (!providerTransaction) fail(`ledger transaction ${hashId(transactionId)} lacks provider evidence`);
+    if (providerTransaction.kind === "FREE_ISSUE") fail(`free provider issue ${hashId(transactionId)} conflicts with the ledger`);
     validateFinancialAndClientFacts(row, providerTransaction, expectedProductId);
     const localStatus = normalizeStatus(row.status);
     if (providerTransaction.kind === "PAID") {
@@ -451,8 +455,13 @@ export function buildPiterLegacyReconciliationPacket({
     fail(`ledger/provider terminal status mismatch for ${hashId(transactionId)}`);
   }
   const providerOnlyRefunds = [];
+  const providerOnlyFreeIssues = [];
   for (const [transactionId, providerTransaction] of providerById) {
     if (ledgerById.has(transactionId)) continue;
+    if (providerTransaction.kind === "FREE_ISSUE") {
+      providerOnlyFreeIssues.push({ transactionId, transactionHash: hashId(transactionId), reason: "FULL_DISCOUNT_ZERO_AMOUNT" });
+      continue;
+    }
     if (providerTransaction.kind !== "REFUNDED" || !refundedSubscriptions.has(transactionId)) {
       fail(`provider transaction ${hashId(transactionId)} is missing from the ledger`);
     }
@@ -466,6 +475,7 @@ export function buildPiterLegacyReconciliationPacket({
   }
   changes.sort((left, right) => left.transactionId.localeCompare(right.transactionId));
   providerOnlyRefunds.sort((left, right) => left.transactionId.localeCompare(right.transactionId));
+  providerOnlyFreeIssues.sort((left, right) => left.transactionId.localeCompare(right.transactionId));
   const expiresAt = new Date(Math.min(...evidenceTimes) + PITER_LEGACY_RECONCILIATION.maxEvidenceAgeMs).toISOString();
   if (Date.parse(expiresAt) <= created.timestamp) fail("evidence expires before packet creation");
   const unsigned = {
@@ -499,10 +509,12 @@ export function buildPiterLegacyReconciliationPacket({
       failedCount: changes.filter((item) => item.action === "MARK_FAILED").length,
       refundedCount: changes.filter((item) => item.action === "MARK_REFUNDED").length,
       providerOnlyRefundCount: providerOnlyRefunds.length,
+      providerOnlyFreeIssueCount: providerOnlyFreeIssues.length,
       paidCountAfter: unchanged.paid,
     },
     changes,
     providerOnlyRefunds,
+    providerOnlyFreeIssues,
   };
   return { ...unsigned, planDigest: sha256(stableJson(unsigned)) };
 }
@@ -584,6 +596,18 @@ export function validatePiterLegacyReconciliationPacket(packet, { now = new Date
     }
     providerOnlyIds.add(item.transactionId);
   }
+  // Optional for pre-existing V1 packets without free issues; never a mutation.
+  const freeIssues = packet.providerOnlyFreeIssues ?? [];
+  if (!Array.isArray(freeIssues) || (packet.expected.providerOnlyFreeIssueCount ?? 0) !== freeIssues.length) {
+    fail("packet provider-only free issue counts mismatch");
+  }
+  for (const item of freeIssues) {
+    if (!toStr(item?.transactionId) || providerOnlyIds.has(item.transactionId) || transactionIds.has(item.transactionId)
+      || item.transactionHash !== hashId(item.transactionId) || item.reason !== "FULL_DISCOUNT_ZERO_AMOUNT") {
+      fail("packet provider-only free issue contract mismatch");
+    }
+    providerOnlyIds.add(item.transactionId);
+  }
   return packet;
 }
 
@@ -602,6 +626,9 @@ export function assertPiterLegacyReconciliationPreconditions(packet, rows, { now
     fail("current ledger preimage drifted from the reviewed packet");
   }
   const byTransactionId = new Map(scoped.map((row) => [pickTransactionId(row), row]));
+  if ((packet.providerOnlyFreeIssues || []).some((item) => byTransactionId.has(item.transactionId))) {
+    fail("provider-only free issue conflicts with the current ledger");
+  }
   for (const change of packet.changes) {
     const row = byTransactionId.get(change.transactionId);
     if (!row || normalizeStatus(row.status) !== change.fromStatus
@@ -699,6 +726,10 @@ export function redactPiterLegacyReconciliationPacket(packet) {
       transactionHash: item.transactionHash,
       subscriptionHash: item.subscriptionHash,
       status: item.status,
+    })),
+    providerOnlyFreeIssues: (packet.providerOnlyFreeIssues || []).map((item) => ({
+      transactionHash: item.transactionHash,
+      reason: item.reason,
     })),
     mutationPerformed: false,
   };

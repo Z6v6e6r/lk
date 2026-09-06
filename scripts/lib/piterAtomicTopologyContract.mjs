@@ -17,8 +17,9 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   mongoClient: "4e820638cc39c730",
 });
 
-export const PITER_ATOMIC_ROUTER_SHA256 = "58ba26c5e68f766ac00f468ba361c984aec211d3840d77d23a7d5c8bb75d52d8";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "dd85c8fff8201cedff3f79b37f295d635b5ea7cc81a404b95a58d6aa20638fcb";
+// Merged source fingerprint only; not a binding to an installed flow.
+export const PITER_ATOMIC_ROUTER_SHA256 = "e776834030d1921d33832bb5fdc14cb0a83334c43f989b2d6b68645da6858b9c";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const currentProductId = String(global.get(key) ?? "").trim();

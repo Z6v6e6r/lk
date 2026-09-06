@@ -852,6 +852,15 @@ if (!ctx) {
   return fail(500, "Summer subscription context is missing");
 }
 
+// Piter-only release: do not admit new HUB checkout continuations. Provider
+// results and existing paid/pending confirmation/binding recovery stay routable.
+if (toStr(ctx.counterKey) === "network_friendship"
+  && ["managed_sale_readiness", "token_purchase", "load_products"].includes(ctx.step)) {
+  return fail(503, "Новые продажи ХАБ не включены в этот выпуск", {
+    code: "HUB_NEW_SALES_RELEASE_DISABLED", counterKey: "network_friendship",
+  });
+}
+
 if (ctx.step === "managed_sale_readiness") {
   if (!isOk(msg.statusCode) || !matchesExactManagedReadiness(msg.payload, ctx)) {
     return fail(503, "Контур managed-продажи ХАБ не готов", {
