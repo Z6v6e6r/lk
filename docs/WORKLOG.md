@@ -2,6 +2,45 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: source-связка controlled application с generation/log collector
+
+- Продолжение после `40c7239`, прежняя ветка/WT; primary — sole writer.
+  Existing controlled-application source runner после legacy12probe A/diskB/HUPB/
+  revokeC включает обязательный fixed11 supplement. Старый session.finish и120s
+  бюджет сохранены; положительный client-2 и прежний revoked client не заменены
+  fake identities. Независимый observer требует ровно+2 после прошлых counters.
+- Новый fixture helper держит один fd в observer через READY(initSha) → canonical
+  transport+EOF → RESULT+stdoutEOF+close0. Transport сам собирается прежним fixed
+  collector в separate client namespace, actual namespace проверена до/после.
+  Host session связывает applied snapshotB с currentC; общий LOCAL link проверяет
+  config/marker/snapshot/transport hash, leaf, namespace и suffix receipt.
+- Второй unconditional correlation log добавлен в source generator; файл0600/dir0700
+  создаются до Nginx startup. Во время held window новых artifact names в /out нет:
+  legacy entries остаются в prefix, свежие чужие строки отклоняются. Imported source
+  copies сохраняют relative layout до transitive canonicalJson core. Source/copy/
+  container/network checks выполняются до/после, exact-owned cleanup не ослаблен.
+- Security/release review нашли общий P2: timer-only90s и новые exec вне общего180s
+  бюджета. Исправлено elapsed monotonic/wall checks на переходах и remaining-budget
+  AbortSignal для обеих CLI веток/pipe. Late READY/RESULT/close, late supplement и
+  rollback получили5regressions. Оба read-only re-review закрыли finding; новых
+  существенных P0–P2 нет. Kill Docker CLI не объявляется remote helper cleanup.
+- Targeted сначала134/134, после correction139/139 PASS (50новых cases).
+  Frozen-source full sequential Partner700tests:676PASS/24FAIL/0skip, actual exit1;
+  exact24failed names совпали с предыдущим checkpoint (Nginx3/binding11/runtime8/
+  packet2), новых0. Старые immutable source pins/receipts не пересчитаны, releaseRED.
+- Root lint фактически exit0,0errors/387warnings. Согласованный LOCAL_HEAVY использован
+  только для fullPartner concurrency1→lint, освобождён после actual exits; собственные
+  socket fixtures только127.0.0.1. Новых runtime/resource процессов не осталось.
+- Scoped ESLint, driver syntax и git diff checks PASS. Drawio-skill добавил страницу
+  Application correlation link в существующую схему, XML0errors/0warnings;25local
+  doc linksPASS. PNG/visualQA NOT_RUN: прежний Electron sandbox blocker.
+- Build NOT_RUN: прежний неизменный preflight17missingVITE. Native application
+  DEFERRED_BY_USER/NOT_RUN. Actual shared-vhost certificate behaviour/log flush/
+  mounts/process generations не проверены; synthetic proc/streams не nativeproof.
+  Production entry всё ещё UNSUPPORTED_INGRESS_ADAPTER. Нет Docker/SSH/native,
+  shared data/provider/secret/routing/live write, push/PR/merge/CI/deploy/activation.
+  Новых согласований с партнёром нет; это наша инфраструктурная работа.
+
 ## 2026-09-06 — Partner: локальные Nginx generation/log consistency и host-session wiring
 
 - Продолжение после `45d15a7`, та же ветка/WT; primary — единственный writer.

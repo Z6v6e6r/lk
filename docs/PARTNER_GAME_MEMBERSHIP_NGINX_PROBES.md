@@ -12,6 +12,8 @@ JSON не заменяет эти наблюдения. Никаких новы�
 Продолжение после `45d15a7`: [поколение workers и журнал](#локальная-проверка-поколения-и-корреляция-журнала)
 реализованы как отдельная локальная проверка согласованности и bounded file reader.
 Это не production operator, не reload и не аттестация внешней vantage.
+После `40c7239` эти primitives [связаны с source runner управляемого применения](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md#дополнение-после-40c7239-обязательная-корреляция-после-отзыва)
+как обязательный supplement; физический native запуск остаётся NOT_RUN.
 [Редактируемая инфографика](assets/partner-game-membership-ingress-evidence.drawio),
 страницы `Bounded transport collector` и `Generation and log correlation`.
 

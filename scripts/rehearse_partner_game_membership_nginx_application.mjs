@@ -5,21 +5,28 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { createLocalNginxApplicationSession, verifyLocalNginxApplicationPhase, deriveLocalNginxApplicationAddresses } from "./partner_game_membership_nginx_application.mjs";
 import { createPartnerNginxTestCertificates } from "./tests/fixtures/partner-nginx124-certificates.mjs";
 import { collectFixtureLogThenCleanup } from "./tests/fixtures/partner-nginx-application-cleanup.mjs";
 import { parseNginxRehearsalMode, runNginxRehearsalMode } from "./partner_game_membership_nginx_identity_diagnostic.mjs";
+import { exchangeLocalNginxGeneration, linkLocalNginxApplicationCorrelation, createLocalNginxApplicationBudget } from "./partner_game_membership_nginx_application_link.mjs";
+import { parseCanonicalIngressJson } from "./partner_game_membership_ingress_evidence.mjs";
+import { canonicalJson } from "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs";
 
 const mode = parseNginxRehearsalMode(process.argv.slice(2));
-const scripts = path.dirname(fileURLToPath(import.meta.url)), started = Date.now();
+const scripts = path.dirname(fileURLToPath(import.meta.url)), started = Date.now(), startedMonotonic = performance.now();
 const nodeImage = "node@sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96";
 const nginxImage = "nginx@sha256:2e26275ed7a47e8e93f264d39a09ca4bc3f4058c904c75087e237f4ea883f2a1";
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const output = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "partner-nginx-application-")); fs.chmodSync(output, 0o700);
 const fixture = path.join(output, "fixture"), control = path.join(output, "control"), results = path.join(output, "results");
 for (const directory of [control, results]) fs.mkdirSync(directory, { mode: 0o700 });
+fs.mkdirSync(path.join(results, "correlation"), { mode: 0o700 });
+fs.writeFileSync(path.join(results, "correlation", "access.jsonl"), "", { mode: 0o600 });
 const runId = crypto.randomBytes(16).toString("hex"), label = "padlhub.partner-nginx-application", owned = [], targets = new Map();
 let networkId, failure, cleanupFailed = false, cleaning = false, session;
 const sources = {}, copies = {};
@@ -77,14 +84,21 @@ function verifyNetwork() {
 }
 try {
   for (const relative of ["partner_game_membership_nginx_application.mjs", "partner_game_membership_nginx_candidate.mjs",
-    "partner_game_membership_ingress_evidence.mjs", "rehearse_partner_game_membership_nginx_application.mjs", "tests/fixtures/partner-nginx124-certificates.mjs", "tests/fixtures/partner-nginx-application-cleanup.mjs", "partner_game_membership_nginx_identity_diagnostic.mjs"]) {
+    "partner_game_membership_ingress_evidence.mjs", "partner_game_membership_nginx_application_link.mjs", "rehearse_partner_game_membership_nginx_application.mjs", "tests/fixtures/partner-nginx124-certificates.mjs", "tests/fixtures/partner-nginx-application-cleanup.mjs", "partner_game_membership_nginx_identity_diagnostic.mjs"]) {
     sources[relative] = sha(fs.readFileSync(path.join(scripts, relative)));
   }
   const binding = createPartnerNginxTestCertificates(fixture, { sourceLimits: true });
   const copiedFiles = mode === "diagnostic"
     ? { "partner_game_membership_nginx_linux.mjs": "partner_game_membership_nginx_linux.mjs", "identity-diagnostic.mjs": "partner_game_membership_nginx_identity_diagnostic.mjs", "peer.cjs": "tests/fixtures/partner-nginx-application-peer.cjs" }
     : { "linux.mjs": "partner_game_membership_nginx_linux.mjs", "peer.cjs": "tests/fixtures/partner-nginx-application-peer.cjs" };
+  // Preserve relative import layout; no alternate collector or rewritten imports.
+  for (const relative of ["partner_game_membership_nginx_generation.mjs", "partner_game_membership_nginx_log_window.mjs",
+    "partner_game_membership_nginx_linux.mjs", "partner_game_membership_nginx_probes.mjs", "partner_game_membership_ingress_evidence.mjs",
+    "tests/fixtures/partner-nginx-application-correlation.mjs", "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs"]) {
+    copiedFiles[path.normalize(`scripts/${relative}`)] = relative;
+  }
   for (const [name, relative] of Object.entries(copiedFiles)) {
+    fs.mkdirSync(path.dirname(path.join(fixture, name)), { recursive: true, mode: 0o700 });
     const bytes = fs.readFileSync(path.join(scripts, relative)); sources[relative] = sha(bytes); copies[name] = sha(bytes); write(path.join(fixture, name), bytes);
   }
   networkId = docker("network", "create", "--internal", "--driver", "bridge", "--label", `${label}=${runId}`, `partner-app-${runId}`);
@@ -97,6 +111,7 @@ try {
   const { peerAddress, probeAddress } = deriveLocalNginxApplicationAddresses(subnet);
   receipt.preparationStep = "OWNED_FIXTURE_AND_CONTAINERS";
   const networkBytes = JSON.stringify({ peerAddress, probeAddress }); write(path.join(fixture, "network.json"), networkBytes);
+  const correlationNetworkBytes = canonicalJson({ peerAddress, probeAddress }); write(path.join(fixture, "correlation-network.json"), correlationNetworkBytes);
   session = createLocalNginxApplicationSession({ binding, peerAddress, probeAddress });
   const publish = phase => { const config = session.configuration(phase); write(path.join(control, "nginx.conf"), config.configuration); return config; };
   const baselineConfig = publish("baseline"); receipt.certificateHashes = baselineConfig.certificateHashes;
@@ -109,6 +124,7 @@ try {
     for (const [name, digest] of Object.entries(copies)) assert.equal(sha(fs.readFileSync(path.join(fixture, name))), digest);
     for (const [name, digest] of Object.entries(receipt.certificateHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, `${name}.crt`))), digest);
     assert.equal(fs.readFileSync(path.join(fixture, "network.json"), "utf8"), networkBytes);
+    assert.equal(fs.readFileSync(path.join(fixture, "correlation-network.json"), "utf8"), correlationNetworkBytes);
   };
   await runNginxRehearsalMode(mode, {
     diagnostic: async () => {
@@ -167,14 +183,45 @@ try {
   assert.throws(() => verifyLocalNginxApplicationPhase({ expected: next, observed: unapplied, previous: baseline.after, peerAddress, probeAddress }), /NGINX_APPLICATION_NEW_WORKER_REQUIRED/);
   verify(nginx); docker("kill", "--signal", "HUP", nginx);
   await settled(baseline.after.workers[0].pid); const applied = await observe("applied"); session.record(applied);
-  publish("revoked"); docker("exec", nginx, "/usr/sbin/nginx", "-t", "-c", "/control/nginx.conf");
+  const revokedConfig = publish("revoked"); docker("exec", nginx, "/usr/sbin/nginx", "-t", "-c", "/control/nginx.conf");
   verify(nginx); docker("kill", "--signal", "HUP", nginx);
   await settled(applied.after.workers[0].pid); session.record(await observe("revoked"));
   const proof = session.finish();
+  // Mandatory supplement AFTER the legacy session; never alter its counters or
+  // 120s deadline. Baseline B -> current C, positive client-2 / removed client.
+  const expected = { configSha256: revokedConfig.configSha256, generationMarker: revokedConfig.marker,
+    target: { address: peerAddress, sourceBindAddress: probeAddress, port: 8443, sidecarPort: 18894, exactHost: binding.exactHost, sharedHost: binding.sharedHost },
+    serverSpkiSha256: sha(new crypto.X509Certificate(binding.serverCertificateBytes).publicKey.export({ type: "spki", format: "der" })),
+    clientLeafSha256: revokedConfig.clientLeafDerSha256["client-2"], wrongClientLeafSha256: revokedConfig.clientLeafDerSha256.client };
+  const initial = { baseline: applied.after, expected }, upstreamBefore = upstream();
+  verifyInputs(); assert.deepEqual(owned.map(verify), containersBefore); assert.deepEqual(verifyNetwork(), networkBefore);
+  const helperPath = "/fixture/scripts/tests/fixtures/partner-nginx-application-correlation.mjs";
+  const budget = createLocalNginxApplicationBudget({ startedAt: started, startedMonotonic });
+  let correlation, peer;
+  try {
+  budget.check();
+  const hostChild = spawn("docker", ["exec", "-i", observer, "node", helperPath, "host"], { stdio: ["pipe", "pipe", "pipe"], signal: budget.signal });
+  ({ correlation, peer } = await exchangeLocalNginxGeneration(hostChild, initial, async () => {
+    // Only this fixed matrix gets its own bounded 65s command, not a global
+    // timeout relaxation. The collector itself stops within 60s.
+    budget.check();
+    const { stdout, stderr } = await promisify(execFile)("docker", ["exec", client, "node", helperPath, "probe"],
+      { encoding: "buffer", timeout: 65000, maxBuffer: 65536, signal: budget.signal });
+    budget.check();
+    assert.equal(stderr.length, 0); assert.equal(stdout.at(-1), 10);
+    return parseCanonicalIngressJson(stdout.subarray(0, -1), 65536);
+  }, budget.signal));
+  budget.check();
+  } finally { budget.close(); }
+  // No artifact creation in /out while the helper holds ancestor metadata.
+  const linked = linkLocalNginxApplicationCorrelation({ application: proof, correlation, peer, expected, upstreamBefore, upstreamAfter: upstream() });
+  assert.deepEqual(snapshot(), proof.records[2].result.snapshot);
   assert.deepEqual(owned.map(verify), containersBefore); assert.deepEqual(verifyNetwork(), networkBefore);
   verifyInputs();
+  assert.ok(Date.now() - started <= 180000);
   const proofBytes = JSON.stringify(proof, null, 2) + "\n"; write(path.join(results, "proof.json"), proofBytes);
-  Object.assign(receipt, { state: "PASS_LOCAL_APPLICATION_ONLY", proofSha256: sha(proofBytes), probeCount: 12, appliedGenerations: 3,
+  const linkedBytes = canonicalJson({ linked, correlation, peer }) + "\n"; write(path.join(results, "correlation-proof.json"), linkedBytes);
+  Object.assign(receipt, { state: "PASS_LOCAL_APPLICATION_WITH_CORRELATION_ONLY", proofSha256: sha(proofBytes), correlationProofSha256: sha(linkedBytes), probeCount: 23, appliedGenerations: 3,
     diskOnlyNegativeConfirmed: true, bindingRevocationConfirmed: true, independentNamespaceRefusalConfirmed: true });
     },
   });

@@ -2,6 +2,16 @@
 
 ## Уровни доказательств
 
+Продолжение после `40c7239`: локальный controlled-application runner включает
+обязательные11probes после revoked, held-fd READY→transport+EOF→RESULT pipe,
+отдельную peer namespace и observer+2. Generation/link suite **139/139 PASS**
+(50новых cases). Full sequential Partner run **700 tests / 676 PASS / 24 FAIL /
+0 skipped**: exact24failure names совпали с предыдущим checkpoint, новых0.
+Новые tests включают protocol errors/EOF/child close и delayed/outer-deadline
+regressions; synthetic metadata/streams не являются Docker/native/Nginx PASS.
+Root lint actual exit0:0errors/387warnings; scoped ESLint и driver syntaxPASS.
+XML0errors/0warnings; local links25PASS. Full release gateRED, nativeNOT_RUN.
+
 Локальное продолжение после `45d15a7`: [generation/log correlation](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md#локальная-проверка-поколения-и-корреляция-журнала).
 Новое: private held-fd reader, snapshot/ID/generation/admission correlation,
 host-session wiring к fixed Linux collector; production entry не открыт.

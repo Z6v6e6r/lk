@@ -5,10 +5,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { openPartnerNginxLogWindow } from "../partner_game_membership_nginx_log_window.mjs";
 import { buildLocalNginxCorrelationLogPolicy, evaluateLocalNginxGenerationCorrelation, createLocalNginxGenerationSession } from "../partner_game_membership_nginx_generation.mjs";
 import { PARTNER_INGRESS_REQUIRED_PROBES, verifyPartnerProductionIngress } from "../partner_game_membership_ingress_evidence.mjs";
 import { canonicalJson } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs";
+import { exchangeLocalNginxGeneration, linkLocalNginxApplicationCorrelation, createLocalNginxApplicationBudget } from "../partner_game_membership_nginx_application_link.mjs";
+import { serveLocalNginxGeneration } from "./fixtures/partner-nginx-application-correlation.mjs";
 
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const jsonl = rows => Buffer.from(rows.map(canonicalJson).join("\n") + "\n");
@@ -227,8 +231,8 @@ test("host-session wiring rejects non-Linux fixture without signals, network or 
   assert.throws(() => createLocalNginxGenerationSession({ baseline: data.baseline, expected: data.expected, logPath: f.logPath }), /LOCAL_NGINX_LINUX_FIXTURE_REQUIRED/);
 });
 
-test("host session reads fixed collector and held log, then finalizes once (synthetic proc metadata)", t => {
-  const f = logFixture(t), data = fixture(), mapping = new Map();
+function syntheticCollector(t, f) {
+  const mapping = new Map();
   const procStat = (pid, parent, ticks) => `${pid} (nginx) S ${[parent, ...Array(17).fill("0"), ticks].join(" ")}\n`;
   for (const [source, content] of Object.entries({
     "/control/nginx.pid": "10\n", "/control/nginx.conf": "new config",
@@ -239,18 +243,22 @@ test("host session reads fixed collector and held log, then finalizes once (synt
   })) {
     const target = path.join(f.root, `fixture-${mapping.size}`); fs.writeFileSync(target, content, { mode: 0o600 }); mapping.set(source, target);
   }
+  mapping.set("/out/correlation/access.jsonl", f.logPath); mapping.set("/out/correlation", f.root); mapping.set("/out", f.root);
   // Only these fixed synthetic files are substituted, not a fake collector return.
   // This is entrypoint wiring evidence, NOT a real Linux /proc observation.
   for (const method of ["openSync", "lstatSync", "readFileSync"]) {
     const original = fs[method]; t.mock.method(fs, method, (file, ...args) => original(mapping.get(file) ?? file, ...args));
   }
   const realpath = fs.realpathSync, readlink = fs.readlinkSync;
-  t.mock.method(fs, "realpathSync", file => file === "/control/nginx.conf" ? file : realpath(file));
+  t.mock.method(fs, "realpathSync", file => mapping.has(file) ? file : realpath(file));
   t.mock.method(fs, "readlinkSync", file => /^\/proc\/(self|10)\/ns\/(pid|net)$/.test(file) ? file.endsWith("/pid") ? "pidns" : "netns" : readlink(file));
   for (const [name, value] of [["platform", "linux"], ["arch", "x64"]]) {
     const descriptor = Object.getOwnPropertyDescriptor(process, name);
     Object.defineProperty(process, name, { ...descriptor, value }); t.after(() => Object.defineProperty(process, name, descriptor));
   }
+}
+test("host session reads fixed collector and held log, then finalizes once (synthetic proc metadata)", t => {
+  const f = logFixture(t), data = fixture(); syntheticCollector(t, f);
   let now = 1000; t.mock.method(Date, "now", () => now);
   const session = createLocalNginxGenerationSession({ baseline: data.input.baseline, expected: data.input.expected, logPath: f.logPath });
   t.after(() => session.close()); fs.appendFileSync(f.logPath, jsonl(data.rows)); now = 1500;
@@ -259,3 +267,155 @@ test("host session reads fixed collector and held log, then finalizes once (synt
   assert.equal(result.logWindow.suffixSha256, hash(jsonl(data.rows))); assert.equal(result.productionVerified, false);
   assert.throws(() => session.finish(data.input.transport), /NGINX_CORRELATION_SESSION_CLOSED/);
 });
+
+function linkedFixture() {
+  const f = fixture(), correlation = { ...evaluateLocalNginxGenerationCorrelation(f.input),
+    provenance: "LOCAL_HOST_READS_TRANSPORT_UNATTESTED", logWindow: {
+      state: "PREFIX_PRESERVED_SUFFIX_OBSERVED_NOT_APPEND_ONLY_PROOF", prefixBytes: 0, prefixSha256: hash(""),
+      suffixBytes: f.input.logBytes.length, suffixSha256: hash(f.input.logBytes), productionVerified: false } };
+  const peer = { transport: f.input.transport, networkNamespaceSha256: hash("peer namespace") };
+  const application = { state: "LOCAL_CONTROLLED_APPLICATION_VERIFIED_NOT_LIVE_PROOF", startedAt: 500, completedAt: 1000,
+    productionVerified: false, deployAuthorized: false, activationAuthorized: false, unapplied: { synthetic: true },
+    records: ["baseline", "applied", "revoked"].map(phase => ({ result: { phase, configSha256: f.input.expected.configSha256,
+      marker: f.input.expected.generationMarker, snapshot: structuredClone(f.input.after) }, observed: { upstreamAfter: 7,
+      probes: [{ clientLeafDerSha256: f.input.expected.wrongClientLeafSha256 }, { clientLeafDerSha256: f.input.expected.clientLeafSha256, networkNamespaceSha256: peer.networkNamespaceSha256 }] } })) };
+  return { application, correlation, peer, expected: f.input.expected, upstreamBefore: 7, upstreamAfter: 9 };
+}
+test("local synthetic supplement links revoked generation, previous leaf, namespace and independent +2 only", () => {
+  const result = linkLocalNginxApplicationCorrelation(linkedFixture());
+  assert.equal(result.state, "LOCAL_APPLICATION_TRANSPORT_LOG_LINKED_NOT_LIVE_PROOF");
+  assert.equal(result.productionVerified, false); assert.equal(result.provenance, "UNATTESTED_UNTIL_OWNED_RUNNER_EXECUTION");
+  assert.throws(() => verifyPartnerProductionIngress(result), /UNSUPPORTED_INGRESS_ADAPTER/);
+});
+for (const [name, mutate] of [
+  ["missing prior phases", f => f.application.records.pop()], ["no disk-only negative", f => { f.application.unapplied = null; }],
+  ["old marker", f => { f.correlation.generationMarker = hash("old"); }],
+  ["old worker snapshot", f => { f.correlation.snapshotSha256 = hash("old"); }],
+  ["other config", f => { f.expected.configSha256 = hash("other"); }],
+  ["swapped client leaf", f => { f.expected.clientLeafSha256 = f.expected.wrongClientLeafSha256; }],
+  ["wrong revoked leaf", f => { f.expected.wrongClientLeafSha256 = hash("other"); }],
+  ["same namespace", f => { f.peer.networkNamespaceSha256 = f.application.records[2].result.snapshot.networkNamespaceSha256; }],
+  ["different prior peer", f => { f.application.records[2].observed.probes[1].networkNamespaceSha256 = hash("other"); }],
+  ["hidden traffic before", f => { f.upstreamBefore++; }], ["unexpected dispatch", f => { f.upstreamAfter++; }],
+  ["forged admission count", f => { f.correlation.admittedHttpProbes = 3; }],
+  ["unmatched transport", f => { f.peer.transport.challenge = hash("other"); }],
+  ["earlier transport", f => { f.application.completedAt = 1500; }],
+  ["overlong aggregate window", f => { f.application.startedAt = -200000; }],
+  ["wrong target", f => { f.expected.target.address = "127.0.0.2"; }],
+  ["wrong suffix", f => { f.correlation.logWindow.suffixSha256 = hash("other"); }],
+  ["missing FD evidence", f => { delete f.correlation.logWindow; }],
+  ["extra evidence", f => { f.correlation.approved = true; }],
+  ["fake host provenance", f => { f.correlation.provenance = "UNATTESTED_LOCAL_INPUTS"; }],
+  ...["application", "correlation", "peer"].map(key => [`production ${key}`, f => { (key === "peer" ? f.peer.transport : f[key]).productionVerified = true; }]),
+]) test(`application link rejects ${name}`, () => { const f = linkedFixture(); mutate(f); assert.throws(() => linkLocalNginxApplicationCorrelation(f)); });
+
+function fakeChild() {
+  const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = () => { child.killed = true; };
+  return child;
+}
+const initialFor = () => { const f = fixture().input; return { baseline: f.baseline, expected: f.expected }; };
+const readyFor = initial => canonicalJson({ state: "READY_LOCAL_LOG_WINDOW", initialSha256: hash(canonicalJson(initial)) }) + "\n";
+const resultLine = () => canonicalJson({ state: "RESULT_LOCAL_LOG_WINDOW", result: linkedFixture().correlation }) + "\n";
+async function closeFake(child, code = 0, signal = null) {
+  child.stdout.end(); await new Promise(resolve => setImmediate(resolve)); child.emit("close", code, signal);
+}
+test("bounded parent pipe waits for READY, transport EOF, stdout EOF and successful close", async () => {
+  const child = fakeChild(), initial = initialFor(); let calls = 0, outgoing = "";
+  child.stdin.on("data", data => { outgoing += data.toString(); });
+  const promise = exchangeLocalNginxGeneration(child, initial, () => { calls++; return linkedFixture().peer; });
+  assert.equal(calls, 0); child.stdout.write(readyFor(initial));
+  await new Promise(resolve => child.stdin.once("finish", resolve)); assert.equal(calls, 1);
+  assert.equal(outgoing.split("\n").filter(Boolean).length, 2);
+  child.stdout.write(resultLine()); let done = false; promise.then(() => { done = true; });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(done, false);
+  await closeFake(child); const result = await promise; assert.equal(result.correlation.productionVerified, false);
+});
+for (const [name, output, code, signal] of [
+  ["wrong READY hash", canonicalJson({ state: "READY_LOCAL_LOG_WINDOW", initialSha256: hash("other") }) + "\n", 0, null],
+  ["RESULT before READY", resultLine(), 0, null], ["blank", "\n", 0, null], ["CRLF", readyFor(initialFor()).replace("\n", "\r\n"), 0, null],
+  ["duplicate keys", '{"state":"x","state":"y"}\n', 0, null], ["oversized output", "x".repeat(8193), 0, null],
+  ["truncated output", readyFor(initialFor()).trimEnd(), 0, null], ["nonzero close", "", 1, null], ["signal", "", null, "SIGTERM"],
+]) test(`parent pipe rejects ${name} before collection`, async () => {
+  const child = fakeChild(); let calls = 0;
+  const promise = exchangeLocalNginxGeneration(child, initialFor(), () => { calls++; return linkedFixture().peer; });
+  const rejection = assert.rejects(promise, /NGINX_APPLICATION_CHANNEL_/);
+  if (output) child.stdout.write(output); await closeFake(child, code, signal); await rejection; assert.equal(calls, 0);
+});
+for (const [name, tail, code] of [["extra RESULT", resultLine(), 0], ["late raw bytes", "private-error", 0], ["RESULT then failure", "", 1]]) {
+  test(`parent pipe rejects ${name}`, async () => {
+    const child = fakeChild(), initial = initialFor(); const promise = exchangeLocalNginxGeneration(child, initial, () => linkedFixture().peer);
+    const rejection = assert.rejects(promise, /NGINX_APPLICATION_CHANNEL_/); child.stdout.write(readyFor(initial));
+    await new Promise(resolve => child.stdin.once("finish", resolve)); child.stdout.write(resultLine() + tail);
+    await closeFake(child, code); await rejection;
+  });
+}
+test("collector failure closes stdin and rejects after actual child close without exposing raw errors", async () => {
+  const child = fakeChild(), initial = initialFor();
+  const promise = exchangeLocalNginxGeneration(child, initial, () => { throw new Error("private synthetic detail"); });
+  const rejection = assert.rejects(promise, error => error.message === "NGINX_APPLICATION_CHANNEL_FAILED");
+  child.stdout.write(readyFor(initial)); await new Promise(resolve => child.stdin.once("finish", resolve));
+  await closeFake(child, 1); await rejection;
+});
+test("unconfirmed child close at deadline is not successful cleanup", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = fakeChild(), promise = exchangeLocalNginxGeneration(child, initialFor(), () => assert.fail("no READY"));
+  const rejection = assert.rejects(promise, /CHANNEL_EXIT_UNCONFIRMED/);
+  t.mock.timers.tick(90000); assert.equal(child.stdin.writableEnded, true);
+  t.mock.timers.tick(5000); await rejection; assert.equal(child.killed, true);
+});
+for (const stage of ["READY", "RESULT", "close"]) test(`elapsed deadline rejects late ${stage} before timer callback`, async t => {
+  const original = performance.now.bind(performance); let elapsed = 0, calls = 0;
+  t.mock.method(performance, "now", () => original() + elapsed);
+  const child = fakeChild(), initial = initialFor(), promise = exchangeLocalNginxGeneration(child, initial, () => { calls++; return linkedFixture().peer; });
+  const rejection = assert.rejects(promise, /NGINX_APPLICATION_CHANNEL_FAILED/);
+  if (stage === "READY") elapsed = 90001;
+  child.stdout.write(readyFor(initial));
+  if (stage !== "READY") {
+    await new Promise(resolve => child.stdin.once("finish", resolve));
+    if (stage === "RESULT") elapsed = 90001;
+    child.stdout.write(resultLine()); elapsed = 90001;
+  }
+  await closeFake(child); await rejection; assert.equal(calls, stage === "READY" ? 0 : 1);
+});
+test("late supplement gets only remaining outer budget; cancellation closes pending host input", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const budget = createLocalNginxApplicationBudget({ startedAt: Date.now() - 179900, startedMonotonic: performance.now() - 179900 });
+  const child = fakeChild(), promise = exchangeLocalNginxGeneration(child, initialFor(), () => assert.fail("no ready"), budget.signal);
+  const rejection = assert.rejects(promise, /NGINX_APPLICATION_CHANNEL_FAILED/);
+  t.mock.timers.tick(101); assert.equal(budget.signal.aborted, true); assert.equal(child.stdin.writableEnded, true);
+  await closeFake(child, 1); await rejection; budget.close();
+});
+test("outer budget rejects expired start and wall rollback without waiting for watchdog", t => {
+  assert.throws(() => createLocalNginxApplicationBudget({ startedAt: Date.now() - 180001, startedMonotonic: performance.now() }), /OUTER_DEADLINE/);
+  const now = Date.now(), budget = createLocalNginxApplicationBudget({ startedAt: now, startedMonotonic: performance.now() });
+  t.mock.method(Date, "now", () => now - 1);
+  assert.throws(() => budget.check(), /OUTER_DEADLINE/); assert.equal(budget.signal.aborted, true); budget.close();
+});
+
+test("actual host stream entrypoint brackets synthetic Linux reads and a held log until EOF", async t => {
+  const f = logFixture(t), data = fixture(); syntheticCollector(t, f);
+  let now = 1000; t.mock.method(Date, "now", () => now);
+  const input = new PassThrough(), output = new PassThrough(); let received = "";
+  output.on("data", bytes => {
+    received += bytes;
+    if (received.split("\n").length === 2) { fs.appendFileSync(f.logPath, jsonl(data.rows)); now = 1500; input.end(canonicalJson(data.input.transport) + "\n"); }
+  });
+  const promise = serveLocalNginxGeneration(input, output); input.write(canonicalJson(initialFor()) + "\n"); await promise;
+  const lines = received.trimEnd().split("\n").map(JSON.parse); assert.equal(lines.length, 2);
+  assert.equal(lines[1].result.state, "LOCAL_NGINX_GENERATION_HTTP_CORRELATED_NOT_LIVE_PROOF");
+  assert.equal(lines[1].result.provenance, "LOCAL_HOST_READS_TRANSPORT_UNATTESTED");
+});
+for (const [name, tail] of [["missing transport", ""], ["partial transport", "{}"], ["blank transport", "\n"],
+  ["extra line", canonicalJson(fixture().input.transport) + "\n{}\n"], ["oversized input", "x".repeat(81921)]]) {
+  test(`host stream rejects ${name} and closes held fd`, async t => {
+    const f = logFixture(t); syntheticCollector(t, f); let closes = 0, opened;
+    const open = fs.openSync, close = fs.closeSync;
+    t.mock.method(fs, "openSync", (file, ...args) => { const fd = open(file, ...args); if (file === "/out/correlation/access.jsonl") opened = fd; return fd; });
+    t.mock.method(fs, "closeSync", fd => { if (fd === opened) closes++; return close(fd); });
+    const input = new PassThrough(), output = new PassThrough(); let received = "";
+    output.on("data", bytes => { received += bytes; input.end(tail); });
+    const promise = serveLocalNginxGeneration(input, output); input.write(canonicalJson(initialFor()) + "\n");
+    await assert.rejects(promise); assert.equal(closes, 1); assert.doesNotMatch(received, /RESULT_LOCAL_LOG_WINDOW/);
+  });
+}

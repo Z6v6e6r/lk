@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { performance } from "node:perf_hooks";
 import { generatePartnerNginx124Candidate } from "./partner_game_membership_nginx_candidate.mjs";
+import { buildLocalNginxCorrelationLogPolicy } from "./partner_game_membership_nginx_generation.mjs";
 
 const fail = code => { throw new Error(code); };
 const requireThat = (condition, code) => { if (!condition) fail(code); };
@@ -42,6 +43,7 @@ function configFor(binding, probeAddress, challenge, phase) {
   };
   replace("pid /tmp/nginx.pid;", "pid /control/nginx.pid;");
   replace('log_format partner escape=json \'{"requestId":', `log_format partner escape=json '{"generation":"${marker}","worker":"$pid","requestId":`);
+  replace("  access_log /out/nginx-access.jsonl partner;", `  access_log /out/nginx-access.jsonl partner;\n  ${buildLocalNginxCorrelationLogPolicy(marker)}  access_log /out/correlation/access.jsonl partner_correlation;`);
   replace("listen 127.0.0.1:8443", "listen 0.0.0.0:8443", 3);
   replace("      allow 127.0.0.1;\n      allow 127.0.0.3; # Second fixed source in the isolated source-limit fixture only.", `      allow ${probeAddress};`);
   if (phase === "revoked") {

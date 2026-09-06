@@ -7,6 +7,9 @@ production config/generation/log correlation и trusted production operator ещ
 После `45d15a7` добавлены [локальные generation/log consistency и host-session wiring](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md#локальная-проверка-поколения-и-корреляция-журнала).
 Это закрывает source-сопоставление snapshot/probe/log, но не trusted production
 operator, controlled application или внешнюю provenance; общий entry по-прежнему закрыт.
+Продолжение после `40c7239`: source runner controlled application дополнен обязательным
+11-probe supplement после revoked, held-fd pipe и +2 observer check. Это локальная
+интеграция исходников, не выполненное Nginx application или production attestation.
 После `b1839dd` реализуется [controlled-application candidate](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md):
 actual Linux master/workers, свежая метка поколения в log, disk-only negative,
 binding revocation и отдельный network namespace. Это локальная подготовка

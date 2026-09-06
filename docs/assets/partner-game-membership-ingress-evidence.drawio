@@ -198,4 +198,23 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Application correlation link">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LEGACY A / DISK B / HUP B / C&#xa;12 probes; leaf binding removed&#xa;Finish existing 120s session&#xa;Keep proof separate, no overall PASS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="OBSERVER: READY + INIT HASH&#xa;Baseline B / expected C&#xa;Fixed Linux reader + held log fd&#xa;No new files in /out during window" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SEPARATE PEER: FIXED 11&#xa;client-2 positive / revoked client&#xa;Actual TLS + socket identities&#xa;Namespace before / after" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="OBSERVER: EOF + FINAL CHECK&#xa;Exact transport / log matching&#xa;Close held fd; emit RESULT&#xa;Parent requires EOF + close(0)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="OUTER CHECKS + CLEANUP&#xa;Same C snapshot / counter +2&#xa;Source, copies, containers, network&#xa;Remaining 180s budget; fail closed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="LOCAL SOURCE INTEGRATION&#xa;23 attempts required in future run&#xa;Native NOT_RUN; no live attestation&#xa;Production / deploy / activation OFF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="same owned runner" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="only after READY" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="one canonical line + EOF" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="no success on RESULT alone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="not a production receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

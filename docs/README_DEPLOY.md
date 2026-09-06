@@ -1035,3 +1035,8 @@ JSON в packet или объявлять выполненной по synthetic f
 collector и приватное окно журнала, но внешний transport/baseline не аттестованы.
 Новый log fragment/public probe ID не устанавливаются на сервер автоматически.
 См. `docs/PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md`, раздел generation/correlation.
+С 7 сентября controlled-application source runner включает обязательный supplement
+с отдельным client namespace, held-fd observer helper и counter+2 после legacy revoke.
+Новый success state относится только к будущему исполненному owned fixture (23probes),
+не к этим unit tests. Native rehearsal остаётся отложенным, production entry закрыт.
+См. `docs/PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md`, дополнение после40c7239.

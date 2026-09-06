@@ -1,11 +1,14 @@
 # Nginx: проверка контролируемого применения конфигурации
 
-**Текущий статус, 2026-09-06:** пользователь отложил native Linux/amd64 rehearsal
+**Текущий статус, 2026-09-07:** пользователь отложил native Linux/amd64 rehearsal
 и установку Docker: `DEFERRED_BY_USER`, native application `NOT_RUN`. Предыдущие
 FAILED receipts и диагностический COMMAND_MISMATCH сохранены; ни collector, ни
 production verifier не ослаблены. Продолжение независимо от этого теста —
 [офлайн-комплект для партнёра](partner-game-membership-kit/README.md), не deploy.
 Ниже остаются требования и исторические результаты, а не новые runtime PASS.
+
+После `40c7239` выполнено [локальное source-связывание transport/generation/log](#дополнение-после-40c7239-обязательная-корреляция-после-отзыва).
+Оно не означает запуск стенда или снятие native/production gate.
 
 Продолжение Partner-ветки после `b1839dd`, без изменения боевой среды.
 Это **локальная реализация проверяемого механизма применения**, не готовый
@@ -14,6 +17,9 @@ production topology, доверенный оператор и внешняя van
 Локальный результат нельзя передать этому входу для обхода блокировки.
 
 ## Почему нужны и поколение, и реальные запросы
+
+Этот раздел описывает исходную трёхфазную матрицу. Новый обязательный supplement
+и отдельный журнал описаны ниже; исторические результаты не пересчитаны.
 
 `nginx -t/-T` проверяют файлы; они не читают конфигурацию из памяти workers.
 При неудачном HUP Nginx может продолжать работу с прежней конфигурацией. Смена PID
@@ -308,7 +314,7 @@ direct-sidecar refusal. Эта последовательность не раз�
    действия при оставшихся старых workers. Verifier не получает права самовольно
    их завершать или выполнять rollback. Cooperative lock не защищает от root,
    который его игнорирует; эта граница должна быть явно принята.
-3. **P0 — security/партнёр:** выбрать независимую внешнюю vantage, custody ключей,
+3. **P0 — security/наша инфраструктура:** выбрать независимую внешнюю vantage, custody ключей,
    approval/trust pins и способ связать её фактические probes с текущим challenge.
    Подписанный caller JSON и существующий declared binding недостаточны.
 4. **P0 — security:** согласовать binding revocation против CA CRL/OCSP, поведение
@@ -321,3 +327,105 @@ direct-sidecar refusal. Эта последовательность не раз�
 `LOCAL_CONTROLLED_APPLICATION_VERIFIED_NOT_LIVE_PROOF`; deploy/activation false.
 Следующая интеграция с production collector должна использовать тот же проверяемый
 механизм, но не объявлять fixture paths/namespace/custody боевыми.
+
+## Дополнение после 40c7239: обязательная корреляция после отзыва
+
+Статус: **SOURCE_IMPLEMENTED / NATIVE_NOT_RUN**, не новый runtime receipt.
+Существующий operator теперь связывает исполнение трёх фаз с новыми
+`partner_game_membership_nginx_generation.mjs` / `nginx_log_window.mjs` и fixed11
+TLS/TCP collector. CLI flags, native identity predicate, image pins, network
+allocation, resource budgets и owned cleanup не ослабляются.
+
+### Последовательность source runner
+
+1. Создать собственные `results/correlation/` mode0700 и пустой `access.jsonl`
+   mode0600 **до Nginx startup**. Второй unconditional `access_log` с закрытым
+   `partner_correlation` format добавлен ко всем трём конфигурациям; legacy log
+   и его rate/concurrency checks сохраняются. Метки в обоих форматах одинаковы.
+2. Выполнить прежние A → B только на диске → HUP B → HUP C с исключённым leaf.
+   Завершить legacy session сразу: её12probes/counters и120s deadline не изменены.
+   Legacy proof пока существует только в памяти, не является общим PASS.
+3. Дополнительный observer helper получает canonical init: actual applied snapshot
+   B и expected revoked config/marker C, fixed target и client identities. Он
+   вызывает неизменённый Linux collector, открывает один held fd и сообщает
+   `READY_LOCAL_LOG_WINDOW` с SHA256 canonical init. Parent принимает ровно такой READY.
+4. Только после READY client container запускает source-owned fixed11 collector.
+   Positive identity — `client-2`; wrongClient — прежний `client`, уже исключённый
+   из binding, но всё ещё CA-valid. Это проверка удаления binding, не CRL/OCSP.
+   Адреса только из собственного allocation `.2/.3`, порты8443/18894 и `.invalid`
+   hosts фиксированы. Actual client net namespace читается до/после matrix.
+5. Parent отправляет **одну** canonical transport JSON line + EOF в тот же helper.
+   Helper захватывает свежий suffix, сверяет generation/probes/log, финальные
+   process/filesystem identities, закрывает fd и возвращает RESULT. Parent требует
+   stdout EOF и child close с code0/no signal; одна RESULT строка ещё не успех.
+6. Связать результат с revoked snapshot/config/marker, фактически собранным
+   transport hash, leaf identities и прежним separate peer namespace. Independent
+   observer count обязан увеличиться ровно на2 после завершённой legacy matrix;
+   никакой поправки прошлых phase counters не выполняется.
+7. Повторить container/network/source/copy/config checks. Лишь после закрытия окна
+   сохранить отдельные legacy `proof.json` и `correlation-proof.json`, затем выполнить
+   прежний exact-owned cleanup. Новый успешный receipt state —
+   `PASS_LOCAL_APPLICATION_WITH_CORRELATION_ONLY`, всего23попытки (12+11).
+   Ошибка correlation/closure/cleanup не допускает fallback к старому PASS.
+
+### Процесс, ввод и cleanup
+
+Новый `scripts/tests/fixtures/partner-nginx-application-correlation.mjs` имеет только
+два взаимоисключающих режима: `host` / `probe`. Host читает фиксированный
+`/out/correlation/access.jsonl`; `logPath`, commands, env, hooks или verdict не
+передаются по pipe. Probe читает только собственные synthetic fixture certificates
+и keys. Они не являются credentials rusPadelUp и не передаются в parent stdout.
+Private key buffers очищаются в finally; это не обещание OpenSSL secure erasure.
+
+Protocol bounds: init≤16KiB, transport≤64KiB, общий input≤80KiB, output≤8KiB;
+canonical UTF8/JSON, LF-only, без duplicate keys/blank/extra/truncated строк.
+Host окно≤90s, parent watchdog90s + до5s ожидания аварийного close, transport command
+≤65s при внутреннем collector≤60s. Общий operator deadline180s сохраняется;
+прежние Docker commands по-прежнему имеют20s timeout. Для supplement отдельный
+общий AbortSignal ограничен **остатком** исходных180s: он отменяет обе новые CLI
+ветки и закрывает pipe. Monotonic/wall elapsed проверки перед READY/collect/send/
+RESULT/close и dispatch не зависят только от своевременности timer callback;
+clock rollback также приводит к отказу. Cleanup grace не считается рабочим временем.
+
+Ошибка collector закрывает stdin; helper отказывает на incomplete input и закрывает
+held fd. Собственный helper timer уничтожает input при зависшем caller. Kill или
+timeout локального `docker exec` **не доказывает**, что процесс внутри контейнера
+исчез. Неподтверждённый close — FAILED; outer finally обязан завершить и удалить
+свои exact-owned containers/network. Прав на host Nginx/PID/systemd это не даёт.
+
+Reader фиксирует metadata **всех** ancestors, включая `/out`. Между READY и RESULT
+нельзя создавать/удалять даже соседние artifact-файлы в `/out`. Сохранение результатов
+идёт после close. Старые записи legacy probes с пустым probe ID находятся в initial
+prefix; в свежем suffix пустые/лишние ID или иной трафик отвергаются. Conditional
+logging и пропуск неудобных строк не добавлены. Late/неполный log приводит к отказу,
+не к повторному capture и не к обещанию flush/durability.
+
+Copy layout сохраняет относительные пути generation/log-window/probes/Linux/ingress
+modules и transitive `node-red/custom-nodes/.../partner-game-membership-core.mjs`.
+Новый helper и host link module входят в current source/copy closure. Старые записи
+про10source/9hashes выше — исторические: они не доказывают новую source closure.
+
+### Что именно доказывают локальные тесты
+
+Stream-тесты проверяют реальный host entrypoint и held fd над **синтетическими**
+`/proc`/filesystem metadata; parent protocol проверяется через тестовые streams/child
+events. Это не запуск Docker или Nginx. Pure link result сохраняет
+`UNATTESTED_UNTIL_OWNED_RUNNER_EXECUTION`; все production/deploy/activation flags false.
+Сам счётчик observer подтверждает только synthetic upstream, не Partner API/HMAC,
+Node-RED, Mongo или Viva. Public API replay/idempotency контракт не менялся.
+
+Native rehearsal остаётся DEFERRED_BY_USER/NOT_RUN. Actual Nginx log output/flush,
+shared-vhost client certificate behaviour, права внутри mounts и process transition
+требуют будущего разрешённого физического запуска. Общий production entry остаётся
+`UNSUPPORTED_INGRESS_ADAPTER`; новых анкет или согласований с партнёром не требуется.
+
+Инфографика: страница `Application correlation link` в существующем drawio.
+XML-only fallback: PNG/visual QA не повторяется при прежнем Electron sandbox blocker.
+
+Финальные локальные проверки 7 сентября: **139/139 targeted PASS** (50новых cases),
+полный sequential Partner **700 tests / 676 PASS / 24 FAIL / 0 skipped**. Все24
+failed names совпадают с прошлым checkpoint, новых0; full release gateRED.
+Scoped ESLint и driver syntaxPASS; root lint фактически exit0,0errors/387warnings.
+Drawio XML0errors/0warnings;25local document linksPASS. Build не повторяется из-за
+прежнего неизменного17missingVITE preflight. Finding по deadlines закрыт обоими
+read-only re-reviews; это source review, а не выполненная physical матрица.
