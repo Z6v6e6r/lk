@@ -7,6 +7,7 @@ import {
 } from "../consts/api_config";
 import {
   apiFetchSubscriptionDailyLimitBookings,
+  apiFetchSubscriptions,
   apiFetchSubscriptioName,
   apiReleaseSubscriptionBookingClaim,
   apiVerifyBookingCancellation,
@@ -144,6 +145,7 @@ export interface TournamentVivaProduct {
   visitsTotal: number | null;
   source: "client-subscription" | "client-one-time" | "one-time" | "subscription" | "custom-tournament-energy";
   raw: unknown;
+  lk1MoneyDiscountCandidate?: boolean;
   priceLabel?: TournamentCustomPricingProductFields["priceLabel"];
   baseAmount?: TournamentCustomPricingProductFields["baseAmount"];
   discountAmount?: TournamentCustomPricingProductFields["discountAmount"];
@@ -2242,6 +2244,21 @@ export async function apiFetchTournamentVivaCheckout(
   );
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
   const subscriptions = subscriptionsResult.error ? [] : normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription");
+  const category = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(exercise);
+  if (category === "group_training" || category === "tournament") {
+    // A display candidate only: the gateway re-reads the same actor-owned
+    // source and active rule before any discount or payment. Do not mutate the
+    // provider's availableClientSubscriptions or offer a subscription visit.
+    const owned = await apiFetchSubscriptions({ includeFinished: true, size: 1000 });
+    if (!owned.error) {
+      const candidates = collectLk1MoneyDiscountCandidates(owned.data, profileResult.data.id, exercise);
+      for (const candidate of candidates) {
+        const index = clientSubscriptions.findIndex((item) => item.id === candidate.id);
+        if (index >= 0) clientSubscriptions[index] = candidate;
+        else clientSubscriptions.push(candidate);
+      }
+    }
+  }
   const resolvedClientSubscriptions = await resolveClientSubscriptionProductNames(
     clientSubscriptions,
     profileResult.data.phone,
@@ -2261,6 +2278,70 @@ export async function apiFetchTournamentVivaCheckout(
     error: null,
     status: exerciseResult.status || profileResult.status,
   };
+}
+
+function collectLk1MoneyDiscountCandidates(
+  payload: unknown,
+  actorId: string,
+  exercise: Record<string, unknown>,
+): TournamentVivaProduct[] {
+  const root = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown> : null;
+  const rows = Array.isArray(payload) ? payload : root?.content;
+  if (!Array.isArray(rows) || (root && (root.last === false
+    || (typeof root.totalElements === "number" && root.totalElements !== rows.length)))) return [];
+  const moscowDate = (value: unknown): string | null => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T| |$)/.test(value)) return null;
+    const dateKey = value.slice(0, 10);
+    const calendarDay = new Date(`${dateKey}T00:00:00Z`);
+    if (!Number.isFinite(calendarDay.getTime()) || calendarDay.toISOString().slice(0, 10) !== dateKey) return null;
+    if (value.length === 10) return dateKey;
+    const instant = Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}+03:00`);
+    return Number.isFinite(instant) ? new Date(instant + 3 * 60 * 60 * 1000).toISOString().slice(0, 10) : null;
+  };
+  const targetDate = moscowDate(exercise.timeFrom || exercise.startsAt);
+  const today = moscowDate(new Date().toISOString());
+  if (!targetDate || !today) return [];
+  const lifecycleInstant = (value: unknown, endOfDay = false, roundUp = !endOfDay): number | null => {
+    if (typeof value !== "string" || !moscowDate(value)) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return Date.parse(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}+03:00`);
+    const timestamp = /^\d{4}-\d{2}-\d{2}[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.(\d{1,6}))?)?(?:Z|[+-]\d{2}:?\d{2})?$/.exec(value);
+    if (!timestamp) return null;
+    const milliseconds = value.replace(/(\.\d{3})\d+/, "$1");
+    const instant = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/.test(milliseconds) ? milliseconds : `${milliseconds}+03:00`);
+    // Round activation up and expiry down; target bounds must not widen eligibility either.
+    const ceiling = roundUp && /[1-9]/.test((timestamp[1] || "").slice(3)) ? 1 : 0;
+    return Number.isFinite(instant) ? instant + ceiling : null;
+  };
+  const targetStart = lifecycleInstant(exercise.timeFrom || exercise.startsAt, false, false);
+  const targetEnd = lifecycleInstant(exercise.timeTo || exercise.endsAt);
+  const now = Date.now();
+  if (targetStart === null || targetEnd === null || targetEnd <= targetStart) return [];
+  const candidates: TournamentVivaProduct[] = [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const product = item.product && typeof item.product === "object" ? item.product as Record<string, unknown> : null;
+    const ids = [item.clientSubscriptionId, item.subscriptionId, item.id].filter((id) => id !== undefined);
+    const products = [item.productId, item.subscriptionProductId, item.templateId, product?.id, product?.uuid, product?.productId]
+      .filter((id) => id !== undefined);
+    const client = item.client && typeof item.client === "object" ? item.client as Record<string, unknown> : null;
+    const owners = [item.clientId, client?.id].filter((id) => id !== undefined);
+    const purchases = [item.purchaseAt, item.purchaseDate].filter((date) => date !== undefined).map(moscowDate);
+    const activation = lifecycleInstant(item.activationDate);
+    const expiry = lifecycleInstant(item.expirationDate, true);
+    if (!ids.length || ids.some((id) => typeof id !== "string" || !id.trim()) || new Set(ids).size !== 1
+      || !products.length || products.some((id) => id !== "db7a5250-7369-4f43-8ac5-9111be24bc74")
+      || owners.some((id) => id !== actorId) || !purchases.length || purchases.some((date) => !date || date < "2026-09-01")
+      || new Set(purchases).size !== 1 || item.status !== "ACTIVE" || activation === null || expiry === null
+      || activation > now || activation > targetStart || expiry < now || expiry < targetEnd - 1
+      || item.holdUntil || item.frozenUntil || item.isFrozen === true) continue;
+    candidates.push({ id: ids[0] as string, name: typeof item.name === "string" ? item.name : "Падел.Дружба.ХАБ",
+      source: "client-subscription", type: "SUBSCRIPTION", cost: null, visitsTotal: null,
+      lk1MoneyDiscountCandidate: true,
+      priceLabel: "Денежная скидка — проверяется сервером; без списания посещения", raw });
+  }
+  return candidates.filter((item) => candidates.filter((other) => other.id === item.id).length === 1);
 }
 
 export async function apiFetchTournamentVivaPublicCheckout(
@@ -2529,6 +2610,33 @@ async function apiCreateTournamentCustomEnergyTransaction(
   };
 }
 
+function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): TournamentVivaTransactionResult | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const value = payload as Record<string, unknown>;
+  if (value.state !== "CONFIRMED" || typeof value.bookingId !== "string" || !value.bookingId.trim()) return null;
+  const hasMoneyFields = ["toPayMinor", "toPay", "paid", "paymentUrl", "transactionId"]
+    .some((key) => value[key] !== undefined);
+  // Legacy CONFIRMED means subscription-only. The additive mixed contract must
+  // prove an exact amount and checkout; a booking alone never proves payment.
+  if (!hasMoneyFields) return { bookingId: value.bookingId, paymentUrl: null,
+    toPay: 0, paid: true, paymentExpiresAt: null, raw: payload };
+  const minor = value.toPayMinor;
+  if (typeof minor !== "number" || !Number.isSafeInteger(minor) || minor < 0
+    || (value.toPay !== undefined && value.toPay !== minor / 100)) return null;
+  let paymentUrl: string | null = null;
+  if (minor > 0) {
+    if (value.paid !== false || typeof value.transactionId !== "string" || !value.transactionId.trim()
+      || typeof value.paymentUrl !== "string") return null;
+    try {
+      const url = new URL(value.paymentUrl);
+      if (url.protocol !== "https:" || url.username || url.password) return null;
+      paymentUrl = value.paymentUrl;
+    } catch { return null; }
+  } else if (value.paid !== true || (value.paymentUrl !== null && value.paymentUrl !== undefined)) return null;
+  return { bookingId: value.bookingId, paymentUrl, toPay: minor, paid: minor === 0,
+    paymentExpiresAt: null, raw: payload };
+}
+
 async function apiCreateTournamentVivaBookingFromSubscription(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -2541,6 +2649,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   if (
     targetDate
     && targetCategory
+    && params.product.lk1MoneyDiscountCandidate !== true
     && subscriptionPlanAllowsDailyLimitCategory(params.product, targetCategory)
   ) {
     const bookingsResult = await apiFetchSubscriptionDailyLimitBookings({ size: 1000 });
@@ -2621,15 +2730,14 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     };
   }
 
+  const payment = normalizeConfirmedSubscriptionBookingPayment(response.data);
+  if (!payment) {
+    return { data: null, error: { status: 202,
+      message: "Запись создана; доплата требует подтверждения. Не создавайте повторную запись.",
+      raw: response.data }, status: 202 };
+  }
   return {
-    data: {
-      paymentUrl: null,
-      bookingId,
-      toPay: 0,
-      paid: true,
-      paymentExpiresAt: null,
-      raw: response.data,
-    },
+    data: payment,
     error: null,
     status: response.status,
   };

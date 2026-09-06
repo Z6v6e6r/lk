@@ -1271,7 +1271,17 @@ export default function GroupSchedulePage({
                                 onClick={() => void completeRegistration(selectedTraining, checkout, product)}
                                 disabled={actionLoading}
                               >
-                                <span>{product.name}</span>
+                                <span>
+                                  {product.name}
+                                  {product.lk1MoneyDiscountCandidate === true && (
+                                    <>
+                                      <br />
+                                      <span>
+                                        Потребуется оплата со скидкой. Посещение не списывается.
+                                      </span>
+                                    </>
+                                  )}
+                                </span>
                                 <div className="tournament-signup-payment-option-meta">
                                   <strong>{formatProductValidity(product)}</strong>
                                 </div>

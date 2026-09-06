@@ -150,6 +150,15 @@ export interface ManagedSubscriptionUsageSnapshot {
   monthlyUsed: number;
   futureBookings: number;
   activeServiceStartsAt: string[];
+  usedOrReservedFreeMinutesToday?: number;
+}
+
+export interface Lk1SubscriptionPolicyFields {
+  maxActiveBookings: number;
+  freeGameMinutesPerDay: number;
+  gameOverageDiscountPercent: number;
+  groupTrainingDiscountPercent: number;
+  tournamentDiscountPercent: number;
 }
 
 export interface ManagedSubscriptionPolicyEvaluationInput {
@@ -159,12 +168,29 @@ export interface ManagedSubscriptionPolicyEvaluationInput {
   instance: ManagedSubscriptionRuntimeInstance;
   target: ManagedSubscriptionResolvedTarget;
   usage: ManagedSubscriptionUsageSnapshot;
+  // Server projection only; not a browser DTO or permission to dispatch writes.
+  lk1Policy?: Lk1SubscriptionPolicyFields;
 }
 
 export interface ManagedSubscriptionPolicyBlocker {
   code: string;
   message: string;
   details: Record<string, unknown> | null;
+}
+
+// Separate server-only product binding; never put a Viva product UUID into a
+// CUP subscriptionTypeId or require a browser-supplied purchase/price snapshot.
+export interface Lk1ProductPolicyEvaluationInput {
+  evaluatedAt: string;
+  action: ManagedSubscriptionAction;
+  lk1Policy: Lk1SubscriptionPolicyFields;
+  lk1ProductBinding: {
+    policyProductId: string;
+    ownedProductId: string;
+    clientSubscriptionId: string;
+  };
+  target: ManagedSubscriptionResolvedTarget & { priceSource: "VIVA_EXISTING_TARIFF" };
+  usage: ManagedSubscriptionUsageSnapshot;
 }
 
 export interface ManagedSubscriptionAppliedBenefit {
@@ -194,4 +220,12 @@ export interface ManagedSubscriptionPolicyDecision {
   dailyLimit: number | null;
   benefit: ManagedSubscriptionAppliedBenefit | null;
   evaluatedAt: string;
+  subscriptionVisitCount?: 0 | 1;
+  gameMinutes?: {
+    localDate: string;
+    usedOrReservedFreeMinutesToday: number;
+    freeMinutes: number;
+    paidOverageMinutes: number;
+    discountPercent: number;
+  };
 }
