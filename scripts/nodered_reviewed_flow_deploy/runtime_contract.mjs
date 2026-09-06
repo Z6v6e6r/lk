@@ -71,6 +71,54 @@ const assertDeploymentId = (value) => {
   return normalized;
 };
 
+const normalizeActivationBoundary = (
+  value,
+  liveById,
+  candidateById,
+  allowedChangeIds,
+  allowedAdditionIds,
+) => {
+  if (value === null || value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Activation boundary must be an object");
+  }
+  const nodeId = String(value.nodeId || "").trim();
+  const notBefore = String(value.notBefore || "").trim();
+  const parsed = Date.parse(notBefore);
+  if (!nodeId || !candidateById.has(nodeId)) throw new Error("Activation boundary node is missing from candidate");
+  if (!allowedChangeIds.has(nodeId) && !allowedAdditionIds.has(nodeId)) {
+    throw new Error("Activation boundary node must be part of the exact reviewed change");
+  }
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(notBefore)
+    || !Number.isFinite(parsed)
+    || new Date(parsed).toISOString() !== notBefore
+  ) throw new Error("Activation boundary must use a canonical UTC timestamp");
+  const node = candidateById.get(nodeId);
+  if (node.type !== "function") throw new Error("Activation boundary node must be a function");
+  const marker = `const FUTURE_GAME_WRITES_NOT_BEFORE = "${notBefore}";`;
+  const source = String(node.func || "");
+  if (source.split(marker).length !== 2) {
+    throw new Error("Activation boundary literal is not pinned exactly once in candidate function");
+  }
+  if (String(liveById.get(nodeId)?.func || "").includes(marker)) {
+    throw new Error("Activation boundary literal is already present in the reviewed source");
+  }
+  if (
+    (value.formatVersion !== undefined && value.formatVersion !== 1)
+    || (
+      value.rollbackPolicy !== undefined
+      && value.rollbackPolicy !== "forbid-source-before-runtime-cutover"
+    )
+  ) throw new Error("Activation boundary contract content mismatch");
+  return {
+    formatVersion: 1,
+    nodeId,
+    notBefore,
+    rollbackPolicy: "forbid-source-before-runtime-cutover",
+  };
+};
+
 export function buildFunctionOnlyContract({ liveBytes, candidateBytes, deploymentId, allowedNodeIds }) {
   const normalizedDeploymentId = assertDeploymentId(deploymentId);
   const allowed = [...new Set((allowedNodeIds || []).map((value) => String(value || "").trim()))];
@@ -135,6 +183,7 @@ export function buildExactGraphContract({
   deploymentId,
   allowedChanges,
   allowedAdditionIds,
+  activationBoundary = null,
 }) {
   const normalizedDeploymentId = assertDeploymentId(deploymentId);
   const normalizedChanges = (allowedChanges || []).map((change) => ({
@@ -196,6 +245,13 @@ export function buildExactGraphContract({
     candidateFlow,
     normalizedAdditionIds,
   );
+  const normalizedActivationBoundary = normalizeActivationBoundary(
+    activationBoundary,
+    liveById,
+    candidateById,
+    new Set(normalizedChanges.map(({ id }) => id)),
+    new Set(normalizedAdditionIds),
+  );
 
   return {
     formatVersion: EXACT_GRAPH_CONTRACT_FORMAT_VERSION,
@@ -217,6 +273,7 @@ export function buildExactGraphContract({
       type: candidateById.get(id).type,
       candidateNodeSha256: nodeSha256(candidateById.get(id)),
     })),
+    ...(normalizedActivationBoundary ? { activationBoundary: normalizedActivationBoundary } : {}),
   };
 }
 
@@ -262,6 +319,7 @@ export function validateExactGraphContract({ liveBytes, candidateBytes, contract
     deploymentId: contract.deploymentId,
     allowedChanges: allowedChanges.map((change) => ({ id: change?.id, fields: change?.fields })),
     allowedAdditionIds: allowedAdditions.map((addition) => addition?.id),
+    activationBoundary: contract.activationBoundary ?? null,
   });
   if (!isDeepStrictEqual(rebuilt, contract)) throw new Error("Exact-graph contract content mismatch");
   return rebuilt;

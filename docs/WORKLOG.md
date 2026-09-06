@@ -2087,3 +2087,32 @@
   cutover packet from being applied as a standalone command.
 - This is isolated source-only work. No production flow, runtime, MongoDB, Viva,
   payment, fence, ACL, ingress, or user data was changed.
+
+## 2026-09-06 — Future game visibility writer (local stage 1)
+
+- Chose the forward-only repair: existing invisible games remain untouched and
+  no Mongo migration principal, writer barrier, or backfill is used.
+- Added an authenticated create/draft ingress that verifies the current Viva
+  profile and the organizer's exact provider booking tuple and settlement.
+- Added server-owned tenant identity, deterministic dedupe `_id`, numeric
+  revision, canonical paid/archive state, majority-journaled write
+  acknowledgement, and exact readback.
+- Kept new referenced card payment confirmation behind Viva transaction readback
+  and a durable tenant-bound claim. Direct create accepts provider-priced
+  zero-due and subscription bookings plus an already card-paid exact cabinet
+  booking only when no payment reference is present; Viva minor units and RUB
+  currency are checked against the LK amount. Exact provider payment type
+  `SUBSCRIPTION` takes precedence over a simultaneous positive transaction
+  status; substring variants remain fail-closed.
+- Made an ambiguous confirmation acknowledgement recover through an exact
+  tenant, revision, payment, transaction, booking, and exercise readback; an
+  exact retry returns the committed paid revision.
+- Added activation-aware reviewed-flow recovery with a protected durable
+  candidate backup and forward `reconcile-current` action for restart failures
+  near or after the activation boundary. Slow restarts recheck the full soak and
+  rollback lead before refreshing the lease; verified reconciliation receipts
+  resume lease release or success publication without another restart.
+- Frontend game writes now forward the current bearer. Rollout order requires
+  the compatible frontend release before the Node-RED ingress rewire.
+- No production flow, runtime, MongoDB, Viva, payment, lease, or user data was
+  changed.
