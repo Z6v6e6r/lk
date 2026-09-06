@@ -55,7 +55,7 @@ network namespace. Timeout, reset, ошибка bind или отсутствие
   подменяет worker identity. Config custody/hash проверяются до/после snapshot.
   Пути фиксированы для стенда; это не проверка Linux ACL/mount custody production.
 - `scripts/rehearse_partner_game_membership_nginx_application.mjs`: единственный
-  source-owned operator для своих Docker IDs. Создаёт окружение, публикует три
+  source-owned operator для своих Docker IDs. В application mode создаёт окружение, публикует три
   точных config-версии, выполняет два HUP и собирает реальные observations.
   Не умеет выбирать host PID, systemd unit, произвольную команду или SSH-цель.
 - `scripts/tests/fixtures/partner-nginx-application-peer.cjs`: synthetic HTTP
@@ -134,7 +134,7 @@ hashes, две копии collector/peer и пять public certificate hashes �
 Эта сверка подтверждает входы неуспешного запуска, не полный before/after
 runtime proof. Чужие Docker IDs сохранены, 10 running healthy / 5 stopped.
 
-**Текущий blocker:** фактические command line и роль отказавшего процесса не
+**Blocker на завершении второго run:** фактические command line и роль отказавшего процесса не
 попали в sanitized receipt; первопричина несовпадения ещё не установлена.
 Docker daemon — `linux/aarch64`, pinned images — `linux/amd64`; различие архитектур
 зафиксировано, но не доказано причиной отказа. Следующий отдельный bounded
@@ -144,7 +144,65 @@ diagnostic должен сохранить безопасные сведения
 добавлять capabilities или считать Docker init PID вместо Nginx worker.
 Новых runtime запусков до отдельного согласования нет; heavy-slot RELEASED.
 
-Схема: страница `Controlled Nginx application` в
+## Отдельная диагностика после 3314cd8: причина установлена
+
+После отдельного согласования выполнен один diagnostic-only run, завершённый
+`2026-09-06T15:10:28.486Z`. Итог **DIAGNOSTIC_COMPLETE_NOT_APPLICATION_PASS** /
+`KNOWN_COMMAND_FORM_REJECTED`, rejected role `master`. Это закрывает локальную
+диагностику, но не blocked controlled-application stage и не выпуск.
+
+| Фактическое наблюдение | Вывод в пределах этого стенда |
+| --- | --- |
+| Master и child worker: одинаковый `ORIGINAL_NGINX_ARGV`, 54 bytes, 5 NUL, один trailing NUL, без space padding | Это исходный argv, не разные role titles; worker/draining state не доказаны |
+| До/после одинаковы PID/start/parent, executable, namespace, boot/config hashes | Наблюдавшееся несовпадение не объясняется изменением этих snapshots |
+| Hash `/proc/.../exe` link совпал с точной известной строкой `/run/rosetta/rosetta`, не `/usr/sbin/nginx` | В этом emulated fixture виден emulator executable, не ожидаемый Nginx executable view |
+| Неизменённый strict collector вернул `NGINX_PROCESS_COMMAND_MISMATCH` | Отказ сохранён; diagnostic classifier не разрешает доступ |
+
+Daemon здесь `linux/aarch64`, pinned images — `linux/amd64`. Docker документирует
+Rosetta как механизм эмуляции x86_64/amd64 на Apple Silicon; Nginx 1.24 устанавливает
+process title в своём process cycle. Это контекст, не замена actual receipt и не
+доказательство универсального дефекта Rosetta или гарантированного успеха native.
+[Docker settings](https://docs.docker.com/desktop/settings-and-maintenance/settings/),
+[Nginx 1.24 process cycle](https://raw.githubusercontent.com/nginx/nginx/release-1.24.0/src/os/unix/ngx_process_cycle.c).
+
+Новый `scripts/partner_game_membership_nginx_identity_diagnostic.mjs` читает только
+bounded собственные PID. Сохраняет static known-form enum, длины/counts/hashes,
+но не raw argv/env/path/error text. Неизвестная форма — `UNKNOWN_REDACTED`;
+exe/namespace read failure — `DIAGNOSTIC_INCOMPLETE` с allowlisted stage/role/code.
+Даже при partial capture неизменённый strict collector вызывается; частичная
+identity не публикуется как доказанная. Actual strict acceptance обозначается
+`NOT_REPRODUCED`, другая причина — `CAUSE_UNRESOLVED`, не принудительно reproduced.
+
+Режим `--owned-local-identity-diagnostic` взаимоисключён с
+`--owned-local-application`; лишние/совмещённые flags запрещены. Выполняется до
+создания третьего peer, без HTTP probes/HUP и без fallthrough в application mode;
+общий `finally` выполняет exact-owned cleanup и при отказе. Запуск требует отдельной
+reservation/system admission: закрытый диагностический запуск не разрешает повтор.
+
+Actual observer requests **0**, access log **0**, HUP и matrix12 **NOT_RUN**,
+`proof.json` отсутствует. Own2containers/network удалены, independent Docker
+exact-ID/label/network readback пуст; foreign10healthy+5stopped сохранены.
+Сверены **9 source hashes / 3 copies / 5 public certificates / config**;
+synthetic keys/CSRs отсутствуют. Оба прежних FAILED receipts неизменны.
+
+- Receipt SHA256: `93f882a96f5d4cb874b5e4e715017ff8768b066ec3ea07eaa9564d99d49b34b5`.
+- Diagnostic SHA256: `6582b1cbed8cdc160f02bd2534051a87e6e207d81275354733e3704139826249`.
+- Known argv SHA256: `b1aeec712965b315e60d7883d8703c3d50315971dc02f2509e0e6160a6074e6d`.
+
+Final targeted **108/108**, полный Partner **378/378**, skipped0; scoped ESLint
+PASS. Регрессия закрепляет фактические 54 bytes и запрет принять одинаковый argv
+за доказательство ролей. Security/release review: существенных findings нет.
+
+**Следующий отдельный этап — подготовка изолированной native Linux/amd64 репетиции**:
+согласовать владельца и target, read-only подтвердить реальную host/daemon
+архитектуру и отсутствие эмуляции; сохранить pins и strict predicate. Один
+`--platform linux/amd64` этого не доказывает. Runtime требует нового допуска;
+самовольная смена Docker settings, capabilities, production host или принятие
+original argv вместо role/draining/executable identity запрещены.
+Native execution пока **NOT_RUN**, успех не обещан. Heavy-slot RELEASED.
+
+Схемы: страницы `Controlled Nginx application` (требуемая матрица, не PASS) и
+`Nginx identity diagnostic` (actual finding / следующий gate) в
 [существующем drawio](assets/partner-game-membership-ingress-evidence.drawio).
 Native exporter ранее недоступен; XML-only fallback, PNG/visual QA NOT_RUN.
 

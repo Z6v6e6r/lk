@@ -2,7 +2,26 @@
 
 ## Уровни доказательств
 
-Новый этап после `b1839dd`: [controlled application](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md).
+Последний этап после `3314cd8`: [отдельная identity diagnostic](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md#отдельная-диагностика-после-3314cd8-причина-установлена).
+Targeted **108/108**, полный Partner **378/378 PASS**, skipped0; scoped ESLint PASS.
+Один admitted physical diagnostic: `DIAGNOSTIC_COMPLETE_NOT_APPLICATION_PASS` /
+`KNOWN_COMMAND_FORM_REJECTED` у master. Одинаковый 54-byte original argv у обоих
+процессов и hash exe-link Rosetta подтверждены стабильными before/after snapshots.
+Strict collector по-прежнему отвергает; observer/access rows0, HUP/matrix12 NOT_RUN.
+9source/3copy/5publiccert/config closure и own2containers/network/key cleanup
+сверены; оба прежних FAILED receipts сохранены. Native Linux/amd64 не проверен.
+
+| Diagnostic regression | Обязательная граница |
+| --- | --- |
+| Фактически наблюдавшиеся 54 bytes / hash / 5 NUL у обоих процессов | Ни master, ни worker/draining identity не принимаются по original argv |
+| Exact known titles, space/NUL padding | Форма классифицируется, strict policy не ослабляется |
+| Unknown suffix/interior NUL/invalid UTF8/Unicode/control/oversize | Нет raw strings/секретов в результате; bounded reject/redaction |
+| PID/start/config/namespace drift, wrong parent/executable | Независимый отказ даже при похожей команде |
+| Exe EACCES / namespace ENOENT / неизвестная ошибка | INCOMPLETE + fixed stage/role/code, strict collector всё равно вызван; нет partial identity PASS |
+| Exclusive CLI / failed capture | Нет третьего peer, HTTP probes, HUP или application fallthrough; `finally` cleanup сохраняется |
+| Actual strict acceptance / другая ошибка | NOT_REPRODUCED / CAUSE_UNRESOLVED; нельзя выдать за reproduced или production PASS |
+
+Предыдущий этап после `b1839dd`: [controlled application](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md).
 Targeted suite **94/94**, полный Partner **364/364 PASS**, skipped0.
 Первый physical run FAILED до containers/probes; второй после IPAM correction
 создал3containers, но остановился на initial Linux process identity:

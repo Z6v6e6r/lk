@@ -2,6 +2,40 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: Nginx identity diagnostic завершена, application остаётся blocked
+
+- После `3314cd8` отдельно одобрена только локальная диагностика command mismatch;
+  прежние branch/worktree и единственный writer сохранены. Linux strict collector,
+  production verifier, application policy, pins, secrets и shared state не менялись.
+- Добавлен bounded own-PID diagnostic и mutually exclusive runner mode до третьего
+  peer/probes/HUP. Raw argv/env/error не сохраняются; known shapes/counts/hashes
+  отделены от авторизации. Security/release P2: exe/namespace failure мог скрыть
+  исходный отказ. Исправлено: fixed INCOMPLETE envelope, actual strict collector
+  вызывается и при partial capture, cleanup сохраняется. Независимые re-reviews PASS.
+- Одна exact reservation и отдельный system admission; run `15:10:28.486Z` завершён
+  `DIAGNOSTIC_COMPLETE_NOT_APPLICATION_PASS` / `KNOWN_COMMAND_FORM_REJECTED` master.
+  У master/worker одинаковые 54 bytes / 5 NUL original argv, стабильные snapshots;
+  exe-link hash совпадает с `/run/rosetta/rosetta`, не `/usr/sbin/nginx`.
+  В данном emulated fixture нет ожидаемых role titles/executable view. Это причина
+  сохранённого COMMAND_MISMATCH, не общий диагноз Rosetta и не failed reload.
+- HTTP/access rows0, HUP/matrix12 NOT_RUN; own2containers/network удалены,
+  independent exact-ID/label/network queries пусты; foreign10healthy+5stopped
+  сохранены. 9current sources/3copies/5public certificates/config hashes совпали;
+  keys/CSRs отсутствуют, оба старых FAILED receipt hashes неизменны.
+  LOCAL_HEAVY=RELEASED, дополнительных runtime попыток нет.
+- Финальная factual regression: observed argv не доказывает роли/draining;
+  targeted **108/108**, полный Partner **378/378**, skipped0. Scoped ESLint PASS
+  через существующий root binary (worktree-local binary отсутствует). Full-repo
+  lint/frontend/modular/CI, прежние physical77/CLI20 не повторялись; native NOT_RUN.
+- Обновлены [runbook](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md), test plan и
+  existing drawio: actual diagnostic отдельно от требуемой application matrix.
+  `global-spark-routing` определил security/release review; `drawio-skill` —
+  XML-only схему. Native exporter ранее недоступен; PNG/visual QA NOT_RUN.
+- Следующий отдельно согласуемый этап: подготовить isolated native Linux/amd64
+  target с реальным подтверждением архитектуры/no emulation и прежними pins/strict
+  predicate. Не принимать original argv, не менять Docker settings/capabilities.
+  Merge/push/PR/deploy/activation и боевых/provider/DB writes нет.
+
 ## 2026-09-06 — Partner: локальная проверка применения Nginx, без production допуска
 
 - После `b1839dd` одобрен local verifier stage; прежние branch/worktree и sole

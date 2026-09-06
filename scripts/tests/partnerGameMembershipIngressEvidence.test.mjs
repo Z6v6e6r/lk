@@ -10,6 +10,7 @@ import { createLocalNginxApplicationSession, verifyLocalNginxApplicationPhase, d
 import { parseNginxProcStat, collectLocalNginxLinuxSnapshot } from "../partner_game_membership_nginx_linux.mjs";
 import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
 import { collectFixtureLogThenCleanup } from "./fixtures/partner-nginx-application-cleanup.mjs";
+import { summarizeNginxDiagnosticCommand, classifyNginxIdentityDiagnostic, parseNginxRehearsalMode, runNginxRehearsalMode, runNginxIdentityDiagnosticCapture } from "../partner_game_membership_nginx_identity_diagnostic.mjs";
 import { canonicalJson } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs";
 import {
   PARTNER_INGRESS_REQUIRED_PROBES, evaluateLocalPartnerIngressObservations,
@@ -338,6 +339,131 @@ test("Nginx preflight rejects noncanonical, oversized and malformed artifacts wi
   }
   assert.throws(() => preflightPartnerNginx124({ ...f.input, controlsBytes: Buffer.alloc(65537) }), /INVALID_NGINX_CONTROLS_BYTES/);
   assert.throws(() => preflightPartnerNginx124({ ...f.input, sidecarSources: { ...f.input.sidecarSources, core: Buffer.alloc(1048577) } }), /INVALID_NGINX_SIDECAR_SOURCE_BYTES/);
+});
+
+test("Nginx process-identity diagnostic is byte-exact, redacted and non-authorizing", async t => {
+  const master = "nginx: master process /usr/sbin/nginx -c /control/nginx.conf -g daemon off;";
+  const cmd = value => summarizeNginxDiagnosticCommand(Buffer.from(value));
+  const rejected = { state: "REJECTED", code: "NGINX_PROCESS_COMMAND_MISMATCH" };
+  const snapshot = () => ({ configSha256: "a".repeat(64), bootSha256: "b".repeat(64), processes: [
+    { role: "master", pid: 10, parentPid: 0, startTicks: "100", command: cmd(master + " \0"),
+      executableSha256: "c".repeat(64), executablePathSha256: "d".repeat(64), namespaces: { pid: "e".repeat(64), net: "f".repeat(64) } },
+    { role: "worker", pid: 11, parentPid: 10, startTicks: "110", command: cmd("nginx: worker process\0"),
+      executableSha256: "c".repeat(64), executablePathSha256: "d".repeat(64), namespaces: { pid: "e".repeat(64), net: "f".repeat(64) } },
+  ] });
+  await t.test("full known titles and original argv are classified without replacing strict policy", () => {
+    assert.equal(cmd(master + "\0\0").shape, "MASTER_TITLE"); assert.equal(cmd(master).strictMasterMatches, true);
+    assert.equal(cmd(master + " \0\0").shape, "MASTER_TITLE_ASCII_SPACE_PADDING");
+    assert.equal(cmd(master + " \0\0").strictMasterMatches, false);
+    assert.equal(cmd(master + " \0\0").trailingAsciiSpaces, 1); assert.equal(cmd(master + " \0\0").trailingNuls, 2);
+    assert.equal(cmd("nginx: worker process\0").strictWorkerMatches, true);
+    assert.equal(cmd("nginx: worker process is shutting down\0").shape, "DRAINING_WORKER_TITLE");
+    const argv = cmd("/usr/sbin/nginx\0-c\0/control/nginx.conf\0-g\0daemon off;\0");
+    assert.equal(argv.shape, "ORIGINAL_NGINX_ARGV"); assert.equal(argv.nulCount, 5); assert.equal(argv.strictMasterMatches, false);
+  });
+  await t.test("observed 54-byte shared argv cannot prove either Nginx role or a draining worker", () => {
+    const observed = cmd("/usr/sbin/nginx\0-c\0/control/nginx.conf\0-g\0daemon off;\0");
+    assert.deepEqual(observed, {
+      rawSha256: "b1aeec712965b315e60d7883d8703c3d50315971dc02f2509e0e6160a6074e6d",
+      byteLength: 54, nulCount: 5, trailingNuls: 1, trailingAsciiSpaces: 0,
+      shape: "ORIGINAL_NGINX_ARGV", strictMasterMatches: false, strictWorkerMatches: false,
+    });
+    const before = snapshot();
+    for (const process of before.processes) process.command = structuredClone(observed);
+    const result = classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected);
+    assert.equal(result.classification, "KNOWN_COMMAND_FORM_REJECTED");
+    assert.equal(result.rejectedRole, "master"); assert.deepEqual(result.strict, rejected);
+    assert.equal(result.before.processes.some(process => process.command.shape === "DRAINING_WORKER_TITLE"), false);
+    assert.equal(result.productionVerified, false); assert.equal(result.applicationProbes, "NOT_RUN");
+    assert.throws(() => verifyPartnerProductionIngress(result), /UNSUPPORTED_INGRESS_ADAPTER/);
+  });
+  await t.test("unknown suffixes, interior NUL, Unicode and controls never leak or match known form", () => {
+    for (const raw of [Buffer.from(master + " SENSITIVE_SUFFIX"), Buffer.from(master + "\0SENSITIVE_SUFFIX\0"),
+      Buffer.from(master + "\t"), Buffer.from(master + "\n"), Buffer.from(master + "\r"), Buffer.from(master + "\u00a0"),
+      Buffer.concat([Buffer.from(master), Buffer.from([0xff, 0xfe])]), Buffer.from("arbitrary SENSITIVE_SUFFIX")]) {
+      const out = summarizeNginxDiagnosticCommand(raw);
+      assert.equal(out.shape, "UNKNOWN_REDACTED"); assert.equal(out.strictMasterMatches, false); assert.equal(out.strictWorkerMatches, false);
+      assert.equal(JSON.stringify(out).includes("SENSITIVE_SUFFIX"), false); assert.equal(JSON.stringify(out).includes(master), false);
+    }
+  });
+  await t.test("non-Buffer, empty and oversized command observations reject", () => {
+    for (const value of [null, "nginx", {}, Buffer.alloc(0), Buffer.alloc(4097)]) assert.throws(() => summarizeNginxDiagnosticCommand(value), /DIAGNOSTIC_FAILED/);
+  });
+  await t.test("known rejected form explains only the captured mismatch, never permits ingress", () => {
+    const before = snapshot(), result = classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected);
+    assert.equal(result.classification, "KNOWN_COMMAND_FORM_REJECTED"); assert.equal(result.rejectedRole, "master");
+    assert.equal(result.productionVerified, false); assert.equal(result.deployAuthorized, false); assert.equal(result.activationAuthorized, false);
+    assert.equal(result.applicationProbes, "NOT_RUN"); assert.equal(result.hup, "NOT_RUN");
+    assert.throws(() => verifyPartnerProductionIngress(result), /UNSUPPORTED_INGRESS_ADAPTER/);
+  });
+  await t.test("actual strict acceptance or unknown rejection cannot be relabelled as reproduced", () => {
+    const before = snapshot();
+    assert.equal(classifyNginxIdentityDiagnostic(before, structuredClone(before), { state: "ACCEPTED", code: null }).classification, "NOT_REPRODUCED");
+    assert.equal(classifyNginxIdentityDiagnostic(before, structuredClone(before), { state: "REJECTED", code: "OTHER_STRICT_REJECTION_REDACTED" }).classification, "CAUSE_UNRESOLVED");
+    before.processes[0].command = cmd("UNKNOWN");
+    assert.equal(classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected).classification, "CAUSE_UNRESOLVED");
+    assert.throws(() => classifyNginxIdentityDiagnostic(before, before, { state: "REJECTED", code: "arbitrary" }));
+  });
+  await t.test("PID/start/config/namespace/command drift or disappearance rejects", () => {
+    for (const change of [value => { value.processes[0].startTicks = "101"; }, value => { value.processes[1].pid = 12; },
+      value => { value.configSha256 = "0".repeat(64); }, value => { value.processes[0].namespaces.pid = "0".repeat(64); },
+      value => { value.processes[0].command = cmd(master); }, value => { value.processes.pop(); }]) {
+      const before = snapshot(), after = structuredClone(before); change(after);
+      assert.throws(() => classifyNginxIdentityDiagnostic(before, after, rejected));
+    }
+  });
+  await t.test("foreign worker namespace, parent or executable rejects even if snapshots match", () => {
+    for (const change of [value => { value.processes[1].parentPid = 99; }, value => { value.processes[1].namespaces.net = "0".repeat(64); },
+      value => { value.processes[1].executableSha256 = "0".repeat(64); }, value => { value.processes[1].startTicks = "90"; }]) {
+      const before = snapshot(); change(before); assert.throws(() => classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected));
+    }
+  });
+  await t.test("CLI requires one exact mode and rejects combined, unknown or extra arguments", () => {
+    assert.equal(parseNginxRehearsalMode(["--owned-local-identity-diagnostic"]), "diagnostic");
+    assert.equal(parseNginxRehearsalMode(["--owned-local-application"]), "application");
+    for (const args of [null, [], ["--production"], ["diagnostic"], ["--owned-local-identity-diagnostic", "--owned-local-application"],
+      ["--owned-local-identity-diagnostic", "extra"]]) assert.throws(() => parseNginxRehearsalMode(args));
+  });
+  await t.test("diagnostic mode cannot call third-create, probe or HUP application actions", async () => {
+    const calls = [];
+    const result = await runNginxRehearsalMode("diagnostic", { diagnostic: () => { calls.push("capture"); return "diagnostic"; },
+      application: () => { calls.push("third-create", "probe", "HUP"); assert.fail("forbidden application branch"); } });
+    assert.equal(result, "diagnostic"); assert.deepEqual(calls, ["capture"]);
+    await assert.rejects(runNginxRehearsalMode("unknown", { diagnostic: () => assert.fail(), application: () => assert.fail() }));
+  });
+  await t.test("diagnostic failure does not fall through and permits caller finally cleanup", async () => {
+    const calls = [];
+    await assert.rejects(async () => {
+      try { await runNginxRehearsalMode("diagnostic", { diagnostic: () => { throw new Error("EXPECTED_CAPTURE_FAILURE"); }, application: () => assert.fail() }); }
+      finally { calls.push("owned-cleanup"); }
+    }, /EXPECTED_CAPTURE_FAILURE/);
+    assert.deepEqual(calls, ["owned-cleanup"]);
+  });
+  await t.test("exe read failure preserves stage/role and still invokes original strict rejection", () => {
+    let strictCalls = 0;
+    const result = runNginxIdentityDiagnosticCapture(progress => {
+      Object.assign(progress, { stage: "EXECUTABLE", role: "master", commandShape: "ORIGINAL_NGINX_ARGV" });
+      throw Object.assign(new Error("SENSITIVE_SUFFIX"), { code: "EACCES" });
+    }, () => { strictCalls++; throw new Error("NGINX_PROCESS_COMMAND_MISMATCH"); });
+    assert.equal(strictCalls, 1); assert.equal(result.state, "DIAGNOSTIC_INCOMPLETE"); assert.equal(result.classification, "CAUSE_UNRESOLVED");
+    assert.deepEqual(result.failure, { pass: "BEFORE", stage: "EXECUTABLE", role: "master", code: "EACCES", observedCommandShape: "ORIGINAL_NGINX_ARGV" });
+    assert.deepEqual(result.strict, rejected); assert.equal(result.productionVerified, false);
+    assert.equal(JSON.stringify(result).includes("SENSITIVE_SUFFIX"), false); assert.equal("before" in result, false);
+  });
+  await t.test("after namespace failure and unknown diagnostics remain redacted and incomplete", () => {
+    let calls = 0;
+    const result = runNginxIdentityDiagnosticCapture(progress => {
+      if (!calls++) return snapshot();
+      Object.assign(progress, { stage: "NAMESPACE", role: "worker" }); throw Object.assign(new Error("SENSITIVE_SUFFIX"), { code: "ENOENT" });
+    }, () => {});
+    assert.equal(result.failure.pass, "AFTER"); assert.equal(result.failure.stage, "NAMESPACE"); assert.equal(result.failure.code, "ENOENT");
+    assert.deepEqual(result.strict, { state: "ACCEPTED", code: null }); assert.equal(result.state, "DIAGNOSTIC_INCOMPLETE");
+    const unknown = runNginxIdentityDiagnosticCapture(progress => {
+      Object.assign(progress, { stage: "SENSITIVE_SUFFIX", role: "SENSITIVE_SUFFIX", commandShape: "SENSITIVE_SUFFIX" });
+      throw Object.assign(new Error("SENSITIVE_SUFFIX"), { code: "SENSITIVE_SUFFIX" });
+    }, () => { throw new Error("SENSITIVE_SUFFIX"); });
+    assert.equal(JSON.stringify(unknown).includes("SENSITIVE_SUFFIX"), false); assert.equal(unknown.failure.stage, "OTHER_REDACTED");
+  });
 });
 
 test("controlled Nginx application candidate: local lifecycle and fail-closed evidence", async t => {

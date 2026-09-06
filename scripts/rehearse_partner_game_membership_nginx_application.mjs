@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
 import { createLocalNginxApplicationSession, verifyLocalNginxApplicationPhase, deriveLocalNginxApplicationAddresses } from "./partner_game_membership_nginx_application.mjs";
 import { createPartnerNginxTestCertificates } from "./tests/fixtures/partner-nginx124-certificates.mjs";
 import { collectFixtureLogThenCleanup } from "./tests/fixtures/partner-nginx-application-cleanup.mjs";
+import { parseNginxRehearsalMode, runNginxRehearsalMode } from "./partner_game_membership_nginx_identity_diagnostic.mjs";
 
-if (process.argv.length !== 3 || process.argv[2] !== "--owned-local-application") throw new Error("EXPLICIT_LOCAL_APPLICATION_REQUIRED");
+const mode = parseNginxRehearsalMode(process.argv.slice(2));
 const scripts = path.dirname(fileURLToPath(import.meta.url)), started = Date.now();
 const nodeImage = "node@sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96";
 const nginxImage = "nginx@sha256:2e26275ed7a47e8e93f264d39a09ca4bc3f4058c904c75087e237f4ea883f2a1";
@@ -22,7 +23,7 @@ for (const directory of [control, results]) fs.mkdirSync(directory, { mode: 0o70
 const runId = crypto.randomBytes(16).toString("hex"), label = "padlhub.partner-nginx-application", owned = [], targets = new Map();
 let networkId, failure, cleanupFailed = false, cleaning = false, session;
 const sources = {}, copies = {};
-const receipt = { state: "STARTING", scope: "LOCAL_NGINX_CONTROLLED_APPLICATION", runId, sources, containers: [], cleanup: [],
+const receipt = { state: "STARTING", scope: mode === "diagnostic" ? "LOCAL_NGINX_IDENTITY_DIAGNOSTIC" : "LOCAL_NGINX_CONTROLLED_APPLICATION", runId, sources, containers: [], cleanup: [],
   productionVerified: false, deployAuthorized: false, activationAuthorized: false };
 const docker = (...args) => {
   if (!cleaning && Date.now() - started > 180000) throw new Error("LOCAL_APPLICATION_HARD_DEADLINE");
@@ -76,11 +77,14 @@ function verifyNetwork() {
 }
 try {
   for (const relative of ["partner_game_membership_nginx_application.mjs", "partner_game_membership_nginx_candidate.mjs",
-    "partner_game_membership_ingress_evidence.mjs", "rehearse_partner_game_membership_nginx_application.mjs", "tests/fixtures/partner-nginx124-certificates.mjs", "tests/fixtures/partner-nginx-application-cleanup.mjs"]) {
+    "partner_game_membership_ingress_evidence.mjs", "rehearse_partner_game_membership_nginx_application.mjs", "tests/fixtures/partner-nginx124-certificates.mjs", "tests/fixtures/partner-nginx-application-cleanup.mjs", "partner_game_membership_nginx_identity_diagnostic.mjs"]) {
     sources[relative] = sha(fs.readFileSync(path.join(scripts, relative)));
   }
   const binding = createPartnerNginxTestCertificates(fixture, { sourceLimits: true });
-  for (const [name, relative] of Object.entries({ "linux.mjs": "partner_game_membership_nginx_linux.mjs", "peer.cjs": "tests/fixtures/partner-nginx-application-peer.cjs" })) {
+  const copiedFiles = mode === "diagnostic"
+    ? { "partner_game_membership_nginx_linux.mjs": "partner_game_membership_nginx_linux.mjs", "identity-diagnostic.mjs": "partner_game_membership_nginx_identity_diagnostic.mjs", "peer.cjs": "tests/fixtures/partner-nginx-application-peer.cjs" }
+    : { "linux.mjs": "partner_game_membership_nginx_linux.mjs", "peer.cjs": "tests/fixtures/partner-nginx-application-peer.cjs" };
+  for (const [name, relative] of Object.entries(copiedFiles)) {
     const bytes = fs.readFileSync(path.join(scripts, relative)); sources[relative] = sha(bytes); copies[name] = sha(bytes); write(path.join(fixture, name), bytes);
   }
   networkId = docker("network", "create", "--internal", "--driver", "bridge", "--label", `${label}=${runId}`, `partner-app-${runId}`);
@@ -100,6 +104,41 @@ try {
   for (let i = 0; !fs.existsSync(path.join(control, "observer-ready")) && i < 30; i++) { assert.equal(inspect(observer).State.Running, true); await wait(100); }
   assert.ok(fs.existsSync(path.join(control, "observer-ready")));
   const nginx = create(nginxImage, "nginx", ["-c", "/control/nginx.conf", "-g", "daemon off;"], { network: `container:${observer}`, pidMode: `container:${observer}`, writable: true });
+  const verifyInputs = () => {
+    for (const [relative, digest] of Object.entries(sources)) assert.equal(sha(fs.readFileSync(path.join(scripts, relative))), digest);
+    for (const [name, digest] of Object.entries(copies)) assert.equal(sha(fs.readFileSync(path.join(fixture, name))), digest);
+    for (const [name, digest] of Object.entries(receipt.certificateHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, `${name}.crt`))), digest);
+    assert.equal(fs.readFileSync(path.join(fixture, "network.json"), "utf8"), networkBytes);
+  };
+  await runNginxRehearsalMode(mode, {
+    diagnostic: async () => {
+      const containersBefore = owned.map(verify), networkBefore = verifyNetwork();
+      assert.equal(owned.length, 2); receipt.containers = containersBefore; receipt.network = networkBefore;
+      receipt.preparationStep = "IDENTITY_DIAGNOSTIC_ONLY";
+      await wait(500);
+      let diagnostic;
+      try { diagnostic = JSON.parse(docker("exec", observer, "node", "/fixture/identity-diagnostic.mjs", "capture")); }
+      catch (error) {
+        // The pinned diagnostic emits a closed redacted envelope on nonzero exit.
+        // Preserve it for diagnosis; never promote incomplete capture to PASS.
+        const stdout = error.stdout;
+        assert.ok((typeof stdout === "string" || Buffer.isBuffer(stdout)) && stdout.length <= 65536);
+        diagnostic = JSON.parse(stdout.toString()); assert.equal(diagnostic.state, "DIAGNOSTIC_INCOMPLETE");
+      }
+      assert.equal(JSON.parse(fs.readFileSync(path.join(control, "observer.json"))).received, 0);
+      assert.equal(fs.readFileSync(path.join(results, "nginx-access.jsonl"), "utf8"), "");
+      assert.deepEqual(owned.map(verify), containersBefore); assert.deepEqual(verifyNetwork(), networkBefore);
+      assert.equal(sha(fs.readFileSync(path.join(control, "nginx.conf"))), baselineConfig.configSha256);
+      verifyInputs();
+      const bytes = JSON.stringify(diagnostic, null, 2) + "\n"; write(path.join(results, "identity-diagnostic.json"), bytes);
+      receipt.diagnosticSha256 = sha(bytes);
+      if (diagnostic.state === "DIAGNOSTIC_INCOMPLETE") throw new Error("NGINX_IDENTITY_DIAGNOSTIC_INCOMPLETE");
+      assert.equal(diagnostic.state, "DIAGNOSTIC_CAPTURE_ONLY_NOT_APPLICATION_PROOF");
+      assert.equal(diagnostic.before.configSha256, baselineConfig.configSha256);
+      Object.assign(receipt, { state: "DIAGNOSTIC_COMPLETE_NOT_APPLICATION_PASS", diagnosticSha256: sha(bytes),
+        classification: diagnostic.classification, observerRequests: 0, ingressLogRows: 0, applicationProbes: "NOT_RUN", hup: "NOT_RUN" });
+    },
+    application: async () => {
   const client = create(nodeImage, "client", ["-e", "setInterval(() => {}, 1000)"], { network: networkId, ip: probeAddress });
   const containersBefore = owned.map(verify), networkBefore = verifyNetwork();
   receipt.containers = containersBefore; receipt.network = networkBefore;
@@ -133,13 +172,12 @@ try {
   await settled(applied.after.workers[0].pid); session.record(await observe("revoked"));
   const proof = session.finish();
   assert.deepEqual(owned.map(verify), containersBefore); assert.deepEqual(verifyNetwork(), networkBefore);
-  for (const [relative, digest] of Object.entries(sources)) assert.equal(sha(fs.readFileSync(path.join(scripts, relative))), digest);
-  for (const [name, digest] of Object.entries(copies)) assert.equal(sha(fs.readFileSync(path.join(fixture, name))), digest);
-  for (const [name, digest] of Object.entries(receipt.certificateHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, `${name}.crt`))), digest);
-  assert.equal(fs.readFileSync(path.join(fixture, "network.json"), "utf8"), networkBytes);
+  verifyInputs();
   const proofBytes = JSON.stringify(proof, null, 2) + "\n"; write(path.join(results, "proof.json"), proofBytes);
   Object.assign(receipt, { state: "PASS_LOCAL_APPLICATION_ONLY", proofSha256: sha(proofBytes), probeCount: 12, appliedGenerations: 3,
     diskOnlyNegativeConfirmed: true, bindingRevocationConfirmed: true, independentNamespaceRefusalConfirmed: true });
+    },
+  });
 } catch (error) { failure = error; receipt.state = "FAILED"; receipt.failureCode = /^NGINX_|^LOCAL_|^EXPLICIT_/.test(error.message) ? error.message : "LOCAL_APPLICATION_ASSERTION_OR_EXEC_FAILED"; }
 finally {
   cleaning = true;

@@ -143,4 +143,22 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Nginx identity diagnostic">
+    <mxGraphModel dx="1740" dy="780" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="2" value="ЧТО ТРЕБУЕТСЯ&#xa;Разные Nginx role titles&#xa;Master / worker / draining&#xa;Nginx executable identity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="ЧТО НАБЛЮДАЛОСЬ&#xa;Одинаковый original argv&#xa;54 bytes / 5 NUL у обоих PID&#xa;Exe-link hash: Rosetta" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="STRICT ОТКАЗ СОХРАНЁН&#xa;COMMAND_MISMATCH: master&#xa;Original argv не доказывает&#xa;роль / drain / Nginx executable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="ГРАНИЦЫ НАБЛЮДЕНИЯ&#xa;Стабильные before / after&#xa;HTTP 0 · HUP / matrix NOT_RUN&#xa;Own cleanup подтверждён" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="ДИАГНОСТИКА ЗАКРЫТА&#xa;Причина в данном fixture&#xa;Application / production STOP&#xa;Не общий дефект Rosetta" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="СЛЕДУЮЩИЙ ОТДЕЛЬНЫЙ GATE&#xa;Подготовить native Linux/amd64&#xa;Те же pins / strict predicate&#xa;Новый runtime ещё не разрешён" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="ожидание / actual proc view" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="не менять predicate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="ограниченное доказательство" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="подготовка, не deploy" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="отдельная среда" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>
