@@ -2,7 +2,18 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import {
+  PUBLIC_TEST_KEY,
+  canonicalContractJson,
+  computePublicVector,
+  loadPublicContractVectors,
+  verifyPublicContractVectors,
+} from "../../docs/partner-game-membership-kit/contract-selftest.mjs";
 import { createPartnerRawRequestGuard } from "../partner_game_membership_sidecar/raw-request-guard.cjs";
 
 import {
@@ -471,6 +482,122 @@ test("published cross-team signature vector remains stable", () => {
   const testOnlyKey = Buffer.from("public-test-vector-key-32-bytes!!");
   assert.match(buildPartnerSignatureInput(input), /38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66/);
   assert.equal(signPartnerRequest(input, testOnlyKey), "v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo");
+});
+
+test("offline partner vectors match independent client and server bytes", () => {
+  const document = loadPublicContractVectors();
+  assert.equal(verifyPublicContractVectors(document), 5);
+  for (const vector of document.vectors) {
+    const { input, expected } = vector;
+    assert.equal(expected.canonicalBody, canonicalJson(input.body), vector.id);
+    assert.equal(expected.signatureInput, buildPartnerSignatureInput(input), vector.id);
+    assert.equal(expected.signature, signPartnerRequest(input, Buffer.from(PUBLIC_TEST_KEY, "utf8")), vector.id);
+    assert.equal(expected.signatureInput.split("\n").length, 11);
+    assert.ok(!expected.signatureInput.endsWith("\n"));
+    assert.match(expected.bodySha256, /^[0-9a-f]{64}$/);
+    assert.match(expected.signature, /^v2=[A-Za-z0-9_-]{43}$/);
+  }
+  assert.equal(document.vectors[0].expected.signature, "v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo");
+});
+
+test("offline retry preserves business identity but changes request proof", () => {
+  const [base, retry, remove, get, unicode] = loadPublicContractVectors().vectors;
+  for (const key of ["method", "path", "body", "idempotencyKey"]) assert.deepEqual(base.input[key], retry.input[key]);
+  assert.equal(base.expected.bodySha256, retry.expected.bodySha256);
+  assert.notEqual(base.expected.signature, retry.expected.signature);
+  assert.equal(Number(retry.input.timestamp), Number(base.input.timestamp) + 1);
+  assert.notEqual(base.input.nonce, retry.input.nonce);
+  assert.notEqual(base.input.correlationId, retry.input.correlationId);
+  assert.equal(remove.expected.wireBody, "{}");
+  assert.equal(remove.expected.wireBodyBytes, 2);
+  assert.equal(get.expected.wireBody, "");
+  assert.equal(get.expected.wireBodyBytes, 0);
+  assert.equal(get.expected.canonicalBody, "{}");
+  assert.equal(get.expected.bodySha256, remove.expected.bodySha256);
+  assert.ok(unicode.expected.wireBodyBytes > unicode.expected.wireBody.length);
+});
+
+test("offline canonical JSON matches UTF-16 sorting, escaping and integer dialect", () => {
+  const values = [null, true, -0, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER,
+    { "\ue000": 1, "🎾": 2, a: ["\n\"\\", "Тест", "é", "e\u0301", "\ud800"] }];
+  for (const value of values) assert.equal(canonicalContractJson(value), canonicalJson(value));
+  for (const value of [0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, undefined, new Date(0), 1n]) {
+    assert.throws(() => canonicalContractJson(value));
+    assert.throws(() => canonicalJson(value));
+  }
+  const base = loadPublicContractVectors().vectors[0].input;
+  const equivalent = { ...base, body: JSON.parse(JSON.stringify(base.body, null, 2)) };
+  equivalent.body = Object.fromEntries(Object.entries(equivalent.body).reverse());
+  assert.deepEqual(computePublicVector(base), computePublicVector(equivalent));
+  assert.equal(canonicalContractJson(JSON.parse('"\\u00e9"')), canonicalContractJson("é"));
+  assert.notEqual(computePublicVector({ ...base, body: { ...base.body, displayName: "é" } }).signature,
+    computePublicVector({ ...base, body: { ...base.body, displayName: "e\u0301" } }).signature);
+});
+
+test("offline example rejects non-demo identities, malformed paths and unexpected fields", () => {
+  const base = loadPublicContractVectors().vectors[0].input;
+  for (const replacement of [
+    { clientId: "another-client" }, { audience: "production" }, { keyId: "another-key" },
+    { path: `${base.path}?a=1` }, { path: `${base.path}#fragment` },
+    { path: `https://example.invalid${base.path}` }, { path: `${base.path}/../members` },
+    { path: base.path.replace("game-001", "game%2D001") }, { method: "post" },
+    { timestamp: "1788253200\n" }, { nonce: `${base.nonce}\r\n` }, { secret: "not-accepted" },
+    { method: "GET", path: "/lk/integrations/v1/operations/not-a-uuid", body: {} },
+    { body: { ...base.body, paid: true } },
+  ]) assert.throws(() => computePublicVector({ ...base, ...replacement }));
+  for (const field of ["timestamp", "nonce", "idempotencyKey", "correlationId"]) {
+    const changed = structuredClone(base);
+    changed[field] = loadPublicContractVectors().vectors[4].input[field];
+    assert.notEqual(computePublicVector(changed).signature, computePublicVector(base).signature);
+  }
+  const changedBody = structuredClone(base);
+  changedBody.body.payment.amountMinor++;
+  assert.notEqual(computePublicVector(changedBody).signature, computePublicVector(base).signature);
+});
+
+test("offline self-test rejects missing, duplicate or changed frozen expectations", () => {
+  for (const mutate of [
+    (doc) => { doc.vectors.pop(); },
+    (doc) => { doc.vectors[1] = doc.vectors[0]; },
+    (doc) => { doc.vectors[0].expected.signature = "v2=incorrect"; },
+    (doc) => { doc.vectors[0].expected.bodySha256 = "0".repeat(64); },
+    (doc) => { doc.publicTestKeyUtf8 = "not-the-public-key"; },
+    (doc) => { doc.productionUsable = true; },
+  ]) {
+    const document = loadPublicContractVectors();
+    mutate(document);
+    assert.throws(() => verifyPublicContractVectors(document));
+  }
+});
+
+test("offline kit runs outside repository, rejects extra arguments and redacts failures", () => {
+  const directory = mkdtempSync(join(tmpdir(), "partner-offline-kit-test-"));
+  try {
+    const script = join(directory, "contract-selftest.mjs");
+    copyFileSync(new URL("../../docs/partner-game-membership-kit/contract-selftest.mjs", import.meta.url), script);
+    copyFileSync(new URL("../../docs/partner-game-membership-kit/vectors.json", import.meta.url), join(directory, "vectors.json"));
+    const run = (args) => spawnSync(process.execPath, [script, ...args], {
+      cwd: directory, encoding: "utf8", timeout: 5000,
+      env: { PARTNER_SECRET: "ENV_SENTINEL_MUST_NOT_BE_USED", PARTNER_API_URL: "https://example.invalid" },
+    });
+    const good = run(["--self-test"]);
+    assert.equal(good.status, 0);
+    assert.equal(good.stdout, "OFFLINE_CONTRACT_VECTORS_PASS vectors=5 network=NOT_USED live_security=NOT_TESTED\n");
+    assert.equal(good.stderr, "");
+    for (const args of [[], ["--self-test", "ARGUMENT_SENTINEL"], ["--url=https://example.invalid"]]) {
+      const bad = run(args);
+      assert.equal(bad.status, 1);
+      assert.equal(bad.stdout, "");
+      assert.equal(bad.stderr, "OFFLINE_CONTRACT_SELFTEST_FAILED\n");
+    }
+    rmSync(join(directory, "vectors.json"));
+    const missing = run(["--self-test"]);
+    assert.equal(missing.status, 1);
+    assert.equal(missing.stdout, "");
+    assert.equal(missing.stderr, "OFFLINE_CONTRACT_SELFTEST_FAILED\n");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("a signed request cannot cross an audience boundary", async () => {

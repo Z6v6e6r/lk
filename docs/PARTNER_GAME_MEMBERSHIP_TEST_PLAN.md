@@ -2,6 +2,19 @@
 
 ## Уровни доказательств
 
+Текущее решение 2026-09-06: native Nginx application rehearsal / Docker install
+`DEFERRED_BY_USER`; native application **NOT_RUN**, прежние failures сохранены.
+Офлайн-проверка [partner kit](partner-game-membership-kit/README.md) независима:
+пять frozen POST/retry/DELETE/GET/Unicode vectors, отдельный reference signer,
+server/client byte compatibility, отрицательные fixtures/CLI и переносимость без
+репозитория. Она не доказывает live replay, mTLS, Viva/Mongo или production ingress.
+Production activation gates и строгая проверка process identity не меняются.
+Новые фактические проверки kit: API suite **45/45**, полный Partner suite
+**384/384**, skipped0; scoped ESLint PASS. Standalone self-test: five vectors PASS
+на Node22.13.1; copied-outside-repository CLI и закрытые ошибки входят в45tests.
+Это source/offline evidence, не CI или live-проверка. Frontend/modular build,
+physical Nginx/Mongo/Viva и полный repository lint/build в этом этапе не запускались.
+
 Preparation после `a150756`: [native target admission](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md#подготовка-native-linuxamd64-после-a150756).
 Target/owner не назначены; native preflight/runtime **NOT_RUN**. Локально
 проверены10transport source hashes/import closure/syntax, прежние9receipt hashes

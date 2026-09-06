@@ -1,5 +1,9 @@
 # Тестовый Partner Game Membership API
 
+Для подготовки клиента без доступа к среде:
+[офлайн-комплект из трёх файлов с пятью эталонными vectors](partner-game-membership-kit/README.md).
+Это public synthetic contract test, не боевые настройки и не подтверждение deploy.
+
 Статус документа: **deployable source pilot v0.2, default-off; isolated sidecar runtime
 SECURITY_AUDIT_PASS, live ingress/custody gates UNBOUND**. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
 но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не

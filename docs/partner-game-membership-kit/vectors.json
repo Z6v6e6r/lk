@@ -1,0 +1,149 @@
+{
+  "format": "PADLHUB_OFFLINE_CONTRACT_V1",
+  "productionUsable": false,
+  "publicTestKeyUtf8": "public-test-vector-key-32-bytes!!",
+  "vectors": [
+    {
+      "id": "POST_BASE",
+      "input": {
+        "method": "POST",
+        "path": "/lk/integrations/v1/open-games/game-001/members",
+        "body": {
+          "externalPlayerId": "player-001",
+          "displayName": "Test Player",
+          "payment": {
+            "reference": "pay-001",
+            "paidAt": "2026-09-01T08:59:00.000Z",
+            "amountMinor": 250000,
+            "currency": "RUB"
+          }
+        },
+        "clientId": "partner-test",
+        "audience": "padlhub-partner-game-test",
+        "keyId": "key-2026-09",
+        "timestamp": "1788253200",
+        "nonce": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0",
+        "idempotencyKey": "11111111-1111-4111-8111-111111111111",
+        "correlationId": "22222222-2222-4222-8222-222222222222"
+      },
+      "expected": {
+        "canonicalBody": "{\"displayName\":\"Test Player\",\"externalPlayerId\":\"player-001\",\"payment\":{\"amountMinor\":250000,\"currency\":\"RUB\",\"paidAt\":\"2026-09-01T08:59:00.000Z\",\"reference\":\"pay-001\"}}",
+        "bodySha256": "38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66",
+        "signatureInput": "PADLHUB-PARTNER-GAME-V2\npadlhub-partner-game-test\npartner-test\nkey-2026-09\n1788253200\nMDEyMzQ1Njc4OWFiY2RlZjAxMjM0\nPOST\n/lk/integrations/v1/open-games/game-001/members\n38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66\n11111111-1111-4111-8111-111111111111\n22222222-2222-4222-8222-222222222222",
+        "signature": "v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo",
+        "wireBody": "{\"displayName\":\"Test Player\",\"externalPlayerId\":\"player-001\",\"payment\":{\"amountMinor\":250000,\"currency\":\"RUB\",\"paidAt\":\"2026-09-01T08:59:00.000Z\",\"reference\":\"pay-001\"}}",
+        "wireBodyBytes": 169
+      }
+    },
+    {
+      "id": "POST_RETRY",
+      "input": {
+        "method": "POST",
+        "path": "/lk/integrations/v1/open-games/game-001/members",
+        "body": {
+          "externalPlayerId": "player-001",
+          "displayName": "Test Player",
+          "payment": {
+            "reference": "pay-001",
+            "paidAt": "2026-09-01T08:59:00.000Z",
+            "amountMinor": 250000,
+            "currency": "RUB"
+          }
+        },
+        "clientId": "partner-test",
+        "audience": "padlhub-partner-game-test",
+        "keyId": "key-2026-09",
+        "timestamp": "1788253201",
+        "nonce": "cHVibGljLWRlbW8tbm9uY2UtMS0wMDAwMDAwMA",
+        "idempotencyKey": "11111111-1111-4111-8111-111111111111",
+        "correlationId": "44444444-4444-4444-8444-444444444441"
+      },
+      "expected": {
+        "canonicalBody": "{\"displayName\":\"Test Player\",\"externalPlayerId\":\"player-001\",\"payment\":{\"amountMinor\":250000,\"currency\":\"RUB\",\"paidAt\":\"2026-09-01T08:59:00.000Z\",\"reference\":\"pay-001\"}}",
+        "bodySha256": "38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66",
+        "signatureInput": "PADLHUB-PARTNER-GAME-V2\npadlhub-partner-game-test\npartner-test\nkey-2026-09\n1788253201\ncHVibGljLWRlbW8tbm9uY2UtMS0wMDAwMDAwMA\nPOST\n/lk/integrations/v1/open-games/game-001/members\n38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66\n11111111-1111-4111-8111-111111111111\n44444444-4444-4444-8444-444444444441",
+        "signature": "v2=uhUJAsd-z6FL6eCRigakCUu3hH6vIAA9RPpLojhpwfM",
+        "wireBody": "{\"displayName\":\"Test Player\",\"externalPlayerId\":\"player-001\",\"payment\":{\"amountMinor\":250000,\"currency\":\"RUB\",\"paidAt\":\"2026-09-01T08:59:00.000Z\",\"reference\":\"pay-001\"}}",
+        "wireBodyBytes": 169
+      }
+    },
+    {
+      "id": "DELETE_OWNED",
+      "input": {
+        "method": "DELETE",
+        "path": "/lk/integrations/v1/open-games/game-001/members/55555555-5555-4555-8555-555555555555",
+        "body": {},
+        "clientId": "partner-test",
+        "audience": "padlhub-partner-game-test",
+        "keyId": "key-2026-09",
+        "timestamp": "1788253202",
+        "nonce": "cHVibGljLWRlbW8tbm9uY2UtMi0wMDAwMDAwMA",
+        "idempotencyKey": "33333333-3333-4333-8333-333333333332",
+        "correlationId": "44444444-4444-4444-8444-444444444442"
+      },
+      "expected": {
+        "canonicalBody": "{}",
+        "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "signatureInput": "PADLHUB-PARTNER-GAME-V2\npadlhub-partner-game-test\npartner-test\nkey-2026-09\n1788253202\ncHVibGljLWRlbW8tbm9uY2UtMi0wMDAwMDAwMA\nDELETE\n/lk/integrations/v1/open-games/game-001/members/55555555-5555-4555-8555-555555555555\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\n33333333-3333-4333-8333-333333333332\n44444444-4444-4444-8444-444444444442",
+        "signature": "v2=QOS4Ox8GdrcC8I2tIEYoWzYNYtqK4VlVC6E129dPWbY",
+        "wireBody": "{}",
+        "wireBodyBytes": 2
+      }
+    },
+    {
+      "id": "GET_OPERATION",
+      "input": {
+        "method": "GET",
+        "path": "/lk/integrations/v1/operations/66666666-6666-4666-8666-666666666666",
+        "body": {},
+        "clientId": "partner-test",
+        "audience": "padlhub-partner-game-test",
+        "keyId": "key-2026-09",
+        "timestamp": "1788253203",
+        "nonce": "cHVibGljLWRlbW8tbm9uY2UtMy0wMDAwMDAwMA",
+        "idempotencyKey": "33333333-3333-4333-8333-333333333333",
+        "correlationId": "44444444-4444-4444-8444-444444444443"
+      },
+      "expected": {
+        "canonicalBody": "{}",
+        "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "signatureInput": "PADLHUB-PARTNER-GAME-V2\npadlhub-partner-game-test\npartner-test\nkey-2026-09\n1788253203\ncHVibGljLWRlbW8tbm9uY2UtMy0wMDAwMDAwMA\nGET\n/lk/integrations/v1/operations/66666666-6666-4666-8666-666666666666\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\n33333333-3333-4333-8333-333333333333\n44444444-4444-4444-8444-444444444443",
+        "signature": "v2=7Ua_Vvq1XHgpd-eGL7YMSdE0ATJxF-Fk55hCIUcHevM",
+        "wireBody": "",
+        "wireBodyBytes": 0
+      }
+    },
+    {
+      "id": "POST_UNICODE",
+      "input": {
+        "method": "POST",
+        "path": "/lk/integrations/v1/open-games/game-001/members",
+        "body": {
+          "externalPlayerId": "player-002",
+          "displayName": "Тестовый игрок 🎾",
+          "payment": {
+            "reference": "pay-002",
+            "paidAt": "2026-09-01T08:59:00.000Z",
+            "amountMinor": 250000,
+            "currency": "RUB"
+          }
+        },
+        "clientId": "partner-test",
+        "audience": "padlhub-partner-game-test",
+        "keyId": "key-2026-09",
+        "timestamp": "1788253204",
+        "nonce": "cHVibGljLWRlbW8tbm9uY2UtNC0wMDAwMDAwMA",
+        "idempotencyKey": "33333333-3333-4333-8333-333333333334",
+        "correlationId": "44444444-4444-4444-8444-444444444444"
+      },
+      "expected": {
+        "canonicalBody": "{\"displayName\":\"Тестовый игрок 🎾\",\"externalPlayerId\":\"player-002\",\"payment\":{\"amountMinor\":250000,\"currency\":\"RUB\",\"paidAt\":\"2026-09-01T08:59:00.000Z\",\"reference\":\"pay-002\"}}",
+        "bodySha256": "b3a79dca5d1dde6c8b25c8e471dd616f5f13ad618102e5ee6f2e3cbf7e760103",
+        "signatureInput": "PADLHUB-PARTNER-GAME-V2\npadlhub-partner-game-test\npartner-test\nkey-2026-09\n1788253204\ncHVibGljLWRlbW8tbm9uY2UtNC0wMDAwMDAwMA\nPOST\n/lk/integrations/v1/open-games/game-001/members\nb3a79dca5d1dde6c8b25c8e471dd616f5f13ad618102e5ee6f2e3cbf7e760103\n33333333-3333-4333-8333-333333333334\n44444444-4444-4444-8444-444444444444",
+        "signature": "v2=0dyXeKnDyBFQ5YKUeQitpqDYSwHrgb3AFePkTu7crAo",
+        "wireBody": "{\"displayName\":\"Тестовый игрок 🎾\",\"externalPlayerId\":\"player-002\",\"payment\":{\"amountMinor\":250000,\"currency\":\"RUB\",\"paidAt\":\"2026-09-01T08:59:00.000Z\",\"reference\":\"pay-002\"}}",
+        "wireBodyBytes": 190
+      }
+    }
+  ]
+}

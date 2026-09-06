@@ -2,6 +2,36 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: native тест отложен, подготовлен офлайн-комплект партнёра
+
+- Пользователь отложил native Linux/amd64 Nginx application rehearsal и Docker
+  install. Статус `DEFERRED_BY_USER` / native `NOT_RUN`; исторические FAILED receipts
+  и COMMAND_MISMATCH сохранены, строгие collector/verifier и production default-off
+  не меняются. Существующие branch/WT сохранены, base `e370ff0`, sole local writer.
+- Независимый результат — [передаваемый kit](partner-game-membership-kit/README.md):
+  standalone Node builtins-only reference signer и пять frozen POST/retry/DELETE/
+  GET/Unicode vectors. Golden POST не изменён; ключ строго public test literal,
+  demo IDs и устаревшие timestamps, без CLI URL/key/env-конфигурации и HTTP отправки.
+  Это не production SDK/валидатор произвольного wire input или replay/mTLS proof.
+- Документация описывает восемь proof headers, GET empty wire + signed `{}`,
+  DELETE exact2bytes, UTF-16 sorting/UTF-8 bytes, отсутствие Unicode normalization,
+  fresh-attempt proof при прежнем Idempotency-Key, UNKNOWN и ownership/payment
+  ограничения. Existing P0–P2 вопросы и инфографики связаны ссылками, не переписаны.
+- Добавлены шесть regression tests: server/reference bytes, retry/wire semantics,
+  canonical edge cases, non-demo/unknown input rejection, tampered expectations,
+  copied-outside-repository CLI и redacted failures. Первый portable test выявил
+  macOS `/var` realpath entrypoint mismatch; исправлено сравнением real paths.
+  Первый lint выявил control-regex rule; заменено на charCode-проверку.
+- Final targeted API **45/45**, полный Partner **384/384**, skipped0; scoped ESLint,
+  standalone five-vector CLI на Node22.13.1 и четыре local documentation links PASS.
+  Frontend/modular/full-repo lint/build, CI, physical Nginx/Mongo/Viva не запускались;
+  applicable runtime source, locks, pins, routes, schemas и deployment policy unchanged.
+- Независимый read-only security/compatibility review actual kit: существенных
+  P0–P2 не найдено; отдельные live/runtime gates и public-demo-only граница сохранены.
+- Сетевых/серверных операций, install/download, secret/shared data mutation,
+  main/merge/push/PR/deploy/activation не было; LOCAL_HEAVY не занимался.
+  Партнёру ничего не отправлено: комплект предназначен для пользовательской проверки.
+
 ## 2026-09-06 — Partner: native rehearsal preparation, target ещё не назначен
 
 - После `a150756` пользователь разрешил только подготовку native Linux/amd64.

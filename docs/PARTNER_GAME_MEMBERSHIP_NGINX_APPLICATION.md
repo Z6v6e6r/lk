@@ -1,5 +1,12 @@
 # Nginx: проверка контролируемого применения конфигурации
 
+**Текущий статус, 2026-09-06:** пользователь отложил native Linux/amd64 rehearsal
+и установку Docker: `DEFERRED_BY_USER`, native application `NOT_RUN`. Предыдущие
+FAILED receipts и диагностический COMMAND_MISMATCH сохранены; ни collector, ни
+production verifier не ослаблены. Продолжение независимо от этого теста —
+[офлайн-комплект для партнёра](partner-game-membership-kit/README.md), не deploy.
+Ниже остаются требования и исторические результаты, а не новые runtime PASS.
+
 Продолжение Partner-ветки после `b1839dd`, без изменения боевой среды.
 Это **локальная реализация проверяемого механизма применения**, не готовый
 production collector. `verifyPartnerProductionIngress()` остаётся закрытым:
