@@ -16,6 +16,99 @@ flow. Every input must be an owned `0600` regular file at a canonical absolute p
 The output directory must not exist, must be outside the repository, and must have an
 owned `0700` parent.
 
+## Production v2 evidence capture
+
+The externally pinned `run_viva_game_projection_remediation_preflight.sh` launcher and
+built-ins-only bootstrap form the production capture-only coordinator. They accept the
+already prepared, digest-pinned cutover execution index
+after Node-RED is stopped in `SHADOW` mode and the matching writer-fence receipt has
+been issued. The wrapper acquires the canonical flock and starts the persistent fence
+guardian. The coordinator validates the exact cutover packet, backup and isolated
+restore receipt, installs the Mongo write barrier, compares the complete live
+`games.lk_games` state with the full backup, and captures the skipped records from
+MongoDB and Viva Admin under that same custody.
+
+The provider bearer token and fence token are passed through owned `0400`, single-link
+regular files on descriptors 10 and 7. The built-ins-only bootstrap validates and closes
+both descriptors before starting the guardian or installing the Mongo barrier. It verifies
+the JWT subject against the service-principal digest already pinned by every migration plan.
+The token is not accepted as a command-line argument or environment value and is not
+written to an artifact or standard output.
+
+```bash
+# Start this clean root shell first. EXACT_* digests come from the reviewed cutover plan.
+/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C \
+  /bin/bash --noprofile --norc
+
+repository_root=/absolute/root-owned/reviewed-repository
+runtime_dir="$(/usr/bin/mktemp -d /run/padlhub-viva-remediation-preflight.XXXXXX)"
+/bin/chmod 700 "$runtime_dir"
+wrapper_sha256=EXACT_REVIEWED_PREFLIGHT_WRAPPER_SHA256
+bootstrap_sha256=EXACT_REVIEWED_PREFLIGHT_BOOTSTRAP_SHA256
+
+exec 7</private/fence-token-0400
+exec 10</private/provider-token-0400
+exec 8<"$repository_root/scripts/run_viva_game_projection_remediation_preflight.sh"
+(set -o noclobber; /bin/cat <&8 >"$runtime_dir/launcher.sh")
+/bin/chmod 500 "$runtime_dir/launcher.sh"
+test "$(/usr/bin/stat -Lc '%u:%a:%h' -- "$runtime_dir/launcher.sh")" = "0:500:1"
+test "$(/usr/bin/sha256sum --binary "$runtime_dir/launcher.sh" | /usr/bin/cut -d' ' -f1)" = "$wrapper_sha256"
+
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C \
+  PADLHUB_REMEDIATION_REPOSITORY_ROOT="$repository_root" \
+  PADLHUB_REMEDIATION_RUNTIME_DIR="$runtime_dir" \
+  PADLHUB_REMEDIATION_PREFLIGHT_WRAPPER_SHA256="$wrapper_sha256" \
+  PADLHUB_REMEDIATION_PREFLIGHT_BOOTSTRAP_SHA256="$bootstrap_sha256" \
+  PADLHUB_REMEDIATION_FENCE_TOKEN_FD=7 \
+  PADLHUB_REMEDIATION_PROVIDER_TOKEN_FD=10 \
+  PADLHUB_CUTOVER_GUARDIAN_RECEIPT="$runtime_dir/guardian.receipt.json" \
+  PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST="$runtime_dir/guardian.release-request.json" \
+  PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST="$runtime_dir/guardian.recovery-request.json" \
+  PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST="$runtime_dir/guardian.ready-request.json" \
+  PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT="$runtime_dir/guardian.heartbeat.json" \
+  /bin/bash --noprofile --norc "$runtime_dir/launcher.sh" \
+  --execution-index /private/cutover-execution-index.json \
+  --expected-execution-index-sha256 EXACT_SHA256 \
+  --output-directory /private/new-remediation-v2-evidence \
+  --report /private/new-remediation-preflight-report.json
+```
+
+Direct Node or repository-wrapper invocation is rejected. Before the guardian starts,
+the bootstrap verifies its external wrapper/bootstrap hashes against the plan, reads the
+complete recursive source closure from the exact clean committed Git tree, performs a fresh
+private `npm ci --ignore-scripts --omit=dev` from the committed SRI-bound lockfile, freezes
+the resulting executor, validates all output/recovery paths, and validates both credential
+descriptors. It then opens the canonical lock with `O_NOFOLLOW`, starts the guardian from
+the frozen snapshot, and writes a durable bootstrap custody receipt beside the report.
+That intermediate receipt records the Node-RED runtime as unverified; only the coordinator's
+exact PM2 readback may later assert `RUNTIME_STOPPED`.
+
+The successful terminal state is
+`EVIDENCE_READY_BARRIERS_HELD_RUNTIME_STOPPED`. It publishes version-2 review,
+enrichment and identity-audit artifacts, version-1 fence-bound provider and Mongo
+captures, and the exact migration-plan bundle. Viva is captured in two complete passes;
+each pass must cover the exact union of every remediation date plus or minus seven days.
+Their canonical rows must match exactly, and raw plus canonical per-date digests, counts,
+and tree hashes are retained. The package builder and executor enforce the same two-pass
+scope contract. Before publication it revalidates the
+fence, guardian, Mongo barrier, and complete collection hash after all provider
+requests. It performs zero game-document writes and zero provider writes.
+
+This coordinator has no tenant-migration APPLY, candidate publication, Node-RED start,
+or automatic recovery capability. Success and failure reports bind the existing
+`recover_viva_game_projection_mongo_write_barrier.mjs` executable, its digest, the
+barrier preparation artifact, cutover plan, execution index, fence receipt, guardian
+receipt, and migration connection. The barrier and guardian remain held until an
+operator separately authorizes and runs either package verification/remediation or
+the pinned recovery command. A failed capture must be treated as an outage with
+explicit recovery required; do not release the flock or restart Node-RED first.
+
+Use the published files as the five remediation inputs plus migration-plan bundle in
+the package-builder command below. The full backup, manifest, restore receipt,
+restored artifact, cutover plan and current flow remain in the exact cutover packet;
+the fence receipt, barrier receipt and migration connection remain at the paths bound
+by the cutover execution index and preflight report.
+
 ```bash
 /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
   /usr/bin/node scripts/prepare_viva_game_projection_remediation_package.mjs \

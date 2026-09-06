@@ -6,6 +6,7 @@ import {
   REMEDIATION_EXECUTOR_SOURCE_PATHS,
   validateMigrationPlanBundle,
   validateRemediationPlanShape,
+  validateStableProviderCapture,
 } from "./vivaGameProjectionRemediationExecution.mjs";
 import { hashCanonicalEjson } from "./vivaGameProjectionTenantMigrationExecution.mjs";
 
@@ -277,6 +278,10 @@ export function buildRemediationExecutionPlan({
   const previouslySkippedCount = cutoverPlan?.migration?.totalSkipped;
   const eligibleMongoIds = validateMigrationPlanBundle(inputs.migrationPlanBundle, cutoverPlan);
   const remediationMongoIds = operations.map((operation) => operation.mongoId.$oid).sort();
+  validateStableProviderCapture(
+    inputs.providerCapture.value,
+    remediationMongoIds.map((mongoId) => fullBackup.byMongoId.get(mongoId)),
+  );
   const activeLegacyMongoIds = fullBackup.documents
     .filter((document) => isActiveLegacyDocument(document, dateFrom))
     .map((document) => document._id.toHexString()).sort();

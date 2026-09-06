@@ -21,6 +21,7 @@ import {
   validateExecutableRemediationPlan,
   validateRemediationApplyReceipt,
   validateRemediationPlanShape,
+  validateStableProviderCapture,
 } from "../lib/vivaGameProjectionRemediationExecution.mjs";
 import { hashCanonicalEjson } from "../lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { mongoAuthenticationRestrictionsSha256 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
@@ -62,6 +63,39 @@ const cloneBson = (value) => BSON.EJSON.parse(
   BSON.EJSON.stringify(value, null, 0, { relaxed: false }),
   { relaxed: false },
 );
+const addFixtureDays = (date, days) => {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
+const providerCaptureTreeSha256 = (dates) => sha256(canonicalJson(dates.map(({
+  date, rowCount, canonicalRowsSha256,
+}) => ({ date, rowCount, canonicalRowsSha256 }))));
+const stableProviderCaptureFixture = (documents) => {
+  const requestedDates = new Set();
+  for (const document of documents) {
+    for (let offset = -7; offset <= 7; offset += 1) {
+      requestedDates.add(addFixtureDays(document.booking.date, offset));
+    }
+  }
+  const dates = [...requestedDates].sort().map((date) => {
+    const rowCount = date === "2026-09-07" ? 3 : 0;
+    return {
+      date,
+      rowCount,
+      rawPayloadSha256: sha256(canonicalJson({ date, rowCount, fixture: "raw-provider-payload" })),
+      canonicalRowsSha256: sha256(canonicalJson({ date, rowCount, fixture: "canonical-provider-rows" })),
+    };
+  });
+  const canonicalRowsSha256 = sha256(canonicalJson({ fixture: "complete-canonical-provider-state" }));
+  const captureTreeSha256 = providerCaptureTreeSha256(dates);
+  return [1, 2].map((pass) => ({
+    pass,
+    canonicalRowsSha256,
+    captureTreeSha256,
+    dates: dates.map((entry) => ({ ...entry })),
+  }));
+};
 
 const runtimeDependencyFixture = () => {
   const packageJsonBytes = Buffer.from(`${JSON.stringify({ name: "remediation-runtime-fixture", private: true })}\n`);
@@ -282,6 +316,7 @@ function fixture() {
     servicePrincipalSha256,
     fenceTokenSha256,
     capturedAt: providerCapturedAt,
+    stablePasses: stableProviderCaptureFixture(documents.slice(0, 4)),
     records: operations.map((operation, index) => ({
       itemFingerprint: operation.itemFingerprint,
       category: operation.category,
@@ -680,6 +715,60 @@ test("remediation package builder deterministically derives the exact executable
     REPAIR_METADATA_IDENTITY: 1,
   });
   assert.equal(plan.expectedPostRemediation.activeLegacyEligibleForFreshTenantMigrationPlan, 12);
+});
+
+test("remediation package and executor require two stable provider passes for the exact bounded date scope", () => {
+  const value = fixture();
+  assert.equal(validateStableProviderCapture(
+    value.artifacts.providerCapture.value,
+    value.documents.slice(0, 4),
+  ), true);
+
+  const missingPasses = fixture();
+  delete missingPasses.artifacts.providerCapture.value.stablePasses;
+  assert.throws(() => buildRemediationExecutionPlan({
+    artifacts: missingPasses.artifacts,
+    generatedAt: missingPasses.generatedAt,
+    mutationAt: missingPasses.mutationAt,
+    operationId: missingPasses.operationId,
+    repository: missingPasses.plan.repository,
+    executorSources: missingPasses.plan.executorSources,
+    runtimeDependencies: missingPasses.plan.runtimeDependencies,
+  }), /provider capture fields do not match/);
+  assert.throws(() => validateExecutableRemediationPlan(missingPasses.plan, {
+    expectedPlanSha256: missingPasses.planSha256,
+    planBytes: missingPasses.planBytes,
+    artifacts: missingPasses.artifacts,
+  }), /provider capture fields do not match/);
+
+  const driftedPass = fixture();
+  const secondPass = driftedPass.artifacts.providerCapture.value.stablePasses[1];
+  secondPass.dates[0].rowCount += 1;
+  secondPass.captureTreeSha256 = providerCaptureTreeSha256(secondPass.dates);
+  assert.throws(() => buildRemediationExecutionPlan({
+    artifacts: driftedPass.artifacts,
+    generatedAt: driftedPass.generatedAt,
+    mutationAt: driftedPass.mutationAt,
+    operationId: driftedPass.operationId,
+    repository: driftedPass.plan.repository,
+    executorSources: driftedPass.plan.executorSources,
+    runtimeDependencies: driftedPass.plan.runtimeDependencies,
+  }), /drifted between complete capture passes/);
+
+  const incompleteScope = fixture();
+  for (const pass of incompleteScope.artifacts.providerCapture.value.stablePasses) {
+    pass.dates.pop();
+    pass.captureTreeSha256 = providerCaptureTreeSha256(pass.dates);
+  }
+  assert.throws(() => buildRemediationExecutionPlan({
+    artifacts: incompleteScope.artifacts,
+    generatedAt: incompleteScope.generatedAt,
+    mutationAt: incompleteScope.mutationAt,
+    operationId: incompleteScope.operationId,
+    repository: incompleteScope.plan.repository,
+    executorSources: incompleteScope.plan.executorSources,
+    runtimeDependencies: incompleteScope.plan.runtimeDependencies,
+  }), /exact bounded date scope/);
 });
 
 test("fresh private npm ci dependency capture ignores coherently tampered repository node_modules", () => {
