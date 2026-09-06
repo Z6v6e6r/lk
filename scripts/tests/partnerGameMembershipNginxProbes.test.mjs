@@ -127,6 +127,8 @@ test("real TLS sockets collect exactly the read-only matrix without promoting in
     assert.equal(raw.split("\r\n\r\n")[1], "");
     assert.doesNotMatch(raw, /authorization:|content-length:|cookie:/i);
     assert.match(raw, /X-Padlhub-Signature: not-a-v2-signature\r\n/);
+    const wireId = /X-Padlhub-Probe-Id: ([a-f0-9]{64})\r\n/.exec(raw)?.[1];
+    assert.ok(result.probes.some(row => row.probeId === wireId));
   }
   assert.equal(result.state, "NGINX_TRANSPORT_OBSERVATIONS_NOT_INGRESS_PROOF");
   for (const flag of ["productionVerified", "deployAuthorized", "activationAuthorized"]) assert.equal(result[flag], false);

@@ -1030,3 +1030,8 @@ JSON в packet или объявлять выполненной по synthetic f
 56 loopback tests не доказывают Nginx application. `UNSUPPORTED_INGRESS_ADAPTER`
 сохраняется до доверенного сбора generation/config и server-log correlation.
 Нельзя использовать public invalid probe headers как рабочие partner credentials.
+Локальная generation/log consistency теперь реализована отдельно; это не снимает
+последний production gate. Host session читает прежний fixed nonroot Linux fixture
+collector и приватное окно журнала, но внешний transport/baseline не аттестованы.
+Новый log fragment/public probe ID не устанавливаются на сервер автоматически.
+См. `docs/PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md`, раздел generation/correlation.

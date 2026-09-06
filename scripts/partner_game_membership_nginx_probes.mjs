@@ -163,6 +163,7 @@ function observe(probe, options, window) {
             // guard without ever authenticating a business request. Default-off
             // must be independently established by the future operator.
             headers: { Host: probe.host, Connection: "close", Accept: "application/json", "Accept-Encoding": "identity",
+              "X-Padlhub-Probe-Id": probe.probeId,
               "X-Padlhub-Client-Id": "ingress-probe-unregistered", "X-Padlhub-Key-Id": "ingress-probe-no-key",
               "X-Padlhub-Audience": "ingress-probe-unbound", "X-Padlhub-Timestamp": String(Math.floor(Date.now() / 1000)),
               "X-Padlhub-Nonce": probe.probeId, "Idempotency-Key": crypto.randomUUID(), "X-Correlation-Id": crypto.randomUUID(),

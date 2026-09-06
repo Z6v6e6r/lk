@@ -2,6 +2,45 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: локальные Nginx generation/log consistency и host-session wiring
+
+- Продолжение после `45d15a7`, та же ветка/WT; primary — единственный writer.
+  Новые `partner_game_membership_nginx_generation.mjs` и `nginx_log_window.mjs`:
+  exact baseline/new-worker/config/epoch и HTTP probe/log correlation; source-only
+  fixed map/log_format с literal generation. В collector добавлен публичный
+  `X-Padlhub-Probe-Id`, wire equality проверена existing actual TLS test.
+- Read-only fd удерживается от initial prefix до final check, no reopen/rotation
+  fallback; canonical path/owner0600/ancestors/nlink, bounded strict JSONL, prefix
+  hash/identity, complete tail, stable capture/final state и90s timeout. Не заявляется
+  append-only history: same-inode copytruncate+exact-prefix restore неотличим от
+  append. Sole-writer/no-rotation и OS/root custody остаются будущим live условием.
+- Host session сам вызывает существующий fixed `/control`/`/proc` Linux/x64 reader
+  before/after/final. Native predicate не ослаблен. Caller baseline/transport не
+  становятся attested: LOCAL_HOST_READS_TRANSPORT_UNATTESTED, controlled application
+  и external vantage NOT_PROVEN; production/deploy/activation всегда false.
+  `verifyPartnerProductionIngress()` по-прежнему UNSUPPORTED_INGRESS_ADAPTER.
+- New89/89 targeted PASS; initial87/88 из-за macOS, снимающего setuid file bit,
+  исправлен только test: special-mode metadata явно synthetic. Добавлен успешный
+  actual collector wiring над synthetic proc files (не actual Linux/Nginx PASS).
+  Full frozen-source Partner run650tests/626PASS/24FAIL/0skip, actual exit1;
+  exact24failure names совпали с прошлым checkpoint, новых0. Historical source
+  pins/receipts не перепечатаны для зелёного статуса: full release gate RED.
+- Scoped ESLint PASS; root `npm run lint` фактически exit0,0errors/387warnings.
+  Shared LOCAL_HEAVY согласован, использован только sequential fullPartner→rootlint
+  и освобождён после actual exit обеих команд. Fixtures только owned127.0.0.1,
+  отсутствие новых внешних сетевых/серверных действий.
+- Security и отдельный release read-only review: существенных P0–P2 нет; оба
+  подтвердили LOCAL-only границу. Physical exact escape=json/flush/log directory,
+  config/source→controlled application binding и external vantage не проверены.
+- Docs/test-plan/deploy обновлены; drawio-skill расширил существующую диаграмму
+  страницей Generation and log correlation. XML validation0errors/0warnings;
+  local doc links22PASS. PNG/visual QA NOT_RUN — прежний Electron sandbox blocker.
+- Build NOT_RUN: прежний неизменный preflight17missingVITE. Native application
+  DEFERRED_BY_USER/NOT_RUN сохранён. Нет Docker/SSH/install/secret/route/Nginx reload,
+  Mongo/Viva/shared-data writes, CI/push/PR/merge/deploy/activation. Нового partner
+  approval/signoff не требуется. Дальше — локальное связывание этих наблюдений с
+  controlled-application verifier; до выпуска нужны actual evidence и release gates.
+
 ## 2026-09-06 — Partner: bounded TLS/TCP collector, production verifier ещё не завершён
 
 - Продолжение после `5b9755f`, прежняя ветка/WT, единственный writer — primary.

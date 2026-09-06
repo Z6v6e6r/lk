@@ -2,13 +2,23 @@
 
 ## Уровни доказательств
 
-Текущее source-дополнение после `5b9755f`:
+Локальное продолжение после `45d15a7`: [generation/log correlation](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md#локальная-проверка-поколения-и-корреляция-журнала).
+Новое: private held-fd reader, snapshot/ID/generation/admission correlation,
+host-session wiring к fixed Linux collector; production entry не открыт.
+Синтетические `/proc` metadata tests не доказывают native Linux/Nginx application.
+Целевые89/89 PASS; финальный полный последовательный Partner run: **650 tests /
+626 PASS / 24 FAIL / 0 skipped**. Exact24failure names совпали с предыдущим
+`45d15a7` checkpoint; новых0. Scoped ESLint PASS; root lint фактически exit0,
+0errors/387warnings. XML structural lint0errors/0warnings; local docs links22PASS.
+Build/native/production/PNG visual QA NOT_RUN; release gate остаётся RED.
+
+Предыдущее source-дополнение после `5b9755f`:
 [bounded TLS/TCP collector](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md).
 Целевые56/56 PASS и scoped ESLint PASS. Actual loopback TLS sockets, в том числе
 raw guard → disabled store, не являются Nginx application/external vantage proof.
 Сборщик возвращает observations, не verdict; production entry остаётся закрытым.
 Native rehearsal и прежние immutable-proof blockers не изменены.
-Полный final Partner run: **561 tests / 537 PASS / 24 FAIL / 0 skipped**;
+Его полный final Partner run: **561 tests / 537 PASS / 24 FAIL / 0 skipped**;
 24failure names точно совпали с предыдущим checkpoint, новых0. Полный lint exit0,
 0 errors / 387 warnings. Full release gate остаётся RED; old receipts не пересчитаны.
 

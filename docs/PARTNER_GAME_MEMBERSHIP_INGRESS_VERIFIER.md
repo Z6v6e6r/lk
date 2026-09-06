@@ -3,7 +3,10 @@
 Статус: реализована **общая локальная часть**, не production live-verifier.
 Следующий source slice после `5b9755f` — [исполняемый TLS/TCP collector](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md).
 Он собирает настоящие ограниченные transport observations, но не даёт live verdict:
-config/generation/log correlation и trusted production operator ещё не реализованы.
+production config/generation/log correlation и trusted production operator ещё не реализованы.
+После `45d15a7` добавлены [локальные generation/log consistency и host-session wiring](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md#локальная-проверка-поколения-и-корреляция-журнала).
+Это закрывает source-сопоставление snapshot/probe/log, но не trusted production
+operator, controlled application или внешнюю provenance; общий entry по-прежнему закрыт.
 После `b1839dd` реализуется [controlled-application candidate](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md):
 actual Linux master/workers, свежая метка поколения в log, disk-only negative,
 binding revocation и отдельный network namespace. Это локальная подготовка
