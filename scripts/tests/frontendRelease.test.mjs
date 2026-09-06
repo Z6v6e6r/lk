@@ -46,7 +46,11 @@ def fill(path, sha):
     for name in m.FILES:
         (path/name).write_text('synthetic ' + name)
     (path/'release.json').write_text(json.dumps({'sourceCommit':sha,'sourceDirty':False,'version':sha}))
-fill(a, '1'*40); (root/'lk').symlink_to(a)
+legacy=root/'lk'; legacy.mkdir()
+for name in ['index.html','ffc-academy-lk.js','ffc-academy-lk-dev.js','release-dev.json']:
+    (legacy/name).write_text('legacy ' + name)
+legacy_before={p.name:p.read_bytes() for p in legacy.iterdir()}
+fill(a, '1'*40); (root/'lk-frontend-current').symlink_to(a)
 old = m.run({'op':'inspect'}, root); token='b'*32
 for extra in ['bundle-dev.js', 'release-dev.json', 'index.html', 'ffc-academy-lk.js']:
     (a/extra).write_text('unrelated')
@@ -61,7 +65,7 @@ fill(destination, '2'*40); expected=m.inventory(destination)
 try: m.run({'op':'publish','token':token,'expected':old}, root); raise AssertionError('bad hash allowed')
 except ValueError: pass
 m.run({'op':'publish','token':token,'expected':expected}, root)
-assert (root/'lk').resolve() == destination
+assert (root/'lk-frontend-current').resolve() == destination
 (destination/'bundle.js').write_text('drift')
 try: m.run({'op':'rollback','token':token}, root); raise AssertionError('unknown bytes overwritten')
 except ValueError: pass
@@ -71,6 +75,8 @@ m.run({'op':'rollback','token':token}, root)
 m.run({'op':'finish','token':token,'rolledBack':True}, root)
 assert m.run({'op':'inspect'}, root) == old
 assert a.exists() and destination.exists()
+assert legacy.is_dir() and not legacy.is_symlink()
+assert {p.name:p.read_bytes() for p in legacy.iterdir()} == legacy_before
 print('atomic publication, lease, hash drift, rollback and retention PASS')
 `;
   const result = spawnSync('python3', ['-B', '-c', script, root], { encoding: 'utf8' });
@@ -127,4 +133,75 @@ test('GitHub release gate rejects failed, cancelled, skipped, missing final chec
     assert.match(result.stderr, /Mandatory delivery check did not succeed/);
   }
   assert.match(invoke('success', false).stderr, /Owner must protect main/);
+});
+
+test('nginx candidate redirects only exact standard paths and preserves every other source byte', async () => {
+  const { buildFrontendStaticCandidate, sha256, CURRENT_ROOT } = await import('../nginx/prepare_frontend_static_bootstrap.mjs');
+  const { legacyStaticServer, legacyReleaseLocation } = await import('./fixtures/frontendStaticNginx.mjs');
+  const result = buildFrontendStaticCandidate(legacyStaticServer, sha256(legacyStaticServer));
+  assert.equal(result.candidate.replace(result.fragment, legacyReleaseLocation), legacyStaticServer);
+  assert.deepEqual(result.paths, files.map(name => `/lk/${name}`));
+  assert.equal((result.fragment.match(/location = /g) || []).length, 16);
+  assert.equal((result.fragment.match(/open_file_cache off;/g) || []).length, 16);
+  assert.equal((result.fragment.match(/limit_except GET HEAD OPTIONS/g) || []).length, 16);
+  assert.match(result.candidate, /alias \/var\/www\/html\/lk\/;/);
+  assert.ok(result.fragment.includes(`alias ${CURRENT_ROOT}/bundle.js;`));
+  assert.doesNotMatch(result.fragment, /bundle-dev|academy|index\.html|subscription-bookings|assets\//);
+  assert.throws(() => buildFrontendStaticCandidate(legacyStaticServer, '0'.repeat(64)), /SHA mismatch/);
+  assert.throws(() => buildFrontendStaticCandidate(result.candidate, result.candidateSha), /already present/);
+  // An inline manifest closing brace must not consume the next backend block.
+  const inline = legacyStaticServer.replace('    server_name fixture.invalid;', '    server_name fixture.invalid;\n    location ~ ^/invite/([^/?#]+)/?$ { return 200; }').replace('    }\n', '        # ignored brace }\n        add_header X-Fixture "quoted { }"; }\n')
+    .replace('    location = /lk/subscription-bookings { return 200 "backend-contract-preserved"; }',
+      '    location = /lk/subscription-bookings {\n        return 200 "backend-contract-preserved";\n    }');
+  const inlineResult = buildFrontendStaticCandidate(inline, sha256(inline));
+  const originalInline = inline.slice(inline.indexOf('    location = /lk/release.json'), inline.indexOf('\n    location = /lk/subscription-bookings'));
+  assert.equal(inlineResult.candidate.replace(inlineResult.fragment + '\n', originalInline + '\n'), inline);
+  assert.match(inlineResult.candidate, /location = \/lk\/subscription-bookings \{\n {8}return 200 "backend-contract-preserved";\n {4}\}/);
+  const duplicate = legacyStaticServer.replace('    location ^~ /lk/', '    location = "/lk/bundle.js" { return 404; }\n    location ^~ /lk/');
+  assert.throws(() => buildFrontendStaticCandidate(duplicate, sha256(duplicate)), /Existing exact route/);
+  const crossed = legacyStaticServer.replace('    location ^~ /lk/', '}\nserver {\n    location ^~ /lk/');
+  assert.throws(() => buildFrontendStaticCandidate(crossed, sha256(crossed)), /same server/);
+});
+
+test('offline bootstrap binds exact preimages, preserves source identity and refuses drift or overwrite', async t => {
+  const fs = await import('node:fs');
+  const { prepareBootstrap, sha256 } = await import('../nginx/prepare_frontend_static_bootstrap.mjs');
+  const { legacyStaticServer } = await import('./fixtures/frontendStaticNginx.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'lk-bootstrap-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const distDir = join(root, 'dist'), fontsDir = join(root, 'fonts');
+  mkdirSync(distDir); mkdirSync(fontsDir);
+  const installed = { source: '1'.repeat(40), version: 'fixture-v1', hashes: {} };
+  for (const name of files) {
+    const value = name === 'release.json' ? JSON.stringify({ sourceCommit: installed.source, sourceDirty: false, version: installed.version }) : `fixture ${name}`;
+    const destination = name.startsWith('fonts/') ? join(fontsDir, name.slice(6)) : join(distDir, name);
+    writeFileSync(destination, value); installed.hashes[name] = sha256(value);
+  }
+  writeFileSync(join(distDir, 'index.html'), 'unrelated');
+  const sourceNginx = join(root, 'nginx.conf'); writeFileSync(sourceNginx, legacyStaticServer);
+  const args = { sourceNginx, expectedSourceSha: sha256(legacyStaticServer), installed, distDir, fontsDir, outDir: join(root, 'candidate') };
+  const plan = prepareBootstrap(args);
+  assert.equal(plan.installed.source, installed.source);
+  assert.equal(plan.legacyDirectoryMutationAllowed, false);
+  assert.equal(plan.liveMutationAuthorized, false);
+  assert.equal(plan.activePath, '/var/www/html/lk-frontend-current');
+  assert.equal(readFileSync(join(args.outDir, 'release/release.json'), 'utf8'), readFileSync(join(distDir, 'release.json'), 'utf8'));
+  assert.equal(fs.existsSync(join(args.outDir, 'release/index.html')), false);
+  assert.equal(fs.statSync(join(args.outDir, 'nginx.source.conf')).mode & 0o777, 0o600);
+  assert.throws(() => prepareBootstrap(args), /EEXIST/);
+  writeFileSync(join(distDir, 'bundle.js'), 'drift');
+  assert.throws(() => prepareBootstrap({ ...args, outDir: join(root, 'drift') }), /artifact hash mismatch/);
+  assert.equal(fs.existsSync(join(root, 'drift')), false);
+});
+
+
+test('real nginx rehearsal is a mandatory release-mechanism check', () => {
+  const workflow = load(readFileSync('.github/workflows/lk1-subscription-enforcement.yml', 'utf8'));
+  const gate = workflow.jobs['lk1-exact-head'].steps.find(step => step.id === 'check_static_nginx');
+  assert.ok(gate);
+  assert.equal(gate.if, "steps.route.outputs.profile == 'release'");
+  assert.equal(gate.env.DELIVERY_CATEGORY, 'release');
+  assert.equal(gate['continue-on-error'], undefined);
+  assert.match(gate.run, /npm run test:frontend-static-nginx/);
+  assert.match(gate.run, /docker pull nginx@sha256:[a-f0-9]{64}/);
 });

@@ -55,10 +55,10 @@ def inventory(path):
 def run(request, parent=Path('/var/www/html')):
     # parent injection is for local synthetic tests; CLI never accepts a remote root.
     parent = parent.resolve(strict=True)
-    active = parent / 'lk'
+    active = parent / 'lk-frontend-current'
     releases = parent / 'lk-frontend-releases'
     if releases.is_symlink() or not releases.is_dir() or not active.is_symlink():
-        raise ValueError('Owner bootstrap required: lk symlink and lk-frontend-releases')
+        raise ValueError('Owner bootstrap required: lk-frontend-current symlink and lk-frontend-releases')
     lock = releases / '.lock'
     with open(lock, 'a') as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -129,7 +129,7 @@ def run(request, parent=Path('/var/www/html')):
             return {'finished': True}
         else:
             raise ValueError('Unknown operation')
-        temporary = parent / ('.lk-switch-' + token)
+        temporary = parent / ('.lk-frontend-switch-' + token)
         os.symlink(target, temporary)
         os.replace(temporary, active)
         sync_dir(parent)

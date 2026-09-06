@@ -7,7 +7,7 @@
 После включения: готовый небольшой PR → применимый CI → bot запрашивает разрешённое
 GitHub protected auto-merge → CI интегрированного main → проверка всего installed..source
 → `build:prod` → `release:preflight:prod` + `package:upload:prod` → существующий
-`deploy-lk.sh prod` в новый статический каталог → атомарная замена ссылки `/lk` →
+`deploy-lk.sh prod` в новый статический каталог → атомарная замена ссылки `lk-frontend-current` →
 HTTP hash/cache readback и Chromium/WebKit smoke → receipt. Ошибка вызывает возврат
 точного предыдущего комплекта, его повторный smoke и неуспешный результат workflow.
 Неизвестные байты или неполное восстановление сохраняют lease и блокируют следующий выпуск.
@@ -55,17 +55,20 @@ production публикации: push CI проверяет интеграцию
    `LK1 exact-head enforcement gate` только от GitHub Actions, запрет прямого/force push
    и обхода bot, требуемый review изменений CI/release/policy (CODEOWNERS или ruleset).
    Включить repository auto-merge и squash merge. Применимость FAST не отменяет защиты.
-2. Подтвердить bootstrap существующего prod на `lk-primary-147`: только 11 prod bundles,
-   `release.json` и четыре fonts из `scripts/frontend-release-remote.py`; никаких DEV,
-   academy, index.html или чужих файлов. DEV остаётся на `lk-reserve-89`.
-   Любые дополнительные маршруты сначала изолировать отдельным согласованным изменением.
-   Сохранить проверенный текущий комплект как реальный каталог
-   `/var/www/html/lk-frontend-releases/<full-source-sha>-<16-hex-id>` и сделать `/var/www/html/lk`
-   ссылкой на него. Проверить hash/public readback, полный sourceCommit/sourceDirty=false,
-   совместимость Tilda loader и `no-cache`/`no-store` для release.json. Проверить
-   atomic switch/restore на синтетическом host rehearsal и права выделенного SSH пользователя
-   только на эти static paths. Все последующие writers обязаны уважать `.lease.json`.
-   Bootstrap не выполняется этой задачей; неизвестный installed source — стоп выпуска.
+2. Подготовить bootstrap существующего prod на `lk-primary-147`. Каталог
+   `/var/www/html/lk` и его legacy URL сохраняются: academy prod/dev, index.html,
+   assets, дополнительные шрифты и резервные копии не входят в переключаемый комплект.
+   Отдельный реальный каталог `/var/www/html/lk-frontend-releases/<full-source-sha>-<16-hex-id>`
+   содержит ровно 11 prod bundles, release.json и четыре WOFF2. Ссылка
+   `/var/www/html/lk-frontend-current` указывает на этот комплект. Nginx направляет туда
+   только 16 точных URL `/lk/...`; прежний alias `/lk/` и backend-location остаются
+   неизменными. URL клиентов и Tilda loader не меняются. DEV остаётся на `lk-reserve-89`;
+   имеющиеся дополнительные DEV/academy URL на primary также не удаляются.
+   Подготовка кандидата и rehearsal описаны ниже. Установить его можно только после
+   проверки свежего nginx/artifact preimage, baseline smoke и scoped SSH permissions.
+   Прямые legacy `deploy:prod` после активации не обслуживают новый current path:
+   стандартный маршрут использует existing upload только с exact staging destination.
+   Другие writers допускаются лишь по отдельно определённому согласованному пути.
 3. Создать environment `frontend-production`, разрешающий только main, без повторного
    reviewer prompt после этой настройки; scoped bot token `LK_FRONTEND_MERGE_TOKEN`
    (merge через bot нужен для push-trigger CI) и static-only `LK_FRONTEND_SSH_KEY`.
@@ -117,3 +120,45 @@ exact graph, lock/lease, защита чужих изменений, guarded rol
 не нужно вручную переписывать неизменившиеся доказательства. Одно критическое согласование
 охватывает определённую последовательность и recovery, пока source/scope/условия не меняются.
 Один продукт и один рабочий сквозной сценарий достаточны для первого ограниченного выпуска.
+
+## Offline static bootstrap candidate
+
+`release:frontend:bootstrap-candidate` не имеет apply/reload/SSH-команды. Она читает
+локальные копии source nginx и полного установленного комплекта, проверяет SHA-256
+каждого из 16 файлов и сохраняет private candidate вне Git:
+
+```bash
+npm run release:frontend:bootstrap-candidate -- \
+  /private/bootstrap/nginx.source.conf <source-sha256> \
+  /private/bootstrap/installed.json /verified/build/dist /verified/build/src/fonts \
+  /private/bootstrap/new-candidate
+```
+
+`installed.json`: `{ "source": "<full-source-sha>", "version": "<installed-version>",
+"hashes": { "bundle.js": "<sha256>", "...all 16 exact paths...": "<sha256>" } }`.
+Использовать independently read-back hashes, а не хеши заново собранного кандидата.
+Родитель вывода должен существовать, принадлежать текущему пользователю и иметь mode
+0700. Существующий/частичный output не перезаписывается. `bootstrap.json` создаётся
+последним; source/candidate nginx имеют mode 0600. Manifest копируется byte-for-byte:
+baseline `94cb4bb` нельзя переименовать в текущий main.
+
+Результат: `release/`, `nginx.source.conf`, `nginx.candidate.conf`, `bootstrap.json`.
+Кандидат заменяет только существующий exact release.json block на 16 exact locations.
+Каждый location сохраняет cache/CORS, допускает GET/HEAD/OPTIONS, запрещает запись и
+отключает open_file_cache, чтобы открытый inode не переживал переключение current.
+Неизвестная структура, duplicate exact routes и source drift блокируют генерацию.
+Ни source nginx, ни private результаты нельзя коммитить или загружать в PR artifacts.
+
+`npm run test:frontend-static-nginx` проверяет настоящий pinned nginx 1.24.0 в
+одноразовом Linux/amd64 container с network=none, без опубликованных портов и с
+read-only fixture mounts. Проверяются старый/новый/восстановленный комплект, все 16
+URL, headers, legacy academy/assets/index/fonts, backend path, OPTIONS/POST и 404.
+Этот тест обязателен в CI только для изменения самого release-механизма.
+
+Однократное применение: под согласованным writer boundary сверить nginx и все
+artifact preimages; установить baseline/new symlink; проверить nginx-кандидат;
+guarded заменить exact config и выполнить nginx -t до reload; затем проверить
+16 публичных hashes, сохранённые legacy URL и браузерный сценарий. При ошибке вернуть
+только exact nginx source и reload. Чужой nginx drift запрещает rollback. Legacy
+каталог, baseline и candidate artifacts не удаляются. Это последовательность для
+отдельного утверждения, а не разрешение выполнить её из offline builder.
