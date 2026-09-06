@@ -17,6 +17,15 @@ const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
 const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260903_release_enabled";
 const NETWORK_FRIENDSHIP_DAILY_LIMIT = 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
+const MANAGED_SALE_COMPATIBILITY = {
+  adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
+  contractVersion: 1,
+  capabilityDigest: "sha256:f1e00751ba2ef19b1945964f2ee90d2d88dbf11121fdb75dfe573b6b12f31791",
+};
+const NETWORK_FRIENDSHIP_PROVIDER_SCOPE = {
+  kind: "STATION_SET",
+  scopeId: "station-set:469c42f52aeda36c921660ab7eff8a89421953fbf1136af9cb6951612d26c877",
+};
 // Piter sales temporarily use the proven legacy lifecycle. This does not enable
 // managed usage policy; only the annual checkout readiness flag is reopened.
 const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
@@ -241,6 +250,39 @@ const readGlobalFirst = (keys) => {
   }
   return null;
 };
+
+const managedSaleReadinessConfig = () => {
+  const apiBase = readGlobalFirst(["subscriptions_runtime_api_base_url"]);
+  const integrationToken = readGlobalFirst(["subscriptions_sale_readiness_integration_token"]);
+  if (!apiBase || !integrationToken) return null;
+  return { apiBase: apiBase.replace(/\/+$/, ""), integrationToken };
+};
+
+const isManagedReadinessResponse = (payload) => payload && typeof payload === "object"
+  && payload.schemaVersion === 1
+  && payload.ready === true
+  && payload.provider === "VIVA"
+  && payload.providerProductId === REGIONAL_FRIENDSHIP_CONFIGS.network_friendship.providerProductId
+  && payload.providerScope?.kind === NETWORK_FRIENDSHIP_PROVIDER_SCOPE.kind
+  && payload.providerScope?.scopeId === NETWORK_FRIENDSHIP_PROVIDER_SCOPE.scopeId
+  && payload.requiredCompatibility?.adapterId === MANAGED_SALE_COMPATIBILITY.adapterId
+  && payload.requiredCompatibility?.contractVersion === MANAGED_SALE_COMPATIBILITY.contractVersion
+  && payload.requiredCompatibility?.capabilityDigest === MANAGED_SALE_COMPATIBILITY.capabilityDigest
+  && payload.instanceProjector?.status === "CURRENT"
+  && payload.binding && typeof payload.binding === "object"
+  && toStr(payload.binding.mappingId)
+  && Number.isInteger(payload.binding.mappingRevision)
+  && toStr(payload.binding.subscriptionTypeId)
+  && toStr(payload.binding.publicationId)
+  && Number.isInteger(payload.binding.policyVersion)
+  && /^sha256:[a-f0-9]{64}$/.test(toStr(payload.binding.policyDigest) || "")
+  && toStr(payload.binding.fenceId)
+  && Number.isInteger(payload.binding.fenceRevision)
+  && /^sha256:[a-f0-9]{64}$/.test(toStr(payload.binding.fenceDigest) || "")
+  && toStr(payload.binding.releaseProgramId)
+  && Number.isInteger(payload.binding.releaseProgramRevision)
+  && toStr(payload.binding.releasePhaseId)
+  && /^sha256:[a-f0-9]{64}$/.test(toStr(payload.binding.projectorReconciliationDigest) || "");
 
 const resolveDailyDropDate = (now = new Date(Date.now())) => {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -643,10 +685,17 @@ const matchesCounterRecord = (doc, counter) => {
   return Boolean(rowProductId && rowProductId === toStr(counter.productId));
 };
 
-const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const ctx = msg._summerSubscriptionCtx && typeof msg._summerSubscriptionCtx === "object"
   ? msg._summerSubscriptionCtx
   : {};
+let managedReadinessPayload = null;
+let managedReadinessAttempted = ctx._managedSaleReadinessAttempted === true;
+let rows = Array.isArray(msg.payload) ? msg.payload : [];
+if (managedReadinessAttempted && Array.isArray(ctx._managedSaleStatusRows)) {
+  managedReadinessPayload = msg.payload && typeof msg.payload === "object" ? msg.payload : null;
+  rows = ctx._managedSaleStatusRows;
+  delete ctx._managedSaleStatusRows;
+}
 const configMap = buildCounterConfigMap();
 const configuredCounters = Array.isArray(ctx.counters) && ctx.counters.length > 0
   ? ctx.counters
@@ -656,6 +705,47 @@ const configuredCounters = Array.isArray(ctx.counters) && ctx.counters.length > 
     .map((counterKey) => configMap[counterKey])
     .filter((counter) => Boolean(counter));
 
+const needsNetworkReadiness = configuredCounters.some(
+  (counter) => normalizeCounterKey(counter?.counterKey) === "network_friendship"
+    && !MANAGED_SALE_BLOCKED_COUNTER_KEYS.has("network_friendship")
+);
+if (needsNetworkReadiness && !managedReadinessAttempted) {
+  const config = managedSaleReadinessConfig();
+  if (config) {
+    ctx._managedSaleReadinessAttempted = true;
+    ctx._managedSaleStatusRows = rows;
+    msg._summerSubscriptionCtx = ctx;
+    msg.method = "POST";
+    msg.url = `${config.apiBase}/internal/subscriptions/sale-readiness`;
+    msg.headers = {
+      "Content-Type": "application/json",
+      "X-Subscriptions-Integration-Token": config.integrationToken,
+      "X-Correlation-Id": `lk-sale-status:${Date.now()}`,
+    };
+    msg.requestTimeout = Math.max(
+      3000,
+      Math.min(20000, toInt(global.get("subscriptions_sale_readiness_timeout_ms"), 5000)),
+    );
+    msg.payload = {
+      provider: "VIVA",
+      providerProductId: REGIONAL_FRIENDSHIP_CONFIGS.network_friendship.providerProductId,
+      providerScopeKind: NETWORK_FRIENDSHIP_PROVIDER_SCOPE.kind,
+      providerScopeId: NETWORK_FRIENDSHIP_PROVIDER_SCOPE.scopeId,
+      requiredAdapterId: MANAGED_SALE_COMPATIBILITY.adapterId,
+      requiredContractVersion: MANAGED_SALE_COMPATIBILITY.contractVersion,
+      requiredCapabilityDigest: MANAGED_SALE_COMPATIBILITY.capabilityDigest,
+    };
+    const debugMsg = Object.assign({}, msg, {
+      payload: { action: "managed_sale_status_readiness_request", counterKey: "network_friendship" },
+    });
+    delete debugMsg.headers;
+    delete debugMsg.url;
+    delete debugMsg.req;
+    delete debugMsg.res;
+    return [null, debugMsg, msg];
+  }
+}
+
 const statesByCounterKey = {};
 const countersOrder = [];
 configuredCounters.forEach((counter) => {
@@ -664,6 +754,18 @@ configuredCounters.forEach((counter) => {
   statesByCounterKey[counterKey] = createCounterState(counter);
   countersOrder.push(counterKey);
 });
+
+if (statesByCounterKey.network_friendship) {
+  const ready = !MANAGED_SALE_BLOCKED_COUNTER_KEYS.has("network_friendship")
+    && typeof msg.statusCode === "number"
+    && Number.isInteger(msg.statusCode) && msg.statusCode >= 200 && msg.statusCode < 300
+    && !msg.error
+    && isManagedReadinessResponse(managedReadinessPayload) === true;
+  statesByCounterKey.network_friendship.managedSaleReady = ready;
+  statesByCounterKey.network_friendship.managedSaleError = ready
+    ? null
+    : "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE";
+}
 
 if (countersOrder.length === 0) {
   DEFAULT_VISIBLE_COUNTER_KEYS.forEach((counterKey) => {
@@ -759,6 +861,78 @@ if (piterState && piterLedger?.ready === true
   piterState._lastUpdatedAtTs = toTs(piterLedger.updatedAt) ?? toTs(piterLedger.baselineCapturedAt);
 }
 
+const hubLedger = docs.find((item) => (
+  item?._id === "inventory:network_friendship_12m_2026_v1"
+  && item?.counterKey === "network_friendship"
+  && item?.inventoryId === "network_friendship_12m_2026_v1"
+));
+const hubState = statesByCounterKey.network_friendship;
+const hubLegacyRefs = Array.isArray(hubLedger?.legacyPaymentRefs)
+  ? hubLedger.legacyPaymentRefs.map(toStr)
+  : [];
+const hubReservations = Array.isArray(hubLedger?.reservations) ? hubLedger.reservations : [];
+const hubReservationRefs = hubReservations.map((item) => toStr(item?.paymentRef));
+const hubTransactionIds = hubReservations.map((item) => toStr(item?.transactionId)).filter(Boolean);
+const hubActiveReservations = hubReservations.filter((item) => (
+  ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"].includes(item?.state)
+));
+const hubActiveIntentFingerprints = hubActiveReservations.map((item) => toStr(item?.intentFingerprint));
+const hubDailyPaidReservations = hubReservations.filter((item) => (
+  item?.state === "PAID" && item?.dailyDate === hubLedger?.dailyDate
+)).length;
+const hubDailyActiveReservations = hubActiveReservations.filter((item) => (
+  item?.dailyDate === hubLedger?.dailyDate
+)).length;
+const hubLedgerRowsValid = Array.isArray(hubLedger?.legacyPaymentRefs)
+  && Array.isArray(hubLedger?.reservations)
+  && hubLegacyRefs.every(Boolean)
+  && hubReservationRefs.every(Boolean)
+  && hubReservations.every((item) => [
+    "CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN", "PAID", "FAILED",
+  ].includes(item?.state))
+  && new Set(hubLegacyRefs).size === hubLegacyRefs.length
+  && new Set(hubReservationRefs).size === hubReservationRefs.length
+  && new Set(hubTransactionIds).size === hubTransactionIds.length
+  && hubActiveIntentFingerprints.every(Boolean)
+  && new Set(hubActiveIntentFingerprints).size === hubActiveIntentFingerprints.length
+  && !hubReservationRefs.some((item) => hubLegacyRefs.includes(item))
+  && hubLedger?.paidCount === hubLegacyRefs.length
+    + hubReservations.filter((item) => item?.state === "PAID").length
+  && hubLedger?.reservedCount === hubActiveReservations.length
+  && hubLedger?.dailyPaidCount === hubLedger?.dailyBaselinePaidCount + hubDailyPaidReservations
+  && hubLedger?.dailyReservedCount === hubDailyActiveReservations;
+const hubLedgerValid = Boolean(hubState && hubLedger?.ready === true
+  && hubLedger.schemaVersion === 1
+  && Number.isInteger(hubLedger.revision) && hubLedger.revision >= 0
+  && Number.isInteger(hubLedger.paidCount) && hubLedger.paidCount >= 0
+  && Number.isInteger(hubLedger.reservedCount) && hubLedger.reservedCount >= 0
+  && Number.isInteger(hubLedger.takenCount) && hubLedger.takenCount >= 0
+  && hubLedger.takenCount === hubLedger.paidCount + hubLedger.reservedCount
+  && hubLedger.takenCount <= hubState.inventoryTotalLimit
+  && /^\d{4}-\d{2}-\d{2}$/.test(toStr(hubLedger.dailyDate) || "")
+  && Number.isInteger(hubLedger.dailyBaselinePaidCount) && hubLedger.dailyBaselinePaidCount >= 0
+  && Number.isInteger(hubLedger.dailyPaidCount) && hubLedger.dailyPaidCount >= 0
+  && Number.isInteger(hubLedger.dailyReservedCount) && hubLedger.dailyReservedCount >= 0
+  && hubLedger.dailyPaidCount + hubLedger.dailyReservedCount <= hubState.dailyLimit
+  && /^[a-f0-9]{64}$/.test(toStr(hubLedger.baselineDigest) || "")
+  && Number.isFinite(Date.parse(toStr(hubLedger.baselineCapturedAt) || ""))
+  && hubLedgerRowsValid);
+if (hubState && hubLedgerValid) {
+  hubState.paidCount = hubLedger.paidCount;
+  hubState.reservedCount = hubLedger.reservedCount;
+  hubState.takenCount = hubLedger.takenCount;
+  hubState.remainingCount = Math.max(hubState.inventoryTotalLimit - hubLedger.takenCount, 0);
+  hubState._dailyPaidCount = hubLedger.dailyPaidCount;
+  hubState._dailyReservedCount = hubLedger.dailyReservedCount;
+  hubState.inventoryPaidCount = hubLedger.paidCount;
+  hubState.inventoryReservedCount = hubLedger.reservedCount;
+  hubState.inventoryRemainingCount = Math.max(hubState.inventoryTotalLimit - hubLedger.takenCount, 0);
+  hubState._lastUpdatedAtTs = toTs(hubLedger.updatedAt) ?? toTs(hubLedger.baselineCapturedAt);
+} else if (hubState) {
+  hubState.managedSaleReady = false;
+  hubState.managedSaleError = "HUB_ATOMIC_LEDGER_NOT_READY";
+}
+
 for (const doc of docs) {
   const matchedCounterKey = countersOrder.find((counterKey) => {
     const state = statesByCounterKey[counterKey];
@@ -767,8 +941,10 @@ for (const doc of docs) {
   if (!matchedCounterKey) continue;
 
   const state = statesByCounterKey[matchedCounterKey];
-  if (matchedCounterKey === "piter_friendship" && piterLedger) continue;
-  const status = normalizeStatus(doc.status);
+  if ((matchedCounterKey === "piter_friendship" && piterLedger)
+    || (matchedCounterKey === "network_friendship" && hubLedger)) continue;
+  const normalizedStatus = normalizeStatus(doc.status);
+  const status = normalizedStatus === "PAID_PENDING_INSTANCE_BINDING" ? "PAID" : normalizedStatus;
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
   const pendingDeadlineTs = resolvePendingDeadlineTs(doc, reservationMinutes);
   const eventTs = status === "PAID"
@@ -1053,4 +1229,4 @@ const debugMsg = Object.assign({}, msg, {
   },
 });
 
-return [msg, debugMsg];
+return [msg, debugMsg, null];

@@ -75,7 +75,7 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner runtime identity");
   exactKeys(manifest.closure, [
     "packageJsonSha256", "packageLockSha256", "dependencyTreeSha256", "auditReportSha256",
-    "functionalRehearsalSha256", "customNodeReleaseSha256",
+    "functionalRehearsalSha256", "customNodeReleaseSha256", "containerReceiptSha256",
   ], "Partner runtime closure");
   exactKeys(manifest.installation, ["command", "installedPackageCount", "exitCode"], "Partner runtime installation");
   exactKeys(manifest.dependencyTree, [
@@ -86,7 +86,7 @@ export function validatePartnerRuntimeEvidence({
   if (manifest.formatVersion !== 1
     || manifest.deploymentId !== "partner-game-membership-api-v02"
     || manifest.state !== "SECURITY_AUDIT_PASS"
-    || manifest.sourceBaseCommit !== "c92e432a9d0319cfebcd2c37b7967aef118f2f41"
+    || manifest.sourceBaseCommit !== "26f90b6d5f54fa3ae6f51f77e70391957b44b781"
     || manifest.runtime.platform !== "linux"
     || manifest.runtime.architecture !== "x64"
     || manifest.runtime.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
@@ -104,6 +104,38 @@ export function validatePartnerRuntimeEvidence({
     || manifest.closure.customNodeReleaseSha256 !== customReleaseSha256) {
     fail("Partner runtime immutable closure hash mismatch");
   }
+  const receipt = functionalRehearsal.containerReceipt;
+  exactKeys(receipt, [
+    "formatVersion", "evidenceScope", "containerId", "imageReference", "containerImageId",
+    "platformImageId", "imageRepoDigests", "platform", "architecture", "networkMode",
+    "publishedPortCount", "mounts", "orchestratorSha256", "inspectedAt", "finishedAt",
+    "exitCode", "cleanupCapturedAt", "containerPresentAfterCleanup", "hostListenerPresentAfterCleanup",
+  ], "Partner container receipt");
+  if (manifest.closure.containerReceiptSha256 !== sha256(Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`))) {
+    fail("Partner container receipt hash mismatch");
+  }
+  const imageReference = `node@sha256:${manifest.runtime.nodeImageSha256}`;
+  const receiptTimes = [receipt.inspectedAt, receipt.finishedAt, receipt.cleanupCapturedAt].map(Date.parse);
+  if (receipt.formatVersion !== 1 || receipt.evidenceScope !== "LOCAL_CONTAINER_CLI_READBACK"
+    || !/^[a-f0-9]{64}$/.test(receipt.containerId)
+    || receipt.imageReference !== imageReference
+    || !/^sha256:[a-f0-9]{64}$/.test(receipt.containerImageId)
+    || !/^sha256:[a-f0-9]{64}$/.test(receipt.platformImageId)
+    || !Array.isArray(receipt.imageRepoDigests) || !receipt.imageRepoDigests.includes(imageReference)
+    || receipt.platform !== "linux" || receipt.architecture !== "amd64"
+    || receipt.networkMode !== "none" || receipt.publishedPortCount !== 0
+    || !/^[a-f0-9]{64}$/.test(receipt.orchestratorSha256)
+    || !receiptTimes.every(Number.isFinite)
+    || receiptTimes[0] > receiptTimes[1] || receiptTimes[1] > receiptTimes[2]
+    || receipt.exitCode !== 0 || receipt.containerPresentAfterCleanup !== false
+    || receipt.hostListenerPresentAfterCleanup !== false
+    || !isDeepStrictEqual(receipt.mounts, [
+      { sourceRelativePath: ".tmp/partner-viva-p2-sidecar", target: "/input/flows", readOnly: true },
+      { sourceRelativePath: ".tmp/partner-viva-rehearse.mjs", target: "/input/rehearse.mjs", readOnly: true },
+      { sourceRelativePath: ".tmp/partner-viva-p2-runtime", target: "/input/runtime", readOnly: true },
+      { sourceRelativePath: "scripts/partner_game_membership_sidecar", target: "/input/sidecar", readOnly: true },
+      { sourceRelativePath: ".tmp/partner-viva-p2-output", target: "/output", readOnly: false },
+    ])) fail("Partner container receipt does not prove the isolated rehearsal boundary");
   if (!isDeepStrictEqual(packageJson, {
     name: "padlhub-partner-game-membership-runtime",
     version: "0.2.0",
@@ -167,7 +199,7 @@ export function validatePartnerRuntimeEvidence({
   exactKeys(functionalRehearsal, [
     "formatVersion", "deploymentId", "capturedAt", "clockSource", "evidenceScope", "sourceBaseCommit",
     "customNodeReleaseSha256", "runtime", "installation", "candidate", "defaultOff",
-    "shutdown", "flowRollback", "packageRollback", "cleanup", "decision", "productionTouched",
+    "shutdown", "flowRollback", "packageRollback", "cleanup", "decision", "productionTouched", "containerReceipt",
   ], "Partner functional rehearsal evidence");
   exactKeys(functionalRehearsal.runtime, [
     "platform", "architecture", "nodeImageSha256", "nodeVersion", "npmVersion", "nodeRedVersion",
@@ -189,7 +221,7 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner functional rehearsal cleanup");
   if (functionalRehearsal.formatVersion !== 1
     || functionalRehearsal.deploymentId !== manifest.deploymentId
-    || functionalRehearsal.capturedAt !== "2026-09-04T12:27:45.000Z"
+    || functionalRehearsal.capturedAt !== "2026-09-05T06:49:04.000Z"
     || functionalRehearsal.clockSource !== "node-red-container-log"
     || functionalRehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || functionalRehearsal.sourceBaseCommit !== manifest.sourceBaseCommit
@@ -200,7 +232,7 @@ export function validatePartnerRuntimeEvidence({
     })
     || !isDeepStrictEqual(functionalRehearsal.candidate, {
       sourceFlowSha256: "ea9b6a5e1b783327a5e4785e8ef6656ee2c3ea3c8523bf46c63599ae0580a2b2",
-      candidateFlowSha256: "65b540a925f731fa9ce7967cd46ec8fe25e8b11c5a1aa3291ff7e6c801088dd2",
+      candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
       audienceEnvironmentVariable: "LK_PARTNER_GAME_API_AUDIENCE",
       signatureVersion: "v2",
     })

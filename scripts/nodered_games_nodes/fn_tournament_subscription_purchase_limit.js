@@ -9,6 +9,15 @@ const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
   "network_friendship",
 ]);
+const MANAGED_SALE_COMPATIBILITY = {
+  adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
+  contractVersion: 1,
+  capabilityDigest: "sha256:f1e00751ba2ef19b1945964f2ee90d2d88dbf11121fdb75dfe573b6b12f31791",
+};
+const NETWORK_FRIENDSHIP_PROVIDER_SCOPE = {
+  kind: "STATION_SET",
+  scopeId: "station-set:469c42f52aeda36c921660ab7eff8a89421953fbf1136af9cb6951612d26c877",
+};
 const MANUAL_PAID_COUNT_DEFAULTS = {
   academy: 4,
   ra: 37,
@@ -112,9 +121,28 @@ const resolveDailyDropDate = (timestamp) => {
   return new Date(dropDay).toISOString().slice(0, 10);
 };
 
+const resolveMoscowDate = (timestamp) => {
+  if (!Number.isFinite(timestamp)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+};
+
 const resolveHttpTimeoutMs = () => {
   const raw = toInt(global.get("summer_subscription_http_timeout_ms"), 20000);
   return Math.max(3000, Math.min(120000, raw));
+};
+
+const managedSaleReadinessConfig = () => {
+  const apiBase = toStr(global.get("subscriptions_runtime_api_base_url"));
+  const integrationToken = toStr(global.get("subscriptions_sale_readiness_integration_token"));
+  if (!apiBase || !integrationToken) return null;
+  return { apiBase: apiBase.replace(/\/+$/, ""), integrationToken };
 };
 
 const normalizeStatus = (value) => {
@@ -246,7 +274,8 @@ for (const row of rows) {
   if (!matchesConfiguredCounter(row, ctx)) continue;
   if (!matchesConfiguredProduct(row, ctx.productId)) continue;
 
-  const status = normalizeStatus(row.status);
+  const normalizedStatus = normalizeStatus(row.status);
+  const status = normalizedStatus === "PAID_PENDING_INSTANCE_BINDING" ? "PAID" : normalizedStatus;
   const stagedRelease = ctx.stagedRelease === true;
   const releasePhase = toStr(row.releasePhase) === "daily" ? "daily" : "launch";
   const eventTs = status === "PAID"
@@ -262,6 +291,11 @@ for (const row of rows) {
       continue;
     }
     paidCount += 1;
+    if (ctx.dailyCapEnabled === true
+      && eventTs != null
+      && resolveMoscowDate(eventTs) === toStr(ctx.dailyDropDate)) {
+      dailyPaidCount += 1;
+    }
     continue;
   }
   if (status !== "PAYMENT_PENDING") continue;
@@ -274,6 +308,11 @@ for (const row of rows) {
       continue;
     }
     reservedCount += 1;
+    if (ctx.dailyCapEnabled === true
+      && eventTs != null
+      && resolveMoscowDate(eventTs) === toStr(ctx.dailyDropDate)) {
+      dailyReservedCount += 1;
+    }
   }
 }
 
@@ -318,7 +357,17 @@ const totalLimit = stagedRelease
   : Math.max(0, Math.floor(Number(ctx.totalLimit) || 0));
 const takenCount = paidCount + reservedCount;
 const unlimited = ctx.unlimited === true;
-const remainingCount = unlimited ? null : Math.max(totalLimit - takenCount, 0);
+const inventoryRemainingCount = unlimited ? null : Math.max(totalLimit - takenCount, 0);
+const dailyCapEnabled = !stagedRelease && ctx.dailyCapEnabled === true;
+const dailyTakenCount = dailyPaidCount + dailyReservedCount;
+const dailyRemainingCount = dailyCapEnabled
+  ? Math.max(Math.max(0, dailyLimit) - dailyTakenCount, 0)
+  : null;
+const remainingCount = unlimited
+  ? null
+  : dailyCapEnabled
+    ? Math.min(inventoryRemainingCount, dailyRemainingCount)
+    : inventoryRemainingCount;
 
 const regionalCounterKey = normalizeCounterKey(ctx.counterKey);
 const regionalBindingLabel = REGIONAL_FRIENDSHIP_BINDING_LABELS[regionalCounterKey];
@@ -382,6 +431,9 @@ if (!unlimited && remainingCount <= 0) {
     launchReservedCount,
     launchCompletedAt,
     dailyLimit,
+    dailyPaidCount,
+    dailyReservedCount,
+    dailyRemainingCount,
     dailyDropDate: toStr(ctx.dailyDropDate),
     dailyDropStartsAt,
   });
@@ -389,6 +441,10 @@ if (!unlimited && remainingCount <= 0) {
 
 ctx.releasePhase = releasePhase;
 ctx.dailyDropActive = dailyDropActive;
+ctx.dailyCapEnabled = dailyCapEnabled;
+ctx.dailyPaidCount = dailyPaidCount;
+ctx.dailyReservedCount = dailyReservedCount;
+ctx.dailyRemainingCount = dailyRemainingCount;
 ctx.totalLimit = totalLimit;
 ctx.launchPaidCount = launchPaidCount;
 ctx.launchReservedCount = launchReservedCount;
@@ -403,6 +459,44 @@ if (!vivaTokenRequestBody) {
   return failMsg(503, "Сервисная авторизация Viva не настроена", {
     code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
   });
+}
+
+ctx.vivaTokenRequestBody = vivaTokenRequestBody;
+
+if (managedSaleCounterKey === "network_friendship") {
+  const readiness = managedSaleReadinessConfig();
+  if (!readiness) {
+    return failMsg(503, "Контур managed-продажи ХАБ не настроен", {
+      code: "MANAGED_SUBSCRIPTION_SALE_READINESS_NOT_CONFIGURED",
+      counterKey: managedSaleCounterKey,
+    });
+  }
+  ctx.step = "managed_sale_readiness";
+  msg.method = "POST";
+  msg.url = `${readiness.apiBase}/internal/subscriptions/sale-readiness`;
+  msg.headers = {
+    "Content-Type": "application/json",
+    "X-Subscriptions-Integration-Token": readiness.integrationToken,
+    "X-Correlation-Id": `lk-sale:${ctx.paymentRef}`,
+  };
+  msg.httpRequestTimeout = Math.min(ctx.httpRequestTimeoutMs, 10000);
+  msg.payload = {
+    provider: "VIVA",
+    providerProductId: ctx.productId,
+    providerScopeKind: NETWORK_FRIENDSHIP_PROVIDER_SCOPE.kind,
+    providerScopeId: NETWORK_FRIENDSHIP_PROVIDER_SCOPE.scopeId,
+    requiredAdapterId: MANAGED_SALE_COMPATIBILITY.adapterId,
+    requiredContractVersion: MANAGED_SALE_COMPATIBILITY.contractVersion,
+    requiredCapabilityDigest: MANAGED_SALE_COMPATIBILITY.capabilityDigest,
+  };
+  const debugMsg = Object.assign({}, msg, {
+    payload: { action: "managed_sale_purchase_readiness_request", counterKey: managedSaleCounterKey },
+  });
+  delete debugMsg.headers;
+  delete debugMsg.url;
+  delete debugMsg.req;
+  delete debugMsg.res;
+  return [msg, null, debugMsg];
 }
 
 ctx.step = "token_purchase";

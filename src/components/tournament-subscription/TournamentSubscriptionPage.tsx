@@ -911,6 +911,7 @@ export default function TournamentSubscriptionPage({
   const [flippedDisplayId, setFlippedDisplayId] = useState<string | null>(null);
   const statusRequestIdRef = useRef(0);
   const autoPurchaseStartedRef = useRef(false);
+  const pendingConfirmationInFlightRef = useRef(false);
 
   const loadStatus = useCallback(async () => {
     const requestId = statusRequestIdRef.current + 1;
@@ -1030,7 +1031,8 @@ export default function TournamentSubscriptionPage({
     }
 
     const entriesToConfirm = Array.from(entriesByRef.values());
-    if (entriesToConfirm.length === 0) return;
+    if (entriesToConfirm.length === 0 || pendingConfirmationInFlightRef.current) return;
+    pendingConfirmationInFlightRef.current = true;
 
     let cancelled = false;
     const runConfirm = async () => {
@@ -1060,9 +1062,21 @@ export default function TournamentSubscriptionPage({
         hasStatusUpdates = true;
         const normalizedPaymentRef = result.data.paymentRef || entry.paymentRef;
 
-        if (result.data.paid) {
+        if (result.data.paid && result.data.status === "PAID") {
           sawPaid = true;
           removePendingPaymentEntry(normalizedPaymentRef);
+          continue;
+        }
+
+        if (result.data.paid) {
+          sawPending = true;
+          upsertPendingPaymentEntry({
+            counterKey: normalizeCounterKey(result.data.counterKey) || entry.counterKey || singlePlanRequest?.counterKey || null,
+            paymentRef: normalizedPaymentRef,
+            planId: normalizePlanTypeToken(result.data.planType) || entry.planId || singlePlanRequest?.planId || null,
+            campaignKey: result.data.campaignKey || entry.campaignKey || singlePlanRequest?.campaignKey || null,
+            createdAt: entry.createdAt,
+          });
           continue;
         }
 
@@ -1103,7 +1117,9 @@ export default function TournamentSubscriptionPage({
       }
     };
 
-    void runConfirm();
+    void runConfirm().finally(() => {
+      pendingConfirmationInFlightRef.current = false;
+    });
     return () => {
       cancelled = true;
     };
@@ -1141,12 +1157,13 @@ export default function TournamentSubscriptionPage({
   useEffect(() => {
     const timer = window.setInterval(() => {
       void loadStatus();
+      void confirmPendingPayments();
     }, 30000);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [loadStatus]);
+  }, [confirmPendingPayments, loadStatus]);
 
   const startPurchase = useCallback(async (plan: DisplayPlanConfig) => {
     const boundPlanId = plan.planId ?? null;

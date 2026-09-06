@@ -26,6 +26,64 @@ client-side identity guard.
 Game, organizer, participant, and waitlist IDs remain unchanged. Names, booking fields, status, payment
 state, pagination, and the existing 404 response are preserved.
 
+### UUID preservation regression (2026-09-05)
+
+The previous embedded-phone matcher interpreted the `860-4924-4450` portion of a
+canonical UUID as a Russian phone number. It replaced that portion of the game ID
+with `[redacted]` in both list and detail responses, so the generated invitation
+could not find the existing game. The stored game and its Viva booking were intact.
+
+Both response functions now preserve complete canonical UUID spans (case-insensitive
+hexadecimal `8-4-4-4-12` with hexadecimal boundaries), including UUIDs in prefixed IDs,
+arrays, text and invitation URLs. Phone-bearing fields, phone identities and phone
+query values are removed before this exception; text outside UUID spans is still
+redacted. There is no blanket exception for fields named `id` or `bookingId`.
+
+Already copied links containing `[redacted]` cannot be reconstructed from the damaged
+ID. After the approved rollout, reload the game list and copy/open a new invitation.
+Do not create a replacement game or modify its booking/payment to repair this issue.
+
+Local acceptance on base `4237fbafe42df9f577356b15487693cc7215d32e`:
+
+- `gameResponsePhoneRedaction.test.ts`: 11/11; the six added cases failed before
+  the fix and pass after it. Covers public/identity lists, detail lookup, the
+  list-to-invitation-to-query ID, nested UUIDs, adjacent phones, invalid UUIDs,
+  phone-field/query precedence and unchanged stored input.
+- `gamesDirectLookupRecovery.test.mjs`, `gamesListIdentityRecovery.test.mjs`,
+  `gameListNormalize.test.ts`, `gameIdentityRelevance.test.ts`: pass after updating
+  the expected candidate source hashes. Historical whole-flow and node preimage
+  pins in the two recovery patchers remain unchanged; they are not current-live
+  deployment entrypoints.
+- Full `npm run lint`: zero errors, 387 warnings. Full `npm run build` (TypeScript
+  and prod/dev bundles): pass with the CI inert `ci.invalid` configuration and
+  existing workstation dependencies. These bundles are local validation artifacts,
+  not deployable release artifacts; a fresh locked install was not run.
+- Fresh read-only `LK Games` modular build/validate: 315 selected nodes, 38 HTTP
+  inputs, no broken wires/links. The validated extraction is the live baseline;
+  the two-function candidate is separately constrained by a reviewed-flow contract.
+- Independent security review: no material findings; seven additional adversarial
+  VM cases passed, including cross-realm records and UUID boundaries.
+- `reviewedFlowDeploy.test.mjs` and `noderedModularToolchain.test.mjs`: 42/42 pass.
+  Independent release review confirms two `func`-only changes, unchanged topology,
+  matching contract digests and candidate functions identical to the edited sources.
+
+The private live snapshot is
+`/private/tmp/lk-game-id-redaction-live-20260905/input/source.flow.json`
+(SHA-256 `46cf684fce5017e5ff4c5add22e918cfde92d404b651b416b6fdebd30275504a`).
+Both target functions were byte-identical to the base sources. The private
+`candidate/flow.json` and `candidate/contract.json` in that workspace constrain
+exactly the two function bodies; 4768 nodes and all 215 HTTP inputs are preserved.
+Candidate SHA-256:
+`7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71`.
+
+This snapshot is rehearsal evidence only. Before an authorized rollout, obtain a
+fresh live snapshot, recheck both function preimages and rebuild the exact candidate
+and function-only contract. Abort on unrelated drift. Use the existing reviewed-flow
+deployment workflow and its backup/lease checks. Rollback must target the immediately
+preceding phone-redacting snapshot, never the historical unredacted preimage.
+No deploy, restart, join, provider call or stored-data mutation was performed during
+this implementation. Actual joining remains untested until an authorized live check.
+
 ## Candidate and release boundary
 
 The guarded Node-RED patcher is pinned to a fresh live-flow preimage and permits only the `func` field of:

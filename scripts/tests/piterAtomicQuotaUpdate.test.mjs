@@ -18,6 +18,7 @@ function fixture() {
     { id: "8ccb70ac6befff79", type: "tab", label: "Media2", disabled: true },
     { id: "c165e43eba668c25", type: "function", z: ids.tab, name: "Build tournament subscription status", outputs: 2, wires: [[], []], func: "return msg; // previous status" },
     { id: ids.purchaseRouter, type: "function", z: ids.tab, name: "Route tournament subscription payment", outputs: 5, wires: [[], [], [], [], [ids.atomicRouter]], func: "return msg;" },
+    { id: ids.confirmResolve, type: "function", z: ids.tab, name: "Resolve tournament subscription confirm", outputs: 4, wires: [[], [], [], [ids.atomicRouter]], func: "return msg;" },
     { id: ids.atomicRouter, type: "function", z: ids.tab, name: "Route atomic Piter subscription sale", func: "return msg; // previous atomic", outputs: 5, timeout: "", noerr: 0, initialize: PITER_ATOMIC_BINDING_INITIALIZER_SOURCE, finalize: "", libs: [], x: 2750, y: 2240, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
     ...[[ids.ledgerFind, "Find Piter atomic inventory ledger", "find", 2180], [ids.ledgerUpdate, "CAS Piter atomic inventory ledger", "updateOne", 2220], [ids.saleUpdate, "Persist Piter atomic sale", "updateOne", 2260]].map(([id, name, operation, y]) =>
       ({ id, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", name, collection: "lk_tournament_subscription_sales", operation, output: "toArray", maxTimeMS: "5000", handleDocId: false, x: 3140, y, wires: [[ids.atomicRouter]] })),
@@ -34,7 +35,9 @@ function fixture() {
   for (const target of PITER_QUOTA_UPDATE.targets) candidate.find(n => n.id === target.id).func = sourceTexts[target.file];
   const expected = { ...PITER_QUOTA_UPDATE, sourceSha256: sha256(bytes(live)), candidateSha256: sha256(bytes(candidate)),
     sourceNodeCount: live.length, candidateNodeCount: live.length, httpInputCount: 1,
-    targets: PITER_QUOTA_UPDATE.targets.map(target => ({ ...target, sourceSha256: sha256(live.find(n => n.id === target.id).func) })) };
+    targets: PITER_QUOTA_UPDATE.targets.map(target => ({ ...target,
+      candidateSha256: sha256(sourceTexts[target.file]),
+      sourceSha256: sha256(live.find(n => n.id === target.id).func) })) };
   return { live, expected, sourceTexts, liveBytes: bytes(live) };
 }
 
@@ -73,6 +76,16 @@ test("source drift, partial installation, reapply, and changed local replacement
   assert.throws(() => buildPiterQuotaUpdate({ ...input, sourceTexts: { ...sourceTexts,
     [input.expected.targets[0].file]: "return msg;" } }), /replacement digest drift/);
   assert.throws(() => buildPiterQuotaUpdate({ ...input, expected: { ...input.expected, candidateSha256: "0".repeat(64) } }), /candidate digest/);
+});
+
+test("integrated regional sources cannot use the historical two-function production updater pins", () => {
+  const input = fixture();
+  // Freeze fixture whole-flow identity, but retain the real production replacement
+  // pins: the integrated sources MUST be refused rather than silently rebound.
+  assert.throws(() => buildPiterQuotaUpdate({ ...input,
+    expected: { ...input.expected, targets: input.expected.targets.map((target, index) => ({
+      ...target, candidateSha256: PITER_QUOTA_UPDATE.targets[index].candidateSha256,
+    })) } }), /replacement digest drift/);
 });
 
 test("topology and legacy guards remain mandatory even after fixture source digest rebinding", () => {

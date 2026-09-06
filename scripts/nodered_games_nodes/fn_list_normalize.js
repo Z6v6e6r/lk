@@ -80,6 +80,10 @@ const phoneIdentityPattern = /^(phone|mobile|telephone|msisdn):/i;
 const exactPhoneValuePattern = /^(?:\+?7|8)(?:[\s().-]*\d){10}$/;
 const embeddedPhoneValuePattern = /(^|[^\d])((?:\+?7|8)(?:[\s().-]*\d){10})(?!\d)/g;
 const phoneQueryValuePattern = /([?&][^=&#]*(?:phone|mobile|telephone|msisdn)[^=&#]*=)[^&#]*/gi;
+// A canonical UUID can contain an 11-digit phone-shaped run across its hyphens.
+// Preserve only complete UUID spans; phone fields/identities/query values still
+// take precedence, and text surrounding each UUID remains subject to redaction.
+const uuidSpanPattern = /((?<![0-9a-f])[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?![0-9a-f]))/gi;
 const isPlainRecord = (value) => {
   if (!isObj(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -101,7 +105,11 @@ const redactPhoneString = (value) => {
   }
   return value
     .replace(phoneQueryValuePattern, "$1[redacted]")
-    .replace(embeddedPhoneValuePattern, "$1[redacted]");
+    .split(uuidSpanPattern)
+    .map((part, index) => index % 2 === 1
+      ? part
+      : part.replace(embeddedPhoneValuePattern, "$1[redacted]"))
+    .join("");
 };
 
 const redactPhoneData = (value) => {

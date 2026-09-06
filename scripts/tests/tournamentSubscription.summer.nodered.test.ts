@@ -10,6 +10,14 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+const exactUpdateAck = () => ({
+  acknowledged: true,
+  matchedCount: 1,
+  modifiedCount: 1,
+  upsertedCount: 0,
+  upsertedId: null,
+});
+
 function runNodeRedFunction(file: string, msg: NodeRedMsg, globalValues: GlobalValues = {}) {
   const source = fs.readFileSync(file, "utf8");
   const mergedGlobals = {
@@ -33,7 +41,22 @@ function runNodeRedFunction(file: string, msg: NodeRedMsg, globalValues: GlobalV
       return key === "VIVACRM_TOKEN_REQUEST_BODY" ? "test-token-body" : undefined;
     },
   };
-  return new Function("msg", "global", "env", source)(msg, globalContext, env);
+  const result = new Function("msg", "global", "env", source)(msg, globalContext, env);
+  if (file.endsWith("fn_tournament_subscription_piter_atomic_router.js")) {
+    for (const output of Array.isArray(result) ? result : []) {
+      const update = Array.isArray(output?.payload) ? output.payload[1] : null;
+      if (!update?.$setOnInsert) continue;
+      const mutablePaths = Object.entries(update)
+        .filter(([operator]) => operator !== "$setOnInsert")
+        .flatMap(([, fields]) => Object.keys(asRecord(fields)));
+      for (const key of Object.keys(update.$setOnInsert)) {
+        assert.equal(mutablePaths.some((field) => (
+          field === key || field.startsWith(`${key}.`) || key.startsWith(`${field}.`)
+        )), false, `Mongo update path conflict: ${key}`);
+      }
+    }
+  }
+  return result;
 }
 
 function withFixedNow<T>(nowIso: string, callback: () => T): T {
@@ -1809,6 +1832,12 @@ test("materialized HAB counter expires undated reservations and honors paymentEx
       expiresAt: "2026-09-03T11:59:00.000Z",
       paymentExpiresAt: "2026-09-03T13:00:00.000Z",
     },
+    {
+      counterKey: "network_friendship",
+      inventoryId: "network_friendship_12m_2026_v1",
+      status: "PAID_PENDING_INSTANCE_BINDING",
+      paidAt: "2026-09-03T09:00:00.000Z",
+    },
   ];
   const buildOut = withFixedNow(nowIso, () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_counter_refresh_response.js",
@@ -1818,10 +1847,12 @@ test("materialized HAB counter expires undated reservations and honors paymentEx
   const networkUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "network_friendship");
   assert.ok(networkUpdate);
   const networkSet = asRecord(asRecord(networkUpdate.payload).$set);
+  assert.equal(networkSet.paidCount, 1);
   assert.equal(networkSet.reservedCount, 2);
-  assert.equal(networkSet.remainingCount, 8);
+  assert.equal(networkSet.remainingCount, 7);
+  assert.equal(networkSet.inventoryPaidCount, 1);
   assert.equal(networkSet.inventoryReservedCount, 2);
-  assert.equal(networkSet.inventoryRemainingCount, 98);
+  assert.equal(networkSet.inventoryRemainingCount, 97);
 });
 
 test("summer subscription materialized counters ignore legacy manual paid baselines", () => {
@@ -1926,7 +1957,7 @@ test("summer subscription counter refresh materializes the staged daily phase", 
   assert.equal(state.remainingCount, 8);
 });
 
-test("summer subscription reconciliation selects only live pending payments from supported inventories", () => {
+test("summer subscription reconciliation keeps polling bounded pending and ambiguous payments", () => {
   const prepared = withFixedNow("2026-07-08T10:00:00.000Z", () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_query.js",
     { payload: Date.now() },
@@ -1934,29 +1965,35 @@ test("summer subscription reconciliation selects only live pending payments from
 
   assert.deepEqual(prepared.query, {
     inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra)|ab_leto_2026_150_v2_(?:friendship|ra)|kotelniki_friendship_12m_2026_v1|network_friendship_12m_2026_v1|piter_friendship_12m_2026_v1)$" },
-    status: "PAYMENT_PENDING",
-    transactionId: { $nin: [null, ""] },
     $or: [
-      { expiresAt: { $gt: "2026-07-08T10:00:00.000Z" } },
-      { paymentExpiresAt: { $gt: "2026-07-08T10:00:00.000Z" } },
       {
-        $and: [
-          {
-            $or: [
-              { expiresAt: { $exists: false } },
-              { expiresAt: null },
-              { expiresAt: "" },
-            ],
-          },
-          {
-            $or: [
-              { paymentExpiresAt: { $exists: false } },
-              { paymentExpiresAt: null },
-              { paymentExpiresAt: "" },
-            ],
-          },
-          { createdAt: { $gt: "2026-07-08T09:30:00.000Z" } },
-        ],
+        status: { $in: ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
+        transactionId: { $nin: [null, ""] },
+      },
+      {
+        status: { $in: ["DISPATCHING", "PROVIDER_UNKNOWN"] },
+        transactionId: { $in: [null, ""] },
+        counterKey: { $in: ["piter_friendship", "network_friendship"] },
+        requestFingerprint: { $nin: [null, ""] },
+        clientId: { $nin: [null, ""] },
+        productId: { $nin: [null, ""] },
+        studioId: { $nin: [null, ""] },
+        providerAttemptedAt: { $nin: [null, ""] },
+        amountMinor: { $gt: 0 },
+      },
+      {
+        status: "DISPATCH_REPAIRING",
+        counterKey: { $in: ["piter_friendship", "network_friendship"] },
+        requestFingerprint: { $nin: [null, ""] },
+        paymentRef: { $nin: [null, ""] },
+        dispatchGeneration: { $gt: 0 },
+        repairProviderAttemptedAt: { $nin: [null, ""] },
+      },
+      {
+        status: "PAID_PENDING_INSTANCE_BINDING",
+        counterKey: "network_friendship",
+        clientSubscriptionId: { $nin: [null, ""] },
+        transactionId: { $nin: [null, ""] },
       },
     ],
   });
@@ -2021,6 +2058,311 @@ test("summer subscription reconciliation converts a pending sale into confirm co
   assert.equal(ctx.reconcile, true);
   assert.equal(ctx.paymentRef, "reconcile-payment-ref");
   assert.equal((prepared.payload as unknown[]).length, 1);
+});
+
+test("scheduled reconciliation accepts a durable atomic provider attempt without a transaction id", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_record.js",
+    {
+      payload: {
+        inventoryId: "piter_friendship_12m_2026_v1",
+        counterKey: "piter_friendship",
+        paymentRef: "recover-payment-ref",
+        transactionId: null,
+        status: "DISPATCHING",
+        providerAttemptedAt: "2026-09-04T10:00:00.000Z",
+      },
+    },
+  ) as Record<string, unknown>;
+
+  const ctx = asRecord(prepared._summerSubscriptionCtx);
+  assert.equal(ctx.action, "confirm");
+  assert.equal(ctx.reconcile, true);
+  assert.equal(ctx.paymentRef, "recover-payment-ref");
+  assert.equal((prepared.payload as unknown[]).length, 1);
+});
+
+for (const { quotaV2, hub } of [{ quotaV2: false, hub: false }, { quotaV2: true, hub: false }, { quotaV2: false, hub: true }]) test(`scheduled reconciliation repairs a durable dispatch fence without repeating provider POST (quotaV2=${quotaV2}, hub=${hub})`, () => {
+  const paymentRef = "repair-fence-payment-ref";
+  const inventoryId = hub ? "network_friendship_12m_2026_v1" : "piter_friendship_12m_2026_v1";
+  const counterKey = hub ? "network_friendship" : "piter_friendship";
+  const requestFingerprint = `${inventoryId}\n${counterKey}\n${paymentRef}\n79990000000\nclient-repair`;
+  const record = {
+    _id: `${hub ? "hub" : "piter"}-sale:${inventoryId}:${paymentRef}`,
+    inventoryId,
+    counterKey,
+    paymentRef,
+    requestFingerprint,
+    transactionId: null,
+    status: "DISPATCH_REPAIRING",
+    dispatchGeneration: 1,
+    providerAttemptedAt: null,
+    repairProviderAttemptedAt: "2026-09-04T10:00:00.000Z",
+    totalLimit: hub ? 100 : 400,
+    dailyLimit: hub ? 10 : 0,
+    dailyDropDate: "2026-09-04",
+    clientId: "client-repair",
+    clientPhone: "79990000000",
+    studioId: "studio-repair",
+    productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+    amountMinor: 1980000,
+  };
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_record.js",
+    { payload: record },
+  ) as Record<string, unknown>;
+  const resolved = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+    prepared,
+  ) as unknown[];
+  assert.equal(resolved[0], null);
+  assert.equal(resolved[1], null);
+  assert.equal(resolved[2], null);
+  const repairStart = asRecord(resolved[3]);
+  const repairCtx = asRecord(repairStart._summerSubscriptionCtx);
+  assert.equal(repairCtx.step, "piter_dispatch_repair_sale_find");
+  assert.equal(repairCtx.dispatchRepairOnly, true);
+
+  const quotaFind = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    repairStart,
+  ) as unknown[];
+  assert.ok(quotaFind[0]); assert.equal(quotaFind[1], null); assert.equal(quotaFind[4], null);
+  const baseLedger = hub ? buildHubLedger() : quotaV2 ? quotaLedger() : asRecord(buildPiterRows(0)[0]);
+  const dispatchLedger = { ...baseLedger, reservedCount: 1, takenCount: Number(baseLedger.paidCount) + 1,
+    reservations: [{ paymentRef, requestFingerprint, intentFingerprint: "repair-intent",
+      state: "DISPATCHING", dispatchGeneration: 1, providerAttemptedAt: record.repairProviderAttemptedAt,
+      dailyDate: hub ? "2026-09-04" : null }], ...(hub ? { dailyReservedCount: 1 } : {}) };
+  const resetLedger = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { _summerSubscriptionCtx: asRecord(quotaFind[0])._summerSubscriptionCtx, payload: [dispatchLedger] },
+  ) as unknown[];
+  assert.ok(resetLedger[1]);
+  assert.equal(resetLedger[4], null);
+  const resetFilter = asRecord((asRecord(resetLedger[1]).payload as unknown[])[0]);
+  assert.equal(resetFilter.schemaVersion, quotaV2 ? 2 : 1);
+  assert.deepEqual(resetFilter.quotaAdjustment, quotaV2 ? 9 : { $exists: false });
+  assert.equal(asRecord(asRecord(resetFilter.reservations).$elemMatch).dispatchGeneration, 1);
+  const resetReadback = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(resetLedger[1])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  assert.ok(resetReadback[0]);
+  const ledger = {
+    ...baseLedger,
+    _id: `inventory:${inventoryId}`,
+    reservations: [{
+      paymentRef,
+      requestFingerprint,
+      state: "CLAIMED",
+      dispatchGeneration: 1,
+      providerAttemptedAt: record.repairProviderAttemptedAt,
+    }],
+  };
+  const restoredSale = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(resetReadback[0])._summerSubscriptionCtx,
+      payload: [ledger],
+    },
+  ) as unknown[];
+  assert.ok(restoredSale[2]);
+  assert.equal(restoredSale[4], null);
+  const done = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(restoredSale[2])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  assert.deepEqual(done, [null, null, null, null, null]);
+});
+
+test("atomic confirm recovers one exact Viva transaction by client, product, amount and attempt time", () => {
+  const resolveOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+    {
+      _summerSubscriptionCtx: {
+        action: "confirm",
+        step: "resolve_record",
+        reconcile: true,
+        paymentRef: "recover-payment-ref",
+      },
+      payload: [{
+        inventoryId: "piter_friendship_12m_2026_v1",
+        counterKey: "piter_friendship",
+        paymentRef: "recover-payment-ref",
+        requestFingerprint: "recover-fingerprint",
+        transactionId: null,
+        status: "PROVIDER_UNKNOWN",
+        clientId: "client-recover-1",
+        clientPhone: "79990000000",
+        studioId: "studio-recover-1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        productName: "Падел.Дружба.Питер — годовая",
+        amountMinor: 1980000,
+        providerProductCostMinor: 5680000,
+        discountMinor: 3700000,
+        providerAttemptedAt: "2026-09-04T20:59:59.000Z",
+        createdAt: "2026-09-04T20:59:58.000Z",
+      }],
+    },
+    PITER_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const tokenRequest = asRecord(resolveOut[0]);
+  assert.equal(tokenRequest.method, "POST");
+  assert.equal(asRecord(tokenRequest._summerSubscriptionCtx).step, "token_confirm");
+
+  const listOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: { access_token: "service-token" },
+      _summerSubscriptionCtx: tokenRequest._summerSubscriptionCtx,
+    },
+  ) as unknown[];
+  const listRequest = asRecord(listOut[0]);
+  assert.equal(listRequest.method, "GET");
+  assert.match(String(listRequest.url), /\/transactions\?/);
+  assert.match(String(listRequest.url), /clientIds=client-recover-1/);
+  assert.match(String(listRequest.url), /productIds=8bf334ba-3050-4017-b40a-7eef2db1eb16/);
+  assert.match(String(listRequest.url), /dateFrom=2026-09-04/);
+  assert.match(String(listRequest.url), /dateTo=2026-09-05/);
+
+  const exactOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        content: [{
+          id: "transaction-recovered-1",
+          createDate: "2026-09-04T21:00:10.000Z",
+          status: "UNPAID",
+          sum: 1980000,
+          toPay: 1980000,
+          client: { id: "client-recover-1" },
+          paymentStudio: { id: "studio-recover-1" },
+          products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16" }],
+        }],
+        totalPages: 1,
+        number: 0,
+        last: true,
+        totalElements: 1,
+        numberOfElements: 1,
+      },
+      _summerSubscriptionCtx: listRequest._summerSubscriptionCtx,
+    },
+  ) as unknown[];
+  const exactLookup = asRecord(exactOut[0]);
+  const recoveredCtx = asRecord(exactLookup._summerSubscriptionCtx);
+  assert.equal(exactLookup.method, "GET");
+  assert.match(String(exactLookup.url), /\/transactions\/transaction-recovered-1$/);
+  assert.equal(recoveredCtx.transactionId, "transaction-recovered-1");
+  assert.equal(recoveredCtx.transactionRecovered, true);
+
+  const verifiedOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        id: "transaction-recovered-1",
+        createDate: "2026-09-04T21:00:10.000Z",
+        status: "UNPAID",
+        sum: 1980000,
+        toPay: 1980000,
+        client: { id: "client-recover-1", phone: "79990000000" },
+        paymentStudio: { id: "studio-recover-1" },
+        products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 }],
+      },
+      _summerSubscriptionCtx: exactLookup._summerSubscriptionCtx,
+    },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(verifiedOut[4])._summerSubscriptionCtx).step, "piter_confirm_result");
+});
+
+test("atomic transaction recovery fails closed for zero, multiple, incomplete or mismatched candidates", () => {
+  const baseCtx = {
+    action: "confirm",
+    step: "confirm_recovery_list",
+    reconcile: true,
+    counterKey: "piter_friendship",
+    inventoryId: "piter_friendship_12m_2026_v1",
+    paymentRef: "recover-negative",
+    requestFingerprint: "recover-negative-fingerprint",
+    clientId: "client-recover-1",
+    studioId: "studio-recover-1",
+    productId: "product-recover-1",
+    expectedAmountMinor: 1980000,
+    providerAttemptedAt: "2026-09-04T10:00:00.000Z",
+    httpRequestTimeoutMs: 20000,
+    token: "service-token",
+  };
+  const exact = {
+    id: "transaction-recover-exact",
+    createDate: "2026-09-04T10:00:10.000Z",
+    status: "UNPAID",
+    sum: 1980000,
+    toPay: 1980000,
+    client: { id: "client-recover-1" },
+    paymentStudio: { id: "studio-recover-1" },
+    products: [{ id: "product-recover-1" }],
+  };
+  const page = (content: unknown[], totalPages = content.length > 0 ? 1 : 0) => ({
+    content,
+    totalPages,
+    number: 0,
+    last: true,
+    totalElements: content.length,
+    numberOfElements: content.length,
+  });
+  const cases = [
+    { payload: page([]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND" },
+    { payload: page([exact, { ...exact, id: "transaction-recover-second" }]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_AMBIGUOUS" },
+    { payload: { ...page([exact], 2), last: false, totalElements: 2 }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: { content: [exact] }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: { ...page([exact]), totalPages: null, number: null }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: { ...page([exact]), totalPages: "", number: "" }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: { ...page([exact]), number: 1 }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: { ...page([exact]), last: false }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: { ...page([exact]), totalElements: 2 }, code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE" },
+    { payload: page([{ ...exact, client: { id: "wrong-client" } }]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND" },
+    { payload: page([{ ...exact, products: [{ id: "wrong-product" }] }]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND" },
+    { payload: page([{ ...exact, sum: 2380000, toPay: 2380000 }]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND" },
+    { payload: page([{ ...exact, createDate: "2026-09-04T10:10:00.000Z" }]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND" },
+    { payload: page([{ ...exact, status: "PAID", toPay: 0 }]), code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND" },
+  ];
+  for (const candidate of cases) {
+    const out = runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      {
+        statusCode: 200,
+        payload: candidate.payload,
+        _summerSubscriptionCtx: { ...baseCtx },
+      },
+    ) as unknown[];
+    assert.equal(out[0], null);
+    const details = asRecord(asRecord(asRecord(out[2]).payload).details);
+    assert.equal(details.code, candidate.code);
+  }
+
+  const canonicalMismatch = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: { ...exact, client: { id: "wrong-client" } },
+      _summerSubscriptionCtx: {
+        ...baseCtx,
+        step: "confirm_lookup",
+        transactionId: exact.id,
+        transactionRecovered: true,
+      },
+    },
+  ) as unknown[];
+  const mismatchDetails = asRecord(asRecord(asRecord(canonicalMismatch[2]).payload).details);
+  assert.equal(mismatchDetails.code, "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_GET_MISMATCH");
 });
 
 test("scheduled subscription reconciliation persists PAID without writing an HTTP response", () => {
@@ -2107,6 +2449,29 @@ function buildPiterRows(count: number) {
   }))];
 }
 
+function buildHubLedger(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: "inventory:network_friendship_12m_2026_v1",
+    inventoryId: "network_friendship_12m_2026_v1",
+    counterKey: "network_friendship",
+    ready: true,
+    schemaVersion: 1,
+    revision: 1,
+    baselineDigest: "b".repeat(64),
+    baselineCapturedAt: "2026-09-04T09:00:00.000Z",
+    paidCount: 0,
+    reservedCount: 0,
+    takenCount: 0,
+    legacyPaymentRefs: [],
+    reservations: [],
+    dailyDate: "2026-09-04",
+    dailyBaselinePaidCount: 0,
+    dailyPaidCount: 0,
+    dailyReservedCount: 0,
+    ...overrides,
+  };
+}
+
 function quotaLedger(newPaid = 0) {
   return { ...buildPiterRows(41)[0], schemaVersion: 2, quotaAdjustment: 9,
     paidCount: 41 + newPaid, takenCount: 41 + newPaid,
@@ -2122,6 +2487,78 @@ function quotaPurchaseContext() {
     providerProductCostMinor: 5680000, providerPayload: { products: [{ id: productId, discount: 3700000 }] },
     tiers: [1980000, 2380000, 3680000, 5680000].map(priceMinor => ({ productId, productName: "Питер", priceMinor, providerProductCostMinor: 5680000 })) };
 }
+
+test("HUB cannot consume Piter schema2 quota or dispatch with Piter quota custody", () => {
+  for (const step of ["piter_ledger_find", "piter_dispatch_claim", "piter_provider_result"]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+      _summerSubscriptionCtx: { ...quotaPurchaseContext(), step, counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1", totalLimit: 100, dailyLimit: 10,
+        dailyDropDate: "2026-09-04", ledgerSchemaVersion: 2, ledgerQuotaAdjustment: 50 },
+      payload: [buildHubLedger({ schemaVersion: 2, quotaAdjustment: 50 })],
+    }) as unknown[];
+    assert.equal(out[1], null); assert.equal(out[4], null); assert.ok(out[3]);
+  }
+});
+
+test("Piter quota dispatch preserves generation fencing alongside quota CAS", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+    _summerSubscriptionCtx: { ...quotaPurchaseContext(), step: "piter_dispatch_claim",
+      ledgerSchemaVersion: 2, ledgerQuotaAdjustment: 9, dispatchGeneration: 4 },
+  }) as unknown[];
+  const args = asRecord(out[1]).payload as unknown[];
+  const filter = asRecord(args[0]); const update = asRecord(args[1]);
+  assert.equal(filter.quotaAdjustment, 9);
+  assert.equal(asRecord(asRecord(filter.reservations).$elemMatch).dispatchGeneration, 4);
+  assert.equal(asRecord(update.$set)["reservations.$.dispatchGeneration"], 5);
+  const rejected = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+    _summerSubscriptionCtx: asRecord(out[1])._summerSubscriptionCtx,
+    payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null },
+  }) as unknown[];
+  assert.equal(rejected[4], null); assert.ok(rejected[3]);
+});
+
+test("Piter confirmation readback rejects schema downgrade and stale generation", () => {
+  const valid = { ...quotaLedger(1), reservations: [{ paymentRef: "quota-new", requestFingerprint: "quota-fp",
+    transactionId: "quota-tx", state: "PAID", dispatchGeneration: 7, priceMinor: 1980000 }] };
+  const context = { ...quotaPurchaseContext(), step: "piter_confirm_replay_find",
+    requestFingerprint: "quota-fp", transactionId: "quota-tx", expectedAmountMinor: 1980000,
+    ledgerSchemaVersion: 2, ledgerQuotaAdjustment: 9, dispatchGeneration: 7,
+    confirmResult: { nextStatus: "PAID", paid: true } };
+  for (const [ledger, accepted] of [[valid, true], [{ ...valid, schemaVersion: 1, quotaAdjustment: undefined }, false],
+    [{ ...valid, quotaAdjustment: 8 }, false],
+    [{ ...valid, reservations: [{ ...valid.reservations[0], dispatchGeneration: 6 }] }, false]] as const) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      { _summerSubscriptionCtx: structuredClone(context), payload: [ledger] }) as unknown[];
+    assert.equal(Boolean(out[2]), accepted); assert.equal(out[4], null);
+    if (!accepted) assert.ok(out[3]);
+  }
+});
+
+test("Piter repair quota lookup rejects invalid custody before any write or provider POST", () => {
+  const reservation = { paymentRef: "quota-new", requestFingerprint: "repair-fp",
+    state: "DISPATCHING", dispatchGeneration: 3, providerAttemptedAt: "2026-09-04T10:00:00.000Z" };
+  const valid = { ...quotaLedger(), reservedCount: 1, takenCount: 42, reservations: [reservation] };
+  const invalidLedgers = [
+    { ...valid, _id: "inventory:wrong" },
+    { ...valid, schemaVersion: 3 },
+    { ...valid, quotaAdjustment: 8 },
+    { ...valid, schemaVersion: 1 },
+    ...[{ paymentRef: "other" }, { requestFingerprint: "other" }, { state: "PAID" },
+      { dispatchGeneration: 2 }, { providerAttemptedAt: "2026-09-04T10:00:00.001Z" }]
+      .map(change => ({ ...valid, reservations: [{ ...reservation, ...change }] })),
+  ];
+  for (const ledger of invalidLedgers) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+      _summerSubscriptionCtx: { ...quotaPurchaseContext(), step: "piter_dispatch_repair_quota_find",
+        requestFingerprint: reservation.requestFingerprint, dispatchGeneration: reservation.dispatchGeneration,
+        providerAttemptedAt: reservation.providerAttemptedAt },
+      payload: [ledger],
+    }) as unknown[];
+    assert.equal(out[0], null); assert.equal(out[1], null); assert.equal(out[2], null);
+    assert.equal(out[4], null); assert.ok(out[3]);
+    assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code, "PITER_DISPATCH_REPAIR_QUOTA_INVALID");
+  }
+});
 
 test("Piter V2 quota starts at 50/100 with 41 real payments and advances tiers consistently", () => {
   const prepared = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
@@ -2474,21 +2911,223 @@ test("Piter CLAIMED replay keeps the originally reserved tier before the only Vi
     "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
     { _summerSubscriptionCtx: ctx, payload: [ledger] },
   ) as unknown[];
-  assert.ok(claimed[1]);
-  const claimedCtx = asRecord(asRecord(claimed[1])._summerSubscriptionCtx);
+  assert.ok(claimed[2]);
+  const claimedCtx = asRecord(asRecord(claimed[2])._summerSubscriptionCtx);
   assert.equal(claimedCtx.priceMinor, 1980000);
   assert.equal(asRecord((asRecord(claimedCtx.providerPayload).products as unknown[])[0]).discount, 3700000);
+
+  const dispatchClaimed = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: claimedCtx,
+      payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 1, upsertedId: "sale-claimed" },
+    },
+  ) as unknown[];
+  assert.ok(dispatchClaimed[1]);
 
   const dispatched = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
     {
-      _summerSubscriptionCtx: claimedCtx,
+      _summerSubscriptionCtx: asRecord(dispatchClaimed[1])._summerSubscriptionCtx,
       payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
     },
   ) as unknown[];
-  assert.ok(dispatched[4]);
-  const providerLine = asRecord((asRecord(asRecord(dispatched[4]).payload).products as unknown[])[0]);
+  assert.ok(dispatched[2]);
+  const dispatchPayload = asRecord(dispatched[2]).payload as unknown[];
+  const dispatchSet = asRecord(dispatchPayload[1]);
+  assert.equal(asRecord(dispatchSet.$set).status, "DISPATCHING");
+  assert.ok(asRecord(dispatchSet.$set).providerAttemptedAt);
+  const provider = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(dispatched[2])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  assert.ok(provider[4]);
+  const providerLine = asRecord((asRecord(asRecord(provider[4]).payload).products as unknown[])[0]);
   assert.equal(providerLine.discount, 3700000);
+});
+
+test("Piter retry repairs a pre-provider DISPATCHING crash only when the durable sale is still CLAIMED", () => {
+  const paymentRef = "piter-dispatch-crash";
+  const clientPhone = "79990000000";
+  const requestFingerprint = [
+    "piter_friendship_12m_2026_v1", "piter_friendship", paymentRef, clientPhone, "client-crash",
+  ].join("\n");
+  const attemptedAt = "2026-09-04T10:00:00.000Z";
+  const saleRecord = {
+    _id: `piter-sale:piter_friendship_12m_2026_v1:${paymentRef}`,
+    counterKey: "piter_friendship",
+    inventoryId: "piter_friendship_12m_2026_v1",
+    paymentRef,
+    requestFingerprint,
+    clientPhone,
+    clientId: "client-crash",
+    studioId: "studio-crash",
+    productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+    amountMinor: 1980000,
+    status: "CLAIMED",
+    dispatchGeneration: 0,
+    providerAttemptedAt: null,
+  };
+  const ledger = {
+    ...buildPiterRows(0)[0],
+    reservedCount: 1,
+    takenCount: 1,
+    reservations: [{
+      paymentRef,
+      requestFingerprint,
+      intentFingerprint: [
+        "piter_friendship_12m_2026_v1", "piter_friendship", clientPhone, "client-crash",
+      ].join("\n"),
+      state: "DISPATCHING",
+      dispatchGeneration: 1,
+      providerAttemptedAt: attemptedAt,
+      clientPhone,
+      clientId: "client-crash",
+      priceMinor: 1980000,
+      productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+      providerProductCostMinor: 5680000,
+      discountMinor: 3700000,
+      saleRecord,
+    }],
+  };
+  const findSale = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        step: "piter_ledger_find",
+        counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1",
+        paymentRef,
+        clientPhone,
+        clientId: "client-crash",
+        totalLimit: 400,
+      },
+      payload: [ledger],
+    },
+  ) as unknown[];
+  assert.ok(findSale[0]);
+  assert.equal(asRecord(asRecord(findSale[0]).payload)._id, saleRecord._id);
+
+  const unresolved = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: { ...asRecord(asRecord(findSale[0])._summerSubscriptionCtx) },
+      payload: [{ ...saleRecord, status: "DISPATCHING", providerAttemptedAt: attemptedAt }],
+    },
+  ) as unknown[];
+  assert.equal(unresolved[1], null);
+  assert.equal(
+    asRecord(asRecord(asRecord(unresolved[3]).payload).details).code,
+    "PITER_ACTIVE_PURCHASE_UNRESOLVED",
+  );
+
+  const fence = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(findSale[0])._summerSubscriptionCtx,
+      payload: [saleRecord],
+    },
+  ) as unknown[];
+  assert.ok(fence[2]);
+  const [fenceFilter, fenceUpdate, fenceOptions] = asRecord(fence[2]).payload as Array<Record<string, unknown>>;
+  assert.equal(asRecord(fenceFilter).status, "CLAIMED");
+  assert.equal(asRecord(asRecord(fenceUpdate).$set).status, "DISPATCH_REPAIRING");
+  assert.equal(asRecord(asRecord(fenceUpdate).$set).dispatchGeneration, 1);
+  assert.equal(asRecord(asRecord(fenceUpdate).$set).repairProviderAttemptedAt, attemptedAt);
+  assert.equal(asRecord(fenceOptions).upsert, false);
+
+  const originalSaleCas = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        ...asRecord(asRecord(findSale[0])._summerSubscriptionCtx),
+        step: "piter_dispatch_ack",
+      },
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  const originalReadback = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(originalSaleCas[2])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  const originalBlocked = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(originalReadback[0])._summerSubscriptionCtx,
+      payload: [{ ...saleRecord, status: "DISPATCH_REPAIRING", dispatchGeneration: 1, dispatchRepairStartedAt: "2026-09-04T10:00:01.000Z" }],
+    },
+  ) as unknown[];
+  assert.equal(originalBlocked[4], null);
+  assert.equal(
+    asRecord(asRecord(asRecord(originalBlocked[3]).payload).details).code,
+    "PITER_DISPATCH_SALE_NOT_DURABLE",
+  );
+
+  const repair = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(fence[2])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  assert.ok(repair[1]);
+  const [repairFilter, repairUpdate] = asRecord(repair[1]).payload as Array<Record<string, unknown>>;
+  assert.equal(asRecord(asRecord(repairFilter).reservations).$elemMatch !== undefined, true);
+  assert.equal(asRecord(asRecord(asRecord(repairFilter).reservations).$elemMatch).state, "DISPATCHING");
+  assert.equal(asRecord(asRecord(repairUpdate).$set)["reservations.$.state"], "CLAIMED");
+  assert.equal(asRecord(asRecord(repairUpdate).$set)["reservations.$.providerAttemptedAt"], undefined);
+
+  const restoreClaimedSale = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(repair[1])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  assert.ok(restoreClaimedSale[2]);
+  const [, restoreUpdate] = asRecord(restoreClaimedSale[2]).payload as Array<Record<string, unknown>>;
+  assert.equal(asRecord(asRecord(restoreUpdate).$set).status, "CLAIMED");
+  assert.equal(asRecord(asRecord(restoreUpdate).$set).dispatchGeneration, 1);
+  assert.deepEqual(asRecord(restoreUpdate).$unset, {
+    dispatchRepairStartedAt: "",
+    repairProviderAttemptedAt: "",
+  });
+
+  const delayedOriginal = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        ...asRecord(asRecord(findSale[0])._summerSubscriptionCtx),
+        step: "piter_dispatch_ack",
+      },
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  const delayedReadback = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(delayedOriginal[2])._summerSubscriptionCtx,
+      payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null },
+    },
+  ) as unknown[];
+  const delayedBlocked = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(delayedReadback[0])._summerSubscriptionCtx,
+      payload: [{ ...saleRecord, status: "CLAIMED", dispatchGeneration: 1 }],
+    },
+  ) as unknown[];
+  assert.equal(delayedBlocked[4], null);
+  assert.equal(
+    asRecord(asRecord(asRecord(delayedBlocked[3]).payload).details).code,
+    "PITER_DISPATCH_SALE_NOT_DURABLE",
+  );
 });
 
 test("Piter CLAIMED replay fails closed when the live provider product no longer matches", () => {
@@ -2804,6 +3443,75 @@ test("Piter confirm finalizes an in-flight payment while the ledger is deactivat
   assert.equal(asRecord(asRecord((asRecord(out[1]).payload as unknown[])[1]).$inc).paidCount, 1);
 });
 
+test("Piter atomic confirm binds one recovered transaction id before changing reservation state", () => {
+  const paymentRef = "piter-recovered-transaction";
+  const requestFingerprint = [
+    "piter_friendship_12m_2026_v1", "piter_friendship", paymentRef, "79990000000", "client-recover-1",
+  ].join("\n");
+  const ledger = {
+    ...buildPiterRows(0)[0],
+    reservedCount: 1,
+    takenCount: 1,
+    reservations: [{
+      paymentRef,
+      requestFingerprint,
+      intentFingerprint: [
+        "piter_friendship_12m_2026_v1", "piter_friendship", "79990000000", "client-recover-1",
+      ].join("\n"),
+      state: "PROVIDER_UNKNOWN",
+      transactionId: null,
+      clientPhone: "79990000000",
+      clientId: "client-recover-1",
+      priceMinor: 1980000,
+      productId: "product-recover-1",
+    }],
+  };
+  const validated = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        step: "piter_confirm_validate",
+        counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1",
+        paymentRef,
+        requestFingerprint,
+        transactionId: "transaction-recovered-1",
+        transactionRecovered: true,
+        transactionRecoveredAt: "2026-09-04T10:02:00.000Z",
+        expectedAmountMinor: 1980000,
+        confirmResult: {
+          nextStatus: "PAYMENT_PENDING",
+          transactionId: "transaction-recovered-1",
+          paid: false,
+          failed: false,
+          toPayMinor: 1980000,
+        },
+      },
+      payload: [ledger],
+    },
+  ) as unknown[];
+  const updateMessage = asRecord(validated[1]);
+  const [filter, update] = updateMessage.payload as Array<Record<string, unknown>>;
+  const reservationFilter = asRecord(asRecord(filter.reservations).$elemMatch);
+  assert.deepEqual(reservationFilter.transactionId, { $in: [null, ""] });
+  assert.ok(filter.$and);
+  const set = asRecord(update.$set);
+  assert.equal(set["reservations.$.transactionId"], "transaction-recovered-1");
+  assert.equal(set["reservations.$.state"], "PAYMENT_PENDING");
+
+  const saleWrite = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: updateMessage._summerSubscriptionCtx,
+      payload: exactUpdateAck(),
+    },
+  ) as unknown[];
+  const salePayload = asRecord(saleWrite[2]).payload as Array<Record<string, unknown>>;
+  const saleSet = asRecord(salePayload[1].$set);
+  assert.equal(saleSet.transactionId, "transaction-recovered-1");
+  assert.equal(saleSet.transactionRecoveredAt, "2026-09-04T10:02:00.000Z");
+});
+
 test("Piter status rejects a ready ledger whose count invariant is inconsistent", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
@@ -3063,23 +3771,570 @@ test("Piter temporary sale still stops at the 400-subscription inventory limit",
   assert.equal(asRecord(asRecord(error.payload).details).remainingCount, 0);
 });
 
-test("HUB annual sale remains fail closed while only Piter is temporarily reopened", () => {
-  const prepared = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+test("HUB new sales remain blocked before database or provider work, configured or not", () => {
+  for (const globals of [NETWORK_PRODUCT_GLOBALS, MANAGED_SALE_GLOBALS]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+      { payload: { clientPhone: "79990000000", counterKey: "network_friendship", paymentRef: "hub-closed" },
+        req: { query: {} } }, globals) as unknown[];
+    assert.equal(out[0], null);
+    assert.equal(asRecord(out[1]).statusCode, 503);
+    assert.equal(asRecord(asRecord(asRecord(out[1]).payload).details).code,
+      "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  }
+});
+
+test("HUB stale limit-check context cannot bypass prepare to request CUP or Viva", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js", {
+    _summerSubscriptionCtx: { action: "purchase", step: "limit_check", counterKey: "network_friendship",
+      inventoryId: "network_friendship_12m_2026_v1", totalLimit: 100, managedSaleBinding: MANAGED_BINDING },
+    payload: [],
+  }, MANAGED_SALE_GLOBALS) as unknown[];
+  assert.equal(out[0], null);
+  assert.equal(asRecord(out[1]).statusCode, 503);
+  assert.equal(asRecord(asRecord(asRecord(out[1]).payload).details).code,
+    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+});
+
+test("HUB closure does not admit a purchase even when pending sale rows are supplied", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js", {
+    payload: { clientPhone: "79990000000", counterKey: "network_friendship", paymentRef: "hub-pending-cap",
+      existingStatus: "PAID_PENDING_INSTANCE_BINDING" }, req: { query: {} },
+  }, MANAGED_SALE_GLOBALS) as unknown[];
+  assert.equal(out[0], null);
+  assert.equal(asRecord(out[1]).statusCode, 503);
+});
+
+test("HUB atomic admission and all stale purchase ACKs stop before any write or provider POST", () => {
+  const steps = ["piter_reserve_start", "piter_ledger_find", "hub_daily_reset_ack", "piter_reserve_ack",
+    "piter_dispatch_claim", "piter_claimed_sale_ack", "piter_claimed_sale_readback",
+    "piter_dispatch_ack", "piter_dispatch_sale_ack", "piter_dispatch_sale_readback"];
+  for (const step of steps) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+      _summerSubscriptionCtx: { action: "purchase", step, counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1", paymentRef: "hub-stale",
+        dispatchGeneration: 1, ledgerSchemaVersion: 1, totalLimit: 100 },
+      payload: step === "piter_ledger_find" ? [buildHubLedger()] : exactUpdateAck(),
+    }) as unknown[];
+    for (const index of [0, 1, 2, 4]) assert.equal(out[index], null, step);
+    assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
+  }
+});
+
+test("HUB atomic ledger rejects the eleventh same-day reservation", () => {
+  const reservations = Array.from({ length: 10 }, (_, index) => ({
+    paymentRef: `hub-paid-${index}`,
+    requestFingerprint: `request-${index}`,
+    intentFingerprint: `intent-${index}`,
+    transactionId: `transaction-${index}`,
+    state: "PAID",
+    dailyDate: "2026-09-04",
+  }));
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
     {
-      payload: {
-        clientPhone: "79990000000",
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "piter_ledger_find",
         counterKey: "network_friendship",
-        paymentRef: "hub-stays-closed",
+        inventoryId: "network_friendship_12m_2026_v1",
+        paymentRef: "hub-eleventh",
+        clientPhone: "79990000011",
+        clientId: "provider-client:hub-11",
+        totalLimit: 100,
+        dailyLimit: 10,
+        dailyDropDate: "2026-09-04",
       },
-      req: { query: {} },
+      payload: [buildHubLedger({
+        revision: 11,
+        paidCount: 10,
+        takenCount: 10,
+        reservations,
+        dailyPaidCount: 10,
+      })],
     },
   ) as unknown[];
-  assert.equal(prepared[0], null);
-  const error = asRecord(prepared[1]);
-  assert.equal(error.statusCode, 503);
-  assert.equal(asRecord(asRecord(error.payload).details).code,
-    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  assert.equal(asRecord(out[3]).statusCode, 503);
+  assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code,
+    "HUB_NEW_SALES_RELEASE_DISABLED");
+  assert.equal(out[4], null);
+});
+
+test("HUB atomic ledger never rolls its daily window backwards", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "piter_ledger_find",
+        counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1",
+        paymentRef: "hub-stale-day",
+        clientPhone: "79990000012",
+        clientId: "provider-client:hub-stale",
+        totalLimit: 100,
+        dailyLimit: 10,
+        dailyDropDate: "2026-09-04",
+      },
+      payload: [buildHubLedger({ dailyDate: "2026-09-05" })],
+    },
+  ) as unknown[];
+  assert.equal(asRecord(out[3]).statusCode, 503);
+  assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code,
+    "HUB_NEW_SALES_RELEASE_DISABLED");
+  assert.equal(out[1], null);
+  assert.equal(out[4], null);
+});
+
+test("HUB new-purchase continuations cannot request CUP, Viva token, reserve or transaction", () => {
+  for (const step of ["managed_sale_readiness", "token_purchase", "load_products"]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
+      _summerSubscriptionCtx: { action: "purchase", step, counterKey: "network_friendship",
+        paymentRef: "hub-stale-readiness", productId: NETWORK_PRODUCT_GLOBALS.summer_subscription_network_friendship_product_id,
+        vivaTokenRequestBody: "fixture-only", managedSaleBinding: MANAGED_BINDING },
+      statusCode: 200, payload: { ready: true, access_token: "fixture-only" },
+    }, MANAGED_SALE_GLOBALS) as unknown[];
+    assert.equal(out[0], null); assert.equal(out[1], null); assert.equal(out[4], undefined);
+    assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
+  }
+});
+
+test("HUB exact readiness cannot reopen new sales in a Piter-only release", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        schemaVersion: 1,
+        ready: true,
+        provider: "VIVA",
+        providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        providerScope: MANAGED_SCOPE,
+        checkedAt: "2026-09-04T10:00:00.000Z",
+        requiredCompatibility: MANAGED_COMPATIBILITY,
+        instanceProjector: { status: "CURRENT", checkpointAsOf: "2026-09-04T09:59:00.000Z" },
+        binding: MANAGED_BINDING,
+        blockers: [],
+      },
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "managed_sale_readiness",
+        counterKey: "network_friendship",
+        productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        paymentRef: "hub-readiness-2",
+        vivaTokenRequestBody: "grant_type=password&client_id=test",
+        httpRequestTimeoutMs: 5000,
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  assert.equal(out[0], null);
+  assert.equal(out[1], null);
+  assert.equal(out[4], undefined);
+  assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
+});
+
+test("HUB readiness rejects an incomplete immutable binding", () => {
+  const incompleteBinding = { ...MANAGED_BINDING } as Record<string, unknown>;
+  delete incompleteBinding.releaseProgramRevision;
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        schemaVersion: 1,
+        ready: true,
+        provider: "VIVA",
+        providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        providerScope: MANAGED_SCOPE,
+        requiredCompatibility: MANAGED_COMPATIBILITY,
+        instanceProjector: { status: "CURRENT" },
+        binding: incompleteBinding,
+      },
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "managed_sale_readiness",
+        counterKey: "network_friendship",
+        productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        paymentRef: "hub-readiness-incomplete",
+        vivaTokenRequestBody: "grant_type=password&client_id=test",
+        httpRequestTimeoutMs: 5000,
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  assert.equal(asRecord(out[3]).statusCode, 503);
+  assert.equal(out[0], null);
+});
+
+test("Piter legacy terminal rules do not release HUB expired UNPAID or refunded reservations", () => {
+  const baseCtx = {
+    action: "confirm", step: "confirm_lookup", counterKey: "network_friendship",
+    inventoryId: "network_friendship_12m_2026_v1", paymentRef: "hub-terminal-compat",
+    transactionId: "tx-hub-terminal", expectedAmountMinor: 5680000,
+    requestFingerprint: "hub-terminal-fingerprint", toPayMinor: 5680000,
+    clientId: "client-hub-terminal", clientPhone: "79990000000",
+    productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+    saleRecord: { providerProductCostMinor: 5680000, discountMinor: 0 },
+  };
+  for (const evidence of [
+    { status: "UNPAID", paymentDueDate: "2020-09-04T10:00:00.000Z" },
+    { status: "REFUND", refundSum: 5680000, refundedAt: "2026-09-04T10:00:00.000Z" },
+    { status: "REFUNDED", refundSum: 10000, refundedAt: "2026-09-04T10:00:00.000Z" },
+    { status: "EXPIRED" },
+  ]) {
+    const out = runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      {
+        _summerSubscriptionCtx: { ...baseCtx }, statusCode: 200,
+        payload: {
+          id: baseCtx.transactionId, toPay: 5680000, sum: 5680000,
+          clientId: baseCtx.clientId, clientPhone: baseCtx.clientPhone,
+          products: [{ id: baseCtx.productId, discount: 0 }], ...evidence,
+        },
+      },
+    ) as unknown[];
+    assert.equal(asRecord(asRecord(asRecord(out[4])._summerSubscriptionCtx).confirmResult).nextStatus,
+      evidence.status === "EXPIRED" ? "FAILED" : "PAYMENT_PENDING");
+  }
+});
+
+test("HUB late provider result remains ledger-bound after new admission closes", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+    _summerSubscriptionCtx: { action: "purchase", step: "piter_provider_result", counterKey: "network_friendship",
+      inventoryId: "network_friendship_12m_2026_v1", paymentRef: "hub-late-result",
+      requestFingerprint: "hub-late-fingerprint", ledgerSchemaVersion: 1, dispatchGeneration: 7,
+      providerAttemptedAt: "2026-09-04T10:00:00.000Z",
+      providerResult: { ok: true, transactionId: "hub-late-tx", paymentUrl: "https://fixture.invalid/pay" } },
+  }) as unknown[];
+  assert.equal(out[0], null); assert.equal(out[2], null); assert.equal(out[3], null); assert.equal(out[4], null);
+  const filter = asRecord((asRecord(out[1]).payload as unknown[])[0]);
+  assert.equal(filter._id, "inventory:network_friendship_12m_2026_v1");
+  assert.equal(filter.schemaVersion, 1);
+  assert.deepEqual(filter.quotaAdjustment, { $exists: false });
+  const match = asRecord(asRecord(asRecord((filter.$and as unknown[])[0]).reservations).$elemMatch);
+  assert.equal(match.dispatchGeneration, 7);
+  assert.equal(match.requestFingerprint, "hub-late-fingerprint");
+});
+
+test("HUB paid confirm updates the atomic ledger before provider subscription readback", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        id: "transaction-hub-paid-1",
+        status: "PAID",
+        toPay: 0,
+        sum: 5680000,
+        clientId: "provider-client-hub-1",
+        products: [{ id: "db7a5250-7369-4f43-8ac5-9111be24bc74", discount: 0,
+          clientSubscriptionId: "client-subscription-hub-1" }],
+      },
+      _summerSubscriptionCtx: {
+        action: "confirm",
+        step: "confirm_lookup",
+        counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1",
+        paymentRef: "hub-confirm-1",
+        transactionId: "transaction-hub-paid-1",
+        clientId: "provider-client-hub-1",
+        productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        expectedAmountMinor: 5680000,
+        toPayMinor: 5680000,
+        saleRecord: { providerProductCostMinor: 5680000, discountMinor: 0 },
+        token: "viva-token",
+        managedSaleBinding: MANAGED_BINDING,
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  const atomic = asRecord(out[4]);
+  const ctx = asRecord(atomic._summerSubscriptionCtx);
+  assert.equal(ctx.step, "piter_confirm_result");
+  assert.equal(ctx.providerMethod, "GET");
+  assert.match(String(ctx.providerUrl), /\/clients\/provider-client-hub-1\/subscriptions\?size=200$/);
+  assert.equal(ctx.clientSubscriptionId, "client-subscription-hub-1");
+});
+
+test("HUB durable limits survive reservation, confirm resolution and atomic paid settlement", () => {
+  const atomicFile = "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js";
+  const routerFile = "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js";
+  const paymentRef = "hub-durable-limits";
+  // A durable historical record, not a newly admitted HUB purchase. New
+  // admission is closed; existing confirmation must still settle these facts.
+  const saleRecord = {
+    counterKey: "network_friendship", inventoryId: "network_friendship_12m_2026_v1",
+    paymentRef, requestFingerprint: "hub-limits-fingerprint",
+    clientId: "client-hub-limits", clientPhone: "79990000000", studioId: "studio-hub",
+    productId: "db7a5250-7369-4f43-8ac5-9111be24bc74", productName: "fixture-HUB",
+    amountMinor: 5680000, providerProductCostMinor: 5680000, discountMinor: 0,
+    batchIndex: 1, batchSize: 100, totalLimit: 100, launchLimit: 0, dailyLimit: 10,
+    dailyDropDate: "2026-09-04", saleType: "tiered_direct_product",
+    managedSaleBinding: MANAGED_BINDING, managedSaleProviderScope: MANAGED_SCOPE,
+    transactionId: "tx-hub-limits", status: "PAYMENT_PENDING", dispatchGeneration: 1,
+  };
+  const reservation = {
+    paymentRef, requestFingerprint: saleRecord.requestFingerprint, intentFingerprint: "hub-limits-intent",
+    state: "PAYMENT_PENDING", dispatchGeneration: 1, dailyDate: "2026-09-04",
+    transactionId: saleRecord.transactionId, priceMinor: 5680000,
+  };
+  assert.equal(saleRecord.totalLimit, 100);
+  assert.equal(saleRecord.launchLimit, 0);
+  assert.equal(saleRecord.dailyLimit, 10);
+  const resolve = (record: Record<string, unknown>) => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+    { _summerSubscriptionCtx: { action: "confirm", step: "resolve_record", paymentRef }, payload: [record] },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  for (const invalid of [
+    { totalLimit: undefined }, { totalLimit: 0 }, { totalLimit: "100" },
+    { dailyLimit: undefined }, { dailyLimit: 101 }, { dailyDropDate: null },
+  ]) {
+    const rejected = resolve({ ...saleRecord, ...invalid });
+    assert.equal(rejected[0], null);
+    const error = asRecord(rejected[1]);
+    assert.equal(error.statusCode, 503);
+    assert.equal(asRecord(asRecord(error.payload).details).code, "HUB_CONFIRM_SALE_LIMITS_INVALID");
+  }
+  const tokenRequest = asRecord(resolve(saleRecord)[0]);
+  const restored = asRecord(tokenRequest._summerSubscriptionCtx);
+  assert.equal(restored.totalLimit, 100);
+  assert.equal(restored.dailyLimit, 10);
+  assert.equal(restored.dailyDropDate, "2026-09-04");
+  const lookup = runNodeRedFunction(routerFile, {
+    _summerSubscriptionCtx: restored, statusCode: 200, payload: { access_token: "fixture-token" },
+  }, MANAGED_SALE_GLOBALS) as unknown[];
+  const confirmed = runNodeRedFunction(routerFile, {
+    _summerSubscriptionCtx: asRecord(lookup[0])._summerSubscriptionCtx,
+    statusCode: 200,
+    payload: {
+      id: saleRecord.transactionId, status: "PAID", toPay: 0, sum: 5680000,
+      clientId: "client-hub-limits", clientPhone: "79990000000",
+      products: [{ id: saleRecord.productId, discount: 0, clientSubscriptionId: "subscription-hub-limits" }],
+    },
+  }, MANAGED_SALE_GLOBALS) as unknown[];
+  assert.ok(confirmed[4], JSON.stringify(confirmed));
+  const ledgerRead = runNodeRedFunction(atomicFile, asRecord(confirmed[4])) as unknown[];
+  for (const ready of [true, false]) {
+    const settled = runNodeRedFunction(atomicFile, {
+      _summerSubscriptionCtx: { ...asRecord(asRecord(ledgerRead[0])._summerSubscriptionCtx) },
+      payload: [buildHubLedger({
+        ready, reservedCount: 1, takenCount: 1, dailyReservedCount: 1,
+        reservations: [{ ...reservation, state: "PAYMENT_PENDING", transactionId: saleRecord.transactionId }],
+      })],
+    }) as unknown[];
+    assert.equal(settled[3], null);
+    const args = asRecord(settled[1]).payload as unknown[];
+    assert.equal(asRecord(args[0]).ready, ready);
+    assert.deepEqual(asRecord(asRecord(args[1]).$inc), {
+      revision: 1, reservedCount: -1, paidCount: 1, dailyReservedCount: -1, dailyPaidCount: 1,
+    });
+  }
+});
+
+test("HUB provider readback builds an idempotent CUP sale binding command", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        content: [{
+          clientSubscriptionId: "client-subscription-hub-1",
+          productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+          state: "PENDING_ACTIVATION",
+          studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+          purchasedAt: "2026-09-04T10:00:00.000Z",
+        }],
+      },
+      _summerSubscriptionCtx: {
+        action: "confirm",
+        step: "managed_sale_instance_readback",
+        counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1",
+        paymentRef: "hub-confirm-1",
+        transactionId: "transaction-hub-paid-1",
+        providerTransactionStatus: "PAID",
+        clientId: "provider-client-hub-1",
+        clientSubscriptionId: "client-subscription-hub-1",
+        productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        expectedAmountMinor: 5680000,
+        managedSaleBinding: MANAGED_BINDING,
+        managedSaleProviderScope: MANAGED_SCOPE,
+        saleRecord: { managedProviderObservedAt: "2026-09-04T10:00:30.000Z" },
+        httpRequestTimeoutMs: 5000,
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  const request = asRecord(out[0]);
+  const body = asRecord(request.payload);
+  assert.equal(request.url, "https://cup.example.test/api/internal/subscriptions/sale-bindings/confirm");
+  assert.equal(asRecord(request.headers)["Idempotency-Key"], "lk-sale-bind:hub-confirm-1");
+  assert.equal(body.clientSubscriptionId, "client-subscription-hub-1");
+  assert.equal(body.providerObservedAt, "2026-09-04T10:00:30.000Z");
+  assert.equal(body.expectedProjectorReconciliationDigest,
+    MANAGED_BINDING.projectorReconciliationDigest);
+  assert.equal(asRecord(request._summerSubscriptionCtx).step, "managed_sale_binding_confirm");
+});
+
+test("HUB CUP outage preserves the paid sale as pending instance binding", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 503,
+      payload: { error: { code: "UPSTREAM_UNAVAILABLE" } },
+      _summerSubscriptionCtx: {
+        action: "confirm",
+        step: "managed_sale_binding_confirm",
+        counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1",
+        paymentRef: "hub-confirm-pending-1",
+        requestFingerprint: "hub-confirm-pending-fingerprint-1",
+        transactionId: "transaction-hub-paid-1",
+        clientSubscriptionId: "client-subscription-hub-1",
+        providerTransactionStatus: "PAID",
+        managedProviderObservedAt: "2026-09-04T10:00:30.000Z",
+        managedProviderInstance: {
+          providerSubscriptionState: "PENDING_ACTIVATION",
+          purchasedAt: "2026-09-04T10:00:00.000Z",
+          activeFrom: null,
+          activeTo: null,
+          homeStationId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+        },
+        saleRecord: { paidAt: "2026-09-04T10:00:00.000Z" },
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  const atomicStart = asRecord(out[4]);
+  const projectionCtx = asRecord(atomicStart._summerSubscriptionCtx);
+  assert.equal(projectionCtx.step, "managed_sale_projection_start");
+  assert.equal(atomicStart.headers, undefined);
+  assert.equal(atomicStart.url, undefined);
+  assert.equal(atomicStart.req, undefined);
+  const projection = asRecord(projectionCtx.managedSaleProjection);
+  const dbSet = asRecord(projection.set);
+  assert.equal(dbSet.status, "PAID_PENDING_INSTANCE_BINDING");
+  assert.equal(dbSet.managedBindingState, "PENDING_INSTANCE_BINDING");
+  assert.equal(dbSet.managedProviderObservedAt, "2026-09-04T10:00:30.000Z");
+  assert.equal(dbSet.providerTransactionStatus, "PAID");
+  assert.deepEqual(asRecord(dbSet.managedProviderInstance), {
+    providerSubscriptionState: "PENDING_ACTIVATION",
+    purchasedAt: "2026-09-04T10:00:00.000Z",
+    activeFrom: null,
+    activeTo: null,
+    homeStationId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+  });
+  const write = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    atomicStart,
+  ) as unknown[];
+  assert.equal(asRecord(write[1]).payload instanceof Array, true);
+  const ack = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(asRecord(write[1])._summerSubscriptionCtx),
+      payload: exactUpdateAck(),
+    },
+  ) as unknown[];
+  const response = asRecord(ack[3]);
+  assert.equal(response.statusCode, 202);
+  assert.equal(asRecord(response.payload).paid, true);
+});
+
+test("HUB CUP binding success finalizes the paid projection without another Viva write", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        schemaVersion: 1,
+        state: "BOUND",
+        replayed: false,
+        subscriptionInstanceId: "subscription-instance:hub-1",
+        clientSubscriptionId: "client-subscription-hub-1",
+        policyVersion: 2,
+      },
+      _summerSubscriptionCtx: {
+        action: "confirm",
+        step: "managed_sale_binding_confirm",
+        counterKey: "network_friendship",
+        inventoryId: "network_friendship_12m_2026_v1",
+        paymentRef: "hub-confirm-bound-1",
+        requestFingerprint: "hub-confirm-bound-fingerprint-1",
+        transactionId: "transaction-hub-paid-1",
+        clientSubscriptionId: "client-subscription-hub-1",
+        managedProviderInstance: { purchasedAt: "2026-09-04T10:00:00.000Z" },
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  assert.equal(out[0], null);
+  const atomicStart = asRecord(out[4]);
+  const projectionCtx = asRecord(atomicStart._summerSubscriptionCtx);
+  const dbSet = asRecord(asRecord(projectionCtx.managedSaleProjection).set);
+  assert.equal(dbSet.status, "PAID");
+  assert.equal(dbSet.managedBindingState, "BOUND");
+  assert.equal(dbSet.subscriptionInstanceId, "subscription-instance:hub-1");
+  const write = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    atomicStart,
+  ) as unknown[];
+  const ack = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(asRecord(write[1])._summerSubscriptionCtx),
+      payload: exactUpdateAck(),
+    },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(ack[3]).payload).status, "PAID");
+});
+
+test("HUB managed sale response waits for exact write ACK or matching readback", () => {
+  const projection = {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    response: { ok: true, paid: true, status: "PAID" },
+    set: {
+      status: "PAID",
+      managedBindingState: "BOUND",
+      subscriptionInstanceId: "subscription-instance:hub-readback",
+    },
+  };
+  const ctx = {
+    action: "confirm",
+    step: "managed_sale_projection_ack",
+    counterKey: "network_friendship",
+    inventoryId: "network_friendship_12m_2026_v1",
+    paymentRef: "hub-confirm-readback-1",
+    requestFingerprint: "hub-confirm-readback-fingerprint-1",
+    managedSaleProjection: projection,
+  };
+  const uncertainAck = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { _summerSubscriptionCtx: ctx, payload: { acknowledged: true, matchedCount: 1 } },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(uncertainAck[0])._summerSubscriptionCtx).step,
+    "managed_sale_projection_readback");
+  assert.equal(uncertainAck[3], null);
+
+  const mismatchedReadback = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: asRecord(asRecord(uncertainAck[0])._summerSubscriptionCtx),
+      payload: [{ ...projection.set, subscriptionInstanceId: "subscription-instance:wrong" }],
+    },
+  ) as unknown[];
+  assert.equal(asRecord(mismatchedReadback[3]).statusCode, 503);
+
+  const matchingReadback = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: { ...ctx, step: "managed_sale_projection_readback" },
+      payload: [{ ...projection.set }],
+    },
+  ) as unknown[];
+  assert.equal(asRecord(matchingReadback[3]).statusCode, 200);
 });
 
 test("classic summer purchase remains available while managed annual sale is closed", () => {
@@ -3143,6 +4398,11 @@ test("regional annual checkout blocks Viva activation before 1 October", () => {
       },
     )) as unknown[];
 
+    if (candidate.counterKey === "network_friendship") {
+      assert.equal(out[0], null); assert.equal(out[1], null); assert.equal(out[4], undefined);
+      assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
+      continue;
+    }
     assert.equal(out[0], null, `${candidate.counterKey} must not create a transaction`);
     const error = asRecord(out[2]);
     const details = asRecord(asRecord(error.payload).details);
@@ -3199,7 +4459,12 @@ test("regional annual checkout accepts a provider activation window extending be
       },
     )) as unknown[];
 
-    const transaction = asRecord(candidate.counterKey === "piter_friendship" ? out[4] : out[0]);
+    if (candidate.counterKey === "network_friendship") {
+      assert.equal(out[0], null); assert.equal(out[1], null); assert.equal(out[4], undefined);
+      assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
+      continue;
+    }
+    const transaction = asRecord(out[4]);
     const transactionCtx = asRecord(transaction._summerSubscriptionCtx);
     assert.equal(transaction.method, "POST");
     assert.match(String(transaction.url), /\/transactions$/);
@@ -3311,44 +4576,15 @@ test("regional annual checkout rejects missing or coerced provider lifecycle fie
   }
 });
 
-test("HUB transaction accepts an exact compatible annual lifecycle", () => {
-  const out = withFixedNow("2026-08-21T09:00:00.000Z", () => runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
-    {
-      statusCode: 200,
-      payload: [{
-        id: "db7a5250-7369-4f43-8ac5-9111be24bc74",
-        name: "Падел.Дружба.ХАБ — годовая",
-        cost: 5680000,
-        productType: "SUBSCRIPTION",
-        activationDays: 41,
-        validityDays: 365,
-        visits: 365,
-      }],
-      _summerSubscriptionCtx: {
-        action: "purchase",
-        step: "load_products",
-        token: "token-1",
-        saleType: "tiered_direct_product",
-        counterKey: "network_friendship",
-        clientPhone: "79990000000",
-        productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
-        productName: "Падел.Дружба.ХАБ — годовая",
-        productCostMinor: 5680000,
-        priceMinor: 5680000,
-        batchIndex: 1,
-      },
-    },
-  )) as unknown[];
-
-  const transaction = asRecord(out[0]);
-  const transactionCtx = asRecord(transaction._summerSubscriptionCtx);
-  assert.equal(transaction.method, "POST");
-  assert.match(String(transaction.url), /\/transactions$/);
-  assert.equal(transactionCtx.providerAutoActivationDate, "2026-10-01");
-  assert.equal(transactionCtx.providerActivationDays, 41);
-  assert.equal(transactionCtx.providerValidityDays, 365);
-  assert.equal(transactionCtx.providerVisits, 365);
+test("HUB new checkout remains closed even with a compatible annual lifecycle", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
+    statusCode: 200,
+    payload: [{ id: NETWORK_PRODUCT_GLOBALS.summer_subscription_network_friendship_product_id,
+      productType: "SUBSCRIPTION", activationDays: 41, validityDays: 365, visits: 365, cost: 5680000 }],
+    _summerSubscriptionCtx: { action: "purchase", step: "load_products", counterKey: "network_friendship" },
+  }, MANAGED_SALE_GLOBALS) as unknown[];
+  assert.equal(out[0], null); assert.equal(out[1], null); assert.equal(out[4], undefined);
+  assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
 });
 
 test("regional atomic sales candidate pins the lifecycle guard source and graph builder", () => {
@@ -3362,6 +4598,8 @@ test("regional atomic sales candidate pins the lifecycle guard source and graph 
   );
   assert.match(router, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
   assert.match(candidateBuilder, /fn_tournament_subscription_purchase_router\.js/);
+  assert.match(candidateBuilder, /fn_tournament_subscription_reconcile_query\.js/);
+  assert.match(candidateBuilder, /fn_tournament_subscription_reconcile_record\.js/);
   assert.match(candidateBuilder, /piter_atomic_router_20260903/);
 });
 
@@ -3419,6 +4657,37 @@ test("Piter transaction without a provider transaction id never returns a checko
 const KOTELNIKI_PRODUCT_GLOBALS = {};
 const NETWORK_PRODUCT_GLOBALS = {
   summer_subscription_network_friendship_product_id: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+};
+const MANAGED_SALE_GLOBALS = {
+  ...NETWORK_PRODUCT_GLOBALS,
+  vivacrm_token_request_body: "grant_type=password&client_id=test",
+  subscriptions_runtime_api_base_url: "https://cup.example.test/api",
+  subscriptions_sale_readiness_integration_token: "readiness-token-32-characters-minimum",
+  subscriptions_sale_binding_integration_token: "binding-token-32-characters-minimum---",
+};
+const MANAGED_COMPATIBILITY = {
+  adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
+  contractVersion: 1,
+  capabilityDigest: "sha256:f1e00751ba2ef19b1945964f2ee90d2d88dbf11121fdb75dfe573b6b12f31791",
+};
+const MANAGED_SCOPE = {
+  kind: "STATION_SET",
+  scopeId: "station-set:469c42f52aeda36c921660ab7eff8a89421953fbf1136af9cb6951612d26c877",
+};
+const MANAGED_BINDING = {
+  mappingId: "mapping:hub-annual",
+  mappingRevision: 3,
+  subscriptionTypeId: "subscription-type:hub-annual",
+  publicationId: "publication:hub-annual-v2",
+  policyVersion: 2,
+  policyDigest: `sha256:${"a".repeat(64)}`,
+  fenceId: "subscription-projection-fence:hub",
+  fenceRevision: 4,
+  fenceDigest: `sha256:${"b".repeat(64)}`,
+  releaseProgramId: "release-program:hub-annual",
+  releaseProgramRevision: 2,
+  releasePhaseId: "release-phase:hub-annual",
+  projectorReconciliationDigest: `sha256:${"c".repeat(64)}`,
 };
 
 function buildRegionalRows(counterKey: string, inventoryId: string, batchSize: number, count: number) {
@@ -3501,6 +4770,12 @@ test("network status caps the existing 100-seat inventory at 10 sales per Moscow
     status: "PAID",
     paidAt: "2026-09-03T08:00:00.000Z",
   }));
+  currentRows.push({
+    inventoryId: "network_friendship_12m_2026_v1",
+    counterKey: "network_friendship",
+    status: "PAID_PENDING_INSTANCE_BINDING",
+    paidAt: "2026-09-03T09:00:00.000Z",
+  });
   const status = withFixedNow("2026-09-03T12:00:00.000Z", () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
     {
@@ -3543,17 +4818,17 @@ test("network status caps the existing 100-seat inventory at 10 sales per Moscow
   const payload = asRecord(asRecord(status[0]).payload);
   assert.equal(payload.batchIndex, 1);
   assert.equal(payload.batchSize, 10);
-  assert.equal(payload.batchRemainingCount, 4);
+  assert.equal(payload.batchRemainingCount, 3);
   assert.equal(payload.totalLimit, 10);
-  assert.equal(payload.paidCount, 3);
+  assert.equal(payload.paidCount, 4);
   assert.equal(payload.reservedCount, 3);
-  assert.equal(payload.remainingCount, 4);
+  assert.equal(payload.remainingCount, 3);
   assert.equal(payload.dailyDropActive, true);
   assert.equal(payload.dailyDropDate, "2026-09-03");
   assert.equal(payload.inventoryTotalLimit, 100);
-  assert.equal(payload.inventoryPaidCount, 8);
+  assert.equal(payload.inventoryPaidCount, 9);
   assert.equal(payload.inventoryReservedCount, 3);
-  assert.equal(payload.inventoryRemainingCount, 89);
+  assert.equal(payload.inventoryRemainingCount, 88);
   assert.equal(payload.priceMinor, 5680000);
   assert.equal(payload.productId, "db7a5250-7369-4f43-8ac5-9111be24bc74");
   assert.equal(payload.providerProductCostMinor, 5680000);
@@ -3561,8 +4836,109 @@ test("network status caps the existing 100-seat inventory at 10 sales per Moscow
   assert.equal(payload.bindingReady, true);
   assert.equal(payload.managedSaleReady, false);
   assert.equal(payload.managedSaleError,
-    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+    "HUB_ATOMIC_LEDGER_NOT_READY");
   assert.equal(payload.canPurchase, false);
+});
+
+test("network status stays closed even for a stale exact CUP ready response", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "network_friendship" } } },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  const first = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    {
+      _summerSubscriptionCtx: asRecord(asRecord(prepared[0])._summerSubscriptionCtx),
+      payload: [buildHubLedger()],
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  assert.equal(first[2], null);
+  assert.equal(asRecord(asRecord(first[0]).payload).canPurchase, false);
+  const readinessContext = {
+    ...asRecord(asRecord(prepared[0])._summerSubscriptionCtx),
+    _managedSaleReadinessAttempted: true, _managedSaleStatusRows: [buildHubLedger()],
+  };
+  const second = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    {
+      _summerSubscriptionCtx: readinessContext,
+      statusCode: 200,
+      payload: {
+        schemaVersion: 1,
+        ready: true,
+        provider: "VIVA",
+        providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        providerScope: MANAGED_SCOPE,
+        requiredCompatibility: MANAGED_COMPATIBILITY,
+        instanceProjector: { status: "CURRENT", checkpointAsOf: "2026-09-04T09:59:00.000Z" },
+        binding: MANAGED_BINDING,
+        blockers: [],
+      },
+    },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  const payload = asRecord(asRecord(second[0]).payload);
+  assert.equal(payload.managedSaleReady, false);
+  assert.equal(payload.canPurchase, false);
+  assert.equal(payload.remainingCount, 10);
+});
+
+test("HUB status never emits a CUP request for any configured timeout budget", () => {
+  for (const configured of [undefined, 0, 2000, 9000, 60000, "invalid"]) {
+    const globals = { ...MANAGED_SALE_GLOBALS, subscriptions_sale_readiness_timeout_ms: configured };
+    const prepared = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+      { req: { query: { counterKey: "network_friendship" } } }, globals) as unknown[];
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+      { _summerSubscriptionCtx: asRecord(asRecord(prepared[0])._summerSubscriptionCtx), payload: [buildHubLedger()] }, globals) as unknown[];
+    assert.equal(out[2], null);
+    assert.equal(asRecord(asRecord(out[0]).payload).canPurchase, false);
+  }
+  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js", "utf8");
+  assert.match(source, /msg\.requestTimeout = Math\.max/);
+  assert.doesNotMatch(source, /msg\.httpRequestTimeout =/);
+});
+
+test("network status closure cannot be overridden by any response status or transport outcome", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "network_friendship" } } }, MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  const first = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: asRecord(asRecord(prepared[0])._summerSubscriptionCtx), payload: [buildHubLedger()] },
+    MANAGED_SALE_GLOBALS,
+  ) as unknown[];
+  assert.equal(first[2], null);
+  const readyBody = {
+    schemaVersion: 1, ready: true, provider: "VIVA",
+    providerProductId: NETWORK_PRODUCT_GLOBALS.summer_subscription_network_friendship_product_id,
+    providerScope: MANAGED_SCOPE, requiredCompatibility: MANAGED_COMPATIBILITY,
+    instanceProjector: { status: "CURRENT" }, binding: MANAGED_BINDING,
+  };
+  const cases: Array<{ statusCode?: unknown; error?: unknown; accepted: boolean }> = [
+    { statusCode: 200, accepted: false }, { statusCode: 201, accepted: false }, { statusCode: 299, accepted: false },
+    { statusCode: 500, accepted: false }, { statusCode: 400, accepted: false },
+    { statusCode: 302, accepted: false }, { statusCode: 199, accepted: false },
+    { accepted: false }, { statusCode: null, accepted: false }, { statusCode: "200", accepted: false },
+    { statusCode: "ETIMEDOUT", accepted: false }, { statusCode: NaN, accepted: false },
+    { statusCode: 200.5, accepted: false }, { statusCode: {}, accepted: false },
+    { error: { code: "ETIMEDOUT" }, accepted: false },
+    { statusCode: 200, error: { code: "ETIMEDOUT" }, accepted: false },
+  ];
+  for (const { accepted, ...transport } of cases) {
+    const out = runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+      { _summerSubscriptionCtx: { ...structuredClone(asRecord(asRecord(prepared[0])._summerSubscriptionCtx)), _managedSaleReadinessAttempted: true, _managedSaleStatusRows: [buildHubLedger()] },
+        payload: structuredClone(readyBody), ...transport }, MANAGED_SALE_GLOBALS,
+    ) as unknown[];
+    const payload = asRecord(asRecord(out[0]).payload);
+    assert.equal(payload.managedSaleReady, accepted);
+    assert.equal(payload.canPurchase, accepted);
+    if (!accepted) assert.equal(payload.managedSaleError, "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+    assert.equal(out[2], null);
+  }
 });
 
 test("network daily cap rolls over at Moscow midnight and never exceeds the global remainder", () => {

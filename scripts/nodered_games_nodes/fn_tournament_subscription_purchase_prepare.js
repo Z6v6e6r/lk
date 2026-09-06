@@ -714,6 +714,7 @@ msg._summerSubscriptionCtx = {
   tiers: Array.isArray(activeCounter.tiers) ? activeCounter.tiers : [],
   totalLimit,
   stagedRelease: activeCounter.stagedRelease === true,
+  dailyCapEnabled: activeCounter.dailyCapEnabled === true,
   releaseStartDate: toStr(activeCounter.releaseStartDate),
   launchLimit: Math.max(0, Math.floor(Number(activeCounter.launchLimit) || 0)),
   dailyLimit: Math.max(0, Math.floor(Number(activeCounter.dailyLimit) || 0)),

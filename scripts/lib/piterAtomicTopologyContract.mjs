@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   tab: "f9575c8726e29196",
   purchaseRouter: "566ae4b886c37ae5",
+  confirmResolve: "ca022fd14027a5b0",
   viva: "fdc3f25f39199546",
   response: "10fe94a32b8adc35",
   debug: "03cc3ac17f7e154a",
@@ -16,9 +17,9 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   mongoClient: "4e820638cc39c730",
 });
 
-// Source contract for quota-aware candidates; not a binding to an installed flow.
-export const PITER_ATOMIC_ROUTER_SHA256 = "7283aec32b1a9e9b3c3ae0d76bc14d1214c4b2a27b9d4a8821619e61149deaf4";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "28cda3933e4ec72690e451a36e883e22157f8c6624cb23a0f12f1f8b9f6056f7";
+// Merged source fingerprint only; not a binding to an installed flow.
+export const PITER_ATOMIC_ROUTER_SHA256 = "e776834030d1921d33832bb5fdc14cb0a83334c43f989b2d6b68645da6858b9c";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const currentProductId = String(global.get(key) ?? "").trim();
@@ -98,6 +99,17 @@ export function assertPiterAtomicTopology(flow) {
     || purchaseRouter.wires.length !== 5
     || !isDeepStrictEqual(purchaseRouter.wires[4], [ids.atomicRouter])) {
     fail(`${ids.purchaseRouter}.wires[4] mismatch`);
+  }
+  const confirmResolve = assertNode(flow, ids.confirmResolve, {
+    type: "function",
+    z: ids.tab,
+    name: "Resolve tournament subscription confirm",
+    outputs: 4,
+  });
+  if (!Array.isArray(confirmResolve.wires)
+    || confirmResolve.wires.length !== 4
+    || !isDeepStrictEqual(confirmResolve.wires[3], [ids.atomicRouter])) {
+    fail(`${ids.confirmResolve}.wires[3] mismatch`);
   }
   assertExactFunctionNode(flow, {
     id: ids.atomicRouter,

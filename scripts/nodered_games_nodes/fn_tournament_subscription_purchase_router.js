@@ -1,5 +1,14 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const REGIONAL_ANNUAL_TIME_ZONE = "Europe/Moscow";
+const MANAGED_SALE_COMPATIBILITY = {
+  adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
+  contractVersion: 1,
+  capabilityDigest: "sha256:f1e00751ba2ef19b1945964f2ee90d2d88dbf11121fdb75dfe573b6b12f31791",
+};
+const NETWORK_FRIENDSHIP_PROVIDER_SCOPE = {
+  kind: "STATION_SET",
+  scopeId: "station-set:469c42f52aeda36c921660ab7eff8a89421953fbf1136af9cb6951612d26c877",
+};
 const REGIONAL_ANNUAL_LIFECYCLE = {
   network_friendship: {
     activationNotBeforeDate: "2026-10-01",
@@ -115,6 +124,180 @@ const adminRequest = (ctx, method, path, payload) => {
   return [msg, null, null, null];
 };
 
+const readManagedGlobal = (key) => {
+  try {
+    return toStr(global.get(key));
+  } catch (_error) {
+    return null;
+  }
+};
+const isAtomicSaleCounter = (counterKey) => (
+  counterKey === "piter_friendship" || counterKey === "network_friendship"
+);
+
+const cupRequest = (ctx, path, token, payload) => {
+  const apiBase = readManagedGlobal("subscriptions_runtime_api_base_url");
+  if (!apiBase || !token) return null;
+  msg._summerSubscriptionCtx = ctx;
+  msg.method = "POST";
+  msg.url = `${apiBase.replace(/\/+$/, "")}${path}`;
+  msg.headers = {
+    "Content-Type": "application/json",
+    "X-Subscriptions-Integration-Token": token,
+    "Idempotency-Key": `lk-sale-bind:${ctx.paymentRef}`,
+    "X-Correlation-Id": `lk-sale:${ctx.paymentRef}`,
+  };
+  msg.httpRequestTimeout = Math.max(
+    3000,
+    Math.min(20000, Math.floor(Number(ctx.httpRequestTimeoutMs) || 10000)),
+  );
+  msg.payload = payload;
+  return [msg, null, null, null];
+};
+
+const exactClientSubscriptionId = (value) => {
+  if (!value || typeof value !== "object") return null;
+  if (!Array.isArray(value)) {
+    const direct = toStr(value.clientSubscriptionId);
+    if (direct) return direct;
+  }
+  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
+    const found = exactClientSubscriptionId(nested);
+    if (found) return found;
+  }
+  return null;
+};
+
+const matchesExactManagedReadiness = (payload, ctx) => {
+  const binding = payload?.binding;
+  return payload && typeof payload === "object"
+    && payload.schemaVersion === 1
+    && payload.ready === true
+    && payload.provider === "VIVA"
+    && payload.providerProductId === ctx.productId
+    && payload.providerScope?.kind === NETWORK_FRIENDSHIP_PROVIDER_SCOPE.kind
+    && payload.providerScope?.scopeId === NETWORK_FRIENDSHIP_PROVIDER_SCOPE.scopeId
+    && payload.requiredCompatibility?.adapterId === MANAGED_SALE_COMPATIBILITY.adapterId
+    && payload.requiredCompatibility?.contractVersion === MANAGED_SALE_COMPATIBILITY.contractVersion
+    && payload.requiredCompatibility?.capabilityDigest === MANAGED_SALE_COMPATIBILITY.capabilityDigest
+    && payload.instanceProjector?.status === "CURRENT"
+    && binding && typeof binding === "object"
+    && toStr(binding.mappingId)
+    && Number.isInteger(binding.mappingRevision)
+    && toStr(binding.subscriptionTypeId)
+    && toStr(binding.publicationId)
+    && Number.isInteger(binding.policyVersion)
+    && /^sha256:[a-f0-9]{64}$/.test(toStr(binding.policyDigest) || "")
+    && toStr(binding.fenceId)
+    && Number.isInteger(binding.fenceRevision)
+    && /^sha256:[a-f0-9]{64}$/.test(toStr(binding.fenceDigest) || "")
+    && toStr(binding.releaseProgramId)
+    && Number.isInteger(binding.releaseProgramRevision)
+    && toStr(binding.releasePhaseId)
+    && /^sha256:[a-f0-9]{64}$/.test(toStr(binding.projectorReconciliationDigest) || "");
+};
+
+const providerSubscriptionProductId = (record) => toStr(
+  record?.productId
+  || record?.subscriptionProductId
+  || record?.product?.id
+  || record?.subscription?.id
+);
+
+const providerSubscriptionHomeStationId = (record) => toStr(
+  record?.homeStationId
+  || record?.stationId
+  || record?.studioId
+  || record?.homeStation?.id
+  || record?.station?.id
+  || record?.studio?.id
+);
+
+const strictProviderInstant = (record, keys) => {
+  for (const key of keys) {
+    const value = toStr(record?.[key]);
+    if (value && Number.isFinite(Date.parse(value))) return value;
+  }
+  return null;
+};
+
+const normalizeManagedProviderInstance = (record, ctx) => {
+  if (!record || typeof record !== "object") return null;
+  const clientSubscriptionId = toStr(record.clientSubscriptionId);
+  if (!clientSubscriptionId || clientSubscriptionId !== ctx.clientSubscriptionId) return null;
+  if (providerSubscriptionProductId(record) !== ctx.productId) return null;
+  const rawStatus = normalizeTransactionStatus(
+    record.status || record.state || record.subscriptionStatus || record.lifecycleState,
+  );
+  const isActive = ["ACTIVE", "ACTIVATED"].includes(rawStatus);
+  const isPending = ["PENDING_ACTIVATION", "NOT_ACTIVE", "CREATED", "PAID"].includes(rawStatus);
+  if (!isActive && !isPending) return null;
+  const purchasedAt = strictProviderInstant(record, [
+    "purchasedAt", "purchaseDate", "paidAt", "createdAt",
+  ]);
+  const activeFrom = strictProviderInstant(record, ["activeFrom", "activationDate", "activatedAt"]);
+  const activeTo = strictProviderInstant(record, ["activeTo", "expirationDate", "expiresAt"]);
+  const homeStationId = providerSubscriptionHomeStationId(record);
+  if (!purchasedAt || !homeStationId) return null;
+  if (isActive && (!activeFrom || !activeTo)) return null;
+  if (!isActive && (activeFrom || activeTo)) return null;
+  return {
+    providerSubscriptionState: isActive ? "ACTIVE" : "PENDING_ACTIVATION",
+    purchasedAt,
+    activeFrom: isActive ? activeFrom : null,
+    activeTo: isActive ? activeTo : null,
+    homeStationId,
+  };
+};
+
+const managedBindingPending = (ctx, code) => {
+  const nowIso = new Date().toISOString();
+  const providerObservedAt = toStr(ctx.managedProviderObservedAt)
+    || toStr(ctx.saleRecord?.managedProviderObservedAt)
+    || nowIso;
+  const projection = {
+    statusCode: 202,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Retry-After": "5" },
+    response: {
+      ok: true,
+      paid: true,
+      status: "PENDING_INSTANCE_BINDING",
+      retryable: true,
+      counterKey: toStr(ctx.counterKey),
+      paymentRef: ctx.paymentRef,
+      transactionId: ctx.transactionId,
+    },
+    set: {
+        status: "PAID_PENDING_INSTANCE_BINDING",
+        paidAt: toStr(ctx.saleRecord?.paidAt) || nowIso,
+        lastCheckedAt: nowIso,
+        updatedAt: nowIso,
+        managedBindingState: "PENDING_INSTANCE_BINDING",
+        managedBindingErrorCode: toStr(code) || "MANAGED_SUBSCRIPTION_INSTANCE_BINDING_UNAVAILABLE",
+        managedProviderObservedAt: providerObservedAt,
+        managedProviderInstance: ctx.managedProviderInstance && typeof ctx.managedProviderInstance === "object"
+          ? { ...ctx.managedProviderInstance }
+          : null,
+        clientSubscriptionId: toStr(ctx.clientSubscriptionId),
+        providerTransactionStatus: toStr(ctx.providerTransactionStatus),
+    },
+  };
+  ctx.step = "managed_sale_projection_start";
+  ctx.managedSaleProjection = projection;
+  delete ctx.token;
+  delete ctx.vivaTokenRequestBody;
+  delete ctx.providerHeaders;
+  delete ctx.providerPayload;
+  const atomicMsg = Object.assign({}, msg, { _summerSubscriptionCtx: ctx, payload: null });
+  delete atomicMsg.headers;
+  delete atomicMsg.url;
+  delete atomicMsg.method;
+  delete atomicMsg.req;
+  delete atomicMsg.res;
+  delete atomicMsg.statusCode;
+  return [null, null, null, null, atomicMsg];
+};
+
 const extractList = (value) => {
   if (Array.isArray(value)) return value;
   if (value && typeof value === "object") {
@@ -178,6 +361,178 @@ const piterProviderFactsMatch = (ctx, transaction) => {
     && toNum(productLines[0]?.discount) === expectedDiscountMinor
     && clientMatches
   );
+};
+
+const buildQuery = (entries) => entries
+  .filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
+  .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+  .join("&");
+
+const addExactIds = (target, value, objectKeys) => {
+  const values = Array.isArray(value) ? value : [value];
+  values.forEach((candidate) => {
+    if (candidate && typeof candidate === "object") {
+      for (const key of objectKeys) {
+        const id = toStr(candidate[key]);
+        if (id) target.add(id);
+      }
+      return;
+    }
+    const id = toStr(candidate);
+    if (id) target.add(id);
+  });
+};
+
+const exactTransactionIds = (transaction) => {
+  const ids = new Set();
+  for (const key of ["transactionId", "transactionUuid", "id", "uuid"]) {
+    addExactIds(ids, transaction?.[key], ["transactionId", "transactionUuid", "id", "uuid"]);
+  }
+  addExactIds(ids, transaction?.transaction, ["transactionId", "transactionUuid", "id", "uuid"]);
+  return [...ids];
+};
+
+const exactTransactionClientIds = (transaction) => {
+  const ids = new Set();
+  addExactIds(ids, transaction?.clientId, ["id", "uuid", "clientId"]);
+  addExactIds(ids, transaction?.client, ["id", "uuid", "clientId"]);
+  return [...ids];
+};
+
+const exactTransactionProductIds = (transaction) => {
+  const ids = new Set();
+  addExactIds(ids, transaction?.productId, ["id", "uuid", "productId", "subscriptionId"]);
+  addExactIds(ids, transaction?.subscriptionProductId, ["id", "uuid", "productId", "subscriptionId"]);
+  const products = Array.isArray(transaction?.products) ? transaction.products : [];
+  products.forEach((product) => {
+    addExactIds(ids, product, ["id", "uuid", "productId", "subscriptionId"]);
+    addExactIds(ids, product?.product, ["id", "uuid", "productId", "subscriptionId"]);
+  });
+  return [...ids];
+};
+
+const exactTransactionStudioIds = (transaction) => {
+  const ids = new Set();
+  for (const key of ["studioId", "stationId", "paymentStudioId"]) {
+    addExactIds(ids, transaction?.[key], ["id", "uuid", "studioId", "stationId"]);
+  }
+  for (const key of ["studio", "station", "paymentStudio"]) {
+    addExactIds(ids, transaction?.[key], ["id", "uuid", "studioId", "stationId"]);
+  }
+  return [...ids];
+};
+
+const transactionCreateTs = (transaction) => {
+  for (const key of ["createDate", "createdAt", "createdDate"]) {
+    const timestamp = toTs(transaction?.[key]);
+    if (timestamp !== null) return timestamp;
+  }
+  return null;
+};
+
+const transactionOriginalAmountMinor = (transaction) => {
+  const values = [
+    transaction?.sum,
+    transaction?.sumMinor,
+    transaction?.amount,
+    transaction?.amountMinor,
+    transaction?.totalAmount,
+    transaction?.totalAmountMinor,
+  ]
+    .map((value) => toNum(value))
+    .filter((value) => value !== null)
+    .map((value) => Math.max(0, Math.round(value)));
+  const unique = [...new Set(values)];
+  if (unique.length === 1) return unique[0];
+  if (unique.length > 1) return null;
+
+  const status = normalizeTransactionStatus(
+    transaction?.status || transaction?.state || transaction?.paymentStatus,
+  );
+  if (isExplicitlyPaidPiterTransaction(transaction)) return null;
+  const toPayMinor = toNum(transaction?.toPay ?? transaction?.toPayMinor);
+  if (toPayMinor === null || isExplicitlyFailedPiterTransaction(transaction)) return null;
+  return Math.max(0, Math.round(toPayMinor));
+};
+
+const isRecoverableOpenTransaction = (transaction) => [
+  "UNPAID",
+  "PAYMENT_PENDING",
+  "PENDING",
+  "CREATED",
+  "WAITING",
+  "WAITING_FOR_PAYMENT",
+].includes(normalizeTransactionStatus(
+  transaction?.status || transaction?.state || transaction?.paymentStatus,
+));
+
+const resolveMoscowDate = (timestamp) => {
+  if (!Number.isFinite(timestamp)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: REGIONAL_ANNUAL_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const recoveryCandidateMatches = (transaction, ctx) => {
+  const transactionIds = exactTransactionIds(transaction);
+  const clientIds = exactTransactionClientIds(transaction);
+  const productIds = exactTransactionProductIds(transaction);
+  const studioIds = exactTransactionStudioIds(transaction);
+  const attemptedAtTs = toTs(ctx.providerAttemptedAt);
+  const createdAtTs = transactionCreateTs(transaction);
+  const expectedAmountMinor = Number(ctx.expectedAmountMinor);
+  const providerAmountMinor = transactionOriginalAmountMinor(transaction);
+  const beforeMs = 60 * 1000;
+  const afterMs = Math.max(180 * 1000, Number(ctx.httpRequestTimeoutMs) + 120 * 1000);
+  return transactionIds.length === 1
+    && isRecoverableOpenTransaction(transaction)
+    && clientIds.length === 1
+    && clientIds[0] === toStr(ctx.clientId)
+    && productIds.length === 1
+    && productIds[0] === toStr(ctx.productId)
+    && toStr(ctx.studioId)
+    && studioIds.length === 1
+    && studioIds[0] === toStr(ctx.studioId)
+    && Number.isInteger(expectedAmountMinor)
+    && expectedAmountMinor > 0
+    && providerAmountMinor === expectedAmountMinor
+    && attemptedAtTs !== null
+    && createdAtTs !== null
+    && createdAtTs >= attemptedAtTs - beforeMs
+    && createdAtTs <= attemptedAtTs + afterMs;
+};
+
+const startMissingTransactionRecovery = (ctx) => {
+  const attemptedAtTs = toTs(ctx.providerAttemptedAt);
+  const beforeMs = 60 * 1000;
+  const afterMs = Math.max(180 * 1000, Number(ctx.httpRequestTimeoutMs) + 120 * 1000);
+  const dateFrom = resolveMoscowDate(attemptedAtTs === null ? null : attemptedAtTs - beforeMs);
+  const dateTo = resolveMoscowDate(attemptedAtTs === null ? null : attemptedAtTs + afterMs);
+  if (!toStr(ctx.clientId)
+    || !toStr(ctx.productId)
+    || !toStr(ctx.studioId)
+    || !Number.isInteger(Number(ctx.expectedAmountMinor))
+    || Number(ctx.expectedAmountMinor) <= 0
+    || !dateFrom
+    || !dateTo) return null;
+  const query = buildQuery([
+    ["clientIds", ctx.clientId],
+    ["productIds", ctx.productId],
+    ["dateFrom", dateFrom],
+    ["dateTo", dateTo],
+    ["page", 0],
+    ["size", 100],
+    ["sort", "createDate,desc"],
+  ]);
+  ctx.step = "confirm_recovery_list";
+  ctx.transactionRecoveryDateFrom = dateFrom;
+  ctx.transactionRecoveryDateTo = dateTo;
+  return adminRequest(ctx, "GET", `/transactions?${query}`);
 };
 
 const normalizeProductType = (value) => {
@@ -497,6 +852,41 @@ if (!ctx) {
   return fail(500, "Summer subscription context is missing");
 }
 
+// Piter-only release: do not admit new HUB checkout continuations. Provider
+// results and existing paid/pending confirmation/binding recovery stay routable.
+if (toStr(ctx.counterKey) === "network_friendship"
+  && ["managed_sale_readiness", "token_purchase", "load_products"].includes(ctx.step)) {
+  return fail(503, "Новые продажи ХАБ не включены в этот выпуск", {
+    code: "HUB_NEW_SALES_RELEASE_DISABLED", counterKey: "network_friendship",
+  });
+}
+
+if (ctx.step === "managed_sale_readiness") {
+  if (!isOk(msg.statusCode) || !matchesExactManagedReadiness(msg.payload, ctx)) {
+    return fail(503, "Контур managed-продажи ХАБ не готов", {
+      code: "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
+      counterKey: toStr(ctx.counterKey),
+      readinessStatusCode: Number(msg.statusCode) || null,
+    });
+  }
+  ctx.managedSaleBinding = { ...msg.payload.binding };
+  ctx.managedSaleReadinessCheckedAt = toStr(msg.payload.checkedAt);
+  ctx.managedSaleProviderScope = { ...NETWORK_FRIENDSHIP_PROVIDER_SCOPE };
+  if (!toStr(ctx.vivaTokenRequestBody)) {
+    return fail(503, "Сервисная авторизация Viva не настроена", {
+      code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+    });
+  }
+  ctx.step = "token_purchase";
+  msg._summerSubscriptionCtx = ctx;
+  msg.method = "POST";
+  msg.url = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+  msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  msg.httpRequestTimeout = ctx.httpRequestTimeoutMs;
+  msg.payload = ctx.vivaTokenRequestBody;
+  return [msg, null, null, null];
+}
+
 if (ctx.step === "token_purchase") {
   if (!isOk(msg.statusCode) || !msg.payload?.access_token) {
     return fail(502, "Viva token error", {
@@ -617,7 +1007,7 @@ if (ctx.step === "load_products") {
   ctx.step = "create_transaction";
   ctx.transactionPayload = transactionPayload;
   const request = adminRequest(ctx, "POST", "/transactions", transactionPayload);
-  if (ctx.counterKey === "piter_friendship") {
+  if (isAtomicSaleCounter(ctx.counterKey)) {
     ctx.step = "piter_reserve_start";
     ctx.providerMethod = request[0].method;
     ctx.providerUrl = request[0].url;
@@ -630,7 +1020,7 @@ if (ctx.step === "load_products") {
 
 if (ctx.step === "create_transaction") {
   if (!isOk(msg.statusCode)) {
-    if (ctx.counterKey === "piter_friendship") {
+    if (isAtomicSaleCounter(ctx.counterKey)) {
       ctx.step = "piter_provider_result";
       ctx.providerResult = {
         ok: false,
@@ -678,7 +1068,7 @@ if (ctx.step === "create_transaction") {
   const transactionId = pickId(msg.payload);
   const paymentUrl = extractPaymentUrl(msg.payload);
   const toPayMinor = Math.max(0, Math.round(toNum(msg.payload?.toPay) ?? 0));
-  if (ctx.counterKey === "piter_friendship" && !transactionId) {
+  if (isAtomicSaleCounter(ctx.counterKey) && !transactionId) {
     ctx.step = "piter_provider_result";
     ctx.providerResult = {
       ok: false,
@@ -691,7 +1081,7 @@ if (ctx.step === "create_transaction") {
     ctx.saleType === "tiered_direct_product"
     && toPayMinor !== Math.max(0, Math.round(Number(ctx.priceMinor) || 0))
   ) {
-    if (ctx.counterKey === "piter_friendship") {
+    if (isAtomicSaleCounter(ctx.counterKey)) {
       ctx.step = "piter_provider_result";
       ctx.providerResult = {
         ok: false,
@@ -713,7 +1103,7 @@ if (ctx.step === "create_transaction") {
     });
   }
   if (!paymentUrl && toPayMinor > 0) {
-    if (ctx.counterKey === "piter_friendship") {
+    if (isAtomicSaleCounter(ctx.counterKey)) {
       ctx.step = "piter_provider_result";
       ctx.providerResult = {
         ok: false,
@@ -770,6 +1160,16 @@ if (ctx.step === "create_transaction") {
       ? ctx.providerValidityDays
       : null,
     providerVisits: Number.isInteger(ctx.providerVisits) ? ctx.providerVisits : null,
+    managedSaleBinding: ctx.counterKey === "network_friendship" && ctx.managedSaleBinding
+      ? { ...ctx.managedSaleBinding }
+      : null,
+    managedSaleReadinessCheckedAt: ctx.counterKey === "network_friendship"
+      ? toStr(ctx.managedSaleReadinessCheckedAt)
+      : null,
+    managedSaleProviderScope: ctx.counterKey === "network_friendship"
+      ? { ...NETWORK_FRIENDSHIP_PROVIDER_SCOPE }
+      : null,
+    managedBindingState: ctx.counterKey === "network_friendship" ? "AWAITING_PAYMENT" : null,
     toPayMinor,
     status: "PAYMENT_PENDING",
     paymentUrl,
@@ -835,7 +1235,7 @@ if (ctx.step === "create_transaction") {
     },
   });
 
-  if (ctx.counterKey === "piter_friendship") {
+  if (isAtomicSaleCounter(ctx.counterKey)) {
     ctx.step = "piter_provider_result";
     ctx.providerResult = {
       ok: true,
@@ -864,7 +1264,14 @@ if (ctx.step === "token_confirm") {
 
   ctx.token = msg.payload.access_token;
   if (!ctx.transactionId) {
-    return fail(400, "transactionId is required for confirmation", { paymentRef: ctx.paymentRef });
+    const recoveryRequest = startMissingTransactionRecovery(ctx);
+    if (!recoveryRequest) {
+      return fail(503, "Транзакция Viva требует ручной сверки", {
+        code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_CONTEXT_INCOMPLETE",
+        paymentRef: ctx.paymentRef,
+      });
+    }
+    return recoveryRequest;
   }
 
   ctx.step = "confirm_lookup";
@@ -873,6 +1280,59 @@ if (ctx.step === "token_confirm") {
     "GET",
     `/transactions/${encodeURIComponent(ctx.transactionId)}`,
   );
+}
+
+if (ctx.step === "confirm_recovery_list") {
+  if (!isOk(msg.statusCode)) {
+    return fail(503, "Не удалось проверить транзакции Viva по клиенту", {
+      code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_UNAVAILABLE",
+      paymentRef: ctx.paymentRef,
+      statusCode: Number(msg.statusCode) || null,
+    });
+  }
+
+  const transactions = extractList(msg.payload)
+    .filter((item) => item && typeof item === "object");
+  const totalPages = msg.payload?.totalPages;
+  const pageNumber = msg.payload?.number;
+  const totalElements = msg.payload?.totalElements;
+  const numberOfElements = msg.payload?.numberOfElements;
+  const completeFirstPage = Number.isInteger(totalPages)
+    && totalPages >= 0
+    && totalPages <= 1
+    && Number.isInteger(pageNumber)
+    && pageNumber === 0
+    && msg.payload?.last === true
+    && Number.isInteger(totalElements)
+    && totalElements === transactions.length
+    && Number.isInteger(numberOfElements)
+    && numberOfElements === transactions.length
+    && totalPages === (transactions.length > 0 ? 1 : 0);
+  const incompletePage = !completeFirstPage;
+  if (incompletePage) {
+    return fail(503, "Список транзакций Viva требует постраничной сверки", {
+      code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_INCOMPLETE",
+      paymentRef: ctx.paymentRef,
+    });
+  }
+
+  const matches = transactions.filter((transaction) => recoveryCandidateMatches(transaction, ctx));
+  if (matches.length !== 1) {
+    return fail(503, "Транзакция Viva не определена однозначно", {
+      code: matches.length === 0
+        ? "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_NOT_FOUND"
+        : "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_AMBIGUOUS",
+      paymentRef: ctx.paymentRef,
+      matchCount: matches.length,
+    });
+  }
+
+  const transactionId = exactTransactionIds(matches[0])[0];
+  ctx.transactionId = transactionId;
+  ctx.transactionRecovered = true;
+  ctx.transactionRecoveredAt = new Date().toISOString();
+  ctx.step = "confirm_lookup";
+  return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(transactionId)}`);
 }
 
 if (ctx.step === "confirm_lookup") {
@@ -885,14 +1345,28 @@ if (ctx.step === "confirm_lookup") {
     });
   }
 
+  if (ctx.transactionRecovered === true && !recoveryCandidateMatches(msg.payload, ctx)) {
+    return fail(503, "Транзакция Viva не прошла повторную проверку", {
+      code: "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_GET_MISMATCH",
+      paymentRef: ctx.paymentRef,
+    });
+  }
+
   const nowIso = new Date().toISOString();
   const isPiter = ctx.counterKey === "piter_friendship";
-  const paid = isPiter ? isExplicitlyPaidPiterTransaction(msg.payload) : isPaidTransaction(msg.payload);
+  const isManagedAnnual = isPiter || ctx.counterKey === "network_friendship";
+  const paid = isManagedAnnual ? isExplicitlyPaidPiterTransaction(msg.payload) : isPaidTransaction(msg.payload);
+  // Piter's offline legacy reconciliation rules must not change HUB inventory
+  // semantics: expired UNPAID/refund evidence is not an automatic HUB release.
   const failed = !paid && (isPiter
     ? isExplicitlyFailedPiterTransaction(msg.payload)
-    : isFailedTransaction(msg.payload));
+    : ctx.counterKey === "network_friendship"
+      ? ["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
+        normalizeTransactionStatus(msg.payload?.status || msg.payload?.state || msg.payload?.paymentStatus),
+      )
+      : isFailedTransaction(msg.payload));
   const nextStatus = paid ? "PAID" : failed ? "FAILED" : "PAYMENT_PENDING";
-  if (isPiter) {
+  if (isManagedAnnual) {
     const providerToPay = toNum(msg.payload?.toPay);
     const expectedAmount = ctx.expectedAmountMinor;
     const validAmount = Number.isInteger(expectedAmount) && expectedAmount > 0
@@ -903,11 +1377,55 @@ if (ctx.step === "confirm_lookup") {
     if (!toStr(ctx.transactionId) || pickId(msg.payload) !== ctx.transactionId
       || !validAmount || !piterProviderFactsMatch(ctx, msg.payload)) {
       return fail(503, "Подтверждение Viva требует сверки; состояние покупки не изменено", {
-        code: "PITER_CONFIRM_PROVIDER_MISMATCH", paymentRef: ctx.paymentRef,
+        code: isPiter ? "PITER_CONFIRM_PROVIDER_MISMATCH" : "HUB_CONFIRM_PROVIDER_MISMATCH",
+        paymentRef: ctx.paymentRef,
       });
     }
   }
   const expiresAt = pickPaymentDeadline(ctx, msg.payload);
+  if (ctx.counterKey === "network_friendship" && paid) {
+    const clientSubscriptionId = exactClientSubscriptionId(msg.payload);
+    const providerClientId = toStr(
+      msg.payload?.providerClientId || msg.payload?.clientId || msg.payload?.client?.id,
+    );
+    if (!clientSubscriptionId
+      || !providerClientId
+      || (toStr(ctx.clientId) && toStr(ctx.clientId) !== providerClientId)
+      || !ctx.managedSaleBinding
+      || typeof ctx.managedSaleBinding !== "object") {
+      return managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_PROVIDER_INSTANCE_ID_UNAVAILABLE");
+    }
+    ctx.clientSubscriptionId = clientSubscriptionId;
+    ctx.clientId = providerClientId;
+    ctx.providerTransactionStatus = normalizeTransactionStatus(
+      msg.payload?.status || msg.payload?.state || msg.payload?.paymentStatus,
+    );
+    ctx.providerTransactionObservedAt = nowIso;
+    // Preserve transaction facts before adminRequest replaces msg.payload.
+    ctx.confirmResult = {
+      nextStatus,
+      transactionId: pickId(msg.payload),
+      paid,
+      failed,
+      expiresAt,
+      paymentUrl: extractPaymentUrl(msg.payload),
+      toPayMinor: Math.max(0, Math.round((toNum(msg.payload?.toPay) ?? Number(ctx.toPayMinor)) || 0)),
+      response: null,
+      reconcile: ctx.reconcile === true,
+    };
+    const readbackRequest = adminRequest(
+      ctx,
+      "GET",
+      `/clients/${encodeURIComponent(ctx.clientId)}/subscriptions?size=200`,
+    );
+    ctx.step = "piter_confirm_result";
+    ctx.providerMethod = readbackRequest[0].method;
+    ctx.providerUrl = readbackRequest[0].url;
+    ctx.providerHeaders = readbackRequest[0].headers;
+    ctx.providerPayload = readbackRequest[0].payload;
+    msg._summerSubscriptionCtx = ctx;
+    return [null, null, null, null, msg];
+  }
   const dbQuery = buildRecordQuery(ctx);
 
   const dbMsg = Object.assign({}, msg, {
@@ -957,7 +1475,7 @@ if (ctx.step === "confirm_lookup") {
     },
   });
 
-  if (ctx.counterKey === "piter_friendship") {
+  if (isAtomicSaleCounter(ctx.counterKey)) {
     ctx.step = "piter_confirm_result";
     ctx.confirmResult = {
       nextStatus,
@@ -975,6 +1493,126 @@ if (ctx.step === "confirm_lookup") {
   }
 
   return [null, dbMsg, responseMsg, debugMsg];
+}
+
+if (ctx.step === "managed_sale_instance_readback") {
+  if (!isOk(msg.statusCode)) {
+    return managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_PROVIDER_READBACK_UNAVAILABLE");
+  }
+  const exactRecord = extractList(msg.payload).find(
+    (item) => toStr(item?.clientSubscriptionId) === ctx.clientSubscriptionId,
+  );
+  const providerInstance = normalizeManagedProviderInstance(exactRecord, ctx);
+  if (!providerInstance) {
+    return managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_PROVIDER_INSTANCE_UNCONFIRMED");
+  }
+  const bindingToken = readManagedGlobal("subscriptions_sale_binding_integration_token");
+  const binding = ctx.managedSaleBinding;
+  const scope = ctx.managedSaleProviderScope;
+  if (!bindingToken || !binding || !scope
+    || scope.kind !== NETWORK_FRIENDSHIP_PROVIDER_SCOPE.kind
+    || scope.scopeId !== NETWORK_FRIENDSHIP_PROVIDER_SCOPE.scopeId) {
+    return managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_SALE_BINDING_NOT_CONFIGURED");
+  }
+  ctx.managedProviderInstance = providerInstance;
+  ctx.managedProviderObservedAt = toStr(ctx.saleRecord?.managedProviderObservedAt)
+    || providerInstance.purchasedAt;
+  ctx.step = "managed_sale_binding_confirm";
+  const request = cupRequest(
+    ctx,
+    "/internal/subscriptions/sale-bindings/confirm",
+    bindingToken,
+    {
+      provider: "VIVA",
+      providerProductId: ctx.productId,
+      providerScopeKind: scope.kind,
+      providerScopeId: scope.scopeId,
+      providerClientId: ctx.clientId,
+      clientSubscriptionId: ctx.clientSubscriptionId,
+      providerTransactionId: ctx.transactionId,
+      providerTransactionStatus: ctx.providerTransactionStatus,
+      providerSubscriptionState: providerInstance.providerSubscriptionState,
+      homeStationId: providerInstance.homeStationId,
+      purchasePriceMinor: ctx.expectedAmountMinor,
+      purchasedAt: providerInstance.purchasedAt,
+      activeFrom: providerInstance.activeFrom,
+      activeTo: providerInstance.activeTo,
+      providerObservedAt: ctx.managedProviderObservedAt,
+      requiredAdapterId: MANAGED_SALE_COMPATIBILITY.adapterId,
+      requiredContractVersion: MANAGED_SALE_COMPATIBILITY.contractVersion,
+      requiredCapabilityDigest: MANAGED_SALE_COMPATIBILITY.capabilityDigest,
+      expectedMappingId: binding.mappingId,
+      expectedMappingRevision: binding.mappingRevision,
+      expectedSubscriptionTypeId: binding.subscriptionTypeId,
+      expectedPublicationId: binding.publicationId,
+      expectedPolicyVersion: binding.policyVersion,
+      expectedPolicyDigest: binding.policyDigest,
+      expectedFenceId: binding.fenceId,
+      expectedFenceRevision: binding.fenceRevision,
+      expectedFenceDigest: binding.fenceDigest,
+      expectedProjectorReconciliationDigest: binding.projectorReconciliationDigest,
+      expectedReleaseProgramId: binding.releaseProgramId,
+      expectedReleaseProgramRevision: binding.releaseProgramRevision,
+      expectedReleasePhaseId: binding.releasePhaseId,
+    },
+  );
+  return request || managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_SALE_BINDING_NOT_CONFIGURED");
+}
+
+if (ctx.step === "managed_sale_binding_confirm") {
+  const body = msg.payload && typeof msg.payload === "object" ? msg.payload : null;
+  const bound = isOk(msg.statusCode)
+    && body?.schemaVersion === 1
+    && body?.state === "BOUND"
+    && body?.clientSubscriptionId === ctx.clientSubscriptionId
+    && toStr(body?.subscriptionInstanceId);
+  if (!bound) {
+    const code = toStr(body?.error?.code)
+      || toStr(body?.code)
+      || "MANAGED_SUBSCRIPTION_INSTANCE_BINDING_UNAVAILABLE";
+    return managedBindingPending(ctx, code);
+  }
+  const nowIso = new Date().toISOString();
+  const providerInstance = ctx.managedProviderInstance || {};
+  ctx.step = "managed_sale_projection_start";
+  ctx.managedSaleProjection = {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    response: {
+      ok: true,
+      paid: true,
+      status: "PAID",
+      managedBindingState: "BOUND",
+      counterKey: toStr(ctx.counterKey),
+      inventoryId: toStr(ctx.inventoryId),
+      paymentRef: ctx.paymentRef,
+      transactionId: ctx.transactionId,
+      updatedAt: nowIso,
+    },
+    set: {
+        status: "PAID",
+        paidAt: toStr(ctx.saleRecord?.paidAt) || toStr(providerInstance.purchasedAt) || nowIso,
+        lastCheckedAt: nowIso,
+        updatedAt: nowIso,
+        managedBindingState: "BOUND",
+        managedBindingErrorCode: null,
+        subscriptionInstanceId: body.subscriptionInstanceId,
+        clientSubscriptionId: ctx.clientSubscriptionId,
+        managedPolicyVersion: Number(body.policyVersion),
+    },
+  };
+  delete ctx.token;
+  delete ctx.vivaTokenRequestBody;
+  delete ctx.providerHeaders;
+  delete ctx.providerPayload;
+  const atomicMsg = Object.assign({}, msg, { _summerSubscriptionCtx: ctx, payload: null });
+  delete atomicMsg.headers;
+  delete atomicMsg.url;
+  delete atomicMsg.method;
+  delete atomicMsg.req;
+  delete atomicMsg.res;
+  delete atomicMsg.statusCode;
+  return [null, null, null, null, atomicMsg];
 }
 
 return fail(500, "Unsupported summer subscription step", {

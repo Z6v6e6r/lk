@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+  buildIngressClosureScript,
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
+  EFFECTIVE_UNIT_NETWORK_SANDBOX,
+  EFFECTIVE_UNIT_PRODUCTION_MARKER_PATTERN,
   INGRESS_TARGET_REFERENCE_PATTERN,
+  REMOTE_PREFLIGHT_SCRIPT,
   selectPinnedEd25519KnownHostLine,
   validateFreshHostPreflightEvidence,
   validateHostPreflightEvidence,
@@ -25,7 +30,39 @@ const UNIT_FRAGMENT_SHA256 = Object.freeze({
   "lk1-subscription-dev-identity-fixture.service": "aa3b2b3da47f5dd21b139f0bba98a1da9a9c9a4114ac5f357ce9970a131f1ffd",
   "lk1-subscription-dev-nodered.service": "dfb45a305fd27d32eacfbf5a3f437e257dcd05f385256289804ba496bdea6e99",
 });
+const BASH_MAJOR = Number.parseInt(
+  execFileSync("/bin/bash", ["-c", "printf '%s' \"${BASH_VERSINFO[0]}\""], { encoding: "utf8" }),
+  10,
+);
+const CAN_EXECUTE_INGRESS_FIXTURES = process.platform === "linux" && BASH_MAJOR >= 4;
 const clone = (value) => structuredClone(value);
+
+const runIngressFixture = (configure, bounds = {}) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lk1-ingress-closure-test-"));
+  const root = path.join(temporary, "root");
+  const external = path.join(temporary, "external");
+  fs.mkdirSync(root);
+  fs.mkdirSync(external);
+  try {
+    configure({ root, external });
+    const output = execFileSync("/bin/bash", ["-c", `set -euo pipefail\n${buildIngressClosureScript({
+      rootRows: [["caddy", root]],
+      ...bounds,
+    })}`], { encoding: "utf8" }).trim();
+    const fields = output.split("\t");
+    assert.equal(fields[0], "INGRESS_ISOLATION");
+    assert.equal(fields.length, 6);
+    return {
+      configurationReadable: fields[1] === "true",
+      targetRouteAbsent: fields[2] === "true",
+      closureComplete: fields[3] === "true",
+      fileCount: Number.parseInt(fields[4], 10),
+      closureSha256: fields[5],
+    };
+  } finally {
+    fs.rmSync(temporary, { recursive: true });
+  }
+};
 const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   `HOSTNAME\t${evidence.target.hostname}`,
   `MACHINE_ID_SHA256\t${evidence.target.machineIdSha256}`,
@@ -47,7 +84,7 @@ const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   ...Object.entries(evidence.inputs)
     .filter(([key]) => key !== "productionMarkersAbsent")
     .map(([key, value]) => `INPUT\t${key}\t${value}`),
-  "INGRESS_ISOLATION\ttrue\ttrue",
+  `INGRESS_ISOLATION\ttrue\ttrue\ttrue\t7\t${"d".repeat(64)}`,
   `PRODUCTION_MARKERS_ABSENT\t${evidence.inputs.productionMarkersAbsent}`,
   `SHARED_FLOW_SHA256\t${evidence.sharedResources.flowSha256}`,
   "END",
@@ -81,6 +118,120 @@ test("ingress target scan rejects every reserved DEV route representation", () =
   ]) assert.equal(pattern.test(value), true, value);
   assert.equal(pattern.test("proxy_pass http://127.0.0.1:1880;"), false);
   assert.equal(pattern.test("set $unrelated 11882;"), false);
+});
+
+test("Linux ingress closure follows inline and external absolute includes", {
+  skip: !CAN_EXECUTE_INGRESS_FIXTURES,
+}, () => {
+  const result = runIngressFixture(({ root, external }) => {
+    const externalConfig = path.join(external, "dev-route.conf");
+    fs.writeFileSync(externalConfig, "proxy_pass http://127.0.0.1:1882;\n");
+    fs.writeFileSync(path.join(root, "main.conf"), `site { import ${externalConfig}; }\n`);
+  });
+  assert.equal(result.configurationReadable, true);
+  assert.equal(result.closureComplete, true);
+  assert.equal(result.targetRouteAbsent, false);
+  assert.equal(result.fileCount, 2);
+});
+
+test("Linux ingress closure ignores include words inside comments and quoted values", {
+  skip: !CAN_EXECUTE_INGRESS_FIXTURES,
+}, () => {
+  const result = runIngressFixture(({ root }) => {
+    fs.writeFileSync(path.join(root, "main.conf"), [
+      "# import /missing/comment.conf",
+      "header X-Note \"include /missing/quoted.conf\";",
+      "",
+    ].join("\n"));
+  });
+  assert.equal(result.configurationReadable, true);
+  assert.equal(result.closureComplete, true);
+  assert.equal(result.targetRouteAbsent, true);
+});
+
+test("Linux ingress closure terminates include cycles and canonicalizes symlinks", {
+  skip: !CAN_EXECUTE_INGRESS_FIXTURES,
+}, () => {
+  const result = runIngressFixture(({ root }) => {
+    fs.writeFileSync(path.join(root, "a.conf"), "import b.conf\n");
+    fs.writeFileSync(path.join(root, "b.conf"), "import a.conf\n");
+    fs.symlinkSync(path.join(root, "a.conf"), path.join(root, "alias.conf"));
+  });
+  assert.equal(result.configurationReadable, true);
+  assert.equal(result.closureComplete, true);
+  assert.equal(result.targetRouteAbsent, true);
+  assert.equal(result.fileCount, 2);
+});
+
+test("Linux ingress closure rejects missing, unreadable, symlink-cycle, and file-limit inputs", {
+  skip: !CAN_EXECUTE_INGRESS_FIXTURES,
+}, () => {
+  const missing = runIngressFixture(({ root }) => {
+    fs.writeFileSync(path.join(root, "main.conf"), "import missing.conf\n");
+  });
+  assert.equal(missing.configurationReadable, false);
+  assert.equal(missing.closureComplete, false);
+
+  const unreadable = runIngressFixture(({ root }) => {
+    fs.writeFileSync(path.join(root, "main.conf"), "import unreadable.conf\n");
+    fs.writeFileSync(path.join(root, "unreadable.conf"), "server localhost:1880\n", { mode: 0o000 });
+  });
+  assert.equal(unreadable.configurationReadable, false);
+  assert.equal(unreadable.closureComplete, false);
+
+  const symlinkCycle = runIngressFixture(({ root }) => {
+    fs.writeFileSync(path.join(root, "main.conf"), "server localhost:1880\n");
+    fs.symlinkSync("cycle-b.conf", path.join(root, "cycle-a.conf"));
+    fs.symlinkSync("cycle-a.conf", path.join(root, "cycle-b.conf"));
+  });
+  assert.equal(symlinkCycle.configurationReadable, false);
+  assert.equal(symlinkCycle.closureComplete, false);
+
+  const overLimit = runIngressFixture(({ root }) => {
+    for (const name of ["a.conf", "b.conf", "c.conf"]) {
+      fs.writeFileSync(path.join(root, name), "server localhost:1880\n");
+    }
+  }, { maxFiles: 2, maxEntries: 3 });
+  assert.equal(overLimit.closureComplete, false);
+  assert.ok(overLimit.fileCount <= 2);
+});
+
+test("effective unit scan accepts only loopback allow plus deny-all network sandbox", () => {
+  const markerPattern = new RegExp(EFFECTIVE_UNIT_PRODUCTION_MARKER_PATTERN, "i");
+  assert.equal(markerPattern.test("IPAddressDeny=0.0.0.0/0 ::/0"), false);
+  assert.deepEqual(EFFECTIVE_UNIT_NETWORK_SANDBOX, {
+    ipAddressAllow: "127.0.0.0/8 ::1/128",
+    ipAddressDeny: "0.0.0.0/0 ::/0",
+    restrictAddressFamilies: "AF_INET AF_INET6 AF_UNIX",
+  });
+  for (const value of [
+    "Environment=CUP_BASE_URL=https://padlhub.su",
+    "Environment=PROVIDER_BASE_URL=https://api.vivacrm.ru",
+    "Environment=MONGO_URL=mongodb+srv://example.invalid",
+    "Environment=SHARED_CUP=https://127.0.0.1:3036",
+    "ExecStart=/usr/bin/ssh lk-primary-147",
+  ]) assert.equal(markerPattern.test(value), true, value);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    'effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group)"',
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    'effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group -p IPAddressAllow',
+  ), false);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    `test "$ip_address_allow" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.ipAddressAllow}'`,
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    `test "$ip_address_deny" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.ipAddressDeny}'`,
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    `test "$restrict_address_families" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.restrictAddressFamilies}'`,
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("nginx -T"), false);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("compgen -G"), false);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("-maxdepth 16"), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes('test "$config_size" -gt 1048576'), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("ingress_closure_complete"), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("ingress_closure_sha256"), true);
 });
 
 test("historical host preflight proves its archived stopped isolated state", () => {
@@ -144,6 +295,8 @@ test("direct SSH capture binds freshness, repository, release, tooling, and trus
     (value) => { value.runtimeIsolation.systemdUnits["lk1-subscription-dev-cup.service"].dropInsAbsent = false; },
     (value) => { value.runtimeIsolation.systemdUnits["lk1-subscription-dev-cup.service"].networkPolicyExact = false; },
     (value) => { value.runtimeIsolation.ingress.targetRouteAbsent = false; },
+    (value) => { value.runtimeIsolation.ingress.closureComplete = false; },
+    (value) => { value.runtimeIsolation.ingress.closureSha256 = "INVALID"; },
     (value) => {
       value.sharedResources.flowSha256 = "c".repeat(64);
       value.sharedResources.expectedFlowSha256 = "c".repeat(64);
@@ -180,8 +333,8 @@ test("capture treats deny-all CIDRs as the required policy, not as wildcard-bind
     assertPinnedHostKey: () => { pinChecks += 1; },
   });
   assert.equal(pinChecks, 1);
-  assert.match(remoteScript, /ip_deny=.*IPAddressDeny --value/);
-  assert.match(remoteScript, /ip_deny.*0\.0\.0\.0\/0 ::\/0/);
+  assert.match(remoteScript, /ip_address_deny=.*IPAddressDeny --value/);
+  assert.match(remoteScript, /ip_address_deny.*0\.0\.0\.0\/0 ::\/0/);
   assert.match(remoteScript, /network_policy_exact=true/);
   assert.doesNotMatch(
     remoteScript,

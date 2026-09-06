@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import test from "node:test";
 
@@ -104,4 +105,25 @@ test("runtime evidence rejects a false audit PASS or incomplete npm ls", () => {
     value.invalidPackageCount = 1;
   });
   assert.throws(() => validatePartnerRuntimeEvidence(incomplete), /closure hash mismatch/);
+});
+
+test("runtime evidence rejects resealed container isolation or cleanup claims", () => {
+  for (const mutate of [
+    (receipt) => { receipt.networkMode = "bridge"; },
+    (receipt) => { receipt.mounts[0].readOnly = false; },
+    (receipt) => { receipt.containerPresentAfterCleanup = true; },
+    (receipt) => { receipt.hostListenerPresentAfterCleanup = true; },
+    (receipt) => { receipt.exitCode = 1; },
+    (receipt) => { receipt.imageReference = "node:22"; },
+  ]) {
+    const input = evidence();
+    input.functionalRehearsalBytes = mutateJson(input.functionalRehearsalBytes, (value) => mutate(value.containerReceipt));
+    const receipt = JSON.parse(input.functionalRehearsalBytes).containerReceipt;
+    const hash = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+    input.manifestBytes = mutateJson(input.manifestBytes, (value) => {
+      value.closure.functionalRehearsalSha256 = hash(input.functionalRehearsalBytes);
+      value.closure.containerReceiptSha256 = hash(Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`));
+    });
+    assert.throws(() => validatePartnerRuntimeEvidence(input), /container receipt/);
+  }
 });

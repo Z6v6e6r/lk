@@ -173,6 +173,282 @@ Reopening ingress on the old flow with migrated rows is forbidden because it can
 write a null tenant without resetting revision. Start the worker in `SHADOW`;
 `ENFORCE` still requires separate approval.
 
+### Cutover packet and migration executor
+
+The cutover is represented by one private packet assembled only from a fresh
+live workspace, its exact candidate, one or more non-overlapping migration
+plans, and a private controls receipt:
+
+```bash
+npm run nodered:viva-game-projection-sync:cutover-packet -- \
+  --workspace /absolute/private/fresh-live-workspace \
+  --candidate-directory /absolute/private/viva-projection-candidate \
+  --migration-index /absolute/private/migration-plan-index.json \
+  --controls /absolute/private/cutover-controls.json \
+  --output-directory /absolute/private/new-cutover-packet \
+  --tenant-key iSkq6G
+```
+
+The migration index has format version 1, the exact tenant, and `plans` entries
+containing absolute private paths for `plan.json`, the Mongo projection, the
+Viva projection, and the provider-capture receipt, plus the plan SHA-256. The
+builder validates every source digest and capture receipt, deterministically
+rebuilds each plan from those exact bytes, and copies the source evidence into
+the packet. The controls
+receipt has format version 1 and the same tenant. It records exact-head CI;
+durable PM2 tenant provisioning and post-restart readback; a held writer fence;
+the current `games.lk_games` backup manifest; an isolated restore rehearsal;
+the exact Mongo replica-set identity; disposition
+of every skipped row; and the prepared postcheck contract. A claimed `PASS`
+with a missing hash, mismatched count, incomplete writer inventory, overlapping
+plan range, unresolved skip, or mismatched flow/tenant/commit is rejected.
+The backup manifest and restore-rehearsal receipt are themselves private inputs;
+the builder reads, hashes, validates, and copies them into the packet evidence
+directory. The packet manifest binds the exact commit, source, deterministically
+rebuilt candidate, controls, reviewed-flow contract, plans, source evidence,
+and every runtime/preparer executor source file. Packet preparation rejects a
+dirty or different checkout whose executor bytes do not match the exact commit.
+The coordinator, migration executor, and postcheck independently hash the full
+packet tree and replay source validation, capture-receipt validation, freshness,
+and deterministic plan reconstruction before any live transition.
+
+The packet enumerates every `mongodb4` writer to `lk_games` in both the source
+and candidate graphs. `aggregate` is conservatively classified as a writer,
+and any dynamic Mongo collection anywhere in the flow or blank `lk_games`
+operation is rejected as unclassifiable. A valid fence receipt must bind the exact writer union and the
+complete set of migration operation IDs, show
+write ingress blocked, internal schedulers stopped, Node-RED stopped, and all
+writers quiescent. Production execution must use
+`scripts/run_viva_game_projection_cutover.sh`. It starts a detached fence
+guardian that inherits the canonical host `flock` descriptor and retains it
+after coordinator success, failure, or interruption. The guardian releases the
+descriptor only after a separate root-owned, token-bound release request with
+confirmation `RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1`. The descriptor is
+identified by its process start identity, descriptor, device, and inode. A
+fresh fsynced heartbeat proves that the detached process still owns that exact
+descriptor; malformed or stale release requests are quarantined without
+releasing the lock. The descriptor is held continuously across every migration plan,
+candidate publication, `pm2 restart --update-env`, live read-only postchecks,
+and READY-marker publication. A crash therefore leaves ingress fenced for
+explicit reconciliation. The lower-level
+`scripts/run_viva_game_projection_fenced_migration.sh` is retained for one
+verify, reconciliation, apply, or restore action only. The executor performs a
+full live PM2/tenant/flock/current-op check before and after each transaction,
+uses a one-second watchdog during the transaction, and performs a cheap
+descriptor/token/inode lease check around each CAS and readback.
+The current-op gate treats DML plus `drop`, `dropDatabase`, `renameCollection`,
+`createIndexes`, `collMod`, and aggregate `$out`/`$merge` targeting
+`games.lk_games` as conflicting writes. Mongo clients
+use bounded connection, socket, operation, and commit timeouts. Each plan is
+limited to 100 operations so those checks and the 15-second commit deadline fit
+inside a bounded transaction. The receipt expires and must leave at least two
+minutes on its lease. A generated packet always has
+`liveMutationAuthorized: false`; `READY_FOR_SEPARATE_LIVE_APPROVAL` means the
+evidence is internally complete for review, not that apply, import, restart, or
+activation is authorized.
+
+Before the first plan, the coordinator writes a durable `.prepared` recovery
+artifact containing the exact preimage, revokes every role from the separately
+identified application principal, and installs a strict impossible collection
+validator on `games.lk_games` as a second layer. It proves that the application
+principal receives authorization error 13 for transactionally aborted insert,
+update, and delete probes and for drop, rename, and `collMod` probes. The pinned
+migration principal must remain distinct and must prove a transactionally
+aborted validator bypass. The previous roles and validator/options are stored
+in the preparation and final private barrier receipts. A failed installation is
+recovered only with the exact artifact and explicit
+`npm run mongo:viva-game-projection-sync:barrier-recover` confirmation. Recovery
+also requires the exact execution index, fresh writer-fence and guardian receipts, a live
+guardian heartbeat holding the canonical lock inode, the frozen runtime in
+`stopped`/`SHADOW`, and the exact clean executor commit. The operator command
+writes a private, fresh recovery request; the guardian alone accepts it and
+spawns the frozen recovery executor with its inherited canonical flock FD.
+Release requests are quarantined while recovery runs. The executor repeats the
+live flock, heartbeat, PM2, and receipt gates before and after every Mongo
+recovery side effect. It durably records an outcome-unknown entry before
+restoring Mongo state; retrying the same report path reconciles that journal and
+completes the exact preimage. Every journal append uses exclusive durable
+publication. A retry publishes the one fully synced, private, exact
+next-sequence orphan left before hard-link creation, while multiple, malformed,
+or unrelated artifacts fail closed. Its terminal journal entry contains the complete
+report and hash before report publication, so a crash in finalization recreates
+the report without repeating Mongo mutations. Before it durably accepts the
+guardian request or performs any fallible post-accept validation, the recovery
+child starts or adopts the single detached takeover keeper with the inherited
+canonical flock descriptor. That keeper has its own receipt, process-start
+identity, and heartbeat, remains alive through guardian or recovery-child
+`SIGKILL`, and accepts the explicit fence-release request only when it also
+binds the exact recovery request ID, recovery report path and SHA-256,
+terminal-journal SHA-256, and takeover-receipt SHA-256. It independently
+rereads the complete terminal report and embedded journal report before
+releasing. It leaves an otherwise valid release pending while the original
+guardian process still owns its copy of the descriptor. After successful
+recovery, the guardian independently checks the terminal report, terminal
+journal, takeover receipt, fresh heartbeat, PID/start identity, descriptor, and
+lock inode, and remains a co-custodian of the flock. It quarantines every
+release that is not bound to that exact terminal evidence. Only after validating
+an exact terminal-bound release and revalidating the live takeover may the
+guardian exit and leave the request for the takeover to consume after it
+observes the parent death. A keeper death after that authorization is safe
+because the release is already exact and terminal-bound. If that exact takeover
+dies before authorization, the still-live guardian proves the old PID/start identity is dead,
+rereads the same receipt, report, and terminal journal, and advertises
+`HOLDING_TERMINAL_RECOVERY_FALLBACK` in its heartbeat. It keeps the canonical
+flock, rejects another recovery child and generic release, and accepts only the
+same terminal-bound release contract that the takeover would have accepted.
+Live, reused-PID-with-lock, partial, or otherwise ambiguous keeper evidence
+never enables fallback.
+The takeover receipt durably records `custodyState=TAKEOVER_ESTABLISHED` before
+the request is accepted. The child announces that exact receipt to the guardian,
+which immediately blocks READY, generic release, and every different recovery
+request ID. A CLI retry discovers the receipt even without an accepted request
+or refreshed guardian heartbeat. It adopts a live keeper, refuses to replace it
+while its first heartbeat is pending, or removes and replaces the exact same-ID keeper only after
+PID/start identity proves that process is dead; incomplete or ambiguous evidence
+never starts a second keeper. Guardian-child handshake events use one canonical
+JSON record per line, so an empty record cannot invalidate an otherwise accepted
+recovery or READY request; the guardian heartbeat retains only a hash of the last
+handshake failure.
+Early invalid release requests are quarantined while both live custodians keep the
+flock. A completed recovery report is reusable only while that exact takeover
+receipt and live heartbeat prove lock custody, or while a fresh exact guardian
+heartbeat proves terminal fallback custody after the keeper's confirmed death. A recovery CLI retry
+reuses the exact accepted request ID, refreshes only its authorization time,
+and adopts the existing live takeover before it reconciles the same journal; it
+cannot create a second keeper. It also reconciles an existing pending request or
+a completed report before it can publish another request, so an older report
+cannot make a new guardian child run after the CLI has returned. The validator is restored before
+application roles are returned. This Mongo barrier recovery therefore retains
+the host fence across coordinator, guardian, and recovery-child failure. The coordinator then rereads
+the packet's complete EJSON backup and requires its document count and canonical
+full-collection state hash to equal a fresh live scan under the barrier before
+any tenant migration. It also requires the frozen plan ObjectIds to equal every
+active legacy row from the packet generation date in UTC, without an upper date
+bound. The boundary is generated independently of migration-plan ranges and is
+revalidated against the fresh packet clock at every live entrypoint.
+
+The executor accepts canonical EJSON ObjectIds and verifies the separately
+pinned packet-manifest, cutover-plan, migration-plan, flow, tenant, host, and
+fence hashes. It also rereads the Mongo-barrier receipt for every expensive
+fence check. `verify` and `reconcile` are read-only. `apply` creates a private
+full-BSON backup outside every Git worktree, fsyncs its file and directory,
+reads it back and validates it before the first mutation, then repeats
+the preimage check inside a majority transaction, uses only exact CAS
+`updateOne(..., { upsert: false })`, requires one matched and modified row per
+operation, and records postimage hashes. Each attempt uses an append-only,
+fsynced state journal and writes `TRANSACTION_OUTCOME_UNKNOWN` before the
+transaction begins. If the client loses the commit result, `reconcile` compares
+every current document to the exact preimage and deterministic postimage; it
+returns only `ABORTED_NO_MUTATION`, `APPLIED_RECOVERED`, or
+`BLOCKED_MIXED_OR_DRIFT`. `reconcile-restore` separately distinguishes an
+uncommitted restore, a fully recovered restore, and mixed/drifted state. `restore`
+requires the exact apply receipt and backup, rejects any post-apply drift, and
+restores every full preimage with CAS in a separate transaction. Apply and
+restore each need a separately approved live-data transition and their exact
+environment confirmation phrase; preparing or verifying the packet does not
+set either phrase.
+
+The restore rehearsal is produced by
+`npm run nodered:viva-game-projection-sync:restore-rehearsal`. It restores the
+exact complete backup into a newly named disposable replica-set database,
+compares the live canonical state, writes the actual restored EJSON bytes and a
+receipt, and marks the database with an exclusive random ownership record.
+Cleanup verifies that marker and drops only the owned `lk_games` and marker
+collections; it never drops the database, so a colliding unrelated collection
+survives. The packet builder hashes and
+revalidates those restored bytes; boolean-only restore claims are rejected.
+
+After migration and candidate installation, the coordinator calls
+`prepare_viva_game_projection_cutover_postcheck.mjs` while it still owns the
+same lock. The postcheck requires the exact sequential coordinator journal,
+including each in-flight entry before its matching applied receipt and all
+applies before candidate publication and runtime restart. It rereads every
+actual apply report and migration plan,
+validates every apply receipt, compares every migrated row with its exact
+postimage, requires the apply identities to equal the global unbounded legacy
+coverage set, queries Mongo for remaining active legacy rows and duplicate provider
+identities, checks for projection-worker audit writes since PM2 restart, and
+reads back the exact candidate, runtime tenant, replica-set identity, Mongo
+write barrier, live guardian heartbeat, executor-source hashes, exclusive host
+lock, and `SHADOW` mode. `SHADOW` and the exact
+tenant must already be present in stopped PM2 state, and the coordinator also
+passes only the required runtime values into `pm2 restart --update-env`, while
+clearing all cutover tokens, paths, descriptors, PIDs, and confirmation phrases.
+The frozen PM2 ID, executable, cwd, arguments, Node arguments, and restart count
+must remain exact through a ten-second stability dwell and a bounded local
+`GET /flows` probe. The probe requires status 200 and the exact canonical hash
+of the reviewed candidate flow. It hashes the actual evidence bytes and
+atomically writes only the postcheck receipt and manifest. The standalone
+postcheck never writes `READY_TO_REOPEN_INGRESS.json` and refuses synthetic hash
+strings without the exact bytes.
+Immediately before READY publication it repeats the current-time lease check,
+exclusive-flock probe, Mongo barrier check, PM2 environment/status readback, and
+candidate-flow hash. The coordinator first fsyncs a terminal intent containing
+the complete report bytes, then atomically publishes the matching terminal
+journal entry and report. A missing, partial, or orphan-temporary terminal
+entry is rebuilt only from that exact intent. If termination occurs while the
+intent itself is being published, rerunning the exact coordinator reconstructs
+the same success report from the durable postcheck receipt, manifest, apply
+index, and Mongo-barrier receipt before it resumes READY finalization. It then repeats the packet, writer fence, guardian,
+Mongo barrier, PM2, and exact `/flows` gates. READY is written last and binds the
+terminal report/journal hashes, exact execution-index SHA, coordinator attempt
+UUID, barrier receipt, guardian receipt, and final guardian heartbeat.
+If the coordinator is terminated after its terminal report, the standalone
+`ready-finalize` command sends a fresh, token-bound request to the guardian. The
+guardian validates the exact four pinned arguments plus the installed finalizer
+SHA, then spawns that finalizer with the inherited flock descriptor. The child
+proves that descriptor and durably renames its own request to the exact accepted
+path before it reports acceptance to the guardian. The same handshake protects
+barrier recovery after its persistent takeover is already live. Once recovery
+finishes successfully, the guardian verifies that takeover and its exact terminal
+report before closing its own descriptor; release authorization then belongs
+exclusively to the terminal-bound takeover. The child
+repeats every final gate before it creates or accepts READY. Its publication is
+idempotent for the same execution/report pair and repairs the exact two-link
+temporary-file state left by `SIGKILL` between hard-link creation and temporary
+unlink; any different alias, owner, mode, content, or binding fails closed. A
+retry adopts the exact pending or guardian-accepted request and accepts an
+existing marker only with its terminal guardian result. The terminal
+coordinator report is atomically published and can be reconstructed
+byte-for-byte from the single terminal journal entry after a crash, including
+a partial legacy report prefix. Delayed finalization validates immutable
+packet, fence, and postcheck evidence at the recorded terminal completion time,
+then reruns current flock, guardian, PM2, candidate-flow, `/flows`, Mongo
+barrier, replica-set, and `$currentOp` checks. It writes a fresh
+`ready-finalization.receipt.json` with those current proofs; READY binds that
+receipt SHA-256. A stale exact READY and receipt are refreshed only after all
+current gates pass.
+If READY publication cannot be reconciled or durably removed, the publication
+helper returns an explicit outcome-unknown path. The coordinator then keeps the
+already validated SHADOW runtime online while ingress and both barriers remain
+closed, avoiding a valid-looking READY marker that points to a stopped runtime.
+The coordinator reports `POSTCHECK_PASS_INGRESS_STILL_BLOCKED`; it never opens
+ingress. A failed postcheck emits no READY marker. If the candidate was already
+published, the coordinator must prove PM2 `stopped`; a stop failure is reported
+explicitly while the persistent host and Mongo barriers remain. Restoring the old flow is allowed only after
+the exact data backup has been restored.
+
+The coordinator consumes one private `viva-game-projection-cutover-execution-index`
+whose SHA-256 is separately pinned. The index binds the packet, fence receipt,
+tenant, exact plan/report/backup paths, a root-private migration-principal
+connection file and its SHA-256, a new Mongo-barrier receipt path, flow-backup
+directory, apply-index output, postcheck output, and canonical live flow path.
+`PADLHUB_CUTOVER_GUARDIAN_RECEIPT`,
+`PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT`, and
+`PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST` and
+`PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST` and
+`PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST` must point to new private paths
+outside the repository. Live execution requires both
+the migration confirmation and `VIVA_GAME_PROJECTION_CUTOVER_EXECUTE=`
+`EXECUTE_VIVA_GAME_PROJECTION_CUTOVER_V1`; neither is present in a prepared
+packet. Run `npm run nodered:viva-game-projection-sync:cutover-run -- --help`
+for the bounded coordinator CLI and
+`npm run nodered:viva-game-projection-sync:ready-finalize -- --help` for exact
+terminal-report recovery. Standalone finalization additionally requires
+`VIVA_GAME_PROJECTION_READY_FINALIZE=FINALIZE_VIVA_GAME_PROJECTION_READY_V1`.
+Producing a READY marker still does not authorize the
+separate ingress-opening transition.
+
 ## Candidate preparation
 
 At release time, start from a fresh private workspace pulled from
