@@ -10,8 +10,11 @@ Runtime suite отклоняет resealed non-Linux/image/command/time/isolation
 не превращаются в PASS общего ingress и не запускают Mongo/Viva бизнес-сценарии.
 Последующий wildcard source fix проверяется отдельно: validate-before-scrub,
 все три header views, сохранение proof/body/path, durable audit failure/recovery.
-Старые physical receipts не переиспользуются для изменённых guard/audit bytes;
-packet assembly остаётся fail-closed до новой репетиции и обновления closure.
+Новая physical репетиция на source `889ebe3`: Nginx **49/49**, guarded CLI **20/20**;
+actual receipts связаны с новыми guard/audit bytes и обновлённой closure.
+Старые physical receipts/disabled packet сохранены. Полный Partner suite после
+обновления — **303/303**, без skipped. Семь Nginx `NOT_TESTED` и production gates
+остаются открытыми; standalone generator не обеспечивает wildcard scrub без guard.
 
 | Уровень | Что доказывает | Что не доказывает |
 | --- | --- | --- |

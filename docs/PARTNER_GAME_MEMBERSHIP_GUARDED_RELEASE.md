@@ -14,11 +14,12 @@ Baseline `settings.cjs` остаётся зависимостью фабрики
 Resealed manifest с изменённым или отсутствующим guard не проходит проверку.
 
 Старый `sidecar-rehearsal.json` сохранён как исторический документ, но исключён
-из нового packet. Исторические runtime audit/functional evidence и семь файлов
+из нового packet. Исторические functional/dependency-tree evidence и семь файлов
 custom-node не переписаны: их прежний scope не расширен новым startup proof.
-`npm ci` в новой репетиции не является новым vulnerability audit. Audit от
-`2026-09-05T06:35:59.436Z` допускается максимум 24 часа; перед выпуском требуется
-независимая свежая проверка, а не изменение даты в JSON.
+`npm ci` в новой репетиции не является новым vulnerability audit. Отдельный actual
+audit от `2026-09-06T09:09:03.738Z` допускается максимум 24 часа; при истечении окна
+нужна независимая свежая проверка, а не изменение даты в JSON.
+[Новая audit/ingress квитанция и границы](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
 
 ## Защищённый запуск
 
@@ -90,13 +91,15 @@ Node-RED CLI, но **не systemd**. Все созданные контейне�
 по exact owned IDs; cleanup failure даёт failure, а не PASS. SIGKILL самого
 orchestrator требует ручной проверки retained receipt/IDs, не общего Docker prune.
 
-Новая suite: **54 unit/negative tests**. Весь Partner набор: **283/283**.
-Physical proof: **20/20**, в том числе три business default-off `503`, loopback-only
+Startup suite: **54 unit/negative tests**. Весь Partner набор после wildcard fix и
+actual closure refresh: **303/303**. Свежий physical proof от
+`2026-09-06T10:10:11.713Z`: **20/20**, в том числе три business default-off `503`, loopback-only
 listener, admin `404`, duplicate header/JSON `400`, шесть durable audit rows,
 graceful stop/restart и десять startup refusals. Snapshot/symlink swap проверен unit
 тестом; нет заявления о live filesystem race test. Receipt и source hashes закреплены
-в `guarded-sidecar-rehearsal.json`. Предыдущие 135 Nginx observer probes — отдельное
-историческое доказательство, не повторный тест нового service path.
+в `guarded-sidecar-rehearsal.json`. Raw receipt SHA `76760a3590d7e5a6c2cfe02e417dea388c3f9389d31223d78f2544502d0d241d`.
+Новая Nginx observer matrix **49/49** — отдельное доказательство scrub/ingress,
+не повторный тест service path или HMAC/payment/provider business flow.
 
 ## Что требуется до боевого результата
 
@@ -104,7 +107,7 @@ graceful stop/restart и десять startup refusals. Snapshot/symlink swap п
 | --- | --- | --- |
 | P0 | Инфраструктура и партнёр | Отдельный Host/SNI, DNS owner, выдача/отзыв mTLS client certificate, разрешённые источники |
 | P0 | Release/security | Свежий runtime audit, exact-head main/CI, новый private packet из свежего shared-flow collision readback; отдельные merge/push/deploy gates |
-| P0 | Инфраструктура/security | Nginx generator и effective-config/live verifier: сейчас `UNSUPPORTED_INGRESS_ADAPTER`; protocol/direct-reachability/wrong-cert/SNI матрица |
+| P0 | Инфраструктура/security | Локальный Nginx generator проверен; закрыть оставшиеся OPEN/NOT_TESTED и effective-config/live verifier: сейчас `UNSUPPORTED_INGRESS_ADAPTER` |
 | P0 | Эксплуатация | Audit custody, monitoring, retention/recovery, host systemd и rollback readback |
 | P0 | Партнёр/provider owner | Viva credential lifecycle, idempotency/cancellation/payment semantics; реальные Mongo indexes и fencing; согласованный canary |
 | P1 | Партнёр | Canonical signing, clock sync, уникальные nonce, persistent idempotency key; новый подписанный retry вместо повторной отправки перехваченного wire request |

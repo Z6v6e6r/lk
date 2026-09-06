@@ -1,6 +1,6 @@
 {
   "formatVersion": 2,
-  "capturedAt": "2026-09-06T06:04:29.147Z",
+  "capturedAt": "2026-09-06T10:10:11.713Z",
   "environment": "LOCAL_DISPOSABLE_CONTAINER",
   "networkMode": "none",
   "runtime": {
@@ -16,8 +16,8 @@
     "settingsRuntimeSha256": "cabd3d1867311ae0bfa8165687d7911ebc60a0e84f54959192dacfead67451c1",
     "settingsGuardedSha256": "1ad5eeaf32ddb703b12f88c31151ff7b7fe9960a55a61a5433000ca92b24ee49",
     "guardedStartupSha256": "6b15c0bd95f999517761b47000d0e9a881f60ea140d862049dacb11be0aea3b2",
-    "rawRequestGuardSha256": "12d192fcc0d361c18e52ccbad6b020fc0131ab3089e662699e0fb9a8c7ede333",
-    "rawAuditSha256": "acae6572895a8fe91ae4e2fc02ae2ea644df099f290bd3f2f9f88b4dad755120",
+    "rawRequestGuardSha256": "c5720dde98b3f64034438a425020a36f5e4efbd8ca8b6471ca2f1be29bdb8a57",
+    "rawAuditSha256": "93faea51e13cd03987c99fd0d54e51dd80b43b8894c3abfa48311ddc525dc7a0",
     "guardedPolicySha256": "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     "candidateFlowSha256": "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965"
   },
@@ -51,7 +51,7 @@
   "proof": {
     "orchestratorSha256": "152233aaf2715629b921f5aba31d25c654c0e3fce29113fb50666655bbc4ee61",
     "probeScriptSha256": "02b6375c165a5a58c5aece628b6a2ce343d12e615c4c66b4932135af6e2ccae7",
-    "receiptSha256": "d860dee0b94f05271bf665955d9e7a5b7841ca4eb6724c170e98ef0ef4d19827",
+    "receiptSha256": "76760a3590d7e5a6c2cfe02e417dea388c3f9389d31223d78f2544502d0d241d",
     "probesSha256": "7990bb1630f4c2100e0fa99c87fde770a7a489c117c6d25b586c5e4e8806b629"
   },
   "cleanup": {

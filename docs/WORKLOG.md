@@ -2,6 +2,35 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner wildcard fix: изолированная Linux-репетиция
+
+- Анализ: user подтвердил только isolated Linux gate без deploy. Сохранены existing
+  branch/worktree и source `889ebe350d15a30e63007f487d528756136b05f3`; sole ownership
+  и heavy-slot подтверждены координатором. Действующий actual audit `Hml4CT`
+  использован без повторного запуска; pinned Linux images уже присутствовали.
+- Проверка: Nginx 1.24 + raw guard + real Node-RED observer — **49/49 PASS**,
+  7 NOT_TESTED, 67 закрытых log rows. Wildcard scrub проходит, duplicate wildcard
+  даёт 400 с observerCalls=0. Guarded Node-RED CLI — **20/20**, 6 durable audit rows,
+  10 startup refusals, stop/restart, default-off. Exact-lock install без scripts /
+  host secrets; bridge install не заявлен как registry-only ACL, probes network:none.
+- Изменение: actual raw receipt `76760a35…` и дата `10:10:11.713Z`, guard/audit SHA
+  связаны в normalized rehearsal `1dafc98b…`, controls `c5d28f1e…`, hardcoded validator
+  и Nginx preflight. Проверены 20 current/retained source hashes и packet closure.
+  Старые receipts/disabled packet не изменены. Детерминированный CLI probes SHA
+  совпал с прежним; свежесть подтверждается новой raw execution receipt, не probes.
+- Общие gates: Partner **303/303**, skipped=0; full lint **0 errors / 387** existing
+  warnings; inert prod/dev build (включая TypeScript) PASS. Drawio XML структурно
+  0 errors / 0 warnings; обновлена existing инфографика через drawio-skill.
+  PNG/visual QA не повторялись в неизменённой среде с известным Electron failure.
+- Independent review: security подтвердил actual Nginx sources/config/49 rows;
+  release reviewer подтвердил 20 source hashes, 18 retained copies и всю новую
+  guarded closure. Новых P0–P2 нет в scope local evidence; production gaps остаются.
+- Cleanup: все четыре own containers удалены, финальный Docker absence readback
+  пуст; synthetic keys/CSR удалены, read-only runtime tree не изменился. Heavy-slot
+  RELEASED. Shared Docker/checkout, main, Node-RED/Mongo/Viva и secrets не менялись.
+  Source closure не разрешает integration, push, deploy, systemd или activation.
+  Standalone Nginx wildcard limitation и остальные OPEN/NOT_TESTED сохранены явно.
+
 ## 2026-09-06 — Partner wildcard forwarding correction (source-only)
 
 - После checkpoint `069d3b8` координатор подтвердил минимальный fix observed local

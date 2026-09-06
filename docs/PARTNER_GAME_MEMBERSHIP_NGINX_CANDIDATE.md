@@ -4,9 +4,9 @@
 Production verifier по-прежнему возвращает `UNSUPPORTED_INGRESS_ADAPTER`;
 deploy/activation остаются `false`. Боевые Nginx, Node-RED, Mongo и Viva не меняются.
 
-## Последующее узкое исправление: source-only, ещё не physical PASS
+## Текущий результат: wildcard fix подтверждён локально
 
-После checkpoint `069d3b8` подтверждённый wildcard gap исправляется в existing raw
+После checkpoint `069d3b8` подтверждённый wildcard gap исправлен в existing raw
 ingress boundary: **сначала** исходная duplicate/framing validation, **затем** удаление
 `Forwarded`, всех case-insensitive `X-Forwarded-*` и `X-Real-IP` из `req.headers`,
 `req.headersDistinct` (включая lazy cache) и `req.rawHeaders`. Proof/audience/
@@ -17,16 +17,18 @@ idempotency/Host headers, method/path и payload не меняются. Nginx п
 Sanitizer failure не допускает dispatch и сохраняется как закрытый audit code.
 Проверка через настоящий durable sink включает следующий корректный запрос и
 повторное открытие audit log: rejection не должен отравить audit latch.
-Scoped raw-guard + guarded-startup suites **144/144 PASS**; это local unit/filesystem
-proof, не новый Nginx/CLI/systemd запуск.
+Source checkpoint `889ebe3` имел scoped raw-guard + guarded-startup **144/144 PASS**.
+На тех же source bytes выполнены новые независимые physical runs: **Nginx 49/49**
+и **guarded Node-RED CLI 20/20**. Это не systemd и не production proof.
 
-Новые sidecar bytes **намеренно ещё не перепривязаны** к старому
-`guarded-sidecar-rehearsal.json`/production-controls. Проверен ожидаемый отказ packet
-validator `sidecar bytes differ from the immutable production-controls closure`.
-Прошлые 299/299, prod/dev build и 47 physical PASS ниже относятся к `069d3b8`, а не
-этому source-only исправлению. Нужны новая изолированная Nginx + guarded CLI
-репетиция, actual receipts и затем согласованное обновление всей closure; нельзя
-механически переименовать прежний known blocker в PASS или менять старые квитанции.
+На source-only checkpoint старые pins намеренно давали fail-closed packet refusal.
+Теперь `guarded-sidecar-rehearsal.json`, оба guard/audit hashes, production-controls,
+hardcoded validator и Nginx preflight pin обновлены **по новым actual receipts**.
+Проверены все 20 source hashes против current files и retained fixture copies;
+новая связанная closure проходит validator. Старые квитанции и опубликованный
+disabled packet не изменялись. Одинаковый probes SHA у двух CLI runs закономерен:
+детерминированные 20 результатов совпали; свежий receipt имеет новые source hashes,
+container cleanup identities и actual capturedAt.
 
 ## Граница реализации
 
@@ -88,23 +90,26 @@ framing и неожиданные bytes после HEAD не равны PASS. О
 
 ## Открытые проверки и блокеры
 
-Физический run завершён `2026-09-06T09:40:57.487Z`: **47 PASS + 1
-KNOWN_BLOCKER_CONFIRMED**, всего 48 rows, не «48 зелёных». Проверены positive
+Физический run на исправлении завершён `2026-09-06T10:09:12.433Z`: **49 PASS**,
+без known-blocker rows. Проверены positive
 TLS1.2/1.3, no/wrong/unbound cert, SNI/Host/shared-host, три routes, запрещённые
 methods/query/encoding/editor, duplicate proof headers/JSON, body 16384/16385 bytes,
-known forwarding, no-store/CORS и client rate (11 accepted / 9 rejected).
-66 access-log records соответствуют закрытой схеме без body/headers/nonce/IP.
+known/wildcard forwarding и duplicate wildcard rejection, no-store/CORS и client
+rate (11 accepted / 9 rejected). 67 access-log records соответствуют закрытой схеме
+без body/headers/nonce/IP.
 Оба own containers удалены, synthetic keys/CSRs удалены, installed runtime tree
 и copied fixture sources не изменились. До реального HMAC/payment/provider handler
 этот observer-fixture не доходит.
 
-Receipt SHA: `197250e27b914705e9d22babd233edc95edcb263e5fb1c6d1ecc13fe6b474807`;
-probes SHA: `69d25c7770f73b8ad3a3e3bf4864e5a707d1a8056a54efd962afe7d08fb72476`.
+Receipt SHA: `93d2356dda55eaa10878c0dbb4b74b3753fad7c64b455e79d4adf51498d09678`;
+probes SHA: `e1ce70e74de6f2ff5518aeaad512bda52acfb04ec875d9ad2223291c110266c0`.
 Эта квитанция не входит в immutable install packet и не открывает deploy gate.
+Исторический run `2026-09-06T09:40:57.487Z` остаётся **47 PASS + 1
+KNOWN_BLOCKER_CONFIRMED**, receipt `197250e2…`: его результат не переписан.
 
 | Статус | Что остаётся |
 | --- | --- |
-| OPEN CONTROL | Произвольные `X-Forwarded-*` ещё не стираются: известные имена очищаются, wildcard-header probe намеренно сохраняет `KNOWN_BLOCKER_CONFIRMED` |
+| LOCAL COMBINED PASS | Произвольные `X-Forwarded-*` стирает raw guard после duplicate validation; standalone Nginx generator по-прежнему перечисляет `WILDCARD_FORWARDED_HEADERS` как собственное ограничение |
 | NOT PROVEN | Source rate/concurrency независимо от более строгого client limiter; нужны разные допущенные synthetic identities |
 | NOT TESTED | TLS ниже 1.2, absent SNI, client concurrency, source CIDR denial, request-line/header limits, upstream idle timeout/no-retry, absolute request deadline |
 | NOT IMPLEMENTED | Controlled production config application/worker-generation collector, external vantage/direct-sidecar proof, production certificate revocation |
@@ -133,8 +138,9 @@ contract ради зелёного fixture. `proxy_read_timeout=15s` — инт�
 - Audit report SHA: `6d9f6bddd4ac0d8f5cb485a7978c6744849de8091f9547ed9ce14a07c9ed643c`.
 - Runtime manifest SHA: `bdb3bce1c7b50211ac2070ec143b4d6f3a182490ac86cd78294bee96b96f97a9`.
 - Raw receipt SHA: `c7759e03484dcb220d39e680229dabd743a9e41120f80114b572a69abf5f1fd6`.
-- Проверенный custom7 release, functional/dependency-tree/guarded files не изменены;
+- Проверенный custom7 release и functional/dependency-tree files не изменены;
   их исторические даты не обновлены. Свежий audit не делает их новым запуском.
+  Guarded startup теперь имеет отдельную actual квитанцию ниже.
 
 Validator сравнивает **весь** `audit.runtime`, проверяет exact schema и independently
 pinned execution receipt; пересчёт caller-side manifest hashes не допускает подмену
@@ -147,12 +153,27 @@ runtime proof tampering. Предварительные physical failures сох
 не суммируются с успешными probes: client half-close дал `499`, fixture без x/y —
 `Circular config node dependency` и upstream `404`.
 
+## Guarded CLI и связанная closure
+
+Run завершён `2026-09-06T10:10:11.713Z`: **20/20**, 6 durable audit rows,
+10 unsafe-startup refusals, stop/restart, default-off 503, admin 404. Фаза exact-lock
+`npm ci` выполнялась отдельно через bridge, без lifecycle scripts/host secrets;
+probes — `network:none`. Это не registry-only firewall и не новый npm audit.
+Два owned containers удалены; `systemdExecuted=false`, `productionTouched=false`.
+
+- Raw receipt SHA: `76760a3590d7e5a6c2cfe02e417dea388c3f9389d31223d78f2544502d0d241d`.
+- Probes SHA: `7990bb1630f4c2100e0fa99c87fde770a7a489c117c6d25b586c5e4e8806b629`.
+- Normalized rehearsal SHA: `1dafc98bae9052aa2ad50fa8033f1d36b68ca4db1e9212663d3b3206b78cf38b`.
+- Controls SHA: `c5d28f1e6edf933ca9680c6ca078590bb6a59d818f9ad57304e4f8266ed1e6c2`.
+
 ## Следующий gate
 
 Verification этого source checkpoint: `npm run test:partner-game-membership-api`
-**299/299 PASS**, runtime/controls validators PASS, `npm run lint` — 0 errors /
-387 warnings в существующем коде, `npm run build` — prod/dev PASS (включая TypeScript)
-с инертными `ci.invalid` compile-time values. Общие frontend dependencies использованы
+**303/303 PASS**, runtime/controls и actual-receipt closure validators PASS,
+`npm run lint` — 0 errors / 387 warnings в существующем коде.
+`npm run build` — prod/dev PASS, включая TypeScript, с инертными `ci.invalid`
+compile-time values; эти артефакты не предназначены для deploy.
+Общие frontend dependencies использованы
 read-only; package-lock SHA у task/shared checkout совпадает. Никакой npm install
 в shared checkout не выполнялся. Physical receipt независимо проверен security
 reviewer; runtime pins — release reviewer. Новых P0–P2 source findings нет; OPEN
