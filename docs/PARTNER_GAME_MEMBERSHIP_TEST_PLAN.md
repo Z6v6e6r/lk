@@ -2,6 +2,15 @@
 
 ## Уровни доказательств
 
+Новый этап после `b1839dd`: [controlled application](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md).
+Targeted suite **94/94**, полный Partner **364/364 PASS**, skipped0.
+Первый physical run FAILED до containers/probes; второй после IPAM correction
+создал3containers, но остановился на initial Linux process identity:
+`NGINX_PROCESS_COMMAND_MISMATCH` / `NGINX_WORKER_TRANSITION_UNPROVEN`.
+Matrix12 и HUP NOT_RUN, runtime PASS нет. Owned cleanup/independent absence PASS.
+Проверяются disk-only/no-HUP, worker respawn со старой меткой, PID/boot/config drift,
+replay/expiry/order, отдельная vantage, binding revocation и запрет local→production.
+
 Отдельный gate после `c828762`: [независимые source-IP limits](PARTNER_GAME_MEMBERSHIP_SOURCE_LIMITS.md).
 Opt-in fixture с тремя TLS identities проверяет source rate/concurrency при
 непревышенных client budgets; actual socket, cold-state, противоположный spoof,

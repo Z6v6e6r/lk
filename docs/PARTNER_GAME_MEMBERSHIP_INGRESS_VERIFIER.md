@@ -1,6 +1,10 @@
 # Partner API: ingress evidence core
 
 Статус: реализована **общая локальная часть**, не production live-verifier.
+После `b1839dd` реализуется [controlled-application candidate](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md):
+actual Linux master/workers, свежая метка поколения в log, disk-only negative,
+binding revocation и отдельный network namespace. Это локальная подготовка
+производственного пути, не снятие требований к production operator/vantage/custody.
 6 сентября добавлен отдельный [локальный Nginx 1.24 generator и audit refresh](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
 Он использует только `.invalid`/synthetic certificate inputs и не открывает production entry.
 Отдельно добавлен [raw-request guard и физическая локальная Nginx-репетиция](PARTNER_GAME_MEMBERSHIP_RAW_GUARD.md).

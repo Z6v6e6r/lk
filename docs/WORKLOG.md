@@ -2,6 +2,56 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: локальная проверка применения Nginx, без production допуска
+
+- После `b1839dd` одобрен local verifier stage; прежние branch/worktree и sole
+  writer сохранены. Production entry остаётся `UNSUPPORTED_INGRESS_ADAPTER`:
+  доверенный production operator, topology/vantage/custody ещё не утверждены.
+- Добавлены source-owned one-shot application session, Linux `/proc` collector и
+  отдельная bounded Docker-репетиция. Проверяются actual master/workers/executable,
+  namespaces/boot, закрытая метка поколения в log и реальные TLS/TCP observations.
+  Обязательны disk-only/no-HUP negative, два controlled HUP, уход старых workers,
+  удаление ранее допущенного leaf binding и positive control другого клиента.
+  Это не CA CRL/OCSP и не принудительное завершение существующих соединений.
+- Security P2: response403 с именем клиента не доказывал его identity. Теперь
+  actual local certificate DER из TLS socket сравнивается с session-owned hash;
+  substitution/missing leaf negative tests обязательны. Release P2: log failure
+  больше не пропускает exact owned cleanup; потеря log всё равно означает FAILED.
+  Оба исправления независимо re-reviewed PASS.
+- Первая reservation + отдельный system admission: actual run `14:25:35.648Z`
+  остановился на network admission до containers/probes. Raw receipt FAILED,
+  matrix12 NOT_RUN; owned=[] и собственная сеть удалена. Independent exact-ID/
+  label readback пуст; keys/CSRs отсутствуют; heavy-slot RELEASED. Точный assert/
+  subnet не сохранены, исходный FAILED не переинтерпретирован в PASS.
+- Read-only Docker inventory подтвердил используемые `192.168.x/20` pools,
+  несовместимые с исходным `172.x/16`-only parser; это bounded hypothesis причины
+  первого отказа. Локальная correction допускает только два canonical private
+  Docker pool forms и выводит `.2/.3` из actual allocation. Нет caller CIDR,
+  `--subnet` override или чужих network mutations. Receipt сохраняет bounded
+  subnet/step, unsupported pool получает fixed code. Source reviews PASS.
+- После IPAM correction: targeted **94/94**, полный Partner **364/364**, skipped0;
+  affected ESLint0/0, controls validator `UNBOUND_AUDIT_PASS`, diff check PASS.
+  После новой reservation/system admission второй run `14:36:05.151Z` принял
+  actual `192.168.32.0/20`, создал3containers и проверил исходный Docker contract.
+  Initial Linux collector30раз отклонил commandline identity; итог FAILED /
+  `NGINX_WORKER_TRANSITION_UNPROVEN`. HUP/12probes NOT_RUN, access log пуст,
+  proof отсутствует; точная причина `NGINX_PROCESS_COMMAND_MISMATCH` не установлена.
+  Daemon aarch64 / pinned images amd64 — наблюдение, не доказанная причина.
+- Own3containers/network удалены, independent exact-ID/label/network queries
+  пусты; keys/CSRs обоих run отсутствуют. Сверены8current source hashes/2copies/
+  5publiccert hashes неуспешного второго run; не full runtime before/after proof.
+  LOCAL_HEAVY=RELEASED. Следующая bounded process-identity diagnostic отдельно,
+  без новых runtime повторов или ослабления проверок на этом этапе.
+- [Runbook](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md) описывает механизм,
+  actual evidence boundaries и remaining production P0/P1. Existing drawio
+  дополнен через drawio-skill, XML0/0; ранее неработающий native exporter не
+  повторялся, PNG/visual QA NOT_RUN. Critical routing потребовал security и
+  release reviewers; production-config/secret/routing/shared-data changes нет.
+- Guard/audit/service/settings/runtime pins, core/provider/DB/Node-RED и CI
+  не менялись. Старые physical77/CLI20 не повторялись на unchanged inputs;
+  full repository lint/frontend/modular builds не запускались. Merge/push/PR/
+  deploy/activation/live mutation не выполнялись.
+
 ## 2026-09-06 — Partner: независимые IP-лимиты, local77 + source325 PASS
 
 - После `c828762` одобрен только отдельный local source-IP gate. Сохранены

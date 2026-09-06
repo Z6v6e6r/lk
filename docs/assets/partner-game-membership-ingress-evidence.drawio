@@ -124,4 +124,23 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Controlled Nginx application">
+    <mxGraphModel dx="1740" dy="780" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="2" value="ПОКОЛЕНИЕ A&#xa;Collector-owned challenge&#xa;Linux master / worker / boot&#xa;TLS + actual log marker A" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="B ТОЛЬКО НА ДИСКЕ&#xa;nginx -t успешен, HUP нет&#xa;Запросы: worker A / marker A&#xa;Применение B НЕ доказано" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="КОНТРОЛИРУЕМЫЙ HUP B&#xa;Новый worker + marker B&#xa;Старый worker отсутствует&#xa;Config / process до и после" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="ОТДЕЛЬНАЯ VANTAGE&#xa;Frontdoor TLS проходит&#xa;Тот же target:18894 — refused&#xa;Не публичный internet proof" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="ТОЛЬКО ЛОКАЛЬНОЕ ДОКАЗАТЕЛЬСТВО&#xa;One-shot / fail-closed / cleanup&#xa;Production operator не назначен&#xa;Deploy и activation запрещены" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="C: УДАЛЕНА LEAF BINDING&#xa;Новый worker + marker C&#xa;Прежний cert:403 / upstream0&#xa;Другой cert проходит; не CRL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="7" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="2" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>
