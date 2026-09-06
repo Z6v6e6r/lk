@@ -18,6 +18,7 @@ import { hashCanonicalEjson } from "../lib/vivaGameProjectionTenantMigrationExec
 import {
   buildRemediationBackup,
   REMEDIATION_EXECUTOR_SOURCE_PATHS,
+  REMEDIATION_RUNTIME_PACKAGE_NAMES,
   reconcileRemediationOutcome,
   reconcileRemediationRestoreOutcome,
   runRemediationTransaction,
@@ -36,6 +37,39 @@ const tenantKey = "fixture-tenant";
 const exerciseId = "11111111-1111-4111-8111-111111111111";
 const operationId = "viva-projection-fixture-migration-1";
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+const runtimeDependencyFixture = () => {
+  const packageJsonBytes = Buffer.from(`${JSON.stringify({ name: "remediation-runtime-fixture", private: true })}\n`);
+  const packageEntries = Object.fromEntries(REMEDIATION_RUNTIME_PACKAGE_NAMES.map((name, index) => [
+    `node_modules/${name}`,
+    { version: `1.0.${index}`, integrity: `sha512-${Buffer.from(`integrity:${name}`).toString("base64")}` },
+  ]));
+  const packageLockBytes = Buffer.from(`${JSON.stringify({ lockfileVersion: 3, packages: packageEntries }, null, 2)}\n`);
+  const packages = REMEDIATION_RUNTIME_PACKAGE_NAMES.map((name) => ({
+    name,
+    version: packageEntries[`node_modules/${name}`].version,
+    integrity: packageEntries[`node_modules/${name}`].integrity,
+  }));
+  const files = REMEDIATION_RUNTIME_PACKAGE_NAMES.map((name) => {
+    const bytes = Buffer.from(`${JSON.stringify({ name, version: packageEntries[`node_modules/${name}`].version })}\n`);
+    return {
+      path: `node_modules/${name}/package.json`,
+      size: bytes.length,
+      sha256: sha256(bytes),
+      bytesBase64: bytes.toString("base64"),
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    formatVersion: 1,
+    kind: "viva-game-projection-runtime-dependency-snapshot",
+    installMethod: "fresh-private-npm-ci-ignore-scripts-omit-dev",
+    packageJsonSha256: sha256(packageJsonBytes),
+    packageJsonBytesBase64: packageJsonBytes.toString("base64"),
+    packageLockSha256: sha256(packageLockBytes),
+    packageLockBytesBase64: packageLockBytes.toString("base64"),
+    packages,
+    files,
+  };
+};
 const write0600 = (filePath, body) => {
   fs.writeFileSync(filePath, body, { mode: 0o600, flag: "wx" });
   fs.chmodSync(filePath, 0o600);
@@ -491,6 +525,7 @@ maybeTest("real replica set applies and restores an exact full-BSON visibility r
       path: sourcePath,
       sha256: sha256(`${index}:${sourcePath}`),
     }));
+    const runtimeDependencies = runtimeDependencyFixture();
     const itemFingerprint = "9".repeat(64);
     const generatedAt = mutationAt;
     const fenceObservedAt = new Date(Date.parse(mutationAt) - 6_000).toISOString();
@@ -508,6 +543,8 @@ maybeTest("real replica set applies and restores an exact full-BSON visibility r
       repository: { commit: "a".repeat(40), branch: "codex/remediation-fixture" },
       executorSources,
       executorSourcesSha256: sha256(canonicalJson(executorSources)),
+      runtimeDependencies,
+      runtimeDependenciesSha256: sha256(canonicalJson(runtimeDependencies)),
       source: {
         packetSha256: "1".repeat(64), enrichmentSha256: "2".repeat(64), identityAuditSha256: "3".repeat(64),
         providerCaptureSha256: "4".repeat(64), mongoCaptureSha256: "5".repeat(64), sourceFlowSha256: "6".repeat(64),
