@@ -454,6 +454,13 @@ jobs:
           docker pull nginx@sha256:2e26275ed7a47e8e93f264d39a09ca4bc3f4058c904c75087e237f4ea883f2a1
           npm run test:frontend-static-nginx
 
+      - name: Validate static-only release SSH with real Linux sshd
+        id: check_static_ssh
+        if: steps.route.outputs.profile == 'release'
+        env:
+          DELIVERY_CATEGORY: release
+        run: npm run test:frontend-static-access
+
       - name: Typecheck
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:

@@ -244,6 +244,21 @@ if [[ ${#prune_files[@]} -gt 0 ]]; then
   done
 fi
 
+# Standard frontend uses the installed forced-command protocol, never arbitrary
+# mkdir/scp. Keep existing inventory/provenance/build checks and legacy transports.
+if [[ "${DEPLOY_FRONTEND_TRANSPORT:-}" == "forced-command-v1" ]]; then
+  if [[ "$channel" != "prod" || "$deploy_prune_opposite_channel" != "0" || "$deploy_use_sudo" != "0" || "${#remote_logins[@]}" != "1" || "${remote_logins[0]}" != "lk-primary-147" ]]; then
+    echo "Forced static transport requires the single standard prod target without sudo/prune" >&2
+    exit 1
+  fi
+  if [[ "$dry_run" == "--dry-run" ]]; then
+    echo "Dry run: forced-command static upload to ${remote_paths[0]}"
+  else
+    node "$repo_root/scripts/frontend-upload.mjs" "${remote_paths[0]}" "$dist_dir" "$font_source_dir"
+  fi
+  exit 0
+fi
+
 if [[ "$dry_run" == "--dry-run" ]]; then
   echo
   echo "Dry run commands:"

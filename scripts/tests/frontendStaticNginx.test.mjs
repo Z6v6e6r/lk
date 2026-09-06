@@ -26,12 +26,13 @@ test('real nginx keeps legacy URLs, exact cache/CORS and backend routing through
     }
   }
   const active = join(publicRoot, 'lk-frontend-current');
-  fs.symlinkSync('lk-frontend-releases/old', active);
+  fs.symlinkSync('lk-frontend-releases/current', active);
+  fs.symlinkSync('old', join(publicRoot, 'lk-frontend-releases/current'));
   const { candidate } = buildFrontendStaticCandidate(legacyStaticServer, sha256(legacyStaticServer));
   fs.writeFileSync(join(root, 'nginx.conf'), `pid /tmp/nginx.pid;\nerror_log stderr notice;\nevents {}\nhttp {\naccess_log off;\n${candidate}\n}\n`);
   let id;
   t.after(() => { if (id) spawnSync('docker', ['rm', '-f', id], { stdio: 'ignore', timeout: 10000 }); fs.rmSync(root, { recursive: true, force: true }); });
-  id = docker(['run', '-d', '--network', 'none', '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/var/cache/nginx', '--platform', 'linux/amd64',
+  id = docker(['run', '-d', '--network', 'none', '--read-only', '--cpus', '1', '--memory', '256m', '--pids-limit', '64', '--tmpfs', '/tmp', '--tmpfs', '/var/cache/nginx', '--platform', 'linux/amd64',
     '--tmpfs', '/var/www/html', '-v', `${root}:/fixture:ro`, '--entrypoint', 'sh', NGINX_IMAGE,
     '-c', 'cp -a /fixture/public/. /var/www/html/ && exec nginx -p /tmp/ -c /fixture/nginx.conf -g "daemon off;"']);
   let ready = false; let lastError = '';
@@ -43,7 +44,7 @@ test('real nginx keeps legacy URLs, exact cache/CORS and backend routing through
   const logs = () => { const result = spawnSync('docker', ['logs', id], { encoding: 'utf8' }); return result.stdout + result.stderr; };
   const get = (name, method = 'GET') => docker(['exec', id, 'curl', '-sS', '-i', '-X', method, `http://127.0.0.1:18080/lk/${name}?v=fixture`]);
   for (const version of ['old', 'next', 'old']) {
-    docker(['exec', id, 'sh', '-c', `ln -s lk-frontend-releases/${version} /var/www/html/.switch && mv -Tf /var/www/html/.switch /var/www/html/lk-frontend-current`]);
+    docker(['exec', id, 'sh', '-c', `ln -s ${version} /var/www/html/lk-frontend-releases/.switch && mv -Tf /var/www/html/lk-frontend-releases/.switch /var/www/html/lk-frontend-releases/current`]);
     for (const name of files) {
       const response = get(name);
       assert.match(response, /HTTP\/1.1 200/, name + '\n' + logs());
