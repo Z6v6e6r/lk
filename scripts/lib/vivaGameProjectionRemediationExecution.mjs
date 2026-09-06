@@ -6,6 +6,7 @@ import { hashCanonicalEjson } from "./vivaGameProjectionTenantMigrationExecution
 const HASH_RE = /^[a-f0-9]{64}$/;
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const MAX_REMEDIATION_OPERATIONS = 100;
 export const REMEDIATION_RUNTIME_PACKAGE_NAMES = Object.freeze([
   "@mongodb-js/saslprep",
@@ -94,6 +95,88 @@ const byteArtifact = (artifacts, name, expectedSha256) => {
   if (sha256(entry.bytes) !== expectedSha256) fail(`Remediation ${name} artifact digest mismatch`);
   return entry.bytes;
 };
+
+const addUtcDays = (date, days) => {
+  if (!DATE_RE.test(String(date || ""))) fail("Remediation provider capture scope date is invalid");
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
+
+const remediationProviderCaptureDates = (documents) => {
+  if (!Array.isArray(documents) || documents.length < 1) {
+    fail("Remediation provider capture scope is empty");
+  }
+  const dates = new Set();
+  for (const document of documents) {
+    const date = document?.booking?.date;
+    if (!DATE_RE.test(String(date || ""))) fail("Remediation provider capture scope date is invalid");
+    for (let offset = -7; offset <= 7; offset += 1) dates.add(addUtcDays(date, offset));
+  }
+  if (dates.size > 31) fail("Remediation provider capture scope exceeds the bounded date window");
+  return [...dates].sort();
+};
+
+export function validateStableProviderCapture(providerCapture, remediationDocuments) {
+  exactKeys(providerCapture, [
+    "formatVersion", "kind", "captureSessionId", "servicePrincipalSha256", "fenceTokenSha256",
+    "capturedAt", "stablePasses", "records",
+  ], "Remediation provider capture");
+  if (providerCapture.formatVersion !== 1
+    || providerCapture.kind !== "viva-admin-remediation-provider-capture"
+    || !/^[A-Za-z0-9._:-]{16,128}$/.test(String(providerCapture.captureSessionId || ""))
+    || !Number.isFinite(Date.parse(providerCapture.capturedAt))
+    || !HASH_RE.test(String(providerCapture.servicePrincipalSha256 || ""))
+    || !HASH_RE.test(String(providerCapture.fenceTokenSha256 || ""))
+    || !Array.isArray(providerCapture.records) || providerCapture.records.length < 1
+    || !Array.isArray(providerCapture.stablePasses) || providerCapture.stablePasses.length !== 2) {
+    fail("Remediation provider capture lacks two complete stable passes");
+  }
+  const expectedDates = remediationProviderCaptureDates(remediationDocuments);
+  let expectedCanonicalRowsSha256;
+  let expectedCaptureTreeSha256;
+  let expectedDateState;
+  for (const [index, pass] of providerCapture.stablePasses.entries()) {
+    exactKeys(pass, ["pass", "canonicalRowsSha256", "captureTreeSha256", "dates"],
+      `Remediation provider capture pass ${index + 1}`);
+    if (pass.pass !== index + 1 || !Array.isArray(pass.dates)) {
+      fail("Remediation provider capture pass sequence is invalid");
+    }
+    assertHash(pass.canonicalRowsSha256, `Remediation provider capture pass ${index + 1} canonical rows`);
+    assertHash(pass.captureTreeSha256, `Remediation provider capture pass ${index + 1} tree`);
+    const dateState = pass.dates.map((entry, dateIndex) => {
+      exactKeys(entry, ["date", "rowCount", "rawPayloadSha256", "canonicalRowsSha256"],
+        `Remediation provider capture pass ${index + 1} date ${dateIndex}`);
+      if (!DATE_RE.test(String(entry.date || ""))
+        || !Number.isSafeInteger(entry.rowCount) || entry.rowCount < 0) {
+        fail("Remediation provider capture date audit is invalid");
+      }
+      assertHash(entry.rawPayloadSha256, "Remediation provider capture raw payload");
+      assertHash(entry.canonicalRowsSha256, "Remediation provider capture canonical date rows");
+      return {
+        date: entry.date,
+        rowCount: entry.rowCount,
+        canonicalRowsSha256: entry.canonicalRowsSha256,
+      };
+    });
+    if (pass.dates.map(({ date }) => date).join("\0") !== expectedDates.join("\0")
+      || new Set(pass.dates.map(({ date }) => date)).size !== pass.dates.length
+      || pass.captureTreeSha256 !== sha256(canonicalJson(dateState))) {
+      fail("Remediation provider capture pass does not cover the exact bounded date scope");
+    }
+    const serializedDateState = canonicalJson(dateState);
+    if (index === 0) {
+      expectedCanonicalRowsSha256 = pass.canonicalRowsSha256;
+      expectedCaptureTreeSha256 = pass.captureTreeSha256;
+      expectedDateState = serializedDateState;
+    } else if (pass.canonicalRowsSha256 !== expectedCanonicalRowsSha256
+      || pass.captureTreeSha256 !== expectedCaptureTreeSha256
+      || serializedDateState !== expectedDateState) {
+      fail("Remediation provider state drifted between complete capture passes");
+    }
+  }
+  return true;
+}
 
 export function validateMigrationPlanBundle(artifactEntry, cutoverPlan) {
   if (!Buffer.isBuffer(artifactEntry?.bytes) || !isObject(artifactEntry.value)) {
@@ -596,6 +679,10 @@ export function validateExecutableRemediationPlan(plan, {
     [...eligibleMongoIds, ...remediationMongoIds],
     activeLegacyMongoIds,
     "Remediation full active legacy identity partition",
+  );
+  validateStableProviderCapture(
+    providerCapture,
+    remediationMongoIds.map((id) => fullBackup.byMongoId.get(id)),
   );
   if (packet.formatVersion !== 2 || packet.kind !== "viva-game-projection-remediation-review-packet"
     || packet.captureSessionId !== plan.source.captureSessionId || packet.sourceFlowSha256 !== plan.source.sourceFlowSha256

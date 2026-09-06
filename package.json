@@ -129,7 +129,7 @@
     "test:nodered-chat-recovery": "node --test scripts/tests/noderedChatRecovery.test.mjs",
     "test:games-list-identity-recovery": "node --experimental-strip-types --test scripts/tests/gamesListIdentityRecovery.test.mjs scripts/tests/gameListNormalize.test.ts scripts/tests/gameResponsePhoneRedaction.test.ts scripts/tests/gameIdentityRelevance.test.ts",
     "test:games-direct-lookup-recovery": "node --test scripts/tests/gamesDirectLookupRecovery.test.mjs",
-    "test:viva-game-projection-sync": "node --experimental-strip-types --test scripts/tests/vivaGameProjectionSync.nodered.test.ts scripts/tests/vivaGameProjectionTenantMigration.test.mjs scripts/tests/vivaGameProjectionCutover.test.mjs scripts/tests/vivaGameProjectionRemediationExecution.test.mjs",
+    "test:viva-game-projection-sync": "node --experimental-strip-types --test scripts/tests/vivaGameProjectionSync.nodered.test.ts scripts/tests/vivaGameProjectionTenantMigration.test.mjs scripts/tests/vivaGameProjectionCutover.test.mjs scripts/tests/vivaGameProjectionRemediationExecution.test.mjs scripts/tests/vivaGameProjectionRemediationPreflight.test.mjs",
     "test:viva-game-projection-sync:mongo": "bash scripts/run_viva_game_projection_replica_tests.sh",
     "test:games-create-upsert-recovery": "node --test scripts/tests/gamesCreateUpsertRecovery.test.mjs",
     "test:games-patch-recovery": "node --test scripts/tests/gamesPatchRecovery.test.mjs",
