@@ -188,7 +188,10 @@
     "rating:game-results:worker": "node --experimental-strip-types scripts/game_result_rating_worker.mjs",
     "test:game-result-rating-worker": "node --experimental-strip-types --test scripts/tests/gameResultRatingWorker.test.ts",
     "rating:reconcile": "node --experimental-strip-types scripts/reconcile_player_rating.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:delivery": "node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs",
+    "release:frontend:standard": "node scripts/frontend-release.mjs",
+    "ci:delivery:route": "node scripts/delivery-policy.mjs"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",
