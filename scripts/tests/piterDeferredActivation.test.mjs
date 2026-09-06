@@ -12,8 +12,45 @@ import { buildPiterDeferredLedgerPlan } from '../lib/piterDeferredLedgerOperatio
 import { validatePiterAtomicActivationPacket } from '../lib/piterAtomicActivationContract.mjs';
 import { runDeferredLedgerOperation, parseArgs, expectedDeferredPostimage, digestDeferredBsonDocuments,
   assertDeferredRuntimeStopped, assertDeferredPublicationReadback, deferredPm2Identity, deferredStartEnvironment,
-  assertDeferredStartGrant, assertDeferredQuiescenceProof, performDeferredGuardedStart, publishDeferredStartEvidence } from '../manage_piter_deferred_ledger.mjs';
+  assertDeferredStartGrant, assertDeferredQuiescenceProof, performDeferredGuardedStart, publishDeferredStartEvidence,
+  PITER_DEFERRED_PRIVATE_PATHS, assertDeferredPrivateDirectory, assertNoLegacyDeferredStartEvidence } from '../manage_piter_deferred_ledger.mjs';
 const ejson = v=>BSON.EJSON.stringify(v,null,2,{relaxed:false});
+
+test('private-directory relocation cannot bypass old consumed/result or partial evidence',()=>{
+  const absent=()=>{throw Object.assign(new Error('missing'),{code:'ENOENT'});};
+  assertNoLegacyDeferredStartEvidence({lstatSync:absent});
+  const files=['/root/.node-red/.padlhub-piter-only-start-consumed.json','/root/.node-red/.padlhub-piter-only-start-result.json'];
+  for(const file of files.flatMap(p=>[p,p+'.pending'])){
+    for(const stat of [{isFile:()=>true},{isSymbolicLink:()=>true},{isDirectory:()=>true}]){
+      assert.throws(()=>assertNoLegacyDeferredStartEvidence({lstatSync:p=>p===file?stat:absent()}),/reviewed recovery/);
+    }
+  }
+  assert.throws(()=>assertNoLegacyDeferredStartEvidence({lstatSync:()=>{throw Object.assign(new Error('private'),{code:'EACCES'});}}),/custody unknown/);
+});
+
+test('fixed Piter private paths do not change shared Node-RED permissions or accept old paths',()=>{
+  const directory='/root/.node-red/.padlhub-piter-only';
+  assert.equal(Object.isFrozen(PITER_DEFERRED_PRIVATE_PATHS),true);
+  assert.deepEqual(Object.values(PITER_DEFERRED_PRIVATE_PATHS),[
+    'release.json','start-grant.json','start-consumed.json','start-result.json','quiescence.json',
+  ].map(name=>`${directory}/${name}`));
+  for(const flag of ['--publication-path','--private-directory','--start-grant','--quiescence-proof']){
+    assert.throws(()=>parseArgs([flag,'/root/.node-red/.padlhub-piter-only-release.json']),/Unsupported/);
+  }
+  const stat=(mode=0o755)=>({isDirectory:()=>true,isSymbolicLink:()=>false,uid:0,mode});
+  const base={lstatSync:p=>stat(p===directory||p==='/root'?0o700:0o755)};
+  assertDeferredPrivateDirectory(directory,0,base);
+  assert.throws(()=>assertDeferredPrivateDirectory('/root/.node-red',0,base),/private/);
+  for(const target of [directory,'/root/.node-red','/root','/']){
+    for(const bad of [{uid:1},{mode:0o777},{isSymbolicLink:()=>true},{isDirectory:()=>false}]){
+      const fake={lstatSync:p=>({...base.lstatSync(p),...(p===target?bad:{})})};
+      assert.throws(()=>assertDeferredPrivateDirectory(directory,0,fake),/custody|private/);
+    }
+  }
+  for(const mode of [0o755,0o750,0o770,0o000]){
+    assert.throws(()=>assertDeferredPrivateDirectory(directory,0,{lstatSync:p=>stat(p===directory?mode:0o755)}),/private|custody/);
+  }
+});
 
 // Guarded-start fixtures below are entirely synthetic, with no host process,
 // provider, Mongo connection or real-person data. The adapter records calls only.
