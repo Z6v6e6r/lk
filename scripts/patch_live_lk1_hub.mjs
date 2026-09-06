@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { verifyWorkspace, assertFlowArray } from './verify_nodered_source_origin.mjs';
 import { readRepositoryProvenance } from './lib/release-provenance.mjs';
+import { buildHubPolicyTransition } from './lib/lk1HubPolicyTransition.mjs';
+import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
 // This adapter composes only the direct HUB rule over the reviewed live bodies.
 // Generic main/CUP sources and all non-target graph fields are deliberately inert.
@@ -46,18 +48,25 @@ function sections(source) {
   }
   return result;
 }
-export function patchHubSources(source) {
+export function patchHubSources(source, policy = { expectedPrior: null, desired: null }) {
   for (const key of Object.keys(HUB_IDS)) {
     if (hash(source[key] || '') !== HUB_PREIMAGES[key]) throw new Error('HUB function preimage drift: ' + key);
   }
   const out = { ...source };
+  out.gateway = replace(out.gateway,
+    '([1, 2, 3].includes(index) || (index === 0 && !preflightReadOnlyHttp(value)))',
+    '([2, 3].includes(index) || (index === 1 && !lk1ReadonlyLookup(value)) || (index === 0 && !preflightReadOnlyHttp(value)))');
   const hooks = sections(snippet('gateway_hooks'));
+  const transition = buildHubPolicyTransition(policy);
   const gateway = snippet('gateway').split('// HUB_STEPS');
   if (gateway.length !== 2) throw new Error('HUB gateway fragment drift');
   out.gateway = replace(out.gateway, 'const ctx = isObj(msg._subscriptionBooking)',
-    hooks.HELPERS + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
+    hooks.HELPERS + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
   out.gateway = replace(out.gateway, 'if (ctx.step === "profile") {',
     gateway[1] + '\nif (ctx.step === "profile") {');
+  out.gateway = replace(out.gateway, '  if (ctx.action === "release") {\n    return prepareUserGet(ctx, "active_bookings"',
+    hooks.PROFILE + '\n}\nif (ctx.step === "lk1_profile_continue") {\n'
+    + '  if (ctx.action === "release") {\n    return prepareUserGet(ctx, "active_bookings"');
   out.gateway = replace(out.gateway, '  if (ctx.action === "release") {\n    return prepareUserGet(ctx, "active_bookings"',
     '  if (ctx.lk1BeforeCreate === true) {\n'
     + '    if (ctx.caller !== "split" || ctx.actorClientId !== ctx.lk1ApprovedActor) return lk1Stop(ctx, "LK1_CREATE_ACTOR_CHANGED");\n'
@@ -164,7 +173,7 @@ export function patchHubSources(source) {
   for (const value of Object.values(out)) new Function('msg', 'node', 'env', 'global', value);
   return out;
 }
-export function composeHubFlow(flow) {
+export function composeHubFlow(flow, policy = { expectedPrior: null, desired: null }) {
   const ids = assertFlowArray(flow);
   const pins = JSON.parse(fs.readFileSync(path.join(dir, 'nodered_lk1_hub_nodes/preimages.json'), 'utf8'));
   for (const [id, expected] of Object.entries(pins.nodes)) {
@@ -184,14 +193,19 @@ export function composeHubFlow(flow) {
     if (matches.length !== 1) throw new Error('Missing HUB target: ' + key);
     return [key, matches[0].func];
   }));
-  const patched = patchHubSources(original);
+  const transition = buildHubPolicyTransition(policy);
+  const patched = patchHubSources(original, policy);
   const candidate = structuredClone(flow);
   for (const [key, id] of Object.entries(HUB_IDS)) candidate.find(n => n.id === id).func = patched[key];
+  const gateway = candidate.find(n => n.id === HUB_IDS.gateway);
+  if (gateway.initialize !== '') throw new Error('HUB gateway initializer preimage drift');
+  gateway.initialize = transition.initialize;
   const changed = candidate.filter((n, i) => !isDeepStrictEqual(n, flow[i]));
   if (changed.length !== 4 || changed.some(n => {
     const before = flow.find(old => old.id === n.id);
-    return !isDeepStrictEqual({ ...n, func: before.func }, before);
-  })) throw new Error('HUB four-function change budget exceeded');
+    return !isDeepStrictEqual({ ...n, func: before.func,
+      ...(n.id === HUB_IDS.gateway ? { initialize: before.initialize } : {}) }, before);
+  })) throw new Error('HUB exact function/initializer change budget exceeded');
   return candidate;
 }
 
@@ -220,7 +234,8 @@ export function hubSourceProvenance() {
   const provenance = readRepositoryProvenance(repo);
   if (provenance.sourceDirty) throw new Error('HUB publication requires a clean committed source');
   const closure = ['scripts/patch_live_lk1_hub.mjs', 'scripts/verify_nodered_source_origin.mjs',
-    'scripts/lib/release-provenance.mjs',
+    'scripts/lib/release-provenance.mjs', 'scripts/lib/lk1HubPolicyTransition.mjs',
+    'scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs',
     ...['gateway.js', 'gateway_hooks.js', 'split.js', 'split_hooks.js', 'finalize.js',
       'evaluator.js', 'preimages.json'].map(name => 'scripts/nodered_lk1_hub_nodes/' + name)];
   const sourceFiles = Object.fromEntries(closure.map(file => {
@@ -233,20 +248,64 @@ export function hubSourceProvenance() {
   return { sourceCommit: provenance.sourceCommit, sourceBranch: provenance.sourceBranch,
     sourceDirty: false, sourceFiles, sourceClosureSha256: hash(JSON.stringify(sourceFiles)) };
 }
-export function buildHubCandidate(workspace, outputDirectory) {
+export function composeHubReleaseArtifacts(liveBytes, policy, deploymentId) {
+  const source = JSON.parse(liveBytes.toString());
+  const transition = buildHubPolicyTransition(policy);
+  const candidate = composeHubFlow(source, policy);
+  const safeOff = transition.desired === null ? candidate
+    : composeHubFlow(source, { expectedPrior: transition.desired, desired: null });
+  const candidateBytes = Buffer.from(JSON.stringify(candidate, null, 2) + '\n');
+  const safeOffBytes = Buffer.from(JSON.stringify(safeOff, null, 2) + '\n');
+  const changes = Object.values(HUB_IDS).map(id => ({ id,
+    fields: id === HUB_IDS.gateway ? ['func', 'initialize'] : ['func'] }));
+  // Install OFF first. Its initializer also accepts the future ON preimage so
+  // the existing installer's automatic enable rollback can safely restore OFF.
+  const installOffContract = buildExactGraphContract({ liveBytes, candidateBytes: safeOffBytes,
+    deploymentId: deploymentId + '-install-off',
+    allowedChanges: changes, allowedAdditionIds: [] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes: safeOffBytes, contract: installOffContract });
+  const contract = candidateBytes.equals(safeOffBytes) ? installOffContract : buildExactGraphContract({
+    liveBytes: safeOffBytes, candidateBytes, deploymentId: deploymentId + '-enable',
+    allowedChanges: [{ id: HUB_IDS.gateway, fields: ['func', 'initialize'] }], allowedAdditionIds: [],
+  });
+  validateReviewedFlowContract({ liveBytes: candidateBytes.equals(safeOffBytes) ? liveBytes : safeOffBytes,
+    candidateBytes, contract });
+  // OFF retains this release's replay guard. The old dormant predecessor is
+  // not an activated-system rollback. No automatic restore of old globals.
+  const safeOffContract = candidateBytes.equals(safeOffBytes) ? null : buildExactGraphContract({
+    liveBytes: candidateBytes, candidateBytes: safeOffBytes, deploymentId: deploymentId + '-safe-off',
+    allowedChanges: [{ id: HUB_IDS.gateway, fields: ['func', 'initialize'] }], allowedAdditionIds: [],
+  });
+  if (safeOffContract) validateReviewedFlowContract({ liveBytes: candidateBytes, candidateBytes: safeOffBytes, contract: safeOffContract });
+  return { candidate, candidateBytes, contract, installOffContract, safeOffBytes, safeOffContract };
+}
+export function buildHubCandidate(workspace, outputDirectory, policy = { expectedPrior: null, desired: null }) {
   const output = assertHubOutputPath(outputDirectory);
   const provenance = hubSourceProvenance();
   const verified = verifyWorkspace(workspace, { quiet: true });
-  const candidate = composeHubFlow(verified.source);
-  const bytes = JSON.stringify(candidate, null, 2) + '\n';
+  const transition = buildHubPolicyTransition(policy);
+  const liveBytes = fs.readFileSync(verified.sourcePath);
+  if (hash(liveBytes) !== verified.sourceSha256) throw new Error('HUB verified source changed before composition');
+  const artifacts = composeHubReleaseArtifacts(liveBytes, policy,
+    'lk1-hub-' + provenance.sourceCommit.slice(0, 12));
+  const { candidate, candidateBytes: bytes } = artifacts;
   const report = { ...provenance, sourceSha256: verified.sourceSha256, candidateSha256: hash(bytes),
-    changed: Object.entries(HUB_IDS).map(([key, id]) => ({ id, fields: ['func'],
+    contractKind: 'exact-graph', policy: { expectedPrior: transition.expectedPrior, desired: transition.desired },
+    safeOffSha256: hash(artifacts.safeOffBytes), safeOffRequiredBeforeFurtherRollback: true,
+    installationOrder: ['install safe-off.json with install-off-contract.json',
+      'verify installed flow and OFF policy readback', 'enable candidate.json with contract.json only after exact approval'],
+    changed: Object.entries(HUB_IDS).map(([key, id]) => ({ id, fields: id === HUB_IDS.gateway ? ['func', 'initialize'] : ['func'],
       beforeSha256: HUB_PREIMAGES[key], afterSha256: hash(candidate.find(n => n.id === id).func) })),
     nodeCount: candidate.length, httpRouteCount: candidate.filter(n => n.type === 'http in').length,
     deployed: false, rulesActivated: false, liveMutationPerformed: false };
   if (!isDeepStrictEqual(provenance, hubSourceProvenance())) throw new Error('HUB source changed during composition');
   fs.mkdirSync(output, { mode: 0o700 });
   fs.writeFileSync(path.join(output, 'candidate.json'), bytes, { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(path.join(output, 'contract.json'), JSON.stringify(artifacts.contract, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(path.join(output, 'install-off-contract.json'), JSON.stringify(artifacts.installOffContract, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(path.join(output, 'safe-off.json'), artifacts.safeOffBytes, { mode: 0o600, flag: 'wx' });
+  if (artifacts.safeOffContract) fs.writeFileSync(path.join(output, 'safe-off-contract.json'),
+    JSON.stringify(artifacts.safeOffContract, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   // Report is last: a partially written directory is not a completed candidate.
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n',
     { mode: 0o600, flag: 'wx' });
@@ -254,7 +313,8 @@ export function buildHubCandidate(workspace, outputDirectory) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length !== 4) throw new Error('Usage: <fresh-live-workspace> <new-private-output-directory>');
-    console.log(JSON.stringify(buildHubCandidate(process.argv[2], process.argv[3])));
+    if (![4, 5].includes(process.argv.length)) throw new Error('Usage: <fresh-live-workspace> <new-private-output-directory> [reviewed-policy-transition.json]');
+    const policy = process.argv[4] ? JSON.parse(fs.readFileSync(process.argv[4], 'utf8')) : undefined;
+    console.log(JSON.stringify(buildHubCandidate(process.argv[2], process.argv[3], policy)));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

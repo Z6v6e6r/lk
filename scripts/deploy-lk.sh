@@ -17,6 +17,7 @@ Environment overrides:
   DEPLOY_PRUNE_OPPOSITE_CHANNEL=0
   DEPLOY_DIST_DIR=/absolute/path/to/dist
   DEPLOY_FONT_SOURCE_DIR=/absolute/path/to/fonts
+  DEPLOY_DEV_ISOLATED=1 # fixed reserve DEV release directory; no fonts/pruning
 
 Examples:
   bash ./scripts/deploy-lk.sh prod
@@ -62,6 +63,15 @@ deploy_port="${DEPLOY_PORT:-22}"
 deploy_use_sudo="${DEPLOY_USE_SUDO:-0}"
 deploy_prune_opposite_channel="${DEPLOY_PRUNE_OPPOSITE_CHANNEL:-0}"
 deploy_targets_raw="${DEPLOY_TARGETS:-}"
+deploy_dev_isolated="${DEPLOY_DEV_ISOLATED:-0}"
+if [[ "$deploy_dev_isolated" != "0" && "$deploy_dev_isolated" != "1" ]]; then
+  echo "Invalid isolated DEV mode" >&2
+  exit 1
+fi
+if [[ "$deploy_dev_isolated" == "1" ]] && { [[ "$channel" != "dev" ]] || [[ "$deploy_prune_opposite_channel" != "0" ]] || [[ "$deploy_use_sudo" != "0" ]]; }; then
+  echo "Isolated DEV requires dev, no pruning and no sudo" >&2
+  exit 1
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dist_dir="${DEPLOY_DIST_DIR:-$repo_root/dist}"
@@ -126,13 +136,13 @@ esac
 manifest_files=()
 case "$channel" in
   prod)
-    manifest_files=("dist/release.json")
+    manifest_files=("$dist_dir/release.json")
     ;;
   dev)
-    manifest_files=("dist/release-dev.json")
+    manifest_files=("$dist_dir/release-dev.json")
     ;;
   all)
-    manifest_files=("dist/release.json" "dist/release-dev.json")
+    manifest_files=("$dist_dir/release.json" "$dist_dir/release-dev.json")
     ;;
 esac
 
@@ -143,11 +153,13 @@ for file_path in "${files[@]}"; do
   fi
 done
 
+if [[ "$deploy_dev_isolated" == "0" ]]; then
 for file_path in "${font_files[@]}"; do
   if [[ ! -f "$file_path" ]]; then
     missing_files+=("$file_path")
   fi
 done
+fi
 
 if [[ ${#missing_files[@]} -gt 0 ]]; then
   echo "Missing build artifacts:" >&2
@@ -200,6 +212,10 @@ for target_spec in "${target_specs[@]}"; do
   remote_login="${target_spec%%:*}"
   remote_path="${target_spec#*:}"
   remote_path="${remote_path%/}"
+  if [[ "$deploy_dev_isolated" == "1" ]] && { [[ "$remote_login" != "lk-reserve-89" ]] || [[ ! "$remote_path" =~ ^/var/www/html/lk-frontend-dev-releases/[a-f0-9]{40}-[a-f0-9]{16}$ ]]; }; then
+    echo "Isolated DEV target must be the fixed reserve immutable release namespace" >&2
+    exit 1
+  fi
 
   if [[ -z "$remote_login" || -z "$remote_path" ]]; then
     echo "Invalid DEPLOY_TARGETS entry: $target_spec" >&2
@@ -233,10 +249,12 @@ echo "Files:"
 for file_path in "${files[@]}"; do
   echo "  - $(basename "$file_path")"
 done
+if [[ "$deploy_dev_isolated" == "0" ]]; then
 echo "Fonts:"
 for file_path in "${font_files[@]}"; do
   echo "  - fonts/$(basename "$file_path")"
 done
+fi
 if [[ ${#prune_files[@]} -gt 0 ]]; then
   echo "Prune opposite-channel files:"
   for file_path in "${prune_files[@]}"; do
@@ -254,12 +272,16 @@ if [[ "$dry_run" == "--dry-run" ]]; then
     font_target="${remote_login}:${remote_path}/fonts/"
 
     echo "  # $target"
-    printf '  %q' "${ssh_cmd[@]}" "$remote_login" "mkdir -p '$remote_path/fonts'"
-    echo
+    if [[ "$deploy_dev_isolated" == "0" ]]; then
+      printf '  %q' "${ssh_cmd[@]}" "$remote_login" "mkdir -p '$remote_path/fonts'"
+      echo
+    fi
     printf '  %q' "${scp_cmd[@]}" "${files[@]}" "$target"
     echo
-    printf '  %q' "${scp_cmd[@]}" "${font_files[@]}" "$font_target"
-    echo
+    if [[ "$deploy_dev_isolated" == "0" ]]; then
+      printf '  %q' "${scp_cmd[@]}" "${font_files[@]}" "$font_target"
+      echo
+    fi
     if [[ ${#prune_files[@]} -gt 0 ]]; then
       prune_cmd="$(build_prune_remote_cmd "$remote_path" "${prune_files[@]}")"
       printf '  %q' "${ssh_cmd[@]}" "$remote_login" "$prune_cmd"
@@ -277,9 +299,13 @@ for index in "${!remote_logins[@]}"; do
 
   echo
   echo "Deploying to $target"
-  "${ssh_cmd[@]}" "$remote_login" "mkdir -p '$remote_path/fonts'"
+  if [[ "$deploy_dev_isolated" == "0" ]]; then
+    "${ssh_cmd[@]}" "$remote_login" "mkdir -p '$remote_path/fonts'"
+  fi
   "${scp_cmd[@]}" "${files[@]}" "$target"
-  "${scp_cmd[@]}" "${font_files[@]}" "$font_target"
+  if [[ "$deploy_dev_isolated" == "0" ]]; then
+    "${scp_cmd[@]}" "${font_files[@]}" "$font_target"
+  fi
   if [[ ${#prune_files[@]} -gt 0 ]]; then
     prune_cmd="$(build_prune_remote_cmd "$remote_path" "${prune_files[@]}")"
     "${ssh_cmd[@]}" "$remote_login" "$prune_cmd"

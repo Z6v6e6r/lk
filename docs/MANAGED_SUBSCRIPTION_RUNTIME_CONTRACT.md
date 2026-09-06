@@ -11,13 +11,81 @@ generic main modules remain unchanged.
 
 The focused patcher scripts/patch_live_lk1_hub.mjs and source fragments under
 scripts/nodered_lk1_hub_nodes/ compose only the direct product-bound HUB delta
-over the four reviewed live function bodies. Whole target/dependency node hashes
+over the four reviewed live function bodies and the gateway initializer. Whole target/dependency node hashes
 and incoming edges are pinned; duplicate IDs, missing targets, changed preimages
 or broken references fail closed. All other nodes and fields are preserved,
 including unrelated Piter changes. Raw live flow stays private outside Git.
 Artifact publication requires fresh live-pull custody.
 
-The existing split_create_readonly_preflight remains read-only. Its bound HUB
+### Reviewed source-bound enable and safe-OFF preparation
+
+`scripts/lib/lk1HubPolicyTransition.mjs` prepares only the existing HUB product
+global. Explicit `expectedPrior` and `desired` values are source-bound; null is
+OFF. An initializer accepts the exact desired value idempotently, changes only
+the exact expected prior, and reads back its result. This is not an atomic CAS:
+one configuration writer is mandatory. A reader independently compares the
+global with its embedded desired policy, so initializer failure or stale
+file-backed ON cannot authorize a different source policy. New eligible HUB
+requests hold on OFF/mismatch; known requests retain the pure replay check.
+
+The focused builder now emits exact-graph contracts, not a function-only
+contract. For an ON release the mandatory order is:
+
+1. Install `safe-off.json` using `install-off-contract.json`, then verify flow
+   and OFF context readback. This baseline contains the new replay guard.
+2. Enable `candidate.json` using `contract.json`, which is bound to that exact
+   safe-OFF predecessor and permits only gateway func/initialize changes.
+3. For recovery, use `safe-off-contract.json` or the existing installer's exact
+   baseline backup. The safe-OFF initializer accepts the embedded ON policy and
+   clears it with readback; unknown prior remains STOP. Verify OFF and retained
+   request behavior before considering any further rollback.
+
+The enable contract mechanically rejects a direct old-source-to-ON install.
+This requires two ordinary backend publication/restart steps and may require a
+guarded recovery restart. Restoring dormant 8db7c36 after activation is not an
+approved rollback: it lacks the replay protection. The old private artifacts
+remain preserved, not relabelled. Synthetic memory/persisted-context lifecycle
+tests do not prove real Node-RED disk persistence or restart behavior.
+
+### Isolated DEV frontend publication preparation
+
+The existing atomic static helper has a fixed `--dev-only` namespace with
+eleven DEV bundles plus `release-dev.json`, separate release/current/lease
+paths, and no fonts or opposite-channel pruning. The narrow owner-run adapter
+`scripts/lk1-dev-frontend-release.mjs` validates the actual external artifacts
+against the exact clean approved source, uploads only to the acquired reserve
+release identity and checks public hashes plus a read-only DEV browser smoke.
+The standard production release remains unchanged and independently gated.
+
+The offline builder `scripts/nginx/prepare_lk1_dev_static_bootstrap.mjs` prepares
+the two reserve server blocks in the existing vhost. It replaces only their
+exact DEV manifest locations with twelve exact DEV aliases; all other bytes,
+including legacy bundle/release routes, API and fonts, are preserved. It retains
+the immutable installed baseline and exact nginx backup/rollback hashes.
+Preparation performs no SSH, nginx installation or reload. Real nginx routing,
+cache/CORS and switch/rollback rehearsal is separate from offline source tests.
+Frontend pointer/nginx recovery does not disable the backend product policy;
+backend safe-OFF does not roll back frontend files.
+
+The existing split_create_readonly_preflight remains read-only. After successful
+Viva profile authentication, fresh booking ingress performs at most one exact
+Mongo FIND in the existing operation store, keyed by canonical tenant,
+authenticated actor and validated operationId. This replaces the former
+zero-DB-call invariant; DB/provider writes remain zero. A definitive empty result
+resumes the existing preflight. Errors, ambiguous results and uncertain known
+operations hold without effects; they must never be interpreted as empty.
+This adds an operation-store read dependency even to legacy/no-rule booking
+requests: a failed lookup blocks those requests as well. Release is unchanged.
+
+Known HUB requests are checked independently of the enable flag. Confirmed
+identity/payload/target and persisted checkout evidence can be returned without
+checkout creation, allowance consumption or split CREATE continuation. All other
+known outcomes require reconciliation. Only the two server-owned, freshly
+authenticated internal CREATE continuations may bypass this ingress read;
+they retain their existing durable-record and separate attempt CAS barriers.
+An OFF rule cannot send those internal continuations into legacy booking.
+
+Its bound HUB
 success enters a separate call through the existing ordinary mutating gateway:
 fresh actor/ownership reads, per-request lookup/insert and strict durable CAS.
 Only that exact CAS continuation can hand back to

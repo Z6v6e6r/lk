@@ -13,7 +13,7 @@ const END = '    # END LK isolated frontend static v1';
 const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Lex braces outside quoted strings/comments; record actual nesting, never indentation.
-function nginxBlocks(source) {
+export function nginxBlocks(source) {
   const blocks = new Map(), stack = [];
   let quote = null, comment = false, inToken = false;
   for (let i = 0; i < source.length; i++) {

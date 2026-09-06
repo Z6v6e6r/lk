@@ -5,9 +5,12 @@ const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDis
 const lk1Config = (owned) => {
   const ids = [...new Set(owned.flatMap(collectExactProductIds))];
   if (!ids.includes(LK1_OVERLAY_HUB_PRODUCT_ID)) return { matched: false };
+  const dates = collectSubscriptionPurchaseDateEvidence(owned);
+  if (ids.length === 1 && !dates.invalid && dates.dates.length === 1
+    && dates.dates[0] < MANAGED_ENFORCEMENT_PURCHASE_FROM) return { matched: false };
   let raw;
-  try { raw = global.get(LK1_PRODUCT_POLICY_GLOBAL); } catch (_) { raw = undefined; }
-  if (raw === undefined || raw === null || raw === "") return { matched: false };
+  try { raw = lk1ReadBoundPolicy(); } catch (_) { return { matched: true, code: "LK1_PRODUCT_RULE_SOURCE_MISMATCH" }; }
+  if (raw === null) return { matched: true, code: "LK1_PRODUCT_RULE_OFF" };
   try { if (typeof raw === "string") raw = JSON.parse(raw); } catch (_) { raw = null; }
   if (!isObj(raw) || ids.length !== 1 || raw.productId !== LK1_OVERLAY_HUB_PRODUCT_ID
     || Object.keys(raw).sort().join() !== ["productId", ...lk1Fields].sort().join()
@@ -20,6 +23,15 @@ const lk1Config = (owned) => {
   return { matched: true, rule };
 };
 const lk1Stop = (ctx, code) => finishPending(ctx, "Запись или доплата требуют безопасной сверки", { code });
+const lk1ReadonlyLookup = (value) => {
+  const ctx = value._subscriptionBooking;
+  return ctx?.step === "lk1_ingress_operation_find" && ctx.lk1IngressReplay === true
+    && typeof ctx.actorClientId === "string" && Boolean(ctx.actorClientId)
+    && typeof ctx.tenantKey === "string" && /^[A-Za-z0-9_-]+$/.test(ctx.tenantKey)
+    && /^[A-Za-z0-9._:-]{8,200}$/.test(ctx.operationId || "")
+    && isObj(value.payload) && Object.keys(value.payload).length === 1
+    && value.payload._id === `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`;
+};
 const lk1Find = (ctx, step, query) => {
   ctx.step = step;
   msg._subscriptionBooking = ctx;
@@ -131,6 +143,70 @@ const lk1Checkout = (ctx) => {
 
 
 // HUB_STEPS
+if (ctx.step === "lk1_ingress_operation_find") {
+  // Pure retry lookup, never the mutating operation_find/checkout continuation.
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) {
+    return lk1Stop(ctx, "LK1_OPERATION_READ_FAILED");
+  }
+  const operation = msg.payload[0];
+  if (!operation && msg.payload.length === 0) {
+    delete ctx.lk1IngressReplay;
+    ctx.step = "lk1_profile_continue";
+  } else {
+    const quote = operation?.lk1;
+    const isCreate = ctx.caller === "split_create_readonly_preflight";
+    const action = isCreate ? "CREATE_GAME" : managedActionForTarget({ ...ctx, category: operation?.category });
+    const identity = { ...ctx, managedAction: action };
+    if (!isObj(operation) || operation._id !== `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`
+      || operation.tenantKey !== ctx.tenantKey || operation.actorClientId !== ctx.actorClientId
+      || operation.operationId !== ctx.operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+      || !isObj(quote) || quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID || !isObj(quote.target)
+      || !action || quote.fingerprint !== lk1Fingerprint(identity, quote)
+      || (isCreate ? JSON.stringify(quote.createPayload) !== JSON.stringify(ctx.lk1CreatePayload)
+        || quote.target.stationId !== ctx.prospectiveTarget?.studioId
+        || quote.target.roomId !== ctx.prospectiveTarget?.roomId
+        || !Number.isFinite(Date.parse(ctx.prospectiveTarget?.timeFrom))
+        || Date.parse(quote.target.startsAt) !== Date.parse(ctx.prospectiveTarget?.timeFrom)
+        || quote.target.durationMinutes !== (Date.parse(ctx.prospectiveTarget?.timeTo) - Date.parse(ctx.prospectiveTarget?.timeFrom)) / 60_000
+        : operation.exerciseId !== ctx.exerciseId || quote.target.eventId !== ctx.exerciseId)
+      || quote.decision?.eligible !== true || ![0, 1].includes(quote.decision.subscriptionVisitCount)
+      || !Number.isSafeInteger(quote.decision?.benefit?.finalPriceMinor)
+      || quote.decision.benefit.finalPriceMinor < 0 || quote.decision.benefit.finalPriceMinor > 1_000_000) {
+      return lk1Stop(ctx, "LK1_REQUEST_IDENTITY_CHANGED");
+    }
+    if (operation.state !== "CONFIRMED" || typeof operation.bookingId !== "string" || !operation.bookingId.trim()
+      || typeof operation.exerciseId !== "string" || !operation.exerciseId.trim()
+      || operation.exerciseId.startsWith("preflight:") || quote.target.eventId !== operation.exerciseId) {
+      return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
+    }
+    const amount = quote.decision.benefit.finalPriceMinor;
+    if (amount > 0) {
+      const checkout = quote.checkout;
+      const intent = quote.transactionIntent;
+      let safeUrl = false;
+      try {
+        if (typeof checkout?.paymentUrl === "string" && checkout.paymentUrl.trim()) {
+          const url = new URL(checkout.paymentUrl);
+          safeUrl = url.protocol === "https:" && !url.username && !url.password;
+        }
+      } catch (_) { /* hold */ }
+      if (!isObj(checkout) || !isObj(intent) || !safeUrl || checkout.toPayMinor !== amount
+        || typeof checkout.transactionId !== "string" || !checkout.transactionId.trim()
+        || checkout.transactionId !== quote.transactionId || !quote.transactionAttemptedAt
+        || intent.bookingId !== operation.bookingId || intent.actorClientId !== ctx.actorClientId
+        || intent.studioId !== quote.target.stationId || intent.chargeMinor !== amount) {
+        return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
+      }
+    } else if (quote.checkout || quote.transactionAttemptedAt || quote.transactionId) {
+      return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
+    }
+    ctx.lk1 = JSON.parse(JSON.stringify(quote));
+    ctx.exerciseId = operation.exerciseId;
+    ctx.confirmedBookingId = operation.bookingId;
+    return lk1Finish(ctx);
+  }
+}
+
 if (ctx.step === "lk1_money_owned_subscriptions") {
   const exercise = ctx.lk1MoneyExercise;
   const phase = ctx.lk1MoneyReturnStep;

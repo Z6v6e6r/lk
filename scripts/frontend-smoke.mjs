@@ -4,6 +4,8 @@ const require = createRequire(`${process.env.LK_PLAYWRIGHT_ROOT}/package.json`);
 const { chromium, webkit } = require('playwright');
 const url = new URL(process.env.LK_FRONTEND_SMOKE_URL);
 if (url.protocol !== 'https:') throw new Error('Public HTTPS smoke URL required');
+const channel = process.env.LK_SMOKE_CHANNEL || 'prod';
+if (!['prod', 'dev'].includes(channel)) throw new Error('Unknown smoke channel');
 const selector = process.env.LK_FRONTEND_SMOKE_SELECTOR;
 if (!selector || !process.env.LK_FRONTEND_SMOKE_OPEN_SELECTOR || !process.env.LK_FRONTEND_SMOKE_RESULT_SELECTOR) throw new Error('Owner must select the visible login/read-only scenario');
 for (const browserType of [chromium, webkit]) {
@@ -24,7 +26,12 @@ for (const browserType of [chromium, webkit]) {
       await page.locator(resultSelector).first().waitFor({ state: 'visible', timeout: 30000 });
     }
     const loaded = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name));
-    if (!loaded.some(value => value.includes('/bundle.js?') && new URL(value).searchParams.get('v') === process.env.LK_SMOKE_VERSION)) throw new Error('Tilda did not load the expected versioned prod bundle');
+    if (!loaded.some(value => {
+      const resource = new URL(value);
+      return resource.pathname === (channel === 'dev' ? '/lk/bundle-dev.js' : '/lk/bundle.js')
+        && (channel !== 'dev' || resource.origin === 'https://lk-reserve.tsup.space')
+        && resource.searchParams.get('v') === process.env.LK_SMOKE_VERSION;
+    })) throw new Error('Tilda did not load the expected versioned ' + channel + ' bundle');
     if (errors.length) throw new Error(`Browser script errors: ${errors.length}`);
   } finally { await browser.close(); }
 }
