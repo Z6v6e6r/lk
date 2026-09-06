@@ -206,6 +206,91 @@ Native execution пока **NOT_RUN**, успех не обещан. Heavy-slot 
 [существующем drawio](assets/partner-game-membership-ingress-evidence.drawio).
 Native exporter ранее недоступен; XML-only fallback, PNG/visual QA NOT_RUN.
 
+## Подготовка native Linux/amd64 после a150756
+
+Статус: **PREPARATION_BLOCKED_TARGET_UNASSIGNED**. Пользователь разрешил
+подготовку, не новый runtime. Read-only discovery 6 сентября: workstation
+`Darwin arm64`, текущий daemon `linux/aarch64`, оба установленных pinned images
+`linux/amd64`. Contexts `default` и `desktop-linux` используют local Unix endpoints;
+назначенный удалённый native target не обнаружен в этом inventory. Координатор
+подтвердил отсутствие назначенного Partner target/владельца в своём реестре.
+Это не утверждение, что подходящих машин вообще нет. Общие LK hosts не назначены
+для этой репетиции; SSH discovery на них, создание VM и изменение Docker не выполнялись.
+
+**Единственный внешний prerequisite сейчас:** владелец указывает существующий
+выделенный native Linux/amd64 target и контакт ответственного за доступ/ресурсы.
+До этого host admission остаётся UNKNOWN; LOCAL_HEAVY не зарезервирован.
+Источник для подготовки — `a15075605f128a8cfbbf9e15db04e742634d6628`, tree
+`d0f811e5b9e1e03947a879e9fc18b0ac2c005594`. Ни strict predicate, ни images не меняются.
+
+### Что проверить на назначенной машине, только чтением
+
+| Требование | Доказательство / stop condition |
+| --- | --- |
+| Owner / scope | Exact alias, владелец и выделенный контур; отсутствие конфликтующего использования. Production/shared LK не выбираются автоматически |
+| Native execution | Owner подтверждает native x86-64 hardware/VM без CPU emulation; `uname -sm` на daemon host = Linux x86_64, Docker server arch = x86_64/amd64. Одного uname внутри amd64 image недостаточно |
+| Operator и daemon на одной машине | Явно зафиксированный local Unix endpoint, тот же approved daemon до/после. Runner не запускать на Mac против удалённого daemon: bind paths должны существовать на daemon host |
+| Host tools | Nonroot UID/GID, уже доступный Docker без расширения прав; Node с поддержкой текущих источников, OpenSSL; версии фиксируются. Locally observed operator Node22.13.1/OpenSSL3.6.2 — не доказательство наличия на target |
+| Images | Оба exact digest ниже уже доступны и image metadata = linux/amd64. Missing image/несовместимый CLI `image inspect --platform` — STOP, не автоматический pull/install |
+| Isolation / capacity | Выделенный private рабочий каталог; resource budget согласован. Проверить свободные память/диск и текущих пользователей daemon. Нет изменения чужих containers/networks, daemon config или ACL |
+| Source closure | Перед переносом и запуском совпадают все10source hashes с frozen source revision; нет env/secrets/node_modules/raw exports. Docs-only checkpoint не меняет source hashes |
+
+Docker допускает запуск amd64 на ARM через эмуляцию; platform label не доказывает
+native. Bind mounts разрешаются на стороне daemon, не клиента.
+[Архитектуры Docker](https://docs.docker.com/build/building/multi-platform/),
+[bind mounts](https://docs.docker.com/engine/storage/bind-mounts/).
+Ни регистрация binfmt, ни наличие/отсутствие одного process name сами по себе
+не заменяют owner/host/image/actual-proc evidence; неизвестное остаётся UNKNOWN.
+
+Exact image pins:
+
+```text
+node@sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96
+nginx@sha256:2e26275ed7a47e8e93f264d39a09ca4bc3f4058c904c75087e237f4ea883f2a1
+```
+
+Для переноса нужны **10** source files: существующие9 из diagnostic receipt и
+`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs`,
+импортируемый ingress evidence для `canonicalJson`. Все относительные imports
+должны разрешаться с сохранённой repo layout; остальные зависимости — Node builtins.
+Это transport preparation inventory, не изменение старого9source receipt и не
+готовый deploy packet. Не переносить весь dirty primary checkout, secrets, реальные
+сертификаты, `.env`, runtime exports или node_modules. Файлы/образы на target пока
+не переносились; installs/downloads не разрешены текущим preparation grant.
+
+### Следующий runtime — только после target admission и отдельного разрешения
+
+Первая попытка на новой среде — существующий **diagnostic-only** mode, не полная
+application matrix. Утвердить exact target/owner/source manifest, окно и один run:
+2owncontainers по1CPU/512MiB/128PID/tmpfs256MiB, один own internal bridge, nonroot,
+read-only rootfs, capdropALL/no-new-privileges, без host ports, внешней сети,
+Docker socket/host namespaces и реальных credentials. Runner работает на target
+под своим UID, native daemon локален; каталоги fresh/private и принадлежат этому UID.
+180s execution deadline и отдельный bounded cleanup; перед запуском назначить
+оператора восстановления, фиксировать exact owned IDs в recovery receipt.
+Не менять сигнал/cleanup policy и не выполнять самостоятельный массовый rollback.
+
+До/после сверяются source/copy/publiccert/config/image/container/network identities.
+Actual strict result **ACCEPTED** означает только отсутствие прежнего mismatch в
+этом capture (`NOT_REPRODUCED`), не native/application/production PASS. Отдельно
+проверить distinct role titles, expected Nginx exe-link и согласованные executable
+hashes; источник ожидаемого binary hash связывается с pinned image. Одних
+равных master/worker hashes недостаточно для доказательства Nginx binary identity.
+Любые padding/mismatch/partial reads/drift остаются STOP с sanitized diagnostic;
+никаких retries или ослабления predicate без отдельного разбора.
+
+Third peer/HTTP/HUP/matrix12 на первом native diagnostic **NOT_RUN**. Собственные
+контейнеры/сеть и synthetic keys/CSRs удаляются штатно, exact absence проверяется
+отдельным readback. Только затем можно отдельно допустить application matrix:
+disk-only negative, A→B→C/HUP/old-worker drain, leaf binding revoke и отдельный
+direct-sidecar refusal. Эта последовательность не разрешает deploy/activation.
+
+В текущем preparation выполнены offline10source/syntax/import-allowlist проверки
+и сопоставление с прежними9receipt hashes. Исходники и тесты не изменены;
+прежние378/378 (включая108targeted) — cached source evidence, не новый прогон
+и не результат native машины. См. существующую схему `Nginx identity diagnostic`:
+её последняя стадия остаётся неисполненной, diagram/visual QA не повторялись.
+
 ## Оставшиеся решения перед production, по критичности
 
 1. **P0 — инфраструктура:** закрепить exact shared-Nginx topology, Host/SNI,

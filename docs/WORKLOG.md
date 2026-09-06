@@ -2,6 +2,30 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: native rehearsal preparation, target ещё не назначен
+
+- После `a150756` пользователь разрешил только подготовку native Linux/amd64.
+  Тот же WT/branch, sole writer; production/runtime code, pins/tests не меняются.
+- Read-only inventory: Mac Darwin/arm64, current Docker linux/aarch64; две exact
+  images присутствуют какlinux/amd64. Contexts default/desktop-linux — local Unix,
+  выделенный remote native target в inventory не обнаружен. Координатор подтвердил:
+  Partner native target/owner в реестре отсутствует; shared LK hosts не назначены.
+  Это отсутствие назначения, не утверждение об отсутствии любых доступных машин.
+- Подготовлены критерии owner/host/daemon/mount/tool/image/capacity admission,
+  транспортная allowlist10sources (включая canonicalJson core), expected-negative
+  matrix, границы первого native diagnostic и отдельного application допуска.
+  Источники побайтово совпали с a150756 и прежними9receipt hashes;10syntax checks
+  и проверка относительных imports/builtins PASS без исполнения runner/imports.
+- Обновлены только runbook/test plan/этот worklog. 378/378 и108targeted — cached
+  evidence прежнего unchanged source, не новые тесты и не native PASS. Existing
+  diagram применима без изменения; visual export не повторялся.
+- Независимый release review preparation docs/inventory: существенных P0–P2 нет;
+ 10-й source требует собственной target-сверки, старый receipt не расширен.
+- Единственный внешний prerequisite — владелец указывает допустимый выделенный
+  native target. PREPARATION_BLOCKED_TARGET_UNASSIGNED; SSH, transfer/install,
+  Docker runtime/download/config changes, main/CI/PR/push/merge/deploy/shared writes
+  не выполнялись, LOCAL_HEAVY не занимался. Никакие прежние failures не переименованы.
+
 ## 2026-09-06 — Partner: Nginx identity diagnostic завершена, application остаётся blocked
 
 - После `3314cd8` отдельно одобрена только локальная диагностика command mismatch;

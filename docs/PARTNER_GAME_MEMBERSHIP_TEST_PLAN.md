@@ -2,6 +2,21 @@
 
 ## Уровни доказательств
 
+Preparation после `a150756`: [native target admission](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md#подготовка-native-linuxamd64-после-a150756).
+Target/owner не назначены; native preflight/runtime **NOT_RUN**. Локально
+проверены10transport source hashes/import closure/syntax, прежние9receipt hashes
+совпали; новых unit/runtime прогонов нет, production code не меняется.
+
+| Native admission negative | Требуемый результат будущей проверки, не текущий PASS |
+| --- | --- |
+| Нет владельца/target, только ARM daemon + amd64 image | TARGET_UNASSIGNED / non-native STOP; не использовать shared LK |
+| Удалённый daemon и локальные Mac bind paths | STOP до исполнения runner; operator и mounts должны быть на daemon host |
+| Missing image/tool/source dependency, hash drift | STOP; не pull/install/change pin и не перенос всего checkout |
+| Root UID или нужно расширить capabilities/ACL | STOP без автоматического изменения прав |
+| Native uname, но original argv/padding/wrong exe/partial read | Strict отказ/UNKNOWN сохраняется; metadata не подменяет actual process identity |
+| Diagnostic strict ACCEPTED | NOT_REPRODUCED, не application PASS; третий peer/HUP/matrix требуют следующего допуска |
+| Failed/incomplete capture или cleanup | Сохранить sanitized failure/recovery; не повторять и не удалять чужие ресурсы |
+
 Последний этап после `3314cd8`: [отдельная identity diagnostic](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md#отдельная-диагностика-после-3314cd8-причина-установлена).
 Targeted **108/108**, полный Partner **378/378 PASS**, skipped0; scoped ESLint PASS.
 Один admitted physical diagnostic: `DIAGNOSTIC_COMPLETE_NOT_APPLICATION_PASS` /
