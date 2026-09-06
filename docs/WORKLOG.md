@@ -2,6 +2,30 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: анкета отменена, выпуск рабочих методов — ответственность PadlHub
+
+- Пользователь отменил согласование P0 и ожидание ответов rusPadelUp. Действующее
+  разделение: PadlHub предоставляет работающие POST/DELETE/GET, фиксированный
+  контракт/доступ и серверные гарантии; партнёр реализует свой клиент.
+- Existing external-team документ заменён ответственностями/checklist вместо
+  блокирующего questionnaire; старый DRAFT не отправлен, история есть в Git.
+  API/kit README/test plan/release/threat docs больше не требуют письма/подписи
+  партнёра. Provider semantics подтверждает PadlHub техническими доказательствами;
+  readiness flags, код и критерии безопасности не ослаблены.
+- Read-only source проверка выявила внутренние препятствия, не зависимость от
+  анкеты: production ingress entry безусловно UNSUPPORTED; startup принимает
+  только DEFAULT_OFF_UNBOUND; standalone graph не наполняет Viva token в memory
+  context; unit допускает только localhost egress. Нужна завершённая серверная
+  реализация, а не только включение env или передача offline vectors.
+- Продолжение в прежней ветке/WT после `11e63d8`. Изменены только семь документов;
+  signer/vectors/runtime/pins не меняются. Проверки diff, локальных ссылок,
+  отсутствия questionnaire gate и configured staged secret/PII scan; unit/runtime
+  tests не повторяются. Прежние384/384 — cached source evidence, не live PASS.
+- Обновление локального offline-архива меняет только README; прежний архив
+  сохраняется. Рабочий endpoint и боевые credentials пока не выданы. Нет внешних
+  отправок/SSH/Docker/install/CI/push/merge/deploy/secret/shared-data операций.
+  Native Nginx application rehearsal остаётся DEFERRED/NOT_RUN.
+
 ## 2026-09-06 — Partner: согласование rusPadelUp через пользователя
 
 - Пользователь выбрал себя посредником: комплект и вопросы передаются партнёру

@@ -263,7 +263,8 @@ deadline документа после завершения соответств
 Его unit/filesystem tests не закрывают перечисленные ниже live ingress, Mongo или
 Viva gates; physical TLS/mTLS probes и production adapter ещё не реализованы.
 
-- все P0 вопросы закрыты и подписаны владельцами;
+- нет требования подписанной анкеты/ответов партнёра: контракт фиксирован;
+  серверные security, ownership, replay и provider проверки выполняет PadlHub;
 - fresh `LK Games` snapshot и SHA зафиксированы только для collision/readback; packet
   содержит отдельный deterministic sidecar source;
 - custom node package и candidate hashes воспроизводимы;

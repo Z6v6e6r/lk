@@ -3,6 +3,9 @@
 6 сентября 2026. **Локальный release candidate; не боевой деплой и не активация.**
 Существующая ветка сохранена. Новый пакет включает raw guard, фактический startup
 entrypoint и дисковый audit. Старый уже созданный packet не изменяется на месте.
+Уточнение ответственности: анкета/подпись P0 от партнёра не требуются и выпуск их
+не ожидает. PadlHub обеспечивает работающие методы, контракт и серверные проверки;
+партнёр реализует свой клиент. Технические prerequisites ниже — наша release-работа.
 
 ## Состав и границы
 
@@ -116,14 +119,14 @@ HTTPOut proof — в [deadline evidence](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLI
 
 | Приоритет | Владелец | Следующий обязательный результат |
 | --- | --- | --- |
-| P0 | Инфраструктура и партнёр | Отдельный Host/SNI, DNS owner, выдача/отзыв mTLS client certificate, разрешённые источники |
+| P0 | Инфраструктура PadlHub | Отдельный Host/SNI, DNS owner, выдача/отзыв mTLS client certificate, разрешённые источники |
 | P0 | Release/security | Свежий runtime audit, exact-head main/CI, новый private packet из свежего shared-flow collision readback; отдельные merge/push/deploy gates |
 | P0 | Инфраструктура/security | Локальный Nginx generator проверен; закрыть оставшиеся OPEN/NOT_TESTED и effective-config/live verifier: сейчас `UNSUPPORTED_INGRESS_ADAPTER` |
 | P0 | Эксплуатация | Audit custody, monitoring, retention/recovery, host systemd и rollback readback |
-| P0 | Партнёр/provider owner | Viva credential lifecycle, idempotency/cancellation/payment semantics; реальные Mongo indexes и fencing; согласованный canary |
-| P1 | Партнёр | Canonical signing, clock sync, уникальные nonce, persistent idempotency key; новый подписанный retry вместо повторной отправки перехваченного wire request |
+| P0 | Backend/provider owner PadlHub | Viva credential lifecycle, доказанные idempotency/cancellation/payment semantics; реальные Mongo indexes и fencing; разрешённый canary |
+| Требования к клиенту, не согласование | Партнёр | Canonical signing, clock sync, уникальные nonce, persistent idempotency key; новый подписанный retry вместо повторной отправки перехваченного wire request |
 
 Raw guard не заменяет HMAC/timestamp/nonce/ACL/ownership. Добавление/оплата/удаление
 в Viva и защита от replay на production должны быть подтверждены отдельной
-согласованной интеграционной проверкой. Сейчас передавать партнёру «боевые настройки»
+разрешённой интеграционной проверкой PadlHub. Сейчас передавать партнёру «боевые настройки»
 как работающие нельзя: endpoint не активирован и ingress не подтверждён.

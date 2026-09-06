@@ -73,7 +73,7 @@ membership/operation ID: в интеграции сохраняются ID из 
   timestamp, новый криптографически случайный nonce, correlation UUID и подпись.
 - Обрыв до получения ответа: повторить ту же команду с прежним Idempotency-Key и
   прежним body, но новым proof. Не создавать вторую бизнес-команду «на всякий случай».
-- `202 UNKNOWN`/незавершённая операция: читать её через GET, согласовать reconciliation;
+- `202 UNKNOWN`/незавершённая операция: читать её через GET, передать в reconciliation;
   не выполнять слепые provider retry или автоматический DELETE/возврат денег.
 - `409 REQUEST_REPLAY_DETECTED`: не пересылать захваченный HTTP request заново.
   `IDEMPOTENCY_CONFLICT`: остановиться и исправить несоответствие команды, а не
@@ -89,22 +89,26 @@ HMAC + nonce защищают от повторов после приёма ор
 idempotency/recovery, audit persistence, отсутствие повторного Viva call или
 недоступность обходного порта.
 
-## Что передать на согласование
+## Самостоятельная интеграция клиента
 
-Партнёр возвращает язык/версию своего клиента, результаты пяти vectors и контакт
-технического владельца — без secrets, request dumps и персональных данных.
-Для продолжения live-интеграции требуются ответы по важности:
+Анкета, согласование P0 и отчёт о прохождении vectors **не требуются**. PadlHub
+предоставляет методы и фиксированный контракт; партнёр отвечает за реализацию своего
+клиента. Vectors служат для самостоятельной проверки. Credentials, request dumps
+и персональные данные присылать не нужно.
 
-1. **P0, до любого Viva write:** владельцы и разрешённые игры; технический Viva
-   пользователь и точный provider contract/idempotency; смысл оплаты без refund;
-   custody ключей/mTLS; ownership, retry/UNKNOWN и конкурентная ёмкость игры.
-2. **P1, до ограниченного пилота:** тестовые данные и приёмка, SLA/SLO, audit/retention,
-   reconciliation, отзыв доступа, совместимость версий.
-3. **P2, до масштабирования:** bulk, события/отчётность, tenancy и масштаб ключей.
+1. **P0 для клиента:** HMAC/mTLS, key custody, время/nonce, стабильные ID, внешняя
+   оплата, retry/idempotency/UNKNOWN и соблюдение серверных ограничений.
+2. **P1 для клиента:** backoff/лимиты, наблюдаемость без секретов, сохранение operationId,
+   обработка отзыва доступа и совместимость версий.
+3. **P2:** bulk/webhooks/group payments не входят в текущий API и не блокируют выпуск.
+
+Работа endpoint, серверная безопасность, audit, Mongo и взаимодействие PadlHub–Viva
+остаются ответственностью PadlHub. Отсутствие обязательной анкеты не заменяет наши
+интеграционные проверки и не означает, что live endpoint уже включён.
 
 Полные документы в основном репозитории (при передаче только этой папки отправляются
 отдельно): [API](../PARTNER_GAME_MEMBERSHIP_API.md),
-[вопросы P0–P2](../PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md),
+[ответственность сторон и checklist P0–P2](../PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md),
 [инфографика безопасности](../assets/partner-game-membership-security.drawio),
 [инфографика production gates](../assets/partner-game-membership-production-gates.drawio).
 

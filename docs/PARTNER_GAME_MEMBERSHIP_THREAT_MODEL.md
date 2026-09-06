@@ -151,8 +151,9 @@ settlement. Viva является authority только для существо
   может перенаправить старый booking на другого клиента. Sibling response containers и
   create wrappers также проверяются совместно: first-match выбор не может скрыть второе,
   противоречивое представление booking.
-- Отсутствует: письменное доказательство Viva idempotency/ON_PLACE/cancel semantics,
-  sandbox evidence и reconciliation worker/runbook.
+- Отсутствует: техническое доказательство Viva idempotency/ON_PLACE/cancel semantics,
+  sandbox evidence и reconciliation worker/runbook. Это проверяет PadlHub; анкета
+  или согласование партнёра не требуются и не заменяют provider evidence.
 - Риск: high; именно поэтому все real mutation gates default-off.
 
 ### T6. Oversubscription при конкурентном LK/Viva/partner add
