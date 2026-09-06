@@ -410,7 +410,7 @@ test("payment claim write requires majority durability and explicit acknowledgem
 });
 
 const authPayload = (overrides = {}) => ({
-  organizer: { id: "client-1", phone: "+7 999 000-00-01" },
+  organizer: { id: "client-1", phone: "79990000001" },
   booking: {
     studioId: "studio-1",
     roomId: "room-1",
