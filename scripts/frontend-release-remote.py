@@ -14,6 +14,14 @@ BUNDLES = ['bundle', 'games', 'tournaments', 'tournament-signup', 'group-schedul
            'onboarding', 'levels-info', 'communities']
 FONTS = ['rf-dewi-ultrabold', 'rf-dewi-expanded-ultrabold-italic', 'SourceCodePro-Medium', 'SourceCodePro-Regular']
 FILES = [x + '.js' for x in BUNDLES] + ['release.json'] + ['fonts/' + x + '.woff2' for x in FONTS]
+DEV_FILES = [x + '-dev.js' for x in BUNDLES] + ['release-dev.json']
+
+def namespace(channel):
+    if channel == 'prod':
+        return FILES, 'release.json', 'lk-frontend'
+    if channel == 'dev':
+        return DEV_FILES, 'release-dev.json', 'lk-frontend-dev'
+    raise ValueError('Only the fixed prod or DEV static namespace is supported')
 
 def sync_dir(path):
     fd = os.open(path, os.O_RDONLY)
@@ -31,41 +39,46 @@ def write_json(path, data):
     os.replace(temp, path)
     sync_dir(path.parent)
 
-def inventory(path):
+def inventory(path, channel='prod'):
+    files, manifest_name, _ = namespace(channel)
     if path.is_symlink() or not path.is_dir():
         raise ValueError('Release directory must be a real directory')
     actual = {str(file.relative_to(path)) for file in path.rglob('*') if file.is_file() or file.is_symlink()}
-    if actual != set(FILES):
-        raise ValueError('Static namespace contains DEV, academy or unrelated files; owner must isolate it first')
+    directories = {str(file.relative_to(path)) for file in path.rglob('*') if file.is_dir()}
+    if directories != ({'fonts'} if channel == 'prod' else set()):
+        raise ValueError('Unexpected static artifact directory')
+    if actual != set(files):
+        raise ValueError('Static namespace contains opposite-channel, academy or unrelated files; owner must isolate it first')
     hashes = {}
-    for name in FILES:
+    for name in files:
         file = path / name
         if file.is_symlink() or not file.is_file() or file.stat().st_nlink != 1:
             raise ValueError('Missing or aliased artifact: ' + name)
         if name.startswith('fonts/') and (path / 'fonts').is_symlink():
             raise ValueError('Aliased fonts directory')
         hashes[name] = hashlib.sha256(file.read_bytes()).hexdigest()
-    manifest = json.loads((path / 'release.json').read_text())
+    manifest = json.loads((path / manifest_name).read_text())
     if not re.fullmatch('[a-f0-9]{40}', str(manifest.get('sourceCommit', ''))) or manifest.get('sourceDirty') is not False:
         raise ValueError('Installed source provenance unavailable')
     if not re.fullmatch('[A-Za-z0-9._-]{1,100}', str(manifest.get('version', ''))):
         raise ValueError('Invalid release version')
     return {'source': manifest['sourceCommit'], 'version': manifest['version'], 'hashes': hashes}
 
-def run(request, parent=Path('/var/www/html')):
+def run(request, parent=Path('/var/www/html'), channel='prod'):
     # parent injection is for local synthetic tests; CLI never accepts a remote root.
     parent = parent.resolve(strict=True)
-    active = parent / 'lk-frontend-current'
-    releases = parent / 'lk-frontend-releases'
+    files, _, prefix = namespace(channel)
+    active = parent / (prefix + '-current')
+    releases = parent / (prefix + '-releases')
     if releases.is_symlink() or not releases.is_dir() or not active.is_symlink():
-        raise ValueError('Owner bootstrap required: lk-frontend-current symlink and lk-frontend-releases')
+        raise ValueError('Owner bootstrap required: ' + prefix + '-current symlink and releases')
     lock = releases / '.lock'
     with open(lock, 'a') as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         current = active.resolve(strict=True)
         if current.parent != releases.resolve() or not re.fullmatch('[a-f0-9]{40}-[a-f0-9]{16}', current.name):
             raise ValueError('Active release is outside the approved static directory')
-        state = inventory(current)
+        state = inventory(current, channel)
         lease_path = releases / '.lease.json'
         op = request['op']
         if op == 'inspect':
@@ -94,21 +107,22 @@ def run(request, parent=Path('/var/www/html')):
             raise ValueError('Lease ownership mismatch')
         previous = releases / lease['previousPath']
         candidate = releases / lease['candidate']
-        if inventory(previous) != lease['previous']:
+        if inventory(previous, channel) != lease['previous']:
             raise ValueError('Retained previous release drifted')
         if op == 'publish':
             if current != previous or state != lease['previous'] or lease['phase'] != 'uploading':
                 raise ValueError('Installed preimage drifted before publication')
-            candidate_state = inventory(candidate)
+            candidate_state = inventory(candidate, channel)
             if candidate_state != request['expected'] or candidate_state['source'] != candidate.name[:40]:
                 raise ValueError('Uploaded artifact mismatch')
             # Freeze the exact candidate BEFORE the switch; interrupted publication is recoverable.
             lease.update({'expected': candidate_state, 'phase': 'publishing'})
             write_json(lease_path, lease)
-            for name in FILES:
+            for name in files:
                 with open(candidate / name, 'rb') as handle:
                     os.fsync(handle.fileno())
-            sync_dir(candidate / 'fonts')
+            if channel == 'prod':
+                sync_dir(candidate / 'fonts')
             sync_dir(candidate)
             target = candidate
         elif op == 'rollback':
@@ -129,15 +143,17 @@ def run(request, parent=Path('/var/www/html')):
             return {'finished': True}
         else:
             raise ValueError('Unknown operation')
-        temporary = parent / ('.lk-frontend-switch-' + token)
+        temporary = parent / ('.' + prefix + '-switch-' + token)
         os.symlink(target, temporary)
         os.replace(temporary, active)
         sync_dir(parent)
-        return inventory(active.resolve(strict=True))
+        return inventory(active.resolve(strict=True), channel)
 
 if __name__ == '__main__':
     try:
-        print(json.dumps(run(json.load(sys.stdin))))
+        if sys.argv[1:] not in ([], ['--dev-only']):
+            raise ValueError('Only --dev-only is accepted; remote root is fixed')
+        print(json.dumps(run(json.load(sys.stdin), channel='dev' if sys.argv[1:] else 'prod')))
     except Exception as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)

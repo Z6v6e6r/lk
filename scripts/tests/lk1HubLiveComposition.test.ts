@@ -5,11 +5,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { composeHubFlow, HUB_IDS, assertHubOutputPath } from "../patch_live_lk1_hub.mjs";
+import { composeHubFlow, composeHubReleaseArtifacts, HUB_IDS, assertHubOutputPath } from "../patch_live_lk1_hub.mjs";
 import { hasDeterministicSubscriptionDecision } from "../../src/utils/subscriptionDecisionContract.ts";
+import { validateReviewedFlowContract } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
 const fixturePath = process.env.LK1_HUB_LIVE_FIXTURE;
 const original = fixturePath ? JSON.parse(fs.readFileSync(fixturePath, "utf8")) : null;
-const composed = original ? composeHubFlow(original) : null;
+const fixtureRule = { productId: "db7a5250-7369-4f43-8ac5-9111be24bc74", maxActiveBookings: 4,
+  freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+  groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 };
+const fixturePolicy = { expectedPrior: null, desired: fixtureRule };
+const composed = original ? composeHubFlow(original, fixturePolicy) : null;
 const test = (name: string, fn: () => void) => nodeTest(name, { skip: !composed }, fn);
 nodeTest("HUB artifact output rejects current and primary worktrees before creating files", () => {
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -23,13 +28,14 @@ nodeTest("HUB artifact output rejects current and primary worktrees before creat
   }
 });
 test("HUB graph composition is reproducible and rejects body dependency or route drift", () => {
-  assert.equal(JSON.stringify(composeHubFlow(original)), JSON.stringify(composed));
+  assert.equal(JSON.stringify(composeHubFlow(original, fixturePolicy)), JSON.stringify(composed));
   const changed = composed.filter((node: any, index: number) =>
     JSON.stringify(node) !== JSON.stringify(original[index]));
   assert.equal(changed.length, 4);
   for (const node of changed) {
     const before = original.find((n: any) => n.id === node.id);
-    assert.deepEqual({ ...node, func: before.func }, before);
+    assert.deepEqual({ ...node, func: before.func,
+      ...(node.id === HUB_IDS.gateway ? { initialize: before.initialize } : {}) }, before);
   }
   for (const mutate of [
     (f: any[]) => { f.push(structuredClone(f[0])); },
@@ -44,6 +50,50 @@ test("HUB graph composition is reproducible and rejects body dependency or route
   const foreign = structuredClone(original);
   foreign.push({ id: "fixture-independent-node", type: "comment", name: "preserve" });
   assert.deepEqual(composeHubFlow(foreign).at(-1), foreign.at(-1));
+});
+test("HUB exact graph packet includes a source-bound safe OFF that retains pure replay", () => {
+  const packet = composeHubReleaseArtifacts(Buffer.from(JSON.stringify(original)), fixturePolicy, "fixture-hub-policy");
+  assert.equal(packet.contract.contractKind, "exact-graph");
+  assert.equal(packet.installOffContract.allowedChanges.length, 4);
+  assert.equal(packet.contract.allowedChanges.length, 1);
+  assert.equal(packet.contract.sourceSha256, packet.installOffContract.candidateSha256);
+  assert.equal(packet.safeOffContract.candidateSha256, packet.installOffContract.candidateSha256);
+  assert.throws(() => validateReviewedFlowContract({ liveBytes: Buffer.from(JSON.stringify(original)),
+    candidateBytes: packet.candidateBytes, contract: packet.contract }), /Live flow digest/);
+  assert.deepEqual(packet.contract.allowedChanges.find((c: any) => c.id === HUB_IDS.gateway).fields, ['func', 'initialize']);
+  assert.equal(packet.safeOffContract.allowedChanges.length, 1);
+  const offGateway = JSON.parse(packet.safeOffBytes.toString()).find((n: any) => n.id === HUB_IDS.gateway);
+  const offPacket = composeHubReleaseArtifacts(Buffer.from(JSON.stringify(original)), { expectedPrior: fixtureRule, desired: null }, 'fixture-hub-off');
+  assert.equal(offPacket.safeOffContract, null);
+  assert.ok(offPacket.candidateBytes.equals(offPacket.safeOffBytes));
+  let globalValue;
+  const store = { get: () => globalValue, set: (_key: string, value: any) => { globalValue = value; } };
+  new Function('global', offGateway.initialize)(store);
+  assert.equal(globalValue, undefined, 'absent memory state already proves OFF');
+  new Function('global', packet.candidate.find((n: any) => n.id === HUB_IDS.gateway).initialize)(store);
+  assert.deepEqual(globalValue, fixtureRule);
+  new Function('global', offGateway.initialize)(store); // exact predecessor restored after enable failure
+  assert.equal(globalValue, null);
+  const run = (msg: any, value: any) => new Function('msg', 'global', 'node', 'env', offGateway.func)(
+    msg, { get: () => value }, { warn() {}, error() {} }, { get() {} });
+  const fixture = lk1DirectFixture(60);
+  const input = structuredClone(fixture.start()[1]);
+  input._subscriptionBooking.step = "exercise";
+  input.payload = fixture.exercise;
+  input.statusCode = 200;
+  for (const policy of [undefined, fixtureRule]) {
+    const out = run(structuredClone(input), policy);
+    assert.ok(out.every((value: any, index: number) => index === 4 || value === null));
+    assert.equal(out[4].payload.state, "PENDING_CONFIRMATION");
+    assert.match(out[4].payload.details.code, /RULE_OFF|SOURCE_MISMATCH/);
+  }
+  const { record } = lk1ThroughBooking(60);
+  const request = { _subscriptionBooking: baseContext("profile", { action: "book", managedAction: "JOIN_GAME" }),
+    statusCode: 200, payload: createProfile };
+  let out = run(request, fixtureRule); // even stale persisted ON cannot defeat source OFF
+  assert.ok(out[1]);
+  out = run({ ...out[1], payload: [record] }, fixtureRule);
+  assertPureFinal(out, "CONFIRMED");
 });
 const ROUTER_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js";
 
@@ -243,9 +293,7 @@ test("HUB preserves live readonly write barriers and no-delete late-failure resp
   }
 });
 const LK1_DIRECT_GLOBALS = { vivacrm_access_token: "fixture-service-token",
-  subscriptions_lk1_product_policy: { productId: HUB_PRODUCT_ID, maxActiveBookings: 4,
-    freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
-    groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 } };
+  subscriptions_lk1_product_policy: fixtureRule };
 
 function createStart(extra: any = {}) {
   const { serviceDate } = futureManagedTarget();
@@ -264,11 +312,77 @@ function createOwned() {
     availableTypes: [{ id: 1613 }], hasStudioLimitation: false, hasDirectionLimitation: false }];
 }
 const createProfile = { id: "client-1", phone: ["7", "999", "0000001"].join("") };
+function ingressLookup(request: any, globals: any = {}) {
+  const out = runFunction(ROUTER_FILE, { ...structuredClone(request), statusCode: 200, payload: createProfile }, globals);
+  assert.equal(out[1]?._subscriptionBooking.step, "lk1_ingress_operation_find");
+  assert.ok(out.every((value: any, index: number) => index === 1 || value === null));
+  const ctx = out[1]._subscriptionBooking;
+  assert.deepEqual(out[1].payload, { _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}` });
+  return out[1];
+}
+function assertPureFinal(out: any, state: string) {
+  assert.ok(out.every((value: any, index: number) => index === 4 || value === null));
+  assert.equal(out[4].payload.state, state);
+  const final = runFunction(FINALIZE_FILE, out[4]);
+  assert.equal(final[0], null, "replay must never enter CREATE or checkout serializer");
+  assert.equal(final[1].payload.state, state);
+  return final[1];
+}
+test("HUB readonly ingress has one exact read and ambiguous/error lookup cannot become empty with rule OFF", () => {
+  const request = createStart()[3];
+  const read = ingressLookup(request);
+  for (const payload of [null, {}, [null], [undefined], [{}, {}]]) {
+    const out = runFunction(ROUTER_FILE, { ...structuredClone(read), payload });
+    assertPureFinal(out, "PENDING_CONFIRMATION");
+  }
+  assertPureFinal(runFunction(ROUTER_FILE, { ...structuredClone(read), payload: [], error: { message: "fixture failure" } }), "PENDING_CONFIRMATION");
+  const empty = runFunction(ROUTER_FILE, { ...structuredClone(read), payload: [] });
+  assert.equal(empty[0].method, "GET");
+  assert.equal(empty[0]._subscriptionBooking.step, "prospective_subscriptions");
+  assert.equal(empty[0]._subscriptionBooking.lk1IngressReplay, undefined);
+  const failedAuth = runFunction(ROUTER_FILE, { ...request, statusCode: 401, payload: {} });
+  assert.equal(failedAuth[1], null, "no DB lookup before authentication");
+});
+test("HUB fresh ingress ignores forged skip markers and cannot cross actor tenant or request identity", () => {
+  const { record } = lk1ThroughBooking(60);
+  const request = { _subscriptionBooking: baseContext("profile", { action: "book", managedAction: "JOIN_GAME",
+    lk1IngressReplay: false, lk1LookupComplete: true }) };
+  const read = ingressLookup(request);
+  const before = structuredClone(record);
+  const replay = assertPureFinal(runFunction(ROUTER_FILE, { ...structuredClone(read), payload: [record] }), "CONFIRMED");
+  assert.equal(replay.payload.bookingId, record.bookingId);
+  assert.deepEqual(record, before);
+  for (const mutate of [
+    (r: any) => { r.actorClientId = "fixture:other-actor"; },
+    (r: any) => { r.tenantKey = "fixture-other-tenant"; },
+    (r: any) => { r.operationId = "fixture-other-operation"; },
+    (r: any) => { r.clientSubscriptionId = "fixture:other-subscription"; },
+    (r: any) => { r.exerciseId = "fixture:other-event"; },
+    (r: any) => { r.lk1.fingerprint = "fixture:forged"; },
+    (r: any) => { r.state = "PENDING_CONFIRMATION"; },
+    (r: any) => { r.state = "PREPARED"; },
+  ]) {
+    const changed = structuredClone(record); mutate(changed);
+    assertPureFinal(runFunction(ROUTER_FILE, { ...structuredClone(read), payload: [changed] }), "PENDING_CONFIRMATION");
+  }
+  const body = { exerciseId: "exercise-target", clientSubscriptionId: "client-subscription-1",
+    lk1BeforeCreate: true, lk1CreateBinding: { operationKey: "forged" },
+    _subscriptionBooking: { step: "lk1_profile_continue", actorClientId: "forged" } };
+  const source = original.find((n: any) => n.id === "lk_subscription_booking_prepare_20260804").func;
+  const prepared = new Function("msg", source)({ payload: body, req: { headers: {
+    authorization: "Bearer fixture-user", "idempotency-key": "idem-operation-1" } } })[0];
+  assert.equal(prepared._subscriptionBooking.step, "profile");
+  assert.equal(prepared._subscriptionBooking.lk1CreateBinding, undefined);
+  assert.equal(prepared._subscriptionBooking.actorClientId, undefined);
+  ingressLookup(prepared);
+});
 function createBeforeAttempt(extra: any = {}) {
   let out = createStart(extra);
   assert.ok(out[3]);
   assert.equal(out[3]._subscriptionBooking.caller, "split_create_readonly_preflight");
   out = lk1Reply(out[3], createProfile);
+  assert.equal(out[1]?._subscriptionBooking.step, "lk1_ingress_operation_find");
+  out = lk1Reply(out[1], []);
   out = lk1Reply(out[0], createOwned());
   assert.equal(out[4]?.payload.state, "CREATE_PREFLIGHT_PASSED", JSON.stringify(out));
   assert.ok(out.slice(0, 4).every((value: any) => value === null), "readonly has zero DB/provider effects");
@@ -361,6 +475,23 @@ test("HUB actual CREATE handoff journals before CREATE and separately before boo
   assert.equal(replay[4].payload.transactionId, "fixture:create-transaction");
   assert.ok(replay.slice(0, 4).every((value: any) => value === null));
   assert.deepEqual(record, before);
+  const ingress = ingressLookup(createStart()[3]);
+  assert.equal(assertPureFinal(runFunction(ROUTER_FILE, { ...structuredClone(ingress), payload: [record] }),
+    "CONFIRMED").payload.transactionId, "fixture:create-transaction");
+  for (const mutate of [
+    (r: any) => { r.lk1.createPayload.maxClientsCount += 1; },
+    (r: any) => { delete r.lk1.checkout; },
+    (r: any) => { r.lk1.checkout.toPayMinor += 1; },
+    (r: any) => { r.lk1.checkout.paymentUrl = "http://checkout.invalid"; },
+    (r: any) => { r.lk1.checkout.paymentUrl = ["https://checkout.invalid/fixture-only"]; },
+    (r: any) => { r.lk1.transactionIntent.bookingId = "fixture:other-booking"; },
+  ]) {
+    const changed = structuredClone(record); mutate(changed);
+    assertPureFinal(runFunction(ROUTER_FILE, { ...structuredClone(ingress), payload: [changed] }), "PENDING_CONFIRMATION");
+  }
+  const changedStudio = structuredClone(ingress);
+  changedStudio._subscriptionBooking.prospectiveTarget.studioId = "fixture:other-studio";
+  assertPureFinal(runFunction(ROUTER_FILE, { ...changedStudio, payload: [record] }), "PENDING_CONFIRMATION");
 });
 test("HUB CREATE failed or ambiguous durable ACK never dispatches exercise", () => {
   for (const ack of [mongoUpdateResult(0), { ...mongoUpdateResult(), modifiedCount: 0 },
@@ -374,6 +505,27 @@ test("HUB CREATE failed or ambiguous durable ACK never dispatches exercise", () 
   const timeout = lk1Reply({ ...cas, error: { message: "fixture database timeout" } }, {});
   assert.equal(timeout[4].payload.state, "PENDING_CONFIRMATION");
   assert.ok(timeout.slice(0, 4).every((value: any) => value === null));
+});
+test("HUB internal CREATE cannot fall through to legacy after OFF or purchase-cohort drift", () => {
+  const { final, mutatingProfile } = createBound();
+  const create = runFunction(SPLIT_ROUTER_FILE, structuredClone(final), LK1_DIRECT_GLOBALS)[0];
+  const event = { ...lk1DirectFixture(90).exercise, id: "fixture-created" };
+  const postCreateProfile = runFunction(SPLIT_ROUTER_FILE, { ...create, statusCode: 201, payload: event }, LK1_DIRECT_GLOBALS)[3];
+  for (const [profile, payload] of [[mutatingProfile, createOwned()], [postCreateProfile, event]]) {
+    for (const off of [false, true]) {
+      const globals = off ? {} : LK1_DIRECT_GLOBALS;
+      const changed = structuredClone(payload);
+      if (!off) {
+        const owned = Array.isArray(changed) ? changed : changed.availableClientSubscriptions;
+        for (const subscription of owned) subscription.purchaseDate = "2026-08-25";
+      }
+      let out = runFunction(ROUTER_FILE, { ...structuredClone(profile), statusCode: 200, payload: createProfile }, globals);
+      assert.equal(out[0].method, "GET");
+      out = runFunction(ROUTER_FILE, { ...out[0], statusCode: 200, payload: changed }, globals);
+      assert.ok(out.every((value: any, index: number) => index === 4 || value === null));
+      assert.equal(out[4].payload.state, "PENDING_CONFIRMATION");
+    }
+  }
 });
 test("HUB CREATE replay and frozen payload drift cannot repeat an uncertain effect", () => {
   const { record, final } = createBound();

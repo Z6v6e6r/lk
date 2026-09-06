@@ -94,6 +94,46 @@ const lk1MongoInserted = (value, expectedId) => isObj(value)
   && Object.keys(value).length === 2 && value.acknowledged === true
   && typeof value.insertedId === "string" && value.insertedId === expectedId;
 
+// HUB_PROFILE
+// HTTP and split ingress rebuild server contexts from explicit allowlists.
+// Never honor a client-supplied skip/read-complete marker at profile entry.
+delete ctx.lk1IngressReplay;
+const split = msg._splitCtx;
+const approval = split?.lk1ReadOnlyApproval;
+const internalCreate = ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding !== undefined
+  || (ctx.caller === "split" && approval !== undefined);
+if (internalCreate) {
+  const key = `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`;
+  const common = ctx.caller === "split" && ctx.managedAction === "CREATE_GAME"
+    && split?.action === "create" && split.subscriptionCreatePreflightDone === true
+    && split.operationId === ctx.operationId && split.clientSubscriptionId === ctx.clientSubscriptionId
+    && approval?.operationId === ctx.operationId && approval.actorClientId === ctx.actorClientId
+    && approval.clientSubscriptionId === ctx.clientSubscriptionId
+    && JSON.stringify(approval.createPayload) === JSON.stringify(ctx.lk1CreatePayload);
+  const before = common && ctx.lk1BeforeCreate === true
+    && split.step === "subscription_create_preflight_complete"
+    && ctx.lk1ApprovedActor === ctx.actorClientId && !split.exerciseId && split.ownsExercise !== true
+    && !ctx.lk1CreateBinding && !split.lk1CreateBinding && ctx.exerciseId === `preflight:${ctx.operationId}`;
+  const after = common && ctx.lk1BeforeCreate !== true && split.step === "create_exercise"
+    && split.ownsExercise === true && split.lk1CreateDispatchUsed === true
+    && ctx.exerciseId === split.exerciseId && typeof ctx.exerciseId === "string"
+    && !ctx.exerciseId.startsWith("preflight:") && ctx.lk1CreateBinding?.operationKey === key
+    && split.lk1CreateBinding?.operationKey === key
+    && typeof ctx.lk1CreateBinding.fingerprint === "string"
+    && ctx.lk1CreateBinding.fingerprint === split.lk1CreateBinding.fingerprint;
+  if (!before && !after) return lk1Stop(ctx, "LK1_CREATE_CONTINUATION_UNBOUND");
+} else if (ctx.action !== "release") {
+  if (!/^[A-Za-z0-9._:-]{8,200}$/.test(ctx.operationId || "")
+    || typeof ctx.tenantKey !== "string" || !/^[A-Za-z0-9_-]+$/.test(ctx.tenantKey)) {
+    return lk1Stop(ctx, "LK1_REQUEST_IDENTITY_INVALID");
+  }
+  ctx.lk1IngressReplay = true;
+  return lk1Find(ctx, "lk1_ingress_operation_find", {
+    _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`,
+  });
+}
+ctx.step = "lk1_profile_continue";
+
 // HUB_EXERCISE
 const visitOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
 let ruleConfigured = false;
@@ -113,9 +153,15 @@ if (ownedSubscriptions.length === 0) {
     });
   }
 const productRule = lk1Config(ownedSubscriptions);
+if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && !productRule.matched) {
+  return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
+}
 if (productRule.matched) {
     ctx.managedAction = managedActionForTarget({ ...ctx, category: resolveCategory(exercise) });
     const quote = lk1Quote(ctx, exercise, ownedSubscriptions);
+    if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && quote.legacy === true) {
+      return lk1Stop(ctx, "LK1_CREATE_COHORT_CHANGED");
+    }
     if (quote.code === "LK1_EVENT_TARIFF_UNVERIFIED" && !ctx.lk1TariffProof
       && ctx.caller === "http" && ["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(ctx.managedAction)) {
       ctx.lk1TariffExercise = exercise;
