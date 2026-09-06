@@ -11,6 +11,7 @@ import { canonicalJson, sha256 } from "./lib/vivaGameProjectionCutoverContract.m
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
 import {
   assertMongoWriteBarrier,
+  hashLiveFullCollection,
   mongoAuthenticationRestrictionsSha256,
 } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import {
@@ -22,6 +23,7 @@ import {
   validateRemediationApplyReceipt,
   validateRemediationBackup,
 } from "./lib/vivaGameProjectionRemediationExecution.mjs";
+import { validateRemediationExecutionIndex } from "./lib/vivaGameProjectionRemediationPackage.mjs";
 import {
   assertExclusiveFenceLease,
   assertNoConcurrentMongoWrites,
@@ -44,13 +46,31 @@ const MAX_BACKUP_BYTES = 1024 * 1024 * 1024;
 const WRITE_COMMANDS = new Set([
   "insert", "update", "delete", "findAndModify", "createIndexes", "drop", "dropDatabase", "renameCollection", "collMod",
 ]);
+const INDEX_INPUT_OPTIONS = Object.freeze({
+  plan: "--plan",
+  cutoverPlan: "--cutover-plan",
+  migrationPlanBundle: "--migration-plan-bundle",
+  packet: "--packet",
+  enrichment: "--enrichment",
+  identityAudit: "--identity-audit",
+  providerCapture: "--provider-capture",
+  mongoCapture: "--mongo-capture",
+  fullBackup: "--full-backup",
+  fullBackupManifest: "--full-backup-manifest",
+  restoreRehearsalReceipt: "--restore-rehearsal-receipt",
+  restoredArtifact: "--restored-artifact",
+  fenceReceipt: "--fence-receipt",
+  mongoWriteBarrierReceipt: "--mongo-write-barrier-receipt",
+  migrationConnectionFile: "--migration-connection-file",
+  flow: "--flow-path",
+});
 
 const fail = (message) => { throw new Error(message); };
 const safeError = (error) => String(error instanceof Error ? error.message : error)
   .replace(/mongodb(?:\+srv)?:\/\/[^\s]+/gi, "[REDACTED_MONGO_URI]")
   .slice(0, 500);
 
-function parseArgs(argv) {
+function parseValues(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
@@ -60,12 +80,57 @@ function parseArgs(argv) {
     }
     values.set(key, value);
   }
+  return values;
+}
+
+function expandExecutionIndex(values) {
+  const executionIndexPath = values.get("--execution-index");
+  if (!executionIndexPath) return values;
+  const allowed = new Set([
+    "--execution-index", "--expected-execution-index-sha256", "--mode", "--report", "--backup-dir",
+    "--backup", "--expected-backup-sha256", "--apply-receipt", "--expected-apply-report-sha256",
+  ]);
+  if ([...values.keys()].some((key) => !allowed.has(key))) {
+    fail("Remediation execution-index mode does not allow overriding pinned inputs");
+  }
+  const expectedSha256 = values.get("--expected-execution-index-sha256");
+  if (!expectedSha256) fail("Missing --expected-execution-index-sha256");
+  const indexRead = readPrivateJson(executionIndexPath, "Remediation execution index", MAX_JSON_BYTES);
+  const index = validateRemediationExecutionIndex(indexRead.value, {
+    expectedSha256,
+    bytes: indexRead.bytes,
+  });
+  const expanded = new Map([...values].filter(([key]) => !key.startsWith("--execution-index")));
+  const pinnedBytes = new Map();
+  for (const [name, option] of Object.entries(INDEX_INPUT_OPTIONS)) {
+    const entry = index.inputs[name];
+    const maximumSize = new Set(["fullBackup", "restoredArtifact"]).has(name)
+      ? MAX_BACKUP_BYTES
+      : name === "flow" ? 256 * 1024 * 1024 : MAX_JSON_BYTES;
+    const bytes = readPrivateBytes(entry.path, `Remediation execution index ${name}`, maximumSize);
+    if (sha256(bytes) !== entry.sha256) fail(`Remediation execution index ${name} digest mismatch`);
+    pinnedBytes.set(name, bytes);
+    expanded.set(option, entry.path);
+  }
+  let plan;
+  try { plan = JSON.parse(pinnedBytes.get("plan").toString("utf8")); }
+  catch { fail("Remediation execution index plan is not valid JSON"); }
+  if (canonicalJson(plan?.repository) !== canonicalJson(index.repository)
+    || plan?.source?.sourceFlowSha256 !== index.inputs.flow.sha256) {
+    fail("Remediation execution index does not bind the plan repository and runtime flow");
+  }
+  expanded.set("--expected-plan-sha256", index.inputs.plan.sha256);
+  return expanded;
+}
+
+export function parseArgs(argv) {
+  const values = expandExecutionIndex(parseValues(argv));
   const mode = values.get("--mode");
   if (!new Set(["verify", "apply", "restore", "reconcile", "reconcile-restore"]).has(mode)) {
     fail("--mode must be verify, apply, restore, reconcile, or reconcile-restore");
   }
   for (const key of [
-    "--plan", "--expected-plan-sha256", "--cutover-plan", "--packet", "--enrichment", "--identity-audit",
+    "--plan", "--expected-plan-sha256", "--cutover-plan", "--migration-plan-bundle", "--packet", "--enrichment", "--identity-audit",
     "--provider-capture", "--mongo-capture", "--full-backup", "--full-backup-manifest",
     "--restore-rehearsal-receipt", "--restored-artifact", "--fence-receipt", "--mongo-write-barrier-receipt",
     "--migration-connection-file", "--flow-path", "--report",
@@ -104,7 +169,7 @@ function writeBackup(backupDirectory, planSha256, backup, plan) {
   return { path: filePath, sha256: sha256(bytes), value: readback.value };
 }
 
-function assertProductionFence(values, receipt, plan, cutoverPlan, nowMs) {
+function assertProductionFence(values, receipt, plan, cutoverPlan, nowMs, { allowExpiredLease = false } = {}) {
   if (typeof process.getuid !== "function" || process.getuid() !== 0
     || path.resolve(values.get("--flow-path")) !== PRODUCTION_FLOW_PATH
     || os.hostname() !== receipt.hostname) {
@@ -121,6 +186,7 @@ function assertProductionFence(values, receipt, plan, cutoverPlan, nowMs) {
     fenceTokenSha256: plan.source.fenceTokenSha256,
     lockPath: cutoverPlan.writerFence.lockPath,
     nowMs,
+    allowExpiredLease,
   });
   assertExclusiveFenceLease(receipt);
   const pm2 = spawnSync("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
@@ -137,6 +203,15 @@ function assertProductionFence(values, receipt, plan, cutoverPlan, nowMs) {
   }
 }
 
+export async function assertFrozenRemediationFullCollection(collection, plan, hashLive = hashLiveFullCollection) {
+  const live = await hashLive(collection);
+  if (live?.documentCount !== plan.source.fullBackupDocumentCount
+    || live?.fullCollectionStateSha256 !== plan.source.fullCollectionStateSha256) {
+    fail("Live games.lk_games state does not exactly match the frozen remediation backup under the Mongo barrier");
+  }
+  return live;
+}
+
 async function run({ mode, values }, dependencies = {}) {
   const clockNow = () => (typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()));
   const planRead = jsonArtifact(values, "--plan", "Remediation plan");
@@ -144,6 +219,7 @@ async function run({ mode, values }, dependencies = {}) {
   const expectedPlanSha256 = values.get("--expected-plan-sha256");
   const inputs = {
     cutoverPlan: jsonArtifact(values, "--cutover-plan", "Remediation cutover plan"),
+    migrationPlanBundle: jsonArtifact(values, "--migration-plan-bundle", "Remediation migration plan bundle"),
     packet: jsonArtifact(values, "--packet", "Remediation packet"),
     enrichment: jsonArtifact(values, "--enrichment", "Remediation enrichment"),
     identityAudit: jsonArtifact(values, "--identity-audit", "Remediation identity audit"),
@@ -161,6 +237,7 @@ async function run({ mode, values }, dependencies = {}) {
     planBytes: planRead.bytes,
     artifacts: inputs,
     nowMs: clockNow(),
+    enforceFreshness: mode === "apply" || mode === "verify",
   });
   (dependencies.assertExecutorSources || assertExactExecutorSources)(plan);
   const flowConnection = readFlowConnection(values.get("--flow-path"), plan.source.sourceFlowSha256);
@@ -190,6 +267,7 @@ async function run({ mode, values }, dependencies = {}) {
   let phase = "CONNECTING";
   let backupPath = null;
   let backupSha256 = null;
+  const recoveryMode = new Set(["reconcile", "reconcile-restore", "restore"]).has(mode);
   client.on?.("commandStarted", (event) => { if (WRITE_COMMANDS.has(event.commandName)) writeCommandCount += 1; });
   try {
     if (!dependencies.mongoClient) await client.connect();
@@ -204,8 +282,12 @@ async function run({ mode, values }, dependencies = {}) {
         fail("Remediation fence or Mongo barrier receipt changed during execution");
       }
       if (dependencies.assertProductionFence) {
-        await dependencies.assertProductionFence(currentFence.value, plan, inputs.cutoverPlan.value, clockNow());
-      } else assertProductionFence(values, currentFence.value, plan, inputs.cutoverPlan.value, clockNow());
+        await dependencies.assertProductionFence(currentFence.value, plan, inputs.cutoverPlan.value, clockNow(), {
+          allowExpiredLease: recoveryMode,
+        });
+      } else assertProductionFence(values, currentFence.value, plan, inputs.cutoverPlan.value, clockNow(), {
+        allowExpiredLease: recoveryMode,
+      });
       await assertMongoWriteBarrier(client, currentBarrier.value, {
         fenceTokenSha256: plan.source.fenceTokenSha256,
         cutoverPlanSha256: plan.source.cutoverPlanSha256,
@@ -215,6 +297,22 @@ async function run({ mode, values }, dependencies = {}) {
       await assertNoConcurrentMongoWrites(client);
     };
     await assertFence();
+    if (mode === "apply" || mode === "verify") {
+      await assertFrozenRemediationFullCollection(
+        collection,
+        plan,
+        dependencies.hashLiveFullCollection || hashLiveFullCollection,
+      );
+    } else {
+      journal.append("RECOVERY_CONTROLS_INTENT", {
+        planSha256: expectedPlanSha256,
+        expectedBackupSha256: values.get("--expected-backup-sha256"),
+        expectedApplyReportSha256: values.get("--expected-apply-report-sha256") || null,
+        fenceReceiptSha256: plan.source.fenceReceiptSha256,
+        mongoWriteBarrierReceiptSha256: plan.source.mongoWriteBarrierReceiptSha256,
+        initiatedAt: new Date(clockNow()).toISOString(),
+      });
+    }
     journal.append("TARGET_AND_FENCE_VERIFIED", { mongoTargetIdentitySha256: plan.source.mongoTargetIdentitySha256 });
     if (mode === "verify") {
       if (writeCommandCount !== 0) fail("Remediation verify attempted a Mongo write command");
@@ -250,6 +348,16 @@ async function run({ mode, values }, dependencies = {}) {
         || applyRead.value?.backupSha256 !== backupSha256) fail("Remediation apply report digest/binding mismatch");
       applyReceipt = applyRead.value?.applyReceipt;
       validateRemediationApplyReceipt(applyReceipt, plan, expectedPlanSha256);
+    }
+    if (recoveryMode) {
+      journal.append("RECOVERY_CONTROLS_VERIFIED", {
+        planSha256: expectedPlanSha256,
+        backupSha256,
+        applyReportSha256: values.get("--expected-apply-report-sha256") || null,
+        fenceReceiptSha256: plan.source.fenceReceiptSha256,
+        mongoWriteBarrierReceiptSha256: plan.source.mongoWriteBarrierReceiptSha256,
+        verifiedAt: new Date(clockNow()).toISOString(),
+      });
     }
     if (mode === "reconcile" || mode === "reconcile-restore") {
       const reconciliation = mode === "reconcile"
@@ -327,6 +435,9 @@ async function run({ mode, values }, dependencies = {}) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  if (!argv.includes("--execution-index") && dependencies.allowDirectInputs !== true) {
+    fail("Production remediation runner requires the exact execution index");
+  }
   const result = await run(parseArgs(argv), dependencies);
   process.stdout.write(`${JSON.stringify({
     mode: result.mode,
@@ -340,7 +451,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === SCRIPT_PATH) {
   if (process.argv.slice(2).includes("--help")) {
-    process.stdout.write("Usage: node scripts/run_viva_game_projection_remediation.mjs --mode verify|apply|restore|reconcile|reconcile-restore [exact private evidence arguments]\nApply and restore require separate live authorization and their exact environment confirmation phrase.\n");
+    process.stdout.write("Usage: node scripts/run_viva_game_projection_remediation.mjs --mode verify|apply|restore|reconcile|reconcile-restore --execution-index /private/index.json --expected-execution-index-sha256 SHA256 --report /private/new-report.json\nProduction execution requires the exact reviewed index. Apply and restore also require separate live authorization and their exact environment confirmation phrase.\n");
   } else {
     main().catch((error) => {
       process.stderr.write(`${safeError(error)}\n`);

@@ -7,6 +7,36 @@ const HASH_RE = /^[a-f0-9]{64}$/;
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const MAX_REMEDIATION_OPERATIONS = 100;
+export const REMEDIATION_RUNTIME_PACKAGE_NAMES = Object.freeze([
+  "@mongodb-js/saslprep",
+  "bson",
+  "memory-pager",
+  "mongodb",
+  "mongodb-connection-string-url",
+  "punycode",
+  "sparse-bitfield",
+  "tr46",
+  "webidl-conversions",
+  "whatwg-url",
+]);
+const MAX_REMEDIATION_RUNTIME_FILES = 2_000;
+const MAX_REMEDIATION_RUNTIME_BYTES = 32 * 1024 * 1024;
+export const REMEDIATION_EXECUTOR_SOURCE_PATHS = Object.freeze([
+  "scripts/run_viva_game_projection_fenced_remediation.sh",
+  "scripts/run_viva_game_projection_remediation_bootstrap.mjs",
+  "scripts/run_viva_game_projection_remediation.mjs",
+  "scripts/run_viva_game_projection_tenant_migration.mjs",
+  "scripts/prepare_viva_game_projection_tenant_migration.mjs",
+  "scripts/lib/vivaGameProjectionRemediationExecution.mjs",
+  "scripts/lib/vivaGameProjectionRemediationPackage.mjs",
+  "scripts/lib/vivaGameProjectionMongoWriteBarrier.mjs",
+  "scripts/lib/vivaGameProjectionExecutorSource.mjs",
+  "scripts/lib/vivaGameProjectionCutoverContract.mjs",
+  "scripts/lib/vivaGameProjectionTenantMigrationExecution.mjs",
+  "scripts/lib/vivaGameProjectionTenantMigration.mjs",
+  "scripts/lib/vivaGameProjectionCutoverPacketValidation.mjs",
+  "scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs",
+]);
 export const REMEDIATION_CATEGORIES = Object.freeze([
   "CANCEL_AND_ARCHIVE",
   "QUARANTINE_AND_ARCHIVE",
@@ -64,6 +94,49 @@ const byteArtifact = (artifacts, name, expectedSha256) => {
   if (sha256(entry.bytes) !== expectedSha256) fail(`Remediation ${name} artifact digest mismatch`);
   return entry.bytes;
 };
+
+export function validateMigrationPlanBundle(artifactEntry, cutoverPlan) {
+  if (!Buffer.isBuffer(artifactEntry?.bytes) || !isObject(artifactEntry.value)) {
+    fail("Migration plan bundle artifact is missing");
+  }
+  const bundle = artifactEntry.value;
+  exactKeys(bundle, ["formatVersion", "kind", "plans"], "Migration plan bundle");
+  if (bundle.formatVersion !== 1 || bundle.kind !== "viva-game-projection-migration-plan-bundle"
+    || !Array.isArray(bundle.plans) || bundle.plans.length < 1) {
+    fail("Migration plan bundle contract mismatch");
+  }
+  const expectedHashes = [...(cutoverPlan?.migration?.planSha256s || [])].sort();
+  const observedHashes = [];
+  const mongoIds = [];
+  for (const [index, entry] of bundle.plans.entries()) {
+    exactKeys(entry, ["sha256", "bytesBase64"], `Migration plan bundle entry ${index}`);
+    assertHash(entry.sha256, `Migration plan bundle entry ${index}`);
+    if (typeof entry.bytesBase64 !== "string" || !entry.bytesBase64.trim()) {
+      fail("Migration plan bundle contains empty plan bytes");
+    }
+    const bytes = Buffer.from(entry.bytesBase64, "base64");
+    if (bytes.toString("base64") !== entry.bytesBase64 || sha256(bytes) !== entry.sha256) {
+      fail("Migration plan bundle contains a non-canonical or mismatched byte stream");
+    }
+    let plan;
+    try { plan = JSON.parse(bytes.toString("utf8")); } catch { fail("Migration plan bundle contains invalid JSON"); }
+    if (plan?.formatVersion !== 1 || plan?.eligibleCount !== plan?.operations?.length) {
+      fail("Migration plan bundle contains an invalid eligible operation set");
+    }
+    observedHashes.push(entry.sha256);
+    for (const operation of plan.operations) {
+      const keys = Object.keys(operation?.filter?._id || {});
+      const id = operation?.filter?._id?.$oid;
+      if (keys.length !== 1 || keys[0] !== "$oid" || !OBJECT_ID_RE.test(String(id || ""))) {
+        fail("Migration plan bundle contains an invalid Mongo identity");
+      }
+      mongoIds.push(String(id).toLowerCase());
+    }
+  }
+  exactSet(observedHashes, expectedHashes, "Migration plan bundle cutover-plan digest set");
+  if (new Set(mongoIds).size !== mongoIds.length) fail("Migration plan bundle contains duplicate Mongo identities");
+  return mongoIds.sort();
+}
 const parseFullCollectionArtifact = (bytes, label) => {
   let documents;
   try { documents = BSON.EJSON.parse(bytes.toString("utf8"), { relaxed: false }); }
@@ -85,6 +158,14 @@ const parseFullCollectionArtifact = (bytes, label) => {
     fullCollectionStateSha256: sha256(canonicalJson(rows)),
   };
 };
+const isActiveLegacyDocument = (document, dateFrom) => document?.archived !== true
+  && !new Set(["CANCELLED", "CANCELED"]).has(String(document?.status || ""))
+  && (document?.tenantKey === null || document?.tenantKey === undefined)
+  && (document?.revision === null || document?.revision === undefined)
+  && typeof document?.booking?.date === "string" && document.booking.date >= dateFrom
+  && typeof document?.booking?.timeFrom === "string" && document.booking.timeFrom !== ""
+  && typeof document?.booking?.timeTo === "string" && document.booking.timeTo !== ""
+  && typeof document?.booking?.studioId === "string" && document.booking.studioId !== "";
 const categoryForReview = (review) => {
   if (review?.reviewResult === "CANCELLED_READBACK_CONFIRMED"
     || (review?.reviewResult === "MANUAL_REVIEW_REQUIRED"
@@ -260,6 +341,7 @@ export function validateRemediationPlanShape(plan) {
     "formatVersion", "kind", "state", "generatedAt", "mutationAt", "operationId", "dryRunOnly",
     "executionAuthorized", "liveMutationAuthorized", "productionWritesPerformed", "source", "counts",
     "operations", "expectedPostRemediation", "repository", "executorSources", "executorSourcesSha256",
+    "runtimeDependencies", "runtimeDependenciesSha256",
   ], "Remediation plan");
   if (plan.formatVersion !== 2 || plan.kind !== "viva-game-projection-remediation-execution-plan"
     || plan.state !== "PREPARED_NOT_AUTHORIZED" || plan.dryRunOnly !== true
@@ -285,32 +367,93 @@ export function validateRemediationPlanShape(plan) {
       fail("Remediation executor source entry is invalid");
     }
   }
-  const requiredExecutorSources = [
-    "scripts/run_viva_game_projection_fenced_remediation.sh",
-    "scripts/run_viva_game_projection_remediation.mjs",
-    "scripts/run_viva_game_projection_tenant_migration.mjs",
-    "scripts/lib/vivaGameProjectionRemediationExecution.mjs",
-    "scripts/lib/vivaGameProjectionMongoWriteBarrier.mjs",
-    "scripts/lib/vivaGameProjectionExecutorSource.mjs",
-    "scripts/lib/vivaGameProjectionCutoverContract.mjs",
-    "scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs",
-  ];
-  exactSet(plan.executorSources.map((entry) => entry.path), requiredExecutorSources, "Remediation executor source path set");
+  exactSet(
+    plan.executorSources.map((entry) => entry.path),
+    REMEDIATION_EXECUTOR_SOURCE_PATHS,
+    "Remediation executor source path set",
+  );
+  assertHash(plan.runtimeDependenciesSha256, "Remediation runtime dependency manifest");
+  if (sha256(canonicalJson(plan.runtimeDependencies)) !== plan.runtimeDependenciesSha256) {
+    fail("Remediation runtime dependency manifest digest mismatch");
+  }
+  const runtime = plan.runtimeDependencies;
+  exactKeys(runtime, [
+    "formatVersion", "kind", "installMethod", "packageJsonSha256", "packageJsonBytesBase64",
+    "packageLockSha256", "packageLockBytesBase64", "packages", "files",
+  ], "Remediation runtime dependency manifest");
+  assertHash(runtime.packageJsonSha256, "Remediation package.json digest");
+  assertHash(runtime.packageLockSha256, "Remediation package-lock digest");
+  const packageJsonBytes = Buffer.from(String(runtime.packageJsonBytesBase64 || ""), "base64");
+  const packageLockBytes = Buffer.from(String(runtime.packageLockBytesBase64 || ""), "base64");
+  if (runtime.installMethod !== "fresh-private-npm-ci-ignore-scripts-omit-dev"
+    || !runtime.packageJsonBytesBase64 || packageJsonBytes.toString("base64") !== runtime.packageJsonBytesBase64
+    || sha256(packageJsonBytes) !== runtime.packageJsonSha256
+    || !runtime.packageLockBytesBase64 || packageLockBytes.toString("base64") !== runtime.packageLockBytesBase64
+    || sha256(packageLockBytes) !== runtime.packageLockSha256) {
+    fail("Remediation package manifest byte stream mismatch");
+  }
+  let packageLock;
+  try { packageLock = JSON.parse(packageLockBytes.toString("utf8")); }
+  catch { fail("Remediation package-lock is not valid JSON"); }
+  if (runtime.formatVersion !== 1 || runtime.kind !== "viva-game-projection-runtime-dependency-snapshot"
+    || !Array.isArray(runtime.packages) || !Array.isArray(runtime.files)
+    || runtime.files.length < REMEDIATION_RUNTIME_PACKAGE_NAMES.length
+    || runtime.files.length > MAX_REMEDIATION_RUNTIME_FILES) {
+    fail("Remediation runtime dependency manifest contract mismatch");
+  }
+  const packageNames = runtime.packages.map((entry) => entry?.name);
+  exactSet(packageNames, REMEDIATION_RUNTIME_PACKAGE_NAMES, "Remediation runtime package set");
+  for (const entry of runtime.packages) {
+    exactKeys(entry, ["name", "version", "integrity"], "Remediation runtime package entry");
+    const locked = packageLock?.packages?.[`node_modules/${entry.name}`];
+    if (!String(entry.version || "").trim() || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(String(entry.integrity || ""))
+      || locked?.version !== entry.version || locked?.integrity !== entry.integrity) {
+      fail("Remediation runtime package differs from the exact package lock");
+    }
+  }
+  let runtimeBytes = 0;
+  const filePaths = [];
+  for (const entry of runtime.files) {
+    exactKeys(entry, ["path", "size", "sha256", "bytesBase64"], "Remediation runtime file entry");
+    const filePath = String(entry.path || "");
+    const parts = filePath.split("/");
+    const matchesPackage = REMEDIATION_RUNTIME_PACKAGE_NAMES.some((name) => (
+      filePath.startsWith(`node_modules/${name}/`)
+    ));
+    if (!matchesPackage || filePath.includes("\\") || parts.some((part) => !part || part === "." || part === "..")
+      || !Number.isSafeInteger(entry.size) || entry.size < 0 || !HASH_RE.test(String(entry.sha256 || ""))) {
+      fail("Remediation runtime dependency file path or metadata is invalid");
+    }
+    const bytes = Buffer.from(String(entry.bytesBase64 || ""), "base64");
+    if (bytes.toString("base64") !== entry.bytesBase64 || bytes.length !== entry.size || sha256(bytes) !== entry.sha256) {
+      fail("Remediation runtime dependency file byte stream mismatch");
+    }
+    runtimeBytes += bytes.length;
+    filePaths.push(filePath);
+  }
+  if (runtimeBytes > MAX_REMEDIATION_RUNTIME_BYTES
+    || JSON.stringify(filePaths) !== JSON.stringify([...filePaths].sort())
+    || new Set(filePaths).size !== filePaths.length
+    || REMEDIATION_RUNTIME_PACKAGE_NAMES.some((name) => !filePaths.includes(`node_modules/${name}/package.json`))) {
+    fail("Remediation runtime dependency file closure is incomplete or oversized");
+  }
   exactKeys(plan.source, [
     "packetSha256", "enrichmentSha256", "identityAuditSha256", "providerCaptureSha256",
     "mongoCaptureSha256", "sourceFlowSha256", "servicePrincipalSha256", "cutoverPlanSha256",
+    "migrationPlanBundleSha256", "eligibleMongoIdSetSha256",
     "fullBackupSha256", "fullBackupManifestSha256", "restoreRehearsalReceiptSha256",
     "fullCollectionStateSha256", "restoredArtifactSha256", "fullBackupDocumentCount",
     "fenceReceiptSha256", "mongoWriteBarrierReceiptSha256", "fenceTokenSha256",
     "mongoTargetIdentitySha256", "applicationConnectionFingerprint", "migrationConnectionFingerprint", "replicaSetName",
     "tenantKeySha256", "runtimeMode", "migrationAuthenticationRestrictionsSha256",
-    "captureSessionId", "fenceObservedAt", "fenceExpiresAt",
+    "captureSessionId", "fenceObservedAt", "fenceExpiresAt", "barrierInstalledAt",
     "backupStartedAt", "backupCompletedAt", "restoreRehearsedAt", "providerCapturedAt", "mongoCapturedAt",
     "itemFingerprintSetSha256",
   ], "Remediation source");
   for (const key of [
     "packetSha256", "enrichmentSha256", "identityAuditSha256", "providerCaptureSha256",
     "mongoCaptureSha256", "sourceFlowSha256", "servicePrincipalSha256", "cutoverPlanSha256",
+    "migrationPlanBundleSha256", "eligibleMongoIdSetSha256",
     "fullBackupSha256", "fullBackupManifestSha256", "restoreRehearsalReceiptSha256",
     "fullCollectionStateSha256", "restoredArtifactSha256",
     "fenceReceiptSha256", "mongoWriteBarrierReceiptSha256", "fenceTokenSha256",
@@ -329,6 +472,7 @@ export function validateRemediationPlanShape(plan) {
   }
   const observedAt = assertTimestamp(plan.source.fenceObservedAt, "Remediation fence observedAt");
   const expiresAt = assertTimestamp(plan.source.fenceExpiresAt, "Remediation fence expiresAt");
+  const barrierInstalledAt = assertTimestamp(plan.source.barrierInstalledAt, "Remediation barrier installedAt");
   const backupStartedAt = assertTimestamp(plan.source.backupStartedAt, "Remediation backup startedAt");
   const backupCompletedAt = assertTimestamp(plan.source.backupCompletedAt, "Remediation backup completedAt");
   const restoreRehearsedAt = assertTimestamp(plan.source.restoreRehearsedAt, "Remediation restore rehearsedAt");
@@ -337,7 +481,8 @@ export function validateRemediationPlanShape(plan) {
   const generatedAt = Date.parse(plan.generatedAt);
   const mutationAt = Date.parse(plan.mutationAt);
   if (expiresAt <= observedAt || backupStartedAt < observedAt || backupCompletedAt < backupStartedAt
-    || restoreRehearsedAt < backupCompletedAt || providerAt < restoreRehearsedAt || mongoAt < providerAt
+    || restoreRehearsedAt < backupCompletedAt || barrierInstalledAt < observedAt
+    || barrierInstalledAt >= expiresAt || providerAt < barrierInstalledAt || mongoAt < providerAt
     || generatedAt < providerAt || generatedAt < mongoAt || generatedAt >= expiresAt
     || mutationAt < generatedAt || mutationAt >= expiresAt) {
     fail("Remediation evidence was not captured under one held fence in the required order");
@@ -393,6 +538,7 @@ export function validateExecutableRemediationPlan(plan, {
   expectedExecutorSourcesSha256,
   nowMs,
   maximumAgeMs = 15 * 60_000,
+  enforceFreshness = true,
 } = {}) {
   const validated = validateRemediationPlanShape(plan);
   assertHash(expectedPlanSha256, "Expected remediation plan digest");
@@ -402,6 +548,7 @@ export function validateExecutableRemediationPlan(plan, {
   }
   const packet = artifact(artifacts, "packet", plan.source.packetSha256);
   const cutoverPlan = artifact(artifacts, "cutoverPlan", plan.source.cutoverPlanSha256);
+  artifact(artifacts, "migrationPlanBundle", plan.source.migrationPlanBundleSha256);
   const enrichment = artifact(artifacts, "enrichment", plan.source.enrichmentSha256);
   const identityAudit = artifact(artifacts, "identityAudit", plan.source.identityAuditSha256);
   const providerCapture = artifact(artifacts, "providerCapture", plan.source.providerCaptureSha256);
@@ -435,6 +582,21 @@ export function validateExecutableRemediationPlan(plan, {
     || cutoverPlan.liveMutationAuthorized !== false) {
     fail("Remediation cutover-plan internal binding mismatch");
   }
+  const eligibleMongoIds = validateMigrationPlanBundle(artifacts.migrationPlanBundle, cutoverPlan);
+  const remediationMongoIds = validated.operations.map(({ mongoId: id }) => id).sort();
+  const activeLegacyMongoIds = fullBackup.documents
+    .filter((document) => isActiveLegacyDocument(document, cutoverPlan.migration?.futureBoundaryDate))
+    .map((document) => document._id.toHexString()).sort();
+  if (sha256(canonicalJson(eligibleMongoIds)) !== plan.source.eligibleMongoIdSetSha256
+    || eligibleMongoIds.length !== plan.counts.alreadyEligibleCount
+    || remediationMongoIds.some((id) => eligibleMongoIds.includes(id))) {
+    fail("Remediation eligible and skipped identity sets overlap or differ from the frozen plan");
+  }
+  exactSet(
+    [...eligibleMongoIds, ...remediationMongoIds],
+    activeLegacyMongoIds,
+    "Remediation full active legacy identity partition",
+  );
   if (packet.formatVersion !== 2 || packet.kind !== "viva-game-projection-remediation-review-packet"
     || packet.captureSessionId !== plan.source.captureSessionId || packet.sourceFlowSha256 !== plan.source.sourceFlowSha256
     || sha256(String(packet.tenantKey || "")) !== plan.source.tenantKeySha256
@@ -533,7 +695,8 @@ export function validateExecutableRemediationPlan(plan, {
     || barrierReceipt.mongoTargetIdentitySha256 !== plan.source.mongoTargetIdentitySha256
     || barrierReceipt.applicationConnectionFingerprint !== plan.source.applicationConnectionFingerprint
     || barrierReceipt.migrationConnectionFingerprint !== plan.source.migrationConnectionFingerprint
-    || barrierReceipt.replicaSetName !== plan.source.replicaSetName) {
+    || barrierReceipt.replicaSetName !== plan.source.replicaSetName
+    || barrierReceipt.installedAt !== plan.source.barrierInstalledAt) {
     fail("Remediation Mongo write-barrier receipt mismatch");
   }
   const packetItems = new Map((packet.remediationItems || []).map((item) => [item?.itemFingerprint, item]));
@@ -580,7 +743,7 @@ export function validateExecutableRemediationPlan(plan, {
     }
   }
   exactSet(identityFingerprints, (identityAudit.results || []).map((result) => result?.itemFingerprint), "Remediation identity-audit target set");
-  if (nowMs !== undefined) {
+  if (enforceFreshness && nowMs !== undefined) {
     const generatedAt = Date.parse(plan.generatedAt);
     if (generatedAt > nowMs + 60_000 || nowMs - generatedAt > maximumAgeMs || Date.parse(plan.source.fenceExpiresAt) <= nowMs) {
       fail("Remediation plan is stale or its fence expired");

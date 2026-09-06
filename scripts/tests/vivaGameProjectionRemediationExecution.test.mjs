@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -14,12 +16,41 @@ import {
   reconcileRemediationRestoreOutcome,
   restoreRemediationBackup,
   runRemediationTransaction,
+  REMEDIATION_EXECUTOR_SOURCE_PATHS,
+  REMEDIATION_RUNTIME_PACKAGE_NAMES,
   validateExecutableRemediationPlan,
   validateRemediationApplyReceipt,
   validateRemediationPlanShape,
 } from "../lib/vivaGameProjectionRemediationExecution.mjs";
 import { hashCanonicalEjson } from "../lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { mongoAuthenticationRestrictionsSha256 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
+import {
+  buildRemediationExecutionPlan,
+  validateRemediationExecutionIndex,
+} from "../lib/vivaGameProjectionRemediationPackage.mjs";
+import {
+  buildFreshRemediationRuntimeDependencySnapshot,
+  parseArgs as parseRemediationPackageArgs,
+  prepareVivaGameProjectionRemediationPackage,
+} from "../lib/prepareVivaGameProjectionRemediationPackage.mjs";
+import {
+  main as runRemediationPackageBuilderBootstrap,
+  REMEDIATION_BUILDER_RUNTIME_PACKAGE_NAMES,
+  REMEDIATION_BUILDER_SOURCE_PATHS,
+  REMEDIATION_LIVE_EXECUTOR_SOURCE_PATHS,
+} from "../prepare_viva_game_projection_remediation_package.mjs";
+import {
+  assertFrozenRemediationFullCollection,
+  main as runRemediationRunner,
+  parseArgs as parseRemediationRunnerArgs,
+} from "../run_viva_game_projection_remediation.mjs";
+import {
+  BOOTSTRAP_REMEDIATION_EXECUTOR_SOURCE_PATHS,
+  BOOTSTRAP_REMEDIATION_RUNTIME_PACKAGE_NAMES,
+  main as runRemediationBootstrap,
+  materializeRemediationExecutorSnapshot,
+  verifyRemediationExecutorBootstrap,
+} from "../run_viva_game_projection_remediation_bootstrap.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -32,6 +63,44 @@ const cloneBson = (value) => BSON.EJSON.parse(
   { relaxed: false },
 );
 
+const runtimeDependencyFixture = () => {
+  const packageJsonBytes = Buffer.from(`${JSON.stringify({ name: "remediation-runtime-fixture", private: true })}\n`);
+  const packageEntries = Object.fromEntries(REMEDIATION_RUNTIME_PACKAGE_NAMES.map((name, index) => [
+    `node_modules/${name}`,
+    {
+      version: `1.0.${index}`,
+      resolved: `https://registry.npmjs.org/${name.replace("/", "%2f")}/-/${name.split("/").at(-1)}-1.0.${index}.tgz`,
+      integrity: `sha512-${Buffer.from(`integrity:${name}`).toString("base64")}`,
+    },
+  ]));
+  const packageLockBytes = Buffer.from(`${JSON.stringify({ lockfileVersion: 3, packages: packageEntries }, null, 2)}\n`);
+  const packages = REMEDIATION_RUNTIME_PACKAGE_NAMES.map((name) => ({
+    name,
+    version: packageEntries[`node_modules/${name}`].version,
+    integrity: packageEntries[`node_modules/${name}`].integrity,
+  }));
+  const files = REMEDIATION_RUNTIME_PACKAGE_NAMES.map((name) => {
+    const bytes = Buffer.from(`${JSON.stringify({ name, version: packageEntries[`node_modules/${name}`].version })}\n`);
+    return {
+      path: `node_modules/${name}/package.json`,
+      size: bytes.length,
+      sha256: sha256(bytes),
+      bytesBase64: bytes.toString("base64"),
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    formatVersion: 1,
+    kind: "viva-game-projection-runtime-dependency-snapshot",
+    installMethod: "fresh-private-npm-ci-ignore-scripts-omit-dev",
+    packageJsonSha256: sha256(packageJsonBytes),
+    packageJsonBytesBase64: packageJsonBytes.toString("base64"),
+    packageLockSha256: sha256(packageLockBytes),
+    packageLockBytesBase64: packageLockBytes.toString("base64"),
+    packages,
+    files,
+  };
+};
+
 function fixture() {
   const fenceToken = "fixture-remediation-fence-token-with-entropy";
   const fenceTokenSha256 = sha256(fenceToken);
@@ -39,6 +108,7 @@ function fixture() {
   const backupStartedAt = "2026-09-06T10:00:10.000Z";
   const backupCompletedAt = "2026-09-06T10:00:20.000Z";
   const restoreRehearsedAt = "2026-09-06T10:00:30.000Z";
+  const barrierInstalledAt = "2026-09-06T10:00:45.000Z";
   const providerCapturedAt = "2026-09-06T10:01:00.000Z";
   const mongoCapturedAt = "2026-09-06T10:02:00.000Z";
   const generatedAt = "2026-09-06T10:03:00.000Z";
@@ -47,26 +117,20 @@ function fixture() {
   const captureSessionId = "remediation-fixture-session-01";
   const operationId = "viva-remediation-fixture-01";
   const tenantKey = "fixture-tenant";
-  const sourceFlowSha256 = "a".repeat(64);
+  const sourceFlowBytes = Buffer.from("[{\"id\":\"fixture-flow\"}]\n");
+  const sourceFlowSha256 = sha256(sourceFlowBytes);
   const servicePrincipalSha256 = "b".repeat(64);
   const mongoTargetIdentitySha256 = "c".repeat(64);
   const applicationConnectionFingerprint = "e".repeat(64);
-  const migrationConnectionFingerprint = "f".repeat(64);
+  const migrationUri = "mongodb://fixture-migration.invalid/games?replicaSet=rs-fixture";
+  const migrationConnectionFingerprint = sha256(migrationUri);
   const migrationAuthenticationRestrictions = [{ clientSource: ["127.0.0.1"], serverAddress: ["127.0.0.1"] }];
-  const executorSources = [
-    "scripts/run_viva_game_projection_fenced_remediation.sh",
-    "scripts/run_viva_game_projection_remediation.mjs",
-    "scripts/run_viva_game_projection_tenant_migration.mjs",
-    "scripts/lib/vivaGameProjectionRemediationExecution.mjs",
-    "scripts/lib/vivaGameProjectionMongoWriteBarrier.mjs",
-    "scripts/lib/vivaGameProjectionExecutorSource.mjs",
-    "scripts/lib/vivaGameProjectionCutoverContract.mjs",
-    "scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs",
-  ].map((sourcePath, index) => ({
+  const executorSources = REMEDIATION_EXECUTOR_SOURCE_PATHS.map((sourcePath, index) => ({
     path: sourcePath,
-    sha256: String(index + 1).repeat(64),
+    sha256: sha256(`${index}:${sourcePath}`),
   }));
   const executorSourcesSha256 = sha256(canonicalJson(executorSources));
+  const runtimeDependencies = runtimeDependencyFixture();
   const exerciseIds = [
     "11111111-1111-4111-8111-111111111111",
     "22222222-2222-4222-8222-222222222222",
@@ -104,6 +168,22 @@ function fixture() {
     payment: { paid: true, amount: 4200, providerTransactionId: `txn-${index}` },
     participants: [{ id: `player-${index}` }],
   }));
+  for (let index = 0; index < 10; index += 1) {
+    documents.push({
+      _id: new ObjectId(String(index + 5).padStart(24, "0")),
+      id: `pay_fixture_eligible_${index}`,
+      tenantKey: null,
+      revision: null,
+      status: "PAID",
+      archived: false,
+      booking: {
+        studioId: "studio-piter",
+        date: "2026-09-07",
+        timeFrom: "12:00",
+        timeTo: "14:00",
+      },
+    });
+  }
   const providerEvidence = categories.map((category, index) => {
     const document = documents[index];
     const identitySignals = [
@@ -306,6 +386,17 @@ function fixture() {
     startedAt: backupStartedAt,
     completedAt: backupCompletedAt,
   });
+  const migrationPlanBytes = Buffer.from(`${JSON.stringify({
+    formatVersion: 1,
+    eligibleCount: 10,
+    operations: documents.slice(4).map((document) => ({ filter: { _id: { $oid: document._id.toHexString() } } })),
+  }, null, 2)}\n`);
+  const migrationPlanSha256 = sha256(migrationPlanBytes);
+  const migrationPlanBundle = at("migrationPlanBundle", {
+    formatVersion: 1,
+    kind: "viva-game-projection-migration-plan-bundle",
+    plans: [{ sha256: migrationPlanSha256, bytesBase64: migrationPlanBytes.toString("base64") }],
+  });
   const cutoverPlan = at("cutoverPlan", {
     formatVersion: 1,
     kind: "viva-game-projection-tenant-cutover-plan",
@@ -333,6 +424,13 @@ function fixture() {
       fullCollectionStateSha256,
       restoreArtifactSha256: fullBackup.sha256,
     },
+    migration: {
+      futureBoundaryDate: "2026-09-06",
+      futureBoundaryTimeZone: "UTC",
+      planSha256s: [migrationPlanSha256],
+      totalEligible: 10,
+      totalSkipped: 4,
+    },
     liveMutationAuthorized: false,
   });
   const cutoverPlanSha256 = cutoverPlan.sha256;
@@ -346,6 +444,13 @@ function fixture() {
     applicationConnectionFingerprint,
     migrationConnectionFingerprint,
     replicaSetName: "rs-fixture",
+    installedAt: barrierInstalledAt,
+  });
+  const migrationConnectionFile = at("migrationConnectionFile", {
+    formatVersion: 1,
+    kind: "viva-game-projection-migration-mongo-connection",
+    uri: migrationUri,
+    authenticationRestrictions: migrationAuthenticationRestrictions,
   });
   const restoreRehearsalReceipt = at("restoreRehearsalReceipt", {
     formatVersion: 1,
@@ -363,11 +468,14 @@ function fixture() {
     rehearsedAt: restoreRehearsedAt,
   });
   const artifacts = Object.fromEntries([
-    cutoverPlan, packet, enrichment, identityAudit, providerCapture, mongoCapture, fenceReceipt, mongoWriteBarrierReceipt,
+    cutoverPlan, migrationPlanBundle, packet, enrichment, identityAudit, providerCapture, mongoCapture,
+    fenceReceipt, mongoWriteBarrierReceipt,
+    migrationConnectionFile,
     fullBackupManifest, restoreRehearsalReceipt,
   ].map(({ name, value, bytes }) => [name, { value, bytes }]));
   artifacts.fullBackup = { bytes: fullBackup.bytes };
   artifacts.restoredArtifact = { bytes: fullBackup.bytes };
+  artifacts.flow = { bytes: sourceFlowBytes };
   const counts = {
     sourceActiveLegacyCount: 14,
     alreadyEligibleCount: 10,
@@ -391,6 +499,8 @@ function fixture() {
     repository: { commit: "4".repeat(40), branch: "codex/remediation-fixture" },
     executorSources,
     executorSourcesSha256,
+    runtimeDependencies,
+    runtimeDependenciesSha256: sha256(canonicalJson(runtimeDependencies)),
     source: {
       packetSha256: packet.sha256,
       enrichmentSha256: enrichment.sha256,
@@ -400,6 +510,8 @@ function fixture() {
       sourceFlowSha256,
       servicePrincipalSha256,
       cutoverPlanSha256,
+      migrationPlanBundleSha256: migrationPlanBundle.sha256,
+      eligibleMongoIdSetSha256: sha256(canonicalJson(documents.slice(4).map((document) => document._id.toHexString()).sort())),
       fullBackupSha256: fullBackup.sha256,
       fullBackupManifestSha256: fullBackupManifest.sha256,
       restoreRehearsalReceiptSha256: restoreRehearsalReceipt.sha256,
@@ -421,6 +533,7 @@ function fixture() {
       captureSessionId,
       fenceObservedAt,
       fenceExpiresAt,
+      barrierInstalledAt,
       backupStartedAt,
       backupCompletedAt,
       restoreRehearsedAt,
@@ -448,6 +561,10 @@ function fixture() {
     artifacts,
     documents,
     executorSourcesSha256,
+    runtimeDependencies,
+    generatedAt,
+    mutationAt,
+    operationId,
   };
 }
 
@@ -519,6 +636,348 @@ test("remediation plan binds exact packet, provider, Mongo, identity and held-fe
     planBytes: value.planBytes,
     artifacts: duplicatePacket,
   }), /packet fingerprint set/);
+
+  const dependencyTamper = structuredClone(value.plan);
+  dependencyTamper.runtimeDependencies.files.find((entry) => entry.path === "node_modules/mongodb/package.json")
+    .bytesBase64 = Buffer.from("tampered mongodb runtime").toString("base64");
+  dependencyTamper.runtimeDependenciesSha256 = sha256(canonicalJson(dependencyTamper.runtimeDependencies));
+  const dependencyTamperBytes = Buffer.from(`${JSON.stringify(dependencyTamper, null, 2)}\n`);
+  assert.throws(() => validateExecutableRemediationPlan(dependencyTamper, {
+    expectedPlanSha256: sha256(dependencyTamperBytes),
+    planBytes: dependencyTamperBytes,
+    artifacts: value.artifacts,
+  }), /runtime dependency file byte stream mismatch/);
+});
+
+test("remediation package builder deterministically derives the exact executable plan", () => {
+  const value = fixture();
+  const plan = buildRemediationExecutionPlan({
+    artifacts: value.artifacts,
+    generatedAt: value.generatedAt,
+    mutationAt: value.mutationAt,
+    operationId: value.operationId,
+    repository: value.plan.repository,
+    executorSources: value.plan.executorSources,
+    runtimeDependencies: value.plan.runtimeDependencies,
+  });
+  const planBytes = Buffer.from(`${JSON.stringify(plan, null, 2)}\n`);
+  const planSha256 = sha256(planBytes);
+  const checked = validateExecutableRemediationPlan(plan, {
+    expectedPlanSha256: planSha256,
+    planBytes,
+    artifacts: value.artifacts,
+    expectedExecutorSourcesSha256: value.executorSourcesSha256,
+    nowMs: Date.parse("2026-09-06T10:05:00.000Z"),
+  });
+  assert.equal(checked.operations.length, 4);
+  assert.deepEqual(plan.counts, {
+    sourceActiveLegacyCount: 14,
+    alreadyEligibleCount: 10,
+    remediationTotal: 4,
+    CANCEL_AND_ARCHIVE: 1,
+    QUARANTINE_AND_ARCHIVE: 1,
+    RECONCILE_PROVIDER_TIME: 1,
+    REPAIR_METADATA_IDENTITY: 1,
+  });
+  assert.equal(plan.expectedPostRemediation.activeLegacyEligibleForFreshTenantMigrationPlan, 12);
+});
+
+test("fresh private npm ci dependency capture ignores coherently tampered repository node_modules", () => {
+  const expected = runtimeDependencyFixture();
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-remediation-runtime-build-test-")));
+  fs.chmodSync(root, 0o700);
+  try {
+    const malicious = path.join(root, "node_modules/mongodb/package.json");
+    fs.mkdirSync(path.dirname(malicious), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(malicious, "coherently tampered repository mongodb", { mode: 0o600 });
+    const packageJsonBytes = Buffer.from(expected.packageJsonBytesBase64, "base64");
+    const packageLockBytes = Buffer.from(expected.packageLockBytesBase64, "base64");
+    const captured = buildFreshRemediationRuntimeDependencySnapshot({
+      repositoryCommit: "a".repeat(40),
+      privateParent: root,
+      repoRoot: root,
+    }, {
+      repository: {
+        committedBytes: (_commit, relativePath) => (
+          relativePath === "package.json" ? packageJsonBytes : packageLockBytes
+        ),
+      },
+      runNpmCi({ installRoot, npmUserConfig, npmGlobalConfig }) {
+        assert.notEqual(installRoot, root);
+        assert.equal(fs.statSync(installRoot).mode & 0o077, 0);
+        assert.notEqual(npmUserConfig, npmGlobalConfig);
+        assert.equal(fs.statSync(npmUserConfig).mode & 0o777, 0o400);
+        assert.equal(fs.statSync(npmGlobalConfig).mode & 0o777, 0o400);
+        for (const entry of expected.files) {
+          const target = path.join(installRoot, entry.path);
+          fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+          fs.writeFileSync(target, Buffer.from(entry.bytesBase64, "base64"), { mode: 0o600 });
+        }
+        return { status: 0 };
+      },
+    });
+    const mongodb = captured.files.find((entry) => entry.path === "node_modules/mongodb/package.json");
+    assert.deepEqual(Buffer.from(mongodb.bytesBase64, "base64"), Buffer.from(
+      expected.files.find((entry) => entry.path === "node_modules/mongodb/package.json").bytesBase64,
+      "base64",
+    ));
+    assert.notEqual(Buffer.from(mongodb.bytesBase64, "base64").toString("utf8"), fs.readFileSync(malicious, "utf8"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("built-in remediation builder bootstrap imports only its fresh private committed closure", async () => {
+  assert.deepEqual(REMEDIATION_BUILDER_RUNTIME_PACKAGE_NAMES, REMEDIATION_RUNTIME_PACKAGE_NAMES);
+  assert.deepEqual(REMEDIATION_LIVE_EXECUTOR_SOURCE_PATHS, REMEDIATION_EXECUTOR_SOURCE_PATHS);
+  const declared = new Set(REMEDIATION_BUILDER_SOURCE_PATHS);
+  for (const relativePath of REMEDIATION_BUILDER_SOURCE_PATHS) {
+    const source = fs.readFileSync(path.join(REPO_ROOT, relativePath), "utf8");
+    const imports = [...source.matchAll(/from\s+["'](\.\.?\/[^"']+)["']/g)].map((match) => (
+      path.relative(REPO_ROOT, path.resolve(REPO_ROOT, path.dirname(relativePath), match[1]))
+    ));
+    for (const imported of imports) {
+      assert.equal(declared.has(imported), true, `${relativePath} imports undeclared local builder source ${imported}`);
+    }
+  }
+  const bootstrapSource = fs.readFileSync(
+    path.join(REPO_ROOT, "scripts/prepare_viva_game_projection_remediation_package.mjs"),
+    "utf8",
+  );
+  assert.deepEqual(
+    [...bootstrapSource.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]).sort(),
+    ["node:child_process", "node:crypto", "node:fs", "node:path", "node:url"],
+  );
+
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-remediation-builder-bootstrap-test-")));
+  fs.chmodSync(root, 0o700);
+  try {
+    const repositoryRoot = path.join(root, "repo");
+    fs.mkdirSync(repositoryRoot, { mode: 0o700 });
+    const maliciousMarker = path.join(root, "repository-node-modules-loaded");
+    const maliciousModule = path.join(repositoryRoot, "node_modules/mongodb/index.js");
+    fs.mkdirSync(path.dirname(maliciousModule), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(maliciousModule, `require("node:fs").writeFileSync(${JSON.stringify(maliciousMarker)}, "loaded")\n`, { mode: 0o600 });
+    const runtime = runtimeDependencyFixture();
+    const packageJsonBytes = Buffer.from(runtime.packageJsonBytesBase64, "base64");
+    const packageLockBytes = Buffer.from(runtime.packageLockBytesBase64, "base64");
+    const committed = (relativePath) => {
+      if (relativePath === "package.json") return packageJsonBytes;
+      if (relativePath === "package-lock.json") return packageLockBytes;
+      return fs.readFileSync(path.join(REPO_ROOT, relativePath));
+    };
+    const output = path.join(root, "prepared-output");
+    let importedEntrypoint;
+    const result = await runRemediationPackageBuilderBootstrap([
+      "--output-directory", output,
+    ], {
+      repoRoot: repositoryRoot,
+      repository: {
+        head: () => "a".repeat(40),
+        branch: () => "codex/bootstrap-fixture",
+        status: () => "",
+        committedBytes: (_commit, relativePath) => committed(relativePath),
+      },
+      runNpmCi({ runtimeRoot, npmUserConfig, npmGlobalConfig }) {
+        assert.notEqual(npmUserConfig, npmGlobalConfig);
+        assert.equal(fs.statSync(npmUserConfig).mode & 0o777, 0o400);
+        assert.equal(fs.statSync(npmGlobalConfig).mode & 0o777, 0o400);
+        for (const entry of runtime.files) {
+          const target = path.join(runtimeRoot, entry.path);
+          fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+          fs.writeFileSync(target, Buffer.from(entry.bytesBase64, "base64"), { mode: 0o600 });
+        }
+        return { status: 0 };
+      },
+      async loadBuilder(entrypoint) {
+        importedEntrypoint = entrypoint;
+        assert.match(entrypoint, /\/executor\/scripts\/lib\/prepareVivaGameProjectionRemediationPackage\.mjs$/);
+        assert.equal(fs.statSync(entrypoint).mode & 0o777, 0o400);
+        assert.equal(fs.statSync(path.dirname(entrypoint)).mode & 0o777, 0o500);
+        return {
+          parseArgs: () => ({}),
+          collectInstalledRuntimeDependencies: () => runtime,
+          prepareVivaGameProjectionRemediationPackage: () => ({ output }),
+          reportPreparedRemediationPackage: () => {},
+        };
+      },
+    });
+    assert.ok(importedEntrypoint);
+    assert.equal(result.output, output);
+    assert.equal(fs.existsSync(maliciousMarker), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("committed lockfile carries SRI for every mandatory remediation runtime package", () => {
+  const packageLock = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package-lock.json"), "utf8"));
+  for (const name of REMEDIATION_RUNTIME_PACKAGE_NAMES) {
+    const locked = packageLock.packages?.[`node_modules/${name}`];
+    assert.ok(locked?.version, `${name} version missing`);
+    assert.match(locked?.resolved || "", /^https:\/\/registry\.npmjs\.org\//, `${name} resolved URL missing`);
+    assert.match(locked?.integrity || "", /^sha512-[A-Za-z0-9+/]+={0,2}$/, `${name} integrity missing`);
+  }
+});
+
+test("remediation package builder rejects provider evidence changed after review", () => {
+  const value = fixture();
+  value.artifacts.providerCapture.value.records[2].evidence.timeFrom = "13:30";
+  assert.throws(() => buildRemediationExecutionPlan({
+    artifacts: value.artifacts,
+    generatedAt: value.generatedAt,
+    mutationAt: value.mutationAt,
+    operationId: value.operationId,
+    repository: value.plan.repository,
+    executorSources: value.plan.executorSources,
+    runtimeDependencies: value.plan.runtimeDependencies,
+  }), /exact reviewed preimage and provider evidence/);
+});
+
+test("remediation package builder rejects a skipped-scope count not proven by the cutover plan", () => {
+  const value = fixture();
+  value.artifacts.cutoverPlan.value.migration.totalSkipped = 3;
+  assert.throws(() => buildRemediationExecutionPlan({
+    artifacts: value.artifacts,
+    generatedAt: value.generatedAt,
+    mutationAt: value.mutationAt,
+    operationId: value.operationId,
+    repository: value.plan.repository,
+    executorSources: value.plan.executorSources,
+    runtimeDependencies: value.plan.runtimeDependencies,
+  }), /does not exactly cover the cutover plan skipped scope/);
+});
+
+test("remediation package builder rejects a count-preserving eligible and skipped identity swap", () => {
+  const value = fixture();
+  const bundle = value.artifacts.migrationPlanBundle.value;
+  const migrationPlan = JSON.parse(Buffer.from(bundle.plans[0].bytesBase64, "base64").toString("utf8"));
+  migrationPlan.operations[0].filter._id.$oid = value.plan.operations[0].mongoId.$oid;
+  const bytes = Buffer.from(`${JSON.stringify(migrationPlan, null, 2)}\n`);
+  bundle.plans[0] = { sha256: sha256(bytes), bytesBase64: bytes.toString("base64") };
+  value.artifacts.migrationPlanBundle.bytes = Buffer.from(`${JSON.stringify(bundle, null, 2)}\n`);
+  value.artifacts.cutoverPlan.value.migration.planSha256s = [sha256(bytes)];
+  assert.throws(() => buildRemediationExecutionPlan({
+    artifacts: value.artifacts,
+    generatedAt: value.generatedAt,
+    mutationAt: value.mutationAt,
+    operationId: value.operationId,
+    repository: value.plan.repository,
+    executorSources: value.plan.executorSources,
+    runtimeDependencies: value.plan.runtimeDependencies,
+  }), /overlap or differ|does not exactly cover/);
+});
+
+test("remediation package CLI rejects operation, plan, authorization, and arbitrary overrides", () => {
+  const base = [
+    "--cutover-plan", "/private/cutover", "--migration-plan-bundle", "/private/migrations",
+    "--packet", "/private/packet", "--enrichment", "/private/enrichment",
+    "--identity-audit", "/private/identity", "--provider-capture", "/private/provider",
+    "--mongo-capture", "/private/mongo", "--full-backup", "/private/backup",
+    "--full-backup-manifest", "/private/backup-manifest",
+    "--restore-rehearsal-receipt", "/private/rehearsal", "--restored-artifact", "/private/restored",
+    "--fence-receipt", "/private/fence", "--mongo-write-barrier-receipt", "/private/barrier",
+    "--migration-connection-file", "/private/connection", "--flow-path", "/private/flow",
+    "--generated-at", "2026-09-06T10:03:00.000Z", "--mutation-at", "2026-09-06T10:04:00.000Z",
+    "--operation-id", "viva-remediation-cli-test", "--output-directory", "/private/output",
+  ];
+  for (const option of ["--operations", "--plan", "--execution-authorized", "--unexpected"]) {
+    assert.throws(() => parseRemediationPackageArgs([...base, option, "value"]), new RegExp(`Unknown argument: ${option}`));
+  }
+});
+
+test("remediation execution index is prepared-only and contains the exact pinned input set", () => {
+  const inputs = Object.fromEntries([
+    "plan", "cutoverPlan", "migrationPlanBundle", "packet", "enrichment", "identityAudit", "providerCapture", "mongoCapture",
+    "fullBackup", "fullBackupManifest", "restoreRehearsalReceipt", "restoredArtifact", "fenceReceipt",
+    "mongoWriteBarrierReceipt", "migrationConnectionFile", "flow",
+  ].map((name) => [name, { path: `/private/${name}`, sha256: sha256(name) }]));
+  const index = {
+    formatVersion: 1,
+    kind: "viva-game-projection-remediation-execution-index",
+    state: "PREPARED_NOT_AUTHORIZED",
+    repository: { commit: "4".repeat(40), branch: "codex/remediation-fixture" },
+    inputs,
+    executionAuthorized: false,
+    liveMutationAuthorized: false,
+    productionWritesPerformed: 0,
+    finalCutoverPlanReusable: false,
+  };
+  const bytes = Buffer.from(canonicalJson(index));
+  assert.equal(validateRemediationExecutionIndex(index, {
+    expectedSha256: sha256(bytes),
+    bytes,
+  }), index);
+  assert.throws(() => validateRemediationExecutionIndex({
+    ...index,
+    finalCutoverPlanReusable: true,
+  }), /contract mismatch/);
+});
+
+test("remediation package is privately published and its index expands without input overrides", () => {
+  const value = fixture();
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-remediation-package-test-")));
+  fs.chmodSync(root, 0o700);
+  try {
+    const paths = {};
+    for (const [name, artifact] of Object.entries(value.artifacts)) {
+      const filePath = path.join(root, `${name}.input`);
+      fs.writeFileSync(filePath, artifact.bytes, { mode: 0o600 });
+      fs.chmodSync(filePath, 0o600);
+      paths[name] = filePath;
+    }
+    const outputDirectory = path.join(root, "package");
+    const result = prepareVivaGameProjectionRemediationPackage({
+      ...paths,
+      generatedAt: value.generatedAt,
+      mutationAt: value.mutationAt,
+      operationId: value.operationId,
+      outputDirectory,
+    }, {
+      repository: value.plan.repository,
+      executorSources: value.plan.executorSources,
+      runtimeDependencies: value.plan.runtimeDependencies,
+      allowTestRuntimeDependencies: true,
+      skipCutoverExecutorVerification: true,
+      skipRemediationExecutorVerification: true,
+      nowMs: Date.parse("2026-09-06T10:05:00.000Z"),
+    });
+    assert.equal(fs.statSync(outputDirectory).mode & 0o077, 0);
+    assert.equal(result.plan.operations.length, 4);
+    assert.equal(result.executionIndex.finalCutoverPlanReusable, false);
+    const indexPath = path.join(outputDirectory, "remediation-execution-index.json");
+    const reportDirectory = path.join(root, "reports");
+    fs.mkdirSync(reportDirectory, { mode: 0o700 });
+    const parsed = parseRemediationRunnerArgs([
+      "--execution-index", indexPath,
+      "--expected-execution-index-sha256", result.executionIndexSha256,
+      "--mode", "verify",
+      "--report", path.join(reportDirectory, "verify.json"),
+    ]);
+    assert.equal(parsed.values.get("--plan"), path.join(outputDirectory, "remediation-plan.json"));
+    assert.equal(parsed.values.get("--flow-path"), paths.flow);
+    assert.throws(() => parseRemediationRunnerArgs([
+      "--execution-index", indexPath,
+      "--expected-execution-index-sha256", result.executionIndexSha256,
+      "--mode", "verify",
+      "--report", path.join(reportDirectory, "verify-override.json"),
+      "--plan", paths.packet,
+    ]), /does not allow overriding pinned inputs/);
+    const mismatchedIndex = structuredClone(result.executionIndex);
+    mismatchedIndex.repository.branch = "codex/different-reviewed-branch";
+    const mismatchedBytes = Buffer.from(canonicalJson(mismatchedIndex));
+    const mismatchedPath = path.join(root, "mismatched-index.json");
+    fs.writeFileSync(mismatchedPath, mismatchedBytes, { mode: 0o600 });
+    fs.chmodSync(mismatchedPath, 0o600);
+    assert.throws(() => parseRemediationRunnerArgs([
+      "--execution-index", mismatchedPath,
+      "--expected-execution-index-sha256", sha256(mismatchedBytes),
+      "--mode", "verify",
+      "--report", path.join(reportDirectory, "verify-mismatch.json"),
+    ]), /does not bind the plan repository and runtime flow/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("remediation plan rejects unexpected fields, loose identity updates, and evidence outside the fence", () => {
@@ -542,6 +1001,41 @@ test("remediation plan rejects unexpected fields, loose identity updates, and ev
   const oldPreparedPlan = structuredClone(value.plan);
   oldPreparedPlan.formatVersion = 1;
   assert.throws(() => validateRemediationPlanShape(oldPreparedPlan), /execution contract mismatch/);
+
+  const captureBeforeBarrier = structuredClone(value.plan);
+  captureBeforeBarrier.source.barrierInstalledAt = "2026-09-06T10:01:30.000Z";
+  assert.throws(() => validateRemediationPlanShape(captureBeforeBarrier), /required order/);
+});
+
+test("remediation recovery validation survives plan and fence expiry while fresh apply validation fails", () => {
+  const value = fixture();
+  const afterExpiry = Date.parse("2026-09-06T11:00:00.000Z");
+  assert.throws(() => validateExecutableRemediationPlan(value.plan, {
+    expectedPlanSha256: value.planSha256,
+    planBytes: value.planBytes,
+    artifacts: value.artifacts,
+    nowMs: afterExpiry,
+  }), /stale or its fence expired/);
+  assert.equal(validateExecutableRemediationPlan(value.plan, {
+    expectedPlanSha256: value.planSha256,
+    planBytes: value.planBytes,
+    artifacts: value.artifacts,
+    nowMs: afterExpiry,
+    enforceFreshness: false,
+  }).operations.length, 4);
+});
+
+test("remediation full-state gate rejects backup and live drift under the held barrier", async () => {
+  const value = fixture();
+  const exact = await assertFrozenRemediationFullCollection({}, value.plan, async () => ({
+    documentCount: value.plan.source.fullBackupDocumentCount,
+    fullCollectionStateSha256: value.plan.source.fullCollectionStateSha256,
+  }));
+  assert.equal(exact.fullCollectionStateSha256, value.plan.source.fullCollectionStateSha256);
+  await assert.rejects(() => assertFrozenRemediationFullCollection({}, value.plan, async () => ({
+    documentCount: value.plan.source.fullBackupDocumentCount,
+    fullCollectionStateSha256: "f".repeat(64),
+  })), /does not exactly match the frozen remediation backup/);
 });
 
 test("remediation execution rejects cross-game provider tuples, tenant drift, writer drift, and invalid restore artifacts", () => {
@@ -617,11 +1111,12 @@ test("remediation execution rejects cross-game provider tuples, tenant drift, wr
 test("remediation apply, reconcile, and restore preserve unrelated BSON fields with full-document CAS", async () => {
   const value = fixture();
   const collection = new MemoryCollection(value.documents);
+  const remediationDocuments = value.documents.slice(0, value.plan.operations.length);
   const backup = buildRemediationBackup(
     value.plan,
     value.planSha256,
     "2026-09-06T10:03:30.000Z",
-    value.documents,
+    remediationDocuments,
   );
   const fencePhases = [];
   const receipt = await applyRemediationPlan(
@@ -633,7 +1128,7 @@ test("remediation apply, reconcile, and restore preserve unrelated BSON fields w
   );
   validateRemediationApplyReceipt(receipt, value.plan, value.planSha256);
   assert.equal(fencePhases.length, 8);
-  for (const original of value.documents) {
+  for (const original of remediationDocuments) {
     const current = await collection.findOne({ _id: original._id });
     assert.equal(hashCanonicalEjson(current.payment), hashCanonicalEjson(original.payment));
     assert.deepEqual(current.participants, original.participants);
@@ -647,7 +1142,7 @@ test("remediation apply, reconcile, and restore preserve unrelated BSON fields w
 
   const restore = await restoreRemediationBackup(collection, value.plan, value.planSha256, backup, receipt);
   assert.equal(restore.restoredCount, 4);
-  for (const original of value.documents) {
+  for (const original of remediationDocuments) {
     assert.equal(hashCanonicalEjson(await collection.findOne({ _id: original._id })), hashCanonicalEjson(original));
   }
   const restored = await reconcileRemediationRestoreOutcome(
@@ -664,7 +1159,10 @@ test("remediation apply, reconcile, and restore preserve unrelated BSON fields w
 test("remediation transaction uses one snapshot/majority transaction and rejects drift before CAS", async () => {
   const value = fixture();
   const collection = new MemoryCollection(value.documents);
-  const backup = buildRemediationBackup(value.plan, value.planSha256, "2026-09-06T10:03:30.000Z", value.documents);
+  const remediationDocuments = value.documents.slice(0, value.plan.operations.length);
+  const backup = buildRemediationBackup(
+    value.plan, value.planSha256, "2026-09-06T10:03:30.000Z", remediationDocuments,
+  );
   let transactionOptions;
   let ended = false;
   const client = {
@@ -720,4 +1218,181 @@ test("remediation runner journals unknown outcome before one transaction and the
   assert.doesNotMatch(barrier, /updateUser:/);
   assert.doesNotMatch(replica, /user:'migration'[\s\S]+role:'root'/);
   assert.match(replica, /SCRAM-SHA-256[\s\S]+authenticationRestrictions/);
+});
+
+test("recovery controls are not journalled as verified before backup and apply receipt validation", () => {
+  const runner = fs.readFileSync(path.join(REPO_ROOT, "scripts/run_viva_game_projection_remediation.mjs"), "utf8");
+  const intent = runner.indexOf('journal.append("RECOVERY_CONTROLS_INTENT"');
+  const backupValidation = runner.indexOf("validateRemediationBackup(backup, plan, expectedPlanSha256)");
+  const applyValidation = runner.indexOf("validateRemediationApplyReceipt(applyReceipt, plan, expectedPlanSha256)");
+  const verified = runner.indexOf('journal.append("RECOVERY_CONTROLS_VERIFIED"');
+  assert.ok(intent >= 0);
+  assert.ok(backupValidation > intent);
+  assert.ok(applyValidation > backupValidation);
+  assert.ok(verified > applyValidation);
+  assert.equal(runner.indexOf('journal.append("RECOVERY_CONTROLS_VERIFIED"', verified + 1), -1);
+});
+
+test("minimal bootstrap verifies every recursive local executor source before importing the runner", async () => {
+  assert.deepEqual(BOOTSTRAP_REMEDIATION_EXECUTOR_SOURCE_PATHS, REMEDIATION_EXECUTOR_SOURCE_PATHS);
+  assert.deepEqual(BOOTSTRAP_REMEDIATION_RUNTIME_PACKAGE_NAMES, REMEDIATION_RUNTIME_PACKAGE_NAMES);
+  const declared = new Set(REMEDIATION_EXECUTOR_SOURCE_PATHS);
+  for (const relativePath of REMEDIATION_EXECUTOR_SOURCE_PATHS.filter((entry) => entry.endsWith(".mjs"))) {
+    const source = fs.readFileSync(path.join(REPO_ROOT, relativePath), "utf8");
+    const imports = [...source.matchAll(/from\s+["'](\.\.?\/[^"']+)["']/g)].map((match) => (
+      path.relative(REPO_ROOT, path.resolve(REPO_ROOT, path.dirname(relativePath), match[1]))
+    ));
+    for (const imported of imports) {
+      assert.equal(declared.has(imported), true, `${relativePath} imports undeclared local executor source ${imported}`);
+    }
+  }
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-remediation-bootstrap-test-")));
+  fs.chmodSync(root, 0o700);
+  try {
+    const commit = "a".repeat(40);
+    const committed = new Map();
+    for (const relativePath of BOOTSTRAP_REMEDIATION_EXECUTOR_SOURCE_PATHS) {
+      const absolutePath = path.join(root, relativePath);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true, mode: 0o700 });
+      const bytes = Buffer.from(`fixture:${relativePath}\n`);
+      fs.writeFileSync(absolutePath, bytes, { mode: 0o600 });
+      committed.set(relativePath, bytes);
+    }
+    const executorSources = BOOTSTRAP_REMEDIATION_EXECUTOR_SOURCE_PATHS.map((relativePath) => ({
+      path: relativePath,
+      sha256: sha256(committed.get(relativePath)),
+    }));
+    const runtimeDependencies = runtimeDependencyFixture();
+    committed.set("package.json", Buffer.from(runtimeDependencies.packageJsonBytesBase64, "base64"));
+    committed.set("package-lock.json", Buffer.from(runtimeDependencies.packageLockBytesBase64, "base64"));
+    const plan = {
+      repository: { commit, branch: "codex/bootstrap-fixture" },
+      executorSources,
+      executorSourcesSha256: sha256(canonicalJson(executorSources)),
+      runtimeDependencies,
+      runtimeDependenciesSha256: sha256(canonicalJson(runtimeDependencies)),
+    };
+    const planBytes = Buffer.from(`${JSON.stringify(plan, null, 2)}\n`);
+    const planPath = path.join(root, "plan.json");
+    fs.writeFileSync(planPath, planBytes, { mode: 0o600 });
+    const index = {
+      kind: "viva-game-projection-remediation-execution-index",
+      inputs: { plan: { path: planPath, sha256: sha256(planBytes) } },
+    };
+    const indexBytes = Buffer.from(canonicalJson(index));
+    const indexPath = path.join(root, "index.json");
+    fs.writeFileSync(indexPath, indexBytes, { mode: 0o600 });
+    const argv = [
+      "--execution-index", indexPath,
+      "--expected-execution-index-sha256", sha256(indexBytes),
+      "--mode", "verify",
+      "--report", path.join(root, "report.json"),
+    ];
+    const repository = {
+      head: () => commit,
+      status: () => "",
+      committedBytes: (_commit, relativePath) => committed.get(relativePath),
+    };
+    const attestation = verifyRemediationExecutorBootstrap(argv, { repoRoot: root, repository });
+    assert.equal(attestation.repositoryCommit, commit);
+    const runtimeRoot = path.join(root, "runtime");
+    fs.mkdirSync(runtimeRoot, { mode: 0o700 });
+    const snapshot = materializeRemediationExecutorSnapshot(attestation, { runtimeRoot });
+    const originalRunner = committed.get("scripts/run_viva_game_projection_remediation.mjs");
+    fs.appendFileSync(path.join(root, "scripts/run_viva_game_projection_remediation.mjs"), "tamper-after-attestation");
+    assert.deepEqual(fs.readFileSync(path.join(snapshot, "scripts/run_viva_game_projection_remediation.mjs")), originalRunner);
+    const mongodbRuntime = runtimeDependencies.files.find((entry) => entry.path === "node_modules/mongodb/package.json");
+    assert.deepEqual(fs.readFileSync(path.join(snapshot, mongodbRuntime.path)), Buffer.from(mongodbRuntime.bytesBase64, "base64"));
+    fs.writeFileSync(path.join(root, "scripts/run_viva_game_projection_remediation.mjs"), originalRunner, { mode: 0o600 });
+    assert.throws(() => verifyRemediationExecutorBootstrap([
+      "--plan", planPath,
+      "--expected-plan-sha256", sha256(planBytes),
+      "--mode", "verify",
+      "--report", path.join(root, "direct.json"),
+    ], { repoRoot: root, repository }), /only execution-index mode/);
+    for (const relativePath of BOOTSTRAP_REMEDIATION_EXECUTOR_SOURCE_PATHS) {
+      const originalCommitted = committed.get(relativePath);
+      committed.set(relativePath, Buffer.concat([originalCommitted, Buffer.from("tamper")]));
+      let imported = false;
+      await assert.rejects(() => runRemediationBootstrap(argv, {
+        repoRoot: root,
+        repository,
+        trustAnchorVerified: true,
+        loadRunner: async () => { imported = true; return { main: async () => null }; },
+      }), /differs before import/);
+      assert.equal(imported, false);
+      committed.set(relativePath, originalCommitted);
+    }
+    const dependencyTamper = structuredClone(plan);
+    dependencyTamper.runtimeDependencies.files.find((entry) => entry.path === "node_modules/mongodb/package.json")
+      .bytesBase64 = Buffer.from("tampered mongodb runtime").toString("base64");
+    dependencyTamper.runtimeDependenciesSha256 = sha256(canonicalJson(dependencyTamper.runtimeDependencies));
+    const dependencyTamperBytes = Buffer.from(`${JSON.stringify(dependencyTamper, null, 2)}\n`);
+    const dependencyTamperPath = path.join(root, "tampered-plan.json");
+    fs.writeFileSync(dependencyTamperPath, dependencyTamperBytes, { mode: 0o600 });
+    const dependencyTamperIndex = {
+      kind: "viva-game-projection-remediation-execution-index",
+      inputs: { plan: { path: dependencyTamperPath, sha256: sha256(dependencyTamperBytes) } },
+    };
+    const dependencyTamperIndexBytes = Buffer.from(canonicalJson(dependencyTamperIndex));
+    const dependencyTamperIndexPath = path.join(root, "tampered-index.json");
+    fs.writeFileSync(dependencyTamperIndexPath, dependencyTamperIndexBytes, { mode: 0o600 });
+    let importedTamperedDependency = false;
+    await assert.rejects(() => runRemediationBootstrap([
+      "--execution-index", dependencyTamperIndexPath,
+      "--expected-execution-index-sha256", sha256(dependencyTamperIndexBytes),
+      "--mode", "verify",
+      "--report", path.join(root, "tampered-report.json"),
+    ], {
+      repoRoot: root,
+      repository,
+      trustAnchorVerified: true,
+      loadRunner: async () => { importedTamperedDependency = true; return { main: async () => null }; },
+    }), /runtime dependency differs before import/);
+    assert.equal(importedTamperedDependency, false);
+  } finally {
+    const makeWritable = (directory) => {
+      if (!fs.existsSync(directory)) return;
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+      fs.chmodSync(directory, 0o700);
+      for (const entry of fs.readdirSync(directory)) makeWritable(path.join(directory, entry));
+    };
+    makeWritable(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("direct remediation runner CLI cannot bypass the reviewed execution index", async () => {
+  await assert.rejects(() => runRemediationRunner(["--mode", "verify"]), /requires the exact execution index/);
+});
+
+test("clean-environment launcher excludes BASH_ENV and NODE_OPTIONS before trusted interpreters", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "viva-remediation-clean-env-test-"));
+  try {
+    const bashMarker = path.join(root, "bash-env-executed");
+    const nodeMarker = path.join(root, "node-options-executed");
+    const bashPayload = path.join(root, "bash-env.sh");
+    const nodePayload = path.join(root, "node-options.cjs");
+    fs.writeFileSync(bashPayload, `printf executed >${JSON.stringify(bashMarker)}\n`, { mode: 0o600 });
+    fs.writeFileSync(nodePayload, `require("node:fs").writeFileSync(${JSON.stringify(nodeMarker)}, "executed")\n`, { mode: 0o600 });
+    const ambient = {
+      ...process.env,
+      BASH_ENV: bashPayload,
+      NODE_OPTIONS: `--require=${nodePayload}`,
+      NODE_PATH: root,
+    };
+    const bash = spawnSync("/usr/bin/env", [
+      "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "--noprofile", "--norc", "-c", "exit 0",
+    ], { env: ambient, encoding: "utf8" });
+    const node = spawnSync("/usr/bin/env", [
+      "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", process.execPath, "-e", "process.exit(0)",
+    ], { env: ambient, encoding: "utf8" });
+    assert.equal(bash.status, 0, bash.stderr);
+    assert.equal(node.status, 0, node.stderr);
+    assert.equal(fs.existsSync(bashMarker), false);
+    assert.equal(fs.existsSync(nodeMarker), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

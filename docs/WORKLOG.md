@@ -2045,3 +2045,45 @@
   so a pre-existing container or volume cannot be removed by a failed test.
 - No production flow, runtime, database, provider, payment, lease, or ingress
   mutation was performed.
+
+### Deterministic version-2 remediation package builder
+
+- Added a private package builder that derives the active legacy scope and exact category operations from
+  the full BSON backup plus the bound review, identity, provider, and Mongo evidence;
+  callers cannot supply or override an operation list.
+- Added a digest-pinned remediation execution index accepted by the existing fenced
+  runner. Index mode verifies every input byte stream and rejects individual input
+  overrides before any Mongo connection is opened.
+- The builder self-runs the complete executable-plan validator before atomic package
+  publication and records that the pre-remediation cutover plan is not reusable for
+  final tenant migration. Fresh post-remediation projections, plans, fence receipt,
+  and cutover index remain mandatory.
+- R4 review added an exact raw-byte migration-plan bundle and proves a disjoint identity
+  partition of the full active legacy scope, rather than relying on eligible/skipped
+  counts. Unknown builder flags now fail closed.
+- A built-in-only package-builder bootstrap verifies the exact clean commit, builds a
+  fresh private dependency tree, freezes every copied directory, and only then imports
+  the committed MongoDB-dependent builder closure. The live bootstrap separately
+  verifies the recursive executor-source closure, requires an FD-copied externally
+  verified wrapper/bootstrap, and loads the remediation runner from a private read-only
+  committed snapshot.
+- A fresh private `npm ci --ignore-scripts --omit=dev` verifies tarball SRI from the
+  committed lockfile before the plan embeds the exact mandatory MongoDB dependency
+  bytes, versions, and integrity fields; live execution never imports the repository's
+  ignored `node_modules` tree. The missing `resolved` and `integrity` metadata for the
+  already locked `punycode@2.3.1` entry was restored from the official npm registry;
+  no dependency version changed. Separate empty private user/global npm configs keep
+  host hooks out of the install and remain compatible with npm 11.
+- Production execution now accepts only the exact digest-pinned execution index;
+  direct runner inputs and mutable-worktree imports fail closed.
+- Remediation APPLY/VERIFY now compare the full live collection with the frozen backup
+  under the held Mongo barrier, and provider/Mongo capture timestamps must follow
+  barrier installation. Recovery can outlive the evidence TTL only while the exact
+  flock, stopped runtime, barrier, immutable backup, plan, and apply receipt are
+  revalidated and journalled. Recovery intent is recorded separately, and controls are
+  marked verified only after the exact backup and, when required, apply receipt pass.
+- Tenant-migration APPLY now requires the in-process cutover coordinator proof of full
+  backup equality and exact global migration coverage, preventing a stale pre-remediation
+  cutover packet from being applied as a standalone command.
+- This is isolated source-only work. No production flow, runtime, MongoDB, Viva,
+  payment, fence, ACL, ingress, or user data was changed.
