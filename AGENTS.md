@@ -48,7 +48,8 @@ Read specialized documents only when their domain trigger applies:
 - Lint: `npm run lint`
 - Node-RED modular build: `npm run nodered:modular:build`
 - Node-RED validate: `npm run nodered:modular:validate`
-- Node-RED exports: `npm run nodered:modular:exports`
+- Delivery routing/tests: `npm run ci:delivery:route`, `npm run test:delivery`
+- Standard frontend release (owner-enabled workflow only): `npm run release:frontend:standard`
 - Community rating tests: `npm run test:community-rating`
 - Rating recalculation: `npm run rating:recalculate`
 - Rating recalculation for all: `npm run rating:recalculate:all`
@@ -83,9 +84,10 @@ Read specialized documents only when their domain trigger applies:
 - Prefer editing source functions in `scripts/nodered_*_nodes/` and patch/build scripts.
 - Do not manually patch large Node-RED JSON files unless there is no safer source-driven path.
 - For deployed LK Games / referral flows, treat the live Node-RED flow on server `147` as the source of truth before regeneration.
-- Before rebuilding modular Node-RED artifacts for release, pull the current live flow from `147` into `node-red/modular/source.flow.json`; do not build from a stale local snapshot.
-- Preferred command for release prep: `npm run nodered:modular:prepare-147 -- /absolute/remote/flows.json`.
-- After Node-RED changes, run `npm run nodered:modular:validate` when possible.
+- Before an authorized real apply, pull a fresh live preimage into a new private external workspace with `nodered:modular:pull-147`, verify it, and use the focused source-driven patcher and reviewed contract.
+- `sync-games-source`, `prepare-147` and `exports` are quarantined. Never regenerate tracked `node-red/modular/source.flow.json` as a shortcut to release.
+- Preserve exact preimage guards, graph consistency, lock/lease, foreign-change protection and guarded rollback. Unified subscription enforcement is one graph; never substitute a sequence of partial wrappers.
+- Local source/fixture checks need no live pull. Reuse unchanged packet source/candidate/results; refresh live preimage and conditions at real apply, not on every documentation or frontend task.
 - Document touched endpoints, function nodes, and import/export files.
 
 ## Data And Rating Rules
@@ -102,198 +104,67 @@ Read specialized documents only when their domain trigger applies:
 - Do not amend commits unless explicitly requested.
 - Final reports must list changed files, checks run, and residual risks.
 
-## Risk-Based Delivery Workflow
+## Delivery by changed operation
 
-Classify the highest-risk intended change as R0-R4 and use the global Fast, Spark, Main,
-or Critical lane. A scoped development request authorizes one continuous reversible
-task-branch loop: identify `origin/main`, create a focused worktree and `codex/*` or
-`agent/*` branch, implement the requested outcome, run proportionate checks, create
-focused commits, push only that task branch, open or update a Draft PR, read CI, and fix
-in-scope CI failures. Do not pause merely because one reversible step completed.
+Ship one small independently releasable outcome from a short-lived focused branch/worktree.
+Start from current `origin/main`, preserve existing dirty work, implement and check the scope,
+commit, publish the task branch and open/update its PR without intermediate permission stops.
+Draft means unfinished work; mark it ready when the scoped result and checks are complete.
+Independent features need no integration package. Record unrelated improvements separately.
 
-Within an authorized task branch, the agent may write migration or backfill code,
-permission/RBAC/ACL/RLS code, secret-handling code without accessing real values, and
-tests; run fully local rehearsals on synthetic data; create commits; push only the task
-branch; create or update a Draft PR; read CI; and fix in-scope CI failures.
+| Route | Changed operation | Checks and review |
+| --- | --- | --- |
+| FAST | Presentation, text, layout, navigation, filters, UI states, reads through an existing authorized contract without changing authority | Self-review and relevant lint/typecheck/build, UI/loading/error checks and regressions |
+| SAFE | Reversible business behavior without money, access, booking/capacity, irreversible data or external writes | Affected behavior/negative checks; another reviewer only for a concrete uncertainty |
+| CRITICAL | Purchases, debits, calculated discounts, booking/capacity, authorization, secrets, migrations, external writes, release mechanism | Specialist review of actually changed risks, compatibility/recovery and applicable full CI |
 
-Human approval remains mandatory before:
+A subscription label or CSS edit is presentation; a purchase handler is critical. Classify the
+operation, not the module's name. Using the already approved release mechanism does not require
+reviewing its design again; changing that mechanism does. Unknown executable code expands CI;
+labels cannot downgrade checks. Automated standard frontend eligibility is deliberately narrower
+than human FAST: CSS and literal native-element JSX presentation only. Other FAST/SAFE code uses
+the business check contour until a reviewed operation-specific classifier covers it.
 
-- merge or direct push to a protected branch;
-- deploy, service restart, or Node-RED import;
-- migration or backfill execution against a real or shared target;
-- live or shared data repair or mutation;
-- live permission, RBAC, ACL, or RLS mutation;
-- permission widening in a deployed environment;
-- secret or key access, installation, replacement, or rotation;
-- DNS, ingress, routing, or public-domain changes;
-- payment or refund execution;
-- external user messages;
-- destructive rollback or another irreversible operation.
+Main movement alone does not invalidate checks whose actual inputs are unchanged. Check the
+integrated source before release. PR CI checks the exact head; push CI checks the integrated
+main; publication builds its production configuration and checks provenance, hashes and smoke
+without replaying the same full regression matrix. A changed input requires fresh evidence.
 
-A Draft PR, green CI, local build, mock, local database rehearsal, or staging artifact does
-not authorize a live or provider mutation.
+## Authority and activation
 
-Use focused frontend/Node-RED/API checks for R0-R2. Expand to full gates when the diff
-touches root/shared configuration, lockfiles/dependencies, public contracts, auth,
-payments, data/schema, deployment workflows, multiple workspaces, or cannot be scoped.
-Do not repeat an identical successful command without changed source, inputs,
-environment, acceptance target, or a new hypothesis. Continue independent in-scope work
-when one lane is blocked; stop for missing material product authority, suspected
-credential/PII exposure, material scope expansion, inseparable baseline failure,
-unavailable required access, or a prohibited next action.
+Before owner activation, merge and live execution require explicit authority. This infrastructure
+PR cannot merge or deploy itself. Editing these instructions grants no new session authority.
+The owner's single activation approves only the boundaries in `docs/FRONTEND_DELIVERY.md`:
+ready eligible PR -> protected merge -> integrated checks -> complete static frontend artifact ->
+existing upload -> atomic publication -> smoke/observation or guarded return. Once enabled,
+those unchanged steps do not request separate manual approvals. Missing protection, source
+identity, bootstrap or access blocks that release, not unrelated development.
 
-## Agent Roles
+CRITICAL releases use one explicit approval naming source, scope, target, ordered operations,
+verification, stop signal and recovery. That approval covers the named unchanged sequence,
+including its guarded recovery; scope or material-condition drift needs a new decision.
+Production data, payment/provider operations, imports/restarts, migrations, secrets, ACL and
+routing never become authorized merely by a green CI or by this frontend activation.
 
-### 1. Architect / Planner
+For every feature state briefly: owner, audience, observed result, stop signal and stop method.
+Use existing flags only when useful. Disabling a flag does not undo past external operations.
+One product and one working end-to-end scenario can be an initial subscription release;
+all products/scenarios are not an implicit readiness condition. Product rules are unchanged.
 
-Use for new features, architecture changes, large refactors, and risky Node-RED/API changes.
+Blocking findings must name the concrete consequence, how it could occur, and the minimum
+condition for continuing. Missing mandatory access/configuration can be that condition; an
+already observed incident is unnecessary. Avoid speculative all-platform acceptance work.
 
-Prompt:
+## Review and report
 
-```text
-Ты архитектор проекта PadlHub LK.
-Сначала изучи применимую цепочку AGENTS.md, релевантные package/module/code/tests и
-существующие паттерны. Читай обзорные, архитектурные и deploy-документы только по
-соответствующему trigger; WORKLOG ищи точечно по задаче.
-Не пиши код сразу.
-Составь план:
-1. какие файлы менять,
-2. какие риски есть,
-3. какие альтернативы,
-4. какие тесты нужны.
-Явно отдели план от реализации и продолжай в утверждённом scope. Остановись только при
-отсутствующем существенном product choice, расширении scope или перед запрещённым
-live/irreversible действием.
-Учитывай React 19 + TypeScript + Vite IIFE bundles для Tilda, Node-RED flows, VivaCRM/Keycloak/SERV2 integrations и community rating scripts.
-```
+No mandatory architect/implementer/tester/reviewer chain. The primary owns implementation.
+FAST uses self-review; SAFE adds a reviewer only when justified; CRITICAL uses the specialist
+for the touched trust boundary (security, payment safety, release, migration or reliability).
+Review is read-only by default. Re-review only the corrected diff and affected properties.
+Never have two writers in the same files; preserve others' branches and worktrees.
 
-### 2. Feature Implementer
-
-Use as the default coding agent.
-
-Prompt:
-
-```text
-Ты основной implementer проекта PadlHub LK.
-Реализуй задачу минимальными изменениями.
-Следуй существующей архитектуре, стилю и неймингу.
-Не переписывай лишние файлы.
-Не трогай secrets и чужие незакоммиченные изменения.
-Для frontend учитывай Tilda widget constraints, overlay bundles, mobile layout и async states.
-Для Node-RED правь source functions/patch scripts, а не большие JSON вручную, если есть безопасная альтернатива.
-После изменений запусти линтер/тесты/сборку, если это возможно.
-В конце дай краткий список изменённых файлов, что изменилось, какие проверки запущены и какие риски остались.
-```
-
-### 3. Debugger
-
-Use for bugs, regressions, payment/API/rating incidents, and production-like issues.
-
-Prompt:
-
-```text
-Ты debugger проекта PadlHub LK.
-Найди причину бага, не исправляй вслепую.
-Сначала:
-1. воспроизведи проблему или объясни, почему не можешь,
-2. найди минимальную причину,
-3. предложи исправление,
-4. добавь регрессионный тест, если это практично.
-Меняй минимальное количество кода.
-Для API/интеграций проверяй контракты VivaCRM, Keycloak, SERV2 и реальные payload/status handling.
-Для Node-RED проверяй соответствующие function nodes, MongoDB запросы и response nodes.
-```
-
-### 4. Test Engineer
-
-Use after implementation of business logic, ratings, repair scripts, API mappers, and bug fixes.
-
-Prompt:
-
-```text
-Ты test engineer проекта PadlHub LK.
-Изучи изменённую логику и существующий стиль тестов.
-Добавь тесты на:
-- основной успешный сценарий,
-- edge cases,
-- ошибки/валидацию,
-- регрессии.
-Не меняй production-код, кроме случаев, когда он явно нетестируемый.
-Если production-код нужно изменить ради тестируемости, сначала объясни почему.
-Для community rating запускай npm run test:community-rating.
-Для Node-RED проверяй npm run nodered:modular:validate, если изменение затрагивает flows.
-```
-
-### 5. Reviewer / Critic
-
-Use after meaningful diffs, preferably in a fresh session.
-
-Prompt:
-
-```text
-Проведи строгий code review diff проекта PadlHub LK.
-Ищи только существенные проблемы: баги, edge cases, безопасность, производительность, нарушения архитектуры, деплойные риски.
-Не придирайся к стилю, если он не ломает читаемость.
-Для каждой проблемы дай:
-- файл и место,
-- почему это проблема,
-- как исправить.
-Особое внимание: Tilda widget constraints, overlay lifecycle, release files, Node-RED flow consistency, payment flows, rating recalculation, secrets leakage.
-Если существенных проблем нет, так и скажи, но перечисли остаточные риски и непокрытые проверки.
-```
-
-### 6. UI/UX Frontend Agent
-
-Use for visual states, responsive layout, accessibility, frontend polish, and user flows.
-
-Prompt:
-
-```text
-Ты frontend/UI агент проекта PadlHub LK.
-Проверь компонент или экран с точки зрения UX:
-- responsive layout,
-- loading/error/empty states,
-- accessibility,
-- keyboard navigation,
-- визуальная консистентность,
-- embedded Tilda widget constraints.
-Исправь только то, что относится к UI/UX.
-Не меняй бизнес-логику, API-контракты и Node-RED flows.
-После правок проверь мобильный и desktop сценарии, если возможно.
-```
-
-## Trigger-Based Review
-
-Do not run a generic agent chain for every task. R0 needs no independent reviewer; R1
-normally uses primary self-review; R2 uses at most one reviewer unless two distinct
-domain triggers apply. R3 requires one specialist per actual risk, and R4 requires two
-genuinely independent risk perspectives. Reviewers are read-only by default.
-
-- auth/session/permissions/PII: security review;
-- public API or event contract: compatibility review;
-- data/schema/migration: migration and rollback review;
-- Node-RED/deployment/image/release files: release review;
-- concurrent writes/retry/idempotency/recovery: reliability review;
-- payments/refunds/subscriptions: payment-safety review;
-- user-visible frontend: UI/accessibility review when behavior or layout changes.
-
-Use `global_spark_worker` only for a bounded R1/R2 implementation with exact files,
-acceptance criteria, validation, and stop conditions. The primary owns architecture,
-critical boundaries, diff inspection, integration, and final acceptance. Never run two
-write agents against the same file or tightly coupled state; use at most two concurrent
-spawned agents.
-
-## Final Report Template
-
-Every agent should finish with:
-
-```text
-Changed files:
-- path: what changed
-
-Checks run:
-- command/result
-
-Risks:
-- remaining risk or "none known"
-```
+Report changed files and commands, checks actually run, skipped evidence, concrete residual
+risks and whether commit, task-branch push, PR, merge, deploy or live mutation occurred.
+Report exactly one executor route: `MODEL_ROUTE: parent`, `MODEL_ROUTE: global_spark_worker`
+or `MODEL_ROUTE: Spark fallback`. Pilot target: a small FAST feature ships within the working
+day and waits minutes after readiness. Measure this; do not promise it or make it a new gate.

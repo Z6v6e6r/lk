@@ -357,11 +357,16 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
 
   for (const name of mandatorySteps) {
     assert.ok(step(name), `${name} must remain present`);
-    assert.equal(step(name).if, undefined, `${name} must not be conditional`);
+    assert.equal(step(name)['continue-on-error'], undefined, `${name} must not soft-fail`);
+    assert.match(step(name).id, /^check_/);
+    const category = step(name).env?.DELIVERY_CATEGORY;
+    if (category === 'business') assert.equal(step(name).if, "steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'");
+    else if (category === 'app') assert.equal(step(name).if, "steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''");
+    else assert.equal(step(name).if, undefined);
   }
   assert.equal(
     step("Validate LK1 workflow event and identity contract").run,
-    "node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs",
+    "node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs",
   );
   assert.match(
     step("Run unified candidate and drift-negative tests").run,

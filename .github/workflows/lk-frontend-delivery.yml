@@ -1,0 +1,135 @@
+name: LK Standard Frontend Delivery
+
+on:
+  workflow_run:
+    workflows: [LK1 Subscription Enforcement]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+# Never interrupt an upload, smoke or guarded recovery.
+concurrency:
+  group: lk-standard-frontend-production
+  cancel-in-progress: false
+
+jobs:
+  ready-pr:
+    if: >-
+      vars.LK_STANDARD_FRONTEND_ENABLED == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check PR with trusted main policy
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LK_FRONTEND_POLICY_SHA: ${{ vars.LK_FRONTEND_POLICY_SHA }}
+        run: node scripts/frontend-delivery-github.mjs merge
+      - name: Request protected automatic merge for this exact head
+        env:
+          # A scoped owner-configured bot token is needed so its merge triggers push CI.
+          GH_TOKEN: ${{ secrets.LK_FRONTEND_MERGE_TOKEN }}
+          PR_NUMBER: ${{ steps.policy.outputs.number }}
+          PR_HEAD: ${{ steps.policy.outputs.head }}
+        run: |
+          test -n "$GH_TOKEN"
+          gh pr merge "$PR_NUMBER" --repo Z6v6e6r/lk --auto --squash --match-head-commit "$PR_HEAD"
+
+  frontend-production:
+    if: >-
+      vars.LK_STANDARD_FRONTEND_ENABLED == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    environment: frontend-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - run: npm ci --include=optional --no-audit --no-fund
+      - name: Verify integrated protected source and successful mandatory CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LK_FRONTEND_POLICY_SHA: ${{ vars.LK_FRONTEND_POLICY_SHA }}
+        run: node scripts/frontend-delivery-github.mjs release
+      - name: Configure public build values and pinned browser smoke
+        env:
+          PUBLIC_BUILD_ENV: ${{ vars.LK_FRONTEND_BUILD_ENV_JSON }}
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import { REQUIRED_BUILD_ENV_KEYS, validateBuildEnv } from "./scripts/lib/build-env.mjs";
+            const values = JSON.parse(process.env.PUBLIC_BUILD_ENV);
+            if (validateBuildEnv(values).length) throw new Error("Invalid public build config");
+            for (const key of REQUIRED_BUILD_ENV_KEYS) {
+              if (/[\r\n]/.test(values[key])) throw new Error("Multiline build value");
+              fs.appendFileSync(process.env.GITHUB_ENV, `${key}=${values[key]}\n`);
+            }
+          '
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund @rollup/rollup-linux-x64-gnu@4.57.0
+          npm install --prefix "$RUNNER_TEMP/lk-browser" --ignore-scripts --no-audit --no-fund playwright@1.58.2
+          "$RUNNER_TEMP/lk-browser/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Deliver static frontend and observe with guarded recovery
+        env:
+          LK_STANDARD_FRONTEND_ENABLED: ${{ vars.LK_STANDARD_FRONTEND_ENABLED }}
+          LK_FRONTEND_POLICY_SHA: ${{ vars.LK_FRONTEND_POLICY_SHA }}
+          RELEASE_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          LK_FRONTEND_ASSET_BASE: ${{ vars.LK_FRONTEND_ASSET_BASE }}
+          LK_FRONTEND_SMOKE_URL: ${{ vars.LK_FRONTEND_SMOKE_URL }}
+          LK_FRONTEND_SMOKE_SELECTOR: ${{ vars.LK_FRONTEND_SMOKE_SELECTOR }}
+          LK_FRONTEND_SMOKE_OPEN_SELECTOR: ${{ vars.LK_FRONTEND_SMOKE_OPEN_SELECTOR }}
+          LK_FRONTEND_SMOKE_RESULT_SELECTOR: ${{ vars.LK_FRONTEND_SMOKE_RESULT_SELECTOR }}
+          LK_SSH_KEY: ${{ secrets.LK_FRONTEND_SSH_KEY }}
+          LK_SSH_CONFIG: ${{ vars.LK_FRONTEND_SSH_CONFIG }}
+          LK_SSH_KNOWN_HOSTS: ${{ vars.LK_FRONTEND_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$LK_SSH_KEY" > "$HOME/.ssh/lk-frontend"
+          printf '%s\n' "$LK_SSH_CONFIG" > "$HOME/.ssh/config"
+          printf '%s\n' "$LK_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          unset LK_SSH_KEY
+          export LK_PLAYWRIGHT_ROOT="$RUNNER_TEMP/lk-browser/node_modules/playwright"
+          trap 'rm -f "$HOME/.ssh/lk-frontend"' EXIT
+          node scripts/frontend-release.mjs
+      - name: Record a blocked preflight when publication never started
+        if: always()
+        env:
+          STEP_OUTCOMES: ${{ toJSON(steps) }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const path = `${process.env.RUNNER_TEMP}/frontend-release-result.json`;
+            if (!fs.existsSync(path)) fs.writeFileSync(path, JSON.stringify({status:"BLOCKED_BEFORE_PUBLICATION", source:process.env.SOURCE_SHA, steps:JSON.parse(process.env.STEP_OUTCOMES), observedAt:new Date().toISOString()}));
+          '
+      - name: Record release observation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-release-observation-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/frontend-release-result.json
+          if-no-files-found: warn
+          retention-days: 30
