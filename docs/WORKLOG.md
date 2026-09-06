@@ -2,6 +2,24 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner guarded release preparation (изолированно)
+
+- Анализ: сохранены branch/worktree и checkpoint c058a9b; fresh origin/main
+  00f9db4135f26664019fa718b833d71698f24241, 3 local / 60 remote commits. Partner
+  paths на main с merge-base не менялись; integration не выполнялась. Проверены
+  actual Node-RED CLI/storage semantics и риски подмены current/двойного flow-read.
+- Изменение: настоящий settings entrypoint, exact CLI/env/candidate policy, pinned
+  storage snapshot, bounded durable private audit; девять sidecar artifacts связаны
+  controls → builder → binding. Historical runtime evidence не переписаны. Добавлены
+  runbook и новая страница существующей инфографики; global-spark-routing R3/Critical,
+  parent writer, независимые security/release reviews.
+- Проверка: 54 новые unit/negative tests; общий Partner 283/283. Реальная Linux/x64
+  Node-RED CLI-репетиция — 20/20, два owned контейнера удалены. Найденные review P1
+  current-symlink и P2 cleanup/service-command binding исправлены; повторный review
+  P0–P2=0. Предварительные fixture failures не засчитаны как PASS. Полная inert
+  prod/dev сборка (включая TypeScript) PASS. Production/SSH/secrets/shared data,
+  merge/push/deploy/activation не выполнялись; live ingress и binding ещё закрыты.
+
 ## Правило
 1. До закрытия любой задачи фиксируем каждый значимый шаг: анализ, изменение, проверку, деплой, откат или выпуск weekly-отчета.
 2. Минимум на одну задачу должно быть хотя бы 3 записи: что посмотрели, что поменяли, чем подтвердили результат.

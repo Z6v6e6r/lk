@@ -73,7 +73,12 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   ]) assert.equal(fs.statSync(path.join(outDir, name)).mode & 0o777, 0o600);
   const settings = fs.readFileSync(path.join(outDir, "sidecar/settings.cjs"), "utf8");
   const service = fs.readFileSync(path.join(outDir, "sidecar/partner-game-membership-sidecar.service"), "utf8");
-  const sidecarRehearsal = JSON.parse(fs.readFileSync(path.join(outDir, "sidecar/sidecar-rehearsal.json"), "utf8"));
+  const sidecarRehearsal = JSON.parse(fs.readFileSync(path.join(outDir, "sidecar/guarded-sidecar-rehearsal.json"), "utf8"));
+  assert.equal(fs.existsSync(path.join(outDir, "sidecar/sidecar-rehearsal.json")), false);
+  assert.match(service, /--settings \/opt\/padlhub\/partner-game-membership\/current\/sidecar\/settings-runtime\.cjs /);
+  for (const name of ["settings-runtime.cjs", "settings-guarded.cjs", "guarded-startup.cjs", "raw-request-guard.cjs", "raw-audit.cjs", "guarded-runtime-policy.json"]) {
+    assert.equal(digestFile(path.join(outDir, "sidecar", name)), digestFile(new URL(`../partner_game_membership_sidecar/${name}`, import.meta.url)));
+  }
   assert.match(settings, /uiHost: "127\.0\.0\.1"/);
   assert.match(settings, /uiPort: 18894/);
   assert.match(settings, /httpAdminRoot: false/);
@@ -91,6 +96,10 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   assert.equal(sidecarRehearsal.readback.port, 18894);
   assert.equal(sidecarRehearsal.readback.partnerDefaultOffHttpStatus, 503);
   assert.equal(sidecarRehearsal.readback.adminRootHttpStatus, 404);
+  assert.equal(sidecarRehearsal.readback.systemdExecuted, false);
+  assert.equal(sidecarRehearsal.readback.serviceCommandAndEnvironmentVerified, true);
+  assert.equal(sidecarRehearsal.readback.durableAuditRows, 6);
+  assert.equal(sidecarRehearsal.readback.startupRefusedCases, 10);
   assert.equal(sidecarRehearsal.artifacts.settingsSha256, digestFile(path.join(outDir, "sidecar/settings.cjs")));
   assert.equal(sidecarRehearsal.artifacts.serviceUnitSha256, digestFile(path.join(outDir, "sidecar/partner-game-membership-sidecar.service")));
   assert.equal(sidecarRehearsal.artifacts.candidateFlowSha256, digestFile(path.join(outDir, "candidate.flow.json")));

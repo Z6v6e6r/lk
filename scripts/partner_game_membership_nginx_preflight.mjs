@@ -2,15 +2,15 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { PartnerIngressEvidenceError, parseCanonicalIngressJson } from "./partner_game_membership_ingress_evidence.mjs";
 
-// Source review pins, not caller approvals. These exact sources have NO proven
-// raw-request guard before the Node-RED JSON parser. Never infer coverage from
-// a matching hash or a caller-supplied boolean. Adding a guard needs new review.
+// Legacy baseline-source capability diagnostic, not the guarded startup proof.
+// It still does not observe a live guard or effective ingress configuration.
+// Updating the packet controls pin must never promote its NOT_PROVEN results.
 const SOURCE_PINS = Object.freeze({
   core: "69781e532d5398ff827e839ba9ce11094dd5c0e413f4ea86c76711c37008f283",
   node: "196bddb4df6116364f75f29995e95cc3716ee71d725bf848a3c81c6526d08c74",
   settings: "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
 });
-const CONTROLS_PIN = "4739197ebaee5b9f8f4a7486002988525e27e3a8c1300b8d1f1718ea62594c6a";
+const CONTROLS_PIN = "0bd15e7c61516784aaf4506e911bf99b4a71df77bdf61e752f445e3f3e838a11";
 const HASH = /^[a-f0-9]{64}$/;
 const KNOWN_FLAGS = Object.freeze([
   "--with-http_ssl_module", "--with-http_v2_module", "--with-control-api",

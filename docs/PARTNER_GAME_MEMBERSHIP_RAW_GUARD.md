@@ -1,11 +1,12 @@
 # Partner API: raw-request guard и локальная Nginx-репетиция
 
 Статус: **реализованный локальный кандидат, не установлен в production**.
-Выбран Nginx; существующая ветка и frozen v0.2 packet сохранены. Этот этап не
-меняет production settings, controls, binding, runtime-manifest или Node-RED flow.
+Выбран Nginx; существующая ветка и ранее собранный v0.2 packet сохранены.
+6 сентября [новый guarded release candidate](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md)
+включён в source-driven packaging/controls/binding; production не изменён.
 `verifyPartnerProductionIngress()` по-прежнему возвращает
 `UNSUPPORTED_INGRESS_ADAPTER`; capability preflight остаётся BLOCKED. Его pins
-описывают старый packet, а не новый guarded candidate.
+проверяют baseline capability, а не live activation нового guarded candidate.
 
 [Редактируемая схема](assets/partner-game-membership-ingress-evidence.drawio),
 [общая ingress-модель и live gates](PARTNER_GAME_MEMBERSHIP_INGRESS_VERIFIER.md).
@@ -48,10 +49,9 @@
    Raw guard не заменяет ни один из этих механизмов и не включает provider.
 
 `settings-guarded.cjs` экспортирует **фабрику**, это не готовый файл для прямой
-передачи в `node-red --settings`. Будущий source-driven packaging обязан вызвать
-`createGuardedPartnerSettings({ expectedHost, audit, flows })` с проверенными
-значениями и связать `flows` с реально загружаемым файлом. Проверка переданного
-массива сама по себе не доказывает runtime flow readback.
+передачи в `node-red --settings`. Новый `settings-runtime.cjs` вызывает фабрику
+через guarded startup, проверяет actual candidate и закрепляет graph в storage
+snapshot. Это проверено отдельной CLI-репетицией, описанной в release-документе.
 
 Фабрика допускает только root `/`, выключенный editor/admin, отсутствие другого
 `httpNodeMiddleware`, `httpNodeCors`, `httpNodeAuth`, и ровно три HTTP-In:
@@ -89,8 +89,8 @@ Content-Type для bodyless GET может отсутствовать. Повт
   подписи, nonce, пути, IP, client ID или пользовательского correlation ID.
 - Trusted audit sink обязан **синхронно вернуть `true`** после принятия записи.
   Throw, false, Promise/thenable блокируют dispatch. В fixture запись выполняется
-  через write + fsync; production sink/custody/retention и сквозная корреляция
-  ingress/application audit ещё требуют отдельного решения.
+  через write + fsync. Новый release включает bounded disk sink; его production
+  custody/retention, monitoring и сквозная ingress/application корреляция ещё не подтверждены.
 
 Важно: при отказе самого audit нельзя обещать сохранение отклонённой записи в
 недоступном хранилище. Fail-closed исключает бизнес-операцию; для production нужны
@@ -172,7 +172,7 @@ locked HTTP-In middleware path и candidate flow preflight в изолирова
 
 | Приоритет / владелец | Решение до следующей границы |
 | --- | --- |
-| P0, release/security | Включить guard/factory в новую exact closure, связать actual flow file с preflight, пересчитать runtime/packet/binding pins и пройти review; старый packet не содержит guard |
+| P0, release/security | Guard/factory/startup уже включены в новую source closure; дальше свежий private packet, exact-head CI и отдельные integration/deploy gates; старый packet не модернизируется на месте |
 | P0, инфраструктура | Закрытый production Nginx generator, exact Host/SNI, TLS/mTLS termination, отсутствие direct ingress и protocol policy; full wrong-cert/SNI/shared-host/reachability matrix пока NOT_RUN |
 | P0, инфраструктура/security | Production audit sink, retention/access, backpressure/disk-full recovery, корреляция отказов Nginx с application log; fsync fixture не доказывает это |
 | P0, партнёр | Владельцы client certificate/key, источник запросов, подпись canonical body, безопасная передача ключей, clock sync, nonce uniqueness и хранение idempotency key; повторный wire request нельзя использовать как retry |

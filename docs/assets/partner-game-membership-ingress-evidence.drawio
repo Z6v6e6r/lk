@@ -52,4 +52,21 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Guarded release startup">
+    <mxGraphModel dx="1580" dy="650" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="RELEASE CANDIDATE&#xa;9 hash-bound sidecar files&#xa;Service → settings-runtime&#xa;current → canonical release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="3" value="GUARDED STARTUP&#xa;Exact CLI + OFF environment&#xa;Pinned candidate bytes + routes&#xa;No alternate graph / parser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="4" value="ACTUAL NODE-RED CLI&#xa;Immutable storage snapshot&#xa;127.0.0.1:18894 · admin OFF&#xa;3 routes → 503 API_DISABLED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="20" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="5" value="DURABLE PRIVATE AUDIT&#xa;0600 · exclusive lock · fsync&#xa;16 MiB cap · fixed metadata&#xa;Any failure → no dispatch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="430" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="6" value="PRODUCTION NOT PROVEN&#xa;20 local probes; no systemd&#xa;Ingress / host / custody UNBOUND&#xa;No Mongo/Viva or activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="430" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="7" value="verified service command" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="captured graph; audit ready" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="required before admission" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="separate evidence gate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

@@ -2,11 +2,12 @@
 
 Статус: реализована **общая локальная часть**, не production live-verifier.
 Отдельно добавлен [raw-request guard и физическая локальная Nginx-репетиция](PARTNER_GAME_MEMBERSHIP_RAW_GUARD.md).
-Новый кандидат ещё не включён в frozen production packet.
+Guarded startup включён в [новую source closure пакета](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md);
+это не подтверждение установки/внешнего ingress.
 `verifyPartnerProductionIngress()` безусловно завершается
 `UNSUPPORTED_INGRESS_ADAPTER`. Нет CLI, сетевого collector, чтения production,
 проверки X.509 certificate/CA или физических TLS/mTLS probes внутри этого verifier. Существующие
-production-controls, binding, immutable packet и runtime не меняются.
+production-controls/binding packaging обновлены отдельно; production runtime не менялся.
 
 **Выбор 2026-09-05: Nginx, подтверждён пользователем.** Read-only `nginx -v/-V`
 на `lk-primary-147` показал `nginx/1.24.0 (Ubuntu)`, `--with-http_ssl_module` и

@@ -7,6 +7,11 @@ fail-closed контракт, но не содержат production hostname, CI
 
 ## Что доказано изолированно
 
+Обновление 6 сентября: [guarded startup release](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md)
+добавлен в отдельную exact sidecar closure: actual CLI/pinned graph/durable audit,
+20 physical probes. Исторические сведения ниже не превращаются в свежий audit или
+production proof; старый sidecar rehearsal исключён из нового install packet.
+
 5 сентября 2026 года пакет custom-node с release identity
 `90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d`
 проверен в отдельном minimal sidecar closure на Linux x64, Node `22.23.2`, npm
