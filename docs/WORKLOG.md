@@ -2,6 +2,60 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner/Viva: согласованная локальная композиция main
+
+- Анализ: после смены symbolic HEAD другим исполнителем прошлый Partner merge
+  сохранён как `bb4063ba3bff2663d92ef28aa650cfacc64bb865`; пользователь отдельно
+  разрешил его интеграцию с Viva main `2f7da26668080985b6d0f30acba95be0b7623461`.
+  Владелец передал существующий main-worktree, fresh origin/main остался `00f9db4`.
+- Изменение: no-ff merge без конфликтов; все 34 Partner и 11 Viva пути сохранены
+  из соответствующих checkpoints, пересечений нет. Проверены symbolic HEAD и refs;
+  новые branch/worktree не создавались, runtime/test source не исправлялся.
+- Проверка: Partner 280 PASS в объединённом worktree; три artifact-reader проверки
+  отказали на world-writable `/private/tmp` ancestry и затем прошли 3/3 на побайтно
+  идентичной test/module closure в сохранённом приватном worktree. Guard и права
+  каталогов не ослаблялись. Viva 54 PASS / 7 platform SKIP, workflow/reviewed-flow
+  48/48, runtime/UNBOUND controls validators PASS, full inert prod/dev build с
+  TypeScript PASS, lint 0 errors / 387 baseline warnings, release review P0–P2=0.
+  Первый Viva/lint запуск с неполными dependencies не засчитан: исправлена только
+  наша временная dependency-ссылка, затем проверки повторены. Remote exact-head CI,
+  push/deploy, Docker, SSH, secrets, provider/shared-data mutations не выполнялись.
+
+## 2026-09-06 — Partner guarded release: локальная интеграция main
+
+- Анализ: пользователь передал существующий main-worktree этой задаче; fresh
+  main/origin/main `00f9db4135f26664019fa718b833d71698f24241`, approved task
+  `df03b4ceaa196c8ce8f8a5622dad44eb61b9f9f3`. CI исходного main — success;
+  этот результат не является CI нового объединённого HEAD.
+- Изменение: локальный no-ff merge сохраняет все 34 одобренных пути; единственный
+  конфликт WORKLOG разрешён сохранением обеих историй, package scripts объединены.
+  Все 32 пути кроме package/WORKLOG побайтно совпадают с approved task; standalone
+  runtime/custom-node/lockfile и используемые Partner exports shared helper сохранены.
+- Проверка: объединённое дерево — Partner 283/283, workflow/reviewed-flow 48/48,
+  runtime/controls validators PASS (controls остаются UNBOUND), ESLint 0 errors /
+  387 baseline warnings, полный inert prod/dev build с TypeScript PASS; независимый
+  release review P0–P2=0. Прежние physical proofs не запускались повторно и не
+  считаются fresh live evidence; runtime validator не обновляет vulnerability audit.
+  Remote exact-head CI, push, deploy, SSH, secrets и live/shared mutations не выполнялись.
+
+## 2026-09-06 — Partner guarded release preparation (изолированно)
+
+- Анализ: сохранены branch/worktree и checkpoint c058a9b; fresh origin/main
+  00f9db4135f26664019fa718b833d71698f24241, 3 local / 60 remote commits. Partner
+  paths на main с merge-base не менялись; integration не выполнялась. Проверены
+  actual Node-RED CLI/storage semantics и риски подмены current/двойного flow-read.
+- Изменение: настоящий settings entrypoint, exact CLI/env/candidate policy, pinned
+  storage snapshot, bounded durable private audit; девять sidecar artifacts связаны
+  controls → builder → binding. Historical runtime evidence не переписаны. Добавлены
+  runbook и новая страница существующей инфографики; global-spark-routing R3/Critical,
+  parent writer, независимые security/release reviews.
+- Проверка: 54 новые unit/negative tests; общий Partner 283/283. Реальная Linux/x64
+  Node-RED CLI-репетиция — 20/20, два owned контейнера удалены. Найденные review P1
+  current-symlink и P2 cleanup/service-command binding исправлены; повторный review
+  P0–P2=0. Предварительные fixture failures не засчитаны как PASS. Полная inert
+  prod/dev сборка (включая TypeScript) PASS. Production/SSH/secrets/shared data,
+  merge/push/deploy/activation не выполнялись; live ingress и binding ещё закрыты.
+
 ## Правило
 1. До закрытия любой задачи фиксируем каждый значимый шаг: анализ, изменение, проверку, деплой, откат или выпуск weekly-отчета.
 2. Минимум на одну задачу должно быть хотя бы 3 записи: что посмотрели, что поменяли, чем подтвердили результат.
@@ -14,6 +68,15 @@
 | --- | --- | --- | --- | --- | --- |
 | 2026-09-05 | ~16:10 | LK Games / tenant cutover local main integration | Checkpoint `5dfd8e51…` объединён с fresh `origin/main=4237fbaf…` через merge `c2f39a07…`; единственный конфликт в append-only WORKLOG разрешён сохранением обеих сторон, package scripts объединены автоматически; 24 runtime/test path побайтно совпадают с проверенным task checkpoint | Интегрировать исправление невидимых Piter-игр и R4 cutover/recovery в актуальный локальный main без потери новых reviewed-flow защит | Projection `51 PASS / 7 Linux-only skip`, reviewed-flow `35/35`, TypeScript PASS, ESLint `0 errors / 387 existing warnings`, полный production+dev build с CI inert env PASS; exact merge Linux/Mongo повтор заблокирован Docker daemon `EOF`, при этом те же 24 runtime/test blobs ранее прошли Linux `31/31` и replica `1/1`; push/deploy/live mutation `0` |
 | 2026-09-05 | — | Reviewed-flow deploy / post-rename failure recovery | В apply catch заменили флаг возврата atomicWrite на проверку защищённого live SHA; exact candidate восстанавливается после ошибки directory fsync, unknown/missing state и неполный rollback сохраняют lease; добавлены шесть аварийных regressions | Устранить ложный «rollback completed» после успешного rename и снять blocker Piter deploy без изменения бизнес-логики | Исходный баг воспроизведён `4/4 FAIL`, исправление: helper `35/35`, совместимость `21 PASS / 1 Linux-only SKIP`, syntax/diff/typecheck/prod build PASS, ESLint `0 errors / 387 baseline warnings`, release/reliability review PASS; server/apply/restart/provider/Mongo writes `0` |
+| 2026-09-05 | — | Partner raw guard / analysis | Продолжена существующая `codex/partner-viva-bounded-response-20260905` от `956af9b`; Docker уже работает, другие контейнеры сохранены; изучен exact locked Node-RED 5.0.6 HTTP-In/body-parser ordering | Закрыть raw duplicate-header/JSON boundary в одобренной локальной области без боевого deploy | Выбраны single-owner stream parser и `_body`/skip marker; frozen settings/runtime/packet остаются неизменными |
+| 2026-09-05 | — | Partner raw guard / implementation | Добавлены bounded guard, candidate settings/flow preflight, 86 negative/lifecycle/fixture regressions и source-pinned Docker orchestrator; устранены review findings по redaction, preparation cleanup и evidence binding; обновлены runbook и drawio | Проверять raw запрос до потери дубликатов, сохранять body semantics, фиксировать audit и исключить ложное production proof | Синтетические сертификаты, отдельный fresh locked install, offline test namespace, zero published ports; provider/Mongo/business узлы не активируются |
+| 2026-09-05 | — | Partner raw guard / verification | Combined Partner 229/229, physical Nginx1.24→Node-RED5.0.6 135/135, unsafe-flow preflight3/3, full ESLint0errors, TypeScript/inert prod/dev build и drawio XML PASS; security/release P0–P2=0 | Подтвердить input guard, observer0 на отказах, payload identity, redacted audit и cleanup | Final receipt PASS_LOCAL_ONLY связывает exact sources/runtime/images/certs/probes/audits; все3task-owned containers удалены, временные private keys/CSR удалены; remote CI/production/full TLS matrix NOT_RUN; merge/push/deploy/live mutations отсутствуют |
+| 2026-09-05 | — | Partner ingress / Nginx selection and capability analysis | Пользователь выбрал Nginx; bounded read-only `nginx -v/-V` на `lk-primary-147` показал Ubuntu 1.24.0, SSL/HTTP2, отсутствие control API и флагов отключения request/connection limits | Привязать план к фактической сборке, не угадывая возможности in-memory readback | Build metadata не является live config proof; конфиги/секреты не читались, reload/upgrade не выполнялись; Docker daemon недоступен и не перезапускался |
+| 2026-09-05 | — | Partner ingress / Nginx preflight implementation | Добавлен pure capability preflight с exact sanitized metadata/control/source pins, ownership map и unconditional BLOCK для raw duplicate-header/JSON guard и effective config proof; добавлены 12 negative regressions, обновлены документация и drawio | Не генерировать ложную Nginx-ready конфигурацию до доказанного raw-request guard и controlled-application procedure | Runtime/packet/binding/production verifier не изменены; live adapter по-прежнему UNSUPPORTED; shell/config generation/live I/O в preflight отсутствуют |
+| 2026-09-05 | — | Partner ingress / Nginx local verification | Targeted `55/55`, combined Partner `143/143`, full ESLint/TypeScript, inert prod/dev build и drawio XML validator PASS; security review P0–P2=`0` | Проверить fail-closed preflight и отсутствие ослабления прежних контрактов | Metadata preflight даёт BLOCK по raw duplicate headers/JSON и effective config; 47 policy entries остаются NOT_PROVEN; Linux/physical/live tests NOT_RUN; push/merge/deploy/reload/runtime/secret/Mongo/Viva mutations отсутствуют |
+| 2026-09-05 | ~16:00 | Partner ingress / local scope analysis | Сохранены существующие branch/worktree и HEAD `1e92a267…`; подтверждены отдельный local scope, неизменность Partner closure относительно main и отсутствие выбранного production ingress adapter | Не повторять CI-fix и не подменять декларативный binding доказательством живой конфигурации | Выбор ingress и authoritative runtime config source остаётся необходимым; merge/push/deploy/production probes не начинались |
+| 2026-09-05 | ~16:35 | Partner ingress / evidence core implementation | Добавлены canonical Ed25519 reachability verification с out-of-band SPKI/context pins, bounded private-file reader и LOCAL_FIXTURE-only probe reducer; suite зарегистрирован в существующей Partner-команде, добавлены документация и editable drawio | Подготовить общую проверяемую часть без догадок о topology и без ложного live PASS | Production entry безусловно `UNSUPPORTED_INGRESS_ADAPTER`; runtime/controls/binding/packet не изменены; X.509 и physical TLS probes ещё не реализованы |
+| 2026-09-05 | ~16:45 | Partner ingress / local verification | Partner `131/131` (43 новых), full ESLint/TypeScript и prod/dev build с inert `ci.invalid` config PASS; security и release/CI read-only reviews P0–P2=`0`; drawio XML structural validation PASS | Подтвердить новый local-only scope без выдачи чужого main CI за evidence текущего diff | macOS Node 22.13.1; clean Linux exact-head CI и physical/live TLS NOT_RUN; PNG не получен из-за draw.io Electron helper failure, сохранён XML; merge/push/deploy/server/Mongo/Viva/secret operations не выполнялись |
 | 2026-09-05 | — | Piter subscription / local main integration | Checkpoint `ac7b0969…` объединён с `origin/main=03e69aff…`; обе стороны WORKLOG сохранены, reconciliation подключён к upstream Linux flock verifier с проверками перед mutations/commit | Сохранить новую защиту shared deploy lock при интеграции исторической сверки | Subscription suites `122 PASS / 1 Linux-only SKIP`, prod build + TypeScript PASS, ESLint `0 errors / 387 baseline warnings`, reliability integration review PASS P0-P2=0; push/deploy/live mutation не выполнялись |
 | 2026-09-05 | ~08:45 | LK1 subscription / DEV host preflight deny-all compatibility | Fresh capture на `lk-reserve-89` обнаружил, что systemd 245 отображает безопасный `IPAddressDeny=any` как `0.0.0.0/0 ::/0`; preflight ошибочно считал это production marker. Проверка разделена на forbidden endpoint/origin markers и exact loopback allow + deny-all + address-family sandbox; `nginx -T` удалён, ingress scan получил read-only include/import/symlink closure с inline-разбором, comment/quote sanitation, лимитами depth/entries/files/bytes/directives и count+digest | Устранить false STOP без ослабления DEV network isolation и доказать полный bounded ingress contour, включая внешние nginx includes | Live Linux rehearsal разрешил 22 readable regular files, closure complete, DEV routes absent; добавлены fixture-regressions inline/external/comment/quote/cycle/symlink/missing/unreadable/limit (на macOS Bash 3.2 ожидаемо SKIP до Linux CI); deploy/install/start не выполнялись, final evidence переснимается после checkpoint |
 | 2026-09-05 | ~09:45 | Partner API v0.2 / Viva bounded response P2 | Viva response переведён на Web Stream reader с общим fetch+body deadline, byte limit `1 000 000`, ранним Content-Length stop и cancel; добавлены три регрессии, обновлены immutable evidence/pins, Docker CLI receipt с хешем и часы binding-fixture | Исключить memory/connection DoS и зависание mutation outcome после HTTP headers; заменить прежние runtime evidence результатами проверки новых bytes | Partner `88/88`, Linux/x64 provider `10/10`, workflow `13/13`, TypeScript, lint, prod/dev build с inert config PASS; security и release reviews P0-P2=`0`; fresh audit `0 critical / 0 high / 7 moderate`, no-network runtime/rollback rehearsal PASS после согласованного Docker restart; temporary runtime/cache/state удалены, raw proof сохранён; base `26f90b6…`, production/Viva/Mongo writes `0` |

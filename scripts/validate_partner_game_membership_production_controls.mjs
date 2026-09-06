@@ -69,18 +69,22 @@ export function validatePartnerProductionControls(contract) {
     npmLsExtraneousPackageCount: 0,
     productionInstallCommand: "npm ci --ignore-scripts --no-fund --no-audit",
   })) fail("Partner immutable runtime closure identity changed");
-  exactKeys(runtime.sidecar, [
-    "topology", "bindAddress", "port", "settingsSha256", "serviceUnitSha256",
-    "rehearsalSha256", "candidateFlowSha256", "sharedFlowMutationAllowed",
-  ], "Partner sidecar closure");
+  exactKeys(runtime.sidecar, ["topology","bindAddress","port","settingsSha256","serviceUnitSha256","settingsRuntimeSha256","settingsGuardedSha256","guardedStartupSha256","rawRequestGuardSha256","rawAuditSha256","guardedPolicySha256","candidateFlowSha256","rehearsalSha256","rehearsalCapturedAt","sharedFlowMutationAllowed"], "Partner sidecar closure");
   if (!isDeepStrictEqual(runtime.sidecar, {
     topology: "DEDICATED_LOOPBACK_SIDECAR",
     bindAddress: "127.0.0.1",
     port: 18894,
     settingsSha256: "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
-    serviceUnitSha256: "66791a6c9674e409ba8eae76efc02cbcf3eb303dd48d9ad879233c3bfd77398b",
-    rehearsalSha256: "e609ec014637276d3b139b6e98b6d2e990367a0ccbe90dcf6054071feda1612e",
+    serviceUnitSha256: "3abbb557f2be9565ff115436107de08e4d8f0e566179700eb47bb1a1a01503dc",
+    settingsRuntimeSha256: "cabd3d1867311ae0bfa8165687d7911ebc60a0e84f54959192dacfead67451c1",
+    settingsGuardedSha256: "1ad5eeaf32ddb703b12f88c31151ff7b7fe9960a55a61a5433000ca92b24ee49",
+    guardedStartupSha256: "6b15c0bd95f999517761b47000d0e9a881f60ea140d862049dacb11be0aea3b2",
+    rawRequestGuardSha256: "12d192fcc0d361c18e52ccbad6b020fc0131ab3089e662699e0fb9a8c7ede333",
+    rawAuditSha256: "acae6572895a8fe91ae4e2fc02ae2ea644df099f290bd3f2f9f88b4dad755120",
+    guardedPolicySha256: "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
+    rehearsalSha256: "93abc335d0b1f604cde57df8de3a213a8d9f1725f18560f1df762629f956b0de",
+    rehearsalCapturedAt: "2026-09-06T06:04:29.147Z",
     sharedFlowMutationAllowed: false,
   })) fail("Partner sidecar immutable closure identity changed");
   exactKeys(runtime.auditPolicy, [

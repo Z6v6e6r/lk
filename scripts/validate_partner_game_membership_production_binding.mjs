@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   buildPartnerV02DeploymentPlan,
   validatePartnerSidecarArtifacts,
+  SIDECAR_TEMPLATE_FILES,
 } from "./prepare_partner_game_membership_v02_packet.mjs";
 import { validateExactGraphContract } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import {
@@ -65,9 +66,7 @@ export const PARTNER_PACKET_FILE_PATHS = Object.freeze([
   "runtime/partner-package/partner-game-membership-node.cjs",
   "runtime/partner-package/partner-game-membership-node.html",
   "runtime/partner-package/partner-game-membership-viva.mjs",
-  "sidecar/partner-game-membership-sidecar.service",
-  "sidecar/sidecar-rehearsal.json",
-  "sidecar/settings.cjs",
+  ...SIDECAR_TEMPLATE_FILES.map((name) => `sidecar/${name}`),
 ]);
 
 const fail = (message) => { throw new Error(message); };
@@ -271,11 +270,7 @@ function validateExactPacket({
   const sourceBytes = read("source.flow.json");
   const candidateBytes = read("candidate.flow.json");
   validatePartnerSidecarArtifacts({
-    artifacts: {
-      "settings.cjs": read("sidecar/settings.cjs"),
-      "partner-game-membership-sidecar.service": read("sidecar/partner-game-membership-sidecar.service"),
-      "sidecar-rehearsal.json": read("sidecar/sidecar-rehearsal.json"),
-    },
+    artifacts: Object.fromEntries(SIDECAR_TEMPLATE_FILES.map((name) => [name, read(`sidecar/${name}`)])),
     candidateBytes,
     sidecarControls: controls.runtime.sidecar,
   });
@@ -296,11 +291,7 @@ function validateExactPacket({
     || !isDeepStrictEqual(contract.allowedAdditions.map(({ id }) => id).sort(), Object.values(PARTNER_API_FLOW_NODE_IDS).sort())) {
     fail("Packet flow contract permits changes outside the exact Partner node allowlist");
   }
-  for (const relativePath of [
-    "settings.cjs",
-    "partner-game-membership-sidecar.service",
-    "sidecar-rehearsal.json",
-  ]) {
+  for (const relativePath of SIDECAR_TEMPLATE_FILES) {
     const expected = fs.readFileSync(path.join(SIDECAR_TEMPLATE_ROOT, relativePath));
     if (!read(`sidecar/${relativePath}`).equals(expected)) {
       fail(`Packet sidecar template differs from the reviewed source: ${relativePath}`);

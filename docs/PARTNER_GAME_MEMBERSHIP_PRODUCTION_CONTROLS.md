@@ -7,6 +7,11 @@ fail-closed контракт, но не содержат production hostname, CI
 
 ## Что доказано изолированно
 
+Обновление 6 сентября: [guarded startup release](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md)
+добавлен в отдельную exact sidecar closure: actual CLI/pinned graph/durable audit,
+20 physical probes. Исторические сведения ниже не превращаются в свежий audit или
+production proof; старый sidecar rehearsal исключён из нового install packet.
+
 5 сентября 2026 года пакет custom-node с release identity
 `90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d`
 проверен в отдельном minimal sidecar closure на Linux x64, Node `22.23.2`, npm
@@ -122,6 +127,12 @@ realpath packet обязан точно совпасть с `custody.targetDirec
 deploy/activation authorization. До deploy нужен отдельный live verifier, который
 читает exact ingress config/readback/certificate/CA и подписанный audit reachability
 artifact, а также сам повторяет отрицательные сетевые probes.
+
+Общая локальная часть описана в
+[Ingress evidence core](PARTNER_GAME_MEMBERSHIP_INGRESS_VERIFIER.md). Она проверяет
+подпись, pinned files и локальную матрицу результатов, но не собирает live evidence:
+production entry point пока всегда возвращает `UNSUPPORTED_INGRESS_ADAPTER`.
+Это не снимает `DECLARED_EVIDENCE_UNVERIFIED` и не изменяет 16 `requiredBeforeDeploy`.
 
 ## Ingress contract
 
