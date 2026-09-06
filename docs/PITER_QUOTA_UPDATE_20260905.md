@@ -1,5 +1,98 @@
 # Piter: update of installed atomic topology
 
+## Local collector and fixed private directory increment, 2026-09-06
+
+This supersedes the protected file locations below, not the monetary, default-off,
+DEFERRED, freshness, lease, lock, no-replay or guarded-start contracts. All five
+files now have one FIXED parent `/root/.node-red/.padlhub-piter-only/`:
+
+- `release.json`
+- `start-grant.json`
+- `quiescence.json`
+- `start-consumed.json` (and its retained `.pending` sibling)
+- `start-result.json` (and its retained `.pending` sibling)
+
+The parent must be a root-owned, non-symlink `0700` directory; every ancestor
+must be owned by root, non-symlink and not group/other writable. Protected JSON
+files remain `0600`. No directory is created or chmod-ed by the ledger operator;
+installation is a separately authorized release step. In particular, do not chmod
+the shared `/root/.node-red` directory. No CLI/environment location override or
+fallback to old flat paths exists. Before a future relocation, the release owner
+must check the OLD and new consumed/result plus `.pending` paths: any old intent
+requires reviewed recovery, never a fresh empty namespace to bypass replay guards.
+The operator also rejects any old consumed/result or `.pending` object before
+publication validation and every default start-grant read; unreadable custody blocks.
+
+`scripts/collect_piter_deferred_activation_evidence.mjs` supplies read-only capture,
+not activation, reconciliation or process control. The two modes are:
+
+```bash
+node scripts/collect_piter_deferred_activation_evidence.mjs \
+  --mode packet --output-dir /absolute/new/private/capture
+node scripts/collect_piter_deferred_activation_evidence.mjs \
+  --mode recheck --packet /absolute/private/activation.packet.json \
+  --output-dir /absolute/new/private/recheck
+```
+
+These commands must NOT be run under a local-source/test-only grant. Future live
+capture requires root, `LK_PITER_DEFERRED_TARGET=lk-primary-147` and
+`LK_PITER_DEFERRED_EVIDENCE_ACTION=COLLECT_PITER_ONLY_147`, the existing host/Mongo
+identity digest environment gates, plus `LK_PITER_DEFERRED_EXPECTED_COLLECTOR_SHA256`.
+Supply already-authorized short-lived Bearer tokens via
+`LK_PITER_DEFERRED_VIVA_TOKEN` and `LK_PITER_DEFERRED_ADMIN_TOKEN`, and the existing
+`LK_PITER_DEFERRED_MONGO_URI`. There is no password login, token refresh, secret
+discovery, PM2 invocation, mutation endpoint, arbitrary origin or alternate product.
+Never paste credentials into commands, checkpoints, output or Git.
+
+The installed collector verifies its own expected digest, the protected publication,
+the exact nine operator-source hashes and the unchanged standalone Mongo/BSON
+dependency closure BEFORE importing the driver. Dependency-only custody is 558
+files, sorted `{path,sha256,mode}`, SHA256
+`ab01492202027e06139a1cd479928c38aa41655a4cd7a50a32274dc8e65363bb`.
+The collector itself must be added to the next install manifest with its new
+source-commit/hash provenance. It is not added to the nine-field operational
+descriptor's script list; that strict descriptor schema is unchanged. A shared
+Node-RED module, mutable development symlink or newer unreviewed closure is refused.
+
+Capture requires the exact installed `5b098…` graph and a matching non-expired
+Piter `soaking` lease, and rereads host/Mongo/lease/publication custody at the end.
+It never invokes the cleanup-capable deployment helper. Packet mode emits seven
+inputs in `activation-input.json`: ledger, provider transactions, refund-client
+subscriptions, product, real Node-RED global binding, canonical attempts and
+publication. One majority-scoped Mongo read, with BSON types retained, supplies
+both ledger and attempt envelopes; any sentinel/atomic row or wrong scope blocks
+initial capture. Canonical BSON digests are computed BEFORE JSON projection.
+
+The known Viva GET interfaces are `/studios`, `/transactions` per studio with the
+exact `productIds`, `/clients/{clientId}/subscriptions?includeFinished=true`, and
+`/products/subscriptions`, with size500/page pagination. Ambiguous response shape,
+duplicate IDs, changing/malformed totals, count mismatch, incomplete page sequences
+and the 100-page ceiling fail closed. No fake `complete=true` on an exhausted loop.
+Binding comes from the existing authenticated loopback Node-RED context GET, not
+from a flow literal or historical export. All sources use their read START time;
+completion never retimestamps older pages. Redirects and overlarge responses fail.
+
+The complete capture has a 15-second wall/monotonic deadline. Recheck mode emits
+only the four envelopes in `activation-recheck.json`, validates them against the
+packet's full original row digests and creation time, and refuses a capture that
+already leaves fewer than nine seconds before its earliest evidence expires.
+The same nine-second minimum is checked after artifact/report writes and each
+directory fsync; a slow durable write fails rather than reporting a usable bundle.
+This is not a promise that the later stop/seed/grant/CAS/start will fit. Capture
+the real binding while Node-RED is available; never invent a stopped-runtime read
+or relax the deadline. If the full sequence cannot meet it, stop before outage.
+
+Output requires a new directory under a private owned `0700` parent. Artifacts
+and reports use exclusive `0600` writes and fsync. Stdout contains only a sanitized
+count/hash report, never records, bearer values or raw exceptions. Any failed or
+partially written output is unusable and must be retained, not overwritten/retried
+as if successful. Freshness and all live guards must still pass at actual use.
+
+This increment is LOCAL source and synthetic testing only. No server directory,
+provider/DB call, production metadata, lease, PM2 state, payment or sales state was
+changed. Original strict files, exact two DEFERRED exceptions and Piter50/100 are
+unchanged; source tests do not establish provider latency or physical execution.
+
 ## Guarded-start source increment, 2026-09-06
 
 Direct user authorization covered exactly this runbook, the existing deferred
