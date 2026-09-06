@@ -2,6 +2,46 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: автономное получение Viva service token, local source checkpoint
+
+- Продолжение устранения внутренних препятствий после `5907950`, та же ветка/WT.
+  Добавлен server-owned password grant на фиксированный Viva token endpoint,
+  scoped env selector/credentials, monotonic cache с запасом 30s, single-flight,
+  bounded response/deadline, credential invalidation и shutdown cancellation.
+  Пароль не нормализуется; ошибки не содержат secrets/upstream payload.
+- Legacy global-context сохранён; password-grant не имеет fallback. HTTP contract,
+  ownership/replay/audit, provider gates и отсутствие mutation retry не ослаблены.
+  Startup/default-off/service/egress и production не менялись. Реальных токенов
+  в этом этапе не получали; никаких ответов партнёра для реализации не требуется.
+- Security review: два P2 исправлены и повторно проверены — явный identity encoding
+  с отказом на compressed response; monotonic elapsed deadline независимо от timer.
+  Release review: сохранить historical receipts и обновить actual closure один раз
+  после freeze зависимых startup/ingress/egress source изменений.
+- Фактически: целевые API/provider `80/80 PASS`; полный Partner `409 tests`,
+  `385 PASS / 24 FAIL / 0 skipped`. Все 24 — stale exact-source fixtures:
+  Nginx preflight 3, binding 11, runtime 8, packet 2. Release gate RED.
+  Прежний runtime manifest, audit/functional/guarded receipts и pins не переписаны.
+- Scoped ESLint PASS; полный `npm run lint` exit0, 0 errors / 387 warnings.
+  `npm run build` exit1 на env preflight: 17 обязательных `VITE_*` отсутствуют;
+  компиляция/сборка не запускались, production env не копировался.
+  `nodered:modular:validate` NOT_RUN: shared flow не меняется, свежий private
+  live workspace не получали. XML structural lint: 0 errors / 0 warnings;
+  PNG export/visual QA NOT_RUN (ранее установленный sandbox CLI limitation).
+- Configured staged secret/PII scan первоначально отклонил synthetic email в тесте;
+  fixture заменена на не-email строку с form metacharacters без ослабления scanner.
+  Повторяются только затронутые source/tests и финальная staged-проверка;
+  заведомо красные runtime/packet tests без новых evidence не перезапускаются.
+- Обновлены API/deploy/production/test docs, добавлен token runbook и вторая
+  страница существующей security drawio. Infographic/source tests не являются
+  live авторизацией, revocation proof или working endpoint acceptance.
+  Состояние: `SOURCE_VERIFIED / RUNTIME_REEVIDENCE_PENDING / PACKET_BLOCKED`;
+  общий source stage остаётся незавершённым. Остались bound startup,
+  production Nginx verifier, scoped egress/credentials и exact-source proof.
+- Нет push/merge/PR/CI/deploy/SSH/Docker/install/activation/secret/shared-data
+  операций. Native Nginx application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
+  Полный repository gate блокирован env preflight и устаревшей release closure;
+  это не подтверждение готовности к выпуску.
+
 ## 2026-09-06 — Partner: анкета отменена, выпуск рабочих методов — ответственность PadlHub
 
 - Пользователь отменил согласование P0 и ожидание ответов rusPadelUp. Действующее

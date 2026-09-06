@@ -2,6 +2,16 @@
 
 ## Уровни доказательств
 
+Текущее source-изменение 6 сентября:
+[standalone Viva token](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
+Целевые API/provider **80/80 PASS**, полный Partner-набор **385 PASS / 24 FAIL / 0 skipped**
+(409 tests). Все 24 отказа относятся к прежним exact-source release fixtures:
+Nginx preflight — 3, production binding — 11, runtime — 8, packet — 2.
+Пины/квитанции не переписаны; полный gate **RED**, не release-ready.
+Новый код требует фактического runtime/guarded refresh после завершения source diff.
+Scoped ESLint и XML lint схемы — PASS. Security review выявил и подтвердил
+исправление двух P2: compression framing и monotonic deadline при задержке таймера.
+
 Текущее решение 2026-09-06: native Nginx application rehearsal / Docker install
 `DEFERRED_BY_USER`; native application **NOT_RUN**, прежние failures сохранены.
 Офлайн-проверка [partner kit](partner-game-membership-kit/README.md) независима:
@@ -9,7 +19,7 @@
 server/client byte compatibility, отрицательные fixtures/CLI и переносимость без
 репозитория. Она не доказывает live replay, mTLS, Viva/Mongo или production ingress.
 Production activation gates и строгая проверка process identity не меняются.
-Новые фактические проверки kit: API suite **45/45**, полный Partner suite
+Исторические проверки kit до изменения token source: API suite **45/45**, полный Partner suite
 **384/384**, skipped0; scoped ESLint PASS. Standalone self-test: five vectors PASS
 на Node22.13.1; copied-outside-repository CLI и закрытые ошибки входят в45tests.
 Это source/offline evidence, не CI или live-проверка. Frontend/modular build,
@@ -173,6 +183,10 @@ secret change, migration, deploy, activation или real provider mutation.
 | Schema | Caller передаёт `paid/source/vivaBookingId/clientId` | `400 UNKNOWN_REQUEST_FIELD` |
 | Privacy | Audit после request | Нет raw nonce/IP/body/name/payment ref |
 | Runtime readiness | Любой Viva gate/token отсутствует | `503` до operation/membership/provider call + durable rejected audit |
+| Standalone token | Scoped server credentials, pinned password grant | Ленивое получение, form encoding без trim пароля, без чтения global context; 20 параллельных вызовов используют один grant |
+| Token lifecycle | Истечение, смена/удаление credentials, shutdown | Монотонный TTL от начала запроса минус 30s, без продления на cache hit; старый cache не используется; pending abort, late body cancel |
+| Token transport | Redirect/compression/invalid UTF-8/framing/oversize/timeout | Fixed URL, identity encoding, максимум 64 KiB и 5s на весь ответ; elapsed deadline проверяется независимо от callback таймера; redacted 503 |
+| Token failure | Невалидный TTL, 401, исключение credential reader | Нет fallback/retry мутации; 1s cooldown для следующего grant с теми же credentials; секреты отсутствуют в ошибке |
 | Viva create contract | Готовый adapter получает add | Один POST, pinned base/path/body, auth/idempotency/correlation headers |
 | Viva ambiguity | Network/timeout/5xx/invalid binding | `202 UNKNOWN`, ровно один mutation call, без retry |
 | Viva slow/oversized response | Body не завершается либо `Content-Length`/chunked body больше `1 000 000` байт | Общий timeout остаётся активным до конца body; reader отменяется; лишний chunk не запрашивается; mutation становится `202 UNKNOWN` |
@@ -211,7 +225,7 @@ npm run test:partner-game-membership-api
    - restart между provider ACK и local commit;
    - audit DB outage до provider call;
    - enabled/key/scopes/station revoke без restart либо с документированным reload.
-3. Viva sandbox после ответов P0:
+3. Viva sandbox после технической подготовки PadlHub, без анкеты партнёра:
    - technical user add + exact booking read-back;
    - повтор provider create с одним operation ID;
    - delete exact booking, already absent, exercise closed;

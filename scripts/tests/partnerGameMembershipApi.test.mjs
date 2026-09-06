@@ -1030,6 +1030,58 @@ test("real provider is fail-closed in the test release", async () => {
   assert.equal(repository.audit.at(-1)?.code, "VIVA_RUNTIME_NOT_CONFIGURED");
 });
 
+test("Node-RED password-grant source uses only explicit server credentials and is lazy", async () => {
+  const register = (await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs")).default;
+  const viva = await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs");
+  const values = {
+    LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE: "password-grant",
+    LK_PARTNER_GAME_API_VIVA_SERVICE_CLIENT_ID: "fixture-client",
+    LK_PARTNER_GAME_API_VIVA_SERVICE_USERNAME: "fixture-user",
+    LK_PARTNER_GAME_API_VIVA_SERVICE_PASSWORD: " public-fixture-password ",
+  };
+  let requests = 0;
+  let credentialReads = 0;
+  const resolve = register.createPartnerVivaTokenResolver({ viva,
+    getGlobalContext: () => { throw new Error("Global context must not be used"); },
+    getEnv: name => { if (name !== "LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE") credentialReads++; return values[name]; },
+    fetchImpl: async (url, options) => {
+      requests++;
+      assert.equal(url, viva.PARTNER_VIVA_TOKEN_URL);
+      assert.equal(new URLSearchParams(options.body).get("password"), " public-fixture-password ");
+      return new Response(JSON.stringify({ access_token: "public.fixture.service-token", token_type: "Bearer", expires_in: 300 }));
+    },
+  });
+  assert.equal(credentialReads, 0);
+  assert.equal(requests, 0);
+  assert.equal(await resolve(), "public.fixture.service-token");
+  assert.equal(await resolve(), "public.fixture.service-token");
+  assert.equal(requests, 1);
+  delete values.LK_PARTNER_GAME_API_VIVA_SERVICE_PASSWORD;
+  await assert.rejects(resolve(), { code: "VIVA_SERVICE_TOKEN_UNAVAILABLE", httpStatus: 503 });
+  assert.equal(requests, 1, "missing private credentials never fall back to global context");
+  resolve.close();
+});
+
+test("Node-RED preserves explicit legacy global-context source and rejects unknown token modes", async () => {
+  const register = (await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs")).default;
+  let expiresAt = Date.now() + 60_000;
+  let token = "public.fixture.global-token";
+  for (const source of [undefined, "global-context"]) {
+    const resolve = register.createPartnerVivaTokenResolver({
+      viva: { createVivaServiceTokenResolver: () => { throw new Error("Service grant must not be created"); } },
+      getEnv: name => name === "LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE" ? source : "IGNORED",
+      getGlobalContext: () => ({ get: key => key === "vivacrm_token_expires_at" ? expiresAt : token }),
+    });
+    assert.equal(await resolve(), token);
+    expiresAt = Date.now() + 1_000;
+    assert.equal(await resolve(), "");
+    expiresAt = Date.now() + 60_000;
+    token = "public.fixture.global-token";
+  }
+  assert.throws(() => register.createPartnerVivaTokenResolver({ getEnv: () => "unrecognized" }),
+    { code: "VIVA_TOKEN_SOURCE_INVALID", httpStatus: 503, expose: false });
+});
+
 test("Node-RED custom node registers and remains disabled before any Mongo connection", async () => {
   const registered = new Map();
   const configNodes = new Map();

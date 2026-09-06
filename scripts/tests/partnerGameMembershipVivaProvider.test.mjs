@@ -5,10 +5,18 @@ import {
   PARTNER_VIVA_ADMIN_API_BASE,
   PARTNER_VIVA_CONTRACT_REVISION,
   PARTNER_VIVA_RESPONSE_MAX_BYTES,
+  PARTNER_VIVA_TOKEN_URL,
+  PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES,
+  createVivaServiceTokenResolver,
   VivaAdminTechnicalUserProvider,
 } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs";
 
 const TOKEN = "header.payload.signature-value-for-tests";
+const credentials = () => ({ clientId: "fixture-client", username: "fixture-user", password: "public-fixture-password" });
+const grantResponse = (overrides = {}) => response(200, {
+  access_token: TOKEN, token_type: "Bearer", expires_in: 300, ...overrides,
+});
+const tokenUnavailable = { code: "VIVA_SERVICE_TOKEN_UNAVAILABLE", httpStatus: 503, expose: false, ambiguous: false };
 const OPERATION_ID = "550e8400-e29b-41d4-a716-446655440000";
 const response = (status, payload) => new Response(
   payload === null ? null : JSON.stringify(payload),
@@ -31,6 +39,280 @@ const addInput = {
   exerciseId: "exercise-1",
   technicalVivaClientId: "technical-client-1",
 };
+
+test("standalone token uses the pinned form grant without global context or credential normalization", async () => {
+  const input = { ...credentials(), username: "fixture+user&=", password: " p&=+ 🎾 " };
+  const calls = [];
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: () => input,
+    fetchImpl: async (url, options) => { calls.push({ url, options }); return grantResponse(); } });
+  assert.equal(await resolve(), TOKEN);
+  assert.equal(await resolve(), TOKEN);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, PARTNER_VIVA_TOKEN_URL);
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.redirect, "error");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/x-www-form-urlencoded");
+  assert.equal(calls[0].options.headers["Accept-Encoding"], "identity");
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(calls[0].options.body)), {
+    grant_type: "password", client_id: input.clientId, username: input.username, password: input.password,
+  });
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  resolve.close();
+  await assert.rejects(resolve(), tokenUnavailable);
+  assert.equal(calls.length, 1);
+});
+
+test("standalone token refresh is single-flight and cache hits never extend its deadline", async () => {
+  let now = 100;
+  let finish;
+  let calls = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials, monotonicNow: () => now,
+    fetchImpl: () => { calls++; return new Promise(done => { finish = done; }); } });
+  const pending = Array.from({ length: 20 }, () => resolve());
+  assert.equal(calls, 1);
+  now = 2_100;
+  finish(grantResponse());
+  assert.deepEqual(await Promise.all(pending), Array(20).fill(TOKEN));
+  now = 270_099;
+  assert.equal(await resolve(), TOKEN);
+  assert.equal(calls, 1);
+  now = 270_100;
+  const renewed = resolve();
+  assert.equal(calls, 2);
+  finish(grantResponse({ access_token: "second.fixture.token-value" }));
+  assert.equal(await renewed, "second.fixture.token-value");
+  resolve.close();
+});
+
+test("standalone token rejects stale credentials during grant and invalidates cached credentials", async () => {
+  let input = credentials();
+  let finish;
+  let calls = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: () => input,
+    fetchImpl: () => { calls++; return new Promise(done => { finish = done; }); } });
+  const old = resolve();
+  input = { ...input, password: "public-rotated-fixture-password" };
+  finish(grantResponse());
+  await assert.rejects(old, tokenUnavailable);
+  const fresh = resolve();
+  finish(grantResponse({ access_token: "rotated.fixture.token-value" }));
+  assert.equal(await fresh, "rotated.fixture.token-value");
+  assert.equal(calls, 2);
+  input = { ...input, password: "" };
+  await assert.rejects(resolve(), tokenUnavailable);
+  assert.equal(calls, 2);
+  resolve.close();
+});
+
+test("concurrent credential replacement aborts the old grant rather than returning its token", async () => {
+  let input = credentials();
+  let signal;
+  let calls = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: () => input,
+    fetchImpl: (_url, options) => { calls++; signal = options.signal; return new Promise(() => {}); } });
+  const first = assert.rejects(resolve(), tokenUnavailable);
+  input = { ...input, clientId: "other-fixture-client" };
+  await assert.rejects(resolve(), tokenUnavailable);
+  assert.equal(signal.aborted, true);
+  await first;
+  assert.equal(calls, 1);
+  resolve.close();
+});
+
+test("standalone token failure has bounded backoff then recovers without an old-token fallback", async () => {
+  let now = 0;
+  let calls = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials, monotonicNow: () => now,
+    fetchImpl: async () => {
+      calls++;
+      if (calls === 1) { now = 4_000; return response(401, { error_description: "PRIVATE_PROVIDER_ERROR" }); }
+      return grantResponse();
+    } });
+  await assert.rejects(resolve(), tokenUnavailable);
+  now = 4_999;
+  await assert.rejects(resolve(), tokenUnavailable);
+  assert.equal(calls, 1);
+  now = 5_000;
+  assert.equal(await resolve(), TOKEN);
+  assert.equal(calls, 2);
+  resolve.close();
+});
+
+for (const ttl of [undefined, null, "300", 0, -1, 30, 30.5, 86_401, Number.MAX_SAFE_INTEGER]) {
+  test(`standalone token rejects unsupported expires_in ${String(ttl)}`, async () => {
+    const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+      fetchImpl: async () => grantResponse({ expires_in: ttl }) });
+    await assert.rejects(resolve(), tokenUnavailable);
+    resolve.close();
+  });
+}
+
+test("standalone token TTL counts response latency and fails closed on clock reversal", async () => {
+  let now = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials, monotonicNow: () => now,
+    fetchImpl: async () => { now = 1_001; return grantResponse({ expires_in: 31 }); } });
+  await assert.rejects(resolve(), tokenUnavailable);
+  now = -1;
+  await assert.rejects(resolve(), tokenUnavailable);
+  resolve.close();
+});
+
+test("standalone token rejects missing credentials, extra fields and reader exceptions without fetching", async () => {
+  let calls = 0;
+  for (const value of [null, {}, { ...credentials(), password: "" }, { ...credentials(), clientId: "fixture\n" },
+    { ...credentials(), username: " " }, { ...credentials(), password: "x".repeat(4097) },
+    { ...credentials(), tokenUrl: "https://example.invalid" }, Promise.resolve(credentials())]) {
+    const resolve = createVivaServiceTokenResolver({ credentialsResolver: () => value,
+      fetchImpl: async () => { calls++; return grantResponse(); } });
+    await assert.rejects(resolve(), tokenUnavailable);
+    resolve.close();
+  }
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: () => { throw new Error("PRIVATE_CREDENTIAL_ERROR"); },
+    fetchImpl: async () => { calls++; return grantResponse(); } });
+  await assert.rejects(resolve(), tokenUnavailable);
+  assert.equal(calls, 0);
+  resolve.close();
+});
+
+test("standalone token rejects elapsed deadlines even before the abort timer can run", async () => {
+  for (const phase of ["headers", "body"]) {
+    let now = 0;
+    let cancellations = 0;
+    let releases = 0;
+    const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials, monotonicNow: () => now,
+      fetchImpl: async () => {
+        if (phase === "headers") now = 5_000;
+        return { status: 200, headers: { get: () => null }, body: { getReader: () => ({
+          read: async () => {
+            now = 5_000;
+            return { done: false, value: Buffer.from(JSON.stringify({ access_token: TOKEN, token_type: "Bearer", expires_in: 300 })) };
+          },
+          cancel: () => { cancellations++; }, releaseLock: () => { releases++; },
+        }) } };
+      } });
+    await assert.rejects(resolve(), tokenUnavailable);
+    assert.equal(cancellations, 1);
+    assert.equal(releases, 1);
+    resolve.close();
+  }
+});
+
+test("standalone token accepts identity framing and rejects encoded responses before reading", async () => {
+  const body = JSON.stringify({ access_token: TOKEN, token_type: "Bearer", expires_in: 300 });
+  const identity = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+    fetchImpl: async () => new Response(body, { headers: { "Content-Encoding": "identity", "Content-Length": String(Buffer.byteLength(body)) } }) });
+  assert.equal(await identity(), TOKEN);
+  identity.close();
+  for (const encoding of ["gzip", "deflate", "br", "gzip, identity"]) {
+    let reads = 0;
+    let cancelled = 0;
+    const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+      fetchImpl: async () => ({ status: 200, headers: { get: name => name === "content-encoding" ? encoding : null },
+        body: { getReader: () => { reads++; }, cancel: () => { cancelled++; } } }) });
+    await assert.rejects(resolve(), tokenUnavailable);
+    assert.equal(reads, 0);
+    assert.equal(cancelled, 1);
+    resolve.close();
+  }
+});
+
+test("standalone token rejects malformed, redirected, unbounded or incomplete responses with redacted errors", async () => {
+  for (const make of [
+    () => response(302, { access_token: TOKEN }),
+    () => response(503, { error: "PRIVATE_PROVIDER_ERROR" }),
+    () => new Response('{"access_token":"PRIVATE_TOKEN_BODY"', { status: 200 }),
+    () => grantResponse({ access_token: "short" }),
+    () => grantResponse({ access_token: `${TOKEN}\n` }),
+    () => grantResponse({ token_type: "Basic" }),
+    () => new Response(new Uint8Array([0xff]), { status: 200 }),
+    () => new Response("{}", { status: 200, headers: { "Content-Length": "1" } }),
+    () => new Response("{}", { status: 200, headers: { "Content-Length": "3" } }),
+    () => new Response("{}", { status: 200, headers: { "Content-Length": "invalid" } }),
+    () => new Response("{}", { status: 200, headers: { "Content-Length": String(PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES + 1) } }),
+    () => new Response("x".repeat(PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES + 1), { status: 200 }),
+    () => ({ status: 200, redirected: true, body: { cancel() {} } }),
+    () => ({ status: 200, url: "https://example.invalid", body: { cancel() {} } }),
+  ]) {
+    let calls = 0;
+    const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+      fetchImpl: async () => { calls++; return make(); } });
+    await assert.rejects(resolve(), error => {
+      assert.equal(error.code, tokenUnavailable.code);
+      assert.equal(error.expose, false);
+      assert.equal(error.ambiguous, false);
+      assert.doesNotMatch(String(error.stack) + JSON.stringify(error), /PRIVATE_|fixture-user|fixture-password|header\.payload|example\.invalid/);
+      return true;
+    });
+    assert.equal(calls, 1);
+    resolve.close();
+  }
+});
+
+test("standalone token deadline covers a stalled body and cancellation releases its reader", async () => {
+  let signal;
+  let cancellations = 0;
+  let releases = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials, timeoutMs: 1_000,
+    fetchImpl: async (_url, options) => {
+      signal = options.signal;
+      return { status: 200, headers: { get: () => null }, body: { getReader: () => ({
+        read: () => new Promise(() => {}), cancel: () => { cancellations++; }, releaseLock: () => { releases++; },
+      }) } };
+    } });
+  await assert.rejects(resolve(), tokenUnavailable);
+  assert.equal(signal.aborted, true);
+  assert.equal(cancellations, 1);
+  assert.equal(releases, 1);
+  resolve.close();
+});
+
+test("standalone token close aborts a non-cooperating transport and cancels its late response", async () => {
+  let finish;
+  let signal;
+  let cancelled = 0;
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+    fetchImpl: (_url, options) => { signal = options.signal; return new Promise(done => { finish = done; }); } });
+  const rejected = assert.rejects(resolve(), tokenUnavailable);
+  resolve.close();
+  await rejected;
+  assert.equal(signal.aborted, true);
+  finish({ body: { cancel: () => { cancelled++; } } });
+  await new Promise(done => setImmediate(done));
+  assert.equal(cancelled, 1);
+});
+
+test("provider readiness does not fetch credentials or tokens while any mutation gate is closed", async () => {
+  let reads = 0;
+  let calls = 0;
+  const tokenResolver = createVivaServiceTokenResolver({ credentialsResolver: () => { reads++; return credentials(); },
+    fetchImpl: async () => { calls++; return grantResponse(); } });
+  for (const overrides of [{ mutationsEnabled: false }, { contractRevision: "wrong" },
+    { idempotencyConfirmed: false }, { onPlacePaymentConfirmed: false }]) {
+    const provider = new VivaAdminTechnicalUserProvider({ tokenResolver, mutationsEnabled: true,
+      contractRevision: PARTNER_VIVA_CONTRACT_REVISION, idempotencyConfirmed: true, onPlacePaymentConfirmed: true,
+      ...overrides });
+    await assert.rejects(provider.assertReady());
+  }
+  assert.equal(reads, 0);
+  assert.equal(calls, 0);
+  tokenResolver.close();
+});
+
+test("new token source does not retry a booking mutation rejected with 401", async () => {
+  let tokenCalls = 0;
+  let mutationCalls = 0;
+  const tokenResolver = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+    fetchImpl: async () => { tokenCalls++; return grantResponse(); } });
+  const provider = new VivaAdminTechnicalUserProvider({ tokenResolver,
+    mutationsEnabled: true, contractRevision: PARTNER_VIVA_CONTRACT_REVISION,
+    idempotencyConfirmed: true, onPlacePaymentConfirmed: true,
+    fetchImpl: async () => { mutationCalls++; return response(401, { error: "Unauthorized" }); } });
+  await provider.assertReady();
+  await assert.rejects(provider.addTechnicalUser(addInput));
+  assert.equal(tokenCalls, 1);
+  assert.equal(mutationCalls, 1);
+  tokenResolver.close();
+});
 
 test("Viva provider remains fail-closed until every external contract gate is explicit", async () => {
   const calls = [];

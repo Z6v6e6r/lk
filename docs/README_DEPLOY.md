@@ -978,7 +978,7 @@ Node-RED workspace с `lk-primary-147`, затем
 Packet всегда содержит `liveMutationAuthorized=false`, `deploymentPerformed=false` и
 `activationPerformed=false`. Его наличие не разрешает install/import/restart, создание
 Mongo indexes, provisioning secrets/ACL, ingress change или Viva mutation. Полный
-порядок, обязательные external ответы и rollback gates описаны в
+порядок, технические проверки PadlHub и rollback gates описаны в
 `docs/PARTNER_GAME_MEMBERSHIP_API.md`.
 
 Перед генерацией и перед любым production-side переходом отдельно выполнить
@@ -1013,3 +1013,8 @@ test/production fingerprints; production certificate fingerprint обязан с
 config/readback/certificate/CA и negative probes должен проверить отдельный live
 verifier до deploy. Активация также требует отдельного sidecar-compatible Viva token
 acquisition/refresh/revocation contract; shared Node-RED global context не используется.
+Локальная реализация `password-grant` и её ограничения описаны в
+`docs/PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md`. Она не включает service/egress,
+не получает боевой токен в тестах и не разрешает activation. Изменившиеся custom-node
+bytes требуют нового runtime/packet proof; исторические квитанции не обновляются
+пересчётом хешей без фактической проверки.

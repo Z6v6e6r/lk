@@ -7,8 +7,9 @@ PadlHub предоставляет работающие методы и фикс
 относится к партнёру. Анкета/согласование P0 и отчёт о vectors не являются условием
 нашего выпуска. [Ответственность сторон](PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md).
 
-Статус документа: **deployable source pilot v0.2, default-off; isolated sidecar runtime
-SECURITY_AUDIT_PASS, live ingress/custody gates UNBOUND**. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
+Статус текущего source pilot v0.2: **default-off; token source implemented;
+runtime closure refresh required; live ingress/custody gates UNBOUND**.
+Исторический `SECURITY_AUDIT_PASS` относится к прежним exact bytes. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
 но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не
 создавались, Mongo/shared ingress/production не менялись. Наличие deployable artifacts
 не является разрешением на deploy или activation.
@@ -241,9 +242,16 @@ audit и возвращает `503`, не создавая operation, membership
 | `LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED` | `true` | Внутренняя проверка PadlHub: технически подтверждённая семантика `Idempotency-Key`, не согласование партнёра |
 | `LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED` | `true` | Подтвердить отсутствие нежелательных payment-side effects |
 
-Bearer берётся только из server-side Node-RED global context
-`vivacrm_access_token` и принимается лишь когда `vivacrm_token_expires_at` остаётся
-больше чем на 30 секунд вперед. Caller не может передать token, Viva client ID, booking ID,
+Источник Bearer выбирается только серверной настройкой
+`LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE`. Для отдельного sidecar реализован
+`password-grant`: получение/обновление токена не зависит от global context общего
+Node-RED. Контракт, секреты и ограничения описаны в
+[серверной авторизации Viva](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
+Отсутствующее/пустое значение либо `global-context` сохраняет прежнюю совместимость:
+`vivacrm_access_token` принимается лишь когда `vivacrm_token_expires_at` остаётся
+больше чем на 30 секунд вперед. Это не рабочая конфигурация нового пустого sidecar.
+Неизвестный selector отклоняется; при ошибке password grant fallback отсутствует.
+Caller не может передать token, Viva client ID, booking ID,
 `paymentType` или API base. Base pinned к `https://api.vivacrm.ru/api/v1`; redirect
 запрещён, timeout ограничен 1–30 секундами и действует до полного чтения ответа,
 mutation не повторяется автоматически. Response читается потоково с жёстким пределом

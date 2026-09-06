@@ -1,6 +1,10 @@
 # Production controls: Partner Game Membership API v0.2
 
-Статус: **runtime SECURITY_AUDIT_PASS / ingress UNBOUND / custody UNBOUND / activation BLOCKED**. Документ и
+Статус текущей локальной версии: **token source implemented / runtime closure refresh required /
+ingress UNBOUND / custody UNBOUND / activation BLOCKED**.
+Ниже сохранён исторический `SECURITY_AUDIT_PASS` для прежних exact bytes, не для
+нового [server-owned token resolver](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
+Документ и
 `scripts/partner_game_membership_production_controls.json` задают минимальный
 fail-closed контракт, но не содержат production hostname, CIDR, сертификат, путь
 размещения, получателей packet, секреты или разрешение на изменение production.
