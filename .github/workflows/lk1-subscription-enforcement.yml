@@ -426,6 +426,12 @@ jobs:
           scripts/tests/referralSubscription.nodered.test.ts
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
 
+      - name: Validate Codex main worktree guard
+        run: npm run test:codex-main-worktree-guard
+
+      - name: Validate community list performance
+        run: npm run test:community-list-performance
+
       - name: Fetch pinned legacy build image
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
         env:
