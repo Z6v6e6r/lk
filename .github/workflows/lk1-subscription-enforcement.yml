@@ -82,6 +82,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify checkout identity and diff endpoints
+        id: check_1
         run: |
           set -euo pipefail
           test -n "$BASE_SHA"
@@ -99,11 +100,13 @@ jobs:
           echo "diff_range=$DIFF_RANGE"
 
       - name: Set up Node.js 22
+        id: check_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
       - name: Record immutable job identity
+        id: check_3
         run: |
           set -euo pipefail
           checked_out_sha="$(git rev-parse HEAD)"
@@ -120,12 +123,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check exact event diff whitespace
+        id: check_4
         env:
           GIT_NO_REPLACE_OBJECTS: "1"
           IMMUTABLE_DIFF_RANGE: ${{ steps.pr_identity.outputs.diff_range || steps.push_identity.outputs.diff_range }}
         run: git diff --check --no-ext-diff --no-textconv "$IMMUTABLE_DIFF_RANGE"
 
       - name: Scan changed paths for secrets, PII, binaries, and runtime artifacts
+        id: check_5
         env:
           GIT_NO_REPLACE_OBJECTS: "1"
           IMMUTABLE_HEAD_SHA: ${{ steps.pr_identity.outputs.head_sha || steps.push_identity.outputs.head_sha }}
@@ -281,9 +286,11 @@ jobs:
             '
 
       - name: Install locked dependencies
+        id: check_6
         run: npm ci --include=optional --no-audit --no-fund
 
       - name: Confirm dependency install kept tracked files clean
+        id: check_7
         run: |
           set -euo pipefail
           if [[ -n "$(git status --short --untracked-files=no)" ]]; then
@@ -292,10 +299,19 @@ jobs:
             exit 1
           fi
 
+      - name: Classify actual changed operations
+        id: route
+        run: node scripts/delivery-policy.mjs
+
       - name: Validate LK1 workflow event and identity contract
-        run: node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs
+        id: check_8
+        run: node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs
 
       - name: Run critical subscription regression matrix
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_9
         run: >-
           node --experimental-strip-types --test
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
@@ -317,6 +333,10 @@ jobs:
           scripts/tests/groupScheduleApi.test.ts
 
       - name: Run unified candidate and drift-negative tests
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_10
         run: >-
           node --test
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
@@ -326,6 +346,10 @@ jobs:
           scripts/tests/subscriptionBookingLegacyPatcher.test.mjs
 
       - name: Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_11
         run: >-
           node --test
           scripts/tests/lk1SubscriptionDevProvisioning.test.mjs
@@ -339,27 +363,51 @@ jobs:
           scripts/dev-uat/subscriptions-sale-period/test.mjs
 
       - name: Run tracked credential and authenticated-route security tests
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_12
         run: >-
           node --test
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
 
       - name: Run Partner membership R4 gates
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_13
         run: |
           npm run test:partner-game-membership-api
           npm run validate:partner-game-membership-runtime
           npm run validate:partner-game-membership-production-controls
 
       - name: Run Piter atomic activation lock and ledger gates
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_14
         run: npm run test:piter-atomic-activation
 
       - name: Validate deterministic Node-RED modular toolchain fixtures
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_15
         run: node --test scripts/tests/noderedModularToolchain.test.mjs
 
       - name: Validate combined legacy game command prerequisites
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_16
         run: npm run test:legacy-game-command-prerequisites
 
       - name: Validate combined split draft persistence
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_17
         run: >-
           node --experimental-strip-types --test
           scripts/tests/paymentSyncDraftRecovery.test.ts
@@ -368,6 +416,10 @@ jobs:
           scripts/tests/splitLifecycleV2.nodered.test.ts
 
       - name: Validate referral attribution compatibility
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_18
         run: >-
           node --experimental-strip-types --test
           scripts/tests/referralAttribution.test.ts
@@ -375,9 +427,17 @@ jobs:
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
 
       - name: Fetch pinned legacy build image
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_19
         run: docker pull node@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a
 
       - name: Validate reviewed-flow and legacy custody boundaries
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        env:
+          DELIVERY_CATEGORY: business
+        id: check_20
         run: >-
           node --test --test-concurrency=1
           scripts/tests/reviewedFlowDeploy.test.mjs
@@ -385,13 +445,34 @@ jobs:
           scripts/tests/legacyGameCommandH2IdentityAudit.test.mjs
           scripts/tests/legacyGameCommandRootAclBootstrap.test.mjs
 
+      - name: Validate isolated frontend static routing with real nginx
+        id: check_static_nginx
+        if: steps.route.outputs.profile == 'release'
+        env:
+          DELIVERY_CATEGORY: release
+        run: |
+          docker pull nginx@sha256:2e26275ed7a47e8e93f264d39a09ca4bc3f4058c904c75087e237f4ea883f2a1
+          npm run test:frontend-static-nginx
+
       - name: Typecheck
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_21
         run: npx tsc -b --pretty false
 
       - name: Lint
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_22
         run: npm run lint
 
       - name: Export inert build environment
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_23
         run: >-
           node --input-type=module -e '
           import fs from "node:fs";
@@ -405,6 +486,10 @@ jobs:
           '
 
       - name: Install pinned Rollup Linux optional binary
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_24
         run: |
           set -euo pipefail
           npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
@@ -412,9 +497,14 @@ jobs:
           node -e 'const value = require("./node_modules/@rollup/rollup-linux-x64-gnu/package.json").version; if (value !== "4.57.0") process.exit(1)'
 
       - name: Build with inert compile-time configuration
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_25
         run: npm run build
 
       - name: Confirm tracked working tree remains clean
+        id: check_26
         run: |
           set -euo pipefail
           if [[ -n "$(git status --short --untracked-files=no)" ]]; then
@@ -422,3 +512,20 @@ jobs:
             git status --short --untracked-files=no
             exit 1
           fi
+
+      - name: Frontend loader and community regressions
+        id: check_frontend
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        run: |
+          npm run test:community-list-performance
+          node --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts
+          node --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs
+
+      - name: Required delivery result
+        if: always()
+        env:
+          DELIVERY_PROFILE: ${{ steps.route.outputs.profile }}
+          DELIVERY_STEPS: ${{ toJSON(steps) }}
+        run: node scripts/delivery-check-result.mjs

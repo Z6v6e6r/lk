@@ -238,11 +238,17 @@ export function validateExactCutoverPacket({ packetRoot, plan, manifest, nowMs =
       nowMs,
     });
     validateProjectedInputs(gamesRead.value, providerRead.value, planRead.value.scope);
-    validateCaptureReceipt(receiptRead.value, source.providerCaptureReceiptSha256, providerRead.value, planRead.value.scope);
+    validateCaptureReceipt(
+      receiptRead.value,
+      source.providerCaptureReceiptSha256,
+      providerRead.value,
+      planRead.value.scope,
+      planRead.value.source.providerServicePrincipalSha256,
+    );
     requireFreshProjection(gamesRead.value, {
       sourceKind: "live-147-mongo-projection", sourceHost: "lk-primary-147", database: "games", collection: "lk_games",
     }, "Games", planRead.value.generatedAt);
-    requireFreshProjection(providerRead.value, { sourceKind: "viva-end-user-tenant-projection" }, "Provider", planRead.value.generatedAt);
+    requireFreshProjection(providerRead.value, { sourceKind: "viva-admin-service-projection" }, "Provider", planRead.value.generatedAt);
     if (gamesRead.value.sourceFlowSha256 !== plan.sourceFlowSha256
       || sha256(String(providerRead.value.tenantKey || "")) !== plan.tenantKeySha256) {
       fail(`Cutover packet migration evidence ${index} target mismatch`);

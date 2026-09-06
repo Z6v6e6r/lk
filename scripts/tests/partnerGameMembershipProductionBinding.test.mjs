@@ -351,7 +351,13 @@ test("private production binding rejects a resealed sidecar service or settings 
   for (const relativePath of [
     "sidecar/settings.cjs",
     "sidecar/partner-game-membership-sidecar.service",
-    "sidecar/sidecar-rehearsal.json",
+    "sidecar/guarded-sidecar-rehearsal.json",
+    "sidecar/settings-runtime.cjs",
+    "sidecar/settings-guarded.cjs",
+    "sidecar/guarded-startup.cjs",
+    "sidecar/raw-request-guard.cjs",
+    "sidecar/raw-audit.cjs",
+    "sidecar/guarded-runtime-policy.json",
   ]) {
     const packet = packetFixture();
     const filePath = path.join(packet.root, relativePath);

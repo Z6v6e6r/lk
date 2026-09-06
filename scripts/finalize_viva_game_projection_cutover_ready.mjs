@@ -330,6 +330,7 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
       fenceTokenSha256: plan.writerFence.fenceTokenSha256,
       cutoverPlanSha256: execution.cutoverPlanSha256,
       mongoTargetIdentitySha256: plan.mongoTarget.targetIdentitySha256,
+      migrationAuthenticationRestrictions: connection.authenticationRestrictions,
     });
     if (dependencies.assertNoConcurrentWrites) await dependencies.assertNoConcurrentWrites();
     else await assertNoConcurrentMongoWrites(client);

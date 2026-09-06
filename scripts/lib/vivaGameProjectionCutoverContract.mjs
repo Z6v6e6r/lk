@@ -74,6 +74,7 @@ function validatePlans(plans, sourceFlowSha256, tenantKey, generatedAt) {
   let totalEligible = 0;
   let totalSkipped = 0;
   let totalScanned = 0;
+  let providerServicePrincipalSha256 = null;
   const cutoverGeneratedAtMs = Date.parse(generatedAt);
   for (const [index, item] of plans.entries()) {
     assertHash(item?.planSha256, `Migration plan ${index} digest`);
@@ -85,6 +86,11 @@ function validatePlans(plans, sourceFlowSha256, tenantKey, generatedAt) {
       || !Number.isSafeInteger(plan.scannedCount) || !Number.isSafeInteger(plan.eligibleCount)) {
       fail(`Migration plan ${index} identity/count mismatch`);
     }
+    assertHash(plan.source.providerServicePrincipalSha256, `Migration plan ${index} provider service-principal digest`);
+    if (providerServicePrincipalSha256 && providerServicePrincipalSha256 !== plan.source.providerServicePrincipalSha256) {
+      fail("Cutover migration plans use different provider service principals");
+    }
+    providerServicePrincipalSha256 = plan.source.providerServicePrincipalSha256;
     const planGeneratedAtMs = Date.parse(plan.generatedAt);
     if (!Number.isFinite(planGeneratedAtMs) || planGeneratedAtMs > cutoverGeneratedAtMs + 60_000
       || cutoverGeneratedAtMs - planGeneratedAtMs > 30 * 60_000) {
@@ -98,7 +104,14 @@ function validatePlans(plans, sourceFlowSha256, tenantKey, generatedAt) {
     totalSkipped += Object.values(plan.skipped || {}).reduce((sum, value) => sum + Number(value || 0), 0);
     totalScanned += plan.scannedCount;
   }
-  return { planSha256s: [...hashes], operationIds: [...operationIds], totalEligible, totalSkipped, totalScanned };
+  return {
+    planSha256s: [...hashes],
+    operationIds: [...operationIds],
+    totalEligible,
+    totalSkipped,
+    totalScanned,
+    providerServicePrincipalSha256,
+  };
 }
 
 export function validateCutoverControls(controls, {
@@ -111,6 +124,7 @@ export function validateCutoverControls(controls, {
   planSha256s,
   totalSkipped,
   totalScanned,
+  providerServicePrincipalSha256,
   generatedAt,
 } = {}) {
   if (!isObject(controls) || controls.formatVersion !== 1) fail("Cutover controls format mismatch");
@@ -139,6 +153,7 @@ export function validateCutoverControls(controls, {
   if (isPass(controls.runtimeTenant.state)) {
     const expectedTenantHash = sha256(tenantKey);
     if (controls.runtimeTenant.tenantKeySha256 !== expectedTenantHash
+      || controls.runtimeTenant.vivaServicePrincipalSha256 !== providerServicePrincipalSha256
       || controls.runtimeTenant.durableConfigReadback !== true
       || controls.runtimeTenant.restartUsedUpdateEnv !== true
       || controls.runtimeTenant.postRestartReadback !== true
@@ -341,6 +356,7 @@ export function buildVivaGameProjectionCutoverPlan({
     planSha256s: planSummary.planSha256s,
     totalSkipped: planSummary.totalSkipped,
     totalScanned: planSummary.totalScanned,
+    providerServicePrincipalSha256: planSummary.providerServicePrincipalSha256,
     generatedAt,
   });
   return {

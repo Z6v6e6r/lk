@@ -1,5 +1,14 @@
 # Деплой — автоподгрузка скрипта в Tilda
 
+## Стандартный frontend-путь
+
+Выключенная по умолчанию автоматизация и единый activation checklist:
+[FRONTEND_DELIVERY.md](FRONTEND_DELIVERY.md). После однократного включения владельцем
+готовая допустимая frontend-фича проходит protected merge, CI интегрированного source,
+существующие build/upload, static publication, smoke и guarded recovery без отдельных
+подтверждений каждого шага. Изменение самого release-механизма требует профильного review.
+Этот инфраструктурный PR не включает путь и не может выпустить себя.
+
 ## 0. Обязательный clean-release preflight
 
 Деплой и сборка upload-пакета разрешены только из чистого Git checkout.
@@ -17,8 +26,8 @@
 npm run release:preflight
 ```
 
-Полный порядок стабилизации и переноса старых исправлений описан в
-`docs/MAIN_STABILIZATION.md`.
+Исторический порядок стабилизации в `docs/MAIN_STABILIZATION.md` не является
+обязательным интеграционным пакетом для независимой фичи.
 
 ## 1. Установить зависимости и собрать
 ```bash
@@ -986,8 +995,10 @@ Mongo indexes, provisioning secrets/ACL, ingress change или Viva mutation. П
 `npm run validate:partner-game-membership-runtime`. Packet обязан содержать
 `production-controls.contract.json` с тем же SHA-256, что `deployment-plan.json`, exact
 runtime lock/`npm ls`/audit/functional manifest, dedicated-sidecar `source.flow.json` и финальный
-`packet.manifest.json`, а также exact `sidecar/settings.cjs`, default-off hardened
-systemd unit и no-network readback evidence. Functional rehearsal доказывает только exact custom-node
+`packet.manifest.json`, а также девять exact sidecar artifacts: baseline settings,
+`settings-runtime.cjs`, factory/guard/startup/audit/policy, default-off hardened
+systemd unit и новый guarded no-network readback. См.
+`docs/PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md`. Functional rehearsal доказывает только exact custom-node
 load/default-off/removal compatibility, но не deploy-stage service/ingress read-back. Packet собирается
 в sibling temp-directory и становится видимым только atomic rename после fsync.
 Текущее состояние — `runtime=SECURITY_AUDIT_PASS`, `ingress=UNBOUND`,

@@ -412,6 +412,7 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
       fenceTokenSha256: plan.writerFence.fenceTokenSha256,
       cutoverPlanSha256: options.expectedCutoverPlanSha256,
       mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+      migrationAuthenticationRestrictions: migrationConnection.authenticationRestrictions,
     });
     if (dependencies.assertNoConcurrentWrites) await dependencies.assertNoConcurrentWrites();
     else await assertNoConcurrentMongoWrites(mongoContext.client);
@@ -518,6 +519,7 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
       fenceTokenSha256: plan.writerFence.fenceTokenSha256,
       cutoverPlanSha256: options.expectedCutoverPlanSha256,
       mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+      migrationAuthenticationRestrictions: migrationConnection.authenticationRestrictions,
     });
     guardianLease = dependencies.assertGuardianLease
       ? await dependencies.assertGuardianLease(guardianRead.value, finalNowMs)

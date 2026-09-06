@@ -106,6 +106,13 @@ test("production controls pin every dedicated sidecar artifact and prohibit shar
     ["serviceUnitSha256", "b".repeat(64)],
     ["rehearsalSha256", "c".repeat(64)],
     ["candidateFlowSha256", "d".repeat(64)],
+    ["settingsRuntimeSha256", "a".repeat(64)],
+    ["settingsGuardedSha256", "a".repeat(64)],
+    ["guardedStartupSha256", "a".repeat(64)],
+    ["rawRequestGuardSha256", "a".repeat(64)],
+    ["rawAuditSha256", "a".repeat(64)],
+    ["guardedPolicySha256", "a".repeat(64)],
+    ["rehearsalCapturedAt", "2000-01-01T00:00:00.000Z"],
     ["sharedFlowMutationAllowed", true],
   ]) {
     const contract = clone();

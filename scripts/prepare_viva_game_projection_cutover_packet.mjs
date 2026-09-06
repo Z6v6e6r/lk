@@ -190,11 +190,17 @@ function loadMigrationPlans(indexPath, expectedSourceFlowSha256, tenantKey) {
       fail(`Migration plan ${planIndex} source evidence digest mismatch`);
     }
     validateProjectedInputs(gamesRead.value, providerRead.value, plan.scope);
-    validateCaptureReceipt(receiptRead.value, receiptSha256, providerRead.value, plan.scope);
+    validateCaptureReceipt(
+      receiptRead.value,
+      receiptSha256,
+      providerRead.value,
+      plan.scope,
+      plan.source.providerServicePrincipalSha256,
+    );
     requireFreshProjection(gamesRead.value, {
       sourceKind: "live-147-mongo-projection", sourceHost: "lk-primary-147", database: "games", collection: "lk_games",
     }, "Games", plan.generatedAt);
-    requireFreshProjection(providerRead.value, { sourceKind: "viva-end-user-tenant-projection" }, "Provider", plan.generatedAt);
+    requireFreshProjection(providerRead.value, { sourceKind: "viva-admin-service-projection" }, "Provider", plan.generatedAt);
     if (gamesRead.value.sourceFlowSha256 !== expectedSourceFlowSha256 || providerRead.value.tenantKey !== tenantKey) {
       fail(`Migration plan ${planIndex} source evidence target mismatch`);
     }

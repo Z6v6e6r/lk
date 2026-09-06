@@ -1,10 +1,33 @@
 import { BSON } from "mongodb";
+import { isIP } from "node:net";
 
 import { buildMongoTargetIdentity, canonicalJson, sha256 } from "./vivaGameProjectionCutoverContract.mjs";
 import { hashCanonicalEjson } from "./vivaGameProjectionTenantMigrationExecution.mjs";
 
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+export const EXPECTED_APPLICATION_ROLES = Object.freeze([
+  { role: "readWrite", db: "PadlhUBScore" },
+  { role: "readWrite", db: "dialog" },
+  { role: "readWrite", db: "events" },
+  { role: "readWrite", db: "games" },
+  { role: "readWrite", db: "games_chat" },
+]);
+
+export const EXPECTED_MIGRATION_PRIVILEGES = Object.freeze([
+  { resource: { cluster: true }, actions: ["inprog"] },
+  { resource: { db: "PadlhUBScore", collection: "" }, actions: ["grantRole", "revokeRole"] },
+  { resource: { db: "admin", collection: "" }, actions: ["viewUser"] },
+  { resource: { db: "dialog", collection: "" }, actions: ["grantRole", "revokeRole"] },
+  { resource: { db: "events", collection: "" }, actions: ["grantRole", "revokeRole"] },
+  { resource: { db: "games", collection: "" }, actions: ["grantRole", "listCollections", "revokeRole"] },
+  {
+    resource: { db: "games", collection: "lk_games" },
+    actions: ["bypassDocumentValidation", "collMod", "find", "update"],
+  },
+  { resource: { db: "games_chat", collection: "" }, actions: ["grantRole", "revokeRole"] },
+]);
 
 export const buildMongoWriteBarrierValidator = (fenceTokenSha256) => ({
   $and: [
@@ -30,6 +53,120 @@ const normalizeRoles = (roles, label = "Mongo roles") => {
   return normalized;
 };
 const principalSha256 = (principal) => sha256(canonicalJson(normalizePrincipal(principal, "Application")));
+const normalizePrivileges = (privileges, label = "Mongo privileges") => {
+  if (!Array.isArray(privileges)) fail(`${label} are invalid`);
+  const normalized = privileges.map((privilege) => {
+    const resource = privilege?.resource;
+    let normalizedResource;
+    if (isObject(resource) && resource.cluster === true && Object.keys(resource).length === 1) {
+      normalizedResource = { cluster: true };
+    } else if (isObject(resource) && typeof resource.db === "string" && typeof resource.collection === "string"
+      && Object.keys(resource).length === 2) {
+      normalizedResource = { db: resource.db, collection: resource.collection };
+    } else {
+      fail(`${label} contain an unsupported resource`);
+    }
+    if (!Array.isArray(privilege.actions) || privilege.actions.length === 0
+      || privilege.actions.some((action) => typeof action !== "string" || !action)) {
+      fail(`${label} contain invalid actions`);
+    }
+    const actions = [...new Set(privilege.actions)].sort();
+    if (actions.length !== privilege.actions.length) fail(`${label} contain duplicate actions`);
+    return { resource: normalizedResource, actions };
+  }).sort((left, right) => canonicalJson(left.resource).localeCompare(canonicalJson(right.resource)));
+  if (new Set(normalized.map((privilege) => canonicalJson(privilege.resource))).size !== normalized.length) {
+    fail(`${label} contain duplicate resources`);
+  }
+  return normalized;
+};
+const exactCanonicalMatch = (left, right) => canonicalEjsonSha256(left) === canonicalEjsonSha256(right);
+const normalizeExactHostAddress = (value, label) => {
+  const entry = String(value || "");
+  if (!entry || entry !== entry.trim()) fail(`Migration Mongo ${label} restriction is invalid`);
+  const slash = entry.lastIndexOf("/");
+  const address = slash === -1 ? entry : entry.slice(0, slash);
+  const prefix = slash === -1 ? null : Number(entry.slice(slash + 1));
+  const family = isIP(address);
+  if (family === 0 || (prefix !== null && prefix !== (family === 4 ? 32 : 128))) {
+    fail(`Migration Mongo ${label} restriction must contain exact host addresses only`);
+  }
+  return entry;
+};
+
+export const normalizeMongoAuthenticationRestrictions = (value) => {
+  if (!Array.isArray(value) || value.length !== 1 || !isObject(value[0])) {
+    fail("Migration Mongo user requires one exact authentication restriction");
+  }
+  const restriction = value[0];
+  if (Object.keys(restriction).sort().join(",") !== "clientSource,serverAddress") {
+    fail("Migration Mongo authentication restriction fields are invalid");
+  }
+  for (const key of ["clientSource", "serverAddress"]) {
+    if (!Array.isArray(restriction[key]) || restriction[key].length === 0
+      || restriction[key].some((entry) => typeof entry !== "string")) {
+      fail(`Migration Mongo ${key} restriction is invalid`);
+    }
+  }
+  const normalized = {
+    clientSource: restriction.clientSource.map((entry) => normalizeExactHostAddress(entry, "clientSource")).sort(),
+    serverAddress: restriction.serverAddress.map((entry) => normalizeExactHostAddress(entry, "serverAddress")).sort(),
+  };
+  if (new Set(normalized.clientSource).size !== normalized.clientSource.length
+    || new Set(normalized.serverAddress).size !== normalized.serverAddress.length) {
+    fail("Migration Mongo authentication restrictions contain duplicate addresses");
+  }
+  return [normalized];
+};
+export const mongoAuthenticationRestrictionsSha256 = (value) => canonicalEjsonSha256(
+  normalizeMongoAuthenticationRestrictions(value),
+);
+
+async function readStoredMongoUserAccess(adminClient, principal, label) {
+  const normalized = normalizePrincipal(principal, label);
+  const result = await adminClient.db(normalized.db).command({
+    usersInfo: normalized,
+    showPrivileges: true,
+    showAuthenticationRestrictions: true,
+  });
+  if (!Array.isArray(result?.users) || result.users.length !== 1) fail(`${label} Mongo user record is missing or ambiguous`);
+  const user = result.users[0];
+  if (user.user !== normalized.user || user.db !== normalized.db) fail(`${label} Mongo user readback changed identity`);
+  return {
+    principal: normalized,
+    roles: normalizeRoles(user.roles || [], `${label} stored roles`),
+    inheritedRoles: normalizeRoles(user.inheritedRoles || [], `${label} inherited roles`),
+    inheritedPrivileges: normalizePrivileges(user.inheritedPrivileges || [], `${label} inherited privileges`),
+    mechanisms: [...(user.mechanisms || [])].sort(),
+    authenticationRestrictions: normalizeMongoAuthenticationRestrictions(user.authenticationRestrictions),
+  };
+}
+
+async function assertLeastPrivilegeMigrationPrincipal(client, connectionAccess, expectedAuthenticationRestrictions) {
+  const principal = connectionAccess.principal;
+  const expectedPrivileges = normalizePrivileges(EXPECTED_MIGRATION_PRIVILEGES, "Expected migration privileges");
+  const expectedRestrictions = normalizeMongoAuthenticationRestrictions(expectedAuthenticationRestrictions);
+  if (principal.db !== "admin" || !/^padlhubVivaProjectionMigration_[A-Za-z0-9_-]{8,}$/.test(principal.user)
+    || connectionAccess.roles.length !== 1 || connectionAccess.roles[0].db !== "admin"
+    || !/^padlhubVivaProjectionMigration_[A-Za-z0-9_-]{8,}$/.test(connectionAccess.roles[0].role)
+    || connectionAccess.roles[0].role !== principal.user
+    || !exactCanonicalMatch(connectionAccess.privileges, expectedPrivileges)) {
+    fail("Migration Mongo principal is not the exact least-privilege custom principal");
+  }
+  const stored = await readStoredMongoUserAccess(client, principal, "Migration");
+  if (!exactCanonicalMatch(stored.roles, connectionAccess.roles)
+    || !exactCanonicalMatch(stored.inheritedRoles, connectionAccess.roles)
+    || !exactCanonicalMatch(stored.inheritedPrivileges, expectedPrivileges)
+    || !exactCanonicalMatch(stored.authenticationRestrictions, expectedRestrictions)
+    || stored.mechanisms.length !== 1 || stored.mechanisms[0] !== "SCRAM-SHA-256") {
+    fail("Migration Mongo user stored/effective access is not exact");
+  }
+  return {
+    role: connectionAccess.roles[0],
+    rolesSha256: canonicalEjsonSha256(stored.roles),
+    privilegesSha256: canonicalEjsonSha256(expectedPrivileges),
+    authenticationRestrictionsSha256: canonicalEjsonSha256(stored.authenticationRestrictions),
+  };
+}
 
 export async function readMongoWriteBarrierState(db, collectionName = "lk_games") {
   const rows = await db.listCollections({ name: collectionName }, { nameOnly: false }).toArray();
@@ -49,8 +186,7 @@ export async function readAuthenticatedMongoPrincipal(client, label) {
   return {
     principal: normalizePrincipal(users[0], label),
     roles: normalizeRoles(status?.authInfo?.authenticatedUserRoles || [], `${label} effective roles`),
-    privileges: Array.isArray(status?.authInfo?.authenticatedUserPrivileges)
-      ? status.authInfo.authenticatedUserPrivileges : [],
+    privileges: normalizePrivileges(status?.authInfo?.authenticatedUserPrivileges || [], `${label} effective privileges`),
   };
 }
 
@@ -63,11 +199,31 @@ export async function readStoredMongoUserRoles(adminClient, principal) {
   return normalizeRoles(user.roles || [], "Stored application roles");
 }
 
-async function updateStoredMongoUserRoles(adminClient, principal, roles) {
+async function replaceStoredMongoUserRoles(adminClient, principal, roles) {
   const normalized = normalizePrincipal(principal, "Application");
-  await adminClient.db(normalized.db).command({ updateUser: normalized.user, roles: normalizeRoles(roles) });
+  const current = await readStoredMongoUserRoles(adminClient, normalized);
+  const target = normalizeRoles(roles);
+  const key = (role) => `${role.db}\0${role.role}`;
+  const currentKeys = new Set(current.map(key));
+  const targetKeys = new Set(target.map(key));
+  const revoke = current.filter((role) => !targetKeys.has(key(role)));
+  const grant = target.filter((role) => !currentKeys.has(key(role)));
+  if (revoke.length > 0) {
+    await adminClient.db(normalized.db).command({
+      revokeRolesFromUser: normalized.user,
+      roles: revoke,
+      writeConcern: { w: "majority" },
+    });
+  }
+  if (grant.length > 0) {
+    await adminClient.db(normalized.db).command({
+      grantRolesToUser: normalized.user,
+      roles: grant,
+      writeConcern: { w: "majority" },
+    });
+  }
   const readback = await readStoredMongoUserRoles(adminClient, normalized);
-  if (canonicalEjsonSha256(readback) !== canonicalEjsonSha256(normalizeRoles(roles))) {
+  if (canonicalEjsonSha256(readback) !== canonicalEjsonSha256(target)) {
     fail("Application Mongo role update did not read back exactly");
   }
   return readback;
@@ -133,6 +289,10 @@ const assertReceiptIdentity = (receipt, expected) => {
     || receipt.cutoverPlanSha256 !== expected.cutoverPlanSha256
     || receipt.mongoTargetIdentitySha256 !== expected.mongoTargetIdentitySha256
     || principalSha256(receipt.applicationPrincipal) !== receipt.applicationPrincipalSha256
+    || principalSha256(receipt.migrationPrincipal) !== receipt.migrationPrincipalSha256
+    || !/^[a-f0-9]{64}$/.test(String(receipt.migrationRolesSha256 || ""))
+    || !/^[a-f0-9]{64}$/.test(String(receipt.migrationPrivilegesSha256 || ""))
+    || !/^[a-f0-9]{64}$/.test(String(receipt.migrationAuthenticationRestrictionsSha256 || ""))
     || receipt.applicationConnectionFingerprint === receipt.migrationConnectionFingerprint) {
     fail("Mongo write-barrier artifact does not bind the exact cutover and separate principals");
   }
@@ -140,6 +300,10 @@ const assertReceiptIdentity = (receipt, expected) => {
 
 export async function assertMongoWriteBarrier(migrationClient, receipt, expected = {}) {
   assertReceiptIdentity(receipt, expected);
+  const expectedRestrictions = normalizeMongoAuthenticationRestrictions(expected.migrationAuthenticationRestrictions);
+  if (canonicalEjsonSha256(expectedRestrictions) !== receipt.migrationAuthenticationRestrictionsSha256) {
+    fail("Mongo write-barrier receipt differs from the frozen migration network allowlist");
+  }
   if (receipt.kind !== "viva-game-projection-mongo-write-barrier-receipt" || receipt.state !== "HELD"
     || receipt.applicationRolesRevoked !== true || receipt.applicationRolesReadbackEmpty !== true
     || receipt.applicationInsertProbeRejected !== true || receipt.applicationUpdateProbeRejected !== true
@@ -157,6 +321,14 @@ export async function assertMongoWriteBarrier(migrationClient, receipt, expected
   }
   const roles = await readStoredMongoUserRoles(migrationClient, receipt.applicationPrincipal);
   if (roles.length !== 0) fail("Application Mongo ACL barrier is no longer held");
+  const migrationAuth = await readAuthenticatedMongoPrincipal(migrationClient, "Migration");
+  const migrationAccess = await assertLeastPrivilegeMigrationPrincipal(migrationClient, migrationAuth, expectedRestrictions);
+  if (principalSha256(migrationAuth.principal) !== receipt.migrationPrincipalSha256
+    || migrationAccess.rolesSha256 !== receipt.migrationRolesSha256
+    || migrationAccess.privilegesSha256 !== receipt.migrationPrivilegesSha256
+    || migrationAccess.authenticationRestrictionsSha256 !== receipt.migrationAuthenticationRestrictionsSha256) {
+    fail("Migration Mongo least-privilege access drifted while the barrier is held");
+  }
   return true;
 }
 
@@ -168,6 +340,7 @@ export async function installMongoWriteBarrier({
   replicaSetName,
   fenceTokenSha256,
   cutoverPlanSha256,
+  expectedMigrationAuthenticationRestrictions,
   installedAt = new Date().toISOString(),
   beforeInstall = async () => {},
 }) {
@@ -184,8 +357,15 @@ export async function installMongoWriteBarrier({
   if (applicationAuth.principal.user === migrationAuth.principal.user && applicationAuth.principal.db === migrationAuth.principal.db) {
     fail("Application and migration Mongo principals must be distinct");
   }
+  const migrationAccess = await assertLeastPrivilegeMigrationPrincipal(
+    migrationClient,
+    migrationAuth,
+    expectedMigrationAuthenticationRestrictions,
+  );
   const previousApplicationRoles = await readStoredMongoUserRoles(migrationClient, applicationAuth.principal);
-  if (previousApplicationRoles.length === 0) fail("Application Mongo principal has no restorable roles");
+  if (!exactCanonicalMatch(previousApplicationRoles, normalizeRoles(EXPECTED_APPLICATION_ROLES, "Expected application roles"))) {
+    fail("Application Mongo principal roles differ from the frozen five-role allowlist");
+  }
   const target = buildMongoTargetIdentity({
     connectionFingerprint: applicationConnectionFingerprint,
     replicaSetName,
@@ -214,6 +394,10 @@ export async function installMongoWriteBarrier({
     applicationPrincipal: applicationAuth.principal,
     applicationPrincipalSha256: principalSha256(applicationAuth.principal),
     migrationPrincipal: migrationAuth.principal,
+    migrationPrincipalSha256: principalSha256(migrationAuth.principal),
+    migrationRolesSha256: migrationAccess.rolesSha256,
+    migrationPrivilegesSha256: migrationAccess.privilegesSha256,
+    migrationAuthenticationRestrictionsSha256: migrationAccess.authenticationRestrictionsSha256,
     replicaSetName,
     barrierValidatorSha256,
     previousValidationOptionsEjson,
@@ -223,7 +407,7 @@ export async function installMongoWriteBarrier({
     preparedAt: installedAt,
   });
 
-  await updateStoredMongoUserRoles(migrationClient, applicationAuth.principal, []);
+  await replaceStoredMongoUserRoles(migrationClient, applicationAuth.principal, []);
   const applicationRolesReadback = await readAuthenticatedMongoPrincipal(applicationClient, "Application after ACL barrier");
   if (applicationRolesReadback.roles.length !== 0 || applicationRolesReadback.privileges.length !== 0) {
     fail("Application Mongo principal retained effective roles or privileges after ACL barrier");
@@ -270,6 +454,10 @@ export async function installMongoWriteBarrier({
     applicationPrincipal: applicationAuth.principal,
     applicationPrincipalSha256: principalSha256(applicationAuth.principal),
     migrationPrincipal: migrationAuth.principal,
+    migrationPrincipalSha256: principalSha256(migrationAuth.principal),
+    migrationRolesSha256: migrationAccess.rolesSha256,
+    migrationPrivilegesSha256: migrationAccess.privilegesSha256,
+    migrationAuthenticationRestrictionsSha256: migrationAccess.authenticationRestrictionsSha256,
     replicaSetName,
     barrierValidatorSha256,
     previousValidationOptionsEjson,
@@ -366,7 +554,7 @@ export async function restorePreviousMongoWriteBarrier(migrationClient, artifact
   }
   if (currentRolesSha256 === emptyRolesSha256) {
     await expected.assertFence("BEFORE_APPLICATION_ROLES_RESTORE");
-    await updateStoredMongoUserRoles(migrationClient, artifact.applicationPrincipal, roles);
+    await replaceStoredMongoUserRoles(migrationClient, artifact.applicationPrincipal, roles);
     await expected.assertFence("AFTER_APPLICATION_ROLES_RESTORE");
   }
   const restored = await readMongoWriteBarrierState(db);

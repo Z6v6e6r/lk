@@ -16,8 +16,8 @@ const METADATA_FIELDS = new Set(["vivaExerciseId", "exerciseId"]);
 const PROVIDER_FIELDS = new Set(["id", "uuid", "exerciseId", "studio", "station", "studioId", "date", "timeFrom", "timeTo", "startTime", "endTime", "active", "isCancelled", "cancelled", "canceled", "status", "state", "lifecycleStatus"]);
 const PROVIDER_ID_FIELDS = new Set(["id", "uuid"]);
 const GAMES_PAYLOAD_FIELDS = new Set(["formatVersion", "sourceKind", "sourceHost", "sourceFlowSha256", "database", "collection", "capturedAt", "games"]);
-const PROVIDER_PAYLOAD_FIELDS = new Set(["formatVersion", "sourceKind", "capturedAt", "tenantKey", "captureReceiptSha256", "rowsByDate"]);
-const RECEIPT_FIELDS = new Set(["formatVersion", "sourceKind", "tenantKey", "capturedAt", "endpointOrigin", "captures"]);
+const PROVIDER_PAYLOAD_FIELDS = new Set(["formatVersion", "sourceKind", "capturedAt", "tenantKey", "servicePrincipalSha256", "captureReceiptSha256", "rowsByDate"]);
+const RECEIPT_FIELDS = new Set(["formatVersion", "sourceKind", "tenantKey", "servicePrincipalSha256", "capturedAt", "endpointOrigin", "captures"]);
 const RECEIPT_CAPTURE_FIELDS = new Set(["date", "requestPath", "statusCode", "complete", "responseShape", "rowCount", "rowsSha256"]);
 
 const requireObject = (value, label) => {
@@ -49,6 +49,7 @@ const listDates = (from, to) => {
 export const validateProjectedInputs = (gamesPayload, providerPayload, scope) => {
   requireOnlyFields(gamesPayload, GAMES_PAYLOAD_FIELDS, "Games projection");
   requireOnlyFields(providerPayload, PROVIDER_PAYLOAD_FIELDS, "Provider projection");
+  if (!/^[a-f0-9]{64}$/.test(String(providerPayload.servicePrincipalSha256 || ""))) fail("Provider service-principal proof is invalid");
   if (!Array.isArray(gamesPayload.games)) fail("Games file must contain { games: [] }");
   if (gamesPayload.games.length > 1000) fail("Games file exceeds the 1000-record migration bound");
   gamesPayload.games.forEach((game, index) => {
@@ -74,7 +75,7 @@ export const validateProjectedInputs = (gamesPayload, providerPayload, scope) =>
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < scope.dateFrom || date > scope.dateTo || !Array.isArray(rows)) {
       fail(`Provider rowsByDate entry is outside the requested scope: ${date}`);
     }
-    if (rows.length > 1000) fail(`Provider date exceeds the 1000-record bound: ${date}`);
+    if (rows.length >= 1000) fail(`Provider date reaches the ambiguous 1000-record completeness bound: ${date}`);
     providerCount += rows.length;
     rows.forEach((row, index) => {
       requireOnlyFields(row, PROVIDER_FIELDS, `Provider ${date} row ${index}`);
@@ -97,10 +98,15 @@ export const validateProjectedInputs = (gamesPayload, providerPayload, scope) =>
   if (providerCount > 15_000) fail("Provider file exceeds the 15000-record migration bound");
 };
 
-export const validateCaptureReceipt = (receipt, receiptSha256, providerPayload, scope) => {
+export const validateCaptureReceipt = (receipt, receiptSha256, providerPayload, scope, expectedServicePrincipalSha256) => {
   requireOnlyFields(receipt, RECEIPT_FIELDS, "Provider capture receipt");
-  if (receipt.formatVersion !== 1 || receipt.sourceKind !== "viva-end-user-tenant-capture-receipt") fail("Provider capture receipt contract mismatch");
+  if (receipt.formatVersion !== 1 || receipt.sourceKind !== "viva-admin-service-capture-receipt") fail("Provider capture receipt contract mismatch");
   if (receipt.tenantKey !== scope.tenantKey || receipt.capturedAt !== providerPayload.capturedAt) fail("Provider capture receipt tenant/time mismatch");
+  if (!/^[a-f0-9]{64}$/.test(String(expectedServicePrincipalSha256 || ""))
+    || receipt.servicePrincipalSha256 !== expectedServicePrincipalSha256
+    || providerPayload.servicePrincipalSha256 !== expectedServicePrincipalSha256) {
+    fail("Provider capture service principal does not match the independently verified runtime principal");
+  }
   if (receipt.endpointOrigin !== "https://api.vivacrm.ru") fail("Provider capture receipt origin mismatch");
   if (providerPayload.captureReceiptSha256 !== receiptSha256) fail("Provider projection receipt hash mismatch");
   if (!Array.isArray(receipt.captures)) fail("Provider capture receipt captures must be an array");
@@ -110,7 +116,7 @@ export const validateCaptureReceipt = (receipt, receiptSha256, providerPayload, 
     const capture = receipt.captures[index];
     requireOnlyFields(capture, RECEIPT_CAPTURE_FIELDS, `Provider capture ${date}`);
     const rows = providerPayload.rowsByDate[date];
-    const expectedPath = `/end-user/api/v1/${encodeURIComponent(scope.tenantKey)}/exercises?date=${date}`;
+    const expectedPath = `/api/v1/exercises?date=${date}&includeCanceled=false&page=0&size=1000`;
     if (!Array.isArray(rows) || capture.date !== date || capture.requestPath !== expectedPath
       || capture.statusCode !== 200 || capture.complete !== true || capture.responseShape !== "array"
       || capture.rowCount !== rows.length || capture.rowsSha256 !== sha256(Buffer.from(JSON.stringify(rows)))) {
@@ -127,7 +133,7 @@ const parseArgs = (argv) => {
     if (!key?.startsWith("--") || !value || value.startsWith("--") || Object.hasOwn(values, key)) fail(`Invalid argument: ${key || ""}`);
     values[key] = value;
   }
-  const required = ["--games-file", "--provider-file", "--provider-capture-receipt-file", "--output-directory", "--tenant-key", "--date-from", "--date-to", "--operation-id", "--expected-flow-sha256", "--expected-provider-receipt-sha256"];
+  const required = ["--games-file", "--provider-file", "--provider-capture-receipt-file", "--output-directory", "--tenant-key", "--date-from", "--date-to", "--operation-id", "--expected-flow-sha256", "--expected-provider-receipt-sha256", "--expected-provider-service-principal-sha256"];
   for (const key of required) if (!values[key]) fail(`Missing ${key}`);
   return {
     gamesFile: values["--games-file"],
@@ -136,6 +142,7 @@ const parseArgs = (argv) => {
     outputDirectory: values["--output-directory"],
     expectedSourceFlowSha256: values["--expected-flow-sha256"],
     expectedProviderReceiptSha256: values["--expected-provider-receipt-sha256"],
+    expectedProviderServicePrincipalSha256: values["--expected-provider-service-principal-sha256"],
     scope: { tenantKey: values["--tenant-key"], dateFrom: values["--date-from"], dateTo: values["--date-to"], operationId: values["--operation-id"] },
   };
 };
@@ -190,6 +197,7 @@ export function prepareVivaGameProjectionTenantMigration(options) {
   if (configuredTenantKey !== options.scope.tenantKey) fail("Requested tenant does not match PADLHUB_PLATFORM_TENANT_KEY");
   if (!/^[a-f0-9]{64}$/.test(options.expectedSourceFlowSha256 || "")) fail("Expected source-flow SHA-256 is invalid");
   if (!/^[a-f0-9]{64}$/.test(options.expectedProviderReceiptSha256 || "")) fail("Expected provider-receipt SHA-256 is invalid");
+  if (!/^[a-f0-9]{64}$/.test(options.expectedProviderServicePrincipalSha256 || "")) fail("Expected provider service-principal SHA-256 is invalid");
   const gamesFile = readPrivateFile(options.gamesFile, "Games file", 32 * 1024 * 1024);
   const providerFile = readPrivateFile(options.providerFile, "Provider file", 64 * 1024 * 1024);
   const receiptFile = readPrivateFile(options.providerCaptureReceiptFile, "Provider capture receipt file", 1024 * 1024);
@@ -199,11 +207,17 @@ export function prepareVivaGameProjectionTenantMigration(options) {
   validateProjectedInputs(gamesPayload, providerPayload, options.scope);
   const receiptSha256 = sha256(receiptFile.bytes);
   if (receiptSha256 !== options.expectedProviderReceiptSha256) fail("Provider capture receipt proof mismatch");
-  validateCaptureReceipt(providerCaptureReceipt, receiptSha256, providerPayload, options.scope);
+  validateCaptureReceipt(
+    providerCaptureReceipt,
+    receiptSha256,
+    providerPayload,
+    options.scope,
+    options.expectedProviderServicePrincipalSha256,
+  );
   const nowIso = options.nowIso || new Date().toISOString();
   requireFreshProjection(gamesPayload, { sourceKind: "live-147-mongo-projection", sourceHost: "lk-primary-147", database: "games", collection: "lk_games" }, "Games", nowIso);
   if (gamesPayload.sourceFlowSha256 !== options.expectedSourceFlowSha256) fail("Games projection source-flow proof mismatch");
-  requireFreshProjection(providerPayload, { sourceKind: "viva-end-user-tenant-projection" }, "Provider", nowIso);
+  requireFreshProjection(providerPayload, { sourceKind: "viva-admin-service-projection" }, "Provider", nowIso);
   if (providerPayload.tenantKey !== options.scope.tenantKey) fail("Provider tenant proof mismatch");
   const plan = buildLegacyTenantMigrationPlan(gamesPayload.games, providerPayload.rowsByDate, options.scope, nowIso);
   const { requested: directory, parent } = prepareOutputDirectory(options.outputDirectory);
@@ -226,6 +240,7 @@ export function prepareVivaGameProjectionTenantMigration(options) {
         gamesCapturedAt: gamesPayload.capturedAt,
         providerCapturedAt: providerPayload.capturedAt,
         providerTenantKey: providerPayload.tenantKey,
+        providerServicePrincipalSha256: providerPayload.servicePrincipalSha256,
       },
       ...plan,
     }, null, 2)}\n`);
@@ -241,6 +256,7 @@ export function prepareVivaGameProjectionTenantMigration(options) {
       eligibleCount: plan.eligibleCount,
       skipped: plan.skipped,
       planSha256,
+      providerServicePrincipalSha256: providerPayload.servicePrincipalSha256,
       writesPerformed: 0,
     };
     writePrivate(path.join(directory, "plan.json"), planBytes);

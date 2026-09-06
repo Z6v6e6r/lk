@@ -10,6 +10,8 @@ import { BSON, ObjectId } from "mongodb";
 
 import {
   assertMongoWriteBarrier,
+  EXPECTED_APPLICATION_ROLES,
+  EXPECTED_MIGRATION_PRIVILEGES,
   installMongoWriteBarrier,
   restorePreviousMongoWriteBarrier,
 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
@@ -133,6 +135,7 @@ const providerRows = {
     active: true,
   }],
 };
+const providerServicePrincipalSha256 = cutoverSha256("viva-service-subject");
 
 const write0600 = (filePath, bytes) => {
   fs.writeFileSync(filePath, bytes, { mode: 0o600, flag: "wx" });
@@ -156,6 +159,7 @@ function executablePlan() {
       gamesCapturedAt: nowIso,
       providerCapturedAt: nowIso,
       providerTenantKey: tenantKey,
+      providerServicePrincipalSha256,
     },
     ...built,
   };
@@ -241,6 +245,7 @@ const controls = (overrides = {}) => ({
     restartCount: 3,
     localHealthUrl: "http://127.0.0.1:1880/flows",
     tenantKeySha256: cutoverSha256(tenantKey),
+    vivaServicePrincipalSha256: providerServicePrincipalSha256,
     durableConfigReadback: true,
     restartUsedUpdateEnv: true,
     postRestartReadback: true,
@@ -363,7 +368,10 @@ test("migration executor decodes canonical EJSON ObjectId and rejects upsert or 
 
 test("Mongo write barrier proves application denial and migration-only bypass", async () => {
   let state = { validator: {}, validationLevel: "strict", validationAction: "error" };
-  let applicationRoles = [{ role: "readWrite", db: "games" }];
+  let applicationRoles = structuredClone(EXPECTED_APPLICATION_ROLES);
+  const migrationRole = { role: "padlhubVivaProjectionMigration_fixture01", db: "admin" };
+  const migrationAuthenticationRestrictions = [{ clientSource: ["127.0.0.1"], serverAddress: ["127.0.0.1"] }];
+  let broadMigration = true;
   let preparation = null;
   const session = () => ({
     startTransaction() {},
@@ -398,13 +406,34 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
       if (command.hello) return { setName: "rs-fixture" };
       if (command.connectionStatus) return {
         authInfo: {
-          authenticatedUsers: [{ user: "migration", db: "admin" }],
-          authenticatedUserRoles: [{ role: "root", db: "admin" }],
-          authenticatedUserPrivileges: [{ resource: { anyResource: true }, actions: ["anyAction"] }],
+          authenticatedUsers: [{ user: "padlhubVivaProjectionMigration_fixture01", db: "admin" }],
+          authenticatedUserRoles: broadMigration ? [{ role: "root", db: "admin" }] : [migrationRole],
+          authenticatedUserPrivileges: broadMigration
+            ? [{ resource: { anyResource: true }, actions: ["anyAction"] }]
+            : structuredClone(EXPECTED_MIGRATION_PRIVILEGES),
         },
       };
-      if (command.usersInfo) return { users: [{ user: "application", db: "admin", roles: applicationRoles }] };
-      if (command.updateUser === "application") { applicationRoles = command.roles; return { ok: 1 }; }
+      if (command.usersInfo?.user === "application") {
+        return { users: [{ user: "application", db: "admin", roles: applicationRoles }] };
+      }
+      if (command.usersInfo?.user === "padlhubVivaProjectionMigration_fixture01") return { users: [{
+        user: "padlhubVivaProjectionMigration_fixture01",
+        db: "admin",
+        roles: [migrationRole],
+        inheritedRoles: [migrationRole],
+        inheritedPrivileges: structuredClone(EXPECTED_MIGRATION_PRIVILEGES),
+        mechanisms: ["SCRAM-SHA-256"],
+        authenticationRestrictions: structuredClone(migrationAuthenticationRestrictions),
+      }] };
+      if (command.revokeRolesFromUser === "application") {
+        const revoked = new Set(command.roles.map((role) => `${role.db}\0${role.role}`));
+        applicationRoles = applicationRoles.filter((role) => !revoked.has(`${role.db}\0${role.role}`));
+        return { ok: 1 };
+      }
+      if (command.grantRolesToUser === "application") {
+        applicationRoles = [...applicationRoles, ...command.roles];
+        return { ok: 1 };
+      }
       throw new Error("unexpected admin command");
     },
   };
@@ -429,6 +458,29 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     db: (name) => (name === "admin" ? applicationAdmin : applicationDb),
     startSession: session,
   };
+  await assert.rejects(() => installMongoWriteBarrier({
+    migrationClient,
+    applicationClient,
+    applicationConnectionFingerprint: mongoConnectionFingerprint,
+    migrationConnectionFingerprint,
+    replicaSetName: "rs-fixture",
+    fenceTokenSha256,
+    cutoverPlanSha256: "6".repeat(64),
+    expectedMigrationAuthenticationRestrictions: migrationAuthenticationRestrictions,
+  }), /least-privilege|unsupported resource/);
+  broadMigration = false;
+  await assert.rejects(() => installMongoWriteBarrier({
+    migrationClient,
+    applicationClient,
+    applicationConnectionFingerprint: mongoConnectionFingerprint,
+    migrationConnectionFingerprint,
+    replicaSetName: "rs-fixture",
+    fenceTokenSha256,
+    cutoverPlanSha256: "6".repeat(64),
+    expectedMigrationAuthenticationRestrictions: [{
+      clientSource: ["0.0.0.0/1", "128.0.0.0/1"], serverAddress: ["127.0.0.1"],
+    }],
+  }), /exact host addresses/);
   const receipt = await installMongoWriteBarrier({
     migrationClient,
     applicationClient,
@@ -437,6 +489,7 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     replicaSetName: "rs-fixture",
     fenceTokenSha256,
     cutoverPlanSha256: "6".repeat(64),
+    expectedMigrationAuthenticationRestrictions: migrationAuthenticationRestrictions,
     installedAt: nowIso,
     beforeInstall: async (value) => { preparation = value; },
   });
@@ -448,7 +501,14 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     fenceTokenSha256,
     cutoverPlanSha256: "6".repeat(64),
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+    migrationAuthenticationRestrictions,
   });
+  await assert.rejects(() => assertMongoWriteBarrier(migrationClient, receipt, {
+    fenceTokenSha256,
+    cutoverPlanSha256: "6".repeat(64),
+    mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+    migrationAuthenticationRestrictions: [{ clientSource: ["127.0.0.2"], serverAddress: ["127.0.0.1"] }],
+  }), /frozen migration network allowlist/);
   const recoveryFencePhases = [];
   await restorePreviousMongoWriteBarrier(migrationClient, preparation, {
     fenceTokenSha256,
@@ -465,7 +525,11 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     "AFTER_RECOVERY_READBACK",
   ]);
   assert.deepEqual(state, { validator: {}, validationLevel: "strict", validationAction: "error" });
-  assert.deepEqual(applicationRoles, [{ role: "readWrite", db: "games" }]);
+  assert.deepEqual(
+    applicationRoles,
+    structuredClone(EXPECTED_APPLICATION_ROLES)
+      .sort((left, right) => `${left.db}.${left.role}`.localeCompare(`${right.db}.${right.role}`)),
+  );
 });
 
 test("fence guardian rejects malformed or stale release requests without treating them as authorization", () => {
@@ -1371,6 +1435,7 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
       formatVersion: 1,
       kind: "viva-game-projection-migration-mongo-connection",
       uri: localUri,
+      authenticationRestrictions: [{ clientSource: ["127.0.0.1"], serverAddress: ["127.0.0.1"] }],
     }));
     write0600(connectionPath, connectionBytes);
     const executionIndexPath = path.join(privateRoot, "execution-index.json");
@@ -1778,6 +1843,7 @@ test("claimed PASS controls reject future runtime, backup, restore, coverage, an
   const futureIso = "2026-09-04T12:02:00.000Z";
   for (const mutate of [
     (value) => { value.runtimeTenant.readBackAt = futureIso; },
+    (value) => { value.runtimeTenant.vivaServicePrincipalSha256 = "0".repeat(64); },
     (value) => { value.backup.completedAt = futureIso; },
     (value) => { value.restoreRehearsal.rehearsedAt = futureIso; },
     (value) => { value.coverage.observedAt = futureIso; },
@@ -1864,6 +1930,10 @@ test("writer fence receipt requires a fresh stopped runtime and complete quiesce
   assert.throws(() => validateHeldWriterFence({ ...receipt, nodeRedProcessState: "ONLINE" }, expected), /complete held fence/);
   assert.throws(() => validateHeldWriterFence({ ...receipt, writerNodeIds: ["other"] }, expected), /cutover writer inventory/);
   assert.throws(() => validateHeldWriterFence({ ...receipt, expiresAt: "2026-09-04T11:59:00.000Z" }, expected), /stale, expired/);
+  assert.doesNotThrow(() => validateHeldWriterFence(
+    { ...receipt, expiresAt: "2026-09-04T12:01:00.000Z" },
+    { ...expected, nowMs: Date.parse("2026-09-04T13:00:00.000Z"), allowExpiredLease: true },
+  ));
 });
 
 test("current-op gate detects DML, DDL, rename and aggregate writes targeting lk_games", async () => {
@@ -2550,6 +2620,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
       formatVersion: 1,
       kind: "viva-game-projection-migration-mongo-connection",
       uri: localUri,
+      authenticationRestrictions: [{ clientSource: ["127.0.0.1"], serverAddress: ["127.0.0.1"] }],
     }));
     write0600(connectionPath, connectionBytes);
     const executionPath = path.join(privateRoot, "execution-index.json");
@@ -3119,13 +3190,14 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     const migrationProviderReceiptPath = path.join(privateRoot, "migration-provider-receipt.json");
     const migrationProviderReceiptBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
-      sourceKind: "viva-end-user-tenant-capture-receipt",
+      sourceKind: "viva-admin-service-capture-receipt",
       tenantKey,
+      servicePrincipalSha256: providerServicePrincipalSha256,
       capturedAt: nowIso,
       endpointOrigin: "https://api.vivacrm.ru",
       captures: [{
         date: scope.dateFrom,
-        requestPath: `/end-user/api/v1/${tenantKey}/exercises?date=${scope.dateFrom}`,
+        requestPath: `/api/v1/exercises?date=${scope.dateFrom}&includeCanceled=false&page=0&size=1000`,
         statusCode: 200,
         complete: true,
         responseShape: "array",
@@ -3137,9 +3209,10 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     const migrationProviderPath = path.join(privateRoot, "migration-provider.json");
     const migrationProviderBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
-      sourceKind: "viva-end-user-tenant-projection",
+      sourceKind: "viva-admin-service-projection",
       capturedAt: nowIso,
       tenantKey,
+      servicePrincipalSha256: providerServicePrincipalSha256,
       captureReceiptSha256: cutoverSha256(migrationProviderReceiptBytes),
       rowsByDate: providerRows,
     }, null, 2)}\n`);
@@ -3416,6 +3489,7 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       formatVersion: 1,
       kind: "viva-game-projection-migration-mongo-connection",
       uri: finalizerMigrationUri,
+      authenticationRestrictions: [{ clientSource: ["127.0.0.1"], serverAddress: ["127.0.0.1"] }],
     }));
     write0600(migrationConnectionFile, migrationConnectionBytes);
     const executionIndexPath = path.join(privateRoot, "execution-index.json");

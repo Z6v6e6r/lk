@@ -27,10 +27,12 @@ Every five minutes the worker:
    configured tenant and the current Moscow date through the lookahead boundary.
 3. Rejects malformed rows, cross-tenant rows, and rows whose Viva exercise IDs
    disagree across booking, metadata, and dedupe fields.
-4. Reads the VivaCRM Admin exercises endpoint for each date, with page size 200,
-   at most five pages per date, rate limiting of two requests per second, bounded HTTP
-   timeouts, and redirects disabled. Unknown response containers, missing page
-   metadata, and contradictory pagination fail the date closed.
+4. Reads the VivaCRM Admin exercises endpoint for each date, requesting one page
+   of 1,000 rows, with rate limiting of two requests per second, bounded HTTP
+   timeouts, and redirects disabled. The current bounded unpaged array response is
+   accepted only on page zero and only below the requested 1,000-row ceiling. Unknown
+   response containers, missing metadata on paged responses, contradictory pagination,
+   and larger arrays fail the date closed.
 5. Accepts only one exact provider exercise with the same exercise ID, studio,
    date, start time, and end time. Cancelled, missing, duplicate, truncated, or
    ambiguous provider data produces no write.
@@ -87,9 +89,9 @@ offline, dry-run-only plan from three private projected inputs:
 
 - Mongo game rows strictly limited to `_id`, status, tenant/revision state,
   provider identity, slot identity, and timestamps;
-- Viva exercises fetched through the exact configured tenant and grouped by
-  date;
-- a reviewed read-only capture receipt for the tenant-bearing endpoint.
+- Viva exercises fetched with the same tenant-scoped service principal and Admin
+  endpoint used by the runtime worker, grouped by date;
+- a reviewed read-only capture receipt for that Admin endpoint.
 
 The planner rejects unrecognized top-level or nested fields, including
 participant, phone, payment, roster, result, and room data, instead of accepting
@@ -114,6 +116,7 @@ npm run nodered:viva-game-projection-sync:migration-plan -- \
   --tenant-key iSkq6G \
   --expected-flow-sha256 <verified-live-flow-sha256> \
   --expected-provider-receipt-sha256 <reviewed-receipt-sha256> \
+  --expected-provider-service-principal-sha256 <verified-runtime-principal-sha256> \
   --date-from 2026-09-04 \
   --date-to 2026-09-11 \
   --operation-id viva-projection-migration-20260904
@@ -124,8 +127,12 @@ runtime configuration and must equal `--tenant-key`. The expected flow hash
 must come from the frozen live-flow readback and must equal the Mongo
 projection's hash. All three inputs must be current-user-owned, single-link
 regular `0600` files and are opened once; planning and hashes use the same
-bytes. The output parent must be private and current-user-owned. The output
-directory is created without replacement as `0700` and contains `0600`
+bytes. The expected provider principal digest must be obtained independently
+from a fresh runtime authentication readback. It is the SHA-256 of the
+canonical authenticated Viva token subject; the receipt and projection contain
+only that digest, never the subject, username, or token. The output parent must
+be private and current-user-owned. The output directory is created without
+replacement as `0700` and contains `0600`
 `plan.json`, `summary.json`, and a final `READY` marker. Consumers must reject a
 directory without `READY` or whose marker does not equal `summary.planSha256`.
 The summary binds the plan, both projections, and the capture receipt by SHA-256
@@ -137,12 +144,16 @@ pass an unchecked JSON object to the driver.
 The Mongo projection metadata must declare format version 1, source kind
 `live-147-mongo-projection`, host `lk-primary-147`, exact source-flow SHA-256,
 database `games`, collection `lk_games`, and capture time. The Viva projection
-must declare format version 1, source kind `viva-end-user-tenant-projection`,
-exact tenant, and capture time. Its separate read-once receipt must cover every
-requested date exactly once, bind each rows array by SHA-256, report a complete
-HTTP 200 array response, and use the exact tenant-bearing path
-`/end-user/api/v1/{tenant}/exercises?date={date}`. Projected provider rows must
-carry the capture tool's reviewed normalized `active: true`; contradictory IDs,
+must declare format version 1, source kind `viva-admin-service-projection`,
+exact runtime tenant, and capture time. Its separate read-once receipt must use
+source kind `viva-admin-service-capture-receipt`, cover every requested date
+exactly once, bind each rows array by SHA-256, report a complete HTTP 200 array
+response, and use the exact path
+`/api/v1/exercises?date={date}&includeCanceled=false&page=0&size=1000`. Its
+`servicePrincipalSha256` must match the independently read runtime principal
+digest and the cutover control
+`runtimeTenant.vivaServicePrincipalSha256`. Projected provider rows must carry
+the capture tool's reviewed normalized `active: true`; contradictory IDs,
 studios, cancellation flags, and lifecycle states are rejected. The reviewed
 receipt SHA is supplied independently. Both projections expire after 30 minutes
 and may be at most five minutes ahead of the planner clock. These labels and
@@ -448,6 +459,67 @@ terminal-report recovery. Standalone finalization additionally requires
 `VIVA_GAME_PROJECTION_READY_FINALIZE=FINALIZE_VIVA_GAME_PROJECTION_READY_V1`.
 Producing a READY marker still does not authorize the
 separate ingress-opening transition.
+
+## Legacy visibility remediation before tenant migration
+
+Provider-cancelled, provider-missing, shifted-time, and metadata-identity rows
+must be repaired with `scripts/run_viva_game_projection_fenced_remediation.sh`.
+The executor rejects format-version-1 review plans and accepts only a fresh
+version-2 plan built after a hard writer fence is held. The exact order is:
+
+1. close write ingress, stop Node-RED and schedulers, prove external writer
+   quiescence, and retain the exclusive fence descriptor;
+2. capture the complete `games.lk_games` BSON backup;
+3. prove an isolated restore of that exact backup;
+4. while the same fence and Mongo barrier remain held, recapture the Viva Admin
+   evidence and exact Mongo preimages, then freeze the remediation plan;
+5. run `verify`, obtain separate approval for the exact plan hash, and only then
+   run `apply`;
+6. reconcile any unknown transaction outcome before retrying, and keep ingress
+   closed until remediation, tenant migration, candidate installation, and all
+   postchecks are complete.
+
+The plan hashes the complete backup, backup manifest, restore receipt, actual
+restored EJSON artifact, provider capture, Mongo capture, writer-fence receipt,
+Mongo-barrier receipt, source flow, repository commit, and every executor source
+file. The executor parses both complete EJSON artifacts and requires their
+document counts and canonical full-collection state hashes to match the manifest,
+restore receipt, and cutover plan. Its item fingerprints must equal the packet,
+review, provider-capture, and Mongo-capture sets exactly. Every packet item binds
+the category, Mongo ObjectId, root game ID, preimage hash, and provider-evidence
+hash. Provider exercise/date/studio/time evidence is checked against that exact
+full-backup preimage. Invalid-ID cancellation and provider-absent branches also
+bind the exact slot and a hash of every source identity signal, so evidence cannot
+be moved between records that share a date or studio.
+Metadata identity repair may set only `metadata.vivaExerciseId` and
+`metadata.exerciseId`; root game IDs, booking IDs, dedupe keys, payment state,
+refund state, and provider state are preserved.
+
+Apply and restore each use one snapshot/majority transaction, full-BSON
+preimage CAS with `upsert:false`, exact matched/modified assertions, postimage
+hashes, a durable pre-transaction unknown-outcome journal, read-only reconcile,
+and full-preimage restore. Apply requires
+`VIVA_GAME_PROJECTION_REMEDIATION_APPLY=APPLY_VIVA_GAME_PROJECTION_REMEDIATION_V2`;
+restore requires
+`VIVA_GAME_PROJECTION_REMEDIATION_RESTORE=RESTORE_VIVA_GAME_PROJECTION_REMEDIATION_V2`.
+Neither value belongs in a prepared packet.
+
+The remediation receipt must match the exact candidate, operation IDs, writer
+node IDs, inventory hash, external-writer proof, fence token, and lock path from
+the frozen cutover plan. Packet, review, fence, stopped PM2 environment, and plan
+must all resolve to the same tenant and `SHADOW` runtime mode.
+
+The barrier accepts only the five frozen application roles and a unique
+`admin` custom migration role with the exact collection/database/cluster
+privilege allowlist. It refuses broad built-in roles. Application roles are
+removed with one `revokeRolesFromUser` command and restored with one
+`grantRolesToUser` command, both with majority write concern. The temporary
+principal must use SCRAM-SHA-256. The separately pinned private migration
+connection file declares the reviewed client and server allowlist; every entry
+must be one exact IP host or `/32`/`/128`, and stored Mongo readback must equal
+that allowlist. It remains available until the validator and all five application
+roles have been restored and read back exactly; bootstrap-admin provisioning
+and deletion are separate access-control transitions.
 
 ## Candidate preparation
 

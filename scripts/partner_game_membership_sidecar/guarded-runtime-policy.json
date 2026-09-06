@@ -1,0 +1,6 @@
+{
+  "formatVersion": 1,
+  "mode": "DEFAULT_OFF_UNBOUND",
+  "expectedHost": "unbound.invalid",
+  "candidateFlowSha256": "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965"
+}

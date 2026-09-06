@@ -102,6 +102,11 @@ npm run test:partner-game-membership-api
 
 ## Exit criteria ограниченного пилота
 
+Локальный ingress evidence core имеет отдельную
+[матрицу проверок и ограничений](PARTNER_GAME_MEMBERSHIP_INGRESS_VERIFIER.md).
+Его unit/filesystem tests не закрывают перечисленные ниже live ingress, Mongo или
+Viva gates; physical TLS/mTLS probes и production adapter ещё не реализованы.
+
 - все P0 вопросы закрыты и подписаны владельцами;
 - fresh `LK Games` snapshot и SHA зафиксированы только для collision/readback; packet
   содержит отдельный deterministic sidecar source;

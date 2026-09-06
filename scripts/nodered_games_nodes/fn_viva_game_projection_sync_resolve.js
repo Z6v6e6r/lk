@@ -9,20 +9,20 @@ const toStr = (value) => {
 };
 const normalizeId = (value) => toStr(value)?.toLowerCase() || null;
 const extractPage = (payload) => {
-  if (Array.isArray(payload)) return { recognized: true, rows: payload, pagination: {} };
-  if (!isObj(payload)) return { recognized: false, rows: [], pagination: {} };
-  if (Array.isArray(payload.content)) return { recognized: true, rows: payload.content, pagination: payload };
-  if (Array.isArray(payload.items)) return { recognized: true, rows: payload.items, pagination: payload };
-  if (Array.isArray(payload.data)) return { recognized: true, rows: payload.data, pagination: payload };
+  if (Array.isArray(payload)) return { recognized: true, rows: payload, pagination: {}, responseShape: "array" };
+  if (!isObj(payload)) return { recognized: false, rows: [], pagination: {}, responseShape: null };
+  if (Array.isArray(payload.content)) return { recognized: true, rows: payload.content, pagination: payload, responseShape: "page" };
+  if (Array.isArray(payload.items)) return { recognized: true, rows: payload.items, pagination: payload, responseShape: "page" };
+  if (Array.isArray(payload.data)) return { recognized: true, rows: payload.data, pagination: payload, responseShape: "page" };
   if (isObj(payload.data)) {
     if (Array.isArray(payload.data.content)) {
-      return { recognized: true, rows: payload.data.content, pagination: payload.data };
+      return { recognized: true, rows: payload.data.content, pagination: payload.data, responseShape: "page" };
     }
     if (Array.isArray(payload.data.items)) {
-      return { recognized: true, rows: payload.data.items, pagination: payload.data };
+      return { recognized: true, rows: payload.data.items, pagination: payload.data, responseShape: "page" };
     }
   }
-  return { recognized: false, rows: [], pagination: {} };
+  return { recognized: false, rows: [], pagination: {}, responseShape: null };
 };
 const exerciseId = (row) => normalizeId(row?.id || row?.exerciseId || row?.uuid);
 const roomId = (row) => toStr(row?.room?.id || row?.roomId || row?.court?.id || row?.courtId);
@@ -103,15 +103,19 @@ const pagination = pageData.pagination;
 const page = Number.isSafeInteger(Number(group.page)) ? Number(group.page) : 0;
 const pageSize = Number(group.pageSize || 200);
 const maxPages = Number(group.maxPages || 5);
+const isUnpagedArray = pageData.responseShape === "array";
+if (isUnpagedArray && (page !== 0 || rows.length >= pageSize * maxPages)) {
+  return report("PROVIDER_PAGE_TRUNCATED", { page, providerRowCount: rows.length });
+}
 const hasLast = Object.hasOwn(pagination, "last");
 const hasTotalPages = Object.hasOwn(pagination, "totalPages");
 const totalPages = Number(pagination.totalPages);
-if ((hasLast && typeof pagination.last !== "boolean")
+if (!isUnpagedArray && ((hasLast && typeof pagination.last !== "boolean")
   || (hasTotalPages && (!Number.isInteger(totalPages) || totalPages < 0))
-  || (!hasLast && !hasTotalPages)) {
+  || (!hasLast && !hasTotalPages))) {
   return report("PROVIDER_PAGE_METADATA_INVALID", { page });
 }
-if (hasLast && hasTotalPages) {
+if (!isUnpagedArray && hasLast && hasTotalPages) {
   const expectedLast = totalPages === 0 || page + 1 >= totalPages;
   if (pagination.last !== expectedLast) {
     return report("PROVIDER_PAGE_METADATA_CONFLICT", { page, totalPages });
@@ -122,7 +126,7 @@ if (page > 0 && fingerprint && fingerprint === group.lastFingerprint) {
   return report("PROVIDER_PAGE_REPEATED", { page, providerRowCount: rows.length });
 }
 const providerRows = [...(Array.isArray(group.providerRows) ? group.providerRows : []), ...rows];
-const pageComplete = hasLast ? pagination.last === true : page + 1 >= totalPages;
+const pageComplete = isUnpagedArray || (hasLast ? pagination.last === true : page + 1 >= totalPages);
 if (!pageComplete) {
   if (page + 1 >= maxPages) {
     return report("PROVIDER_PAGE_TRUNCATED", { page, providerRowCount: providerRows.length });

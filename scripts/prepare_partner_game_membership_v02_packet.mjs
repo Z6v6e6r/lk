@@ -48,11 +48,18 @@ const RUNTIME_ARTIFACT_FILES = Object.freeze([
   "functional-rehearsal.json",
   "runtime-manifest.json",
 ]);
-const SIDECAR_TEMPLATE_FILES = Object.freeze([
-  "settings.cjs",
-  "partner-game-membership-sidecar.service",
-  "sidecar-rehearsal.json",
-]);
+export const SIDECAR_ARTIFACT_HASH_FIELDS = Object.freeze({
+  "settings.cjs": "settingsSha256",
+  "partner-game-membership-sidecar.service": "serviceUnitSha256",
+  "settings-runtime.cjs": "settingsRuntimeSha256",
+  "settings-guarded.cjs": "settingsGuardedSha256",
+  "guarded-startup.cjs": "guardedStartupSha256",
+  "raw-request-guard.cjs": "rawRequestGuardSha256",
+  "raw-audit.cjs": "rawAuditSha256",
+  "guarded-runtime-policy.json": "guardedPolicySha256",
+  "guarded-sidecar-rehearsal.json": "rehearsalSha256",
+});
+export const SIDECAR_TEMPLATE_FILES = Object.freeze(Object.keys(SIDECAR_ARTIFACT_HASH_FIELDS));
 
 const isWithin = (parent, candidate) => {
   const relative = path.relative(parent, candidate);
@@ -178,32 +185,27 @@ export function validatePartnerSidecarArtifacts({ artifacts, candidateBytes, sid
   if (!artifacts || !Buffer.isBuffer(candidateBytes) || !sidecarControls) {
     throw new Error("Pilot packet requires exact sidecar artifact bytes and controls");
   }
-  const settingsBytes = artifacts["settings.cjs"];
-  const serviceUnitBytes = artifacts["partner-game-membership-sidecar.service"];
-  const rehearsalBytes = artifacts["sidecar-rehearsal.json"];
-  if (![settingsBytes, serviceUnitBytes, rehearsalBytes].every(Buffer.isBuffer)
-    || sha256(settingsBytes) !== sidecarControls.settingsSha256
-    || sha256(serviceUnitBytes) !== sidecarControls.serviceUnitSha256
-    || sha256(rehearsalBytes) !== sidecarControls.rehearsalSha256
+  const rehearsalBytes = artifacts["guarded-sidecar-rehearsal.json"];
+  if (!isDeepStrictEqual(Object.keys(artifacts).sort(), [...SIDECAR_TEMPLATE_FILES].sort())
+    || Object.entries(SIDECAR_ARTIFACT_HASH_FIELDS).some(([name, field]) => !Buffer.isBuffer(artifacts[name]) || sha256(artifacts[name]) !== sidecarControls[field])
     || sha256(candidateBytes) !== sidecarControls.candidateFlowSha256) {
     throw new Error("Pilot packet sidecar bytes differ from the immutable production-controls closure");
   }
   const rehearsal = JSON.parse(rehearsalBytes.toString("utf8"));
   const expected = {
-    formatVersion: 1,
-    capturedAt: "2026-09-05T06:49:04.000Z",
+    formatVersion: 2,
+    capturedAt: sidecarControls.rehearsalCapturedAt,
     environment: "LOCAL_DISPOSABLE_CONTAINER",
     networkMode: "none",
     runtime: {
       platform: "linux",
       architecture: "x64",
-      nodeImageSha256: "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+      nodeImageSha256: "4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96",
       nodeVersion: "22.23.2",
       nodeRedVersion: "5.0.6",
     },
     artifacts: {
-      settingsSha256: sidecarControls.settingsSha256,
-      serviceUnitSha256: sidecarControls.serviceUnitSha256,
+      ...Object.fromEntries(Object.values(SIDECAR_ARTIFACT_HASH_FIELDS).filter((field) => field !== "rehearsalSha256").map((field) => [field, sidecarControls[field]])),
       candidateFlowSha256: sidecarControls.candidateFlowSha256,
     },
     readback: {
@@ -219,11 +221,24 @@ export function validatePartnerSidecarArtifacts({ artifacts, candidateBytes, sid
       cacheControl: "no-store",
       corsResponseHeader: null,
       gracefulStopMarkers: ["Stopping flows", "Stopped flows"],
+      actualNodeRedCli: true,
+      serviceCommandAndEnvironmentVerified: true,
+      currentSymlink: true,
+      systemdExecuted: false,
+      rawDuplicateHeaderHttpStatus: 400,
+      rawDuplicateJsonHttpStatus: 400,
+      durableAuditRows: 6,
+      restartExistingAudit: true,
+      startupRefusedCases: 10,
+      physicalProbesPassed: 20,
     },
-    cleanup: { containerPresent: false, hostListenerPresent: false },
+    proof: rehearsal.proof,
+    cleanup: { ownedContainersRemoved: 2, hostPortsPublished: 0 },
     productionTouched: false,
   };
-  if (sidecarControls.topology !== "DEDICATED_LOOPBACK_SIDECAR"
+  if (!rehearsal.proof || !isDeepStrictEqual(Object.keys(rehearsal.proof).sort(), ["orchestratorSha256", "probeScriptSha256", "probesSha256", "receiptSha256"])
+    || Object.values(rehearsal.proof).some((value) => !/^[a-f0-9]{64}$/.test(value))
+    || sidecarControls.topology !== "DEDICATED_LOOPBACK_SIDECAR"
     || sidecarControls.sharedFlowMutationAllowed !== false
     || !isDeepStrictEqual(rehearsal, expected)) {
     throw new Error("Pilot packet sidecar rehearsal is incomplete or differs from the approved fail-closed evidence");

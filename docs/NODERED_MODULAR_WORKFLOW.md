@@ -327,3 +327,15 @@ Do not bind a reviewed SHA or reuse a historical function-only artifact. A futur
 release must first rebuild and independently review an exact-graph contract that includes
 the atomic Piter topology. Provisioning protected runtime configuration, reviewed-flow
 deploy, provider rotation and revocation remain separate R4 gates.
+
+## Bounded release authorization and evidence reuse
+
+One approval of a concrete critical release can cover its specified preimage check,
+source-driven candidate, reviewed apply, postcheck/observation and guarded recovery.
+Do not request a new confirmation at each unchanged step. Source, scope, target or
+material-condition drift requires a new decision. Packet/contract/plan tooling remains
+responsible for source/candidate identities, results and concrete blockers; reuse unchanged
+outputs instead of manually copying evidence. A fresh live preimage remains mandatory at
+real apply. Wide commands remain quarantined and unified subscription enforcement remains
+one graph. Frontend CI/release requires no live snapshot or subscription runtime readiness.
+The first subscription release may cover one product and one working end-to-end scenario.
