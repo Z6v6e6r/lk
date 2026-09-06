@@ -16,6 +16,7 @@ const ERROR_CODES = new Set([
   "RAW_SECURITY_HEADER_INVALID", "RAW_CONTENT_TYPE_INVALID", "RAW_FRAMING_INVALID", "RAW_GUARD_ORDER_INVALID",
   "RAW_AUDIT_UNAVAILABLE", "RAW_BODY_TIMEOUT", "RAW_BODY_ABORTED", "RAW_BODY_IO_ERROR", "RAW_RESPONSE_CLOSED",
   "RAW_DELETE_BODY_INVALID",
+  "RAW_FORWARDING_SANITIZATION_FAILED",
 ]);
 
 // Scan decoded object keys before JSON.parse can discard duplicates. No stream
@@ -208,6 +209,18 @@ function createPartnerRawRequestGuard({ expectedHost, audit, bodyTimeoutMs = 500
       if (req.body !== undefined || req._body || req.skipRawBodyParser || req.readableEnded || req.readableDidRead
         || req.readableFlowing !== null || req.destroyed || req.readableEncoding !== null) fail("RAW_GUARD_ORDER_INVALID");
       expected = validateRawRequest(req, expectedHost);
+      // Preserve the original duplicate/framing evidence until validation above.
+      // Nginx rebuilds its own source-IP limiter from the socket peer. The sidecar
+      // does not trust a forwarded chain: remove it from ALL downstream header
+      // views, including IncomingMessage's lazily cached headersDistinct.
+      try {
+        const forwarding = name => name.toLowerCase() === "forwarded"
+          || name.toLowerCase().startsWith("x-forwarded-") || name.toLowerCase() === "x-real-ip";
+        const views = [req.headers, req.headersDistinct];
+        if (views.some(view => !view || typeof view !== "object" || Array.isArray(view))) fail("RAW_FORWARDING_SANITIZATION_FAILED");
+        for (const view of views) for (const name of Object.keys(view)) if (forwarding(name)) delete view[name];
+        req.rawHeaders = req.rawHeaders.filter((name, index, all) => !forwarding(index % 2 === 0 ? name : all[index - 1]));
+      } catch { fail("RAW_FORWARDING_SANITIZATION_FAILED"); }
     } catch (error) { reject(error.message); return; }
     req.on("data", onData);
     req.once("end", onEnd);

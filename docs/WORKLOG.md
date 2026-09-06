@@ -2,6 +2,22 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner wildcard forwarding correction (source-only)
+
+- После checkpoint `069d3b8` координатор подтвердил минимальный fix observed local
+  wildcard defect без пересмотра платформы. Existing raw guard после исходной
+  duplicate/framing validation стирает forwarding headers из трёх request views;
+  proof headers/body/path сохраняются. Nginx header forwarding глобально не отключён.
+- Scoped raw-guard/guarded-startup tests 144/144 PASS, включая реальные durable audit
+  write/reopen после sanitizer failure. Reviewer обнаружил отсутствие нового кода
+  в raw-audit allowlist; исправлены code и regression, без расширения sink schema.
+- Прежние physical FAIL/PASS receipts и sidecar/control pins сохранены. Packet
+  validator ожидаемо отклоняет новые raw-guard bytes против старого rehearsal.
+  New physical run/full suite/build NOT_RUN; 299 PASS/build PASS относятся к
+  предыдущему checkpoint, не означают green exact-head текущего fix.
+- No merge/push/deploy/activation/shared data. Новый Docker/CLI run требует отдельного
+  exact runtime admission и heavy-slot после A. Source ownership/branch сохранены.
+
 ## 2026-09-06 — Partner local Nginx candidate / runtime audit refresh
 
 - Анализ: продолжается existing `codex/partner-viva-bounded-response-20260905` от

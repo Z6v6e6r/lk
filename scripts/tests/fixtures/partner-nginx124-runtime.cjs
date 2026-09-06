@@ -123,9 +123,10 @@ async function probes() {
     await check("body-16384", { body: '{"x":"' + "a".repeat(16376) + '"}' }, [503], 1);
     await check("body-16385", { body: '{"x":"' + "a".repeat(16377) + '"}' }, [413]);
     const forwarded = await check("known-forwarded-scrub", { extra: ["Forwarded", "for=DO_NOT_LOG_ME", "X-Forwarded-For", "DO_NOT_LOG_ME"] }, [503], 1);
-    assert.equal(forwarded.after.last.forwarded, null); assert.equal(forwarded.after.last.xff, "127.0.0.1");
-    const arbitrary = await check("wildcard-forwarded-open-control", { extra: ["X-Forwarded-Fixture", "DO_NOT_LOG_ME"] }, [503], 1);
-    assert.equal(arbitrary.after.last.arbitraryForwardedPresent, true); rows.at(-1).result = "KNOWN_BLOCKER_CONFIRMED";
+    assert.equal(forwarded.after.last.forwarded, null); assert.equal(forwarded.after.last.xff, null);
+    const arbitrary = await check("wildcard-forwarded-scrub", { extra: ["X-Forwarded-Fixture", "DO_NOT_LOG_ME"] }, [503], 1);
+    assert.equal(arbitrary.after.last.arbitraryForwardedPresent, false);
+    await check("duplicate-wildcard-forwarded", { extra: ["X-Forwarded-Fixture", "DO_NOT_LOG_ME", "x-FORWARDED-fixture", "DO_NOT_LOG_ME"] }, [400]);
     await wait(6000);
     const beforeRate = await snapshot(); const rate = [];
     for (let i = 0; i < 20; i++) rate.push(await request());

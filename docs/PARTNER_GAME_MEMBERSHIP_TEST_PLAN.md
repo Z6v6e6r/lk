@@ -8,6 +8,10 @@
 Runtime suite отклоняет resealed non-Linux/image/command/time/isolation evidence.
 Физический Nginx runner исполняется отдельно; OPEN/NOT_TESTED перечислены в receipt,
 не превращаются в PASS общего ingress и не запускают Mongo/Viva бизнес-сценарии.
+Последующий wildcard source fix проверяется отдельно: validate-before-scrub,
+все три header views, сохранение proof/body/path, durable audit failure/recovery.
+Старые physical receipts не переиспользуются для изменённых guard/audit bytes;
+packet assembly остаётся fail-closed до новой репетиции и обновления closure.
 
 | Уровень | Что доказывает | Что не доказывает |
 | --- | --- | --- |

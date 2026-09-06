@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import guardModule from "../partner_game_membership_sidecar/raw-request-guard.cjs";
+import auditModule from "../partner_game_membership_sidecar/raw-audit.cjs";
 import settingsModule from "../partner_game_membership_sidecar/settings-guarded.cjs";
 import baseline from "../partner_game_membership_sidecar/settings.cjs";
 import fs from "node:fs";
@@ -22,6 +23,13 @@ const call = async ({ body = "{}", method = "POST", url, headers, mutate, action
   req.originalUrl = req.url = url || (method === "GET" ? "/lk/integrations/v1/operations/fixture-op"
     : `/lk/integrations/v1/open-games/fixture-game/members${method === "DELETE" ? "/fixture-member" : ""}`);
   req.rawHeaders = headers || baseHeaders(body);
+  req.headers = {};
+  req.headersDistinct = {};
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    const name = req.rawHeaders[i].toLowerCase(), value = req.rawHeaders[i + 1];
+    req.headers[name] = Object.hasOwn(req.headers, name) ? `${req.headers[name]}, ${value}` : value;
+    (req.headersDistinct[name] ||= []).push(value);
+  }
   req.complete = true;
   req.trailers = {};
   const events = [];
@@ -91,6 +99,74 @@ test("DELETE empty object and bodyless GET", async () => {
   assert.deepEqual(out.req.body, {});
   denied(await call({ method: "DELETE", body: '{"x":1}' }), "RAW_DELETE_BODY_INVALID");
   denied(await call({ method: "GET" }), "RAW_FRAMING_INVALID");
+});
+
+test("forwarding scrub removes arbitrary mixed-case names from every view without changing proof/body/route", async () => {
+  for (const method of ["POST", "DELETE", "GET"]) {
+    const body = method === "GET" ? "" : "{}", raw = baseHeaders(body);
+    const names = ["Forwarded", "X-Forwarded-For", "x-FoRwArDeD-Fixture", "X-Forwarded-", "X-Real-IP"];
+    const out = await call({ method, body, headers: [...raw, ...names.flatMap(name => [name, "DO_NOT_LOG_ME"])] });
+    assert.equal(out.nextCount, 1);
+    assert.deepEqual(out.req.rawHeaders, raw);
+    for (const name of names) {
+      assert.equal(out.req.headers[name.toLowerCase()], undefined);
+      assert.equal(out.req.headersDistinct[name.toLowerCase()], undefined);
+    }
+    for (const name of SECURITY_HEADERS) {
+      const value = name === "content-type" ? "application/json" : "fixture-value";
+      assert.equal(out.req.headers[name], value);
+      assert.deepEqual(out.req.headersDistinct[name], [value]);
+    }
+    assert.equal(out.req.url, out.req.originalUrl);
+    assert.deepEqual(out.req.body, {});
+    assert.doesNotMatch(JSON.stringify([out.events, out.res.result]), /DO_NOT_LOG_ME/);
+  }
+});
+
+test("duplicates cannot be hidden by removing forwarding headers", async () => {
+  for (const name of ["Forwarded", "X-Forwarded-Fixture", ...SECURITY_HEADERS]) {
+    const headers = [...baseHeaders(), "X-Forwarded-Other", "DO_NOT_LOG_ME"];
+    if (!SECURITY_HEADERS.includes(name)) headers.push(name, "DO_NOT_LOG_ME");
+    headers.push(name.toUpperCase(), "DO_NOT_LOG_ME");
+    const out = await call({ headers });
+    denied(out, "RAW_HEADER_DUPLICATE");
+    assert.deepEqual(out.req.rawHeaders, headers); // validation precedes mutation
+    assert.doesNotMatch(JSON.stringify([out.events, out.res.result]), /DO_NOT_LOG_ME/);
+  }
+});
+
+test("unmodifiable or missing header views fail closed before body/parser/dispatch", async () => {
+  for (const field of ["headers", "headersDistinct"]) {
+    const out = await call({ headers: [...baseHeaders(), "X-Forwarded-Fixture", "DO_NOT_LOG_ME"],
+      mutate: req => Object.freeze(req[field]) });
+    denied(out, "RAW_FORWARDING_SANITIZATION_FAILED");
+  }
+  denied(await call({ mutate: req => { delete req.headersDistinct; } }), "RAW_FORWARDING_SANITIZATION_FAILED");
+  denied(await call({ mutate: req => Object.defineProperty(req, "rawHeaders", { writable: false }) }), "RAW_FORWARDING_SANITIZATION_FAILED");
+});
+
+test("real durable audit records sanitizer failure without poisoning later requests or restart", async () => {
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "partner-forwarding-audit-"));
+  fs.chmodSync(directory, 0o700);
+  let sink;
+  try {
+    sink = auditModule.openPartnerRawAudit({ directory });
+    const failed = await call({ headers: [...baseHeaders(), "X-Forwarded-Fixture", "DO_NOT_LOG_ME"],
+      mutate: req => Object.freeze(req.headers), audit: sink.write });
+    denied(failed, "RAW_FORWARDING_SANITIZATION_FAILED");
+    assert.equal(failed.res.statusCode, 400);
+    assert.equal((await call({ audit: sink.write })).nextCount, 1);
+    sink.close();
+    sink = auditModule.openPartnerRawAudit({ directory });
+    assert.equal((await call({ audit: sink.write })).nextCount, 1);
+    const bytes = fs.readFileSync(path.join(directory, "raw-requests.audit.jsonl"), "utf8");
+    const rows = bytes.trim().split("\n").map(JSON.parse);
+    assert.deepEqual(rows.map(row => row.code), ["RAW_FORWARDING_SANITIZATION_FAILED", "RAW_ACCEPTED", "RAW_ACCEPTED"]);
+    assert.doesNotMatch(bytes, /DO_NOT_LOG_ME|fixture-value|X-Forwarded/);
+  } finally {
+    sink?.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 for (const header of [...SECURITY_HEADERS, "host", "content-length"]) {
   test(`raw duplicate ${header} case-insensitive`, async () => denied(await call({ headers: [...baseHeaders(), header.toUpperCase(), "fixture-value"] }), "RAW_HEADER_DUPLICATE"));

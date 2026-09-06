@@ -4,6 +4,30 @@
 Production verifier по-прежнему возвращает `UNSUPPORTED_INGRESS_ADAPTER`;
 deploy/activation остаются `false`. Боевые Nginx, Node-RED, Mongo и Viva не меняются.
 
+## Последующее узкое исправление: source-only, ещё не physical PASS
+
+После checkpoint `069d3b8` подтверждённый wildcard gap исправляется в existing raw
+ingress boundary: **сначала** исходная duplicate/framing validation, **затем** удаление
+`Forwarded`, всех case-insensitive `X-Forwarded-*` и `X-Real-IP` из `req.headers`,
+`req.headersDistinct` (включая lazy cache) и `req.rawHeaders`. Proof/audience/
+idempotency/Host headers, method/path и payload не меняются. Nginx по-прежнему
+применяет source limiter к своему socket peer; sidecar не наследует forwarded chain
+и не утверждает, что loopback peer — публичный клиентский IP.
+
+Sanitizer failure не допускает dispatch и сохраняется как закрытый audit code.
+Проверка через настоящий durable sink включает следующий корректный запрос и
+повторное открытие audit log: rejection не должен отравить audit latch.
+Scoped raw-guard + guarded-startup suites **144/144 PASS**; это local unit/filesystem
+proof, не новый Nginx/CLI/systemd запуск.
+
+Новые sidecar bytes **намеренно ещё не перепривязаны** к старому
+`guarded-sidecar-rehearsal.json`/production-controls. Проверен ожидаемый отказ packet
+validator `sidecar bytes differ from the immutable production-controls closure`.
+Прошлые 299/299, prod/dev build и 47 physical PASS ниже относятся к `069d3b8`, а не
+этому source-only исправлению. Нужны новая изолированная Nginx + guarded CLI
+репетиция, actual receipts и затем согласованное обновление всей closure; нельзя
+механически переименовать прежний known blocker в PASS или менять старые квитанции.
+
 ## Граница реализации
 
 `scripts/partner_game_membership_nginx_candidate.mjs` — чистый versioned generator:
