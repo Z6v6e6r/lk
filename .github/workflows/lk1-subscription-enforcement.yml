@@ -445,6 +445,15 @@ jobs:
           scripts/tests/legacyGameCommandH2IdentityAudit.test.mjs
           scripts/tests/legacyGameCommandRootAclBootstrap.test.mjs
 
+      - name: Validate isolated frontend static routing with real nginx
+        id: check_static_nginx
+        if: steps.route.outputs.profile == 'release'
+        env:
+          DELIVERY_CATEGORY: release
+        run: |
+          docker pull nginx@sha256:2e26275ed7a47e8e93f264d39a09ca4bc3f4058c904c75087e237f4ea883f2a1
+          npm run test:frontend-static-nginx
+
       - name: Typecheck
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:

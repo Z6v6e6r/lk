@@ -425,7 +425,7 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
 
 test("workflow contains no manual or production mutation path", () => {
   const runCommands = steps
-    .filter((candidate) => candidate.name !== "Fetch pinned legacy build image")
+    .filter((candidate) => !["Fetch pinned legacy build image", "Validate isolated frontend static routing with real nginx"].includes(candidate.name))
     .map((candidate) => candidate.run ?? "")
     .join("\n");
   assert.doesNotMatch(workflowText, /workflow_dispatch/);
