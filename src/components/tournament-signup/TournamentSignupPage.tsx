@@ -2244,7 +2244,17 @@ export default function TournamentSignupPage({
                                       onClick={() => void completeVivaRegistration(checkout, product)}
                                       disabled={actionLoading}
                                     >
-                                      <span>{product.name}</span>
+                                      <span>
+                                        {product.name}
+                                        {product.lk1MoneyDiscountCandidate === true && (
+                                          <>
+                                            <br />
+                                            <span className="tournament-signup-payment-option-note">
+                                              Потребуется оплата со скидкой. Посещение не списывается.
+                                            </span>
+                                          </>
+                                        )}
+                                      </span>
                                       <div className="tournament-signup-payment-option-meta">
                                         <strong>
                                           {isConfirming

@@ -176,7 +176,10 @@ function evaluate(input: ManagedSubscriptionPolicyEvaluationInput | Record<strin
   const msg = {
     _managedSubscriptionPolicyInput: structuredClone(input),
   } as Record<string, any>;
-  const output = new Function("msg", evaluatorSource)(msg) as Array<Record<string, any> | null>;
+  const source = Object.hasOwn(input, "lk1Policy")
+    ? fs.readFileSync("scripts/nodered_lk1_hub_nodes/evaluator.js", "utf8")
+    : evaluatorSource;
+  const output = new Function("msg", source)(msg) as Array<Record<string, any> | null>;
   const resultMsg = output[0] || output[1];
   assert.ok(resultMsg, "evaluator must route the message to one output");
   return {
@@ -189,6 +192,160 @@ function evaluate(input: ManagedSubscriptionPolicyEvaluationInput | Record<strin
 function blockerCodes(input: ManagedSubscriptionPolicyEvaluationInput | Record<string, unknown>) {
   return evaluate(input).decision.blockers.map((item: { code: string }) => item.code);
 }
+
+function lk1Input(overrides: Record<string, any> = {}): Record<string, any> {
+  const base = baseInput();
+  return {
+    ...base,
+    lk1Policy: { maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+      gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
+      tournamentDiscountPercent: 50 },
+    target: { ...base.target, basePriceMinor: 1_000_000 },
+    usage: { ...base.usage, activeServiceScope: "ALL_BOOKINGS",
+      usedOrReservedFreeMinutesToday: 0 },
+    ...overrides,
+  };
+}
+
+test("LK1 five-field projection uses the existing monetary-discount calculation", () => {
+  for (const [action, category, used, percent] of [
+    ["JOIN_GAME", "GAME", 60, 30],
+    ["BOOK_GROUP_TRAINING", "GROUP_TRAINING", 0, 50],
+    ["BOOK_TOURNAMENT", "TOURNAMENT", 0, 50],
+  ] as const) {
+    const input = lk1Input();
+    input.action = action;
+    input.target.category = category;
+    input.usage.usedOrReservedFreeMinutesToday = used;
+    const result = evaluate(input);
+    assert.equal(result.decision.eligible, true);
+    assert.equal(result.decision.benefit.discountMinor, 1_000_000 * percent / 100);
+    assert.equal(result.decision.benefit.finalPriceMinor, 1_000_000 * (100 - percent) / 100);
+    assert.equal(result.decision.usageUnits, null);
+  }
+});
+
+test("invalid LK1 projection never falls back to CUP or reaches numeric coercion", () => {
+  for (const value of [null, [], "bad", {}, { ...lk1Input().lk1Policy,
+    groupTrainingDiscountPercent: { toString: null } }]) {
+    const input = lk1Input({ lk1Policy: value, action: "BOOK_GROUP_TRAINING" });
+    input.target.category = "GROUP_TRAINING";
+    const result = evaluate(input);
+    assert.equal(result.decision.eligible, false);
+    assert.ok(result.decision.blockers.some((item: any) => item.code === "LK1_POLICY_INVALID"));
+    assert.equal(result.decision.benefit.kind, "NONE");
+  }
+});
+
+test("LK1 minute allocation counts used and planned minutes; mixed-price binding remains blocked", () => {
+  for (const [used, duration, free, paid] of [[0, 60, 60, 0], [0, 90, 60, 30],
+    [30, 90, 30, 60], [60, 60, 0, 60]]) {
+    const input = lk1Input();
+    input.target.durationMinutes = duration;
+    input.usage.usedOrReservedFreeMinutesToday = used;
+    const { decision } = evaluate(input);
+    assert.deepEqual(decision.gameMinutes, { localDate: "2026-08-15",
+      usedOrReservedFreeMinutesToday: used, freeMinutes: free,
+      paidOverageMinutes: paid, discountPercent: 30 });
+    assert.equal(decision.eligible, !(free > 0 && paid > 0));
+    if (free > 0 && paid > 0) {
+      assert.ok(decision.blockers.some((item: any) => item.code === "LK1_GAME_OVERAGE_ALLOCATION_UNBOUND"));
+    }
+    assert.deepEqual(evaluate(input).decision, decision, "pure re-evaluation consumes nothing");
+  }
+});
+
+test("LK1 active limit requires complete all-booking scope, permits 3 and rejects 4", () => {
+  const input = lk1Input();
+  input.usage.activeServices = 3;
+  assert.equal(evaluate(input).decision.eligible, true);
+  input.usage.activeServices = 4;
+  assert.ok(blockerCodes(input).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
+  input.usage.activeServices = 0;
+  input.usage.activeServiceScope = "SUBSCRIPTION_BENEFIT_ONLY";
+  assert.ok(blockerCodes(input).includes("USAGE_SNAPSHOT_INVALID"));
+});
+
+test("LK1 Viva product tariff reuses partial-price calculation and consumes one visit only for free minutes", () => {
+  for (const [used, duration, free, paid, charge, visits] of [
+    [0, 60, 60, 0, 0, 1], [0, 90, 60, 30, 35_000, 1],
+    [30, 90, 30, 60, 70_000, 1], [60, 60, 0, 60, 70_000, 0],
+  ]) {
+    const input = lk1Input();
+    delete input.policy;
+    delete input.instance;
+    input.lk1ProductBinding = { policyProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+      ownedProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74", clientSubscriptionId: "fixture:owned-sub" };
+    // Existing tariff example: 1,000 RUB/hour; 10k SERVICE is not this price.
+    input.target.basePriceMinor = 100_000 * duration / 60;
+    input.target.priceSource = "VIVA_EXISTING_TARIFF";
+    input.target.durationMinutes = duration;
+    input.usage.usedOrReservedFreeMinutesToday = used;
+    const { decision } = evaluate(input);
+    assert.equal(decision.eligible, true);
+    assert.equal(decision.policyVersion, null, "Viva product IDs are not CUP policy types");
+    assert.equal(decision.gameMinutes.freeMinutes, free);
+    assert.equal(decision.gameMinutes.paidOverageMinutes, paid);
+    assert.equal(decision.subscriptionVisitCount, visits);
+    assert.equal(decision.benefit.finalPriceMinor, charge);
+    if (free && paid) assert.deepEqual(decision.benefit.partialPriceCalculation, {
+      numerator: paid, denominator: duration,
+      chargeBeforeDiscountMinor: 100_000 * paid / 60,
+      percentageDiscountMinor: 30_000 * paid / 60,
+    });
+  }
+});
+
+test("LK1 product-bound price rejects forged identity or unverified tariff without a CUP fallback", () => {
+  const base = lk1Input();
+  delete base.policy;
+  delete base.instance;
+  base.lk1ProductBinding = { policyProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+    ownedProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74", clientSubscriptionId: "fixture:owned-sub" };
+  base.target.priceSource = "VIVA_EXISTING_TARIFF";
+  for (const change of [
+    (input: any) => { input.lk1ProductBinding = null; },
+    (input: any) => { input.lk1ProductBinding.ownedProductId = "fixture:wrong-product"; },
+    (input: any) => { input.lk1ProductBinding.clientSubscriptionId = []; },
+    (input: any) => { input.target.priceSource = "BROWSER"; },
+    (input: any) => { input.target.basePriceMinor = -1; },
+    (input: any) => { input.target.basePriceMinor = null; },
+  ]) {
+    const input = structuredClone(base);
+    change(input);
+    assert.equal(evaluate(input).decision.eligible, false);
+  }
+});
+
+test("LK1 five-field projection ignores inactive CUP caps, pricing and lifecycle extensions", () => {
+  const input = lk1Input();
+  const expected = evaluate(input).decision;
+  input.policy = { ...input.policy, createGame: { enabled: false },
+    benefitRules: [{ kind: "FIXED_PRICE", valueMinor: 1 }],
+    activeServicesLimit: { enabled: true, max: 0 }, bookingWindow: { enabled: true, days: 0 },
+    dailyUsageLimit: 0, usageUnitsByDuration: {},
+    lifecycle: { activationMode: "FIRST_USE", allowBookingsAfterExpiry: false },
+    usage: { weeklyUsageLimit: 0, monthlyUsageLimit: 0, maxFutureBookings: 0,
+      blackoutDates: ["2026-08-15"], minHoursBetweenUses: 1000 },
+    stationAccessRules: [{ surcharge: { kind: "FIXED", amountMinor: 999999 } }] };
+  input.instance.noShowBlockedUntil = "2027-01-01T00:00:00Z";
+  assert.deepEqual(evaluate(input).decision, expected);
+});
+
+test("LK1 projection rejects wrong day, unknown action, browser target and unconfirmed service price", () => {
+  const input = lk1Input();
+  input.usage.dailyBucketLocalDate = "2026-08-14";
+  assert.ok(blockerCodes(input).includes("USAGE_SNAPSHOT_BUCKET_MISMATCH"));
+  input.usage.dailyBucketLocalDate = "2026-08-15";
+  input.target.basePriceMinor = 10_000;
+  assert.ok(blockerCodes(input).includes("BASE_PRICE_UNRESOLVED"));
+  input.target.basePriceMinor = 1_000_000;
+  input.target.resolutionSource = "BROWSER";
+  assert.ok(blockerCodes(input).includes("TARGET_NOT_SERVER_RESOLVED"));
+  input.target.resolutionSource = "SERVER";
+  input.action = "PURCHASE_ADD_ON_PRODUCT";
+  assert.ok(blockerCodes(input).includes("TARGET_NOT_SERVER_RESOLVED"));
+});
 
 test("published policy allows a server-resolved 60 minute game", () => {
   const result = evaluate(baseInput());

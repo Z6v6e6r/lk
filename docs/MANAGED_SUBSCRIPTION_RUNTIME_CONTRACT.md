@@ -2,6 +2,269 @@
 
 ## Status
 
+### Scoped live integration in progress — not installed or activated
+
+The preserved task checkpoint is 948a10fb66c002c5d49698eb1f802fa3d49d1d86.
+Its historical whole-function bodies must not replace production. The local
+integration branch starts at 58f2c78e99599ab4d503b13a3c17e3d0f4590f24;
+generic main modules remain unchanged.
+
+The focused patcher scripts/patch_live_lk1_hub.mjs and source fragments under
+scripts/nodered_lk1_hub_nodes/ compose only the direct product-bound HUB delta
+over the four reviewed live function bodies. Whole target/dependency node hashes
+and incoming edges are pinned; duplicate IDs, missing targets, changed preimages
+or broken references fail closed. All other nodes and fields are preserved,
+including unrelated Piter changes. Raw live flow stays private outside Git.
+Artifact publication requires fresh live-pull custody.
+
+The existing split_create_readonly_preflight remains read-only. Its bound HUB
+success enters a separate call through the existing ordinary mutating gateway:
+fresh actor/ownership reads, per-request lookup/insert and strict durable CAS.
+Only that exact CAS continuation can hand back to
+subscription_create_preflight_complete and permit one exercise POST. The
+frozen CREATE payload, operation, actor, subscription and target must match.
+After CREATE, a separate attempt CAS binds the actual exercise before booking.
+Unknown outcomes never grant another CREATE, booking, transaction or DELETE.
+The existing live no-delete guard and non-HUB rounding/daily rules are retained.
+
+This integration does not import the older CUP overlay, reserve protocol, or
+type-binding prerequisite. The new private-fixture test is
+scripts/tests/lk1HubLiveComposition.test.ts; it executes the final composed
+functions. Without LK1_HUB_LIVE_FIXTURE it is explicitly skipped, not PASS.
+Physical Mongo/provider behavior and actual Viva one-times tariff DTO acceptance
+remain unverified. The earlier configured frontend build belongs to checkpoint
+948a10fb, not to this integration source.
+
+The optional product global has no actor-specific pilot switch. Enabling it on
+shared backend 147 affects the entire eligible product/purchase cohort, including
+production clients; using the DEV frontend does not isolate real booking writes.
+No rule, subscription, booking or payment has been activated by this integration.
+
+### 2026-09-06: direct Viva product rule, local implementation (not deployed)
+
+The current user-approved pilot targets Viva product
+`db7a5250-7369-4f43-8ac5-9111be24bc74` directly, not a CUP subscription type.
+It supersedes the historical type-binding prerequisite in the section below.
+The optional server global `subscriptions_lk1_product_policy` is one object with
+exact fields `productId`, `maxActiveBookings`, `freeGameMinutesPerDay`,
+`gameOverageDiscountPercent`, `groupTrainingDiscountPercent`,
+`tournamentDiscountPercent`. It is absent by default and has **not been installed**.
+Only authoritative owned Viva product/date/target evidence selects this branch.
+Before `2026-09-01 Europe/Moscow`, the existing legacy path is retained.
+
+For GAME, any positive free-minute portion consumes exactly one subscription
+visit; the paid portion alone uses the existing partial-price percentage
+calculator. Examples: used0+60 => one visit, no money; used0+90 => one visit and
+paid30 at30% discount; used30+90 => one visit and paid60 at30%; used60+60 => no
+free visit and paid60 at30%. The tariff comes from existing server price logic,
+not the 10,000 RUB SERVICE carrier. Amounts above that carrier's capacity are
+rejected before any operation insertion or provider write.
+
+The existing `lk_subscription_daily_booking_ops` collection stores one immutable
+request identity `(tenant, actor, operationId)`, frozen rule/target/minute decision,
+and the per-leg attempted/result metadata. No new collection or booking state is
+introduced. CREATE persists its attempt before the exercise POST, then binds the
+actual server-read target and a separate booking attempt before the booking POST.
+JOIN persists the booking attempt before its POST. Request replay cannot consume
+allowance again or adopt a different request's booking; confirmation requires the
+exact persisted/POST-returned booking ID. Unknown outcomes remain pending. Failed
+or released requests are not reclaimed for a new booking.
+
+Money uses the existing split SERVICE serializer, with count1, exact monetary
+discount and the confirmed booking ID. A durable one-shot CAS must positively
+modify the record before the transaction POST. Ambiguous outcomes without an exact
+transaction ID do not trigger another POST. Exact transaction readback validates
+all supplied amount/identity aliases; malformed or contradictory evidence stays
+pending. A checkout URL means money is due, not paid. Carrier errors after a visit
+do not authorize legacy compensation. The tournament subscription wrapper preserves
+this additive due/checkout contract instead of always returning `paid: true`.
+
+Evidence is **local synthetic function-chain testing**, including the actual
+evaluator, split serializer, gateway and finalizer with an in-memory Mongo CAS
+simulation. It is not physical DB, provider, deployed routing or browser proof.
+Actor-wide/cross-request concurrency is explicitly deferred by the user while Viva
+remains in use; same-request idempotency remains mandatory.
+
+Subscription callers without a tariff now enter the existing authenticated
+master-service/studio/sub-service/price GET pipeline after product/cohort selection.
+The split completion includes the existing `PAYMENT_REQUIRED` settlement evidence;
+the actual game-client decision predicate accepts the mixed result locally.
+
+GT/T now uses the existing authenticated own-subscriptions GET independently of
+visit availability, with exact product/instance/owner, ACTIVE status, purchase
+cutoff and lifecycle covering the whole event. Zero remaining visits does not
+exclude a monetary discount. It re-reads ownership, target and the existing
+one-times tariff before an ON_PLACE booking, then uses the same SERVICE checkout
+at the configured discount, with no subscription visit or GAME-minute debit.
+The actual exercise's `availableClientSubscriptions` is never fabricated.
+Malformed identity fields, timestamp expiry and price drift fail closed.
+
+Still required before DEV activation: a real sanitized owned-instance response
+proving the product link, a real event-bound one-times tariff response matching
+the strict parser, final release checks, and fresh DEV backend
+identity/isolation/preimage/rollback. `apiClient.Subscription` currently declares
+the instance ID but no explicit product ID. The supplied catalog product UUID
+and a matching product name do not prove owned-instance-to-product identity.
+Accepted explicit server paths include `productId`, `subscriptionProductId`,
+`templateId`, nested `product`/`template` IDs and their `subscription` equivalents;
+all supplied aliases must agree. No existing sanitized real fixture proves one
+of these paths. The browser collector is deliberately narrower (top-level IDs
+or nested `product`), so other valid server paths may remain unavailable in UI.
+
+The affected bundle compiles with inert `ci.invalid` settings only; it is not a
+DEV/release artifact. An initial synthetic CUA render exposed that the existing
+owned-subscription button ignored the candidate's monetary `priceLabel`. With
+coordinator-approved ownership of the existing component, the flagged candidate
+now shows «Потребуется оплата со скидкой. Посещение не списывается.» before the
+action; ordinary variants and business flow are unchanged. Final desktop and
+390px mobile CUA renders confirm the warning is visible and in the accessible
+button text. Mobile validity text still wraps poorly (pre-existing cosmetic
+limitation); no CSS was changed. No booking button was clicked. Playwright CLI
+was unavailable (registry DNS); CUA is the fallback, not a Playwright CLI PASS.
+
+GAME cached tariff evidence is target-bound and expires after30 seconds;
+target/rule recheck is not a second tariff fetch. GT/T does fetch its tariff again.
+No agent booking/debit/payment tests are authorized: the user plans
+manual cases on `https://padlhub.ru/lk_dev`. That frontend URL alone does not prove
+backend isolation. Production, shared routing, secrets and real data remain unchanged.
+
+#### Safe checkpoint: local source, not release acceptance
+
+```text
+ROLE_AND_CURRENT_TASK=B / LK1 product-bound free-hour + money-overage implementation
+REPOSITORY=Z6v6e6r/lk
+WORKTREE_PATH=.worktrees/lk1-launcher-fix-main3bd-integration-20260905
+BRANCH=codex/lk1-launcher-fix-main3bd-integration-20260905
+HEAD_SHA=95ecbc40b54f94398f4d8222afca716464c04112 (changes uncommitted)
+CHANGED_AND_UNTRACKED_FILES=11 modified scoped files listed below; no untracked files
+DONE=GAME CREATE/JOIN allocation and one-shot checkout; GT/T independent money ownership, fresh event tariff, zero-visit discounted checkout; client due normalization
+CURRENTLY_RUNNING=None; owned loopback fixture stopped after final render; no server/DB operation
+TESTS_ACTUALLY_PASSED=Prior GAME gate: 224 PASS / 4 SKIP; GT/T increment: 2 gateway cases and 8 wrapper/daily-limit cases; after final lifecycle/identity fix: 3 focused GT/T cases; final UI tsc -b --noEmit and scoped ESLint --quiet; git diff --check; final inert affected-bundle compile; final local synthetic desktop/mobile warning render
+BLOCKER=Real own-instance product link and event tariff DTO NOT_VERIFIED; DEV isolation/target NOT_PROVEN; release/runtime checks incomplete
+SHARED_ENVIRONMENT_OR_RESOURCES=No host/provider/DB/config writes; coordinator owns read-only DEV target investigation; actor-wide concurrency deferred
+NEXT_STEP_TO_CLOSE_A_B_C_D=Accept real sanitized product/tariff proof and fresh isolated DEV target/preimage/rollback before candidate installation. No claim that A/C/D are closed.
+MODEL_ROUTE=parent
+```
+
+Changed files (existing worktree preserved):
+
+- `scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js`
+- `scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js`
+- `scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js`
+- `scripts/nodered_games_nodes/fn_split_router.js`
+- `scripts/tests/subscriptionBookingGateway.nodered.test.ts`
+- `scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts`
+- `scripts/tests/tournamentSignup.subscriptionConfirmation.test.ts`
+- `src/types/managedSubscriptionRuntime.ts`
+- `src/utils/tournamentSignupApi.ts`
+- `src/components/tournament-signup/TournamentSignupPage.tsx` (coordinator-approved payment warning only)
+- `docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md`
+
+Four explicit skips from the prior 224-PASS gate (none counted as PASS):
+
+- `native custody physical RESERVE READBACK with owned PostgreSQL and Mongo`:
+  optional physical fixture absent; historical inactive CUP/LK2 path, not proof
+  of the new direct-rule Mongo runtime either.
+- `native custody in-process actual CUP resolver quote to native LK to canonical route`:
+  old CUP resolver fixture/environment absent; inactive outside this direct rule.
+- `LK1 overlay consumes actual CUP supplier responses across the final contract`:
+  `LK1_CUP_SUPPLIER_RESPONSES` absent; historical mapping path, not this pilot.
+- `HUB response and external command prefix match the exact fresh-live preimage`:
+  `LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE` absent; fresh preimage remains a release gate.
+
+Node-RED function files are ignored by ESLint, but their actual bodies execute in
+the affected tests. The previous full ESLint passed; final changed TS/test scope
+also passed. The final affected tournament bundle compiled 119 modules with all
+required URLs set to inert `https://ci.invalid/…`; normal DEV environment validation
+is blocked by 17 missing keys. No credentials were restored. Modular candidate
+validation, physical Mongo and real provider/manual UI cases were not run.
+No checkpoint commit, push, PR, merge, deploy or live mutation occurred. Triggered
+read-only review closed the GAME 2P1/2P2/carrier-cap findings and the final GT/T
+timestamp-lifecycle/malformed-identity findings; both are scoped source verdicts.
+The separately reviewed final UI delta is `SCOPED_UI_PAYMENT_REVIEW=PASS`; the
+reviewer did not repeat tests/render. Final inert compilation transformed 119
+modules and emitted a 3,745.73 kB bundle (2,395.66 kB gzip) only under `/private/tmp`.
+
+### Historical local projection/type-contract evidence (not an activation path)
+
+The new release scope replaces the broad CUP/LK2 readiness criteria below.
+The existing evaluator accepts a **server-built** `lk1Policy` containing only
+`maxActiveBookings`, `freeGameMinutesPerDay`, `gameOverageDiscountPercent`,
+`groupTrainingDiscountPercent`, and `tournamentDiscountPercent`.
+This source-only entry is not called by the booking router yet and must not be
+treated as production eligibility, publication, or provider authorization.
+
+The corresponding LK1 consumer now accepts the agreed additive runtime-context
+`policyResolution: { kind: ABSENT | LEGACY | MATCH, subscriptionTypeId }` contract.
+The final CUP supplier source has been exercised against this consumer locally,
+with synthetic actor/repository reads. This is not deployed-contract or current
+mapping evidence. Enrollment requires both the existing
+exact HUB product allowlist and the scalar Node-RED global
+`subscriptions_lk1_overlay_subscription_type_id`. Its owner/purpose is the current
+LK1 pilot; it has no default value, policy registry or browser input. Do not set it
+until the existing read-only mapping bridge freshly verifies the actual HUB type
+and the reviewed contract/release gates pass. Review or remove this pilot binding
+when the pilot closes or an existing authoritative enrollment mechanism replaces
+it; do not expand it into a registry. Old HUB allowlist membership alone does not
+enable the new branch. Product ID as type ID and mismatched response types fail
+closed for the explicitly enrolled pilot.
+
+ABSENT continues the legacy flow without requiring a purchase date. LEGACY and
+MATCH require valid unambiguous Viva date evidence; before the cutoff they retain
+the legacy flow. A current MATCH deliberately stops with
+`LK1_POLICY_OVERLAY_EXECUTION_UNBOUND`, without old CUP reserve or activation.
+Before a legacy booking POST, the consumer repeats the same read and compares
+type, instance, mapping revisions and rule identity. Non-2xx/malformed replies
+cannot authorize fallback; recheck failures stay pending without a compensation
+grant. These are synthetic function-path checks, not a live booking/payment test.
+
+The final ABSENT/LEGACY response includes an exact safe `instance` subset:
+`subscriptionInstanceId`, `subscriptionTypeId`, `state`, `activeFrom`, `activeTo`,
+`frozenUntil`, `homeStationId`, `noShowBlockedUntil` (null). Both nested identities
+must match the top-level result. Private fields, `purchasedAt`, `policyVersion`,
+policy/publication payloads and extra keys are rejected in these two branches.
+Instance metadata does not replace the original Viva eligibility guards.
+The local cross-contract check executes the actual CUP source with synthetic
+read-only dependencies, then feeds its ABSENT/LEGACY/MATCH and four actual error
+responses to the actual LK1 function. It covers legacy continuation, safe MATCH
+STOP, type/date/recheck drift and errors without any HTTP dispatch. The opt-in
+gateway test uses `LK1_CUP_SUPPLIER_RESPONSES`; without supplied evidence it is
+SKIPPED, never PASS. Supplier fixture generation pins its source/test hashes;
+the JSON fixture alone is not proof of supplier provenance or live behavior.
+
+The projection ignores the wider CUP booking window, units, weekly/monthly caps,
+station surcharges, benefits, no-show extensions and activation capabilities.
+It uses `ALL_BOOKINGS` active count and `usedOrReservedFreeMinutesToday` for the
+game's `Europe/Moscow` date; these must come from complete authoritative Viva
+reads and the existing concurrency/retry guards, never browser input. A pure
+repeatable calculation is not proof of booking/payment idempotency.
+
+The existing monetary calculation is reused: service 10,000 RUB is 1,000,000
+minor units, and Viva transaction `discount` is a monetary amount, not a percent.
+Mixed free/paid games compute minutes but remain blocked with
+`LK1_GAME_OVERAGE_ALLOCATION_UNBOUND`; no proportional charge is invented.
+The existing separate tournament Energy product has a 20,000 RUB base and is
+not a substitute for this service.
+
+Remaining wiring prerequisites: generic server-owned type lookup with no-rule
+Viva fallback, existing authoritative purchase-date/sale-period selection,
+unchanged underlying ownership/validity/past-event guards, and existing booking
+plus discounted-payment dispatch/recovery. The real pilot type/version binding is
+not server-verified. No legacy CUP/LK2 reserve/claim/worker/PG capability is required by the
+new release, and no live candidate is prepared by this increment.
+
+The user-selected pilot is `Падел.Дружба.ХАБ — годовая`, whose existing LK
+catalogue provider product is `db7a5250-7369-4f43-8ac5-9111be24bc74`.
+This product ID is not a subscription type ID. A fresh authoritative type/mapping
+response is still required; fixture aliases and an unapplied historical activation
+packet cannot establish the current binding. For the configured type, an
+authoritative purchase before `2026-09-01` in `Europe/Moscow` keeps the existing
+Viva/LK path without new calculations. The exact boundary belongs to the new
+five-field rule. Missing or ambiguous purchase dates block only a configured rule;
+confirmed absence of a policy must not require a purchase date.
+
+### Earlier broad-runtime source contract (historical; not the new release DoD)
+
 This checkpoint defines, wires and tests the first server-side policy evaluator
 for the managed annual subscription model. It does not publish a CUP policy,
 activate a Viva product, create a client subscription, change the live Node-RED
