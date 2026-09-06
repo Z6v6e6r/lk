@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { completeHttpResponse } from "./fixtures/partner-http-response.cjs";
-import { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
+import { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, sourceRateRow, sourceConcurrencyRow, missingDeadlineRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
 import { generatePartnerNginx124Candidate } from "../partner_game_membership_nginx_candidate.mjs";
 import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
 import { verifyPartnerProductionIngress } from "../partner_game_membership_ingress_evidence.mjs";
@@ -15,6 +15,37 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "partner-nginx-unit-"));
 fs.chmodSync(root, 0o700);
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 const input = createPartnerNginxTestCertificates(path.join(root, "certificates"));
+const sourceInput = createPartnerNginxTestCertificates(path.join(root, "source-certificates"), { sourceLimits: true });
+
+test("source-limit opt-in binds exactly three distinct TLS identities without changing any thresholds", () => {
+  const single = generatePartnerNginx124Candidate(input), multi = generatePartnerNginx124Candidate(sourceInput);
+  assert.doesNotMatch(single.configuration, /fixture-client-[23]|allow 127\.0\.0\.3/);
+  assert.equal(single.clientIdentities.length, 1); assert.equal(multi.clientIdentities.length, 3);
+  assert.equal(new Set(multi.clientIdentities.map(item => item.spkiSha256)).size, 3);
+  assert.equal(new Set(multi.clientIdentities.map(item => item.leafSha256)).size, 3);
+  assert.deepEqual(multi.clientIdentities.map(item => item.bucket), ["fixture-client", "fixture-client-2", "fixture-client-3"]);
+  assert.deepEqual(Object.keys(multi.certificateHashes).sort(), ["ca", "client", "client-2", "client-3", "server"]);
+  assert.match(multi.configuration, /allow 127\.0\.0\.1;[\s\S]*allow 127\.0\.0\.3;[^\n]*\n\s*deny all;/);
+  assert.doesNotMatch(multi.configuration, /^\s*(?:allow 127\.0\.0\.2|set_real_ip_from|real_ip_header|limit_(req|conn)_dry_run|include |load_module )/m);
+  const policy = config => config.split("\n").filter(line => /^\s*limit_(req|conn)/.test(line));
+  assert.deepEqual(policy(single.configuration), policy(multi.configuration));
+  assert.equal(multi.unresolvedControls.includes("SOURCE_LIMIT_INDEPENDENT_PROOF"), true);
+  for (const flag of ["productionVerified", "deployAuthorized", "activationAuthorized"]) assert.equal(multi[flag], false);
+  assert.throws(() => verifyPartnerProductionIngress(multi), /UNSUPPORTED_INGRESS_ADAPTER/);
+});
+
+test("additional TLS bindings reject malformed arrays, alias keys, unpinned leaves and input overrides", () => {
+  const build = bindings => generatePartnerNginx124Candidate({ ...sourceInput, sourceLimitClients: bindings });
+  for (const value of [undefined, null, [], [sourceInput.sourceLimitClients[0]], Array(2), [...sourceInput.sourceLimitClients, sourceInput.sourceLimitClients[0]]]) assert.throws(() => build(value));
+  const [a, b] = sourceInput.sourceLimitClients;
+  for (const binding of [{ ...a, label: "attacker" }, { ...a, approvedClientSpkiSha256: "0".repeat(64) },
+    { ...a, clientCertificateBytes: sourceInput.serverCertificateBytes },
+    { ...a, clientCertificateBytes: fs.readFileSync(path.join(root, "source-certificates/wrong-client.crt")) },
+    { ...a, clientCertificateBytes: input.clientCertificateBytes }]) assert.throws(() => build([binding, b]));
+  assert.throws(() => build([a, a]), /IDENTITY_DUPLICATE/);
+  assert.throws(() => build([{ clientCertificateBytes: sourceInput.clientCertificateBytes, approvedClientSpkiSha256: sourceInput.approvedClientSpkiSha256 }, b]), /IDENTITY_DUPLICATE/);
+  for (const changes of [{ sourceCidrs: ["0.0.0.0/0"] }, { sourceRate: 999 }, { clientLimit: 999 }, { skipLimits: true }]) assert.throws(() => generatePartnerNginx124Candidate({ ...sourceInput, ...changes }));
+});
 
 test("Nginx candidate is deterministic, include-free, loopback-only and never production evidence", () => {
   const a = generatePartnerNginx124Candidate(input);
@@ -192,7 +223,7 @@ test("complete matrix summary cannot drop, duplicate or relabel a remaining boun
   for (const row of rows.filter(row => ["absolute-request-deadline", "sidecar-late-httpout-after-deadline"].includes(row.name))) {
     Object.assign(row, { control: "SIDECAR_RESPONSE_DEADLINE", watchdogAudits: 1 });
   }
-  assert.deepEqual(summarizeNginxRows(rows), { passed: 70, confirmedBlockers: [], notTested: [] });
+  assert.deepEqual(summarizeNginxRows(rows), { passed: 77, confirmedBlockers: [], notTested: [] });
   assert.throws(() => summarizeNginxRows(rows.slice(1)));
   assert.throws(() => summarizeNginxRows([...rows.slice(1), rows[1]]));
   assert.throws(() => summarizeNginxRows(rows.map(row => row.name === "absent-sni" ? { ...row, name: "unknown" } : row)));
@@ -221,5 +252,48 @@ test("deadline proof requires trusted same-request watchdog audit, timing, no re
   for (const changes of [{ calls: 2 }, { received: 2 }, { active: 1 }, { trickleWrites: 10 }, { audits: [] },
     { audits: [after.audits[0], { ...after.audits[1], requestId: "other" }] }, { audits: [...after.audits, after.audits[1]] }]) {
     assert.throws(() => deadlineRow("deadline", response, before, { ...after, ...changes }, "trickle"));
+  }
+});
+
+test("source rate proof refuses client-budget, socket, log, warm-state and timing substitutions", () => {
+  const fresh = () => {
+    const attempts = Array.from({ length: 30 }, (_, i) => ({ client: ["client", "client-2", "client-3"][i % 3],
+      source: "source-a", callerId: `fixture-caller-${i}`, forwardedSource: "source-b",
+      response: observedHttp(i < 21 ? 503 : 429, { socketLocalAddress: "127.0.0.1" }) }));
+    const differential = { client: "client-3", source: "source-b", forwardedSource: "source-a", response: observedHttp(503, { socketLocalAddress: "127.0.0.3" }) };
+    const logs = [...attempts, differential].map(item => ({ status: String(item.response.status), clientVerified: "1",
+      upstream: item.response.status === 503 ? "503" : "", rate: item.response.status === 503 ? "PASSED" : "REJECTED", concurrency: item.response.status === 503 ? "PASSED" : "" }));
+    return [attempts, differential, { calls: 0, received: 0, active: 0 }, { calls: 22, received: 22, active: 0 }, 800, logs, 6005];
+  };
+  assert.equal(sourceRateRow(...fresh()).rejected, 9);
+  for (const mutate of [args => { args[0][0].client = "client-3"; }, args => { args[0][0].source = "source-b"; },
+    args => { args[0][0].response.socketLocalAddress = "127.0.0.3"; }, args => { args[0][0].callerId = "same"; },
+    args => { args[0][0].response.serverAuthorized = false; }, args => { args[1].response.status = 429; },
+    args => { args[1].response.socketLocalAddress = "127.0.0.1"; }, args => { args[3].calls++; },
+    args => { args[4] = 1600; }, args => { args[6] = 5999; }, args => { args[2].active = 1; },
+    args => { args[5][21].concurrency = "REJECTED"; }, args => { args[5][21].upstream = "429"; },
+    args => { args[5][21].rate = "PASSED"; }, args => { args[5].pop(); }]) {
+    const args = fresh(); mutate(args); assert.throws(() => sourceRateRow(...args));
+  }
+});
+
+test("source concurrency proof requires eight actual held handlers below every client cap and other-source admission", () => {
+  const fresh = () => {
+    const attempt = (client, source, status, changes = {}) => ({ client, source, forwardedSource: "source-a", callerId: "fixture-caller",
+      response: observedHttp(status, { socketLocalAddress: source === "source-a" ? "127.0.0.1" : "127.0.0.3" }), ...changes });
+    const held = Array.from({ length: 8 }, (_, i) => attempt(["client", "client-2", "client-3"][i % 3], "source-a", 503));
+    const rejected = attempt("client-3", "source-a", 429), spoofed = attempt("client-3", "source-a", 429, { callerId: "fixture-other-caller", forwardedSource: "source-b" });
+    const differential = attempt("client-3", "source-b", 503);
+    const logs = [...held, rejected, spoofed, differential].map(item => ({ status: String(item.response.status), clientVerified: "1", rate: "PASSED",
+      upstream: item.response.status === 503 ? "503" : "", concurrency: item.response.status === 503 ? "PASSED" : "REJECTED" }));
+    return [held, rejected, spoofed, differential, { calls: 0, received: 0, active: 0 }, { calls: 8, received: 8, active: 8 }, { calls: 9, received: 9, active: 0 }, logs, 6005];
+  };
+  assert.equal(sourceConcurrencyRow(...fresh()).result, "PASS");
+  for (const mutate of [args => { args[0][7].client = "client"; }, args => { args[5].active = 7; }, args => { args[5].calls = 7; },
+    args => { args[1].client = "client"; }, args => { args[2].response.socketLocalAddress = "127.0.0.3"; },
+    args => { args[3].response.status = 429; }, args => { args[3].response.socketLocalAddress = "127.0.0.1"; },
+    args => { args[6].calls = 10; }, args => { args[6].active = 1; }, args => { args[7][8].rate = "REJECTED"; },
+    args => { args[7][8].upstream = "429"; }, args => { args[8] = 5000; }, args => { args[7].pop(); }]) {
+    const args = fresh(); mutate(args); assert.throws(() => sourceConcurrencyRow(...args));
   }
 });

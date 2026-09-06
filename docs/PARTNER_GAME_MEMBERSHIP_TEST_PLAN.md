@@ -2,6 +2,15 @@
 
 ## Уровни доказательств
 
+Отдельный gate после `c828762`: [независимые source-IP limits](PARTNER_GAME_MEMBERSHIP_SOURCE_LIMITS.md).
+Opt-in fixture с тремя TLS identities проверяет source rate/concurrency при
+непревышенных client budgets; actual socket, cold-state, противоположный spoof,
+differential другого IP и recovery обязательны. Actual run `13:34:20.347Z`:
+**77/77 PASS**; source rate 22 приёма / 8 отказов за 328.97 мс, concurrency 8
+обработчиков (3+3+2) / 2 отказа. Другой фактический IP и recovery проходят.
+Полный Partner suite **325/325**, skipped 0; scoped ESLint: 0 errors / 0 warnings.
+Боевые лимиты/ACL/сертификаты и sidecar closure этот gate не меняет.
+
 Дополнение 6 сентября: [Nginx candidate и runtime audit](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
 Новый suite проверяет закрытый generator, X.509/SPKI/SAN/time, case-sensitive leaf,
 полноту HTTP framing (включая negative truncation), cleanup при pre-Docker failure.

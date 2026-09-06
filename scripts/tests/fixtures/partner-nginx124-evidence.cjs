@@ -72,6 +72,65 @@ function concurrencyRow(responses, rejected, before, held, after, logs) {
   return { name: "client-concurrency", result: "PASS", held: 4, accepted: 4, rejected: 1, observerCalls: 4, upstreamCalls: 4, activeAfter: 0 };
 }
 
+const SOURCE_CLIENTS = Object.freeze(["client", "client-2", "client-3"]);
+function sourceRateRow(attempts, differential, before, after, elapsedMs, logs, coldElapsedMs) {
+  assert.ok(Number.isFinite(coldElapsedMs) && coldElapsedMs >= 6000); assert.equal(before.active, 0);
+  assert.equal(attempts.length, 30); assert.equal(logs.length, 31);
+  assert.ok(Number.isFinite(elapsedMs) && elapsedMs > 0 && elapsedMs <= 1500);
+  const counts = Object.fromEntries(SOURCE_CLIENTS.map(client => [client, 0]));
+  for (const [i, attempt] of attempts.entries()) {
+    assert.equal(attempt.client, SOURCE_CLIENTS[i % 3]); counts[attempt.client]++;
+    assert.equal(attempt.source, "source-a"); assert.equal(attempt.callerId, `fixture-caller-${i}`);
+    assert.equal(attempt.response.socketLocalAddress, "127.0.0.1");
+    assert.equal(attempt.forwardedSource, "source-b");
+    assertHttpResponse(attempt.response); assert.ok([503, 429].includes(attempt.response.status));
+    assert.equal(logs[i].status, String(attempt.response.status));
+    assert.equal(logs[i].clientVerified, "1");
+    assert.equal(logs[i].rate, attempt.response.status === 429 ? "REJECTED" : "PASSED");
+    assert.equal(logs[i].concurrency, attempt.response.status === 429 ? "" : "PASSED");
+    assert.equal(logs[i].upstream, attempt.response.status === 429 ? "" : "503");
+  }
+  assert.deepEqual(Object.values(counts), [10, 10, 10]); // each strictly below client first+burst=11
+  const accepted = attempts.filter(attempt => attempt.response.status === 503).length;
+  assert.ok(accepted >= 21 && accepted < 30, "Cold source first+burst=21, then actual source denial");
+  assert.equal(differential.client, "client-3"); assert.equal(differential.source, "source-b");
+  assert.equal(differential.response.socketLocalAddress, "127.0.0.3");
+  assert.equal(differential.forwardedSource, "source-a"); // opposite spoof must not poison fresh source
+  assertHttpResponse(differential.response); assert.equal(differential.response.status, 503);
+  assert.equal(logs[30].status, "503"); assert.equal(logs[30].upstream, "503");
+  assert.equal(logs[30].rate, "PASSED"); assert.equal(logs[30].concurrency, "PASSED");
+  assert.equal(after.active, 0); assert.equal(after.calls - before.calls, accepted + 1);
+  assert.equal(after.received - before.received, accepted + 1);
+  return { name: "source-rate-independent", result: "PASS", clientAttempts: counts, coldElapsedMs,
+    sameSourceAttempts: 30, accepted, rejected: 30 - accepted, batchElapsedMs: elapsedMs,
+    differentialOtherSourceStatus: 503, forwardedAndCallerSpoofed: true, attempts, differential };
+}
+
+function sourceConcurrencyRow(attempts, rejected, spoofed, differential, before, held, after, logs, coldElapsedMs) {
+  assert.ok(Number.isFinite(coldElapsedMs) && coldElapsedMs >= 6000); assert.equal(before.active, 0);
+  assert.equal(attempts.length, 8); assert.equal(logs.length, 11);
+  assert.equal(held.active, 8); assert.equal(held.calls - before.calls, 8); assert.equal(held.received - before.received, 8);
+  assert.deepEqual(attempts.map(attempt => attempt.client), ["client", "client-2", "client-3", "client", "client-2", "client-3", "client", "client-2"]);
+  for (const attempt of attempts) { assert.equal(attempt.source, "source-a"); assert.equal(attempt.response.socketLocalAddress, "127.0.0.1"); assertHttpResponse(attempt.response); assert.equal(attempt.response.status, 503); }
+  for (const attempt of [rejected, spoofed]) {
+    assert.equal(attempt.client, "client-3"); assert.equal(attempt.source, "source-a");
+    assert.equal(attempt.response.socketLocalAddress, "127.0.0.1");
+    assertHttpResponse(attempt.response); assert.equal(attempt.response.status, 429);
+  }
+  assert.equal(spoofed.forwardedSource, "source-b"); assert.equal(spoofed.callerId, "fixture-other-caller");
+  assert.equal(differential.client, "client-3"); assert.equal(differential.source, "source-b");
+  assert.equal(differential.response.socketLocalAddress, "127.0.0.3");
+  assert.equal(differential.forwardedSource, "source-a");
+  assertHttpResponse(differential.response); assert.equal(differential.response.status, 503);
+  assert.equal(after.calls - before.calls, 9); assert.equal(after.received - before.received, 9); assert.equal(after.active, 0);
+  assert.equal(logs.filter(row => row.status === "429" && row.concurrency === "REJECTED" && row.upstream === "").length, 2);
+  assert.equal(logs.filter(row => row.status === "503" && row.concurrency === "PASSED" && row.upstream === "503").length, 9);
+  assert.ok(logs.every(row => row.rate === "PASSED" && row.clientVerified === "1"));
+  return { name: "source-concurrency-independent", result: "PASS", held: 8, perClientHeld: [3, 3, 2], coldElapsedMs,
+    rejected: 2, differentialOtherSourceStatus: 503, observerCalls: 9, upstreamCalls: 9, activeAfter: 0,
+    attempts, rejectedAttempt: rejected, spoofedAttempt: spoofed, differential };
+}
+
 function missingDeadlineRow(response, before, after) {
   const row = boundaryRow("absolute-request-deadline", response, before, after, {
     statuses: [503], dispatch: 1, upstream: 1, minElapsedMs: 17500, maxElapsedMs: 23000,
@@ -121,7 +180,9 @@ const BOUNDARY_NAMES = Object.freeze(["reject-TLSv1", "reject-TLSv1.1", "absent-
   "packed-head-post-16384", "packed-head-delete-16384", "packed-head-get-16384", "packed-head-post-16385",
   "header-section-16385", "packed-head-reordered-16384-denied",
   "client-concurrency", "concurrency-slot-recovery", "upstream-silence-bound-no-retry", "absolute-request-deadline",
-  "sidecar-late-httpout-after-deadline", "positive-after-boundaries"]);
+  "sidecar-late-httpout-after-deadline", "positive-after-boundaries",
+  "source-client-2-admitted", "source-client-3-admitted", "source-unbound-leaf-spoof-denied",
+  "source-rate-independent", "source-rate-recovery", "source-concurrency-independent", "source-concurrency-recovery"]);
 function summarizeNginxRows(rows) {
   assert.equal(rows.length, 49 + BOUNDARY_NAMES.length);
   assert.equal(new Set(rows.map(row => row.name)).size, rows.length);
@@ -134,4 +195,5 @@ function summarizeNginxRows(rows) {
   }
   return { passed: rows.length, confirmedBlockers: [], notTested: [] };
 }
-module.exports = { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows, BOUNDARY_NAMES };
+module.exports = { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, sourceRateRow, sourceConcurrencyRow,
+  missingDeadlineRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows, BOUNDARY_NAMES };

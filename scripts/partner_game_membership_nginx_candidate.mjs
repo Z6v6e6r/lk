@@ -32,7 +32,8 @@ function certificate(bytes) {
 // No file reads, command execution, install, public listener or production input.
 // This closes a testable config dialect, NOT the production application boundary.
 export function generatePartnerNginx124Candidate(input) {
-  exact(input, ["scope", "exactHost", "sharedHost", "clientCertificateBytes", "serverCertificateBytes", "caCertificateBytes", "approvedClientSpkiSha256", "now"]);
+  const multiClient = input && Object.hasOwn(input, "sourceLimitClients");
+  exact(input, ["scope", "exactHost", "sharedHost", "clientCertificateBytes", "serverCertificateBytes", "caCertificateBytes", "approvedClientSpkiSha256", "now", ...(multiClient ? ["sourceLimitClients"] : [])]);
   if (input.scope !== "LOCAL_FIXTURE" || !fixtureHost(input.exactHost) || !fixtureHost(input.sharedHost)
     || input.exactHost === input.sharedHost || !Number.isSafeInteger(input.now)
     || !/^[a-f0-9]{64}$/.test(input.approvedClientSpkiSha256)) fail("INVALID_NGINX_CANDIDATE_INPUT");
@@ -50,9 +51,28 @@ export function generatePartnerNginx124Candidate(input) {
     fail("NGINX_CERTIFICATE_BINDING_REJECTED");
   }
   if (hash(client.publicKey.export({ type: "spki", format: "der" })) !== input.approvedClientSpkiSha256) fail("NGINX_CLIENT_SPKI_MISMATCH");
+  const clients = [{ bytes: input.clientCertificateBytes, pin: input.approvedClientSpkiSha256, name: "client", bucket: "fixture-client" }];
+  if (multiClient) {
+    // Closed opt-in LOCAL fixture, not production provisioning or caller-chosen
+    // identities. Three distinct TLS keys make the unchanged source limits reachable.
+    if (!Array.isArray(input.sourceLimitClients) || input.sourceLimitClients.length !== 2
+      || Object.keys(input.sourceLimitClients).join(",") !== "0,1") fail("INVALID_NGINX_CANDIDATE_INPUT");
+    input.sourceLimitClients.forEach((binding, index) => {
+      exact(binding, ["clientCertificateBytes", "approvedClientSpkiSha256"]);
+      const cert = certificate(binding.clientCertificateBytes);
+      if (Date.parse(cert.validFrom) > input.now || Date.parse(cert.validTo) <= input.now) fail("NGINX_CERTIFICATE_EXPIRED_OR_FUTURE");
+      if (cert.ca || !cert.verify(ca.publicKey) || !cert.checkIssued(ca)
+        || !cert.keyUsage?.includes("1.3.6.1.5.5.7.3.2")) fail("NGINX_CERTIFICATE_BINDING_REJECTED");
+      const pin = hash(cert.publicKey.export({ type: "spki", format: "der" }));
+      if (pin !== binding.approvedClientSpkiSha256) fail("NGINX_CLIENT_SPKI_MISMATCH");
+      if (clients.some(item => item.pin === pin || item.bytes.equals(binding.clientCertificateBytes))) fail("NGINX_CLIENT_IDENTITY_DUPLICATE");
+      clients.push({ bytes: binding.clientCertificateBytes, pin, name: `client-${index + 2}`, bucket: `fixture-client-${index + 2}` });
+    });
+  }
   // Nginx exposes a SHA-1 fingerprint, not SPKI SHA-256. Pin the entire canonical
   // public leaf instead, after checking the independently supplied SPKI SHA-256.
-  const leaf = encodeURIComponent(input.clientCertificateBytes.toString());
+  const leaves = clients.map(item => `"~^${encodeURIComponent(item.bytes.toString())}$" ${item.bucket};`).join(" ");
+  const admitted = clients.map(item => `"SUCCESS:${item.bucket}" 1;`).join(" ");
   const configuration = `# LOCAL FIXTURE ONLY: not a shared-server include or deploy artifact.
 pid /tmp/nginx.pid;
 worker_processes 1;
@@ -83,9 +103,9 @@ http {
   keepalive_timeout 0;
   send_timeout 15s;
   add_header Cache-Control no-store always;
-  map $ssl_client_escaped_cert $partner_client { default ""; "~^${leaf}$" fixture-client; }
+  map $ssl_client_escaped_cert $partner_client { default ""; ${leaves} }
   map $ssl_client_verify $partner_verified { SUCCESS 1; default 0; }
-  map "$ssl_client_verify:$partner_client" $partner_admitted { default 0; "SUCCESS:fixture-client" 1; }
+  map "$ssl_client_verify:$partner_client" $partner_admitted { default 0; ${admitted} }
   map "$http_transfer_encoding$http_content_encoding$http_trailer$http_expect$http_upgrade$http_proxy_connection" $bad_framing { "" 0; default 1; }
   map $http_connection $bad_connection { "" 0; ~*^(close|keep-alive)$ 0; default 1; }
   map "$request_method:$request_uri" $partner_route {
@@ -123,7 +143,7 @@ http {
     if ($bad_connection) { return 400; }
     if ($partner_route = 0) { return 404; }
     location / {
-      allow 127.0.0.1;
+      allow 127.0.0.1;${multiClient ? "\n      allow 127.0.0.3; # Second fixed source in the isolated source-limit fixture only." : ""}
       deny all;
       limit_req zone=partner_client_rate burst=10 nodelay;
       limit_req zone=partner_source_rate burst=20 nodelay;
@@ -159,7 +179,9 @@ http {
   return Object.freeze({
     state: "LOCAL_NGINX_124_CANDIDATE_NOT_DEPLOYABLE", configuration,
     configSha256: hash(Buffer.from(configuration)), clientSpkiSha256: input.approvedClientSpkiSha256,
-    certificateHashes: Object.freeze(Object.fromEntries(["client", "server", "ca"].map(name => [name, hash(input[`${name}CertificateBytes`])]))),
+    certificateHashes: Object.freeze(Object.fromEntries([...clients.map(item => [item.name, hash(item.bytes)]),
+      ...["server", "ca"].map(name => [name, hash(input[`${name}CertificateBytes`])])])),
+    clientIdentities: Object.freeze(clients.map(item => Object.freeze({ bucket: item.bucket, leafSha256: hash(item.bytes), spkiSha256: item.pin }))),
     productionVerified: false, deployAuthorized: false, activationAuthorized: false,
     unresolvedControls: Object.freeze(["WILDCARD_FORWARDED_HEADERS", "SOURCE_LIMIT_INDEPENDENT_PROOF", "CONTROLLED_PRODUCTION_APPLICATION", "EXTERNAL_VANTAGE_AND_DIRECT_SIDECAR", "PRODUCTION_CERTIFICATE_REVOCATION"]),
   });

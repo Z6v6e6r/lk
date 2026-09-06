@@ -30,8 +30,10 @@ function prepare() {
 for (const relative of ["partner_game_membership_nginx_candidate.mjs", "rehearse_partner_game_membership_nginx_candidate.mjs", "tests/fixtures/partner-nginx124-certificates.mjs"]) {
   sources[relative] = sha(fs.readFileSync(path.join(scripts, relative)));
 }
-const binding = createPartnerNginxTestCertificates(fixture);
+const binding = createPartnerNginxTestCertificates(fixture, { sourceLimits: true });
 candidate = generatePartnerNginx124Candidate(binding);
+assert.deepEqual(candidate.clientIdentities.map(item => item.bucket), ["fixture-client", "fixture-client-2", "fixture-client-3"]);
+assert.equal(new Set(candidate.clientIdentities.map(item => item.spkiSha256)).size, 3);
 fs.writeFileSync(path.join(fixture, "nginx.conf"), candidate.configuration, { mode: 0o600 });
 for (const [name, relative] of Object.entries({
   "runner.cjs": "tests/fixtures/partner-nginx124-runtime.cjs", "http-response.cjs": "tests/fixtures/partner-http-response.cjs", "settings.cjs": "partner_game_membership_sidecar/settings.cjs",
@@ -41,6 +43,7 @@ for (const [name, relative] of Object.entries({
 for (const name of ["package.json", "package-lock.json"]) assert.equal(sha(fs.readFileSync(path.join(runtime, name))), auditReceipt.sourceHashes[`partner_game_membership_runtime/${name}`]);
 runtimeBefore = treeDigest();
 Object.assign(receipt, { candidateSha256: candidate.configSha256, certificateHashes: candidate.certificateHashes,
+  fixtureMode: "THREE_CLIENT_TWO_SOURCE_LOCAL", clientIdentities: candidate.clientIdentities,
   unresolvedControls: candidate.unresolvedControls, runtimeBeforeSha256: runtimeBefore });
 }
 const treeDigest = () => {
@@ -107,14 +110,17 @@ try {
   const after = [verify(nodeId), verify(nginxId)]; assert.deepEqual(after, before);
   assert.equal(treeDigest(), runtimeBefore); assert.equal(sha(fs.readFileSync(path.join(fixture, "nginx.conf"))), candidate.configSha256);
   for (const [name, digest] of Object.entries(copiedHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, name))), digest);
+  for (const [name, digest] of Object.entries(candidate.certificateHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, `${name}.crt`))), digest);
   for (const [relative, digest] of Object.entries(sources)) assert.equal(sha(fs.readFileSync(path.join(scripts, relative))), digest);
   const probes = JSON.parse(fs.readFileSync(path.join(results, "nginx-probes.json")));
   assert.equal(probes.state, "LOCAL_NGINX_MATRIX_CHECKED_NOT_PRODUCTION"); assert.equal(probes.node, "v22.23.2"); assert.equal(probes.nodeRed, "5.0.6");
   assert.equal(probes.productionVerified, false);
+  assert.equal(probes.sourceLimitsIndependentlyProven, true);
   assert.equal(probes.platform, "linux"); assert.equal(probes.architecture, "x64");
   const summary = summarizeNginxRows(probes.rows);
   for (const field of ["passed", "notTested", "confirmedBlockers"]) assert.deepEqual(probes[field], summary[field]);
   Object.assign(receipt, summary);
+  receipt.sourceLimitsIndependentlyProven = true;
   receipt.probesSha256 = sha(fs.readFileSync(path.join(results, "nginx-probes.json")));
   receipt.runtimeAfterSha256 = runtimeBefore; receipt.state = "PASS_LOCAL_MATRIX_ONLY";
 } catch (error) { failure = error; receipt.state = "FAILED"; }

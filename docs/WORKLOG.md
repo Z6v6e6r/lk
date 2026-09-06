@@ -2,6 +2,45 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: независимые IP-лимиты, local77 + source325 PASS
+
+- После `c828762` одобрен только отдельный local source-IP gate. Сохранены
+  существующие ветка/worktree и один владелец записи. Нет новых branch/PR,
+  main/push/deploy, боевых сертификатов, секретов, routing или shared-data writes.
+- Закрытый opt-in стенд использует три независимые TLS identities и два
+  фиксированных loopback-источника. Дополнительные leaf/SPKI проходят прежние
+  проверки; повтор ключа/сертификата и произвольные CIDR/labels запрещены.
+  Стандартный конфиг одного клиента побайтово прежний; пороги лимитов не менялись.
+- Добавлены семь source probes: приём двух новых identities, отказ unbound
+  сертификату с поддельным client header, независимые rate/concurrency проверки
+  и восстановление. Для attribution обязательны холодное состояние, реальные
+  socket addresses, клиентские бюджеты, счётчики обработчиков и ingress logs.
+- Source tests: **28/28 PASS**, полный Partner suite **325/325**, skipped 0;
+  scoped ESLint всех шести изменённых JS-файлов: 0 errors / 0 warnings.
+  Security и release/evidence source reviews без открытых P0–P2.
+- После явного Viva RELEASED, отдельного resource reservation и system admission
+  выполнен один физический прогон: `13:34:20.347Z`, **77/77 PASS**. Source rate:
+  22 приёма / 8 отказов из 30 попыток за 328.97 мс после cold 6011.89 мс.
+  Source concurrency: 8 active handlers (3+3+2), 2 отказа; та же TLS identity с
+  другого actual IP проходит при занятых восьми handlers. Recovery PASS.
+- Receipt `f1737963…`, probes `af47b62d…`, config `c23ac642…`; 9 current sources,
+  6 copies, 5 public certs, runtime before/after и process identity сверены;
+  135 metadata log rows. Оба own containers удалены, отдельный exact-ID readback
+  подтвердил отсутствие, synthetic keys/CSRs удалены. LOCAL_HEAVY=RELEASED.
+  Независимый финальный receipt review: PASS_LOCAL_MATRIX_ONLY, открытых P0–P2 нет;
+  source attribution подтверждена бюджетами, actual IP, upstream/log observations,
+  а не одним кодом 503.
+- [Документация source-IP gate](PARTNER_GAME_MEMBERSHIP_SOURCE_LIMITS.md) содержит
+  критерии доказательства, ограничения и вопросы P0/P1 к владельцам интеграции.
+  Existing drawio дополнен через drawio-skill, XML validation: 0 errors / 0 warnings.
+  Native exporter ранее недоступен; PNG/visual QA NOT_RUN, повторного запуска нет.
+- Guard/audit/service/settings/runtime locks и guarded CLI closure не менялись;
+  прежние 70/20/321 результаты остаются историческими. Production verifier
+  `UNSUPPORTED_INGRESS_ADAPTER`, external sidecar/revocation и выпуск не закрыты.
+  Full repository lint/frontend/modular build/guarded CLI не повторялись на
+  остальных unchanged inputs. Следующий gate — production ingress verifier и
+  доказательство применения конфигурации; это не разрешение на live изменения.
+
 ## 2026-09-06 — Partner response deadline: local70 + CLI20 PASS
 
 - После `32c0ad6` пользователь одобрил только local15s deadline correction.

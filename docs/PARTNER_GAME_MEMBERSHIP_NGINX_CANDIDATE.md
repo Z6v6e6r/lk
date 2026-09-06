@@ -4,6 +4,12 @@
 Production verifier по-прежнему возвращает `UNSUPPORTED_INGRESS_ADAPTER`;
 deploy/activation остаются `false`. Боевые Nginx, Node-RED, Mongo и Viva не меняются.
 
+После local deadline checkpoint `c828762` добавлен отдельный opt-in
+[стенд независимых source-IP limits](PARTNER_GAME_MEMBERSHIP_SOURCE_LIMITS.md).
+Новый actual run `13:34:20.347Z`: **77/77 PASS**, source rate/concurrency независимо
+подтверждены только в локальном стенде; source suite 325/325, scoped lint PASS.
+Ниже сохранены исторические receipts; новый gate не переименовывает их результаты.
+
 ## Исправление aggregate limit: консервативный бюджет
 
 Раздел ниже — историческое доказательство checkpoint `32c0ad6`. Последующий
@@ -179,7 +185,7 @@ canonical public X.509 PEM, отдельный approved SHA-256 DER SPKI и яв
 | Transport | TLS 1.2/1.3, early data/tickets/cache off; default SNI rejects handshake | Не аудит установленного Ubuntu package и не полная TLS scan |
 | Identity | mTLS + exact public leaf после независимого SPKI SHA-256; exact SNI и HTTP Host | Synthetic CA/leaf, без production revocation workflow |
 | Routing | Три raw method/path, без query/rewrite/OPTIONS/editor | Только loopback fixture `8443 → 18894` |
-| Limits | Client 2 r/s, burst 10, concurrency 4; source 5 r/s, burst 20, concurrency 8 | Независимое source enforcement и часть границ ещё не доказаны |
+| Limits | Client 2 r/s, burst 10, concurrency 4; source 5 r/s, burst 20, concurrency 8 | Независимое source enforcement подтверждено локальным 77-row run; не production proof |
 | Raw request | Existing guard до Node-RED parser: duplicate proof headers/JSON, 16 KiB | HMAC и paid-membership бизнес-flow не исполняются этим fixture |
 | Response/log | CORS скрыт, no-store; логи только requestId/status/limiter flags | Нельзя подменять этим production audit/custody |
 

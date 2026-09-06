@@ -8,7 +8,7 @@ const runtimeRequire = createRequire("/runtime/package.json");
 const { createGuardedPartnerSettings } = require("/fixture/settings-guarded.cjs");
 const { SECURITY_HEADERS } = require("/fixture/raw-request-guard.cjs");
 const { completeHttpResponse } = require("/fixture/http-response.cjs");
-const { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
+const { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, sourceRateRow, sourceConcurrencyRow, deadlineTransportResponse, deadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
 const route = "/lk/integrations/v1/open-games/fixture-game/members";
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const requestHeaders = (body, host = "fixture.invalid", extra = []) => ["Host", host, "Connection", "close", "Content-Length", String(Buffer.byteLength(body)),
@@ -93,12 +93,13 @@ const snapshot = () => new Promise((resolve, reject) => {
 });
 function request({ method = "POST", target = route, body = "{}", host = "fixture.invalid", sni = "fixture.invalid", client = "client", extra = [], headers, protocol, localAddress = "127.0.0.1", deadlineMs = 4500, alpn = ["http/1.1"], deadlineMode = null } = {}) {
   assert.ok([4500, 8000, 23000].includes(deadlineMs));
-  assert.ok(["127.0.0.1", "127.0.0.2"].includes(localAddress));
+  assert.ok(["127.0.0.1", "127.0.0.2", "127.0.0.3"].includes(localAddress));
+  assert.ok([null, "client", "client-2", "client-3", "other-client", "wrong-client"].includes(client));
   assert.ok([null, "trickle", "late"].includes(deadlineMode));
   if (deadlineMode) { assert.equal(body, JSON.stringify({ fixtureMode: deadlineMode })); assert.equal(deadlineMs, 23000); }
   return new Promise((resolve, reject) => {
-    const chunks = [], startedAt = performance.now(); let receivedBytes = 0, firstByteMs = null, serverAuthorized = false, negotiatedProtocol = null, alpnProtocol = null, handled = false;
-    const observation = () => ({ serverAuthorized, negotiatedProtocol, alpnProtocol, elapsedMs: Math.round(performance.now() - startedAt), firstByteMs, responseChunks: chunks.length });
+    const chunks = [], startedAt = performance.now(); let receivedBytes = 0, firstByteMs = null, serverAuthorized = false, negotiatedProtocol = null, alpnProtocol = null, handled = false, socketLocalAddress = null;
+    const observation = () => ({ serverAuthorized, negotiatedProtocol, alpnProtocol, socketLocalAddress, elapsedMs: Math.round(performance.now() - startedAt), firstByteMs, responseChunks: chunks.length });
     const socket = deadlineMode === "late" ? net.connect({ host: "127.0.0.1", port: 18894 }) : tls.connect({ host: "127.0.0.1", port: 8443, localAddress, ...(sni === null ? {} : { servername: sni }),
       ca: fs.readFileSync("/fixture/ca.crt"), ALPNProtocols: alpn,
       ...(protocol ? { minVersion: protocol, maxVersion: protocol } : {}),
@@ -107,6 +108,8 @@ function request({ method = "POST", target = route, body = "{}", host = "fixture
       ...(client ? { cert: fs.readFileSync(`/fixture/${client}.crt`), key: fs.readFileSync(`/fixture/${client}.key`) } : {}) });
     const deadline = setTimeout(() => socket.destroy(new Error("FIXTURE_DEADLINE")), deadlineMs);
     socket.once(deadlineMode === "late" ? "connect" : "secureConnect", () => {
+      socketLocalAddress = socket.localAddress;
+      if (socketLocalAddress !== localAddress) { socket.destroy(new Error("FIXTURE_SOCKET_SOURCE_MISMATCH")); return; }
       if (deadlineMode !== "late") { serverAuthorized = socket.authorized; negotiatedProtocol = socket.getProtocol(); alpnProtocol = socket.alpnProtocol || null; }
       const all = headers || requestHeaders(body, host, extra);
       socket.write(`${method} ${target} HTTP/1.1\r\n${all.map((v, i) => i % 2 ? `${v}\r\n` : `${v}: `).join("")}\r\n${body}`);
@@ -229,6 +232,65 @@ async function remainingBoundaries(rows) {
   await check("positive-after-boundaries", {}, { statuses: [503], dispatch: 1, upstream: 1 });
 }
 
+async function independentSourceLimits(rows) {
+  const clients = ["client", "client-2", "client-3"];
+  const attempt = async (client, source, callerId, forwardedSource, options = {}) => {
+    const ip = source === "source-a" ? "127.0.0.1" : "127.0.0.3";
+    const forwarded = forwardedSource === "source-a" ? "127.0.0.1" : "127.0.0.3";
+    const headers = requestHeaders(options.body || "{}", "fixture.invalid", ["X-Forwarded-For", forwarded, "Forwarded", `for=${forwarded}`]);
+    headers[headers.indexOf("x-padlhub-client-id") + 1] = callerId;
+    const response = await request({ ...options, client, localAddress: ip, headers });
+    assert.equal(response.socketLocalAddress, ip);
+    return { client, source, callerId, forwardedSource, response };
+  };
+  for (const client of clients.slice(1)) {
+    await wait(550); const before = await snapshot(), response = await request({ client }), after = await untilState(state => state.active === 0);
+    rows.push(boundaryRow(`source-${client}-admitted`, response, before, after, { statuses: [503], dispatch: 1, upstream: 1 }));
+  }
+  await wait(550);
+  const unboundBefore = await snapshot(), unbound = await attempt("other-client", "source-a", "fixture-client-3", "source-b"), unboundAfter = await snapshot();
+  rows.push(boundaryRow("source-unbound-leaf-spoof-denied", unbound.response, unboundBefore, unboundAfter, { statuses: [403], dispatch: 0, upstream: 0 }));
+
+  const cool = async () => {
+    const quiet = await untilState(state => state.active === 0), started = performance.now();
+    await wait(6000); const before = await snapshot();
+    assert.equal(before.active, 0); assert.equal(before.calls, quiet.calls); assert.equal(before.received, quiet.received);
+    return { before, coldElapsedMs: performance.now() - started };
+  };
+  const cold = await cool(), rateOffset = accessLogs().length, started = performance.now(), attempts = [];
+  // Exactly ten attempts per TLS identity: below each cold first+burst=11.
+  // Caller-ID/forwarded spoof is inside this budget, not extra hidden traffic.
+  for (let i = 0; i < 30; i++) attempts.push(await attempt(clients[i % 3], "source-a", `fixture-caller-${i}`, "source-b"));
+  const elapsed = performance.now() - started;
+  // This is only the eleventh attempt for client-3, still within its cold burst.
+  const otherSource = await attempt("client-3", "source-b", "fixture-differential", "source-a");
+  const rateAfter = await untilState(state => state.active === 0);
+  rows.push(sourceRateRow(attempts, otherSource, cold.before, rateAfter, elapsed, accessLogs().slice(rateOffset), cold.coldElapsedMs));
+  await cool();
+  const recoveryBefore = await snapshot(), recovery = await request(), recoveryAfter = await untilState(state => state.active === 0);
+  rows.push(boundaryRow("source-rate-recovery", recovery, recoveryBefore, recoveryAfter, { statuses: [503], dispatch: 1, upstream: 1 }));
+
+  const concurrencyCold = await cool(), offset = accessLogs().length;
+  const pending = Array.from({ length: 8 }, (_, i) => attempt(clients[i % 3], "source-a", "fixture-caller", "source-b", { body: '{"hold":true}', deadlineMs: 8000 }));
+  const settled = Promise.allSettled(pending);
+  let held, rejected, spoofed, differential;
+  try {
+    held = await untilState(state => state.active === 8);
+    rejected = await attempt("client-3", "source-a", "fixture-caller", "source-a");
+    assert.equal((await snapshot()).active, 8);
+    spoofed = await attempt("client-3", "source-a", "fixture-other-caller", "source-b");
+    assert.equal((await snapshot()).active, 8);
+    differential = await attempt("client-3", "source-b", "fixture-caller", "source-a");
+    assert.equal((await untilState(state => state.active === 8)).calls - concurrencyCold.before.calls, 9);
+  } finally { await settled; }
+  const responses = (await settled).map(result => { assert.equal(result.status, "fulfilled"); return result.value; });
+  const after = await untilState(state => state.active === 0);
+  rows.push(sourceConcurrencyRow(responses, rejected, spoofed, differential, concurrencyCold.before, held, after, accessLogs().slice(offset), concurrencyCold.coldElapsedMs));
+  await wait(550);
+  const finalBefore = await snapshot(), final = await request(), finalAfter = await untilState(state => state.active === 0);
+  rows.push(boundaryRow("source-concurrency-recovery", final, finalBefore, finalAfter, { statuses: [503], dispatch: 1, upstream: 1 }));
+}
+
 async function probes() {
   const rows = [];
   const check = async (name, options, statuses, dispatch = 0) => {
@@ -282,9 +344,10 @@ async function probes() {
     await wait(6000);
     await check("positive-after-negatives", {}, [503], 1);
     await remainingBoundaries(rows);
+    await independentSourceLimits(rows);
     fs.writeFileSync("/out/nginx-probes.json", JSON.stringify({ state: "LOCAL_NGINX_MATRIX_CHECKED_NOT_PRODUCTION", node: process.version,
       nodeRed: runtimeRequire("node-red/package.json").version, platform: process.platform, architecture: process.arch, rows,
-      productionVerified: false, externalDirectSidecarProven: false, sourceLimitsIndependentlyProven: false,
+      productionVerified: false, externalDirectSidecarProven: false, sourceLimitsIndependentlyProven: true,
       ...summarizeNginxRows(rows) }, null, 2) + "\n");
   } catch (error) {
     const state = await snapshot().catch(() => null);
