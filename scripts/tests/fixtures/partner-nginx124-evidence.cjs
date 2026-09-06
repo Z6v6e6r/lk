@@ -24,6 +24,41 @@ function boundaryRow(name, response, before, after, policy) {
   return { name, ...response, observerCalls: after.calls - before.calls, upstreamCalls: after.received - before.received, result: "PASS" };
 }
 
+// Build a synthetic request head packed on 2k field boundaries. The first
+// buffer includes the request line and mandatory headers; the final CRLF counts.
+// This constructs wire input, not a model of Nginx's parser or proof of admission.
+function packedHeaderFixture(method, target, headers, headBytes) {
+  assert.ok(["POST", "DELETE", "GET"].includes(method));
+  assert.match(target, /^\/[A-Za-z0-9/_-]+$/);
+  assert.ok(Array.isArray(headers) && headers.length % 2 === 0);
+  const result = [...headers];
+  const fieldBytes = (name, value) => Buffer.byteLength(`${name}: ${value}\r\n`);
+  const lineBytes = Buffer.byteLength(`${method} ${target} HTTP/1.1\r\n`);
+  assert.ok([16384, 16385, 16385 + lineBytes].includes(headBytes));
+  let used = lineBytes;
+  for (let i = 0; i < result.length; i += 2) {
+    assert.match(result[i], /^[A-Za-z0-9-]+$/); assert.match(result[i + 1], /^[\x20-\x7e]*$/);
+    used += fieldBytes(result[i], result[i + 1]);
+  }
+  assert.ok(used < 2000);
+  for (let i = 0; used < headBytes - 2; i++) {
+    const name = `X-Budget-${i}`, bytes = Math.min(2048 - used % 2048, headBytes - 2 - used);
+    assert.ok(bytes >= fieldBytes(name, ""));
+    result.push(name, "a".repeat(bytes - fieldBytes(name, ""))); used += bytes;
+  }
+  assert.equal(new Set(result.filter((_, i) => i % 2 === 0).map(name => name.toLowerCase())).size, result.length / 2);
+  return { headers: result, headBytes: used + 2, headerSectionBytes: used + 2 - lineBytes, lineBytes };
+}
+
+function ingressDenialRow(name, response, before, after, logs, wire = {}) {
+  const row = boundaryRow(name, response, before, after, { statuses: [400], dispatch: 0, upstream: 0 });
+  // Node's own 431 can occur before its request counter increments. Require
+  // the actual serial Nginx access record to prove no upstream attempt.
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].status, "400"); assert.equal(logs[0].upstream, "");
+  return { ...row, ...wire, ingressUpstreamStatus: "" };
+}
+
 function concurrencyRow(responses, rejected, before, held, after, logs) {
   assert.equal(responses.length, 4);
   [...responses, rejected].forEach(assertHttpResponse);
@@ -50,6 +85,8 @@ function missingDeadlineRow(response, before, after) {
 }
 const BOUNDARY_NAMES = Object.freeze(["reject-TLSv1", "reject-TLSv1.1", "absent-sni", "source-cidr-denial",
   "request-line-2048", "request-line-2049", "header-field-2048", "header-field-2049", "aggregate-header-over-16k",
+  "packed-head-post-16384", "packed-head-delete-16384", "packed-head-get-16384", "packed-head-post-16385",
+  "header-section-16385", "packed-head-reordered-16384-denied",
   "client-concurrency", "concurrency-slot-recovery", "upstream-idle-timeout-no-retry", "absolute-request-deadline", "positive-after-boundaries"]);
 function summarizeNginxRows(rows) {
   assert.equal(rows.length, 49 + BOUNDARY_NAMES.length);
@@ -62,4 +99,4 @@ function summarizeNginxRows(rows) {
   }
   return { passed: rows.length - 1, confirmedBlockers: ["ABSOLUTE_REQUEST_DEADLINE"], notTested: [] };
 }
-module.exports = { boundaryRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES };
+module.exports = { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES };

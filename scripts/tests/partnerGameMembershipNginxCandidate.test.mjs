@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { completeHttpResponse } from "./fixtures/partner-http-response.cjs";
-import { boundaryRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
+import { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows, BOUNDARY_NAMES } from "./fixtures/partner-nginx124-evidence.cjs";
 import { generatePartnerNginx124Candidate } from "../partner_game_membership_nginx_candidate.mjs";
 import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
 import { verifyPartnerProductionIngress } from "../partner_game_membership_ingress_evidence.mjs";
@@ -105,7 +105,43 @@ test("rate admission uses bound TLS leaf, never caller client-ID or forwarded-IP
   assert.doesNotMatch(log, /\$request[" ]|\$request_uri|\$remote_addr|\$http_|\$ssl_client_s_dn|\$ssl_client_escaped_cert/);
 });
 
+test("aggregate budget includes the initial buffer and cannot silently enable HTTP/2 or connection reuse", () => {
+  const { configuration } = generatePartnerNginx124Candidate(input);
+  const initial = [...configuration.matchAll(/^\s*client_header_buffer_size (\d+)k;/gm)];
+  const large = [...configuration.matchAll(/^\s*large_client_header_buffers (\d+) (\d+)k;/gm)];
+  assert.equal(initial.length, 1); assert.equal(large.length, 1);
+  assert.equal(Number(initial[0][1]), 2); assert.equal(Number(large[0][2]), 2);
+  assert.equal((Number(initial[0][1]) + Number(large[0][1]) * Number(large[0][2])) * 1024, 16384);
+  assert.equal(configuration.match(/^\s*keepalive_timeout 0;/gm)?.length, 1);
+  assert.doesNotMatch(configuration, /^\s*http2\s|^\s*listen .*\b(?:http2|quic|reuseport)\b|^\s*proxy_pass_request_headers off;/m);
+});
+
+test("packed header fixture measures the whole head independently of body and preserves unique proof fields", () => {
+  const base = ["Host", "fixture.invalid", "Connection", "close", "Content-Length", "2", "X-Proof", "fixture-value"];
+  for (const method of ["POST", "DELETE", "GET"]) for (const bytes of [16384, 16385]) {
+    const target = "/fixture/" + "a".repeat(160), built = packedHeaderFixture(method, target, base, bytes);
+    const fields = built.headers.reduce((all, value, i, list) => i % 2 ? all : [...all, `${value}: ${list[i + 1]}\r\n`], []);
+    const head = `${method} ${target} HTTP/1.1\r\n${fields.join("")}\r\n`;
+    assert.equal(Buffer.byteLength(head), bytes); assert.equal(built.headBytes, bytes);
+    assert.equal(built.headerSectionBytes, Buffer.byteLength(fields.join("") + "\r\n"));
+    assert.ok(fields.every(field => Buffer.byteLength(field) <= 2048));
+    assert.deepEqual(built.headers.slice(0, base.length), base); assert.deepEqual(base.slice(-2), ["X-Proof", "fixture-value"]);
+  }
+  assert.throws(() => packedHeaderFixture("POST", "/fixture", base, 20000));
+  assert.throws(() => packedHeaderFixture("POST", "/fixture", [...base, "host", "duplicate"], 16384));
+  assert.throws(() => packedHeaderFixture("POST", "/fixture\r\nInjected", base, 16384));
+});
+
 const observedHttp = (status, extra = {}) => ({ status, outcome: "HTTP_RESPONSE", serverAuthorized: true, noStore: true, cors: false, elapsedMs: 100, ...extra });
+test("aggregate ingress proof rejects a hidden upstream parser refusal even if request counters stay zero", () => {
+  const state = { calls: 0, received: 0 }, response = observedHttp(400);
+  const log = { status: "400", upstream: "" };
+  assert.equal(ingressDenialRow("oversize", response, state, state, [log]).ingressUpstreamStatus, "");
+  for (const logs of [[], [log, log], [{ status: "400" }], [{ ...log, upstream: "-" }], [{ ...log, upstream: "400" }], [{ status: "431", upstream: "431" }]]) {
+    assert.throws(() => ingressDenialRow("oversize", response, state, state, logs));
+  }
+  assert.throws(() => ingressDenialRow("oversize", observedHttp(431), state, state, [{ status: "431", upstream: "431" }]));
+});
 test("boundary proof rejects wrong status, hidden dispatch, insecure response and invalid timing", () => {
   const before = { calls: 0, received: 0 }, after = { calls: 0, received: 0 };
   const policy = { statuses: [403], dispatch: 0, upstream: 0 };
@@ -154,7 +190,7 @@ test("completed drip response beyond the bound confirms a blocker and can never 
 test("complete matrix summary cannot drop, duplicate or relabel a remaining boundary", () => {
   const rows = [...Array.from({ length: 49 }, (_, i) => ({ name: `baseline-${i}`, result: "PASS" })), ...BOUNDARY_NAMES.map(name => ({ name, result: "PASS" }))];
   Object.assign(rows.find(row => row.name === "absolute-request-deadline"), { result: "KNOWN_BLOCKER_CONFIRMED", control: "ABSOLUTE_REQUEST_DEADLINE" });
-  assert.deepEqual(summarizeNginxRows(rows), { passed: 62, confirmedBlockers: ["ABSOLUTE_REQUEST_DEADLINE"], notTested: [] });
+  assert.deepEqual(summarizeNginxRows(rows), { passed: 68, confirmedBlockers: ["ABSOLUTE_REQUEST_DEADLINE"], notTested: [] });
   assert.throws(() => summarizeNginxRows(rows.slice(1)));
   assert.throws(() => summarizeNginxRows([...rows.slice(1), rows[1]]));
   assert.throws(() => summarizeNginxRows(rows.map(row => row.name === "absent-sni" ? { ...row, name: "unknown" } : row)));

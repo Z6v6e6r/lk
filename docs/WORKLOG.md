@@ -2,6 +2,33 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner aggregate Nginx cap исправлен; deadline blocker подтверждён
+
+- User одобрил узкий local correction после `c38bc73`. Сохранены same branch/WT,
+  sole writer parent; отдельные security/release read-only reviews и bounded
+  heavy-slot. Никаких branch/PR duplicates, merge/push/deploy/shared data/secrets.
+- Причина: начальный2k buffer не входил в восемь large buffers. Generator меняет
+  только8→7 и поясняет conservative16KiB head budget с request line/packing loss.
+  Guard/audit/service/business/runtime locks/production pins не изменены.
+- Тесты:6новых packed/oversize/reordered physical probes, pure wire builder и
+  exact ingress log proof. Security review закрыл P2 ложного upstream sentinel:
+  actual JSON empty string, не dash; unit отвергает missing/dash/upstream400/431.
+- Actual physical run `11:08:36.588Z`: **69rows=68PASS+1confirmed deadline blocker**.
+  Aggregate17562/headersection16385 отклоняет Nginx400 без upstream; POST/DELETE/GET
+  packedhead16384 проходят, POST также body16384. Reordered same volume даёт ранний
+  отказ — compatibility caveat сохранён. Client concurrency4+fifth429/recovery и
+  idle504/15040ms/oneupstream PASS. Drip полный503/18048ms/firstbyte28ms подтверждает
+  отсутствие абсолютного15s deadline; не назван PASS и не исправляется этим scope.
+- Evidence: receipt`0cb10064…`, probes`afd1019a…`;9source/6copies/config/runtime
+  before-after/container postchecks PASS,88closed log rows. Actual audit reused
+  RO, без нового install; source tree/runtime identities проверены.2ownedcontainers
+  удалены и fresh exact-IDfilter пуст; synthetic keys/CSR отсутствуют, slot RELEASED.
+- Source:22unit; final full Partner311/311, skipped0; lint0errors/387existingwarnings.
+  Старые guardedCLI20/frontendbuild не повторялись на unchangedinputs. Existing
+  drawio обновлён через drawio-skill; XML fallback, прежний сломанный Electron
+  exporter не перезапускался. Старые raw failures/disabled packet неизменны.
+- Следующий gate — отдельный общий deadline correction/recovery, не deploy.
+
 ## 2026-09-06 — Partner remaining Nginx boundaries: STOP
 
 - Анализ: после user «приступай» сохранены same branch/worktree и `b9a8a37`;

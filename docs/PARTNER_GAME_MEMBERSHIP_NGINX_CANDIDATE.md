@@ -4,7 +4,78 @@
 Production verifier по-прежнему возвращает `UNSUPPORTED_INGRESS_ADAPTER`;
 deploy/activation остаются `false`. Боевые Nginx, Node-RED, Mongo и Viva не меняются.
 
-## Последняя boundary-репетиция: STOP на суммарных заголовках
+## Исправление aggregate limit: консервативный бюджет
+
+После `c38bc73` пользователь одобрил только исправление aggregate limit и локальные
+проверки. Generator сохраняет `client_header_buffer_size 2k`, но меняет дополнительные
+буферы на `large_client_header_buffers 7 2k`. Начальные2KiB учитываются отдельно:
+общий верхний бюджет теперь16KiB, включая request line и потери при переносе
+неполного поля. Keepalive и HTTP/2 остаются выключены; overrides/includes отсутствуют.
+Новых модулей, зависимостей, изменений raw guard/service/control pins нет.
+
+Это **не точный header-only порог приёма**. Некоторые запросы с меньшим объёмом
+заголовков могут быть отклонены из-за их упаковки. Контракт `maxHeaderBytes=16384`
+задаёт максимум, а не обязанность принимать любую комбинацию такого размера.
+Обещание принимать body16384 отдельно сохраняется. Основание: в Nginx1.24 начальный
+buffer и `hc->nbusy` дополнительных buffers учитываются раздельно; копирование
+partial field расходует ёмкость. [Nginx1.24 source](https://github.com/nginx/nginx/blob/release-1.24.0/src/http/ngx_http_request.c#L1467),
+[buffer contract](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
+
+Добавлены шесть физических regressions: packed whole head16384 для трёх методов
+(POST также с body16384; DELETE/GET с максимальными идентификаторами), whole
+head16385, header section16385 и тот же packed объём с переставленными padding
+fields. Последний показал консервативный ранний отказ — это не успешный
+приём. Сохранён исходный17562-byte запрос. Проверка ingress отказа требует HTTP400,
+нулевые observer/request counters **и единственный actual access row** со
+`status="400", upstream=""`. Missing field, `"-"` и upstream400/431 не допускаются.
+JSON `escape=json` записывает отсутствие upstream как пустую строку; один нулевой
+Node counter недостаточен, поскольку parser431 возникает до request event.
+
+Source gate на final bytes: **311/311 PASS**, skipped0; full lint0errors/
+387existingwarnings. В aggregate-fix diff новых существенных security/release
+findings нет; `ABSOLUTE_REQUEST_DEADLINE` остаётся подтверждённым blocker.
+Runtime matrix завершена `2026-09-06T11:08:36.588Z`: **69 rows =68PASS +1
+KNOWN_BLOCKER_CONFIRMED**, state `LOCAL_MATRIX_WITH_CONFIRMED_BLOCKERS`.
+Это не полный PASS ingress: confirmed control failure — `ABSOLUTE_REQUEST_DEADLINE`.
+Deadline матрицы150s зафиксирован до runtime admission; per-request bounds прежние.
+Прежние guardedCLI20/frontend prod-dev build применимы только к их unchanged inputs,
+не являются новыми запусками и не разрешают production. Старый failed receipt ниже
+сохранён как историческое доказательство дефекта, не переписан.
+
+| Actual probe | Результат |
+| --- | --- |
+| Header section17562 и16385 | Nginx400, `upstream=""`, observer/request counters0 |
+| Packed whole head16384: POST / DELETE / GET | Observer503, один upstream/dispatch; header sections16317/16006/16178, соответственно |
+| POST одновременно whole head16384 + body16384 | PASS: body budget не подменён head budget |
+| Whole head16385 | Nginx400 без upstream, хотя header section16318 — намеренно консервативный предел |
+| Те же whole head16384/header section16317, другой порядок padding | Nginx400 без upstream: подтверждена зависимость раннего отказа от упаковки |
+| Client concurrency | Четыре active handlers, пятый429 от `limit_conn`, не rate limiter; затем recovery503 |
+| Idle timeout/no retry | 504 через15040ms, один upstream/dispatch, handler закрыт |
+| Absolute request deadline15s | **BLOCKER**: полный503 через18048ms, первый байт28ms, 12 response chunks; observer выполнил10 drip writes |
+| Recovery после матрицы | Корректный запрос503, один upstream/dispatch |
+
+`proxy_read_timeout` ограничивает паузу между чтениями, а не общую длительность:
+периодический ответ обходит именно wall-clock bound. Это не проверка реальной Viva
+операции или business timeout; дефект доказан в isolated ingress/observer contour.
+[Nginx proxy read timeout](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_read_timeout).
+
+- Receipt SHA: `0cb100645642c3a584ed67f4169bb51501ba0544c4becd39e505a91366054675`.
+- Probes SHA: `afd1019add916e5ee932f2a58dc53218be91965604bf3c30677b4c2dc5171e38`.
+- Config SHA: `067455adb386d9878b48e9db8a69c720c597df6b0a72bb8179ab85db0f0a0703`.
+- Все9 current source hashes,6 fixture copies, config, runtime before/after и
+  container/process identities прошли collector postchecks. Runtime tree
+  `6daf6d15…` совпадает с reused actual audit; нового install/audit не было.
+- 88 закрытых metadata log rows; два exact owned containers удалены и отсутствие
+  подтверждено отдельным Docker readback. Synthetic keys/CSRs отсутствуют.
+- `notTested=[]` относится только к named69row local matrix: независимые source
+  limits, external/direct-sidecar, production collector/revocation остаются OPEN.
+- Heavy-slot RELEASED; после первого подтверждённого deadline blocker — только
+  завершение предусмотренного recovery/cleanup и docs/checkpoint, без второго run.
+
+Следующий узкий gate требует отдельного подтверждения: общий15s deadline и его
+recovery/negative tests. Боевой verifier остаётся безусловно unsupported.
+
+## Предыдущая boundary-репетиция: STOP на суммарных заголовках
 
 Run завершён `2026-09-06T10:37:25.320Z` со статусом **FAILED**: 57 PASS rows
 (49 baseline + 8 новых), затем отказ проверки `aggregate-header-over-16k`.
@@ -47,7 +118,7 @@ boundary/compatibility tests не выполнено. [Nginx buffer semantics](h
 
 Добавлены pure evidence assertions и opt-in remaining matrix: planned63rows означают
 62PASS + один **ожидаемый диагностический** deadline blocker только при полном
-фактическом выполнении. Этот итог сейчас **не получен**. `notTested=[]` не выдан.
+фактическом выполнении. На предыдущем STOP этот итог **не получен**; `notTested=[]` тогда не выдан.
 Для TLS-negative lowered cipher security применяется только к отдельному synthetic
 клиенту, не к Nginx и не глобально. [Node TLS contexts](https://nodejs.org/docs/latest-v22.x/api/tls.html#openssl-security-level).
 
@@ -56,10 +127,10 @@ skipped0; full lint0errors/387existingwarnings. Это source tests, не зам
 guarded CLI не повторяются: их inputs не менялись; прежние результаты остаются
 историческими, без новой даты и без заявления о current physical PASS.
 
-Следующий минимальный переход: исправить и проверить **суммарный ingress header
+Предложение на момент предыдущего STOP (выполнено в новом run выше): исправить и проверить **суммарный ingress header
 limit** в том же локальном generator, сохранив duplicate evidence и допустимые
 запросы; затем продолжить оставшиеся probes после нового runtime admission/slot.
-Deadline не объявлен подтверждённым дефектом этим run: drip18s ещё не запускался.
+Deadline не был подтверждён предыдущим run: drip18s тогда ещё не запускался.
 
 ## Текущий результат: wildcard fix подтверждён локально
 
@@ -147,7 +218,7 @@ framing и неожиданные bytes после HEAD не равны PASS. О
 
 ## Открытые проверки и блокеры
 
-Физический run на исправлении завершён `2026-09-06T10:09:12.433Z`: **49 PASS**,
+Исторический wildcard run завершён `2026-09-06T10:09:12.433Z`: **49 PASS**,
 без known-blocker rows. Проверены positive
 TLS1.2/1.3, no/wrong/unbound cert, SNI/Host/shared-host, три routes, запрещённые
 methods/query/encoding/editor, duplicate proof headers/JSON, body 16384/16385 bytes,
@@ -168,8 +239,9 @@ KNOWN_BLOCKER_CONFIRMED**, receipt `197250e2…`: его результат не
 | --- | --- |
 | LOCAL COMBINED PASS | Произвольные `X-Forwarded-*` стирает raw guard после duplicate validation; standalone Nginx generator по-прежнему перечисляет `WILDCARD_FORWARDED_HEADERS` как собственное ограничение |
 | NOT PROVEN | Source rate/concurrency независимо от более строгого client limiter; нужны разные допущенные synthetic identities |
-| FAILED | Aggregate header limit на Nginx:17562-byte header section дошёл до Node parser431; см. последний run выше |
-| NOT TESTED | Client concurrency, upstream idle timeout/no-retry, absolute request deadline; TLS/SNI/CIDR и single-line/field bounds уже проверены |
+| LOCAL CONSERVATIVE PASS | Aggregate budget2k+7×2k:17562/16385-byte header sections отклонены до upstream; packed positives и ранний отказ при другой упаковке подтверждены |
+| LOCAL PASS | Client concurrency/recovery, upstream idle timeout/no-retry в одном silence scenario; TLS/SNI/CIDR и single-line/field bounds подтверждены |
+| CONFIRMED BLOCKER | Общий15s deadline: completed drip response18048ms; idle timeout не ограничивает полную длительность |
 | NOT IMPLEMENTED | Controlled production config application/worker-generation collector, external vantage/direct-sidecar proof, production certificate revocation |
 
 Не следует включать `proxy_pass_request_headers off` без нового решения: это может

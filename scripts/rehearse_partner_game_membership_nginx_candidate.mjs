@@ -103,7 +103,7 @@ try {
   await new Promise(resolve => setTimeout(resolve, 1000));
   const before = [verify(nodeId), verify(nginxId)]; receipt.containers = before;
   // Bounded execution may exceed a single tool wait, but not the fixture deadline.
-  execFileSync("docker", ["exec", nodeId, "node", "/fixture/runner.cjs", "test"], { encoding: "utf8", timeout: 120000, maxBuffer: 65536 });
+  execFileSync("docker", ["exec", nodeId, "node", "/fixture/runner.cjs", "test"], { encoding: "utf8", timeout: 150000, maxBuffer: 65536 });
   const after = [verify(nodeId), verify(nginxId)]; assert.deepEqual(after, before);
   assert.equal(treeDigest(), runtimeBefore); assert.equal(sha(fs.readFileSync(path.join(fixture, "nginx.conf"))), candidate.configSha256);
   for (const [name, digest] of Object.entries(copiedHashes)) assert.equal(sha(fs.readFileSync(path.join(fixture, name))), digest);

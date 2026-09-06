@@ -8,9 +8,12 @@ const runtimeRequire = createRequire("/runtime/package.json");
 const { createGuardedPartnerSettings } = require("/fixture/settings-guarded.cjs");
 const { SECURITY_HEADERS } = require("/fixture/raw-request-guard.cjs");
 const { completeHttpResponse } = require("/fixture/http-response.cjs");
-const { boundaryRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
+const { boundaryRow, packedHeaderFixture, ingressDenialRow, concurrencyRow, missingDeadlineRow, summarizeNginxRows } = require("/fixture/evidence.cjs");
 const route = "/lk/integrations/v1/open-games/fixture-game/members";
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const requestHeaders = (body, host = "fixture.invalid", extra = []) => ["Host", host, "Connection", "close", "Content-Length", String(Buffer.byteLength(body)),
+  ...SECURITY_HEADERS.flatMap(name => [name, name === "content-type" ? "application/json" : "fixture-value"]), ...extra];
+const accessLogs = () => fs.readFileSync("/out/nginx-access.jsonl", "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
 
 async function serve() {
   const RED = runtimeRequire("node-red"), express = runtimeRequire("express");
@@ -82,8 +85,7 @@ function request({ method = "POST", target = route, body = "{}", host = "fixture
     const deadline = setTimeout(() => socket.destroy(new Error("FIXTURE_DEADLINE")), deadlineMs);
     socket.once("secureConnect", () => {
       serverAuthorized = socket.authorized; negotiatedProtocol = socket.getProtocol(); alpnProtocol = socket.alpnProtocol || null;
-      const all = headers || ["Host", host, "Connection", "close", "Content-Length", String(Buffer.byteLength(body)),
-        ...SECURITY_HEADERS.flatMap(name => [name, name === "content-type" ? "application/json" : "fixture-value"]), ...extra];
+      const all = headers || requestHeaders(body, host, extra);
       socket.write(`${method} ${target} HTTP/1.1\r\n${all.map((v, i) => i % 2 ? `${v}\r\n` : `${v}: `).join("")}\r\n${body}`);
     });
     socket.on("data", b => { firstByteMs ??= Math.round(performance.now() - startedAt); receivedBytes += b.length; if (receivedBytes > 65536) socket.destroy(new Error("FIXTURE_RESPONSE_SIZE")); else chunks.push(b); });
@@ -126,13 +128,42 @@ async function remainingBoundaries(rows) {
   for (const bytes of [2048, 2049]) await check(`header-field-${bytes}`, { extra: ["X-Fixture-Pad", "a".repeat(bytes - 17)], deadlineMs: 8000 }, {
     statuses: [bytes === 2048 ? 503 : 400], dispatch: bytes === 2048 ? 1 : 0, upstream: bytes === 2048 ? 1 : 0,
   });
-  await check("aggregate-header-over-16k", { extra: Array.from({ length: 17 }, (_, i) => [`X-Pad-${i}`, "a".repeat(1000)]).flat(), deadlineMs: 8000 }, { statuses: [400], dispatch: 0, upstream: 0 });
+  const ingressCheck = async (name, options, wire) => {
+    await wait(550); const offset = accessLogs().length, before = await snapshot(), response = await request(options);
+    const after = await untilState(state => state.active === 0);
+    rows.push(ingressDenialRow(name, response, before, after, accessLogs().slice(offset), wire));
+  };
+  const oversized = requestHeaders("{}", "fixture.invalid", Array.from({ length: 17 }, (_, i) => [`X-Pad-${i}`, "a".repeat(1000)]).flat());
+  const headerSectionBytes = Buffer.byteLength(oversized.map((v, i) => i % 2 ? `${v}\r\n` : `${v}: `).join("") + "\r\n");
+  assert.equal(headerSectionBytes, 17562);
+  await ingressCheck("aggregate-header-over-16k", { headers: oversized, deadlineMs: 8000 }, { headerSectionBytes });
+
+  for (const method of ["POST", "DELETE", "GET"]) {
+    const target = method === "GET" ? `/lk/integrations/v1/operations/${"a".repeat(160)}`
+      : method === "DELETE" ? `/lk/integrations/v1/open-games/${"a".repeat(160)}/members/${"b".repeat(160)}` : route;
+    const body = method === "GET" ? "" : method === "POST" ? '{"x":"' + "a".repeat(16376) + '"}' : "{}";
+    const packed = packedHeaderFixture(method, target, requestHeaders(body), 16384);
+    const { headers, ...wire } = packed;
+    const row = await check(`packed-head-${method.toLowerCase()}-16384`, { method, target, body, headers, deadlineMs: 8000 }, { statuses: [503], dispatch: 1, upstream: 1 });
+    Object.assign(row, wire, { bodyBytes: Buffer.byteLength(body) });
+  }
+  const { headers: overHeaders, ...overWire } = packedHeaderFixture("POST", route, requestHeaders("{}"), 16385);
+  await ingressCheck("packed-head-post-16385", { headers: overHeaders, deadlineMs: 8000 }, overWire);
+  const lineBytes = Buffer.byteLength(`POST ${route} HTTP/1.1\r\n`);
+  const { headers: sectionHeaders, ...sectionWire } = packedHeaderFixture("POST", route, requestHeaders("{}"), 16385 + lineBytes);
+  assert.equal(sectionWire.headerSectionBytes, 16385);
+  await ingressCheck("header-section-16385", { headers: sectionHeaders, deadlineMs: 8000 }, sectionWire);
+  const base = requestHeaders("{}"), { headers: packed, ...reorderedWire } = packedHeaderFixture("POST", route, base, 16384);
+  const pairs = packed.slice(base.length).reduce((all, value, i, list) => i % 2 ? all : [...all, list.slice(i, i + 2)], []);
+  // Same byte count, fields and proof, only padding order changes. Large fields
+  // waste the initial buffer: an intentional conservative early refusal, not
+  // proof that every header section below 16k can be accepted.
+  await ingressCheck("packed-head-reordered-16384-denied", { headers: [...base, ...pairs.reverse().flat()], deadlineMs: 8000 }, reorderedWire);
 
   // Full headers + four actual upstream handlers are held; the fifth must be
   // denied by limit_conn, not by rate limiting or an unprocessed TLS socket.
   await wait(6000);
-  const logs = () => fs.readFileSync("/out/nginx-access.jsonl", "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
-  const logStart = logs().length, before = await snapshot();
+  const logStart = accessLogs().length, before = await snapshot();
   const pending = Array.from({ length: 4 }, () => request({ body: '{"hold":true}', deadlineMs: 8000 }));
   const settled = Promise.allSettled(pending);
   let held, rejected;
@@ -140,7 +171,7 @@ async function remainingBoundaries(rows) {
   finally { await settled; }
   const responses = (await settled).map(result => { assert.equal(result.status, "fulfilled"); return result.value; });
   const after = await untilState(state => state.active === 0);
-  rows.push(concurrencyRow(responses, rejected, before, held, after, logs().slice(logStart)));
+  rows.push(concurrencyRow(responses, rejected, before, held, after, accessLogs().slice(logStart)));
   await check("concurrency-slot-recovery", {}, { statuses: [503], dispatch: 1, upstream: 1 });
 
   await check("upstream-idle-timeout-no-retry", { body: '{"fixtureMode":"idle"}', deadlineMs: 23000 }, {

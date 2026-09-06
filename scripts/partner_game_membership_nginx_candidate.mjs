@@ -73,8 +73,11 @@ http {
   ssl_session_tickets off;
   ssl_session_cache off;
   client_max_body_size 16k;
+  # Conservative aggregate ceiling: initial 2k PLUS seven large 2k buffers.
+  # Request line and partial-field copies also consume this 16k budget; this
+  # is not an exact header-only acceptance threshold. Keep HTTP/2 and reuse off.
   client_header_buffer_size 2k;
-  large_client_header_buffers 8 2k;
+  large_client_header_buffers 7 2k;
   client_header_timeout 5s;
   client_body_timeout 5s;
   keepalive_timeout 0;

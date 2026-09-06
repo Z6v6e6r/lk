@@ -18,7 +18,7 @@ actual receipts связаны с новыми guard/audit bytes и обновл
 
 ### Дополнительная physical boundary matrix
 
-Existing Nginx fixture расширен без изменения generator, guard или service.
+На предыдущем checkpoint existing Nginx fixture расширен без изменения generator, guard или service.
 Actual run `10:37:25Z`: **57 PASS, затем aggregate header FAIL**. Client concurrency,
 idle timeout и absolute deadline **NOT_RUN**. Planned matrix ниже — не список
 уже пройденных проверок; результат с 63 rows не получен.
@@ -38,6 +38,36 @@ timestamp, rate/concurrency substitution, missing/duplicate row и relabel block
 отклоняются. Общий physical result требует все named rows, а вывод collector явно
 различает завершённую проверку и подтверждённый дефект контроля.
 Фактический итог и receipt — в [Nginx runbook](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
+
+### Aggregate correction после c38bc73
+
+`2k initial +7×2k large` — консервативный общий бюджет с request line и потерями
+упаковки, не exact header-only admission. Unit проверяет сумму буферов, единственное
+объявление каждого лимита, выключенные HTTP/2/keepalive, сохранённые proof fields и
+точный wire size test-builder. Evidence negatives запрещают принять parser431 при
+нулевых request counters: нужен actual Nginx400 и существующее `upstream=""`.
+
+| Дополнительный wire input | Фактический локальный результат11:08:36UTC |
+| --- | --- |
+| Packed whole head16384, POST + body16384 | Observer503, один upstream/dispatch |
+| Packed whole head16384, DELETE/GET с max IDs | Observer503 для обоих методов |
+| Packed whole head16385 | Nginx400, без upstream |
+| Header section16385, каждый field≤2048 | Nginx400, без upstream |
+| Тот же whole head16384, padding fields в обратном порядке | Консервативный ранний Nginx400; не обещать приём любого sub16KiB header section |
+| Исходные17562-byte headers | Nginx400, без upstream, не downstream parser431 |
+
+Проверки line/field2048/2049, body16384/16385, duplicate evidence, forwarding,
+post-rejection recovery и remaining concurrency/timeouts сохранены. Полная planned
+matrix69rows требует68PASS +1explicit deadline diagnostic, только если выполнена
+физически; остановка раньше оставляет остальные NOT_RUN. Fixed timeout150s согласован
+до запуска. Source suite на final bytes311/311 PASS, skipped0; это не physical proof.
+
+Actual run `2026-09-06T11:08:36.588Z` выполнил все69rows: **68PASS +1
+KNOWN_BLOCKER_CONFIRMED**. Header tests выше, client concurrency/recovery и idle
+timeout15040ms прошли. Полный drip ответ18048ms при первом байте28ms доказал отсутствие
+общего15s deadline. `notTested=[]` относится только к этой named matrix; production/
+independent source limits/external/direct-sidecar/revocation остаются OPEN. Receipt
+`0cb10064…`, probes`afd1019a…`; cleanup двух exact owned containers и keys/CSR подтверждён.
 
 | Уровень | Что доказывает | Что не доказывает |
 | --- | --- | --- |
