@@ -17,6 +17,7 @@ import { buildLegacyTenantMigrationPlan } from "../lib/vivaGameProjectionTenantM
 import { hashCanonicalEjson } from "../lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import {
   buildRemediationBackup,
+  REMEDIATION_EXECUTOR_SOURCE_PATHS,
   reconcileRemediationOutcome,
   reconcileRemediationRestoreOutcome,
   runRemediationTransaction,
@@ -231,6 +232,7 @@ maybeTest("real replica set applies and restores an exact tenant migration under
         externalWriterProofSha256: sha256(externalWriterProofBytes),
         backupManifestSha256: sha256(fullBackupManifestBytes),
         backupSha256: sha256(fullBackupBytes),
+        fullCollectionStateSha256: rehearsalStateSha256,
       },
       liveMutationAuthorized: false,
     }, null, 2)}\n`);
@@ -333,6 +335,19 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     process.env.VIVA_GAME_PROJECTION_MIGRATION_APPLY = "APPLY_VIVA_GAME_PROJECTION_TENANT_MIGRATION_V1";
     const backupDir = path.join(root, "backups");
     const applyReportPath = path.join(root, "apply-report.json");
+    await assert.rejects(() => runMigration([
+      "--mode", "apply", ...common, "--backup-dir", backupDir, "--report", applyReportPath,
+    ], dependencies), /requires the in-process coordinator/);
+    const globalMongoIdsSha256 = sha256(canonicalJson([preimage._id.toHexString()]));
+    dependencies.coordinatorPreflight = {
+      coordinatorAttemptId: "fixture-coordinator-attempt",
+      cutoverPlanSha256: cutoverSha256,
+      barrierReceiptSha256: sha256(fs.readFileSync(barrierPath)),
+      fullCollectionStateSha256: rehearsalStateSha256,
+      liveGlobalMongoIdsSha256: globalMongoIdsSha256,
+      planMongoIdsSha256: globalMongoIdsSha256,
+      planSha256s: [planSha256],
+    };
     const applied = await runMigration([
       "--mode", "apply", ...common, "--backup-dir", backupDir, "--report", applyReportPath,
     ], dependencies);
@@ -472,19 +487,12 @@ maybeTest("real replica set applies and restores an exact full-BSON visibility r
       source: "viva_game_projection_remediation",
       payload: { operationId: "viva-remediation-real-fixture", category: "CANCEL_AND_ARCHIVE" },
     };
-    const executorPaths = [
-      "scripts/run_viva_game_projection_fenced_remediation.sh",
-      "scripts/run_viva_game_projection_remediation.mjs",
-      "scripts/run_viva_game_projection_tenant_migration.mjs",
-      "scripts/lib/vivaGameProjectionRemediationExecution.mjs",
-      "scripts/lib/vivaGameProjectionMongoWriteBarrier.mjs",
-      "scripts/lib/vivaGameProjectionExecutorSource.mjs",
-      "scripts/lib/vivaGameProjectionCutoverContract.mjs",
-      "scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs",
-    ];
-    const executorSources = executorPaths.map((sourcePath, index) => ({ path: sourcePath, sha256: String(index + 1).repeat(64) }));
+    const executorSources = REMEDIATION_EXECUTOR_SOURCE_PATHS.map((sourcePath, index) => ({
+      path: sourcePath,
+      sha256: sha256(`${index}:${sourcePath}`),
+    }));
     const itemFingerprint = "9".repeat(64);
-    const generatedAt = new Date(Date.parse(mutationAt) - 1_000).toISOString();
+    const generatedAt = mutationAt;
     const fenceObservedAt = new Date(Date.parse(mutationAt) - 6_000).toISOString();
     const plan = {
       formatVersion: 2,
@@ -504,6 +512,8 @@ maybeTest("real replica set applies and restores an exact full-BSON visibility r
         packetSha256: "1".repeat(64), enrichmentSha256: "2".repeat(64), identityAuditSha256: "3".repeat(64),
         providerCaptureSha256: "4".repeat(64), mongoCaptureSha256: "5".repeat(64), sourceFlowSha256: "6".repeat(64),
         servicePrincipalSha256: "a".repeat(64), cutoverPlanSha256,
+        migrationPlanBundleSha256: "7".repeat(64),
+        eligibleMongoIdSetSha256: sha256(canonicalJson([])),
         fullBackupSha256: "b".repeat(64), fullBackupManifestSha256: "c".repeat(64),
         restoreRehearsalReceiptSha256: "d".repeat(64), fenceReceiptSha256: "e".repeat(64),
         mongoWriteBarrierReceiptSha256: "f".repeat(64), fenceTokenSha256,
@@ -524,11 +534,12 @@ maybeTest("real replica set applies and restores an exact full-BSON visibility r
         captureSessionId: "remediation-real-fixture-session",
         fenceObservedAt,
         fenceExpiresAt: new Date(Date.parse(mutationAt) + 60_000).toISOString(),
+        barrierInstalledAt: barrierReceipt.installedAt,
         backupStartedAt: new Date(Date.parse(fenceObservedAt) + 1_000).toISOString(),
         backupCompletedAt: new Date(Date.parse(fenceObservedAt) + 2_000).toISOString(),
         restoreRehearsedAt: new Date(Date.parse(fenceObservedAt) + 3_000).toISOString(),
-        providerCapturedAt: new Date(Date.parse(fenceObservedAt) + 4_000).toISOString(),
-        mongoCapturedAt: new Date(Date.parse(fenceObservedAt) + 5_000).toISOString(),
+        providerCapturedAt: barrierReceipt.installedAt,
+        mongoCapturedAt: barrierReceipt.installedAt,
         itemFingerprintSetSha256: sha256(canonicalJson([itemFingerprint])),
       },
       counts: {

@@ -515,6 +515,7 @@ export function validateHeldWriterFence(receipt, {
   fenceTokenSha256,
   lockPath,
   nowMs = Date.now(),
+  allowExpiredLease = false,
 }) {
   if (!isObject(receipt) || receipt.formatVersion !== 1 || receipt.kind !== "viva-game-projection-writer-fence-receipt"
     || receipt.state !== "HELD" || receipt.sourceFlowSha256 !== sourceFlowSha256
@@ -540,8 +541,9 @@ export function validateHeldWriterFence(receipt, {
   }
   const observedAt = Date.parse(receipt.observedAt);
   const expiresAt = Date.parse(receipt.expiresAt);
-  if (!Number.isFinite(observedAt) || !Number.isFinite(expiresAt)
-    || observedAt > nowMs + 60_000 || nowMs - observedAt > 5 * 60_000 || expiresAt - nowMs < 2 * 60_000) {
+  if (!Number.isFinite(observedAt) || !Number.isFinite(expiresAt) || expiresAt <= observedAt
+    || observedAt > nowMs + 60_000
+    || (!allowExpiredLease && (nowMs - observedAt > 5 * 60_000 || expiresAt - nowMs < 2 * 60_000))) {
     fail("Writer fence receipt is stale, expired, or lacks a two-minute execution lease");
   }
   return true;
@@ -657,6 +659,21 @@ async function run({ mode, values }, dependencies = {}) {
   const packetRoot = fs.realpathSync(path.dirname(values.get("--packet-manifest")));
   if (dependencies.validateExactCutoverPacket) await dependencies.validateExactCutoverPacket({ packetRoot, plan: cutoverPlan, manifest: manifestRead.value });
   else validateExactCutoverPacket({ packetRoot, plan: cutoverPlan, manifest: manifestRead.value, nowMs: clockNow() });
+  const coordinatorPreflight = dependencies.coordinatorPreflight;
+  if (mode === "apply") {
+    const planSha256s = [...(coordinatorPreflight?.planSha256s || [])].sort();
+    if (!isObject(coordinatorPreflight)
+      || coordinatorPreflight.cutoverPlanSha256 !== values.get("--expected-cutover-plan-sha256")
+      || coordinatorPreflight.fullCollectionStateSha256 !== cutoverPlan.evidence?.fullCollectionStateSha256
+      || !/^[a-f0-9]{64}$/.test(String(coordinatorPreflight.fullCollectionStateSha256 || ""))
+      || coordinatorPreflight.planMongoIdsSha256 !== coordinatorPreflight.liveGlobalMongoIdsSha256
+      || !/^[a-f0-9]{64}$/.test(String(coordinatorPreflight.planMongoIdsSha256 || ""))
+      || JSON.stringify(planSha256s) !== JSON.stringify([...(cutoverPlan.migration?.planSha256s || [])].sort())
+      || !planSha256s.includes(expectedPlanSha256)
+      || !/^[a-f0-9]{64}$/.test(String(coordinatorPreflight.barrierReceiptSha256 || ""))) {
+      fail("Migration apply requires the in-process coordinator full-state and global-coverage preflight");
+    }
+  }
   if ((mode === "verify" || mode === "apply" || mode === "reconcile")
     && expectedRuntimeFlowSha256 !== expectedSourceFlowSha256) fail("Verify/apply/reconcile require the frozen source flow to remain active on disk");
   if (new Set(["restore", "reconcile-restore"]).has(mode)
@@ -726,6 +743,9 @@ async function run({ mode, values }, dependencies = {}) {
     const collection = db.collection("lk_games");
     const barrierRead = readPrivateJson(values.get("--mongo-write-barrier-receipt"), "Mongo write-barrier receipt", MAX_PACKET_BYTES);
     const barrierReceiptSha256 = sha256(barrierRead.bytes);
+    if (mode === "apply" && coordinatorPreflight.barrierReceiptSha256 !== barrierReceiptSha256) {
+      fail("Migration coordinator preflight does not bind the current Mongo barrier receipt");
+    }
     const assertBarrier = async () => {
       const current = readPrivateJson(values.get("--mongo-write-barrier-receipt"), "Mongo write-barrier receipt", MAX_PACKET_BYTES);
       if (sha256(current.bytes) !== barrierReceiptSha256) fail("Mongo write-barrier receipt changed during execution");

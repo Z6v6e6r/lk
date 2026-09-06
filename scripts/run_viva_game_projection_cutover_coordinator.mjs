@@ -495,6 +495,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         .find(buildGlobalActiveLegacyTenantQuery({ dateFrom: coverageDateFrom }), { projection: { _id: 1 } })
         .sort({ _id: 1 }).toArray();
       const liveGlobalMongoIds = liveGlobalRows.map((row) => row?._id?.toHexString?.()).sort();
+      const planMongoIdsSha256 = sha256(canonicalJson(plannedMongoIds));
       if (liveGlobalMongoIds.some((value) => !value)
         || JSON.stringify(liveGlobalMongoIds) !== JSON.stringify(plannedMongoIds)) {
         fail("Frozen migration plans do not cover every active legacy row from the global future boundary");
@@ -503,6 +504,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         dateFrom: coverageDateFrom,
         mongoIds: liveGlobalMongoIds,
         mongoIdsSha256: sha256(canonicalJson(liveGlobalMongoIds)),
+        planMongoIdsSha256,
       };
       coordinatorJournal.append("GLOBAL_LEGACY_SCOPE_COVERED", {
         dateFrom: coverageDateFrom,
@@ -550,8 +552,28 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         "--report", item.reportPath,
       ];
       const result = dependencies.runMigration
-        ? await dependencies.runMigration(migrationArgs)
-        : await runMigration(migrationArgs);
+        ? await dependencies.runMigration(migrationArgs, {
+          coordinatorPreflight: {
+            coordinatorAttemptId,
+            cutoverPlanSha256: execution.cutoverPlanSha256,
+            barrierReceiptSha256: barrierArtifact.sha256,
+            fullCollectionStateSha256: plan.evidence.fullCollectionStateSha256,
+            liveGlobalMongoIdsSha256: globalLegacyCoverage.mongoIdsSha256,
+            planMongoIdsSha256: globalLegacyCoverage.planMongoIdsSha256,
+            planSha256s: execution.items.map((entry) => entry.planSha256),
+          },
+        })
+        : await runMigration(migrationArgs, {
+          coordinatorPreflight: {
+            coordinatorAttemptId,
+            cutoverPlanSha256: execution.cutoverPlanSha256,
+            barrierReceiptSha256: barrierArtifact.sha256,
+            fullCollectionStateSha256: plan.evidence.fullCollectionStateSha256,
+            liveGlobalMongoIdsSha256: globalLegacyCoverage.mongoIdsSha256,
+            planMongoIdsSha256: globalLegacyCoverage.planMongoIdsSha256,
+            planSha256s: execution.items.map((entry) => entry.planSha256),
+          },
+        });
       if (result?.mode !== "APPLY" || result.outcome !== "SUCCEEDED") fail("Migration apply did not succeed exactly");
       const reportBytes = readPrivateBytes(item.reportPath, "Migration apply report", MAX_JSON_BYTES);
       appliedItems.push({

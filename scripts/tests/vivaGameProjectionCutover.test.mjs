@@ -1930,6 +1930,10 @@ test("writer fence receipt requires a fresh stopped runtime and complete quiesce
   assert.throws(() => validateHeldWriterFence({ ...receipt, nodeRedProcessState: "ONLINE" }, expected), /complete held fence/);
   assert.throws(() => validateHeldWriterFence({ ...receipt, writerNodeIds: ["other"] }, expected), /cutover writer inventory/);
   assert.throws(() => validateHeldWriterFence({ ...receipt, expiresAt: "2026-09-04T11:59:00.000Z" }, expected), /stale, expired/);
+  assert.doesNotThrow(() => validateHeldWriterFence(
+    { ...receipt, expiresAt: "2026-09-04T12:01:00.000Z" },
+    { ...expected, nowMs: Date.parse("2026-09-04T13:00:00.000Z"), allowExpiredLease: true },
+  ));
 });
 
 test("current-op gate detects DML, DDL, rename and aggregate writes targeting lk_games", async () => {
