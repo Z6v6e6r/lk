@@ -1023,3 +1023,10 @@ anchor для Host/audience/exact release: `docs/PARTNER_GAME_MEMBERSHIP_GUARDED
 Это не active mode и не готовый installed packet. Service/egress/credentials и
 production binding пока не меняются; установку anchor нельзя подменять записью
 JSON в packet или объявлять выполненной по synthetic filesystem tests.
+
+Для следующего ingress-verifier этапа добавлен read-only source collector:
+`docs/PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md`. Его вызов создаёт реальный сетевой
+трафик и требует отдельно approved target/vantage; CLI/production wiring нет.
+56 loopback tests не доказывают Nginx application. `UNSUPPORTED_INGRESS_ADAPTER`
+сохраняется до доверенного сбора generation/config и server-log correlation.
+Нельзя использовать public invalid probe headers как рабочие partner credentials.

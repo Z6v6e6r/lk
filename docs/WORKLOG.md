@@ -2,6 +2,44 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-06 — Partner: bounded TLS/TCP collector, production verifier ещё не завершён
+
+- Продолжение после `5b9755f`, прежняя ветка/WT, единственный writer — primary.
+  При реализации production verifier выделен первый исполняемый missing primitive:
+  новый read-only `partner_game_membership_nginx_probes.mjs`, а не ещё один validator
+  подписанного caller JSON. Generic production entry остаётся fail-closed.
+- Fixed11 GET/OPTIONS/TCP probes, bodyless synthetic operation IDs, numeric target
+  и explicit source bind, actual CA/hostname/server SPKI/local-client-leaf до HTTP,
+  public invalid proof headers без HMAC; no DNS/redirect/proxy/commands/env/CLI.
+  5s absolute per-probe /60s session, byte caps16KiB, strict complete HTTP framing,
+  once-only finish и owned socket/request/agent cleanup. Capture только metadata/hash,
+  без body/keys/certs/raw errors. Outputs private и UNATTESTED, не ingress PASS.
+- Security review выявил P2: без proof headers actual raw guard вернул бы400 до
+  default-off. Исправлено public invalid signature и actual HTTPS → actual raw guard
+  → actual disabled Store regression (4RAW_ACCEPTED, толькоPARTNER_API_DISABLED503).
+  Finding закрыт re-review. Release review: нового code blocker нет; same-CA/SPKI
+  shared-host dialect, no actual client admission / generation / trusted-vantage
+  proof явно сохранены. Native application DEFERRED_BY_USER / NOT_RUN не ослаблен.
+- Новые56/56 targeted PASS; полный последовательный Partner suite561tests:
+  537PASS/24FAIL/0skip. Exact24failure names сравнены с предыдущим checkpoint log:
+  все прежние (Nginx3/binding11/runtime8/packet2), новых0. Root lint фактически
+  завершён exit0,0errors/387warnings; scoped ESLint PASS. Общая сборка не повторялась:
+  прежний неизменный preflight17missingVITE. Modular/live/runtime/Docker NOT_RUN.
+- Первый test запуск: sandbox listenEPERM, затем separately admitted localhost-only
+  повтор. Исправлен error-listener тестового TLS server при intentional client reset;
+  added actual5s body-stall/noDNS/clock/inputs/framing/regressions. Это macOS Node22.13.1
+  + owned loopback syntheticTLS, не actual Nginx/Linux/внешняя production матрица.
+- Docs/testplan/deploy и существующая drawio-схема обновлены по drawio-skill: новая
+  страница boundaries, structural lint0errors/0warnings. Local docs links20PASS.
+  PNG/visualQA NOT_RUN из-за ранее подтверждённого Electron sandbox ограничения.
+- LOCAL_HEAVY использован только для single sequential fullPartner → rootlint.
+  Преждевременно отправленный координатору lint/release статус немедленно исправлен;
+  финальный release подтверждён только после actual exit0. Активных процессов/lease нет.
+- Historical runtime/guarded/audit receipts и source pins неизменны. Нет push/PR/merge,
+  CI/SSH/install/secret/egress/route/deploy/activation/Mongo/Viva/shared-data изменений.
+  Partner signoff не вводится. Остаток verifier: наш trusted config/process-generation
+  collector, root log/upstream correlation и независимо утверждённая внешняя vantage.
+
 ## 2026-09-06 — Partner: BOUND_DEFAULT_OFF startup с независимым root anchor
 
 - Продолжение после `eb607aa`, прежняя ветка/WT; primary — единственный writer.

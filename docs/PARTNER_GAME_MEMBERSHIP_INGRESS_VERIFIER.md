@@ -1,6 +1,9 @@
 # Partner API: ingress evidence core
 
 Статус: реализована **общая локальная часть**, не production live-verifier.
+Следующий source slice после `5b9755f` — [исполняемый TLS/TCP collector](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md).
+Он собирает настоящие ограниченные transport observations, но не даёт live verdict:
+config/generation/log correlation и trusted production operator ещё не реализованы.
 После `b1839dd` реализуется [controlled-application candidate](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md):
 actual Linux master/workers, свежая метка поколения в log, disk-only negative,
 binding revocation и отдельный network namespace. Это локальная подготовка
@@ -11,7 +14,7 @@ binding revocation и отдельный network namespace. Это локаль�
 Guarded startup включён в [новую source closure пакета](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md);
 это не подтверждение установки/внешнего ingress.
 `verifyPartnerProductionIngress()` безусловно завершается
-`UNSUPPORTED_INGRESS_ADAPTER`. Нет CLI, сетевого collector, чтения production,
+`UNSUPPORTED_INGRESS_ADAPTER`. Нет CLI или подключённого production collector, чтения production,
 проверки X.509 certificate/CA или физических TLS/mTLS probes внутри этого verifier. Существующие
 production-controls/binding packaging обновлены отдельно; production runtime не менялся.
 
@@ -211,6 +214,7 @@ expiry, canonical encoding, размер, file ownership/modes, symlink/hardlink
 Ключи тестов генерируются только в памяти; shared data и реальные сертификаты не нужны.
 
 Production TLS, Linux-host collector и production evidence: **NOT_RUN / NOT_IMPLEMENTED**.
+Отдельный новый transport collector имеет loopback tests, но не вызывается этим entry.
 Отдельный raw-guard fixture теперь физически проверяет HTTP/1.1 TLS с синтетическим
 client certificate и no-cert rejection, но не всю generic/live matrix.
 Не следует подменять эту отметку результатом unit-тестов или прошлым зелёным main CI.

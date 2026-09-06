@@ -2,6 +2,16 @@
 
 ## Уровни доказательств
 
+Текущее source-дополнение после `5b9755f`:
+[bounded TLS/TCP collector](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md).
+Целевые56/56 PASS и scoped ESLint PASS. Actual loopback TLS sockets, в том числе
+raw guard → disabled store, не являются Nginx application/external vantage proof.
+Сборщик возвращает observations, не verdict; production entry остаётся закрытым.
+Native rehearsal и прежние immutable-proof blockers не изменены.
+Полный final Partner run: **561 tests / 537 PASS / 24 FAIL / 0 skipped**;
+24failure names точно совпали с предыдущим checkpoint, новых0. Полный lint exit0,
+0 errors / 387 warnings. Full release gate остаётся RED; old receipts не пересчитаны.
+
 Следующее source-дополнение после `eb607aa`:
 [BOUND_DEFAULT_OFF startup](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md#привязанный-запуск-без-активации).
 Это root-anchor/source consistency tests и controlled entrypoint wiring; реальные
