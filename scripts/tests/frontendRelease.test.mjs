@@ -50,7 +50,8 @@ legacy=root/'lk'; legacy.mkdir()
 for name in ['index.html','ffc-academy-lk.js','ffc-academy-lk-dev.js','release-dev.json']:
     (legacy/name).write_text('legacy ' + name)
 legacy_before={p.name:p.read_bytes() for p in legacy.iterdir()}
-fill(a, '1'*40); (root/'lk-frontend-current').symlink_to(a)
+fill(a, '1'*40); (releases/'current').symlink_to(a.name)
+(root/'lk-frontend-current').symlink_to('lk-frontend-releases/current')
 old = m.run({'op':'inspect'}, root); token='b'*32
 for extra in ['bundle-dev.js', 'release-dev.json', 'index.html', 'ffc-academy-lk.js']:
     (a/extra).write_text('unrelated')
@@ -83,11 +84,19 @@ print('atomic publication, lease, hash drift, rollback and retention PASS')
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('static-only helper rejects unsafe transport and upload operations', () => {
+  execFileSync('python3', ['-B', 'scripts/tests/frontendReleaseAccess.test.py'], { stdio: 'pipe' });
+});
+
 test('existing upload command remains static-only and never prunes opposite channel in standard delivery', () => {
   const source = readFileSync('scripts/frontend-release.mjs', 'utf8');
   assert.match(source, /\['scripts\/deploy-lk.sh', 'prod'\]/);
   assert.match(source, /DEPLOY_PRUNE_OPPOSITE_CHANNEL: '0'/);
   assert.match(source, /package:upload:prod/);
+  assert.match(source, /lk-frontend-v1/);
+  assert.doesNotMatch(source, /python3 -c/);
+  const policy = readFileSync('scripts/ssh/lk-frontend.conf', 'utf8');
+  for (const rule of ['DisableForwarding yes', 'PermitTTY no', 'PermitUserRC no', 'ForceCommand /usr/bin/python3 -I -B']) assert.ok(policy.includes(rule));
   for (const path of ['scripts/frontend-release.mjs', 'scripts/frontend-release-remote.py', 'scripts/deploy-lk.sh']) {
     assert.doesNotMatch(readFileSync(path, 'utf8'), /(?:pm2|systemctl|mongosh|mongodb|flows\.json|nodered|node-red)/i);
   }
@@ -204,4 +213,30 @@ test('real nginx rehearsal is a mandatory release-mechanism check', () => {
   assert.equal(gate['continue-on-error'], undefined);
   assert.match(gate.run, /npm run test:frontend-static-nginx/);
   assert.match(gate.run, /docker pull nginx@sha256:[a-f0-9]{64}/);
+});
+
+test('real SSH confinement is a mandatory release check', () => {
+  const workflow = load(readFileSync('.github/workflows/lk1-subscription-enforcement.yml', 'utf8'));
+  const gate = workflow.jobs['lk1-exact-head'].steps.find(step => step.id === 'check_static_ssh');
+  assert.equal(gate.if, "steps.route.outputs.profile == 'release'");
+  assert.equal(gate.env.DELIVERY_CATEGORY, 'release');
+  assert.equal(gate['continue-on-error'], undefined);
+  assert.equal(gate.run, 'npm run test:frontend-static-access');
+});
+
+test('forced upload uses the same resolved artifact directories as deploy inventory', async t => {
+  const { uploadStaticFiles } = await import('../frontend-upload.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'lk-custom-upload-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const distDir = join(root, 'custom-dist'), fontsDir = join(root, 'custom-fonts');
+  mkdirSync(distDir); mkdirSync(fontsDir);
+  for (const name of files) writeFileSync(name.startsWith('fonts/') ? join(fontsDir, name.slice(6)) : join(distDir, name), `custom:${name}`);
+  const requests = [];
+  const options = { destination: '/var/www/html/lk-frontend-releases/' + '1'.repeat(40) + '-' + 'b'.repeat(16), token: 'b'.repeat(32), distDir, fontsDir,
+    remote: request => { requests.push(request); return { uploaded: request.name, sha256: request.sha256 }; } };
+  uploadStaticFiles(options);
+  assert.deepEqual(requests.map(request => request.name), files);
+  for (const request of requests) assert.equal(Buffer.from(request.data, 'base64').toString(), `custom:${request.name}`);
+  assert.throws(() => uploadStaticFiles({ ...options, destination: '/var/www/html/lk' }), /staged static destination/);
+  assert.throws(() => uploadStaticFiles({ ...options, remote: () => ({}) }), /receipt mismatch/);
 });

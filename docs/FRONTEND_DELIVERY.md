@@ -7,7 +7,7 @@
 После включения: готовый небольшой PR → применимый CI → bot запрашивает разрешённое
 GitHub protected auto-merge → CI интегрированного main → проверка всего installed..source
 → `build:prod` → `release:preflight:prod` + `package:upload:prod` → существующий
-`deploy-lk.sh prod` в новый статический каталог → атомарная замена ссылки `lk-frontend-current` →
+`deploy-lk.sh prod` в новый статический каталог → атомарная замена `lk-frontend-releases/current` →
 HTTP hash/cache readback и Chromium/WebKit smoke → receipt. Ошибка вызывает возврат
 точного предыдущего комплекта, его повторный smoke и неуспешный результат workflow.
 Неизвестные байты или неполное восстановление сохраняют lease и блокируют следующий выпуск.
@@ -60,12 +60,14 @@ production публикации: push CI проверяет интеграцию
    assets, дополнительные шрифты и резервные копии не входят в переключаемый комплект.
    Отдельный реальный каталог `/var/www/html/lk-frontend-releases/<full-source-sha>-<16-hex-id>`
    содержит ровно 11 prod bundles, release.json и четыре WOFF2. Ссылка
-   `/var/www/html/lk-frontend-current` указывает на этот комплект. Nginx направляет туда
+   `/var/www/html/lk-frontend-current` принадлежит root и неизменно указывает на
+   `lk-frontend-releases/current`. Publisher переключает только `current` внутри store. Nginx направляет туда
    только 16 точных URL `/lk/...`; прежний alias `/lk/` и backend-location остаются
    неизменными. URL клиентов и Tilda loader не меняются. DEV остаётся на `lk-reserve-89`;
    имеющиеся дополнительные DEV/academy URL на primary также не удаляются.
    Подготовка кандидата и rehearsal описаны ниже. Установить его можно только после
-   проверки свежего nginx/artifact preimage, baseline smoke и scoped SSH permissions.
+   проверки свежего nginx/artifact preimage, baseline smoke и scoped SSH permissions
+   по схеме forced-command ниже.
    Прямые legacy `deploy:prod` после активации не обслуживают новый current path:
    стандартный маршрут использует existing upload только с exact staging destination.
    Другие writers допускаются лишь по отдельно определённому согласованному пути.
@@ -162,3 +164,39 @@ guarded заменить exact config и выполнить nginx -t до reload
 только exact nginx source и reload. Чужой nginx drift запрещает rollback. Legacy
 каталог, baseline и candidate artifacts не удаляются. Это последовательность для
 отдельного утверждения, а не разрешение выполнить её из offline builder.
+
+## Static-only SSH installation boundary
+
+Выделенный `lk-frontend` UID не получает sudo, привилегированные группы или write в
+`/var/www/html`. Root владеет внешней ссылкой, home, SSH policy/authorized key и
+`/usr/local/libexec/lk-frontend/frontend-release-remote.py`; UID владеет только
+`/var/www/html/lk-frontend-releases`. Public link имеет точный относительный target
+`lk-frontend-releases/current`, а store/current — только имя retained release.
+
+Owner устанавливает проверенный `scripts/ssh/lk-frontend.conf` в действующий include
+sshd, проверяет полный `sshd -t` и effective `sshd -T -C user=lk-frontend,...` до reload.
+Public key хранится в root-owned `/etc/ssh/authorized_keys/lk-frontend` с `restrict`;
+родитель 0755, файл 0644. Home root-owned 0755. У helper и всех родителей root ownership
+и отсутствие group/other write; helper 0444, каталог 0555. Private key не выводить,
+не коммитить и не помещать в build artifacts. Генерация/установка ключа — только
+отдельно согласованная часть owner activation.
+
+ForceCommand запускает установленный Python helper с `-I -B`; разрешён ровно
+`lk-frontend-v1 <sha256 установленного helper>`. CLI проверяет hash и ownership до
+чтения запроса. Клиентский Python/shell, SFTP, forwarding, PTY и user-rc запрещены.
+`inspect/acquire/upload/publish/rollback/finish` принимают JSON через stdin. Upload
+разрешён только для одного из 16 файлов внутри candidate действующей uploading lease;
+проверяются token, size (до 32 MiB на файл), SHA-256, exclusive/no-follow запись.
+Previous release, legacy namespace и файлы вне store через протокол недоступны для записи.
+
+`deploy-lk.sh` сохраняет текущие inventory/provenance проверки и legacy transport.
+Только standard route устанавливает `DEPLOY_FRONTEND_TRANSPORT=forced-command-v1`
+и передаёт lease token адаптеру `frontend-upload.mjs`; arbitrary mkdir/scp не вызываются.
+Изменение helper требует owner-reviewed установки нового exact hash и policy pin.
+
+`npm run test:frontend-static-access`: локальный одноразовый Linux fixture с настоящим
+sshd; временные ключи остаются внутри контейнера. Запуск network=none, без опубликованных
+портов, 1 CPU / 512 MiB / 128 PID, 120 s run limit; image build имеет 180 s timeout и
+ставит test-only python3/openssh-server из Debian на pinned Node base. Удаляются только
+собственные container/tag/context. Проверяются реальные запреты shell/forwarding/PTY,
+права dedicated UID и upload/publish/rollback. Этот check обязателен для release diff.
