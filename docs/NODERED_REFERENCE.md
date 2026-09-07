@@ -1,5 +1,107 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Subscription product identity (implementation, activation separate)
+
+Owner: LK subscription gateway. Audience: LK users of the existing Viva tenant.
+The instance/product association is persistent metadata, not entitlement or a
+cached balance. No sales flag, policy percentage, visit debit or payment formula
+is changed by this increment.
+
+- `GET /lk/subscriptions/product?subId=<instance>` requires the user's Bearer.
+  The existing `apiFetchSubscriptioName` signature remains compatible but ignores
+  phone and returns `{sertName}`. It verifies end-user profile and current owned
+  subscriptions even on a hit. Wrong owner is rejected; phone is never authority.
+- Collection `lk_subscription_product_identity` uses deterministic unique `_id`
+  keys: `[instance, tenant, verified-client, instance]`, `[product, tenant, product]`,
+  and `[lock, tenant, verified-client, instance]`. The existing MongoDB client is
+  reused. Both LK hosts must use the same database for cross-host deduplication.
+- Unknown instance: bounded, server-only Admin GET
+  `/api/v1/clients/{verified-client}/subscriptions/{instance}` using the existing
+  service token. Validate returned `subscriptionId`, `product.id` and `product.name`,
+  then save the immutable mapping and one shared catalog name. Hits perform zero
+  ADMIN reads. A new instance response updates the name for every instance of the
+  same product. Current end-user product aliases, when present, must agree.
+- Status, purchase/activation/expiration dates, restrictions and remaining visits
+  are never persisted in this collection. HUB uses the current end-user row,
+  verifies NEW first use or ACTIVE usability with the existing lifecycle helper,
+  and requires a positive visit balance. Exercise availability remains required.
+  Pre-provider-write recheck obtains the owned row again; refund/hold/expiry,
+  zero visits, identity conflict or incomplete evidence stops the write.
+- CREATE read-only preflight reads an already populated mapping/catalog; a cold
+  mapping returns `SUBSCRIPTION_PRODUCT_NOT_READY` without ADMIN or Mongo writes.
+  The ordinary LK subscription-name read populates it. Retry calculation after
+  the label request succeeds; never silently fall through to legacy free rules.
+- Cross-host misses use a 120-second Mongo lease, longer than the 60-second total
+  resolver deadline. Contention waits at most 24 half-second intervals. Lost
+  release ownership cannot return success. Updates use majority+journal ACK and
+  readback. `_id` provides uniqueness without a separate migration/index build.
+
+### Manual Node-RED refresh
+
+In the new `Subscription product` nodes, edit the payload of **Refresh ONE cached
+product: enter productId** to a product UUID and click the inject button. `once`,
+repeat and cron are disabled. There is no public refresh endpoint. It reads the
+catalog's known representative instance and re-fetches Admin details once. Only
+its shared product name is updated; all instances display it on their next read.
+The debug result contains only result/code/product/name. Errors retain the last
+valid name. A confirmed change of the representative's product ID quarantines
+that instance (`invalid:true`); it never automatically changes its mapping.
+Quarantine requires separate provider reconciliation before repair.
+
+The design uses the agreed invariant that a purchased instance keeps its product
+ID. The supplied Admin response confirms the DTO shape; it is not independent
+proof of lifetime immutability in Viva. An intentional provider-side reassignment
+requires reconciliation. Name ordering uses observation time (host clocks must
+be synchronized); names are display data and do not select HUB policy.
+
+### Installation and stopping
+
+Sources: `scripts/nodered_subscription_product_nodes/*.js` and
+`patch_live_subscription_product_identity.mjs`. The pure composer extends the
+reviewed HUB gateway by one output and adds the resolver graph. It verifies the
+exact gateway preimage and preserves its initializer and policy globals. It
+returns an exact-graph contract for the existing reviewed-flow installer; it
+never imports or deploys. Full raw flow files stay in private external packets.
+A fresh source-origin-verified live preimage is required at real apply.
+
+Required deployment order, under separate exact-target authorization:
+
+1. Install the backend graph on each intended LK API host using its freshly
+   verified exact contract and the existing backup/readback procedure. Verify
+   the Mongo client/database and service-token availability without exposing them.
+2. Install `scripts/nginx/lk-subscription-product-guard.conf` in nginx **http**
+   context; install the exact GET/OPTIONS location from
+   `lk-subscription-product-location.conf` ahead of static `/lk/`. Use existing
+   `patch_subscription_booking_proxy.mjs build-product` / `apply-product` modes:
+   same source/candidate SHA checks and sibling backup as booking mode. Run
+   `nginx -t` before reload; on failure restore the exact backups, no reload.
+3. Verify unauthenticated GET rejects, OPTIONS advertises GET/Authorization,
+   correct-owner warm lookup is successful, another owner is rejected, and a
+   repeat lookup has no Admin request. The endpoint rate limit is 60/minute/IP,
+   burst 20, excess 429. The client has a 35-second abort deadline, sequential
+   fallback only for network/5xx, and no retry/fallback on 4xx. Correlation ID is
+   propagated on provider reads and returned to the client without credentials.
+4. Publish the reviewed frontend bundle only after backend/ingress work on every
+   advertised API origin. Legacy `/seliger?type=get_sub_name` is preserved for
+   unrelated server consumers; this frontend and patched booking gateway stop
+   using it. No sales activation is implied by this installation.
+
+Stop signals: `SUBSCRIPTION_PRODUCT_*` errors, missing/contradictory identity,
+new unexpected provider writes, or unavailable backend route. Stop further
+publication; preserve operation records and reconcile pending writes through the
+existing gateway procedure. Do not clear the mapping collection or restore the
+old free-fallback gateway while HUB rules are active. Restoring the prior static
+bundle does not undo backend/cache/provider operations.
+
+Local tests: `node --experimental-strip-types --test
+scripts/tests/subscriptionProductIdentity.test.mjs
+scripts/tests/subscriptionBookingNginx.test.mjs`. Set
+`SUBSCRIPTION_PRODUCT_FLOW_FIXTURE` to a private retained exact HUB flow for
+connected gateway/composition checks. Without it those two LOCAL checks are
+explicitly skipped; pure resolver, lifecycle, identity and nginx/client tests
+still run in CI. The changed API requires the regular typecheck/lint/build gate.
+
+
 ## Partner game membership API (deployable pilot v0.2, default-off)
 
 - Отдельный M2M namespace: `POST /lk/integrations/v1/open-games/:gameId/members`,

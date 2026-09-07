@@ -315,6 +315,7 @@ jobs:
         run: >-
           node --experimental-strip-types --test
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
+          scripts/tests/subscriptionProductIdentity.test.mjs
           scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts
           scripts/tests/subscriptionSharedDailyLimit.test.ts
           scripts/tests/subscriptionCategoryDailyLimit.test.ts

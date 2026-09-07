@@ -7,6 +7,10 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FRAGMENT_PATH = path.join(SCRIPT_DIR, "lk-subscription-booking-location.conf");
 const STATIC_LK_MARKER = "    location ^~ /lk/ {\n        alias /var/www/html/lk/;";
 const ROUTE_PATTERN = /location\s*=\s*\/lk\/subscription-bookings\s*\{/g;
+const PRODUCT_ROUTE_PATTERN = /location\s*=\s*\/lk\/subscriptions\/product\s*\{/g;
+export const readSubscriptionProductLocation = () => readSubscriptionBookingLocation(path.join(SCRIPT_DIR, 'lk-subscription-product-location.conf'));
+export const buildSubscriptionProductNginxCandidate = (source, expectedSourceSha) =>
+  buildSubscriptionBookingNginxCandidate(source, expectedSourceSha, readSubscriptionProductLocation(), PRODUCT_ROUTE_PATTERN);
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -20,13 +24,14 @@ export function buildSubscriptionBookingNginxCandidate(
   source,
   expectedSourceSha,
   fragment = readSubscriptionBookingLocation(),
+  routePattern = ROUTE_PATTERN,
 ) {
   const sourceSha = sha256(source);
   if (sourceSha !== expectedSourceSha) {
     throw new Error(`Nginx source SHA mismatch: expected ${expectedSourceSha}, got ${sourceSha}`);
   }
 
-  const routeMatches = [...source.matchAll(ROUTE_PATTERN)];
+  const routeMatches = [...source.matchAll(routePattern)];
   if (routeMatches.length > 0) {
     if (routeMatches.length === 1 && source.includes(fragment)) {
       return { candidate: source, changed: false, sourceSha, candidateSha: sourceSha };
@@ -40,15 +45,15 @@ export function buildSubscriptionBookingNginxCandidate(
   }
 
   const candidate = `${source.slice(0, markerIndex)}${fragment}\n${source.slice(markerIndex)}`;
-  const candidateRoutes = [...candidate.matchAll(ROUTE_PATTERN)];
+  const candidateRoutes = [...candidate.matchAll(routePattern)];
   if (candidateRoutes.length !== 1) throw new Error("Candidate must contain exactly one managed location");
   return { candidate, changed: true, sourceSha, candidateSha: sha256(candidate) };
 }
 
-function writeCandidate(sourcePath, candidatePath, expectedSourceSha) {
+function writeCandidate(sourcePath, candidatePath, expectedSourceSha, product = false) {
   if (sourcePath === candidatePath) throw new Error("Refusing to overwrite the nginx source while building a candidate");
   const source = fs.readFileSync(sourcePath, "utf8");
-  const result = buildSubscriptionBookingNginxCandidate(source, expectedSourceSha);
+  const result = (product ? buildSubscriptionProductNginxCandidate : buildSubscriptionBookingNginxCandidate)(source, expectedSourceSha);
   fs.mkdirSync(path.dirname(candidatePath), { recursive: true });
   fs.writeFileSync(candidatePath, result.candidate, "utf8");
   console.log(JSON.stringify({
@@ -60,12 +65,12 @@ function writeCandidate(sourcePath, candidatePath, expectedSourceSha) {
   }, null, 2));
 }
 
-export function applyCandidate(livePath, candidatePath, expectedSourceSha, expectedCandidateSha, backupPath) {
+export function applyCandidate(livePath, candidatePath, expectedSourceSha, expectedCandidateSha, backupPath, product = false) {
   if (path.dirname(livePath) !== path.dirname(backupPath)) {
     throw new Error("Nginx backup must stay beside the live config");
   }
   const source = fs.readFileSync(livePath, "utf8");
-  const result = buildSubscriptionBookingNginxCandidate(source, expectedSourceSha);
+  const result = (product ? buildSubscriptionProductNginxCandidate : buildSubscriptionBookingNginxCandidate)(source, expectedSourceSha);
   const candidate = fs.readFileSync(candidatePath, "utf8");
   const candidateSha = sha256(candidate);
   if (!result.changed) throw new Error("Managed nginx location is already installed");
@@ -93,14 +98,14 @@ export function applyCandidate(livePath, candidatePath, expectedSourceSha, expec
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "build" && args.length === 3) {
-    writeCandidate(path.resolve(args[0]), path.resolve(args[1]), args[2]);
-  } else if (command === "apply" && args.length === 5) {
-    applyCandidate(path.resolve(args[0]), path.resolve(args[1]), args[2], args[3], path.resolve(args[4]));
+  if (["build", "build-product"].includes(command) && args.length === 3) {
+    writeCandidate(path.resolve(args[0]), path.resolve(args[1]), args[2], command === "build-product");
+  } else if (["apply", "apply-product"].includes(command) && args.length === 5) {
+    applyCandidate(path.resolve(args[0]), path.resolve(args[1]), args[2], args[3], path.resolve(args[4]), command === "apply-product");
   } else {
     throw new Error(
-      "Usage: patch_subscription_booking_proxy.mjs build <source> <candidate> <source-sha> | "
-      + "apply <live> <candidate> <source-sha> <candidate-sha> <backup>",
+      "Usage: patch_subscription_booking_proxy.mjs build[-product] <source> <candidate> <source-sha> | "
+      + "apply[-product] <live> <candidate> <source-sha> <candidate-sha> <backup>",
     );
   }
 }
