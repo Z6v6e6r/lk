@@ -2,6 +2,31 @@
 
 ## Уровни доказательств
 
+### 7 сентября: оставшиеся disk include targets обследованы
+
+После `65a5b2e` — [отдельный bounded read-only capture](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-literal-include-targets-completed-read-only-continuation).
+Actual SSH exit0,06:23:52.306–.428UTC:12config-файлов/1,235statements/skipped0,
+финальные epoch/hash/fd checks прошли. Это literal-include disk inventory, не
+полный semantic graph, native Nginx application или production acceptance.
+
+| Новые проверки private helper | Фактический результат |
+| --- | --- |
+| Exact6targets/3symlink destinations, frozen3glob sets; drift original6pins | Bounded allow или отказ; разрешения не расширяются по содержимому config |
+| Path aliases, unknown rawConfig/rawToken fields | Нет неизвестных полей/доменных имён в metadata projection |
+| Quoted6structuralheads | Явный отказ; не молчаливое пропускание include |
+| Private key/cert/credential/unknown config paths | Не входят в read allowlist |
+
+Все **31 дополнительные synthetic assertions PASS**, отдельно от прежних31lexer
+unit tests. На изменённом helper также PASS13scanner/path assertions и7synthetic
+fd/ancestor/race scenarios; syntaxPASS. Review P2 quotedhead закрыт доSSH;
+повторный security review P0–P2=0. Это review кода, не аттестация private receipt.
+
+Runtime/policy/pins в репозитории не менялись. Полный Partner suite, lint и build
+в этом этапе **NOT_RUN**, прежние731/707PASS/24FAIL и0errors/387warnings не являются
+новыми прогонами. Native rehearsal DEFERRED_BY_USER/NOT_RUN; нет probes/reload или
+server/provider/shared-data writes. Схема обновляется как XML; PNG/visualQA NOT_RUN
+из-за известного sandbox/Electron blocker, повторных запусков export нет.
+
 ### 7 сентября: исправление ограниченного inventory lexer
 
 После `b678973` закрыта [ошибка сканера на строке 465](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#line-465-scanner-discrepancy-resolved-not-nginx-validation).

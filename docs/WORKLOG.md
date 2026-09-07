@@ -2,6 +2,40 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: завершена bounded disk include инвентаризация Nginx
+
+- После65a5b2e пользователь отдельно разрешил read-only continuation; coordinator
+  подтвердил отсутствие assigned server/ingress writers147. Прежние ветка/WT,
+  primary sole writer, LOCAL_HEAVY не запрашивался.
+- Private one-shot helper: exact6 ранее наблюдённых targets+3symlink destinations;
+  строки destinations офлайн совпали с предыдущими hashes. Original6file pins и
+  frozen3globsets не resealed; root/ancestor/symlink/O_NOFOLLOW/samefd checks,
+  host/boot/process before/after и remote20sTERM/2sKILL сохранены.
+- До SSH review закрыл P2 quotedstructuralhead skip: fail-closed для6имён,
+  exact publicRecord whitelist, unknown rawConfig/rawToken omitted.31newsynthetic
+  assertions+13scanner/path+7fd/race scenarios иsyntax PASS. Rereview P0–P2=0.
+- Actual SSH06:23:52.306–.428UTC,exit0:12files/1,235lexical statements/skipped0;
+  финальные guards прошли.6targets gap закрыт в bounded literal include graph,
+  не semantic/applied-config proof. Два backup/pre-release файла входят в glob,
+  содержат PadlHub server-name/listen; ничего не удалено/переименовано.
+- Exact Partner server-name/literal127.0.0.1:18894proxy_pass/ssl_verify_client
+  statements не наблюдались; отсутствие косвенных upstream или memory routing
+  этим не доказано. Private capture/helper retained outsideGit, rawconfig и
+  чужиеdomains не экспортированы; cert/key/env/client-log contents не открывались.
+- SSH завершён, coordinator получил end, ресурсов не удерживаем. Нет probes,
+  nginx-t/-T/reload/restart, host/provider/shared-data writes, secret changes,
+  install/push/PR/merge/CI/deploy/activation. В репозитории только docs/diagram;
+  runtime/policy/receipts byte-preserved, fulltests/lint/build NOT_RUN без новых
+  runtime inputs. Прежний fullrelease RED остаётся; native DEFERRED/NOT_RUN.
+- Обновлены inventory/ingress/production-controls/test-plan docs и существующая
+  drawio-схема. XML-only fallback: ранее подтверждённый sandbox/Electron blocker;
+  PNG/visualQA не перезапускались. Следующий локальный scope — production adapter
+  contract поверх уже существующего candidate/collector, не перепроектирование.
+- XML0errors/0warnings,40local links/anchors PASS; private capture aggregates и
+  executed helper SHA совпали. Проверены unchanged lexer/production entry/controls.
+  Независимый read-only release/evidence review6docs: P0–P2=0; redacted metadata
+  согласованы, исходные config bytes этим review не аттестуются.
+
 ## 2026-09-07 — Partner: устранена ложная ошибка Nginx inventory lexer
 
 - Продолжение после `b678973`, прежняя ветка/WT, primary sole writer. Узкий scanner

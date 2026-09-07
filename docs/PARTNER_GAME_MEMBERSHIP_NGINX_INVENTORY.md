@@ -1,7 +1,10 @@
 # Partner Nginx: bounded read-only inventory, 7 September 2026
 
-Result: **PARTIAL / NOT PRODUCTION VERIFICATION**. This records observations, not
-an installed Partner API, an approved private binding or a deploy authorization.
+Latest result: **DISK INCLUDE INVENTORY COMPLETED / NOT PRODUCTION VERIFICATION**.
+All literal include targets discovered by the bounded scanner were read; this is
+not a full Nginx semantic/dependency graph or proof of applied configuration.
+This records observations, not an installed Partner API, an approved private
+binding or a deploy authorization. Earlier partial captures remain below.
 
 The user separately authorized this read-only SSH stage after choosing
 `partner-api.padlhub.su` on `lk-primary-147`. The coordinator reported no conflicting
@@ -109,16 +112,91 @@ observations prove what configuration workers applied.
   probes, `nginx -t/-T`, reload/restart, push, merge, deploy or activation. Both SSH
   operations completed; the local heavy-test window was released after lint exit.
 
+## Remaining literal include targets: completed read-only continuation
+
+After the user's separate approval following `65a5b2e`, the coordinator confirmed
+no assigned conflicting server/ingress writer. A reviewed one-shot helper extended
+the exact read allowlist by the six previously observed non-hidden vhost/include
+targets and three exact symlink destinations. Each destination string matched its
+previously captured path hash before the SSH run; arbitrary directory contents
+were not admitted. The six original config hashes and all three glob target sets
+were fixed preconditions, not refreshed automatically on drift.
+
+Actual remote window: **7 September 2026, 06:23:52.306–06:23:52.428 UTC**, SSH exit
+**0**. The collector retained root/non-writable ancestor checks, bounded symlink
+chains, `O_NOFOLLOW`, same-fd pre/post checks, config rechecks, host/boot/process
+identity checks before and after, and the external 20-second TERM/2-second KILL
+deadline. All checks completed. State:
+`SCOPED_DISK_CONFIG_INVENTORY_NOT_APPLICATION_PROOF`, graph coverage
+`ALL_DISCOVERED_LITERAL_INCLUDES_SCANNED_LEXICALLY_ONLY`, skipped targets **0**.
+
+| Disk scope | Files actually scanned | Meaning |
+| --- | ---: | --- |
+| Main config and MIME types | 2 | Fixed entrypoint and data include |
+| Previously observed PadlHub `conf.d` files | 2 | Same hashes as the prior capture |
+| Selected PadlHub vhost | 1 | Same hash, 307 statements |
+| Previously unread vhost/backup targets | 6 | Three exact leaf symlinks resolved; unrelated names are redacted |
+| Shared public TLS-options include | 1 | Reused by seven vhost configs; cert/key references not followed |
+| **Total** | **12** | **1,235 lexical statements; no skipped discovered literal includes** |
+
+The sites-enabled glob still matched two non-hidden backup/pre-release PadlHub
+files. Both contain literal PadlHub server-name/listen declarations. They were
+read, not deleted, renamed or excluded. Matching the on-disk glob does not prove
+which virtual server wins or that a future reload succeeds. Their custody must
+remain in the later controlled-application/rollback preconditions; any cleanup
+requires a separate reviewed change, not an implicit Partner installation step.
+
+No exact `partner-api.padlhub.su` server-name token, literal
+`proxy_pass http://127.0.0.1:18894` or `ssl_verify_client` statement was observed
+in this bounded lexical projection. This is **not** proof of the absence of an
+indirect/named upstream, external TLS termination or routing in loaded memory.
+The planned URL must still not be represented as operational.
+
+### New helper checks and evidence custody
+
+- Before SSH, review identified a P2: a quoted structural directive name could
+  be silently skipped. The helper now rejects quoted `include`, `server_name`,
+  `listen`, `proxy_pass`, `ssl_verify_client` and `load_module` heads. It does not
+  broaden the generic lexer or claim to implement Nginx grammar. Nginx resolves
+  directive names from token values; see the
+  [official token/handler implementation](https://github.com/nginx/nginx/blob/release-1.24.0/src/core/ngx_conf_file.c#L334-L381).
+- **31 new synthetic helper assertions PASS**: exact target admission, fixed glob
+  set and original-pin drift rejection, private-path aliasing, unknown-field
+  omission, quoted structural-head rejection and sensitive-path denial. These
+  are separate from the 31 checked-in lexer tests run at the previous checkpoint.
+- Existing 13 scanner/path assertions and 7 synthetic fd/ancestor/race scenarios
+  also passed for the changed one-shot helper; syntax check PASS. These tests do
+  not access a host, a real secret or a network service.
+- Re-review: P0–P2 = 0 in the bounded helper scope. Records use explicit metadata
+  fields; unknown top-level/include fields are not exported. Raw tokens and
+  unrelated domains are not included in the output; cert/key/env/client-log
+  contents were not opened. The private source and redacted working capture are
+  retained outside Git, with executed source SHA-256
+  `8c2477662d5610837eed981db6a1e087848f5075676aed1b4956de25062ffdfd`.
+- No repository runtime source, policy/binding or immutable release pin changed.
+  Full Partner tests/lint/build were not rerun for this documentation-only repo
+  diff. The previous **707 PASS / 24 FAIL** and lint **0 errors / 387 warnings**
+  remain historical results, not new executions. Native rehearsal remains deferred.
+- No HTTP/TLS/DNS probes, native `nginx -t/-T`, reload/restart, server/provider/shared
+  data writes, secret changes, installs, push, merge, deploy or activation occurred.
+  The SSH process exited; the coordinator was notified and no resources are held.
+
 ## Remaining work
 
 1. **Closed locally:** the line-465 scanner bug is reproduced, fixed and covered by
    synthetic regressions; the corrected scoped capture completed. No production
    config repair or removal was necessary or authorized.
-2. Define the full service/config/include ownership and trusted application/probe
-   procedure. The six other glob targets remain unread; the dedicated Partner Host/SNI,
-   TLS/mTLS termination and route isolation have not been verified. A disk-only read
-   cannot supply the missing applied-config/generation proof.
-3. Retain fresh runtime/packet proof, exact-head CI, separately authorized deploy
+2. **Closed for the bounded disk inventory:** all discovered literal include
+   targets were scanned. The six-target gap is resolved; preserve this capture as
+   historical evidence and refresh it before any separately approved live transition.
+3. Next local slice: connect the existing Nginx candidate/collector design to a
+   production adapter contract using the observed entrypoint and exact file custody,
+   without replacing the existing implementation. Specify tests for candidate/base
+   drift, unchanged shared vhosts (including backup targets), generation change,
+   failure/recovery and redacted audit. Do not enable the production entry merely
+   because inventory is complete. Exact TLS/mTLS/custody inputs, trusted application
+   operator, external vantage and route isolation still need evidence and authority.
+4. Retain fresh runtime/packet proof, exact-head CI, separately authorized deploy
    and activation gates. Native application rehearsal remains
    `DEFERRED_BY_USER / NOT_RUN`; no new partner signoff is required.
 

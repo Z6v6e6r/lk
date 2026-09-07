@@ -40,9 +40,12 @@ Policy template остаётся `UNBOUND`, production entry — `UNSUPPORTED_IN
 После отдельного разрешения выполнен [bounded read-only inventory на 147](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
 Подтверждены service/process/build paths и scoped disk hashes. Первоначальная ошибка
 сканера на строке 465 устранена: `#` внутри regex-token ошибочно считался комментарием.
-31 synthetic regression PASS; повторное guarded чтение завершилось для шести
-allowlisted config-файлов. Шесть чужих vhost/include-целей не читались. Результат
-остаётся `PARTIAL_SCOPED_READ`, а не full/applied-config или production proof.
+31 synthetic regression PASS; первое исправленное guarded чтение охватило шесть
+config-файлов. Следующее отдельно разрешённое чтение 06:23:52 UTC закрыло оставшиеся
+шесть целей: **12 файлов / 1,235 lexical statements / skipped 0**, финальные
+epoch/hash checks PASS. Это полный набор обнаруженных literal include targets в
+пределах сканера, а не semantic/applied-config или production proof. Shared backup
+targets сохранены; config, routes, сертификаты и production entry не менялись.
 
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.

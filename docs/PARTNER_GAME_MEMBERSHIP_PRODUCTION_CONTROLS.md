@@ -11,17 +11,19 @@ fail-closed контракт без заполненной production binding. �
 ## Выбранное размещение — только планирование
 
 Следующее отдельно разрешённое read-only окно выполнено 7 сентября:
-[частичный inventory и ограничения](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
-Это не закрывает production binding: native validation, полный config graph и
-applied-config proof не получены; разрешения ниже остаются неизменными.
+[disk inventory и ограничения](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+Последнее чтение 06:23:52 UTC охватило12config-файлов, skipped literal include targets0.
+Это закрывает прежний пробел из6targets, но не production binding: native validation,
+полный semantic/dependency graph и applied-config proof не получены; разрешения
+ниже остаются неизменными. Файлы backup-vhost, попавшие под glob, не менялись.
 
 7 сентября 2026 пользователь подтвердил следующий target:
 
 | Поле | Решение | Что ещё не подтверждено |
 | --- | --- | --- |
 | Exact Host/SNI | `partner-api.padlhub.su` | DNS, сертификат и фактическая обработка Host/SNI |
-| Сервер | `lk-primary-147` | Fresh host/service/process/config identity для Partner |
-| Ingress | Nginx, ранее выбранный пользователем | Реальная service/listener/include topology и применение candidate |
+| Сервер | `lk-primary-147` | Inventory identity зафиксирована; перед live-переходом нужен fresh readback |
+| Ingress | Nginx, ранее выбранный пользователем | Disk include topology обследована; применение candidate и external route proof не подтверждены |
 | Upstream | Прежний контракт: `http://127.0.0.1:18894` | Установка и readback отдельного sidecar |
 
 Это не рабочие настройки для передачи партнёру. Решение не задаёт audience, CIDR,
@@ -35,7 +37,8 @@ ingress/custody `UNBOUND`, activation `BLOCKED`, все разрешения `fa
 Выбор hostname не заполняет private binding и не пересчитывает исторические
 runtime/packet receipts. Production entry сохраняет `UNSUPPORTED_INGRESS_ADAPTER`.
 
-Следующий отдельный этап — **read-only инвентаризация Nginx на `lk-primary-147`**:
+Выполненный read-only этап Nginx на `lk-primary-147` использовал следующие границы
+(они сохраняются для будущего отдельно разрешённого readback):
 
 1. Согласовать с координатором окно без конфликтующего ingress writer. Установить
    связь host/boot → service → master/workers → executable и listeners, сохранив
@@ -54,6 +57,9 @@ runtime/packet receipts. Production entry сохраняет `UNSUPPORTED_INGRES
 
 После inventory отдельно остаются trusted operator/vantage, config application и
 negative probes, свежая runtime closure, exact-head CI, deploy и activation gates.
+Ближайшее локальное продолжение — production adapter contract поверх существующего
+candidate/collector, с exact custody и сохранением shared vhosts; не новый ingress
+с нуля и не разрешение на его установку. [Оставшиеся границы](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-work).
 Отложенная native application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
 Инфраструктурные проверки и выпуск выполняет PadlHub; нового согласования или signoff
 от партнёра не требуется. Ответственность партнёра — подключить свой клиент к

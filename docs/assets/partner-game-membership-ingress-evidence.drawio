@@ -217,7 +217,7 @@
       </root>
     </mxGraphModel>
   </diagram>
-  <diagram name="Bounded inventory lexer fix">
+  <diagram name="Historical scoped lexer fix">
     <mxGraphModel grid="1" gridSize="10" page="0">
       <root>
         <mxCell id="0" />
@@ -231,6 +231,26 @@
         <mxCell id="8" value="exact source in scoped helper" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="9" value="success is lexical only" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="10" value="not a production receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Disk include inventory completed">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="PINNED ENTRYPOINT&#xa;nginx.conf: 1 file&#xa;Same host / boot / process epoch&#xa;No server writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="DATA / GLOBAL INCLUDES&#xa;MIME types + 2 conf.d files&#xa;3 files; original hashes pinned&#xa;Module glob: 0 targets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SITES-ENABLED GLOB&#xa;7 configs; 3 exact symlink targets&#xa;Includes 2 backup/pre-release files&#xa;All preserved; names redacted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="SHARED PUBLIC TLS OPTIONS&#xa;1 unique file, reused by 7 configs&#xa;Certificate / key refs NOT followed&#xa;No secret or log reads" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="DISK INVENTORY COMPLETED&#xa;12 files / 1,235 lexical statements&#xa;Skipped discovered includes: 0&#xa;Final epoch / hash guards passed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="PRODUCTION STILL UNPROVEN&#xa;Not a semantic or applied graph&#xa;TLS/mTLS / route / operator gates&#xa;UNBOUND / BLOCKED; no activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1940" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="literal includes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="frozen target set" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="4"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="200" y="570" /></Array></mxGeometry></mxCell>
+        <mxCell id="10" value="same reused include" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="bounded lexical scan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="readback complete" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="13" value="does not prove worker application" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
       </root>
     </mxGraphModel>
   </diagram>
