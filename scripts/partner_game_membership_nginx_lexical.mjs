@@ -61,21 +61,34 @@ function tokenize(text) {
   return tokens;
 }
 
-export function scanNginxInventoryStatements(text) {
+function scan(text, structure) {
   const statements = [];
+  const context = [];
   let current = [], depth = 0;
   for (const token of tokenize(text)) {
     if (!token.punctuation) { current.push(token); continue; }
-    if (token.value === ";") { if (current.length) statements.push(current); current = []; }
+    if (token.value === ";") {
+      if (current.length) statements.push(structure ? { words: current, block: false, context: [...context] } : current);
+      current = [];
+    }
     else if (token.value === "{") {
       if (!current.length) fail("UNNAMED_BLOCK", token.line);
+      if (structure) statements.push({ words: current, block: true, context: [...context] });
+      context.push(current[0].value);
       current = []; if (++depth > 256) fail("DEPTH_LIMIT", token.line);
     } else {
       if (current.length) fail("UNTERMINATED_DIRECTIVE_BEFORE_CLOSE", token.line);
       if (--depth < 0) fail("UNBALANCED_CLOSE", token.line);
+      context.pop();
     }
   }
   if (current.length) fail("UNTERMINATED_DIRECTIVE_AT_EOF", current[0].line);
   if (depth !== 0) fail("UNBALANCED_BLOCKS_AT_EOF");
   return statements;
 }
+
+export function scanNginxInventoryStatements(text) { return scan(text, false); }
+
+// Same bounded dialect, additionally retaining block headers and lexical context.
+// Private intermediate tokens, never a semantic Nginx AST or exportable receipt.
+export function scanNginxInventoryStructure(text) { return scan(text, true); }

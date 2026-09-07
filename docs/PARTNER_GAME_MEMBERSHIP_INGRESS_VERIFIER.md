@@ -47,6 +47,12 @@ epoch/hash checks PASS. Это полный набор обнаруженных 
 пределах сканера, а не semantic/applied-config или production proof. Shared backup
 targets сохранены; config, routes, сертификаты и production entry не менялись.
 
+7 сентября добавлен [локальный shared-overlay renderer и byte-preservation checker](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md).
+Это первый production-layout source slice: один добавочный exact-host vhost,
+собственный namespace, запрет inherited Real IP и сохранение переданных baseline
+bytes. Не host custody/semantic proof и не подключённый production collector;
+старый log correlation dialect ещё требует адаптации. Live entry остаётся закрыт.
+
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.
 [Редактируемая схема границ](assets/partner-game-membership-ingress-evidence.drawio).

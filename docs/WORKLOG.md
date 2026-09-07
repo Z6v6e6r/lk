@@ -2,6 +2,44 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: локальный Nginx shared-overlay renderer/checker
+
+- Продолжение с `e8c6cc6`, прежняя branch/worktree, primary sole writer. Пользователь
+  разрешил локальный production-adapter source slice, не SSH/установку/ingress writes.
+  Координатор подтвердил отсутствие конфликта own-WT работы с отдельным static deploy.
+- Новый pure `partner_game_membership_nginx_shared_overlay.mjs`: один добавочный
+  exact-host vhost, namespaced maps/zones/redacted log, закрытые public-cert inputs
+  и фиксированные draft paths. Прежний standalone generator не переносится на shared
+  сервер. Нет filesystem/network/process I/O, key reads или production mode.
+- Bounded lexer получил отдельный structural-context API без смены старого output.
+  Checker сохраняет все caller baseline bytes + ровно один source-owned overlay;
+  запрещает namespace/host collision, повторный/wrong-context conf.d include,
+  пропуски literal targets, cycles/orphans и effective-http inherited Real IP.
+  Synthetic 12-file fixture не является actual host capture/closure attestation.
+- Security review выявил и закрыл inherited Real IP/limiter dry-run, подмену через
+  inherited Array iterator и расхождение проверенного/rendered cert через Buffer
+  methods. Exact prototypes/data snapshots, dry-run off/satisfy all и regression
+  tests добавлены. Итог security source review P0–P2 = 0; reviewers read-only.
+- Последний targeted overlay run 58/58 PASS; lexer 31 PASS до неизменённого остатка
+  этапа. Scoped ESLint PASS. Full sequential Partner suite actual exit 1:
+  789 tests / 765 PASS / 24 FAIL / 0 skipped, 21.877 s. Все 24 failing names точно
+  совпали с предыдущим 731-test baseline. Release RED, receipts не resealed.
+- Root lint actual exit 0: 0 errors / 387 warnings. Согласованный LOCAL_HEAVY
+  освобождён после двух actual exits; coordinator уведомлён. Build не повторён:
+  прежние 17 missing VITE inputs; native application DEFERRED_BY_USER / NOT_RUN.
+- Подробный contract/negative-test matrix и новая страница существующей drawio:
+  XML validator 0 errors / 0 warnings. По drawio-skill использован XML-only fallback
+  после прежнего sandbox/Electron blocker; PNG export/visual QA NOT_RUN.
+- Local links/anchors: 51 PASS; diff whitespace PASS. Финальный независимый
+  release/compatibility review source/docs/diagram: P0–P2 = 0; private execution
+  receipts не являются предметом аттестации этого reviewer.
+- Непокрыты shared semantics/TLS defaults, PKI/key custody, production log/collector
+  dialect, все четыре workers/controlled application и external proof. Source draft
+  не открывает production verifier; policy/binding/runtime/packet bytes не меняются.
+- Нет SSH, внешней сети, реальных cert/key/env/log reads, provider/shared-data writes,
+  DNS/routes, install/reload/restart, push/PR/merge/CI/deploy/activation. Локальный
+  checkpoint завершит этот slice; до него staged secret/PII scan обязателен.
+
 ## 2026-09-07 — Partner: завершена bounded disk include инвентаризация Nginx
 
 - После65a5b2e пользователь отдельно разрешил read-only continuation; coordinator

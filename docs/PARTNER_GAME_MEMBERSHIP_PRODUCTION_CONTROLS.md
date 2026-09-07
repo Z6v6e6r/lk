@@ -57,9 +57,12 @@ runtime/packet receipts. Production entry сохраняет `UNSUPPORTED_INGRES
 
 После inventory отдельно остаются trusted operator/vantage, config application и
 negative probes, свежая runtime closure, exact-head CI, deploy и activation gates.
-Ближайшее локальное продолжение — production adapter contract поверх существующего
-candidate/collector, с exact custody и сохранением shared vhosts; не новый ingress
-с нуля и не разрешение на его установку. [Оставшиеся границы](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-work).
+Первый локальный слой production adapter contract реализован:
+[shared-overlay renderer и проверка baseline byte preservation](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md).
+Он не заменяет standalone fixture и не выдаёт host custody/semantic/application
+proof; все deploy/activation flags false. Тестовые 12 файлов не являются копией
+боевой конфигурации. Далее нужны shared semantics и production collector/log/worker
+contract, затем отдельные live gates. [Оставшиеся границы](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-work).
 Отложенная native application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
 Инфраструктурные проверки и выпуск выполняет PadlHub; нового согласования или signoff
 от партнёра не требуется. Ответственность партнёра — подключить свой клиент к

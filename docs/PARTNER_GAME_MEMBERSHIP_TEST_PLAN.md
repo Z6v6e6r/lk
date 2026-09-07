@@ -2,6 +2,41 @@
 
 ## Уровни доказательств
 
+### 7 сентября: локальный shared-overlay source slice
+
+[Renderer/checker contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md) выдаёт
+только draft одного добавочного vhost, не deploy config или production evidence.
+Сохранены прежние branch/worktree; реальная конфигурация, ключи и policy не менялись.
+
+- Последний targeted shared-overlay run: **58/58 PASS**, 0 failures/skips, exit 0.
+  Прежние 31 lexer tests прошли ранее в этом этапе; после этого lexer не менялся.
+  Общий свежий прогон ниже повторно включает все эти 89 tests; synthetic certs only.
+- Проверены exact route/rate parity, public certificate pins/SAN/EKU/validity,
+  source allowlist, closed input, inherited iterator и Buffer-method injection, namespace/host
+  collision, +1 file preservation (включая backup names), include cycles/missing
+  targets, double overlay loading и inherited Real IP через разные include contexts.
+- Явные limiter dry-run off / satisfy all, редактированный audit и все live flags
+  false. Копия renderer object, self-declared workers/application/production PASS
+  не становятся source-owned overlay или production-verifier evidence.
+- Scoped ESLint трёх source/test files: PASS. Full sequential Partner suite:
+  **789 tests / 765 PASS / 24 FAIL / 0 skipped**, actual exit 1. Все 24 failing names
+  точно совпали с предыдущим 731-test baseline; новых failing names нет. Старые
+  source/proof pins не resealed; общий release gate остаётся RED.
+- Root `npm run lint`: actual exit 0, **0 errors / 387 warnings**. LOCAL_HEAVY
+  освобождён после завершения обоих последовательных процессов; coordinator уведомлён.
+  Root build не повторялся: прежние 17 недостающих VITE inputs остаются blocker.
+- Независимый read-only security review закрыл inherited Real IP/dry-run, Array
+  iterator и Buffer-method bypasses; финальный scoped source verdict P0–P2 = 0.
+- Native Nginx/shared-listener/PKI/application/worker/external probe tests: **NOT_RUN**;
+  ранее отложенная native rehearsal остаётся **DEFERRED_BY_USER**. Existing fixed
+  probe/generation collector не подключён к новому redacted log dialect.
+- Инфографика: новая страница существующего drawio XML. CLI export и PNG visual QA
+  не повторялись после установленного sandbox/Electron blocker; XML-only fallback.
+
+Двенадцать файлов в fixture — модель topology, не actual host export. Byte
+preservation не доказывает semantic preservation; root/key custody и фактическая
+полнота glob enumeration здесь не проверяются. Исторические receipts не resealed.
+
 ### 7 сентября: оставшиеся disk include targets обследованы
 
 После `65a5b2e` — [отдельный bounded read-only capture](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-literal-include-targets-completed-read-only-continuation).

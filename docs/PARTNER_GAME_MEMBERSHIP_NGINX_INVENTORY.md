@@ -189,13 +189,14 @@ The planned URL must still not be represented as operational.
 2. **Closed for the bounded disk inventory:** all discovered literal include
    targets were scanned. The six-target gap is resolved; preserve this capture as
    historical evidence and refresh it before any separately approved live transition.
-3. Next local slice: connect the existing Nginx candidate/collector design to a
-   production adapter contract using the observed entrypoint and exact file custody,
-   without replacing the existing implementation. Specify tests for candidate/base
-   drift, unchanged shared vhosts (including backup targets), generation change,
-   failure/recovery and redacted audit. Do not enable the production entry merely
-   because inventory is complete. Exact TLS/mTLS/custody inputs, trusted application
-   operator, external vantage and route isolation still need evidence and authority.
+3. First local source slice is now [an additions-only renderer and byte-preservation
+   checker](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md). Its twelve-file fixture
+   is synthetic, not this host capture. It checks candidate/base drift and preserves
+   supplied shared/backup bytes without issuing custody or applied-config proof.
+   Shared semantic validation, production log/collector/all-worker contracts,
+   exact TLS/mTLS/custody inputs, trusted application operator, external vantage,
+   failure/recovery and route isolation still need implementation/evidence/authority.
+   Do not enable production entry or reseal this capture from a new local source hash.
 4. Retain fresh runtime/packet proof, exact-head CI, separately authorized deploy
    and activation gates. Native application rehearsal remains
    `DEFERRED_BY_USER / NOT_RUN`; no new partner signoff is required.
