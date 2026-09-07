@@ -44,13 +44,28 @@ const launcherSha = sha(launcherBytes);
 const manifestSha = "b".repeat(64);
 const attempt = "a".repeat(32);
 const bundle = "/root/.padlhub-frontend-bootstrap-" + manifestSha;
+const runnerInput = "/tmp/lk-frontend-runner-input";
+fs.mkdirSync(runnerInput, { recursive: true, mode: 0o700 });
+fs.writeFileSync(runnerInput + "/guard", guardBytes, { mode: 0o500 });
+fs.writeFileSync(runnerInput + "/launcher", launcherBytes, { mode: 0o500 });
+fs.chownSync(runnerInput + "/guard", 1001, 1001);
+fs.chownSync(runnerInput + "/launcher", 1001, 1001);
 fs.mkdirSync(bundle + "/payload", { recursive: true, mode: 0o700 });
-fs.copyFileSync("/input/guard", bundle + "/payload/guard");
-fs.copyFileSync("/input/launcher", bundle + "/payload/launcher");
+fs.copyFileSync(runnerInput + "/guard", bundle + "/payload/guard");
+fs.copyFileSync(runnerInput + "/launcher", bundle + "/payload/launcher");
 fs.chmodSync(bundle, 0o700);
 fs.chmodSync(bundle + "/payload", 0o700);
+// Root copyFileSync preserves the bind-mounted source owner on native Linux.
+// Transfer the rehearsal payload into the same root custody required in production.
+fs.chownSync(bundle + "/payload/guard", 0, 0);
+fs.chownSync(bundle + "/payload/launcher", 0, 0);
 fs.chmodSync(bundle + "/payload/guard", 0o500);
 fs.chmodSync(bundle + "/payload/launcher", 0o500);
+for (const name of ["guard", "launcher"]) {
+  const stat = fs.lstatSync(bundle + "/payload/" + name);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || stat.gid !== 0
+    || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o500) process.exit(43);
+}
 const runtimeSource = \`import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 const action = process.argv[2];
