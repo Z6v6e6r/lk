@@ -29,6 +29,14 @@ const GUARD_FLAGS = Object.freeze([
   "-static", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-fno-ident",
   "-ffile-prefix-map=/src=.", "-Wl,--build-id=none", "-s",
 ]);
+const BOOTSTRAP_GATES = Object.freeze([
+  "Verify current nginx and all installed artifact preimages under one approved writer boundary",
+  "Install the exact retained baseline and new current symlink without modifying legacy lk",
+  "Test candidate nginx configuration in isolation, then guarded install and nginx -t before reload",
+  "Read back all 16 public hashes, cache/CORS and preserved legacy URL baselines, then browser smoke",
+  "On failure restore exact nginx preimage and reload; keep the baseline files and current symlink for investigation",
+]);
+const BOOTSTRAP_ROLLBACK_RULE = "Refuse rollback over unknown nginx bytes; do not remove the legacy directory or retained artifacts";
 const EXECUTION_SOURCES = Object.freeze([
   "scripts/frontend_bootstrap_guard.c",
   "scripts/frontend_bootstrap_exec_launcher.c",
@@ -424,9 +432,12 @@ export function prepareFrontendBootstrapExecution({ candidateDirectory, hostSnap
   const planBytes = regularBytes(path.join(candidate, "bootstrap.json"));
   const plan = JSON.parse(planBytes);
   exactKeys(plan, ["schema", "liveMutationAuthorized", "applied", "legacyDirectoryMutationAllowed",
-    "nginx", "installed", "activePath", "legacyPath", "routedPaths", "retainedReleasePath"],
+    "nginx", "installed", "activePath", "legacyPath", "routedPaths", "retainedReleasePath",
+    "gates", "rollback"],
   "Offline frontend bootstrap plan");
   exactKeys(plan.nginx, ["sourceSha", "candidateSha"], "Offline frontend bootstrap nginx plan");
+  exactKeys(plan.rollback, ["sourceFile", "expectedLiveSha", "restoredSha", "rule"],
+    "Offline frontend bootstrap rollback plan");
   const sourceBytes = regularBytes(path.join(candidate, "nginx.source.conf"));
   const candidateBytes = regularBytes(path.join(candidate, "nginx.candidate.conf"));
   if (plan?.schema !== "LK_FRONTEND_STATIC_BOOTSTRAP_V1" || plan.liveMutationAuthorized !== false
@@ -437,6 +448,13 @@ export function prepareFrontendBootstrapExecution({ candidateDirectory, hostSnap
     || plan.legacyPath !== "/var/www/html/lk"
     || !Array.isArray(plan.routedPaths) || plan.routedPaths.length !== files.length) {
     fail("Offline frontend bootstrap plan does not bind the host snapshot");
+  }
+  if (!equal(plan.gates, BOOTSTRAP_GATES)
+    || plan.rollback.sourceFile !== "nginx.source.conf"
+    || plan.rollback.expectedLiveSha !== plan.nginx.candidateSha
+    || plan.rollback.restoredSha !== plan.nginx.sourceSha
+    || plan.rollback.rule !== BOOTSTRAP_ROLLBACK_RULE) {
+    fail("Offline frontend bootstrap policy metadata mismatch");
   }
   const rebuilt = buildFrontendStaticCandidate(sourceBytes.toString("utf8"), plan.nginx.sourceSha);
   if (!candidateBytes.equals(Buffer.from(rebuilt.candidate))

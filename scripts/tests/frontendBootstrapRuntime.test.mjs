@@ -17,7 +17,10 @@ import {
   prepareFrontendBootstrapAuditKit,
   prepareFrontendBootstrapExecution,
 } from "../prepare_frontend_bootstrap_execution.mjs";
-import { buildFrontendStaticCandidate } from "../nginx/prepare_frontend_static_bootstrap.mjs";
+import {
+  buildFrontendStaticCandidate,
+  prepareBootstrap,
+} from "../nginx/prepare_frontend_static_bootstrap.mjs";
 
 const digest = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 const canonical = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -128,22 +131,14 @@ const fixture = (t, { failFirstReload = false } = {}) => {
   };
 
   const candidate = path.join(sandbox, "candidate");
-  makeDirectory(candidate, 0o700);
-  makeDirectory(path.join(candidate, "release"), 0o700);
-  makeDirectory(path.join(candidate, "release/fonts"), 0o700);
-  write(path.join(candidate, "nginx.source.conf"), sourceConfig, 0o600);
-  write(path.join(candidate, "nginx.candidate.conf"), candidateConfig, 0o600);
-  for (const name of files) write(path.join(candidate, "release", name), publicBytes[name], 0o400);
-  const releaseName = `${source}-${digest(JSON.stringify(files.map((name) => [name,
-    host.installed.hashes[name]]))).slice(0, 16)}`;
-  const plan = {
-    schema: "LK_FRONTEND_STATIC_BOOTSTRAP_V1", liveMutationAuthorized: false, applied: false,
-    legacyDirectoryMutationAllowed: false, nginx: { sourceSha: digest(sourceConfig), candidateSha: digest(candidateConfig) },
-    installed: host.installed, activePath: "/var/www/html/lk-frontend-current",
-    legacyPath: "/var/www/html/lk", routedPaths: files.map((name) => `/lk/${name}`),
-    retainedReleasePath: `/var/www/html/lk-frontend-releases/${releaseName}`,
-  };
-  write(path.join(candidate, "bootstrap.json"), canonical(plan), 0o400);
+  const dist = path.join(sandbox, "dist");
+  const fonts = path.join(sandbox, "fonts");
+  makeDirectory(dist);
+  makeDirectory(fonts);
+  for (const name of files) write(name.startsWith("fonts/")
+    ? path.join(fonts, path.basename(name)) : path.join(dist, name), publicBytes[name]);
+  prepareBootstrap({ sourceNginx: configPath, expectedSourceSha: digest(sourceConfig),
+    installed: host.installed, distDir: dist, fontsDir: fonts, outDir: candidate });
   const parent = path.join(sandbox, "private");
   makeDirectory(parent, 0o700);
   const output = path.join(parent, "execution");
@@ -191,7 +186,7 @@ const fixture = (t, { failFirstReload = false } = {}) => {
   };
   const runtime = createFrontendBootstrapRuntime({ verified, rootPrefix: root, production: false,
     hostname: () => host.hostname, machineIdBytes: () => machineId, execFile });
-  return { sandbox, root, host, output, prepared, verified, runtime, sourceConfig, candidateConfig,
+  return { sandbox, root, host, candidate, output, prepared, verified, runtime, sourceConfig, candidateConfig,
     machineId, configPath, execFile, guardExecutables,
     get reloads() { return reloads; } };
 };
@@ -485,13 +480,14 @@ test("verified bundle rejects a cross-bound audit producer", (t) => {
 
 test("execution builder rejects a coherent-looking but non-deterministic nginx candidate", (t) => {
   const value = fixture(t);
-  const candidate = path.join(value.sandbox, "candidate");
+  const candidate = value.candidate;
   const candidatePath = path.join(candidate, "nginx.candidate.conf");
   const bytes = Buffer.from(`${fs.readFileSync(candidatePath, "utf8")}# coherent tamper\n`);
   fs.writeFileSync(candidatePath, bytes);
   const planPath = path.join(candidate, "bootstrap.json");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   plan.nginx.candidateSha = digest(bytes);
+  plan.rollback.expectedLiveSha = plan.nginx.candidateSha;
   fs.chmodSync(planPath, 0o600);
   fs.writeFileSync(planPath, canonical(plan));
   fs.chmodSync(planPath, 0o400);
@@ -502,6 +498,40 @@ test("execution builder rejects a coherent-looking but non-deterministic nginx c
     production: false, guardArtifact: { bytes: guardBytes, sha256: digest(guardBytes),
       sourceSha256: digest(guardSource), image: "fixture@sha256", flags: ["-static"] } }),
   /deterministic source transform/);
+});
+
+test("execution builder rejects changed offline bootstrap gates", (t) => {
+  const value = fixture(t);
+  const planPath = path.join(value.candidate, "bootstrap.json");
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  plan.gates[0] = "tampered gate";
+  fs.chmodSync(planPath, 0o600);
+  fs.writeFileSync(planPath, canonical(plan));
+  fs.chmodSync(planPath, 0o400);
+  const guardBytes = Buffer.from("fixture static guard\n");
+  const guardSource = fs.readFileSync(new URL("../frontend_bootstrap_guard.c", import.meta.url));
+  assert.throws(() => prepareFrontendBootstrapExecution({ candidateDirectory: value.candidate,
+    hostSnapshot: value.host, outputDirectory: path.join(value.sandbox, "private", "tampered-gates"),
+    production: false, guardArtifact: { bytes: guardBytes, sha256: digest(guardBytes),
+      sourceSha256: digest(guardSource), image: "fixture@sha256", flags: ["-static"] } }),
+  /policy metadata mismatch/);
+});
+
+test("execution builder rejects changed offline bootstrap rollback policy", (t) => {
+  const value = fixture(t);
+  const planPath = path.join(value.candidate, "bootstrap.json");
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  plan.rollback.rule = "tampered rollback";
+  fs.chmodSync(planPath, 0o600);
+  fs.writeFileSync(planPath, canonical(plan));
+  fs.chmodSync(planPath, 0o400);
+  const guardBytes = Buffer.from("fixture static guard\n");
+  const guardSource = fs.readFileSync(new URL("../frontend_bootstrap_guard.c", import.meta.url));
+  assert.throws(() => prepareFrontendBootstrapExecution({ candidateDirectory: value.candidate,
+    hostSnapshot: value.host, outputDirectory: path.join(value.sandbox, "private", "tampered-rollback"),
+    production: false, guardArtifact: { bytes: guardBytes, sha256: digest(guardBytes),
+      sourceSha256: digest(guardSource), image: "fixture@sha256", flags: ["-static"] } }),
+  /policy metadata mismatch/);
 });
 
 test("standalone host audit captures every launcher tool and exact legacy preimage", (t) => {
