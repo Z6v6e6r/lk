@@ -6,6 +6,20 @@ not a full Nginx semantic/dependency graph or proof of applied configuration.
 This records observations, not an installed Partner API, an approved private
 binding or a deploy authorization. Earlier partial captures remain below.
 
+## Local source update after `888fe90`: worker declaration only
+
+The checker now accepts exactly one main `worker_processes 4` or `auto` declaration,
+including main-context include expansion. Missing/duplicate/non-main declarations
+fail closed. The old result schema and the separate four-actual-worker generation
+proof are unchanged. Existing baseline files cannot be rewritten in either direction.
+[Current local contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md).
+
+This removes the reproduced declaration mismatch locally, **not all actual-baseline
+compatibility gaps**. Early TLS/header and explicit-default requirements remain strict.
+No new host read or native validation occurred; the original redacted capture cannot
+be re-evaluated as configuration bytes. Its pins/helper/source attribution below are
+historical and unchanged. There is no fresh full-profile or production PASS.
+
 ## Compatibility read after `9901488`: completed with a profile mismatch
 
 The user confirmed continuation after release of the shared window. The coordinator
@@ -22,7 +36,7 @@ failure of our constrained source profile, **not a native Nginx error or outage*
 
 | Evidence | Observed result | Meaning and limit |
 | --- | --- | --- |
-| Root `worker_processes` | `auto` | Confirmed mismatch: the source profile accepts only literal `4` |
+| Root `worker_processes` | `auto` | Confirmed historical mismatch: source `1c0a82d` accepted only literal `4`; see the later local-only update above |
 | Process epoch | The pinned master and four workers matched before/after | Four observed processes do not turn an `auto` declaration into literal `4`, or prove a new configuration was applied |
 | File-local explicit TLS defaults | Zero exact `443 ssl default_server` and `[::]:443 ssl default_server` declarations in the structural projection | Not an effective default-selection analysis; the checker stopped before this gate |
 | Root-http early settings | TLS list differs from the closed profile; five explicit header settings absent in root-http | Not a claim that the effective settings are absent or insecure: included/server/default contexts still require separate reasoning |
@@ -34,7 +48,7 @@ It exported fixed metadata only; certificate/key/env/client-log references were 
 followed, and intentional host writes and probes were zero. Earlier captures and
 source/proof pins were retained, not replaced or resealed.
 
-No fix was applied. The next proposed scope is local profile compatibility work,
+No fix was applied during that read-only stage. Its proposed next scope was local profile compatibility work,
 retaining the actual four-worker proof and shared-default/header safety boundaries;
 do not change global server settings simply to satisfy this checker. This read-only
 approval does not authorize that source expansion, another SSH run, or deployment.

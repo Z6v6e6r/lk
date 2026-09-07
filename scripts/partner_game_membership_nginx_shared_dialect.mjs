@@ -57,7 +57,7 @@ export function checkLocalSharedNginxDialect(files) {
     try { records.set(name, scanNginxInventoryStructure(Buffer.from(bytes).toString("utf8"))); }
     catch { fail("LEXICAL_UNSUPPORTED"); }
   }
-  let visits = 0, rowCount = 0, sequence = 0, httpCount = 0;
+  let visits = 0, rowCount = 0, sequence = 0, httpCount = 0, workerDeclarations = 0;
   const global = {}, servers = new Map();
   const assign = (store, head, args) => { if (Object.hasOwn(store, head)) fail("DUPLICATE_SETTING"); store[head] = args; };
   const visit = (name, parents = [], stack = []) => {
@@ -94,11 +94,19 @@ export function checkLocalSharedNginxDialect(files) {
       }
       if (dataBlock) { if (row.block) fail("DATA_BLOCK_UNSUPPORTED"); continue; }
       if (head === "load_module") fail("MODULE_CUSTODY_UNPROVEN");
+      if (head === "worker_processes") {
+        // Only declaration compatibility: auto is NOT an observed worker count.
+        // The generation evaluator still requires four actual workers in every
+        // snapshot and complete coverage; no CPU lookup or caller override here.
+        if (kinds.length || row.block || args.length !== 1 || !["4", "auto"].includes(args[0])) fail("MAIN_UNSUPPORTED");
+        if (++workerDeclarations !== 1) fail("DUPLICATE_SETTING");
+        continue;
+      }
       if (!kinds.length) {
         if (row.block && head === "http" && !args.length) { if (++httpCount !== 1) fail("HTTP_CONTEXT"); continue; }
         if (row.block && head === "events" && !args.length) continue;
-        if (row.block || !["user", "worker_processes", "pid", "error_log", "worker_rlimit_nofile"].includes(head)) fail("MAIN_UNSUPPORTED");
-        if (!args.length || args.length > 2 || head === "worker_processes" && !same(args, ["4"])) fail("MAIN_UNSUPPORTED");
+        if (row.block || !["user", "pid", "error_log", "worker_rlimit_nofile"].includes(head)) fail("MAIN_UNSUPPORTED");
+        if (!args.length || args.length > 2) fail("MAIN_UNSUPPORTED");
         continue;
       }
       if (same(kinds, ["events"])) {
@@ -134,6 +142,7 @@ export function checkLocalSharedNginxDialect(files) {
   };
   visit("/etc/nginx/nginx.conf");
   if (httpCount !== 1) fail("HTTP_CONTEXT");
+  if (workerDeclarations !== 1) fail("WORKER_DECLARATION_REQUIRED");
   const defaults = new Map();
   for (const server of servers.values()) {
     for (const args of server.listeners ?? []) {

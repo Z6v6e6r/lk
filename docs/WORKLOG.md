@@ -2,6 +2,46 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: local `worker_processes auto` compatibility, строгие proof gates сохранены
+
+- Пользователь подтвердил локальный этап после `888fe90`; та же branch/worktree,
+  исходно clean, primary sole writer. Cached origin/main `07db0f6` не обновлялся и
+  не является exact-head release evidence. MODEL_ROUTE: parent, R3 Critical.
+- Только shared dialect runtime source: ровно одна main-декларация `4`/`auto`,
+  включая раскрытые include instances. Missing/duplicate/unsupported/non-main
+  вызывают отказ; comments и map/types data не считаются декларациями.
+- Не добавлены CPU inference, caller worker override, новые result fields или
+  production mode. Не менялись generation evaluator, overlay preservation,
+  early TLS/header/default predicates, ingress entry, Node-RED, package/lock.
+  Baseline bytes `auto → 4` и `4 → auto` переписать нельзя.
+- Before-fix focused regressions 2/2 ожидаемо FAIL. Targeted adapter после fix:
+  113/113 PASS, actual exit0; добавлено23tests, 11прежних unsafe-profile сценариев
+  проверяются и под4, и подauto. Intermediate два новых assertions использовали
+  неверное имя ошибки; исправлены на прежний EXISTING_FILE_CHANGED без смены guard.
+- Проверки auto подтверждают отказ при3/5workers в каждом baseline/before/after,
+  partial coverage остаётся NOT_PROVEN. Полный synthetic coverage — лишь local proof.
+  Независимое security/compatibility review source/tests: P0–P2=0, reviewer read-only.
+- Full sequential suite в sandbox:904/854PASS/50FAIL, actual exit1;26дополнительных
+  отказов только listenEPERM на own-loopback fixtures. Повтор с разрешёнными fixture
+  sockets:904/880PASS/24FAIL/0skip, actual exit1,33.804s. Exact24failing names совпали
+  с prior881baseline; новых нет. Release остаётся RED, старые receipts не resealed.
+- Scoped lint после удаления unused testbinding PASS. Root npm run lint:actual
+  exit0,0errors/387warnings. Зависимости использованы из существующего ancestor
+  node_modules; install/lock/symlink changes отсутствуют. Build/native NOT_RUN:
+  исторический build-input gap не закрыт, native rehearsal DEFERRED_BY_USER.
+- Координатор выделил LOCAL_HEAVY только для последовательных tests/lint. Все
+  процессы завершены, локально ресурс освобождён. Итоговое уведомление координатору
+  не доставлено: auto-review отклонил сообщение в другую задачу; обхода/повтора после
+  отказа нет. До этого первый запрос окна timeout, единственный разрешённый retry
+  доставлен и получил grant. Доставка итогов требует явного разрешения пользователя.
+- Docs inventory/adapter/test-plan и existing drawio отражают только local fix.
+  Actual full host profile не проверен: старый redacted capture не содержит исходных
+  config bytes; следующий actual rejection неизвестен. Early/default ограничения
+  не сняты. XML-only drawio-skill fallback, PNG/visualQA после прежнего сбоя не повторены.
+- Нет SSH, host/config/key/env reads, nativeNginx/reload, provider/shared-data writes,
+  автоматизации, push/PR/merge/CI/deploy/activation. Нужны отдельные actual-profile,
+  native/application/production и release gates; новым source approval их не заменить.
+
 ## 2026-09-07 — Partner: actual read PASS, shared profile CLOSED_PROFILE_REJECTED
 
 - Продолжение с clean `9901488`, та же branch/worktree, sole writer. Пользователь

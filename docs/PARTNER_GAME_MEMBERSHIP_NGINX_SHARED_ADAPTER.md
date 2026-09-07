@@ -36,6 +36,33 @@ instance. Поэтому два разных server-блока или повто
 смешиваются в один контекст. Верхняя граница: 2,048 file visits, 50,000 expanded
 rows, include depth 8; это намеренно ограниченный профиль, не полный Nginx parser.
 
+### Worker declaration: `4` или `auto`, без вывода числа процессов
+
+После checkpoint `888fe90` локально устранён первый подтверждённый source mismatch:
+допускается **ровно одна** effective-main декларация `worker_processes 4;` либо
+`worker_processes auto;`. Счётчик действует на раскрытые include instances: одна
+декларация в main include допустима, root + include и повторное включение файла с
+декларацией отклоняются. Отсутствие декларации, другие числа, `AUTO`, переменная,
+лишний аргумент, block или реальная декларация вне main также вызывают отказ.
+Комментарий и `map/types` data не подменяют main declaration.
+
+`auto` выбирает число процессов автоматически, а не обещает четыре:
+[официальный контракт Nginx](https://nginx.org/en/docs/ngx_core_module.html#worker_processes).
+Профиль не читает CPU/host, не принимает caller override и не вычисляет «ожидаемое»
+количество из декларации. Старый результат/flags/schema сохранён; самостоятельный
+dialect checker не создаёт source-owned preparation. Неизменённый generation evaluator
+по-прежнему требует ровно четыре actual workers в **каждом** baseline/before/after
+snapshot и полное joined coverage. Три/пять процессов дают отказ, частичное покрытие
+даёт `LOCAL_SHARED_WORKER_COVERAGE_NOT_PROVEN`, а не допуск другой топологии.
+
+Preservation запрещает изменять существующие bytes и в направлении `auto → 4`,
+и в обратном. Новая совместимость не разрешает менять сервер и **не означает**,
+что actual baseline целиком принят: TLS/default/header predicates ниже не ослаблены.
+Старый actual read относится к `1c0a82d`; новый source на сервере не исполнялся,
+raw config локально не копировался, прежние observation/helper/proof pins не обновлялись.
+
+### Остальные inherited/default ограничения сохранены
+
 Неизвестные effective-http директивы отклоняются. Разрешены только перечисленные
 в source table формы нейтральных/перекрытых настроек. В частности, отказ вызывают
 `error_page`, активные auth/mirror handlers, method/body/header substitutions,
@@ -137,11 +164,13 @@ proof, exact-head CI и разрешённые deploy/activation/postchecks. Nat
 guards совпали. Checker этого source checkpoint вернул **CLOSED_PROFILE_REJECTED /
 NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED**. Подтверждено `worker_processes auto` при
 требовании literal `4`; это несовместимость нашего профиля, не ошибка native Nginx.
-Четыре фактически наблюдённых worker процесса не устраняют этот source mismatch.
+Четыре фактически наблюдённых worker процесса не устраняли mismatch в том source.
 File-local данные о defaults/header settings не являются effective semantics;
 полный результат и границы — в [инвентаризации](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
-Сервер и профиль не менялись. Следующий local compatibility scope требует отдельного
-подтверждения; запрет live changes и отложенный native gate остаются в силе.
+В read-only этапе сервер и профиль не менялись. Затем пользователь подтвердил
+локальную адаптацию: выше описан только worker-declaration fix после `888fe90`.
+Новая проверка полного actual profile не выполнялась. Запрет live changes и
+отложенный native gate остаются в силе.
 
 Результаты тестов — в [тест-плане](PARTNER_GAME_MEMBERSHIP_TEST_PLAN.md).
 [Редактируемая инфографика](assets/partner-game-membership-ingress-evidence.drawio).

@@ -2,6 +2,49 @@
 
 ## Уровни доказательств
 
+### 7 сентября, после `888fe90`: local worker declaration compatibility
+
+Разрешён только локальный source этап в прежней ветке/worktree. Новый профиль
+принимает одну main-декларацию `4`/`auto`; topology/runtime, defaults, TLS/header
+predicates, result schema и production entry не изменены.
+
+| Проверка | Ожидаемая граница |
+| --- | --- |
+| `auto` или прежний `4` | Local preparation, flags false, native/loaded proof отсутствует |
+| Missing/comment-only, duplicate/mixed, другие числа/аргументы/block | Fail closed |
+| Один main include; root + include; повторный include | Один допускается, дубликаты считаются по include instances и отклоняются |
+| Map data / quoted text / comments; реальный non-main statement | Data не считается декларацией; настоящий statement вне main отклоняется |
+| Baseline `auto → 4` и `4 → auto` | `NGINX_SHARED_EXISTING_FILE_CHANGED`, без переписывания baseline |
+| Три/пять workers отдельно в baseline/before/after при `auto` | `NGINX_SHARED_GENERATION_SNAPSHOT_INVALID` |
+| Четыре workers, но partial response-ID/log coverage | `LOCAL_SHARED_WORKER_COVERAGE_NOT_PROVEN` |
+| Четыре correlated workers на synthetic inputs | Только local correlation, не production/application proof |
+| 11 прежних unsafe-profile сценариев под `4` и `auto` | Отказ на defaults, early headers, TLS downgrade, modules, listener options и context confusion сохранён |
+
+До исправления два focused regressions actual exit 1: `auto` отвергнут, missing
+declaration ошибочно принят. После исправления targeted adapter **113/113 PASS**,
+actual exit 0, 1.148 s; добавлено 23 test cases и расширены прежние 11 сценариев.
+В промежуточном прогоне два новых assertions ожидали неверное имя preservation
+ошибки; исправлены на существующий `EXISTING_FILE_CHANGED`, production-код не ослаблен.
+Scoped ESLint сначала обнаружил unused fixture binding после его локализации;
+лишняя переменная удалена, последующий scoped ESLint PASS.
+
+Полный последовательный Partner suite на финальном source:
+`node --test --test-concurrency=1 scripts/tests/partnerGameMembership*.test.mjs`.
+Первый sandbox run: 904 tests / 854 PASS / 50 FAIL, exit 1; дополнительные 26 failures
+имели `listen EPERM` на собственных loopback fixtures. После разрешения fixture
+sockets второй run: **904 tests / 880 PASS / 24 FAIL / 0 skipped**, exit 1, 33.804 s.
+Все 24 failing names точно совпали с предыдущим 881-test baseline; новых нет,
+23 добавленных tests PASS. Release gate остаётся **RED**; это не зелёный full suite.
+Security/compatibility review source и regressions: P0–P2 = 0, reviewer read-only.
+Root `npm run lint`: actual exit 0, **0 errors / 387 warnings**. Build не запускался;
+исторический build-input gap этим изменением не закрыт. Локальные тесты используют
+собственные fixture sockets, а не production или native Nginx.
+
+Свежий actual-host/full-profile/native результат **NOT_RUN**: redacted metadata
+прошлого чтения не являются исходными config bytes. Historical helper и pins не
+пересобраны, фактический следующий source rejection на сервере не известен.
+XML-only fallback drawio-skill; PNG/visual QA не повторяются после известного сбоя.
+
 ### 7 сентября: actual read завершён, закрытый профиль несовместим
 
 После `9901488` пользователь подтвердил продолжение и coordinator предоставил новое

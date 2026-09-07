@@ -308,4 +308,19 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Local auto declaration and retained proof gates">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LOCAL DECLARATION CHECK&#xa;Exactly one: 4 or auto&#xa;Count main include instances&#xa;Reject missing / duplicate / other" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="UNCHANGED SECURITY PROFILE&#xa;Explicit IPv4 + IPv6 defaults&#xa;Strict early TLS / header settings&#xa;No baseline byte rewrites" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SEPARATE WORKER PROOF&#xa;4 actual workers in each snapshot&#xa;Full response-ID / log coverage&#xa;3 / 5 or partial coverage ≠ PASS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1380" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="ACTUAL FULL PROFILE NOT RECHECKED&#xa;Historical redacted capture unchanged&#xa;Native / application NOT_RUN&#xa;No SSH / config writes / deploy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="460" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="auto is not worker-count proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="7" value="all gates still required" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="synthetic tests do not attest host" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

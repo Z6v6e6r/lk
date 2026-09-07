@@ -35,7 +35,65 @@ const baseFiles = () => [file("/etc/nginx/nginx.conf", main),
 const args = (baselineFiles = baseFiles()) => ({ baselineFiles, candidateFiles: [...baselineFiles, file(overlay.path, overlay.configuration)],
   expectedBaselineSha256: hashLocalNginxClosure(baselineFiles), overlay });
 const preparation = prepareLocalNginxSharedAdapter(args());
-const binding = readLocalNginxSharedAdapterBinding(preparation);
+const workerFiles = declaration => {
+  const files = baseFiles();
+  files[0].bytes = Buffer.from(main.replace("worker_processes 4;", declaration));
+  return files;
+};
+
+test("auto declaration is accepted without deriving a worker count or upgrading evidence", () => {
+  const input = args(workerFiles("worker_processes auto;"));
+  const prepared = prepareLocalNginxSharedAdapter(input);
+  assert.deepEqual(prepared.dialect, preparation.dialect);
+  assert.equal(prepared.state, preparation.state);
+  assert.equal(prepared.productionVerified, false);
+  assert.equal(prepared.dialect.nativeValidation, "NOT_RUN");
+  assert.equal(prepared.dialect.loadedConfiguration, "NOT_PROVEN");
+  assert.ok(input.baselineFiles[0].bytes.equals(input.candidateFiles[0].bytes));
+  assert.throws(() => verifyPartnerProductionIngress(prepared), /UNSUPPORTED_INGRESS_ADAPTER/);
+});
+
+for (const [name, declaration] of [
+  ["missing", ""], ["comment only", "# worker_processes auto;\n"],
+  ["duplicate auto", "worker_processes auto; worker_processes auto;"],
+  ["duplicate four", "worker_processes 4; worker_processes 4;"],
+  ["mixed declarations", "worker_processes auto; worker_processes 4;"],
+  ...["AUTO", "0", "1", "3", "5", "8", "04", "$workers", "auto 4", "4 auto", ""].map(value => [JSON.stringify(value), `worker_processes ${value};`]),
+  ["block", "worker_processes auto {}"],
+]) test(`worker declaration refuses ${name}`, () => {
+  assert.throws(() => prepareLocalNginxSharedAdapter(args(workerFiles(declaration))), /NGINX_SHARED_DIALECT_/);
+});
+
+test("worker declaration counts expanded main include instances, not unique files", () => {
+  const include = "include /etc/nginx/worker.conf;";
+  const files = workerFiles(include);
+  files.push(file("/etc/nginx/worker.conf", "worker_processes auto;"));
+  assert.deepEqual(prepareLocalNginxSharedAdapter(args(files)).dialect, preparation.dialect);
+  for (const declaration of [`worker_processes 4; ${include}`, `${include} ${include}`]) {
+    files[0].bytes = Buffer.from(main.replace("worker_processes 4;", declaration));
+    assert.throws(() => prepareLocalNginxSharedAdapter(args(files)), /NGINX_SHARED_DIALECT_DUPLICATE_SETTING/);
+  }
+});
+
+test("worker text in comments and map data is not a declaration; actual non-main declarations fail", () => {
+  const files = workerFiles("# worker_processes 4;\nworker_processes auto;");
+  files[1].bytes = Buffer.from('map $uri $existing { worker_processes auto; default "worker_processes 4;"; }');
+  assert.equal(prepareLocalNginxSharedAdapter(args(files)).productionVerified, false);
+  files[0].bytes = Buffer.from(main.replace("worker_processes 4;", ""));
+  assert.throws(() => prepareLocalNginxSharedAdapter(args(files)), /NGINX_SHARED_DIALECT_WORKER_DECLARATION_REQUIRED/);
+  for (const statement of ["worker_processes auto;", "location /other { worker_processes auto; }"]) {
+    const nested = workerFiles("worker_processes auto;");
+    nested[2].bytes = Buffer.from(nested[2].bytes.toString().replace("return 404;", statement));
+    assert.throws(() => prepareLocalNginxSharedAdapter(args(nested)), /NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED/);
+  }
+});
+
+for (const [before, after] of [["auto", "4"], ["4", "auto"]])
+  test(`shared preparation cannot rewrite worker declaration ${before} to ${after}`, () => {
+    const input = args(workerFiles(`worker_processes ${before};`));
+    input.candidateFiles[0] = file("/etc/nginx/nginx.conf", main.replace("worker_processes 4;", `worker_processes ${after};`));
+    assert.throws(() => prepareLocalNginxSharedAdapter(input), /NGINX_SHARED_EXISTING_FILE_CHANGED/);
+  });
 
 test("shared preparation retains unchanged explicit defaults, early settings and false live flags", () => {
   assert.equal(preparation.dialect.explicitUnchangedDefaults, 2);
@@ -126,10 +184,15 @@ for (const [name, mutate] of [
   ["missing early setting", files => { files[0].bytes = Buffer.from(main.replace("ignore_invalid_headers on;", "")); }],
   ["module load", files => { files[0].bytes = Buffer.from("load_module /etc/nginx/example.so;\n" + main); }],
 ]) test(`shared compatibility refuses ${name}`, () => {
-  const files = baseFiles(); mutate(files); assert.throws(() => prepareLocalNginxSharedAdapter(args(files)), /NGINX_SHARED_DIALECT_/);
+  for (const mode of ["4", "auto"]) {
+    const files = baseFiles(); mutate(files);
+    files[0].bytes = Buffer.from(files[0].bytes.toString().replace("worker_processes 4;", `worker_processes ${mode};`));
+    assert.throws(() => prepareLocalNginxSharedAdapter(args(files)), /NGINX_SHARED_DIALECT_/);
+  }
 });
 
-function data() {
+function data(prepared = preparation) {
+  const binding = readLocalNginxSharedAdapterBinding(prepared);
   const process = (pid, ticks, parentPid = 10) => ({ pid, parentPid, startTicks: String(ticks), executableSha256: sha("nginx binary"), draining: false });
   const baseline = { scope: "LOCAL_FIXTURE", configSha256: sha("unchanged root file"), master: process(10, 100, 1),
     workers: Array.from({ length: 4 }, (_, i) => process(11 + i, 200 + i)), bootSha256: sha("boot"), pidNamespaceSha256: sha("pidns"), networkNamespaceSha256: sha("netns") };
@@ -160,7 +223,25 @@ function data() {
   return { rows, observation: { scope: "LOCAL_PREPARATION", baseline, before, after: structuredClone(before),
     closure: { baselineSha256: binding.baselineSha256, candidateSha256: binding.candidateSha256 }, transport, startedAt: 1000, completedAt: 31000 } };
 }
-const evaluate = f => evaluateLocalNginxSharedGeneration({ preparation, observationBytes: json(f.observation), logBytes: jsonl(f.rows) });
+const evaluate = (f, prepared = preparation) => evaluateLocalNginxSharedGeneration({ preparation: prepared, observationBytes: json(f.observation), logBytes: jsonl(f.rows) });
+
+test("auto still requires four distinct correlated workers and rejects partial coverage", () => {
+  const prepared = prepareLocalNginxSharedAdapter(args(workerFiles("worker_processes auto;")));
+  const f = data(prepared);
+  const result = evaluate(f, prepared);
+  assert.equal(result.state, "LOCAL_SHARED_FOUR_WORKERS_CORRELATED_NOT_LIVE_PROOF");
+  assert.equal(result.productionVerified, false);
+  for (const row of f.rows) row.worker = "21";
+  assert.equal(evaluate(f, prepared).state, "LOCAL_SHARED_WORKER_COVERAGE_NOT_PROVEN");
+  for (const which of ["baseline", "before", "after"]) {
+    for (const count of [3, 5]) {
+      const wrong = data(prepared), workers = wrong.observation[which].workers;
+      if (count === 3) workers.pop();
+      else workers.push({ ...workers.at(-1), pid: workers.at(-1).pid + 1 });
+      assert.throws(() => evaluate(wrong, prepared), /NGINX_SHARED_GENERATION_SNAPSHOT_INVALID/);
+    }
+  }
+});
 
 test("four distinct new workers correlate by server response ID, not log order or caller probe ID", () => {
   const f = data(); f.rows.reverse(); const result = evaluate(f);
