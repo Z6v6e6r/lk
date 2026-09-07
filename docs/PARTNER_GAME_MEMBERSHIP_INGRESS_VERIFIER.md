@@ -38,9 +38,11 @@ live-операции. [Границы решения и следующий read
 Policy template остаётся `UNBOUND`, production entry — `UNSUPPORTED_INGRESS_ADAPTER`.
 
 После отдельного разрешения выполнен [bounded read-only inventory на 147](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
-Подтверждены service/process/build paths и scoped disk hashes, но scanner остановился
-на строке 465 PadlHub config; чужие vhost/backup contents не читались. Отдельный closing
-readback не превращает частичный lexical scan в full/applied-config proof.
+Подтверждены service/process/build paths и scoped disk hashes. Первоначальная ошибка
+сканера на строке 465 устранена: `#` внутри regex-token ошибочно считался комментарием.
+31 synthetic regression PASS; повторное guarded чтение завершилось для шести
+allowlisted config-файлов. Шесть чужих vhost/include-целей не читались. Результат
+остаётся `PARTIAL_SCOPED_READ`, а не full/applied-config или production proof.
 
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.

@@ -2,6 +2,37 @@
 
 ## Уровни доказательств
 
+### 7 сентября: исправление ограниченного inventory lexer
+
+После `b678973` закрыта [ошибка сканера на строке 465](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#line-465-scanner-discrepancy-resolved-not-nginx-validation).
+`node --test scripts/tests/partnerGameMembershipNginxLexical.test.mjs`: **31/31 PASS**.
+Тестовые config-строки синтетические; production tokens/строки не скопированы.
+
+| Сценарий | Проверяемое поведение |
+| --- | --- |
+| `#` внутри unquoted regex/word; synthetic line-465 fixture | Не начинается комментарий, открывающая скобка не теряется; hash/no-hash дают одинаковую структуру |
+| Комментарий на границе token, quotes, escapes, variables, CRLF | Прежние ограниченные правила и номера строк сохраняются |
+| Input/type/NUL/UTF-8 bytes, token count, nesting depth | Bounded reject; punctuation тоже расходует token limit |
+| Truncated escape/quote/variable, unnamed/unbalanced block | Фиксированный error code, без исходных значений в ошибке |
+| Попытка принять lexical result за production proof | Production entry по-прежнему `UNSUPPORTED_INGRESS_ADAPTER` |
+
+Полный последовательный Partner-набор `node --test --test-concurrency=1
+scripts/tests/partnerGameMembership*.test.mjs`: **731 tests / 707 PASS / 24 FAIL /
+0 skipped**, actual exit 1. Сравнение имён падений с предыдущим 700-test baseline:
+все 24 совпали, новых/исчезнувших 0. Исторические proof pins не менялись.
+Root `npm run lint`: actual exit 0, **0 errors / 387 warnings**; scoped ESLint PASS.
+Full release gate RED; root build не повторялся без прежних 17 VITE inputs.
+
+Отдельное фактическое read-only A/B чтение воспроизвело legacy scanner failure и
+307 statements после исправления. Следующий guarded inventory завершил чтение
+6 allowlisted config-файлов с before/after guards. Это **scoped disk evidence**, не
+native Nginx validation/application, HTTP/TLS probe или полный include graph:
+6 чужих targets не читались. Native rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
+Схема дополнена отдельной страницей границ; PNG export/visual QA NOT_RUN из-за
+ранее подтверждённого sandbox/Electron blocker. Production entry не открывался.
+
+### Предыдущие checkpoints
+
 Продолжение после `40c7239`: локальный controlled-application runner включает
 обязательные11probes после revoked, held-fd READY→transport+EOF→RESULT pipe,
 отдельную peer namespace и observer+2. Generation/link suite **139/139 PASS**

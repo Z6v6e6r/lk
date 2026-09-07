@@ -8,7 +8,7 @@ The user separately authorized this read-only SSH stage after choosing
 server/ingress writer. The existing branch/worktree was retained at source checkpoint
 `97a3038`; no production code, policy JSON or immutable release receipt was changed.
 
-## Observations and their limits
+## Historical first capture and its limits
 
 | Scope | Actual observation | Limit |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ the selected PadlHub config SHA-256 was
 `0fde6859932324136cd5b86ec08a410e4eebba2fd633f3cfc499b3099dfd3d63`.
 These are historical observations, not new production pins or release receipts.
 
-## Scope and actual checks
+## Scope and actual checks of the first capture
 
 - Five config files were opened through an exact allowlist: main config, MIME types,
   `lk_tournament_history_log.conf`, `lk_tournament_participants_guard.conf` and the
@@ -53,12 +53,67 @@ These are historical observations, not new production pins or release receipts.
   The separate closing readback is recorded separately; it does not convert that
   failure into a successful config scan.
 
+## Line-465 scanner discrepancy resolved, not Nginx validation
+
+The continuation after `b678973` retained the same branch/worktree and the
+coordinator's non-conflicting read-only window. The bug was in the private lexical
+scanner: it treated `#` inside an unquoted token as the beginning of a comment.
+For a regex such as the **synthetic** `^/a/[^/?#]+$`, this discarded the rest of the
+line, including an opening block brace. The eventual closing brace was then
+incorrectly reported as unbalanced. The Nginx 1.24 token reader starts a comment
+only in its token-start (`last_space`) branch, not inside that word.
+[Official Nginx 1.24 source](https://github.com/nginx/nginx/blob/release-1.24.0/src/core/ngx_conf_file.c#L618-L714).
+
+At 05:54:55 UTC, one guarded A/B read of the same exact PadlHub config hash above
+reproduced the legacy `UNBALANCED_CLOSE / 465`; changing only this lexical rule
+produced 307 statements. Redacted diagnostics identified affected token lines 53
+and 370 and the boolean `hashInCharacterClass: true`, without returning the tokens
+or raw lines. Host/boot/process identities and the exact file hash matched before
+and after. This was a scanner diagnostic, not a native Nginx grammar check.
+
+The fix is now in [the bounded lexical module](../scripts/partner_game_membership_nginx_lexical.mjs),
+with [31 synthetic regression tests](../scripts/tests/partnerGameMembershipNginxLexical.test.mjs).
+It has no I/O or production-verifier wiring. Limits are 128 KiB UTF-8 input,
+50,000 tokens including punctuation and depth 256; rejected input produces fixed
+error codes/line numbers. Returned token values are **private intermediate data**:
+only a separate allowlisted projector may emit selected metadata. Do not log or
+serialize the complete return value. This intentionally limited lexer is neither
+a generic Nginx parser nor an applied-config verifier.
+
+### Corrected scoped capture
+
+At 05:59:55 UTC, a fixed one-shot helper embedding the exact checked-in lexer source
+completed with SSH exit 0, final epoch checks and state
+`SCOPED_DISK_CONFIG_INVENTORY_NOT_APPLICATION_PROOF`. The original exact-path,
+ancestor/symlink, same-fd race checks and server TERM/KILL deadline were retained.
+Six files were read: the original five plus the explicitly allowed public
+`/etc/letsencrypt/options-ssl-nginx.conf` included by the PadlHub config.
+Certificate/key references were counted, **not followed**. Main and PadlHub hashes
+remained the same as the first capture.
+
+`graphCoverage: PARTIAL_SCOPED_READ`; six other vhost/include targets remain
+outside the read scope. No exact Partner hostname or 18894 upstream was observed
+in the scanned statements; this says nothing about unread targets or loaded
+configuration. Neither successful tokenization nor unchanged disk/process
+observations prove what configuration workers applied.
+
+- Targeted tests: **31/31 PASS**. Scoped ESLint and payload syntax/self-checks PASS.
+- Full sequential Partner suite: **731 tests / 707 PASS / 24 FAIL / 0 skipped**,
+  actual exit 1. All 24 failing names match the previous 700-test baseline; no new
+  failing names. Historical proof/source pins were not resealed. Release gate RED.
+- Root `npm run lint`: actual exit 0, **0 errors / 387 warnings**. Root build was
+  not rerun: the previously missing 17 VITE inputs remain an unclosed build gate.
+- Read-only security review: no P0–P2 findings in the bounded scanner/diagnostic
+  scope. This is not a security review of Nginx or a live ingress acceptance.
+- No server/provider/shared-data writes, key/cert/env/client-log reads, network
+  probes, `nginx -t/-T`, reload/restart, push, merge, deploy or activation. Both SSH
+  operations completed; the local heavy-test window was released after lint exit.
+
 ## Remaining work
 
-1. Resolve the limited scanner's line-465 discrepancy without exporting raw config
-   or treating a generic text parser as Nginx itself. Add a sanitized local regression
-   for the actual construction before relying on its inventory. Do not repair or
-   remove production config files based on this diagnostic result.
+1. **Closed locally:** the line-465 scanner bug is reproduced, fixed and covered by
+   synthetic regressions; the corrected scoped capture completed. No production
+   config repair or removal was necessary or authorized.
 2. Define the full service/config/include ownership and trusted application/probe
    procedure. The six other glob targets remain unread; the dedicated Partner Host/SNI,
    TLS/mTLS termination and route isolation have not been verified. A disk-only read

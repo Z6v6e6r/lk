@@ -217,4 +217,21 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Bounded inventory lexer fix">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LEGACY SCANNER BUG&#xa;# inside regex treated as comment&#xa;Opening brace discarded&#xa;False UNBALANCED_CLOSE at 465" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="PURE BOUNDED FIX&#xa;# comment only at token boundary&#xa;31 synthetic regressions PASS&#xa;Private tokens / redacted errors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="READ-ONLY GUARDED CAPTURE&#xa;Same scoped hash / process epoch&#xa;6 files; selected config: 307 statements&#xa;No raw config / key / cert export" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="PARTIAL DISK EVIDENCE ONLY&#xa;6 other include targets unread&#xa;No loaded-config / native proof&#xa;No probes or server changes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="RELEASE STILL BLOCKED&#xa;Full suite: 707 PASS / 24 prior FAIL&#xa;Native rehearsal DEFERRED / NOT_RUN&#xa;Ingress UNBOUND / no activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="synthetic reproduction" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="exact source in scoped helper" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="success is lexical only" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="not a production receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

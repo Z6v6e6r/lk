@@ -2,6 +2,38 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: устранена ложная ошибка Nginx inventory lexer
+
+- Продолжение после `b678973`, прежняя ветка/WT, primary sole writer. Узкий scanner
+  ошибочно считал `#` внутри regex-token началом комментария и терял `{`.
+  Минимальная synthetic reproduction подтверждена; official Nginx 1.24 token-start
+  semantics проверены. Это bug диагностического сканера, не Nginx configuration.
+- Guarded read-only A/B на том же config SHA, 05:54:55 UTC: legacy
+  UNBALANCED_CLOSE/465 против fixed307 statements; наружу только line53/370 и
+  hash-in-character-class boolean. Before/after host/boot/process/hash совпали.
+- Новый pure bounded module `scripts/partner_game_membership_nginx_lexical.mjs`:
+  128KiB/50k token/depth256 caps, fixed redacted errors, без I/O/live-verdict.
+  Raw token values остаются только private intermediate для allowlisted projector.
+- Corrected scoped inventory 05:59:55 UTC actual SSH exit0:6 allowlisted configs,
+  включая public TLS options; финальные epoch checks PASS. Certificate/key refs
+  не открывались;6 чужих vhost/include targets не читались. PARTIAL_SCOPED_READ,
+  не full/applied-config proof. Оба SSH завершены, server writes0.
+- Новые31 regression tests PASS; scoped ESLint/payload syntax/self-checks PASS.
+  Full sequential Partner:731/707PASS/24FAIL/0skip, exit1; exact24names совпали с
+  прежним baseline, новых0. Root lint exit0:0errors/387warnings. LOCAL_HEAVY
+  освобождён после фактических exit; source/proof pins не перепечатаны.
+- Root build NOT_RUN: прежние17 missing VITE inputs не закрыты. Native application
+  DEFERRED_BY_USER/NOT_RUN. Нет probes/nginx-t/-T/reload/restart/Docker/install,
+  provider/shared-data writes, push/PR/merge/CI/deploy/activation. Полный release RED.
+- Read-only security review bounded source/diagnostic: P0–P2=0. Обновлены inventory,
+  ingress и test-plan docs; в существующей drawio-схеме отдельная страница границ.
+  PNG export/visual QA NOT_RUN: ранее подтверждённый sandbox/Electron blocker,
+  повторный запуск export не выполнялся. UNBOUND/BLOCKED/unsupported сохранены.
+- XML structural validation:0errors/0warnings;28 local links/anchors PASS;
+  source hash совпал с bytes фактического inventory и проверок, production entry
+  byte-identical к HEAD. Read-only release/evidence review финального diff: P0–P2=0;
+  private SSH receipts этим review не аттестуются.
+
 ## 2026-09-07 — Partner: частичная read-only инвентаризация Nginx на 147
 
 - Отдельный user grant после `97a3038`, coordinator подтвердил отсутствие конфликтующих
