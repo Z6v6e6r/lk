@@ -1,0 +1,76 @@
+# Partner Nginx: bounded read-only inventory, 7 September 2026
+
+Result: **PARTIAL / NOT PRODUCTION VERIFICATION**. This records observations, not
+an installed Partner API, an approved private binding or a deploy authorization.
+
+The user separately authorized this read-only SSH stage after choosing
+`partner-api.padlhub.su` on `lk-primary-147`. The coordinator reported no conflicting
+server/ingress writer. The existing branch/worktree was retained at source checkpoint
+`97a3038`; no production code, policy JSON or immutable release receipt was changed.
+
+## Observations and their limits
+
+| Scope | Actual observation | Limit |
+| --- | --- | --- |
+| Service/process, 03:27:42 UTC | `nginx.service` active/running, no control process; one master and four workers; executable `/usr/sbin/nginx`; unit `/usr/lib/systemd/system/nginx.service`, no reported drop-ins | Metadata, not proof of loaded config |
+| Listeners | Nginx owns host-namespace listeners on 80/443; no listener on 18894 in that snapshot | No external connectivity/firewall probe; this does not establish absence in other namespaces |
+| Other relevant port | A non-Nginx listener on 1880 is bound to a non-loopback wildcard address | Process ownership and external reachability were not investigated; do not relabel this as confirmed Node-RED exposure |
+| Build paths, 03:30:16 UTC | Nginx 1.24.0; main config `/etc/nginx/nginx.conf`, prefix `/usr/share/nginx`, modules path `/usr/lib/nginx/modules`; default master arguments observed | `nginx -V` only, not `-t/-T`; this step checked boot/master-start/child-PID set and pathname binary, not every worker start epoch |
+| Main config on disk | Includes MIME types, two observed PadlHub `conf.d` files, and a sites-enabled glob; that glob resolves to the selected PadlHub config plus six other names | Other vhost/backup contents were outside the exact read scope |
+| Config names | `sites-enabled` contains ordinary vhost names and non-hidden backup/pre-release names; directory metadata collection later stopped at an unsupported basename shape in `sites-available` | A matching filename is not proof that its bytes are loaded by workers; no file was removed or renamed |
+| PadlHub config | The private bounded scanner reached `/etc/nginx/sites-enabled/padlhub.su`, then returned `UNBALANCED_CLOSE` at line 465 | A scanner limitation or syntax discrepancy, **not a finding that Nginx configuration is invalid**; no native validation was performed |
+| Closing readback, 03:48:44–45 UTC | Original host/boot, master/worker parent/start/executable identities matched; main and PadlHub config hashes matched the earlier scoped capture | Stable endpoints of this observation, not an atomic/full-tree snapshot or proof that no transient change occurred |
+
+The main config SHA-256 was
+`48c6a4ec1e1fd28ccf968490f07e34a1d7f755793b2108a3ed8670b1ee2a0aa2`;
+the selected PadlHub config SHA-256 was
+`0fde6859932324136cd5b86ec08a410e4eebba2fd633f3cfc499b3099dfd3d63`.
+These are historical observations, not new production pins or release receipts.
+
+## Scope and actual checks
+
+- Five config files were opened through an exact allowlist: main config, MIME types,
+  `lk_tournament_history_log.conf`, `lk_tournament_participants_guard.conf` and the
+  selected `sites-enabled/padlhub.su`. Unrelated vhost/backup contents were not read.
+- No private keys, credential/environment files, client logs or shared flows were
+  opened; certificate/key/log references were not followed. No Mongo/Viva calls,
+  HTTP/TLS probes, DNS changes, installs, `nginx -t/-T`, reload/restart, push, merge,
+  deployment or activation occurred. All diagnostic SSH processes exited.
+- Local metadata redaction: 8 assertions PASS. Local config lexer/path checks:
+  13 assertions PASS. Synthetic fd/ancestor/race checks: 7 scenarios PASS.
+  Script syntax checks passed. These checks do not cover the unrecognized live
+  config construction and are not native Nginx/runtime/API tests.
+- Security review found a post-hoc deadline P2 in the first metadata helper.
+  That completed capture took 127 ms; its original source identity was retained.
+  Subsequent helpers used monotonic checks and server-side TERM/KILL deadlines.
+- Before any config-content read, review found and closed two P1 risks: a path/open
+  race and an overbroad filename allowlist. The executed helper used exact paths,
+  root-owned non-writable ancestors, checked symlink chains, `O_NOFOLLOW`, same-fd
+  pre-read checks and repeated fd/path checks. Read-only re-review found no remaining
+  P0–P2 in this limited scope. This does not cover a compromised root or grant an
+  absolute filesystem-history guarantee.
+- The config collector's incomplete result did not reach its final epoch check.
+  The separate closing readback is recorded separately; it does not convert that
+  failure into a successful config scan.
+
+## Remaining work
+
+1. Resolve the limited scanner's line-465 discrepancy without exporting raw config
+   or treating a generic text parser as Nginx itself. Add a sanitized local regression
+   for the actual construction before relying on its inventory. Do not repair or
+   remove production config files based on this diagnostic result.
+2. Define the full service/config/include ownership and trusted application/probe
+   procedure. The six other glob targets remain unread; the dedicated Partner Host/SNI,
+   TLS/mTLS termination and route isolation have not been verified. A disk-only read
+   cannot supply the missing applied-config/generation proof.
+3. Retain fresh runtime/packet proof, exact-head CI, separately authorized deploy
+   and activation gates. Native application rehearsal remains
+   `DEFERRED_BY_USER / NOT_RUN`; no new partner signoff is required.
+
+`verifyPartnerProductionIngress()` remains `UNSUPPORTED_INGRESS_ADAPTER`; ingress and
+custody remain `UNBOUND`, activation remains `BLOCKED`. The planned hostname must not
+be sent to the partner as a working production endpoint on the basis of this inventory.
+
+Related: [production controls](PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md),
+[ingress verifier](PARTNER_GAME_MEMBERSHIP_INGRESS_VERIFIER.md),
+[existing evidence diagram](assets/partner-game-membership-ingress-evidence.drawio).

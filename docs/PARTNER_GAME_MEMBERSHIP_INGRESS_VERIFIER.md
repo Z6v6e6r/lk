@@ -37,6 +37,11 @@ reload/restart/upgrade не выполнялись. Выбирать Caddy бо�
 live-операции. [Границы решения и следующий read-only этап](PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md#выбранное-размещение--только-планирование).
 Policy template остаётся `UNBOUND`, production entry — `UNSUPPORTED_INGRESS_ADAPTER`.
 
+После отдельного разрешения выполнен [bounded read-only inventory на 147](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+Подтверждены service/process/build paths и scoped disk hashes, но scanner остановился
+на строке 465 PadlHub config; чужие vhost/backup contents не читались. Отдельный closing
+readback не превращает частичный lexical scan в full/applied-config proof.
+
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.
 [Редактируемая схема границ](assets/partner-game-membership-ingress-evidence.drawio).

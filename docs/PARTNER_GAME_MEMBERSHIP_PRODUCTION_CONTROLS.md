@@ -10,6 +10,11 @@ fail-closed контракт без заполненной production binding. �
 
 ## Выбранное размещение — только планирование
 
+Следующее отдельно разрешённое read-only окно выполнено 7 сентября:
+[частичный inventory и ограничения](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+Это не закрывает production binding: native validation, полный config graph и
+applied-config proof не получены; разрешения ниже остаются неизменными.
+
 7 сентября 2026 пользователь подтвердил следующий target:
 
 | Поле | Решение | Что ещё не подтверждено |

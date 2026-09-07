@@ -2,6 +2,36 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: частичная read-only инвентаризация Nginx на 147
+
+- Отдельный user grant после `97a3038`, coordinator подтвердил отсутствие конфликтующих
+  server/ingress writers. Ветка/WT сохранены; runtime/policy/pins не менялись.
+- Actual SSH metadata: active nginx.service, master+4workers, Nginx 80/443; host listener
+  18894 отсутствовал. Non-Nginx wildcard 1880 не объявляется подтверждённой внешней
+  доступностью или принадлежностью Node-RED. Build-only `nginx -V`: 1.24.0,
+  `/etc/nginx/nginx.conf`; все raw args/build/config outputs исключены из отчёта.
+- Metadata каталогов частичная: conf.d/sites-enabled получены; sites-available
+  остановлен по basename shape. Содержимое чужих vhost/backup не читалось.
+- До config-content read закрыты review P1: path/open race и широкий filename allowlist.
+  Exact config set, root/non-writable ancestors, bounded symlink chain, O_NOFOLLOW,
+  fstat перед bytes и fd/path checks после; повторный security review P0–P2 = 0.
+  Deadline P2 закрыт monotonic checks и внешним server TERM/KILL timeout; первый
+  metadata capture фактически 127 ms, его прежний source SHA не перепечатан.
+- Фактически прочитаны пять allowlisted configs. Lexical scan вернул UNBALANCED_CLOSE
+  на строке 465 padlhub.su, а не config PASS. Это не доказательство invalid Nginx config.
+  Closing readback 03:48:44–45 UTC отдельно подтвердил прежний process epoch и два
+  scoped hashes; он не повышает incomplete scan до full/applied-config proof.
+- Локальные проверки: 8 metadata assertions, 13 lexer/path assertions и 7 synthetic
+  fd/ancestor/race scenarios PASS; syntax PASS. Native Nginx, полный Partner suite и
+  root build/lint не запускались; source runtime не менялся. Проверенные результаты
+  и незакрытые границы: docs/PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md.
+- Нет key/env/client-log/shared-flow reads, Mongo/Viva/probes/DNS/host writes,
+  nginx -t/-T/reload/restart, install/push/PR/merge/deploy/activation. Все SSH процессы
+  завершены, ресурсов/lease не удерживаем. UNBOUND/BLOCKED/unsupported сохранены.
+- Docs-only scope4, пять новых local links, diff check и configured added-line
+  secret/PII scan PASS. Controls/verifier byte-identical к `97a3038`. Отдельный
+  read-only release review документов: P0–P2 = 0, private receipts не аттестовывались.
+
 ## 2026-09-07 — Partner: подтверждено планируемое production размещение
 
 - Пользователь подтвердил `partner-api.padlhub.su` на `lk-primary-147` только как
