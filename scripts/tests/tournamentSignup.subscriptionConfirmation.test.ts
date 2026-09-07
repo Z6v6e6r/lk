@@ -13,6 +13,87 @@ type GatewayResult = {
   status: number | null;
 };
 
+function loadCheckoutFunction(name: string, dependencies: Record<string, unknown>) {
+  const source = ts.createSourceFile("tournamentSignupApi.ts",
+    fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
+  const declaration = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+  const interlock = source.statements.find((node) => ts.isVariableStatement(node)
+    && node.declarationList.declarations.some((item) => item.name.getText(source) === "LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED"));
+  assert.ok(declaration);
+  assert.ok(interlock);
+  const compiled = ts.transpileModule(`${interlock.getText(source)}\n${declaration.getText(source).replace(/^export\s+/, "")}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  return new Function(...Object.keys(dependencies), `${compiled}; return ${name};`)(...Object.values(dependencies));
+}
+
+test("raw-backend rollout interlock neither adds money-only GT/T candidates nor replaces visit products", async () => {
+  for (const category of ["group_training", "tournament"]) {
+    for (const hasVisitProduct of [false, true]) {
+      const visit = { id: "fixture:owned-hub", source: "client-subscription", visitsTotal: 1 };
+      const available = hasVisitProduct ? [visit] : [];
+      const exercise = { id: "fixture:exercise", availableClientSubscriptions: available };
+      const requests: string[] = [];
+      let ownedSubscriptionReads = 0;
+      let candidateCollections = 0;
+      const checkout = loadCheckoutFunction("apiFetchTournamentVivaCheckout", {
+        TENANT_KEY: "fixture",
+        request: async (url: string, options: { method: string }) => {
+          assert.equal(options.method, "GET");
+          requests.push(url);
+          return { data: url.endsWith("/profile") ? { id: "fixture:actor" }
+            : url.includes("/exercises/") ? exercise : [], error: null, status: 200 };
+        },
+        isRecord: (value: unknown) => value !== null && typeof value === "object",
+        pickNestedRecord: () => null,
+        pickString: () => null,
+        resolveTournamentCustomPricing: () => null,
+        pickFirstArray: (value: Record<string, unknown>, keys: string[]) => value[keys[0]] || [],
+        normalizeVivaProducts: (value: unknown) => value,
+        filterClientSubscriptionsForExercise: (value: unknown) => value,
+        extractItems: (value: unknown) => value,
+        resolveSubscriptionCategoryDailyLimitCategoryFromEvent: () => category,
+        apiFetchSubscriptions: async () => { ownedSubscriptionReads += 1; return { data: [{}], error: null }; },
+        collectLk1MoneyDiscountCandidates: () => {
+          candidateCollections += 1;
+          return [{ ...visit, lk1MoneyDiscountCandidate: true, visitsTotal: null }];
+        },
+        resolveClientSubscriptionProductNames: async (value: unknown) => value,
+      });
+      const result = await checkout(exercise.id);
+      assert.equal(result.error, null);
+      assert.deepEqual(result.data.clientSubscriptions, available);
+      assert.deepEqual(result.data.purchasedProducts, available);
+      assert.deepEqual(exercise.availableClientSubscriptions, available);
+      assert.equal(ownedSubscriptionReads, 0);
+      assert.equal(candidateCollections, 0);
+      assert.equal(requests.length, 4, "only the existing read-only checkout requests remain");
+    }
+  }
+});
+
+test("a stale money-discount selection is rejected before booking, custom checkout or payment dispatch", async () => {
+  let dispatched = 0;
+  const legacy = { data: { bookingId: "fixture:legacy", paid: true }, error: null, status: 201 };
+  const create = loadCheckoutFunction("apiCreateTournamentVivaTransaction", {
+    apiCreateTournamentVivaBookingFromSubscription: async () => { dispatched += 1; return legacy; },
+    apiCreateTournamentCustomEnergyTransaction: async () => { dispatched += 1; return legacy; },
+    createVivaPaymentWatcher: () => { dispatched += 1; throw new Error("Unexpected payment dispatch"); },
+  });
+  for (const extra of [{}, { isCustomTournamentEnergy: true }, { source: "one-time" }]) {
+    const result = await create({ product: { source: "client-subscription", ...extra, lk1MoneyDiscountCandidate: true } });
+    assert.equal(result.status, 503);
+    assert.equal(result.data, null);
+    assert.equal(result.error.raw.code, "LK1_MONEY_DISCOUNT_NOT_READY");
+    assert.equal(dispatched, 0);
+  }
+  for (const flag of [undefined, false]) {
+    assert.equal(await create({ product: { source: "client-subscription", lk1MoneyDiscountCandidate: flag } }), legacy);
+  }
+  assert.equal(await create({ product: { isCustomTournamentEnergy: true } }), legacy);
+  assert.equal(dispatched, 3, "existing subscription and custom checkout dispatch are unchanged");
+});
+
 test("subscription confirmation retries the same pending operation until Viva returns a booking", async () => {
   const responses: GatewayResult[] = [
     { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 },
@@ -120,7 +201,7 @@ test("subscription checkout keeps the server money leg unpaid and rejects ambigu
   }
 });
 
-test("GT/T checkout displays only active owned money candidates without changing provider visit availability", () => {
+test("dormant GT/T collector retains active ownership checks without changing provider visit availability", () => {
   const source = fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8");
   const start = source.indexOf("function collectLk1MoneyDiscountCandidates(");
   const end = source.indexOf("export async function apiFetchTournamentVivaPublicCheckout", start);
