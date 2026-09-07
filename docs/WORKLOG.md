@@ -2,6 +2,25 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: подтверждено планируемое production размещение
+
+- Пользователь подтвердил `partner-api.padlhub.su` на `lk-primary-147` только как
+  target для планирования; ранее выбранный Nginx сохранён. Та же ветка/worktree,
+  исходный checkpoint `a444430`; новых веток/PR нет.
+- Решение записано в production-controls docs и связано с ingress/deploy runbooks.
+  Runtime code, tests, policy JSON, private binding и immutable receipts не менялись:
+  `exactHost: null`, `UNBOUND`, `BLOCKED`, production entry unsupported сохранены.
+- Следующий этап описан как отдельный bounded read-only inventory service/process/
+  listeners/config/include на `147`, без private keys/env/logs/flows и без `nginx -t/-T`,
+  probes/reload/install. Target choice не объявляется live proof. Наши infrastructure
+  gates не требуют нового partner signoff; native rehearsal остаётся отложенной.
+- В этом этапе нет SSH/DNS/TLS/native/Docker/secret/provider/shared-data операций,
+  push/PR/merge/CI/deploy/activation. Проверки предыдущего checkpoint не выдаются за
+  новый запуск; docs-only diff не требует повторного runtime/full Partner rehearsal.
+- Фактически прошли diff check, exact четырёхфайловый docs-only scope, два новых
+  local link/anchor и configured added-line secret/PII scan. Controls и verifier
+  byte-identical к `a444430`. Независимый read-only release review: P0–P2 = 0.
+
 ## 2026-09-07 — Partner: source-связка controlled application с generation/log collector
 
 - Продолжение после `40c7239`, прежняя ветка/WT; primary — sole writer.

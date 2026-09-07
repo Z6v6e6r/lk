@@ -32,6 +32,11 @@ production-controls/binding packaging обновлены отдельно; produ
 процесса и не security audit Ubuntu package. Конфиги, сертификаты и секреты не читались;
 reload/restart/upgrade не выполнялись. Выбирать Caddy больше не требуется.
 
+**Выбор 2026-09-07: `partner-api.padlhub.su` на `lk-primary-147`.** Это подтверждённое
+планируемое размещение, не DNS/host readback, private binding или разрешение на
+live-операции. [Границы решения и следующий read-only этап](PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md#выбранное-размещение--только-планирование).
+Policy template остаётся `UNBOUND`, production entry — `UNSUPPORTED_INGRESS_ADAPTER`.
+
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.
 [Редактируемая схема границ](assets/partner-game-membership-ingress-evidence.drawio).
@@ -185,15 +190,16 @@ timeout или неоднозначный reset отклоняется. Даже
 
 ## Следующая реализация: решения по критичности
 
-1. **P0, владелец инфраструктуры:** Nginx выбран, build 1.24.0 наблюдался read-only.
-   Осталось закрепить topology: exact host/SNI, место TLS/mTLS termination, proxy
-   chain, service/listeners, shared hostnames. Старый Caddy path в synthetic fixture
-   остаётся только fixture, он не назначает production topology.
+1. **P0, владелец инфраструктуры PadlHub:** Nginx выбран; планируемый exact Host/SNI
+   `partner-api.padlhub.su` и target `lk-primary-147` подтверждены пользователем.
+   Осталось установить фактическую topology: место TLS/mTLS termination, proxy
+   chain, service/listeners, shared hostnames и config/include closure. Историческое
+   наблюдение build 1.24.0 и synthetic fixture не заменяют fresh read-only inventory.
 2. **P0, инфраструктура + security:** определить доверенный read-only источник именно
    загруженной конфигурации и runtime generation. Одни файлы, `nginx -T`, `caddy adapt`
    или unit dump недостаточны. При отсутствии доказательства —
    `EFFECTIVE_CONFIG_UNPROVABLE`; reload/restart требует отдельного согласования.
-3. **P0, security + партнёр:** определить владельца reviewer key и безопасную передачу
+3. **P0, security + инфраструктура PadlHub:** определить владельца reviewer key и безопасную передачу
    SPKI pin, тестового client certificate и CA; секретные ключи не входят в Git/логи.
    Определить внешнюю точку probes, чтобы проверить shared host/direct sidecar,
    не путая loopback fixture с внешней недоступностью.
@@ -203,12 +209,13 @@ timeout или неоднозначный reset отклоняется. Даже
    Live receipt должен отдельно включать digest фактических probe-результатов,
    adapter/collector identity/version, доверенную vantage и одноразовый run challenge;
    подписанный audit artifact с допустимым повторным чтением не заменяет этот receipt.
-5. **P1, тестирование + партнёр:** физическая isolated TLS/mTLS matrix: positive control,
+5. **P1, тестирование PadlHub:** физическая isolated TLS/mTLS matrix: positive control,
    no/wrong cert, SNI/Host, query/OPTIONS, CORS, proxy headers и route isolation.
    Затем отдельно согласованные live probes. Ошибка транспорта не равна PASS.
 
-Это дополнение к вопросам партнёру и 16 `requiredBeforeDeploy` в `deployment-plan.json`,
-а не их замена. Mongo/Viva gates, отдельная интеграция, push, deploy и activation
+Это дополнение к 16 `requiredBeforeDeploy` в `deployment-plan.json`, а не их замена.
+Новый partner signoff для наших инфраструктурных проверок не требуется.
+Mongo/Viva gates, отдельная интеграция, push, deploy и activation
 остаются самостоятельными этапами; никакие текущие локальные функции их не открывают.
 
 ## Проверки

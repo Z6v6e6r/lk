@@ -969,6 +969,11 @@ provider postcheck: `docs/VIVA_USER_AGENT.md`.
 
 ## Partner Game Membership API v0.2
 
+7 сентября пользователь закрепил **планируемый** Host/SNI `partner-api.padlhub.su`
+на `lk-primary-147`, ingress Nginx. Это не действующий endpoint и не разрешение на
+DNS, сертификаты, SSH/readback, reload или deploy. Production-controls остаётся
+`UNBOUND`; [решение и границы следующей инвентаризации](PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md#выбранное-размещение--только-планирование).
+
 Этот endpoint нельзя выкладывать обычным frontend deploy. Сначала нужен свежий private
 Node-RED workspace с `lk-primary-147`, затем
 создать canonical user-owned parent с mode `0700` и выполнить

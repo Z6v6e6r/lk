@@ -4,10 +4,55 @@
 ingress UNBOUND / custody UNBOUND / activation BLOCKED**.
 Ниже сохранён исторический `SECURITY_AUDIT_PASS` для прежних exact bytes, не для
 нового [server-owned token resolver](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
-Документ и
-`scripts/partner_game_membership_production_controls.json` задают минимальный
-fail-closed контракт, но не содержат production hostname, CIDR, сертификат, путь
-размещения, получателей packet, секреты или разрешение на изменение production.
+`scripts/partner_game_membership_production_controls.json` задаёт минимальный
+fail-closed контракт без заполненной production binding. Выбранное размещение ниже —
+решение для планирования, а не проверенная конфигурация или разрешение на production.
+
+## Выбранное размещение — только планирование
+
+7 сентября 2026 пользователь подтвердил следующий target:
+
+| Поле | Решение | Что ещё не подтверждено |
+| --- | --- | --- |
+| Exact Host/SNI | `partner-api.padlhub.su` | DNS, сертификат и фактическая обработка Host/SNI |
+| Сервер | `lk-primary-147` | Fresh host/service/process/config identity для Partner |
+| Ingress | Nginx, ранее выбранный пользователем | Реальная service/listener/include topology и применение candidate |
+| Upstream | Прежний контракт: `http://127.0.0.1:18894` | Установка и readback отдельного sidecar |
+
+Это не рабочие настройки для передачи партнёру. Решение не задаёт audience, CIDR,
+сертификаты, secret custody, пути файлов или владельца production operator и не
+подтверждает доступность URL. Оно не разрешает SSH/readback, DNS, выпуск сертификатов,
+установку, reload/restart, смену секретов, deploy или activation. Общий Node-RED на
+`127.0.0.1:1880` и действующие vhosts должны остаться неизменными.
+
+Машиночитаемый policy template намеренно сохранён byte-for-byte: `exactHost: null`,
+ingress/custody `UNBOUND`, activation `BLOCKED`, все разрешения `false`.
+Выбор hostname не заполняет private binding и не пересчитывает исторические
+runtime/packet receipts. Production entry сохраняет `UNSUPPORTED_INGRESS_ADAPTER`.
+
+Следующий отдельный этап — **read-only инвентаризация Nginx на `lk-primary-147`**:
+
+1. Согласовать с координатором окно без конфликтующего ingress writer. Установить
+   связь host/boot → service → master/workers → executable и listeners, сохранив
+   только необходимые метаданные и hashes, без process environment и raw argv dump.
+2. Определить фактические config entrypoint/prefix и include graph, scoped
+   listeners/server names/upstreams, место TLS termination и proxy chain. Сохранить
+   только allowlisted поля и file identity/hash; не печатать и не экспортировать
+   полные config/unit dumps. Не предполагать `nginx.service` или путь из fixture.
+3. Не читать private keys, credentials/EnvironmentFile, клиентские журналы, Mongo,
+   Viva или общий `flows.json`; не запускать `nginx -t/-T`, reload/restart, установку,
+   сетевые HTTP/TLS probes или автоматическое исправление. Если безопасный readback
+   требует расширения этих границ, остановиться с конкретным blocker.
+4. Вернуть redacted inventory и точный план локального adapter diff с tests/recovery.
+   Файлы на диске и process snapshot не доказывают загруженную конфигурацию. При
+   drift/неполноте/чужой операции не повышать результат до live PASS.
+
+После inventory отдельно остаются trusted operator/vantage, config application и
+negative probes, свежая runtime closure, exact-head CI, deploy и activation gates.
+Отложенная native application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
+Инфраструктурные проверки и выпуск выполняет PadlHub; нового согласования или signoff
+от партнёра не требуется. Ответственность партнёра — подключить свой клиент к
+выпущенным методам; выбор target ещё не означает их выпуск.
 
 ## Что доказано изолированно
 
