@@ -155,10 +155,137 @@ read-only fixture mounts. Проверяются старый/новый/вос�
 URL, headers, legacy academy/assets/index/fonts, backend path, OPTIONS/POST и 404.
 Этот тест обязателен в CI только для изменения самого release-механизма.
 
-Однократное применение: под согласованным writer boundary сверить nginx и все
-artifact preimages; установить baseline/new symlink; проверить nginx-кандидат;
-guarded заменить exact config и выполнить nginx -t до reload; затем проверить
-16 публичных hashes, сохранённые legacy URL и браузерный сценарий. При ошибке вернуть
-только exact nginx source и reload. Чужой nginx drift запрещает rollback. Legacy
-каталог, baseline и candidate artifacts не удаляются. Это последовательность для
-отдельного утверждения, а не разрешение выполнить её из offline builder.
+## Bootstrap execution bundle
+
+Runtime bundle готовится только по свежему (не старше 15 минут) read-only snapshot
+целевого хоста. Сначала clean committed checkout создаёт отдельный audit kit без импорта
+repository modules или `node_modules`:
+
+Production entry не проходит через `npm`: родительский npm/Node успел бы обработать
+`NODE_OPTIONS` до внутреннего `env -i`. Из clean checkout exact builder сначала извлекается
+из текущего commit системным Git в новый private каталог. Затем absolute Node, SHA которого
+зафиксирован и повторно проверен непосредственно перед запуском, получает только явно
+заданное чистое окружение:
+
+```bash
+/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
+  /bin/bash -c '
+set -euo pipefail
+readonly REPOSITORY="$1" EXPECTED_COMMIT="$2" EXPECTED_BUILDER_SHA256="$3"
+readonly EXPECTED_NODE_SHA256="$4" AUDIT_OUTPUT="$5"
+readonly -a GIT=(/usr/bin/git --no-replace-objects -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null -c core.attributesFile=/dev/null
+  -c core.excludesFile=/dev/null -c protocol.file.allow=never)
+[[ -z "$("${GIT[@]}" -C "$REPOSITORY" status --porcelain=v1)" ]]
+[[ "$("${GIT[@]}" -C "$REPOSITORY" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]]
+[[ "$("${GIT[@]}" -C "$REPOSITORY" show
+  "$EXPECTED_COMMIT":scripts/prepare_frontend_bootstrap_execution.mjs |
+  /usr/bin/shasum -a 256 | /usr/bin/awk "{print \$1}")" == "$EXPECTED_BUILDER_SHA256" ]]
+[[ "$(/usr/bin/shasum -a 256 /usr/local/bin/node |
+  /usr/bin/awk "{print \$1}")" == "$EXPECTED_NODE_SHA256" ]]
+PRIVATE_BUILDER=$(/usr/bin/mktemp -d /private/tmp/lk-frontend-builder.XXXXXX)
+"${GIT[@]}" -C "$REPOSITORY" show
+  "$EXPECTED_COMMIT":scripts/prepare_frontend_bootstrap_execution.mjs > "$PRIVATE_BUILDER/builder.mjs"
+/bin/chmod 0400 "$PRIVATE_BUILDER/builder.mjs"
+[[ "$(/usr/bin/shasum -a 256 "$PRIVATE_BUILDER/builder.mjs" |
+  /usr/bin/awk "{print \$1}")" == "$EXPECTED_BUILDER_SHA256" ]]
+/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
+  LK_FRONTEND_REPOSITORY="$REPOSITORY" LK_FRONTEND_BUILDER_COMMIT="$EXPECTED_COMMIT" \
+  LK_FRONTEND_BUILDER_SHA256="$EXPECTED_BUILDER_SHA256" \
+  LK_FRONTEND_NODE_PATH=/usr/local/bin/node LK_FRONTEND_NODE_SHA256="$EXPECTED_NODE_SHA256" \
+  /usr/local/bin/node "$PRIVATE_BUILDER/builder.mjs" --audit-kit "$AUDIT_OUTPUT"
+printf "%s\n" "$PRIVATE_BUILDER"
+' bootstrap /absolute/clean/checkout FROZEN_COMMIT \
+  FROZEN_BUILDER_SHA256 FROZEN_NODE_SHA256 \
+  /private/bootstrap/new-audit-kit
+```
+
+`launcherSha256` и `auditSourceSha256` из результата фиксируются вне переносимого каталога.
+После копирования на хост launcher и audit source должны быть root-owned, unaliased и иметь
+режимы 0500/0400. Перед первым запуском SHA launcher сверяется с отдельно зафиксированным
+значением. Затем launcher открывает себя, `/usr/bin/node` и audit source один раз, проверяет
+custody и SHA тех же FD, очищает окружение и делает `fexecve`:
+
+```bash
+/root/frontend-bootstrap-audit/launcher audit LAUNCHER_SHA256 \
+  /root/frontend-bootstrap-audit/audit.mjs AUDIT_SOURCE_SHA256
+```
+
+`audit_frontend_bootstrap_host.mjs` фиксирует в snapshot SHA фактически исполненных
+launcher/Node/source, machine
+identity, topology/stat/hash nginx config, каталогов, Node/curl/nginx/systemctl и системных
+утилит, полный установленный комплект, preserved legacy и отсутствие старого bootstrap
+state. Snapshot и private candidate передаются локальному builder:
+
+Тот же verified committed builder и заново проверенный absolute Node создают execution bundle:
+
+```bash
+/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
+  /bin/bash -c '
+set -euo pipefail
+readonly REPOSITORY="$1" EXPECTED_COMMIT="$2" EXPECTED_BUILDER_SHA256="$3"
+readonly EXPECTED_NODE_SHA256="$4" PRIVATE_BUILDER="$5"
+[[ "$(/usr/bin/shasum -a 256 /usr/local/bin/node |
+  /usr/bin/awk "{print \$1}")" == "$EXPECTED_NODE_SHA256" ]]
+[[ "$(/usr/bin/shasum -a 256 "$PRIVATE_BUILDER/builder.mjs" |
+  /usr/bin/awk "{print \$1}")" == "$EXPECTED_BUILDER_SHA256" ]]
+/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
+  LK_FRONTEND_REPOSITORY="$REPOSITORY" LK_FRONTEND_BUILDER_COMMIT="$EXPECTED_COMMIT" \
+  LK_FRONTEND_BUILDER_SHA256="$EXPECTED_BUILDER_SHA256" \
+  LK_FRONTEND_NODE_PATH=/usr/local/bin/node LK_FRONTEND_NODE_SHA256="$EXPECTED_NODE_SHA256" \
+  /usr/local/bin/node "$PRIVATE_BUILDER/builder.mjs" "$6" "$7" "$8"
+' bootstrap /absolute/clean/checkout FROZEN_COMMIT \
+  FROZEN_BUILDER_SHA256 FROZEN_NODE_SHA256 \
+  /private/tmp/lk-frontend-builder.XXXXXX /private/bootstrap/offline-candidate \
+  /private/bootstrap/host-snapshot.json /private/bootstrap/new-execution
+```
+
+Production builder запускается с очищенным окружением, использует только Node built-ins,
+требует clean committed checkout и до чтения входов сверяет всю рекурсивную execution
+closure с точным Git commit. Он не загружает repository modules или `node_modules`, повторно
+строит nginx candidate из source, сравнивает байты, дважды собирает одинаковые статические
+Linux launcher и guard в pinned network-disabled Docker image и
+отклоняет нерепродуцируемый ELF. Новый каталог создаётся вне repository: все каталоги
+0700, `payload/launcher`, `payload/guard` и `payload/runtime.mjs` 0500, остальные файлы 0400.
+`manifest.json` связывает exact audit producer, host, repository sources, launcher/guard
+build, runtime source, offline plan, source/candidate nginx и все payload hashes. Его SHA
+определяет единственный допустимый root-путь
+`/root/.padlhub-frontend-bootstrap-<manifest-sha256>`.
+
+Guard запускается только через independently pinned `payload/launcher`: launcher проверяет
+root custody и внешний SHA exact guard FD, затем делает `fexecve`. Guard повторно проверяет
+себя, открывает exact Node/runtime через `O_NOFOLLOW`, очищает окружение и запускает Node по
+проверенному FD. Каждый runtime child получает отдельный process group; при ошибке, выходе с
+живым потомком или hard timeout guard убивает и reap-ит всю группу до освобождения locks.
+`preflight` выполняет read-only `inspect` до создания lock-файлов.
+Остальные действия держат global bootstrap и общий nginx-writer flock, а после durable
+инициализации также release flock. Существующий lock с неверным owner/mode/type/nlink
+отклоняется без chmod/chown.
+
+Runtime повторно проверяет bundle и host identity, пишет global/release lease и durable
+INTENT до публикации. Release root с blocking lease публикуется одним rename; baseline
+создаётся через O_EXCL, hard-link publication и fsync, `current` — exact relative symlink.
+Guard меняет только известный nginx source/candidate: `renameat2(RENAME_EXCHANGE)`, затем
+сверяет displaced inode/hash и при расхождении выполняет обратный exchange. После этого
+runtime выполняет `nginx -t`, journal-before-reload, reload и readback 16 URL через
+loopback origin и публичный маршрут, включая CORS/cache, OPTIONS, candidate POST 403,
+source POST 405 и preserved legacy.
+
+Действия guard принимают явный `--authority`: `apply` — `CONFIRM_EXACT_BOOTSTRAP`,
+`recover` — `CONFIRM_EXACT_BOOTSTRAP_RECOVERY`, `rollback` —
+`CONFIRM_EXACT_BOOTSTRAP_ROLLBACK`, `finalize` — `CONFIRM_EXACT_BOOTSTRAP_FINALIZE`.
+`apply` заканчивается durable `SERVER_SUCCESS` и сохраняет lease. После отдельного
+браузерного smoke оператор выбирает `finalize` либо `rollback`; только `finalize` пишет
+terminal SUCCESS и снимает lease. `recover` продолжает durable rollback intent, известную
+инициализацию или candidate state; неизвестный config/current/release/journal drift
+оставляет leases. Terminal receipt fsync-ится до снятия lease, поэтому повторный recover
+безопасно завершает частично снятую блокировку. Legacy каталог и retained release не
+удаляются.
+
+`npm run test:frontend-bootstrap-runtime` проверяет state machine, source cross-binding и
+crash recovery, включая partial temp, hardlink orphan и невозможный candidate/current state.
+`npm run test:frontend-bootstrap-guard` в pinned Docker проверяет воспроизводимую static
+сборку, independent launcher, подменённый guard, clean-env exact-FD audit/runtime execution,
+process-group cleanup, lock custody, atomic exchange и отказ без изменения current config
+при неверном preimage. Execution bundle не разрешает upload, nginx replace, reload или
+другую live mutation.
