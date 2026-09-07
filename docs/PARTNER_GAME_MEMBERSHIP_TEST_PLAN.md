@@ -2,6 +2,52 @@
 
 ## Уровни доказательств
 
+### 7 сентября: локальная shared-adapter связка
+
+[Shared adapter contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md) продолжает
+`3b89c38` в прежней ветке/worktree. Local preparation, отдельный shared transport
+и four-worker evaluator реализованы; production entry и старые receipts не менялись.
+
+| Область | Проверяемые отказы и границы |
+| --- | --- |
+| Preservation / input | Один private snapshot, Buffer-method/getter/symbol rejection, clone не становится trusted preparation |
+| Shared inheritance | Unknown/опасные http handlers, include-instance context, реальные объявления map/set/captures против обычных references |
+| Global variable namespace | Case-insensitive map/set, три PCRE capture формы; bare apostrophe в location/map проверяется по raw и decoded token |
+| Default listeners | Оба explicit unchanged defaults, точные early TLS/header settings; implicit/address-specific/HTTP2/proxy-protocol/conflict reject |
+| Shared transport | 27 фиксированных attempts, actual response ID, duplicate/malformed response header reject, configured client ID, invalid HMAC, GET/OPTIONS only |
+| Generation / log | Четыре новых workers, epoch/startTicks/PPID/executable, separate closure hashes, server-ID join, TLS/leaf/no-store/limiters, no stale/extra/retry rows |
+| Coverage / negatives | Missing worker → NOT_PROVEN; чужой vhost/TLS без ID и log → uncorrelated, не server-denial PASS |
+| Host session | Fixed nonroot Linux reader, real held FD на synthetic fixture files, final snapshot, outer deadline до/после log finish, repeat finish rejected |
+
+Physical targeted collector run: **2/2 PASS**, actual exit 0, 16.791 s; это реальные
+loopback TLS sockets, не Nginx. После исправления fixture path два host-session tests
+прошли отдельно; enhanced deadline regression также PASS. Bare-apostrophe regressions
+**2/2 PASS**. Фактический итог общего набора приведён ниже.
+
+Первый full run: 881 tests / 856 PASS / 25 FAIL, actual exit 1. Дополнительное падение
+старого interface assertion выявило новое поле в `row.words`; сохранена прежняя
+форма words, raw spelling перенесён в отдельный `rawWords`, assertion не ослаблен.
+Affected interface + два bare-capture regressions: **3/3 PASS**, scoped rereview PASS.
+
+Финальный `node --test --test-concurrency=1 scripts/tests/partnerGameMembership*.test.mjs`:
+**881 tests / 857 PASS / 24 FAIL / 0 skipped**, actual exit 1, 34.022 s. Все **92 новых
+теста прошли**; exact 24 failing names совпали с baseline `3b89c38`, новых/исчезнувших
+0. Runtime/packet proof pins не resealed, полный release gate **RED**.
+Root `npm run lint`: actual exit 0, **0 errors / 387 warnings**. Согласованный слот
+освобождён после обоих actual exits. Scoped ESLint PASS; XML validator 0 errors /
+0 warnings; local doc links/anchors 67 PASS. Root build не повторён: input gap
+предыдущего checkpoint не закрывался этим этапом.
+
+Read-only security review закрыл snapshot reread и global-variable shadowing,
+включая bare apostrophe capture. Reliability review закрыл late final-snapshot
+deadline. Финальные scoped source verdicts: P0–P2 = 0, не native attestation.
+
+Native four-worker Nginx/application/external vantage и production key/module/closure
+custody **NOT_RUN / NOT_PROVEN**. Rehearsal остаётся **DEFERRED_BY_USER**, не снята
+этим этапом. Нет SSH/реальных cert-key-env-log reads/deploy/activation. Drawio-skill:
+существующая схема дополнена XML-only страницей; PNG/visual QA NOT_RUN после
+известного sandbox/Electron blocker, повторного export нет.
+
 ### 7 сентября: локальный shared-overlay source slice
 
 [Renderer/checker contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md) выдаёт

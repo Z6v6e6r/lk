@@ -10,7 +10,7 @@ import path from "node:path";
 import tls from "node:tls";
 import { performance } from "node:perf_hooks";
 import test, { before, after } from "node:test";
-import { collectPartnerNginxTransportObservations } from "../partner_game_membership_nginx_probes.mjs";
+import { collectPartnerNginxTransportObservations, collectPartnerNginxSharedTransportObservations, PARTNER_SHARED_COVERAGE_PROBES } from "../partner_game_membership_nginx_probes.mjs";
 import { PARTNER_INGRESS_REQUIRED_PROBES, verifyPartnerProductionIngress } from "../partner_game_membership_ingress_evidence.mjs";
 import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
 import { createPartnerRawRequestGuard } from "../partner_game_membership_sidecar/raw-request-guard.cjs";
@@ -145,6 +145,47 @@ test("actual TLS verification rejects server key drift before sending HTTP", asy
   assert.equal(f.requests.length, 0);
   assert.equal(result.probes[0].outcome, "TLS_IDENTITY_MISMATCH");
   assert.equal(result.productionVerified, false);
+});
+
+test("shared collector uses actual response IDs and finite coverage attempts, never caller IDs", async t => {
+  const f = await serve(t, (socket, raw) => {
+    const external = /Host: shared\.invalid\r\n/i.test(raw);
+    const wrongHost = /Host: unbound\.invalid\r\n/i.test(raw);
+    const malformed = raw.startsWith("GET /flows ");
+    const id = hash(`server-generated-${f.requests.length}`).slice(0, 32);
+    const headers = external ? "" : wrongHost ? `X-Padlhub-Ingress-Request-Id: ${id}\r\nx-padlhub-ingress-request-id: ${id}\r\n`
+      : `X-Padlhub-Ingress-Request-Id: ${malformed ? "not-hex" : id}\r\n`;
+    socket.end(reply(503, headers));
+  });
+  const result = await collectPartnerNginxSharedTransportObservations({ ...f.options, clientId: "synthetic-partner" });
+  assert.equal(result.state, "NGINX_SHARED_TRANSPORT_OBSERVATIONS_NOT_INGRESS_PROOF");
+  assert.deepEqual(result.probes.map(p => p.id), [...PARTNER_INGRESS_REQUIRED_PROBES, ...PARTNER_SHARED_COVERAGE_PROBES]);
+  assert.equal(result.probes.length, 27);
+  assert.equal(result.probes[0].ingressRequestId, hash("server-generated-1").slice(0, 32));
+  for (const id of ["wrongHost", "editorAdmin"]) {
+    const p = result.probes.find(p => p.id === id); assert.equal(p.errorCode, "INGRESS_REQUEST_ID_REJECTED");
+    assert.equal(p.ingressRequestId, null); assert.equal(p.complete, false);
+  }
+  assert.equal(result.probes.find(p => p.id === "sharedHost").ingressRequestId, null);
+  for (const raw of f.requests) {
+    assert.match(raw, /X-Padlhub-Client-Id: synthetic-partner\r\n/);
+    assert.doesNotMatch(raw, /X-Padlhub-Ingress-Request-Id:/i);
+    assert.match(raw, /X-Padlhub-Signature: not-a-v2-signature\r\n/);
+    assert.match(raw, /^(GET|OPTIONS) /); assert.equal(raw.split("\r\n\r\n")[1], "");
+  }
+  assert.equal(result.productionVerified, false); assert.equal(result.applicationEvidence, "NOT_COLLECTED");
+});
+
+test("shared collector rejects injected schema/client ID and Buffer methods before sockets", async t => {
+  let sockets = 0, methods = 0;
+  t.mock.method(tls, "connect", () => { sockets++; throw new Error("not reached"); });
+  const options = { ...input(), clientId: "synthetic-partner" };
+  const buffer = Buffer.from(options.clientCertificateBytes); buffer.toString = () => { methods++; return "wrong"; };
+  for (const delta of [{ clientId: "a\r\nInjected: true" }, { attempts: 100 }, { ingressRequestId: "a".repeat(32) },
+    { clientCertificateBytes: buffer }, { [Symbol("extra")]: true }])
+    await assert.rejects(collectPartnerNginxSharedTransportObservations({ ...options, ...delta }), /INVALID_NGINX_PROBE_INPUT/);
+  await assert.rejects(collectPartnerNginxSharedTransportObservations({ ...options, get clientId() { methods++; return "synthetic-partner"; } }), /INVALID_NGINX_PROBE_INPUT/);
+  assert.equal(sockets, 0); assert.equal(methods, 0);
 });
 
 test("actual mTLS rejection is an observation, not proof of upstream isolation", async t => {

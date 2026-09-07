@@ -51,7 +51,11 @@ targets сохранены; config, routes, сертификаты и production
 Это первый production-layout source slice: один добавочный exact-host vhost,
 собственный namespace, запрет inherited Real IP и сохранение переданных baseline
 bytes. Не host custody/semantic proof и не подключённый production collector;
-старый log correlation dialect ещё требует адаптации. Live entry остаётся закрыт.
+старый log correlation dialect не выдаёт новых доказательств. Теперь реализована
+[отдельная shared-layout source связка](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md):
+closed inherited/default profile, server-response-ID collector и четыре новых
+workers, с отдельным результатом NOT_PROVEN при недостаточном coverage. Это не
+native application или trusted production operator. Live entry остаётся закрыт.
 
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.

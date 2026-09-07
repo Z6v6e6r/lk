@@ -193,7 +193,8 @@ The planned URL must still not be represented as operational.
    checker](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md). Its twelve-file fixture
    is synthetic, not this host capture. It checks candidate/base drift and preserves
    supplied shared/backup bytes without issuing custody or applied-config proof.
-   Shared semantic validation, production log/collector/all-worker contracts,
+   [Shared dialect and log/collector/four-worker contracts](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md)
+   now have a separate local implementation, not native/live proof. Actual shared semantic validation,
    exact TLS/mTLS/custody inputs, trusted application operator, external vantage,
    failure/recovery and route isolation still need implementation/evidence/authority.
    Do not enable production entry or reseal this capture from a new local source hash.

@@ -21,8 +21,11 @@ const KEYS = ["targetAddress", "sourceAddress", "port", "sidecarPort", "exactHos
   "serverCaBytes", "clientCertificateBytes", "clientKeyBytes", "wrongClientCertificateBytes", "wrongClientKeyBytes",
   "approvedServerSpkiSha256", "approvedClientSpkiSha256", "approvedWrongClientSpkiSha256"];
 const BUFFER_KEYS = KEYS.filter(key => key.endsWith("Bytes"));
-const exact = value => value && Object.getPrototypeOf(value) === Object.prototype
-  && isDeepStrictEqual(Object.keys(value).sort(), [...KEYS].sort());
+const exact = (value, keys = KEYS) => value && Object.getPrototypeOf(value) === Object.prototype
+  && Reflect.ownKeys(value).every(key => typeof key === "string")
+  && Object.values(Object.getOwnPropertyDescriptors(value)).every(d => Object.hasOwn(d, "value"))
+  && isDeepStrictEqual(Reflect.ownKeys(value).sort(), [...keys].sort());
+export const PARTNER_SHARED_COVERAGE_PROBES = Object.freeze(Array.from({ length: 16 }, (_, i) => `workerCoverage${String(i + 1).padStart(2, "0")}`));
 const spki = key => hash(key.export({ type: "spki", format: "der" }));
 
 function publicCertificate(bytes) {
@@ -35,11 +38,14 @@ function validKey(key) {
   return key.asymmetricKeyType === "rsa" && key.asymmetricKeyDetails.modulusLength >= 2048
     || key.asymmetricKeyType === "ec" && ["prime256v1", "secp384r1"].includes(key.asymmetricKeyDetails.namedCurve);
 }
-function prepare(input) {
-  if (!exact(input)) fail("INVALID_NGINX_PROBE_INPUT");
-  const options = { ...input };
+function prepare(input, shared = false) {
+  if (!exact(input, shared ? [...KEYS, "clientId"] : KEYS)
+    || shared && (typeof input.clientId !== "string" || !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(input.clientId))) fail("INVALID_NGINX_PROBE_INPUT");
+  const options = { ...input, shared };
   for (const field of BUFFER_KEYS) {
-    if (!Buffer.isBuffer(input[field]) || !input[field].length || input[field].length > 8192) fail("INVALID_NGINX_PROBE_INPUT");
+    if (!Buffer.isBuffer(input[field]) || Object.getPrototypeOf(input[field]) !== Buffer.prototype
+      || Reflect.ownKeys(input[field]).some(key => typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key))
+      || !input[field].length || input[field].length > 8192) fail("INVALID_NGINX_PROBE_INPUT");
   }
   for (const field of ["targetAddress", "sourceAddress"]) {
     // Deliberately narrow IPv4 dialect: no DNS, octal, mapped IPv6 or zone IDs.
@@ -79,7 +85,7 @@ function prepare(input) {
 }
 
 function plan(id, options, challenge) {
-  const probeId = hash(`PADLHUB-NGINX-PROBE-V1\n${challenge}\n${id}`);
+  const probeId = hash(`${options.shared ? "PADLHUB-NGINX-SHARED-PROBE-V1" : "PADLHUB-NGINX-PROBE-V1"}\n${challenge}\n${id}`);
   const route = `/lk/integrations/v1/operations/ingress-probe-${probeId}`;
   return { id, probeId, servername: id === "wrongSni" ? "unbound.invalid" : id === "sharedHost" ? options.sharedHost : options.exactHost,
     host: id === "wrongHost" ? "unbound.invalid" : id === "sharedHost" ? options.sharedHost : options.exactHost,
@@ -96,6 +102,7 @@ function observe(probe, options, window) {
       serverLeafSha256: null, serverSpkiSha256: null, actualClientLeafSha256: null,
       sourceAddress: null, peerAddress: null, peerPort: null,
       cacheControl: null, corsHeaderPresent: false, bodyBytes: 0, bodySha256: null,
+      ...(options.shared ? { ingressRequestId: null } : {}),
       startedAt: Date.now(), completedAt: null };
     let socket, request, agent, response, finished = false;
     const withinWindow = () => performance.now() - start < PROBE_MS && performance.now() - window.monotonic < SESSION_MS
@@ -164,7 +171,7 @@ function observe(probe, options, window) {
             // must be independently established by the future operator.
             headers: { Host: probe.host, Connection: "close", Accept: "application/json", "Accept-Encoding": "identity",
               "X-Padlhub-Probe-Id": probe.probeId,
-              "X-Padlhub-Client-Id": "ingress-probe-unregistered", "X-Padlhub-Key-Id": "ingress-probe-no-key",
+              "X-Padlhub-Client-Id": options.shared ? options.clientId : "ingress-probe-unregistered", "X-Padlhub-Key-Id": "ingress-probe-no-key",
               "X-Padlhub-Audience": "ingress-probe-unbound", "X-Padlhub-Timestamp": String(Math.floor(Date.now() / 1000)),
               "X-Padlhub-Nonce": probe.probeId, "Idempotency-Key": crypto.randomUUID(), "X-Correlation-Id": crypto.randomUUID(),
               "X-Padlhub-Signature": "not-a-v2-signature",
@@ -174,6 +181,13 @@ function observe(probe, options, window) {
             if (!guard()) return;
             result.httpStatus = res.statusCode;
             const names = res.rawHeaders.filter((_, index) => index % 2 === 0).map(name => name.toLowerCase());
+            if (options.shared) {
+              const ids = res.rawHeaders.filter((_, index) => index % 2 === 1 && res.rawHeaders[index - 1].toLowerCase() === "x-padlhub-ingress-request-id");
+              if (ids.length > 1 || ids.length === 1 && !/^[a-f0-9]{32}$/.test(ids[0])) {
+                finish("HTTP_REJECTED", "INGRESS_REQUEST_ID_REJECTED"); return;
+              }
+              result.ingressRequestId = ids[0] ?? null;
+            }
             result.corsHeaderPresent = names.some(name => name.startsWith("access-control-"));
             result.cacheControl = res.headers["cache-control"] === "no-store" ? "no-store" : null;
             if (res.statusCode < 200 || res.statusCode > 599 || new Set(names).size !== names.length
@@ -216,6 +230,29 @@ export async function collectPartnerNginxTransportObservations(input) {
     if (performance.now() - window.monotonic >= SESSION_MS || Date.now() < window.wall || Date.now() - window.wall >= SESSION_MS) fail("NGINX_PROBE_SESSION_EXPIRED");
     return Object.freeze({ state: "NGINX_TRANSPORT_OBSERVATIONS_NOT_INGRESS_PROOF", challenge,
       startedAt: window.wall, completedAt: Date.now(),
+      target: { address: options.targetAddress, sourceBindAddress: options.sourceAddress, port: options.port, sidecarPort: options.sidecarPort,
+        exactHost: options.exactHost, sharedHost: options.sharedHost }, probes,
+      productionVerified: false, deployAuthorized: false, activationAuthorized: false,
+      vantage: "UNATTESTED", applicationEvidence: "NOT_COLLECTED", upstreamAdmission: "NOT_COLLECTED" });
+  } finally { for (const field of BUFFER_KEYS) options[field].fill(0); }
+}
+
+// Separate shared-layout dialect. Finite read-only attempts, actual response IDs,
+// no production verdict. A trusted future operator must establish default-off.
+export async function collectPartnerNginxSharedTransportObservations(input) {
+  const options = prepare(input, true), window = { monotonic: performance.now(), wall: Date.now() };
+  const challenge = crypto.randomBytes(32).toString("hex"), probes = [];
+  try {
+    for (const id of [...PARTNER_INGRESS_REQUIRED_PROBES, ...PARTNER_SHARED_COVERAGE_PROBES]) {
+      // Avoid intentionally bursting the unchanged 2r/s partner limiter. Never
+      // retry/adapt on server outcomes; coverage shortfall stays NOT_PROVEN.
+      if (probes.length) await new Promise(resolve => setTimeout(resolve, 600));
+      if (performance.now() - window.monotonic >= SESSION_MS || Date.now() < window.wall || Date.now() - window.wall >= SESSION_MS) fail("NGINX_PROBE_SESSION_EXPIRED");
+      probes.push(await observe(plan(id, options, challenge), options, window));
+    }
+    if (performance.now() - window.monotonic >= SESSION_MS || Date.now() < window.wall || Date.now() - window.wall >= SESSION_MS) fail("NGINX_PROBE_SESSION_EXPIRED");
+    return Object.freeze({ state: "NGINX_SHARED_TRANSPORT_OBSERVATIONS_NOT_INGRESS_PROOF", challenge,
+      startedAt: window.wall, completedAt: Date.now(), clientId: options.clientId,
       target: { address: options.targetAddress, sourceBindAddress: options.sourceAddress, port: options.port, sidecarPort: options.sidecarPort,
         exactHost: options.exactHost, sharedHost: options.sharedHost }, probes,
       productionVerified: false, deployAuthorized: false, activationAuthorized: false,

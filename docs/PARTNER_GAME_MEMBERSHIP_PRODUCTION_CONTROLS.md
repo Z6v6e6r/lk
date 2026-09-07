@@ -61,8 +61,10 @@ negative probes, свежая runtime closure, exact-head CI, deploy и activati
 [shared-overlay renderer и проверка baseline byte preservation](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md).
 Он не заменяет standalone fixture и не выдаёт host custody/semantic/application
 proof; все deploy/activation flags false. Тестовые 12 файлов не являются копией
-боевой конфигурации. Далее нужны shared semantics и production collector/log/worker
-contract, затем отдельные live gates. [Оставшиеся границы](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-work).
+боевой конфигурации. [Shared profile и новый collector/log/four-worker contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md)
+теперь реализованы локально; actual baseline compatibility, native/shared behavior,
+trusted production operator и live gates не доказаны.
+[Оставшиеся границы](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-work).
 Отложенная native application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
 Инфраструктурные проверки и выпуск выполняет PadlHub; нового согласования или signoff
 от партнёра не требуется. Ответственность партнёра — подключить свой клиент к

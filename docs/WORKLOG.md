@@ -2,6 +2,49 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: завершена локальная shared Nginx adapter связка
+
+- Продолжение с `3b89c38` в прежнем WT/branch; primary sole writer, local-only
+  approval. Риск R3, MODEL_ROUTE: parent; security и reliability reviewers read-only.
+- Source files: `partner_game_membership_nginx_lexical.mjs`, `nginx_probes.mjs`,
+  `nginx_shared_overlay.mjs`, новые `nginx_shared_dialect.mjs` и
+  `nginx_shared_generation.mjs` (последние четыре с тем же `partner_game_membership_`
+  prefix, все в `scripts/`). Closed inherited/default profile, source-owned preparation,
+  новый shared transport и redacted request-ID/four-worker evaluator + fixture session.
+- Tests: новый `scripts/tests/partnerGameMembershipNginxSharedAdapter.test.mjs` и
+  дополненный `partnerGameMembershipNginxProbes.test.mjs`. 90 adapter tests и 2 новых
+  physical/schema collector tests, synthetic certs/proc metadata, реальные loopback TLS
+  и held FD; это не native Nginx/application или actual server state.
+- Shared profile запрещает неизвестные inherited handlers, переменные guard namespace
+  через map/set/три PCRE формы, implicit/conflicting defaults и неподдержанные listeners.
+  Один private snapshot для обеих проверок; actual host profile не аттестован.
+- Security P2 snapshot reread и variable shadowing (включая bare apostrophe capture)
+  закрыты. Reliability P2 общего deadline после final snapshot закрыт; finally cleanup
+  и регрессионный outer/log-window mismatch test. Финальные scoped verdicts P0–P2 = 0.
+- Первый полный прогон actual exit 1: 881/856 PASS/25 FAIL. Новый interface regression
+  закрыт без правки старого assert: прежние `words`, отдельные private `rawWords`.
+  Affected 3/3 PASS; security re-review малого delta P0–P2 = 0.
+- Финальный full Partner sequential: **881 tests / 857 PASS / 24 FAIL / 0 skipped**,
+  actual exit 1, 34.022 s. Все 92 новых PASS; 24 failing names точно совпали с baseline
+  предыдущего checkpoint, новых/исчезнувших 0. Root lint actual exit 0: 0 errors /
+  387 warnings; scoped ESLint PASS. Оба LOCAL_HEAVY слота освобождены после actual exits,
+  coordinator уведомлён; первичные и final logs сохранены отдельно вне Git.
+- Docs: новый `PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md`, обновлены ingress
+  verifier, inventory, shared overlay, production controls, test plan, этот worklog
+  и существующий `docs/assets/partner-game-membership-ingress-evidence.drawio`.
+  По drawio-skill XML-only fallback после известного Electron/sandbox blocker;
+  PNG/visual QA NOT_RUN. XML 0 errors / 0 warnings, 67 local links/anchors PASS.
+- Независимый final release-claims review source/docs/diagram P0–P2 = 0; private
+  command receipts не являются предметом аттестации reviewer. Runtime/policy/binding/
+  application/production-entry и historical receipts не менялись, release gate RED.
+- Нет SSH, внешней сети, реальных cert/key/env/log reads, provider/shared-data writes,
+  DNS/routes, install/reload, push/PR/merge/CI/deploy/activation. Native application
+  остаётся DEFERRED_BY_USER / NOT_RUN; build input gap предыдущего этапа не закрывался.
+  Trusted production operator, fresh module/PKI/closure custody, actual-baseline
+  compatibility, four-worker application/external proof и release refresh ещё нужны.
+- Локальный checkpoint после exact staged secret/PII scan закрывает только source
+  этап; production flags false и UNSUPPORTED_INGRESS_ADAPTER остаются обязательными.
+
 ## 2026-09-07 — Partner: локальный Nginx shared-overlay renderer/checker
 
 - Продолжение с `e8c6cc6`, прежняя branch/worktree, primary sole writer. Пользователь

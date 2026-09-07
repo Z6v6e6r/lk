@@ -3,7 +3,9 @@
 Статус: **LOCAL_NGINX_SHARED_OVERLAY_DRAFT_NOT_DEPLOYABLE**. Реализованы генератор
 одного добавочного конфигурационного файла и проверка побайтовой сохранности
 переданных baseline-файлов. Это первый локальный слой production-layout адаптера,
-не завершённый production adapter, не установленный endpoint и не live evidence.
+не установленный endpoint и не live evidence. Следующий локальный слой теперь
+[реализован отдельно](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md): closed
+shared dialect, отдельный TLS collector и request-ID / four-worker correlation.
 Production verifier по-прежнему возвращает `UNSUPPORTED_INGRESS_ADAPTER`.
 
 Исходники: [renderer и preservation checker](../scripts/partner_game_membership_nginx_shared_overlay.mjs),
@@ -105,7 +107,8 @@ expectedBaselineSha256, overlay})` требует одновременно:
    Наследуемые из `http` `set_real_ip_from`, `real_ip_header`, `real_ip_recursive`
    отклоняются; настройки только внутри неизменного sibling server не наследуются.
 
-Новый `scanNginxInventoryStructure()` сохраняет заголовки блоков и lexical context;
+Новый `scanNginxInventoryStructure()` сохраняет заголовки блоков, lexical context
+и block/context IDs для различения sibling blocks и include instances;
 старый `scanNginxInventoryStatements()` сохраняет прежний output. Оба ограничены
 128 KiB / 50,000 tokens / depth 256; raw tokens остаются private intermediate.
 Изменение source SHA не пересчитывает предыдущие inventory captures задним числом.
@@ -124,8 +127,9 @@ expectedBaselineSha256, overlay})` требует одновременно:
 Применимый inherited Real IP отклоняется, limiter dry-run и `satisfy` перекрываются
 явно. Но общие `error_page`, auth/rewrite/module handlers всё ещё могут менять denial
 routing и обработку запроса. Этот checker не аттестует их семантику. Нужен отдельный
-compatibility/security adapter, а не снятие флага NOT_PROVEN. Новый обезличенный
-log dialect также **не подключён** к старому fixed probe/generation collector:
+compatibility/security adapter, а не снятие флага NOT_PROVEN. Теперь есть отдельный
+[closed shared-dialect профиль и новая source correlation](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md).
+Обезличенный log dialect по-прежнему **не подключён** к старому fixed collector:
 там требуются поля `probeId`/source, которых нет в production-layout draft log.
 Не переименовывать старую fixture receipt в подтверждение этой конфигурации.
 
@@ -135,7 +139,7 @@ log dialect также **не подключён** к старому fixed probe
   fresh baseline under lock; caller может опустить файл glob, и текущая функция
   не обнаружит это без внешнего filesystem observation;
 - exact shared-listener/default-server semantics, full dependency/module closure,
-  native validation и shared-vhost/route-isolation negatives;
+  native validation и фактические shared-vhost/route-isolation negatives;
 - trusted server PKI/key custody, live raw guard/runtime и fresh packet proof;
 - controlled application с доказательством **всех четырёх** workers, disk-only negative,
   revocation/recovery и external probes из отдельно наблюдаемой точки.

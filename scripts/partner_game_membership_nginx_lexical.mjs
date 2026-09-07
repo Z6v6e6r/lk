@@ -13,7 +13,7 @@ function fail(code, line = null) {
   throw error;
 }
 
-function tokenize(text) {
+function tokenize(text, structure) {
   if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > MAX_BYTES || text.includes("\0")) fail("INPUT_REJECTED");
   const tokens = [];
   let index = 0, line = 1;
@@ -27,7 +27,7 @@ function tokenize(text) {
     if (character === "#") { while (index < text.length && text[index] !== "\n") index++; continue; }
     if ("{};".includes(character)) { push({ value: character, line, punctuation: true }); index++; continue; }
     let value = "", quoted = false;
-    const origin = line;
+    const origin = line, start = index;
     while (index < text.length && !whitespace(text[index]) && !"{};".includes(text[index])) {
       if (text[index] === "\\") {
         index++; if (index >= text.length) fail("DANGLING_ESCAPE", line);
@@ -56,7 +56,9 @@ function tokenize(text) {
       value += text[index++];
     }
     if (!value && !quoted) fail("EMPTY_TOKEN", origin);
-    push({ value, line: origin, quoted });
+    // Structural consumers also inspect the exact private token spelling. The
+    // legacy inventory value intentionally retains its original limited grammar.
+    push({ value, line: origin, quoted, ...(structure ? { raw: text.slice(start, index) } : {}) });
   }
   return tokens;
 }
@@ -64,22 +66,34 @@ function tokenize(text) {
 function scan(text, structure) {
   const statements = [];
   const context = [];
+  const contextIds = [];
+  let nextBlockId = 0;
   let current = [], depth = 0;
-  for (const token of tokenize(text)) {
+  const row = (block, blockId) => ({
+    // Keep the statement-token interface byte-for-byte compatible; raw spelling
+    // is separate private structural metadata, not an extra inventory field.
+    words: current.map(({ value, line, quoted }) => ({ value, line, quoted })),
+    rawWords: current.map(word => word.raw),
+    block, context: [...context], contextIds: [...contextIds], blockId,
+  });
+  for (const token of tokenize(text, structure)) {
     if (!token.punctuation) { current.push(token); continue; }
     if (token.value === ";") {
-      if (current.length) statements.push(structure ? { words: current, block: false, context: [...context] } : current);
+      if (current.length) statements.push(structure ? row(false, null) : current);
       current = [];
     }
     else if (token.value === "{") {
       if (!current.length) fail("UNNAMED_BLOCK", token.line);
-      if (structure) statements.push({ words: current, block: true, context: [...context] });
+      const blockId = ++nextBlockId;
+      if (structure) statements.push(row(true, blockId));
       context.push(current[0].value);
+      contextIds.push(blockId);
       current = []; if (++depth > 256) fail("DEPTH_LIMIT", token.line);
     } else {
       if (current.length) fail("UNTERMINATED_DIRECTIVE_BEFORE_CLOSE", token.line);
       if (--depth < 0) fail("UNBALANCED_CLOSE", token.line);
       context.pop();
+      contextIds.pop();
     }
   }
   if (current.length) fail("UNTERMINATED_DIRECTIVE_AT_EOF", current[0].line);

@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { canonicalJson, PARTNER_API_BASE_PATH } from "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs";
 import { PartnerIngressEvidenceError } from "./partner_game_membership_ingress_evidence.mjs";
 import { scanNginxInventoryStructure } from "./partner_game_membership_nginx_lexical.mjs";
+import { checkLocalSharedNginxDialect } from "./partner_game_membership_nginx_shared_dialect.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -14,6 +15,8 @@ const NAMESPACE = "pgm_v02";
 const OUTPUT_PATH = "/etc/nginx/conf.d/partner-game-membership-api-v02.conf";
 const CERT_ROOT = "/etc/nginx/partner-game-membership-api-v02";
 const generated = new WeakMap();
+const preparations = new WeakMap();
+const preservedInputs = new WeakMap();
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const fail = code => { throw new PartnerIngressEvidenceError(`NGINX_SHARED_${code}`); };
 const exact = (value, keys) => {
@@ -31,12 +34,13 @@ const list = (value, min, max) => {
 };
 const denied = Object.freeze({ productionVerified: false, deployAuthorized: false, activationAuthorized: false });
 
-function certificateSnapshot(bytes) {
+function byteSnapshot(bytes, max, code) {
   if (!Buffer.isBuffer(bytes) || Object.getPrototypeOf(bytes) !== Buffer.prototype
     || Reflect.ownKeys(bytes).some(key => typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key))
-    || !bytes.length || bytes.length > 32768) fail("PUBLIC_CERTIFICATE_INVALID");
+    || !bytes.length || bytes.length > max) fail(code);
   return Buffer.from(bytes);
 }
+const certificateSnapshot = bytes => byteSnapshot(bytes, 32768, "PUBLIC_CERTIFICATE_INVALID");
 
 function publicCertificates(bytes, maxCount) {
   if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 32768) fail("PUBLIC_CERTIFICATE_INVALID");
@@ -103,7 +107,7 @@ limit_req_zone $pgm_v02_client zone=pgm_v02_client_rate:1m rate=2r/s;
 limit_req_zone $binary_remote_addr zone=pgm_v02_source_rate:1m rate=5r/s;
 limit_conn_zone $pgm_v02_client zone=pgm_v02_client_connections:1m;
 limit_conn_zone $binary_remote_addr zone=pgm_v02_source_connections:1m;
-log_format pgm_v02_audit escape=json '{"requestId":"$request_id","status":"$status","upstream":"$upstream_status","clientVerified":"$pgm_v02_verified","admitted":"$pgm_v02_admitted","worker":"$pid","generation":"${input.generationMarker}","rate":"$limit_req_status","concurrency":"$limit_conn_status"}';
+log_format pgm_v02_audit escape=json '{"admitted":"$pgm_v02_admitted","clientVerified":"$pgm_v02_verified","concurrency":"$limit_conn_status","generation":"${input.generationMarker}","rate":"$limit_req_status","requestId":"$request_id","status":"$status","upstream":"$upstream_status","worker":"$pid"}';
 server {
   listen 443 ssl;
   listen [::]:443 ssl;
@@ -128,6 +132,8 @@ server {
   keepalive_timeout 0;
   send_timeout 15s;
   add_header Cache-Control no-store always;
+  add_header X-Padlhub-Ingress-Request-Id $request_id always;
+  gzip off;
   access_log /var/log/nginx/partner-game-membership-api-v02.audit.jsonl pgm_v02_audit;
   error_log /dev/null crit;
   limit_req_status 429;
@@ -161,6 +167,10 @@ ${sourceAddresses.sort().map(ip => `    allow ${ip};`).join("\n")}
     proxy_set_header X-Forwarded-Port "";
     proxy_set_header X-Real-IP "";
     proxy_request_buffering off;
+    proxy_pass_request_headers on;
+    proxy_pass_request_body on;
+    proxy_redirect off;
+    proxy_ignore_headers X-Accel-Redirect X-Accel-Expires X-Accel-Limit-Rate X-Accel-Buffering X-Accel-Charset;
     proxy_buffering off;
     proxy_cache off;
     proxy_store off;
@@ -170,6 +180,7 @@ ${sourceAddresses.sort().map(ip => `    allow ${ip};`).join("\n")}
     proxy_send_timeout 15s;
     proxy_read_timeout 15s;
     proxy_hide_header Cache-Control;
+    proxy_hide_header X-Padlhub-Ingress-Request-Id;
     proxy_hide_header Access-Control-Allow-Origin;
     proxy_hide_header Access-Control-Allow-Credentials;
     proxy_hide_header Access-Control-Allow-Headers;
@@ -187,8 +198,30 @@ ${sourceAddresses.sort().map(ip => `    allow ${ip};`).join("\n")}
       "SHARED_VHOST_SEMANTICS_AND_ROUTE_ISOLATION", "SERVER_PKI_TRUST_AND_KEY_CUSTODY", "LIVE_RAW_GUARD_AND_RUNTIME_PROOF",
       "ALL_WORKER_GENERATION_AND_APPLICATION", "EXTERNAL_PROBES_AND_REVOCATION"]),
   });
-  generated.set(result, { configuration, exactHost: input.exactHost });
+  generated.set(result, { configuration, exactHost: input.exactHost, clientId: input.clientId,
+    sourceAddresses: Object.freeze([...sourceAddresses]), clientLeafSha256: sha(client.raw),
+    serverSpkiSha256: sha(server.publicKey.export({ type: "spki", format: "der" })) });
   return result;
+}
+
+// Closed local preparation, not an operator, host observation or deployment plan.
+export function prepareLocalNginxSharedAdapter(input) {
+  const preservation = verifyLocalNginxSharedOverlayChange(input);
+  const dialect = checkLocalSharedNginxDialect(preservedInputs.get(preservation));
+  const own = generated.get(input.overlay);
+  const result = Object.freeze({ state: "LOCAL_SHARED_ADAPTER_PREPARED_NOT_DEPLOYABLE", preservation, dialect,
+    ...denied });
+  preparations.set(result, Object.freeze({ baselineSha256: preservation.baselineSha256,
+    candidateSha256: preservation.candidateSha256, overlaySha256: preservation.overlaySha256,
+    generationMarker: input.overlay.generationMarker, exactHost: own.exactHost, clientId: own.clientId,
+    sourceAddresses: own.sourceAddresses, clientLeafSha256: own.clientLeafSha256, serverSpkiSha256: own.serverSpkiSha256 }));
+  return result;
+}
+
+export function readLocalNginxSharedAdapterBinding(preparation) {
+  const value = preparations.get(preparation);
+  if (!value) fail("SOURCE_OWNED_PREPARATION_REQUIRED");
+  return value;
 }
 
 function files(value) {
@@ -199,11 +232,12 @@ function files(value) {
     exact(item, ["path", "bytes"]);
     if (typeof item.path !== "string" || !/^\/etc\/(?:nginx\/[A-Za-z0-9_./-]+|letsencrypt\/options-ssl-nginx\.conf)$/.test(item.path)
       || path.posix.normalize(item.path) !== item.path || /(?:\.key|\.pem|\.env|\.log)$/.test(item.path)
-      || output.has(item.path) || !Buffer.isBuffer(item.bytes) || !item.bytes.length || item.bytes.length > 131072
-      || !Buffer.from(item.bytes.toString("utf8")).equals(item.bytes)) fail("CLOSURE_INVALID");
-    total += item.bytes.length;
+      || output.has(item.path)) fail("CLOSURE_INVALID");
+    const bytes = byteSnapshot(item.bytes, 131072, "CLOSURE_INVALID");
+    if (!Buffer.from(bytes.toString("utf8")).equals(bytes)) fail("CLOSURE_INVALID");
+    total += bytes.length;
     if (total > 1048576) fail("CLOSURE_INVALID");
-    output.set(item.path, Buffer.from(item.bytes));
+    output.set(item.path, bytes);
   }
   if (!output.has("/etc/nginx/nginx.conf")) fail("ENTRYPOINT_MISSING");
   return output;
@@ -232,9 +266,9 @@ export function verifyLocalNginxSharedOverlayChange(input) {
     for (const row of rows) {
       const [head, ...args] = row.words;
       if (head.quoted && ["include", "server_name", "map", "geo", "log_format", "limit_req_zone", "limit_conn_zone"].includes(head.value)) fail("CLOSURE_DIALECT_UNSUPPORTED");
-      if (row.words.some(word => word.value.includes(NAMESPACE))) fail("NAMESPACE_COLLISION");
+      if (row.words.some(word => word.value.toLowerCase().includes(NAMESPACE))) fail("NAMESPACE_COLLISION");
       if (head.value === "server_name") {
-        if (args.some(arg => arg.value === own.exactHost)) fail("HOST_COLLISION");
+        if (args.some(arg => arg.value.toLowerCase().replace(/\.$/, "") === own.exactHost)) fail("HOST_COLLISION");
         if (args.some(arg => /[~*$]/.test(arg.value) || arg.value.startsWith("."))) fail("SERVER_SELECTION_UNPROVEN");
       }
       if (head.value === "include" && args.some(arg => arg.value === "/etc/nginx/conf.d/*.conf")) {
@@ -274,9 +308,11 @@ export function verifyLocalNginxSharedOverlayChange(input) {
   };
   visit("/etc/nginx/nginx.conf");
   if (reached.size !== baseline.size) fail("UNREACHABLE_BASELINE_FILE");
-  return Object.freeze({ state: "LOCAL_SHARED_OVERLAY_BYTE_PRESERVATION_CHECKED_NOT_LIVE_PROOF",
+  const result = Object.freeze({ state: "LOCAL_SHARED_OVERLAY_BYTE_PRESERVATION_CHECKED_NOT_LIVE_PROOF",
     baselineSha256: manifest(baseline), candidateSha256: manifest(candidate), overlaySha256: sha(own.configuration),
     preservedFileCount: baseline.size, addedFileCount: 1, ...denied,
     provenance: "CALLER_SUPPLIED_BYTES_NOT_HOST_ATTESTED", filesystemCustody: "NOT_CHECKED",
     semanticPreservation: "NOT_PROVEN", workerGeneration: "NOT_OBSERVED" });
+  preservedInputs.set(result, baseline);
+  return result;
 }
