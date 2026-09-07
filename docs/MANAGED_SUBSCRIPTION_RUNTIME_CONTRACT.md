@@ -33,12 +33,21 @@ contract. For an ON release the mandatory order is:
 
 1. Install `safe-off.json` using `install-off-contract.json`, then verify flow
    and OFF context readback. This baseline contains the new replay guard.
+   Respect the installer's ordinary fifteen-minute soak lease before the
+   distinct enable deployment; do not manually clear or bypass that lease.
 2. Enable `candidate.json` using `contract.json`, which is bound to that exact
    safe-OFF predecessor and permits only gateway func/initialize changes.
 3. For recovery, use `safe-off-contract.json` or the existing installer's exact
    baseline backup. The safe-OFF initializer accepts the embedded ON policy and
    clears it with readback; unknown prior remains STOP. Verify OFF and retained
    request behavior before considering any further rollback.
+
+HUB contracts have no `activationBoundary`; preserved future-game nodes do not
+implicitly add one. Recovery of a failed enable must use the exact safe-OFF
+backup and guarded rollback/resume. Do not substitute `reconcile-current` for
+that recovery: its forward-recovery branch can republish the retained ON
+candidate over already restored OFF bytes. Re-enabling through that command
+requires renewed explicit ON authority and a reviewed current-state plan.
 
 The enable contract mechanically rejects a direct old-source-to-ON install.
 This requires two ordinary backend publication/restart steps and may require a
