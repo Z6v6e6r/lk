@@ -10251,13 +10251,23 @@ export async function apiFetchMasterServiceGameModes(options: {
   };
 }
 
-export async function apiFetchSubscriptioName(subId: string, phone: string) {
-  const search = `?type=get_sub_name&phone=${encodeURIComponent(phone)}&subId=${encodeURIComponent(subId)}`;
-  const candidates = buildProjectUrlCandidates(`${SERV2}${search}`, SERV2, SERV2_FALLBACK);
-  return requestAbsoluteUrlCandidates<SubscriptionName>(candidates, {
-    method: "GET",
-    retries: 1,
-  });
+export async function apiFetchSubscriptioName(subId: string, _phone: string): Promise<ApiResult<SubscriptionName>> {
+  const candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
+  try {
+    return await runWithAbortTimeout(35_000, async (signal) => {
+      let result: ApiResult<SubscriptionName> = { data: null, error: { status: null, message: "Ошибка сети" }, status: null };
+      for (const baseUrl of candidates.length ? candidates : [getServ2Origin()]) {
+        result = await rawRequest<SubscriptionName>(`/lk/subscriptions/product?subId=${encodeURIComponent(subId)}`, {
+          method: "GET", auth: true, baseUrl, signal,
+        });
+        if (signal.aborted || (result.status !== null && result.status < 500)) break;
+      }
+      return result;
+    });
+  } catch (error) {
+    if (!isRequestTimeoutError(error)) throw error;
+    return { data: null, error: { status: null, message: "Превышено время ожидания названия абонемента" }, status: null };
+  }
 }
 
 export async function apiBuySubscroption(
