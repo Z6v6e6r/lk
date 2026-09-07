@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -366,8 +367,13 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
   }
   assert.equal(
     step("Validate LK1 workflow event and identity contract").run,
-    "node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs",
+    "npm run test:delivery",
   );
+  const deliveryCommand = JSON.parse(readFileSync('package.json', 'utf8')).scripts['test:delivery'];
+  for (const suite of ['lk1SubscriptionEnforcementWorkflow.test.mjs', 'deliveryPolicy.test.mjs',
+    'frontendRelease.test.mjs', 'lk1DevFrontendRelease.test.mjs', 'lk1HubPolicyTransition.test.ts']) {
+    assert.ok(deliveryCommand.includes('scripts/tests/' + suite), `Required delivery suite missing: ${suite}`);
+  }
   assert.match(
     step("Run unified candidate and drift-negative tests").run,
     /scripts\/tests\/lk1SubscriptionActivationPacket\.test\.mjs/,

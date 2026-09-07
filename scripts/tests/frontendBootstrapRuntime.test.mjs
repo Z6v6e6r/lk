@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { files } from "../frontend-release.mjs";
 import { auditFrontendBootstrapHost } from "../audit_frontend_bootstrap_host.mjs";
@@ -635,8 +635,8 @@ test("external env-i prevents NODE_OPTIONS from preloading before the production
   const marker = path.join(root, "preload-marker");
   const preload = path.join(root, "preload.cjs");
   write(preload, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");\n`, 0o600);
-  const builder = path.resolve(new URL("../prepare_frontend_bootstrap_execution.mjs", import.meta.url).pathname);
-  const repository = path.resolve(new URL("../../", import.meta.url).pathname);
+  const builder = fileURLToPath(new URL("../prepare_frontend_bootstrap_execution.mjs", import.meta.url));
+  const repository = fileURLToPath(new URL("../../", import.meta.url));
   const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).stdout.trim();
   const result = spawnSync("/usr/bin/env", ["-i",
     "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C",

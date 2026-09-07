@@ -3,9 +3,39 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { load } from 'js-yaml';
 import { deploy, files } from '../frontend-release.mjs';
+import { expectedEntryResource } from '../lib/frontend-smoke-resource.mjs';
+
+test('DEV smoke accepts only the two reviewed HTTPS reserve origins and exact path/version', () => {
+  const version = '20260831T134208Z';
+  for (const origin of ['https://lk-reserve.tsup.space', 'https://lk-reserve.89-108-64-209.sslip.io']) {
+    assert.deepEqual(expectedEntryResource(`${origin}/lk/bundle-dev.js?v=${version}&charset=utf-8`, 'dev', version),
+      { origin, path: '/lk/bundle-dev.js', v: version });
+  }
+  for (const value of [
+    `https://padlhub.su/lk/bundle-dev.js?v=${version}`,
+    `https://padlhub.ru/lk/bundle-dev.js?v=${version}`,
+    `https://unreviewed.invalid/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.tsup.space.unreviewed.invalid/lk/bundle-dev.js?v=${version}`,
+    `http://lk-reserve.tsup.space/lk/bundle-dev.js?v=${version}`,
+    `http://lk-reserve.89-108-64-209.sslip.io/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.tsup.space:8443/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.89-108-64-209.sslip.io:8443/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.tsup.space/lk/bundle.js?v=${version}`,
+    `https://lk-reserve.tsup.space/bundle-dev.js?v=${version}`,
+    'https://lk-reserve.tsup.space/lk/bundle-dev.js?v=wrong',
+    'https://lk-reserve.tsup.space/lk/bundle-dev.js',
+  ]) assert.equal(expectedEntryResource(value, 'dev', version), null, value);
+  // The production path/version contract is unchanged by this DEV-only fix.
+  assert.deepEqual(expectedEntryResource(`https://padlhub.su/lk/bundle.js?v=${version}`, 'prod', version),
+    { origin: 'https://padlhub.su', path: '/lk/bundle.js', v: version });
+  const smoke = readFileSync('scripts/frontend-smoke.mjs', 'utf8');
+  assert.match(smoke, /expectedEntryResource\(value, channel, process\.env\.LK_SMOKE_VERSION\)/);
+  assert.match(smoke, /engine: browserType\.name\(\), status: 'PASS', resource/);
+});
 
 const old = { source: '1'.repeat(40), version: 'old', hashes: {} };
 const next = { source: '2'.repeat(40), version: 'new', hashes: {} };
@@ -120,7 +150,7 @@ test('GitHub release gate rejects failed, cancelled, skipped, missing final chec
   writeFileSync(join(cwd, 'event.json'), JSON.stringify(event));
   mkdirSync(join(cwd, 'bin'));
   writeFileSync(join(cwd, 'bin/gh'), '#!/usr/bin/env node\nconst p=process.argv[3]; process.stdout.write(p.includes("/branches/") ? process.env.FIXTURE_BRANCH : process.env.FIXTURE_JOBS);\n', { mode: 0o755 });
-  const invoke = (outcome, protectedBranch = true) => spawnSync(process.execPath, [new URL('../frontend-delivery-github.mjs', import.meta.url).pathname, 'release'], {
+  const invoke = (outcome, protectedBranch = true) => spawnSync(process.execPath, [fileURLToPath(new URL('../frontend-delivery-github.mjs', import.meta.url)), 'release'], {
     cwd, encoding: 'utf8', env: { ...process.env, PATH: `${cwd}/bin:${process.env.PATH}`, GITHUB_REPOSITORY: 'Z6v6e6r/lk', GITHUB_EVENT_PATH: join(cwd, 'event.json'), LK_FRONTEND_POLICY_SHA: source,
       FIXTURE_BRANCH: JSON.stringify({ protected: protectedBranch, commit: { sha: source } }),
       FIXTURE_JOBS: JSON.stringify({ jobs: [{ name: 'LK1 exact-head enforcement gate', conclusion: 'success', steps: outcome === 'missing' ? [] : [{ name: 'Required delivery result', conclusion: outcome }] }] }),
@@ -133,6 +163,59 @@ test('GitHub release gate rejects failed, cancelled, skipped, missing final chec
     assert.match(result.stderr, /Mandatory delivery check did not succeed/);
   }
   assert.match(invoke('success', false).stderr, /Owner must protect main/);
+});
+
+test('DEV publication switches exactly twelve files and retains prod fonts and legacy bytes', t => {
+  const root = mkdtempSync(join(tmpdir(), 'lk-dev-static-release-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const script = `
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location('release', 'scripts/frontend-release-remote.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+root = pathlib.Path(sys.argv[1]).resolve()
+def fill(path, sha, dev):
+    if not dev: (path/'fonts').mkdir()
+    for name in (m.DEV_FILES if dev else m.FILES): (path/name).write_text('fixture ' + name)
+    (path/('release-dev.json' if dev else 'release.json')).write_text(json.dumps({'sourceCommit':sha,'sourceDirty':False,'version':sha}))
+for prefix, dev in [('lk-frontend', False), ('lk-frontend-dev', True)]:
+    releases=root/(prefix+'-releases'); releases.mkdir()
+    old=releases/('1'*40+'-'+'a'*16); old.mkdir(); fill(old, '1'*40, dev)
+    (root/(prefix+'-current')).symlink_to(old)
+prod=m.run({'op':'inspect'}, root)
+legacy=root/'lk'; legacy.mkdir(); (legacy/'bundle.js').write_text('legacy unchanged')
+before={str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+old=m.run({'op':'inspect'},root,'dev'); token='b'*32
+destination=pathlib.Path(m.run({'op':'acquire','token':token,'previous':old,'candidate':'2'*40+'-'+'b'*16},root,'dev')['destination'])
+fill(destination,'2'*40,True)
+for extra in ['bundle.js','release.json','index.html','ffc-academy-lk-dev.js']:
+    (destination/extra).write_text('foreign')
+    try: m.inventory(destination,'dev'); raise AssertionError('foreign file accepted')
+    except ValueError: pass
+    (destination/extra).unlink()
+(destination/'fonts').mkdir()
+try: m.inventory(destination,'dev'); raise AssertionError('fonts namespace accepted')
+except ValueError: pass
+(destination/'fonts').rmdir()
+expected=m.inventory(destination,'dev')
+assert len(expected['hashes']) == 12
+m.run({'op':'publish','token':token,'expected':expected},root,'dev')
+assert (root/'lk-frontend-dev-current').resolve() == destination
+assert m.run({'op':'inspect'},root) == prod
+(destination/'bundle-dev.js').write_text('foreign drift')
+try: m.run({'op':'rollback','token':token},root,'dev'); raise AssertionError('drift overwritten')
+except ValueError: pass
+(destination/'bundle-dev.js').write_text('fixture bundle-dev.js')
+m.run({'op':'rollback','token':token},root,'dev')
+m.run({'op':'finish','token':token,'rolledBack':True},root,'dev')
+assert m.run({'op':'inspect'},root,'dev') == old
+assert m.run({'op':'inspect'},root) == prod
+assert all((root/name).read_bytes()==value for name,value in before.items())
+try: m.run({'op':'inspect'},root,'foreign'); raise AssertionError('arbitrary namespace accepted')
+except ValueError: pass
+print('DEV only publication and rollback PASS')
+`;
+  const result = spawnSync('python3', ['-B', '-c', script, root], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('nginx candidate redirects only exact standard paths and preserves every other source byte', async () => {

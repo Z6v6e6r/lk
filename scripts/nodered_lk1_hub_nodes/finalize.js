@@ -1,3 +1,13 @@
+if (ctx?.lk1IngressReplay === true) {
+  // An ingress retry ends here, including readonly CREATE. Never re-enter
+  // preflight success or split's write-capable CREATE/checkout path.
+  if (responseStatus === 200 && payload.state === "CONFIRMED" && ctx.lk1) {
+    msg.payload = { ...payload,
+      settlementState: payload.toPayMinor > 0 ? "PAYMENT_REQUIRED" : "CONFIRMED",
+      selectedPaymentMode: payload.toPayMinor > 0 ? "one_time" : "subscription" };
+  }
+  return [null, msg];
+}
 if (ctx?.step === "lk1_tariff_required" && responseStatus === 200 && payload.state === "LK1_TARIFF_REQUIRED"
   && ["split", "split_create_readonly_preflight"].includes(ctx.caller)) {
   msg._splitCtx = { ...msg._splitCtx, step: "lk1_tariff_required", userAuthHeader: ctx.authHeader };

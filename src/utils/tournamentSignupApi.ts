@@ -63,6 +63,12 @@ import {
 } from "./tournamentSignupListSnapshot";
 import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
+// B-owned rollout interlock, not a runtime capability signal. Keep DEV/PROD
+// closed until compatible deployed HUB behavior is proven and frontend
+// enablement is separately approved; changing this constant requires review.
+// A DEV URL, owned subscription or client flag cannot prove backend readiness.
+const LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED = false;
+
 export type { TournamentSignupListSnapshotState } from "./tournamentSignupListSnapshot";
 
 export type TournamentSignupStatus = "AVAILABLE" | "REGISTERED" | "WAITLIST" | "FULL" | "CLOSED" | "CANCELLED";
@@ -2245,7 +2251,7 @@ export async function apiFetchTournamentVivaCheckout(
   const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
   const subscriptions = subscriptionsResult.error ? [] : normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription");
   const category = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(exercise);
-  if (category === "group_training" || category === "tournament") {
+  if (LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED && (category === "group_training" || category === "tournament")) {
     // A display candidate only: the gateway re-reads the same actor-owned
     // source and active rule before any discount or payment. Do not mutate the
     // provider's availableClientSubscriptions or offer a subscription visit.
@@ -2823,6 +2829,17 @@ export async function apiPreviewTournamentVivaTransaction(
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
+  if (params.product.lk1MoneyDiscountCandidate === true && !LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED) {
+    return {
+      data: null,
+      error: {
+        status: 503,
+        message: "Денежная скидка по абонементу временно недоступна. Обновите варианты оплаты.",
+        raw: { code: "LK1_MONEY_DISCOUNT_NOT_READY" },
+      },
+      status: 503,
+    };
+  }
   if (params.product.isCustomTournamentEnergy) {
     return apiCreateTournamentCustomEnergyTransaction(params);
   }
