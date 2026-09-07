@@ -1,5 +1,6 @@
 // Use the owner-selected existing public page. Never authenticate or submit a form.
 import { createRequire } from 'node:module';
+import { expectedEntryResource } from './lib/frontend-smoke-resource.mjs';
 const require = createRequire(`${process.env.LK_PLAYWRIGHT_ROOT}/package.json`);
 const { chromium, webkit } = require('playwright');
 const url = new URL(process.env.LK_FRONTEND_SMOKE_URL);
@@ -26,12 +27,10 @@ for (const browserType of [chromium, webkit]) {
       await page.locator(resultSelector).first().waitFor({ state: 'visible', timeout: 30000 });
     }
     const loaded = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name));
-    if (!loaded.some(value => {
-      const resource = new URL(value);
-      return resource.pathname === (channel === 'dev' ? '/lk/bundle-dev.js' : '/lk/bundle.js')
-        && (channel !== 'dev' || resource.origin === 'https://lk-reserve.tsup.space')
-        && resource.searchParams.get('v') === process.env.LK_SMOKE_VERSION;
-    })) throw new Error('Tilda did not load the expected versioned ' + channel + ' bundle');
+    let resource;
+    loaded.some(value => (resource = expectedEntryResource(value, channel, process.env.LK_SMOKE_VERSION)));
+    if (!resource) throw new Error('Tilda did not load the expected versioned ' + channel + ' bundle');
     if (errors.length) throw new Error(`Browser script errors: ${errors.length}`);
+    console.log(JSON.stringify({ engine: browserType.name(), status: 'PASS', resource }));
   } finally { await browser.close(); }
 }

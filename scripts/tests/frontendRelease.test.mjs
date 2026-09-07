@@ -7,6 +7,35 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { load } from 'js-yaml';
 import { deploy, files } from '../frontend-release.mjs';
+import { expectedEntryResource } from '../lib/frontend-smoke-resource.mjs';
+
+test('DEV smoke accepts only the two reviewed HTTPS reserve origins and exact path/version', () => {
+  const version = '20260831T134208Z';
+  for (const origin of ['https://lk-reserve.tsup.space', 'https://lk-reserve.89-108-64-209.sslip.io']) {
+    assert.deepEqual(expectedEntryResource(`${origin}/lk/bundle-dev.js?v=${version}&charset=utf-8`, 'dev', version),
+      { origin, path: '/lk/bundle-dev.js', v: version });
+  }
+  for (const value of [
+    `https://padlhub.su/lk/bundle-dev.js?v=${version}`,
+    `https://padlhub.ru/lk/bundle-dev.js?v=${version}`,
+    `https://unreviewed.invalid/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.tsup.space.unreviewed.invalid/lk/bundle-dev.js?v=${version}`,
+    `http://lk-reserve.tsup.space/lk/bundle-dev.js?v=${version}`,
+    `http://lk-reserve.89-108-64-209.sslip.io/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.tsup.space:8443/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.89-108-64-209.sslip.io:8443/lk/bundle-dev.js?v=${version}`,
+    `https://lk-reserve.tsup.space/lk/bundle.js?v=${version}`,
+    `https://lk-reserve.tsup.space/bundle-dev.js?v=${version}`,
+    'https://lk-reserve.tsup.space/lk/bundle-dev.js?v=wrong',
+    'https://lk-reserve.tsup.space/lk/bundle-dev.js',
+  ]) assert.equal(expectedEntryResource(value, 'dev', version), null, value);
+  // The production path/version contract is unchanged by this DEV-only fix.
+  assert.deepEqual(expectedEntryResource(`https://padlhub.su/lk/bundle.js?v=${version}`, 'prod', version),
+    { origin: 'https://padlhub.su', path: '/lk/bundle.js', v: version });
+  const smoke = readFileSync('scripts/frontend-smoke.mjs', 'utf8');
+  assert.match(smoke, /expectedEntryResource\(value, channel, process\.env\.LK_SMOKE_VERSION\)/);
+  assert.match(smoke, /engine: browserType\.name\(\), status: 'PASS', resource/);
+});
 
 const old = { source: '1'.repeat(40), version: 'old', hashes: {} };
 const next = { source: '2'.repeat(40), version: 'new', hashes: {} };
