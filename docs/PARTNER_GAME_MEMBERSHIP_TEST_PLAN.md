@@ -2,6 +2,28 @@
 
 ## Уровни доказательств
 
+### 7 сентября, 09:37 UTC: updated-profile actual read
+
+После явного освобождения окна coordinator выполнен один approved SSH read.
+Fresh clean HEAD `713ff72`, branch, четыре source hashes и reviewed helper SHA
+совпали. Actual session exit **0**, stderr 0 bytes, 09:37:29.001–09:37:29.204 UTC.
+Все **12 prior pins / 1,235 statements / skipped 0** и final fd/path/epoch guards
+прошли; локальная сверка двух capture подтвердила одинаковые hashes и projections.
+
+Фактический first rejection изменился с `MAIN_UNSUPPORTED` на
+**`NGINX_SHARED_DIALECT_INHERITED_UNSUPPORTED`**. Проверка чтения PASS, полный
+профиль REJECTED; точная виновная директива/полный список ошибок не определены.
+File-local root-TLS/header/default observations не заменяют effective semantics.
+
+Helper preparation ранее прошла syntax, 24 compatibility/projection assertions,
+43 closure scope/pin/redaction assertions, 13 scanner/path assertions и 7 synthetic
+fd/race scenarios; exact six-input bundle/source audit и security delta review PASS.
+В actual-read продолжении эти неизменённые tests не повторялись. Full suite/lint/build
+также не повторялись для docs-only результата; прежние 904/880PASS/24FAIL остаются
+историческими, release RED. Native/application/TLS probes — **NOT_RUN**.
+Ресурс освобождён после actual exit, receipt доставлен; сервер/source policy не
+изменены, новых read/reload/deploy нет. Existing diagram обновлён в XML-only режиме.
+
 ### 7 сентября, после `888fe90`: local worker declaration compatibility
 
 Разрешён только локальный source этап в прежней ветке/worktree. Новый профиль

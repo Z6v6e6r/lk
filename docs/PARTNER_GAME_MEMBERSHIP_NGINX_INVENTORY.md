@@ -6,6 +6,35 @@ not a full Nginx semantic/dependency graph or proof of applied configuration.
 This records observations, not an installed Partner API, an approved private
 binding or a deploy authorization. Earlier partial captures remain below.
 
+## Updated-profile actual read after `713ff72`
+
+After the coordinator explicitly released the competing prewrite window, one reviewed
+stdin-only read completed at **09:37:29.001–09:37:29.204 UTC**, SSH exit **0**, stderr
+empty. Fresh HEAD/branch/clean/source/helper guards passed immediately before SSH.
+The helper SHA-256 was
+`d82a2caa8623ad562f8bae3cae19b6c8771ae0233762905237e06d91c74069d7`;
+the evaluated source was `713ff72d558d594efd0b0de4c0775aacfd658a06`.
+
+Result: **CLOSED_PROFILE_REJECTED**, now first code
+`NGINX_SHARED_DIALECT_INHERITED_UNSUPPORTED`. The earlier main `auto` rejection was
+passed, but the full closed profile still rejects the same captured configuration.
+This is not a native/runtime failure. The fixed-code output does **not** identify
+the exact rejected directive or prove that TLS alone caused this rejection.
+
+All twelve prior path/content hashes matched again; 1,235 lexical statements,
+zero skipped targets, final fd/path/host/master/four-worker guards completed.
+Local comparison against the previous capture confirmed the same root `AUTO`,
+root-http TLS `DIFFERENT_REDACTED`, five missing root header declarations and zero
+file-local literal explicit IPv4/IPv6 defaults. These projections remain **not
+effective inheritance/default-selection proof**; no complete error list is claimed.
+
+The SSH process ended and receipt/release was delivered to the coordinator. No new
+SSH, native `-t/-T`, probes, config writes, certificate/key/env/log reference reads,
+reload, deploy or activation followed. Observation SHA-256:
+`90a9a007ee14a2c8b1476a02d8cab1a450b5d81d9ed4c045a24f62138a1e6a66`.
+Old observations/pins are retained. Next work must localize the inherited-profile
+rejection safely; this diagnostic does not authorize a profile exception or server fix.
+
 ## Local source update after `888fe90`: worker declaration only
 
 The checker now accepts exactly one main `worker_processes 4` or `auto` declaration,

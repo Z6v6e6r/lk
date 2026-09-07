@@ -2,6 +2,34 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: updated-profile read завершён, inherited compatibility остаётся закрытой
+
+- Пользователь подтвердил read-only проверку `713ff72`. Вначале окно147 было WAIT
+  из-за чужого prewrite/smoke; SSH не запускался. Local private helper подготовлен
+  без изменения12pins/epoch/path/fd guards, проверен и прошёл security delta review.
+- После явного coordinator grant выполнен один stdin-only SSH77415, actual exit0:
+  09:37:29.001–09:37:29.204UTC, stderr0. Fresh HEAD/branch/clean/4source/helper guards
+  PASS; helperSHA d82a2caa8623ad562f8bae3cae19b6c8771ae0233762905237e06d91c74069d7.
+- Все12path/content pins совпали,1,235lexical statements,skipped0; finalfd/epoch
+  guards завершены. Локальная сверка с priorcapture подтвердила hashes/projections.
+- Source713ff72 прошёл прежний MAIN_UNSUPPORTED барьер, новый firstcode:
+  NGINX_SHARED_DIALECT_INHERITED_UNSUPPORTED / CLOSED_PROFILE_REJECTED. Конкретная
+  отвергнутая директива не установлена; нельзя называть rootTLS sole cause или
+  считать это native/runtime failure. File-local defaults/header facts не effective proof.
+- После actualexit отправлены receipt и RELEASED coordinator; доставка успешна.
+  Ресурсов/процессов не удерживаем. Предыдущее итоговое сообщение source-этапа после
+  отдельного usergrant также было доставлено; прежняя запись отказа остаётся историей.
+- Helper tests24+43+13assertions/7synthetic scenarios и six-input audit/security
+  review использованы из завершённой подготовки; в actual продолжении не повторены.
+  Full904/880PASS/24FAIL и rootlint0errors/387warnings — historical, release RED.
+- Изменены только inventory/adapter/test-plan/worklog и existing drawio labels.
+  Source policy, helpers/pins/captures прежних этапов не переписаны. Drawio-skill
+  XML-only fallback: PNG/visualQA не повторены после известного sandbox сбоя.
+- Нет новых SSH/native/-t/-T/probes, key/cert/env/log reference reads, hostwrites,
+  provider/shared-data writes, reload/install/push/PR/merge/CI/deploy/activation.
+  Следующий scope должен безопасно локализовать inherited-profile rejection;
+  текущее чтение не разрешает исключения в профиле или live fix. MODEL_ROUTE: parent.
+
 ## 2026-09-07 — Partner: local `worker_processes auto` compatibility, строгие proof gates сохранены
 
 - Пользователь подтвердил локальный этап после `888fe90`; та же branch/worktree,

@@ -6,6 +6,14 @@ dialect → отдельный TLS collector → request-ID / four-worker correl
 `productionVerified`, `deployAuthorized`, `activationAuthorized` = `false`;
 `verifyPartnerProductionIngress()` остаётся `UNSUPPORTED_INGRESS_ADAPTER`.
 
+Последний actual read source `713ff72` завершён 7 сентября, 09:37:29 UTC, exit 0:
+все 12 prior config pins и final process/fd guards совпали. Прежний `auto`/main
+барьер пройден; новый первый отказ — `NGINX_SHARED_DIALECT_INHERITED_UNSUPPORTED`.
+Полный профиль всё ещё **CLOSED_PROFILE_REJECTED**. Конкретная отвергнутая директива
+не раскрывается этим fixed-code выводом; её нельзя угадывать по root-TLS projection.
+Сервер не менялся, native/application proof отсутствует. Подробнее —
+[обновлённая инвентаризация](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+
 ## Файлы и совместимость
 
 | Файл | Ответственность |
@@ -58,8 +66,9 @@ snapshot и полное joined coverage. Три/пять процессов д�
 Preservation запрещает изменять существующие bytes и в направлении `auto → 4`,
 и в обратном. Новая совместимость не разрешает менять сервер и **не означает**,
 что actual baseline целиком принят: TLS/default/header predicates ниже не ослаблены.
-Старый actual read относится к `1c0a82d`; новый source на сервере не исполнялся,
-raw config локально не копировался, прежние observation/helper/proof pins не обновлялись.
+На момент локального checkpoint actual read относился к `1c0a82d`, новый source
+ещё не исполнялся. Последующее чтение `713ff72` описано в начале документа.
+Raw config локально не копировался, прежние observation/helper/proof pins не обновлялись.
 
 ### Остальные inherited/default ограничения сохранены
 
@@ -169,8 +178,9 @@ File-local данные о defaults/header settings не являются effect
 полный результат и границы — в [инвентаризации](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
 В read-only этапе сервер и профиль не менялись. Затем пользователь подтвердил
 локальную адаптацию: выше описан только worker-declaration fix после `888fe90`.
-Новая проверка полного actual profile не выполнялась. Запрет live changes и
-отложенный native gate остаются в силе.
+На source-этапе новая actual проверка не выполнялась. Последующее одноразовое
+чтение `713ff72` описано в начале документа: inherited-profile rejection, не PASS.
+Запрет live changes и отложенный native gate остаются в силе.
 
 Результаты тестов — в [тест-плане](PARTNER_GAME_MEMBERSHIP_TEST_PLAN.md).
 [Редактируемая инфографика](assets/partner-game-membership-ingress-evidence.drawio).
