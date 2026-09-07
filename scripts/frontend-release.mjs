@@ -10,8 +10,12 @@ export const files = [...releaseArtifactNames('release.json'), 'release.json', .
   'rf-dewi-ultrabold', 'rf-dewi-expanded-ultrabold-italic', 'SourceCodePro-Medium', 'SourceCodePro-Regular',
 ].map(name => `fonts/${name}.woff2`)];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const run = (command, args, options = {}) => execFileSync(command, args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...options });
+
+export function remoteRequest(request) {
+  const codeHash = hash(readFileSync(new URL('./frontend-release-remote.py', import.meta.url)));
+  return JSON.parse(run('ssh', ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', 'lk-primary-147', `lk-frontend-v1 ${codeHash}`], { input: JSON.stringify(request) }));
+}
 
 export function assertStandardRange(previous, source, policySha) {
   if (!/^[a-f0-9]{40}$/.test(policySha || '')) throw new Error('Owner activation commit is missing');
@@ -72,8 +76,7 @@ async function main() {
   }
   if (new URL(process.env.LK_FRONTEND_SMOKE_URL).protocol !== 'https:') throw new Error('HTTPS smoke URL required');
   // Workflow separately checks server-owned branch protection, CI event and exact source.
-  const remoteCode = readFileSync(new URL('./frontend-release-remote.py', import.meta.url), 'utf8');
-  const remote = request => JSON.parse(run('ssh', ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', 'lk-primary-147', `python3 -c ${quote(remoteCode)}`], { input: JSON.stringify(request) }));
+  const remote = remoteRequest;
   const previous = remote({ op: 'inspect' });
   const range = assertStandardRange(previous, repository.sourceCommit, process.env.LK_FRONTEND_POLICY_SHA);
   await publicReadback(process.env.LK_FRONTEND_ASSET_BASE, previous);
@@ -89,6 +92,7 @@ async function main() {
   const result = await deploy({ previous, expected, token, remote, smoke,
     upload: destination => run('bash', ['scripts/deploy-lk.sh', 'prod'], { stdio: 'inherit', env: { ...process.env,
       DEPLOY_TARGETS: `lk-primary-147:${destination}`, DEPLOY_PRUNE_OPPOSITE_CHANNEL: '0', DEPLOY_USE_SUDO: '0',
+      DEPLOY_FRONTEND_TRANSPORT: 'forced-command-v1', DEPLOY_FRONTEND_LEASE_TOKEN: token,
     } }),
   });
   writeFileSync(`${process.env.RUNNER_TEMP}/frontend-release-result.json`, JSON.stringify({ ...result, range, observedAt: new Date().toISOString() }, null, 2));
