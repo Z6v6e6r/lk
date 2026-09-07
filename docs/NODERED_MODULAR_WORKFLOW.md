@@ -115,7 +115,8 @@ lease in `/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json`.
 - an expired lease is removed only while the global OS lock is held.
 
 Flow and contract backups are created and fsynced before the lease is
-published. Lease creation uses a durable temporary inode plus atomic
+published. Activation-aware deployments also preserve the exact candidate as a
+protected durable backup. Lease creation uses a durable temporary inode plus atomic
 no-clobber link publication; an interrupted second-link cleanup is recovered
 under the global lock without accepting partial final bytes. Lease
 creation/refresh and atomic live-flow publication fsync both file content and
@@ -129,6 +130,19 @@ that candidate must be restored and the source runtime restarted before the
 lease is released. Unknown or unreadable live bytes, an incomplete restore,
 or an offline runtime retain the lease and report incomplete rollback. A failure
 before rename with exact source bytes and a healthy runtime requires no restart.
+
+An exact-graph contract may pin a future activation boundary to a changed or
+added function node. Preflight and apply then require the complete soak lease
+and worst-case source rollback runtime before that boundary. Once the remaining
+window is too short, source publication or restart is refused. Under a matching
+`rollback-restart-required` v2 lease, `reconcile-current` is the forward-only
+recovery: it validates the protected source, contract, and candidate backups,
+publishes only the candidate when needed, restarts it, verifies the active
+digest and PM2 identity, writes a durable `VERIFIED_PENDING_RELEASE` receipt,
+releases the matching lease, and only then writes a success receipt. The same
+stamp can resume from that verified receipt after interruption without another
+restart, including when lease release already completed. Its earlier durable
+intent remains marked `VERIFICATION_PENDING` if restart or verification fails.
 
 This lease is the minimum production soak window. Do not delete or edit it to
 force an unrelated rollout; wait for expiry or roll back the owning deployment.

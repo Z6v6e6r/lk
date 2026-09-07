@@ -16,7 +16,10 @@ import {
   writeFileExclusiveAtomicDurable,
   writeFileExclusiveDurable,
 } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
-import { createReviewedFlowRuntime } from "../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs";
+import {
+  createPm2Adapter,
+  createReviewedFlowRuntime,
+} from "../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs";
 
 const bytes = (flow) => Buffer.from(`${JSON.stringify(flow, null, 2)}\n`, "utf8");
 const fixture = () => ([
@@ -34,10 +37,12 @@ const candidateFixture = () => {
   return flow;
 };
 
-const exactGraphCandidateFixture = () => {
+const exactGraphCandidateFixture = (activationNotBefore = null) => {
   const flow = structuredClone(fixture());
   const functionNode = flow.find((node) => node.id === "fn-a");
-  functionNode.func = "msg.policy = true; return msg;";
+  functionNode.func = activationNotBefore
+    ? `const FUTURE_GAME_WRITES_NOT_BEFORE = "${activationNotBefore}";\nmsg.policy = true; return msg;`
+    : "msg.policy = true; return msg;";
   functionNode.outputs = 2;
   functionNode.wires = [["response"], ["policy"]];
   flow.push({
@@ -262,6 +267,83 @@ test("exact-graph contract permits only an explicitly pinned HTTP input wire cha
   }), /removed live node/);
 });
 
+test("exact-graph activation boundary pins the candidate function and canonical UTC literal", () => {
+  const notBefore = "2026-08-20T09:30:00.000Z";
+  const liveBytes = bytes(fixture());
+  const candidateBytes = bytes(exactGraphCandidateFixture(notBefore));
+  const contract = buildExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    deploymentId: "future-writer-foundation",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+    activationBoundary: { nodeId: "fn-a", notBefore },
+  });
+  assert.deepEqual(contract.activationBoundary, {
+    formatVersion: 1,
+    nodeId: "fn-a",
+    notBefore,
+    rollbackPolicy: "forbid-source-before-runtime-cutover",
+  });
+  assert.deepEqual(validateExactGraphContract({ liveBytes, candidateBytes, contract }), contract);
+
+  const tampered = structuredClone(contract);
+  tampered.activationBoundary.notBefore = "2026-08-20T09:31:00.000Z";
+  assert.throws(
+    () => validateExactGraphContract({ liveBytes, candidateBytes, contract: tampered }),
+    /literal is not pinned/,
+  );
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(exactGraphCandidateFixture()),
+    deploymentId: "future-writer-foundation",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+    activationBoundary: { nodeId: "fn-a", notBefore },
+  }), /literal is not pinned/);
+
+  const unchangedBoundary = exactGraphCandidateFixture();
+  unchangedBoundary.find((node) => node.id === "fn-b").func = `const FUTURE_GAME_WRITES_NOT_BEFORE = "${notBefore}"; return msg;`;
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(unchangedBoundary),
+    deploymentId: "future-writer-foundation",
+    allowedChanges: [
+      { id: "fn-a", fields: ["func", "outputs", "wires"] },
+      { id: "fn-b", fields: ["func"] },
+    ],
+    allowedAdditionIds: ["policy"],
+    activationBoundary: { nodeId: "route", notBefore },
+  }), /part of the exact reviewed change|must be a function/);
+});
+
+test("PM2 adapter applies the hard timeout to inspect, restart, and restart readback", () => {
+  const calls = [];
+  let restartCount = 10;
+  const spawnCommand = (command, args, options) => {
+    calls.push({ command, args, timeout: options.timeout });
+    if (args[0] === "restart") restartCount += 1;
+    return args[0] === "jlist"
+      ? {
+        status: 0,
+        stdout: JSON.stringify([{
+          name: "node-red",
+          pid: 1234,
+          pm2_env: { status: "online", restart_time: restartCount },
+        }]),
+      }
+      : { status: 0, stdout: "" };
+  };
+  const pm2 = createPm2Adapter({ commandTimeoutMs: 60_000, spawnCommand });
+  assert.equal(pm2.inspect().restartCount, 10);
+  assert.equal(pm2.restart(10).restartCount, 11);
+  assert.deepEqual(calls.map(({ args, timeout }) => [args.join(" "), timeout]), [
+    ["jlist", 60_000],
+    ["restart node-red", 60_000],
+    ["jlist", 60_000],
+  ]);
+});
+
 const prepareRuntime = (
   t,
   {
@@ -270,6 +352,11 @@ const prepareRuntime = (
     exactGraph = false,
     liveMode = 0o600,
     deploymentLeaseMs = 15 * 60 * 1000,
+    sourceRollbackBudgetMs = 4 * 60 * 1000,
+    activationNotBefore = null,
+    advanceOnFailedRestartMs = 0,
+    advanceOnSuccessfulRestartMs = 0,
+    restoreSourceOnFailedRestart = false,
   } = {},
 ) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-runtime-"));
@@ -285,7 +372,7 @@ const prepareRuntime = (
   fs.mkdirSync(stage, { mode: 0o700 });
   fs.chmodSync(stage, 0o700);
   const liveBytes = bytes(fixture());
-  const candidateBytes = bytes(exactGraph ? exactGraphCandidateFixture() : candidateFixture());
+  const candidateBytes = bytes(exactGraph ? exactGraphCandidateFixture(activationNotBefore) : candidateFixture());
   const contract = exactGraph
     ? buildExactGraphContract({
       liveBytes,
@@ -293,6 +380,7 @@ const prepareRuntime = (
       deploymentId: "managed-subscription-rules",
       allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
       allowedAdditionIds: ["policy"],
+      activationBoundary: activationNotBefore ? { nodeId: "fn-a", notBefore: activationNotBefore } : null,
     })
     : buildFunctionOnlyContract({
       liveBytes,
@@ -328,10 +416,13 @@ const prepareRuntime = (
       restartCount += 1;
       if (failRemaining > 0) {
         failRemaining -= 1;
+        nowMs += advanceOnFailedRestartMs;
+        if (restoreSourceOnFailedRestart) fs.writeFileSync(liveFlowPath, liveBytes, { mode: liveMode });
         processStatus = "errored";
         processPid = 0;
         throw new Error("synthetic restart failure");
       }
+      nowMs += advanceOnSuccessfulRestartMs;
       processStatus = "online";
       processPid = 1235;
       return { pid: processPid, status: processStatus, restartCount };
@@ -343,6 +434,7 @@ const prepareRuntime = (
     backupDirectory,
     deploymentLeasePath,
     deploymentLeaseMs,
+    sourceRollbackBudgetMs,
     uid,
     gid,
     getUid: () => uid,
@@ -373,6 +465,23 @@ const prepareRuntime = (
     },
   };
 };
+
+test("apply rechecks full soak and source rollback lead after a slow successful restart", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:20:30.000Z",
+    advanceOnSuccessfulRestartMs: 2 * 60 * 1000,
+  });
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T120000+0300",
+  }), /rollback completed: Candidate soak lease refresh is too close/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
+});
 
 const seedSourceLeaseRecovery = (prepared, { phase = "applying", formatVersion = 2 } = {}) => {
   fs.mkdirSync(prepared.backupDirectory, { mode: 0o700, recursive: true });
@@ -466,6 +575,326 @@ test("remote runtime restores reviewed bytes when candidate restart fails", (t) 
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
   assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
+});
+
+test("activation boundary requires a full soak and rollback budget before publication", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+  });
+  const common = {
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+  };
+  const preflight = prepared.runtime.preflight(common);
+  assert.equal(preflight.activationNotBefore, "2026-08-20T09:30:00.000Z");
+  assert.equal(preflight.activationLeadSeconds, 30 * 60);
+  assert.equal(preflight.sourceRollbackBudgetSeconds, 4 * 60);
+
+  prepared.advanceTime(13 * 60 * 1000);
+  assert.throws(() => prepared.runtime.apply({
+    ...common,
+    stamp: "20260820T121300+0300",
+  }), /too close to the reviewed activation boundary/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+});
+
+test("failed restart near activation keeps candidate bytes and the lease for runtime verification", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    failFirstRestart: true,
+    advanceOnFailedRestartMs: 28 * 60 * 1000,
+  });
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T120000+0300",
+  }), /runtime_unverified/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.equal(
+    JSON.parse(fs.readFileSync(prepared.deploymentLeasePath, "utf8")).phase,
+    "rollback-restart-required",
+  );
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+});
+
+test("automatic source restart is refused when its PM2 budget crosses activation", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    failFirstRestart: true,
+    advanceOnFailedRestartMs: 28 * 60 * 1000,
+    restoreSourceOnFailedRestart: true,
+  });
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T120000+0300",
+  }), /runtime_unverified/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+});
+
+test("incomplete candidate restart can be reconciled after activation without restoring source", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    failFirstRestart: true,
+    advanceOnFailedRestartMs: 28 * 60 * 1000,
+  });
+  const deploymentId = prepared.contract.deploymentId;
+  const artifactStamp = "20260820T120000+0300";
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId,
+    stamp: artifactStamp,
+  }), /runtime_unverified/);
+  prepared.advanceTime(3 * 60 * 1000);
+  prepared.setRestartFailures(0);
+  const result = prepared.runtime.reconcileCurrent({
+    deploymentId,
+    stamp: "20260820T123100+0300",
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  });
+  assert.equal(result.action, "reconcile-current");
+  assert.equal(result.activeFlowSha256, prepared.contract.candidateSha256);
+  assert.equal(result.deploymentLeaseReleased, true);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.equal(JSON.parse(fs.readFileSync(result.intentPath, "utf8")).state, "VERIFICATION_PENDING");
+  assert.equal(JSON.parse(fs.readFileSync(result.verifiedPath, "utf8")).state, "VERIFIED_PENDING_RELEASE");
+  assert.equal(JSON.parse(fs.readFileSync(result.receiptPath, "utf8")).state, "SUCCESS");
+  const replay = prepared.runtime.reconcileCurrent({
+    deploymentId,
+    stamp: "20260820T123100+0300",
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  });
+  assert.equal(replay.resumedSuccess, true);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
+});
+
+test("verified reconciliation resumes lease release without another Node-RED restart", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    failFirstRestart: true,
+    advanceOnFailedRestartMs: 28 * 60 * 1000,
+  });
+  const deploymentId = prepared.contract.deploymentId;
+  const artifactStamp = "20260820T120000+0300";
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId,
+    stamp: artifactStamp,
+  }), /runtime_unverified/);
+  prepared.advanceTime(3 * 60 * 1000);
+  prepared.setRestartFailures(0);
+  const reconcileStamp = "20260820T123100+0300";
+  const options = {
+    deploymentId,
+    stamp: reconcileStamp,
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  };
+  const originalUnlinkSync = fs.unlinkSync;
+  let refusedOnce = false;
+  fs.unlinkSync = (filePath, ...args) => {
+    if (!refusedOnce && path.resolve(filePath) === path.resolve(prepared.deploymentLeasePath)) {
+      refusedOnce = true;
+      throw new Error("synthetic lease release failure");
+    }
+    return originalUnlinkSync.call(fs, filePath, ...args);
+  };
+  try {
+    assert.throws(() => prepared.runtime.reconcileCurrent(options), /synthetic lease release failure/);
+  } finally {
+    fs.unlinkSync = originalUnlinkSync;
+  }
+  const verifiedPath = path.join(
+    prepared.backupDirectory,
+    `reconcile-current-verified-${deploymentId}-${reconcileStamp}.json`,
+  );
+  assert.equal(JSON.parse(fs.readFileSync(verifiedPath, "utf8")).state, "VERIFIED_PENDING_RELEASE");
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  const resumed = prepared.runtime.reconcileCurrent(options);
+  assert.equal(resumed.resumedVerified, true);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
+});
+
+test("verified reconciliation resumes success publication after lease release", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    failFirstRestart: true,
+    advanceOnFailedRestartMs: 28 * 60 * 1000,
+  });
+  const deploymentId = prepared.contract.deploymentId;
+  const artifactStamp = "20260820T120000+0300";
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId,
+    stamp: artifactStamp,
+  }), /runtime_unverified/);
+  prepared.advanceTime(3 * 60 * 1000);
+  prepared.setRestartFailures(0);
+  const reconcileStamp = "20260820T123100+0300";
+  const options = {
+    deploymentId,
+    stamp: reconcileStamp,
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  };
+  const successPath = path.join(
+    prepared.backupDirectory,
+    `reconcile-current-success-${deploymentId}-${reconcileStamp}.json`,
+  );
+  const originalOpenSync = fs.openSync;
+  let refusedOnce = false;
+  fs.openSync = (filePath, ...args) => {
+    if (!refusedOnce && path.resolve(filePath) === path.resolve(successPath)) {
+      refusedOnce = true;
+      throw new Error("synthetic success receipt failure");
+    }
+    return originalOpenSync.call(fs, filePath, ...args);
+  };
+  try {
+    assert.throws(() => prepared.runtime.reconcileCurrent(options), /synthetic success receipt failure/);
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.equal(fs.existsSync(successPath), false);
+  const resumed = prepared.runtime.reconcileCurrent(options);
+  assert.equal(resumed.resumedVerified, true);
+  assert.equal(JSON.parse(fs.readFileSync(successPath, "utf8")).state, "SUCCESS");
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
+});
+
+test("failed current reconciliation leaves only a pending intent and the matching lease", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    failFirstRestart: true,
+    advanceOnFailedRestartMs: 28 * 60 * 1000,
+  });
+  const deploymentId = prepared.contract.deploymentId;
+  const artifactStamp = "20260820T120000+0300";
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId,
+    stamp: artifactStamp,
+  }), /runtime_unverified/);
+  prepared.setRestartFailures(1);
+  const reconcileStamp = "20260820T123000+0300";
+  assert.throws(() => prepared.runtime.reconcileCurrent({
+    deploymentId,
+    stamp: reconcileStamp,
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  }), /synthetic restart failure/);
+  const intentPath = path.join(prepared.backupDirectory, `reconcile-current-intent-${deploymentId}-${reconcileStamp}.json`);
+  const verifiedPath = path.join(prepared.backupDirectory, `reconcile-current-verified-${deploymentId}-${reconcileStamp}.json`);
+  const successPath = path.join(prepared.backupDirectory, `reconcile-current-success-${deploymentId}-${reconcileStamp}.json`);
+  assert.equal(JSON.parse(fs.readFileSync(intentPath, "utf8")).state, "VERIFICATION_PENDING");
+  assert.equal(fs.existsSync(verifiedPath), false);
+  assert.equal(fs.existsSync(successPath), false);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+});
+
+test("current candidate reconciliation refuses unknown active bytes under an incomplete lease", (t) => {
+  const prepared = prepareRuntime(t, { failFirstRestart: true, advanceOnFailedRestartMs: 0 });
+  const deploymentId = prepared.contract.deploymentId;
+  const artifactStamp = "20260820T120000+0300";
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId,
+    stamp: artifactStamp,
+  }), /rollback completed/);
+  seedSourceLeaseRecovery(prepared, { phase: "rollback-restart-required" });
+  fs.writeFileSync(prepared.liveFlowPath, "unknown active bytes", { mode: 0o600 });
+  assert.throws(() => prepared.runtime.reconcileCurrent({
+    deploymentId,
+    stamp: "20260820T121000+0300",
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  }), /exact reviewed source or candidate on disk/);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+});
+
+test("forward reconciliation republishes the durable candidate after source rollback restart fails", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+    restartFailures: 2,
+    advanceOnFailedRestartMs: 5 * 60 * 1000,
+  });
+  const deploymentId = prepared.contract.deploymentId;
+  const artifactStamp = "20260820T120000+0300";
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId,
+    stamp: artifactStamp,
+  }), /rollback is incomplete/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  prepared.advanceTime(21 * 60 * 1000);
+  prepared.setRestartFailures(0);
+  const result = prepared.runtime.reconcileCurrent({
+    deploymentId,
+    stamp: "20260820T124100+0300",
+    flowBackup: path.join(prepared.backupDirectory, `flows-pre-${deploymentId}-${artifactStamp}.json`),
+    contractBackup: path.join(prepared.backupDirectory, `contract-${deploymentId}-${artifactStamp}.json`),
+    candidateBackup: path.join(prepared.backupDirectory, `candidate-${deploymentId}-${artifactStamp}.flow.json`),
+  });
+  assert.equal(result.activeFlowSha256, prepared.contract.candidateSha256);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11, 12]);
+});
+
+test("explicit source rollback is refused before its worst-case runtime budget crosses activation", (t) => {
+  const prepared = prepareRuntime(t, {
+    exactGraph: true,
+    activationNotBefore: "2026-08-20T09:30:00.000Z",
+  });
+  const applied = prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T120000+0300",
+  });
+  prepared.advanceTime(28 * 60 * 1000);
+  assert.throws(() => prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    flowBackup: applied.flowBackup,
+    contractBackup: applied.contractBackup,
+  }), /runtime_unverified/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
 });
 
 const failAfterLiveRename = (t, prepared, { failRestore = false, drift = null } = {}) => {

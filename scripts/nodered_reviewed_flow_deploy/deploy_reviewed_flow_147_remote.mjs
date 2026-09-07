@@ -25,6 +25,11 @@ const DEPLOYMENT_LOCK_HELD_ENV = "PADLHUB_REVIEWED_FLOW_LOCK_HELD";
 const DEPLOYMENT_LOCK_CONFLICT_EXIT = 75;
 const DEPLOYMENT_LEASE_FORMAT_VERSION = 2;
 const DEFAULT_DEPLOYMENT_LEASE_MS = 15 * 60 * 1000;
+const DEFAULT_PM2_COMMAND_TIMEOUT_MS = 60 * 1000;
+const SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS = 60 * 1000;
+const DEFAULT_SOURCE_ROLLBACK_BUDGET_MS = (
+  3 * DEFAULT_PM2_COMMAND_TIMEOUT_MS + SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS
+);
 const DEPLOYMENT_LEASE_PHASES = new Set(["applying", "soaking", "rollback-restart-required"]);
 const LEGACY_DEPLOYMENT_LEASE_PHASE = "legacy-unknown";
 const STAGE_PATTERN = /^\.padlhub-reviewed-flow-stage-\d{8}T\d{6}[+-]\d{4}-\d+$/;
@@ -52,49 +57,61 @@ const safeSha256 = (value, label) => {
   return normalized;
 };
 
-const runPm2Command = (args) => {
-  const result = spawnSync("pm2", args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) throw new Error(`PM2 command failed: pm2 ${args.join(" ")}`);
-  return result.stdout;
+export const createPm2Adapter = ({
+  commandTimeoutMs = DEFAULT_PM2_COMMAND_TIMEOUT_MS,
+  spawnCommand = spawnSync,
+} = {}) => {
+  if (!Number.isInteger(commandTimeoutMs) || commandTimeoutMs < 1_000 || commandTimeoutMs > 120_000) {
+    throw new Error("PM2 command timeout must be between 1 and 120 seconds");
+  }
+  return {
+    inspect() {
+      const commandResult = spawnCommand("pm2", ["jlist"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: commandTimeoutMs,
+      });
+      if (commandResult.error) throw new Error("PM2 inspect did not complete within its runtime budget");
+      if (commandResult.status !== 0) throw new Error("PM2 command failed: pm2 jlist");
+      const processes = JSON.parse(commandResult.stdout);
+      const matches = processes.filter((item) => item?.name === "node-red");
+      if (matches.length !== 1) throw new Error("Expected exactly one PM2 node-red process");
+      const processInfo = matches[0];
+      const result = {
+        pid: Number(processInfo.pid),
+        status: String(processInfo?.pm2_env?.status || ""),
+        restartCount: Number(processInfo?.pm2_env?.restart_time),
+      };
+      if (!Number.isInteger(result.pid) || result.pid < 0 || !result.status
+        || !Number.isInteger(result.restartCount) || result.restartCount < 0) {
+        throw new Error("PM2 node-red process metadata is invalid");
+      }
+      return result;
+    },
+    assertOnline() {
+      const result = this.inspect();
+      if (result.status !== "online" || result.pid <= 0) throw new Error("PM2 node-red process is not online");
+      return result;
+    },
+    restart(previousRestartCount) {
+      if (!Number.isInteger(previousRestartCount) || previousRestartCount < 0) {
+        throw new Error("Previous PM2 node-red restart counter is invalid");
+      }
+      const result = spawnCommand("pm2", ["restart", "node-red"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: commandTimeoutMs,
+      });
+      if (result.error) throw new Error("PM2 restart did not complete within its runtime budget");
+      if (result.status !== 0) throw new Error("PM2 command failed: pm2 restart node-red");
+      const current = this.assertOnline();
+      if (!Number.isInteger(current.restartCount) || current.restartCount <= previousRestartCount) {
+        throw new Error("PM2 node-red restart counter did not advance");
+      }
+      return current;
+    },
+  };
 };
-
-export const createPm2Adapter = () => ({
-  inspect() {
-    const processes = JSON.parse(runPm2Command(["jlist"]));
-    const matches = processes.filter((item) => item?.name === "node-red");
-    if (matches.length !== 1) throw new Error("Expected exactly one PM2 node-red process");
-    const processInfo = matches[0];
-    const result = {
-      pid: Number(processInfo.pid),
-      status: String(processInfo?.pm2_env?.status || ""),
-      restartCount: Number(processInfo?.pm2_env?.restart_time),
-    };
-    if (!Number.isInteger(result.pid) || result.pid < 0 || !result.status
-      || !Number.isInteger(result.restartCount) || result.restartCount < 0) {
-      throw new Error("PM2 node-red process metadata is invalid");
-    }
-    return result;
-  },
-  assertOnline() {
-    const result = this.inspect();
-    if (result.status !== "online" || result.pid <= 0) throw new Error("PM2 node-red process is not online");
-    return result;
-  },
-  restart(previousRestartCount) {
-    if (!Number.isInteger(previousRestartCount) || previousRestartCount < 0) {
-      throw new Error("Previous PM2 node-red restart counter is invalid");
-    }
-    runPm2Command(["restart", "node-red"]);
-    const current = this.assertOnline();
-    if (!Number.isInteger(current.restartCount) || current.restartCount <= previousRestartCount) {
-      throw new Error("PM2 node-red restart counter did not advance");
-    }
-    return current;
-  },
-});
 
 const assertProtectedDirectory = (directory, { uid, gid, mode }) => {
   const stat = fs.lstatSync(directory);
@@ -110,17 +127,61 @@ export function createReviewedFlowRuntime({
   backupDirectory = BACKUP_DIRECTORY,
   deploymentLeasePath = DEPLOYMENT_LEASE_PATH,
   deploymentLeaseMs = DEFAULT_DEPLOYMENT_LEASE_MS,
+  pm2CommandTimeoutMs = DEFAULT_PM2_COMMAND_TIMEOUT_MS,
+  sourceRollbackBudgetMs = DEFAULT_SOURCE_ROLLBACK_BUDGET_MS,
   uid = 0,
   gid = 0,
   getUid = () => process.getuid?.(),
   now = () => Date.now(),
   randomUUID = () => crypto.randomUUID(),
-  pm2 = createPm2Adapter(),
+  pm2 = createPm2Adapter({ commandTimeoutMs: pm2CommandTimeoutMs }),
 } = {}) {
   const protectedFileOptions = { uid, gid, mode: 0o600 };
   if (!Number.isInteger(deploymentLeaseMs) || deploymentLeaseMs < 60_000 || deploymentLeaseMs > 60 * 60 * 1000) {
     throw new Error("Reviewed-flow deployment lease must be between 60 and 3600 seconds");
   }
+  if (!Number.isInteger(pm2CommandTimeoutMs) || pm2CommandTimeoutMs < 1_000 || pm2CommandTimeoutMs > 120_000) {
+    throw new Error("PM2 command timeout must be between 1 and 120 seconds");
+  }
+  const minimumSourceRollbackBudgetMs = (
+    3 * pm2CommandTimeoutMs + SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS
+  );
+  if (
+    !Number.isInteger(sourceRollbackBudgetMs)
+    || sourceRollbackBudgetMs < minimumSourceRollbackBudgetMs
+    || sourceRollbackBudgetMs > 10 * 60 * 1000
+  ) {
+    throw new Error(
+      `Source rollback runtime budget must cover three PM2 commands plus scheduling margin (${minimumSourceRollbackBudgetMs}ms minimum)`,
+    );
+  }
+
+  const activationState = (contract) => {
+    const boundary = contract?.activationBoundary;
+    if (!boundary) return null;
+    const notBeforeMs = Date.parse(boundary.notBefore);
+    if (!Number.isFinite(notBeforeMs)) throw new Error("Reviewed activation boundary is invalid");
+    return {
+      ...boundary,
+      notBeforeMs,
+      remainingMs: notBeforeMs - now(),
+    };
+  };
+
+  const assertActivationLead = (contract, requiredMs, action) => {
+    const state = activationState(contract);
+    if (!state) return null;
+    if (state.remainingMs <= requiredMs) {
+      throw new Error(
+        `${action} is too close to the reviewed activation boundary; runtime_unverified and source rollback is refused`,
+      );
+    }
+    return state;
+  };
+
+  const assertSourceRollbackWindow = (contract, action) => (
+    assertActivationLead(contract, sourceRollbackBudgetMs, action)
+  );
 
   const assertRoot = () => {
     if (getUid() !== uid) throw new Error("Remote reviewed-flow installer must run as the protected owner");
@@ -303,6 +364,11 @@ export function createReviewedFlowRuntime({
   const preflight = (options) => {
     assertDeploymentLeaseAvailable();
     const prepared = readPrepared(options.candidatePath, options.contractPath, options.deploymentId);
+    const activation = assertActivationLead(
+      prepared.contract,
+      deploymentLeaseMs + sourceRollbackBudgetMs,
+      "Preflight",
+    );
     const processInfo = pm2.assertOnline();
     return {
       ok: true,
@@ -320,19 +386,31 @@ export function createReviewedFlowRuntime({
       nodeRedRestartCount: processInfo.restartCount,
       deploymentLeaseAvailable: true,
       deploymentLeaseSeconds: deploymentLeaseMs / 1000,
+      ...(activation ? {
+        activationNotBefore: activation.notBefore,
+        activationLeadSeconds: Math.floor(activation.remainingMs / 1000),
+        sourceRollbackBudgetSeconds: sourceRollbackBudgetMs / 1000,
+      } : {}),
     };
   };
 
   const apply = (options) => {
     const stamp = safeTimestamp(options.stamp);
     const prepared = readPrepared(options.candidatePath, options.contractPath, options.deploymentId);
+    assertActivationLead(
+      prepared.contract,
+      deploymentLeaseMs + sourceRollbackBudgetMs,
+      "Apply",
+    );
     const beforeProcess = pm2.assertOnline();
     assertDeploymentLeaseAvailable();
     ensureBackupDirectory();
     const flowBackup = path.join(backupDirectory, `flows-pre-${prepared.contract.deploymentId}-${stamp}.json`);
     const contractBackup = path.join(backupDirectory, `contract-${prepared.contract.deploymentId}-${stamp}.json`);
+    const candidateBackup = path.join(backupDirectory, `candidate-${prepared.contract.deploymentId}-${stamp}.flow.json`);
     writeFileExclusiveDurable(flowBackup, prepared.liveBytes, protectedFileOptions);
     writeFileExclusiveDurable(contractBackup, prepared.contractBytes, protectedFileOptions);
+    writeFileExclusiveDurable(candidateBackup, prepared.candidateBytes, protectedFileOptions);
     let deploymentLease = acquireDeploymentLease(prepared.contract);
 
     let restartAttempted = false;
@@ -340,6 +418,11 @@ export function createReviewedFlowRuntime({
       if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256) {
         throw new Error("Live flow changed after backup and before publication");
       }
+      assertActivationLead(
+        prepared.contract,
+        deploymentLeaseMs + sourceRollbackBudgetMs,
+        "Candidate publication",
+      );
       atomicWrite(liveFlowPath, prepared.candidateBytes, { uid, gid });
       restartAttempted = true;
       const processInfo = pm2.restart(beforeProcess.restartCount);
@@ -347,6 +430,11 @@ export function createReviewedFlowRuntime({
       if (activeSha256 !== prepared.contract.candidateSha256) {
         throw new Error("Active flow digest differs from reviewed candidate");
       }
+      assertActivationLead(
+        prepared.contract,
+        deploymentLeaseMs + sourceRollbackBudgetMs,
+        "Candidate soak lease refresh",
+      );
       deploymentLease = refreshDeploymentLease(deploymentLease, prepared.contract, "soaking");
       return {
         ok: true,
@@ -357,6 +445,7 @@ export function createReviewedFlowRuntime({
         activeFlowSha256: activeSha256,
         flowBackup,
         contractBackup,
+        candidateBackup,
         nodeRedOnline: true,
         nodeRedPid: processInfo.pid,
         nodeRedRestartCount: processInfo.restartCount,
@@ -380,7 +469,12 @@ export function createReviewedFlowRuntime({
             prepared.contract,
             "rollback-restart-required",
           );
-          if (candidateActive) atomicWrite(liveFlowPath, prepared.liveBytes, { uid, gid });
+          if (candidateActive) {
+            assertSourceRollbackWindow(prepared.contract, "Automatic source rollback");
+            atomicWrite(liveFlowPath, prepared.liveBytes, { uid, gid });
+          } else {
+            assertSourceRollbackWindow(prepared.contract, "Automatic source restart");
+          }
           const rollbackProcess = pm2.inspect();
           pm2.restart(rollbackProcess.restartCount);
         }
@@ -431,6 +525,7 @@ export function createReviewedFlowRuntime({
     if (!isCandidateActive && !isSourceActive) {
       throw new Error("Active flow no longer matches the reviewed candidate selected for rollback");
     }
+    assertSourceRollbackWindow(contract, "Explicit source rollback");
     if (isSourceActive && !activeLease) {
       throw new Error("Reviewed source is active without a matching deployment lease; rollback resume is refused");
     }
@@ -461,7 +556,10 @@ export function createReviewedFlowRuntime({
     const rollbackLease = activeLease
       ? refreshDeploymentLease(activeLease, contract, "rollback-restart-required")
       : acquireDeploymentLease(contract, "rollback-restart-required");
-    if (isCandidateActive) atomicWrite(liveFlowPath, backupBytes, { uid, gid });
+    if (isCandidateActive) {
+      assertSourceRollbackWindow(contract, "Explicit source publication");
+      atomicWrite(liveFlowPath, backupBytes, { uid, gid });
+    }
     const beforeRestart = pm2.inspect();
     const processInfo = pm2.restart(beforeRestart.restartCount);
     const restoredSha256 = sha256(fs.readFileSync(liveFlowPath));
@@ -481,6 +579,278 @@ export function createReviewedFlowRuntime({
       restartCountBefore: beforeRestart.restartCount,
       rollbackMode: isCandidateActive ? "restore-and-restart" : "resume-restart",
       resumedIncompleteRollback: isSourceActive,
+      deploymentLeaseReleased,
+    };
+  };
+
+  const reconcileCurrent = (options) => {
+    assertRoot();
+    const stamp = safeTimestamp(options.stamp);
+    const { deploymentId, flowBackup, contractBackup, artifactStamp } = resolveBackupArtifacts(
+      options,
+      "Current candidate reconciliation",
+    );
+    const candidateBackup = path.resolve(String(options.candidateBackup || ""));
+    if (
+      path.dirname(candidateBackup) !== backupDirectory
+      || path.basename(candidateBackup) !== `candidate-${deploymentId}-${artifactStamp}.flow.json`
+    ) throw new Error("Current candidate backup is outside the reviewed backup contract");
+    assertProtectedFile(liveFlowPath, protectedFileOptions);
+    assertProtectedFile(flowBackup, protectedFileOptions);
+    assertProtectedFile(contractBackup, protectedFileOptions);
+    assertProtectedFile(candidateBackup, protectedFileOptions);
+    const activeBytes = fs.readFileSync(liveFlowPath);
+    const backupBytes = fs.readFileSync(flowBackup);
+    const candidateBackupBytes = fs.readFileSync(candidateBackup);
+    const contractBytes = fs.readFileSync(contractBackup);
+    const contract = JSON.parse(contractBytes.toString("utf8"));
+    if (contract.deploymentId !== deploymentId) {
+      throw new Error("Current candidate reconciliation contract deployment mismatch");
+    }
+    const activeSha256 = sha256(activeBytes);
+    if (![contract.sourceSha256, contract.candidateSha256].includes(activeSha256)) {
+      throw new Error("Current candidate reconciliation requires the exact reviewed source or candidate on disk");
+    }
+    if (sha256(backupBytes) !== contract.sourceSha256) {
+      throw new Error("Current candidate reconciliation source backup digest mismatch");
+    }
+    if (sha256(candidateBackupBytes) !== contract.candidateSha256) {
+      throw new Error("Current candidate reconciliation candidate backup digest mismatch");
+    }
+    validateReviewedFlowContract({ liveBytes: backupBytes, candidateBytes: candidateBackupBytes, contract });
+    const intentPath = path.join(
+      backupDirectory,
+      `reconcile-current-intent-${deploymentId}-${stamp}.json`,
+    );
+    const receiptPath = path.join(
+      backupDirectory,
+      `reconcile-current-success-${deploymentId}-${stamp}.json`,
+    );
+    const verifiedPath = path.join(
+      backupDirectory,
+      `reconcile-current-verified-${deploymentId}-${stamp}.json`,
+    );
+    const activeLease = readDeploymentLease({ includeExpired: true });
+    const receiptBase = {
+      formatVersion: 1,
+      action: "reconcile-current",
+      deploymentId,
+      sourceSha256: contract.sourceSha256,
+      candidateSha256: contract.candidateSha256,
+      contractSha256: sha256(contractBytes),
+      flowBackupSha256: sha256(backupBytes),
+      candidateBackupSha256: sha256(candidateBackupBytes),
+    };
+    const readReceipt = (filePath) => {
+      assertProtectedFile(filePath, protectedFileOptions);
+      try {
+        return JSON.parse(fs.readFileSync(filePath, "utf8"));
+      } catch {
+        throw new Error(`Current candidate reconciliation receipt is invalid: ${filePath}`);
+      }
+    };
+    const assertReceipt = (value, state) => {
+      if (!value || typeof value !== "object" || Array.isArray(value) || value.state !== state) {
+        throw new Error(`Current candidate reconciliation ${state} receipt state mismatch`);
+      }
+      for (const [key, expected] of Object.entries(receiptBase)) {
+        if (value[key] !== expected) {
+          throw new Error(`Current candidate reconciliation ${state} receipt mismatch: ${key}`);
+        }
+      }
+      safeSha256(value.leaseSha256, "Reconciliation lease");
+      if (state !== "VERIFICATION_PENDING") {
+        if (
+          value.intentPath !== intentPath
+          || !Number.isInteger(value.nodeRedPid)
+          || value.nodeRedPid <= 0
+          || !Number.isInteger(value.nodeRedRestartCount)
+          || value.nodeRedRestartCount < 0
+          || !Number.isInteger(value.restartCountBefore)
+          || value.restartCountBefore < 0
+        ) throw new Error(`Current candidate reconciliation ${state} runtime receipt mismatch`);
+      }
+      if (
+        state === "SUCCESS"
+        && (value.verifiedPath !== verifiedPath || value.deploymentLeaseReleased !== true)
+      ) throw new Error("Current candidate reconciliation success receipt mismatch");
+      return value;
+    };
+    const resultFromReceipt = (receipt, extra = {}) => ({
+      ok: true,
+      action: "reconcile-current",
+      deploymentId,
+      activeFlowSha256: contract.candidateSha256,
+      candidateBackup,
+      intentPath,
+      verifiedPath,
+      receiptPath,
+      receiptSha256: sha256(fs.readFileSync(receiptPath)),
+      nodeRedOnline: true,
+      nodeRedPid: receipt.nodeRedPid,
+      nodeRedRestartCount: receipt.nodeRedRestartCount,
+      restartCountBefore: receipt.restartCountBefore,
+      deploymentLeaseReleased: true,
+      ...extra,
+    });
+
+    if (fs.existsSync(receiptPath)) {
+      if (!fs.existsSync(intentPath) || !fs.existsSync(verifiedPath)) {
+        throw new Error("Current candidate reconciliation success receipt chain is incomplete");
+      }
+      assertReceipt(readReceipt(intentPath), "VERIFICATION_PENDING");
+      assertReceipt(readReceipt(verifiedPath), "VERIFIED_PENDING_RELEASE");
+      const receipt = assertReceipt(readReceipt(receiptPath), "SUCCESS");
+      if (activeLease) throw new Error("Current candidate reconciliation success conflicts with an active lease");
+      if (activeSha256 !== contract.candidateSha256) {
+        throw new Error("Current candidate reconciliation success no longer matches active candidate bytes");
+      }
+      const processInfo = pm2.assertOnline();
+      if (
+        processInfo.pid !== receipt.nodeRedPid
+        || processInfo.restartCount !== receipt.nodeRedRestartCount
+      ) throw new Error("Current candidate reconciliation success no longer matches Node-RED identity");
+      return resultFromReceipt(receipt, { resumedSuccess: true });
+    }
+
+    if (fs.existsSync(verifiedPath)) {
+      if (!fs.existsSync(intentPath)) {
+        throw new Error("Current candidate reconciliation verified receipt has no pending intent");
+      }
+      assertReceipt(readReceipt(intentPath), "VERIFICATION_PENDING");
+      const verified = assertReceipt(readReceipt(verifiedPath), "VERIFIED_PENDING_RELEASE");
+      if (activeSha256 !== contract.candidateSha256) {
+        throw new Error("Current candidate reconciliation verified receipt no longer matches active candidate bytes");
+      }
+      const processInfo = pm2.assertOnline();
+      if (
+        processInfo.pid !== verified.nodeRedPid
+        || processInfo.restartCount !== verified.nodeRedRestartCount
+      ) throw new Error("Current candidate reconciliation verified receipt no longer matches Node-RED identity");
+      if (activeLease) {
+        if (
+          activeLease.formatVersion !== DEPLOYMENT_LEASE_FORMAT_VERSION
+          || activeLease.phase !== "rollback-restart-required"
+          || activeLease.deploymentId !== deploymentId
+          || activeLease.sourceSha256 !== contract.sourceSha256
+          || activeLease.candidateSha256 !== contract.candidateSha256
+          || sha256(fs.readFileSync(deploymentLeasePath)) !== verified.leaseSha256
+        ) throw new Error("Current candidate reconciliation verified receipt conflicts with the active lease");
+        releaseDeploymentLease(activeLease);
+      }
+      const receipt = {
+        ...verified,
+        state: "SUCCESS",
+        verifiedPath,
+        deploymentLeaseReleased: true,
+        completedAt: new Date(now()).toISOString(),
+      };
+      writeFileExclusiveDurable(
+        receiptPath,
+        Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8"),
+        protectedFileOptions,
+      );
+      assertProtectedFile(receiptPath, protectedFileOptions);
+      return resultFromReceipt(receipt, { resumedVerified: true });
+    }
+
+    if (fs.existsSync(intentPath)) {
+      throw new Error("Current candidate reconciliation pending intent requires a new reconciliation stamp");
+    }
+    if (
+      !activeLease
+      || activeLease.formatVersion !== DEPLOYMENT_LEASE_FORMAT_VERSION
+      || activeLease.phase !== "rollback-restart-required"
+      || activeLease.deploymentId !== deploymentId
+      || activeLease.sourceSha256 !== contract.sourceSha256
+      || activeLease.candidateSha256 !== contract.candidateSha256
+    ) throw new Error("Current candidate reconciliation requires the matching incomplete-restart lease");
+    const expectedLeaseSha256 = sha256(fs.readFileSync(deploymentLeasePath));
+
+    const intent = {
+      ...receiptBase,
+      state: "VERIFICATION_PENDING",
+      leaseSha256: expectedLeaseSha256,
+      createdAt: new Date(now()).toISOString(),
+    };
+    writeFileExclusiveDurable(
+      intentPath,
+      Buffer.from(`${JSON.stringify(intent, null, 2)}\n`, "utf8"),
+      protectedFileOptions,
+    );
+    assertProtectedFile(intentPath, protectedFileOptions);
+
+    if (activeSha256 === contract.sourceSha256) {
+      atomicWrite(liveFlowPath, candidateBackupBytes, { uid, gid });
+    }
+
+    const beforeRestart = pm2.inspect();
+    const processInfo = pm2.restart(beforeRestart.restartCount);
+    if (sha256(fs.readFileSync(liveFlowPath)) !== contract.candidateSha256) {
+      throw new Error("Current candidate changed during runtime reconciliation");
+    }
+    if (sha256(fs.readFileSync(deploymentLeasePath)) !== expectedLeaseSha256) {
+      throw new Error("Deployment lease changed during current candidate reconciliation");
+    }
+    if (
+      sha256(fs.readFileSync(liveFlowPath)) !== contract.candidateSha256
+      || sha256(fs.readFileSync(flowBackup)) !== contract.sourceSha256
+      || sha256(fs.readFileSync(candidateBackup)) !== contract.candidateSha256
+      || sha256(fs.readFileSync(contractBackup)) !== sha256(contractBytes)
+      || sha256(fs.readFileSync(deploymentLeasePath)) !== expectedLeaseSha256
+    ) throw new Error("Current candidate reconciliation state changed before lease release");
+    const finalProcessInfo = pm2.assertOnline();
+    if (
+      finalProcessInfo.pid !== processInfo.pid
+      || finalProcessInfo.restartCount !== processInfo.restartCount
+    ) throw new Error("Node-RED process identity changed before reconciliation lease release");
+    const verified = {
+      ...intent,
+      state: "VERIFIED_PENDING_RELEASE",
+      intentPath,
+      nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount,
+      restartCountBefore: beforeRestart.restartCount,
+      verifiedAt: new Date(now()).toISOString(),
+    };
+    writeFileExclusiveDurable(
+      verifiedPath,
+      Buffer.from(`${JSON.stringify(verified, null, 2)}\n`, "utf8"),
+      protectedFileOptions,
+    );
+    assertProtectedFile(verifiedPath, protectedFileOptions);
+    if (
+      sha256(fs.readFileSync(liveFlowPath)) !== contract.candidateSha256
+      || sha256(fs.readFileSync(deploymentLeasePath)) !== expectedLeaseSha256
+    ) throw new Error("Current candidate reconciliation changed after verified receipt");
+    const deploymentLeaseReleased = releaseDeploymentLease(activeLease);
+    const receipt = {
+      ...verified,
+      state: "SUCCESS",
+      verifiedPath,
+      deploymentLeaseReleased,
+      completedAt: new Date(now()).toISOString(),
+    };
+    writeFileExclusiveDurable(
+      receiptPath,
+      Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8"),
+      protectedFileOptions,
+    );
+    assertProtectedFile(receiptPath, protectedFileOptions);
+    return {
+      ok: true,
+      action: "reconcile-current",
+      deploymentId,
+      activeFlowSha256: contract.candidateSha256,
+      candidateBackup,
+      intentPath,
+      verifiedPath,
+      receiptPath,
+      receiptSha256: sha256(fs.readFileSync(receiptPath)),
+      nodeRedOnline: true,
+      nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount,
+      restartCountBefore: beforeRestart.restartCount,
       deploymentLeaseReleased,
     };
   };
@@ -652,7 +1022,7 @@ export function createReviewedFlowRuntime({
     };
   };
 
-  return { preflight, apply, rollback, finalizeLegacyCandidate };
+  return { preflight, apply, rollback, reconcileCurrent, finalizeLegacyCandidate };
 }
 
 const getArg = (name) => {
@@ -678,6 +1048,14 @@ export function main() {
           flowBackup: getArg("--flow-backup"),
           contractBackup: getArg("--contract-backup"),
         })
+        : action === "reconcile-current"
+          ? runtime.reconcileCurrent({
+            deploymentId: common.deploymentId,
+            stamp: getArg("--stamp"),
+            flowBackup: getArg("--flow-backup"),
+            contractBackup: getArg("--contract-backup"),
+            candidateBackup: getArg("--candidate-backup"),
+          })
         : action === "finalize-legacy-v1-candidate"
           ? runtime.finalizeLegacyCandidate({
             deploymentId: common.deploymentId,
@@ -692,7 +1070,7 @@ export function main() {
         : null;
   if (!result) {
     throw new Error(
-      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|finalize-legacy-v1-candidate> [options]",
+      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|reconcile-current|finalize-legacy-v1-candidate> [options]",
     );
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

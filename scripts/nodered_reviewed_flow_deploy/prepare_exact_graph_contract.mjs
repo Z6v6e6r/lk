@@ -24,11 +24,26 @@ for (let index = 2; index < process.argv.length; index += 2) {
   }
 }
 
-const allowed = new Set(["--live", "--candidate", "--output", "--deployment-id"]);
-if ([...values.keys()].some((key) => !allowed.has(key)) || [...allowed].some((key) => !values.has(key))) {
+const allowed = new Set([
+  "--live",
+  "--candidate",
+  "--output",
+  "--deployment-id",
+  "--activation-node",
+  "--activation-not-before",
+]);
+const required = ["--live", "--candidate", "--output", "--deployment-id"];
+const hasActivationNode = values.has("--activation-node");
+const hasActivationTime = values.has("--activation-not-before");
+if (
+  [...values.keys()].some((key) => !allowed.has(key))
+  || required.some((key) => !values.has(key))
+  || hasActivationNode !== hasActivationTime
+) {
   throw new Error(
     "Usage: --live <flow> --candidate <flow> --output <contract> --deployment-id <id> "
-      + "--allow-change <id:field,field> [...] --allow-add <id> [...]",
+      + "--allow-change <id:field,field> [...] --allow-add <id> [...] "
+      + "[--activation-node <id> --activation-not-before <canonical UTC>]",
   );
 }
 if (!allowedChanges.length && !allowedAdditionIds.length) {
@@ -45,6 +60,10 @@ const contract = buildExactGraphContract({
   deploymentId: values.get("--deployment-id"),
   allowedChanges,
   allowedAdditionIds,
+  activationBoundary: hasActivationNode ? {
+    nodeId: values.get("--activation-node"),
+    notBefore: values.get("--activation-not-before"),
+  } : null,
 });
 fs.writeFileSync(outputPath, `${JSON.stringify(contract, null, 2)}\n`, { flag: "wx", mode: 0o600 });
 process.stdout.write(`${JSON.stringify({
@@ -56,4 +75,5 @@ process.stdout.write(`${JSON.stringify({
   httpInputCount: contract.httpInputCount,
   changedNodeCount: contract.allowedChanges.length,
   addedNodeCount: contract.allowedAdditions.length,
+  activationBoundary: contract.activationBoundary ?? null,
 })}\n`);
