@@ -2,6 +2,34 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: compatibility read подготовлен, окно отозвано до SSH
+
+- Пользователь подтвердил read-only compatibility gate после `1c0a82d`; сохранены
+  branch/worktree, исходно clean, sole writer. MODEL_ROUTE: parent; Critical routing
+  использован для security-review исполняемого read-only helper до server access.
+- Private one-shot: предыдущий exact12-file scope, fd/ancestor/O_NOFOLLOW guards,
+  старые boot/master/worker pins, source-owned lexer/checker из `1c0a82d`. Планируемый
+  stdin launcher с `env -i`, absolute executables, timeout20sTERM/2sKILL; нет remote
+  helper file. Вывод только fixed metadata, не raw configs/domains/error values.
+- Security review нашёл неполную prior-content pinning для дополнительных6 файлов.
+  Добавлена отдельная pathnameSHA→contentSHA таблица из прежнего private receipt,
+  без repin и расширения read scope; отдельная таблица сохраняет redacted aliases.
+  Final pin-delta/source-hash re-review P0–P2 = 0. Local doc links/anchors67PASS,
+  whitespace diff checkPASS; private diagnostics не включаются в commit.
+- Final bundle syntax, 16 compatibility/projection, 43 closure scope/pin/redaction,
+  13 scanner/path и7synthetic fd/ancestor/race assertions — actual PASS/exit0.
+  Среди43 —12новых drift/alias checks. Repo runtime source/receipts не менялись;
+  fullPartner/lint/build не повторены, прежний fullrelease RED остаётся.
+- Coordinator сначала подтвердил окно147, затем отозвал его для отдельно одобренного
+  backend deploy **до старта SSH**. Remote process не запускался и не прерывался,
+  resources FREE, coordinator уведомлён. Actual compatibility NOT_RUN, не PASS/mismatch.
+- Private bundle/source/tests/evidence сохранены внеGit. В repo только четыре docs:
+  NGINX_INVENTORY, NGINX_SHARED_ADAPTER, TEST_PLAN и WORKLOG. Existing diagram не менялся:
+  граница local/NOT_PROVEN остаётся верной. Нет новых веток/PR, push/merge/CI/deploy,
+  SSH/native/probes/reload/-t/-T, key/cert/env/log reads или shared/provider/data writes.
+- Для продолжения нужно новое неконфликтующее owner window с fresh guards. Не открывать
+  дополнительный цикл улучшений или автоматически обновлять pins после общего deploy.
+
 ## 2026-09-07 — Partner: завершена локальная shared Nginx adapter связка
 
 - Продолжение с `3b89c38` в прежнем WT/branch; primary sole writer, local-only

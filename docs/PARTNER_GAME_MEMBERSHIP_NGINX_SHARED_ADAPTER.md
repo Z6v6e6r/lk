@@ -132,6 +132,12 @@ native config validation, controlled application/revocation/recovery, runtime/pa
 proof, exact-head CI и разрешённые deploy/activation/postchecks. Native rehearsal
 по-прежнему `DEFERRED_BY_USER / NOT_RUN`; запускать её молча нельзя.
 
+Read-only compatibility continuation после `1c0a82d` подготовлена локально, но
+**SSH не начат**: coordinator отозвал окно `147` для отдельно разрешённого backend
+деплоя. Текущая host compatibility остаётся NOT_RUN; локальные helper tests не
+подтверждают ни соответствие, ни несоответствие реальной конфигурации. Возобновление
+требует нового неконфликтующего окна и свежих guards; pins не обновляются автоматически.
+
 Результаты тестов — в [тест-плане](PARTNER_GAME_MEMBERSHIP_TEST_PLAN.md).
 [Редактируемая инфографика](assets/partner-game-membership-ingress-evidence.drawio).
 Согласований с партнёром этот внутренний этап не добавляет; рабочие методы будут

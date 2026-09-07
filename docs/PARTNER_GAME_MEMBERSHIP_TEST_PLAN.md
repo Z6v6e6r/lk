@@ -2,6 +2,26 @@
 
 ## Уровни доказательств
 
+### 7 сентября: read-only compatibility gate подготовлен, SSH NOT_RUN
+
+Продолжение после `1c0a82d`: private one-shot diagnostic использует неизменённые
+source lexer/checker и прежний guarded reader; repo runtime не менялся. Syntax и
+локальные synthetic assertions: **16 profile/projection + 43 closure scope/pins/
+redaction + 13 scanner/path + 7 fd/ancestor/race — PASS**, actual exit 0.
+Из 43 closure checks двенадцать новых проверяют отказ при drift каждого из шести
+дополнительных файлов и сохранение их redacted aliases. Все 12 прежних content pins
+сохранены; реальные keys/cert/env/logs не читаются. Fixed metadata не заменяют
+native/effective-default semantics и не содержат raw config или error values.
+
+Coordinator отозвал `147` read window до старта SSH для отдельно разрешённого
+backend deploy. **Actual host compatibility NOT_RUN**, remote processes/writes 0;
+ничего не прерывалось. Ни profile PASS, ни mismatch на действующем сервере не доказаны.
+Полный Partner/lint/build не повторялись на неизменённых runtime inputs: предыдущие
+881/857 PASS/24 FAIL и lint 0 errors/387 warnings остаются историческими результатами.
+Native rehearsal DEFERRED_BY_USER / NOT_RUN; production entry и receipts не менялись.
+Существующая инфографика по-прежнему корректно показывает границу NOT_PROVEN;
+новой схемы или попытки PNG export этот остановленный read-only шаг не требует.
+
 ### 7 сентября: локальная shared-adapter связка
 
 [Shared adapter contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md) продолжает

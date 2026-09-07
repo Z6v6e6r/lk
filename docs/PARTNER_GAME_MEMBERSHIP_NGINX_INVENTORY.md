@@ -1,10 +1,37 @@
 # Partner Nginx: bounded read-only inventory, 7 September 2026
 
-Latest result: **DISK INCLUDE INVENTORY COMPLETED / NOT PRODUCTION VERIFICATION**.
+Latest completed host result: **DISK INCLUDE INVENTORY COMPLETED / NOT PRODUCTION VERIFICATION**.
 All literal include targets discovered by the bounded scanner were read; this is
 not a full Nginx semantic/dependency graph or proof of applied configuration.
 This records observations, not an installed Partner API, an approved private
 binding or a deploy authorization. Earlier partial captures remain below.
+
+## Compatibility continuation after `1c0a82d`: SSH not started
+
+The user approved a read-only compatibility check against the local shared-adapter
+profile. A private one-shot diagnostic now reuses the existing exact-path reader,
+fd/ancestor/epoch guards and the unchanged checkpoint's lexer and dialect checker.
+All twelve prior content hashes are pinned; no historical observation is replaced.
+Only fixed rejection codes, root-worker mode, root-http setting match flags and
+file-local literal-default counts may leave the process. Those counts are not an
+effective shared-listener or native Nginx verdict.
+
+The coordinator initially offered a read-only window, then withdrew it **before
+SSH started** for a separately approved backend deployment. No diagnostic process
+was started on `147`, and no server resource is held by this task. Actual current
+host compatibility is **NOT_RUN**, not PASS or a confirmed profile mismatch.
+
+Local final-bundle syntax and synthetic checks passed: 16 compatibility/projection
+assertions, 43 closure scope/pin/redaction assertions, 13 scanner/path assertions
+and 7 fd/ancestor/race scenarios. Security review found six missing historical
+content pins; a separate pathname-hash map closes that gap while preserving private
+output aliases. These are private-helper tests, not a new execution of the full
+Partner suite, a native rehearsal, or proof of today's host state.
+
+Resume only after a renewed non-conflicting owner window. Refresh guards immediately
+before the one allowed read; drift stops the read without automatic repinning or
+scope expansion. No key/cert/env/log reads, probes, reload, `nginx -t/-T`, deploy or
+activation are authorized by this diagnostic. The native-test deferral remains.
 
 The user separately authorized this read-only SSH stage after choosing
 `partner-api.padlhub.su` on `lk-primary-147`. The coordinator reported no conflicting
