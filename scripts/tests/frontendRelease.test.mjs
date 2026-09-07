@@ -278,13 +278,15 @@ test('offline bootstrap binds exact preimages, preserves source identity and ref
 });
 
 
-test('real nginx rehearsal is a mandatory release-mechanism check', () => {
+test('static bootstrap runtime, guard and real nginx rehearsals are mandatory release-mechanism checks', () => {
   const workflow = load(readFileSync('.github/workflows/lk1-subscription-enforcement.yml', 'utf8'));
   const gate = workflow.jobs['lk1-exact-head'].steps.find(step => step.id === 'check_static_nginx');
   assert.ok(gate);
   assert.equal(gate.if, "steps.route.outputs.profile == 'release'");
   assert.equal(gate.env.DELIVERY_CATEGORY, 'release');
   assert.equal(gate['continue-on-error'], undefined);
+  assert.match(gate.run, /npm run test:frontend-bootstrap-runtime/);
+  assert.match(gate.run, /npm run test:frontend-bootstrap-guard/);
   assert.match(gate.run, /npm run test:frontend-static-nginx/);
   assert.match(gate.run, /docker pull nginx@sha256:[a-f0-9]{64}/);
 });

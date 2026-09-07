@@ -31,9 +31,22 @@ test('real nginx keeps legacy URLs, exact cache/CORS and backend routing through
   const active = join(publicRoot, 'lk-frontend-current');
   fs.symlinkSync('lk-frontend-releases/old', active);
   const { candidate } = buildFrontendStaticCandidate(legacyStaticServer, sha256(legacyStaticServer));
+  fs.writeFileSync(join(root, 'nginx-source.conf'), `pid /tmp/nginx.pid;\nerror_log stderr notice;\nevents {}\nhttp {\naccess_log off;\n${legacyStaticServer}\n}\n`);
   fs.writeFileSync(join(root, 'nginx.conf'), `pid /tmp/nginx.pid;\nerror_log stderr notice;\nevents {}\nhttp {\naccess_log off;\n${candidate}\n}\n`);
   let id;
   t.after(() => { if (id) spawnSync('docker', ['rm', '-f', id], { stdio: 'ignore', timeout: 10000 }); fs.rmSync(root, { recursive: true, force: true }); });
+  id = docker(['run', '-d', '--network', 'none', '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/var/cache/nginx', '--platform', 'linux/amd64',
+    '--tmpfs', '/var/www/html', '-v', `${root}:/fixture:ro`, '--entrypoint', 'sh', NGINX_IMAGE,
+    '-c', 'cp -a /fixture/public/. /var/www/html/ && exec nginx -p /tmp/ -c /fixture/nginx-source.conf -g "daemon off;"']);
+  for (let i = 0; i < 30; i++) {
+    try {
+      if (docker(['exec', id, 'curl', '-fsS', 'http://127.0.0.1:18080/lk/bundle.js']).startsWith('legacy:')) break;
+    } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+  }
+  assert.match(docker(['exec', id, 'curl', '-sS', '-i', '-X', 'POST',
+    'http://127.0.0.1:18080/lk/bundle.js']), /HTTP\/1.1 405/);
+  docker(['rm', '-f', id]);
+  id = undefined;
   id = docker(['run', '-d', '--network', 'none', '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/var/cache/nginx', '--platform', 'linux/amd64',
     '--tmpfs', '/var/www/html', '-v', `${root}:/fixture:ro`, '--entrypoint', 'sh', NGINX_IMAGE,
     '-c', 'cp -a /fixture/public/. /var/www/html/ && exec nginx -p /tmp/ -c /fixture/nginx.conf -g "daemon off;"']);

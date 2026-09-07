@@ -2,6 +2,26 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Frontend static bootstrap: durable execution runtime
+
+- Анализ: production `147` не имеет atomic `lk-frontend-current/releases`, а прежний
+  upload/install оставлял mixed-set и не имел crash-safe recovery. Выбран отдельный
+  R4 static guard для однократного перевода существующего exact baseline; legacy каталог
+  и опубликованные файлы не переписываются.
+- Изменение: добавлены self-contained host audit, fresh-snapshot execution builder и
+  reproducible static guard/runtime с global+nginx+release flock/lease, durable journal,
+  crash-safe publication, `renameat2(RENAME_EXCHANGE)` nginx CAS, test/reload/readback,
+  отдельными SERVER_SUCCESS/finalize и идемпотентным recovery. Launcher/guard очищают
+  inherited FD, runtime выполняет повторный exchange через retained exact guard FD, а
+  builder принимает только exact allowlisted host/plan schema. Unknown config/current/
+  release/journal drift сохраняет blocking leases.
+- Проверка: bootstrap runtime 30/30 PASS, delivery 58/58 PASS, pinned Docker static
+  guard 1/1 PASS, real pinned nginx source/candidate/switch/rollback 1/1 PASS, полный
+  prod/dev build PASS, полный lint без ошибок (387 baseline warnings) и targeted ESLint
+  PASS. Read-only проверка `147`: kernel 6.8, `/usr/bin/bash` regular root-owned, а
+  `/bin/bash` разрешается в `/usr/bin/bash`. Upload, SSH apply, nginx reload,
+  production files, merge/push/deploy не выполнялись.
+
 ## 2026-09-06 — Partner/Viva: согласованная локальная композиция main
 
 - Анализ: после смены symbolic HEAD другим исполнителем прошлый Partner merge

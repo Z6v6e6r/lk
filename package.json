@@ -193,11 +193,13 @@
     "test:game-result-rating-worker": "node --experimental-strip-types --test scripts/tests/gameResultRatingWorker.test.ts",
     "rating:reconcile": "node --experimental-strip-types scripts/reconcile_player_rating.mjs",
     "preview": "vite preview",
-    "test:delivery": "node --experimental-strip-types --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs scripts/tests/lk1DevFrontendRelease.test.mjs scripts/tests/lk1HubPolicyTransition.test.ts",
+    "test:delivery": "node --experimental-strip-types --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs scripts/tests/lk1DevFrontendRelease.test.mjs scripts/tests/lk1HubPolicyTransition.test.ts scripts/tests/frontendBootstrapRuntime.test.mjs",
     "release:frontend:standard": "node scripts/frontend-release.mjs",
     "ci:delivery:route": "node scripts/delivery-policy.mjs",
     "test:frontend-static-nginx": "node --test scripts/tests/frontendStaticNginx.test.mjs",
-    "release:frontend:bootstrap-candidate": "node scripts/nginx/prepare_frontend_static_bootstrap.mjs"
+    "release:frontend:bootstrap-candidate": "node scripts/nginx/prepare_frontend_static_bootstrap.mjs",
+    "test:frontend-bootstrap-runtime": "node --test scripts/tests/frontendBootstrapRuntime.test.mjs",
+    "test:frontend-bootstrap-guard": "node --test scripts/tests/frontendBootstrapGuard.test.mjs"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",
