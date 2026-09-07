@@ -593,6 +593,22 @@ test("production builder rejects a Node preload environment before output", (t) 
   }
 });
 
+test("production builder rejects an invalid Darwin text-encoding environment", (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "lk-frontend-builder-cf-env-"));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  fs.chmodSync(parent, 0o700);
+  const previous = process.env.__CF_USER_TEXT_ENCODING;
+  process.env.__CF_USER_TEXT_ENCODING = "secret-smuggling";
+  try {
+    assert.throws(() => prepareFrontendBootstrapAuditKit({
+      outputDirectory: path.join(parent, "audit-kit"), production: true,
+    }), /exact clean environment/);
+  } finally {
+    if (previous === undefined) delete process.env.__CF_USER_TEXT_ENCODING;
+    else process.env.__CF_USER_TEXT_ENCODING = previous;
+  }
+});
+
 test("builder import cannot execute a malicious repository node_modules package", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "lk-frontend-builder-import-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -625,7 +641,7 @@ test("external env-i prevents NODE_OPTIONS from preloading before the production
   const result = spawnSync("/usr/bin/env", ["-i",
     "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C",
     `LK_FRONTEND_REPOSITORY=${repository}`, `LK_FRONTEND_BUILDER_COMMIT=${commit}`,
-    `LK_FRONTEND_BUILDER_SHA256=${digest(fs.readFileSync(builder))}`,
+    `LK_FRONTEND_BUILDER_SHA256=${"f".repeat(64)}`,
     `LK_FRONTEND_NODE_PATH=${process.execPath}`,
     `LK_FRONTEND_NODE_SHA256=${digest(fs.readFileSync(process.execPath))}`,
     process.execPath, builder, "--audit-kit", path.join(root, "kit")], {

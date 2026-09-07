@@ -90,8 +90,11 @@ const committedRepository = (production) => {
   }
   const allowedEnvironment = new Set(["PATH", "LANG", "LC_ALL", "LK_FRONTEND_REPOSITORY",
     "LK_FRONTEND_BUILDER_COMMIT", "LK_FRONTEND_BUILDER_SHA256", "LK_FRONTEND_NODE_PATH",
-    "LK_FRONTEND_NODE_SHA256"]);
-  if (Object.keys(process.env).some((name) => !allowedEnvironment.has(name))) {
+    "LK_FRONTEND_NODE_SHA256", "__CF_USER_TEXT_ENCODING"]);
+  const darwinTextEncoding = process.env.__CF_USER_TEXT_ENCODING;
+  if (Object.keys(process.env).some((name) => !allowedEnvironment.has(name))
+    || (darwinTextEncoding !== undefined && (process.platform !== "darwin"
+      || !/^0x[0-9A-F]+:0x[0-9A-F]+:0x[0-9A-F]+$/i.test(darwinTextEncoding)))) {
     fail("Production execution build requires an exact clean environment");
   }
   const expectedCommit = process.env.LK_FRONTEND_BUILDER_COMMIT;

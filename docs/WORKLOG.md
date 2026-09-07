@@ -15,7 +15,7 @@
   inherited FD, runtime выполняет повторный exchange через retained exact guard FD, а
   builder принимает только exact allowlisted host/plan schema. Unknown config/current/
   release/journal drift сохраняет blocking leases.
-- Проверка: bootstrap runtime 29/29 PASS, delivery 57/57 PASS, pinned Docker static
+- Проверка: bootstrap runtime 30/30 PASS, delivery 58/58 PASS, pinned Docker static
   guard 1/1 PASS, real pinned nginx source/candidate/switch/rollback 1/1 PASS, полный
   prod/dev build PASS, полный lint без ошибок (387 baseline warnings) и targeted ESLint
   PASS. Read-only проверка `147`: kernel 6.8, `/usr/bin/bash` regular root-owned, а
