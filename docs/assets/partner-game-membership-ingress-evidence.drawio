@@ -293,4 +293,19 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram name="Actual read and closed-profile mismatch">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="GUARDED READ · 7 SEP 08:28 UTC&#xa;12 prior file hashes matched&#xa;Master + four-worker epoch stable&#xa;SSH exit 0 · window released" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="CLOSED PROFILE · SOURCE 1c0a82d&#xa;Server declaration: auto&#xa;Checker accepts only literal 4&#xa;MAIN_UNSUPPORTED → REJECTED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="NO PRODUCTION APPROVAL&#xa;Not a native Nginx error&#xa;Native / application NOT_RUN&#xa;Config writes / deploy = 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1380" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="PROPOSED NEXT LOCAL SCOPE&#xa;Auto / defaults / header profile&#xa;Preserve actual four-worker proof&#xa;No global server edits" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="460" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="same private config bytes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="7" value="read PASS ≠ profile PASS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="requires next-scope approval" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

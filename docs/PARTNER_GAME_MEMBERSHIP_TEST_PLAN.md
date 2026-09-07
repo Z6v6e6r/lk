@@ -2,6 +2,30 @@
 
 ## Уровни доказательств
 
+### 7 сентября: actual read завершён, закрытый профиль несовместим
+
+После `9901488` пользователь подтвердил продолжение и coordinator предоставил новое
+одноразовое read-only окно. Fresh local guards: прежняя clean branch/HEAD, четыре
+repo inputs byte-equal source `1c0a82d`, reviewed helper SHA совпал. Новых source
+изменений не было: прежние helper tests/review не повторялись без изменённых inputs.
+
+Actual SSH exit **0**, 08:28:02.408–08:28:02.618 UTC, stderr 0 bytes. Все **12 file pins**,
+fd/path before-after и финальный host/master/four-worker epoch совпали; **1,235 lexical
+statements**, skipped 0. Checker вернул **CLOSED_PROFILE_REJECTED**, первый код
+`NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED`; root `worker_processes=AUTO`, тогда как source
+разрешает только `4`. Чтение PASS не является compatibility PASS или native validation.
+
+Дополнительные file-local observations: ноль exact explicit IPv4/IPv6 TLS default
+declarations, root-http TLS-list отличается и пять header directives отсутствуют в
+этом контексте. Это не проверка effective/include/default inheritance и не полный
+перечень ошибок; checker остановился на первом rejection. Safety gates не ослаблены.
+
+Нет новых network probes/native/-t/-T/reload, key/cert/env/log reads, server/provider/
+shared-data writes, merge/push/deploy/activation. После actual exit окно освобождено.
+Full Partner/lint/build не перезапускались для docs-only diff; предыдущий release RED
+не изменён. Drawio-skill: existing XML дополнен страницей разделения read/profile/native
+evidence, PNG/visual QA NOT_RUN после известного Electron/sandbox blocker.
+
 ### 7 сентября: read-only compatibility gate подготовлен, SSH NOT_RUN
 
 Продолжение после `1c0a82d`: private one-shot diagnostic использует неизменённые

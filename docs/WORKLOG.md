@@ -2,6 +2,42 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-07 — Partner: actual read PASS, shared profile CLOSED_PROFILE_REJECTED
+
+- Продолжение с clean `9901488`, та же branch/worktree, sole writer. Пользователь
+  подтвердил read после освобождения147окна; coordinator предоставил одно новое
+  неконфликтующее окно, когда другой deploy ещё не занял сервер.
+- Предложенная heartbeat automation не создана: auto-review отклонил периодическое
+  расписание. Обходов/повторных попыток не было. Свободное окно позволило выполнить
+  уже разрешённое непосредственное чтение, а не отложенную автоматизацию.
+- Fresh local guards PASS: HEAD/branch/clean state, four repo inputs byte-equal
+  runtime source `1c0a82d`, reviewed helper SHA exact. Helper/source tests и security
+  review использованы из предыдущего этапа без изменений; новых source diffs нет.
+- Actual one SSH19110 exit0, 08:28:02.408–08:28:02.618 UTC, stderr empty. Прежние12
+  file-content pins, fd/path checks и final host/master/four-worker epoch совпали;
+  1,235 lexical statements, skipped0. Сразу после actual exit coordinator получил
+  RELEASED, процессов/ресурсов не удерживаем, новых SSH не запускали.
+- Result CLOSED_PROFILE_REJECTED, firstcode NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED.
+  Root worker_processes=AUTO при literal4 в source profile. Это source compatibility
+  mismatch, не native/runtime Nginx failure и не blocker чужого backend deploy.
+- File-local structural projection: zero exact IPv4/IPv6 explicit TLS default
+  declarations; root-http TLS list different, five header settings missing. Эти
+  данные не аттестуют effective defaults/inheritance, последующие gates не пройдены.
+- Hostwrites/probes0, key/cert/env/log refs не читались. Нет -t/-T/native/reload,
+  provider/shared-data writes, push/PR/merge/CI/deploy/activation. Runtime/policy/
+  production entry и historical receipts byte-preserved; native DEFERRED/NOT_RUN.
+- В repo обновлены NGINX_INVENTORY, NGINX_SHARED_ADAPTER, TEST_PLAN, этот WORKLOG и
+  существующая drawio evidence schema. Drawio-skill XML-only fallback, PNG/visual QA
+  NOT_RUN после известного Electron/sandbox blocker. Fullsuite/lint/build не повторены
+  для docs-only diff; прежние881/857PASS/24FAIL остаются историческим release RED.
+- XML structural validator0errors/0warnings,68local links/anchorsPASS, whitespace
+  diffPASS; отдельная локальная сверка12old path/content hashes с новым capturePASS.
+  Read-only evidence/claims review пяти docs/schema: P0–P2=0; reviewer не аттестует
+  отсутствующие rawconfig/guard history, native или production acceptance.
+- Следующий предложенный scope — локальная совместимость профиля с текущими settings
+  без global server edits и без ослабления actual-worker/default/header safeguards.
+  В текущем read-only этапе исправление не начинается. MODEL_ROUTE: parent.
+
 ## 2026-09-07 — Partner: compatibility read подготовлен, окно отозвано до SSH
 
 - Пользователь подтвердил read-only compatibility gate после `1c0a82d`; сохранены

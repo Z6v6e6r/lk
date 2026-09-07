@@ -132,11 +132,16 @@ native config validation, controlled application/revocation/recovery, runtime/pa
 proof, exact-head CI и разрешённые deploy/activation/postchecks. Native rehearsal
 по-прежнему `DEFERRED_BY_USER / NOT_RUN`; запускать её молча нельзя.
 
-Read-only compatibility continuation после `1c0a82d` подготовлена локально, но
-**SSH не начат**: coordinator отозвал окно `147` для отдельно разрешённого backend
-деплоя. Текущая host compatibility остаётся NOT_RUN; локальные helper tests не
-подтверждают ни соответствие, ни несоответствие реальной конфигурации. Возобновление
-требует нового неконфликтующего окна и свежих guards; pins не обновляются автоматически.
+После паузы `9901488` получено новое неконфликтующее окно: одно read-only чтение
+7 сентября 08:28:02 UTC завершилось exit 0, все 12 prior config pins и final epoch
+guards совпали. Checker этого source checkpoint вернул **CLOSED_PROFILE_REJECTED /
+NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED**. Подтверждено `worker_processes auto` при
+требовании literal `4`; это несовместимость нашего профиля, не ошибка native Nginx.
+Четыре фактически наблюдённых worker процесса не устраняют этот source mismatch.
+File-local данные о defaults/header settings не являются effective semantics;
+полный результат и границы — в [инвентаризации](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+Сервер и профиль не менялись. Следующий local compatibility scope требует отдельного
+подтверждения; запрет live changes и отложенный native gate остаются в силе.
 
 Результаты тестов — в [тест-плане](PARTNER_GAME_MEMBERSHIP_TEST_PLAN.md).
 [Редактируемая инфографика](assets/partner-game-membership-ingress-evidence.drawio).

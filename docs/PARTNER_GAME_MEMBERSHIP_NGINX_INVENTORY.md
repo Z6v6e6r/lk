@@ -1,12 +1,47 @@
 # Partner Nginx: bounded read-only inventory, 7 September 2026
 
-Latest completed host result: **DISK INCLUDE INVENTORY COMPLETED / NOT PRODUCTION VERIFICATION**.
+Latest completed host result: **READ COMPLETED / CLOSED ADAPTER PROFILE REJECTED / NOT PRODUCTION VERIFICATION**.
 All literal include targets discovered by the bounded scanner were read; this is
 not a full Nginx semantic/dependency graph or proof of applied configuration.
 This records observations, not an installed Partner API, an approved private
 binding or a deploy authorization. Earlier partial captures remain below.
 
-## Compatibility continuation after `1c0a82d`: SSH not started
+## Compatibility read after `9901488`: completed with a profile mismatch
+
+The user confirmed continuation after release of the shared window. The coordinator
+then granted one immediate, non-conflicting read; another deployment had not acquired
+the host window. The reviewed helper ran once through SSH stdin at
+**08:28:02.408–08:28:02.618 UTC**, actual SSH exit **0**, stderr empty.
+All twelve prior file-content pins and final fd/path/host/process guards matched;
+the bounded inventory still contained **1,235 lexical statements**, no skipped targets.
+The SSH process exited and the window was released to the coordinator immediately.
+
+The unchanged checkpoint `1c0a82d` checker returned **CLOSED_PROFILE_REJECTED**,
+with first code `NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED`. This is a compatibility
+failure of our constrained source profile, **not a native Nginx error or outage**.
+
+| Evidence | Observed result | Meaning and limit |
+| --- | --- | --- |
+| Root `worker_processes` | `auto` | Confirmed mismatch: the source profile accepts only literal `4` |
+| Process epoch | The pinned master and four workers matched before/after | Four observed processes do not turn an `auto` declaration into literal `4`, or prove a new configuration was applied |
+| File-local explicit TLS defaults | Zero exact `443 ssl default_server` and `[::]:443 ssl default_server` declarations in the structural projection | Not an effective default-selection analysis; the checker stopped before this gate |
+| Root-http early settings | TLS list differs from the closed profile; five explicit header settings absent in root-http | Not a claim that the effective settings are absent or insecure: included/server/default contexts still require separate reasoning |
+| Native/application/external proof | NOT_RUN | No `nginx -t/-T`, reload or probes occurred; native rehearsal remains deferred |
+
+The exact reviewed helper SHA-256 was
+`b79ec21685cfb800fecc4a99609f5815b8b466a77df2cfa417118b97c9884fe1`.
+It exported fixed metadata only; certificate/key/env/client-log references were not
+followed, and intentional host writes and probes were zero. Earlier captures and
+source/proof pins were retained, not replaced or resealed.
+
+No fix was applied. The next proposed scope is local profile compatibility work,
+retaining the actual four-worker proof and shared-default/header safety boundaries;
+do not change global server settings simply to satisfy this checker. This read-only
+approval does not authorize that source expansion, another SSH run, or deployment.
+The attempted background schedule was rejected and not created; immediate reading
+used the independently granted window, not a scheduling workaround.
+
+## Historical compatibility preparation after `1c0a82d`: SSH not started
 
 The user approved a read-only compatibility check against the local shared-adapter
 profile. A private one-shot diagnostic now reuses the existing exact-path reader,
@@ -19,7 +54,7 @@ effective shared-listener or native Nginx verdict.
 The coordinator initially offered a read-only window, then withdrew it **before
 SSH started** for a separately approved backend deployment. No diagnostic process
 was started on `147`, and no server resource is held by this task. Actual current
-host compatibility is **NOT_RUN**, not PASS or a confirmed profile mismatch.
+host compatibility at that checkpoint was **NOT_RUN**, not PASS or a confirmed profile mismatch.
 
 Local final-bundle syntax and synthetic checks passed: 16 compatibility/projection
 assertions, 43 closure scope/pin/redaction assertions, 13 scanner/path assertions
