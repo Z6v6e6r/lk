@@ -1,3 +1,4 @@
+import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
 import {
   TENANT_KEY,
   API_BASE,
@@ -10249,6 +10250,26 @@ export async function apiFetchMasterServiceGameModes(options: {
     error: null,
     status: 200 as ApiStatus,
   };
+}
+
+/** Advisory read only: this endpoint never creates/reserves a game or charges a subscription. */
+export async function apiFetchSubscriptionPricePreview(
+  target: SubscriptionPriceTarget,
+  subscriptionIds: string[],
+  signal: AbortSignal,
+): Promise<ApiResult<{ quotes: SubscriptionPriceQuote[] }>> {
+  const candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
+  let result: ApiResult<{ quotes: SubscriptionPriceQuote[] }> = {
+    data: null, error: { status: null, message: "Не удалось проверить условия подписок" }, status: null,
+  };
+  for (const baseUrl of candidates.length ? candidates : [getServ2Origin()]) {
+    if (signal.aborted) break;
+    result = await rawRequest<{ quotes: SubscriptionPriceQuote[] }>("/lk/subscriptions/game-price-preview", {
+      method: "POST", auth: true, baseUrl, signal, body: JSON.stringify({ target, subscriptionIds }),
+    });
+    if (signal.aborted || result.status !== null) break;
+  }
+  return result;
 }
 
 export async function apiFetchSubscriptioName(subId: string, _phone: string): Promise<ApiResult<SubscriptionName>> {

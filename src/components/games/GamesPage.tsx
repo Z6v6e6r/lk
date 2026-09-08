@@ -1,3 +1,6 @@
+import { createSubscriptionPriceTarget } from "./subscriptionPricePreview";
+import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
+import { SubscriptionPricePreviewAside } from "./SubscriptionPricePreviewAside";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -7052,9 +7055,16 @@ export default function GamesPage({
   const publicCreateVisibilityOpenPillLabel = "Быстрее собрать";
   const publicCreateVisibilityPrivatePillLabel = "Для своих";
   const publicCreateGeneralListCardLabel = "Общий список игр";
-  const shouldShowPublicSplitSubscriptionBadge = splitHasSubscriptionPaymentOptions
-    && !splitSubscriptionsLoading
-    && !splitPaymentAvailabilityLabelIsError;
+  const publicSplitPricePreview = useSubscriptionPricePreview({
+    target: createSubscriptionPriceTarget({ slotId: selectedSlotId, stationId: studioId, roomId: courtId,
+      masterServiceId: studioMasterServiceId, subServiceIds: resolvedSelectedSubServiceIds,
+      date: selectedDate ? formatDateLocalIso(selectedDate) : null, fromTime: time,
+      durationMinutes: duration, shareCount: splitShareCount }),
+    subscriptionIds: splitSubscriptionPaymentOptions.map(option => option.subscriptionId),
+    actorId: profileId,
+    enabled: usePublicCreateWizard && step === "time" && canProceedToPayment && !splitPaymentAvailabilityLabelIsError,
+    availabilityLoading: splitSubscriptionsLoading,
+  });
   const shouldShowPublicSplitSubscriptionInfoBadge = !splitHasSubscriptionPaymentOptions
     && !splitSubscriptionsLoading
     && !splitPaymentAvailabilityLabelIsError;
@@ -7200,7 +7210,9 @@ export default function GamesPage({
         splitRequiredTypeIds,
         splitRequiredDirectionIds,
         studioId,
-        splitRequiredSubscriptionVisits,
+        // Candidates only: HAB needs one visit even for 90/120 minutes.
+        // The server preview and CREATE determine the actual entitlement.
+        usePublicCreateWizard ? 1 : splitRequiredSubscriptionVisits,
         duration,
         selectedDate ? formatDateLocalIso(selectedDate) : null,
       );
@@ -7273,6 +7285,7 @@ export default function GamesPage({
     splitRequiredSubscriptionVisits,
     splitRequiredTypeIds,
     studioId,
+    usePublicCreateWizard,
   ]);
   const handlePaymentModeSwitchTap = useCallback(() => {
     setPaymentMode((current) => {
@@ -15031,7 +15044,7 @@ export default function GamesPage({
                 <div className="game-card-title">Кто оплачивает корт?</div>
                 <button
                   type="button"
-                  className={`game-payment-choice-card game-payment-choice-card--payer ${splitPaymentSelected ? "selected" : ""}`}
+                  className={`game-payment-choice-card game-payment-choice-card--payer game-payment-choice-card--with-price-preview ${splitPaymentSelected ? "selected" : ""}`}
                   onClick={(event) => {
                     const target = event.target;
                     if (target instanceof HTMLElement && target.closest("[data-subscription-info-trigger='true']")) {
@@ -15073,22 +15086,13 @@ export default function GamesPage({
                       <span>{publicCreateJoinersPillLabel}</span>
                     </span>
                   </span>
-                  <span className={`game-payment-choice-aside${shouldShowPublicSplitSubscriptionBadge ? " game-payment-choice-aside--subscription" : ""}`}>
-                    <strong className={`game-payment-choice-price${shouldShowPublicSplitSubscriptionBadge ? " game-payment-choice-price--discounted" : ""}`}>
-                      {`${formatPrice(splitShareAmount)} ₽`}
-                    </strong>
-                    {shouldShowPublicSplitSubscriptionBadge ? (
-                      <span className="game-payment-choice-badge">Подписка</span>
-                    ) : null}
-                    {shouldShowPublicSplitSubscriptionInfoBadge && (
-                      <span
-                        className="game-payment-choice-badge game-payment-choice-badge--outline"
-                        data-subscription-info-trigger="true"
-                      >
-                        Подписка
-                      </span>
-                    )}
-                  </span>
+                  <SubscriptionPricePreviewAside
+                    ordinaryPrice={`${formatPrice(splitShareAmount)} ₽`}
+                    ordinaryPriceMinor={Math.round(splitShareAmount * 100)}
+                    preview={publicSplitPricePreview}
+                    showPreview={splitHasSubscriptionPaymentOptions || splitSubscriptionsLoading}
+                    showInfoBadge={shouldShowPublicSplitSubscriptionInfoBadge}
+                  />
                 </button>
                 <button
                   type="button"

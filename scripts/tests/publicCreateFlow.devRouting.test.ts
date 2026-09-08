@@ -168,10 +168,10 @@ test("public game create flow uses dedicated summary and split checkout selectio
     gamesPageSource,
     /const guarded = preferredPaymentMode === "subscription";[\s\S]*splitSubscriptionSubmitInFlightRef\.current/,
   );
-  assert.match(gamesPageSource, /shouldShowPublicSplitSubscriptionBadge \? \(\s*<span className="game-payment-choice-badge">Подписка<\/span>/);
-  assert.match(gamesPageSource, /game-payment-choice-price\$\{shouldShowPublicSplitSubscriptionBadge \? " game-payment-choice-price--discounted" : ""\}/);
+  assert.match(gamesPageSource, /<SubscriptionPricePreviewAside/);
+  assert.match(gamesPageSource, /preview=\{publicSplitPricePreview\}/);
   assert.match(gamesPageSource, /!usePublicCreateWizard && <span className="game-submit-price">\{paymentBookingAmount\}<\/span>/);
-  assert.match(gamesPageSource, /className=\{`game-payment-choice-card game-payment-choice-card--payer \$\{splitPaymentSelected \? "selected" : ""\}`\}/);
+  assert.match(gamesPageSource, /className=\{`game-payment-choice-card game-payment-choice-card--payer game-payment-choice-card--with-price-preview \$\{splitPaymentSelected \? "selected" : ""\}`\}/);
   assert.match(gamesPageSource, /publicCreateFinalSubmitTitle/);
   assert.match(gamesPageSource, /Параметры игры/);
   assert.match(gamesPageSource, /Показано время для/);
@@ -277,4 +277,15 @@ test("public game create styling keeps friendship chips and new rating range sty
     /\.game-create-level-option\.selected \.game-payment-choice-radio::after \{[\s\S]*?content: "";/,
   );
   assert.doesNotMatch(myAppCssSource, /\.game-visibility-option-inline-icon/);
+});
+
+test("production time-step quote does not depend on the DEV payment demo", () => {
+  const start = gamesPageSource.indexOf("const publicSplitPricePreview = useSubscriptionPricePreview");
+  const block = gamesPageSource.slice(start, gamesPageSource.indexOf("const shouldShowPublicSplitSubscriptionInfoBadge", start));
+  assert.match(block, /target: createSubscriptionPriceTarget/);
+  assert.doesNotMatch(block, /IS_DEV_RELEASE_CHANNEL|a3Pay|subscriptionUsageShadowCreatePreview/);
+});
+
+test("public price preview retains one-visit candidates for authoritative HAB overage evaluation", () => {
+  assert.match(gamesPageSource, /usePublicCreateWizard \? 1 : splitRequiredSubscriptionVisits/);
 });
