@@ -1,6 +1,7 @@
 // Explicit owner-run DEV adaptation of the existing atomic static publisher.
 // No bootstrap, routing, backend, font or opposite-channel mutations here.
 import { execFileSync } from 'node:child_process';
+import https from 'node:https';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,6 +13,7 @@ import { readRepositoryProvenance } from './lib/release-provenance.mjs';
 export const devFiles = Object.freeze([...releaseArtifactNames('release-dev.json'), 'release-dev.json']);
 export const DEV_CURRENT_ROOT = '/var/www/html/lk-frontend-dev-current';
 export const DEV_RELEASES_ROOT = '/var/www/html/lk-frontend-dev-releases';
+export const DEV_ASSET_BASE = 'https://lk-reserve.89-108-64-209.sslip.io/lk/';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -40,12 +42,39 @@ export function devUploadEnvironment(directory, destination, expected, token) {
     DEPLOY_DEV_ISOLATED: '1', DEPLOY_PRUNE_OPPOSITE_CHANNEL: '0', DEPLOY_USE_SUDO: '0' };
 }
 
-async function readback(expected) {
+// SCP blocks the event loop long enough for nginx to close pooled idle sockets.
+// Each verification GET owns its connection, including verification after rollback.
+export function readDevArtifact(url, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const request = https.get(url, { agent: false, headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.once('error', reject);
+      response.once('end', () => resolve({
+        status: response.statusCode, headers: response.headers, bytes: Buffer.concat(chunks),
+      }));
+      response.once('close', () => clearTimeout(timer));
+    });
+    request.once('error', error => { clearTimeout(timer); reject(error); });
+    timer = setTimeout(() => request.destroy(Object.assign(new Error('Readback deadline exceeded'),
+      { code: 'READBACK_TIMEOUT' })), timeoutMs);
+    timer.unref();
+  });
+}
+
+export async function readback(expected, { baseUrl = DEV_ASSET_BASE, timeoutMs = 20000 } = {}) {
   for (const name of devFiles) {
-    const response = await fetch(`https://lk-reserve.tsup.space/lk/${name}?v=${encodeURIComponent(expected.version)}`,
-      { signal: AbortSignal.timeout(20000), redirect: 'error', cache: 'no-store' });
-    if (!response.ok || hash(Buffer.from(await response.arrayBuffer())) !== expected.hashes[name]) throw new Error(`DEV public bytes mismatch: ${name}`);
-    if (name === 'release-dev.json' && !/no-store|no-cache/.test(response.headers.get('cache-control') || '')) throw new Error('DEV manifest cache guard missing');
+    let response;
+    try {
+      response = await readDevArtifact(`${baseUrl}${name}?v=${encodeURIComponent(expected.version)}`, timeoutMs);
+    } catch (error) {
+      // File and stable transport code only; never log request headers or raw URLs.
+      throw new Error(`DEV public readback failed: ${name} (${error.code || 'NETWORK_ERROR'})`, { cause: error });
+    }
+    if (response.status < 200 || response.status >= 300) throw new Error(`DEV public readback HTTP ${response.status}: ${name}`);
+    if (hash(response.bytes) !== expected.hashes[name]) throw new Error(`DEV public bytes mismatch: ${name}`);
+    if (name === 'release-dev.json' && !/no-store|no-cache/.test(response.headers['cache-control'] || '')) throw new Error('DEV manifest cache guard missing');
   }
 }
 
