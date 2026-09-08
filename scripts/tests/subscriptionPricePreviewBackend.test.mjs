@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 import { composeSubscriptionPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
@@ -30,9 +31,9 @@ function harness(options={}) {
   const node = name=>nodes.find(row=>row.id.endsWith('_'+name));
   let current=node('entry');
   for(let i=0;i<100;i++) {
-    if(current.type==='http response') return {response:msg,calls};
+    if(current.type==='http response') return {response:structuredClone(msg),calls};
     if(current.type==='function') {
-      const result = new Function('msg','global','env','node',current.func)(msg,
+      const result = vm.compileFunction(current.func, ['msg','global','env','node'], {parsingContext:vm.createContext({})})(msg,
         {get:key=>globals[key],set(){assert.fail('No global writes allowed');}}, {get(){return undefined;}}, {warn(){assert.fail('No raw debug allowed');}});
       const outputs=Array.isArray(result)?result:[result]; const port=outputs.findIndex(Boolean);
       assert.ok(port>=0,'Every fixture request must terminate'); msg=outputs[port];
@@ -162,4 +163,25 @@ liveTest('one visit remains a HAB 90/120 minute candidate while legacy cannot us
     assert.notEqual(legacy.payload.quotes[0].status,'AVAILABLE');
     assert.equal(legacy.payload.quotes[0].amountMinor,null);
   }
+});
+
+
+test('tariff query runs in a Function sandbox without Node global URLSearchParams',()=>{
+  const source=fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js',import.meta.url),'utf8');
+  const context=vm.createContext({});
+  assert.equal(vm.runInContext('typeof URLSearchParams',context),'undefined');
+  const run=vm.compileFunction(source,['msg','pricing'],{parsingContext:context});
+  const msg={statusCode:200,payload:[{id:service}],_subscriptionPricePreview:{
+    tenantKey:'fixture',auth:'Bearer fixture-user',step:'subservices',startedAt:Date.now(),target}};
+  const outputs=run(msg,{extractList:value=>value});
+  assert.equal(outputs[0],msg);
+  const url=new URL(msg.url);
+  assert.equal(msg.method,'GET');
+  assert.equal(url.origin,'https://api.vivacrm.ru');
+  assert.equal(url.searchParams.get('studioId'),studio);
+  assert.equal(url.searchParams.get('roomId'),room);
+  assert.equal(url.searchParams.get('subServiceIds'),service);
+  assert.equal(url.searchParams.get('fromDate'),'2099-09-21');
+  assert.equal(url.searchParams.get('fromTime'),'07:00:00');
+  assert.equal(url.searchParams.get('toTime'),'08:30:00');
 });

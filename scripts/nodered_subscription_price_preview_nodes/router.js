@@ -112,9 +112,11 @@ if (ctx.step === 'subservices') {
   const localEnd = new Date(Date.parse(ctx.target.startsAt) + (ctx.target.durationMinutes + 180) * 60000).toISOString();
   // Current CREATE binds a single local date to both ends. Do not invent a cross-day tariff here.
   if (localEnd.slice(0, 10) !== ctx.target.startsAt.slice(0, 10)) return stop('PRICE_PREVIEW_CROSS_DAY_UNRESOLVED');
-  const query = new URLSearchParams({ studioId: ctx.target.stationId, roomId: ctx.target.roomId,
+  // Function nodes do not expose Node.js URLSearchParams in their sandbox.
+  const query = Object.entries({ studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     subServiceIds: ctx.target.subServiceIds.join(','), fromTime: ctx.target.startsAt.slice(11, 19),
-    toTime: localEnd.slice(11, 19), fromDate: ctx.target.startsAt.slice(0, 10) });
+    toTime: localEnd.slice(11, 19), fromDate: ctx.target.startsAt.slice(0, 10) })
+    .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&');
   return http('price', `/end-user/api/v1/${ctx.tenantKey}/products/master-services/${ctx.target.masterServiceId}/price?${query}`);
 }
 if (ctx.step === 'price') {
