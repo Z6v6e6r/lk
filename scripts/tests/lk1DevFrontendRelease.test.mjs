@@ -109,14 +109,16 @@ test('DEV readback survives blocked uploads with fresh verified TLS and preserve
   `;
   await run(imports + `
     import { deploy } from ${JSON.stringify(deployUrl)};
-    // Reproduce the old pooled-fetch failure in a separate server process while this
-    // event loop is blocked, then exercise the real fixed readback under the same pause.
-    for (let i = 0; i < 2; i++) { const r = await fetch(baseUrl + 'release-dev.json'); await r.arrayBuffer(); }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
-    await assert.rejects(fetch(baseUrl + 'release-dev.json'), error => error.cause?.code === 'UND_ERR_SOCKET');
+    // Leave a pooled connection idle while the upload blocks network events.
+    // Do not require a particular undici version to fail on that stale socket;
+    // assert our reader's connection isolation directly, even without a pause.
+    const pooled = await fetch(baseUrl + 'release-dev.json'); await pooled.arrayBuffer();
     const before = await readDevArtifact(baseUrl + 'release-dev.json');
+    const immediate = await readDevArtifact(baseUrl + 'release-dev.json');
+    assert.notEqual(before.headers['x-test-connection'], immediate.headers['x-test-connection']);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
     const after = await readDevArtifact(baseUrl + 'release-dev.json');
+    assert.notEqual(pooled.headers.get('x-test-connection'), after.headers['x-test-connection']);
     assert.notEqual(before.headers['x-test-connection'], after.headers['x-test-connection']);
     assert.equal(after.status, 200);
     await readback(expected, { baseUrl }); // All twelve hashes and manifest cache header.
