@@ -18,7 +18,7 @@ export const PREVIEW_CSP = [
 
 export const blockedPayload = {
   code: 'LK1_LOCAL_EXTERNAL_ACCESS_DISABLED',
-  message: 'LK1 запущен локально. Подключение боевого аккаунта ещё не разрешено.',
+  message: 'Локальный ЛК работает только для чтения. Этот запрос заблокирован.',
 };
 
 export function localPreviewPlugin() {
@@ -28,7 +28,7 @@ export function localPreviewPlugin() {
     res.end(JSON.stringify(payload));
   };
   return {
-    name: 'lk1-local-offline-preview',
+    name: 'lk1-local-readonly-preview',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
@@ -46,7 +46,7 @@ export function localPreviewPlugin() {
         }
         const url = new URL(req.url || '/', PREVIEW_ORIGIN);
         if (url.pathname === '/__lk1_local/status') {
-          return json(res, 200, { mode: 'offline', upstreamConnections: 0, blockedRequests });
+          return json(res, 200, { mode: 'production-readonly', blockedRequests });
         }
         if (url.pathname === '/__lk1_local/blocked') {
           blockedRequests += 1;
@@ -62,7 +62,7 @@ export function localPreviewPlugin() {
           res.end(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LK1 — локальная версия</title><style>
             *{box-sizing:border-box}html,body{margin:0;height:100%;font-family:system-ui,sans-serif;background:#f4f6f8;color:#152b3a}
             body{display:flex;flex-direction:column}header{padding:12px 20px;background:#152b3a;color:white;display:flex;gap:8px 20px;align-items:center;flex-wrap:wrap}strong{white-space:nowrap}span{font-size:13px;line-height:1.4;color:#dde6ee}iframe{width:100%;flex:1;border:0;background:white}
-          </style></head><body><header><strong>LK1 · Локальная версия</strong><span>Внешние запросы заблокированы. Вход в боевой аккаунт ещё не подключён.</span></header><iframe title="Личный кабинет LK1" src="/lk_new?authMode=viva" sandbox="allow-scripts allow-same-origin allow-forms"></iframe></body></html>`);
+          </style></head><body><header><strong>LK1 · Локальная версия</strong><span>Вход через SMS · Боевые данные только для чтения. Брони, оплаты и изменения заблокированы.</span></header><iframe title="Личный кабинет LK1" src="/lk_new?authMode=viva" sandbox="allow-scripts allow-same-origin allow-forms"></iframe></body></html>`);
           return;
         }
         // Keep the application inside the shell: its frame-src blocks remote

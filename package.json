@@ -193,7 +193,7 @@
     "test:game-result-rating-worker": "node --experimental-strip-types --test scripts/tests/gameResultRatingWorker.test.ts",
     "rating:reconcile": "node --experimental-strip-types scripts/reconcile_player_rating.mjs",
     "preview": "vite preview",
-    "test:delivery": "node --experimental-strip-types --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs scripts/tests/lk1DevFrontendRelease.test.mjs scripts/tests/lk1HubPolicyTransition.test.ts scripts/tests/frontendBootstrapRuntime.test.mjs",
+    "test:delivery": "node --experimental-strip-types --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs scripts/tests/deliveryPolicy.test.mjs scripts/tests/frontendRelease.test.mjs scripts/tests/lk1DevFrontendRelease.test.mjs scripts/tests/lk1HubPolicyTransition.test.ts scripts/tests/frontendBootstrapRuntime.test.mjs scripts/tests/lk1LocalPreview.test.mjs scripts/tests/lk1LocalGateway.test.mjs",
     "release:frontend:standard": "node scripts/frontend-release.mjs",
     "ci:delivery:route": "node scripts/delivery-policy.mjs",
     "test:frontend-static-nginx": "node --test scripts/tests/frontendStaticNginx.test.mjs",
@@ -203,7 +203,7 @@
     "local:up": "docker compose -f compose.lk1-local.yaml up -d --build",
     "local:status": "docker compose -f compose.lk1-local.yaml ps",
     "local:stop": "docker compose -f compose.lk1-local.yaml stop",
-    "test:local-preview": "node --test scripts/tests/lk1LocalPreview.test.mjs"
+    "test:local-preview": "node --test scripts/tests/lk1LocalPreview.test.mjs scripts/tests/lk1LocalGateway.test.mjs"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

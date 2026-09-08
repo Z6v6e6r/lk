@@ -41,7 +41,7 @@ test('status exposes aggregate counters only, never request values', () => {
   const request = middlewareHarness();
   request('/__lk1_local/blocked?private=test-value');
   const response = request('/__lk1_local/status');
-  assert.deepEqual(JSON.parse(response.body), { mode: 'offline', upstreamConnections: 0, blockedRequests: 1 });
+  assert.deepEqual(JSON.parse(response.body), { mode: 'production-readonly', blockedRequests: 1 });
   assert.equal(response.body.includes('test-value'), false);
 });
 

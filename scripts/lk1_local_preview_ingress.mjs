@@ -1,7 +1,10 @@
-// Fixed local Docker hop only. There is no configurable or request-derived
-// upstream, credential handling, production API route, or CONNECT support.
+// The local hop stays fixed. Only the separately validated gateway may reach
+// the fixed identity provider and five own-account read templates.
 import http from 'node:http';
 import net from 'node:net';
+import { createGateway, webHeaders } from './lk1_local_gateway.mjs';
+
+const gateway = createGateway();
 
 const valid = (req) => req.headers.host === '127.0.0.1:5180'
   && req.url?.startsWith('/') && !req.url.startsWith('//')
@@ -9,14 +12,19 @@ const valid = (req) => req.headers.host === '127.0.0.1:5180'
   && req.headers['sec-fetch-site'] !== 'cross-site';
 
 const server = http.createServer((req, res) => {
+  if (req.url === '/__lk1_local/gateway') { void gateway.handle(req, res); return; }
   if (!valid(req) || !['GET', 'HEAD'].includes(req.method || 'GET')) {
     res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ code: 'LK1_LOCAL_EXTERNAL_ACCESS_DISABLED' }));
     return;
   }
+  if (req.url === '/__lk1_local/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(gateway.status())); return;
+  }
   const upstream = http.request({
     hostname: 'web', port: 5173, path: req.url, method: req.method,
-    headers: req.headers, timeout: 15000,
+    headers: webHeaders(req.headers), timeout: 15000,
   }, (response) => {
     res.writeHead(response.statusCode || 502, response.headers);
     response.pipe(res);
@@ -30,7 +38,7 @@ const server = http.createServer((req, res) => {
 server.on('upgrade', (req, socket, head) => {
   if (!valid(req) || req.headers['sec-websocket-protocol'] !== 'vite-hmr') { socket.destroy(); return; }
   const upstream = net.connect(5173, 'web', () => {
-    upstream.write(`GET ${req.url} HTTP/1.1\r\n${Object.entries(req.headers).map(([key, value]) => `${key}: ${value}`).join('\r\n')}\r\n\r\n`);
+    upstream.write(`GET ${req.url} HTTP/1.1\r\n${Object.entries(webHeaders(req.headers)).map(([key, value]) => `${key}: ${value}`).join('\r\n')}\r\n\r\n`);
     if (head.length) upstream.write(head);
     socket.pipe(upstream).pipe(socket);
   });
