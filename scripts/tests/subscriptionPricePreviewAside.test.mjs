@@ -13,3 +13,19 @@ test('unknown state never crosses out price and exposes a live status',()=>{
  const html=render(200000,{state:'unavailable',label:'Условия подписки не подтверждены',detail:null,amountMinor:null});
  assert.doesNotMatch(html,/price--discounted/);assert.match(html,/role="status"/);assert.match(html,/aria-live="polite"/);
 });
+
+
+const optionBundle=await build({entryPoints:['src/components/games/SubscriptionOptionPrice.tsx'],bundle:true,write:false,format:'cjs',platform:'node',jsx:'automatic',external:['react','react/jsx-runtime'],logLevel:'silent'});
+const optionModule={exports:{}};new Function('require','module','exports',optionBundle.outputFiles[0].text)(require,optionModule,optionModule.exports);
+const renderOption=(value,shareLabel='1/4')=>renderToStaticMarkup(React.createElement(optionModule.exports.SubscriptionOptionPrice,{preview:value,shareLabel}));
+test('subscription option renders exact participation price and overage without a minimum label',()=>{
+  const html=renderOption(preview);assert.match(html,/Участие в 1\/4 игры · 700 ₽/);
+  assert.match(html,/Доплата за 30 мин/);assert.doesNotMatch(html,/от 700/);
+  assert.match(renderOption({...preview,amountMinor:0,detail:null}),/0 ₽/);
+  assert.match(renderOption({...preview,amountMinor:105050},'1/2'),/Участие в 1\/2 игры · 1\u00a0050,5 ₽/);
+});
+test('unconfirmed option never displays a free participation price',()=>{
+  const html=renderOption({...preview,state:'unavailable',amountMinor:null,label:'Условия подписки не подтверждены'});
+  assert.doesNotMatch(html,/0 ₽|700 ₽|Доплата/);assert.match(html,/не подтверждены/);
+  assert.match(html,/aria-live="polite"/);
+});

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetchSubscriptionPricePreview } from "../../utils/apiClient";
-import { subscriptionPricePreview, subscriptionPriceSelectionKey,
+import { subscriptionPricePreview, subscriptionPricePreviewsById, subscriptionPriceSelectionKey,
   type SubscriptionPriceQuote, type SubscriptionPriceTarget } from "./subscriptionPricePreview.ts";
 
 export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, enabled, availabilityLoading }: {
@@ -10,9 +10,10 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
   enabled: boolean;
   availabilityLoading: boolean;
 }) {
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const selectionKey = target ? subscriptionPriceSelectionKey(target) : "";
   const idsKey = JSON.stringify([...new Set(subscriptionIds)].sort());
-  const scope = JSON.stringify([actorId, selectionKey, idsKey, enabled, availabilityLoading]);
+  const scope = JSON.stringify([actorId, selectionKey, idsKey, enabled, availabilityLoading, refreshVersion]);
   const ids = useMemo<string[]>(() => JSON.parse(idsKey), [idsKey]);
   const [state, setState] = useState<{scope: string; loading: boolean; quotes: SubscriptionPriceQuote[] | null}>({
     scope: "", loading: false, quotes: null,
@@ -44,7 +45,9 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
   const canCheck = enabled && Boolean(target && actorId && ids.length && ids.length <= 20);
-  return subscriptionPricePreview({ selectionKey, durationMinutes: target?.durationMinutes ?? 0,
+  const input = { selectionKey, durationMinutes: target?.durationMinutes ?? 0,
     subscriptionIds: ids, quotes: state.scope === scope ? state.quotes : null,
-    loading: canCheck && (availabilityLoading || state.scope !== scope || state.loading), now: Date.now() });
+    loading: canCheck && (availabilityLoading || state.scope !== scope || state.loading), now: Date.now() };
+  return { ...subscriptionPricePreview(input), bySubscriptionId: subscriptionPricePreviewsById(input),
+    refresh: () => setRefreshVersion(version => version + 1) };
 }

@@ -105,3 +105,14 @@ export function subscriptionPricePreview(input: {
     discounted: amountMinor < best.basePriceMinor,
   };
 }
+
+
+/** Validate the whole batch before presenting any individual subscription price. */
+export function subscriptionPricePreviewsById(input: Parameters<typeof subscriptionPricePreview>[0]): Record<string, SubscriptionPricePreview> {
+  const batch = subscriptionPricePreview(input);
+  return Object.fromEntries([...new Set(input.subscriptionIds)].map(id => [id,
+    batch.state === "available" || batch.state === "limit-used"
+      ? subscriptionPricePreview({...input, subscriptionIds: [id], quotes: input.quotes!.filter(q => q.subscriptionId === id)})
+      : batch,
+  ]));
+}

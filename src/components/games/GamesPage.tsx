@@ -1,3 +1,4 @@
+import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
 import { createSubscriptionPriceTarget } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
 import { SubscriptionPricePreviewAside } from "./SubscriptionPricePreviewAside";
@@ -7062,7 +7063,7 @@ export default function GamesPage({
       durationMinutes: duration, shareCount: splitShareCount }),
     subscriptionIds: splitSubscriptionPaymentOptions.map(option => option.subscriptionId),
     actorId: profileId,
-    enabled: usePublicCreateWizard && step === "time" && canProceedToPayment && !splitPaymentAvailabilityLabelIsError,
+    enabled: usePublicCreateWizard && (step === "time" || step === "create") && canProceedToPayment && !splitPaymentAvailabilityLabelIsError,
     availabilityLoading: splitSubscriptionsLoading,
   });
   const shouldShowPublicSplitSubscriptionInfoBadge = !splitHasSubscriptionPaymentOptions
@@ -17614,10 +17615,18 @@ export default function GamesPage({
                 <span className="game-payment-choice-radio" aria-hidden="true" />
                 <span className="game-payment-choice-copy">
                   <strong>{option.name}</strong>
-                  <span>Создать игру по подписке</span>
+                  <SubscriptionOptionPrice
+                    preview={publicSplitPricePreview.bySubscriptionId[option.subscriptionId]}
+                    shareLabel={splitSharePartLabel}
+                  />
                 </span>
               </button>
             ))}
+            {splitHasSubscriptionPaymentOptions && publicSplitPricePreview.state === "unavailable" && (
+              <button type="button" className="game-summary-edit-button" onClick={publicSplitPricePreview.refresh}>
+                Обновить стоимость по подпискам
+              </button>
+            )}
             <button
               type="button"
               className={`game-payment-choice-card ${splitCheckoutMode === "one_time" ? "selected" : ""}`}

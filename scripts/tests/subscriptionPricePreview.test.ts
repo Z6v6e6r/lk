@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSubscriptionPriceTarget, subscriptionPricePreview, subscriptionPriceSelectionKey, type SubscriptionPriceQuote } from "../../src/components/games/subscriptionPricePreview.ts";
+import { createSubscriptionPriceTarget, subscriptionPricePreview, subscriptionPricePreviewsById, subscriptionPriceSelectionKey, type SubscriptionPriceQuote } from "../../src/components/games/subscriptionPricePreview.ts";
 
 const now = Date.parse("2026-09-08T12:00:00Z");
 const target = { targetKind: "NEW_GAME" as const, shareCount: 4 as const, slotId: "slot-a", stationId: "station-a", roomId: "room-a",
@@ -80,4 +80,28 @@ test("positive-balance candidate filter keeps NEW and ACTIVE one-visit subscript
     assert.deepEqual(filter([candidate],2),[]);
     assert.deepEqual(filter([{...candidate,visitsLeft:0}],1),[]);
   }
+});
+
+
+test("each subscription keeps its own price even when the overall minimum is free", () => {
+  const input = {quotes: [quote("legacy", {amountMinor: 0, freeMinutes: 90, paidMinutes: 0}),
+    quote("annual", {amountMinor: 70000}), quote("used", {status: "LIMIT_USED", amountMinor: null})],
+    subscriptionIds: ["annual", "used", "legacy"], selectionKey: key, durationMinutes: 90, loading: false, now};
+  const rows = subscriptionPricePreviewsById(input);
+  assert.equal(rows.annual.amountMinor, 70000);
+  assert.equal(rows.annual.detail, "Доплата за 30 мин");
+  assert.equal(rows.legacy.amountMinor, 0);
+  assert.equal(rows.legacy.detail, null);
+  assert.equal(rows.used.state, "limit-used");
+  assert.equal(rows.used.amountMinor, null);
+});
+test("individual prices reject the whole incomplete, inconsistent or expired batch", () => {
+  const input = {quotes: [quote("a"), quote("b")], subscriptionIds: ["a", "b"],
+    selectionKey: key, durationMinutes: 90, loading: false, now};
+  for (const quotes of [[quote("a")], [quote("a"), quote("b", {basePriceMinor: 200000})],
+    [quote("a"), quote("b", {expiresAt: now})], [quote("a"), quote("b", {selectionKey: "old"})]]) {
+    const rows = subscriptionPricePreviewsById({...input, quotes});
+    assert.equal(rows.a.amountMinor, null); assert.equal(rows.b.amountMinor, null);
+  }
+  assert.equal(subscriptionPricePreviewsById({...input, loading: true}).a.state, "checking");
 });

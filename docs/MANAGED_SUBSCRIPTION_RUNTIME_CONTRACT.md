@@ -641,6 +641,11 @@ the lowest confirmed amount across the complete batch as “По подписк�
 of the concrete subscription remains on the next screen. Changing slot/account/IDs
 invalidates the old result immediately. Expiry/errors restore the ordinary price.
 
+On the public CREATE payment-method screen each subscription row displays its own confirmed
+participation price and paid-minute detail from that same complete batch. The overall minimum
+is never assigned to another subscription. Expiry or uncertainty hides row prices; the user can
+refresh all rows with one batched request. Checkout selection and server CREATE rechecks are unchanged.
+
 Preview makes no reservation, booking, debit or payment; CREATE always rechecks current
 authoritative state. Cross-midnight tariffs and unsupported regional policy reads remain
 unconfirmed rather than guessed. The API requires an existing valid service token for
