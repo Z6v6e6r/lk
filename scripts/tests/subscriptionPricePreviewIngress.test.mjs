@@ -25,7 +25,7 @@ test('real isolated nginx rejects burst/body overflow, preserves CORS, and lets 
   id=docker(['run','-d','--network','none','--read-only','--tmpfs','/tmp','--tmpfs','/var/cache/nginx','--platform','linux/amd64',
     '-v',`${root}:/fixture:ro`,'--entrypoint','nginx',image,'-p','/tmp/','-c','/fixture/nginx.conf','-g','daemon off;']);
   const request=(method='POST',body='{}')=>docker(['exec',id,'curl','-sS','-i','-X',method,'-H','Content-Type: application/json','--data-binary',body,'http://127.0.0.1:18080/lk/subscriptions/game-price-preview']);
-  let ready=false;for(let n=0;n<20&&!ready;n++){try{ready=request('OPTIONS').includes('204');}catch{}if(!ready)await new Promise(r=>setTimeout(r,100));}assert.ok(ready);
+  let ready=false;for(let n=0;n<20&&!ready;n++){try{ready=request('OPTIONS').includes('204');}catch{/* The owned fixture may still be starting; retry within the bounded readiness loop. */}if(!ready)await new Promise(r=>setTimeout(r,100));}assert.ok(ready);
   const burst=Array.from({length:8},()=>request());assert.ok(burst.some(r=>r.includes('200 OK')));assert.ok(burst.some(r=>r.includes('429')));
   const preflight=request('OPTIONS');assert.match(preflight,/204/);assert.match(preflight,/Access-Control-Allow-Methods: POST, OPTIONS/i);
   assert.match(request('GET'),/405/);assert.match(request('POST','x'.repeat(17000)),/413/);
