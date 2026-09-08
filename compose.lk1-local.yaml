@@ -18,6 +18,7 @@ services:
     volumes:
       - ./scripts/lk1_local_preview_ingress.mjs:/preview/ingress.mjs:ro
       - ./scripts/lk1_local_gateway.mjs:/preview/lk1_local_gateway.mjs:ro
+      - ./scripts/lk1_local_oauth_browser.js:/preview/lk1_local_oauth_browser.js:ro
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:5180/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s

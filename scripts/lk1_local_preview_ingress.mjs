@@ -12,6 +12,7 @@ const valid = (req) => req.headers.host === '127.0.0.1:5180'
   && req.headers['sec-fetch-site'] !== 'cross-site';
 
 const server = http.createServer((req, res) => {
+  if (gateway.serveOAuthPage(req, res)) return;
   if (req.url === '/__lk1_local/gateway') { void gateway.handle(req, res); return; }
   if (!valid(req) || !['GET', 'HEAD'].includes(req.method || 'GET')) {
     res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });

@@ -221,3 +221,98 @@ test('browser bridge emits route enums, strips URL/headers and suppresses durabl
   await context.window.fetch('https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile', { method: 'PATCH', body: '{}' });
   assert.equal(calls.at(-1)[0], '/__lk1_local/blocked');
 });
+
+const oauthStart = async f => {
+  const start = await f.gateway.dispatch({ route: 'auth.oauth.start' });
+  assert.equal(start.status, 200);
+  return { start, session: sid(start), url: new URL(start.data.authorizeUrl),
+    payload: { state: new URL(start.data.authorizeUrl).searchParams.get('state'), code: 'fixture-code' } };
+};
+
+test('Yandex has fixed callback/client/tenant, server PKCE and one-use session-bound code exchange', async () => {
+  const f = fixture(); const auth = await oauthStart(f);
+  assert.equal(f.calls.length, 0, 'start is local only');
+  assert.equal(auth.url.origin, 'https://kc.vivacrm.ru');
+  assert.equal(auth.url.searchParams.get('kc_idp_hint'), 'yandex');
+  assert.equal(auth.url.searchParams.get('client_id'), 'widget');
+  assert.equal(auth.url.searchParams.get('prompt'), 'login');
+  assert.equal(auth.url.searchParams.get('tenant_key'), 'iSkq6G');
+  assert.equal(auth.url.searchParams.get('redirect_uri'), `${LOCAL_ORIGIN}/lk_new?authMode=viva`);
+  assert.equal(auth.url.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(auth.url.searchParams.has('code_verifier'), false);
+  const result = await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: auth.payload }, auth.session);
+  assert.equal(result.status, 200); assert.notEqual(sid(result), auth.session);
+  const form = new URLSearchParams(f.calls[0].body);
+  assert.equal(form.get('grant_type'), 'authorization_code');
+  assert.equal(form.get('redirect_uri'), auth.url.searchParams.get('redirect_uri'));
+  const { createHash } = await import('node:crypto');
+  assert.equal(createHash('sha256').update(form.get('code_verifier')).digest('base64url'), auth.url.searchParams.get('code_challenge'));
+  assert.equal(f.calls.length, 2, 'token and own canonical profile only');
+  for (const secret of [...f.realTokens, form.get('code_verifier'), 'provider-refresh-1']) assert.equal(JSON.stringify(result).includes(secret), false);
+  assert.equal((await f.gateway.dispatch({ route: 'profile', token: result.data.access_token }, sid(result))).status, 200);
+  const before = f.calls.length;
+  for (const session of [auth.session, sid(result)]) assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: auth.payload }, session)).status, 401);
+  assert.equal(f.calls.length, before);
+});
+
+test('OAuth rejects missing/foreign/expired state, arbitrary redirect/provider and duplicate attempts without upstream', async () => {
+  const f = fixture(); const a = await oauthStart(f); const b = await oauthStart(f);
+  for (const payload of [{ redirectUri: 'https://example.invalid' }, { provider: 'vkid' }]) assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.start', payload })).status, 403);
+  assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: a.payload })).status, 401);
+  for (const payload of [{ ...a.payload, state: b.payload.state }, { ...a.payload, iss: 'https://example.invalid' }, { ...a.payload, code_verifier: 'injected' }]) {
+    assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload }, a.session)).status, 403);
+  }
+  f.advance(600001);
+  assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: a.payload }, a.session)).status, 401);
+  assert.equal(f.calls.length, 0);
+});
+
+test('OAuth cancellation, missing phone, subject/profile mismatch and transport error fail closed without retry', async () => {
+  for (const options of [{ claims: { phone_number: undefined } }, { claims: { iss: 'https://example.invalid' } }, { claims: { azp: 'other' } }, { profile: { phone: otherPhone } }, { error: true }, { tokenFailure: true }]) {
+    const f = fixture(options); const a = await oauthStart(f);
+    const result = await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: a.payload }, a.session);
+    assert.equal(result.status, 502); assert.equal(result.data.access_token, undefined);
+    if (options.claims?.phone_number === undefined && Object.hasOwn(options.claims || {}, 'phone_number')) assert.equal(result.data.code, 'LK1_LOCAL_PHONE_REQUIRED');
+    const before = f.calls.length;
+    assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: a.payload }, a.session)).status, 401);
+    assert.equal(f.calls.length, before);
+  }
+  const f = fixture(); const a = await oauthStart(f);
+  assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: { state: a.payload.state, error: 'denied' } }, a.session)).status, 401);
+  assert.equal(f.calls.length, 0);
+});
+
+test('OAuth concurrent completion/logout cannot resurrect authority', async () => {
+  let release; let reached;
+  const waiting = new Promise(resolve => { reached = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  const f = fixture({ beforeCall: async plan => { if (plan.url.endsWith('/profile')) { reached(); await blocked; } } });
+  const a = await oauthStart(f);
+  const pending = f.gateway.dispatch({ route: 'auth.oauth.finish', payload: a.payload }, a.session);
+  await waiting;
+  assert.equal((await f.gateway.dispatch({ route: 'auth.oauth.finish', payload: a.payload }, a.session)).status, 401);
+  await f.gateway.dispatch({ route: 'auth.logout' }, a.session);
+  release(); const result = await pending;
+  assert.equal(result.status, 401); assert.equal(result.cookie, undefined);
+});
+
+test('cross-site callback returns only static HTML; no reflection, session access or upstream exchange', () => {
+  const f = fixture();
+  const request = (url, headers = {}, method = 'GET') => {
+    const res = { writeHead(status, responseHeaders) { this.status = status; this.headers = responseHeaders; }, end(body) { this.body = body; } };
+    const served = f.gateway.serveOAuthPage({ method, url, headers: { host: '127.0.0.1:5180', 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate', ...headers } }, res);
+    return { served, ...res };
+  };
+  const path = '/lk_new?authMode=viva&code=private-code&state=' + 's'.repeat(43);
+  const res = request(path);
+  assert.equal(res.served, true); assert.equal(res.headers['Set-Cookie'], undefined);
+  assert.equal(res.body.includes('private-'), false); assert.match(res.headers['Content-Security-Policy'], /frame-ancestors 'none'/);
+  assert.equal(request(path, {}, 'POST').served, false);
+  assert.equal(request(path, { host: 'evil.invalid:5180' }).served, false);
+  assert.equal(request(path, { 'sec-fetch-dest': 'iframe' }).served, false);
+  assert.equal(request(path + '&state=duplicate').served, false);
+  assert.equal(request(path + '&extra=field').served, false);
+  assert.equal(request('/__lk1_local/oauth.js').served, false);
+  assert.equal(request('/lk_new?authMode=viva').served, false);
+  assert.equal(f.calls.length, 0);
+});

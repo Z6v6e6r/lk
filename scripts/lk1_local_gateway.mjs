@@ -1,6 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 export const LOCAL_ORIGIN = 'http://127.0.0.1:5180';
+export const OAUTH_CALLBACK = `${LOCAL_ORIGIN}/lk_new?authMode=viva`;
 const KC = 'https://kc.vivacrm.ru/realms/clients';
 const API = 'https://api.vivacrm.ru/end-user/api';
 const TENANT = 'iSkq6G';
@@ -71,6 +73,8 @@ export async function productionTransport(plan) {
 // Injectable transport/clock are for local tests only; no environment variable or
 // HTTP request can select an upstream or change the production transport.
 export function createGateway({ transport = productionTransport, now = Date.now } = {}) {
+  // Fail startup if the read-only browser asset mount is missing.
+  const oauthScript = readFileSync(new URL('./lk1_local_oauth_browser.js', import.meta.url), 'utf8');
   const sessions = new Map();
   const limits = new Map();
   const counters = { authRequests: 0, readRequests: 0, blockedRequests: 0, upstreamFailures: 0 };
@@ -106,15 +110,17 @@ export function createGateway({ transport = productionTransport, now = Date.now 
       || profilePhone !== session.phone || (session.profileId && session.profileId !== profile.id)) throw new Error('profile subject');
     session.profileId = profile.id; session.profilePhone = profilePhone;
   };
-  const minted = (data, session) => {
+  const minted = (data, session, acceptPhone = false) => {
     if (typeof data?.access_token !== 'string' || typeof data?.refresh_token !== 'string'
       || data.access_token.length > 16000 || data.refresh_token.length > 16000) throw new Error('token shape');
     // This JWT came directly over TLS from the fixed IdP, never from the browser.
     const claims = JSON.parse(Buffer.from(data.access_token.split('.')[1], 'base64url').toString('utf8'));
     const claimedPhone = String(claims.phone_number || claims.phoneNumber || claims.phone || '').replace(/\D/g, '');
+    if (acceptPhone && !phoneOk(claimedPhone)) throw new Error('phone required');
     if (claims.iss !== KC || claims.azp !== 'widget' || typeof claims.sub !== 'string' || !claims.sub
-      || !Number.isFinite(claims.exp) || claims.exp * 1000 <= now() || claimedPhone !== session.phone
+      || !Number.isFinite(claims.exp) || claims.exp * 1000 <= now() || (!acceptPhone && claimedPhone !== session.phone)
       || (session.subject && session.subject !== claims.sub)) throw new Error('token subject');
+    if (acceptPhone) session.phone = claimedPhone;
     const expires = Math.min(claims.exp * 1000, session.until);
     const localClaims = { iss: LOCAL_ORIGIN, sub: session.displaySubject, phone_number: 'local-preview', exp: Math.floor(expires / 1000) };
     session.previousDisplay = session.displayAccess;
@@ -137,6 +143,50 @@ export function createGateway({ transport = productionTransport, now = Date.now 
       if (session) sessions.delete(sessionId);
       return { status: 200, data: { ok: true }, cookie: cookie('') };
     }
+    if (route === 'auth.oauth.start') {
+      if (!own(payload, [])) return reject(403);
+      if (session?.subject || session?.busy) return reject(409, 'LK1_LOCAL_LOGOUT_OR_WAIT');
+      if (!limit('oauth:global', 20, 3600000) || sessions.size >= 32) return reject(429, 'LK1_LOCAL_RATE_LIMIT');
+      if (session) sessions.delete(sessionId);
+      sessionId = id();
+      const verifier = id();
+      session = { until: now() + 600000, displaySubject: id(), oauth: { state: id(), verifier } };
+      sessions.set(sessionId, session);
+      const params = new URLSearchParams({ client_id: 'widget', redirect_uri: OAUTH_CALLBACK,
+        response_type: 'code', scope: 'openid', prompt: 'login', kc_idp_hint: 'yandex', tenant_key: TENANT,
+        state: session.oauth.state, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' });
+      return { status: 200, cookie: cookie(sessionId), data: { authorizeUrl: `${KC}/protocol/openid-connect/auth?${params}` } };
+    }
+    if (route === 'auth.oauth.finish') {
+      if (!session?.oauth || session.busy || session.subject) return reject(401, 'LK1_LOCAL_SESSION_REQUIRED');
+      if (!own(payload, ['state', 'code', 'iss', 'error']) || payload.state !== session.oauth.state
+        || (payload.iss !== undefined && payload.iss !== KC)) return reject(403, 'LK1_LOCAL_OAUTH_STATE');
+      const { verifier } = session.oauth;
+      delete session.oauth; // One attempt, including provider errors and ambiguous transport failures.
+      if (payload.error || typeof payload.code !== 'string' || !/^[A-Za-z0-9._~-]{1,2048}$/.test(payload.code)) {
+        sessions.delete(sessionId); return reject(401, 'LK1_LOCAL_OAUTH_FAILED');
+      }
+      session.busy = true;
+      try {
+        counters.authRequests += 1;
+        const result = await remote({ url: `${KC}/protocol/openid-connect/token`, method: 'POST',
+          body: new URLSearchParams({ grant_type: 'authorization_code', client_id: 'widget', code: payload.code,
+            redirect_uri: OAUTH_CALLBACK, code_verifier: verifier }).toString() });
+        if (result.status !== 200) throw new Error('exchange failed');
+        session.until = now() + 28800000;
+        const data = minted(result.data, session, true);
+        counters.readRequests += 1;
+        const profile = await remote({ ...readPlan('profile'), token: session.access });
+        if (profile.status !== 200) throw new Error('profile unavailable');
+        bindProfile(profile.data, session);
+        if (sessions.get(sessionId) !== session) return reject(401, 'LK1_LOCAL_SESSION_REQUIRED');
+        sessions.delete(sessionId); sessionId = id(); sessions.set(sessionId, session);
+        return { status: 200, data, cookie: cookie(sessionId) };
+      } catch (error) {
+        sessions.delete(sessionId);
+        return reject(502, error.message === 'phone required' ? 'LK1_LOCAL_PHONE_REQUIRED' : 'LK1_LOCAL_AUTH_UNAVAILABLE');
+      } finally { session.busy = false; }
+    }
     if (route === 'auth.code') {
       if (!own(payload, ['phone', 'channel']) || !phoneOk(payload.phone) || payload.channel !== 'cascade') return reject(403);
       if (session?.subject || session?.busy) return reject(409, 'LK1_LOCAL_LOGOUT_OR_WAIT');
@@ -145,6 +195,7 @@ export function createGateway({ transport = productionTransport, now = Date.now 
         if (sessions.size >= 32) return reject(429, 'LK1_LOCAL_RATE_LIMIT');
         sessionId = id(); session = { until: now() + 600000, displaySubject: id() }; sessions.set(sessionId, session);
       }
+      delete session.oauth;
       session.busy = true; session.phone = payload.phone; session.challengeUntil = 0; session.attempts = 0;
       const responseCookie = cookie(sessionId);
       try {
@@ -232,5 +283,28 @@ export function createGateway({ transport = productionTransport, now = Date.now 
     } catch { if (!res.headersSent && !res.destroyed) respond(reject(502, 'LK1_LOCAL_UPSTREAM_UNAVAILABLE')); }
     finally { clearTimeout(controller); }
   }
-  return { handle, dispatch, status: () => ({ mode: 'production-readonly', ...counters }) };
+  function serveOAuthPage(req, res) {
+    if (req.method !== 'GET' || req.headers.host !== '127.0.0.1:5180') return false;
+    if (!req.url?.startsWith('/') || req.url.startsWith('//')) return false;
+    const url = new URL(req.url, LOCAL_ORIGIN);
+    const asset = url.pathname === '/__lk1_local/oauth.js' && !url.search;
+    // A cross-site GET may only receive this static callback document. It neither
+    // reads a session nor exchanges a code. The clean document then makes a
+    // same-origin guarded POST carrying the Strict cookie and verified state.
+    const callback = url.pathname === '/lk_new' && url.searchParams.get('authMode') === 'viva'
+      && req.headers['sec-fetch-dest'] === 'document' && req.headers['sec-fetch-mode'] === 'navigate'
+      && (url.searchParams.has('code') !== url.searchParams.has('error')) && req.url.length <= 4096
+      && /^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('state') || '')
+      && [...url.searchParams.keys()].every(key => ['authMode', 'code', 'state', 'iss', 'session_state', 'error', 'error_description'].includes(key)
+        && url.searchParams.getAll(key).length === 1);
+    if (!asset && !callback) return false;
+    if (asset && (req.headers['sec-fetch-site'] === 'cross-site' || (req.headers.origin && req.headers.origin !== LOCAL_ORIGIN))) return false;
+    res.writeHead(200, { 'Content-Type': asset ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" });
+    res.end(asset ? oauthScript
+      : '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Вход в локальный LK1</title><body><p id="lk1-oauth-status" role="status">Завершаем вход через Яндекс…</p><a href="/">Вернуться в локальный ЛК</a><script src="/__lk1_local/oauth.js"></script></body></html>');
+    return true;
+  }
+  return { handle, dispatch, serveOAuthPage, status: () => ({ mode: 'production-readonly', ...counters }) };
 }

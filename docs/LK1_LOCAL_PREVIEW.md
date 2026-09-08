@@ -9,10 +9,11 @@ Edits to `src` are picked up by Vite. `npm run local:status` reads container hea
 
 ## Current boundary
 
-This preview supports **SMS login and production data read-only**. Sending a code
+This preview supports **Yandex/SMS login and production data read-only**. Sending a code
 and exchanging/refreshing credentials are explicitly authorized authentication
-exceptions. Only the user initiates SMS login for their existing account. OAuth and
-phone-number registration/verification are disabled. Payments, invitations, bookings,
+exceptions. Only the user initiates login for their existing account. Yandex is
+started by the outer shell button; other OAuth providers and phone-number
+registration/verification remain disabled. Payments, invitations, bookings,
 profile changes, consent synchronization, push registration and analytics writes are
 blocked independently of UI behavior. A visible banner identifies this boundary.
 
@@ -45,7 +46,7 @@ size, no redirects/retries, a concurrency bound and a temporary failure circuit.
 
 ## Account and credential boundary
 
-The gateway binds token exchange to a recent successful SMS challenge and limits code
+The gateway binds SMS token exchange to a recent successful challenge and limits code
 requests across sessions plus OTP attempts per challenge. Tokens arrive directly from
 the fixed Keycloak endpoint over TLS. Issuer, client, subject, expiry and phone are
 checked; an authenticated Viva profile must confirm the same phone and a stable profile
@@ -58,7 +59,7 @@ They cannot be used at Viva. The display JWT contains a random local subject and
 non-personal phone marker. Analytics profile/visit/pending storage, phone-keyed referral
 windows, pending consent queues and client-keyed community order/read markers are cleared and suppressed before
 app bootstrap. Stopping/restarting the entry container drops all authenticated sessions;
-enter SMS again after a restart. Sessions expire after at most eight hours.
+sign in again after a restart. Sessions expire after at most eight hours.
 
 The ingress never forwards cookies or bearer/proxy authorization headers into Vite,
 including during HMR. Existing real credentials in this origin's two auth storage keys
@@ -75,7 +76,51 @@ third-party participant data are not connected, so those sections may be incompl
 
 Run `npm run test:local-preview` for the local boundary tests. Fixture tests and a healthy
 login screen do not prove a real-account session; authenticated production reads require
-the user's manual SMS login and an explicit runtime observation without logging PII.
+the user's manual login and an explicit runtime observation without logging PII.
 
 Stop signal: any unexpected external request or enabled business command. Stop with
 `npm run local:stop`. Stopping the container removes no other task's services or data.
+
+## Yandex local sign-in
+
+Use **Войти через Яндекс** in the outer local header. This uses the existing Viva
+Keycloak broker (`clients`, client `widget`, tenant `iSkq6G`, fixed `kc_idp_hint=yandex`,
+`prompt=login`, scope `openid`). It does not create a separate Yandex application or
+change the production frontend. The iframe's provider buttons remain disabled and its
+sandbox is unchanged. The outer shell alone navigates to the fixed authorization URL.
+
+State and PKCE S256 verifier are random, server-memory-only and expire in ten minutes.
+The fixed callback URI is exactly:
+
+`http://127.0.0.1:5180/lk_new?authMode=viva`
+
+The ingress serves a static callback document only for a bounded top-level GET with
+unique recognized parameters. No callback URL reaches Vite; code/state/provider error
+text are never reflected or logged. The callback script clears the URL, then uses a
+same-origin POST with the Strict HttpOnly cookie. State is consumed before the first
+await; retries, foreign/expired sessions and client-selected redirect/verifier values
+are rejected. Token exchange and canonical profile confirmation happen on the server;
+only synthetic local handles reach origin-local storage. A missing phone claim fails
+closed and prompts the user to use SMS or complete linking separately in the real LK.
+The preview never invokes phone verification/linking commands.
+
+Manual verification after restoring network access (for example, the user disables VPN):
+
+1. Open the exact loopback URL above via the root `http://127.0.0.1:5180/` in Chrome.
+2. Click the outer Yandex button and deliberately select your existing linked account.
+   Use a separate browser profile if the browser holds someone else's identity session.
+3. Complete the provider's own UI, then check return to local LK and profile/bookings.
+4. If Keycloak reports `Invalid parameter: redirect_uri`, its client owner must confirm
+   or separately authorize adding the exact callback URI. This repository does not
+   administer the provider's redirect allowlist. Do not use wildcard redirects.
+5. If the callback reports a network error, begin a fresh login after restoring access:
+   authorization codes are single-use and ambiguous exchanges are never retried.
+
+Provider reachability, redirect registration, Yandex broker claim mapping and real-account
+callback are **NOT_RUN** until that manual check. `prompt=login` requests fresh login;
+the broker's actual propagation/account-selection behavior is not locally proven.
+The fixed provider hint is not a cryptographic assertion of the upstream Yandex identity.
+A first brokered login may create/link an identity according to Keycloak's existing
+realm flow; this is an authentication effect, separate from the blocked business writes.
+No such live login or identity change is performed by automated tests. The user handles
+any account-linking or provider consent screen themselves.
