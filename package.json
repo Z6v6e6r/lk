@@ -199,7 +199,11 @@
     "test:frontend-static-nginx": "node --test scripts/tests/frontendStaticNginx.test.mjs",
     "release:frontend:bootstrap-candidate": "node scripts/nginx/prepare_frontend_static_bootstrap.mjs",
     "test:frontend-bootstrap-runtime": "node --test scripts/tests/frontendBootstrapRuntime.test.mjs",
-    "test:frontend-bootstrap-guard": "node --test scripts/tests/frontendBootstrapGuard.test.mjs"
+    "test:frontend-bootstrap-guard": "node --test scripts/tests/frontendBootstrapGuard.test.mjs",
+    "local:up": "docker compose -f compose.lk1-local.yaml up -d --build",
+    "local:status": "docker compose -f compose.lk1-local.yaml ps",
+    "local:stop": "docker compose -f compose.lk1-local.yaml stop",
+    "test:local-preview": "node --test scripts/tests/lk1LocalPreview.test.mjs"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

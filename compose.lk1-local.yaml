@@ -1,0 +1,67 @@
+name: lk1-local-readonly
+services:
+  ingress:
+    image: node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+    user: node
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [node, /preview/ingress.mjs]
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5180:5180"
+    networks: [local-entry, offline]
+    volumes:
+      - ./scripts/lk1_local_preview_ingress.mjs:/preview/ingress.mjs:ro
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:5180/__lk1_local/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.lk1-local
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [offline]
+    volumes:
+      - ./src:/workspace/src:ro
+      - ./public:/workspace/public:ro
+      - ./scripts/lk1_local_preview.mjs:/workspace/scripts/lk1_local_preview.mjs:ro
+      - ./scripts/lk1_local_preview_browser.js:/workspace/scripts/lk1_local_preview_browser.js:ro
+      - ./index.html:/workspace/index.html:ro
+      - ./vite.config.lk1-local.mjs:/workspace/vite.config.lk1-local.mjs:ro
+      - ./tsconfig.json:/workspace/tsconfig.json:ro
+      - ./tsconfig.app.json:/workspace/tsconfig.app.json:ro
+      - ./tsconfig.node.json:/workspace/tsconfig.node.json:ro
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m
+      - /workspace/node_modules/.vite:rw,nosuid,nodev,uid=1000,gid=1000,size=256m
+      - /workspace/node_modules/.vite-temp:rw,nosuid,nodev,uid=1000,gid=1000,size=64m
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:5173/__lk1_local/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+networks:
+  local-entry: {}
+  offline:
+    internal: true
