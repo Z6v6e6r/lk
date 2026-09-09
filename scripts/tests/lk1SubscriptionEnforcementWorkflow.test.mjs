@@ -247,6 +247,18 @@ test("binary asset exceptions are exact and content-addressed", async () => {
       "src/components/subscription-storefront/assets/fonts/RFDewiExpanded-Bold.ttf",
       "b83e2c6d91ef691da891de119a6a4f784e6af40e674b961cb55bfb4db3a5aa8d",
     ],
+    [
+      "src/components/subscription-storefront/assets/fonts/InterDisplay-Regular.woff2",
+      "3a9463a58c3e7ba1e3cd65b5dbff91a35c508ff78a104cd1121feff83efeb787",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/InterDisplay-Medium.woff2",
+      "f1227907684853882ad00d7f97ce9f64bc17b89a2a291a7d4ec84fccfa442934",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/InterDisplay-Bold.woff2",
+      "23bc37619593377e128f24660fedb2869d18277b4026cb46e5637be7643faf91",
+    ],
   ];
 
   assert.deepEqual(allowlistEntries, expectedEntries);

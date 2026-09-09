@@ -104,3 +104,20 @@ export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, Summe
     benefitGroups: sportBenefits,
   },
 };
+
+
+// Keep annual copy aligned with the existing HAB annual card, not the summer artwork.
+export const friendshipVariantBenefits: Readonly<Record<string, readonly SubscriptionBenefitGroup[]>> = {
+  'monthly-two-hours': [{ id: 'daily-two-hours', title: '2 часа в день:',
+    items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }] }],
+  annual: [
+    friendshipBenefits[0],
+    { id: 'annual-discounts', title: 'Скидки:', items: [
+      { id: 'game-discount', badge: '30%', label: 'На создание / участие в играх на 90 или 120 минут' },
+      { id: 'other-discount', badge: '50%', label: 'На игру с тренером, групповые тренировки и «Время на друзей»' },
+    ] },
+    { id: 'booking-limit', title: 'Планирование:', items: [
+      { id: 'active-bookings', label: 'До 4 активных записей на 2 недели вперёд' },
+    ] },
+  ],
+};

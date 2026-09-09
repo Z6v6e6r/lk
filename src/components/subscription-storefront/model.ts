@@ -14,7 +14,11 @@ export interface SubscriptionBillingProgress {
 export interface SubscriptionBillingOption {
   readonly id: string;
   readonly label: string;
-  readonly priceMinor: number;
+  readonly priceMinor: number | null;
+  readonly ctaDisabled?: boolean;
+  readonly ctaLabel?: string;
+  readonly statusMessage?: string;
+  readonly benefitGroups?: readonly SubscriptionBenefitGroup[];
   readonly priceSuffix?: string;
   readonly progress?: SubscriptionBillingProgress;
 }

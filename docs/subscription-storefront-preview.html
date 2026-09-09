@@ -8,14 +8,21 @@
     <label>Ширина блока <select id="width"><option value="100%">Вся страница</option><option value="375px">375 px</option><option value="768px">768 px</option></select></label>
   </aside>
   <div id="padlhub-subscriptions" style="max-width:100%;margin:auto"></div>
-  <script src="../dist/subscription-storefront/subscription-storefront.js"></script>
   <script type="module">
-    import { summerPlanPresentation } from '../src/components/subscription-storefront/presentation.ts';
+    import { summerPlanPresentation, friendshipVariantBenefits } from '../src/components/subscription-storefront/presentation.ts';
+    import { friendshipBillingOptions } from '../src/components/subscription-storefront/catalog.ts';
     import markUrl from '../src/components/subscription-storefront/assets/brand/подписка.svg';
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '../dist/subscription-storefront/subscription-storefront.js?force_ts=' + Date.now();
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.append(script);
+    });
     const view = { id: 'local-preview', title: 'Играй в падел выгодно', description: 'Выберите подписку под свой ритм игры', markUrl,
       sections: [{ id: 'monthly', plans: ['friendship','ra','academy'].map((id, index) => ({
         ...summerPlanPresentation[id], id, ctaLabel: 'Демонстрация · покупка отключена', ctaDisabled: true,
-        billingOptions: [{ id: 'monthly', label: '30 дней', priceSuffix: '/ 30 дней', priceMinor: index ? 2380000 : 980000,
+        billingOptions: id === 'friendship' ? friendshipBillingOptions([{ counterKey: 'friendship', priceMinor: 980000, canPurchase: false, bindingReady: true, unlimited: true, remainingCount: 0, totalLimit: 0 }, { counterKey: 'network_friendship', priceMinor: 5680000, canPurchase: false, bindingReady: true, unlimited: false, remainingCount: 10, totalLimit: 10 }]).map(option => ({ ...option, benefitGroups: friendshipVariantBenefits[option.id] })) : [{ id: 'monthly', label: '30 дней', priceSuffix: '/ 30 дней', priceMinor: index ? 2380000 : 980000,
           ...(id === 'ra' ? { progress: { current: 12, total: 100, label: 'Доступно' } } : {}) }],
       })) }] };
     const mount = () => window.LKWidgetSubscriptionStorefront.mount({ data: { previewView: view } });

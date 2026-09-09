@@ -1,4 +1,28 @@
 @font-face {
+  font-family: 'Subscription Inter Display';
+  src: url('./assets/fonts/InterDisplay-Bold.woff2') format('woff2');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: 'Subscription Inter Display';
+  src: url('./assets/fonts/InterDisplay-Regular.woff2') format('woff2');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: 'Subscription Inter Display';
+  src: url('./assets/fonts/InterDisplay-Medium.woff2') format('woff2');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
   font-family: 'Subscription Inter';
   src: url('./assets/fonts/Inter_18pt-Regular.ttf') format('truetype');
   font-display: swap;
@@ -98,7 +122,7 @@
   min-height: calc(100dvh - 2 * var(--subscription-page-pad));
   padding: var(--subscription-canvas-pad);
   flex-direction: column;
-  gap: clamp(24px, 2vw, 36px);
+  gap: 32px;
 }
 
 .subscription-storefront__navigation {
@@ -111,6 +135,8 @@
 .subscription-storefront__content {
   display: flex;
   width: 100%;
+  max-width: var(--subscription-content-max);
+  margin-inline: auto;
   flex-direction: column;
   gap: var(--subscription-hero-gap);
 }
@@ -153,7 +179,7 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: clamp(16px, 1.5vw, 32px);
+  gap: 28px;
   font-size: clamp(28px, 7vw, 40px);
 }
 
@@ -183,8 +209,10 @@
   color: var(--subscription-text-secondary);
   font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
   font-size: clamp(14px, 3.8vw, 16px);
-  font-weight: 700;
-  line-height: 1.2;
+  font-weight: 600;
+  line-height: 1;
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
   letter-spacing: 0.01em;
 }
 
@@ -263,9 +291,9 @@
   display: flex;
   width: var(--subscription-card-width);
   min-width: 0;
-  padding: clamp(2px, 0.25vw, 4px) clamp(2px, 0.25vw, 4px) 0;
+  padding: 0;
   flex: 0 0 var(--subscription-card-width);
-  align-items: stretch;
+  align-items: flex-end;
   scroll-snap-align: center;
 }
 
@@ -273,7 +301,6 @@
   position: relative;
   display: flex;
   width: 100%;
-  height: 100%;
   min-height: 430px;
   padding-top: clamp(9px, 0.7vw, 13px);
   padding-right: clamp(2px, 0.25vw, 4px);
@@ -319,7 +346,7 @@
   gap: clamp(18px, 1.7vw, 32px);
   padding: clamp(20px, 1.9vw, 36px) clamp(18px, 1.7vw, 32px) clamp(28px, 2.72vw, 52px);
   border: 0.5px solid #ededed;
-  border-radius: clamp(18px, 1.3vw, 24px);
+  border-radius: 32px;
   background: var(--subscription-surface);
   box-shadow: -4px 4px 8px 0 #1f1e2005;
 }
@@ -340,7 +367,7 @@
 
 .subscription-card__tag {
   display: inline-flex;
-  min-height: var(--subscription-badge-height, 28px);
+  min-height: var(--subscription-badge-height, 22px);
   align-items: center;
 }
 
@@ -443,8 +470,9 @@
 
 .subscription-card__price span {
   color: var(--subscription-text-muted);
+  font-family: 'Subscription Inter Display', sans-serif;
   font-size: 14px;
-  font-weight: 400;
+  font-weight: 500;
   line-height: 1;
   letter-spacing: 0.01em;
 }
@@ -462,14 +490,14 @@
 .subscription-card__billing-options button {
   min-height: 34px;
   padding: 9px 16px 11px;
-  border: 0;
+  border: 0.5px solid transparent;
   border-radius: 40px;
   color: rgb(53 52 54 / 40%);
   background: transparent;
   cursor: pointer;
-  font: inherit;
+  font-family: 'Subscription Inter Display', sans-serif;
   font-size: 14px;
-  font-weight: 400;
+  font-weight: 500;
   line-height: 1;
   letter-spacing: 0.02em;
   text-transform: lowercase;
@@ -552,7 +580,7 @@
   font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
   font-size: clamp(14px, 0.85vw, 16px);
   font-weight: 600;
-  line-height: 1.32;
+  line-height: 1;
   letter-spacing: 0.01em;
 }
 
@@ -571,14 +599,14 @@
 .subscription-card__benefit-group li > b {
   display: inline-flex;
   min-width: 37px;
-  min-height: 18px;
-  padding: 5px 6px;
+  height: 18px;
+  padding: 3px 6px;
   align-items: center;
   justify-content: center;
   border-radius: 23px;
   color: var(--subscription-badge-text);
   background: var(--subscription-badge-bg);
-  font-family: 'Inter Display', Inter, sans-serif;
+  font-family: 'Subscription Inter Display', sans-serif;
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
@@ -714,6 +742,51 @@
 .subscription-storefront .subscription-plan-rail__item { flex: 0 0 min(480px, 86cqw); }
 .subscription-storefront .subscription-plan-rail::before,
 .subscription-storefront .subscription-plan-rail::after { display: none; }
-.subscription-storefront p, .subscription-storefront h1, .subscription-storefront h2,
-.subscription-storefront h3 { margin: 0; }
+
 .subscription-storefront .subscription-status-message { padding: 16px; font: inherit; }
+
+/* Figma desktop 1752:2759; intrinsic height accommodates live copy and three variants. */
+.subscription-card--no-progress { padding: 0; }
+.subscription-card--no-progress > .subscription-card__progress { display: none; }
+.subscription-card__price-row--variants { flex-direction: column; align-items: flex-start; }
+.subscription-card__price-row--variants .subscription-card__billing-options { max-width: 100%; }
+.subscription-card__billing-options button { white-space: nowrap; }
+.subscription-card__availability { color: #66666b; font: 14px/1.4 'Subscription Inter Display', sans-serif; }
+@media (min-width: 1280px) {
+  .subscription-card__panel { min-height: 648px; }
+  .subscription-card { padding: 13px 4px 0; gap: 12px; }
+  .subscription-card--no-progress { padding: 0; }
+  .subscription-card__progress { font-weight: 800; }
+}
+@container (max-width: 450px) {
+  .subscription-card__price-row--variants .subscription-card__billing-options {
+    width: 100%; border-radius: 20px; align-items: stretch;
+  }
+  .subscription-card__price-row--variants .subscription-card__billing-options button {
+    min-width: 0; padding-inline: 8px; flex: 1; white-space: normal; line-height: 1.15;
+  }
+}
+
+.subscription-card:not(.subscription-card--no-progress) > .subscription-card__panel { border-radius: 24px; }
+@media (min-width: 1280px) {
+  .subscription-storefront .subscription-plan-rail__item:has(.subscription-card:not(.subscription-card--no-progress)) {
+    flex-basis: min(488px, 86cqw);
+  }
+}
+
+.subscription-card__benefit-group li:not(:has(> img, > b)) { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1280px) { .subscription-storefront__hero { min-height: 97px; } }
+
+/* Embedded Tilda columns follow their own width even on a wide desktop. */
+@container (max-width: 719px) {
+  .subscription-storefront__canvas { padding: 16px; gap: 24px; }
+  .subscription-storefront__hero { min-height: 0; font-size: 28px; }
+  .subscription-storefront__hero h1 { font-size: 28px; }
+  .subscription-storefront__hero p { font-size: 14px; line-height: 1.2; }
+  .subscription-storefront__mark { right: 2em; top: -0.52em; width: 1.2em; }
+  .subscription-plan-rail__item { align-items: flex-start; }
+  .subscription-card__panel { min-height: 0; padding: 20px 18px 28px; gap: 20px; }
+  .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 20px; }
+  .subscription-card__price strong { font-size: 28px; }
+  .subscription-card__benefit-group li { font-size: 14px; }
+}
