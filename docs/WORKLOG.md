@@ -1,5 +1,11 @@
 # Журнал шагов
 
+## 2026-09-09 — DEV channel for standalone game join loader
+
+- Post-deploy readback found `/game_join?channel=dev` still loading production `games.js`; `/lk_dev?joinGame=…` already displays live subscription prices correctly.
+- `docs/tilda-game-join.html` now reuses CREATE channel resolution and selects only the matching primary/prod or reserve/dev manifest and games bundle. Default and explicit prod remain primary-only.
+- Added executable routing regression coverage for explicit channel, cabinet/return/referrer, prod precedence and unknown input. Checks: loader 10/10 PASS, full prod/dev build with inert configuration PASS, lint 0 errors / 387 existing warnings, independent release compatibility review PASS. Publication of the Tilda HTML remains a separate stage.
+
 2026-09-09 — Subscription instance limits: scoped active bookings and daily free minutes to clientSubscriptionId in HUB booking and preview calculations; added cross-instance, reservation, history and exact-patch regressions. Local source change; live activation separate.
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
