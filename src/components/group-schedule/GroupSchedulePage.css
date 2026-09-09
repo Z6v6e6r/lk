@@ -772,3 +772,7 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+.group-schedule-registration .group-schedule-discount-price > span {
+  color: inherit;
+}
