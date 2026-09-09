@@ -2169,3 +2169,18 @@
 - Added the existing server price/limit preview to both game-details join interfaces; per-instance participation amount, overage and exhausted/unconfirmed states replace name-only debit choices. The subscription action is disabled until its quote is confirmed.
 - EXISTING_GAME preview resolves the stored game and authenticated Viva exercise, reuses the exact court tariff and instance-scoped evaluator, and adds only a Mongo find path. Product binding uses the existing owned metadata lookup; real JOIN remains independently revalidated.
 - Local evidence: 560 PASS / 8 SKIP / 0 FAIL, full prod/dev build and final affected builds, TypeScript, lint without errors, exact graph upgrade, independent payment-safety review and desktop/mobile component checks. No merge/push/deploy or real booking/payment. Details: `docs/SUBSCRIPTION_JOIN_PRICE_PREVIEW_2026-09-09.md`.
+
+### 2026-09-09 — next subscription sales opening, local preparation
+
+Preserved task branch/worktree based on 7342973. Prepared RA V3 with ten additional
+seats and old-payment reconciliation; Piter48 immutable commercial adjustment; source-
+bound LK1 HAB checkout with next-day activation, exact provider instance confirmation
+and frozen recovery; exact nine-function/confirm-wire/receipt candidate plus an offline
+empty-HAB bootstrap plan. See SUBSCRIPTION_SALE_QUOTAS_20260909.md for the current
+scope, ordered release/data/flag gates and residual ALL_BOOKINGS/RA concurrency debt.
+
+User explicitly changed both annual offers to next-day activation. Viva catalog UI
+saved activationDays1 on the exact HAB and Piter products; independent reads confirmed
+price9800000/5680000 and validity365/visits365 unchanged. No payment, refund, booking,
+client-instance, Mongo, sales-flag, merge or deployment action accompanied this edit.
+The local candidate and synthetic checks are not live checkout/autoactivation proof.

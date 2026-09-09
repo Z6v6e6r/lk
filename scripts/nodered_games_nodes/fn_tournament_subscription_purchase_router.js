@@ -1,3 +1,32 @@
+// BEGIN generated hubLk1SaleContract
+function normalizeHubSalePolicy(value) {
+  try { if (typeof value === 'string') value = JSON.parse(value); } catch { return null; }
+  const keys = ['productId', 'maxActiveBookings', 'freeGameMinutesPerDay', 'gameOverageDiscountPercent', 'groupTrainingDiscountPercent', 'tournamentDiscountPercent'];
+  if (!value || Array.isArray(value) || typeof value !== 'object'
+    || Object.keys(value).sort().join() !== [...keys].sort().join()
+    || value.productId !== 'db7a5250-7369-4f43-8ac5-9111be24bc74'
+    || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)
+    || value.maxActiveBookings < 1 || keys.slice(3).some(k => value[k] > 100)) return null;
+  return Object.fromEntries(keys.map(k => [k, value[k]]));
+}
+function normalizeFrozenHubSale(value) {
+  const policy = normalizeHubSalePolicy(value?.policy);
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+    || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
+    || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
+  return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };
+}
+function readHubLk1Sale(globalContext) {
+  if (globalContext.get('summer_subscription_hub_lk1_sales_enabled') !== true
+    || globalContext.get('summer_subscription_sales_20260909_enabled') !== true) return null;
+  const policy = normalizeHubSalePolicy(globalContext.get('subscriptions_lk1_product_policy'));
+  const receipt = normalizeFrozenHubSale(globalContext.get('subscriptions_lk1_hub_sale_runtime'));
+  if (!policy || !receipt || JSON.stringify(policy) !== JSON.stringify(receipt.policy)) return null;
+  return receipt;
+}
+const hubLk1Sale = readHubLk1Sale(global);
+const piterNextDaySale = global.get("summer_subscription_piter_next_day_sales_20260909_enabled") === true && global.get("summer_subscription_sales_20260909_enabled") === true;
+// END generated hubLk1SaleContract
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const REGIONAL_ANNUAL_TIME_ZONE = "Europe/Moscow";
 const MANAGED_SALE_COMPATIBILITY = {
@@ -230,7 +259,8 @@ const normalizeManagedProviderInstance = (record, ctx) => {
     record.status || record.state || record.subscriptionStatus || record.lifecycleState,
   );
   const isActive = ["ACTIVE", "ACTIVATED"].includes(rawStatus);
-  const isPending = ["PENDING_ACTIVATION", "NOT_ACTIVE", "CREATED", "PAID"].includes(rawStatus);
+  const isPending = ["PENDING_ACTIVATION", "NOT_ACTIVE", "CREATED", "PAID"].includes(rawStatus)
+    || (rawStatus === "NEW" && normalizeFrozenHubSale(ctx.hubLk1Sale) !== null);
   if (!isActive && !isPending) return null;
   const purchasedAt = strictProviderInstant(record, [
     "purchasedAt", "purchaseDate", "paidAt", "createdAt",
@@ -589,6 +619,18 @@ const regionalAnnualLifecycleEvidence = (counterKey, product, now = new Date(Dat
   if (!expected) return null;
   const purchaseDate = resolveLocalDate(now);
   const projectedAutoActivationDate = addLocalDateDays(purchaseDate, product.activationDays);
+  // New LK1 HAB purchases use provider-native next-day activation. The legacy
+  // CUP/Piter branch below retains its frozen October lifecycle.
+  if ((counterKey === "network_friendship" && normalizeFrozenHubSale(ctx.hubLk1Sale))
+    || (counterKey === "piter_friendship" && piterNextDaySale && ctx.providerLifecycleMode === "VIVA_NEXT_DAY_V1")) {
+    return {
+      compatible: product.reportedProductType === "SUBSCRIPTION" && product.activationDays === 1
+        && product.validityDays === 365 && product.visits === 365 && projectedAutoActivationDate !== null,
+      purchaseDate, projectedAutoActivationDate, activationNotBeforeDate: projectedAutoActivationDate,
+      activationDays: product.activationDays, validityDays: product.validityDays, visits: product.visits,
+      reportedProductType: product.reportedProductType,
+    };
+  }
   const compatible = (
     product.reportedProductType === "SUBSCRIPTION"
     && Number.isInteger(product.activationDays)
@@ -855,7 +897,8 @@ if (!ctx) {
 // Piter-only release: do not admit new HUB checkout continuations. Provider
 // results and existing paid/pending confirmation/binding recovery stay routable.
 if (toStr(ctx.counterKey) === "network_friendship"
-  && ["managed_sale_readiness", "token_purchase", "load_products"].includes(ctx.step)) {
+  && ["managed_sale_readiness", "token_purchase", "load_products"].includes(ctx.step)
+  && (!hubLk1Sale || JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale)) !== JSON.stringify(hubLk1Sale))) {
   return fail(503, "Новые продажи ХАБ не включены в этот выпуск", {
     code: "HUB_NEW_SALES_RELEASE_DISABLED", counterKey: "network_friendship",
   });
@@ -1155,6 +1198,7 @@ if (ctx.step === "create_transaction") {
       ? ctx.providerActivationDays
       : null,
     providerAutoActivationDate: toStr(ctx.providerAutoActivationDate),
+    providerLifecycleMode: toStr(ctx.providerLifecycleMode),
     activationNotBeforeDate: toStr(ctx.activationNotBeforeDate),
     providerValidityDays: Number.isInteger(ctx.providerValidityDays)
       ? ctx.providerValidityDays
@@ -1169,6 +1213,7 @@ if (ctx.step === "create_transaction") {
     managedSaleProviderScope: ctx.counterKey === "network_friendship"
       ? { ...NETWORK_FRIENDSHIP_PROVIDER_SCOPE }
       : null,
+    hubLk1Sale: normalizeFrozenHubSale(ctx.hubLk1Sale),
     managedBindingState: ctx.counterKey === "network_friendship" ? "AWAITING_PAYMENT" : null,
     toPayMinor,
     status: "PAYMENT_PENDING",
@@ -1391,8 +1436,8 @@ if (ctx.step === "confirm_lookup") {
     if (!clientSubscriptionId
       || !providerClientId
       || (toStr(ctx.clientId) && toStr(ctx.clientId) !== providerClientId)
-      || !ctx.managedSaleBinding
-      || typeof ctx.managedSaleBinding !== "object") {
+      || (!normalizeFrozenHubSale(ctx.hubLk1Sale)
+        && (!ctx.managedSaleBinding || typeof ctx.managedSaleBinding !== "object"))) {
       return managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_PROVIDER_INSTANCE_ID_UNAVAILABLE");
     }
     ctx.clientSubscriptionId = clientSubscriptionId;
@@ -1505,6 +1550,29 @@ if (ctx.step === "managed_sale_instance_readback") {
   const providerInstance = normalizeManagedProviderInstance(exactRecord, ctx);
   if (!providerInstance) {
     return managedBindingPending(ctx, "MANAGED_SUBSCRIPTION_PROVIDER_INSTANCE_UNCONFIRMED");
+  }
+  const frozenLk1Sale = normalizeFrozenHubSale(ctx.hubLk1Sale);
+  if (frozenLk1Sale) {
+    const nowIso = new Date().toISOString();
+    ctx.step = "managed_sale_projection_start";
+    ctx.managedSaleProjection = {
+      statusCode: 200, headers: { "Content-Type": "application/json; charset=utf-8" },
+      response: { ok: true, paid: true, status: "PAID", managedBindingState: "LK1_VIVA_CONFIRMED",
+        counterKey: ctx.counterKey, inventoryId: ctx.inventoryId, paymentRef: ctx.paymentRef,
+        transactionId: ctx.transactionId, clientSubscriptionId: ctx.clientSubscriptionId, updatedAt: nowIso },
+      set: { status: "PAID", paidAt: toStr(ctx.saleRecord?.paidAt) || providerInstance.purchasedAt,
+        lastCheckedAt: nowIso, updatedAt: nowIso, managedBindingState: "LK1_VIVA_CONFIRMED",
+        managedBindingErrorCode: null, clientSubscriptionId: ctx.clientSubscriptionId,
+        hubLk1Sale: frozenLk1Sale,
+        providerSubscriptionState: providerInstance.providerSubscriptionState,
+        providerPurchasedAt: providerInstance.purchasedAt,
+        providerActivationDate: providerInstance.activeFrom,
+        providerExpirationDate: providerInstance.activeTo,
+        providerExpectedActivationDate: addLocalDateDays(resolveLocalDate(new Date(providerInstance.purchasedAt)), 1) },
+    };
+    delete ctx.token; delete ctx.vivaTokenRequestBody; delete ctx.providerHeaders; delete ctx.providerPayload;
+    const next = { _summerSubscriptionCtx: ctx, payload: null, req: msg.req, res: msg.res, _msgid: msg._msgid };
+    return [null, null, null, null, next];
   }
   const bindingToken = readManagedGlobal("subscriptions_sale_binding_integration_token");
   const binding = ctx.managedSaleBinding;

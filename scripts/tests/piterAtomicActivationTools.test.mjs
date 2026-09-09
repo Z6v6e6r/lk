@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { PITER_QUOTA_UPDATE } from "../lib/piterAtomicQuotaUpdateContract.mjs";
+import { PITER_QUOTA_UPDATE, PITER_QUOTA48_UPDATE } from "../lib/piterAtomicQuotaUpdateContract.mjs";
 import {
   PITER_ATOMIC_ACTIVATION,
   buildPiterAtomicActivationPacket,
@@ -850,4 +850,33 @@ test("live mutation rejects a spoofed lock env and an expired packet at the fina
   });
   await assert.rejects(() => runLedgerOperation(expiring.options, expiring.dependencies), /expired/);
   assert.equal(expiring.writeCalls, 0);
+});
+
+
+test("reviewed next-day opening preserves 42 payments and starts at 48 commercial seats", () => {
+  const rows = Array.from({length:42}, (_, i) => paidRow({ _id: `sale-${i}`, paymentRef: `pay-${i}`, transactionId: `tx-${i}` }));
+  const transactions = rows.map(row => providerTransaction({ id: row.transactionId }));
+  const data = evidence(rows, transactions);
+  data.productEvidence.products[0].activationDays = 1;
+  data.candidateReport = { ...data.candidateReport, ...PITER_QUOTA48_UPDATE, launchQuotaSchemaVersion: 2 };
+  const original = structuredClone(data);
+  const built = buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining: 48 });
+  assert.doesNotThrow(() => validatePiterAtomicActivationPacket(built, {now:NOW}));
+  const sentinel = buildPiterAtomicSentinel(built, NOW.toISOString());
+  assert.equal(sentinel.paidCount, 42); assert.equal(sentinel.takenCount, 42);
+  assert.equal(sentinel.quotaAdjustment, 10); assert.equal(100-sentinel.takenCount-sentinel.quotaAdjustment, 48);
+  assert.equal(sentinel.legacyPaymentRefs.length, 42); assert.equal(sentinel.ready, false);
+  assert.doesNotThrow(() => validateAtomicLedgerShape(sentinel));
+  const plan = buildPiterAtomicLedgerPlan({ action:'activate', packet:built, documents:[...rows,sentinel],
+    activeFlowSha256: PITER_QUOTA48_UPDATE.candidateSha256, expectedRevision:0, now:NOW });
+  assert.equal(plan.mutation.filter.quotaAdjustment, 10);
+  assert.deepEqual(data,original);
+  for(const remaining of [null,50,49,0]) assert.throws(() => buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining:remaining }));
+  for(const activationDays of [0,2,365,'1']) assert.throws(() => buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining:48,
+    productEvidence:{...data.productEvidence, products:[{...data.productEvidence.products[0],activationDays}]} }));
+  const old = evidence();
+  assert.throws(() => buildPiterAtomicActivationPacket({ ...old, candidateReport:{...old.candidateReport,...PITER_QUOTA_UPDATE,launchQuotaSchemaVersion:2}, initialBatchRemaining:48 }));
+  const wrong = structuredClone(built);wrong.launchQuota.initialBatchRemaining=50;wrong.launchQuota.adjustment=8;
+  delete wrong.contractDigest; wrong.contractDigest=sha256(stableJson(wrong));
+  assert.throws(()=>validatePiterAtomicActivationPacket(wrong,{now:NOW}));
 });

@@ -1,3 +1,32 @@
+// BEGIN generated hubLk1SaleContract
+function normalizeHubSalePolicy(value) {
+  try { if (typeof value === 'string') value = JSON.parse(value); } catch { return null; }
+  const keys = ['productId', 'maxActiveBookings', 'freeGameMinutesPerDay', 'gameOverageDiscountPercent', 'groupTrainingDiscountPercent', 'tournamentDiscountPercent'];
+  if (!value || Array.isArray(value) || typeof value !== 'object'
+    || Object.keys(value).sort().join() !== [...keys].sort().join()
+    || value.productId !== 'db7a5250-7369-4f43-8ac5-9111be24bc74'
+    || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)
+    || value.maxActiveBookings < 1 || keys.slice(3).some(k => value[k] > 100)) return null;
+  return Object.fromEntries(keys.map(k => [k, value[k]]));
+}
+function normalizeFrozenHubSale(value) {
+  const policy = normalizeHubSalePolicy(value?.policy);
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+    || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
+    || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
+  return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };
+}
+function readHubLk1Sale(globalContext) {
+  if (globalContext.get('summer_subscription_hub_lk1_sales_enabled') !== true
+    || globalContext.get('summer_subscription_sales_20260909_enabled') !== true) return null;
+  const policy = normalizeHubSalePolicy(globalContext.get('subscriptions_lk1_product_policy'));
+  const receipt = normalizeFrozenHubSale(globalContext.get('subscriptions_lk1_hub_sale_runtime'));
+  if (!policy || !receipt || JSON.stringify(policy) !== JSON.stringify(receipt.policy)) return null;
+  return receipt;
+}
+const hubLk1Sale = readHubLk1Sale(global);
+const piterNextDaySale = global.get("summer_subscription_piter_next_day_sales_20260909_enabled") === true && global.get("summer_subscription_sales_20260909_enabled") === true;
+// END generated hubLk1SaleContract
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const DEFAULT_RESERVATION_MINUTES = 30;
 const DEFAULT_PLAN_KEY = "sport";
@@ -386,6 +415,9 @@ if (!record) {
   });
 }
 
+if (record.hubLk1Sale != null && !normalizeFrozenHubSale(record.hubLk1Sale)) {
+  return failMsg(503, "Сохранённые правила продажи ХАБ требуют сверки", { code: "HUB_FROZEN_SALE_MODE_INVALID" });
+}
 const recordCounter = resolveCounterFromRecord(record, configMap);
 ctx.counterKey = toStr(ctx.counterKey) || toStr(recordCounter?.counterKey) || normalizeCounterKey(record.counterKey);
 ctx.inventoryId = toStr(record.inventoryId) || toStr(ctx.inventoryId) || toStr(recordCounter?.inventoryId) || null;
@@ -438,6 +470,7 @@ ctx.saleRecord = {
   productType: toStr(record.productType) || "SUBSCRIPTION",
   providerActivationDays: Number.isInteger(record.providerActivationDays) ? record.providerActivationDays : null,
   providerAutoActivationDate: toStr(record.providerAutoActivationDate),
+  providerLifecycleMode: toStr(record.providerLifecycleMode),
   activationNotBeforeDate: toStr(record.activationNotBeforeDate),
   providerValidityDays: Number.isInteger(record.providerValidityDays) ? record.providerValidityDays : null,
   providerVisits: Number.isInteger(record.providerVisits) ? record.providerVisits : null,
@@ -448,6 +481,7 @@ ctx.saleRecord = {
   managedSaleProviderScope: record.managedSaleProviderScope && typeof record.managedSaleProviderScope === "object"
     ? { ...record.managedSaleProviderScope }
     : null,
+  hubLk1Sale: normalizeFrozenHubSale(record.hubLk1Sale),
   managedBindingState: toStr(record.managedBindingState),
   managedProviderObservedAt: toStr(record.managedProviderObservedAt),
   managedProviderInstance: record.managedProviderInstance && typeof record.managedProviderInstance === "object"
@@ -462,6 +496,8 @@ ctx.saleRecord = {
   failUrl: toStr(record.failUrl),
   createdAt: toStr(record.createdAt) || new Date().toISOString(),
 };
+ctx.hubLk1Sale = ctx.saleRecord.hubLk1Sale;
+ctx.providerLifecycleMode = ctx.saleRecord.providerLifecycleMode;
 ctx.managedSaleBinding = ctx.saleRecord.managedSaleBinding;
 ctx.managedSaleReadinessCheckedAt = ctx.saleRecord.managedSaleReadinessCheckedAt;
 ctx.managedSaleProviderScope = ctx.saleRecord.managedSaleProviderScope;

@@ -119,7 +119,7 @@ export function validateAtomicLedgerShape(ledger, totalLimit = PITER_ATOMIC_ACTI
   const quotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0;
   if ((ledger.schemaVersion === 1 && Object.hasOwn(ledger, "quotaAdjustment"))
     || !Number.isSafeInteger(quotaAdjustment) || quotaAdjustment < 0
-    || (ledger.schemaVersion === 2 && ledger.legacyPaymentRefs.length + quotaAdjustment !== 50)
+    || (ledger.schemaVersion === 2 && ![50, 52].includes(ledger.legacyPaymentRefs.length + quotaAdjustment))
     || ledger.takenCount + quotaAdjustment > totalLimit) fail("atomic launch quota invariant mismatch");
   if (ledger.takenCount !== ledger.paidCount + ledger.reservedCount || ledger.takenCount > totalLimit) {
     fail("atomic sentinel invariant mismatch");

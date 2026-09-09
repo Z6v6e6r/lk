@@ -23,7 +23,7 @@ Usage:
     --binding-file /absolute/private/nodered-binding-evidence.json \\
     [--reconciliation-packet /absolute/private/reconciliation.packet.json] \\
     [--reconciliation-receipt /absolute/private/apply-receipt.json] \\
-    [--initial-batch-remaining 50] \\
+    [--initial-batch-remaining 48|50] \\
     --candidate-report /absolute/fresh-live-workspace/build-piter-atomic/report.json \\
     --product-id <exact-viva-product-id> \\
     --output-dir /absolute/new/private/output-directory
@@ -76,10 +76,10 @@ export function parseArgs(argv) {
   }
   options.reconciliationPacket = toStr(options.reconciliationPacket);
   options.reconciliationReceipt = toStr(options.reconciliationReceipt);
-  if (options.initialBatchRemaining !== undefined && options.initialBatchRemaining !== "50") {
-    throw new Error("--initial-batch-remaining supports only the approved value 50");
+  if (options.initialBatchRemaining !== undefined && !["48", "50"].includes(options.initialBatchRemaining)) {
+    throw new Error("--initial-batch-remaining supports only the approved values 48 and 50");
   }
-  options.initialBatchRemaining = options.initialBatchRemaining === "50" ? 50 : null;
+  options.initialBatchRemaining = options.initialBatchRemaining === undefined ? null : Number(options.initialBatchRemaining);
   for (const key of ["ledgerFile", "providerFile", "productFile", "bindingFile", "candidateReport", "reconciliationPacket", "reconciliationReceipt", "outputDir"]) {
     if (options[key] && !path.isAbsolute(options[key])) throw new Error(`${key} must be an absolute path`);
   }

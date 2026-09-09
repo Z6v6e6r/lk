@@ -1,3 +1,32 @@
+// BEGIN generated hubLk1SaleContract
+function normalizeHubSalePolicy(value) {
+  try { if (typeof value === 'string') value = JSON.parse(value); } catch { return null; }
+  const keys = ['productId', 'maxActiveBookings', 'freeGameMinutesPerDay', 'gameOverageDiscountPercent', 'groupTrainingDiscountPercent', 'tournamentDiscountPercent'];
+  if (!value || Array.isArray(value) || typeof value !== 'object'
+    || Object.keys(value).sort().join() !== [...keys].sort().join()
+    || value.productId !== 'db7a5250-7369-4f43-8ac5-9111be24bc74'
+    || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)
+    || value.maxActiveBookings < 1 || keys.slice(3).some(k => value[k] > 100)) return null;
+  return Object.fromEntries(keys.map(k => [k, value[k]]));
+}
+function normalizeFrozenHubSale(value) {
+  const policy = normalizeHubSalePolicy(value?.policy);
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+    || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
+    || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
+  return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };
+}
+function readHubLk1Sale(globalContext) {
+  if (globalContext.get('summer_subscription_hub_lk1_sales_enabled') !== true
+    || globalContext.get('summer_subscription_sales_20260909_enabled') !== true) return null;
+  const policy = normalizeHubSalePolicy(globalContext.get('subscriptions_lk1_product_policy'));
+  const receipt = normalizeFrozenHubSale(globalContext.get('subscriptions_lk1_hub_sale_runtime'));
+  if (!policy || !receipt || JSON.stringify(policy) !== JSON.stringify(receipt.policy)) return null;
+  return receipt;
+}
+const hubLk1Sale = readHubLk1Sale(global);
+const piterNextDaySale = global.get("summer_subscription_piter_next_day_sales_20260909_enabled") === true && global.get("summer_subscription_sales_20260909_enabled") === true;
+// END generated hubLk1SaleContract
 const PITER_COUNTER_KEY = "piter_friendship";
 const PITER_INVENTORY_ID = "piter_friendship_12m_2026_v1";
 const HUB_COUNTER_KEY = "network_friendship";
@@ -115,7 +144,7 @@ const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
   const quotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0;
   if ((ledger.schemaVersion === 1 && Object.prototype.hasOwnProperty.call(ledger, "quotaAdjustment"))
     || !Number.isSafeInteger(quotaAdjustment) || quotaAdjustment < 0
-    || (ledger.schemaVersion === 2 && legacyRefs.length + quotaAdjustment !== 50)
+    || (ledger.schemaVersion === 2 && ![50, 52].includes(legacyRefs.length + quotaAdjustment))
     || ledger.takenCount + quotaAdjustment > totalLimit) return false;
   const reservationRefs = ledger.reservations.map((item) => toStr(item?.paymentRef));
   if (legacyRefs.some((item) => !item) || reservationRefs.some((item) => !item)) return false;
@@ -141,7 +170,8 @@ const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
     || !Number.isInteger(ledger.dailyBaselinePaidCount) || ledger.dailyBaselinePaidCount < 0
     || !Number.isInteger(ledger.dailyPaidCount) || ledger.dailyPaidCount < 0
     || !Number.isInteger(ledger.dailyReservedCount) || ledger.dailyReservedCount < 0
-    || ledger.dailyPaidCount + ledger.dailyReservedCount > Math.max(0, Number(ctx.dailyLimit) || 0)) {
+    || ledger.dailyPaidCount + ledger.dailyReservedCount > (ledger.dailyDate < ctx.dailyDropDate
+      ? totalLimit : Math.max(0, Number(ctx.dailyLimit) || 0))) {
     return false;
   }
   const dailyPaidReservations = ledger.reservations.filter((item) => (
@@ -187,6 +217,7 @@ const saleInsert = (ctx, nowIso) => ({
       productType: ctx.productType || "SUBSCRIPTION",
       providerActivationDays: Number.isInteger(ctx.providerActivationDays) ? ctx.providerActivationDays : null,
       providerAutoActivationDate: toStr(ctx.providerAutoActivationDate),
+      providerLifecycleMode: toStr(ctx.providerLifecycleMode),
       activationNotBeforeDate: toStr(ctx.activationNotBeforeDate),
       providerValidityDays: Number.isInteger(ctx.providerValidityDays) ? ctx.providerValidityDays : null,
       providerVisits: Number.isInteger(ctx.providerVisits) ? ctx.providerVisits : null,
@@ -197,6 +228,7 @@ const saleInsert = (ctx, nowIso) => ({
       managedSaleProviderScope: ctx.managedSaleProviderScope && typeof ctx.managedSaleProviderScope === "object"
         ? { ...ctx.managedSaleProviderScope }
         : null,
+      hubLk1Sale: normalizeFrozenHubSale(ctx.hubLk1Sale),
       managedBindingState: isHub(ctx) ? "AWAITING_PAYMENT" : null,
       dispatchGeneration: dispatchGeneration(ctx.dispatchGeneration),
       providerAttemptedAt: toStr(ctx.providerAttemptedAt),
@@ -259,6 +291,12 @@ const saleProjectionMatches = (record, ctx, expectedStatus, result = {}) => Bool
   && record.requestFingerprint === ctx.requestFingerprint
   && record.status === expectedStatus
   && record.amountMinor === (ctx.expectedAmountMinor ?? ctx.priceMinor)
+  && toStr(record.providerLifecycleMode) === toStr(ctx.providerLifecycleMode)
+  && (!isHub(ctx) || (
+    (record.hubLk1Sale == null || normalizeFrozenHubSale(record.hubLk1Sale) !== null)
+    && (ctx.hubLk1Sale == null || normalizeFrozenHubSale(ctx.hubLk1Sale) !== null)
+    && JSON.stringify(normalizeFrozenHubSale(record.hubLk1Sale)) === JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale))
+  ))
   && (expectedStatus !== "PAYMENT_PENDING" || (toStr(result.transactionId) && toStr(result.paymentUrl)))
   && (result.transactionId == null || record.transactionId === result.transactionId)
   && (result.paymentUrl == null || record.paymentUrl === result.paymentUrl)
@@ -352,7 +390,8 @@ if (ctx.counterKey === "network_friendship" && [
   "piter_reserve_start", "piter_ledger_find", "hub_daily_reset_ack", "piter_reserve_ack",
   "piter_dispatch_claim", "piter_claimed_sale_ack", "piter_claimed_sale_readback",
   "piter_dispatch_ack", "piter_dispatch_sale_ack", "piter_dispatch_sale_readback",
-].includes(ctx.step)) {
+].includes(ctx.step) && (!hubLk1Sale
+  || JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale)) !== JSON.stringify(hubLk1Sale))) {
   return fail(503, "Новые продажи ХАБ не включены в этот выпуск", "HUB_NEW_SALES_RELEASE_DISABLED");
 }
 
@@ -407,6 +446,21 @@ if (ctx.step === "piter_ledger_find") {
     }
   }
   if (existing) {
+    if (isPiter(ctx)) {
+      const savedLifecycle = toStr(existing.saleRecord?.providerLifecycleMode);
+      if (["CLAIMED", "DISPATCHING"].includes(existing.state) && savedLifecycle !== toStr(ctx.providerLifecycleMode)) {
+        return fail(503, "Условия сохранённой продажи изменились", "PITER_FROZEN_LIFECYCLE_DRIFT");
+      }
+      ctx.providerLifecycleMode = savedLifecycle;
+    }
+    if (isHub(ctx)) {
+      const storedSaleMode = normalizeFrozenHubSale(existing.saleRecord?.hubLk1Sale);
+      if (["CLAIMED", "DISPATCHING"].includes(existing.state) && (!storedSaleMode
+        || JSON.stringify(storedSaleMode) !== JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale)))) {
+        return fail(503, "Замороженные правила продажи ХАБ изменились", "HUB_FROZEN_SALE_MODE_DRIFT");
+      }
+      ctx.hubLk1Sale = storedSaleMode;
+    }
     if (existing.requestFingerprint !== requestFingerprint) {
       return fail(409, "paymentRef уже связан с другой покупкой", "PITER_PAYMENT_REF_CONFLICT");
     }
