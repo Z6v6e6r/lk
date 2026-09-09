@@ -29,3 +29,13 @@ test('unconfirmed option never displays a free participation price',()=>{
   assert.doesNotMatch(html,/0 ₽|700 ₽|Доплата/);assert.match(html,/не подтверждены/);
   assert.match(html,/aria-live="polite"/);
 });
+
+const joinBundle=await build({entryPoints:['src/components/games/JoinSubscriptionOptions.tsx'],bundle:true,write:false,format:'cjs',platform:'node',jsx:'automatic',external:['react','react/jsx-runtime'],logLevel:'silent'});
+const joinModule={exports:{}};new Function('require','module','exports',joinBundle.outputFiles[0].text)(require,joinModule,joinModule.exports);
+test('join options display individual participation prices and block unconfirmed or exhausted choices',()=>{
+ const bySubscriptionId={a:preview,b:{...preview,state:'limit-used',amountMinor:null,label:'Лимит по подписке исчерпан'},c:{...preview,amountMinor:0,detail:null}};
+ const html=renderToStaticMarkup(React.createElement(joinModule.exports.JoinSubscriptionOptions,{options:['a','b','c','d'].map(subscriptionId=>({subscriptionId,name:subscriptionId,balanceLabel:'до 07.09.2027'})),preview:{...preview,bySubscriptionId,refresh(){}},disabled:false,shareLabel:'1/4',onJoin(){}}));
+ assert.match(html,/700 ₽/);assert.match(html,/0 ₽/);assert.match(html,/Лимит по подписке исчерпан/);
+ assert.equal((html.match(/disabled=""/g)||[]).length,2);
+ assert.match(html,/Обновить стоимость по подпискам/);assert.doesNotMatch(html,/Списать с/);
+});

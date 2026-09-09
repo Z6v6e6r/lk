@@ -5,7 +5,7 @@ import fs from "node:fs";
 const gamesSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
 const standaloneJoinSource = fs.readFileSync("src/components/games/GameJoinPage.tsx", "utf8");
 
-test("split create and join entrypoints share the subscription lifecycle filter", () => {
+test("create preserves lifecycle checks and joins delegate balances and lifecycle to the shared server quote", () => {
   assert.match(gamesSource, /filterSplitEligibleSubscriptions,/);
   assert.doesNotMatch(gamesSource, /function\s+filterSplitEligibleSubscriptions\s*\(/);
   assert.doesNotMatch(gamesSource, /function\s+isSplitSubscriptionStatusActive\s*\(/);
@@ -14,7 +14,12 @@ test("split create and join entrypoints share the subscription lifecycle filter"
     /preferredPaymentMode === "subscription" && !canUseSplitSubscription\s*\?\s*"one_time"/,
   );
   assert.match(gamesSource, /Не удалось определить доступный абонемент\. Обновите список и попробуйте снова\./);
-  assert.match(standaloneJoinSource, /const eligible\s*=\s*filterSplitEligibleSubscriptions\s*\(/);
+  for (const source of [gamesSource, standaloneJoinSource]) {
+    assert.match(source, /const eligible\s*=\s*filterSplitCategoryCompatibleSubscriptions\s*\(/);
+    assert.match(source, /createJoinSubscriptionPriceTarget/);
+    assert.match(source, /<JoinSubscriptionOptions/);
+    assert.match(source, /Сначала проверьте стоимость и лимиты по выбранной подписке/);
+  }
 });
 
 test("all split join entrypoints require an explicit client subscription selection", () => {

@@ -1,4 +1,4 @@
-export interface SubscriptionPriceTarget {
+export interface NewGameSubscriptionPriceTarget {
   targetKind: "NEW_GAME";
   slotId: string;
   stationId: string;
@@ -10,12 +10,31 @@ export interface SubscriptionPriceTarget {
   shareCount: 2 | 4;
 }
 
+export interface ExistingGameSubscriptionPriceTarget {
+  targetKind: "EXISTING_GAME";
+  gameId: string;
+  startsAt: string;
+  durationMinutes: 60 | 90 | 120;
+}
+
+export type SubscriptionPriceTarget = NewGameSubscriptionPriceTarget | ExistingGameSubscriptionPriceTarget;
+
+export function createJoinSubscriptionPriceTarget(input: {
+  gameId: string | null; date: string | null; fromTime: string | null; durationMinutes: number;
+}): ExistingGameSubscriptionPriceTarget | null {
+  if (!input.gameId || !input.date || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)
+    || !input.fromTime || !/^\d{2}:\d{2}(?::\d{2})?$/.test(input.fromTime)
+    || ![60, 90, 120].includes(input.durationMinutes)) return null;
+  return { targetKind: "EXISTING_GAME", gameId: input.gameId,
+    startsAt: `${input.date}T${input.fromTime.length === 5 ? input.fromTime + ":00" : input.fromTime}+03:00`, durationMinutes: input.durationMinutes as 60 | 90 | 120 };
+}
+
 /** Shared by production and DEV; payment-demo/shadow modes never control this read. */
 export function createSubscriptionPriceTarget(input: {
   slotId: string | null; stationId: string | null; roomId: string | null;
   masterServiceId: string | null; subServiceIds: string[];
   date: string | null; fromTime: string | null; durationMinutes: number; shareCount: number;
-}): SubscriptionPriceTarget | null {
+}): NewGameSubscriptionPriceTarget | null {
   if (!input.slotId || !input.stationId || !input.roomId || !input.masterServiceId
     || !input.subServiceIds.length || input.subServiceIds.some(id => !id)
     || !input.date || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)
@@ -50,6 +69,7 @@ export type SubscriptionPricePreview = {
 };
 
 export function subscriptionPriceSelectionKey(target: SubscriptionPriceTarget): string {
+  if (target.targetKind === "EXISTING_GAME") return JSON.stringify([target.targetKind, target.gameId, target.startsAt, target.durationMinutes]);
   return JSON.stringify([target.slotId, target.stationId, target.roomId, target.masterServiceId,
     [...target.subServiceIds].sort(), target.startsAt, target.durationMinutes, target.shareCount]);
 }

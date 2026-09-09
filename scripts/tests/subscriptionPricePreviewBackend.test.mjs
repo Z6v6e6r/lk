@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
-import { composeSubscriptionPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
+import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
 const legacyOriginal = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
@@ -21,6 +21,7 @@ const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const actor = uuid(1), sub = uuid(2), room = uuid(3), studio = uuid(4), master = uuid(5), service = uuid(6);
 const product = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
 const rule = {productId:product,maxActiveBookings:4,freeGameMinutesPerDay:60,gameOverageDiscountPercent:30,groupTrainingDiscountPercent:50,tournamentDiscountPercent:50};
+const gameId = 'pay_' + uuid(70), exerciseId = uuid(71);
 const target = {targetKind:'NEW_GAME',slotId:'slot:fixture',stationId:studio,roomId:room,masterServiceId:master,subServiceIds:[service],startsAt:'2099-09-21T07:00:00+03:00',durationMinutes:90,shareCount:4};
 const subscription = (id=sub,extra={}) => ({subscriptionId:id, product:{id:product,name:'Падел.Дружба.ХАБ — годовая'},
   purchaseDate:'2026-09-05T06:40:26',activationDate:'2026-09-07T12:22:12',expirationDate:'2100-09-07',status:'ACTIVE',
@@ -35,7 +36,7 @@ function harness(options={}) {
   const instances = subscriptions.map(row=>({_id:key('instance',actor,row.subscriptionId),kind:'instance',tenantKey:'iSkq6G',actorClientId:actor,subscriptionId:row.subscriptionId,productId:product}));
   const catalog = [{_id:key('product',product),kind:'product',tenantKey:'iSkq6G',productId:product,name:'Падел.Дружба.ХАБ — годовая'}];
   const calls=[];
-  let msg={req:{headers:{authorization:'Bearer fixture-user'}},payload:{target:{...target,...options.target},subscriptionIds:options.ids||subscriptions.map(row=>row.subscriptionId),...options.body}};
+  let msg={req:{headers:{authorization:'Bearer fixture-user'}},payload:{target:options.join ? {targetKind:'EXISTING_GAME',gameId,startsAt:target.startsAt,durationMinutes:90,...options.target} : {...target,...options.target},subscriptionIds:options.ids||subscriptions.map(row=>row.subscriptionId),...options.body}};
   const node = name=>nodes.find(row=>row.id.endsWith('_'+name));
   let current=node('entry');
   for(let i=0;i<100;i++) {
@@ -53,6 +54,7 @@ function harness(options={}) {
       calls.push({kind:'GET',path:url.pathname,query:url.search});
       let payload;
       if(url.pathname.endsWith('/profile')) payload={id:actor};
+      else if(url.pathname.includes('/exercises/')) payload=options.exercise || {id:exerciseId,studioId:studio,roomId:room,timeFrom:target.startsAt,timeTo:'2099-09-21T08:30:00+03:00',typeId:1613,directionId:4588,availableClientSubscriptions:subscriptions};
       else if(url.pathname.endsWith('/subscriptions')) payload={content:subscriptions,totalElements:subscriptions.length};
       else if(url.pathname.endsWith('/bookings/history')) payload=options.history||[];
       else if(url.pathname.endsWith('/bookings')) payload=options.active||[];
@@ -68,7 +70,10 @@ function harness(options={}) {
       if(options.mutateHttp) options.mutateHttp(msg,url);
     } else if(current.type==='mongodb4') {
       assert.equal(current.operation,'find'); calls.push({kind:'find',collection:current.collection,query:structuredClone(msg.payload)});
-      if(current.collection==='lk_subscription_daily_booking_ops') {
+      if(current.collection==='lk_games') {
+        assert.deepEqual(structuredClone(msg.payload),{id:gameId});
+        msg.payload=options.games || [{id:gameId,booking:{studioId:studio,roomId:room,masterServiceId:master,subServiceIds:[service],date:'2099-09-21',timeFrom:'07:00',timeTo:'08:30',durationMinutes:90,vivaExerciseId:exerciseId},metadata:{splitPayment:{shareCount:4}}}];
+      } else if(current.collection==='lk_subscription_daily_booking_ops') {
         assert.equal(msg.payload.actorClientId,actor); assert.equal(msg.payload['lk1.rule.productId'],product);
         msg.payload=options.operations||[];
       } else msg.payload=msg._subscriptionPricePreview.step==='catalog'?catalog:(options.instances||instances);
@@ -230,5 +235,83 @@ liveTest('selected-instance unresolved provider date/category refuses preview',(
       assert.ok(response.statusCode>=400);
       assert.equal(response.payload.quotes,undefined);
     }
+  }
+});
+
+liveTest('existing game joins use canonical game, exercise and the same instance-scoped quote',()=>{
+  const {response,calls}=harness({join:true,subscriptions:[subscription(),subscription(uuid(12),{purchaseDate:'2026-08-29T10:00:00'})]});
+  assert.equal(response.statusCode,200);
+  assert.deepEqual(response.payload.quotes.map(q=>q.amountMinor),[70000,0]);
+  assert.equal(response.payload.quotes[0].selectionKey,JSON.stringify(['EXISTING_GAME',gameId,target.startsAt,90]));
+  assert.equal(calls.filter(c=>c.collection==='lk_games').length,1);
+  assert.equal(calls.filter(c=>c.path?.includes('/exercises/')).length,1);
+  assert.ok(calls.every(c=>['GET','find'].includes(c.kind)));
+});
+liveTest('join spent allowance, active limits and last visit stay specific to the purchased instance',()=>{
+  const ids=[sub,uuid(12)];
+  const rows=ids.map(id=>subscription(id,{visitsLeft:1}));
+  const busy=harness({join:true,subscriptions:rows,active:[1,2,3,4].map(n=>booking(uuid(20+n),{exerciseDate:'2099-09-22'}))}).response;
+  assert.equal(busy.statusCode,200); assert.deepEqual(busy.payload.quotes.map(q=>q.status),['LIMIT_USED','AVAILABLE']);
+  const used=harness({join:true,subscriptions:rows,history:[booking()]}).response;
+  assert.equal(used.statusCode,200); assert.deepEqual(used.payload.quotes.map(q=>q.amountMinor),[210000,70000]);
+});
+liveTest('join rejects missing game, conflicting target and untrusted price before a quote',()=>{
+  for(const options of [{games:[]},{target:{durationMinutes:60}},{target:{startsAt:'2099-09-21T07:30:00+03:00'}},
+    {target:{amountMinor:0}},{target:{stationId:studio}},{games:[{id:gameId,booking:{}}]}]) {
+    const {response}=harness({join:true,...options});assert.notEqual(response.statusCode,200);assert.equal(response.payload.quotes,undefined);
+  }
+});
+liveTest('join requires current exercise subscription availability, not just owned catalog',()=>{
+  const result=harness({join:true,mutateHttp(msg,url){if(url.pathname.includes('/exercises/'))msg.payload.availableClientSubscriptions=[];}}).response;
+  assert.equal(result.statusCode,200);assert.equal(result.payload.quotes[0].status,'UNAVAILABLE');
+  for(const change of [{id:uuid(99)},{studioId:uuid(99)},{roomId:uuid(99)},{typeId:123,directionId:123},{isCancelled:true},{availableClientSubscriptions:null}]) {
+    const {response}=harness({join:true,mutateHttp(msg,url){if(url.pathname.includes('/exercises/'))Object.assign(msg.payload,change);}});
+    assert.notEqual(response.statusCode,200);assert.equal(response.payload.quotes,undefined);
+  }
+});
+liveTest('join provider or metadata failures have no price and no write-capable path',()=>{
+  for(const options of [{instances:[]},{mutateHttp(msg,url){if(url.pathname.includes('/exercises/'))msg.statusCode=503;}},
+    {mutateMongo(msg,node){if(node.collection==='lk_games')msg.error={message:'fixture-read-error'};}}]) {
+    const {response,calls}=harness({join:true,...options});assert.notEqual(response.statusCode,200);assert.equal(response.payload.quotes,undefined);
+    assert.ok(calls.every(c=>['GET','find'].includes(c.kind)));
+  }
+});
+
+liveTest('join canonical game corruption never produces a price',()=>{
+  for (const change of [game=>game.status='CANCELLED',game=>game.metadata.splitPayment.enabled=false,
+    game=>game.booking.timeTo='09:00',game=>game.booking.durationMinutes=60,
+    game=>game.booking.exerciseId=uuid(99),game=>game.booking.masterServiceId=null]) {
+    const {response}=harness({join:true,mutateMongo(msg,node){if(node.collection==='lk_games')change(msg.payload[0]);}});
+    assert.notEqual(response.statusCode,200);assert.equal(response.payload.quotes,undefined);
+  }
+  const duplicate=harness({join:true,mutateMongo(msg,node){if(node.collection==='lk_games')msg.payload.push({...msg.payload[0]});}}).response;
+  assert.notEqual(duplicate.statusCode,200);
+});
+liveTest('join server pricing preserves singles share and known unavailable rows',()=>{
+  const singles=harness({join:true,mutateMongo(msg,node){if(node.collection==='lk_games')msg.payload[0].metadata.splitPayment.shareCount=2;}}).response;
+  assert.equal(singles.statusCode,200); assert.equal(singles.payload.quotes[0].amountMinor,140000);
+  for (const [extra,status] of [[{visitsLeft:0},'LIMIT_USED'],[{visitsLeft:1,purchaseDate:'2026-08-29T10:00:00'},'UNAVAILABLE'],
+    [{expirationDate:'2026-09-07'},'UNAVAILABLE'],[{isFrozen:true},'UNAVAILABLE']]) {
+    const result=harness({join:true,subscriptions:[subscription(sub,extra)]}).response;
+    assert.equal(result.statusCode,200);assert.equal(result.payload.quotes[0].status,status);
+  }
+});
+
+const installedFixture = process.env.LK_JOIN_PREVIEW_INSTALLED_FLOW_FIXTURE;
+test('existing preview upgrade preserves every unrelated node and fails on source drift', {skip:!installedFixture && 'Requires private installed preview fixture'},()=>{
+  const bytes=fs.readFileSync(installedFixture), before=JSON.parse(bytes);
+  const packet=composeSubscriptionJoinPricePreviewArtifacts(bytes,'join-upgrade-test');
+  const changed=['lk_subscription_price_preview_20260908_entry','lk_subscription_price_preview_20260908_router','lk_subscription_price_preview_20260908_catch'];
+  for(const row of before) if(!changed.includes(row.id)) assert.deepEqual(packet.candidate.find(n=>n.id===row.id),row);
+  assert.equal(packet.candidate.length,before.length+1);
+  const added=packet.candidate.at(-1);assert.equal(added.collection,'lk_games');assert.equal(added.operation,'find');
+  before.find(n=>n.id===changed[0]).func+='\n// drift';
+  assert.throws(()=>composeSubscriptionJoinPricePreviewArtifacts(Buffer.from(JSON.stringify(before)),'join-upgrade-test'),/preimage drift/);
+});
+liveTest('join 60 and 120 minute calculations retain canonical minute allocation',()=>{
+  for(const [duration,end,amount,free,paid] of [[60,'08:00',0,60,0],[120,'09:00',105000,60,60]]) {
+    const result=harness({join:true,target:{durationMinutes:duration},mutateMongo(msg,node){if(node.collection==='lk_games')Object.assign(msg.payload[0].booking,{timeTo:end,durationMinutes:duration});},
+      mutateHttp(msg,url){if(url.pathname.includes('/exercises/'))msg.payload.timeTo=`2099-09-21T${end}:00+03:00`;}}).response;
+    assert.equal(result.statusCode,200);assert.deepEqual([result.payload.quotes[0].amountMinor,result.payload.quotes[0].freeMinutes,result.payload.quotes[0].paidMinutes],[amount,free,paid]);
   }
 });
