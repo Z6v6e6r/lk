@@ -263,12 +263,14 @@ test('new nginx route uses existing SHA guard and backup; existing booking route
 });
 test('frontend product lookup is authenticated, bounded, sequential and does not retry 401/403/429', async () => {
   const file = fs.readFileSync(new URL('../../src/utils/apiClient.ts', import.meta.url), 'utf8');
-  const body = file.slice(file.indexOf('export async function apiFetchSubscriptioName('), file.indexOf('\nexport async function apiBuySubscroption('));
+  // The network helper owns auth, timeout and fallback; the facade's shared cache
+  // is exercised separately by subscriptionSessionCache.test.mjs.
+  const body = file.slice(file.indexOf('async function fetchSubscriptionName('), file.indexOf('\nexport async function apiBuySubscroption('));
   const js = ts.transpileModule(body.replace('export ', ''), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const run = async statuses => {
     const calls = []; const controller = new AbortController();
     const raw = async (path, options) => { calls.push({ path, options }); return { data: null, error: null, status: statuses.shift() }; };
-    const lookup = new Function('resolveLkApiBaseUrlCandidates', 'SERV2', 'SERV2_FALLBACK', 'runWithAbortTimeout', 'rawRequest', 'getServ2Origin', 'isRequestTimeoutError', js + '; return apiFetchSubscriptioName;')(
+    const lookup = new Function('resolveLkApiBaseUrlCandidates', 'SERV2', 'SERV2_FALLBACK', 'runWithAbortTimeout', 'rawRequest', 'getServ2Origin', 'isRequestTimeoutError', js + '; return fetchSubscriptionName;')(
       () => ['https://primary.invalid', 'https://reserve.invalid'], '', '', async (ms, fn) => { assert.equal(ms, 35000); return fn(controller.signal); }, raw, () => '', () => false);
     const result = await lookup(sub, 'ignored'); return { calls, result };
   };

@@ -277,7 +277,8 @@ test("Games details use shared occupancy for the counter and both join CTAs", ()
     occupiedIndex,
   );
   const joinGuardIndex = source.indexOf("const canCurrentUserJoinSplitGameInDetails", freeSlotsIndex);
-  const waitlistGuardIndex = source.indexOf("&& !isCurrentUserInWaitlist", joinGuardIndex);
+  const eligibilityGuardIndex = source.indexOf("const canCurrentUserCheckSplitSubscriptionsInDetails", freeSlotsIndex);
+  const waitlistGuardIndex = source.indexOf("&& !isCurrentUserInWaitlist", eligibilityGuardIndex);
   const firstCtaIndex = source.indexOf("disabled={!canCurrentUserJoinSplitGameInDetails}", joinGuardIndex);
   const secondCtaIndex = source.indexOf("disabled={!canCurrentUserJoinSplitGameInDetails}", firstCtaIndex + 1);
 
@@ -290,8 +291,13 @@ test("Games details use shared occupancy for the counter and both join CTAs", ()
   assert.ok(freeSlotsIndex > occupiedIndex, "free-slot guard must use the same count");
   assert.ok(joinGuardIndex > freeSlotsIndex, "join guard must depend on corrected free-slot state");
   assert.ok(
-    waitlistGuardIndex > joinGuardIndex && waitlistGuardIndex < firstCtaIndex,
+    eligibilityGuardIndex > freeSlotsIndex && waitlistGuardIndex > eligibilityGuardIndex && waitlistGuardIndex < joinGuardIndex,
     "current waitlisted user must not start a duplicate payment",
+  );
+  assert.match(
+    source.slice(joinGuardIndex, source.indexOf("const detailsSplitSubscriptionOptions", joinGuardIndex)),
+    /canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails\s*&& !updatingGameRoster\s*&& !updatingGameMeta\s*&& !joiningSplitPayment/,
+    "both payment CTAs must retain eligibility and busy guards",
   );
   assert.ok(firstCtaIndex > joinGuardIndex, "subscription CTA must use corrected join guard");
   assert.ok(secondCtaIndex > firstCtaIndex, "one-time CTA must use corrected join guard");
