@@ -5002,6 +5002,106 @@ test("regional purchase ignores browser productId and fails before any provider 
 
 const SALES_QUOTA_GLOBALS = { summer_subscription_sales_20260909_enabled: true };
 
+const HAB_PRICE_ONLY_GLOBALS = { summer_subscription_network_friendship_price_98000_enabled: true };
+
+function withoutObservationTime(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutObservationTime);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => key !== "updatedAt")
+    .map(([key, item]) => [key, withoutObservationTime(item)]));
+  return value;
+}
+
+function readPriceOnlyViews(counterKey: string, globals: GlobalValues) {
+  return withFixedNow("2026-09-09T08:00:00.000Z", () => {
+    const file = (name: string) => `scripts/nodered_games_nodes/fn_tournament_subscription_${name}.js`;
+    const prepared = runNodeRedFunction(file("status_prepare"), { req: { query: { counterKey } } }, globals) as NodeRedMsg[];
+    const status = runNodeRedFunction(file("status_response"),
+      { _summerSubscriptionCtx: prepared[0]._summerSubscriptionCtx, payload: [] }, globals) as NodeRedMsg[];
+    const purchase = runNodeRedFunction(file("purchase_prepare"), {
+      payload: { counterKey, clientPhone: quotaPurchaseContext().clientPhone, paymentRef: "price-only-regression" }, req: { query: {} },
+    }, globals) as NodeRedMsg[];
+    const refresh = runNodeRedFunction(file("counter_refresh_prepare"), {}, globals) as NodeRedMsg;
+    const refreshed = runNodeRedFunction(file("counter_refresh_response"),
+      { _summerSubscriptionCtx: refresh._summerSubscriptionCtx, payload: [] }, globals) as NodeRedMsg[][];
+    const update = refreshed[0].find(entry => asRecord(entry.query).counterKey === counterKey);
+    assert.ok(update);
+    return { status: asRecord(status[0].payload), purchase: purchase[0]
+      ? asRecord(purchase[0]._summerSubscriptionCtx) : asRecord(purchase[1].payload),
+      refresh: asRecord(asRecord(update.payload).$set) };
+  });
+}
+
+test("HAB price-only flag changes new prices to 98000 without changing quotas or opening sales", () => {
+  const before = readPriceOnlyViews("network_friendship", {});
+  const after = readPriceOnlyViews("network_friendship", HAB_PRICE_ONLY_GLOBALS);
+  for (const view of [after.status, after.refresh]) {
+    assert.equal(view.priceMinor, 9800000);
+    assert.equal(view.providerProductCostMinor, 9800000);
+    assert.equal(view.discountMinor, 0);
+    assert.equal(view.totalLimit, 10);
+    assert.equal(view.dailyLimit, 10);
+    assert.equal(view.canPurchase, false);
+  }
+  assert.equal(asRecord(after.purchase.details).code, "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  const admitted = readPriceOnlyViews("network_friendship", { ...HUB_NEXT_DAY_GLOBALS, ...HAB_PRICE_ONLY_GLOBALS });
+  assert.equal(admitted.purchase.productCostMinor, 9800000);
+  assert.equal(asRecord((admitted.purchase.tiers as NodeRedMsg[])[0]).priceMinor, 9800000);
+  assert.equal(admitted.purchase.dailyLimit, 1);
+  const withoutPrices = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(withoutPrices);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !["priceMinor", "price", "productCostMinor", "providerProductCostMinor"].includes(key))
+      .map(([key, item]) => [key, withoutPrices(item)]));
+    return value;
+  };
+  assert.deepEqual(withoutObservationTime(withoutPrices(after)), withoutObservationTime(withoutPrices(before)));
+});
+
+test("HAB price-only flag is strict and leaves every other configured sale unchanged", () => {
+  for (const value of [undefined, false, "true", 1, null]) {
+    assert.deepEqual(withoutObservationTime(readPriceOnlyViews("network_friendship", { summer_subscription_network_friendship_price_98000_enabled: value })),
+      withoutObservationTime(readPriceOnlyViews("network_friendship", {})));
+  }
+  for (const key of ["friendship", "ra", "piter_friendship", "sport", "academy", "energy5"]) {
+    assert.deepEqual(withoutObservationTime(readPriceOnlyViews(key, HAB_PRICE_ONLY_GLOBALS)), withoutObservationTime(readPriceOnlyViews(key, {})));
+  }
+  assert.deepEqual(withoutObservationTime(readPriceOnlyViews("network_friendship", { ...SALES_QUOTA_GLOBALS, ...HAB_PRICE_ONLY_GLOBALS })),
+    withoutObservationTime(readPriceOnlyViews("network_friendship", SALES_QUOTA_GLOBALS)));
+});
+
+test("HAB price-only flag rejects an old provider base instead of creating a discount", () => {
+  const mismatch = readPriceOnlyViews("network_friendship", {
+    ...HAB_PRICE_ONLY_GLOBALS, summer_subscription_network_friendship_product_cost_minor: 5680000,
+  });
+  assert.equal(mismatch.status.priceMinor, 9800000);
+  assert.equal(mismatch.status.bindingReady, false);
+  assert.equal(mismatch.status.canPurchase, false);
+  const matched = readPriceOnlyViews("network_friendship", {
+    ...HAB_PRICE_ONLY_GLOBALS, summer_subscription_network_friendship_product_cost_minor: 9800000,
+  });
+  assert.equal(matched.status.bindingReady, true);
+  assert.equal(matched.status.discountMinor, 0);
+});
+
+test("HAB price-only flag preserves the amount and provider base of previously accepted payments", () => {
+  for (const status of ["PAID", "PAYMENT_PENDING"]) {
+    const record = { counterKey: "network_friendship", inventoryId: "network_friendship_12m_2026_v1",
+      paymentRef: "old-price", transactionId: "fixture-old-transaction", status,
+      amountMinor: 5680000, providerProductCostMinor: 5680000, discountMinor: 0 };
+    const original = structuredClone(record);
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+      buildConfirmResolveMessage({ _summerSubscriptionCtx: { action: "confirm", step: "resolve_record",
+        counterKey: "network_friendship", paymentRef: record.paymentRef }, payload: [record] }), HAB_PRICE_ONLY_GLOBALS) as NodeRedMsg[];
+    const output = out.find(item => item?._summerSubscriptionCtx);
+    assert.ok(output);
+    const ctx = asRecord(output._summerSubscriptionCtx);
+    assert.equal(ctx.expectedAmountMinor, 5680000);
+    assert.equal(asRecord(ctx.saleRecord).providerProductCostMinor, 5680000);
+    assert.deepEqual(record, original);
+  }
+});
+
 function readResumedQuota(counterKey: string, rows: NodeRedMsg[], nowIso = "2026-09-09T08:00:00.000Z") {
   return withFixedNow(nowIso, () => {
     const file = (name: string) => `scripts/nodered_games_nodes/fn_tournament_subscription_${name}.js`;
@@ -5426,6 +5526,7 @@ test("selected-subscription HAB receipt admits new purchase and preserves old pa
 });
 
 test("old HAB pending payment replays its frozen receipt and URL under selected-subscription runtime",()=>{
+ for(const frozenPrice of [5680000,9800000]){
  const current={...HUB_NEXT_DAY_RECEIPT,bookingUsageScope:"SUBSCRIPTION_BENEFIT_ONLY"};
  const ctx={...quotaPurchaseContext(),counterKey:"network_friendship",inventoryId:"network_friendship_12m_2026_v1",
   totalLimit:100,dailyLimit:1,dailyDropDate:"2026-09-09",hubLk1Sale:current};
@@ -5434,7 +5535,7 @@ test("old HAB pending payment replays its frozen receipt and URL under selected-
  const ledger=buildHubLedger({dailyDate:"2026-09-09",reservedCount:1,takenCount:1,dailyReservedCount:1,
   reservations:[{paymentRef:ctx.paymentRef,requestFingerprint,intentFingerprint:"fixture-old-intent",state:"PAYMENT_PENDING",dailyDate:"2026-09-09",
    clientPhone:ctx.clientPhone,transactionId:"fixture-old-pending",paymentUrl:"https://pay.example.test/old-hab",
-   priceMinor:9800000,providerProductCostMinor:9800000,discountMinor:0,productId:HUB_NEXT_DAY_POLICY.productId,saleRecord}]});
+   priceMinor:frozenPrice,providerProductCostMinor:frozenPrice,discountMinor:0,productId:HUB_NEXT_DAY_POLICY.productId,saleRecord}]});
  const before=structuredClone(ledger);
  const out=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
   {payload:[ledger],_summerSubscriptionCtx:ctx},{...HUB_NEXT_DAY_GLOBALS,subscriptions_lk1_hub_sale_runtime:current}) as NodeRedMsg[];
@@ -5443,5 +5544,27 @@ test("old HAB pending payment replays its frozen receipt and URL under selected-
  const replay=asRecord(asRecord(out[2])._summerSubscriptionCtx);
  assert.deepEqual(replay.hubLk1Sale,HUB_NEXT_DAY_RECEIPT);assert.deepEqual(replay.saleRecord,saleRecord);
  assert.equal(asRecord(replay.providerResult).paymentUrl,"https://pay.example.test/old-hab");
- assert.equal(replay.priceMinor,9800000);assert.deepEqual(ledger,before);
+ assert.equal(replay.priceMinor,frozenPrice);assert.equal(replay.productCostMinor,frozenPrice);assert.deepEqual(ledger,before);
+ }
+});
+
+
+test("old HAB CLAIMED price cannot dispatch after the provider base changes", () => {
+  const ctx = { ...quotaPurchaseContext(), counterKey: "network_friendship",
+    inventoryId: "network_friendship_12m_2026_v1", totalLimit: 100, dailyLimit: 1,
+    dailyDropDate: "2026-09-09", hubLk1Sale: HUB_NEXT_DAY_RECEIPT,
+    providerProductCostMinor: 9800000,
+    providerPayload: { products: [{ id: HUB_NEXT_DAY_POLICY.productId, discount: 0 }] } };
+  const requestFingerprint = [ctx.inventoryId, ctx.counterKey, ctx.paymentRef, ctx.clientPhone, ""].join("\n");
+  const ledger = buildHubLedger({ dailyDate: "2026-09-09", reservedCount: 1, takenCount: 1, dailyReservedCount: 1,
+    reservations: [{ paymentRef: ctx.paymentRef, requestFingerprint, intentFingerprint: "fixture-old-intent",
+      state: "CLAIMED", dailyDate: "2026-09-09", clientPhone: ctx.clientPhone,
+      priceMinor: 5680000, providerProductCostMinor: 5680000, discountMinor: 0,
+      productId: HUB_NEXT_DAY_POLICY.productId, saleRecord: { hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT) } }] });
+  const before = structuredClone(ledger);
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { payload: [ledger], _summerSubscriptionCtx: ctx }, { ...HUB_NEXT_DAY_GLOBALS, ...HAB_PRICE_ONLY_GLOBALS }) as NodeRedMsg[];
+  assert.equal(out[4], null); assert.equal(out[1], null);
+  assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code, "PITER_CLAIMED_TIER_DRIFT");
+  assert.deepEqual(ledger, before);
 });
