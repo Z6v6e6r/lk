@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { apiFetchTournamentSubscriptionStatus } from '../../utils/apiClient';
 import { IS_DEV_RELEASE_CHANNEL } from '../../consts/api_config';
 import { SubscriptionStorefront } from './SubscriptionStorefront';
-import { summerPlanPresentation } from './presentation';
-import { billingFromStatus, canContinue, storefrontPlanKeys, subscriptionCheckoutUrl, type StorefrontStatus } from './catalog';
+import { summerPlanPresentation, friendshipVariantBenefits } from './presentation';
+import { billingFromStatus, canContinue, storefrontPlanKeys, subscriptionCheckoutUrl, friendshipBillingOptions, scopedStorefrontStatuses, type StorefrontStatus } from './catalog';
 import type { SubscriptionStorefrontView } from './model';
+import { loadTournamentSubscriptionStatuses } from '../../utils/tournamentSubscriptionStatusLoader';
 import markUrl from './assets/brand/подписка.svg';
 
 export function SubscriptionPage({ onBack, previewView }: {
@@ -23,10 +24,17 @@ export function SubscriptionPage({ onBack, previewView }: {
       controller = new AbortController();
       const deadline = setTimeout(() => controller?.abort(), 12_000);
       try {
-        const result = await apiFetchTournamentSubscriptionStatus({}, { signal: controller.signal });
+        const signal = controller.signal;
+        const result = await loadTournamentSubscriptionStatuses(
+          [{ counterKey: 'network_friendship' }],
+          async params => {
+            const response = await apiFetchTournamentSubscriptionStatus(params ?? {}, { signal });
+            return { ...response, data: response.data ? scopedStorefrontStatuses(response.data, params?.counterKey) : null };
+          },
+        );
         if (cancelled) return;
-        if (result.error || !result.data) throw new Error('Status unavailable');
-        setStatuses(result.data);
+        if (result.aggregateResult.error || !result.aggregateResult.data) throw new Error('Status unavailable');
+        setStatuses(result.statuses.filter(status => !result.failedExplicitCounterKeys.includes(status.counterKey ?? '')));
         setError(false);
       } catch {
         if (!cancelled) setError(true);
@@ -42,13 +50,18 @@ export function SubscriptionPage({ onBack, previewView }: {
 
   const plans = storefrontPlanKeys.flatMap(key => {
     const status = statuses?.find(item => item.counterKey === key);
-    if (!status) return [];
-    const billingOptions = billingFromStatus(status);
+    if (!status && key !== 'friendship') return [];
+    const billingOptions = key === 'friendship'
+      ? friendshipBillingOptions(statuses ?? [], error).map(option => ({
+        ...option,
+        benefitGroups: friendshipVariantBenefits[option.id],
+      }))
+      : status ? billingFromStatus(status) : [];
     if (!billingOptions.length) return [];
     return [{
       ...summerPlanPresentation[key], id: key, billingOptions,
-      ctaLabel: canContinue(status, error) ? 'Оформить подписку' : 'Сейчас недоступно',
-      ctaDisabled: !canContinue(status, error),
+      ctaLabel: status && canContinue(status, error) ? 'Оформить подписку' : 'Сейчас недоступно',
+      ctaDisabled: key === 'friendship' ? error : !status || !canContinue(status, error),
     }];
   });
   const view = previewView ?? {
@@ -65,11 +78,12 @@ export function SubscriptionPage({ onBack, previewView }: {
         {error && <button type="button" onClick={() => setAttempt(value => value + 1)}>Повторить</button>}
       </div>
     </div>}
-    {(previewView || statuses) && <SubscriptionStorefront view={view} onBack={onBack} onChoose={({ planId }) => {
+    {(previewView || statuses) && <SubscriptionStorefront view={view} onBack={onBack} onChoose={({ planId, billingOptionId }) => {
       if (previewView) return;
-      const status = statuses?.find(item => item.counterKey === planId);
+      const counterKey = planId === 'friendship' && billingOptionId === 'annual' ? 'network_friendship' : planId;
+      const status = statuses?.find(item => item.counterKey === counterKey);
       if (!status || !canContinue(status, error)) return;
-      const target = subscriptionCheckoutUrl(planId, IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod');
+      const target = subscriptionCheckoutUrl(planId, IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod', billingOptionId);
       if (target) window.location.assign(target);
     }} />}
   </>;
