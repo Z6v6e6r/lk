@@ -377,12 +377,33 @@ if (ctx.step === "lk1_create_booking_bound") {
 
 if (ctx.step === "lk1_usage_operations") {
   if (msg.error || !Array.isArray(msg.payload)) return lk1Stop(ctx, "LK1_ALLOWANCE_READ_FAILED");
+  // Resolve membership before filtering: an incomplete/conflicting provider row
+  // cannot prove that the selected subscription still has unused allowance.
+  const relevantBookings = ctx.lk1.activeBookings.concat(ctx.lk1.bookings.filter((booking) =>
+    !isInactiveBooking(booking) && (!eventDate(booking) || eventDate(booking) === ctx.serviceDate)));
+  for (const booking of relevantBookings) {
+    const aliases = [booking.clientSubscriptionId, booking.subscriptionId, booking.clientSubId];
+    for (const nested of [booking.subscription, booking.clientSubscription]) {
+      if (isObj(nested)) aliases.push(nested.clientSubscriptionId, nested.subscriptionId, nested.id, nested.uuid);
+    }
+    const present = aliases.filter((value) => value !== undefined && value !== null && value !== "");
+    const ids = new Set(present.map(normalizeId).filter(Boolean));
+    const paidBySubscription = [booking.paymentType, booking.paymentMethod]
+      .some((value) => String(value || "").trim().toUpperCase() === "SUBSCRIPTION");
+    if (present.some((value) => typeof value !== "string") || ids.size > 1
+      || (paidBySubscription && ids.size !== 1)) return lk1Stop(ctx, "LK1_BOOKING_SUBSCRIPTION_ID_UNRESOLVED");
+    if (ids.has(normalizeId(ctx.clientSubscriptionId)) && !eventDate(booking)) {
+      return lk1Stop(ctx, "LK1_BOOKING_DATE_UNRESOLVED");
+    }
+  }
   let used = 0;
   const coveredBookings = new Set();
   for (const operation of msg.payload) {
     if (!isObj(operation) || operation.actorClientId !== ctx.actorClientId
       || operation.tenantKey !== ctx.tenantKey || operation.serviceDate !== ctx.serviceDate
       || !isObj(operation.lk1?.decision)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
+    if (!normalizeId(operation.clientSubscriptionId)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
+    if (normalizeId(operation.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)) continue;
     if (["FAILED", "RELEASED"].includes(operation.state)) continue;
     const minutes = operation.lk1.decision.gameMinutes;
     if (minutes) {
@@ -395,12 +416,16 @@ if (ctx.step === "lk1_usage_operations") {
   for (const booking of ctx.lk1.bookings) {
     if (isInactiveBooking(booking) || eventDate(booking) !== ctx.serviceDate
       || normalizeId(bookingSubscriptionId(booking)) !== normalizeId(ctx.clientSubscriptionId)
-      || coveredBookings.has(normalizeId(bookingId(booking))) || resolveCategory(booking) !== "open_game") continue;
+      || coveredBookings.has(normalizeId(bookingId(booking)))) continue;
+    const category = resolveCategory(booking);
+    if (!category) return lk1Stop(ctx, "LK1_BOOKING_CATEGORY_UNRESOLVED");
+    if (category !== "open_game") continue;
     const minutes = eventDurationMinutes(booking.exercise || booking);
     if (!minutes) return lk1Stop(ctx, "LK1_ALLOWANCE_PROVIDER_DURATION_UNRESOLVED");
     used += Math.min(ctx.lk1.rule.freeGameMinutesPerDay, minutes);
   }
-  const active = ctx.lk1.activeBookings;
+  const active = ctx.lk1.activeBookings.filter((booking) =>
+    normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId));
   if (!Number.isSafeInteger(used)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
   const policy = {};
   for (const field of lk1Fields) policy[field] = ctx.lk1.rule[field];
@@ -410,7 +435,7 @@ if (ctx.step === "lk1_usage_operations") {
     action: ctx.managedAction, lk1Policy: policy,
     lk1ProductBinding: { policyProductId: ctx.lk1.rule.productId,
       ownedProductId: ctx.lk1.rule.productId, clientSubscriptionId: ctx.clientSubscriptionId },
-    target: ctx.lk1.target, usage: { activeServiceScope: "ALL_BOOKINGS",
+    target: ctx.lk1.target, usage: { activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY",
       dailyBucketLocalDate: ctx.serviceDate, activeServices: active.length,
       usedOrReservedFreeMinutesToday: used } };
   delete ctx.lk1.bookings;

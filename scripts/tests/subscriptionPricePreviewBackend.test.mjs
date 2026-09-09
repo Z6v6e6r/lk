@@ -2,10 +2,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
-const original = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
+const legacyOriginal = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
+const original = legacyOriginal ? structuredClone(legacyOriginal) : null;
+if (original) {
+  const gateway = original.find(row=>row.id==='lk_subscription_booking_router_20260804');
+  gateway.func = scopeSubscriptionUsage(gateway.func);
+  const evaluator = original.find(row=>row.id==='lk_subscription_managed_policy_20260820');
+  evaluator.func = scopeSubscriptionEvaluator(evaluator.func);
+}
 const packet = original ? composeSubscriptionPricePreviewArtifacts(Buffer.from(JSON.stringify(original)), 'preview-fixture') : null;
 const nodes = packet?.candidate.filter(row => row.id.startsWith('lk_subscription_price_preview_20260908_')) || [];
 const liveTest = (name, fn) => test(name, { skip: !original && 'Requires private exact canonical flow fixture; never copied into Git' }, fn);
@@ -102,7 +110,7 @@ liveTest('all instances return exactly one result and legacy price remains free'
   assert.deepEqual(response.payload.quotes.map(q=>q.amountMinor),[70000,0]);
 });
 liveTest('durable minutes and covered Viva booking are counted once',()=>{
-  const b=booking();const op={tenantKey:'iSkq6G',actorClientId:actor,serviceDate:'2099-09-21',state:'CONFIRMED',bookingId:b.id,
+  const b=booking();const op={clientSubscriptionId:sub,tenantKey:'iSkq6G',actorClientId:actor,serviceDate:'2099-09-21',state:'CONFIRMED',bookingId:b.id,
     lk1:{rule,decision:{gameMinutes:{localDate:'2099-09-21',freeMinutes:30}}}};
   const {response}=harness({history:[b],operations:[op]});assert.equal(response.statusCode,200);
   assert.deepEqual([response.payload.quotes[0].freeMinutes,response.payload.quotes[0].amountMinor],[30,140000]);
@@ -184,4 +192,43 @@ test('tariff query runs in a Function sandbox without Node global URLSearchParam
   assert.equal(url.searchParams.get('fromDate'),'2099-09-21');
   assert.equal(url.searchParams.get('fromTime'),'07:00:00');
   assert.equal(url.searchParams.get('toTime'),'08:30:00');
+});
+
+liveTest('three instances isolate active bookings and free-minute ledger in the complete preview route',()=>{
+  const second=uuid(12),third=uuid(13);
+  const active=[1,2,3,4].map(n=>booking(uuid(40+n),{exerciseDate:'2099-09-22'}));
+  const operations=[{tenantKey:'iSkq6G',actorClientId:actor,clientSubscriptionId:sub,serviceDate:'2099-09-21',state:'CONFIRMED',lk1:{rule,decision:{gameMinutes:{localDate:'2099-09-21',freeMinutes:60}}}}];
+  const {response,calls}=harness({subscriptions:[subscription(),subscription(second),subscription(third)],active,operations,target:{durationMinutes:60}});
+  assert.equal(response.statusCode,200);
+  const [a,b,c]=response.payload.quotes;
+  assert.equal(a.reasonCode,'ACTIVE_SERVICES_LIMIT_REACHED');
+  assert.equal(a.status,'LIMIT_USED');
+  for(const q of [b,c]) assert.deepEqual([q.status,q.amountMinor,q.freeMinutes],['AVAILABLE',0,60]);
+  assert.deepEqual([b.subscriptionId,c.subscriptionId],[second,third]);
+  assert.equal(calls.filter(call=>call.collection==='lk_subscription_daily_booking_ops').length,1);
+  assert.equal(calls.filter(call=>call.path?.endsWith('/bookings')).length,1);
+});
+
+liveTest('preview refuses missing or conflicting subscription membership in active and history reads',()=>{
+  for(const extra of [{clientSubscriptionId:null},{subscriptionId:uuid(12)},{subscription:{id:uuid(12)}},{clientSubscription:{uuid:uuid(12)}}]) {
+    for(const list of ['active','history']) {
+      const {response}=harness({[list]:[booking(uuid(77),extra)]});
+      assert.ok(response.statusCode>=400);
+      assert.equal(response.payload.quotes,undefined);
+    }
+  }
+});
+
+liveTest('fresh preview install rejects the old actor-wide CREATE runtime',()=>{
+  assert.throws(()=>composeSubscriptionPricePreviewArtifacts(Buffer.from(JSON.stringify(legacyOriginal)),'fixture-old-runtime'),/canonical/);
+});
+
+liveTest('selected-instance unresolved provider date/category refuses preview',()=>{
+  for(const extra of [{exerciseDate:null,timeFrom:null},{exerciseType:null,exerciseDirection:null}]){
+    for(const list of ['active','history']){
+      const {response}=harness({[list]:[booking(uuid(78),extra)]});
+      assert.ok(response.statusCode>=400);
+      assert.equal(response.payload.quotes,undefined);
+    }
+  }
 });

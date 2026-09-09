@@ -1,5 +1,31 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Subscription instance limits
+
+The LK1 HUB rule counts active bookings and used/reserved daily free game minutes
+by `(tenantKey, actorClientId, clientSubscriptionId)`. The same product, label or
+owner does not combine purchased instances. Card bookings do not consume these
+subscription counters. The evaluator accepts `SUBSCRIPTION_BENEFIT_ONLY` usage;
+actor-wide `ALL_BOOKINGS` input is rejected for the HUB rule.
+
+The booking gateway filters the loaded operations by the normalized selected
+instance ID, preserving equality across UUID casing in existing records. Preview
+`POST /lk/subscriptions/game-price-preview` loads bookings and operations once for
+the batch, then uses that same calculation for each requested ID.
+Provider history uses the same instance filter; covered bookings are deduplicated
+against operations, and FAILED/RELEASED operations do not reserve minutes. A ledger
+row without an instance ID fails closed instead of granting an unproven allowance.
+
+`patch_nodered_subscription_instance_limits.mjs` exports a local candidate composer
+for four function bodies: booking router, managed evaluator, preview router and
+preview evaluator. It requires exact function preimages and preserves the graph,
+initializers and other nodes. Activation must update all four together from a fresh
+verified live source. No stored counter, booking, debit or policy value is rewritten.
+Rollback of source cannot reverse provider bookings made after activation.
+The existing distinct-operation read/decide/insert race is unchanged: these
+calculations are instance-scoped, but atomic quota reservation under concurrent
+requests is not proven. This remains separate follow-up work.
+
 ## Subscription product identity (implementation, activation separate)
 
 Owner: LK subscription gateway. Audience: LK users of the existing Viva tenant.
