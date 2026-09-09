@@ -617,3 +617,57 @@ with exact read-back and audit history.
 
 The three-section CUP module and analytics definitions are specified in
 `docs/MANAGED_SUBSCRIPTION_ADMIN_MODULE.md`.
+
+
+## Game creation price preview
+
+`POST /lk/subscriptions/game-price-preview` is an authenticated advisory read. It accepts
+`target` (`NEW_GAME`, slot/station/room/master-service IDs, subServiceIds, startsAt,
+durationMinutes 60/90/120, shareCount 2/4) and 1–20 unique `subscriptionIds`. The actor
+comes from the bearer profile. Client-supplied actor, product, price and usage are rejected.
+
+One batch reads current owned subscriptions, product mappings/catalog names, active and
+historical bookings, durable HAB usage and the existing Viva court tariff. Cache misses
+never start admin subscription lookups or projection writes. The isolated graph contains
+only GET transport and Mongo find operations. It reuses source-bound booking helpers,
+the unchanged HAB usage block, and the exact installed policy evaluator. The HAB purchase
+cohort and legacy daily rules remain unchanged. Unsupported/uncertain policy, identity or
+partial provider data fails the whole batch; a partial minimum is never advertised.
+
+Each quote binds `selectionKey` to slot/station/room/master-service/sorted subservices/
+start/duration/share count, returns AVAILABLE/LIMIT_USED/UNAVAILABLE, basePriceMinor,
+amountMinor, freeMinutes/paidMinutes and a 30-second expiry. The date/time card displays
+the lowest confirmed amount across the complete batch as “По подписке от … ₽”. Selection
+of the concrete subscription remains on the next screen. Changing slot/account/IDs
+invalidates the old result immediately. Freshness is validated at response receipt: an
+already-expired or malformed response never becomes a displayed price. A valid display
+snapshot is retained for the unchanged selection, without an expiry timer or automatic
+refresh. Its age alone does not replace the displayed price with an error.
+
+On the public CREATE payment-method screen each subscription row displays its own confirmed
+participation price and paid-minute detail from that same complete batch. The overall minimum
+is never assigned to another subscription. Failed initial reads or uncertainty hide row
+prices; the user can explicitly retry the batched preview. Selecting a subscription does
+not trigger another preview read. CREATE submits only the selected clientSubscriptionId,
+not the display snapshot or its quoted amount; the existing server checks the chosen
+subscription against current authoritative state before booking/write-off. Its rejection
+is presented as the creation error, without silently choosing a different subscription.
+
+Preview makes no reservation, booking, debit or payment; CREATE always rechecks current
+authoritative state. Cross-midnight tariffs and unsupported regional policy reads remain
+unconfirmed rather than guessed. The API requires an existing valid service token for
+the room/station read; preview never refreshes that token.
+
+Deployment is separate: apply the additions-only graph contract from
+`scripts/patch_nodered_subscription_price_preview.mjs`, prepare the exact primary/reserve ingress candidates with
+`scripts/nginx/prepare_subscription_price_preview.mjs` (dedicated `lk_subscription_price_preview_by_ip` zone at 60r/m,
+burst 2, body cap 16 KiB, 30-second proxy timeouts, verified reserve TLS), then publish
+frontend. Applying those artifacts requires separate owner approval. No existing
+booking graph is replaced. Missing backend routing yields unconfirmed UI conditions.
+The local graph harness uses `LK_PRICE_PREVIEW_FLOW_FIXTURE` pointing to an exact private
+flow; raw provider flows must never enter Git. CI without that private fixture reports
+those runtime cases as skipped, not provider proof.
+
+Public CREATE keeps category/lifecycle-compatible candidates with at least one visit for preview and later selection: HAB can cover its free hour on 90/120-minute games with one visit. This is not a local entitlement decision. A legacy one-visit subscription can remain visible as a candidate, but the authoritative preview does not quote it as available and CREATE still rejects insufficient balance. Filtering that later candidate list by fresh server quotes is a follow-up UX improvement.
+
+Install the matching `previewGuard('primary' | 'reserve')` in nginx's HTTP context before enabling this location. The primary guard reuses the existing `lk_subscription_product_limit_key` map, preserving the trusted reserve proxy exemption; reserve uses `$binary_remote_addr`. Catalog lookups retain their original limiter and cannot consume the preview quota. Guard and location must be installed together with exact preimages, backup, `nginx -t` and reload.

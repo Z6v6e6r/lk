@@ -1,0 +1,187 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+import vm from 'node:vm';
+import { composeSubscriptionPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
+
+const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
+const original = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
+const packet = original ? composeSubscriptionPricePreviewArtifacts(Buffer.from(JSON.stringify(original)), 'preview-fixture') : null;
+const nodes = packet?.candidate.filter(row => row.id.startsWith('lk_subscription_price_preview_20260908_')) || [];
+const liveTest = (name, fn) => test(name, { skip: !original && 'Requires private exact canonical flow fixture; never copied into Git' }, fn);
+const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const actor = uuid(1), sub = uuid(2), room = uuid(3), studio = uuid(4), master = uuid(5), service = uuid(6);
+const product = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
+const rule = {productId:product,maxActiveBookings:4,freeGameMinutesPerDay:60,gameOverageDiscountPercent:30,groupTrainingDiscountPercent:50,tournamentDiscountPercent:50};
+const target = {targetKind:'NEW_GAME',slotId:'slot:fixture',stationId:studio,roomId:room,masterServiceId:master,subServiceIds:[service],startsAt:'2099-09-21T07:00:00+03:00',durationMinutes:90,shareCount:4};
+const subscription = (id=sub,extra={}) => ({subscriptionId:id, product:{id:product,name:'Падел.Дружба.ХАБ — годовая'},
+  purchaseDate:'2026-09-05T06:40:26',activationDate:'2026-09-07T12:22:12',expirationDate:'2100-09-07',status:'ACTIVE',
+  variant:'BY_VISITS',visitsLeft:100,hasStudioLimitation:false,hasTypeLimitation:true,availableTypes:[{id:1613}],hasDirectionLimitation:false,...extra});
+const booking = (id=uuid(9), extra={}) => ({id,clientSubscriptionId:sub,client:{id:actor},paymentType:'SUBSCRIPTION',
+  timeFrom:'2099-09-21T04:00:00+03:00',timeTo:'2099-09-21T05:00:00+03:00',exerciseId:uuid(10),exerciseDate:'2099-09-21T04:00:00+03:00',exerciseDateTo:'2099-09-21T05:00:00+03:00',
+  exerciseType:{id:1613},exerciseDirection:{id:4588},...extra});
+const key = (kind,...args)=>JSON.stringify([kind,'iSkq6G',...args]);
+function harness(options={}) {
+  const globals = {subscriptions_lk1_product_policy:rule,vivacrm_access_token:'fixture-admin',vivacrm_token_expires_at:Date.now()+60000,...options.globals};
+  const subscriptions = options.subscriptions || [subscription()];
+  const instances = subscriptions.map(row=>({_id:key('instance',actor,row.subscriptionId),kind:'instance',tenantKey:'iSkq6G',actorClientId:actor,subscriptionId:row.subscriptionId,productId:product}));
+  const catalog = [{_id:key('product',product),kind:'product',tenantKey:'iSkq6G',productId:product,name:'Падел.Дружба.ХАБ — годовая'}];
+  const calls=[];
+  let msg={req:{headers:{authorization:'Bearer fixture-user'}},payload:{target:{...target,...options.target},subscriptionIds:options.ids||subscriptions.map(row=>row.subscriptionId),...options.body}};
+  const node = name=>nodes.find(row=>row.id.endsWith('_'+name));
+  let current=node('entry');
+  for(let i=0;i<100;i++) {
+    if(current.type==='http response') return {response:structuredClone(msg),calls};
+    if(current.type==='function') {
+      const result = vm.compileFunction(current.func, ['msg','global','env','node'], {parsingContext:vm.createContext({})})(msg,
+        {get:key=>globals[key],set(){assert.fail('No global writes allowed');}}, {get(){return undefined;}}, {warn(){assert.fail('No raw debug allowed');}});
+      const outputs=Array.isArray(result)?result:[result]; const port=outputs.findIndex(Boolean);
+      assert.ok(port>=0,'Every fixture request must terminate'); msg=outputs[port];
+      current=nodes.find(row=>row.id===current.wires[port][0]); assert.ok(current); continue;
+    }
+    if(current.type==='http request') {
+      assert.equal(current.method,'GET'); assert.equal(msg.method,'GET');
+      const url=new URL(msg.url); assert.equal(url.origin,'https://api.vivacrm.ru');
+      calls.push({kind:'GET',path:url.pathname,query:url.search});
+      let payload;
+      if(url.pathname.endsWith('/profile')) payload={id:actor};
+      else if(url.pathname.endsWith('/subscriptions')) payload={content:subscriptions,totalElements:subscriptions.length};
+      else if(url.pathname.endsWith('/bookings/history')) payload=options.history||[];
+      else if(url.pathname.endsWith('/bookings')) payload=options.active||[];
+      else if(url.pathname.includes('/rooms/')) payload={id:room};
+      else if(url.pathname.endsWith('/studios')) payload=[{id:studio}];
+      else if(url.pathname.endsWith('/subServices')) payload=[{id:service}];
+      else if(url.pathname.endsWith('/price')) {
+        assert.equal(url.searchParams.get('fromTime'),'07:00:00');
+        assert.equal(url.searchParams.get('toTime'), options.target?.durationMinutes===120?'09:00:00':options.target?.durationMinutes===60?'08:00:00':'08:30:00');
+        payload={ [service]: {calculation:{fixture:{basePrice:{valueFrom:12000},impacts:[]}}} };
+      } else assert.fail('Unexpected provider read');
+      msg.payload=payload;msg.statusCode=200;
+      if(options.mutateHttp) options.mutateHttp(msg,url);
+    } else if(current.type==='mongodb4') {
+      assert.equal(current.operation,'find'); calls.push({kind:'find',collection:current.collection,query:structuredClone(msg.payload)});
+      if(current.collection==='lk_subscription_daily_booking_ops') {
+        assert.equal(msg.payload.actorClientId,actor); assert.equal(msg.payload['lk1.rule.productId'],product);
+        msg.payload=options.operations||[];
+      } else msg.payload=msg._subscriptionPricePreview.step==='catalog'?catalog:(options.instances||instances);
+      if(options.mutateMongo) options.mutateMongo(msg,current);
+    } else assert.fail('Write-capable or unknown node reached');
+    current=nodes.find(row=>row.id===current.wires[0][0]);
+  }
+  assert.fail('State machine did not terminate');
+}
+test('preview source never calls CREATE or a product cache miss resolver',()=>{
+  const router=fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js',import.meta.url),'utf8');
+  assert.doesNotMatch(router,/\/split\/create|\/seliger|insertOne|updateOne|global\.set/);
+});
+liveTest('90 minute preview uses actual state machine, exact tariff DTO and canonical evaluator',()=>{
+  const {response,calls}=harness(); assert.equal(response.statusCode,200);const q=response.payload.quotes[0];
+  assert.deepEqual([q.amountMinor,q.freeMinutes,q.paidMinutes],[70000,60,30]);
+  assert.equal(calls.filter(c=>c.path?.endsWith('/subscriptions')).length,1);
+  assert.equal(calls.filter(c=>c.path?.endsWith('/profile')).length,1);
+});
+liveTest('60 and120 minute preview keeps canonical free/paid allocation',()=>{
+  for(const [duration,amount,paid] of [[60,0,0],[120,105000,60]]) {
+    const {response}=harness({target:{durationMinutes:duration}}); assert.equal(response.statusCode,200);
+    assert.deepEqual([response.payload.quotes[0].amountMinor,response.payload.quotes[0].paidMinutes],[amount,paid]);
+  }
+});
+liveTest('daily free allowance exhausted yields paid quote; history does not inflate active count',()=>{
+  const {response}=harness({history:[booking(),booking(uuid(11),{isCancelled:true})]});assert.equal(response.statusCode,200);
+  assert.equal(response.payload.quotes[0].amountMinor,210000);
+});
+liveTest('active booking limit and zero visits cannot advertise a free place',()=>{
+  const busy=harness({active:[1,2,3,4].map(n=>booking(uuid(20+n),{exerciseDate:'2099-09-22'}))}).response;
+  assert.equal(busy.statusCode,200);assert.equal(busy.payload.quotes[0].status,'LIMIT_USED');
+  const empty=harness({subscriptions:[subscription(sub,{visitsLeft:0})]}).response;
+  assert.equal(empty.payload.quotes[0].status,'LIMIT_USED');
+});
+liveTest('all instances return exactly one result and legacy price remains free',()=>{
+  const {response}=harness({subscriptions:[subscription(),subscription(uuid(12),{purchaseDate:'2026-08-29T10:00:00'})]});
+  assert.equal(response.statusCode,200);assert.equal(response.payload.quotes.length,2);
+  assert.deepEqual(response.payload.quotes.map(q=>q.amountMinor),[70000,0]);
+});
+liveTest('durable minutes and covered Viva booking are counted once',()=>{
+  const b=booking();const op={tenantKey:'iSkq6G',actorClientId:actor,serviceDate:'2099-09-21',state:'CONFIRMED',bookingId:b.id,
+    lk1:{rule,decision:{gameMinutes:{localDate:'2099-09-21',freeMinutes:30}}}};
+  const {response}=harness({history:[b],operations:[op]});assert.equal(response.statusCode,200);
+  assert.deepEqual([response.payload.quotes[0].freeMinutes,response.payload.quotes[0].amountMinor],[30,140000]);
+});
+liveTest('policy OFF/mismatch, cache miss, foreign ownership and incomplete pages fail the whole batch',()=>{
+  const variants=[{globals:{subscriptions_lk1_product_policy:null}},
+    {globals:{subscriptions_lk1_product_policy:{...rule,freeGameMinutesPerDay:120}}},{instances:[]},
+    {subscriptions:[subscription(sub,{clientId:uuid(88)})]},
+    {mutateHttp(msg,url){if(url.pathname.endsWith('/bookings'))msg.payload={content:[],totalElements:2,last:false};}},
+    {mutateHttp(msg,url){if(url.pathname.endsWith('/subscriptions'))msg.payload={content:[subscription()],totalElements:2};}},
+    {mutateMongo(msg,node){if(node.collection==='lk_subscription_daily_booking_ops')msg.error={message:'fixture failure'};}}];
+  for(const options of variants){const {response}=harness(options);assert.ok(response.statusCode>=400);assert.equal(response.payload.quotes,undefined);}
+});
+liveTest('invalid client price/actor/duplicate IDs stop before any provider call',()=>{
+  for(const options of [{body:{actorClientId:uuid(99)}},{target:{basePriceMinor:0}},{ids:[sub,sub]},{ids:[]}]) {
+    const {response,calls}=harness(options);assert.equal(response.statusCode,400);assert.equal(calls.length,0);
+  }
+});
+liveTest('graph cannot reach an existing node or a business write; evaluator byte identity preserved',()=>{
+  assert.equal(packet.contract.allowedChanges.length,0);
+  const ids=new Set(nodes.map(n=>n.id));
+  for(const n of nodes){for(const id of (n.wires||[]).flat()) assert.ok(ids.has(id));
+    if(n.type==='mongodb4')assert.equal(n.operation,'find');if(n.type==='http request')assert.equal(n.method,'GET');}
+  assert.equal(nodes.find(n=>n.id.endsWith('_evaluate')).func, original.find(n=>n.id==='lk_subscription_managed_policy_20260820').func);
+  assert.ok(nodes.some(n=>n.type==='http in'&&n.url===PATH&&n.method==='post'));
+});
+
+liveTest('changed canonical helper or usage cannot become new public executable code',()=>{
+  for(const id of ['lk_subscription_booking_router_20260804','8f7bd5b482fe9763','lk_subscription_managed_policy_20260820']) {
+    const altered=structuredClone(original);altered.find(row=>row.id===id).func+='\n// drift';
+    assert.throws(()=>composeSubscriptionPricePreviewArtifacts(Buffer.from(JSON.stringify(altered)),'fixture-drift'),/canonical/);
+  }
+});
+
+liveTest('HAB cohort must have one valid purchase date; cutoff preserves legacy behavior',()=>{
+  for(const change of [{purchaseDate:undefined},{purchaseDate:'invalid'},{purchaseDate:'2026-09-05',purchaseAt:'2026-08-31'}]) {
+    const {response}=harness({subscriptions:[subscription(sub,change)]});assert.equal(response.statusCode,503);assert.equal(response.payload.quotes,undefined);
+  }
+  for(const [date,amount] of [['2026-08-31',0],['2026-09-01',70000]]) {
+    assert.equal(harness({subscriptions:[subscription(sub,{purchaseDate:date})]}).response.payload.quotes[0].amountMinor,amount);
+  }
+});
+liveTest('malformed persisted product ID cannot be resolved by a legacy name',()=>{
+  const {response}=harness({mutateMongo(msg){if(msg._subscriptionPricePreview.step==='metadata')msg.payload[0].productId='-'.repeat(36);}});
+  assert.equal(response.statusCode,503);assert.equal(response.payload.quotes,undefined);
+});
+
+liveTest('one visit remains a HAB 90/120 minute candidate while legacy cannot use two visits',()=>{
+  for(const durationMinutes of [90,120]) for(const status of ['ACTIVE','NEW']) {
+    const lifecycle=status==='NEW'?{status,activationDate:null,expirationDate:null}: {status};
+    const current=harness({target:{durationMinutes},subscriptions:[subscription(sub,{...lifecycle,visitsLeft:1})]}).response;
+    assert.equal(current.statusCode,200);
+    assert.equal(current.payload.quotes[0].status,'AVAILABLE');
+    assert.equal(current.payload.quotes[0].paidMinutes,durationMinutes-60);
+    assert.ok(current.payload.quotes[0].amountMinor>0);
+    const legacy=harness({target:{durationMinutes},subscriptions:[subscription(sub,{...lifecycle,visitsLeft:1,purchaseDate:'2026-08-29T10:00:00'})]}).response;
+    assert.equal(legacy.statusCode,200);
+    assert.notEqual(legacy.payload.quotes[0].status,'AVAILABLE');
+    assert.equal(legacy.payload.quotes[0].amountMinor,null);
+  }
+});
+
+
+test('tariff query runs in a Function sandbox without Node global URLSearchParams',()=>{
+  const source=fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js',import.meta.url),'utf8');
+  const context=vm.createContext({});
+  assert.equal(vm.runInContext('typeof URLSearchParams',context),'undefined');
+  const run=vm.compileFunction(source,['msg','pricing'],{parsingContext:context});
+  const msg={statusCode:200,payload:[{id:service}],_subscriptionPricePreview:{
+    tenantKey:'fixture',auth:'Bearer fixture-user',step:'subservices',startedAt:Date.now(),target}};
+  const outputs=run(msg,{extractList:value=>value});
+  assert.equal(outputs[0],msg);
+  const url=new URL(msg.url);
+  assert.equal(msg.method,'GET');
+  assert.equal(url.origin,'https://api.vivacrm.ru');
+  assert.equal(url.searchParams.get('studioId'),studio);
+  assert.equal(url.searchParams.get('roomId'),room);
+  assert.equal(url.searchParams.get('subServiceIds'),service);
+  assert.equal(url.searchParams.get('fromDate'),'2099-09-21');
+  assert.equal(url.searchParams.get('fromTime'),'07:00:00');
+  assert.equal(url.searchParams.get('toTime'),'08:30:00');
+});
