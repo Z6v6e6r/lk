@@ -2,7 +2,7 @@
   "deploymentId": "piter-atomic-sales-20260903",
   "updateKind": "sales-opening-quota48-20260909",
   "sourceSha256": "de6a6b2206476de79564fbec9ad5d41ac8bd6088517c29452f4101d6ed3bb0aa",
-  "candidateSha256": "38d4dc877a4d63ff8dfdb9f6517ea0869a9ad9aa86031e22fbd30eacf0a95e1e",
+  "candidateSha256": "941e50caac7c0aa6fe58019db49319099a095f68bb8bfa140f7ddfe83df80bdf",
   "sourceNodeCount": 4798,
   "candidateNodeCount": 4798,
   "httpInputCount": 219,
@@ -13,7 +13,7 @@
       "file": "fn_tournament_subscription_status_prepare.js",
       "outputs": 3,
       "sourceSha256": "dcb5ee5af1e3ec982c20e30bf3b9e53a1646e38c52e5335c0ecd64b78a349855",
-      "candidateSha256": "62bf3e3979b0b1adafda21812cf0063ae90cc32a56429dc08080e42c099867df"
+      "candidateSha256": "34de1450d02fb20d3116394882ff4e1da284c3ee8ea3adf221a1cb1699ecc642"
     },
     {
       "id": "c165e43eba668c25",
@@ -21,7 +21,7 @@
       "file": "fn_tournament_subscription_status_response.js",
       "outputs": 2,
       "sourceSha256": "c06fb5d7a071853682041b69d4415760f7f781481222334caeaee91a29248c2f",
-      "candidateSha256": "74e38d3a52990ff28b1e8ba94e68e93eb6718c2c85112577cefd72aea734a7bd"
+      "candidateSha256": "b827edf10d0ae3132f01bf3cd34d7e8990a1b27b1198a3d77c8c063f6a6fd2e6"
     },
     {
       "id": "91dded2dc8cfebe4",
@@ -29,7 +29,7 @@
       "file": "fn_tournament_subscription_purchase_prepare.js",
       "outputs": 3,
       "sourceSha256": "84fc6b2b257573d3323e53b75d6af039ba49d8723b31669d20aaec679cc3cd10",
-      "candidateSha256": "a6d6c8bcaf2c4822e5ae3a9b4880bbc7c1ee1907d3542039490657ecf8f3b712"
+      "candidateSha256": "7dbf111802d3c1f7f30e3e82d2f19259a613991142fcfcc37743dbef33e800cf"
     },
     {
       "id": "f8679e53edadc39b",
@@ -53,7 +53,7 @@
       "file": "fn_tournament_subscription_counter_refresh_prepare.js",
       "outputs": 1,
       "sourceSha256": "8960991cfd9ccc42ab43237e3ba5de105b61a98b8869e6834f73f2510c35bf4d",
-      "candidateSha256": "a6188c4b52eb936865dc37d4d08a94d9dcfaa1f4e26deeb7a7ceacfd744fe9cc"
+      "candidateSha256": "213f527a8f3ea83341cecc426ca4aca74c14a543674b4af9762db04bee425f58"
     },
     {
       "id": "ca022fd14027a5b0",
