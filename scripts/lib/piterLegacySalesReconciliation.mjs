@@ -7,6 +7,7 @@ import {
   sha256,
   stableJson,
 } from "./piterAtomicActivationContract.mjs";
+import { assertVivaRefundProof, buildVivaRefundProof, matchesVivaPaymentDeadline } from "./vivaHistoricalEvidence.mjs";
 
 export const PITER_LEGACY_RECONCILIATION = Object.freeze({
   kind: "PADLHUB_PITER_LEGACY_SALES_RECONCILIATION_V1",
@@ -235,11 +236,9 @@ const indexRefundedSubscriptions = (clients, refundProviderById, productId) => {
     const matches = byTransactionId.get(transactionId) || [];
     if (matches.length !== 1) fail(`refund subscription evidence is not exact for ${hashId(transactionId)}`);
     const subscription = matches[0].subscription;
-    const subscriptionRefund = refundFacts(subscription);
-    if (subscriptionRefund.refundSumMinor !== provider.refundSumMinor
-      || subscriptionRefund.refundedAt !== provider.refundedAt) {
-      fail(`refund subscription facts mismatch for ${hashId(transactionId)}`);
-    }
+    // Exact entity linkage above proves the refund; the two entity timestamps
+    // are independent evidence and must not be normalized into equality.
+    buildVivaRefundProof(provider.transaction, subscription);
   }
   return new Map([...byTransactionId].map(([transactionId, matches]) => [transactionId, matches[0]]));
 };
@@ -269,6 +268,7 @@ const marker = ({ operationId, outcome, transactionId, provider, subscription, r
   subscriptionHash: subscription ? hashId(pickSubscriptionId(subscription)) : null,
   evidenceDigest,
   reconciledAt,
+  ...(subscription ? { refundProof: buildVivaRefundProof(provider.transaction, subscription) } : {}),
 });
 
 const assertExistingReconciliationMarker = (row, outcome, transactionId) => {
@@ -372,7 +372,7 @@ export function buildPiterLegacyReconciliationPacket({
       continue;
     }
     if (providerTransaction.kind === "EXPIRED_UNPAID") {
-      if (toStr(row.expiresAt) !== providerTransaction.paymentDueDate || toStr(row.paidAt)) {
+      if (!matchesVivaPaymentDeadline(row.expiresAt, providerTransaction.paymentDueDate) || toStr(row.paidAt)) {
         fail(`expired UNPAID deadline mismatch for ${hashId(transactionId)}`);
       }
       if (FAILED_STATUSES.has(localStatus)) {
@@ -471,6 +471,7 @@ export function buildPiterLegacyReconciliationPacket({
       subscriptionId: pickSubscriptionId(refundedSubscriptions.get(transactionId).subscription),
       subscriptionHash: hashId(pickSubscriptionId(refundedSubscriptions.get(transactionId).subscription)),
       status: providerTransaction.status,
+      refundProof: buildVivaRefundProof(providerTransaction.transaction, refundedSubscriptions.get(transactionId).subscription),
     });
   }
   changes.sort((left, right) => left.transactionId.localeCompare(right.transactionId));
@@ -481,6 +482,7 @@ export function buildPiterLegacyReconciliationPacket({
   const unsigned = {
     formatVersion: 1,
     kind: PITER_LEGACY_RECONCILIATION.kind,
+    refundEvidenceVersion: 1,
     createdAt: created.text,
     expiresAt,
     operationId,
@@ -521,7 +523,8 @@ export function buildPiterLegacyReconciliationPacket({
 
 export function validatePiterLegacyReconciliationPacket(packet, { now = new Date(), allowExpired = false } = {}) {
   if (!packet || typeof packet !== "object" || Array.isArray(packet)
-    || packet.formatVersion !== 1 || packet.kind !== PITER_LEGACY_RECONCILIATION.kind) {
+    || packet.formatVersion !== 1 || packet.kind !== PITER_LEGACY_RECONCILIATION.kind
+    || (packet.refundEvidenceVersion !== undefined && packet.refundEvidenceVersion !== 1)) {
     fail("packet identity mismatch");
   }
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(String(now));
@@ -585,6 +588,19 @@ export function validatePiterLegacyReconciliationPacket(packet, { now = new Date
     }
     transactionIds.add(change.transactionId);
     paymentRefs.add(change.paymentRef);
+    if (change.action === "MARK_REFUNDED" && (packet.refundEvidenceVersion === 1
+      || change.set.piterLegacyReconciliation.refundProof !== undefined)) {
+      if (!Number.isSafeInteger(change.set.refundSumMinor) || change.set.refundSumMinor <= 0
+        || !toStr(change.set.refundedAt)) fail("packet refund proof mismatch");
+      assertVivaRefundProof(change.set.piterLegacyReconciliation.refundProof, {
+        refundSumMinor: change.set.refundSumMinor,
+        transactionRefundedAt: change.set.refundedAt,
+      });
+      if (!toStr(change.set.refundedSubscriptionId)
+        || change.set.piterLegacyReconciliation.subscriptionHash !== hashId(change.set.refundedSubscriptionId)) {
+        fail("packet refunded subscription identity mismatch");
+      }
+    }
   }
   const providerOnlyIds = new Set();
   for (const item of packet.providerOnlyRefunds) {
@@ -595,6 +611,7 @@ export function validatePiterLegacyReconciliationPacket(packet, { now = new Date
       fail("packet provider-only refund contract mismatch");
     }
     providerOnlyIds.add(item.transactionId);
+    if (packet.refundEvidenceVersion === 1 || item.refundProof !== undefined) assertVivaRefundProof(item.refundProof);
   }
   // Optional for pre-existing V1 packets without free issues; never a mutation.
   const freeIssues = packet.providerOnlyFreeIssues ?? [];

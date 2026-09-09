@@ -1,5 +1,12 @@
 # Журнал шагов
 
+## 2026-09-09 — Annual history reconciliation evidence correction
+
+- Preserve independently validated raw refund timestamps in versioned proof; keep exact subscription linkage, amount checks, CAS and durable receipts. Match only exact payment instants or the observed nanosecond-to-microsecond provider serialization.
+- Correct the earlier diagnostic: the legacy Piter client ID is absent, not conflicting; its existing phone-based contract passes without changing identity.
+- Include the new helper in deferred publication custody. Local contract checks: 96 pass / 14 skip; critical matrix: 523 / 5; candidate matrix: 65 / 2; prod/dev build pass; lint 0 errors / 387 warnings. Independent payment/reliability findings resolved.
+- Fresh read-only evidence still shows 14 HAB and 2 Piter paid transactions outside the local ledger. HAB aggregate accounting remains a product question; no executable opening packet, live writes, or flag activation. See `ANNUAL_SUBSCRIPTION_HISTORY_RECONCILIATION_20260909.md`.
+
 ## 2026-09-09 — DEV channel for standalone game join loader
 
 - Post-deploy readback found `/game_join?channel=dev` still loading production `games.js`; `/lk_dev?joinGame=…` already displays live subscription prices correctly.

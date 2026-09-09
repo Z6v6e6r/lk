@@ -198,6 +198,84 @@ test("reconciliation packet plans only expired UNPAID and exact REFUNDED changes
   assert.equal(text.includes("subscription-3"), false);
 });
 
+test("independent refund times and ns/us pending deadline pass through reconciliation to baseline", () => {
+  const data = inputs();
+  data.providerEvidence.transactions[2].refundedAt = "2026-09-03T15:00:00.005123+03:00";
+  data.subscriptionEvidence.clients[0].subscriptions[0].refundedAt = "2026-09-03T12:00:00.000987";
+  data.subscriptionEvidence.clients[1].subscriptions[0].refundedAt = "2026-09-03T12:00:00.004987";
+  data.ledgerEvidence.rows[1].clientId = null; // Original legacy record; do not rewrite it.
+  data.ledgerEvidence.rows[1].expiresAt = "2026-09-03T11:00:00.123456789+03:00";
+  data.providerEvidence.transactions[1].paymentDueDate = "2026-09-03T08:00:00.123456Z";
+  const original = structuredClone(data);
+  const packet = buildPiterLegacyReconciliationPacket(data);
+  assert.equal(packet.refundEvidenceVersion, 1);
+  const refund = packet.changes.find(change => change.action === "MARK_REFUNDED");
+  assert.equal(refund.set.refundedAt, data.providerEvidence.transactions[2].refundedAt);
+  assert.equal(refund.set.piterLegacyReconciliation.refundProof.subscriptionRefundedAt,
+    data.subscriptionEvidence.clients[0].subscriptions[0].refundedAt);
+  assert.equal(packet.providerOnlyRefunds[0].refundProof.subscriptionRefundedAt,
+    data.subscriptionEvidence.clients[1].subscriptions[0].refundedAt);
+  assert.doesNotThrow(() => validatePiterLegacyReconciliationPacket(packet, { now: NOW }));
+  const rows = structuredClone(data.ledgerEvidence.rows);
+  for (const change of packet.changes) Object.assign(rows.find(row => row.transactionId === change.transactionId), change.set);
+  const baseline = derivePiterLegacyBaseline({ ledgerRows: rows, providerTransactions: data.providerEvidence.transactions,
+    productId: PRODUCT_ID, providerCapturedAt: data.providerEvidence.capturedAt, reconciliationReceipt: reconciliationReceipt(packet) });
+  assert.equal(baseline.paidCount, 1);
+  assert.equal(rows[1].clientId, null);
+  assert.equal(rows[1].expiresAt, data.ledgerEvidence.rows[1].expiresAt);
+  assert.deepEqual(data, original);
+  rows[1].expiresAt = "2026-09-03T11:00:00.123457789+03:00";
+  assert.throws(() => derivePiterLegacyBaseline({ ledgerRows: rows, providerTransactions: data.providerEvidence.transactions,
+    productId: PRODUCT_ID, providerCapturedAt: data.providerEvidence.capturedAt, reconciliationReceipt: reconciliationReceipt(packet) }), /marker mismatch/);
+});
+
+test("new refund proof cannot be removed or contradicted by recomputing the plan digest", () => {
+  for (const mutate of [
+    packet => { delete packet.changes[1].set.piterLegacyReconciliation.refundProof; },
+    packet => { delete packet.changes[1].set.refundSumMinor; },
+    packet => { delete packet.changes[1].set.refundedAt; },
+    packet => { packet.changes[1].set.piterLegacyReconciliation.refundProof.refundSumMinor = 1; },
+    packet => { packet.changes[1].set.piterLegacyReconciliation.refundProof.transactionRefundedAt = "2026-09-02T12:00:00Z"; },
+    packet => { packet.changes[1].set.refundedSubscriptionId = "wrong-subscription"; },
+    packet => { delete packet.providerOnlyRefunds[0].refundProof; },
+    packet => { packet.refundEvidenceVersion = 2; },
+  ]) {
+    const packet = buildPacket();
+    mutate(packet);
+    delete packet.planDigest;
+    packet.planDigest = sha256(stableJson(packet));
+    assert.throws(() => validatePiterLegacyReconciliationPacket(packet, { now: NOW }), /proof mismatch|identity mismatch/);
+  }
+  const oldPacket = buildPacket();
+  delete oldPacket.refundEvidenceVersion;
+  delete oldPacket.changes[1].set.piterLegacyReconciliation.refundProof;
+  delete oldPacket.providerOnlyRefunds[0].refundProof;
+  delete oldPacket.planDigest;
+  oldPacket.planDigest = sha256(stableJson(oldPacket));
+  assert.doesNotThrow(() => validatePiterLegacyReconciliationPacket(oldPacket, { now: NOW }));
+});
+
+test("refund entity linkage remains exact independently of timestamp representation", () => {
+  for (const mutate of [
+    sub => { sub.transactionId = "different-transaction"; },
+    sub => { sub.transaction = { id: "conflicting-alias" }; },
+    sub => { sub.clientId = "different-client"; },
+    sub => { sub.product.id = "different-product"; },
+    sub => { sub.status = "ACTIVE"; },
+    sub => { sub.refundSum = 1; },
+    sub => { sub.refundedAt = "2026-02-30T10:00:00"; },
+  ]) {
+    const data = inputs();
+    mutate(data.subscriptionEvidence.clients[0].subscriptions[0]);
+    assert.throws(() => buildPiterLegacyReconciliationPacket(data), /not exact|amount mismatch|proof mismatch/);
+  }
+  const data = inputs();
+  const client = data.subscriptionEvidence.clients[0];
+  client.subscriptions.push(structuredClone(client.subscriptions[0]));
+  client.pagination.rowCount++;
+  assert.throws(() => buildPiterLegacyReconciliationPacket(data), /not exact/);
+});
+
 test("realistic Viva PAID totals and provider-only full-discount issues preserve cash baseline", () => {
   const data = inputs();
   data.providerEvidence.transactions.push(transaction("free", {
@@ -338,6 +416,8 @@ test("packet rebuild is idempotent only for rows with exact reconciliation marke
 
 test("atomic activation links the exact applied reconciliation and provider-only refund proof", () => {
   const source = inputs();
+  source.subscriptionEvidence.clients[0].subscriptions[0].refundedAt = "2026-09-03T12:00:00.004987";
+  source.subscriptionEvidence.clients[1].subscriptions[0].refundedAt = "2026-09-03T12:00:00.004987";
   const reconciliationPacket = buildPiterLegacyReconciliationPacket(source);
   const rows = structuredClone(source.ledgerEvidence.rows);
   for (const change of reconciliationPacket.changes) {
@@ -403,6 +483,26 @@ test("atomic activation links the exact applied reconciliation and provider-only
   const packet = buildPiterAtomicActivationPacket(activation);
   assert.equal(packet.reconciliation.planDigest, reconciliationPacket.planDigest);
   assert.equal(packet.reconciliation.providerOnlyRefundHashes.length, 1);
+
+  for (const mutate of [
+    value => { delete value.ledgerEvidence.rows[2].piterLegacyReconciliation.refundProof; },
+    value => { value.ledgerEvidence.rows[2].piterLegacyReconciliation.refundProof.subscriptionRefundedAt = "2026-09-02T12:00:00"; },
+    value => { delete value.ledgerEvidence.rows[2].refundSumMinor; delete value.reconciliationPacket.changes[1].set.refundSumMinor; },
+    value => { delete value.ledgerEvidence.rows[2].refundedAt; delete value.reconciliationPacket.changes[1].set.refundedAt; },
+    value => { value.reconciliationPacket.providerOnlyRefunds[0].refundProof.transactionRefundedAt = "2026-09-02T12:00:00Z"; },
+  ]) {
+    // Persisted packet and ledger snapshots do not share nested object identity.
+    const tampered = JSON.parse(JSON.stringify(activation));
+    mutate(tampered);
+    delete tampered.reconciliationPacket.planDigest;
+    tampered.reconciliationPacket.planDigest = sha256(stableJson(tampered.reconciliationPacket));
+    const receipt = tampered.reconciliationApplyReceipt;
+    receipt.planDigest = tampered.reconciliationPacket.planDigest;
+    receipt.legacyLedgerDigest = digestPiterLegacyLedgerRows(tampered.ledgerEvidence.rows);
+    delete receipt.receiptDigest;
+    receipt.receiptDigest = sha256(stableJson(receipt));
+    assert.throws(() => buildPiterAtomicActivationPacket(tampered), /refund proof/);
+  }
 
   const laterActivation = structuredClone(activation);
   laterActivation.createdAt = "2026-09-04T11:00:00.000Z";

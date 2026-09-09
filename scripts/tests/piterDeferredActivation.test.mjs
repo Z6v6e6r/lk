@@ -209,7 +209,12 @@ test('original live mutators stay unchanged; reviewed 48-seat contract extension
   "lib/piterAtomicLedgerOperations.mjs": "e3c48f505ecaae3f74e0503f306d9f4b91197ba9764ba4d6fff9b6972f8df13b",
   "prepare_piter_atomic_activation_packet.mjs": "35e381541ea8e6e17e2b641971c562de80d40addfe99af2cf7a3310a4dba8f96"
 };
-  for(const [file,pin] of Object.entries(pins))assert.equal(sha256(fs.readFileSync(new URL('../'+file,import.meta.url))),reviewedOpeningAmendments[file] ?? pin,file);
+  // History evidence correction; historical 50/48-seat pins above remain unchanged.
+  const reviewedHistoryAmendments = {
+  "lib/piterAtomicActivationContract.mjs": "5c7f7e14b507ba90be1ed8c5b4e3c39926ff77e0e2f6ae7f50f6e6a5bb0ce2a7",
+  "lib/piterLegacySalesReconciliation.mjs": "301c6a94a9065adf226ed3f6388367f74c6395c8c35d534d69e82ebb69f38dbc"
+};
+  for(const [file,pin] of Object.entries(pins))assert.equal(sha256(fs.readFileSync(new URL('../'+file,import.meta.url))),reviewedHistoryAmendments[file] ?? reviewedOpeningAmendments[file] ?? pin,file);
 });
 
 const hash = v => sha256(stableJson(v));
@@ -456,6 +461,7 @@ test('protected publication binds exact installed dependency closure and canonic
   const names=['manage_piter_deferred_ledger.mjs','prepare_piter_deferred_activation.mjs',
     'lib/piterDeferredActivationContract.mjs','lib/piterDeferredLedgerOperations.mjs',
     'lib/piterAtomicActivationContract.mjs','lib/piterAtomicLedgerOperations.mjs','lib/piterAtomicQuotaUpdateContract.mjs',
+    'lib/vivaHistoricalEvidence.mjs',
     'nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs','nodered_reviewed_flow_deploy/runtime_contract.mjs'];
   const installed=Object.fromEntries(names.map(name=>[name,sha256(fs.readFileSync(new URL('../'+name,import.meta.url)))]));
   const descriptor={formatVersion:1,sourceCommit:'a'.repeat(40),runtimeSourceTree:DEFERRED.runtimeSourceTree,

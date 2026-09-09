@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { assertVivaRefundProof, matchesVivaPaymentDeadline } from "./vivaHistoricalEvidence.mjs";
 import { isExactPiterQuotaUpdateDeployment, PITER_QUOTA_UPDATE, isExactPiterQuota48Deployment } from "./piterAtomicQuotaUpdateContract.mjs";
 
 export const PITER_ATOMIC_ACTIVATION = Object.freeze({
@@ -358,7 +359,8 @@ const validateLegacyReconciliationProof = ({
     || packet.deployment?.candidateSha256 !== candidate.candidateSha256
     || packet.evidence?.providerDigest !== sha256(stableJson(providerTransactions))
     || !SHA256_PATTERN.test(String(packet.evidence?.evidenceDigest || ""))
-    || !Array.isArray(packet.changes) || !Array.isArray(packet.providerOnlyRefunds)) {
+    || !Array.isArray(packet.changes) || !Array.isArray(packet.providerOnlyRefunds)
+    || (packet.refundEvidenceVersion !== undefined && packet.refundEvidenceVersion !== 1)) {
     fail("legacy reconciliation packet scope mismatch");
   }
   const evidenceTimes = ["ledgerCapturedAt", "providerCapturedAt", "subscriptionCapturedAt"]
@@ -408,12 +410,18 @@ const validateLegacyReconciliationProof = ({
     fail("durable legacy reconciliation apply receipt mismatch");
   }
   const ledgerByTransactionId = new Map(ledgerRows.map((row) => [pickTransactionId(row), row]));
+  const transactionsById = new Map(providerTransactions.map((row) => [pickTransactionId(row), row]));
   for (const { transactionId, statusClass } of classified) {
     if (statusClass !== "REFUNDED" && statusClass !== "EXPIRED_UNPAID") continue;
     const row = ledgerByTransactionId.get(transactionId);
     if (!row) {
       if (statusClass !== "REFUNDED" || !providerOnly.has(transactionId)) {
         fail(`legacy reconciliation proof is missing for ${hashId(transactionId)}`);
+      }
+      const proof = providerOnly.get(transactionId).refundProof;
+      if (packet.refundEvidenceVersion === 1 || proof !== undefined) {
+        const transaction = transactionsById.get(transactionId);
+        assertVivaRefundProof(proof, { refundSumMinor: transaction.refundSum, transactionRefundedAt: transaction.refundedAt });
       }
       continue;
     }
@@ -428,6 +436,17 @@ const validateLegacyReconciliationProof = ({
       || marker?.outcome !== expectedOutcome
       || marker?.transactionHash !== hashId(transactionId)) {
       fail(`legacy reconciliation marker is not linked for ${hashId(transactionId)}`);
+    }
+    if (statusClass === "REFUNDED" && (packet.refundEvidenceVersion === 1 || marker.refundProof !== undefined)) {
+      const transaction = transactionsById.get(transactionId);
+      assertVivaRefundProof(marker.refundProof, { refundSumMinor: transaction.refundSum, transactionRefundedAt: transaction.refundedAt });
+      if (stableJson(marker.refundProof) !== stableJson(change.set.piterLegacyReconciliation.refundProof)
+        || row.refundedAt !== transaction.refundedAt || row.refundSumMinor !== transaction.refundSum
+        || change.set.refundedAt !== row.refundedAt || change.set.refundSumMinor !== row.refundSumMinor
+        || !toStr(row.refundedSubscriptionId) || change.set.refundedSubscriptionId !== row.refundedSubscriptionId
+        || marker.subscriptionHash !== hashId(row.refundedSubscriptionId)) {
+        fail(`legacy reconciliation refund proof is not linked for ${hashId(transactionId)}`);
+      }
     }
   }
   return {
@@ -503,6 +522,11 @@ export function derivePiterLegacyBaseline({
     if (toStr(row.productId) !== productId) fail(`ledger product mismatch for ${hashId(transactionId)}`);
     if (provider.statusClass === "REFUNDED") {
       const marker = row.piterLegacyReconciliation;
+      if (marker?.refundProof !== undefined) {
+        assertVivaRefundProof(marker.refundProof, {
+          refundSumMinor: provider.transaction.refundSum, transactionRefundedAt: provider.transaction.refundedAt,
+        });
+      }
       if (localStatus !== "REFUNDED"
         || marker?.kind !== "PITER_LEGACY_SALE_RECONCILIATION_V1"
         || marker?.outcome !== "PROVIDER_REFUNDED"
@@ -517,7 +541,7 @@ export function derivePiterLegacyBaseline({
     if (provider.statusClass === "EXPIRED_UNPAID") {
       const marker = row.piterLegacyReconciliation;
       if (localStatus !== "FAILED"
-        || toStr(row.expiresAt) !== toStr(provider.transaction?.paymentDueDate)
+        || !matchesVivaPaymentDeadline(row.expiresAt, provider.transaction?.paymentDueDate)
         || toStr(row.paidAt)
         || marker?.kind !== "PITER_LEGACY_SALE_RECONCILIATION_V1"
         || marker?.outcome !== "PROVIDER_UNPAID_EXPIRED"
