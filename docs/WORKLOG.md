@@ -1,5 +1,12 @@
 # Журнал шагов
 
+## 2026-09-09 — Full subscription history and opening plan
+
+- Prepared `SUBSCRIPTION_HISTORY_OPENING_PLAN_20260909.md`: typed provider-only baseline without fabricated LK payments, canonical-ID dedup, non-empty HAB history, independent maintenance custody, staged flag activation and data-preserving recovery.
+- Fresh read-only annual snapshot 18:14 UTC confirms 14 HAB / 2 Piter external paid sales; both products activationDays1 and HAB98000. Daily snapshot: Friendship3paid/0activepending today gives4/7, RA new v3 has no rows. No Mongo/provider writes.
+- Open choice: HAB aggregate scope (all18paid→82/100 or only4LK→96/100). Required implementation gates also include safe late-payment handling and admission-stop/persistence; old expired soaking lease is not reusable.
+- Plan reviewed from payment-accounting and reliability/custody perspectives. Documentation only; no runtime changes, merge, push, deploy, process stop or flag activation in this stage.
+
 ## 2026-09-09 — Annual history reconciliation evidence correction
 
 - Preserve independently validated raw refund timestamps in versioned proof; keep exact subscription linkage, amount checks, CAS and durable receipts. Match only exact payment instants or the observed nanosecond-to-microsecond provider serialization.
