@@ -4845,6 +4845,7 @@ export default function GamesPage({
   const [studios, setStudios] = useState<Studio[]>([]);
   const [timeslots, setTimeslots] = useState<GameTimeSlot[]>([]);
   const [loadingTimeslots, setLoadingTimeslots] = useState(false);
+  const [subscriptionPrefetchReady, setSubscriptionPrefetchReady] = useState(false);
   const [timeslotsError, setTimeslotsError] = useState<string | null>(null);
   const [studiosQuery, setStudiosQuery] = useState("");
   const [studio, setStudio] = useState<Studio | null>(null);
@@ -5020,6 +5021,7 @@ export default function GamesPage({
     timeoutId: null,
   });
   const splitSubscriptionRequestRef = useRef(0);
+  const subscriptionPrefetchReadyRef = useRef(false);
   const detailsSplitSubscriptionRequestRef = useRef(0);
   const splitSubscriptionSubmitInFlightRef = useRef(false);
   const detailsSubscriptionSubmitInFlightRef = useRef(false);
@@ -5778,6 +5780,8 @@ export default function GamesPage({
 
     let alive = true;
     setLoadingTimeslots(true);
+    subscriptionPrefetchReadyRef.current = false;
+    setSubscriptionPrefetchReady(false);
     setTimeslotsError(null);
 
     apiFetchMasterServiceTimeslots(formatDateLocalIso(targetDate), {
@@ -5799,6 +5803,9 @@ export default function GamesPage({
         setTimeslots(nextSlots);
         if (res.error) {
           setTimeslotsError(res.error.message || "Не удалось загрузить расписание кортов");
+        } else {
+          subscriptionPrefetchReadyRef.current = true;
+          setSubscriptionPrefetchReady(true);
         }
       })
       .catch(() => {
@@ -7300,10 +7307,25 @@ export default function GamesPage({
   useEffect(() => {
     setSplitShareCount(splitShareCountByGameFormat);
   }, [splitShareCountByGameFormat]);
+  // Start the existing read path once the schedule is ready, before payer selection.
+  // Keep one enabled state so selecting split payment reuses the background result.
+  const splitSubscriptionsEnabled = splitPaymentSelected || (
+    usePublicCreateWizard
+    && (step === "time" || step === "create")
+    && subscriptionPrefetchReady
+    && !loadingTimeslots
+    && !timeslotsError
+    && !splitSubscriptionsError
+  );
   useEffect(() => {
-    if (!splitPaymentSelected) return;
+    if (!splitSubscriptionsEnabled) return;
+    // The schedule effect may have started a new request in this same effect flush.
+    if (usePublicCreateWizard && !subscriptionPrefetchReadyRef.current) return;
     void loadSplitSubscriptions();
-  }, [splitPaymentSelected, loadSplitSubscriptions]);
+    return () => {
+      splitSubscriptionRequestRef.current += 1;
+    };
+  }, [splitSubscriptionsEnabled, subscriptionPrefetchReady, loadSplitSubscriptions, usePublicCreateWizard]);
   useEffect(() => {
     if (!splitPaymentSelected) {
       setSplitCheckoutMode("one_time");
