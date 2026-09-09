@@ -12,16 +12,6 @@ export function SubscriptionOfferSection(props: {
 }): React.JSX.Element {
 
 
-  const hasRealProgress = props.section.plans.some((plan) => {
-    const selectedBillingOptionId =
-      props.selectedBillingOptions[plan.id] ?? plan.initialBillingOptionId ?? plan.billingOptions[0]?.id;
-    return Boolean(
-      plan.billingOptions.find(
-        (option) => option.id === selectedBillingOptionId,
-      )?.progress,
-    );
-  });
-
   return (
     <section className="subscription-offer-section" aria-labelledby={`${props.section.id}-title`}>
       {props.section.title ? (
@@ -72,7 +62,6 @@ export function SubscriptionOfferSection(props: {
             >
               <SubscriptionPlanCard
                 plan={plan}
-                bare={!hasRealProgress}
                 selectedBillingOptionId={selectedBillingOptionId}
                 onBillingOptionChange={(optionId) => props.onBillingOptionChange(plan.id, optionId)}
                 onChoose={() =>

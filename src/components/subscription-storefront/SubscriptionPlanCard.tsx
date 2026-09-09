@@ -76,7 +76,7 @@ function BillingOptions(props: {
     <div
       className="subscription-card__billing-options"
       role="radiogroup"
-      aria-label="Период оплаты"
+      aria-label="Вариант подписки"
       onKeyDown={onKeyDown}
     >
       {props.options.map((option) => {
@@ -174,9 +174,9 @@ function PlanCardBody(props: {
           )}
         </div>
 
-        <div className="subscription-card__price-row">
+        <div className={`subscription-card__price-row${props.plan.billingOptions.length > 2 ? " subscription-card__price-row--variants" : ""}`}>
           <p className="subscription-card__price">
-            <strong>{rubles(props.selectedOption.priceMinor)} ₽</strong>
+            <strong>{props.selectedOption.priceMinor === null ? "—" : `${rubles(props.selectedOption.priceMinor)} ₽`}</strong>
             <span>{props.selectedOption.priceSuffix ?? '/ мес.'}</span>
           </p>
           <BillingOptions
@@ -191,14 +191,15 @@ function PlanCardBody(props: {
         <button
           className="subscription-card__cta"
           type="button"
-          disabled={props.plan.ctaDisabled === true}
+          disabled={props.plan.ctaDisabled === true || props.selectedOption.ctaDisabled === true || props.selectedOption.priceMinor === null}
           onClick={props.onChoose}
         >
-          {props.plan.ctaLabel ?? 'Оформить подписку'}
+          {props.selectedOption.ctaLabel ?? props.plan.ctaLabel ?? 'Оформить подписку'}
         </button>
 
+        {props.selectedOption.statusMessage && <p className="subscription-card__availability" role="status">{props.selectedOption.statusMessage}</p>}
         <div className="subscription-card__benefits">
-          {props.plan.benefitGroups.map((group) => (
+          {(props.selectedOption.benefitGroups ?? props.plan.benefitGroups).map((group) => (
             <section key={group.id} className="subscription-card__benefit-group">
               <h3>{group.title}</h3>
               <ul>
@@ -223,7 +224,6 @@ export function SubscriptionPlanCard(props: {
   readonly selectedBillingOptionId: string;
   readonly onBillingOptionChange: (optionId: string) => void;
   readonly onChoose: () => void;
-  readonly bare?: boolean;
 }): React.JSX.Element {
   const selectedOption =
     props.plan.billingOptions.find((option) => option.id === props.selectedBillingOptionId) ??
@@ -232,16 +232,6 @@ export function SubscriptionPlanCard(props: {
 
   const progress = selectedOption.progress;
 
-  if (props.bare) {
-    return (
-      <PlanCardBody
-        plan={props.plan}
-        selectedOption={selectedOption}
-        onBillingOptionChange={props.onBillingOptionChange}
-        onChoose={props.onChoose}
-      />
-    );
-  }
 
   return (
     <article
