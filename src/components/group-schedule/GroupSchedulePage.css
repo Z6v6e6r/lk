@@ -750,3 +750,25 @@
     font-size: 16px;
   }
 }
+
+.group-schedule-registration .group-schedule-discount-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  text-align: left;
+}
+
+.group-schedule-registration .group-schedule-discount-description {
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.group-schedule-registration .group-schedule-discount-price {
+  flex-direction: column;
+  flex-shrink: 0;
+  white-space: nowrap;
+}

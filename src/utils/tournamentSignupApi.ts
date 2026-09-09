@@ -63,6 +63,8 @@ import {
 } from "./tournamentSignupListSnapshot";
 import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
+import { isGroupSubscriptionDiscountQuote, type GroupSubscriptionDiscountQuote } from "./groupSubscriptionDiscount";
+
 // B-owned rollout interlock, not a runtime capability signal. Keep DEV/PROD
 // closed until compatible deployed HUB behavior is proven and frontend
 // enablement is separately approved; changing this constant requires review.
@@ -152,6 +154,7 @@ export interface TournamentVivaProduct {
   source: "client-subscription" | "client-one-time" | "one-time" | "subscription" | "custom-tournament-energy";
   raw: unknown;
   lk1MoneyDiscountCandidate?: boolean;
+  groupDiscountQuote?: GroupSubscriptionDiscountQuote;
   priceLabel?: TournamentCustomPricingProductFields["priceLabel"];
   baseAmount?: TournamentCustomPricingProductFields["baseAmount"];
   discountAmount?: TournamentCustomPricingProductFields["discountAmount"];
@@ -2715,6 +2718,14 @@ async function apiCreateTournamentVivaBookingFromSubscription(
       body: JSON.stringify({
         exerciseId: params.exerciseId,
         clientSubscriptionId,
+        ...(params.product.groupDiscountQuote ? { expectedGroupDiscount: {
+          basePriceMinor: params.product.groupDiscountQuote.basePriceMinor,
+          amountMinor: params.product.groupDiscountQuote.amountMinor,
+          productId: params.product.groupDiscountQuote.productId,
+          startsAt: params.product.groupDiscountQuote.startsAt,
+          durationMinutes: params.product.groupDiscountQuote.durationMinutes,
+          discountPercent: params.product.groupDiscountQuote.discountPercent,
+        } } : {}),
       }),
     },
   );
@@ -2826,9 +2837,41 @@ export async function apiPreviewTournamentVivaTransaction(
   return { data: preview, error: null, status: result.status };
 }
 
+export async function apiFetchGroupSubscriptionDiscounts(
+  exerciseId: string,
+  signal?: AbortSignal,
+  subscriptionId?: string,
+): Promise<ApiResult<{ quotes: GroupSubscriptionDiscountQuote[] }>> {
+  return request<{ quotes: GroupSubscriptionDiscountQuote[] }>("/lk/subscriptions/game-price-preview", {
+    method: "POST", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
+    body: JSON.stringify({ target: { targetKind: "GROUP_TRAINING", exerciseId },
+      ...(subscriptionId ? { subscriptionIds: [subscriptionId] } : {}) }),
+  });
+}
+
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
+  if (params.product.lk1MoneyDiscountCandidate === true && params.product.groupDiscountQuote) {
+    const displayed = params.product.groupDiscountQuote;
+    const actorId = params.clientId || params.profile?.id || "";
+    const targetStart = Date.parse(String(params.exercise?.timeFrom || params.exercise?.startsAt || ""));
+    // Displayed quotes stay bound to the selected target, actor and product; the gateway revalidates them.
+    if (params.product.source !== "client-subscription" || params.product.isCustomTournamentEnergy || params.promoCode
+      || params.product.id !== displayed.subscriptionId || pickSubscriptionLookupId(params.product.raw) !== displayed.subscriptionId
+      || displayed.exerciseId !== params.exerciseId || displayed.actorClientId !== actorId
+      || resolveSubscriptionCategoryDailyLimitCategoryFromEvent(params.exercise) !== "group_training"
+      || Date.parse(displayed.startsAt) !== targetStart) {
+      return { data: null, error: { status: 409, message: "Условия скидки изменились. Обновите варианты записи." }, status: 409 };
+    }
+    // The price stays visible for an unchanged selection. The existing gateway
+    // replays its stable operation before checking fresh eligibility; a separate
+    // preflight here would block payment recovery after the last slot was used.
+    if (!isGroupSubscriptionDiscountQuote(displayed, params.exerciseId, actorId, displayed.evaluatedAt)) {
+      return { data: null, error: { status: 409, message: "Не удалось подтвердить скидку. Обновите варианты записи." }, status: 409 };
+    }
+    return apiCreateTournamentVivaBookingFromSubscription(params);
+  }
   if (params.product.lk1MoneyDiscountCandidate === true && !LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED) {
     return {
       data: null,

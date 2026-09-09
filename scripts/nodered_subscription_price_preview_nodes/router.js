@@ -22,9 +22,13 @@ const http = (step, path, admin = false) => {
 };
 const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null) => {
   ctx.quotes.push({ subscriptionId, selectionKey: ctx.selectionKey, status, basePriceMinor: ctx.basePriceMinor,
-    amountMinor, freeMinutes, paidMinutes, reasonCode, evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
+    amountMinor, freeMinutes, paidMinutes, reasonCode,
+    ...(ctx.groupTraining ? { kind: 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1', exerciseId: ctx.exerciseId,
+      actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.catalog[ctx.metadata[subscriptionId].productId],
+      discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}), evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
 if (ctx.done) return out(4);
+if (ctx.groupTraining && typeof canonical.identityMoneyOwned !== 'function') return stop('GROUP_DISCOUNT_BACKEND_NOT_READY');
 if (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');
 if (Date.now() - ctx.startedAt > 28000) return stop('PRICE_PREVIEW_TIMEOUT');
 if (ctx.step === 'start') return http('profile', `/end-user/api/v1/${ctx.tenantKey}/profile`);
@@ -32,7 +36,23 @@ if (ctx.step === 'profile') {
   const profile = canonical.unwrapRecord(msg.payload);
   if (!ok() || !profile || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(profile.id || profile.clientId || '')) return stop('PRICE_PREVIEW_AUTH_REQUIRED', 401);
   ctx.actorClientId = profile.id || profile.clientId;
+  if (ctx.groupTraining) return http('groupExercise', `/end-user/api/v1/${ctx.tenantKey}/exercises/${ctx.exerciseId}`);
   if (ctx.existingGame) return find('game', { id: ctx.target.gameId }, 5);
+  return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
+}
+if (ctx.step === 'groupExercise') {
+  const exercise = canonical.unwrapRecord(msg.payload);
+  const start = Date.parse(canonical.eventStartsAt(exercise));
+  const duration = canonical.eventDurationMinutes(exercise);
+  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
+    || canonical.resolveCategory(exercise) !== 'group_training' || !Number.isFinite(start) || start <= Date.now()
+    || !Number.isSafeInteger(duration) || duration < 1 || duration > 720
+    || !canonical.exerciseRoomId(exercise) || !(exercise.studio?.id || exercise.studioId)
+    || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
+    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop('GROUP_DISCOUNT_TARGET_UNRESOLVED');
+  ctx.exercise = exercise;
+  ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
+    durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
 if (ctx.step === 'game') {
@@ -86,9 +106,17 @@ if (ctx.step === 'subscriptions') {
       || (body.totalPages !== undefined && ![0, 1].includes(body.totalPages)) || body.last === false || body.hasNext === true))) {
     return stop('PRICE_PREVIEW_SUBSCRIPTIONS_INCOMPLETE');
   }
+  if (ctx.groupTraining && ctx.requestedIds === undefined) {
+    ctx.requestedIds = list.filter(row => row.status === 'ACTIVE' && (canonical.collectExactProductIds(row).length === 0
+      || canonical.collectExactProductIds(row).includes('db7a5250-7369-4f43-8ac5-9111be24bc74'))).map(row => row.subscriptionId || row.clientSubscriptionId || row.id);
+    if (ctx.requestedIds.length > 20 || ctx.requestedIds.some(id => typeof id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+      || new Set(ctx.requestedIds).size !== ctx.requestedIds.length) return stop('PRICE_PREVIEW_OWNERSHIP_UNRESOLVED');
+    if (!ctx.requestedIds.length) { ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4); }
+  }
   ctx.subscriptions = {};
   for (const id of ctx.requestedIds) {
-    const matches = list.filter(row => row.subscriptionId === id);
+    const matches = list.filter(row => (ctx.groupTraining ? row.subscriptionId || row.clientSubscriptionId || row.id : row.subscriptionId) === id);
     if (matches.length !== 1 || [matches[0].clientSubscriptionId, matches[0].id].some(v => v !== undefined && v !== id)
       || [matches[0].clientId, matches[0].client?.id].some(v => v !== undefined && v !== ctx.actorClientId)) return stop('PRICE_PREVIEW_OWNERSHIP_UNRESOLVED');
     ctx.subscriptions[id] = matches[0];
@@ -106,6 +134,11 @@ if (ctx.step === 'metadata') {
       || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(row.productId || '')
       || canonical.collectExactProductIds(ctx.subscriptions[id]).some(product => product !== row.productId.toLowerCase())) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     ctx.metadata[id] = row;
+  }
+  if (ctx.groupTraining) {
+    ctx.requestedIds = ctx.requestedIds.filter(id => ctx.metadata[id].productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74');
+    ctx.metadata = Object.fromEntries(ctx.requestedIds.map(id => [id, ctx.metadata[id]]));
+    if (!ctx.requestedIds.length) { ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4); }
   }
   return find('catalog', { _id: { $in: [...new Set(Object.values(ctx.metadata).map(row => key('product', row.productId)))] } });
 }
@@ -137,6 +170,7 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
 if (ctx.step === 'operations') {
   if (msg.error || !Array.isArray(msg.payload)) return stop('LK1_ALLOWANCE_READ_FAILED');
   ctx.operations = msg.payload;
+  if (ctx.groupTraining) return http('groupTariff', `/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${ctx.exerciseId}`);
   return http('room', `/api/v1/studios/${encodeURIComponent(ctx.target.stationId)}/rooms/${encodeURIComponent(ctx.target.roomId)}`, true);
 }
 if (ctx.step === 'room') {
@@ -168,6 +202,24 @@ if (ctx.step === 'price') {
   if (!Number.isSafeInteger(ctx.basePriceMinor) || ctx.basePriceMinor > 1000000) return stop('SPLIT_EXACT_PRICE_INVALID');
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
 }
+if (ctx.step === 'groupTariff') {
+  if (!ok() || !canonical.hasCompleteBookingList(msg.payload)) return stop('LK1_EVENT_TARIFF_UNAVAILABLE');
+  const rows = canonical.extractItems(msg.payload);
+  if (rows.length !== 1 || !canonical.isObj(rows[0])) return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
+  const product = rows[0];
+  const productIds = [product.id, product.productId].filter((id) => id !== undefined);
+  const eventIds = [product.exerciseId, product.exercise?.id].filter((id) => id !== undefined);
+  const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);
+  const types = [product.productType, product.type].filter((type) => type !== undefined);
+  if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
+    || new Set(productIds).size !== 1 || !eventIds.length || eventIds.some((id) => id !== ctx.exerciseId)
+    || !types.length || types.some((type) => !["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"].includes(type))
+    || !amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
+    || new Set(amounts).size !== 1) return stop("LK1_EVENT_TARIFF_UNVERIFIED");
+  ctx.basePriceMinor = amounts[0]; ctx.priceProductId = productIds[0];
+  if (ctx.basePriceMinor > 1000000) return stop('LK1_EVENT_TARIFF_UNVERIFIED');
+  ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
+}
 if (ctx.step === 'evaluate') {
   const decision = msg._managedSubscriptionPolicyDecision;
   if (!canonical.isObj(decision)) return stop('PRICE_PREVIEW_DECISION_INVALID');
@@ -175,8 +227,16 @@ if (ctx.step === 'evaluate') {
     if (decision.blockers?.length === 1 && decision.blockers[0].code === 'ACTIVE_SERVICES_LIMIT_REACHED') quote(ctx.currentId, 'LIMIT_USED', null, 0, 0, 'ACTIVE_SERVICES_LIMIT_REACHED');
     else return stop('PRICE_PREVIEW_DECISION_UNRESOLVED');
   } else {
-    if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || !decision.gameMinutes) return stop('PRICE_PREVIEW_DECISION_INVALID');
-    quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, decision.gameMinutes.freeMinutes, decision.gameMinutes.paidOverageMinutes);
+    if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
+      || decision.benefit.finalPriceMinor > ctx.basePriceMinor) return stop('PRICE_PREVIEW_DECISION_INVALID');
+    if (ctx.groupTraining) {
+      if (decision.subscriptionVisitCount !== 0 || ctx.groupDiscountPercent !== 50
+        || decision.benefit.finalPriceMinor !== Math.round(ctx.basePriceMinor * 0.5)) return stop('GROUP_DISCOUNT_DECISION_INVALID');
+      quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, 0, ctx.target.durationMinutes);
+    } else {
+      if (!decision.gameMinutes) return stop('PRICE_PREVIEW_DECISION_INVALID');
+      quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, decision.gameMinutes.freeMinutes, decision.gameMinutes.paidOverageMinutes);
+    }
   }
   delete msg._managedSubscriptionPolicyDecision; delete msg._managedSubscriptionPolicyInput;
   ctx.step = 'next';
@@ -193,9 +253,9 @@ while (ctx.step === 'next') {
   const exercise = ctx.exercise || { id: 'preview', studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     timeFrom: ctx.target.startsAt, timeTo: new Date(Date.parse(ctx.target.startsAt) + ctx.target.durationMinutes * 60000).toISOString(),
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
-  if (['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
-  if (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
-    || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0) {
+  if (!ctx.groupTraining && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
+  if (!ctx.groupTraining && (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
+    || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0)) {
     quote(id, live.visitsLeft === 0 ? 'LIMIT_USED' : 'UNAVAILABLE', null, 0, 0, live.visitsLeft === 0 ? 'SUBSCRIPTION_VISITS_EXHAUSTED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
   const available = ctx.existingGame ? exercise.availableClientSubscriptions.filter(row => {
@@ -206,7 +266,7 @@ while (ctx.step === 'next') {
     return aliases.length > 0 && aliases.every(value => typeof value === 'string' && canonical.normalizeId(value) === canonical.normalizeId(id));
   }) : [live];
   if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
-  const owned = canonical.identityOwned(bound, available, exercise);
+  const owned = ctx.groupTraining ? canonical.identityMoneyOwned(bound, available) : canonical.identityOwned(bound, available, exercise);
   if (owned.length !== 1) return stop('PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
   if (productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74') {
     const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
@@ -214,8 +274,22 @@ while (ctx.step === 'next') {
   }
   const configured = canonical.lk1Config(owned);
   if (configured.code) return stop(configured.code);
+  if (ctx.groupTraining) {
+    const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
+    const activation = canonical.lk1LifecycleInstant(live.activationDate);
+    const expiry = canonical.lk1LifecycleInstant(live.expirationDate, true);
+    const targetStart = Date.parse(ctx.target.startsAt);
+    if (!configured.matched || dates.invalid || dates.dates.length !== 1 || dates.dates[0] < '2026-09-01'
+      || live.status !== 'ACTIVE' || activation === null || expiry === null || activation > Date.now()
+      || activation > targetStart || expiry < Date.now() || expiry < targetStart + ctx.target.durationMinutes * 60000 - 1
+      || live.holdUntil || live.frozenUntil || live.isFrozen === true) {
+      quote(id, 'UNAVAILABLE', null, 0, 0, 'LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN'); continue;
+    }
+    ctx.groupDiscountPercent = configured.rule.groupTrainingDiscountPercent;
+    if (ctx.groupDiscountPercent !== 50) return stop('GROUP_DISCOUNT_RULE_UNCONFIRMED');
+  }
   const visitCount = configured.matched ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
-  if (canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),
+  if (!ctx.groupTraining && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),
     ctx.target.stationId, visitCount, ctx.target.durationMinutes, ctx.target.startsAt.slice(0, 10)).length !== 1) {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
@@ -240,10 +314,13 @@ while (ctx.step === 'next') {
   }
   ctx.currentId = id;
   const usageContext = { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: id,
-    serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: ctx.existingGame ? 'JOIN_GAME' : 'CREATE_GAME', step: 'lk1_usage_operations',
+    serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: ctx.groupTraining ? 'BOOK_GROUP_TRAINING' : ctx.existingGame ? 'JOIN_GAME' : 'CREATE_GAME', step: 'lk1_usage_operations',
     lk1: { rule: configured.rule, bookings: ctx.bookings, activeBookings: ctx.activeBookings,
-      target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
-        basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } } };
+      target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: ctx.groupTraining ? 'GROUP_TRAINING' : 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
+        basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes,
+        ...(ctx.groupTraining ? { stationId: ctx.target.stationId, roomId: ctx.target.roomId,
+          externalEventTypeId: canonical.managedExternalEventTypeId(exercise), productTypeId: null,
+          priceProductId: ctx.priceProductId } : {}) } } };
   if (ctx.operations.some(row => row?.lk1?.rule?.productId !== configured.rule.productId)) return stop('LK1_ALLOWANCE_RECORD_INVALID');
   const usageMessage = { payload: ctx.operations, _subscriptionBooking: usageContext };
   canonicalUsage(usageMessage);

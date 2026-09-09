@@ -128,3 +128,67 @@ export function composeSubscriptionJoinPricePreviewArtifacts(liveBytes, deployme
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidate, candidateBytes, contract };
 }
+
+/** Group quote capability is bound to the same reviewed money gateway and evaluator. */
+export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploymentId) {
+  const flow = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
+  const expected = {
+    entry: '793d08896655392f15c13a8ef172e75651944ab84d2765204ebb5790bfb290c4',
+    router: 'b66401e010790cb6b9a016f603f9867123920f5ef93806536f606ef622a39472',
+  };
+  if (!Array.isArray(flow) || new Set(flow.map(row => row?.id)).size !== flow.length) throw new Error('Invalid preview source');
+  for (const [name, digest] of Object.entries(expected)) {
+    const current = flow.find(row => row.id === PREFIX + name);
+    if (current?.type !== 'function' || sha(current.func || '') !== digest) throw new Error(`Group preview preimage drift: ${name}`);
+  }
+  const booking = flow.find(row => row.id === 'lk_subscription_booking_router_20260804');
+  const evaluator = flow.find(row => row.id === PREFIX + 'evaluate');
+  const checkoutEvaluator = flow.find(row => row.id === 'lk_subscription_managed_policy_20260820');
+  if (checkoutEvaluator?.func !== evaluator?.func) throw new Error('Group checkout evaluator mismatch');
+  if (sha(booking?.func || '') !== '8848722f61f84e1792d2cdd69d8204be61ae66fe35c1af1d2bc7d8774f84636a'
+    || sha(evaluator?.func || '') !== '6f4e7aa5506d7da4123fc0f8c86c5a310f6fc2dc86c9cc23b56ef1deaa001a72') throw new Error('Group preview money source changed');
+  const identitySource = fs.readFileSync(path.join(ROOT, 'nodered_subscription_product_nodes/gateway.js'), 'utf8');
+  const originalIdentity = identitySource.slice(0, identitySource.indexOf('// Monetary group discounts'))
+    + identitySource.slice(identitySource.indexOf('const identityOwned ='))
+      .replace(/\n {2}if \(ctx.caller === 'http' && ctx.step === 'lk1_money_owned_subscriptions'\n {4}&& resolveCategory\(exercise\) === 'group_training'\) return identityMoneyOwned\(ctx, rows\);/, '');
+  // Compare exact function text before replacing the visit/money boundary.
+  const oldIdentity = originalIdentity.trim();
+  if (booking.func.split(oldIdentity).length !== 2) throw new Error('Group identity helper preimage drift');
+  const oldMoneyRead = 'const selected = findOwnedSubscriptions({ availableClientSubscriptions: rows }, ctx.clientSubscriptionId);';
+  if (booking.func.split(oldMoneyRead).length !== 2) throw new Error('Group money ownership read preimage drift');
+  let moneyGateway = booking.func.replace(oldIdentity, identitySource + '\n')
+    .replace(oldMoneyRead, 'const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);');
+  const gatewaySource = fs.readFileSync(path.join(ROOT, 'nodered_lk1_hub_nodes/gateway.js'), 'utf8');
+  const guardStart = gatewaySource.indexOf('  // An existing operation is replayed earlier.');
+  const guardEnd = gatewaySource.indexOf('  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));', guardStart);
+  if (guardStart < 0 || guardEnd < 0) throw new Error('Group quote guard source missing');
+  const decisionMarker = '  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));';
+  if (moneyGateway.split(decisionMarker).length !== 2) throw new Error('Group quote decision preimage drift');
+  moneyGateway = moneyGateway.replace(decisionMarker, gatewaySource.slice(guardStart, guardEnd) + decisionMarker);
+  const prepareId = 'lk_subscription_booking_prepare_20260804';
+  const prepare = flow.find(row => row.id === prepareId);
+  const prepareSource = fs.readFileSync(path.join(ROOT, 'nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js'), 'utf8');
+  const expectedCopy = '  ...(body.expectedGroupDiscount !== undefined ? { expectedGroupDiscount: body.expectedGroupDiscount } : {}),\n';
+  if (sha(prepare?.func || '') !== '51c7b349a18ea04300fcc8649d87601e98c3952e6c57c6cb52ae35e2cf689e15'
+    || !prepareSource.includes(expectedCopy) || prepare.func.split('  caller: "http",\n').length !== 2) throw new Error('Group quote prepare preimage drift');
+  const extraRoots = ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId'];
+  const extra = extractSubscriptionPricePreviewSource({ source: moneyGateway, label: 'group lifecycle', roots: extraRoots });
+  const existingRouter = flow.find(row => row.id === PREFIX + 'router').func;
+  const marker = '// Dedicated advisory graph.';
+  if (existingRouter.split(marker).length !== 2) throw new Error('Group preview boundary drift');
+  // Preserve the installed GAME helper/price/usage closure byte for byte.
+  const router = existingRouter.slice(0, existingRouter.indexOf(marker))
+    + `Object.assign(canonical, (() => {\n${extra.source}\nreturn {${extraRoots.join(',')}}; })());\n` + read('router');
+  const candidate = structuredClone(flow);
+  candidate.find(row => row.id === prepareId).func = prepare.func.replace('  caller: "http",\n', '  caller: "http",\n' + expectedCopy);
+  candidate.find(row => row.id === 'lk_subscription_booking_router_20260804').func = moneyGateway;
+  candidate.find(row => row.id === PREFIX + 'entry').func = read('entry');
+  candidate.find(row => row.id === PREFIX + 'router').func = router;
+  const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId,
+    allowedChanges: [...['entry', 'router'].map(name => ({id: PREFIX + name, fields: ['func']})),
+      { id: 'lk_subscription_booking_router_20260804', fields: ['func'] },
+      { id: prepareId, fields: ['func'] }], allowedAdditionIds: [] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidate, candidateBytes, contract };
+}

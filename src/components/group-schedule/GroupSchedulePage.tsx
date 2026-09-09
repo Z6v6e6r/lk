@@ -29,6 +29,7 @@ import {
   apiFetchTournamentParticipants,
 } from "../../utils/apiClient";
 import {
+  apiFetchGroupSubscriptionDiscounts,
   apiCancelTournamentVivaRegistration,
   apiCreateTournamentVivaTransaction,
   apiFetchTournamentVivaCheckout,
@@ -57,6 +58,7 @@ import {
   pickSubscriptionValidityDate,
   resolveSubscriptionUsageDisplay,
 } from "../../utils/subscriptionValidity";
+import { isGroupSubscriptionDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionDiscountQuote } from "../../utils/groupSubscriptionDiscount";
 import "./GroupSchedulePage.css";
 
 interface GroupSchedulePageProps {
@@ -406,7 +408,7 @@ export default function GroupSchedulePage({
   initialStudioId,
   returnToFindGame = false,
 }: GroupSchedulePageProps) {
-  const { isAuthenticated, isRestoringSession } = useAuth();
+  const { isAuthenticated, isRestoringSession, phone } = useAuth();
   const subscriptionUsageShadow = useSubscriptionUsageShadow();
   const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
   const subscriptionUsageShadowPreview = subscriptionUsageShadow.preview;
@@ -430,6 +432,11 @@ export default function GroupSchedulePage({
   const [detailRosterLoading, setDetailRosterLoading] = useState(false);
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
+  const [discountQuotes, setDiscountQuotes] = useState<GroupSubscriptionDiscountQuote[]>([]);
+  const [discountResolvedFor, setDiscountResolvedFor] = useState<string | null>(null);
+  const [discountLoading, setDiscountLoading] = useState(false);
+  const [discountError, setDiscountError] = useState<string | null>(null);
+  const registrationRequestIdRef = useRef(0);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
   const [registrationLoading, setRegistrationLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -572,6 +579,8 @@ export default function GroupSchedulePage({
 
   const loadRegistrationState = useCallback(async (training: GroupTrainingSummary) => {
     if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled) return;
+    const requestId = ++registrationRequestIdRef.current;
+    setCheckout(null);
     setRegistrationLoading(true);
     setDetailError(null);
     const [registrationResult, checkoutResult] = await Promise.all([
@@ -587,6 +596,7 @@ export default function GroupSchedulePage({
       })),
     ]);
 
+    if (registrationRequestIdRef.current !== requestId) return;
     setRegistration(registrationResult.data ?? null);
     if (checkoutResult.error || !checkoutResult.data) {
       setCheckout(null);
@@ -596,6 +606,11 @@ export default function GroupSchedulePage({
     }
     setRegistrationLoading(false);
   }, [isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
+
+  useEffect(() => {
+    registrationRequestIdRef.current += 1;
+    return () => { registrationRequestIdRef.current += 1; };
+  }, [selectedId, selectedDetail, isAuthenticated, isRestoringSession, phone]);
 
   useEffect(() => {
     if (!selectedDetail) {
@@ -622,7 +637,44 @@ export default function GroupSchedulePage({
     loadRegistrationState,
     selectedDetail,
     subscriptionUsageShadowEnabled,
+    phone,
   ]);
+
+  useEffect(() => {
+    setDiscountQuotes([]);
+    setDiscountResolvedFor(null);
+    setDiscountError(null);
+    setDiscountLoading(false);
+    if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled
+      || !selectedId || !checkout?.profile?.id || registrationLoading) return;
+    const controller = new AbortController();
+    const actorId = checkout.profile.id;
+    const resolvedFor = `${selectedId}:${actorId}`;
+    setDiscountLoading(true);
+    void apiFetchGroupSubscriptionDiscounts(selectedId, controller.signal).then(result => {
+      if (controller.signal.aborted) return;
+      const quotes = result.data?.quotes;
+      if (result.error || !Array.isArray(quotes) || new Set(quotes.map(q => q?.subscriptionId)).size !== quotes.length) {
+        setDiscountError("Не удалось проверить скидку по подписке.");
+      } else {
+        const available = quotes.filter(q => q?.status === "AVAILABLE");
+        if (available.some(q => !isGroupSubscriptionDiscountQuote(q, selectedId, actorId))) {
+          setDiscountError("Не удалось подтвердить стоимость по подписке.");
+        } else {
+          setDiscountQuotes(available);
+          if (!available.length && quotes.some(q => q.status === "LIMIT_USED")) setDiscountError("Лимит записей по подписке исчерпан.");
+        }
+      }
+      setDiscountResolvedFor(resolvedFor);
+      setDiscountLoading(false);
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setDiscountError("Не удалось проверить скидку по подписке.");
+      setDiscountResolvedFor(resolvedFor);
+      setDiscountLoading(false);
+    });
+    return () => controller.abort();
+  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -667,6 +719,9 @@ export default function GroupSchedulePage({
   );
 
   const selectedTraining = selectedDetail;
+  const discountContextKey = `${selectedId}:${checkout?.profile?.id}`;
+  const discountPending = Boolean(checkout && (discountLoading || discountResolvedFor !== discountContextKey));
+  const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const purchasableProducts = checkout ? [...checkout.oneTimes, ...checkout.subscriptions] : [];
@@ -783,6 +838,10 @@ export default function GroupSchedulePage({
       setDetailError("Не удалось получить телефон профиля Viva.");
       return;
     }
+    if (training.id !== selectedId || activeCheckout.exercise.id !== training.id) {
+      setDetailError("Тренировка изменилась. Дождитесь обновления вариантов записи.");
+      return;
+    }
 
     setActionLoading(true);
     setDetailError(null);
@@ -830,6 +889,7 @@ export default function GroupSchedulePage({
     loadList,
     loadRegistrationState,
     previewSubscriptionDiscount,
+    selectedId,
     subscriptionUsageShadowEnabled,
   ]);
 
@@ -1290,6 +1350,8 @@ export default function GroupSchedulePage({
                           </div>
                         )}
 
+                        {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
+                        {discountError && <div className="tournament-signup-muted" role="status">{discountError}</div>}
                         {purchasableProducts.length > 0 && (
                           <div className="tournament-signup-payment-group">
                             <button
@@ -1304,6 +1366,12 @@ export default function GroupSchedulePage({
                               <div className="tournament-signup-payment-purchase-list">
                                 {purchasableProducts.map((product) => {
                                   const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
+                                  const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product) : null;
+                                  const bookingProduct: TournamentVivaProduct = discount ? {
+                                    id: discount.subscriptionId, name: discount.subscriptionName, source: "client-subscription", type: "SUBSCRIPTION",
+                                    cost: discount.amountMinor, visitsTotal: null, raw: { clientSubscriptionId: discount.subscriptionId },
+                                    lk1MoneyDiscountCandidate: true, groupDiscountQuote: discount,
+                                  } : product;
                                   return (
                                     <button
                                       key={`${product.source}-${product.id}`}
@@ -1312,14 +1380,22 @@ export default function GroupSchedulePage({
                                       onClick={() => void completeRegistration(
                                         selectedTraining,
                                         checkout,
-                                        product,
+                                        bookingProduct,
                                         promoPreview ? appliedPromo?.code : null,
                                       )}
-                                      disabled={actionLoading || promoLoading}
+                                      disabled={actionLoading || promoLoading || discountPending}
                                     >
-                                      <span>{product.name}</span>
-                                      <strong className={promoPreview ? "group-schedule-promo-price" : undefined}>
-                                        {promoPreview ? (
+                                      <span className="group-schedule-discount-label">
+                                        <span>{product.name}</span>
+                                        {discount && <span className="group-schedule-discount-description">Скидка 50% по подписке «{discount.subscriptionName}»</span>}
+                                      </span>
+                                      <strong className={discount ? "group-schedule-promo-price group-schedule-discount-price" : promoPreview ? "group-schedule-promo-price" : undefined}>
+                                        {discount ? (
+                                          <>
+                                            <s className="group-schedule-promo-price-old">{formatMoneyMinor(discount.basePriceMinor)}</s>
+                                            <span>{formatMoneyMinor(discount.amountMinor)}</span>
+                                          </>
+                                        ) : promoPreview ? (
                                           <>
                                             <span className="group-schedule-promo-price-old">
                                               {formatMoneyMinor(promoPreview.sumMinor)}

@@ -229,7 +229,7 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     return true;
   };
   if (!rows.every(validIdentityShape)) return lk1Stop(ctx, "LK1_MONEY_OWNERSHIP_DTO_INVALID");
-  const selected = findOwnedSubscriptions({ availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
+  const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
   const configured = lk1Config(selected);
   if (configured.code) return lk1Stop(ctx, configured.code);
   const dates = collectSubscriptionPurchaseDateEvidence(selected);
@@ -449,6 +449,22 @@ if (ctx.step === "lk1_policy_decision") {
     || !Number.isSafeInteger(decision.benefit.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
     || decision.benefit.finalPriceMinor > 1_000_000
     || ![0, 1].includes(decision.subscriptionVisitCount)) return lk1Stop(ctx, "LK1_DECISION_INVALID");
+  // An existing operation is replayed earlier. Only a first write must agree
+  // with the displayed group quote; client amounts can only restrict a charge.
+  if (ctx.expectedGroupDiscount !== undefined) {
+    const expected = ctx.expectedGroupDiscount;
+    const target = ctx.lk1.target;
+    if (ctx.caller !== "http" || ctx.managedAction !== "BOOK_GROUP_TRAINING" || !isObj(expected)
+      || Object.keys(expected).sort().join() !== ["basePriceMinor", "amountMinor", "productId", "startsAt", "durationMinutes", "discountPercent"].sort().join()
+      || !Number.isSafeInteger(expected.basePriceMinor) || !Number.isSafeInteger(expected.amountMinor)
+      || expected.basePriceMinor !== target.basePriceMinor || expected.amountMinor !== decision.benefit.finalPriceMinor
+      || expected.productId !== target.priceProductId || expected.discountPercent !== 50
+      || expected.discountPercent !== ctx.lk1.rule.groupTrainingDiscountPercent
+      || expected.durationMinutes !== target.durationMinutes || typeof expected.startsAt !== "string"
+      || Date.parse(expected.startsAt) !== Date.parse(target.startsAt)) {
+      return finishError(ctx, 409, "Стоимость или условия подписки изменились. Обновите варианты записи.", { code: "GROUP_DISCOUNT_QUOTE_CHANGED" });
+    }
+  }
   ctx.lk1.decision = JSON.parse(JSON.stringify(decision));
   ctx.subscriptionVisitCount = decision.subscriptionVisitCount;
   ctx.step = "operation_insert";
