@@ -255,7 +255,7 @@ if (ctx.lk1) {
     if (matches.length !== 1 || !bookingId(matches[0])) {
       return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
     }
-    return prepareConfirmedUpdate(ctx, matches[0]);
+    return lk1NeedsVisitJob(ctx) ? prepareVisitConfirmedUpdate(ctx, matches[0]) : prepareConfirmedUpdate(ctx, matches[0]);
   }
 
 // HUB_PREACCEPT

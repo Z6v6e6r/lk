@@ -127,6 +127,7 @@ const lk1Finish = (ctx) => {
   return emit(OUTPUT_FINAL);
 };
 const lk1Checkout = (ctx) => {
+  if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");
   if (ctx.lk1.decision.benefit.finalPriceMinor === 0) return lk1Finish(ctx);
   if (ctx.lk1.checkout) return lk1Finish(ctx);
   if (ctx.lk1.transactionAttemptedAt) {

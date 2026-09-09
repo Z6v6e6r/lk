@@ -59,6 +59,67 @@ if (targetBookingIdSet.size > 0 && operationBookingIds.length > 0
   && !operationBookingIds.some((bookingId) => targetBookingIdSet.has(bookingId))) {
   return retry(ctx, "daily_limit_booking_mismatch");
 }
+// Paid mixed JOIN returns its separately adjusted limit through the visit worker.
+// This is deliberately separate from legacy SUBSCRIPTION-booking return checks.
+if (operation.lk1?.visitJob !== undefined) {
+  const job = operation.lk1.visitJob;
+  ctx.dailyLimitOperationKey = toStr(operation._id);
+  if (job?.operationKey !== operation._id || job?.operationId !== operation.operationId
+    || ["tenantKey", "actorClientId", "clientSubscriptionId", "exerciseId", "bookingId", "serviceDate"].some(key => job?.[key] !== operation[key])
+    || job?.actorClientId !== ctx.targetClientId || job?.exerciseId !== ctx.exerciseId
+    || !targetBookingIdSet.has(normalizeId(job?.bookingId))) return retry(ctx, "visit_cancel_binding_unverified");
+  if (state === "RELEASED" && job?.cancellation) {
+    try {
+      if (!__subscriptionVisitLifecycle.visitAllowanceRelease(job)) return retry(ctx, "visit_return_unverified");
+      ctx.dailyLimitReleaseOutcome = "RELEASED";
+      return continueApply(ctx);
+    } catch (_) { return retry(ctx, "visit_job_invalid"); }
+  }
+  if (ctx.mode === "STAFF_TARGET" && ctx.reason === "CUP_STAFF_REMOVAL" && ctx.requestedRefundMethod === "NONE") {
+    try {
+      const after = __subscriptionVisitLifecycle.retainVisitByStaff(job, { kind: "STAFF_NO_RETURN",
+        bookingId: job.bookingId, operationId: ctx.operationId, staffActorId: ctx.staffActorId,
+        verifiedAt: ctx.vivaVerifiedAt }, new Date().toISOString());
+      ctx.dailyLimitReleaseOutcome = "VISIT_RETAINED_BY_STAFF";
+      if (after.revision === job.revision) return continueApply(ctx);
+      const command = __subscriptionVisitLifecycle.visitJobCas(job, after);
+      command.query.state = "CONFIRMED";
+      ctx.dailyLimitVisitJobWrite = true;
+      msg._splitLeaveCtx = ctx;
+      msg.payload = [command.query, command.update, command.options];
+      return [msg, null, null, null];
+    } catch (_) { return retry(ctx, "visit_staff_retention_unverified"); }
+  }
+  const cancelled = asArray(ctx.bookingResults).find((row) => normalizeId(row.bookingId) === normalizeId(job?.bookingId));
+  if (state !== "CONFIRMED" || job?.operationKey !== operation._id
+    || job?.actorClientId !== ctx.targetClientId || job?.exerciseId !== ctx.exerciseId
+    || !targetBookingIdSet.has(normalizeId(job?.bookingId))
+    || ctx.vivaVerification !== "active_absent_history_cancelled" || !ctx.vivaVerifiedAt) {
+    return retry(ctx, "visit_cancel_binding_unverified");
+  }
+  // A persisted cancellation survives retry contexts that no longer carry the
+  // original successful refund request. First insertion requires that request.
+  if (!job.cancellation && (!cancelled || cancelled.provisional !== "cancel_requested"
+    || !["CURRENCY", "DEPOSIT", "NONE"].includes(cancelled.refundMethod))) {
+    return retry(ctx, "visit_money_cancel_unverified");
+  }
+  try {
+    const cancellation = job.cancellation || { source: "VIVA_BOOKING_READBACK", operationId: ctx.operationId,
+      tenantKey: job.tenantKey, actorClientId: job.actorClientId, clientSubscriptionId: job.clientSubscriptionId,
+      exerciseId: job.exerciseId, bookingId: job.bookingId, bookingCancelled: true,
+      verifiedAt: ctx.vivaVerifiedAt, moneyRefundState: cancelled.refundMethod === "NONE" ? "NO_REFUND_REQUESTED" : "REQUEST_ACCEPTED" };
+    const after = __subscriptionVisitLifecycle.requestVisitReturn(job, cancellation, new Date().toISOString());
+    ctx.dailyLimitReleaseOutcome = "VISIT_RETURN_PENDING";
+    if (after.revision === job.revision) return continueApply(ctx);
+    const command = __subscriptionVisitLifecycle.visitJobCas(job, after);
+    command.query.state = "CONFIRMED";
+    command.update.$set["lk1.visitNextCheckAt"] = new Date().toISOString();
+    ctx.dailyLimitVisitJobWrite = true;
+    msg._splitLeaveCtx = ctx;
+    msg.payload = [command.query, command.update, command.options];
+    return [msg, null, null, null];
+  } catch (_) { return retry(ctx, "visit_job_invalid"); }
+}
 // Removing the cancelled booking from the roster may finish while Viva is still
 // returning its visit. Keep the allowance reserved until the existing recovery
 // path observes RETURN_VERIFIED and passes through this node again.

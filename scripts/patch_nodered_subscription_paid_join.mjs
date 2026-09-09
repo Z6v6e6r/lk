@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { visitLifecycleRuntimeSource, visitConfirmationSource } from './lib/subscriptionVisitRuntimeSource.mjs';
 import crypto from 'node:crypto';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
@@ -29,8 +31,13 @@ export function patchPaidJoinGateway(source) {
     '&& (ctx.lk1.decision.subscriptionVisitCount === 1\n        && (ctx.managedAction !== "JOIN_GAME" || ctx.lk1.decision.benefit.finalPriceMinor === 0)\n');
   out = replace(out, ': !isSubscriptionBooking(booking)));',
     ': !isSubscriptionBooking(booking)\n          && String(booking.paymentType || booking.paymentMethod || "").trim().toUpperCase() === "ON_PLACE"));');
-  return replace(out, 'actorClientId: ctx.actorClientId, serviceDate: ctx.serviceDate,\n      "lk1.rule.productId"',
+  out = replace(out, 'actorClientId: ctx.actorClientId, serviceDate: ctx.serviceDate,\n      "lk1.rule.productId"',
     'actorClientId: ctx.actorClientId,\n      "lk1.rule.productId"');
+  out = replace(out, 'return prepareConfirmedUpdate(ctx, matches[0]);',
+    'return lk1NeedsVisitJob(ctx) ? prepareVisitConfirmedUpdate(ctx, matches[0]) : prepareConfirmedUpdate(ctx, matches[0]);');
+  out = replace(out, 'const lk1Checkout = (ctx) => {',
+    'const lk1Checkout = (ctx) => {\n  if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");');
+  return visitLifecycleRuntimeSource() + visitConfirmationSource() + out;
 }
 export function patchPaidJoinPreview(source) {
   let out = patchPaidBenefitUsage(source);
@@ -39,6 +46,9 @@ export function patchPaidJoinPreview(source) {
   return replace(out, "serviceDate: ctx.target.startsAt.slice(0, 10), 'lk1.rule.productId':", "'lk1.rule.productId':");
 }
 const targets = [
+  ['lk_split_leave_daily_limit_find_build_20260811', '8d84a1b05c644180284114a92388f4671a60e0c2a7806c0c02c281dd43b272bd', () => fs.readFileSync(new URL('./nodered_games_nodes/fn_split_leave_daily_limit_find.js', import.meta.url), 'utf8')],
+  ['lk_split_leave_daily_limit_route_20260811', 'ad8a0f1c49a9085ddb64ee042d13c879a75e189a2003c71024b2d0a1d422065a', () => visitLifecycleRuntimeSource() + fs.readFileSync(new URL('./nodered_games_nodes/fn_split_leave_daily_limit_route.js', import.meta.url), 'utf8')],
+  ['lk_split_leave_daily_limit_ack_20260811', '7e5abe293062a71cba10795c3579760a4976f9199d0dd617c57be7d246c20e98', () => fs.readFileSync(new URL('./nodered_games_nodes/fn_split_leave_daily_limit_ack.js', import.meta.url), 'utf8')],
   ['lk_subscription_booking_router_20260804', '8848722f61f84e1792d2cdd69d8204be61ae66fe35c1af1d2bc7d8774f84636a', patchPaidJoinGateway],
   ['lk_subscription_price_preview_20260908_router', 'b66401e010790cb6b9a016f603f9867123920f5ef93806536f606ef622a39472', patchPaidJoinPreview],
 ];

@@ -1,82 +1,43 @@
-# Subscription paid JOIN: visit lifecycle follow-up
+# Платное присоединение по подписке: списание и возврат посещения
 
-Status: local implementation stage remains **BLOCKED** on the inverse operation and
-ambiguous-outcome recovery. The new P2 HAR establishes a separate limit decrement;
-it does not establish a complete visit debit/return contract.
-Branch: `codex/subscription-join-payment-20260909`.
-Base: `be2e395eebae6b6fee7e405fbfa87ef3e3e703bf`.
-Previous local checkpoint: `3a9407077233e381d1a6d82da7241608d366c195`.
+Статус: реализовано и проверено локально; не выложено. Ветка
+`codex/subscription-join-payment-20260909`, исходная база
+`be2e395eebae6b6fee7e405fbfa87ef3e3e703bf`.
+Предыдущие checkpoints: `3a9407077233e381d1a6d82da7241608d366c195`,
+`0b29acfca8a94df7faa46e30abfbaefd4801baec`, `11f9095`.
 
-## Required behavior
+## Поведение
 
-A mixed JOIN creates one paid booking and checkout for the authoritative discounted
-amount, and durably schedules one visit debit against the exact selected subscription.
-Cancellation cancels that booking, removes the participant, starts the applicable money
-refund and returns the same visit. The date's free 60 minutes become available again
-only after the visit return is verified and allowance release is persisted. If debit
-was never sent, a confirmed cancellation can release the allowance without a return.
-An unresolved debit or return must not be repeated blindly or release the allowance.
+1. JOIN с положительной доплатой создаёт одну запись ON_PLACE. Цена берётся из
+   серверного расчёта подписки; для исходного HAR 90 минут = 60 бесплатных + 30
+   платных, итог 262,50 руб. Используется существующая SERVICE-транзакция со скидкой.
+2. Точное подтверждение записи и `lk1.visitJob` сохраняются одним Mongo CAS в
+   `lk_subscription_daily_booking_ops`. Задание связано с выбранным экземпляром
+   подписки, пользователем, записью, упражнением, продуктом, датой и операцией JOIN.
+   Checkout не ждёт фонового запроса, но не продолжается без сохранённого задания.
+3. Фоновый worker проверяет запись ON_PLACE и подписку, сохраняет отправку задания,
+   затем единожды вызывает изменение лимита на −1. Отдельная запись SUBSCRIPTION
+   для списания не создаётся. Полностью бесплатный JOIN сохраняет прежнее поведение;
+   при отсутствии бесплатных минут отдельного задания нет.
+4. `split_leave` после подтверждённой отмены сохраняет обратное задание до перехода
+   к удалению участника. Деньги возвращает прежний механизм отмены; worker возвращает
+   посещение через +1 на тот же экземпляр. Удаление участника может завершиться раньше.
+5. Только после сохранённого подтверждения +1 операция льготы получает RELEASED.
+   Расчёт снова предоставляет бесплатные 60 минут в этот день. Если отмена опередила
+   отправку −1, worker освобождает резерв без ненужного списания/возврата.
 
-## Local changes
+Отмены из кабинета и очистка неоплаченных игр могут обходить `split_leave`. Worker
+периодически проверяет точную запись Viva и ставит обратное задание при подтверждённой
+отмене. Он не заявляет, что денежный refund завершён, и не повторяет его. Для штатного
+NONE сохраняется `NO_REFUND_REQUESTED`, а не ложное доказательство отсутствия оплаты.
+Явный staff `NO_RETURN` сохраняет посещение и резерв: worker проверяет durable
+staff-команду после readback отмены, а leave-hook сохраняет `STAFF_NO_RETURN` в журнале.
+Это закрывает окно между отменой в Viva и сохранением локального результата.
 
-- `scripts/lib/subscriptionVisitLifecycle.mjs`: server-only pure job/journal and Mongo
-  CAS planners. A job is bound to one operation, client, subscription instance,
-  exercise, booking and service date. Initial confirmation and job insertion share
-  one proposed update. An acknowledged claim precedes each mutation intent;
-  sent/unknown jobs produce verification tasks after restart. Cancellation during
-  debit is preserved; a confirmed late debit schedules its inverse. Return evidence
-  must identify the original debit. Persisted phases, receipts and identities are
-  validated, including after restart. Release targets the old job/booking so a late
-  worker cannot release a later JOIN.
-- `scripts/nodered_games_nodes/fn_split_leave_daily_limit_route.js`: existing cancellation
-  source keeps allowance reserved while subscription return is pending, while allowing
-  roster cleanup to continue. Existing return-verification recovery re-enters this
-  gate. Failed/malformed allowance reads retry instead of treating them as absent.
-- `scripts/tests/subscriptionVisitLifecycle.test.mjs`: 16 fixture tests, including
-  cancellation races, duplicate claims, ambiguous outcomes, corrupt restored jobs,
-  exact identity, and actual quote usage before/after a persisted return release.
-- `scripts/tests/subscriptionVisitLeaveGuard.test.mjs`: 5 source-function tests for
-  pending/verified return, unchanged money-only path, failed reads and booking mismatch.
-- `docs/SUBSCRIPTION_PAID_JOIN_FIX_20260909.md`, `docs/WORKLOG.md`: revised delivery status.
+## Подтверждённый контракт Viva
 
-## Missing integration and release blocker
-
-The new module performs no I/O. It is **not imported by a runtime flow**, does not
-actually enqueue a job, and has no real dispatcher or Viva adapter. Its proposed
-atomic confirmation update is not wired into the gateway. The leave guard addresses
-the existing subscription-return state; the paid JOIN's future separate visit job
-is not yet connected to that state. This patch therefore does not implement a working
-end-to-end background debit/return service.
-
-The original code/HAR inspection showed visit consumption through a SUBSCRIPTION
-booking and return through that booking's cancellation. The new P2 HAR also establishes
-a separate **limit decrement**, detailed below. It does not establish a corresponding
-return, booking-linked consumption record, or operation-linked readback. A second
-SUBSCRIPTION booking remains an invalid substitute because it creates another
-participant/capacity claim.
-
-Needed: a captured inverse adjustment on the same subscription instance and an actual
-way to resolve a lost mutation response. The adapter must account for the observed
-non-idempotent delta semantics. The current fixture-only requirements for provider
-idempotency and operation-linked receipts are **not met** by this HAR; do not set those
-capability flags to true or reuse the purchase transaction ID as a debit receipt.
-Once these boundaries are resolved, wire the journal update, dispatcher, provider
-adapter and cancellation recovery, then rehearse the full flow in approved isolation.
-
-The earlier two-node paid-only candidate is insufficient for this expanded scope.
-No new deploy artifact was generated from stale local flow snapshots. Source-function
-checks here are not evidence that primary has this behavior. The original pending
-HAR operation remains untouched, and its historical provider outcome is unconfirmed.
-
-## P2 HAR evidence — 2026-09-09
-
-Input: user-provided `viva-hub-p2-sanitized.har`, SHA256
-`92c6fac34b48bfa462fd223e814ae3a7ae4d251f0cf6418303f1992a07b36410`.
-Read offline as evidence only; no recorded request was replayed. Neither HAR contents,
-customer IDs, tokens nor purchase transaction IDs were copied into the repository.
-The file contains 10 entries: 2 list GETs, 3 limit PUTs and 5 OPTIONS requests.
-
-Observed method (placeholders identify the exact client subscription instance):
+Оба предоставленных HAR прочитаны офлайн; запросы из них не воспроизводились.
+Клиентские ID, токены, исходные HAR и transaction ID покупки не включены в Git.
 
 ```http
 PUT /api/v1/clients/{clientId}/subscriptions/{clientSubscriptionId}/limit
@@ -85,66 +46,114 @@ Content-Type: application/json
 {"type":"BY_VISITS","value":-1}
 ```
 
-All three PUTs returned HTTP 200 and a subscription object whose `subscriptionId`
-matched the request path. Entry indexes below are zero-based. Earlier list GETs
-provided the initial counters; the first PUT response provides the second PUT's
-baseline on the same instance.
+Возврат использует тот же URL с `value:1`. HTTP 200 возвращает объект подписки.
 
-| HAR entry | Instance alias | visitsTotal before → after | visitsLeft before → after |
+| Источник | Действие | visitsTotal | visitsLeft |
 | --- | --- | --- | --- |
-| 4 | A | 365 → 364 | 365 → 364 |
-| 6 | A, identical method/path/body | 364 → 363 | 364 → 363 |
-| 8 | B, already has one booking | 365 → 364 | 364 → 363 |
+| P2, индекс 4, экземпляр A | −1 | 365 → 364 | 365 → 364 |
+| P2, индекс 6, тот же A | повтор −1 | 364 → 363 | 364 → 363 |
+| P2, индекс 8, экземпляр B | −1 | 365 → 364 | 364 → 363 |
+| P2-2, индекс 0, тот же B | +1 | 364 → 365 | 363 → 364 |
 
-A complete response-object comparison changes only `visitsTotal` and `visitsLeft`.
-The `bookings` array, receipts, activation booking and existing `transactionId` are
-unchanged. Therefore this observation proves a relative limit adjustment; it does
-not prove that Viva registered a new visit or new transaction for the paid booking.
-The used-count difference (`visitsTotal - visitsLeft`) remains unchanged.
+При сравнении объектов меняются только два счётчика. Список bookings и transactionId
+покупки не меняются. Это корректировка лимита; Viva не создаёт отдельную запись
+посещения/транзакцию, связанную с ON_PLACE. Аудит связи хранится в нашем журнале.
 
-An identical repeated PUT consumes another unit. The observed request must never be
-blindly retried. The sanitized capture contains no idempotency key, conditional-write
-header, request operation identifier, new response operation identifier or revision.
-This does not prove that Viva has no such optional API feature; it leaves support
-unverified. Its existing purchase `transactionId` cannot identify this adjustment.
-There is no `value:1` request, inverse endpoint, or post-mutation GET in this capture.
+SHA256 исходных файлов:
+- P2: `92c6fac34b48bfa462fd223e814ae3a7ae4d251f0cf6418303f1992a07b36410`.
+- P2-2: `820f0d1d2ea00d1538af453c45dc9dd71cdb0b15892fd0210e5c63dfbcee1e4e`.
 
-Integration consequence: a local journal claim can prevent normal duplicate dispatch
-but cannot establish exactly-once provider execution across a timeout/crash. A lost
-response must remain unresolved and retain the free-minute allowance; a later balance
-delta alone cannot attribute the change to this job under concurrent writers. An
-explicit successful response can support a future request-bound adapter, but that is
-a different evidence contract from the current operation-readback-only scaffold.
-No adapter was connected or capability check weakened based on this incomplete trace.
+## Повторы, отмена и восстановление
 
-Independent read-only payment/reliability inspection confirmed the delta semantics
-and absence of inverse evidence. Next evidence needed from the user is a separate
-one-visit return on the same instance, preferably followed by a fresh read of its
-counters; no live adjustment was performed by this task.
+- `lk_subscription_visit_locks` использует уникальный `_id` на tenant/client/instance.
+  Lock не истекает автоматически. Для DEBIT и RETURN применяется отдельная метка
+  операции; старый worker не может удалить lock уже начавшегося возврата.
+- HTTP выполняется без retry, redirect replay или подмены provider-idempotency.
+  Сначала подтверждается CAS отправки. Принимается только непосредственный HTTP 200
+  на этот запрос: точный экземпляр, продукт, тип и изменение обоих счётчиков на ±1.
+- Потеря ответа, сбой записи ACK, противоречивый DTO или неопределённый статус оставляют
+  SENT/UNKNOWN на ручной сверке. Последующий баланс не доказывает авторство изменения.
+  Нельзя автоматически повторять PUT, выдавать providerOperationId покупки за ACK
+  или освобождать минуты. Lock ограничивает последующие изменения этой подписки.
+- Observer требует согласованные идентификаторы и paymentType=ON_PLACE, явные признаки
+  состояния записи и корректные даты. Противоречивые aliases и неполная/противоречивая
+  пагинация останавливают обработку. Просмотр ограничен 10 страницами по 200 записей.
+- Worker обрабатывает отмену, пришедшую во время −1, через revision CAS. Старый результат
+  не может освободить резерв нового JOIN. Изменения вне приложения не защищены общим
+  provider CAS; противоречие с непосредственным ответом требует ручной сверки.
 
-## Checks and remaining evidence
+## Файлы
 
-P2 audit follow-up changed documentation only: parsed all 10 HAR entries, compared
-all three mutation response objects with their preceding snapshots, inspected
-header names and identity binding, ran `git diff --check` and a narrow added-text
-credential/customer-ID scan. No runtime tests were rerun for documentation edits.
-The test/build results below belong to the previous code checkpoints.
+- `scripts/lib/subscriptionVisitLifecycle.mjs`: журнал, direct-ACK контракт, переходы,
+  CAS, удержание сотрудником и освобождение лимита; JSON clone совместим с Node-RED VM.
+- `scripts/lib/subscriptionVisitWorker.mjs`: Mongo lock, проверка владельца журнала,
+  однократный HTTP, observer внешней отмены и восстановление подтверждённых locks.
+- `scripts/run_subscription_visit_worker.mjs`: явный запуск, tenant scope, курсор,
+  повторная проверка через 120 секунд, вывод изменений статуса и ручной сверки.
+- `scripts/lib/subscriptionVisitRuntimeSource.mjs`,
+  `scripts/nodered_lk1_hub_nodes/visit_confirm.js`: embedding журнала и атомарное enqueue.
+- `scripts/nodered_lk1_hub_nodes/gateway.js`, `gateway_hooks.js`,
+  `scripts/patch_live_lk1_hub.mjs`: подключение подтверждения и зависимости сборки.
+- `scripts/nodered_games_nodes/fn_split_leave_daily_limit_find.js`,
+  `fn_split_leave_daily_limit_route.js`, `fn_split_leave_daily_limit_ack.js`: точная
+  запись вместо выбора всех JOIN упражнения, постановка возврата и различение ACK.
+- `scripts/patch_nodered_subscription_paid_join.mjs`: полный fixture-пакет из пяти
+  функций — gateway, preview, daily-limit find/route/ack. Связи и остальные узлы сохранены.
+- `scripts/tests/subscriptionVisitWorker.test.mjs`: worker, HTTP, Mongo и отрицательные
+  сценарии; `lk1HubLiveComposition.test.ts`, `subscriptionPaidJoin.nodered.test.mjs`,
+  `splitLeave.router.test.ts`: enqueue и согласование обновлённых узлов.
+- Этот отчёт, `SUBSCRIPTION_PAID_JOIN_FIX_20260909.md`, `WORKLOG.md`: статус и доказательства.
 
-- New lifecycle and leave-guard suite: 21 PASS, 0 FAIL, 0 SKIP.
-- Existing split-leave auth/router, subscription-instance and shared-daily-limit suite:
-  117 PASS, 0 FAIL, 1 optional SKIP.
-- Full repository lint: 0 errors, 387 pre-existing warnings. Scoped follow-up lint
-  passed for the new module/tests after final cleanup.
-- Independent payment/reliability review completed; corrected phase validation and
-  ambiguous-read handling; no remaining blocking local findings at final review.
-- Prior checkpoint typecheck and source modular validation passed. Full frontend build
-  remains blocked by missing ignored VITE environment configuration, before compilation;
-  it is not a successful build and was not rerun without changed inputs.
-- No new flow composition/validation or physical provider/DB/worker/UI proof for this
-  follow-up. In-memory fixtures verify local transitions, not concurrent Mongo or
-  real provider effects. Retry scheduling, provider error observability and operational
-  recovery still require the runtime integration.
+## Проверки
 
-No push, merge, deploy, provider debit, refund, booking cancellation, or shared data
-mutation occurred. Existing primary checkout changes were preserved.
+- 43 PASS / 0 FAIL / 0 SKIP: lifecycle, leave-guard и worker. В составе — один полный
+  тест на настоящей MongoDB 7 и loopback HTTP-фикстуре с 8 параллельными worker: один
+  −1, один +1, RELEASED, исходные счётчики восстановлены, locks удалены. Остальные
+  тесты используют локальные фикстуры, часть проверяет настоящий HTTP и Node-RED VM.
+- 14 PASS / 15 SKIP: source-bound composition и paid JOIN/checkout. Пропущены прежние
+  CREATE/identity installation-сценарии, требующие другого исторического снимка.
+- 117 PASS / 1 SKIP: смежные split-leave/instance/shared-daily-limit регрессии.
+- Полный lint: 0 ошибок / 387 исходных предупреждений; финальный scoped lint — PASS.
+- Независимое payment/reliability review: замечания исправлены; блокирующих замечаний
+  по последнему коду не осталось. `git diff --check` и узкая проверка новых данных — PASS.
+- Предыдущий typecheck относится к неизменённому frontend. Полная сборка ранее
+  остановилась до компиляции из-за отсутствующей ignored VITE-конфигурации; это не PASS.
+- Новый live-origin modular audit не выполнялся: использован замороженный fixture.
+  Пять функций компилируются; exact-graph тест проверяет сохранение всех прочих полей,
+  узлов и связей. Это не подтверждение актуальности рабочего Node-RED.
+
+Временная MongoDB работала в Docker internal network; тестовый Node делил её network
+namespace и обращался по loopback. Исходники монтировались read-only. Тестовая БД,
+контейнер и сеть удалены после проверки. Ни одного обращения к реальному Viva из тестов.
+
+Fixture candidate SHA256:
+`10b7984fbc14dd2d7c90a05965b3789484322084dcf581ed3741e68371c484b6`.
+Он привязан к прежнему снимку первичного сервера и не является разрешением на выкладку.
+
+## Запуск и следующие этапы
+
+Без `--run` команда `node scripts/run_subscription_visit_worker.mjs` только выводит
+описание и не подключается к БД/Viva. Runtime требует server-owned переменные:
+`SUBSCRIPTION_VISIT_MONGO_URI`, `SUBSCRIPTION_VISIT_DB`, `SUBSCRIPTION_VISIT_TENANT`,
+`SUBSCRIPTION_VISIT_TOKEN_FILE`; origin по умолчанию официальный Viva. Локальные тесты
+используют отдельный loopback origin. `--once` выполняет один пакет, обычный запуск
+проверяет очередь каждые 5 секунд; неизменившиеся задания получают паузу 120 секунд.
+Доступ к service token и запуск worker на сервере ещё не настроены и не выполнялись.
+
+Локальная повторная проверка: тесты `subscriptionVisitLifecycle.test.mjs`,
+`subscriptionVisitLeaveGuard.test.mjs`, `subscriptionVisitWorker.test.mjs`; для
+physical-сценария нужен отдельный fixture-owned Mongo на loopback и переменная
+`LK_VISIT_VERIFY_MONGO_URI=mongodb://127.0.0.1:<port>`. Тест сам создаёт БД с префиксом
+`subscription_visit_verify_` и удаляет только её. Зависимости — существующие node_modules.
+
+Перед rollout нужны отдельные согласованные стадии: пользовательская проверка,
+интеграция, push, затем свежий live-source audit и подготовка полного пакета + worker
+из одного подтверждённого commit. Старый paid-only пакет из двух функций неполон.
+Нельзя откатывать журнал/locks с неопределёнными запросами или автоматически повторять
+зависшее списание. Ручная сверка и исправление конкретной операции — отдельная операция
+с подтверждённым исходом Viva; автоматического механизма угадывания этого исхода нет.
+
+UI/real Viva payment/refund smoke, измерение production-нагрузки и активация worker
+не выполнялись. Исходная PENDING_CONFIRMATION-операция из первого HAR не изменялась.
+Push, Draft PR, merge, deploy и рабочие provider/database-операции не выполнялись.
 MODEL_ROUTE: parent

@@ -2227,3 +2227,10 @@ Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving
 - Offline audit of the new sanitized HAR confirms `PUT /clients/{clientId}/subscriptions/{instanceId}/limit` with `BY_VISITS/-1`: three HTTP 200 responses decrement both total and remaining visits. Two identical requests on one instance each decrement again.
 - Only those two response fields change; purchase transaction and booking lists remain unchanged. No inverse adjustment or operation-linked recovery/idempotency contract is established by this capture.
 - Updated [lifecycle evidence](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md) and paid-JOIN status. Independent read-only review agrees. No runtime code changes, replay, new adapter, capability override, push, merge, deploy or live writes. Implementation remains blocked pending inverse/recovery evidence.
+
+## 2026-09-09 — Paid JOIN visit worker and inverse connected locally
+
+- Second P2 HAR confirms +1 on the same instance restores visitsTotal/visitsLeft. Implemented direct-ACK −1/+1 without claiming provider idempotency or purchase transaction linkage.
+- Gateway confirmation atomically enqueues the exact-instance job. Split leave schedules its inverse before roster continuation; worker also discovers cabinet/cleanup cancellations and preserves explicit staff NO_RETURN. Allowance releases only after persisted return (or proven cancellation before debit).
+- Added per-instance Mongo locks, direct response validation, restart/unknown handling, coherent booking/pagination validation and scheduled diagnostics. Physical fixture suite43 PASS; composition14 PASS/15 historical skips; related regressions117 PASS/1 skip. Independent payment/reliability findings fixed.
+- Full [implementation/evidence/configuration](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md). Only isolated fixture DB/HTTP writes; test DB/container/network removed. No push, PR, merge, deploy, live debit, refund or original-operation repair.

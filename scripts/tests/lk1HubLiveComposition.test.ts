@@ -680,6 +680,13 @@ test("LK1 paid benefit reserves minutes and creates one ON_PLACE booking plus on
     assert.equal(bookingPost.payload.count, undefined);
     assert.equal(bookingPost.payload.clientSubscriptionId, undefined);
     assert.equal(record.lk1.decision.subscriptionVisitCount, visits);
+    if (visits === 1) {
+      assert.equal(record.action, "JOIN_GAME");
+      assert.equal(record.bookingPaymentType, "ON_PLACE");
+      assert.equal(record.lk1.visitJob.phase, "DEBIT_PENDING");
+      assert.equal(record.lk1.visitJob.bookingId, record.bookingId);
+      assert.equal(record.lk1.visitJob.clientSubscriptionId, record.clientSubscriptionId);
+    } else assert.equal(record.lk1.visitJob, undefined);
     assert.equal(record.lk1.decision.gameMinutes.freeMinutes, Math.min(duration, Math.max(0, 60 - used)));
     assert.equal(record.lk1.decision.benefit.finalPriceMinor, charge);
     let output = lk1Reply(afterBooking[0], [{ id: "fixture:service", name: "Услуга 10000",

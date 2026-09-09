@@ -1,9 +1,9 @@
 # Subscription paid JOIN correction — local stage
 
-**Superseded scope: implementation remains BLOCKED on the inverse limit adjustment and ambiguous-outcome recovery.**
-The P2 HAR establishes a non-idempotent limit decrement; see the follow-up for evidence.
-The paid-only candidate below does not satisfy the requested full lifecycle and must not be released by itself.
-See [visit lifecycle follow-up](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md).
+**Expanded scope implemented locally:** the full candidate now enqueues the visit
+job, supports observed −1/+1 limit operations, cancellation recovery and delayed
+allowance release. The old two-node paid-only candidate below is superseded.
+See [full lifecycle and validation](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md).
 
 Base: `origin/main` = `be2e395eebae6b6fee7e405fbfa87ef3e3e703bf`.
 Branch: `codex/subscription-join-payment-20260909`.

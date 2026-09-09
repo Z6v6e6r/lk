@@ -6,11 +6,11 @@ import { buildExactGraphContract, validateReviewedFlowContract } from '../nodere
 const file = process.env.LK1_PAID_JOIN_LIVE_FIXTURE;
 const bytes = file ? fs.readFileSync(file) : null;
 const run = (name, fn) => test(name, { skip: !bytes }, fn);
-run('Paid join candidate preserves every node and field except the two reviewed function bodies; rollback is exact', () => {
+run('Paid join candidate preserves every node and field except the five reviewed function bodies; rollback is exact', () => {
   const packet = composeSubscriptionPaidJoinArtifacts(bytes, 'fixture-paid-join');
   const before = JSON.parse(bytes);
   assert.equal(packet.candidate.length, before.length);
-  assert.equal(packet.contract.allowedChanges.length, 2);
+  assert.equal(packet.contract.allowedChanges.length, 5);
   const changed = new Set(packet.contract.allowedChanges.map(row => row.id));
   for (const row of before) {
     const after = packet.candidate.find(n => n.id === row.id);

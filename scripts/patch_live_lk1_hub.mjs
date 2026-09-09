@@ -1,3 +1,4 @@
+import { visitLifecycleRuntimeSource, visitConfirmationSource } from './lib/subscriptionVisitRuntimeSource.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -61,7 +62,7 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
   const gateway = snippet('gateway').split('// HUB_STEPS');
   if (gateway.length !== 2) throw new Error('HUB gateway fragment drift');
   out.gateway = replace(out.gateway, 'const ctx = isObj(msg._subscriptionBooking)',
-    hooks.HELPERS + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
+    visitLifecycleRuntimeSource() + visitConfirmationSource() + hooks.HELPERS + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
   out.gateway = replace(out.gateway, 'if (ctx.step === "profile") {',
     gateway[1] + '\nif (ctx.step === "profile") {');
   out.gateway = replace(out.gateway, '  if (ctx.action === "release") {\n    return prepareUserGet(ctx, "active_bookings"',
@@ -238,8 +239,9 @@ export function hubSourceProvenance() {
   if (provenance.sourceDirty) throw new Error('HUB publication requires a clean committed source');
   const closure = ['scripts/patch_live_lk1_hub.mjs', 'scripts/verify_nodered_source_origin.mjs',
     'scripts/lib/release-provenance.mjs', 'scripts/lib/lk1HubPolicyTransition.mjs',
+    'scripts/lib/subscriptionVisitRuntimeSource.mjs', 'scripts/lib/subscriptionVisitLifecycle.mjs',
     'scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs',
-    ...['gateway.js', 'gateway_hooks.js', 'split.js', 'split_hooks.js', 'finalize.js',
+    ...['gateway.js', 'gateway_hooks.js', 'visit_confirm.js', 'split.js', 'split_hooks.js', 'finalize.js',
       'evaluator.js', 'preimages.json'].map(name => 'scripts/nodered_lk1_hub_nodes/' + name)];
   const sourceFiles = Object.fromEntries(closure.map(file => {
     const disk = fs.readFileSync(path.join(repo, file));

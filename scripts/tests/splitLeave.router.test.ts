@@ -641,6 +641,7 @@ test("Viva-confirmed leave releases the exact daily subscription operation befor
     tenantKey: "iSkq6G",
     actorClientId: "client-1",
     exerciseId: "exercise-1",
+    $or: [{ bookingId: { $in: ["booking-1"] } }, { upstreamBookingId: { $in: ["booking-1"] } }],
   });
 
   find.payload = [{
