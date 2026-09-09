@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Подписки — локальная проверка</title></head>
+<body style="margin:0">
+  <aside style="padding:12px;font:14px sans-serif;background:#fff3ce">Локальный макет · демонстрационные цены и остатки · покупки отключены
+    <button id="unmount" type="button">Размонтировать</button>
+    <button id="mount" type="button">Смонтировать</button>
+    <label>Ширина блока <select id="width"><option value="100%">Вся страница</option><option value="375px">375 px</option><option value="768px">768 px</option></select></label>
+  </aside>
+  <div id="padlhub-subscriptions" style="max-width:100%;margin:auto"></div>
+  <script src="../dist/subscription-storefront/subscription-storefront.js"></script>
+  <script type="module">
+    import { summerPlanPresentation } from '../src/components/subscription-storefront/presentation.ts';
+    import markUrl from '../src/components/subscription-storefront/assets/brand/подписка.svg';
+    const view = { id: 'local-preview', title: 'Играй в падел выгодно', description: 'Выберите подписку под свой ритм игры', markUrl,
+      sections: [{ id: 'monthly', plans: ['friendship','ra','academy'].map((id, index) => ({
+        ...summerPlanPresentation[id], id, ctaLabel: 'Демонстрация · покупка отключена', ctaDisabled: true,
+        billingOptions: [{ id: 'monthly', label: '30 дней', priceSuffix: '/ 30 дней', priceMinor: index ? 2380000 : 980000,
+          ...(id === 'ra' ? { progress: { current: 12, total: 100, label: 'Доступно' } } : {}) }],
+      })) }] };
+    const mount = () => window.LKWidgetSubscriptionStorefront.mount({ data: { previewView: view } });
+    document.getElementById('unmount').onclick = () => window.LKWidgetSubscriptionStorefront.unmount();
+    document.getElementById('mount').onclick = mount;
+    document.getElementById('width').onchange = event => { document.getElementById('padlhub-subscriptions').style.width = event.target.value; };
+    mount();
+  </script>
+</body>
+</html>

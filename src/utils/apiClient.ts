@@ -10555,6 +10555,7 @@ function normalizeTournamentSubscriptionConfirmResult(
 
 export async function apiFetchTournamentSubscriptionStatus(
   params: TournamentSubscriptionStatusParams = {},
+  options: { signal?: AbortSignal } = {},
 ) {
   const baseUrl = getServ2Origin() || "";
   const query = new URLSearchParams();
@@ -10575,6 +10576,7 @@ export async function apiFetchTournamentSubscriptionStatus(
     method: "GET",
     baseUrl,
     retries: 0,
+    signal: options.signal,
   });
 
   if (response.error) {

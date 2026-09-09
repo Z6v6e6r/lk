@@ -199,7 +199,9 @@
     "test:frontend-static-nginx": "node --test scripts/tests/frontendStaticNginx.test.mjs",
     "release:frontend:bootstrap-candidate": "node scripts/nginx/prepare_frontend_static_bootstrap.mjs",
     "test:frontend-bootstrap-runtime": "node --test scripts/tests/frontendBootstrapRuntime.test.mjs",
-    "test:frontend-bootstrap-guard": "node --test scripts/tests/frontendBootstrapGuard.test.mjs"
+    "test:frontend-bootstrap-guard": "node --test scripts/tests/frontendBootstrapGuard.test.mjs",
+    "build:subscription-storefront": "vite build --config vite.config.subscription-storefront.ts && node scripts/write-release.mjs dist/subscription-storefront release.json",
+    "build:subscription-storefront:dev": "vite build --config vite.config.subscription-storefront.ts --mode dev && node scripts/write-release.mjs dist/subscription-storefront release-dev.json"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",
