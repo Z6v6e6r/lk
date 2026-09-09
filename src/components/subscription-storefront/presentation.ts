@@ -12,7 +12,7 @@ export const discounts: SubscriptionBenefitGroup = {
       id: 'other-discount',
       badge: '50%',
       label:
-        'Скидка на форматы: игра + тренер, групповые тренировки, «Время на друзей», турниры Падлхаб',
+        'Скидка на форматы: игра + тренер, групповые тренировки, «Время на друзей», турниры ПадлхАБ',
     },
   ],
 };
@@ -35,7 +35,7 @@ export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
       { id: 'group', icon: 'group', label: 'Групповые тренировки' },
       { id: 'friends-time', icon: 'friends-time', label: '«Время на друзей»' },
-      { id: 'tournament', icon: 'tournament', label: 'Турниры Падлхаб' },
+      { id: 'tournament', icon: 'tournament', label: 'Турниры ПадлхАБ' },
     ],
   },
   discounts,

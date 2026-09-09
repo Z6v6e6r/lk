@@ -104,6 +104,7 @@
   color: var(--subscription-text);
   background: var(--subscription-page-background);
   font-family: 'Subscription Inter', Inter, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 .subscription-storefront *,
@@ -344,11 +345,11 @@
   height: 100%;
   flex-direction: column;
   gap: clamp(18px, 1.7vw, 32px);
-  padding: clamp(20px, 1.9vw, 36px) clamp(18px, 1.7vw, 32px) clamp(28px, 2.72vw, 52px);
-  border: 0.5px solid #ededed;
+  padding: calc(clamp(20px, 1.9vw, 36px) + 0.5px) calc(clamp(18px, 1.7vw, 32px) + 0.5px) calc(clamp(28px, 2.72vw, 52px) + 0.5px);
+  border: 0;
   border-radius: 32px;
   background: var(--subscription-surface);
-  box-shadow: -4px 4px 8px 0 #1f1e2005;
+  box-shadow: inset 0 0 0 0.5px #ededed, -4px 4px 8px 0 #1f1e2005;
 }
 
 .subscription-card__header,
@@ -490,7 +491,7 @@
 .subscription-card__billing-options button {
   min-height: 34px;
   padding: 9px 16px 11px;
-  border: 0.5px solid transparent;
+  border: 0;
   border-radius: 40px;
   color: rgb(53 52 54 / 40%);
   background: transparent;
@@ -506,12 +507,13 @@
 .subscription-card__billing-options button[aria-checked='true'] {
   color: var(--subscription-text-secondary);
   background: #fff;
-  border: 0.5px solid var(--subscription-border);
+  box-shadow: inset 0 0 0 0.5px var(--subscription-border);
 }
 
 .subscription-card__cta {
   width: 100%;
   min-height: 51px;
+  height: 51px;
   padding: 16px 24px;
   border: 0;
   border-radius: 14px;
@@ -785,8 +787,45 @@
   .subscription-storefront__hero p { font-size: 14px; line-height: 1.2; }
   .subscription-storefront__mark { right: 2em; top: -0.52em; width: 1.2em; }
   .subscription-plan-rail__item { align-items: flex-start; }
-  .subscription-card__panel { min-height: 0; padding: 20px 18px 28px; gap: 20px; }
+  .subscription-card__panel { min-height: 0; padding: 20.5px 18.5px 28.5px; gap: 20px; }
   .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 20px; }
   .subscription-card__price strong { font-size: 28px; }
   .subscription-card__benefit-group li { font-size: 14px; }
 }
+
+/* Figma uses cap-height trimming in prices and 132% leading in wrapped discount copy. */
+.subscription-card__price strong,
+.subscription-card__price span { text-box-trim: trim-both; text-box-edge: cap alphabetic; }
+.subscription-card__benefit-group li:has(> b) > span { line-height: 1.32; }
+.subscription-storefront__navigation { position: relative; }
+.subscription-storefront__more { position: relative; }
+.subscription-storefront__more summary { list-style: none; }
+.subscription-storefront__more summary::-webkit-details-marker { display: none; }
+.subscription-storefront__more summary:focus-visible {
+  outline: 3px solid var(--subscription-accent); outline-offset: 3px; border-radius: 50%;
+}
+.subscription-storefront__more-links {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 5;
+  min-width: 180px; padding: 8px; background: #fff; border: 1px solid #ededed;
+  border-radius: 14px; box-shadow: 0 4px 16px #1f1e2014;
+}
+.subscription-storefront__more-links a {
+  display: block; padding: 10px 12px; color: #353436; text-decoration: none;
+  font: 14px/1.2 'Subscription Inter Display', sans-serif; border-radius: 8px;
+}
+.subscription-storefront__more-links a:hover { background: #fafafa; }
+
+@media (min-width: 1280px) {
+  .subscription-storefront__hero { width: 626px; max-width: 100%; }
+  .subscription-storefront__mark { left: calc(50% + 166.72px); right: auto; top: -40px; width: 82px; height: 80px; }
+  .subscription-card__benefit-group ul { gap: 16px; }
+}
+.subscription-card__benefit-group li:has(> b) { gap: 8px; }
+.subscription-card__price-row { align-items: center; }
+.subscription-card__price-row--variants { align-items: flex-start; }
+@container (max-width: 719px) {
+  .subscription-storefront__mark { left: auto; right: 2em; top: -0.52em; width: 1.2em; height: auto; }
+}
+.subscription-card__benefit-group li:has(> b) > span { max-width: 357px; }
+.subscription-card__benefit-group li:has(> b):first-child { align-items: center; }
+.subscription-card__benefit-group li:has(> b):first-child > span { line-height: 1; }

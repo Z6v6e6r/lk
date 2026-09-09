@@ -7,9 +7,11 @@ No merge, push, deploy, Tilda mutation or provider/payment mutation in this chan
 
 - User reference: https://www.figma.com/design/Oq4zP6seJcuAP3u4YXL7W9?node-id=1752-2761
 - Native Figma viewer confirms parent desktop 1752:2759 is 1920 x 1080; child 1752:2761 is 1904 x 1064 with padding/gap 32.
-- Layout specifications came from the user-supplied Figma CSS. A native app screenshot of the desktop was inspected, but full-resolution PNG export could not be completed: the native UI alternated between unavailable windows and stale save-dialog state. Figma MCP also refused design/screenshot access for its connected identity.
-- Full pixel comparison is **NOT VERIFIED**. It needs the exported desktop PNG. This is not a claim that the current Tilda publication matches the new local build.
-- Deliberate differences: three Friendship variants instead of two; real product copy and availability instead of placeholder copy/figma counts; future two-hour option; no default action for the unassigned top-right More button. The third variant moves the pill below the price. Narrow containers wrap the middle label to keep all options reachable.
+- Full-resolution user PNG received: 3840 x 2160, transparent background. It was composited against the specified #FAFAFA for analysis; no black page background was introduced.
+- PNG comparison completed against a 1920 x1080 browser at deviceScaleFactor2 with the same copy, two tabs and display prices. Card bounds480x648, content1496, inner width415, CTA415x51 and line wrapping were checked.
+- The comparison is not byte-identical: font rasterization, subpixel metrics and shadows retain small differences. No claim of a zero-difference pixel match or updated Tilda publication is made.
+- Interactive local comparison: http://127.0.0.1:5193/tmp/subscription-figma-check/index.html . Reference-mode fixture: `/docs/subscription-storefront-preview.html?reference=figma`.
+- Deliberate working-page differences: three Friendship variants instead of two; real copy, periods, prices and availability instead of placeholder values. The third tab moves the pill below the price; on narrow containers its label wraps. The future two-hour variant stays disabled.
 
 ## Changes
 
@@ -43,3 +45,13 @@ No merge, push, deploy, Tilda mutation or provider/payment mutation in this chan
 - Published page still serves the previous approved release. The new local assets require normal user verification, integration, push and deployment stages.
 
 MODEL_ROUTE: parent
+
+## PNG follow-up after fd61cb8
+
+- Changed `subscriptions.css`: cap-height price trimming, 132% multiline leading, Figma list gaps and357px discount text width, half-pixel inner outlines without layout rounding, macOS antialiasing, exact desktop mark bounds and51px CTA height.
+- Changed `SubscriptionStorefront.tsx`: default More menu matching the reference icon; existing local cabinet/home links and Escape focus restoration.
+- Changed `presentation.ts`: brand spelling ПадлхАБ.
+- Changed preview HTML: local-only Figma comparison data. Visually active reference CTAs still perform no action because preview `onChoose` returns immediately; public entrypoint rejects preview data outside local hostnames.
+- Current checks: scoped ESLint, TypeScript, 8 storefront tests, prod/dev standalone builds, 18 browser assertions including More keyboard behavior and the previous variant/containment guards. Read-only UI review found no actionable issues.
+- Comparison artifacts are in ignored `tmp/subscription-figma-check/`; PNGs are excluded from the checkpoint. RGB crop metrics and browser geometry are preserved there, not used as a readiness percentage.
+- No full unrelated-bundle rebuild or payment tests were added for these UI-only follow-up changes. Prior limitations above still apply.

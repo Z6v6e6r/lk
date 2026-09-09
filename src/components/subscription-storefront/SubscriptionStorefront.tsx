@@ -10,6 +10,7 @@ import type {
   SubscriptionStorefrontView,
 } from './model.js';
 import './subscriptions.css';
+import { IS_DEV_RELEASE_CHANNEL } from '../../consts/api_config';
 
 type StorefrontCssProperties = CSSProperties & {
   '--subscription-accent'?: string;
@@ -90,7 +91,7 @@ export function SubscriptionStorefront(props: {
               />
             </a>
           )}
-          {props.onMore && <button
+          {props.onMore ? <button
             type="button"
             className="subscription-storefront__nav-button"
             aria-label="Другие действия"
@@ -102,7 +103,20 @@ export function SubscriptionStorefront(props: {
               alt=""
               aria-hidden
             />
-          </button>}
+          </button> : <details className="subscription-storefront__more" onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }
+          }}>
+            <summary className="subscription-storefront__nav-button" aria-label="Другие действия">
+              <img className="subscription-storefront__nav-icon" src={moreIconUrl} alt="" aria-hidden />
+            </summary>
+            <div className="subscription-storefront__more-links">
+              <a href={IS_DEV_RELEASE_CHANNEL ? '/lk_dev' : '/lk_new'}>Личный кабинет</a>
+              <a href="/">Главная</a>
+            </div>
+          </details>}
         </nav>
 
         <div className="subscription-storefront__content">
