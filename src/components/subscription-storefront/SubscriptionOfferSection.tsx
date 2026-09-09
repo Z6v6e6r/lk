@@ -69,14 +69,7 @@ export function SubscriptionOfferSection(props: {
           disabled={scroll.position <= 1} onClick={() => move(-1)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6" /></svg>
         </button>
-        <label className="subscription-rail-controls__track">
-          <span>Листайте подписки</span>
-          <input type="range" min={0} max={Math.ceil(scroll.max)} step={1}
-            aria-label="Прокрутка подписок" aria-controls={railId}
-            aria-valuetext={`${Math.round(scroll.position / scroll.max * 100)}%`}
-            value={Math.ceil(scroll.position)}
-            onChange={event => railRef.current?.scrollTo({ left: Number(event.target.value), behavior: 'instant' })} />
-        </label>
+        <span className="subscription-rail-controls__hint">Листайте подписки</span>
         <button type="button" aria-label="Следующая подписка" aria-controls={railId}
           disabled={scroll.position >= scroll.max - 1} onClick={() => move(1)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>

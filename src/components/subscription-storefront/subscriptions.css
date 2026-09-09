@@ -324,24 +324,13 @@
   stroke-linejoin: round;
 }
 
-.subscription-rail-controls__track {
-  display: grid;
-  gap: 8px;
+.subscription-rail-controls__hint {
   color: var(--subscription-text-secondary);
   font: 12px/1.2 'Subscription Inter Display', sans-serif;
   text-align: center;
 }
 
-.subscription-rail-controls input {
-  width: 100%;
-  height: 24px;
-  margin: 0;
-  accent-color: var(--subscription-accent);
-  cursor: pointer;
-}
-
-.subscription-rail-controls button:focus-visible,
-.subscription-rail-controls input:focus-visible {
+.subscription-rail-controls button:focus-visible {
   outline: 3px solid var(--subscription-accent);
   outline-offset: 3px;
 }
