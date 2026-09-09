@@ -311,10 +311,16 @@ the JSON fixture alone is not proof of supplier provenance or live behavior.
 
 The projection ignores the wider CUP booking window, units, weekly/monthly caps,
 station surcharges, benefits, no-show extensions and activation capabilities.
-It uses `ALL_BOOKINGS` active count and `usedOrReservedFreeMinutesToday` for the
-game's `Europe/Moscow` date; these must come from complete authoritative Viva
-reads and the existing concurrency/retry guards, never browser input. A pure
-repeatable calculation is not proof of booking/payment idempotency.
+It uses `SUBSCRIPTION_BENEFIT_ONLY` active count and
+`usedOrReservedFreeMinutesToday` for the game's `Europe/Moscow` date. Both
+counters are scoped to the selected `clientSubscriptionId` within the verified
+tenant and actor; another instance of the same product never shares either
+counter. They come from complete authoritative Viva reads plus instance-scoped
+reserved operations, never browser input. Existing retries preserve same-operation
+idempotency only. Distinct concurrent operations can still race between usage
+read and reservation insertion; atomic per-instance quota reservation is a
+pre-existing follow-up and is not established by this change. A pure repeatable
+calculation is not proof of booking/payment idempotency.
 
 The existing monetary calculation is reused: service 10,000 RUB is 1,000,000
 minor units, and Viva transaction `discount` is a monetary amount, not a percent.

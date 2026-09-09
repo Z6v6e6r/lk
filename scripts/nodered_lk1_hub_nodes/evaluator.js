@@ -117,8 +117,8 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
   decision.dailyUsed = null;
   decision.dailyLimit = null;
   if (!Number.isSafeInteger(activeCount) || activeCount < 0
-    || usage.activeServiceScope !== "ALL_BOOKINGS") {
-    block("USAGE_SNAPSHOT_INVALID", "Полный список активных записей Viva не подтверждён");
+    || usage.activeServiceScope !== "SUBSCRIPTION_BENEFIT_ONLY") {
+    block("USAGE_SNAPSHOT_INVALID", "Активные записи выбранной подписки не подтверждены");
   } else if (activeCount >= rule.maxActiveBookings) {
     block("ACTIVE_SERVICES_LIMIT_REACHED", "Достигнут лимит активных записей");
   }
