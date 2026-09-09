@@ -15,39 +15,35 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
   const idsKey = JSON.stringify([...new Set(subscriptionIds)].sort());
   const scope = JSON.stringify([actorId, selectionKey, idsKey, enabled, availabilityLoading, refreshVersion]);
   const ids = useMemo<string[]>(() => JSON.parse(idsKey), [idsKey]);
-  const [state, setState] = useState<{scope: string; loading: boolean; quotes: SubscriptionPriceQuote[] | null}>({
-    scope: "", loading: false, quotes: null,
+  const [state, setState] = useState<{scope: string; loading: boolean; quotes: SubscriptionPriceQuote[] | null; receivedAt: number}>({
+    scope: "", loading: false, quotes: null, receivedAt: 0,
   });
   useEffect(() => {
     if (!enabled || availabilityLoading || !target || !actorId || !ids.length || ids.length > 20) return;
     const controller = new AbortController();
     let current = true;
-    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
-    setState({scope, loading: true, quotes: null});
+    setState({scope, loading: true, quotes: null, receivedAt: 0});
     const deadline = setTimeout(() => controller.abort(), 30_000);
     const debounce = setTimeout(() => {
       void apiFetchSubscriptionPricePreview(target, ids, controller.signal).then(result => {
         if (!current) return;
         const quotes = !result.error && Array.isArray(result.data?.quotes) ? result.data.quotes : null;
-        setState({scope, loading: false, quotes});
-        if (quotes?.length && quotes.every(q => q && typeof q === "object" && Number.isFinite(q.expiresAt))) {
-          const remaining = Math.min(...quotes.map(q => q.expiresAt)) - Date.now();
-          if (Number.isFinite(remaining)) expiryTimer = setTimeout(() => {
-            if (current) setState({scope, loading: false, quotes: null});
-          }, Math.max(0, Math.min(remaining, 60_000)));
-        }
+        // Validate freshness at receipt, then retain this display snapshot for the
+        // unchanged selection. CREATE independently checks the chosen subscription;
+        // this preview is never sent as authorization or as the amount to charge.
+        setState({scope, loading: false, quotes, receivedAt: Date.now()});
       }).catch(() => {
-        if (current) setState({scope, loading: false, quotes: null});
+        if (current) setState({scope, loading: false, quotes: null, receivedAt: 0});
       }).finally(() => clearTimeout(deadline));
     }, 300);
-    return () => { current = false; clearTimeout(debounce); clearTimeout(deadline); clearTimeout(expiryTimer); controller.abort(); };
+    return () => { current = false; clearTimeout(debounce); clearTimeout(deadline); controller.abort(); };
     // Canonical keys include every target, account and subscription identity field.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
   const canCheck = enabled && Boolean(target && actorId && ids.length && ids.length <= 20);
   const input = { selectionKey, durationMinutes: target?.durationMinutes ?? 0,
     subscriptionIds: ids, quotes: state.scope === scope ? state.quotes : null,
-    loading: canCheck && (availabilityLoading || state.scope !== scope || state.loading), now: Date.now() };
+    loading: canCheck && (availabilityLoading || state.scope !== scope || state.loading), now: state.receivedAt };
   return { ...subscriptionPricePreview(input), bySubscriptionId: subscriptionPricePreviewsById(input),
     refresh: () => setRefreshVersion(version => version + 1) };
 }

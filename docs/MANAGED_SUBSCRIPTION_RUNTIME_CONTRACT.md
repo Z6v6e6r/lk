@@ -639,12 +639,19 @@ start/duration/share count, returns AVAILABLE/LIMIT_USED/UNAVAILABLE, basePriceM
 amountMinor, freeMinutes/paidMinutes and a 30-second expiry. The date/time card displays
 the lowest confirmed amount across the complete batch as “По подписке от … ₽”. Selection
 of the concrete subscription remains on the next screen. Changing slot/account/IDs
-invalidates the old result immediately. Expiry/errors restore the ordinary price.
+invalidates the old result immediately. Freshness is validated at response receipt: an
+already-expired or malformed response never becomes a displayed price. A valid display
+snapshot is retained for the unchanged selection, without an expiry timer or automatic
+refresh. Its age alone does not replace the displayed price with an error.
 
 On the public CREATE payment-method screen each subscription row displays its own confirmed
 participation price and paid-minute detail from that same complete batch. The overall minimum
-is never assigned to another subscription. Expiry or uncertainty hides row prices; the user can
-refresh all rows with one batched request. Checkout selection and server CREATE rechecks are unchanged.
+is never assigned to another subscription. Failed initial reads or uncertainty hide row
+prices; the user can explicitly retry the batched preview. Selecting a subscription does
+not trigger another preview read. CREATE submits only the selected clientSubscriptionId,
+not the display snapshot or its quoted amount; the existing server checks the chosen
+subscription against current authoritative state before booking/write-off. Its rejection
+is presented as the creation error, without silently choosing a different subscription.
 
 Preview makes no reservation, booking, debit or payment; CREATE always rechecks current
 authoritative state. Cross-midnight tariffs and unsupported regional policy reads remain
