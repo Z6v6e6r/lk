@@ -288,6 +288,64 @@
   display: none;
 }
 
+.subscription-rail-controls {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.subscription-rail-controls button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 10px;
+  place-items: center;
+  border: 1px solid var(--subscription-border);
+  border-radius: 50%;
+  color: var(--subscription-accent);
+  background: #fff;
+  cursor: pointer;
+}
+
+.subscription-rail-controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.subscription-rail-controls svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.subscription-rail-controls__track {
+  display: grid;
+  gap: 8px;
+  color: var(--subscription-text-secondary);
+  font: 12px/1.2 'Subscription Inter Display', sans-serif;
+  text-align: center;
+}
+
+.subscription-rail-controls input {
+  width: 100%;
+  height: 24px;
+  margin: 0;
+  accent-color: var(--subscription-accent);
+  cursor: pointer;
+}
+
+.subscription-rail-controls button:focus-visible,
+.subscription-rail-controls input:focus-visible {
+  outline: 3px solid var(--subscription-accent);
+  outline-offset: 3px;
+}
+
 .subscription-plan-rail__item {
   display: flex;
   width: var(--subscription-card-width);
@@ -738,6 +796,7 @@
 .subscription-storefront .subscription-plan-rail {
   width: 100%; margin-left: 0; margin-right: 0; justify-content: flex-start;
   padding-inline: 0; scroll-padding-inline: 0;
+  scroll-snap-type: none;
 }
 .subscription-storefront .subscription-plan-rail__item {
   flex: 0 0 min(480px, 86cqw);

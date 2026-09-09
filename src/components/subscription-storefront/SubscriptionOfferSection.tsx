@@ -1,5 +1,4 @@
-
-
+import { useEffect, useId, useRef, useState } from 'react';
 import { SubscriptionPlanCard } from './SubscriptionPlanCard.js';
 import type { SubscriptionOfferSectionView, SubscriptionPlanSelection } from './model.js';
 
@@ -10,7 +9,47 @@ export function SubscriptionOfferSection(props: {
   readonly onBillingOptionChange: (planId: string, optionId: string) => void;
   readonly onChoose: (selection: SubscriptionPlanSelection) => void;
 }): React.JSX.Element {
+  const railRef = useRef<HTMLDivElement>(null);
+  const railId = useId();
+  const [scroll, setScroll] = useState({ position: 0, max: 0 });
 
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    let frame = 0;
+    const measure = () => {
+      const max = Math.max(0, rail.scrollWidth - rail.clientWidth);
+      const position = Math.max(0, Math.min(max, rail.scrollLeft));
+      setScroll(previous => previous.position === position && previous.max === max
+        ? previous : { position, max });
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(rail);
+    for (const item of rail.children) observer.observe(item);
+    rail.addEventListener('scroll', schedule, { passive: true });
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      rail.removeEventListener('scroll', schedule);
+    };
+  }, [props.section.plans]);
+
+  const move = (direction: -1 | 1) => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const left = rail.getBoundingClientRect().left;
+    const stops = Array.from(rail.children, item =>
+      Math.min(scroll.max, Math.max(0, item.getBoundingClientRect().left - left + rail.scrollLeft)));
+    const target = direction === 1
+      ? stops.find(stop => stop > rail.scrollLeft + 1) ?? scroll.max
+      : stops.reverse().find(stop => stop < rail.scrollLeft - 1) ?? 0;
+    rail.scrollTo({ left: target, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  };
 
   return (
     <section className="subscription-offer-section" aria-labelledby={`${props.section.id}-title`}>
@@ -25,7 +64,27 @@ export function SubscriptionOfferSection(props: {
         </h2>
       )}
 
+      {scroll.max > 1 && <div className="subscription-rail-controls">
+        <button type="button" aria-label="Предыдущая подписка" aria-controls={railId}
+          disabled={scroll.position <= 1} onClick={() => move(-1)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6" /></svg>
+        </button>
+        <label className="subscription-rail-controls__track">
+          <span>Листайте подписки</span>
+          <input type="range" min={0} max={Math.ceil(scroll.max)} step={1}
+            aria-label="Прокрутка подписок" aria-controls={railId}
+            aria-valuetext={`${Math.round(scroll.position / scroll.max * 100)}%`}
+            value={Math.ceil(scroll.position)}
+            onChange={event => railRef.current?.scrollTo({ left: Number(event.target.value), behavior: 'instant' })} />
+        </label>
+        <button type="button" aria-label="Следующая подписка" aria-controls={railId}
+          disabled={scroll.position >= scroll.max - 1} onClick={() => move(1)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>
+        </button>
+      </div>}
       <div
+        ref={railRef}
+        id={railId}
         className="subscription-plan-rail"
         role="list"
         aria-label={props.section.title ?? 'Варианты абонементов'}
