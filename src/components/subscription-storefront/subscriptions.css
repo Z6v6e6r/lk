@@ -248,7 +248,7 @@
 
 .subscription-plan-rail {
   --subscription-rail-inset: max(16px, var(--subscription-page-pad) + var(--subscription-canvas-pad));
-  --subscription-rail-gap: clamp(12px, 1.25vw, 24px);
+  --subscription-rail-gap: 24px;
   /* Mobile: pad enough to center-snap a card. Tablet/desktop override to inset only. */
   --subscription-rail-snap-pad: max(
     var(--subscription-rail-inset),
@@ -303,14 +303,11 @@
   display: flex;
   width: 100%;
   min-height: 430px;
-  padding-top: clamp(9px, 0.7vw, 13px);
-  padding-right: clamp(2px, 0.25vw, 4px);
-  padding-bottom: clamp(2px, 0.25vw, 4px);
-  padding-left: clamp(2px, 0.25vw, 4px);
+  padding: 13px 4px 0;
   overflow: hidden;
   flex-direction: column;
-  gap: clamp(8px, 0.63vw, 12px);
-  border-radius: clamp(24px, 1.7vw, 32px);
+  gap: 12px;
+  border-radius: 32px;
   background: linear-gradient(180deg, #9c80f2 0%, #fafafa 100%);
 }
 
@@ -321,7 +318,7 @@
 .subscription-card__progress {
   display: flex;
   min-height: 14px;
-  padding: 0 clamp(16px, 1.3vw, 24px);
+  padding: 0 24px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -344,8 +341,9 @@
   width: 100%;
   height: 100%;
   flex-direction: column;
-  gap: clamp(18px, 1.7vw, 32px);
-  padding: calc(clamp(20px, 1.9vw, 36px) + 0.5px) calc(clamp(18px, 1.7vw, 32px) + 0.5px) calc(clamp(28px, 2.72vw, 52px) + 0.5px);
+  gap: 32px;
+  min-height: 648px;
+  padding: 36.5px 32.5px 52.5px;
   border: 0;
   border-radius: 32px;
   background: var(--subscription-surface);
@@ -356,7 +354,7 @@
 .subscription-card__body {
   display: flex;
   flex-direction: column;
-  gap: clamp(20px, 1.7vw, 32px);
+  gap: 32px;
 }
 
 .subscription-card__lightning {
@@ -463,7 +461,7 @@
 .subscription-card__price strong {
   color: var(--subscription-text);
   font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
-  font-size: clamp(28px, 6vw, 36px);
+  font-size: 36px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.01em;
@@ -551,7 +549,7 @@
 
 .subscription-card__benefits {
   display: grid;
-  gap: clamp(20px, 1.7vw, 32px);
+  gap: 32px;
 }
 
 .subscription-card__benefit-group h3 {
@@ -569,7 +567,7 @@
   display: grid;
   padding: 0;
   margin: 0;
-  gap: clamp(10px, 0.8vw, 14px);
+  gap: 16px;
   list-style: none;
 }
 
@@ -580,7 +578,7 @@
   gap: 12px;
   color: var(--subscription-text-secondary);
   font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
-  font-size: clamp(14px, 0.85vw, 16px);
+  font-size: 16px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.01em;
@@ -671,7 +669,7 @@
   }
 }
 
-@media (max-width: 499px) {
+@container subscription-card (max-width: 450px) {
   .subscription-card__price-row {
     flex-wrap: wrap;
   }
@@ -736,12 +734,15 @@
 }
 
 /* LK1/Tilda host containment; manual scrolling keeps keyboard focus stable. */
-.subscription-storefront { container-type: inline-size; }
+.subscription-storefront { container-type: inline-size; container-name: subscription-storefront; }
 .subscription-storefront .subscription-plan-rail {
   width: 100%; margin-left: 0; margin-right: 0; justify-content: flex-start;
   padding-inline: 0; scroll-padding-inline: 0;
 }
-.subscription-storefront .subscription-plan-rail__item { flex: 0 0 min(480px, 86cqw); }
+.subscription-storefront .subscription-plan-rail__item {
+  flex: 0 0 min(480px, 86cqw);
+  container-type: inline-size; container-name: subscription-card;
+}
 .subscription-storefront .subscription-plan-rail::before,
 .subscription-storefront .subscription-plan-rail::after { display: none; }
 
@@ -754,13 +755,8 @@
 .subscription-card__price-row--variants .subscription-card__billing-options { max-width: 100%; }
 .subscription-card__billing-options button { white-space: nowrap; }
 .subscription-card__availability { color: #66666b; font: 14px/1.4 'Subscription Inter Display', sans-serif; }
-@media (min-width: 1280px) {
-  .subscription-card__panel { min-height: 648px; }
-  .subscription-card { padding: 13px 4px 0; gap: 12px; }
-  .subscription-card--no-progress { padding: 0; }
-  .subscription-card__progress { font-weight: 800; }
-}
-@container (max-width: 450px) {
+.subscription-card__progress { font-weight: 800; }
+@container subscription-card (max-width: 450px) {
   .subscription-card__price-row--variants .subscription-card__billing-options {
     width: 100%; border-radius: 20px; align-items: stretch;
   }
@@ -770,27 +766,31 @@
 }
 
 .subscription-card:not(.subscription-card--no-progress) > .subscription-card__panel { border-radius: 24px; }
-@media (min-width: 1280px) {
-  .subscription-storefront .subscription-plan-rail__item:has(.subscription-card:not(.subscription-card--no-progress)) {
-    flex-basis: min(488px, 86cqw);
-  }
+.subscription-storefront .subscription-plan-rail__item:has(.subscription-card:not(.subscription-card--no-progress)) {
+  flex-basis: min(488px, 86cqw);
 }
 
 .subscription-card__benefit-group li:not(:has(> img, > b)) { grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 1280px) { .subscription-storefront__hero { min-height: 97px; } }
 
 /* Embedded Tilda columns follow their own width even on a wide desktop. */
-@container (max-width: 719px) {
+@container subscription-storefront (max-width: 719px) {
   .subscription-storefront__canvas { padding: 16px; gap: 24px; }
   .subscription-storefront__hero { min-height: 0; font-size: 28px; }
   .subscription-storefront__hero h1 { font-size: 28px; }
   .subscription-storefront__hero p { font-size: 14px; line-height: 1.2; }
   .subscription-storefront__mark { right: 2em; top: -0.52em; width: 1.2em; }
   .subscription-plan-rail__item { align-items: flex-start; }
+}
+
+/* Keep Figma spacing on full-size cards, even in a narrower host window. */
+@container subscription-card (max-width: 400px) {
   .subscription-card__panel { min-height: 0; padding: 20.5px 18.5px 28.5px; gap: 20px; }
   .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 20px; }
   .subscription-card__price strong { font-size: 28px; }
   .subscription-card__benefit-group li { font-size: 14px; }
+  .subscription-card__benefit-group ul { gap: 10px; }
+  .subscription-card__progress { padding-inline: 16px; }
 }
 
 /* Figma uses cap-height trimming in prices and 132% leading in wrapped discount copy. */
@@ -818,12 +818,11 @@
 @media (min-width: 1280px) {
   .subscription-storefront__hero { width: 626px; max-width: 100%; }
   .subscription-storefront__mark { left: calc(50% + 166.72px); right: auto; top: -40px; width: 82px; height: 80px; }
-  .subscription-card__benefit-group ul { gap: 16px; }
 }
 .subscription-card__benefit-group li:has(> b) { gap: 8px; }
 .subscription-card__price-row { align-items: center; }
 .subscription-card__price-row--variants { align-items: flex-start; }
-@container (max-width: 719px) {
+@container subscription-storefront (max-width: 719px) {
   .subscription-storefront__mark { left: auto; right: 2em; top: -0.52em; width: 1.2em; height: auto; }
 }
 .subscription-card__benefit-group li:has(> b) > span { max-width: 357px; }

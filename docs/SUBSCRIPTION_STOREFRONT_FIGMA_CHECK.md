@@ -55,3 +55,13 @@ MODEL_ROUTE: parent
 - Current checks: scoped ESLint, TypeScript, 8 storefront tests, prod/dev standalone builds, 18 browser assertions including More keyboard behavior and the previous variant/containment guards. Read-only UI review found no actionable issues.
 - Comparison artifacts are in ignored `tmp/subscription-figma-check/`; PNGs are excluded from the checkpoint. RGB crop metrics and browser geometry are preserved there, not used as a readiness percentage.
 - No full unrelated-bundle rebuild or payment tests were added for these UI-only follow-up changes. Prior limitations above still apply.
+
+## Spacing follow-up after fd613dc
+
+- Reproduced in the user's 793px in-app window: a stale IIFE plus viewport-based card padding reduced full-width cards to 18–20px insets. Refreshed the actual user tab after rebuilding.
+- `subscriptions.css`: full-size panels now retain 480x648 geometry, 36.5/32.5/52.5px padding (including the half-pixel outline), 32px section gaps and 16px list gaps independently of viewport width. Progress cards reserve 488px including their frame; rail gap is24px.
+- Named storefront and card containers separate outer responsive layout from internal card spacing. Compact cards below400px retain mobile padding/type; price/tab rows wrap below450px to preserve the right inset.
+- Focused browser check passed at1920,793,520,375px and a375px embed in a1920px viewport: no page or price-row overflow; full-size geometry at1920 and793 is identical. Actual in-app tab readback confirms all three panels480x648 with32px gaps.
+- Rebuilt production and DEV storefront bundles; git diff check passed. Existing18 browser assertions passed against the new build (including three variants, fonts, keyboard focus and disabled purchase guards).
+- Evidence: `/private/tmp/subscription-spacing-{check.js,result.txt}` and `/private/tmp/subscription-spacing-*.png`. Business logic and unrelated bundles were unchanged; broader unit/type/lint gates were not repeated for this CSS-only correction.
+- Local checkpoint only; no merge, push, deploy, Tilda publication or provider/payment mutation.
