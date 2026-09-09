@@ -52,6 +52,7 @@ const inventoryIdPattern = `^(?:${[
 const queryFilter = {
   inventoryId: { $regex: inventoryIdPattern },
   $or: [
+    { schemaVersion: 3, "history.version": 1, documentType: { $in: ["HUB_ATOMIC_INVENTORY_LEDGER", "PITER_ATOMIC_INVENTORY_LEDGER"] } },
     {
       // Provider state, not the local checkout deadline, is authoritative for
       // releasing bounded inventory. Keep polling expired/ambiguous transactions

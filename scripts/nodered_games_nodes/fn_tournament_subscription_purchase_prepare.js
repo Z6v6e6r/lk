@@ -668,6 +668,11 @@ if (requestedCounterKey) {
   activeCounter = mappedByCampaign;
 }
 
+if (["ra", "friendship"].includes(activeCounter.counterKey)
+  && global.get(`summer_subscription_${activeCounter.counterKey}_admission_closed`) === true) {
+  return fail(503, "Продажа подписки временно закрыта", { code: "SUBSCRIPTION_ADMISSION_CLOSED", counterKey: activeCounter.counterKey });
+}
+
 if (MANAGED_SALE_BLOCKED_COUNTER_KEYS.has(activeCounter.counterKey)) {
   return fail(503, "Продажа годовой подписки ожидает authoritative-привязку оплаты к экземпляру", {
     code: "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",

@@ -1,3 +1,448 @@
+// BEGIN generated annualSubscriptionHistoryRouter
+function runAnnualHistory({ msg, ctx, annualHistory, ledgerFind, ledgerUpdate, saleUpdate, fail, response }) {
+  if (!String(ctx.step || '').startsWith('annual_history_')) return undefined;
+  const rejected = code => fail(503, 'История годовой подписки требует сверки', code);
+  const oneLedger = () => {
+    const list = Array.isArray(msg.payload) ? msg.payload : [msg.payload];
+    const matches = list.filter(x => x?._id === `inventory:${ctx.inventoryId}`);
+    if (matches.length !== 1 || !annualHistory.validate(matches[0])
+      || matches[0].counterKey !== ctx.counterKey) throw Error('LEDGER_INVALID');
+    return matches[0];
+  };
+  const findRow = (projection, step) => {
+    ctx.step = step; ctx.historyProjection = projection;
+    msg.payload = { _id: projection.rowId };
+    return [msg, null, null, null, null];
+  };
+  const exactFilter = doc => ({ _id: doc._id, $expr: { $eq: ['$$ROOT', { $literal: doc }] } });
+  const providerRead = () => {
+    ctx.step = 'annual_history_instances';
+    msg.method = 'GET';
+    msg.url = `https://api.vivacrm.ru/api/v1/clients/${encodeURIComponent(ctx.historyWatch.fact.clientId)}/subscriptions?includeFinished=true&size=200&page=${ctx.historyInstancePage}`;
+    msg.headers = { Authorization: `Bearer ${ctx.token}`, 'Content-Type': 'application/json' };
+    msg.httpRequestTimeout = ctx.httpRequestTimeoutMs; msg.payload = '';
+    return [null, null, null, null, msg];
+  };
+  const transactionRead = () => {
+    ctx.step = 'annual_history_transaction_readback';
+    msg.method = 'GET'; msg.url = `https://api.vivacrm.ru/api/v1/transactions/${encodeURIComponent(ctx.transactionId)}`;
+    msg.headers = { Authorization: `Bearer ${ctx.token}`, 'Content-Type': 'application/json' };
+    msg.httpRequestTimeout = ctx.httpRequestTimeoutMs; msg.payload = '';
+    return [null, null, null, null, msg];
+  };
+  const startProjection = ledger => {
+    const settlement = annualHistory.pendingProjection(ledger);
+    if (!settlement) return ctx.reconcile === true ? [null, null, null, null, null]
+      : response(200, { ok: true, status: annualHistory.current(ledger).get(ctx.transactionId)?.state || 'PAYMENT_PENDING' });
+    ctx.historySettlementId = settlement.id;
+    ctx.historyWatch = ledger.history.entries.find(e => e.transactionId === settlement.transactionId);
+    return findRow(settlement.projection, 'annual_history_projection_find');
+  };
+  const rowMatches = row => {
+    const original = ctx.historyWatch?.localPreimage;
+    return original && row && ['_id', 'inventoryId', 'counterKey', 'paymentRef', 'transactionId',
+      'productId', 'amountMinor', 'providerProductCostMinor', 'discountMinor', 'clientId', 'clientPhone', 'expiresAt']
+      .every(k => annualHistory.stable(row[k]) === annualHistory.stable(original[k]))
+      && !row.requestFingerprint;
+  };
+  const projectionMatches = row => rowMatches(row) && Object.entries(ctx.historyProjection.fields)
+    .every(([k,v]) => annualHistory.stable(row[k]) === annualHistory.stable(v));
+  try {
+    if (ctx.step === 'annual_history_begin') return ledgerFind(ctx, 'annual_history_attempt');
+    if (ctx.step === 'annual_history_attempt') {
+      const ledger = oneLedger();
+      if (annualHistory.pendingProjection(ledger)) return startProjection(ledger);
+      const watch = ledger.history.entries.find(e => e.transactionId === ctx.transactionId);
+      if (!watch || watch.localRowId !== (ctx.annualHistoryRowId || null)
+        || watch.paymentRef !== (ctx.paymentRef || null) || watch.fact.productId !== ctx.productId || !ctx.token) return rejected('ANNUAL_HISTORY_WATCH_MISMATCH');
+      const history = JSON.parse(JSON.stringify(ledger.history));
+      ctx.historyAttemptAt = new Date().toISOString();
+      history.entries.find(e => e.transactionId === ctx.transactionId).lastAttemptAt = ctx.historyAttemptAt;
+      ctx.step = 'annual_history_attempt_ack';
+      return ledgerUpdate(ctx, exactFilter(ledger), { $set: { history }, $inc: { revision: 1 } }, { upsert: false });
+    }
+    if (ctx.step === 'annual_history_attempt_ack') return ledgerFind(ctx, 'annual_history_attempt_readback');
+    if (ctx.step === 'annual_history_attempt_readback') {
+      const ledger = oneLedger(), watch = ledger.history.entries.find(e => e.transactionId === ctx.transactionId);
+      if (watch?.lastAttemptAt !== ctx.historyAttemptAt) return rejected('ANNUAL_HISTORY_ATTEMPT_NOT_PROVEN');
+      return transactionRead();
+    }
+    if (ctx.step === 'annual_history_transaction_readback') {
+      if (!(msg.statusCode >= 200 && msg.statusCode < 300)) return rejected('ANNUAL_HISTORY_TRANSACTION_UNAVAILABLE');
+      ctx.annualHistoryTransaction = msg.payload; ctx.historyObservedAt = new Date().toISOString();
+      return ledgerFind(ctx, 'annual_history_watch');
+    }
+    if (['annual_history_transaction', 'annual_history_resume'].includes(ctx.step)) {
+      ctx.historyObservedAt = new Date().toISOString();
+      return ledgerFind(ctx, ctx.step === 'annual_history_resume' ? 'annual_history_recover' : 'annual_history_watch');
+    }
+    if (ctx.step === 'annual_history_recover') return startProjection(oneLedger());
+    if (ctx.step === 'annual_history_watch') {
+      const ledger = oneLedger();
+      if (annualHistory.pendingProjection(ledger)) return startProjection(ledger);
+      const watch = ledger.history.entries.find(e => e.transactionId === ctx.transactionId);
+      if (!watch || watch.localRowId !== (ctx.annualHistoryRowId || null)
+        || watch.paymentRef !== (ctx.paymentRef || null)
+        || watch.fact.productId !== ctx.productId || !ctx.token) return rejected('ANNUAL_HISTORY_WATCH_MISMATCH');
+      ctx.historyWatch = watch;
+      if (ctx.annualHistoryTransaction?.status === 'UNPAID') {
+        ctx.historySubscriptions = [];
+        return ledgerFind(ctx, 'annual_history_settle');
+      }
+      ctx.historySubscriptions = []; ctx.historyInstancePage = 0;
+      return providerRead();
+    }
+    if (ctx.step === 'annual_history_instances') {
+      const p = msg.payload;
+      if (!(msg.statusCode >= 200 && msg.statusCode < 300) || !Array.isArray(p?.content)
+        || p.number !== ctx.historyInstancePage || !Number.isSafeInteger(p.totalPages) || p.totalPages < 0
+        || p.totalPages > 50 || !Number.isSafeInteger(p.totalElements) || p.totalElements < 0
+        || p.numberOfElements !== p.content.length || p.last !== (p.number >= p.totalPages - 1)
+        || (ctx.historyInstancePage > 0 && (p.totalPages !== ctx.historyInstancePages || p.totalElements !== ctx.historyInstanceTotal))) {
+        return rejected('ANNUAL_HISTORY_INSTANCE_SNAPSHOT_INCOMPLETE');
+      }
+      ctx.historyInstancePages = p.totalPages; ctx.historyInstanceTotal = p.totalElements;
+      ctx.historySubscriptions.push(...p.content);
+      if (!p.last) { ctx.historyInstancePage++; return providerRead(); }
+      if (ctx.historySubscriptions.length !== p.totalElements) return rejected('ANNUAL_HISTORY_INSTANCE_COUNT_MISMATCH');
+      return ledgerFind(ctx, 'annual_history_settle');
+    }
+    if (ctx.step === 'annual_history_settle') {
+      const ledger = oneLedger();
+      if (annualHistory.pendingProjection(ledger)) return startProjection(ledger);
+      const watch = ledger.history.entries.find(e => e.transactionId === ctx.transactionId);
+      if (!watch || annualHistory.stable(watch) !== annualHistory.stable(ctx.historyWatch)
+        || Date.now() - Date.parse(ctx.historyObservedAt) > 300_000) return rejected('ANNUAL_HISTORY_OBSERVATION_DRIFT');
+      const fact = annualHistory.observe(ctx.annualHistoryTransaction, { productId: ctx.productId,
+        subscriptions: ctx.historySubscriptions, clientId: watch.fact.clientId, localRow: watch.localPreimage });
+      const next = annualHistory.settle(ledger, fact, ctx.historyObservedAt);
+      ctx.historyExpected = next; ctx.step = 'annual_history_settlement_ack';
+      return ledgerUpdate(ctx, exactFilter(ledger), { $set: Object.fromEntries(Object.entries(next).filter(([k]) => k !== '_id')) }, { upsert: false });
+    }
+    if (ctx.step === 'annual_history_settlement_ack') return ledgerFind(ctx, 'annual_history_settlement_readback');
+    if (ctx.step === 'annual_history_settlement_readback') {
+      const ledger = oneLedger();
+      const expected = ctx.historyExpected;
+      const wanted = expected.history.entries.find(e => e.transactionId === ctx.transactionId);
+      const actual = ledger.history.entries.find(e => e.transactionId === ctx.transactionId);
+      if (!actual || actual.lastCheckedAt < wanted.lastCheckedAt
+        || !expected.history.settlements.every(s => ledger.history.settlements.some(x => x.id === s.id
+          && annualHistory.stable(x.fact) === annualHistory.stable(s.fact)))) return rejected('ANNUAL_HISTORY_SETTLEMENT_NOT_PROVEN');
+      return startProjection(ledger);
+    }
+    if (ctx.step === 'annual_history_projection_find') {
+      const list = Array.isArray(msg.payload) ? msg.payload : [msg.payload];
+      if (list.length !== 1 || !rowMatches(list[0])) return rejected('ANNUAL_HISTORY_LOCAL_PREIMAGE_DRIFT');
+      const row = list[0];
+      if (projectionMatches(row)) return ledgerFind(ctx, 'annual_history_projection_complete');
+      if (row.status === 'REFUNDED' && ctx.historyProjection.fields.status !== 'REFUNDED') return rejected('ANNUAL_HISTORY_REFUND_CONFLICT');
+      ctx.step = 'annual_history_projection_ack';
+      return saleUpdate(ctx, exactFilter(row), { $set: ctx.historyProjection.fields }, { upsert: false });
+    }
+    if (ctx.step === 'annual_history_projection_ack') return findRow(ctx.historyProjection, 'annual_history_projection_readback');
+    if (ctx.step === 'annual_history_projection_readback') {
+      const list = Array.isArray(msg.payload) ? msg.payload : [msg.payload];
+      if (list.length !== 1 || !projectionMatches(list[0])) return rejected('ANNUAL_HISTORY_PROJECTION_NOT_PROVEN');
+      return ledgerFind(ctx, 'annual_history_projection_complete');
+    }
+    if (ctx.step === 'annual_history_projection_complete') {
+      const ledger = oneLedger();
+      const settlement = ledger.history.settlements.find(s => s.id === ctx.historySettlementId);
+      if (!settlement || annualHistory.stable(settlement.projection?.fields) !== annualHistory.stable(ctx.historyProjection.fields)) return rejected('ANNUAL_HISTORY_PROJECTION_DRIFT');
+      if (settlement.projection.state === 'DONE') return startProjection(ledger);
+      const history = JSON.parse(JSON.stringify(ledger.history));
+      history.settlements.find(s => s.id === settlement.id).projection.state = 'DONE';
+      ctx.step = 'annual_history_projection_done_ack';
+      return ledgerUpdate(ctx, exactFilter(ledger), { $set: { history, updatedAt: new Date().toISOString() }, $inc: { revision: 1 } }, { upsert: false });
+    }
+    if (ctx.step === 'annual_history_projection_done_ack') return ledgerFind(ctx, 'annual_history_recover');
+    return rejected('ANNUAL_HISTORY_STEP_UNKNOWN');
+  } catch { return rejected('ANNUAL_HISTORY_PROOF_INVALID'); }
+}
+// END generated annualSubscriptionHistoryRouter
+// BEGIN generated annualSubscriptionHistory
+function parseVivaTimestamp(value, { requireZone = false } = {}) {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})?$/.exec(value);
+  if (!match || (requireZone && !match[8])) return null;
+  const [, year, month, day, hour, minute, second, fraction = "", zone] = match;
+  const date = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 19) !== value.slice(0, 19)) return null;
+  if (zone && zone !== "Z" && (+zone.slice(1, 3) > 23 || +zone.slice(4, 6) > 59)) return null;
+  const offsetMinutes = !zone || zone === "Z" ? 0
+    : (zone[0] === "+" ? 1 : -1) * (+zone.slice(1, 3) * 60 + +zone.slice(4, 6));
+  return {
+    precision: fraction.length,
+    // Only a zoned timestamp denotes an instant.
+    nanoseconds: zone ? BigInt(date.getTime() - offsetMinutes * 60_000) * 1_000_000n
+      + BigInt(fraction.padEnd(9, "0")) : null,
+  };
+}
+function matchesVivaPaymentDeadline(localValue, providerValue) {
+  const local = parseVivaTimestamp(localValue, { requireZone: true });
+  const provider = parseVivaTimestamp(providerValue, { requireZone: true });
+  if (!local || !provider) return false;
+  if (local.nanoseconds === provider.nanoseconds) return true;
+  // The saved creation response can have nanoseconds; the transaction GET
+  // serializes microseconds. Permit only that loss, not general millisecond drift.
+  const difference = local.nanoseconds - provider.nanoseconds;
+  return local.precision === 9 && provider.precision === 6
+    && difference >= 0n && difference < 1_000n;
+}
+function assertVivaRefundProof(proof, { refundSumMinor, transactionRefundedAt } = {}) {
+  if (proof?.kind !== "VIVA_REFUND_ENTITY_LINK_V1"
+    || !Number.isSafeInteger(proof.refundSumMinor) || proof.refundSumMinor <= 0
+    || !parseVivaTimestamp(proof.transactionRefundedAt, { requireZone: true })
+    || !parseVivaTimestamp(proof.subscriptionRefundedAt)
+    || (refundSumMinor !== undefined && proof.refundSumMinor !== refundSumMinor)
+    || (transactionRefundedAt !== undefined && proof.transactionRefundedAt !== transactionRefundedAt)) {
+    throw Error("Viva refund proof mismatch");
+  }
+  return proof;
+}
+function buildVivaRefundProof(transaction, subscription) {
+  const proof = {
+    kind: "VIVA_REFUND_ENTITY_LINK_V1",
+    refundSumMinor: transaction?.refundSum,
+    transactionRefundedAt: transaction?.refundedAt,
+    subscriptionRefundedAt: subscription?.refundedAt,
+  };
+  if (subscription?.refundSum !== proof.refundSumMinor) throw Error("refund subscription amount mismatch");
+  assertVivaRefundProof(proof);
+  return proof;
+}
+function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymentDeadline, buildVivaRefundProof }) {
+  const products = {
+    network_friendship: { productId: 'db7a5250-7369-4f43-8ac5-9111be24bc74', inventoryId: 'network_friendship_12m_2026_v1', totalLimit: 100 },
+    piter_friendship: { productId: '8bf334ba-3050-4017-b40a-7eef2db1eb16', inventoryId: 'piter_friendship_12m_2026_v1', totalLimit: 400 },
+  };
+  const fail = message => { throw Error(`ANNUAL_HISTORY_${message}`); };
+  const text = x => typeof x === 'string' && x.trim() === x && x ? x : null;
+  const integer = x => Number.isSafeInteger(x) && x >= 0;
+  const stable = x => JSON.stringify((function sort(v) {
+    return Array.isArray(v) ? v.map(sort) : v && typeof v === 'object'
+      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sort(v[k])])) : v;
+  })(x));
+  const exactId = values => {
+    const ids = values.filter(v => v !== undefined && v !== null).map(text);
+    if (!ids.length || ids.some(v => !v || v !== ids[0])) fail('IDENTITY_CONFLICT');
+    return ids[0];
+  };
+  const phone = x => {
+    const n = String(x || '').replace(/\D/g, '');
+    return n.length === 10 ? `7${n}` : n.length === 11 ? (n[0] === '8' ? `7${n.slice(1)}` : n) : null;
+  };
+  const date = x => {
+    const parsed = parseVivaTimestamp(x, { requireZone: true });
+    if (!parsed) fail('TIMESTAMP_INVALID');
+    return new Date(Number(parsed.nanoseconds / 1_000_000n) + 3 * 3600_000).toISOString().slice(0, 10);
+  };
+  const active = r => ['CLAIMED', 'DISPATCHING', 'PAYMENT_PENDING', 'PROVIDER_UNKNOWN'].includes(r.state);
+  const counted = f => f.state === 'PAID' && f.amountMinor > 0;
+
+  function observe(transaction, { productId, subscriptions = [], clientId: snapshotClientId, localRow = null, requireInstance = true, allowFailed = false } = {}) {
+    const t = transaction;
+    const transactionId = exactId([t?.id, t?.uuid, t?.transactionId]);
+    const clientId = exactId([t.clientId, t.client?.id, t.client?.uuid, t.client?.clientId]);
+    const lines = t.products;
+    if (!Array.isArray(lines) || lines.length !== 1) fail('PRODUCT_LINES_INVALID');
+    const line = lines[0];
+    if (exactId([line.id, line.uuid, line.productId, line.product?.id, t.productId]) !== productId
+      || line.count !== 1 || !integer(line.cost) || !integer(line.discount)
+      || line.discount > line.cost || t.sum !== line.cost || t.discount !== line.discount
+      || t.toPay !== line.cost - line.discount) fail('FINANCIAL_FACTS_INVALID');
+    const amountMinor = line.cost - line.discount;
+    const providerStatus = exactId([t.status, t.state, t.paymentStatus]);
+    const state = ['REFUND', 'REFUNDED'].includes(providerStatus) ? 'REFUNDED' : providerStatus;
+    const failed = allowFailed && ['FAILED', 'CANCELLED', 'CANCELED', 'REJECTED', 'EXPIRED'].includes(state);
+    if (!['PAID', 'UNPAID', 'REFUNDED'].includes(state) && !failed) fail('PROVIDER_STATE_UNSUPPORTED');
+    const noRefund = (t.refundSum == null || t.refundSum === 0) && !t.refundedAt
+      && (line.refunded == null || line.refunded === false);
+    if (failed && (t.paymentDate || !noRefund)) fail('FAILED_FACTS_INVALID');
+    if (state === 'UNPAID' && (t.paymentDate || !noRefund
+      || !parseVivaTimestamp(t.paymentDueDate, { requireZone: true }))) fail('UNPAID_FACTS_INVALID');
+    if (state === 'PAID' && (!noRefund
+      || !parseVivaTimestamp(t.paymentDate, { requireZone: true }))) fail('PAID_FACTS_INVALID');
+    const phones = [t.clientPhone, t.client?.phone, t.client?.mobile, t.client?.phoneNumber].filter(v => v != null).map(phone);
+    if (phones.some(v => !v || v !== phones[0])) fail('CLIENT_PHONE_CONFLICT');
+    const clientPhone = phones[0] || null;
+    if (localRow) {
+      if (!text(localRow.paymentRef) || localRow.transactionId !== transactionId || localRow.productId !== productId
+        || localRow.requestFingerprint || localRow.amountMinor !== amountMinor
+        || localRow.providerProductCostMinor !== line.cost || localRow.discountMinor !== line.discount
+        || (!text(localRow.clientId) && !phone(localRow.clientPhone))
+        || (localRow.clientId && localRow.clientId !== clientId)
+        || (localRow.clientPhone && phone(localRow.clientPhone) !== clientPhone)
+        || (state === 'UNPAID' && !matchesVivaPaymentDeadline(localRow.expiresAt, t.paymentDueDate))) fail('LOCAL_FACTS_MISMATCH');
+    }
+    const linked = subscriptions.filter(s => [s.transactionId, s.transactionUuid, s.transaction?.id, s.transaction?.uuid].includes(transactionId));
+    let subscriptionId = null, refundProof = null;
+    if (linked.length || (state !== 'UNPAID' && (requireInstance || state === 'REFUNDED'))) {
+      if (linked.length !== 1 || snapshotClientId !== clientId) fail('INSTANCE_LINK_INVALID');
+      const s = linked[0];
+      if (exactId([s.transactionId, s.transactionUuid, s.transaction?.id, s.transaction?.uuid]) !== transactionId
+        || exactId([s.productId, s.subscriptionProductId, s.product?.id, s.product?.uuid]) !== productId
+        || [s.clientId, s.client?.id, s.client?.uuid, s.client?.clientId].filter(v => v != null).some(v => v !== clientId)) fail('INSTANCE_IDENTITY_INVALID');
+      subscriptionId = exactId([s.subscriptionId, s.clientSubscriptionId, s.id, s.uuid]);
+      const ss = exactId([s.status, s.subscriptionStatus, s.state]);
+      if (state === 'PAID' && !['NEW', 'ACTIVE', 'FINISHED', 'EXPIRED'].includes(ss)) fail('INSTANCE_STATUS_INVALID');
+      if (state === 'REFUNDED') {
+        if (ss !== 'REFUNDED' || !integer(t.refundSum) || t.refundSum > amountMinor || s.refundSum !== t.refundSum) fail('REFUND_FACTS_INVALID');
+        if (amountMinor > 0) refundProof = buildVivaRefundProof(t, s);
+        else {
+          if (t.refundSum !== 0 || !parseVivaTimestamp(t.refundedAt, { requireZone: true })
+            || !parseVivaTimestamp(s.refundedAt)) fail('FREE_RETURN_INVALID');
+          refundProof = { kind: 'VIVA_FREE_ISSUE_RETURN_V1', refundSumMinor: 0,
+            transactionRefundedAt: t.refundedAt, subscriptionRefundedAt: s.refundedAt };
+        }
+      }
+    }
+    return { transactionId, productId, clientId, clientPhone, amountMinor, costMinor: line.cost,
+      discountMinor: line.discount, state, paidAt: t.paymentDate || null,
+      paidDate: t.paymentDate ? date(t.paymentDate) : null, paymentDueDate: t.paymentDueDate || null,
+      subscriptionId, refundProof };
+  }
+
+  const factIdentity = f => stable([f.transactionId, f.productId, f.clientId, f.clientPhone,
+    f.amountMinor, f.costMinor, f.discountMinor, f.paymentDueDate]);
+  const validFact = f => {
+    if (!f || !text(f.transactionId) || !text(f.productId) || !text(f.clientId)
+      || (f.clientPhone !== null && phone(f.clientPhone) !== f.clientPhone)
+      || ![f.amountMinor, f.costMinor, f.discountMinor].every(integer)
+      || f.amountMinor + f.discountMinor !== f.costMinor
+      || !['PAID', 'UNPAID', 'REFUNDED'].includes(f.state)
+      || (f.paymentDueDate !== null && !parseVivaTimestamp(f.paymentDueDate, { requireZone: true }))
+      || (f.paidAt !== null && (!parseVivaTimestamp(f.paidAt, { requireZone: true }) || date(f.paidAt) !== f.paidDate))) return false;
+    if (f.state === 'UNPAID') return f.paidAt === null && f.paidDate === null && f.refundProof === null && !!f.paymentDueDate;
+    if (!text(f.subscriptionId)) return false;
+    if (f.state === 'PAID') return !!f.paidAt && f.refundProof === null;
+    const p = f.refundProof;
+    return p && p.kind === (f.amountMinor > 0 ? 'VIVA_REFUND_ENTITY_LINK_V1' : 'VIVA_FREE_ISSUE_RETURN_V1')
+      && integer(p.refundSumMinor) && p.refundSumMinor <= f.amountMinor
+      && (f.amountMinor > 0 ? p.refundSumMinor > 0 : p.refundSumMinor === 0)
+      && !!parseVivaTimestamp(p.transactionRefundedAt, { requireZone: true })
+      && !!parseVivaTimestamp(p.subscriptionRefundedAt);
+  };
+  const projectionFor = (entry, fact, observedAt) => entry.localRowId ? {
+    rowId: entry.localRowId, paymentRef: entry.paymentRef, state: 'PENDING', fields: {
+      status: fact.state, updatedAt: observedAt, lastCheckedAt: observedAt,
+      annualHistorySettlementId: `${fact.transactionId}:${fact.state}`,
+      ...(fact.state === 'PAID' ? { paidAt: fact.paidAt } : {
+        refundedAt: fact.refundProof.transactionRefundedAt, refundSumMinor: fact.refundProof.refundSumMinor,
+        refundedSubscriptionId: fact.subscriptionId, annualHistoryRefundProof: fact.refundProof,
+      }),
+    },
+  } : null;
+  function current(ledger) {
+    const map = new Map(ledger.history.entries.map(e => [e.transactionId, e.fact]));
+    for (const s of ledger.history.settlements) map.set(s.transactionId, s.fact);
+    return map;
+  }
+  function counts(ledger, dailyDate = ledger.dailyDate) {
+    const facts = [...current(ledger).values()];
+    const paidCount = facts.filter(counted).length + ledger.reservations.filter(r => r.state === 'PAID').length;
+    const reservedCount = ledger.reservations.filter(active).length;
+    return { paidCount, reservedCount, takenCount: paidCount + reservedCount,
+      dailyBaselinePaidCount: facts.filter(f => counted(f) && f.paidDate === dailyDate).length,
+      dailyPaidCount: facts.filter(f => counted(f) && f.paidDate === dailyDate).length
+        + ledger.reservations.filter(r => r.state === 'PAID' && r.dailyDate === dailyDate).length,
+      dailyReservedCount: ledger.reservations.filter(r => active(r) && r.dailyDate === dailyDate).length };
+  }
+  const admissionReady = ledger => validate(ledger) && ledger.ready === true
+    && !pendingProjection(ledger)
+    && ledger.history.entries.every(e => !e.lastAttemptAt || e.lastCheckedAt >= e.lastAttemptAt);
+  function validate(ledger) {
+    try {
+      const spec = products[ledger?.counterKey];
+      if (!spec || ledger._id !== `inventory:${spec.inventoryId}` || ledger.inventoryId !== spec.inventoryId
+        || ledger.schemaVersion !== 3 || typeof ledger.ready !== 'boolean' || !integer(ledger.revision)
+        || !/^[a-f0-9]{64}$/.test(ledger.baselineDigest || '')
+        || !parseVivaTimestamp(ledger.baselineCapturedAt, { requireZone: true })
+        || ledger.history?.version !== 1 || ledger.history.accountingScope !== 'ALL_PROVIDER_PAID'
+        || !Array.isArray(ledger.history.entries) || !Array.isArray(ledger.history.settlements)
+        || !Array.isArray(ledger.reservations) || !Array.isArray(ledger.legacyPaymentRefs)) return false;
+      const entries = ledger.history.entries, ids = new Set(), refs = new Set(), localIds = new Set();
+      for (const e of entries) {
+        if (!text(e.transactionId) || ids.has(e.transactionId) || !text(e.ref) || refs.has(e.ref)
+          || !validFact(e.fact) || e.fact.transactionId !== e.transactionId || e.fact.productId !== spec.productId
+          || !['LOCAL', 'PROVIDER_ONLY'].includes(e.source)
+          || (e.source === 'LOCAL' ? (!text(e.localRowId) || localIds.has(e.localRowId) || !text(e.paymentRef))
+            : e.localRowId !== null || e.paymentRef !== null)) return false;
+        if (e.source === 'LOCAL') {
+          const r = e.localPreimage;
+          if (!r || r._id !== e.localRowId || r.paymentRef !== e.paymentRef || e.ref !== e.paymentRef
+            || r.transactionId !== e.transactionId || r.productId !== spec.productId
+            || r.counterKey !== ledger.counterKey || r.inventoryId !== ledger.inventoryId || r.requestFingerprint
+            || r.amountMinor !== e.fact.amountMinor || r.providerProductCostMinor !== e.fact.costMinor || r.discountMinor !== e.fact.discountMinor
+            || (!r.clientId && !phone(r.clientPhone)) || (r.clientId && r.clientId !== e.fact.clientId)
+            || (r.clientPhone && phone(r.clientPhone) !== e.fact.clientPhone)) return false;
+        } else if (e.localPreimage !== null || e.ref !== `viva-legacy:${spec.productId}:${e.transactionId}`) return false;
+        ids.add(e.transactionId); refs.add(e.ref); if (e.localRowId) localIds.add(e.localRowId);
+      }
+      const initialRefs = entries.filter(e => counted(e.fact)).map(e => e.ref).sort();
+      if (stable(initialRefs) !== stable([...ledger.legacyPaymentRefs].sort())
+        || ledger.history.openingPaidCount !== initialRefs.length
+        || !integer(ledger.quotaAdjustment)
+        || (ledger.counterKey === 'piter_friendship'
+          ? ledger.history.openingPaidCount + ledger.quotaAdjustment !== 52 : ledger.quotaAdjustment !== 0)) return false;
+      const seenSettlements = new Set(), seenTerminal = new Map(entries.map(e => [e.transactionId, e.fact]));
+      for (const s of ledger.history.settlements) {
+        const before = seenTerminal.get(s.transactionId);
+        const entry = entries.find(e => e.transactionId === s.transactionId);
+        if (!before || !validFact(s.fact) || seenSettlements.has(s.id) || s.id !== `${s.transactionId}:${s.fact.state}`
+          || factIdentity(before) !== factIdentity(s.fact)
+          || before.state === 'REFUNDED' || s.fact.state === 'UNPAID'
+          || (before.state === s.fact.state)
+          || !parseVivaTimestamp(s.observedAt, { requireZone: true })) return false;
+        const projection = projectionFor(entry, s.fact, s.observedAt);
+        if (projection && s.projection?.state === 'DONE') projection.state = 'DONE';
+        if (stable(projection) !== stable(s.projection)) return false;
+        seenSettlements.add(s.id); seenTerminal.set(s.transactionId, s.fact);
+      }
+      const intents = new Set(), reservationRefs = new Set();
+      for (const r of ledger.reservations) {
+        if (!text(r.paymentRef) || reservationRefs.has(r.paymentRef) || refs.has(r.paymentRef)
+          || r.saleRecord?.inventoryLedgerSchemaVersion !== 3
+          || !['CLAIMED', 'DISPATCHING', 'PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'PAID', 'FAILED'].includes(r.state)) return false;
+        reservationRefs.add(r.paymentRef);
+        if (r.transactionId) { if (!text(r.transactionId) || ids.has(r.transactionId)) return false; ids.add(r.transactionId); }
+        if (active(r)) { if (!text(r.intentFingerprint) || intents.has(r.intentFingerprint)) return false; intents.add(r.intentFingerprint); }
+      }
+      const c = counts(ledger);
+      if (['paidCount', 'reservedCount', 'takenCount'].some(k => !integer(ledger[k]) || ledger[k] !== c[k])) return false;
+      return ledger.counterKey !== 'network_friendship' || (/^\d{4}-\d{2}-\d{2}$/.test(ledger.dailyDate)
+        && ['dailyBaselinePaidCount', 'dailyPaidCount', 'dailyReservedCount'].every(k => integer(ledger[k]) && ledger[k] === c[k]));
+    } catch { return false; }
+  }
+
+  function settle(ledger, fact, observedAt) {
+    if (!validate(ledger) || !validFact(fact) || !parseVivaTimestamp(observedAt, { requireZone: true })) fail('LEDGER_INVALID');
+    const entry = ledger.history.entries.find(e => e.transactionId === fact.transactionId);
+    const previous = current(ledger).get(fact.transactionId);
+    if (!entry || factIdentity(previous) !== factIdentity(fact)) fail('WATCH_IDENTITY_DRIFT');
+    if (previous.subscriptionId && fact.subscriptionId !== previous.subscriptionId) fail('INSTANCE_DRIFT');
+    if (previous.paidAt && fact.paidAt !== previous.paidAt) fail('PAYMENT_DATE_DRIFT');
+    if (previous.state === 'REFUNDED' && fact.state !== 'REFUNDED') fail('STALE_PROVIDER_STATE');
+    if (fact.state === 'UNPAID' && previous.state !== 'UNPAID') fail('STALE_PROVIDER_STATE');
+    const next = JSON.parse(JSON.stringify(ledger));
+    const watch = next.history.entries.find(e => e.transactionId === fact.transactionId);
+    watch.lastCheckedAt = observedAt;
+    if (fact.state !== previous.state) {
+      const id = `${fact.transactionId}:${fact.state}`;
+      const projection = projectionFor(entry, fact, observedAt);
+      next.history.settlements.push({ id, transactionId: fact.transactionId, fact, observedAt, projection });
+    } else if (previous.paidAt !== fact.paidAt || stable(previous.refundProof) !== stable(fact.refundProof)) fail('TERMINAL_FACT_DRIFT');
+    Object.assign(next, counts(next)); next.revision++; next.updatedAt = observedAt;
+    if (!validate(next)) fail('SETTLEMENT_POSTIMAGE_INVALID');
+    return next;
+  }
+  function pendingProjection(ledger) {
+    return ledger.history.settlements.find(s => s.projection?.state === 'PENDING') || null;
+  }
+  return { products, observe, validate, counts, current, settle, pendingProjection, counted, date, stable, factIdentity, admissionReady };
+}
+const annualHistory = createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymentDeadline, buildVivaRefundProof });
+// END generated annualSubscriptionHistory
 // BEGIN generated hubLk1SaleContract
 function normalizeHubSalePolicy(value) {
   try { if (typeof value === 'string') value = JSON.parse(value); } catch { return null; }
@@ -129,8 +574,10 @@ const intentFingerprint = (ctx) => [
 ].join("\n");
 const ACTIVE_RESERVATION_STATES = ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"];
 const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
+  if (ledger?.schemaVersion === 3) return annualHistory.validate(ledger)
+    && ledger.inventoryId === ctx.inventoryId && ledger.counterKey === ctx.counterKey;
   if (!(ledger && typeof ledger.ready === "boolean"
-    && (ledger.schemaVersion === 1 || (isPiter(ctx) && ledger.schemaVersion === 2))
+    && (ledger.schemaVersion === 1 || (isPiter(ctx) && [2, 3].includes(ledger.schemaVersion)))
     && Number.isInteger(ledger.revision) && ledger.revision >= 0
     && Number.isInteger(ledger.paidCount) && ledger.paidCount >= 0
     && Number.isInteger(ledger.reservedCount) && ledger.reservedCount >= 0
@@ -142,10 +589,10 @@ const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
     && Array.isArray(ledger.legacyPaymentRefs)
     && Array.isArray(ledger.reservations))) return false;
   const legacyRefs = ledger.legacyPaymentRefs.map(toStr);
-  const quotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0;
+  const quotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : 0;
   if ((ledger.schemaVersion === 1 && Object.prototype.hasOwnProperty.call(ledger, "quotaAdjustment"))
     || !Number.isSafeInteger(quotaAdjustment) || quotaAdjustment < 0
-    || (ledger.schemaVersion === 2 && ![50, 52].includes(legacyRefs.length + quotaAdjustment))
+    || ([2, 3].includes(ledger.schemaVersion) && ![50, 52].includes(legacyRefs.length + quotaAdjustment))
     || ledger.takenCount + quotaAdjustment > totalLimit) return false;
   const reservationRefs = ledger.reservations.map((item) => toStr(item?.paymentRef));
   if (legacyRefs.some((item) => !item) || reservationRefs.some((item) => !item)) return false;
@@ -186,8 +633,10 @@ const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
 };
 const ledgerIsPurchaseReady = (ledger, totalLimit, ctx) => (
   ledger?.ready === true && ledgerIsStructurallyValid(ledger, totalLimit, ctx)
+    && (ledger.schemaVersion !== 3 || annualHistory.admissionReady(ledger))
 );
 const saleInsert = (ctx, nowIso) => ({
+      ...(ctx.ledgerSchemaVersion === 3 ? { inventoryLedgerSchemaVersion: 3 } : {}),
       counterKey: ctx.counterKey,
       inventoryId: ctx.inventoryId,
       paymentRef: ctx.paymentRef,
@@ -292,6 +741,7 @@ const saleProjectionMatches = (record, ctx, expectedStatus, result = {}) => Bool
   && record.requestFingerprint === ctx.requestFingerprint
   && record.status === expectedStatus
   && record.amountMinor === (ctx.expectedAmountMinor ?? ctx.priceMinor)
+  && (ctx.ledgerSchemaVersion !== 3 || record.inventoryLedgerSchemaVersion === 3)
   && toStr(record.providerLifecycleMode) === toStr(ctx.providerLifecycleMode)
   && (!isHub(ctx) || (
     (record.hubLk1Sale == null || normalizeFrozenHubSale(record.hubLk1Sale) !== null)
@@ -312,16 +762,16 @@ const finishConfirmProjection = () => {
   if (ctx.confirmResult?.reconcile === true) return [null, null, null, null, null];
   return response(200, ctx.confirmResult?.response || { ok: true, status: ctx.confirmResult?.nextStatus });
 };
-const quotaCustodyFilter = (ctx) => (ctx.ledgerSchemaVersion === 2
-  && (!isPiter(ctx) || !Number.isSafeInteger(ctx.ledgerQuotaAdjustment) || ctx.ledgerQuotaAdjustment < 0)
+const quotaCustodyFilter = (ctx) => ([2, 3].includes(ctx.ledgerSchemaVersion)
+  && (!(isPiter(ctx) || ctx.ledgerSchemaVersion === 3) || !Number.isSafeInteger(ctx.ledgerQuotaAdjustment) || ctx.ledgerQuotaAdjustment < 0)
   ? null : {
   schemaVersion: ctx.ledgerSchemaVersion ?? 1,
-  quotaAdjustment: ctx.ledgerSchemaVersion === 2
+  quotaAdjustment: [2, 3].includes(ctx.ledgerSchemaVersion)
     ? ctx.ledgerQuotaAdjustment : { $exists: false },
 });
 const ledgerQuotaMatches = (ledger, ctx) => ledger?.schemaVersion === (ctx.ledgerSchemaVersion ?? 1)
-  && (ctx.ledgerSchemaVersion === 2
-    ? isPiter(ctx) && ledger.quotaAdjustment === ctx.ledgerQuotaAdjustment
+  && ([2, 3].includes(ctx.ledgerSchemaVersion)
+    ? (isPiter(ctx) || ctx.ledgerSchemaVersion === 3) && ledger.quotaAdjustment === ctx.ledgerQuotaAdjustment
     : !Object.prototype.hasOwnProperty.call(ledger || {}, "quotaAdjustment"));
 const dispatchClaim = (ctx) => {
   const custody = quotaCustodyFilter(ctx);
@@ -384,6 +834,9 @@ if (!ctx || (!isPiter(ctx) && !isHub(ctx))) {
   return fail(500, "Regional atomic sale context is missing", "REGIONAL_ATOMIC_CONTEXT_MISSING");
 }
 
+const historyResult = runAnnualHistory({ msg, ctx, annualHistory, ledgerFind, ledgerUpdate, saleUpdate, fail, response });
+if (historyResult !== undefined) return historyResult;
+
 // Keep the live baseline's HUB admission closed, including stale server-side
 // purchase continuations. Do not gate provider results, confirmations or the
 // durable dispatch-repair/projection paths for previously accepted payments.
@@ -404,7 +857,7 @@ if (ctx.step === "piter_ledger_find") {
     return fail(503, "Продажа Питера ещё не активирована", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
-  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
+  ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
   if (isHub(ctx) && ledger.dailyDate > ctx.dailyDropDate) {
     return fail(409, "Запрос относится к уже закрытому дневному окну", "HUB_DAILY_CAP_STALE_REQUEST", {
       ledgerDailyDate: ledger.dailyDate,
@@ -415,16 +868,16 @@ if (ctx.step === "piter_ledger_find") {
     ctx.step = "hub_daily_reset_ack";
     return ledgerUpdate(ctx, {
       _id: ledgerId(ctx), ready: true, revision: ledger.revision,
-      schemaVersion: 1, quotaAdjustment: { $exists: false },
+      schemaVersion: ledger.schemaVersion, quotaAdjustment: ledger.schemaVersion === 3 ? 0 : { $exists: false },
       dailyDate: ledger.dailyDate,
       dailyPaidCount: ledger.dailyPaidCount,
       dailyReservedCount: ledger.dailyReservedCount,
     }, {
       $set: {
         dailyDate: ctx.dailyDropDate,
-        dailyBaselinePaidCount: 0,
-        dailyPaidCount: 0,
-        dailyReservedCount: 0,
+        dailyBaselinePaidCount: ledger.schemaVersion === 3 ? annualHistory.counts(ledger, ctx.dailyDropDate).dailyBaselinePaidCount : 0,
+        dailyPaidCount: ledger.schemaVersion === 3 ? annualHistory.counts(ledger, ctx.dailyDropDate).dailyPaidCount : 0,
+        dailyReservedCount: ledger.schemaVersion === 3 ? annualHistory.counts(ledger, ctx.dailyDropDate).dailyReservedCount : 0,
         updatedAt: new Date().toISOString(),
       },
       $inc: { revision: 1 },
@@ -553,7 +1006,7 @@ if (ctx.step === "piter_ledger_find") {
   if (!ledgerIsPurchaseReady(ledger, ctx.totalLimit, ctx)) {
     return fail(503, "Продажа Питера остановлена", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
-  const quotaTakenCount = ledger.takenCount + (ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0);
+  const quotaTakenCount = ledger.takenCount + ([2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : 0);
   if (quotaTakenCount >= ctx.totalLimit) {
     return fail(409, "Лимит абонементов исчерпан", "PITER_INVENTORY_EXHAUSTED", {
       totalLimit: ctx.totalLimit, takenCount: quotaTakenCount,
@@ -622,7 +1075,7 @@ if (ctx.step === "piter_ledger_find") {
     _id: ledgerId(ctx), ready: true, revision: ledger.revision,
     takenCount: ledger.takenCount,
     schemaVersion: ledger.schemaVersion,
-    quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
+    quotaAdjustment: [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : { $exists: false },
     $and: [
       { "reservations.paymentRef": { $ne: ctx.paymentRef } },
       { reservations: { $not: { $elemMatch: {
@@ -733,7 +1186,7 @@ if (ctx.step === "piter_dispatch_repair_quota_find") {
     return fail(503, "Квота попытки оплаты требует сверки", "PITER_DISPATCH_REPAIR_QUOTA_INVALID");
   }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
-  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
+  ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
   return resetDispatchAfterFence(ctx);
 }
 
@@ -861,6 +1314,9 @@ if (ctx.step === "piter_provider_result") {
   if (toStr(result.transactionId)) resultFilter.$and.push({ reservations: { $not: { $elemMatch: {
     transactionId: result.transactionId, paymentRef: { $ne: ctx.paymentRef },
   } } } });
+  if (ctx.ledgerSchemaVersion === 3 && toStr(result.transactionId)) {
+    resultFilter["history.entries.transactionId"] = { $ne: result.transactionId };
+  }
   return ledgerUpdate(ctx, resultFilter, {
     $set: {
       "reservations.$.state": result.ok ? "PAYMENT_PENDING" : "PROVIDER_UNKNOWN",
@@ -926,7 +1382,7 @@ if (ctx.step === "piter_confirm_result") {
   const validStatus = ["PAID", "FAILED", "PAYMENT_PENDING"].includes(result.nextStatus);
   const validAmount = Number.isInteger(expectedAmount) && expectedAmount > 0
     && Number.isInteger(result.toPayMinor) && result.toPayMinor >= 0
-    && (result.nextStatus === "PAID" ? result.toPayMinor === 0
+    && (result.nextStatus === "PAID" ? result.toPayMinor === (ctx.inventoryLedgerSchemaVersion === 3 ? expectedAmount : 0)
       : result.nextStatus === "FAILED" ? [0, expectedAmount].includes(result.toPayMinor)
         : result.toPayMinor === expectedAmount);
   if (!validStatus || !validAmount || !toStr(ctx.transactionId) || result.transactionId !== ctx.transactionId) {
@@ -945,6 +1401,8 @@ if (ctx.step === "piter_confirm_validate") {
     && !toStr(existing.transactionId);
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || 400, ctx)
     || !existing
+    || (ledger.schemaVersion === 3 && (existing.saleRecord?.inventoryLedgerSchemaVersion !== 3 || ctx.inventoryLedgerSchemaVersion !== 3))
+    || (ledger.schemaVersion !== 3 && ctx.inventoryLedgerSchemaVersion === 3)
     || existing.requestFingerprint !== ctx.requestFingerprint
     || dispatchGeneration(existing.dispatchGeneration) !== dispatchGeneration(ctx.dispatchGeneration)
     || (!recoveredTransaction && existing.transactionId !== ctx.transactionId)
@@ -955,7 +1413,7 @@ if (ctx.step === "piter_confirm_validate") {
     return fail(503, "Atomic ledger не прошёл проверку перед подтверждением", "PITER_CONFIRM_LEDGER_INVALID");
   }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
-  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
+  ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
   const nowIso = new Date().toISOString();
   ctx.step = "piter_confirm_ledger_ack";
   const inc = { revision: 1 };
@@ -977,7 +1435,7 @@ if (ctx.step === "piter_confirm_validate") {
     _id: ledgerId(ctx),
     ready: ledger.ready,
     schemaVersion: ledger.schemaVersion,
-    quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
+    quotaAdjustment: [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : { $exists: false },
     revision: ledger.revision,
     paidCount: ledger.paidCount,
     reservedCount: ledger.reservedCount,
@@ -999,6 +1457,7 @@ if (ctx.step === "piter_confirm_validate") {
       paymentRef: { $ne: ctx.paymentRef },
     } } } }];
   }
+  if (ledger.schemaVersion === 3) confirmFilter["history.entries.transactionId"] = { $ne: ctx.transactionId };
   return ledgerUpdate(ctx, confirmFilter, {
     $set: {
       "reservations.$.state": result.nextStatus,

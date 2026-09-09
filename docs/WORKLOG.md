@@ -2222,3 +2222,27 @@ Prepared isolated local reconciliation for a phantom LK roster restored without 
 ### 2026-09-09 — split leave deployed; completed-receipt follow-up
 
 Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving nine parallel nodes. Installed flow3456eb84..., restart99, 15-minute observation and read-only API checks passed. Exact-game postcheck found a completed removal receipt moved back to VIVA_CONFIRMED by existing refund verification before deploy. Prepared a separate two-predicate follow-up accepting that state only with lkAppliedAt/outcomeREMOVED/cancellation proof; 97 focused tests, critical527 PASS/5 SKIP, independent review PASS. Follow-up not merged/pushed/deployed; no real test leave or refund initiated. Details: SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md.
+
+### 2026-09-09 — annual history implementation, local checkpoint
+
+Implemented the approved ALL_PROVIDER_PAID opening scope in the existing
+`codex/subscription-sale-quotas-20260909` worktree, integrating main aebcc59 locally
+into the task branch (0bafdc0) to preserve the parallel HAB price fix. Schema3 now
+keeps typed canonical history, immutable Piter adjustment10, durable late-payment/
+refund settlement and recoverable local projections. Added a versioned stopped-runtime
+maintenance operator, exact candidate builder and persistent per-product sales configuration.
+New HAB confirmation follows actual Viva finances and complete client-instance pagination
+before and after ledger ACK; frozen old receipts stay compatible and CUP remains inactive.
+
+Read-only audit: 150 transactions, 103 local rows, 160 provider GET, zero business writes;
+HAB18 paid including14 outside LK, Piter42 paid including2 outside LK. Diagnostic maintenance
+replay passed for both products. Annual tests25 PASS; critical528 PASS/5 SKIP; candidate88
+PASS/2 SKIP; lint0 errors/387 baseline warnings; inert-env prod/dev build and private modular
+validation passed. Exact full-flow candidate ff056708... has4799 nodes/219 HTTP inputs.
+Independent payment-safety and reliability reviews completed. Real Linux/Mongo execution,
+live restart/persistence, new-head CI and public affected UI remain unverified.
+
+Before any candidate deployment, publish the reviewed inactive persistent configuration:
+missing/invalid configuration closes RA/Friendship too. Main merge, push, deployment,
+runtime control, database/provider writes and sales activation did not occur. Full changed-file
+register, exact hashes, evidence and limits: `docs/SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
