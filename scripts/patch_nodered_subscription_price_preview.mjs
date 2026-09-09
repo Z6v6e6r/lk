@@ -20,7 +20,7 @@ export function previewSources(flow) {
   };
   const booking = sourceOf('lk_subscription_booking_router_20260804');
   const split = sourceOf('8f7bd5b482fe9763');
-  if (sha(booking) !== '0d505c16e83f88b238d7a9d26a47d01fa6ab32be5b7a7f0d604474b2f3123f37'
+  if (sha(booking) !== '8848722f61f84e1792d2cdd69d8204be61ae66fe35c1af1d2bc7d8774f84636a'
     || sha(split) !== '53c4f6ab309b4287eaded6c6d16a9c0e34f47c8eac625c58bdf423acfb083d42') {
     throw new Error('Price preview canonical booking/pricing source changed');
   }
@@ -48,7 +48,7 @@ export function previewSources(flow) {
     ${usage}
   };`;
   const evaluator = sourceOf('lk_subscription_managed_policy_20260820');
-  if (sha(evaluator) !== '2ae3a02b1dfc1129883a72dda404d13cfb9b43e67e634d654f81fb01a5ca620c') throw new Error('Price preview canonical evaluator changed');
+  if (sha(evaluator) !== '6f4e7aa5506d7da4123fc0f8c86c5a310f6fc2dc86c9cc23b56ef1deaa001a72') throw new Error('Price preview canonical evaluator changed');
   return { router: `${canonical}\n${pricing}\n${usageFunction}\n${read('router')}`, evaluator,
     helperNames: helper.names, pricingNames: prices.names };
 }

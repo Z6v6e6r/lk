@@ -1,5 +1,7 @@
 # Журнал шагов
 
+2026-09-09 — Subscription instance limits: scoped active bookings and daily free minutes to clientSubscriptionId in HUB booking and preview calculations; added cross-instance, reservation, history and exact-patch regressions. Local source change; live activation separate.
+
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
 ## 2026-09-07 — Frontend static bootstrap: durable execution runtime

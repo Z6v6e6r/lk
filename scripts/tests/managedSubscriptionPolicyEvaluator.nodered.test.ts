@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// Keep gateway/preview instance isolation in the existing critical CI entrypoint.
+import "./subscriptionInstanceLimits.test.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -201,7 +203,7 @@ function lk1Input(overrides: Record<string, any> = {}): Record<string, any> {
       gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
       tournamentDiscountPercent: 50 },
     target: { ...base.target, basePriceMinor: 1_000_000 },
-    usage: { ...base.usage, activeServiceScope: "ALL_BOOKINGS",
+    usage: { ...base.usage, activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY",
       usedOrReservedFreeMinutesToday: 0 },
     ...overrides,
   };
@@ -255,14 +257,14 @@ test("LK1 minute allocation counts used and planned minutes; mixed-price binding
   }
 });
 
-test("LK1 active limit requires complete all-booking scope, permits 3 and rejects 4", () => {
+test("LK1 active limit requires selected-subscription scope, permits 3 and rejects 4", () => {
   const input = lk1Input();
   input.usage.activeServices = 3;
   assert.equal(evaluate(input).decision.eligible, true);
   input.usage.activeServices = 4;
   assert.ok(blockerCodes(input).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
   input.usage.activeServices = 0;
-  input.usage.activeServiceScope = "SUBSCRIPTION_BENEFIT_ONLY";
+  input.usage.activeServiceScope = "ALL_BOOKINGS";
   assert.ok(blockerCodes(input).includes("USAGE_SNAPSHOT_INVALID"));
 });
 
