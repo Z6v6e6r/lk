@@ -27,7 +27,11 @@ export function previewSources(flow) {
   const roots = ['isObj', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
     'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields', 'preflightAvailability',
     'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
-    'eventDurationMinutes', 'resolveCategory', 'resolvePlanKey', 'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode'];
+    'eventDurationMinutes', 'eventStartsAt', 'exerciseRoomId', 'resolveCategory', 'resolvePlanKey', 'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode'];
+  const joinSource = sourceOf('e92e68bf3f08a70c');
+  if (sha(joinSource) !== '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462') throw new Error('Price preview canonical join source changed');
+  const join = extractSubscriptionPricePreviewSource({ source: joinSource, label: 'join', roots: ['resolveIsSinglesGame'] });
+  const joinPricing = `const joinPricing = (() => {\n${join.source}\nreturn { resolveIsSinglesGame }; })();`;
   const helper = extractSubscriptionPricePreviewSource({ source: booking, label: 'booking', roots });
   const prices = extractSubscriptionPricePreviewSource({ source: split, label: 'pricing', roots: ['extractExactCourtPrice', 'extractList'] });
   // No emitter/transport/state machine may enter the extracted helper closure.
@@ -49,7 +53,7 @@ export function previewSources(flow) {
   };`;
   const evaluator = sourceOf('lk_subscription_managed_policy_20260820');
   if (sha(evaluator) !== '6f4e7aa5506d7da4123fc0f8c86c5a310f6fc2dc86c9cc23b56ef1deaa001a72') throw new Error('Price preview canonical evaluator changed');
-  return { router: `${canonical}\n${pricing}\n${usageFunction}\n${read('router')}`, evaluator,
+  return { router: `${canonical}\n${pricing}\n${joinPricing}\n${usageFunction}\n${read('router')}`, evaluator,
     helperNames: helper.names, pricingNames: prices.names };
 }
 
@@ -65,13 +69,14 @@ export function composeSubscriptionPricePreviewFlow(flow) {
   return flow.concat([
     { id: id('post'), type: 'http in', z, name: 'LK subscription game price preview', url: PATH, method: 'post', upload: false, swaggerDoc: '', x: 300, y: 1000, wires: [[id('entry')]] },
     node(z, 'entry', 1, [[id('router')]]),
-    { ...node(z, 'router', 5, [[id('http')], [id('metadata')], [id('operations')], [id('evaluate')], [id('final')]]), func: sources.router },
+    { ...node(z, 'router', 6, [[id('http')], [id('metadata')], [id('operations')], [id('evaluate')], [id('final')], [id('games')]]), func: sources.router },
     node(z, 'evaluate', 2, [[id('router')], [id('router')]], sources.evaluator),
     node(z, 'final', 1, [[id('response')]]),
     { id: id('http'), type: 'http request', z, name: 'Subscription price preview Viva reads only', method: 'GET', ret: 'obj', paytoqs: 'ignore', url: '', tls: '', persist: false, proxy: '', insecureHTTPParser: false, authType: '', senderr: true, headers: [], requestTimeout: '10000', x: 970, y: 960, wires: [[id('router')]] },
     mongo('metadata', 'lk_subscription_product_identity'),
     mongo('operations', 'lk_subscription_daily_booking_ops'),
-    { id: id('catch'), type: 'catch', z, name: 'Subscription price preview I/O failure', scope: [id('entry'), id('router'), id('evaluate'), id('http'), id('metadata'), id('operations')], uncaught: false, x: 950, y: 1100, wires: [[id('error')]] },
+    mongo('games', 'lk_games'),
+    { id: id('catch'), type: 'catch', z, name: 'Subscription price preview I/O failure', scope: [id('entry'), id('router'), id('evaluate'), id('http'), id('metadata'), id('operations'), id('games')], uncaught: false, x: 950, y: 1100, wires: [[id('error')]] },
     node(z, 'error', 1, [[id('final')]], "msg._subscriptionPricePreview = { done: true, statusCode: 503, error: 'PRICE_PREVIEW_UNAVAILABLE' }; return msg;"),
     { id: id('response'), type: 'http response', z, name: '', statusCode: '', headers: {}, x: 1250, y: 1000, wires: [] },
     { id: id('options-in'), type: 'http in', z, name: 'OPTIONS subscription game price preview', url: PATH, method: 'options', upload: false, swaggerDoc: '', x: 300, y: 1180, wires: [[id('options')]] },
@@ -86,4 +91,40 @@ export function composeSubscriptionPricePreviewArtifacts(liveBytes, deploymentId
   const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId, allowedChanges: [], allowedAdditionIds });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidate, candidateBytes, contract, sourceSha256: sha(liveBytes) };
+}
+
+/** Upgrade an existing preview without replacing routes, shared gateways or policy state. */
+export function composeSubscriptionJoinPricePreviewArtifacts(liveBytes, deploymentId) {
+  const flow = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
+  const expected = {
+    entry: 'e7419f0463bc30d4d198f3ab262e0401bfe762ef879ae05515428a379d2c3f7f',
+    router: '7e561aa1e10432ec02631684d1f01a805c8336d8f7fa26fe565b25da7f505f19',
+  };
+  if (!Array.isArray(flow) || new Set(flow.map(row => row?.id)).size !== flow.length) throw new Error('Invalid preview source');
+  const current = name => flow.find(row => row.id === PREFIX + name);
+  for (const [name, digest] of Object.entries(expected)) {
+    if (current(name)?.type !== 'function' || sha(current(name).func || '') !== digest) throw new Error(`Join preview preimage drift: ${name}`);
+  }
+  if (current('router').outputs !== 5 || JSON.stringify(current('router').wires) !== JSON.stringify(
+    ['http', 'metadata', 'operations', 'evaluate', 'final'].map(name => [PREFIX + name]))) throw new Error('Join preview router wiring drift');
+  const existing = flow.filter(row => row.id.startsWith(PREFIX));
+  const base = flow.filter(row => !row.id.startsWith(PREFIX));
+  // Source binding requires the same reviewed instance-scoped policy/usage as CREATE.
+  const composed = composeSubscriptionPricePreviewFlow(base);
+  const desired = name => composed.find(row => row.id === PREFIX + name);
+  if (!current('catch') || current('catch').type !== 'catch'
+    || JSON.stringify(current('catch').scope) !== JSON.stringify(['entry', 'router', 'evaluate', 'http', 'metadata', 'operations'].map(name => PREFIX + name))
+    || current('games') || existing.length !== 13) throw new Error('Join preview graph drift');
+  const candidate = structuredClone(flow);
+  for (const name of ['entry', 'router']) candidate.find(row => row.id === PREFIX + name).func = desired(name).func;
+  const router = candidate.find(row => row.id === PREFIX + 'router');
+  router.outputs = 6; router.wires.push([PREFIX + 'games']);
+  candidate.find(row => row.id === PREFIX + 'catch').scope.push(PREFIX + 'games');
+  candidate.push(desired('games'));
+  const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId,
+    allowedChanges: [{id: PREFIX + 'entry', fields: ['func']}, {id: PREFIX + 'router', fields: ['func', 'outputs', 'wires']},
+      {id: PREFIX + 'catch', fields: ['scope']}], allowedAdditionIds: [PREFIX + 'games'] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidate, candidateBytes, contract };
 }

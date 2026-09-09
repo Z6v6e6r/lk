@@ -14,7 +14,7 @@ const bundle = await build({
 });
 const target = { targetKind: 'NEW_GAME', slotId: 'slot-a', stationId: 'station-a', roomId: 'room-a',
   masterServiceId: 'service-a', subServiceIds: ['sub-a'], startsAt: '2030-01-01T07:00:00+03:00', durationMinutes: 60, shareCount: 4 };
-const key = value => JSON.stringify([value.slotId, value.stationId, value.roomId, value.masterServiceId,
+const key = value => value.targetKind === 'EXISTING_GAME' ? JSON.stringify([value.targetKind,value.gameId,value.startsAt,value.durationMinutes]) : JSON.stringify([value.slotId, value.stationId, value.roomId, value.masterServiceId,
   [...value.subServiceIds].sort(), value.startsAt, value.durationMinutes, value.shareCount]);
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -127,4 +127,15 @@ test('timeout and explicit retry remain bounded, without background polling', as
   await h.advance(60000); assert.equal(h.requests.length, 1);
   h.result.refresh(); h.render(); await h.advance(300); assert.equal(h.requests.length, 2);
   await h.resolve(); assert.equal(h.result.state, 'available');
+});
+
+test('join quotes invalidate on game, date, account and options changes and ignore cancelled response',async()=>{
+  const h=harness();h.props={...h.props,target:{targetKind:'EXISTING_GAME',gameId:'pay_a',startsAt:target.startsAt,durationMinutes:60}};h.render();
+  await h.advance(300);await h.resolve();assert.equal(h.result.state,'available');
+  h.props={...h.props,target:{...h.props.target,gameId:'pay_b'}};h.render();assert.equal(h.result.state,'checking');
+  await h.advance(300);h.props={...h.props,actorId:'actor-b',availabilityLoading:true};h.render();
+  assert.equal(h.requests.at(-1).signal.aborted,true);await h.resolve();assert.equal(h.result.amountMinor,null);
+  await h.advance(1000);assert.equal(h.requests.length,2);
+  h.props={...h.props,availabilityLoading:false,subscriptionIds:['subscription-new']};h.render();
+  await h.advance(300);await h.resolve();assert.equal(h.result.state,'available');assert.deepEqual(Object.keys(h.result.bySubscriptionId),['subscription-new']);
 });

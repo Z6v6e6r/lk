@@ -21060,3 +21060,11 @@ body.lk-idle-data-stale {
     font-size: 22px;
   }
 }
+
+/* Join preview uses the same server quote as the create payment choices. */
+.game-split-subscription-option--preview { align-items: flex-start; gap: 12px; }
+.game-split-subscription-option-copy { display: flex; flex-direction: column; gap: 6px; min-width: 0; text-align: left; }
+.game-split-subscription-option-copy > strong { overflow-wrap: anywhere; }
+.game-split-subscription-option-copy [role="status"] { font-size: 13px; line-height: 1.4; }
+.game-split-subscription-option-validity { flex-shrink: 0; font-size: 12px; max-width: 105px; text-align: right; }
+.game-split-subscription-option--preview:disabled { opacity: 0.65; cursor: not-allowed; }

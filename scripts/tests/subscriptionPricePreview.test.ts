@@ -105,3 +105,15 @@ test("individual prices reject the whole incomplete, inconsistent or expired bat
   }
   assert.equal(subscriptionPricePreviewsById({...input, loading: true}).a.state, "checking");
 });
+
+
+test("existing game quote identity excludes client prices and invalidates on target changes", async () => {
+  const {createJoinSubscriptionPriceTarget} = await import("../../src/components/games/subscriptionPricePreview.ts");
+  const input={gameId:"pay_game-a",date:"2099-09-23",fromTime:"07:00",durationMinutes:90};
+  const selected=createJoinSubscriptionPriceTarget(input)!;
+  assert.deepEqual(selected,{targetKind:"EXISTING_GAME",gameId:"pay_game-a",startsAt:"2099-09-23T07:00:00+03:00",durationMinutes:90});
+  for (const change of [{gameId:"pay_game-b"},{date:"2099-09-24"},{fromTime:"08:00"},{durationMinutes:120}]) {
+    assert.notEqual(subscriptionPriceSelectionKey(createJoinSubscriptionPriceTarget({...input,...change})!),subscriptionPriceSelectionKey(selected));
+  }
+  assert.equal(createJoinSubscriptionPriceTarget({...input,gameId:null}),null);
+});

@@ -1,7 +1,7 @@
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.
 const ctx = msg._subscriptionPricePreview;
 if (!ctx) return null;
-const out = index => { const result = [null, null, null, null, null]; result[index] = msg; return result; };
+const out = index => { const result = [null, null, null, null, null, null]; result[index] = msg; return result; };
 const stop = (code, status = 503) => { ctx.done = true; ctx.error = code; ctx.statusCode = status; return out(4); };
 const ok = () => !msg.error && Number(msg.statusCode) >= 200 && Number(msg.statusCode) < 300;
 const rows = () => canonical.extractItems(msg.payload);
@@ -21,9 +21,7 @@ const http = (step, path, admin = false) => {
   return out(0);
 };
 const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null) => {
-  ctx.quotes.push({ subscriptionId, selectionKey: JSON.stringify([ctx.target.slotId, ctx.target.stationId,
-    ctx.target.roomId, ctx.target.masterServiceId, ctx.target.subServiceIds, ctx.target.startsAt,
-    ctx.target.durationMinutes, ctx.target.shareCount]), status, basePriceMinor: ctx.basePriceMinor,
+  ctx.quotes.push({ subscriptionId, selectionKey: ctx.selectionKey, status, basePriceMinor: ctx.basePriceMinor,
     amountMinor, freeMinutes, paidMinutes, reasonCode, evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
 if (ctx.done) return out(4);
@@ -34,6 +32,50 @@ if (ctx.step === 'profile') {
   const profile = canonical.unwrapRecord(msg.payload);
   if (!ok() || !profile || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(profile.id || profile.clientId || '')) return stop('PRICE_PREVIEW_AUTH_REQUIRED', 401);
   ctx.actorClientId = profile.id || profile.clientId;
+  if (ctx.existingGame) return find('game', { id: ctx.target.gameId }, 5);
+  return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
+}
+if (ctx.step === 'game') {
+  if (!Array.isArray(msg.payload) || msg.payload.length !== 1 || msg.payload[0]?.id !== ctx.target.gameId) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  const game = msg.payload[0];
+  const booking = game.booking || {};
+  const metadata = game.metadata || {};
+  const splitPayment = metadata.splitPayment || {};
+  const exerciseIds = [splitPayment.vivaExerciseId, splitPayment.viva_exercise_id, booking.vivaExerciseId,
+    booking.exerciseId, metadata.vivaExerciseId, metadata.exerciseId, metadata.viva_exercise_id,
+    metadata.exercise_id, splitPayment.exerciseId, splitPayment.exercise_id].filter(value => value != null && value !== '');
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const stationId = booking.studioId || metadata.studioId;
+  const roomId = booking.roomId || metadata.roomId;
+  const masterServiceId = booking.masterServiceId || metadata.masterServiceId;
+  const subServiceIds = booking.subServiceIds || metadata.subServiceIds;
+  const storedDuration = canonical.eventDurationMinutes({timeFrom: booking.timeFrom, timeTo: booking.timeTo});
+  const start = `${booking.date}T${String(booking.timeFrom || '').length === 5 ? booking.timeFrom + ':00' : booking.timeFrom}+03:00`;
+  if (game.isCancelled === true || game.isCanceled === true || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(game.status || '').toUpperCase())
+    || !canonical.isObj(metadata.splitPayment) || splitPayment.enabled === false
+    || storedDuration !== ctx.target.durationMinutes
+    || (booking.durationMinutes != null && Number(booking.durationMinutes) !== storedDuration)
+    || !exerciseIds.length || exerciseIds.some(id => !uuid(id)) || new Set(exerciseIds).size !== 1
+    || !uuid(stationId) || !uuid(roomId) || !uuid(masterServiceId)
+    || !Array.isArray(subServiceIds) || subServiceIds.length < 1 || subServiceIds.length > 20
+    || subServiceIds.some(id => !uuid(id)) || new Set(subServiceIds).size !== subServiceIds.length
+    || Date.parse(start) !== Date.parse(ctx.target.startsAt)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  ctx.exerciseId = exerciseIds[0];
+  ctx.target = { ...ctx.target, stationId, roomId, masterServiceId, subServiceIds: [...subServiceIds].sort(),
+    shareCount: joinPricing.resolveIsSinglesGame({game, booking, metadata, splitPayment}) ? 2 : 4 };
+  return http('exercise', `/end-user/api/v1/${ctx.tenantKey}/exercises/${ctx.exerciseId}`);
+}
+if (ctx.step === 'exercise') {
+  const exercise = canonical.unwrapRecord(msg.payload);
+  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
+    || canonical.resolveCategory(exercise) !== 'open_game'
+    || String(exercise.studio?.id || exercise.studioId || '') !== ctx.target.stationId || canonical.exerciseRoomId(exercise) !== ctx.target.roomId
+    || canonical.eventDurationMinutes(exercise) !== ctx.target.durationMinutes
+    || Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)
+    || exercise.isCancelled === true || exercise.isCanceled === true
+    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())
+    || !Array.isArray(exercise.availableClientSubscriptions)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  ctx.exercise = exercise;
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
 if (ctx.step === 'subscriptions') {
@@ -148,7 +190,7 @@ while (ctx.step === 'next') {
   const bound = { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: id,
     lk1ProductIdentity: { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, subscriptionId: id,
       productId, name, purchaseDate: live.purchaseDate, subscription: live } };
-  const exercise = { id: 'preview', studioId: ctx.target.stationId, roomId: ctx.target.roomId,
+  const exercise = ctx.exercise || { id: 'preview', studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     timeFrom: ctx.target.startsAt, timeTo: new Date(Date.parse(ctx.target.startsAt) + ctx.target.durationMinutes * 60000).toISOString(),
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
   if (['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
@@ -156,7 +198,15 @@ while (ctx.step === 'next') {
     || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0) {
     quote(id, live.visitsLeft === 0 ? 'LIMIT_USED' : 'UNAVAILABLE', null, 0, 0, live.visitsLeft === 0 ? 'SUBSCRIPTION_VISITS_EXHAUSTED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
-  const owned = canonical.identityOwned(bound, [live], exercise);
+  const available = ctx.existingGame ? exercise.availableClientSubscriptions.filter(row => {
+    if (!canonical.isObj(row)) return false;
+    const ids = [row.clientSubscriptionId, row.subscriptionId, row.clientSubId, row.clientSubscription?.id,
+      row.clientSubscription?.clientSubscriptionId, row.clientSub?.id].filter(value => value !== undefined && value !== null);
+    const aliases = ids.length ? ids : [row.id, row.uuid].filter(value => value !== undefined && value !== null);
+    return aliases.length > 0 && aliases.every(value => typeof value === 'string' && canonical.normalizeId(value) === canonical.normalizeId(id));
+  }) : [live];
+  if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
+  const owned = canonical.identityOwned(bound, available, exercise);
   if (owned.length !== 1) return stop('PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
   if (productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74') {
     const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
@@ -190,9 +240,9 @@ while (ctx.step === 'next') {
   }
   ctx.currentId = id;
   const usageContext = { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: id,
-    serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: 'CREATE_GAME', step: 'lk1_usage_operations',
+    serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: ctx.existingGame ? 'JOIN_GAME' : 'CREATE_GAME', step: 'lk1_usage_operations',
     lk1: { rule: configured.rule, bookings: ctx.bookings, activeBookings: ctx.activeBookings,
-      target: { resolutionSource: 'SERVER', category: 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
+      target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
         basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } } };
   if (ctx.operations.some(row => row?.lk1?.rule?.productId !== configured.rule.productId)) return stop('LK1_ALLOWANCE_RECORD_INVALID');
   const usageMessage = { payload: ctx.operations, _subscriptionBooking: usageContext };

@@ -2163,3 +2163,9 @@
   the compatible frontend release before the Node-RED ingress rewire.
 - No production flow, runtime, MongoDB, Viva, payment, lease, or user data was
   changed.
+
+## 2026-09-09 — Price and subscription limits before joining
+
+- Added the existing server price/limit preview to both game-details join interfaces; per-instance participation amount, overage and exhausted/unconfirmed states replace name-only debit choices. The subscription action is disabled until its quote is confirmed.
+- EXISTING_GAME preview resolves the stored game and authenticated Viva exercise, reuses the exact court tariff and instance-scoped evaluator, and adds only a Mongo find path. Product binding uses the existing owned metadata lookup; real JOIN remains independently revalidated.
+- Local evidence: 560 PASS / 8 SKIP / 0 FAIL, full prod/dev build and final affected builds, TypeScript, lint without errors, exact graph upgrade, independent payment-safety review and desktop/mobile component checks. No merge/push/deploy or real booking/payment. Details: `docs/SUBSCRIPTION_JOIN_PRICE_PREVIEW_2026-09-09.md`.

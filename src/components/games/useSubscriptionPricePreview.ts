@@ -29,7 +29,7 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
         if (!current) return;
         const quotes = !result.error && Array.isArray(result.data?.quotes) ? result.data.quotes : null;
         // Validate freshness at receipt, then retain this display snapshot for the
-        // unchanged selection. CREATE independently checks the chosen subscription;
+        // unchanged selection. CREATE/JOIN independently checks the chosen subscription;
         // this preview is never sent as authorization or as the amount to charge.
         setState({scope, loading: false, quotes, receivedAt: Date.now()});
       }).catch(() => {
