@@ -127,7 +127,22 @@ test('real DEV nginx preserves both reserve servers through twelve-file switch a
       assert.match(get(port, 'bundle-dev.js', 'POST'), /HTTP\/1.1 403/);
     }
   }
+  // Reload starts new workers before the previous generation has stopped serving.
+  // One successful response can hit a new worker while another port still reaches
+  // an old one. Wait for the old generation to exit before asserting exact routing.
+  const oldWorkers = docker(['exec', id, 'sh', '-c',
+    'master=$(cat /tmp/nginx.pid); cat /proc/$master/task/$master/children']).split(/\s+/).filter(Boolean);
+  assert.ok(oldWorkers.length > 0 && oldWorkers.every(pid => /^\d+$/.test(pid)));
   docker(['exec', id, 'sh', '-c', 'cp /fixture/source.conf /tmp/nginx.conf && nginx -t -p /tmp/ -c /tmp/nginx.conf && nginx -s reload -p /tmp/ -c /tmp/nginx.conf']);
+  let oldWorkersExited = false;
+  for (let i = 0; i < 30 && !oldWorkersExited; i++) {
+    const result = spawnSync('docker', ['exec', id, 'sh', '-c',
+      `for worker in ${oldWorkers.join(' ')}; do test ! -d /proc/$worker || exit 1; done`],
+    { encoding: 'utf8', timeout: 10000 });
+    oldWorkersExited = result.status === 0;
+    if (!oldWorkersExited) await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.equal(oldWorkersExited, true, 'nginx reload must retire every worker from the previous configuration');
   let restored = false;
   for (let i = 0; i < 30 && !restored; i++) {
     restored = get(18081, 'bundle-dev.js').endsWith('legacy:bundle-dev.js');

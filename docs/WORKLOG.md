@@ -2305,3 +2305,19 @@ Checks: exact critical matrix 548 PASS / 5 optional SKIP / 0 FAIL; delivery suit
 PASS under loopback permission; affected lint/diff check PASS. Independent test and
 workflow review: no material findings. Runtime sources equal already-built d2083b1;
 no duplicate frontend build. No deployment or live payment/provider operations.
+
+### 2026-09-09 — remove nginx fixture reload-generation race from CI
+
+The subscription critical matrix passed after `ec57e7d`. Unchanged DEV nginx
+rollback fixture failed intermittently after observing one restored response:
+old workers could still serve another port. One retry passed this fixture but
+was then cancelled by the parallel main push `96065cf`, which includes all
+subscription snapshot commits unchanged; that run reproduced the fixture race.
+
+Before the existing exact rollback assertions, record the owned container's old
+worker PIDs and wait for that generation to exit after reload. No process is
+killed by the barrier. Keep all exact file/body and both-port assertions; a failed
+reload or workers that do not retire still fail the test. Only the test changes.
+`npm run test:frontend-static-nginx`: 2/2 PASS in real isolated read-only,
+network-none Docker fixtures; affected lint and diff check PASS. Independent
+review: no material findings. No production nginx/configuration/deploy changes.
