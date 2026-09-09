@@ -1,3 +1,4 @@
+import { invalidateSubscriptionSnapshot } from "./subscriptionSessionCache";
 import {
   apiConfirmPadelGamePayment,
   apiFetchPadelGameByPaymentRef,
@@ -447,6 +448,7 @@ export function markPendingPaymentSyncResolved(paymentRefRaw: string): void {
   if (!paymentRef) return;
   const queue = readQueue();
   if (queue[paymentRef]) {
+    invalidateSubscriptionSnapshot();
     writeQueue(removePaymentSyncQueueItem(queue, paymentRef));
   }
   removePendingPaidGameDraft(paymentRef);

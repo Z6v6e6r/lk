@@ -12,6 +12,8 @@ import {
   ALLOW_LOCAL_PRODUCTION_HISTORY_API,
   LEGACY_ROSTER_BRIDGE_ENABLED,
 } from "../consts/api_config";
+import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChangesSubscriptions } from "./subscriptionSessionCache";
+import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
 import type {
@@ -4187,11 +4189,14 @@ async function rawRequest<T>(
 
   const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
 
+  const changesSubscriptions = requestChangesSubscriptions(fullUrl, fetchOptions.method, fetchOptions.body);
+  if (changesSubscriptions) invalidateSubscriptionSnapshot();
   let response: Response;
 
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
   } catch (err) {
+    if (changesSubscriptions) invalidateSubscriptionSnapshot();
     const idlePaused = isLkIdleRequestPausedError(err);
     if (!idlePaused) {
       trackClientError(
@@ -4224,6 +4229,8 @@ async function rawRequest<T>(
   } else {
     payload = await response.text().catch(() => null);
   }
+
+  if (changesSubscriptions) invalidateSubscriptionSnapshot();
 
   if (status === 304) {
     return {
@@ -5192,14 +5199,14 @@ export async function apiFetchSubscriptions(options: SubscriptionFetchOptions = 
   });
 
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<SubscriptionResponse>(
-    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/subscriptions${suffix}`,
-    {
-      method: "GET",
-      auth: true,
-      retries: 1,
-    },
-  );
+  const url = `${API_BASE}/end-user/api/v1/${TENANT_KEY}/subscriptions${suffix}`;
+  return readSubscriptionSnapshot<SubscriptionResponse>({
+    key: JSON.stringify(["list", url, SERV2, SERV2_FALLBACK, IS_DEV_RELEASE_CHANNEL]),
+    token: readAuthToken(),
+    currentToken: readAuthToken,
+    sanitize: sanitizeSubscriptionSnapshot,
+    load: () => request<SubscriptionResponse>(url, { method: "GET", auth: true, retries: 1 }),
+  });
 }
 
 export async function apiFetchExercisesByDate(
@@ -10273,6 +10280,16 @@ export async function apiFetchSubscriptionPricePreview(
 }
 
 export async function apiFetchSubscriptioName(subId: string, _phone: string): Promise<ApiResult<SubscriptionName>> {
+  return readSubscriptionSnapshot<SubscriptionName>({
+    key: JSON.stringify(["name", subId, API_BASE, TENANT_KEY, SERV2, SERV2_FALLBACK, IS_DEV_RELEASE_CHANNEL]),
+    token: readAuthToken(),
+    currentToken: readAuthToken,
+    sanitize: sanitizeSubscriptionName,
+    load: () => fetchSubscriptionName(subId),
+  });
+}
+
+async function fetchSubscriptionName(subId: string): Promise<ApiResult<SubscriptionName>> {
   const candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
   try {
     return await runWithAbortTimeout(35_000, async (signal) => {
@@ -10726,6 +10743,8 @@ export async function apiConfirmTournamentSubscriptionPurchase(
     };
   }
 
+  if (parsed.paid) invalidateSubscriptionSnapshot();
+
   return {
     data: parsed,
     error: null,
@@ -11117,6 +11136,8 @@ export async function apiConfirmReferralSubscriptionPurchase(
       status: response.status,
     };
   }
+
+  if (parsed.paid) invalidateSubscriptionSnapshot();
 
   return {
     data: parsed,
