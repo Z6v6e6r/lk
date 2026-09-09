@@ -227,3 +227,28 @@ Re-preparation checks (overlapping suites; do not add counts):
   source pull/regeneration or remote CI was run for this local correction.
 - No merge, push, deploy, activation or database/provider business mutation.
   A fresh installed-flow update remains necessary before deployment.
+
+## Push and CI correction
+
+The approved merge `653f6939477a77c6e325404f40ff7fd544f29cdb` was pushed to
+`origin/main`; remote SHA was read back exactly. The repository-configured custody
+scan passed before push. No deployment or sales activation occurred.
+
+[CI run 34360226209](https://github.com/Z6v6e6r/lk/actions/runs/34360226209)
+failed the critical regression matrix: 516 passed, one failed, five skipped.
+`tournamentSubscriptionSalesCandidate.test.mjs` caught two stale unbound source
+amendment hashes after the seven-seat correction. The test stopped at the first
+mismatch; both status response and purchase prepare metadata required updating.
+
+The local correction changes only those two hashes in
+`scripts/prepare_lk1_subscription_enforcement_candidate.mjs` and this documentation.
+Frozen target pins, `UNBOUND_AFTER_ROUTER_AMENDMENT`, null candidate binding and all
+retirement/provenance rejection checks remain unchanged. No runtime behavior changed.
+
+Replayed the exact current CI check_9 and check_10 commands locally: 517 passed /
+five private-fixture skips, and 65 passed / one private-fixture plus one Linux-only
+skip, respectively. Scoped ESLint and `git diff --check` passed. Independent
+read-only release review found no issues. Full frontend build was not repeated
+for these two metadata-only hash corrections. Remote CI remains failed until a
+separately approved integration/push publishes the correction. No rerun of the
+unchanged failed SHA was requested.
