@@ -370,7 +370,7 @@ if (mode === "SELF" && targetActive && !canonicalMembershipVersion
     mode: "SELF",
     actorClientId: ctx.actorClientId,
     targetClientId,
-    state: { $in: ["DONE", "RETURN_PENDING"] },
+    state: { $in: ["DONE", "RETURN_PENDING", "VIVA_CONFIRMED"] },
     vivaVerification: "active_absent_history_cancelled",
     lkAppliedAt: { $exists: true },
     outcome: "REMOVED",

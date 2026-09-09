@@ -1671,3 +1671,27 @@ test("a leave marker alone cannot authorize writes through an active join respon
   assert.equal(out[1].statusCode, 403);
   assert.ok(!out[3] && !out[4]);
 });
+
+
+test("return verification may leave a completed cancellation in VIVA_CONFIRMED; proof still recovers phantom", () => {
+  const prior = priorCancelledLeave({ state: "VIVA_CONFIRMED" });
+  const original = structuredClone(prior);
+  const lookup = authorizeSelf(phantomGame());
+  assert.ok(lookup.payload.state.$in.includes("VIVA_CONFIRMED"));
+  const msg = completeReconciliationProof(reconciliationDiscovery(phantomGame(), prior));
+  assert.equal(msg._splitLeaveCtx.vivaTargetMode, "NONE");
+  assert.equal(msg._splitLeaveCtx.localReconciliation.priorOperationId, prior.operationId);
+  assert.notEqual(msg._splitLeaveCtx.operationId, prior.operationId);
+  assert.deepEqual(prior, original);
+});
+
+for (const invalid of [
+  { lkAppliedAt: undefined }, { lkAppliedAt: null }, { outcome: undefined },
+  { outcome: "REJOIN_PRESERVED" }, { vivaVerification: "unverified" },
+]) test(`VIVA_CONFIRMED alone cannot prove completed local removal ${JSON.stringify(invalid)}`, () => {
+  const msg = authorizeSelf(phantomGame());
+  msg.payload = [priorCancelledLeave({ state: "VIVA_CONFIRMED", ...invalid })];
+  const result = run("fn_split_leave_operation_route.js", msg).result;
+  assert.equal(result[0], null); assert.equal(result[1], null);
+  assert.equal(result[2].payload.state, "RETRY_REQUIRED");
+});

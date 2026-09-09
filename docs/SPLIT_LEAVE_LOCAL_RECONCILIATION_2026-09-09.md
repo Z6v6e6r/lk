@@ -91,3 +91,38 @@ Node-RED import/restart, deploy, реальные leave/join/booking/refund/data
 CI этого task head и реальный UI/provider postcheck ещё не выполнялись. Для релиза
 нужно отдельное разрешение, свежий preimage и штатный reviewed deployment contract.
 Структурный reverse contract сам по себе не доказывает rollback новых persisted операций.
+
+
+## Post-deploy: completed receipt in VIVA_CONFIRMED
+
+Первый пакет из `fa2a0c6` установлен на 147: active SHA
+`3456eb84554f09ccc71a767b2a679f8aae5b7eca7f0e2495c1ca0a301b78855c`.
+Свежий preimage `38d4dc87...` включал девять параллельных узлов продаж; они
+сохранены при независимом function-only rebind. PM2 restart 98 -> 99, 15-minute
+observation PASS (904 seconds), оба public GET 200 и unauth leave probe 401.
+Prod/dev manifests неизменны. Реального leave/join/refund теста не было.
+
+Read-only postcheck точной игры выявил незавершённый сценарий: предыдущая отмена
+содержит `lkAppliedAt`, `outcome=REMOVED`, `vivaVerification=active_absent_history_cancelled`,
+но verifier возврата перевёл её из `RETURN_PENDING` обратно в `VIVA_CONFIRMED` ещё
+до этого деплоя. Из-за фильтра состояний она не попадала в recovery proof lookup.
+
+Отдельная поправка добавляет `VIVA_CONFIRMED` в два одинаковых фильтра —
+`fn_split_leave_authorize.js` и `fn_split_leave_operation_route.js`. Наличие
+подтверждённого применения в ЛК, точного target/game/exercise и отмены по-прежнему
+обязательно. Новая операция повторяет fresh active/history checks, не отменяет
+новый booking и не меняет старый refund. Случаи без lkAppliedAt/outcome или с
+REJOIN_PRESERVED отклоняются. Absent-receipt replay не расширяется.
+
+Поправка проверена: 97 focused PASS; критическая матрица 527 PASS / 5 optional
+SKIP / 0 FAIL; independent incremental payment/reliability review PASS.
+Предыдущие frontend lint/typecheck/build результаты переиспользованы: их исходники
+и зависимости не изменились, поправка затрагивает только два Node-RED predicates.
+
+Follow-up candidate (не применён):
+`/private/tmp/lk-leave-confirmed-receipt-candidate/`, SHA
+`dd1dde9b854c5cc810ae3b9d2053cbb892637f760ee56a81a7d5a8f87bfe0732`,
+2 function bodies, 4798 nodes / 219 routes, forward/reverse contracts PASS.
+Follow-up branch: `codex/split-leave-confirmed-receipt-20260909`, base `fa2a0c6`.
+Следующий код пока локальный: не merged/pushed/deployed. Причина зависания
+старой проверки возврата и фактический возврат посещений остаются вне этой поправки.
