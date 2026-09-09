@@ -8460,20 +8460,21 @@ export default function GamesPage({
     && !isDetailsSplitPaymentGame
     && (detailsHasFreeSlots || isDetailsWaitlistEnabled),
   );
-  const canCurrentUserJoinSplitGameInDetails = Boolean(
+  const canCurrentUserCheckSplitSubscriptionsInDetails = Boolean(
     gameRecordId
     && !isReadOnlySyntheticGame
     && isDetailsSplitPaymentGame
     && !isCurrentUserOrganizerByDetails
-    && !updatingGameRoster
-    && !updatingGameMeta
-    && !joiningSplitPayment
     && hasCurrentUserIdentityInDetails
     && !isCurrentUserConfirmedParticipant
     && !isCurrentUserInWaitlist
     && !hasCurrentUserActiveSplitPayment
     && detailsHasFreeSlots
   );
+  const canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails
+    && !updatingGameRoster
+    && !updatingGameMeta
+    && !joiningSplitPayment;
   const detailsSplitSubscriptionOptions = useMemo(() => (
     detailsSplitSubscriptions
       .map((subscription) => {
@@ -8488,6 +8489,32 @@ export default function GamesPage({
       })
       .filter((item): item is { subscriptionId: string; name: string; balanceLabel: string } => Boolean(item))
   ), [detailsSplitSubscriptions, detailsSplitSubscriptionNamesById]);
+  // Roster/status refreshes replace the record object without changing subscription
+  // eligibility. Keep the load context stable until actual game conditions change.
+  const detailsSplitSubscriptionLoadContext = useMemo(() => ({
+    gameId: activeGameRecord?.id || null,
+    studioId: String(activeGameRecord?.booking?.studioId || "").trim(),
+    bookingDate: String(activeGameRecord?.booking?.date || detailsDateKey || "").trim(),
+    roomId: activeGameRecord?.booking?.roomId || null,
+    fromTime: activeGameRecord?.booking?.timeFrom || null,
+    durationMinutes: detailsDurationMinutes,
+    exerciseTypeId: toFiniteNumber(detailsSplitPaymentMetadata?.exerciseTypeId
+      ?? detailsSplitPaymentMetadata?.vivaExerciseTypeId),
+    directionId: toFiniteNumber(detailsSplitPaymentMetadata?.directionId
+      ?? detailsSplitPaymentMetadata?.vivaDirectionId),
+  }), [
+    activeGameRecord?.id,
+    activeGameRecord?.booking?.studioId,
+    activeGameRecord?.booking?.date,
+    activeGameRecord?.booking?.roomId,
+    activeGameRecord?.booking?.timeFrom,
+    detailsDateKey,
+    detailsDurationMinutes,
+    detailsSplitPaymentMetadata?.exerciseTypeId,
+    detailsSplitPaymentMetadata?.vivaExerciseTypeId,
+    detailsSplitPaymentMetadata?.directionId,
+    detailsSplitPaymentMetadata?.vivaDirectionId,
+  ]);
   const loadDetailsSplitSubscriptions = useCallback(async () => {
     if (subscriptionUsageShadowEnabled || !profileId) {
       detailsSplitSubscriptionRequestRef.current += 1;
@@ -8503,10 +8530,8 @@ export default function GamesPage({
     setDetailsSplitSubscriptionsError(null);
 
     try {
-      const booking = activeGameRecord?.booking;
-      const studioId = String(booking?.studioId || "").trim();
-      const bookingDate = String(booking?.date || detailsDateKey || "").trim();
-      if (!activeGameRecord || !studioId || !bookingDate) {
+      const { gameId, studioId, bookingDate, exerciseTypeId, directionId } = detailsSplitSubscriptionLoadContext;
+      if (!gameId || !studioId || !bookingDate) {
         setDetailsSplitSubscriptions([]);
         setDetailsSplitSubscriptionNamesById({});
         setDetailsSplitSubscriptionsError("В игре недостаточно данных для проверки абонементов");
@@ -8527,14 +8552,6 @@ export default function GamesPage({
       const subscriptions = Array.isArray(subscriptionsResult.data?.content)
         ? subscriptionsResult.data.content
         : [];
-      const exerciseTypeId = toFiniteNumber(
-        detailsSplitPaymentMetadata?.exerciseTypeId
-        ?? detailsSplitPaymentMetadata?.vivaExerciseTypeId,
-      );
-      const directionId = toFiniteNumber(
-        detailsSplitPaymentMetadata?.directionId
-        ?? detailsSplitPaymentMetadata?.vivaDirectionId,
-      );
       const eligible = filterSplitCategoryCompatibleSubscriptions(
         subscriptions,
         buildComparableIdSet([
@@ -8580,15 +8597,13 @@ export default function GamesPage({
       }
     }
   }, [
-    activeGameRecord,
-    detailsDateKey,
-    detailsSplitPaymentMetadata,
+    detailsSplitSubscriptionLoadContext,
     profilePhone,
     profileId,
     subscriptionUsageShadowEnabled,
   ]);
   useEffect(() => {
-    if (!canCurrentUserJoinSplitGameInDetails) {
+    if (!canCurrentUserCheckSplitSubscriptionsInDetails) {
       detailsSplitSubscriptionRequestRef.current += 1;
       setDetailsSplitSubscriptionsLoading(false);
       setDetailsSplitSubscriptionsError(null);
@@ -8597,7 +8612,8 @@ export default function GamesPage({
       return;
     }
     void loadDetailsSplitSubscriptions();
-  }, [canCurrentUserJoinSplitGameInDetails, loadDetailsSplitSubscriptions]);
+    return () => { detailsSplitSubscriptionRequestRef.current += 1; };
+  }, [canCurrentUserCheckSplitSubscriptionsInDetails, loadDetailsSplitSubscriptions]);
   const detailsSplitJoinOneTimeLabel = joiningSplitPayment
     ? "Готовим оплату..."
     : `Оплатить стоимость${detailsSplitShareAmount != null ? ` · ${formatPrice(detailsSplitShareAmount)} ₽` : ""}`;
@@ -8606,7 +8622,7 @@ export default function GamesPage({
       date: activeGameRecord?.booking?.date || null, fromTime: activeGameRecord?.booking?.timeFrom || null,
       durationMinutes: detailsDurationMinutes }),
     subscriptionIds: detailsSplitSubscriptionOptions.map(option => option.subscriptionId), actorId: profileId,
-    enabled: step === "details" && canCurrentUserJoinSplitGameInDetails && !subscriptionUsageShadowEnabled && !detailsSplitSubscriptionsError,
+    enabled: step === "details" && canCurrentUserCheckSplitSubscriptionsInDetails && !subscriptionUsageShadowEnabled && !detailsSplitSubscriptionsError,
     availabilityLoading: detailsSplitSubscriptionsLoading,
   });
   const shouldShowCurrentUserLeaveActionInDetails = !isCurrentUserOrganizerOfActiveGame

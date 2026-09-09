@@ -1,5 +1,13 @@
 # Журнал шагов
 
+## 2026-09-09 — Стабильная загрузка подписок в деталях игры
+
+- В HAR повторные загрузки возвращали неизменные подписки и цены. `loadDetailsSplitSubscriptions` зависел от всего объекта игры/metadata, а временные busy-флаги очищали список; переключение loading сбрасывало предварительную цену.
+- `GamesPage.tsx` теперь сохраняет контекст загрузки по идентификатору игры, станции/корту, дате/времени/длительности и категории. Новый объект той же игры не запускает запрос. Профиль остаётся отдельной зависимостью; смена пользователя или условий загружает подписки заново. Cleanup/requestId отклоняют запоздалый ответ предыдущей загрузки.
+- Состояния сохранения состава, metadata и подготовки оплаты блокируют JOIN, но не сбрасывают подписки или полученные цены. Проверки JOIN и серверные платёжные операции не изменены; ручное обновление цены сохранено.
+- Проверки: `node --test scripts/tests/joinSubscriptionLoading.test.mjs` 6/6; существующие preview hook/render/API suites 13/13; `npm run lint` 0 errors / 387 warnings; полный `npm run build` (prod/dev, inert loopback config) PASS. `npm run test:night-e-acceptance`: 125/126, единственный отказ из-за устаревшего ожидания текста «Создать игру по подписке» воспроизведён отдельно на baseline `be2e395` без исправления. Независимое UI/payment-boundary review: существенных замечаний нет.
+- Локальная браузерная модель с настоящими React hooks и синтетическими API: после трёх обновлений объекта игры и busy-toggle список/расчёт остаются 1/1, при смене даты становятся 2/2; карточки сохраняют цену, а JOIN недоступен при busy. Это локальное доказательство, не live/provider acceptance. HAR, сырые пользовательские данные и синтетическая сборка в Git не включены; merge/push/deploy/payment/data mutation не выполнялись.
+
 ## 2026-09-09 — DEV channel for standalone game join loader
 
 - Post-deploy readback found `/game_join?channel=dev` still loading production `games.js`; `/lk_dev?joinGame=…` already displays live subscription prices correctly.
