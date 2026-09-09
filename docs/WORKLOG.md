@@ -2289,3 +2289,19 @@ loopback configuration PASS; lint 0 errors / 387 existing warnings; diff check P
 The unchanged, previously confirmed night-e source-text baseline failure was not
 rerun. No push, PR, deployment or live payment/booking/provider mutation. Remote
 publication and authenticated runtime verification remain separate approved stages.
+
+### 2026-09-09 — subscription snapshot CI harness compatibility
+
+Push of `d2083b1` was confirmed on remote main. CI run `34391820980` exposed two
+source-extraction harness assumptions: the waitlist guard moved into shared
+eligibility, and product-name transport moved behind the snapshot facade.
+Updated those tests without changing runtime: assert the eligibility/busy chain
+for both payment CTAs and exercise the real network helper's auth/timeout/fallback.
+Added the two new join/cache suites to the existing critical CI matrix; workflow
+permissions, triggers and publication behavior remain unchanged.
+
+Checks: exact critical matrix 548 PASS / 5 optional SKIP / 0 FAIL; delivery suite
+68 PASS / 1 sandbox-cancelled local TLS fixture, with that exact fixture separately
+PASS under loopback permission; affected lint/diff check PASS. Independent test and
+workflow review: no material findings. Runtime sources equal already-built d2083b1;
+no duplicate frontend build. No deployment or live payment/provider operations.
