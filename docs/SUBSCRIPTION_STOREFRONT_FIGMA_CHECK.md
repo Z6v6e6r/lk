@@ -34,7 +34,7 @@ No merge, push, deploy, Tilda mutation or provider/payment mutation in this chan
 - Desktop panels: x=212/720/1228, y=328, width480, height648; radii32/24/32. Content1496 wide.
 - Actual browser fonts: heading `RFDewi-Bold`, subtitle `RFDewi-Semibold`, switch and suffix `InterDisplay-Medium`, discount badges `InterDisplay-Bold`; all custom fonts.
 - Browser checks cover 19,800/Скоро, annual text, no mobile overflow, fitting radio labels, narrow embed progress widths, preserved focus with a single progress-bearing Friendship card, explicit false vs aggregate true, wrong explicit key with aggregate annual fallback.
-- Screenshots and run output: `output/playwright/subscription-variants/` (local ignored artifacts). Test fixture harness: `/private/tmp/subscription-browser-check.js`.
+- Screenshots and run output: `/private/tmp/subscription-variants-evidence-20260909/` (local artifacts outside Git). Test fixture harness: `/private/tmp/subscription-browser-check.js`.
 - Read-only specialist reviews found three P2 defects (annual fallback, narrow-container width, focus loss); all three corrected and covered by unit/browser checks.
 
 ## Remaining boundaries
