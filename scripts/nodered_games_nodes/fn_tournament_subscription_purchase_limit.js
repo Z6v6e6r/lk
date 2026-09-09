@@ -1,3 +1,32 @@
+// BEGIN generated hubLk1SaleContract
+function normalizeHubSalePolicy(value) {
+  try { if (typeof value === 'string') value = JSON.parse(value); } catch { return null; }
+  const keys = ['productId', 'maxActiveBookings', 'freeGameMinutesPerDay', 'gameOverageDiscountPercent', 'groupTrainingDiscountPercent', 'tournamentDiscountPercent'];
+  if (!value || Array.isArray(value) || typeof value !== 'object'
+    || Object.keys(value).sort().join() !== [...keys].sort().join()
+    || value.productId !== 'db7a5250-7369-4f43-8ac5-9111be24bc74'
+    || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)
+    || value.maxActiveBookings < 1 || keys.slice(3).some(k => value[k] > 100)) return null;
+  return Object.fromEntries(keys.map(k => [k, value[k]]));
+}
+function normalizeFrozenHubSale(value) {
+  const policy = normalizeHubSalePolicy(value?.policy);
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+    || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
+    || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
+  return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };
+}
+function readHubLk1Sale(globalContext) {
+  if (globalContext.get('summer_subscription_hub_lk1_sales_enabled') !== true
+    || globalContext.get('summer_subscription_sales_20260909_enabled') !== true) return null;
+  const policy = normalizeHubSalePolicy(globalContext.get('subscriptions_lk1_product_policy'));
+  const receipt = normalizeFrozenHubSale(globalContext.get('subscriptions_lk1_hub_sale_runtime'));
+  if (!policy || !receipt || JSON.stringify(policy) !== JSON.stringify(receipt.policy)) return null;
+  return receipt;
+}
+const hubLk1Sale = readHubLk1Sale(global);
+const piterNextDaySale = global.get("summer_subscription_piter_next_day_sales_20260909_enabled") === true && global.get("summer_subscription_sales_20260909_enabled") === true;
+// END generated hubLk1SaleContract
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const REGIONAL_FRIENDSHIP_BINDING_LABELS = {
@@ -9,6 +38,8 @@ const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
   "network_friendship",
 ]);
+if (hubLk1Sale) MANAGED_SALE_BLOCKED_COUNTER_KEYS.delete("network_friendship");
+if (piterNextDaySale) MANAGED_SALE_BLOCKED_COUNTER_KEYS.delete("piter_friendship");
 const MANAGED_SALE_COMPATIBILITY = {
   adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
   contractVersion: 1,
@@ -466,9 +497,13 @@ if (!vivaTokenRequestBody) {
   });
 }
 
+if (managedSaleCounterKey === "network_friendship"
+  && JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale)) !== JSON.stringify(hubLk1Sale)) {
+  return failMsg(503, "Правила продажи ХАБ изменились", { code: "HUB_LK1_SALE_BINDING_DRIFT" });
+}
 ctx.vivaTokenRequestBody = vivaTokenRequestBody;
 
-if (managedSaleCounterKey === "network_friendship") {
+if (managedSaleCounterKey === "network_friendship" && !hubLk1Sale) {
   const readiness = managedSaleReadinessConfig();
   if (!readiness) {
     return failMsg(503, "Контур managed-продажи ХАБ не настроен", {

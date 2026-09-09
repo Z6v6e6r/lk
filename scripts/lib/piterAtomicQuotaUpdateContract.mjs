@@ -1,3 +1,4 @@
+import fs from "node:fs";
 // Exact local update of the already installed atomic graph. These are not
 // activation permission or a claim about the current production flow.
 export const PITER_QUOTA_UPDATE = Object.freeze({
@@ -27,3 +28,13 @@ export const PITER_QUOTA_UPDATE = Object.freeze({
 export const isExactPiterQuotaUpdateDeployment = (value) => Boolean(value && [
   "deploymentId", "sourceSha256", "candidateSha256", "sourceNodeCount", "candidateNodeCount",
 ].every((key) => value[key] === PITER_QUOTA_UPDATE[key]));
+
+// A separate exact tuple is bound by the reviewed opening candidate. Historical
+// update receipts above remain 50-only; changing a packet field cannot upgrade them.
+export const PITER_QUOTA48_UPDATE = Object.freeze(JSON.parse(fs.readFileSync(
+  new URL("../subscription_sale_opening_binding.json", import.meta.url), "utf8",
+)));
+export const isExactPiterQuota48Deployment = (value) => Boolean(value
+  && /^[a-f0-9]{64}$/.test(PITER_QUOTA48_UPDATE.candidateSha256)
+  && ["deploymentId", "updateKind", "sourceSha256", "candidateSha256", "sourceNodeCount", "candidateNodeCount"]
+    .every((key) => value[key] === PITER_QUOTA48_UPDATE[key]));

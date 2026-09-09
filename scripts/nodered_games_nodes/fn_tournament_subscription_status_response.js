@@ -1,3 +1,32 @@
+// BEGIN generated hubLk1SaleContract
+function normalizeHubSalePolicy(value) {
+  try { if (typeof value === 'string') value = JSON.parse(value); } catch { return null; }
+  const keys = ['productId', 'maxActiveBookings', 'freeGameMinutesPerDay', 'gameOverageDiscountPercent', 'groupTrainingDiscountPercent', 'tournamentDiscountPercent'];
+  if (!value || Array.isArray(value) || typeof value !== 'object'
+    || Object.keys(value).sort().join() !== [...keys].sort().join()
+    || value.productId !== 'db7a5250-7369-4f43-8ac5-9111be24bc74'
+    || keys.slice(1).some(k => !Number.isSafeInteger(value[k]) || value[k] < 0)
+    || value.maxActiveBookings < 1 || keys.slice(3).some(k => value[k] > 100)) return null;
+  return Object.fromEntries(keys.map(k => [k, value[k]]));
+}
+function normalizeFrozenHubSale(value) {
+  const policy = normalizeHubSalePolicy(value?.policy);
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+    || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
+    || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
+  return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };
+}
+function readHubLk1Sale(globalContext) {
+  if (globalContext.get('summer_subscription_hub_lk1_sales_enabled') !== true
+    || globalContext.get('summer_subscription_sales_20260909_enabled') !== true) return null;
+  const policy = normalizeHubSalePolicy(globalContext.get('subscriptions_lk1_product_policy'));
+  const receipt = normalizeFrozenHubSale(globalContext.get('subscriptions_lk1_hub_sale_runtime'));
+  if (!policy || !receipt || JSON.stringify(policy) !== JSON.stringify(receipt.policy)) return null;
+  return receipt;
+}
+const hubLk1Sale = readHubLk1Sale(global);
+const piterNextDaySale = global.get("summer_subscription_piter_next_day_sales_20260909_enabled") === true && global.get("summer_subscription_sales_20260909_enabled") === true;
+// END generated hubLk1SaleContract
 const DEFAULT_TOTAL_LIMIT = 100;
 const MAX_TOTAL_LIMIT = 1000;
 const SIRIUS_FRIENDSHIP_DEFAULT_LIMIT = 100;
@@ -36,6 +65,8 @@ const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "network_friendship",
   "piter_friendship",
 ]);
+if (hubLk1Sale) MANAGED_SALE_BLOCKED_COUNTER_KEYS.delete("network_friendship");
+if (piterNextDaySale) MANAGED_SALE_BLOCKED_COUNTER_KEYS.delete("piter_friendship");
 const DEFAULT_PLAN_KEY = "sport";
 const DEFAULT_VISIBLE_COUNTER_KEYS = ["friendship", "sport", "academy", "ra", "energy5"];
 const AB_LETO_TOTAL_LIMIT_DEFAULTS = {
@@ -368,6 +399,13 @@ const readAbLetoInventoryId = (counterKey = null) => {
     return baseInventoryId;
   }
   const stagedRelease = resolveAbLetoStagedRelease();
+  // A new allocation, not a reset of paid/pending records in the previous inventory.
+  // Frozen confirmations keep their original inventory even after a late payment.
+  if (normalizedCounterKey === "ra" && SALES_QUOTAS_20260909_ENABLED
+    && stagedRelease?.inventoryId === AB_LETO_STAGED_INVENTORY_ID
+    && Date.now() >= Date.parse(SALES_QUOTAS_20260909_START)) {
+    return "ab_leto_20260909_daily_v3_ra";
+  }
   if (stagedRelease) {
     return `${stagedRelease.inventoryId}_${normalizedCounterKey}`;
   }
@@ -712,7 +750,7 @@ const configuredCounters = Array.isArray(ctx.counters) && ctx.counters.length > 
     .map((counterKey) => configMap[counterKey])
     .filter((counter) => Boolean(counter));
 
-const needsNetworkReadiness = configuredCounters.some(
+const needsNetworkReadiness = !hubLk1Sale && configuredCounters.some(
   (counter) => normalizeCounterKey(counter?.counterKey) === "network_friendship"
     && !MANAGED_SALE_BLOCKED_COUNTER_KEYS.has("network_friendship")
 );
@@ -763,7 +801,7 @@ configuredCounters.forEach((counter) => {
 });
 
 if (statesByCounterKey.network_friendship) {
-  const ready = !MANAGED_SALE_BLOCKED_COUNTER_KEYS.has("network_friendship")
+  const ready = Boolean(hubLk1Sale) || !MANAGED_SALE_BLOCKED_COUNTER_KEYS.has("network_friendship")
     && typeof msg.statusCode === "number"
     && Number.isInteger(msg.statusCode) && msg.statusCode >= 200 && msg.statusCode < 300
     && !msg.error
@@ -840,7 +878,7 @@ const piterLedgerRowsValid = Array.isArray(piterLedger?.legacyPaymentRefs)
 const piterQuotaAdjustment = piterLedger?.schemaVersion === 2 ? piterLedger.quotaAdjustment : 0;
 const piterQuotaValid = Number.isSafeInteger(piterQuotaAdjustment) && piterQuotaAdjustment >= 0
   && (piterLedger?.schemaVersion === 2
-    ? piterLegacyRefs.length + piterQuotaAdjustment === 50
+    ? [50, 52].includes(piterLegacyRefs.length + piterQuotaAdjustment)
     : !Object.prototype.hasOwnProperty.call(piterLedger || {}, "quotaAdjustment"));
 if (piterState && piterLedger?.ready === true
   && [1, 2].includes(piterLedger.schemaVersion)
@@ -863,8 +901,9 @@ if (piterState && piterLedger?.ready === true
   piterState.reservedCount = piterLedger.reservedCount;
   piterState.takenCount = piterLedger.takenCount;
   piterState.remainingCount = Math.max(piterState.totalLimit - piterLedger.takenCount, 0);
-  piterState.managedSaleReady = true;
-  piterState.managedSaleError = null;
+  const requiresNextDayRelease = piterLedger.schemaVersion === 2 && piterLegacyRefs.length + piterQuotaAdjustment === 52;
+  piterState.managedSaleReady = !requiresNextDayRelease || piterNextDaySale;
+  piterState.managedSaleError = piterState.managedSaleReady ? null : "PITER_NEXT_DAY_SALES_RELEASE_DISABLED";
   piterState._lastUpdatedAtTs = toTs(piterLedger.updatedAt) ?? toTs(piterLedger.baselineCapturedAt);
 }
 
@@ -920,7 +959,9 @@ const hubLedgerValid = Boolean(hubState && hubLedger?.ready === true
   && Number.isInteger(hubLedger.dailyBaselinePaidCount) && hubLedger.dailyBaselinePaidCount >= 0
   && Number.isInteger(hubLedger.dailyPaidCount) && hubLedger.dailyPaidCount >= 0
   && Number.isInteger(hubLedger.dailyReservedCount) && hubLedger.dailyReservedCount >= 0
-  && hubLedger.dailyPaidCount + hubLedger.dailyReservedCount <= hubState.dailyLimit
+  && hubLedger.dailyDate <= hubState.dailyDropDate
+  && hubLedger.dailyPaidCount + hubLedger.dailyReservedCount <= (hubLedger.dailyDate < hubState.dailyDropDate
+    ? hubState.inventoryTotalLimit : hubState.dailyLimit)
   && /^[a-f0-9]{64}$/.test(toStr(hubLedger.baselineDigest) || "")
   && Number.isFinite(Date.parse(toStr(hubLedger.baselineCapturedAt) || ""))
   && hubLedgerRowsValid);
@@ -929,8 +970,9 @@ if (hubState && hubLedgerValid) {
   hubState.reservedCount = hubLedger.reservedCount;
   hubState.takenCount = hubLedger.takenCount;
   hubState.remainingCount = Math.max(hubState.inventoryTotalLimit - hubLedger.takenCount, 0);
-  hubState._dailyPaidCount = hubLedger.dailyPaidCount;
-  hubState._dailyReservedCount = hubLedger.dailyReservedCount;
+  // Project rollover on GET; only the atomic purchase CAS may mutate the ledger.
+  hubState._dailyPaidCount = hubLedger.dailyDate === hubState.dailyDropDate ? hubLedger.dailyPaidCount : 0;
+  hubState._dailyReservedCount = hubLedger.dailyDate === hubState.dailyDropDate ? hubLedger.dailyReservedCount : 0;
   hubState.inventoryPaidCount = hubLedger.paidCount;
   hubState.inventoryReservedCount = hubLedger.reservedCount;
   hubState.inventoryRemainingCount = Math.max(hubState.inventoryTotalLimit - hubLedger.takenCount, 0);

@@ -200,6 +200,13 @@ const readAbLetoInventoryId = (counterKey = null) => {
     return baseInventoryId;
   }
   const stagedRelease = resolveAbLetoStagedRelease();
+  // A new allocation, not a reset of paid/pending records in the previous inventory.
+  // Frozen confirmations keep their original inventory even after a late payment.
+  if (normalizedCounterKey === "ra" && SALES_QUOTAS_20260909_ENABLED
+    && stagedRelease?.inventoryId === AB_LETO_STAGED_INVENTORY_ID
+    && Date.now() >= Date.parse(SALES_QUOTAS_20260909_START)) {
+    return "ab_leto_20260909_daily_v3_ra";
+  }
   if (stagedRelease) {
     return `${stagedRelease.inventoryId}_${normalizedCounterKey}`;
   }

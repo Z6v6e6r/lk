@@ -44,6 +44,8 @@ const inventoryIdPattern = `^(?:${[
   `${escapeRegex(inventoryId)}(?:_(?:friendship|ra)_.*)?`,
   `${escapeRegex(LEGACY_STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra)`,
   `${escapeRegex(STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra)`,
+  // Always poll this inventory, including after the configuration flag is turned off.
+  escapeRegex("ab_leto_20260909_daily_v3_ra"),
   ...regionalInventoryIds.map(escapeRegex),
 ].join("|")})$`;
 

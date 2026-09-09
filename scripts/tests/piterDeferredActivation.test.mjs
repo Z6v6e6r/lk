@@ -197,13 +197,19 @@ test('guarded start evidence uses exclusive durable publication and retains part
   assert.equal(files.has('/fixture/broken.json.pending'),true);assert.equal(files.has('/fixture/broken.json'),false);
 });
 
-test('all five original strict files remain byte-identical',()=>{
+test('original live mutators stay unchanged; reviewed 48-seat contract extensions remain pinned',()=>{
   const pins={ 'lib/piterAtomicActivationContract.mjs':'9d7592f9249c72eed0b8e9bfe57e43bad4111fd6e1958a3e1a96d84f17626a87',
     'lib/piterAtomicLedgerOperations.mjs':'3ac59e5524c9bff868f7335f817bfe39a102d9a6176d43a00c0a2661b24225c7',
     'prepare_piter_atomic_activation_packet.mjs':'af6c49f279b893516633f468adb1764dd73de1d9d3e338c8cc669854b46d6dcd',
     'manage_piter_atomic_ledger.mjs':'e60249fba1cb6ceeae312699b8d21d37d0daee6b2a75f20bdf9fffb55cdc7c1e',
     'lib/piterLegacySalesReconciliation.mjs':'9483299fb3eb7ce778ac881c13bee0ac2b50b23c95ed3f78bbff5e81792456ce'};
-  for(const [file,pin] of Object.entries(pins))assert.equal(sha256(fs.readFileSync(new URL('../'+file,import.meta.url))),pin,file);
+  // The old deferred 50-seat receipt is not upgraded; the new exact tuple owns these additions.
+  const reviewedOpeningAmendments = {
+  "lib/piterAtomicActivationContract.mjs": "2a0d0603e7f114567d6ef3b99cbf057bf2a0043d58d0033763a1cc5e1e4a8e12",
+  "lib/piterAtomicLedgerOperations.mjs": "e3c48f505ecaae3f74e0503f306d9f4b91197ba9764ba4d6fff9b6972f8df13b",
+  "prepare_piter_atomic_activation_packet.mjs": "35e381541ea8e6e17e2b641971c562de80d40addfe99af2cf7a3310a4dba8f96"
+};
+  for(const [file,pin] of Object.entries(pins))assert.equal(sha256(fs.readFileSync(new URL('../'+file,import.meta.url))),reviewedOpeningAmendments[file] ?? pin,file);
 });
 
 const hash = v => sha256(stableJson(v));

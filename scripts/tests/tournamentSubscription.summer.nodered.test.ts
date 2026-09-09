@@ -1964,7 +1964,7 @@ test("summer subscription reconciliation keeps polling bounded pending and ambig
   )) as Record<string, unknown>;
 
   assert.deepEqual(prepared.query, {
-    inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra)|ab_leto_2026_150_v2_(?:friendship|ra)|kotelniki_friendship_12m_2026_v1|network_friendship_12m_2026_v1|piter_friendship_12m_2026_v1)$" },
+    inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra)|ab_leto_2026_150_v2_(?:friendship|ra)|ab_leto_20260909_daily_v3_ra|kotelniki_friendship_12m_2026_v1|network_friendship_12m_2026_v1|piter_friendship_12m_2026_v1)$" },
     $or: [
       {
         status: { $in: ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
@@ -5032,7 +5032,7 @@ function readResumedQuota(counterKey: string, rows: NodeRedMsg[], nowIso = "2026
   });
 }
 
-for (const counterKey of ["ra", "friendship"]) {
+for (const counterKey of ["friendship"]) {
   test(`resumed ${counterKey} has 10 daily seats without erasing the unfinished launch history`, () => {
     const inventoryId = `ab_leto_2026_150_v2_${counterKey}`;
     const rows = Array.from({ length: 5 }, (_, i) => ({
@@ -5142,4 +5142,239 @@ test("HAB quota flag sets 1 of 1 at 98000 RUB and preserves historical prices an
     assert.equal(mismatch.bindingReady, false);
     assert.equal(mismatch.canPurchase, false);
   });
+});
+
+const RA_RESUMED_INVENTORY = "ab_leto_20260909_daily_v3_ra";
+test("RA starts ten new seats while historical paid and pending operations keep their inventory", () => {
+  const historical = [
+    { inventoryId: "ab_leto_2026_150_v2_ra", counterKey: "ra", status: "PAID", paymentRef: "old-paid", paidAt: "2026-09-09T07:10:00.000Z" },
+    { inventoryId: "ab_leto_2026_150_v2_ra", counterKey: "ra", status: "PAYMENT_PENDING", paymentRef: "old-pending", createdAt: "2026-09-09T07:20:00.000Z", expiresAt: "2026-09-09T09:00:00.000Z" },
+  ];
+  const original = structuredClone(historical);
+  const assertSeats = (rows: NodeRedMsg[], seats: number) => {
+    const result = readResumedQuota("ra", rows);
+    for (const view of [result.status, result.refresh]) {
+      assert.equal(view.inventoryId, RA_RESUMED_INVENTORY);
+      assert.equal(view.totalLimit, 10);
+      assert.equal(view.remainingCount, seats);
+    }
+    assert.equal(result.purchaseCtx.inventoryId, RA_RESUMED_INVENTORY);
+    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, seats);
+  };
+  assertSeats(historical, 10);
+  const latePaid = historical.map(row => row.paymentRef === "old-pending"
+    ? { ...row, status: "PAID", paidAt: "2026-09-09T07:59:00.000Z" } : row);
+  assertSeats(latePaid, 10);
+  const next = { inventoryId: RA_RESUMED_INVENTORY, counterKey: "ra", paymentRef: "new-one",
+    status: "PAYMENT_PENDING", releasePhase: "daily", dailyDropDate: "2026-09-09",
+    createdAt: "2026-09-09T07:55:00.000Z", expiresAt: "2026-09-09T09:00:00.000Z" };
+  assertSeats([...latePaid, next], 9);
+  assertSeats([...latePaid, { ...next, status: "PAID", paidAt: "2026-09-09T07:59:00.000Z" }], 9);
+  assertSeats([...latePaid, { ...next, status: "FAILED" }], 10);
+  const tomorrow = readResumedQuota("ra", [...latePaid, { ...next, status: "PAID" }], "2026-09-10T08:00:00.000Z");
+  assert.equal(tomorrow.status.remainingCount, 10);
+  assert.equal(tomorrow.refresh.remainingCount, 10);
+  assert.deepEqual(historical, original);
+});
+
+test("RA reconciliation includes both inventories even when the new allocation is disabled", () => {
+  for (const flag of [true, false]) {
+    const result = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_query.js",
+      {}, { summer_subscription_sales_20260909_enabled: flag }) as NodeRedMsg;
+    const query = asRecord(asRecord(result).query);
+    const pattern = new RegExp(String(asRecord(query.inventoryId).$regex));
+    assert.equal(pattern.test(RA_RESUMED_INVENTORY), true);
+    assert.equal(pattern.test("ab_leto_2026_150_v2_ra"), true);
+    assert.equal(pattern.test("ab_leto_20260909_daily_v3_friendship"), false);
+    assert.equal(pattern.test(RA_RESUMED_INVENTORY + "_other"), false);
+  }
+});
+
+test("late RA confirmation keeps the saved V2 inventory after V3 allocation", () => {
+  const result = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+    buildConfirmResolveMessage({
+      _summerSubscriptionCtx: { action: "confirm", step: "resolve_record", counterKey: "ra", inventoryId: RA_RESUMED_INVENTORY, paymentRef: "old-ra-confirm" },
+      payload: [{ counterKey: "ra", inventoryId: "ab_leto_2026_150_v2_ra", paymentRef: "old-ra-confirm", transactionId: "old-transaction",
+        status: "PAYMENT_PENDING", amountMinor: 2380000, providerProductCostMinor: 2380000, discountMinor: 0 }],
+    }), SALES_QUOTA_GLOBALS) as NodeRedMsg[];
+  const ctx = asRecord(asRecord(result[0])._summerSubscriptionCtx);
+  assert.equal(ctx.inventoryId, "ab_leto_2026_150_v2_ra");
+  assert.equal(ctx.expectedAmountMinor, 2380000);
+});
+
+const HUB_NEXT_DAY_POLICY = { productId: "db7a5250-7369-4f43-8ac5-9111be24bc74", maxActiveBookings: 3,
+  freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 20, tournamentDiscountPercent: 20 };
+const HUB_NEXT_DAY_RECEIPT = { bookingUsageScope: "ALL_BOOKINGS", mode: "LK1_VIVA_PRODUCT_NEXT_DAY_V1", policy: HUB_NEXT_DAY_POLICY, sourceDigest: "sha256:" + "a".repeat(64) };
+const HUB_NEXT_DAY_GLOBALS = { ...NETWORK_PRODUCT_GLOBALS, summer_subscription_sales_20260909_enabled: true,
+  summer_subscription_hub_lk1_sales_enabled: true, subscriptions_lk1_product_policy: HUB_NEXT_DAY_POLICY,
+  subscriptions_lk1_hub_sale_runtime: HUB_NEXT_DAY_RECEIPT };
+function nextDayHubProduct(activationDays: unknown, date = "2026-09-09T20:59:59.000Z", globals = HUB_NEXT_DAY_GLOBALS) {
+  return withFixedNow(date, () => runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
+    statusCode: 200,
+    payload: [{ id: HUB_NEXT_DAY_POLICY.productId, name: "Падел.Дружба.ХАБ — годовая", cost: 9800000,
+      productType: "SUBSCRIPTION", activationDays, validityDays: 365, visits: 365 }],
+    _summerSubscriptionCtx: { action: "purchase", step: "load_products", token: "fixture-token", saleType: "tiered_direct_product",
+      counterKey: "network_friendship", inventoryId: "network_friendship_12m_2026_v1", clientPhone: "79990000000",
+      productId: HUB_NEXT_DAY_POLICY.productId, productCostMinor: 9800000, priceMinor: 9800000,
+      hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT), batchIndex: 1 },
+  }, globals)) as NodeRedMsg[];
+}
+test("new LK1 HAB requires exact next-day activation and freezes the Moscow date", () => {
+  for (const [date, expected] of [["2026-09-09T20:59:59.000Z", "2026-09-10"],
+    ["2026-09-09T21:00:00.000Z", "2026-09-11"], ["2026-10-02T09:00:00.000Z", "2026-10-03"]]) {
+    const out = nextDayHubProduct(1, date); assert.equal(out[0], null);
+    const ctx = asRecord(asRecord(out[4])._summerSubscriptionCtx);
+    assert.equal(ctx.providerActivationDays, 1); assert.equal(ctx.providerAutoActivationDate, expected);
+    assert.equal(ctx.activationNotBeforeDate, expected); assert.equal(ctx.providerValidityDays, 365);
+    assert.equal(ctx.providerVisits, 365); assert.equal(ctx.priceMinor, 9800000);
+    assert.deepEqual(ctx.hubLk1Sale, HUB_NEXT_DAY_RECEIPT);
+  }
+  for (const days of [0, 2, 365, "1", null, undefined]) {
+    const out = nextDayHubProduct(days); assert.equal(out[0], null); assert.equal(out[4], undefined);
+    assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE");
+  }
+});
+test("next-day card alone cannot bypass disabled or mismatched HAB runtime", () => {
+  for (const globals of [{ ...HUB_NEXT_DAY_GLOBALS, summer_subscription_hub_lk1_sales_enabled: false },
+    { ...HUB_NEXT_DAY_GLOBALS, subscriptions_lk1_product_policy: { ...HUB_NEXT_DAY_POLICY, maxActiveBookings: 4 } },
+    { ...HUB_NEXT_DAY_GLOBALS, subscriptions_lk1_hub_sale_runtime: null }]) {
+    const out = nextDayHubProduct(1, undefined, globals as typeof HUB_NEXT_DAY_GLOBALS);
+    assert.equal(out[0], null); assert.equal(out[4], undefined);
+    assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "HUB_NEW_SALES_RELEASE_DISABLED");
+  }
+});
+
+test("paid next-day HAB confirms exact NEW Viva instance without CUP or activation writes", () => {
+  const base = { action: "confirm", step: "managed_sale_instance_readback", counterKey: "network_friendship",
+    inventoryId: "network_friendship_12m_2026_v1", clientId: "fixture-client", clientSubscriptionId: "fixture-instance",
+    productId: HUB_NEXT_DAY_POLICY.productId, paymentRef: "fixture-paid", transactionId: "fixture-tx",
+    expectedAmountMinor: 9800000, hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT), saleRecord: {} };
+  const provider = { clientSubscriptionId: "fixture-instance", productId: HUB_NEXT_DAY_POLICY.productId,
+    status: "NEW", purchaseDate: "2026-09-10T00:10:00+03:00", studioId: "fixture-station" };
+  // Sales can be OFF now; a previously accepted frozen operation must still finish.
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
+    statusCode: 200, payload: [provider], _summerSubscriptionCtx: structuredClone(base),
+  }) as NodeRedMsg[];
+  assert.equal(out[0], null); assert.equal(out[1], null);
+  const next = asRecord(asRecord(out[4])._summerSubscriptionCtx);
+  assert.equal(next.step, "managed_sale_projection_start");
+  const set = asRecord(asRecord(next.managedSaleProjection).set);
+  assert.equal(set.status, "PAID"); assert.equal(set.managedBindingState, "LK1_VIVA_CONFIRMED");
+  assert.equal(set.providerSubscriptionState, "PENDING_ACTIVATION");
+  assert.equal(set.providerExpectedActivationDate, "2026-09-11");
+  assert.equal(set.providerActivationDate, null); assert.equal(set.providerExpirationDate, null);
+  for (const change of [{ productId: "wrong" }, { clientSubscriptionId: "wrong" }, { purchaseDate: null },
+    { status: "ACTIVE" }, { status: "NEW", activationDate: "2026-09-10T01:00:00+03:00" }]) {
+    const invalid = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
+      statusCode: 200, payload: [{ ...provider, ...change }], _summerSubscriptionCtx: structuredClone(base),
+    }) as NodeRedMsg[];
+    assert.equal(invalid[0], null);
+    const pending = asRecord(asRecord(invalid[4])._summerSubscriptionCtx);
+    assert.notEqual(asRecord(asRecord(pending.managedSaleProjection).set).managedBindingState, "LK1_VIVA_CONFIRMED");
+  }
+});
+
+test("durable HAB sale projection rejects another frozen mode before dispatch", () => {
+  const ctx = { step: "piter_claimed_sale_readback", counterKey: "network_friendship",
+    inventoryId: "network_friendship_12m_2026_v1", paymentRef: "frozen-one", requestFingerprint: "fixture-fingerprint",
+    expectedAmountMinor: 9800000, hubLk1Sale: HUB_NEXT_DAY_RECEIPT, dispatchGeneration: 0 };
+  for (const mode of [null, { ...HUB_NEXT_DAY_RECEIPT, sourceDigest: "sha256:" + "b".repeat(64) }, { mode: "invalid" }]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+      _summerSubscriptionCtx: structuredClone(ctx), payload: [{ _id: "hub-sale:network_friendship_12m_2026_v1:frozen-one",
+        requestFingerprint: ctx.requestFingerprint, status: "CLAIMED", amountMinor: 9800000,
+        dispatchGeneration: 0, providerAttemptedAt: null, hubLk1Sale: mode }],
+    }, HUB_NEXT_DAY_GLOBALS) as NodeRedMsg[];
+    assert.equal(out[4], null); assert.equal(out[1], null);
+    assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code, "PITER_CLAIMED_SALE_NOT_DURABLE");
+  }
+});
+
+test("Piter next-day opening accepts exact lifecycle and reserves from 48 without rewriting paid history", () => {
+  const globals = { ...PITER_PRODUCT_GLOBALS, summer_subscription_sales_20260909_enabled: true,
+    summer_subscription_piter_next_day_sales_20260909_enabled: true };
+  const mode = "VIVA_NEXT_DAY_V1";
+  for (const days of [1, 0, 2, "1"]) {
+    const out = withFixedNow("2026-10-02T12:00:00.000Z", () => runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
+        statusCode: 200, payload: [{ id: PITER_PRODUCT_GLOBALS.summer_subscription_piter_friendship_product_id,
+          cost: 5680000, productType: "SUBSCRIPTION", activationDays: days, validityDays: 365, visits: 365 }],
+        _summerSubscriptionCtx: { action: "purchase", step: "load_products", saleType: "tiered_direct_product", token: "fixture",
+          counterKey: "piter_friendship", productId: PITER_PRODUCT_GLOBALS.summer_subscription_piter_friendship_product_id,
+          productCostMinor: 5680000, priceMinor: 1980000, clientPhone: "79990000000", providerLifecycleMode: mode },
+      }, globals)) as NodeRedMsg[];
+    if (days === 1) {
+      const ctx = asRecord(asRecord(out[4])._summerSubscriptionCtx);
+      assert.equal(ctx.providerAutoActivationDate, "2026-10-03"); assert.equal(ctx.providerLifecycleMode, mode);
+      assert.equal(ctx.priceMinor, 1980000); assert.equal(ctx.discountMinor, 3700000);
+    } else { assert.equal(out[4], undefined); assert.equal(out[0], null); }
+  }
+  const ledger = { ...buildPiterRows(42)[0], schemaVersion: 2, quotaAdjustment: 10 };
+  const before = structuredClone(ledger);
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js", {
+    payload: [ledger], _summerSubscriptionCtx: { ...quotaPurchaseContext(), providerLifecycleMode: mode },
+  }, globals) as NodeRedMsg[];
+  const [filter, update] = asRecord(out[1]).payload as NodeRedMsg[];
+  assert.equal(filter.quotaAdjustment, 10);
+  assert.equal(asRecord(update.$inc).takenCount, 1); assert.equal(asRecord(update.$inc).reservedCount, 1);
+  assert.equal(asRecord(update.$inc).paidCount, undefined);
+  assert.equal(100 - (ledger.takenCount + 1) - ledger.quotaAdjustment, 47);
+  assert.deepEqual(ledger,before); assert.equal(out[4], null);
+});
+
+test("Piter 48-seat status follows OFF ON OFF on the same immutable ledger", () => {
+  const ledger={...buildPiterRows(42)[0],schemaVersion:2,quotaAdjustment:10};const before=structuredClone(ledger);
+  for(const enabled of [false,true,false]) {
+    const globals={...PITER_PRODUCT_GLOBALS,summer_subscription_sales_20260909_enabled:true,
+      summer_subscription_piter_next_day_sales_20260909_enabled:enabled};
+    const prepared=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+      {req:{query:{counterKey:"piter_friendship"}}},globals) as NodeRedMsg[];
+    const msg=asRecord(prepared[0]);msg.payload=[ledger];
+    const out=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",msg,globals) as NodeRedMsg[];
+    const body=asRecord(asRecord(out[0]).payload);
+    assert.equal(body.canPurchase,enabled);assert.equal(body.batchRemainingCount,48);assert.equal(body.paidCount,42);
+  }
+  assert.deepEqual(ledger,before);
+});
+test("old Piter lifecycle cannot be redispatched via CLAIMED or DISPATCHING repair",()=>{
+ for(const state of ["CLAIMED","DISPATCHING"]){
+  const ctx={...quotaPurchaseContext(),providerLifecycleMode:"VIVA_NEXT_DAY_V1"};
+  const ledger={...buildPiterRows(42)[0],schemaVersion:2,quotaAdjustment:10,reservedCount:1,takenCount:43,
+    reservations:[{paymentRef:ctx.paymentRef,state,requestFingerprint:"old",intentFingerprint:"old-intent",
+      providerAttemptedAt:state==="DISPATCHING"?"2026-09-09T09:00:00.000Z":null,
+      saleRecord:{providerLifecycleMode:null}}]};
+  const out=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {payload:[ledger],_summerSubscriptionCtx:ctx}) as NodeRedMsg[];
+  assert.equal(out[4],null);assert.equal(out[1],null);
+  assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code,"PITER_FROZEN_LIFECYCLE_DRIFT");
+ }
+});
+
+test("HAB projects yesterday's sold quota into the new daily window without erasing history",()=>{
+ const old=buildHubLedger({dailyDate:"2026-09-08",paidCount:2,takenCount:2,legacyPaymentRefs:["old-a","old-b"],
+   dailyBaselinePaidCount:2,dailyPaidCount:2});const original=structuredClone(old);
+ for(const dailyDate of ["2026-09-08","2026-09-10"]){
+  const out=withFixedNow("2026-09-09T10:00:00.000Z",()=>{
+   const prepared=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+     {req:{query:{counterKey:"network_friendship"}}},HUB_NEXT_DAY_GLOBALS) as NodeRedMsg[];
+   const msg=asRecord(prepared[0]);msg.payload=[{...old,dailyDate}];
+   return runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",msg,HUB_NEXT_DAY_GLOBALS) as NodeRedMsg[];
+  });
+  const body=asRecord(asRecord(out[0]).payload);
+  if(dailyDate==="2026-09-08"){assert.equal(body.canPurchase,true);assert.equal(body.remainingCount,1);assert.equal(body.inventoryPaidCount,2);}
+  else assert.equal(body.canPurchase,false);
+ }
+ assert.deepEqual(old,original);
+});
+test("HAB saved CUP or different receipt cannot redispatch via CLAIMED or DISPATCHING",()=>{
+ for(const state of ["CLAIMED","DISPATCHING"]) for(const receipt of [null,{...HUB_NEXT_DAY_RECEIPT,sourceDigest:"sha256:"+"b".repeat(64)}]){
+  const ctx={...quotaPurchaseContext(),counterKey:"network_friendship",inventoryId:"network_friendship_12m_2026_v1",
+    totalLimit:100,dailyLimit:1,dailyDropDate:"2026-09-09",hubLk1Sale:HUB_NEXT_DAY_RECEIPT};
+  const ledger=buildHubLedger({dailyDate:"2026-09-09",reservedCount:1,takenCount:1,dailyReservedCount:1,
+    reservations:[{paymentRef:ctx.paymentRef,state,requestFingerprint:"old",intentFingerprint:"old-intent",dailyDate:"2026-09-09",
+      providerAttemptedAt:state==="DISPATCHING"?"2026-09-09T09:00:00.000Z":null,saleRecord:{hubLk1Sale:receipt}}]});
+  const out=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {payload:[ledger],_summerSubscriptionCtx:ctx},HUB_NEXT_DAY_GLOBALS) as NodeRedMsg[];
+  assert.equal(out[4],null);assert.equal(out[1],null);
+  assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code,"HUB_FROZEN_SALE_MODE_DRIFT");
+ }
 });

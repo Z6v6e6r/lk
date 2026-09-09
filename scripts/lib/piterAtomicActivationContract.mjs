@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { isExactPiterQuotaUpdateDeployment, PITER_QUOTA_UPDATE } from "./piterAtomicQuotaUpdateContract.mjs";
+import { isExactPiterQuotaUpdateDeployment, PITER_QUOTA_UPDATE, isExactPiterQuota48Deployment } from "./piterAtomicQuotaUpdateContract.mjs";
 
 export const PITER_ATOMIC_ACTIVATION = Object.freeze({
   kind: "PADLHUB_PITER_ATOMIC_SALES_ACTIVATION_V1",
@@ -246,7 +246,7 @@ const addLocalDateDays = (localDate, days) => {
   return new Date(Date.UTC(year, month - 1, day) + days * 86_400_000).toISOString().slice(0, 10);
 };
 
-const normalizeProduct = (product, expectedProductId, capturedAt) => {
+const normalizeProduct = (product, expectedProductId, capturedAt, nextDay = false) => {
   if (!product || typeof product !== "object") fail("provider product is missing");
   const productId = toStr(product.id) || toStr(product.uuid);
   if (productId !== expectedProductId) fail("provider product ID mismatch");
@@ -264,8 +264,9 @@ const normalizeProduct = (product, expectedProductId, capturedAt) => {
   if (!Number.isInteger(activationDays) || activationDays < 0) fail("provider activationDays must be a non-negative integer");
   if (validityDays !== PITER_ATOMIC_ACTIVATION.validityDays) fail("provider validityDays mismatch");
   if (visits !== PITER_ATOMIC_ACTIVATION.visits) fail("provider visits mismatch");
-  if (purchaseDate > PITER_ATOMIC_ACTIVATION.activationNotBeforeDate) fail("provider activation window has closed");
-  if (!projectedAutoActivationDate || projectedAutoActivationDate < PITER_ATOMIC_ACTIVATION.activationNotBeforeDate) {
+  if (nextDay && product.activationDays !== 1) fail("next-day product requires activationDays=1");
+  if (!nextDay && purchaseDate > PITER_ATOMIC_ACTIVATION.activationNotBeforeDate) fail("provider activation window has closed");
+  if (!projectedAutoActivationDate || (!nextDay && projectedAutoActivationDate < PITER_ATOMIC_ACTIVATION.activationNotBeforeDate)) {
     fail("provider product can activate before the required date");
   }
   return {
@@ -278,7 +279,7 @@ const normalizeProduct = (product, expectedProductId, capturedAt) => {
     visits,
     purchaseDate,
     projectedAutoActivationDate,
-    activationNotBeforeDate: PITER_ATOMIC_ACTIVATION.activationNotBeforeDate,
+    activationNotBeforeDate: nextDay ? projectedAutoActivationDate : PITER_ATOMIC_ACTIVATION.activationNotBeforeDate,
   };
 };
 
@@ -293,15 +294,15 @@ const validateCandidateReport = (report) => {
   for (const key of ["sourceSha256", "candidateSha256"]) {
     if (!SHA256_PATTERN.test(String(report[key] || ""))) fail(`candidate report ${key} is invalid`);
   }
-  if (report.updateKind !== undefined && (report.updateKind !== PITER_QUOTA_UPDATE.updateKind
+  if (report.updateKind !== undefined && !isExactPiterQuota48Deployment(report) && (report.updateKind !== PITER_QUOTA_UPDATE.updateKind
     || !isExactPiterQuotaUpdateDeployment(report) || report.launchQuotaSchemaVersion !== 2)) {
     fail("candidate report quota update identity mismatch");
   }
   if (!Number.isInteger(report.sourceNodeCount) || report.sourceNodeCount < 1
     || !Number.isInteger(report.candidateNodeCount)
     || (report.candidateNodeCount <= report.sourceNodeCount
-      && !(isExactPiterQuotaUpdateDeployment(report)
-        && report.updateKind === PITER_QUOTA_UPDATE.updateKind && report.launchQuotaSchemaVersion === 2))) {
+      && !((isExactPiterQuotaUpdateDeployment(report) || isExactPiterQuota48Deployment(report))
+        && report.launchQuotaSchemaVersion === 2))) {
     fail("candidate report node counts are invalid");
   }
   return {
@@ -637,14 +638,18 @@ export function buildPiterAtomicActivationPacket({
   }
   const productMatches = products.rows.filter((item) => (toStr(item?.id) || toStr(item?.uuid)) === expectedProductId);
   if (productMatches.length !== 1 || products.rows.length !== 1) fail("product evidence must contain exactly the selected product");
-  const product = normalizeProduct(productMatches[0], expectedProductId, products.capturedAt);
+  const candidate = validateCandidateReport(candidateReport);
+  const product = normalizeProduct(productMatches[0], expectedProductId, products.capturedAt, isExactPiterQuota48Deployment(candidate));
   const evidenceTimes = [ledger.capturedAt, provider.capturedAt, products.capturedAt, bindings.capturedAt].map(Date.parse);
   if (Math.max(...evidenceTimes) - Math.min(...evidenceTimes) > PITER_ATOMIC_ACTIVATION.maxEvidenceSkewMs) {
     fail("evidence snapshots exceed the allowed capture-time skew");
   }
-  const candidate = validateCandidateReport(candidateReport);
+  if (isExactPiterQuota48Deployment(candidate) && initialBatchRemaining !== 48) fail("opening candidate requires explicit 48-of-100 launch quota");
   if (isExactPiterQuotaUpdateDeployment(candidate) && initialBatchRemaining !== 50) {
     fail("quota update candidate requires explicit 50-of-100 launch quota");
+  }
+  if (initialBatchRemaining === 48 && !isExactPiterQuota48Deployment(candidate)) {
+    fail("48-of-100 launch requires its exact reviewed runtime candidate");
   }
   const reconciliation = validateLegacyReconciliationProof({
     packet: reconciliationPacket,
@@ -664,9 +669,10 @@ export function buildPiterAtomicActivationPacket({
   });
   let launchQuota = null;
   if (initialBatchRemaining !== null) {
-    if (initialBatchRemaining !== 50 || candidateReport.launchQuotaSchemaVersion !== 2
-      || baseline.paidCount > 50) fail("50-of-100 launch quota requires a V2 candidate and at most 50 historical paid sales");
-    launchQuota = { initialBatchRemaining: 50, batchSize: 100, adjustment: 50 - baseline.paidCount };
+    const occupied = 100 - initialBatchRemaining;
+    if (![48, 50].includes(initialBatchRemaining) || candidateReport.launchQuotaSchemaVersion !== 2
+      || baseline.paidCount > occupied) fail("approved launch quota requires a V2 candidate and cannot erase historical paid sales");
+    launchQuota = { initialBatchRemaining, batchSize: 100, adjustment: occupied - baseline.paidCount };
   }
   const expiresAt = new Date(Math.min(
     Date.parse(ledger.capturedAt),
@@ -734,10 +740,10 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     || !Number.isInteger(packet.deployment?.sourceNodeCount) || packet.deployment.sourceNodeCount < 1
     || !Number.isInteger(packet.deployment?.candidateNodeCount)
     || (packet.deployment.candidateNodeCount <= packet.deployment.sourceNodeCount
-      && !(packet.launchQuota && isExactPiterQuotaUpdateDeployment(packet.deployment)))) {
+      && !(packet.launchQuota && (isExactPiterQuotaUpdateDeployment(packet.deployment) || isExactPiterQuota48Deployment(packet.deployment))))) {
     fail("packet deployment contract mismatch");
   }
-  if (packet.deployment.updateKind !== undefined && (packet.deployment.updateKind !== PITER_QUOTA_UPDATE.updateKind
+  if (packet.deployment.updateKind !== undefined && !isExactPiterQuota48Deployment(packet.deployment) && (packet.deployment.updateKind !== PITER_QUOTA_UPDATE.updateKind
     || !packet.launchQuota || !isExactPiterQuotaUpdateDeployment(packet.deployment))) {
     fail("packet deployment contract quota update mismatch");
   }
@@ -768,7 +774,7 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     && (!Number.isSafeInteger(packet.evidence.providerOnlyFreeIssueCount) || packet.evidence.providerOnlyFreeIssueCount < 0)) {
     fail("packet provider-only free issue count is invalid");
   }
-  const normalizedProduct = normalizeProduct(packet.product, packet.product?.id, packet.evidence.productCapturedAt);
+  const normalizedProduct = normalizeProduct(packet.product, packet.product?.id, packet.evidence.productCapturedAt, isExactPiterQuota48Deployment(packet.deployment));
   if (stableJson(normalizedProduct) !== stableJson(packet.product)) fail("packet product contract mismatch");
   if (stableJson(packet.binding) !== stableJson({
     key: PITER_ATOMIC_ACTIVATION.productBindingKey,
@@ -776,10 +782,16 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
   })) fail("packet Node-RED product binding mismatch");
   const entries = packet.baseline?.entries;
   if (!Array.isArray(entries)) fail("packet baseline entries are required");
-  if (packet.launchQuota !== undefined && stableJson(packet.launchQuota) !== stableJson({
-    initialBatchRemaining: 50, batchSize: 100, adjustment: 50 - entries.length,
-  })) fail("packet launch quota mismatch");
-  if (packet.launchQuota && entries.length > 50) fail("packet launch quota cannot erase historical sales");
+  const initialRemaining = packet.launchQuota?.initialBatchRemaining;
+  if (isExactPiterQuota48Deployment(packet.deployment) && initialRemaining !== 48) fail("opening packet requires 48-of-100 quota");
+  if (packet.launchQuota !== undefined && (![48, 50].includes(initialRemaining)
+    || stableJson(packet.launchQuota) !== stableJson({
+      initialBatchRemaining: initialRemaining, batchSize: 100, adjustment: 100 - initialRemaining - entries.length,
+    }))) fail("packet launch quota mismatch");
+  if (initialRemaining === 48 && !isExactPiterQuota48Deployment(packet.deployment)) {
+    fail("packet 48-of-100 quota requires its exact reviewed candidate");
+  }
+  if (packet.launchQuota && entries.length > 100 - initialRemaining) fail("packet launch quota cannot erase historical sales");
   if (!SHA256_PATTERN.test(String(packet.baseline?.legacyLedgerDigest || ""))) {
     fail("packet legacy ledger digest is invalid");
   }
