@@ -272,7 +272,7 @@ const withAbLetoStagedRelease = (counter) => {
     forcedDailyDropStartsAt: resumedDaily ? SALES_QUOTAS_20260909_START : null,
     releaseStartDate: stagedRelease.releaseStartDate,
     launchLimit: stagedRelease.launchLimit,
-    dailyLimit: resumedDaily ? 10 : counterKey === "ra"
+    dailyLimit: counterKey === "ra"
       ? AB_LETO_STAGED_RA_DAILY_DROP_LIMIT
       : AB_LETO_STAGED_DAILY_DROP_LIMIT,
     dailyDropDate: resolveDailyDropDate(),

@@ -5033,7 +5033,7 @@ function readResumedQuota(counterKey: string, rows: NodeRedMsg[], nowIso = "2026
 }
 
 for (const counterKey of ["friendship"]) {
-  test(`resumed ${counterKey} has 10 daily seats without erasing the unfinished launch history`, () => {
+  test(`resumed ${counterKey} has 7 daily seats without erasing the unfinished launch history`, () => {
     const inventoryId = `ab_leto_2026_150_v2_${counterKey}`;
     const rows = Array.from({ length: 5 }, (_, i) => ({
       inventoryId, counterKey, status: "PAID", paymentRef: `historical-${i}`,
@@ -5043,15 +5043,15 @@ for (const counterKey of ["friendship"]) {
     const result = readResumedQuota(counterKey, rows);
     for (const view of [result.status, result.refresh]) {
       assert.equal(view.inventoryId, inventoryId);
-      assert.equal(view.totalLimit, 10);
-      assert.equal(view.remainingCount, 10);
+      assert.equal(view.totalLimit, 7);
+      assert.equal(view.remainingCount, 7);
       assert.equal(view.launchPaidCount, 5);
       assert.equal(view.launchLimit, 150);
       assert.equal(view.launchCompletedAt, null);
       assert.equal(view.releasePhase, "daily");
       assert.equal(view.dailyDropStartsAt, "2026-09-09T07:00:00.000Z");
     }
-    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 10);
+    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 7);
     assert.equal(result.purchaseCtx.inventoryId, inventoryId);
     assert.deepEqual(rows, original);
     const before = readResumedQuota(counterKey, rows, "2026-09-09T06:59:59.999Z");
@@ -5070,10 +5070,10 @@ for (const counterKey of ["friendship"]) {
     for (const view of [result.status, result.refresh]) {
       assert.equal(view.paidCount, 1);
       assert.equal(view.reservedCount, 1);
-      assert.equal(view.remainingCount, 8);
+      assert.equal(view.remainingCount, 5);
     }
-    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 8);
-    const full = readResumedQuota(counterKey, Array.from({ length: 10 }, () => ({ ...oldPending })));
+    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 5);
+    const full = readResumedQuota(counterKey, Array.from({ length: 7 }, () => ({ ...oldPending })));
     assert.equal(full.status.remainingCount, 0);
     assert.equal(full.status.canPurchase, false);
     assert.equal(full.refresh.remainingCount, 0);
@@ -5081,6 +5081,30 @@ for (const counterKey of ["friendship"]) {
     assert.equal(asRecord(full.limit[1]).statusCode, 409);
   });
 }
+
+test("friendship seven-seat cap retains one paid and two active pending operations", () => {
+  const common = { inventoryId: "ab_leto_2026_150_v2_friendship", counterKey: "friendship", releasePhase: "launch" };
+  const rows = [
+    { ...common, paymentRef: "existing-paid", status: "PAID", paidAt: "2026-09-09T07:20:00.000Z", amountMinor: 980000 },
+    ...["existing-pending-1", "existing-pending-2"].map(paymentRef => ({
+      ...common, paymentRef, status: "PAYMENT_PENDING", createdAt: "2026-09-09T07:30:00.000Z",
+      expiresAt: "2026-09-09T09:00:00.000Z", amountMinor: 980000,
+    })),
+  ];
+  const original = structuredClone(rows);
+  const result = readResumedQuota("friendship", rows);
+  for (const view of [result.status, result.refresh]) {
+    assert.equal(view.totalLimit, 7);
+    assert.equal(view.paidCount, 1);
+    assert.equal(view.reservedCount, 2);
+    assert.equal(view.remainingCount, 4);
+    assert.equal(view.inventoryId, common.inventoryId);
+  }
+  assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 4);
+  assert.equal(readResumedQuota("friendship", rows, "2026-09-09T09:00:00.001Z").status.remainingCount, 6);
+  assert.equal(readResumedQuota("friendship", rows, "2026-09-10T08:00:00.000Z").status.remainingCount, 7);
+  assert.deepEqual(rows, original);
+});
 
 test("sales quota flag changes only the approved products and requires strict true", () => {
   withFixedNow("2026-09-09T08:00:00.000Z", () => {

@@ -9,7 +9,7 @@ It does not authorize integration, deployment, ledger writes or opening the flag
 | Product | New availability | Price | New activation |
 | --- | --- | --- | --- |
 | РА | 10 new daily seats; previous payments remain separate | unchanged | unchanged |
-| Дружба | 10 daily seats less payments in that daily allocation | unchanged | unchanged |
+| Дружба | 7 daily seats less paid and actively reserved seats in that daily allocation | unchanged | unchanged |
 | Годовая ХАБ | 1 daily seat, aggregate inventory 100 | 98,000 RUB | next day after purchase |
 | Годовая Питер | start with 48 of the first 100 seats; aggregate inventory 400 | existing tier, currently 19,800 RUB | next day after purchase |
 
@@ -25,6 +25,20 @@ Piter retains every real paid row and payment identity. The commercial adjustmen
 The adjustment is immutable CAS custody, not fabricated payments. More than 52 historic
 paid rows, unresolved transactions, stale evidence or a changed baseline stop preparation.
 The historical 50-seat candidate and deferred receipts cannot authorize this 48-seat launch.
+
+## Friendship correction after provider/history preparation
+
+The user confirmed that Friendship must retain the existing allocation and count its
+paid and active pending operations within a **seven-seat** daily cap. It receives no
+new inventory or seven additional seats. One payment plus two active reservations
+therefore leaves four seats; expired unpaid reservations no longer occupy the cap.
+RA remains ten additional seats in its separate V3 inventory.
+
+This source correction has not been deployed. The binding still composes against
+its archived pre-deploy source for offline verification; the installed `38d4dc8...`
+flow is no longer this correction's candidate. A fresh, separately reviewed update
+from the actual installed flow is required before release; do not replay the old
+opening deployment packet. Annual history/reconciliation blockers remain unresolved.
 
 ## Provider changes actually performed
 
@@ -193,3 +207,23 @@ Re-preparation checks (overlapping suites; do not add counts):
 - Both independent payment compatibility and quota/release reviewers closed findings.
 - Unchanged frontend/dependency/build inputs retain the previous successful main CI
   evidence (run 34346980749); no new production/frontend build is claimed here.
+
+## Seven-seat correction verification
+
+- Parent-owned R3 payment/subscription change in the existing worktree; base checkpoint
+  `d46305896430626adb111d1077b1bcb54c80202f`. Refreshed `origin/main` remains
+  `fa2a0c6e629fa517ccbeacd63c24942ab5066bec`; no integration performed.
+- Four function files changed: status prepare/response, purchase prepare, counter
+  refresh prepare. Also updated the opening binding, summer Node-RED regression
+  tests and this document. No runtime schema, record repair or new inventory.
+- Summer runtime + opening tests: 141 passed, one fixture skipped initially.
+  Opening + Piter activation/reconciliation tests with the archived private flow:
+  50 passed, one Linux-only flock test skipped on macOS. The opening composition
+  and exact structural reverse passed with that fixture. These are local tests,
+  not a fresh deploy rehearsal or provider write proof.
+- `npm run lint`: zero errors, 387 existing warnings. Full `npm run build` with
+  inert compile-time URLs: prod/dev and TypeScript passed. `git diff --check` passed.
+- Independent read-only payment review found no P1/P2 issues. No live modular
+  source pull/regeneration or remote CI was run for this local correction.
+- No merge, push, deploy, activation or database/provider business mutation.
+  A fresh installed-flow update remains necessary before deployment.
