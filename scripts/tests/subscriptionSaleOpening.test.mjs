@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';import fs from 'node:fs';import test from 'node:test';
-import {HUB_LK1_SALE_HELPERS,HUB_LK1_SALE_SOURCE_FILES} from '../lib/hubLk1SaleContract.mjs';
+import {HUB_LK1_SALE_HELPERS,HUB_LK1_SALE_SOURCE_FILES,buildHubRuntimeEvidence,normalizeFrozenHubSale} from '../lib/hubLk1SaleContract.mjs';
 import {PITER_QUOTA48_UPDATE as binding} from '../lib/piterAtomicQuotaUpdateContract.mjs';
 import {buildSaleOpeningCandidate} from '../prepare_subscription_sale_opening_candidate.mjs';
 import {buildHubAtomicOpeningPlan} from '../lib/hubAtomicOpeningPlan.mjs';
@@ -8,10 +8,17 @@ const texts=Object.fromEntries(binding.targets.map(t=>[t.file,fs.readFileSync(ne
 test('opening code bindings and generated helpers are exact',()=>{
   for(const t of binding.targets)assert.equal(sha256(texts[t.file]),t.candidateSha256,t.file);
   for(const f of HUB_LK1_SALE_SOURCE_FILES)assert.ok(texts[f].includes('// BEGIN generated hubLk1SaleContract\n'+HUB_LK1_SALE_HELPERS+'// END generated hubLk1SaleContract'),f);
-  assert.equal(binding.hubBookingReceipt.bookingUsageScope,'ALL_BOOKINGS');
+  assert.equal(binding.hubBookingReceipt.bookingUsageScope,'SUBSCRIPTION_BENEFIT_ONLY');
   assert.equal(binding.hubBookingReceipt.policy.maxActiveBookings,4);
 });
 test('unreviewed source cannot produce an opening artifact',()=>assert.throws(()=>buildSaleOpeningCandidate({liveBytes:Buffer.from('[]'),sourceTexts:texts}),/source drift/));
+test('frozen historical and selected-subscription receipts preserve their exact scope and digest',()=>{
+ for(const scope of ['ALL_BOOKINGS','SUBSCRIPTION_BENEFIT_ONLY']){
+  const receipt={...binding.hubBookingReceipt,bookingUsageScope:scope};
+  assert.deepEqual(normalizeFrozenHubSale(receipt),receipt);
+ }
+ for(const scope of ['UNKNOWN','subscription_benefit_only',null,undefined])assert.equal(normalizeFrozenHubSale({...binding.hubBookingReceipt,bookingUsageScope:scope}),null);
+});
 const fixture=process.env.SUBSCRIPTION_SALE_LIVE_FIXTURE;
 test('private installed-flow composition preserves unrelated graph and supports exact reverse',{skip:!fixture},()=>{
  const liveBytes=fs.readFileSync(fixture);const built=buildSaleOpeningCandidate({liveBytes,sourceTexts:texts});
@@ -20,6 +27,19 @@ test('private installed-flow composition preserves unrelated graph and supports 
  for(let i=0;i<before.length;i++)if(!changed.has(before[i].id))assert.deepEqual(after[i],before[i]);
  const drift={...texts,[binding.targets[0].file]:texts[binding.targets[0].file]+'\n'};
  assert.throws(()=>buildSaleOpeningCandidate({liveBytes,sourceTexts:drift}),/replacement drift/);
+ for(const id of ['lk_subscription_booking_router_20260804','lk_subscription_managed_policy_20260820']){
+  const mismatched=structuredClone(before);const n=mismatched.find(n=>n.id===id);
+  n.func=n.func.replaceAll('SUBSCRIPTION_BENEFIT_ONLY','ALL_BOOKINGS');
+  assert.throws(()=>buildHubRuntimeEvidence(mismatched),/usage scope mismatch/);
+ }
+ const historical=structuredClone(before);
+ for(const id of ['lk_subscription_booking_router_20260804','lk_subscription_managed_policy_20260820']){
+  const n=historical.find(n=>n.id===id);n.func=n.func.replaceAll('SUBSCRIPTION_BENEFIT_ONLY','ALL_BOOKINGS');
+ }
+ assert.equal(buildHubRuntimeEvidence(historical).receipt.bookingUsageScope,'ALL_BOOKINGS');
+ assert.notEqual(buildHubRuntimeEvidence(historical).receipt.sourceDigest,binding.hubBookingReceipt.sourceDigest);
+ // A valid but different receipt still cannot replace the pinned installed graph.
+ assert.throws(()=>buildSaleOpeningCandidate({liveBytes:Buffer.from(JSON.stringify(historical)),sourceTexts:texts}),/source drift/);
 });
 test('HAB empty bootstrap is inactive, source-bound, rejects history and has exact activation CAS',()=>{
  const input={saleRows:[],capturedAt:'2026-09-09T10:00:00.000Z',now:'2026-09-09T10:01:00.000Z',activeFlowSha256:binding.candidateSha256,

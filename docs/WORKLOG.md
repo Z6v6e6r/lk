@@ -2190,3 +2190,12 @@ saved activationDays1 on the exact HAB and Piter products; independent reads con
 price9800000/5680000 and validity365/visits365 unchanged. No payment, refund, booking,
 client-instance, Mongo, sales-flag, merge or deployment action accompanied this edit.
 The local candidate and synthetic checks are not live checkout/autoactivation proof.
+
+### 2026-09-09 — rebind sales opening after concurrent booking release
+
+Deployment of da04bd7 stopped before mutation on live source drift. Reprepared the
+existing task against de6a6b22... (4798 nodes / 219 HTTP inputs), preserving all
+parallel booking/preview changes. Receipt now describes SUBSCRIPTION_BENEFIT_ONLY;
+old frozen ALL_BOOKINGS confirmations and pending replay remain compatible. Updated
+exact source/candidate/dependency hashes and partial-composition denial fingerprints.
+No live deployment, flags, Mongo or provider writes in this re-preparation.

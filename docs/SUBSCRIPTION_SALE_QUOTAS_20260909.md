@@ -59,10 +59,11 @@ HAB additionally requires `summer_subscription_hub_lk1_sales_enabled`, a matchin
 `subscriptions_lk1_product_policy`, a source-bound `subscriptions_lk1_hub_sale_runtime`
 receipt, and a ready atomic ledger. The receipt identifies the installed direct LK1
 booking implementation and policy **4 active bookings / 60 free minutes / 30% overage
-/ 50% group / 50% tournament discount**, with the existing `ALL_BOOKINGS` semantics.
-It is not CUP readiness or a claim about the newer selected-subscription implementation.
-The existing broad counting may overrestrict a customer's remaining benefits; it is
-retained as baseline debt, not silently changed in this sales release.
+/ 50% group / 50% tournament discount**, with the installed `SUBSCRIPTION_BENEFIT_ONLY` semantics.
+The parallel release already installed instance-scoped booking and free-minute counting.
+This candidate preserves that implementation; it does not replace booking logic or
+claim CUP readiness. Historical `ALL_BOOKINGS` receipts remain readable without
+changing their scope or digest.
 
 The receipt digest is derived by `buildHubRuntimeEvidence`: normalized policy, exact
 hashes of split/gateway/finalize/evaluator/product-router nodes, and incoming edges.
@@ -85,10 +86,10 @@ including a pre-POST `DISPATCHING` recovery.
 It replaces nine subscription functions, adds the missing fourth confirm output to
 the existing atomic router, and adds the source-bound receipt initializer. It preserves
 all other nodes, including the today's product identity fix. Existing topology remains
-4,797 nodes and 219 HTTP inputs; no nodes are added or removed.
+4,798 nodes and 219 HTTP inputs; no nodes are added or removed.
 
 The pinned source is the installed snapshot
-`e743fa0da4db1645e5403aadb868091620a888f9c2944c8acd0c9750961ae67d`.
+`de6a6b2206476de79564fbec9ad5d41ac8bd6088517c29452f4101d6ed3bb0aa`.
 The current candidate digest is in the binding file; it changes when reviewed source
 changes. Local private-snapshot composition and structural reverse are tested. This
 is **not** a fresh production release packet: the CLI requires a fresh private
@@ -139,7 +140,7 @@ production assets. Physical Mongo/Viva payment/autoactivation and browser purcha
 remain separate live evidence. Optional Linux flock and private/physical fixtures are
 reported as skipped when their required environment is absent.
 
-Final local verification (suites overlap; counts must not be added):
+Initial checkpoint verification (suites overlap; counts must not be added):
 
 - Final sales regressions: 134 passed, zero failed/skipped.
 - CI affected business group: 474 passed, 5 existing out-of-scope skips;
@@ -155,4 +156,40 @@ Final local verification (suites overlap; counts must not be added):
 - Final `git diff --check` passed. Narrow regex/manual review of all 26 changed
   paths found no high-confidence credential patterns; this was not a PII classifier.
 - Both payment-safety and quota/release reviewers closed their findings. Current
-  local candidate: `932be7a8193b5bfad79c62d546ebf7a122cc5a1d4b25682744d7ab944fa15af6`.
+  initial local candidate (superseded below): `932be7a8193b5bfad79c62d546ebf7a122cc5a1d4b25682744d7ab944fa15af6`.
+
+## Re-preparation after the parallel booking release
+
+The attempted deployment of main `da04bd7` stopped before remote staging, restart or
+any data write: the fresh source no longer matched the earlier reviewed preimage.
+The prior local candidate `932be7a8...` is superseded and must not be deployed.
+
+The new source contains one additional price-preview Mongo node and six changed
+nodes, including the gateway/evaluator pair. All are preserved byte-for-byte by
+this focused nine-node sales patch. HTTP inputs remain 219. The new candidate is
+`38d4dc877a4d63ff8dfdb9f6517ea0869a9ad9aa86031e22fbd30eacf0a95e1e`.
+
+The runtime receipt now records `SUBSCRIPTION_BENEFIT_ONLY`. Its builder rejects
+disagreement between the installed gateway and evaluator and continues to bind the
+complete dependency hashes and incoming edges. Both exact historical and current
+receipt scopes are accepted for saved operations, without converting old values.
+A scope or digest mismatch still blocks CLAIMED/DISPATCHING redispatch before POST;
+paid confirmation and pending-payment URL replay retain their frozen receipt.
+The partial-composition guard includes the new purchase-router digest and retains
+both earlier denied digests. The historical Piter 50-seat tuple is unchanged.
+
+This is a local re-preparation. Fresh origin, source-drift, lock/lease, backup and
+flags-OFF checks remain mandatory immediately before an authorized live apply.
+
+Re-preparation checks (overlapping suites; do not add counts):
+
+- Affected business matrix: 477 passed, 5 existing environment/out-of-scope skips.
+- Final candidate/activation matrix: 66 passed, 1 optional private fixture skipped;
+  the actual freshly pulled opening graph fixture was supplied and passed.
+- Final sales and Piter matrix: 226 passed, 14 physical/private/Linux skips.
+- Scoped ESLint passed. Exact graph preservation/reverse and source/helper bindings
+  passed. The partial-composition regression caught a stale denylist hash; it was
+  corrected and the affected matrix rerun successfully.
+- Both independent payment compatibility and quota/release reviewers closed findings.
+- Unchanged frontend/dependency/build inputs retain the previous successful main CI
+  evidence (run 34346980749); no new production/frontend build is claimed here.

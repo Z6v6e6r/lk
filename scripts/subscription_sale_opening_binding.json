@@ -1,10 +1,10 @@
 {
   "deploymentId": "piter-atomic-sales-20260903",
   "updateKind": "sales-opening-quota48-20260909",
-  "sourceSha256": "e743fa0da4db1645e5403aadb868091620a888f9c2944c8acd0c9750961ae67d",
-  "candidateSha256": "932be7a8193b5bfad79c62d546ebf7a122cc5a1d4b25682744d7ab944fa15af6",
-  "sourceNodeCount": 4797,
-  "candidateNodeCount": 4797,
+  "sourceSha256": "de6a6b2206476de79564fbec9ad5d41ac8bd6088517c29452f4101d6ed3bb0aa",
+  "candidateSha256": "38d4dc877a4d63ff8dfdb9f6517ea0869a9ad9aa86031e22fbd30eacf0a95e1e",
+  "sourceNodeCount": 4798,
+  "candidateNodeCount": 4798,
   "httpInputCount": 219,
   "targets": [
     {
@@ -21,7 +21,7 @@
       "file": "fn_tournament_subscription_status_response.js",
       "outputs": 2,
       "sourceSha256": "c06fb5d7a071853682041b69d4415760f7f781481222334caeaee91a29248c2f",
-      "candidateSha256": "80771107122deb4dd9567ae67277c16c4645f80b8be86eab7ad530b13e3ca3e2"
+      "candidateSha256": "74e38d3a52990ff28b1e8ba94e68e93eb6718c2c85112577cefd72aea734a7bd"
     },
     {
       "id": "91dded2dc8cfebe4",
@@ -29,7 +29,7 @@
       "file": "fn_tournament_subscription_purchase_prepare.js",
       "outputs": 3,
       "sourceSha256": "84fc6b2b257573d3323e53b75d6af039ba49d8723b31669d20aaec679cc3cd10",
-      "candidateSha256": "70172c5fd2f23d3a1f3f7ffe85104a70a044edcdf5166b99a515c14500e7d6af"
+      "candidateSha256": "a6d6c8bcaf2c4822e5ae3a9b4880bbc7c1ee1907d3542039490657ecf8f3b712"
     },
     {
       "id": "f8679e53edadc39b",
@@ -37,7 +37,7 @@
       "file": "fn_tournament_subscription_purchase_limit.js",
       "outputs": 3,
       "sourceSha256": "1d37ffe0df4264b8e65a67f1b680e487dd5ac57ab2437b5aaab35efc8f210216",
-      "candidateSha256": "2fa2141febe5c10cc76db6beb4fe3e260709a262ffe337e98118d182045753c5"
+      "candidateSha256": "ee9e1cf141372b57a96559f4cf95cf5982be71f67a76d9419b9e34543bf10a31"
     },
     {
       "id": "566ae4b886c37ae5",
@@ -45,7 +45,7 @@
       "file": "fn_tournament_subscription_purchase_router.js",
       "outputs": 5,
       "sourceSha256": "28cda3933e4ec72690e451a36e883e22157f8c6624cb23a0f12f1f8b9f6056f7",
-      "candidateSha256": "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b"
+      "candidateSha256": "0a7912018609e60261b9f1237d4d3fb653b1ba32354799f30cc4e5700ef79bf9"
     },
     {
       "id": "519b6a6ca208e281",
@@ -61,7 +61,7 @@
       "file": "fn_tournament_subscription_confirm_resolve.js",
       "outputs": 3,
       "sourceSha256": "72d8a32ad585ea236e2d8da12e7e0b51d8b3edec5eabb1c49749cc492f212182",
-      "candidateSha256": "01ea09f5d7f7e4d6abd058100035ce75c77a7748059a63f603840861b5f71d0d"
+      "candidateSha256": "de0ec321883354e42b8552e3dcbdf94c97e5d6f1d32dc9ca0862b0dc87ba12bd"
     },
     {
       "id": "ab1e202650000002",
@@ -77,7 +77,7 @@
       "file": "fn_tournament_subscription_piter_atomic_router.js",
       "outputs": 5,
       "sourceSha256": "fe097554fb070cbf7e076ee907c90f4448317424650d7804eb2151b2d9372a6c",
-      "candidateSha256": "a78ba8b22d2046a9506475360dcb82c0c38af3c2ec332e3044e814c92ea66f0f"
+      "candidateSha256": "0cbcbabd943a4d88d7ee18247eeb3c6d11243bcb0e6c8d21f902640693675055"
     }
   ],
   "preservedHubNodes": [
@@ -87,7 +87,7 @@
     },
     {
       "id": "lk_subscription_booking_router_20260804",
-      "nodeSha256": "db8f7da006b5cb2a27d05ff904ce18f927afdc635f0eb161af1a400bbd1cef11"
+      "nodeSha256": "64aa61f6da1697ae87c3853a2006d970f4186491439e043637a0f50a11b8154a"
     },
     {
       "id": "lk_subscription_booking_finalize_20260804",
@@ -95,7 +95,7 @@
     },
     {
       "id": "lk_subscription_managed_policy_20260820",
-      "nodeSha256": "4c144d7cf4a00082ac96bbf02e065493d540163c6e98a897a3dc7fa31dce4e89"
+      "nodeSha256": "8f5e24625978aef8cf8bfa70e480b111c52c4f8ac7054ad3f9913fbf81a9ed88"
     },
     {
       "id": "lk_subscription_product_router_20260907",
@@ -112,8 +112,8 @@
       "groupTrainingDiscountPercent": 50,
       "tournamentDiscountPercent": 50
     },
-    "sourceDigest": "sha256:50e09c21335ae11abbb510f45c7642a067d8683f9b1e682a2c3e631d8357c84c",
-    "bookingUsageScope": "ALL_BOOKINGS"
+    "sourceDigest": "sha256:8342653317b22b3986c7e3c74d7d6c089090657391edec1446605d082dfc1a76",
+    "bookingUsageScope": "SUBSCRIPTION_BENEFIT_ONLY"
   },
-  "hubReceiptInitializer": "\n// Source-bound receipt for the preserved LK1 direct booking graph; this does not open sales.\nconst hubSaleRuntimeReceipt = {\"mode\":\"LK1_VIVA_PRODUCT_NEXT_DAY_V1\",\"policy\":{\"productId\":\"db7a5250-7369-4f43-8ac5-9111be24bc74\",\"maxActiveBookings\":4,\"freeGameMinutesPerDay\":60,\"gameOverageDiscountPercent\":30,\"groupTrainingDiscountPercent\":50,\"tournamentDiscountPercent\":50},\"sourceDigest\":\"sha256:50e09c21335ae11abbb510f45c7642a067d8683f9b1e682a2c3e631d8357c84c\",\"bookingUsageScope\":\"ALL_BOOKINGS\"};\nglobal.set(\"subscriptions_lk1_hub_sale_runtime\", hubSaleRuntimeReceipt);\nif (JSON.stringify(global.get(\"subscriptions_lk1_hub_sale_runtime\")) !== JSON.stringify(hubSaleRuntimeReceipt)) throw new Error(\"HUB sale runtime receipt readback mismatch\");\n"
+  "hubReceiptInitializer": "\n// Source-bound receipt for the preserved LK1 direct booking graph; this does not open sales.\nconst hubSaleRuntimeReceipt = {\"mode\":\"LK1_VIVA_PRODUCT_NEXT_DAY_V1\",\"policy\":{\"productId\":\"db7a5250-7369-4f43-8ac5-9111be24bc74\",\"maxActiveBookings\":4,\"freeGameMinutesPerDay\":60,\"gameOverageDiscountPercent\":30,\"groupTrainingDiscountPercent\":50,\"tournamentDiscountPercent\":50},\"sourceDigest\":\"sha256:8342653317b22b3986c7e3c74d7d6c089090657391edec1446605d082dfc1a76\",\"bookingUsageScope\":\"SUBSCRIPTION_BENEFIT_ONLY\"};\nglobal.set(\"subscriptions_lk1_hub_sale_runtime\", hubSaleRuntimeReceipt);\nif (JSON.stringify(global.get(\"subscriptions_lk1_hub_sale_runtime\")) !== JSON.stringify(hubSaleRuntimeReceipt)) throw new Error(\"HUB sale runtime receipt readback mismatch\");\n"
 }
