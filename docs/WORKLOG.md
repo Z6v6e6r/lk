@@ -2190,3 +2190,8 @@ saved activationDays1 on the exact HAB and Piter products; independent reads con
 price9800000/5680000 and validity365/visits365 unchanged. No payment, refund, booking,
 client-instance, Mongo, sales-flag, merge or deployment action accompanied this edit.
 The local candidate and synthetic checks are not live checkout/autoactivation proof.
+
+
+### 2026-09-09 — repeated SELF leave after confirmed Viva cancellation
+
+Prepared isolated local reconciliation for a phantom LK roster restored without membership/booking/payment identity after a confirmed leave. Recovery checks an owned durable cancellation plus fresh complete Viva active/history, uses a snapshot-scoped NONE operation and existing CAS, preserves prior pending refunds/payment history and skips daily claim release. DONE receipt replay avoids a second cancellation. Critical matrix 519 PASS / 5 optional SKIP / 0 FAIL; lint/typecheck/prod+dev build, modular validation, exact function-only forward/reverse contract and independent safety review passed. No merge, push, deployment or live data/provider operations. See `docs/SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md`.

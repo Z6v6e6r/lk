@@ -39,7 +39,10 @@ ctx.operationState = "VIVA_CONFIRMED";
 msg._splitLeaveCtx = ctx;
 msg.payload = [{
   _id: ctx.operationKey,
-  state: previousState === "RETURN_PENDING" ? "RETURN_PENDING" : "STARTED",
-  ...(previousState === "RETURN_PENDING" ? {} : { claimToken: ctx.claimToken }),
+  state: previousState === "RETURN_PENDING" ? "RETURN_PENDING"
+    : (ctx.localReconciliation && previousState === "VIVA_CONFIRMED" ? "VIVA_CONFIRMED" : "STARTED"),
+  ...(previousState === "RETURN_PENDING" ? {}
+    : (ctx.localReconciliation && previousState === "VIVA_CONFIRMED"
+      ? { localApplyClaimToken: ctx.claimToken } : { claimToken: ctx.claimToken })),
 }, update, {}];
 return [msg, null];

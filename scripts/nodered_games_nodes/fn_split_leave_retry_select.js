@@ -5,7 +5,7 @@ const nowIso = new Date().toISOString();
 const claimToken = `retry-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 const operationState = String(operation.state || "").toUpperCase();
 const vivaTargetMode = operation.vivaTargetMode || "BOOKINGS";
-if (operationState === "STARTED" && vivaTargetMode !== "NONE"
+if (operationState === "STARTED" && (vivaTargetMode !== "NONE" || operation.localReconciliation)
   && !String(global.get("vivacrm_access_token") || "").trim()) {
   msg.payload = { operationId: operation.operationId || null, reason: "service_token_missing_before_claim" };
   return [null, msg];
@@ -28,6 +28,7 @@ msg._splitLeaveCtx = {
   targetClientId: operation.targetClientId,
   targetPhoneNorm: operation.targetPhoneNorm,
   membershipVersion: operation.membershipVersion || null,
+  localReconciliation: operation.localReconciliation || null,
   vivaTargetMode,
   initialBookingIds: Array.isArray(operation.bookingIds) ? operation.bookingIds : [],
   subscriptionReturnChecks: Array.isArray(operation.subscriptionReturnChecks)

@@ -143,7 +143,12 @@ const actorIsOrganizer = matchesActor(game.organizer, actorId, actorPhone)
 const actorParticipants = asArray(game.participants).filter((item) => matchesActor(item, actorId, actorPhone));
 const actorWaitlist = asArray(game.waitlist).filter((item) => matchesActor(item, actorId, actorPhone));
 const actorKnown = actorIsOrganizer || actorParticipants.length > 0 || actorWaitlist.length > 0 || actorPayments.length > 0;
-if (!actorKnown) return respond(403, "CONFLICT", "Профиль не связан с этой игрой", ctx);
+const actorHasLeaveMarker = asArray(metadata.leaveEvents).some((event) => (
+  event?.actor === "self" && normalizeId(event.playerId) === actorId
+  && toStr(event.operationId)?.startsWith(`self-leave:${ctx.gameId}:${ctx.actorClientId}:`)
+));
+// A marker permits only a durable receipt lookup, never a local/provider write.
+if (!actorKnown && !actorHasLeaveMarker) return respond(403, "CONFLICT", "Профиль не связан с этой игрой", ctx);
 
 if (mode === "ORGANIZER_TARGET" && !actorIsOrganizer) {
   return respond(403, "CONFLICT", "Удалить другого игрока может только организатор", ctx);
@@ -279,6 +284,9 @@ const targetActive = targetIsOrganizer
   || targetParticipants.some((item) => !inactiveStatus(item.status))
   || targetWaitlist.some((item) => !inactiveStatus(item.status))
   || targetPayments.some((item) => !inactiveStatus(item.status));
+if (!actorKnown && (targetActive || canonicalMembershipVersion || targetJoinResponse)) {
+  return respond(403, "CONFLICT", "Профиль не связан с текущей записью игры", ctx);
+}
 const previouslyApplied = operationApplied || (!targetActive && targetPayments.some((item) => (
   inactiveStatus(item.status) && (toStr(item.leftAt) || toStr(item.cancelledAt))
 )));
@@ -338,6 +346,37 @@ msg._splitLeaveCtx = ctx;
 delete msg.statusCode;
 delete msg._splitCleanupAuth;
 msg.payload = undefined;
+if (!targetActive && actorHasLeaveMarker && !canonicalMembershipVersion && !targetJoinResponse) {
+  ctx.step = "find_absent_self_leave";
+  msg.payload = {
+    gameId: ctx.gameId, exerciseId, mode: "SELF",
+    actorClientId: ctx.actorClientId, targetClientId,
+    state: { $in: ["DONE", "RETURN_PENDING"] }, outcome: "REMOVED",
+    lkAppliedAt: { $exists: true },
+  };
+  return [null, null, null, null, msg];
+}
+// A roster projection can reintroduce a player after a completed cancellation.
+// Read the durable server operation; client-editable game audit is not proof.
+if (mode === "SELF" && targetActive && !canonicalMembershipVersion
+  && verifiedQueue.length === 0 && activeTargetPayments.length === 0 && !targetJoinResponse
+  && typeof game.updatedAt === "string" && Number.isFinite(Date.parse(game.updatedAt))
+  && exerciseId && targetId && upstreamAuthHeader) {
+  ctx.localAlreadyApplied = false;
+  ctx.step = "find_local_reconciliation_proof";
+  msg.payload = {
+    gameId: ctx.gameId,
+    exerciseId,
+    mode: "SELF",
+    actorClientId: ctx.actorClientId,
+    targetClientId,
+    state: { $in: ["DONE", "RETURN_PENDING"] },
+    vivaVerification: "active_absent_history_cancelled",
+    lkAppliedAt: { $exists: true },
+    outcome: "REMOVED",
+  };
+  return [null, null, null, null, msg];
+}
 if (previouslyApplied) {
   ctx.operationKey = `${ctx.gameId}:${ctx.operationId}`;
   msg._splitLeaveCtx = ctx;
