@@ -15,6 +15,20 @@ const recoverableMissingTransaction = (
   && ["piter_friendship", "network_friendship"].includes(toStr(record?.counterKey))
 );
 
+if (record?.documentType === 'ANNUAL_HISTORY_RECONCILIATION_JOB_V1') {
+  msg._summerSubscriptionCtx = { action: "confirm", step: "resolve_record", reconcile: true,
+    counterKey: record.counterKey, inventoryId: record.inventoryId, annualHistoryJob: true };
+  msg.payload = [record];
+  return msg;
+}
+if (record?.schemaVersion === 3 && record.history?.version === 1
+  && ["HUB_ATOMIC_INVENTORY_LEDGER", "PITER_ATOMIC_INVENTORY_LEDGER"].includes(record.documentType)) {
+  msg._summerSubscriptionCtx = { action: "confirm", step: "resolve_record", reconcile: true,
+    counterKey: record.counterKey, inventoryId: record.inventoryId, annualHistoryLedger: true };
+  msg.payload = [record];
+  return msg;
+}
+
 if (!record || !toStr(record.paymentRef)
   || (!toStr(record.transactionId) && !recoverableMissingTransaction)) {
   return null;

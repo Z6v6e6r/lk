@@ -1966,6 +1966,7 @@ test("summer subscription reconciliation keeps polling bounded pending and ambig
   assert.deepEqual(prepared.query, {
     inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra)|ab_leto_2026_150_v2_(?:friendship|ra)|ab_leto_20260909_daily_v3_ra|kotelniki_friendship_12m_2026_v1|network_friendship_12m_2026_v1|piter_friendship_12m_2026_v1)$" },
     $or: [
+      { schemaVersion: 3, "history.version": 1, documentType: { $in: ["HUB_ATOMIC_INVENTORY_LEDGER", "PITER_ATOMIC_INVENTORY_LEDGER"] } },
       {
         status: { $in: ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
         transactionId: { $nin: [null, ""] },

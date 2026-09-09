@@ -18,8 +18,8 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
 });
 
 // Merged source fingerprint only; not a binding to an installed flow.
-export const PITER_ATOMIC_ROUTER_SHA256 = "0cbcbabd943a4d88d7ee18247eeb3c6d11243bcb0e6c8d21f902640693675055";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "0a7912018609e60261b9f1237d4d3fb653b1ba32354799f30cc4e5700ef79bf9";
+export const PITER_ATOMIC_ROUTER_SHA256 = "eaf6e1443f2c5ed91ca96af620faa45f45c7bb6e1f59313eb9962e7e766d7c49";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "b32dd57bc2f031febf8caa9c7536bce28bcc92f487e7daa47aa27942a1ee243f";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const currentProductId = String(global.get(key) ?? "").trim();
@@ -80,13 +80,15 @@ export function assertNoEnabledLegacyPiterSalesTab(flow) {
 }
 
 export function rejectTopologyDependentPiterSource(source, context) {
-  if ([PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256, "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b", "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d"].includes(sha256(source))) {
+  if ([PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256, "0a7912018609e60261b9f1237d4d3fb653b1ba32354799f30cc4e5700ef79bf9", "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b", "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d"].includes(sha256(source))) {
     fail(`${context} cannot compose the topology-dependent Piter purchase router`);
   }
   return true;
 }
 
-export function assertPiterAtomicTopology(flow, { atomicInitializer = PITER_ATOMIC_BINDING_INITIALIZER_SOURCE } = {}) {
+export function assertPiterAtomicTopology(flow, { atomicInitializer = PITER_ATOMIC_BINDING_INITIALIZER_SOURCE,
+  atomicRouterSha256 = PITER_ATOMIC_ROUTER_SHA256 } = {}) {
+  if (!/^[a-f0-9]{64}$/.test(atomicRouterSha256)) fail('atomic source binding must be an exact SHA256');
   if (!Array.isArray(flow)) fail("flow must be an array");
   const ids = PITER_ATOMIC_TOPOLOGY_IDS;
   const purchaseRouter = assertNode(flow, ids.purchaseRouter, {
@@ -125,7 +127,7 @@ export function assertPiterAtomicTopology(flow, { atomicInitializer = PITER_ATOM
     x: 2750,
     y: 2240,
     wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]],
-  }, PITER_ATOMIC_ROUTER_SHA256);
+  }, atomicRouterSha256);
   for (const [id, name, operation, y] of [
     [ids.ledgerFind, "Find Piter atomic inventory ledger", "find", 2180],
     [ids.ledgerUpdate, "CAS Piter atomic inventory ledger", "updateOne", 2220],

@@ -7,6 +7,13 @@
 - Final focused 25/25, full prod/dev build, TypeScript, lint (0 errors/387 warnings), exact four-function graph contract and independent payment-safety review passed. Browser fixture verified desktop/mobile and absent/error states.
 - Expanded suite has four base-reproduced preimage failures and 92 private-fixture skips; standard modular validation blocked by missing source metadata. No push/merge/deploy/live writes. See `docs/GROUP_SUBSCRIPTION_DISCOUNT_20260909.md`.
 
+## 2026-09-09 — Full subscription history and opening plan
+
+- Prepared `SUBSCRIPTION_HISTORY_OPENING_PLAN_20260909.md`: typed provider-only baseline without fabricated LK payments, canonical-ID dedup, non-empty HAB history, independent maintenance custody, staged flag activation and data-preserving recovery.
+- Fresh read-only annual snapshot 18:14 UTC confirms 14 HAB / 2 Piter external paid sales; both products activationDays1 and HAB98000. Daily snapshot: Friendship3paid/0activepending today gives4/7, RA new v3 has no rows. No Mongo/provider writes.
+- Open choice: HAB aggregate scope (all18paid→82/100 or only4LK→96/100). Required implementation gates also include safe late-payment handling and admission-stop/persistence; old expired soaking lease is not reusable.
+- Plan reviewed from payment-accounting and reliability/custody perspectives. Documentation only; no runtime changes, merge, push, deploy, process stop or flag activation in this stage.
+
 ## 2026-09-09 — Annual history reconciliation evidence correction
 
 - Preserve independently validated raw refund timestamps in versioned proof; keep exact subscription linkage, amount checks, CAS and durable receipts. Match only exact payment instants or the observed nanosecond-to-microsecond provider serialization.
@@ -2328,3 +2335,39 @@ reload or workers that do not retire still fail the test. Only the test changes.
 `npm run test:frontend-static-nginx`: 2/2 PASS in real isolated read-only,
 network-none Docker fixtures; affected lint and diff check PASS. Independent
 review: no material findings. No production nginx/configuration/deploy changes.
+
+### 2026-09-09 — annual history implementation, local checkpoint
+
+Implemented the approved ALL_PROVIDER_PAID opening scope in the existing
+`codex/subscription-sale-quotas-20260909` worktree, integrating main aebcc59 locally
+into the task branch (0bafdc0) to preserve the parallel HAB price fix. Schema3 now
+keeps typed canonical history, immutable Piter adjustment10, durable late-payment/
+refund settlement and recoverable local projections. Added a versioned stopped-runtime
+maintenance operator, exact candidate builder and persistent per-product sales configuration.
+New HAB confirmation follows actual Viva finances and complete client-instance pagination
+before and after ledger ACK; frozen old receipts stay compatible and CUP remains inactive.
+
+Read-only audit: 150 transactions, 103 local rows, 160 provider GET, zero business writes;
+HAB18 paid including14 outside LK, Piter42 paid including2 outside LK. Diagnostic maintenance
+replay passed for both products. Annual tests25 PASS; critical528 PASS/5 SKIP; candidate88
+PASS/2 SKIP; lint0 errors/387 baseline warnings; inert-env prod/dev build and private modular
+validation passed. Exact full-flow candidate ff056708... has4799 nodes/219 HTTP inputs.
+Independent payment-safety and reliability reviews completed. Real Linux/Mongo execution,
+live restart/persistence, new-head CI and public affected UI remain unverified.
+
+Before any candidate deployment, publish the reviewed inactive persistent configuration:
+missing/invalid configuration closes RA/Friendship too. Main merge, push, deployment,
+runtime control, database/provider writes and sales activation did not occur. Full changed-file
+register, exact hashes, evidence and limits: `docs/SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
+
+### 2026-09-09 — annual history local main integration
+
+User approved local merge of annual history checkpoint80b4e1d. Fresh main a0cfefd
+preserved parallel HAB persistent startup price, group discounts and subscription session
+cache; WORKLOG conflict resolved by keeping both entries. Integrated critical matrix548
+PASS/5SKIP; full lint0errors/387warnings; inert-env prod/dev build PASS. Added explicit
+legacy-price source invalidation coverage and corrected a temporary-custody fixture for
+checkouts already inside/tmp; affected tests20PASS/3SKIP. Historical price-only positive
+fixtures are explicitly skipped when superseded, never relabelled as live proof. Independent
+integration review completed. Task branch preserved; no push/deploy/live writes/activation.
+Details and evidence limits: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.

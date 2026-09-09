@@ -3,11 +3,16 @@ import fs from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import { buildHabAnnualPriceCandidate } from "../prepare_hab_annual_price_candidate.mjs";
-import { validateExactGraphContract } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
+import { sha256, validateExactGraphContract } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
 const sourceDir = new URL("../nodered_games_nodes/", import.meta.url);
 const ids = ["8fdc7076a0c436a2", "c165e43eba668c25", "91dded2dc8cfebe4", "519b6a6ca208e281"];
 const binding = JSON.parse(fs.readFileSync(new URL("../subscription_sale_opening_binding.json", import.meta.url)));
 const bytes = value => Buffer.from(JSON.stringify(value, null, 2) + "\n");
+// This release is frozen to its four price-only functions. New annual history
+// sources intentionally invalidate it; never advance its pins to make it pass.
+const frozenSourcesAvailable = binding.targets.filter(t => ids.includes(t.id)).every(t =>
+  sha256(fs.readFileSync(new URL(t.file, sourceDir), "utf8")) === t.candidateSha256);
+const frozenSourceTest = { skip: frozenSourcesAvailable ? false : "price-only release superseded by annual history sources" };
 function fixture() {
   return [{ id: "f9575c8726e29196", type: "tab" },
     ...binding.targets.filter(t => ids.includes(t.id)).map(t => ({
@@ -32,7 +37,7 @@ test("startup price survives independent memory-store restarts without changing 
   }
   assert.throws(() => start({}, () => {}), /readback mismatch/);
 });
-test("candidate changes only four funcs and the exact empty startup field; reverse restores source", () => {
+test("candidate changes only four funcs and the exact empty startup field; reverse restores source", frozenSourceTest, () => {
   const source = fixture(); const before = structuredClone(source); const liveBytes = bytes(source);
   const result = buildHabAnnualPriceCandidate(liveBytes);
   const after = JSON.parse(result.candidateBytes);
@@ -45,23 +50,33 @@ test("candidate changes only four funcs and the exact empty startup field; rever
   assert.equal(result.report.deploymentPerformed, false);
 });
 test("candidate rejects altered source, occupied startup hooks, missing and duplicate targets", () => {
-  for (const change of [flow => { flow.find(n => n.id === ids[0]).func += "\n"; },
-    flow => { flow.find(n => n.id === ids[0]).initialize = "existing startup work"; },
-    flow => { flow.splice(flow.findIndex(n => n.id === ids[0]), 1); },
-    flow => { flow.push(structuredClone(flow.find(n => n.id === ids[0]))); }]) {
-    const flow = fixture(); change(flow); assert.throws(() => buildHabAnnualPriceCandidate(bytes(flow)));
+  const cases = [
+    [flow => { flow.find(n => n.id === ids[0]).func += "\n"; }, /target preimage drift: 8fdc7076a0c436a2/],
+    [flow => { flow.find(n => n.id === ids[0]).initialize = "existing startup work"; }, /initializer preimage drift/],
+    [flow => { flow.splice(flow.findIndex(n => n.id === ids[0]), 1); }, /target preimage drift: 8fdc7076a0c436a2/],
+    [flow => { flow.push(structuredClone(flow.find(n => n.id === ids[0]))); }, /duplicate node id: 8fdc7076a0c436a2/],
+  ];
+  for (const [change, expected] of cases) {
+    const flow = fixture(); change(flow);
+    assert.throws(() => buildHabAnnualPriceCandidate(bytes(flow)), expected);
   }
 });
-test("reviewed contract rejects any extra live topology or admission change", () => {
+test("reviewed contract rejects any extra live topology or admission change", frozenSourceTest, () => {
   const liveBytes = bytes(fixture()); const result = buildHabAnnualPriceCandidate(liveBytes);
   const candidate = JSON.parse(result.candidateBytes);
   candidate.find(n => n.id === ids[1]).wires = [["unrelated"], []];
   assert.throws(() => validateExactGraphContract({ liveBytes, candidateBytes: bytes(candidate), contract: result.contract }));
 });
 test("fresh private production snapshot builds with exact four-node scope", {
-  skip: !process.env.HAB_PRICE_LIVE_FIXTURE,
+  skip: !process.env.HAB_PRICE_LIVE_FIXTURE || !frozenSourcesAvailable,
 }, () => {
   const liveBytes = fs.readFileSync(process.env.HAB_PRICE_LIVE_FIXTURE);
   const result = buildHabAnnualPriceCandidate(liveBytes);
   assert.equal(result.report.changedNodeCount, 4); assert.equal(result.report.addedNodeCount, 0);
+});
+
+test("annual source amendments cannot be deployed through the frozen price-only candidate", {
+  skip: frozenSourcesAvailable,
+}, () => {
+  assert.throws(() => buildHabAnnualPriceCandidate(bytes(fixture())), /target preimage drift|replacement drift/);
 });

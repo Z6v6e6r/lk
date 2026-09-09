@@ -785,7 +785,9 @@ test("offline generator rejects a temp symlink parent that resolves outside its 
   const holder = fs.mkdtempSync(path.join(TEMP_ROOT, "lk1-dev-symlink-parent-"));
   try {
     const redirect = path.join(holder, "redirect");
-    fs.symlinkSync(fs.realpathSync(ROOT), redirect);
+    // The repository itself can be inside /tmp during integration. Use a
+    // filesystem root that is outside the allowed temporary-child custody.
+    fs.symlinkSync(fs.realpathSync(path.parse(ROOT).root), redirect);
     assert.throws(() => publishOfflineDevSource(path.join(redirect, "workspace"), FROZEN_SOURCE_COMMIT),
       /workspace must be under/);
   } finally {

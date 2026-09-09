@@ -1,0 +1,106 @@
+{
+  "kind": "ANNUAL_HISTORY_CANDIDATE_BINDING_V1",
+  "sourceSha256": "325839a66e235caa9e56bde36afdb89286aab8e26e963f2612dea03bf7a7cb75",
+  "candidateSha256": "ff056708ce47aca989dfef9156600586c022fe5f317453417e135325ff131e12",
+  "sourceNodeCount": 4798,
+  "httpInputCount": 219,
+  "hubEvidence": {
+    "nodes": [
+      {
+        "id": "8f7bd5b482fe9763",
+        "nodeSha256": "db948cea864c2122a03ac4b0b904f8b05d3c97a1531f1d683e596a07f29636e3"
+      },
+      {
+        "id": "lk_subscription_booking_router_20260804",
+        "nodeSha256": "64aa61f6da1697ae87c3853a2006d970f4186491439e043637a0f50a11b8154a"
+      },
+      {
+        "id": "lk_subscription_booking_finalize_20260804",
+        "nodeSha256": "e923ac50d9fdb350cf3b7416bdb29da92710b4eb2cd5bfe6e0881ad5d53dd71a"
+      },
+      {
+        "id": "lk_subscription_managed_policy_20260820",
+        "nodeSha256": "8f5e24625978aef8cf8bfa70e480b111c52c4f8ac7054ad3f9913fbf81a9ed88"
+      },
+      {
+        "id": "lk_subscription_product_router_20260907",
+        "nodeSha256": "7d82ac109f638c4fdfcfbdcfd2e8092748e59824881de7736fe8c08478319d04"
+      }
+    ],
+    "receipt": {
+      "mode": "LK1_VIVA_PRODUCT_NEXT_DAY_V1",
+      "policy": {
+        "productId": "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        "maxActiveBookings": 4,
+        "freeGameMinutesPerDay": 60,
+        "gameOverageDiscountPercent": 30,
+        "groupTrainingDiscountPercent": 50,
+        "tournamentDiscountPercent": 50
+      },
+      "sourceDigest": "sha256:8342653317b22b3986c7e3c74d7d6c089090657391edec1446605d082dfc1a76",
+      "bookingUsageScope": "SUBSCRIPTION_BENEFIT_ONLY"
+    }
+  },
+  "targets": [
+    {
+      "id": "8fdc7076a0c436a2",
+      "file": "fn_tournament_subscription_status_prepare.js",
+      "preimageNodeSha256": "5d0c519aa8fcb27477aecd5e65cbae91587406375b0813a4cbd37b16ba9e6864",
+      "sourceTextSha256": "048430d27721fa7fc93cd46206101df2d3679fc0b690dd885b25a45af3f7000c"
+    },
+    {
+      "id": "c165e43eba668c25",
+      "file": "fn_tournament_subscription_status_response.js",
+      "preimageNodeSha256": "366eef99ee020f259182a47e32851f08820c8023960450a79da8c2aea5605bb6",
+      "sourceTextSha256": "250d245b3ae4a34c8b6ea924b4caf7ce6fbf7b44b804857b71bf4b9c78d3ad82"
+    },
+    {
+      "id": "91dded2dc8cfebe4",
+      "file": "fn_tournament_subscription_purchase_prepare.js",
+      "preimageNodeSha256": "3f8126817275ac3329e5b60fcb919244a708a8af7d814ae75f4070999bf1278d",
+      "sourceTextSha256": "d4c6952f5909daede6994655250944413c4ba766c8da656989f833b11ff739ef"
+    },
+    {
+      "id": "566ae4b886c37ae5",
+      "file": "fn_tournament_subscription_purchase_router.js",
+      "preimageNodeSha256": "2d624c5f44298a08cbf1c2794b8bbe7369327d2cab45c9f1ae2171e54f1ed8f2",
+      "sourceTextSha256": "b32dd57bc2f031febf8caa9c7536bce28bcc92f487e7daa47aa27942a1ee243f"
+    },
+    {
+      "id": "519b6a6ca208e281",
+      "file": "fn_tournament_subscription_counter_refresh_prepare.js",
+      "preimageNodeSha256": "23035414f1afa569fe305ccba5ed39948452fe9ce90cff8d84db31ce4f7d3563",
+      "sourceTextSha256": "6c3cc3ae5975f8ef54f3349e37f35b3024d038d07d9747916a1a6c4ab78f2f18"
+    },
+    {
+      "id": "ca022fd14027a5b0",
+      "file": "fn_tournament_subscription_confirm_resolve.js",
+      "preimageNodeSha256": "207d2bfb7485abe2c8fea6acb3f3e792a2301b3cf07167b76ba97b03d97d1dee",
+      "sourceTextSha256": "e7974a29b947bcc17f4f16158bab1a209631d558144e563126ae6bd778a1a4b4"
+    },
+    {
+      "id": "ab1e202650000002",
+      "file": "fn_tournament_subscription_reconcile_query.js",
+      "preimageNodeSha256": "d17b07bf602dcdf6103f2a147f603cb4927741706d9a8b80287649022bda1328",
+      "sourceTextSha256": "29ed1849b9591ed9e94bc906f46a863f27e6e9df66040350135969adeedb5cd3"
+    },
+    {
+      "id": "piter_atomic_router_20260903",
+      "file": "fn_tournament_subscription_piter_atomic_router.js",
+      "preimageNodeSha256": "8009c8d58e31a3a4874bf24c7fdb741b7db6cfdb6f3a4aa5df897dba619fbb32",
+      "sourceTextSha256": "eaf6e1443f2c5ed91ca96af620faa45f45c7bb6e1f59313eb9962e7e766d7c49"
+    },
+    {
+      "id": "ab1e202650000006",
+      "file": "fn_tournament_subscription_reconcile_record.js",
+      "preimageNodeSha256": "6b8542335f914b9bf9852cc07a3041d9417cc9c354440ad114fcefb645389abb",
+      "sourceTextSha256": "8126fe92ab4660acaffd3972e577993f346b058b5d2fafccf728423fb8e15195"
+    }
+  ],
+  "reconcileFindPreimageSha256": "7ec611b7d4cc4c91c1603289c9c25b084953552f55f24428fb9a3e2976f6d00b",
+  "expander": {
+    "id": "annual_history_expand_20260909",
+    "file": "fn_tournament_subscription_reconcile_expand.js",
+    "sourceTextSha256": "288bf2e6da5e6aaa306eb0a7f7cdf49801b9cdeea4952530a971d20802db990b"
+  }
+}
