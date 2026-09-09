@@ -36,6 +36,7 @@ if (ctx.localReconciliation) {
   return continueApply(ctx);
 }
 
+if (msg.error || !Array.isArray(msg.payload)) return retry(ctx, "daily_limit_read_unavailable");
 const rows = asArray(msg.payload).filter(isObj);
 if (rows.length === 0) {
   ctx.dailyLimitReleaseOutcome = ctx.dailyLimitReleaseOutcome || "NOT_APPLICABLE";
@@ -57,6 +58,14 @@ const state = String(operation.state || "").trim().toUpperCase();
 if (targetBookingIdSet.size > 0 && operationBookingIds.length > 0
   && !operationBookingIds.some((bookingId) => targetBookingIdSet.has(bookingId))) {
   return retry(ctx, "daily_limit_booking_mismatch");
+}
+// Removing the cancelled booking from the roster may finish while Viva is still
+// returning its visit. Keep the allowance reserved until the existing recovery
+// path observes RETURN_VERIFIED and passes through this node again.
+if (ctx.subscriptionReturnState === "RETURN_PENDING") {
+  ctx.dailyLimitReleaseOutcome = "RETURN_PENDING";
+  ctx.dailyLimitOperationKey = toStr(operation._id);
+  return continueApply(ctx);
 }
 if (["FAILED", "RELEASED"].includes(state)
   || (targetBookingIdSet.size > 0

@@ -1,5 +1,9 @@
 # Subscription paid JOIN correction — local stage
 
+**Superseded scope: implementation is BLOCKED on the independent Viva visit debit/return contract.**
+The paid-only candidate below does not satisfy the requested full lifecycle and must not be released by itself.
+See [visit lifecycle follow-up](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md).
+
 Base: `origin/main` = `be2e395eebae6b6fee7e405fbfa87ef3e3e703bf`.
 Branch: `codex/subscription-join-payment-20260909`.
 

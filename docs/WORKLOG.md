@@ -2214,3 +2214,10 @@ Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving
 - HAR: selected 90-minute participation quote is 262.50 RUB; JOIN returns 202/PENDING_CONFIRMATION. Fresh source confirms mixed JOIN incorrectly uses SUBSCRIPTION booking before checkout.
 - Local correction creates ON_PLACE for a positive JOIN quote, preserves exact confirmation and checkout CAS, and accounts for active paid benefits in gateway/preview. CREATE remains unchanged.
 - Evidence, changed files and remaining gates: [SUBSCRIPTION_PAID_JOIN_FIX_20260909.md](SUBSCRIPTION_PAID_JOIN_FIX_20260909.md). No deploy or provider/database/payment mutation; saved pending operation remains untouched.
+
+## 2026-09-09 — Subscription paid JOIN visit lifecycle (local, blocked)
+
+- Prepared a pure server job/CAS planner for exact-subscription debit and inverse return, cancellation races and delayed allowance release; not wired to runtime or a real provider adapter.
+- Fixed the existing leave source to retain daily allowance during RETURN_PENDING and retry malformed/failed reads; roster cleanup may continue.
+- New local tests: 21 PASS; related regressions: 117 PASS / 1 optional SKIP. Full lint: 0 errors / 387 baseline warnings. Independent payment/reliability review completed.
+- Full implementation remains blocked: inspected code/HAR do not establish separate Viva debit/return for a paid ON_PLACE booking. The previous paid-only candidate must not be released independently. See [lifecycle evidence and missing integration](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md). No push, merge, deployment or live mutation.
