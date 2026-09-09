@@ -43,6 +43,7 @@ const PUBLICATION_SCRIPTS = Object.freeze([
   'manage_piter_deferred_ledger.mjs','prepare_piter_deferred_activation.mjs',
   'lib/piterDeferredActivationContract.mjs','lib/piterDeferredLedgerOperations.mjs',
   'lib/piterAtomicActivationContract.mjs','lib/piterAtomicLedgerOperations.mjs','lib/piterAtomicQuotaUpdateContract.mjs',
+  'lib/vivaHistoricalEvidence.mjs',
   'nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs','nodered_reviewed_flow_deploy/runtime_contract.mjs',
 ]);
 
