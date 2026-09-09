@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 const STANDALONE_TILDA_TEMPLATES = [
   "docs/tilda-game-create.html",
@@ -44,6 +45,7 @@ test("standalone Tilda templates preserve reserve runtime base-url context", () 
 
 test("dev-aware standalone Tilda templates keep strict split origins per channel", () => {
   [
+    "docs/tilda-game-join.html",
     "docs/tilda-game-create.html",
     "docs/tilda-game-create-composite.html",
     "docs/tilda-finde-game.html",
@@ -88,15 +90,33 @@ test("group and tournament templates load DEV-only bundles from reserve on expli
   });
 });
 
-test("prod-only standalone Tilda templates stay pinned to primary assets", () => {
-  [
-    "docs/tilda-game-join.html",
-  ].forEach((path) => {
-    const source = readFile(path);
-
-    assert.match(source, /var assetOrigins = dedupeStrings\(\[normalizeOrigin\(primaryAssetOrigin\)\]\.filter\(Boolean\)\);/);
-    assert.doesNotMatch(source, /fallbackAssetOrigins/);
-  });
+test("game join loader selects the requested channel without cross-channel fallback", () => {
+  const prefix = inlineScript("docs/tilda-game-join.html").split("    function hideTildaShell()")[0];
+  function resolve(query: string, referrer = "") {
+    const href = `https://padlhub.ru/game_join${query}`;
+    return vm.runInNewContext(`${prefix}return {channel, assetOrigins, scriptPath, releasePath, defaultCabinetUrl}; })();`, {
+      URL, window: { location: { href, origin: "https://padlhub.ru" } }, document: { referrer },
+    });
+  }
+  const cases = [
+    ["?channel=dev", "", "dev"],
+    ["?cabinetUrl=https%3A%2F%2Fpadlhub.ru%2Flk_dev%3FauthMode%3Dviva", "", "dev"],
+    ["?returnUrl=%2Flk_dev", "", "dev"],
+    ["", "https://padlhub.ru/lk_dev?authMode=viva", "dev"],
+    ["?channel=prod&cabinetUrl=%2Flk_dev", "https://padlhub.ru/lk_dev", "prod"],
+    ["", "", "prod"],
+    ["?channel=unknown&assetOrigin=https%3A%2F%2Fexample.test", "", "prod"],
+  ];
+  for (const [query, referrer, channel] of cases) {
+    const result = resolve(query, referrer);
+    const dev = channel === "dev";
+    assert.equal(result.channel, channel);
+    assert.deepEqual(Array.from(result.assetOrigins), [dev ? "https://lk-reserve.89-108-64-209.sslip.io" : "https://padlhub.su"]);
+    assert.equal(result.scriptPath, dev ? "/lk/games-dev.js" : "/lk/games.js");
+    assert.equal(result.releasePath, dev ? "/lk/release-dev.json" : "/lk/release.json");
+    assert.equal(result.defaultCabinetUrl, dev ? "https://padlhub.ru/lk_dev" : "https://padlhub.ru/lk_new");
+  }
+  assert.doesNotThrow(() => new Function(inlineScript("docs/tilda-game-join.html")));
 });
 
 test("dev-only composite template stays pinned to reserve dev runtime", () => {
