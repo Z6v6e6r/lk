@@ -1,3 +1,4 @@
+import { invalidateSubscriptionSnapshot } from "./subscriptionSessionCache";
 import { deleteCookie, getCookie, setCookie } from "./cookies.ts";
 
 const AUTH_TOKEN_COOKIE_NAME = "padlhubAuthToken";
@@ -175,6 +176,7 @@ export function persistAuthTokens(
 }
 
 export function clearAuthTokens() {
+  invalidateSubscriptionSnapshot();
   deleteCookiesBySuffix("AuthToken");
   deleteCookiesBySuffix("RefreshToken");
   writeStorage(AUTH_TOKEN_STORAGE_KEY, null);

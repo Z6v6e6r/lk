@@ -1,3 +1,4 @@
+import { invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
 import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties } from "react";
 import { UserProfile } from "./UserProfile";
 import {
@@ -2917,6 +2918,7 @@ export function Cabinet({
     if (isRefreshingApp) return;
     setIsRefreshingApp(true);
     try {
+      invalidateSubscriptionSnapshot();
       await forceAppRefresh();
     } catch (error) {
       trackClientError(

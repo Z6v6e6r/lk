@@ -2216,3 +2216,57 @@ Prepared isolated local reconciliation for a phantom LK roster restored without 
 ### 2026-09-09 — split leave deployed; completed-receipt follow-up
 
 Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving nine parallel nodes. Installed flow3456eb84..., restart99, 15-minute observation and read-only API checks passed. Exact-game postcheck found a completed removal receipt moved back to VIVA_CONFIRMED by existing refund verification before deploy. Prepared a separate two-predicate follow-up accepting that state only with lkAppliedAt/outcomeREMOVED/cancellation proof; 97 focused tests, critical527 PASS/5 SKIP, independent review PASS. Follow-up not merged/pushed/deployed; no real test leave or refund initiated. Details: SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md.
+
+### 2026-09-09 — shared subscription session snapshot across LK screens
+
+Continued `codex/join-subscriptions-load-once-20260909` after checkpoint `d52cc04`;
+original branch base remains `be2e395eebae6b6fee7e405fbfa87ef3e3e703bf`.
+
+- `src/utils/subscriptionSessionCache.ts`: one versioned browser singleton shares
+  successful display reads/inflight promises across independent IIFE bundles;
+  sessionStorage restores them on same-origin Tilda navigation. SHA-256 account
+  partition uses issuer/subject/audience/session/auth-time for JWTs (stable across
+  access-token refresh); opaque tokens conservatively start over on token change.
+  No raw access token is stored in the snapshot. Query variants, tenant/API origin
+  and release channel remain separate. Entries have a 12-hour maximum age and a
+  100-entry bound; there is no background refresh timer. Storage/crypto failures
+  degrade to memory/network; failed or unsupported responses are not cached.
+- `src/utils/subscriptionSnapshotData.ts`: whitelist display/eligibility fields,
+  including product aliases, owner IDs and lifecycle/freeze evidence. Drop unrelated
+  provider/personal fields; refuse caching malformed known evidence. Preserve the
+  existing annual-discount and daily-limit classifiers on cache hits.
+- `src/utils/apiClient.ts`: route list and product-name reads through the common
+  snapshot. Invalidate before/after explicit subscription/transaction/booking/leave
+  writes, including ambiguous transport failures and partial cancellation; exclude
+  preview and cleanup dry runs. Confirmed purchase results also invalidate.
+  Different list queries (active vs history/pagination) each load once; they are
+  intentionally not treated as interchangeable complete datasets.
+- `src/utils/authTokenStorage.ts`, `src/utils/paymentSync.ts`,
+  `src/components/cabinet/Cabinet.tsx`: clear on logout, recovered payment completion,
+  and explicit full-LK refresh. Subsequent reads fetch fresh data after invalidation.
+  Existing subscription purchase redirects use a cleared snapshot on return.
+- Price-preview requests, fresh exercise availability/daily-limit checks and the
+  server decision for the exact selected subscription remain outside this cache.
+  Remote/admin changes can remain invisible until manual refresh or expiry; cached
+  membership/price is never permission to charge or book. Already mounted UI state
+  updates through existing refresh/load flows; this change adds no polling/event loop.
+
+Verification:
+- `node --test scripts/tests/subscriptionSessionCache.test.mjs scripts/tests/joinSubscriptionLoading.test.mjs scripts/tests/subscriptionPricePreviewHook.test.mjs scripts/tests/subscriptionPricePreviewAside.test.mjs scripts/tests/subscriptionPricePreview.apiClient.test.mjs`: 33/33 PASS.
+- `node --experimental-strip-types --test scripts/tests/tournamentSignup.subscriptionConfirmation.test.ts`: 9/9 PASS.
+- Full `npm run build` (PROD and DEV, inert loopback build configuration): PASS;
+  `npm run lint`: 0 errors / 387 pre-existing warnings; `git diff --check`: PASS.
+- `npm run test:night-e-acceptance`: 125/126. Existing baseline source-text test
+  `public game create flow uses dedicated summary and split checkout selection`
+  still expects `Создать игру по подписке`; reproduced on the unchanged base in
+  the preceding checkpoint. No new acceptance failures.
+- Independent security/payment/cache review: initial serializer product-identity
+  finding fixed; real candidate/classifier parity regressions added; final review
+  has no remaining material findings.
+- Browser fixture with the real cache module, synthetic data and full document
+  navigation: LK -> game -> LK keeps source-load counter 1; manual refresh -> 2;
+  account A -> B -> game shows B's balance and counter 3. Runnable local fixture:
+  `http://127.0.0.1:4397/session.html` (temporary harness, not a deployed LK).
+
+No task-branch push, PR, main integration, deployment or live booking/payment/provider
+mutation. Real authenticated Tilda/runtime verification remains a later release gate.
