@@ -294,7 +294,7 @@
   min-width: 0;
   padding: 0;
   flex: 0 0 var(--subscription-card-width);
-  align-items: flex-end;
+  align-items: flex-start;
   scroll-snap-align: center;
 }
 
@@ -751,6 +751,11 @@
 /* Figma desktop 1752:2759; intrinsic height accommodates live copy and three variants. */
 .subscription-card--no-progress { padding: 0; }
 .subscription-card--no-progress > .subscription-card__progress { display: none; }
+/* Align white panel tops regardless of content height or an inventory frame.
+   The frame header occupies 13px padding + 14px label + 12px gap. */
+.subscription-plan-rail:has(.subscription-card:not(.subscription-card--no-progress)) .subscription-card--no-progress {
+  margin-top: 39px;
+}
 .subscription-card__price-row--variants { flex-direction: column; align-items: flex-start; }
 .subscription-card__price-row--variants .subscription-card__billing-options { max-width: 100%; }
 .subscription-card__billing-options button { white-space: nowrap; }
