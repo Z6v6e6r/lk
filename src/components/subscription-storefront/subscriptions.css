@@ -314,8 +314,7 @@
 .subscription-rail-arrow--previous { left: -18px; }
 .subscription-rail-arrow--next { right: -18px; }
 .subscription-rail-arrow:disabled {
-  color: var(--subscription-text-muted);
-  cursor: default;
+  visibility: hidden;
 }
 
 .subscription-rail-arrow svg {
