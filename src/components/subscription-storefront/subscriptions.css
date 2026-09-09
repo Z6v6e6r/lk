@@ -288,33 +288,37 @@
   display: none;
 }
 
-.subscription-rail-controls {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 20px;
+.subscription-rail-frame {
+  position: relative;
+  min-width: 0;
 }
 
-.subscription-rail-controls button {
+.subscription-rail-arrow {
+  position: absolute;
+  z-index: 2;
+  top: min(240px, 35%);
+  transform: translateY(-50%);
   display: grid;
-  width: 40px;
-  height: 40px;
-  padding: 10px;
+  width: 36px;
+  height: 36px;
+  padding: 8px;
   place-items: center;
   border: 1px solid var(--subscription-border);
   border-radius: 50%;
   color: var(--subscription-accent);
   background: #fff;
+  box-shadow: 0 2px 10px #1f1e2014;
   cursor: pointer;
 }
 
-.subscription-rail-controls button:disabled {
-  opacity: 0.35;
+.subscription-rail-arrow--previous { left: -18px; }
+.subscription-rail-arrow--next { right: -18px; }
+.subscription-rail-arrow:disabled {
+  color: var(--subscription-text-muted);
   cursor: default;
 }
 
-.subscription-rail-controls svg {
+.subscription-rail-arrow svg {
   width: 20px;
   height: 20px;
   fill: none;
@@ -324,13 +328,40 @@
   stroke-linejoin: round;
 }
 
-.subscription-rail-controls__hint {
-  color: var(--subscription-text-secondary);
-  font: 12px/1.2 'Subscription Inter Display', sans-serif;
-  text-align: center;
+.subscription-rail-dots {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 12px;
 }
 
-.subscription-rail-controls button:focus-visible {
+.subscription-rail-dots button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.subscription-rail-dots button::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 8px;
+  background: #d9d4e8;
+}
+
+.subscription-rail-dots button[aria-current='true']::after {
+  width: 24px;
+  background: var(--subscription-accent);
+}
+
+.subscription-rail-arrow:focus-visible,
+.subscription-rail-dots button:focus-visible {
   outline: 3px solid var(--subscription-accent);
   outline-offset: 3px;
 }
