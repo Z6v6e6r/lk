@@ -4999,3 +4999,147 @@ test("regional purchase ignores browser productId and fails before any provider 
   assert.equal(details.code, "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
   assert.equal(details.counterKey, "kotelniki_friendship");
 });
+
+const SALES_QUOTA_GLOBALS = { summer_subscription_sales_20260909_enabled: true };
+
+function readResumedQuota(counterKey: string, rows: NodeRedMsg[], nowIso = "2026-09-09T08:00:00.000Z") {
+  return withFixedNow(nowIso, () => {
+    const file = (name: string) => `scripts/nodered_games_nodes/fn_tournament_subscription_${name}.js`;
+    const prepared = runNodeRedFunction(file("status_prepare"),
+      { req: { query: { counterKey } } }, SALES_QUOTA_GLOBALS) as NodeRedMsg[];
+    const status = runNodeRedFunction(file("status_response"),
+      { _summerSubscriptionCtx: prepared[0]._summerSubscriptionCtx, payload: rows },
+      SALES_QUOTA_GLOBALS) as NodeRedMsg[];
+    const purchase = runNodeRedFunction(file("purchase_prepare"), {
+      payload: { counterKey, clientPhone: "79990000000", paymentRef: "quota-regression" },
+      req: { query: {} },
+    }, SALES_QUOTA_GLOBALS) as NodeRedMsg[];
+    const limit = runNodeRedFunction(file("purchase_limit"),
+      { _summerSubscriptionCtx: purchase[0]._summerSubscriptionCtx, payload: rows },
+      SALES_QUOTA_GLOBALS) as NodeRedMsg[];
+    const refresh = runNodeRedFunction(file("counter_refresh_prepare"), {}, SALES_QUOTA_GLOBALS) as NodeRedMsg;
+    const refreshed = runNodeRedFunction(file("counter_refresh_response"),
+      { _summerSubscriptionCtx: refresh._summerSubscriptionCtx, payload: rows },
+      SALES_QUOTA_GLOBALS) as NodeRedMsg[][];
+    const update = refreshed[0].find((entry) => asRecord(entry.query).counterKey === counterKey);
+    assert.ok(update);
+    return {
+      status: asRecord(status[0].payload),
+      purchaseCtx: asRecord(purchase[0]._summerSubscriptionCtx),
+      limit,
+      refresh: asRecord(asRecord(update.payload).$set),
+    };
+  });
+}
+
+for (const counterKey of ["ra", "friendship"]) {
+  test(`resumed ${counterKey} has 10 daily seats without erasing the unfinished launch history`, () => {
+    const inventoryId = `ab_leto_2026_150_v2_${counterKey}`;
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      inventoryId, counterKey, status: "PAID", paymentRef: `historical-${i}`,
+      releasePhase: "launch", paidAt: "2026-09-08T08:00:00.000Z", amountMinor: 123400,
+    }));
+    const original = structuredClone(rows);
+    const result = readResumedQuota(counterKey, rows);
+    for (const view of [result.status, result.refresh]) {
+      assert.equal(view.inventoryId, inventoryId);
+      assert.equal(view.totalLimit, 10);
+      assert.equal(view.remainingCount, 10);
+      assert.equal(view.launchPaidCount, 5);
+      assert.equal(view.launchLimit, 150);
+      assert.equal(view.launchCompletedAt, null);
+      assert.equal(view.releasePhase, "daily");
+      assert.equal(view.dailyDropStartsAt, "2026-09-09T07:00:00.000Z");
+    }
+    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 10);
+    assert.equal(result.purchaseCtx.inventoryId, inventoryId);
+    assert.deepEqual(rows, original);
+    const before = readResumedQuota(counterKey, rows, "2026-09-09T06:59:59.999Z");
+    assert.equal(before.status.releasePhase, "launch");
+    assert.equal(before.status.totalLimit, 150);
+    assert.equal(before.status.remainingCount, 145);
+  });
+
+  test(`resumed ${counterKey} includes active old launch payments and refuses an exhausted daily quota`, () => {
+    const common = { inventoryId: `ab_leto_2026_150_v2_${counterKey}`, counterKey, releasePhase: "launch" };
+    const oldPending = { ...common, status: "PAYMENT_PENDING", createdAt: "2026-09-09T06:55:00.000Z",
+      expiresAt: "2026-09-09T09:00:00.000Z" };
+    const currentPaid = { ...common, status: "PAID", paidAt: "2026-09-09T07:20:00.000Z" };
+    const expired = { ...oldPending, expiresAt: "2026-09-09T07:59:59.000Z" };
+    const result = readResumedQuota(counterKey, [oldPending, currentPaid, expired]);
+    for (const view of [result.status, result.refresh]) {
+      assert.equal(view.paidCount, 1);
+      assert.equal(view.reservedCount, 1);
+      assert.equal(view.remainingCount, 8);
+    }
+    assert.equal(asRecord(result.limit[0]._summerSubscriptionCtx).remainingBefore, 8);
+    const full = readResumedQuota(counterKey, Array.from({ length: 10 }, () => ({ ...oldPending })));
+    assert.equal(full.status.remainingCount, 0);
+    assert.equal(full.status.canPurchase, false);
+    assert.equal(full.refresh.remainingCount, 0);
+    assert.equal(full.limit[0], null);
+    assert.equal(asRecord(full.limit[1]).statusCode, 409);
+  });
+}
+
+test("sales quota flag changes only the approved products and requires strict true", () => {
+  withFixedNow("2026-09-09T08:00:00.000Z", () => {
+    const counter = (key: string, globals: GlobalValues) => {
+      const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+        { req: { query: { counterKey: key } } }, globals) as NodeRedMsg[];
+      return asRecord(asRecord(out[0]._summerSubscriptionCtx).activeCounter);
+    };
+    for (const key of ["piter_friendship", "kotelniki_friendship", "sport", "academy", "energy5", "sirius_friendship"]) {
+      assert.deepEqual(counter(key, SALES_QUOTA_GLOBALS), counter(key, {}));
+    }
+    for (const flag of [false, "true", 1, undefined]) {
+      assert.deepEqual(counter("network_friendship", { summer_subscription_sales_20260909_enabled: flag }),
+        counter("network_friendship", {}));
+    }
+    const legacy = counter("friendship", {
+      ...SALES_QUOTA_GLOBALS, summer_subscription_ab_leto_20260903_release_enabled: false,
+    });
+    assert.equal(legacy.forcedDailyDropStartsAt, null);
+    assert.equal(legacy.dailyLimit, 7);
+    assert.equal(legacy.inventoryId, "ab_leto_2026_100_then_7_v1_friendship");
+  });
+});
+
+test("HAB quota flag sets 1 of 1 at 98000 RUB and preserves historical prices and sales guards", () => {
+  withFixedNow("2026-09-09T08:00:00.000Z", () => {
+    const globals = { ...SALES_QUOTA_GLOBALS, ...NETWORK_PRODUCT_GLOBALS };
+    const prepare = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+      { req: { query: { counterKey: "network_friendship" } } }, globals) as NodeRedMsg[];
+    const ctx = asRecord(prepare[0]._summerSubscriptionCtx);
+    const target = asRecord(ctx.activeCounter);
+    assert.equal(target.inventoryId, "network_friendship_12m_2026_v1");
+    assert.equal(target.totalLimit, 100);
+    assert.equal(target.dailyLimit, 1);
+    const historical = { inventoryId: target.inventoryId, counterKey: "network_friendship", status: "PAID",
+      amountMinor: 5680000, paidAt: "2026-09-08T08:00:00.000Z" };
+    const original = structuredClone(historical);
+    const read = (rows: NodeRedMsg[], override: GlobalValues = {}) => {
+      const effectiveGlobals = { ...globals, ...override };
+      const configured = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+        { req: { query: { counterKey: "network_friendship" } } }, effectiveGlobals) as NodeRedMsg[];
+      const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+        { _summerSubscriptionCtx: configured[0]._summerSubscriptionCtx, payload: rows }, effectiveGlobals) as NodeRedMsg[];
+      return asRecord(out[0].payload);
+    };
+    const emptyDay = read([historical]);
+    assert.equal(emptyDay.totalLimit, 1);
+    assert.equal(emptyDay.remainingCount, 1);
+    assert.equal(emptyDay.inventoryPaidCount, 1);
+    assert.equal(emptyDay.priceMinor, 9800000);
+    assert.equal(emptyDay.price, 98000);
+    assert.equal(emptyDay.canPurchase, false);
+    assert.equal(emptyDay.managedSaleReady, false);
+    const used = read([historical, { ...historical, paidAt: "2026-09-09T07:30:00.000Z" }]);
+    assert.equal(used.remainingCount, 0);
+    assert.deepEqual(historical, original);
+    const mismatch = read([], { summer_subscription_network_friendship_product_cost_minor: 5680000 });
+    assert.equal(mismatch.priceMinor, 9800000);
+    assert.equal(mismatch.bindingReady, false);
+    assert.equal(mismatch.canPurchase, false);
+  });
+});

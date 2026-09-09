@@ -187,6 +187,7 @@ const states = counters.map((counter) => {
     dailyLimit: Math.max(0, Math.floor(Number(counter.dailyLimit) || 0)),
     dailyDropDate: toStr(counter.dailyDropDate),
     dailyDropStartsAt: null,
+    forcedDailyDropStartsAt: toStr(counter?.forcedDailyDropStartsAt),
     totalLimit,
     paidCount: manualPaidCount,
     reservedCount: 0,
@@ -310,7 +311,11 @@ const updateMessages = states.map((state) => {
       ? state._launchPaidTimestamps[state.launchLimit - 1]
       : null;
     state.launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
-    state.dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+    const naturalDailyStart = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+    const forcedDailyStart = toTs(state.forcedDailyDropStartsAt);
+    state.dailyDropStartsAt = forcedDailyStart != null
+      && (naturalDailyStart == null || forcedDailyStart < Date.parse(naturalDailyStart))
+      ? new Date(forcedDailyStart).toISOString() : naturalDailyStart;
     state.dailyDropActive = Boolean(state.dailyDropStartsAt && Date.parse(state.dailyDropStartsAt) <= nowTs);
     const dailyDropStartsAtTs = toTs(state.dailyDropStartsAt);
     state.launchPaidCount = launchComplete ? state.launchLimit : state.launchPaidCount;
@@ -325,7 +330,8 @@ const updateMessages = states.map((state) => {
         if (isCurrentDailyDrop) state._dailyPaidCount += 1;
         continue;
       }
-      if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+      if (isCurrentDailyDrop || (state.dailyDropActive && forcedDailyStart != null
+          && row.releasePhase === "launch")) state._dailyReservedCount += 1;
       else if (row.releasePhase === "launch") state.launchReservedCount += 1;
     }
     state.releasePhase = state.dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch";

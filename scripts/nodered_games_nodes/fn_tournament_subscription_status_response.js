@@ -15,7 +15,10 @@ const AB_LETO_STAGED_LAUNCH_LIMIT = 150;
 const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
 const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
 const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260903_release_enabled";
-const NETWORK_FRIENDSHIP_DAILY_LIMIT = 10;
+// Enabled only by the reviewed sales configuration operation, after provider price readback.
+const SALES_QUOTAS_20260909_ENABLED = global.get("summer_subscription_sales_20260909_enabled") === true;
+const SALES_QUOTAS_20260909_START = "2026-09-09T07:00:00.000Z";
+const NETWORK_FRIENDSHIP_DAILY_LIMIT = SALES_QUOTAS_20260909_ENABLED ? 1 : 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
 const MANAGED_SALE_COMPATIBILITY = {
   adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
@@ -115,13 +118,13 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
   network_friendship: {
     inventoryId: "network_friendship_12m_2026_v1",
     batchSize: 100,
-    tierPricesMinor: [5680000],
+    tierPricesMinor: [SALES_QUOTAS_20260909_ENABLED ? 9800000 : 5680000],
     productName: "Падел.Дружба.ХАБ",
     bindingLabel: "ХАБ",
     launchEnabled: true,
     providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
     providerProductName: "Падел.Дружба.ХАБ — годовая",
-    providerProductCostMinor: 5680000,
+    providerProductCostMinor: SALES_QUOTAS_20260909_ENABLED ? 9800000 : 5680000,
     dailyCapEnabled: true,
     dailyLimit: NETWORK_FRIENDSHIP_DAILY_LIMIT,
   },
@@ -377,11 +380,14 @@ const withAbLetoStagedRelease = (counter) => {
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !stagedRelease) {
     return counter;
   }
+  const resumedDaily = SALES_QUOTAS_20260909_ENABLED
+    && stagedRelease.inventoryId === AB_LETO_STAGED_INVENTORY_ID;
   return Object.assign({}, counter, {
     stagedRelease: true,
+    forcedDailyDropStartsAt: resumedDaily ? SALES_QUOTAS_20260909_START : null,
     releaseStartDate: stagedRelease.releaseStartDate,
     launchLimit: stagedRelease.launchLimit,
-    dailyLimit: counterKey === "ra"
+    dailyLimit: resumedDaily ? 10 : counterKey === "ra"
       ? AB_LETO_STAGED_RA_DAILY_DROP_LIMIT
       : AB_LETO_STAGED_DAILY_DROP_LIMIT,
     dailyDropDate: resolveDailyDropDate(),
@@ -614,6 +620,7 @@ const createCounterState = (counter) => {
     dailyLimit: Math.max(0, Math.floor(Number(counter?.dailyLimit) || 0)),
     dailyDropDate: toStr(counter?.dailyDropDate),
     dailyDropStartsAt: null,
+    forcedDailyDropStartsAt: toStr(counter?.forcedDailyDropStartsAt),
     totalLimit,
     paidCount: manualPaidCount,
     reservedCount: 0,
@@ -1029,7 +1036,11 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
         ? state._launchPaidTimestamps[state.launchLimit - 1]
         : null;
       state.launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
-      state.dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+      const naturalDailyStart = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+      const forcedDailyStart = toTs(state.forcedDailyDropStartsAt);
+      state.dailyDropStartsAt = forcedDailyStart != null
+        && (naturalDailyStart == null || forcedDailyStart < Date.parse(naturalDailyStart))
+        ? new Date(forcedDailyStart).toISOString() : naturalDailyStart;
       state.dailyDropActive = Boolean(state.dailyDropStartsAt && Date.parse(state.dailyDropStartsAt) <= now);
       const dailyDropStartsAtTs = toTs(state.dailyDropStartsAt);
       state.launchPaidCount = launchComplete ? state.launchLimit : state.launchPaidCount;
@@ -1044,7 +1055,8 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
           if (isCurrentDailyDrop) state._dailyPaidCount += 1;
           continue;
         }
-        if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+        if (isCurrentDailyDrop || (state.dailyDropActive && forcedDailyStart != null
+          && row.releasePhase === "launch")) state._dailyReservedCount += 1;
         else if (row.releasePhase === "launch") state.launchReservedCount += 1;
       }
       state.releasePhase = state.dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch";

@@ -325,7 +325,11 @@ const launchCompletedAtTs = launchComplete && launchPaidTimestamps.length >= lau
   ? launchPaidTimestamps[launchLimit - 1]
   : null;
 const launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
-const dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+const naturalDailyStart = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+const forcedDailyStart = toTs(ctx.forcedDailyDropStartsAt);
+const dailyDropStartsAt = forcedDailyStart != null
+  && (naturalDailyStart == null || forcedDailyStart < Date.parse(naturalDailyStart))
+  ? new Date(forcedDailyStart).toISOString() : naturalDailyStart;
 const dailyDropActive = Boolean(dailyDropStartsAt && Date.parse(dailyDropStartsAt) <= now);
 if (stagedRelease) {
   const dailyDropStartsAtTs = toTs(dailyDropStartsAt);
@@ -341,7 +345,8 @@ if (stagedRelease) {
       if (isCurrentDailyDrop) dailyPaidCount += 1;
       continue;
     }
-    if (isCurrentDailyDrop) dailyReservedCount += 1;
+    if (isCurrentDailyDrop || (dailyDropActive && forcedDailyStart != null
+      && row.releasePhase === "launch")) dailyReservedCount += 1;
     else if (row.releasePhase === "launch") launchReservedCount += 1;
   }
 }
