@@ -132,7 +132,7 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
   ctx.activeBookings = canonical.mergeBookings(ctx.activePayload, []).filter(row => !canonical.isInactiveBooking(row));
   delete ctx.activePayload;
   return find('operations', { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
-    serviceDate: ctx.target.startsAt.slice(0, 10), 'lk1.rule.productId': 'db7a5250-7369-4f43-8ac5-9111be24bc74' }, 2);
+    'lk1.rule.productId': 'db7a5250-7369-4f43-8ac5-9111be24bc74' }, 2);
 }
 if (ctx.step === 'operations') {
   if (msg.error || !Array.isArray(msg.payload)) return stop('LK1_ALLOWANCE_READ_FAILED');

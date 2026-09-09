@@ -84,6 +84,9 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
     '  msg.payload = [query, update, ctx.lk1 ? { writeConcern: { w: "majority", j: true } } : {}];');
   out.gateway = replace(out.gateway, '  if (ctx.spot) payload.spot = ctx.spot;',
     hooks.BOOKING + '\n  if (ctx.spot) payload.spot = ctx.spot;');
+  out.gateway = replace(out.gateway,
+    'if (ctx.caller === "split" && subscriptionVisitCount >= 1 && subscriptionVisitCount <= 2) {',
+    'if (ctx.caller === "split" && payload.paymentType === "SUBSCRIPTION" && subscriptionVisitCount >= 1 && subscriptionVisitCount <= 2) {');
   out.gateway = replace(out.gateway, 'if (ctx.step === "operation_insert") {',
     'if (ctx.step === "operation_insert") {\n'
     + '  if (ctx.lk1 && (msg.error || !lk1MongoInserted(msg.payload, ctx.operationKey))) return lk1Stop(ctx, "LK1_INSERT_ACK_UNKNOWN");');

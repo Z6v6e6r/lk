@@ -233,7 +233,7 @@ if (ctx.lk1 && ctx.action !== "release") {
     ctx.lk1.bookings = bookings;
     ctx.lk1.activeBookings = mergeBookings(activeBookingsPayload, []).filter((booking) => !isInactiveBooking(booking));
     return lk1Find(ctx, "lk1_usage_operations", { tenantKey: ctx.tenantKey,
-      actorClientId: ctx.actorClientId, serviceDate: ctx.serviceDate,
+      actorClientId: ctx.actorClientId,
       "lk1.rule.productId": ctx.lk1.rule.productId });
   }
 
@@ -247,9 +247,11 @@ if (ctx.lk1) {
       && !isInactiveBooking(booking) && normalizeId(bookingExerciseId(booking)) === normalizeId(ctx.exerciseId)
       && normalizeId(bookingClientId(booking)) === normalizeId(ctx.actorClientId)
       && (ctx.lk1.decision.subscriptionVisitCount === 1
+        && (ctx.managedAction !== "JOIN_GAME" || ctx.lk1.decision.benefit.finalPriceMinor === 0)
         ? normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)
           && isSubscriptionBooking(booking) && (booking.count === undefined || booking.count === 1)
-        : !isSubscriptionBooking(booking)));
+        : !isSubscriptionBooking(booking)
+          && String(booking.paymentType || booking.paymentMethod || "").trim().toUpperCase() === "ON_PLACE"));
     if (matches.length !== 1 || !bookingId(matches[0])) {
       return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
     }
@@ -267,7 +269,8 @@ if (ctx.lk1 && ctx.lk1BeforeCreate === true) {
   }
 
 // HUB_BOOKING
-if (ctx.lk1 && ctx.lk1.decision.subscriptionVisitCount === 0) {
+if (ctx.lk1 && (ctx.lk1.decision.subscriptionVisitCount === 0
+    || (ctx.managedAction === "JOIN_GAME" && ctx.lk1.decision.benefit.finalPriceMinor > 0))) {
     payload.paymentType = "ON_PLACE";
     delete payload.clientSubscriptionId;
   }

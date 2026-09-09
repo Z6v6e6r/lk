@@ -2208,3 +2208,9 @@ Prepared isolated local reconciliation for a phantom LK roster restored without 
 ### 2026-09-09 — split leave deployed; completed-receipt follow-up
 
 Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving nine parallel nodes. Installed flow3456eb84..., restart99, 15-minute observation and read-only API checks passed. Exact-game postcheck found a completed removal receipt moved back to VIVA_CONFIRMED by existing refund verification before deploy. Prepared a separate two-predicate follow-up accepting that state only with lkAppliedAt/outcomeREMOVED/cancellation proof; 97 focused tests, critical527 PASS/5 SKIP, independent review PASS. Follow-up not merged/pushed/deployed; no real test leave or refund initiated. Details: SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md.
+
+## 2026-09-09 — Local subscription paid JOIN correction
+
+- HAR: selected 90-minute participation quote is 262.50 RUB; JOIN returns 202/PENDING_CONFIRMATION. Fresh source confirms mixed JOIN incorrectly uses SUBSCRIPTION booking before checkout.
+- Local correction creates ON_PLACE for a positive JOIN quote, preserves exact confirmation and checkout CAS, and accounts for active paid benefits in gateway/preview. CREATE remains unchanged.
+- Evidence, changed files and remaining gates: [SUBSCRIPTION_PAID_JOIN_FIX_20260909.md](SUBSCRIPTION_PAID_JOIN_FIX_20260909.md). No deploy or provider/database/payment mutation; saved pending operation remains untouched.

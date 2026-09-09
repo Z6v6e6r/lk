@@ -10,7 +10,7 @@ const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 const gateway = read('../nodered_lk1_hub_nodes/gateway.js');
 const evaluator = read('../nodered_lk1_hub_nodes/evaluator.js');
 const bookingSource = read('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js');
-const roots = ['isObj', 'normalizeId', 'isInactiveBooking', 'eventDate', 'bookingSubscriptionId', 'bookingId', 'resolveCategory', 'eventDurationMinutes'];
+const roots = ['isObj', 'isValidDateKey', 'normalizeId', 'isInactiveBooking', 'eventDate', 'bookingSubscriptionId', 'bookingId', 'resolveCategory', 'eventDurationMinutes'];
 const helpers = extractSubscriptionPricePreviewSource({ source: bookingSource, label: 'booking', roots }).source;
 const usageBlock = source => source.slice(source.indexOf('if (ctx.step === "lk1_usage_operations") {'), source.indexOf('if (ctx.step === "lk1_policy_decision") {'));
 const runUsage = new Function('msg', `${helpers}\nconst ctx=msg._subscriptionBooking;
@@ -65,8 +65,8 @@ test('released/failed operations do not consume minutes; pending reservations do
   assert.equal(calculate('sub-B',{operations:[operation('sub-B',{state:'RELEASED'}),operation('sub-B',{state:'FAILED'})]}).input.usage.usedOrReservedFreeMinutesToday,0);
   assert.equal(calculate('sub-B',{operations:[operation('sub-B',{state:'PREPARED'})]}).input.usage.usedOrReservedFreeMinutesToday,60);
 });
-test('missing instance, foreign tenant/actor and date mismatch fail closed',()=>{
-  for(const extra of [{clientSubscriptionId:null},{tenantKey:'foreign'},{actorClientId:'foreign'},{serviceDate:'2099-09-23'}]){
+test('missing instance, foreign tenant/actor and invalid date fail closed',()=>{
+  for(const extra of [{clientSubscriptionId:null},{tenantKey:'foreign'},{actorClientId:'foreign'},{serviceDate:'invalid'}]){
     assert.equal(calculate('sub-B',{operations:[operation('sub-B',extra)]}).errorCode,'LK1_ALLOWANCE_RECORD_INVALID');
   }
 });
