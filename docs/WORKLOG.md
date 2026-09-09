@@ -2221,3 +2221,9 @@ Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving
 - Fixed the existing leave source to retain daily allowance during RETURN_PENDING and retry malformed/failed reads; roster cleanup may continue.
 - New local tests: 21 PASS; related regressions: 117 PASS / 1 optional SKIP. Full lint: 0 errors / 387 baseline warnings. Independent payment/reliability review completed.
 - Full implementation remains blocked: inspected code/HAR do not establish separate Viva debit/return for a paid ON_PLACE booking. The previous paid-only candidate must not be released independently. See [lifecycle evidence and missing integration](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md). No push, merge, deployment or live mutation.
+
+## 2026-09-09 — P2 HAR subscription limit contract audit
+
+- Offline audit of the new sanitized HAR confirms `PUT /clients/{clientId}/subscriptions/{instanceId}/limit` with `BY_VISITS/-1`: three HTTP 200 responses decrement both total and remaining visits. Two identical requests on one instance each decrement again.
+- Only those two response fields change; purchase transaction and booking lists remain unchanged. No inverse adjustment or operation-linked recovery/idempotency contract is established by this capture.
+- Updated [lifecycle evidence](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md) and paid-JOIN status. Independent read-only review agrees. No runtime code changes, replay, new adapter, capability override, push, merge, deploy or live writes. Implementation remains blocked pending inverse/recovery evidence.

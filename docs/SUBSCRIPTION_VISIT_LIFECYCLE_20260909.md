@@ -1,6 +1,8 @@
 # Subscription paid JOIN: visit lifecycle follow-up
 
-Status: local implementation stage remains **BLOCKED** on the provider contract.
+Status: local implementation stage remains **BLOCKED** on the inverse operation and
+ambiguous-outcome recovery. The new P2 HAR establishes a separate limit decrement;
+it does not establish a complete visit debit/return contract.
 Branch: `codex/subscription-join-payment-20260909`.
 Base: `be2e395eebae6b6fee7e405fbfa87ef3e3e703bf`.
 Previous local checkpoint: `3a9407077233e381d1a6d82da7241608d366c195`.
@@ -46,24 +48,87 @@ the existing subscription-return state; the paid JOIN's future separate visit jo
 is not yet connected to that state. This patch therefore does not implement a working
 end-to-end background debit/return service.
 
-Inspected project code and available HAR samples show visit consumption through a
-SUBSCRIPTION booking and return through that booking's cancellation. They do not
-establish an independent debit/return method for an ON_PLACE booking. A second
-SUBSCRIPTION booking would create another participant/capacity claim and is not a
-valid substitute. No undocumented provider method or balance mutation was invented.
+The original code/HAR inspection showed visit consumption through a SUBSCRIPTION
+booking and return through that booking's cancellation. The new P2 HAR also establishes
+a separate **limit decrement**, detailed below. It does not establish a corresponding
+return, booking-linked consumption record, or operation-linked readback. A second
+SUBSCRIPTION booking remains an invalid substitute because it creates another
+participant/capacity claim.
 
-Needed: the actual backend/provider method, request and response for separate debit
-and return, operation-linked readback, and retry/idempotency semantics. Once supplied,
-wire the journal update, dispatcher, provider adapter and cancellation recovery; then
-rehearse the complete flow against fixture-owned services and the approved DEV target.
-A fixture's adapter capability flags are not evidence of provider capabilities.
+Needed: a captured inverse adjustment on the same subscription instance and an actual
+way to resolve a lost mutation response. The adapter must account for the observed
+non-idempotent delta semantics. The current fixture-only requirements for provider
+idempotency and operation-linked receipts are **not met** by this HAR; do not set those
+capability flags to true or reuse the purchase transaction ID as a debit receipt.
+Once these boundaries are resolved, wire the journal update, dispatcher, provider
+adapter and cancellation recovery, then rehearse the full flow in approved isolation.
 
 The earlier two-node paid-only candidate is insufficient for this expanded scope.
 No new deploy artifact was generated from stale local flow snapshots. Source-function
 checks here are not evidence that primary has this behavior. The original pending
 HAR operation remains untouched, and its historical provider outcome is unconfirmed.
 
+## P2 HAR evidence — 2026-09-09
+
+Input: user-provided `viva-hub-p2-sanitized.har`, SHA256
+`92c6fac34b48bfa462fd223e814ae3a7ae4d251f0cf6418303f1992a07b36410`.
+Read offline as evidence only; no recorded request was replayed. Neither HAR contents,
+customer IDs, tokens nor purchase transaction IDs were copied into the repository.
+The file contains 10 entries: 2 list GETs, 3 limit PUTs and 5 OPTIONS requests.
+
+Observed method (placeholders identify the exact client subscription instance):
+
+```http
+PUT /api/v1/clients/{clientId}/subscriptions/{clientSubscriptionId}/limit
+Content-Type: application/json
+
+{"type":"BY_VISITS","value":-1}
+```
+
+All three PUTs returned HTTP 200 and a subscription object whose `subscriptionId`
+matched the request path. Entry indexes below are zero-based. Earlier list GETs
+provided the initial counters; the first PUT response provides the second PUT's
+baseline on the same instance.
+
+| HAR entry | Instance alias | visitsTotal before → after | visitsLeft before → after |
+| --- | --- | --- | --- |
+| 4 | A | 365 → 364 | 365 → 364 |
+| 6 | A, identical method/path/body | 364 → 363 | 364 → 363 |
+| 8 | B, already has one booking | 365 → 364 | 364 → 363 |
+
+A complete response-object comparison changes only `visitsTotal` and `visitsLeft`.
+The `bookings` array, receipts, activation booking and existing `transactionId` are
+unchanged. Therefore this observation proves a relative limit adjustment; it does
+not prove that Viva registered a new visit or new transaction for the paid booking.
+The used-count difference (`visitsTotal - visitsLeft`) remains unchanged.
+
+An identical repeated PUT consumes another unit. The observed request must never be
+blindly retried. The sanitized capture contains no idempotency key, conditional-write
+header, request operation identifier, new response operation identifier or revision.
+This does not prove that Viva has no such optional API feature; it leaves support
+unverified. Its existing purchase `transactionId` cannot identify this adjustment.
+There is no `value:1` request, inverse endpoint, or post-mutation GET in this capture.
+
+Integration consequence: a local journal claim can prevent normal duplicate dispatch
+but cannot establish exactly-once provider execution across a timeout/crash. A lost
+response must remain unresolved and retain the free-minute allowance; a later balance
+delta alone cannot attribute the change to this job under concurrent writers. An
+explicit successful response can support a future request-bound adapter, but that is
+a different evidence contract from the current operation-readback-only scaffold.
+No adapter was connected or capability check weakened based on this incomplete trace.
+
+Independent read-only payment/reliability inspection confirmed the delta semantics
+and absence of inverse evidence. Next evidence needed from the user is a separate
+one-visit return on the same instance, preferably followed by a fresh read of its
+counters; no live adjustment was performed by this task.
+
 ## Checks and remaining evidence
+
+P2 audit follow-up changed documentation only: parsed all 10 HAR entries, compared
+all three mutation response objects with their preceding snapshots, inspected
+header names and identity binding, ran `git diff --check` and a narrow added-text
+credential/customer-ID scan. No runtime tests were rerun for documentation edits.
+The test/build results below belong to the previous code checkpoints.
 
 - New lifecycle and leave-guard suite: 21 PASS, 0 FAIL, 0 SKIP.
 - Existing split-leave auth/router, subscription-instance and shared-daily-limit suite:

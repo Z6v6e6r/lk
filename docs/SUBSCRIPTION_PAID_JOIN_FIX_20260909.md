@@ -1,6 +1,7 @@
 # Subscription paid JOIN correction — local stage
 
-**Superseded scope: implementation is BLOCKED on the independent Viva visit debit/return contract.**
+**Superseded scope: implementation remains BLOCKED on the inverse limit adjustment and ambiguous-outcome recovery.**
+The P2 HAR establishes a non-idempotent limit decrement; see the follow-up for evidence.
 The paid-only candidate below does not satisfy the requested full lifecycle and must not be released by itself.
 See [visit lifecycle follow-up](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md).
 
