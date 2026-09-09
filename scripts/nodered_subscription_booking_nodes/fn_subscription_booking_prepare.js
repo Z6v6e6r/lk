@@ -62,7 +62,6 @@ if (action === "book" && (!exerciseId || !clientSubscriptionId)) {
 
 msg._subscriptionBooking = {
   caller: "http",
-  ...(body.expectedGroupDiscount !== undefined ? { expectedGroupDiscount: body.expectedGroupDiscount } : {}),
   action,
   step: "profile",
   tenantKey: TENANT_KEY,

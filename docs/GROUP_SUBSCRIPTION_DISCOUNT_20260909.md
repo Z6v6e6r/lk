@@ -37,7 +37,6 @@ already-started operation. Existing tournament/visit payment gates remain in pla
 - `scripts/nodered_subscription_price_preview_nodes/router.js`: authenticated group eligibility and tariff preview.
 - `scripts/nodered_subscription_product_nodes/gateway.js`: group monetary ownership without visit-balance requirement.
 - `scripts/nodered_lk1_hub_nodes/gateway.js`: actual category propagation and first-write quote comparison.
-- `scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js`: optional expected-price constraint.
 - `scripts/patch_nodered_subscription_price_preview.mjs`: guarded four-function composer preserving installed game behavior.
 - `scripts/tests/groupSubscriptionDiscount.test.ts`: quote and checkout dispatch tests.
 - `scripts/tests/groupSubscriptionDiscount.backend.test.mjs`: composed function tests, negative identity/lifecycle/limit/tariff cases and first-write protection.
@@ -125,3 +124,21 @@ Logs: `/private/tmp/group-discount-integration-focused.log`,
 `/private/tmp/group-discount-integration-lint.log`.
 Unchanged private historical fixture/modular metadata limitations above remain.
 CI, push, deployment and live provider/payment operations are outside this stage.
+
+## Stage 4 — push and CI correction
+
+Published main `f9bdf65` retained parallel nginx fixture fix `c8a97a6`. CI run
+34394102673 passed the credential scan and critical matrix, then rejected the
+changed generic booking prepare source against the frozen offline DEV input hash.
+The generic source was restored. The group-only composer still adds the identical
+expected-price field under its exact live preimage guard, alongside the price guard.
+No frozen source binding, eligibility rule or guard was loosened.
+
+The corrected group candidate is identical to the previously reviewed 4,798-node
+candidate (canonical JSON SHA-256
+`9877a7c3f70ffebdb486ec17b2427c1fa281e409b12f51c92b48474d61617a37`).
+Narrow specialist review found no blocker. Local group/DEV suite: 29 PASS, 1 FAIL;
+the previously failing publisher now passes. The remaining local failure is the
+unchanged temp-symlink custody test on macOS, which passed in the first Linux CI run.
+The new Linux CI run remains the required result. Log:
+`/private/tmp/group-discount-ci-fix-tests.log`.

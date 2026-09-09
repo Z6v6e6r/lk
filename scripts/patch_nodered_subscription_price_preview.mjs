@@ -167,10 +167,11 @@ export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploym
   moneyGateway = moneyGateway.replace(decisionMarker, gatewaySource.slice(guardStart, guardEnd) + decisionMarker);
   const prepareId = 'lk_subscription_booking_prepare_20260804';
   const prepare = flow.find(row => row.id === prepareId);
-  const prepareSource = fs.readFileSync(path.join(ROOT, 'nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js'), 'utf8');
+  // Keep the generic frozen DEV prepare source intact. This field belongs only
+  // to the exact group-capable graph, alongside its expected-price guard.
   const expectedCopy = '  ...(body.expectedGroupDiscount !== undefined ? { expectedGroupDiscount: body.expectedGroupDiscount } : {}),\n';
   if (sha(prepare?.func || '') !== '51c7b349a18ea04300fcc8649d87601e98c3952e6c57c6cb52ae35e2cf689e15'
-    || !prepareSource.includes(expectedCopy) || prepare.func.split('  caller: "http",\n').length !== 2) throw new Error('Group quote prepare preimage drift');
+    || prepare.func.split('  caller: "http",\n').length !== 2) throw new Error('Group quote prepare preimage drift');
   const extraRoots = ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId'];
   const extra = extractSubscriptionPricePreviewSource({ source: moneyGateway, label: 'group lifecycle', roots: extraRoots });
   const existingRouter = flow.find(row => row.id === PREFIX + 'router').func;
