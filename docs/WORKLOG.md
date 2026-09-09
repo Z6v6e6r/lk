@@ -2,6 +2,31 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-09 — Автоматическая привязка продукта перед созданием игры
+
+- Причина: `Subscription product router` возвращал `SUBSCRIPTION_PRODUCT_NOT_READY`
+  на отсутствии метаданных при `split_create_readonly_preflight`, хотя тот же resolver
+  уже умеет безопасно получать и сохранять привязку для других входов.
+- Изменение: предварительная проверка `/lk/games/split/create` теперь использует
+  существующие проверку владения, lease, ADMIN GET Viva и подтверждённую запись
+  метаданных в `lk_subscription_product_identity`, затем продолжает проверку условий.
+  Готовая привязка повторно используется; лимиты, создание exercise/booking и списание
+  остаются за существующими проверками gateway. Имя caller сохранено для этих барьеров.
+  Меняется только source функции `lk_subscription_product_router_20260907`; HTTP routes,
+  wires и import/export файлы не менялись. Новый raw flow не выгружался.
+- Регрессии: отсутствие/наличие привязки, продолжение gateway, параллельные запросы,
+  чужой абонемент, неполный ownership response, отказ Viva/БД и последующее восстановление.
+- Проверки: product suite 19 PASS, 3 SKIP (private flow fixture отсутствует);
+  расширенный business suite 429 PASS, 1 SKIP; TypeScript PASS; lint 0 errors,
+  387 warnings. `npm run build` остановлен guard из-за отсутствующих ignored `.env`;
+  `nodered:modular:validate` требует `--workspace` со свежим private flow, которого
+  в этой source-only задаче нет. Эти проверки не считаются PASS.
+- Независимое read-only payment/security/reliability review: блокирующих замечаний нет;
+  привязка сохраняет ownership, lease и переход в предварительную проверку gateway.
+- Только локальная реализация от `origin/main` `9705dc15707bee2a7715f1cebe681c11d4572c28`.
+  Для установки требуется свежий live preimage и reviewed candidate, меняющий только
+  указанную function node. Merge, push, deploy и live-привязка не выполнялись.
+
 ## 2026-09-07 — Frontend static bootstrap: durable execution runtime
 
 - Анализ: production `147` не имеет atomic `lk-frontend-current/releases`, а прежний

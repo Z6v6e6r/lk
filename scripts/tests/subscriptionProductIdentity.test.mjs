@@ -113,15 +113,60 @@ test('incomplete ownership list, malformed provider identity and unresolved stor
     assert.ok([...h.db.values()].filter(r => r.kind === 'lock').every(r => r.owner === null));
   }
 });
-test('read-only CREATE preflight never calls ADMIN or writes cache, on either hit or miss', async () => {
+const createPreflight = () => ({ ...request({ caller: 'booking', actorClientId: actor }),
+  _subscriptionBooking: { caller: 'split_create_readonly_preflight', step: 'lk1_product_identity',
+    actorClientId: actor, clientSubscriptionId: sub, tenantKey: tenant } });
+test('CREATE preflight binds a missing product and resumes; a retry reuses the binding', async () => {
   const h = harness();
-  const input = () => ({ ...request({ caller: 'booking', actorClientId: actor }),
-    _subscriptionBooking: { caller: 'split_create_readonly_preflight' } });
-  const cold = await h.run(input()); assert.equal(cold.payload.code, 'SUBSCRIPTION_PRODUCT_NOT_READY');
-  assert.equal(h.adminCalls(), 0); assert.equal(h.writes.length, 0);
-  await h.run(request()); const writes = h.writes.length, reads = h.adminCalls();
-  assert.equal((await h.run(input())).statusCode, 200);
+  const cold = await h.run(createPreflight()); assert.equal(cold.statusCode, 200);
+  assert.equal(h.adminCalls(), 1);
+  assert.deepEqual([...h.db.values()].map(row => row.kind).sort(), ['instance', 'lock', 'product']);
+  const continued = execute('finish', cold)[0]._subscriptionBooking;
+  assert.equal(continued.caller, 'split_create_readonly_preflight');
+  assert.equal(continued.step, 'lk1_product_identity_return');
+  assert.equal(continued.lk1ProductIdentity.productId, product);
+  const resume = new Function('msg', 'const ctx = msg._subscriptionBooking;\n'
+    + 'const isObj = value => value !== null && typeof value === "object" && !Array.isArray(value);\n'
+    + source('gateway') + '\n' + source('gateway_start') + '\nreturn ctx;');
+  assert.equal(resume({ statusCode: 200, _subscriptionBooking: continued }).step, 'lk1_profile_continue');
+  assert.equal(continued.caller, 'split_create_readonly_preflight');
+  assert.ok(h.calls.every(path => path.includes('/subscriptions')));
+  const writes = h.writes.length, reads = h.adminCalls();
+  assert.equal((await h.run(createPreflight())).statusCode, 200);
   assert.equal(h.adminCalls(), reads); assert.equal(h.writes.length, writes);
+});
+test('concurrent CREATE preflights share one product binding and each resume safely', async () => {
+  const db = new Map(); const a = harness({ db, adminDelay: 5 }), b = harness({ db, adminDelay: 5 });
+  const results = await Promise.all([a.run(createPreflight()), b.run(createPreflight())]);
+  assert.equal(a.adminCalls() + b.adminCalls(), 1);
+  for (const result of results) {
+    assert.equal(result.statusCode, 200);
+    assert.equal(execute('finish', result)[0]._subscriptionBooking.lk1ProductIdentity.productId, product);
+  }
+  assert.equal([...db.values()].filter(row => row.kind === 'instance').length, 1);
+});
+test('CREATE binding rejects unowned subscriptions before ADMIN reads or metadata writes', async () => {
+  for (const options of [{ owned: [] }, { pagination: { totalElements: 999 } },
+    { ownedFields: { clientId: sub2 } }, { ownedFields: { clientSubscriptionId: sub2 } }]) {
+    const h = harness(options); const result = await h.run(createPreflight());
+    assert.ok(result.statusCode >= 400);
+    assert.equal(h.adminCalls(), 0); assert.equal(h.writes.length, 0);
+    assert.equal(execute('finish', result)[0]._subscriptionBooking.lk1ProductIdentity, null);
+  }
+});
+test('failed CREATE binding leaves no usable mapping and a later request can recover', async () => {
+  for (const options of [{ token: false }, { adminStatus: 500 },
+    { detail: { subscriptionId: sub2, product: { id: product, name: 'wrong instance' } } },
+    { ownedFields: { productId: sub2 } },
+    { failWrite: (_query, change) => change.$set?.kind === 'product' },
+    { failWrite: (_query, change) => change.$setOnInsert?.kind === 'instance' }]) {
+    const h = harness(options); const result = await h.run(createPreflight());
+    assert.equal(result.statusCode, 503); assert.equal(h.db.has(key('instance', actor, sub)), false);
+    assert.equal(execute('finish', result)[0]._subscriptionBooking.lk1ProductIdentity, null);
+    assert.ok([...h.db.values()].filter(row => row.kind === 'lock').every(row => row.owner === null));
+    Object.assign(h.settings, { token: true, adminStatus: 200, detail: undefined, ownedFields: undefined, failWrite: undefined });
+    assert.equal((await h.run(createPreflight())).statusCode, 200);
+  }
 });
 test('same-instance cross-host misses are coalesced by persistent lease', async () => {
   const db = new Map(); const a = harness({ db, adminDelay: 5 }), b = harness({ db, adminDelay: 5 });

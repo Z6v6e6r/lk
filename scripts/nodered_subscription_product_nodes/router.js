@@ -58,7 +58,9 @@ const lookup = () => {
   ctx.lockKey = key('lock', ctx.actorClientId, ctx.subscriptionId);
   return find('instance', ctx.instanceKey);
 };
-const claim = () => ctx.readOnly ? finish('SUBSCRIPTION_PRODUCT_NOT_READY', 503) : update('claim', {
+// CREATE preflight may bind verified product metadata. Booking, benefit usage
+// and payment writes remain guarded by the booking gateway after this lookup.
+const claim = () => update('claim', {
   _id: ctx.lockKey, $or: [{ leaseUntil: { $lte: Date.now() } }, { leaseUntil: { $exists: false } }],
 }, { $set: { kind: 'lock', leaseUntil: Date.now() + 120000, owner: ctx.requestId } }, true);
 const release = () => update('released', { _id: ctx.lockKey, owner: ctx.requestId },
@@ -75,7 +77,6 @@ if (!object(ctx) || ctx.tenantKey !== 'iSkq6G'
   return finish('SUBSCRIPTION_PRODUCT_CONTEXT_INVALID');
 }
 if (ctx.step === 'start') {
-  ctx.readOnly = ctx.caller === 'booking' && msg._subscriptionBooking?.caller === 'split_create_readonly_preflight';
   if (ctx.caller === 'refresh') {
     if (!uuid(ctx.productId)) return finish('SUBSCRIPTION_PRODUCT_ID_INVALID', 400);
     return find('refresh_catalog', key('product', ctx.productId));
