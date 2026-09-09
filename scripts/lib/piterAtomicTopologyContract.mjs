@@ -18,8 +18,8 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
 });
 
 // Merged source fingerprint only; not a binding to an installed flow.
-export const PITER_ATOMIC_ROUTER_SHA256 = "a78ba8b22d2046a9506475360dcb82c0c38af3c2ec332e3044e814c92ea66f0f";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b";
+export const PITER_ATOMIC_ROUTER_SHA256 = "0cbcbabd943a4d88d7ee18247eeb3c6d11243bcb0e6c8d21f902640693675055";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "0a7912018609e60261b9f1237d4d3fb653b1ba32354799f30cc4e5700ef79bf9";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const currentProductId = String(global.get(key) ?? "").trim();
@@ -80,7 +80,7 @@ export function assertNoEnabledLegacyPiterSalesTab(flow) {
 }
 
 export function rejectTopologyDependentPiterSource(source, context) {
-  if ([PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256, "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d"].includes(sha256(source))) {
+  if ([PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256, "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b", "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d"].includes(sha256(source))) {
     fail(`${context} cannot compose the topology-dependent Piter purchase router`);
   }
   return true;

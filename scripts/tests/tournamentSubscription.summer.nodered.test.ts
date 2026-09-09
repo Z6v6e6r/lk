@@ -5216,7 +5216,7 @@ function nextDayHubProduct(activationDays: unknown, date = "2026-09-09T20:59:59.
     _summerSubscriptionCtx: { action: "purchase", step: "load_products", token: "fixture-token", saleType: "tiered_direct_product",
       counterKey: "network_friendship", inventoryId: "network_friendship_12m_2026_v1", clientPhone: "79990000000",
       productId: HUB_NEXT_DAY_POLICY.productId, productCostMinor: 9800000, priceMinor: 9800000,
-      hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT), batchIndex: 1 },
+      hubLk1Sale: structuredClone(globals.subscriptions_lk1_hub_sale_runtime || HUB_NEXT_DAY_RECEIPT), batchIndex: 1 },
   }, globals)) as NodeRedMsg[];
 }
 test("new LK1 HAB requires exact next-day activation and freezes the Moscow date", () => {
@@ -5366,7 +5366,8 @@ test("HAB projects yesterday's sold quota into the new daily window without eras
  assert.deepEqual(old,original);
 });
 test("HAB saved CUP or different receipt cannot redispatch via CLAIMED or DISPATCHING",()=>{
- for(const state of ["CLAIMED","DISPATCHING"]) for(const receipt of [null,{...HUB_NEXT_DAY_RECEIPT,sourceDigest:"sha256:"+"b".repeat(64)}]){
+ for(const state of ["CLAIMED","DISPATCHING"]) for(const receipt of [null,{...HUB_NEXT_DAY_RECEIPT,sourceDigest:"sha256:"+"b".repeat(64)},
+   {...HUB_NEXT_DAY_RECEIPT,bookingUsageScope:"SUBSCRIPTION_BENEFIT_ONLY"}]){
   const ctx={...quotaPurchaseContext(),counterKey:"network_friendship",inventoryId:"network_friendship_12m_2026_v1",
     totalLimit:100,dailyLimit:1,dailyDropDate:"2026-09-09",hubLk1Sale:HUB_NEXT_DAY_RECEIPT};
   const ledger=buildHubLedger({dailyDate:"2026-09-09",reservedCount:1,takenCount:1,dailyReservedCount:1,
@@ -5377,4 +5378,46 @@ test("HAB saved CUP or different receipt cannot redispatch via CLAIMED or DISPAT
   assert.equal(out[4],null);assert.equal(out[1],null);
   assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code,"HUB_FROZEN_SALE_MODE_DRIFT");
  }
+});
+
+test("selected-subscription HAB receipt admits new purchase and preserves old paid confirmation",()=>{
+ const receipt={...HUB_NEXT_DAY_RECEIPT,bookingUsageScope:"SUBSCRIPTION_BENEFIT_ONLY",sourceDigest:"sha256:"+"b".repeat(64)};
+ const globals={...HUB_NEXT_DAY_GLOBALS,subscriptions_lk1_hub_sale_runtime:receipt};
+ const purchase=nextDayHubProduct(1,undefined,globals);
+ assert.deepEqual(asRecord(asRecord(purchase[4])._summerSubscriptionCtx).hubLk1Sale,receipt);
+ for(const frozen of [HUB_NEXT_DAY_RECEIPT,receipt]) for(const enabled of [true,false]){
+  const out=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",{
+   statusCode:200,payload:[{clientSubscriptionId:"fixture-instance",productId:HUB_NEXT_DAY_POLICY.productId,
+     status:"NEW",purchaseDate:"2026-09-10T00:10:00+03:00",studioId:"fixture-station"}],
+   _summerSubscriptionCtx:{action:"confirm",step:"managed_sale_instance_readback",counterKey:"network_friendship",
+     inventoryId:"network_friendship_12m_2026_v1",clientId:"fixture-client",clientSubscriptionId:"fixture-instance",
+     productId:HUB_NEXT_DAY_POLICY.productId,paymentRef:"fixture-paid",transactionId:"fixture-tx",
+     expectedAmountMinor:9800000,hubLk1Sale:structuredClone(frozen),saleRecord:{}}
+  },{...globals,summer_subscription_hub_lk1_sales_enabled:enabled}) as NodeRedMsg[];
+  const ctx=asRecord(asRecord(out[4])._summerSubscriptionCtx);
+  assert.deepEqual(ctx.hubLk1Sale,frozen);
+  assert.equal(asRecord(asRecord(ctx.managedSaleProjection).set).providerSubscriptionState,"PENDING_ACTIVATION");
+  assert.equal(out[0],null);assert.equal(out[1],null);
+ }
+});
+
+test("old HAB pending payment replays its frozen receipt and URL under selected-subscription runtime",()=>{
+ const current={...HUB_NEXT_DAY_RECEIPT,bookingUsageScope:"SUBSCRIPTION_BENEFIT_ONLY"};
+ const ctx={...quotaPurchaseContext(),counterKey:"network_friendship",inventoryId:"network_friendship_12m_2026_v1",
+  totalLimit:100,dailyLimit:1,dailyDropDate:"2026-09-09",hubLk1Sale:current};
+ const requestFingerprint=[ctx.inventoryId,ctx.counterKey,ctx.paymentRef,ctx.clientPhone,""].join("\n");
+ const saleRecord={hubLk1Sale:structuredClone(HUB_NEXT_DAY_RECEIPT)};
+ const ledger=buildHubLedger({dailyDate:"2026-09-09",reservedCount:1,takenCount:1,dailyReservedCount:1,
+  reservations:[{paymentRef:ctx.paymentRef,requestFingerprint,intentFingerprint:"fixture-old-intent",state:"PAYMENT_PENDING",dailyDate:"2026-09-09",
+   clientPhone:ctx.clientPhone,transactionId:"fixture-old-pending",paymentUrl:"https://pay.example.test/old-hab",
+   priceMinor:9800000,providerProductCostMinor:9800000,discountMinor:0,productId:HUB_NEXT_DAY_POLICY.productId,saleRecord}]});
+ const before=structuredClone(ledger);
+ const out=runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+  {payload:[ledger],_summerSubscriptionCtx:ctx},{...HUB_NEXT_DAY_GLOBALS,subscriptions_lk1_hub_sale_runtime:current}) as NodeRedMsg[];
+ assert.equal(out[4],null);assert.equal(out[1],null);
+ assert.ok(out[2],"Pending replay must produce only the durable sale projection");
+ const replay=asRecord(asRecord(out[2])._summerSubscriptionCtx);
+ assert.deepEqual(replay.hubLk1Sale,HUB_NEXT_DAY_RECEIPT);assert.deepEqual(replay.saleRecord,saleRecord);
+ assert.equal(asRecord(replay.providerResult).paymentUrl,"https://pay.example.test/old-hab");
+ assert.equal(replay.priceMinor,9800000);assert.deepEqual(ledger,before);
 });

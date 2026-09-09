@@ -11,7 +11,8 @@ function normalizeHubSalePolicy(value) {
 }
 function normalizeFrozenHubSale(value) {
   const policy = normalizeHubSalePolicy(value?.policy);
-  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1'
+    || !['ALL_BOOKINGS', 'SUBSCRIPTION_BENEFIT_ONLY'].includes(value.bookingUsageScope) || !policy
     || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
     || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
   return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };

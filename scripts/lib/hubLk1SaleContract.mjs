@@ -14,7 +14,8 @@ export function normalizeHubSalePolicy(value) {
 }
 export function normalizeFrozenHubSale(value) {
   const policy = normalizeHubSalePolicy(value?.policy);
-  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1' || value.bookingUsageScope !== 'ALL_BOOKINGS' || !policy
+  if (!value || value.mode !== 'LK1_VIVA_PRODUCT_NEXT_DAY_V1'
+    || !['ALL_BOOKINGS', 'SUBSCRIPTION_BENEFIT_ONLY'].includes(value.bookingUsageScope) || !policy
     || !/^sha256:[a-f0-9]{64}$/.test(value.sourceDigest || '')
     || Object.keys(value).sort().join() !== ['mode', 'policy', 'sourceDigest', 'bookingUsageScope'].sort().join()) return null;
   return { mode: value.mode, policy, sourceDigest: value.sourceDigest, bookingUsageScope: value.bookingUsageScope };
@@ -35,7 +36,7 @@ export const HUB_LK1_SALE_SOURCE_FILES = [
   'fn_tournament_subscription_status_response.js', 'fn_tournament_subscription_confirm_resolve.js',
 ];
 
-// Attests the installed conservative implementation, not the newer selected-benefit scope.
+// Preserve historical receipts, but attest only the scope agreed by both installed nodes.
 export function buildHubRuntimeEvidence(flow) {
   const ids = ['8f7bd5b482fe9763','lk_subscription_booking_router_20260804',
     'lk_subscription_booking_finalize_20260804','lk_subscription_managed_policy_20260820','lk_subscription_product_router_20260907'];
@@ -50,7 +51,14 @@ export function buildHubRuntimeEvidence(flow) {
   const transition = buildHubPolicyTransition({expectedPrior:null,desired:policy});
   const gateway = flow.find(n => n.id === ids[1]);
   if (!gateway.func.includes(transition.reader) || gateway.initialize !== transition.initialize) throw Error('HUB runtime policy mismatch');
+  const evaluator = flow.find(n => n.id === ids[3]);
+  const scopes = ['ALL_BOOKINGS', 'SUBSCRIPTION_BENEFIT_ONLY'];
+  const gatewayScopes = scopes.filter(scope => gateway.func.includes('activeServiceScope: "' + scope + '"'));
+  const evaluatorScopes = scopes.filter(scope => evaluator.func.includes('usage.activeServiceScope !== "' + scope + '"'));
+  if (gatewayScopes.length !== 1 || evaluatorScopes.length !== 1
+    || gatewayScopes[0] !== evaluatorScopes[0]) throw Error('HUB runtime usage scope mismatch');
+  const bookingUsageScope = gatewayScopes[0];
   const incoming = flow.flatMap(n => (n.wires || []).flatMap((group,output) => group.filter(id => ids.includes(id)).map(id => [n.id,output,id])));
-  const sourceDigest = 'sha256:' + hash(JSON.stringify({policy,bookingUsageScope:'ALL_BOOKINGS',nodes,incoming}));
-  return {nodes,receipt:normalizeFrozenHubSale({mode:'LK1_VIVA_PRODUCT_NEXT_DAY_V1',policy,sourceDigest,bookingUsageScope:'ALL_BOOKINGS'})};
+  const sourceDigest = 'sha256:' + hash(JSON.stringify({policy,bookingUsageScope,nodes,incoming}));
+  return {nodes,receipt:normalizeFrozenHubSale({mode:'LK1_VIVA_PRODUCT_NEXT_DAY_V1',policy,sourceDigest,bookingUsageScope})};
 }
