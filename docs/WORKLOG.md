@@ -1,5 +1,12 @@
 # Журнал шагов
 
+## 2026-09-09 — Group training HAB 50% monetary discount, local stage
+
+- Added authenticated eligibility preview and crossed-out original/discounted one-time price with the exact subscription name. Existing HAB rule only; no promo stacking or visit consumption.
+- Group money checkout supports zero visits, revalidates actual tariff/ownership/limits and rejects changed display terms before the first operation insert while preserving operation replay.
+- Final focused 25/25, full prod/dev build, TypeScript, lint (0 errors/387 warnings), exact four-function graph contract and independent payment-safety review passed. Browser fixture verified desktop/mobile and absent/error states.
+- Expanded suite has four base-reproduced preimage failures and 92 private-fixture skips; standard modular validation blocked by missing source metadata. No push/merge/deploy/live writes. See `docs/GROUP_SUBSCRIPTION_DISCOUNT_20260909.md`.
+
 ## 2026-09-09 — Annual history reconciliation evidence correction
 
 - Preserve independently validated raw refund timestamps in versioned proof; keep exact subscription linkage, amount checks, CAS and durable receipts. Match only exact payment instants or the observed nanosecond-to-microsecond provider serialization.

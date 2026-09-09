@@ -17,7 +17,24 @@ const identitySelected = (body, ctx) => {
     || [row.clientId, row.client?.id].filter(v => v !== undefined).some(v => v !== ctx.actorClientId)) return null;
   return row;
 };
+// Monetary group discounts verify the freshly read owned row. They neither
+// consume a visit nor use the earlier visit-eligibility snapshot.
+const identityMoneyOwned = (ctx, rows) => {
+  if (!identityBound(ctx) || rows.length !== 1) return [];
+  const p = ctx.lk1ProductIdentity;
+  if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];
+  const row = rows[0];
+  if (row.status !== 'ACTIVE' || !identitySelected({ content: [row], totalElements: 1 }, ctx)
+    || collectExactProductIds(row).some(id => id !== normalizeId(p.productId))) return [];
+  const aliases = [row.purchaseDate, row.purchaseAt].filter(value => value !== undefined && value !== null && value !== '');
+  const date = normalizePurchaseDateMoscow(p.purchaseDate);
+  if (!date || !aliases.length || aliases.some(value => normalizePurchaseDateMoscow(value) !== date)) return [];
+  return [{ ...row, productId: p.productId, name: p.name,
+    product: { ...(isObj(row.product) ? row.product : {}), id: p.productId, name: p.name } }];
+};
 const identityOwned = (ctx, rows, exercise) => {
+  if (ctx.caller === 'http' && ctx.step === 'lk1_money_owned_subscriptions'
+    && resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows);
   if (ctx.action === 'release') return rows;
   if (!identityBound(ctx)) return [];
   const p = ctx.lk1ProductIdentity;
