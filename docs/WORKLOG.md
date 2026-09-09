@@ -2199,3 +2199,7 @@ parallel booking/preview changes. Receipt now describes SUBSCRIPTION_BENEFIT_ONL
 old frozen ALL_BOOKINGS confirmations and pending replay remain compatible. Updated
 exact source/candidate/dependency hashes and partial-composition denial fingerprints.
 No live deployment, flags, Mongo or provider writes in this re-preparation.
+
+### 2026-09-09 — repeated SELF leave after confirmed Viva cancellation
+
+Prepared isolated local reconciliation for a phantom LK roster restored without membership/booking/payment identity after a confirmed leave. Recovery checks an owned durable cancellation plus fresh complete Viva active/history, uses a snapshot-scoped NONE operation and existing CAS, preserves prior pending refunds/payment history and skips daily claim release. DONE receipt replay avoids a second cancellation. Critical matrix 519 PASS / 5 optional SKIP / 0 FAIL; lint/typecheck/prod+dev build, modular validation, exact function-only forward/reverse contract and independent safety review passed. No merge, push, deployment or live data/provider operations. See `docs/SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md`.

@@ -53,6 +53,11 @@ if (ctx.chatCleanupAttempted === true && (msg.error || !ackOk(msg.payload))) {
 }
 if (ctx.localAlreadyApplied === true) return [null, msg, null];
 
+if (ctx.localReconciliation && ctx.game.updatedAt !== ctx.localReconciliation.snapshotUpdatedAt) {
+  msg.statusCode = 202;
+  msg.payload = { ok: true, state: "RETRY_REQUIRED", message: "Состав игры изменился. Обновите игру перед новым выходом." };
+  return [null, null, msg];
+}
 const game = ctx.game;
 const nowIso = new Date().toISOString();
 const targetId = normalizeId(ctx.targetClientId);
@@ -64,7 +69,7 @@ const participantPhones = uniq(participants.map((item) => normalizePhone(item?.p
 const waitlistPhones = uniq(waitlist.map((item) => normalizePhone(item?.phoneNorm || item?.phone)));
 const metadata = isObj(game.metadata) ? JSON.parse(JSON.stringify(game.metadata)) : {};
 const splitPayment = isObj(metadata.splitPayment) ? metadata.splitPayment : {};
-splitPayment.payments = asArray(splitPayment.payments).map((payment) => (
+if (!ctx.localReconciliation) splitPayment.payments = asArray(splitPayment.payments).map((payment) => (
   matchesTarget(payment, targetId, targetPhone)
     ? {
       ...payment,

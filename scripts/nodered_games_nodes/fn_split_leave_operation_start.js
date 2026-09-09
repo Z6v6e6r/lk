@@ -43,6 +43,7 @@ msg.payload = [
       staffActorId: ctx.staffActorId || null,
       idempotencyDigest: ctx.idempotencyDigest || null,
       membershipVersion: ctx.membershipVersion || null,
+      ...(ctx.localReconciliation ? { localReconciliation: ctx.localReconciliation } : {}),
       bookingIds,
       clientSubscriptionId: ctx.clientSubscriptionId || null,
       subscriptionVisitCount: Number.isSafeInteger(ctx.subscriptionVisitCount)

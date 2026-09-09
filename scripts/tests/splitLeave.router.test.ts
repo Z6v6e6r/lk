@@ -1429,3 +1429,245 @@ test("persistence catch does not claim Viva was changed before confirmation", ()
   assert.equal(postViva.payload.ok, true);
   assert.equal(postViva.payload.state, "RETRY_REQUIRED");
 });
+
+function phantomGame(): Msg {
+  const game: Msg = selfGame();
+  game.participants[0].source = "ADMIN";
+  game.metadata.splitPayment.payments = [];
+  return game;
+}
+function priorCancelledLeave(overrides: Msg = {}): Msg {
+  const operationId = "self-leave:game-1:client-1:old-generation";
+  return {
+    _id: `game-1:${operationId}`, operationId, gameId: "game-1", exerciseId: "exercise-1",
+    mode: "SELF", actorClientId: "client-1", targetClientId: "client-1",
+    bookingIds: ["old-booking"], state: "RETURN_PENDING", outcome: "REMOVED",
+    vivaVerification: "active_absent_history_cancelled", createdAt: "2026-08-01T08:00:00.000Z",
+    lkAppliedAt: "2026-08-01T08:00:02.000Z", subscriptionReturnState: "RETURN_PENDING",
+    ...overrides,
+  };
+}
+function reconciliationDiscovery(game = phantomGame(), prior = priorCancelledLeave()): Msg {
+  const msg = authorizeSelf(game);
+  assert.equal(msg._splitLeaveCtx.step, "find_local_reconciliation_proof");
+  assert.equal(msg.payload.targetClientId, "client-1");
+  msg.payload = [prior];
+  const routed = run("fn_split_leave_operation_route.js", msg).result[0];
+  assert.ok(routed);
+  return run("fn_split_leave_router.js", routed).result[0];
+}
+function completeReconciliationProof(msg: Msg): Msg {
+  msg.statusCode = 200; msg.payload = { content: [], last: true, totalElements: 0 };
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  assert.equal(msg.method, "GET");
+  msg.statusCode = 200;
+  msg.payload = { content: [
+    { id: "old-booking", exerciseId: "exercise-1", clientId: "client-1", isCancelled: true },
+    ...(msg._splitLeaveCtx.backgroundStartedRecovery
+      ? [{ id: "other-active-booking", exerciseId: "exercise-1", clientId: "client-2", isCancelled: false }]
+      : []),
+  ], last: true };
+  const result = run("fn_split_leave_router.js", msg).result;
+  return result[4] || result[3];
+}
+
+test("repeated leave cleans phantom locally, keeps prior pending return and payment history unchanged", () => {
+  const prior = priorCancelledLeave();
+  const originalPrior = structuredClone(prior);
+  const game = phantomGame();
+  game.metadata.splitPayment.payments = [{ clientId: "client-1", status: "LEFT", bookingId: "old-booking", leaveOperationId: prior.operationId }];
+  game.metadata.leaveOperations = [{ operationId: prior.operationId, state: "RETURN_PENDING" }];
+  const msg = completeReconciliationProof(reconciliationDiscovery(game, prior));
+  assert.equal(msg._splitLeaveCtx.vivaTargetMode, "NONE");
+  assert.deepEqual(msg._splitLeaveCtx.initialBookingIds, []);
+  assert.notEqual(msg._splitLeaveCtx.operationId, prior.operationId);
+  let next = run("fn_split_leave_operation_start.js", msg).result[0];
+  const inserted = structuredClone(next.payload[1].$setOnInsert);
+  assert.equal(inserted.localReconciliation.priorOperationId, prior.operationId);
+  assert.equal(inserted.clientSubscriptionId, null);
+  next.payload = [inserted];
+  next = run("fn_split_leave_operation_route.js", next).result[0];
+  next = run("fn_split_leave_router.js", next).result[0];
+  next = completeReconciliationProof(next);
+  next = run("fn_split_leave_operation_viva_confirmed.js", next).result[0];
+  assert.equal(next.payload[0]._id, inserted._id);
+  assert.notEqual(next.payload[0]._id, prior._id);
+  next.payload = { acknowledged: true, matchedCount: 1 };
+  next = run("fn_split_leave_operation_viva_ack.js", next).result[0];
+  next = run("fn_split_leave_daily_limit_find.js", next).result[1];
+  next = run("fn_split_leave_daily_limit_route.js", next).result[1];
+  next = run("fn_split_leave_game_update.js", next).result[0];
+  const [query, update] = next.payload;
+  assert.equal(query.updatedAt, game.updatedAt);
+  assert.deepEqual(update.$set.participants.map((p: Msg) => p.id), ["client-2"]);
+  assert.deepEqual(update.$set.metadata.splitPayment.payments, game.metadata.splitPayment.payments);
+  assert.deepEqual(update.$set.metadata.leaveOperations[0], game.metadata.leaveOperations[0]);
+  assert.deepEqual(prior, originalPrior);
+  next.payload = { acknowledged: true, matchedCount: 1 };
+  next = run("fn_split_leave_game_ack.js", next).result[0];
+  next.payload = [{ ...game, ...update.$set }];
+  next = run("fn_split_leave_generation_fence.js", next).result[0];
+  next = run("fn_split_leave_operation_done.js", next).result[0];
+  assert.equal(next.payload[1].$set.state, "DONE");
+  next.payload = { acknowledged: true, matchedCount: 1 };
+  const response = run("fn_split_leave_finalize.js", next).result[0];
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.payload.state, "DONE");
+  assert.equal(response.payload.message, "Вы вышли из игры");
+});
+
+test("same phantom snapshot has a stable recovery key, later projection gets a distinct key", () => {
+  const first = completeReconciliationProof(reconciliationDiscovery())._splitLeaveCtx.operationId;
+  assert.equal(completeReconciliationProof(reconciliationDiscovery())._splitLeaveCtx.operationId, first);
+  const changed = phantomGame(); changed.updatedAt = "2026-08-01T09:01:00.000Z";
+  assert.notEqual(completeReconciliationProof(reconciliationDiscovery(changed))._splitLeaveCtx.operationId, first);
+});
+
+for (const invalid of [
+  { targetClientId: "other-client" }, { actorClientId: "other-client" }, { exerciseId: "other-exercise" },
+  { gameId: "other-game" }, { mode: "ORGANIZER_TARGET" }, { state: "STARTED" },
+  { vivaVerification: null }, { lkAppliedAt: null }, { bookingIds: [] }, { outcome: "REJOIN_PRESERVED" },
+]) test(`recovery rejects unrelated or unconfirmed prior proof ${JSON.stringify(invalid)}`, () => {
+  const msg = authorizeSelf(phantomGame()); msg.payload = [priorCancelledLeave(invalid)];
+  const out = run("fn_split_leave_operation_route.js", msg).result;
+  assert.equal(out[0], null);
+  assert.equal(out[2].payload.state, "RETRY_REQUIRED");
+});
+
+test("ambiguous latest proof cannot trigger cleanup", () => {
+  for (const rows of [[priorCancelledLeave(), priorCancelledLeave({ operationId: "other", _id: "game-1:other" })]]) {
+    const msg = authorizeSelf(phantomGame()); msg.payload = rows;
+    assert.equal(run("fn_split_leave_operation_route.js", msg).result[2].payload.state, "RETRY_REQUIRED");
+  }
+});
+
+for (const payload of [
+  {}, null, { content: [], last: false }, { content: [], totalElements: 2 },
+  { content: [], number: 1 }, { content: [], hasNext: true },
+  { content: [null] }, { content: [{ id: "new-booking", exerciseId: "exercise-1" }] },
+  { content: [{ id: "unknown-exercise" }] },
+  { data: { items: [{ id: "new-booking", exerciseId: "exercise-1" }] } },
+  { data: { data: [{ id: "new-booking", exerciseId: "exercise-1" }] } },
+]) test(`recovery requires complete active absence ${JSON.stringify(payload)}`, () => {
+  const msg = reconciliationDiscovery(); msg.statusCode = 200; msg.payload = payload;
+  const out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[0], null); assert.equal(out[3], null); assert.equal(out[4], null);
+  assert.equal(out[1].payload.state, "RETRY_REQUIRED");
+});
+
+for (const payload of [
+  {}, { content: [] }, { content: [{ id: "old-booking", exerciseId: "exercise-1", isCancelled: false }] },
+  { content: [{ id: "old-booking", exerciseId: "exercise-1", isCancelled: true }], last: false },
+  { content: [{ id: "old-booking", exerciseId: "different-exercise", isCancelled: true }] },
+]) test(`recovery needs exact complete cancelled history ${JSON.stringify(payload)}`, () => {
+  let msg = reconciliationDiscovery(); msg.statusCode = 200; msg.payload = { content: [] };
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200; msg.payload = payload;
+  const out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[3], null); assert.equal(out[4], null);
+  assert.equal(out[1].payload.state, "RETRY_REQUIRED");
+});
+
+test("reconciliation bypasses newer daily claims even if accidentally provided to route", () => {
+  const msg = completeReconciliationProof(reconciliationDiscovery());
+  msg.payload = [{ _id: "new-claim", state: "CONFIRMED", bookingId: "new-booking" }];
+  const out = run("fn_split_leave_daily_limit_route.js", msg).result;
+  assert.equal(out[0], null); assert.ok(out[1]);
+  assert.equal(out[1]._splitLeaveCtx.dailyLimitReleaseOutcome, "NOT_APPLICABLE");
+});
+
+for (const state of ["STARTED", "VIVA_CONFIRMED"]) test(`background ${state} recovery rechecks Viva and keeps snapshot CAS`, () => {
+  let msg = completeReconciliationProof(reconciliationDiscovery());
+  msg = run("fn_split_leave_operation_start.js", msg).result[0];
+  const operation = { ...msg.payload[1].$setOnInsert, state };
+  const global = { vivacrm_access_token: "fixture-service-token" };
+  msg = run("fn_split_leave_retry_select.js", { payload: [operation] }, { global }).result[0];
+  msg.payload = [phantomGame()];
+  msg = run("fn_split_leave_retry_hydrate.js", msg, { global }).result[1];
+  assert.equal(msg._splitLeaveCtx.step, "start_verify_active");
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  assert.equal(msg.method, "GET");
+  msg = completeReconciliationProof(msg);
+  msg = run("fn_split_leave_operation_viva_confirmed.js", msg).result[0];
+  assert.equal(msg.payload[0].state, state);
+  if (state === "VIVA_CONFIRMED") assert.ok(msg.payload[0].localApplyClaimToken);
+});
+
+test("background recovery preserves any changed snapshot and never releases a daily claim", () => {
+  let msg = completeReconciliationProof(reconciliationDiscovery());
+  msg = run("fn_split_leave_operation_start.js", msg).result[0];
+  const operation = msg.payload[1].$setOnInsert;
+  const global = { vivacrm_access_token: "fixture-service-token" };
+  for (const change of ["updatedAt", "membershipId", "payment", "joinResponse"]) {
+    const fresh = phantomGame();
+    if (change === "updatedAt") fresh.updatedAt = "2026-08-01T10:00:00.000Z";
+    if (change === "membershipId") fresh.participants[0].membershipId = "new-membership";
+    if (change === "payment") fresh.metadata.splitPayment.payments = [{ clientId: "client-1", status: "PENDING" }];
+    if (change === "joinResponse") fresh.metadata.joinResponses = { "79990000001": { status: "PENDING" } };
+    msg = run("fn_split_leave_retry_select.js", { payload: [operation] }, { global }).result[0];
+    msg.payload = [fresh];
+    const out = run("fn_split_leave_retry_hydrate.js", msg, { global }).result;
+    assert.equal(out[0], null); assert.equal(out[1], null); assert.equal(out[3], null);
+    assert.equal(out[2].payload.reason, "local_reconciliation_snapshot_changed");
+  }
+});
+
+test("recovery CAS conflict cannot report done and altered snapshot cannot generate update", () => {
+  const msg = completeReconciliationProof(reconciliationDiscovery());
+  msg.payload = { acknowledged: true, matchedCount: 0 };
+  assert.equal(run("fn_split_leave_game_ack.js", msg).result[1].payload.state, "RETRY_REQUIRED");
+  msg._splitLeaveCtx.game.updatedAt = "2026-08-01T10:00:00.000Z";
+  assert.equal(run("fn_split_leave_game_update.js", msg).result[2].payload.state, "RETRY_REQUIRED");
+});
+
+
+test("first leave of imported Viva player without prior operation still discovers normal cancellation target", () => {
+  let msg = authorizeSelf(phantomGame()); msg.payload = [];
+  msg = run("fn_split_leave_operation_route.js", msg).result[0];
+  assert.equal(msg._splitLeaveCtx.localReconciliation, undefined);
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [{ id: "first-booking", exerciseId: "exercise-1", clientId: "client-1" }] };
+  msg = run("fn_split_leave_router.js", msg).result[4];
+  assert.equal(msg._splitLeaveCtx.vivaTargetMode, "BOOKINGS");
+  assert.deepEqual(msg._splitLeaveCtx.initialBookingIds, ["first-booking"]);
+});
+
+
+test("after phantom cleanup an absent player replays the durable DONE receipt without another mutation", () => {
+  const game = phantomGame();
+  game.participants = game.participants.filter((p: Msg) => p.id !== "client-1");
+  const operation = priorCancelledLeave({ state: "DONE", vivaVerification: "no_active_booking_for_exercise", successMessage: "Вы вышли из игры" });
+  game.metadata.leaveEvents = [{ playerId: "client-1", actor: "self", operationId: operation.operationId }];
+  const msg = authorizeSelf(game);
+  assert.equal(msg._splitLeaveCtx.step, "find_absent_self_leave");
+  msg.payload = [operation];
+  const out = run("fn_split_leave_operation_route.js", msg).result;
+  assert.equal(out[0], null); assert.equal(out[1], null);
+  assert.equal(out[2].statusCode, 200);
+  assert.equal(out[2].payload.state, "DONE");
+  assert.equal(out[2].payload.operationId, operation.operationId);
+});
+
+test("a client-editable leave marker cannot forge a successful exit receipt", () => {
+  for (const proof of [[], [priorCancelledLeave({ targetClientId: "another-client" })]]) {
+    const game = phantomGame(); game.participants = [];
+    game.metadata.leaveEvents = [{ playerId: "client-1", actor: "self", operationId: priorCancelledLeave().operationId }];
+    const msg = authorizeSelf(game); msg.payload = proof;
+    const out = run("fn_split_leave_operation_route.js", msg).result;
+    assert.equal(out[0], null); assert.equal(out[1], null);
+    assert.equal(out[2].statusCode, 403);
+  }
+});
+
+
+test("a leave marker alone cannot authorize writes through an active join response", () => {
+  const game = phantomGame(); game.participants = [];
+  game.metadata.leaveEvents = [{ playerId: "client-1", actor: "self", operationId: priorCancelledLeave().operationId }];
+  game.metadata.joinResponses = { "79990000001": { status: "PENDING", membershipId: "unverified-marker-membership" } };
+  const msg = prepareSelf(); msg.payload = [game];
+  const out = run("fn_split_leave_authorize.js", msg).result;
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 403);
+  assert.ok(!out[3] && !out[4]);
+});

@@ -31,6 +31,10 @@ const continueApply = (ctx) => {
 
 const ctx = isObj(msg._splitLeaveCtx) ? msg._splitLeaveCtx : null;
 if (!ctx) return retry(ctx, "context_missing");
+if (ctx.localReconciliation) {
+  ctx.dailyLimitReleaseOutcome = "NOT_APPLICABLE";
+  return continueApply(ctx);
+}
 
 const rows = asArray(msg.payload).filter(isObj);
 if (rows.length === 0) {

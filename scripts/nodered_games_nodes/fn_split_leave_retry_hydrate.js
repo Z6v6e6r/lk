@@ -104,6 +104,29 @@ const currentVersion = membershipVersion([
   joinResponse?.paymentRef,
 ]);
 
+if (ctx.localReconciliation) {
+  // Never retarget an old recovery to a newer snapshot, even if it has no IDs.
+  if (ctx.localAlreadyApplied) {
+    ctx.chatCleanupSkipped = true;
+    msg.payload = undefined;
+    return [null, null, null, msg];
+  }
+  if (currentVersion || payments.length || joinResponse
+    || game.updatedAt !== ctx.localReconciliation.snapshotUpdatedAt) {
+    msg.payload = { operationId: ctx.operationId, reason: "local_reconciliation_snapshot_changed" };
+    return [null, null, msg, null];
+  }
+  const serviceToken = String(global.get("vivacrm_access_token") || "").trim();
+  if (!serviceToken) return [null, null, msg, null];
+  ctx.backgroundStartedRecovery = true;
+  ctx.upstreamAuthHeader = `Bearer ${serviceToken}`;
+  ctx.initialBookingIds = [];
+  ctx.bookingQueue = [];
+  ctx.step = "start_verify_active";
+  msg.payload = undefined;
+  return [null, msg, null, null];
+}
+
 if (currentVersion && (!ctx.membershipVersion || currentVersion !== ctx.membershipVersion)) {
   if (ctx.operationState === "STARTED" && ctx.vivaTargetMode !== "NONE") {
     ctx.rejoinDetected = true;

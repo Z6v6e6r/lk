@@ -20,6 +20,22 @@ const responseRows = (payload) => {
   if (isObj(payload.data) && Array.isArray(payload.data.content)) return payload.data.content;
   return [];
 };
+// Absence is evidence only from a complete, well-formed first page.
+const completeBookingPage = (payload, limit) => {
+  if (isObj(payload?.data) && !Array.isArray(payload.data.content)) return false;
+  const page = isObj(payload?.data) ? payload.data : payload;
+  const recognized = Array.isArray(page) || (isObj(page)
+    && [page.content, page.items, page.data].some(Array.isArray));
+  if (!recognized) return false;
+  const rows = responseRows(payload);
+  return rows.every(isObj) && rows.length < limit
+    && [payload, page].every((value) => Array.isArray(value) || (
+      value.last !== false && value.hasNext !== true && !value.next && !value.nextPage
+      && !(Number(value.number || value.page || 0) > 0)
+      && !(Number(value.totalPages) > 1)
+      && !(Number(value.totalElements ?? value.total) > rows.length)
+    ));
+};
 const rowBookingId = (row) => normalizeId(row?.id || row?.bookingId || row?.uuid);
 const rowClientId = (row) => normalizeId(
   row?.client?.id || row?.clientId || row?.playerId || row?.userId,
@@ -271,6 +287,9 @@ if (!ctx) {
   msg.payload = { ok: false, state: "CONFLICT", message: "split leave context missing" };
   return [null, msg, msg, null, null];
 }
+if (ctx.localReconciliation && !["start_verify_active", "verify_active", "verify_history", "local_apply"].includes(ctx.step)) {
+  return fail(ctx, 202, "RETRY_REQUIRED", "Требуется повторная проверка состава игры.");
+}
 if (ctx.step === "start_verify_subscription_return") {
   return startSubscriptionReadback(ctx, "verify_subscription_return");
 }
@@ -367,7 +386,18 @@ if (ctx.step === "cancel_booking") {
 
 if (ctx.step === "verify_active") {
   if (!isOk(msg.statusCode)) return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить активные записи Viva");
+  if (ctx.localReconciliation && !completeBookingPage(msg.payload, usesEndUser(ctx) ? 1000 : 200)) {
+    return fail(ctx, 202, "RETRY_REQUIRED", "Не удалось полностью проверить записи Viva. Повторите проверку.");
+  }
   const activeRows = responseRows(msg.payload).filter((row) => !isCancelled(row));
+  if (ctx.localReconciliation) {
+    const ambiguousOrActive = activeRows.some((row) => usesEndUser(ctx)
+      ? (!rowExerciseId(row) || rowExerciseId(row) === normalizeId(ctx.exerciseId))
+      : (!rowClientId(row) || rowClientId(row) === normalizeId(ctx.targetClientId)));
+    if (ambiguousOrActive) {
+      return fail(ctx, 202, "RETRY_REQUIRED", "В Viva есть действующая запись. Обновите игру перед новым выходом.");
+    }
+  }
   const bookingIds = new Set(asArray(ctx.initialBookingIds).map(normalizeId).filter(Boolean));
   const targetClientId = normalizeId(ctx.targetClientId);
   const exerciseId = normalizeId(ctx.exerciseId);
@@ -455,6 +485,31 @@ if (ctx.step === "verify_active") {
 if (ctx.step === "verify_history") {
   if (!isOk(msg.statusCode)) return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить историю записей Viva");
   const rows = responseRows(msg.payload);
+  if (ctx.localReconciliation) {
+    const targetRows = rows.filter((row) => usesEndUser(ctx)
+      ? rowExerciseId(row) === normalizeId(ctx.exerciseId)
+      : rowClientId(row) === normalizeId(ctx.targetClientId));
+    const proof = ctx.localReconciliation;
+    if (!completeBookingPage(msg.payload, usesEndUser(ctx) ? 1000 : 200)
+      || rows.some((row) => usesEndUser(ctx) ? !rowExerciseId(row) : !rowClientId(row))
+      || targetRows.some((row) => !isCancelled(row))
+      || !proof.priorBookingIds.every((id) => targetRows.some((row) => (
+        rowBookingId(row) === normalizeId(id) && isCancelled(row)
+      )))) {
+      return fail(ctx, 202, "RETRY_REQUIRED", "Не удалось подтвердить отмену предыдущей записи. Повторите проверку.");
+    }
+    assignMembershipVersion(ctx, ["local-reconciliation", proof.priorOperationId, proof.snapshotUpdatedAt]);
+    ctx.vivaVerifiedAt = new Date().toISOString();
+    ctx.vivaVerification = "no_active_booking_for_exercise";
+    ctx.vivaTargetMode = "NONE";
+    ctx.preCancelVerification = false;
+    ctx.successMessage = "Вы вышли из игры";
+    if (ctx.preOperationDiscovery === true) {
+      ctx.preOperationDiscovery = false;
+      return toOperationStart(ctx);
+    }
+    return toLocalApply(ctx);
+  }
   if (ctx.localOnlyNoBooking === true && asArray(ctx.initialBookingIds).length === 0) {
     const exerciseId = normalizeId(ctx.exerciseId);
     const exactHistoryRows = rows.filter((row) => exerciseId && rowExerciseId(row) === exerciseId);
