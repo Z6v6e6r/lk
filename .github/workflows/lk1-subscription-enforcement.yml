@@ -218,6 +218,27 @@ jobs:
               src/assets/summer-subscription-ra.webp)
                 expected_hash="5f89f2f44ea1cd1d2fd1e36b8fb39a2cb6dbd9d525380b0f4d588a2139142329"
                 ;;
+              src/components/subscription-storefront/assets/fonts/Inter_18pt-Regular.ttf)
+                expected_hash="3e5f90a0138b38de4cf4d779ad78391974ea1df776b9164842bdcbb60ce383c5"
+                ;;
+              src/components/subscription-storefront/assets/fonts/Inter_24pt-Regular.ttf)
+                expected_hash="d2a4911506ea4e124a47ca044e5e79f671ddf8f1a55f1ab9a56c58d088124b63"
+                ;;
+              src/components/subscription-storefront/assets/fonts/RFDewi-Bold.woff)
+                expected_hash="fba1df2c86a6e72b63f61ca4d02f94506fd272f6b5780baaa45046f0e45e78c4"
+                ;;
+              src/components/subscription-storefront/assets/fonts/RFDewi-Regular.woff)
+                expected_hash="b307668b5a99b738c8dd898dd263128f5aa5b7ca187695ddbe0e849a6a4190de"
+                ;;
+              src/components/subscription-storefront/assets/fonts/RFDewi-Semibold.woff)
+                expected_hash="eb5c9bbf623ebe960156f182c9d420f144a4a01d94d38af6f93b66681ce416b5"
+                ;;
+              src/components/subscription-storefront/assets/fonts/RFDewi-Ultrabold.ttf)
+                expected_hash="658c22b70cb80a9f2ba828d653e970a8676c694e428694fa29194336d4c93219"
+                ;;
+              src/components/subscription-storefront/assets/fonts/RFDewiExpanded-Bold.ttf)
+                expected_hash="b83e2c6d91ef691da891de119a6a4f784e6af40e674b961cb55bfb4db3a5aa8d"
+                ;;
             esac
             if [[ -n "$expected_hash" ]]; then
               if ! git cat-file -e "$IMMUTABLE_HEAD_SHA:$changed_path"; then

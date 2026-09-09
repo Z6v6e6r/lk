@@ -176,7 +176,7 @@ test("binary asset exceptions are exact and content-addressed", async () => {
   assert.match(scan, /git diff --unified=0 --no-color --no-ext-diff --no-textconv/);
   assert.match(scan, /read -r -d '' changed_path/);
   const allowlistEntries = [...scan.matchAll(
-    /^\s+(src\/assets\/[^)]+\.webp\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
+    /^\s+(src\/[^)]+\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
   )].map((match) => [match[1].slice(0, -1), match[2]]);
   const expectedEntries = [
     [
@@ -219,6 +219,34 @@ test("binary asset exceptions are exact and content-addressed", async () => {
       "src/assets/summer-subscription-ra.webp",
       "5f89f2f44ea1cd1d2fd1e36b8fb39a2cb6dbd9d525380b0f4d588a2139142329",
     ],
+    [
+      "src/components/subscription-storefront/assets/fonts/Inter_18pt-Regular.ttf",
+      "3e5f90a0138b38de4cf4d779ad78391974ea1df776b9164842bdcbb60ce383c5",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/Inter_24pt-Regular.ttf",
+      "d2a4911506ea4e124a47ca044e5e79f671ddf8f1a55f1ab9a56c58d088124b63",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/RFDewi-Bold.woff",
+      "fba1df2c86a6e72b63f61ca4d02f94506fd272f6b5780baaa45046f0e45e78c4",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/RFDewi-Regular.woff",
+      "b307668b5a99b738c8dd898dd263128f5aa5b7ca187695ddbe0e849a6a4190de",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/RFDewi-Semibold.woff",
+      "eb5c9bbf623ebe960156f182c9d420f144a4a01d94d38af6f93b66681ce416b5",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/RFDewi-Ultrabold.ttf",
+      "658c22b70cb80a9f2ba828d653e970a8676c694e428694fa29194336d4c93219",
+    ],
+    [
+      "src/components/subscription-storefront/assets/fonts/RFDewiExpanded-Bold.ttf",
+      "b83e2c6d91ef691da891de119a6a4f784e6af40e674b961cb55bfb4db3a5aa8d",
+    ],
   ];
 
   assert.deepEqual(allowlistEntries, expectedEntries);
@@ -243,7 +271,7 @@ test("binary scan accepts only the pinned assets and rejects path or content dri
   const rulesAsset = new URL("../../src/assets/piter-subscription-rules-from-20260901.webp", import.meta.url);
   const tierAsset = new URL("../../src/assets/piter-subscription-tier-1.webp", import.meta.url);
   const allowedAssetPaths = [...binaryScan().matchAll(
-    /^\s+(src\/assets\/[^)]+\.webp\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
+    /^\s+(src\/[^)]+\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
   )].map((match) => match[1].slice(0, -1));
 
   const allowed = await runBinaryScan(
@@ -273,6 +301,15 @@ test("binary scan accepts only the pinned assets and rejects path or content dri
   ]);
   assert.equal(wrongContent.status, 1);
   assert.match(wrongContent.stderr, /Allowlisted binary hash mismatch/);
+
+  const fontPath = "src/components/subscription-storefront/assets/fonts/RFDewi-Bold.woff";
+  const fontUrl = new URL(`../../${fontPath}`, import.meta.url);
+  const renamedFont = await runBinaryScan(t, [[`${fontPath}.copy.woff`, fontUrl]]);
+  assert.equal(renamedFont.status, 1);
+  assert.match(renamedFont.stderr, /Unexpected binary files in event diff/);
+  const modifiedFont = await runBinaryScan(t, [[fontPath, tierAsset]]);
+  assert.equal(modifiedFont.status, 1);
+  assert.match(modifiedFont.stderr, /Allowlisted binary hash mismatch/);
 
   const overrideDirectory = await mkdtemp(join(tmpdir(), "lk1-attribute-override-"));
   t.after(() => rm(overrideDirectory, { recursive: true, force: true }));

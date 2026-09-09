@@ -76,8 +76,8 @@ T123 читает собственный release-манифест и добав�
 - Полный `npm run build` остановлен build-env preflight: в изолированной рабочей копии отсутствуют ignored `.env`/VITE-переменные общего LK1. Самостоятельные prod/dev сборки новой витрины прошли.
 - Node-RED suite, CI и реальные платежи не запускались: backend/платёжный обработчик не меняются.
 - Тексты преимуществ взяты из PR. Фактическое применение этих условий/скидок у провайдера не проверялось.
-- В редакторе Tilda получена форма входа. Страница не создана/не опубликована.
-- Merge, push, Draft PR, deploy, provider/database mutation отсутствуют.
+- Первоначально редактор Tilda требовал входа. Позже создан черновик страницы `233220109` с alias `subsription`, сохранён и повторно проверен T123 loader. Страница не опубликована.
+- Исходный checkpoint: `5719399`. Позже локально интегрирован и отправлен `main` `7342973`. Deploy и публикация Tilda не выполнялись; Draft PR не создавался, provider/database mutation в этой задаче отсутствуют.
 
 MODEL_ROUTE: parent
 
@@ -119,3 +119,14 @@ MODEL_ROUTE: parent
 - `src/components/subscription-storefront/model.ts`
 - `src/components/subscription-storefront/presentation.ts`
 - `src/components/subscription-storefront/subscriptions.css`
+
+## Исправление CI после push 2026-09-09
+
+- GitHub run `34339637653` на `7342973` остановился на встроенном custody scan: семь шрифтов не были включены в список разрешённых бинарных ресурсов. До push этот встроенный сканер был пропущен при локальной проверке.
+- Исправление ограничено семью точными путями и SHA-256 Git blobs в `.github/workflows/lk1-subscription-enforcement.yml`; запреты на остальные бинарные файлы, secrets/PII и подмену diff сохранены.
+- В `scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs` добавлены проверки хешей шрифтов, принятия разрешённых файлов, отказа при изменении пути и содержимого.
+- Отдельный workflow suite: 13/13 PASS; `git diff --check`: PASS.
+- Независимое release/security review: существенных замечаний нет, все семь хешей подтверждены по Git blobs.
+- `npm run test:delivery`: 68 passed, 1 cancelled; отменён DEV readback с `Promise resolution is still pending but the event loop has already resolved`. Такая же отмена воспроизведена на неизменённом `7342973` отдельным запуском `scripts/tests/lk1DevFrontendRelease.test.mjs`; это ограничение baseline, не PASS.
+- Последующая ошибка финализатора CI `ERR_MODULE_NOT_FOUND: js-yaml` возникла после раннего отказа scanner до установки зависимостей. Финализатор в этом исправлении не меняется.
+- Эта коррекция подготавливается в прежней рабочей ветке; новая интеграция и отправка main требуют следующих отдельных этапов.
