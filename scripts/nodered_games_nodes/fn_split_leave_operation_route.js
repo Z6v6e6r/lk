@@ -35,7 +35,7 @@ if (ctx?.step === "find_local_reconciliation_proof") {
   const eligible = rows.filter((row) => row && row.mode === "SELF"
     && row.gameId === ctx.gameId && sameId(row.exerciseId, ctx.exerciseId)
     && sameId(row.actorClientId, ctx.actorClientId) && sameId(row.targetClientId, ctx.targetClientId)
-    && ["DONE", "RETURN_PENDING"].includes(row.state) && row.outcome === "REMOVED"
+    && ["DONE", "RETURN_PENDING", "VIVA_CONFIRMED"].includes(row.state) && row.outcome === "REMOVED"
     && row.vivaVerification === "active_absent_history_cancelled"
     && Number.isFinite(Date.parse(row.lkAppliedAt)) && Number.isFinite(Date.parse(row.createdAt))
     && row.operationId && row._id === `${ctx.gameId}:${row.operationId}`

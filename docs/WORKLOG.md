@@ -2203,3 +2203,8 @@ No live deployment, flags, Mongo or provider writes in this re-preparation.
 ### 2026-09-09 — repeated SELF leave after confirmed Viva cancellation
 
 Prepared isolated local reconciliation for a phantom LK roster restored without membership/booking/payment identity after a confirmed leave. Recovery checks an owned durable cancellation plus fresh complete Viva active/history, uses a snapshot-scoped NONE operation and existing CAS, preserves prior pending refunds/payment history and skips daily claim release. DONE receipt replay avoids a second cancellation. Critical matrix 519 PASS / 5 optional SKIP / 0 FAIL; lint/typecheck/prod+dev build, modular validation, exact function-only forward/reverse contract and independent safety review passed. No merge, push, deployment or live data/provider operations. See `docs/SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md`.
+
+
+### 2026-09-09 — split leave deployed; completed-receipt follow-up
+
+Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving nine parallel nodes. Installed flow3456eb84..., restart99, 15-minute observation and read-only API checks passed. Exact-game postcheck found a completed removal receipt moved back to VIVA_CONFIRMED by existing refund verification before deploy. Prepared a separate two-predicate follow-up accepting that state only with lkAppliedAt/outcomeREMOVED/cancellation proof; 97 focused tests, critical527 PASS/5 SKIP, independent review PASS. Follow-up not merged/pushed/deployed; no real test leave or refund initiated. Details: SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md.
