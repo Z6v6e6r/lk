@@ -288,13 +288,90 @@
   display: none;
 }
 
+.subscription-rail-frame {
+  position: relative;
+  min-width: 0;
+}
+
+.subscription-rail-arrow {
+  position: absolute;
+  z-index: 2;
+  top: min(240px, 35%);
+  transform: translateY(-50%);
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+  place-items: center;
+  border: 1px solid var(--subscription-border);
+  border-radius: 50%;
+  color: var(--subscription-accent);
+  background: #fff;
+  box-shadow: 0 2px 10px #1f1e2014;
+  cursor: pointer;
+}
+
+.subscription-rail-arrow--previous { left: -18px; }
+.subscription-rail-arrow--next { right: -18px; }
+.subscription-rail-arrow:disabled {
+  visibility: hidden;
+}
+
+.subscription-rail-arrow svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.subscription-rail-dots {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.subscription-rail-dots button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.subscription-rail-dots button::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 8px;
+  background: #d9d4e8;
+}
+
+.subscription-rail-dots button[aria-current='true']::after {
+  width: 24px;
+  background: var(--subscription-accent);
+}
+
+.subscription-rail-arrow:focus-visible,
+.subscription-rail-dots button:focus-visible {
+  outline: 3px solid var(--subscription-accent);
+  outline-offset: 3px;
+}
+
 .subscription-plan-rail__item {
   display: flex;
   width: var(--subscription-card-width);
   min-width: 0;
   padding: 0;
   flex: 0 0 var(--subscription-card-width);
-  align-items: flex-end;
+  align-items: flex-start;
   scroll-snap-align: center;
 }
 
@@ -511,7 +588,7 @@
 .subscription-card__cta {
   width: 100%;
   min-height: 51px;
-  height: 51px;
+  height: auto;
   padding: 16px 24px;
   border: 0;
   border-radius: 14px;
@@ -738,6 +815,7 @@
 .subscription-storefront .subscription-plan-rail {
   width: 100%; margin-left: 0; margin-right: 0; justify-content: flex-start;
   padding-inline: 0; scroll-padding-inline: 0;
+  scroll-snap-type: none;
 }
 .subscription-storefront .subscription-plan-rail__item {
   flex: 0 0 min(480px, 86cqw);
@@ -751,6 +829,11 @@
 /* Figma desktop 1752:2759; intrinsic height accommodates live copy and three variants. */
 .subscription-card--no-progress { padding: 0; }
 .subscription-card--no-progress > .subscription-card__progress { display: none; }
+/* Align white panel tops regardless of content height or an inventory frame.
+   The frame header occupies 13px padding + 14px label + 12px gap. */
+.subscription-plan-rail:has(.subscription-card:not(.subscription-card--no-progress)) .subscription-card--no-progress {
+  margin-top: 39px;
+}
 .subscription-card__price-row--variants { flex-direction: column; align-items: flex-start; }
 .subscription-card__price-row--variants .subscription-card__billing-options { max-width: 100%; }
 .subscription-card__billing-options button { white-space: nowrap; }

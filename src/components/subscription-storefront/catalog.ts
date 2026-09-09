@@ -55,10 +55,10 @@ export function friendshipBillingOptions(statuses: readonly StorefrontStatus[], 
     };
   }
   return [
-    availableOption(monthly, 'monthly', 'Месячная', '/ мес.'),
-    { id: 'monthly-two-hours', label: 'Месячная 2 часа', priceMinor: 1980000, priceSuffix: '/ мес.',
+    availableOption(monthly, 'monthly', 'месяц', '/ мес.'),
+    { id: 'monthly-two-hours', label: 'месяц 2 часа', priceMinor: 1980000, priceSuffix: '/ мес.',
       ctaDisabled: true, ctaLabel: 'Скоро', statusMessage: 'Дружба 2.0 скоро появится в продаже' },
-    availableOption(annual, 'annual', 'Годовая', '/ год'),
+    availableOption(annual, 'annual', 'год', '/ год'),
   ];
 }
 

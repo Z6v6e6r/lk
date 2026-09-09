@@ -23,7 +23,7 @@
     const view = { id: 'local-preview', title: 'Играй в падел выгодно', description: 'Выберите подписку под свой ритм игры', markUrl,
       sections: [{ id: 'monthly', plans: ['friendship','ra','academy'].map((id, index) => ({
         ...summerPlanPresentation[id], id, ctaLabel: 'Демонстрация · покупка отключена', ctaDisabled: true,
-        billingOptions: id === 'friendship' ? friendshipBillingOptions([{ counterKey: 'friendship', priceMinor: 980000, canPurchase: false, bindingReady: true, unlimited: true, remainingCount: 0, totalLimit: 0 }, { counterKey: 'network_friendship', priceMinor: 5680000, canPurchase: false, bindingReady: true, unlimited: false, remainingCount: 10, totalLimit: 10 }]).map(option => ({ ...option, benefitGroups: friendshipVariantBenefits[option.id] })) : [{ id: 'monthly', label: '30 дней', priceSuffix: '/ 30 дней', priceMinor: index ? 2380000 : 980000,
+        billingOptions: id === 'friendship' ? friendshipBillingOptions([{ counterKey: 'friendship', priceMinor: 980000, canPurchase: false, bindingReady: true, unlimited: true, remainingCount: 0, totalLimit: 0 }, { counterKey: 'network_friendship', priceMinor: 9800000, canPurchase: false, bindingReady: true, unlimited: false, remainingCount: 10, totalLimit: 10 }]).map(option => ({ ...option, benefitGroups: friendshipVariantBenefits[option.id] })) : [{ id: 'monthly', label: '30 дней', priceSuffix: '/ 30 дней', priceMinor: index ? 2380000 : 980000,
           ...(id === 'ra' ? { progress: { current: 12, total: 100, label: 'Доступно' } } : {}) }],
       })) }] };
     if (reference) {
