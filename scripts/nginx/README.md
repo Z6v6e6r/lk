@@ -90,3 +90,25 @@ systemctl reload nginx
 If `nginx -t` fails, restore the named backup before any reload. Public
 post-checks are OPTIONS `204` with `POST, OPTIONS` and POST without Bearer
 `401 SUBSCRIPTION_BOOKING_AUTH_REQUIRED`.
+
+### Reserve booking route
+
+`lk-subscription-booking-reserve-location.conf` adds the same POST/OPTIONS API
+on the DEV reserve host, forwarding to `https://padlhub.su` with verified TLS,
+unchanged URI/query, request body and Authorization, and no upstream retries.
+The exact location precedes the reserve `location /lk/ { try_files $uri =404; }`.
+It does not install a Node-RED gateway on reserve or change frontend pricing.
+
+Use `buildReserveBookingNginxCandidate(source, sourceSha)` from
+`prepare_subscription_booking_reserve.mjs` against a fresh private copy of
+`/etc/nginx/sites-enabled/lk-reserve.tsup.space`. It rejects source drift,
+conflicting routes and ambiguous/missing static markers. The existing primary
+`applyCandidate()` CLI cannot install this reserve fragment. A later authorized
+installation must recheck both hashes, preserve the original config and metadata,
+validate with `nginx -t`, reload once, then check OPTIONS 204 and unauthenticated
+POST 401. Do not replay an authenticated booking for a connectivity probe.
+Restore the exact backup on failed validation; guard any post-reload rollback
+against intervening config changes and validate it before reloading.
+
+Local physical check (owned Docker fixture, network disabled, synthetic TLS):
+`LK_BOOKING_RESERVE_NGINX_TEST=1 node --test scripts/tests/subscriptionBookingReserveIngress.test.mjs`.

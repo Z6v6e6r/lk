@@ -2463,3 +2463,13 @@ lint0errors/387warnings; exact candidate remainsa9c1bd66…/4799nodes/219HTTP. I
 integration review PASS. Unchanged build/typecheck inputs reuse green exact-base CI34434812931.
 Task branch preserved. Local merge only; no push, deploy, runtime control or live writes.
 Details: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
+
+## 2026-09-10 — group booking reserve OPTIONS 404 (isolated correction)
+
+Confirmed missing exact booking proxy on reserve: OPTIONS404 blocks POST before
+payment-link creation. Added a SHA-guarded reserve candidate with verified TLS,
+no upstream retries and unchanged request identity/body/auth; primary defaults,
+frontend and Node-RED unchanged. Physical network-none nginx tests2 PASS, unit7
+PASS, delivery68 plus separately passed loopback1, compatibility20 PASS/5 optional
+SKIP, lint0errors/387warnings; specialist review clear. No merge/push/deploy/live
+booking or payment. See GROUP_BOOKING_RESERVE_ROUTE_20260910.md.

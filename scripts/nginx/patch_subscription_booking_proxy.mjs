@@ -25,6 +25,7 @@ export function buildSubscriptionBookingNginxCandidate(
   expectedSourceSha,
   fragment = readSubscriptionBookingLocation(),
   routePattern = ROUTE_PATTERN,
+  staticMarker = STATIC_LK_MARKER,
 ) {
   const sourceSha = sha256(source);
   if (sourceSha !== expectedSourceSha) {
@@ -39,8 +40,8 @@ export function buildSubscriptionBookingNginxCandidate(
     throw new Error("An unmanaged subscription booking nginx location already exists");
   }
 
-  const markerIndex = source.indexOf(STATIC_LK_MARKER);
-  if (markerIndex < 0 || source.indexOf(STATIC_LK_MARKER, markerIndex + 1) >= 0) {
+  const markerIndex = source.indexOf(staticMarker);
+  if (markerIndex < 0 || source.indexOf(staticMarker, markerIndex + 1) >= 0) {
     throw new Error("Static /lk/ nginx marker must exist exactly once");
   }
 
