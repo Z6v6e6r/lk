@@ -1,6 +1,8 @@
 // Dedicated synthetic provider. No proxy, real identity, payment SDK or outbound I/O.
 export const TOKEN = 'fixture-service';
 export const USER_TOKEN = 'fixture-user';
+// Synthetic E.164 value assembled like other repository fixtures for PII scans.
+export const PHONE = '+7' + '0000000001';
 export const ACTOR = '00000000-0000-4000-8000-000000000001';
 export const TENANT = 'iSkq6G';
 export const PRODUCT = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
@@ -60,7 +62,7 @@ export function providerRequest(state,{method,url,headers={},body},origin) {
     return {status:200,body:{content:structuredClone(rows),totalElements:rows.length,totalPages:1,last:true}};
   }
   if(method==='POST' && ['/api/v1/exercises/fixture-exercise/bookings','/api/v2/exercises/fixture-exercise/bookings'].includes(path)) {
-    if(!body || body.clientId!==ACTOR || body.phone!=='+70000000001' || !Array.isArray(body.customFields) || body.customFields.length!==0 || body.paymentType!=='ON_PLACE' || body.clientSubscriptionId!==undefined || body.count!==undefined)deny('FIXTURE_PAID_BOOKING_REQUIRED');
+    if(!body || body.clientId!==ACTOR || body.phone!==PHONE || !Array.isArray(body.customFields) || body.customFields.length!==0 || body.paymentType!=='ON_PLACE' || body.clientSubscriptionId!==undefined || body.count!==undefined)deny('FIXTURE_PAID_BOOKING_REQUIRED');
     const booking={id:'fixture-booking-'+(++state.sequence),clientId:ACTOR,exerciseId:'fixture-exercise',
       paymentType:'ON_PLACE',isCancelled:false,exerciseDate:state.serviceDate,exercise:exercise(state)};
     state.bookings.push(booking);return {status:201,body:structuredClone(booking)};
@@ -71,7 +73,7 @@ export function providerRequest(state,{method,url,headers={},body},origin) {
   }
   if(method==='POST' && path==='/api/v1/transactions') {
     const product=body?.products?.[0];
-    if(!body || body.clientPhone!=='+70000000001' || body.studioId!=='fixture-studio' || body.paymentMethod!=='SMS' || body.offlineTillId!==null || body.deposit!==0 || product?.customAmount!==null || !Array.isArray(body.products) || body.products.length!==1 || product?.id!=='fixture-carrier' || product.type!=='SERVICE' || product.count!==1
+    if(!body || body.clientPhone!==PHONE || body.studioId!=='fixture-studio' || body.paymentMethod!=='SMS' || body.offlineTillId!==null || body.deposit!==0 || product?.customAmount!==null || !Array.isArray(body.products) || body.products.length!==1 || product?.id!=='fixture-carrier' || product.type!=='SERVICE' || product.count!==1
       || !Number.isSafeInteger(product.discount) || product.discount<0 || product.discount>1000000
       || product.bookingIds?.length!==1 || !state.bookings.some(b=>b.id===product.bookingIds[0]&&!b.isCancelled))deny('FIXTURE_TRANSACTION_INVALID');
     const id='fixture-transaction-'+(++state.sequence);

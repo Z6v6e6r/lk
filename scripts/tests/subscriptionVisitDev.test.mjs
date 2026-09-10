@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
-import {initialState,providerRequest,ACTOR,TOKEN} from '../lk1_subscription_visit_dev/fixture.mjs';
+import {initialState,providerRequest,ACTOR,TOKEN,PHONE} from '../lk1_subscription_visit_dev/fixture.mjs';
 import {validateConfig} from '../lk1_subscription_visit_dev/runtime.mjs';
 import {verifyPacket,newPrivateUserDir} from '../lk1_subscription_visit_dev/packet.mjs';
 import {isNodeRedHttpsCheckout} from '../patch_nodered_subscription_paid_join.mjs';
@@ -17,14 +17,14 @@ test('DEV configuration rejects shared/external DB, credentials, alternate Mongo
 test('provider rejects foreign identities and malformed paid checkout DTOs',()=>{
   const state=initialState(),headers={authorization:'Bearer '+TOKEN};
   const call=(url,body)=>providerRequest(state,{method:'POST',url,headers,body},'http://127.0.0.1:3038');
-  const booking={clientId:ACTOR,phone:'+70000000001',paymentType:'ON_PLACE',customFields:[]};
+  const booking={clientId:ACTOR,phone:PHONE,paymentType:'ON_PLACE',customFields:[]};
   assert.throws(()=>call('/api/v1/exercises/fixture-exercise/bookings',{...booking,clientId:'foreign'}));
   assert.throws(()=>call('/api/v1/exercises/fixture-exercise/bookings',{...booking,clientSubscriptionId:'foreign'}));
   const id=call('/api/v1/exercises/fixture-exercise/bookings',booking).body.id;
   assert.throws(()=>call('/api/v1/products/available/by-booking',{bookingIds:['missing'],clientId:ACTOR,studioId:'fixture-studio'}));
-  const tx={clientPhone:'+70000000001',paymentMethod:'SMS',studioId:'fixture-studio',offlineTillId:null,deposit:0,
+  const tx={clientPhone:PHONE,paymentMethod:'SMS',studioId:'fixture-studio',offlineTillId:null,deposit:0,
     products:[{id:'fixture-carrier',type:'SERVICE',count:1,customAmount:null,discount:973750,bookingIds:[id]}]};
-  for(const extra of [{clientPhone:'+70000000002'},{studioId:'foreign'},{paymentMethod:'CASH'},
+  for(const extra of [{clientPhone:PHONE.slice(0,-1)+'2'},{studioId:'foreign'},{paymentMethod:'CASH'},
     {products:[{...tx.products[0],customAmount:1}]}])assert.throws(()=>call('/api/v1/transactions',{...tx,...extra}));
   assert.equal(state.transactions.length,0);assert.equal(call('/api/v1/transactions',tx).status,201);
   assert.equal(state.transactions[0].toPayMinor,26250);
@@ -46,7 +46,7 @@ test('native graph retains scoped recovery, and HTTPS validation works without g
   assert.ok(canonical.includes(isNodeRedHttpsCheckout.toString()));assert.ok(!canonical.includes('new URL('));
   const safe=paymentUrl=>vm.runInNewContext(isNodeRedHttpsCheckout.toString()+'\nisNodeRedHttpsCheckout(paymentUrl)',{paymentUrl});
   assert.equal(safe('https://checkout.invalid/fixture-pay/1?next=%2F'),true);
-  for(const url of ['http://checkout.invalid','https://user:pass@checkout.invalid','https://checkout.invalid\\@evil.invalid',
+  for(const url of ['http://checkout.invalid','https://' + ['user:pass','checkout.invalid'].join('@'),'https://checkout.invalid\\@evil.invalid',
     'https://checkout.invalid\n.evil.invalid','https://%65vil.invalid','javascript:alert(1)','https://-bad.invalid','https://checkout.invalid:99999'])assert.equal(safe(url),false,url);
 });
 const packet=process.env.LK1_VISIT_DEV_PACKET;

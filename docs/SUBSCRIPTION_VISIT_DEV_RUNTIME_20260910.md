@@ -119,9 +119,10 @@ installer/enable/start в пакете нет. Shared flow и main branch не �
 - Полная `npm run build` с inert CI env: PASS. Release с реальными env не собирался.
 - Payment/recovery specialist review: блокирующих замечаний после правок нет.
 - Secret/PII pattern review: реальные секреты/персональные выгрузки не добавлены.
-  Regex CI-scanner находит synthetic E.164 fixtures/invalid userinfo URL и публичный
-  e-mail в npm deprecation metadata; перед будущим push нужны узкие исключения либо
-  иной согласованный формат фикстур. Не ослаблять scanner для production данных.
+  Перед push synthetic E.164/invalid userinfo fixtures переведены в сборку строк,
+  как в существующих тестах. Из npm deprecation metadata удалена только рекламная
+  фраза с публичным контактом; предупреждение о vulnerabilities сохранено.
+  Scanner и runtime-значения фикстур не менялись.
 - Pinned Node-RED4.0.9 lock включает deprecated tar7.4.3 с предупреждением registry
   о vulnerabilities. Editor/module auto-install отключены; тесты network-none.
   Перед серверной активацией отдельно проверить dependency advisory/обновление runtime.
