@@ -1,3 +1,41 @@
+// BEGIN generated subscriptionCounterEpoch
+function createSubscriptionCounterEpoch() {
+  const id = 'subscription-sales-20260910';
+  const cutoffKey = 'subscription_counter_epoch_started_at';
+  const inventories = {
+    ra: 'ab_leto_20260910_epoch_ra',
+    friendship: 'ab_leto_20260910_epoch_friendship',
+    network_friendship: 'network_friendship_12m_20260910_epoch',
+    piter_friendship: 'piter_friendship_12m_20260910_epoch',
+  };
+  const previous = {
+    network_friendship: 'network_friendship_12m_2026_v1',
+    piter_friendship: 'piter_friendship_12m_2026_v1',
+  };
+  const iso = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  const startedAt = globalContext => {
+    const value = globalContext.get(cutoffKey);
+    return iso(value) ? value : null;
+  };
+  const isNew = (counterKey, inventoryId) => Object.hasOwn(inventories, counterKey) && inventories[counterKey] === inventoryId;
+  const activeInventory = (counterKey, fallback, globalContext) => startedAt(globalContext) && Object.hasOwn(inventories, counterKey)
+    ? inventories[counterKey] : fallback;
+  const descriptor = value => ({ id, startedAt: value, timeZone: 'Europe/Moscow', membership: 'NEW_LK_RESERVATIONS_ONLY' });
+  const validDescriptor = value => value && Object.keys(value).sort().join() === ['id','startedAt','timeZone','membership'].sort().join()
+    && value.id === id && iso(value.startedAt) && value.timeZone === 'Europe/Moscow' && value.membership === 'NEW_LK_RESERVATIONS_ONLY';
+  const admission = (ctx, globalContext, now = Date.now()) => {
+    const cutoff = startedAt(globalContext);
+    if (!cutoff) return !isNew(ctx.counterKey, ctx.inventoryId);
+    if (!Object.hasOwn(inventories, ctx.counterKey)) return true;
+    return isNew(ctx.counterKey, ctx.inventoryId) && globalContext.get('summer_subscription_sales_20260909_enabled') === true
+      && (!ctx.counterEpoch || (validDescriptor(ctx.counterEpoch) && ctx.counterEpoch.startedAt === cutoff))
+      && now >= Date.parse(cutoff);
+  };
+  return { id, cutoffKey, inventories, previous, iso, startedAt, isNew, activeInventory, descriptor, validDescriptor, admission };
+}
+const subscriptionCounterEpoch = createSubscriptionCounterEpoch();
+// END generated subscriptionCounterEpoch
 const DEFAULT_TOTAL_LIMIT = 100;
 const MAX_TOTAL_LIMIT = 1000;
 const SIRIUS_FRIENDSHIP_DEFAULT_LIMIT = 100;
@@ -18,10 +56,10 @@ const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260
 // Enabled only by the reviewed sales configuration operation, after provider price readback.
 const SALES_QUOTAS_20260909_ENABLED = global.get("summer_subscription_sales_20260909_enabled") === true;
 // Change only new HAB purchase prices; quota and admission flags remain independent.
-const HUB_PRICE_98000_ENABLED = SALES_QUOTAS_20260909_ENABLED
+const HUB_PRICE_98000_ENABLED = !!subscriptionCounterEpoch.startedAt(global) || SALES_QUOTAS_20260909_ENABLED
   || global.get("summer_subscription_network_friendship_price_98000_enabled") === true;
 const SALES_QUOTAS_20260909_START = "2026-09-09T07:00:00.000Z";
-const NETWORK_FRIENDSHIP_DAILY_LIMIT = SALES_QUOTAS_20260909_ENABLED ? 1 : 10;
+const NETWORK_FRIENDSHIP_DAILY_LIMIT = (SALES_QUOTAS_20260909_ENABLED || subscriptionCounterEpoch.startedAt(global)) ? 1 : 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
 
 const DEFAULT_VISIBLE_COUNTER_KEYS = ["friendship", "sport", "academy", "ra", "energy5"];
@@ -196,6 +234,8 @@ const isAbLeto20260903ReleaseActive = () => (
 );
 
 const readAbLetoInventoryId = (counterKey = null) => {
+  const epochId = subscriptionCounterEpoch.activeInventory(counterKey, null, global);
+  if (epochId) return epochId;
   const baseInventoryId = readGlobalFirst(["summer_subscription_inventory_id"])
     || AB_LETO_INVENTORY_ID;
   const normalizedCounterKey = String(counterKey || "").trim().toLowerCase();
@@ -219,10 +259,17 @@ const readAbLetoInventoryId = (counterKey = null) => {
 const withAbLetoStagedRelease = (counter) => {
   const counterKey = String(counter?.counterKey || "").trim().toLowerCase();
   const stagedRelease = resolveAbLetoStagedRelease();
+  if (subscriptionCounterEpoch.isNew(counterKey, counter?.inventoryId)) {
+    return Object.assign({}, counter, { stagedRelease: true,
+      forcedDailyDropStartsAt: subscriptionCounterEpoch.startedAt(global),
+      releaseStartDate: resolveMoscowDate(new Date(subscriptionCounterEpoch.startedAt(global))),
+      launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT, dailyLimit: counterKey === "ra" ? 10 : 7,
+      dailyDropDate: resolveDailyDropDate(), totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT });
+  }
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !stagedRelease) {
     return counter;
   }
-  const resumedDaily = SALES_QUOTAS_20260909_ENABLED
+  const resumedDaily = (SALES_QUOTAS_20260909_ENABLED || !!subscriptionCounterEpoch.startedAt(global))
     && stagedRelease.inventoryId === AB_LETO_STAGED_INVENTORY_ID;
   return Object.assign({}, counter, {
     stagedRelease: true,
@@ -401,11 +448,10 @@ const readRegionalFriendshipConfig = (counterKey) => {
       providerProductCostMinor,
     };
   });
-  const dailyCapEnabled = regional.dailyCapEnabled === true && isAbLeto20260903ReleaseActive();
+  const dailyCapEnabled = regional.dailyCapEnabled === true && (isAbLeto20260903ReleaseActive() || !!subscriptionCounterEpoch.startedAt(global));
   return {
     counterKey,
-    inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
-      || regional.inventoryId,
+    inventoryId: subscriptionCounterEpoch.activeInventory(counterKey, readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`]) || regional.inventoryId, global),
     saleType: "tiered_direct_product",
     planKey: null,
     campaignKey: null,

@@ -1,3 +1,41 @@
+// BEGIN generated subscriptionCounterEpoch
+function createSubscriptionCounterEpoch() {
+  const id = 'subscription-sales-20260910';
+  const cutoffKey = 'subscription_counter_epoch_started_at';
+  const inventories = {
+    ra: 'ab_leto_20260910_epoch_ra',
+    friendship: 'ab_leto_20260910_epoch_friendship',
+    network_friendship: 'network_friendship_12m_20260910_epoch',
+    piter_friendship: 'piter_friendship_12m_20260910_epoch',
+  };
+  const previous = {
+    network_friendship: 'network_friendship_12m_2026_v1',
+    piter_friendship: 'piter_friendship_12m_2026_v1',
+  };
+  const iso = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  const startedAt = globalContext => {
+    const value = globalContext.get(cutoffKey);
+    return iso(value) ? value : null;
+  };
+  const isNew = (counterKey, inventoryId) => Object.hasOwn(inventories, counterKey) && inventories[counterKey] === inventoryId;
+  const activeInventory = (counterKey, fallback, globalContext) => startedAt(globalContext) && Object.hasOwn(inventories, counterKey)
+    ? inventories[counterKey] : fallback;
+  const descriptor = value => ({ id, startedAt: value, timeZone: 'Europe/Moscow', membership: 'NEW_LK_RESERVATIONS_ONLY' });
+  const validDescriptor = value => value && Object.keys(value).sort().join() === ['id','startedAt','timeZone','membership'].sort().join()
+    && value.id === id && iso(value.startedAt) && value.timeZone === 'Europe/Moscow' && value.membership === 'NEW_LK_RESERVATIONS_ONLY';
+  const admission = (ctx, globalContext, now = Date.now()) => {
+    const cutoff = startedAt(globalContext);
+    if (!cutoff) return !isNew(ctx.counterKey, ctx.inventoryId);
+    if (!Object.hasOwn(inventories, ctx.counterKey)) return true;
+    return isNew(ctx.counterKey, ctx.inventoryId) && globalContext.get('summer_subscription_sales_20260909_enabled') === true
+      && (!ctx.counterEpoch || (validDescriptor(ctx.counterEpoch) && ctx.counterEpoch.startedAt === cutoff))
+      && now >= Date.parse(cutoff);
+  };
+  return { id, cutoffKey, inventories, previous, iso, startedAt, isNew, activeInventory, descriptor, validDescriptor, admission };
+}
+const subscriptionCounterEpoch = createSubscriptionCounterEpoch();
+// END generated subscriptionCounterEpoch
 // BEGIN generated annualSubscriptionHistory
 function parseVivaTimestamp(value, { requireZone = false } = {}) {
   if (typeof value !== "string") return null;
@@ -54,6 +92,8 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
     network_friendship: { productId: 'db7a5250-7369-4f43-8ac5-9111be24bc74', inventoryId: 'network_friendship_12m_2026_v1', totalLimit: 100 },
     piter_friendship: { productId: '8bf334ba-3050-4017-b40a-7eef2db1eb16', inventoryId: 'piter_friendship_12m_2026_v1', totalLimit: 400 },
   };
+  const epochInventories = { network_friendship: 'network_friendship_12m_20260910_epoch', piter_friendship: 'piter_friendship_12m_20260910_epoch' };
+  const isEpoch = ledger => !!epochInventories[ledger?.counterKey] && ledger.inventoryId === epochInventories[ledger.counterKey];
   const fail = message => { throw Error(`ANNUAL_HISTORY_${message}`); };
   const text = x => typeof x === 'string' && x.trim() === x && x ? x : null;
   const integer = x => Number.isSafeInteger(x) && x >= 0;
@@ -191,14 +231,21 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
     && ledger.history.entries.every(e => !e.lastAttemptAt || e.lastCheckedAt >= e.lastAttemptAt);
   function validate(ledger) {
     try {
-      const spec = products[ledger?.counterKey];
+      const epoch = isEpoch(ledger);
+      const base = products[ledger?.counterKey];
+      const spec = base && (epoch ? { ...base, inventoryId: epochInventories[ledger.counterKey] } : base);
       if (!spec || ledger._id !== `inventory:${spec.inventoryId}` || ledger.inventoryId !== spec.inventoryId
         || ledger.schemaVersion !== 3 || typeof ledger.ready !== 'boolean' || !integer(ledger.revision)
         || !/^[a-f0-9]{64}$/.test(ledger.baselineDigest || '')
         || !parseVivaTimestamp(ledger.baselineCapturedAt, { requireZone: true })
-        || ledger.history?.version !== 1 || ledger.history.accountingScope !== 'ALL_PROVIDER_PAID'
+        || ledger.history?.version !== 1 || ledger.history.accountingScope !== (epoch ? 'NEW_EPOCH_RESERVATIONS_ONLY' : 'ALL_PROVIDER_PAID')
         || !Array.isArray(ledger.history.entries) || !Array.isArray(ledger.history.settlements)
         || !Array.isArray(ledger.reservations) || !Array.isArray(ledger.legacyPaymentRefs)) return false;
+      if (epoch && (ledger.history.entries.length || ledger.history.settlements.length || ledger.legacyPaymentRefs.length
+        || ledger.history.openingPaidCount !== 0 || ledger.epoch?.id !== 'subscription-sales-20260910'
+        || ledger.epoch.timeZone !== 'Europe/Moscow' || ledger.epoch.membership !== 'NEW_LK_RESERVATIONS_ONLY'
+        || !parseVivaTimestamp(ledger.epoch.startedAt, { requireZone: true })
+        || Object.keys(ledger.epoch).sort().join() !== ['id','startedAt','timeZone','membership'].sort().join())) return false;
       const entries = ledger.history.entries, ids = new Set(), refs = new Set(), localIds = new Set();
       for (const e of entries) {
         if (!text(e.transactionId) || ids.has(e.transactionId) || !text(e.ref) || refs.has(e.ref)
@@ -242,6 +289,9 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
         if (!text(r.paymentRef) || reservationRefs.has(r.paymentRef) || refs.has(r.paymentRef)
           || r.saleRecord?.inventoryLedgerSchemaVersion !== 3
           || !['CLAIMED', 'DISPATCHING', 'PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'PAID', 'FAILED'].includes(r.state)) return false;
+        if (epoch && (r.saleRecord.inventoryId !== ledger.inventoryId || r.saleRecord.counterKey !== ledger.counterKey
+          || stable(r.saleRecord.counterEpoch) !== stable(ledger.epoch) || !parseVivaTimestamp(r.createdAt, { requireZone: true })
+          || Date.parse(r.createdAt) < Date.parse(ledger.epoch.startedAt))) return false;
         reservationRefs.add(r.paymentRef);
         if (r.transactionId) { if (!text(r.transactionId) || ids.has(r.transactionId)) return false; ids.add(r.transactionId); }
         if (active(r)) { if (!text(r.intentFingerprint) || intents.has(r.intentFingerprint)) return false; intents.add(r.intentFingerprint); }
@@ -499,6 +549,8 @@ const resolveDailyDropDate = (now = new Date(Date.now())) => {
 };
 
 const readAbLetoInventoryId = (counterKey = null) => {
+  const epochId = subscriptionCounterEpoch.activeInventory(counterKey, null, global);
+  if (epochId) return epochId;
   const baseInventoryId = readGlobalFirst(["summer_subscription_inventory_id"])
     || AB_LETO_INVENTORY_ID;
   const normalizedCounterKey = String(counterKey || "").trim().toLowerCase();
@@ -590,8 +642,7 @@ const readDirectCounterConfig = (counterKey) => {
 
 const readRegionalFriendshipConfig = (counterKey) => ({
   counterKey,
-  inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
-    || REGIONAL_FRIENDSHIP_CONFIGS[counterKey].inventoryId,
+  inventoryId: subscriptionCounterEpoch.activeInventory(counterKey, readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`]) || REGIONAL_FRIENDSHIP_CONFIGS[counterKey].inventoryId, global),
   saleType: "tiered_direct_product",
   planKey: null,
   campaignKey: null,
@@ -755,12 +806,18 @@ if (record.inventoryLedgerSchemaVersion !== undefined && record.inventoryLedgerS
   return failMsg(503, "Формат сохранённой продажи требует сверки", { code: "ANNUAL_SALE_SCHEMA_INVALID" });
 }
 ctx.inventoryLedgerSchemaVersion = record.inventoryLedgerSchemaVersion;
+ctx.counterEpoch = record.counterEpoch;
+if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId)
+  && (!subscriptionCounterEpoch.validDescriptor(ctx.counterEpoch)
+    || (["network_friendship", "piter_friendship"].includes(ctx.counterKey)
+      && (!ctx.requestFingerprint || record.inventoryLedgerSchemaVersion !== 3)))) return failMsg(503, "Сохранённый период платежа требует сверки", { code: "COUNTER_EPOCH_FROZEN_SALE_INVALID" });
 
 ctx.providerAttemptedAt = toStr(record.providerAttemptedAt);
 ctx.dispatchGeneration = Number.isInteger(record.dispatchGeneration) && record.dispatchGeneration >= 0
   ? record.dispatchGeneration
   : 0;
 ctx.saleRecord = {
+  ...(ctx.counterEpoch ? { counterEpoch: ctx.counterEpoch } : {}),
   ...(record.inventoryLedgerSchemaVersion === 3 ? { inventoryLedgerSchemaVersion: 3 } : {}),
   counterKey: ctx.counterKey,
   inventoryId: ctx.inventoryId,
@@ -847,7 +904,9 @@ ctx.httpRequestTimeoutMs = resolveHttpTimeoutMs();
 
 // Only a saved ledger watch can authorize settlement. Missing fingerprints
 // select a read-only lookup; they never authorize a count or a sale upsert.
-if (annualHistory.products[ctx.counterKey] && !ctx.requestFingerprint) {
+if (subscriptionCounterEpoch.startedAt(global) && subscriptionCounterEpoch.previous[ctx.counterKey] === ctx.inventoryId && !ctx.requestFingerprint) {
+  ctx.legacyEpochCandidate = true; ctx.legacyEpochRowId = record._id;
+} else if (annualHistory.products[ctx.counterKey] && !ctx.requestFingerprint) {
   ctx.annualHistoryCandidate = true; ctx.annualHistoryRowId = record._id;
 }
 const currentStatus = String(record.status || "").trim().toUpperCase();

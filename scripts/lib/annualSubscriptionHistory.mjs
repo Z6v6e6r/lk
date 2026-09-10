@@ -7,6 +7,8 @@ export function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesViv
     network_friendship: { productId: 'db7a5250-7369-4f43-8ac5-9111be24bc74', inventoryId: 'network_friendship_12m_2026_v1', totalLimit: 100 },
     piter_friendship: { productId: '8bf334ba-3050-4017-b40a-7eef2db1eb16', inventoryId: 'piter_friendship_12m_2026_v1', totalLimit: 400 },
   };
+  const epochInventories = { network_friendship: 'network_friendship_12m_20260910_epoch', piter_friendship: 'piter_friendship_12m_20260910_epoch' };
+  const isEpoch = ledger => !!epochInventories[ledger?.counterKey] && ledger.inventoryId === epochInventories[ledger.counterKey];
   const fail = message => { throw Error(`ANNUAL_HISTORY_${message}`); };
   const text = x => typeof x === 'string' && x.trim() === x && x ? x : null;
   const integer = x => Number.isSafeInteger(x) && x >= 0;
@@ -144,14 +146,21 @@ export function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesViv
     && ledger.history.entries.every(e => !e.lastAttemptAt || e.lastCheckedAt >= e.lastAttemptAt);
   function validate(ledger) {
     try {
-      const spec = products[ledger?.counterKey];
+      const epoch = isEpoch(ledger);
+      const base = products[ledger?.counterKey];
+      const spec = base && (epoch ? { ...base, inventoryId: epochInventories[ledger.counterKey] } : base);
       if (!spec || ledger._id !== `inventory:${spec.inventoryId}` || ledger.inventoryId !== spec.inventoryId
         || ledger.schemaVersion !== 3 || typeof ledger.ready !== 'boolean' || !integer(ledger.revision)
         || !/^[a-f0-9]{64}$/.test(ledger.baselineDigest || '')
         || !parseVivaTimestamp(ledger.baselineCapturedAt, { requireZone: true })
-        || ledger.history?.version !== 1 || ledger.history.accountingScope !== 'ALL_PROVIDER_PAID'
+        || ledger.history?.version !== 1 || ledger.history.accountingScope !== (epoch ? 'NEW_EPOCH_RESERVATIONS_ONLY' : 'ALL_PROVIDER_PAID')
         || !Array.isArray(ledger.history.entries) || !Array.isArray(ledger.history.settlements)
         || !Array.isArray(ledger.reservations) || !Array.isArray(ledger.legacyPaymentRefs)) return false;
+      if (epoch && (ledger.history.entries.length || ledger.history.settlements.length || ledger.legacyPaymentRefs.length
+        || ledger.history.openingPaidCount !== 0 || ledger.epoch?.id !== 'subscription-sales-20260910'
+        || ledger.epoch.timeZone !== 'Europe/Moscow' || ledger.epoch.membership !== 'NEW_LK_RESERVATIONS_ONLY'
+        || !parseVivaTimestamp(ledger.epoch.startedAt, { requireZone: true })
+        || Object.keys(ledger.epoch).sort().join() !== ['id','startedAt','timeZone','membership'].sort().join())) return false;
       const entries = ledger.history.entries, ids = new Set(), refs = new Set(), localIds = new Set();
       for (const e of entries) {
         if (!text(e.transactionId) || ids.has(e.transactionId) || !text(e.ref) || refs.has(e.ref)
@@ -195,6 +204,9 @@ export function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesViv
         if (!text(r.paymentRef) || reservationRefs.has(r.paymentRef) || refs.has(r.paymentRef)
           || r.saleRecord?.inventoryLedgerSchemaVersion !== 3
           || !['CLAIMED', 'DISPATCHING', 'PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'PAID', 'FAILED'].includes(r.state)) return false;
+        if (epoch && (r.saleRecord.inventoryId !== ledger.inventoryId || r.saleRecord.counterKey !== ledger.counterKey
+          || stable(r.saleRecord.counterEpoch) !== stable(ledger.epoch) || !parseVivaTimestamp(r.createdAt, { requireZone: true })
+          || Date.parse(r.createdAt) < Date.parse(ledger.epoch.startedAt))) return false;
         reservationRefs.add(r.paymentRef);
         if (r.transactionId) { if (!text(r.transactionId) || ids.has(r.transactionId)) return false; ids.add(r.transactionId); }
         if (active(r)) { if (!text(r.intentFingerprint) || intents.has(r.intentFingerprint)) return false; intents.add(r.intentFingerprint); }
