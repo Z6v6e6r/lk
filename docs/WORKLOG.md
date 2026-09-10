@@ -2496,3 +2496,18 @@ candidate remains 12ed9b7a. Independent integration review PASS. Unchanged full
 build/lint/typecheck inputs reuse green base CI 34437567179. Local merge only;
 no push, deploy, PM2 control or live business writes. See
 `SUBSCRIPTION_ANNUAL_DEPLOY_PACKAGE_20260910.md` for evidence and remaining gates.
+
+### 2026-09-10 — annual OFF runtime deployed and observed
+
+Deployed published dd2b9a4 as exact candidate 12ed9b7a on 147. Persistent PM2 OFF
+configuration and actual flags/attestation verified. First postcheck misread
+Node-RED boolean strings and triggered a successful guarded source rollback;
+operational decoder fixed, same candidate reapplied, existing OFF config reused.
+Full 15-minute soak: 20 samples PASS, stable PID 4058767 / restarts 114; final readback
+05:43:27Z PASS, no annual sentinels. Public GET statuses and booking OPTIONS 204
+passed. RA/Friendship admission unchanged; new daily limits and the approved Piter opening balance remain inactive.
+Deployment checks performed no ledger maintenance or purchase/provider operation.
+Next preparation requires permanent operator publication, its pinned MongoDB Node
+driver 7.2.0 environment, and fresh reconciliation evidence; server default 3.7.4
+lacks required BSON.EJSON. Existing branches/main preserved. Details and receipts:
+`SUBSCRIPTION_ANNUAL_DEPLOY_RESULT_20260910.md`.
