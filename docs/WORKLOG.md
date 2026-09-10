@@ -2371,3 +2371,17 @@ checkouts already inside/tmp; affected tests20PASS/3SKIP. Historical price-only 
 fixtures are explicitly skipped when superseded, never relabelled as live proof. Independent
 integration review completed. Task branch preserved; no push/deploy/live writes/activation.
 Details and evidence limits: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
+
+### 2026-09-10 — annual opening candidate rebound to current flow147
+
+Approved re-preparation in the existing task branch after main eb9a041 passed CI.
+Fresh source ee3f600… preserves parallel price/group/preview deployments. Exact candidate
+a9c1bd66… changes8 nodes/adds1expander, retains219HTTP inputs and all unrelated fields.
+Rebound one server-owned HAB receipt literal to actual preserved booking graph c1b75e9e…;
+price initializer and historical purchase receipts preserved. No runtime function edits.
+Annual27PASS; compatibility68PASS/5SKIP; lint0errors/387warnings; source modular and exact
+candidate graph checks PASS; independent release/payment reviews PASS. Previous main CI
+reused for unchanged frontend/runtime inputs. Private OFF configuration and17-file publication
+descriptor prepared, not applied. New-day stock reconciliation remains pending. No main merge,
+push, deploy, runtime control, provider/Mongo business writes or activation in this stage.
+See `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md` for exact hashes and evidence limits.

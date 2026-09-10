@@ -400,3 +400,60 @@ test('annual candidate binds every changed source and rejects a foreign flow bef
   }
   assert.throws(() => buildAnnualHistoryCandidate({ liveBytes: Buffer.from('[]'), sourceTexts: {}, binding }), /preimage drift/);
 });
+
+test('candidate startup rebinds the reviewed HAB receipt without changing price or enabling sales', async () => {
+  const { buildAnnualHistoryInitializer } = await import('../prepare_annual_subscription_history_candidate.mjs');
+  const { salesConfigurationInitializer } = await import('../lib/subscriptionSalesConfiguration.mjs');
+  const receipt = JSON.parse(fs.readFileSync(new URL('../annual_subscription_history_binding.json', import.meta.url))).hubEvidence.receipt;
+  const previous = { ...receipt, sourceDigest: 'sha256:' + 'a'.repeat(64) };
+  const prefix = 'global.set("unrelated", "preserved");\n';
+  const suffix = '\nglobal.set("subscriptions_lk1_hub_sale_runtime", hubSaleRuntimeReceipt);\n';
+  const init = prefix + `const hubSaleRuntimeReceipt = ${JSON.stringify(previous)};` + suffix;
+  const code = buildAnnualHistoryInitializer(init, receipt);
+  assert.equal(code, prefix + `const hubSaleRuntimeReceipt = ${JSON.stringify(receipt)};` + suffix + salesConfigurationInitializer());
+  const config = { kind: 'SUBSCRIPTION_SALES_CONFIGURATION_V1', revision: 1,
+    common: false, hub: false, piter: false, raClosed: false, friendshipClosed: false };
+  for (const raw of [JSON.stringify(config), undefined]) {
+    const store = new Map([['summer_subscription_network_friendship_price_98000_enabled', true]]);
+    new Function('global', 'env', code)({ get: k => store.get(k), set: (k,v) => store.set(k,v) }, { get: () => raw });
+    assert.deepEqual(store.get('subscriptions_lk1_hub_sale_runtime'), receipt);
+    assert.equal(store.get('summer_subscription_network_friendship_price_98000_enabled'), true);
+    assert.equal(store.get('summer_subscription_sales_20260909_enabled'), false);
+    assert.equal(store.get('summer_subscription_hub_lk1_sales_enabled'), false);
+    assert.equal(store.get('summer_subscription_ra_admission_closed'), raw === undefined);
+  }
+  for (const bad of ['', init + init, code, init.replace(JSON.stringify(previous), '{}')]) {
+    assert.throws(() => buildAnnualHistoryInitializer(bad, receipt));
+  }
+  assert.throws(() => buildAnnualHistoryInitializer(init, { ...receipt, sourceDigest: 'unverified' }));
+});
+
+test('private annual rebind preserves all unrelated nodes and installed price initializer', {
+  skip: !process.env.ANNUAL_HISTORY_LIVE_FIXTURE,
+}, async () => {
+  const { buildAnnualHistoryCandidate } = await import('../prepare_annual_subscription_history_candidate.mjs');
+  const binding = JSON.parse(fs.readFileSync(new URL('../annual_subscription_history_binding.json', import.meta.url)));
+  const liveBytes = fs.readFileSync(process.env.ANNUAL_HISTORY_LIVE_FIXTURE);
+  const sourceTexts = Object.fromEntries([...binding.targets, binding.expander].map(t => [t.file,
+    fs.readFileSync(new URL(`../nodered_games_nodes/${t.file}`, import.meta.url), 'utf8')]));
+  const result = buildAnnualHistoryCandidate({ liveBytes, sourceTexts, binding });
+  const before = JSON.parse(liveBytes), after = JSON.parse(result.candidateBytes);
+  const changed = new Set(result.report.changedNodeIds);
+  for (const n of before) if (!changed.has(n.id)) assert.deepEqual(after.find(a => a.id === n.id), n);
+  assert.equal(after.filter(n => n.type === 'http in').length, before.filter(n => n.type === 'http in').length);
+  const status = after.find(n => n.id === '8fdc7076a0c436a2');
+  assert.match(status.initialize, /summer_subscription_network_friendship_price_98000_enabled/);
+  const atomic = after.find(n => n.id === 'piter_atomic_router_20260903');
+  const config = JSON.stringify({ kind: 'SUBSCRIPTION_SALES_CONFIGURATION_V1', revision: 1,
+    common: false, hub: false, piter: false, raClosed: false, friendshipClosed: false });
+  for (const order of [[status, atomic], [atomic, status]]) {
+    const map = new Map(), global = { get: k => map.get(k), set: (k,v) => map.set(k,v) };
+    for (const n of order) new Function('global', 'env', n.initialize)(global, { get: () => config });
+    assert.deepEqual(map.get('subscriptions_lk1_hub_sale_runtime'), binding.hubEvidence.receipt);
+    assert.equal(map.get('summer_subscription_network_friendship_price_98000_enabled'), true);
+    assert.equal(map.get('summer_subscription_sales_20260909_enabled'), false);
+  }
+  const changedSources = { ...sourceTexts, [binding.targets[0].file]: sourceTexts[binding.targets[0].file] + '\n' };
+  assert.throws(() => buildAnnualHistoryCandidate({ liveBytes, sourceTexts: changedSources, binding }), /target drift/);
+  assert.throws(() => buildAnnualHistoryCandidate({ liveBytes, sourceTexts, binding: { ...binding, candidateSha256: '0'.repeat(64) } }), /final candidate digest drift/);
+});
