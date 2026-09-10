@@ -2,6 +2,23 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-10 — Partner: причина Nginx rejection установлена, layout choice остаётся открытым
+
+- Сохранены прежняя clean task branch/worktree на `f66ec81` и грязный основной
+  checkout. Fetched origin/main `d0e8394`; main/чужие изменения не интегрировались.
+- Добавлена закрытая диагностическая проекция inherited error через WeakMap;
+  predicates, error code, successful schema и production stop не менялись.
+- Read-only root и полный текущий 14-file snapshot локализовали root line33
+  ssl_protocols; structural default-кандидат переопределяет TLS на1.2/1.3, но
+  остаются implicit-default/header/listener ограничения. Native/runtime не доказан.
+- Целевые120/120PASS; full911/887PASS/24FAIL, exact24 совпали с baseline; rootlint
+  0errors/387warnings; build остановлен из-за17missingVITEinputs. Review source и
+  private helper завершён; исправления helper внесены до соответствующих reads.
+- Пункт1 не объявлен закрытым: пользователю предложен выбор isolated8443,
+  измененияshared443 или отдельногоIP. Deploy/reload/probes/provider/data writes0.
+- Полные результаты и пределы: [отчёт](PARTNER_GAME_MEMBERSHIP_NGINX_STEP1_20260910.md).
+  MODEL_ROUTE: parent.
+
 ## 2026-09-07 — Partner: updated-profile read завершён, inherited compatibility остаётся закрытой
 
 - Пользователь подтвердил read-only проверку `713ff72`. Вначале окно147 было WAIT

@@ -5,6 +5,12 @@ import { scanNginxInventoryStructure } from "./partner_game_membership_nginx_lex
 import { PartnerIngressEvidenceError } from "./partner_game_membership_ingress_evidence.mjs";
 
 const fail = code => { throw new PartnerIngressEvidenceError(`NGINX_SHARED_DIALECT_${code}`); };
+// Diagnostics belong only to errors raised by this checker. No caller-supplied
+// error fields, config paths, argument values or raw tokens may escape here.
+const rejectionDetails = new WeakMap();
+export function readLocalSharedNginxRejection(error) {
+  return rejectionDetails.get(error) ?? null;
+}
 const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
 const number = value => /^[1-9][0-9]{0,8}$/.test(value);
 const size = value => /^[1-9][0-9]{0,7}[km]?$/.test(value);
@@ -53,7 +59,9 @@ export function checkLocalSharedNginxDialect(files) {
   // This independently exported checker never creates a trusted preparation.
   if (!(files instanceof Map) || files.size < 1 || files.size > 64 || !files.has("/etc/nginx/nginx.conf")) fail("INPUT_INVALID");
   const records = new Map();
+  const fileIndexes = new Map();
   for (const [name, bytes] of files) {
+    fileIndexes.set(name, fileIndexes.size);
     try { records.set(name, scanNginxInventoryStructure(Buffer.from(bytes).toString("utf8"))); }
     catch { fail("LEXICAL_UNSUPPORTED"); }
   }
@@ -121,7 +129,16 @@ export function checkLocalSharedNginxDialect(files) {
           continue;
         }
         if (row.block && head === "types" && !args.length) continue;
-        if (row.block || !Object.hasOwn(inherited, head) || !inherited[head](args)) fail("INHERITED_UNSUPPORTED");
+        if (row.block || !Object.hasOwn(inherited, head) || !inherited[head](args)) {
+          const error = new PartnerIngressEvidenceError("NGINX_SHARED_DIALECT_INHERITED_UNSUPPORTED");
+          const known = Object.hasOwn(inherited, head);
+          rejectionDetails.set(error, Object.freeze({
+            code: error.code, fileIndex: fileIndexes.get(name), line: row.words[0].line,
+            context: "HTTP", directive: known ? head : "UNKNOWN",
+            reason: row.block ? "BLOCK_UNSUPPORTED" : known ? "ARGUMENTS_UNSUPPORTED" : "DIRECTIVE_UNSUPPORTED",
+          }));
+          throw error;
+        }
         if (Object.hasOwn(early, head)) assign(global, head, args);
         continue;
       }

@@ -1,5 +1,10 @@
 # Partner Nginx: bounded read-only inventory, 7 September 2026
 
+**10 September update:** [current 14-file diagnostic and remaining layout choice](PARTNER_GAME_MEMBERSHIP_NGINX_STEP1_20260910.md).
+The inherited rejection is localized to root `ssl_protocols`; structural default
+candidates override TLS to 1.2/1.3, but default/header/listener compatibility remains
+unproven. The observations below are retained as historical evidence.
+
 Latest completed host result: **READ COMPLETED / CLOSED ADAPTER PROFILE REJECTED / NOT PRODUCTION VERIFICATION**.
 All literal include targets discovered by the bounded scanner were read; this is
 not a full Nginx semantic/dependency graph or proof of applied configuration.
