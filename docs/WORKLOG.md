@@ -2521,8 +2521,8 @@ Local integration only; push, deploy and real business writes remain separate st
 
 Prepared serial periodic/manual worker, full sibling-job drain, exact manifest/Node22
 foreground launcher, private-network locked unit candidates and offline staging plan.
-DEV Node-RED4.1.15 closes prior critical findings but leaves23 audit package findings;
-server Node18 also mismatches the required runtime. Activation remains blocked, not
-waived by network isolation. Root frontend dependencies and production business logic
+DEV Node-RED4.1.15 with scoped npm11.19.1/qs6.16.0 overrides passes audit with zero
+findings. Server Node18 mismatches the required runtime; pinned Node22.23.2 Linux x64
+archive is prepared separately. No activation is implied by network isolation. Root frontend dependencies and production business logic
 unchanged. See SUBSCRIPTION_VISIT_SERVER_PREP_20260910.md. No server installation,
 start, main integration/push, or real provider/payment mutation in this stage.

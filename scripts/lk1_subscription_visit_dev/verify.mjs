@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import RED from 'node-red';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {startVisitDev} from './start.mjs';
@@ -22,6 +23,7 @@ if(!scenario){
   const group=scenario.replace('_restart','_lost').replace('mongo_after_booking','mongo');
   const config={...JSON.parse(fs.readFileSync(path.join(packet,'config.json'))),database:`lk1_subscription_dev_fixture_verify_${process.argv[3]}_${group}`};
   const app=await startVisitDev({config,flowPath:path.join(packet,'flows.json'),userDir:fs.mkdtempSync('/tmp/visit-nodered-'),workerIntervalMs:scenario==='scheduled'?1000:0});
+  assert.deepEqual(RED.settings.externalModules,{autoInstall:false,palette:{allowInstall:false,allowUpload:false},modules:{allowInstall:false}});
   const api=async(route,body,key='fixture-join-1',auth=true)=>{
     const response=await fetch(`http://127.0.0.1:${config.nodeRedPort}${route}`,{method:body===undefined?'GET':'POST',
       headers:{...(auth?{Authorization:'Bearer '+USER_TOKEN}:{}),'Content-Type':'application/json','Idempotency-Key':key},

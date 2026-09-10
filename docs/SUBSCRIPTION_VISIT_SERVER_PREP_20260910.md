@@ -42,11 +42,18 @@ inactive+disabled,1882/3038/27030 свободны, dedicated flows.json отс�
 не читались как источник бизнес-данных и не изменялись.
 
 На сервере dedicated Node **18.20.8** и Mongo **7.0.24**. Драйвер MongoDB7.2.0
-требует Node>=20.19.0; новый launcher принимает только22.x. Нужен отдельный pinned
+требует Node>=20.19.0; новый launcher принимает только22.23.2. Нужен отдельный pinned
 Node22 binary с проверенным hash, root-owned closure и Linux x64 проверкой.
-Существующий Node18 не заменяется этой задачей.
+Для подготовки выбран официальный Node **22.23.2 Linux x64**, архив
+`node-v22.23.2-linux-x64.tar.xz`, SHA256
+`d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307`.
+Источник: https://nodejs.org/dist/v22.23.2/SHASUMS256.txt. Существующий Node18
+не заменяется этой задачей; новый binary предназначен для отдельного node22 path.
 
-DEV Node-RED обновлён **4.0.9→4.1.15**, Mongo driver7.2.0 без изменения. Root package
+DEV Node-RED обновлён **4.0.9→4.1.15**, Mongo driver7.2.0 без изменения.
+Точечные overrides: npm11.19.1 и qs6.16.0. Встроенный npm относится к module installer; явные
+`palette.allowInstall/allowUpload=false`, `modules.allowInstall=false`,
+`autoInstall=false` и выключенный admin/editor сохраняют его неактивным; установка/обновление модулей в runtime не разрешена. Root package
 и зависимости frontend не менялись. [Релиз4.1.15](https://github.com/node-red/node-red/releases/tag/4.1.15)
 содержит backport исправления JSONata. Обновление проверяется локально, не установлено
 на сервер. `npm audit --package-lock-only --omit=dev --json` дал:
@@ -54,7 +61,8 @@ DEV Node-RED обновлён **4.0.9→4.1.15**, Mongo driver7.2.0 без из�
 | Lockfile | critical | high | moderate | low | Всего package findings |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | прежний4.0.9 | 4 | 9 | 4 | 2 | 19 |
-| кандидат4.1.15 | 0 | 15 | 7 | 1 | 23 |
+| промежуточный4.1.15 | 0 | 15 | 7 | 1 | 23 |
+| итоговый4.1.15 + npm11.19.1 + qs6.16.0 | 0 | 0 | 0 | 0 | 0 |
 
 Числа включают транзитивные/metavulnerability записи и не равны числу независимых
 уязвимостей. Совместимый `npm audit fix --package-lock-only --ignore-scripts` без
@@ -62,9 +70,12 @@ force не устранил остаток: Node-RED registry включает n
 express4.22.2 удерживает вложенный qs6.15.x. Force/downgrade, удаление security warnings,
 ручная правка dependency integrity и runtime установка не выполнялись.
 
-**Активация заблокирована:** пакет не объявляется безопасным только потому, что editor,
-module auto-install и внешняя сеть отключены. Нужен отдельно проверенный способ закрыть
-остаточные advisories, затем пересобрать closure под Linux x64 и повторить native tests.
+**Dependency audit итогового lockfile: PASS,0 findings.** Промежуточный npm11.17
+был проверен только вне Git и отвергнут из-за оставшихся bundled advisories.
+Закреплена npm11.19.1, включая обновлённые bundled зависимости; qs6.16.0 закрывает
+вложенные старые qs. Это override внутреннего npm major, поэтому native startup,
+JOIN/worker/return/restart проверяются повторно. Нулевой audit не доказывает отсутствие
+неизвестных уязвимостей и не заменяет Linux x64 closure/host readback.
 Оригинальный4.0.9 packet и пользовательский локальный UI5191 сохранены.
 
 ## Воспроизводимая подготовка
@@ -88,8 +99,9 @@ preimages units/drop-in/env и ABSENT visit-packet. Никогда не заме
 Для локальной репетиции: новый Mongo container `--network none`, native Node22 container
 в его network namespace, readonly packet и зависимости; host ports не публиковать.
 `verify.mjs`: native8 сценариев, включая automatic worker, unpaid cancel и lost ACK
-с перезапуском. `verify-server.mjs <packet>`: фактический serve CLI, scheduled debit/
-return, SIGTERM drain и перезапуск с той же Mongo; только свежая fixture-owned база.
+с перезапуском. Drain незавершённых jobs проверяется негативным scheduler unit-тестом.
+`verify-server.mjs <packet>`: фактический serve CLI, scheduled debit/
+return, SIGTERM clean stop и перезапуск с той же Mongo; только свежая fixture-owned база.
 
 При ошибке или расхождении остановить visit service и сохранить Mongo/журналы/пакет.
 Остановка не возвращает реальные деньги/визиты. Никогда не удалять lock и не делать

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {verifyPacket,newPrivateUserDir} from './packet.mjs';
 export function validateServicePacket(packet,expectedManifestHash,entry=fileURLToPath(import.meta.url),nodeVersion=process.versions.node) {
-  if(!/^22\./.test(nodeVersion))throw Error('DEV_SERVER_NODE22_REQUIRED');
+  if(nodeVersion!=='22.23.2')throw Error('DEV_SERVER_PINNED_NODE22_REQUIRED');
   packet=fs.realpathSync(packet);
   if(fs.realpathSync(entry)!==path.join(packet,'scripts/lk1_subscription_visit_dev/serve.mjs'))throw Error('DEV_SERVER_ENTRY_MISMATCH');
   if(!/^[a-f0-9]{64}$/.test(expectedManifestHash||'')||crypto.createHash('sha256').update(fs.readFileSync(path.join(packet,'manifest.json'))).digest('hex')!==expectedManifestHash)throw Error('DEV_SERVER_MANIFEST_MISMATCH');

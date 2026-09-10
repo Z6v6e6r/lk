@@ -15,16 +15,16 @@ const updateManifest=(copy,fn)=>{const p=path.join(copy,'manifest.json'),m=JSON.
 test('service requires exact immutable entry, clean source, manifest hash, Node22 and dedicated target',{skip:!packet},()=>withPacket(copy=>{
   const entry=path.join(copy,'scripts/lk1_subscription_visit_dev/serve.mjs');
   let hash=updateManifest(copy,m=>{m.sourceDirty=false;});
-  assert.equal(validateServicePacket(copy,hash,entry,'22.22.0').nodeRedPort,1882);
-  assert.throws(()=>validateServicePacket(copy,'0'.repeat(64),entry,'22.22.0'),/MANIFEST_MISMATCH/);
-  assert.throws(()=>validateServicePacket(copy,hash,entry,'18.20.8'),/NODE22_REQUIRED/);
-  assert.throws(()=>validateServicePacket(copy,hash,import.meta.filename,'22.22.0'),/ENTRY_MISMATCH/);
+  assert.equal(validateServicePacket(copy,hash,entry,'22.23.2').nodeRedPort,1882);
+  assert.throws(()=>validateServicePacket(copy,'0'.repeat(64),entry,'22.23.2'),/MANIFEST_MISMATCH/);
+  for(const version of ['18.20.8','22.0.0','22.23.1'])assert.throws(()=>validateServicePacket(copy,hash,entry,version),/NODE22_REQUIRED/);
+  assert.throws(()=>validateServicePacket(copy,hash,import.meta.filename,'22.23.2'),/ENTRY_MISMATCH/);
   hash=updateManifest(copy,m=>{m.sourceDirty=true;});
-  assert.throws(()=>validateServicePacket(copy,hash,entry,'22.22.0'),/CLEAN_SOURCE_REQUIRED/);
+  assert.throws(()=>validateServicePacket(copy,hash,entry,'22.23.2'),/CLEAN_SOURCE_REQUIRED/);
   const configFile=path.join(copy,'config.json'),config=JSON.parse(fs.readFileSync(configFile));config.nodeRedPort=1880;
   fs.writeFileSync(configFile,JSON.stringify(config));
   hash=updateManifest(copy,m=>{m.sourceDirty=false;m.files.find(r=>r.path==='config.json').sha256=sha(fs.readFileSync(configFile));});
-  assert.throws(()=>validateServicePacket(copy,hash,entry,'22.22.0'),/TARGET_MISMATCH/);
+  assert.throws(()=>validateServicePacket(copy,hash,entry,'22.23.2'),/TARGET_MISMATCH/);
 }));
 test('offline staging preserves stopped gates, rejects reused output and does not bundle private files',{skip:!packet},()=>withPacket((copy,tmp)=>{
   updateManifest(copy,m=>{m.sourceDirty=false;});

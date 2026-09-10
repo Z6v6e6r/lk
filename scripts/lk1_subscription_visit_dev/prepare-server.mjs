@@ -28,6 +28,8 @@ export function prepareServer({packet,output,auditFile}) {
   const plan={formatVersion:1,environment:'DEV',state:'PREPARED_NOT_INSTALLABLE',sourceCommit:manifest.sourceCommit,
     targetHost:'lk-reserve-89',targetRoot:'/srv/lk1-subscription-dev',manifestSha256:manifestHash,
     installAuthorized:false,startAuthorized:false,productionCompatible:false,
+    node22:{version:'22.23.2',platform:'linux-x64',url:'https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz',
+      archiveSha256:'d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307',installed:false},
     blockers:['NODE22_BINARY_AND_HASH_REQUIRED','DEPENDENCY_CLOSURE_AND_AUDIT_BINDING_REQUIRED','FRESH_HOST_PREIMAGE_REQUIRED',
       ...(audit.metadata.vulnerabilities.total?['DEPENDENCY_ADVISORIES_UNRESOLVED']:[])],
     audit:{sha256:digest(auditBytes),vulnerabilities:audit.metadata.vulnerabilities,evidenceOnly:true},

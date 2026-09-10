@@ -1,5 +1,5 @@
 // Run inside fixture-owned network-none Node22 + Mongo container namespace only.
-// This exercises the actual foreground server CLI, SIGTERM drain and restart.
+// This exercises the actual foreground server CLI, SIGTERM clean stop and restart.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -39,5 +39,5 @@ try{
   assert.deepEqual(released.provider.deltas.map(d=>d.value),[-1,1]);assert.equal(released.provider.refunds.length,1);assert.equal(released.game.participants.length,0);
   await stop();await start();const restarted=await waitFor(s=>s.worker.cycles>=2);
   assert.deepEqual(restarted.provider,released.provider);assert.equal(restarted.locks,0);assert.equal(restarted.operations[0].state,'RELEASED');
-  await stop();console.log(JSON.stringify({result:'PASS',mode:'serve CLI',checks:['scheduled debit','scheduled return','SIGTERM drain','same-Mongo restart'],externalNetwork:false}));
+  await stop();console.log(JSON.stringify({result:'PASS',mode:'serve CLI',checks:['scheduled debit','scheduled return','SIGTERM clean stop','same-Mongo restart'],externalNetwork:false}));
 }finally{if(child){child.kill('SIGTERM');await exit;}}

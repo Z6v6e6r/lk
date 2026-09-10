@@ -34,7 +34,7 @@ export async function startVisitDev({config,flowPath,userDir,workerIntervalMs=0}
   RED.init(server,{userDir,flowFile:path.resolve(flowPath),uiHost:'127.0.0.1',uiPort:config.nodeRedPort,
     httpAdminRoot:false,disableEditor:true,httpNodeRoot:'/',credentialSecret:false,
     contextStorage:{default:{module:'memory'}},functionGlobalContext:{visitDevIO:runtime.io,vivacrm_access_token:TOKEN,vivacrm_token_expires_at:Date.now()+86400000,
-      subscriptions_lk1_product_policy:RULE},externalModules:{autoInstall:false},
+      subscriptions_lk1_product_policy:RULE},externalModules:{autoInstall:false,palette:{allowInstall:false,allowUpload:false},modules:{allowInstall:false}},
     logging:{console:{level:'warn',metrics:false,audit:false}}});
   let startTimer,onStarted;
   const started=new Promise((resolve,reject)=>{
