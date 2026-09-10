@@ -13,15 +13,15 @@ verifyPacket(packet);
 const scenario=process.argv[2];
 if(!scenario){
   const suffix=Date.now().toString(36);
-  for(const name of ['mongo_after_booking','happy','unpaid','debit_lost','debit_restart','return_lost','return_restart']){
+  for(const name of ['mongo_after_booking','happy','scheduled','unpaid','debit_lost','debit_restart','return_lost','return_restart']){
     const run=spawnSync(process.execPath,[file,name,suffix],{stdio:'inherit'});
     assert.equal(run.status,0,name);
   }
-  console.log(JSON.stringify({result:'PASS',runtime:'native Node-RED 4.0.9 + MongoDB 7',externalNetwork:false,scenarios:7}));
+  console.log(JSON.stringify({result:'PASS',runtime:'native Node-RED '+JSON.parse(fs.readFileSync(new URL('./package.json',import.meta.url))).dependencies['node-red']+' + MongoDB 7',externalNetwork:false,scenarios:8}));
 }else{
   const group=scenario.replace('_restart','_lost').replace('mongo_after_booking','mongo');
   const config={...JSON.parse(fs.readFileSync(path.join(packet,'config.json'))),database:`lk1_subscription_dev_fixture_verify_${process.argv[3]}_${group}`};
-  const app=await startVisitDev({config,flowPath:path.join(packet,'flows.json'),userDir:fs.mkdtempSync('/tmp/visit-nodered-')});
+  const app=await startVisitDev({config,flowPath:path.join(packet,'flows.json'),userDir:fs.mkdtempSync('/tmp/visit-nodered-'),workerIntervalMs:scenario==='scheduled'?1000:0});
   const api=async(route,body,key='fixture-join-1',auth=true)=>{
     const response=await fetch(`http://127.0.0.1:${config.nodeRedPort}${route}`,{method:body===undefined?'GET':'POST',
       headers:{...(auth?{Authorization:'Bearer '+USER_TOKEN}:{}),'Content-Type':'application/json','Idempotency-Key':key},
@@ -32,7 +32,14 @@ if(!scenario){
     paymentMode:'subscription',clientSubscriptionId:SUBSCRIPTIONS[0],clientId:ACTOR,clientPhone:'70000000001',paymentRef:key},key);
     assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.body.toPayMinor,26250);assert.equal(r.body.gameMinutes.freeMinutes,60);return r.body;};
   const state=()=>app.runtime.state();
-  const worker=()=>app.runtime.worker();
+  const worker=async()=>{
+    if(scenario!=='scheduled')return app.runtime.worker();
+    const cycle=app.scheduler.status().cycles,deadline=Date.now()+12000;
+    while(app.scheduler.status().cycles===cycle){
+      if(Date.now()>deadline)throw Error('SCHEDULED_WORKER_TIMEOUT');
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+  };
   const leave=async()=>{const r=await api('/lk/games/fixture-game/split/leave',{});assert.equal(r.status,200,JSON.stringify(r));return r;};
   try{
     if(scenario==='mongo_after_booking'){

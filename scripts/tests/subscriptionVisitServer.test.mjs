@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {validateServicePacket} from '../lk1_subscription_visit_dev/serve.mjs';
+import {prepareServer} from '../lk1_subscription_visit_dev/prepare-server.mjs';
+const packet=process.env.LK1_VISIT_DEV_PACKET;
+const sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
+const withPacket=fn=>{const tmp=fs.mkdtempSync('/tmp/visit-server-unit-');try{
+  const copy=path.join(tmp,'packet');fs.cpSync(packet,copy,{recursive:true,filter:src=>!src.includes('node_modules')});
+  return fn(copy,tmp);
+}finally{fs.rmSync(tmp,{recursive:true});}};
+const updateManifest=(copy,fn)=>{const p=path.join(copy,'manifest.json'),m=JSON.parse(fs.readFileSync(p));fn(m);fs.writeFileSync(p,JSON.stringify(m));return sha(fs.readFileSync(p));};
+test('service requires exact immutable entry, clean source, manifest hash, Node22 and dedicated target',{skip:!packet},()=>withPacket(copy=>{
+  const entry=path.join(copy,'scripts/lk1_subscription_visit_dev/serve.mjs');
+  let hash=updateManifest(copy,m=>{m.sourceDirty=false;});
+  assert.equal(validateServicePacket(copy,hash,entry,'22.22.0').nodeRedPort,1882);
+  assert.throws(()=>validateServicePacket(copy,'0'.repeat(64),entry,'22.22.0'),/MANIFEST_MISMATCH/);
+  assert.throws(()=>validateServicePacket(copy,hash,entry,'18.20.8'),/NODE22_REQUIRED/);
+  assert.throws(()=>validateServicePacket(copy,hash,import.meta.filename,'22.22.0'),/ENTRY_MISMATCH/);
+  hash=updateManifest(copy,m=>{m.sourceDirty=true;});
+  assert.throws(()=>validateServicePacket(copy,hash,entry,'22.22.0'),/CLEAN_SOURCE_REQUIRED/);
+  const configFile=path.join(copy,'config.json'),config=JSON.parse(fs.readFileSync(configFile));config.nodeRedPort=1880;
+  fs.writeFileSync(configFile,JSON.stringify(config));
+  hash=updateManifest(copy,m=>{m.sourceDirty=false;m.files.find(r=>r.path==='config.json').sha256=sha(fs.readFileSync(configFile));});
+  assert.throws(()=>validateServicePacket(copy,hash,entry,'22.22.0'),/TARGET_MISMATCH/);
+}));
+test('offline staging preserves stopped gates, rejects reused output and does not bundle private files',{skip:!packet},()=>withPacket((copy,tmp)=>{
+  updateManifest(copy,m=>{m.sourceDirty=false;});
+  fs.writeFileSync(path.join(copy,'.env'),'PRIVATE_NOT_FOR_PACKAGE');
+  const auditFile=path.join(tmp,'audit.json');fs.writeFileSync(auditFile,JSON.stringify({metadata:{vulnerabilities:{total:1,high:1}}}));
+  const output=path.join(tmp,'staged'),plan=prepareServer({packet:copy,output,auditFile});
+  assert.equal(plan.installAuthorized,false);assert.equal(plan.startAuthorized,false);
+  assert.ok(plan.blockers.includes('DEPENDENCY_ADVISORIES_UNRESOLVED'));
+  assert.ok(plan.blockers.includes('DEPENDENCY_CLOSURE_AND_AUDIT_BINDING_REQUIRED'));
+  assert.equal(fs.existsSync(path.join(output,'visit-packet/.env')),false);
+  assert.equal(fs.existsSync(path.join(output,'visit-packet/scripts/lk1_subscription_visit_dev/node_modules')),false);
+  assert.throws(()=>prepareServer({packet:copy,output,auditFile}),/NEW_EXTERNAL_OUTPUT/);
+  const unit=fs.readFileSync(path.join(output,'lk1-subscription-visit-dev.service'),'utf8');
+  for(const value of ['RefuseManualStart=yes','PrivateNetwork=yes','Restart=no','/usr/bin/flock --nonblock','JoinsNamespaceOf=lk1-subscription-dev-mongo.service'])assert.ok(unit.includes(value));
+  assert.ok(!unit.includes('WantedBy='));assert.ok(!unit.includes('Conflicts='));
+}));

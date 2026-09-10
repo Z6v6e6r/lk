@@ -30,7 +30,7 @@ test('provider rejects foreign identities and malformed paid checkout DTOs',()=>
   assert.equal(state.transactions[0].toPayMinor,26250);
 });
 test('runtime user directory must be new and private',()=>{
-  const parent=fs.mkdtempSync('/private/tmp/visit-unit-');
+  const parent=fs.mkdtempSync('/tmp/visit-unit-');
   try{assert.throws(()=>newPrivateUserDir(parent));const child=newPrivateUserDir(path.join(parent,'new'));assert.equal(fs.statSync(child).mode&0o777,0o700);}
   finally{fs.rmSync(parent,{recursive:true});}
 });
@@ -53,7 +53,7 @@ const packet=process.env.LK1_VISIT_DEV_PACKET;
 test('packet requires exact inventory, entry binding and content integrity',{skip:!packet},()=>{
   verifyPacket(packet);
   assert.throws(()=>verifyPacket(packet,import.meta.filename),/ENTRY_MISMATCH/);
-  const copy=fs.mkdtempSync('/private/tmp/visit-packet-unit-');
+  const copy=fs.mkdtempSync('/tmp/visit-packet-unit-');
   try{
     fs.cpSync(packet,copy,{recursive:true,filter:src=>!src.includes('node_modules')});
     const manifest=JSON.parse(fs.readFileSync(path.join(copy,'manifest.json')));

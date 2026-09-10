@@ -1,6 +1,7 @@
 # Изолированная проверка JOIN по абонементу
 
-Состояние: компоненты подготовлены для локальной репетиции. Установка, запуск на
+Состояние: компоненты подготовлены для локальной репетиции.
+Серверная подготовка и её dependency blockers: [SERVER_PREP](SUBSCRIPTION_VISIT_SERVER_PREP_20260910.md). Установка, запуск на
 `lk-reserve-89`, merge, push и любые реальные платежи этой задачей не выполняются.
 Основа: `a7be8cdc31f8511ad8c34e41f390bec2fc96222a`; прежние task/worktree сохранены.
 
@@ -28,7 +29,7 @@ backslash, control bytes и escapes в authority. IPv6 и нестандартн
 
 ## Фикстуры и изоляция
 
-- Standalone зависимости: Node-RED **4.0.9**, MongoDB driver **7.2.0**, отдельный lockfile.
+- Standalone зависимости: Node-RED **4.1.15** (историческая репетиция —4.0.9), MongoDB driver **7.2.0**, отдельный lockfile.
   Это runtime существующего DEV-контура, root dependencies не меняются.
 - Node-RED `127.0.0.1:1882`, synthetic provider `127.0.0.1:3038`.
 - Mongo только `127.0.0.1:27030`, база `lk1_subscription_dev_fixture` либо
@@ -41,7 +42,8 @@ backslash, control bytes и escapes в authority. IPv6 и нестандартн
 - CLI по умолчанию disabled. Явный `--run` проверяет полный SHA256 inventory,
   привязку entry к пакету и новый приватный userDir в `/tmp`. Editor/admin выключены.
   Hash inventory — контроль изменения одобренного пакета, не цифровая подпись.
-- Worker вызывается явно `/dev/control/worker`; планировщик на сервере не установлен.
+- В локальном режиме worker вызывается явно `/dev/control/worker`. Новый `serve.mjs`
+  планирует scan каждые5с; планировщик на сервере не установлен.
   Fault injection доступен из test runtime API, не опубликован отдельным HTTP route.
 
 ## Репетиция
@@ -106,7 +108,7 @@ SHA и dependency inventory. Пакет сейчас запускает native N
 текущий CLI намеренно допускает только новый временный userDir. Исполняемого server
 installer/enable/start в пакете нет. Shared flow и main branch не менять.
 
-## Зафиксированные результаты локальной проверки
+## Исторические результаты локальной проверки4.0.9
 
 - Native suite: **7 PASS**, включая production scoped recovery202 после отказа Mongo
   между созданием Viva booking и подтверждением журнала.

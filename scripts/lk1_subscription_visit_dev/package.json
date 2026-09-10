@@ -3,5 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "dependencies": { "node-red": "4.0.9", "mongodb": "7.2.0" }
+  "dependencies": {
+    "mongodb": "7.2.0",
+    "node-red": "4.1.15"
+  }
 }
