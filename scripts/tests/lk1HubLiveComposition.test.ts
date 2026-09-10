@@ -8,14 +8,26 @@ import { execFileSync } from "node:child_process";
 import { composeHubFlow, composeHubReleaseArtifacts, HUB_IDS, assertHubOutputPath } from "../patch_live_lk1_hub.mjs";
 import { hasDeterministicSubscriptionDecision } from "../../src/utils/subscriptionDecisionContract.ts";
 import { validateReviewedFlowContract } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
-const fixturePath = process.env.LK1_HUB_LIVE_FIXTURE;
+import { composeSubscriptionPaidJoinArtifacts } from "../patch_nodered_subscription_paid_join.mjs";
+const paidFixture = process.env.LK1_PAID_JOIN_LIVE_FIXTURE;
+const fixturePath = paidFixture || process.env.LK1_HUB_LIVE_FIXTURE;
 const original = fixturePath ? JSON.parse(fs.readFileSync(fixturePath, "utf8")) : null;
 const fixtureRule = { productId: "db7a5250-7369-4f43-8ac5-9111be24bc74", maxActiveBookings: 4,
   freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
   groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 };
 const fixturePolicy = { expectedPrior: null, desired: fixtureRule };
-const composed = original ? composeHubFlow(original, fixturePolicy) : null;
-const test = (name: string, fn: () => void) => nodeTest(name, { skip: !composed }, fn);
+const composed = original ? (paidFixture
+  ? composeSubscriptionPaidJoinArtifacts(fs.readFileSync(paidFixture), "fixture-paid-join").candidate
+  : composeHubFlow(original, fixturePolicy)) : null;
+const compositionTest = (name: string, fn: () => void) => nodeTest(name, { skip: !original || Boolean(paidFixture) }, fn);
+// The installed identity gateway has a newer ingress contract than the original
+// HUB installation fixture. This opt-in exercises only the changed JOIN chain;
+// original CREATE/identity installation scenarios keep their original fixture.
+const paidJoinCase = /LK1 (product flow|paid |replay never|write permission|.*carrier|.*checkout)|HUB money carrier/;
+const test = (name: string, fn: () => void) => nodeTest(name, {
+  skip: !composed || (Boolean(paidFixture) && !paidJoinCase.test(name)
+    && "Requires original HUB ingress fixture; outside paid JOIN delta"),
+}, fn);
 nodeTest("HUB artifact output rejects current and primary worktrees before creating files", () => {
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const common = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: repo, encoding: "utf8" }).trim();
@@ -27,7 +39,7 @@ nodeTest("HUB artifact output rejects current and primary worktrees before creat
     assert.equal(fs.existsSync(target), false);
   }
 });
-test("HUB graph composition is reproducible and rejects body dependency or route drift", () => {
+compositionTest("HUB graph composition is reproducible and rejects body dependency or route drift", () => {
   assert.equal(JSON.stringify(composeHubFlow(original, fixturePolicy)), JSON.stringify(composed));
   const changed = composed.filter((node: any, index: number) =>
     JSON.stringify(node) !== JSON.stringify(original[index]));
@@ -51,7 +63,7 @@ test("HUB graph composition is reproducible and rejects body dependency or route
   foreign.push({ id: "fixture-independent-node", type: "comment", name: "preserve" });
   assert.deepEqual(composeHubFlow(foreign).at(-1), foreign.at(-1));
 });
-test("HUB exact graph packet includes a source-bound safe OFF that retains pure replay", () => {
+compositionTest("HUB exact graph packet includes a source-bound safe OFF that retains pure replay", () => {
   const packet = composeHubReleaseArtifacts(Buffer.from(JSON.stringify(original)), fixturePolicy, "fixture-hub-policy");
   assert.equal(packet.contract.contractKind, "exact-graph");
   assert.equal(packet.installOffContract.allowedChanges.length, 4);
@@ -171,6 +183,14 @@ function baseContext(step: string, overrides: Record<string, unknown> = {}) {
     context.managedEnforcement = context.planKey === "piter_friendship"
       ? managedEnforcement(true)
       : managedEnforcement(false, "82caad6f-4d19-4d01-852b-932bdbb0f405");
+  }
+  if (paidFixture) {
+    context.lk1ProductIdentity = { actorClientId: context.actorClientId,
+      subscriptionId: context.clientSubscriptionId, tenantKey: context.tenantKey,
+      productId: HUB_PRODUCT_ID, name: "Падел.Дружба.ХАБ", purchaseDate: MANAGED_PURCHASE_DATE,
+      subscription: { subscriptionId: context.clientSubscriptionId, clientId: context.actorClientId,
+        status: "ACTIVE", activationDate: "2026-09-01", expirationDate: "2027-09-01",
+        visitsLeft: 365, variant: "BY_VISITS", purchaseDate: MANAGED_PURCHASE_DATE } };
   }
   return context;
 }
@@ -557,13 +577,13 @@ test("HUB CREATE forged incomplete or mismatched continuation cannot dispatch", 
   }
 });
 
-function lk1DirectFixture(duration = 90) {
+function lk1DirectFixture(duration = 90, basePriceMinor = 100_000 * duration / 60) {
   const { startsAt } = futureManagedTarget();
   const exercise = { ...managedExercise(HUB_PRODUCT_ID, "Падел.Дружба.ХАБ — годовая"),
     roomId: "fixture-room", timeFrom: startsAt,
     timeTo: new Date(Date.parse(startsAt) + duration * 60_000).toISOString() };
   const context = baseContext("exercise", { caller: "split", managedAction: "JOIN_GAME",
-    lk1TariffProof: { source: "VIVA_EXISTING_TARIFF", amountMinor: 100_000 * duration / 60,
+    lk1TariffProof: { source: "VIVA_EXISTING_TARIFF", amountMinor: basePriceMinor,
       stationId: PITER_STATION_ID, roomId: "fixture-room", durationMinutes: duration,
       startsAt, observedAt: Date.now() } });
   return { exercise, start: () => runFunction(ROUTER_FILE, { statusCode: 200,
@@ -573,8 +593,15 @@ function lk1DirectFixture(duration = 90) {
   }, LK1_DIRECT_GLOBALS) };
 }
 
-const lk1Reply = (request: any, payload: any, statusCode = 200) => runFunction(ROUTER_FILE,
-  { ...request, payload, statusCode }, LK1_DIRECT_GLOBALS);
+const lk1Reply = (request: any, payload: any, statusCode = 200) => {
+  let output = runFunction(ROUTER_FILE, { ...request, payload, statusCode }, LK1_DIRECT_GLOBALS);
+  if (paidFixture && output[0]?._subscriptionBooking.step === "product_owned_recheck") {
+    const row = output[0]._subscriptionBooking.lk1ProductIdentity.subscription;
+    output = runFunction(ROUTER_FILE, { ...output[0], statusCode: 200,
+      payload: { content: [structuredClone(row)], totalElements: 1 } }, LK1_DIRECT_GLOBALS);
+  }
+  return output;
+};
 
 function lk1Apply(record: any, request: any) {
   const [query, update, options] = request.payload;
@@ -599,8 +626,8 @@ function lk1Apply(record: any, request: any) {
   return mongoUpdateResult();
 }
 
-function lk1ThroughBooking(duration = 90, used = 0) {
-  const fixture = lk1DirectFixture(duration);
+function lk1ThroughBooking(duration = 90, used = 0, basePriceMinor = 100_000 * duration / 60) {
+  const fixture = lk1DirectFixture(duration, basePriceMinor);
   let output = fixture.start();
   assert.ok(output[1], JSON.stringify(output));
   output = lk1Reply(output[1], []); // request record absent
@@ -608,7 +635,7 @@ function lk1ThroughBooking(duration = 90, used = 0) {
   output = lk1Reply(output[0], []); // complete history
   const context = output[1]._subscriptionBooking;
   const prior = used ? [{ tenantKey: context.tenantKey, actorClientId: context.actorClientId,
-    serviceDate: context.serviceDate, state: "CONFIRMED", bookingId: "fixture:prior-booking",
+    clientSubscriptionId: context.clientSubscriptionId, serviceDate: context.serviceDate, state: "CONFIRMED", bookingId: "fixture:prior-booking",
     lk1: { decision: { gameMinutes: { localDate: context.serviceDate, freeMinutes: used } } } }] : [];
   output = lk1Reply(output[1], prior);
   const evaluated = runFunction("scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js", output[6]);
@@ -622,9 +649,9 @@ function lk1ThroughBooking(duration = 90, used = 0) {
   assert.equal(bookingPost.method, "POST");
   assert.match(bookingPost.url, /\/exercises\/exercise-target\/bookings$/);
   const booking = flatBooking({ id: "fixture:confirmed-booking", exerciseId: "exercise-target",
-    exerciseDate: record.serviceDate, clientId: "client-1", count: record.lk1.decision.subscriptionVisitCount,
-    paymentType: record.lk1.decision.subscriptionVisitCount ? "SUBSCRIPTION" : "ON_PLACE",
-    clientSubscriptionId: record.lk1.decision.subscriptionVisitCount ? "client-subscription-1" : undefined });
+    exerciseDate: record.serviceDate, clientId: "client-1", count: bookingPost.payload.count,
+    paymentType: bookingPost.payload.paymentType,
+    clientSubscriptionId: bookingPost.payload.clientSubscriptionId });
   output = lk1Reply(output[0], booking, 201);
   output = lk1Reply(output[3], lk1Apply(record, output[3]));
   output = lk1Reply(output[0], [booking]);
@@ -646,11 +673,21 @@ test("LK1 product flow confirms one visit for free hour without a CUP call or mo
   assert.equal(replay[4].payload.bookingId, "fixture:confirmed-booking");
 });
 
-test("LK1 mixed actual function chain consumes one visit then creates one SERVICE checkout for paid minutes", () => {
-  for (const [used, duration, charge, visits] of [[0, 90, 35_000, 1], [30, 90, 70_000, 1], [60, 60, 70_000, 0]]) {
-    const { fixture, record, output: afterBooking, bookingPost } = lk1ThroughBooking(duration, used);
-    assert.equal(bookingPost.payload.paymentType, visits ? "SUBSCRIPTION" : "ON_PLACE");
-    assert.equal(bookingPost.payload.count, visits ? 1 : undefined);
+test("LK1 paid benefit reserves minutes and creates one ON_PLACE booking plus one discounted SERVICE checkout", () => {
+  for (const [used, duration, charge, visits, base] of [[0, 90, 26_250, 1, 112_500], [0, 90, 35_000, 1, 150_000], [30, 90, 70_000, 1, 150_000], [60, 60, 70_000, 0, 100_000]]) {
+    const { fixture, record, output: afterBooking, bookingPost } = lk1ThroughBooking(duration, used, base);
+    assert.equal(bookingPost.payload.paymentType, "ON_PLACE");
+    assert.equal(bookingPost.payload.count, undefined);
+    assert.equal(bookingPost.payload.clientSubscriptionId, undefined);
+    assert.equal(record.lk1.decision.subscriptionVisitCount, visits);
+    if (visits === 1) {
+      assert.equal(record.action, "JOIN_GAME");
+      assert.equal(record.bookingPaymentType, "ON_PLACE");
+      assert.equal(record.lk1.visitJob.phase, "DEBIT_PENDING");
+      assert.equal(record.lk1.visitJob.bookingId, record.bookingId);
+      assert.equal(record.lk1.visitJob.clientSubscriptionId, record.clientSubscriptionId);
+    } else assert.equal(record.lk1.visitJob, undefined);
+    assert.equal(record.lk1.decision.gameMinutes.freeMinutes, Math.min(duration, Math.max(0, 60 - used)));
     assert.equal(record.lk1.decision.benefit.finalPriceMinor, charge);
     let output = lk1Reply(afterBooking[0], [{ id: "fixture:service", name: "Услуга 10000",
       productType: "SERVICE", type: "SERVICE", cost: 1_000_000 }]);
@@ -973,4 +1010,45 @@ test("LK1 GT/T missing conflicting expired frozen or unknown ownership and tarif
     assert.equal(rejected[2], null);
     assert.equal(rejected[3], null);
   }
+});
+
+test("LK1 paid join exact readback rejects wrong identity and payment mode before checkout", () => {
+  const { bookingPost } = lk1ThroughBooking(90, 0, 112_500);
+  const request = { ...bookingPost, _subscriptionBooking: { ...bookingPost._subscriptionBooking,
+    step: "confirmation_bookings", immediateBookingId: "fixture:confirmed-booking" } };
+  const valid = flatBooking({ id: "fixture:confirmed-booking", exerciseId: "exercise-target",
+    clientId: "client-1", paymentType: "ON_PLACE", clientSubscriptionId: undefined });
+  for (const rows of [[], [valid, valid], [{ ...valid, id: "fixture:other" }],
+    [{ ...valid, exerciseId: "fixture:other" }], [{ ...valid, clientId: "fixture:other" }],
+    [{ ...valid, isCancelled: true }], [{ ...valid, paymentType: "SUBSCRIPTION", clientSubscriptionId: "client-subscription-1" }],
+    [{ ...valid, paymentType: undefined }], [{ ...valid, paymentType: "FREE" }]]) {
+    const output = lk1Reply(structuredClone(request), rows);
+    assert.equal(output[4]?.payload.state, "PENDING_CONFIRMATION");
+    assert.equal(output[0], null, "invalid readback cannot start checkout");
+    assert.equal(output[3], null, "invalid readback cannot confirm operation");
+  }
+  assert.ok(lk1Reply(structuredClone(request), [valid])[3]);
+});
+
+test("LK1 paid benefit counts active bookings across dates without spending today's minutes twice", () => {
+  const fixture = lk1DirectFixture(90, 112_500);
+  let output = lk1Reply(fixture.start()[1], []);
+  const active = ["a", "b", "c", "d"].map(id => flatBooking({ id: `fixture:${id}`, clientId: "client-1",
+    paymentType: "ON_PLACE", clientSubscriptionId: undefined, exerciseDate: "2026-10-01" }));
+  output = lk1Reply(output[0], active);
+  output = lk1Reply(output[0], []);
+  assert.equal(output[1].payload.serviceDate, undefined, "operation query includes other dates");
+  const ctx = output[1]._subscriptionBooking;
+  const prior = active.map(booking => ({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
+    clientSubscriptionId: ctx.clientSubscriptionId, serviceDate: "2026-10-01", state: "CONFIRMED", bookingId: booking.id,
+    lk1: { decision: { gameMinutes: { localDate: "2026-10-01", freeMinutes: 60 } } } }));
+  const evaluate = (operations: any[]) => lk1Reply(structuredClone(output[1]), operations)[6]._managedSubscriptionPolicyInput;
+  assert.equal(evaluate(prior).usage.activeServices, 4);
+  assert.equal(evaluate(prior).usage.usedOrReservedFreeMinutesToday, 0);
+  assert.equal(evaluate([...prior, prior[0]]).usage.activeServices, 4, "same booking is counted once");
+  assert.equal(evaluate([{ ...prior[0], clientSubscriptionId: "fixture:other-subscription" }]).usage.activeServices, 0);
+  assert.equal(evaluate([{ ...prior[0], state: "RELEASED" }]).usage.activeServices, 0);
+  const decision = runFunction("fn_managed_subscription_policy_evaluate.js", { _managedSubscriptionPolicyInput: evaluate(prior) });
+  assert.equal(decision[0], null, "four active paid benefits block another booking");
+  assert.ok(decision[1]);
 });

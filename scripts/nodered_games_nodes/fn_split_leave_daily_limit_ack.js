@@ -1,7 +1,9 @@
 const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object" ? msg._splitLeaveCtx : null;
 const matched = Number(msg.payload?.matchedCount ?? msg.payload?.modifiedCount ?? 0);
 
-if (!ctx || msg.error || matched < 1) {
+if (!ctx || msg.error || matched < 1
+  || (ctx.dailyLimitVisitJobWrite === true && (msg.payload?.acknowledged !== true
+    || msg.payload?.matchedCount !== 1 || msg.payload?.modifiedCount !== 1))) {
   msg.statusCode = 202;
   msg.payload = {
     ok: true,
@@ -13,8 +15,13 @@ if (!ctx || msg.error || matched < 1) {
   return [null, null, msg];
 }
 
-ctx.dailyLimitReleaseOutcome = "RELEASED";
-ctx.dailyLimitReleasedAt = new Date().toISOString();
+if (ctx.dailyLimitVisitJobWrite === true) {
+  if (ctx.dailyLimitReleaseOutcome !== "VISIT_RETAINED_BY_STAFF") ctx.dailyLimitReleaseOutcome = "VISIT_RETURN_PENDING";
+  delete ctx.dailyLimitVisitJobWrite;
+} else {
+  ctx.dailyLimitReleaseOutcome = "RELEASED";
+  ctx.dailyLimitReleasedAt = new Date().toISOString();
+}
 msg._splitLeaveCtx = ctx;
 msg.payload = undefined;
 delete msg.statusCode;

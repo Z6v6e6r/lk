@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { patchPaidBenefitUsage } from './patch_nodered_subscription_paid_join.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +25,7 @@ export function previewSources(flow) {
     || sha(split) !== '53c4f6ab309b4287eaded6c6d16a9c0e34f47c8eac625c58bdf423acfb083d42') {
     throw new Error('Price preview canonical booking/pricing source changed');
   }
-  const roots = ['isObj', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
+  const roots = ['isObj', 'isValidDateKey', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
     'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields', 'preflightAvailability',
     'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
     'eventDurationMinutes', 'eventStartsAt', 'exerciseRoomId', 'resolveCategory', 'resolvePlanKey', 'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode'];
@@ -41,11 +42,11 @@ export function previewSources(flow) {
   const usageStart = 'if (ctx.step === "lk1_usage_operations") {';
   const usageEnd = 'if (ctx.step === "lk1_policy_decision") {';
   if (booking.split(usageStart).length !== 2 || booking.split(usageEnd).length !== 2) throw new Error('Price preview allowance source drift');
-  const usage = booking.slice(booking.indexOf(usageStart), booking.indexOf(usageEnd));
+  const usage = patchPaidBenefitUsage(booking.slice(booking.indexOf(usageStart), booking.indexOf(usageEnd)));
   const canonical = `const canonical = (() => {\n${helper.source}\nreturn {${roots.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
-    const { isObj, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields } = canonical;
+    const { isObj, isValidDateKey, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields } = canonical;
     const OUTPUT_MANAGED_POLICY = 6;
     const emit = () => msg;
     const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
@@ -177,9 +178,17 @@ export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploym
   const existingRouter = flow.find(row => row.id === PREFIX + 'router').func;
   const marker = '// Dedicated advisory graph.';
   if (existingRouter.split(marker).length !== 2) throw new Error('Group preview boundary drift');
+  // This historical exact-preimage packet retains the installed daily-only
+  // gateway/usage pair. Do not mix it with the current paid preview's all-date
+  // operation query; the combined paid release needs its own fresh contract.
+  const currentOperations = "return find('operations', { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,\n    'lk1.rule.productId':";
+  const routerBody = read('router');
+  if (routerBody.split(currentOperations).length !== 2) throw new Error('Group daily operation query anchor drift');
+  const legacyRouterBody = routerBody.replace(currentOperations,
+    "return find('operations', { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,\n    serviceDate: ctx.target.startsAt.slice(0, 10), 'lk1.rule.productId':");
   // Preserve the installed GAME helper/price/usage closure byte for byte.
   const router = existingRouter.slice(0, existingRouter.indexOf(marker))
-    + `Object.assign(canonical, (() => {\n${extra.source}\nreturn {${extraRoots.join(',')}}; })());\n` + read('router');
+    + `Object.assign(canonical, (() => {\n${extra.source}\nreturn {${extraRoots.join(',')}}; })());\n` + legacyRouterBody;
   const candidate = structuredClone(flow);
   candidate.find(row => row.id === prepareId).func = prepare.func.replace('  caller: "http",\n', '  caller: "http",\n' + expectedCopy);
   candidate.find(row => row.id === 'lk_subscription_booking_router_20260804').func = moneyGateway;

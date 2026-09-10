@@ -13,5 +13,8 @@ msg.payload = {
   tenantKey: "iSkq6G",
   actorClientId,
   exerciseId,
+  ...(Array.isArray(ctx.initialBookingIds) && ctx.initialBookingIds.length > 0
+    ? { $or: [{ bookingId: { $in: ctx.initialBookingIds } }, { upstreamBookingId: { $in: ctx.initialBookingIds } }] }
+    : {}),
 };
 return [msg, null, null];

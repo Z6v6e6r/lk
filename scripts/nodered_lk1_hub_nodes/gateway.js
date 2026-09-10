@@ -127,6 +127,7 @@ const lk1Finish = (ctx) => {
   return emit(OUTPUT_FINAL);
 };
 const lk1Checkout = (ctx) => {
+  if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");
   if (ctx.lk1.decision.benefit.finalPriceMinor === 0) return lk1Finish(ctx);
   if (ctx.lk1.checkout) return lk1Finish(ctx);
   if (ctx.lk1.transactionAttemptedAt) {
@@ -398,13 +399,16 @@ if (ctx.step === "lk1_usage_operations") {
   }
   let used = 0;
   const coveredBookings = new Set();
+  const benefitBookings = new Set();
   for (const operation of msg.payload) {
     if (!isObj(operation) || operation.actorClientId !== ctx.actorClientId
-      || operation.tenantKey !== ctx.tenantKey || operation.serviceDate !== ctx.serviceDate
+      || operation.tenantKey !== ctx.tenantKey || !isValidDateKey(operation.serviceDate)
       || !isObj(operation.lk1?.decision)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
     if (!normalizeId(operation.clientSubscriptionId)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
     if (normalizeId(operation.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)) continue;
     if (["FAILED", "RELEASED"].includes(operation.state)) continue;
+    if (operation.bookingId) benefitBookings.add(normalizeId(operation.bookingId));
+    if (operation.serviceDate !== ctx.serviceDate) continue;
     const minutes = operation.lk1.decision.gameMinutes;
     if (minutes) {
       if (minutes.localDate !== ctx.serviceDate || !Number.isSafeInteger(minutes.freeMinutes)
@@ -425,7 +429,8 @@ if (ctx.step === "lk1_usage_operations") {
     used += Math.min(ctx.lk1.rule.freeGameMinutesPerDay, minutes);
   }
   const active = ctx.lk1.activeBookings.filter((booking) =>
-    normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId));
+    normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)
+    || benefitBookings.has(normalizeId(bookingId(booking))));
   if (!Number.isSafeInteger(used)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
   const policy = {};
   for (const field of lk1Fields) policy[field] = ctx.lk1.rule[field];

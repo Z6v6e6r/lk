@@ -35,7 +35,7 @@ function harness(options = {}) {
     msg = outputs[output];
     if (output === 4) return { ctx: JSON.parse(JSON.stringify(msg._subscriptionPricePreview)), calls };
     const step = msg._subscriptionPricePreview.step;
-    calls.push({ output, step, method: msg.method, url: msg.url });
+    calls.push({ output, step, method: msg.method, url: msg.url, query: output === 2 ? structuredClone(msg.payload) : undefined });
     if (output === 3) { execute(node('evaluate'), msg, globals); continue; }
     if (output === 0) {
       assert.equal(msg.method, 'GET', 'preview must not invoke a provider mutation');
@@ -177,4 +177,21 @@ run('earlier GAME composers refuse group support unless the monetary helper was 
   const msg = { _subscriptionPricePreview: { groupTraining: true, step: 'start' } };
   const out = new Function('msg', 'canonical', code)(msg, {});
   assert.equal(out[4]._subscriptionPricePreview.error, 'GROUP_DISCOUNT_BACKEND_NOT_READY');
+});
+
+run('historical group packet keeps its operation query scoped to the frozen daily usage contract', () => {
+  const { ctx, calls } = harness();
+  assert.equal(ctx.error, undefined);
+  const query = calls.find(call => call.step === 'operations').query;
+  assert.equal(query.serviceDate, exercise.timeFrom.slice(0, 10));
+  assert.equal(query.actorClientId, actor);
+  assert.equal(query.tenantKey, 'iSkq6G');
+  // The current paid preview keeps its all-date active-benefit query.
+  const current = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js', import.meta.url), 'utf8');
+  const msg = { statusCode: 200, payload: [], _subscriptionPricePreview: { step: 'historyBookings',
+    startedAt: Date.now(), tenantKey: 'iSkq6G', actorClientId: actor, target: { startsAt: exercise.timeFrom }, bookings: [] } };
+  const out = new Function('msg', 'canonical', current)(msg, {
+    hasCompleteBookingList: () => true, extractItems: value => value, mergeBookings: () => [], isObj: value => value !== null && typeof value === 'object',
+  });
+  assert.equal(Object.hasOwn(out[2].payload, 'serviceDate'), false);
 });

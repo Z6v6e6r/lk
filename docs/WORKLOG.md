@@ -2238,6 +2238,7 @@ Prepared isolated local reconciliation for a phantom LK roster restored without 
 
 Applied reviewed fa2a0c6 leave functions on fresh sales-aware source, preserving nine parallel nodes. Installed flow3456eb84..., restart99, 15-minute observation and read-only API checks passed. Exact-game postcheck found a completed removal receipt moved back to VIVA_CONFIRMED by existing refund verification before deploy. Prepared a separate two-predicate follow-up accepting that state only with lkAppliedAt/outcomeREMOVED/cancellation proof; 97 focused tests, critical527 PASS/5 SKIP, independent review PASS. Follow-up not merged/pushed/deployed; no real test leave or refund initiated. Details: SPLIT_LEAVE_LOCAL_RECONCILIATION_2026-09-09.md.
 
+
 ### 2026-09-09 — shared subscription session snapshot across LK screens
 
 Continued `codex/join-subscriptions-load-once-20260909` after checkpoint `d52cc04`;
@@ -2371,3 +2372,41 @@ checkouts already inside/tmp; affected tests20PASS/3SKIP. Historical price-only 
 fixtures are explicitly skipped when superseded, never relabelled as live proof. Independent
 integration review completed. Task branch preserved; no push/deploy/live writes/activation.
 Details and evidence limits: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
+
+## 2026-09-09 — Local subscription paid JOIN correction
+
+- HAR: selected 90-minute participation quote is 262.50 RUB; JOIN returns 202/PENDING_CONFIRMATION. Fresh source confirms mixed JOIN incorrectly uses SUBSCRIPTION booking before checkout.
+- Local correction creates ON_PLACE for a positive JOIN quote, preserves exact confirmation and checkout CAS, and accounts for active paid benefits in gateway/preview. CREATE remains unchanged.
+- Evidence, changed files and remaining gates: [SUBSCRIPTION_PAID_JOIN_FIX_20260909.md](SUBSCRIPTION_PAID_JOIN_FIX_20260909.md). No deploy or provider/database/payment mutation; saved pending operation remains untouched.
+
+## 2026-09-09 — Subscription paid JOIN visit lifecycle (local, blocked)
+
+- Prepared a pure server job/CAS planner for exact-subscription debit and inverse return, cancellation races and delayed allowance release; not wired to runtime or a real provider adapter.
+- Fixed the existing leave source to retain daily allowance during RETURN_PENDING and retry malformed/failed reads; roster cleanup may continue.
+- New local tests: 21 PASS; related regressions: 117 PASS / 1 optional SKIP. Full lint: 0 errors / 387 baseline warnings. Independent payment/reliability review completed.
+- Full implementation remains blocked: inspected code/HAR do not establish separate Viva debit/return for a paid ON_PLACE booking. The previous paid-only candidate must not be released independently. See [lifecycle evidence and missing integration](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md). No push, merge, deployment or live mutation.
+
+## 2026-09-09 — P2 HAR subscription limit contract audit
+
+- Offline audit of the new sanitized HAR confirms `PUT /clients/{clientId}/subscriptions/{instanceId}/limit` with `BY_VISITS/-1`: three HTTP 200 responses decrement both total and remaining visits. Two identical requests on one instance each decrement again.
+- Only those two response fields change; purchase transaction and booking lists remain unchanged. No inverse adjustment or operation-linked recovery/idempotency contract is established by this capture.
+- Updated [lifecycle evidence](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md) and paid-JOIN status. Independent read-only review agrees. No runtime code changes, replay, new adapter, capability override, push, merge, deploy or live writes. Implementation remains blocked pending inverse/recovery evidence.
+
+## 2026-09-09 — Paid JOIN visit worker and inverse connected locally
+
+- Second P2 HAR confirms +1 on the same instance restores visitsTotal/visitsLeft. Implemented direct-ACK −1/+1 without claiming provider idempotency or purchase transaction linkage.
+- Gateway confirmation atomically enqueues the exact-instance job. Split leave schedules its inverse before roster continuation; worker also discovers cabinet/cleanup cancellations and preserves explicit staff NO_RETURN. Allowance releases only after persisted return (or proven cancellation before debit).
+- Added per-instance Mongo locks, direct response validation, restart/unknown handling, coherent booking/pagination validation and scheduled diagnostics. Physical fixture suite43 PASS; composition14 PASS/15 historical skips; related regressions117 PASS/1 skip. Independent payment/reliability findings fixed.
+- Full [implementation/evidence/configuration](SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md). Only isolated fixture DB/HTTP writes; test DB/container/network removed. No push, PR, merge, deploy, live debit, refund or original-operation repair.
+
+## 2026-09-10 — paid JOIN local main integration
+
+User accepted fixture verification of88b9910 and separately authorized local main
+integration onto fetched eb9a041. Preserved both WORKLOG histories and parallel group
+quote changes. Specialist review found historical group composer mixing frozen daily
+usage with the new all-date query; scoped restoration of its daily query is regression
+covered (RED before fix,12 group tests PASS). Modern paid preview remains all-date.
+Integrated critical548 PASS/5SKIP; focused82 PASS/17SKIP including the loopback test
+rerun after sandbox listen permission; lint0errors/387baselinewarnings and full inert-env
+prod/dev build PASS. Task branch and foreign dirty primary checkout retained. No push,
+deploy, live debit/refund or worker activation. See SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md.
