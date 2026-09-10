@@ -2526,3 +2526,14 @@ findings. Server Node18 mismatches the required runtime; pinned Node22.23.2 Linu
 archive is prepared separately. No activation is implied by network isolation. Root frontend dependencies and production business logic
 unchanged. See SUBSCRIPTION_VISIT_SERVER_PREP_20260910.md. No server installation,
 start, main integration/push, or real provider/payment mutation in this stage.
+
+### 2026-09-10 — subscription visit stopped-installer preparation
+
+Added a fail-closed Python bundle builder and stopped installer for the dedicated
+synthetic DEV visit service. The installer verifies immutable payload inventory,
+exact host/unit preimage, no dedicated listeners or service processes, absent start
+markers and disabled legacy units; it needs a separate exact authorization to publish
+and never enables or starts a unit. Local rootless rehearsal covers check-only,
+authorization denial, idempotent stopped publication and interruption hold. No server
+installation/start, main integration/push, provider/Mongo business write or payment
+operation occurred. See SUBSCRIPTION_VISIT_STOPPED_INSTALLER_20260910.md.
