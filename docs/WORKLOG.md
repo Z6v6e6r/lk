@@ -2410,3 +2410,32 @@ Integrated critical548 PASS/5SKIP; focused82 PASS/17SKIP including the loopback 
 rerun after sandbox listen permission; lint0errors/387baselinewarnings and full inert-env
 prod/dev build PASS. Task branch and foreign dirty primary checkout retained. No push,
 deploy, live debit/refund or worker activation. See SUBSCRIPTION_VISIT_LIFECYCLE_20260909.md.
+
+
+### 2026-09-10 — group one-time tariff compatibility hotfix (local)
+
+Confirmed the live preview 503: Viva returns the one-time tariff without an
+exerciseId echo. Bind group tariffs to the exact server GET in preview and
+initial/prewrite gateway checks; retain conflicting-echo, price/type and
+tournament guards. Added exact two-function installed-graph repair and realistic
+DTO regression. Both installer paths yield identical full graphs.
+
+Checks: 15/15 backend cases per path; related critical/frozen matrix 581 pass,
+32 optional skips, no failures; full PROD/DEV build and TypeScript pass; lint
+0 errors/387 warnings; fresh source, modular validation and exact graph contract
+pass. Payment-safety review has no blockers. No merge/push/deploy or live data,
+booking/payment operations. See GROUP_SUBSCRIPTION_TARIFF_FIX_20260910.md.
+
+
+### 2026-09-10 — group tariff fix local-main integration
+
+Integrated 483c27f with clean local main 048bcbf, preserving pending paid-join
+and visit-lifecycle commits. Restricted the exact hotfix composer to the tariff
+block so it retains the installed daily query while current main uses all-date
+benefit accounting. Generated candidate equals the prior reviewed bytes.
+
+Checks: 17/17 per group path; broad matrix 623 pass plus one loopback test
+passed separately after sandbox denial, 61 optional skips; paid-JOIN fixture
+14 pass/15 historical skips; lint 0 errors/387 warnings; payment-safety review
+clear. Unchanged frontend build inputs reuse the successful 483c27f full build.
+No push, PR, deploy, booking/payment or provider mutation.

@@ -274,8 +274,12 @@ if (ctx.step === "lk1_event_tariff") {
   if (!isHttpOk(msg.statusCode) || !isObj(exercise) || !hasCompleteBookingList(msg.payload)) {
     return lk1Stop(ctx, "LK1_EVENT_TARIFF_UNAVAILABLE");
   }
-  // A nominal service carrier is not an event price. Require one explicit
-  // event-bound tariff from the existing one-times read; ambiguity stays closed.
+  // Group one-times are scoped by the server GET; Viva does not echo exerciseId.
+  // Preserve the existing explicit event binding for other event categories.
+  const groupTariff = resolveCategory(exercise) === "group_training";
+  const tariffUrl = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${encodeURIComponent(ctx.exerciseId)}`;
+  if (groupTariff && (msg.method !== "GET" || msg.url !== tariffUrl
+    || (msg.responseUrl !== undefined && msg.responseUrl !== tariffUrl))) return lk1Stop(ctx, "LK1_EVENT_TARIFF_UNVERIFIED");
   const rows = extractItems(msg.payload);
   if (rows.length !== 1 || !isObj(rows[0])) return lk1Stop(ctx, "LK1_EVENT_TARIFF_AMBIGUOUS");
   const product = rows[0];
@@ -284,7 +288,7 @@ if (ctx.step === "lk1_event_tariff") {
   const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);
   const types = [product.productType, product.type].filter((type) => type !== undefined);
   if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
-    || new Set(productIds).size !== 1 || !eventIds.length || eventIds.some((id) => id !== ctx.exerciseId)
+    || new Set(productIds).size !== 1 || (!groupTariff && !eventIds.length) || eventIds.some((id) => id !== ctx.exerciseId)
     || !types.length || types.some((type) => !["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"].includes(type))
     || !amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
     || new Set(amounts).size !== 1) return lk1Stop(ctx, "LK1_EVENT_TARIFF_UNVERIFIED");

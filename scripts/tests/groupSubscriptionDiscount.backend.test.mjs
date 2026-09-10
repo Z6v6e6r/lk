@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
-import { composeGroupSubscriptionPricePreviewArtifacts } from '../patch_nodered_subscription_price_preview.mjs';
+import { composeGroupSubscriptionPricePreviewArtifacts, composeGroupSubscriptionTariffFixArtifacts } from '../patch_nodered_subscription_price_preview.mjs';
 
-const fixture = process.env.LK_GROUP_DISCOUNT_FLOW_FIXTURE;
+const tariffFix = Boolean(process.env.LK_GROUP_TARIFF_FIX_FLOW_FIXTURE);
+const fixture = process.env.LK_GROUP_TARIFF_FIX_FLOW_FIXTURE || process.env.LK_GROUP_DISCOUNT_FLOW_FIXTURE;
 const liveBytes = fixture ? fs.readFileSync(fixture) : null;
-const candidate = liveBytes ? composeGroupSubscriptionPricePreviewArtifacts(liveBytes, 'group-discount-test').candidate : null;
+const compose = tariffFix ? composeGroupSubscriptionTariffFixArtifacts : composeGroupSubscriptionPricePreviewArtifacts;
+const candidate = liveBytes ? compose(liveBytes, 'group-discount-test').candidate : null;
 const run = (name, fn) => test(name, { skip: !candidate && 'Requires private current flow fixture' }, fn);
 const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const actor = uuid(1), sub = uuid(2), exerciseId = uuid(3), room = uuid(4), studio = uuid(5), oneTime = uuid(6);
@@ -17,7 +19,11 @@ const subscription = { subscriptionId: sub, clientId: actor, productId, status: 
   activationDate: '2026-09-01', expirationDate: '2100-01-01', visitsLeft: 0 };
 const exercise = { id: exerciseId, type: { id: 605 }, direction: { id: 1001 }, room: { id: room }, studio: { id: studio },
   timeFrom: '2099-09-21T08:00:00+03:00', timeTo: '2099-09-21T09:00:00+03:00', availableClientSubscriptions: [] };
-const tariff = { id: oneTime, exerciseId, cost: 550000, productType: 'SERVICE' };
+// Public Viva one-times DTO observed on 2026-09-10; identity anonymized.
+// The endpoint scopes this DTO by exerciseId in the GET, not in the product.
+const tariff = { id: oneTime, name: 'Разовая🎾', cost: 550000, trialCost: 550000,
+  discountPrice: null, discountPercent: null, bonusPoints: 0, productType: 'SERVICE' };
+const tariffUrl = `https://api.vivacrm.ru/end-user/api/v2/iSkq6G/products/one-times?exerciseId=${exerciseId}`;
 const execute = (source, msg, globals) => vm.runInNewContext(`(function(){${source}\n})()`, {
   msg, global: { get: name => globals[name] }, Date, Intl, Set, Map, JSON, Buffer,
 });
@@ -49,6 +55,8 @@ function harness(options = {}) {
       };
       assert.ok(step in payloads, `unexpected provider read ${step}`);
       msg.payload = payloads[step];
+      msg.responseUrl = msg.url;
+      if (step === 'groupTariff') Object.assign(msg, options.tariffTransport || {});
     } else if (output === 1) {
       assert.deepEqual(Object.keys(msg.payload), ['_id'], 'only metadata reads allowed');
       msg.payload = step === 'metadata' ? [{ _id: key('instance', actor, sub), kind: 'instance', tenantKey: 'iSkq6G',
@@ -78,7 +86,7 @@ run('group quote rechecks exactly requested subscription and rejects another own
   assert.equal(harness({ body: { subscriptionIds: [uuid(99)] } }).ctx.error, 'PRICE_PREVIEW_OWNERSHIP_UNRESOLVED');
 });
 run('group quote never accepts ambiguous, unbound, or malformed tariffs', () => {
-  for (const tariffChange of [{ exerciseId: undefined }, { exerciseId: uuid(99) }, { price: 1 }, { cost: 5500.5 },
+  for (const tariffChange of [{ exerciseId: null }, { exerciseId: uuid(99) }, { price: 1 }, { cost: 5500.5 },
     { productType: 'SUBSCRIPTION' }, { productId: uuid(99) }, { cost: 1000001 }]) {
     assert.ok(harness({ tariff: tariffChange }).ctx.error, JSON.stringify(tariffChange));
   }
@@ -104,7 +112,9 @@ run('group quote respects four active subscription bookings and read failures', 
 run('group composer changes only the scoped gateway and two advisory function bodies', () => {
   const before = JSON.parse(liveBytes);
   const changed = candidate.filter((n, i) => JSON.stringify(n) !== JSON.stringify(before[i]));
-  assert.deepEqual(changed.map(n => n.id).sort(), ['lk_subscription_booking_prepare_20260804', 'lk_subscription_booking_router_20260804', ...['entry', 'router'].map(n => 'lk_subscription_price_preview_20260908_' + n)]);
+  assert.deepEqual(changed.map(n => n.id).sort(), tariffFix
+    ? ['lk_subscription_booking_router_20260804', 'lk_subscription_price_preview_20260908_router']
+    : ['lk_subscription_booking_prepare_20260804', 'lk_subscription_booking_router_20260804', ...['entry', 'router'].map(n => 'lk_subscription_price_preview_20260908_' + n)]);
   for (const n of changed) {
     const original = before.find(v => v.id === n.id);
     assert.deepEqual({ ...n, func: original.func }, original);
@@ -118,7 +128,94 @@ run('unrelated active subscription needs no binding and cannot hide the HUB disc
 run('composer rejects an independently changed checkout evaluator', () => {
   const changed = JSON.parse(liveBytes);
   changed.find(n => n.id === 'lk_subscription_managed_policy_20260820').func += '\n// drift';
-  assert.throws(() => composeGroupSubscriptionPricePreviewArtifacts(Buffer.from(JSON.stringify(changed)), 'drift'), /evaluator mismatch/);
+  assert.throws(() => compose(Buffer.from(JSON.stringify(changed)), 'drift'), /evaluator (mismatch|drift)/);
+});
+
+const badTariffTransports = [
+  { method: 'POST' }, { url: undefined }, { url: tariffUrl.replace(exerciseId, uuid(99)) },
+  { url: tariffUrl.replace('api.vivacrm.ru', 'example.invalid') },
+  { url: tariffUrl + '&exerciseId=' + exerciseId }, { url: tariffUrl + '&other=true' },
+  { responseUrl: tariffUrl.replace(exerciseId, uuid(99)) }, { responseUrl: null },
+];
+run('group preview binds an omitted event echo to the exact server GET only', () => {
+  assert.equal(harness({ tariff: { exerciseId } }).ctx.quotes[0].amountMinor, 275000);
+  assert.equal(harness({ tariffTransport: { responseUrl: undefined } }).ctx.quotes[0].amountMinor, 275000);
+  for (const tariffTransport of badTariffTransports) {
+    assert.equal(harness({ tariffTransport }).ctx.error, 'LK1_EVENT_TARIFF_UNVERIFIED', JSON.stringify(tariffTransport));
+  }
+  assert.equal(harness({ tariff: { exercise: { id: uuid(99) } } }).ctx.error, 'LK1_EVENT_TARIFF_UNVERIFIED');
+});
+
+function gatewayTariff(options = {}) {
+  const code = candidate.find(n => n.id === 'lk_subscription_booking_router_20260804').func;
+  const target = { ...exercise, ...options.exercise };
+  const ctx = { caller: 'http', action: 'book', step: 'lk1_event_tariff', tenantKey: 'iSkq6G',
+    actorClientId: actor, clientSubscriptionId: sub, authHeader: 'Bearer fixture', exerciseId,
+    operationId: 'fixture-group-tariff', managedAction: 'BOOK_GROUP_TRAINING',
+    lk1TariffExercise: target, lk1MoneyReadbackPhase: 'exercise',
+    lk1MoneyOwnership: { exerciseId, actorClientId: actor, observedAt: Date.now(), subscription },
+    ...options.ctx };
+  const msg = { _subscriptionBooking: ctx, statusCode: 200, method: 'GET', url: tariffUrl, responseUrl: tariffUrl,
+    payload: options.tariffs || [{ ...tariff, ...options.tariff }], ...options.transport };
+  const outputs = new Function('msg', 'global', 'node', 'env', code)(msg,
+    { get: key => ({ subscriptions_lk1_product_policy: rule, vivacrm_access_token: 'fixture-service',
+      vivacrm_token_expires_at: Date.now() + 60000 })[key] },
+    { warn() {}, error() {} }, { get() {} });
+  return { ctx, outputs };
+}
+run('actual gateway binds group tariff before its initial quote and preserves tournament rules', () => {
+  const accepted = gatewayTariff();
+  assert.equal(accepted.ctx.lk1TariffProof.amountMinor, 550000);
+  assert.ok(accepted.ctx.lk1?.fingerprint, 'initial quote must resolve from the real gateway');
+  assert.ok(accepted.outputs.every(m => !m || m.method !== 'POST'), 'initial tariff resolution must not write');
+  for (const transport of badTariffTransports) {
+    const rejected = gatewayTariff({ transport });
+    assert.equal(rejected.ctx.lk1TariffProof, undefined);
+    assert.equal(rejected.outputs[0], null);
+    assert.equal(rejected.outputs[4].payload.details.code, 'LK1_EVENT_TARIFF_UNVERIFIED');
+  }
+  for (const change of [{ exerciseId: null }, { exerciseId: uuid(99) }, { exercise: { id: uuid(99) } },
+    { trialCost: 1 }, { cost: -1 }, { productType: 'SUBSCRIPTION' }]) {
+    assert.equal(gatewayTariff({ tariff: change }).ctx.lk1TariffProof, undefined);
+  }
+  assert.equal(gatewayTariff({ tariffs: [tariff, tariff] }).ctx.lk1TariffProof, undefined);
+  assert.equal(gatewayTariff({ exercise: { type: { id: 839 }, direction: { id: 2617 } } }).ctx.lk1TariffProof, undefined);
+});
+run('actual gateway rechecks the scoped tariff and refuses changed price before booking', () => {
+  const initial = gatewayTariff().ctx.lk1;
+  assert.ok(initial?.fingerprint);
+  initial.decision = { eligible: true, subscriptionVisitCount: 0, benefit: { finalPriceMinor: 275000 } };
+  const ctx = { lk1: initial, lk1TariffRecheck: true };
+  const accepted = gatewayTariff({ ctx });
+  assert.equal(accepted.outputs[0]?.method, 'POST', JSON.stringify(accepted.outputs.filter(Boolean).map(m => ({payload:m.payload,step:m._subscriptionBooking.step}))));
+  for (const options of [
+    ...badTariffTransports.map(transport => ({ transport })),
+    { tariff: { cost: 600000, trialCost: 600000 } }, { tariff: { id: uuid(99) } },
+    { tariff: { exerciseId: uuid(99) } },
+  ]) {
+    const rejected = gatewayTariff({ ...options, ctx: structuredClone(ctx) });
+    assert.equal(rejected.outputs[0], null, JSON.stringify(options));
+    assert.ok(rejected.outputs[4]);
+  }
+});
+run('tariff composer refuses touched-node drift and an already repaired source', () => {
+  const changed = JSON.parse(liveBytes);
+  changed.find(n => n.id === 'lk_subscription_booking_router_20260804').func += '\n// drift';
+  assert.throws(() => compose(Buffer.from(JSON.stringify(changed)), 'drift'), /source changed|preimage drift/);
+  assert.throws(() => compose(Buffer.from(JSON.stringify(candidate)), 'repeat'), /preimage drift/);
+});
+
+run('installed tariff repair preserves every byte outside the two tariff blocks', () => {
+  if (!tariffFix) return;
+  const before = JSON.parse(liveBytes);
+  const regions = [
+    ['lk_subscription_booking_router_20260804', 'if (ctx.step === "lk1_event_tariff") {', 'if (ctx.step === "lk1_operation_find") {'],
+    ['lk_subscription_price_preview_20260908_router', "if (ctx.step === 'groupTariff') {", "if (ctx.step === 'evaluate') {"],
+  ];
+  for (const [id, start, end] of regions) {
+    const outside = source => source.slice(0, source.indexOf(start)) + source.slice(source.indexOf(end));
+    assert.equal(outside(candidate.find(n => n.id === id).func), outside(before.find(n => n.id === id).func), id);
+  }
 });
 
 run('actual gateway accepts active zero-visit group money ownership and still rejects unusable or foreign rows', () => {

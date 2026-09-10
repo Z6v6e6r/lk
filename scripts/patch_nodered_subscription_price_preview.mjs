@@ -11,6 +11,17 @@ const PREFIX = 'lk_subscription_price_preview_20260908_';
 export const PATH = '/lk/subscriptions/game-price-preview';
 const read = name => fs.readFileSync(path.join(ROOT, 'nodered_subscription_price_preview_nodes', `${name}.js`), 'utf8');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const replaceEventTariffBlock = source => {
+  const start = 'if (ctx.step === "lk1_event_tariff") {';
+  const end = 'if (ctx.step === "lk1_operation_find") {';
+  const desired = fs.readFileSync(path.join(ROOT, 'nodered_lk1_hub_nodes/gateway.js'), 'utf8');
+  for (const text of [source, desired]) {
+    if (text.split(start).length !== 2 || text.split(end).length !== 2
+      || text.indexOf(start) >= text.indexOf(end)) throw new Error('Group tariff boundary drift');
+  }
+  return source.slice(0, source.indexOf(start))
+    + desired.slice(desired.indexOf(start), desired.indexOf(end)) + source.slice(source.indexOf(end));
+};
 const node = (z, name, outputs, wires, source = null) => ({ id: `${PREFIX}${name}`, type: 'function', z, name: `Subscription price preview ${name}`, func: source ?? read(name), outputs, timeout: 0, noerr: 0, initialize: '', finalize: '', libs: [], x: 680, y: 1000, wires });
 
 export function previewSources(flow) {
@@ -166,6 +177,7 @@ export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploym
   const decisionMarker = '  ctx.lk1.decision = JSON.parse(JSON.stringify(decision));';
   if (moneyGateway.split(decisionMarker).length !== 2) throw new Error('Group quote decision preimage drift');
   moneyGateway = moneyGateway.replace(decisionMarker, gatewaySource.slice(guardStart, guardEnd) + decisionMarker);
+  moneyGateway = replaceEventTariffBlock(moneyGateway);
   const prepareId = 'lk_subscription_booking_prepare_20260804';
   const prepare = flow.find(row => row.id === prepareId);
   // Keep the generic frozen DEV prepare source intact. This field belongs only
@@ -199,6 +211,44 @@ export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploym
     allowedChanges: [...['entry', 'router'].map(name => ({id: PREFIX + name, fields: ['func']})),
       { id: 'lk_subscription_booking_router_20260804', fields: ['func'] },
       { id: prepareId, fields: ['func'] }], allowedAdditionIds: [] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidate, candidateBytes, contract };
+}
+
+/** Repair the installed group capability without rebuilding its shared graph. */
+export function composeGroupSubscriptionTariffFixArtifacts(liveBytes, deploymentId) {
+  const flow = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
+  if (!Array.isArray(flow) || new Set(flow.map(row => row?.id)).size !== flow.length) throw new Error('Invalid tariff source');
+  const expected = {
+    lk_subscription_booking_router_20260804: 'f7bf647210421212ae447c4778e391347c3533eba35b0616c463f444df8b6782',
+    [PREFIX + 'router']: 'c09e6756640aafd11de9d96412ecd5a09fc5a6a102729afc05ccca84424005e0',
+  };
+  for (const [id, digest] of Object.entries(expected)) {
+    const current = flow.find(row => row.id === id);
+    if (current?.type !== 'function' || sha(current.func || '') !== digest) throw new Error(`Group tariff preimage drift: ${id}`);
+  }
+  for (const id of [PREFIX + 'evaluate', 'lk_subscription_managed_policy_20260820']) {
+    if (sha(flow.find(row => row.id === id)?.func || '') !== '6f4e7aa5506d7da4123fc0f8c86c5a310f6fc2dc86c9cc23b56ef1deaa001a72') {
+      throw new Error('Group tariff evaluator drift');
+    }
+  }
+  const candidate = structuredClone(flow);
+  const booking = candidate.find(row => row.id === 'lk_subscription_booking_router_20260804');
+  booking.func = replaceEventTariffBlock(booking.func);
+  const router = candidate.find(row => row.id === PREFIX + 'router');
+  const start = "if (ctx.step === 'groupTariff') {";
+  const end = "if (ctx.step === 'evaluate') {";
+  const desired = read('router');
+  for (const source of [router.func, desired]) {
+    if (source.split(start).length !== 2 || source.split(end).length !== 2
+      || source.indexOf(start) >= source.indexOf(end)) throw new Error('Group tariff preview boundary drift');
+  }
+  // The installed daily usage/query contract must survive newer paid-visit sources.
+  router.func = router.func.slice(0, router.func.indexOf(start))
+    + desired.slice(desired.indexOf(start), desired.indexOf(end)) + router.func.slice(router.func.indexOf(end));
+  const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId,
+    allowedChanges: Object.keys(expected).map(id => ({ id, fields: ['func'] })), allowedAdditionIds: [] });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidate, candidateBytes, contract };
 }
