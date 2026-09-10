@@ -2511,3 +2511,17 @@ Next preparation requires permanent operator publication, its pinned MongoDB Nod
 driver 7.2.0 environment, and fresh reconciliation evidence; server default 3.7.4
 lacks required BSON.EJSON. Existing branches/main preserved. Details and receipts:
 `SUBSCRIPTION_ANNUAL_DEPLOY_RESULT_20260910.md`.
+
+### 2026-09-10 — annual operator preparation found BSON blockers
+
+Prepared isolated MongoDB-driver 7.2.0/BSON 7.3.2 package with locked dependencies,
+Linux ESM/custody/type checks and archive hashes. Fresh server-memory read-only
+Viva/Mongo audit at 08:10Z validated all 150 canonical transactions: HAB18 and
+Piter42 positive-price paid subscriptions; three proven local refund-status
+corrections remain. No customer raw-data export. Both annual sentinels absent,
+flow12ed9b7a unchanged and actual sales flags OFF. All103 local IDs are BSON
+ObjectId, rejected by the string-only opening contract. Physical isolated Mongo
+seed also exposed relaxed-EJSON Long/Double postimage mismatch; transaction
+aborted and exact original rows were preserved. Package is not execution-ready.
+No runtime/application changes, merge, push, deploy or live business writes.
+See SUBSCRIPTION_ANNUAL_OPERATOR_PREPARATION_20260910.md for blockers and evidence.
