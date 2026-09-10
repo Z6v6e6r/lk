@@ -157,3 +157,93 @@ Task-ветка и checkpoint сохранены. Выполняется тол�
 deploy, runtime control, provider/Mongo business writes и activation в этот этап не входят.
 Перед будущим deploy обязательно заново прочитать flow147 и при drift пересобрать exact
 binding/candidate/HUB receipt; старый ff056708… остаётся доказательством прежнего снимка.
+
+## Переподготовка после изменения flow147 — 2026-09-10
+
+Отдельно согласованная переподготовка выполнена в прежней task-ветке, продвинутой
+fast-forward до опубликованного `eb9a041`. Его CI `34433165322` завершился success.
+Main merge/push нового изменения в этот этап не включены.
+
+Новый read-only snapshot147 содержит 4798 узлов. По сравнению с прошлым снимком
+изменены восемь узлов: четыре функции цены/статуса/покупки, initializer цены ХАБ,
+подготовка/маршрутизация бронирования и две функции preview. Добавлений/удалений нет.
+Первый scp прервался, повторный полный pull с metadata происхождения успешен.
+
+| Связка | SHA256 |
+|---|---|
+| Проверенный source147 | `ee3f60079e7fbebeba6387d3d2f2f57d6fec17003e3e91ce7da5ff85061c63c7` |
+| Новый полный annual candidate | `a9c1bd6663e73dc473e338a7d96c076565afe751bb1d82766a73502e68dc8c53` |
+| Новый HAB booking receipt digest | `c1b75e9e7439207f0ef69632413bf180acf5461f4df7f6ebf739b0c0bb18b53f` |
+
+Уже установленные status_prepare/counter_refresh совпадают с целевыми исходниками
+и исключены из списка замен. Кандидат меняет восемь узлов, добавляет только expander,
+сохраняет остальные узлы/поля, содержит 4799 узлов и прежние 219 HTTP inputs.
+Price initializer, group booking и preview updates сохранены без перезаписи.
+
+Изменение gateway потребовало обновить HAB receipt в atomic initializer. Новый helper
+`buildAnnualHistoryInitializer` заменяет ровно один валидный JSON-литерал receipt на
+значение, полученное из точного live graph и проверенное против binding. Остальные байты
+initializer сохраняются; после него добавляется прежний загрузчик persistent sales config.
+Неоднозначный/отсутствующий receipt, неверный receipt и повторное добавление config
+отклоняются. Итоговый initializer компилируется. Старые receipts покупок и коммерческие
+правила не меняются. Функции runtime продажи относительно eb9a041 не редактировались.
+
+Проверки этого изменения:
+
+- Annual history: 27 PASS, 0 SKIP/FAIL, включая полный приватный snapshot/candidate,
+  сохранение каждого незатронутого узла, отрицательные source/digest проверки и запуск
+  двух initializer в обоих порядках. Private case в обычном CI без snapshot явно SKIP.
+- Candidate/compatibility: 68 PASS, 5 SKIP, 0 FAIL. Пропуски — ранее описанные private
+  и superseded historical price-only fixtures; они не считаются доказательством выпуска.
+- Полный lint: 0 errors, 387 существующих warnings; diff check PASS.
+- Private modular build/validate текущего source: 142 selected nodes, 13 HTTP inputs,
+  0 broken wires/links. Exact full-flow contract проверен отдельно CLI builder.
+- Два независимых read-only review: release graph/custody и payment receipt — PASS.
+  Подтверждено, что receipt candidate соответствует его фактическому booking graph.
+- Полный build/typecheck и неизменённые runtime regression inputs повторно не запускались:
+  используются успешные exact-head CI eb9a041, поскольку frontend, lockfile и runtime
+  function sources в этой переподготовке не изменились. Новый startup/rebind path проверен
+  описанными тестами; live restart/Provider/Mongo исполнение по-прежнему не проверены.
+
+Изменены: `scripts/annual_subscription_history_binding.json`,
+`scripts/prepare_annual_subscription_history_candidate.mjs`,
+`scripts/tests/annualSubscriptionHistory.test.mjs`, этот отчёт и WORKLOG.
+Приватный каталог `/private/tmp/lk-annual-history-rebind-20260910/` содержит source с
+metadata, candidate/contract, журналы, descriptor 17 файлов operator publication closure
+и образец `sales-configuration-off.json`. Ничего из этого не опубликовано или применено.
+
+Initializer применяет реальные booleans из ENV: candidate hash сам по себе не доказывает
+OFF. До установки нужна проверенная неактивная persistent конфигурация из предыдущего
+раздела; отсутствие/ошибка ENV закрывает также РА/Дружбу. В тестах OFF подтверждён
+только для явно заданной неактивной конфигурации либо отсутствующего/невалидного ENV.
+Коммерческие остатки этого документа относятся к прежним снимкам: при наступившем
+новом дне перед открытием нужен новый полный расчёт. В этом этапе stock/data не менялись.
+
+Повторный read-only SHA147 после подготовки снова подтвердил `ee3f600…` (после одного
+сетевого таймаута). За время работы parallel main продвинулся до `a7be8cd` с paid-join/
+visit lifecycle и group tariff изменениями. Они не включались в этот локальный checkpoint;
+при следующей согласованной интеграции их нужно сохранить. Кандидат привязан к фактически
+прочитанному flow147, не подменяет ещё не установленные runtime функции исходниками main.
+
+## Локальная интеграция переподготовки — 2026-09-10
+
+По отдельному согласованию `1956274` объединён с `main=a7be8cd`; CI точной базы
+`34434812931` — success. Paid JOIN, visit worker/return и group tariff изменения main
+сохранены. Единственный конфликт WORKLOG разрешён сохранением обеих записей.
+Runtime source и коммерческие правила при интеграции не редактировались.
+
+Проверки объединённого дерева: critical548 PASS/5SKIP; candidate/annual/group/visit
+совместимость133 PASS/23SKIP и один loopback-тест, первоначально заблокированный sandbox
+(`listen EPERM 127.0.0.1`), отдельно выполнен успешно. Итого134 успешных compatibility
+проверки, без неустранённых отказов. Optional physical/private/historical cases остаются
+SKIP, не runtime acceptance. Lint0errors/387 прежних warnings; exact candidate CLI
+воспроизводит `a9c1bd66…` с прежними4799 узлами/219HTTP. Независимый integration review PASS.
+Полный build/typecheck переиспользован из успешного CI a7be8cd: соответствующие входы
+относительно этой базы не менялись. Проверки секретов и финального diff выполняются
+для merge checkpoint. Logs: `/private/tmp/lk-annual-history-rebind-integration-20260910/`.
+
+Изменённые файлы относительно базы main остаются теми же пятью из предыдущего раздела.
+Task-ветка1956274 сохранена. В этом этапе только локальный merge: push/deploy, runtime
+control, provider/Mongo business writes и включение продаж не выполняются. Установка
+параллельных runtime функций до annual deploy потребует нового сравнения с live flow;
+совпадение source нельзя выводить из одной лишь интеграции исходников в main.

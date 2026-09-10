@@ -5,11 +5,26 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { buildExactGraphContract, validateExactGraphContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 import { assertPiterAtomicTopology, assertNoEnabledLegacyPiterSalesTab } from './lib/piterAtomicTopologyContract.mjs';
-import { buildHubRuntimeEvidence } from './lib/hubLk1SaleContract.mjs';
+import { buildHubRuntimeEvidence, normalizeFrozenHubSale } from './lib/hubLk1SaleContract.mjs';
 import { salesConfigurationInitializer } from './lib/subscriptionSalesConfiguration.mjs';
 import { syncAnnualHistory } from './sync_annual_subscription_history.mjs';
 
 const hash = x => createHash('sha256').update(x).digest('hex');
+// Rebind only the existing server-owned receipt literal. The surrounding product
+// binding/readback code and every other initializer are preserved byte for byte.
+export function buildAnnualHistoryInitializer(initializer, receipt) {
+  const normalized = normalizeFrozenHubSale(receipt);
+  const pattern = /^const hubSaleRuntimeReceipt = (\{[^\n]+\});$/gm;
+  const matches = typeof initializer === 'string' ? [...initializer.matchAll(pattern)] : [];
+  if (!normalized || JSON.stringify(normalized) !== JSON.stringify(receipt)
+    || matches.length !== 1 || !normalizeFrozenHubSale(JSON.parse(matches[0][1]))
+    || initializer.includes('// BEGIN subscription sales persistent configuration')) throw Error('annual receipt initializer preimage mismatch');
+  const rebound = initializer.replace(pattern, `const hubSaleRuntimeReceipt = ${JSON.stringify(normalized)};`)
+    + salesConfigurationInitializer();
+  new vm.Script(`(function(global,env){${rebound}\n})`);
+  return rebound;
+}
+
 export function buildAnnualHistoryCandidate({ liveBytes, sourceTexts, binding }) {
   if (binding.kind !== 'ANNUAL_HISTORY_CANDIDATE_BINDING_V1' || hash(liveBytes) !== binding.sourceSha256) throw Error('annual candidate preimage drift');
   const source = JSON.parse(liveBytes), candidate = structuredClone(source);
@@ -23,7 +38,7 @@ export function buildAnnualHistoryCandidate({ liveBytes, sourceTexts, binding })
       || node.type !== 'function' || typeof code !== 'string' || hash(code) !== target.sourceTextSha256) throw Error('annual candidate target drift');
     new vm.Script(`(function(msg,node,context,flow,global,env){${code}\n})`);
     node.func = code; const fields = ['func'];
-    if (node.id === 'piter_atomic_router_20260903') { node.initialize += salesConfigurationInitializer(); fields.push('initialize'); }
+    if (node.id === 'piter_atomic_router_20260903') { node.initialize = buildAnnualHistoryInitializer(node.initialize, evidence.receipt); fields.push('initialize'); }
     changes.push({ id: node.id, fields });
   }
   const db = candidate.find(n => n.id === 'ab1e202650000003');

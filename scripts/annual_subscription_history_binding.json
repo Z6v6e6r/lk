@@ -1,7 +1,7 @@
 {
   "kind": "ANNUAL_HISTORY_CANDIDATE_BINDING_V1",
-  "sourceSha256": "325839a66e235caa9e56bde36afdb89286aab8e26e963f2612dea03bf7a7cb75",
-  "candidateSha256": "ff056708ce47aca989dfef9156600586c022fe5f317453417e135325ff131e12",
+  "sourceSha256": "ee3f60079e7fbebeba6387d3d2f2f57d6fec17003e3e91ce7da5ff85061c63c7",
+  "candidateSha256": "a9c1bd6663e73dc473e338a7d96c076565afe751bb1d82766a73502e68dc8c53",
   "sourceNodeCount": 4798,
   "httpInputCount": 219,
   "hubEvidence": {
@@ -12,7 +12,7 @@
       },
       {
         "id": "lk_subscription_booking_router_20260804",
-        "nodeSha256": "64aa61f6da1697ae87c3853a2006d970f4186491439e043637a0f50a11b8154a"
+        "nodeSha256": "20df410ae89a2a09e8e3dfdb79158bbd2d85193e3d4f1b59a32e61f286fe9dc1"
       },
       {
         "id": "lk_subscription_booking_finalize_20260804",
@@ -37,27 +37,21 @@
         "groupTrainingDiscountPercent": 50,
         "tournamentDiscountPercent": 50
       },
-      "sourceDigest": "sha256:8342653317b22b3986c7e3c74d7d6c089090657391edec1446605d082dfc1a76",
+      "sourceDigest": "sha256:c1b75e9e7439207f0ef69632413bf180acf5461f4df7f6ebf739b0c0bb18b53f",
       "bookingUsageScope": "SUBSCRIPTION_BENEFIT_ONLY"
     }
   },
   "targets": [
     {
-      "id": "8fdc7076a0c436a2",
-      "file": "fn_tournament_subscription_status_prepare.js",
-      "preimageNodeSha256": "5d0c519aa8fcb27477aecd5e65cbae91587406375b0813a4cbd37b16ba9e6864",
-      "sourceTextSha256": "048430d27721fa7fc93cd46206101df2d3679fc0b690dd885b25a45af3f7000c"
-    },
-    {
       "id": "c165e43eba668c25",
       "file": "fn_tournament_subscription_status_response.js",
-      "preimageNodeSha256": "366eef99ee020f259182a47e32851f08820c8023960450a79da8c2aea5605bb6",
+      "preimageNodeSha256": "bd6bf1fa405d9c4d9b96828ba9809e64b9137e0fe1b0720174878e83e931f6ab",
       "sourceTextSha256": "250d245b3ae4a34c8b6ea924b4caf7ce6fbf7b44b804857b71bf4b9c78d3ad82"
     },
     {
       "id": "91dded2dc8cfebe4",
       "file": "fn_tournament_subscription_purchase_prepare.js",
-      "preimageNodeSha256": "3f8126817275ac3329e5b60fcb919244a708a8af7d814ae75f4070999bf1278d",
+      "preimageNodeSha256": "775780eef86b46b2218a70ce5b7cf15d479eb896ed2df6b59308522c5e5c6131",
       "sourceTextSha256": "d4c6952f5909daede6994655250944413c4ba766c8da656989f833b11ff739ef"
     },
     {
@@ -65,12 +59,6 @@
       "file": "fn_tournament_subscription_purchase_router.js",
       "preimageNodeSha256": "2d624c5f44298a08cbf1c2794b8bbe7369327d2cab45c9f1ae2171e54f1ed8f2",
       "sourceTextSha256": "b32dd57bc2f031febf8caa9c7536bce28bcc92f487e7daa47aa27942a1ee243f"
-    },
-    {
-      "id": "519b6a6ca208e281",
-      "file": "fn_tournament_subscription_counter_refresh_prepare.js",
-      "preimageNodeSha256": "23035414f1afa569fe305ccba5ed39948452fe9ce90cff8d84db31ce4f7d3563",
-      "sourceTextSha256": "6c3cc3ae5975f8ef54f3349e37f35b3024d038d07d9747916a1a6c4ab78f2f18"
     },
     {
       "id": "ca022fd14027a5b0",

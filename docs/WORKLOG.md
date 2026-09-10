@@ -2439,3 +2439,27 @@ passed separately after sandbox denial, 61 optional skips; paid-JOIN fixture
 14 pass/15 historical skips; lint 0 errors/387 warnings; payment-safety review
 clear. Unchanged frontend build inputs reuse the successful 483c27f full build.
 No push, PR, deploy, booking/payment or provider mutation.
+
+### 2026-09-10 — annual opening candidate rebound to current flow147
+
+Approved re-preparation in the existing task branch after main eb9a041 passed CI.
+Fresh source ee3f600… preserves parallel price/group/preview deployments. Exact candidate
+a9c1bd66… changes8 nodes/adds1expander, retains219HTTP inputs and all unrelated fields.
+Rebound one server-owned HAB receipt literal to actual preserved booking graph c1b75e9e…;
+price initializer and historical purchase receipts preserved. No runtime function edits.
+Annual27PASS; compatibility68PASS/5SKIP; lint0errors/387warnings; source modular and exact
+candidate graph checks PASS; independent release/payment reviews PASS. Previous main CI
+reused for unchanged frontend/runtime inputs. Private OFF configuration and17-file publication
+descriptor prepared, not applied. New-day stock reconciliation remains pending. No main merge,
+push, deploy, runtime control, provider/Mongo business writes or activation in this stage.
+See `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md` for exact hashes and evidence limits.
+
+### 2026-09-10 — re-prepared annual candidate integrated locally
+
+Approved merge1956274 onto maina7be8cd preserves paidJOIN/visit/group tariff changes.
+WORKLOG conflict retained both entries; no runtime function edits. Critical548PASS/5SKIP;
+compatibility133PASS/23SKIP plus one sandbox-blocked loopback test passed separately;
+lint0errors/387warnings; exact candidate remainsa9c1bd66…/4799nodes/219HTTP. Independent
+integration review PASS. Unchanged build/typecheck inputs reuse green exact-base CI34434812931.
+Task branch preserved. Local merge only; no push, deploy, runtime control or live writes.
+Details: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
