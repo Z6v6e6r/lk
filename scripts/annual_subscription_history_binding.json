@@ -1,7 +1,7 @@
 {
   "kind": "ANNUAL_HISTORY_CANDIDATE_BINDING_V1",
-  "sourceSha256": "ee3f60079e7fbebeba6387d3d2f2f57d6fec17003e3e91ce7da5ff85061c63c7",
-  "candidateSha256": "a9c1bd6663e73dc473e338a7d96c076565afe751bb1d82766a73502e68dc8c53",
+  "sourceSha256": "5fce9a8d20138e0c28f2bb7d6e950fb1f71b31364af423085e4207e807d8e2d5",
+  "candidateSha256": "12ed9b7a70d086f0640a7d0332213b7baf5b02dd5756eebe0317ec0fc611f31b",
   "sourceNodeCount": 4798,
   "httpInputCount": 219,
   "hubEvidence": {
@@ -12,7 +12,7 @@
       },
       {
         "id": "lk_subscription_booking_router_20260804",
-        "nodeSha256": "20df410ae89a2a09e8e3dfdb79158bbd2d85193e3d4f1b59a32e61f286fe9dc1"
+        "nodeSha256": "3f1498ad49b55a0febedc183b649256e6667629c8fb9d6ae96ff4e2bfc421ce0"
       },
       {
         "id": "lk_subscription_booking_finalize_20260804",
@@ -37,7 +37,7 @@
         "groupTrainingDiscountPercent": 50,
         "tournamentDiscountPercent": 50
       },
-      "sourceDigest": "sha256:c1b75e9e7439207f0ef69632413bf180acf5461f4df7f6ebf739b0c0bb18b53f",
+      "sourceDigest": "sha256:7ab6d09c0c2f1df57310cf9e03179e7ac5427cd3f0b89cb1acc9ef1673018210",
       "bookingUsageScope": "SUBSCRIPTION_BENEFIT_ONLY"
     }
   },

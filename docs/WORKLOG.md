@@ -2473,3 +2473,26 @@ frontend and Node-RED unchanged. Physical network-none nginx tests2 PASS, unit7
 PASS, delivery68 plus separately passed loopback1, compatibility20 PASS/5 optional
 SKIP, lint0errors/387warnings; specialist review clear. No merge/push/deploy/live
 booking or payment. See GROUP_BOOKING_RESERVE_ROUTE_20260910.md.
+
+### 2026-09-10 — annual deployment package refreshed against current live flow
+
+Preserved the existing task branch and advanced it to published base bcf9f7c
+(CI 34436116735 successful). Fresh source 5fce9a8d produces candidate 12ed9b7a;
+both upstream booking/preview changes survive unchanged. Updated four binding
+metadata fields only; runtime/builder logic unchanged. Prepared private OFF
+configuration and complete 17-file operator publication closure, not applied.
+Annual tests: 27 PASS; compatibility: 65 PASS / 2 optional SKIP; isolated modular build and
+validation PASS with zero broken wires/links. Production configuration persistence,
+runtime attestation and fresh stock reconciliation remain unproven. No merge,
+push, deploy, PM2 control, provider/Mongo business write or sales activation.
+See `SUBSCRIPTION_ANNUAL_DEPLOY_PACKAGE_20260910.md` for package hashes and sequence.
+
+### 2026-09-10 — current annual package integrated into local main
+
+Merged approved checkpoint 9937d1b onto fresh main c867ed3, preserving reserve
+nginx routing and both WORKLOG entries. Critical matrix: 548 PASS / 5 SKIP;
+compatibility, annual and nginx tests: 99 PASS / 3 SKIP; no failures. Strict
+candidate remains 12ed9b7a. Independent integration review PASS. Unchanged full
+build/lint/typecheck inputs reuse green base CI 34437567179. Local merge only;
+no push, deploy, PM2 control or live business writes. See
+`SUBSCRIPTION_ANNUAL_DEPLOY_PACKAGE_20260910.md` for evidence and remaining gates.
