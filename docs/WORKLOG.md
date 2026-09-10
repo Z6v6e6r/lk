@@ -2496,3 +2496,23 @@ candidate remains 12ed9b7a. Independent integration review PASS. Unchanged full
 build/lint/typecheck inputs reuse green base CI 34437567179. Local merge only;
 no push, deploy, PM2 control or live business writes. See
 `SUBSCRIPTION_ANNUAL_DEPLOY_PACKAGE_20260910.md` for evidence and remaining gates.
+
+## 2026-09-10 — Subscription visit DEV runtime (local preparation)
+
+- Added isolated native Node-RED/Mongo/HTTP rehearsal packet and strict synthetic
+  provider for paid JOIN, visit debit, refund/cancel, return and same-day free60 reuse.
+- Preserved scoped recovery and durable journals; unknown provider ACK survives restart
+  without repeat delta. Payment projection is a labelled fixture with generation CAS.
+- Fixed both paid checkout HTTPS checks for Node-RED Function without global URL.
+- Details and boundaries: `docs/SUBSCRIPTION_VISIT_DEV_RUNTIME_20260910.md`.
+- No server installation/activation, merge, push or real payment/data mutation.
+
+### 2026-09-10 — subscription visit DEV runtime integrated into local main
+
+Approved checkpoint394e0af merged over fresh maindd2b9a4. Preserved annual opening
+package and reserve booking routing; only WORKLOG needed a content merge. Critical
+matrix548PASS/5SKIP; subscription, annual and ingress compatibility88PASS/18SKIP;
+lint0errors/387warnings; full production+DEV bundle build with inert CI env PASS.
+Integrated DEV graph equals the verified394e0af packet byte-for-byte; native7-case
+and browser fixture proof remain applicable. Independent integration review PASS.
+Local integration only; push, deploy and real business writes remain separate stages.
