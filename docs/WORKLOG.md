@@ -2463,3 +2463,16 @@ lint0errors/387warnings; exact candidate remainsa9c1bd66…/4799nodes/219HTTP. I
 integration review PASS. Unchanged build/typecheck inputs reuse green exact-base CI34434812931.
 Task branch preserved. Local merge only; no push, deploy, runtime control or live writes.
 Details: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
+
+### 2026-09-10 — annual deployment package refreshed against current live flow
+
+Preserved the existing task branch and advanced it to published base bcf9f7c
+(CI 34436116735 successful). Fresh source 5fce9a8d produces candidate 12ed9b7a;
+both upstream booking/preview changes survive unchanged. Updated four binding
+metadata fields only; runtime/builder logic unchanged. Prepared private OFF
+configuration and complete 17-file operator publication closure, not applied.
+Annual tests: 27 PASS; compatibility: 65 PASS / 2 optional SKIP; isolated modular build and
+validation PASS with zero broken wires/links. Production configuration persistence,
+runtime attestation and fresh stock reconciliation remain unproven. No merge,
+push, deploy, PM2 control, provider/Mongo business write or sales activation.
+See `SUBSCRIPTION_ANNUAL_DEPLOY_PACKAGE_20260910.md` for package hashes and sequence.
