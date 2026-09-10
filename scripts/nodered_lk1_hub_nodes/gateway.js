@@ -1,3 +1,8 @@
+function isNodeRedHttpsCheckout(paymentUrl) {
+  return typeof paymentUrl === 'string' && paymentUrl.length <= 4096
+    && /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::443)?(?:[/?#][^\s\\]*)?$/i.test(paymentUrl)
+    && !Array.from(paymentUrl).some(char => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127);
+}
 const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const LK1_PRODUCT_POLICY_GLOBAL = "subscriptions_lk1_product_policy";
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
@@ -184,13 +189,7 @@ if (ctx.step === "lk1_ingress_operation_find") {
     if (amount > 0) {
       const checkout = quote.checkout;
       const intent = quote.transactionIntent;
-      let safeUrl = false;
-      try {
-        if (typeof checkout?.paymentUrl === "string" && checkout.paymentUrl.trim()) {
-          const url = new URL(checkout.paymentUrl);
-          safeUrl = url.protocol === "https:" && !url.username && !url.password;
-        }
-      } catch (_) { /* hold */ }
+      const safeUrl = isNodeRedHttpsCheckout(checkout?.paymentUrl);
       if (!isObj(checkout) || !isObj(intent) || !safeUrl || checkout.toPayMinor !== amount
         || typeof checkout.transactionId !== "string" || !checkout.transactionId.trim()
         || checkout.transactionId !== quote.transactionId || !quote.transactionAttemptedAt
@@ -586,8 +585,7 @@ if (ctx.step === "lk1_transaction_readback") {
   const suppliedBookings = bookingEvidence.filter((value) => value !== undefined);
   const bookingsValid = suppliedBookings.length > 0 && suppliedBookings.every((ids) =>
     Array.isArray(ids) && ids.length === 1 && ids[0] === ctx.confirmedBookingId);
-  let safeUrl = false;
-  try { const url = new URL(paymentUrl); safeUrl = url.protocol === "https:" && !url.username && !url.password; } catch (_) { /* fail closed */ }
+  const safeUrl = isNodeRedHttpsCheckout(paymentUrl);
   if (!isHttpOk(msg.statusCode) || !isObj(transaction) || !isObj(intent)
     || id !== ctx.lk1.transactionId || clientId !== ctx.actorClientId
     || !bookingsValid || !productsValid

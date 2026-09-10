@@ -2439,3 +2439,13 @@ passed separately after sandbox denial, 61 optional skips; paid-JOIN fixture
 14 pass/15 historical skips; lint 0 errors/387 warnings; payment-safety review
 clear. Unchanged frontend build inputs reuse the successful 483c27f full build.
 No push, PR, deploy, booking/payment or provider mutation.
+
+## 2026-09-10 — Subscription visit DEV runtime (local preparation)
+
+- Added isolated native Node-RED/Mongo/HTTP rehearsal packet and strict synthetic
+  provider for paid JOIN, visit debit, refund/cancel, return and same-day free60 reuse.
+- Preserved scoped recovery and durable journals; unknown provider ACK survives restart
+  without repeat delta. Payment projection is a labelled fixture with generation CAS.
+- Fixed both paid checkout HTTPS checks for Node-RED Function without global URL.
+- Details and boundaries: `docs/SUBSCRIPTION_VISIT_DEV_RUNTIME_20260910.md`.
+- No server installation/activation, merge, push or real payment/data mutation.

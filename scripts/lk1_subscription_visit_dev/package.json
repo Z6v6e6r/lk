@@ -1,0 +1,7 @@
+{
+  "name": "padlhub-subscription-visit-dev",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": { "node-red": "4.0.9", "mongodb": "7.2.0" }
+}

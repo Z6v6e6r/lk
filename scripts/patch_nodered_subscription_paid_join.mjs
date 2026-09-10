@@ -21,8 +21,22 @@ export function patchPaidBenefitUsage(source) {
     '    normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)\n'
     + '    || benefitBookings.has(normalizeId(bookingId(booking))));');
 }
+// Conservative HTTPS DNS authority, standard TLS port only; no userinfo,
+// authority escapes, control bytes or backslashes. Works in Node-RED's VM.
+export function isNodeRedHttpsCheckout(paymentUrl) {
+  return typeof paymentUrl === 'string' && paymentUrl.length <= 4096
+    && /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::443)?(?:[/?#][^\s\\]*)?$/i.test(paymentUrl)
+    && !Array.from(paymentUrl).some(char => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127);
+}
 export function patchPaidJoinGateway(source) {
   let out = patchPaidBenefitUsage(source);
+  // Node-RED Function does not expose the WHATWG URL global.
+  out = replace(out,
+    '  let safeUrl = false;\n  try { const url = new URL(paymentUrl); safeUrl = url.protocol === "https:" && !url.username && !url.password; } catch (_) { /* fail closed */ }',
+    '  const safeUrl = isNodeRedHttpsCheckout(paymentUrl);');
+  out = replace(out,
+    '      let safeUrl = false;\n      try {\n        if (typeof checkout?.paymentUrl === "string" && checkout.paymentUrl.trim()) {\n          const url = new URL(checkout.paymentUrl);\n          safeUrl = url.protocol === "https:" && !url.username && !url.password;\n        }\n      } catch (_) { /* hold */ }',
+    '      const safeUrl = isNodeRedHttpsCheckout(checkout?.paymentUrl);');
   out = replace(out, 'if (ctx.lk1 && ctx.lk1.decision.subscriptionVisitCount === 0) {',
     'if (ctx.lk1 && (ctx.lk1.decision.subscriptionVisitCount === 0\n    || (ctx.managedAction === "JOIN_GAME" && ctx.lk1.decision.benefit.finalPriceMinor > 0))) {');
   out = replace(out, 'if (ctx.caller === "split" && subscriptionVisitCount >= 1 && subscriptionVisitCount <= 2) {',
@@ -37,7 +51,7 @@ export function patchPaidJoinGateway(source) {
     'return lk1NeedsVisitJob(ctx) ? prepareVisitConfirmedUpdate(ctx, matches[0]) : prepareConfirmedUpdate(ctx, matches[0]);');
   out = replace(out, 'const lk1Checkout = (ctx) => {',
     'const lk1Checkout = (ctx) => {\n  if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");');
-  return visitLifecycleRuntimeSource() + visitConfirmationSource() + out;
+  return isNodeRedHttpsCheckout.toString() + '\n' + visitLifecycleRuntimeSource() + visitConfirmationSource() + out;
 }
 export function patchPaidJoinPreview(source) {
   let out = patchPaidBenefitUsage(source);
