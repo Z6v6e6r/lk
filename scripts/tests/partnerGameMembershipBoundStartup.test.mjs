@@ -39,7 +39,7 @@ function fixture(t) {
     sources[`runtime/${name}`] = fs.readFileSync(path.join(scripts, "partner_game_membership_runtime", name));
   }
   for (const name of ["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs",
-    "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-node.html"]) {
+    "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs", "partner-game-membership-node.html"]) {
     sources[`runtime/partner-package/${name}`] = fs.readFileSync(path.join(scripts, "../node-red/custom-nodes/partner-game-membership-api", name));
   }
   const files = Object.entries(sources).map(([relativePath, content]) => {

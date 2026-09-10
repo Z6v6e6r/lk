@@ -94,7 +94,7 @@ function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, i
     ...["settings.cjs", "settings-runtime.cjs", "settings-guarded.cjs", "guarded-startup.cjs", "raw-request-guard.cjs",
       "raw-audit.cjs", "guarded-runtime-policy.json", "partner-game-membership-sidecar.service"].map(name => `sidecar/${name}`),
     ...["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs",
-      "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-node.html"]
+      "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs", "partner-game-membership-node.html"]
       .map(name => `runtime/partner-package/${name}`)]);
   const seen = new Set();
   let totalBytes = 0;

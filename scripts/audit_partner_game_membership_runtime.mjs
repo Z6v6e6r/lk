@@ -21,7 +21,7 @@ const runId = crypto.randomBytes(16).toString("hex");
 const sources = {};
 function copy(source, target) { const bytes = fs.readFileSync(path.join(scripts, source)); fs.writeFileSync(target, bytes, { mode: 0o600 }); sources[source] = sha(bytes); }
 for (const name of ["package.json", "package-lock.json"]) copy(`partner_game_membership_runtime/${name}`, path.join(runtime, name));
-for (const name of ["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs", "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-node.html"]) copy(`../node-red/custom-nodes/partner-game-membership-api/${name}`, path.join(runtime, "partner-package", name));
+for (const name of ["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs", "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs", "partner-game-membership-node.html"]) copy(`../node-red/custom-nodes/partner-game-membership-api/${name}`, path.join(runtime, "partner-package", name));
 copy("tests/fixtures/partner-runtime-audit.mjs", path.join(input, "run.mjs"));
 fs.writeFileSync(path.join(input, "empty-global.npmrc"), "# no inherited configuration\n", { mode: 0o600 });
 const user = `${process.getuid()}:${process.getgid()}`;

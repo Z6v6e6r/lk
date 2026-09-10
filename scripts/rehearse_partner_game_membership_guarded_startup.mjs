@@ -21,7 +21,7 @@ fs.symlinkSync("releases/proof", path.join(layout, "current"));
 const sources = {};
 const copy = (relative, target) => { const bytes = fs.readFileSync(path.join(scripts, relative)); fs.writeFileSync(target, bytes, { mode: 0o600 }); sources[relative] = sha(bytes); };
 for (const name of ["package.json", "package-lock.json"]) copy(`partner_game_membership_runtime/${name}`, path.join(runtime, name));
-for (const name of ["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs", "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-node.html"]) copy(`../node-red/custom-nodes/partner-game-membership-api/${name}`, path.join(runtime, "partner-package", name));
+for (const name of ["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs", "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs", "partner-game-membership-node.html"]) copy(`../node-red/custom-nodes/partner-game-membership-api/${name}`, path.join(runtime, "partner-package", name));
 for (const name of ["settings.cjs", "settings-runtime.cjs", "settings-guarded.cjs", "guarded-startup.cjs", "raw-request-guard.cjs", "raw-audit.cjs", "guarded-runtime-policy.json", "partner-game-membership-sidecar.service"]) copy(`partner_game_membership_sidecar/${name}`, path.join(sidecar, name));
 copy("tests/fixtures/partner-guarded-startup-runtime.cjs", path.join(output, "runner.cjs"));
 const candidate = Buffer.from(JSON.stringify(buildPartnerGameMembershipApiSidecarCandidate().flow, null, 2) + "\n");

@@ -16,7 +16,7 @@ const ERROR_CODES = new Set([
   "RAW_ROUTE_INVALID", "RAW_HEADERS_INVALID", "RAW_HEADERS_SIZE", "RAW_HEADER_DUPLICATE", "RAW_HOST_INVALID",
   "RAW_SECURITY_HEADER_INVALID", "RAW_CONTENT_TYPE_INVALID", "RAW_FRAMING_INVALID", "RAW_GUARD_ORDER_INVALID",
   "RAW_AUDIT_UNAVAILABLE", "RAW_BODY_TIMEOUT", "RAW_BODY_ABORTED", "RAW_BODY_IO_ERROR", "RAW_RESPONSE_CLOSED",
-  "RAW_DELETE_BODY_INVALID",
+  "RAW_DELETE_BODY_INVALID", "RAW_PEER_INVALID",
   "RAW_FORWARDING_SANITIZATION_FAILED",
 ]);
 
@@ -235,8 +235,10 @@ function createPartnerRawRequestGuard({ expectedHost, audit, bodyTimeoutMs = 500
       if (performance.now() >= deadlineAt) { expireResponse(); return; }
       if (responseSettled || res.destroyed) { responseFinished(); return; }
       req.body = body;
-      req._body = true; // body-parser 1.x (locked Node-RED 5.0.6)
-      req.skipRawBodyParser = true;
+      // Node-RED's rawBodyParser calls next() once for skipRawBodyParser and
+      // then again when _body is also set. Marking only _body prevents a second
+      // route dispatch on Node-RED 4.x/5.x while retaining the parsed body.
+      req._body = true;
       next();
     }
     // Independent of the body reader: next() and req.close do not mean that the

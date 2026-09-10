@@ -2,6 +2,22 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-10 — Partner: локальный кандидат отдельного потока в общем Node-RED
+
+- На существующей task branch добавлены отдельная вкладка/flow builder и scoped
+  ingress middleware. Обычные HTTP routes проходят без чтения body, аудита или
+  изменения headers; existing `httpNodeMiddleware` блокирует import. Partner namespace проверяется до
+  Mongo/Viva и допускает только loopback peer.
+- Физически проверен Node-RED 4.0.9, соответствующий 147: обычный POST прошёл
+  один раз, валидный raw Partner POST достиг default-off handler и вернул 503.
+  Выявлена совместимость: admin root `/` разбирает body раньше HTTP-In; adapter
+  теперь fail-closed требует `httpAdminRoot=false` или отдельный путь.
+- Исправлен двойной `next()` в raw guard: используется только `_body`, который
+  корректно пропускает последующий Node-RED raw parser.
+- На 147 выполнено только read-only metadata чтение: Node 22.23.2, Node-RED
+  4.0.9. Effective admin/CORS/middleware topology, import/restart/Nginx/keys/
+  Mongo/Viva writes и activation не выполнялись.
+
 ## 2026-09-10 — Partner: причина Nginx rejection установлена, layout choice остаётся открытым
 
 - Сохранены прежняя clean task branch/worktree на `f66ec81` и грязный основной

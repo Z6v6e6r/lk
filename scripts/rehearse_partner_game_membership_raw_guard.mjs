@@ -37,7 +37,7 @@ for (const name of ["package.json", "package-lock.json"]) {
   receipt.sources[`partner_game_membership_runtime/${name}`] = sha(bytes);
 }
 for (const name of ["package.json", "package-lock.json", "partner-game-membership-core.mjs", "partner-game-membership-mongo.mjs",
-  "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-node.html"]) {
+  "partner-game-membership-viva.mjs", "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs", "partner-game-membership-node.html"]) {
   const relative = `../node-red/custom-nodes/partner-game-membership-api/${name}`;
   const bytes = fs.readFileSync(path.join(scripts, relative));
   fs.writeFileSync(path.join(runtime, "partner-package", name), bytes);

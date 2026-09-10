@@ -8,7 +8,10 @@ PadlHub предоставляет работающие методы и фикс
 нашего выпуска. [Ответственность сторон](PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md).
 
 Статус текущего source pilot v0.2: **default-off; token source implemented;
-runtime closure refresh required; live ingress/custody gates UNBOUND**.
+runtime closure refresh required; live ingress/custody gates UNBOUND**. Локальный
+кандидат отдельной вкладки для общего Node-RED описан в
+[PARTNER_GAME_MEMBERSHIP_SHARED_NODE_RED.md](PARTNER_GAME_MEMBERSHIP_SHARED_NODE_RED.md);
+он требует отдельного scoped raw-body middleware и пока не импортирован.
 Исторический `SECURITY_AUDIT_PASS` относится к прежним exact bytes. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
 но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не
 создавались, Mongo/shared ingress/production не менялись. Наличие deployable artifacts

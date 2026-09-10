@@ -37,7 +37,7 @@ const RELEASE_FILES = Object.freeze([
   "partner-game-membership-core.mjs",
   "partner-game-membership-mongo.mjs",
   "partner-game-membership-viva.mjs",
-  "partner-game-membership-node.cjs",
+  "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs",
   "partner-game-membership-node.html",
 ]);
 const RUNTIME_ARTIFACT_FILES = Object.freeze([

@@ -89,7 +89,7 @@ test("middleware preserves parsed payload and marks body-parser complete exactly
   assert.equal(out.nextCount, 1);
   assert.deepEqual(out.req.body, JSON.parse(body));
   assert.equal(out.req._body, true);
-  assert.equal(out.req.skipRawBodyParser, true);
+  assert.equal(out.req.skipRawBodyParser, undefined);
   assert.equal(out.req.listenerCount("data"), 0);
   assert.equal(out.events.length, 1);
   assert.equal(out.events[0].code, "RAW_ACCEPTED");

@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { consumePartnerIngress } = require("./partner-game-membership-ingress.cjs");
 
 const readEnv = (name) => String(process.env[name] || "").trim();
 
@@ -58,8 +59,14 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
       vivaOnPlaceConfirmed: String(config.vivaOnPlaceConfirmedEnv || "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED").trim(),
     };
     let runtimePromise = null;
+    let closing = false;
+    const inFlight = new Set();
+    const assertOpen = () => {
+      if (closing) throw Object.assign(new Error("Partner API store is closing"), { code: "PARTNER_API_CLOSING", httpStatus: 503 });
+    };
 
     node.getRuntime = async function getRuntime() {
+      assertOpen();
       if (readEnv(envNames.enabled) !== "true") {
         const error = new Error("Partner game membership API is disabled");
         error.code = "PARTNER_API_DISABLED";
@@ -159,19 +166,32 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
     };
 
     node.handleHttpMessage = async function handleHttpMessage(msg) {
-      const runtime = await node.getRuntime();
+      assertOpen();
       const req = msg.req || {};
-      return runtime.service.handle({
+      // Shared flow requires proof before even opening Mongo or obtaining a token.
+      const proof = config.requireIngressProof === true ? consumePartnerIngress(req) : null;
+      const command = proof ? {
+        method: proof[0], path: proof[1], headers: proof[3], body: proof[4],
+        remoteAddress: req.socket?.remoteAddress || null,
+      } : {
         method: req.method || msg.method,
         path: req.originalUrl || req.url || msg.url,
         headers: req.headers || msg.headers || {},
         body: msg.payload ?? {},
         remoteAddress: req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || null,
-      });
+      };
+      const operation = (async () => {
+        const runtime = await node.getRuntime();
+        return runtime.service.handle(command);
+      })();
+      inFlight.add(operation);
+      try { return await operation; } finally { inFlight.delete(operation); }
     };
 
     node.on("close", async (_removed, done) => {
+      closing = true;
       try {
+        await Promise.allSettled([...inFlight]);
         const runtime = runtimePromise ? await runtimePromise : null;
         runtime?.tokenResolver?.close?.();
         await runtime?.repository?.close();
