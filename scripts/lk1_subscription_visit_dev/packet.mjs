@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 export const PAYLOAD_FILES=[
   'scripts/lk1_subscription_visit_dev/fixture.mjs','scripts/lk1_subscription_visit_dev/runtime.mjs',
   'scripts/lk1_subscription_visit_dev/start.mjs','scripts/lk1_subscription_visit_dev/packet.mjs',
+  'scripts/lk1_subscription_visit_dev/scheduler.mjs','scripts/lk1_subscription_visit_dev/serve.mjs',
   'scripts/lk1_subscription_visit_dev/verify.mjs','scripts/lk1_subscription_visit_dev/package.json',
   'scripts/lk1_subscription_visit_dev/package-lock.json',
   'scripts/lib/subscriptionVisitWorker.mjs','scripts/lib/subscriptionVisitLifecycle.mjs',

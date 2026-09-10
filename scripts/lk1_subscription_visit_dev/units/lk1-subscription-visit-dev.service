@@ -1,0 +1,29 @@
+[Unit]
+Description=Subscription paid JOIN synthetic DEV with serial visit worker (stopped candidate)
+After=lk1-subscription-dev-mongo.service
+Requires=lk1-subscription-dev-mongo.service
+JoinsNamespaceOf=lk1-subscription-dev-mongo.service
+ConditionPathExists=/srv/lk1-subscription-dev/authorization/visit-start.approved
+RefuseManualStart=yes
+
+[Service]
+Type=simple
+User=lk1-subscription-dev
+Group=lk1-subscription-dev
+WorkingDirectory=/srv/lk1-subscription-dev/visit-packet
+EnvironmentFile=/srv/lk1-subscription-dev/visit-service.env
+RuntimeDirectory=lk1-subscription-visit-dev
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/flock --nonblock /run/lk1-subscription-visit-dev/worker.lock /srv/lk1-subscription-dev/runtime/node22/bin/node /srv/lk1-subscription-dev/visit-packet/scripts/lk1_subscription_visit_dev/serve.mjs --serve /srv/lk1-subscription-dev/visit-packet ${VISIT_MANIFEST_SHA256}
+Restart=no
+TimeoutStopSec=90
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost

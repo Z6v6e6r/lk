@@ -4,10 +4,13 @@ import http from 'node:http';
 import { verifyPacket,newPrivateUserDir } from './packet.mjs';
 import { fileURLToPath } from 'node:url';
 import RED from 'node-red';
+import { createVisitScheduler } from './scheduler.mjs';
 import { openVisitDev,validateConfig,RULE,TOKEN,USER_TOKEN } from './runtime.mjs';
-export async function startVisitDev({config,flowPath,userDir}) {
+export async function startVisitDev({config,flowPath,userDir,workerIntervalMs=0}) {
   validateConfig(config);
+  if(!Number.isSafeInteger(workerIntervalMs)||(workerIntervalMs!==0&&(workerIntervalMs<1000||workerIntervalMs>60000)))throw Error('DEV_WORKER_INTERVAL_INVALID');
   const runtime=await openVisitDev(config);
+  let scheduler;
   const authorized=req=>req.socket.remoteAddress==='127.0.0.1' && ['Bearer '+TOKEN,'Bearer '+USER_TOKEN].includes(req.headers.authorization)
     && req.headers.host===`127.0.0.1:${config.nodeRedPort}`
     && (!req.headers.origin || req.headers.origin===`http://127.0.0.1:${config.nodeRedPort}`);
@@ -18,9 +21,9 @@ export async function startVisitDev({config,flowPath,userDir}) {
         const body=text?JSON.parse(text):{};
         const route=req.method+' '+req.url;
         let result;
-        if(route==='GET /dev/control/state')result=await runtime.state();
+        if(route==='GET /dev/control/state')result={...await runtime.state(),worker:scheduler?.status()};
         else if(route==='POST /dev/control/seed'&&Object.keys(body).length===0)result=await runtime.seed();
-        else if(route==='POST /dev/control/worker'&&Object.keys(body).length===0)result=await runtime.worker();
+        else if(route==='POST /dev/control/worker'&&Object.keys(body).length===0)result=await scheduler.runOnce();
         else if(route==='POST /dev/control/pay'&&Object.keys(body).join()==='transactionId')result=await runtime.pay(body.transactionId);
         else throw Error('DEV_CONTROL_NOT_IMPLEMENTED');
         res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(result));
@@ -31,12 +34,18 @@ export async function startVisitDev({config,flowPath,userDir}) {
   RED.init(server,{userDir,flowFile:path.resolve(flowPath),uiHost:'127.0.0.1',uiPort:config.nodeRedPort,
     httpAdminRoot:false,disableEditor:true,httpNodeRoot:'/',credentialSecret:false,
     contextStorage:{default:{module:'memory'}},functionGlobalContext:{visitDevIO:runtime.io,vivacrm_access_token:TOKEN,vivacrm_token_expires_at:Date.now()+86400000,
-      subscriptions_lk1_product_policy:RULE},externalModules:{autoInstall:false},
+      subscriptions_lk1_product_policy:RULE},externalModules:{autoInstall:false,palette:{allowInstall:false,allowUpload:false},modules:{allowInstall:false}},
     logging:{console:{level:'warn',metrics:false,audit:false}}});
-  try{const started=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('DEV_FLOWS_START_TIMEOUT')),15000);
-    RED.events.once('flows:started',()=>{clearTimeout(timer);resolve();});});await RED.start();await started;await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(config.nodeRedPort,'127.0.0.1',resolve);});}
+  let startTimer,onStarted;
+  const started=new Promise((resolve,reject)=>{
+    startTimer=setTimeout(()=>reject(Error('DEV_FLOWS_START_TIMEOUT')),60000);
+    onStarted=resolve;RED.events.once('flows:started',onStarted);
+  });
+  try{await Promise.all([RED.start(),started]);await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(config.nodeRedPort,'127.0.0.1',resolve);});}
   catch(e){await RED.stop();await runtime.close();throw e;}
-  return {runtime,async close(){await new Promise(resolve=>server.close(resolve));await RED.stop();await runtime.close();}};
+  finally{clearTimeout(startTimer);RED.events.removeListener('flows:started',onStarted);}
+  scheduler=createVisitScheduler({worker:()=>runtime.worker(),intervalMs:workerIntervalMs});
+  return {runtime,scheduler,async close(){const closing=new Promise(resolve=>server.close(resolve));await scheduler.stop();await closing;await RED.stop();await runtime.close();}};
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)) {
   if(process.argv.length!==5 || process.argv[2]!=='--run') {

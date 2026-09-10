@@ -3,6 +3,11 @@ import { MongoClient } from 'mongodb';
 import { initialState,exercise,providerRequest,TOKEN,USER_TOKEN,ACTOR,RULE } from './fixture.mjs';
 import { createVivaVisitProvider,runSubscriptionVisitJob } from '../lib/subscriptionVisitWorker.mjs';
 export {RULE,TOKEN,USER_TOKEN};
+export async function settleVisitJobs(jobs) {
+  const results=await Promise.allSettled(jobs);
+  if(results.some(row=>row.status==='rejected'))throw Error('DEV_WORKER_SCAN_FAILED');
+  return results.map(row=>row.value);
+}
 const fail=code=>{throw new Error(code);};
 export function validateConfig(config) {
   if(!config || typeof config.database!=='string' || config.database.length>63 || config.environment!=='DEV' || !/^mongodb:\/\/127\.0\.0\.1:\d+\/?$/.test(config.mongoUri)
@@ -92,7 +97,7 @@ export async function openVisitDev(config) {
       if(result.modifiedCount!==1)fail('DEV_PAYMENT_PROJECTION_RETRY');
       return {paid:true,synthetic:true};});},
     async worker(){const rows=await db.collection('lk_subscription_daily_booking_ops').find({state:'CONFIRMED','lk1.visitJob':{$exists:true}}).toArray();
-      return Promise.all(rows.map(row=>runSubscriptionVisitJob({operationKey:row._id,operations:db.collection('lk_subscription_daily_booking_ops'),
+      return settleVisitJobs(rows.map(row=>runSubscriptionVisitJob({operationKey:row._id,operations:db.collection('lk_subscription_daily_booking_ops'),
         locks:db.collection('lk_subscription_visit_locks'),leaveOperations:db.collection('lk_game_leave_operations'),provider})));},
     async state(){return {provider:await stateCollection.findOne({_id:'fixture'}),operations:await db.collection('lk_subscription_daily_booking_ops').find({}).toArray(),
       game:await db.collection('lk_games').findOne({id:'fixture-game'}),locks:await db.collection('lk_subscription_visit_locks').countDocuments()};},

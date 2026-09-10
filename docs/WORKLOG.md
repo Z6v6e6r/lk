@@ -2516,3 +2516,13 @@ lint0errors/387warnings; full production+DEV bundle build with inert CI env PASS
 Integrated DEV graph equals the verified394e0af packet byte-for-byte; native7-case
 and browser fixture proof remain applicable. Independent integration review PASS.
 Local integration only; push, deploy and real business writes remain separate stages.
+
+### 2026-09-10 — subscription visit server preparation (stopped candidate)
+
+Prepared serial periodic/manual worker, full sibling-job drain, exact manifest/Node22
+foreground launcher, private-network locked unit candidates and offline staging plan.
+DEV Node-RED4.1.15 with scoped npm11.19.1/qs6.16.0 overrides passes audit with zero
+findings. Server Node18 mismatches the required runtime; pinned Node22.23.2 Linux x64
+archive is prepared separately. No activation is implied by network isolation. Root frontend dependencies and production business logic
+unchanged. See SUBSCRIPTION_VISIT_SERVER_PREP_20260910.md. No server installation,
+start, main integration/push, or real provider/payment mutation in this stage.
