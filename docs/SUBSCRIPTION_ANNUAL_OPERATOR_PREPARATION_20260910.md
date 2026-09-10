@@ -84,6 +84,10 @@ before any use; the package alone does not close that gate.
    strings and therefore did not establish compatibility with live BSON.
    Identity support must preserve native BSON type through evidence, lookup,
    exact filters, intent and recovery; production IDs must not be rewritten.
+   Independent payment review also confirmed affected annualHistory validation,
+   runtime projection lookup and strict reference comparisons. The correction
+   spans generated runtime helpers as well as the offline operator; changing
+   only the opening guard or coercing all IDs to strings would be unsafe.
 
 2. Lossy relaxed-EJSON normalization and expected BSON postimages diverge.
    manage_annual_subscription_history.mjs:143 converts Long to JS Number;
