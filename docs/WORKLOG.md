@@ -119,6 +119,982 @@
   release review P0–P2=0. Прежние physical proofs не запускались повторно и не
   считаются fresh live evidence; runtime validator не обновляет vulnerability audit.
   Remote exact-head CI, push, deploy, SSH, secrets и live/shared mutations не выполнялись.
+## 2026-09-10 — Partner: локальный кандидат отдельного потока в общем Node-RED
+
+- На существующей task branch добавлены отдельная вкладка/flow builder и scoped
+  ingress middleware. Обычные HTTP routes проходят без чтения body, аудита или
+  изменения headers; existing `httpNodeMiddleware` блокирует import. Partner namespace проверяется до
+  Mongo/Viva и допускает только loopback peer.
+- Физически проверен Node-RED 4.0.9, соответствующий 147: обычный POST прошёл
+  один раз, валидный raw Partner POST достиг default-off handler и вернул 503.
+  Выявлена совместимость: admin root `/` разбирает body раньше HTTP-In; adapter
+  теперь fail-closed требует `httpAdminRoot=false` или отдельный путь.
+- Исправлен двойной `next()` в raw guard: используется только `_body`, который
+  корректно пропускает последующий Node-RED raw parser.
+- На 147 выполнено только read-only metadata чтение: Node 22.23.2, Node-RED
+  4.0.9. Effective admin/CORS/middleware topology, import/restart/Nginx/keys/
+  Mongo/Viva writes и activation не выполнялись.
+
+## 2026-09-10 — Partner: причина Nginx rejection установлена, layout choice остаётся открытым
+
+- Сохранены прежняя clean task branch/worktree на `f66ec81` и грязный основной
+  checkout. Fetched origin/main `d0e8394`; main/чужие изменения не интегрировались.
+- Добавлена закрытая диагностическая проекция inherited error через WeakMap;
+  predicates, error code, successful schema и production stop не менялись.
+- Read-only root и полный текущий 14-file snapshot локализовали root line33
+  ssl_protocols; structural default-кандидат переопределяет TLS на1.2/1.3, но
+  остаются implicit-default/header/listener ограничения. Native/runtime не доказан.
+- Целевые120/120PASS; full911/887PASS/24FAIL, exact24 совпали с baseline; rootlint
+  0errors/387warnings; build остановлен из-за17missingVITEinputs. Review source и
+  private helper завершён; исправления helper внесены до соответствующих reads.
+- Пункт1 не объявлен закрытым: пользователю предложен выбор isolated8443,
+  измененияshared443 или отдельногоIP. Deploy/reload/probes/provider/data writes0.
+- Полные результаты и пределы: [отчёт](PARTNER_GAME_MEMBERSHIP_NGINX_STEP1_20260910.md).
+  MODEL_ROUTE: parent.
+
+## 2026-09-07 — Partner: updated-profile read завершён, inherited compatibility остаётся закрытой
+
+- Пользователь подтвердил read-only проверку `713ff72`. Вначале окно147 было WAIT
+  из-за чужого prewrite/smoke; SSH не запускался. Local private helper подготовлен
+  без изменения12pins/epoch/path/fd guards, проверен и прошёл security delta review.
+- После явного coordinator grant выполнен один stdin-only SSH77415, actual exit0:
+  09:37:29.001–09:37:29.204UTC, stderr0. Fresh HEAD/branch/clean/4source/helper guards
+  PASS; helperSHA d82a2caa8623ad562f8bae3cae19b6c8771ae0233762905237e06d91c74069d7.
+- Все12path/content pins совпали,1,235lexical statements,skipped0; finalfd/epoch
+  guards завершены. Локальная сверка с priorcapture подтвердила hashes/projections.
+- Source713ff72 прошёл прежний MAIN_UNSUPPORTED барьер, новый firstcode:
+  NGINX_SHARED_DIALECT_INHERITED_UNSUPPORTED / CLOSED_PROFILE_REJECTED. Конкретная
+  отвергнутая директива не установлена; нельзя называть rootTLS sole cause или
+  считать это native/runtime failure. File-local defaults/header facts не effective proof.
+- После actualexit отправлены receipt и RELEASED coordinator; доставка успешна.
+  Ресурсов/процессов не удерживаем. Предыдущее итоговое сообщение source-этапа после
+  отдельного usergrant также было доставлено; прежняя запись отказа остаётся историей.
+- Helper tests24+43+13assertions/7synthetic scenarios и six-input audit/security
+  review использованы из завершённой подготовки; в actual продолжении не повторены.
+  Full904/880PASS/24FAIL и rootlint0errors/387warnings — historical, release RED.
+- Изменены только inventory/adapter/test-plan/worklog и existing drawio labels.
+  Source policy, helpers/pins/captures прежних этапов не переписаны. Drawio-skill
+  XML-only fallback: PNG/visualQA не повторены после известного sandbox сбоя.
+- Нет новых SSH/native/-t/-T/probes, key/cert/env/log reference reads, hostwrites,
+  provider/shared-data writes, reload/install/push/PR/merge/CI/deploy/activation.
+  Следующий scope должен безопасно локализовать inherited-profile rejection;
+  текущее чтение не разрешает исключения в профиле или live fix. MODEL_ROUTE: parent.
+
+## 2026-09-07 — Partner: local `worker_processes auto` compatibility, строгие proof gates сохранены
+
+- Пользователь подтвердил локальный этап после `888fe90`; та же branch/worktree,
+  исходно clean, primary sole writer. Cached origin/main `07db0f6` не обновлялся и
+  не является exact-head release evidence. MODEL_ROUTE: parent, R3 Critical.
+- Только shared dialect runtime source: ровно одна main-декларация `4`/`auto`,
+  включая раскрытые include instances. Missing/duplicate/unsupported/non-main
+  вызывают отказ; comments и map/types data не считаются декларациями.
+- Не добавлены CPU inference, caller worker override, новые result fields или
+  production mode. Не менялись generation evaluator, overlay preservation,
+  early TLS/header/default predicates, ingress entry, Node-RED, package/lock.
+  Baseline bytes `auto → 4` и `4 → auto` переписать нельзя.
+- Before-fix focused regressions 2/2 ожидаемо FAIL. Targeted adapter после fix:
+  113/113 PASS, actual exit0; добавлено23tests, 11прежних unsafe-profile сценариев
+  проверяются и под4, и подauto. Intermediate два новых assertions использовали
+  неверное имя ошибки; исправлены на прежний EXISTING_FILE_CHANGED без смены guard.
+- Проверки auto подтверждают отказ при3/5workers в каждом baseline/before/after,
+  partial coverage остаётся NOT_PROVEN. Полный synthetic coverage — лишь local proof.
+  Независимое security/compatibility review source/tests: P0–P2=0, reviewer read-only.
+- Full sequential suite в sandbox:904/854PASS/50FAIL, actual exit1;26дополнительных
+  отказов только listenEPERM на own-loopback fixtures. Повтор с разрешёнными fixture
+  sockets:904/880PASS/24FAIL/0skip, actual exit1,33.804s. Exact24failing names совпали
+  с prior881baseline; новых нет. Release остаётся RED, старые receipts не resealed.
+- Scoped lint после удаления unused testbinding PASS. Root npm run lint:actual
+  exit0,0errors/387warnings. Зависимости использованы из существующего ancestor
+  node_modules; install/lock/symlink changes отсутствуют. Build/native NOT_RUN:
+  исторический build-input gap не закрыт, native rehearsal DEFERRED_BY_USER.
+- Координатор выделил LOCAL_HEAVY только для последовательных tests/lint. Все
+  процессы завершены, локально ресурс освобождён. Итоговое уведомление координатору
+  не доставлено: auto-review отклонил сообщение в другую задачу; обхода/повтора после
+  отказа нет. До этого первый запрос окна timeout, единственный разрешённый retry
+  доставлен и получил grant. Доставка итогов требует явного разрешения пользователя.
+- Docs inventory/adapter/test-plan и existing drawio отражают только local fix.
+  Actual full host profile не проверен: старый redacted capture не содержит исходных
+  config bytes; следующий actual rejection неизвестен. Early/default ограничения
+  не сняты. XML-only drawio-skill fallback, PNG/visualQA после прежнего сбоя не повторены.
+- Нет SSH, host/config/key/env reads, nativeNginx/reload, provider/shared-data writes,
+  автоматизации, push/PR/merge/CI/deploy/activation. Нужны отдельные actual-profile,
+  native/application/production и release gates; новым source approval их не заменить.
+
+## 2026-09-07 — Partner: actual read PASS, shared profile CLOSED_PROFILE_REJECTED
+
+- Продолжение с clean `9901488`, та же branch/worktree, sole writer. Пользователь
+  подтвердил read после освобождения147окна; coordinator предоставил одно новое
+  неконфликтующее окно, когда другой deploy ещё не занял сервер.
+- Предложенная heartbeat automation не создана: auto-review отклонил периодическое
+  расписание. Обходов/повторных попыток не было. Свободное окно позволило выполнить
+  уже разрешённое непосредственное чтение, а не отложенную автоматизацию.
+- Fresh local guards PASS: HEAD/branch/clean state, four repo inputs byte-equal
+  runtime source `1c0a82d`, reviewed helper SHA exact. Helper/source tests и security
+  review использованы из предыдущего этапа без изменений; новых source diffs нет.
+- Actual one SSH19110 exit0, 08:28:02.408–08:28:02.618 UTC, stderr empty. Прежние12
+  file-content pins, fd/path checks и final host/master/four-worker epoch совпали;
+  1,235 lexical statements, skipped0. Сразу после actual exit coordinator получил
+  RELEASED, процессов/ресурсов не удерживаем, новых SSH не запускали.
+- Result CLOSED_PROFILE_REJECTED, firstcode NGINX_SHARED_DIALECT_MAIN_UNSUPPORTED.
+  Root worker_processes=AUTO при literal4 в source profile. Это source compatibility
+  mismatch, не native/runtime Nginx failure и не blocker чужого backend deploy.
+- File-local structural projection: zero exact IPv4/IPv6 explicit TLS default
+  declarations; root-http TLS list different, five header settings missing. Эти
+  данные не аттестуют effective defaults/inheritance, последующие gates не пройдены.
+- Hostwrites/probes0, key/cert/env/log refs не читались. Нет -t/-T/native/reload,
+  provider/shared-data writes, push/PR/merge/CI/deploy/activation. Runtime/policy/
+  production entry и historical receipts byte-preserved; native DEFERRED/NOT_RUN.
+- В repo обновлены NGINX_INVENTORY, NGINX_SHARED_ADAPTER, TEST_PLAN, этот WORKLOG и
+  существующая drawio evidence schema. Drawio-skill XML-only fallback, PNG/visual QA
+  NOT_RUN после известного Electron/sandbox blocker. Fullsuite/lint/build не повторены
+  для docs-only diff; прежние881/857PASS/24FAIL остаются историческим release RED.
+- XML structural validator0errors/0warnings,68local links/anchorsPASS, whitespace
+  diffPASS; отдельная локальная сверка12old path/content hashes с новым capturePASS.
+  Read-only evidence/claims review пяти docs/schema: P0–P2=0; reviewer не аттестует
+  отсутствующие rawconfig/guard history, native или production acceptance.
+- Следующий предложенный scope — локальная совместимость профиля с текущими settings
+  без global server edits и без ослабления actual-worker/default/header safeguards.
+  В текущем read-only этапе исправление не начинается. MODEL_ROUTE: parent.
+
+## 2026-09-07 — Partner: compatibility read подготовлен, окно отозвано до SSH
+
+- Пользователь подтвердил read-only compatibility gate после `1c0a82d`; сохранены
+  branch/worktree, исходно clean, sole writer. MODEL_ROUTE: parent; Critical routing
+  использован для security-review исполняемого read-only helper до server access.
+- Private one-shot: предыдущий exact12-file scope, fd/ancestor/O_NOFOLLOW guards,
+  старые boot/master/worker pins, source-owned lexer/checker из `1c0a82d`. Планируемый
+  stdin launcher с `env -i`, absolute executables, timeout20sTERM/2sKILL; нет remote
+  helper file. Вывод только fixed metadata, не raw configs/domains/error values.
+- Security review нашёл неполную prior-content pinning для дополнительных6 файлов.
+  Добавлена отдельная pathnameSHA→contentSHA таблица из прежнего private receipt,
+  без repin и расширения read scope; отдельная таблица сохраняет redacted aliases.
+  Final pin-delta/source-hash re-review P0–P2 = 0. Local doc links/anchors67PASS,
+  whitespace diff checkPASS; private diagnostics не включаются в commit.
+- Final bundle syntax, 16 compatibility/projection, 43 closure scope/pin/redaction,
+  13 scanner/path и7synthetic fd/ancestor/race assertions — actual PASS/exit0.
+  Среди43 —12новых drift/alias checks. Repo runtime source/receipts не менялись;
+  fullPartner/lint/build не повторены, прежний fullrelease RED остаётся.
+- Coordinator сначала подтвердил окно147, затем отозвал его для отдельно одобренного
+  backend deploy **до старта SSH**. Remote process не запускался и не прерывался,
+  resources FREE, coordinator уведомлён. Actual compatibility NOT_RUN, не PASS/mismatch.
+- Private bundle/source/tests/evidence сохранены внеGit. В repo только четыре docs:
+  NGINX_INVENTORY, NGINX_SHARED_ADAPTER, TEST_PLAN и WORKLOG. Existing diagram не менялся:
+  граница local/NOT_PROVEN остаётся верной. Нет новых веток/PR, push/merge/CI/deploy,
+  SSH/native/probes/reload/-t/-T, key/cert/env/log reads или shared/provider/data writes.
+- Для продолжения нужно новое неконфликтующее owner window с fresh guards. Не открывать
+  дополнительный цикл улучшений или автоматически обновлять pins после общего deploy.
+
+## 2026-09-07 — Partner: завершена локальная shared Nginx adapter связка
+
+- Продолжение с `3b89c38` в прежнем WT/branch; primary sole writer, local-only
+  approval. Риск R3, MODEL_ROUTE: parent; security и reliability reviewers read-only.
+- Source files: `partner_game_membership_nginx_lexical.mjs`, `nginx_probes.mjs`,
+  `nginx_shared_overlay.mjs`, новые `nginx_shared_dialect.mjs` и
+  `nginx_shared_generation.mjs` (последние четыре с тем же `partner_game_membership_`
+  prefix, все в `scripts/`). Closed inherited/default profile, source-owned preparation,
+  новый shared transport и redacted request-ID/four-worker evaluator + fixture session.
+- Tests: новый `scripts/tests/partnerGameMembershipNginxSharedAdapter.test.mjs` и
+  дополненный `partnerGameMembershipNginxProbes.test.mjs`. 90 adapter tests и 2 новых
+  physical/schema collector tests, synthetic certs/proc metadata, реальные loopback TLS
+  и held FD; это не native Nginx/application или actual server state.
+- Shared profile запрещает неизвестные inherited handlers, переменные guard namespace
+  через map/set/три PCRE формы, implicit/conflicting defaults и неподдержанные listeners.
+  Один private snapshot для обеих проверок; actual host profile не аттестован.
+- Security P2 snapshot reread и variable shadowing (включая bare apostrophe capture)
+  закрыты. Reliability P2 общего deadline после final snapshot закрыт; finally cleanup
+  и регрессионный outer/log-window mismatch test. Финальные scoped verdicts P0–P2 = 0.
+- Первый полный прогон actual exit 1: 881/856 PASS/25 FAIL. Новый interface regression
+  закрыт без правки старого assert: прежние `words`, отдельные private `rawWords`.
+  Affected 3/3 PASS; security re-review малого delta P0–P2 = 0.
+- Финальный full Partner sequential: **881 tests / 857 PASS / 24 FAIL / 0 skipped**,
+  actual exit 1, 34.022 s. Все 92 новых PASS; 24 failing names точно совпали с baseline
+  предыдущего checkpoint, новых/исчезнувших 0. Root lint actual exit 0: 0 errors /
+  387 warnings; scoped ESLint PASS. Оба LOCAL_HEAVY слота освобождены после actual exits,
+  coordinator уведомлён; первичные и final logs сохранены отдельно вне Git.
+- Docs: новый `PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md`, обновлены ingress
+  verifier, inventory, shared overlay, production controls, test plan, этот worklog
+  и существующий `docs/assets/partner-game-membership-ingress-evidence.drawio`.
+  По drawio-skill XML-only fallback после известного Electron/sandbox blocker;
+  PNG/visual QA NOT_RUN. XML 0 errors / 0 warnings, 67 local links/anchors PASS.
+- Независимый final release-claims review source/docs/diagram P0–P2 = 0; private
+  command receipts не являются предметом аттестации reviewer. Runtime/policy/binding/
+  application/production-entry и historical receipts не менялись, release gate RED.
+- Нет SSH, внешней сети, реальных cert/key/env/log reads, provider/shared-data writes,
+  DNS/routes, install/reload, push/PR/merge/CI/deploy/activation. Native application
+  остаётся DEFERRED_BY_USER / NOT_RUN; build input gap предыдущего этапа не закрывался.
+  Trusted production operator, fresh module/PKI/closure custody, actual-baseline
+  compatibility, four-worker application/external proof и release refresh ещё нужны.
+- Локальный checkpoint после exact staged secret/PII scan закрывает только source
+  этап; production flags false и UNSUPPORTED_INGRESS_ADAPTER остаются обязательными.
+
+## 2026-09-07 — Partner: локальный Nginx shared-overlay renderer/checker
+
+- Продолжение с `e8c6cc6`, прежняя branch/worktree, primary sole writer. Пользователь
+  разрешил локальный production-adapter source slice, не SSH/установку/ingress writes.
+  Координатор подтвердил отсутствие конфликта own-WT работы с отдельным static deploy.
+- Новый pure `partner_game_membership_nginx_shared_overlay.mjs`: один добавочный
+  exact-host vhost, namespaced maps/zones/redacted log, закрытые public-cert inputs
+  и фиксированные draft paths. Прежний standalone generator не переносится на shared
+  сервер. Нет filesystem/network/process I/O, key reads или production mode.
+- Bounded lexer получил отдельный structural-context API без смены старого output.
+  Checker сохраняет все caller baseline bytes + ровно один source-owned overlay;
+  запрещает namespace/host collision, повторный/wrong-context conf.d include,
+  пропуски literal targets, cycles/orphans и effective-http inherited Real IP.
+  Synthetic 12-file fixture не является actual host capture/closure attestation.
+- Security review выявил и закрыл inherited Real IP/limiter dry-run, подмену через
+  inherited Array iterator и расхождение проверенного/rendered cert через Buffer
+  methods. Exact prototypes/data snapshots, dry-run off/satisfy all и regression
+  tests добавлены. Итог security source review P0–P2 = 0; reviewers read-only.
+- Последний targeted overlay run 58/58 PASS; lexer 31 PASS до неизменённого остатка
+  этапа. Scoped ESLint PASS. Full sequential Partner suite actual exit 1:
+  789 tests / 765 PASS / 24 FAIL / 0 skipped, 21.877 s. Все 24 failing names точно
+  совпали с предыдущим 731-test baseline. Release RED, receipts не resealed.
+- Root lint actual exit 0: 0 errors / 387 warnings. Согласованный LOCAL_HEAVY
+  освобождён после двух actual exits; coordinator уведомлён. Build не повторён:
+  прежние 17 missing VITE inputs; native application DEFERRED_BY_USER / NOT_RUN.
+- Подробный contract/negative-test matrix и новая страница существующей drawio:
+  XML validator 0 errors / 0 warnings. По drawio-skill использован XML-only fallback
+  после прежнего sandbox/Electron blocker; PNG export/visual QA NOT_RUN.
+- Local links/anchors: 51 PASS; diff whitespace PASS. Финальный независимый
+  release/compatibility review source/docs/diagram: P0–P2 = 0; private execution
+  receipts не являются предметом аттестации этого reviewer.
+- Непокрыты shared semantics/TLS defaults, PKI/key custody, production log/collector
+  dialect, все четыре workers/controlled application и external proof. Source draft
+  не открывает production verifier; policy/binding/runtime/packet bytes не меняются.
+- Нет SSH, внешней сети, реальных cert/key/env/log reads, provider/shared-data writes,
+  DNS/routes, install/reload/restart, push/PR/merge/CI/deploy/activation. Локальный
+  checkpoint завершит этот slice; до него staged secret/PII scan обязателен.
+
+## 2026-09-07 — Partner: завершена bounded disk include инвентаризация Nginx
+
+- После65a5b2e пользователь отдельно разрешил read-only continuation; coordinator
+  подтвердил отсутствие assigned server/ingress writers147. Прежние ветка/WT,
+  primary sole writer, LOCAL_HEAVY не запрашивался.
+- Private one-shot helper: exact6 ранее наблюдённых targets+3symlink destinations;
+  строки destinations офлайн совпали с предыдущими hashes. Original6file pins и
+  frozen3globsets не resealed; root/ancestor/symlink/O_NOFOLLOW/samefd checks,
+  host/boot/process before/after и remote20sTERM/2sKILL сохранены.
+- До SSH review закрыл P2 quotedstructuralhead skip: fail-closed для6имён,
+  exact publicRecord whitelist, unknown rawConfig/rawToken omitted.31newsynthetic
+  assertions+13scanner/path+7fd/race scenarios иsyntax PASS. Rereview P0–P2=0.
+- Actual SSH06:23:52.306–.428UTC,exit0:12files/1,235lexical statements/skipped0;
+  финальные guards прошли.6targets gap закрыт в bounded literal include graph,
+  не semantic/applied-config proof. Два backup/pre-release файла входят в glob,
+  содержат PadlHub server-name/listen; ничего не удалено/переименовано.
+- Exact Partner server-name/literal127.0.0.1:18894proxy_pass/ssl_verify_client
+  statements не наблюдались; отсутствие косвенных upstream или memory routing
+  этим не доказано. Private capture/helper retained outsideGit, rawconfig и
+  чужиеdomains не экспортированы; cert/key/env/client-log contents не открывались.
+- SSH завершён, coordinator получил end, ресурсов не удерживаем. Нет probes,
+  nginx-t/-T/reload/restart, host/provider/shared-data writes, secret changes,
+  install/push/PR/merge/CI/deploy/activation. В репозитории только docs/diagram;
+  runtime/policy/receipts byte-preserved, fulltests/lint/build NOT_RUN без новых
+  runtime inputs. Прежний fullrelease RED остаётся; native DEFERRED/NOT_RUN.
+- Обновлены inventory/ingress/production-controls/test-plan docs и существующая
+  drawio-схема. XML-only fallback: ранее подтверждённый sandbox/Electron blocker;
+  PNG/visualQA не перезапускались. Следующий локальный scope — production adapter
+  contract поверх уже существующего candidate/collector, не перепроектирование.
+- XML0errors/0warnings,40local links/anchors PASS; private capture aggregates и
+  executed helper SHA совпали. Проверены unchanged lexer/production entry/controls.
+  Независимый read-only release/evidence review6docs: P0–P2=0; redacted metadata
+  согласованы, исходные config bytes этим review не аттестуются.
+
+## 2026-09-07 — Partner: устранена ложная ошибка Nginx inventory lexer
+
+- Продолжение после `b678973`, прежняя ветка/WT, primary sole writer. Узкий scanner
+  ошибочно считал `#` внутри regex-token началом комментария и терял `{`.
+  Минимальная synthetic reproduction подтверждена; official Nginx 1.24 token-start
+  semantics проверены. Это bug диагностического сканера, не Nginx configuration.
+- Guarded read-only A/B на том же config SHA, 05:54:55 UTC: legacy
+  UNBALANCED_CLOSE/465 против fixed307 statements; наружу только line53/370 и
+  hash-in-character-class boolean. Before/after host/boot/process/hash совпали.
+- Новый pure bounded module `scripts/partner_game_membership_nginx_lexical.mjs`:
+  128KiB/50k token/depth256 caps, fixed redacted errors, без I/O/live-verdict.
+  Raw token values остаются только private intermediate для allowlisted projector.
+- Corrected scoped inventory 05:59:55 UTC actual SSH exit0:6 allowlisted configs,
+  включая public TLS options; финальные epoch checks PASS. Certificate/key refs
+  не открывались;6 чужих vhost/include targets не читались. PARTIAL_SCOPED_READ,
+  не full/applied-config proof. Оба SSH завершены, server writes0.
+- Новые31 regression tests PASS; scoped ESLint/payload syntax/self-checks PASS.
+  Full sequential Partner:731/707PASS/24FAIL/0skip, exit1; exact24names совпали с
+  прежним baseline, новых0. Root lint exit0:0errors/387warnings. LOCAL_HEAVY
+  освобождён после фактических exit; source/proof pins не перепечатаны.
+- Root build NOT_RUN: прежние17 missing VITE inputs не закрыты. Native application
+  DEFERRED_BY_USER/NOT_RUN. Нет probes/nginx-t/-T/reload/restart/Docker/install,
+  provider/shared-data writes, push/PR/merge/CI/deploy/activation. Полный release RED.
+- Read-only security review bounded source/diagnostic: P0–P2=0. Обновлены inventory,
+  ingress и test-plan docs; в существующей drawio-схеме отдельная страница границ.
+  PNG export/visual QA NOT_RUN: ранее подтверждённый sandbox/Electron blocker,
+  повторный запуск export не выполнялся. UNBOUND/BLOCKED/unsupported сохранены.
+- XML structural validation:0errors/0warnings;28 local links/anchors PASS;
+  source hash совпал с bytes фактического inventory и проверок, production entry
+  byte-identical к HEAD. Read-only release/evidence review финального diff: P0–P2=0;
+  private SSH receipts этим review не аттестуются.
+
+## 2026-09-07 — Partner: частичная read-only инвентаризация Nginx на 147
+
+- Отдельный user grant после `97a3038`, coordinator подтвердил отсутствие конфликтующих
+  server/ingress writers. Ветка/WT сохранены; runtime/policy/pins не менялись.
+- Actual SSH metadata: active nginx.service, master+4workers, Nginx 80/443; host listener
+  18894 отсутствовал. Non-Nginx wildcard 1880 не объявляется подтверждённой внешней
+  доступностью или принадлежностью Node-RED. Build-only `nginx -V`: 1.24.0,
+  `/etc/nginx/nginx.conf`; все raw args/build/config outputs исключены из отчёта.
+- Metadata каталогов частичная: conf.d/sites-enabled получены; sites-available
+  остановлен по basename shape. Содержимое чужих vhost/backup не читалось.
+- До config-content read закрыты review P1: path/open race и широкий filename allowlist.
+  Exact config set, root/non-writable ancestors, bounded symlink chain, O_NOFOLLOW,
+  fstat перед bytes и fd/path checks после; повторный security review P0–P2 = 0.
+  Deadline P2 закрыт monotonic checks и внешним server TERM/KILL timeout; первый
+  metadata capture фактически 127 ms, его прежний source SHA не перепечатан.
+- Фактически прочитаны пять allowlisted configs. Lexical scan вернул UNBALANCED_CLOSE
+  на строке 465 padlhub.su, а не config PASS. Это не доказательство invalid Nginx config.
+  Closing readback 03:48:44–45 UTC отдельно подтвердил прежний process epoch и два
+  scoped hashes; он не повышает incomplete scan до full/applied-config proof.
+- Локальные проверки: 8 metadata assertions, 13 lexer/path assertions и 7 synthetic
+  fd/ancestor/race scenarios PASS; syntax PASS. Native Nginx, полный Partner suite и
+  root build/lint не запускались; source runtime не менялся. Проверенные результаты
+  и незакрытые границы: docs/PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md.
+- Нет key/env/client-log/shared-flow reads, Mongo/Viva/probes/DNS/host writes,
+  nginx -t/-T/reload/restart, install/push/PR/merge/deploy/activation. Все SSH процессы
+  завершены, ресурсов/lease не удерживаем. UNBOUND/BLOCKED/unsupported сохранены.
+- Docs-only scope4, пять новых local links, diff check и configured added-line
+  secret/PII scan PASS. Controls/verifier byte-identical к `97a3038`. Отдельный
+  read-only release review документов: P0–P2 = 0, private receipts не аттестовывались.
+
+## 2026-09-07 — Partner: подтверждено планируемое production размещение
+
+- Пользователь подтвердил `partner-api.padlhub.su` на `lk-primary-147` только как
+  target для планирования; ранее выбранный Nginx сохранён. Та же ветка/worktree,
+  исходный checkpoint `a444430`; новых веток/PR нет.
+- Решение записано в production-controls docs и связано с ingress/deploy runbooks.
+  Runtime code, tests, policy JSON, private binding и immutable receipts не менялись:
+  `exactHost: null`, `UNBOUND`, `BLOCKED`, production entry unsupported сохранены.
+- Следующий этап описан как отдельный bounded read-only inventory service/process/
+  listeners/config/include на `147`, без private keys/env/logs/flows и без `nginx -t/-T`,
+  probes/reload/install. Target choice не объявляется live proof. Наши infrastructure
+  gates не требуют нового partner signoff; native rehearsal остаётся отложенной.
+- В этом этапе нет SSH/DNS/TLS/native/Docker/secret/provider/shared-data операций,
+  push/PR/merge/CI/deploy/activation. Проверки предыдущего checkpoint не выдаются за
+  новый запуск; docs-only diff не требует повторного runtime/full Partner rehearsal.
+- Фактически прошли diff check, exact четырёхфайловый docs-only scope, два новых
+  local link/anchor и configured added-line secret/PII scan. Controls и verifier
+  byte-identical к `a444430`. Независимый read-only release review: P0–P2 = 0.
+
+## 2026-09-07 — Partner: source-связка controlled application с generation/log collector
+
+- Продолжение после `40c7239`, прежняя ветка/WT; primary — sole writer.
+  Existing controlled-application source runner после legacy12probe A/diskB/HUPB/
+  revokeC включает обязательный fixed11 supplement. Старый session.finish и120s
+  бюджет сохранены; положительный client-2 и прежний revoked client не заменены
+  fake identities. Независимый observer требует ровно+2 после прошлых counters.
+- Новый fixture helper держит один fd в observer через READY(initSha) → canonical
+  transport+EOF → RESULT+stdoutEOF+close0. Transport сам собирается прежним fixed
+  collector в separate client namespace, actual namespace проверена до/после.
+  Host session связывает applied snapshotB с currentC; общий LOCAL link проверяет
+  config/marker/snapshot/transport hash, leaf, namespace и suffix receipt.
+- Второй unconditional correlation log добавлен в source generator; файл0600/dir0700
+  создаются до Nginx startup. Во время held window новых artifact names в /out нет:
+  legacy entries остаются в prefix, свежие чужие строки отклоняются. Imported source
+  copies сохраняют relative layout до transitive canonicalJson core. Source/copy/
+  container/network checks выполняются до/после, exact-owned cleanup не ослаблен.
+- Security/release review нашли общий P2: timer-only90s и новые exec вне общего180s
+  бюджета. Исправлено elapsed monotonic/wall checks на переходах и remaining-budget
+  AbortSignal для обеих CLI веток/pipe. Late READY/RESULT/close, late supplement и
+  rollback получили5regressions. Оба read-only re-review закрыли finding; новых
+  существенных P0–P2 нет. Kill Docker CLI не объявляется remote helper cleanup.
+- Targeted сначала134/134, после correction139/139 PASS (50новых cases).
+  Frozen-source full sequential Partner700tests:676PASS/24FAIL/0skip, actual exit1;
+  exact24failed names совпали с предыдущим checkpoint (Nginx3/binding11/runtime8/
+  packet2), новых0. Старые immutable source pins/receipts не пересчитаны, releaseRED.
+- Root lint фактически exit0,0errors/387warnings. Согласованный LOCAL_HEAVY использован
+  только для fullPartner concurrency1→lint, освобождён после actual exits; собственные
+  socket fixtures только127.0.0.1. Новых runtime/resource процессов не осталось.
+- Scoped ESLint, driver syntax и git diff checks PASS. Drawio-skill добавил страницу
+  Application correlation link в существующую схему, XML0errors/0warnings;25local
+  doc linksPASS. PNG/visualQA NOT_RUN: прежний Electron sandbox blocker.
+- Build NOT_RUN: прежний неизменный preflight17missingVITE. Native application
+  DEFERRED_BY_USER/NOT_RUN. Actual shared-vhost certificate behaviour/log flush/
+  mounts/process generations не проверены; synthetic proc/streams не nativeproof.
+  Production entry всё ещё UNSUPPORTED_INGRESS_ADAPTER. Нет Docker/SSH/native,
+  shared data/provider/secret/routing/live write, push/PR/merge/CI/deploy/activation.
+  Новых согласований с партнёром нет; это наша инфраструктурная работа.
+
+## 2026-09-06 — Partner: локальные Nginx generation/log consistency и host-session wiring
+
+- Продолжение после `45d15a7`, та же ветка/WT; primary — единственный writer.
+  Новые `partner_game_membership_nginx_generation.mjs` и `nginx_log_window.mjs`:
+  exact baseline/new-worker/config/epoch и HTTP probe/log correlation; source-only
+  fixed map/log_format с literal generation. В collector добавлен публичный
+  `X-Padlhub-Probe-Id`, wire equality проверена existing actual TLS test.
+- Read-only fd удерживается от initial prefix до final check, no reopen/rotation
+  fallback; canonical path/owner0600/ancestors/nlink, bounded strict JSONL, prefix
+  hash/identity, complete tail, stable capture/final state и90s timeout. Не заявляется
+  append-only history: same-inode copytruncate+exact-prefix restore неотличим от
+  append. Sole-writer/no-rotation и OS/root custody остаются будущим live условием.
+- Host session сам вызывает существующий fixed `/control`/`/proc` Linux/x64 reader
+  before/after/final. Native predicate не ослаблен. Caller baseline/transport не
+  становятся attested: LOCAL_HOST_READS_TRANSPORT_UNATTESTED, controlled application
+  и external vantage NOT_PROVEN; production/deploy/activation всегда false.
+  `verifyPartnerProductionIngress()` по-прежнему UNSUPPORTED_INGRESS_ADAPTER.
+- New89/89 targeted PASS; initial87/88 из-за macOS, снимающего setuid file bit,
+  исправлен только test: special-mode metadata явно synthetic. Добавлен успешный
+  actual collector wiring над synthetic proc files (не actual Linux/Nginx PASS).
+  Full frozen-source Partner run650tests/626PASS/24FAIL/0skip, actual exit1;
+  exact24failure names совпали с прошлым checkpoint, новых0. Historical source
+  pins/receipts не перепечатаны для зелёного статуса: full release gate RED.
+- Scoped ESLint PASS; root `npm run lint` фактически exit0,0errors/387warnings.
+  Shared LOCAL_HEAVY согласован, использован только sequential fullPartner→rootlint
+  и освобождён после actual exit обеих команд. Fixtures только owned127.0.0.1,
+  отсутствие новых внешних сетевых/серверных действий.
+- Security и отдельный release read-only review: существенных P0–P2 нет; оба
+  подтвердили LOCAL-only границу. Physical exact escape=json/flush/log directory,
+  config/source→controlled application binding и external vantage не проверены.
+- Docs/test-plan/deploy обновлены; drawio-skill расширил существующую диаграмму
+  страницей Generation and log correlation. XML validation0errors/0warnings;
+  local doc links22PASS. PNG/visual QA NOT_RUN — прежний Electron sandbox blocker.
+- Build NOT_RUN: прежний неизменный preflight17missingVITE. Native application
+  DEFERRED_BY_USER/NOT_RUN сохранён. Нет Docker/SSH/install/secret/route/Nginx reload,
+  Mongo/Viva/shared-data writes, CI/push/PR/merge/deploy/activation. Нового partner
+  approval/signoff не требуется. Дальше — локальное связывание этих наблюдений с
+  controlled-application verifier; до выпуска нужны actual evidence и release gates.
+
+## 2026-09-06 — Partner: bounded TLS/TCP collector, production verifier ещё не завершён
+
+- Продолжение после `5b9755f`, прежняя ветка/WT, единственный writer — primary.
+  При реализации production verifier выделен первый исполняемый missing primitive:
+  новый read-only `partner_game_membership_nginx_probes.mjs`, а не ещё один validator
+  подписанного caller JSON. Generic production entry остаётся fail-closed.
+- Fixed11 GET/OPTIONS/TCP probes, bodyless synthetic operation IDs, numeric target
+  и explicit source bind, actual CA/hostname/server SPKI/local-client-leaf до HTTP,
+  public invalid proof headers без HMAC; no DNS/redirect/proxy/commands/env/CLI.
+  5s absolute per-probe /60s session, byte caps16KiB, strict complete HTTP framing,
+  once-only finish и owned socket/request/agent cleanup. Capture только metadata/hash,
+  без body/keys/certs/raw errors. Outputs private и UNATTESTED, не ingress PASS.
+- Security review выявил P2: без proof headers actual raw guard вернул бы400 до
+  default-off. Исправлено public invalid signature и actual HTTPS → actual raw guard
+  → actual disabled Store regression (4RAW_ACCEPTED, толькоPARTNER_API_DISABLED503).
+  Finding закрыт re-review. Release review: нового code blocker нет; same-CA/SPKI
+  shared-host dialect, no actual client admission / generation / trusted-vantage
+  proof явно сохранены. Native application DEFERRED_BY_USER / NOT_RUN не ослаблен.
+- Новые56/56 targeted PASS; полный последовательный Partner suite561tests:
+  537PASS/24FAIL/0skip. Exact24failure names сравнены с предыдущим checkpoint log:
+  все прежние (Nginx3/binding11/runtime8/packet2), новых0. Root lint фактически
+  завершён exit0,0errors/387warnings; scoped ESLint PASS. Общая сборка не повторялась:
+  прежний неизменный preflight17missingVITE. Modular/live/runtime/Docker NOT_RUN.
+- Первый test запуск: sandbox listenEPERM, затем separately admitted localhost-only
+  повтор. Исправлен error-listener тестового TLS server при intentional client reset;
+  added actual5s body-stall/noDNS/clock/inputs/framing/regressions. Это macOS Node22.13.1
+  + owned loopback syntheticTLS, не actual Nginx/Linux/внешняя production матрица.
+- Docs/testplan/deploy и существующая drawio-схема обновлены по drawio-skill: новая
+  страница boundaries, structural lint0errors/0warnings. Local docs links20PASS.
+  PNG/visualQA NOT_RUN из-за ранее подтверждённого Electron sandbox ограничения.
+- LOCAL_HEAVY использован только для single sequential fullPartner → rootlint.
+  Преждевременно отправленный координатору lint/release статус немедленно исправлен;
+  финальный release подтверждён только после actual exit0. Активных процессов/lease нет.
+- Historical runtime/guarded/audit receipts и source pins неизменны. Нет push/PR/merge,
+  CI/SSH/install/secret/egress/route/deploy/activation/Mongo/Viva/shared-data изменений.
+  Partner signoff не вводится. Остаток verifier: наш trusted config/process-generation
+  collector, root log/upstream correlation и независимо утверждённая внешняя vantage.
+
+## 2026-09-06 — Partner: BOUND_DEFAULT_OFF startup с независимым root anchor
+
+- Продолжение после `eb607aa`, прежняя ветка/WT; primary — единственный writer.
+  Расширен `guarded-startup.cjs`: fixed external root-owned approved-startup JSON,
+  explicit mode, exact Host/audience/candidate/release directory и независимые
+  approved commit/tree/manifest hash. Сам packet не может одобрить себя; anchor
+  отсутствует/подменён/конфликтует с mode — отказ без downgrade к unbound.
+- Baseline policy, service unit, raw guard/audit, provider flags и egress неизменны.
+  Active mode не добавлен. Проверяются root ownership/modes/ancestors, bounded
+  strict JSON, manifest aggregate/critical paths/actual file bytes и exact installed
+  custom-node symlink `../../partner-package`. Writable state отделён от release.
+- Security review: исправлены два P2 — финальная перепроверка всех ранее прочитанных
+  file/ancestor identities и запрет intermediate symlink hop при совпадающем
+  начальном realpath. Оба исправления получили read-only re-review PASS.
+  Release review: новых code blockers нет; installed root/group-read layout не
+  подменяет private transport packet `0700/0600` для production binding validator.
+- Добавлены 96 bound startup/negative/entrypoint-wiring tests, все PASS в final
+  full run. Legacy startup fixture явно изолирована от реального `/etc` через IO
+  seam; npm Partner test command включает новый файл. Прошли промежуточные
+  targeted232/232 и246/246; финальный полный набор `505 tests: 481 PASS / 24 FAIL /
+  0 skipped` включает последний symlink fix. Те же24 failures: Nginx3, binding11,
+  runtime8, packet2 — stale exact-source proof; новых failure нет, release gate RED.
+- Scoped ESLint PASS; полный `npm run lint` exit0, 0 errors / 387 warnings.
+  XML structural lint: 0 errors / 0 warnings; checked local document links16 PASS.
+  Общая сборка не повторяется: прежний неизменный preflight blocker17missingVITE
+  остаётся; shared Node-RED modular build/validate не запускались без live workspace.
+  Drawio обновлён на существующей startup-странице; PNG/visual QA NOT_RUN из-за
+  ранее доказанной недоступности Electron CLI в sandbox.
+- Обновлены guarded release/deploy/test-plan docs и схема: root metadata tests
+  синтетические, VM dependency wiring не actual Node-RED/systemd. Real root custody,
+  installed dependencies, свежий runtime/guarded proof и private packet всё ещё
+  требуют проверки. Root anchor читается только на startup; это не runtime revoke
+  и не атомарный filesystem snapshot. Trusted installation до require обязательна.
+- Local checkpoint только: без push/PR/merge/CI/SSH/Docker/install/deploy/activation,
+  без реальных anchor/credentials/Mongo/Viva/shared-data изменений. Native Nginx
+  application rehearsal сохраняет `DEFERRED_BY_USER / NOT_RUN`. Следующее source
+  препятствие — production Nginx verifier; live approval и evidence gates не сняты.
+
+## 2026-09-06 — Partner: автономное получение Viva service token, local source checkpoint
+
+- Продолжение устранения внутренних препятствий после `5907950`, та же ветка/WT.
+  Добавлен server-owned password grant на фиксированный Viva token endpoint,
+  scoped env selector/credentials, monotonic cache с запасом 30s, single-flight,
+  bounded response/deadline, credential invalidation и shutdown cancellation.
+  Пароль не нормализуется; ошибки не содержат secrets/upstream payload.
+- Legacy global-context сохранён; password-grant не имеет fallback. HTTP contract,
+  ownership/replay/audit, provider gates и отсутствие mutation retry не ослаблены.
+  Startup/default-off/service/egress и production не менялись. Реальных токенов
+  в этом этапе не получали; никаких ответов партнёра для реализации не требуется.
+- Security review: два P2 исправлены и повторно проверены — явный identity encoding
+  с отказом на compressed response; monotonic elapsed deadline независимо от timer.
+  Release review: сохранить historical receipts и обновить actual closure один раз
+  после freeze зависимых startup/ingress/egress source изменений.
+- Фактически: целевые API/provider `80/80 PASS`; полный Partner `409 tests`,
+  `385 PASS / 24 FAIL / 0 skipped`. Все 24 — stale exact-source fixtures:
+  Nginx preflight 3, binding 11, runtime 8, packet 2. Release gate RED.
+  Прежний runtime manifest, audit/functional/guarded receipts и pins не переписаны.
+- Scoped ESLint PASS; полный `npm run lint` exit0, 0 errors / 387 warnings.
+  `npm run build` exit1 на env preflight: 17 обязательных `VITE_*` отсутствуют;
+  компиляция/сборка не запускались, production env не копировался.
+  `nodered:modular:validate` NOT_RUN: shared flow не меняется, свежий private
+  live workspace не получали. XML structural lint: 0 errors / 0 warnings;
+  PNG export/visual QA NOT_RUN (ранее установленный sandbox CLI limitation).
+- Configured staged secret/PII scan первоначально отклонил synthetic email в тесте;
+  fixture заменена на не-email строку с form metacharacters без ослабления scanner.
+  Повторяются только затронутые source/tests и финальная staged-проверка;
+  заведомо красные runtime/packet tests без новых evidence не перезапускаются.
+- Обновлены API/deploy/production/test docs, добавлен token runbook и вторая
+  страница существующей security drawio. Infographic/source tests не являются
+  live авторизацией, revocation proof или working endpoint acceptance.
+  Состояние: `SOURCE_VERIFIED / RUNTIME_REEVIDENCE_PENDING / PACKET_BLOCKED`;
+  общий source stage остаётся незавершённым. Остались bound startup,
+  production Nginx verifier, scoped egress/credentials и exact-source proof.
+- Нет push/merge/PR/CI/deploy/SSH/Docker/install/activation/secret/shared-data
+  операций. Native Nginx application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
+  Полный repository gate блокирован env preflight и устаревшей release closure;
+  это не подтверждение готовности к выпуску.
+
+## 2026-09-06 — Partner: анкета отменена, выпуск рабочих методов — ответственность PadlHub
+
+- Пользователь отменил согласование P0 и ожидание ответов rusPadelUp. Действующее
+  разделение: PadlHub предоставляет работающие POST/DELETE/GET, фиксированный
+  контракт/доступ и серверные гарантии; партнёр реализует свой клиент.
+- Existing external-team документ заменён ответственностями/checklist вместо
+  блокирующего questionnaire; старый DRAFT не отправлен, история есть в Git.
+  API/kit README/test plan/release/threat docs больше не требуют письма/подписи
+  партнёра. Provider semantics подтверждает PadlHub техническими доказательствами;
+  readiness flags, код и критерии безопасности не ослаблены.
+- Read-only source проверка выявила внутренние препятствия, не зависимость от
+  анкеты: production ingress entry безусловно UNSUPPORTED; startup принимает
+  только DEFAULT_OFF_UNBOUND; standalone graph не наполняет Viva token в memory
+  context; unit допускает только localhost egress. Нужна завершённая серверная
+  реализация, а не только включение env или передача offline vectors.
+- Продолжение в прежней ветке/WT после `11e63d8`. Изменены только семь документов;
+  signer/vectors/runtime/pins не меняются. Проверки diff, локальных ссылок,
+  отсутствия questionnaire gate и configured staged secret/PII scan; unit/runtime
+  tests не повторяются. Прежние384/384 — cached source evidence, не live PASS.
+- Обновление локального offline-архива меняет только README; прежний архив
+  сохраняется. Рабочий endpoint и боевые credentials пока не выданы. Нет внешних
+  отправок/SSH/Docker/install/CI/push/merge/deploy/secret/shared-data операций.
+  Native Nginx application rehearsal остаётся DEFERRED/NOT_RUN.
+
+## 2026-09-06 — Partner: согласование rusPadelUp через пользователя
+
+- Пользователь выбрал себя посредником: комплект и вопросы передаются партнёру
+  пользователем, ответы возвращаются в эту задачу. Прямые внешние отправки агента
+  не требуются; доставка и ответ партнёра пока не подтверждены.
+- Обновлены существующие лист P0 и журнал после `a512978`; имя контакта не включено.
+  Канал согласования не принят за круглосуточный канал экстренного отзыва доступа.
+  Все P0 целиком остаются открытыми; runtime/default-off/native NOT_RUN не меняются.
+- Docs-only: проверки diff/ссылок/границ согласования и configured staged secret/PII
+  scan; unit/runtime tests не повторяются. Прежняя ветка/WT и kit сохранены;
+  код, secrets, общие данные, push/merge/deploy/activation не затрагиваются.
+
+## 2026-09-06 — Partner: rusPadelUp и технический контакт определены
+
+- Пользователь указал rusPadelUp и назначил технический контакт. Название и факт
+  назначения зафиксированы в существующем P0-листе; имя/контакты остаются в
+  переписке и не включены в репозиторий или public kit. Machine clientId не выдан.
+- Удалены повторные вопросы о названии/контакте; подготовлен DRAFT/NOT_SENT запрос
+  rusPadelUp по клиентской части P0. Provider/Viva и серверные подтверждения остаются
+  отдельной ответственностью PadlHub. Восемь P0 не закрыты без письменных ответов.
+- Docs-only продолжение после `1fdba34`: прежняя ветка/WT, только лист вопросов и
+  журнал. Проверки документа/ссылок/diff и configured staged secret/PII scan;
+  unit/runtime tests не повторяются. Kit, код, secrets, инфраструктура и данные
+  не меняются. Внешняя отправка, push/merge/deploy/activation не выполнялись.
+
+## 2026-09-06 — Partner: потребитель API — отдельный партнёр
+
+- Пользователь уточнил тип потребителя: отдельный партнёр, не Viva. В существующем
+  листе P0 зафиксирован только этот факт; название и технический владелец ещё нужны.
+- Вопросы разделены между партнёром, backend/владельцем Viva API и инфраструктурой
+  PadlHub. Partner M2M identity отделена от серверного технического Viva client;
+  весь P0-01 и остальные P0 не помечены согласованными.
+- Docs-only продолжение после `eb4215f` в прежней ветке/WT: изменены существующий
+  лист вопросов и этот журнал. Проверки — diff/структура документа и configured
+  staged secret/PII scan; unit/runtime tests не повторяются. Код, kit, credentials,
+  боевые настройки и отложенный native Nginx тест не меняются; внешних отправок,
+  push/merge/deploy/shared-data операций нет.
+
+## 2026-09-06 — Partner: начато согласование P0, ожидаются владельцы и внешние ответы
+
+- После `ffcbe3a` пользователь разрешил этап согласования P0. Прежняя ветка/WT
+  сохранены; runtime, offline kit, тесты и shared state не меняются.
+- В существующий документ вопросов добавлен рабочий лист восьми P0: требования
+  текущего source-контракта отдельно от внешнего согласия, ответственные роли для
+  назначения, ожидаемые evidence и единый формат письменного решения. Все строки
+  `AWAITING_CONFIRMATION`; согласованных ответов в просмотренных документах нет.
+- Новый контракт/ветка/PR/тестовая игра не создавались. Уже указанная пользователем
+  игра сохранена как будущий target; её live-состояние не проверялось. Первое
+  недостающее решение — потребитель API и технический владелец со стороны партнёра.
+- P0 acceptance отделён от P1, release/runtime gates и фактических live permissions.
+  Native Nginx/Docker DEFERRED/NOT_RUN и default-off не менялись. Партнёру ничего не
+  отправлено; SSH/CI/push/merge/deploy/secret/shared-data операций нет.
+- Изменены только этот журнал и существующие вопросы внешней команде. Проверки
+  этапа — структура восьми decision rows, внутренние ссылки, staged diff и
+  configured secret/PII scan; unit/runtime tests не повторяются для docs-only diff.
+  Прежние 384/384 относятся к unchanged source `ffcbe3a`, не к новому прогону.
+
+## 2026-09-06 — Partner: native тест отложен, подготовлен офлайн-комплект партнёра
+
+- Пользователь отложил native Linux/amd64 Nginx application rehearsal и Docker
+  install. Статус `DEFERRED_BY_USER` / native `NOT_RUN`; исторические FAILED receipts
+  и COMMAND_MISMATCH сохранены, строгие collector/verifier и production default-off
+  не меняются. Существующие branch/WT сохранены, base `e370ff0`, sole local writer.
+- Независимый результат — [передаваемый kit](partner-game-membership-kit/README.md):
+  standalone Node builtins-only reference signer и пять frozen POST/retry/DELETE/
+  GET/Unicode vectors. Golden POST не изменён; ключ строго public test literal,
+  demo IDs и устаревшие timestamps, без CLI URL/key/env-конфигурации и HTTP отправки.
+  Это не production SDK/валидатор произвольного wire input или replay/mTLS proof.
+- Документация описывает восемь proof headers, GET empty wire + signed `{}`,
+  DELETE exact2bytes, UTF-16 sorting/UTF-8 bytes, отсутствие Unicode normalization,
+  fresh-attempt proof при прежнем Idempotency-Key, UNKNOWN и ownership/payment
+  ограничения. Existing P0–P2 вопросы и инфографики связаны ссылками, не переписаны.
+- Добавлены шесть regression tests: server/reference bytes, retry/wire semantics,
+  canonical edge cases, non-demo/unknown input rejection, tampered expectations,
+  copied-outside-repository CLI и redacted failures. Первый portable test выявил
+  macOS `/var` realpath entrypoint mismatch; исправлено сравнением real paths.
+  Первый lint выявил control-regex rule; заменено на charCode-проверку.
+- Final targeted API **45/45**, полный Partner **384/384**, skipped0; scoped ESLint,
+  standalone five-vector CLI на Node22.13.1 и четыре local documentation links PASS.
+  Frontend/modular/full-repo lint/build, CI, physical Nginx/Mongo/Viva не запускались;
+  applicable runtime source, locks, pins, routes, schemas и deployment policy unchanged.
+- Независимый read-only security/compatibility review actual kit: существенных
+  P0–P2 не найдено; отдельные live/runtime gates и public-demo-only граница сохранены.
+- Сетевых/серверных операций, install/download, secret/shared data mutation,
+  main/merge/push/PR/deploy/activation не было; LOCAL_HEAVY не занимался.
+  Партнёру ничего не отправлено: комплект предназначен для пользовательской проверки.
+
+## 2026-09-06 — Partner: native rehearsal preparation, target ещё не назначен
+
+- После `a150756` пользователь разрешил только подготовку native Linux/amd64.
+  Тот же WT/branch, sole writer; production/runtime code, pins/tests не меняются.
+- Read-only inventory: Mac Darwin/arm64, current Docker linux/aarch64; две exact
+  images присутствуют какlinux/amd64. Contexts default/desktop-linux — local Unix,
+  выделенный remote native target в inventory не обнаружен. Координатор подтвердил:
+  Partner native target/owner в реестре отсутствует; shared LK hosts не назначены.
+  Это отсутствие назначения, не утверждение об отсутствии любых доступных машин.
+- Подготовлены критерии owner/host/daemon/mount/tool/image/capacity admission,
+  транспортная allowlist10sources (включая canonicalJson core), expected-negative
+  matrix, границы первого native diagnostic и отдельного application допуска.
+  Источники побайтово совпали с a150756 и прежними9receipt hashes;10syntax checks
+  и проверка относительных imports/builtins PASS без исполнения runner/imports.
+- Обновлены только runbook/test plan/этот worklog. 378/378 и108targeted — cached
+  evidence прежнего unchanged source, не новые тесты и не native PASS. Existing
+  diagram применима без изменения; visual export не повторялся.
+- Независимый release review preparation docs/inventory: существенных P0–P2 нет;
+ 10-й source требует собственной target-сверки, старый receipt не расширен.
+- Единственный внешний prerequisite — владелец указывает допустимый выделенный
+  native target. PREPARATION_BLOCKED_TARGET_UNASSIGNED; SSH, transfer/install,
+  Docker runtime/download/config changes, main/CI/PR/push/merge/deploy/shared writes
+  не выполнялись, LOCAL_HEAVY не занимался. Никакие прежние failures не переименованы.
+
+## 2026-09-06 — Partner: Nginx identity diagnostic завершена, application остаётся blocked
+
+- После `3314cd8` отдельно одобрена только локальная диагностика command mismatch;
+  прежние branch/worktree и единственный writer сохранены. Linux strict collector,
+  production verifier, application policy, pins, secrets и shared state не менялись.
+- Добавлен bounded own-PID diagnostic и mutually exclusive runner mode до третьего
+  peer/probes/HUP. Raw argv/env/error не сохраняются; known shapes/counts/hashes
+  отделены от авторизации. Security/release P2: exe/namespace failure мог скрыть
+  исходный отказ. Исправлено: fixed INCOMPLETE envelope, actual strict collector
+  вызывается и при partial capture, cleanup сохраняется. Независимые re-reviews PASS.
+- Одна exact reservation и отдельный system admission; run `15:10:28.486Z` завершён
+  `DIAGNOSTIC_COMPLETE_NOT_APPLICATION_PASS` / `KNOWN_COMMAND_FORM_REJECTED` master.
+  У master/worker одинаковые 54 bytes / 5 NUL original argv, стабильные snapshots;
+  exe-link hash совпадает с `/run/rosetta/rosetta`, не `/usr/sbin/nginx`.
+  В данном emulated fixture нет ожидаемых role titles/executable view. Это причина
+  сохранённого COMMAND_MISMATCH, не общий диагноз Rosetta и не failed reload.
+- HTTP/access rows0, HUP/matrix12 NOT_RUN; own2containers/network удалены,
+  independent exact-ID/label/network queries пусты; foreign10healthy+5stopped
+  сохранены. 9current sources/3copies/5public certificates/config hashes совпали;
+  keys/CSRs отсутствуют, оба старых FAILED receipt hashes неизменны.
+  LOCAL_HEAVY=RELEASED, дополнительных runtime попыток нет.
+- Финальная factual regression: observed argv не доказывает роли/draining;
+  targeted **108/108**, полный Partner **378/378**, skipped0. Scoped ESLint PASS
+  через существующий root binary (worktree-local binary отсутствует). Full-repo
+  lint/frontend/modular/CI, прежние physical77/CLI20 не повторялись; native NOT_RUN.
+- Обновлены [runbook](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md), test plan и
+  existing drawio: actual diagnostic отдельно от требуемой application matrix.
+  `global-spark-routing` определил security/release review; `drawio-skill` —
+  XML-only схему. Native exporter ранее недоступен; PNG/visual QA NOT_RUN.
+- Следующий отдельно согласуемый этап: подготовить isolated native Linux/amd64
+  target с реальным подтверждением архитектуры/no emulation и прежними pins/strict
+  predicate. Не принимать original argv, не менять Docker settings/capabilities.
+  Merge/push/PR/deploy/activation и боевых/provider/DB writes нет.
+
+## 2026-09-06 — Partner: локальная проверка применения Nginx, без production допуска
+
+- После `b1839dd` одобрен local verifier stage; прежние branch/worktree и sole
+  writer сохранены. Production entry остаётся `UNSUPPORTED_INGRESS_ADAPTER`:
+  доверенный production operator, topology/vantage/custody ещё не утверждены.
+- Добавлены source-owned one-shot application session, Linux `/proc` collector и
+  отдельная bounded Docker-репетиция. Проверяются actual master/workers/executable,
+  namespaces/boot, закрытая метка поколения в log и реальные TLS/TCP observations.
+  Обязательны disk-only/no-HUP negative, два controlled HUP, уход старых workers,
+  удаление ранее допущенного leaf binding и positive control другого клиента.
+  Это не CA CRL/OCSP и не принудительное завершение существующих соединений.
+- Security P2: response403 с именем клиента не доказывал его identity. Теперь
+  actual local certificate DER из TLS socket сравнивается с session-owned hash;
+  substitution/missing leaf negative tests обязательны. Release P2: log failure
+  больше не пропускает exact owned cleanup; потеря log всё равно означает FAILED.
+  Оба исправления независимо re-reviewed PASS.
+- Первая reservation + отдельный system admission: actual run `14:25:35.648Z`
+  остановился на network admission до containers/probes. Raw receipt FAILED,
+  matrix12 NOT_RUN; owned=[] и собственная сеть удалена. Independent exact-ID/
+  label readback пуст; keys/CSRs отсутствуют; heavy-slot RELEASED. Точный assert/
+  subnet не сохранены, исходный FAILED не переинтерпретирован в PASS.
+- Read-only Docker inventory подтвердил используемые `192.168.x/20` pools,
+  несовместимые с исходным `172.x/16`-only parser; это bounded hypothesis причины
+  первого отказа. Локальная correction допускает только два canonical private
+  Docker pool forms и выводит `.2/.3` из actual allocation. Нет caller CIDR,
+  `--subnet` override или чужих network mutations. Receipt сохраняет bounded
+  subnet/step, unsupported pool получает fixed code. Source reviews PASS.
+- После IPAM correction: targeted **94/94**, полный Partner **364/364**, skipped0;
+  affected ESLint0/0, controls validator `UNBOUND_AUDIT_PASS`, diff check PASS.
+  После новой reservation/system admission второй run `14:36:05.151Z` принял
+  actual `192.168.32.0/20`, создал3containers и проверил исходный Docker contract.
+  Initial Linux collector30раз отклонил commandline identity; итог FAILED /
+  `NGINX_WORKER_TRANSITION_UNPROVEN`. HUP/12probes NOT_RUN, access log пуст,
+  proof отсутствует; точная причина `NGINX_PROCESS_COMMAND_MISMATCH` не установлена.
+  Daemon aarch64 / pinned images amd64 — наблюдение, не доказанная причина.
+- Own3containers/network удалены, independent exact-ID/label/network queries
+  пусты; keys/CSRs обоих run отсутствуют. Сверены8current source hashes/2copies/
+  5publiccert hashes неуспешного второго run; не full runtime before/after proof.
+  LOCAL_HEAVY=RELEASED. Следующая bounded process-identity diagnostic отдельно,
+  без новых runtime повторов или ослабления проверок на этом этапе.
+- [Runbook](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md) описывает механизм,
+  actual evidence boundaries и remaining production P0/P1. Existing drawio
+  дополнен через drawio-skill, XML0/0; ранее неработающий native exporter не
+  повторялся, PNG/visual QA NOT_RUN. Critical routing потребовал security и
+  release reviewers; production-config/secret/routing/shared-data changes нет.
+- Guard/audit/service/settings/runtime pins, core/provider/DB/Node-RED и CI
+  не менялись. Старые physical77/CLI20 не повторялись на unchanged inputs;
+  full repository lint/frontend/modular builds не запускались. Merge/push/PR/
+  deploy/activation/live mutation не выполнялись.
+
+## 2026-09-06 — Partner: независимые IP-лимиты, local77 + source325 PASS
+
+- После `c828762` одобрен только отдельный local source-IP gate. Сохранены
+  существующие ветка/worktree и один владелец записи. Нет новых branch/PR,
+  main/push/deploy, боевых сертификатов, секретов, routing или shared-data writes.
+- Закрытый opt-in стенд использует три независимые TLS identities и два
+  фиксированных loopback-источника. Дополнительные leaf/SPKI проходят прежние
+  проверки; повтор ключа/сертификата и произвольные CIDR/labels запрещены.
+  Стандартный конфиг одного клиента побайтово прежний; пороги лимитов не менялись.
+- Добавлены семь source probes: приём двух новых identities, отказ unbound
+  сертификату с поддельным client header, независимые rate/concurrency проверки
+  и восстановление. Для attribution обязательны холодное состояние, реальные
+  socket addresses, клиентские бюджеты, счётчики обработчиков и ingress logs.
+- Source tests: **28/28 PASS**, полный Partner suite **325/325**, skipped 0;
+  scoped ESLint всех шести изменённых JS-файлов: 0 errors / 0 warnings.
+  Security и release/evidence source reviews без открытых P0–P2.
+- После явного Viva RELEASED, отдельного resource reservation и system admission
+  выполнен один физический прогон: `13:34:20.347Z`, **77/77 PASS**. Source rate:
+  22 приёма / 8 отказов из 30 попыток за 328.97 мс после cold 6011.89 мс.
+  Source concurrency: 8 active handlers (3+3+2), 2 отказа; та же TLS identity с
+  другого actual IP проходит при занятых восьми handlers. Recovery PASS.
+- Receipt `f1737963…`, probes `af47b62d…`, config `c23ac642…`; 9 current sources,
+  6 copies, 5 public certs, runtime before/after и process identity сверены;
+  135 metadata log rows. Оба own containers удалены, отдельный exact-ID readback
+  подтвердил отсутствие, synthetic keys/CSRs удалены. LOCAL_HEAVY=RELEASED.
+  Независимый финальный receipt review: PASS_LOCAL_MATRIX_ONLY, открытых P0–P2 нет;
+  source attribution подтверждена бюджетами, actual IP, upstream/log observations,
+  а не одним кодом 503.
+- [Документация source-IP gate](PARTNER_GAME_MEMBERSHIP_SOURCE_LIMITS.md) содержит
+  критерии доказательства, ограничения и вопросы P0/P1 к владельцам интеграции.
+  Existing drawio дополнен через drawio-skill, XML validation: 0 errors / 0 warnings.
+  Native exporter ранее недоступен; PNG/visual QA NOT_RUN, повторного запуска нет.
+- Guard/audit/service/settings/runtime locks и guarded CLI closure не менялись;
+  прежние 70/20/321 результаты остаются историческими. Production verifier
+  `UNSUPPORTED_INGRESS_ADAPTER`, external sidecar/revocation и выпуск не закрыты.
+  Full repository lint/frontend/modular build/guarded CLI не повторялись на
+  остальных unchanged inputs. Следующий gate — production ingress verifier и
+  доказательство применения конфигурации; это не разрешение на live изменения.
+
+## 2026-09-06 — Partner response deadline: local70 + CLI20 PASS
+
+- После `32c0ad6` пользователь одобрил только local15s deadline correction.
+  Сохранены branch/WT/sole writer; Critical lane, два независимых read-only risk
+  reviews. Новых branch/PR, main integration/push/deploy/shared writes не было.
+- Raw guard получил независимый monotonic response watchdog: body≤5s отдельно,
+  response≤15s от middleware entry. `next()`/req.close/drip не снимают watchdog;
+  finish/response.close чистят lifecycle. Expiry — destroy без synthetic error,
+  затем одна попытка fixed audit с тем же trusted requestId. Provider/core/DB и
+  operation/nonce ownership не менялись; late business work может продолжаться.
+- Security P2 закрыт: timer может проснуться раньше budget; remaining recheck,
+  ceil/re-arm и regression предотвращают ранний cutoff. До dispatch после sync
+  audit повторная monotonic проверка. Release P2 закрыт в docs: fail-closed нового
+  dispatch относится к admission audit, не к terminal audit уже начатой операции.
+- Actual physical run `12:33:54.677Z`: **70/70 PASS**, receipt`3afb400b…`,
+  probes`f80b6d05…`. Nginx drip15029ms/incomplete503; direct sidecar15030ms/0bytes;
+  synthetic op после close завершилась один раз через actual HTTPOut/catch0;
+  recovery503. Silence502/15032ms — combined timer race, не Nginx-only proof.
+- Actual guarded CLI `12:37:38.718Z`: **20/20 PASS**,6durable audit rows,
+  10startup refusals; receipt`5c3937eb…`. 19copied sources/current bindings
+  проверены; normalizedproof`23d0a768…`, controls`6226f692…`. Runtime/custom7,
+  service/settings locks unchanged; только guard/audit closure pins refreshed.
+- Два отдельных resource/system admissions; Nginxnetwork:none/ROreusedruntime,
+  CLIexactlockedinstall scriptsOFF затемnetwork:none.4ownedcontainers удалены,
+  обе пары exact-ID absence отдельно подтверждены, synthetic keys/CSRs удалены;
+  чужие Docker/rootWT/общие зависимости нетронуты. Heavy-slot RELEASED.
+- Source: targetedguard+Nginx121, API39; final fullPartner **321/321**, skipped0;
+  lint0errors/387existingwarnings, controls validator/diff/XML PASS. Existing
+  drawio дополнен через drawio-skill; XML-only fallback, сломанный exporter не
+  повторяли. Frontend/modular builds не повторялись на unchangedinputs.
+- [Подробный deadline/recovery/evidence контракт](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md)
+  содержит P0/P1/P2 вопросы. Это не hard realtime/edge TLS-header bound, не proof
+  реального Viva/DB/systemd и не production release. `UNSUPPORTED_INGRESS_ADAPTER`
+  остаётся; historical raw failures/receipts и published disabled packet сохранены.
+
+## 2026-09-06 — Partner aggregate Nginx cap исправлен; deadline blocker подтверждён
+
+- User одобрил узкий local correction после `c38bc73`. Сохранены same branch/WT,
+  sole writer parent; отдельные security/release read-only reviews и bounded
+  heavy-slot. Никаких branch/PR duplicates, merge/push/deploy/shared data/secrets.
+- Причина: начальный2k buffer не входил в восемь large buffers. Generator меняет
+  только8→7 и поясняет conservative16KiB head budget с request line/packing loss.
+  Guard/audit/service/business/runtime locks/production pins не изменены.
+- Тесты:6новых packed/oversize/reordered physical probes, pure wire builder и
+  exact ingress log proof. Security review закрыл P2 ложного upstream sentinel:
+  actual JSON empty string, не dash; unit отвергает missing/dash/upstream400/431.
+- Actual physical run `11:08:36.588Z`: **69rows=68PASS+1confirmed deadline blocker**.
+  Aggregate17562/headersection16385 отклоняет Nginx400 без upstream; POST/DELETE/GET
+  packedhead16384 проходят, POST также body16384. Reordered same volume даёт ранний
+  отказ — compatibility caveat сохранён. Client concurrency4+fifth429/recovery и
+  idle504/15040ms/oneupstream PASS. Drip полный503/18048ms/firstbyte28ms подтверждает
+  отсутствие абсолютного15s deadline; не назван PASS и не исправляется этим scope.
+- Evidence: receipt`0cb10064…`, probes`afd1019a…`;9source/6copies/config/runtime
+  before-after/container postchecks PASS,88closed log rows. Actual audit reused
+  RO, без нового install; source tree/runtime identities проверены.2ownedcontainers
+  удалены и fresh exact-IDfilter пуст; synthetic keys/CSR отсутствуют, slot RELEASED.
+- Source:22unit; final full Partner311/311, skipped0; lint0errors/387existingwarnings.
+  Старые guardedCLI20/frontendbuild не повторялись на unchangedinputs. Existing
+  drawio обновлён через drawio-skill; XML fallback, прежний сломанный Electron
+  exporter не перезапускался. Старые raw failures/disabled packet неизменны.
+- Следующий gate — отдельный общий deadline correction/recovery, не deploy.
+
+## 2026-09-06 — Partner remaining Nginx boundaries: STOP
+
+- Анализ: после user «приступай» сохранены same branch/worktree и `b9a8a37`;
+  координатор подтвердил sole ownership и bounded heavy-slot. Разрешены только
+  local checks, без generator/guard/service/controls changes или production.
+- Изменение: existing fixture получил legacy-TLS/absent-SNI/CIDR/size/concurrency/
+  timeout probes; новый pure evidence helper отвергает ложный status/count/timing,
+  rate substitution и relabel known blocker. Collector сохраняет6copied+3source
+  hashes, проверяет полноту planned matrix. Unit19/19 PASS после regression для
+  null timing; security/release source reviews новых P0–P2 не нашли.
+- Physical: actual run `10:37:25.320Z` **FAILED** после57PASS (49baseline+8new).
+  Заголовки17562bytes прошли Nginx, Node parser вернул431; businessdispatch0.
+  Expected aggregate refusal до upstream не выполнен. Это локализованный ingress
+  enforcement gap, не доказанный business bypass. TLS1/1.1,absentSNI,CIDR и
+  отдельные2048/2049line/field probes прошли; concurrency/idle/deadline NOT_RUN.
+  Raw receipt98a0577f…/probes058b0272… сохранены без редактирования.
+- Source verification: полный Partner suite308/308 PASS,skipped0; full lint0errors/
+  387existingwarnings. Прежние
+  frontendbuild/guardedCLI не повторялись при unchangedinputs и не переименованы
+  в новые доказательства. Existing drawio обновлён через drawio-skill,
+  structural0errors/0warnings; PNG/visualQA недоступны в прежней Electron-среде.
+- Cleanup:2ownedcontainers удалены, keys/CSR удалены, freshDockerabsence пуст;
+  heavy-slot RELEASED. После failure не заявляется непройденный post-matrix
+  identity readback. Повторного physical run, main/push/deploy/secret/shareddata нет.
+  Следующий gate — узкое исправление aggregate header limit, не расширенный rollout.
+
+## 2026-09-06 — Partner wildcard fix: изолированная Linux-репетиция
+
+- Анализ: user подтвердил только isolated Linux gate без deploy. Сохранены existing
+  branch/worktree и source `889ebe350d15a30e63007f487d528756136b05f3`; sole ownership
+  и heavy-slot подтверждены координатором. Действующий actual audit `Hml4CT`
+  использован без повторного запуска; pinned Linux images уже присутствовали.
+- Проверка: Nginx 1.24 + raw guard + real Node-RED observer — **49/49 PASS**,
+  7 NOT_TESTED, 67 закрытых log rows. Wildcard scrub проходит, duplicate wildcard
+  даёт 400 с observerCalls=0. Guarded Node-RED CLI — **20/20**, 6 durable audit rows,
+  10 startup refusals, stop/restart, default-off. Exact-lock install без scripts /
+  host secrets; bridge install не заявлен как registry-only ACL, probes network:none.
+- Изменение: actual raw receipt `76760a35…` и дата `10:10:11.713Z`, guard/audit SHA
+  связаны в normalized rehearsal `1dafc98b…`, controls `c5d28f1e…`, hardcoded validator
+  и Nginx preflight. Проверены 20 current/retained source hashes и packet closure.
+  Старые receipts/disabled packet не изменены. Детерминированный CLI probes SHA
+  совпал с прежним; свежесть подтверждается новой raw execution receipt, не probes.
+- Общие gates: Partner **303/303**, skipped=0; full lint **0 errors / 387** existing
+  warnings; inert prod/dev build (включая TypeScript) PASS. Drawio XML структурно
+  0 errors / 0 warnings; обновлена existing инфографика через drawio-skill.
+  PNG/visual QA не повторялись в неизменённой среде с известным Electron failure.
+- Independent review: security подтвердил actual Nginx sources/config/49 rows;
+  release reviewer подтвердил 20 source hashes, 18 retained copies и всю новую
+  guarded closure. Новых P0–P2 нет в scope local evidence; production gaps остаются.
+- Cleanup: все четыре own containers удалены, финальный Docker absence readback
+  пуст; synthetic keys/CSR удалены, read-only runtime tree не изменился. Heavy-slot
+  RELEASED. Shared Docker/checkout, main, Node-RED/Mongo/Viva и secrets не менялись.
+  Source closure не разрешает integration, push, deploy, systemd или activation.
+  Standalone Nginx wildcard limitation и остальные OPEN/NOT_TESTED сохранены явно.
+
+## 2026-09-06 — Partner wildcard forwarding correction (source-only)
+
+- После checkpoint `069d3b8` координатор подтвердил минимальный fix observed local
+  wildcard defect без пересмотра платформы. Existing raw guard после исходной
+  duplicate/framing validation стирает forwarding headers из трёх request views;
+  proof headers/body/path сохраняются. Nginx header forwarding глобально не отключён.
+- Scoped raw-guard/guarded-startup tests 144/144 PASS, включая реальные durable audit
+  write/reopen после sanitizer failure. Reviewer обнаружил отсутствие нового кода
+  в raw-audit allowlist; исправлены code и regression, без расширения sink schema.
+- Прежние physical FAIL/PASS receipts и sidecar/control pins сохранены. Packet
+  validator ожидаемо отклоняет новые raw-guard bytes против старого rehearsal.
+  New physical run/full suite/build NOT_RUN; 299 PASS/build PASS относятся к
+  предыдущему checkpoint, не означают green exact-head текущего fix.
+- No merge/push/deploy/activation/shared data. Новый Docker/CLI run требует отдельного
+  exact runtime admission и heavy-slot после A. Source ownership/branch сохранены.
+
+## 2026-09-06 — Partner local Nginx candidate / runtime audit refresh
+
+- Анализ: продолжается existing `codex/partner-viva-bounded-response-20260905` от
+  `df03b4ce`; отдельные ветка/PR/worktree не создавались. Пользователь разрешил
+  локальное закрытие Nginx/runtime evidence без merge/deploy. Source ownership
+  подтверждён координатором; тяжёлые проверки используют отдельную ресурсную очередь.
+- Изменение: closed `.invalid`/public-X.509 Nginx 1.24 generator, реальный Node-RED
+  observer fixture без бизнес-узлов/Mongo/Viva, strict complete-HTTP parser,
+  pre-Docker failure cleanup; новый opt-in Linux audit collector. Audit/control pins
+  обновлены фактическими 6 September readbacks, исторические functional/guarded/tree
+  bytes сохранены. Production verifier всё ещё безусловно закрыт.
+- Проверка source: Nginx unit `14/14`, runtime `9/9` (включая 17 resealed tamper cases),
+  runtime/controls validators PASS. Свежий Linux audit: Node 22.23.2/npm 10.9.8/
+  Node-RED 5.0.6, 291 packages, 0 critical/high + 7 moderate, owned-container cleanup
+  подтверждён. Configured workflow secret/PII/binary scan 21 paths PASS;
+  independent security/release re-reviews P0–P2=0 в указанной source области.
+- Physical correction: первые fixture failures `499` (преждевременный TLS half-close)
+  и upstream `404` (HTTP nodes без x/y классифицированы как config nodes) сохранены
+  как FAIL; исправления основаны на actual runtime log. После explicit release A
+  выполнен physical run: 47 PASS + 1 known wildcard blocker, 7 NOT_TESTED, 66 safe
+  log rows, два own containers/keys cleanup, unchanged runtime/source hashes.
+  Полный Partner suite 299/299 PASS, full lint 0 errors / 387 warnings в существующем
+  коде; inert prod/dev build с ci.invalid (включая TypeScript) PASS. Independent
+  physical evidence review подтвердил matrix/log/source hashes без расхождений.
+  Heavy-slot освобождён; лишние повторные Docker/tests/build не запускаются.
+- Документация: новый Nginx/audit runbook, explicit OPEN/NOT_TESTED, обновлённая
+  четвёртая страница existing `.drawio`. drawio-skill structural check 0 errors/
+  0 warnings; PNG export недоступен из-за Electron helper failure, visual QA NOT_RUN.
+- Граница: shared main checkout, опубликованный disabled packet, production Nginx/
+  Node-RED/Mongo/Viva/credentials не менялись; merge/push/deploy/activation `0`.
 
 ## 2026-09-06 — Partner guarded release preparation (изолированно)
 

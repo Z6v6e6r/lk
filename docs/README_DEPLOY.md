@@ -985,6 +985,11 @@ provider postcheck: `docs/VIVA_USER_AGENT.md`.
 
 ## Partner Game Membership API v0.2
 
+7 сентября пользователь закрепил **планируемый** Host/SNI `partner-api.padlhub.su`
+на `lk-primary-147`, ingress Nginx. Это не действующий endpoint и не разрешение на
+DNS, сертификаты, SSH/readback, reload или deploy. Production-controls остаётся
+`UNBOUND`; [решение и границы следующей инвентаризации](PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md#выбранное-размещение--только-планирование).
+
 Этот endpoint нельзя выкладывать обычным frontend deploy. Сначала нужен свежий private
 Node-RED workspace с `lk-primary-147`, затем
 создать canonical user-owned parent с mode `0700` и выполнить
@@ -994,7 +999,7 @@ Node-RED workspace с `lk-primary-147`, затем
 Packet всегда содержит `liveMutationAuthorized=false`, `deploymentPerformed=false` и
 `activationPerformed=false`. Его наличие не разрешает install/import/restart, создание
 Mongo indexes, provisioning secrets/ACL, ingress change или Viva mutation. Полный
-порядок, обязательные external ответы и rollback gates описаны в
+порядок, технические проверки PadlHub и rollback gates описаны в
 `docs/PARTNER_GAME_MEMBERSHIP_API.md`.
 
 Перед генерацией и перед любым production-side переходом отдельно выполнить
@@ -1029,3 +1034,30 @@ test/production fingerprints; production certificate fingerprint обязан с
 config/readback/certificate/CA и negative probes должен проверить отдельный live
 verifier до deploy. Активация также требует отдельного sidecar-compatible Viva token
 acquisition/refresh/revocation contract; shared Node-RED global context не используется.
+Локальная реализация `password-grant` и её ограничения описаны в
+`docs/PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md`. Она не включает service/egress,
+не получает боевой токен в тестах и не разрешает activation. Изменившиеся custom-node
+bytes требуют нового runtime/packet proof; исторические квитанции не обновляются
+пересчётом хешей без фактической проверки.
+Локальный `BOUND_DEFAULT_OFF` startup теперь поддерживает независимый root-owned
+anchor для Host/audience/exact release: `docs/PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md`.
+Это не active mode и не готовый installed packet. Service/egress/credentials и
+production binding пока не меняются; установку anchor нельзя подменять записью
+JSON в packet или объявлять выполненной по synthetic filesystem tests.
+
+Для следующего ingress-verifier этапа добавлен read-only source collector:
+`docs/PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md`. Его вызов создаёт реальный сетевой
+трафик и требует отдельно approved target/vantage; CLI/production wiring нет.
+56 loopback tests не доказывают Nginx application. `UNSUPPORTED_INGRESS_ADAPTER`
+сохраняется до доверенного сбора generation/config и server-log correlation.
+Нельзя использовать public invalid probe headers как рабочие partner credentials.
+Локальная generation/log consistency теперь реализована отдельно; это не снимает
+последний production gate. Host session читает прежний fixed nonroot Linux fixture
+collector и приватное окно журнала, но внешний transport/baseline не аттестованы.
+Новый log fragment/public probe ID не устанавливаются на сервер автоматически.
+См. `docs/PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md`, раздел generation/correlation.
+С 7 сентября controlled-application source runner включает обязательный supplement
+с отдельным client namespace, held-fd observer helper и counter+2 после legacy revoke.
+Новый success state относится только к будущему исполненному owned fixture (23probes),
+не к этим unit tests. Native rehearsal остаётся отложенным, production entry закрыт.
+См. `docs/PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md`, дополнение после40c7239.

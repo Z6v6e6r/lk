@@ -127,4 +127,24 @@
       </root>
     </mxGraphModel>
   </diagram>
+  <diagram id="viva-service-token" name="Viva token — server owned">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1600" pageHeight="940">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="2" value="Viva-токен — ответственность PadlHub, не партнёра" style="text;html=1;align=left;fontSize=28;fontStyle=1;fontColor=#172033;" vertex="1" parent="1"><mxGeometry x="40" y="30" width="1520" height="60" as="geometry"/></mxCell>
+        <mxCell id="3" value="1. Серверные credentials&#xa;Явный password-grant selector&#xa;Scoped client ID / username / password&#xa;Не из HTTP, не в packet / logs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=17;" vertex="1" parent="1"><mxGeometry x="40" y="140" width="320" height="140" as="geometry"/></mxCell>
+        <mxCell id="4" value="2. Resolver: только память&#xa;Readiness gates проверены ДО вызова&#xa;Один grant на параллельные вызовы&#xa;Кэш до TTL − 30s от начала запроса" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=17;" vertex="1" parent="1"><mxGeometry x="640" y="140" width="320" height="140" as="geometry"/></mxCell>
+        <mxCell id="5" value="3. Viva token endpoint&#xa;Фиксированный HTTPS URL&#xa;Password grant, без redirect&#xa;Identity encoding • 64 KiB • 5s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=17;" vertex="1" parent="1"><mxGeometry x="1240" y="140" width="320" height="140" as="geometry"/></mxCell>
+        <mxCell id="6" value="Отзыв / сбой&#xa;Смена credentials сбрасывает cache&#xa;Close отменяет pending запрос&#xa;Ошибка → redacted 503, без fallback&#xa;Отзыв токена в Viva — отдельная процедура" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=17;" vertex="1" parent="1"><mxGeometry x="40" y="520" width="320" height="170" as="geometry"/></mxCell>
+        <mxCell id="7" value="4. Готовый токен → Viva provider&#xa;Только после строгого response check&#xa;Grant НЕ включает запись&#xa;401 НЕ повторяет booking mutation&#xa;Ownership / audit / nonce не меняются" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=17;" vertex="1" parent="1"><mxGeometry x="640" y="520" width="320" height="170" as="geometry"/></mxCell>
+        <mxCell id="8" value="Граница доказательств&#xa;Source + synthetic tests&#xa;Не live grant / не deploy&#xa;Нужен новый exact runtime proof&#xa;Ingress / startup / egress ещё закрыты" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=17;" vertex="1" parent="1"><mxGeometry x="1240" y="520" width="320" height="170" as="geometry"/></mxCell>
+        <mxCell id="9" value="server only" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="10" value="cache miss" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="11" value="valid cached token" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="12" value="fail closed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#b85450;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="720" y="390"/><mxPoint x="200" y="390"/></Array></mxGeometry></mxCell>
+        <mxCell id="13" value="Партнёр подписывает запрос собственным ключом. Viva credentials и разрешение на mutation — независимые серверные границы." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#172033;strokeColor=#172033;fontColor=#ffffff;fontSize=18;" vertex="1" parent="1"><mxGeometry x="40" y="810" width="1520" height="80" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
 </mxfile>

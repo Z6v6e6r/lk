@@ -36,7 +36,7 @@ const CUSTOM_NODE_FILES = Object.freeze([
   "partner-game-membership-core.mjs",
   "partner-game-membership-mongo.mjs",
   "partner-game-membership-viva.mjs",
-  "partner-game-membership-node.cjs",
+  "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs",
   "partner-game-membership-node.html",
 ]);
 export const PARTNER_PACKET_FILE_PATHS = Object.freeze([
@@ -50,7 +50,7 @@ export const PARTNER_PACKET_FILE_PATHS = Object.freeze([
   "custom-node/package-lock.json",
   "custom-node/partner-game-membership-core.mjs",
   "custom-node/partner-game-membership-mongo.mjs",
-  "custom-node/partner-game-membership-node.cjs",
+  "custom-node/partner-game-membership-node.cjs", "custom-node/partner-game-membership-ingress.cjs",
   "custom-node/partner-game-membership-node.html",
   "custom-node/partner-game-membership-viva.mjs",
   "runtime/audit-report.json",
@@ -63,7 +63,7 @@ export const PARTNER_PACKET_FILE_PATHS = Object.freeze([
   "runtime/partner-package/package-lock.json",
   "runtime/partner-package/partner-game-membership-core.mjs",
   "runtime/partner-package/partner-game-membership-mongo.mjs",
-  "runtime/partner-package/partner-game-membership-node.cjs",
+  "runtime/partner-package/partner-game-membership-node.cjs", "runtime/partner-package/partner-game-membership-ingress.cjs",
   "runtime/partner-package/partner-game-membership-node.html",
   "runtime/partner-package/partner-game-membership-viva.mjs",
   ...SIDECAR_TEMPLATE_FILES.map((name) => `sidecar/${name}`),

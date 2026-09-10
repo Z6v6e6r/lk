@@ -72,6 +72,11 @@ Content-Type для bodyless GET может отсутствовать. Повт
 
 ## Ошибки, ресурсы, audit
 
+Новый независимый response watchdog15s описан в
+[контракте deadline и recovery](PARTNER_GAME_MEMBERSHIP_RESPONSE_DEADLINE.md).
+Он продолжает работать после `next()`; ниже body-timeout означает только чтение
+входного тела, а не отмену бизнес-операции.
+
 - Body ≤16384 **байт**, headers ≤16384 байт / 100 пар, target ≤2048 байт.
 - JSON depth ≤32, values ≤4096. Duplicate keys проверяются во всех объектах,
   включая вложенные в массивы и escaped Unicode aliases. Invalid UTF-8/BOM,
@@ -83,7 +88,9 @@ Content-Type для bodyless GET может отсутствовать. Повт
   признаки предыдущего parser дают отказ до `next()`, с очисткой buffers/listeners.
 - Ответ guard содержит только фиксированный `error` и новый случайный
   `requestId`, `Cache-Control: no-store`, `Connection: close`; CORS не добавляется.
-  Статусы: 400 для запрещённого input, 408 deadline, 413 oversize, 503 audit failure.
+  Статусы до dispatch: 400 для запрещённого input, 408 body deadline, 413 oversize,
+  503 audit failure. Response deadline после dispatch закрывает transport без
+  synthetic HTTP response; одна попытка audit `RAW_REQUEST_DEADLINE`.
 - Неожиданные ошибки нормализуются в `RAW_GUARD_INTERNAL_ERROR`. Audit event имеет
   только `stage`, фиксированный `code`, новый `requestId`; нет body, headers,
   подписи, nonce, пути, IP, client ID или пользовательского correlation ID.
@@ -93,8 +100,10 @@ Content-Type для bodyless GET может отсутствовать. Повт
   custody/retention, monitoring и сквозная ingress/application корреляция ещё не подтверждены.
 
 Важно: при отказе самого audit нельзя обещать сохранение отклонённой записи в
-недоступном хранилище. Fail-closed исключает бизнес-операцию; для production нужны
-независимый сигнал недоступности audit и его восстановление.
+недоступном хранилище. Fail-closed **admission audit до `next()`** исключает новый
+business dispatch. Terminal deadline audit может отказать уже после запуска:
+transport закрывается, операция не отменяется, запись не гарантируется. Для
+production нужны независимый сигнал недоступности audit и его восстановление.
 
 ## Воспроизводимая локальная проверка
 

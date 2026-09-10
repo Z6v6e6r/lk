@@ -58,14 +58,268 @@
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="2" value="RELEASE CANDIDATE&#xa;9 hash-bound sidecar files&#xa;Service → settings-runtime&#xa;current → canonical release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="320" height="170" as="geometry" /></mxCell>
-        <mxCell id="3" value="GUARDED STARTUP&#xa;Exact CLI + OFF environment&#xa;Pinned candidate bytes + routes&#xa;No alternate graph / parser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="320" height="170" as="geometry" /></mxCell>
-        <mxCell id="4" value="ACTUAL NODE-RED CLI&#xa;Immutable storage snapshot&#xa;127.0.0.1:18894 · admin OFF&#xa;3 routes → 503 API_DISABLED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="20" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="3" value="BOUND_DEFAULT_OFF&#xa;Exact CLI + OFF environment&#xa;Approved manifest / files / link&#xa;Final file identity recheck" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="4" value="RUNTIME TARGET&#xa;Immutable storage snapshot&#xa;127.0.0.1:18894 · admin OFF&#xa;No activation / provider calls" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="20" width="320" height="170" as="geometry" /></mxCell>
         <mxCell id="5" value="DURABLE PRIVATE AUDIT&#xa;0600 · exclusive lock · fsync&#xa;16 MiB cap · fixed metadata&#xa;Any failure → no dispatch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="430" width="320" height="170" as="geometry" /></mxCell>
-        <mxCell id="6" value="PRODUCTION NOT PROVEN&#xa;20 local probes; no systemd&#xa;Ingress / host / custody UNBOUND&#xa;No Mongo/Viva or activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="430" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="6" value="PRODUCTION NOT PROVEN&#xa;Synthetic root-metadata tests&#xa;New CLI / systemd NOT_RUN&#xa;Old 20 probes ≠ new proof" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="430" width="320" height="170" as="geometry" /></mxCell>
         <mxCell id="7" value="verified service command" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="8" value="captured graph; audit ready" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="9" value="required before admission" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="10" value="separate evidence gate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="EXTERNAL ROOT ANCHOR&#xa;Fixed /etc path, outside packet&#xa;Host / audience / release identity&#xa;Missing or mismatch → refusal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="430" width="320" height="170" as="geometry" /></mxCell>
+        <mxCell id="12" value="independent approval" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.8;" edge="1" parent="1" source="11" target="3"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="470" y="515"/><mxPoint x="470" y="155"/></Array></mxGeometry></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Nginx candidate and fresh audit">
+    <mxGraphModel dx="1580" dy="680" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="SYNTHETIC INPUTS ONLY&#xa;Two .invalid hosts + public CA&#xa;Leaf + independent SPKI SHA256&#xa;No production keys or snippets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="320" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="CLOSED NGINX 1.24 GENERATOR&#xa;TLS / mTLS / exact SNI + Host&#xa;2k + 7×2k conservative head cap&#xa;Loopback 8443 → 18894" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="320" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="OWNED LOCAL FIXTURE&#xa;Pinned Nginx + real Node-RED&#xa;Raw guard → observer-only 503&#xa;Complete HTTP + dispatch counts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="20" width="320" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="FRESH LINUX AUDIT · 6 SEP&#xa;Exact installed lock; scripts OFF&#xa;0 critical/high · 7 moderate&#xa;Commands / image / cleanup pins" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="440" width="320" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="68 PASS + 1 CONFIRMED BLOCKER&#xa;Header cap + concurrency PASS&#xa;18.048s drip exceeds 15s deadline&#xa;PRODUCTION STOP · no deploy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="440" width="320" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="validate X.509 + exact inputs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="generated config; network none" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="complete matrix ≠ control PASS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="audit does not authorize release" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Response deadline and operation ownership">
+    <mxGraphModel dx="1700" dy="760" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="ВХОД В RAW MIDDLEWARE&#xa;Monotonic clock starts here&#xa;Body ≤5s · response ≤15s&#xa;TLS / edge headers — отдельно" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="HTTP RESPONSE WATCHDOG&#xa;Переживает next() / drip bytes&#xa;finish / close → cleanup&#xa;Deadline → destroy(), без504" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="TRUSTED AUDIT&#xa;RAW_REQUEST_DEADLINE&#xa;Тот же server requestId&#xa;Одна попытка · без PII" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1240" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="НАЧАТАЯ ОПЕРАЦИЯ&#xa;Может продолжиться после15s&#xa;Не cancel / не compensation&#xa;Nonce / ownership сохраняются" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="RECOVERY ПАРТНЁРА&#xa;Operation GET или та же команда&#xa;Тот же Idempotency-Key&#xa;Новая подпись / nonce / timestamp" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="ГРАНИЦА ДОКАЗАТЕЛЬСТВ&#xa;Local tests ≠ Viva / live proof&#xa;Не hard real time&#xa;Production STOP · no deploy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1240" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="независимый lifecycle" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="после закрытия transport" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="dispatch только до deadline" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="2" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="pending / complete / UNKNOWN" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="без второго provider add" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Independent source IP limits">
+    <mxGraphModel dx="1700" dy="760" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="3 НЕЗАВИСИМЫХ TLS CLIENTS&#xa;Разные pinned leaf + SPKI&#xa;Client caps:2r/s · burst10 · conn4&#xa;Headers не выбирают identity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="ОДИН SOCKET SOURCE A&#xa;Общий budget:5r/s · burst20 · conn8&#xa;30 attempts =10+10+10&#xa;8 held handlers =3+3+2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="ТРЕБУЕМЫЙ SOURCE ОТКАЗ&#xa;429 без upstream&#xa;Каждый client ниже своего cap&#xa;XFF / caller-ID spoof не помогает" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1240" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="ТА ЖЕ ТРЕТЬЯ TLS IDENTITY&#xa;Другой actual socket source B&#xa;Поддельный XFF указывает A&#xa;Client budget ещё не исчерпан" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="DIFFERENTIAL ПРИЁМ&#xa;503 от synthetic observer&#xa;Не глобальный cap и не client отказ&#xa;Затем recovery / active0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="ТОЛЬКО LOCAL FIXTURE&#xa;Cold-state + counters + logs&#xa;Source proof ≠ production / NAT&#xa;No deploy / no provider writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1240" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="проверенные TLS identities" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="исчерпан только source budget" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="меняется только socket source" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="2" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="новый source bucket" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="в совокупности, не по одному429" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Controlled Nginx application">
+    <mxGraphModel dx="1740" dy="780" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="2" value="ПОКОЛЕНИЕ A&#xa;Collector-owned challenge&#xa;Linux master / worker / boot&#xa;TLS + actual log marker A" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="B ТОЛЬКО НА ДИСКЕ&#xa;nginx -t успешен, HUP нет&#xa;Запросы: worker A / marker A&#xa;Применение B НЕ доказано" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="КОНТРОЛИРУЕМЫЙ HUP B&#xa;Новый worker + marker B&#xa;Старый worker отсутствует&#xa;Config / process до и после" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="ОТДЕЛЬНАЯ VANTAGE&#xa;Frontdoor TLS проходит&#xa;Тот же target:18894 — refused&#xa;Не публичный internet proof" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="ТОЛЬКО ЛОКАЛЬНОЕ ДОКАЗАТЕЛЬСТВО&#xa;One-shot / fail-closed / cleanup&#xa;Production operator не назначен&#xa;Deploy и activation запрещены" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="C: УДАЛЕНА LEAF BINDING&#xa;Новый worker + marker C&#xa;Прежний cert:403 / upstream0&#xa;Другой cert проходит; не CRL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="7" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="2" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Nginx identity diagnostic">
+    <mxGraphModel dx="1740" dy="780" grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="2" value="ЧТО ТРЕБУЕТСЯ&#xa;Разные Nginx role titles&#xa;Master / worker / draining&#xa;Nginx executable identity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="ЧТО НАБЛЮДАЛОСЬ&#xa;Одинаковый original argv&#xa;54 bytes / 5 NUL у обоих PID&#xa;Exe-link hash: Rosetta" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="STRICT ОТКАЗ СОХРАНЁН&#xa;COMMAND_MISMATCH: master&#xa;Original argv не доказывает&#xa;роль / drain / Nginx executable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="ГРАНИЦЫ НАБЛЮДЕНИЯ&#xa;Стабильные before / after&#xa;HTTP 0 · HUP / matrix NOT_RUN&#xa;Own cleanup подтверждён" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="ДИАГНОСТИКА ЗАКРЫТА&#xa;Причина в данном fixture&#xa;Application / production STOP&#xa;Не общий дефект Rosetta" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="СЛЕДУЮЩИЙ ОТДЕЛЬНЫЙ GATE&#xa;Подготовить native Linux/amd64&#xa;Те же pins / strict predicate&#xa;Новый runtime ещё не разрешён" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="440" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="ожидание / actual proc view" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="не менять predicate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="ограниченное доказательство" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="подготовка, не deploy" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="отдельная среда" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Bounded transport collector">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="TRUSTED OPERATOR — НУЖЕН&#xa;Approved target + source bind&#xa;Отдельные CA / SPKI / key inputs&#xa;Default-off readback до вызова" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="COLLECTOR SOURCE — ГОТОВ&#xa;11 fixed TLS / HTTP / TCP probes&#xa;Actual server pin ДО HTTP&#xa;5s / probe · 60s / session · 16 KiB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="OBSERVATIONS, НЕ PASS&#xa;Complete HTTP / TLS / socket facts&#xa;Body hash, без body / keys / errors&#xa;Vantage UNATTESTED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="56 LOCAL TESTS PASS&#xa;Real TLS sockets на loopback&#xa;Raw guard → disabled store503&#xa;Public INVALID proof; no HMAC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="460" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="PRODUCTION VERIFIER — STOP&#xa;Нужны LIVE generation / config / logs&#xa;Native application NOT_RUN&#xa;deploy / activation = false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="460" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="будущий approved вызов" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="без verdict / без reload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="проверено локально" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="не доказывает loaded config" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Generation and log correlation">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="BASELINE + EXPECTED BINDING&#xa;Master / boot / namespaces&#xa;Old worker PID + startTicks&#xa;New config SHA + literal marker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="BEFORE: NEW WORKER&#xa;Same epoch / executable&#xa;New PID + later startTicks&#xa;One worker, no draining" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="AFTER + FINAL CHECK&#xa;Process / config unchanged&#xa;Held fd / inode / prefix stable&#xa;NO ATOMIC SNAPSHOT CLAIM" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="20" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="EXACT HTTP CORRELATION&#xa;Public probe ID → one log row&#xa;Marker / worker / source / status&#xa;Admission + upstream checks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="640" y="460" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="LOCAL CONSISTENCY ONLY&#xa;External transport UNATTESTED&#xa;Copytruncate-restore not excluded&#xa;Production / deploy / activation OFF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1260" y="460" width="340" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="compare identity" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="bracket actual observations" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="fresh suffix / no ordering guess" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="hashes, not authorization" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="provenance still required" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Application correlation link">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LEGACY A / DISK B / HUP B / C&#xa;12 probes; leaf binding removed&#xa;Finish existing 120s session&#xa;Keep proof separate, no overall PASS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="OBSERVER: READY + INIT HASH&#xa;Baseline B / expected C&#xa;Fixed Linux reader + held log fd&#xa;No new files in /out during window" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SEPARATE PEER: FIXED 11&#xa;client-2 positive / revoked client&#xa;Actual TLS + socket identities&#xa;Namespace before / after" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="OBSERVER: EOF + FINAL CHECK&#xa;Exact transport / log matching&#xa;Close held fd; emit RESULT&#xa;Parent requires EOF + close(0)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="OUTER CHECKS + CLEANUP&#xa;Same C snapshot / counter +2&#xa;Source, copies, containers, network&#xa;Remaining 180s budget; fail closed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="LOCAL SOURCE INTEGRATION&#xa;23 attempts required in future run&#xa;Native NOT_RUN; no live attestation&#xa;Production / deploy / activation OFF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="same owned runner" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="only after READY" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="one canonical line + EOF" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="no success on RESULT alone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="not a production receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Historical scoped lexer fix">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LEGACY SCANNER BUG&#xa;# inside regex treated as comment&#xa;Opening brace discarded&#xa;False UNBALANCED_CLOSE at 465" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="PURE BOUNDED FIX&#xa;# comment only at token boundary&#xa;31 synthetic regressions PASS&#xa;Private tokens / redacted errors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="READ-ONLY GUARDED CAPTURE&#xa;Same scoped hash / process epoch&#xa;6 files; selected config: 307 statements&#xa;No raw config / key / cert export" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="PARTIAL DISK EVIDENCE ONLY&#xa;6 other include targets unread&#xa;No loaded-config / native proof&#xa;No probes or server changes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="RELEASE STILL BLOCKED&#xa;Full suite: 707 PASS / 24 prior FAIL&#xa;Native rehearsal DEFERRED / NOT_RUN&#xa;Ingress UNBOUND / no activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="synthetic reproduction" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="exact source in scoped helper" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="success is lexical only" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="not a production receipt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Disk include inventory completed">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="PINNED ENTRYPOINT&#xa;nginx.conf: 1 file&#xa;Same host / boot / process epoch&#xa;No server writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="DATA / GLOBAL INCLUDES&#xa;MIME types + 2 conf.d files&#xa;3 files; original hashes pinned&#xa;Module glob: 0 targets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SITES-ENABLED GLOB&#xa;7 configs; 3 exact symlink targets&#xa;Includes 2 backup/pre-release files&#xa;All preserved; names redacted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="SHARED PUBLIC TLS OPTIONS&#xa;1 unique file, reused by 7 configs&#xa;Certificate / key refs NOT followed&#xa;No secret or log reads" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="DISK INVENTORY COMPLETED&#xa;12 files / 1,235 lexical statements&#xa;Skipped discovered includes: 0&#xa;Final epoch / hash guards passed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="PRODUCTION STILL UNPROVEN&#xa;Not a semantic or applied graph&#xa;TLS/mTLS / route / operator gates&#xa;UNBOUND / BLOCKED; no activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1940" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="literal includes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="frozen target set" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="4"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="200" y="570" /></Array></mxGeometry></mxCell>
+        <mxCell id="10" value="same reused include" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="bounded lexical scan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="readback complete" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="13" value="does not prove worker application" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Shared overlay local preparation">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="OFFLINE INPUTS&#xa;Exact host / client / IPv4&#xa;Public cert bytes + caller pins&#xa;No private keys / host reads" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="ONE SHARED OVERLAY&#xa;Own maps / limits / redacted log&#xa;Exact Partner server only&#xa;No shared/default replacement" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SOURCE-OWNED DRAFT&#xa;Immutable object + SHA&#xa;NOT_DEPLOYABLE&#xa;No production-verifier entry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="20" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="CALLER BASE / CANDIDATE&#xa;Synthetic 12-file test model&#xa;Not the historical host capture&#xa;No trusted filesystem issuer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="BYTE PRESERVATION CHECK&#xa;Same baseline bytes + one file&#xa;No duplicate include / collision&#xa;Inherited Real IP → reject" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="660" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="STILL REQUIRED&#xa;Actual baseline + PKI custody&#xa;Native four-worker application&#xa;External probes / live authority" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1300" y="480" width="360" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="closed schema" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="local rendering" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="exact generated bytes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="caller SHA, not host proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="NOT_LIVE_PROOF" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Shared request ID and four workers">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LOCAL PREPARATION&#xa;One private baseline snapshot&#xa;Byte preservation + closed dialect&#xa;Unknown defaults / vars → reject" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="380" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="BOUNDED TLS OBSERVATIONS&#xa;11 cases + 16 coverage attempts&#xa;Actual response request ID&#xa;GET / OPTIONS · invalid HMAC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="680" y="20" width="380" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SOURCE-OWNED CORRELATION&#xa;Fresh log ↔ response request ID&#xa;New generation · all 4 workers&#xa;Positive 503 + TLS + limiters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1340" y="20" width="380" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="FIXTURE HOST SESSION&#xa;Fixed nonroot Linux reader&#xa;Held FD · final snapshot · 90s&#xa;Closure / transport UNATTESTED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="480" width="380" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="EXPLICIT EVIDENCE LIMITS&#xa;Missing worker → NOT_PROVEN&#xa;No ID/log → uncorrelated&#xa;Not a server-denial PASS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="680" y="480" width="380" height="180" as="geometry" /></mxCell>
+        <mxCell id="7" value="NO PRODUCTION VERDICT&#xa;Native rehearsal DEFERRED&#xa;Trusted operator still required&#xa;Deploy / activation = false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1340" y="480" width="380" height="180" as="geometry" /></mxCell>
+        <mxCell id="8" value="exact local identity" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="27 fixed observations" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="private preparation binding" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="2" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="11" value="local fixture evidence only" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="12" value="NOT_LIVE_PROOF" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="13" value="do not promote missing proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Actual read and closed-profile mismatch">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="GUARDED READ · 7 SEP 08:28 UTC&#xa;12 prior file hashes matched&#xa;Master + four-worker epoch stable&#xa;SSH exit 0 · window released" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="CLOSED PROFILE · SOURCE 1c0a82d&#xa;Server declaration: auto&#xa;Checker accepts only literal 4&#xa;MAIN_UNSUPPORTED → REJECTED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="NO PRODUCTION APPROVAL&#xa;Not a native Nginx error&#xa;Native / application NOT_RUN&#xa;Config writes / deploy = 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1380" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="PROPOSED NEXT LOCAL SCOPE&#xa;Auto / defaults / header profile&#xa;Preserve actual four-worker proof&#xa;No global server edits" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="460" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="same private config bytes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="7" value="read PASS ≠ profile PASS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="requires next-scope approval" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Auto declaration and actual inherited-profile rejection">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="LOCAL DECLARATION CHECK&#xa;Exactly one: 4 or auto&#xa;Count main include instances&#xa;Reject missing / duplicate / other" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="3" value="UNCHANGED SECURITY PROFILE&#xa;Explicit IPv4 + IPv6 defaults&#xa;Strict early TLS / header settings&#xa;No baseline byte rewrites" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="4" value="SEPARATE WORKER PROOF&#xa;4 actual workers in each snapshot&#xa;Full response-ID / log coverage&#xa;3 / 5 or partial coverage ≠ PASS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1380" y="20" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="5" value="READ 09:37 UTC · SOURCE 713ff72&#xa;12 old pins matched · SSH exit 0&#xa;INHERITED_UNSUPPORTED → REJECTED&#xa;Exact directive not identified&#xa;Native NOT_RUN · config writes 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="700" y="460" width="400" height="180" as="geometry" /></mxCell>
+        <mxCell id="6" value="auto is not worker-count proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="7" value="all gates still required" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="actual read ≠ native proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

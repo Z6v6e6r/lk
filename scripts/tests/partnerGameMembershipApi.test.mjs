@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import {
+  PUBLIC_TEST_KEY,
+  canonicalContractJson,
+  computePublicVector,
+  loadPublicContractVectors,
+  verifyPublicContractVectors,
+} from "../../docs/partner-game-membership-kit/contract-selftest.mjs";
+import { createPartnerRawRequestGuard } from "../partner_game_membership_sidecar/raw-request-guard.cjs";
 
 import {
   DisabledVivaProvider,
@@ -471,6 +484,122 @@ test("published cross-team signature vector remains stable", () => {
   assert.equal(signPartnerRequest(input, testOnlyKey), "v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo");
 });
 
+test("offline partner vectors match independent client and server bytes", () => {
+  const document = loadPublicContractVectors();
+  assert.equal(verifyPublicContractVectors(document), 5);
+  for (const vector of document.vectors) {
+    const { input, expected } = vector;
+    assert.equal(expected.canonicalBody, canonicalJson(input.body), vector.id);
+    assert.equal(expected.signatureInput, buildPartnerSignatureInput(input), vector.id);
+    assert.equal(expected.signature, signPartnerRequest(input, Buffer.from(PUBLIC_TEST_KEY, "utf8")), vector.id);
+    assert.equal(expected.signatureInput.split("\n").length, 11);
+    assert.ok(!expected.signatureInput.endsWith("\n"));
+    assert.match(expected.bodySha256, /^[0-9a-f]{64}$/);
+    assert.match(expected.signature, /^v2=[A-Za-z0-9_-]{43}$/);
+  }
+  assert.equal(document.vectors[0].expected.signature, "v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo");
+});
+
+test("offline retry preserves business identity but changes request proof", () => {
+  const [base, retry, remove, get, unicode] = loadPublicContractVectors().vectors;
+  for (const key of ["method", "path", "body", "idempotencyKey"]) assert.deepEqual(base.input[key], retry.input[key]);
+  assert.equal(base.expected.bodySha256, retry.expected.bodySha256);
+  assert.notEqual(base.expected.signature, retry.expected.signature);
+  assert.equal(Number(retry.input.timestamp), Number(base.input.timestamp) + 1);
+  assert.notEqual(base.input.nonce, retry.input.nonce);
+  assert.notEqual(base.input.correlationId, retry.input.correlationId);
+  assert.equal(remove.expected.wireBody, "{}");
+  assert.equal(remove.expected.wireBodyBytes, 2);
+  assert.equal(get.expected.wireBody, "");
+  assert.equal(get.expected.wireBodyBytes, 0);
+  assert.equal(get.expected.canonicalBody, "{}");
+  assert.equal(get.expected.bodySha256, remove.expected.bodySha256);
+  assert.ok(unicode.expected.wireBodyBytes > unicode.expected.wireBody.length);
+});
+
+test("offline canonical JSON matches UTF-16 sorting, escaping and integer dialect", () => {
+  const values = [null, true, -0, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER,
+    { "\ue000": 1, "🎾": 2, a: ["\n\"\\", "Тест", "é", "e\u0301", "\ud800"] }];
+  for (const value of values) assert.equal(canonicalContractJson(value), canonicalJson(value));
+  for (const value of [0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, undefined, new Date(0), 1n]) {
+    assert.throws(() => canonicalContractJson(value));
+    assert.throws(() => canonicalJson(value));
+  }
+  const base = loadPublicContractVectors().vectors[0].input;
+  const equivalent = { ...base, body: JSON.parse(JSON.stringify(base.body, null, 2)) };
+  equivalent.body = Object.fromEntries(Object.entries(equivalent.body).reverse());
+  assert.deepEqual(computePublicVector(base), computePublicVector(equivalent));
+  assert.equal(canonicalContractJson(JSON.parse('"\\u00e9"')), canonicalContractJson("é"));
+  assert.notEqual(computePublicVector({ ...base, body: { ...base.body, displayName: "é" } }).signature,
+    computePublicVector({ ...base, body: { ...base.body, displayName: "e\u0301" } }).signature);
+});
+
+test("offline example rejects non-demo identities, malformed paths and unexpected fields", () => {
+  const base = loadPublicContractVectors().vectors[0].input;
+  for (const replacement of [
+    { clientId: "another-client" }, { audience: "production" }, { keyId: "another-key" },
+    { path: `${base.path}?a=1` }, { path: `${base.path}#fragment` },
+    { path: `https://example.invalid${base.path}` }, { path: `${base.path}/../members` },
+    { path: base.path.replace("game-001", "game%2D001") }, { method: "post" },
+    { timestamp: "1788253200\n" }, { nonce: `${base.nonce}\r\n` }, { secret: "not-accepted" },
+    { method: "GET", path: "/lk/integrations/v1/operations/not-a-uuid", body: {} },
+    { body: { ...base.body, paid: true } },
+  ]) assert.throws(() => computePublicVector({ ...base, ...replacement }));
+  for (const field of ["timestamp", "nonce", "idempotencyKey", "correlationId"]) {
+    const changed = structuredClone(base);
+    changed[field] = loadPublicContractVectors().vectors[4].input[field];
+    assert.notEqual(computePublicVector(changed).signature, computePublicVector(base).signature);
+  }
+  const changedBody = structuredClone(base);
+  changedBody.body.payment.amountMinor++;
+  assert.notEqual(computePublicVector(changedBody).signature, computePublicVector(base).signature);
+});
+
+test("offline self-test rejects missing, duplicate or changed frozen expectations", () => {
+  for (const mutate of [
+    (doc) => { doc.vectors.pop(); },
+    (doc) => { doc.vectors[1] = doc.vectors[0]; },
+    (doc) => { doc.vectors[0].expected.signature = "v2=incorrect"; },
+    (doc) => { doc.vectors[0].expected.bodySha256 = "0".repeat(64); },
+    (doc) => { doc.publicTestKeyUtf8 = "not-the-public-key"; },
+    (doc) => { doc.productionUsable = true; },
+  ]) {
+    const document = loadPublicContractVectors();
+    mutate(document);
+    assert.throws(() => verifyPublicContractVectors(document));
+  }
+});
+
+test("offline kit runs outside repository, rejects extra arguments and redacts failures", () => {
+  const directory = mkdtempSync(join(tmpdir(), "partner-offline-kit-test-"));
+  try {
+    const script = join(directory, "contract-selftest.mjs");
+    copyFileSync(new URL("../../docs/partner-game-membership-kit/contract-selftest.mjs", import.meta.url), script);
+    copyFileSync(new URL("../../docs/partner-game-membership-kit/vectors.json", import.meta.url), join(directory, "vectors.json"));
+    const run = (args) => spawnSync(process.execPath, [script, ...args], {
+      cwd: directory, encoding: "utf8", timeout: 5000,
+      env: { PARTNER_SECRET: "ENV_SENTINEL_MUST_NOT_BE_USED", PARTNER_API_URL: "https://example.invalid" },
+    });
+    const good = run(["--self-test"]);
+    assert.equal(good.status, 0);
+    assert.equal(good.stdout, "OFFLINE_CONTRACT_VECTORS_PASS vectors=5 network=NOT_USED live_security=NOT_TESTED\n");
+    assert.equal(good.stderr, "");
+    for (const args of [[], ["--self-test", "ARGUMENT_SENTINEL"], ["--url=https://example.invalid"]]) {
+      const bad = run(args);
+      assert.equal(bad.status, 1);
+      assert.equal(bad.stdout, "");
+      assert.equal(bad.stderr, "OFFLINE_CONTRACT_SELFTEST_FAILED\n");
+    }
+    rmSync(join(directory, "vectors.json"));
+    const missing = run(["--self-test"]);
+    assert.equal(missing.status, 1);
+    assert.equal(missing.stdout, "");
+    assert.equal(missing.stderr, "OFFLINE_CONTRACT_SELFTEST_FAILED\n");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("a signed request cannot cross an audience boundary", async () => {
   const { service, provider } = buildFixture();
   const request = signedRequest({ audience: "padlhub-partner-game-production" });
@@ -593,6 +722,58 @@ test("concurrent requests with one idempotency key have exactly one mutation own
   const first = await firstPromise;
   assert.equal(first.statusCode, 201);
   assert.equal(provider.addCalls, 1);
+});
+
+test("transport deadline leaves the dispatched operation owned; signed recovery cannot add twice", async () => {
+  let releaseProvider, enteredProvider;
+  const providerGate = new Promise(resolve => { releaseProvider = resolve; });
+  const entered = new Promise(resolve => { enteredProvider = resolve; });
+  class DelayedProvider extends CountingProvider {
+    async addTechnicalUser(input) {
+      this.addCalls++; enteredProvider(); await providerGate;
+      return SyntheticVivaProvider.prototype.addTechnicalUser.call(this, input);
+    }
+  }
+  const provider = new DelayedProvider(), { service, repository } = buildFixture({ provider });
+  const idempotencyKey = crypto.randomUUID(), signed = signedRequest({ idempotencyKey });
+  const req = new PassThrough(), res = new EventEmitter(), events = [];
+  const body = JSON.stringify(signed.body);
+  Object.assign(req, { method: signed.method, url: signed.path, originalUrl: signed.path, complete: true, trailers: {},
+    headers: { host: "fixture.invalid", "content-type": "application/json", "content-length": String(Buffer.byteLength(body)), ...signed.headers } });
+  req.rawHeaders = Object.entries(req.headers).flat();
+  req.headersDistinct = Object.fromEntries(Object.entries(req.headers).map(([name, value]) => [name, [value]]));
+  const closed = new Promise(resolve => res.once("close", resolve));
+  res.destroy = () => { res.destroyed = true; res.emit("close"); };
+  let firstPromise, dispatches = 0;
+  createPartnerRawRequestGuard({ expectedHost: "fixture.invalid", bodyTimeoutMs: 20, requestTimeoutMs: 50,
+    audit: event => { events.push(event); return true; } })(req, res, () => {
+    dispatches++; firstPromise = service.handle({ ...signed, headers: req.headers, body: req.body });
+  });
+  req.end(body);
+  // Ref'd test ceiling only; watchdog remains unref'd in production.
+  let ceiling;
+  try {
+    await Promise.race([Promise.all([entered, closed]), new Promise((_, reject) => {
+      ceiling = setTimeout(() => reject(new Error("TEST_DEADLINE_NOT_OBSERVED")), 1000);
+    })]);
+    assert.equal(provider.addCalls, 1); assert.equal(provider.removeCalls, 0);
+    assert.equal(repository.operations.size, 1); assert.equal(repository.memberships.size, 1);
+    assert.equal([...repository.operations.values()][0].state, "SLOT_RESERVED");
+    assert.deepEqual(events.map(event => event.code), ["RAW_ACCEPTED", "RAW_REQUEST_DEADLINE"]);
+    assert.equal(events[0].requestId, events[1].requestId);
+    await assert.rejects(service.handle(signed), { code: "REQUEST_REPLAY_DETECTED", httpStatus: 409 });
+    const pending = await service.handle(signedRequest({ idempotencyKey }));
+    assert.equal(pending.statusCode, 202); assert.equal(provider.addCalls, 1);
+    releaseProvider();
+    const first = await firstPromise;
+    assert.equal(first.statusCode, 201); assert.equal(res.destroyed, true); assert.equal(dispatches, 1);
+    const completed = await service.handle(signedRequest({ idempotencyKey }));
+    assert.equal(completed.statusCode, 200); assert.deepEqual(completed.body, first.body);
+    assert.equal(provider.addCalls, 1); assert.equal(provider.removeCalls, 0);
+    assert.equal(repository.games.get(GAME_ID).participants.length, 1);
+    assert.equal(repository.games.get(GAME_ID).payments.length, 1);
+    assert.equal([...repository.operations.values()][0].state, "COMPLETED");
+  } finally { clearTimeout(ceiling); releaseProvider(); await firstPromise; res.destroy(); }
 });
 
 test("same idempotency key with a different signed body is rejected", async () => {
@@ -847,6 +1028,58 @@ test("real provider is fail-closed in the test release", async () => {
   assert.equal(repository.memberships.size, 0, "provider readiness must fail before slot reservation");
   assert.equal(repository.audit.at(-1)?.outcome, "REJECTED");
   assert.equal(repository.audit.at(-1)?.code, "VIVA_RUNTIME_NOT_CONFIGURED");
+});
+
+test("Node-RED password-grant source uses only explicit server credentials and is lazy", async () => {
+  const register = (await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs")).default;
+  const viva = await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs");
+  const values = {
+    LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE: "password-grant",
+    LK_PARTNER_GAME_API_VIVA_SERVICE_CLIENT_ID: "fixture-client",
+    LK_PARTNER_GAME_API_VIVA_SERVICE_USERNAME: "fixture-user",
+    LK_PARTNER_GAME_API_VIVA_SERVICE_PASSWORD: " public-fixture-password ",
+  };
+  let requests = 0;
+  let credentialReads = 0;
+  const resolve = register.createPartnerVivaTokenResolver({ viva,
+    getGlobalContext: () => { throw new Error("Global context must not be used"); },
+    getEnv: name => { if (name !== "LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE") credentialReads++; return values[name]; },
+    fetchImpl: async (url, options) => {
+      requests++;
+      assert.equal(url, viva.PARTNER_VIVA_TOKEN_URL);
+      assert.equal(new URLSearchParams(options.body).get("password"), " public-fixture-password ");
+      return new Response(JSON.stringify({ access_token: "public.fixture.service-token", token_type: "Bearer", expires_in: 300 }));
+    },
+  });
+  assert.equal(credentialReads, 0);
+  assert.equal(requests, 0);
+  assert.equal(await resolve(), "public.fixture.service-token");
+  assert.equal(await resolve(), "public.fixture.service-token");
+  assert.equal(requests, 1);
+  delete values.LK_PARTNER_GAME_API_VIVA_SERVICE_PASSWORD;
+  await assert.rejects(resolve(), { code: "VIVA_SERVICE_TOKEN_UNAVAILABLE", httpStatus: 503 });
+  assert.equal(requests, 1, "missing private credentials never fall back to global context");
+  resolve.close();
+});
+
+test("Node-RED preserves explicit legacy global-context source and rejects unknown token modes", async () => {
+  const register = (await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs")).default;
+  let expiresAt = Date.now() + 60_000;
+  let token = "public.fixture.global-token";
+  for (const source of [undefined, "global-context"]) {
+    const resolve = register.createPartnerVivaTokenResolver({
+      viva: { createVivaServiceTokenResolver: () => { throw new Error("Service grant must not be created"); } },
+      getEnv: name => name === "LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE" ? source : "IGNORED",
+      getGlobalContext: () => ({ get: key => key === "vivacrm_token_expires_at" ? expiresAt : token }),
+    });
+    assert.equal(await resolve(), token);
+    expiresAt = Date.now() + 1_000;
+    assert.equal(await resolve(), "");
+    expiresAt = Date.now() + 60_000;
+    token = "public.fixture.global-token";
+  }
+  assert.throws(() => register.createPartnerVivaTokenResolver({ getEnv: () => "unrecognized" }),
+    { code: "VIVA_TOKEN_SOURCE_INVALID", httpStatus: 503, expose: false });
 });
 
 test("Node-RED custom node registers and remains disabled before any Mongo connection", async () => {

@@ -1,11 +1,26 @@
 # Partner API: ingress evidence core
 
 Статус: реализована **общая локальная часть**, не production live-verifier.
+Следующий source slice после `5b9755f` — [исполняемый TLS/TCP collector](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md).
+Он собирает настоящие ограниченные transport observations, но не даёт live verdict:
+production config/generation/log correlation и trusted production operator ещё не реализованы.
+После `45d15a7` добавлены [локальные generation/log consistency и host-session wiring](PARTNER_GAME_MEMBERSHIP_NGINX_PROBES.md#локальная-проверка-поколения-и-корреляция-журнала).
+Это закрывает source-сопоставление snapshot/probe/log, но не trusted production
+operator, controlled application или внешнюю provenance; общий entry по-прежнему закрыт.
+Продолжение после `40c7239`: source runner controlled application дополнен обязательным
+11-probe supplement после revoked, held-fd pipe и +2 observer check. Это локальная
+интеграция исходников, не выполненное Nginx application или production attestation.
+После `b1839dd` реализуется [controlled-application candidate](PARTNER_GAME_MEMBERSHIP_NGINX_APPLICATION.md):
+actual Linux master/workers, свежая метка поколения в log, disk-only negative,
+binding revocation и отдельный network namespace. Это локальная подготовка
+производственного пути, не снятие требований к production operator/vantage/custody.
+6 сентября добавлен отдельный [локальный Nginx 1.24 generator и audit refresh](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md).
+Он использует только `.invalid`/synthetic certificate inputs и не открывает production entry.
 Отдельно добавлен [raw-request guard и физическая локальная Nginx-репетиция](PARTNER_GAME_MEMBERSHIP_RAW_GUARD.md).
 Guarded startup включён в [новую source closure пакета](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md);
 это не подтверждение установки/внешнего ingress.
 `verifyPartnerProductionIngress()` безусловно завершается
-`UNSUPPORTED_INGRESS_ADAPTER`. Нет CLI, сетевого collector, чтения production,
+`UNSUPPORTED_INGRESS_ADAPTER`. Нет CLI или подключённого production collector, чтения production,
 проверки X.509 certificate/CA или физических TLS/mTLS probes внутри этого verifier. Существующие
 production-controls/binding packaging обновлены отдельно; production runtime не менялся.
 
@@ -16,6 +31,31 @@ production-controls/binding packaging обновлены отдельно; produ
 `--without-http_limit_conn_module`. Это build metadata, не аттестация работающего
 процесса и не security audit Ubuntu package. Конфиги, сертификаты и секреты не читались;
 reload/restart/upgrade не выполнялись. Выбирать Caddy больше не требуется.
+
+**Выбор 2026-09-07: `partner-api.padlhub.su` на `lk-primary-147`.** Это подтверждённое
+планируемое размещение, не DNS/host readback, private binding или разрешение на
+live-операции. [Границы решения и следующий read-only этап](PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md#выбранное-размещение--только-планирование).
+Policy template остаётся `UNBOUND`, production entry — `UNSUPPORTED_INGRESS_ADAPTER`.
+
+После отдельного разрешения выполнен [bounded read-only inventory на 147](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+Подтверждены service/process/build paths и scoped disk hashes. Первоначальная ошибка
+сканера на строке 465 устранена: `#` внутри regex-token ошибочно считался комментарием.
+31 synthetic regression PASS; первое исправленное guarded чтение охватило шесть
+config-файлов. Следующее отдельно разрешённое чтение 06:23:52 UTC закрыло оставшиеся
+шесть целей: **12 файлов / 1,235 lexical statements / skipped 0**, финальные
+epoch/hash checks PASS. Это полный набор обнаруженных literal include targets в
+пределах сканера, а не semantic/applied-config или production proof. Shared backup
+targets сохранены; config, routes, сертификаты и production entry не менялись.
+
+7 сентября добавлен [локальный shared-overlay renderer и byte-preservation checker](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md).
+Это первый production-layout source slice: один добавочный exact-host vhost,
+собственный namespace, запрет inherited Real IP и сохранение переданных baseline
+bytes. Не host custody/semantic proof и не подключённый production collector;
+старый log correlation dialect не выдаёт новых доказательств. Теперь реализована
+[отдельная shared-layout source связка](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md):
+closed inherited/default profile, server-response-ID collector и четыре новых
+workers, с отдельным результатом NOT_PROVEN при недостаточном coverage. Это не
+native application или trusted production operator. Live entry остаётся закрыт.
 
 Исходник: `scripts/partner_game_membership_ingress_evidence.mjs`.
 Тесты: `scripts/tests/partnerGameMembershipIngressEvidence.test.mjs`.
@@ -170,15 +210,16 @@ timeout или неоднозначный reset отклоняется. Даже
 
 ## Следующая реализация: решения по критичности
 
-1. **P0, владелец инфраструктуры:** Nginx выбран, build 1.24.0 наблюдался read-only.
-   Осталось закрепить topology: exact host/SNI, место TLS/mTLS termination, proxy
-   chain, service/listeners, shared hostnames. Старый Caddy path в synthetic fixture
-   остаётся только fixture, он не назначает production topology.
+1. **P0, владелец инфраструктуры PadlHub:** Nginx выбран; планируемый exact Host/SNI
+   `partner-api.padlhub.su` и target `lk-primary-147` подтверждены пользователем.
+   Осталось установить фактическую topology: место TLS/mTLS termination, proxy
+   chain, service/listeners, shared hostnames и config/include closure. Историческое
+   наблюдение build 1.24.0 и synthetic fixture не заменяют fresh read-only inventory.
 2. **P0, инфраструктура + security:** определить доверенный read-only источник именно
    загруженной конфигурации и runtime generation. Одни файлы, `nginx -T`, `caddy adapt`
    или unit dump недостаточны. При отсутствии доказательства —
    `EFFECTIVE_CONFIG_UNPROVABLE`; reload/restart требует отдельного согласования.
-3. **P0, security + партнёр:** определить владельца reviewer key и безопасную передачу
+3. **P0, security + инфраструктура PadlHub:** определить владельца reviewer key и безопасную передачу
    SPKI pin, тестового client certificate и CA; секретные ключи не входят в Git/логи.
    Определить внешнюю точку probes, чтобы проверить shared host/direct sidecar,
    не путая loopback fixture с внешней недоступностью.
@@ -188,12 +229,13 @@ timeout или неоднозначный reset отклоняется. Даже
    Live receipt должен отдельно включать digest фактических probe-результатов,
    adapter/collector identity/version, доверенную vantage и одноразовый run challenge;
    подписанный audit artifact с допустимым повторным чтением не заменяет этот receipt.
-5. **P1, тестирование + партнёр:** физическая isolated TLS/mTLS matrix: positive control,
+5. **P1, тестирование PadlHub:** физическая isolated TLS/mTLS matrix: positive control,
    no/wrong cert, SNI/Host, query/OPTIONS, CORS, proxy headers и route isolation.
    Затем отдельно согласованные live probes. Ошибка транспорта не равна PASS.
 
-Это дополнение к вопросам партнёру и 16 `requiredBeforeDeploy` в `deployment-plan.json`,
-а не их замена. Mongo/Viva gates, отдельная интеграция, push, deploy и activation
+Это дополнение к 16 `requiredBeforeDeploy` в `deployment-plan.json`, а не их замена.
+Новый partner signoff для наших инфраструктурных проверок не требуется.
+Mongo/Viva gates, отдельная интеграция, push, deploy и activation
 остаются самостоятельными этапами; никакие текущие локальные функции их не открывают.
 
 ## Проверки
@@ -205,6 +247,7 @@ expiry, canonical encoding, размер, file ownership/modes, symlink/hardlink
 Ключи тестов генерируются только в памяти; shared data и реальные сертификаты не нужны.
 
 Production TLS, Linux-host collector и production evidence: **NOT_RUN / NOT_IMPLEMENTED**.
+Отдельный новый transport collector имеет loopback tests, но не вызывается этим entry.
 Отдельный raw-guard fixture теперь физически проверяет HTTP/1.1 TLS с синтетическим
 client certificate и no-cert rejection, но не всю generic/live matrix.
 Не следует подменять эту отметку результатом unit-тестов или прошлым зелёным main CI.

@@ -1,7 +1,18 @@
 # Тестовый Partner Game Membership API
 
-Статус документа: **deployable source pilot v0.2, default-off; isolated sidecar runtime
-SECURITY_AUDIT_PASS, live ingress/custody gates UNBOUND**. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
+Для подготовки клиента без доступа к среде:
+[офлайн-комплект из трёх файлов с пятью эталонными vectors](partner-game-membership-kit/README.md).
+Это public synthetic contract test, не боевые настройки и не подтверждение deploy.
+PadlHub предоставляет работающие методы и фиксированный контракт; реализация клиента
+относится к партнёру. Анкета/согласование P0 и отчёт о vectors не являются условием
+нашего выпуска. [Ответственность сторон](PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md).
+
+Статус текущего source pilot v0.2: **default-off; token source implemented;
+runtime closure refresh required; live ingress/custody gates UNBOUND**. Локальный
+кандидат отдельной вкладки для общего Node-RED описан в
+[PARTNER_GAME_MEMBERSHIP_SHARED_NODE_RED.md](PARTNER_GAME_MEMBERSHIP_SHARED_NODE_RED.md);
+он требует отдельного scoped raw-body middleware и пока не импортирован.
+Исторический `SECURITY_AUDIT_PASS` относится к прежним exact bytes. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
 но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не
 создавались, Mongo/shared ingress/production не менялись. Наличие deployable artifacts
 не является разрешением на deploy или activation.
@@ -231,12 +242,19 @@ audit и возвращает `503`, не создавая operation, membership
 | `LK_PARTNER_GAME_API_PROVIDER_MODE` | `viva` | Выбрать real adapter вместо `disabled`/isolated `synthetic` |
 | `LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED` | `true` | Отдельный mutation kill switch |
 | `LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION` | `padlhub-viva-technical-booking-v1` | Привязать runtime к reviewed contract |
-| `LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED` | `true` | Подтвердить письменный ответ Viva об `Idempotency-Key` |
+| `LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED` | `true` | Внутренняя проверка PadlHub: технически подтверждённая семантика `Idempotency-Key`, не согласование партнёра |
 | `LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED` | `true` | Подтвердить отсутствие нежелательных payment-side effects |
 
-Bearer берётся только из server-side Node-RED global context
-`vivacrm_access_token` и принимается лишь когда `vivacrm_token_expires_at` остаётся
-больше чем на 30 секунд вперед. Caller не может передать token, Viva client ID, booking ID,
+Источник Bearer выбирается только серверной настройкой
+`LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE`. Для отдельного sidecar реализован
+`password-grant`: получение/обновление токена не зависит от global context общего
+Node-RED. Контракт, секреты и ограничения описаны в
+[серверной авторизации Viva](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
+Отсутствующее/пустое значение либо `global-context` сохраняет прежнюю совместимость:
+`vivacrm_access_token` принимается лишь когда `vivacrm_token_expires_at` остаётся
+больше чем на 30 секунд вперед. Это не рабочая конфигурация нового пустого sidecar.
+Неизвестный selector отклоняется; при ошибке password grant fallback отсутствует.
+Caller не может передать token, Viva client ID, booking ID,
 `paymentType` или API base. Base pinned к `https://api.vivacrm.ru/api/v1`; redirect
 запрещён, timeout ограничен 1–30 секундами и действует до полного чтения ответа,
 mutation не повторяется автоматически. Response читается потоково с жёстким пределом
@@ -244,7 +262,7 @@ mutation не повторяется автоматически. Response чит
 останавливается и отменяется сразу при превышении лимита.
 
 Текущий provider contract основан на существующих repository integrations и остаётся
-**provisional до письменного подтверждения Viva**:
+**provisional до технической проверки PadlHub по актуальному контракту и provider evidence**:
 
 | Действие | Pinned request | Обязательный ответ/read-back |
 | --- | --- | --- |
@@ -254,7 +272,8 @@ mutation не повторяется автоматически. Response чит
 | Remove | `PUT` того же path, body `refundMethod=NONE`, `cancelExercise=false` | Затем read-back обязан показать booking неактивным/отсутствующим |
 
 `Idempotency-Key` и `X-Correlation-ID` пересылаются в Viva. Однако само наличие header
-не доказывает server-side idempotency: до ответа Viva gate обязан оставаться `false`.
+не доказывает server-side idempotency: до технического подтверждения gate остаётся
+`false`. Отмена анкеты не выставляет его в `true`; проверка относится к PadlHub.
 Network error, timeout, `5xx`, слишком большой/невалидный mutation response или binding
 mismatch дают `202 UNKNOWN`; blind retry и автоматическая компенсация запрещены.
 Все одновременно присутствующие alias-поля booking/client/exercise и `status/state`

@@ -15,7 +15,7 @@ const CUSTOM_NODE_FILES = Object.freeze([
   "partner-game-membership-core.mjs",
   "partner-game-membership-mongo.mjs",
   "partner-game-membership-viva.mjs",
-  "partner-game-membership-node.cjs",
+  "partner-game-membership-node.cjs", "partner-game-membership-ingress.cjs",
   "partner-game-membership-node.html",
 ]);
 const fail = (message) => { throw new Error(message); };
@@ -166,7 +166,22 @@ export function validatePartnerRuntimeEvidence({
     || manifest.dependencyTree.exitCode !== 0) {
     fail("Partner npm ls evidence is incomplete or inconsistent");
   }
-  exactKeys(auditReport, ["formatVersion", "capturedAt", "command", "runtime", "metadata", "vulnerabilities", "decision"], "Partner audit evidence");
+  exactKeys(auditReport, ["formatVersion", "capturedAt", "command", "runtime", "metadata", "vulnerabilities", "decision", "executionEvidence"], "Partner audit evidence");
+  const auditExecution = auditReport.executionEvidence;
+  exactKeys(auditExecution, [
+    "formatVersion", "scope", "state", "receiptSha256", "observationSha256", "orchestratorSha256", "runnerSha256",
+    "imageReference", "platformImageId", "sourceHashes", "inputHashes", "commands", "containers", "egressBoundary",
+    "containerPresentAfterCleanup", "cleanupCapturedAt", "productionTouched",
+  ], "Partner audit execution evidence");
+  // Exact reviewed CLI readback, not a caller-resealable assertion. A future audit
+  // needs new observed evidence and review; changing its date is not a refresh.
+  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "2199b408e99874fa6e0ecde5cb78e093c05fde09f1c860ba9305651500292822"
+    || auditExecution.inputHashes["package.json"] !== manifest.closure.packageJsonSha256
+    || auditExecution.inputHashes["package-lock.json"] !== manifest.closure.packageLockSha256
+    || auditExecution.commands.at(-1).completedAt !== auditReport.capturedAt
+    || auditReport.command !== "npm audit --omit=dev --json --ignore-scripts") {
+    fail("Partner audit execution evidence does not match the reviewed Linux readback");
+  }
   const reportedCounts = auditReport.metadata?.vulnerabilities || {};
   const counts = {
     critical: reportedCounts.critical,
@@ -177,9 +192,7 @@ export function validatePartnerRuntimeEvidence({
   };
   if (auditReport.command !== manifest.audit.command
     || auditReport.capturedAt !== manifest.audit.capturedAt
-    || auditReport.runtime?.nodeVersion !== manifest.runtime.nodeVersion
-    || auditReport.runtime?.npmVersion !== manifest.runtime.npmVersion
-    || auditReport.runtime?.nodeRedVersion !== manifest.runtime.nodeRedVersion
+    || !isDeepStrictEqual(auditReport.runtime, manifest.runtime)
     || !isDeepStrictEqual(counts, manifest.audit.affectedPackages)
     || auditReport.vulnerabilities.length !== counts.total
     || auditReport.decision !== "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES"

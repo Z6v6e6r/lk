@@ -1,8 +1,36 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { consumePartnerIngress } = require("./partner-game-membership-ingress.cjs");
 
 const readEnv = (name) => String(process.env[name] || "").trim();
+
+function createPartnerVivaTokenResolver({ viva, getGlobalContext, getEnv = name => process.env[name], fetchImpl } = {}) {
+  const source = String(getEnv("LK_PARTNER_GAME_API_VIVA_TOKEN_SOURCE") || "global-context").trim();
+  if (source === "password-grant") {
+    return viva.createVivaServiceTokenResolver({
+      fetchImpl,
+      credentialsResolver: () => ({
+        clientId: getEnv("LK_PARTNER_GAME_API_VIVA_SERVICE_CLIENT_ID"),
+        username: getEnv("LK_PARTNER_GAME_API_VIVA_SERVICE_USERNAME"),
+        password: getEnv("LK_PARTNER_GAME_API_VIVA_SERVICE_PASSWORD"),
+      }),
+    });
+  }
+  if (source !== "global-context") {
+    const error = new Error("Viva token source configuration is invalid");
+    Object.assign(error, { code: "VIVA_TOKEN_SOURCE_INVALID", httpStatus: 503, expose: false });
+    throw error;
+  }
+  return async () => {
+    try {
+      const globalContext = getGlobalContext();
+      const expiresAt = Number(globalContext.get("vivacrm_token_expires_at") || 0);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() + 30_000) return "";
+      return globalContext.get("vivacrm_access_token");
+    } catch { return ""; }
+  };
+}
 
 const parseKeyring = (raw) => {
   let value;
@@ -31,8 +59,14 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
       vivaOnPlaceConfirmed: String(config.vivaOnPlaceConfirmedEnv || "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED").trim(),
     };
     let runtimePromise = null;
+    let closing = false;
+    const inFlight = new Set();
+    const assertOpen = () => {
+      if (closing) throw Object.assign(new Error("Partner API store is closing"), { code: "PARTNER_API_CLOSING", httpStatus: 503 });
+    };
 
     node.getRuntime = async function getRuntime() {
+      assertOpen();
       if (readEnv(envNames.enabled) !== "true") {
         const error = new Error("Partner game membership API is disabled");
         error.code = "PARTNER_API_DISABLED";
@@ -78,24 +112,17 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
               await repository.verifyRequiredIndexes();
             }
             let provider;
+            let tokenResolver;
             if (providerMode === "synthetic") {
               provider = new core.SyntheticVivaProvider();
             } else if (providerMode === "viva") {
+              tokenResolver = createPartnerVivaTokenResolver({ viva, getGlobalContext: () => node.context().global });
               provider = new viva.VivaAdminTechnicalUserProvider({
                 mutationsEnabled: readEnv(envNames.vivaMutationsEnabled) === "true",
                 contractRevision: readEnv(envNames.vivaContractRevision),
                 idempotencyConfirmed: readEnv(envNames.vivaIdempotencyConfirmed) === "true",
                 onPlacePaymentConfirmed: readEnv(envNames.vivaOnPlaceConfirmed) === "true",
-                tokenResolver: async () => {
-                  try {
-                    const globalContext = node.context().global;
-                    const expiresAt = Number(globalContext.get("vivacrm_token_expires_at") || 0);
-                    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() + 30_000) return "";
-                    return globalContext.get("vivacrm_access_token");
-                  } catch {
-                    return "";
-                  }
-                },
+                tokenResolver,
               });
             } else if (!providerMode || providerMode === "disabled") {
               provider = new core.DisabledVivaProvider();
@@ -125,7 +152,7 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
               technicalVivaClientId,
               auditKey,
             });
-            return { client, repository, service, providerMode, isolated };
+            return { client, repository, service, providerMode, isolated, tokenResolver };
           } catch (error) {
             await client.close().catch(() => {});
             throw error;
@@ -139,20 +166,34 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
     };
 
     node.handleHttpMessage = async function handleHttpMessage(msg) {
-      const runtime = await node.getRuntime();
+      assertOpen();
       const req = msg.req || {};
-      return runtime.service.handle({
+      // Shared flow requires proof before even opening Mongo or obtaining a token.
+      const proof = config.requireIngressProof === true ? consumePartnerIngress(req) : null;
+      const command = proof ? {
+        method: proof[0], path: proof[1], headers: proof[3], body: proof[4],
+        remoteAddress: req.socket?.remoteAddress || null,
+      } : {
         method: req.method || msg.method,
         path: req.originalUrl || req.url || msg.url,
         headers: req.headers || msg.headers || {},
         body: msg.payload ?? {},
         remoteAddress: req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || null,
-      });
+      };
+      const operation = (async () => {
+        const runtime = await node.getRuntime();
+        return runtime.service.handle(command);
+      })();
+      inFlight.add(operation);
+      try { return await operation; } finally { inFlight.delete(operation); }
     };
 
     node.on("close", async (_removed, done) => {
+      closing = true;
       try {
+        await Promise.allSettled([...inFlight]);
         const runtime = runtimePromise ? await runtimePromise : null;
+        runtime?.tokenResolver?.close?.();
         await runtime?.repository?.close();
         done();
       } catch (error) {
@@ -212,3 +253,4 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
 };
 
 module.exports.parseKeyring = parseKeyring;
+module.exports.createPartnerVivaTokenResolver = createPartnerVivaTokenResolver;

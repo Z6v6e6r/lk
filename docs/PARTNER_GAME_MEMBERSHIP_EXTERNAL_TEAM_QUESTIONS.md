@@ -1,204 +1,107 @@
-# Вопросы внешней команде: Partner Game Membership API
+# Partner API: ответственность сторон и приоритеты интеграции
 
-Ответы фиксируются письменно с владельцем решения, датой и примером payload/read-back.
-Ниже порядок не по удобству, а по риску. Неразрешённый P0 блокирует shared test с Viva;
-P1 блокирует ограниченный пилот; P2 можно согласовать до масштабирования.
+## Действующее решение
 
-## P0 — блокирует любой реальный вызов Viva
+Пользователь отменил обязательное согласование анкеты P0: **ANSWERS_NOT_REQUIRED**.
+PadlHub предоставляет rusPadelUp работающие методы, фиксированный контракт,
+документацию, примеры и доступ. Реализация клиента — ответственность партнёра.
+Не ждём ответов на анкету, подписанного decision log, отчёта о клиентском стеке
+или формального одобрения контракта для продолжения нашей разработки и выпуска.
 
-### 1. Кто является сторонами и владельцем данных?
+Прежний черновик запроса и процесс согласования отменены, не отправлены;
+история сохранена в Git. Технический контакт уже указан пользователем, имя
+не переносится в репозиторий. Материалы передаются через пользователя этой задачи;
+прямая отправка агента партнёру не требуется. Название rusPadelUp не является
+выданным machine clientId. Данные для фактической настройки доступа передаются
+приватно как параметры подключения, а не как анкета согласования.
 
-- Кто потребитель API: Viva, отдельная касса/агрегатор или наша прослойка?
-- Какой legal/tenant/station соответствует каждому `clientId`?
-- Кто вправе утверждать, что внешний платёж завершён, отменён или возвращён?
-- Кто отвечает за ошибочно добавленного игрока и ручную reconciliation?
+Отмена анкеты не является доказательством работы endpoint и не отменяет наши
+обязанности по серверной безопасности, проверке Viva и разрешениям на боевые операции.
+Согласие партнёра не может заменить отрицательный тест или исправить сломанный сервер.
 
-**Нужно получить:** RACI, список tenant/station, технического и бизнес-владельца,
-канал экстренной блокировки.
+## Что должен получить партнёр
 
-### 2. Точный Viva контракт технического пользователя
+| Метод | Путь | Гарантия контракта |
+| --- | --- | --- |
+| POST | `/lk/integrations/v1/open-games/{gameId}/members` | Добавить внешнего игрока с отметкой внешней оплаты; booking в Viva создаёт PadlHub на технического клиента |
+| DELETE | `/lk/integrations/v1/open-games/{gameId}/members/{membershipId}` | Удалить только membership, созданный тем же integration client |
+| GET | `/lk/integrations/v1/operations/{operationId}` | Прочитать состояние только своей операции, включая неоднозначный результат |
 
-- Как отдельный Partner sidecar получает Viva access token без общего Node-RED global
-  context: OAuth client credentials, service account или иной серверный grant?
-- Какие exact token endpoint, audience/scope, TTL, refresh/reissue и revocation
-  semantics? Разрешён ли отдельный least-privilege credential только для
-  add/read/cancel технического booking?
-- Как отличить token expiry/revocation от provider outage и доказать, что новый token
-  не расширяет tenant/station scope? Кто владелец ротации и экстренного отзыва?
-- Какой Admin API endpoint создаёт booking технического клиента в уже существующем
-  exercise? Метод, path, body, auth scope и допустимые status codes.
-- Можно ли одному техническому Viva client иметь несколько активных booking в одном
-  exercise? Если нет, требуется пул технических клиентов или иная модель.
-- Возвращается ли уникальный booking ID в подтверждённом response? Как выполнить exact
-  read-back по `exerciseId + bookingId + clientId`?
-- Какие поля/states однозначно означают active и cancelled booking? Как доказать, что
-  booking отсутствует: `last`, `totalPages/totalElements`, отдельный GET-by-ID? Может ли
-  нужная запись оказаться за пределами первой страницы `size=200`?
-- Как удалить именно эту запись без refund/возврата/затрагивания других booking?
-- Как Viva отвечает на повтор create/delete, timeout после commit, already cancelled,
-  exercise closed и capacity conflict?
-- Поддерживает ли каждый mutation endpoint header `Idempotency-Key`? Какова область
-  уникальности (tenant/client/endpoint), TTL записи, поведение при том же key+body и при
-  том же key с другим body? Сохраняется ли тот же booking ID после lost response?
-- Прокидывается/возвращается ли `X-Correlation-ID`, есть ли provider request ID для
-  разбора неоднозначного timeout/`5xx`?
-- Подтверждает ли команда точные provisional paths/body v0.2: Admin API v1 create,
-  list read-back, cancellation probe и PUT `{refundMethod:"NONE",cancelExercise:false}`?
-- Создаёт ли технический booking задолженность, оплату, чек, уведомление, абонементное
-  списание, статистику посещения или рейтинг?
+В комплект подключения входят фактически работающий HTTPS base URL, предоставленные
+приватно индивидуальные credentials/mTLS-параметры и права клиента, допустимая
+тестовая игра, схемы запросов/ответов/ошибок, правила подписи и retry, примеры
+POST/DELETE/GET. Ключи и сертификаты разных сред не переиспользуются. Публичный demo
+key из [офлайн-комплекта](partner-game-membership-kit/README.md) боевым не становится.
 
-**Нужно получить:** актуальная OpenAPI-схема, sandbox examples, отдельный
-least-privilege token/grant contract и таблица семантики всех 2xx/4xx/5xx/timeout,
-отдельное письменное подтверждение `Idempotency-Key` и `ON_PLACE`.
-Пока этого нет, реализованный v0.2 adapter остаётся default-off: четыре real-mutation
-gate нельзя включать по предположению или только по успешному единичному запросу.
+[Полный контракт API](PARTNER_GAME_MEMBERSHIP_API.md) уже определяет тела, headers,
+canonical JSON, payment semantics и ошибки. Партнёр реализует этот контракт, а не
+выбирает через анкету, нужны ли HMAC, mTLS, idempotency или запрет чужого удаления.
 
-### 3. Что означает «оплачено»?
+## Наша ответственность — PadlHub
 
-- `PAID` — деньги реально settled, только authorized или внутреннее обещание партнёра?
-- Валюта и amount берутся из партнёра или сверяются с ценой слота в PadlHub/Viva?
-- Может ли сумма быть 0; допустимы скидки, промокоды, частичная оплата?
-- Где источник истины для refund/chargeback? Нужен ли отдельный reversal event?
-- Подтверждает ли команда v0.2 правило: payment reference уникален и неизменяем в рамках
-  integration client? Если один платёж покрывает нескольких игроков, нужен отдельный
-  group-payment контракт, а не переиспользование reference.
+- Реализовать и выпустить три метода; самим проверить успешное добавление/чтение/
+  удаление, точный Viva booking/read-back и отсутствие побочных списаний/возвратов.
+- Обеспечить HMAC, timestamp/atomic nonce, durable idempotency, ownership, scopes и
+  station/game allowlist. Перехваченный повтор, подмена подписи и чужое удаление
+  должны отвергаться на сервере, независимо от качества клиента.
+- Настроить и проверить Nginx/mTLS, запрет обхода sidecar, лимиты и отзыв доступа.
+  Не считать наличие подписи защитой от пересылки оригинала раньше клиента без mTLS.
+- Обеспечить audit, сохранность Mongo, fencing/capacity, UNKNOWN/reconciliation,
+  управляемое отключение и восстановление. Не перекладывать ошибки серверной
+  реализации или интеграции PadlHub–Viva на rusPadelUp.
+- Самостоятельно подтвердить provider semantics техническими доказательствами:
+  актуальным контрактом и контролируемыми проверками/точным read-back. Анкета или
+  письмо не заменяют доказательство; без него нельзя выставить server readiness
+  flags в true только ради выпуска.
+- Передать документацию, клиентские требования и работоспособные параметры доступа
+  через пользователя. Не сообщать «боевые методы готовы» по одному offline PASS.
 
-**Нужно получить:** payment state diagram, правило amount/currency validation,
-refund/chargeback policy и примеры reconciliation. Без этого отметка остаётся только
-`settlementSource=EXTERNAL_PARTNER`, не банковским подтверждением PadlHub.
+## Ответственность rusPadelUp — требования к клиенту, не согласование
 
-### 4. Стабильная идентичность игрока
+- Server-to-server вызовы; безопасное хранение ключей, mTLS и разделение сред.
+- Точная подпись canonical body/path/audience; актуальное время, случайный nonce и
+  новая подпись каждой попытки; сохранение Idempotency-Key исходной команды.
+- Стабильные externalPlayerId, допустимые displayName, корректные amount/currency
+  и уникальный payment.reference. PAID означает заявление о внешнем расчёте,
+  не проведение банковского платежа или Viva payment методом PadlHub.
+- Обработка ошибок и UNKNOWN по контракту, без слепых повторов/автоматического
+  DELETE или refund. Удаление игрока из LK/Viva/другого партнёра через этот API запрещено.
+- Совместимость своей реализации с опубликованными примерами и поддержка клиента.
+  Пять vectors можно использовать самостоятельно; присылать нам отчёт не требуется.
 
-- `externalPlayerId` уникален в рамках client, tenant или глобально?
-- Может ли ID перейти другому человеку или измениться после merge аккаунтов?
-- Какой displayName допустимо передавать и хранить; нужен ли телефон? В v0.2 телефон
-  намеренно запрещён.
-- Нужно ли связывать внешнего игрока с существующим LK/Viva профилем? Если да, кто и по
-  какому доказательству выполняет mapping?
+## Приоритеты, которые партнёр должен учитывать
 
-**Нужно получить:** lifecycle ID, retention/erasure policy и запрет на переиспользование.
+Это checklist для разработки его клиента, а не release checklist с обязательными
+ответами. Обнаруженный дефект нашего API остаётся нашей ответственностью.
 
-### 5. Криптография и хранение ключей на стороне клиента
+- **P0 — корректность и безопасность вызовов:** защита ключей, HMAC/mTLS, время/nonce,
+  стабильная идентичность, точная семантика внешней оплаты, retry/idempotency/UNKNOWN,
+  соблюдение ownership, scopes и ограничений игры.
+- **P1 — эксплуатация клиента:** backoff/лимиты, мониторинг ошибок, сохранение
+  operationId, диагностика без PII/секретов, реагирование на отзыв доступа и версии API.
+- **P2 — развитие:** bulk, webhooks, group payments и profile mapping не входят
+  в текущие три метода; их отсутствие не является препятствием этому выпуску.
 
-- Где хранится HMAC secret: KMS/secret manager/HSM, кто имеет read/use права?
-- Может ли клиент выполнить HMAC без вывода секрета в логи?
-- Может ли клиент конфигурировать и подписывать отдельный exact audience для test и
-  production и fail-closed отклонять неизвестную среду?
-- Синхронизированы ли часы через NTP и каков максимальный drift?
-- Может ли клиент генерировать 192+ bit random nonce и новый correlation ID на попытку?
-- Подтверждает ли клиент exact canonical JSON и golden test vectors?
-- Как отзывается скомпрометированный key и кто круглосуточно выполняет rotation?
+## Реальные незавершённые работы PadlHub
 
-**Нужно получить:** owner key custody, rotation/revocation runbook и успешные golden
-signature vectors. Передача секрета в request или ticket запрещена.
+На проверенном source checkpoint `11e63d8` (runtime bytes с `ffcbe3a` не менялись):
 
-### 6. Сетевая защита
+1. `verifyPartnerProductionIngress()` безусловно возвращает
+   `UNSUPPORTED_INGRESS_ADAPTER`: production-проверка Nginx не реализована.
+2. Guarded startup принимает только `DEFAULT_OFF_UNBOUND`/`unbound.invalid`;
+   одного изменения env недостаточно для включения методов. Нужен защищённый путь
+   запуска с привязкой к реальному deployment, без ослабления текущей защиты.
+3. Viva adapter читает token из global context, но в отдельном sidecar с memory
+   context нет token producer/refresh. В service unit сеть разрешена только через
+   localhost. Нужны серверный token lifecycle и ограниченный доступ к нашим
+   Mongo/Viva dependencies; выдача партнёру его API-key этого не исправляет.
+4. До выдачи работающего подключения нужны наши target/readback, audit, Mongo/Viva,
+   anti-replay/ownership и полные API post-checks. Текущие source/fixture результаты
+   не являются такими live-доказательствами.
 
-- Есть ли стабильные egress IP/CIDR клиента как дополнительное ограничение?
-- Поддерживает ли клиент обязательный mTLS, отдельные test/production certificates и
-  их ротацию без повторного использования ключевого материала?
-- Где завершается TLS, какие proxy переписывают path/headers и какой path фактически
-  подписывает клиент?
-- Кто устанавливает rate limit и максимальный body size?
-
-**Нужно получить:** обязательный mTLS, разные test/production client ID, HMAC key и
-certificate, exact audience/Host/SNI, дополнительный IP allowlist, TLS policy,
-socket-peer/trusted-proxy схема и DDoS/rate-limit значения. CIDR без mTLS не допускается:
-HMAC не предотвращает real-time relay, а `X-Forwarded-For` не является identity.
-
-### 7. Retry и неоднозначный результат
-
-- Подтверждает ли клиент: старый HTTP request нельзя повторять; retry создаёт новый
-  timestamp/nonce/correlation/signature при прежнем idempotency key и неизменном body?
-- Как долго клиент хранит idempotency key и результат?
-- Что клиент делает при `202 UNKNOWN`, `409`, `429`, `5xx` и connection reset?
-- Запрещён ли автоматический DELETE после неясного POST?
-
-**Нужно получить:** retry matrix с max attempts/backoff и отдельный manual path для
-`UNKNOWN`.
-
-### 8. Конкуренция и ёмкость игры
-
-- Кто ещё одновременно добавляет игроков: LK, Viva-оператор, админ, другие партнёры?
-- Какая величина является capacity и что делать, если место занято между Viva add и
-  local commit?
-- Разрешён ли waitlist через эту интеграцию? В v0.1 — нет.
-- Какие exact поля и значения являются каноническими для public/private, archived и
-  lifecycle? Локальный v0.1 принимает `PAID`, `PAYMENT_PENDING` и перечисленные legacy
-  open statuses, но конфликтующие visibility flags отклоняет.
-- Какой момент закрывает игру для новых участников: start, end либо отдельный join
-  cutoff? Какой server clock/timezone является authority?
-
-**Нужно получить:** единый joinability/capacity invariant с примерами реальных payload,
-authority времени и согласованный compensation/manual reconciliation сценарий.
-
-## P1 — блокирует ограниченный пилот
-
-### 9. SLA/SLO и эксплуатация
-
-- Ожидаемые RPS, burst, timeout и дневной объём?
-- SLO ответа и максимальное время `UNKNOWN` до разбирательства?
-- Кто получает алерты и имеет read-only доступ к operation/audit?
-- Окно поддержки и эскалация P1/P2 incident?
-
-### 10. Audit, PII и retention
-
-- Какие поля обязаны быть в журнале для спора, а какие запрещены?
-- Срок хранения membership/payment/audit/nonce/outbox?
-- Требуются ли data residency, consent, DPA, право на удаление и legal hold?
-- Как выдавать клиенту audit evidence без раскрытия другого tenant?
-
-### 11. Sandbox и приёмочные данные
-
-- Есть ли отдельные Viva tenant/station/exercise/technical client, не связанные с
-  реальными клиентами и деньгами?
-- Кто создаёт 2/4, 3/4, 4/4, closed/cancelled test games?
-- Как очищать sandbox без переиспользования production IDs?
-- Какие before/after provider read-back считаются доказательством?
-
-### 12. Reconciliation и поддержка
-
-- Нужен ли webhook от партнёра/Viva или достаточно polling operation?
-- Как выявлять orphan booking, orphan local membership, duplicate external payment?
-- Кто подтверждает ручной repair и какой four-eyes контроль требуется?
-- Как клиент узнаёт о принудительном disable/revocation?
-
-### 13. Версионирование и совместимость
-
-- Срок уведомления о breaking change?
-- Какие поля клиент обязан игнорировать в response?
-- Нужен ли `problem+json` или текущий `{error:{code,message}}`?
-- Требуется ли контрактная OpenAPI и consumer-driven tests в CI обеих сторон?
-
-## P2 — до масштабирования
-
-### 14. Массовые операции
-
-- Нужен ли batch add/remove? Без отдельного дизайна v0.2 остаётся one request — one
-  membership, чтобы сохранять понятную idempotency и ownership.
-- Нужен ли atomic group booking или допустим частичный результат?
-
-### 15. События и отчётность
-
-- Нужны ли signed webhook о `COMPLETED/UNKNOWN/REMOVED`?
-- Как подтверждать доставку webhook и защищать его от replay?
-- Какие ежедневные settlement/reconciliation отчёты требуются?
-
-### 16. Масштаб ключей и tenancy
-
-- Отдельный client/key на юридическое лицо, среду и station либо общий?
-- Нужны ли разные scopes на add/remove/read и operator-level approvals?
-- Как проводится регулярный access review и автоматическое истечение тестового доступа?
-
-## Минимальный пакет ответов для открытия shared sandbox
-
-1. Подписанный P0 decision log.
-2. Viva OpenAPI + sandbox technical client + exact add/read/delete examples + письменная
-   гарантия provider idempotency и `ON_PLACE` semantics + отдельный least-privilege
-   sidecar token grant с TTL/refresh/revocation runbook.
-3. Golden HMAC vectors, NTP proof и retry matrix.
-4. Отдельный test mTLS certificate + exact test audience; production certificate,
-   client ID и HMAC key выпускаются отдельно и не переиспользуют test material.
-5. Payment semantics и запрет нежелательных Viva side effects.
-6. Test data plan без реальных пользователей и денег.
-7. Owners для incident, key revocation и `UNKNOWN` reconciliation.
+Это внутренние технические работы, а не ожидание решений rusPadelUp.
+[Release requirements](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md) сохраняются.
+Native Nginx application rehearsal/Docker install остаются
+`DEFERRED_BY_USER / NOT_RUN`; прежние failures сохранены и не переименовываются в PASS.
+Игра уже указана пользователем; новую не создаём, перед live-тестом проверяем
+актуальное состояние и работаем только в разрешённом scope.

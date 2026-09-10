@@ -1,10 +1,14 @@
 import { PartnerProviderError } from "./partner-game-membership-core.mjs";
 import { isDeepStrictEqual, TextDecoder } from "node:util";
+import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 
 export const PARTNER_VIVA_ADMIN_API_BASE = "https://api.vivacrm.ru/api/v1";
 export const PARTNER_VIVA_CONTRACT_REVISION = "padlhub-viva-technical-booking-v1";
 export const PARTNER_VIVA_PAYMENT_TYPE = "ON_PLACE";
 export const PARTNER_VIVA_RESPONSE_MAX_BYTES = 1_000_000;
+export const PARTNER_VIVA_TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+export const PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES = 65_536;
 
 const TOKEN_PATTERN = /^[A-Za-z0-9._~-]{16,8192}$/;
 const TERMINAL_BOOKING_STATES = new Set([
@@ -86,10 +90,16 @@ const cancelResponseBody = (response, reason) => {
   }
 };
 
-const readBoundedResponseText = async (response, signal) => {
+const readBoundedResponseText = async (response, signal, {
+  maxBytes = PARTNER_VIVA_RESPONSE_MAX_BYTES, strict = false, checkDeadline = () => {},
+} = {}) => {
   const contentLength = toText(response?.headers?.get?.("content-length"));
+  if (strict && contentLength && !/^(?:0|[1-9][0-9]*)$/.test(contentLength)) {
+    cancelResponseBody(response, "Invalid Viva response framing");
+    throw new Error("Invalid Viva response framing");
+  }
   if (/^\d+$/.test(contentLength)
-    && Number(contentLength) > PARTNER_VIVA_RESPONSE_MAX_BYTES) {
+    && Number(contentLength) > maxBytes) {
     cancelResponseBody(response, "Viva response exceeds the accepted limit");
     throw providerError(
       "VIVA_RESPONSE_TOO_LARGE",
@@ -103,18 +113,20 @@ const readBoundedResponseText = async (response, signal) => {
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: strict });
   const textChunks = [];
   let receivedBytes = 0;
   try {
     while (true) {
+      checkDeadline();
       const { done, value } = await awaitWithAbort(reader.read(), signal);
+      checkDeadline();
       if (done) break;
       if (!(value instanceof Uint8Array)) {
         throw new TypeError("Viva response stream returned a non-byte chunk");
       }
       receivedBytes += value.byteLength;
-      if (receivedBytes > PARTNER_VIVA_RESPONSE_MAX_BYTES) {
+      if (receivedBytes > maxBytes) {
         throw providerError(
           "VIVA_RESPONSE_TOO_LARGE",
           "Viva response exceeds the accepted limit",
@@ -122,6 +134,9 @@ const readBoundedResponseText = async (response, signal) => {
         );
       }
       textChunks.push(decoder.decode(value, { stream: true }));
+    }
+    if (strict && contentLength && receivedBytes !== Number(contentLength)) {
+      throw new Error("Incomplete Viva response");
     }
     textChunks.push(decoder.decode());
     return textChunks.join("");
@@ -132,6 +147,129 @@ const readBoundedResponseText = async (response, signal) => {
     reader.releaseLock();
   }
 };
+
+// Server-owned credentials only. This does not enable provider mutations, accept
+// an arbitrary token endpoint, or retry any booking/payment operation.
+export function createVivaServiceTokenResolver({
+  credentialsResolver,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 5_000,
+  monotonicNow = () => performance.now(),
+} = {}) {
+  const unavailable = () => providerError("VIVA_SERVICE_TOKEN_UNAVAILABLE", "Viva service token is unavailable");
+  if (typeof credentialsResolver !== "function" || typeof fetchImpl !== "function"
+    || typeof monotonicNow !== "function" || !Number.isInteger(timeoutMs)
+    || timeoutMs < 1_000 || timeoutMs > 5_000) throw unavailable();
+  let cached = null;
+  let pending = null;
+  let failed = null;
+  let closed = false;
+  let lastClock = 0;
+  const now = () => {
+    const value = monotonicNow();
+    if (!Number.isFinite(value) || value < lastClock || value > Number.MAX_SAFE_INTEGER - 86_400_000) {
+      cached = null;
+      throw unavailable();
+    }
+    lastClock = value;
+    return value;
+  };
+  const credentials = () => {
+    const value = credentialsResolver();
+    if (!value || Object.getPrototypeOf(value) !== Object.prototype
+      || Object.keys(value).sort().join(",") !== "clientId,password,username") throw unavailable();
+    const { clientId, username, password } = value;
+    if (typeof clientId !== "string" || clientId !== clientId.trim() || !/^[A-Za-z0-9._:-]{1,128}$/.test(clientId)
+      || typeof username !== "string" || !username.trim() || Buffer.byteLength(username) > 1024
+      || typeof password !== "string" || !password.length || Buffer.byteLength(password) > 4096) throw unavailable();
+    // Password whitespace is significant; URLSearchParams performs form encoding.
+    const key = createHash("sha256").update(JSON.stringify([clientId, username, password])).digest("hex");
+    return { clientId, username, password, key };
+  };
+  const resolve = async () => {
+    let input;
+    let startedAt;
+    try {
+      if (closed) throw unavailable();
+      startedAt = now();
+      input = credentials();
+    } catch {
+      cached = null;
+      pending?.controller.abort();
+      throw unavailable();
+    }
+    if (cached?.key === input.key && startedAt < cached.expiresAt) return cached.token;
+    cached = null;
+    if (pending) {
+      if (pending.key !== input.key) {
+        pending.controller.abort();
+        throw unavailable();
+      }
+      return pending.promise;
+    }
+    if (failed?.key === input.key && startedAt < failed.retryAfter) throw unavailable();
+    const controller = new AbortController();
+    const checkDeadline = () => {
+      const current = now();
+      if (closed || controller.signal.aborted || current >= startedAt + timeoutMs) throw unavailable();
+      return current;
+    };
+    const record = { key: input.key, controller, promise: null };
+    pending = record;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    record.promise = (async () => {
+      const request = Promise.resolve(fetchImpl(PARTNER_VIVA_TOKEN_URL, {
+        method: "POST", redirect: "error", signal: controller.signal,
+        headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "Accept-Encoding": "identity" },
+        body: new URLSearchParams({ grant_type: "password", client_id: input.clientId,
+          username: input.username, password: input.password }).toString(),
+      }));
+      // Even a non-cooperating transport must not retain a late response body.
+      request.then(response => {
+        if (controller.signal.aborted) cancelResponseBody(response, "Viva token request ended");
+      }, () => {});
+      const response = await awaitWithAbort(request, controller.signal);
+      const encoding = toText(response?.headers?.get?.("content-encoding")).toLowerCase();
+      if (response?.status !== 200 || response.redirected === true
+        || (response.url && response.url !== PARTNER_VIVA_TOKEN_URL)
+        || (encoding && encoding !== "identity")) {
+        cancelResponseBody(response, "Viva token response rejected");
+        throw unavailable();
+      }
+      const body = await readBoundedResponseText(response, controller.signal,
+        { maxBytes: PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES, strict: true, checkDeadline });
+      const payload = JSON.parse(body);
+      if (!payload || Array.isArray(payload) || typeof payload !== "object"
+        || typeof payload.access_token !== "string" || payload.access_token !== payload.access_token.trim()
+        || !TOKEN_PATTERN.test(payload.access_token)
+        || typeof payload.token_type !== "string" || payload.token_type.toLowerCase() !== "bearer"
+        || !Number.isSafeInteger(payload.expires_in) || payload.expires_in <= 30 || payload.expires_in > 86_400) {
+        throw unavailable();
+      }
+      const expiresAt = startedAt + payload.expires_in * 1000 - 30_000;
+      if (checkDeadline() >= expiresAt || credentials().key !== input.key) throw unavailable();
+      cached = { key: input.key, token: payload.access_token, expiresAt };
+      failed = null;
+      return cached.token;
+    })().catch(() => {
+      cached = null;
+      try { now(); } catch { /* retain only the last valid monotonic timestamp */ }
+      failed = { key: input.key, retryAfter: lastClock + 1_000 };
+      throw unavailable();
+    }).finally(() => {
+      clearTimeout(timer);
+      if (pending === record) pending = null;
+    });
+    return record.promise;
+  };
+  resolve.close = () => {
+    closed = true;
+    cached = null;
+    failed = null;
+    pending?.controller.abort();
+  };
+  return resolve;
+}
 
 const exactAlias = (values, label) => {
   const normalized = values.map(toText).filter(Boolean);

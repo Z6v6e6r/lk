@@ -6,6 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { preflightPartnerNginx124 } from "../partner_game_membership_nginx_preflight.mjs";
+import { createLocalNginxApplicationSession, verifyLocalNginxApplicationPhase, deriveLocalNginxApplicationAddresses } from "../partner_game_membership_nginx_application.mjs";
+import { parseNginxProcStat, collectLocalNginxLinuxSnapshot } from "../partner_game_membership_nginx_linux.mjs";
+import { createPartnerNginxTestCertificates } from "./fixtures/partner-nginx124-certificates.mjs";
+import { collectFixtureLogThenCleanup } from "./fixtures/partner-nginx-application-cleanup.mjs";
+import { summarizeNginxDiagnosticCommand, classifyNginxIdentityDiagnostic, parseNginxRehearsalMode, runNginxRehearsalMode, runNginxIdentityDiagnosticCapture } from "../partner_game_membership_nginx_identity_diagnostic.mjs";
 import { canonicalJson } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs";
 import {
   PARTNER_INGRESS_REQUIRED_PROBES, evaluateLocalPartnerIngressObservations,
@@ -334,4 +339,300 @@ test("Nginx preflight rejects noncanonical, oversized and malformed artifacts wi
   }
   assert.throws(() => preflightPartnerNginx124({ ...f.input, controlsBytes: Buffer.alloc(65537) }), /INVALID_NGINX_CONTROLS_BYTES/);
   assert.throws(() => preflightPartnerNginx124({ ...f.input, sidecarSources: { ...f.input.sidecarSources, core: Buffer.alloc(1048577) } }), /INVALID_NGINX_SIDECAR_SOURCE_BYTES/);
+});
+
+test("Nginx process-identity diagnostic is byte-exact, redacted and non-authorizing", async t => {
+  const master = "nginx: master process /usr/sbin/nginx -c /control/nginx.conf -g daemon off;";
+  const cmd = value => summarizeNginxDiagnosticCommand(Buffer.from(value));
+  const rejected = { state: "REJECTED", code: "NGINX_PROCESS_COMMAND_MISMATCH" };
+  const snapshot = () => ({ configSha256: "a".repeat(64), bootSha256: "b".repeat(64), processes: [
+    { role: "master", pid: 10, parentPid: 0, startTicks: "100", command: cmd(master + " \0"),
+      executableSha256: "c".repeat(64), executablePathSha256: "d".repeat(64), namespaces: { pid: "e".repeat(64), net: "f".repeat(64) } },
+    { role: "worker", pid: 11, parentPid: 10, startTicks: "110", command: cmd("nginx: worker process\0"),
+      executableSha256: "c".repeat(64), executablePathSha256: "d".repeat(64), namespaces: { pid: "e".repeat(64), net: "f".repeat(64) } },
+  ] });
+  await t.test("full known titles and original argv are classified without replacing strict policy", () => {
+    assert.equal(cmd(master + "\0\0").shape, "MASTER_TITLE"); assert.equal(cmd(master).strictMasterMatches, true);
+    assert.equal(cmd(master + " \0\0").shape, "MASTER_TITLE_ASCII_SPACE_PADDING");
+    assert.equal(cmd(master + " \0\0").strictMasterMatches, false);
+    assert.equal(cmd(master + " \0\0").trailingAsciiSpaces, 1); assert.equal(cmd(master + " \0\0").trailingNuls, 2);
+    assert.equal(cmd("nginx: worker process\0").strictWorkerMatches, true);
+    assert.equal(cmd("nginx: worker process is shutting down\0").shape, "DRAINING_WORKER_TITLE");
+    const argv = cmd("/usr/sbin/nginx\0-c\0/control/nginx.conf\0-g\0daemon off;\0");
+    assert.equal(argv.shape, "ORIGINAL_NGINX_ARGV"); assert.equal(argv.nulCount, 5); assert.equal(argv.strictMasterMatches, false);
+  });
+  await t.test("observed 54-byte shared argv cannot prove either Nginx role or a draining worker", () => {
+    const observed = cmd("/usr/sbin/nginx\0-c\0/control/nginx.conf\0-g\0daemon off;\0");
+    assert.deepEqual(observed, {
+      rawSha256: "b1aeec712965b315e60d7883d8703c3d50315971dc02f2509e0e6160a6074e6d",
+      byteLength: 54, nulCount: 5, trailingNuls: 1, trailingAsciiSpaces: 0,
+      shape: "ORIGINAL_NGINX_ARGV", strictMasterMatches: false, strictWorkerMatches: false,
+    });
+    const before = snapshot();
+    for (const process of before.processes) process.command = structuredClone(observed);
+    const result = classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected);
+    assert.equal(result.classification, "KNOWN_COMMAND_FORM_REJECTED");
+    assert.equal(result.rejectedRole, "master"); assert.deepEqual(result.strict, rejected);
+    assert.equal(result.before.processes.some(process => process.command.shape === "DRAINING_WORKER_TITLE"), false);
+    assert.equal(result.productionVerified, false); assert.equal(result.applicationProbes, "NOT_RUN");
+    assert.throws(() => verifyPartnerProductionIngress(result), /UNSUPPORTED_INGRESS_ADAPTER/);
+  });
+  await t.test("unknown suffixes, interior NUL, Unicode and controls never leak or match known form", () => {
+    for (const raw of [Buffer.from(master + " SENSITIVE_SUFFIX"), Buffer.from(master + "\0SENSITIVE_SUFFIX\0"),
+      Buffer.from(master + "\t"), Buffer.from(master + "\n"), Buffer.from(master + "\r"), Buffer.from(master + "\u00a0"),
+      Buffer.concat([Buffer.from(master), Buffer.from([0xff, 0xfe])]), Buffer.from("arbitrary SENSITIVE_SUFFIX")]) {
+      const out = summarizeNginxDiagnosticCommand(raw);
+      assert.equal(out.shape, "UNKNOWN_REDACTED"); assert.equal(out.strictMasterMatches, false); assert.equal(out.strictWorkerMatches, false);
+      assert.equal(JSON.stringify(out).includes("SENSITIVE_SUFFIX"), false); assert.equal(JSON.stringify(out).includes(master), false);
+    }
+  });
+  await t.test("non-Buffer, empty and oversized command observations reject", () => {
+    for (const value of [null, "nginx", {}, Buffer.alloc(0), Buffer.alloc(4097)]) assert.throws(() => summarizeNginxDiagnosticCommand(value), /DIAGNOSTIC_FAILED/);
+  });
+  await t.test("known rejected form explains only the captured mismatch, never permits ingress", () => {
+    const before = snapshot(), result = classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected);
+    assert.equal(result.classification, "KNOWN_COMMAND_FORM_REJECTED"); assert.equal(result.rejectedRole, "master");
+    assert.equal(result.productionVerified, false); assert.equal(result.deployAuthorized, false); assert.equal(result.activationAuthorized, false);
+    assert.equal(result.applicationProbes, "NOT_RUN"); assert.equal(result.hup, "NOT_RUN");
+    assert.throws(() => verifyPartnerProductionIngress(result), /UNSUPPORTED_INGRESS_ADAPTER/);
+  });
+  await t.test("actual strict acceptance or unknown rejection cannot be relabelled as reproduced", () => {
+    const before = snapshot();
+    assert.equal(classifyNginxIdentityDiagnostic(before, structuredClone(before), { state: "ACCEPTED", code: null }).classification, "NOT_REPRODUCED");
+    assert.equal(classifyNginxIdentityDiagnostic(before, structuredClone(before), { state: "REJECTED", code: "OTHER_STRICT_REJECTION_REDACTED" }).classification, "CAUSE_UNRESOLVED");
+    before.processes[0].command = cmd("UNKNOWN");
+    assert.equal(classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected).classification, "CAUSE_UNRESOLVED");
+    assert.throws(() => classifyNginxIdentityDiagnostic(before, before, { state: "REJECTED", code: "arbitrary" }));
+  });
+  await t.test("PID/start/config/namespace/command drift or disappearance rejects", () => {
+    for (const change of [value => { value.processes[0].startTicks = "101"; }, value => { value.processes[1].pid = 12; },
+      value => { value.configSha256 = "0".repeat(64); }, value => { value.processes[0].namespaces.pid = "0".repeat(64); },
+      value => { value.processes[0].command = cmd(master); }, value => { value.processes.pop(); }]) {
+      const before = snapshot(), after = structuredClone(before); change(after);
+      assert.throws(() => classifyNginxIdentityDiagnostic(before, after, rejected));
+    }
+  });
+  await t.test("foreign worker namespace, parent or executable rejects even if snapshots match", () => {
+    for (const change of [value => { value.processes[1].parentPid = 99; }, value => { value.processes[1].namespaces.net = "0".repeat(64); },
+      value => { value.processes[1].executableSha256 = "0".repeat(64); }, value => { value.processes[1].startTicks = "90"; }]) {
+      const before = snapshot(); change(before); assert.throws(() => classifyNginxIdentityDiagnostic(before, structuredClone(before), rejected));
+    }
+  });
+  await t.test("CLI requires one exact mode and rejects combined, unknown or extra arguments", () => {
+    assert.equal(parseNginxRehearsalMode(["--owned-local-identity-diagnostic"]), "diagnostic");
+    assert.equal(parseNginxRehearsalMode(["--owned-local-application"]), "application");
+    for (const args of [null, [], ["--production"], ["diagnostic"], ["--owned-local-identity-diagnostic", "--owned-local-application"],
+      ["--owned-local-identity-diagnostic", "extra"]]) assert.throws(() => parseNginxRehearsalMode(args));
+  });
+  await t.test("diagnostic mode cannot call third-create, probe or HUP application actions", async () => {
+    const calls = [];
+    const result = await runNginxRehearsalMode("diagnostic", { diagnostic: () => { calls.push("capture"); return "diagnostic"; },
+      application: () => { calls.push("third-create", "probe", "HUP"); assert.fail("forbidden application branch"); } });
+    assert.equal(result, "diagnostic"); assert.deepEqual(calls, ["capture"]);
+    await assert.rejects(runNginxRehearsalMode("unknown", { diagnostic: () => assert.fail(), application: () => assert.fail() }));
+  });
+  await t.test("diagnostic failure does not fall through and permits caller finally cleanup", async () => {
+    const calls = [];
+    await assert.rejects(async () => {
+      try { await runNginxRehearsalMode("diagnostic", { diagnostic: () => { throw new Error("EXPECTED_CAPTURE_FAILURE"); }, application: () => assert.fail() }); }
+      finally { calls.push("owned-cleanup"); }
+    }, /EXPECTED_CAPTURE_FAILURE/);
+    assert.deepEqual(calls, ["owned-cleanup"]);
+  });
+  await t.test("exe read failure preserves stage/role and still invokes original strict rejection", () => {
+    let strictCalls = 0;
+    const result = runNginxIdentityDiagnosticCapture(progress => {
+      Object.assign(progress, { stage: "EXECUTABLE", role: "master", commandShape: "ORIGINAL_NGINX_ARGV" });
+      throw Object.assign(new Error("SENSITIVE_SUFFIX"), { code: "EACCES" });
+    }, () => { strictCalls++; throw new Error("NGINX_PROCESS_COMMAND_MISMATCH"); });
+    assert.equal(strictCalls, 1); assert.equal(result.state, "DIAGNOSTIC_INCOMPLETE"); assert.equal(result.classification, "CAUSE_UNRESOLVED");
+    assert.deepEqual(result.failure, { pass: "BEFORE", stage: "EXECUTABLE", role: "master", code: "EACCES", observedCommandShape: "ORIGINAL_NGINX_ARGV" });
+    assert.deepEqual(result.strict, rejected); assert.equal(result.productionVerified, false);
+    assert.equal(JSON.stringify(result).includes("SENSITIVE_SUFFIX"), false); assert.equal("before" in result, false);
+  });
+  await t.test("after namespace failure and unknown diagnostics remain redacted and incomplete", () => {
+    let calls = 0;
+    const result = runNginxIdentityDiagnosticCapture(progress => {
+      if (!calls++) return snapshot();
+      Object.assign(progress, { stage: "NAMESPACE", role: "worker" }); throw Object.assign(new Error("SENSITIVE_SUFFIX"), { code: "ENOENT" });
+    }, () => {});
+    assert.equal(result.failure.pass, "AFTER"); assert.equal(result.failure.stage, "NAMESPACE"); assert.equal(result.failure.code, "ENOENT");
+    assert.deepEqual(result.strict, { state: "ACCEPTED", code: null }); assert.equal(result.state, "DIAGNOSTIC_INCOMPLETE");
+    const unknown = runNginxIdentityDiagnosticCapture(progress => {
+      Object.assign(progress, { stage: "SENSITIVE_SUFFIX", role: "SENSITIVE_SUFFIX", commandShape: "SENSITIVE_SUFFIX" });
+      throw Object.assign(new Error("SENSITIVE_SUFFIX"), { code: "SENSITIVE_SUFFIX" });
+    }, () => { throw new Error("SENSITIVE_SUFFIX"); });
+    assert.equal(JSON.stringify(unknown).includes("SENSITIVE_SUFFIX"), false); assert.equal(unknown.failure.stage, "OTHER_REDACTED");
+  });
+});
+
+test("controlled Nginx application candidate: local lifecycle and fail-closed evidence", async t => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "partner-application-unit-"));
+  t.after(() => fs.rmSync(root, { recursive: true }));
+  const binding = createPartnerNginxTestCertificates(path.join(root, "fixture"), { sourceLimits: true });
+  const network = { peerAddress: "172.24.0.2", probeAddress: "172.24.0.3" };
+  const session = () => createLocalNginxApplicationSession({ binding, ...network });
+  const identity = (pid, startTicks, parentPid) => ({ pid, parentPid, startTicks, executableSha256: "a".repeat(64), draining: false });
+  function observation(s, phase, index, upstreamBefore, marker = null) {
+    const expected = s.configuration(phase);
+    const snapshot = { scope: "LOCAL_FIXTURE", configSha256: expected.configSha256, master: identity(1, "10", 0),
+      workers: [identity(11 + index, String(100 + index * 10), 1)], bootSha256: "b".repeat(64),
+      pidNamespaceSha256: "c".repeat(64), networkNamespaceSha256: "d".repeat(64) };
+    const status = phase === "revoked" ? [403, 503] : [503, 503];
+    return { phase, before: snapshot, after: structuredClone(snapshot), upstreamBefore,
+      upstreamAfter: upstreamBefore + (phase === "revoked" ? 1 : 2),
+      probes: ["client", "client-2", "direct-sidecar"].map((name, i) => ({ name,
+        outcome: i === 2 ? "CONNECTION_REFUSED" : "HTTP_RESPONSE", status: status[i] ?? null,
+        tlsAuthorized: i !== 2, noStore: i !== 2, cors: false, complete: i !== 2,
+        sourceAddress: i === 2 ? null : network.probeAddress, peerAddress: network.peerAddress, port: i === 2 ? 18894 : 8443,
+        networkNamespaceSha256: "e".repeat(64), clientLeafDerSha256: i === 2 ? null : expected.clientLeafDerSha256[name] })),
+      logs: status.map((code, i) => ({ generation: marker ?? expected.marker, worker: String(11 + index),
+        requestId: String(index * 10 + i + 1).padStart(32, "0"), status: String(code), clientVerified: "1",
+        upstream: code === 403 ? "" : "503", rate: code === 403 ? "" : "PASSED", concurrency: code === 403 ? "" : "PASSED" })),
+    };
+  }
+  function baseline(s) { const row = observation(s, "baseline", 0, 0); s.record(row); return row; }
+  function unapplied(s) { const row = observation(s, "applied", 0, 2, s.configuration("baseline").marker); s.recordUnapplied(row); return row; }
+  function complete(s) { baseline(s); unapplied(s); s.record(observation(s, "applied", 1, 4)); s.record(observation(s, "revoked", 2, 6)); return s.finish(); }
+
+  await t.test("three generations plus disk-only negative finish once, never production", () => {
+    const s = session(), proof = complete(s);
+    assert.equal(proof.state, "LOCAL_CONTROLLED_APPLICATION_VERIFIED_NOT_LIVE_PROOF");
+    assert.equal(proof.records.length, 3); assert.equal(proof.records[2].observed.upstreamAfter, 7);
+    assert.equal(proof.productionVerified, false); assert.equal(proof.deployAuthorized, false); assert.equal(proof.activationAuthorized, false);
+    assert.equal(proof.revocation, "LEAF_BINDING_REMOVAL_NOT_CA_CRL_OR_OCSP");
+    assert.throws(() => s.finish(), /SESSION_CLOSED/); assert.throws(() => s.configuration("baseline"), /SESSION_CLOSED/);
+    assert.throws(() => verifyPartnerProductionIngress({ adapter: "nginx", proof }), /UNSUPPORTED_INGRESS_ADAPTER/);
+    assert.throws(() => verifyPartnerProductionIngress({ adapter: "nginx", proof: { ...proof, productionVerified: true } }), /UNSUPPORTED_INGRESS_ADAPTER/);
+  });
+  await t.test("closed fixture preserves thresholds and removes only the formerly admitted leaf", () => {
+    const s = session(), a = s.configuration("baseline"), b = s.configuration("applied"), c = s.configuration("revoked");
+    assert.notEqual(a.marker, b.marker); assert.notEqual(a.configSha256, b.configSha256);
+    assert.match(a.configuration, /"worker":"\$pid"/); assert.ok(a.configuration.includes(a.marker));
+    assert.match(a.configuration, /listen 0\.0\.0\.0:8443/); assert.match(a.configuration, /allow 172\.24\.0\.3;/);
+    for (const config of [a, b, c]) { assert.match(config.configuration, /partner_source_rate burst=20/); assert.match(config.configuration, /partner_source_connections 8/); }
+    assert.match(a.configuration, /"SUCCESS:fixture-client" 1;/); assert.doesNotMatch(c.configuration, /"SUCCESS:fixture-client" 1;/);
+    assert.match(c.configuration, /"SUCCESS:fixture-client-2" 1;/); assert.match(c.configuration, /"SUCCESS:fixture-client-3" 1;/);
+    a.marker = "f".repeat(64); assert.notEqual(s.configuration("baseline").marker, a.marker);
+  });
+  await t.test("unknown options, external/loopback/identical targets and production inputs fail", () => {
+    for (const change of [{ exec() {} }, { productionVerified: true }, { probeAddress: "127.0.0.1" },
+      { peerAddress: "203.0.113.1" }, { peerAddress: network.probeAddress }, { probeAddress: "172.999.0.3" }]) {
+      assert.throws(() => createLocalNginxApplicationSession({ binding, ...network, ...change }));
+    }
+    assert.throws(() => createLocalNginxApplicationSession({ binding: { ...binding, scope: "PRODUCTION" }, ...network }));
+  });
+  await t.test("owned Docker allocation supports both observed private pool forms without caller CIDRs", () => {
+    for (const subnet of ["172.17.0.0/16", "172.31.0.0/16", "192.168.0.0/20", "192.168.16.0/20", "192.168.240.0/20"]) {
+      const addresses = deriveLocalNginxApplicationAddresses(subnet);
+      const prefix = subnet.split(".").slice(0, 3).join(".");
+      assert.deepEqual(addresses, { peerAddress: `${prefix}.2`, probeAddress: `${prefix}.3` });
+      const s = createLocalNginxApplicationSession({ binding, ...addresses });
+      assert.ok(s.configuration("baseline").configuration.includes(`      allow ${prefix}.3;`));
+    }
+  });
+  await t.test("Docker subnet parser rejects public, broad, misaligned, malformed and unsupported pools", () => {
+    for (const subnet of [null, {}, "", "172.15.0.0/16", "172.32.0.0/16", "172.24.1.0/16", "172.24.0.0/12",
+      "192.169.0.0/20", "192.168.1.0/20", "192.168.256.0/20", "192.168.016.0/20", "192.168.16.0/16",
+      "192.168.16.1/20", "192.168.16.0/20\n", "0.0.0.0/0", "10.0.0.0/8", "127.0.0.0/8", "::1/128"]) {
+      assert.throws(() => deriveLocalNginxApplicationAddresses(subnet), /NGINX_APPLICATION_DOCKER_SUBNET_UNSUPPORTED/);
+    }
+    for (const probeAddress of ["192.168.256.3", "192.168.016.3", "192.168.16.0", "192.168.16.255", "192.169.16.3", "192.168.16.3/20"]) {
+      assert.throws(() => createLocalNginxApplicationSession({ binding, ...network, probeAddress }), /VANTAGE_INVALID/);
+    }
+  });
+  await t.test("different sessions have independent challenges and reject cross-run evidence", () => {
+    const a = session(), b = session(); assert.notEqual(a.challenge, b.challenge);
+    assert.throws(() => b.record(observation(a, "baseline", 0, 0)), /CONFIG_MISMATCH/);
+    assert.throws(() => b.record(observation(b, "baseline", 0, 0)), /SESSION_CLOSED/);
+  });
+  await t.test("phase ordering, replay, incomplete finish and failure latch", () => {
+    const a = session(); assert.throws(() => a.finish(), /MATRIX_INCOMPLETE/); assert.throws(() => a.finish(), /SESSION_CLOSED/);
+    const b = session(); baseline(b); assert.throws(() => b.record(observation(b, "baseline", 0, 2)), /PHASE_ORDER/);
+    const c = session(); baseline(c); assert.throws(() => c.record(observation(c, "applied", 1, 2)), /UNAPPLIED_PROOF_REQUIRED/);
+    const d = session(); assert.throws(() => d.recordUnapplied(observation(d, "applied", 0, 0)), /PHASE_ORDER/);
+  });
+  await t.test("expiry and clock rollback close a session permanently", () => {
+    const now = Date.now, current = now(), a = session(), b = session();
+    try {
+      Date.now = () => current + 120001; assert.throws(() => a.configuration("baseline"), /SESSION_EXPIRED/);
+      Date.now = () => current - 1; assert.throws(() => b.configuration("baseline"), /SESSION_EXPIRED/);
+    } finally { Date.now = now; }
+    assert.throws(() => a.configuration("baseline"), /SESSION_CLOSED/);
+  });
+  await t.test("disk files B and old worker/marker A are not applied B", () => {
+    const s = session(), old = baseline(s), row = unapplied(s);
+    assert.throws(() => verifyLocalNginxApplicationPhase({ expected: s.configuration("applied"), observed: row, previous: old.after, ...network }), /NEW_WORKER_REQUIRED/);
+  });
+  await t.test("new PID from worker respawn cannot substitute for a new applied marker", () => {
+    const s = session(); baseline(s); unapplied(s);
+    const row = observation(s, "applied", 1, 4, s.configuration("baseline").marker);
+    assert.throws(() => s.record(row), /GENERATION_NOT_APPLIED/);
+  });
+  for (const [name, mutate] of [
+    ["old worker still present", row => { row.before.workers.push(identity(99, "99", 1)); }],
+    ["draining worker", row => { row.before.workers[0].draining = true; }],
+    ["PID reuse", row => { row.before.workers[0].pid = 11; row.after.workers[0].pid = 11; }],
+    ["wrong master", row => { row.before.master.startTicks = "11"; row.after.master.startTicks = "11"; }],
+    ["wrong boot", row => { row.before.bootSha256 = "f".repeat(64); row.after.bootSha256 = "f".repeat(64); }],
+    ["executable drift", row => { row.after.master.executableSha256 = "f".repeat(64); }],
+    ["config drift", row => { row.after.configSha256 = "f".repeat(64); }],
+    ["upstream spoofed marker", row => { row.logs[0].generation = "UNTRUSTED_UPSTREAM_MARKER"; }],
+    ["wrong logged worker", row => { row.logs[0].worker = "999"; }],
+    ["loopback namespace posing as external", row => { row.probes[0].networkNamespaceSha256 = row.before.networkNamespaceSha256; }],
+    ["different direct vantage", row => { row.probes[2].networkNamespaceSha256 = "f".repeat(64); }],
+    ["wrong peer target", row => { row.probes[2].peerAddress = "172.24.0.9"; }],
+    ["invented actual source on refused socket", row => { row.probes[2].sourceAddress = network.probeAddress; }],
+    ["timeout instead of direct refusal", row => { row.probes[2].outcome = "TIMEOUT"; }],
+    ["missing positive control", row => { row.probes[1].status = 403; }],
+    ["truncated response", row => { row.probes[0].complete = false; }],
+    ["CORS leakage", row => { row.probes[0].cors = true; }],
+    ["hidden upstream", row => { row.upstreamAfter++; }],
+    ["hidden gap traffic", row => { row.upstreamBefore++; row.upstreamAfter++; }],
+    ["incomplete logs", row => { row.logs.pop(); }],
+    ["duplicated request id", row => { row.logs[1].requestId = row.logs[0].requestId; }],
+    ["caller authorization", row => { row.productionVerified = true; }],
+  ]) await t.test(`reject ${name}`, () => {
+    const s = session(); baseline(s); unapplied(s); const row = observation(s, "applied", 1, 4); mutate(row);
+    assert.throws(() => s.record(row)); assert.throws(() => s.finish(), /SESSION_CLOSED/);
+  });
+  await t.test("revocation must deny old leaf before upstream and keep another identity working", () => {
+    for (const mutate of [row => { row.probes[0].status = 503; }, row => { row.logs[0].upstream = "403"; },
+      row => { row.logs[0].clientVerified = "0"; }, row => { row.probes[1].status = 403; }]) {
+      const s = session(); baseline(s); unapplied(s); s.record(observation(s, "applied", 1, 4));
+      const row = observation(s, "revoked", 2, 6); mutate(row); assert.throws(() => s.record(row));
+    }
+  });
+  await t.test("same-CA unbound leaf cannot substitute for the previously admitted revoked leaf", () => {
+    const other = digest(new crypto.X509Certificate(fs.readFileSync(path.join(root, "fixture/other-client.crt"))).raw);
+    const s = session(); baseline(s); unapplied(s); s.record(observation(s, "applied", 1, 4));
+    const row = observation(s, "revoked", 2, 6); row.probes[0].clientLeafDerSha256 = other;
+    assert.throws(() => s.record(row), /CLIENT_LEAF_MISMATCH/);
+  });
+  await t.test("actual leaf is mandatory for every TLS control and cannot be claimed on refused TCP", () => {
+    for (const index of [0, 1, 2]) {
+      const s = session(), row = observation(s, "baseline", 0, 0);
+      row.probes[index].clientLeafDerSha256 = index === 2 ? "f".repeat(64) : null;
+      assert.throws(() => s.record(row));
+    }
+  });
+  await t.test("log read/write failure still performs owned cleanup and is not a passing log result", () => {
+    const actions = [];
+    const result = collectFixtureLogThenCleanup(() => { actions.push("log"); throw new Error("log unavailable"); }, () => actions.push("cleanup"));
+    assert.deepEqual(actions, ["log", "cleanup"]); assert.deepEqual(result, { logCollectionFailed: true });
+  });
+  await t.test("cleanup failure is never swallowed after a log failure", () => {
+    assert.throws(() => collectFixtureLogThenCleanup(() => { throw new Error("log unavailable"); }, () => { throw new Error("cleanup unconfirmed"); }), /cleanup unconfirmed/);
+    assert.deepEqual(collectFixtureLogThenCleanup(() => {}, () => {}), { logCollectionFailed: false });
+  });
+  await t.test("Linux stat parser rejects wrong PID/command/malformed identity", () => {
+    const fields = Array(49).fill("0"); fields[0] = "1"; fields[18] = "100";
+    const raw = `12 (nginx) S ${fields.join(" ")}\n`;
+    assert.deepEqual(parseNginxProcStat(raw, 12), { pid: 12, parentPid: 1, startTicks: "100" });
+    for (const bad of [raw.replace("nginx", "node"), raw.replace("100", "-1"), "12 (nginx) S", raw + "SECRET_SHOULD_NOT_APPEAR"]) {
+      assert.throws(() => parseNginxProcStat(bad, 12), error => { assert.equal(error.message, "NGINX_PROC_STAT_INVALID"); return true; });
+    }
+    assert.throws(() => parseNginxProcStat(raw, 13), /NGINX_PROC_STAT_INVALID/);
+    if (process.platform !== "linux" || process.arch !== "x64" || process.getuid() === 0) assert.throws(() => collectLocalNginxLinuxSnapshot(), /LOCAL_NGINX_LINUX_FIXTURE_REQUIRED/);
+  });
 });

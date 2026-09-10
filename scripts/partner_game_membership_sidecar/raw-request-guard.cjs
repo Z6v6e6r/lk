@@ -2,6 +2,7 @@
 
 const { randomUUID } = require("node:crypto");
 const { TextDecoder } = require("node:util");
+const { performance } = require("node:perf_hooks");
 
 const MAX_BODY_BYTES = 16384;
 const SECURITY_HEADERS = Object.freeze([
@@ -15,7 +16,8 @@ const ERROR_CODES = new Set([
   "RAW_ROUTE_INVALID", "RAW_HEADERS_INVALID", "RAW_HEADERS_SIZE", "RAW_HEADER_DUPLICATE", "RAW_HOST_INVALID",
   "RAW_SECURITY_HEADER_INVALID", "RAW_CONTENT_TYPE_INVALID", "RAW_FRAMING_INVALID", "RAW_GUARD_ORDER_INVALID",
   "RAW_AUDIT_UNAVAILABLE", "RAW_BODY_TIMEOUT", "RAW_BODY_ABORTED", "RAW_BODY_IO_ERROR", "RAW_RESPONSE_CLOSED",
-  "RAW_DELETE_BODY_INVALID",
+  "RAW_DELETE_BODY_INVALID", "RAW_PEER_INVALID",
+  "RAW_FORWARDING_SANITIZATION_FAILED",
 ]);
 
 // Scan decoded object keys before JSON.parse can discard duplicates. No stream
@@ -132,13 +134,17 @@ function validateRawRequest(req, expectedHost) {
   return Number(length);
 }
 
-function createPartnerRawRequestGuard({ expectedHost, audit, bodyTimeoutMs = 5000 } = {}) {
+function createPartnerRawRequestGuard({ expectedHost, audit, bodyTimeoutMs = 5000, requestTimeoutMs = 15000 } = {}) {
   if (typeof expectedHost !== "string" || !/^[a-z0-9.-]+(?::[0-9]{1,5})?$/.test(expectedHost)
-    || typeof audit !== "function" || !Number.isInteger(bodyTimeoutMs) || bodyTimeoutMs < 10 || bodyTimeoutMs > 5000) {
+    || typeof audit !== "function" || !Number.isInteger(bodyTimeoutMs) || bodyTimeoutMs < 10 || bodyTimeoutMs > 5000
+    || !Number.isInteger(requestTimeoutMs) || requestTimeoutMs < bodyTimeoutMs || requestTimeoutMs > 15000) {
     fail("RAW_GUARD_CONFIGURATION_INVALID");
   }
   return function partnerRawRequestGuard(req, res, next) {
+    const deadlineAt = performance.now() + requestTimeoutMs;
     const requestId = randomUUID();
+    let responseSettled = false;
+    let responseTimer;
     let settled = false;
     let chunks = [];
     let received = 0;
@@ -161,6 +167,31 @@ function createPartnerRawRequestGuard({ expectedHost, audit, bodyTimeoutMs = 500
         if (accepted && typeof accepted.then === "function") Promise.resolve(accepted).catch(() => {});
         return accepted === true;
       } catch { return false; }
+    };
+    const responseFinished = () => {
+      responseSettled = true;
+      clearTimeout(responseTimer);
+      res.removeListener("finish", responseFinished);
+      res.removeListener("close", responseFinished);
+    };
+    const expireResponse = () => {
+      if (responseSettled) return;
+      if (res.destroyed || res.writableFinished) { responseFinished(); return; }
+      const remaining = deadlineAt - performance.now();
+      // Node timers truncate fractional delays and can wake early. An early
+      // callback is not expiry; keep the original monotonic deadline.
+      if (remaining > 0) {
+        responseTimer = setTimeout(expireResponse, Math.max(1, Math.ceil(remaining)));
+        responseTimer.unref();
+        return;
+      }
+      responseFinished();
+      if (!settled) { settled = true; cleanup(); req.pause(); }
+      // Transport only: never synthesize a second response or cancel/retry a
+      // possibly committed provider operation. Late HTTPOut must remain safe.
+      // Close before synchronous audit; sink failure must not keep it open.
+      res.destroy();
+      record("RAW_REQUEST_DEADLINE");
     };
     const reject = (code) => {
       if (settled) return;
@@ -199,15 +230,39 @@ function createPartnerRawRequestGuard({ expectedHost, audit, bodyTimeoutMs = 500
       if (!record("RAW_ACCEPTED")) { reject("RAW_AUDIT_UNAVAILABLE"); return; }
       settled = true;
       cleanup();
+      // A synchronous audit/parse can delay the timer. Do not dispatch a new
+      // operation after its budget has elapsed or the response has closed.
+      if (performance.now() >= deadlineAt) { expireResponse(); return; }
+      if (responseSettled || res.destroyed) { responseFinished(); return; }
       req.body = body;
-      req._body = true; // body-parser 1.x (locked Node-RED 5.0.6)
-      req.skipRawBodyParser = true;
+      // Node-RED's rawBodyParser calls next() once for skipRawBodyParser and
+      // then again when _body is also set. Marking only _body prevents a second
+      // route dispatch on Node-RED 4.x/5.x while retaining the parsed body.
+      req._body = true;
       next();
     }
+    // Independent of the body reader: next() and req.close do not mean that the
+    // response is finished. This watchdog survives dispatch and trickled bytes.
+    res.once("finish", responseFinished);
+    res.once("close", responseFinished);
+    responseTimer = setTimeout(expireResponse, Math.max(1, Math.ceil(deadlineAt - performance.now())));
+    responseTimer.unref();
     try {
       if (req.body !== undefined || req._body || req.skipRawBodyParser || req.readableEnded || req.readableDidRead
         || req.readableFlowing !== null || req.destroyed || req.readableEncoding !== null) fail("RAW_GUARD_ORDER_INVALID");
       expected = validateRawRequest(req, expectedHost);
+      // Preserve the original duplicate/framing evidence until validation above.
+      // Nginx rebuilds its own source-IP limiter from the socket peer. The sidecar
+      // does not trust a forwarded chain: remove it from ALL downstream header
+      // views, including IncomingMessage's lazily cached headersDistinct.
+      try {
+        const forwarding = name => name.toLowerCase() === "forwarded"
+          || name.toLowerCase().startsWith("x-forwarded-") || name.toLowerCase() === "x-real-ip";
+        const views = [req.headers, req.headersDistinct];
+        if (views.some(view => !view || typeof view !== "object" || Array.isArray(view))) fail("RAW_FORWARDING_SANITIZATION_FAILED");
+        for (const view of views) for (const name of Object.keys(view)) if (forwarding(name)) delete view[name];
+        req.rawHeaders = req.rawHeaders.filter((name, index, all) => !forwarding(index % 2 === 0 ? name : all[index - 1]));
+      } catch { fail("RAW_FORWARDING_SANITIZATION_FAILED"); }
     } catch (error) { reject(error.message); return; }
     req.on("data", onData);
     req.once("end", onEnd);

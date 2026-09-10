@@ -1,11 +1,82 @@
 # Production controls: Partner Game Membership API v0.2
 
-Статус: **runtime SECURITY_AUDIT_PASS / ingress UNBOUND / custody UNBOUND / activation BLOCKED**. Документ и
-`scripts/partner_game_membership_production_controls.json` задают минимальный
-fail-closed контракт, но не содержат production hostname, CIDR, сертификат, путь
-размещения, получателей packet, секреты или разрешение на изменение production.
+Статус текущей локальной версии: **token source implemented / runtime closure refresh required /
+ingress UNBOUND / custody UNBOUND / activation BLOCKED**.
+Ниже сохранён исторический `SECURITY_AUDIT_PASS` для прежних exact bytes, не для
+нового [server-owned token resolver](PARTNER_GAME_MEMBERSHIP_VIVA_TOKEN.md).
+`scripts/partner_game_membership_production_controls.json` задаёт минимальный
+fail-closed контракт без заполненной production binding. Выбранное размещение ниже —
+решение для планирования, а не проверенная конфигурация или разрешение на production.
+
+## Выбранное размещение — только планирование
+
+Следующее отдельно разрешённое read-only окно выполнено 7 сентября:
+[disk inventory и ограничения](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md).
+Последнее чтение 06:23:52 UTC охватило12config-файлов, skipped literal include targets0.
+Это закрывает прежний пробел из6targets, но не production binding: native validation,
+полный semantic/dependency graph и applied-config proof не получены; разрешения
+ниже остаются неизменными. Файлы backup-vhost, попавшие под glob, не менялись.
+
+7 сентября 2026 пользователь подтвердил следующий target:
+
+| Поле | Решение | Что ещё не подтверждено |
+| --- | --- | --- |
+| Exact Host/SNI | `partner-api.padlhub.su` | DNS, сертификат и фактическая обработка Host/SNI |
+| Сервер | `lk-primary-147` | Inventory identity зафиксирована; перед live-переходом нужен fresh readback |
+| Ingress | Nginx, ранее выбранный пользователем | Disk include topology обследована; применение candidate и external route proof не подтверждены |
+| Upstream | Прежний контракт: `http://127.0.0.1:18894` | Установка и readback отдельного sidecar |
+
+Это не рабочие настройки для передачи партнёру. Решение не задаёт audience, CIDR,
+сертификаты, secret custody, пути файлов или владельца production operator и не
+подтверждает доступность URL. Оно не разрешает SSH/readback, DNS, выпуск сертификатов,
+установку, reload/restart, смену секретов, deploy или activation. Общий Node-RED на
+`127.0.0.1:1880` и действующие vhosts должны остаться неизменными.
+
+Машиночитаемый policy template намеренно сохранён byte-for-byte: `exactHost: null`,
+ingress/custody `UNBOUND`, activation `BLOCKED`, все разрешения `false`.
+Выбор hostname не заполняет private binding и не пересчитывает исторические
+runtime/packet receipts. Production entry сохраняет `UNSUPPORTED_INGRESS_ADAPTER`.
+
+Выполненный read-only этап Nginx на `lk-primary-147` использовал следующие границы
+(они сохраняются для будущего отдельно разрешённого readback):
+
+1. Согласовать с координатором окно без конфликтующего ingress writer. Установить
+   связь host/boot → service → master/workers → executable и listeners, сохранив
+   только необходимые метаданные и hashes, без process environment и raw argv dump.
+2. Определить фактические config entrypoint/prefix и include graph, scoped
+   listeners/server names/upstreams, место TLS termination и proxy chain. Сохранить
+   только allowlisted поля и file identity/hash; не печатать и не экспортировать
+   полные config/unit dumps. Не предполагать `nginx.service` или путь из fixture.
+3. Не читать private keys, credentials/EnvironmentFile, клиентские журналы, Mongo,
+   Viva или общий `flows.json`; не запускать `nginx -t/-T`, reload/restart, установку,
+   сетевые HTTP/TLS probes или автоматическое исправление. Если безопасный readback
+   требует расширения этих границ, остановиться с конкретным blocker.
+4. Вернуть redacted inventory и точный план локального adapter diff с tests/recovery.
+   Файлы на диске и process snapshot не доказывают загруженную конфигурацию. При
+   drift/неполноте/чужой операции не повышать результат до live PASS.
+
+После inventory отдельно остаются trusted operator/vantage, config application и
+negative probes, свежая runtime closure, exact-head CI, deploy и activation gates.
+Первый локальный слой production adapter contract реализован:
+[shared-overlay renderer и проверка baseline byte preservation](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_OVERLAY.md).
+Он не заменяет standalone fixture и не выдаёт host custody/semantic/application
+proof; все deploy/activation flags false. Тестовые 12 файлов не являются копией
+боевой конфигурации. [Shared profile и новый collector/log/four-worker contract](PARTNER_GAME_MEMBERSHIP_NGINX_SHARED_ADAPTER.md)
+теперь реализованы локально; actual baseline compatibility, native/shared behavior,
+trusted production operator и live gates не доказаны.
+[Оставшиеся границы](PARTNER_GAME_MEMBERSHIP_NGINX_INVENTORY.md#remaining-work).
+Отложенная native application rehearsal остаётся `DEFERRED_BY_USER / NOT_RUN`.
+Инфраструктурные проверки и выпуск выполняет PadlHub; нового согласования или signoff
+от партнёра не требуется. Ответственность партнёра — подключить свой клиент к
+выпущенным методам; выбор target ещё не означает их выпуск.
 
 ## Что доказано изолированно
+
+Свежий [Linux runtime audit 6 сентября](PARTNER_GAME_MEMBERSHIP_NGINX_CANDIDATE.md)
+завершён `2026-09-06T09:09:03.738Z`: 0 critical/high, 7 moderate. Новая квитанция
+сохраняет actual argv, stdout/stderr hashes, index/platform image identities,
+before/after isolation и подтверждённый cleanup. Functional/dependency-tree/guarded
+даты и bytes ниже остаются историческими; это не fresh production readback.
 
 Обновление 6 сентября: [guarded startup release](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md)
 добавлен в отдельную exact sidecar closure: actual CLI/pinned graph/durable audit,
