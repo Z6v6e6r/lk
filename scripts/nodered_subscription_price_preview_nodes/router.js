@@ -204,6 +204,10 @@ if (ctx.step === 'price') {
 }
 if (ctx.step === 'groupTariff') {
   if (!ok() || !canonical.hasCompleteBookingList(msg.payload)) return stop('LK1_EVENT_TARIFF_UNAVAILABLE');
+  // Viva scopes this product list by the request, without echoing exerciseId.
+  const tariffUrl = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${encodeURIComponent(ctx.exerciseId)}`;
+  if (msg.method !== 'GET' || msg.url !== tariffUrl
+    || (msg.responseUrl !== undefined && msg.responseUrl !== tariffUrl)) return stop('LK1_EVENT_TARIFF_UNVERIFIED');
   const rows = canonical.extractItems(msg.payload);
   if (rows.length !== 1 || !canonical.isObj(rows[0])) return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
   const product = rows[0];
@@ -212,7 +216,7 @@ if (ctx.step === 'groupTariff') {
   const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);
   const types = [product.productType, product.type].filter((type) => type !== undefined);
   if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
-    || new Set(productIds).size !== 1 || !eventIds.length || eventIds.some((id) => id !== ctx.exerciseId)
+    || new Set(productIds).size !== 1 || eventIds.some((id) => id !== ctx.exerciseId)
     || !types.length || types.some((type) => !["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"].includes(type))
     || !amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
     || new Set(amounts).size !== 1) return stop("LK1_EVENT_TARIFF_UNVERIFIED");

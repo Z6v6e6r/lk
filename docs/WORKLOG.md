@@ -2371,3 +2371,18 @@ checkouts already inside/tmp; affected tests20PASS/3SKIP. Historical price-only 
 fixtures are explicitly skipped when superseded, never relabelled as live proof. Independent
 integration review completed. Task branch preserved; no push/deploy/live writes/activation.
 Details and evidence limits: `SUBSCRIPTION_HISTORY_IMPLEMENTATION_20260909.md`.
+
+
+### 2026-09-10 — group one-time tariff compatibility hotfix (local)
+
+Confirmed the live preview 503: Viva returns the one-time tariff without an
+exerciseId echo. Bind group tariffs to the exact server GET in preview and
+initial/prewrite gateway checks; retain conflicting-echo, price/type and
+tournament guards. Added exact two-function installed-graph repair and realistic
+DTO regression. Both installer paths yield identical full graphs.
+
+Checks: 15/15 backend cases per path; related critical/frozen matrix 581 pass,
+32 optional skips, no failures; full PROD/DEV build and TypeScript pass; lint
+0 errors/387 warnings; fresh source, modular validation and exact graph contract
+pass. Payment-safety review has no blockers. No merge/push/deploy or live data,
+booking/payment operations. See GROUP_SUBSCRIPTION_TARIFF_FIX_20260910.md.
