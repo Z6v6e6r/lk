@@ -1,3 +1,41 @@
+// BEGIN generated subscriptionCounterEpoch
+function createSubscriptionCounterEpoch() {
+  const id = 'subscription-sales-20260910';
+  const cutoffKey = 'subscription_counter_epoch_started_at';
+  const inventories = {
+    ra: 'ab_leto_20260910_epoch_ra',
+    friendship: 'ab_leto_20260910_epoch_friendship',
+    network_friendship: 'network_friendship_12m_20260910_epoch',
+    piter_friendship: 'piter_friendship_12m_20260910_epoch',
+  };
+  const previous = {
+    network_friendship: 'network_friendship_12m_2026_v1',
+    piter_friendship: 'piter_friendship_12m_2026_v1',
+  };
+  const iso = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  const startedAt = globalContext => {
+    const value = globalContext.get(cutoffKey);
+    return iso(value) ? value : null;
+  };
+  const isNew = (counterKey, inventoryId) => Object.hasOwn(inventories, counterKey) && inventories[counterKey] === inventoryId;
+  const activeInventory = (counterKey, fallback, globalContext) => startedAt(globalContext) && Object.hasOwn(inventories, counterKey)
+    ? inventories[counterKey] : fallback;
+  const descriptor = value => ({ id, startedAt: value, timeZone: 'Europe/Moscow', membership: 'NEW_LK_RESERVATIONS_ONLY' });
+  const validDescriptor = value => value && Object.keys(value).sort().join() === ['id','startedAt','timeZone','membership'].sort().join()
+    && value.id === id && iso(value.startedAt) && value.timeZone === 'Europe/Moscow' && value.membership === 'NEW_LK_RESERVATIONS_ONLY';
+  const admission = (ctx, globalContext, now = Date.now()) => {
+    const cutoff = startedAt(globalContext);
+    if (!cutoff) return !isNew(ctx.counterKey, ctx.inventoryId);
+    if (!Object.hasOwn(inventories, ctx.counterKey)) return true;
+    return isNew(ctx.counterKey, ctx.inventoryId) && globalContext.get('summer_subscription_sales_20260909_enabled') === true
+      && (!ctx.counterEpoch || (validDescriptor(ctx.counterEpoch) && ctx.counterEpoch.startedAt === cutoff))
+      && now >= Date.parse(cutoff);
+  };
+  return { id, cutoffKey, inventories, previous, iso, startedAt, isNew, activeInventory, descriptor, validDescriptor, admission };
+}
+const subscriptionCounterEpoch = createSubscriptionCounterEpoch();
+// END generated subscriptionCounterEpoch
 // BEGIN generated annualSubscriptionHistory
 function parseVivaTimestamp(value, { requireZone = false } = {}) {
   if (typeof value !== "string") return null;
@@ -54,6 +92,8 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
     network_friendship: { productId: 'db7a5250-7369-4f43-8ac5-9111be24bc74', inventoryId: 'network_friendship_12m_2026_v1', totalLimit: 100 },
     piter_friendship: { productId: '8bf334ba-3050-4017-b40a-7eef2db1eb16', inventoryId: 'piter_friendship_12m_2026_v1', totalLimit: 400 },
   };
+  const epochInventories = { network_friendship: 'network_friendship_12m_20260910_epoch', piter_friendship: 'piter_friendship_12m_20260910_epoch' };
+  const isEpoch = ledger => !!epochInventories[ledger?.counterKey] && ledger.inventoryId === epochInventories[ledger.counterKey];
   const fail = message => { throw Error(`ANNUAL_HISTORY_${message}`); };
   const text = x => typeof x === 'string' && x.trim() === x && x ? x : null;
   const integer = x => Number.isSafeInteger(x) && x >= 0;
@@ -191,14 +231,21 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
     && ledger.history.entries.every(e => !e.lastAttemptAt || e.lastCheckedAt >= e.lastAttemptAt);
   function validate(ledger) {
     try {
-      const spec = products[ledger?.counterKey];
+      const epoch = isEpoch(ledger);
+      const base = products[ledger?.counterKey];
+      const spec = base && (epoch ? { ...base, inventoryId: epochInventories[ledger.counterKey] } : base);
       if (!spec || ledger._id !== `inventory:${spec.inventoryId}` || ledger.inventoryId !== spec.inventoryId
         || ledger.schemaVersion !== 3 || typeof ledger.ready !== 'boolean' || !integer(ledger.revision)
         || !/^[a-f0-9]{64}$/.test(ledger.baselineDigest || '')
         || !parseVivaTimestamp(ledger.baselineCapturedAt, { requireZone: true })
-        || ledger.history?.version !== 1 || ledger.history.accountingScope !== 'ALL_PROVIDER_PAID'
+        || ledger.history?.version !== 1 || ledger.history.accountingScope !== (epoch ? 'NEW_EPOCH_RESERVATIONS_ONLY' : 'ALL_PROVIDER_PAID')
         || !Array.isArray(ledger.history.entries) || !Array.isArray(ledger.history.settlements)
         || !Array.isArray(ledger.reservations) || !Array.isArray(ledger.legacyPaymentRefs)) return false;
+      if (epoch && (ledger.history.entries.length || ledger.history.settlements.length || ledger.legacyPaymentRefs.length
+        || ledger.history.openingPaidCount !== 0 || ledger.epoch?.id !== 'subscription-sales-20260910'
+        || ledger.epoch.timeZone !== 'Europe/Moscow' || ledger.epoch.membership !== 'NEW_LK_RESERVATIONS_ONLY'
+        || !parseVivaTimestamp(ledger.epoch.startedAt, { requireZone: true })
+        || Object.keys(ledger.epoch).sort().join() !== ['id','startedAt','timeZone','membership'].sort().join())) return false;
       const entries = ledger.history.entries, ids = new Set(), refs = new Set(), localIds = new Set();
       for (const e of entries) {
         if (!text(e.transactionId) || ids.has(e.transactionId) || !text(e.ref) || refs.has(e.ref)
@@ -242,6 +289,9 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
         if (!text(r.paymentRef) || reservationRefs.has(r.paymentRef) || refs.has(r.paymentRef)
           || r.saleRecord?.inventoryLedgerSchemaVersion !== 3
           || !['CLAIMED', 'DISPATCHING', 'PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'PAID', 'FAILED'].includes(r.state)) return false;
+        if (epoch && (r.saleRecord.inventoryId !== ledger.inventoryId || r.saleRecord.counterKey !== ledger.counterKey
+          || stable(r.saleRecord.counterEpoch) !== stable(ledger.epoch) || !parseVivaTimestamp(r.createdAt, { requireZone: true })
+          || Date.parse(r.createdAt) < Date.parse(ledger.epoch.startedAt))) return false;
         reservationRefs.add(r.paymentRef);
         if (r.transactionId) { if (!text(r.transactionId) || ids.has(r.transactionId)) return false; ids.add(r.transactionId); }
         if (active(r)) { if (!text(r.intentFingerprint) || intents.has(r.intentFingerprint)) return false; intents.add(r.intentFingerprint); }
@@ -331,10 +381,10 @@ const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260
 // Enabled only by the reviewed sales configuration operation, after provider price readback.
 const SALES_QUOTAS_20260909_ENABLED = global.get("summer_subscription_sales_20260909_enabled") === true;
 // Change only new HAB purchase prices; quota and admission flags remain independent.
-const HUB_PRICE_98000_ENABLED = SALES_QUOTAS_20260909_ENABLED
+const HUB_PRICE_98000_ENABLED = !!subscriptionCounterEpoch.startedAt(global) || SALES_QUOTAS_20260909_ENABLED
   || global.get("summer_subscription_network_friendship_price_98000_enabled") === true;
 const SALES_QUOTAS_20260909_START = "2026-09-09T07:00:00.000Z";
-const NETWORK_FRIENDSHIP_DAILY_LIMIT = SALES_QUOTAS_20260909_ENABLED ? 1 : 10;
+const NETWORK_FRIENDSHIP_DAILY_LIMIT = (SALES_QUOTAS_20260909_ENABLED || subscriptionCounterEpoch.startedAt(global)) ? 1 : 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
 const MANAGED_SALE_COMPATIBILITY = {
   adapterId: "LK_REGIONAL_BOOKING_GATEWAY",
@@ -679,6 +729,8 @@ const isAbLeto20260903ReleaseActive = () => (
 );
 
 const readAbLetoInventoryId = (counterKey = null) => {
+  const epochId = subscriptionCounterEpoch.activeInventory(counterKey, null, global);
+  if (epochId) return epochId;
   const baseInventoryId = readGlobalFirst(["summer_subscription_inventory_id"])
     || AB_LETO_INVENTORY_ID;
   const normalizedCounterKey = String(counterKey || "").trim().toLowerCase();
@@ -702,10 +754,17 @@ const readAbLetoInventoryId = (counterKey = null) => {
 const withAbLetoStagedRelease = (counter) => {
   const counterKey = String(counter?.counterKey || "").trim().toLowerCase();
   const stagedRelease = resolveAbLetoStagedRelease();
+  if (subscriptionCounterEpoch.isNew(counterKey, counter?.inventoryId)) {
+    return Object.assign({}, counter, { stagedRelease: true,
+      forcedDailyDropStartsAt: subscriptionCounterEpoch.startedAt(global),
+      releaseStartDate: resolveMoscowDate(new Date(subscriptionCounterEpoch.startedAt(global))),
+      launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT, dailyLimit: counterKey === "ra" ? 10 : 7,
+      dailyDropDate: resolveDailyDropDate(), totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT });
+  }
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !stagedRelease) {
     return counter;
   }
-  const resumedDaily = SALES_QUOTAS_20260909_ENABLED
+  const resumedDaily = (SALES_QUOTAS_20260909_ENABLED || !!subscriptionCounterEpoch.startedAt(global))
     && stagedRelease.inventoryId === AB_LETO_STAGED_INVENTORY_ID;
   return Object.assign({}, counter, {
     stagedRelease: true,
@@ -840,11 +899,10 @@ const readRegionalFriendshipConfig = (counterKey) => {
       providerProductCostMinor,
     };
   });
-  const dailyCapEnabled = regional.dailyCapEnabled === true && isAbLeto20260903ReleaseActive();
+  const dailyCapEnabled = regional.dailyCapEnabled === true && (isAbLeto20260903ReleaseActive() || !!subscriptionCounterEpoch.startedAt(global));
   return {
     counterKey,
-    inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
-      || regional.inventoryId,
+    inventoryId: subscriptionCounterEpoch.activeInventory(counterKey, readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`]) || regional.inventoryId, global),
     saleType: "tiered_direct_product",
     planKey: null,
     campaignKey: null,
@@ -1130,9 +1188,9 @@ const reservationMinutes = Math.max(
 );
 const docs = rows.filter((item) => item && typeof item === "object");
 const piterLedger = docs.find((item) => (
-  item?._id === "inventory:piter_friendship_12m_2026_v1"
+  item?._id === `inventory:${subscriptionCounterEpoch.activeInventory("piter_friendship", "piter_friendship_12m_2026_v1", global)}`
   && item?.counterKey === "piter_friendship"
-  && item?.inventoryId === "piter_friendship_12m_2026_v1"
+  && item?.inventoryId === subscriptionCounterEpoch.activeInventory("piter_friendship", "piter_friendship_12m_2026_v1", global)
 ));
 const piterState = statesByCounterKey.piter_friendship;
 const piterLegacyRefs = Array.isArray(piterLedger?.legacyPaymentRefs)
@@ -1168,7 +1226,9 @@ const piterQuotaValid = Number.isSafeInteger(piterQuotaAdjustment) && piterQuota
     ? [50, 52].includes(piterLegacyRefs.length + piterQuotaAdjustment)
     : !Object.prototype.hasOwnProperty.call(piterLedger || {}, "quotaAdjustment"));
 if (piterState && piterLedger?.ready === true
-  && ((piterLedger.schemaVersion === 3 && annualHistory.validate(piterLedger)) || ([1, 2].includes(piterLedger.schemaVersion)
+  && ((piterLedger.schemaVersion === 3 && annualHistory.validate(piterLedger)
+    && (!subscriptionCounterEpoch.isNew(piterState.counterKey, piterState.inventoryId)
+      || piterLedger.epoch?.startedAt === subscriptionCounterEpoch.startedAt(global))) || ([1, 2].includes(piterLedger.schemaVersion)
   && piterQuotaValid
   && Number.isInteger(piterLedger.revision)
   && piterLedger.revision >= 0
@@ -1193,12 +1253,15 @@ if (piterState && piterLedger?.ready === true
     && (piterLedger.schemaVersion !== 3 || annualHistory.admissionReady(piterLedger));
   piterState.managedSaleError = piterState.managedSaleReady ? null : "PITER_NEXT_DAY_SALES_RELEASE_DISABLED";
   piterState._lastUpdatedAtTs = toTs(piterLedger.updatedAt) ?? toTs(piterLedger.baselineCapturedAt);
+} else if (piterState) {
+  piterState.managedSaleReady = false;
+  piterState.managedSaleError = "PITER_ATOMIC_LEDGER_NOT_READY";
 }
 
 const hubLedger = docs.find((item) => (
-  item?._id === "inventory:network_friendship_12m_2026_v1"
+  item?._id === `inventory:${subscriptionCounterEpoch.activeInventory("network_friendship", "network_friendship_12m_2026_v1", global)}`
   && item?.counterKey === "network_friendship"
-  && item?.inventoryId === "network_friendship_12m_2026_v1"
+  && item?.inventoryId === subscriptionCounterEpoch.activeInventory("network_friendship", "network_friendship_12m_2026_v1", global)
 ));
 const hubState = statesByCounterKey.network_friendship;
 const hubLegacyRefs = Array.isArray(hubLedger?.legacyPaymentRefs)
@@ -1236,7 +1299,9 @@ const hubLedgerRowsValid = Array.isArray(hubLedger?.legacyPaymentRefs)
   && hubLedger?.dailyPaidCount === hubLedger?.dailyBaselinePaidCount + hubDailyPaidReservations
   && hubLedger?.dailyReservedCount === hubDailyActiveReservations;
 const hubLedgerValid = Boolean(hubState && hubLedger?.ready === true
-  && ((hubLedger.schemaVersion === 3 && annualHistory.validate(hubLedger)) || (hubLedger.schemaVersion === 1
+  && ((hubLedger.schemaVersion === 3 && annualHistory.validate(hubLedger)
+    && (!subscriptionCounterEpoch.isNew(hubState.counterKey, hubState.inventoryId)
+      || hubLedger.epoch?.startedAt === subscriptionCounterEpoch.startedAt(global))) || (hubLedger.schemaVersion === 1
   && Number.isInteger(hubLedger.revision) && hubLedger.revision >= 0
   && Number.isInteger(hubLedger.paidCount) && hubLedger.paidCount >= 0
   && Number.isInteger(hubLedger.reservedCount) && hubLedger.reservedCount >= 0
@@ -1358,6 +1423,11 @@ for (const doc of docs) {
   }
 }
 
+// A paused epoch never falls back to an older allocation.
+for (const state of Object.values(statesByCounterKey)) {
+  if (!subscriptionCounterEpoch.admission(state, global)) state.canPurchase = false;
+}
+
 const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
   .map((counterKey) => {
     const state = statesByCounterKey[counterKey];
@@ -1462,7 +1532,8 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       && global.get(`summer_subscription_${state.counterKey}_admission_closed`) === true)
       && (state.unlimited || state.remainingCount > 0)
       && state.bindingReady
-      && state.managedSaleReady;
+      && state.managedSaleReady
+      && subscriptionCounterEpoch.admission(state, global);
     state.updatedAt = state._lastUpdatedAtTs == null
       ? new Date().toISOString()
       : new Date(state._lastUpdatedAtTs).toISOString();

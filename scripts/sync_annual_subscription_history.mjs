@@ -4,7 +4,7 @@ import path from 'node:path';
 import { annualHistoryRuntimeSource } from './lib/annualSubscriptionHistory.mjs';
 import { annualHistoryRouterSource } from './lib/annualSubscriptionHistoryRouter.mjs';
 
-export const annualHistorySourceFiles = ['confirm_resolve', 'status_response', 'piter_atomic_router', 'purchase_router']
+export const annualHistorySourceFiles = ['confirm_resolve', 'status_response', 'piter_atomic_router', 'purchase_router', 'counter_refresh_response']
   .map(name => `fn_tournament_subscription_${name}.js`);
 export function syncAnnualHistory({ check = false } = {}) {
   for (const file of annualHistorySourceFiles) {

@@ -1,3 +1,129 @@
+// BEGIN generated legacyEpochConfirmation
+function runLegacyEpochConfirmation({ msg, ctx, annualHistory, epoch, saleUpdate, response, fail }) {
+  if (!String(ctx.step || '').startsWith('legacy_epoch_')) return undefined;
+  const reject = code => fail(503, 'Существующий платёж требует сверки', code);
+  const list = p => Array.isArray(p) ? p : p ? [p] : [];
+  const idKey = id => typeof id === 'string' ? `string:${id}`
+    : ['ObjectId', 'ObjectID'].includes(id?._bsontype) && typeof id.toHexString === 'function' ? `objectId:${id.toHexString()}` : null;
+  const query = () => ({ inventoryId: ctx.inventoryId, paymentRef: ctx.paymentRef, transactionId: ctx.transactionId });
+  const read = step => { ctx.step = step; msg.payload = query(); return [msg, null, null, null, null]; };
+  const rowFrom = payload => {
+    const matches = list(payload);
+    if (matches.length !== 1) throw Error('ROW_CARDINALITY');
+    const row = matches[0], spec = annualHistory.products[ctx.counterKey];
+    if (!spec || epoch.previous[ctx.counterKey] !== ctx.inventoryId || row.inventoryId !== ctx.inventoryId
+      || row.counterKey !== ctx.counterKey || row.productId !== spec.productId || row.productId !== ctx.productId
+      || row.paymentRef !== ctx.paymentRef || row.transactionId !== ctx.transactionId || row.requestFingerprint
+      || !idKey(row._id) || !['PAID','PAYMENT_PENDING','PROVIDER_UNKNOWN','REFUNDED','FAILED'].includes(row.status)
+      || (ctx.legacyEpochIdKey && idKey(row._id) !== ctx.legacyEpochIdKey)) throw Error('ROW_IDENTITY');
+    return row;
+  };
+  const provider = (step, path) => {
+    ctx.step = step; msg.method = 'GET'; msg.url = 'https://api.vivacrm.ru/api/v1' + path;
+    msg.headers = { Authorization: `Bearer ${ctx.token}`, 'Content-Type': 'application/json' };
+    msg.httpRequestTimeout = ctx.httpRequestTimeoutMs; msg.payload = '';
+    return [null, null, null, null, msg];
+  };
+  const readInstances = () => provider('legacy_epoch_instances', `/clients/${encodeURIComponent(ctx.legacyEpochClientId)}/subscriptions?includeFinished=true&size=200&page=${ctx.legacyEpochPage}`);
+  const done = row => ctx.reconcile === true ? [null,null,null,null,null]
+    : response(200, { ok: true, status: row.status, paymentRef: row.paymentRef, transactionId: row.transactionId });
+  const matchesFields = (row, fields) => Object.entries(fields).every(([key, value]) => annualHistory.stable(row[key]) === annualHistory.stable(value));
+  try {
+    if (ctx.legacyEpochCandidate !== true || !ctx.token || !ctx.transactionId
+      || epoch.previous[ctx.counterKey] !== ctx.inventoryId) return reject('LEGACY_EPOCH_SCOPE_INVALID');
+    if (ctx.step === 'legacy_epoch_begin') return read('legacy_epoch_row');
+    if (ctx.step === 'legacy_epoch_row') {
+      const row = rowFrom(msg.payload); ctx.legacyEpochIdKey = idKey(row._id);
+      return provider('legacy_epoch_transaction', `/transactions/${encodeURIComponent(ctx.transactionId)}`);
+    }
+    if (ctx.step === 'legacy_epoch_transaction') {
+      if (!(msg.statusCode >= 200 && msg.statusCode < 300) || msg.payload?.id !== ctx.transactionId) return reject('LEGACY_EPOCH_TRANSACTION_UNAVAILABLE');
+      ctx.legacyEpochTransaction = msg.payload;
+      const ids = [msg.payload.clientId, msg.payload.client?.id, msg.payload.client?.uuid, msg.payload.client?.clientId].filter(v => v != null);
+      if (!ids.length || ids.some(id => typeof id !== 'string' || !id || id !== ids[0])) return reject('LEGACY_EPOCH_CLIENT_INVALID');
+      ctx.legacyEpochClientId = ids[0]; ctx.legacyEpochSubscriptions = []; ctx.legacyEpochPage = 0;
+      if (msg.payload.status === 'UNPAID') return read('legacy_epoch_compare');
+      return readInstances();
+    }
+    if (ctx.step === 'legacy_epoch_instances') {
+      const p = msg.payload;
+      if (!(msg.statusCode >= 200 && msg.statusCode < 300) || !Array.isArray(p?.content)
+        || p.number !== ctx.legacyEpochPage || !Number.isSafeInteger(p.totalElements) || p.totalElements < 0
+        || !Number.isSafeInteger(p.totalPages) || p.totalPages < 0 || p.totalPages > 50
+        || p.totalPages !== Math.ceil(p.totalElements / 200) || p.numberOfElements !== p.content.length
+        || p.content.length > 200 || p.last !== (p.number >= p.totalPages - 1)
+        || (!p.last && p.content.length !== 200)
+        || (ctx.legacyEpochPage > 0 && (p.totalPages !== ctx.legacyEpochPages || p.totalElements !== ctx.legacyEpochTotal))) return reject('LEGACY_EPOCH_INSTANCE_PAGES_INVALID');
+      ctx.legacyEpochPages = p.totalPages; ctx.legacyEpochTotal = p.totalElements;
+      ctx.legacyEpochSubscriptions.push(...p.content);
+      if (!p.last) { ctx.legacyEpochPage++; return readInstances(); }
+      const ids = ctx.legacyEpochSubscriptions.map(s => s.subscriptionId || s.clientSubscriptionId || s.id || s.uuid);
+      if (ids.length !== p.totalElements || ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) return reject('LEGACY_EPOCH_INSTANCE_COVERAGE_INVALID');
+      return read('legacy_epoch_compare');
+    }
+    if (ctx.step === 'legacy_epoch_compare') {
+      const row = rowFrom(msg.payload);
+      const fact = annualHistory.observe(ctx.legacyEpochTransaction, { productId: ctx.productId,
+        clientId: ctx.legacyEpochClientId, subscriptions: ctx.legacyEpochSubscriptions, localRow: row });
+      if ((row.status === 'REFUNDED' && fact.state !== 'REFUNDED') || (row.status === 'PAID' && fact.state === 'UNPAID')) return reject('LEGACY_EPOCH_STALE_PROVIDER_STATE');
+      if (fact.state === 'UNPAID') return done(row);
+      const fields = fact.state === 'PAID' ? { status: 'PAID', paidAt: fact.paidAt, clientSubscriptionId: fact.subscriptionId }
+        : { status: 'REFUNDED', refundedAt: fact.refundProof.transactionRefundedAt,
+          refundSumMinor: fact.refundProof.refundSumMinor, refundedSubscriptionId: fact.subscriptionId,
+          annualHistoryRefundProof: fact.refundProof };
+      if (matchesFields(row, fields)) return done(row);
+      ctx.legacyEpochFields = fields; ctx.step = 'legacy_epoch_write_ack';
+      return saleUpdate(ctx, { _id: row._id, $expr: { $eq: ['$$ROOT', { $literal: row }] } },
+        { $set: { ...fields, updatedAt: new Date().toISOString() } }, { upsert: false });
+    }
+    if (ctx.step === 'legacy_epoch_write_ack') return read('legacy_epoch_readback');
+    if (ctx.step === 'legacy_epoch_readback') {
+      const row = rowFrom(msg.payload);
+      if (!ctx.legacyEpochFields || !matchesFields(row, ctx.legacyEpochFields)) return reject('LEGACY_EPOCH_CAS_NOT_CONFIRMED');
+      return done(row);
+    }
+    return reject('LEGACY_EPOCH_STEP_INVALID');
+  } catch { return reject('LEGACY_EPOCH_EVIDENCE_INVALID'); }
+}
+// END generated legacyEpochConfirmation
+// BEGIN generated subscriptionCounterEpoch
+function createSubscriptionCounterEpoch() {
+  const id = 'subscription-sales-20260910';
+  const cutoffKey = 'subscription_counter_epoch_started_at';
+  const inventories = {
+    ra: 'ab_leto_20260910_epoch_ra',
+    friendship: 'ab_leto_20260910_epoch_friendship',
+    network_friendship: 'network_friendship_12m_20260910_epoch',
+    piter_friendship: 'piter_friendship_12m_20260910_epoch',
+  };
+  const previous = {
+    network_friendship: 'network_friendship_12m_2026_v1',
+    piter_friendship: 'piter_friendship_12m_2026_v1',
+  };
+  const iso = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  const startedAt = globalContext => {
+    const value = globalContext.get(cutoffKey);
+    return iso(value) ? value : null;
+  };
+  const isNew = (counterKey, inventoryId) => Object.hasOwn(inventories, counterKey) && inventories[counterKey] === inventoryId;
+  const activeInventory = (counterKey, fallback, globalContext) => startedAt(globalContext) && Object.hasOwn(inventories, counterKey)
+    ? inventories[counterKey] : fallback;
+  const descriptor = value => ({ id, startedAt: value, timeZone: 'Europe/Moscow', membership: 'NEW_LK_RESERVATIONS_ONLY' });
+  const validDescriptor = value => value && Object.keys(value).sort().join() === ['id','startedAt','timeZone','membership'].sort().join()
+    && value.id === id && iso(value.startedAt) && value.timeZone === 'Europe/Moscow' && value.membership === 'NEW_LK_RESERVATIONS_ONLY';
+  const admission = (ctx, globalContext, now = Date.now()) => {
+    const cutoff = startedAt(globalContext);
+    if (!cutoff) return !isNew(ctx.counterKey, ctx.inventoryId);
+    if (!Object.hasOwn(inventories, ctx.counterKey)) return true;
+    return isNew(ctx.counterKey, ctx.inventoryId) && globalContext.get('summer_subscription_sales_20260909_enabled') === true
+      && (!ctx.counterEpoch || (validDescriptor(ctx.counterEpoch) && ctx.counterEpoch.startedAt === cutoff))
+      && now >= Date.parse(cutoff);
+  };
+  return { id, cutoffKey, inventories, previous, iso, startedAt, isNew, activeInventory, descriptor, validDescriptor, admission };
+}
+const subscriptionCounterEpoch = createSubscriptionCounterEpoch();
+// END generated subscriptionCounterEpoch
 // BEGIN generated annualSubscriptionHistoryRouter
 function runAnnualHistory({ msg, ctx, annualHistory, ledgerFind, ledgerUpdate, saleUpdate, fail, response }) {
   if (!String(ctx.step || '').startsWith('annual_history_')) return undefined;
@@ -216,6 +342,8 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
     network_friendship: { productId: 'db7a5250-7369-4f43-8ac5-9111be24bc74', inventoryId: 'network_friendship_12m_2026_v1', totalLimit: 100 },
     piter_friendship: { productId: '8bf334ba-3050-4017-b40a-7eef2db1eb16', inventoryId: 'piter_friendship_12m_2026_v1', totalLimit: 400 },
   };
+  const epochInventories = { network_friendship: 'network_friendship_12m_20260910_epoch', piter_friendship: 'piter_friendship_12m_20260910_epoch' };
+  const isEpoch = ledger => !!epochInventories[ledger?.counterKey] && ledger.inventoryId === epochInventories[ledger.counterKey];
   const fail = message => { throw Error(`ANNUAL_HISTORY_${message}`); };
   const text = x => typeof x === 'string' && x.trim() === x && x ? x : null;
   const integer = x => Number.isSafeInteger(x) && x >= 0;
@@ -353,14 +481,21 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
     && ledger.history.entries.every(e => !e.lastAttemptAt || e.lastCheckedAt >= e.lastAttemptAt);
   function validate(ledger) {
     try {
-      const spec = products[ledger?.counterKey];
+      const epoch = isEpoch(ledger);
+      const base = products[ledger?.counterKey];
+      const spec = base && (epoch ? { ...base, inventoryId: epochInventories[ledger.counterKey] } : base);
       if (!spec || ledger._id !== `inventory:${spec.inventoryId}` || ledger.inventoryId !== spec.inventoryId
         || ledger.schemaVersion !== 3 || typeof ledger.ready !== 'boolean' || !integer(ledger.revision)
         || !/^[a-f0-9]{64}$/.test(ledger.baselineDigest || '')
         || !parseVivaTimestamp(ledger.baselineCapturedAt, { requireZone: true })
-        || ledger.history?.version !== 1 || ledger.history.accountingScope !== 'ALL_PROVIDER_PAID'
+        || ledger.history?.version !== 1 || ledger.history.accountingScope !== (epoch ? 'NEW_EPOCH_RESERVATIONS_ONLY' : 'ALL_PROVIDER_PAID')
         || !Array.isArray(ledger.history.entries) || !Array.isArray(ledger.history.settlements)
         || !Array.isArray(ledger.reservations) || !Array.isArray(ledger.legacyPaymentRefs)) return false;
+      if (epoch && (ledger.history.entries.length || ledger.history.settlements.length || ledger.legacyPaymentRefs.length
+        || ledger.history.openingPaidCount !== 0 || ledger.epoch?.id !== 'subscription-sales-20260910'
+        || ledger.epoch.timeZone !== 'Europe/Moscow' || ledger.epoch.membership !== 'NEW_LK_RESERVATIONS_ONLY'
+        || !parseVivaTimestamp(ledger.epoch.startedAt, { requireZone: true })
+        || Object.keys(ledger.epoch).sort().join() !== ['id','startedAt','timeZone','membership'].sort().join())) return false;
       const entries = ledger.history.entries, ids = new Set(), refs = new Set(), localIds = new Set();
       for (const e of entries) {
         if (!text(e.transactionId) || ids.has(e.transactionId) || !text(e.ref) || refs.has(e.ref)
@@ -404,6 +539,9 @@ function createAnnualSubscriptionHistory({ parseVivaTimestamp, matchesVivaPaymen
         if (!text(r.paymentRef) || reservationRefs.has(r.paymentRef) || refs.has(r.paymentRef)
           || r.saleRecord?.inventoryLedgerSchemaVersion !== 3
           || !['CLAIMED', 'DISPATCHING', 'PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'PAID', 'FAILED'].includes(r.state)) return false;
+        if (epoch && (r.saleRecord.inventoryId !== ledger.inventoryId || r.saleRecord.counterKey !== ledger.counterKey
+          || stable(r.saleRecord.counterEpoch) !== stable(ledger.epoch) || !parseVivaTimestamp(r.createdAt, { requireZone: true })
+          || Date.parse(r.createdAt) < Date.parse(ledger.epoch.startedAt))) return false;
         reservationRefs.add(r.paymentRef);
         if (r.transactionId) { if (!text(r.transactionId) || ids.has(r.transactionId)) return false; ids.add(r.transactionId); }
         if (active(r)) { if (!text(r.intentFingerprint) || intents.has(r.intentFingerprint)) return false; intents.add(r.intentFingerprint); }
@@ -501,8 +639,8 @@ const exactUpsertAck = (value) => Boolean(
   && value.upsertedId !== null && value.upsertedId !== undefined
 );
 const rows = (value) => Array.isArray(value) ? value : (value ? [value] : []);
-const isHub = (ctx) => ctx?.counterKey === HUB_COUNTER_KEY && ctx?.inventoryId === HUB_INVENTORY_ID;
-const isPiter = (ctx) => ctx?.counterKey === PITER_COUNTER_KEY && ctx?.inventoryId === PITER_INVENTORY_ID;
+const isHub = (ctx) => ctx?.counterKey === HUB_COUNTER_KEY && [HUB_INVENTORY_ID, subscriptionCounterEpoch.inventories.network_friendship].includes(ctx?.inventoryId);
+const isPiter = (ctx) => ctx?.counterKey === PITER_COUNTER_KEY && [PITER_INVENTORY_ID, subscriptionCounterEpoch.inventories.piter_friendship].includes(ctx?.inventoryId);
 const ledgerId = (ctx) => `inventory:${ctx.inventoryId}`;
 const saleId = (ctx) => `${isPiter(ctx) ? "piter" : "hub"}-sale:${ctx.inventoryId}:${ctx.paymentRef}`;
 const dispatchGeneration = (value) => {
@@ -557,6 +695,21 @@ const saleUpdate = (ctx, filter, update, options = {}) => {
   return [null, null, msg, null, null];
 };
 const provider = (ctx) => {
+  const createsTransaction = ctx.providerMethod === "POST" && ctx.providerUrl === "https://api.vivacrm.ru/api/v1/transactions";
+  if (createsTransaction) {
+    if (isHub(ctx) && (!hubLk1Sale
+      || JSON.stringify(normalizeFrozenHubSale(ctx.hubLk1Sale)) !== JSON.stringify(hubLk1Sale))) {
+      return fail(503, "Продажи ХАБ закрыты или условия изменились", "HUB_NEW_SALES_RELEASE_DISABLED");
+    }
+    if (isPiter(ctx) && subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId) && !piterNextDaySale) {
+      return fail(503, "Продажи Питера закрыты", "PITER_NEW_SALES_RELEASE_DISABLED");
+    }
+    if (!subscriptionCounterEpoch.admission(ctx, global)) return fail(503, "Продажи этого периода закрыты", "COUNTER_EPOCH_ADMISSION_CLOSED");
+    if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId) && !ctx.epochDispatchOwnershipChecked) {
+      ctx.epochDispatchReturnStep = ctx.step; ctx.step = "epoch_dispatch_ownership";
+      msg.payload = { paymentRef: ctx.paymentRef }; return [msg, null, null, null, null];
+    }
+  }
   msg._summerSubscriptionCtx = ctx;
   msg.method = ctx.providerMethod;
   msg.url = ctx.providerUrl;
@@ -636,6 +789,7 @@ const ledgerIsPurchaseReady = (ledger, totalLimit, ctx) => (
     && (ledger.schemaVersion !== 3 || annualHistory.admissionReady(ledger))
 );
 const saleInsert = (ctx, nowIso) => ({
+      ...(ctx.counterEpoch ? { counterEpoch: ctx.counterEpoch } : {}),
       ...(ctx.ledgerSchemaVersion === 3 ? { inventoryLedgerSchemaVersion: 3 } : {}),
       counterKey: ctx.counterKey,
       inventoryId: ctx.inventoryId,
@@ -735,10 +889,15 @@ const persistClaimedSale = (ctx, nextStep = "piter_claimed_sale_ack") => {
     $unset: { dispatchRepairStartedAt: "", repairProviderAttemptedAt: "" },
   });
 };
+const epochMatches = (left, right) => subscriptionCounterEpoch.validDescriptor(left)
+  && subscriptionCounterEpoch.validDescriptor(right)
+  && left.id === right.id && left.startedAt === right.startedAt
+  && left.timeZone === right.timeZone && left.membership === right.membership;
 const saleProjectionMatches = (record, ctx, expectedStatus, result = {}) => Boolean(
   record
   && record._id === saleId(ctx)
   && record.requestFingerprint === ctx.requestFingerprint
+  && (!subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId) || epochMatches(record.counterEpoch, ctx.counterEpoch))
   && record.status === expectedStatus
   && record.amountMinor === (ctx.expectedAmountMinor ?? ctx.priceMinor)
   && (ctx.ledgerSchemaVersion !== 3 || record.inventoryLedgerSchemaVersion === 3)
@@ -834,6 +993,22 @@ if (!ctx || (!isPiter(ctx) && !isHub(ctx))) {
   return fail(500, "Regional atomic sale context is missing", "REGIONAL_ATOMIC_CONTEXT_MISSING");
 }
 
+const legacyResult = runLegacyEpochConfirmation({ msg, ctx, annualHistory, epoch: subscriptionCounterEpoch, saleUpdate, response, fail });
+if (legacyResult !== undefined) return legacyResult;
+if (ctx.step === "epoch_recovery_ownership_start") {
+  if (!subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId) || !subscriptionCounterEpoch.validDescriptor(ctx.counterEpoch) || !ctx.transactionId) return fail(503, "Восстановление периода требует сверки", "COUNTER_EPOCH_RECOVERY_SCOPE_INVALID");
+  ctx.step = "epoch_recovery_ownership_readback"; msg.payload = { transactionId: ctx.transactionId }; return [msg, null, null, null, null];
+}
+if (ctx.step === "epoch_recovery_ownership_readback") {
+  if (rows(msg.payload).some(row => row.inventoryId !== ctx.inventoryId || row.paymentRef !== ctx.paymentRef)) return fail(409, "Транзакция принадлежит другой покупке", "COUNTER_EPOCH_TRANSACTION_CONFLICT");
+  ctx.step = "confirm_lookup"; msg.method = "GET"; msg.url = `https://api.vivacrm.ru/api/v1/transactions/${encodeURIComponent(ctx.transactionId)}`;
+  msg.headers = { Authorization: `Bearer ${ctx.token}`, "Content-Type": "application/json" }; msg.payload = ""; msg.httpRequestTimeout = ctx.httpRequestTimeoutMs;
+  return [null, null, null, null, msg];
+}
+if (ctx.step === "epoch_dispatch_ownership") {
+  if (rows(msg.payload).some(row => row.inventoryId !== ctx.inventoryId || row.paymentRef !== ctx.paymentRef)) return fail(409, "Платёжная ссылка уже использована", "COUNTER_EPOCH_PAYMENT_REF_CONFLICT");
+  ctx.epochDispatchOwnershipChecked = true; ctx.step = ctx.epochDispatchReturnStep; return provider(ctx);
+}
 const historyResult = runAnnualHistory({ msg, ctx, annualHistory, ledgerFind, ledgerUpdate, saleUpdate, fail, response });
 if (historyResult !== undefined) return historyResult;
 
@@ -849,12 +1024,27 @@ if (ctx.counterKey === "network_friendship" && [
   return fail(503, "Новые продажи ХАБ не включены в этот выпуск", "HUB_NEW_SALES_RELEASE_DISABLED");
 }
 
-if (ctx.step === "piter_reserve_start") return ledgerFind(ctx);
+if (ctx.step === "piter_reserve_start") {
+  if (!subscriptionCounterEpoch.admission(ctx, global)) return fail(503, "Продажи этого периода закрыты", "COUNTER_EPOCH_ADMISSION_CLOSED");
+  if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId)) {
+    ctx.step = "epoch_payment_ref_lookup"; msg.payload = { paymentRef: ctx.paymentRef }; return [msg, null, null, null, null];
+  }
+  return ledgerFind(ctx);
+}
+if (ctx.step === "epoch_payment_ref_lookup") {
+  if (rows(msg.payload).some(row => row.paymentRef === ctx.paymentRef && row.inventoryId !== ctx.inventoryId)) return fail(409, "Платёжная ссылка относится к предыдущему периоду", "COUNTER_EPOCH_PAYMENT_REF_CONFLICT");
+  return ledgerFind(ctx);
+}
 
 if (ctx.step === "piter_ledger_find") {
   const ledger = rows(msg.payload).find((row) => row?._id === ledgerId(ctx));
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit, ctx)) {
     return fail(503, "Продажа Питера ещё не активирована", "PITER_ATOMIC_LEDGER_NOT_READY");
+  }
+  if (!subscriptionCounterEpoch.admission(ctx, global)) return fail(503, "Продажи этого периода закрыты", "COUNTER_EPOCH_ADMISSION_CLOSED");
+  if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId)) {
+    if (!subscriptionCounterEpoch.validDescriptor(ledger.epoch) || ledger.epoch.startedAt !== subscriptionCounterEpoch.startedAt(global)) return fail(503, "Период продаж не совпадает", "COUNTER_EPOCH_LEDGER_MISMATCH");
+    ctx.counterEpoch = ledger.epoch;
   }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
   ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
@@ -1185,6 +1375,11 @@ if (ctx.step === "piter_dispatch_repair_quota_find") {
     || toStr(reservation.providerAttemptedAt) !== toStr(ctx.providerAttemptedAt)) {
     return fail(503, "Квота попытки оплаты требует сверки", "PITER_DISPATCH_REPAIR_QUOTA_INVALID");
   }
+  if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId)
+    && (!epochMatches(ctx.counterEpoch, ledger.epoch)
+      || !epochMatches(ctx.counterEpoch, reservation.saleRecord?.counterEpoch))) {
+    return fail(503, "Сохранённый период платежа изменился", "COUNTER_EPOCH_FROZEN_SALE_INVALID");
+  }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
   ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
   return resetDispatchAfterFence(ctx);
@@ -1411,6 +1606,11 @@ if (ctx.step === "piter_confirm_validate") {
       || (recoveredTransaction && existing.state === "DISPATCHING")
       || existing.state === result.nextStatus)) {
     return fail(503, "Atomic ledger не прошёл проверку перед подтверждением", "PITER_CONFIRM_LEDGER_INVALID");
+  }
+  if (subscriptionCounterEpoch.isNew(ctx.counterKey, ctx.inventoryId)
+    && (!epochMatches(ctx.counterEpoch, ledger.epoch)
+      || !epochMatches(ctx.counterEpoch, existing.saleRecord?.counterEpoch))) {
+    return fail(503, "Сохранённый период платежа изменился", "COUNTER_EPOCH_FROZEN_SALE_INVALID");
   }
   ctx.ledgerSchemaVersion = ledger.schemaVersion;
   ctx.ledgerQuotaAdjustment = [2, 3].includes(ledger.schemaVersion) ? ledger.quotaAdjustment : null;
