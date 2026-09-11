@@ -46,6 +46,17 @@ export type StorefrontPurchaseOutcome =
 
 export class StorefrontPaymentError extends Error {}
 
+/**
+ * Surfaces the gateway's own reason instead of a generic message: a failed
+ * purchase must tell the visitor (and support) whether the provider rejected
+ * the request (`418` and friends) or the bank simply returned nothing.
+ */
+export function describePaymentFailure(error: { status?: number | null; message?: string | null } | null | undefined, fallback: string): string {
+  const message = String(error?.message || '').trim() || fallback;
+  const status = typeof error?.status === 'number' ? error.status : null;
+  return status === null ? message : `${message} (код ${status})`;
+}
+
 export function resolveStorefrontBillingTarget(
   planId: string,
   billingOptionId: StorefrontBillingOptionId,
@@ -206,7 +217,9 @@ export async function createStorefrontSubscriptionPayment(params: {
       failUrl: returnUrl,
     });
     if (result.error || !result.data) {
-      throw new StorefrontPaymentError(result.error?.message || 'Не удалось создать оплату абонемента');
+      throw new StorefrontPaymentError(
+        describePaymentFailure(result.error, 'Не удалось создать оплату абонемента'),
+      );
     }
     if (result.data.paymentUrl) {
       return { status: 'redirect', paymentUrl: result.data.paymentUrl, paymentRef };
@@ -227,7 +240,9 @@ export async function createStorefrontSubscriptionPayment(params: {
     failUrl: returnUrl,
   });
   if (result.error || !result.data) {
-    throw new StorefrontPaymentError(result.error?.message || 'Не удалось создать оплату подписки');
+    throw new StorefrontPaymentError(
+      describePaymentFailure(result.error, 'Не удалось создать оплату подписки'),
+    );
   }
 
   const resolvedPaymentRef = result.data.paymentRef || paymentRef;

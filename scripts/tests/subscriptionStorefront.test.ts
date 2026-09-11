@@ -13,6 +13,8 @@ const FIXTURE_PHONE = `+${'7'}${'900000000'}`;
 interface PaymentAdapterCalls {
   created: { counterKey: string | null; planType: string | null }[];
   bought: { productId: string; phone: string }[];
+  /** Provider failure returned by the direct-product purchase stub. */
+  buyFailure?: { status: number; message: string } | null;
 }
 
 /** Removes top-level import declarations before transpiling the module for the VM. */
@@ -24,6 +26,7 @@ function stripImports(source: string): string {
 function loadPaymentAdapter(): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
+  describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
   calls: PaymentAdapterCalls;
 } {
   const source = stripImports(readFileSync(
@@ -39,6 +42,7 @@ function loadPaymentAdapter(): {
   const stubs = {
     apiBuySubscroption: async (productId: string, phone: string) => {
       calls.bought.push({ productId, phone });
+      if (calls.buyFailure) return { data: null, error: calls.buyFailure, status: calls.buyFailure.status };
       return { data: { toPay: 2380000, paymentUrl: 'https://bank.example/pay/direct' }, error: null, status: 200 };
     },
     apiCreateTournamentSubscriptionPurchase: async (params: { counterKey?: string | null; planType?: string | null }) => {
@@ -88,6 +92,7 @@ function loadPaymentAdapter(): {
     calls,
     resolveStorefrontBillingTarget: exported.resolveStorefrontBillingTarget as never,
     createStorefrontSubscriptionPayment: exported.createStorefrontSubscriptionPayment as never,
+    describePaymentFailure: exported.describePaymentFailure as never,
   };
 }
 
@@ -246,4 +251,21 @@ test('annual must come from its explicit response, never from aggregate fallback
     assert.equal(friendshipBillingOptions(merged)[2].priceMinor, null);
   }
   assert.deepEqual(scopedStorefrontStatuses([monthly, annual], 'network_friendship'), [annual]);
+});
+
+test('provider rejections keep their own reason and status code', async () => {
+  const adapter = loadPaymentAdapter();
+  assert.equal(
+    adapter.describePaymentFailure({ status: 418, message: "I'm a teapot" }, 'fallback'),
+    "I'm a teapot (код 418)",
+  );
+  assert.equal(adapter.describePaymentFailure({ status: null, message: null }, 'Не удалось создать оплату'), 'Не удалось создать оплату');
+  assert.equal(adapter.describePaymentFailure(null, 'Не удалось создать оплату'), 'Не удалось создать оплату');
+
+  adapter.calls.buyFailure = { status: 418, message: "I'm a teapot" };
+  await assert.rejects(
+    adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: FIXTURE_PHONE }),
+    // The adapter lives in another VM realm, so assert on the message, not on `instanceof`.
+    (error: unknown) => /I'm a teapot/.test(String((error as { message?: string })?.message)) && /418/.test(String((error as { message?: string })?.message)),
+  );
 });
