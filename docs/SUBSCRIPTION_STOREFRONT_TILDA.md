@@ -120,6 +120,12 @@ T123 читает собственный release-манифест и добав�
 - В `.subscription-storefront__hero` добавлен `background: transparent`: локальный preview-харнесс (и потенциальная host-CSS Tilda) стилизует голый `header`, из-за чего заголовок получал чёрную заливку. Правило харнесса тоже сужено до `body > header`.
 - LOCAL: focused 13/13, TypeScript, ESLint, prod/dev builds и headless-проверка CTA (три сценария) — PASS. Проверки UI: desktop 1400 и mobile 390.
 
+### Годовая цена «Дружбы» (2026-09-11)
+
+- Витрина не хранит цену: карточка показывает `priceMinor` из `GET /lk/tournaments/summer-subscription/status?counterKey=network_friendship`. Поэтому «98 000 ₽» на карточке появятся ровно тогда, когда живой счётчик начнёт возвращать 9 800 000 minor.
+- Одобренная цена ХАБ зафиксирована в `docs/HAB_ANNUAL_PRICE_98000_20260909.md`: каталог Viva уже показывает 98 000 ₽, а публичный статус LK возвращает 56 800 ₽, пока в Node-RED не включён флаг `summer_subscription_network_friendship_price_98000_enabled` (кандидат: `scripts/prepare_hab_annual_price_candidate.mjs` + `scripts/nodered_games_nodes/init_hab_annual_price_98000.js`). Включение флага — живая операция на `147`, отдельная от этой фронтенд-задачи и не выполнявшаяся.
+- В локальном preview-харнессе заглушка `network_friendship` приведена к одобренной цене 9 800 000, чтобы макет проверялся с «98 000 ₽ / год»; боевая выдача при этом не менялась.
+
 
 MODEL_ROUTE: parent
 
