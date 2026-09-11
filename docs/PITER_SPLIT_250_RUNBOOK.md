@@ -54,6 +54,7 @@ Guarded configuration update:
 - A modified browser `shareAmount`, `totalAmount`, or `studioId` does not change the server charge.
 - A room that does not belong to the quoted station is rejected before Viva creates an exercise or booking.
 - A non-Piter split game fetches the exact Viva court price for the verified station, room, date/time, master service and sub-services, then divides that price by the server share count. The nominal transaction product cost is not pricing authority.
+- A join surface never quotes the nominal `10 000 / share count` fallback: a stored share without an exact total or pricing-policy snapshot is re-priced from the exact court price before it is displayed.
 - A one-time Piter game created under the campaign keeps its exact policy ID, version and hourly rates; the rate is re-proved from the organizer transaction before each participant booking.
 - A subscription-created Piter game validates the exact stored snapshot against CUP on join. A legacy subscription-created game without a snapshot uses CUP only for its stored date/station/room, which repairs the pre-fix 1,500 RUB fallback without trusting browser fields.
 - Full payment uses the existing Viva full-payment path and the ordinary slot price.

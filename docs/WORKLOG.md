@@ -1,5 +1,25 @@
 # Журнал шагов
 
+## 2026-09-11 — Split join: ordinary court price for records without a canonical share
+
+- Invitation (`/game_join`) and cabinet game-details join surfaces now re-price a split
+  game whose stored `shareAmount` has no server-derived total or pricing-policy snapshot
+  from the exact Viva court price for the stored station, room, date/time, master service
+  and sub-services. The nominal `10 000 / share count` fallback is never quoted as the
+  participant price; the server stays the pricing authority.
+- Live finding: `pay_1fb78942-4348-4cda-95cd-93634d335a60` (Питер, Корт №8, 2026-09-11
+  21:30-22:30, 4 players) stored `metadata.splitPayment.shareAmount = 2500` without
+  `totalAmount`; the exact Viva court price is `4000`, so the participant share is `1000`
+  — the amount already charged to the participant transaction at 11:39.
+- New modules: `splitOrdinaryPricing.ts` (pure contract/canonicality/precedence helpers),
+  `resolveSplitOrdinaryPrice.ts` (exact-price lookup) and `useSplitOrdinaryPrice.ts`
+  (display-only hook used by both join surfaces).
+- Checks: `npm run test:split-ordinary-price` 17/17, `test:split-create-contract`,
+  `test:split-payment-recovery`, split promo pricing, `tsc -b`, games prod and dev bundle
+  builds, eslint 0 errors (pre-existing warnings only). `test:night-e-acceptance` 125/126;
+  the single failure is the pre-existing red `publicCreateFlow.devRouting` expectation.
+  No merge, push, deploy or live data mutation.
+
 ## 2026-09-09 — Group training HAB 50% monetary discount, local stage
 
 - Added authenticated eligibility preview and crossed-out original/discounted one-time price with the exact subscription name. Existing HAB rule only; no promo stacking or visit consumption.

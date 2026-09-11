@@ -165,6 +165,8 @@ import {
   resolveSplitSubscriptionLifecycle,
 } from "./splitSubscriptionAvailability";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
+import { hasCanonicalSplitSharePrice, resolveSplitDisplayShareAmount } from "./splitOrdinaryPricing";
+import { useSplitOrdinaryPrice } from "./useSplitOrdinaryPrice";
 import {
   resolveSubscriptionCategoryDailyLimitErrorMessage,
 } from "../../utils/subscriptionCategoryDailyLimit";
@@ -8412,12 +8414,22 @@ export default function GamesPage({
     if (shareCount === 2) return 2;
     return detailsMaxPlayers <= 2 ? 2 : 4;
   }, [detailsSplitPaymentMetadata, detailsMaxPlayers]);
+  const detailsSplitOrdinaryPricing = useSplitOrdinaryPrice({
+    booking: activeGameRecord?.booking ?? null,
+    metadata: isRecordObject(activeGameRecord?.metadata)
+      ? activeGameRecord.metadata as Record<string, unknown>
+      : null,
+    splitPayment: detailsSplitPaymentMetadata,
+    shareCount: detailsSplitShareCount,
+    enabled: isDetailsSplitPaymentGame,
+  });
   const detailsSplitShareAmount = useMemo(() => {
     const organizerUsedSubscription = String(
       detailsSplitPaymentMetadata?.selectedPaymentMode || "",
     ).trim().toLowerCase() === "subscription";
+    let promoAmount: number | null = null;
     if (organizerUsedSubscription && activeGameRecord?.booking) {
-      const promoAmount = resolveSplitPromoShareAmount({
+      promoAmount = resolveSplitPromoShareAmount({
         config: splitPaymentPromoConfig,
         date: activeGameRecord.booking.date,
         studioId: activeGameRecord.booking.studioId,
@@ -8427,22 +8439,42 @@ export default function GamesPage({
         shareCount: detailsSplitShareCount,
         durationMinutes: activeGameRecord.booking.durationMinutes,
       });
-      if (promoAmount != null) return promoAmount;
     }
     const fromSplit = toFiniteNumber(
       detailsSplitPaymentMetadata?.shareAmount
       ?? detailsSplitPaymentMetadata?.amount
       ?? detailsSplitPaymentMetadata?.toPay,
     );
-    if (fromSplit != null && fromSplit > 0) return Math.round(fromSplit);
+    const storedIsCanonical = hasCanonicalSplitSharePrice(detailsSplitPaymentMetadata);
+    const resolvedAmount = resolveSplitDisplayShareAmount({
+      promoShareAmount: promoAmount,
+      ordinaryShareAmount: detailsSplitOrdinaryPricing.price?.shareAmount ?? null,
+      ordinarySettled: detailsSplitOrdinaryPricing.settled,
+      storedShareAmount: storedIsCanonical ? fromSplit : null,
+      storedIsCanonical,
+    });
+    if (resolvedAmount != null) return Math.round(resolvedAmount);
 
     const fromJoinPrice = toFiniteNumber(extractGameJoinPrice(detailsMetadata));
     if (fromJoinPrice != null && fromJoinPrice > 0) return Math.round(fromJoinPrice);
+
+    // Legacy record without a canonical price and without a resolvable exact
+    // court price: keep the stored share only as a fail-open display value.
+    if (
+      !storedIsCanonical
+      && detailsSplitOrdinaryPricing.settled
+      && fromSplit != null
+      && fromSplit > 0
+    ) {
+      return Math.round(fromSplit);
+    }
     return null;
   }, [
     activeGameRecord,
     detailsSplitPaymentMetadata,
     detailsMetadata,
+    detailsSplitOrdinaryPricing.price?.shareAmount,
+    detailsSplitOrdinaryPricing.settled,
     detailsSplitShareCount,
     splitPaymentPromoConfig,
   ]);

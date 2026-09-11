@@ -54,6 +54,8 @@ import {
   resolveSubscriptionCategoryDailyLimitErrorMessage,
 } from "../../utils/subscriptionCategoryDailyLimit";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
+import { hasCanonicalSplitSharePrice, resolveSplitDisplayShareAmount } from "./splitOrdinaryPricing";
+import { useSplitOrdinaryPrice } from "./useSplitOrdinaryPrice";
 import { createLocalMembershipId } from "./localMembershipGeneration";
 import {
   SubscriptionUsageShadowPanel,
@@ -880,6 +882,26 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     });
   }, [game, splitPaymentPromoConfig]);
 
+  const splitPaymentForPricing = useMemo(() => resolveSplitPaymentMetadata(game), [game]);
+  const splitStoredShareAmount = useMemo(() => getSplitShareAmount(game), [game]);
+  const splitStoredPriceIsCanonical = useMemo(
+    () => hasCanonicalSplitSharePrice(splitPaymentForPricing),
+    [splitPaymentForPricing],
+  );
+  const splitPricingShareCount = useMemo(
+    () => getSplitShareCount(game)
+      ?? (!game || resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4),
+    [game],
+  );
+  const splitOrdinaryPricing = useSplitOrdinaryPrice({
+    booking: game?.booking ?? null,
+    metadata: isRecord(game?.metadata) ? game.metadata : null,
+    splitPayment: splitPaymentForPricing,
+    shareCount: splitPricingShareCount,
+    enabled: Boolean(game && splitPricingGameId),
+  });
+  const resolvedSplitOrdinaryShareAmount = splitOrdinaryPricing.price?.shareAmount ?? null;
+
   useEffect(() => {
     if (subscriptionUsageShadowEnabled) return;
     if (!game || !profile) return;
@@ -1427,6 +1449,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             })
           : null;
         const shareAmount = promoShareAmount
+          ?? resolvedSplitOrdinaryShareAmount
           ?? getSplitShareAmount(actualGame)
           ?? (shareCount === 2 ? 5000 : 2500);
         const paymentRef = generatePaymentRef();
@@ -1827,6 +1850,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       previewSubscriptionUsageShadow,
       profile,
       rejectSubscriptionUsageShadowAction,
+      resolvedSplitOrdinaryShareAmount,
       splitPaymentPromoConfig,
       subscriptionUsageShadowJoinPreview,
       subscriptionUsageShadowEnabled,
@@ -1906,7 +1930,13 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const stationLabel = game.booking?.studioName || "Станция";
   const alreadyJoined = myDecision === "JOINED";
   const splitPaymentGame = isSplitPaymentGame(game);
-  const splitShareAmount = resolvedSplitPromoShareAmount ?? getSplitShareAmount(game);
+  const splitShareAmount = resolveSplitDisplayShareAmount({
+    promoShareAmount: resolvedSplitPromoShareAmount,
+    ordinaryShareAmount: resolvedSplitOrdinaryShareAmount,
+    ordinarySettled: splitOrdinaryPricing.settled,
+    storedShareAmount: splitStoredShareAmount,
+    storedIsCanonical: splitStoredPriceIsCanonical,
+  });
   const splitShareCount = getSplitShareCount(game) ?? (resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4);
   const canPrimaryAction = submitting === null
     && !confirmingSplitPaymentRef
