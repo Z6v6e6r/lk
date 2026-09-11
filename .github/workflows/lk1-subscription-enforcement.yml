@@ -376,6 +376,7 @@ jobs:
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
+          scripts/tests/subscriptionHubLimitPatch.test.mjs
           scripts/tests/subscriptionStatusPricePatch.test.mjs
           scripts/tests/piterAtomicActivationTools.test.mjs
           scripts/tests/lk1SubscriptionActivationPacket.test.mjs
