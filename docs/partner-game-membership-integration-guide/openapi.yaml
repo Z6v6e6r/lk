@@ -1,0 +1,224 @@
+openapi: 3.1.0
+info:
+  title: PadlHub Partner Game Membership API
+  version: 0.2.0-pilot
+  description: >
+    Три метода, которыми доверенный M2M-клиент добавляет внешнего игрока в открытую
+    игру PadlHub и создаёт booking в Viva на технического клиента. Расчёт происходит
+    у партнёра; PadlHub денег не проводит, а сохраняет проекцию PAID/EXTERNAL_PARTNER.
+    Базовый URL, credentials и mTLS-сертификат выдаются отдельно; в спецификации их нет.
+servers:
+  - url: https://{issuedHost}
+    description: Хост выдаётся приватно вместе с доступами
+    variables:
+      issuedHost:
+        default: issued-host.invalid
+        description: Точный Host/SNI из комплекта подключения
+tags:
+  - name: Members
+  - name: Operations
+security:
+  - PartnerProof: []
+paths:
+  /lk/integrations/v1/open-games/{gameId}/members:
+    post:
+      tags: [Members]
+      operationId: addExternalMember
+      summary: Добавить внешнего игрока в открытую игру
+      description: >
+        Требует scope members:add. Создаёт booking в Viva на технического клиента и
+        локальную проекцию оплаты PAID/EXTERNAL_PARTNER.
+      parameters:
+        - $ref: "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMemberRequest"
+      responses:
+        "201":
+          description: Первая успешная обработка
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipResponse"
+        "200":
+          description: Идемпотентный повтор завершённой операции
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipResponse"
+        "202":
+          description: Результат неизвестен; прочитать операцию
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResponse"
+        "400": { $ref: "#/components/responses/ClientError" }
+        "401": { $ref: "#/components/responses/ClientError" }
+        "403": { $ref: "#/components/responses/ClientError" }
+        "409": { $ref: "#/components/responses/ClientError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /lk/integrations/v1/open-games/{gameId}/members/{membershipId}:
+    delete:
+      tags: [Members]
+      operationId: removeOwnedMember
+      summary: Удалить только собственный membership
+      description: Требует scope members:remove. Тело строго {}.
+      parameters:
+        - $ref: "#/components/parameters/GameId"
+        - name: membershipId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              maxProperties: 0
+      responses:
+        "200":
+          description: Удалено или идемпотентный повтор
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemovedMembershipResponse"
+        "202":
+          description: Результат неизвестен; прочитать операцию
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResponse"
+        "400": { $ref: "#/components/responses/ClientError" }
+        "403": { $ref: "#/components/responses/ClientError" }
+        "404": { $ref: "#/components/responses/ClientError" }
+        "409": { $ref: "#/components/responses/ClientError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /lk/integrations/v1/operations/{operationId}:
+    get:
+      tags: [Operations]
+      operationId: readOwnOperation
+      summary: Прочитать состояние своей операции
+      description: Требует scope operations:read. Тело не отправляется.
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Состояние операции
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResponse"
+        "404": { $ref: "#/components/responses/ClientError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+components:
+  securitySchemes:
+    PartnerProof:
+      type: apiKey
+      in: header
+      name: X-PadlHub-Signature
+      description: >
+        Полный proof: X-PadlHub-Client-Id, X-PadlHub-Audience, X-PadlHub-Key-Id,
+        X-PadlHub-Timestamp, X-PadlHub-Nonce, X-PadlHub-Signature, Idempotency-Key,
+        X-Correlation-ID и mTLS. См. SIGNING.md.
+  parameters:
+    GameId:
+      name: gameId
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$" }
+  responses:
+    ClientError:
+      description: Ошибка клиента
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Endpoint выключен или runtime не готов
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    AddMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [externalPlayerId, displayName, payment]
+      properties:
+        externalPlayerId: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" }
+        displayName: { type: string, minLength: 1 }
+        payment:
+          type: object
+          additionalProperties: false
+          required: [reference, paidAt, amountMinor, currency]
+          properties:
+            reference: { type: string, minLength: 1 }
+            paidAt: { type: string, format: date-time }
+            amountMinor: { type: integer, minimum: 0, maximum: 100000000 }
+            currency: { type: string, pattern: "^[A-Z]{3}$" }
+    MembershipResponse:
+      type: object
+      required: [operationId, membership]
+      properties:
+        operationId: { type: string, format: uuid }
+        membership:
+          type: object
+          required: [membershipId, gameId, externalPlayerId, state, paymentStatus, settlementSource]
+          properties:
+            membershipId: { type: string, format: uuid }
+            gameId: { type: string }
+            externalPlayerId: { type: string }
+            state: { type: string, enum: [ACTIVE] }
+            paymentStatus: { type: string, enum: [PAID] }
+            settlementSource: { type: string, enum: [EXTERNAL_PARTNER] }
+    RemovedMembershipResponse:
+      type: object
+      required: [operationId, membership]
+      properties:
+        operationId: { type: string, format: uuid }
+        membership:
+          type: object
+          required: [membershipId, gameId, externalPlayerId, state]
+          properties:
+            membershipId: { type: string, format: uuid }
+            gameId: { type: string }
+            externalPlayerId: { type: string }
+            state: { type: string, enum: [REMOVED] }
+    OperationResponse:
+      type: object
+      required: [operation]
+      properties:
+        operation:
+          type: object
+          required: [operationId, action, state, createdAt, updatedAt]
+          properties:
+            operationId: { type: string, format: uuid }
+            action: { type: string, enum: [ADD_MEMBER, REMOVE_MEMBER] }
+            state:
+              type: string
+              enum: [RECEIVED, SLOT_RESERVED, VIVA_PENDING, COMPLETED, UNKNOWN, FAILED]
+            gameId: { type: [string, "null"] }
+            membershipId: { type: [string, "null"], format: uuid }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            error: { type: [string, "null"] }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            operationId: { type: [string, "null"] }
+            correlationId: { type: [string, "null"] }

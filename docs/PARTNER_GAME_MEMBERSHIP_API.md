@@ -1,5 +1,10 @@
 # Тестовый Partner Game Membership API
 
+Партнёрский комплект для интеграции: [руководство](partner-game-membership-integration-guide/README.md)
+(методы, подпись, ошибки, лимиты, подключение, примеры). Этот файл — полный контракт;
+разделы §4.1, §7, §8, §10 и §11 содержат внутренние детали PadlHub (Viva env, коллекции
+Mongo, audit/алерты, packet, rollback) и партнёру не предназначены.
+
 Для подготовки клиента без доступа к среде:
 [офлайн-комплект из трёх файлов с пятью эталонными vectors](partner-game-membership-kit/README.md).
 Это public synthetic contract test, не боевые настройки и не подтверждение deploy.
