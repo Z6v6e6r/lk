@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  assertStatusPriceLiveBaseline,
   buildFocusedStatusPriceCandidate,
   STATUS_PRICE_DEPLOYMENT_ID,
   STATUS_PRICE_LIVE_CONTRACT,
@@ -90,6 +91,32 @@ test("status price builder fails closed on preimage, candidate and change budget
 });
 
 const fixture = process.env.SUBSCRIPTION_STATUS_PRICE_LIVE_FIXTURE;
+test("status price generation rejects any live baseline other than the reviewed preimage", () => {
+  const source = [
+    { id: "f9575c8726e29196", type: "tab", label: "LK Tournaments" },
+    ...Array.from({ length: STATUS_PRICE_LIVE_CONTRACT.httpInputCount },
+      (_, index) => ({ id: `synthetic-http-${index}`, type: "http in", method: "get", url: `/synthetic/${index}` })),
+  ];
+  const baseline = {
+    sourceSha256: STATUS_PRICE_LIVE_CONTRACT.sourceSha256,
+    nodeCount: STATUS_PRICE_LIVE_CONTRACT.nodeCount,
+    source,
+  };
+  assert.equal(assertStatusPriceLiveBaseline(baseline), true);
+  assert.throws(() => assertStatusPriceLiveBaseline({ ...baseline, sourceSha256: "0".repeat(64) }), /baseline changed/);
+  assert.throws(() => assertStatusPriceLiveBaseline({ ...baseline, nodeCount: baseline.nodeCount - 1 }), /baseline changed/);
+  assert.throws(
+    () => assertStatusPriceLiveBaseline({ ...baseline, source: [...source, { id: "extra-http", type: "http in" }] }),
+    /HTTP input count changed/,
+  );
+  assert.throws(
+    () => assertStatusPriceLiveBaseline({
+      ...baseline,
+      source: source.map((node) => (node.id === "f9575c8726e29196" ? { ...node, disabled: true } : node)),
+    }),
+    /tab contract mismatch/,
+  );
+});
 test("fresh private preimage composes exactly, keeps topology and reverses structurally", { skip: !fixture }, () => {
   const liveBytes = fs.readFileSync(fixture);
   const built = buildFocusedStatusPriceCandidate(liveBytes);
