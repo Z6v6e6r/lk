@@ -80,3 +80,58 @@ Rollback: вернуть preimage и убрать `include`, затем `nginx -
 - Локальные проверки shared-adapter/overlay/candidate/generation: **338/338 PASS**.
 - Живые операции (snapshot, `nginx -t/-T`, reload, install, probes, активация):
   **не выполнялись**. Deploy и activation остаются отдельными разрешениями.
+
+## Снимок 147 от 2026-09-11 (read-only)
+
+`3170594-cd19972`, nginx 1.24.0 (Ubuntu), приватные receipts вне Git
+(`/private/tmp/partner-nginx-443-20260911/`). Сертификаты и ключи не читались.
+
+Корневой `http{}` (`/etc/nginx/nginx.conf`):
+
+```text
+worker_processes auto;
+ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers on;
+gzip on;
+# server_tokens off;  (закомментирован, значит default on)
+```
+
+`include /etc/nginx/conf.d/*.conf;` идёт до `include /etc/nginx/sites-enabled/*;`.
+
+Наблюдения, важные для shared 443:
+
+- **`default_server` не задан нигде.** Первый по порядку включения `server`-блок на 443
+  становится неявным default. Порядок: `kozlovatv.ru`, `moscowpadelday.ru`,
+  `padlhub.su`, `score-padlhub-disabled.conf`, `zver.tw1.ru`. Наш блок не претендует
+  на default, поэтому ничего не перехватывает.
+- **В `sites-enabled` лежат две не-dot копии `padlhub.su`** — `padlhub.su.backup-padel-day-…`
+  и `padlhub.su.pre-547ee2e-…`. Обе включаются glob'ом и дублируют
+  `server_name padlhub.su www.padlhub.su` (nginx при этом предупреждает о конфликте имён).
+  Это существующая проблема гигиены каталога, не наша; трогать в этом этапе нельзя,
+  но при проверке «остальных сайтов» её надо учесть как baseline.
+- Другие 443-блоки используют `listen 443 ssl http2` и подключают
+  `/etc/letsencrypt/options-ssl-nginx.conf` (`ssl_protocols TLSv1.2 TLSv1.3;`,
+  `ssl_prefer_server_ciphers off;`, Mozilla-список ciphers). Наш блок — HTTP/1.1
+  (`listen 443 ssl;` без `http2`) и задаёт свои TLS-параметры.
+- `conf.d/*.conf` объявляют только `map`, `log_format` и два `limit_req_zone`
+  (`lk_subscription_*`, `lk_tournament_*`) на уровне `http{}`. Коллизий с нашими
+  `pgm_v02_*` зонами нет.
+- Корневой `ssl_protocols` содержит TLSv1/1.1, но это не влияет на наш хост: блок
+  объявляет `ssl_protocols TLSv1.2 TLSv1.3` сам и дополнительно отдаёт `403`, если
+  фактический `$ssl_protocol` ниже 1.2.
+
+По итогам снимка генератор overlay сделан самодостаточным: добавлены явные
+`ssl_prefer_server_ciphers off`, `ssl_ciphers` (тот же Mozilla-список, что уже
+используется на хосте), `ignore_invalid_headers on` и `underscores_in_headers off`,
+чтобы блок не зависел от общего профиля.
+
+### Что осталось до применения
+
+1. `nginx -t` на копии дерева с подключённым overlay (без записи в живой файл).
+2. Атомарная установка overlay + `include`, preimage сохранён.
+3. `nginx -t` на живом дереве, затем `reload`.
+4. Probes: TLS 1.2/1.3, отказ 1.0/1.1, `421` при чужом SNI/Host, `403` без mTLS,
+   `404` вне allowlist, `429`, `no-store`, отсутствие CORS.
+5. Выборочная проверка остальных сайтов на 443 (включая baseline-конфликт
+   дублированных `padlhub.su`).
+6. Реализовать `verifyPartnerProductionIngress()` — сейчас `UNSUPPORTED_INGRESS_ADAPTER`.

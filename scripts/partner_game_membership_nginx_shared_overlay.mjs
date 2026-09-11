@@ -118,6 +118,11 @@ server {
   ssl_verify_client on;
   ssl_verify_depth 1;
   ssl_protocols TLSv1.2 TLSv1.3;
+  # Declare the remaining inherited controls explicitly instead of relying on the
+  # shared http{} profile, whose root ssl_protocols/prefer_server_ciphers and header
+  # defaults are not part of the reviewed partner profile.
+  ssl_prefer_server_ciphers off;
+  ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
   ssl_early_data off;
   ssl_session_tickets off;
   ssl_session_cache off;
@@ -129,6 +134,8 @@ server {
   large_client_header_buffers 7 2k;
   client_header_timeout 5s;
   client_body_timeout 5s;
+  ignore_invalid_headers on;
+  underscores_in_headers off;
   keepalive_timeout 0;
   send_timeout 15s;
   add_header Cache-Control no-store always;
