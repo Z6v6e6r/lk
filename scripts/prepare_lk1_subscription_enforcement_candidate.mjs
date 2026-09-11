@@ -45,12 +45,12 @@ export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
   }),
   Object.freeze({
     id: "c165e43eba668c25",
-    sourceSha256: "bd5be3995b53fc6b013ba11635402ecaa3d840b8f78e3543a16115d01c7d8f5f",
+    sourceSha256: "cf4beffffedcd2fb8efaa2efff6564cdbf2d8417c9d71d9305d8533448c69d3d",
     reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
   }),
   Object.freeze({
     id: "91dded2dc8cfebe4",
-    sourceSha256: "4fe051ed4204265ad4cb5896b1bfbfd1afd4f0a247a763e6c2ad680fb8cb9b91",
+    sourceSha256: "7d8e8e1f067e46845824f86471749565c9dde83b48e8915480ea0f92af049004",
     reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
   }),
   Object.freeze({
