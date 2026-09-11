@@ -328,6 +328,9 @@ test('card copy follows the approved mock: free hour, footer note and five-visit
   assert.match(sectionSource, /stopPlans/);
   assert.doesNotMatch(cssSource, /\.subscription-rail-dots/);
   assert.match(cssSource, /\.subscription-plan-switcher button\[aria-current='true'\]/);
+  // Phones fit the hero, one card and the switcher on a single screen.
+  assert.match(cssSource, /\.subscription-storefront__canvas \{ padding: 12px; gap: 14px; \}/);
+  assert.match(cssSource, /\.subscription-card__panel \{ min-height: 0; padding: 16px 14px 16px; gap: 14px; \}/);
 });
 
 

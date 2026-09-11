@@ -928,21 +928,28 @@
 
 /* Embedded Tilda columns follow their own width even on a wide desktop. */
 @container subscription-storefront (max-width: 719px) {
-  .subscription-storefront__canvas { padding: 16px; gap: 24px; }
-  .subscription-storefront__hero { min-height: 0; font-size: 28px; }
-  .subscription-storefront__hero h1 { font-size: 28px; }
-  .subscription-storefront__hero p { font-size: 14px; line-height: 1.2; }
+  /* Phone: hero, one card and the switcher have to fit one screen. */
+  .subscription-storefront__canvas { padding: 12px; gap: 14px; }
+  .subscription-storefront__hero { min-height: 0; font-size: 24px; gap: 10px; }
+  .subscription-storefront__hero h1 { font-size: 24px; }
+  .subscription-storefront__hero p { max-width: 320px; font-size: 13px; line-height: 1.2; }
   .subscription-storefront__mark { right: 2em; top: -0.52em; width: 1.2em; }
+  .subscription-storefront__sections { gap: 14px; }
+  .subscription-plan-switcher { margin-top: 14px; padding: 4px; gap: 2px; }
+  .subscription-plan-switcher button { min-height: 38px; padding: 6px 8px; font-size: 14px; }
 }
 
 /* Keep Figma spacing on full-size cards, even in a narrower host window. */
 @container subscription-card (max-width: 400px) {
-  .subscription-card__panel { min-height: 0; padding: 20.5px 18.5px 28.5px; gap: 20px; }
-  .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 20px; }
-  .subscription-card__price strong { font-size: 28px; }
+  .subscription-card__panel { min-height: 0; padding: 16px 14px 16px; gap: 14px; }
+  .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 14px; }
+  .subscription-card__price strong { font-size: 26px; }
   .subscription-card__benefit-group li { font-size: 14px; }
-  .subscription-card__benefit-group ul { gap: 10px; }
-  .subscription-card__progress { padding-inline: 16px; }
+  .subscription-card__benefit-group ul { gap: 8px; }
+  .subscription-card__benefit-group h3 { margin-bottom: 12px; }
+  .subscription-card__progress { padding-inline: 12px; }
+  .subscription-card__cta { min-height: 44px; padding: 12px 18px; font-size: 15px; }
+  .subscription-card__note { font-size: 11px; }
 }
 
 /* Figma uses cap-height trimming in prices and 132% leading in wrapped discount copy. */

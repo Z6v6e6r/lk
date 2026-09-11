@@ -40,9 +40,9 @@ function page(search = '') {
     'preview',
   ].join('.');
   return `<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>Preview /subsription</title>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Preview /subsription</title>
 <style>body{margin:0;font-family:Arial,sans-serif}body>header{padding:16px;background:#111;color:#fff}
-code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8px 16px;font:12px/1.4 monospace;color:#444;white-space:pre-wrap}</style>
+code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8px 16px;font:12px/1.4 monospace;color:#444;white-space:pre-wrap;overflow-wrap:anywhere}</style>
 </head><body>
 <header>Preview витрины /subsription — оплата создаётся виджетом. Сценарий: ${auth ? 'авторизован' : 'без входа'}.</header>
 <div id="padlhub-subscriptions"></div>
