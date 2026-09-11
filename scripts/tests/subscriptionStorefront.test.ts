@@ -3,7 +3,10 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { billingFromStatus, canContinue, friendshipBillingOptions, scopedStorefrontStatuses } from '../../src/components/subscription-storefront/catalog.ts';
+import {
+  billingFromStatus, canContinue, energy5BillingOptions, friendshipBillingOptions, requiresAnnualTermsConsent,
+  scopedStorefrontStatuses,
+} from '../../src/components/subscription-storefront/catalog.ts';
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
 
@@ -59,7 +62,8 @@ function loadPaymentAdapter(): {
     resolveTournamentSubscriptionDirectProductId: (value: string) => (
       value === 'academy' ? '9eb8a7a4-c195-492a-95e4-3fb82899ac10'
         : value === 'ra' ? 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759'
-          : null
+          : value === 'energy5' ? 'dfa72adf-233b-4285-8d69-e5eab4234fbe'
+            : null
     ),
   };
   const context = {
@@ -121,6 +125,36 @@ test('storefront CTA creates the payment in the widget instead of navigating to 
   assert.match(paymentSource, /apiCreateTournamentSubscriptionPurchase/);
   assert.match(paymentSource, /apiBuySubscroption/);
   assert.match(pageSource, /window\.location\.href = outcome\.paymentUrl/);
+});
+
+test('annual terms are confirmed only after the CTA press, never above the storefront', () => {
+  const pageSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
+  const storefrontIndex = pageSource.indexOf('<SubscriptionStorefront');
+  const consentIndex = pageSource.indexOf('className="subscription-consent"');
+  assert.ok(storefrontIndex > 0, 'the storefront render disappeared');
+  assert.ok(consentIndex > storefrontIndex, 'the terms row must not render above the storefront');
+  // The row is inside the dialog that the CTA opens, not in the initial page.
+  assert.match(pageSource, /const \[consentRequested, setConsentRequested\] = useState\(false\)/);
+  assert.match(pageSource, /consentRequested && isAuthenticated/);
+  assert.match(pageSource, /aria-labelledby="subscription-consent-title"/);
+  assert.match(pageSource, /requiresAnnualTermsConsent\(billingOptionId, annualTermsAccepted\)/);
+  assert.equal(
+    pageSource.slice(storefrontIndex).match(/className="subscription-consent"/g)?.length,
+    1,
+    'the terms row must exist once, in the confirmation dialog',
+  );
+  for (const [optionId, accepted, expected] of [
+    ['annual', false, true],
+    ['annual', true, false],
+    ['monthly', false, false],
+    ['monthly-two-hours', false, false],
+  ] as const) {
+    assert.equal(
+      requiresAnnualTermsConsent(optionId, accepted),
+      expected,
+      `${optionId} with accepted=${accepted}`,
+    );
+  }
 });
 
 test('storefront ships the cabinet auth styles it needs for the shared AuthForm', () => {
@@ -187,7 +221,7 @@ test('friendship variants retain independent prices, inventory and availability'
   assert.deepEqual(options.map(option => option.priceMinor), [980000, 1980000, 5680000]);
   assert.deepEqual(options.map(option => option.ctaDisabled), [false, true, true]);
   assert.equal(options[1].progress, undefined);
-  assert.equal(options[1].ctaLabel, 'Скоро');
+  assert.equal(options[1].ctaLabel, 'Скоро. Может быть');
   assert.equal(options[2].progress?.current, 10);
   assert.equal(options[2].priceSuffix, '/ год');
   assert.ok(friendshipBillingOptions([monthly, { ...annual, canPurchase: true }], true).every(option => option.ctaDisabled));
@@ -220,6 +254,10 @@ test('payment adapter binds every sold billing option to its own LK1 counter', a
     { counterKey: 'ra', directProductId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planType: 'friendship' },
   );
   assert.deepEqual(
+    target(adapter, 'energy5', 'monthly'),
+    { counterKey: 'energy5', directProductId: 'dfa72adf-233b-4285-8d69-e5eab4234fbe', planType: 'friendship' },
+  );
+  assert.deepEqual(
     target(adapter, 'academy', 'monthly'),
     { counterKey: 'academy', directProductId: '9eb8a7a4-c195-492a-95e4-3fb82899ac10', planType: 'friendship' },
   );
@@ -237,6 +275,65 @@ test('payment adapter binds every sold billing option to its own LK1 counter', a
   assert.equal(adapter.calls.bought.length, 1);
   assert.equal(adapter.calls.bought[0].productId, 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759');
   assert.equal(adapter.calls.created.length, 1);
+
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'energy5', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
+  assert.equal(adapter.calls.bought.length, 2);
+  assert.equal(adapter.calls.bought[1].productId, 'dfa72adf-233b-4285-8d69-e5eab4234fbe');
+});
+
+test('five-visit pass keeps its API price and disables the CTA without one', () => {
+  const pass = energy5BillingOptions({ ...available, counterKey: 'energy5', priceMinor: 1980000, unlimited: true, remainingCount: 0 });
+  assert.equal(pass.length, 1);
+  assert.equal(pass[0].id, 'monthly');
+  assert.equal(pass[0].label, '5 занятий');
+  assert.equal(pass[0].priceSuffix, '/ 5 занятий');
+  assert.equal(pass[0].priceMinor, 1980000);
+  assert.equal(pass[0].ctaLabel, 'Оформить абонемент');
+  assert.equal(pass[0].progress, undefined);
+  assert.equal(pass[0].ctaDisabled, false);
+  assert.equal(energy5BillingOptions(undefined).length, 0);
+  const soldOut = energy5BillingOptions({ ...available, counterKey: 'energy5', canPurchase: false });
+  assert.equal(soldOut.length, 1);
+  assert.equal(soldOut[0].ctaDisabled, true);
+  assert.equal(soldOut[0].ctaLabel, 'Сейчас недоступно');
+  for (const priceMinor of [null, 0, NaN]) {
+    const unavailable = energy5BillingOptions({ ...available, counterKey: 'energy5', priceMinor, unlimited: true, remainingCount: 0 });
+    assert.equal(unavailable.length, 0, `price ${priceMinor}`);
+  }
+  // Every 30-day variant names its period instead of a bare «мес.».
+  const monthly = friendshipBillingOptions([{ ...available, counterKey: 'friendship', priceMinor: 980000 }]);
+  assert.deepEqual(monthly.map(option => option.priceSuffix), ['/ 30 дней', '/ 30 дней', '/ год']);
+});
+
+test('card copy follows the approved mock: free hour, footer note and five-visit pass', () => {
+  const presentationSource = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
+  assert.equal((presentationSource.match(/title: '1 час в день бесплатно:'/g) || []).length, 4);
+  assert.match(presentationSource, /kind: 'note'/);
+  assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*shortLabel: 'Энергия',\s*labelKind: 'plain',/);
+  assert.match(presentationSource, /title: 'Форматы на выбор:'/);
+  assert.match(presentationSource, /label: 'До 4 активных записей'/);
+  assert.doesNotMatch(presentationSource, /на 2 недели вперёд/);
+  // The «Другие действия» menu was removed from the public page.
+  const storefrontSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionStorefront.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(storefrontSource, /subscription-storefront__more/);
+  // The back arrow overlays the hero band instead of taking its own row.
+  const cssSource = readFileSync(new URL('../../src/components/subscription-storefront/subscriptions.css', import.meta.url), 'utf8');
+  assert.match(cssSource, /\.subscription-storefront__canvas \{ position: relative; \}/);
+  assert.match(cssSource, /\.subscription-storefront__navigation \{\s*position: absolute;/);
+  // The card pager is a named switcher, not a dot indicator.
+  const sectionSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionOfferSection.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(sectionSource, /subscription-rail-dots/);
+  assert.match(sectionSource, /className="subscription-plan-switcher"/);
+  assert.match(sectionSource, /plan\.shortLabel \?\? plan\.label/);
+  assert.match(sectionSource, /stopPlans/);
+  assert.doesNotMatch(cssSource, /\.subscription-rail-dots/);
+  assert.match(cssSource, /\.subscription-plan-switcher button\[aria-current='true'\]/);
+  // Phones fit the hero, one card and the switcher on a single screen.
+  assert.match(cssSource, /\.subscription-storefront__canvas \{ padding: 12px; gap: 14px; \}/);
+  assert.match(cssSource, /\.subscription-card__panel \{ min-height: 0; padding: 16px 14px 16px; gap: 14px; \}/);
+  // Short phones trim the remaining chrome and keep the arrow off the title.
+  assert.match(cssSource, /@media \(max-height: 700px\)/);
+  assert.match(cssSource, /\.subscription-storefront__nav-button \{ width: 38px; height: 38px; \}/);
 });
 
 

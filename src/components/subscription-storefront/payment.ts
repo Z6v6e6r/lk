@@ -25,7 +25,7 @@ const PENDING_PAYMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export type StorefrontBillingOptionId = 'monthly' | 'annual' | 'monthly-two-hours';
 
 export interface StorefrontBillingTarget {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy';
+  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5';
   /** Direct product purchase (`apiBuySubscroption`) when the plan has a catalog product. */
   directProductId: string | null;
   /** Summer-plan purchase mode used for counter based plans. */
@@ -33,7 +33,7 @@ export interface StorefrontBillingTarget {
 }
 
 export interface PendingPaymentEntry {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | null;
+  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | null;
   paymentRef: string;
   planId: StorefrontBillingOptionId | null;
   campaignKey: string | null;
@@ -69,7 +69,7 @@ export function resolveStorefrontBillingTarget(
   if (planId === 'friendship') {
     return { counterKey: 'friendship', directProductId: null, planType: 'friendship' };
   }
-  if (planId === 'ra' || planId === 'academy') {
+  if (planId === 'ra' || planId === 'academy' || planId === 'energy5') {
     return {
       counterKey: planId,
       directProductId: resolveTournamentSubscriptionDirectProductId(planId),
@@ -116,6 +116,7 @@ export function clearStorefrontPaymentRef(): void {
 
 function normalizePendingCounterKey(value: string): PendingPaymentEntry['counterKey'] {
   return value === 'friendship' || value === 'network_friendship' || value === 'ra' || value === 'academy'
+    || value === 'energy5'
     ? value
     : null;
 }

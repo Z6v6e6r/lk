@@ -1,5 +1,17 @@
 # Журнал шагов
 
+## 2026-09-11 — Витрина `/subsription`: согласие после CTA и правки карточек
+
+- Сообщение о согласии с условиями годовой подписки убрано с верха страницы и открывается отдельным окном только после нажатия «Оформить подписку»; без отметки оплата не создаётся.
+- По семи browser-комментариям: одинаковая высота карточек, рамка «Дружбы» в цвете бейджа, CTA без заливки кроме РА, «/ 30 дней» вместо «мес.», «1 час в день бесплатно:», колонтитул «ⓘ До 4 активных записей на 2 недели вперёд», новая карточка «Абонемент «Энергия 5»» на существующем статусе `energy5`.
+- LOCAL: focused 13/13, TypeScript, ESLint, prod/dev IIFE builds и headless-проверка CTA на локальных заглушках (гость, «Дружба 30 дней», годовая) — PASS. Публичный статус `energy5`, продажа, выкладка, Tilda и main не проверялись; merge/push/deploy/live writes отсутствуют. См. `docs/SUBSCRIPTION_STOREFRONT_TILDA.md`.
+- Уточнения по второму кругу комментариев: колонтитул «До 4 активных записей», удалена кнопка «Другие действия», стрелка «Назад» наложена на полосу заголовка (мобильная карточка без прокрутки), убран чёрный фон заголовка в preview (host `header`).
+- Годовая «Дружба»: в локальной заглушке статуса выставлена одобренная цена 98 000 ₽ (9 800 000 minor). Сама витрина печатает цену из `network_friendship`-статуса, поэтому боевые 98 000 ₽ требуют включения флага `summer_subscription_network_friendship_price_98000_enabled` на Node-RED — отдельной живой операции; живой статус в этом проходе прочитать не удалось.
+- Переключатель карточек заменён на именованный (Дружба / РА / Академия / Энергия) по макету: пункт ведёт к своей карточке, активный — тёмная «пилюля»; точечный индикатор и его CSS удалены, добавлен `shortLabel` в модель и презентацию.
+- Мобильная посадка: уплотнены только контейнеры ≤719px/≤400px (canvas, hero, панель карточки, списки, CTA, переключатель), харнесс получил `meta viewport` и переносимый лог. Замер 393×852 — весь блок витрины (hero + карточка + переключатель) помещается в один экран; десктоп не изменился.
+- Подпись недоступной кнопки «месяц 2 часа»: «Скоро» → «Скоро. Может быть» (состояние disabled и запрет покупки не менялись).
+- 375px и короткие экраны: стрелка «Назад» уменьшена до 38px и прижата к углу (не перекрывает «И»), добавлен компактный режим `max-height: 700px`, баннер харнесса стал однострочным. Замер 375×667 — hero, карточка и переключатель помещаются в экран.
+
 ## 2026-09-11 — Split join: ordinary court price for records without a canonical share
 
 - Invitation (`/game_join`) and cabinet game-details join surfaces now re-price a split
@@ -19,7 +31,6 @@
   builds, eslint 0 errors (pre-existing warnings only). `test:night-e-acceptance` 125/126;
   the single failure is the pre-existing red `publicCreateFlow.devRouting` expectation.
   No merge, push, deploy or live data mutation.
-
 ## 2026-09-09 — Group training HAB 50% monetary discount, local stage
 
 - Added authenticated eligibility preview and crossed-out original/discounted one-time price with the exact subscription name. Existing HAB rule only; no promo stacking or visit consumption.

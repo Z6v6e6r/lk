@@ -63,6 +63,14 @@
   color: rgba(244, 246, 248, 0.86);
 }
 
+/* The annual terms confirmation reuses the login overlay shell, so the row has
+   to read on the dark panel instead of on the storefront canvas. */
+.subscription-auth-block .subscription-consent {
+  margin: 0 0 18px;
+  color: rgba(244, 246, 248, 0.9);
+  font-size: 15px;
+}
+
 .subscription-auth-block .auth-wrapper {
   min-height: auto;
   background: transparent;

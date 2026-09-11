@@ -40,11 +40,11 @@ function page(search = '') {
     'preview',
   ].join('.');
   return `<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>Preview /subsription</title>
-<style>body{margin:0;font-family:Arial,sans-serif}header{padding:16px;background:#111;color:#fff}
-code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8px 16px;font:12px/1.4 monospace;color:#444;white-space:pre-wrap}</style>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Preview /subsription</title>
+<style>body{margin:0;font-family:Arial,sans-serif}body>header{padding:6px 12px;background:#111;color:#fff;font-size:12px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8px 16px;font:12px/1.4 monospace;color:#444;white-space:pre-wrap;overflow-wrap:anywhere}</style>
 </head><body>
-<header>Preview витрины /subsription — оплата создаётся виджетом. Сценарий: ${auth ? 'авторизован' : 'без входа'}.</header>
+<header>Preview /subsription · оплата на заглушках · ${auth ? 'авторизован' : 'без входа'}</header>
 <div id="padlhub-subscriptions"></div>
 <pre id="preview-log">log:</pre>
 <script>
@@ -62,9 +62,11 @@ code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8
     if (url.indexOf('/lk/tournaments/summer-subscription/status') !== -1) {
       var scoped = url.indexOf('counterKey=') !== -1;
       var payload = scoped
+        // Approved HAB annual price (98 000 RUB); the live counter still returns
+        // 56 800 RUB until the price-98000 flag is enabled in Node-RED.
         ? [{ counterKey: 'network_friendship', inventoryId: 'preview', unlimited: false,
              planType: 'friendship', campaignKey: 'preview', productId: null,
-             priceMinor: 5680000, canPurchase: true, bindingReady: true,
+             priceMinor: 9800000, canPurchase: true, bindingReady: true,
              remainingCount: 10, totalLimit: 10, paidCount: 0, status: 'READY' }]
         : [
             { counterKey: 'friendship', inventoryId: 'preview', unlimited: false, planType: 'friendship',
@@ -76,6 +78,9 @@ code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8
             { counterKey: 'academy', inventoryId: 'preview', unlimited: false, planType: 'friendship',
               campaignKey: 'preview', productId: null, priceMinor: 2380000, canPurchase: true,
               bindingReady: true, remainingCount: 7, totalLimit: 100, paidCount: 93, status: 'READY' },
+            { counterKey: 'energy5', inventoryId: 'preview', unlimited: true, planType: 'friendship',
+              campaignKey: 'preview', productId: null, priceMinor: 1980000, canPurchase: true,
+              bindingReady: true, remainingCount: 0, totalLimit: 0, paidCount: 0, status: 'READY' },
           ];
       note('stub status <- ' + url);
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });

@@ -106,18 +106,72 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
 
-  const runScenario = async (query) => {
-    await send('Page.navigate', { url: `${previewUrl}/?${query}` });
-    await waitFor(send, "document.querySelectorAll('#padlhub-subscriptions button').length > 0");
+  /** Waits for the stubbed purchase, the stored ref and the bank redirect. */
+  const assertPurchaseReachedBank = async (query, expectedCounterKey) => {
+    // The purchase request and the redirect happen in the same tick, so capture
+    // the stub log before the bank page replaces the document.
+    const log = await waitFor(
+      send,
+      "document.getElementById('preview-log') && /stub purchase/.test(document.getElementById('preview-log').textContent) ? document.getElementById('preview-log').textContent : ''",
+      20_000,
+    );
+    const pending = await evaluate(send, "window.localStorage.getItem('padlhub_tournament_subscription_pending_refs') || ''");
+    await waitFor(send, "document.location.href.indexOf('/mock-bank') !== -1");
+    const bank = await evaluate(send, "document.getElementById('mock-bank')?.textContent || ''");
+    if (!/stub purchase/.test(log)) failures.push(`[${query}] purchase endpoint was not called: ${log}`);
+    if (!new RegExp(`"counterKey":"${expectedCounterKey}"`).test(log) || !/"planType":"friendship"/.test(log)) {
+      failures.push(`[${query}] purchase payload lost the ${expectedCounterKey} counter binding: ${log}`);
+    }
+    if (!new RegExp(`"paymentRef":"${expectedCounterKey}-summer-`).test(pending)) {
+      failures.push(`[${query}] pending payment was not stored for the bank return: ${pending}`);
+    }
+    if (!/MOCK BANK/.test(bank)) failures.push(`[${query}] bank page not reached`);
+    return {
+      log: log.replace(/\s+/g, ' ').trim().slice(-220),
+      pendingRefs: pending.slice(0, 160) || '(none)',
+      bank: bank.trim(),
+    };
+  };
 
-    const unauthCheck = await evaluate(send, `(() => {
-      const buttons = Array.from(document.querySelectorAll('#padlhub-subscriptions button'));
-      const cta = buttons.find(button => button.textContent.trim() === 'Оформить подписку');
+  const clickFriendshipCta = async (query) => {
+    const result = await evaluate(send, `(() => {
+      const card = document.querySelector('[data-plan-id="friendship"]');
+      if (!card) return 'card-missing';
+      const cta = Array.prototype.find.call(
+        card.querySelectorAll('button'),
+        (button) => button.textContent.trim() === 'Оформить подписку',
+      );
       if (!cta) return 'cta-missing';
       cta.click();
       return 'clicked';
     })()`);
-    if (unauthCheck !== 'clicked') failures.push(`[${query}] CTA not found`);
+    if (result !== 'clicked') failures.push(`[${query}] friendship CTA not clickable: ${result}`);
+  };
+
+  const runScenario = async (query) => {
+    const annual = query.includes('plan=annual');
+    await send('Page.navigate', { url: `${previewUrl}/?${query}` });
+    await waitFor(send, "document.querySelectorAll('#padlhub-subscriptions [data-plan-id]').length > 0");
+
+    // The annual terms row belongs to the checkout step, never to the page itself.
+    const termsBeforeCta = await evaluate(send, "document.querySelectorAll('.subscription-consent').length");
+    if (termsBeforeCta !== 0) failures.push(`[${query}] terms row rendered before the CTA press: ${termsBeforeCta}`);
+
+    if (annual) {
+      const selected = await evaluate(send, `(() => {
+        const card = document.querySelector('[data-plan-id="friendship"]');
+        const option = card && Array.prototype.find.call(
+          card.querySelectorAll('[role="radio"]'),
+          (node) => node.textContent.trim() === 'год',
+        );
+        if (!option) return 'option-missing';
+        option.click();
+        return 'selected';
+      })()`);
+      if (selected !== 'selected') failures.push(`[${query}] annual billing option is not selectable: ${selected}`);
+    }
+
+    await clickFriendshipCta(query);
 
     if (query.includes('auth=0')) {
       const overlay = await waitFor(
@@ -139,53 +193,54 @@ try {
       return { overlay: overlay.replace(/\s+/g, ' ').trim().slice(0, 120), form };
     }
 
-    const consent = await evaluate(send, `(() => {
-      const label = document.querySelector('.subscription-consent');
-      if (!label) return 'consent-missing';
-      const input = label.querySelector('input');
-      input.click();
-      return input.checked ? 'checked' : 'unchecked';
-    })()`);
-    if (consent !== 'checked') failures.push(`[${query}] consent checkbox not usable: ${consent}`);
+    if (!annual) return assertPurchaseReachedBank(query, 'friendship');
 
-    await send('Page.navigate', { url: `${previewUrl}/?auth=1` });
-    await waitFor(send, "document.querySelectorAll('#padlhub-subscriptions button').length > 0");
-    await evaluate(send, `(() => {
-      const label = document.querySelector('.subscription-consent input');
-      if (label && !label.checked) label.click();
-      const cta = Array.from(document.querySelectorAll('#padlhub-subscriptions button'))
-        .find(button => button.textContent.trim() === 'Оформить подписку');
-      cta.click();
-    })()`);
-
-    // The purchase request and the redirect happen in the same tick, so capture
-    // the stub log before the bank page replaces the document.
-    const log = await waitFor(
+    // Annual: the terms dialog opens on the CTA press and gates the payment.
+    const dialog = await waitFor(
       send,
-      "document.getElementById('preview-log') && /stub purchase/.test(document.getElementById('preview-log').textContent) ? document.getElementById('preview-log').textContent : ''",
-      20_000,
+      "document.querySelector('.subscription-auth-block') ? document.querySelector('.subscription-auth-block').textContent : ''",
     );
-    const pending = await evaluate(send, "window.localStorage.getItem('padlhub_tournament_subscription_pending_refs') || ''");
-    await waitFor(send, "document.location.href.indexOf('/mock-bank') !== -1");
-    const bank = await evaluate(send, "document.getElementById('mock-bank')?.textContent || ''");
-    if (!/stub purchase/.test(log)) failures.push(`[${query}] purchase endpoint was not called: ${log}`);
-    if (!/"counterKey":"friendship"/.test(log) || !/"planType":"friendship"/.test(log)) {
-      failures.push(`[${query}] purchase payload lost the friendship counter binding: ${log}`);
-    }
-    if (!/"paymentRef":"friendship-summer-/.test(pending)) {
-      failures.push(`[${query}] pending payment was not stored for the bank return: ${pending}`);
-    }
-    if (!/MOCK BANK/.test(bank)) failures.push(`[${query}] bank page not reached`);
-    return {
-      log: log.replace(/\s+/g, ' ').trim().slice(-220),
-      pendingRefs: pending.slice(0, 160) || '(none)',
-      bank: bank.trim(),
-    };
+    if (!/Оформление годовой подписки/.test(dialog)) failures.push(`[${query}] terms dialog missing: ${dialog}`);
+    if (!/условиями годовой подписки/.test(dialog)) failures.push(`[${query}] terms copy missing: ${dialog}`);
+
+    const gate = JSON.parse(await evaluate(send, `(() => {
+      const block = document.querySelector('.subscription-auth-block');
+      const checkbox = block && block.querySelector('.subscription-consent input');
+      const button = block && Array.prototype.find.call(block.querySelectorAll('.auth-btn'), () => true);
+      return JSON.stringify({
+        checkbox: Boolean(checkbox),
+        continueDisabled: button ? button.disabled : null,
+        purchaseCalled: /stub purchase/.test(document.getElementById('preview-log').textContent),
+      });
+    })()`));
+    if (!gate.checkbox) failures.push(`[${query}] terms checkbox missing in the dialog`);
+    if (gate.continueDisabled !== true) failures.push(`[${query}] continue button was usable before the terms were accepted`);
+    if (gate.purchaseCalled) failures.push(`[${query}] payment was created before the terms were accepted`);
+
+    const confirmed = await evaluate(send, `(() => {
+      const block = document.querySelector('.subscription-auth-block');
+      const checkbox = block && block.querySelector('.subscription-consent input');
+      if (!checkbox) return 'checkbox-missing';
+      checkbox.click();
+      const button = block && Array.prototype.find.call(
+        block.querySelectorAll('.auth-btn'),
+        (node) => /Продолжить оплату/.test(node.textContent),
+      );
+      if (!button) return 'continue-missing';
+      if (button.disabled) return 'continue-disabled';
+      button.click();
+      return 'continued';
+    })()`);
+    if (confirmed !== 'continued') failures.push(`[${query}] terms were not accepted: ${confirmed}`);
+
+    const purchase = await assertPurchaseReachedBank(query, 'network_friendship');
+    return { ...purchase, dialog: dialog.replace(/\s+/g, ' ').trim().slice(0, 120) };
   };
 
   const anonymous = await runScenario('auth=0');
   const authorized = await runScenario('auth=1');
-  console.log(JSON.stringify({ anonymous, authorized, failures }, null, 2));
+  const annualTerms = await runScenario('auth=1&plan=annual');
+  console.log(JSON.stringify({ anonymous, authorized, annualTerms, failures }, null, 2));
 } catch (error) {
   failures.push(`harness error: ${error instanceof Error ? error.message : String(error)}`);
   console.log(JSON.stringify({ failures }, null, 2));

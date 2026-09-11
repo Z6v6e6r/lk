@@ -182,6 +182,8 @@
   text-align: center;
   gap: 28px;
   font-size: clamp(28px, 7vw, 40px);
+  /* Host pages (Tilda blocks, local previews) style bare `header` elements. */
+  background: transparent;
 }
 
 .subscription-storefront__mark {
@@ -327,40 +329,47 @@
   stroke-linejoin: round;
 }
 
-.subscription-rail-dots {
+/* Named card switcher (replaces the dot indicator) under the rail. */
+.subscription-plan-switcher {
   display: flex;
-  justify-content: center;
+  width: min(100%, 464px);
+  margin: 24px auto 0;
+  padding: 6px;
+  align-items: stretch;
   gap: 4px;
-  margin-bottom: 12px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #ededed, 0 4px 16px #1f1e2014;
 }
 
-.subscription-rail-dots button {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  place-items: center;
+.subscription-plan-switcher button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  flex: 1 1 0;
   border: 0;
-  border-radius: 16px;
+  border-radius: 999px;
   background: transparent;
+  color: var(--subscription-text, #353436);
   cursor: pointer;
+  overflow: hidden;
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 160ms ease, color 160ms ease;
 }
 
-.subscription-rail-dots button::after {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 8px;
-  background: #d9d4e8;
-}
-
-.subscription-rail-dots button[aria-current='true']::after {
-  width: 24px;
-  background: var(--subscription-accent);
+.subscription-plan-switcher button[aria-current='true'] {
+  color: #fff;
+  background: #1c1b1f;
+  font-weight: 700;
 }
 
 .subscription-rail-arrow:focus-visible,
-.subscription-rail-dots button:focus-visible {
+.subscription-plan-switcher button:focus-visible {
   outline: 3px solid var(--subscription-accent);
   outline-offset: 3px;
 }
@@ -371,7 +380,8 @@
   min-width: 0;
   padding: 0;
   flex: 0 0 var(--subscription-card-width);
-  align-items: flex-start;
+  /* Cards differ in copy length: stretching keeps every card the same height. */
+  align-items: stretch;
   scroll-snap-align: center;
 }
 
@@ -385,7 +395,7 @@
   flex-direction: column;
   gap: 12px;
   border-radius: 32px;
-  background: linear-gradient(180deg, #9c80f2 0%, #fafafa 100%);
+  background: linear-gradient(180deg, var(--subscription-card-frame, #9c80f2) 0%, #fafafa 100%);
 }
 
 .subscription-card--no-progress {
@@ -416,7 +426,7 @@
 .subscription-card__panel {
   display: flex;
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 32px;
   min-height: 648px;
@@ -433,6 +443,8 @@
   flex-direction: column;
   gap: 32px;
 }
+
+.subscription-card__body { flex: 1 1 auto; }
 
 .subscription-card__lightning {
   display: block;
@@ -451,6 +463,16 @@
   padding: 0;
   color: #fff;
   background: transparent;
+}
+
+.subscription-card__tag--plain > span {
+  color: var(--subscription-text, #353436);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .subscription-card__tag--art {
@@ -590,10 +612,10 @@
   min-height: 51px;
   height: auto;
   padding: 16px 24px;
-  border: 0;
+  border: 1px solid #dedce4;
   border-radius: 14px;
-  color: #fff;
-  background: var(--subscription-accent);
+  color: var(--subscription-text, #353436);
+  background: #fff;
   cursor: pointer;
   font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
   font-size: 16px;
@@ -602,11 +624,13 @@
   letter-spacing: 0.01em;
   transition:
     background 160ms ease,
+    border-color 160ms ease,
     transform 160ms ease;
 }
 
 .subscription-card__cta:hover {
-  background: var(--subscription-accent-strong);
+  background: #f6f5fa;
+  border-color: #cbc8d6;
 }
 
 .subscription-card__cta:active {
@@ -614,19 +638,67 @@
 }
 
 .subscription-card__cta:disabled {
-  color: #fff;
-  background: #e8e8e9;
+  color: #9b9aa2;
+  background: #fff;
+  border-color: #ececf0;
   cursor: not-allowed;
   transform: none;
 }
 
 .subscription-card__cta:disabled:hover {
+  background: #fff;
+  border-color: #ececf0;
+}
+
+/* Figma marks РА as the featured plan: only its CTA keeps the accent fill. */
+.subscription-card--featured .subscription-card__cta {
+  border-color: transparent;
+  color: #fff;
+  background: var(--subscription-accent);
+}
+
+.subscription-card--featured .subscription-card__cta:hover {
+  background: var(--subscription-accent-strong);
+  border-color: transparent;
+}
+
+.subscription-card--featured .subscription-card__cta:disabled {
+  color: #fff;
+  background: #e8e8e9;
+  border-color: transparent;
+}
+
+.subscription-card--featured .subscription-card__cta:disabled:hover {
   background: #e8e8e9;
 }
 
 .subscription-card__benefits {
-  display: grid;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   gap: 32px;
+}
+
+/* Compact footer line copied from the Figma cards. */
+.subscription-card__note {
+  display: flex;
+  margin: auto 0 0;
+  align-items: center;
+  gap: 8px;
+  color: #8f8e96;
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.subscription-card__note-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .subscription-card__benefit-group h3 {
@@ -827,13 +899,11 @@
 .subscription-storefront .subscription-status-message { padding: 16px; font: inherit; }
 
 /* Figma desktop 1752:2759; intrinsic height accommodates live copy and three variants. */
-.subscription-card--no-progress { padding: 0; }
+.subscription-card--no-progress { padding: 39px 4px 0; }
 .subscription-card--no-progress > .subscription-card__progress { display: none; }
 /* Align white panel tops regardless of content height or an inventory frame.
-   The frame header occupies 13px padding + 14px label + 12px gap. */
-.subscription-plan-rail:has(.subscription-card:not(.subscription-card--no-progress)) .subscription-card--no-progress {
-  margin-top: 39px;
-}
+   The frame header occupies 13px padding + 14px label + 12px gap, so a card
+   without an inventory frame reserves the same space as top padding. */
 .subscription-card__price-row--variants { flex-direction: column; align-items: flex-start; }
 .subscription-card__price-row--variants .subscription-card__billing-options { max-width: 100%; }
 .subscription-card__billing-options button { white-space: nowrap; }
@@ -858,45 +928,71 @@
 
 /* Embedded Tilda columns follow their own width even on a wide desktop. */
 @container subscription-storefront (max-width: 719px) {
-  .subscription-storefront__canvas { padding: 16px; gap: 24px; }
-  .subscription-storefront__hero { min-height: 0; font-size: 28px; }
-  .subscription-storefront__hero h1 { font-size: 28px; }
-  .subscription-storefront__hero p { font-size: 14px; line-height: 1.2; }
+  /* Phone: hero, one card and the switcher have to fit one screen. */
+  .subscription-storefront__canvas { padding: 12px; gap: 14px; }
+  .subscription-storefront__hero { min-height: 0; font-size: 24px; gap: 10px; }
+  .subscription-storefront__hero h1 { font-size: 24px; }
+  .subscription-storefront__hero p { max-width: 320px; font-size: 13px; line-height: 1.2; }
   .subscription-storefront__mark { right: 2em; top: -0.52em; width: 1.2em; }
-  .subscription-plan-rail__item { align-items: flex-start; }
+  .subscription-storefront__sections { gap: 14px; }
+  .subscription-plan-switcher { margin-top: 14px; padding: 4px; gap: 2px; }
+  .subscription-plan-switcher button { min-height: 38px; padding: 6px 8px; font-size: 14px; }
 }
 
 /* Keep Figma spacing on full-size cards, even in a narrower host window. */
 @container subscription-card (max-width: 400px) {
-  .subscription-card__panel { min-height: 0; padding: 20.5px 18.5px 28.5px; gap: 20px; }
-  .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 20px; }
-  .subscription-card__price strong { font-size: 28px; }
+  .subscription-card__panel { min-height: 0; padding: 16px 14px 16px; gap: 14px; }
+  .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 14px; }
+  .subscription-card__price strong { font-size: 26px; }
   .subscription-card__benefit-group li { font-size: 14px; }
-  .subscription-card__benefit-group ul { gap: 10px; }
-  .subscription-card__progress { padding-inline: 16px; }
+  .subscription-card__benefit-group ul { gap: 8px; }
+  .subscription-card__benefit-group h3 { margin-bottom: 12px; }
+  .subscription-card__progress { padding-inline: 12px; }
+  .subscription-card__cta { min-height: 44px; padding: 12px 18px; font-size: 15px; }
+  .subscription-card__note { font-size: 11px; }
 }
 
 /* Figma uses cap-height trimming in prices and 132% leading in wrapped discount copy. */
 .subscription-card__price strong,
 .subscription-card__price span { text-box-trim: trim-both; text-box-edge: cap alphabetic; }
 .subscription-card__benefit-group li:has(> b) > span { line-height: 1.32; }
-.subscription-storefront__navigation { position: relative; }
-.subscription-storefront__more { position: relative; }
-.subscription-storefront__more summary { list-style: none; }
-.subscription-storefront__more summary::-webkit-details-marker { display: none; }
-.subscription-storefront__more summary:focus-visible {
-  outline: 3px solid var(--subscription-accent); outline-offset: 3px; border-radius: 50%;
+
+/* The back arrow rides on the hero band instead of taking its own row, so a
+   mobile card fits without scrolling past an empty navigation strip. */
+.subscription-storefront__canvas { position: relative; }
+.subscription-storefront__navigation {
+  position: absolute;
+  z-index: 5;
+  top: var(--subscription-canvas-pad);
+  left: var(--subscription-canvas-pad);
+  right: var(--subscription-canvas-pad);
+  width: auto;
 }
-.subscription-storefront__more-links {
-  position: absolute; right: 0; top: calc(100% + 8px); z-index: 5;
-  min-width: 180px; padding: 8px; background: #fff; border: 1px solid #ededed;
-  border-radius: 14px; box-shadow: 0 4px 16px #1f1e2014;
+
+/* Narrow phones: tuck the arrow into the corner so it cannot sit on the «И». */
+@container subscription-storefront (max-width: 719px) {
+  .subscription-storefront__navigation { top: 6px; left: 4px; right: 4px; }
+  .subscription-storefront__nav-button { width: 38px; height: 38px; }
 }
-.subscription-storefront__more-links a {
-  display: block; padding: 10px 12px; color: #353436; text-decoration: none;
-  font: 14px/1.2 'Subscription Inter Display', sans-serif; border-radius: 8px;
+
+/* Short phones (iPhone SE class): trim the rest of the vertical chrome too. */
+@media (max-height: 700px) {
+  @container subscription-storefront (max-width: 719px) {
+    .subscription-storefront__canvas { padding: 8px; gap: 10px; }
+    .subscription-storefront__hero { gap: 8px; }
+    .subscription-storefront__hero h1 { font-size: 22px; }
+    .subscription-storefront__hero p { font-size: 12px; }
+    .subscription-storefront__sections { gap: 10px; }
+    .subscription-plan-switcher { margin-top: 10px; }
+    .subscription-plan-switcher button { min-height: 34px; font-size: 13px; }
+  }
+  @container subscription-card (max-width: 400px) {
+    .subscription-card__panel { padding: 12px 12px 12px; gap: 12px; }
+    .subscription-card__header, .subscription-card__body, .subscription-card__benefits { gap: 12px; }
+    .subscription-card__cta { min-height: 40px; padding: 10px 16px; }
+    .subscription-card__benefit-group h3 { margin-bottom: 10px; }
+  }
 }
-.subscription-storefront__more-links a:hover { background: #fafafa; }
 
 @media (min-width: 1280px) {
   .subscription-storefront__hero { width: 626px; max-width: 100%; }
@@ -912,12 +1008,13 @@
 .subscription-card__benefit-group li:has(> b):first-child { align-items: center; }
 .subscription-card__benefit-group li:has(> b):first-child > span { line-height: 1; }
 
-/* Direct payment flow: consent label above the storefront.
+/* Direct payment flow: the annual terms row lives in the confirmation dialog
+   that opens on «Оформить подписку», not above the storefront.
    The login overlay itself reuses the cabinet AuthForm; its styles live in
    storefront-auth.css and storefront-auth-overlay.css. */
 .subscription-consent {
-  display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px;
-  color: #353436; font: 14px/1.4 'Subscription Inter Display', sans-serif;
+  display: flex; align-items: flex-start; gap: 10px; margin: 0 0 16px;
+  font: 14px/1.4 'Subscription Inter Display', sans-serif;
 }
 .subscription-consent input { margin: 2px 0 0; width: 18px; height: 18px; accent-color: var(--subscription-accent, #5a2ea6); }
 .subscription-status-message--error { color: #b42318; }

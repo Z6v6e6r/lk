@@ -11,7 +11,7 @@ export function SubscriptionOfferSection(props: {
 }): React.JSX.Element {
   const railRef = useRef<HTMLDivElement>(null);
   const railId = useId();
-  const [scroll, setScroll] = useState({ position: 0, max: 0, stops: [0] });
+  const [scroll, setScroll] = useState({ position: 0, max: 0, stops: [0], stopPlans: [0] });
 
   useEffect(() => {
     const rail = railRef.current;
@@ -21,12 +21,18 @@ export function SubscriptionOfferSection(props: {
       const max = Math.max(0, rail.scrollWidth - rail.clientWidth);
       const position = Math.max(0, Math.min(max, rail.scrollLeft));
       const left = rail.getBoundingClientRect().left;
-      const stops = Array.from(rail.children, item =>
-        Math.min(max, Math.max(0, item.getBoundingClientRect().left - left + rail.scrollLeft)))
-        .filter((stop, index, all) => index === 0 || stop - all[index - 1] > 1);
+      // One entry per card: the switcher names every plan even when the rail
+      // clamps the last cards onto the same end position.
+      const measured = Array.from(rail.children, (item, index) => ({
+        index,
+        left: Math.max(0, item.getBoundingClientRect().left - left + rail.scrollLeft),
+      }));
+      const stops = measured.map(entry => Math.min(max, entry.left));
+      const stopPlans = measured.map(entry => entry.index);
       setScroll(previous => previous.position === position && previous.max === max
         && previous.stops.length === stops.length && previous.stops.every((stop, index) => Math.abs(stop - stops[index]) < 0.5)
-        ? previous : { position, max, stops });
+        && previous.stopPlans.every((plan, index) => plan === stopPlans[index])
+        ? previous : { position, max, stops, stopPlans });
     };
     const schedule = () => {
       cancelAnimationFrame(frame);
@@ -54,7 +60,7 @@ export function SubscriptionOfferSection(props: {
       : [...scroll.stops].reverse().find(stop => stop < position - 1) ?? 0);
   };
   const activeStop = scroll.stops.reduce((closest, stop, index) =>
-    Math.abs(stop - scroll.position) < Math.abs(scroll.stops[closest] - scroll.position) ? index : closest, 0);
+    Math.abs(stop - scroll.position) <= Math.abs(scroll.stops[closest] - scroll.position) ? index : closest, 0);
 
 
   return (
@@ -70,12 +76,6 @@ export function SubscriptionOfferSection(props: {
         </h2>
       )}
 
-      {scroll.max > 1 && <div className="subscription-rail-dots" role="group" aria-label="Переключение карточек подписок">
-        {scroll.stops.map((stop, index) => <button key={index} type="button"
-          aria-label={`Показать подписки, страница ${index + 1} из ${scroll.stops.length}`}
-          aria-controls={railId} aria-current={activeStop === index ? 'true' : undefined}
-          onClick={() => goTo(stop)} />)}
-      </div>}
       <div className="subscription-rail-frame">
         {scroll.max > 1 && <>
           <button className="subscription-rail-arrow subscription-rail-arrow--previous" type="button"
@@ -139,6 +139,38 @@ export function SubscriptionOfferSection(props: {
         })}
       </div>
       </div>
+      {props.section.plans.length > 1 && (
+        <div
+          className="subscription-plan-switcher"
+          role="group"
+          aria-label="Переключение карточек подписок"
+          onKeyDown={(event) => {
+            const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+            if (!step) return;
+            event.preventDefault();
+            const buttons = Array.from(event.currentTarget.querySelectorAll('button'));
+            const nextIndex = Math.min(buttons.length - 1, Math.max(0, activeStop + step));
+            buttons[nextIndex]?.focus();
+            goTo(scroll.stops[nextIndex] ?? 0);
+          }}
+        >
+          {scroll.stops.map((stop, index) => {
+            const plan = props.section.plans[scroll.stopPlans[index]];
+            if (!plan) return null;
+            return (
+              <button
+                key={plan.id}
+                type="button"
+                aria-controls={railId}
+                aria-current={activeStop === index ? 'true' : undefined}
+                onClick={() => goTo(stop)}
+              >
+                {plan.shortLabel ?? plan.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
