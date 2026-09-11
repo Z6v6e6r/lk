@@ -425,6 +425,13 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
       "summer_subscription_friendship_sirius_product_id",
     ])
     || friendshipPlan.productId,
+  productCostMinor: toMoneyMinor(
+    readGlobalFirst([
+      "summer_subscription_sirius_friendship_product_cost_minor",
+      "summer_subscription_friendship_sirius_product_cost_minor",
+    ]),
+    friendshipPlan.productCostMinor,
+  ),
   manualPaidCount: readManualPaidCount("sirius_friendship"),
   totalLimit: toPlanLimit(
     readGlobalFirst([
