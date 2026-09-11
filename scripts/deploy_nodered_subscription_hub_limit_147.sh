@@ -135,7 +135,7 @@ trap 'exit 143' TERM HUP
 # and the exact live function body, so a tab-scoped extraction is not enough.
 pull_live_workspace
 
-node scripts/patch_live_subscription_status_price.mjs \
+node scripts/patch_live_subscription_hub_limit.mjs \
   --workspace "$workspace" \
   --output "$candidate_flow" \
   --import "$candidate_import" \
