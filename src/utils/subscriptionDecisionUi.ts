@@ -215,6 +215,20 @@ function errorMessage(error: ApiError | null | undefined): string | null {
   return normalized;
 }
 
+// The server reason can already start with the same lead-in (for example the client timeout
+// message), so never prepend a phrase that is already there.
+function buildDecisionErrorMessage(
+  leadIn: string,
+  tail: string,
+  serverReason: string | null,
+): string {
+  if (!serverReason) return `${leadIn}. ${tail}`;
+  const reason = serverReason.toLowerCase().startsWith(leadIn.toLowerCase())
+    ? serverReason
+    : `${leadIn}: ${serverReason}`;
+  return `${reason}. ${tail}`;
+}
+
 function isNoSubscriptionsAvailable(error: ApiError | null | undefined): boolean {
   if (!error) return false;
   const candidates: unknown[] = [error.message];
@@ -334,17 +348,21 @@ export function resolveSubscriptionDecisionPresentation({
     // Surface the server reason even for an unmapped code: otherwise a definitive refusal is
     // reported as a generic temporary error and the reason is lost. The fail-closed retry
     // contract for unknown states stays unchanged.
-    const serverReason = errorMessage(error)?.replace(/[.\s]+$/, "") || null;
+    const serverReason = errorMessage(error)?.replace(/[.!?…\s]+$/, "") || null;
     return {
       kind: "TECHNICAL_ERROR",
       title: "Временная техническая ошибка",
       message: technical
-        ? (serverReason
-          ? `Не удалось подтвердить условия подписки: ${serverReason}. Повторите попытку; неизвестное состояние не даёт скидку.`
-          : "Не удалось подтвердить условия подписки. Повторите попытку; неизвестное состояние не даёт скидку.")
-        : (serverReason
-          ? `Сервер не подтвердил условия подписки: ${serverReason}. Обновите данные и повторите попытку.`
-          : "Сервер не подтвердил условия подписки. Обновите данные и повторите попытку."),
+        ? buildDecisionErrorMessage(
+          "Не удалось подтвердить условия подписки",
+          "Повторите попытку; неизвестное состояние не даёт скидку.",
+          serverReason,
+        )
+        : buildDecisionErrorMessage(
+          "Сервер не подтвердил условия подписки",
+          "Обновите данные и повторите попытку.",
+          serverReason,
+        ),
       reasonCode: primaryCode,
       retryable: true,
       subscriptionApplied: false,
