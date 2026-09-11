@@ -104,15 +104,66 @@ scopes `members:add`/`members:remove`/`operations:read`, `keyId` `canary-2026-09
 runtime, то есть после активации. Сейчас корректно говорить: keyring **настроен**, но
 ещё не задействован.
 
+## Боевая Mongo: факты и блокеры (2026-09-11)
+
+Владелец подтвердил боевую Mongo. Что установлено read-only пробником через драйвер
+рантайма (секреты не печатались):
+
+- хост `147.45.254.160:27017`, БД `games`, replica set `mongodb-510979`, primary
+  `192.168.0.4:27017` (внутренний адрес в `hello.hosts`);
+- боевой Node-RED подключается как `mongodb://…@147.45.254.160:27017/games?authSource=admin&directConnection=true&retryWrites=false`,
+  то есть **через `directConnection` к primary**, минуя discovery — sidecar должен
+  повторять этот режим, иначе внутренний `192.168.0.4` недостижим;
+- пользователь LK имеет роли `readWrite` на `PadlhUBScore`, `dialog`, `events`, `games`,
+  `games_chat` и **не имеет `userAdmin`**;
+- коллекций `lk_partner_*` в БД нет; в `lk_games` индексы только `_id_`,
+  `schedule_station_date_time_v1`, `lk_games_payment_booking_lookup_wildcard_v1`.
+
+**Блокер A — создать Mongo-пользователя я не могу.** Ролей приложения недостаточно для
+`createUser` (нужен `userAdmin`/`userAdminAnyDatabase`), а других креденшелов у меня нет.
+Нужно, чтобы пользователя создал владелец БД (или выдал административный доступ не через
+чат). Целевые роли — минимальные:
+
+```js
+db.getSiblingDB("games").createUser({
+  user: "partner-game-api",
+  pwd: passwordPrompt(),
+  roles: [
+    { role: "readWrite", db: "games", collection: "lk_games" },
+    { role: "readWrite", db: "games", collection: "lk_partner_api_nonces" },
+    { role: "readWrite", db: "games", collection: "lk_partner_game_operations" },
+    { role: "readWrite", db: "games", collection: "lk_partner_game_memberships" },
+    { role: "readWrite", db: "games", collection: "lk_partner_api_audit" },
+    { role: "readWrite", db: "games", collection: "lk_partner_game_outbox" }
+  ]
+})
+```
+
+**Блокер B — нужна миграция индексов на боевой БД.** В репозитории production-путь
+только **проверяет** индексы (`verifyRequiredIndexes`); создаёт их лишь
+`ensureIndexesForIsolatedTest()` для изолированного режима. Значит до активации нужно:
+
+1. read-only проверка на дубликаты `{tenantKey, id}` в `lk_games` и затем создание
+   **уникального** индекса `uniq_tenant_game_id` (`{tenantKey:1, id:1}`) — сейчас его нет;
+2. создание пяти коллекций `lk_partner_*` с индексами из `PARTNER_MEMBERSHIP_INDEX_SPECS`
+   (unique idempotency, unique active membership, unique payment reference, TTL nonce,
+   unique outbox event и вспомогательные).
+
+Это изменение схемы боевой БД, поэтому оно требует отдельного разрешения, pre-check и
+плана отката (индексы additive; откат — drop созданных индексов/коллекций).
+
 ## Дальше
 
-Порядок перед активацией:
-
-1. **Mongo.** На хосте нет локального Mongo (нет listener и unit), а unit разрешает
-   egress только на localhost. Нужны Mongo replica-set с индексами и расширение сетевой
-   политики unit — это отдельное изменение стадии активации.
-2. **Игра и станция.** Заполнить `stationIds` и `games[{gameId: {tenantKey, capacity}}]`
-   канареечного клиента выбранной тестовой игрой (capacity строго `2` или `4`).
-3. **Viva-техклиент** и token source, четыре mutation-gate — по-прежнему `disabled`.
-4. **Активация** канареечного клиента — отдельное разрешение; после неё запрос впервые
+1. Владелец создаёт Mongo-пользователя `partner-game-api` с ролями выше; пароль попадает
+   сразу в `/etc/padlhub/partner-game-membership/service.env` (не в чат).
+2. С отдельного разрешения: pre-check дубликатов и миграция индексов.
+3. Обновить `service.env`: `MONGO_URI` (directConnection, `authSource=admin`), `MONGO_DB=games`,
+   `LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID`; egress уже сужен до `147.45.254.160/32`.
+4. Viva-техклиент и token source, четыре mutation-gate — сейчас `disabled`.
+5. **Активация** канареечного клиента — отдельное разрешение; после неё запрос впервые
    пройдёт проверку подписи.
+
+Канареечный keyring уже заполнен: `stationIds=["6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1"]`,
+`games={"pay_adff32ae-3cca-425d-a31a-36942a75c8f7": {tenantKey: null, capacity: 4}}`.
+Игра проверена: `archived=false`, `status=PAID`, `settings.isPrivate=false`,
+`invite.maxPlayers=4`, бронь 2026-09-22 07:00–08:30, `booking.studioId` = station.
