@@ -7519,6 +7519,24 @@ h6,
   gap: 8px;
 }
 
+.details-roster-join-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  border: 1px solid #d8caff;
+  border-radius: 12px;
+  background: #f6f3ff;
+  color: #5e3dd7;
+}
+
+.details-roster-join-status-reason {
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+
 .details-roster-leave-status .details-roster-leave-spinner {
   margin-top: 2px;
   color: #6d4ee6;

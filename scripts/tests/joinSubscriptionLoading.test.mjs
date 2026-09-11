@@ -132,3 +132,19 @@ test('manual price refresh keeps subscription list loaded and performs only one 
  const h=harness();await h.resolve();await h.advance(300);h.result.preview.refresh();h.render();await h.advance(300);
  assert.equal(h.subscriptions.length,1);assert.equal(h.names.length,2);assert.equal(h.previews.length,2);h.unmount();
 });
+
+test('pending subscription join is shown as a retryable status instead of a roster error',()=>{
+ assert.match(source,/presentation\.kind === "PENDING_CONFIRMATION"/);
+ assert.match(source,/setDetailsSplitJoinPending\(\{/);
+ assert.match(source,/setDetailsSplitJoinPending\(null\)/);
+ assert.match(source,/detailsSplitJoinPending\.subscriptionId/);
+ assert.match(source,/className="game-empty details-roster-join-status" role="status" aria-live="polite"/);
+ assert.match(source,/Проверить снова/);
+ // A pending decision must reach the status slot; only non-pending decisions use the error slot.
+ const branchStart=source.indexOf('presentation.kind === "PENDING_CONFIRMATION"');
+ const branchEnd=source.indexOf('const subscriptionDecisionNotice = preferredPaymentMode === "subscription"');
+ assert.ok(branchStart>0&&branchEnd>branchStart);
+ const branch=source.slice(branchStart,branchEnd);
+ assert.match(branch,/\} else \{\s*setGameRosterError\(presentationMessage\);\s*\}/);
+ assert.doesNotMatch(branch,/setGameRosterError\(presentationMessage\);\s*\}\s*else \{\s*setDetailsSplitJoinPending/);
+});

@@ -297,3 +297,130 @@ test("split payment confirmation sends provider locators without a browser-owned
   assert.match(confirmationFunction, /bookingId:\s*input\.bookingId\.trim\(\)/);
   assert.doesNotMatch(confirmationFunction, /\bpaid\s*:/);
 });
+
+test("subscription join re-issues the same operation while a pending confirmation is unresolved", () => {
+  const joinFunction = extractFunctionBlock("export async function apiCreatePadelSplitParticipantPayment");
+  const createFunction = extractFunctionBlock("export async function apiCreatePadelSplitGamePayment");
+  const pollFunction = extractFunctionBlock("async function requestPadelSplitJoinWithPendingPoll");
+
+  assert.match(joinFunction, /requestPadelSplitJoinWithPendingPoll\(splitRequest, baseUrl, params\)/);
+  assert.doesNotMatch(joinFunction, /await requestPadelSplitPayment\(splitRequest, baseUrl, params\)/);
+  assert.match(createFunction, /await requestPadelSplitPayment\(splitRequest, baseUrl, params\)/);
+  assert.doesNotMatch(createFunction, /requestPadelSplitJoinWithPendingPoll/);
+  assert.match(pollFunction, /params\.paymentMode !== "subscription"/);
+  assert.match(pollFunction, /resolvePadelSplitPendingError\(response\.data, response\.status\)/);
+  assert.match(pollFunction, /SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS/);
+  assert.equal(
+    (pollFunction.match(/requestPadelSplitPayment\(splitRequest, baseUrl, params\)/g) || []).length,
+    2,
+  );
+});
+
+type SplitPollResult = {
+  data: unknown;
+  error: unknown;
+  status: number | null;
+};
+
+type SplitPollAttempt = (...args: unknown[]) => Promise<SplitPollResult>;
+
+function buildPendingJoinPoll(requestPadelSplitPayment: SplitPollAttempt) {
+  const expression = toRunnableFunctionExpression("async function requestPadelSplitJoinWithPendingPoll");
+  return new Function(
+    "requestPadelSplitPayment",
+    "resolvePadelSplitPendingError",
+    "SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS",
+    `return ${expression};`,
+  )(
+    requestPadelSplitPayment,
+    (data: unknown, status: number | null) => {
+      const state = data && typeof data === "object"
+        ? String((data as Record<string, unknown>).state || "").toUpperCase()
+        : "";
+      return state === "PENDING_CONFIRMATION" ? { status, message: "fixture pending" } : null;
+    },
+    [10, 20, 30],
+  ) as (
+    splitRequest: unknown,
+    baseUrl: string,
+    params: Record<string, unknown>,
+    options: { delaysMs?: number[]; wait?: (delayMs: number) => Promise<void> },
+  ) => Promise<SplitPollResult>;
+}
+
+const pendingJoinRequest = { path: "/lk/games/game-1/split/join?operationId=op-1", operationId: "op-1" };
+
+test("pending subscription join is re-issued until the gateway confirms it", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    if (requestCalls < 3) return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+    return { data: { state: "CONFIRMED", bookingId: "booking-1" }, error: null, status: 201 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 3);
+  assert.equal(waits.join(","), "10,20");
+  assert.deepEqual(result.data, { state: "CONFIRMED", bookingId: "booking-1" });
+  assert.equal(result.error, null);
+});
+
+test("definitive subscription join error is returned without any retry", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    return { data: null, error: { status: 409, message: "no visits left" }, status: 409 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 1);
+  assert.equal(waits.length, 0);
+  assert.deepEqual(result.error, { status: 409, message: "no visits left" });
+});
+
+test("one-time split join never polls a pending-looking payload", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "one_time" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 1);
+  assert.equal(waits.length, 0);
+  assert.equal(result.status, 202);
+});
+
+test("split join keeps polling within the bounded schedule before reporting pending", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 4);
+  assert.equal(waits.join(","), "10,20,30");
+  assert.equal(result.status, 202);
+  assert.deepEqual(result.data, { state: "PENDING_CONFIRMATION" });
+});
