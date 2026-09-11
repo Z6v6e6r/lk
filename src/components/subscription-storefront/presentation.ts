@@ -20,7 +20,7 @@ export const discounts: SubscriptionBenefitGroup = {
 const planning: SubscriptionBenefitGroup = {
   id: 'booking-limit',
   title: 'Планирование:',
-  items: [{ id: 'active-bookings', label: 'До 4 активных записей на 2 недели вперёд' }],
+  items: [{ id: 'active-bookings', label: 'До 4 активных записей' }],
   kind: 'note',
 };
 

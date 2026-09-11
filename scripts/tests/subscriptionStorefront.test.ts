@@ -311,6 +311,15 @@ test('card copy follows the approved mock: free hour, footer note and five-visit
   assert.match(presentationSource, /kind: 'note'/);
   assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*labelKind: 'plain',/);
   assert.match(presentationSource, /title: 'Форматы на выбор:'/);
+  assert.match(presentationSource, /label: 'До 4 активных записей'/);
+  assert.doesNotMatch(presentationSource, /на 2 недели вперёд/);
+  // The «Другие действия» menu was removed from the public page.
+  const storefrontSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionStorefront.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(storefrontSource, /subscription-storefront__more/);
+  // The back arrow overlays the hero band instead of taking its own row.
+  const cssSource = readFileSync(new URL('../../src/components/subscription-storefront/subscriptions.css', import.meta.url), 'utf8');
+  assert.match(cssSource, /\.subscription-storefront__canvas \{ position: relative; \}/);
+  assert.match(cssSource, /\.subscription-storefront__navigation \{\s*position: absolute;/);
 });
 
 
