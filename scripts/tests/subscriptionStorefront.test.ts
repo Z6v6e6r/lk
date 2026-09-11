@@ -221,7 +221,7 @@ test('friendship variants retain independent prices, inventory and availability'
   assert.deepEqual(options.map(option => option.priceMinor), [980000, 1980000, 5680000]);
   assert.deepEqual(options.map(option => option.ctaDisabled), [false, true, true]);
   assert.equal(options[1].progress, undefined);
-  assert.equal(options[1].ctaLabel, 'Скоро');
+  assert.equal(options[1].ctaLabel, 'Скоро. Может быть');
   assert.equal(options[2].progress?.current, 10);
   assert.equal(options[2].priceSuffix, '/ год');
   assert.ok(friendshipBillingOptions([monthly, { ...annual, canPurchase: true }], true).every(option => option.ctaDisabled));

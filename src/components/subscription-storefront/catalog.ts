@@ -55,7 +55,8 @@ export function friendshipBillingOptions(statuses: readonly StorefrontStatus[], 
   return [
     availableOption(monthly, 'monthly', 'месяц', '/ 30 дней'),
     { id: 'monthly-two-hours', label: 'месяц 2 часа', priceMinor: 1980000, priceSuffix: '/ 30 дней',
-      ctaDisabled: true, ctaLabel: 'Скоро', statusMessage: 'Дружба 2.0 скоро появится в продаже' },
+      ctaDisabled: true, ctaLabel: 'Скоро. Может быть',
+      statusMessage: 'Дружба 2.0 скоро появится в продаже' },
     availableOption(annual, 'annual', 'год', '/ год'),
   ];
 }
