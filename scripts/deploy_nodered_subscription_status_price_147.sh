@@ -201,17 +201,28 @@ fi
 # row, so an absent fix can still show the configured price while reservations
 # exist. It is recorded here only as an end-to-end observation next to the
 # installed-flow readback above.
-curl --retry 5 --retry-delay 2 --retry-connrefused --max-time 20 -sS \
-  'https://padlhub.su/lk/tournaments/summer-subscription/status?counterKey=ra' -o "$postcheck_result" || true
-node -e '
-  const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-  const status=Array.isArray(value) ? value[0] : value;
-  if (!status || status.counterKey !== "ra" || status.canPurchase !== true
-    || status.priceMinor !== Number(process.argv[2])) process.exit(1);
-' "$postcheck_result" "$expected_price_minor" || {
-  echo "RA status smoke check failed; automatic rollback requested" >&2
+# apply restarts Node-RED, so the endpoint legitimately answers with an error
+# page for a short window. Retry until the payload parses and matches, with a
+# bounded budget; a wrong payload after the budget still fails closed.
+smoke_ok=0
+for ((smoke_attempt = 1; smoke_attempt <= 30; smoke_attempt++)); do
+  if curl -sS --max-time 15 \
+    'https://padlhub.su/lk/tournaments/summer-subscription/status?counterKey=ra' -o "$postcheck_result" \
+    && node -e '
+        const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+        const status=Array.isArray(value) ? value[0] : value;
+        if (!status || status.counterKey !== "ra" || status.canPurchase !== true
+          || status.priceMinor !== Number(process.argv[2])) process.exit(1);
+      ' "$postcheck_result" "$expected_price_minor"; then
+    smoke_ok=1
+    break
+  fi
+  sleep 3
+done
+if [[ "$smoke_ok" != "1" ]]; then
+  echo "RA status smoke check failed after the warm-up budget; automatic rollback requested" >&2
   exit 6
-}
+fi
 
 completed=1
 echo "deployedGitSha=$local_sha"
