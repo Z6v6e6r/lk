@@ -20,7 +20,7 @@ export const discounts: SubscriptionBenefitGroup = {
 const planning: SubscriptionBenefitGroup = {
   id: 'booking-limit',
   title: 'Планирование:',
-  items: [{ id: 'active-bookings', label: 'До 4 активных записей' }],
+  items: [{ id: 'active-bookings', label: 'До 4 активных записей на 2 недели вперёд' }],
   kind: 'note',
 };
 
@@ -78,7 +78,10 @@ export const sportBenefits: readonly SubscriptionBenefitGroup[] = [
   planning,
 ];
 
-/** Five-visit pass: sold as a direct product, so it has no daily limits copy. */
+/**
+ * Five-visit pass: sold as a direct product. It has neither a daily hour nor a
+ * booking limit, so the shared `planning` footer note is intentionally absent.
+ */
 export const energy5Benefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'formats',
@@ -90,7 +93,6 @@ export const energy5Benefits: readonly SubscriptionBenefitGroup[] = [
       { id: 'tournament', icon: 'tournament', label: 'Турниры ПадлхАБ' },
     ],
   },
-  planning,
 ];
 
 export type SummerPlanCounterKey = 'friendship' | 'ra' | 'academy' | 'sport' | 'energy5';
