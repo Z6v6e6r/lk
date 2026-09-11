@@ -67,8 +67,12 @@ cleanup() {
   if [[ "$remote_stage_created" == "1" ]]; then
     ssh "$host" "rm -f '$remote_candidate' '$remote_contract' '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
-  rm -f "$preflight_result" "$apply_result" "$postcheck_result" 2>/dev/null || true
   rm -f "$candidate_flow" "$candidate_import" "$candidate_report" "$contract_file" 2>/dev/null || true
+  # Receipts are the failure evidence: keep them (and the stage directory) once an
+  # apply started, so a manual rollback has its stamp and the recorded receipts.
+  if [[ "$apply_started" != "1" ]]; then
+    rm -f "$preflight_result" "$apply_result" "$postcheck_result" 2>/dev/null || true
+  fi
   rm -f "$workspace/input/source.flow.json" "$workspace/input/source.flow.meta.json" 2>/dev/null || true
   rmdir "$candidate_dir" "$workspace/input" "$workspace" "$stage_root" 2>/dev/null || true
 }
@@ -115,6 +119,11 @@ node -e '
 ' "$preflight_result" "$source_sha" "$candidate_sha"
 
 apply_started=1
+# Publish the recovery identifiers before the mutation: on a failed postcheck the
+# operator needs the stamp to run the rollback wrapper.
+echo "stamp=$remote_stamp"
+echo "flowBackup=$remote_flow_backup"
+echo "contractBackup=$remote_contract_backup"
 ssh "$host" "node '$remote_helper' apply --candidate '$remote_candidate' --contract '$remote_contract' --deployment-id '$deployment_id' --stamp '$remote_stamp'" >"$apply_result"
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
