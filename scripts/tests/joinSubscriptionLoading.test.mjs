@@ -148,3 +148,16 @@ test('pending subscription join is shown as a retryable status instead of a rost
  assert.match(branch,/\} else \{\s*setGameRosterError\(presentationMessage\);\s*\}/);
  assert.doesNotMatch(branch,/setGameRosterError\(presentationMessage\);\s*\}\s*else \{\s*setDetailsSplitJoinPending/);
 });
+
+test('pending retry stays bound to the game it was raised for',()=>{
+ // The pending status carries an actionable retry button, so it must never survive a switch to
+ // another game: the stored game id is part of the state and gates the rendered block.
+ assert.match(source,/gameId: string \| null;/);
+ assert.match(source,/gameId: gameRecordId,/);
+ assert.match(source,/detailsSplitJoinPending && detailsSplitJoinPending\.gameId === gameRecordId/);
+ const renderStart=source.indexOf('className="game-empty details-roster-join-status"');
+ assert.ok(renderStart>0);
+ const gateStart=source.lastIndexOf('{detailsSplitJoinPending',renderStart);
+ assert.ok(gateStart>0&&gateStart<renderStart);
+ assert.match(source.slice(gateStart,renderStart),/detailsSplitJoinPending\.gameId === gameRecordId/);
+});
