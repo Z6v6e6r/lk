@@ -35,7 +35,10 @@ if [[ "$local_sha" != "$remote_sha" ]]; then
   exit 4
 fi
 
-stage_root="$(mktemp -d /private/tmp/padlhub-subscription-status-price-deploy.XXXXXX)"
+stage_root="$(mktemp -d /private/tmp/padlhub-status-price-deploy.XXXXXX)"
+# Unix socket paths are limited to about 104 bytes, so keep the control path
+# short: a long mktemp directory plus the %C hash exceeds the limit.
+ssh_control_root="$(mktemp -d /private/tmp/psp.XXXXXX)"
 workspace="$stage_root/live"
 candidate_dir="$workspace/candidate-status-price"
 source_flow="$workspace/input/source.flow.json"
@@ -70,7 +73,7 @@ ssh_opts=(
   -o ServerAliveInterval=10
   -o ServerAliveCountMax=3
   -o ControlMaster=auto
-  -o ControlPath="$stage_root/ssh-control-%C"
+  -o ControlPath="$ssh_control_root/c-%C"
   -o ControlPersist=120
 )
 ssh_retry_attempts="${NODE_RED_SUBSCRIPTION_STATUS_PRICE_SSH_ATTEMPTS:-5}"
@@ -114,7 +117,8 @@ cleanup() {
     ssh "${ssh_opts[@]}" "$host" "rm -f '$remote_candidate' '$remote_contract' '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
   ssh "${ssh_opts[@]}" -O exit "$host" >/dev/null 2>&1 || true
-  rm -f "$stage_root"/ssh-control-* 2>/dev/null || true
+  rm -f "$ssh_control_root"/c-* 2>/dev/null || true
+  rmdir "$ssh_control_root" 2>/dev/null || true
   rm -f "$candidate_flow" "$candidate_import" "$candidate_report" "$contract_file" 2>/dev/null || true
   # Receipts are the failure evidence: keep them (and the stage directory) once an
   # apply started, so a manual rollback has its stamp and the recorded receipts.
