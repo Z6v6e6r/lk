@@ -18,8 +18,10 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
 });
 
 // Merged source fingerprint only; not a binding to an installed flow.
-export const PITER_ATOMIC_ROUTER_SHA256 = "eaf6e1443f2c5ed91ca96af620faa45f45c7bb6e1f59313eb9962e7e766d7c49";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "b32dd57bc2f031febf8caa9c7536bce28bcc92f487e7daa47aa27942a1ee243f";
+// Refreshed to the counter-epoch reviewed source (same text as
+// subscription_counter_epoch_binding.json target sourceTextSha256).
+export const PITER_ATOMIC_ROUTER_SHA256 = "34e7f9fab11b7471d44445a8d9721afe9855a8287d7e2f756ff6315c55362431";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "0e996ead62b9898645b8df22178fc3fa8ac10ed939739479c0c78a8241c4cac0";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const currentProductId = String(global.get(key) ?? "").trim();
