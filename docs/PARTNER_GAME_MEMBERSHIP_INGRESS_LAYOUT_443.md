@@ -127,11 +127,7 @@ gzip on;
 
 ### Что осталось до применения
 
-0. **Провизия имени и сертификата.** Wildcard-сертификата на хосте нет:
-   `padlhub.su` покрывает `padlhub.su`/`www.padlhub.su`, `score.padlhub.su` имеет
-   собственный. Значит для выделенного hostname (например `partner-api.padlhub.su`)
-   нужны DNS A-запись на `147.45.103.3` и отдельный сертификат (certbot). Использовать
-   `padlhub.su` нельзя: это создаст дублирующийся `server_name` с существующим сайтом.
+0. ~~Провизия имени и сертификата.~~ **Выполнено 2026-09-11** — см. журнал ниже.
 1. `nginx -t` на копии дерева с подключённым overlay (без записи в живой файл).
 2. Атомарная установка overlay + `include`, preimage сохранён.
 3. `nginx -t` на живом дереве, затем `reload`.
@@ -140,3 +136,34 @@ gzip on;
 5. Выборочная проверка остальных сайтов на 443 (включая baseline-конфликт
    дублированных `padlhub.su`).
 6. Реализовать `verifyPartnerProductionIngress()` — сейчас `UNSUPPORTED_INGRESS_ADAPTER`.
+
+## Журнал: DNS и сертификат (2026-09-11)
+
+**DNS.** Владелец создал `A partner-api.padlhub.su → 147.45.103.3` (TTL 300) в панели
+Timeweb. Зона `padlhub.su` обслуживается `ns1/ns2.timeweb.ru`, `ns3/ns4.timeweb.org`;
+на хосте нет ни API-доступа к Timeweb, ни TSIG-ключей, поэтому запись создавал владелец.
+
+**Распространение.** Первый выпуск сертификата упал: Let's Encrypt получил
+`NXDOMAIN looking up A for partner-api.padlhub.su`. При этом `ns1`, `ns2` и `ns4`
+уже отдавали адрес, а `ns3.timeweb.org` — нет (пустой ответ), и SOA-серии расходились
+(33 против 35). Через ~4 минуты `ns3` догнал, все четыре NS стали согласованы, и
+повторный выпуск прошёл. Первый неудачный challenge не изменил конфигурацию.
+
+**Сертификат.** `certbot certonly --nginx -d partner-api.padlhub.su` (certbot 2.9.0,
+production-аккаунт): `subject=CN=partner-api.padlhub.su`, `issuer=Let's Encrypt YE2`,
+ECDSA, SAN только этот hostname, действует до 2026-12-10. Renewal-конфиг:
+`authenticator=nginx`, `installer=nginx`, `key_type=ecdsa`.
+
+Проверено после выпуска:
+
+- хеши `nginx.conf`, `sites-enabled/*`, `conf.d/*` **совпали с pre-image**;
+- постоянного vhost `partner-api.padlhub.su` certbot **не оставил** (`certonly`, без
+  installer-изменений);
+- `nginx -t` успешен, `systemctl is-active nginx` = `active`, версия 1.24.0.
+
+Сертификаты и ключи не читались и в репозиторий не копировались; приватный pre/post
+image — в `/private/tmp/partner-nginx-443-20260911/`.
+
+**Следующая зависимость.** Overlay генерируется только вместе с клиентским
+сертификатом партнёра и его CA (генератор валидирует цепочку и пины SPKI). Пока нет
+CSR партнёра, применить 443-блок нечем: серверная цепочка уже есть, клиентской нет.
