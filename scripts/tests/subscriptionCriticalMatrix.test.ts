@@ -258,6 +258,15 @@ const errorCases: Array<{
     continueWithoutSubscription: false,
     message: /Сервер отклонил действие по неизвестной причине/,
   },
+  {
+    id: "REJECT-CODE-WITH-5XX-STAYS-TECHNICAL",
+    action: "JOIN_GAME",
+    apiError: error("VIVA_SUBSCRIPTION_BOOKING_REJECTED", 503, "Viva временно недоступна"),
+    expected: "TECHNICAL_ERROR",
+    retryable: true,
+    continueWithoutSubscription: false,
+    message: /Viva временно недоступна/,
+  },
 ];
 
 for (const scenario of errorCases) {
