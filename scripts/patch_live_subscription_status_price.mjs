@@ -174,6 +174,9 @@ function main(argv) {
 
   const liveBytes = fs.readFileSync(verified.sourcePath);
   const built = buildFocusedStatusPriceCandidate(liveBytes);
+  if (built.contract.sourceSha256 !== verified.sourceSha256) {
+    fail("Live source changed between verification and composition");
+  }
   const [outputPath, importPath, reportPath] = prepareTargets(verified.workspace, [
     args["--output"], args["--import"], args["--report"],
   ]);
