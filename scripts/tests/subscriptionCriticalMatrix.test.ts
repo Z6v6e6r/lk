@@ -267,6 +267,28 @@ const errorCases: Array<{
     continueWithoutSubscription: false,
     message: /Viva временно недоступна/,
   },
+  {
+    id: "EDGE-TIMEOUT-MESSAGE-NOT-DUPLICATED",
+    action: "JOIN_GAME",
+    apiError: {
+      status: null,
+      message: "Не удалось подтвердить условия подписки: превышено время ожидания",
+      raw: { code: "REQUEST_TIMEOUT" },
+    },
+    expected: "TECHNICAL_ERROR",
+    retryable: true,
+    continueWithoutSubscription: false,
+    message: /^Не удалось подтвердить условия подписки: превышено время ожидания\. Повторите попытку; неизвестное состояние не даёт скидку\.$/,
+  },
+  {
+    id: "EDGE-UNMAPPED-4XX-TRIMS-PUNCTUATION",
+    action: "JOIN_GAME",
+    apiError: error("UNRECOGNISED_NEW_SERVER_CODE", 418, "Отказано!"),
+    expected: "TECHNICAL_ERROR",
+    retryable: true,
+    continueWithoutSubscription: false,
+    message: /^Сервер не подтвердил условия подписки: Отказано\. Обновите данные и повторите попытку\.$/,
+  },
 ];
 
 for (const scenario of errorCases) {
