@@ -24,7 +24,7 @@ export const HUB_LIMIT_DEPLOYMENT_ID = "subscription-hub-daily-limit-20260911";
 // Exact live preimage this generation was reviewed against (pull-147,
 // 2026-09-11T10:00:52Z). Any other preimage is rejected before composing.
 export const HUB_LIMIT_LIVE_CONTRACT = Object.freeze({
-  sourceSha256: "2ace2b60d0e246e84d5b9a542f6022ea1f7788c945dd855339e0ff0e47c09438",
+  sourceSha256: "2edad045b7d22d1f5f28d5e5f45050790a5aa383aea577550011d814d9f8ff46",
   nodeCount: 4799,
   httpInputCount: 219,
 });
