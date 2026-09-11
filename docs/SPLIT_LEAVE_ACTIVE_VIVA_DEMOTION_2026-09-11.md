@@ -56,8 +56,8 @@ Base: `origin/main` `99e7fdd`. Branch: `codex/lk-self-leave-active-viva-20260911
   считает выход состоявшимся, иначе снимает pending-состояние и показывает реальное
   сообщение сервера.
 - Новый focused builder
-  `scripts/prepare_split_leave_active_viva_demotion_candidate.mjs` (fresh preimage
-  `2ace2b60…`, меняет только тела двух function nodes, forward/reverse
+  `scripts/prepare_split_leave_active_viva_demotion_candidate.mjs` (preimage пересобран
+  на apply-момент `47bffbef…`, меняет только тела двух function nodes, forward/reverse
   function-only contract).
 
 ## Границы
@@ -85,10 +85,10 @@ Base: `origin/main` `99e7fdd`. Branch: `codex/lk-self-leave-active-viva-20260911
 - `tsc -b --pretty false`: PASS.
 - `eslint` по изменённым файлам: 0 errors (только существующие warnings).
 - `npm run build` (prod + dev bundles): PASS.
-- Modular build/validate LK Games из fresh live 147 `2ace2b60…`: 345 узлов, 42 HTTP inputs,
+- Modular build/validate LK Games из fresh live 147: 345 узлов, 42 HTTP inputs,
   broken wires/links 0/0.
-- Focused candidate: source `2ace2b60…` → candidate `95841d98…`, changed functions 2,
-  forward + reverse contract PASS.
+- Focused candidate на apply-момент: source `47bffbef…` → candidate `e5d64351…`,
+  changed functions 2, added 0, forward + reverse contract PASS.
 - Предсуществующие красные тесты (падают и на чистом `origin/main`, не связаны с diff):
   `gameCancellationConsistency.client.test.ts` → «GamesPage self leave delegates to server…»,
   `splitLeaveProjectionPatch.test.mjs` → пины `fn_split_leave_game_update.js`,
@@ -97,6 +97,28 @@ Base: `origin/main` `99e7fdd`. Branch: `codex/lk-self-leave-active-viva-20260911
 
 ## Статус этапа
 
-Изменения подготовлены и проверены изолированно. Commit, push, PR, merge, Node-RED
-import/restart, deploy и любые live-мутации не выполнялись. Для реального применения нужен
-свежий preimage, явное разрешение и штатный reviewed deployment contract.
+Этап 1 (изолированная реализация) и reviewed apply в live Node-RED на `lk-primary-147`
+выполнены. Frontend-релиз и merge в `main` не выполнялись.
+
+Apply в live (штатный reviewed-flow deploy, 2026-09-11):
+
+- живой preimage на apply-момент: `47bffbef103ae106e6cba8e0bc0378fbc26a6d2d1f448ac13ab659345ae1db8e`
+  (перед этим live дважды менялся: `2ace2b60…` → `2edad045…` чужим deploy `subscription-hub-daily-limit`);
+  целевые функции в обоих свежих preimage не менялись — обновлялся только пин;
+- preflight: `ok`, nodes 4799 → 4799, HTTP inputs 219, changed 2, added 0,
+  `deploymentLeaseAvailable: true`, Node-RED online (restart 138);
+- apply: `activeFlowSha256 = e5d64351…` = candidate, Node-RED online, pid 15137,
+  restart 139, soak-lease до `2026-09-11T13:45:24.933Z`;
+- backups: `/root/.node-red/.padlhub-reviewed-flow-backups/flows-pre-split-leave-active-viva-demotion-20260911-20260911T163000+0300.json`,
+  `…/contract-split-leave-active-viva-demotion-20260911-20260911T163000+0300.json`,
+  `…/candidate-split-leave-active-viva-demotion-20260911-20260911T163000+0300.flow.json`;
+- postcheck: в живом флоу тела узлов равны кандидату (`prepare` `7cae69a1…`,
+  `router` `4411495c…`), маркеры `foregroundRequest` / `local_reconciliation_demoted`
+  присутствуют, pm2 `node-red online` restarts 139;
+- smoke: `OPTIONS /lk/games/:id/split/leave` → 204, неавторизованный `POST` → 401
+  `SPLIT_CLEANUP_AUTH_TOKEN_REQUIRED` (fail closed).
+
+Rollback (не выполнялся, штатная процедура):
+`node deploy_reviewed_flow_147_remote.mjs rollback --deployment-id split-leave-active-viva-demotion-20260911
+--flow-backup <flows-pre-…> --contract-backup <contract-…>`.
+Stop signal: рост 5xx/некорректные отмены, расхождение active SHA, отказ smoke.

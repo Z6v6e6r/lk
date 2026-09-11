@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import { buildFunctionOnlyContract, validateFunctionOnlyContract, sha256 } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 
-// Fresh read-only preimage pulled from lk-primary-147 (4799 nodes) before this change.
-export const SOURCE_SHA256 = "2ace2b60d0e246e84d5b9a542f6022ea1f7788c945dd855339e0ff0e47c09438";
+// Fresh read-only preimage pulled from lk-primary-147 (4799 nodes) at apply time.
+export const SOURCE_SHA256 = "47bffbef103ae106e6cba8e0bc0378fbc26a6d2d1f448ac13ab659345ae1db8e";
 export const DEPLOYMENT_ID = "split-leave-active-viva-demotion-20260911";
 
 export const TARGETS = [
