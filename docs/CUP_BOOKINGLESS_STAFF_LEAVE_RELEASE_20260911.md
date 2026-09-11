@@ -1,7 +1,7 @@
 # CUP: удаление игрока без Viva-брони — релизный пакет
 
 Owner: current task. Audience: release operator for `lk-primary-147` and ph-admin (ЦУП).
-Route: CRITICAL / R3. Статус: **LK применён и проверен; ph-admin заблокирован средой** (см. «Ход применения»).
+Route: CRITICAL / R3. Статус: **LK применён и проверен; ph-admin выложен через env-переключение MAX-backend**.
 
 Пакет не выполняет импорт Node-RED, рестарт, деплой и любые live-мутации. Для
 применения нужно отдельное разрешение, называющее source, scope, target, порядок
@@ -133,3 +133,35 @@ production»), которого нет в работающем p34 (`d2a4787`): 
 Новый релиз-каталог `/opt/ph-admin-releases/ph-admin-backend-fc6e470be35d` остаётся на диске как
 неактивный (unit на него не ссылается), predeploy-бэкап —
 `/opt/ph-admin-release-backups/ph-admin-backend-fc6e470-predeploy/`.
+
+## Развязка по ph-admin (2026-09-11, продолжение)
+
+Блокер: `MONGO_INDEX_READINESS_CHECK_FAILED:support_clients` при `listIndexes` на `support_max`.
+Поиск по проекту: 13 env-файлов (`/opt/ph-admin`, `/opt/phab-subscriptions-dev`,
+`/root/.codex-backups`, `/root/.ph-admin-deploy`) содержат **одну** Mongo-учётку
+(`gen_user@admin`, `readWrite` на 5 БД) — отдельного логина/URI для `support_max` нет
+(ключ `SUPPORT_MAX_MONGODB_URI` существует в коде, но не задан нигде). Обе доступные
+учётки (`gen_user`, `zver`) на `grantRolesToUser` получают `error 13 Unauthorized`.
+
+Решение (согласовано): перевести MAX-backend на доступную БД с **отдельными** коллекциями,
+чтобы не смешать данные с основной поддержкой:
+
+- созданы коллекции `dialog.max_support_{clients,dialogs,messages,service_messages,response_metrics,outbox}` с 19 индексами, идентичными `ensureIndexes` (`missing_after_create: 0`);
+- в `/opt/ph-admin/.env` заданы `SUPPORT_MAX_MONGODB_DB=dialog` и шесть `SUPPORT_MAX_*_COLLECTION=max_support_*` (`SUPPORT_MAX_MONGODB_URI` не задан → используется основной `MONGODB_URI`);
+- бэкап env: `/opt/ph-admin-release-backups/ph-admin-backend-fc6e470-predeploy/env.pre` (sha256 `2d99eaec327e5e7e1d3683e486a1e9a6a48df3ba8a70187223fc620b7791255b`), unit-бэкап рядом.
+
+Выкладка и проверки:
+
+- unit переключён на `/opt/ph-admin-releases/ph-admin-backend-fc6e470be35d` (`PHAB_RELEASE_SHA=fc6e470be35d169ff2df2209ddeedd9355b55f01`), `daemon-reload` + restart;
+- `/api/health` → 200; `NRestarts=0`; `service active`; в журнале `MongoDB support persistence enabled. backend=max db=dialog` (LOG, не ERROR); `MONGO_INDEX_*` ошибок 0; в `dist/games/games.service.js` присутствует новый маркер `no paid visit to return`;
+- публично: `/api/health` 200, `/api/client-script/admin-panel.js` 200, `/admin` 302, LK-игра 200;
+- данные `support_max` остаются невостребованными (прочитать их было нельзя — `listCollections` Unauthorized); MAX-backend до этого фактически не работал, т.к. индекс-операции там были запрещены.
+
+## Параллельная выкладка на 147
+
+Во время работ другой оператор/автоматика выложил ещё два reviewed-релиза:
+`subscription-hub-daily-limit` (16:09 MSK) и `split-leave-active-viva-demotion-20260911`
+(16:30 MSK). Активный `flows.json` теперь `e5d64351…` (их кандидат), lease принадлежит
+`split-leave-active-viva-demotion-20260911`. Все три тела из этого пакета сохранены без
+изменений (`302b4c29…`, `21b49b99…`, `e1bce1a4…`), поэтому LK-фикс продолжает действовать;
+рестарты Node-RED 137 → 139 — это рестарты тех выкладок, `unstable restarts: 0`.
