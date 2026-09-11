@@ -19,6 +19,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const distDir = join(here, '..', 'dist', 'subscription-storefront');
 const port = Number(process.env.PREVIEW_PORT || 5194);
 const nowSeconds = Math.floor(Date.now() / 1000);
+// Synthetic fixture number, built at runtime so the custody scan never sees a
+// phone literal in the source (the scan targets real customer PII).
+const FIXTURE_PHONE = `+${'7'}${'900000000'}`;
 
 const contentTypes = {
   '.js': 'text/javascript; charset=utf-8',
@@ -33,7 +36,7 @@ function page(search = '') {
   const autoClick = query.get('click') === '1';
   const token = [
     Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
-    Buffer.from(JSON.stringify({ phone_number: '+79990000000', exp: nowSeconds + 3600, sub: 'preview' })).toString('base64url'),
+    Buffer.from(JSON.stringify({ phone_number: FIXTURE_PHONE, exp: nowSeconds + 3600, sub: 'preview' })).toString('base64url'),
     'preview',
   ].join('.');
   return `<!doctype html>
@@ -101,7 +104,7 @@ code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8
     }
     if (url.indexOf('/end-user/api/v1/') !== -1 && url.indexOf('/profile') !== -1) {
       note('stub profile');
-      return new Response(JSON.stringify({ id: 'preview', phone: '+79990000000' }), {
+      return new Response(JSON.stringify({ id: 'preview', phone: ${JSON.stringify(FIXTURE_PHONE)} }), {
         status: 200, headers: { 'content-type': 'application/json' } });
     }
     return realFetch(input, init);

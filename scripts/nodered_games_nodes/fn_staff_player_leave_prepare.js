@@ -65,11 +65,14 @@ if (!gameId || !/^[A-Za-z0-9._:-]{3,160}$/.test(gameId)) {
 if (!idempotencyKey || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
   return respond(400, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required");
 }
-if (!targetClientId || !targetBookingId || !expectedMembershipVersion || !staffActorId) {
+if (!targetClientId || !expectedMembershipVersion || !staffActorId) {
   return respond(400, "INVALID_REQUEST", "Exact target, membership version and staff actor are required");
 }
 if (!new Set(["RETURN_VISIT", "NO_RETURN"]).has(visitAction)) {
   return respond(400, "INVALID_VISIT_ACTION", "visitAction is invalid");
+}
+if (!targetBookingId && visitAction !== "NO_RETURN") {
+  return respond(409, "VISIT_RETURN_UNAVAILABLE", "Participant has no Viva booking to return; use visitAction NO_RETURN");
 }
 if (toStr(body.reason)?.toUpperCase() !== "CUP_STAFF_REMOVAL") {
   return respond(400, "INVALID_REASON", "reason must be CUP_STAFF_REMOVAL");

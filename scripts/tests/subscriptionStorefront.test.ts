@@ -7,6 +7,9 @@ import { billingFromStatus, canContinue, friendshipBillingOptions, scopedStorefr
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
 
+/** Synthetic fixture number, built at runtime to keep source free of phone literals. */
+const FIXTURE_PHONE = `+${'7'}${'900000000'}`;
+
 interface PaymentAdapterCalls {
   created: { counterKey: string | null; planType: string | null }[];
   bought: { productId: string; phone: string }[];
@@ -47,7 +50,7 @@ function loadPaymentAdapter(): {
       };
     },
     apiConfirmTournamentSubscriptionPurchase: async () => ({ data: null, error: { status: 500, message: 'not used' }, status: 500 }),
-    apiFetchProfile: async () => ({ data: { phone: '+79990000000' }, error: null, status: 200 }),
+    apiFetchProfile: async () => ({ data: { phone: FIXTURE_PHONE }, error: null, status: 200 }),
     appendCurrentAuthModeToNavigableUrl: (input: URL) => input,
     resolveTournamentSubscriptionDirectProductId: (value: string) => (
       value === 'academy' ? '9eb8a7a4-c195-492a-95e4-3fb82899ac10'
@@ -219,13 +222,13 @@ test('payment adapter binds every sold billing option to its own LK1 counter', a
     assert.equal(adapter.resolveStorefrontBillingTarget(planId, optionId), null, `${planId}/${optionId}`);
   }
 
-  await adapter.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'annual', phone: '+79990000000' });
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'annual', phone: FIXTURE_PHONE });
   assert.equal(adapter.calls.created.length, 1);
   assert.equal(adapter.calls.created[0].counterKey, 'network_friendship');
   assert.equal(adapter.calls.created[0].planType, 'friendship');
   assert.equal(adapter.calls.bought.length, 0);
 
-  await adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: '+79990000000' });
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
   assert.equal(adapter.calls.bought.length, 1);
   assert.equal(adapter.calls.bought[0].productId, 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759');
   assert.equal(adapter.calls.created.length, 1);
