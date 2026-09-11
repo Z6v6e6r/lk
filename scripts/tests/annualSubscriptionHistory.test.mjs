@@ -393,12 +393,19 @@ test('maintenance dry-run rebuilds both products and rejects stale evidence and 
 test('annual candidate binds every changed source and rejects a foreign flow before composition', async () => {
   const { createHash } = await import('node:crypto');
   const { buildAnnualHistoryCandidate } = await import('../prepare_annual_subscription_history_candidate.mjs');
+  const { newestReviewedSourceSha256 } = await import('../lib/subscriptionSourceGenerationPins.mjs');
   const binding = JSON.parse(fs.readFileSync(new URL('../annual_subscription_history_binding.json', import.meta.url)));
   const epochBinding = JSON.parse(fs.readFileSync(new URL('../subscription_counter_epoch_binding.json', import.meta.url)));
   for (const target of [...binding.targets, binding.expander]) {
     const source = fs.readFileSync(new URL(`../nodered_games_nodes/${target.file}`, import.meta.url));
     const current = epochBinding.targets.find(t => t.file === target.file) || target;
-    assert.equal(createHash('sha256').update(source).digest('hex'), current.sourceTextSha256);
+    // The newest reviewed generation owns the file; older bindings keep their
+    // historical hashes and the epoch/legacy pins stay frozen.
+    assert.equal(
+      createHash('sha256').update(source).digest('hex'),
+      newestReviewedSourceSha256(target.file) ?? current.sourceTextSha256,
+      target.file,
+    );
   }
   assert.throws(() => buildAnnualHistoryCandidate({ liveBytes: Buffer.from('[]'), sourceTexts: {}, binding }), /preimage drift/);
 });
