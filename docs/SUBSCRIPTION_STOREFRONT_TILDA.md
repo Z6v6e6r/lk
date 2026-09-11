@@ -32,8 +32,10 @@ LK1-база: `160180124d5708f2a71f0480f6e6dc682620158f` (`origin/main`).
 - Карточки: Дружба, РА, Академия. Снятый с витрины Спорт и демонстрационные X2/годовые цены не добавляются.
 - Цены/остатки — существующий `apiFetchTournamentSubscriptionStatus`. Неизвестная цена не подменяется нулём/моком.
 - Последовательное обновление через 30 секунд, timeout 12 секунд, отмена при unmount/retry. Ошибка обновления блокирует CTA.
-- CTA открывает существующую `/ab_leto?variant=single_artwork&artworkKey=...&autoPurchase=0` в соответствующем prod/dev канале. Авторизация и платёж остаются в LK1.
-- Новый адаптер не создаёт платежи. Существующий API client может отправлять диагностику при ошибках запросов.
+- CTA создаёт оплату внутри витрины и уводит на `paymentUrl` банка: «Дружба 30 дней» и «Дружба год» — через `POST /lk/tournaments/summer-subscription/purchase` (`counterKey` `friendship` / `network_friendship`), «РА» и «Академия» — через `POST /end-user/api/v1/<tenant>/transactions` по своим продуктам. Переход на `/ab_leto` с `autoPurchase` из витрины убран.
+- Неавторизованному клиенту показывается то же окно авторизации, что на `/ab_leto` (общий `AuthForm`; его стили из `MyApp.css` продублированы в `storefront-auth.css`/`storefront-auth-overlay.css`, потому что на Tilda-странице стили кабинета не подключены); после входа оплата продолжается кнопкой «Продолжить оплату». Для годовой подписки требуется явное согласие с условиями.
+- После оплаты банк возвращает клиента на страницу витрины с `summerPaymentRef`, виджет подтверждает платёж через `confirm` и переводит подтверждённую оплату в личный кабинет (`cabinetUrl`, по умолчанию `/lk_new`).
+- Новый адаптер не создаёт обходных платежей: он вызывает те же LK1-контракты, что и страница `/ab_leto`. Существующий API client может отправлять диагностику при ошибках запросов.
 - Автопрокрутка из PR не переносилась; лента поддерживает ручной scroll и клавиши ←/→/Home/End. Размеры ограничены контейнером Tilda.
 - `apiFetchTournamentSubscriptionStatus` получил необязательный второй параметр `{signal}`; прежние вызовы совместимы.
 
@@ -48,6 +50,17 @@ npx vite --host 127.0.0.1 --port 5193 --strictPort
 Предпросмотр: `http://127.0.0.1:5193/docs/subscription-storefront-preview.html`.
 Он загружает собранный prod IIFE; данные демонстрационные, CTA отключены, запросов каталога нет.
 Вспомогательный previewView принимается только на localhost/127.0.0.1/file preview.
+
+Интерактивная проверка оплаты без боевых запросов:
+
+```sh
+node scripts/preview-subscription-storefront.mjs      # http://127.0.0.1:5194/?auth=1
+node scripts/check-subscription-storefront-payment.mjs # headless-проверка клика и редиректа
+```
+
+Харнесс отдаёт собранный `dist/subscription-storefront` и подменяет в `window.fetch`
+status/purchase/confirm/transactions, поэтому клик по CTA доходит до «банка» локально
+и не создаёт реальную транзакцию.
 
 Файлы сборки лежат в `dist/subscription-storefront/`:
 
@@ -78,6 +91,17 @@ T123 читает собственный release-манифест и добав�
 - Тексты преимуществ взяты из PR. Фактическое применение этих условий/скидок у провайдера не проверялось.
 - Первоначально редактор Tilda требовал входа. Позже создан черновик страницы `233220109` с alias `subsription`, сохранён и повторно проверен T123 loader. Страница не опубликована.
 - Исходный checkpoint: `5719399`. Позже локально интегрирован и отправлен `main` `7342973`. Deploy и публикация Tilda не выполнялись; Draft PR не создавался, provider/database mutation в этой задаче отсутствуют.
+
+## Прямая оплата из витрины (2026-09-11)
+
+- Задача: кнопки на `https://padlhub.ru/subsription` больше не должны уводить на `/ab_leto` с `autoPurchase=0`, а должны сразу открывать оплату.
+- Реализация: `payment.ts` (адаптер покупки), кабинетный `AuthForm` в окне входа, `SubscriptionPage.tsx` (состояния, согласие, подтверждение после банка), `subscription-storefront.tsx` (`AuthProvider`, `cabinetUrl`), `subscriptions.css`; навигационный `subscriptionCheckoutUrl` удалён.
+- LOCAL: `node --experimental-strip-types --test scripts/tests/subscriptionStorefront.test.ts` — 8/8 PASS (включая VM-тест привязки счётчиков и продуктов).
+- LOCAL: `tsc --noEmit -p tsconfig.app.json` PASS; ESLint затронутых файлов PASS; `git diff --check` PASS.
+- LOCAL: prod/dev IIFE builds PASS (`dist/subscription-storefront/subscription-storefront.js` ≈2.44 МБ, базовая live-сборка ≈2.37 МБ).
+- LOCAL E2E (headless Chrome + CDP, `scripts/check-subscription-storefront-payment.mjs`): неавторизованный клик открывает окно входа по SMS; авторизованный клик вызывает `POST /lk/tournaments/summer-subscription/purchase` с `counterKey=friendship`, сохраняет `paymentRef` в pending-хранилище и переходит на `paymentUrl` банка. PASS.
+- НЕ проверено на этом этапе: боевые API SERV2/Viva (обе проверки шли на подменённом `fetch`), боевой Node-RED `network_friendship`/`ra`, реальная транзакция, выкладка на prod/dev, страница Tilda.
+
 
 MODEL_ROUTE: parent
 

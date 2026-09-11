@@ -49,7 +49,7 @@ test("candidate changes only four funcs and the exact empty startup field; rever
   validateExactGraphContract({ liveBytes: result.candidateBytes, candidateBytes: liveBytes, contract: result.reverse });
   assert.equal(result.report.deploymentPerformed, false);
 });
-test("candidate rejects altered source, occupied startup hooks, missing and duplicate targets", () => {
+test("candidate rejects altered source, occupied startup hooks, missing and duplicate targets", frozenSourceTest, () => {
   const cases = [
     [flow => { flow.find(n => n.id === ids[0]).func += "\n"; }, /target preimage drift: 8fdc7076a0c436a2/],
     [flow => { flow.find(n => n.id === ids[0]).initialize = "existing startup work"; }, /initializer preimage drift/],

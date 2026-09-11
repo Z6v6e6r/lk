@@ -224,6 +224,13 @@ test('status and refresh agree on empty RA10/F7/HAB1 at98000/Piter48 first batch
     assert.equal(live.canPurchase, true, counterKey);
     assert.equal(cached.canPurchase, true, counterKey);
     assert.deepEqual(quotaView(cached), quotaView(live), counterKey);
+    // A new epoch starts with no sale rows, so status must publish the configured
+    // price instead of falling back to the latest paid/pending document amount.
+    const expectedPriceMinor = { ra: 2380000, friendship: 980000, network_friendship: 9800000,
+      piter_friendship: 1980000 }[counterKey];
+    assert.equal(live.priceMinor, expectedPriceMinor, `${counterKey} status price with zero paid history`);
+    assert.equal(live.price, expectedPriceMinor / 100, `${counterKey} status price with zero paid history`);
+    assert.equal(cached.priceMinor, expectedPriceMinor, `${counterKey} refresh price with zero paid history`);
     if (counterKey === 'piter_friendship') {
       assert.equal(live.quotaAdjustment, 52);
       assert.equal(cached.quotaAdjustment, 52);
@@ -234,11 +241,31 @@ test('status and refresh agree on empty RA10/F7/HAB1 at98000/Piter48 first batch
       const expected = counterKey === 'ra' ? 10 : counterKey === 'friendship' ? 7 : 1;
       assert.equal(live.totalLimit, expected);
       assert.equal(live.remainingCount, expected);
-      if (counterKey === 'network_friendship') {
-        assert.equal(live.price, 98000);
-        assert.equal(live.priceMinor, 9800000);
-      }
     }
+  }
+});
+
+test('annual HUB daily seat count is configuration, not code', () => {
+  const rows = emptyAnnualLedgers();
+  const defaultLimit = status('network_friendship', rows).dailyLimit;
+  assert.equal(defaultLimit, 1);
+  // The override is read from the same style of global the other limits use, and
+  // every counter node must agree on it: status, refresh and purchase prepare.
+  for (const configured of [3, '4']) {
+    const values = globals({ summer_subscription_network_friendship_daily_limit: configured });
+    const live = status('network_friendship', rows, values);
+    assert.equal(live.dailyLimit, Number(configured));
+    assert.equal(live.totalLimit, Number(configured));
+    assert.equal(live.remainingCount, Number(configured));
+    assert.equal(refresh(rows, values).network_friendship.dailyLimit, Number(configured));
+    const prepared = run('purchase_prepare', { payload: { counterKey: 'network_friendship', paymentRef: 'synthetic-limit',
+      clientPhone: phone, clientId: 'synthetic-client' } }, values);
+    assert.equal(prepared[0]._summerSubscriptionCtx.dailyLimit, Number(configured));
+  }
+  // Invalid configuration falls back to the epoch default instead of opening sales.
+  for (const broken of [0, -2, 'abc', '']) {
+    const live = status('network_friendship', rows, globals({ summer_subscription_network_friendship_daily_limit: broken }));
+    assert.equal(live.dailyLimit, 1, String(broken));
   }
 });
 

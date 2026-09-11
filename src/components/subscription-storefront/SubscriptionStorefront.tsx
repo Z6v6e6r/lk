@@ -10,6 +10,8 @@ import type {
   SubscriptionStorefrontView,
 } from './model.js';
 import './subscriptions.css';
+import './storefront-auth.css';
+import './storefront-auth-overlay.css';
 import { IS_DEV_RELEASE_CHANNEL } from '../../consts/api_config';
 
 type StorefrontCssProperties = CSSProperties & {

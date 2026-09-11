@@ -359,6 +359,7 @@ jobs:
           scripts/tests/splitPaymentOccupancy.test.ts
           scripts/tests/joinSubscriptionLoading.test.mjs
           scripts/tests/subscriptionSessionCache.test.mjs
+          scripts/tests/subscriptionCounterEpochRuntime.test.mjs
           scripts/tests/tournamentSubscription.summer.nodered.test.ts
           scripts/tests/tournamentSubscriptionSalesCandidate.test.mjs
           scripts/tests/tournamentSignupAvailability.test.ts
@@ -375,6 +376,8 @@ jobs:
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
+          scripts/tests/subscriptionHubLimitPatch.test.mjs
+          scripts/tests/subscriptionStatusPricePatch.test.mjs
           scripts/tests/piterAtomicActivationTools.test.mjs
           scripts/tests/lk1SubscriptionActivationPacket.test.mjs
           scripts/tests/lk1SubscriptionDevCandidate.test.mjs

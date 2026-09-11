@@ -1,0 +1,389 @@
+/*
+ * Кабинетное окно авторизации (AuthForm) для витрины /subsription.
+ *
+ * Стили скопированы из src/MyApp.css без изменений, чтобы окно входа выглядело
+ * ровно так же, как на /ab_leto: на Tilda-странице витрины стили кабинета не
+ * подключены, а сам компонент AuthForm общий.
+ *
+ * Тематические переменные ниже — начальные значения из :root MyApp.css.
+ */
+:root {
+  --purple: #7353D9;
+  --purple-dark: #5B3FB5;
+  --purple-light: #EDE9FF;
+  --bg: #F5F5F7;
+  --white: #FFFFFF;
+  --text: #1A1A1A;
+  --text-secondary: #6B7280;
+  --border: #E5E7EB;
+  --red: #EF4444;
+  --radius: 16px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.08);
+  --ui-font: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* ─── AUTH ─── */
+.auth-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--white);
+}
+
+.auth-logo {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--purple);
+  margin-bottom: 8px;
+  letter-spacing: -0.5px;
+}
+
+.auth-tagline {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 40px;
+}
+
+.auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+.auth-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-input {
+  width: 80%;
+  padding: 20x 16px;
+  font-size: 20px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.auth-input:focus {
+  border-color: var(--purple);
+  background: var(--white);
+}
+
+.phone-input {
+  /* твои стили */
+  width: 100%;
+  font-size: 20px;
+}
+
+.auth-btn {
+  width: 100%;
+  padding: 15px;
+  font-size: 16px;
+  font-weight: 600;
+  background: var(--purple);
+  color: var(--white);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.auth-btn:hover { background: var(--purple-dark); }
+.auth-btn:active { transform: scale(0.98); }
+.auth-btn:disabled { background: #C4C4C4; cursor: not-allowed; }
+
+.auth-btn-secondary {
+  background: var(--white);
+  color: var(--purple);
+  border: 1.5px solid var(--purple);
+}
+
+.auth-btn-secondary:hover {
+  background: rgba(135, 102, 235, 0.06);
+}
+
+.auth-link {
+  text-align: center;
+  font-size: 14px;
+  color: var(--purple);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.auth-link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+}
+
+.auth-error {
+  font-size: 14px;
+  color: var(--red);
+  text-align: center;
+  min-height: 18px;
+}
+
+.resend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-card-chooser {
+  gap: 10px;
+  position: relative;
+}
+
+.auth-oauth-btn {
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  background: var(--white);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--ui-font);
+  font-style: normal;
+  font-weight: 600;
+  transition: border-color 0.2s, transform 0.1s, background 0.2s;
+}
+
+.auth-oauth-btn:hover {
+  border-color: var(--purple);
+  background: rgba(135, 102, 235, 0.04);
+}
+
+.auth-oauth-btn:active {
+  transform: scale(0.98);
+}
+
+.auth-oauth-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-oauth-btn__content {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 18px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.auth-oauth-btn__icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+}
+
+.auth-provider-icon-image {
+  width: 22px;
+  height: 22px;
+  display: block;
+  object-fit: contain;
+}
+
+.auth-consents {
+  min-width: 0;
+  margin: 10px 0 2px;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-consents__legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.auth-consent {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.auth-consent__checkbox {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  flex: 0 0 20px;
+  accent-color: var(--purple);
+  cursor: pointer;
+}
+
+.auth-consent__checkbox:focus-visible {
+  outline: 2px solid rgba(118, 73, 255, 0.38);
+  outline-offset: 2px;
+}
+
+.auth-consent__label {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: var(--ui-font);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.auth-consent__link {
+  color: #587651;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.auth-consent__link:focus-visible {
+  outline: 2px solid rgba(88, 118, 81, 0.4);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.auth-brand-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.auth-brand-logo {
+  width: min(182px, 72vw);
+  height: auto;
+  display: block;
+}
+
+.auth-title--brand {
+  max-width: 320px;
+  margin: 0;
+  font-family: "RF Dewi", "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.auth-more-options {
+  position: relative;
+}
+
+.auth-more-options-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: none;
+  box-shadow: none;
+  color: var(--text);
+  font-family: var(--ui-font);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.auth-more-options-btn svg {
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+}
+
+.auth-more-options-btn[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.auth-more-options-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(180px, calc(100vw - 64px));
+  padding: 8px;
+  border: 1px solid rgba(135, 102, 235, 0.12);
+  border-radius: 16px;
+  background: var(--white);
+  box-shadow: 0 18px 44px rgba(17, 24, 39, 0.12);
+  z-index: 4;
+}
+
+.auth-more-options-item {
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: #F7F7FB;
+  color: var(--text);
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  font-family: var(--ui-font);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.auth-more-options-item:hover {
+  background: #F0EDFF;
+}
+
+.auth-more-options-item:active {
+  transform: scale(0.98);
+}
+
+.auth-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.resend-img {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  opacity: 0.7;
+}

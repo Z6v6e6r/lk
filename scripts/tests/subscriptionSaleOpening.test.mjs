@@ -4,11 +4,12 @@ import {PITER_QUOTA48_UPDATE as binding} from '../lib/piterAtomicQuotaUpdateCont
 import {buildSaleOpeningCandidate} from '../prepare_subscription_sale_opening_candidate.mjs';
 import {buildHubAtomicOpeningPlan} from '../lib/hubAtomicOpeningPlan.mjs';
 import {sha256} from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
+import {newestReviewedSourceSha256} from '../lib/subscriptionSourceGenerationPins.mjs';
 const historyBinding=JSON.parse(fs.readFileSync(new URL('../annual_subscription_history_binding.json',import.meta.url)));
 const epochBinding=JSON.parse(fs.readFileSync(new URL('../subscription_counter_epoch_binding.json',import.meta.url)));
 const texts=Object.fromEntries(binding.targets.map(t=>[t.file,fs.readFileSync(new URL('../nodered_games_nodes/'+t.file,import.meta.url),'utf8')]));
 test('opening code bindings and generated helpers are exact',()=>{
-  for(const t of binding.targets)assert.equal(sha256(texts[t.file]),epochBinding.targets.find(n=>n.file===t.file)?.sourceTextSha256 ?? historyBinding.targets.find(n=>n.file===t.file)?.sourceTextSha256 ?? t.candidateSha256,t.file);
+  for(const t of binding.targets)assert.equal(sha256(texts[t.file]),newestReviewedSourceSha256(t.file) ?? epochBinding.targets.find(n=>n.file===t.file)?.sourceTextSha256 ?? historyBinding.targets.find(n=>n.file===t.file)?.sourceTextSha256 ?? t.candidateSha256,t.file);
   for(const f of HUB_LK1_SALE_SOURCE_FILES)assert.ok(texts[f].includes('// BEGIN generated hubLk1SaleContract\n'+HUB_LK1_SALE_HELPERS+'// END generated hubLk1SaleContract'),f);
   assert.equal(binding.hubBookingReceipt.bookingUsageScope,'SUBSCRIPTION_BENEFIT_ONLY');
   assert.equal(binding.hubBookingReceipt.policy.maxActiveBookings,4);

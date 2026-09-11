@@ -28,19 +28,6 @@ export function canContinue(status: StorefrontStatus, stale = false): boolean {
     && (status.unlimited || status.remainingCount > 0);
 }
 
-/** Navigation only. Authentication, current price and payment remain owned by LK1. */
-export function subscriptionCheckoutUrl(planId: string, channel: 'prod' | 'dev', optionId = 'monthly'): string | null {
-  if (!storefrontPlanKeys.some(key => key === planId)) return null;
-  if (optionId !== 'monthly' && !(planId === 'friendship' && optionId === 'annual')) return null;
-  const url = new URL('https://padlhub.ru/ab_leto');
-  url.searchParams.set('variant', optionId === 'annual' ? 'network_friendship' : 'single_artwork');
-  if (optionId !== 'annual') url.searchParams.set('artworkKey', planId);
-  url.searchParams.set('autoPurchase', '0');
-  url.searchParams.set('channel', channel);
-  url.searchParams.set('cabinetUrl', `https://padlhub.ru/${channel === 'dev' ? 'lk_dev' : 'lk_new'}`);
-  return url.toString();
-}
-
 export function friendshipBillingOptions(statuses: readonly StorefrontStatus[], stale = false): SubscriptionPlanView['billingOptions'] {
   const monthly = statuses.find(status => status.counterKey === 'friendship');
   const annual = statuses.find(status => status.counterKey === 'network_friendship');
