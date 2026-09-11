@@ -297,7 +297,14 @@ export function resolveSubscriptionDecisionPresentation({
         continueWithoutSubscription: false,
       };
     }
-    if (includesCode(codes, REJECTED_CODES)) {
+    // Only an explicit 4xx refusal is final; the same code arriving with a 5xx or without a
+    // status stays in the retryable fail-closed branch below.
+    if (
+      error.status !== null
+      && error.status >= 400
+      && error.status < 500
+      && includesCode(codes, REJECTED_CODES)
+    ) {
       return {
         kind: "SUBSCRIPTION_REJECTED",
         title: "Подписка не применена",
