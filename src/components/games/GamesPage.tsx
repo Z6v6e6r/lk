@@ -13925,6 +13925,7 @@ export default function GamesPage({
 
     let finalMessage: string | null = null;
     let hardError: string | null = null;
+    let lastPendingMessage: string | null = null;
     for (let attemptIndex = 0; attemptIndex < SELF_REMOVE_RETRY_DELAYS_MS.length; attemptIndex += 1) {
       const retryDelayMs = SELF_REMOVE_RETRY_DELAYS_MS[attemptIndex];
       if (retryDelayMs > 0) await delay(retryDelayMs);
@@ -13944,7 +13945,8 @@ export default function GamesPage({
           || transientStatus === 429
           || transientStatus >= 500;
         if (shouldRetry) {
-          setLeavePendingMessage(leaveResult.error?.message || SELF_REMOVE_PENDING_NOTICE);
+          lastPendingMessage = leaveResult.error?.message || SELF_REMOVE_PENDING_NOTICE;
+          setLeavePendingMessage(lastPendingMessage);
           continue;
         }
         hardError = leaveResult.error?.message || "Не удалось покинуть игру";
@@ -13955,7 +13957,8 @@ export default function GamesPage({
         break;
       }
       if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
-        setLeavePendingMessage(leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE);
+        lastPendingMessage = leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE;
+        setLeavePendingMessage(lastPendingMessage);
         continue;
       }
       hardError = leaveResult.data.message || "Не удалось подтвердить выход из игры";
@@ -13963,16 +13966,38 @@ export default function GamesPage({
     }
 
     if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
-    setUpdatingGameRoster(false);
     if (hardError) {
+      setUpdatingGameRoster(false);
       setLeavePendingMessage(null);
       setGameRosterError(hardError);
       return;
     }
     if (!finalMessage) {
-      setLeavePendingMessage(SELF_REMOVE_PENDING_NOTICE);
-      return;
+      // The server may keep answering RETRY_REQUIRED for a state the player has to resolve
+      // (for example when a live Viva booking appeared after a completed exit). Never leave
+      // the roster in a permanently disabled "leaving" state: refresh the game once, treat an
+      // already absent player as exited and otherwise surface the server message.
+      const refreshed = await apiFetchPadelGameRecord(gameRecordId);
+      if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
+      const refreshedRecord = refreshed.data?.id ? (refreshed.data as PadelGameRecord) : null;
+      if (refreshedRecord) {
+        upsertGameRecordInStores(refreshedRecord, { communityMode: "if_exists" });
+        const stillActiveMember = [
+          ...(Array.isArray(refreshedRecord.participants) ? refreshedRecord.participants : []),
+          ...(Array.isArray(refreshedRecord.waitlist) ? refreshedRecord.waitlist : []),
+        ].some((player) => isCurrentUserPlayer(player));
+        if (!stillActiveMember) {
+          finalMessage = SELF_REMOVE_SUCCESS_NOTICE;
+        }
+      }
+      if (!finalMessage) {
+        setUpdatingGameRoster(false);
+        setLeavePendingMessage(null);
+        setGameRosterError(lastPendingMessage || SELF_REMOVE_PENDING_NOTICE);
+        return;
+      }
     }
+    setUpdatingGameRoster(false);
     setLeavePendingMessage(null);
     pushCabinetFlashNotice(finalMessage);
     if (!navigateToCabinetFromGamesDetails()) {
@@ -13999,6 +14024,7 @@ export default function GamesPage({
     onBack,
     rejectSubscriptionUsageShadowAction,
     subscriptionUsageShadowEnabled,
+    upsertGameRecordInStores,
   ]);
 
   const handleSplitJoinCurrentUserFromDetails = useCallback(async (
