@@ -11,11 +11,14 @@ import {
   STATUS_PRICE_LIVE_CONTRACT,
   STATUS_PRICE_TARGETS,
 } from "../patch_live_subscription_status_price.mjs";
+import { newestReviewedSourceSha256 } from "../lib/subscriptionSourceGenerationPins.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const FN_DIR = path.join(ROOT, "scripts", "nodered_games_nodes");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
-// Recorded for the exact preimage the generation was reviewed against.
+// Historical record of the reviewed status-price candidate bytes. The tracked file is
+// now owned by the newer hub-limit generation, so this constant stays frozen while the
+// current source text is checked against the newest generation pin instead.
 const EXPECTED_CANDIDATE_SHA256 = "2ace2b60d0e246e84d5b9a542f6022ea1f7788c945dd855339e0ff0e47c09438";
 
 test("status price generation pins one reviewed live function node", () => {
@@ -26,10 +29,20 @@ test("status price generation pins one reviewed live function node", () => {
   });
   assert.equal(STATUS_PRICE_DEPLOYMENT_ID, "subscription-status-price-20260911");
   assert.equal(STATUS_PRICE_TARGETS.length, 1);
+  // The generation is consumed: its own candidate stays historical and is now the
+  // preimage recorded by the newer hub-limit generation.
+  assert.equal(
+    STATUS_PRICE_TARGETS[0].candidateSha256,
+    "8bbeee82bb309ee2a899c8b9a5b0e59090aaec58a7df1938eb19d9dab722f614",
+  );
   for (const target of STATUS_PRICE_TARGETS) {
     assert.match(target.liveSha256, /^[a-f0-9]{64}$/);
     const source = fs.readFileSync(path.join(FN_DIR, target.fileName), "utf8");
-    assert.equal(sha256(source), target.candidateSha256, target.fileName);
+    assert.equal(
+      sha256(source),
+      newestReviewedSourceSha256(target.fileName) ?? target.candidateSha256,
+      target.fileName,
+    );
     assert.doesNotThrow(() => new Function("msg", "flow", "global", "node", "env", source));
   }
 });
@@ -48,7 +61,16 @@ test("status price builder changes only the selected function body and declares 
     x: 10,
     y: 20,
   }];
-  const target = { ...reviewed, id: "synthetic-status-price", name: "Synthetic status price target", outputs: 1, liveSha256: sha256(oldSource) };
+  // The builder composes the current reviewed text, which is now pinned by the newest
+  // generation that consumed this file; the historical candidate hash stays in the module.
+  const target = {
+    ...reviewed,
+    id: "synthetic-status-price",
+    name: "Synthetic status price target",
+    outputs: 1,
+    liveSha256: sha256(oldSource),
+    candidateSha256: newestReviewedSourceSha256(reviewed.fileName) ?? reviewed.candidateSha256,
+  };
   const result = buildFocusedStatusPriceCandidate(source, [target]);
   assert.equal(source[0].func, oldSource);
   assert.deepEqual(result.changes, [{
@@ -85,7 +107,10 @@ test("status price builder fails closed on preimage, candidate and change budget
   // the generation is either already applied or its target is mis-declared.
   const reviewedSource = fs.readFileSync(path.join(FN_DIR, reviewed.fileName), "utf8");
   assert.throws(
-    () => buildFocusedStatusPriceCandidate([node({ func: reviewedSource })], [{ ...reviewed, liveSha256: sha256(reviewedSource) }]),
+    () => buildFocusedStatusPriceCandidate(
+      [node({ func: reviewedSource })],
+      [{ ...reviewed, liveSha256: sha256(reviewedSource), candidateSha256: sha256(reviewedSource) }],
+    ),
     /Focused change budget mismatch/,
   );
 });

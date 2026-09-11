@@ -1,6 +1,6 @@
 {
   "formatVersion": 2,
-  "capturedAt": "2026-09-06T12:37:38.718Z",
+  "capturedAt": "2026-09-11T11:37:29.010Z",
   "environment": "LOCAL_DISPOSABLE_CONTAINER",
   "networkMode": "none",
   "runtime": {
@@ -15,9 +15,9 @@
     "serviceUnitSha256": "3abbb557f2be9565ff115436107de08e4d8f0e566179700eb47bb1a1a01503dc",
     "settingsRuntimeSha256": "cabd3d1867311ae0bfa8165687d7911ebc60a0e84f54959192dacfead67451c1",
     "settingsGuardedSha256": "1ad5eeaf32ddb703b12f88c31151ff7b7fe9960a55a61a5433000ca92b24ee49",
-    "guardedStartupSha256": "6b15c0bd95f999517761b47000d0e9a881f60ea140d862049dacb11be0aea3b2",
-    "rawRequestGuardSha256": "7ed28c4e37703bf0d616e23ce0bb9f97e9adeb7002c54191d5d89f9dc62df9cc",
-    "rawAuditSha256": "fbe2cd280e15a9fc6f63ecbc7691d150c573332d4873dcb384b9d2b1c8b63336",
+    "guardedStartupSha256": "225ab231e475754672aebb52803536e45f8940fa09bba18b9e04de028e390b99",
+    "rawRequestGuardSha256": "74437f13a36fe583f6265553a6d06b8e7a91b0abae06ca755c335080c4368871",
+    "rawAuditSha256": "a89b4d36d49f8f06e8163368b3e7c4d7a774d494100748fce1a25bdc7884eead",
     "guardedPolicySha256": "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     "candidateFlowSha256": "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965"
   },
@@ -49,10 +49,10 @@
     "physicalProbesPassed": 20
   },
   "proof": {
-    "orchestratorSha256": "152233aaf2715629b921f5aba31d25c654c0e3fce29113fb50666655bbc4ee61",
+    "orchestratorSha256": "f2fc3bc2fac9eff6ec572fe140a397d250e9ebf35541c9b319c58eafd131bb4e",
     "probeScriptSha256": "02b6375c165a5a58c5aece628b6a2ce343d12e615c4c66b4932135af6e2ccae7",
-    "receiptSha256": "5c3937eb037baa5ca023d820f00878ee66307959429914e0055bdff5d6ca7829",
-    "probesSha256": "7990bb1630f4c2100e0fa99c87fde770a7a489c117c6d25b586c5e4e8806b629"
+    "probesSha256": "7990bb1630f4c2100e0fa99c87fde770a7a489c117c6d25b586c5e4e8806b629",
+    "receiptSha256": "59edbaee77ed61b619bf8aa53fe9452c950b721e2eb6181ed34064ff87354994"
   },
   "cleanup": {
     "ownedContainersRemoved": 2,

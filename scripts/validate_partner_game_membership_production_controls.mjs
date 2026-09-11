@@ -54,15 +54,15 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "bdb3bce1c7b50211ac2070ec143b4d6f3a182490ac86cd78294bee96b96f97a9",
+    runtimeManifestSha256: "ceea1d1d04330105a4e1604591c2ba5dcaf9ce86b7771636fd5b369b98187173",
     packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
-    dependencyTreeSha256: "2d8fe65584d879ed60cb6bd1271314ea26bf7a2f4fef9af009fc88b79e55578e",
-    auditReportSha256: "6d9f6bddd4ac0d8f5cb485a7978c6744849de8091f9547ed9ce14a07c9ed643c",
-    functionalRehearsalSha256: "9a3f38ddf5531eb371e1f612dc57ffbb9552abd20a1ccde3477a6f5540164d7f",
-    functionalRehearsalCapturedAt: "2026-09-05T06:49:04.000Z",
-    auditCapturedAt: "2026-09-06T09:09:03.738Z",
-    dependencyTreeCapturedAt: "2026-09-05T06:35:56.269Z",
+    dependencyTreeSha256: "b90abb8c6780e42caae6cc06db42f6ed7b5877d5b173239b34603048398a99c2",
+    auditReportSha256: "f984affcc6600ead898038a0f6143d2e032c0c659441b1bc03b983b9acb3e8e7",
+    functionalRehearsalSha256: "1bfdd869f61d2a8d2d8d1faf72d0046cb8e6ec50b65665e4ecee5ea90d3a8764",
+    functionalRehearsalCapturedAt: "2026-09-11T11:46:17.001Z",
+    auditCapturedAt: "2026-09-11T12:00:11.196Z",
+    dependencyTreeCapturedAt: "2026-09-11T12:00:08.539Z",
     npmCiInstalledPackageCount: 291,
     npmLsPackageOccurrenceCount: 838,
     npmLsInvalidPackageCount: 0,
@@ -78,13 +78,13 @@ export function validatePartnerProductionControls(contract) {
     serviceUnitSha256: "3abbb557f2be9565ff115436107de08e4d8f0e566179700eb47bb1a1a01503dc",
     settingsRuntimeSha256: "cabd3d1867311ae0bfa8165687d7911ebc60a0e84f54959192dacfead67451c1",
     settingsGuardedSha256: "1ad5eeaf32ddb703b12f88c31151ff7b7fe9960a55a61a5433000ca92b24ee49",
-    guardedStartupSha256: "6b15c0bd95f999517761b47000d0e9a881f60ea140d862049dacb11be0aea3b2",
-    rawRequestGuardSha256: "7ed28c4e37703bf0d616e23ce0bb9f97e9adeb7002c54191d5d89f9dc62df9cc",
-    rawAuditSha256: "fbe2cd280e15a9fc6f63ecbc7691d150c573332d4873dcb384b9d2b1c8b63336",
+    guardedStartupSha256: "225ab231e475754672aebb52803536e45f8940fa09bba18b9e04de028e390b99",
+    rawRequestGuardSha256: "74437f13a36fe583f6265553a6d06b8e7a91b0abae06ca755c335080c4368871",
+    rawAuditSha256: "a89b4d36d49f8f06e8163368b3e7c4d7a774d494100748fce1a25bdc7884eead",
     guardedPolicySha256: "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
-    rehearsalSha256: "23d0a7684835c39600c493edba6066f59d29c3a282a2c63978875a2ea9a7b0a7",
-    rehearsalCapturedAt: "2026-09-06T12:37:38.718Z",
+    rehearsalSha256: "fbb3c3da6eb6c013df108628c76e263b4ca90a0012a2cb643d1795d5b82d3897",
+    rehearsalCapturedAt: "2026-09-11T11:37:29.010Z",
     sharedFlowMutationAllowed: false,
   })) fail("Partner sidecar immutable closure identity changed");
   exactKeys(runtime.auditPolicy, [
@@ -114,11 +114,11 @@ export function validatePartnerProductionControls(contract) {
   if (rehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || rehearsal.functionalRehearsalSha256 !== runtime.immutableClosure.functionalRehearsalSha256
     || rehearsal.capturedAt !== runtime.immutableClosure.functionalRehearsalCapturedAt
-    || rehearsal.sourceCommit !== "26f90b6d5f54fa3ae6f51f77e70391957b44b781"
+    || rehearsal.sourceCommit !== "4776b80a996b1365dfb2712276fbc9d0b6c9e273"
     || rehearsal.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
     || rehearsal.nodeVersion !== runtime.requiredNodeVersion
     || rehearsal.nodeRedVersion !== runtime.minimumRehearsedNodeRedVersion
-    || rehearsal.customNodeReleaseSha256 !== "90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d"
+    || rehearsal.customNodeReleaseSha256 !== "90227ae407b1fbe7c4bb1e1683084bf3695abd9938d0c31253f52e1b5298f2ea"
     || rehearsal.defaultOffHttpStatus !== 503
     || rehearsal.flowRollbackHttpStatus !== 404
     || rehearsal.packageRollbackHttpStatus !== 404

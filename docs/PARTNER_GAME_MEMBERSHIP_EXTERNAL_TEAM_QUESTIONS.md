@@ -84,22 +84,28 @@ canonical JSON, payment semantics и ошибки. Партнёр реализу
 
 ## Реальные незавершённые работы PadlHub
 
-На проверенном source checkpoint `11e63d8` (runtime bytes с `ffcbe3a` не менялись):
+Состояние source-gate на 2026-09-11: партнёрский набор `911/911` плюс зарегистрированные
+shared-тесты (`934/934`), runtime/rehearsal/audit evidence перегенерированы
+воспроизводимо. Остаются инфраструктурные и provider-гейты:
 
 1. `verifyPartnerProductionIngress()` безусловно возвращает
-   `UNSUPPORTED_INGRESS_ADAPTER`: production-проверка Nginx не реализована.
-2. Guarded startup принимает только `DEFAULT_OFF_UNBOUND`/`unbound.invalid`;
-   одного изменения env недостаточно для включения методов. Нужен защищённый путь
-   запуска с привязкой к реальному deployment, без ослабления текущей защиты.
-3. Viva adapter читает token из global context, но в отдельном sidecar с memory
-   context нет token producer/refresh. В service unit сеть разрешена только через
-   localhost. Нужны серверный token lifecycle и ограниченный доступ к нашим
-   Mongo/Viva dependencies; выдача партнёру его API-key этого не исправляет.
-4. До выдачи работающего подключения нужны наши target/readback, audit, Mongo/Viva,
-   anti-replay/ownership и полные API post-checks. Текущие source/fixture результаты
-   не являются такими live-доказательствами.
+   `UNSUPPORTED_INGRESS_ADAPTER`: production-проверка Nginx ещё не реализована.
+2. Схема размещения Nginx не выбрана (изолированный `8443` / общий `443` / отдельный
+   IP); shared-profile даёт `CLOSED_PROFILE_REJECTED` из-за `ssl_protocols` и
+   заголовков. Нужно решение владельца и native/application proof.
+3. Guarded startup поддерживает `DEFAULT_OFF_UNBOUND` и `BOUND_DEFAULT_OFF`, но
+   привязанный запуск не проверен на реальном deployment: нужен новый private packet
+   и независимо утверждённый anchor.
+4. Отдельный Viva service-token resolver реализован локально, но не имеет live grant:
+   нужны технический клиент, egress ACL и подтверждённые idempotency/ON_PLACE/отмена.
+5. Не подняты: dedicated sidecar `127.0.0.1:18894` + systemd, keyring, mTLS-сертификаты
+   партнёра, DNS/сертификат выбранного хоста, Mongo replica-set с индексами и
+   транзакциями.
+6. Нужны audit custody/monitoring/retention, свежий runtime audit (<24 ч) на релизном
+   коммите и отдельные разрешения на deploy и activation.
 
-Это внутренние технические работы, а не ожидание решений rusPadelUp.
+Это внутренние технические работы, а не ожидание решений rusPadelUp. Партнёрский
+комплект документации для подготовки клиента: [integration guide](partner-game-membership-integration-guide/README.md).
 [Release requirements](PARTNER_GAME_MEMBERSHIP_GUARDED_RELEASE.md) сохраняются.
 Native Nginx application rehearsal/Docker install остаются
 `DEFERRED_BY_USER / NOT_RUN`; прежние failures сохранены и не переименовываются в PASS.

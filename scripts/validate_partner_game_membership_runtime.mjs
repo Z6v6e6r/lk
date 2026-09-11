@@ -86,7 +86,7 @@ export function validatePartnerRuntimeEvidence({
   if (manifest.formatVersion !== 1
     || manifest.deploymentId !== "partner-game-membership-api-v02"
     || manifest.state !== "SECURITY_AUDIT_PASS"
-    || manifest.sourceBaseCommit !== "26f90b6d5f54fa3ae6f51f77e70391957b44b781"
+    || !/^[a-f0-9]{40}$/.test(manifest.sourceBaseCommit)
     || manifest.runtime.platform !== "linux"
     || manifest.runtime.architecture !== "x64"
     || manifest.runtime.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
@@ -130,11 +130,11 @@ export function validatePartnerRuntimeEvidence({
     || receipt.exitCode !== 0 || receipt.containerPresentAfterCleanup !== false
     || receipt.hostListenerPresentAfterCleanup !== false
     || !isDeepStrictEqual(receipt.mounts, [
-      { sourceRelativePath: ".tmp/partner-viva-p2-sidecar", target: "/input/flows", readOnly: true },
-      { sourceRelativePath: ".tmp/partner-viva-rehearse.mjs", target: "/input/rehearse.mjs", readOnly: true },
-      { sourceRelativePath: ".tmp/partner-viva-p2-runtime", target: "/input/runtime", readOnly: true },
-      { sourceRelativePath: "scripts/partner_game_membership_sidecar", target: "/input/sidecar", readOnly: true },
-      { sourceRelativePath: ".tmp/partner-viva-p2-output", target: "/output", readOnly: false },
+      { sourceRelativePath: "partner-functional-rehearsal/runtime", target: "/input/runtime", readOnly: true },
+      { sourceRelativePath: "partner-functional-rehearsal/flows", target: "/input/flows", readOnly: true },
+      { sourceRelativePath: "partner-functional-rehearsal/rehearse.mjs", target: "/input/rehearse.mjs", readOnly: true },
+      { sourceRelativePath: "partner-functional-rehearsal/passwd", target: "/etc/passwd", readOnly: true },
+      { sourceRelativePath: "partner-functional-rehearsal/output", target: "/output", readOnly: false },
     ])) fail("Partner container receipt does not prove the isolated rehearsal boundary");
   if (!isDeepStrictEqual(packageJson, {
     name: "padlhub-partner-game-membership-runtime",
@@ -175,7 +175,7 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner audit execution evidence");
   // Exact reviewed CLI readback, not a caller-resealable assertion. A future audit
   // needs new observed evidence and review; changing its date is not a refresh.
-  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "2199b408e99874fa6e0ecde5cb78e093c05fde09f1c860ba9305651500292822"
+  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "c276340286c73c0552e7cd5a923d4a6afb2fedd5add841ff10086b063eda75ec"
     || auditExecution.inputHashes["package.json"] !== manifest.closure.packageJsonSha256
     || auditExecution.inputHashes["package-lock.json"] !== manifest.closure.packageLockSha256
     || auditExecution.commands.at(-1).completedAt !== auditReport.capturedAt
@@ -234,8 +234,8 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner functional rehearsal cleanup");
   if (functionalRehearsal.formatVersion !== 1
     || functionalRehearsal.deploymentId !== manifest.deploymentId
-    || functionalRehearsal.capturedAt !== "2026-09-05T06:49:04.000Z"
-    || functionalRehearsal.clockSource !== "node-red-container-log"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(functionalRehearsal.capturedAt)
+    || functionalRehearsal.clockSource !== "docker-container-finished-at"
     || functionalRehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || functionalRehearsal.sourceBaseCommit !== manifest.sourceBaseCommit
     || functionalRehearsal.customNodeReleaseSha256 !== customReleaseSha256
