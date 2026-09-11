@@ -21,12 +21,13 @@ const planning: SubscriptionBenefitGroup = {
   id: 'booking-limit',
   title: 'Планирование:',
   items: [{ id: 'active-bookings', label: 'До 4 активных записей на 2 недели вперёд' }],
+  kind: 'note',
 };
 
 export const friendshipBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день:',
+    title: '1 час в день бесплатно:',
     items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }],
   },
   discounts,
@@ -36,7 +37,7 @@ export const friendshipBenefits: readonly SubscriptionBenefitGroup[] = [
 export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день:',
+    title: '1 час в день бесплатно:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -52,7 +53,7 @@ export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
 export const academyBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день:',
+    title: '1 час в день бесплатно:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -66,7 +67,7 @@ export const academyBenefits: readonly SubscriptionBenefitGroup[] = [
 export const sportBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день:',
+    title: '1 час в день бесплатно:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -77,16 +78,35 @@ export const sportBenefits: readonly SubscriptionBenefitGroup[] = [
   planning,
 ];
 
-export type SummerPlanCounterKey = 'friendship' | 'ra' | 'academy' | 'sport';
+/** Five-visit pass: sold as a direct product, so it has no daily limits copy. */
+export const energy5Benefits: readonly SubscriptionBenefitGroup[] = [
+  {
+    id: 'formats',
+    title: 'Форматы на выбор:',
+    items: [
+      { id: 'training', icon: 'training', label: 'Игра + тренер' },
+      { id: 'group', icon: 'group', label: 'Групповые тренировки' },
+      { id: 'split', icon: 'group', label: 'Сплит тренировки' },
+      { id: 'tournament', icon: 'tournament', label: 'Турниры ПадлхАБ' },
+    ],
+  },
+  planning,
+];
+
+export type SummerPlanCounterKey = 'friendship' | 'ra' | 'academy' | 'sport' | 'energy5';
 
 export const summerPlanDisplayOrder: readonly SummerPlanCounterKey[] = [
   'friendship',
   'ra',
   'academy',
   'sport',
+  'energy5',
 ];
 
-export type SummerPlanPresentation = Pick<SubscriptionPlanView, 'label' | 'tagTone' | 'artUrl' | 'featured' | 'benefitGroups'>;
+export type SummerPlanPresentation = Pick<
+  SubscriptionPlanView,
+  'label' | 'labelKind' | 'tagTone' | 'artUrl' | 'featured' | 'benefitGroups'
+>;
 
 export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, SummerPlanPresentation>> = {
   friendship: {
@@ -113,13 +133,18 @@ export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, Summe
     tagTone: '#66bceb',
     benefitGroups: sportBenefits,
   },
+  energy5: {
+    label: 'Абонемент «Энергия 5»',
+    labelKind: 'plain',
+    benefitGroups: energy5Benefits,
+  },
 };
 
 
 // Keep annual copy aligned with the existing HAB annual card, not the summer artwork.
 export const friendshipVariantBenefits: Readonly<Record<string, readonly SubscriptionBenefitGroup[]>> = {
   'monthly-two-hours': [
-    { id: 'daily-two-hours', title: '2 часа в день:',
+    { id: 'daily-two-hours', title: '2 часа в день бесплатно:',
       items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }] },
     { ...discounts, title: 'СВЕРХ 2-ух ЧАСОВ:' },
     planning,

@@ -1,5 +1,11 @@
 # Журнал шагов
 
+## 2026-09-11 — Витрина `/subsription`: согласие после CTA и правки карточек
+
+- Сообщение о согласии с условиями годовой подписки убрано с верха страницы и открывается отдельным окном только после нажатия «Оформить подписку»; без отметки оплата не создаётся.
+- По семи browser-комментариям: одинаковая высота карточек, рамка «Дружбы» в цвете бейджа, CTA без заливки кроме РА, «/ 30 дней» вместо «мес.», «1 час в день бесплатно:», колонтитул «ⓘ До 4 активных записей на 2 недели вперёд», новая карточка «Абонемент «Энергия 5»» на существующем статусе `energy5`.
+- LOCAL: focused 13/13, TypeScript, ESLint, prod/dev IIFE builds и headless-проверка CTA на локальных заглушках (гость, «Дружба 30 дней», годовая) — PASS. Публичный статус `energy5`, продажа, выкладка, Tilda и main не проверялись; merge/push/deploy/live writes отсутствуют. См. `docs/SUBSCRIPTION_STOREFRONT_TILDA.md`.
+
 ## 2026-09-09 — Group training HAB 50% monetary discount, local stage
 
 - Added authenticated eligibility preview and crossed-out original/discounted one-time price with the exact subscription name. Existing HAB rule only; no promo stacking or visit consumption.

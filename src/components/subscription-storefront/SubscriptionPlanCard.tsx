@@ -5,6 +5,7 @@ import { subscriptionBenefitIconUrls } from './assets/benefit-icons.js';
 import lightningUrl from './assets/icons/lightning.svg';
 
 type TagCssProperties = CSSProperties & { '--subscription-tag-tone'?: string };
+type CardCssProperties = CSSProperties & { '--subscription-card-frame'?: string };
 
 function rubles(priceMinor: number): string {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(priceMinor / 100);
@@ -145,6 +146,17 @@ function PlanTagBadge({ label }: { readonly label: string }): React.JSX.Element 
   );
 }
 
+/** Circled exclamation used by the compact «До 4 активных записей…» footer line. */
+function PlanNoteIcon(): React.JSX.Element {
+  return (
+    <svg className="subscription-card__note-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M8 4.3v5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="8" cy="11.6" r="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
 function PlanCardBody(props: {
   readonly plan: SubscriptionPlanView;
   readonly selectedOption: SubscriptionBillingOption;
@@ -154,25 +166,31 @@ function PlanCardBody(props: {
   return (
     <div className="subscription-card__panel">
       <div className="subscription-card__header">
-        <div
-          className={`subscription-card__tag${
-            props.plan.artUrl
-              ? ' subscription-card__tag--art'
-              : ' subscription-card__tag--label'
-          }`}
-          style={
-            props.plan.tagTone
-              ? { '--subscription-tag-tone': props.plan.tagTone } as TagCssProperties
-              : undefined
-          }
-          aria-label={props.plan.label}
-        >
-          {props.plan.artUrl ? (
-            <img className="subscription-card__art" src={props.plan.artUrl} alt="" aria-hidden />
-          ) : (
-            <PlanTagBadge label={props.plan.label} />
-          )}
-        </div>
+        {props.plan.labelKind === 'plain' ? (
+          <div className="subscription-card__tag subscription-card__tag--plain" aria-label={props.plan.label}>
+            <span>{props.plan.label}</span>
+          </div>
+        ) : (
+          <div
+            className={`subscription-card__tag${
+              props.plan.artUrl
+                ? ' subscription-card__tag--art'
+                : ' subscription-card__tag--label'
+            }`}
+            style={
+              props.plan.tagTone
+                ? { '--subscription-tag-tone': props.plan.tagTone } as TagCssProperties
+                : undefined
+            }
+            aria-label={props.plan.label}
+          >
+            {props.plan.artUrl ? (
+              <img className="subscription-card__art" src={props.plan.artUrl} alt="" aria-hidden />
+            ) : (
+              <PlanTagBadge label={props.plan.label} />
+            )}
+          </div>
+        )}
 
         <div className={`subscription-card__price-row${props.plan.billingOptions.length > 2 ? " subscription-card__price-row--variants" : ""}`}>
           <p className="subscription-card__price">
@@ -200,18 +218,25 @@ function PlanCardBody(props: {
         {props.selectedOption.statusMessage && <p className="subscription-card__availability" role="status">{props.selectedOption.statusMessage}</p>}
         <div className="subscription-card__benefits">
           {(props.selectedOption.benefitGroups ?? props.plan.benefitGroups).map((group) => (
-            <section key={group.id} className="subscription-card__benefit-group">
-              <h3>{group.title}</h3>
-              <ul>
-                {group.items.map((item) => (
-                  <li key={item.id}>
-                    {item.icon ? <BenefitIcon name={item.icon} /> : null}
-                    {item.badge ? <b>{item.badge}</b> : null}
-                    <span>{item.label}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            group.kind === 'note' ? (
+              <p key={group.id} className="subscription-card__note">
+                <PlanNoteIcon />
+                {group.items.map((item) => <span key={item.id}>{item.label}</span>)}
+              </p>
+            ) : (
+              <section key={group.id} className="subscription-card__benefit-group">
+                <h3>{group.title}</h3>
+                <ul>
+                  {group.items.map((item) => (
+                    <li key={item.id}>
+                      {item.icon ? <BenefitIcon name={item.icon} /> : null}
+                      {item.badge ? <b>{item.badge}</b> : null}
+                      <span>{item.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )
           ))}
         </div>
       </div>
@@ -235,8 +260,13 @@ export function SubscriptionPlanCard(props: {
 
   return (
     <article
-      className={`subscription-card${progress ? '' : ' subscription-card--no-progress'}`}
+      className={`subscription-card${progress ? '' : ' subscription-card--no-progress'}${
+        props.plan.featured ? ' subscription-card--featured' : ''
+      }`}
       data-plan-id={props.plan.id}
+      style={props.plan.tagTone
+        ? ({ '--subscription-card-frame': props.plan.tagTone } as CardCssProperties)
+        : undefined}
     >
       <PlanProgress progress={progress} className="subscription-card__progress" />
       <PlanCardBody

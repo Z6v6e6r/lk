@@ -34,11 +34,15 @@ export interface SubscriptionBenefitGroup {
   readonly id: string;
   readonly title: string;
   readonly items: readonly SubscriptionBenefit[];
+  /** `note` renders the group as the compact footer line instead of a list. */
+  readonly kind?: 'list' | 'note';
 }
 
 export interface SubscriptionPlanView {
   readonly id: string;
   readonly label: string;
+  /** `plain` renders the label as a headline instead of the badge artwork. */
+  readonly labelKind?: 'badge' | 'plain';
   readonly tagTone?: string;
   readonly artUrl?: string;
   readonly featured?: boolean;

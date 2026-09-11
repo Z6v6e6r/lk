@@ -6,7 +6,8 @@ import { SubscriptionStorefront } from './SubscriptionStorefront';
 import { AuthForm } from '../auth/AuthForm';
 import { summerPlanPresentation, friendshipVariantBenefits } from './presentation';
 import {
-  billingFromStatus, canContinue, storefrontPlanKeys, friendshipBillingOptions, scopedStorefrontStatuses,
+  billingFromStatus, canContinue, energy5BillingOptions, requiresAnnualTermsConsent, storefrontPlanKeys,
+  friendshipBillingOptions, scopedStorefrontStatuses,
   type StorefrontStatus,
 } from './catalog';
 import type { SubscriptionPlanSelection, SubscriptionStorefrontView } from './model';
@@ -25,8 +26,6 @@ import {
 } from './payment';
 import markUrl from './assets/brand/подписка.svg';
 
-/** Billing option that requires an explicit terms confirmation before payment. */
-const CONSENT_REQUIRED_OPTION_ID = 'annual';
 const PAYMENT_CONFIRM_ATTEMPTS = 3;
 const PAYMENT_CONFIRM_RETRY_MS = 4000;
 
@@ -41,6 +40,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
   const [attempt, setAttempt] = useState(0);
   const [annualTermsAccepted, setAnnualTermsAccepted] = useState(false);
   const [authRequested, setAuthRequested] = useState(false);
+  const [consentRequested, setConsentRequested] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<SubscriptionPlanSelection | null>(null);
   const [processing, setProcessing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -127,7 +127,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
     return () => { cancelled = true; };
   }, [cabinetUrl, previewView]);
 
-  const handleChoose = useCallback(async (selection: SubscriptionPlanSelection, resumeAuth = false) => {
+  const handleChoose = useCallback(async (selection: SubscriptionPlanSelection, resumeFlow = false) => {
     if (previewView || paymentInFlightRef.current) return;
     setFailure(null);
     setNotice(null);
@@ -143,8 +143,11 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
       setAuthRequested(true);
       return;
     }
-    if (billingOptionId === CONSENT_REQUIRED_OPTION_ID && !annualTermsAccepted) {
-      setFailure('Подтвердите согласие с условиями годовой подписки');
+    if (requiresAnnualTermsConsent(billingOptionId, annualTermsAccepted)) {
+      // Условия годовой подписки показываем только после нажатия «Оформить подписку».
+      setPendingSelection(selection);
+      setConsentRequested(true);
+      if (resumeFlow) setAuthRequested(false);
       return;
     }
 
@@ -164,7 +167,10 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
       }
       setNotice(outcome.message);
       setAttempt(value => value + 1);
-      if (resumeAuth) setAuthRequested(false);
+      if (resumeFlow) {
+        setAuthRequested(false);
+        setConsentRequested(false);
+      }
     } catch (paymentError) {
       setFailure(paymentError instanceof StorefrontPaymentError
         ? paymentError.message
@@ -175,6 +181,12 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
     }
   }, [annualTermsAccepted, isAuthenticated, previewView]);
 
+  const closeConsentDialog = useCallback(() => {
+    setConsentRequested(false);
+    setPendingSelection(null);
+    setFailure(null);
+  }, []);
+
   const plans = storefrontPlanKeys.flatMap(key => {
     const status = statuses?.find(item => item.counterKey === key);
     if (!status && key !== 'friendship') return [];
@@ -183,11 +195,15 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
         ...option,
         benefitGroups: friendshipVariantBenefits[option.id],
       }))
-      : status ? billingFromStatus(status) : [];
+      : key === 'energy5'
+        ? energy5BillingOptions(status)
+        : status ? billingFromStatus(status) : [];
     if (!billingOptions.length) return [];
     return [{
       ...summerPlanPresentation[key], id: key, billingOptions,
-      ctaLabel: processing ? 'Создаём оплату…' : 'Оформить подписку',
+      ctaLabel: processing
+        ? 'Создаём оплату…'
+        : (key === 'energy5' ? 'Оформить абонемент' : 'Оформить подписку'),
       ctaDisabled: processing || (key === 'friendship' ? error : !status || !canContinue(status, error)),
     }];
   });
@@ -208,20 +224,6 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
     {(previewView || statuses) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}
       {failure && <p className="subscription-status-message subscription-status-message--error" role="alert">{failure}</p>}
-      {!previewView && isAuthenticated && (
-        <label className="subscription-consent">
-          <input
-            type="checkbox"
-            checked={annualTermsAccepted}
-            onChange={event => {
-              const checked = event.target.checked;
-              setAnnualTermsAccepted(checked);
-              if (checked) setFailure(null);
-            }}
-          />
-          <span>Я ознакомился(ась) и согласен(на) с условиями годовой подписки</span>
-        </label>
-      )}
       <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }} />
     </>}
     {!previewView && authRequested && (
@@ -266,6 +268,53 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
           ) : (
             <AuthForm onLogin={() => {}} />
           )}
+        </section>
+      </div>
+    )}
+    {!previewView && consentRequested && isAuthenticated && (
+      <div className="subscription-auth-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-consent-title">
+        <button
+          type="button"
+          className="subscription-auth-backdrop"
+          aria-label="Закрыть подтверждение условий годовой подписки"
+          onClick={closeConsentDialog}
+        />
+        <section className="subscription-auth-block">
+          <button
+            type="button"
+            className="subscription-auth-close"
+            aria-label="Закрыть подтверждение условий годовой подписки"
+            onClick={closeConsentDialog}
+          >
+            ×
+          </button>
+          <h2 id="subscription-consent-title" className="subscription-auth-title">
+            Оформление годовой подписки
+          </h2>
+          <p className="subscription-auth-caption">
+            Подтвердите согласие с условиями годовой подписки — и мы сразу откроем страницу оплаты банка.
+          </p>
+          {failure && <p className="auth-error" role="alert">{failure}</p>}
+          <label className="subscription-consent">
+            <input
+              type="checkbox"
+              checked={annualTermsAccepted}
+              onChange={event => {
+                const checked = event.target.checked;
+                setAnnualTermsAccepted(checked);
+                if (checked) setFailure(null);
+              }}
+            />
+            <span>Я ознакомился(ась) и согласен(на) с условиями годовой подписки</span>
+          </label>
+          <button
+            type="button"
+            className="auth-btn"
+            disabled={!annualTermsAccepted || processing}
+            onClick={() => { if (pendingSelection) void handleChoose(pendingSelection, true); }}
+          >
+            {processing ? 'Создаём оплату…' : 'Продолжить оплату'}
+          </button>
         </section>
       </div>
     )}

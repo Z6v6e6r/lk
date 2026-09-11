@@ -76,6 +76,9 @@ code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8
             { counterKey: 'academy', inventoryId: 'preview', unlimited: false, planType: 'friendship',
               campaignKey: 'preview', productId: null, priceMinor: 2380000, canPurchase: true,
               bindingReady: true, remainingCount: 7, totalLimit: 100, paidCount: 93, status: 'READY' },
+            { counterKey: 'energy5', inventoryId: 'preview', unlimited: true, planType: 'friendship',
+              campaignKey: 'preview', productId: null, priceMinor: 1980000, canPurchase: true,
+              bindingReady: true, remainingCount: 0, totalLimit: 0, paidCount: 0, status: 'READY' },
           ];
       note('stub status <- ' + url);
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
