@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Explicit local installation + registry audit. No host credentials or deployment.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
@@ -12,7 +11,9 @@ if (process.argv.slice(2).join(" ") !== "--install-and-audit-locked-runtime") th
 const scripts = path.dirname(fileURLToPath(import.meta.url));
 const reference = "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5";
 const child = "sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96";
-const output = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "partner-runtime-audit-")); fs.chmodSync(output, 0o700);
+// Mount sources must live under a path the container runtime can share; the
+// canonical /tmp root is used because this host does not share /var/folders.
+const output = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "partner-runtime-audit-")); fs.chmodSync(output, 0o700);
 const runtime = path.join(output, "runtime"), input = path.join(output, "input"), results = path.join(output, "results");
 for (const dir of [runtime, input, results, path.join(runtime, "partner-package")]) fs.mkdirSync(dir, { mode: 0o700 });
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -51,7 +52,14 @@ function verify() {
     inspectedAt: new Date().toISOString() };
 }
 try {
-  const image = JSON.parse(docker("image", "inspect", "--platform", "linux/amd64", reference))[0];
+  // Docker Desktop intermittently loses the pinned manifest reference until it is
+  // re-resolved; pull is idempotent and the pinned digest still decides the bytes.
+  let image;
+  for (let attempt = 0; attempt < 6 && !image; attempt += 1) {
+    try { image = JSON.parse(docker("image", "inspect", "--platform", "linux/amd64", reference))[0]; }
+    catch { try { docker("pull", "--platform", "linux/amd64", reference); } catch { /* retry below */ } execFileSync("sleep", ["3"]); }
+  }
+  assert.ok(image, "pinned linux/amd64 runtime image unavailable");
   assert.equal(image.Id, child); assert.equal(image.Os, "linux"); assert.equal(image.Architecture, "amd64");
   assert.ok(image.RepoDigests.includes(reference)); receipt.imageRepoDigests = image.RepoDigests;
   ownedId = docker("create", "--platform", "linux/amd64", "--name", `partner-audit-${runId}`, "--label", `padlhub.partner-runtime-audit=${runId}`,
@@ -63,7 +71,9 @@ try {
   if (!/^[a-f0-9]{64}$/.test(ownedId)) throw new Error("UNCONFIRMED_AUDIT_CONTAINER");
   fs.writeFileSync(path.join(results, "recovery.json"), JSON.stringify({ runId, ownedId, state: "CREATED_NOT_STARTED" }) + "\n", { mode: 0o600, flag: "wx" });
   receipt.containers.push(verify()); docker("start", ownedId);
-  const deadline = Date.now() + 240000;
+  // npm ci + npm ls + npm audit under emulation needs far more than the previous 4
+  // minutes; keep a hard bound but let the pinned Linux runtime finish.
+  const deadline = Date.now() + 45 * 60 * 1000;
   while (inspect().State.Running && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 1000));
   const final = inspect(); receipt.containers.push(verify());
   fs.writeFileSync(path.join(results, "container.log"), docker("logs", ownedId), { mode: 0o600 });

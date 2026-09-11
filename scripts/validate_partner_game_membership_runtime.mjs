@@ -175,7 +175,7 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner audit execution evidence");
   // Exact reviewed CLI readback, not a caller-resealable assertion. A future audit
   // needs new observed evidence and review; changing its date is not a refresh.
-  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "2199b408e99874fa6e0ecde5cb78e093c05fde09f1c860ba9305651500292822"
+  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "c276340286c73c0552e7cd5a923d4a6afb2fedd5add841ff10086b063eda75ec"
     || auditExecution.inputHashes["package.json"] !== manifest.closure.packageJsonSha256
     || auditExecution.inputHashes["package-lock.json"] !== manifest.closure.packageLockSha256
     || auditExecution.commands.at(-1).completedAt !== auditReport.capturedAt

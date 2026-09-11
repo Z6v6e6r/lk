@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "capturedAt": "2026-09-06T09:09:03.738Z",
+  "capturedAt": "2026-09-11T12:00:11.196Z",
   "command": "npm audit --omit=dev --json --ignore-scripts",
   "runtime": {
     "platform": "linux",
@@ -51,12 +51,18 @@
       "via": [
         "body-parser"
       ],
-      "effects": [],
-      "range": ">=4.1.11",
+      "effects": [
+        "node-red"
+      ],
+      "range": "4.1.11 - 4.1.14 || 5.0.0-beta.0 - 5.0.6",
       "nodes": [
         "node_modules/@node-red/nodes"
       ],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "node-red",
+        "version": "4.1.10",
+        "isSemVerMajor": true
+      }
     },
     {
       "name": "@node-red/runtime",
@@ -87,17 +93,21 @@
       "nodes": [
         "node_modules/body-parser"
       ],
-      "fixAvailable": true
+      "fixAvailable": {
+        "name": "node-red",
+        "version": "4.1.10",
+        "isSemVerMajor": true
+      }
     },
     {
       "name": "express",
       "severity": "moderate",
       "isDirect": false,
       "via": [
-        "body-parser",
         "qs"
       ],
       "effects": [
+        "@node-red/editor-api",
         "@node-red/runtime",
         "node-red"
       ],
@@ -191,9 +201,9 @@
     "formatVersion": 1,
     "scope": "LOCAL_INSTALLED_LINUX_RUNTIME_AUDIT",
     "state": "PASS_LOCAL_AUDIT_ONLY",
-    "receiptSha256": "c7759e03484dcb220d39e680229dabd743a9e41120f80114b572a69abf5f1fd6",
-    "observationSha256": "4220d28018b358210478cf988557efcb33a37a2bb6e729dfeecdd309bc5c2071",
-    "orchestratorSha256": "fe73f3d1ff17ecc3cbfff5babb444be2458498acf2d0a48482beac3bdd271658",
+    "receiptSha256": "5cb0d2a7903c8e7c764e0e623c74d0daf9db122211981843dd1a5ede08a1cfd4",
+    "observationSha256": "2ea2501a8a4bb6c2b8eec1dea365a9f0f4b653aa3e823765c68f2b79d59cec58",
+    "orchestratorSha256": "2ebcd489ffbe23bf42de7a61f77646e6c280530a3bc8892d340572cd12366edb",
     "runnerSha256": "7cedf75c8abb79fb39c6df5346e6b8c1cf57a559351f572139f3d9bdbed9e6af",
     "imageReference": "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     "platformImageId": "sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96",
@@ -204,9 +214,10 @@
       "../node-red/custom-nodes/partner-game-membership-api/package-lock.json": "faf9399da660857128ea21e16c1ac451382a406c038733412a880ca19e8c0e8e",
       "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs": "69781e532d5398ff827e839ba9ce11094dd5c0e413f4ea86c76711c37008f283",
       "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs": "96fd4163e625641d5958c96c9d68cdc6930010e42de2e10decf714d53307f641",
-      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs": "ab772d4bbd6489ecf5b101675768890769a0cb8776fafc04cbfdb0666807777b",
-      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs": "196bddb4df6116364f75f29995e95cc3716ee71d725bf848a3c81c6526d08c74",
-      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.html": "dbfe619f98c94884f65b8e992a6f237b0ef5a6ee3378950cbed63db6749cbee3",
+      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs": "f38a6b50a66564a56ae9773b93e9ba16db4e3e151c1819713437b03e4873b0e6",
+      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs": "083060dd19a5ca830de1d7f4d2aae67200b170f1666f5d150b893d968758de3b",
+      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-ingress.cjs": "66634f6ac8fe9c6e99a866bedd05c4fdd123440e5e4058267fe1523246490349",
+      "../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.html": "80d2e7678c1f609b5d2e969c45a2e8d13a6f313ef8fdd57fc81ff8809a5adf3c",
       "tests/fixtures/partner-runtime-audit.mjs": "7cedf75c8abb79fb39c6df5346e6b8c1cf57a559351f572139f3d9bdbed9e6af"
     },
     "inputHashes": {
@@ -227,8 +238,8 @@
           "--fetch-retries=0",
           "--fetch-timeout=30000"
         ],
-        "startedAt": "2026-09-06T09:08:44.118Z",
-        "completedAt": "2026-09-06T09:08:44.719Z",
+        "startedAt": "2026-09-11T11:59:49.233Z",
+        "completedAt": "2026-09-11T11:59:49.812Z",
         "exitCode": 0,
         "stdoutSha256": "7eeb2f42ee0d10d4e00355252af2e7468bbff992af43b511355feb76da5c7cfb",
         "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -247,10 +258,10 @@
           "--fetch-retries=0",
           "--fetch-timeout=30000"
         ],
-        "startedAt": "2026-09-06T09:08:44.720Z",
-        "completedAt": "2026-09-06T09:08:58.777Z",
+        "startedAt": "2026-09-11T11:59:49.813Z",
+        "completedAt": "2026-09-11T12:00:07.644Z",
         "exitCode": 0,
-        "stdoutSha256": "ede71bb345d2d3df7a06371b8b599c42935233cdfd0e7c2487871e31e9d4d8c9",
+        "stdoutSha256": "616bdc3f0373c3cbe51f2299926dd51c488c7ee465d04cdf5cabe912877314d5",
         "stderrSha256": "ea1459f5efae90125f581fb4ad7a08d389754aa1861589940e246843f777cae8"
       },
       {
@@ -267,8 +278,8 @@
           "--fetch-retries=0",
           "--fetch-timeout=30000"
         ],
-        "startedAt": "2026-09-06T09:08:58.779Z",
-        "completedAt": "2026-09-06T09:09:00.123Z",
+        "startedAt": "2026-09-11T12:00:07.645Z",
+        "completedAt": "2026-09-11T12:00:08.539Z",
         "exitCode": 0,
         "stdoutSha256": "cda0d213f216fec6f5170d2689eade54cdcddb23fd0ee8f170eb0d3b26c24c21",
         "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -287,19 +298,20 @@
           "--fetch-retries=0",
           "--fetch-timeout=30000"
         ],
-        "startedAt": "2026-09-06T09:09:00.131Z",
-        "completedAt": "2026-09-06T09:09:03.738Z",
+        "startedAt": "2026-09-11T12:00:08.545Z",
+        "completedAt": "2026-09-11T12:00:11.196Z",
         "exitCode": 1,
-        "stdoutSha256": "35df9edc5424448d6c44434eb99996843a1e49446addc94101b4e4e6daa733d5",
+        "stdoutSha256": "7149d404f5598735a77df56d093dcc9841cf4c4aa1689c31d86333a69c4904d9",
         "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "containers": [
       {
-        "id": "6e85513de1e68f982e19229d46485a1e9feab3135dd0c9e47f175af9ddf5b93d",
+        "id": "70e824dae4cc2410ff2429b4c088c0c1e6ea202369048c98aac6e790d4f12fb1",
         "imageId": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
         "imageReference": "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
         "networkMode": "bridge",
+        "user": "501:20",
         "readOnlyRootfs": true,
         "publishedPorts": 0,
         "privileged": false,
@@ -328,14 +340,14 @@
             "writable": false
           }
         ],
-        "inspectedAt": "2026-09-06T09:08:43.503Z",
-        "nonRootUser": true
+        "inspectedAt": "2026-09-11T11:59:48.415Z"
       },
       {
-        "id": "6e85513de1e68f982e19229d46485a1e9feab3135dd0c9e47f175af9ddf5b93d",
+        "id": "70e824dae4cc2410ff2429b4c088c0c1e6ea202369048c98aac6e790d4f12fb1",
         "imageId": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
         "imageReference": "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
         "networkMode": "bridge",
+        "user": "501:20",
         "readOnlyRootfs": true,
         "publishedPorts": 0,
         "privileged": false,
@@ -364,13 +376,12 @@
             "writable": false
           }
         ],
-        "inspectedAt": "2026-09-06T09:09:04.386Z",
-        "nonRootUser": true
+        "inspectedAt": "2026-09-11T12:00:11.817Z"
       }
     ],
     "egressBoundary": "REGISTRY_CONFIGURED_BRIDGE_NOT_EGRESS_ACL",
     "containerPresentAfterCleanup": false,
-    "cleanupCapturedAt": "2026-09-06T09:09:04.511Z",
+    "cleanupCapturedAt": "2026-09-11T12:00:11.932Z",
     "productionTouched": false
   }
 }
