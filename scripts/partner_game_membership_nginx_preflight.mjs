@@ -7,10 +7,10 @@ import { PartnerIngressEvidenceError, parseCanonicalIngressJson } from "./partne
 // Updating the packet controls pin must never promote its NOT_PROVEN results.
 const SOURCE_PINS = Object.freeze({
   core: "69781e532d5398ff827e839ba9ce11094dd5c0e413f4ea86c76711c37008f283",
-  node: "196bddb4df6116364f75f29995e95cc3716ee71d725bf848a3c81c6526d08c74",
+  node: "083060dd19a5ca830de1d7f4d2aae67200b170f1666f5d150b893d968758de3b",
   settings: "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
 });
-const CONTROLS_PIN = "6226f692004944a0c93bca18fce04ba6328a6c91afd0619562fc8f7f40be3d26";
+const CONTROLS_PIN = "b877d65c5113a6009bab7e0b1b5a6edd6e207c2e25cc29447e57093e91b3ec3c";
 const HASH = /^[a-f0-9]{64}$/;
 const KNOWN_FLAGS = Object.freeze([
   "--with-http_ssl_module", "--with-http_v2_module", "--with-control-api",

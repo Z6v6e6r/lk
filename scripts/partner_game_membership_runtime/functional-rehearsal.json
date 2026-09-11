@@ -1,11 +1,11 @@
 {
   "formatVersion": 1,
   "deploymentId": "partner-game-membership-api-v02",
-  "capturedAt": "2026-09-05T06:49:04.000Z",
-  "clockSource": "node-red-container-log",
+  "capturedAt": "2026-09-11T11:26:06.631061841Z",
+  "clockSource": "docker-container-finished-at",
   "evidenceScope": "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
-  "sourceBaseCommit": "26f90b6d5f54fa3ae6f51f77e70391957b44b781",
-  "customNodeReleaseSha256": "90c365a8512a59eef27fd75edbfb5dd60d0d0bc21ece37b867baea7fba65428d",
+  "sourceBaseCommit": "342ea14258748288c20433ef57981f9fe7e48a25",
+  "customNodeReleaseSha256": "90227ae407b1fbe7c4bb1e1683084bf3695abd9938d0c31253f52e1b5298f2ea",
   "runtime": {
     "platform": "linux",
     "architecture": "x64",
@@ -59,7 +59,7 @@
   "containerReceipt": {
     "formatVersion": 1,
     "evidenceScope": "LOCAL_CONTAINER_CLI_READBACK",
-    "containerId": "9f02ba07c9d6528863548acea8526aa3c11b69436bce4d94546cbfde5ca81603",
+    "containerId": "0c143cc517a256b94935158e8f317581b37c9e98c843c8e43c58805e6ee2d595",
     "imageReference": "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     "containerImageId": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     "platformImageId": "sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96",
@@ -72,36 +72,36 @@
     "publishedPortCount": 0,
     "mounts": [
       {
-        "sourceRelativePath": ".tmp/partner-viva-p2-sidecar",
-        "target": "/input/flows",
-        "readOnly": true
-      },
-      {
-        "sourceRelativePath": ".tmp/partner-viva-rehearse.mjs",
-        "target": "/input/rehearse.mjs",
-        "readOnly": true
-      },
-      {
-        "sourceRelativePath": ".tmp/partner-viva-p2-runtime",
+        "sourceRelativePath": "partner-functional-rehearsal/runtime",
         "target": "/input/runtime",
         "readOnly": true
       },
       {
-        "sourceRelativePath": "scripts/partner_game_membership_sidecar",
-        "target": "/input/sidecar",
+        "sourceRelativePath": "partner-functional-rehearsal/flows",
+        "target": "/input/flows",
         "readOnly": true
       },
       {
-        "sourceRelativePath": ".tmp/partner-viva-p2-output",
+        "sourceRelativePath": "partner-functional-rehearsal/rehearse.mjs",
+        "target": "/input/rehearse.mjs",
+        "readOnly": true
+      },
+      {
+        "sourceRelativePath": "partner-functional-rehearsal/passwd",
+        "target": "/etc/passwd",
+        "readOnly": true
+      },
+      {
+        "sourceRelativePath": "partner-functional-rehearsal/output",
         "target": "/output",
         "readOnly": false
       }
     ],
-    "orchestratorSha256": "0f774b59663581309fa311a8fa008a920f54d858f740be81ca2752c0f9c66ea7",
-    "inspectedAt": "2026-09-05T06:48:59.076Z",
-    "finishedAt": "2026-09-05T06:49:07.864180793Z",
+    "orchestratorSha256": "2fa31c01fba00c5377c6b2e1aadd2d746393eeddeee58ca1f5b2e3879b34a7f8",
+    "inspectedAt": "2026-09-11T11:25:33.836Z",
+    "finishedAt": "2026-09-11T11:26:06.631061841Z",
     "exitCode": 0,
-    "cleanupCapturedAt": "2026-09-05T06:49:08.451Z",
+    "cleanupCapturedAt": "2026-09-11T11:26:10.610Z",
     "containerPresentAfterCleanup": false,
     "hostListenerPresentAfterCleanup": false
   }
