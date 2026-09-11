@@ -226,3 +226,37 @@ root-ACL custody (`build_legacy_game_command_root_acl_bootstrap.mjs`,
 `uniq_tenant_game_id` на `lk_games` (дубликатов больше нет) и пять коллекций
 `lk_partner_*` с индексами, с явным решением владельца вне legacy-governance. Индексы
 additive, откат — drop созданного.
+
+## Журнал: индексы применены scoped-миграцией (2026-09-11)
+
+Владелец выбрал scoped-исключение. Миграция
+`scripts/migrate_partner_game_membership_indexes.mjs` (режимы
+`audit`/`dry-run`/`apply`/`postcheck`/`rollback-plan`) прогнана на боевой БД `games`:
+
+- перед `apply` dry-run подтвердил `missing: 11`, `conflicts: []`, `duplicates: []`;
+- `apply --confirm-apply` создал 11 индексов:
+
+```text
+lk_partner_api_nonces:ttl_partner_nonce_expiry                        (TTL)
+lk_partner_game_operations:uniq_partner_client_idempotency            (unique)
+lk_partner_game_operations:partner_client_correlation
+lk_partner_game_memberships:uniq_partner_active_membership            (unique, sparse)
+lk_partner_game_memberships:uniq_partner_payment_reference            (unique)
+lk_partner_game_memberships:partner_owner_history
+lk_partner_api_audit:partner_audit_time_client
+lk_partner_api_audit:partner_audit_correlation
+lk_partner_game_outbox:uniq_partner_outbox_event                      (unique)
+lk_partner_game_outbox:partner_outbox_delivery
+lk_games:uniq_tenant_game_id                                          (unique)
+```
+
+- `postcheck`: `ok: true`, `missing: 0`, `conflicts: 0`; `rollback-plan` — 11 `dropIndex`.
+
+Миграция только создаёт отсутствующие индексы: ни одного `dropIndex`, ни одной записи в
+документы. Она является **пилотным исключением вне legacy-governance** и должна быть
+выведена из эксплуатации или заменена управляемым путём, когда trust anchor legacy game
+command будет привязан (`status: BOUND`). Уникальность `{tenantKey, id}` на `lk_games`
+теперь обеспечена — предусловие `verifyRequiredIndexes()` для активации выполнено.
+
+Откат: `node scripts/migrate_partner_game_membership_indexes.mjs --mode rollback-plan`
+даёт точный список; сами `dropIndex` выполняются вручную после отдельного решения.
