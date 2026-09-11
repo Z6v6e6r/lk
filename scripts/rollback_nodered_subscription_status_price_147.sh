@@ -39,24 +39,53 @@ remote_backup_dir="/root/.node-red/.padlhub-reviewed-flow-backups"
 remote_flow_backup="$remote_backup_dir/flows-pre-$deployment_id-$stamp.json"
 remote_contract_backup="$remote_backup_dir/contract-$deployment_id-$stamp.json"
 remote_stage_created=0
+ssh_control_root="$(mktemp -d /private/tmp/padlhub-subscription-status-price-rollback.XXXXXX)"
+
+# Same connection discipline as the deploy wrapper: one multiplexed connection
+# with bounded retries for idempotent steps. rollback itself is attempted once.
+ssh_opts=(
+  -o BatchMode=yes
+  -o ConnectTimeout=20
+  -o ServerAliveInterval=10
+  -o ServerAliveCountMax=3
+  -o ControlMaster=auto
+  -o ControlPath="$ssh_control_root/ssh-control-%C"
+  -o ControlPersist=120
+)
+ssh_retry_attempts="${NODE_RED_SUBSCRIPTION_STATUS_PRICE_SSH_ATTEMPTS:-5}"
+retry_idempotent() {
+  local attempt
+  for ((attempt = 1; attempt <= ssh_retry_attempts; attempt++)); do
+    if "$@"; then return 0; fi
+    sleep $((attempt * 2))
+  done
+  return 1
+}
+remote_ssh() { retry_idempotent ssh "${ssh_opts[@]}" "$host" "$@"; }
+remote_scp_to() { retry_idempotent scp -q -P 22 "${ssh_opts[@]}" "$@"; }
 
 cleanup() {
   if [[ "$remote_stage_created" == "1" ]]; then
-    ssh "$host" "rm -f '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh "${ssh_opts[@]}" "$host" "rm -f '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
+  ssh "${ssh_opts[@]}" -O exit "$host" >/dev/null 2>&1 || true
+  rm -f "$ssh_control_root"/ssh-control-* 2>/dev/null || true
+  rmdir "$ssh_control_root" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-ssh "$host" "test ! -e '$remote_stage' && install -d -m 700 '$remote_stage'"
+remote_ssh "test ! -e '$remote_stage' && install -d -m 700 '$remote_stage'"
 remote_stage_created=1
-scp -q \
+remote_scp_to \
   scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs \
   scripts/nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs \
   "$host:$remote_stage/"
-ssh "$host" "chmod 600 '$remote_runtime'; chmod 700 '$remote_helper'"
-ssh "$host" "node '$remote_helper' rollback --deployment-id '$deployment_id' --flow-backup '$remote_flow_backup' --contract-backup '$remote_contract_backup'"
+remote_ssh "chmod 600 '$remote_runtime'; chmod 700 '$remote_helper'"
+# Single attempt by design: a dropped connection during a state mutation is
+# re-run by the operator, not replayed automatically.
+ssh "${ssh_opts[@]}" "$host" "node '$remote_helper' rollback --deployment-id '$deployment_id' --flow-backup '$remote_flow_backup' --contract-backup '$remote_contract_backup'"
 
 # Postcheck: the restored flow must no longer carry the candidate generation, and
 # the status endpoint must still answer. A restored pre-fix flow may legitimately

@@ -60,13 +60,61 @@ remote_stage_created=0
 apply_started=0
 completed=0
 
+# Intermittent SSH to the production host is a real failure mode: one deploy opens
+# many connections and a single dropped connection aborts it. Reuse one
+# multiplexed connection and bound retries for idempotent steps only. apply is
+# never retried: a partially applied flow must fail closed and be reconciled.
+ssh_opts=(
+  -o BatchMode=yes
+  -o ConnectTimeout=20
+  -o ServerAliveInterval=10
+  -o ServerAliveCountMax=3
+  -o ControlMaster=auto
+  -o ControlPath="$stage_root/ssh-control-%C"
+  -o ControlPersist=120
+)
+ssh_retry_attempts="${NODE_RED_SUBSCRIPTION_STATUS_PRICE_SSH_ATTEMPTS:-5}"
+retry_idempotent() {
+  local attempt
+  for ((attempt = 1; attempt <= ssh_retry_attempts; attempt++)); do
+    if "$@"; then return 0; fi
+    sleep $((attempt * 2))
+  done
+  return 1
+}
+remote_ssh() { retry_idempotent ssh "${ssh_opts[@]}" "$host" "$@"; }
+remote_scp_to() { retry_idempotent scp -q -P 22 "${ssh_opts[@]}" "$@"; }
+# Only a fully successful attempt publishes its output, so a dropped connection
+# can never leave a truncated receipt behind.
+remote_ssh_capture() {
+  local outfile="$1" attempt
+  shift
+  for ((attempt = 1; attempt <= ssh_retry_attempts; attempt++)); do
+    if ssh "${ssh_opts[@]}" "$host" "$@" >"$outfile.tmp"; then mv "$outfile.tmp" "$outfile"; return 0; fi
+    sleep $((attempt * 2))
+  done
+  rm -f "$outfile.tmp"
+  return 1
+}
+pull_live_workspace() {
+  local attempt
+  for ((attempt = 1; attempt <= ssh_retry_attempts; attempt++)); do
+    rm -rf "$workspace"
+    if bash scripts/pull_nodered_source_from_147.sh "$workspace"; then return 0; fi
+    sleep $((attempt * 2))
+  done
+  return 1
+}
+
 cleanup() {
   if [[ "$apply_started" == "1" && "$completed" != "1" ]]; then
-    ssh "$host" "node '$remote_helper' rollback --deployment-id '$deployment_id' --flow-backup '$remote_flow_backup' --contract-backup '$remote_contract_backup'" >/dev/null 2>&1 || true
+    ssh "${ssh_opts[@]}" "$host" "node '$remote_helper' rollback --deployment-id '$deployment_id' --flow-backup '$remote_flow_backup' --contract-backup '$remote_contract_backup'" >/dev/null 2>&1 || true
   fi
   if [[ "$remote_stage_created" == "1" ]]; then
-    ssh "$host" "rm -f '$remote_candidate' '$remote_contract' '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh "${ssh_opts[@]}" "$host" "rm -f '$remote_candidate' '$remote_contract' '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
+  ssh "${ssh_opts[@]}" -O exit "$host" >/dev/null 2>&1 || true
+  rm -f "$stage_root"/ssh-control-* 2>/dev/null || true
   rm -f "$candidate_flow" "$candidate_import" "$candidate_report" "$contract_file" 2>/dev/null || true
   # Receipts are the failure evidence: keep them (and the stage directory) once an
   # apply started, so a manual rollback has its stamp and the recorded receipts.
@@ -82,7 +130,7 @@ trap 'exit 143' TERM HUP
 
 # Full-flow preimage: the focused generation validates node order, HTTP inputs
 # and the exact live function body, so a tab-scoped extraction is not enough.
-bash scripts/pull_nodered_source_from_147.sh "$workspace"
+pull_live_workspace
 
 node scripts/patch_live_subscription_status_price.mjs \
   --workspace "$workspace" \
@@ -101,17 +149,18 @@ node scripts/nodered_reviewed_flow_deploy/prepare_contract.mjs \
 source_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.sourceSha256)' "$contract_file")"
 candidate_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.candidateSha256)' "$contract_file")"
 
-ssh "$host" "test ! -e '$remote_stage' && install -d -m 700 '$remote_stage'"
+remote_ssh "test ! -e '$remote_stage' && install -d -m 700 '$remote_stage'"
 remote_stage_created=1
-scp -q "$candidate_flow" "$host:$remote_candidate"
-scp -q "$contract_file" "$host:$remote_contract"
-scp -q \
+remote_scp_to "$candidate_flow" "$host:$remote_candidate"
+remote_scp_to "$contract_file" "$host:$remote_contract"
+remote_scp_to \
   scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs \
   scripts/nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs \
   "$host:$remote_stage/"
-ssh "$host" "chmod 600 '$remote_candidate' '$remote_contract' '$remote_runtime'; chmod 700 '$remote_helper'"
+remote_ssh "chmod 600 '$remote_candidate' '$remote_contract' '$remote_runtime'; chmod 700 '$remote_helper'"
 
-ssh "$host" "node '$remote_helper' preflight --candidate '$remote_candidate' --contract '$remote_contract' --deployment-id '$deployment_id'" >"$preflight_result"
+remote_ssh_capture "$preflight_result" \
+  "node '$remote_helper' preflight --candidate '$remote_candidate' --contract '$remote_contract' --deployment-id '$deployment_id'"
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
   if (!value.ok || value.action !== "preflight" || value.sourceSha256 !== process.argv[2]
@@ -124,7 +173,9 @@ apply_started=1
 echo "stamp=$remote_stamp"
 echo "flowBackup=$remote_flow_backup"
 echo "contractBackup=$remote_contract_backup"
-ssh "$host" "node '$remote_helper' apply --candidate '$remote_candidate' --contract '$remote_contract' --deployment-id '$deployment_id' --stamp '$remote_stamp'" >"$apply_result"
+# Single attempt by design: apply is mutated state, so a dropped connection is
+# reconciled or rolled back instead of replayed.
+ssh "${ssh_opts[@]}" "$host" "node '$remote_helper' apply --candidate '$remote_candidate' --contract '$remote_contract' --deployment-id '$deployment_id' --stamp '$remote_stamp'" >"$apply_result"
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
   if (!value.ok || value.action !== "apply" || value.sourceSha256 !== process.argv[2]
@@ -134,7 +185,8 @@ node -e '
 
 # Authoritative postcheck: read the installed flow back from the host and require
 # the exact reviewed candidate bytes. The apply receipt alone is not independent.
-installed_sha="$(ssh "$host" "sha256sum '$remote_live_flow' | cut -d' ' -f1")"
+remote_ssh_capture "$stage_root/readback.txt" "sha256sum '$remote_live_flow' | cut -d' ' -f1"
+installed_sha="$(tr -d '\n' < "$stage_root/readback.txt")"
 if [[ "$installed_sha" != "$candidate_sha" ]]; then
   echo "Installed flow readback does not match the candidate; automatic rollback requested" >&2
   exit 5
