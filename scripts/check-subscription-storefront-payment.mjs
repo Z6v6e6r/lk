@@ -131,7 +131,7 @@ try {
         const wrapper = document.querySelector('.subscription-auth-block .auth-wrapper');
         const styles = wrapper ? getComputedStyle(wrapper) : null;
         if (!styles || styles.display !== 'flex') return 'auth-styles-missing';
-        return card.textContent.replace(/\s+/g, ' ').trim().slice(0, 120);
+        return card.textContent.replace(new RegExp('\\s+', 'g'), ' ').trim().slice(0, 120);
       })()`);
       if (!/войти в личный кабинет|Войти или зарегистрироваться|Вход по SMS/i.test(form)) {
         failures.push(`[${query}] cabinet AuthForm not rendered: ${form}`);
