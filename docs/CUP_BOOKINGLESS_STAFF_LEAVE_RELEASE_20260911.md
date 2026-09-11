@@ -1,7 +1,7 @@
 # CUP: удаление игрока без Viva-брони — релизный пакет
 
 Owner: current task. Audience: release operator for `lk-primary-147` and ph-admin (ЦУП).
-Route: CRITICAL / R3. Статус: **пакет подготовлен, применение НЕ авторизовано**.
+Route: CRITICAL / R3. Статус: **LK применён и проверен; ph-admin заблокирован средой** (см. «Ход применения»).
 
 Пакет не выполняет импорт Node-RED, рестарт, деплой и любые live-мутации. Для
 применения нужно отдельное разрешение, называющее source, scope, target, порядок
@@ -91,3 +91,45 @@ Read-only pre-flight 147 на момент подготовки: активны�
 Пакет не авторизует и не выполняет: импорт Node-RED, рестарт сервисов, деплой,
 live-мутации данных, merge PR. Контракт и кандидат действительны только для preimage
 `2ace2b60…`; при дрейфе живого flow пакет пересобирается заново.
+
+## Ход применения (2026-09-11)
+
+### LK — применено и проверено
+
+- свежий preimage подтвердил `2ace2b60…` (4799 nodes / 219 routes), пересборка дала тот же
+  `candidateSha256=2edad045…` и `contractSha256=2715889b…`;
+- stage `/root/.node-red/.padlhub-reviewed-flow-stage-20260911T154743+0300-3541` (0700/0600);
+- `preflight` → `ok:true`; `apply --stamp 20260911T154800+0300` → `activeFlowSha256=2edad045…`,
+  `node-red` restart count `136 → 137`, lease `soaking` до `2026-09-11T13:03:12Z`;
+- backups: `flows-pre-cup-bookingless-staff-leave-20260911-20260911T154800+0300.json`,
+  `contract-…json`, `candidate-….flow.json` в `/root/.node-red/.padlhub-reviewed-flow-backups/`;
+- postchecks: nodes 4799 / routes 219; `pm2` online, restart count без роста; RSS в норме;
+  новый ошибок в логах нет; `GET /lk/games/viva_6e7c314e-…` → 200, удалённого игрока нет,
+  snapshot чистый; `by-phone?phone=79104310415` → 0; `/lk/games` по identity-контракту → 400
+  («phone or clientId or … required»), `?public=true` → 200;
+- staff-роут внутренний: публично nginx отдаёт 404, напрямую `127.0.0.1:1880` → **401
+  UNAUTHORIZED** (auth работает, мутации нет).
+
+### ph-admin — заблокировано, откат выполнен
+
+Релиз собран на 147 релизным toolchain (`node v22.13.1`, `npm 11.1.0`):
+`archiveSha256=80a55336161fa292a83e9ee20b7fe7d1018a59ff8fb74a96eb9f54378839cd8b`,
+`runtimeFileCount=9336`, манифест записан.
+
+Выкладка нового релиза упала на старте: `MONGO_INDEX_READINESS_CHECK_FAILED:support_clients`
+(`mongo-index.guard.js` → `listIndexes()` на БД `support_max`). Unit автоматически откатился на
+предыдущий релиз, прод проверен: `/api/health` → 200, сервис active.
+
+Причина не связана с этой задачей: guard введён коммитом `ebe0961` («fix: verify Mongo indexes in
+production»), которого нет в работающем p34 (`d2a4787`): в p34 `mongo-index.guard.js` отсутствует и
+`ensureMongoIndex` не вызывается. То есть **любой релиз из текущего main не поднимается на 147**,
+пока Mongo-пользователю не доступны индексные операции на `support_max`. Env-переключателя у guard
+нет (`isProductionRuntime` + безусловная проверка).
+
+Минимальное условие продолжения: выдать Mongo-пользователю права на `listIndexes`/`createIndexes`
+для `support_max` (или отдельно одобренное изменение поведения max-backend readiness), после чего
+повторить выкладку того же артефакта.
+
+Новый релиз-каталог `/opt/ph-admin-releases/ph-admin-backend-fc6e470be35d` остаётся на диске как
+неактивный (unit на него не ссылается), predeploy-бэкап —
+`/opt/ph-admin-release-backups/ph-admin-backend-fc6e470-predeploy/`.
