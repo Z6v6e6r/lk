@@ -117,6 +117,95 @@ test("visit action maps strictly to SERVICE or NONE", () => {
   assert.equal(run("fn_staff_player_leave_prepare.js", invalid, { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[1].statusCode, 400);
 });
 
+const localMembershipVersion = stableVersion(["local:membership-9"]);
+const localGame = (overrides = {}) => ({
+  id: "game-1",
+  updatedAt: "2026-08-12T08:00:00.000Z",
+  archived: false,
+  organizer: { id: "client-1", phone: "79990000001" },
+  participants: [
+    { id: "client-1", name: "Organizer", source: "ORGANIZER", status: "CONFIRMED" },
+    { id: "client-2", name: "Local Player", source: "INVITE_LINK", status: "CONFIRMED", membershipId: "local:membership-9" },
+  ],
+  waitlist: [],
+  metadata: {
+    organizerId: "client-1",
+    organizerPhoneNorm: "79990000001",
+    teamSlots: [
+      { id: "client-1", name: "Organizer" },
+      { id: "client-2", name: "Local Player" },
+      null,
+      null,
+    ],
+  },
+  ...overrides,
+});
+const localCommand = (overrides = {}) => ({
+  req: {
+    params: { gameId: "game-1" },
+    headers: { authorization: "Bearer service-secret", "idempotency-key": "remove-command-local-1" },
+  },
+  payload: {
+    target: { clientId: "client-2", bookingId: null },
+    expectedMembershipVersion: localMembershipVersion,
+    visitAction: "NO_RETURN",
+    staffActor: { id: "staff-1" },
+    reason: "CUP_STAFF_REMOVAL",
+  },
+  ...overrides,
+});
+
+test("staff leave accepts a booking-less target only without visit return", () => {
+  const prepared = run("fn_staff_player_leave_prepare.js", localCommand(), { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } });
+  assert.equal(prepared[1], null);
+  assert.equal(prepared[0]._staffLeaveCtx.targetBookingId, null);
+  assert.equal(prepared[0]._staffLeaveCtx.requestedRefundMethod, "NONE");
+
+  const returnVisit = localCommand();
+  returnVisit.payload.visitAction = "RETURN_VISIT";
+  const rejected = run("fn_staff_player_leave_prepare.js", returnVisit, { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } });
+  assert.equal(rejected[1].statusCode, 409);
+  assert.equal(rejected[1].payload.code, "VISIT_RETURN_UNAVAILABLE");
+  assert.equal(rejected[1]._staffLeaveCtx, undefined);
+});
+
+test("staff leave removes a local membership without any live Viva booking", () => {
+  const prepared = run("fn_staff_player_leave_prepare.js", localCommand(), { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[0];
+  prepared.payload = [localGame()];
+  const result = run("fn_staff_player_leave_authorize.js", prepared, { global: {} });
+  assert.equal(result[1], null);
+  const ctx = result[0]._splitLeaveCtx;
+  assert.equal(ctx.vivaTargetMode, "NONE");
+  assert.deepEqual(ctx.initialBookingIds, []);
+  assert.equal(ctx.upstreamAuthHeader, null);
+  assert.equal(ctx.membershipVersion, localMembershipVersion);
+
+  const started = run("fn_split_leave_operation_start.js", structuredClone(result[0]))[0];
+  assert.equal(started.payload[1].$setOnInsert.vivaTargetMode, "NONE");
+  const inserted = started.payload[1].$setOnInsert;
+  const operation = { ...inserted, _id: `${inserted.gameId}:${inserted.operationId}` };
+  const routed = run("fn_split_leave_operation_route.js", { ...structuredClone(result[0]), payload: [operation] });
+  assert.equal(routed[0], null);
+  assert.equal(routed[1]._splitLeaveCtx.step, "local_apply");
+});
+
+test("staff leave fails closed when a booking-less request targets an active Viva booking", () => {
+  const prepared = run("fn_staff_player_leave_prepare.js", localCommand(), { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[0];
+  prepared.payload = [game()];
+  const result = run("fn_staff_player_leave_authorize.js", prepared, { global: { vivacrm_access_token: "admin-token" } });
+  assert.equal(result[1].payload.code, "BOOKING_TARGET_REQUIRED");
+});
+
+test("local roster mutation clears the removed player team slot", () => {
+  const prepared = run("fn_staff_player_leave_prepare.js", localCommand(), { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[0];
+  prepared.payload = [localGame()];
+  const authorized = run("fn_staff_player_leave_authorize.js", prepared, { global: {} })[0];
+  const update = run("fn_split_leave_game_update.js", authorized)[0].payload[1].$set;
+  assert.deepEqual(update.participants.map((item) => item.id), ["client-1"]);
+  assert.deepEqual(update.metadata.teamSlots, [{ id: "client-1", name: "Organizer" }, null, null, null]);
+  assert.equal(update.metadata.selfRemovalAuditLog.at(-1).status, "no_viva_booking_target");
+});
+
 const preparedForAuthorize = (inputGame = game(), commandOverrides = {}) => {
   const prepared = run("fn_staff_player_leave_prepare.js", command(commandOverrides), { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[0];
   prepared.payload = [inputGame];

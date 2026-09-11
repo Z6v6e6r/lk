@@ -47,3 +47,27 @@ request доходит до default-off handler и получает `503 PARTNER
 
 Реальный import, изменение settings, restart, Nginx, ключи, Mongo/Viva write
 и activation в этот этап не входят.
+
+## Локальный запуск тестов
+
+`scripts/tests/partnerGameMembershipSharedRuntime.test.mjs` проверяет патчер и
+scoped middleware без внешнего рантайма и входит в `test:partner-game-membership-api`.
+
+`scripts/tests/partnerGameMembershipSharedNodeRed409.test.mjs` запускает реальный
+Node-RED 4.0.9 и требует отдельно установленный рантайм:
+
+```sh
+npm install --prefix /private/tmp/partner-shared-runtime-20260910 node-red@4.0.9
+# либо указать собственный путь:
+PARTNER_SHARED_NODERED_RUNTIME=/abs/path/node_modules/node-red/red.js \
+  npm run test:partner-game-membership-api
+```
+
+Если рантайм не провизионен, тест пропускается, а не падает.
+
+## Граница относительно production
+
+Общий вариант остаётся **локальным кандидатом**; production-решение не меняется.
+`sharedFlowMutationAllowed` остаётся `false`, а API по-прежнему запрещено ставить
+в общий Node-RED `127.0.0.1:1880` из-за наблюдаемой palette
+(`5 critical / 12 high`). Рабочий контур — отдельный sidecar `127.0.0.1:18894`.

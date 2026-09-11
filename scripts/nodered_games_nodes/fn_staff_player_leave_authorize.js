@@ -72,7 +72,16 @@ for (const row of [...payments, ...participants, ...waitlist]) {
   }
 }
 const queue = Array.from(new Map(bookingItems.map((item) => [item.bookingId.toLowerCase(), item])).values());
-if (!queue.some((item) => normalizeId(item.bookingId) === normalizeId(input.targetBookingId))) {
+const requestedBookingId = normalizeId(input.targetBookingId);
+const localOnlyRemoval = !requestedBookingId;
+if (localOnlyRemoval) {
+  if (input.visitAction !== "NO_RETURN") {
+    return respond(409, "VISIT_RETURN_UNAVAILABLE", "Participant has no Viva booking to return; use visitAction NO_RETURN", input);
+  }
+  if (queue.length > 0) {
+    return respond(409, "BOOKING_TARGET_REQUIRED", "Participant has an active Viva booking; request removal with that exact booking", input);
+  }
+} else if (!queue.some((item) => normalizeId(item.bookingId) === requestedBookingId)) {
   return respond(409, "BOOKING_TARGET_MISMATCH", "Booking is not active for the exact target", input);
 }
 
@@ -124,7 +133,7 @@ const exerciseId = toStr(
   || game.metadata?.exerciseId,
 );
 const serviceToken = toStr(global.get("vivacrm_access_token"));
-if (!exerciseId || !serviceToken) {
+if (!localOnlyRemoval && (!exerciseId || !serviceToken)) {
   return respond(503, "UPSTREAM_UNAVAILABLE", "Cancellation service is temporarily unavailable", input);
 }
 
@@ -160,7 +169,9 @@ msg._splitLeaveCtx = {
   subscriptionVisitCount: subscriptionVisitCounts.length === 1 ? subscriptionVisitCounts[0] : null,
   trace: [],
   successMessage: "Игрок удалён из игры",
-  upstreamAuthHeader: `Bearer ${serviceToken}`,
+  vivaTargetMode: localOnlyRemoval ? "NONE" : "BOOKINGS",
+  vivaVerification: localOnlyRemoval ? "no_active_booking_for_exercise" : null,
+  upstreamAuthHeader: localOnlyRemoval ? null : `Bearer ${serviceToken}`,
   localAlreadyApplied: false,
   targetClientId: input.targetClientId,
   targetPhoneNorm: targetPhone,

@@ -99,6 +99,11 @@ if (ctx.targetWasOrganizer === true) {
   delete metadata.organizerPhone;
   delete metadata.organizerPhoneNorm;
 }
+if (Array.isArray(metadata.teamSlots)) {
+  metadata.teamSlots = metadata.teamSlots.map((slot) => (
+    matchesTarget(slot, targetId, targetPhone) ? null : slot
+  ));
+}
 const leaveEventExists = asArray(metadata.leaveEvents).some((item) => toStr(item?.operationId) === toStr(ctx.operationId));
 const auditActor = ctx.mode === "SELF" ? "self" : (ctx.mode === "STAFF_TARGET" ? "staff" : "organizer");
 if (!leaveEventExists) {

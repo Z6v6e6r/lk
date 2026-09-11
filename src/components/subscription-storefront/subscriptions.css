@@ -911,3 +911,13 @@
 .subscription-card__benefit-group li:has(> b) > span { max-width: 357px; }
 .subscription-card__benefit-group li:has(> b):first-child { align-items: center; }
 .subscription-card__benefit-group li:has(> b):first-child > span { line-height: 1; }
+
+/* Direct payment flow: consent label above the storefront.
+   The login overlay itself reuses the cabinet AuthForm; its styles live in
+   storefront-auth.css and storefront-auth-overlay.css. */
+.subscription-consent {
+  display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px;
+  color: #353436; font: 14px/1.4 'Subscription Inter Display', sans-serif;
+}
+.subscription-consent input { margin: 2px 0 0; width: 18px; height: 18px; accent-color: var(--subscription-accent, #5a2ea6); }
+.subscription-status-message--error { color: #b42318; }

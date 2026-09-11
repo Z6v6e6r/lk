@@ -159,11 +159,11 @@ test("fresh audit rejects resealed non-Linux identity, image, provenance and iso
   }
 });
 
-test("fresh audit retains the earlier unchanged functional and dependency-tree observations", () => {
+test("refreshed audit evidence keeps the reviewed closure and execution receipt pinned", () => {
   const { manifest } = validateCheckedPartnerRuntimeEvidence();
-  assert.equal(manifest.audit.capturedAt, "2026-09-06T09:09:03.738Z");
-  assert.equal(manifest.dependencyTree.capturedAt, "2026-09-05T06:35:56.269Z");
-  assert.equal(manifest.closure.functionalRehearsalSha256, "9a3f38ddf5531eb371e1f612dc57ffbb9552abd20a1ccde3477a6f5540164d7f");
+  assert.equal(manifest.audit.capturedAt, "2026-09-11T12:00:11.196Z");
+  assert.equal(manifest.dependencyTree.capturedAt, "2026-09-11T12:00:08.539Z");
+  assert.equal(manifest.closure.functionalRehearsalSha256, "1bfdd869f61d2a8d2d8d1faf72d0046cb8e6ec50b65665e4ecee5ea90d3a8764");
   const audit = JSON.parse(read("audit-report.json"));
   assert.equal(audit.executionEvidence.containerPresentAfterCleanup, false);
   assert.equal(audit.executionEvidence.commands.find(command => command.name === "audit").exitCode, 1);

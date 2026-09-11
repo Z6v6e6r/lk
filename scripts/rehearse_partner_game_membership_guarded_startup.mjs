@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Local fixture only. No SSH, host ports, production credentials or shared data.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
@@ -11,9 +10,11 @@ import { buildPartnerGameMembershipApiSidecarCandidate } from "./patch_partner_g
 
 if (process.argv.slice(2).join(" ") !== "--install-locked-runtime") throw new Error("Explicit --install-locked-runtime required");
 const scripts = path.dirname(fileURLToPath(import.meta.url));
-const image = "node@sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96";
+const image = "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5";
 const sha = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
-const output = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "partner-guarded-startup-")); fs.chmodSync(output, 0o700);
+// Mount sources must live under a path the container runtime can share; the
+// canonical /tmp root is used because this host does not share /var/folders.
+const output = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "partner-guarded-startup-")); fs.chmodSync(output, 0o700);
 const layout = path.join(output, "layout"); const release = path.join(layout, "releases/proof");
 const runtime = path.join(release, "runtime"); const sidecar = path.join(release, "sidecar");
 for (const dir of [runtime, sidecar, path.join(runtime, "partner-package"), path.join(output, "state"), path.join(output, "results")]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -41,7 +42,11 @@ let imageId;
 let cleanupFailed = false;
 function verify(id, network, mounts) {
   const info = inspect(id); const config = info.HostConfig;
-  assert.equal(info.Config.Labels?.["padlhub.partner-guarded-startup"], runId); assert.equal(info.Image, imageId);
+  assert.equal(info.Config.Labels?.["padlhub.partner-guarded-startup"], runId);
+  // Docker 29 with the containerd image store reports the manifest-list digest in
+  // info.Image while older stores reported the platform config digest; accept the
+  // requested reference either way, as the audit orchestrator already does.
+  assert.ok([imageId, image.slice("node@".length)].includes(info.Image), "container image identity");
   assert.equal(info.Config.Image, image); assert.equal(info.Config.User, user); assert.equal(config.NetworkMode, network);
   assert.equal(config.Privileged, false); assert.equal(config.ReadonlyRootfs, true); assert.deepEqual(config.CapDrop, ["ALL"]);
   assert.deepEqual(config.SecurityOpt, ["no-new-privileges"]); assert.equal(Object.keys(config.PortBindings || {}).length, 0);
@@ -54,7 +59,10 @@ async function container(name, network, mounts, command) {
   const id = docker("create", ...isolation, "--network", network, "--name", `partner-guarded-${runId}-${name}`, ...mountArgs, image, ...command);
   if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("Unconfirmed owned container identity"); owned.push(id);
   verify(id, network, mounts); docker("start", id);
-  for (let i = 0; i < 240; i++) {
+  // The previous 120s poll bound only held on native linux/amd64 hosts. Keep a
+  // hard bound but let the pinned Linux runtime finish on emulated hosts too.
+  const deadlineAt = Date.now() + 45 * 60 * 1000;
+  while (Date.now() < deadlineAt) {
     if (!inspect(id).State.Running) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -63,7 +71,15 @@ async function container(name, network, mounts, command) {
   receipt.containers.push(verify(id, network, mounts));
 }
 try {
-  const meta = JSON.parse(docker("image", "inspect", image))[0]; assert.equal(meta.Architecture, "amd64"); assert.equal(meta.Os, "linux"); imageId = meta.Id;
+  // Docker Desktop intermittently loses the pinned manifest reference until it is
+  // re-resolved; pull is idempotent and the pinned digest still decides the bytes.
+  let meta;
+  for (let attempt = 0; attempt < 6 && !meta; attempt += 1) {
+    try { meta = JSON.parse(docker("image", "inspect", "--platform", "linux/amd64", image))[0]; }
+    catch { try { docker("pull", "--platform", "linux/amd64", image); } catch { /* retry below */ } execFileSync("sleep", ["3"]); }
+  }
+  assert.ok(meta, "pinned linux/amd64 runtime image unavailable");
+  assert.equal(meta.Architecture, "amd64"); assert.equal(meta.Os, "linux"); imageId = meta.Id;
   await container("install", "bridge", [[runtime, "/runtime", true]], ["npm", "ci", "--prefix", "/runtime", "--cache", "/tmp/npm-cache", "--ignore-scripts", "--no-fund", "--no-audit", "--registry=https://registry.npmjs.org"]);
   receipt.install = { exitCode: 0, lifecycleScripts: false, reusedRuntime: false };
   await container("probe", "none", [[layout, "/opt/padlhub/partner-game-membership", false], [path.join(output, "state"), "/var/lib/padlhub/partner-game-membership", true], [path.join(output, "results"), "/out", true], [path.join(output, "runner.cjs"), "/runner.cjs", false], [path.join(output, "passwd"), "/etc/passwd", false]], ["node", "/runner.cjs"]);
