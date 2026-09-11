@@ -3,9 +3,91 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { billingFromStatus, canContinue, subscriptionCheckoutUrl, friendshipBillingOptions, scopedStorefrontStatuses } from '../../src/components/subscription-storefront/catalog.ts';
+import { billingFromStatus, canContinue, friendshipBillingOptions, scopedStorefrontStatuses } from '../../src/components/subscription-storefront/catalog.ts';
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
+
+interface PaymentAdapterCalls {
+  created: { counterKey: string | null; planType: string | null }[];
+  bought: { productId: string; phone: string }[];
+}
+
+/** Removes top-level import declarations before transpiling the module for the VM. */
+function stripImports(source: string): string {
+  return source.replace(/^import[\s\S]*?from\s+'[^']+';\n/gm, '');
+}
+
+/** Loads the payment adapter in a VM with stubbed LK1 API calls. */
+function loadPaymentAdapter(): {
+  resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
+  createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
+  calls: PaymentAdapterCalls;
+} {
+  const source = stripImports(readFileSync(
+    new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
+    'utf8',
+  ));
+  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId } = __stubs;\n${source}`;
+  const compiled = ts.transpileModule(withStubs, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls: PaymentAdapterCalls = { created: [], bought: [] };
+  const exported: Record<string, (...args: never[]) => unknown> = {};
+  const stubs = {
+    apiBuySubscroption: async (productId: string, phone: string) => {
+      calls.bought.push({ productId, phone });
+      return { data: { toPay: 2380000, paymentUrl: 'https://bank.example/pay/direct' }, error: null, status: 200 };
+    },
+    apiCreateTournamentSubscriptionPurchase: async (params: { counterKey?: string | null; planType?: string | null }) => {
+      calls.created.push({ counterKey: params.counterKey ?? null, planType: params.planType ?? null });
+      return {
+        data: { paymentUrl: 'https://bank.example/pay/counter', paymentRef: params.counterKey ?? null, counterKey: params.counterKey ?? null, toPayMinor: 2380000 },
+        error: null,
+        status: 200,
+      };
+    },
+    apiConfirmTournamentSubscriptionPurchase: async () => ({ data: null, error: { status: 500, message: 'not used' }, status: 500 }),
+    apiFetchProfile: async () => ({ data: { phone: '+79990000000' }, error: null, status: 200 }),
+    appendCurrentAuthModeToNavigableUrl: (input: URL) => input,
+    resolveTournamentSubscriptionDirectProductId: (value: string) => (
+      value === 'academy' ? '9eb8a7a4-c195-492a-95e4-3fb82899ac10'
+        : value === 'ra' ? 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759'
+          : null
+    ),
+  };
+  const context = {
+    exports: exported,
+    __stubs: stubs,
+    console,
+    URL,
+    URLSearchParams,
+    Date,
+    Math,
+    JSON,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    window: {
+      location: {
+        href: 'https://padlhub.ru/subsription',
+        search: '',
+        pathname: '/subsription',
+        hash: '',
+        origin: 'https://padlhub.ru',
+      },
+      history: { state: null, replaceState: () => {} },
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    },
+    document: { title: 'Подписки' },
+  };
+  vm.runInNewContext(compiled, context);
+  return {
+    calls,
+    resolveStorefrontBillingTarget: exported.resolveStorefrontBillingTarget as never,
+    createStorefrontSubscriptionPayment: exported.createStorefrontSubscriptionPayment as never,
+  };
+}
+
 test('uses API price and inventory; no invented price for missing/invalid data', () => {
   assert.equal(billingFromStatus(available)[0].priceMinor, 2380000);
   assert.equal(billingFromStatus(available)[0].progress?.current, 12);
@@ -19,18 +101,16 @@ test('blocks unavailable, unbound and stale inventory', () => {
   assert.equal(canContinue({ ...available, remainingCount: 0 }), false);
   assert.equal(canContinue({ ...available, remainingCount: 0, unlimited: true }), true);
 });
-test('navigation uses an allowlisted LK1 page with auto-purchase disabled and matching channel', () => {
-  for (const channel of ['prod', 'dev'] as const) {
-    const url = new URL(subscriptionCheckoutUrl('ra', channel)!);
-    assert.equal(url.origin, 'https://padlhub.ru');
-    assert.equal(url.pathname, '/ab_leto');
-    assert.equal(url.searchParams.get('autoPurchase'), '0');
-    assert.equal(url.searchParams.get('channel'), channel);
-    assert.equal(url.searchParams.get('artworkKey'), 'ra');
-    assert.equal(url.searchParams.has('priceLabel'), false);
-  }
-  assert.equal(subscriptionCheckoutUrl('sport', 'prod'), null);
-  assert.equal(subscriptionCheckoutUrl('https://example.com', 'prod'), null);
+test('storefront CTA creates the payment in the widget instead of navigating to /ab_leto', () => {
+  const catalogSource = readFileSync(new URL('../../src/components/subscription-storefront/catalog.ts', import.meta.url), 'utf8');
+  const pageSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
+  const paymentSource = readFileSync(new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(catalogSource, /ab_leto|autoPurchase|subscriptionCheckoutUrl/);
+  assert.doesNotMatch(pageSource, /ab_leto|subscriptionCheckoutUrl/);
+  assert.match(pageSource, /createStorefrontSubscriptionPayment/);
+  assert.match(paymentSource, /apiCreateTournamentSubscriptionPurchase/);
+  assert.match(paymentSource, /apiBuySubscroption/);
+  assert.match(pageSource, /window\.location\.href = outcome\.paymentUrl/);
 });
 test('T123 embeds a valid isolated loader using its own release manifests and widget lifecycle', () => {
   const html = readFileSync(new URL('../../docs/tilda-subscription-storefront.html', import.meta.url), 'utf8');
@@ -89,17 +169,43 @@ test('friendship variants retain independent prices, inventory and availability'
   }
 });
 
-test('annual navigation has its own binding; future and unknown variants never navigate', () => {
-  for (const channel of ['prod', 'dev'] as const) {
-    const annual = new URL(subscriptionCheckoutUrl('friendship', channel, 'annual')!);
-    assert.equal(annual.searchParams.get('variant'), 'network_friendship');
-    assert.equal(annual.searchParams.has('artworkKey'), false);
-    assert.equal(annual.searchParams.get('autoPurchase'), '0');
-    assert.equal(annual.searchParams.get('channel'), channel);
-    assert.equal(subscriptionCheckoutUrl('friendship', channel, 'monthly-two-hours'), null);
-    assert.equal(subscriptionCheckoutUrl('ra', channel, 'annual'), null);
-    assert.equal(subscriptionCheckoutUrl('friendship', channel, 'unknown'), null);
+test('payment adapter binds every sold billing option to its own LK1 counter', async () => {
+  const adapter = loadPaymentAdapter();
+  // VM-created objects use the VM realm prototype: copy before deep comparison.
+  function target(a: ReturnType<typeof loadPaymentAdapter>, planId: string, optionId: string) {
+    const resolved = a.resolveStorefrontBillingTarget(planId, optionId) as Record<string, unknown> | null;
+    return resolved ? { ...resolved } : null;
   }
+  assert.deepEqual(
+    target(adapter, 'friendship', 'monthly'),
+    { counterKey: 'friendship', directProductId: null, planType: 'friendship' },
+  );
+  assert.deepEqual(
+    target(adapter, 'friendship', 'annual'),
+    { counterKey: 'network_friendship', directProductId: null, planType: 'friendship' },
+  );
+  assert.deepEqual(
+    target(adapter, 'ra', 'monthly'),
+    { counterKey: 'ra', directProductId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planType: 'friendship' },
+  );
+  assert.deepEqual(
+    target(adapter, 'academy', 'monthly'),
+    { counterKey: 'academy', directProductId: '9eb8a7a4-c195-492a-95e4-3fb82899ac10', planType: 'friendship' },
+  );
+  for (const [planId, optionId] of [['friendship', 'monthly-two-hours'], ['sport', 'monthly'], ['ra', 'annual'], ['friendship', 'unknown']] as const) {
+    assert.equal(adapter.resolveStorefrontBillingTarget(planId, optionId), null, `${planId}/${optionId}`);
+  }
+
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'annual', phone: '+79990000000' });
+  assert.equal(adapter.calls.created.length, 1);
+  assert.equal(adapter.calls.created[0].counterKey, 'network_friendship');
+  assert.equal(adapter.calls.created[0].planType, 'friendship');
+  assert.equal(adapter.calls.bought.length, 0);
+
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: '+79990000000' });
+  assert.equal(adapter.calls.bought.length, 1);
+  assert.equal(adapter.calls.bought[0].productId, 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759');
+  assert.equal(adapter.calls.created.length, 1);
 });
 
 
