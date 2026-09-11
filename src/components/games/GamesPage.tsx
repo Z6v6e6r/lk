@@ -4931,6 +4931,7 @@ export default function GamesPage({
   const [gameRecordError, setGameRecordError] = useState<string | null>(null);
   const [gameRosterError, setGameRosterError] = useState<string | null>(null);
   const [detailsSplitJoinPending, setDetailsSplitJoinPending] = useState<{
+    gameId: string | null;
     message: string;
     reason: string | null;
     subscriptionId: string | null;
@@ -14206,6 +14207,7 @@ export default function GamesPage({
           const presentationMessage = formatSubscriptionDecisionPresentation(presentation);
           if (presentation.kind === "PENDING_CONFIRMATION") {
             setDetailsSplitJoinPending({
+              gameId: gameRecordId,
               message: presentationMessage,
               reason: resolveSplitJoinPendingReason(paymentResult.error?.message, presentationMessage),
               subscriptionId: resolvedClientSubscriptionId,
@@ -15962,7 +15964,7 @@ export default function GamesPage({
             </div>
           </div>
           {gameRosterError && <div className="game-empty game-pay-error">{gameRosterError}</div>}
-          {detailsSplitJoinPending && (
+          {detailsSplitJoinPending && detailsSplitJoinPending.gameId === gameRecordId && (
             <div className="game-empty details-roster-join-status" role="status" aria-live="polite">
               <span>{detailsSplitJoinPending.message}</span>
               {detailsSplitJoinPending.reason && (
@@ -15979,7 +15981,7 @@ export default function GamesPage({
                   );
                 }}
               >
-                {joiningSplitPayment ? "Проверяем..." : "Проверить снова"}
+                Проверить снова
               </button>
             </div>
           )}
