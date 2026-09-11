@@ -139,18 +139,41 @@ db.getSiblingDB("games").createUser({
 })
 ```
 
-**Блокер B — нужна миграция индексов на боевой БД.** В репозитории production-путь
-только **проверяет** индексы (`verifyRequiredIndexes`); создаёт их лишь
-`ensureIndexesForIsolatedTest()` для изолированного режима. Значит до активации нужно:
+**Блокер B — миграция индексов, и её нельзя делать ad-hoc.** В репозитории
+production-путь только **проверяет** индексы (`verifyRequiredIndexes`); создаёт их лишь
+`ensureIndexesForIsolatedTest()` для изолированного режима.
 
-1. read-only проверка на дубликаты `{tenantKey, id}` в `lk_games` и затем создание
-   **уникального** индекса `uniq_tenant_game_id` (`{tenantKey:1, id:1}`) — сейчас его нет;
-2. создание пяти коллекций `lk_partner_*` с индексами из `PARTNER_MEMBERSHIP_INDEX_SPECS`
-   (unique idempotency, unique active membership, unique payment reference, TTL nonce,
-   unique outbox event и вспомогательные).
+Read-only pre-check боевой БД (`games`):
 
-Это изменение схемы боевой БД, поэтому оно требует отдельного разрешения, pre-check и
-плана отката (индексы additive; откат — drop созданных индексов/коллекций).
+- `lk_games`: **18 013** документов, без `id` — 0, с пустым `id` — 0;
+- **есть 1 группа дубликатов** `{tenantKey, id}`:
+  `{tenantKey: null, id: "pay_3a8aa2de-365d-45ce-827c-0094ea344e6a"}` — 2 документа
+  (`…75ea` CANCELLED, обновлён 2026-05-23, 4 участника; `…75eb` PAID, не обновлялся с
+  создания 2026-05-11, 1 участник; вставки различаются на 12 мс — гонка двойной вставки);
+- существующие индексы `lk_games`: `_id_`, `schedule_station_date_time_v1`,
+  `lk_games_payment_booking_lookup_wildcard_v1`; `uniq_tenant_game_id` **отсутствует**;
+- коллекций `lk_partner_*` нет.
+
+Уникальный индекс `uniq_tenant_game_id` на такой коллекции **не построится** — дубликат
+его блокирует, и этот дубликат нужно сначала отремонтировать по решению владельца
+(какой документ канонический: отменённый с поздним апдейтом или оплаченный с создания).
+
+Кроме того, `uniq_tenant_game_id` на `lk_games` **уже принадлежит другой управляемой
+production-миграции** — legacy game command
+(`LEGACY_COMMAND_INDEX_SPECS.games` в `node-red/custom-nodes/legacy-game-command-transaction/legacy-game-command-core.mjs`),
+а у неё есть режимы `audit`/`dry-run`/`apply`/`postcheck`/`rollback-plan`, аудит дубликатов
+по `["tenantKey","id"]` и подписанный production-approval с trust anchor
+(`scripts/run_legacy_game_command_production_migration.mjs`). Значит создавать этот индекс
+вручную нельзя: правильный путь — эта миграция либо отдельное явное решение владельца.
+
+Индексы пяти коллекций `lk_partner_*` — отдельная, партнёрская миграция; готового
+инструмента в репозитории нет, его нужно добавить. Индексы additive, откат — drop
+созданного.
+
+**Блокер A (обновление).** Переданные креденшелы `partner-game-api` **не проходят
+аутентификацию** ни с `authSource=admin`, ни с `authSource=games` (`AuthenticationFailed`),
+то есть пользователь, судя по всему, ещё не создан. Пароль передан в чате — после
+корректного создания пользователя его стоит ротировать.
 
 ## Дальше
 
