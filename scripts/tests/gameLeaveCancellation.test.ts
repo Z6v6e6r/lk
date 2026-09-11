@@ -47,12 +47,28 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
   assert.match(leaveHandlerSource, /transientStatus === 408/);
   assert.match(leaveHandlerSource, /transientStatus >= 500/);
   assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED" \|\| leaveResult\.data\.state === "IN_PROGRESS"/);
-  assert.match(leaveHandlerSource, /setLeavePendingMessage\(leaveResult\.data\.message \|\| SELF_REMOVE_PENDING_NOTICE\)/);
+  assert.match(leaveHandlerSource, /lastPendingMessage = leaveResult\.data\.message \|\| SELF_REMOVE_PENDING_NOTICE/);
+  assert.match(leaveHandlerSource, /setLeavePendingMessage\(lastPendingMessage\)/);
   assert.match(leaveHandlerSource, /setLeavePendingMessage\(SELF_REMOVE_START_NOTICE\)/);
   assert.doesNotMatch(leaveHandlerSource, /apiCancelPadelSelfRemovalBookings/);
   assert.doesNotMatch(leaveHandlerSource, /patchGameRoster\(/);
   assert.match(leaveHandlerSource, /pushCabinetFlashNotice\(finalMessage\)/);
   assert.match(leaveHandlerSource, /navigateToCabinetFromGamesDetails\(\)/);
+});
+
+test("exhausted self leave stops the roster spinner instead of pending forever", () => {
+  const leaveHandlerStart = gamesPageSource.indexOf("const handleLeaveCurrentUserFromDetails = useCallback");
+  const leaveHandlerEnd = gamesPageSource.indexOf("const handleSplitJoinCurrentUserFromDetails = useCallback", leaveHandlerStart);
+  const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
+  // The unresolved branch must refresh the game, exit when the player is already gone and
+  // otherwise clear the disabled "leaving" state with the real server message.
+  assert.match(leaveHandlerSource, /const refreshed = await apiFetchPadelGameRecord\(gameRecordId\)/);
+  assert.match(leaveHandlerSource, /upsertGameRecordInStores\(refreshedRecord, \{ communityMode: "if_exists" \}\)/);
+  assert.match(leaveHandlerSource, /\.some\(\(player\) => isCurrentUserPlayer\(player\)\)/);
+  assert.match(leaveHandlerSource, /finalMessage = SELF_REMOVE_SUCCESS_NOTICE/);
+  assert.match(leaveHandlerSource, /setLeavePendingMessage\(null\)/);
+  assert.match(leaveHandlerSource, /setGameRosterError\(lastPendingMessage \|\| SELF_REMOVE_PENDING_NOTICE\)/);
+  assert.doesNotMatch(leaveHandlerSource, /if \(!finalMessage\) \{\s*setLeavePendingMessage\(SELF_REMOVE_PENDING_NOTICE\);\s*return;\s*\}/);
 });
 
 test("self leave renders an in-roster pending spinner and keeps the background state visible", () => {

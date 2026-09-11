@@ -67,6 +67,9 @@ msg._splitLeaveCtx = {
   gameId,
   operationId,
   claimToken,
+  // Only the HTTP entry sets this. Background retries hydrate their context from the
+  // durable operation instead, so reconciliation never demotes itself outside a player action.
+  foregroundRequest: true,
   reason: toStr(body.reason) || "PLAYER_LEFT",
   requestedRefundMethod: requestedRefundMethodRaw,
   actorClientId,

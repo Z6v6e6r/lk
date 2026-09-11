@@ -1545,7 +1545,7 @@ test("ambiguous latest proof cannot trigger cleanup", () => {
 for (const payload of [
   {}, null, { content: [], last: false }, { content: [], totalElements: 2 },
   { content: [], number: 1 }, { content: [], hasNext: true },
-  { content: [null] }, { content: [{ id: "new-booking", exerciseId: "exercise-1" }] },
+  { content: [null] },
   { content: [{ id: "unknown-exercise" }] },
   { data: { items: [{ id: "new-booking", exerciseId: "exercise-1" }] } },
   { data: { data: [{ id: "new-booking", exerciseId: "exercise-1" }] } },
@@ -1554,6 +1554,75 @@ for (const payload of [
   const out = run("fn_split_leave_router.js", msg).result;
   assert.equal(out[0], null); assert.equal(out[3], null); assert.equal(out[4], null);
   assert.equal(out[1].payload.state, "RETRY_REQUIRED");
+});
+
+function foregroundActiveBookingPayload(rows: Msg[]): Msg {
+  return { content: rows, last: true, totalElements: rows.length };
+}
+
+test("foreground self leave with its own live Viva booking demotes reconciliation and cancels it normally", () => {
+  const msg = reconciliationDiscovery();
+  assert.equal(msg._splitLeaveCtx.foregroundRequest, true);
+  assert.ok(msg._splitLeaveCtx.localReconciliation);
+  msg.statusCode = 200;
+  msg.payload = foregroundActiveBookingPayload([
+    { id: "live-booking", exerciseId: "exercise-1", clientId: "client-1", isCancelled: false },
+  ]);
+  const out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[0], null); assert.equal(out[1], null);
+  const next = out[4];
+  assert.ok(next, "demoted reconciliation must start the durable normal leave operation");
+  assert.equal(next._splitLeaveCtx.localReconciliation, undefined);
+  assert.equal(next._splitLeaveCtx.reconciliationDemoted, true);
+  assert.equal(next._splitLeaveCtx.vivaTargetMode, "BOOKINGS");
+  assert.deepEqual(next._splitLeaveCtx.initialBookingIds, ["live-booking"]);
+  assert.ok(next._splitLeaveCtx.membershipVersion);
+  assert.notEqual(next._splitLeaveCtx.operationId, priorCancelledLeave().operationId);
+  const started = run("fn_split_leave_operation_start.js", next).result[0];
+  const inserted = started.payload[1].$setOnInsert;
+  assert.equal(inserted.state, "STARTED");
+  assert.equal(inserted.vivaTargetMode, "BOOKINGS");
+  assert.equal(inserted.localReconciliation, undefined);
+  assert.deepEqual(inserted.bookingIds, ["live-booking"]);
+});
+
+test("background recovery never demotes and still refuses an attributable live booking", () => {
+  const msg = reconciliationDiscovery();
+  delete msg._splitLeaveCtx.foregroundRequest;
+  msg._splitLeaveCtx.backgroundStartedRecovery = true;
+  msg.statusCode = 200;
+  msg.payload = foregroundActiveBookingPayload([
+    { id: "live-booking", clientId: "client-1", isCancelled: false },
+  ]);
+  const out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[0], null); assert.equal(out[3], null); assert.equal(out[4], null);
+  assert.equal(out[1].statusCode, 202);
+  assert.equal(out[1].payload.state, "RETRY_REQUIRED");
+  assert.equal(out[1].payload.message, "В Viva есть действующая запись. Обновите игру перед новым выходом.");
+});
+
+test("foreground leave with an unattributable live booking still refuses", () => {
+  const msg = reconciliationDiscovery();
+  msg.statusCode = 200;
+  msg.payload = foregroundActiveBookingPayload([{ id: "unlabelled-booking" }]);
+  const out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[4], null);
+  assert.equal(out[1].payload.state, "RETRY_REQUIRED");
+  assert.equal(out[1].payload.message, "В Viva есть действующая запись. Обновите игру перед новым выходом.");
+});
+
+test("foreground leave with only unrelated live bookings keeps the local-only cleanup path", () => {
+  const msg = reconciliationDiscovery();
+  msg.statusCode = 200;
+  msg.payload = foregroundActiveBookingPayload([
+    { id: "other-booking", exerciseId: "other-exercise", clientId: "client-1", isCancelled: false },
+  ]);
+  const out = run("fn_split_leave_router.js", msg).result;
+  const next = out[0];
+  assert.ok(next, "guard must pass and continue to history verification");
+  assert.equal(next.method, "GET");
+  assert.equal(next._splitLeaveCtx.localReconciliation.priorOperationId, priorCancelledLeave().operationId);
+  assert.equal(next._splitLeaveCtx.reconciliationDemoted, undefined);
 });
 
 for (const payload of [
