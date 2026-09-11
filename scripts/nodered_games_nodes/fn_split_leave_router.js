@@ -391,10 +391,26 @@ if (ctx.step === "verify_active") {
   }
   const activeRows = responseRows(msg.payload).filter((row) => !isCancelled(row));
   if (ctx.localReconciliation) {
-    const ambiguousOrActive = activeRows.some((row) => usesEndUser(ctx)
-      ? (!rowExerciseId(row) || rowExerciseId(row) === normalizeId(ctx.exerciseId))
-      : (!rowClientId(row) || rowClientId(row) === normalizeId(ctx.targetClientId)));
-    if (ambiguousOrActive) {
+    const rowIsAmbiguous = (row) => (usesEndUser(ctx) ? !rowExerciseId(row) : !rowClientId(row));
+    const rowMatchesTarget = (row) => (usesEndUser(ctx)
+      ? Boolean(normalizeId(ctx.exerciseId)) && rowExerciseId(row) === normalizeId(ctx.exerciseId)
+      : Boolean(normalizeId(ctx.targetClientId)) && rowClientId(row) === normalizeId(ctx.targetClientId));
+    const attributableRows = activeRows.filter((row) => !rowIsAmbiguous(row) && rowMatchesTarget(row));
+    const ambiguousRows = activeRows.filter(rowIsAmbiguous);
+    // A player-initiated leave that finds its own live booking for this exercise must be
+    // allowed to cancel it through the normal booking path. Background recovery and live
+    // bookings that cannot be attributed keep failing closed.
+    if (
+      ctx.mode === "SELF"
+      && ctx.foregroundRequest === true
+      && ctx.backgroundStartedRecovery !== true
+      && attributableRows.length > 0
+      && ambiguousRows.length === 0
+    ) {
+      ctx.reconciliationDemoted = true;
+      delete ctx.localReconciliation;
+      appendTrace(ctx, { step: "local_reconciliation_demoted", activeBookings: attributableRows.length });
+    } else if (attributableRows.length > 0 || ambiguousRows.length > 0) {
       return fail(ctx, 202, "RETRY_REQUIRED", "В Viva есть действующая запись. Обновите игру перед новым выходом.");
     }
   }
