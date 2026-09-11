@@ -73,7 +73,46 @@ Private evidence: `/private/tmp/partner-canary-mtls-20260911/` (вне Git).
 - Продление сертификата `partner-api.padlhub.su` идёт через `authenticator=nginx`
   (временная правка конфига + `reload`).
 
+## Keyring и окружение (2026-09-11)
+
+Добавлено:
+
+- `/etc/padlhub/partner-game-membership/service.env` (`0640 root:partner-game-api`) с
+  `LK_PARTNER_GAME_API_KEYRING_JSON`, `LK_PARTNER_GAME_API_AUDIENCE=padlhub-partner-game-prod`,
+  `LK_PARTNER_GAME_API_ENVIRONMENT=production`, `LK_PARTNER_GAME_API_AUDIT_HMAC_KEY`;
+- drop-in `…service.d/credentials.conf` с `EnvironmentFile=/etc/padlhub/partner-game-membership/service.env`.
+
+Keyring (server-only) содержит канареечного клиента `padlhub-canary`: `enabled: true`,
+scopes `members:add`/`members:remove`/`operations:read`, `keyId` `canary-2026-09` со
+случайным секретом 32 байта. `stationIds` и `games` **пока пустые** — тестовая игра и
+станция в репозитории не зафиксированы (`canaryGameIds: []`, `"<allowed-station-id>"`),
+поэтому allowlist надо заполнить перед активацией.
+
+Секреты сгенерированы на операторской машине и лежат приватно (`/private/tmp/partner-canary-mtls-20260911/`,
+`0600`), в репозиторий не попадают. `AUDIT_HMAC_KEY` — 32 случайных байта в base64url.
+
+Проверено после перезапуска: сервис `active`, listener `127.0.0.1:18894`, в окружении
+процесса присутствуют `LK_PARTNER_GAME_API_{KEYRING_JSON,AUDIENCE,ENVIRONMENT,AUDIT_HMAC_KEY}`,
+флаги остаются `ENABLED=false`, `PROVIDER_MODE=disabled`, `VIVA_MUTATIONS_ENABLED=false`,
+`STARTUP_MODE=BOUND_DEFAULT_OFF`. Запрос через ingress по-прежнему возвращает
+`503 PARTNER_API_DISABLED`; `padlhub.su` `302`, `score.padlhub.su` `410` без изменений.
+
+**Важно про «ключ проходит».** При `ENABLED=false` проверка ключа и подписи **не
+выполняется вообще**: `getRuntime()` возвращает `PARTNER_API_DISABLED`/`503` раньше, чем
+читается keyring (`partner-game-membership-node.cjs:70`). Поэтому состояние «503, но
+подпись уже проверена» одновременно недостижимо: keyring валидируется только при сборке
+runtime, то есть после активации. Сейчас корректно говорить: keyring **настроен**, но
+ещё не задействован.
+
 ## Дальше
 
-Keyring → Mongo replica-set → Viva-техклиент и token → отдельная активация канареечного
-клиента → замена канареечного сертификата/IP на партнёрские.
+Порядок перед активацией:
+
+1. **Mongo.** На хосте нет локального Mongo (нет listener и unit), а unit разрешает
+   egress только на localhost. Нужны Mongo replica-set с индексами и расширение сетевой
+   политики unit — это отдельное изменение стадии активации.
+2. **Игра и станция.** Заполнить `stationIds` и `games[{gameId: {tenantKey, capacity}}]`
+   канареечного клиента выбранной тестовой игрой (capacity строго `2` или `4`).
+3. **Viva-техклиент** и token source, четыре mutation-gate — по-прежнему `disabled`.
+4. **Активация** канареечного клиента — отдельное разрешение; после неё запрос впервые
+   пройдёт проверку подписи.
