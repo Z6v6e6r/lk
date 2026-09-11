@@ -165,7 +165,11 @@ import {
   resolveSplitSubscriptionLifecycle,
 } from "./splitSubscriptionAvailability";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
-import { hasCanonicalSplitSharePrice, resolveSplitDisplayShareAmount } from "./splitOrdinaryPricing";
+import {
+  hasCanonicalSplitSharePrice,
+  resolveSplitDisplayShareAmount,
+  resolveSplitJoinShareCount,
+} from "./splitOrdinaryPricing";
 import { useSplitOrdinaryPrice } from "./useSplitOrdinaryPrice";
 import {
   resolveSubscriptionCategoryDailyLimitErrorMessage,
@@ -8409,11 +8413,13 @@ export default function GamesPage({
 
     return byPlayerKey;
   }, [isDetailsSplitPaymentGame, detailsSplitPaymentMetadata, detailsWaitlist, splitPendingNowTs]);
-  const detailsSplitShareCount = useMemo<2 | 4>(() => {
-    const shareCount = toFiniteNumber(detailsSplitPaymentMetadata?.shareCount);
-    if (shareCount === 2) return 2;
-    return detailsMaxPlayers <= 2 ? 2 : 4;
-  }, [detailsSplitPaymentMetadata, detailsMaxPlayers]);
+  const detailsSplitShareCount = useMemo<2 | 4>(() => (
+    resolveSplitJoinShareCount(detailsSplitPaymentMetadata?.shareCount, detailsMaxPlayers)
+  ), [detailsSplitPaymentMetadata, detailsMaxPlayers]);
+  const detailsSplitOrganizerUsedSubscription = useMemo(
+    () => String(detailsSplitPaymentMetadata?.selectedPaymentMode || "").trim().toLowerCase() === "subscription",
+    [detailsSplitPaymentMetadata],
+  );
   const detailsSplitOrdinaryPricing = useSplitOrdinaryPrice({
     booking: activeGameRecord?.booking ?? null,
     metadata: isRecordObject(activeGameRecord?.metadata)
@@ -8421,12 +8427,12 @@ export default function GamesPage({
       : null,
     splitPayment: detailsSplitPaymentMetadata,
     shareCount: detailsSplitShareCount,
-    enabled: isDetailsSplitPaymentGame,
+    // A subscription-organized game is priced by its campaign/CUP snapshot, not
+    // by the plain court share, so the ordinary lookup must not override it.
+    enabled: isDetailsSplitPaymentGame && !detailsSplitOrganizerUsedSubscription,
   });
   const detailsSplitShareAmount = useMemo(() => {
-    const organizerUsedSubscription = String(
-      detailsSplitPaymentMetadata?.selectedPaymentMode || "",
-    ).trim().toLowerCase() === "subscription";
+    const organizerUsedSubscription = detailsSplitOrganizerUsedSubscription;
     let promoAmount: number | null = null;
     if (organizerUsedSubscription && activeGameRecord?.booking) {
       promoAmount = resolveSplitPromoShareAmount({
@@ -8449,7 +8455,7 @@ export default function GamesPage({
     const resolvedAmount = resolveSplitDisplayShareAmount({
       promoShareAmount: promoAmount,
       ordinaryShareAmount: detailsSplitOrdinaryPricing.price?.shareAmount ?? null,
-      ordinarySettled: detailsSplitOrdinaryPricing.settled,
+      ordinaryStatus: detailsSplitOrdinaryPricing.status,
       storedShareAmount: storedIsCanonical ? fromSplit : null,
       storedIsCanonical,
     });
@@ -8462,7 +8468,7 @@ export default function GamesPage({
     // court price: keep the stored share only as a fail-open display value.
     if (
       !storedIsCanonical
-      && detailsSplitOrdinaryPricing.settled
+      && detailsSplitOrdinaryPricing.status === "failed"
       && fromSplit != null
       && fromSplit > 0
     ) {
@@ -8474,7 +8480,8 @@ export default function GamesPage({
     detailsSplitPaymentMetadata,
     detailsMetadata,
     detailsSplitOrdinaryPricing.price?.shareAmount,
-    detailsSplitOrdinaryPricing.settled,
+    detailsSplitOrdinaryPricing.status,
+    detailsSplitOrganizerUsedSubscription,
     detailsSplitShareCount,
     splitPaymentPromoConfig,
   ]);
@@ -14384,7 +14391,9 @@ export default function GamesPage({
         enabled: true,
         status: "ACTIVE",
         shareCount: detailsSplitShareCount,
-        shareAmount,
+        // The server re-derives the share before charging; persist its value so a
+        // browser-side fallback can never become the stored participant price.
+        shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
         bookingIds: Array.from(new Set([
           ...pendingCurrentSplitBookingIds,
           paymentResult.data.bookingId,
@@ -14546,7 +14555,7 @@ export default function GamesPage({
           enabled: true,
           status: "ACTIVE",
           shareCount: detailsSplitShareCount,
-          shareAmount,
+          shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
           bookingIds: Array.from(new Set([
             ...parseBookingIdsFromUnknown(currentBookingIds),
             ...parseBookingIdsFromUnknown(matchedCurrentSplitPayment?.bookingIds),

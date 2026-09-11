@@ -54,7 +54,11 @@ import {
   resolveSubscriptionCategoryDailyLimitErrorMessage,
 } from "../../utils/subscriptionCategoryDailyLimit";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
-import { hasCanonicalSplitSharePrice, resolveSplitDisplayShareAmount } from "./splitOrdinaryPricing";
+import {
+  hasCanonicalSplitSharePrice,
+  resolveSplitDisplayShareAmount,
+  resolveSplitJoinShareCount,
+} from "./splitOrdinaryPricing";
 import { useSplitOrdinaryPrice } from "./useSplitOrdinaryPrice";
 import { createLocalMembershipId } from "./localMembershipGeneration";
 import {
@@ -888,9 +892,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     () => hasCanonicalSplitSharePrice(splitPaymentForPricing),
     [splitPaymentForPricing],
   );
+  const splitOrganizerUsedSubscription = useMemo(
+    () => String(splitPaymentForPricing?.selectedPaymentMode || "").trim().toLowerCase() === "subscription",
+    [splitPaymentForPricing],
+  );
   const splitPricingShareCount = useMemo(
-    () => getSplitShareCount(game)
-      ?? (!game || resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4),
+    () => resolveSplitJoinShareCount(getSplitShareCount(game), game ? resolveMaxPlayers(game) : 0),
     [game],
   );
   const splitOrdinaryPricing = useSplitOrdinaryPrice({
@@ -898,7 +905,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     metadata: isRecord(game?.metadata) ? game.metadata : null,
     splitPayment: splitPaymentForPricing,
     shareCount: splitPricingShareCount,
-    enabled: Boolean(game && splitPricingGameId),
+    // A subscription-organized game is priced by its campaign/CUP snapshot, not
+    // by the plain court share, so the ordinary lookup must not override it.
+    enabled: Boolean(game && splitPricingGameId) && !splitOrganizerUsedSubscription,
   });
   const resolvedSplitOrdinaryShareAmount = splitOrdinaryPricing.price?.shareAmount ?? null;
 
@@ -1429,9 +1438,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         const bookingDurationMinutes = typeof booking?.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
           ? booking.durationMinutes
           : null;
-        const shareCountRaw = getSplitShareCount(actualGame);
-        const fallbackShareCount = resolveMaxPlayers(actualGame) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4;
-        const shareCount = shareCountRaw === 2 || fallbackShareCount === 2 ? 2 : 4;
+        const shareCount = resolveSplitJoinShareCount(
+          getSplitShareCount(actualGame),
+          resolveMaxPlayers(actualGame),
+        );
         const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
         const organizerUsedSubscription = String(
           splitPaymentMeta.selectedPaymentMode || "",
@@ -1448,10 +1458,13 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
               durationMinutes: bookingDurationMinutes,
             })
           : null;
-        const shareAmount = promoShareAmount
-          ?? resolvedSplitOrdinaryShareAmount
-          ?? getSplitShareAmount(actualGame)
-          ?? (shareCount === 2 ? 5000 : 2500);
+        const shareAmount = resolveSplitDisplayShareAmount({
+          promoShareAmount,
+          ordinaryShareAmount: resolvedSplitOrdinaryShareAmount,
+          ordinaryStatus: splitOrdinaryPricing.status,
+          storedShareAmount: getSplitShareAmount(actualGame),
+          storedIsCanonical: hasCanonicalSplitSharePrice(splitPaymentMeta),
+        }) ?? (shareCount === 2 ? 5000 : 2500);
         const paymentRef = generatePaymentRef();
         const successUrl = buildCurrentJoinUrl({
           [PAYMENT_REF_QUERY_KEY]: paymentRef,
@@ -1690,7 +1703,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           enabled: true,
           status: "ACTIVE",
           shareCount,
-          shareAmount,
+          // The server re-derives the share before charging; persist its value so a
+          // browser-side fallback can never become the stored participant price.
+          shareAmount: toFiniteNumber(paymentResult.data.shareAmount) ?? shareAmount,
           bookingIds: [
             ...new Set([
               ...(Array.isArray(splitPaymentMeta.bookingIds) ? splitPaymentMeta.bookingIds : []),
@@ -1851,6 +1866,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       profile,
       rejectSubscriptionUsageShadowAction,
       resolvedSplitOrdinaryShareAmount,
+      splitOrdinaryPricing.status,
       splitPaymentPromoConfig,
       subscriptionUsageShadowJoinPreview,
       subscriptionUsageShadowEnabled,
@@ -1933,7 +1949,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const splitShareAmount = resolveSplitDisplayShareAmount({
     promoShareAmount: resolvedSplitPromoShareAmount,
     ordinaryShareAmount: resolvedSplitOrdinaryShareAmount,
-    ordinarySettled: splitOrdinaryPricing.settled,
+    ordinaryStatus: splitOrdinaryPricing.status,
     storedShareAmount: splitStoredShareAmount,
     storedIsCanonical: splitStoredPriceIsCanonical,
   });

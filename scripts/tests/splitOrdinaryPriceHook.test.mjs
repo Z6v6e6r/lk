@@ -75,7 +75,7 @@ test('a canonical stored share is trusted without any price lookup', () => {
   const h = harness({ splitPayment: { ...nominalSplitPayment, shareAmount: 1000, totalAmount: 4000 } });
   assert.equal(h.requests.length, 0);
   assert.equal(h.result.price, null);
-  assert.equal(h.result.settled, true);
+  assert.equal(h.result.status, 'resolved');
 });
 
 test('a nominal stored share is re-priced from the exact Viva court price', async () => {
@@ -90,61 +90,79 @@ test('a nominal stored share is re-priced from the exact Viva court price', asyn
   assert.equal(params.masterServiceId, 'service-1');
   assert.equal(params.subServiceIds.join(','), 'sub-1');
   assert.equal(h.result.price, null);
-  assert.equal(h.result.settled, false);
+  assert.equal(h.result.status, 'pending');
   await h.resolve();
-  assert.equal(h.result.settled, true);
+  assert.equal(h.result.status, 'resolved');
   assert.equal(h.result.price.totalAmount, 4000);
   assert.equal(h.result.price.shareAmount, 1000);
 });
 
-test('the exact court price is divided by the stored share count', async () => {
+test('the exact court price is divided by the coerced share count', async () => {
   const h = harness({ splitPayment: { ...nominalSplitPayment, shareCount: 2 }, shareCount: 2 });
   await h.resolve(0, { error: null, data: 4000 });
   assert.equal(h.result.price.totalAmount, 4000);
   assert.equal(h.result.price.shareAmount, 2000);
 });
 
-test('a failed lookup settles without quoting a price', async () => {
+test('an executed lookup without a usable price may fall back to the stored share', async () => {
   const h = harness();
   await h.resolve(0, { error: { status: 502, message: 'provider' }, data: null });
+  assert.equal(h.result.status, 'failed');
   assert.equal(h.result.price, null);
-  assert.equal(h.result.settled, true);
 });
 
-test('a record without the exact station contract is never re-priced', async () => {
-  for (const splitPayment of [nominalSplitPayment]) {
-    for (const incomplete of [
-      { booking: { ...booking, masterServiceId: null } },
-      { booking: { ...booking, subServiceIds: [] } },
-      { booking: { ...booking, roomId: null } },
-    ]) {
-      const h = harness({ splitPayment, ...incomplete });
-      assert.equal(h.requests.length, 0);
-      assert.equal(h.result.price, null);
-      await tick(); h.render();
-      assert.equal(h.result.settled, true);
-    }
+test('a missing session is unavailable, never a normalised failure fallback', async () => {
+  const h = harness();
+  await h.resolve(0, { error: { status: 401, message: 'Не авторизован' }, data: null });
+  assert.equal(h.result.status, 'unavailable');
+  assert.equal(h.result.price, null);
+});
+
+test('a record without the exact station contract resolves to unavailable', async () => {
+  for (const incomplete of [
+    { booking: { ...booking, masterServiceId: null } },
+    { booking: { ...booking, subServiceIds: [] } },
+    { booking: { ...booking, roomId: null } },
+  ]) {
+    const h = harness(incomplete);
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.result.price, null);
+    await tick(); h.render();
+    assert.equal(h.result.status, 'unavailable');
   }
 });
 
-test('a location change re-resolves and ignores the late first response', async () => {
+test('a disabled hook performs no lookup and exposes no ordinary price', () => {
+  const h = harness({ enabled: false });
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.result.price, null);
+});
+
+test('a changed exact-price contract re-resolves and ignores the late first response', async () => {
   const h = harness();
   h.props = { ...h.props, booking: { ...booking, roomId: 'court-9' } };
   h.render();
   assert.equal(h.requests.length, 2);
   await h.resolve(0, { error: null, data: 8000 });
-  assert.equal(h.result.price, null);
-  assert.equal(h.result.settled, false);
+  assert.equal(h.result.status, 'pending');
   await h.resolve(1, { error: null, data: 4000 });
   assert.equal(h.result.price.totalAmount, 4000);
   assert.equal(h.result.price.shareAmount, 1000);
   h.unmount();
 });
 
-test('the legacy nominal share is only displayed after the lookup settled', async () => {
-  const h = harness();
-  assert.equal(h.result.settled, false);
-  await h.resolve(0, { error: { status: 409, message: 'incomplete' }, data: null });
-  assert.equal(h.result.settled, true);
-  assert.equal(h.result.price, null);
+test('a malformed pricing-policy snapshot does not count as a canonical price', () => {
+  const snapshot = harness({ splitPayment: { ...nominalSplitPayment, pricingPolicy: {} } });
+  assert.equal(snapshot.requests.length, 1);
+  const valid = harness({
+    splitPayment: {
+      ...nominalSplitPayment,
+      pricingPolicy: {
+        id: 'piter-split-250-per-hour-v1', pricingMode: 'PER_PARTICIPANT_HOUR', currency: 'RUB',
+        twoTeamsHourlyAmount: 500, fourPlayersHourlyAmount: 250,
+      },
+    },
+  });
+  assert.equal(valid.requests.length, 0);
+  assert.equal(valid.result.status, 'resolved');
 });
