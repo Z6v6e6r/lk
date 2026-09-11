@@ -122,11 +122,21 @@ try {
     if (query.includes('auth=0')) {
       const overlay = await waitFor(
         send,
-        "document.querySelector('.subscription-auth-overlay') ? document.querySelector('.subscription-auth-overlay').textContent : ''",
+        "document.querySelector('.subscription-auth-block') ? document.querySelector('.subscription-auth-block').textContent : ''",
       );
-      if (!/Войдите, чтобы перейти к оплате/.test(overlay)) failures.push(`[${query}] login overlay text missing: ${overlay}`);
-      if (!/Вход по SMS/.test(overlay)) failures.push(`[${query}] SMS login form missing`);
-      return { overlay: overlay.replace(/\s+/g, ' ').trim().slice(0, 120) };
+      if (!/Войдите, чтобы продолжить оплату/.test(overlay)) failures.push(`[${query}] overlay caption missing: ${overlay}`);
+      const form = await evaluate(send, `(() => {
+        const card = document.querySelector('.subscription-auth-block .auth-card');
+        if (!card) return 'auth-card-missing';
+        const wrapper = document.querySelector('.subscription-auth-block .auth-wrapper');
+        const styles = wrapper ? getComputedStyle(wrapper) : null;
+        if (!styles || styles.display !== 'flex') return 'auth-styles-missing';
+        return card.textContent.replace(/\s+/g, ' ').trim().slice(0, 120);
+      })()`);
+      if (!/войти в личный кабинет|Войти или зарегистрироваться|Вход по SMS/i.test(form)) {
+        failures.push(`[${query}] cabinet AuthForm not rendered: ${form}`);
+      }
+      return { overlay: overlay.replace(/\s+/g, ' ').trim().slice(0, 120), form };
     }
 
     const consent = await evaluate(send, `(() => {
@@ -181,7 +191,13 @@ try {
   console.log(JSON.stringify({ failures }, null, 2));
 } finally {
   chrome.kill('SIGKILL');
-  rmSync(profileDir, { recursive: true, force: true });
+  // Chrome may still hold handles in the temporary profile: cleanup is best effort.
+  await delay(500);
+  try {
+    rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // A leftover temp profile must not fail the check.
+  }
 }
 
 if (failures.length > 0) {

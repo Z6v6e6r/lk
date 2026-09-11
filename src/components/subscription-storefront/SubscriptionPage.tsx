@@ -3,7 +3,7 @@ import { apiFetchTournamentSubscriptionStatus } from '../../utils/apiClient';
 import { CABINET_URL } from '../../consts/api_config';
 import { useAuth } from '../../context/AuthContext';
 import { SubscriptionStorefront } from './SubscriptionStorefront';
-import { StorefrontLogin } from './StorefrontLogin';
+import { AuthForm } from '../auth/AuthForm';
 import { summerPlanPresentation, friendshipVariantBenefits } from './presentation';
 import {
   billingFromStatus, canContinue, storefrontPlanKeys, friendshipBillingOptions, scopedStorefrontStatuses,
@@ -224,59 +224,50 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
       )}
       <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }} />
     </>}
-    {!previewView && authRequested && (isAuthenticated ? (
+    {!previewView && authRequested && (
       <div className="subscription-auth-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-auth-title">
         <button
           type="button"
-          className="subscription-auth-overlay__backdrop"
-          aria-label="Закрыть окно авторизации"
-          onClick={() => setAuthRequested(false)}
-        />
-        <section className="subscription-auth-overlay__block">
-          <h2 id="subscription-auth-title">Вы вошли в личный кабинет</h2>
-          <p>Продолжите оформление подписки — мы сразу откроем страницу оплаты банка.</p>
-          {failure && <p className="subscription-login__error" role="alert">{failure}</p>}
-          <button
-            type="button"
-            className="subscription-login__submit"
-            disabled={processing}
-            onClick={() => {
-              if (pendingSelection) void handleChoose(pendingSelection, true);
-            }}
-          >
-            {processing ? 'Создаём оплату…' : 'Продолжить оплату'}
-          </button>
-          <button
-            type="button"
-            className="subscription-login__resend"
-            onClick={() => { setAuthRequested(false); setPendingSelection(null); }}
-          >
-            Отмена
-          </button>
-        </section>
-      </div>
-    ) : (
-      <div className="subscription-auth-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-auth-title">
-        <button
-          type="button"
-          className="subscription-auth-overlay__backdrop"
+          className="subscription-auth-backdrop"
           aria-label="Закрыть окно авторизации"
           onClick={() => { setAuthRequested(false); setPendingSelection(null); }}
         />
-        <section className="subscription-auth-overlay__block">
+        <section className="subscription-auth-block">
           <button
             type="button"
-            className="subscription-auth-overlay__close"
+            className="subscription-auth-close"
             aria-label="Закрыть окно авторизации"
             onClick={() => { setAuthRequested(false); setPendingSelection(null); }}
           >
             ×
           </button>
-          <h2 id="subscription-auth-title">Оформление подписки</h2>
-          <p>Войдите, чтобы перейти к оплате.</p>
-          <StorefrontLogin onCancel={() => { setAuthRequested(false); setPendingSelection(null); }} />
+          <h2 id="subscription-auth-title" className="subscription-auth-title">
+            {isAuthenticated ? 'Вы вошли в личный кабинет' : 'Оформление подписки'}
+          </h2>
+          <p className="subscription-auth-caption">
+            {isAuthenticated
+              ? 'Продолжите оформление — мы сразу откроем страницу оплаты банка.'
+              : 'Войдите, чтобы продолжить оплату.'}
+          </p>
+          {isAuthenticated ? (
+            <>
+              {failure && <p className="auth-error" role="alert">{failure}</p>}
+              <button
+                type="button"
+                className="auth-btn"
+                disabled={processing}
+                onClick={() => {
+                  if (pendingSelection) void handleChoose(pendingSelection, true);
+                }}
+              >
+                {processing ? 'Создаём оплату…' : 'Продолжить оплату'}
+              </button>
+            </>
+          ) : (
+            <AuthForm onLogin={() => {}} />
+          )}
         </section>
       </div>
-    ))}
+    )}
   </>;
 }

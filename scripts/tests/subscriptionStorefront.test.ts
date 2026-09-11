@@ -108,6 +108,8 @@ test('storefront CTA creates the payment in the widget instead of navigating to 
   assert.doesNotMatch(catalogSource, /ab_leto|autoPurchase|subscriptionCheckoutUrl/);
   assert.doesNotMatch(pageSource, /ab_leto|subscriptionCheckoutUrl/);
   assert.match(pageSource, /createStorefrontSubscriptionPayment/);
+  assert.match(pageSource, /<AuthForm onLogin=/);
+  assert.doesNotMatch(pageSource, /StorefrontLogin/);
   assert.match(paymentSource, /apiCreateTournamentSubscriptionPurchase/);
   assert.match(paymentSource, /apiBuySubscroption/);
   assert.match(pageSource, /window\.location\.href = outcome\.paymentUrl/);

@@ -1,0 +1,92 @@
+/* Оверлей окна авторизации как на /ab_leto: те же правила из MyApp.css. */
+.subscription-auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+.subscription-auth-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(11, 13, 18, 0.8);
+  cursor: pointer;
+}
+
+.subscription-auth-block {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 560px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(57, 60, 67, 0.92);
+  backdrop-filter: blur(2px);
+  padding: 20px;
+  margin: 0;
+}
+
+.subscription-auth-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  color: rgba(245, 247, 249, 0.92);
+  background: rgba(18, 21, 27, 0.58);
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.subscription-auth-title {
+  margin: 0;
+  font-size: clamp(28px, 8vw, 44px);
+  line-height: 0.96;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  letter-spacing: 0.03em;
+}
+
+.subscription-auth-caption {
+  margin: 10px 0 18px;
+  color: rgba(244, 246, 248, 0.86);
+}
+
+.subscription-auth-block .auth-wrapper {
+  min-height: auto;
+  background: transparent;
+  padding: 0;
+  justify-content: flex-start;
+}
+
+.subscription-auth-block .auth-card {
+  max-width: none;
+}
+
+@media (max-width: 640px) {
+  .subscription-auth-overlay {
+    padding: 16px 10px;
+  }
+  .subscription-auth-block {
+    max-height: calc(100vh - 32px);
+    padding: 16px 14px;
+  }
+  .subscription-auth-close {
+    top: 6px;
+    right: 6px;
+    width: 30px;
+    height: 30px;
+    font-size: 22px;
+  }
+}
