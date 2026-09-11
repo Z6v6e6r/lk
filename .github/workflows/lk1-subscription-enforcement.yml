@@ -357,6 +357,9 @@ jobs:
           scripts/tests/gamesPatchCancelGuard.test.ts
           scripts/tests/gamesPatchRecovery.test.mjs
           scripts/tests/splitPaymentOccupancy.test.ts
+          scripts/tests/splitOrdinaryPricing.test.ts
+          scripts/tests/splitOrdinaryPriceHook.test.mjs
+          scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/joinSubscriptionLoading.test.mjs
           scripts/tests/subscriptionSessionCache.test.mjs
           scripts/tests/subscriptionCounterEpochRuntime.test.mjs

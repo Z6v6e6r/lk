@@ -28,11 +28,20 @@
 - New modules: `splitOrdinaryPricing.ts` (pure contract/canonicality/precedence helpers),
   `resolveSplitOrdinaryPrice.ts` (exact-price lookup) and `useSplitOrdinaryPrice.ts`
   (display-only hook used by both join surfaces).
-- Checks: `npm run test:split-ordinary-price` 17/17, `test:split-create-contract`,
-  `test:split-payment-recovery`, split promo pricing, `tsc -b`, games prod and dev bundle
-  builds, eslint 0 errors (pre-existing warnings only). `test:night-e-acceptance` 125/126;
-  the single failure is the pre-existing red `publicCreateFlow.devRouting` expectation.
-  No merge, push, deploy or live data mutation.
+- Independent payment-safety review of the first revision produced five findings, all fixed
+  in the same branch: (1) an unauthenticated invite lookup short-circuits with `401` before
+  the network call, so `unavailable` (no session / incomplete contract) must not fail open
+  to the nominal share; (2) the join now persists the server-returned `shareAmount` instead
+  of the browser value; (3) the invite surface divides by the same coerced 2/4 share count
+  as the payload and the server; (4) the ordinary lookup is skipped for subscription-organized
+  games, whose price is owned by the campaign/CUP snapshot; (5) the three new regressions are
+  wired into the required CI matrix. A malformed `pricingPolicy` snapshot no longer counts as
+  a canonical price.
+- Checks: `npm run test:split-ordinary-price` 24/24 (7 pure + 17 hook/source), the exact
+  required CI matrix (check_9) locally 604 tests / 0 fail, `test:split-create-contract` 49/49,
+  `test:split-payment-recovery` 27/27, split promo pricing 3/3, `tsc -b`, games prod and dev
+  bundle builds, eslint 0 errors (pre-existing warnings only). `test:night-e-acceptance`
+  125/126; the single failure is the pre-existing red `publicCreateFlow.devRouting` expectation.
 ## 2026-09-09 — Group training HAB 50% monetary discount, local stage
 
 - Added authenticated eligibility preview and crossed-out original/discounted one-time price with the exact subscription name. Existing HAB rule only; no promo stacking or visit consumption.
