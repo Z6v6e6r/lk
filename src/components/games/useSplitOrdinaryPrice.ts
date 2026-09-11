@@ -4,6 +4,7 @@ import {
   hasCanonicalSplitSharePrice,
   type SplitOrdinaryPrice,
   type SplitOrdinaryPriceState,
+  type SplitOrdinaryPriceStatus,
 } from "./splitOrdinaryPricing";
 import { resolveSplitOrdinaryPrice } from "./resolveSplitOrdinaryPrice";
 
@@ -39,18 +40,25 @@ export function useSplitOrdinaryPrice(params: {
   const [state, setState] = useState<{
     scope: string;
     price: SplitOrdinaryPrice | null;
-    settled: boolean;
-  }>({ scope: "", price: null, settled: false });
+    status: SplitOrdinaryPriceStatus;
+  }>({ scope: "", price: null, status: "pending" });
 
   useEffect(() => {
     if (!enabled || storedIsCanonical) return;
     let current = true;
     void resolveSplitOrdinaryPrice({ booking, metadata, shareCount })
-      .then((price) => {
-        if (current) setState({ scope, price, settled: true });
+      .then((outcome) => {
+        if (!current) return;
+        setState(
+          outcome.status === "resolved"
+            ? { scope, price: outcome.price, status: "resolved" }
+            : { scope, price: null, status: outcome.status },
+        );
       })
       .catch(() => {
-        if (current) setState({ scope, price: null, settled: true });
+        // A thrown lookup is a real attempt without a price: the legacy fallback
+        // may be displayed, but it is never persisted as the participant price.
+        if (current) setState({ scope, price: null, status: "failed" });
       });
     return () => {
       current = false;
@@ -59,6 +67,6 @@ export function useSplitOrdinaryPrice(params: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
 
-  if (!enabled || storedIsCanonical) return { price: null, settled: true };
-  return state.scope === scope ? state : { price: null, settled: false };
+  if (!enabled || storedIsCanonical) return { price: null, status: "resolved" };
+  return state.scope === scope ? state : { price: null, status: "pending" };
 }

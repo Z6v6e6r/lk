@@ -5,6 +5,7 @@ import {
   hasCanonicalSplitSharePrice,
   normalizeSplitShareCount,
   resolveSplitDisplayShareAmount,
+  resolveSplitJoinShareCount,
   resolveSplitOrdinaryPriceContract,
 } from "../../src/components/games/splitOrdinaryPricing.ts";
 
@@ -33,10 +34,35 @@ test("a nominal split share without a server-derived total is not canonical", ()
   assert.equal(hasCanonicalSplitSharePrice({ shareAmount: 2500, totalAmount: "0" }), false);
 });
 
-test("an exact court total or a pricing-policy snapshot makes the stored share canonical", () => {
+test("an exact court total or a valid pricing-policy snapshot makes the stored share canonical", () => {
   assert.equal(hasCanonicalSplitSharePrice(canonicalSplitPayment), true);
   assert.equal(hasCanonicalSplitSharePrice({ shareAmount: 250, totalAmount: "4000" }), true);
-  assert.equal(hasCanonicalSplitSharePrice({ shareAmount: 250, pricingPolicy: { id: "piter" } }), true);
+  assert.equal(hasCanonicalSplitSharePrice({
+    shareAmount: 250,
+    pricingPolicy: {
+      id: "piter-split-250-per-hour-v1",
+      pricingMode: "PER_PARTICIPANT_HOUR",
+      currency: "RUB",
+      twoTeamsHourlyAmount: 500,
+      fourPlayersHourlyAmount: 250,
+    },
+  }), true);
+  // A malformed or empty snapshot is not a canonical price: the server fails such
+  // a record closed, and the client must not treat the stored share as proven.
+  for (const pricingPolicy of [{}, { id: "piter" }, null, "policy", []]) {
+    assert.equal(hasCanonicalSplitSharePrice({ shareAmount: 250, pricingPolicy }), false);
+  }
+});
+
+test("the join share count follows the server coercion of two versus four players", () => {
+  assert.equal(resolveSplitJoinShareCount(2, 4), 2);
+  assert.equal(resolveSplitJoinShareCount("2", 10), 2);
+  assert.equal(resolveSplitJoinShareCount(4, 2), 2);
+  assert.equal(resolveSplitJoinShareCount(4, 4), 4);
+  assert.equal(resolveSplitJoinShareCount(3, 4), 4);
+  assert.equal(resolveSplitJoinShareCount(null, 4), 4);
+  assert.equal(resolveSplitJoinShareCount(undefined, 0), 4);
+  assert.equal(resolveSplitJoinShareCount(0, 2), 2);
 });
 
 test("ordinary share is the exact court price divided by the share count", () => {
@@ -91,13 +117,13 @@ test("the ordinary court share outranks the legacy nominal stored share", () => 
   const precedence = (params: {
     promoShareAmount?: number | null;
     ordinaryShareAmount?: number | null;
-    ordinarySettled?: boolean;
+    ordinaryStatus?: "pending" | "resolved" | "failed" | "unavailable";
     storedShareAmount?: number | null;
     storedIsCanonical?: boolean;
   }) => resolveSplitDisplayShareAmount({
     promoShareAmount: params.promoShareAmount ?? null,
     ordinaryShareAmount: params.ordinaryShareAmount ?? null,
-    ordinarySettled: params.ordinarySettled ?? false,
+    ordinaryStatus: params.ordinaryStatus ?? "unavailable",
     storedShareAmount: params.storedShareAmount ?? null,
     storedIsCanonical: params.storedIsCanonical ?? false,
   });
@@ -108,9 +134,11 @@ test("the ordinary court share outranks the legacy nominal stored share", () => 
   assert.equal(precedence({ ordinaryShareAmount: 1000, storedShareAmount: 2500 }), 1000);
   // Canonical stored share is kept as-is when the game does not need re-pricing.
   assert.equal(precedence({ storedShareAmount: 1000, storedIsCanonical: true }), 1000);
-  // A non-canonical record must not quote the nominal fallback before the lookup settles.
-  assert.equal(precedence({ storedShareAmount: 2500, ordinarySettled: false }), null);
-  // Legacy fail-open: keep the stored share only after the lookup settled without a price.
-  assert.equal(precedence({ storedShareAmount: 2500, ordinarySettled: true }), 2500);
+  // A pending, impossible or unauthorized lookup never re-quotes the nominal fallback.
+  for (const ordinaryStatus of ["pending", "unavailable"] as const) {
+    assert.equal(precedence({ storedShareAmount: 2500, ordinaryStatus }), null);
+  }
+  // Legacy fail-open: keep the stored share only after a real lookup returned no price.
+  assert.equal(precedence({ storedShareAmount: 2500, ordinaryStatus: "failed" }), 2500);
   assert.equal(precedence({}), null);
 });
