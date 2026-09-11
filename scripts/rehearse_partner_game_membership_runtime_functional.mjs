@@ -70,6 +70,7 @@ let installedPackageCount;
 let observed;
 let probe;
 let platformImageId;
+let repoDigests;
 
 function isolation(name) {
   return [
@@ -158,10 +159,18 @@ fs.copyFileSync(fixture, rehearsePath);
 fs.writeFileSync(passwd, `root:x:0:0:root:/root:/usr/sbin/nologin\npartner-functional:x:${process.getuid()}:${process.getgid()}:fixture:/tmp:/usr/sbin/nologin\n`, { mode: 0o600 });
 
 try {
-  const meta = JSON.parse(docker("image", "inspect", "--platform", "linux/amd64", image))[0];
+  // Docker Desktop intermittently loses the pinned manifest reference until it is
+  // re-resolved; pull is idempotent and the pinned digest still decides the bytes.
+  let meta;
+  for (let attempt = 0; attempt < 6 && !meta; attempt += 1) {
+    try { meta = JSON.parse(docker("image", "inspect", "--platform", "linux/amd64", image))[0]; }
+    catch { try { docker("pull", "--platform", "linux/amd64", image); } catch { /* retry below */ } delay(3000); }
+  }
+  assert.ok(meta, "pinned linux/amd64 runtime image unavailable");
   assert.equal(meta.Os, "linux");
   assert.equal(meta.Architecture, "amd64");
   platformImageId = meta.Id;
+  repoDigests = meta.RepoDigests;
 
   const install = await runContainer("install", "bridge", [[runtimeDir, "/runtime", true]], [],
     ["npm", "ci", "--prefix", "/runtime", "--cache", "/tmp/npm-cache", "--ignore-scripts", "--no-fund", "--no-audit", "--registry=https://registry.npmjs.org"]);
@@ -220,7 +229,7 @@ const containerReceipt = {
   imageReference: image,
   containerImageId: probe.inspector.imageId,
   platformImageId,
-  imageRepoDigests: JSON.parse(docker("image", "inspect", "--platform", "linux/amd64", image))[0].RepoDigests,
+  imageRepoDigests: repoDigests,
   platform: "linux",
   architecture: "amd64",
   networkMode: "none",
@@ -228,7 +237,7 @@ const containerReceipt = {
   mounts: receiptMounts,
   orchestratorSha256: sha(fs.readFileSync(fileURLToPath(import.meta.url))),
   inspectedAt: probe.inspector.inspectedAt,
-  finishedAt: probe.inspector.finished.State.FinishedAt,
+  finishedAt: new Date(probe.inspector.finished.State.FinishedAt).toISOString(),
   exitCode: probe.inspector.finished.State.ExitCode,
   cleanupCapturedAt: cleanedAt,
   containerPresentAfterCleanup: false,
@@ -241,7 +250,7 @@ assert.match(sourceBaseCommit, /^[a-f0-9]{40}$/);
 const functional = {
   formatVersion: 1,
   deploymentId: manifest.deploymentId,
-  capturedAt: probe.inspector.finished.State.FinishedAt,
+  capturedAt: new Date(probe.inspector.finished.State.FinishedAt).toISOString(),
   clockSource: "docker-container-finished-at",
   evidenceScope: "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
   sourceBaseCommit,

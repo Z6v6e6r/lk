@@ -54,13 +54,13 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "8128e7d1bd03e8632e358f7f9ecfe4cc66b5be39c751c14601ccb62e6eecd60d",
+    runtimeManifestSha256: "9eea63c26f2671ca5743b364cc0e077090df480a576cb655c8065bc8811728a2",
     packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
     dependencyTreeSha256: "2d8fe65584d879ed60cb6bd1271314ea26bf7a2f4fef9af009fc88b79e55578e",
     auditReportSha256: "6d9f6bddd4ac0d8f5cb485a7978c6744849de8091f9547ed9ce14a07c9ed643c",
-    functionalRehearsalSha256: "ea3db67777998ef60fec16e30639557cf09d496f4fad25edb18557b4b43e38b6",
-    functionalRehearsalCapturedAt: "2026-09-11T11:26:06.631061841Z",
+    functionalRehearsalSha256: "1bfdd869f61d2a8d2d8d1faf72d0046cb8e6ec50b65665e4ecee5ea90d3a8764",
+    functionalRehearsalCapturedAt: "2026-09-11T11:46:17.001Z",
     auditCapturedAt: "2026-09-06T09:09:03.738Z",
     dependencyTreeCapturedAt: "2026-09-05T06:35:56.269Z",
     npmCiInstalledPackageCount: 291,
@@ -83,8 +83,8 @@ export function validatePartnerProductionControls(contract) {
     rawAuditSha256: "a89b4d36d49f8f06e8163368b3e7c4d7a774d494100748fce1a25bdc7884eead",
     guardedPolicySha256: "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
-    rehearsalSha256: "23d0a7684835c39600c493edba6066f59d29c3a282a2c63978875a2ea9a7b0a7",
-    rehearsalCapturedAt: "2026-09-06T12:37:38.718Z",
+    rehearsalSha256: "fbb3c3da6eb6c013df108628c76e263b4ca90a0012a2cb643d1795d5b82d3897",
+    rehearsalCapturedAt: "2026-09-11T11:37:29.010Z",
     sharedFlowMutationAllowed: false,
   })) fail("Partner sidecar immutable closure identity changed");
   exactKeys(runtime.auditPolicy, [
@@ -114,7 +114,7 @@ export function validatePartnerProductionControls(contract) {
   if (rehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || rehearsal.functionalRehearsalSha256 !== runtime.immutableClosure.functionalRehearsalSha256
     || rehearsal.capturedAt !== runtime.immutableClosure.functionalRehearsalCapturedAt
-    || rehearsal.sourceCommit !== "342ea14258748288c20433ef57981f9fe7e48a25"
+    || rehearsal.sourceCommit !== "4776b80a996b1365dfb2712276fbc9d0b6c9e273"
     || rehearsal.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
     || rehearsal.nodeVersion !== runtime.requiredNodeVersion
     || rehearsal.nodeRedVersion !== runtime.minimumRehearsedNodeRedVersion
