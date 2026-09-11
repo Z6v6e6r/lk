@@ -165,6 +165,7 @@
     "nodered:tournament-community-context:patch": "node scripts/patch_live_tournament_community_context.mjs",
     "test:deploy-topology": "node --experimental-strip-types --test scripts/tests/deployTopology.test.ts",
     "test:subscription-booking-nginx": "node --test scripts/tests/subscriptionBookingNginx.test.mjs",
+    "test:annual-claim-release": "node --test scripts/tests/annualClaimRelease.test.mjs",
     "test:lk-games-cors-nginx": "node --test scripts/tests/lkGamesCorsNginx.test.mjs",
     "test:a3pay-dev-viva-booking": "node --experimental-strip-types --test scripts/tests/a3PayGameCreateDemo.test.ts scripts/tests/a3PayDevVivaBooking.nodered.test.ts",
     "test:managed-subscription-policy": "node --experimental-strip-types --test scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts",
