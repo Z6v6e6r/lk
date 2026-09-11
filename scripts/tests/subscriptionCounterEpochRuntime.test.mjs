@@ -224,6 +224,13 @@ test('status and refresh agree on empty RA10/F7/HAB1 at98000/Piter48 first batch
     assert.equal(live.canPurchase, true, counterKey);
     assert.equal(cached.canPurchase, true, counterKey);
     assert.deepEqual(quotaView(cached), quotaView(live), counterKey);
+    // A new epoch starts with no sale rows, so status must publish the configured
+    // price instead of falling back to the latest paid/pending document amount.
+    const expectedPriceMinor = { ra: 2380000, friendship: 980000, network_friendship: 9800000,
+      piter_friendship: 1980000 }[counterKey];
+    assert.equal(live.priceMinor, expectedPriceMinor, `${counterKey} status price with zero paid history`);
+    assert.equal(live.price, expectedPriceMinor / 100, `${counterKey} status price with zero paid history`);
+    assert.equal(cached.priceMinor, expectedPriceMinor, `${counterKey} refresh price with zero paid history`);
     if (counterKey === 'piter_friendship') {
       assert.equal(live.quotaAdjustment, 52);
       assert.equal(cached.quotaAdjustment, 52);
@@ -234,10 +241,6 @@ test('status and refresh agree on empty RA10/F7/HAB1 at98000/Piter48 first batch
       const expected = counterKey === 'ra' ? 10 : counterKey === 'friendship' ? 7 : 1;
       assert.equal(live.totalLimit, expected);
       assert.equal(live.remainingCount, expected);
-      if (counterKey === 'network_friendship') {
-        assert.equal(live.price, 98000);
-        assert.equal(live.priceMinor, 9800000);
-      }
     }
   }
 });
