@@ -39,7 +39,7 @@ remote_backup_dir="/root/.node-red/.padlhub-reviewed-flow-backups"
 remote_flow_backup="$remote_backup_dir/flows-pre-$deployment_id-$stamp.json"
 remote_contract_backup="$remote_backup_dir/contract-$deployment_id-$stamp.json"
 remote_stage_created=0
-ssh_control_root="$(mktemp -d /private/tmp/padlhub-subscription-status-price-rollback.XXXXXX)"
+ssh_control_root="$(mktemp -d /private/tmp/psr.XXXXXX)"
 
 # Same connection discipline as the deploy wrapper: one multiplexed connection
 # with bounded retries for idempotent steps. rollback itself is attempted once.
@@ -49,7 +49,7 @@ ssh_opts=(
   -o ServerAliveInterval=10
   -o ServerAliveCountMax=3
   -o ControlMaster=auto
-  -o ControlPath="$ssh_control_root/ssh-control-%C"
+  -o ControlPath="$ssh_control_root/c-%C"
   -o ControlPersist=120
 )
 ssh_retry_attempts="${NODE_RED_SUBSCRIPTION_STATUS_PRICE_SSH_ATTEMPTS:-5}"
@@ -69,7 +69,7 @@ cleanup() {
     ssh "${ssh_opts[@]}" "$host" "rm -f '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
   ssh "${ssh_opts[@]}" -O exit "$host" >/dev/null 2>&1 || true
-  rm -f "$ssh_control_root"/ssh-control-* 2>/dev/null || true
+  rm -f "$ssh_control_root"/c-* 2>/dev/null || true
   rmdir "$ssh_control_root" 2>/dev/null || true
 }
 trap cleanup EXIT
