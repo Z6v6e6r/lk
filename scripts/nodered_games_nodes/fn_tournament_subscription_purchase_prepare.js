@@ -89,7 +89,16 @@ const SALES_QUOTAS_20260909_ENABLED = global.get("summer_subscription_sales_2026
 const HUB_PRICE_98000_ENABLED = !!subscriptionCounterEpoch.startedAt(global) || SALES_QUOTAS_20260909_ENABLED
   || global.get("summer_subscription_network_friendship_price_98000_enabled") === true;
 const SALES_QUOTAS_20260909_START = "2026-09-09T07:00:00.000Z";
-const NETWORK_FRIENDSHIP_DAILY_LIMIT = (SALES_QUOTAS_20260909_ENABLED || subscriptionCounterEpoch.startedAt(global)) ? 1 : 10;
+// The daily annual seat count is configuration, not code: read it from the same
+// style of global the other subscription limits use, and keep the current
+// epoch default when it is absent. All four counter nodes must agree, so they
+// share this exact expression.
+const NETWORK_FRIENDSHIP_DAILY_LIMIT_DEFAULT = (SALES_QUOTAS_20260909_ENABLED || subscriptionCounterEpoch.startedAt(global)) ? 1 : 10;
+const NETWORK_FRIENDSHIP_DAILY_LIMIT = (() => {
+  const configured = Number(String(global.get("summer_subscription_network_friendship_daily_limit") ?? "").trim());
+  if (!Number.isFinite(configured) || configured < 1) return NETWORK_FRIENDSHIP_DAILY_LIMIT_DEFAULT;
+  return Math.max(1, Math.floor(configured));
+})();
 const DEFAULT_RESERVATION_MINUTES = 30;
 const PAYMENT_REF_QUERY_KEY = "summerPaymentRef";
 const TRAINER_QR_CODE_PATTERN = /^TR-(?:00[1-9]|0[1-4]\d|050)$/;
