@@ -190,3 +190,39 @@ production-миграции** — legacy game command
 `games={"pay_adff32ae-3cca-425d-a31a-36942a75c8f7": {tenantKey: null, capacity: 4}}`.
 Игра проверена: `archived=false`, `status=PAID`, `settings.isPrivate=false`,
 `invite.maxPlayers=4`, бронь 2026-09-22 07:00–08:30, `booking.studioId` = station.
+
+## Журнал: креденшелы и ремонт дубликата (2026-09-11)
+
+**Креденшелы.** `partner-game-api` (создан в `admin`) **аутентифицируется**. Роли:
+`readWrite` на `PadlhUBScore`, `dialog`, `events`, `games`, `games_chat` — те же широкие
+database-level роли, что у боевого Node-RED, а не минимальные collection-level, которые я
+рекомендовал. Функционально достаточно, но для нового сервиса стоит сузить до `readWrite`
+на `lk_games` и пять `lk_partner_*`. `MONGO_URI` и `MONGO_DB` прописаны в
+`/etc/padlhub/partner-game-membership/service.env`; повторно пароль в чат не передавался.
+
+**Ремонт дубликата.** Перед изменением оба документа выгружены целиком в приватный
+`duplicate-backup.json` (8 457 байт, содержит PII участников — лежит только в
+`/private/tmp/partner-canary-mtls-20260911/` и подлежит удалению после стабилизации).
+Проверка 25 game-связанных коллекций не нашла ссылок на удаляемый `_id` или `gameId` вне
+`lk_games`. Удалён ровно один документ — `…75eb` (`PAID`, вставка гонки); остался `…75ea`
+(`CANCELLED`, поздний апдейт 2026-05-23, 4 участника). Итог: `deletedCount=1`, у игры один
+документ, **групп дубликатов `{tenantKey,id}` — 0**. Временные файлы на хосте удалены.
+
+**Блокер B (уточнение): управляемая legacy-миграция сейчас не запускается.** Trust anchor
+`scripts/legacy_game_command_production_trust_anchor.json` имеет `status: "UNBOUND"`,
+`keyId: "UNBOUND"`, `publicKeySpkiSha256: "UNBOUND"`, а
+`assertProductionApprovalTrustAnchorBound()` бросает
+`Production approval trust anchor is not bound in source` для любого статуса кроме
+`BOUND`. Раннер дополнительно требует execution packet, подписанный approval, backup
+manifest, quiescence attestation и runtime compatibility evidence.
+
+Чтобы пойти этим путём, сначала нужно отдельно поднять governance legacy game command:
+root-ACL custody (`build_legacy_game_command_root_acl_bootstrap.mjs`,
+`legacy_game_command_root_acl_bootstrap.c`), привязать Ed25519 trust anchor (`BOUND`),
+собрать пакет и подписать approval. Это самостоятельный процесс, не часть партнёрского
+пилота.
+
+Альтернатива для пилота — scoped-исключение: отдельная партнёрская миграция, создающая
+`uniq_tenant_game_id` на `lk_games` (дубликатов больше нет) и пять коллекций
+`lk_partner_*` с индексами, с явным решением владельца вне legacy-governance. Индексы
+additive, откат — drop созданного.
