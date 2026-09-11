@@ -114,6 +114,27 @@ test('storefront CTA creates the payment in the widget instead of navigating to 
   assert.match(paymentSource, /apiBuySubscroption/);
   assert.match(pageSource, /window\.location\.href = outcome\.paymentUrl/);
 });
+
+test('storefront ships the cabinet auth styles it needs for the shared AuthForm', () => {
+  const myAppSource = readFileSync(new URL('../../src/MyApp.css', import.meta.url), 'utf8');
+  const authBlock = myAppSource.slice(
+    myAppSource.indexOf('/* ─── AUTH ─── */'),
+    myAppSource.indexOf('/* ─── CABINET HEADER ─── */'),
+  ).trimEnd();
+  const authSource = readFileSync(new URL('../../src/components/subscription-storefront/storefront-auth.css', import.meta.url), 'utf8');
+  // The auth rules must stay a verbatim copy of MyApp.css, otherwise the widget
+  // and /ab_leto would render the same AuthForm differently.
+  for (const selector of ['.auth-wrapper', '.auth-card', '.auth-title', '.auth-btn', '.auth-input', '.auth-oauth-btn', '.auth-consents', '.phone-input', '.resend-row']) {
+    assert.ok(authBlock.includes(selector), `MyApp.css lost ${selector}`);
+    assert.ok(authSource.includes(selector), `storefront-auth.css lost ${selector}`);
+  }
+  assert.doesNotMatch(authSource, /@media/);
+  const overlaySource = readFileSync(new URL('../../src/components/subscription-storefront/storefront-auth-overlay.css', import.meta.url), 'utf8');
+  for (const selector of ['.subscription-auth-overlay', '.subscription-auth-backdrop', '.subscription-auth-block', '.subscription-auth-title', '.subscription-auth-caption']) {
+    assert.ok(overlaySource.includes(selector), `storefront-auth-overlay.css lost ${selector}`);
+  }
+  assert.match(overlaySource, /\.subscription-auth-block \.auth-wrapper/);
+});
 test('T123 embeds a valid isolated loader using its own release manifests and widget lifecycle', () => {
   const html = readFileSync(new URL('../../docs/tilda-subscription-storefront.html', import.meta.url), 'utf8');
   new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)![1]);
