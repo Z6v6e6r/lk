@@ -25,9 +25,10 @@
   max-height: calc(100vh - 48px);
   overflow: auto;
   border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(57, 60, 67, 0.92);
-  backdrop-filter: blur(2px);
+  /* Same surface as the cabinet auth screen: the copied AuthForm is white on
+     white there, so the widget must not darken it. */
+  border: 1px solid #ededed;
+  background: #fff;
   padding: 20px;
   margin: 0;
 }
@@ -40,8 +41,8 @@
   height: 34px;
   border: 0;
   border-radius: 50%;
-  color: rgba(245, 247, 249, 0.92);
-  background: rgba(18, 21, 27, 0.58);
+  color: #353436;
+  background: #f5f5f7;
   cursor: pointer;
   font-size: 26px;
   line-height: 1;
@@ -52,6 +53,7 @@
 
 .subscription-auth-title {
   margin: 0;
+  color: #1a1a1a;
   font-size: clamp(28px, 8vw, 44px);
   line-height: 0.96;
   font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
@@ -60,14 +62,14 @@
 
 .subscription-auth-caption {
   margin: 10px 0 18px;
-  color: rgba(244, 246, 248, 0.86);
+  color: #6b7280;
 }
 
 /* The annual terms confirmation reuses the login overlay shell, so the row has
-   to read on the dark panel instead of on the storefront canvas. */
+   to read on the dialog surface. */
 .subscription-auth-block .subscription-consent {
   margin: 0 0 18px;
-  color: rgba(244, 246, 248, 0.9);
+  color: #353436;
   font-size: 15px;
 }
 
