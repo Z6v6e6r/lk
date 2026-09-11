@@ -78,6 +78,7 @@ const PLAN_DEFAULTS = {
     campaignKey: "summer_padel_friendship_2026",
     productName: "Лето.Падел.Дружба",
     productId: "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
+    productCostMinor: 980000,
   },
   sport: {
     counterKey: "sport",
@@ -86,6 +87,7 @@ const PLAN_DEFAULTS = {
     campaignKey: "summer_padel_sport_2026",
     productName: "Лето.Падел.Спорт",
     productId: "82caad6f-4d19-4d01-852b-932bdbb0f405",
+    productCostMinor: 1980000,
   },
 };
 const DIRECT_COUNTER_DEFAULTS = {
@@ -96,6 +98,7 @@ const DIRECT_COUNTER_DEFAULTS = {
     campaignKey: null,
     productName: "Энергия-5",
     productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe",
+    productCostMinor: 1980000,
   },
   academy: {
     counterKey: "academy",
@@ -104,6 +107,7 @@ const DIRECT_COUNTER_DEFAULTS = {
     campaignKey: null,
     productName: "Лето.Падел.Академия",
     productId: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
+    productCostMinor: 2380000,
   },
   ra: {
     counterKey: "ra",
@@ -112,6 +116,7 @@ const DIRECT_COUNTER_DEFAULTS = {
     campaignKey: null,
     productName: "Лето.Падел.РА",
     productId: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
+    productCostMinor: 2380000,
   },
 };
 const MANUAL_PAID_COUNT_DEFAULTS = {
@@ -361,6 +366,11 @@ const readSummerPlanConfig = (planKey) => {
       productId:
         readGlobalFirst(["summer_subscription_sport_product_id", "summer_subscription_product_id"])
         || base.productId,
+      productCostMinor: toMoneyMinor(
+        global.get("summer_subscription_sport_product_cost_minor")
+          ?? global.get("summer_subscription_product_cost_minor"),
+        base.productCostMinor,
+      ),
       manualPaidCount: 0,
       totalLimit: toPlanLimit(
         global.get("summer_subscription_sport_limit"),
@@ -383,6 +393,10 @@ const readSummerPlanConfig = (planKey) => {
     productId:
       readGlobalFirst(["summer_subscription_friendship_product_id"])
       || base.productId,
+    productCostMinor: toMoneyMinor(
+      global.get("summer_subscription_friendship_product_cost_minor"),
+      base.productCostMinor,
+    ),
     manualPaidCount: 0,
     totalLimit: toPlanLimit(global.get("summer_subscription_friendship_limit"), getDefaultTotalLimit("friendship")),
   });
@@ -485,6 +499,10 @@ const readDirectCounterConfig = (counterKey) => {
     productId:
       readGlobalFirst([`summer_subscription_${counterKey}_product_id`])
       || base.productId,
+    productCostMinor: toMoneyMinor(
+      global.get(`summer_subscription_${counterKey}_product_cost_minor`),
+      base.productCostMinor,
+    ),
     manualPaidCount: 0,
     totalLimit: unlimited
       ? 0
