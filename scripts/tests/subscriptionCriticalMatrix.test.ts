@@ -222,6 +222,42 @@ const errorCases: Array<{
     continueWithoutSubscription: false,
     message: /Сервер отклонил действие/,
   },
+  {
+    id: "REJECT-MANAGED-POLICY-BLOCKED",
+    action: "JOIN_GAME",
+    apiError: error("MANAGED_SUBSCRIPTION_POLICY_BLOCKED", 409, "Правила подписки не разрешили эту запись"),
+    expected: "SUBSCRIPTION_REJECTED",
+    retryable: false,
+    continueWithoutSubscription: true,
+    message: /Правила подписки не разрешили эту запись/,
+  },
+  {
+    id: "REJECT-VIVA-BOOKING",
+    action: "JOIN_GAME",
+    apiError: error("VIVA_SUBSCRIPTION_BOOKING_REJECTED", 409, "Viva отклонила создание записи"),
+    expected: "SUBSCRIPTION_REJECTED",
+    retryable: false,
+    continueWithoutSubscription: true,
+    message: /Viva отклонила создание записи/,
+  },
+  {
+    id: "REJECT-EXERCISE-MISMATCH",
+    action: "CREATE_GAME",
+    apiError: error("SUBSCRIPTION_BOOKING_EXERCISE_MISMATCH", 409, "Упражнение Viva не совпало с целью записи"),
+    expected: "SUBSCRIPTION_REJECTED",
+    retryable: false,
+    continueWithoutSubscription: true,
+    message: /Упражнение Viva не совпало с целью записи/,
+  },
+  {
+    id: "EDGE-UNMAPPED-4XX-SURFACES-REASON",
+    action: "JOIN_GAME",
+    apiError: error("UNRECOGNISED_NEW_SERVER_CODE", 418, "Сервер отклонил действие по неизвестной причине"),
+    expected: "TECHNICAL_ERROR",
+    retryable: true,
+    continueWithoutSubscription: false,
+    message: /Сервер отклонил действие по неизвестной причине/,
+  },
 ];
 
 for (const scenario of errorCases) {
