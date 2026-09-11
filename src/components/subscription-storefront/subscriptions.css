@@ -329,40 +329,47 @@
   stroke-linejoin: round;
 }
 
-.subscription-rail-dots {
+/* Named card switcher (replaces the dot indicator) under the rail. */
+.subscription-plan-switcher {
   display: flex;
-  justify-content: center;
+  width: min(100%, 464px);
+  margin: 24px auto 0;
+  padding: 6px;
+  align-items: stretch;
   gap: 4px;
-  margin-bottom: 12px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #ededed, 0 4px 16px #1f1e2014;
 }
 
-.subscription-rail-dots button {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  place-items: center;
+.subscription-plan-switcher button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  flex: 1 1 0;
   border: 0;
-  border-radius: 16px;
+  border-radius: 999px;
   background: transparent;
+  color: var(--subscription-text, #353436);
   cursor: pointer;
+  overflow: hidden;
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 160ms ease, color 160ms ease;
 }
 
-.subscription-rail-dots button::after {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 8px;
-  background: #d9d4e8;
-}
-
-.subscription-rail-dots button[aria-current='true']::after {
-  width: 24px;
-  background: var(--subscription-accent);
+.subscription-plan-switcher button[aria-current='true'] {
+  color: #fff;
+  background: #1c1b1f;
+  font-weight: 700;
 }
 
 .subscription-rail-arrow:focus-visible,
-.subscription-rail-dots button:focus-visible {
+.subscription-plan-switcher button:focus-visible {
   outline: 3px solid var(--subscription-accent);
   outline-offset: 3px;
 }

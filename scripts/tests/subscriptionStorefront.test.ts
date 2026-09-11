@@ -309,7 +309,7 @@ test('card copy follows the approved mock: free hour, footer note and five-visit
   const presentationSource = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
   assert.equal((presentationSource.match(/title: '1 час в день бесплатно:'/g) || []).length, 4);
   assert.match(presentationSource, /kind: 'note'/);
-  assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*labelKind: 'plain',/);
+  assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*shortLabel: 'Энергия',\s*labelKind: 'plain',/);
   assert.match(presentationSource, /title: 'Форматы на выбор:'/);
   assert.match(presentationSource, /label: 'До 4 активных записей'/);
   assert.doesNotMatch(presentationSource, /на 2 недели вперёд/);
@@ -320,6 +320,14 @@ test('card copy follows the approved mock: free hour, footer note and five-visit
   const cssSource = readFileSync(new URL('../../src/components/subscription-storefront/subscriptions.css', import.meta.url), 'utf8');
   assert.match(cssSource, /\.subscription-storefront__canvas \{ position: relative; \}/);
   assert.match(cssSource, /\.subscription-storefront__navigation \{\s*position: absolute;/);
+  // The card pager is a named switcher, not a dot indicator.
+  const sectionSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionOfferSection.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(sectionSource, /subscription-rail-dots/);
+  assert.match(sectionSource, /className="subscription-plan-switcher"/);
+  assert.match(sectionSource, /plan\.shortLabel \?\? plan\.label/);
+  assert.match(sectionSource, /stopPlans/);
+  assert.doesNotMatch(cssSource, /\.subscription-rail-dots/);
+  assert.match(cssSource, /\.subscription-plan-switcher button\[aria-current='true'\]/);
 });
 
 

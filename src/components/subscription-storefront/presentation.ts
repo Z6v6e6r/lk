@@ -105,18 +105,20 @@ export const summerPlanDisplayOrder: readonly SummerPlanCounterKey[] = [
 
 export type SummerPlanPresentation = Pick<
   SubscriptionPlanView,
-  'label' | 'labelKind' | 'tagTone' | 'artUrl' | 'featured' | 'benefitGroups'
+  'label' | 'shortLabel' | 'labelKind' | 'tagTone' | 'artUrl' | 'featured' | 'benefitGroups'
 >;
 
 export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, SummerPlanPresentation>> = {
   friendship: {
     label: 'Дружба',
+    shortLabel: 'Дружба',
     tagTone: '#49d8a1',
     artUrl: friendshipArtUrl,
     benefitGroups: friendshipBenefits,
   },
   ra: {
     label: 'РА',
+    shortLabel: 'РА',
     tagTone: '#9a74ef',
     artUrl: raArtUrl,
     featured: true,
@@ -124,17 +126,20 @@ export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, Summe
   },
   academy: {
     label: 'Академия',
+    shortLabel: 'Академия',
     tagTone: '#91dd1c',
     artUrl: academyArtUrl,
     benefitGroups: academyBenefits,
   },
   sport: {
     label: 'Спорт',
+    shortLabel: 'Спорт',
     tagTone: '#66bceb',
     benefitGroups: sportBenefits,
   },
   energy5: {
     label: 'Абонемент «Энергия 5»',
+    shortLabel: 'Энергия',
     labelKind: 'plain',
     benefitGroups: energy5Benefits,
   },

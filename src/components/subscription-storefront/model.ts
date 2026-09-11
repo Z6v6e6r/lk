@@ -41,6 +41,8 @@ export interface SubscriptionBenefitGroup {
 export interface SubscriptionPlanView {
   readonly id: string;
   readonly label: string;
+  /** Compact name used by the plan switcher under the rail. */
+  readonly shortLabel?: string;
   /** `plain` renders the label as a headline instead of the badge artwork. */
   readonly labelKind?: 'badge' | 'plain';
   readonly tagTone?: string;
