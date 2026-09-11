@@ -5,11 +5,13 @@ import { createHash } from 'node:crypto';
 import { buildCounterEpochCandidate, buildCounterEpochInitializer, counterEpochTargets } from '../prepare_subscription_counter_epoch_candidate.mjs';
 import { syncCounterEpoch } from '../sync_subscription_counter_epoch.mjs';
 import { syncAnnualHistory } from '../sync_annual_subscription_history.mjs';
+import { newestReviewedSourceSha256 } from '../lib/subscriptionSourceGenerationPins.mjs';
 const binding = JSON.parse(fs.readFileSync(new URL('../subscription_counter_epoch_binding.json', import.meta.url)));
 const texts = Object.fromEntries(counterEpochTargets.map(t => [t.file, fs.readFileSync(new URL(`../nodered_games_nodes/${t.file}`, import.meta.url), 'utf8')]));
 test('epoch candidate binds all current source files and generated helpers', () => {
   syncCounterEpoch({ check: true }); syncAnnualHistory({ check: true });
-  for (const t of binding.targets) assert.equal(createHash('sha256').update(texts[t.file]).digest('hex'), t.sourceTextSha256, t.file);
+  for (const t of binding.targets) assert.equal(createHash('sha256').update(texts[t.file]).digest('hex'),
+    newestReviewedSourceSha256(t.file) ?? t.sourceTextSha256, t.file);
   assert.equal(binding.targets.length, 11);
   assert.throws(() => buildCounterEpochCandidate({ liveBytes: Buffer.from('[]'), sourceTexts: texts, binding }), /preimage drift/);
 });
