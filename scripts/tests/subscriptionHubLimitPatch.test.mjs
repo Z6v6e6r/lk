@@ -17,12 +17,12 @@ const FN_DIR = path.join(ROOT, "scripts", "nodered_games_nodes");
 const TAB_ID = "f9575c8726e29196";
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 // Recorded for the exact preimage this generation was reviewed against.
-const EXPECTED_CANDIDATE_SHA256 = "aaccf2f066fa866cc7580bdbefaadb5e5e7c6d92e405a4dda36b032674a78470";
+const EXPECTED_CANDIDATE_SHA256 = "47bffbef103ae106e6cba8e0bc0378fbc26a6d2d1f448ac13ab659345ae1db8e";
 const EXPECTED_TARGET_IDS = ["8fdc7076a0c436a2", "c165e43eba668c25", "91dded2dc8cfebe4", "519b6a6ca208e281"];
 
 test("hub limit generation pins the four reviewed live function nodes", () => {
   assert.deepEqual(HUB_LIMIT_LIVE_CONTRACT, {
-    sourceSha256: "2ace2b60d0e246e84d5b9a542f6022ea1f7788c945dd855339e0ff0e47c09438",
+    sourceSha256: "2edad045b7d22d1f5f28d5e5f45050790a5aa383aea577550011d814d9f8ff46",
     nodeCount: 4799,
     httpInputCount: 219,
   });
