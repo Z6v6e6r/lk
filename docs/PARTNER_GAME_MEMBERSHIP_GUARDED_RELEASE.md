@@ -13,6 +13,14 @@ root-owned startup anchor. Это локальный source checkpoint, не н�
 exact bytes. Изменившийся startup, как и предыдущий token resolver, требует нового
 runtime/guarded/packet evidence; release pins и старые receipts не переписаны.
 
+Дополнение после `b38e8f7`: добавлен третий режим **BOUND_ACTIVE** — единственный,
+который может обслуживать трафик. Он достижим только через тот же root-owned anchor,
+который явно авторизует активацию для одного canary-клиента и ограниченного набора
+игр; env-переменные сами по себе активацию не дают, и packet manifest её не
+авторизует. Sidecar bytes изменились, поэтому sidecar closure resealed: новый
+`guardedStartupSha256` `d610475a`, репетиция `5416c722`, controls pin `eb1d0af0`
+(было `5e74de46`). Install packet под эти bytes ещё не собран.
+
 ## Состав и границы
 
 `sidecar/settings-runtime.cjs` — единственный выбранный `--settings` в service unit.
@@ -40,9 +48,10 @@ audit от `2026-09-06T09:09:03.738Z` допускается максимум 24
    bounded read, inode/size/timestamps и SHA-256 actual candidate.
 3. Baseline packet policy остаётся `DEFAULT_OFF_UNBOUND`, Host `unbound.invalid`.
    Новый внешний anchor может привязать Host, audience и exact release в режиме
-   `BOUND_DEFAULT_OFF` по правилам ниже. Оба режима требуют `ENABLED=false`,
-   `PROVIDER_MODE=disabled`, `VIVA_MUTATIONS_ENABLED=false`; env drop-in с `true`
-   не активирует версию. Режимов `ACTIVE`/`BOUND_ACTIVE` нет.
+   `BOUND_DEFAULT_OFF` по правилам ниже. `DEFAULT_OFF_UNBOUND` и `BOUND_DEFAULT_OFF`
+   требуют `ENABLED=false`, `PROVIDER_MODE=disabled`, `VIVA_MUTATIONS_ENABLED=false`;
+   env drop-in с `true` не активирует версию. `BOUND_ACTIVE` — единственный
+   activatable режим и требует обратного набора флагов (см. «Активация»).
 4. Ровно три HTTP-In routes; upload/skipBodyParsing запрещены. Node-RED получает
    сохранённую копию graph через storage adapter. Его поздняя CLI assignment не
    перечитывает pathname, и последующая замена `current` не меняет captured graph.
@@ -67,22 +76,56 @@ userDir**. CLI, env, HTTP и sibling JSON в packet не могут замени
 | --- | --- |
 | Selector отсутствует или `DEFAULT_OFF_UNBOUND`, anchor отсутствует | Прежний default-off, Host `unbound.invalid` |
 | `LK_PARTNER_GAME_API_STARTUP_MODE=BOUND_DEFAULT_OFF`, anchor корректен, runtime audience совпадает | Привязанный Host, immutable graph, API по-прежнему OFF |
+| `BOUND_ACTIVE`, anchor активен и keyring совпадает, все provider gates выставлены | Привязанный Host, immutable graph, API обслуживает объявленных клиентов |
+| `BOUND_ACTIVE` без `activationAuthorized`, без `authorizedClients` или с иным `mode` в anchor | Startup refusal, без fallback |
+| Keyring и `authorizedClients` расходятся: включён необъявленный клиент, объявленный выключен, или игра клиента вне его набора | Startup refusal |
+| `BOUND_ACTIVE` при неполном наборе provider gates (любой из них отсутствует или иной) | Startup refusal |
+| Keyring и `authorizedClients` расходятся по составу клиентов или игры клиента выходят за его набор | Startup refusal |
 | Bound selector без anchor, пустой/неизвестный selector, anchor при unbound selector | Startup refusal, без fallback |
 | Anchor unreadable/malformed/подменён, любой release/audience mismatch | Startup refusal, без открытия audit/runtime settings |
-| Любой provider/activation flag вместо `false/disabled/false` | Startup refusal независимо от корректности anchor |
+| Bound/DEFAULT_OFF flag вместо `false/disabled/false` | Startup refusal независимо от корректности anchor |
 
 JSON anchor имеет ровно следующие поля (таблица — контракт, не боевые настройки):
 
 | Поле | Требование |
 | --- | --- |
 | `formatVersion` | Число `1` |
-| `mode` | Только `BOUND_DEFAULT_OFF` |
+| `mode` | `BOUND_DEFAULT_OFF` или `BOUND_ACTIVE`; обязан совпадать с `LK_PARTNER_GAME_API_STARTUP_MODE`, поэтому default-off anchor нельзя переиспользовать для активации |
 | `expectedHost` | Exact lowercase DNS hostname до 253 символов; без wildcard, URL, port, trailing dot, IP и `unbound.invalid` |
 | `expectedAudience` | Существующая grammar `[a-z0-9][a-z0-9._:-]{2,127}`; exact match с серверным `LK_PARTNER_GAME_API_AUDIENCE`, без trim/fallback |
 | `candidateFlowSha256` | SHA-256 exact `candidate.flow.json`, также совпадающий с baseline policy |
 | `releaseDirectory` | Canonical абсолютный каталог этого release, не alias `current`, не `/`; не пересекается с writable userDir |
 | `packetManifestSha256` | SHA-256 independently approved bytes `packet.manifest.json` |
 | `approvedCommit`, `approvedTree` | Independently approved 40-hex Git identities; сравниваются с manifest, не извлекаются из него как expected values |
+
+Только для `mode=BOUND_ACTIVE` в anchor добавляются ровно два поля; при
+`BOUND_DEFAULT_OFF` их присутствие — startup refusal (exact key set на каждый режим):
+
+| Поле | Требование |
+| --- | --- |
+| `activationAuthorized` | Строго `true`; единственная авторизация активации, packet manifest её не заменяет |
+| `authorizedClients` | Объект: ключ — `clientId` по `^[a-z0-9][a-z0-9_-]{2,63}$`, значение — 1–8 уникальных game id по `^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$`. 1–16 клиентов |
+
+`authorizedClients` должен совпадать с keyring по составу: каждый `enabled:true` client
+объявлен, ни один объявленный клиент не выключен, а игры каждого клиента — непустое
+подмножество его собственного набора. Включение нового клиента всегда требует нового
+root-owned anchor, поэтому именно анкор, а не env и не packet, остаётся единственной
+авторизацией активации.
+
+## Активация (`BOUND_ACTIVE`)
+
+Активация — отдельно разрешённое действие оператора PadlHub, а не следствие
+успешного packet или rehearsal. Порядок: собрать и установить exact release,
+затем записать root-owned anchor с двумя полями выше, затем выставить gates.
+Guard требует одновременно `ENABLED=true`, `PROVIDER_MODE=viva`,
+`VIVA_MUTATIONS_ENABLED=true`, revision `padlhub-viva-technical-booking-v1`,
+подтверждённые idempotency и on-place и непустой technical client id; любой
+неполный набор — startup refusal, а не частичная активация. Границы активации
+ограничены набором клиентов и игр из `authorizedClients`: включённый client не
+может получить игру вне своего набора, а включение клиента без правки анкора
+даёт refusal при старте. Возврат — замена anchor на `BOUND_DEFAULT_OFF` (или
+удаление двух ACTIVE-полей) и restart: `ENABLED=true` без активного anchor даёт refusal,
+то есть downgrade не открывает listener и не оставляет API включённым.
 
 Anchor: root owner, regular non-executable file, один hard link, без symlink и
 group/world write. Каждый ancestor — canonical root-owned directory без

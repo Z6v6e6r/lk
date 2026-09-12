@@ -20,10 +20,12 @@ const sha = value => crypto.createHash("sha256").update(value).digest("hex");
 const json = value => Buffer.from(canonicalJson(value));
 const jsonl = rows => Buffer.from(rows.map(canonicalJson).join("\n") + "\n");
 const file = (name, text) => ({ path: name, bytes: Buffer.from(text) });
-const overlay = generatePartnerNginxSharedOverlay({ scope: "LOCAL_PREPARATION", exactHost: certs.exactHost, clientId: "synthetic-partner",
+const overlay = generatePartnerNginxSharedOverlay({ scope: "LOCAL_PREPARATION", exactHost: certs.exactHost,
+  clients: [{ clientId: "synthetic-partner", clientCertificateBytes: certs.clientCertificateBytes,
+    approvedClientSpkiSha256: certs.approvedClientSpkiSha256 }],
   sourceAddresses: ["127.0.0.1"], generationMarker: sha("new shared generation"), now: certs.now,
-  clientCertificateBytes: certs.clientCertificateBytes, clientCaCertificateBytes: certs.caCertificateBytes,
-  serverCertificateChainBytes: certs.serverCertificateBytes, approvedClientSpkiSha256: certs.approvedClientSpkiSha256,
+  clientCaCertificateBytes: certs.caCertificateBytes,
+  serverCertificateChainBytes: certs.serverCertificateBytes,
   approvedClientCaSha256: sha(certs.caCertificateBytes), approvedServerChainSha256: sha(certs.serverCertificateBytes) });
 const main = `worker_processes 4; events { worker_connections 1024; }
 http { ssl_protocols TLSv1.2 TLSv1.3; client_header_buffer_size 2k; large_client_header_buffers 7 2k;
@@ -211,12 +213,12 @@ function data(prepared = preparation) {
       httpStatus: opaque ? null : positive ? 503 : statuses[id], complete: !opaque, tlsAuthorized: !opaque,
       tlsProtocol: opaque ? null : "TLSv1.3", alpnProtocol: null,
       serverLeafSha256: opaque ? null : sha("server leaf"), serverSpkiSha256: opaque ? null : binding.serverSpkiSha256,
-      actualClientLeafSha256: opaque || id === "noClientCertificate" ? null : id === "wrongClientCertificate" ? sha("wrong client") : binding.clientLeafSha256,
+      actualClientLeafSha256: opaque || id === "noClientCertificate" ? null : id === "wrongClientCertificate" ? sha("wrong client") : binding.clients[0].clientLeafSha256,
       sourceAddress: opaque ? null : "127.0.0.1", peerAddress: opaque ? null : "127.0.0.1", peerPort: opaque ? null : 443,
       cacheControl: opaque ? null : "no-store", corsHeaderPresent: false, bodyBytes: opaque ? 0 : 2, bodySha256: opaque ? null : sha("{}"),
       startedAt: 1200 + index * 700, completedAt: 1210 + index * 700, ingressRequestId: opaque || external ? null : sha(`response${index}`).slice(0, 32) };
     transport.probes.push(probe);
-    if (!opaque && !external) rows.push({ admitted: positive ? "1" : "0", clientVerified: positive ? "1" : "0", concurrency: positive ? "PASSED" : "-",
+    if (!opaque && !external) rows.push({ admitted: positive ? "1" : "0", client: positive ? "synthetic-partner" : "", clientVerified: positive ? "1" : "0", concurrency: positive ? "PASSED" : "-",
       generation: binding.generationMarker, rate: positive ? "PASSED" : "-", requestId: probe.ingressRequestId,
       status: String(probe.httpStatus), upstream: positive ? "503" : "-", worker: String(21 + index % 4) });
   }

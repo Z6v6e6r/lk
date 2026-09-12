@@ -1,11 +1,11 @@
 {
   "formatVersion": 1,
   "deploymentId": "partner-game-membership-api-v02",
-  "capturedAt": "2026-09-11T11:46:17.001Z",
+  "capturedAt": "2026-09-12T06:26:07.247Z",
   "clockSource": "docker-container-finished-at",
   "evidenceScope": "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
-  "sourceBaseCommit": "4776b80a996b1365dfb2712276fbc9d0b6c9e273",
-  "customNodeReleaseSha256": "90227ae407b1fbe7c4bb1e1683084bf3695abd9938d0c31253f52e1b5298f2ea",
+  "sourceBaseCommit": "aaca89270d1ac3a8d8adc622226026df6f9c32ef",
+  "customNodeReleaseSha256": "15361530654e2f4f0f20d83481991bc2402a3ccc0e47cef95b1729b305ab77f4",
   "runtime": {
     "platform": "linux",
     "architecture": "x64",
@@ -59,7 +59,7 @@
   "containerReceipt": {
     "formatVersion": 1,
     "evidenceScope": "LOCAL_CONTAINER_CLI_READBACK",
-    "containerId": "5ddd43a1211a55f2b4e8f1643d9cd667777ec56a31eaa50f5bcca528cc773eea",
+    "containerId": "6d83a46725b6d9079f204c6acba56fee8fe1a4bff82ba4ef2462dfeaac35170b",
     "imageReference": "node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     "containerImageId": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     "platformImageId": "sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96",
@@ -98,10 +98,10 @@
       }
     ],
     "orchestratorSha256": "0ece2e6a2f42f4b24a7d5a000d18f063dbee1b1ce182716b4c009d6a8a2aa83a",
-    "inspectedAt": "2026-09-11T11:45:43.017Z",
-    "finishedAt": "2026-09-11T11:46:17.001Z",
+    "inspectedAt": "2026-09-12T06:25:33.492Z",
+    "finishedAt": "2026-09-12T06:26:07.247Z",
     "exitCode": 0,
-    "cleanupCapturedAt": "2026-09-11T11:46:19.633Z",
+    "cleanupCapturedAt": "2026-09-12T06:26:10.322Z",
     "containerPresentAfterCleanup": false,
     "hostListenerPresentAfterCleanup": false
   }

@@ -226,3 +226,203 @@ root-ACL custody (`build_legacy_game_command_root_acl_bootstrap.mjs`,
 `uniq_tenant_game_id` на `lk_games` (дубликатов больше нет) и пять коллекций
 `lk_partner_*` с индексами, с явным решением владельца вне legacy-governance. Индексы
 additive, откат — drop созданного.
+
+## Журнал: индексы применены scoped-миграцией (2026-09-11)
+
+Владелец выбрал scoped-исключение. Миграция
+`scripts/migrate_partner_game_membership_indexes.mjs` (режимы
+`audit`/`dry-run`/`apply`/`postcheck`/`rollback-plan`) прогнана на боевой БД `games`:
+
+- перед `apply` dry-run подтвердил `missing: 11`, `conflicts: []`, `duplicates: []`;
+- `apply --confirm-apply` создал 11 индексов:
+
+```text
+lk_partner_api_nonces:ttl_partner_nonce_expiry                        (TTL)
+lk_partner_game_operations:uniq_partner_client_idempotency            (unique)
+lk_partner_game_operations:partner_client_correlation
+lk_partner_game_memberships:uniq_partner_active_membership            (unique, sparse)
+lk_partner_game_memberships:uniq_partner_payment_reference            (unique)
+lk_partner_game_memberships:partner_owner_history
+lk_partner_api_audit:partner_audit_time_client
+lk_partner_api_audit:partner_audit_correlation
+lk_partner_game_outbox:uniq_partner_outbox_event                      (unique)
+lk_partner_game_outbox:partner_outbox_delivery
+lk_games:uniq_tenant_game_id                                          (unique)
+```
+
+- `postcheck`: `ok: true`, `missing: 0`, `conflicts: 0`; `rollback-plan` — 11 `dropIndex`.
+
+Миграция только создаёт отсутствующие индексы: ни одного `dropIndex`, ни одной записи в
+документы. Она является **пилотным исключением вне legacy-governance** и должна быть
+выведена из эксплуатации или заменена управляемым путём, когда trust anchor legacy game
+command будет привязан (`status: BOUND`). Уникальность `{tenantKey, id}` на `lk_games`
+теперь обеспечена — предусловие `verifyRequiredIndexes()` для активации выполнено.
+
+Откат: `node scripts/migrate_partner_game_membership_indexes.mjs --mode rollback-plan`
+даёт точный список; сами `dropIndex` выполняются вручную после отдельного решения.
+
+## Журнал: проверка после миграции (2026-09-11)
+
+Сквозной путь подтверждён **с резервного хоста `89.108.64.209`** (он стабильно в
+allowlist): `POST` на валидный маршрут вернул `503 PARTNER_API_DISABLED`, как и должно
+быть при выключенном API. `padlhub.su` `302`, `score.padlhub.su` `410` — без изменений.
+
+Отдельно зафиксировано операционное неудобство: IP этой рабочей машины **ротируется**
+(наблюдались `194.71.130.27` и `109.173.114.67`), поэтому пробы прямо с неё дают `403` от
+`deny all`, когда адрес не совпал с allowlist. Для повторяемых канареечных проб
+используйте резервный хост, а не рабочую машину.
+
+Канареечные клиентские `client.pem`/`client.key` временно размещены на резервном хосте
+(`/tmp/partner-canary-client.*`, `0600`) для этих проб. Это **временный** материал: перед
+активацией его нужно удалить либо заменить сертификатом партнёра, иначе приватный ключ
+канарейки остаётся на чужом хосте.
+
+## Журнал: release v02-20260912 и Viva-креды (2026-09-12)
+
+По решению владельца лимит `expires_in` ослаблен в коде до
+`PARTNER_VIVA_TOKEN_MAX_TTL_SECONDS = 604800` (правка custom node, коммит `1e0bc57`), после
+чего runtime evidence перевыпущен и packet пересобран.
+
+- Свежий live-pull: `e5d64351…`, 4799 узлов. `candidateSha256` не изменился
+  (`5a5aefe3…`) — sidecar-кандидат строится из синтетического однотабового preimage и от
+  живого flow не зависит; живой flow нужен только как collision-evidence.
+- Установлен release `v02-20260912`: 38 файлов, `npm ci` → 291 пакет, Node-RED `5.0.6`,
+  симлинк custom node на месте, `current` переключён.
+- Новый anchor: `packetManifestSha256=7680eed9…`, `approvedCommit=1e0bc57…`,
+  `approvedTree=d4413ab3…`, release-каталог `v02-20260912`.
+- В `service.env` добавлены Viva-переменные: `VIVA_TOKEN_SOURCE=password-grant`,
+  `VIVA_SERVICE_CLIENT_ID=React-auth-dev`, сервисный аккаунт `test_match_point@padlhub.ru`
+  и технический клиент `a46217b4-d1c0-4363-a848-a9b05d8aa648`.
+- Egress расширен: `147.45.254.160/32` (Mongo) + `91.219.191.8/32` (api и kc Viva) +
+  localhost.
+- Сервис `active`, listener только `127.0.0.1:18894`.
+
+Проверка **боевого резолвера из установленного кода**: модуль сообщает
+`max ttl: 604800`, реальный password grant прошёл (`RESOLVER OK token_len=3289`). То есть
+ослабленный лимит действует именно в том коде, который развёрнут.
+
+API при этом остаётся **выключенным**: запрос через ingress с резервного хоста
+(`89.108.64.209`) по-прежнему получает `503 PARTNER_API_DISABLED`; `padlhub.su` `302`,
+`score.padlhub.su` `410` — без изменений. Временные файлы на хосте удалены; пароль Viva
+хранится только в `service.env` (`0640 root:partner-game-api`).
+
+Остаётся активация (`ENABLED=true`, `PROVIDER_MODE=viva`, четыре provider-gate) и затем
+выдача доступа партнёру — отдельные разрешения.
+
+## Журнал: активация канареечного клиента (2026-09-12)
+
+Активация выполнена по разрешению владельца. Сначала код `BOUND_ACTIVE`
+(коммит `6a87f5a`), затем пакет v03 из свежего live-pull (`f6c6c9e2…`, 4799 узлов;
+манифест `5e527cba…`, commit `9d809f8c`, tree `1a0af7f6`, `candidateSha256` прежний
+`5a5aefe3…`), релиз `v03-20260912` (37 файлов сверено по байтам, `npm ci` → 291 пакет,
+Node-RED `5.0.6`, Node `22.23.2`), ACTIVE-анкор (`activationAuthorized:true`,
+`padlhub-canary`, игра `pay_adff32ae-…`) и drop-in `zz-activation.conf` с семью гейтами.
+Эффективное окружение проверено **до** переключения `current`.
+
+Результат: гвард принял `BOUND_ACTIVE`, слушатель только `127.0.0.1:18894`. С резервного
+хоста через общий 443 подписанный `GET` вернул **404 `OPERATION_NOT_FOUND`** вместо
+`503` — то есть ingress, mTLS, HMAC v2, маршрут, allowlist и аудит работают. Подписанный
+`POST` на тестовую игру вернул `202` и **создал корректную бронь** `6af8c23f`:
+`client=a46217b4` (технический), `paymentType=ON_PLACE`, `isCancelled=false`.
+
+**Найденный блокер.** Операция осталась `UNKNOWN` с `VIVA_READBACK_BINDING_MISMATCH`.
+Живая строка списка броней не содержит ни `exerciseId`, ни `exercise`, ни `service`, а
+`readBooking` требовал один из них; флаги отмены в проде — `isCancelled` и
+`cancellationDate`, тогда как `bookingIsActive` знал только
+`active`/`cancelled`/`canceled`/`status`/`state`. Итог: ни одну мутацию нельзя
+подтвердить, компенсации нет, бронь осталась активной, игра в ЦУП не обновлена
+(`participants` без изменений), membership `65bce39c` и операция `d3230cf5` — `UNKNOWN`.
+Тесты кодировали предполагаемую форму payload и с живым API не сверялись.
+
+Фикс в коммите `aaca892`: привязка упражнения берётся из scope запроса (путь адресует
+коллекцию одного упражнения), отсутствующий alias подтверждает запрошенное упражнение,
+присутствующий но другой — по-прежнему фатален, `client` обязателен, а `paymentType`
+(если есть) обязан быть `ON_PLACE`. Живая страница сохранена как фикстура
+`scripts/tests/fixtures/partner-viva-bookings-list.live-20260912.json`.
+
+Остаётся: перевыпуск runtime evidence и пакета под изменённый custom node, установка
+релиза, повторная активация, живая проверка ADD и удаление осиротевшей брони `6af8c23f`
+через исправленный `DELETE`.
+
+## Журнал: повторная активация с фиксом (2026-09-12)
+
+Пакет v04 собран из свежего live-pull (тот же `f6c6c9e2…`, 4799 узлов; манифест
+`0ac4f3f2…`, commit `72e0be1`, tree `3c7ce69a`), `customNodeReleaseSha256` теперь
+`15361530…`. Релиз `v04-20260912`: 37/37 файлов сверено, aggregate совпал, `npm ci` →
+291 пакет, установленный `partner-game-membership-viva.mjs` = `d9434ce0…`. Новый
+ACTIVE-анкор привязан к v04, `current` переключён, сервис поднялся.
+
+Живой прогон через общий 443 с резервного хоста:
+
+| Шаг | Результат |
+| --- | --- |
+| Подписанный `GET` операции | `404 OPERATION_NOT_FOUND` (API обслуживает) |
+| Подписанный `POST` (новый игрок) | **`201`**, membership `57ff95f1`, `state ACTIVE`, операция `cec1cb2c` `COMPLETED` |
+| Бронь в Viva | `c2b01878`, `client=a46217b4`, `paymentType=ON_PLACE` — read-back прошёл |
+| Подписанный `DELETE` | **`200`**, membership `state REMOVED`, операция `c0506990` `COMPLETED` |
+| Бронь после `DELETE` | `isCancelled=true`, `cancellationDate=2026-09-12T06:31:26` |
+
+Побочный факт: вторая бронь на того же технического клиента и то же упражнение принята
+Viva, то есть несколько участников одной игры не конфликтуют на стороне провайдера.
+
+Отдельно подтверждена вторая половина продуктового обещания — ростер в ЦУП. Пока
+membership активен, в документе игры появляется участник
+`id="partner:<membershipId>"`, `source="PARTNER_API"`, `status="CONFIRMED"` с
+`vivaBookingId`; после `DELETE` он исчезает, и в `participants` остаётся только исходный
+организатор. Проверялось на третьем цикле (`d8680112-64da-4975-9d70-135f78eef986`,
+booking `784c89c6-5f58-438e-a2a3-11da6183b4b6`).
+
+Осиротевшая бронь `6af8c23f` от прогона до фикса отменена отдельным операторским
+действием тем же контрактом (`GET …/cancel` probe → `PUT {refundMethod:"NONE",
+cancelExercise:false}`); запись membership `65bce39c` осталась в `UNKNOWN` без `bookingId`
+как след дефекта и не переписывалась. Игра в ЦУП не загрязнена: `participants` содержит
+только исходного организатора, оба партнёрских membership доведены до `REMOVED`.
+
+Итог по состояниям: операций 3 (`UNKNOWN` — только до-фиксовый прогон, два `COMPLETED`),
+membership 2 (`UNKNOWN` и `REMOVED`), audit 14, nonces 8. Публичные хосты без изменений
+(`padlhub.su` `302`, `score.padlhub.su` `410`, `kozlovatv.ru` `200`).
+
+Остаётся: выдача доступа партнёру (отдельное разрешение), сужение ролей Mongo для
+`partner-game-api`, удаление канареечного приватного ключа с резервного хоста и
+англоязычная версия гайда. Уникальность `activeKey` для `canary-player-20260912-01`
+занята записью `UNKNOWN` — реальные идентификаторы партнёра с ней не пересекаются.
+
+## Журнал: набор клиентов в гварде и allowlist в ingress (2026-09-12)
+
+Снято ограничение «ровно один enabled клиент». Анкор теперь несёт `authorizedClients`
+(клиент → его игры), а ingress допускает клиента только при совпадении сертификата и
+заголовка `X-PadlHub-Client-Id`.
+
+- Источник: коммит `9bbac5fb`, пакет v05 (манифест `8f748a17…`, `customNodeReleaseSha256`
+  прежний `15361530…`, `guardedStartupSha256` `4c4248f9…`), релиз `v05-20260912` — 37/37
+  файлов сверено, `npm ci` → 291 пакет.
+- Sidecar closure resealed: rehearsal `d612cf7b`, controls pin `68f31f5c`.
+- Пред-полёт гварда на **новом** релизе под сервисным пользователем, до переключения
+  `current`: позитивный случай — `GUARD_PREFLIGHT_PASS`, `clients=["padlhub-canary",
+  "canary-second"]`; негативный — включённый, но необъявленный третий клиент отклонён.
+- Ingress: сгенерирован из `generatePartnerNginxSharedOverlay` на два клиента, применён
+  `nginx -t` + `nginx -s reload`.
+
+Важная находка: первый reload **молча не применился** —
+`[emerg] limit_req "pgm_v02_client_rate" uses the "$pgm_v02_cert_client" key while
+previously it used the "$pgm_v02_client" key`. nginx запрещает менять ключ существующей
+`limit_req_zone`/`limit_conn_zone` при reload, поэтому новая переменная была переименована
+обратно в историческую `$pgm_v02_client` (меняются только значения map) и reload прошёл
+без рестарта общего ingress. Признак неприменения — старый `generation` в audit-логе; он
+же используется как проверка применения.
+
+Проверено вживую (второй клиент `canary-second` с отдельным сертификатом от того же CA):
+
+| Проба | Результат |
+| --- | --- |
+| canary cert + `padlhub-canary` | `404` (допущен, доходит до приложения) |
+| canary cert + `canary-second` | `403`, `admitted=1`, `client=padlhub-canary` |
+| второй cert + `padlhub-canary` | `403`, `admitted=1`, `client=canary-second` |
+| второй cert + `canary-second` | `404` — **сосуществование подтверждено** |
+| любой cert + неизвестный id | `403` |
+
+Второй клиент выведен из эксплуатации сразу после проверки: keyring, `authorizedClients`
+и ingress вернулись к канареечному клиенту, в audit — generation `9596f6ed…`,
+`client=padlhub-canary`; выведенный сертификат получает `403` (`admitted=0`, `client=""`),
+а его приватный ключ удалён с резервного хоста. В аудит добавлено поле `client` —
+идентичность из сертификата, а не из заголовка.

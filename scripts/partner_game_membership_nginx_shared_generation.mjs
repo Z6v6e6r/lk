@@ -66,8 +66,11 @@ function logs(raw) {
   if (lines.length > 27) fail("LOG_INVALID");
   const rows = lines.map(line => parse(Buffer.from(line), 2048));
   for (const row of rows) {
-    exact(row, ["admitted", "clientVerified", "concurrency", "generation", "rate", "requestId", "status", "upstream", "worker"]);
-    if (!["0", "1"].includes(row.admitted) || !["0", "1"].includes(row.clientVerified) || !hash(row.generation) || !requestId(row.requestId)
+    exact(row, ["admitted", "client", "clientVerified", "concurrency", "generation", "rate", "requestId", "status", "upstream", "worker"]);
+    // The audit row carries the client identity derived from the presented certificate, not
+    // the client-supplied header, so per-client forensics survive a multi-client allowlist.
+    if (typeof row.client !== "string" || (row.client !== "" && !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(row.client))
+      || !["0", "1"].includes(row.admitted) || !["0", "1"].includes(row.clientVerified) || !hash(row.generation) || !requestId(row.requestId)
       || !["", "-", "503"].includes(row.upstream) || !/^[2-5][0-9]{2}$/.test(row.status)
       || !/^[1-9][0-9]{0,9}$/.test(row.worker)
       || !["", "-", "PASSED", "DELAYED", "REJECTED"].includes(row.rate)
@@ -92,7 +95,9 @@ export function evaluateLocalNginxSharedGeneration(input) {
   exact(transport, ["state", "challenge", "startedAt", "completedAt", "target", "clientId", "probes", "productionVerified",
     "deployAuthorized", "activationAuthorized", "vantage", "applicationEvidence", "upstreamAdmission"]);
   if (transport.state !== "NGINX_SHARED_TRANSPORT_OBSERVATIONS_NOT_INGRESS_PROOF" || !hash(transport.challenge)
-    || transport.clientId !== binding.clientId || transport.productionVerified !== false || transport.deployAuthorized !== false || transport.activationAuthorized !== false
+    || typeof transport.clientId !== "string"
+    || !binding.clients.some(client => client.clientId === transport.clientId)
+    || transport.productionVerified !== false || transport.deployAuthorized !== false || transport.activationAuthorized !== false
     || transport.vantage !== "UNATTESTED" || transport.applicationEvidence !== "NOT_COLLECTED" || transport.upstreamAdmission !== "NOT_COLLECTED"
     || !Number.isSafeInteger(transport.startedAt) || transport.startedAt < startedAt || !Number.isSafeInteger(transport.completedAt)
     || transport.completedAt > completedAt || transport.completedAt < transport.startedAt || transport.completedAt - transport.startedAt > 60000) fail("TRANSPORT_INVALID");
@@ -136,14 +141,15 @@ export function evaluateLocalNginxSharedGeneration(input) {
     if (probe.serverSpkiSha256 !== binding.serverSpkiSha256 || row.status !== String(probe.httpStatus)) fail("LOG_IDENTITY_MISMATCH");
     joined.add(row.requestId);
     if (positive) {
-      if (probe.httpStatus !== 503 || probe.cacheControl !== "no-store" || probe.actualClientLeafSha256 !== binding.clientLeafSha256
-        || row.upstream !== "503" || row.admitted !== "1" || row.clientVerified !== "1"
+      if (probe.httpStatus !== 503 || probe.cacheControl !== "no-store"
+        || probe.actualClientLeafSha256 !== binding.clients.find(client => client.clientId === transport.clientId).clientLeafSha256
+        || row.upstream !== "503" || row.admitted !== "1" || row.clientVerified !== "1" || row.client !== transport.clientId
         || !["PASSED", "DELAYED"].includes(row.rate) || row.concurrency !== "PASSED") fail("ADMISSION_UNPROVEN");
       covered.add(row.worker); admitted++;
     } else {
       const allowed = { wrongHost: [400, 421], wrongSni: [400, 403, 421], editorAdmin: [404], options: [400, 404, 405], query: [400, 404], noClientCertificate: [400, 403], wrongClientCertificate: [400, 403] };
       if (!allowed[probe.id]?.includes(probe.httpStatus) || !["", "-"].includes(row.upstream)
-        || ["noClientCertificate", "wrongClientCertificate"].includes(probe.id) && row.admitted !== "0") fail("DENIAL_UNPROVEN");
+        || ["noClientCertificate", "wrongClientCertificate"].includes(probe.id) && (row.admitted !== "0" || row.client !== "")) fail("DENIAL_UNPROVEN");
     }
   }
   if (joined.size !== rows.length || admitted !== positiveIds.size) fail("UNRELATED_AUDIT_TRAFFIC");

@@ -16,10 +16,12 @@ after(() => fs.rmSync(root, { recursive: true, force: true }));
 const fixture = createPartnerNginxTestCertificates(path.join(root, "certificates"));
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const input = {
-  scope: "LOCAL_PREPARATION", exactHost: fixture.exactHost, clientId: "synthetic-partner",
+  scope: "LOCAL_PREPARATION", exactHost: fixture.exactHost,
+  clients: [{ clientId: "synthetic-partner", clientCertificateBytes: fixture.clientCertificateBytes,
+    approvedClientSpkiSha256: fixture.approvedClientSpkiSha256 }],
   sourceAddresses: ["198.51.100.10"], generationMarker: "a".repeat(64), now: fixture.now,
-  clientCertificateBytes: fixture.clientCertificateBytes, clientCaCertificateBytes: fixture.caCertificateBytes,
-  serverCertificateChainBytes: fixture.serverCertificateBytes, approvedClientSpkiSha256: fixture.approvedClientSpkiSha256,
+  clientCaCertificateBytes: fixture.caCertificateBytes,
+  serverCertificateChainBytes: fixture.serverCertificateBytes,
   approvedClientCaSha256: sha(fixture.caCertificateBytes), approvedServerChainSha256: sha(fixture.serverCertificateBytes),
 };
 const overlay = generatePartnerNginxSharedOverlay(input);
@@ -36,6 +38,9 @@ const baseline = () => [
 const change = (base = baseline(), own = overlay) => ({ baselineFiles: base,
   candidateFiles: [...base.map(item => ({ ...item, bytes: Buffer.from(item.bytes) })), file(own.path, own.configuration)],
   expectedBaselineSha256: hashLocalNginxClosure(base), overlay: own });
+const nest = (name, bytes) => name === "clientCertificateBytes"
+  ? { ...input, clients: [{ ...input.clients[0], clientCertificateBytes: bytes }] }
+  : { ...input, [name]: bytes };
 const rejected = (fn, suffix) => assert.throws(fn, suffix ? new RegExp(`NGINX_SHARED_${suffix}`) : /^PartnerIngressEvidenceError: NGINX_SHARED_/);
 
 test("shared overlay is deterministic, additions-only and has no standalone/shared/default server", () => {
@@ -55,11 +60,15 @@ test("route and rate expressions match the existing fixture policy with a separa
   const routes = text => text.split("\n").map(line => line.trim()).filter(line => /^"~\^(POST|DELETE|GET):/.test(line));
   assert.deepEqual(routes(overlay.configuration), routes(legacy));
   const limits = text => text.split("\n").map(line => line.trim()).filter(line => /^limit_(?:req|conn)(?:_zone|_status)? /.test(line));
-  assert.deepEqual(limits(overlay.configuration.replaceAll("pgm_v02", "partner")), limits(legacy));
+  // Zones now key on the certificate-derived client identity, so the comparison keeps the
+  // legacy text for the two source-based zones and accepts the bound identity for the rest.
+  assert.deepEqual(limits(overlay.configuration.replaceAll("pgm_v02_client", "partner_client").replaceAll("pgm_v02", "partner")), limits(legacy));
   assert.match(overlay.configuration, /proxy_pass http:\/\/127\.0\.0\.1:18894;/);
   assert.match(overlay.configuration, /proxy_next_upstream off;/);
   assert.match(overlay.configuration, /proxy_request_buffering off;/);
-  assert.match(overlay.configuration, /if \(\$http_x_padlhub_client_id != "synthetic-partner"\) \{ return 403; \}/);
+  assert.match(overlay.configuration, /map \$ssl_client_escaped_cert \$pgm_v02_client \{ default ""; "~\^[^"]+" "synthetic-partner"; \}/);
+  assert.match(overlay.configuration, /map "\$pgm_v02_client:\$http_x_padlhub_client_id" \$pgm_v02_client_bound \{ default 0; "synthetic-partner:synthetic-partner" 1; \}/);
+  assert.match(overlay.configuration, /if \(\$pgm_v02_client_bound = 0\) \{ return 403; \}/);
 });
 
 test("every named map, limiter and log format uses only the reserved namespace", () => {
@@ -79,11 +88,28 @@ test("audit fields do not include body, URI, IP, caller IDs, DN, certificates or
   assert.match(overlay.configuration, /error_log \/dev\/null crit;/);
 });
 
+test("several clients are admitted only through their own exact leaf and never through a shared bucket", () => {
+  // Two distinct leaves from the same CA, each bound to its own client id: the generated
+  // maps must stay pairwise, so a client can never present another client's certificate or
+  // claim another client's id.
+  const otherBytes = fs.readFileSync(path.join(root, "certificates/other-client.crt"));
+  const secondClient = { clientId: "second-partner", clientCertificateBytes: otherBytes,
+    approvedClientSpkiSha256: crypto.createHash("sha256")
+      .update(new crypto.X509Certificate(otherBytes).publicKey.export({ type: "spki", format: "der" })).digest("hex") };
+  const multi = generatePartnerNginxSharedOverlay({ ...input, clients: [{ ...input.clients[0] }, secondClient] });
+  // One leaf can never be reused for a second client id.
+  rejected(() => generatePartnerNginxSharedOverlay({ ...input, clients: [{ ...input.clients[0] },
+    { ...input.clients[0], clientId: "second-partner" }] }), "INPUT_INVALID");
+  assert.equal(multi.configuration.match(/\$pgm_v02_client \{/g).length, 1);
+  assert.match(multi.configuration, /map "\$pgm_v02_client:\$http_x_padlhub_client_id" \$pgm_v02_client_bound \{ default 0; (?:[^}]*)"synthetic-partner:synthetic-partner" 1; (?:[^}]*)"second-partner:second-partner" 1; (?:[^}]*)\}/);
+  assert.deepEqual(multi.clients.map(client => client.clientId), ["synthetic-partner", "second-partner"]);
+});
+
 test("public leaf pin plus CA verification, exact Host/SNI and explicit address allowlist remain mandatory", () => {
   assert.match(overlay.configuration, /ssl_verify_client on;/);
   assert.match(overlay.configuration, /ssl_early_data off;/);
   assert.match(overlay.configuration, /ssl_session_cache off;/);
-  assert.ok(overlay.configuration.includes(encodeURIComponent(input.clientCertificateBytes.toString())));
+  assert.ok(overlay.configuration.includes(encodeURIComponent(input.clients[0].clientCertificateBytes.toString())));
   assert.match(overlay.configuration, /if \(\$ssl_server_name != "fixture.invalid"\)/);
   assert.match(overlay.configuration, /if \(\$http_host != "fixture.invalid"\)/);
   assert.match(overlay.configuration, /allow 198\.51\.100\.10;\n\s*deny all;/);
@@ -128,23 +154,28 @@ test("valid indexed data cannot hide a custom prototype or inherited iterator in
 
 test("certificate validation and rendering cannot observe different caller Buffer methods", () => {
   let invoked = false;
-  for (const name of ["clientCertificateBytes", "clientCaCertificateBytes", "serverCertificateChainBytes"]) {
-    const bytes = Buffer.from(input[name]);
+  const source = { clientCertificateBytes: fixture.clientCertificateBytes, clientCaCertificateBytes: fixture.caCertificateBytes,
+    serverCertificateChainBytes: fixture.serverCertificateBytes };
+  for (const name of Object.keys(source)) {
+    const bytes = Buffer.from(source[name]);
     bytes.toString = () => { invoked = true; return fixture.clientCertificateBytes.toString(); };
-    rejected(() => generatePartnerNginxSharedOverlay({ ...input, [name]: bytes }), "PUBLIC_CERTIFICATE_INVALID");
-    const altered = Buffer.from(input[name]); Object.setPrototypeOf(altered, Object.create(Buffer.prototype));
-    rejected(() => generatePartnerNginxSharedOverlay({ ...input, [name]: altered }), "PUBLIC_CERTIFICATE_INVALID");
+    rejected(() => generatePartnerNginxSharedOverlay(nest(name, bytes)), "PUBLIC_CERTIFICATE_INVALID");
+    const altered = Buffer.from(source[name]); Object.setPrototypeOf(altered, Object.create(Buffer.prototype));
+    rejected(() => generatePartnerNginxSharedOverlay(nest(name, altered)), "PUBLIC_CERTIFICATE_INVALID");
   }
   assert.equal(invoked, false);
 });
 
 for (const key of ["approvedClientSpkiSha256", "approvedClientCaSha256", "approvedServerChainSha256"])
-  test(`certificate mismatch: ${key}`, () => rejected(() => generatePartnerNginxSharedOverlay({ ...input, [key]: "0".repeat(64) }), "CERTIFICATE_PIN_MISMATCH"));
+  test(`certificate mismatch: ${key}`, () => rejected(() => generatePartnerNginxSharedOverlay(key === "approvedClientSpkiSha256"
+    ? { ...input, clients: [{ ...input.clients[0], [key]: "0".repeat(64) }] }
+    : { ...input, [key]: "0".repeat(64) }), "CERTIFICATE_PIN_MISMATCH"));
 
 test("certificate admission rejects other SAN, expired/future cert, wrong role and unknown CA", () => {
   for (const delta of [{ exactHost: "partner.example.com" }, { now: input.now + 2 * 86400000 }, { now: input.now - 2 * 86400000 },
-    { clientCertificateBytes: fixture.serverCertificateBytes }, { serverCertificateChainBytes: fixture.clientCertificateBytes },
-    { clientCertificateBytes: fs.readFileSync(path.join(root, "certificates/wrong-client.crt")) }]) rejected(() => generatePartnerNginxSharedOverlay({ ...input, ...delta }));
+    nest("clientCertificateBytes", Buffer.from(fixture.serverCertificateBytes)),
+    { serverCertificateChainBytes: fixture.clientCertificateBytes },
+    nest("clientCertificateBytes", fs.readFileSync(path.join(root, "certificates/wrong-client.crt")))]) rejected(() => generatePartnerNginxSharedOverlay({ ...input, ...delta }));
 });
 
 test("certificate parsing rejects private bytes, duplicate chain and trailing noncertificate input", () => {

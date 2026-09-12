@@ -9,6 +9,10 @@ export const PARTNER_VIVA_PAYMENT_TYPE = "ON_PLACE";
 export const PARTNER_VIVA_RESPONSE_MAX_BYTES = 1_000_000;
 export const PARTNER_VIVA_TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 export const PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES = 65_536;
+// The production Keycloak client React-auth-dev issues 604 800 s (7 day) access tokens, so
+// the accepted lifetime is bounded by that value instead of one day. Anything longer is
+// still refused, and the token is cached only until expires_in minus the 30 s safety margin.
+export const PARTNER_VIVA_TOKEN_MAX_TTL_SECONDS = 604_800;
 
 const TOKEN_PATTERN = /^[A-Za-z0-9._~-]{16,8192}$/;
 const TERMINAL_BOOKING_STATES = new Set([
@@ -243,7 +247,8 @@ export function createVivaServiceTokenResolver({
         || typeof payload.access_token !== "string" || payload.access_token !== payload.access_token.trim()
         || !TOKEN_PATTERN.test(payload.access_token)
         || typeof payload.token_type !== "string" || payload.token_type.toLowerCase() !== "bearer"
-        || !Number.isSafeInteger(payload.expires_in) || payload.expires_in <= 30 || payload.expires_in > 86_400) {
+        || !Number.isSafeInteger(payload.expires_in) || payload.expires_in <= 30
+        || payload.expires_in > PARTNER_VIVA_TOKEN_MAX_TTL_SECONDS) {
         throw unavailable();
       }
       const expiresAt = startedAt + payload.expires_in * 1000 - 30_000;
@@ -335,13 +340,24 @@ const bookingIsActive = (value) => {
     evidence.push(object.active);
     decisiveEvidence = true;
   }
-  for (const field of ["cancelled", "canceled"]) {
+  for (const field of ["cancelled", "canceled", "isCancelled"]) {
     if (object[field] === undefined || object[field] === null) continue;
     if (typeof object[field] !== "boolean") {
       throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking cancellation flag is not boolean", { ambiguous: true });
     }
     evidence.push(!object[field]);
     if (object[field] === true) decisiveEvidence = true;
+  }
+  // Live Viva booking rows carry cancellationDate instead of a lifecycle state string.
+  // A date means cancelled; an explicit null next to isCancelled === false is decisive
+  // proof that the booking is still active.
+  if (object.cancellationDate !== undefined) {
+    const cancellationDate = toText(object.cancellationDate);
+    if (object.cancellationDate !== null && !cancellationDate) {
+      throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking cancellation date is not a string", { ambiguous: true });
+    }
+    evidence.push(!cancellationDate);
+    decisiveEvidence = true;
   }
   const state = exactAlias(
     [object.status, object.state].map((entry) => toText(entry).toUpperCase()),
@@ -552,14 +568,23 @@ export class VivaAdminTechnicalUserProvider {
     const row = matches[0];
     const exerciseId = exerciseIdOf(row);
     const clientId = clientIdOf(row);
-    if (exerciseId !== input.exerciseId || clientId !== input.technicalVivaClientId) {
+    const paymentType = toText(row.paymentType);
+    // The request path addresses one exercise's booking collection, so the provider
+    // itself scopes every returned row to input.exerciseId; live rows carry no exercise
+    // field at all (verified against production Viva on 2026-09-12). An absent alias
+    // therefore confirms the requested exercise, a present but different one stays fatal,
+    // and the returned exerciseId states the binding the scoped query proved. The payment
+    // type is checked whenever the row exposes it, because the partner booking must stay
+    // ON_PLACE and must never become a paid one.
+    if ((exerciseId && exerciseId !== input.exerciseId) || clientId !== input.technicalVivaClientId
+      || (paymentType && paymentType !== PARTNER_VIVA_PAYMENT_TYPE)) {
       throw providerError("VIVA_READBACK_BINDING_MISMATCH", "Viva booking read-back binding differs", {
         ambiguous: true,
       });
     }
     return {
       bookingId: bookingIdOf(row),
-      exerciseId,
+      exerciseId: input.exerciseId,
       clientId,
       active: bookingIsActive(row),
     };

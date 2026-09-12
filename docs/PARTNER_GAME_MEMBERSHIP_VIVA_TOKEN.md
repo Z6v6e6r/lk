@@ -1,5 +1,8 @@
 # Серверная авторизация Viva для Partner API
 
+Рабочая схема заведения клиента и прав для передачи администратору Viva/Keycloak:
+[VIVA_CLIENT_SETUP](PARTNER_GAME_MEMBERSHIP_VIVA_CLIENT_SETUP.md).
+
 Статус: локальная реализация и автоматические проверки; **не deployed, не live grant,
 не activation**. Партнёр получает только контракт Partner API и собственный доступ.
 Учётная запись Viva, её права, настройка сервиса и проверка результата — зона PadlHub;
