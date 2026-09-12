@@ -118,7 +118,7 @@ async function leaveBooking({ gameId, token, bookingId, exerciseId, clientId, ph
   return { status, ok: status >= 200 && status < 300, payload };
 }
 
-function resolveCanonicalStoredShare(game, shareCount) {
+function resolveCanonicalStoredShare(game) {
   const splitPayment = isObj(game.metadata) && isObj(game.metadata.splitPayment) ? game.metadata.splitPayment : {};
   const stored = toNumber(splitPayment.shareAmount);
   const total = toNumber(splitPayment.totalAmount);
@@ -132,7 +132,7 @@ async function resolveExpectedShare(game, shareCount) {
     const exact = await resolveExactShare(game, shareCount);
     return { shareAmount: exact.shareAmount, source: "viva", totalAmount: exact.totalAmount };
   } catch (error) {
-    const canonical = resolveCanonicalStoredShare(game, shareCount);
+    const canonical = resolveCanonicalStoredShare(game);
     if (canonical !== null) {
       return { shareAmount: canonical, source: "stored-canonical", priceLookupError: error.message };
     }
