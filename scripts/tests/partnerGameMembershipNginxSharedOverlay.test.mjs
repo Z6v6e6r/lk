@@ -62,12 +62,12 @@ test("route and rate expressions match the existing fixture policy with a separa
   const limits = text => text.split("\n").map(line => line.trim()).filter(line => /^limit_(?:req|conn)(?:_zone|_status)? /.test(line));
   // Zones now key on the certificate-derived client identity, so the comparison keeps the
   // legacy text for the two source-based zones and accepts the bound identity for the rest.
-  assert.deepEqual(limits(overlay.configuration.replaceAll("pgm_v02_cert_client", "partner_client").replaceAll("pgm_v02", "partner")), limits(legacy));
+  assert.deepEqual(limits(overlay.configuration.replaceAll("pgm_v02_client", "partner_client").replaceAll("pgm_v02", "partner")), limits(legacy));
   assert.match(overlay.configuration, /proxy_pass http:\/\/127\.0\.0\.1:18894;/);
   assert.match(overlay.configuration, /proxy_next_upstream off;/);
   assert.match(overlay.configuration, /proxy_request_buffering off;/);
-  assert.match(overlay.configuration, /map \$ssl_client_escaped_cert \$pgm_v02_cert_client \{ default ""; "~\^[^"]+" "synthetic-partner"; \}/);
-  assert.match(overlay.configuration, /map "\$pgm_v02_cert_client:\$http_x_padlhub_client_id" \$pgm_v02_client_bound \{ default 0; "synthetic-partner:synthetic-partner" 1; \}/);
+  assert.match(overlay.configuration, /map \$ssl_client_escaped_cert \$pgm_v02_client \{ default ""; "~\^[^"]+" "synthetic-partner"; \}/);
+  assert.match(overlay.configuration, /map "\$pgm_v02_client:\$http_x_padlhub_client_id" \$pgm_v02_client_bound \{ default 0; "synthetic-partner:synthetic-partner" 1; \}/);
   assert.match(overlay.configuration, /if \(\$pgm_v02_client_bound = 0\) \{ return 403; \}/);
 });
 
@@ -100,8 +100,8 @@ test("several clients are admitted only through their own exact leaf and never t
   // One leaf can never be reused for a second client id.
   rejected(() => generatePartnerNginxSharedOverlay({ ...input, clients: [{ ...input.clients[0] },
     { ...input.clients[0], clientId: "second-partner" }] }), "INPUT_INVALID");
-  assert.equal(multi.configuration.match(/\$pgm_v02_cert_client \{/g).length, 1);
-  assert.match(multi.configuration, /map "\$pgm_v02_cert_client:\$http_x_padlhub_client_id" \$pgm_v02_client_bound \{ default 0; (?:[^}]*)"synthetic-partner:synthetic-partner" 1; (?:[^}]*)"second-partner:second-partner" 1; (?:[^}]*)\}/);
+  assert.equal(multi.configuration.match(/\$pgm_v02_client \{/g).length, 1);
+  assert.match(multi.configuration, /map "\$pgm_v02_client:\$http_x_padlhub_client_id" \$pgm_v02_client_bound \{ default 0; (?:[^}]*)"synthetic-partner:synthetic-partner" 1; (?:[^}]*)"second-partner:second-partner" 1; (?:[^}]*)\}/);
   assert.deepEqual(multi.clients.map(client => client.clientId), ["synthetic-partner", "second-partner"]);
 });
 

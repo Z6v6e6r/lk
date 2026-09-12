@@ -76,8 +76,9 @@ userDir**. CLI, env, HTTP и sibling JSON в packet не могут замени
 | --- | --- |
 | Selector отсутствует или `DEFAULT_OFF_UNBOUND`, anchor отсутствует | Прежний default-off, Host `unbound.invalid` |
 | `LK_PARTNER_GAME_API_STARTUP_MODE=BOUND_DEFAULT_OFF`, anchor корректен, runtime audience совпадает | Привязанный Host, immutable graph, API по-прежнему OFF |
-| `BOUND_ACTIVE`, anchor активен и keyring совпадает, все provider gates выставлены | Привязанный Host, immutable graph, API обслуживает canary |
-| `BOUND_ACTIVE` без `activationAuthorized`, без canary client/games или с иным `mode` в anchor | Startup refusal, без fallback |
+| `BOUND_ACTIVE`, anchor активен и keyring совпадает, все provider gates выставлены | Привязанный Host, immutable graph, API обслуживает объявленных клиентов |
+| `BOUND_ACTIVE` без `activationAuthorized`, без `authorizedClients` или с иным `mode` в anchor | Startup refusal, без fallback |
+| Keyring и `authorizedClients` расходятся: включён необъявленный клиент, объявленный выключен, или игра клиента вне его набора | Startup refusal |
 | `BOUND_ACTIVE` при неполном наборе provider gates (любой из них отсутствует или иной) | Startup refusal |
 | Keyring: не ровно один enabled client, client ≠ `canaryClientId`, или его games выходят за `canaryGameIds` | Startup refusal |
 | Bound selector без anchor, пустой/неизвестный selector, anchor при unbound selector | Startup refusal, без fallback |
@@ -97,28 +98,33 @@ JSON anchor имеет ровно следующие поля (таблица �
 | `packetManifestSha256` | SHA-256 independently approved bytes `packet.manifest.json` |
 | `approvedCommit`, `approvedTree` | Independently approved 40-hex Git identities; сравниваются с manifest, не извлекаются из него как expected values |
 
-Только для `mode=BOUND_ACTIVE` в anchor добавляются ровно три поля; при
+Только для `mode=BOUND_ACTIVE` в anchor добавляются ровно два поля; при
 `BOUND_DEFAULT_OFF` их присутствие — startup refusal (exact key set на каждый режим):
 
 | Поле | Требование |
 | --- | --- |
 | `activationAuthorized` | Строго `true`; единственная авторизация активации, packet manifest её не заменяет |
-| `canaryClientId` | `^[a-z0-9][a-z0-9_-]{2,63}$`; в keyring обязан быть ровно один `enabled:true` client и его id равен этому значению |
-| `canaryGameIds` | 1–8 уникальных game id по `^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$`; games активированного client — непустое подмножество этого набора |
+| `authorizedClients` | Объект: ключ — `clientId` по `^[a-z0-9][a-z0-9_-]{2,63}$`, значение — 1–8 уникальных game id по `^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$`. 1–16 клиентов |
+
+`authorizedClients` должен совпадать с keyring по составу: каждый `enabled:true` client
+объявлен, ни один объявленный клиент не выключен, а игры каждого клиента — непустое
+подмножество его собственного набора. Включение нового клиента всегда требует нового
+root-owned anchor, поэтому именно анкор, а не env и не packet, остаётся единственной
+авторизацией активации.
 
 ## Активация (`BOUND_ACTIVE`)
 
 Активация — отдельно разрешённое действие оператора PadlHub, а не следствие
 успешного packet или rehearsal. Порядок: собрать и установить exact release,
-затем записать root-owned anchor с тремя полями выше, затем выставить gates.
+затем записать root-owned anchor с двумя полями выше, затем выставить gates.
 Guard требует одновременно `ENABLED=true`, `PROVIDER_MODE=viva`,
 `VIVA_MUTATIONS_ENABLED=true`, revision `padlhub-viva-technical-booking-v1`,
 подтверждённые idempotency и on-place и непустой technical client id; любой
 неполный набор — startup refusal, а не частичная активация. Границы активации
-ограничены одним canary-клиентом и списком игр из anchor: остальные клиенты
-keyring остаются выключенными, и включённый client не может получить игру вне
-`canaryGameIds`. Возврат — замена anchor на `BOUND_DEFAULT_OFF` (или удаление
-трёх ACTIVE-полей) и restart: `ENABLED=true` без активного anchor даёт refusal,
+ограничены набором клиентов и игр из `authorizedClients`: включённый client не
+может получить игру вне своего набора, а включение клиента без правки анкора
+даёт refusal при старте. Возврат — замена anchor на `BOUND_DEFAULT_OFF` (или
+удаление двух ACTIVE-полей) и restart: `ENABLED=true` без активного anchor даёт refusal,
 то есть downgrade не открывает listener и не оставляет API включённым.
 
 Anchor: root owner, regular non-executable file, один hard link, без symlink и

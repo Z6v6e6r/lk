@@ -386,3 +386,43 @@ membership 2 (`UNKNOWN` и `REMOVED`), audit 14, nonces 8. Публичные х
 `partner-game-api`, удаление канареечного приватного ключа с резервного хоста и
 англоязычная версия гайда. Уникальность `activeKey` для `canary-player-20260912-01`
 занята записью `UNKNOWN` — реальные идентификаторы партнёра с ней не пересекаются.
+
+## Журнал: набор клиентов в гварде и allowlist в ingress (2026-09-12)
+
+Снято ограничение «ровно один enabled клиент». Анкор теперь несёт `authorizedClients`
+(клиент → его игры), а ingress допускает клиента только при совпадении сертификата и
+заголовка `X-PadlHub-Client-Id`.
+
+- Источник: коммит `9bbac5fb`, пакет v05 (манифест `8f748a17…`, `customNodeReleaseSha256`
+  прежний `15361530…`, `guardedStartupSha256` `4c4248f9…`), релиз `v05-20260912` — 37/37
+  файлов сверено, `npm ci` → 291 пакет.
+- Sidecar closure resealed: rehearsal `d612cf7b`, controls pin `68f31f5c`.
+- Пред-полёт гварда на **новом** релизе под сервисным пользователем, до переключения
+  `current`: позитивный случай — `GUARD_PREFLIGHT_PASS`, `clients=["padlhub-canary",
+  "canary-second"]`; негативный — включённый, но необъявленный третий клиент отклонён.
+- Ingress: сгенерирован из `generatePartnerNginxSharedOverlay` на два клиента, применён
+  `nginx -t` + `nginx -s reload`.
+
+Важная находка: первый reload **молча не применился** —
+`[emerg] limit_req "pgm_v02_client_rate" uses the "$pgm_v02_cert_client" key while
+previously it used the "$pgm_v02_client" key`. nginx запрещает менять ключ существующей
+`limit_req_zone`/`limit_conn_zone` при reload, поэтому новая переменная была переименована
+обратно в историческую `$pgm_v02_client` (меняются только значения map) и reload прошёл
+без рестарта общего ingress. Признак неприменения — старый `generation` в audit-логе; он
+же используется как проверка применения.
+
+Проверено вживую (второй клиент `canary-second` с отдельным сертификатом от того же CA):
+
+| Проба | Результат |
+| --- | --- |
+| canary cert + `padlhub-canary` | `404` (допущен, доходит до приложения) |
+| canary cert + `canary-second` | `403`, `admitted=1`, `client=padlhub-canary` |
+| второй cert + `padlhub-canary` | `403`, `admitted=1`, `client=canary-second` |
+| второй cert + `canary-second` | `404` — **сосуществование подтверждено** |
+| любой cert + неизвестный id | `403` |
+
+Второй клиент выведен из эксплуатации сразу после проверки: keyring, `authorizedClients`
+и ingress вернулись к канареечному клиенту, в audit — generation `9596f6ed…`,
+`client=padlhub-canary`; выведенный сертификат получает `403` (`admitted=0`, `client=""`),
+а его приватный ключ удалён с резервного хоста. В аудит добавлено поле `client` —
+идентичность из сертификата, а не из заголовка.

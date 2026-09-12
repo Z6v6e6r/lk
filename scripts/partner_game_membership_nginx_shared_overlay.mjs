@@ -103,14 +103,17 @@ export function generatePartnerNginxSharedOverlay(input) {
     || sha(serverBytes) !== input.approvedServerChainSha256) fail("CERTIFICATE_PIN_MISMATCH");
   // Reuse the established exact public-leaf admission, not SHA-1 fingerprints or
   // caller client-id buckets. No shared-host/default-server or http{} wrapper.
+  // The certificate-derived identity keeps the historical $pgm_v02_client variable name: the
+  // limit zones key on it, and nginx refuses a reload that changes an existing zone key, so a
+  // rename would force a full restart of the shared ingress. Only the map values change.
   const leafEntries = clients.map(client => `"~^${encodeURIComponent(client.bytes.toString())}$" "${client.clientId}";`).join(" ");
   const admittedEntries = clients.map(client => `"SUCCESS:${client.clientId}" 1;`).join(" ");
   const boundEntries = clients.map(client => `"${client.clientId}:${client.clientId}" 1;`).join(" ");
   const configuration = `# OFFLINE SHARED OVERLAY DRAFT: native review/application still required.
-map $ssl_client_escaped_cert $pgm_v02_cert_client { default ""; ${leafEntries} }
+map $ssl_client_escaped_cert $pgm_v02_client { default ""; ${leafEntries} }
 map $ssl_client_verify $pgm_v02_verified { SUCCESS 1; default 0; }
-map "$ssl_client_verify:$pgm_v02_cert_client" $pgm_v02_admitted { default 0; ${admittedEntries} }
-map "$pgm_v02_cert_client:$http_x_padlhub_client_id" $pgm_v02_client_bound { default 0; ${boundEntries} }
+map "$ssl_client_verify:$pgm_v02_client" $pgm_v02_admitted { default 0; ${admittedEntries} }
+map "$pgm_v02_client:$http_x_padlhub_client_id" $pgm_v02_client_bound { default 0; ${boundEntries} }
 map "$http_transfer_encoding$http_content_encoding$http_trailer$http_expect$http_upgrade$http_proxy_connection" $pgm_v02_bad_framing { "" 0; default 1; }
 map $http_connection $pgm_v02_bad_connection { "" 0; ~*^(close|keep-alive)$ 0; default 1; }
 map "$request_method:$request_uri" $pgm_v02_route {
@@ -119,11 +122,11 @@ map "$request_method:$request_uri" $pgm_v02_route {
   "~^DELETE:${PARTNER_API_BASE_PATH}/open-games/[A-Za-z0-9_-]{1,160}/members/[A-Za-z0-9_-]{1,160}$" 1;
   "~^GET:${PARTNER_API_BASE_PATH}/operations/[A-Za-z0-9_-]{1,160}$" 1;
 }
-limit_req_zone $pgm_v02_cert_client zone=pgm_v02_client_rate:1m rate=2r/s;
+limit_req_zone $pgm_v02_client zone=pgm_v02_client_rate:1m rate=2r/s;
 limit_req_zone $binary_remote_addr zone=pgm_v02_source_rate:1m rate=5r/s;
-limit_conn_zone $pgm_v02_cert_client zone=pgm_v02_client_connections:1m;
+limit_conn_zone $pgm_v02_client zone=pgm_v02_client_connections:1m;
 limit_conn_zone $binary_remote_addr zone=pgm_v02_source_connections:1m;
-log_format pgm_v02_audit escape=json '{"admitted":"$pgm_v02_admitted","client":"$pgm_v02_cert_client","clientVerified":"$pgm_v02_verified","concurrency":"$limit_conn_status","generation":"${input.generationMarker}","rate":"$limit_req_status","requestId":"$request_id","status":"$status","upstream":"$upstream_status","worker":"$pid"}';
+log_format pgm_v02_audit escape=json '{"admitted":"$pgm_v02_admitted","client":"$pgm_v02_client","clientVerified":"$pgm_v02_verified","concurrency":"$limit_conn_status","generation":"${input.generationMarker}","rate":"$limit_req_status","requestId":"$request_id","status":"$status","upstream":"$upstream_status","worker":"$pid"}';
 server {
   listen 443 ssl;
   listen [::]:443 ssl;
