@@ -3543,3 +3543,12 @@ seed also exposed relaxed-EJSON Long/Double postimage mismatch; transaction
 aborted and exact original rows were preserved. Package is not execution-ready.
 No runtime/application changes, merge, push, deploy or live business writes.
 See SUBSCRIPTION_ANNUAL_OPERATOR_PREPARATION_20260910.md for blockers and evidence.
+
+## 2026-09-12 — Partner Game Membership API: активация, фикс Viva read-back, комплект документов
+
+- Реализован третий режим guarded startup `BOUND_ACTIVE` как единственный activatable: активация достижима только через root-owned анкор (`activationAuthorized`, `canaryClientId`, `canaryGameIds`), keyring обязан совпадать с объявленным клиентом и его играми. Полный partner suite 959/959, `PARTNER_RUNTIME=SECURITY_AUDIT_PASS`, `PARTNER_PRODUCTION_CONTROLS=UNBOUND_AUDIT_PASS`, lint 0 errors.
+- Пакет v03 собран из свежего live-pull (4799 узлов), релиз `v03-20260912` установлен и активирован. Живой прогон через общий 443: подписанный `GET` вернул `404` вместо `503`, подписанный `POST` — `202` и корректную booking, но операция осталась `UNKNOWN` с `VIVA_READBACK_BINDING_MISMATCH`.
+- Найден и исправлен дефект: живая строка списка броней Viva не содержит `exerciseId`/`exercise`/`service`, а отмена помечается `isCancelled`/`cancellationDate`. Read-back теперь берёт привязку упражнения из scope запроса, распознаёт живые флаги отмены и требует `paymentType=ON_PLACE`, если поле присутствует. Живая страница сохранена как фикстура.
+- Runtime closure перевыпущен (`customNodeReleaseSha256 15361530`, manifest `7a789a63`, rehearsal `fed34bc9`, controls pin `7d918779`), пакет v04 установлен и активирован. Живой прогон: `POST` `201 ACTIVE` и операция `COMPLETED`, booking `ON_PLACE`; `DELETE` `200 REMOVED` и отмена booking. Осиротевшая booking до-фиксового прогона отменена операторским действием; игра в ЦУП содержит только исходного организатора.
+- Комплект документов для партнёра расширен: `ACCESS_REQUEST.md`, `ACCEPTANCE_TESTS.md`, обновлены README/CHANGELOG/ONBOARDING/QUICKSTART, добавлено англоязычное издание `en/` (README, INTEGRATION, ONBOARDING, ACCESS_REQUEST, ACCEPTANCE_TESTS), внутренний регламент `PARTNER_GAME_MEMBERSHIP_ACCESS_ISSUANCE.md`. 50 внутренних ссылок проверены.
+- Доступ партнёру не выдан: нужны его CSR, статические исходящие адреса, игры/станции с вместимостью. Известные пробелы: канареечный приватный ключ остаётся на резервном хосте, точечная проверка `padlhub-canary` в nginx, отзыв сертификата без CRL, роли Mongo для `partner-game-api` не сужены. Merge/push не выполнялись.
