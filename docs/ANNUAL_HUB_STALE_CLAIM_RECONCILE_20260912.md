@@ -78,19 +78,48 @@ Guards (each has its own reason code in the report):
 
 Tests: `npm run test:stale-annual-claim-release`.
 
-## Recommended schedule
+## Scheduled run on `147` (every 5 minutes)
 
-Every few minutes, after the checkout window (the reservation's own `expiresAt`)
-has passed. The HUB has one daily seat, so the scan is tiny and idempotent; a
-tick that finds nothing writes nothing. Example wrapper: `flock` against
-overlapping ticks, the CLI in `--apply` mode, a log line per tick, and backup
-pruning. A release only writes the ledger document (no provider call, no sale
-row, no provider data).
+Installed on 2026-09-12 from the confirmed pushed SHA `2009e76f` (owner-approved),
+matching the reviewed mechanism above. Host layout
+`/root/.node-red/stale-annual-claims/`:
+
+| path | role |
+| --- | --- |
+| `scripts/reconcile_stale_annual_claims.mjs`, `scripts/lib/{annualClaimRelease,annualSubscriptionHistory,vivaHistoricalEvidence}.mjs` | host copy of the reviewed files; sha256 in `MANIFEST.json` |
+| `run-release.sh` | wrapper: `flock` (no overlapping ticks), one `--apply` tick, one JSON line per tick, 30-day backup pruning |
+| `state/run.log` | one JSON line per tick, trimmed to the last 4000 |
+| `state/report.json` | report of the last tick, mode 0600 |
+| `backups/` | preimage of any releasing tick, mode 0600, kept 30 days |
+
+Units: `padlhub-stale-annual-claims.service` (`Type=oneshot`,
+`ExecStart=/root/.node-red/stale-annual-claims/run-release.sh`) and
+`padlhub-stale-annual-claims.timer` (`OnCalendar=*:0/5`, `RandomizedDelaySec=30`).
+The reconciler never calls the provider, so the wrapper needs no service token.
+
+Live result on 2026-09-12 (the HUB daily seat held by a checkout whose link died
+at `04:31:34Z`):
+
+| step | result |
+| --- | --- |
+| dry-run scan | 1 HUB ledger, 5 reservations, 1 releasable (today's seat) |
+| apply | released 1; `reservedCount 2 -> 1`, `dailyReservedCount 1 -> 0`, revision `53 -> 54`, 0 compare-and-swap failures |
+| postcheck dry-run | `releasableClaims 0`, `NOTHING_TO_RELEASE` |
+| storefront status | `totalLimit 1, reservedCount 0, remainingCount 1, canPurchase true` |
+| scheduled ticks | manual and autonomous ticks both `NOTHING_TO_RELEASE`, 0 compare-and-swap failures |
+
+Stop signals: any `compareAndSwapFailures` in a tick, a `FAILED` tick line, or an
+implausible release count (the HUB daily seat is one, so a tick normally releases
+0-1). Stop method: `systemctl disable --now padlhub-stale-annual-claims.timer`
+(released documents stay in `backups/`). Recovery: restore the ledger preimage from
+`backups/` through the same compare-and-swap on `revision`.
 
 ## Residual work (not in this change)
 
 - The runtime still keeps a non-terminal reservation while the provider is
   non-terminal, by design; this reconciler only closes the *stale* window after
   the local deadline, it does not shorten the live checkout.
-- The scheduled job itself (cron/systemd unit on `147`) is a deployment step and
-  is not installed by this change.
+- Only the *current* Moscow daily seat is released. A non-terminal reservation from
+  a previous day stays active (it no longer blocks the daily seat) and keeps
+  counting in `reservedCount`; broadening the release to past seats needs a
+  separate review.
