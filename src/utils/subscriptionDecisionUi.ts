@@ -11,6 +11,7 @@ export type SubscriptionDecisionKind =
   | "LIMIT_USED"
   | "ADDITIONAL_PAYMENT_REQUIRED"
   | "SUBSCRIPTION_INVALID"
+  | "SUBSCRIPTION_REJECTED"
   | "ACTION_UNAVAILABLE"
   | "STALE_STATE"
   | "PENDING_CONFIRMATION"
@@ -142,6 +143,19 @@ const ACTION_UNAVAILABLE_CODES = new Set([
   "SUBSCRIPTION_NO_SHOW_BLOCKED",
 ]);
 
+// Definitive 4xx refusals from the booking gateway: the subscription cannot be applied to this
+// write, so the answer will not change on retry and the server reason must be shown as-is.
+const REJECTED_CODES = new Set([
+  "MANAGED_SUBSCRIPTION_POLICY_BLOCKED",
+  "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED",
+  "MANAGED_SUBSCRIPTION_TARGET_UNRESOLVED",
+  "MANAGED_SUBSCRIPTION_PREFLIGHT_TARGET_UNRESOLVED",
+  "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISSING",
+  "SUBSCRIPTION_BOOKING_EXERCISE_MISMATCH",
+  "SUBSCRIPTION_ACTIVATION_RANGE_INVALID",
+  "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+]);
+
 const PENDING_CODES = new Set([
   "SUBSCRIPTION_AMBIGUOUS_INTENT_LOCKED",
   "PENDING_CONFIRMATION",
@@ -199,6 +213,20 @@ function errorMessage(error: ApiError | null | undefined): string | null {
     return null;
   }
   return normalized;
+}
+
+// The server reason can already start with the same lead-in (for example the client timeout
+// message), so never prepend a phrase that is already there.
+function buildDecisionErrorMessage(
+  leadIn: string,
+  tail: string,
+  serverReason: string | null,
+): string {
+  if (!serverReason) return `${leadIn}. ${tail}`;
+  const reason = serverReason.toLowerCase().startsWith(leadIn.toLowerCase())
+    ? serverReason
+    : `${leadIn}: ${serverReason}`;
+  return `${reason}. ${tail}`;
 }
 
 function isNoSubscriptionsAvailable(error: ApiError | null | undefined): boolean {
@@ -283,6 +311,25 @@ export function resolveSubscriptionDecisionPresentation({
         continueWithoutSubscription: false,
       };
     }
+    // Only an explicit 4xx refusal is final; the same code arriving with a 5xx or without a
+    // status stays in the retryable fail-closed branch below.
+    if (
+      error.status !== null
+      && error.status >= 400
+      && error.status < 500
+      && includesCode(codes, REJECTED_CODES)
+    ) {
+      return {
+        kind: "SUBSCRIPTION_REJECTED",
+        title: "Подписка не применена",
+        message: errorMessage(error)
+          || "Сервер не разрешил применить подписку к этой игре. Выберите обычную оплату или другую игру.",
+        reasonCode: primaryCode,
+        retryable: false,
+        subscriptionApplied: false,
+        continueWithoutSubscription: true,
+      };
+    }
     if (includesCode(codes, PENDING_CODES)) {
       return {
         kind: "PENDING_CONFIRMATION",
@@ -298,12 +345,24 @@ export function resolveSubscriptionDecisionPresentation({
     const technical = includesCode(codes, TECHNICAL_CODES)
       || error.status === null
       || (error.status ?? 0) >= 500;
+    // Surface the server reason even for an unmapped code: otherwise a definitive refusal is
+    // reported as a generic temporary error and the reason is lost. The fail-closed retry
+    // contract for unknown states stays unchanged.
+    const serverReason = errorMessage(error)?.replace(/[.!?…\s]+$/, "") || null;
     return {
       kind: "TECHNICAL_ERROR",
       title: "Временная техническая ошибка",
       message: technical
-        ? "Не удалось подтвердить условия подписки. Повторите попытку; неизвестное состояние не даёт скидку."
-        : "Сервер не подтвердил условия подписки. Обновите данные и повторите попытку.",
+        ? buildDecisionErrorMessage(
+          "Не удалось подтвердить условия подписки",
+          "Повторите попытку; неизвестное состояние не даёт скидку.",
+          serverReason,
+        )
+        : buildDecisionErrorMessage(
+          "Сервер не подтвердил условия подписки",
+          "Обновите данные и повторите попытку.",
+          serverReason,
+        ),
       reasonCode: primaryCode,
       retryable: true,
       subscriptionApplied: false,

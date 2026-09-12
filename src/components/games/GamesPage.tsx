@@ -337,6 +337,15 @@ function formatSplitSubscriptionValidityLabel(
   })?.label ?? null;
 }
 
+function resolveSplitJoinPendingReason(
+  serverMessage: string | null | undefined,
+  canonicalMessage: string,
+): string | null {
+  const reason = typeof serverMessage === "string" ? serverMessage.trim() : "";
+  if (!reason || reason === canonicalMessage) return null;
+  return reason;
+}
+
 function buildSplitSubscriptionStatusLabel(
   subscriptions: Subscription[],
   subscriptionNamesById: Record<string, string>,
@@ -4927,6 +4936,12 @@ export default function GamesPage({
   const [confirmCancelUnpaidGame, setConfirmCancelUnpaidGame] = useState(false);
   const [gameRecordError, setGameRecordError] = useState<string | null>(null);
   const [gameRosterError, setGameRosterError] = useState<string | null>(null);
+  const [detailsSplitJoinPending, setDetailsSplitJoinPending] = useState<{
+    gameId: string | null;
+    message: string;
+    reason: string | null;
+    subscriptionId: string | null;
+  } | null>(null);
   const [leavePendingMessage, setLeavePendingMessage] = useState<string | null>(null);
   const [gameDetailsMetaError, setGameDetailsMetaError] = useState<string | null>(null);
   const [updatingGameRoster, setUpdatingGameRoster] = useState(false);
@@ -6086,6 +6101,7 @@ export default function GamesPage({
 
     setGameRecordError(null);
     setGameRosterError(null);
+    setDetailsSplitJoinPending(null);
     setGameRecordId(requestedGameId);
     setGameRecordStatus(null);
     setInviteLink(null);
@@ -14164,6 +14180,7 @@ export default function GamesPage({
     if (preferredPaymentMode === "subscription") detailsSubscriptionSubmitInFlightRef.current = true;
     setJoiningSplitPayment(true);
     setGameRosterError(null);
+    setDetailsSplitJoinPending(null);
     try {
       const profile = await resolveCurrentClientProfile();
       const clientPhone = profile.clientPhone ?? normalizedPhone;
@@ -14246,19 +14263,30 @@ export default function GamesPage({
         if (dailyLimitMessage) {
           setGameRosterError(dailyLimitMessage);
         } else if (preferredPaymentMode === "subscription") {
-          setGameRosterError(formatSubscriptionDecisionPresentation(
-            resolveSubscriptionDecisionPresentation({
-              action: "JOIN_GAME",
-              requestedPaymentMode: "subscription",
-              durationMinutes: bookingDurationMinutes,
-              error: paymentResult.error,
-            }),
-          ));
+          const presentation = resolveSubscriptionDecisionPresentation({
+            action: "JOIN_GAME",
+            requestedPaymentMode: "subscription",
+            durationMinutes: bookingDurationMinutes,
+            error: paymentResult.error,
+          });
+          const presentationMessage = formatSubscriptionDecisionPresentation(presentation);
+          if (presentation.kind === "PENDING_CONFIRMATION") {
+            setDetailsSplitJoinPending({
+              gameId: gameRecordId,
+              message: presentationMessage,
+              reason: resolveSplitJoinPendingReason(paymentResult.error?.message, presentationMessage),
+              subscriptionId: resolvedClientSubscriptionId,
+            });
+          } else {
+            setGameRosterError(presentationMessage);
+          }
         } else {
           setGameRosterError(paymentResult.error?.message || "Не удалось создать оплату участия");
         }
         return;
       }
+
+      setDetailsSplitJoinPending(null);
 
       const subscriptionDecisionNotice = preferredPaymentMode === "subscription"
         ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
@@ -16003,6 +16031,27 @@ export default function GamesPage({
             </div>
           </div>
           {gameRosterError && <div className="game-empty game-pay-error">{gameRosterError}</div>}
+          {detailsSplitJoinPending && detailsSplitJoinPending.gameId === gameRecordId && (
+            <div className="game-empty details-roster-join-status" role="status" aria-live="polite">
+              <span>{detailsSplitJoinPending.message}</span>
+              {detailsSplitJoinPending.reason && (
+                <span className="details-roster-join-status-reason">{detailsSplitJoinPending.reason}</span>
+              )}
+              <button
+                type="button"
+                className="details-roster-action"
+                disabled={joiningSplitPayment}
+                onClick={() => {
+                  void handleSplitJoinCurrentUserFromDetails(
+                    "subscription",
+                    detailsSplitJoinPending.subscriptionId,
+                  );
+                }}
+              >
+                Проверить снова
+              </button>
+            </div>
+          )}
           {leavePendingMessage && (
             <div className="game-empty details-roster-leave-status" role="status" aria-live="polite">
               <span className="details-roster-leave-spinner" aria-hidden="true" />

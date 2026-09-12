@@ -40,6 +40,7 @@ import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournamentHistoryRequestPolicy";
 import { hasDeterministicSubscriptionDecision } from "./subscriptionDecisionContract.ts";
+import { SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS } from "./subscriptionBookingConfirmation.ts";
 import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts";
 import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
 import {
@@ -8995,6 +8996,41 @@ async function requestPadelSplitPayment(
   }
 }
 
+// The gateway accepts a subscription request and can answer PENDING_CONFIRMATION when Viva or
+// the managed entitlement service has not finished confirming the booking yet. Re-issuing the
+// same deterministic operationId is safe: the gateway keeps one atomic claim per operation and
+// never debits a second visit, it only re-reads the provider state. Poll briefly so a normal
+// transient pending answer is not surfaced to the player as a failure.
+interface PadelSplitPendingPollOptions {
+  delaysMs?: readonly number[];
+  wait?: (delayMs: number) => Promise<void>;
+}
+
+async function requestPadelSplitJoinWithPendingPoll(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  baseUrl: string,
+  params: PadelSplitPaymentParams,
+  options: PadelSplitPendingPollOptions | null = null,
+): Promise<ApiResult<unknown>> {
+  const resolvedOptions = options ?? {};
+  const delaysMs = resolvedOptions.delaysMs ?? SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS;
+  const wait = resolvedOptions.wait ?? (async (delayMs) => {
+    await new Promise((resolve) => {
+      globalThis.setTimeout(resolve, delayMs);
+    });
+  });
+  let response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  if (params.paymentMode !== "subscription") return response;
+  for (const delayMs of delaysMs) {
+    if (response.error || !resolvePadelSplitPendingError(response.data, response.status)) {
+      return response;
+    }
+    await wait(delayMs);
+    response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  }
+  return response;
+}
+
 export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
   const baseUrl = getServ2Origin() || "";
   const studioId = params.studioId?.trim() || null;
@@ -9106,7 +9142,7 @@ export async function apiCreatePadelSplitParticipantPayment(
     params,
     normalizedGameId,
   );
-  const response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  const response = await requestPadelSplitJoinWithPendingPoll(splitRequest, baseUrl, params);
 
   if (response.error) {
     return {

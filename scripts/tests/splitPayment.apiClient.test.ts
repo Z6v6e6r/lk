@@ -297,3 +297,205 @@ test("split payment confirmation sends provider locators without a browser-owned
   assert.match(confirmationFunction, /bookingId:\s*input\.bookingId\.trim\(\)/);
   assert.doesNotMatch(confirmationFunction, /\bpaid\s*:/);
 });
+
+test("subscription join re-issues the same operation while a pending confirmation is unresolved", () => {
+  const joinFunction = extractFunctionBlock("export async function apiCreatePadelSplitParticipantPayment");
+  const createFunction = extractFunctionBlock("export async function apiCreatePadelSplitGamePayment");
+  const pollFunction = extractFunctionBlock("async function requestPadelSplitJoinWithPendingPoll");
+
+  assert.match(joinFunction, /requestPadelSplitJoinWithPendingPoll\(splitRequest, baseUrl, params\)/);
+  assert.doesNotMatch(joinFunction, /await requestPadelSplitPayment\(splitRequest, baseUrl, params\)/);
+  assert.match(createFunction, /await requestPadelSplitPayment\(splitRequest, baseUrl, params\)/);
+  assert.doesNotMatch(createFunction, /requestPadelSplitJoinWithPendingPoll/);
+  assert.match(pollFunction, /params\.paymentMode !== "subscription"/);
+  assert.match(pollFunction, /resolvePadelSplitPendingError\(response\.data, response\.status\)/);
+  assert.match(pollFunction, /SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS/);
+  assert.equal(
+    (pollFunction.match(/requestPadelSplitPayment\(splitRequest, baseUrl, params\)/g) || []).length,
+    2,
+  );
+});
+
+type SplitPollResult = {
+  data: unknown;
+  error: unknown;
+  status: number | null;
+};
+
+type SplitPollAttempt = (...args: unknown[]) => Promise<SplitPollResult>;
+
+function buildPendingJoinPoll(
+  requestPadelSplitPayment: SplitPollAttempt,
+  resolvePadelSplitPendingError?: (data: unknown, status: number | null) => unknown,
+) {
+  const expression = toRunnableFunctionExpression("async function requestPadelSplitJoinWithPendingPoll");
+  return new Function(
+    "requestPadelSplitPayment",
+    "resolvePadelSplitPendingError",
+    "SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS",
+    `return ${expression};`,
+  )(
+    requestPadelSplitPayment,
+    resolvePadelSplitPendingError ?? ((data: unknown, status: number | null) => {
+      const state = data && typeof data === "object"
+        ? String((data as Record<string, unknown>).state || "").toUpperCase()
+        : "";
+      return state === "PENDING_CONFIRMATION" ? { status, message: "fixture pending" } : null;
+    }),
+    [10, 20, 30],
+  ) as (
+    splitRequest: unknown,
+    baseUrl: string,
+    params: Record<string, unknown>,
+    options: { delaysMs?: number[]; wait?: (delayMs: number) => Promise<void> },
+  ) => Promise<SplitPollResult>;
+}
+
+const pendingJoinRequest = { path: "/lk/games/game-1/split/join?operationId=op-1", operationId: "op-1" };
+
+test("pending subscription join is re-issued until the gateway confirms it", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    if (requestCalls < 3) return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+    return { data: { state: "CONFIRMED", bookingId: "booking-1" }, error: null, status: 201 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 3);
+  assert.equal(waits.join(","), "10,20");
+  assert.deepEqual(result.data, { state: "CONFIRMED", bookingId: "booking-1" });
+  assert.equal(result.error, null);
+});
+
+test("definitive subscription join error is returned without any retry", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    return { data: null, error: { status: 409, message: "no visits left" }, status: 409 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 1);
+  assert.equal(waits.length, 0);
+  assert.deepEqual(result.error, { status: 409, message: "no visits left" });
+});
+
+test("one-time split join never polls a pending-looking payload", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "one_time" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 1);
+  assert.equal(waits.length, 0);
+  assert.equal(result.status, 202);
+});
+
+test("split join keeps polling within the bounded schedule before reporting pending", async () => {
+  const waits: number[] = [];
+  let requestCalls = 0;
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    return { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 };
+  };
+  const poll = buildPendingJoinPoll(request);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 4);
+  assert.equal(waits.join(","), "10,20,30");
+  assert.equal(result.status, 202);
+  assert.deepEqual(result.data, { state: "PENDING_CONFIRMATION" });
+});
+
+test("every retry repeats the same join path, operation and params object", async () => {
+  const seen: unknown[][] = [];
+  const request = async (...args: unknown[]): Promise<SplitPollResult> => {
+    seen.push(args);
+    return seen.length < 3
+      ? { data: { state: "PENDING_CONFIRMATION" }, error: null, status: 202 }
+      : { data: { state: "CONFIRMED", bookingId: "booking-2" }, error: null, status: 201 };
+  };
+  const poll = buildPendingJoinPoll(request);
+  const sameRequest = { path: "/lk/games/game-1/split/join?operationId=op-stable", operationId: "op-stable" };
+  const sameParams = { paymentMode: "subscription", clientSubscriptionId: "subscription-a" };
+
+  await poll(sameRequest, "https://serv2.invalid", sameParams, { wait: async () => {} });
+
+  assert.equal(seen.length, 3);
+  for (const args of seen) {
+    assert.equal(args[0], sameRequest);
+    assert.equal(args[1], "https://serv2.invalid");
+    assert.equal(args[2], sameParams);
+  }
+});
+
+test("the production pending predicate drives the retry loop", async () => {
+  const predicateExpression = toRunnableFunctionExpression("function resolvePadelSplitPendingError");
+  const predicate = new Function(
+    "isRecord",
+    "pickString",
+    `return ${predicateExpression};`,
+  )(
+    (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value),
+    (value: unknown, keys: readonly string[]) => {
+      if (!value || typeof value !== "object") return null;
+      for (const key of keys) {
+        const raw = (value as Record<string, unknown>)[key];
+        if (typeof raw === "string" && raw.trim()) return raw.trim();
+      }
+      return null;
+    },
+  ) as (data: unknown, status: number | null) => { message: string } | null;
+
+  assert.equal(predicate({ state: "CONFIRMED", bookingId: "b" }, 200), null);
+  assert.equal(predicate({ error: "rejected" }, 409), null);
+  assert.equal(
+    predicate({ ok: true, state: "PENDING_CONFIRMATION", message: "gateway pending" }, 202)?.message,
+    "gateway pending",
+  );
+  assert.equal(
+    predicate({ data: { state: "pending_confirmation" } }, 202)?.message,
+    "Запись ожидает подтверждения Viva. Повторите проверку.",
+  );
+
+  let requestCalls = 0;
+  const waits: number[] = [];
+  const request = async (): Promise<SplitPollResult> => {
+    requestCalls += 1;
+    if (requestCalls < 2) {
+      return { data: { ok: true, state: "PENDING_CONFIRMATION", message: "gateway pending" }, error: null, status: 202 };
+    }
+    return { data: { state: "CONFIRMED", bookingId: "booking-3" }, error: null, status: 201 };
+  };
+  const poll = buildPendingJoinPoll(request, predicate);
+
+  const result = await poll(pendingJoinRequest, "", { paymentMode: "subscription" }, {
+    delaysMs: [1, 2, 3],
+    wait: async (delayMs: number) => { waits.push(delayMs); },
+  });
+
+  assert.equal(requestCalls, 2);
+  assert.equal(waits.join(","), "1");
+  assert.equal((result.data as Record<string, unknown>).bookingId, "booking-3");
+});
