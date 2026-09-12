@@ -291,7 +291,8 @@ allowlist): `POST` на валидный маршрут вернул `503 PARTNE
 - Новый anchor: `packetManifestSha256=7680eed9…`, `approvedCommit=1e0bc57…`,
   `approvedTree=d4413ab3…`, release-каталог `v02-20260912`.
 - В `service.env` добавлены Viva-переменные: `VIVA_TOKEN_SOURCE=password-grant`,
-  `VIVA_SERVICE_CLIENT_ID=React-auth-dev`, сервисный аккаунт `test_match_point@padlhub.ru`
+  `VIVA_SERVICE_CLIENT_ID=React-auth-dev`, сервисный аккаунт Viva (логин хранится только
+  в `service.env` и в репозиторий не переносится)
   и технический клиент `a46217b4-d1c0-4363-a848-a9b05d8aa648`.
 - Egress расширен: `147.45.254.160/32` (Mongo) + `91.219.191.8/32` (api и kc Viva) +
   localhost.
