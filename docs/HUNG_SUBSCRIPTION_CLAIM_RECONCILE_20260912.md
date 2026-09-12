@@ -59,6 +59,7 @@ Guards (each has its own reason code in the report):
 | `STATE_REQUIRES_MANUAL_RECONCILIATION` | `PRECREATE_*` state: an accepted CREATE may already have created the game, so only a game-side manual reconciliation may release it (the scan reports it, never writes) |
 | `STATE_NOT_HUNG` | state outside both lists |
 | `PROVIDER_BOOKING_BOUND` | claim carries `bookingId`/`upstreamBookingId`; the provider owns it |
+| `CREATE_ATTEMPT_REQUIRES_MANUAL_RECONCILIATION` | claim carries `lk1.createAttemptedAt`/`lk1.bookingAttemptedAt`: an accepted CREATE may already have created the game, so only a game-side manual reconciliation may resolve it |
 | `IDENTITY_UNRESOLVED` | no actor or no subscription on the record |
 | `DEADLINE_MISSING` | no `pendingUntil`/`leaseUntil` and no `createdAt`/`updatedAt` |
 | `DEADLINE_NOT_REACHED` | still inside the claim window |
@@ -156,9 +157,16 @@ so the affected player can simply book again.
 
 ## Residual work (not in this change)
 
-- `scripts/nodered_lk1_hub_nodes/gateway_hooks.js` (`// HUB_PREACCEPT`) should write
-  `pendingUntil` when it moves a HUB claim to `PENDING_CONFIRMATION`, so the reconciler has
-  a declared deadline instead of the TTL fallback. This is a reviewed HUB flow packet
-  (`patch_live_lk1_hub.mjs`, composition contract, live preimage), so it ships separately.
-- The price preview and HUB usage readers still count an *unexpired* claim; that is
-  intended (double-spend protection).
+- ~~`scripts/nodered_lk1_hub_nodes/gateway_hooks.js` (`// HUB_PREACCEPT`) should write
+  `pendingUntil`~~ — implemented in `codex/hub-pending-deadline-20260912`: the HUB pre-accept now
+  writes `pendingUntil` with `HUB_PENDING_CONFIRMATION_MS` (15 minutes, the same window the daily
+  gateway uses), so a HUB claim carries a declared deadline instead of relying on the TTL
+  fallback. It still needs the HUB flow packet (`patch_live_lk1_hub.mjs`, composition contract,
+  fresh live preimage) to reach `147`.
+- Still open: the HUB request path (`lk1_operation_find`) answers "pending" indefinitely for a
+  join claim that has no booking id yet, because it never applies the daily path's expired-pending
+  reconciliation. A bounded branch there would let the player's own retry bind a booking that the
+  provider does show, or release the claim, in about 15 minutes instead of waiting for the
+  scheduled reconciler.
+- The price preview and HUB usage readers still count an *unexpired* claim; that is intended
+  (double-spend protection).
