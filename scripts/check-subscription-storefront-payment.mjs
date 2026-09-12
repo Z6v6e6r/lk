@@ -95,6 +95,42 @@ async function waitFor(send, expression, timeoutMs = 25_000) {
 
 const failures = [];
 
+/**
+ * A failing catalogue refresh must stay silent: no error copy and no retry
+ * button, because the widget retries on its own every 30 seconds.
+ */
+const checkSilentStatusFailure = async (send, query) => {
+  await send('Page.navigate', { url: `${previewUrl}/?${query}` });
+  await waitFor(send, "document.querySelector('#padlhub-subscriptions') !== null");
+  const readState = async () => JSON.parse(await evaluate(send, `(() => {
+    const root = document.getElementById('padlhub-subscriptions');
+    const text = root ? root.textContent : '';
+    return JSON.stringify({
+      hasErrorCopy: /Не удалось обновить подписки/.test(text),
+      hasRetryButton: Array.prototype.some.call(root ? root.querySelectorAll('button') : [], (node) => node.textContent.trim() === 'Повторить'),
+      alerts: root ? root.querySelectorAll('[role="alert"]').length : 0,
+      loadingCopy: /Загружаем подписки/.test(text),
+      noticeText: root && root.querySelector('.subscription-status-message')
+        ? root.querySelector('.subscription-status-message').textContent.trim() : null,
+      statusCalls: /stub status FAIL 500/.test(document.getElementById('preview-log')?.textContent || ''),
+    });
+  })()`));
+  // The request layer retries before it gives up: wait until the stub was hit
+  // and the widget settled into its final (silent) state.
+  let state = await readState();
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (state.statusCalls && !state.loadingCopy && !state.hasErrorCopy) break;
+    await delay(1000);
+    state = await readState();
+  }
+  if (!state.statusCalls) failures.push(`[${query}] the stubbed status endpoint was never called`);
+  if (state.hasErrorCopy) failures.push(`[${query}] the storefront still prints the refresh error`);
+  if (state.hasRetryButton) failures.push(`[${query}] the storefront still offers a retry button`);
+  if (state.alerts) failures.push(`[${query}] the widget rendered ${state.alerts} alert region(s)`);
+  if (state.loadingCopy) failures.push(`[${query}] the storefront stayed on the loading notice`);
+  return state;
+};
+
 try {
   const wsUrl = await findTarget();
   const socket = new WebSocket(wsUrl);
@@ -240,7 +276,8 @@ try {
   const anonymous = await runScenario('auth=0');
   const authorized = await runScenario('auth=1');
   const annualTerms = await runScenario('auth=1&plan=annual');
-  console.log(JSON.stringify({ anonymous, authorized, annualTerms, failures }, null, 2));
+  const silentFailure = await checkSilentStatusFailure(send, 'auth=1&fail=status');
+  console.log(JSON.stringify({ anonymous, authorized, annualTerms, silentFailure, failures }, null, 2));
 } catch (error) {
   failures.push(`harness error: ${error instanceof Error ? error.message : String(error)}`);
   console.log(JSON.stringify({ failures }, null, 2));

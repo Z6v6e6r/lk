@@ -213,13 +213,18 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
     sections: [{ id: 'subscriptions-monthly', plans }],
   };
 
+  /**
+   * A failed status refresh stays silent: the cards keep the last known data and
+   * the 30-second loop retries on its own. Only first load and the genuinely
+   * empty catalogue talk to the visitor.
+   */
+  const statusNotice = error ? null
+    : !statuses ? 'Загружаем подписки…'
+      : !plans.length ? 'Сейчас нет доступных предложений.' : null;
+
   return <>
-    {!previewView && (!statuses || error || !plans.length) && <div className="subscription-storefront" style={{ minHeight: 0 }}>
-      <div className="subscription-status-message" role={error ? 'alert' : 'status'}>
-        {error ? 'Не удалось обновить подписки. Попробуйте ещё раз.' :
-          !statuses ? 'Загружаем подписки…' : 'Сейчас нет доступных предложений.'}
-        {error && <button type="button" onClick={() => setAttempt(value => value + 1)}>Повторить</button>}
-      </div>
+    {!previewView && statusNotice && <div className="subscription-storefront" style={{ minHeight: 0 }}>
+      <div className="subscription-status-message" role="status">{statusNotice}</div>
     </div>}
     {(previewView || statuses) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}

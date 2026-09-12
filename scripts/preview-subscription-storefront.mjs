@@ -34,6 +34,8 @@ function page(search = '') {
   const query = new URLSearchParams(search || process.env.PREVIEW_QUERY || 'auth=0');
   const auth = query.get('auth') === '1';
   const autoClick = query.get('click') === '1';
+  // `fail=status` makes the stubbed catalogue answer 500 to exercise the silent-error path.
+  const failStatus = query.get('fail') === 'status';
   // `bare=1` hides the preview banner so mobile geometry matches the Tilda page.
   const bare = query.get('bare') === '1';
   const token = [
@@ -62,6 +64,11 @@ ${bare ? '' : `<header>Preview /subsription · оплата на заглушк�
   window.fetch = async function (input, init) {
     var url = typeof input === 'string' ? input : input.url;
     if (url.indexOf('/lk/tournaments/summer-subscription/status') !== -1) {
+      if (${failStatus}) {
+        note('stub status FAIL 500');
+        return new Response(JSON.stringify({ error: 'fixture-status-failure' }), {
+          status: 500, headers: { 'content-type': 'application/json' } });
+      }
       var scoped = url.indexOf('counterKey=') !== -1;
       var payload = scoped
         // Approved HAB annual price (98 000 RUB); the live counter still returns

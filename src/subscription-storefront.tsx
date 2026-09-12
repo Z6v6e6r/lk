@@ -6,6 +6,7 @@ import type { SubscriptionStorefrontView } from './components/subscription-store
 import { AuthProvider } from './context/AuthContext';
 import { CABINET_URL } from './consts/api_config';
 import { installGlobalErrorTracking, trackAnalyticsEvent } from './utils/analytics';
+import './components/subscription-storefront/storefront-idle-guard.css';
 
 type MountData = { previewView?: SubscriptionStorefrontView; cabinetUrl?: string | null };
 type MountOptions = { targetId?: string; onClose?: () => void; data?: MountData };

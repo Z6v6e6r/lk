@@ -157,6 +157,45 @@ test('annual terms are confirmed only after the CTA press, never above the store
   }
 });
 
+test('storefront ships the cabinet idle-data guard and hides status errors', () => {
+  const myAppSource = readFileSync(new URL('../../src/MyApp.css', import.meta.url), 'utf8');
+  const block = myAppSource.slice(
+    myAppSource.indexOf('body.lk-idle-data-stale'),
+    myAppSource.indexOf('/* Join preview uses the same server quote'),
+  ).trimEnd();
+  assert.ok(block.length > 500, 'MyApp.css lost the idle-data guard block');
+
+  const guardSource = readFileSync(
+    new URL('../../src/components/subscription-storefront/storefront-idle-guard.css', import.meta.url),
+    'utf8',
+  );
+  for (const selector of [
+    '.lk-idle-data-guard', '.lk-idle-data-guard__panel', '.lk-idle-data-guard__title',
+    '.lk-idle-data-guard__description', '.lk-idle-data-guard__refresh',
+  ]) {
+    assert.ok(guardSource.includes(selector), `storefront-idle-guard.css lost ${selector}`);
+  }
+  // The copied rules must stay identical to the cabinet ones, otherwise the
+  // widget would render the same block differently from every other LK1 page.
+  const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
+  assert.equal(
+    normalize(guardSource.slice(guardSource.indexOf('body.lk-idle-data-stale'))),
+    normalize(block),
+  );
+  const entrySource = readFileSync(new URL('../../src/subscription-storefront.tsx', import.meta.url), 'utf8');
+  assert.match(entrySource, /import '\.\/components\/subscription-storefront\/storefront-idle-guard\.css';/);
+
+  // A failed status refresh stays silent and the 30s loop keeps retrying.
+  const pageSource = readFileSync(
+    new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(pageSource, /Не удалось обновить подписки/);
+  assert.doesNotMatch(pageSource, /Повторить/);
+  assert.match(pageSource, /'Загружаем подписки…'/);
+  assert.match(pageSource, /void refresh\(\); \}, 30_000\)/);
+});
+
 test('storefront ships the cabinet auth styles it needs for the shared AuthForm', () => {
   const myAppSource = readFileSync(new URL('../../src/MyApp.css', import.meta.url), 'utf8');
   const authBlock = myAppSource.slice(
