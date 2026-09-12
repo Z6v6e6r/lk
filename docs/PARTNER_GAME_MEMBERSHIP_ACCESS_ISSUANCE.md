@@ -134,6 +134,40 @@ location / {
 Широкий `default 1` или `allow all` в этом блоке запрещены: маршрут открыт публично и
 защищён именно этой парой проверок.
 
+## 4a. Права Mongo
+
+Сервис ходит в Mongo одним пользователем `partner-game-api`. Нужны права **только** на БД
+`games`: модуль обращается к шести коллекциям (`lk_partner_api_nonces`,
+`lk_partner_game_operations`, `lk_partner_game_memberships`, `lk_partner_api_audit`,
+`lk_partner_game_outbox`, `lk_games`) в одном database handle и не упоминает другие БД.
+`readWrite` на БД включает `createIndex`, который нужен проверке индексов.
+
+Состояние на 2026-09-12: у пользователя остаются `readWrite` на `events`, `dialog`,
+`games_chat` и `PadlhUBScore` — они сервису не нужны. Сужение **не выполнено**: у самого
+сервисного пользователя нет прав на `revokeRolesFromUser` (ответ `Unauthorized` на
+`admin`), поэтому нужен административный креденшел Mongo. Это отдельное действие
+владельца; до него сервис продолжает работать с текущими правами.
+
+Проверено под текущим пользователем: чтение всех шести коллекций, создание/удаление
+индекса, запись и удаление временной коллекции-пробника (создана и сразу удалена).
+
+Сужение (после получения административного доступа):
+
+```js
+// удалить лишние роли, оставив только games
+db.getSiblingDB("admin").revokeRolesFromUser("partner-game-api",
+  [{ role: "readWrite", db: "events" }, { role: "readWrite", db: "dialog" },
+   { role: "readWrite", db: "games_chat" }, { role: "readWrite", db: "PadlhUBScore" }])
+// возврат
+db.getSiblingDB("admin").grantRolesToUser("partner-game-api",
+  [{ role: "readWrite", db: "events" }, { role: "readWrite", db: "dialog" },
+   { role: "readWrite", db: "games_chat" }, { role: "readWrite", db: "PadlhUBScore" }])
+```
+
+После сужения обязательны: рестарт сервиса, подписанный `GET` через ingress и одна пара
+`POST`/`DELETE` — они докажут, что запись (nonce-ledger, операция, membership, outbox,
+`lk_games`) под новыми правами проходит.
+
 ## 5. Активация endpoint
 
 Активация — не следствие успешной установки, а отдельное решение. Порядок:
@@ -257,6 +291,12 @@ console.log("entries",m.files.length,"mismatches",bad);' <release>
 (приложение перестаёт его авторизовать), затем ingress (ingress перестаёт его
 пропускать). Обратный порядок оставляет окно, когда ingress пропускает клиента, которого
 приложение уже не знает.
+
+Материал канареечной mTLS-идентичности с резервного хоста **удалён** 2026-09-12
+(`/tmp/partner-canary-client.{pem,key}`, `canary-curl.cfg` и остатки запросов). Для
+повторной проверки его нужно положить туда заново (`scp` сертификата и ключа, `0600`) и
+удалить сразу после проб: постоянного хранения приватного ключа на probe-хосте быть не
+должно.
 
 ## 9. Обязательства по evidence
 

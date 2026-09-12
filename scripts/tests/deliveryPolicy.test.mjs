@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { load } from 'js-yaml';
-import { classifyChange, classifyChanges, classifyRange, requiredOutcome, validateOutcomes } from '../delivery-policy.mjs';
+import { classifyChange, classifyChanges, classifyRange, requiredCheckSteps, requiredOutcome, validateOutcomes } from '../delivery-policy.mjs';
 
 const path = 'src/components/cabinet/BuySubscription.tsx';
 const source = readFileSync(path, 'utf8');
@@ -83,5 +83,44 @@ test('workflow routes checks explicitly and the final result always evaluates ou
   for (const profile of ['docs', 'frontend', 'business', 'release']) {
     const outcomes = Object.fromEntries(checks.map(step => [step.id, { outcome: requiredOutcome(profile, step.env?.DELIVERY_CATEGORY ?? 'always') ? 'success' : 'skipped' }]));
     assert.equal(validateOutcomes(profile, checks.map(step => ({ id: step.id, category: step.env?.DELIVERY_CATEGORY ?? 'always' })), outcomes).ok, true);
+  }
+});
+
+test('the dependency-free workflow reader matches the YAML document it replaces', () => {
+  const text = readFileSync('.github/workflows/lk1-subscription-enforcement.yml', 'utf8');
+  const expected = load(text).jobs['lk1-exact-head'].steps
+    .filter(step => step.id?.startsWith('check_'))
+    .map(step => ({ id: step.id, category: step.env?.DELIVERY_CATEGORY ?? 'always' }));
+  assert.ok(expected.length > 5, 'the enforcement job must still declare its required checks');
+  assert.deepEqual(requiredCheckSteps(text), expected);
+  assert.throws(() => requiredCheckSteps(text, 'no-such-job'), /not found/);
+});
+
+test('the delivery report runs without any installed package', () => {
+  // The reporting step is the last step of the job with `if: always()`, so an early gate
+  // failure runs it before `npm ci`. A reporter that needs an installed package crashes and
+  // hides the failure it was meant to explain.
+  const workflow = readFileSync('.github/workflows/lk1-subscription-enforcement.yml', 'utf8');
+  const checks = requiredCheckSteps(workflow);
+  const outcomes = Object.fromEntries(checks.map(({ id, category }) => [id,
+    { outcome: requiredOutcome('docs', category) ? 'success' : 'skipped' }]));
+  const root = mkdtempSync(join(tmpdir(), 'delivery-report-'));
+  mkdirSync(join(root, '.github/workflows'), { recursive: true });
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  writeFileSync(join(root, '.github/workflows/lk1-subscription-enforcement.yml'), workflow);
+  for (const name of ['delivery-outcome.mjs', 'delivery-check-result.mjs']) {
+    writeFileSync(join(root, 'scripts', name), readFileSync(join('scripts', name), 'utf8'));
+  }
+  try {
+    assert.equal(existsSync(join(root, 'node_modules')), false);
+    const output = execFileSync(process.execPath, ['scripts/delivery-check-result.mjs'], { cwd: root, encoding: 'utf8',
+      env: { PATH: process.env.PATH, DELIVERY_PROFILE: 'docs', DELIVERY_STEPS: JSON.stringify(outcomes) } });
+    assert.match(output, /check_1: PASS \(success\)/);
+    // execFileSync throws on a non-zero exit, so reaching this point already proves the report
+    // itself succeeded; no required check may be reported as failed.
+    assert.doesNotMatch(output, /FAIL/);
+    for (const { id } of checks) assert.match(output, new RegExp(`${id}: `));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

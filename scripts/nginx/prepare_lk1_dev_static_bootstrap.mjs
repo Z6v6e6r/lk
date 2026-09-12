@@ -85,7 +85,10 @@ export function prepareDevBootstrap({ sourceNginx, expectedSourceSha, installed,
     throw new Error('Canonical private user-owned parent required');
   }
   try {
-    execFileSync('git', ['rev-parse', '--git-dir'], { cwd: parent, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Pin the locale: the check below reads git's own message, and a localized git would
+    // otherwise turn a correct refusal into an unrelated failure.
+    execFileSync('git', ['rev-parse', '--git-dir'], { cwd: parent, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
     throw new Error('DEV private bootstrap must remain outside every Git workspace');
   } catch (error) {
     if (error.status !== 128 || !String(error.stderr).includes('not a git repository')) throw error;

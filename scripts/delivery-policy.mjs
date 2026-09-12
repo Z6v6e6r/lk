@@ -73,22 +73,10 @@ export function classifyRange(base, head, { cwd = process.cwd(), pullRequest = f
   return { base, head, ...classifyChanges(changes) };
 }
 
-export function requiredOutcome(profile, category) {
-  return category === 'always' || (category === 'app' && profile !== 'docs')
-    || (category === 'business' && ['business', 'release'].includes(profile))
-    || (category === 'release' && profile === 'release');
-}
-
-export function validateOutcomes(profile, checks, outcomes) {
-  if (!['docs', 'frontend', 'business', 'release'].includes(profile)) throw new Error('Missing valid routing result');
-  const report = checks.map(({ id, category }) => {
-    const outcome = outcomes[id]?.outcome;
-    const required = requiredOutcome(profile, category);
-    const pass = required ? outcome === 'success' : outcome === 'skipped';
-    return { id, required, outcome: outcome ?? 'missing', result: pass ? (required ? 'PASS' : 'NOT_APPLICABLE') : 'FAIL' };
-  });
-  return { ok: report.every(row => row.result !== 'FAIL'), report };
-}
+// The outcome helpers live in a dependency-free module because the reporting step must run
+// even when an early gate failed before any package was installed. Re-exported here so the
+// routing step and its tests keep one entry point.
+export { requiredCheckSteps, requiredOutcome, validateOutcomes } from './delivery-outcome.mjs';
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const result = classifyRange(process.env.BASE_SHA, process.env.EXPECTED_HEAD_SHA, { pullRequest: process.env.GITHUB_EVENT_NAME === 'pull_request' });
