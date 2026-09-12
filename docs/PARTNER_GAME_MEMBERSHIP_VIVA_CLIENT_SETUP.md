@@ -164,7 +164,7 @@ read-only** проверки (мутаций Viva не было):
 
 - `a46217b4-d1c0-4363-a848-a9b05d8aa648` — это **технический клиент VivaCRM**
   (`VIVA_TECHNICAL_CLIENT_ID`), а не Keycloak `client_id`;
-- сервисный аккаунт `test_match_point@padlhub.ru` рабочий, права на чтение упражнения и
+- сервисный аккаунт Viva рабочий (логин — только в `service.env`), права на чтение упражнения и
   карточки клиента подтверждены;
 - **блокер:** `React-auth-dev` выдаёт `expires_in = 604800` (7 дней), а резолвер принимает
   только `31..86400` секунд (`partner-game-membership-viva.mjs:246`, `payload.expires_in >
