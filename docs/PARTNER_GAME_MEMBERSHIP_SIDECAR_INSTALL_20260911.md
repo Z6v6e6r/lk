@@ -276,3 +276,35 @@ allowlist): `POST` на валидный маршрут вернул `503 PARTNE
 (`/tmp/partner-canary-client.*`, `0600`) для этих проб. Это **временный** материал: перед
 активацией его нужно удалить либо заменить сертификатом партнёра, иначе приватный ключ
 канарейки остаётся на чужом хосте.
+
+## Журнал: release v02-20260912 и Viva-креды (2026-09-12)
+
+По решению владельца лимит `expires_in` ослаблен в коде до
+`PARTNER_VIVA_TOKEN_MAX_TTL_SECONDS = 604800` (правка custom node, коммит `1e0bc57`), после
+чего runtime evidence перевыпущен и packet пересобран.
+
+- Свежий live-pull: `e5d64351…`, 4799 узлов. `candidateSha256` не изменился
+  (`5a5aefe3…`) — sidecar-кандидат строится из синтетического однотабового preimage и от
+  живого flow не зависит; живой flow нужен только как collision-evidence.
+- Установлен release `v02-20260912`: 38 файлов, `npm ci` → 291 пакет, Node-RED `5.0.6`,
+  симлинк custom node на месте, `current` переключён.
+- Новый anchor: `packetManifestSha256=7680eed9…`, `approvedCommit=1e0bc57…`,
+  `approvedTree=d4413ab3…`, release-каталог `v02-20260912`.
+- В `service.env` добавлены Viva-переменные: `VIVA_TOKEN_SOURCE=password-grant`,
+  `VIVA_SERVICE_CLIENT_ID=React-auth-dev`, сервисный аккаунт `test_match_point@padlhub.ru`
+  и технический клиент `a46217b4-d1c0-4363-a848-a9b05d8aa648`.
+- Egress расширен: `147.45.254.160/32` (Mongo) + `91.219.191.8/32` (api и kc Viva) +
+  localhost.
+- Сервис `active`, listener только `127.0.0.1:18894`.
+
+Проверка **боевого резолвера из установленного кода**: модуль сообщает
+`max ttl: 604800`, реальный password grant прошёл (`RESOLVER OK token_len=3289`). То есть
+ослабленный лимит действует именно в том коде, который развёрнут.
+
+API при этом остаётся **выключенным**: запрос через ingress с резервного хоста
+(`89.108.64.209`) по-прежнему получает `503 PARTNER_API_DISABLED`; `padlhub.su` `302`,
+`score.padlhub.su` `410` — без изменений. Временные файлы на хосте удалены; пароль Viva
+хранится только в `service.env` (`0640 root:partner-game-api`).
+
+Остаётся активация (`ENABLED=true`, `PROVIDER_MODE=viva`, четыре provider-gate) и затем
+выдача доступа партнёру — отдельные разрешения.
