@@ -147,3 +147,40 @@ Sidecar сейчас ограничен: `IPAddressDeny=any`, `IPAddressAllow=lo
 - Кэш не отзывает уже выданный токен: экстренное отключение — это отключение клиента в
   Keycloak/Viva плюс рестарт sidecar.
 - До подтверждения прав на шаге 2 нельзя выставлять `VIVA_MUTATIONS_ENABLED=true`.
+
+## 9. Журнал проверки (2026-09-11)
+
+Владелец передал `clientId` и сервисный аккаунт, после чего выполнены **только
+read-only** проверки (мутаций Viva не было):
+
+| Проверка | Результат |
+| --- | --- |
+| Password grant с `client_id=a46217b4-…` | **401 `invalid_client`** — это не Keycloak-клиент |
+| Password grant с `client_id=React-auth-dev` (клиент боевого LK) | **200**, `token_type=Bearer`, `scope=profile email tenant` |
+| `GET /exercises/5f1374e4-…/bookings?showCancelled=true&page=0&size=200` | **200**, `content` = 1 запись |
+| `GET /clients/a46217b4-d1c0-4363-a848-a9b05d8aa648` | **200** — технический клиент существует |
+
+Выводы:
+
+- `a46217b4-d1c0-4363-a848-a9b05d8aa648` — это **технический клиент VivaCRM**
+  (`VIVA_TECHNICAL_CLIENT_ID`), а не Keycloak `client_id`;
+- сервисный аккаунт `test_match_point@padlhub.ru` рабочий, права на чтение упражнения и
+  карточки клиента подтверждены;
+- **блокер:** `React-auth-dev` выдаёт `expires_in = 604800` (7 дней), а резолвер принимает
+  только `31..86400` секунд (`partner-game-membership-viva.mjs:246`, `payload.expires_in >
+  86_400` → отказ). В текущем виде активация вернула бы `VIVA_SERVICE_TOKEN_UNAVAILABLE`
+  / `503`.
+
+Что нужно решить:
+
+1. **Предпочтительно** — завести отдельный Keycloak-клиент под эту интеграцию
+   (public, Direct Access Grants on) с access-token lifespan ≤ 86 400 c, например 3600 c.
+   Использовать общий `React-auth-dev` не стоит ещё и потому, что это клиент фронтенда
+   ЛК: изменение его lifespan затронет обычное приложение.
+2. Либо принять решение о смягчении лимита `expires_in` в коде — это отдельное
+   security-relevant изменение с ревью и перевыпуском runtime evidence; по умолчанию не
+   рекомендуется.
+
+Сетевой доступ `91.219.191.8/32` в юнит **ещё не добавлен** — понадобится на шаге
+токен-проверки через sidecar (сейчас grant выполнялся из shell хоста, где ограничение
+юнита не действует).
