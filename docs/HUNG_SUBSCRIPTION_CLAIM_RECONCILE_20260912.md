@@ -78,6 +78,24 @@ Guards (each has its own reason code in the report):
 
 Tests: `npm run test:hung-claim-release`.
 
+## Live result (2026-09-12, `147`, owner-approved)
+
+Provider-verified run against `games.lk_subscription_daily_booking_ops`:
+
+| step | result |
+| --- | --- |
+| verified dry-run (698 scanned) | `RELEASABLE 223`, `PROVIDER_BOOKING_ACTIVE 452`, `PROVIDER_BOOKING_BOUND 21`, `PROVIDER_SUBSCRIPTION_ID_UNRESOLVED 2`, 33 s |
+| apply | `released 223`, `compareAndSwapFailures 0` |
+| postcheck | `PENDING_CONFIRMATION 698 -> 475`, `RELEASED 1118 -> 1340` |
+| postcheck dry-run (475 scanned) | `RELEASABLE 0`; the rest all hold a live provider booking, a `bookingId`, or an ambiguous provider row |
+| claims open on today-or-future dates | `51 -> 32` (19 released); the remaining 32 (16 `PROVIDER_BOOKING_ACTIVE`, 16 `PROVIDER_BOOKING_BOUND`) correspond to a real provider booking |
+
+Custody on the host: `/root/.node-red/.padlhub-hung-claims-20260912/` (`hung-claims-…json` backup,
+`apply-…json`, `postcheck-dry.json`, all mode 0600). The service token was minted in a temporary
+0600 file from the running node-red process environment, never printed, and deleted after the run.
+
+Reproduce with the same command and a fresh token; nothing in the run depends on stored state.
+
 ## Residual work (not in this change)
 
 - `scripts/nodered_lk1_hub_nodes/gateway_hooks.js` (`// HUB_PREACCEPT`) should write
