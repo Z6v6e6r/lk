@@ -138,7 +138,7 @@ test("standalone token failure has bounded backoff then recovers without an old-
   resolve.close();
 });
 
-for (const ttl of [undefined, null, "300", 0, -1, 30, 30.5, 86_401, Number.MAX_SAFE_INTEGER]) {
+for (const ttl of [undefined, null, "300", 0, -1, 30, 30.5, 604_801, Number.MAX_SAFE_INTEGER]) {
   test(`standalone token rejects unsupported expires_in ${String(ttl)}`, async () => {
     const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials,
       fetchImpl: async () => grantResponse({ expires_in: ttl }) });
@@ -146,6 +146,13 @@ for (const ttl of [undefined, null, "300", 0, -1, 30, 30.5, 86_401, Number.MAX_S
     resolve.close();
   });
 }
+
+test("standalone token accepts the production seven day lifetime", async () => {
+  const resolve = createVivaServiceTokenResolver({ credentialsResolver: credentials,
+    fetchImpl: async () => grantResponse({ expires_in: 604_800 }) });
+  assert.equal(await resolve(), TOKEN);
+  resolve.close();
+});
 
 test("standalone token TTL counts response latency and fails closed on clock reversal", async () => {
   let now = 0;

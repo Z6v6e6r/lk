@@ -9,6 +9,10 @@ export const PARTNER_VIVA_PAYMENT_TYPE = "ON_PLACE";
 export const PARTNER_VIVA_RESPONSE_MAX_BYTES = 1_000_000;
 export const PARTNER_VIVA_TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 export const PARTNER_VIVA_TOKEN_RESPONSE_MAX_BYTES = 65_536;
+// The production Keycloak client React-auth-dev issues 604 800 s (7 day) access tokens, so
+// the accepted lifetime is bounded by that value instead of one day. Anything longer is
+// still refused, and the token is cached only until expires_in minus the 30 s safety margin.
+export const PARTNER_VIVA_TOKEN_MAX_TTL_SECONDS = 604_800;
 
 const TOKEN_PATTERN = /^[A-Za-z0-9._~-]{16,8192}$/;
 const TERMINAL_BOOKING_STATES = new Set([
@@ -243,7 +247,8 @@ export function createVivaServiceTokenResolver({
         || typeof payload.access_token !== "string" || payload.access_token !== payload.access_token.trim()
         || !TOKEN_PATTERN.test(payload.access_token)
         || typeof payload.token_type !== "string" || payload.token_type.toLowerCase() !== "bearer"
-        || !Number.isSafeInteger(payload.expires_in) || payload.expires_in <= 30 || payload.expires_in > 86_400) {
+        || !Number.isSafeInteger(payload.expires_in) || payload.expires_in <= 30
+        || payload.expires_in > PARTNER_VIVA_TOKEN_MAX_TTL_SECONDS) {
         throw unavailable();
       }
       const expiresAt = startedAt + payload.expires_in * 1000 - 30_000;
