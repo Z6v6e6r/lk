@@ -16,6 +16,7 @@ import {
 
 const NOW = '2026-09-12T08:00:00.000Z';
 const ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS;
+const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 // Synthetic identities only: the fixture must never carry a real actor or subscription.
 const ACTOR = 'fixture-actor-0001';
 const SUB = 'fixture-subscription-0001';
@@ -204,6 +205,48 @@ test('the audit summary counts every guard separately', () => {
   assert.equal(summary.total, 3);
   assert.equal(summary.releasable.length, 1);
   assert.deepEqual(summary.byReason, { RELEASABLE: 1, STATE_TERMINAL: 1, PROVIDER_BOOKING_BOUND: 1 });
+});
+
+test('the HUB pre-accept writes the same bounded pending window as the daily gateway', () => {
+  const hooks = read('../nodered_lk1_hub_nodes/gateway_hooks.js');
+  const booking = read('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js');
+  const helpers = hooks.slice(hooks.indexOf('// HUB_HELPERS'), hooks.indexOf('// HUB_PROFILE'));
+  const fragment = hooks.slice(hooks.indexOf('// HUB_PREACCEPT'), hooks.indexOf('// HUB_BOOKING'));
+  assert.match(helpers, /const HUB_PENDING_CONFIRMATION_MS = 15 \* 60 \* 1000;/);
+  const dailyWindow = Number(booking.match(/const PENDING_CONFIRMATION_MS = (\d+) \* 60 \* 1000;/)?.[1]);
+  assert.equal(dailyWindow, 15, 'the daily pending window is the reference');
+
+  const updates = [];
+  const prepareMongoUpdate = (ctx, step, query, update) => {
+    updates.push({ step, query, update });
+    return updates.length;
+  };
+  const now = new Date('2026-09-12T08:00:00.000Z');
+  const ctx = {
+    lk1: {},
+    lk1BeforeCreate: true,
+    operationKey: 'lk1-product:["fixture","fixture-actor","fixture-operation"]',
+    operationId: 'fixture-operation',
+  };
+  new Function('ctx', 'now', 'prepareMongoUpdate', 'HUB_PENDING_CONFIRMATION_MS', fragment)(
+    ctx, now, prepareMongoUpdate, 15 * 60 * 1000,
+  );
+  assert.equal(updates.length, 1);
+  const [{ step, query, update }] = updates;
+  assert.equal(step, 'lk1_create_attempt_saved');
+  assert.deepEqual(query, {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: 'PREPARED',
+    'lk1.createAttemptedAt': { $exists: false },
+  });
+  assert.equal(update.$set.state, 'PENDING_CONFIRMATION');
+  assert.equal(update.$set['lk1.createAttemptedAt'], '2026-09-12T08:00:00.000Z');
+  // The declared deadline is what the reconciler reads instead of its own fallback.
+  assert.equal(update.$set.pendingUntil, '2026-09-12T08:15:00.000Z');
+  assert.deepEqual(update.$unset, { leaseUntil: '' });
+  assert.equal(update.$inc.attempts, 1);
+  assert.equal(hungClaimDeadlineTs({ pendingUntil: update.$set.pendingUntil }), Date.parse('2026-09-12T08:15:00.000Z'));
 });
 
 test('the CLI rehearses offline, refuses --apply with --fixture and never writes in dry-run', () => {
