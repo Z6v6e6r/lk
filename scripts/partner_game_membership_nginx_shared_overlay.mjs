@@ -58,43 +58,59 @@ function publicCertificates(bytes, maxCount) {
 }
 
 export function generatePartnerNginxSharedOverlay(input) {
-  exact(input, ["scope", "exactHost", "clientId", "sourceAddresses", "generationMarker", "now",
-    "clientCertificateBytes", "clientCaCertificateBytes", "serverCertificateChainBytes",
-    "approvedClientSpkiSha256", "approvedClientCaSha256", "approvedServerChainSha256"]);
+  exact(input, ["scope", "exactHost", "clients", "sourceAddresses", "generationMarker", "now",
+    "clientCaCertificateBytes", "serverCertificateChainBytes",
+    "approvedClientCaSha256", "approvedServerChainSha256"]);
   if (input.scope !== "LOCAL_PREPARATION" || typeof input.exactHost !== "string" || input.exactHost.length > 253
-    || !HOST.test(input.exactHost) || typeof input.clientId !== "string" || !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(input.clientId)
+    || !HOST.test(input.exactHost)
     || !Number.isSafeInteger(input.now) || input.now < 0
-    || ["generationMarker", "approvedClientSpkiSha256", "approvedClientCaSha256", "approvedServerChainSha256"]
+    || ["generationMarker", "approvedClientCaSha256", "approvedServerChainSha256"]
       .some(key => typeof input[key] !== "string" || !HASH.test(input[key]))) fail("INPUT_INVALID");
   const sourceAddresses = list(input.sourceAddresses, 1, 8);
   if (sourceAddresses.some(ip => typeof ip !== "string" || net.isIP(ip) !== 4 || ip === "0.0.0.0" || ip === "255.255.255.255")
     || new Set(sourceAddresses).size !== sourceAddresses.length) fail("SOURCE_ALLOWLIST_INVALID");
-  const clientBytes = certificateSnapshot(input.clientCertificateBytes);
+  // Each admitted client is bound to its own exact public leaf, so a client can never claim
+  // another client's id and the client list stays an explicit allowlist, not a bucket.
+  const clientEntries = list(input.clients, 1, 16).map(entry => {
+    exact(entry, ["clientId", "clientCertificateBytes", "approvedClientSpkiSha256"]);
+    if (typeof entry.clientId !== "string" || !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(entry.clientId)
+      || typeof entry.approvedClientSpkiSha256 !== "string" || !HASH.test(entry.approvedClientSpkiSha256)) fail("INPUT_INVALID");
+    return Object.freeze({ clientId: entry.clientId, approvedClientSpkiSha256: entry.approvedClientSpkiSha256,
+      bytes: certificateSnapshot(entry.clientCertificateBytes) });
+  });
+  if (new Set(clientEntries.map(entry => entry.clientId)).size !== clientEntries.length
+    || new Set(clientEntries.map(entry => sha(entry.bytes))).size !== clientEntries.length) fail("INPUT_INVALID");
   const caBytes = certificateSnapshot(input.clientCaCertificateBytes);
   const serverBytes = certificateSnapshot(input.serverCertificateChainBytes);
-  const [client] = publicCertificates(clientBytes, 1);
+  const clients = clientEntries.map(entry => Object.freeze({ ...entry,
+    cert: publicCertificates(entry.bytes, 1)[0] }));
   const [ca] = publicCertificates(caBytes, 1);
   const chain = publicCertificates(serverBytes, 6), server = chain[0];
-  for (const cert of [client, ca, ...chain]) {
+  for (const cert of [...clients.map(client => client.cert), ca, ...chain]) {
     if (Date.parse(cert.validFrom) > input.now || Date.parse(cert.validTo) <= input.now) fail("CERTIFICATE_TIME_INVALID");
   }
-  if (client.ca || !ca.ca || !ca.checkIssued(ca) || !ca.verify(ca.publicKey) || server.ca || !client.checkIssued(ca) || !client.verify(ca.publicKey)
-    || !client.keyUsage?.includes("1.3.6.1.5.5.7.3.2") || !server.keyUsage?.includes("1.3.6.1.5.5.7.3.1")
+  if (!ca.ca || !ca.checkIssued(ca) || !ca.verify(ca.publicKey) || server.ca
+    || clients.some(client => client.cert.ca || !client.cert.checkIssued(ca) || !client.cert.verify(ca.publicKey)
+      || !client.cert.keyUsage?.includes("1.3.6.1.5.5.7.3.2"))
+    || !server.keyUsage?.includes("1.3.6.1.5.5.7.3.1")
     || server.checkHost(input.exactHost, { subject: "never", wildcards: false }) !== input.exactHost) fail("CERTIFICATE_BINDING_INVALID");
   for (let i = 1; i < chain.length; i++) {
     if (!chain[i].ca || !chain[i - 1].checkIssued(chain[i]) || !chain[i - 1].verify(chain[i].publicKey)) fail("CERTIFICATE_CHAIN_INVALID");
   }
   if (new Set(chain.map(cert => sha(cert.raw))).size !== chain.length) fail("CERTIFICATE_CHAIN_INVALID");
-  if (sha(client.publicKey.export({ type: "spki", format: "der" })) !== input.approvedClientSpkiSha256
+  if (clients.some(client => sha(client.cert.publicKey.export({ type: "spki", format: "der" })) !== client.approvedClientSpkiSha256)
     || sha(caBytes) !== input.approvedClientCaSha256
     || sha(serverBytes) !== input.approvedServerChainSha256) fail("CERTIFICATE_PIN_MISMATCH");
   // Reuse the established exact public-leaf admission, not SHA-1 fingerprints or
   // caller client-id buckets. No shared-host/default-server or http{} wrapper.
-  const leaf = encodeURIComponent(clientBytes.toString());
+  const leafEntries = clients.map(client => `"~^${encodeURIComponent(client.bytes.toString())}$" "${client.clientId}";`).join(" ");
+  const admittedEntries = clients.map(client => `"SUCCESS:${client.clientId}" 1;`).join(" ");
+  const boundEntries = clients.map(client => `"${client.clientId}:${client.clientId}" 1;`).join(" ");
   const configuration = `# OFFLINE SHARED OVERLAY DRAFT: native review/application still required.
-map $ssl_client_escaped_cert $pgm_v02_client { default ""; "~^${leaf}$" partner; }
+map $ssl_client_escaped_cert $pgm_v02_cert_client { default ""; ${leafEntries} }
 map $ssl_client_verify $pgm_v02_verified { SUCCESS 1; default 0; }
-map "$ssl_client_verify:$pgm_v02_client" $pgm_v02_admitted { default 0; "SUCCESS:partner" 1; }
+map "$ssl_client_verify:$pgm_v02_cert_client" $pgm_v02_admitted { default 0; ${admittedEntries} }
+map "$pgm_v02_cert_client:$http_x_padlhub_client_id" $pgm_v02_client_bound { default 0; ${boundEntries} }
 map "$http_transfer_encoding$http_content_encoding$http_trailer$http_expect$http_upgrade$http_proxy_connection" $pgm_v02_bad_framing { "" 0; default 1; }
 map $http_connection $pgm_v02_bad_connection { "" 0; ~*^(close|keep-alive)$ 0; default 1; }
 map "$request_method:$request_uri" $pgm_v02_route {
@@ -103,11 +119,11 @@ map "$request_method:$request_uri" $pgm_v02_route {
   "~^DELETE:${PARTNER_API_BASE_PATH}/open-games/[A-Za-z0-9_-]{1,160}/members/[A-Za-z0-9_-]{1,160}$" 1;
   "~^GET:${PARTNER_API_BASE_PATH}/operations/[A-Za-z0-9_-]{1,160}$" 1;
 }
-limit_req_zone $pgm_v02_client zone=pgm_v02_client_rate:1m rate=2r/s;
+limit_req_zone $pgm_v02_cert_client zone=pgm_v02_client_rate:1m rate=2r/s;
 limit_req_zone $binary_remote_addr zone=pgm_v02_source_rate:1m rate=5r/s;
-limit_conn_zone $pgm_v02_client zone=pgm_v02_client_connections:1m;
+limit_conn_zone $pgm_v02_cert_client zone=pgm_v02_client_connections:1m;
 limit_conn_zone $binary_remote_addr zone=pgm_v02_source_connections:1m;
-log_format pgm_v02_audit escape=json '{"admitted":"$pgm_v02_admitted","clientVerified":"$pgm_v02_verified","concurrency":"$limit_conn_status","generation":"${input.generationMarker}","rate":"$limit_req_status","requestId":"$request_id","status":"$status","upstream":"$upstream_status","worker":"$pid"}';
+log_format pgm_v02_audit escape=json '{"admitted":"$pgm_v02_admitted","client":"$pgm_v02_cert_client","clientVerified":"$pgm_v02_verified","concurrency":"$limit_conn_status","generation":"${input.generationMarker}","rate":"$limit_req_status","requestId":"$request_id","status":"$status","upstream":"$upstream_status","worker":"$pid"}';
 server {
   listen 443 ssl;
   listen [::]:443 ssl;
@@ -152,7 +168,7 @@ server {
   if ($http_host != "${input.exactHost}") { return 421; }
   if ($ssl_protocol !~ "^TLSv1\\.[23]$") { return 403; }
   if ($pgm_v02_admitted = 0) { return 403; }
-  if ($http_x_padlhub_client_id != "${input.clientId}") { return 403; }
+  if ($pgm_v02_client_bound = 0) { return 403; }
   if ($pgm_v02_bad_framing) { return 400; }
   if ($pgm_v02_bad_connection) { return 400; }
   if ($pgm_v02_route = 0) { return 404; }
@@ -200,13 +216,16 @@ ${sourceAddresses.sort().map(ip => `    allow ${ip};`).join("\n")}
   const result = Object.freeze({ state: "LOCAL_NGINX_SHARED_OVERLAY_DRAFT_NOT_DEPLOYABLE", path: OUTPUT_PATH,
     configuration, configSha256: sha(configuration), generationMarker: input.generationMarker,
     serverChainSha256: input.approvedServerChainSha256, clientCaSha256: input.approvedClientCaSha256,
-    clientSpkiSha256: input.approvedClientSpkiSha256, ...denied,
+    clients: Object.freeze(clients.map(client => Object.freeze({ clientId: client.clientId,
+      clientSpkiSha256: client.approvedClientSpkiSha256, clientLeafSha256: sha(client.cert.raw) }))), ...denied,
     unresolvedControls: Object.freeze(["TRUSTED_HOST_CLOSURE_AND_FILE_CUSTODY", "SHARED_LISTENER_TLS_AND_HEADER_INHERITANCE",
       "SHARED_VHOST_SEMANTICS_AND_ROUTE_ISOLATION", "SERVER_PKI_TRUST_AND_KEY_CUSTODY", "LIVE_RAW_GUARD_AND_RUNTIME_PROOF",
       "ALL_WORKER_GENERATION_AND_APPLICATION", "EXTERNAL_PROBES_AND_REVOCATION"]),
   });
-  generated.set(result, { configuration, exactHost: input.exactHost, clientId: input.clientId,
-    sourceAddresses: Object.freeze([...sourceAddresses]), clientLeafSha256: sha(client.raw),
+  generated.set(result, { configuration, exactHost: input.exactHost,
+    clients: Object.freeze(clients.map(client => Object.freeze({ clientId: client.clientId,
+      clientLeafSha256: sha(client.cert.raw) }))),
+    sourceAddresses: Object.freeze([...sourceAddresses]),
     serverSpkiSha256: sha(server.publicKey.export({ type: "spki", format: "der" })) });
   return result;
 }
@@ -220,8 +239,8 @@ export function prepareLocalNginxSharedAdapter(input) {
     ...denied });
   preparations.set(result, Object.freeze({ baselineSha256: preservation.baselineSha256,
     candidateSha256: preservation.candidateSha256, overlaySha256: preservation.overlaySha256,
-    generationMarker: input.overlay.generationMarker, exactHost: own.exactHost, clientId: own.clientId,
-    sourceAddresses: own.sourceAddresses, clientLeafSha256: own.clientLeafSha256, serverSpkiSha256: own.serverSpkiSha256 }));
+    generationMarker: input.overlay.generationMarker, exactHost: own.exactHost, clients: own.clients,
+    sourceAddresses: own.sourceAddresses, serverSpkiSha256: own.serverSpkiSha256 }));
   return result;
 }
 

@@ -78,13 +78,13 @@ export function validatePartnerProductionControls(contract) {
     serviceUnitSha256: "3abbb557f2be9565ff115436107de08e4d8f0e566179700eb47bb1a1a01503dc",
     settingsRuntimeSha256: "cabd3d1867311ae0bfa8165687d7911ebc60a0e84f54959192dacfead67451c1",
     settingsGuardedSha256: "1ad5eeaf32ddb703b12f88c31151ff7b7fe9960a55a61a5433000ca92b24ee49",
-    guardedStartupSha256: "d610475a57f8e0bc6342921d58abbfbcec8a57624e80ff9c088ce0a7094f2562",
+    guardedStartupSha256: "4c4248f9ac3e849ffde03e9e23353e5f573fc78bb3200a2fa5547617ecbf0582",
     rawRequestGuardSha256: "74437f13a36fe583f6265553a6d06b8e7a91b0abae06ca755c335080c4368871",
     rawAuditSha256: "a89b4d36d49f8f06e8163368b3e7c4d7a774d494100748fce1a25bdc7884eead",
     guardedPolicySha256: "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
-    rehearsalSha256: "5416c722ad49dff58734e801bb56d85ebe54f9710cc729a8504f8ee045ae74b9",
-    rehearsalCapturedAt: "2026-09-12T05:26:39.211Z",
+    rehearsalSha256: "d612cf7b0ef2ac0af11e43ed596753295a90b3ec96730d34d98cf618274019fb",
+    rehearsalCapturedAt: "2026-09-12T07:42:54.634Z",
     sharedFlowMutationAllowed: false,
   })) fail("Partner sidecar immutable closure identity changed");
   exactKeys(runtime.auditPolicy, [

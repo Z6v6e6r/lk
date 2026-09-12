@@ -15,13 +15,14 @@ const COMMIT = /^[a-f0-9]{40}$/;
 const stableFields = ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode", "nlink", "uid"];
 // DEFAULT_OFF_UNBOUND and BOUND_DEFAULT_OFF are non-activatable. BOUND_ACTIVE is the only
 // mode that may serve traffic, and it is reachable only through a root-owned anchor that
-// explicitly authorizes activation for a bounded canary client and game set.
+// explicitly authorizes activation for a bounded set of clients and game sets.
 const STARTUP_MODES = Object.freeze(["DEFAULT_OFF_UNBOUND", "BOUND_DEFAULT_OFF", "BOUND_ACTIVE"]);
 const ACTIVE_CONTRACT_REVISION = "padlhub-viva-technical-booking-v1";
 const ACTIVE_PROVIDER_MODE = "viva";
 const ANCHOR_FIELDS = Object.freeze(["formatVersion", "mode", "expectedHost", "expectedAudience",
   "candidateFlowSha256", "releaseDirectory", "packetManifestSha256", "approvedCommit", "approvedTree"]);
-const ANCHOR_ACTIVE_FIELDS = Object.freeze([...ANCHOR_FIELDS, "activationAuthorized", "canaryClientId", "canaryGameIds"]);
+const ANCHOR_ACTIVE_FIELDS = Object.freeze([...ANCHOR_FIELDS, "activationAuthorized", "authorizedClients"]);
+const MAX_AUTHORIZED_CLIENTS = 16;
 const CLIENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
 const GAME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
 const exactKeys = (value, keys) => {
@@ -89,24 +90,36 @@ function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, i
     || !HASH.test(anchor.candidateFlowSha256) || digest(candidateBytes) !== anchor.candidateFlowSha256
     || !HASH.test(anchor.packetManifestSha256) || !COMMIT.test(anchor.approvedCommit) || !COMMIT.test(anchor.approvedTree)) fail();
   if (active) {
-    // Activation is bounded to a single canary client and an explicit game set, and the
-    // running keyring must match that bound exactly. The packet manifest itself never
-    // authorizes activation; that authority lives only in this root-owned anchor.
-    if (anchor.activationAuthorized !== true || typeof anchor.canaryClientId !== "string"
-      || !CLIENT_ID_PATTERN.test(anchor.canaryClientId)
-      || !Array.isArray(anchor.canaryGameIds) || anchor.canaryGameIds.length < 1 || anchor.canaryGameIds.length > 8
-      || new Set(anchor.canaryGameIds).size !== anchor.canaryGameIds.length
-      || anchor.canaryGameIds.some(id => typeof id !== "string" || !GAME_ID_PATTERN.test(id))) fail();
+    // Activation is bounded to the clients the anchor names and to the game set each of them
+    // is declared for. The running keyring must match that declaration exactly: every enabled
+    // client is declared, nothing is declared that is not enabled, and no client may hold a
+    // game outside its own declared set. Enabling a client therefore always requires a fresh
+    // root-owned anchor. The packet manifest never authorizes activation.
+    if (anchor.activationAuthorized !== true) fail();
+    const declared = anchor.authorizedClients;
+    if (!declared || Array.isArray(declared) || typeof declared !== "object") fail();
+    const declaredIds = Object.keys(declared);
+    if (declaredIds.length < 1 || declaredIds.length > MAX_AUTHORIZED_CLIENTS) fail();
+    for (const clientId of declaredIds) {
+      const gameIds = declared[clientId];
+      if (!CLIENT_ID_PATTERN.test(clientId)
+        || !Array.isArray(gameIds) || gameIds.length < 1 || gameIds.length > 8
+        || new Set(gameIds).size !== gameIds.length
+        || gameIds.some(id => typeof id !== "string" || !GAME_ID_PATTERN.test(id))) fail();
+    }
     let keyring;
     try { keyring = parsePartnerRawJson(Buffer.from(String(env.LK_PARTNER_GAME_API_KEYRING_JSON || ""), "utf8")); }
     catch { fail(); }
     if (!keyring || Array.isArray(keyring) || typeof keyring !== "object") fail();
     const enabled = Object.entries(keyring).filter(([, credential]) => credential && credential.enabled === true);
-    if (enabled.length !== 1 || enabled[0][0] !== anchor.canaryClientId) fail();
-    const games = enabled[0][1].games && typeof enabled[0][1].games === "object" && !Array.isArray(enabled[0][1].games)
-      ? Object.keys(enabled[0][1].games)
-      : [];
-    if (games.length < 1 || games.some(gameId => !anchor.canaryGameIds.includes(gameId))) fail();
+    if (enabled.length !== declaredIds.length
+      || enabled.some(([clientId]) => !Object.hasOwn(declared, clientId))) fail();
+    for (const [clientId, credential] of enabled) {
+      const games = credential.games && typeof credential.games === "object" && !Array.isArray(credential.games)
+        ? Object.keys(credential.games)
+        : [];
+      if (games.length < 1 || games.some(gameId => !declared[clientId].includes(gameId))) fail();
+    }
   }
   const manifestBytes = readPinnedFile(path.join(root, "packet.manifest.json"), 16384, { io, rootOwned: true, snapshot });
   if (digest(manifestBytes) !== anchor.packetManifestSha256) fail();
