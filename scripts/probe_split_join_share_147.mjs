@@ -211,9 +211,9 @@ async function main() {
   const requestedPhone = String(process.env.SPLIT_JOIN_PROBE_PHONE || "").trim();
   const requestedClientId = String(process.env.SPLIT_JOIN_PROBE_CLIENT_ID || "").trim();
   let profile = null;
-  if (!requestedPhone || !requestedClientId) {
-    // The authenticated session is the probe identity: resolve the phone and client id
-    // from it instead of requiring them separately.
+  if (!requestedPhone) {
+    // The authenticated session is the probe identity: resolve the phone from it when the
+    // operator did not pass one. The client id is optional (the server resolves it by phone).
     profile = await fetchProfile(token);
   }
   const phone = requestedPhone || String(profile?.phone || "").trim();
@@ -282,6 +282,9 @@ async function main() {
     expectedTotalAmount: expected.totalAmount ?? null,
     priceLookupError: expected.priceLookupError ?? null,
     joinStatus: join.status,
+    joinError: join.payload?.error ?? null,
+    joinErrorCode: join.payload?.code ?? join.payload?.details?.code ?? null,
+    joinErrorDetails: join.payload?.details ?? null,
     joinShareAmount: toNumber(join.payload?.shareAmount),
     joinToPay: toNumber(join.payload?.toPay),
     joinBookingId: join.payload?.bookingId ?? null,
@@ -324,7 +327,7 @@ async function main() {
 
   console.log(JSON.stringify(receipt, null, 2));
   if (joinFailed || shareMismatch || toPayMismatch || nominalLeaked) {
-    console.error("Probe assertions failed");
+    console.error(`Probe assertions failed (join http ${join.status}${receipt.joinErrorCode ? ` ${receipt.joinErrorCode}` : ""})`);
     process.exitCode = 2;
   }
 }
