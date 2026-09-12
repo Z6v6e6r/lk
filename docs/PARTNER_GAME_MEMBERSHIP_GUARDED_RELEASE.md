@@ -80,7 +80,7 @@ userDir**. CLI, env, HTTP и sibling JSON в packet не могут замени
 | `BOUND_ACTIVE` без `activationAuthorized`, без `authorizedClients` или с иным `mode` в anchor | Startup refusal, без fallback |
 | Keyring и `authorizedClients` расходятся: включён необъявленный клиент, объявленный выключен, или игра клиента вне его набора | Startup refusal |
 | `BOUND_ACTIVE` при неполном наборе provider gates (любой из них отсутствует или иной) | Startup refusal |
-| Keyring: не ровно один enabled client, client ≠ `canaryClientId`, или его games выходят за `canaryGameIds` | Startup refusal |
+| Keyring и `authorizedClients` расходятся по составу клиентов или игры клиента выходят за его набор | Startup refusal |
 | Bound selector без anchor, пустой/неизвестный selector, anchor при unbound selector | Startup refusal, без fallback |
 | Anchor unreadable/malformed/подменён, любой release/audience mismatch | Startup refusal, без открытия audit/runtime settings |
 | Bound/DEFAULT_OFF flag вместо `false/disabled/false` | Startup refusal независимо от корректности anchor |

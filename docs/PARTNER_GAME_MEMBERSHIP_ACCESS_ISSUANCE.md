@@ -181,9 +181,8 @@ Environment=LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED=true
    `Started flows` без `PARTNER_GUARDED_STARTUP_REFUSED`.
 
 Гвард связан с anchor: `activationAuthorized` живёт только в root-owned анкоре, packet
-manifest активацию не авторизует, а keyring обязан совпадать с `canaryClientId` и
-`canaryGameIds`. Пока в keyring один клиент, `canaryGameIds` — его игры; при выдаче
-второго клиента набор и логика привязки требуют отдельного пересмотра (см. раздел 8).
+manifest активацию не авторизует, а keyring обязан совпадать с `authorizedClients` по
+составу клиентов и по играм каждого из них (см. раздел 8).
 
 ## 6. Установка релиза sidecar
 
