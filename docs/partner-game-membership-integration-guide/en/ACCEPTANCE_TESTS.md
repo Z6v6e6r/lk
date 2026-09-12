@@ -25,7 +25,7 @@ arrive with your credentials.
 | B3 | TLS below 1.2 | Rejected | yes |
 | B4 | Route outside the three issued ones | `404 ROUTE_NOT_FOUND` | yes |
 | B5 | Request from an IP outside the allowlist | `403` from the ingress | yes |
-| B6 | `Content-Type: application/json; charset=utf-8` | `400 RAW_CONTENT_TYPE_INVALID` | yes |
+| B6 | Missing `Content-Type`, or one carrying `charset` | `400 RAW_CONTENT_TYPE_INVALID` | yes |
 | B7 | Response carries `Cache-Control: no-store` and no CORS headers | yes | yes |
 
 ## C. Happy path
@@ -34,7 +34,7 @@ arrive with your credentials.
 | --- | --- | --- | --- |
 | C1 | `POST /open-games/<GAME_ID>/members` with a valid signature | `201`, `membership.state=ACTIVE`, `paymentStatus=PAID`, `settlementSource=EXTERNAL_PARTNER` | yes |
 | C2 | `GET /operations/<OPERATION_ID>` from C1 | `200`, `operation.state=COMPLETED`, `error=null` | yes |
-| C3 | The participant appears in LK/TSUP and Viva holds a booking on the technical client with `paymentType=ON_PLACE` | yes | yes |
+| C3 | The participant appears in LK/TSUP as `source=PARTNER_API` with its `vivaBookingId`, and Viva holds a booking on the technical client with `paymentType=ON_PLACE` | yes | yes |
 | C4 | `DELETE /open-games/<GAME_ID>/members/<MEMBERSHIP_ID>` with a body of exactly `{}` | `200`, `membership.state=REMOVED` | yes |
 | C5 | `GET` of the removal operation | `200`, `state=COMPLETED` | yes |
 | C6 | The Viva booking is cancelled | yes | yes |
@@ -80,8 +80,9 @@ arrive with your credentials.
 | --- | --- | --- | --- |
 | G1 | Exceed 2 rps per client | `429` | contract |
 | G2 | Body larger than 16 384 bytes | `413` or `400 RAW_BODY_SIZE` | contract |
-| G3 | Forced timeout after sending | `202` and `state=UNKNOWN`; only `GET` afterwards | yes |
-| G4 | `202` handled per section 7 of [INTEGRATION.md](INTEGRATION.md): no blind provider retry, no automatic `DELETE` | yes | contract |
+| G3 | Forced timeout after sending | `202` and `state=UNKNOWN`; only `GET` afterwards | contract |
+| G4 | Client behaviour on `202` | `GET` and reconciliation only, per section 7 of [INTEGRATION.md](INTEGRATION.md): no blind provider retry, no automatic `DELETE` | contract |
+| G5 | Receive a `202` and parse the body | `202` with `state=UNKNOWN` and a populated `error.code` | yes: observed on the pre-fix run (`VIVA_READBACK_BINDING_MISMATCH`); the timeout trigger of G3 was not reproduced |
 
 ## H. Sign-off
 

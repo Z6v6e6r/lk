@@ -25,7 +25,7 @@
 | B3 | TLS ниже 1.2 | Отказ | да |
 | B4 | Маршрут вне трёх выданных | `404 ROUTE_NOT_FOUND` | да |
 | B5 | Запрос с IP вне allowlist | `403` от ingress | да |
-| B6 | `Content-Type: application/json; charset=utf-8` | `400 RAW_CONTENT_TYPE_INVALID` | да |
+| B6 | `Content-Type` отсутствует или указан с `charset` | `400 RAW_CONTENT_TYPE_INVALID` | да |
 | B7 | Ответ содержит `Cache-Control: no-store`, без CORS-заголовков | да | да |
 
 ## C. Основной сценарий
@@ -34,7 +34,7 @@
 | --- | --- | --- | --- |
 | C1 | `POST /open-games/<GAME_ID>/members` с корректной подписью | `201`, `membership.state=ACTIVE`, `paymentStatus=PAID`, `settlementSource=EXTERNAL_PARTNER` | да |
 | C2 | `GET /operations/<OPERATION_ID>` из C1 | `200`, `operation.state=COMPLETED`, `error=null` | да |
-| C3 | Участник появился в ЛК/ЦУП, в Viva создан booking на технического клиента с `paymentType=ON_PLACE` | да | да |
+| C3 | Участник появился в ЛК/ЦУП как `source=PARTNER_API` со своим `vivaBookingId`, а в Viva создан booking на технического клиента с `paymentType=ON_PLACE` | да | да |
 | C4 | `DELETE /open-games/<GAME_ID>/members/<MEMBERSHIP_ID>` с телом ровно `{}` | `200`, `membership.state=REMOVED` | да |
 | C5 | `GET` операции удаления | `200`, `state=COMPLETED` | да |
 | C6 | Booking в Viva отменён | да | да |
@@ -80,8 +80,9 @@
 | --- | --- | --- | --- |
 | G1 | Превысить 2 rps на клиента | `429` | контракт |
 | G2 | Тело больше 16 384 байт | `413` или `400 RAW_BODY_SIZE` | контракт |
-| G3 | Искусственный таймаут после отправки | `202` и `state=UNKNOWN`; далее только `GET` | да |
-| G4 | `202` обработан по [IDEMPOTENCY.md](IDEMPOTENCY.md): без слепого provider retry и без автоматического `DELETE` | да | контракт |
+| G3 | Искусственный таймаут после отправки | `202` и `state=UNKNOWN`; далее только `GET` | контракт |
+| G4 | Поведение клиента при `202` | Только `GET` и reconciliation по [IDEMPOTENCY.md](IDEMPOTENCY.md): без слепого provider retry и без автоматического `DELETE` | контракт |
+| G5 | Получить `202` и разобрать тело | `202` с `state=UNKNOWN` и заполненным `error.code` | да: наблюдалось на до-фиксовом прогоне (`VIVA_READBACK_BINDING_MISMATCH`); триггер таймаута из G3 не воспроизводился |
 
 ## H. Подпись приёмки
 

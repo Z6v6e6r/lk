@@ -49,6 +49,7 @@ and `sign.mjs`.
 - [ACCESS_REQUEST.md](ACCESS_REQUEST.md) — what we need from you and how access is issued.
 - [ACCEPTANCE_TESTS.md](ACCEPTANCE_TESTS.md) — go-live acceptance checklist.
 - [ONBOARDING.md](ONBOARDING.md) — access, environments, rotation, revocation, support.
+- [DATA_PROTECTION.md](DATA_PROTECTION.md) — personal data and logging.
 - [`../openapi.yaml`](../openapi.yaml) — machine-readable specification of the three routes (OpenAPI 3.1).
 - [`../sign.mjs`](../sign.mjs) — reference signing CLI (Node.js 18+, no dependencies).
 - [`../../partner-game-membership-kit/README.md`](../../partner-game-membership-kit/README.md) — offline vector kit.

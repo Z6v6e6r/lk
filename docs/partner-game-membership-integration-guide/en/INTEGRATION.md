@@ -407,9 +407,34 @@ curl --fail-with-body --http1.1 \
   --data "$(cat /tmp/member.json)"
 ```
 
-Step 3 — read the operation with `GET` (no body, signature still over canonical `{}`),
-then delete with `DELETE` and a body of exactly `{}`. Full request shapes are in the
-Russian edition's `../QUICKSTART.md`, which this section mirrors.
+Step 3 — read the operation. GET sends no body but still signs canonical `{}`:
+
+```sh
+curl --fail-with-body --http1.1 \
+  --cert client.crt --key client.key --cacert padlhub-ca.pem \
+  "https://<ASSIGNED_HOST>/lk/integrations/v1/operations/$OPERATION_ID" \
+  -H "X-PadlHub-Client-Id: $PADLHUB_CLIENT_ID" -H "X-PadlHub-Audience: $PADLHUB_AUDIENCE" \
+  -H "X-PadlHub-Key-Id: $PADLHUB_KEY_ID" -H "X-PadlHub-Timestamp: $TS" \
+  -H "X-PadlHub-Nonce: $NONCE" -H "X-PadlHub-Signature: $SIGNATURE" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY_3" -H "X-Correlation-ID: $CORRELATION_ID_3"
+```
+
+Step 4 — remove the participant. The body is exactly `{}`:
+
+```sh
+curl --fail-with-body --http1.1 \
+  --cert client.crt --key client.key --cacert padlhub-ca.pem \
+  -X DELETE "https://<ASSIGNED_HOST>/lk/integrations/v1/open-games/$GAME_ID/members/$MEMBERSHIP_ID" \
+  -H 'Content-Type: application/json' \
+  -H "X-PadlHub-Client-Id: $PADLHUB_CLIENT_ID" -H "X-PadlHub-Audience: $PADLHUB_AUDIENCE" \
+  -H "X-PadlHub-Key-Id: $PADLHUB_KEY_ID" -H "X-PadlHub-Timestamp: $TS" \
+  -H "X-PadlHub-Nonce: $NONCE" -H "X-PadlHub-Signature: $SIGNATURE" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY_2" -H "X-Correlation-ID: $CORRELATION_ID_2" \
+  --data '{}'
+```
+
+Only a membership created by the same client can be removed. Start with
+`Idempotency-Key`s 1, 2 and 3 for the three steps; each is a separate business command.
 
 ### Minimal Node.js caller
 

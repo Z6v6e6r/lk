@@ -79,9 +79,9 @@ personal data of test players. Public vectors are sufficient to verify your sign
 PadlHub stores the membership projection: `externalPlayerId`, `displayName`, the
 `payment` declaration, the game and station identity, and the booking reference in Viva.
 Logs and audit records are built so that they do not carry the signature, the secret, the
-nonce, the full request body, `displayName` or `payment.reference`. The Russian edition's
-`../DATA_PROTECTION.md` is the authoritative text on retention, subject requests and the
-contact channel.
+nonce, the full request body, `displayName` or `payment.reference`. See
+[DATA_PROTECTION.md](DATA_PROTECTION.md) for the full rules; the Russian edition's
+`../DATA_PROTECTION.md` is authoritative.
 
 ## Support
 
