@@ -66,6 +66,15 @@ node sign.mjs \
 
 ## Шаг 3 — отправить POST
 
+Если сертификат пришёл как PKCS#12, сначала распакуйте его в PEM-пару — curl и большинство
+HTTP-клиентов работают с ней напрямую (пароль спросит openssl):
+
+```sh
+openssl pkcs12 -in client.p12 -clcerts -nokeys -out client.crt
+openssl pkcs12 -in client.p12 -nocerts -nodes -out client.key
+chmod 600 client.crt client.key
+```
+
 ```sh
 curl --fail-with-body --http1.1 \
   --cert client.crt --key client.key --cacert padlhub-ca.pem \
