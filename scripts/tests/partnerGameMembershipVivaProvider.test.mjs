@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -646,8 +647,60 @@ test("Viva readback accepts agreeing aliases and rejects contradictory identity 
   }
 });
 
-test("Viva removal requires cancellation-only proof before the pinned cancellation command", async () => {
-  const calls = [];
+// Captured from production Viva on 2026-09-12: the booking list row carries no
+// exerciseId, exercise or service field and marks cancellation with isCancelled plus
+// cancellationDate. The read-back binds the exercise through the exercise-scoped query.
+const liveBookingsPage = () => JSON.parse(fs.readFileSync(
+  new URL("./fixtures/partner-viva-bookings-list.live-20260912.json", import.meta.url), "utf8"));
+const pageWithRow = (row) => {
+  const page = liveBookingsPage();
+  return { ...page, content: [row], totalElements: 1, numberOfElements: 1 };
+};
+
+test("Viva readback accepts the captured production row shape that omits exercise identity", async () => {
+  const page = liveBookingsPage();
+  const row = page.content[1];
+  assert.equal("exerciseId" in row, false);
+  assert.equal("exercise" in row, false);
+  assert.equal("service" in row, false);
+
+  const provider = readyProvider(async () => response(200, page));
+  assert.deepEqual(await provider.readBooking({ ...addInput, bookingId: "booking-1" }), {
+    bookingId: "booking-1",
+    exerciseId: "exercise-1",
+    clientId: "technical-client-1",
+    active: true,
+  });
+
+  // Live cancellation evidence: either signal alone proves the booking is gone, and the
+  // pair agrees because production sets both together.
+  for (const cancelled of [
+    { ...row, isCancelled: true, cancellationDate: "2026-09-12T09:00:00+03:00" },
+    { ...row, isCancelled: true, cancellationDate: undefined },
+    { ...row, isCancelled: undefined, cancellationDate: "2026-09-12T09:00:00+03:00" },
+  ]) {
+    const cancelledProvider = readyProvider(async () => response(200, pageWithRow(cancelled)));
+    assert.equal((await cancelledProvider.readBooking({ ...addInput, bookingId: "booking-1" })).active, false);
+  }
+
+  // A row that does carry exercise identity stays strictly bound to the request.
+  const foreign = readyProvider(async () => response(200, pageWithRow({ ...row, exerciseId: "exercise-2" })));
+  await assert.rejects(() => foreign.readBooking({ ...addInput, bookingId: "booking-1" }),
+    { code: "VIVA_READBACK_BINDING_MISMATCH", ambiguous: true });
+
+  // A partner membership must never be confirmed against a paid booking.
+  const paid = readyProvider(async () => response(200, pageWithRow({ ...row, paymentType: "SUBSCRIPTION" })));
+  await assert.rejects(() => paid.readBooking({ ...addInput, bookingId: "booking-1" }),
+    { code: "VIVA_READBACK_BINDING_MISMATCH", ambiguous: true });
+
+  // Contradictory live evidence is refused rather than resolved.
+  const conflicted = readyProvider(async () => response(200,
+    pageWithRow({ ...row, isCancelled: false, cancellationDate: "2026-09-12T09:00:00+03:00" })));
+  await assert.rejects(() => conflicted.readBooking({ ...addInput, bookingId: "booking-1" }),
+    { code: "VIVA_READBACK_AMBIGUOUS", ambiguous: true });
+});
+
+test("Viva removal requires cancellation-only proof before the pinned cancellation command", async () => {  const calls = [];
   const input = { ...addInput, bookingId: "booking-1", idempotencyKey: "partner-remove-001" };
   const provider = readyProvider(async (url, options) => {
     calls.push({ url, options });

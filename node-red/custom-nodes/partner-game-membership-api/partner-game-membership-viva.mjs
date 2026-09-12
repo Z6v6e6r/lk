@@ -340,13 +340,24 @@ const bookingIsActive = (value) => {
     evidence.push(object.active);
     decisiveEvidence = true;
   }
-  for (const field of ["cancelled", "canceled"]) {
+  for (const field of ["cancelled", "canceled", "isCancelled"]) {
     if (object[field] === undefined || object[field] === null) continue;
     if (typeof object[field] !== "boolean") {
       throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking cancellation flag is not boolean", { ambiguous: true });
     }
     evidence.push(!object[field]);
     if (object[field] === true) decisiveEvidence = true;
+  }
+  // Live Viva booking rows carry cancellationDate instead of a lifecycle state string.
+  // A date means cancelled; an explicit null next to isCancelled === false is decisive
+  // proof that the booking is still active.
+  if (object.cancellationDate !== undefined) {
+    const cancellationDate = toText(object.cancellationDate);
+    if (object.cancellationDate !== null && !cancellationDate) {
+      throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking cancellation date is not a string", { ambiguous: true });
+    }
+    evidence.push(!cancellationDate);
+    decisiveEvidence = true;
   }
   const state = exactAlias(
     [object.status, object.state].map((entry) => toText(entry).toUpperCase()),
@@ -557,14 +568,23 @@ export class VivaAdminTechnicalUserProvider {
     const row = matches[0];
     const exerciseId = exerciseIdOf(row);
     const clientId = clientIdOf(row);
-    if (exerciseId !== input.exerciseId || clientId !== input.technicalVivaClientId) {
+    const paymentType = toText(row.paymentType);
+    // The request path addresses one exercise's booking collection, so the provider
+    // itself scopes every returned row to input.exerciseId; live rows carry no exercise
+    // field at all (verified against production Viva on 2026-09-12). An absent alias
+    // therefore confirms the requested exercise, a present but different one stays fatal,
+    // and the returned exerciseId states the binding the scoped query proved. The payment
+    // type is checked whenever the row exposes it, because the partner booking must stay
+    // ON_PLACE and must never become a paid one.
+    if ((exerciseId && exerciseId !== input.exerciseId) || clientId !== input.technicalVivaClientId
+      || (paymentType && paymentType !== PARTNER_VIVA_PAYMENT_TYPE)) {
       throw providerError("VIVA_READBACK_BINDING_MISMATCH", "Viva booking read-back binding differs", {
         ambiguous: true,
       });
     }
     return {
       bookingId: bookingIdOf(row),
-      exerciseId,
+      exerciseId: input.exerciseId,
       clientId,
       active: bookingIsActive(row),
     };
