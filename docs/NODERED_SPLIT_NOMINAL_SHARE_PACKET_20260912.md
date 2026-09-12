@@ -64,6 +64,19 @@ Semantics: the prepare nodes resolve the share as `totalAmount / shareCount` →
   - set difference: exactly one test — the new `subscription booking response never fabricates a
     participant share`, failing before the delta and passing after it. **No regressions.**
 
+## Modular validation
+
+`nodered:modular:build` + `nodered:modular:validate` (`--source-tab-id 4b91e2a2413688db`) pass for
+both workspaces:
+
+| workspace | source sha256 | modular candidate | nodes | http in | broken wires / links |
+| --- | --- | --- | --- | --- | --- |
+| live preimage | `e5d64351…` | `18813fd9ab20780f1621659b3a9c0d95408d6055554439c5fbf65f571a3a79d8` | 345 | 42 | 0 / 0 |
+| candidate | `f6c6c9e2…` | `e08c425f62da27fe43601a4b8855e85c398776cea07dadf35b0744b1df9d7b2b` | 345 | 42 | 0 / 0 |
+
+The candidate keeps the preimage topology exactly: same selected node count, same http-input
+count, zero broken wires and zero broken links.
+
 ## Apply plan (requires explicit owner approval)
 
 1. Fresh pull of `/root/.node-red/flows.json` into a new private workspace (`nodered:modular:pull-147`)
