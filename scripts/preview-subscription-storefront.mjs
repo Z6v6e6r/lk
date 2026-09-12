@@ -34,6 +34,8 @@ function page(search = '') {
   const query = new URLSearchParams(search || process.env.PREVIEW_QUERY || 'auth=0');
   const auth = query.get('auth') === '1';
   const autoClick = query.get('click') === '1';
+  // `bare=1` hides the preview banner so mobile geometry matches the Tilda page.
+  const bare = query.get('bare') === '1';
   const token = [
     Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
     Buffer.from(JSON.stringify({ phone_number: FIXTURE_PHONE, exp: nowSeconds + 3600, sub: 'preview' })).toString('base64url'),
@@ -44,7 +46,7 @@ function page(search = '') {
 <style>body{margin:0;font-family:Arial,sans-serif}body>header{padding:6px 12px;background:#111;color:#fff;font-size:12px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 code{background:#f0f0f0;padding:2px 4px;border-radius:4px}#preview-log{padding:8px 16px;font:12px/1.4 monospace;color:#444;white-space:pre-wrap;overflow-wrap:anywhere}</style>
 </head><body>
-<header>Preview /subsription · оплата на заглушках · ${auth ? 'авторизован' : 'без входа'}</header>
+${bare ? '' : `<header>Preview /subsription · оплата на заглушках · ${auth ? 'авторизован' : 'без входа'}</header>`}
 <div id="padlhub-subscriptions"></div>
 <pre id="preview-log">log:</pre>
 <script>

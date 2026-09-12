@@ -942,7 +942,12 @@
   .subscription-storefront__content { flex: 1 1 auto; }
   .subscription-storefront__sections { flex: 1 1 auto; }
   .subscription-offer-section { display: flex; flex: 1 1 auto; flex-direction: column; }
-  .subscription-plan-switcher { margin-top: auto; position: sticky; bottom: 8px; z-index: 6; }
+  /* The frame grows first, so the pager lands on the bottom edge without overlapping. */
+  .subscription-plan-switcher { margin-top: auto; }
+  /* Phone: the card stretches down to the pager row, whatever the screen height. */
+  .subscription-rail-frame { flex: 1 1 auto; }
+  .subscription-plan-rail { height: 100%; }
+  .subscription-plan-rail__item { align-items: stretch; }
 }
 
 /* Keep Figma spacing on full-size cards, even in a narrower host window. */
@@ -990,8 +995,7 @@
     .subscription-storefront__hero h1 { font-size: 22px; }
     .subscription-storefront__hero p { font-size: 12px; }
     .subscription-storefront__sections { gap: 10px; }
-    /* Keep the pager pinned to the bottom edge instead of resetting the margin. */
-    .subscription-plan-switcher { bottom: 4px; }
+    /* Keep the pager on the bottom edge instead of resetting the auto margin. */
     .subscription-plan-switcher button { min-height: 34px; font-size: 13px; }
   }
   @container subscription-card (max-width: 400px) {
