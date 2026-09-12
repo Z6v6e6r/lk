@@ -32,7 +32,7 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
         Object.freeze(["8f7bd5b482fe9763"]),
       ]),
       liveFuncSha256: "19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41",
-      candidateFuncSha256: "b85af365a2aa954484ca19f05eebb0d2115393589111c6dc1e14832e76dbfe68",
+      candidateFuncSha256: "258c865544f4150ece7e0fc47af455cb97ff2288d81a382841985777604178ef",
     }),
   ]),
   restorations: Object.freeze([]),

@@ -27,7 +27,7 @@ export const SPLIT_PRICING_RECOVERY_TARGETS = Object.freeze([
       Object.freeze(["8f7bd5b482fe9763"]),
     ]),
     liveSha256: "70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462",
-    candidateSha256: "2192e71a9a5c2e453d774ac8588d4ed1ff3bc34ba77f674d04797bbff443db31",
+    candidateSha256: "515dca2fdb427ff5e56dda7b47372a45056ece3fcdbdba00a70074c7a3b36010",
   }),
   Object.freeze({
     id: "8f7bd5b482fe9763",
@@ -42,7 +42,7 @@ export const SPLIT_PRICING_RECOVERY_TARGETS = Object.freeze([
       Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
     ]),
     liveSha256: "cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a",
-    candidateSha256: "6a14d80655daa998e1d26c68d20bbcdcfa7ef401d023689440f4accea6e8a9ec",
+    candidateSha256: "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5",
   }),
 ]);
 

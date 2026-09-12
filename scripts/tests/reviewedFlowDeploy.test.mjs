@@ -1526,7 +1526,7 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
     .replace("    settlementState,\n", "");
   assert.equal(
     sha256(splitRouterSource),
-    "a480563d9b0ea98fa0917e5535f22c5528481d33052e3971517b110ae573cae4",
+    "ba575b1db15b68612dcc93ea54f9d7455c8c0df628bcf547aa08fed42bacb1eb",
     "fixture must remain the exact reviewed live preimage",
   );
   const splitWires = [

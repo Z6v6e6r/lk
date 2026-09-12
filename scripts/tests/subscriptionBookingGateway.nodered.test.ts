@@ -3767,7 +3767,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "6a14d80655daa998e1d26c68d20bbcdcfa7ef401d023689440f4accea6e8a9ec");
+  assert.equal(funcSha256, "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 
