@@ -99,6 +99,37 @@ async function resolveExactShare(game, shareCount, attempts = 3) {
   throw lastError;
 }
 
+async function fetchProfile(token) {
+  const { status, payload } = await httpJson(`${VIVA_BASE}/profile`, {
+    headers: { accept: "application/json", authorization: `Bearer ${token}` },
+  });
+  if (status !== 200 || !isObj(payload)) throw new Error(`Profile lookup failed (http ${status})`);
+  return payload;
+}
+
+function assertProbeIdentity(game, { clientId, phone }) {
+  const organizerId = isObj(game.organizer) ? String(game.organizer.id || "").trim() : "";
+  const digits = (value) => String(value || "").replace(/\D/g, "");
+  if (clientId && organizerId && clientId === organizerId) {
+    throw new Error("The probe identity is the organizer of this game");
+  }
+  const activeStatuses = /^(CONFIRMED|PAID|PAYMENT_PENDING|PENDING|WAITLIST)$/i;
+  const participants = [...(Array.isArray(game.participants) ? game.participants : []),
+    ...(Array.isArray(game.waitlist) ? game.waitlist : [])];
+  if (participants.some((player) => isObj(player)
+    && ((clientId && String(player.id || "") === clientId)
+      || (phone && digits(player.phone) === digits(phone))))) {
+    throw new Error("The probe identity is already in this game roster");
+  }
+  const splitPayment = isObj(game.metadata) && isObj(game.metadata.splitPayment) ? game.metadata.splitPayment : {};
+  const payments = Array.isArray(splitPayment.payments) ? splitPayment.payments : [];
+  if (payments.some((item) => isObj(item) && activeStatuses.test(String(item.status || ""))
+    && ((clientId && String(item.clientId || "") === clientId)
+      || (phone && digits(item.phone || item.phoneNorm) === digits(phone))))) {
+    throw new Error("The probe identity already has an active split payment in this game");
+  }
+}
+
 async function leaveBooking({ gameId, token, bookingId, exerciseId, clientId, phone, reason }) {
   const { status, payload } = await httpJson(`${API_BASE}/lk/games/${encodeURIComponent(gameId)}/split/leave`, {
     method: "POST",
@@ -177,12 +208,22 @@ async function main() {
     throw new Error(`Set SPLIT_JOIN_PROBE=${ACK} to acknowledge the real Viva booking`);
   }
   const token = required("SPLIT_JOIN_PROBE_TOKEN");
-  const phone = required("SPLIT_JOIN_PROBE_PHONE");
-  const clientId = String(process.env.SPLIT_JOIN_PROBE_CLIENT_ID || "").trim() || null;
+  const requestedPhone = String(process.env.SPLIT_JOIN_PROBE_PHONE || "").trim();
+  const requestedClientId = String(process.env.SPLIT_JOIN_PROBE_CLIENT_ID || "").trim();
+  let profile = null;
+  if (!requestedPhone || !requestedClientId) {
+    // The authenticated session is the probe identity: resolve the phone and client id
+    // from it instead of requiring them separately.
+    profile = await fetchProfile(token);
+  }
+  const phone = requestedPhone || String(profile?.phone || "").trim();
+  if (!phone) throw new Error("SPLIT_JOIN_PROBE_PHONE is required (the session profile has no phone)");
+  const clientId = requestedClientId || String(profile?.id || "").trim() || null;
   const reason = String(process.env.SPLIT_JOIN_PROBE_REASON || "").trim() || "SPLIT_SHARE_PROBE_CLEANUP";
   const keepBooking = String(process.env.SPLIT_JOIN_PROBE_KEEP_BOOKING || "") === "1";
 
   const game = await fetchGame(gameId);
+  assertProbeIdentity(game, { clientId, phone });
   const booking = isObj(game.booking) ? game.booking : {};
   const splitPayment = isObj(game.metadata) && isObj(game.metadata.splitPayment) ? game.metadata.splitPayment : {};
   const shareCount = Number(splitPayment.shareCount) === 2 ? 2 : 4;
@@ -248,6 +289,7 @@ async function main() {
     paymentUrlIssued: Boolean(join.payload?.paymentUrl),
     paymentLinkOpened: false,
     phoneMasked: maskPhone(phone),
+    probeIdentitySource: requestedPhone ? "env" : "session-profile",
     cleanup: null,
   };
 
