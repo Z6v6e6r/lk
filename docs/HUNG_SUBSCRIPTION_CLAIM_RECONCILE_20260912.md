@@ -110,8 +110,11 @@ Installed on 2026-09-12 with owner approval: `/root/.node-red/hung-claim-release
 | `backups/` | exact scanned documents of every releasing tick, mode 0600, kept 30 days |
 
 Units: `padlhub-hung-claim-release.service` (`Type=oneshot`, `ExecStart=run-release.sh`) and
-`padlhub-hung-claim-release.timer` (`OnCalendar=*:0/15`). The wrapper runs with `--limit 500`
-and `--ttl-minutes 30`; a tick that finds nothing to release writes no backup.
+`padlhub-hung-claim-release.timer` (`OnCalendar=*:0/15`). Every tick scans the freshest claims
+(`--sort newest --limit 60`, `--ttl-minutes 30`) so a claim hung since the previous tick is
+released within about half an hour; the 04:00 MSK tick is a deep sweep (`--sort oldest
+--limit 2000`) that also re-checks claims which keep a provider booking. A tick that finds
+nothing to release writes no backup.
 
 Stop signals: any `compareAndSwapFailures` in a tick, a `WORKER`-level error line, or a tick that
 releases an implausible batch (far above the one-off 223 baseline). Stop method: `systemctl disable --now padlhub-hung-claim-release.timer`

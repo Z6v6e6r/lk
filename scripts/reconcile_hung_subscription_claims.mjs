@@ -49,6 +49,7 @@ Scan options:
   --subscription <uuid>        restrict to one subscription instance
   --ttl-minutes <n>            hung-claim TTL when the claim declares no deadline (default: ${DEFAULT_HUNG_CLAIM_TTL_MS / 60000})
   --limit <n>                  max claims per run (default: 200)
+  --sort <oldest|newest>       which claims a bounded run scans first (default: oldest)
   --now <iso>                  evaluate at this instant (default: current time)
   --fixture <path>             offline rehearsal from a captured { operations, bookingsByExercise } snapshot
 
@@ -73,6 +74,7 @@ const tenantKey = value('--tenant');
 const actorClientId = value('--actor');
 const clientSubscriptionId = value('--subscription');
 const limit = Number(value('--limit') || 200);
+const sortOrder = value('--sort') || 'oldest';
 const ttlMinutes = Number(value('--ttl-minutes') || DEFAULT_HUNG_CLAIM_TTL_MS / 60000);
 const nowIso = value('--now') || new Date().toISOString();
 const vivaBase = value('--viva-base') || process.env.VIVA_API_BASE || 'https://api.vivacrm.ru';
@@ -82,6 +84,7 @@ const inlineToken = value('--viva-token') || process.env.VIVA_ADMIN_TOKEN;
 const fail = (message) => { throw new Error(message); };
 const ttlMs = Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? ttlMinutes * 60000 : fail('--ttl-minutes must be a positive number');
 if (!Number.isSafeInteger(limit) || limit < 1) fail('--limit must be a positive integer');
+if (!['oldest', 'newest'].includes(sortOrder)) fail('--sort must be oldest or newest');
 if (apply && !backupDir) fail('--backup-dir is required with --apply');
 if (apply && fixturePath) fail('--apply cannot be combined with --fixture');
 if (!Number.isFinite(Date.parse(nowIso))) fail('--now must be an ISO timestamp');
@@ -166,7 +169,10 @@ async function loadScan() {
   if (tenantKey) query.tenantKey = tenantKey;
   if (actorClientId) query.actorClientId = actorClientId;
   if (clientSubscriptionId) query.clientSubscriptionId = clientSubscriptionId;
-  const operations = await collection.find(query).sort({ updatedAt: 1 }).limit(limit).toArray();
+  const operations = await collection.find(query)
+    .sort({ updatedAt: sortOrder === 'newest' ? -1 : 1 })
+    .limit(limit)
+    .toArray();
   const token = await providerToken();
   if (token) {
     for (const exerciseId of new Set(operations.map((operation) => String(operation?.exerciseId || '')).filter(Boolean))) {
