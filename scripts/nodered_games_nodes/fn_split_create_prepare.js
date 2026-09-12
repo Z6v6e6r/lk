@@ -263,19 +263,20 @@ const totalAmount = roundMoney(
   ?? body.slotPrice
   ?? body.amount,
 );
-const defaultShareAmount = roundMoney(oneTimeBaseAmount / Math.max(shareCount, 1))
-  ?? (shareCount === 2 ? 5000 : 2500);
 const resolvedShareAmountFromTotal =
   totalAmount !== null && totalAmount > 0
     ? roundMoney(totalAmount / Math.max(shareCount, 1))
     : null;
+// No nominal fallback: the router proves the exact court price for one-time payment
+// and the campaign policy for subscription payment, otherwise the request fails closed.
 const shareAmount = resolvedShareAmountFromTotal
-  ?? resolveShareAmount(
-    toNumber(body.shareAmount) ?? defaultShareAmount,
-    durationMinutes,
-    body.shareAmountIncludesDuration === true,
-  )
-  ?? defaultShareAmount;
+  ?? (toNumber(body.shareAmount) !== null
+    ? resolveShareAmount(
+      toNumber(body.shareAmount),
+      durationMinutes,
+      body.shareAmountIncludesDuration === true,
+    )
+    : null);
 const maxClientsLimit = shareCount === 2 ? 2 : 4;
 const maxClientsCount = Math.max(1, Math.min(maxClientsLimit, Math.floor(toNumber(body.maxClientsCount) ?? shareCount)));
 const spot = Math.max(1, Math.min(maxClientsLimit, Math.floor(toNumber(body.spot) ?? 1)));

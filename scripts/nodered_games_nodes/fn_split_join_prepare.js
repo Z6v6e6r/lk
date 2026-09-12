@@ -551,16 +551,17 @@ const totalAmount = roundMoney(
   ?? body.slotPrice
   ?? body.amount,
 );
-const defaultShareAmount = roundMoney(oneTimeBaseAmount / Math.max(shareCount, 1))
-  ?? (shareCount === 2 ? 5000 : 2500);
+// The nominal 10 000 / shareCount fallback is never fabricated: without a stored,
+// requested or court-proven amount the share stays unresolved and the router fails
+// closed before any Viva mutation (`SPLIT_PRICE_NOT_VERIFIED` / `SPLIT_EXACT_PRICE_NOT_VERIFIED`).
 const shareAmount =
   (totalAmount !== null && totalAmount > 0
     ? roundMoney(totalAmount / Math.max(shareCount, 1))
     : null)
   ?? (
     bodyShareAmount !== null
-      ? (resolveShareAmount(bodyShareAmount, durationMinutes, body.shareAmountIncludesDuration === true) ?? defaultShareAmount)
-      : storedShareAmount ?? resolveShareAmount(defaultShareAmount, durationMinutes, false) ?? defaultShareAmount
+      ? resolveShareAmount(bodyShareAmount, durationMinutes, body.shareAmountIncludesDuration === true)
+      : storedShareAmount
   );
 const maxClientsLimit = shareCount === 2 ? 2 : 4;
 const maxClientsCount = Math.max(1, Math.min(maxClientsLimit, Math.floor(toNumber(body.maxClientsCount) ?? shareCount)));

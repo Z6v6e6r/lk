@@ -59,6 +59,9 @@ type RouterMessage = {
       actualTransactionId?: string | null;
     };
     subscriptionProductId?: string;
+    shareAmount?: number | null;
+    shareAmountMinor?: number | null;
+    toPay?: number;
     paymentModes?: Array<{ productId?: string }>;
     transactionId?: string;
     paymentUrl?: string;
@@ -657,6 +660,41 @@ test("subscription booking response keeps the actual matched client subscription
   assert.equal(responseMsg.statusCode, 201);
   assert.equal(responseMsg.payload?.subscriptionProductId, "sport-subscription");
   assert.equal(responseMsg.payload?.paymentModes?.[0]?.productId, "sport-subscription");
+});
+
+test("subscription booking response never fabricates a participant share", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "booking-1",
+      clientSubscriptionId: "sport-subscription",
+      client: { id: "client-1", phone: "79990000001" },
+      studio: { id: "studio-1" },
+      spot: 1,
+    },
+    _splitCtx: {
+      step: "create_booking",
+      action: "create",
+      paymentMode: "subscription",
+      selectedPaymentMode: "subscription",
+      clientSubscriptionId: "sport-subscription",
+      shareCount: 4,
+      oneTimeBaseAmount: 10000,
+      paymentRef: "split-ref-nominal",
+      exerciseId: "exercise-nominal",
+      vivaDirectionId: 4588,
+      vivaExerciseTypeId: 1613,
+      deadlineAt: null,
+      assembleDeadlineAt: null,
+      spot: 1,
+    },
+  }) as unknown[];
+
+  const responseMsg = out[1] as RouterMessage;
+  assert.equal(responseMsg.statusCode, 201);
+  assert.equal(responseMsg.payload?.shareAmount, null);
+  assert.equal(responseMsg.payload?.shareAmountMinor, null);
+  assert.equal(responseMsg.payload?.toPay, 0);
 });
 
 test("verified room-studio binding starts exact Viva pricing before any mutation", () => {
