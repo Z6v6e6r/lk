@@ -15,7 +15,7 @@ channel, ticket or mailbox.
 | Technical contact | yes | The engineer running the integration |
 | Incident contact | yes | 24/7 or with a duty window |
 | Data-protection contact | yes | For personal-data questions |
-| Correspondence language | no | Russian by default; an English edition exists |
+| Correspondence language | no | Russian by default |
 
 ## 2. Environments
 

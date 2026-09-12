@@ -1,7 +1,7 @@
 # Partner API: офлайн-комплект проверки контракта
 
-Статус: **OFFLINE ONLY**. Эти три файла можно передать разработчикам партнёра для
-подготовки клиента без сервера, Docker, Viva и доступа к игре. Комплект не является
+Статус: **OFFLINE ONLY**. Эти три файла нужны, чтобы подготовить клиент без сервера,
+Docker, Viva и доступа к игре. Комплект не является
 production SDK, HTTP-клиентом, валидатором произвольных запросов или разрешением на
 подключение. Боевой URL, credentials и персональные данные сюда не входят.
 
@@ -22,7 +22,7 @@ OFFLINE_CONTRACT_VECTORS_PASS vectors=5 network=NOT_USED live_security=NOT_TESTE
 `vectors.json` содержит пять фиксированных входов и ожидаемые canonical body,
 SHA256, полную строку подписи, HMAC, wire body и его размер в UTF-8 bytes.
 `contract-selftest.mjs` вычисляет их независимо от backend и сравнивает с сохранёнными
-значениями. Партнёр должен получить те же значения **своей реализацией**, а не только
+значениями. Вы должны получить те же значения **своей реализацией**, а не только
 запустить приложенный пример. Исходный опубликованный POST vector не изменён.
 Успешный self-test не удостоверяет происхождение изменённого комплекта.
 
@@ -80,7 +80,7 @@ membership/operation ID: в интеграции сохраняются ID из 
   обходить конфликт случайной заменой ключа.
 - `401/403`: остановить mutation и проверить доступ с владельцем интеграции.
   Удалять можно только собственный membership этого integration client, не игрока
-  из LK/Viva/другого партнёра. `PAID` — заявление партнёра о внешнем расчёте, не
+  из LK, Viva или чужой системы. `PAID` — ваше заявление о внешнем расчёте, не
   банковское или фискальное подтверждение и не проведение платежа в Viva.
 
 HMAC + nonce защищают от повторов после приёма оригинала. Защита от пересылки
@@ -92,7 +92,7 @@ idempotency/recovery, audit persistence, отсутствие повторног
 ## Самостоятельная интеграция клиента
 
 Анкета, согласование P0 и отчёт о прохождении vectors **не требуются**. PadlHub
-предоставляет методы и фиксированный контракт; партнёр отвечает за реализацию своего
+предоставляет методы и фиксированный контракт; вы отвечаете за реализацию своего
 клиента. Vectors служат для самостоятельной проверки. Credentials, request dumps
 и персональные данные присылать не нужно.
 
@@ -106,14 +106,12 @@ idempotency/recovery, audit persistence, отсутствие повторног
 остаются ответственностью PadlHub. Отсутствие обязательной анкеты не заменяет наши
 интеграционные проверки и не означает, что live endpoint уже включён.
 
-Полные документы в основном репозитории (при передаче только этой папки отправляются
-отдельно): [API](../PARTNER_GAME_MEMBERSHIP_API.md),
-[ответственность сторон и checklist P0–P2](../PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md),
-[инфографика безопасности](../assets/partner-game-membership-security.drawio),
-[инфографика production gates](../assets/partner-game-membership-production-gates.drawio).
+Остальные документы комплекта: [присоединение к существующей игре](../partner-game-membership-integration-guide/JOIN_EXISTING_GAMES.md),
+[подпись](../partner-game-membership-integration-guide/SIGNING.md),
+[ошибки](../partner-game-membership-integration-guide/ERRORS.md),
+[повторы](../partner-game-membership-integration-guide/IDEMPOTENCY.md).
 
-Native Linux/amd64 Nginx application rehearsal и установка Docker отложены
-пользователем 2026-09-06: **DEFERRED / NOT_RUN**. Прежние FAILED observations
-сохранены. Production ingress/custody остаются UNBOUND/default-off; этот комплект
-не закрывает и не отменяет release gates. Реальные endpoint/credentials выдаются
-отдельно после их прохождения и разрешения на live этап.
+Боевой endpoint активирован; рабочий адрес, credentials и mTLS-сертификат выдаются
+индивидуально и не входят в этот комплект. Self-test проверяет только контракт подписи
+и не заменяет приёмку из
+[ACCEPTANCE_TESTS.md](../partner-game-membership-integration-guide/ACCEPTANCE_TESTS.md).
