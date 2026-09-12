@@ -311,7 +311,8 @@ test('card copy follows the approved mock: free hour, footer note and five-visit
   assert.match(presentationSource, /kind: 'note'/);
   assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*shortLabel: 'Энергия',\s*labelKind: 'plain',/);
   assert.match(presentationSource, /title: 'Форматы на выбор:'/);
-  assert.match(presentationSource, /label: 'До 4 активных записей на 2 недели вперёд'/);
+  assert.match(presentationSource, /label: 'До 4 активных записей'/);
+  assert.doesNotMatch(presentationSource, /на 2 недели вперёд/);
   // The five-visit pass has no booking limit, so it must not reuse the note.
   const energy5Block = presentationSource.slice(
     presentationSource.indexOf('export const energy5Benefits'),
@@ -340,8 +341,10 @@ test('card copy follows the approved mock: free hour, footer note and five-visit
   // Short phones trim the remaining chrome and keep the arrow off the title.
   assert.match(cssSource, /@media \(max-height: 700px\)/);
   assert.match(cssSource, /\.subscription-storefront__nav-button \{ width: 38px; height: 38px; \}/);
-  // Phones anchor the pager to the bottom edge of the screen.
-  assert.match(cssSource, /\.subscription-plan-switcher \{ margin-top: auto; position: sticky; bottom: 8px; z-index: 6; \}/);
+  // Phones anchor the pager to the bottom edge and stretch the card down to it.
+  assert.match(cssSource, /\.subscription-plan-switcher \{ margin-top: auto; \}/);
+  assert.match(cssSource, /\.subscription-rail-frame \{ flex: 1 1 auto; \}/);
+  assert.match(cssSource, /\.subscription-plan-rail \{ height: 100%; \}/);
 });
 
 
