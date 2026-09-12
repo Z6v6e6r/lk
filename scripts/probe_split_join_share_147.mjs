@@ -130,7 +130,9 @@ function assertProbeIdentity(game, { clientId, phone }) {
   }
 }
 
-async function leaveBooking({ gameId, token, bookingId, exerciseId, clientId, phone, reason }) {
+async function leaveBooking({ gameId, token, bookingId, clientId, phone, reason }) {
+  // The leave contract resolves the actor and the booking targets server-side and
+  // rejects exerciseId/gameId in the body.
   const { status, payload } = await httpJson(`${API_BASE}/lk/games/${encodeURIComponent(gameId)}/split/leave`, {
     method: "POST",
     headers: {
@@ -140,13 +142,39 @@ async function leaveBooking({ gameId, token, bookingId, exerciseId, clientId, ph
     },
     body: JSON.stringify({
       bookingIds: bookingId ? [bookingId] : [],
-      exerciseId: exerciseId || null,
       clientId: clientId || null,
       playerPhone: phone,
       reason,
     }),
   });
   return { status, ok: status >= 200 && status < 300, payload };
+}
+
+/**
+ * Fallback cancellation through the participant's own Viva session. The current
+ * end-user API cancels a booking with DELETE /bookings/{id}; the older
+ * /bookings/{id}/cancel route answers 405. Verified by readback.
+ */
+async function vivaSelfCancel({ bookingId, token }) {
+  const del = await httpJson(`${VIVA_BASE}/bookings/${encodeURIComponent(bookingId)}`, {
+    method: "DELETE",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({}),
+  });
+  const readback = await httpJson(`${VIVA_BASE}/bookings/${encodeURIComponent(bookingId)}`, {
+    headers: { accept: "application/json", authorization: `Bearer ${token}` },
+  });
+  const cancelled = readback.payload?.isCancelled === true;
+  return {
+    deleteStatus: del.status,
+    readbackStatus: readback.status,
+    isCancelled: cancelled,
+    ok: cancelled,
+  };
 }
 
 function resolveCanonicalStoredShare(game) {
@@ -308,17 +336,30 @@ async function main() {
       gameId,
       token,
       bookingId: receipt.joinBookingId,
-      exerciseId: joinBody.exerciseId,
       clientId,
       phone,
       reason,
     });
-    receipt.cleanup = { status: left.status, ok: left.ok };
+    receipt.cleanup = { lkLeaveStatus: left.status, lkLeaveOk: left.ok, lkLeavePayload: left.payload ?? null };
     if (!left.ok) {
+      // The LK leave flow authorizes against the stored game record, which a raw probe
+      // join does not update; cancel the booking through the participant's own session.
+      try {
+        const viva = await vivaSelfCancel({ bookingId: receipt.joinBookingId, token });
+        receipt.cleanup.vivaSelfCancel = viva;
+        if (viva.ok) receipt.cleanup.ok = true;
+      } catch (error) {
+        receipt.cleanup.vivaSelfCancel = { ok: false, error: error.message };
+      }
+    } else {
+      receipt.cleanup.ok = true;
+    }
+    if (receipt.cleanup.ok !== true) {
       console.error(JSON.stringify({ ...receipt, error: "CLEANUP_FAILED" }, null, 2));
       console.error(
-        "Manual cleanup required: POST " + `${API_BASE}/lk/games/${gameId}/split/leave`
-        + " with bookingIds=[" + receipt.joinBookingId + "], playerPhone, reason=" + reason,
+        "Manual cleanup required: cancel Viva booking " + receipt.joinBookingId
+        + " (DELETE " + `${VIVA_BASE}/bookings/${receipt.joinBookingId}` + " with the participant session),"
+        + " then confirm isCancelled=true",
       );
       process.exitCode = 3;
       return;
