@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { annualHistory } from '../lib/annualSubscriptionHistory.mjs';
-import { claimDeadlineTs, findAnnualClaim, listAnnualClaims, releaseAnnualClaim, RELEASE_REASON } from '../lib/annualClaimRelease.mjs';
+import { claimDeadlineTs, findAnnualClaim, listAnnualClaims, releaseAllAnnualClaims, releaseAnnualClaim, RELEASE_REASON } from '../lib/annualClaimRelease.mjs';
 
 // Sanitized capture of the production HUB annual ledger (client identifiers,
 // phones and provider references redacted). Real schema, real reservation
@@ -151,4 +151,78 @@ test('an ambiguous or unknown payment reference is refused', () => {
   ] };
   assert.equal(findAnnualClaim(ambiguous, EXPIRED_REF), null);
   assert.equal(releaseAnnualClaim(ambiguous, { paymentRef: EXPIRED_REF, now: NOW }).code, 'CLAIM_NOT_UNIQUE');
+});
+
+// A second stale claim on the same daily seat, built from the captured one so
+// the ledger still passes its own validation (unique refs, transaction id and
+// intent fingerprint), but the daily limit of the fixture is not asserted here.
+const withSecondStaleClaim = () => {
+  const ledger = fixture();
+  const template = ledger.reservations.find((item) => item.paymentRef === EXPIRED_REF);
+  const clone = JSON.parse(JSON.stringify(template));
+  clone.paymentRef = 'fixture-payment-ref-4';
+  clone.transactionId = 'fixture-transaction-4';
+  clone.intentFingerprint = 'fixture-fingerprint-8';
+  clone.requestFingerprint = 'fixture-fingerprint-7';
+  clone.saleRecord = { ...clone.saleRecord, paymentRef: clone.paymentRef, requestFingerprint: clone.requestFingerprint };
+  ledger.reservations.push(clone);
+  Object.assign(ledger, annualHistory.counts(ledger, ledger.dailyDate));
+  return ledger;
+};
+
+test('releaseAllAnnualClaims releases every stale claim in one chained transformation', () => {
+  const ledger = withSecondStaleClaim();
+  assert.equal(annualHistory.validate(ledger), true);
+  const outcome = releaseAllAnnualClaims(ledger, { now: NOW });
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(outcome.released.map((item) => item.paymentRef).sort(), ['fixture-payment-ref-3', 'fixture-payment-ref-4']);
+  assert.equal(outcome.next.revision, ledger.revision + 2);
+  assert.equal(outcome.next.reservedCount, ledger.reservedCount - 2);
+  assert.equal(outcome.next.dailyReservedCount, ledger.dailyReservedCount - 2);
+  assert.equal(outcome.next.takenCount, ledger.takenCount - 2);
+  assert.equal(outcome.next.paidCount, ledger.paidCount);
+  assert.equal(annualHistory.validate(outcome.next), true);
+  for (const ref of ['fixture-payment-ref-3', 'fixture-payment-ref-4']) {
+    assert.equal(outcome.next.reservations.find((item) => item.paymentRef === ref).state, 'FAILED');
+  }
+  // Terminal claims are left exactly as they were.
+  for (const other of [TERMINAL_REF, OTHER_TERMINAL_REF]) {
+    assert.deepEqual(
+      outcome.next.reservations.find((item) => item.paymentRef === other),
+      ledger.reservations.find((item) => item.paymentRef === other),
+    );
+  }
+});
+
+test('releaseAllAnnualClaims returns the input unchanged when nothing is stale', () => {
+  const ledger = fixture();
+  const outcome = releaseAllAnnualClaims(ledger, { now: '2026-09-11T17:00:00.000Z' });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.released.length, 0);
+  assert.equal(outcome.next, ledger);
+});
+
+test('releaseAllAnnualClaims is idempotent on an already released ledger', () => {
+  const first = releaseAllAnnualClaims(fixture(), { now: NOW });
+  assert.equal(first.ok, true);
+  assert.equal(first.released.length, 1);
+  const second = releaseAllAnnualClaims(first.next, { now: NOW });
+  assert.equal(second.ok, true);
+  assert.equal(second.released.length, 0);
+  assert.equal(second.next, first.next);
+});
+
+test('releaseAllAnnualClaims applies the same ledger guards as a single release', () => {
+  assert.equal(releaseAllAnnualClaims({ ...fixture(), counterKey: 'piter_friendship' }, { now: NOW }).code, 'COUNTER_NOT_ANNUAL_HUB');
+  assert.equal(releaseAllAnnualClaims({ ...fixture(), ready: false }, { now: NOW }).code, 'LEDGER_NOT_READY_V3');
+  const invalid = fixture();
+  invalid.reservedCount += 1;
+  assert.equal(releaseAllAnnualClaims(invalid, { now: NOW }).code, 'LEDGER_INVALID');
+});
+
+test('releaseAllAnnualClaims leaves the input ledger untouched', () => {
+  const ledger = withSecondStaleClaim();
+  const snapshot = JSON.stringify(ledger);
+  releaseAllAnnualClaims(ledger, { now: NOW });
+  assert.equal(JSON.stringify(ledger), snapshot);
 });
