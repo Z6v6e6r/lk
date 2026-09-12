@@ -25,6 +25,7 @@ import {
   HUNG_CLAIM_STATES,
   AUDIT_ONLY_CLAIM_STATES,
   buildHungClaimReleaseCommand,
+  hasCreateAttempt,
   planHungClaimRelease,
   summarizeHungClaims,
 } from './lib/hungClaimRelease.mjs';
@@ -99,6 +100,9 @@ const redactedDecision = (operation, decision) => ({
   deadline: decision.deadline,
   releasable: decision.releasable,
   reason: decision.reason ?? 'RELEASABLE',
+  // Reported regardless of the deciding reason: a create attempt is the operator's
+  // manual-reconciliation signal even when a booking id already binds the claim.
+  createAttempt: hasCreateAttempt(operation),
 });
 
 function attachMongoDatabase(url, database) {

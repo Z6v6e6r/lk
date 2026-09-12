@@ -16,6 +16,7 @@ import {
 
 const NOW = '2026-09-12T08:00:00.000Z';
 const ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS;
+const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 // Synthetic identities only: the fixture must never carry a real actor or subscription.
 const ACTOR = 'fixture-actor-0001';
 const SUB = 'fixture-subscription-0001';
@@ -206,24 +207,75 @@ test('the audit summary counts every guard separately', () => {
   assert.deepEqual(summary.byReason, { RELEASABLE: 1, STATE_TERMINAL: 1, PROVIDER_BOOKING_BOUND: 1 });
 });
 
+test('the HUB pre-accept writes the same bounded pending window as the daily gateway', () => {
+  const hooks = read('../nodered_lk1_hub_nodes/gateway_hooks.js');
+  const booking = read('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js');
+  const helpers = hooks.slice(hooks.indexOf('// HUB_HELPERS'), hooks.indexOf('// HUB_PROFILE'));
+  const fragment = hooks.slice(hooks.indexOf('// HUB_PREACCEPT'), hooks.indexOf('// HUB_BOOKING'));
+  assert.match(helpers, /const HUB_PENDING_CONFIRMATION_MS = 15 \* 60 \* 1000;/);
+  const dailyWindow = Number(booking.match(/const PENDING_CONFIRMATION_MS = (\d+) \* 60 \* 1000;/)?.[1]);
+  assert.equal(dailyWindow, 15, 'the daily pending window is the reference');
+
+  const updates = [];
+  const prepareMongoUpdate = (ctx, step, query, update) => {
+    updates.push({ step, query, update });
+    return updates.length;
+  };
+  const now = new Date('2026-09-12T08:00:00.000Z');
+  const ctx = {
+    lk1: {},
+    lk1BeforeCreate: true,
+    operationKey: 'lk1-product:["fixture","fixture-actor","fixture-operation"]',
+    operationId: 'fixture-operation',
+  };
+  new Function('ctx', 'now', 'prepareMongoUpdate', 'HUB_PENDING_CONFIRMATION_MS', fragment)(
+    ctx, now, prepareMongoUpdate, 15 * 60 * 1000,
+  );
+  assert.equal(updates.length, 1);
+  const [{ step, query, update }] = updates;
+  assert.equal(step, 'lk1_create_attempt_saved');
+  assert.deepEqual(query, {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: 'PREPARED',
+    'lk1.createAttemptedAt': { $exists: false },
+  });
+  assert.equal(update.$set.state, 'PENDING_CONFIRMATION');
+  assert.equal(update.$set['lk1.createAttemptedAt'], '2026-09-12T08:00:00.000Z');
+  // The declared deadline is what the reconciler reads instead of its own fallback.
+  assert.equal(update.$set.pendingUntil, '2026-09-12T08:15:00.000Z');
+  assert.deepEqual(update.$unset, { leaseUntil: '' });
+  assert.equal(update.$inc.attempts, 1);
+  assert.equal(hungClaimDeadlineTs({ pendingUntil: update.$set.pendingUntil }), Date.parse('2026-09-12T08:15:00.000Z'));
+});
+
 test('the CLI rehearses offline, refuses --apply with --fixture and never writes in dry-run', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hung-claims-'));
   const fixturePath = path.join(dir, 'fixture.json');
   fs.writeFileSync(fixturePath, `${JSON.stringify({
-    operations: [operation({ _id: 'fixture-doc-1' }), operation({ _id: 'fixture-doc-2', state: 'CONFIRMED' })],
+    operations: [
+      operation({ _id: 'fixture-doc-1' }),
+      operation({ _id: 'fixture-doc-2', state: 'CONFIRMED' }),
+      operation({ _id: 'fixture-doc-3', bookingId: 'fixture-booking-0009', lk1: { createAttemptedAt: '2026-09-11T05:00:00.000Z' } }),
+    ],
     bookingsByExercise: { [EXERCISE]: [] },
   }, null, 2)}\n`);
   const script = fileURLToPath(new URL('../reconcile_hung_subscription_claims.mjs', import.meta.url));
   const out = execFileSync(process.execPath, [script, '--fixture', fixturePath, '--now', NOW], { encoding: 'utf8' });
   const report = JSON.parse(out);
   assert.equal(report.mode, 'dry-run');
-  assert.equal(report.scanned, 2);
+  assert.equal(report.scanned, 3);
   assert.equal(report.releasable.length, 1);
   assert.equal(report.backupPath, null);
-  assert.equal(report.decisions.length, 2);
+  assert.equal(report.decisions.length, 3);
   // Reports carry a stable hash label, never the raw claim id.
   assert.ok(report.decisions.every((item) => /^[0-9a-f]{12}$/.test(item.claim)));
   assert.equal(out.includes('fixture-doc-1'), false);
+  // A create attempt stays visible for manual reconciliation even when a booking id
+  // already binds the claim and decides the reason.
+  const bound = report.decisions.filter((item) => item.reason === 'PROVIDER_BOOKING_BOUND');
+  assert.deepEqual(bound.map((item) => item.createAttempt), [true]);
+  assert.equal(report.decisions.find((item) => item.releasable).createAttempt, false);
   assert.throws(() => execFileSync(process.execPath,
     [script, '--fixture', fixturePath, '--apply', '--backup-dir', dir], { encoding: 'utf8', stdio: 'pipe' }),
   /--apply cannot be combined with --fixture/);

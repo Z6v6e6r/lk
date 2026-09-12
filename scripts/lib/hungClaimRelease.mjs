@@ -139,6 +139,26 @@ export function readCompleteBookingRows(value, { pageSize = PROVIDER_PAGE_SIZE }
 }
 
 /**
+ * Marks of a claim that already attempted a provider CREATE. An accepted CREATE may
+ * have created the game even when no booking id was recorded, so the runtime never
+ * resolves such a claim by TTL alone; the reconciler keeps the same rule and lists
+ * these claims for a game-side manual reconciliation instead.
+ */
+export const CREATE_ATTEMPT_FIELDS = Object.freeze([
+  'lk1.createAttemptedAt',
+  'lk1.bookingAttemptedAt',
+  'createAttemptedAt',
+]);
+
+/** True when the claim carries any recorded create attempt. */
+export function hasCreateAttempt(operation) {
+  return CREATE_ATTEMPT_FIELDS.some((field) => {
+    const [head, tail] = field.split('.');
+    return tail ? toStr(operation?.[head]?.[tail]) : toStr(operation?.[head]);
+  });
+}
+
+/**
  * Decide one claim. `bookings` is the provider readback for the claim's exercise:
  * pass the parsed admin payload (array or `content`/`items` envelope), or null when
  * the provider could not be read — a missing readback never releases.
@@ -166,6 +186,7 @@ export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT
     return deny(TERMINAL_CLAIM_STATES.includes(base.state) ? 'STATE_TERMINAL' : 'STATE_NOT_HUNG');
   }
   if (claimBookingId(operation)) return deny('PROVIDER_BOOKING_BOUND');
+  if (hasCreateAttempt(operation)) return deny('CREATE_ATTEMPT_REQUIRES_MANUAL_RECONCILIATION');
   if (!base.actorClientId || !base.clientSubscriptionId) return deny('IDENTITY_UNRESOLVED');
   const deadlineTs = hungClaimDeadlineTs(operation, { ttlMs });
   const deadline = deadlineTs === null ? null : new Date(deadlineTs).toISOString();

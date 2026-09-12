@@ -149,6 +149,30 @@ const lk1Checkout = (ctx) => {
 
 
 // HUB_STEPS
+// A HUB claim declares its own pending window (`pendingUntil`). Once it has passed and the
+// record never bound a booking, the claim is no longer a live reservation: a retry is
+// reconciled against the provider instead of answering "pending" indefinitely. A create
+// attempt keeps the manual path — an accepted CREATE may already have created the game.
+const LK1_EXPIRED_PENDING_RECONCILE = "lk1_ingress_expired_pending";
+const LK1_EXPIRED_PENDING_RELEASE = "lk1_expired_pending_release";
+const lk1ExpiredUnboundClaim = (operation, nowMs) => {
+  if (!isObj(operation) || operation.state !== "PENDING_CONFIRMATION") return false;
+  if (toStr(operation.bookingId) || toStr(operation.upstreamBookingId)) return false;
+  if (toStr(operation.lk1?.createAttemptedAt) || toStr(operation.lk1?.bookingAttemptedAt)) return false;
+  const pendingUntil = Date.parse(toStr(operation.pendingUntil) || "");
+  return Number.isFinite(pendingUntil) && pendingUntil <= nowMs;
+};
+// A replay may finish a binding that the provider already holds, but it must never open a
+// new money leg: a claim without a recorded checkout and with a price still to pay is left
+// pending instead of calling the payment-products read.
+const lk1ReplayMayFinishBoundBooking = (operation) => {
+  const decision = operation?.lk1?.decision;
+  if (!isObj(decision) || !isObj(decision.benefit)) return false;
+  if (!Number.isSafeInteger(decision.benefit.finalPriceMinor)) return false;
+  return Boolean(decision.benefit.finalPriceMinor === 0
+    || isObj(operation.lk1.checkout) || toStr(operation.lk1.transactionId));
+};
+
 if (ctx.step === "lk1_ingress_operation_find") {
   // Pure retry lookup, never the mutating operation_find/checkout continuation.
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) {
@@ -180,6 +204,14 @@ if (ctx.step === "lk1_ingress_operation_find") {
       || quote.decision.benefit.finalPriceMinor < 0 || quote.decision.benefit.finalPriceMinor > 1_000_000) {
       return lk1Stop(ctx, "LK1_REQUEST_IDENTITY_CHANGED");
     }
+    if (lk1ExpiredUnboundClaim(operation, Date.now())) {
+      if (!lk1ReplayMayFinishBoundBooking(operation)) {
+        return lk1Stop(ctx, "LK1_EXPIRED_PENDING_PAYMENT_RECONCILIATION_REQUIRED");
+      }
+      ctx.lk1ExpiredPendingOperation = operation;
+      return prepareAdminGet(ctx, LK1_EXPIRED_PENDING_RECONCILE,
+        `/api/v1/exercises/${encodeURIComponent(operation.exerciseId)}/bookings?showCancelled=true&size=200`);
+    }
     if (operation.state !== "CONFIRMED" || typeof operation.bookingId !== "string" || !operation.bookingId.trim()
       || typeof operation.exerciseId !== "string" || !operation.exerciseId.trim()
       || operation.exerciseId.startsWith("preflight:") || quote.target.eventId !== operation.exerciseId) {
@@ -205,6 +237,77 @@ if (ctx.step === "lk1_ingress_operation_find") {
     ctx.confirmedBookingId = operation.bookingId;
     return lk1Finish(ctx);
   }
+}
+
+if (ctx.step === LK1_EXPIRED_PENDING_RECONCILE) {
+  const operation = ctx.lk1ExpiredPendingOperation;
+  if (!isObj(operation) || !isHttpOk(msg.statusCode) || !hasCompleteBookingList(msg.payload)) {
+    return lk1Stop(ctx, "LK1_EXPIRED_PENDING_RECONCILIATION_UNAVAILABLE");
+  }
+  const actorClientId = normalizeId(operation.actorClientId);
+  const clientSubscriptionId = normalizeId(operation.clientSubscriptionId);
+  const exerciseId = normalizeId(operation.exerciseId);
+  if (!actorClientId || !clientSubscriptionId || !exerciseId) {
+    return lk1Stop(ctx, "LK1_EXPIRED_PENDING_IDENTITY_UNRESOLVED");
+  }
+  const actorBookings = extractItems(msg.payload).filter((booking) => (
+    isObj(booking) && normalizeId(bookingClientId(booking)) === actorClientId
+  ));
+  // One rule with the daily path: a provider row without a resolvable subscription cannot
+  // prove that nothing was created (a paid booking carries no subscription), so the claim
+  // stays and the manual path owns it.
+  if (actorBookings.some((booking) => !bookingSubscriptionId(booking))) {
+    return lk1Stop(ctx, "LK1_EXPIRED_PENDING_SUBSCRIPTION_UNRESOLVED");
+  }
+  const match = actorBookings.find((booking) => !isInactiveBooking(booking)
+    && normalizeId(bookingSubscriptionId(booking)) === clientSubscriptionId
+    && (!bookingExerciseId(booking) || normalizeId(bookingExerciseId(booking)) === exerciseId));
+  if (match) {
+    // The provider does hold a booking for this claim: bind it and let the ordinary
+    // confirmation path re-verify it against the user-scoped read. Never repeat the POST.
+    delete ctx.lk1ExpiredPendingOperation;
+    ctx.exerciseId = operation.exerciseId;
+    ctx.confirmedBookingId = null;
+    ctx.immediateBookingId = bookingId(match);
+    ctx.lk1 = JSON.parse(JSON.stringify(operation.lk1));
+    ctx.subscriptionVisitCount = ctx.lk1?.decision?.subscriptionVisitCount;
+    return prepareUserGet(ctx, "confirmation_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
+  }
+  // Nothing was created for this claim: release it with a compare-and-swap on the observed
+  // window, and let the client start a fresh attempt with a new operation id.
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, LK1_EXPIRED_PENDING_RELEASE, {
+    _id: operation._id,
+    operationId: operation.operationId,
+    state: "PENDING_CONFIRMATION",
+    pendingUntil: operation.pendingUntil,
+    $and: [
+      { $or: [{ bookingId: { $exists: false } }, { bookingId: null }, { bookingId: "" }] },
+      { $or: [{ upstreamBookingId: { $exists: false } }, { upstreamBookingId: null }, { upstreamBookingId: "" }] },
+    ],
+  }, {
+    $set: {
+      state: "RELEASED",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+      reconciliation: {
+        source: "hub_expired_pending_viva_readback",
+        decision: "SAFE_TO_RELEASE",
+        reconciledAt: nowIso,
+        observedPendingUntil: operation.pendingUntil ?? null,
+      },
+    },
+    $unset: { pendingUntil: "", leaseUntil: "" },
+  });
+}
+
+if (ctx.step === LK1_EXPIRED_PENDING_RELEASE) {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return lk1Stop(ctx, "LK1_EXPIRED_PENDING_RELEASE_CONFLICT");
+  }
+  return finishPending(ctx, "Просроченный резерв снят, повторите запись", {
+    code: "LK1_EXPIRED_PENDING_RELEASED",
+  });
 }
 
 if (ctx.step === "lk1_money_owned_subscriptions") {

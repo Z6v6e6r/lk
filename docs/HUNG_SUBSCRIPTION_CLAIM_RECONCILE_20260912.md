@@ -59,6 +59,7 @@ Guards (each has its own reason code in the report):
 | `STATE_REQUIRES_MANUAL_RECONCILIATION` | `PRECREATE_*` state: an accepted CREATE may already have created the game, so only a game-side manual reconciliation may release it (the scan reports it, never writes) |
 | `STATE_NOT_HUNG` | state outside both lists |
 | `PROVIDER_BOOKING_BOUND` | claim carries `bookingId`/`upstreamBookingId`; the provider owns it |
+| `CREATE_ATTEMPT_REQUIRES_MANUAL_RECONCILIATION` | claim carries `lk1.createAttemptedAt`/`lk1.bookingAttemptedAt`: an accepted CREATE may already have created the game, so only a game-side manual reconciliation may resolve it |
 | `IDENTITY_UNRESOLVED` | no actor or no subscription on the record |
 | `DEADLINE_MISSING` | no `pendingUntil`/`leaseUntil` and no `createdAt`/`updatedAt` |
 | `DEADLINE_NOT_REACHED` | still inside the claim window |
@@ -156,9 +157,44 @@ so the affected player can simply book again.
 
 ## Residual work (not in this change)
 
-- `scripts/nodered_lk1_hub_nodes/gateway_hooks.js` (`// HUB_PREACCEPT`) should write
-  `pendingUntil` when it moves a HUB claim to `PENDING_CONFIRMATION`, so the reconciler has
-  a declared deadline instead of the TTL fallback. This is a reviewed HUB flow packet
-  (`patch_live_lk1_hub.mjs`, composition contract, live preimage), so it ships separately.
-- The price preview and HUB usage readers still count an *unexpired* claim; that is
-  intended (double-spend protection).
+- ~~`scripts/nodered_lk1_hub_nodes/gateway_hooks.js` (`// HUB_PREACCEPT`) should write
+  `pendingUntil`~~ — implemented in `codex/hub-pending-deadline-20260912`: the HUB pre-accept now
+  writes `pendingUntil` with `HUB_PENDING_CONFIRMATION_MS` (15 minutes, the same window the daily
+  gateway uses), so a HUB claim carries a declared deadline instead of relying on the TTL
+  fallback. It still needs the HUB flow packet (`patch_live_lk1_hub.mjs`, composition contract,
+  fresh live preimage) to reach `147`.
+- ~~Still open: the HUB request path (`lk1_operation_find`) answers "pending" indefinitely for a
+  join claim that has no booking id yet~~ — implemented in `codex/hub-pending-deadline-20260912`
+  as a bounded retry in `lk1_ingress_operation_find`:
+  - only an expired (`pendingUntil` passed), never-bound claim **without** a create attempt enters
+    the branch;
+  - the provider readback is exercised once: an active booking of the same actor and subscription
+    in the claim's exercise is **bound** (`immediateBookingId`) and the ordinary confirmation path
+    re-verifies it against the user-scoped read — the POST is never repeated;
+  - a provider row without a resolvable subscription, an incomplete readback or a failed read keeps
+    the claim (the same rule the daily path uses);
+  - a claim with no created booking is released with a compare-and-swap on the observed window and
+    the client is asked to retry, so a hung join no longer answers "pending" forever;
+  - a claim whose price is still to pay and which has no recorded checkout is kept pending instead:
+    a replay never opens a new money leg.
+  Covered by `npm run test:hub-expired-pending` (8 offline cases over the sliced fragment).
+- HUB overlay flow delivery **applied on 147** at 2026-09-12 13:16 MSK after exact-head CI passed.
+  The fresh preimage was `f6c6c9e2da8a751a28075e44521662f794556052b96c17bed3fc00f59f5b502d`
+  (4,799 nodes); the deployed candidate is `e672b79ae011f647d5156d840315543b88e471880236374c2aea2eaf0239f223`.
+  Only `lk_subscription_booking_router_20260804.func` changed; the verified function digest is
+  `4eb1e642e00526f5c510cb33b0c4f5a964c0b8642d830da700bc6050d3836432`.
+
+  `scripts/prepare_lk1_hub_overlay_migration.mjs` remained the migration composer because live
+  already carried the older HUB overlay; refreshing raw `HUB_PREIMAGES` would have attempted a
+  second injection. Its whole-flow/gateway pins, absent-marker checks and exact-graph contract
+  admitted only that one function field. Apply stored protected preimage/contract/candidate backups
+  under `/root/.node-red/.padlhub-reviewed-flow-backups/` with deployment id
+  `lk1-hub-overlay-pending-recovery-20260912`; Node-RED restarted once (`150 → 151`) and remained
+  online through the 15-minute soak. Post-soak check confirmed active candidate SHA, marker counts
+  (deadline handler 1, reconcile handler 1), active timer and service `ExecMainStatus=0`.
+
+  The short-lived deployment lease expired and was safely cleared by the reviewed runtime's normal
+  preflight lease cleanup. A preflight against the original source→candidate contract correctly
+  refuses afterwards because the candidate is now active; this is expected, not drift.
+- The price preview and HUB usage readers still count an *unexpired* claim; that is intended
+  (double-spend protection).

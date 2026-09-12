@@ -1,6 +1,11 @@
 // HUB_HELPERS
 const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01";
 
+// Bounded pending window for a HUB claim, the same contract the daily gateway uses:
+// after it passes, the claim is no longer a live reservation and the request path may
+// reconcile it against the provider instead of answering "pending" indefinitely.
+const HUB_PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
+
 const MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE = "Europe/Moscow";
 
 const isValidDateKey = (value) => {
@@ -265,6 +270,7 @@ if (ctx.lk1 && ctx.lk1BeforeCreate === true) {
       _id: ctx.operationKey, operationId: ctx.operationId, state: "PREPARED",
       "lk1.createAttemptedAt": { $exists: false },
     }, { $set: { state: "PENDING_CONFIRMATION", "lk1.createAttemptedAt": ctx.lk1.createAttemptedAt,
+      pendingUntil: new Date(now.getTime() + HUB_PENDING_CONFIRMATION_MS).toISOString(),
       updatedAt: now.toISOString() }, $unset: { leaseUntil: "" }, $inc: { attempts: 1 } });
   }
 
