@@ -62,7 +62,8 @@ Guards (each has its own reason code in the report):
 | `IDENTITY_UNRESOLVED` | no actor or no subscription on the record |
 | `DEADLINE_MISSING` | no `pendingUntil`/`leaseUntil` and no `createdAt`/`updatedAt` |
 | `DEADLINE_NOT_REACHED` | still inside the claim window |
-| `PROVIDER_EVIDENCE_MISSING` | no complete Viva readback for that exercise |
+| `PROVIDER_EVIDENCE_MISSING` | the exercise readback failed, timed out or returned nothing usable |
+| `PROVIDER_EVIDENCE_INCOMPLETE` | the readback cannot be proven complete: no list, a page that declares more rows, `last: false`/`hasNext: true`, a later page, or a bare array that fills the requested `size=200` page |
 | `PROVIDER_SUBSCRIPTION_ID_UNRESOLVED` | the provider shows a live booking of this actor without a resolvable subscription |
 | `PROVIDER_BOOKING_ACTIVE` | provider still shows an active booking for actor + subscription |
 
@@ -77,6 +78,37 @@ Guards (each has its own reason code in the report):
   to the batch an operator wants to review.
 
 Tests: `npm run test:hung-claim-release`.
+
+## How a release proves that no booking exists
+
+The decision never trusts the local record alone. In order, and each failing step keeps the claim:
+
+1. **Local state.** Only `PREPARED` and `PENDING_CONFIRMATION` are candidates. `CONFIRMED`,
+   `FAILED`, `RELEASED` stop at `STATE_TERMINAL`; `PRECREATE_*` stop at
+   `STATE_REQUIRES_MANUAL_RECONCILIATION` because an accepted CREATE may already have created
+   the game.
+2. **Provider binding.** A claim that already carries `bookingId`/`upstreamBookingId` is the
+   provider's to release (`PROVIDER_BOOKING_BOUND`).
+3. **Identity.** Actor and subscription instance must both be present (`IDENTITY_UNRESOLVED`).
+4. **Deadline.** `pendingUntil`, else `leaseUntil`, else `updatedAt`/`createdAt` + TTL. No
+   timestamp evidence at all means `DEADLINE_MISSING` — such a claim is never released
+   automatically. A deadline in the future means `DEADLINE_NOT_REACHED`.
+5. **Provider readback.** `GET /api/v1/exercises/{exerciseId}/bookings?showCancelled=true&size=200`
+   with the service token, 10 s timeout, no redirects, cached per run. A failed read, a payload
+   without a list, or a page that cannot be proven complete gives `PROVIDER_EVIDENCE_MISSING` /
+   `PROVIDER_EVIDENCE_INCOMPLETE` — "could not verify" always means "do not release".
+6. **Ownership of the readback.** Any live row of this actor whose subscription cannot be
+   resolved gives `PROVIDER_SUBSCRIPTION_ID_UNRESOLVED` (the same rule the runtime applies),
+   and any live row matching actor + subscription gives `PROVIDER_BOOKING_ACTIVE`. Cancelled,
+   archived, failed and refunded rows do not protect the claim.
+7. **Compare-and-swap.** The write repeats `_id + operationId + state + updatedAt`; a request
+   path that touched the claim in the meantime wins and the claim is left alone.
+
+Even a wrong release cannot invent capacity: a claim is a local reservation, Viva stays the
+authority, and the runtime's usage reader also counts provider bookings that no claim covers, so
+a real booking keeps consuming the limit regardless of a released local claim. The bounded
+residual case is a booking the readback genuinely cannot show (for example an exercise holding
+more than the requested page of rows); that case is exactly what step 5 now refuses.
 
 ## Live result (2026-09-12, `147`, owner-approved)
 

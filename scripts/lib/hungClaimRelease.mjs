@@ -107,11 +107,35 @@ export function isActiveBooking(value) {
 export function extractBookingRows(value) {
   if (Array.isArray(value)) return value;
   if (value && typeof value === 'object') {
-    for (const key of ['content', 'data', 'items', 'bookings']) {
+    for (const key of ['content', 'items', 'records', 'bookings', 'data']) {
       if (Array.isArray(value[key])) return value[key];
     }
   }
   return null;
+}
+
+/** Page size this reconciler requests from the provider, and therefore its truncation bound. */
+export const PROVIDER_PAGE_SIZE = 200;
+
+/**
+ * Rows of one exercise readback only when the payload proves the list is complete.
+ * Mirrors the runtime's own completeness rule and additionally refuses a bare array
+ * that fills the requested page, because a truncated list could hide the very booking
+ * this decision has to see. Returns null when completeness cannot be proven.
+ */
+export function readCompleteBookingRows(value, { pageSize = PROVIDER_PAGE_SIZE } = {}) {
+  if (Array.isArray(value)) return value.length >= pageSize ? null : value;
+  if (!value || typeof value !== 'object') return null;
+  const rows = extractBookingRows(value);
+  if (!rows) return null;
+  const total = Number(value.totalElements ?? value.totalCount);
+  const page = Number(value.number ?? value.page);
+  const totalPages = Number(value.totalPages);
+  if (Number.isFinite(total) && total > rows.length) return null;
+  if (value.last === false || value.hasNext === true) return null;
+  if (Number.isFinite(page) && Number.isFinite(totalPages) && page + 1 < totalPages) return null;
+  if (rows.length >= pageSize) return null;
+  return rows;
 }
 
 /**
@@ -147,8 +171,10 @@ export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT
   const deadline = deadlineTs === null ? null : new Date(deadlineTs).toISOString();
   if (deadlineTs === null) return deny('DEADLINE_MISSING');
   if (deadlineTs > nowTs) return deny('DEADLINE_NOT_REACHED', deadline);
-  const rows = extractBookingRows(bookings);
-  if (!rows) return deny('PROVIDER_EVIDENCE_MISSING', deadline);
+  const rows = readCompleteBookingRows(bookings);
+  if (!rows) {
+    return deny(Array.isArray(bookings) || bookings ? 'PROVIDER_EVIDENCE_INCOMPLETE' : 'PROVIDER_EVIDENCE_MISSING', deadline);
+  }
   if (!base.exerciseId) return deny('EXERCISE_ID_MISSING', deadline);
   const actor = normalizeId(base.actorClientId);
   const subscription = normalizeId(base.clientSubscriptionId);

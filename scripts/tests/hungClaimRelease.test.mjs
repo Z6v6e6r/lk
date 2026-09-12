@@ -96,14 +96,48 @@ test('provider-bound, terminal and foreign states keep their own reason code', (
   }
 });
 
-test('missing or partial provider evidence never releases a claim', () => {
-  for (const bookings of [null, undefined, {}, { totalElements: 0 }]) {
+test('missing or unproven provider evidence never releases a claim', () => {
+  // No readback at all.
+  for (const bookings of [null, undefined]) {
     const decision = planHungClaimRelease({ operation: operation(), bookings, now: NOW, ttlMs });
     assert.equal(decision.releasable, false);
     assert.equal(decision.reason, 'PROVIDER_EVIDENCE_MISSING');
   }
+  // A readback that carries no provable complete list.
+  for (const bookings of [{}, { totalElements: 0 }, { items: 0 }, 'text']) {
+    const decision = planHungClaimRelease({ operation: operation(), bookings, now: NOW, ttlMs });
+    assert.equal(decision.releasable, false);
+    assert.equal(decision.reason, 'PROVIDER_EVIDENCE_INCOMPLETE');
+  }
   const envelope = planHungClaimRelease({ operation: operation(), bookings: { content: [] }, now: NOW, ttlMs });
   assert.equal(envelope.releasable, true);
+});
+
+test('a truncated or paginated provider page keeps the claim', () => {
+  const row = booking({ clientId: 'fixture-actor-0002' });
+  const cases = [
+    // A bare array that fills the requested page size cannot be distinguished from a cut list.
+    Array.from({ length: 200 }, () => structuredClone(row)),
+    { content: Array.from({ length: 200 }, () => structuredClone(row)) },
+    { content: [row], totalElements: 300 },
+    { content: [row], totalCount: 2 },
+    { content: [row], last: false },
+    { content: [row], hasNext: true },
+    { content: [row], number: 0, totalPages: 3 },
+  ];
+  for (const bookings of cases) {
+    const decision = planHungClaimRelease({ operation: operation(), bookings, now: NOW, ttlMs });
+    assert.equal(decision.releasable, false, `expected no release for ${JSON.stringify(bookings).slice(0, 60)}`);
+    assert.equal(decision.reason, 'PROVIDER_EVIDENCE_INCOMPLETE');
+  }
+  // The same rows on a proven final page are a valid readback.
+  const finalPage = planHungClaimRelease({
+    operation: operation(),
+    bookings: { content: [row], totalElements: 1, totalPages: 1, number: 0, last: true },
+    now: NOW,
+    ttlMs,
+  });
+  assert.equal(finalPage.releasable, true);
 });
 
 test('an active booking of the same actor and subscription protects the claim', () => {

@@ -25,7 +25,6 @@ import {
   HUNG_CLAIM_STATES,
   AUDIT_ONLY_CLAIM_STATES,
   buildHungClaimReleaseCommand,
-  extractBookingRows,
   planHungClaimRelease,
   summarizeHungClaims,
 } from './lib/hungClaimRelease.mjs';
@@ -127,7 +126,9 @@ const bookingCache = new Map();
 async function readExerciseBookings(exerciseId, token) {
   const key = String(exerciseId || '').toLowerCase();
   if (bookingCache.has(key)) return bookingCache.get(key);
-  let rows = null;
+  // The raw payload is cached, not just its rows: the release decision needs the
+  // page envelope to prove the list is complete.
+  let payload = null;
   try {
     const response = await fetch(`${vivaBase}/api/v1/exercises/${encodeURIComponent(exerciseId)}/bookings?showCancelled=true&size=200`, {
       method: 'GET',
@@ -135,19 +136,19 @@ async function readExerciseBookings(exerciseId, token) {
       signal: AbortSignal.timeout(10000),
       redirect: 'error',
     });
-    if (response.ok) rows = extractBookingRows(await response.json());
+    if (response.ok) payload = await response.json();
   } catch {
-    rows = null;
+    payload = null;
   }
-  bookingCache.set(key, rows);
-  return rows;
+  bookingCache.set(key, payload);
+  return payload;
 }
 
 async function loadScan() {
   if (fixturePath) {
     const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
     const map = new Map(Object.entries(fixture.bookingsByExercise || {})
-      .map(([key, rows]) => [String(key).toLowerCase(), extractBookingRows(rows)]));
+      .map(([key, value]) => [String(key).toLowerCase(), value]));
     return {
       operations: Array.isArray(fixture.operations) ? fixture.operations : [],
       bookingsByExercise: map,
