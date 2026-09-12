@@ -1,7 +1,6 @@
 # Node-RED packet: split participant share is never fabricated
 
-Status: **candidate built and verified, not applied.** Owner approval is required before any
-live write (CRITICAL, live Node-RED on `lk-primary-147`).
+Status: **applied to live Node-RED on `lk-primary-147` (2026-09-12) and verified.**
 
 ## Objective
 
@@ -99,3 +98,23 @@ count, zero broken wires and zero broken links.
   `lk1_subscription_dev_source_authorization.json`) describe the `main` generation candidate and
   this packet does not rewrite them; the DEV authorization bindings remain the owner's.
 - Frontend bundles, game records, CUP campaign configuration and nginx.
+
+## Applied (2026-09-12)
+
+- wrapper: `NODE_RED_SPLIT_NOMINAL_SHARE_DEPLOY=CONFIRM_147 bash scripts/deploy_nodered_split_nominal_share_147.sh`
+- deployed source: branch `codex/nodered-split-fail-closed-20260912` at `22131cb23994fa1348d46d07d0633ac31fa7b5b2`
+- preimage `e5d64351…` → candidate `f6c6c9e2…`; installed-flow readback equals the candidate
+- installed body hashes: create `b69eb36c138d5b9ae6ac020202148ca6d86f7495b4046811f7dde1473ea0ef9d`,
+  join `8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074`,
+  router `d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b`
+- rollback artifacts (byte-equal to the preimage, verified):
+  `/root/.node-red/.padlhub-reviewed-flow-backups/flows-pre-split-nominal-share-20260912T081522+0300.json`
+  and `contract-split-nominal-share-20260912T081522+0300.json`
+- postcheck: Node-RED online under PM2, `/lk/games` probes answer 200, the repaired records still
+  report 1 000 / 4 000 and 3 000 / 12 000, no new error-level flow logs
+- recovery: copy the flow backup over `/root/.node-red/flows.json` and `pm2 restart node-red`;
+  a helper-based rollback needs the reviewed helper re-uploaded, because the wrapper removes its
+  remote stage after a successful apply
+- deliberately not run: a live create/join probe, because it would create a real Viva booking and
+  transaction; the participant-share behaviour is covered by the exact installed bytes (identical
+  to the candidate that passed the local regressions) and by the control experiment above
