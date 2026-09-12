@@ -163,10 +163,25 @@ so the affected player can simply book again.
   gateway uses), so a HUB claim carries a declared deadline instead of relying on the TTL
   fallback. It still needs the HUB flow packet (`patch_live_lk1_hub.mjs`, composition contract,
   fresh live preimage) to reach `147`.
-- Still open: the HUB request path (`lk1_operation_find`) answers "pending" indefinitely for a
-  join claim that has no booking id yet, because it never applies the daily path's expired-pending
-  reconciliation. A bounded branch there would let the player's own retry bind a booking that the
-  provider does show, or release the claim, in about 15 minutes instead of waiting for the
-  scheduled reconciler.
+- ~~Still open: the HUB request path (`lk1_operation_find`) answers "pending" indefinitely for a
+  join claim that has no booking id yet~~ — implemented in `codex/hub-pending-deadline-20260912`
+  as a bounded retry in `lk1_ingress_operation_find`:
+  - only an expired (`pendingUntil` passed), never-bound claim **without** a create attempt enters
+    the branch;
+  - the provider readback is exercised once: an active booking of the same actor and subscription
+    in the claim's exercise is **bound** (`immediateBookingId`) and the ordinary confirmation path
+    re-verifies it against the user-scoped read — the POST is never repeated;
+  - a provider row without a resolvable subscription, an incomplete readback or a failed read keeps
+    the claim (the same rule the daily path uses);
+  - a claim with no created booking is released with a compare-and-swap on the observed window and
+    the client is asked to retry, so a hung join no longer answers "pending" forever;
+  - a claim whose price is still to pay and which has no recorded checkout is kept pending instead:
+    a replay never opens a new money leg.
+  Covered by `npm run test:hub-expired-pending` (8 offline cases over the sliced fragment).
+- Flow delivery for both HUB source changes is **not applied**: the reviewed packet pins
+  (`HUB_PREIMAGES` in `patch_live_lk1_hub.mjs`) no longer match the live bodies of all four target
+  nodes (checked 2026-09-12: split, gateway, finalize, evaluator all differ), so the packet needs a
+  fresh read-only pull (`npm run nodered:modular:pull-147 -- <private workspace>`), refreshed pins
+  and a revalidated composition contract before an apply.
 - The price preview and HUB usage readers still count an *unexpired* claim; that is intended
   (double-spend protection).
