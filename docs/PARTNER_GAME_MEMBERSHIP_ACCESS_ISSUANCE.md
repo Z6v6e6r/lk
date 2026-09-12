@@ -28,9 +28,17 @@
 
 ## 1. Входные данные
 
-Соберите по `ACCESS_REQUEST.md`: контакты, окружения, CSR, исходящие IP, игры и станции
-с вместимостью, желаемый `clientId`/`keyId`, канал передачи секрета. Без CSR и
-статических адресов выдача не начинается.
+Минимальный набор от партнёра (см. `ACCESS_REQUEST.md`): **исходящий IP**, **подтверждение
+конкретной игры** и **контакт для передачи секретов** (+ контакт для инцидентов, если
+есть). `clientId`, `keyId`, игру, вместимость и `audience` определяем мы; CSR не нужен,
+если сертификат выпускаем мы (§3).
+
+Необязательные, но полезные сведения: ожидаемая нагрузка (текущие лимиты — 2 rps и 4
+соединения на клиента, правится в ingress), планируемая дата запуска, нужен ли сразу
+production или сначала test.
+
+Без исходящего адреса выдача возможна технически, но запросы партнёра будут получать `403`
+на ingress: адрес обязателен для допуска, а не для выпуска сертификата.
 
 ## 2. Запись клиента в keyring
 
@@ -71,19 +79,74 @@ const k=JSON.parse(env.LK_PARTNER_GAME_API_KEYRING_JSON);
 for(const [id,c] of Object.entries(k))console.log(id,"enabled="+c.enabled,"scopes="+c.scopes.join(","),"games="+Object.keys(c.games).join(","),"keys="+Object.keys(c.keys).join(","));'
 ```
 
-## 3. Подпись клиентского сертификата
+## 3. Выпуск клиентского сертификата
 
-Приватный ключ партнёра у нас не появляется: только CSR.
+Два варианта. По умолчанию — **мы генерируем пару**, потому что это не требует от партнёра
+ничего, кроме контакта для передачи.
+
+### 3a. Ключ генерируем мы (по умолчанию)
+
+Все команды выполняются там, где лежит CA (§3c), в отдельном рабочем каталоге `0700`:
 
 ```sh
-openssl req -in partner.csr -noout -subject -verify      # CSR валиден и CN совпадает
-openssl x509 -req -in partner.csr -CA partner-client-ca.crt -CAkey partner-client-ca.key \
-  -CAcreateserial -days 365 -sha256 -out partner-client.crt
-openssl verify -CAfile partner-client-ca.crt partner-client.crt
+CID=<clientId>                       # напр. partner-example
+openssl ecparam -name prime256v1 -genkey -noout -out "$CID.key"   # или rsa:3072
+openssl req -new -key "$CID.key" -subj "/CN=$CID" -out "$CID.csr"
+printf 'extendedKeyUsage=clientAuth\n' > "$CID.ext"
+openssl x509 -req -in "$CID.csr" -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -days 365 -sha256 -extfile "$CID.ext" -out "$CID.crt"
+openssl verify -CAfile ca.pem "$CID.crt"
+
+# комплект для партнёра: сертификат + ключ в одном защищённом контейнере
+openssl pkcs12 -export -inkey "$CID.key" -in "$CID.crt" \
+  -name "$CID" -out "$CID.p12"                     # пароль спросит openssl: задать свой
+chmod 600 "$CID.key" "$CID.p12"
 ```
 
-Партнёру возвращаются `partner-client.crt` и `partner-client-ca.crt`. Сертификат привязан
-к одному окружению и одному клиенту.
+Правила:
+
+1. Пароль от `.p12` передаётся **отдельным каналом** от файла (файл — в защищённое
+   хранилище/мессенджер, пароль — голосом или СМС).
+2. После передачи партнёру удалить у себя `$CID.key`, `$CID.csr` и `$CID.p12`
+   (`shred -u`), оставив только публичный `$CID.crt` и запись о выпуске. Наша копия
+   приватного ключа существовать не должна.
+3. В ingress уходит `$CID.crt` (из него генератор берёт лист и SPKI-пин).
+
+### 3b. Ключ генерирует партнёр (CSR)
+
+Если партнёр не готов передавать приватный ключ:
+
+```sh
+openssl req -in partner.csr -noout -subject -verify        # CSR валиден, CN совпадает с clientId
+openssl x509 -req -in partner.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -days 365 -sha256 -extfile partner.ext -out partner.crt  # partner.ext: extendedKeyUsage=clientAuth
+openssl verify -CAfile ca.pem partner.crt
+```
+
+Партнёру возвращаются `partner.crt` и `ca.pem`.
+
+### 3c. Хранение CA
+
+Ключ клиентского CA (`ca.key`) — корень доверия для всех партнёрских сертификатов. Правила:
+
+- **никогда** не в `/tmp`, не в репозитории, не на ingress-хосте: у кого есть `ca.key`,
+  тот может выпустить себе клиентский сертификат;
+- текущее место: `/root/padlhub-partner-client-ca/` на резервном хосте (`lk-reserve-89`),
+  каталог `0700 root:root`, `ca.key` `0600`. Резервный хост выбран намеренно: там **нет**
+  keyring с HMAC-секретами, поэтому одного `ca.key` для вызова API недостаточно;
+- копии публичного `ca.pem` лежат в ingress (`/etc/nginx/partner-game-membership-api-v02/client-ca.pem`)
+  и передаются партнёру;
+- вторая (offline) копия `ca.key` — решение владельца: рекомендуется зашифрованный экспорт
+  в корпоративном хранилище секретов;
+- **потеря `ca.key`** означает невозможность выпустить или продлить сертификаты: придётся
+  создавать новый CA, перевыпускать сертификаты всем клиентам и менять
+  `ssl_client_certificate` в ingress.
+
+Проверка места и прав:
+
+```sh
+ssh lk-reserve-89 'ls -ld /root/padlhub-partner-client-ca; ls -l /root/padlhub-partner-client-ca'
+```
 
 **Известный пробел:** nginx доверяет клиентскому CA (`ssl_client_certificate` +
 `ssl_verify_client on`) и не проверяет CRL/OCSP. Отзыв отдельного сертификата до

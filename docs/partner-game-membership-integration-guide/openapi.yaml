@@ -5,7 +5,7 @@ info:
   description: >
     Три метода, которыми доверенный M2M-клиент добавляет внешнего игрока в открытую
     игру PadlHub и создаёт booking в Viva на технического клиента. Расчёт происходит
-    у партнёра; PadlHub денег не проводит, а сохраняет проекцию PAID/EXTERNAL_PARTNER.
+    на вашей стороне; PadlHub денег не проводит, а сохраняет проекцию PAID/EXTERNAL_PARTNER.
     Базовый URL, credentials и mTLS-сертификат выдаются отдельно; в спецификации их нет.
 servers:
   - url: https://{issuedHost}
