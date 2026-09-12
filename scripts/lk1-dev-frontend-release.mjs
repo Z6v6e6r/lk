@@ -84,7 +84,9 @@ async function main() {
     || process.env.LK1_DEV_FRONTEND_APPLY !== 'CONFIRM_RESERVE_89'
     || process.env.LK1_DEV_APPROVED_SOURCE !== provenance.sourceCommit) throw new Error('Exact clean source and explicit reserve DEV owner grant required');
   if (process.env.LK_FRONTEND_SMOKE_URL !== 'https://padlhub.ru/lk_dev') throw new Error('Approved LK1 DEV UI smoke required');
-  for (const key of ['LK_FRONTEND_SMOKE_SELECTOR', 'LK_FRONTEND_SMOKE_OPEN_SELECTOR', 'LK_FRONTEND_SMOKE_RESULT_SELECTOR']) {
+  const selectorOnly = process.env.LK_FRONTEND_SMOKE_READ_ONLY === 'SELECTOR_ONLY';
+  for (const key of ['LK_FRONTEND_SMOKE_SELECTOR', ...(selectorOnly
+    ? [] : ['LK_FRONTEND_SMOKE_OPEN_SELECTOR', 'LK_FRONTEND_SMOKE_RESULT_SELECTOR'])]) {
     if (!process.env[key]) throw new Error('DEV UI smoke selector missing');
   }
   const directory = process.argv[2];
