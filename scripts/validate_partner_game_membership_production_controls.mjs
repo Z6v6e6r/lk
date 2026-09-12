@@ -54,13 +54,13 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "af44d4dd6588187c8486f21c0a6cb445273db1fd64ce65efffa18411c334170a",
+    runtimeManifestSha256: "7a789a6308e10f11b22f0ca9d5979435ebda6ad65bd510f3002c629bd8f3bb91",
     packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
     dependencyTreeSha256: "b90abb8c6780e42caae6cc06db42f6ed7b5877d5b173239b34603048398a99c2",
     auditReportSha256: "f984affcc6600ead898038a0f6143d2e032c0c659441b1bc03b983b9acb3e8e7",
-    functionalRehearsalSha256: "38bb48c7170c073c4255cce4e15af1649b1521c0d2f4d882e32aa0c688333342",
-    functionalRehearsalCapturedAt: "2026-09-12T04:52:59.728Z",
+    functionalRehearsalSha256: "fed34bc90e9e536d12bd58d84cbcf78ca7eaa75389849e2dce809dd273ebeb7d",
+    functionalRehearsalCapturedAt: "2026-09-12T06:26:07.247Z",
     auditCapturedAt: "2026-09-11T12:00:11.196Z",
     dependencyTreeCapturedAt: "2026-09-11T12:00:08.539Z",
     npmCiInstalledPackageCount: 291,
@@ -114,11 +114,11 @@ export function validatePartnerProductionControls(contract) {
   if (rehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || rehearsal.functionalRehearsalSha256 !== runtime.immutableClosure.functionalRehearsalSha256
     || rehearsal.capturedAt !== runtime.immutableClosure.functionalRehearsalCapturedAt
-    || rehearsal.sourceCommit !== "9f8adf29168fc3fe582f1cfff3d4ca241aaef6ba"
+    || rehearsal.sourceCommit !== "aaca89270d1ac3a8d8adc622226026df6f9c32ef"
     || rehearsal.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
     || rehearsal.nodeVersion !== runtime.requiredNodeVersion
     || rehearsal.nodeRedVersion !== runtime.minimumRehearsedNodeRedVersion
-    || rehearsal.customNodeReleaseSha256 !== "d174122863928edebe4b5d9a85d70283f346d273a0930c69596ccdfd4d5d6593"
+    || rehearsal.customNodeReleaseSha256 !== "15361530654e2f4f0f20d83481991bc2402a3ccc0e47cef95b1729b305ab77f4"
     || rehearsal.defaultOffHttpStatus !== 503
     || rehearsal.flowRollbackHttpStatus !== 404
     || rehearsal.packageRollbackHttpStatus !== 404

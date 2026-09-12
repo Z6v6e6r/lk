@@ -163,7 +163,7 @@ test("refreshed audit evidence keeps the reviewed closure and execution receipt 
   const { manifest } = validateCheckedPartnerRuntimeEvidence();
   assert.equal(manifest.audit.capturedAt, "2026-09-11T12:00:11.196Z");
   assert.equal(manifest.dependencyTree.capturedAt, "2026-09-11T12:00:08.539Z");
-  assert.equal(manifest.closure.functionalRehearsalSha256, "38bb48c7170c073c4255cce4e15af1649b1521c0d2f4d882e32aa0c688333342");
+  assert.equal(manifest.closure.functionalRehearsalSha256, "fed34bc90e9e536d12bd58d84cbcf78ca7eaa75389849e2dce809dd273ebeb7d");
   const audit = JSON.parse(read("audit-report.json"));
   assert.equal(audit.executionEvidence.containerPresentAfterCleanup, false);
   assert.equal(audit.executionEvidence.commands.find(command => command.name === "audit").exitCode, 1);
