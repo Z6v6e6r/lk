@@ -178,10 +178,22 @@ so the affected player can simply book again.
   - a claim whose price is still to pay and which has no recorded checkout is kept pending instead:
     a replay never opens a new money leg.
   Covered by `npm run test:hub-expired-pending` (8 offline cases over the sliced fragment).
-- Flow delivery for both HUB source changes is **not applied**: the reviewed packet pins
-  (`HUB_PREIMAGES` in `patch_live_lk1_hub.mjs`) no longer match the live bodies of all four target
-  nodes (checked 2026-09-12: split, gateway, finalize, evaluator all differ), so the packet needs a
-  fresh read-only pull (`npm run nodered:modular:pull-147 -- <private workspace>`), refreshed pins
-  and a revalidated composition contract before an apply.
+- Flow delivery is **not applied**. A fresh read-only 147 pull was made at 2026-09-12 11:53Z
+  (`sourceSha256: f6c6c9e2da8a751a28075e44521662f794556052b96c17bed3fc00f59f5b502d`,
+  4,799 nodes). It proved that the four raw `HUB_PREIMAGES` are stale because the live gateway
+  already carries the older HUB overlay; simply refreshing the raw-composer pins would attempt a
+  second injection and fails on the existing read-only guard anchor.
+
+  `scripts/prepare_lk1_hub_overlay_migration.mjs` is the separate migration composer for that
+  live overlay. It refuses any whole-flow hash other than the fresh pull and any gateway body other
+  than `aa9be7356409f7a486a3b97a3f1278c5a1090a9e27c77193229069cead6fb799`; it also refuses if
+  any of the new markers already exists. Its exact-graph contract permits **only**
+  `lk_subscription_booking_router_20260804.func`, preserves every other node/field/route, compiles
+  the candidate function, and rejects a second compose. The private-fixture test is
+  `npm run test:hub-overlay-migration` with `LK1_HUB_LIVE_FIXTURE` set to the fresh pull.
+
+  A candidate is still not an apply authorization: before any live write, re-pull and require the
+  identical preimage again, build a new private exact-graph candidate and contract, then request
+  explicit live-apply approval with an ordered verify/rollback plan.
 - The price preview and HUB usage readers still count an *unexpired* claim; that is intended
   (double-spend protection).

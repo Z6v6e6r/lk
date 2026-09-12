@@ -116,6 +116,7 @@
     "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
     "test:hung-claim-release": "node --test scripts/tests/hungClaimRelease.test.mjs",
     "test:hub-expired-pending": "node --test scripts/tests/hubExpiredPendingReconcile.test.mjs",
+    "test:hub-overlay-migration": "node --test scripts/tests/lk1HubOverlayMigration.test.mjs",
     "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
     "test:tff-community-backfill": "node --experimental-strip-types --test scripts/tests/timeForFriendsCommunityBackfill.test.mjs",
     "test:published-tournament-membership-plan": "node --test scripts/tests/publishedTournamentMembershipPlan.test.mjs",
