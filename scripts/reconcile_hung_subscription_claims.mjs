@@ -189,6 +189,8 @@ const report = {
   now: nowIso,
   ttlMinutes,
   providerVerification: providerReady ? 'PERFORMED' : 'TOKEN_MISSING',
+  applied: null,
+  reason: null,
   scanned: 0,
   released: [],
   skipped: [],
@@ -209,35 +211,43 @@ try {
     report.decisions = operations.map((operation, index) => redactedDecision(operation, summary.decisions[index]));
     report.releasable = report.decisions.filter((item) => item.releasable).map((item) => item.claim);
   } else {
-    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
-    const stamp = nowIso.replace(/[:.]/g, '-');
-    const backupPath = path.join(backupDir, `hung-claims-${stamp}.json`);
     const releasable = summary.releasable;
     const releasableLabels = new Set(releasable.map((decision) => claimLabel({ _id: decision.operationKey })));
     const toWrite = operations.filter((operation) => releasableLabels.has(claimLabel(operation)));
-    fs.writeFileSync(backupPath, `${JSON.stringify(toWrite, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    report.backupPath = backupPath;
+    // A scheduled run usually finds nothing to release; it must not leave an empty
+    // backup behind on every tick.
+    if (!toWrite.length) {
+      report.applied = false;
+      report.reason = 'NOTHING_TO_RELEASE';
+    } else {
+      fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+      const stamp = nowIso.replace(/[:.]/g, '-');
+      const backupPath = path.join(backupDir, `hung-claims-${stamp}.json`);
+      fs.writeFileSync(backupPath, `${JSON.stringify(toWrite, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      report.backupPath = backupPath;
+      report.applied = true;
 
-    for (const operation of toWrite) {
-      const decision = planHungClaimRelease({
-        operation,
-        bookings: bookingsByExercise.get(String(operation?.exerciseId || '').toLowerCase()),
-        now: nowIso,
-        ttlMs,
-      });
-      if (!decision.releasable) {
-        report.skipped.push(redactedDecision(operation, decision));
-        continue;
+      for (const operation of toWrite) {
+        const decision = planHungClaimRelease({
+          operation,
+          bookings: bookingsByExercise.get(String(operation?.exerciseId || '').toLowerCase()),
+          now: nowIso,
+          ttlMs,
+        });
+        if (!decision.releasable) {
+          report.skipped.push(redactedDecision(operation, decision));
+          continue;
+        }
+        const command = buildHungClaimReleaseCommand({ operation, now: nowIso });
+        const result = await collection.updateOne(command.query, command.update, command.options);
+        const matched = result.matchedCount ?? result.result?.n ?? 0;
+        const modified = result.modifiedCount ?? result.result?.nModified ?? 0;
+        if (matched !== 1 || modified !== 1) {
+          report.compareAndSwapFailures.push(claimLabel(operation));
+          continue;
+        }
+        report.released.push(redactedDecision(operation, decision));
       }
-      const command = buildHungClaimReleaseCommand({ operation, now: nowIso });
-      const result = await collection.updateOne(command.query, command.update, command.options);
-      const matched = result.matchedCount ?? result.result?.n ?? 0;
-      const modified = result.modifiedCount ?? result.result?.nModified ?? 0;
-      if (matched !== 1 || modified !== 1) {
-        report.compareAndSwapFailures.push(claimLabel(operation));
-        continue;
-      }
-      report.released.push(redactedDecision(operation, decision));
     }
   }
 

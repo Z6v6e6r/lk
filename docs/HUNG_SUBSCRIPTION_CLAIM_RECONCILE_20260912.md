@@ -96,6 +96,29 @@ Custody on the host: `/root/.node-red/.padlhub-hung-claims-20260912/` (`hung-cla
 
 Reproduce with the same command and a fresh token; nothing in the run depends on stored state.
 
+## Scheduled run on `147` (every 15 minutes)
+
+Installed on 2026-09-12 with owner approval: `/root/.node-red/hung-claim-release/`
+
+| path | role |
+| --- | --- |
+| `scripts/reconcile_hung_subscription_claims.mjs`, `scripts/lib/hungClaimRelease.mjs` | host copy of the two reviewed files, source commit recorded in `MANIFEST.json` with sha256 |
+| `run-release.sh` | wrapper: `flock` (no overlapping ticks), token cache, reconciler `--apply`, log append, backup pruning |
+| `state/viva.token` | cached service token, mode 0600, re-minted when older than 24 h |
+| `state/run.log` | one JSON line per tick, mode 0600, trimmed to the last 2000 lines |
+| `state/report.json` | report of the last tick, mode 0600 |
+| `backups/` | exact scanned documents of every releasing tick, mode 0600, kept 30 days |
+
+Units: `padlhub-hung-claim-release.service` (`Type=oneshot`, `ExecStart=run-release.sh`) and
+`padlhub-hung-claim-release.timer` (`OnCalendar=*:0/15`). The wrapper runs with `--limit 500`
+and `--ttl-minutes 30`; a tick that finds nothing to release writes no backup.
+
+Stop signals: any `compareAndSwapFailures` in a tick, a `WORKER`-level error line, or a tick that
+releases an implausible batch (far above the one-off 223 baseline). Stop method: `systemctl disable --now padlhub-hung-claim-release.timer`
+(the released documents stay in `backups/`). A release only writes claim documents — no provider
+data, no booking, no ledger — and the runtime treats `RELEASED` exactly like a cancelled claim,
+so the affected player can simply book again.
+
 ## Residual work (not in this change)
 
 - `scripts/nodered_lk1_hub_nodes/gateway_hooks.js` (`// HUB_PREACCEPT`) should write
