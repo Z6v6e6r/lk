@@ -118,3 +118,38 @@ count, zero broken wires and zero broken links.
 - deliberately not run: a live create/join probe, because it would create a real Viva booking and
   transaction; the participant-share behaviour is covered by the exact installed bytes (identical
   to the candidate that passed the local regressions) and by the control experiment above
+
+## Behavioural probe (owner-run, creates one real Viva booking)
+
+`scripts/probe_split_join_share_147.mjs` performs exactly one participant join on a designated
+game, asserts the server reports the exact court share instead of the fabricated nominal, and then
+cancels the created booking again. The payment link is never opened or paid.
+
+Read-only rehearsal (no mutation, works for any future game):
+
+```
+SPLIT_JOIN_PROBE_DRY_RUN=1 \
+SPLIT_JOIN_PROBE_GAME_ID=pay_aa8d97de-c99b-47ac-8bfd-0d32674f6b1b \
+SPLIT_JOIN_PROBE_EXPECTED_SHARE=3000 \
+node scripts/probe_split_join_share_147.mjs
+```
+
+Real probe (requires explicit acknowledgement, a session token of a test identity, a test phone
+that exists in Viva and a game where a short-lived booking is acceptable):
+
+```
+SPLIT_JOIN_PROBE=CONFIRM_VIVA_BOOKING \
+SPLIT_JOIN_PROBE_TOKEN=<user bearer> \
+SPLIT_JOIN_PROBE_PHONE=<test phone> \
+SPLIT_JOIN_PROBE_GAME_ID=<pay_...> \
+SPLIT_JOIN_PROBE_EXPECTED_SHARE=<exact court share, optional> \
+node scripts/probe_split_join_share_147.mjs
+```
+
+The probe deliberately sends `shareAmount = 2500/5000` (the fabricated nominal) and fails when the
+response still reports that value, when the response share differs from the expected exact share,
+or when the automatic cancellation fails (then it prints the exact manual leave command and the
+booking id). Without `SPLIT_JOIN_PROBE_EXPECTED_SHARE` the expected share comes from the public
+Viva price lookup, falling back to the canonical stored share (`totalAmount > 0`). Note that the
+public Viva price endpoint is rate-limited from some client networks (nginx 403), which is why the
+explicit expected share is supported.
