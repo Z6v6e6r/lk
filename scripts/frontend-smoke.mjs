@@ -8,7 +8,14 @@ if (url.protocol !== 'https:') throw new Error('Public HTTPS smoke URL required'
 const channel = process.env.LK_SMOKE_CHANNEL || 'prod';
 if (!['prod', 'dev'].includes(channel)) throw new Error('Unknown smoke channel');
 const selector = process.env.LK_FRONTEND_SMOKE_SELECTOR;
-if (!selector || !process.env.LK_FRONTEND_SMOKE_OPEN_SELECTOR || !process.env.LK_FRONTEND_SMOKE_RESULT_SELECTOR) throw new Error('Owner must select the visible login/read-only scenario');
+// Default stays the full owner-selected scenario. The explicit SELECTOR_ONLY mode drops the
+// click/results step for public pages whose controls are inert without a session; it still
+// proves the versioned entry bundle loaded and that the page raised no script errors.
+const selectorOnly = process.env.LK_FRONTEND_SMOKE_READ_ONLY === 'SELECTOR_ONLY';
+if (!selector || (!selectorOnly
+  && (!process.env.LK_FRONTEND_SMOKE_OPEN_SELECTOR || !process.env.LK_FRONTEND_SMOKE_RESULT_SELECTOR))) {
+  throw new Error('Owner must select the visible login/read-only scenario');
+}
 for (const browserType of [chromium, webkit]) {
   const browser = await browserType.launch();
   try {
@@ -19,7 +26,7 @@ for (const browserType of [chromium, webkit]) {
     await page.route('**/*', route => ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.continue() : route.abort());
     await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.locator(selector).first().waitFor({ state: 'visible', timeout: 30000 });
-    const clickSelector = process.env.LK_FRONTEND_SMOKE_OPEN_SELECTOR;
+    const clickSelector = selectorOnly ? null : process.env.LK_FRONTEND_SMOKE_OPEN_SELECTOR;
     if (clickSelector) {
       await page.locator(clickSelector).first().click();
       const resultSelector = process.env.LK_FRONTEND_SMOKE_RESULT_SELECTOR;

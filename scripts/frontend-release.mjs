@@ -67,7 +67,9 @@ async function main() {
   const repository = readRepositoryProvenance(process.cwd());
   if (repository.sourceDirty || repository.sourceCommit !== process.env.RELEASE_SOURCE_SHA
     || process.env.GITHUB_REF !== 'refs/heads/main' || process.env.LK_STANDARD_FRONTEND_ENABLED !== 'true') throw new Error('Trusted clean main source and owner enablement required');
-  for (const key of ['LK_FRONTEND_ASSET_BASE', 'LK_FRONTEND_SMOKE_URL', 'LK_FRONTEND_SMOKE_SELECTOR', 'LK_FRONTEND_SMOKE_OPEN_SELECTOR', 'LK_FRONTEND_SMOKE_RESULT_SELECTOR']) {
+  const selectorOnly = process.env.LK_FRONTEND_SMOKE_READ_ONLY === 'SELECTOR_ONLY';
+  for (const key of ['LK_FRONTEND_ASSET_BASE', 'LK_FRONTEND_SMOKE_URL', 'LK_FRONTEND_SMOKE_SELECTOR', ...(selectorOnly
+    ? [] : ['LK_FRONTEND_SMOKE_OPEN_SELECTOR', 'LK_FRONTEND_SMOKE_RESULT_SELECTOR'])]) {
     if (!process.env[key]) throw new Error(`Owner smoke configuration missing: ${key}`);
   }
   if (new URL(process.env.LK_FRONTEND_SMOKE_URL).protocol !== 'https:') throw new Error('HTTPS smoke URL required');
