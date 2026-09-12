@@ -253,20 +253,29 @@ test('the CLI rehearses offline, refuses --apply with --fixture and never writes
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hung-claims-'));
   const fixturePath = path.join(dir, 'fixture.json');
   fs.writeFileSync(fixturePath, `${JSON.stringify({
-    operations: [operation({ _id: 'fixture-doc-1' }), operation({ _id: 'fixture-doc-2', state: 'CONFIRMED' })],
+    operations: [
+      operation({ _id: 'fixture-doc-1' }),
+      operation({ _id: 'fixture-doc-2', state: 'CONFIRMED' }),
+      operation({ _id: 'fixture-doc-3', bookingId: 'fixture-booking-0009', lk1: { createAttemptedAt: '2026-09-11T05:00:00.000Z' } }),
+    ],
     bookingsByExercise: { [EXERCISE]: [] },
   }, null, 2)}\n`);
   const script = fileURLToPath(new URL('../reconcile_hung_subscription_claims.mjs', import.meta.url));
   const out = execFileSync(process.execPath, [script, '--fixture', fixturePath, '--now', NOW], { encoding: 'utf8' });
   const report = JSON.parse(out);
   assert.equal(report.mode, 'dry-run');
-  assert.equal(report.scanned, 2);
+  assert.equal(report.scanned, 3);
   assert.equal(report.releasable.length, 1);
   assert.equal(report.backupPath, null);
-  assert.equal(report.decisions.length, 2);
+  assert.equal(report.decisions.length, 3);
   // Reports carry a stable hash label, never the raw claim id.
   assert.ok(report.decisions.every((item) => /^[0-9a-f]{12}$/.test(item.claim)));
   assert.equal(out.includes('fixture-doc-1'), false);
+  // A create attempt stays visible for manual reconciliation even when a booking id
+  // already binds the claim and decides the reason.
+  const bound = report.decisions.filter((item) => item.reason === 'PROVIDER_BOOKING_BOUND');
+  assert.deepEqual(bound.map((item) => item.createAttempt), [true]);
+  assert.equal(report.decisions.find((item) => item.releasable).createAttempt, false);
   assert.throws(() => execFileSync(process.execPath,
     [script, '--fixture', fixturePath, '--apply', '--backup-dir', dir], { encoding: 'utf8', stdio: 'pipe' }),
   /--apply cannot be combined with --fixture/);
