@@ -281,3 +281,70 @@ for (const mutation of ["source", "missing-file", "manifest-flag", "commit", "tr
     refused(() => startup.validateGuardedStartup(f.input)); assert.equal(f.handles.size, 0);
   });
 }
+
+const ACTIVE_GAME = "pay_adff32ae-3cca-425d-a31a-36942a75c8f7";
+const ACTIVE_STATION = "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1";
+const ACTIVE_TECHNICAL_CLIENT = "a46217b4-d1c0-4363-a848-a9b05d8aa648";
+const ACTIVE_REVISION = "padlhub-viva-technical-booking-v1";
+const canaryKeyring = (games = { [ACTIVE_GAME]: { tenantKey: null, capacity: 4 } }, clientId = "padlhub-canary") => ({
+  [clientId]: { enabled: true, scopes: ["members:add", "members:remove", "operations:read"],
+    stationIds: [ACTIVE_STATION], games, keys: { "canary-2026-09": "A".repeat(43) } },
+});
+
+// BOUND_ACTIVE is the only activatable mode. It stays reachable only through a root-owned
+// anchor that authorizes a single canary client and an explicit game set, and every provider
+// gate plus the pinned technical client must be present.
+function activeFixture(t) {
+  const f = fixture(t);
+  f.anchor.mode = "BOUND_ACTIVE";
+  f.anchor.activationAuthorized = true;
+  f.anchor.canaryClientId = "padlhub-canary";
+  f.anchor.canaryGameIds = [ACTIVE_GAME];
+  f.writeAnchor();
+  f.input.env = { ...f.input.env,
+    LK_PARTNER_GAME_API_ENABLED: "true", LK_PARTNER_GAME_API_PROVIDER_MODE: "viva",
+    LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED: "true", LK_PARTNER_GAME_API_STARTUP_MODE: "BOUND_ACTIVE",
+    LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION: ACTIVE_REVISION,
+    LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED: "true",
+    LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED: "true",
+    LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID: ACTIVE_TECHNICAL_CLIENT,
+    LK_PARTNER_GAME_API_KEYRING_JSON: JSON.stringify(canaryKeyring()) };
+  return f;
+}
+
+test("bound active startup admits a fully gated canary release", (t) => {
+  const f = activeFixture(t);
+  const result = startup.validateGuardedStartup(f.input);
+  assert.equal(result.expectedHost, f.anchor.expectedHost);
+  assert.deepEqual(result.candidateBytes, f.bytes);
+  assert.equal(f.handles.size, 0);
+});
+
+test("the guarded activation contract revision matches the Viva provider revision", async () => {
+  const viva = await import("../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs");
+  assert.equal(viva.PARTNER_VIVA_CONTRACT_REVISION, ACTIVE_REVISION);
+});
+
+for (const [name, mutate] of [
+  ["enabled=false", (f) => { f.input.env.LK_PARTNER_GAME_API_ENABLED = "false"; }],
+  ["provider=disabled", (f) => { f.input.env.LK_PARTNER_GAME_API_PROVIDER_MODE = "disabled"; }],
+  ["mutations=false", (f) => { f.input.env.LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED = "false"; }],
+  ["wrong contract revision", (f) => { f.input.env.LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION = "other"; }],
+  ["idempotency unconfirmed", (f) => { f.input.env.LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED = "false"; }],
+  ["on-place unconfirmed", (f) => { f.input.env.LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED = "false"; }],
+  ["missing technical client", (f) => { f.input.env.LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID = "  "; }],
+  ["activation not authorized", (f) => { f.anchor.activationAuthorized = false; f.writeAnchor(); }],
+  ["empty canary game set", (f) => { f.anchor.canaryGameIds = []; f.writeAnchor(); }],
+  ["selector and anchor mode disagree", (f) => { f.anchor.mode = "BOUND_DEFAULT_OFF"; f.writeAnchor(); }],
+  ["keyring enables another client", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify(canaryKeyring({ [ACTIVE_GAME]: { tenantKey: null, capacity: 4 } }, "other-client")); }],
+  ["keyring enables two clients", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify({ ...canaryKeyring(), "second-client": { enabled: true, games: { [ACTIVE_GAME]: { tenantKey: null, capacity: 4 } } } }); }],
+  ["keyring game outside the canary set", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify(canaryKeyring({ "other-game": { tenantKey: null, capacity: 4 } })); }],
+  ["keyring without games", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify(canaryKeyring({})); }],
+]) {
+  test(`bound active startup refuses ${name}`, (t) => {
+    const f = activeFixture(t);
+    mutate(f);
+    refused(() => startup.validateGuardedStartup(f.input));
+    assert.equal(f.handles.size, 0);
+  });
+}

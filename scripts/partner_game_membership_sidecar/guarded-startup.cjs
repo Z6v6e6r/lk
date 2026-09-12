@@ -13,6 +13,17 @@ const STARTUP_ANCHOR_PATH = "/etc/padlhub/partner-game-membership/approved-start
 const HASH = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const stableFields = ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode", "nlink", "uid"];
+// DEFAULT_OFF_UNBOUND and BOUND_DEFAULT_OFF are non-activatable. BOUND_ACTIVE is the only
+// mode that may serve traffic, and it is reachable only through a root-owned anchor that
+// explicitly authorizes activation for a bounded canary client and game set.
+const STARTUP_MODES = Object.freeze(["DEFAULT_OFF_UNBOUND", "BOUND_DEFAULT_OFF", "BOUND_ACTIVE"]);
+const ACTIVE_CONTRACT_REVISION = "padlhub-viva-technical-booking-v1";
+const ACTIVE_PROVIDER_MODE = "viva";
+const ANCHOR_FIELDS = Object.freeze(["formatVersion", "mode", "expectedHost", "expectedAudience",
+  "candidateFlowSha256", "releaseDirectory", "packetManifestSha256", "approvedCommit", "approvedTree"]);
+const ANCHOR_ACTIVE_FIELDS = Object.freeze([...ANCHOR_FIELDS, "activationAuthorized", "canaryClientId", "canaryGameIds"]);
+const CLIENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
+const GAME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
 const exactKeys = (value, keys) => {
   if (!value || Array.isArray(value) || typeof value !== "object"
     || Object.keys(value).sort().join(",") !== [...keys].sort().join(",")) fail();
@@ -63,11 +74,11 @@ function readStartupAnchor(io, snapshot) {
   return parsePartnerRawJson(readPinnedFile(STARTUP_ANCHOR_PATH, 4096, { io, rootOwned: true, snapshot }));
 }
 
-function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, io, snapshot }) {
-  exactKeys(anchor, ["formatVersion", "mode", "expectedHost", "expectedAudience", "candidateFlowSha256",
-    "releaseDirectory", "packetManifestSha256", "approvedCommit", "approvedTree"]);
+function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, io, snapshot, mode }) {
+  const active = mode === "BOUND_ACTIVE";
+  exactKeys(anchor, active ? ANCHOR_ACTIVE_FIELDS : ANCHOR_FIELDS);
   const root = path.dirname(sidecarDirectory);
-  if (anchor.formatVersion !== 1 || anchor.mode !== "BOUND_DEFAULT_OFF"
+  if (anchor.formatVersion !== 1 || anchor.mode !== mode
     || anchor.releaseDirectory !== root || root === path.parse(root).root
     || within(root, STARTUP_ANCHOR_PATH)
     || typeof anchor.expectedHost !== "string" || anchor.expectedHost.length > 253
@@ -77,6 +88,26 @@ function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, i
     || env.LK_PARTNER_GAME_API_AUDIENCE !== anchor.expectedAudience
     || !HASH.test(anchor.candidateFlowSha256) || digest(candidateBytes) !== anchor.candidateFlowSha256
     || !HASH.test(anchor.packetManifestSha256) || !COMMIT.test(anchor.approvedCommit) || !COMMIT.test(anchor.approvedTree)) fail();
+  if (active) {
+    // Activation is bounded to a single canary client and an explicit game set, and the
+    // running keyring must match that bound exactly. The packet manifest itself never
+    // authorizes activation; that authority lives only in this root-owned anchor.
+    if (anchor.activationAuthorized !== true || typeof anchor.canaryClientId !== "string"
+      || !CLIENT_ID_PATTERN.test(anchor.canaryClientId)
+      || !Array.isArray(anchor.canaryGameIds) || anchor.canaryGameIds.length < 1 || anchor.canaryGameIds.length > 8
+      || new Set(anchor.canaryGameIds).size !== anchor.canaryGameIds.length
+      || anchor.canaryGameIds.some(id => typeof id !== "string" || !GAME_ID_PATTERN.test(id))) fail();
+    let keyring;
+    try { keyring = parsePartnerRawJson(Buffer.from(String(env.LK_PARTNER_GAME_API_KEYRING_JSON || ""), "utf8")); }
+    catch { fail(); }
+    if (!keyring || Array.isArray(keyring) || typeof keyring !== "object") fail();
+    const enabled = Object.entries(keyring).filter(([, credential]) => credential && credential.enabled === true);
+    if (enabled.length !== 1 || enabled[0][0] !== anchor.canaryClientId) fail();
+    const games = enabled[0][1].games && typeof enabled[0][1].games === "object" && !Array.isArray(enabled[0][1].games)
+      ? Object.keys(enabled[0][1].games)
+      : [];
+    if (games.length < 1 || games.some(gameId => !anchor.canaryGameIds.includes(gameId))) fail();
+  }
   const manifestBytes = readPinnedFile(path.join(root, "packet.manifest.json"), 16384, { io, rootOwned: true, snapshot });
   if (digest(manifestBytes) !== anchor.packetManifestSha256) fail();
   const manifest = parsePartnerRawJson(manifestBytes);
@@ -140,14 +171,24 @@ function validateGuardedStartup({ sidecarDirectory, argv, env, io = fs }) {
     for (const name of ["NODE_OPTIONS", "NODE_PATH", "NODE_RED_ENABLE_SAFE_MODE", "NODE_RED_ENABLE_PROJECTS"]) {
       if (env[name] !== undefined && env[name] !== "") fail();
     }
-    // Both supported startup modes are non-activatable.
-    if (env.LK_PARTNER_GAME_API_ENABLED !== "false" || env.LK_PARTNER_GAME_API_PROVIDER_MODE !== "disabled"
-      || env.LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED !== "false") fail();
     const mode = env.LK_PARTNER_GAME_API_STARTUP_MODE === undefined ? "DEFAULT_OFF_UNBOUND" : env.LK_PARTNER_GAME_API_STARTUP_MODE;
-    if (!["DEFAULT_OFF_UNBOUND", "BOUND_DEFAULT_OFF"].includes(mode)) fail();
+    if (!STARTUP_MODES.includes(mode)) fail();
+    const active = mode === "BOUND_ACTIVE";
+    if (active) {
+      // BOUND_ACTIVE is the only activatable mode and requires every provider gate plus the
+      // pinned technical client. Any partial combination is refused.
+      if (env.LK_PARTNER_GAME_API_ENABLED !== "true" || env.LK_PARTNER_GAME_API_PROVIDER_MODE !== ACTIVE_PROVIDER_MODE
+        || env.LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED !== "true"
+        || env.LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION !== ACTIVE_CONTRACT_REVISION
+        || env.LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED !== "true"
+        || env.LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED !== "true"
+        || typeof env.LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID !== "string"
+        || !env.LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID.trim()) fail();
+    } else if (env.LK_PARTNER_GAME_API_ENABLED !== "false" || env.LK_PARTNER_GAME_API_PROVIDER_MODE !== "disabled"
+      || env.LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED !== "false") fail();
     const snapshot = [];
     const anchor = readStartupAnchor(io, snapshot);
-    const bound = mode === "BOUND_DEFAULT_OFF";
+    const bound = mode === "BOUND_DEFAULT_OFF" || active;
     if (bound !== (anchor !== null)
       || (bound && (within(userDir, path.dirname(sidecarDirectory)) || within(path.dirname(sidecarDirectory), userDir)
         || within(userDir, STARTUP_ANCHOR_PATH)))) fail();
@@ -159,7 +200,7 @@ function validateGuardedStartup({ sidecarDirectory, argv, env, io = fs }) {
     if (digest(candidateBytes) !== policy.candidateFlowSha256) fail();
     validatePartnerGuardFlows(JSON.parse(candidateBytes));
     if (bound) {
-      validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, io, snapshot });
+      validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, io, snapshot, mode });
       for (const [file, stat] of snapshot) {
         const current = io.lstatSync(file);
         for (const field of stableFields) if (stat[field] !== current[field]) fail();
