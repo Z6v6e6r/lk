@@ -44,9 +44,11 @@
 
 ## Документы
 
-Начните с [ACCESS_REQUEST.md](ACCESS_REQUEST.md), если доступов ещё нет, и с
-[QUICKSTART.md](QUICKSTART.md), если нужно собрать первый запрос.
+Начните с [JOIN_EXISTING_GAMES.md](JOIN_EXISTING_GAMES.md) — это сам метод присоединения к
+существующей игре, собранный в один документ. Дальше: [ACCESS_REQUEST.md](ACCESS_REQUEST.md),
+если доступов ещё нет, и [QUICKSTART.md](QUICKSTART.md), если нужно собрать первый запрос.
 
+- [JOIN_EXISTING_GAMES.md](JOIN_EXISTING_GAMES.md) — метод присоединения к существующей игре: запрос, ответ, ошибки, повторы, порядок интеграции.
 - [ACCESS_REQUEST.md](ACCESS_REQUEST.md) — что нужно от партнёра и порядок выдачи доступов.
 - [QUICKSTART.md](QUICKSTART.md) — пошаговый пример POST → GET → DELETE.
 - [SIGNING.md](SIGNING.md) — канонический JSON, строка подписи, HMAC, headers.

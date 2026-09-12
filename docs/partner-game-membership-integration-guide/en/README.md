@@ -45,6 +45,7 @@ and `sign.mjs`.
 
 ## Documents
 
+- [JOIN_EXISTING_GAMES.md](JOIN_EXISTING_GAMES.md) — the join-an-existing-game method in one document: request, response, errors, retries, integration order.
 - [INTEGRATION.md](INTEGRATION.md) — signing, endpoints, errors, idempotency, limits, quickstart.
 - [ACCESS_REQUEST.md](ACCESS_REQUEST.md) — what we need from you and how access is issued.
 - [ACCEPTANCE_TESTS.md](ACCEPTANCE_TESTS.md) — go-live acceptance checklist.
