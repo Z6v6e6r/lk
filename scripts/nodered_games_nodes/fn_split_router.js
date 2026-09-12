@@ -2195,13 +2195,18 @@ if (ctx.step === "create_booking") {
       toNumber(ctx.oneTimeBaseAmount) ?? DEFAULT_ONE_TIME_PRODUCT_AMOUNT,
     );
     const baseShareAmount = oneTimeBaseAmount / shareCount;
-    const shareAmount = Math.max(0, toNumber(ctx.shareAmount) ?? 0);
+    // A subscription write-off carries no money; when no price was ever established
+    // report no amount at all instead of fabricating the nominal 10 000 / shareCount.
+    const resolvedShareAmount = toNumber(ctx.shareAmount);
+    const shareAmount = resolvedShareAmount !== null && resolvedShareAmount > 0
+      ? resolvedShareAmount
+      : null;
     const subscriptionVisitCount = resolveSubscriptionVisitCount(ctx);
 
     ctx.selectedPaymentMode = "subscription";
     ctx.subscriptionVisitCount = subscriptionVisitCount;
     ctx.shareAmount = shareAmount;
-    ctx.shareAmountMinor = Math.max(0, Math.round(shareAmount * 100));
+    ctx.shareAmountMinor = shareAmount === null ? null : Math.max(0, Math.round(shareAmount * 100));
     ctx.baseShareAmount = baseShareAmount;
     ctx.baseShareAmountMinor = Math.max(0, Math.round(baseShareAmount * 100));
     ctx.discountAmount = 0;

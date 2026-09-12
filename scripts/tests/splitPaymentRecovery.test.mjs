@@ -110,6 +110,31 @@ test('join preserves the participant deadline and detects singles from stored sp
   assert.equal(outputs[0].requestTimeout, 10000);
 });
 
+test('join prepare never fabricates the nominal share when no price is stored or requested', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 03' },
+    payload: [{
+      metadata: { splitPayment: { vivaExerciseId: 'exercise-1', shareCount: 4 } },
+      booking: { studioId: 'studio-1', roomId: 'room-1', date: '2026-08-01', timeFrom: '10:00', timeTo: '11:00' },
+      invite: { maxPlayers: 4 },
+    }],
+  });
+  assert.equal(outputs[0]._splitCtx.shareAmount, null);
+  assert.equal(outputs[0]._splitCtx.oneTimeBaseAmount, 10000);
+  assert.equal(outputs[0]._splitCtx.step, 'token');
+});
+
+test('create prepare never fabricates the nominal share when the court total is unknown', () => {
+  const outputs = run('create', {
+    payload: {
+      date: '2026-08-01', fromTime: '10:00', toTime: '11:00', roomId: 'room-1',
+      clientPhone: '8 960 000 00 04',
+    },
+  });
+  assert.equal(outputs[0]._splitCtx.shareAmount, null);
+  assert.equal(outputs[0]._splitCtx.totalAmount, null);
+});
+
 test('join keeps the stored pricing snapshot and never rereads the current CUP campaign', () => {
   const pricingPolicy = {
     id: 'piter-split-250-per-hour-v1',
