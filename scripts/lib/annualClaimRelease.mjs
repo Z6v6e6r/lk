@@ -122,3 +122,42 @@ export function releaseAnnualClaim(ledger, { paymentRef, now = new Date().toISOS
     after: counters(next),
   };
 }
+
+/**
+ * Release every stale reservation of one ledger in a single chained
+ * transformation. This is what a scheduled tick uses: it applies the same
+ * guarded `releaseAnnualClaim` to each releasable claim, so a ledger that holds
+ * more than one hung daily seat is emptied in one compare-and-swap instead of
+ * one write per claim.
+ *
+ * Returns { ok: true, next, released: [...] } or { ok: false, code, message }.
+ * An empty ledger or one with nothing releasable returns the input unchanged.
+ */
+export function releaseAllAnnualClaims(ledger, { now = new Date().toISOString() } = {}) {
+  const deny = (code, message) => ({ ok: false, code, message });
+  if (!ledger || ledger?.counterKey !== 'network_friendship') {
+    return deny('COUNTER_NOT_ANNUAL_HUB', `Unexpected counterKey: ${ledger?.counterKey}`);
+  }
+  if (ledger?.schemaVersion !== 3 || ledger?.ready !== true) {
+    return deny('LEDGER_NOT_READY_V3', 'Ledger is not a ready schemaVersion 3 document');
+  }
+  if (!annualHistory.validate(ledger)) return deny('LEDGER_INVALID', 'Ledger fails its own validation');
+
+  const releasable = listAnnualClaims(ledger, { now }).filter((item) => item.releasable);
+  if (releasable.length === 0) return { ok: true, next: ledger, released: [] };
+
+  let working = JSON.parse(JSON.stringify(ledger));
+  const released = [];
+  for (const decision of releasable) {
+    const outcome = releaseAnnualClaim(working, { paymentRef: decision.paymentRef, now });
+    if (!outcome.ok) return outcome;
+    working = outcome.next;
+    released.push({
+      paymentRef: decision.paymentRef,
+      deadline: outcome.deadline,
+      before: outcome.before,
+      after: outcome.after,
+    });
+  }
+  return { ok: true, next: working, released };
+}
