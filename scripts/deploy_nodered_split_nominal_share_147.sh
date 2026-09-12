@@ -35,10 +35,11 @@ if [[ "$(git branch --show-current)" != "$expected_branch" || -n "$(git status -
   echo "Deploy requires a clean checkout of $expected_branch" >&2
   exit 3
 fi
-git fetch --quiet origin "$expected_branch"
 local_sha="$(git rev-parse HEAD)"
-remote_sha="$(git rev-parse "origin/$expected_branch")"
-if [[ "$local_sha" != "$remote_sha" ]]; then
+# Compare against the published branch directly: a worktree may not carry a local
+# remote-tracking ref even after a push.
+remote_sha="$(git ls-remote origin "refs/heads/$expected_branch" | awk '{print $1}')"
+if [[ -z "$remote_sha" || "$local_sha" != "$remote_sha" ]]; then
   echo "Local $expected_branch and origin/$expected_branch differ" >&2
   exit 4
 fi
