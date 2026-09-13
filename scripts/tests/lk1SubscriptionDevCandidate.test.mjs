@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   assertExactMainSourceCommit,
   publishOfflineDevSource,
@@ -687,19 +688,40 @@ test("shared-root audit capture cannot become a DEV candidate source", () => {
     /diverges from the provisioning contract/);
 });
 
-test("offline generator and publisher emit an install-blocked readiness packet", () => {
+test("offline generator and publisher emit an install-blocked readiness packet", async () => {
   const parents = [
     fs.mkdtempSync(path.join(TEMP_ROOT, "lk1-dev-publish-a-")),
     fs.mkdtempSync(path.join(TEMP_ROOT, "lk1-dev-publish-b-")),
   ];
   try {
+    // The authorized candidate is frozen; exercise current tooling against its
+    // exact source inputs without changing the developer checkout or authority.
+    const fixtureRoot = path.join(parents[0], "repository");
+    const fixtureScripts = path.join(fixtureRoot, "scripts");
+    fs.mkdirSync(fixtureScripts, { recursive: true });
+    for (const entry of fs.readdirSync(path.join(ROOT, "scripts"), { withFileTypes: true })) {
+      if (entry.isFile() && /\.(mjs|json)$/.test(entry.name)) {
+        fs.copyFileSync(path.join(ROOT, "scripts", entry.name), path.join(fixtureScripts, entry.name));
+      }
+    }
+    execFileSync("git", ["init", "--quiet", fixtureRoot]);
+    const objects = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "objects"],
+      { cwd: ROOT, encoding: "utf8" }).trim();
+    fs.writeFileSync(path.join(fixtureRoot, ".git/objects/info/alternates"), `${objects}\n`);
+    for (const file of SOURCE_INPUTS) {
+      const destination = path.join(fixtureRoot, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, execFileSync("git", ["show", `${FROZEN_SOURCE_COMMIT}:${file}`], { cwd: ROOT }));
+    }
+    const publisherPath = path.join(fixtureScripts, "prepare_lk1_subscription_dev_candidate.mjs");
+    const { publishDevCandidate: publishFrozenCandidate } = await import(pathToFileURL(publisherPath).href);
     const results = parents.map((parent) => {
       const workspace = path.join(parent, "workspace");
       publishOfflineDevSource(workspace, FROZEN_SOURCE_COMMIT);
       const binding = JSON.parse(fs.readFileSync(path.join(
         workspace, "input/source.flow.meta.json",
       ), "utf8"));
-      return publishDevCandidate(workspace, binding);
+      return publishFrozenCandidate(workspace, binding);
     });
     const ready = JSON.parse(fs.readFileSync(results[0].readyPath, "utf8"));
     assert.equal(ready.sourceProvenance, "OFFLINE_GENERATED");
@@ -711,9 +733,9 @@ test("offline generator and publisher emit an install-blocked readiness packet",
     const foreignWorkspace = path.join(parents[0], "foreign-workspace");
     publishOfflineDevSource(foreignWorkspace, FROZEN_SOURCE_COMMIT);
     assert.doesNotThrow(() => execFileSync(process.execPath, [
-      path.resolve("scripts/prepare_lk1_subscription_dev_candidate.mjs"),
+      publisherPath,
       "--workspace", foreignWorkspace,
-      "--binding", path.resolve("scripts/lk1_subscription_dev_candidate_binding.json"),
+      "--binding", path.join(fixtureScripts, "lk1_subscription_dev_candidate_binding.json"),
     ], { cwd: TEMP_ROOT, encoding: "utf8" }));
     for (const file of [
       "lk1-subscription-dev.candidate.json",
@@ -732,6 +754,20 @@ test("offline generator and publisher emit an install-blocked readiness packet",
     ], { cwd: path.resolve("."), encoding: "utf8" });
     assert.notEqual(installAttempt.status, 0);
     assert.match(installAttempt.stderr, /blocks DEV install/);
+    const driftWorkspace = path.join(parents[1], "drift-workspace");
+    publishOfflineDevSource(driftWorkspace, FROZEN_SOURCE_COMMIT);
+    const driftBinding = JSON.parse(fs.readFileSync(path.join(driftWorkspace, "input/source.flow.meta.json"), "utf8"));
+    for (const file of [
+      "scripts/nodered_games_nodes/fn_split_router.js",
+      "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_options.js",
+    ]) {
+      const inputPath = path.join(fixtureRoot, file);
+      const original = fs.readFileSync(inputPath);
+      fs.appendFileSync(inputPath, "\n// source drift\n");
+      assert.throws(() => publishFrozenCandidate(driftWorkspace, driftBinding), /offline source input digest mismatch/);
+      assert.equal(fs.existsSync(path.join(driftWorkspace, "build")), false);
+      fs.writeFileSync(inputPath, original);
+    }
   } finally {
     parents.forEach((parent) => fs.rmSync(parent, { recursive: true, force: true }));
   }

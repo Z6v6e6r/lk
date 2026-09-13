@@ -25,7 +25,10 @@ const TOOLING_TREE = "7".repeat(40);
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const clone = (value) => JSON.parse(JSON.stringify(value));
-const committed = (_commit, repositoryPath) => fs.readFileSync(path.join(ROOT, repositoryPath));
+// Tooling is mocked at the current checkout; the authorized source base is immutable.
+const committed = (commit, repositoryPath) => commit === TOOLING_COMMIT
+  ? fs.readFileSync(path.join(ROOT, repositoryPath))
+  : execFileSync("git", ["show", `${commit}:${repositoryPath}`], { cwd: ROOT });
 
 test("candidate location policy accepts only local temp or exact manifest-bound production root", () => {
   const manifestSha256 = "a".repeat(64);
