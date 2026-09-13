@@ -31,13 +31,13 @@ test('missing nodes and duplicate IDs fail before producing a graph',()=>{
   const source=fixture();assert.throws(()=>buildGamesMaintenanceBootstrap([...source,source[0]]),/Duplicate/);
 });
 test('admission rejects HTTP and silently stops scheduler, regardless of message flags',()=>{
-  const run=new Function('msg',fs.readFileSync('scripts/nodered_games_maintenance/admission.js','utf8'));
+  const run=new Function('msg',fs.readFileSync('scripts/nodered_games_maintenance_nodes/admission.js','utf8'));
   assert.equal(run({maintenanceOpen:true}),null);
   const out=run({req:{},res:{},maintenanceOpen:true});
   assert.equal(out.statusCode,503); assert.equal(out.payload.code,'GAMES_MAINTENANCE');
 });
 test('collector retains correlation without credentials, PII or arbitrary provider response',()=>{
-  const run=new Function('msg','flow','node',"const POINT='provider'; const PHASE='AFTER_PROVIDER';\n"+fs.readFileSync('scripts/nodered_games_maintenance/capture.js','utf8'));
+  const run=new Function('msg','flow','node',"const POINT='provider'; const PHASE='AFTER_PROVIDER';\n"+fs.readFileSync('scripts/nodered_games_maintenance_nodes/capture.js','utf8'));
   const out=run({_msgid:'message',statusCode:200,headers:{Authorization:'do-not-store'},payload:{secret:'do-not-store'},
     _splitCleanupCtx:{gameId:'game',step:'cancel',initialBookingIds:['booking'],phone:'do-not-store',accessToken:'do-not-store'}},context(),{error:()=>{}});
   assert.equal(out.payload[0].state,'RECONCILIATION_REQUIRED');
@@ -45,7 +45,7 @@ test('collector retains correlation without credentials, PII or arbitrary provid
   assert.equal(JSON.stringify(out.payload).includes('do-not-store'),false);
 });
 test('unknown/error response never establishes successful cancellation',()=>{
-  const run=new Function('msg','flow','node',"const POINT='provider'; const PHASE='AFTER_PROVIDER';\n"+fs.readFileSync('scripts/nodered_games_maintenance/capture.js','utf8'));
+  const run=new Function('msg','flow','node',"const POINT='provider'; const PHASE='AFTER_PROVIDER';\n"+fs.readFileSync('scripts/nodered_games_maintenance_nodes/capture.js','utf8'));
   const out=run({error:new Error('timeout'),statusCode:'ETIMEDOUT'},context(),{error:()=>{}});
   assert.equal(out.payload[0].errorObserved,true);assert.equal(out.payload[0].providerStatus,null);
   assert.equal(out.payload[0].state,'RECONCILIATION_REQUIRED');
@@ -54,7 +54,7 @@ test('packet refuses unreviewed private source, including caller supplied revisi
   assert.throws(()=>prepareMaintenancePacket(Buffer.from(JSON.stringify(fixture())),'revision'),/Unreviewed live source/);
 });
 test('incomplete evidence is explicit and each same-clock emission is distinct',()=>{
-  const run=new Function('msg','flow','node',"const POINT='provider'; const PHASE='AFTER_PROVIDER';\n"+fs.readFileSync('scripts/nodered_games_maintenance/capture.js','utf8'));
+  const run=new Function('msg','flow','node',"const POINT='provider'; const PHASE='AFTER_PROVIDER';\n"+fs.readFileSync('scripts/nodered_games_maintenance_nodes/capture.js','utf8'));
   const flow=context();const emit=()=>run({_msgid:'same',_splitLeaveCtx:{gameId:'x'.repeat(201),initialBookingIds:Array.from({length:101},(_,i)=>String(i))}},flow,{error:()=>{}}).payload[0];
   const a=emit(),b=emit();assert.notEqual(a._id,b._id);assert.equal(a.originalBookingIdCount,101);
   assert.equal(a.evidenceIncomplete,true);assert.equal(a.bookingIds.length,100);assert.equal(flow.get().pending,2);

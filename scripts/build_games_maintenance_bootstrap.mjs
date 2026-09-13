@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { SOURCE_SHA } from './build_organizer_handoff_candidate.mjs';
 const directory = path.dirname(fileURLToPath(import.meta.url));
-const read = name => fs.readFileSync(path.join(directory, 'nodered_games_maintenance', name + '.js'), 'utf8');
+const read = name => fs.readFileSync(path.join(directory, 'nodered_games_maintenance_nodes', name + '.js'), 'utf8');
 export const MAINTENANCE_ENTRIES = [
   'ecf32036257013bd', '9e6c24c105675e17', 'lk_staff_player_leave_post_20260812',
   'lk_split_leave_retry_inject_20260801', 'lk_split_cleanup_scheduler_20260822',
