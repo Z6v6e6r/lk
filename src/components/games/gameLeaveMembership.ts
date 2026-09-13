@@ -52,3 +52,45 @@ export function hasActiveGameLeaveMembership(
     .some((row) => active(row) && matches(row, identity))
     || Boolean(findActiveSplitPaymentForLeave(split?.payments, identity));
 }
+
+// Include active payment and waitlist membership when the visual roster is stale.
+export function hasOtherActiveGameMembers(
+  game: { participants?: unknown; waitlist?: unknown; metadata?: Row | null },
+  organizer: GameLeaveIdentity,
+): boolean {
+  const split = game.metadata?.splitPayment as Row | undefined;
+  return [...rows(game.participants), ...rows(game.waitlist), ...rows(split?.payments)]
+    .some((row) => active(row) && !matches(row, organizer));
+}
+
+export function collectGameCancellationBookingIds(game: {
+  booking?: unknown; payment?: unknown; metadata?: Row | null;
+}): Set<string> {
+  const split = game.metadata?.splitPayment as Row | undefined;
+  const sources = [game.booking, game.payment, game.metadata, split, ...rows(split?.payments)];
+  const result = new Set<string>();
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    const row = source as Row;
+    for (const value of [row.bookingId, row.booking_id, row.organizerBookingId,
+      row.bookingIds, row.booking_ids]) {
+      const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [value];
+      for (const candidate of values) {
+        const normalized = id(candidate);
+        if (normalized) result.add(normalized);
+      }
+    }
+  }
+  return result;
+}
+
+export function organizerTransferCandidates(
+  game: { participants?: unknown }, organizer: GameLeaveIdentity,
+): Array<{ id: string; name: string }> {
+  return rows(game.participants).filter(row => active(row) && !matches(row, organizer)
+    && !/PAYMENT_PENDING/i.test(String(row.status || "")))
+    .flatMap(row => {
+      const clientId = id(row.clientId || row.playerId || row.userId || row.id);
+      return clientId ? [{ id: clientId, name: String(row.name || row.playerName || "Игрок") }] : [];
+    });
+}

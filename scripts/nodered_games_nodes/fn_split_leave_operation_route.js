@@ -102,12 +102,17 @@ ctx.subscriptionReturnState = operation.subscriptionReturnState || null;
 ctx.subscriptionReturnReason = operation.subscriptionReturnReason || null;
 msg._splitLeaveCtx = ctx;
 if (ctx.operationState === "DONE") {
-  return respond(200, "DONE", operation.refundMessage || operation.successMessage || "Вы вышли из игры");
+  ctx.subscriptionReturnState = null;
+  ctx.refundMessage = operation.refundMessage || operation.successMessage || "Вы вышли из игры";
+  msg.payload = { matchedCount: 1 };
+  return [null, null, null, null, msg];
 }
 if (ctx.operationState === "RETURN_PENDING") {
   const serviceToken = String(global.get("vivacrm_access_token") || "").trim();
   if (!serviceToken) {
-    return respond(202, "RETURN_PENDING", "Вы вышли из игры. Возврат посещения проверяется");
+    ctx.subscriptionReturnState = "RETURN_PENDING";
+    msg.payload = { matchedCount: 1 };
+    return [null, null, null, null, msg];
   }
   ctx.localAlreadyApplied = true;
   ctx.upstreamAuthHeader = `Bearer ${serviceToken}`;

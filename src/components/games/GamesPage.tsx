@@ -1,5 +1,6 @@
+import { GameBookingCancellation } from "./GameBookingCancellation";
 import { AvatarImage } from "../UI/AvatarImage";
-import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership } from "./gameLeaveMembership";
+import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership, hasOtherActiveGameMembers } from "./gameLeaveMembership";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
 import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
@@ -12130,6 +12131,18 @@ export default function GamesPage({
     setCancellingUnpaidGame(true);
     setGameRecordError(null);
 
+    const fresh = await apiFetchPadelGameRecord(gameRecordId);
+    if (fresh.error || fresh.data?.id !== gameRecordId) {
+      setGameRecordError("Не удалось проверить актуальный состав игры");
+      setCancellingUnpaidGame(false);
+      return;
+    }
+    if (hasOtherActiveGameMembers(fresh.data, { id: profileId, phone: profilePhoneNorm ?? profilePhone })) {
+      setGameRecordError("В игре есть другие игроки. Сначала передайте роль организатора одному из участников.");
+      setCancellingUnpaidGame(false);
+      return;
+    }
+
     let cleanupHandled = false;
     let cleanupSucceeded = false;
 
@@ -12139,6 +12152,11 @@ export default function GamesPage({
       limit: 1,
       intent: "cancel_game",
     });
+    if (cleanupResult.error) {
+      setGameRecordError(cleanupResult.error.message || "Не удалось отменить игру");
+      setCancellingUnpaidGame(false);
+      return;
+    }
     const cleanupData = cleanupResult.data;
     const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
     const cleanupItem = cleanupItems.find((item) => item.gameId === gameRecordId)
@@ -12179,7 +12197,7 @@ export default function GamesPage({
 
     setGameRecordError(cancelResult.error?.message || "Не удалось отменить бронь");
     setCancellingUnpaidGame(false);
-  }, [gameRecordId, cancellingUnpaidGame, removeGameRecordFromStores]);
+  }, [gameRecordId, cancellingUnpaidGame, removeGameRecordFromStores, profileId, profilePhoneNorm, profilePhone]);
 
   const toggleDetailsCommunityUnpublishSelection = useCallback((communityId: string) => {
     const normalizedCommunityId = communityId.trim();
@@ -16970,6 +16988,17 @@ export default function GamesPage({
                 </button>
               )}
             </div>
+          )}
+
+          {activeGameRecord && isCurrentUserOrganizerByDetails
+            && !isReadOnlySyntheticGame && !subscriptionUsageShadowEnabled
+            && !isGameCancelledStatus(gameRecordStatus) && activeGameRecord.archived !== true && (
+            <GameBookingCancellation
+              key={activeGameRecord.id}
+              gameId={activeGameRecord.id}
+              organizer={{ id: profileId, phone: profilePhoneNorm ?? profilePhone }}
+              onGameChanged={(game) => upsertGameRecordInStores(game, { recordMode: "replace" })}
+            />
           )}
 
           {!isCurrentUserConfirmedParticipant
