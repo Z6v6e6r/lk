@@ -122,9 +122,9 @@ test("every booking cancellation rechecks exact linkage at the mutation boundary
 
 test("organizer game cancellation never falls back to direct Viva cancellation", () => {
   const organizerCancelSource = sourceSlice(
-    cabinetSource,
-    "const handleCancelGameBooking = async",
-    "const handleArchiveGameFromCabinet = async",
+    fs.readFileSync("src/components/games/GameBookingCancellation.tsx", "utf8"),
+    "const cleanupResult = await apiCleanupPadelGameByOrganizer",
+    "return { ok: true, message:",
   );
   assert.match(organizerCancelSource, /apiCleanupPadelGameByOrganizer\(gameId/);
   assert.match(organizerCancelSource, /cleanupItem\?\.cancelledInLk === true/);
@@ -161,7 +161,8 @@ test("GamesPage self leave delegates to server and never patches roster locally"
     "const handleLeaveCurrentUserFromDetails = useCallback",
     "const handleSplitJoinCurrentUserFromDetails = useCallback",
   );
-  assert.match(leaveSource, /apiLeavePadelGameAsCurrentUser\(gameRecordId\)/);
+  assert.match(leaveSource, /leaveCurrentUserRequest\(gameRecordId\)/);
+  assert.match(gamesPageSource, /const leaveCurrentUserRequest = selfLeavePreview\?\.request \?\? apiLeavePadelGameAsCurrentUser/);
   assert.match(leaveSource, /state === "RETRY_REQUIRED"/);
   assert.match(leaveSource, /state === "IN_PROGRESS"/);
   assert.match(leaveSource, /state === "DONE"/);

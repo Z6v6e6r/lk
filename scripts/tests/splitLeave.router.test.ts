@@ -23,6 +23,14 @@ function run(fileName: string, msg: Msg, options: {
   return { result: result as any[], globalValues, flowValues };
 }
 
+function finishReceiptAfterFenceRelease(msg: Msg) {
+  const release = run("../nodered_organizer_handoff_nodes/fn_leave_release_build.js", msg).result[0];
+  assert.ok(release.payload[0]["membershipMutation.operationKey"]);
+  release.payload = { acknowledged: true, matchedCount: 0 };
+  const acknowledged = run("../nodered_organizer_handoff_nodes/fn_leave_release_ack.js", release).result[0];
+  return run("fn_split_leave_finalize.js", acknowledged).result[0];
+}
+
 function selfGame(overrides: Msg = {}) {
   return {
     id: "game-1",
@@ -848,8 +856,9 @@ test("already-applied operation reads durable DONE directly and remains idempote
   authorized.payload = [{ _id: `game-1:${operationId}`, state: "DONE", successMessage: "Вы вышли из игры" }];
   const routed = run("fn_split_leave_operation_route.js", authorized).result;
   assert.deepEqual(routed.slice(0, 2), [null, null]);
-  assert.equal(routed[2].statusCode, 200);
-  assert.equal(routed[2].payload.state, "DONE");
+  const completed = finishReceiptAfterFenceRelease(routed[4]);
+  assert.equal(completed.statusCode, 200);
+  assert.equal(completed.payload.state, "DONE");
 });
 
 test("local apply removes active roster while historical chat projection remains non-authoritative", () => {
@@ -1704,7 +1713,7 @@ test("first leave of imported Viva player without prior operation still discover
 });
 
 
-test("after phantom cleanup an absent player replays the durable DONE receipt without another mutation", () => {
+test("after phantom cleanup an absent player replays the durable DONE receipt without another provider mutation", () => {
   const game = phantomGame();
   game.participants = game.participants.filter((p: Msg) => p.id !== "client-1");
   const operation = priorCancelledLeave({ state: "DONE", vivaVerification: "no_active_booking_for_exercise", successMessage: "Вы вышли из игры" });
@@ -1714,9 +1723,10 @@ test("after phantom cleanup an absent player replays the durable DONE receipt wi
   msg.payload = [operation];
   const out = run("fn_split_leave_operation_route.js", msg).result;
   assert.equal(out[0], null); assert.equal(out[1], null);
-  assert.equal(out[2].statusCode, 200);
-  assert.equal(out[2].payload.state, "DONE");
-  assert.equal(out[2].payload.operationId, operation.operationId);
+  const completed = finishReceiptAfterFenceRelease(out[4]);
+  assert.equal(completed.statusCode, 200);
+  assert.equal(completed.payload.state, "DONE");
+  assert.equal(completed.payload.operationId, operation.operationId);
 });
 
 test("a client-editable leave marker cannot forge a successful exit receipt", () => {

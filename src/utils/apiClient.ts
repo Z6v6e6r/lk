@@ -9271,6 +9271,19 @@ export async function apiCancelPadelSplitParticipantBookings(
   );
 }
 
+export async function apiTransferPadelGameOrganizer(
+  gameId: string,
+  successorId: string,
+  expectedUpdatedAt: string,
+) {
+  return request<{ ok: boolean; state: "ORGANIZER_TRANSFERRED" | "CONFLICT";
+    gameId: string; successorId?: string; message: string }>(
+    `/lk/games/${encodeURIComponent(gameId.trim())}/organizer/transfer`,
+    { method: "POST", baseUrl: getServ2Origin() || "", auth: true, retries: 0,
+      body: JSON.stringify({ successorId, expectedUpdatedAt }) },
+  );
+}
+
 export async function apiLeavePadelGameAsCurrentUser(
   gameId: string,
   options: {

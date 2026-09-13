@@ -160,7 +160,7 @@ const allRelatedPhones = uniq([
 
 ctx.localApplyAt = nowIso;
 msg._splitLeaveCtx = ctx;
-const query = { id: ctx.gameId, archived: { $ne: true } };
+const query = { id: ctx.gameId, archived: { $ne: true }, "membershipMutation.operationKey": ctx.operationKey };
 if (game.updatedAt !== undefined) query.updatedAt = game.updatedAt;
 const update = {
   $set: {

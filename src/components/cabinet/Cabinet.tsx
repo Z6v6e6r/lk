@@ -46,7 +46,6 @@ import { Advertisement } from "./Advertisement";
 import { CommunitiesSectionLoader } from "./CommunitiesSectionLoader";
 import { SupportChatWidget } from "./SupportChatWidget";
 import {
-  BookingCancellationDialog,
   type BookingCancellationExecutionResult,
 } from "./BookingCancellationDialog";
 import {
@@ -186,7 +185,6 @@ type GamesUpdatedEventDetail = {
   source?: string;
 };
 
-type GameCancelState = "idle" | "confirm";
 
 type ResultPromptStationModalState = {
   stationTitle: string;
@@ -1656,8 +1654,6 @@ export function Cabinet({
   const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
   const [, setChatReadMap] = useState<Record<string, number>>({});
   const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
-  const [gameCancelStateById, setGameCancelStateById] = useState<Record<string, GameCancelState>>({});
-  const [cancellingGameId, setCancellingGameId] = useState<string | null>(null);
   const [archivingGameId, setArchivingGameId] = useState<string | null>(null);
   const [archiveGameErrorById, setArchiveGameErrorById] = useState<Record<string, string>>({});
   const [resultPromptStationModal, setResultPromptStationModal] = useState<ResultPromptStationModalState | null>(null);
@@ -3093,64 +3089,6 @@ export function Cabinet({
     onOpenGames({ gameId: game.id, openChat: false });
   };
 
-  const handleCancelGameBooking = async (
-    gameId: string,
-    bookingId: string,
-    action: BookingCancellationAction,
-  ): Promise<BookingCancellationExecutionResult> => {
-    if (!gameId || !bookingId || cancellingGameId) {
-      return {
-        ok: false,
-        message: "Не удалось отменить запись",
-      };
-    }
-
-    setCancellingGameId(gameId);
-    const cleanupResult = await apiCleanupPadelGameByOrganizer(gameId, {
-      force: true,
-      dryRun: false,
-      limit: 1,
-      intent: "cancel_game",
-      refundMethod: action.refundMethod ?? undefined,
-      cancellationActionId: action.id,
-      actorBookingId: bookingId,
-    });
-    const cleanupItems = Array.isArray(cleanupResult.data?.items)
-      ? cleanupResult.data.items
-      : [];
-    const cleanupItem = cleanupItems.find((item) => (
-      normalizeBookingLikeId(item.gameId) === normalizeBookingLikeId(gameId)
-    )) ?? null;
-    const ok = !cleanupResult.error
-      && cleanupItem?.cancelledInLk === true
-      && cleanupItem.withVivaErrors !== true;
-    const successMessage = cleanupItem?.refundMessage || action.successMessage;
-
-    setCancellingGameId(null);
-    if (!ok) {
-      return {
-        ok: false,
-        message: cleanupResult.error?.message
-          || "Не удалось подтвердить серверную отмену игры. Запись Viva не изменена этим экраном.",
-      };
-    }
-
-    if (action.id === "subscription") {
-      const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
-      if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
-        return {
-          ok: false,
-          message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован. Повторите позже.",
-        };
-      }
-    }
-
-    return {
-      ok: true,
-      message: successMessage,
-    };
-  };
-
   const handleArchiveGameFromCabinet = async (gameId: string) => {
     const normalizedGameId = gameId.trim();
     if (!normalizedGameId || archivingGameId) return;
@@ -3209,12 +3147,6 @@ export function Cabinet({
 
       setCreatedGames((current) => current.filter((item) => item.id !== normalizedGameId));
       setChatUnreadByGame((current) => {
-        if (!current[normalizedGameId]) return current;
-        const next = { ...current };
-        delete next[normalizedGameId];
-        return next;
-      });
-      setGameCancelStateById((current) => {
         if (!current[normalizedGameId]) return current;
         const next = { ...current };
         delete next[normalizedGameId];
@@ -3511,21 +3443,7 @@ export function Cabinet({
       && isGamePaidForInvite(game)
     );
     const canOpenChat = !isSyntheticBookingGame;
-    const canCancelGameBooking = Boolean(
-      !isCancelledForCabinet
-      && isOrganizer
-      && linkedBooking
-      && linkedBooking.cancellationDeadline
-      && new Date(linkedBooking.cancellationDeadline) > new Date(),
-    );
-    const showCancelDeadlineText = Boolean(
-      !isCancelledForCabinet
-      && isOrganizer
-      && linkedBooking
-      && !canCancelGameBooking,
-    );
     const showArchiveGameAction = isCancelledForCabinet;
-    const cancelState = gameCancelStateById[game.id] ?? "idle";
     const isArchivingThisGame = archivingGameId === game.id;
     const archiveGameError = archiveGameErrorById[game.id] ?? null;
     const unreadCount = chatUnreadByGame[game.id] ?? 0;
@@ -3875,36 +3793,7 @@ export function Cabinet({
         {archiveGameError && (
           <div className="booking-status-text">{archiveGameError}</div>
         )}
-        {canCancelGameBooking && cancelState === "idle" && linkedBooking && (
-          <div className="booking-cancel-row game-created-cancel-row">
-            <button
-              className="btn-cancel danger"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                setGameCancelStateById((prev) => ({ ...prev, [game.id]: "confirm" }));
-              }}
-            >
-              Отменить запись
-            </button>
-          </div>
-        )}
-        {showCancelDeadlineText && (
-          <div className="booking-status-text">Отмена возможна только за 24 часа</div>
-        )}
-        {linkedBooking && (
-          <BookingCancellationDialog
-            bookingId={linkedBooking.id}
-            isOpen={cancelState === "confirm"}
-            onClose={() => {
-              setGameCancelStateById((prev) => ({ ...prev, [game.id]: "idle" }));
-            }}
-            onSuccessClose={() => {
-              window.location.reload();
-            }}
-            executeAction={(action) => handleCancelGameBooking(game.id, linkedBooking.id, action)}
-          />
-        )}
+
       </div>
     );
   };
