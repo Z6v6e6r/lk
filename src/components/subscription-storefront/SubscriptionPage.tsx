@@ -224,7 +224,14 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
 
   return <>
     {!previewView && statusNotice && <div className="subscription-storefront" style={{ minHeight: 0 }}>
-      <div className="subscription-status-message" role="status">{statusNotice}</div>
+      <div className="subscription-status-message" role="status">
+        {!statuses ? <div className="subscription-loading" aria-label={statusNotice}>
+          <span className="subscription-loading-ball" aria-hidden="true" />
+          <span className="subscription-loading-ball" aria-hidden="true" />
+          <span className="subscription-loading-ball" aria-hidden="true" />
+          <span className="subscription-loading-label">{statusNotice}</span>
+        </div> : statusNotice}
+      </div>
     </div>}
     {(previewView || statuses) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}
