@@ -898,6 +898,63 @@
 
 .subscription-storefront .subscription-status-message { padding: 16px; font: inherit; }
 
+.subscription-storefront .subscription-loading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+  min-height: 96px;
+  padding-bottom: 20px;
+}
+
+.subscription-storefront .subscription-loading-ball {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #c7ed47;
+  box-shadow: inset -3px -3px 0 rgb(0 0 0 / 10%);
+  animation: subscription-ball-bounce 900ms ease-in-out infinite;
+}
+
+.subscription-storefront .subscription-loading-ball::before,
+.subscription-storefront .subscription-loading-ball::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  width: 16px;
+  height: 24px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+.subscription-storefront .subscription-loading-ball::before { left: -12px; }
+.subscription-storefront .subscription-loading-ball::after { right: -12px; }
+.subscription-storefront .subscription-loading-ball:nth-child(2) { animation-delay: 150ms; }
+.subscription-storefront .subscription-loading-ball:nth-child(3) { animation-delay: 300ms; }
+
+.subscription-storefront .subscription-loading-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@keyframes subscription-ball-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-24px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subscription-storefront .subscription-loading-ball { animation: none; }
+}
+
 /* Figma desktop 1752:2759; intrinsic height accommodates live copy and three variants. */
 .subscription-card--no-progress { padding: 39px 4px 0; }
 .subscription-card--no-progress > .subscription-card__progress { display: none; }
