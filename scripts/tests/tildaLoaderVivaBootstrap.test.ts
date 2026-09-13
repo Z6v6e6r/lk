@@ -1,3 +1,5 @@
+// Run the HAR-derived transport/resource regressions in the existing bootstrap CI gate.
+import "./homeLoadErrors.test.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";

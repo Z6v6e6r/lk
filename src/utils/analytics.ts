@@ -381,7 +381,6 @@ function disableAnalyticsTransport(reason: string) {
 
 async function sendEvent(
   serializedEvent: string,
-  preferBeacon: boolean,
 ): Promise<SendEventResult> {
   if (isLkIdleRequestPaused()) {
     return {
@@ -402,36 +401,8 @@ async function sendEvent(
     };
   }
 
-  if (
-    preferBeacon
-    && typeof navigator !== "undefined"
-    && typeof navigator.sendBeacon === "function"
-  ) {
-    const body = new Blob([serializedEvent], { type: "application/json" });
-    for (const endpoint of endpoints) {
-      if (isLkIdleRequestPaused()) {
-        return {
-          delivered: false,
-          retryable: false,
-          status: null,
-          paused: true,
-        };
-      }
-      try {
-        if (navigator.sendBeacon(endpoint, body)) {
-          return {
-            delivered: true,
-            retryable: true,
-            status: 200,
-            paused: false,
-          };
-        }
-      } catch {
-        // ignored
-      }
-    }
-  }
-
+  // JSON beacons include credentials and fail against the public wildcard-CORS
+  // collector. Keepalive fetch reports the HTTP result, not just queue admission.
   let hasRetryableFailure = false;
   let lastStatus: number | null = null;
 
@@ -442,6 +413,7 @@ async function sendEvent(
         headers: { "Content-Type": "application/json" },
         body: serializedEvent,
         keepalive: true,
+        credentials: "omit",
       });
       if (response.ok) {
         return {
@@ -483,7 +455,7 @@ async function flushPendingEvents() {
     const nextQueue: string[] = [];
     for (const eventPayload of queue) {
       if (isLkIdleRequestPaused()) return;
-      const result = await sendEvent(eventPayload, false);
+      const result = await sendEvent(eventPayload);
       if (result.delivered) {
         continue;
       }
@@ -594,7 +566,7 @@ export function identifyAnalyticsUser(payload: IdentifyAnalyticsUserPayload) {
 export function trackAnalyticsEvent(
   event: string,
   payload: AnalyticsPayload = {},
-  options?: { preferBeacon?: boolean },
+  _options?: { preferBeacon?: boolean },
 ) {
   if (isLkIdleRequestPaused()) return;
   const eventName = trimString(event);
@@ -612,7 +584,7 @@ export function trackAnalyticsEvent(
     await flushPendingEvents();
     if (isAnalyticsTemporarilyDisabled()) return;
 
-    const result = await sendEvent(serializedEvent, options?.preferBeacon ?? false);
+    const result = await sendEvent(serializedEvent);
     if (result.delivered) {
       return;
     }
