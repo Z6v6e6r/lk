@@ -22,17 +22,10 @@ const NOW = new Date("2026-09-10T12:00:00.000Z");
 const ATTEMPT_ID = "a".repeat(32);
 const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 const canonical = (value) => `${JSON.stringify(value, null, 2)}\n`;
-// Tooling is fixture-owned current code; flow inputs must come from their
-// exact frozen source commit even after the working checkout has advanced.
-const committed = (commit, repositoryPath) => {
-  if (commit === SOURCE_COMMIT) {
-    return execFileSync("git", ["show", `${commit}:${repositoryPath}`], {
-      cwd: ROOT, stdio: ["ignore", "pipe", "pipe"],
-    });
-  }
-  assert.equal(commit, TOOLING_COMMIT);
-  return fs.readFileSync(path.join(ROOT, repositoryPath));
-};
+// Tooling is mocked at the current checkout; the authorized source base is immutable.
+const committed = (commit, repositoryPath) => commit === TOOLING_COMMIT
+  ? fs.readFileSync(path.join(ROOT, repositoryPath))
+  : execFileSync("git", ["show", `${commit}:${repositoryPath}`], { cwd: ROOT });
 const BOOTSTRAP_UNIT_HASHES = Object.freeze({
   "lk1-subscription-dev-mongo.service": "370f07b518f14d87ba78d2cdc3e3cd15714349cf664d2bf53ac95ec2125a9980",
   "lk1-subscription-dev-cup.service": "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",

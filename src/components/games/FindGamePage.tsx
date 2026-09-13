@@ -1759,8 +1759,6 @@ export default function FindGamePage({
 
       <div className="find-game-section-head">
         <div>
-          <div className="game-section-title">Game Atlas</div>
-          <div className="find-game-section-sub">Найдите игру по месту, уровню и свободным местам</div>
           {presetStudioName && <div className="find-game-section-sub">{presetStudioName}</div>}
         </div>
         {visibleCountLabel && <div className="find-game-total">{visibleCountLabel}</div>}
