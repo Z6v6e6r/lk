@@ -63,9 +63,9 @@ test("exhausted self leave stops the roster spinner instead of pending forever",
   // The unresolved branch must refresh the game, exit when the player is already gone and
   // otherwise clear the disabled "leaving" state with the real server message.
   assert.match(leaveHandlerSource, /const refreshed = await apiFetchPadelGameRecord\(gameRecordId\)/);
-  assert.match(leaveHandlerSource, /upsertGameRecordInStores\(refreshedRecord, \{ communityMode: "if_exists" \}\)/);
-  assert.match(leaveHandlerSource, /\.some\(\(player\) => isCurrentUserPlayer\(player\)\)/);
-  assert.match(leaveHandlerSource, /finalMessage = SELF_REMOVE_SUCCESS_NOTICE/);
+  assert.match(leaveHandlerSource, /upsertGameRecordInStores\(refreshedRecord, \{ communityMode: "if_exists", recordMode: "replace" \}\)/);
+  assert.match(leaveHandlerSource, /hasActiveGameLeaveMembership\(refreshedRecord/);
+  assert.match(leaveHandlerSource, /finalMessage = finalMessage \|\| SELF_REMOVE_SUCCESS_NOTICE/);
   assert.match(leaveHandlerSource, /setLeavePendingMessage\(null\)/);
   assert.match(leaveHandlerSource, /setGameRosterError\(lastPendingMessage \|\| SELF_REMOVE_PENDING_NOTICE\)/);
   assert.doesNotMatch(leaveHandlerSource, /if \(!finalMessage\) \{\s*setLeavePendingMessage\(SELF_REMOVE_PENDING_NOTICE\);\s*return;\s*\}/);
