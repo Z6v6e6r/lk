@@ -353,6 +353,8 @@ jobs:
           scripts/tests/splitRouter.transactionAndSubscription.test.ts
           scripts/tests/splitRouter.dailyLimit.test.ts
           scripts/tests/splitLeave.router.test.ts
+          scripts/tests/gameLeaveMembership.test.ts
+          scripts/tests/gameLeaveCancellation.test.ts
           scripts/tests/legacyRosterBridge.nodered.test.ts
           scripts/tests/gamesPatchCancelGuard.test.ts
           scripts/tests/gamesPatchRecovery.test.mjs
