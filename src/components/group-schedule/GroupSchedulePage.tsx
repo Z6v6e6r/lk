@@ -1268,8 +1268,8 @@ export default function GroupSchedulePage({
                           disabled={subscriptionUsageShadow.busy}
                         >
                           {subscriptionUsageShadow.busy
-                            ? "Проверяем скидку 50%…"
-                            : "Проверить скидку 50% без записи и оплаты"}
+                            ? "Проверяем скидку по подписке…"
+                            : "Проверить скидку по подписке без записи и оплаты"}
                         </button>
                       </div>
                     )}
@@ -1388,7 +1388,7 @@ export default function GroupSchedulePage({
                                     >
                                       <span className="group-schedule-discount-label">
                                         <span>{product.name}</span>
-                                        {discount && <span className="group-schedule-discount-description">Скидка 50% по подписке «{discount.subscriptionName}»</span>}
+                                        {discount && <span className="group-schedule-discount-description">Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}»</span>}
                                       </span>
                                       <strong className={discount ? "group-schedule-promo-price group-schedule-discount-price" : promoPreview ? "group-schedule-promo-price" : undefined}>
                                         {discount ? (

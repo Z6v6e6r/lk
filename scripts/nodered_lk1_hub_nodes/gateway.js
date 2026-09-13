@@ -131,6 +131,41 @@ const lk1Finish = (ctx) => {
     gameMinutes: ctx.lk1.decision.gameMinutes || null };
   return emit(OUTPUT_FINAL);
 };
+// Group events use their server-resolved tariff product, never the game carrier.
+const lk1IsGroupPayment = (ctx) => ctx.managedAction === "BOOK_GROUP_TRAINING";
+const lk1GroupPaymentBinding = (ctx, quote = ctx.lk1) => {
+  const target = quote?.target;
+  const decision = quote?.decision;
+  const percent = quote?.rule?.groupTrainingDiscountPercent;
+  const base = target?.basePriceMinor;
+  if (ctx.caller !== "http" || target?.category !== "GROUP_TRAINING"
+    || target.eventId !== ctx.exerciseId || typeof target.priceProductId !== "string" || !target.priceProductId.trim()
+    || !Number.isSafeInteger(base) || base <= 0 || base > 1_000_000
+    || !Number.isSafeInteger(percent) || percent < 0 || percent > 100
+    || decision?.eligible !== true || decision.subscriptionVisitCount !== 0
+    || decision.benefit?.finalPriceMinor !== base - Math.floor(base * percent / 100)) return null;
+  return { productId: target.priceProductId, productType: "SERVICE", baseMinor: base,
+    chargeMinor: decision.benefit.finalPriceMinor,
+    discountMinor: base - decision.benefit.finalPriceMinor };
+};
+// Payment products use Viva's services/subServices envelopes as well as lists.
+const lk1PaymentProductRows = (value, seen = new Set()) => {
+  if (Array.isArray(value)) return value;
+  if (!isObj(value) || seen.has(value) || value.last === false || value.hasNext === true) return null;
+  seen.add(value);
+  const keys = ["content", "items", "records", "data", "payload", "result", "services", "subServices"]
+    .filter(key => value[key] !== undefined);
+  if (!keys.length) return null;
+  const lists = keys.map(key => lk1PaymentProductRows(value[key], seen));
+  if (lists.some(rows => rows === null)) return null;
+  const rows = lists.flat();
+  const total = Number(value.totalElements ?? value.totalCount);
+  const page = Number(value.number ?? value.page);
+  const pages = Number(value.totalPages);
+  if ((Number.isFinite(total) && total > rows.length)
+    || (Number.isFinite(page) && Number.isFinite(pages) && page + 1 < pages)) return null;
+  return rows;
+};
 const lk1Checkout = (ctx) => {
   if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");
   if (ctx.lk1.decision.benefit.finalPriceMinor === 0) return lk1Finish(ctx);
@@ -139,7 +174,8 @@ const lk1Checkout = (ctx) => {
     if (!ctx.lk1.transactionId) return lk1Stop(ctx, "LK1_TRANSACTION_OUTCOME_UNKNOWN");
     return prepareAdminGet(ctx, "lk1_transaction_readback", `/api/v1/transactions/${encodeURIComponent(ctx.lk1.transactionId)}`);
   }
-  // Reuse the split SERVICE selection and serializer via the existing finalizer.
+  if (lk1IsGroupPayment(ctx) && !lk1GroupPaymentBinding(ctx)) return lk1Stop(ctx, "LK1_GROUP_PAYMENT_BINDING_INVALID");
+  // Groups select the event tariff below; games retain the existing split serializer.
   const token = readGlobal("vivacrm_access_token");
   if (!token) return lk1Stop(ctx, "LK1_SERVICE_TOKEN_UNAVAILABLE");
   return prepareHttp(ctx, "lk1_payment_products", "POST", `${VIVA_API_BASE}/api/v1/products/available/by-booking`, {
@@ -259,6 +295,19 @@ if (ctx.step === "lk1_ingress_operation_find") {
       return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
     }
     const amount = quote.decision.benefit.finalPriceMinor;
+    if (managedActionForTarget({ ...ctx, category: operation.category }) === "BOOK_GROUP_TRAINING") {
+      const binding = lk1GroupPaymentBinding({ ...ctx, exerciseId: operation.exerciseId }, quote);
+      const intent = quote.transactionIntent;
+      // A previously verified legacy game-carrier checkout remains replayable.
+      // It never re-enters the write path; missing checkout still fails below.
+      const legacy = isObj(intent) && !Object.prototype.hasOwnProperty.call(intent, "productType")
+        && !Object.prototype.hasOwnProperty.call(intent, "baseMinor");
+      const validIntent = legacy
+        ? typeof intent.productId === "string" && Boolean(intent.productId.trim()) && intent.discountMinor === 1_000_000 - amount
+        : binding && isObj(intent) && intent.productId === binding.productId && intent.productType === binding.productType
+          && intent.baseMinor === binding.baseMinor && intent.discountMinor === binding.discountMinor;
+      if (!binding || (amount > 0 && !validIntent)) return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
+    }
     if (amount > 0) {
       const checkout = quote.checkout;
       const intent = quote.transactionIntent;
@@ -554,7 +603,7 @@ if (ctx.step === "lk1_policy_decision") {
       || Object.keys(expected).sort().join() !== ["basePriceMinor", "amountMinor", "productId", "startsAt", "durationMinutes", "discountPercent"].sort().join()
       || !Number.isSafeInteger(expected.basePriceMinor) || !Number.isSafeInteger(expected.amountMinor)
       || expected.basePriceMinor !== target.basePriceMinor || expected.amountMinor !== decision.benefit.finalPriceMinor
-      || expected.productId !== target.priceProductId || expected.discountPercent !== 50
+      || expected.productId !== target.priceProductId
       || expected.discountPercent !== ctx.lk1.rule.groupTrainingDiscountPercent
       || expected.durationMinutes !== target.durationMinutes || typeof expected.startsAt !== "string"
       || Date.parse(expected.startsAt) !== Date.parse(target.startsAt)) {
@@ -578,6 +627,31 @@ if (ctx.step === "lk1_policy_decision") {
 
 if (ctx.step === "lk1_payment_products") {
   if (!isHttpOk(msg.statusCode)) return lk1Stop(ctx, "LK1_PAYMENT_CARRIER_UNAVAILABLE");
+  if (lk1IsGroupPayment(ctx)) {
+    const binding = lk1GroupPaymentBinding(ctx);
+    const products = lk1PaymentProductRows(msg.payload);
+    if (!binding || !products) return lk1Stop(ctx, "LK1_GROUP_PAYMENT_BINDING_INVALID");
+    const rows = products.filter(row => isObj(row)
+      && [row.id, row.productId].includes(binding.productId));
+    if (rows.length !== 1) return lk1Stop(ctx, "LK1_GROUP_PAYMENT_PRODUCT_UNAVAILABLE");
+    const row = rows[0];
+    const exact = (values, expected) => {
+      const present = values.filter(value => value !== undefined);
+      return present.length > 0 && present.every(value => value === expected);
+    };
+    if (!exact([row.id, row.productId], binding.productId)
+      || !exact([row.type, row.productType], binding.productType)
+      || !exact([row.cost, row.price, row.amount], binding.baseMinor)) {
+      return lk1Stop(ctx, "LK1_GROUP_PAYMENT_PRODUCT_CHANGED");
+    }
+    const product = { id: binding.productId, type: binding.productType, count: 1,
+      bookingIds: [ctx.confirmedBookingId], customAmount: null, discount: binding.discountMinor };
+    msg._splitCtx = { productId: binding.productId, transactionPayload: {
+      clientPhone: ctx.actorPhone, paymentMethod: "SMS", products: [product], studioId: ctx.studioId,
+      discountReason: "Скидка по правилам подписки на групповое занятие",
+    } };
+    return prepareUserGet(ctx, "lk1_payment_profile_recheck", `/end-user/api/v1/${ctx.tenantKey}/profile`);
+  }
   msg.statusCode = 200;
   msg._subscriptionBooking = ctx;
   return emit(OUTPUT_FINAL);
@@ -587,6 +661,9 @@ if (ctx.step === "lk1_payment_profile_recheck") {
   const profile = unwrapRecord(msg.payload);
   const payload = msg._splitCtx?.transactionPayload;
   const product = payload?.products?.[0];
+  const group = lk1IsGroupPayment(ctx);
+  const binding = group ? lk1GroupPaymentBinding(ctx) : null;
+  if (group && (!binding || product?.id !== binding.productId)) return lk1Stop(ctx, "LK1_GROUP_PAYMENT_BINDING_INVALID");
   if (!isHttpOk(msg.statusCode) || normalizeId(profile?.id || profile?.clientId) !== normalizeId(ctx.actorClientId)
     || normalizePhone(profile?.phone || profile?.phoneNumber) !== normalizePhone(ctx.actorPhone)
     || !isObj(payload) || !Array.isArray(payload.products) || payload.products.length !== 1
@@ -597,7 +674,7 @@ if (ctx.step === "lk1_payment_profile_recheck") {
     || normalizePhone(payload.clientPhone) !== normalizePhone(ctx.actorPhone)
     || typeof product.id !== "string" || product.id !== msg._splitCtx.productId
     || !Number.isSafeInteger(product.discount)
-    || product.discount !== 1_000_000 - ctx.lk1.decision.benefit.finalPriceMinor) {
+    || product.discount !== (group ? binding.baseMinor : 1_000_000) - ctx.lk1.decision.benefit.finalPriceMinor) {
     return lk1Stop(ctx, "LK1_PAYMENT_INTENT_INVALID");
   }
   const configured = lk1Config([{ productId: ctx.lk1.rule.productId }]);
@@ -606,7 +683,8 @@ if (ctx.step === "lk1_payment_profile_recheck") {
   ctx.lk1.transactionAttemptedAt = attemptedAt;
   ctx.lk1.transactionIntent = { productId: product.id, bookingId: ctx.confirmedBookingId,
     actorClientId: ctx.actorClientId, studioId: ctx.studioId,
-    chargeMinor: ctx.lk1.decision.benefit.finalPriceMinor, discountMinor: product.discount };
+    chargeMinor: ctx.lk1.decision.benefit.finalPriceMinor, discountMinor: product.discount,
+    ...(group ? { productType: binding.productType, baseMinor: binding.baseMinor } : {}) };
   // No credentials, phone or caller redirects in the durable price/minute record.
   ctx.lk1TransactionPayload = { clientPhone: payload.clientPhone, paymentMethod: "SMS",
     products: [product], studioId: ctx.studioId, discountReason: payload.discountReason,
@@ -652,6 +730,14 @@ if (ctx.step === "lk1_transaction_id_saved") {
 if (ctx.step === "lk1_transaction_readback") {
   const transaction = unwrapRecord(msg.payload);
   const intent = ctx.lk1.transactionIntent;
+  if (lk1IsGroupPayment(ctx)) {
+    const binding = lk1GroupPaymentBinding(ctx);
+    if (!binding || !isObj(intent) || intent.productId !== binding.productId
+      || intent.productType !== binding.productType || intent.baseMinor !== binding.baseMinor
+      || intent.chargeMinor !== binding.chargeMinor || intent.discountMinor !== binding.discountMinor) {
+      return lk1Stop(ctx, "LK1_GROUP_PAYMENT_BINDING_INVALID");
+    }
+  }
   // All supplied aliases are evidence, not alternatives from which to pick a
   // convenient value. Conflicting or malformed evidence cannot prove a bill.
   const one = (values, valid) => {

@@ -29,9 +29,9 @@ export function isGroupSubscriptionDiscountQuote(
     && typeof q.subscriptionId === "string" && Boolean(q.subscriptionId.trim())
     && typeof q.subscriptionName === "string" && Boolean(q.subscriptionName.trim())
     && typeof q.productId === "string" && Boolean(q.productId.trim())
-    && q.status === "AVAILABLE" && q.discountPercent === 50
+    && q.status === "AVAILABLE" && Number.isSafeInteger(q.discountPercent) && q.discountPercent >= 0 && q.discountPercent <= 100
     && Number.isSafeInteger(q.basePriceMinor) && q.basePriceMinor > 0 && q.basePriceMinor <= 1_000_000
-    && Number.isSafeInteger(q.amountMinor) && q.amountMinor === Math.round(q.basePriceMinor * 0.5)
+    && Number.isSafeInteger(q.amountMinor) && q.amountMinor === q.basePriceMinor - Math.floor(q.basePriceMinor * q.discountPercent / 100)
     && Number.isFinite(Date.parse(q.startsAt)) && Date.parse(q.startsAt) > now
     && Number.isSafeInteger(q.durationMinutes) && q.durationMinutes > 0 && q.durationMinutes <= 720
     && Number.isFinite(q.evaluatedAt) && Number.isFinite(q.expiresAt)

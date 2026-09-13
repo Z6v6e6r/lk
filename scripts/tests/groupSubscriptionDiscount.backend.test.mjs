@@ -107,7 +107,7 @@ run('group quote respects four active subscription bookings and read failures', 
   assert.equal(harness({ bookings }).ctx.quotes[0].status, 'LIMIT_USED');
   assert.ok(harness({ failStep: 'groupTariff' }).ctx.error);
   assert.ok(harness({ pagination: { last: false } }).ctx.error);
-  assert.ok(harness({ globals: { subscriptions_lk1_product_policy: { ...rule, groupTrainingDiscountPercent: 40 } } }).ctx.error);
+  assert.equal(harness({ globals: { subscriptions_lk1_product_policy: { ...rule, groupTrainingDiscountPercent: 40 } } }).ctx.quotes[0].amountMinor, 330000);
 });
 run('group composer changes only the scoped gateway and two advisory function bodies', () => {
   const before = JSON.parse(liveBytes);
