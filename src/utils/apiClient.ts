@@ -42,6 +42,7 @@ import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournament
 import { hasDeterministicSubscriptionDecision } from "./subscriptionDecisionContract.ts";
 import { SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS } from "./subscriptionBookingConfirmation.ts";
 import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts";
+import { SubscriptionRejoinTracker } from "./subscriptionRejoin.ts";
 import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
 import {
   buildPadelAvailableGamesQuery,
@@ -8827,6 +8828,16 @@ function buildPadelSplitIdempotencyKey(
   return `lk-split-${scope}-${hashPart(seed)}${hashPart([...seed].reverse().join(""))}`;
 }
 
+let browserSubscriptionRejoinTracker: SubscriptionRejoinTracker | null = null;
+function getSubscriptionRejoinTracker(): SubscriptionRejoinTracker {
+  if (!browserSubscriptionRejoinTracker) {
+    let storage: Storage | null = null;
+    try { if (typeof window !== "undefined") storage = window.localStorage; } catch { /* memory only */ }
+    browserSubscriptionRejoinTracker = new SubscriptionRejoinTracker(storage);
+  }
+  return browserSubscriptionRejoinTracker;
+}
+
 function buildPadelSplitRequest(
   path: string,
   scope: "create" | "join",
@@ -8834,7 +8845,9 @@ function buildPadelSplitRequest(
   gameId?: string | null,
 ) {
   const operationId = params.paymentMode === "subscription"
-    ? buildPadelSplitIdempotencyKey(scope, params, gameId)
+    ? (scope === "join"
+      ? getSubscriptionRejoinTracker().resolve(buildPadelSplitIdempotencyKey(scope, params, gameId))
+      : buildPadelSplitIdempotencyKey(scope, params, gameId))
     : String(params.paymentRef || "").trim();
   if (params.paymentMode !== "subscription") {
     return { path, options: { auth: true as const }, operationId };
@@ -8998,10 +9011,10 @@ async function requestPadelSplitPayment(
 }
 
 // The gateway accepts a subscription request and can answer PENDING_CONFIRMATION when Viva or
-// the managed entitlement service has not finished confirming the booking yet. Re-issuing the
-// same deterministic operationId is safe: the gateway keeps one atomic claim per operation and
-// never debits a second visit, it only re-reads the provider state. Poll briefly so a normal
-// transient pending answer is not surfaced to the player as a failure.
+// the managed entitlement service has not finished confirming the booking yet. Keep the
+// operationId fixed for the entire poll: existing operations retain their atomic claim.
+// Missing operations can enter fresh validation; this is not a read-only status endpoint.
+// Terminal released responses stop polling and require a subsequent user submission.
 interface PadelSplitPendingPollOptions {
   delaysMs?: readonly number[];
   wait?: (delayMs: number) => Promise<void>;
@@ -9146,6 +9159,11 @@ export async function apiCreatePadelSplitParticipantPayment(
   const response = await requestPadelSplitJoinWithPendingPoll(splitRequest, baseUrl, params);
 
   if (response.error) {
+    if (params.paymentMode === "subscription") {
+      // A terminal release only prepares the NEXT user submission. Never advance
+      // the operation inside the pending poll or repeat this call automatically.
+      getSubscriptionRejoinTracker().rememberReleased(splitRequest.operationId, response.status, response.error.raw);
+    }
     return {
       data: null as PadelSplitPaymentResult | null,
       error: response.error,

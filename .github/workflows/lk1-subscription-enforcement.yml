@@ -364,6 +364,9 @@ jobs:
           scripts/tests/splitJoinOrdinaryPriceSource.test.mjs
           scripts/tests/splitPayment.apiClient.test.ts
           scripts/tests/subscriptionCriticalMatrix.test.ts
+          scripts/tests/subscriptionRejoin.test.ts
+          scripts/tests/subscriptionRejoinGateway.test.mjs
+          scripts/tests/subscriptionRejoinPatch.test.mjs
           scripts/tests/joinSubscriptionLoading.test.mjs
           scripts/tests/subscriptionSessionCache.test.mjs
           scripts/tests/subscriptionCounterEpochRuntime.test.mjs

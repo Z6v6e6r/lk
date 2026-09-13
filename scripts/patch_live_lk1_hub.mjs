@@ -82,7 +82,7 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
   out.gateway = replace(out.gateway, 'const preparePreaccept = (ctx) => {\n  const now = new Date();',
     'const preparePreaccept = (ctx) => {\n  const now = new Date();\n' + hooks.PREACCEPT);
   out.gateway = replace(out.gateway, '  msg.payload = [query, update, {}];',
-    '  msg.payload = [query, update, ctx.lk1 ? { writeConcern: { w: "majority", j: true } } : {}];');
+    '  msg.payload = [lk1FenceOperationUpdate(ctx, step, query), update, ctx.lk1 ? { writeConcern: { w: "majority", j: true } } : {}];');
   out.gateway = replace(out.gateway, '  if (ctx.spot) payload.spot = ctx.spot;',
     hooks.BOOKING + '\n  if (ctx.spot) payload.spot = ctx.spot;');
   out.gateway = replace(out.gateway,
