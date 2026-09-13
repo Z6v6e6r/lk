@@ -3540,6 +3540,7 @@ h6,
 }
 
 .game-created-split-join-info {
+  grid-column: 1 / -1;
   align-self: stretch;
   display: flex;
   flex-direction: column;
