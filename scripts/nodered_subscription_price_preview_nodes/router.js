@@ -234,8 +234,8 @@ if (ctx.step === 'evaluate') {
     if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
       || decision.benefit.finalPriceMinor > ctx.basePriceMinor) return stop('PRICE_PREVIEW_DECISION_INVALID');
     if (ctx.groupTraining) {
-      if (decision.subscriptionVisitCount !== 0 || ctx.groupDiscountPercent !== 50
-        || decision.benefit.finalPriceMinor !== Math.round(ctx.basePriceMinor * 0.5)) return stop('GROUP_DISCOUNT_DECISION_INVALID');
+      if (decision.subscriptionVisitCount !== 0 || (!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)
+        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100)) return stop('GROUP_DISCOUNT_DECISION_INVALID');
       quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, 0, ctx.target.durationMinutes);
     } else {
       if (!decision.gameMinutes) return stop('PRICE_PREVIEW_DECISION_INVALID');
@@ -290,7 +290,7 @@ while (ctx.step === 'next') {
       quote(id, 'UNAVAILABLE', null, 0, 0, 'LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN'); continue;
     }
     ctx.groupDiscountPercent = configured.rule.groupTrainingDiscountPercent;
-    if (ctx.groupDiscountPercent !== 50) return stop('GROUP_DISCOUNT_RULE_UNCONFIRMED');
+    if ((!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)) return stop('GROUP_DISCOUNT_RULE_UNCONFIRMED');
   }
   const visitCount = configured.matched ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
   if (!ctx.groupTraining && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),

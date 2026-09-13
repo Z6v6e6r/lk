@@ -46,3 +46,16 @@ test("discount dispatch uses existing idempotent subscription gateway, never one
   }
   assert.equal(count, 2);
 });
+
+test("discount percentage comes from quote and uses canonical kopeck rounding", () => {
+  for (const [discountPercent, basePriceMinor, amountMinor] of [
+    [50, 550000, 275000], [10, 550000, 495000], [33, 550001, 368501],
+    [0, 550000, 550000], [100, 550000, 0],
+  ]) {
+    assert.ok(isGroupSubscriptionDiscountQuote({ ...quote, discountPercent, basePriceMinor, amountMinor }, "group", "actor", now));
+  }
+  for (const discountPercent of [-1, 101, 50.5, NaN, "50"]) {
+    assert.equal(isGroupSubscriptionDiscountQuote({ ...quote, discountPercent }, "group", "actor", now), false);
+  }
+  assert.equal(isGroupSubscriptionDiscountQuote({ ...quote, discountPercent: 33, basePriceMinor: 550001, amountMinor: 368500 }, "group", "actor", now), false);
+});
