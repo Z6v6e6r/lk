@@ -3,6 +3,10 @@ const operation = rows[0] && typeof rows[0] === "object" ? rows[0] : null;
 if (!operation) return [null, msg];
 const nowIso = new Date().toISOString();
 const claimToken = `retry-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+if (operation?.vivaTargetMode === "DISCOVERY") {
+  msg.payload = { operationId: operation.operationId, reason: "foreground_discovery_required" };
+  return [null, msg];
+}
 const operationState = String(operation.state || "").toUpperCase();
 const vivaTargetMode = operation.vivaTargetMode || "BOOKINGS";
 if (operationState === "STARTED" && (vivaTargetMode !== "NONE" || operation.localReconciliation)
@@ -29,6 +33,7 @@ msg._splitLeaveCtx = {
   targetPhoneNorm: operation.targetPhoneNorm,
   membershipVersion: operation.membershipVersion || null,
   localReconciliation: operation.localReconciliation || null,
+  bookingDiscovery: operation.bookingDiscovery || null,
   vivaTargetMode,
   initialBookingIds: Array.isArray(operation.bookingIds) ? operation.bookingIds : [],
   subscriptionReturnChecks: Array.isArray(operation.subscriptionReturnChecks)

@@ -5,7 +5,7 @@ if (!ctx) {
   return [null, msg];
 }
 const bookingIds = Array.isArray(ctx.initialBookingIds) ? ctx.initialBookingIds.filter(Boolean) : [];
-if (!ctx.membershipVersion || (bookingIds.length === 0 && ctx.vivaTargetMode !== "NONE")) {
+if (!ctx.membershipVersion || (bookingIds.length === 0 && !["NONE", "DISCOVERY"].includes(ctx.vivaTargetMode))) {
   msg.statusCode = 409;
   msg.payload = {
     ok: false,
@@ -43,6 +43,7 @@ msg.payload = [
       staffActorId: ctx.staffActorId || null,
       idempotencyDigest: ctx.idempotencyDigest || null,
       membershipVersion: ctx.membershipVersion || null,
+      ...(ctx.bookingDiscovery ? { bookingDiscovery: ctx.bookingDiscovery } : {}),
       ...(ctx.localReconciliation ? { localReconciliation: ctx.localReconciliation } : {}),
       bookingIds,
       clientSubscriptionId: ctx.clientSubscriptionId || null,

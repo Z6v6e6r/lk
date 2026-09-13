@@ -163,7 +163,9 @@ test("staff leave accepts a booking-less target only without visit return", () =
 
   const returnVisit = localCommand();
   returnVisit.payload.visitAction = "RETURN_VISIT";
-  const rejected = run("fn_staff_player_leave_prepare.js", returnVisit, { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } });
+  const returnPrepared = run("fn_staff_player_leave_prepare.js", returnVisit, { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[0];
+  returnPrepared.payload = [localGame()];
+  const rejected = run("fn_staff_player_leave_authorize.js", returnPrepared);
   assert.equal(rejected[1].statusCode, 409);
   assert.equal(rejected[1].payload.code, "VISIT_RETURN_UNAVAILABLE");
   assert.equal(rejected[1]._staffLeaveCtx, undefined);
@@ -434,4 +436,81 @@ test("guarded patcher declares exactly the two internal staff routes", () => {
   assert.match(source, /candidateRouteCount/);
   assert.match(source, /fn_staff_player_leave_prepare\.js/);
   assert.doesNotMatch(source, /service-secret|admin-token/);
+});
+
+function discoveryFixture() {
+  const g = game();
+  g.participants = [{ id: "client-2", name: "Rejoined", source: "ADMIN", status: "CONFIRMED" }];
+  g.metadata.splitPayment.payments[0].status = "EXPIRED";
+  const c = command();
+  c.payload.target.bookingId = null;
+  c.payload.expectedMembershipVersion = stableVersion(["viva-discovery", g.id, "client-2", "exercise-1", g.updatedAt]);
+  const prepared = run("fn_staff_player_leave_prepare.js", c, { env: { CUP_LK_PLAYER_LEAVE_TOKEN: "service-secret" } })[0];
+  prepared.payload = [g];
+  const authorized = run("fn_staff_player_leave_authorize.js", prepared, { global: { vivacrm_access_token: "server-token" } })[0];
+  assert.ok(authorized);
+  const started = run("fn_split_leave_operation_start.js", authorized)[0];
+  const operation = structuredClone(started.payload[1].$setOnInsert);
+  const routed = run("fn_split_leave_operation_route.js", { ...started, payload: [operation] })[0];
+  return { g, operation, routed };
+}
+
+test("unbound ADMIN rejoin persists discovery then binds only the fresh booking before cancellation", () => {
+  const { routed, operation } = discoveryFixture();
+  assert.equal(operation.vivaTargetMode, "DISCOVERY");
+  assert.equal(operation.clientSubscriptionId, null);
+  let msg = run("fn_split_leave_router.js", routed)[0];
+  assert.equal(msg.method, "GET");
+  assert.match(msg.url, /exercises\/exercise-1\/bookings/);
+  msg.statusCode = 200;
+  msg.payload = { content: [{ id: "booking-new", clientId: "client-2", clientSubscriptionId: "subscription-new", count: 2 }], last: true };
+  msg = run("fn_split_leave_router.js", msg)[5];
+  assert.ok(msg, "must persist discovery before any cancellation");
+  const update = run("fn_staff_leave_discovery_bind.js", msg)[0];
+  assert.equal(update.payload[0].vivaTargetMode, "DISCOVERY");
+  assert.deepEqual(update.payload[1].$set.bookingIds, ["booking-new"]);
+  assert.equal(update.payload[1].$set.clientSubscriptionId, "subscription-new");
+  assert.equal(run("fn_staff_leave_discovery_ack.js", { ...update, payload: { acknowledged: true, matchedCount: 0 } })[0], null);
+  const read = run("fn_staff_leave_discovery_ack.js", { ...update, payload: { acknowledged: true, matchedCount: 1 } })[0];
+  assert.deepEqual(read.payload, { _id: operation._id });
+  const bound = { ...operation, ...update.payload[1].$set };
+  const next = run("fn_split_leave_operation_route.js", { ...read, payload: [bound] })[0];
+  assert.deepEqual(next._splitLeaveCtx.initialBookingIds, ["booking-new"]);
+  assert.equal(next._splitLeaveCtx.preCancelVerification, true);
+  assert.equal(next._splitLeaveCtx.vivaTargetMode, "BOOKINGS");
+  assert.equal(next._splitLeaveCtx.subscriptionVisitCount, 2);
+  // Same request after provider success resumes these IDs, not a new discovery.
+  const repeat = run("fn_split_leave_operation_route.js", { ...structuredClone(routed), payload: [bound] })[0];
+  assert.deepEqual(repeat._splitLeaveCtx.initialBookingIds, ["booking-new"]);
+  const changed = structuredClone(routed);
+  changed._splitLeaveCtx.requestedRefundMethod = "NONE";
+  changed.payload = [bound];
+  assert.equal(run("fn_split_leave_operation_route.js", changed)[2].statusCode, 409);
+});
+
+test("discovery rejects absence, duplicates, malformed pages and other exercise evidence without writes", () => {
+  for (const payload of [
+    { content: [], last: true },
+    { content: [{ id: "a", clientId: "client-2" }, { id: "b", clientId: "client-2" }], last: true },
+    { content: [{ id: "a", clientId: "client-2" }], last: false },
+    { content: [{ id: "a", clientId: "client-2", exerciseId: "other" }], last: true },
+    { content: [{ id: "a" }], last: true },
+    { unknown: [] },
+  ]) {
+    const { routed } = discoveryFixture();
+    routed._splitLeaveCtx.step = "verify_active";
+    routed.statusCode = 200;
+    routed.payload = payload;
+    const out = run("fn_split_leave_router.js", routed);
+    assert.equal(out[0], null);
+    assert.equal(out[5], undefined);
+    assert.ok(out[2].statusCode >= 400);
+  }
+});
+
+test("discovery cannot run in background and snapshot drift prevents local deletion", () => {
+  const { operation, routed } = discoveryFixture();
+  assert.equal(run("fn_split_leave_retry_select.js", { payload: [operation] })[0], null);
+  routed._splitLeaveCtx.game.updatedAt = "2026-08-12T09:00:00.000Z";
+  assert.equal(run("fn_split_leave_game_update.js", routed)[0], null);
 });
