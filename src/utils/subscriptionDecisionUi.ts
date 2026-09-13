@@ -14,6 +14,7 @@ export type SubscriptionDecisionKind =
   | "SUBSCRIPTION_REJECTED"
   | "ACTION_UNAVAILABLE"
   | "STALE_STATE"
+  | "BOOKING_RELEASED"
   | "PENDING_CONFIRMATION"
   | "TECHNICAL_ERROR"
   | "ORDINARY_PAYMENT_ALLOWED";
@@ -330,11 +331,22 @@ export function resolveSubscriptionDecisionPresentation({
         continueWithoutSubscription: true,
       };
     }
+    if (error.status === 409 && codes.includes("SUBSCRIPTION_BOOKING_RELEASED")) {
+      return {
+        kind: "BOOKING_RELEASED",
+        title: "Предыдущая запись отменена",
+        message: "Для новой записи нажмите «Присоединиться снова» или выберите абонемент ещё раз. Стоимость будет проверена заново.",
+        reasonCode: "SUBSCRIPTION_BOOKING_RELEASED",
+        retryable: true,
+        subscriptionApplied: false,
+        continueWithoutSubscription: false,
+      };
+    }
     if (includesCode(codes, PENDING_CODES)) {
       return {
         kind: "PENDING_CONFIRMATION",
         title: "Проверяем результат",
-        message: "Запрос принят, но итог ещё не подтверждён. Повторите проверку — новая льгота не спишется.",
+        message: "Не удалось подтвердить результат записи или доплаты. Повторите проверку текущей попытки.",
         reasonCode: primaryCode,
         retryable: true,
         subscriptionApplied: false,
