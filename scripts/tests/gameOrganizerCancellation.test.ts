@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import { collectGameCancellationBookingIds, hasOtherActiveGameMembers } from "../../src/components/games/gameLeaveMembership.ts";
 
-const organizer = { id: "organizer", phone: "+70000000001" };
+const organizer = { id: "organizer", phone: "70000000001" };
 test("solo organizer can reach ordinary cancellation", () => {
   assert.equal(hasOtherActiveGameMembers({ participants: [organizer] }, organizer), false);
 });
