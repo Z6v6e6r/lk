@@ -12,7 +12,7 @@ The cabinet list no longer contains the cancel action. Game details load the cur
 - `src/components/games/gameLeaveMembership.ts`: active membership, eligible successors and booking references.
 - `src/utils/apiClient.ts`: authenticated `POST /lk/games/:gameId/organizer/transfer` with `{successorId, expectedUpdatedAt}`. Actor is derived from verified Viva profile, never from the body.
 - `scripts/nodered_organizer_handoff_nodes/`: transfer CAS, shared leave/cleanup fences, authority protection and persistence acknowledgements.
-- `scripts/nodered_games_nodes/fn_split_cleanup_prepare.js`: explicit organizer cancellation requires no other active membership. Scheduler policy is unchanged.
+- `scripts/nodered_organizer_handoff_nodes/cleanup_prepare_guard.js`: candidate-only explicit organizer cancellation requires no other active membership. Scheduler policy is unchanged.
 - `scripts/nodered_games_nodes/fn_split_leave_game_update.js`: local leave CAS requires its own fence.
 - `scripts/nodered_games_nodes/fn_split_leave_operation_route.js`: durable terminal receipts release their fence before final response.
 - `scripts/build_organizer_handoff_candidate.mjs`: focused patch of the pinned live graph; raw flows/imports remain outside Git.
@@ -53,3 +53,5 @@ No import, restart, deploy, real booking cancellation, transfer or provider muta
 Before separately authorized rollout: refresh the exact source and review any drift; verify new route ingress and auth/CORS; drain or reconcile existing operations which may already have sent provider requests under the old runtime; verify no unexplained membership fences; deploy the reviewed backend before frontend; perform the approved test-game/provider acceptance and capture role, roster, booking/refund and retry evidence. No automatic migration or backfill is included.
 
 Stop signal: stale role/version, lost persistence acknowledgement, active fence or failed provider verification. Stop method: return conflict/retry with no new authority change; preserve confirmed transfer and durable operation for retry. Do not roll back the guard nodes or remove a fence while its operation may still perform provider writes. A clean frontend rollback alone does not undo transferred roles or completed cancellations.
+
+CI compatibility: the cleanup guard is applied only by the organizer candidate builder. The subscription candidate cleanup source and its immutable hash remain unchanged.
