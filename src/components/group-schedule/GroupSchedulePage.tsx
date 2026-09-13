@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
@@ -1170,7 +1171,7 @@ export default function GroupSchedulePage({
                   <div className="group-schedule-trainer-info-row group-schedule-trainer-info-row--person">
                     <span className="group-schedule-trainer-avatar" aria-hidden="true">
                       {selectedTraining.trainerAvatarUrl ? (
-                        <img src={selectedTraining.trainerAvatarUrl} alt="" />
+                        <AvatarImage name={selectedTraining.trainerName} src={selectedTraining.trainerAvatarUrl} alt="" />
                       ) : (
                         <span>{getNameInitials(selectedTraining.trainerName)}</span>
                       )}

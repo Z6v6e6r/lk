@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import {
   useCallback,
   useEffect,
@@ -6015,7 +6016,7 @@ export function CommunitiesSection({
                         <div className="community-member-main">
                           <div className="community-member-avatar">
                             {member.avatar
-                              ? <img src={member.avatar} alt={member.name} className="community-ranking-avatar-image" />
+                              ? <AvatarImage src={member.avatar} alt={member.name} className="community-ranking-avatar-image" />
                               : getInitials(member.name)}
                           </div>
                           <div className="community-member-copy">

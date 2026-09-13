@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
@@ -2115,7 +2116,7 @@ export default function TournamentSignupPage({
                         <div className="details-roster-row">
                           <div className="details-roster-player">
                             {detailTrainerAvatarUrl ? (
-                              <img src={detailTrainerAvatarUrl} alt={detailTrainerName} className="details-roster-avatar" />
+                              <AvatarImage src={detailTrainerAvatarUrl} alt={detailTrainerName} className="details-roster-avatar" />
                             ) : (
                               <span className="details-roster-avatar details-roster-avatar-fallback">{getInitials(detailTrainerName)}</span>
                             )}
@@ -2159,7 +2160,7 @@ export default function TournamentSignupPage({
                                   style={levelMeta.ringStyle}
                                 >
                                   {participant.avatarUrl ? (
-                                    <img src={participant.avatarUrl} alt={participant.name} className="details-roster-avatar" />
+                                    <AvatarImage src={participant.avatarUrl} alt={participant.name} className="details-roster-avatar" />
                                   ) : (
                                     <span className="details-roster-avatar details-roster-avatar-fallback">{getInitials(participant.name)}</span>
                                   )}

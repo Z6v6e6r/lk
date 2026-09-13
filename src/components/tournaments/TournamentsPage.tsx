@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
@@ -3474,15 +3475,10 @@ function TournamentDetailsModal({
             <div className="tournament-participant tournament-trainer-card">
               <div className={`tournament-participant-avatar ${trainer.photo ? "" : "no-photo"}`}>
                 {trainer.photo ? (
-                  <img
+                  <AvatarImage
+                    initials={trainerInitials}
                     src={trainer.photo}
                     alt={trainer.firstName}
-                    onError={(e) => {
-                      const target = e.currentTarget;
-                      target.style.display = "none";
-                      const parent = target.parentElement;
-                      if (parent) parent.classList.add("no-photo");
-                    }}
                   />
                 ) : null}
                 <span className="tournament-participant-initials">{trainerInitials}</span>
@@ -3745,15 +3741,9 @@ function TournamentDetailsModal({
                           <div className="tournament-participant-order">{idx + 1}</div>
                           <div className={`tournament-participant-avatar ${participant.photo ? "" : "no-photo"}`}>
                             {participant.photo ? (
-                              <img
+                              <AvatarImage
                                 src={participant.photo}
                                 alt={participant.name}
-                                onError={(e) => {
-                                  const target = e.currentTarget;
-                                  target.style.display = "none";
-                                  const parent = target.parentElement;
-                                  if (parent) parent.classList.add("no-photo");
-                                }}
                               />
                             ) : null}
                             <span className="tournament-participant-initials">{initials}</span>
@@ -4220,15 +4210,12 @@ function TournamentDetailsModal({
                       >
                         <span className="tournament-pair-player-avatar">
                           {participant.photo ? (
-                            <img
+                            <AvatarImage
                               src={participant.photo}
                               alt={participant.name}
-                              onError={(e) => {
-                                e.currentTarget.style.display = "none";
-                              }}
                             />
                           ) : null}
-                          <span>{getInitialsFromName(participant.name)}</span>
+                          {!participant.photo && <span>{getInitialsFromName(participant.name)}</span>}
                         </span>
                         <span className="tournament-pair-player-name">{participant.name}</span>
                         {ratingValue != null && (
@@ -5688,16 +5675,10 @@ function TournamentManagerModal({
           >
             <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
               {row.photo ? (
-                <img
+                <AvatarImage
                   src={row.photo}
                   alt={row.name}
                   crossOrigin="anonymous"
-                  onError={(e) => {
-                    const target = e.currentTarget;
-                    target.style.display = "none";
-                    const parent = target.parentElement;
-                    if (parent) parent.classList.add("no-photo");
-                  }}
                 />
               ) : null}
               <span className="tournament-participant-initials">
@@ -6619,16 +6600,10 @@ function TournamentManagerModal({
                         >
                           <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
                             {row.photo ? (
-                              <img
+                              <AvatarImage
                                 src={row.photo}
                                 alt={row.name}
                                 crossOrigin="anonymous"
-                                onError={(e) => {
-                                  const target = e.currentTarget;
-                                  target.style.display = "none";
-                                  const parent = target.parentElement;
-                                  if (parent) parent.classList.add("no-photo");
-                                }}
                               />
                             ) : null}
                             <span className="tournament-participant-initials">

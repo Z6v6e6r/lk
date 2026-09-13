@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import React, { useState } from "react";
 import { Modal } from "../UI/Modal";
 import { apiUploadProfilePhoto, apiUpdateProfile } from "../../utils/apiClient";
@@ -89,7 +90,7 @@ export const ProfileEditForm: React.FC<ProfileEditFormProps> = ({
 
         <div className="form-avatar-group">
           {formData.photo
-            ? <img src={formData.photo} alt="Фото" className="form-avatar" />
+            ? <AvatarImage name={`${formData.firstName || ""} ${formData.lastName || ""}`} src={formData.photo} alt="Фото" className="form-avatar" />
             : <div className="form-avatar-placeholder">{formData.firstName?.[0]}{formData.lastName?.[0]}</div>
           }
           <input type="file" id="photo-upload" accept="image/*" onChange={handlePhotoChange} className="img-form-input" />

@@ -1,3 +1,4 @@
+import { AvatarImage } from "../../UI/AvatarImage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../../UI/Modal";
 import type { KeyboardEvent } from "react";
@@ -120,7 +121,7 @@ export function CommunityNewsModal({
           <div className="community-news-modal-author-block">
             <div className="community-news-modal-avatar">
               {authorAvatar ? (
-                <img
+                <AvatarImage
                   src={authorAvatar}
                   alt={authorName}
                   className="community-news-modal-avatar-image"

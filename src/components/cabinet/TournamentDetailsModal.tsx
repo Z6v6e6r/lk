@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
 import { apiFetchPadelLiveRatings, apiFetchTournamentParticipants } from "../../utils/apiClient";
@@ -945,7 +946,7 @@ export function TournamentDetailsModal({
               <div className="tournament-details-person-card">
                 <div className="tournament-details-avatar">
                   {getTrainerPhoto(trainer) ? (
-                    <img src={getTrainerPhoto(trainer) || ""} alt={getTrainerName(trainer)} />
+                    <AvatarImage src={getTrainerPhoto(trainer) || ""} alt={getTrainerName(trainer)} />
                   ) : (
                     <span>{getInitials(getTrainerName(trainer))}</span>
                   )}
@@ -990,7 +991,7 @@ export function TournamentDetailsModal({
                       <div className="tournament-details-row-order">{participant.order}</div>
                       <div className="tournament-details-avatar">
                         {participant.photo ? (
-                          <img src={participant.photo} alt={participant.name} />
+                          <AvatarImage src={participant.photo} alt={participant.name} />
                         ) : (
                           <span>{getInitials(participant.name)}</span>
                         )}
@@ -1033,7 +1034,7 @@ export function TournamentDetailsModal({
                         <div className={`tournament-details-avatar-ring${row.rating ? " has-level" : ""}`}>
                           <div className="tournament-details-avatar tournament-details-avatar--result">
                             {row.photo ? (
-                              <img src={row.photo} alt={row.name} />
+                              <AvatarImage src={row.photo} alt={row.name} />
                             ) : (
                               <span>{getInitials(row.name)}</span>
                             )}

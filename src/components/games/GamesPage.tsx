@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership } from "./gameLeaveMembership";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
@@ -2747,21 +2748,16 @@ function AvatarWithInitialsFallback({
   fallbackText: string;
   fallbackStyle?: CSSProperties;
 }) {
-  const [imageFailed, setImageFailed] = useState(false);
   const normalizedSrc = (src || "").trim();
-  const showImage = Boolean(normalizedSrc) && !imageFailed;
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [normalizedSrc]);
+  const showImage = Boolean(normalizedSrc);
 
   if (showImage) {
     return (
-      <img
+      <AvatarImage
+        initials={fallbackText}
         className={imageClassName}
         src={normalizedSrc}
         alt={alt}
-        onError={() => setImageFailed(true)}
       />
     );
   }
@@ -5031,7 +5027,6 @@ export default function GamesPage({
   const [matchResultNowTs, setMatchResultNowTs] = useState(() => Date.now());
   const [geocodeLoading, setGeocodeLoading] = useState(false);
   const [geocodedCoords, setGeocodedCoords] = useState<Record<string, { lat: number; lng: number }>>({});
-  const [avatarError, setAvatarError] = useState(false);
   const mapHostRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<LeafletMap | null>(null);
   const mapMarkersRef = useRef<LeafletLayerGroup | null>(null);
@@ -17511,12 +17506,12 @@ export default function GamesPage({
                       );
                     })}
                   </svg>
-                  {profilePhoto && !avatarError ? (
-                    <img
+                  {profilePhoto ? (
+                    <AvatarImage
+                      initials={initials}
                       src={profilePhoto}
                       alt="Аватар"
                       className="team-avatar-img"
-                      onError={() => setAvatarError(true)}
                     />
                   ) : (
                     <div className="team-avatar-fallback">
