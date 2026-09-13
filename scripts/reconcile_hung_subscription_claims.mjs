@@ -23,11 +23,14 @@ import { createRequire } from 'node:module';
 import {
   DEFAULT_HUNG_CLAIM_TTL_MS,
   HUNG_CLAIM_STATES,
+  hasCreateAttempt,
   AUDIT_ONLY_CLAIM_STATES,
   buildHungClaimReleaseCommand,
   planHungClaimRelease,
   summarizeHungClaims,
 } from './lib/hungClaimRelease.mjs';
+
+import { readHungClaimPage, readScanCursor, writeScanCursor } from './lib/hungClaimScan.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -48,7 +51,9 @@ Scan options:
   --subscription <uuid>        restrict to one subscription instance
   --ttl-minutes <n>            hung-claim TTL when the claim declares no deadline (default: ${DEFAULT_HUNG_CLAIM_TTL_MS / 60000})
   --limit <n>                  max claims per run (default: 200)
-  --sort <oldest|newest>       which claims a bounded run scans first (default: oldest)
+  --sort <oldest|newest>       legacy audit order without a cursor (default: oldest)
+  --cursor-file <path>         resume bounded traversal by operation key; dry-run never advances it
+                              apply defaults to <backup-dir>/.scan-cursor.json
   --now <iso>                  evaluate at this instant (default: current time)
   --fixture <path>             offline rehearsal from a captured { operations, bookingsByExercise } snapshot
 
@@ -67,6 +72,7 @@ const fixturePath = value('--fixture');
 const backupDir = value('--backup-dir');
 const reportPath = value('--report');
 const quiet = has('--quiet');
+const cursorPath = value('--cursor-file') || (apply && backupDir ? path.join(backupDir, '.scan-cursor.json') : null);
 const databaseName = value('--database') || process.env.GAMES_MONGODB_DB || 'games';
 const collectionName = value('--collection') || 'lk_subscription_daily_booking_ops';
 const tenantKey = value('--tenant');
@@ -99,6 +105,8 @@ const redactedDecision = (operation, decision) => ({
   deadline: decision.deadline,
   releasable: decision.releasable,
   reason: decision.reason ?? 'RELEASABLE',
+  evidence: decision.evidence ?? null,
+  createAttempt: hasCreateAttempt(operation),
 });
 
 function attachMongoDatabase(url, database) {
@@ -123,9 +131,9 @@ async function providerToken() {
 }
 
 const bookingCache = new Map();
-async function readExerciseBookings(exerciseId, token) {
+async function readExerciseBookings(exerciseId, token, fresh = false) {
   const key = String(exerciseId || '').toLowerCase();
-  if (bookingCache.has(key)) return bookingCache.get(key);
+  if (!fresh && bookingCache.has(key)) return bookingCache.get(key);
   // The raw payload is cached, not just its rows: the release decision needs the
   // page envelope to prove the list is complete.
   let payload = null;
@@ -165,25 +173,27 @@ async function loadScan() {
   const client = new mongodb.MongoClient(attachMongoDatabase(url, databaseName), { serverSelectionTimeoutMS: 10000 });
   await client.connect();
   const collection = client.db(databaseName).collection(collectionName);
-  const nowTs = Date.parse(nowIso);
-  const query = { state: { $in: [...HUNG_CLAIM_STATES, ...AUDIT_ONLY_CLAIM_STATES] }, updatedAt: { $lte: new Date(nowTs - ttlMs).toISOString() } };
+  // The pure deadline guard handles explicit deadlines, createdAt fallback and
+  // missing timestamps. A mandatory updatedAt cutoff used to hide legacy rows.
+  const query = { state: { $in: [...HUNG_CLAIM_STATES, ...AUDIT_ONLY_CLAIM_STATES] } };
   if (tenantKey) query.tenantKey = tenantKey;
   if (actorClientId) query.actorClientId = actorClientId;
   if (clientSubscriptionId) query.clientSubscriptionId = clientSubscriptionId;
-  const operations = await collection.find(query)
-    .sort({ updatedAt: sortOrder === 'newest' ? -1 : 1 })
-    .limit(limit)
-    .toArray();
+  const scope = crypto.createHash('sha256').update(JSON.stringify([url, databaseName, collectionName, query])).digest('hex');
+  const page = cursorPath ? await readHungClaimPage({ collection, query, limit,
+    afterId: readScanCursor(cursorPath, scope) }) : null;
+  const operations = page ? page.operations : await collection.find(query)
+    .sort({ updatedAt: sortOrder === 'newest' ? -1 : 1, _id: 1 }).limit(limit).toArray();
   const token = await providerToken();
   if (token) {
     for (const exerciseId of new Set(operations.map((operation) => String(operation?.exerciseId || '')).filter(Boolean))) {
       await readExerciseBookings(exerciseId, token);
     }
   }
-  return { operations, bookingsByExercise: bookingCache, collection, close: () => client.close(), source: maskUri(url) };
+  return { operations, bookingsByExercise: bookingCache, collection, close: () => client.close(), source: maskUri(url), cursor: page ? { scope, afterId: page.afterId } : null };
 }
 
-const { operations, bookingsByExercise, collection, close, source } = await loadScan();
+const { operations, bookingsByExercise, collection, close, source, cursor } = await loadScan();
 const providerReady = Boolean(fixturePath) || Boolean(await providerToken());
 if (apply && !fixturePath && !providerReady) {
   fail('--apply requires a provider token: pass --token-file or --viva-token');
@@ -202,6 +212,9 @@ const report = {
   released: [],
   skipped: [],
   compareAndSwapFailures: [],
+  freshReadFailures: 0,
+  scanOrder: cursor ? 'operation-key-cursor' : sortOrder,
+  cursorAdvanced: false,
   backupPath: null,
 };
 try {
@@ -235,17 +248,24 @@ try {
       report.applied = true;
 
       for (const operation of toWrite) {
+        const command = buildHungClaimReleaseCommand({ operation, now: new Date().toISOString() });
+        // Runtime may have changed binding/lk1 without touching updatedAt.
+        if (!await collection.findOne(command.query)) {
+          report.compareAndSwapFailures.push(claimLabel(operation));
+          continue;
+        }
+        const freshBookings = await readExerciseBookings(operation.exerciseId, await providerToken(), true);
+        if (!freshBookings) report.freshReadFailures += 1;
         const decision = planHungClaimRelease({
           operation,
-          bookings: bookingsByExercise.get(String(operation?.exerciseId || '').toLowerCase()),
-          now: nowIso,
+          bookings: freshBookings,
+          now: new Date().toISOString(),
           ttlMs,
         });
         if (!decision.releasable) {
           report.skipped.push(redactedDecision(operation, decision));
           continue;
         }
-        const command = buildHungClaimReleaseCommand({ operation, now: nowIso });
         const result = await collection.updateOne(command.query, command.update, command.options);
         const matched = result.matchedCount ?? result.result?.n ?? 0;
         const modified = result.modifiedCount ?? result.result?.nModified ?? 0;
@@ -258,6 +278,10 @@ try {
     }
   }
 
+  if (apply && cursor && !report.compareAndSwapFailures.length && !report.freshReadFailures) {
+    writeScanCursor(cursorPath, cursor.scope, cursor.afterId);
+    report.cursorAdvanced = true;
+  }
   if (reportPath) {
     fs.mkdirSync(path.dirname(path.resolve(reportPath)), { recursive: true });
     fs.writeFileSync(path.resolve(reportPath), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
@@ -268,8 +292,8 @@ try {
   } else {
     console.log(JSON.stringify(report, null, 2));
   }
-  if (report.compareAndSwapFailures.length) {
-    console.error(`compare-and-swap failed for ${report.compareAndSwapFailures.length} claim(s); nothing was overwritten`);
+  if (report.compareAndSwapFailures.length || report.freshReadFailures) {
+    console.error(`compare-and-swap failed for ${report.compareAndSwapFailures.length} claim(s), fresh-read failures: ${report.freshReadFailures}; failed candidates were not written`);
     process.exitCode = 2;
   }
 } finally {
