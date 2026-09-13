@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { LEGACY_CAS_PROFILE, renderLegacyLeaveFunction } from "./lib/repeated_booking_leave_profile.mjs";
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const TARGETS = Object.freeze([
   {
@@ -51,6 +52,12 @@ export const TARGETS = Object.freeze([
     "beforeSha256": "2f2d344707652ad5dbf0d120d648eb7bc8f1e1a1194f24749f43973fc674a9b9"
   }
 ]);
+export const LEGACY_TARGETS = Object.freeze(TARGETS.map(target => ({ ...target,
+  beforeSha256: ({
+    fn_split_leave_operation_route_js: "534c8f790fb0902312d48d0e1c0182045e86b4fb75508e006f08e6077a12e12f",
+    fn_split_leave_game_update_js: "e1bce1a4476e76f21b72ba94b98dc2fd515ce7cff343336ce63c05e0435d67ac",
+  })[target.file.replace('.', '_')] || target.beforeSha256,
+})));
 export const IDS = Object.freeze({ router: "9878400d518ebcbd", update: "lk_split_leave_operation_start_update_20260801",
   route: "lk_split_leave_operation_route_20260801", find: "lk_split_leave_operation_find_20260801", response: "35f7c89069fc393a",
   bind: "lk_staff_leave_discovery_bind_20260913", persist: "lk_staff_leave_discovery_update_20260913",
@@ -60,7 +67,10 @@ const read = (file) => fs.readFileSync(path.join(ROOT, "nodered_games_nodes", fi
 
 // Source-only composition. CLI never accepts alternate preimage pins. The optional
 // pins seam is used solely by synthetic graph tests, not release validation.
-export function buildRepeatedBookingLeaveCandidate(source, pins = TARGETS) {
+export function buildRepeatedBookingLeaveCandidate(source, pins = TARGETS, profile = "membership-lock-v1") {
+  if (!["membership-lock-v1", LEGACY_CAS_PROFILE].includes(profile)) throw new Error("Unknown leave profile");
+  const legacy = profile === LEGACY_CAS_PROFILE;
+  if (legacy && pins === TARGETS) pins = LEGACY_TARGETS;
   if (!Array.isArray(source)) throw new Error("Flow must be an array");
   const result = structuredClone(source);
   const ids = new Set();
@@ -75,19 +85,25 @@ export function buildRepeatedBookingLeaveCandidate(source, pins = TARGETS) {
   };
   const router = exact(IDS.router, "function");
   if (router.outputs !== 5 || router.wires?.length !== 5) throw new Error("Router topology drift");
+  const route = exact(IDS.route, "function");
+  if (route.outputs !== (legacy ? 4 : 5) || route.wires?.length !== route.outputs) throw new Error("Operation route profile mismatch");
+  if (legacy && result.some(node => node.type === "function" && /membershipMutation/.test(node.func || ""))) {
+    throw new Error("Legacy profile cannot downgrade membership-lock topology");
+  }
   const update = exact(IDS.update, "mongodb4");
   const find = exact(IDS.find, "mongodb4");
   exact(IDS.response, "http response");
   if (update.operation !== "updateOne" || find.operation !== "find"
     || update.collection !== "lk_game_leave_operations" || find.collection !== update.collection
-    || !update.server || find.server !== update.server
+    || !update.clientNode || find.clientNode !== update.clientNode
     || JSON.stringify(find.wires) !== JSON.stringify([[IDS.route]])
     || update.z !== router.z || find.z !== router.z) throw new Error("Operation database contract mismatch");
+  exact(update.clientNode, "mongodb4-client");
   for (const target of pins) {
     const node = exact(target.id, "function");
     if (node.z !== router.z || hash(node.func) !== target.beforeSha256) throw new Error(`Preimage drift: ${target.id}`);
     if (node.wires?.length !== node.outputs) throw new Error("Function output mismatch");
-    const body = read(target.file);
+    const body = legacy ? renderLegacyLeaveFunction(target.file, read(target.file)) : read(target.file);
     new vm.Script(`(function(msg,global,flow,env){${body}\n})`);
     node.func = body;
   }
@@ -112,11 +128,11 @@ export function buildRepeatedBookingLeaveCandidate(source, pins = TARGETS) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [input, output] = process.argv.slice(2);
+  const [input, output, profile] = process.argv.slice(2);
   if (!input || !output || !path.isAbsolute(input) || !path.isAbsolute(output) || input === output) {
-    throw new Error("Usage: node prepare_repeated_booking_leave_candidate.mjs /absolute/source.json /absolute/new-candidate.json");
+    throw new Error("Usage: node prepare_repeated_booking_leave_candidate.mjs /absolute/source.json /absolute/new-candidate.json [membership-lock-v1|production-legacy-cas-v1]");
   }
-  const candidate = buildRepeatedBookingLeaveCandidate(JSON.parse(fs.readFileSync(input, "utf8")));
+  const candidate = buildRepeatedBookingLeaveCandidate(JSON.parse(fs.readFileSync(input, "utf8")), TARGETS, profile);
   fs.writeFileSync(output, JSON.stringify(candidate), { mode: 0o600, flag: "wx" });
   console.log(JSON.stringify({ candidateSha256: hash(JSON.stringify(candidate)), nodes: candidate.length, liveWrites: 0 }));
 }

@@ -34,6 +34,10 @@ identities can still require manual diagnosis rather than automatic removal.
 
 ## Release boundary
 
+For the production graph without organizer-handoff, use the explicit profile and
+combined upgrade in [LK_SEPTEMBER_RELEASE_COMPATIBILITY.md](LK_SEPTEMBER_RELEASE_COMPATIBILITY.md).
+The following describes the original source candidate, not a direct live upgrade.
+
 The source-only builder is `scripts/prepare_repeated_booking_leave_candidate.mjs`.
 It requires an external fresh source flow whose touched functions match reviewed
 base preimages, validates existing operation-store configuration and routing, adds
