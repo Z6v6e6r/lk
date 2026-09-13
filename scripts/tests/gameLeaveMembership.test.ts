@@ -44,7 +44,7 @@ test("server identity aliases and legacy phone-only membership are supported", (
   for (const key of ["clientId", "playerId", "userId", "id"]) {
     assert.ok(findActiveSplitPaymentForLeave([{ [key]: " FIXTURE-PLAYER ", status: "WAITLIST" }], actor));
   }
-  assert.ok(findActiveSplitPaymentForLeave([{ mobile: "+7 (000) 000-00-01", status: "WAITLIST" }], actor));
+  assert.ok(findActiveSplitPaymentForLeave([{ mobile: `+${actor.phone}`, status: "WAITLIST" }], actor));
   assert.equal(hasActiveGameLeaveMembership(game(), {}), false);
 });
 
