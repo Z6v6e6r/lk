@@ -27,7 +27,7 @@ export function buildOrganizerHandoffCandidate(source) {
     target.func = target.func.replace(before, after);
   };
   // Apply only the new guard to live cleanup, preserving its deployed task shape.
-  const guard = read('cleanup_prepare_guard');
+  const guard = read('cleanup_prepare_guard') + '\n';
   replaceExact('9508f8e0ae8d282a', '  const timedOutPaymentItems = [];', guard + '  const timedOutPaymentItems = [];');
   replaceExact('9508f8e0ae8d282a', 'mode: "GAME_CLEANUP",\n    gameId,',
     'mode: "GAME_CLEANUP",\n    gameId,\n    expectedUpdatedAt: toStr(game.updatedAt),');
