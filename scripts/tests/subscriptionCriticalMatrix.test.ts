@@ -202,7 +202,7 @@ const errorCases: Array<{
     expected: "PENDING_CONFIRMATION",
     retryable: true,
     continueWithoutSubscription: false,
-    message: /новая льгота не спишется/i,
+    message: /проверку текущей попытки/i,
   },
   {
     id: "AS-CONFIRM-PENDING-REPLAY",
@@ -211,7 +211,7 @@ const errorCases: Array<{
     expected: "PENDING_CONFIRMATION",
     retryable: true,
     continueWithoutSubscription: false,
-    message: /новая льгота не спишется/i,
+    message: /проверку текущей попытки/i,
   },
   {
     id: "DUR-INVALID",
