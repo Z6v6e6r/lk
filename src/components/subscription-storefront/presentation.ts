@@ -148,7 +148,7 @@ export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, Summe
 };
 
 
-// Keep annual copy aligned with the existing HAB annual card, not the summer artwork.
+// Annual and monthly friendship plans share the same benefit descriptions.
 export const friendshipVariantBenefits: Readonly<Record<string, readonly SubscriptionBenefitGroup[]>> = {
   'monthly-two-hours': [
     { id: 'daily-two-hours', title: '2 часа в день бесплатно:',
@@ -156,12 +156,5 @@ export const friendshipVariantBenefits: Readonly<Record<string, readonly Subscri
     { ...discounts, title: 'СВЕРХ 2-ух ЧАСОВ:' },
     planning,
   ],
-  annual: [
-    friendshipBenefits[0],
-    { id: 'annual-discounts', title: 'Скидки:', items: [
-      { id: 'game-discount', badge: '30%', label: 'На создание / участие в играх на 90 или 120 минут' },
-      { id: 'other-discount', badge: '50%', label: 'На игру с тренером, групповые тренировки и «Время на друзей»' },
-    ] },
-    planning,
-  ],
+  annual: friendshipBenefits,
 };
