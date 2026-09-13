@@ -4935,6 +4935,7 @@ export default function GamesPage({
   const [gameRecordError, setGameRecordError] = useState<string | null>(null);
   const [gameRosterError, setGameRosterError] = useState<string | null>(null);
   const [detailsSplitJoinPending, setDetailsSplitJoinPending] = useState<{
+    released?: boolean;
     gameId: string | null;
     message: string;
     reason: string | null;
@@ -14272,11 +14273,13 @@ export default function GamesPage({
             error: paymentResult.error,
           });
           const presentationMessage = formatSubscriptionDecisionPresentation(presentation);
-          if (presentation.kind === "PENDING_CONFIRMATION") {
+          if (presentation.kind === "PENDING_CONFIRMATION" || presentation.kind === "BOOKING_RELEASED") {
             setDetailsSplitJoinPending({
+              released: presentation.kind === "BOOKING_RELEASED",
               gameId: gameRecordId,
               message: presentationMessage,
-              reason: resolveSplitJoinPendingReason(paymentResult.error?.message, presentationMessage),
+              reason: presentation.kind === "BOOKING_RELEASED" ? null
+                : resolveSplitJoinPendingReason(paymentResult.error?.message, presentationMessage),
               subscriptionId: resolvedClientSubscriptionId,
             });
           } else {
@@ -16050,7 +16053,7 @@ export default function GamesPage({
                   );
                 }}
               >
-                Проверить снова
+                {detailsSplitJoinPending.released ? "Присоединиться снова" : "Проверить снова"}
               </button>
             </div>
           )}

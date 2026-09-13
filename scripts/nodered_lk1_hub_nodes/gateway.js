@@ -148,24 +148,59 @@ const lk1Checkout = (ctx) => {
 };
 
 
-// HUB_STEPS
-if (ctx.step === "lk1_ingress_operation_find") {
-  // Pure retry lookup, never the mutating operation_find/checkout continuation.
-  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) {
-    return lk1Stop(ctx, "LK1_OPERATION_READ_FAILED");
+// REJOIN_HELPERS_START
+const lk1FenceOperationUpdate = (ctx, step, query) => {
+  if (!ctx.lk1) return query;
+  if (step === "operation_fail") {
+    return { ...query, state: { $in: ["PREPARED", "PENDING_CONFIRMATION"] } };
   }
-  const operation = msg.payload[0];
-  if (!operation && msg.payload.length === 0) {
-    delete ctx.lk1IngressReplay;
-    ctx.step = "lk1_profile_continue";
-  } else {
+  if (step === "operation_accept" || step === "operation_confirm") {
+    return { ...query, state: "PENDING_CONFIRMATION",
+      ...(step === "operation_confirm" ? {
+        // A bound booking must match. Missing evidence remains admissible for
+        // the existing read-only recovery of an expired, unbound claim.
+        upstreamBookingId: { $in: [ctx.confirmedBookingId, null, ""] },
+      } : {}),
+    };
+  }
+  return query;
+};
+
+const lk1RejoinIdentity = (id) => {
+  const match = typeof id === "string" && /^(lk-split-join-[a-z0-9]+)(?::rejoin:([1-9]\d{0,3}))?$/.exec(id);
+  if (!match || Number(match[2] || 0) > 1000) return null;
+  return { base: match[1], generation: Number(match[2] || 0) };
+};
+const lk1RejoinNextId = (id) => {
+  const value = lk1RejoinIdentity(id);
+  return value && value.generation < 1000 ? `${value.base}:rejoin:${value.generation + 1}` : null;
+};
+const lk1RejoinPreviousId = (id) => {
+  const value = lk1RejoinIdentity(id);
+  return value?.generation > 0
+    ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;
+};
+const lk1ReleasedWithoutPayment = (operation) => {
+  const presentId = value => typeof value === "string" && value.trim().length > 0;
+  const bookingIds = [operation.bookingId, operation.upstreamBookingId].filter(value => value != null);
+  return operation.state === "RELEASED" && operation.releaseSource === "GAME_LEAVE"
+    && presentId(operation.releaseOperationId) && presentId(operation.releaseBookingId)
+    && typeof operation.releasedAt === "string" && Number.isFinite(Date.parse(operation.releasedAt))
+    && bookingIds.length > 0 && bookingIds.every(id => presentId(id) && id === operation.releaseBookingId)
+    && Array.isArray(operation.releasedBookingIds) && operation.releasedBookingIds.includes(operation.releaseBookingId)
+    // An attempted charge or visit adjustment needs its own recovery, even if
+    // the booking has been cancelled. Never infer a refund from RELEASED.
+    && ["transactionAttemptedAt", "transactionId", "transactionIntent", "checkout", "visitJob"]
+      .every(key => operation.lk1?.[key] === undefined);
+};
+const lk1ReplayIdentityMatches = (ctx, operation, operationId = ctx.operationId) => {
     const quote = operation?.lk1;
     const isCreate = ctx.caller === "split_create_readonly_preflight";
     const action = isCreate ? "CREATE_GAME" : managedActionForTarget({ ...ctx, category: operation?.category });
     const identity = { ...ctx, managedAction: action };
-    if (!isObj(operation) || operation._id !== `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`
+    return !(!isObj(operation) || operation._id !== `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, operationId])}`
       || operation.tenantKey !== ctx.tenantKey || operation.actorClientId !== ctx.actorClientId
-      || operation.operationId !== ctx.operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+      || operation.operationId !== operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
       || !isObj(quote) || quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID || !isObj(quote.target)
       || !action || quote.fingerprint !== lk1Fingerprint(identity, quote)
       || (isCreate ? JSON.stringify(quote.createPayload) !== JSON.stringify(ctx.lk1CreatePayload)
@@ -177,8 +212,46 @@ if (ctx.step === "lk1_ingress_operation_find") {
         : operation.exerciseId !== ctx.exerciseId || quote.target.eventId !== ctx.exerciseId)
       || quote.decision?.eligible !== true || ![0, 1].includes(quote.decision.subscriptionVisitCount)
       || !Number.isSafeInteger(quote.decision?.benefit?.finalPriceMinor)
-      || quote.decision.benefit.finalPriceMinor < 0 || quote.decision.benefit.finalPriceMinor > 1_000_000) {
+      || quote.decision.benefit.finalPriceMinor < 0 || quote.decision.benefit.finalPriceMinor > 1_000_000);
+};
+// REJOIN_HELPERS_END
+
+// HUB_STEPS
+if (ctx.step === "lk1_ingress_operation_find") {
+  // Existing operations are only read. A new explicit successor must prove
+  // its predecessor below before entering ordinary fresh validation.
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) {
+    return lk1Stop(ctx, "LK1_OPERATION_READ_FAILED");
+  }
+  const operation = msg.payload[0];
+  if (!operation && msg.payload.length === 0) {
+    const previousId = lk1RejoinPreviousId(ctx.operationId);
+    if (String(ctx.operationId).includes(":rejoin:") && !previousId) {
+      return finishError(ctx, 409, "Не удалось проверить предыдущую запись", { code: "SUBSCRIPTION_REJOIN_INVALID" });
+    }
+    if (previousId) {
+      if (ctx.caller !== "split" || ctx.managedAction !== "JOIN_GAME") {
+        return finishError(ctx, 409, "Повторная запись недоступна", { code: "SUBSCRIPTION_REJOIN_INVALID" });
+      }
+      return lk1Find(ctx, "lk1_rejoin_predecessor_find", {
+        _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, previousId])}`,
+      });
+    }
+    delete ctx.lk1IngressReplay;
+    ctx.step = "lk1_profile_continue";
+  } else {
+    if (!lk1ReplayIdentityMatches(ctx, operation)) {
       return lk1Stop(ctx, "LK1_REQUEST_IDENTITY_CHANGED");
+    }
+    const quote = operation.lk1;
+    if (operation.state === "RELEASED" && ctx.caller === "split" && ctx.managedAction === "JOIN_GAME") {
+      const nextOperationId = lk1RejoinNextId(ctx.operationId);
+      if (!nextOperationId || !lk1ReleasedWithoutPayment(operation)) {
+        return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
+      }
+      return finishError(ctx, 409, "Предыдущая запись отменена. Для новой записи нажмите «Присоединиться снова».", {
+        code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId, nextOperationId,
+      });
     }
     if (operation.state !== "CONFIRMED" || typeof operation.bookingId !== "string" || !operation.bookingId.trim()
       || typeof operation.exerciseId !== "string" || !operation.exerciseId.trim()
@@ -205,6 +278,21 @@ if (ctx.step === "lk1_ingress_operation_find") {
     ctx.confirmedBookingId = operation.bookingId;
     return lk1Finish(ctx);
   }
+}
+
+if (ctx.step === "lk1_rejoin_predecessor_find") {
+  const previousId = lk1RejoinPreviousId(ctx.operationId);
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
+    || ctx.caller !== "split" || ctx.managedAction !== "JOIN_GAME" || !previousId
+    || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)
+    || !lk1ReleasedWithoutPayment(msg.payload[0])) {
+    return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
+  }
+  const previous = msg.payload[0];
+  ctx.lk1Rejoin = { operationId: previousId, releaseOperationId: previous.releaseOperationId,
+    bookingId: previous.releaseBookingId, releasedAt: previous.releasedAt };
+  delete ctx.lk1IngressReplay;
+  ctx.step = "lk1_profile_continue";
 }
 
 if (ctx.step === "lk1_money_owned_subscriptions") {
@@ -482,6 +570,7 @@ if (ctx.step === "lk1_policy_decision") {
     clientSubscriptionId: ctx.clientSubscriptionId, operationId: ctx.operationId,
     exerciseId: ctx.exerciseId, serviceDate: ctx.serviceDate, category: ctx.category,
     state: "PREPARED", attempts: 0, lk1: JSON.parse(JSON.stringify(ctx.lk1)),
+    ...(ctx.lk1Rejoin ? { rejoinPredecessor: ctx.lk1Rejoin } : {}),
     createdAt: now, updatedAt: now, leaseUntil: new Date(Date.now() + PREPARED_LEASE_MS).toISOString() };
   msg.payload = [record, { writeConcern: { w: "majority", j: true } }];
   return emit(OUTPUT_MONGO_INSERT);

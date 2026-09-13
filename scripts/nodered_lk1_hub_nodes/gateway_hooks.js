@@ -98,6 +98,7 @@ const lk1MongoInserted = (value, expectedId) => isObj(value)
 // HTTP and split ingress rebuild server contexts from explicit allowlists.
 // Never honor a client-supplied skip/read-complete marker at profile entry.
 delete ctx.lk1IngressReplay;
+delete ctx.lk1Rejoin;
 const split = msg._splitCtx;
 const approval = split?.lk1ReadOnlyApproval;
 const internalCreate = ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding !== undefined
