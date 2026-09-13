@@ -69,8 +69,8 @@ export function energy5BillingOptions(status: StorefrontStatus | undefined): Sub
   return [{
     ...billing,
     id: 'monthly',
-    label: '5 занятий',
-    priceSuffix: '/ 5 занятий',
+    label: '60 дней, 5 занятий',
+    priceSuffix: '/ 60 дней, 5 занятий',
     ctaDisabled: !canContinue(status),
     ctaLabel: canContinue(status) ? 'Оформить абонемент' : 'Сейчас недоступно',
   }];

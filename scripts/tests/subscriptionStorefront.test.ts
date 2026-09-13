@@ -324,8 +324,8 @@ test('five-visit pass keeps its API price and disables the CTA without one', () 
   const pass = energy5BillingOptions({ ...available, counterKey: 'energy5', priceMinor: 1980000, unlimited: true, remainingCount: 0 });
   assert.equal(pass.length, 1);
   assert.equal(pass[0].id, 'monthly');
-  assert.equal(pass[0].label, '5 занятий');
-  assert.equal(pass[0].priceSuffix, '/ 5 занятий');
+  assert.equal(pass[0].label, '60 дней, 5 занятий');
+  assert.equal(pass[0].priceSuffix, '/ 60 дней, 5 занятий');
   assert.equal(pass[0].priceMinor, 1980000);
   assert.equal(pass[0].ctaLabel, 'Оформить абонемент');
   assert.equal(pass[0].progress, undefined);
