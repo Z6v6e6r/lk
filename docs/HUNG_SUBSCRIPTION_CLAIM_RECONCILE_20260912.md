@@ -162,3 +162,74 @@ so the affected player can simply book again.
   (`patch_live_lk1_hub.mjs`, composition contract, live preimage), so it ships separately.
 - The price preview and HUB usage readers still count an *unexpired* claim; that is
   intended (double-spend protection).
+
+## Cancellation reconciliation update (source change, 2026-09-13)
+
+The following behavior supersedes the original blanket `PROVIDER_BOOKING_BOUND`
+rule and scheduled scan description above. Deploying this version and applying it
+are separate operational actions; this source change does not alter the live timer.
+
+A `PREPARED`/`PENDING_CONFIRMATION` claim with `bookingId` or `upstreamBookingId` may
+be released only after its deadline and a complete read of that exercise proves:
+
+- both binding aliases agree, and exactly one row has that booking ID;
+- client and subscription aliases match exactly, with no conflicting exercise ID;
+- the booking is explicitly cancelled, with no contradictory flags/statuses;
+- no other active or potentially relevant unidentified booking remains.
+
+Absence of a bound row, payment failure/refund, expiry, and exercise archival are
+not evidence that this booking was cancelled. Unknown active clients and conflicting
+aliases fail closed, including for unbound claims.
+
+CREATE attempts (including `lk1.createAttemptedAt`, `lk1.bookingAttemptedAt` and
+`createPayload`) remain manual. Managed entitlements, visit jobs, transactions,
+checkout and pending activation also remain manual: this reconciler only changes
+its claim, so it cannot prove those other actions closed. The observed incident has
+both a cancelled upstream booking and CREATE attempt markers; its expected dry-run
+result is `CREATE_ATTEMPT_REQUIRES_MANUAL_RECONCILIATION`, not automatic release.
+No production identifiers or provider exports belong in fixtures or this document.
+
+Before each write the CLI re-reads the matching Mongo preimage and performs a new
+Viva GET (not the scan cache). CAS includes identity, both binding IDs, `lk1`, related
+operation fields, and deadline fields, with explicit absence predicates. This catches
+runtime writers that change `lk1` without changing `updatedAt`. A fresh-read failure
+or CAS mismatch prevents that write and returns a nonzero exit code. Exact scanned
+preimages are still backed up first. Money/visits/provider data are never written.
+
+### Bounded traversal
+
+Apply uses a persistent operation-key cursor by default at
+`<backup-dir>/.scan-cursor.json`; `--cursor-file` overrides the location. Each tick
+reads at most `--limit` candidates ordered by string `_id`, resumes after the prior
+key, and wraps when it reaches the end. Skipped records therefore cannot permanently
+occupy the first batch. Query filters are part of the cursor scope. Non-string keys
+are rejected rather than silently skipped. Every active candidate is visible even
+without `updatedAt`; the pure guard checks explicit deadlines or `createdAt` fallback.
+The latest valid explicit deadline wins if several are supplied.
+
+`--sort oldest|newest` remains available for one-shot audits **without a cursor**.
+In apply mode the cursor order takes precedence, including for an existing wrapper's
+nightly larger batch. Keep the wrapper's `flock`: concurrent cursor writers are not
+supported. Cursor files are atomic and private (`0600`). Dry-run may read a cursor
+but never advances it. Failed writes/fresh reads keep its position for retry.
+
+When packaging this version include all three source files:
+`reconcile_hung_subscription_claims.mjs`, `lib/hungClaimRelease.mjs`, and
+`lib/hungClaimScan.mjs`. The live copy previously had CREATE guards absent from main;
+this change retains those protections rather than replacing them with the older copy.
+
+### Verification and limits
+
+- `node --test scripts/tests/hungClaimRelease.test.mjs`: pure guards and CLI offline
+  rehearsal. The Mongo test explicitly skips without its isolated fixture URI.
+- `HUNG_CLAIM_TEST_MONGO_URI=mongodb://127.0.0.1:<fixture-port> node --test scripts/tests/hungClaimRelease.test.mjs`:
+  real MongoDB 7, loopback-only fake Viva; dry-run/no writes, exact cancellation,
+  fresh provider failure/active state, concurrent `lk1` change without `updatedAt`,
+  repeat apply, and traversal to a legacy claim. The test creates and drops only its
+  uniquely named `hung_claim_verify_*` database. No production endpoints are used.
+
+Residual runtime boundary: generic confirm/fail continuations currently match
+`_id + operationId` without a state predicate and may overwrite a released claim
+**after** reconciliation. CAS protects the write preimage, not those future writers.
+Fencing those runtime paths is a separate Node-RED change; do not claim this script
+fixes all delayed continuations or completes CREATE/payment/visit reconciliation.

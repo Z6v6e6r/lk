@@ -35,7 +35,7 @@ export const AUDIT_ONLY_CLAIM_STATES = Object.freeze([
   'PRECREATE_RECONCILIATION_REQUIRED',
 ]);
 
-/** Terminal states that never consume a limit (mirrors the runtime usage reader). */
+/** States this reconciler does not change. CONFIRMED can still consume allowance. */
 export const TERMINAL_CLAIM_STATES = Object.freeze(['CONFIRMED', 'FAILED', 'RELEASED']);
 
 export const DEFAULT_HUNG_CLAIM_TTL_MS = 30 * 60 * 1000;
@@ -64,10 +64,9 @@ export const claimBookingId = (operation) => toStr(operation?.bookingId) || toSt
  * usable evidence at all — such a claim is never released automatically.
  */
 export function hungClaimDeadlineTs(operation, { ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS } = {}) {
-  for (const field of ['pendingUntil', 'leaseUntil', 'precreateLeaseUntil']) {
-    const explicit = parseTs(operation?.[field]);
-    if (explicit !== null) return explicit;
-  }
+  const declared = ['pendingUntil', 'leaseUntil', 'precreateLeaseUntil']
+    .map(field => parseTs(operation?.[field])).filter(value => value !== null);
+  if (declared.length) return Math.max(...declared);
   const observed = parseTs(operation?.updatedAt) ?? parseTs(operation?.createdAt);
   return observed === null ? null : observed + ttlMs;
 }
@@ -90,18 +89,33 @@ export const bookingSubscriptionId = (booking) => {
 /** Booking id of a Viva booking row. */
 export const bookingId = (value) => toStr(value?.id || value?.bookingId || value?.uuid);
 
-/** A booking row the provider still reports as live. */
-export function isActiveBooking(value) {
+/** Only an explicit booking cancellation proves its seat was released. Payment
+ * errors/refunds and an archived exercise alone are not cancellation evidence. */
+export function isExplicitlyCancelled(value) {
   if (!value || typeof value !== 'object') return false;
-  const nested = value?.exercise;
-  if (value.isCancelled === true || value.cancelled === true || value.canceled === true
-    || value.archived === true || toStr(value.cancellationDate) || toStr(value.cancelledAt)
-    || nested?.isCancelled === true || nested?.cancelled === true || nested?.canceled === true
-    || nested?.archived === true) return false;
-  return ![value.status, value.state, value.bookingStatus, value.transactionStatus?.transactionStatus,
-    nested?.status, nested?.state]
-    .some((status) => /CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|ARCHIVE|REMOV/i.test(String(status || '')));
+  const flags = [value.isCancelled, value.cancelled, value.canceled];
+  const statuses = [value.status, value.state, value.bookingStatus].filter(status => status != null && status !== '');
+  if (flags.some(flag => flag === false || (flag != null && typeof flag !== 'boolean'))) return false;
+  // Unknown or active status cannot corroborate a conflicting cancellation flag.
+  if (statuses.some(status => !/^(CANCELLED|CANCELED)$/i.test(String(status).trim()))) return false;
+  return flags.includes(true) || parseTs(value.cancellationDate) !== null
+    || parseTs(value.cancelledAt) !== null || statuses.length > 0;
 }
+export const isActiveBooking = value => !isExplicitlyCancelled(value);
+
+// Do not choose one convenient alias when the provider supplied conflicting IDs.
+export function exactId(values) {
+  const present = values.filter(value => value !== undefined && value !== null && value !== '');
+  if (!present.length || present.some(value => typeof value !== 'string' || !value.trim())) return null;
+  const ids = new Set(present.map(normalizeId));
+  return ids.size === 1 ? [...ids][0] : null;
+}
+const exactClient = row => exactId([row?.clientId, row?.client?.id, row?.client?.clientId, row?.playerId, row?.userId]);
+const exactSubscription = row => exactId([row?.clientSubscriptionId, row?.subscriptionId, row?.clientSubId,
+  row?.subscription?.clientSubscriptionId, row?.subscription?.subscriptionId, row?.subscription?.id,
+  row?.subscription?.uuid, row?.clientSubscription?.clientSubscriptionId,
+  row?.clientSubscription?.subscriptionId, row?.clientSubscription?.id, row?.clientSubscription?.uuid]);
+const exactBooking = row => exactId([row?.id, row?.bookingId, row?.uuid]);
 
 /** Provider rows of one exercise readback, whatever envelope the admin API returned. */
 export function extractBookingRows(value) {
@@ -139,6 +153,26 @@ export function readCompleteBookingRows(value, { pageSize = PROVIDER_PAGE_SIZE }
 }
 
 /**
+ * Marks of a claim that already attempted a provider CREATE. An accepted CREATE may
+ * have created the game even when no booking id was recorded, so the runtime never
+ * resolves such a claim by TTL alone; the reconciler keeps the same rule and lists
+ * these claims for a game-side manual reconciliation instead.
+ */
+export const CREATE_ATTEMPT_FIELDS = Object.freeze([
+  'lk1.createAttemptedAt',
+  'lk1.bookingAttemptedAt',
+  'createAttemptedAt',
+]);
+
+/** True when the claim carries any recorded create attempt. */
+export function hasCreateAttempt(operation) {
+  return CREATE_ATTEMPT_FIELDS.some((field) => {
+    const [head, tail] = field.split('.');
+    return tail ? toStr(operation?.[head]?.[tail]) : toStr(operation?.[head]);
+  });
+}
+
+/**
  * Decide one claim. `bookings` is the provider readback for the claim's exercise:
  * pass the parsed admin payload (array or `content`/`items` envelope), or null when
  * the provider could not be read — a missing readback never releases.
@@ -159,14 +193,20 @@ export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT
     reason: null,
   };
   const deny = (reason, deadline = null) => ({ ...base, deadline, releasable: false, reason });
-  if (!nowTs) return deny('NOW_UNRESOLVED');
+  if (nowTs === null) return deny('NOW_UNRESOLVED');
   if (!operation || typeof operation !== 'object') return deny('OPERATION_INVALID');
   if (AUDIT_ONLY_CLAIM_STATES.includes(base.state)) return deny('STATE_REQUIRES_MANUAL_RECONCILIATION');
   if (!HUNG_CLAIM_STATES.includes(base.state)) {
     return deny(TERMINAL_CLAIM_STATES.includes(base.state) ? 'STATE_TERMINAL' : 'STATE_NOT_HUNG');
   }
-  if (claimBookingId(operation)) return deny('PROVIDER_BOOKING_BOUND');
-  if (!base.actorClientId || !base.clientSubscriptionId) return deny('IDENTITY_UNRESOLVED');
+  if (operation.lk1 != null && (typeof operation.lk1 !== 'object' || Array.isArray(operation.lk1))) return deny('OPERATION_INVALID');
+  if (hasCreateAttempt(operation) || operation.lk1?.createPayload) return deny('CREATE_ATTEMPT_REQUIRES_MANUAL_RECONCILIATION');
+  if (operation.managedEntitlementOperationId || operation.managedSubscriptionInstanceId
+    || operation.activationState === 'PENDING' || ['visitJob', 'transactionAttemptedAt',
+      'transactionIntent', 'transactionId', 'checkout'].some(key => operation.lk1?.[key] != null)) {
+    return deny('RELATED_OPERATION_REQUIRES_RECONCILIATION');
+  }
+  if (!exactId([operation.actorClientId]) || !exactId([operation.clientSubscriptionId])) return deny('IDENTITY_UNRESOLVED');
   const deadlineTs = hungClaimDeadlineTs(operation, { ttlMs });
   const deadline = deadlineTs === null ? null : new Date(deadlineTs).toISOString();
   if (deadlineTs === null) return deny('DEADLINE_MISSING');
@@ -178,20 +218,39 @@ export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT
   if (!base.exerciseId) return deny('EXERCISE_ID_MISSING', deadline);
   const actor = normalizeId(base.actorClientId);
   const subscription = normalizeId(base.clientSubscriptionId);
-  const actorRows = rows.filter((row) => row && typeof row === 'object'
-    && normalizeId(bookingClientId(row)) === actor);
-  // A live row of this actor whose subscription cannot be resolved proves neither
-  // ownership nor absence: the runtime holds such a claim too, so it is never
-  // released by the reconciler.
-  if (actorRows.some((row) => isActiveBooking(row) && !bookingSubscriptionId(row))) {
-    return deny('PROVIDER_SUBSCRIPTION_ID_UNRESOLVED', deadline);
+  const bound = claimBookingId(operation);
+  if (bound) {
+    const boundId = exactId([operation.bookingId, operation.upstreamBookingId]);
+    if (!boundId) return deny('BOOKING_ID_CONFLICT', deadline);
+    const matches = rows.filter(row => [row?.id, row?.bookingId, row?.uuid]
+      .some(id => normalizeId(id) === boundId));
+    if (matches.length !== 1 || exactBooking(matches[0]) !== boundId) return deny('BOUND_BOOKING_UNRESOLVED', deadline);
+    const row = matches[0];
+    if (exactClient(row) !== actor || exactSubscription(row) !== subscription) return deny('BOUND_BOOKING_IDENTITY_MISMATCH', deadline);
+    const exerciseAliases = [row.exerciseId, row.exercise?.id, row.exercise?.exerciseId].filter(value => value != null);
+    if (exerciseAliases.length && exactId(exerciseAliases) !== normalizeId(base.exerciseId)) return deny('BOUND_EXERCISE_MISMATCH', deadline);
+    if (!isExplicitlyCancelled(row)) return deny('BOUND_BOOKING_NOT_CANCELLED', deadline);
   }
-  if (actorRows.some((row) => isActiveBooking(row)
-    && normalizeId(bookingSubscriptionId(row)) === subscription)) {
-    return deny('PROVIDER_BOOKING_ACTIVE', deadline);
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return deny('PROVIDER_IDENTITY_UNRESOLVED', deadline);
+    if (!isActiveBooking(row)) continue;
+    const client = exactClient(row);
+    if (!client) return deny('PROVIDER_IDENTITY_UNRESOLVED', deadline);
+    if (client !== actor) continue;
+    const sub = exactSubscription(row);
+    if (!sub) return deny('PROVIDER_SUBSCRIPTION_ID_UNRESOLVED', deadline);
+    if (sub === subscription) return deny('PROVIDER_BOOKING_ACTIVE', deadline);
   }
-  return { ...base, deadline, releasable: true, reason: null };
+  return { ...base, deadline, releasable: true, reason: null, evidence: bound ? 'EXACT_CANCELLED_BOOKING' : 'NO_ACTIVE_BOOKING' };
 }
+
+// Some runtime continuations update lk1/binding without changing updatedAt.
+export const CLAIM_CAS_FIELDS = Object.freeze([
+  '_id', 'operationId', 'state', 'updatedAt', 'createdAt', 'tenantKey', 'actorClientId',
+  'clientSubscriptionId', 'exerciseId', 'bookingId', 'upstreamBookingId', 'lk1',
+  'managedEntitlementOperationId', 'managedSubscriptionInstanceId', 'activationState',
+  'createAttemptedAt', 'pendingUntil', 'leaseUntil', 'precreateLeaseUntil', 'attempts',
+]);
 
 /**
  * Compare-and-swap that moves one hung claim to RELEASED. The query repeats the
@@ -201,12 +260,8 @@ export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT
 export function buildHungClaimReleaseCommand({ operation, now }) {
   const nowIso = new Date(parseTs(now)).toISOString();
   return {
-    query: {
-      _id: operation._id,
-      operationId: operation.operationId,
-      state: operation.state,
-      updatedAt: operation.updatedAt,
-    },
+    query: Object.fromEntries(CLAIM_CAS_FIELDS.map(key => [key,
+      Object.hasOwn(operation, key) ? { $eq: operation[key] } : { $exists: false }])),
     update: {
       $set: {
         state: 'RELEASED',
