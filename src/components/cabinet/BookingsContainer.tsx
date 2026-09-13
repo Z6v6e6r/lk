@@ -27,6 +27,7 @@ interface BookingsContainerProps {
   onLoadMoreActiveRecords?: () => void;
   gameRecords?: PadelGameRecord[];
   onCreateTeamGame?: (booking: Booking) => void;
+  canCreateTeamGame?: (booking: Booking) => boolean;
   hasTeamGameForBooking?: (booking: Booking) => boolean;
   renderGameCard?: (
     game: PadelGameRecord,
@@ -335,6 +336,7 @@ export function BookingsContainer({
   onLoadMoreActiveRecords,
   gameRecords = [],
   onCreateTeamGame,
+  canCreateTeamGame,
   hasTeamGameForBooking,
   renderGameCard,
   loadingGameRecords = false,
@@ -560,6 +562,7 @@ export function BookingsContainer({
         loadBookings={active ? loadBookings : undefined}
         showCreateTeamGame={
           active
+          && (canCreateTeamGame?.(booking) ?? false)
           && isExerciseConvertibleToGameFromBooking(booking)
           && !(hasTeamGameForBooking?.(booking) ?? false)
           && !(isGameLinkAmbiguousForBooking?.(booking) ?? false)
@@ -655,7 +658,8 @@ export function BookingsContainer({
                     active={true}
                     loadBookings={loadBookings}
                     showCreateTeamGame={
-                      !(resolveGameForBooking?.(booking) ?? null)
+                      (canCreateTeamGame?.(booking) ?? false)
+                      && !(resolveGameForBooking?.(booking) ?? null)
                       && !(isGameLinkAmbiguousForBooking?.(booking) ?? false)
                     }
                     onCreateTeamGame={onCreateTeamGame}

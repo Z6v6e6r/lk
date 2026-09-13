@@ -1,3 +1,4 @@
+import { canCreateGameAfterLookup } from "./bookingGameCreationGuard";
 import { AvatarImage } from "../UI/AvatarImage";
 import { invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
 import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties } from "react";
@@ -1646,6 +1647,9 @@ export function Cabinet({
     Record<string, ExactGameLinkState>
   >({});
   const [loadingCreatedGames, setLoadingCreatedGames] = useState(false);
+  const gamesIdentity = JSON.stringify([profile?.id ?? null, profile?.phone ?? null]);
+  const [loadedGamesIdentity, setLoadedGamesIdentity] = useState<string | null>(null);
+  const [pendingBookingRefreshes, setPendingBookingRefreshes] = useState(0);
   const [createdGamesError, setCreatedGamesError] = useState<string | null>(null);
   const [cabinetFlashNotice] = useState<string | null>(() => consumeCabinetFlashNotice());
   const [activeGameRecordsTotal, setActiveGameRecordsTotal] = useState(0);
@@ -1971,6 +1975,7 @@ export function Cabinet({
 
   useEffect(() => {
     const phone = profile?.phone?.trim();
+    setLoadedGamesIdentity(null);
     if (!phone) {
       setCreatedGames([]);
       setActiveGameRecordsTotal(0);
@@ -2019,6 +2024,9 @@ export function Cabinet({
           mergedGames.length,
         ));
         const error = activeGamesResult.error ?? resultWindowGamesResult.error;
+        if (!error && activeGamesResult.data && resultWindowGamesResult.data) {
+          setLoadedGamesIdentity(gamesIdentity);
+        }
         if (error) {
           setCreatedGamesError(error.message || "Не удалось загрузить игры");
         }
@@ -2036,7 +2044,7 @@ export function Cabinet({
     return () => {
       alive = false;
     };
-  }, [profile?.phone, profile?.id]);
+  }, [profile?.phone, profile?.id, gamesIdentity]);
 
   const loadAllActiveRecords = useCallback(async () => {
     const phone = profile?.phone?.trim();
@@ -2933,69 +2941,78 @@ export function Cabinet({
   }, [isRefreshingApp, profile?.id]);
 
   const loadBookings = async () => {
-    const shouldRefreshHistory = isBookingHistoryOpen || historyBookings !== null;
-    const phone = profile?.phone?.trim() || null;
-    const [
-      activeBookingsData,
-      historyBookingsData,
-      userSubscriptionsData,
-      referralSubscriptionsData,
-      activeGamesResult,
-      resultWindowGamesResult,
-    ] = await Promise.all([
-      apiFetchBookings(false),
-      shouldRefreshHistory ? loadHistoryBookings(true) : Promise.resolve(null),
-      apiFetchSubscriptions(),
-      apiFetchSubscriptions(REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS),
-      phone
-        ? apiFetchPadelGamesByPhone(
-            phone,
+    setPendingBookingRefreshes((count) => count + 1);
+    setLoadedGamesIdentity(null);
+    try {
+      const shouldRefreshHistory = isBookingHistoryOpen || historyBookings !== null;
+      const phone = profile?.phone?.trim() || null;
+      const [
+        activeBookingsData,
+        historyBookingsData,
+        userSubscriptionsData,
+        referralSubscriptionsData,
+        activeGamesResult,
+        resultWindowGamesResult,
+      ] = await Promise.all([
+        apiFetchBookings(false),
+        shouldRefreshHistory ? loadHistoryBookings(true) : Promise.resolve(null),
+        apiFetchSubscriptions(),
+        apiFetchSubscriptions(REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS),
+        phone
+          ? apiFetchPadelGamesByPhone(
+              phone,
+              profile?.id ?? null,
+              false,
+              { limit: ACTIVE_RESULT_WINDOW_LIMIT },
+            )
+          : Promise.resolve(null),
+        phone
+          ? apiFetchPadelGamesByPhone(
+              phone,
+              profile?.id ?? null,
+              true,
+              {
+                limit: ACTIVE_RESULT_WINDOW_LIMIT,
+                windowHours: 24,
+                needsResult: true,
+              },
+            )
+          : Promise.resolve(null),
+      ]);
+      if (activeBookingsData) setActiveBookings(activeBookingsData.data);
+      if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
+      setReferralUserSubscriptions(referralSubscriptionsData.data || userSubscriptionsData.data || null);
+      if (activeGamesResult?.data || resultWindowGamesResult?.data) {
+        const activeGames = activeGamesResult?.data?.games ?? [];
+        const resultWindowGames = resultWindowGamesResult?.data?.games ?? [];
+        const mergedGames = mergeCabinetGameRecords(activeGames, resultWindowGames)
+          .filter((game) => isGameRelevantToCabinetIdentity(
+            game,
             profile?.id ?? null,
-            false,
-            { limit: ACTIVE_RESULT_WINDOW_LIMIT },
-          )
-        : Promise.resolve(null),
-      phone
-        ? apiFetchPadelGamesByPhone(
-            phone,
-            profile?.id ?? null,
-            true,
-            {
-              limit: ACTIVE_RESULT_WINDOW_LIMIT,
-              windowHours: 24,
-              needsResult: true,
-            },
-          )
-        : Promise.resolve(null),
-    ]);
-    if (activeBookingsData) setActiveBookings(activeBookingsData.data);
-    if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
-    setReferralUserSubscriptions(referralSubscriptionsData.data || userSubscriptionsData.data || null);
-    if (activeGamesResult?.data || resultWindowGamesResult?.data) {
-      const activeGames = activeGamesResult?.data?.games ?? [];
-      const resultWindowGames = resultWindowGamesResult?.data?.games ?? [];
-      const mergedGames = mergeCabinetGameRecords(activeGames, resultWindowGames)
-        .filter((game) => isGameRelevantToCabinetIdentity(
-          game,
-          profile?.id ?? null,
-          profile?.phone ?? null,
+            profile?.phone ?? null,
+          ));
+        setCreatedGames(mergedGames);
+        setActiveGameRecordsTotal(Math.max(
+          activeGamesResult?.data?.total ?? 0,
+          resultWindowGamesResult?.data?.total ?? 0,
+          mergedGames.length,
         ));
-      setCreatedGames(mergedGames);
-      setActiveGameRecordsTotal(Math.max(
-        activeGamesResult?.data?.total ?? 0,
-        resultWindowGamesResult?.data?.total ?? 0,
-        mergedGames.length,
-      ));
+      }
+      const gamesError = activeGamesResult?.error ?? resultWindowGamesResult?.error;
+      setCreatedGamesError(gamesError?.message ?? null);
+      if (!gamesError && activeGamesResult?.data && resultWindowGamesResult?.data) {
+        setLoadedGamesIdentity(gamesIdentity);
+      }
+      trackAnalyticsEvent("cabinet_data_refreshed", {
+        activeBookingsCount: activeBookingsData?.data?.content?.length ?? 0,
+        historyBookingsCount: historyBookingsData?.content?.length ?? (historyBookings?.content?.length ?? 0),
+        historyBookingsLoaded: shouldRefreshHistory,
+        subscriptionsCount: userSubscriptionsData?.data?.content?.length ?? 0,
+        referralSubscriptionsCount: referralSubscriptionsData?.data?.content?.length ?? 0,
+      });
+    } finally {
+      setPendingBookingRefreshes((count) => count - 1);
     }
-    const gamesError = activeGamesResult?.error ?? resultWindowGamesResult?.error;
-    setCreatedGamesError(gamesError?.message ?? null);
-    trackAnalyticsEvent("cabinet_data_refreshed", {
-      activeBookingsCount: activeBookingsData?.data?.content?.length ?? 0,
-      historyBookingsCount: historyBookingsData?.content?.length ?? (historyBookings?.content?.length ?? 0),
-      historyBookingsLoaded: shouldRefreshHistory,
-      subscriptionsCount: userSubscriptionsData?.data?.content?.length ?? 0,
-      referralSubscriptionsCount: referralSubscriptionsData?.data?.content?.length ?? 0,
-    });
   };
 
   const openBookingHistory = useCallback(() => {
@@ -3236,8 +3253,21 @@ export function Cabinet({
     }
   };
 
+  const canCreateTeamGameFromBooking = (booking: Booking): boolean => (
+    !booking.isCancelled
+    && isExerciseConvertibleToGameFromBooking(booking)
+    && canCreateGameAfterLookup({
+      gamesLoaded: loadedGamesIdentity === gamesIdentity,
+      loading: loadingCreatedGames || loadingMoreActiveRecords || pendingBookingRefreshes > 0,
+      error: createdGamesError,
+      exactLinkState: exactGameLinkStateByBookingId[normalizeBookingLikeId(booking.id) ?? ""]?.state,
+      hasLinkedGame: hasTeamGameForBooking(booking),
+    })
+  );
+
   const handleCreateTeamGameFromBooking = (booking: Booking) => {
     if (!isExerciseConvertibleToGameFromBooking(booking)) return;
+    if (!canCreateTeamGameFromBooking(booking)) return;
 
     const exercise = booking.exercise;
     const bookingId = String(booking.id || "").trim();
@@ -3342,14 +3372,14 @@ export function Cabinet({
       options?.onBeforeOpen?.();
     };
     const openGameDetails = () => {
-      handleBeforeOpen();
       if (isSyntheticCabinetBookingGame(game)) {
         const booking = resolveBookingForGameCancellation(game);
-        if (booking && isExerciseConvertibleToGameFromBooking(booking)) {
-          handleCreateTeamGameFromBooking(booking);
-          return;
-        }
+        if (!booking || !canCreateTeamGameFromBooking(booking)) return;
+        handleBeforeOpen();
+        handleCreateTeamGameFromBooking(booking);
+        return;
       }
+      handleBeforeOpen();
       handleOpenGameDetails(game);
     };
     const openGameChat = () => {
@@ -3492,10 +3522,14 @@ export function Cabinet({
     const isOrganizer = isCurrentUserOrganizer(game);
     const showOrganizerWaitlistBadge = isOrganizer && waitlistCount > 0;
     const isSyntheticBookingGame = isSyntheticCabinetBookingGame(game);
+    const syntheticLookupFailed = Boolean(
+      createdGamesError
+      || (linkedBooking && exactGameLinkStateByBookingId[normalizeBookingLikeId(linkedBooking.id) ?? ""]?.state === "error"),
+    );
     const canRecoverSyntheticGame = Boolean(
       isSyntheticBookingGame
       && linkedBooking
-      && isExerciseConvertibleToGameFromBooking(linkedBooking),
+      && canCreateTeamGameFromBooking(linkedBooking),
     );
     const isCancelledForCabinet = Boolean(
       isGameCancelledStatus(game.status)
@@ -3855,12 +3889,15 @@ export function Cabinet({
                   <button
                     className="game-created-action"
                     type="button"
+                    disabled={isSyntheticBookingGame}
                     onClick={(event) => {
                       event.stopPropagation();
                       openGameDetails();
                     }}
                   >
-                    Подробнее
+                    {isSyntheticBookingGame
+                      ? (syntheticLookupFailed ? "Не удалось проверить игру" : "Настройка пока недоступна")
+                      : "Подробнее"}
                   </button>
                 )}
               </div>
@@ -4106,6 +4143,7 @@ export function Cabinet({
         onLoadMoreActiveRecords={loadAllActiveRecords}
         gameRecords={createdGames}
         onCreateTeamGame={handleCreateTeamGameFromBooking}
+        canCreateTeamGame={canCreateTeamGameFromBooking}
         hasTeamGameForBooking={hasTeamGameForBooking}
         renderGameCard={renderGameCard}
         loadingGameRecords={loadingCreatedGames}
