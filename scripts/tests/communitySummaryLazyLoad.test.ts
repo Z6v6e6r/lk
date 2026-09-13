@@ -105,15 +105,17 @@ test("ordinary community reads reuse stable URLs", () => {
   assert.doesNotMatch(readOptionsSource, /cache:/);
 });
 
-test("summary rows retain the legacy logo endpoint fallback without embedding the data URL", () => {
+test("summary rows use explicit provider logo fields without inventing legacy URLs", () => {
   const logoCandidatesSource = sourceSlice(
     apiSource,
     "export function buildCommunityLogoCandidates",
     "function decodeInviteSegment",
   );
 
-  assert.match(logoCandidatesSource, /community-logo-legacy\/\$\{encodeURIComponent\(community\.id\)\}\/thumb/);
-  assert.match(logoCandidatesSource, /community-logo-legacy\/\$\{encodeURIComponent\(community\.id\)\}`/);
+  assert.match(logoCandidatesSource, /community\.logoThumbUrl/);
+  assert.match(logoCandidatesSource, /community\.logoUrl/);
+  assert.match(logoCandidatesSource, /community\.logo,/);
+  assert.doesNotMatch(logoCandidatesSource, /encodeURIComponent\(community\.id\)/);
 });
 
 test("successful community mutations invalidate the browser-memory list cache", () => {

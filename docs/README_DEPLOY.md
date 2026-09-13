@@ -302,8 +302,15 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
     var baseUrls = resolveBaseUrls(channel);
     window.__LK_BASE_URLS__ = baseUrls.slice();
 
+    var reportedBootstrapErrors = Object.create(null);
+    var bootstrapErrorCount = 0;
+
     function sendBootstrapError(kind, payload) {
       try {
+        var key = kind + JSON.stringify(payload || {});
+        if (reportedBootstrapErrors[key] || bootstrapErrorCount >= 20) return;
+        reportedBootstrapErrors[key] = true;
+        bootstrapErrorCount += 1;
         var body = JSON.stringify({
           event: "tilda_bootstrap_error",
           timestamp: new Date().toISOString(),
@@ -317,15 +324,14 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
           },
           userAgent: navigator.userAgent || null
         });
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon(analyticsUrl, new Blob([body], { type: "application/json" }));
-          return;
-        }
         fetch(analyticsUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: body,
-          keepalive: true
+          keepalive: true,
+          credentials: "omit"
+        }).catch(function () {
+          // Diagnostics must not generate another unhandled rejection.
         });
       } catch (_) {}
     }
@@ -341,7 +347,18 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
     }
 
     window.addEventListener("error", function (event) {
-      if (isLikelyExtensionError(event)) return;
+      if (window.__LK_GLOBAL_ERROR_TRACKING_INSTALLED__ || isLikelyExtensionError(event)) return;
+      var target = event && event.target;
+      var tagName = String(target && target.tagName || "").toLowerCase();
+      if (tagName) {
+        // Image fallbacks are handled by the widget, not bootstrap failures.
+        if (tagName !== "script" && tagName !== "link") return;
+        sendBootstrapError("window.resource_error", {
+          tagName: tagName,
+          url: target.src || target.href || null
+        });
+        return;
+      }
       sendBootstrapError("window.error", {
         message: event.message || "Runtime error before widget init",
         filename: event.filename || null,
@@ -351,6 +368,7 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
     }, true);
 
     window.addEventListener("unhandledrejection", function (event) {
+      if (window.__LK_GLOBAL_ERROR_TRACKING_INSTALLED__) return;
       var reason = event && event.reason ? String(event.reason) : "Unhandled promise rejection";
       sendBootstrapError("window.unhandledrejection", { reason: reason });
     });
