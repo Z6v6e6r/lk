@@ -1757,26 +1757,28 @@ export default function FindGamePage({
         </button>
       </div>
 
-      <div className="find-game-section-head">
-        <div>
-          {presetStudioName && <div className="find-game-section-sub">{presetStudioName}</div>}
+      {presetStudioName && (
+        <div className="find-game-section-head">
+          <div className="find-game-section-sub">{presetStudioName}</div>
         </div>
+      )}
+
+      <div className="find-game-category-row">
+        <nav className="find-game-categories" aria-label="Категории игр">
+          {FIND_GAME_CATEGORY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`find-game-category${category === option.value ? " active" : ""}`}
+              aria-pressed={category === option.value}
+              onClick={() => setCategory(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </nav>
         {visibleCountLabel && <div className="find-game-total">{visibleCountLabel}</div>}
       </div>
-
-      <nav className="find-game-categories" aria-label="Категории игр">
-        {FIND_GAME_CATEGORY_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={`find-game-category${category === option.value ? " active" : ""}`}
-            aria-pressed={category === option.value}
-            onClick={() => setCategory(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </nav>
 
       <div className="find-game-searchbar">
         <label className="find-game-search">
