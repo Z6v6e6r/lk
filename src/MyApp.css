@@ -3737,6 +3737,7 @@ h6,
 }
 
 .find-game-total {
+  flex: 0 0 auto;
   border-radius: 999px;
   background: #f1edff;
   color: #6d4ee6;
@@ -3746,10 +3747,18 @@ h6,
   white-space: nowrap;
 }
 
-.find-game-categories {
+.find-game-category-row {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 0 16px 14px;
+}
+
+.find-game-categories {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 8px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
@@ -4612,7 +4621,7 @@ h6,
 
   .find-game-hero,
   .find-game-section-head,
-  .find-game-categories,
+  .find-game-category-row,
   .find-game-searchbar,
   .find-game-date-filter,
   .find-game-filterbar,
