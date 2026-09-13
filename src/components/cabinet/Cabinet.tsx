@@ -3505,7 +3505,6 @@ export function Cabinet({
     const inviteUrl = resolveGameInviteUrl(game);
     const canInvite = Boolean(
       inviteUrl
-      && isOrganizer
       && !isSyntheticBookingGame
       && !isCancelledForCabinet
       && isGamePaidForInvite(game)
