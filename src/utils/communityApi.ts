@@ -409,12 +409,11 @@ export function buildCommunityLogoCandidates(
 ) {
   if (!community) return [] as string[];
 
+  // The API supplies legacy URLs when a logo exists; an id alone is not an image.
   const candidates = [
     community.logoThumbUrl,
     community.logoUrl,
     community.logo,
-    community.id ? `/lk/media/community-logo-legacy/${encodeURIComponent(community.id)}/thumb` : null,
-    community.id ? `/lk/media/community-logo-legacy/${encodeURIComponent(community.id)}` : null,
   ]
     .map((value) => toAbsoluteCommunityAssetUrl(value))
     .filter((value): value is string => Boolean(value));
