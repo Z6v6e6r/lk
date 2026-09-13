@@ -295,7 +295,7 @@ if (ctx.step === "lk1_ingress_operation_find") {
       return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
     }
     const amount = quote.decision.benefit.finalPriceMinor;
-    if (action === "BOOK_GROUP_TRAINING") {
+    if (managedActionForTarget({ ...ctx, category: operation.category }) === "BOOK_GROUP_TRAINING") {
       const binding = lk1GroupPaymentBinding({ ...ctx, exerciseId: operation.exerciseId }, quote);
       const intent = quote.transactionIntent;
       // A previously verified legacy game-carrier checkout remains replayable.
