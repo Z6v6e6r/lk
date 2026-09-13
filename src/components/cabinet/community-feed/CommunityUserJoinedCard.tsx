@@ -1,3 +1,4 @@
+import { AvatarImage } from "../../UI/AvatarImage";
 import { CommunityFeedCardBase } from "./CommunityFeedCardBase";
 import { ChevronRightIcon } from "./CommunityIcons";
 import { getInitials } from "./feedFormatters";
@@ -22,7 +23,7 @@ export function CommunityUserJoinedCard({
         <div className="community-feed-user-joined">
           <div className="community-feed-user-avatar">
             {card.user.avatarUrl || card.user.avatar ? (
-              <img
+              <AvatarImage
                 src={card.user.avatarUrl || card.user.avatar}
                 alt={card.user.name}
                 className="community-feed-user-avatar-image"

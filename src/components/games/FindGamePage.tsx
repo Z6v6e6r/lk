@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -870,7 +871,6 @@ function isJoinablePublicGame(
 }
 
 function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: number }) {
-  const [imageFailed, setImageFailed] = useState(false);
   const numeric = (
     typeof player.ratingNumeric === "number" && Number.isFinite(player.ratingNumeric)
       ? player.ratingNumeric
@@ -878,14 +878,10 @@ function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: n
   );
   const level = normalizeLevelGradeLabel(player.rating, numeric);
   const photoSrc = (player.photo || "").trim();
-  const showPhoto = Boolean(photoSrc) && !imageFailed;
+  const showPhoto = Boolean(photoSrc);
   const progress = numeric !== null
     ? `${Math.max(18, Math.min(360, (numeric / 7) * 360))}deg`
     : "0deg";
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [photoSrc]);
 
   return (
     <div className="find-game-player" title={player.name || `Игрок ${index + 1}`}>
@@ -894,7 +890,7 @@ function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: n
         style={{ "--player-ring-progress": progress } as CSSProperties}
       >
         {showPhoto ? (
-          <img className="find-game-player-avatar" src={photoSrc} alt="" onError={() => setImageFailed(true)} />
+          <AvatarImage name={player.name} className="find-game-player-avatar" src={photoSrc} alt="" />
         ) : (
           <span className="find-game-player-avatar find-game-player-fallback">
             {initialsFromName(player.name)}
@@ -978,7 +974,7 @@ function GamePlusTrainerCard({
       {training.trainerName && (
         <div className="find-game-organizer find-game-training-coach">
           {training.trainerAvatarUrl ? (
-            <img className="find-game-training-coach-avatar" src={training.trainerAvatarUrl} alt="" />
+            <AvatarImage name={training.trainerName} className="find-game-training-coach-avatar" src={training.trainerAvatarUrl} alt="" />
           ) : (
             <span className="find-game-training-coach-avatar find-game-training-coach-fallback" aria-hidden="true">
               {initialsFromName(training.trainerName)}

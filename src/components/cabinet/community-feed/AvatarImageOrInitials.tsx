@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { AvatarImage } from "../../UI/AvatarImage";
 import { getInitials } from "./feedFormatters";
 
 type AvatarImageOrInitialsProps = {
@@ -14,21 +14,15 @@ export function AvatarImageOrInitials({
   imageClassName,
   fallbackClassName,
 }: AvatarImageOrInitialsProps) {
-  const [imageFailed, setImageFailed] = useState(false);
   const normalizedSrc = (src || "").trim();
-  const shouldShowImage = Boolean(normalizedSrc) && !imageFailed;
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [normalizedSrc]);
+  const shouldShowImage = Boolean(normalizedSrc);
 
   if (shouldShowImage) {
     return (
-      <img
+      <AvatarImage
         src={normalizedSrc}
         alt={name}
         className={imageClassName}
-        onError={() => setImageFailed(true)}
       />
     );
   }

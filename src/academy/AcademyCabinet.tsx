@@ -1,3 +1,4 @@
+import { AvatarImage } from "../components/UI/AvatarImage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { BuySupscription } from "../components/cabinet/BuySubscription";
@@ -336,7 +337,7 @@ export function AcademyCabinet() {
             <div className="academy-profile-avatar-wrap">
               <div className="academy-profile-avatar-ring" />
               {snapshot.profile.photo ? (
-                <img className="academy-profile-avatar" src={snapshot.profile.photo} alt={displayName} />
+                <AvatarImage className="academy-profile-avatar" src={snapshot.profile.photo} alt={displayName} />
               ) : (
                 <div className="academy-profile-avatar academy-profile-avatar--fallback">
                   {displayName.slice(0, 1)}

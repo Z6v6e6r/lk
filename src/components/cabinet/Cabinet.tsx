@@ -1,3 +1,4 @@
+import { AvatarImage } from "../UI/AvatarImage";
 import { invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
 import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties } from "react";
 import { UserProfile } from "./UserProfile";
@@ -3642,7 +3643,7 @@ export function Cabinet({
                     style={{ "--player-ring-progress": ringProgressDeg } as CSSProperties}
                   >
                     {player?.photo ? (
-                      <img
+                      <AvatarImage
                         src={player.photo}
                         alt={player.name}
                         className="game-created-player-avatar"
@@ -3739,7 +3740,7 @@ export function Cabinet({
                         className={`game-created-result-prompt-avatar${player ? "" : " game-created-result-prompt-avatar--empty"}`}
                       >
                         {player?.photo ? (
-                          <img src={player.photo} alt={player.name || "Игрок"} />
+                          <AvatarImage src={player.photo} alt={player.name || "Игрок"} />
                         ) : (
                           <span>{player ? initials : ""}</span>
                         )}

@@ -1,3 +1,4 @@
+import { AvatarImage } from "../../UI/AvatarImage";
 import { useEffect, useRef, useState } from "react";
 import { CommunityFeedCardBase } from "./CommunityFeedCardBase";
 import { Modal } from "../../UI/Modal";
@@ -171,7 +172,7 @@ export function CommunityTournamentCard({
         <div className={styles.author}>
           <div className={styles.avatar}>
             {card.trainerAvatarUrl ? (
-              <img src={card.trainerAvatarUrl} alt="" loading="lazy" decoding="async" />
+              <AvatarImage name={trainerName} src={card.trainerAvatarUrl} alt="" loading="lazy" decoding="async" />
             ) : (
               <span>{getInitials(trainerName)}</span>
             )}
