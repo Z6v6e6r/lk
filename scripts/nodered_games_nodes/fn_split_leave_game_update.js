@@ -53,7 +53,8 @@ if (ctx.chatCleanupAttempted === true && (msg.error || !ackOk(msg.payload))) {
 }
 if (ctx.localAlreadyApplied === true) return [null, msg, null];
 
-if (ctx.localReconciliation && ctx.game.updatedAt !== ctx.localReconciliation.snapshotUpdatedAt) {
+if ((ctx.localReconciliation && ctx.game.updatedAt !== ctx.localReconciliation.snapshotUpdatedAt)
+  || (ctx.bookingDiscovery && ctx.game.updatedAt !== ctx.bookingDiscovery.snapshotUpdatedAt)) {
   msg.statusCode = 202;
   msg.payload = { ok: true, state: "RETRY_REQUIRED", message: "Состав игры изменился. Обновите игру перед новым выходом." };
   return [null, null, msg];
@@ -71,6 +72,9 @@ const metadata = isObj(game.metadata) ? JSON.parse(JSON.stringify(game.metadata)
 const splitPayment = isObj(metadata.splitPayment) ? metadata.splitPayment : {};
 if (!ctx.localReconciliation) splitPayment.payments = asArray(splitPayment.payments).map((payment) => (
   matchesTarget(payment, targetId, targetPhone)
+    && (!/CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|CLOSE|ARCHIVE|LEFT|REMOV/i.test(String(payment.status || ""))
+      || (String(payment.status || "").toUpperCase() === "LEFT"
+        && asArray(ctx.initialBookingIds).map(normalizeId).includes(normalizeId(payment.bookingId))))
     ? {
       ...payment,
       status: "LEFT",

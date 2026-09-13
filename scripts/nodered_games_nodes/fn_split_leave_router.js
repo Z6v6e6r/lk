@@ -122,7 +122,7 @@ const exactActiveSubscriptionCandidates = (payload, bookingId) => responseRows(p
   subscriptionInstanceId(row) && subscriptionHasActiveBooking(row, bookingId)
 ));
 const fail = (ctx, statusCode, state, message) => {
-  const retryScheduled = state === "VIVA_UNVERIFIED"
+  const retryScheduled = ctx.vivaTargetMode !== "DISCOVERY" && state === "VIVA_UNVERIFIED"
     && ctx.operationState === "STARTED"
     && Boolean(ctx.operationKey)
     && Boolean(ctx.claimToken);
@@ -386,6 +386,34 @@ if (ctx.step === "cancel_booking") {
 
 if (ctx.step === "verify_active") {
   if (!isOk(msg.statusCode)) return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить активные записи Viva");
+  if (ctx.vivaTargetMode === "DISCOVERY") {
+    if (ctx.mode !== "STAFF_TARGET" || !ctx.bookingDiscovery || ctx.backgroundRetry === true
+      || !completeBookingPage(msg.payload, 200)) {
+      return fail(ctx, 409, "CONFLICT", "Не удалось полностью проверить текущую запись. Обновите игру.");
+    }
+    const rows = responseRows(msg.payload).filter((row) => !isCancelled(row));
+    if (rows.some((row) => !rowClientId(row) || !rowBookingId(row)
+      || (rowExerciseId(row) && rowExerciseId(row) !== normalizeId(ctx.exerciseId)))) {
+      return fail(ctx, 422, "VIVA_UNVERIFIED", "Viva вернула неоднозначную принадлежность записи");
+    }
+    const exact = rows.filter((row) => rowClientId(row) === normalizeId(ctx.targetClientId));
+    if (exact.length !== 1) {
+      return fail(ctx, 409, "CONFLICT", exact.length > 1
+        ? "В Viva несколько активных записей игрока. Требуется проверка администратора."
+        : "В Viva нет активной записи игрока. Обновите состав игры.");
+    }
+    ctx.discoveredBooking = {
+      bookingId: rowBookingId(exact[0]),
+      clientSubscriptionId: rowClientSubscriptionId(exact[0]),
+      subscriptionVisitCount: rowSubscriptionVisitCount(exact[0]),
+    };
+    msg._splitLeaveCtx = ctx;
+    delete msg.method;
+    delete msg.url;
+    delete msg.headers;
+    msg.payload = undefined;
+    return [null, null, null, null, null, msg];
+  }
   if (ctx.localReconciliation && !completeBookingPage(msg.payload, usesEndUser(ctx) ? 1000 : 200)) {
     return fail(ctx, 202, "RETRY_REQUIRED", "Не удалось полностью проверить записи Viva. Повторите проверку.");
   }
@@ -417,6 +445,24 @@ if (ctx.step === "verify_active") {
   const bookingIds = new Set(asArray(ctx.initialBookingIds).map(normalizeId).filter(Boolean));
   const targetClientId = normalizeId(ctx.targetClientId);
   const exerciseId = normalizeId(ctx.exerciseId);
+  if (ctx.preCancelVerification === true && bookingIds.size > 0) {
+    if (!completeBookingPage(msg.payload, usesEndUser(ctx) ? 1000 : 200)) {
+      return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось полностью проверить текущую запись Viva");
+    }
+    const boundRows = activeRows.filter((row) => bookingIds.has(rowBookingId(row)));
+    const wrongTarget = boundRows.some((row) => (
+      (rowClientId(row) && rowClientId(row) !== targetClientId)
+      || (rowExerciseId(row) && rowExerciseId(row) !== exerciseId)
+      || (usesEndUser(ctx) ? !rowExerciseId(row) : !rowClientId(row))
+    ));
+    const replacement = ctx.localMutationDisabled !== true && activeRows.some((row) => (
+      (usesEndUser(ctx) ? rowExerciseId(row) === exerciseId : rowClientId(row) === targetClientId)
+      && !bookingIds.has(rowBookingId(row))
+    ));
+    if (wrongTarget || replacement) {
+      return fail(ctx, 409, "CONFLICT", "Запись игрока в Viva изменилась. Обновите состав игры перед удалением.");
+    }
+  }
   if (ctx.mode === "SELF" && bookingIds.size === 0) {
     const exactExerciseRows = activeRows.filter((row) => (
       ctx.backgroundStartedRecovery === true
@@ -561,6 +607,11 @@ if (ctx.step === "verify_history") {
   appendTrace(ctx, { step: "viva_verified" });
   if (asArray(ctx.subscriptionReturnChecks).length > 0) {
     return startSubscriptionReadback(ctx, "verify_subscription_return");
+  }
+  if (ctx.requestedRefundMethod === "SERVICE"
+    || ctx.currentRefundMethod === "SERVICE"
+    || (ctx.clientSubscriptionId && ctx.requestedRefundMethod !== "NONE")) {
+    return markReturnPendingAndApply(ctx, "subscription_return_baseline_missing");
   }
   return toLocalApply(ctx);
 }

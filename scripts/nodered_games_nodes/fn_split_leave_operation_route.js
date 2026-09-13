@@ -80,6 +80,7 @@ if (ctx.mode === "STAFF_TARGET" && (
 )) {
   return respond(409, "CONFLICT", "Existing operation has different removal parameters");
 }
+ctx.bookingDiscovery = operation.bookingDiscovery || null;
 ctx.localReconciliation = operation.localReconciliation || ctx.localReconciliation || null;
 ctx.operationState = String(operation.state || "STARTED").toUpperCase();
 ctx.operationKey = String(operation._id || ctx.operationKey);
@@ -154,7 +155,7 @@ if (ctx.operationState === "STARTED") {
     ctx.step = "local_apply";
     return [null, msg, null, null];
   }
-  ctx.preCancelVerification = true;
+  ctx.preCancelVerification = ctx.vivaTargetMode !== "DISCOVERY";
   ctx.step = "start_verify_active";
   return [msg, null, null, null];
 }

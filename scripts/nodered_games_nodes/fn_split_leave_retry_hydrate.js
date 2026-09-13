@@ -96,7 +96,7 @@ const joinResponse = targetPhone && isObj(metadata.joinResponses?.[targetPhone])
   && !inactiveStatus(metadata.joinResponses[targetPhone].status)
   ? metadata.joinResponses[targetPhone]
   : null;
-const currentVersion = membershipVersion([
+let currentVersion = membershipVersion([
   ...payments.flatMap((item) => [item.membershipId, ...asArray(item.bookingIds), item.bookingId, item.paymentRef]),
   ...participants.flatMap((item) => [item.membershipId, item.bookingId, item.paymentRef]),
   ...waitlist.flatMap((item) => [item.membershipId, item.bookingId, item.paymentRef]),
@@ -104,6 +104,11 @@ const currentVersion = membershipVersion([
   joinResponse?.paymentRef,
 ]);
 
+if (ctx.bookingDiscovery && !currentVersion
+  && game.updatedAt === ctx.bookingDiscovery.snapshotUpdatedAt
+  && participants.length === 1 && String(participants[0].source || "").toUpperCase() === "ADMIN") {
+  currentVersion = ctx.membershipVersion;
+}
 if (ctx.localReconciliation) {
   // Never retarget an old recovery to a newer snapshot, even if it has no IDs.
   if (ctx.localAlreadyApplied) {

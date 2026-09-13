@@ -203,6 +203,7 @@ test("organizer retry uses the same canonical payment and participant generation
       operationKey: `game-1:${authorized._splitLeaveCtx.operationId}`,
       operationId: authorized._splitLeaveCtx.operationId,
       operationState: "VIVA_CONFIRMED",
+      initialBookingIds: ["booking-2"],
       gameId: "game-1",
       targetClientId: "client-2",
       targetPhoneNorm: "79990000002",
@@ -1774,4 +1775,52 @@ for (const invalid of [
   const result = run("fn_split_leave_operation_route.js", msg).result;
   assert.equal(result[0], null); assert.equal(result[1], null);
   assert.equal(result[2].payload.state, "RETRY_REQUIRED");
+});
+
+test("re-added member uses the current roster booking and never inherits expired subscription evidence", () => {
+  const game = selfGame();
+  game.participants[0] = { ...game.participants[0], bookingId: "booking-new", membershipId: "viva-booking:booking-new" };
+  game.metadata.splitPayment.payments[0].status = "EXPIRED";
+  const msg = authorizeSelf(game);
+  assert.deepEqual(msg._splitLeaveCtx.initialBookingIds, ["booking-new"]);
+  assert.equal(msg._splitLeaveCtx.clientSubscriptionId, null);
+  assert.notEqual(msg._splitLeaveCtx.operationId, authorizeSelf()._splitLeaveCtx.operationId);
+});
+
+test("fresh Viva check refuses a replaced or foreign booking before cancellation", () => {
+  for (const row of [
+    { id: "booking-new", exerciseId: "exercise-1", clientId: "client-1" },
+    { id: "booking-1", exerciseId: "exercise-other", clientId: "client-1" },
+    { id: "booking-1", exerciseId: "exercise-1", clientId: "client-other" },
+  ]) {
+    const msg = authorizeSelf();
+    msg._splitLeaveCtx.step = "verify_active";
+    msg._splitLeaveCtx.preCancelVerification = true;
+    msg.statusCode = 200;
+    msg.payload = { content: [row], last: true };
+    const result = run("fn_split_leave_router.js", msg).result;
+    assert.equal(result[0], null, "must issue no cancellation or probe");
+    assert.equal(result[2].statusCode, 409);
+  }
+});
+
+test("interrupted subscription return cannot claim verified return without durable baseline", () => {
+  const msg = authorizeSelf();
+  Object.assign(msg._splitLeaveCtx, { step: "verify_history", requestedRefundMethod: "SERVICE", subscriptionReturnChecks: [] });
+  msg.statusCode = 200;
+  msg.payload = { content: [{ id: "booking-1", exerciseId: "exercise-1", clientId: "client-1", cancelled: true }], last: true };
+  const out = run("fn_split_leave_router.js", msg).result;
+  assert.ok(out[3]);
+  assert.equal(out[0], null, "must not repeat cancellation");
+  assert.equal(out[3]._splitLeaveCtx.subscriptionReturnState, "RETURN_PENDING");
+  assert.equal(out[3]._splitLeaveCtx.subscriptionReturnReason, "subscription_return_baseline_missing");
+});
+
+test("self leave preserves unrelated expired payment history", () => {
+  const msg = authorizeSelf();
+  const old = { clientId: "client-1", bookingId: "booking-old", status: "EXPIRED", cancelReason: "PAYMENT_TIMEOUT" };
+  msg._splitLeaveCtx.game.metadata.splitPayment.payments.push(old);
+  const update = run("fn_split_leave_game_update.js", msg).result[0].payload[1].$set;
+  assert.deepEqual(update.metadata.splitPayment.payments.find((p: Msg) => p.bookingId === "booking-old"), old);
+  assert.equal(update.metadata.splitPayment.payments.find((p: Msg) => p.bookingId === "booking-1").status, "LEFT");
 });

@@ -321,12 +321,12 @@ ctx.needsBookingDiscovery = mode === "SELF" && verifiedQueue.length === 0;
 ctx.preOperationDiscovery = ctx.needsBookingDiscovery;
 ctx.bookingResults = [];
 const subscriptionInstanceIds = Array.from(new Set(
-  targetPayments
+  activeTargetPayments
     .map((item) => toStr(item.clientSubscriptionId))
     .filter(Boolean),
 ));
 const subscriptionVisitCounts = Array.from(new Set(
-  targetPayments
+  activeTargetPayments
     .map((item) => Number(item.subscriptionVisitCount))
     .filter((value) => Number.isSafeInteger(value) && value > 0),
 ));

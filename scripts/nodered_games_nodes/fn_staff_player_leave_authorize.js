@@ -73,7 +73,18 @@ for (const row of [...payments, ...participants, ...waitlist]) {
 }
 const queue = Array.from(new Map(bookingItems.map((item) => [item.bookingId.toLowerCase(), item])).values());
 const requestedBookingId = normalizeId(input.targetBookingId);
-const localOnlyRemoval = !requestedBookingId;
+const exerciseId = toStr(
+  game.metadata?.splitPayment?.vivaExerciseId
+  || game.booking?.vivaExerciseId
+  || game.booking?.exerciseId
+  || game.metadata?.vivaExerciseId
+  || game.metadata?.exerciseId,
+);
+const snapshotUpdatedAt = toStr(game.updatedAt);
+const needsDiscovery = !requestedBookingId && queue.length === 0 && participants.length === 1
+  && String(participants[0].source || "").toUpperCase() === "ADMIN"
+  && Boolean(exerciseId && snapshotUpdatedAt && Number.isFinite(Date.parse(snapshotUpdatedAt)));
+const localOnlyRemoval = !requestedBookingId && !needsDiscovery;
 if (localOnlyRemoval) {
   if (input.visitAction !== "NO_RETURN") {
     return respond(409, "VISIT_RETURN_UNAVAILABLE", "Participant has no Viva booking to return; use visitAction NO_RETURN", input);
@@ -81,7 +92,7 @@ if (localOnlyRemoval) {
   if (queue.length > 0) {
     return respond(409, "BOOKING_TARGET_REQUIRED", "Participant has an active Viva booking; request removal with that exact booking", input);
   }
-} else if (!queue.some((item) => normalizeId(item.bookingId) === requestedBookingId)) {
+} else if (!needsDiscovery && !queue.some((item) => normalizeId(item.bookingId) === requestedBookingId)) {
   return respond(409, "BOOKING_TARGET_MISMATCH", "Booking is not active for the exact target", input);
 }
 
@@ -120,18 +131,11 @@ const membershipVersion = stableVersion([
   ...waitlist.flatMap((row) => [row.membershipId, row.bookingId, row.paymentRef]),
   joinResponse?.membershipId,
   joinResponse?.paymentRef,
-]);
+]) || (needsDiscovery ? stableVersion(["viva-discovery", game.id, input.targetClientId, exerciseId, snapshotUpdatedAt]) : null);
 if (!membershipVersion || membershipVersion !== input.expectedMembershipVersion) {
   return respond(409, "STALE_MEMBERSHIP_VERSION", "Game membership changed; refresh before removal", input);
 }
 
-const exerciseId = toStr(
-  game.metadata?.splitPayment?.vivaExerciseId
-  || game.booking?.vivaExerciseId
-  || game.booking?.exerciseId
-  || game.metadata?.vivaExerciseId
-  || game.metadata?.exerciseId,
-);
 const serviceToken = toStr(global.get("vivacrm_access_token"));
 if (!localOnlyRemoval && (!exerciseId || !serviceToken)) {
   return respond(503, "UPSTREAM_UNAVAILABLE", "Cancellation service is temporarily unavailable", input);
@@ -169,7 +173,8 @@ msg._splitLeaveCtx = {
   subscriptionVisitCount: subscriptionVisitCounts.length === 1 ? subscriptionVisitCounts[0] : null,
   trace: [],
   successMessage: "Игрок удалён из игры",
-  vivaTargetMode: localOnlyRemoval ? "NONE" : "BOOKINGS",
+  vivaTargetMode: needsDiscovery ? "DISCOVERY" : (localOnlyRemoval ? "NONE" : "BOOKINGS"),
+  ...(needsDiscovery ? { bookingDiscovery: { snapshotUpdatedAt } } : {}),
   vivaVerification: localOnlyRemoval ? "no_active_booking_for_exercise" : null,
   upstreamAuthHeader: localOnlyRemoval ? null : `Bearer ${serviceToken}`,
   localAlreadyApplied: false,
