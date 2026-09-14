@@ -2,6 +2,8 @@ import { StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Component, type ReactNode } from 'react';
 import { SubscriptionPage } from './components/subscription-storefront/SubscriptionPage';
+import { PromoSubscriptionPage } from './components/subscription-storefront/PromoSubscriptionPage';
+import { readStorefrontPromoKey } from './components/subscription-storefront/promo';
 import type { SubscriptionStorefrontView } from './components/subscription-storefront/model';
 import { AuthProvider } from './context/AuthContext';
 import { CABINET_URL } from './consts/api_config';
@@ -35,6 +37,7 @@ function mount(options: MountOptions = {}) {
   if (!container) throw new Error('Subscription storefront mount target not found');
   const localPreview = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
   const cabinetUrl = resolveCabinetUrl(options.data);
+  const offerKey = readStorefrontPromoKey(window.location.search);
   installGlobalErrorTracking();
   trackAnalyticsEvent('widget_bundle_loaded', { entry: 'subscription-storefront' });
   unmount();
@@ -43,11 +46,11 @@ function mount(options: MountOptions = {}) {
     <StrictMode>
       <Boundary>
         <AuthProvider>
-          <SubscriptionPage
+          {offerKey !== null ? <PromoSubscriptionPage offerKey={offerKey} cabinetUrl={cabinetUrl} onBack={options.onClose} /> : <SubscriptionPage
             cabinetUrl={cabinetUrl}
             onBack={options.onClose}
             previewView={localPreview ? options.data?.previewView : undefined}
-          />
+          />}
         </AuthProvider>
       </Boundary>
     </StrictMode>,

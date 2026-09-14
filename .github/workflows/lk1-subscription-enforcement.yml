@@ -378,6 +378,9 @@ jobs:
           scripts/tests/subscriptionCounterEpochRuntime.test.mjs
           scripts/tests/subscriptionPaymentPolling.test.mjs
           scripts/tests/tournamentSubscription.summer.nodered.test.ts
+          scripts/tests/subscriptionStorefront.test.ts
+          scripts/tests/subscriptionStorefrontPromo.test.ts
+          scripts/tests/tournamentSubscriptionCatalog.test.ts
           scripts/tests/tournamentSubscriptionSalesCandidate.test.mjs
           scripts/tests/tournamentSignupAvailability.test.ts
           scripts/tests/tournamentSignupVivaBookingIdentity.test.ts

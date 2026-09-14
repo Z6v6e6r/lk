@@ -10383,6 +10383,8 @@ export async function apiBuySubscroption(
     successUrl?: string | null;
     failUrl?: string | null;
     baseRedirectUrl?: string | null;
+    /** Non-idempotent promo purchases must not retry an ambiguous create. */
+    retries?: 0 | 1;
   } = {},
 ) {
   const successUrl = options.successUrl?.trim() || options.baseRedirectUrl?.trim() || SUCCESS_URL;
@@ -10394,7 +10396,7 @@ export async function apiBuySubscroption(
     {
       method: "POST",
       auth: true,
-      retries: 1,
+      retries: options.retries ?? 1,
       body: JSON.stringify({
         clientPhone: phone,
         failUrl,
