@@ -16068,7 +16068,7 @@ export default function GamesPage({
           {leavePendingMessage && (
             <div className="game-empty details-roster-leave-status" role="status" aria-live="polite">
               <span className="details-roster-leave-spinner" aria-hidden="true" />
-              <div className="details-roster-actions">
+              <div className="details-roster-actions" style={{ minWidth: 0, flex: 1 }}>
                 <span>{leavePendingMessage}</span>
                 {!updatingGameRoster && (
                   <button type="button" className="details-roster-action details-roster-move-waitlist" onClick={() => {
