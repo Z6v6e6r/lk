@@ -296,7 +296,7 @@ test("Games details use shared occupancy for the counter and both join CTAs", ()
   );
   assert.match(
     source.slice(joinGuardIndex, source.indexOf("const detailsSplitSubscriptionOptions", joinGuardIndex)),
-    /canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails\s*&& !updatingGameRoster\s*&& !updatingGameMeta\s*&& !joiningSplitPayment/,
+    /canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails\s*&& !leavePendingMessage\s*&& !updatingGameRoster\s*&& !updatingGameMeta\s*&& !joiningSplitPayment/,
     "both payment CTAs must retain eligibility and busy guards",
   );
   assert.ok(firstCtaIndex > joinGuardIndex, "subscription CTA must use corrected join guard");
