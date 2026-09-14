@@ -346,7 +346,8 @@ test('five-visit pass keeps its API price and disables the CTA without one', () 
 
 test('card copy follows the approved mock: free hour, footer note and five-visit pass', () => {
   const presentationSource = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
-  assert.equal((presentationSource.match(/title: '1 час в день бесплатно:'/g) || []).length, 4);
+  assert.equal((presentationSource.match(/title: '1 час в день бесплатно:'/g) || []).length, 2);
+  assert.equal((presentationSource.match(/title: '1 час в день бесплатно на выбор:'/g) || []).length, 2);
   assert.match(presentationSource, /kind: 'note'/);
   assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*shortLabel: 'Энергия',\s*labelKind: 'plain',/);
   assert.match(presentationSource, /title: 'Форматы на выбор:'/);
