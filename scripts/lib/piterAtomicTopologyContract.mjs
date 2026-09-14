@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+const pollingTopologySources = JSON.parse(fs.readFileSync(new URL('../subscription_payment_polling_generation.json', import.meta.url))).targets
+  .filter(t => ['fn_tournament_subscription_purchase_router.js', 'fn_tournament_subscription_confirm_resolve.js'].includes(t.fileName))
+  .map(t => t.candidateSha256);
 import { isDeepStrictEqual } from "node:util";
 
 export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
@@ -82,7 +86,7 @@ export function assertNoEnabledLegacyPiterSalesTab(flow) {
 }
 
 export function rejectTopologyDependentPiterSource(source, context) {
-  if ([PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256, "0a7912018609e60261b9f1237d4d3fb653b1ba32354799f30cc4e5700ef79bf9", "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b", "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d"].includes(sha256(source))) {
+  if ([...pollingTopologySources, PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256, "0a7912018609e60261b9f1237d4d3fb653b1ba32354799f30cc4e5700ef79bf9", "e1e38e81318cf3aa8fffda3e44dc7c99dcabc28c3b836f5bfafc2885c80bf85b", "84e68e84556ceecbf5e1baa83d29bdc90f5dee2d2b2754debd72bc47ae62901d"].includes(sha256(source))) {
     fail(`${context} cannot compose the topology-dependent Piter purchase router`);
   }
   return true;

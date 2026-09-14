@@ -20,6 +20,8 @@ const exactUpdateAck = () => ({
 
 function runNodeRedFunction(file: string, msg: NodeRedMsg, globalValues: GlobalValues = {}) {
   const source = fs.readFileSync(file, "utf8");
+  // These are post-admission business tests; the durable gate has its own graph tests.
+  if (file.endsWith("fn_tournament_subscription_confirm_resolve.js")) msg._paymentPollingAdmitted = true;
   const mergedGlobals = {
     summer_subscription_academy_manual_paid_count: 0,
     summer_subscription_friendship_manual_paid_count: 0,
@@ -1957,7 +1959,7 @@ test("summer subscription counter refresh materializes the staged daily phase", 
   assert.equal(state.remainingCount, 8);
 });
 
-test("summer subscription reconciliation keeps polling bounded pending and ambiguous payments", () => {
+test("summer subscription reconciliation bounds Mongo reads and selects only due payments", () => {
   const prepared = withFixedNow("2026-07-08T10:00:00.000Z", () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_query.js",
     { payload: Date.now() },
@@ -1965,9 +1967,14 @@ test("summer subscription reconciliation keeps polling bounded pending and ambig
 
   assert.deepEqual(prepared.query, {
     inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra)|ab_leto_2026_150_v2_(?:friendship|ra)|ab_leto_20260909_daily_v3_ra|kotelniki_friendship_12m_2026_v1|network_friendship_12m_2026_v1|piter_friendship_12m_2026_v1|ab_leto_20260910_epoch_ra|ab_leto_20260910_epoch_friendship|network_friendship_12m_20260910_epoch|piter_friendship_12m_20260910_epoch)$" },
+    $and: [{ $or: [
+      { 'paymentPolling.nextCheckAt': { $exists: false } },
+      { 'paymentPolling.nextCheckAt': { $lte: '2026-07-08T10:00:00.000Z' } },
+    ] }],
     $or: [
       { schemaVersion: 3, "history.version": 1, documentType: { $in: ["HUB_ATOMIC_INVENTORY_LEDGER", "PITER_ATOMIC_INVENTORY_LEDGER"] } },
       {
+        paymentRef: { $nin: [null, ""] },
         status: { $in: ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
         transactionId: { $nin: [null, ""] },
       },
@@ -1998,13 +2005,12 @@ test("summer subscription reconciliation keeps polling bounded pending and ambig
       },
     ],
   });
-  assert.deepEqual(prepared.payload, prepared.query);
-  assert.equal(prepared.limit, 200);
+  assert.deepEqual(prepared.payload, [prepared.query, { sort: { 'paymentPolling.nextCheckAt': 1, _id: 1 }, limit: 60 }]);
 
   const reconcileMeta = asRecord(prepared._summerSubscriptionReconcile);
   assert.equal(reconcileMeta.requestedAt, "2026-07-08T10:00:00.000Z");
-  assert.equal(reconcileMeta.reservationMinutes, 30);
-  assert.equal(reconcileMeta.createdAtCutoff, "2026-07-08T09:30:00.000Z");
+  assert.equal(reconcileMeta.reservationMinutes, 20);
+  assert.equal(reconcileMeta.createdAtCutoff, "2026-07-08T09:40:00.000Z");
   assert.deepEqual(reconcileMeta.regionalInventoryIds, [
     "kotelniki_friendship_12m_2026_v1",
     "network_friendship_12m_2026_v1",
@@ -2842,8 +2848,8 @@ test("Piter atomic ledger CAS reserves before provider and replays the same paym
       payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 1, upsertedId: "sale-1" },
     },
   ) as unknown[];
-  assert.equal(asRecord(healed[3]).statusCode, 200);
-  assert.equal(asRecord(asRecord(healed[3]).payload).replayed, true);
+  assert.equal(asRecord(healed[0])._summerSubscriptionCtx && asRecord(asRecord(healed[0])._summerSubscriptionCtx).step, "piter_replay_sale_readback");
+  assert.equal(healed[3], null); // The cached ledger URL is not returned before sale readback.
   assert.equal(healed[4], null);
 });
 

@@ -1,0 +1,49 @@
+{
+  "kind": "SUBSCRIPTION_PAYMENT_POLLING_GENERATION_V1",
+  "targets": [
+    {
+      "id": "ab1e202650000002",
+      "fileName": "fn_tournament_subscription_reconcile_query.js",
+      "preimageSha256": "960f6bed0d785c2bbcb89855c25a2d331c4acb9d4c0e63a6bd75c5deda87940f",
+      "candidateSha256": "982e3c16ef107a84218caef7f162b088bf6220969276e0d22fa34f9d5d89b1f8"
+    },
+    {
+      "id": "annual_history_expand_20260909",
+      "fileName": "fn_tournament_subscription_reconcile_expand.js",
+      "preimageSha256": "ff8d866d3e66ed2e2ddaa690e0c002df190b53c8dc18f2c734f9838cad6a1182",
+      "candidateSha256": "1b0714c9fa985cf5568e23d6f66628e481c82bae4bf5bf212936c6218801d816"
+    },
+    {
+      "id": "ca022fd14027a5b0",
+      "fileName": "fn_tournament_subscription_confirm_resolve.js",
+      "preimageSha256": "f80999c3184077a74732c6b32b86d27d70b7b6ed9afd1acc452916d704dcd457",
+      "candidateSha256": "28d3c80d0b3bc7f3258b364f94ea580980b615eb5f5f338ca844be654043c301"
+    },
+    {
+      "id": "566ae4b886c37ae5",
+      "fileName": "fn_tournament_subscription_purchase_router.js",
+      "preimageSha256": "5caf9ac8ecdcb770f7f53e57090d96a22b5efd38b0e402a2c01bcfd9dbf5c0fd",
+      "candidateSha256": "cc9a047a6cb2f42d0b1e029747ff59a9edfae3438632f00fb37d2c56639ee869"
+    },
+    {
+      "id": "piter_atomic_router_20260903",
+      "fileName": "fn_tournament_subscription_piter_atomic_router.js",
+      "preimageSha256": "0de0f74c91150b90f00b9a1584dc291c174dae85efd4a0bae6f6b09a30d29d7d",
+      "candidateSha256": "ec43cd012c82cb6d5d58d74a613631e928b4700b2e9b074ee96a4cce6a603af9"
+    }
+  ],
+  "additions": [
+    {
+      "fileName": "fn_tournament_subscription_poll_admit.js",
+      "candidateSha256": "4f4677de1733c115ff50e0f8d5c9df61f86a49f5a9089ae74a2c42de84073903"
+    },
+    {
+      "fileName": "fn_tournament_subscription_poll_ack.js",
+      "candidateSha256": "8c3ad663e8851db695b3539528fcf2c5e6c84dda4e8a588180679afa8fbbde9a"
+    },
+    {
+      "fileName": "fn_tournament_subscription_reconcile_dispatch.js",
+      "candidateSha256": "41e4988171c7c26729824725f6a11a4930471e55bd09cfac4e73a1ecc3fdb7f3"
+    }
+  ]
+}

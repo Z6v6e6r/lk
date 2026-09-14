@@ -13,6 +13,10 @@ import {
 } from "../lib/piterAtomicTopologyContract.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
+// Historical topology bindings stay frozen. Explicitly pin the current atomic
+// function for this core-topology fixture; the polling graph has its own tests.
+const atomicOptions = { atomicRouterSha256: JSON.parse(fs.readFileSync(new URL('../subscription_payment_polling_generation.json', import.meta.url))).targets
+  .find(t => t.fileName === 'fn_tournament_subscription_piter_atomic_router.js').candidateSha256 };
 const FUNCTION_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
 
 function validFlow() {
@@ -38,7 +42,7 @@ function validFlow() {
 }
 
 test("exact Piter atomic topology accepts the reviewed graph", () => {
-  assert.equal(assertPiterAtomicTopology(validFlow()), true);
+  assert.equal(assertPiterAtomicTopology(validFlow(), atomicOptions), true);
 });
 
 test("Piter atomic initializer sets only the exact missing or matching product binding", () => {
@@ -84,7 +88,7 @@ test("exact Piter atomic topology rejects graph, Mongo, function, and debug drif
   ]) {
     const flow = validFlow();
     mutate(flow);
-    assert.throws(() => assertPiterAtomicTopology(flow), /Piter atomic topology precondition failed/);
+    assert.throws(() => assertPiterAtomicTopology(flow, atomicOptions), /Piter atomic topology precondition failed/);
   }
 });
 
@@ -104,5 +108,7 @@ test("legacy Piter paths remain disabled and function-only composition stays blo
     () => rejectTopologyDependentPiterSource(currentRouter, "fixture"),
     /cannot compose the topology-dependent Piter purchase router/,
   );
+  const confirm = fs.readFileSync(path.join(FUNCTION_DIR, 'fn_tournament_subscription_confirm_resolve.js'), 'utf8');
+  assert.throws(() => rejectTopologyDependentPiterSource(confirm, 'fixture'), /cannot compose/);
   assert.equal(rejectTopologyDependentPiterSource("return msg;", "fixture"), true);
 });
