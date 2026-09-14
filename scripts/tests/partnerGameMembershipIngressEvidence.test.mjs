@@ -553,12 +553,16 @@ test("controlled Nginx application candidate: local lifecycle and fail-closed ev
     const d = session(); assert.throws(() => d.recordUnapplied(observation(d, "applied", 0, 0)), /PHASE_ORDER/);
   });
   await t.test("expiry and clock rollback close a session permanently", () => {
-    const now = Date.now, current = now(), a = session(), b = session();
+    const now = Date.now, current = now();
+    let a, b;
     try {
+      Date.now = () => current;
+      a = session(); b = session();
       Date.now = () => current + 120001; assert.throws(() => a.configuration("baseline"), /SESSION_EXPIRED/);
       Date.now = () => current - 1; assert.throws(() => b.configuration("baseline"), /SESSION_EXPIRED/);
     } finally { Date.now = now; }
     assert.throws(() => a.configuration("baseline"), /SESSION_CLOSED/);
+    assert.throws(() => b.configuration("baseline"), /SESSION_CLOSED/);
   });
   await t.test("disk files B and old worker/marker A are not applied B", () => {
     const s = session(), old = baseline(s), row = unapplied(s);
