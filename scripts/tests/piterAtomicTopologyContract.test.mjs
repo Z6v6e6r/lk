@@ -10,12 +10,13 @@ import {
   assertNoEnabledLegacyPiterSalesTab,
   assertPiterAtomicTopology,
   rejectTopologyDependentPiterSource,
+  isTopologyDependentPiterSourceHash,
 } from "../lib/piterAtomicTopologyContract.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 // Historical topology bindings stay frozen. Explicitly pin the current atomic
 // function for this core-topology fixture; the polling graph has its own tests.
-const atomicOptions = { atomicRouterSha256: JSON.parse(fs.readFileSync(new URL('../subscription_payment_polling_generation.json', import.meta.url))).targets
+const atomicOptions = { atomicRouterSha256: JSON.parse(fs.readFileSync(new URL('../subscription_payment_archive_generation.json', import.meta.url))).targets
   .find(t => t.fileName === 'fn_tournament_subscription_piter_atomic_router.js').candidateSha256 };
 const FUNCTION_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
 
@@ -111,4 +112,14 @@ test("legacy Piter paths remain disabled and function-only composition stays blo
   const confirm = fs.readFileSync(path.join(FUNCTION_DIR, 'fn_tournament_subscription_confirm_resolve.js'), 'utf8');
   assert.throws(() => rejectTopologyDependentPiterSource(confirm, 'fixture'), /cannot compose/);
   assert.equal(rejectTopologyDependentPiterSource("return msg;", "fixture"), true);
+});
+
+
+test('both original polling and archive successor hashes require complete topology', () => {
+  for (const name of ['subscription_payment_polling_generation.json', 'subscription_payment_archive_generation.json']) {
+    const generation = JSON.parse(fs.readFileSync(new URL('../' + name, import.meta.url)));
+    for (const target of generation.targets.filter(t => ['fn_tournament_subscription_purchase_router.js', 'fn_tournament_subscription_confirm_resolve.js'].includes(t.fileName))) {
+      assert.equal(isTopologyDependentPiterSourceHash(target.candidateSha256), true);
+    }
+  }
 });

@@ -6,11 +6,12 @@
 // pinned by the newest generation that consumed it instead. Generations are
 // listed newest first, and the first entry for a file wins.
 import fs from 'node:fs';
+const PAYMENT_ARCHIVE_TARGETS = JSON.parse(fs.readFileSync(new URL('../subscription_payment_archive_generation.json', import.meta.url))).targets;
 const PAYMENT_POLLING_TARGETS = JSON.parse(fs.readFileSync(new URL('../subscription_payment_polling_generation.json', import.meta.url))).targets;
 import { HUB_LIMIT_TARGETS } from '../patch_live_subscription_hub_limit.mjs';
 import { STATUS_PRICE_TARGETS } from '../patch_live_subscription_status_price.mjs';
 
-const GENERATIONS_NEWEST_FIRST = [PAYMENT_POLLING_TARGETS, HUB_LIMIT_TARGETS, STATUS_PRICE_TARGETS];
+const GENERATIONS_NEWEST_FIRST = [PAYMENT_ARCHIVE_TARGETS, PAYMENT_POLLING_TARGETS, HUB_LIMIT_TARGETS, STATUS_PRICE_TARGETS];
 const NEWEST_SOURCE_SHA256_BY_FILE = new Map();
 for (const generation of GENERATIONS_NEWEST_FIRST) {
   for (const target of generation) {

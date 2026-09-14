@@ -165,11 +165,14 @@ test('focused candidate proves old queue has no other input and adds a scoped Mo
   ];
   for (const t of generation.targets) {
     t.preimageSha256 = hash(original);
+    t.candidateSha256 = hash(texts[t.fileName]); // this fixture supplies its own generation
+
     graph.push({ id: t.id, type: 'function', z: tab, func: original, outputs: t.id === 'ca022fd14027a5b0' ? 4 : 1,
       wires: t.id === 'ab1e202650000002' ? [['ab1e202650000003']]
         : t.id === 'annual_history_expand_20260909' ? [['ab1e202650000004']]
           : t.id === 'ca022fd14027a5b0' ? [['fdc3f25f39199546'], ['10fe94a32b8adc35'], ['03cc3ac17f7e154a'], ['piter_atomic_router_20260903']] : [[]] });
   }
+  for (const t of generation.additions) t.candidateSha256 = hash(texts[t.fileName]);
   const build = input => buildPaymentPollingCandidate({ liveBytes: Buffer.from(JSON.stringify(input)), sourceTexts: texts, generation });
   const built = build(graph), candidate = JSON.parse(built.candidateBytes);
   assert.equal(built.report.addedNodeIds.length, 5);
@@ -184,4 +187,71 @@ test('focused candidate proves old queue has no other input and adds a scoped Mo
   assert.throws(() => build(badClient), /client drift/);
   const foreign = clone(graph); foreign.find(n => n.id === generation.targets[0].id).func += '\n// foreign';
   assert.throws(() => build(foreign), /source drift/);
+});
+
+
+test('explicit no-transaction archives survive foreground admission and preserve recovery', () => {
+  for (const status of ['PAYMENT_PENDING', 'PROVIDER_UNKNOWN']) {
+    for (const transactionId of [undefined, null, '']) {
+      const saved = row({ status, transactionId, createdAt: undefined,
+        paymentPolling: { status: 'FAILED', checks: 0, reason: 'LEGACY_MISSING_TRANSACTION_ID',
+          archivedAt: new Date(start).toISOString(), nextCheckAt: new Date(start + policy.recoveryMs).toISOString() } });
+      const preimage = clone(saved), later = start + policy.recoveryMs;
+      assert.deepEqual(policy.plan(saved, { now: later }), { dispatch: false, value: null });
+      assert.deepEqual(saved, preimage);
+      const recovery = policy.plan(saved, { now: later, recovery: true });
+      assert.equal(recovery.dispatch, true);
+      assert.equal(recovery.value.status, 'FAILED');
+      assert.equal(recovery.value.checks, 0);
+      assert.equal(recovery.value.recoveryChecks, 1);
+      assert.equal(recovery.value.archivedAt, preimage.paymentPolling.archivedAt);
+      assert.equal(recovery.value.nextCheckAt, new Date(later + policy.recoveryMs).toISOString());
+      const next = { ...saved, paymentPolling: recovery.value };
+      const stopped = runPollingNode('poll_admit', admission(next, false), { now: later + policy.recoveryMs });
+      assert.equal(stopped[0], null);
+      assert.equal(stopped[1]._paymentPollingStopped, true);
+      const response = runPollingNode('confirm_resolve', stopped[1], { now: later + policy.recoveryMs });
+      assert.equal(response[0], null);
+      assert.equal(response[1].payload.status, 'FAILED');
+      assert.equal(response[1].payload.archived, true);
+      assert.equal(response[1].payload.paymentUrl, null);
+      const paid = { ...next, status: 'PAID', transactionId: 'late-provider-transaction' };
+      assert.equal(policy.response({ status: 'PAID', paid: true }, paid).paid, true);
+    }
+  }
+});
+
+test('unarchived missing-transaction recovery is not treated as an expired checkout', () => {
+  const saved = row({ status: 'PROVIDER_UNKNOWN', transactionId: null, createdAt: undefined });
+  const recovery = policy.plan(saved, { now: start, recovery: true });
+  assert.equal(recovery.dispatch, true);
+  assert.equal(recovery.value.status, 'ACTIVE');
+  assert.equal(recovery.value.checks, 0);
+  assert.equal(recovery.value.nextCheckAt, new Date(start + policy.intervalMs).toISOString());
+});
+
+
+test('archive successor pins match current sources without rewriting the original generation', async () => {
+  const { createHash } = await import('node:crypto');
+  const { newestReviewedSourceSha256 } = await import('../lib/subscriptionSourceGenerationPins.mjs');
+  const archive = JSON.parse(fs.readFileSync(new URL('../subscription_payment_archive_generation.json', import.meta.url)));
+  const oldTargets = [...pollingGeneration.targets, ...pollingGeneration.additions];
+  assert.equal(archive.targets.length, 4);
+  for (const target of archive.targets) {
+    assert.equal(target.preimageSha256, oldTargets.find(t => t.fileName === target.fileName).candidateSha256);
+    assert.equal(target.candidateSha256, createHash('sha256').update(fs.readFileSync(new URL('../nodered_games_nodes/' + target.fileName, import.meta.url))).digest('hex'));
+    assert.equal(newestReviewedSourceSha256(target.fileName), target.candidateSha256);
+  }
+});
+
+
+test('missing-transaction terminal response maps an explicit archive after recovery admission', () => {
+  const saved = row({ transactionId: null, paymentPolling: { status: 'FAILED', checks: 0,
+    reason: 'LEGACY_MISSING_TRANSACTION_ID', archivedAt: new Date(start).toISOString() } });
+  const response = runPollingNode('confirm_resolve', { _paymentPollingAdmitted: true,
+    payload: [saved], _summerSubscriptionCtx: { action: 'confirm', paymentRef: saved.paymentRef } });
+  assert.equal(response[0], null);
+  assert.equal(response[1].payload.status, 'FAILED');
+  assert.equal(response[1].payload.archived, true);
+  assert.equal(response[1].payload.paymentUrl, null);
 });

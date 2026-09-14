@@ -31,7 +31,9 @@ function createSubscriptionPaymentPolling() {
     const saved = row.paymentPolling || {}, local = state(row, now);
     const nowIso = new Date(now).toISOString();
     const isLink = pending(row) && !!row.transactionId;
-    const closed = isLink && local.closed;
+    // An explicit local archive also survives a missing provider transaction.
+    // Recovery may still find the transaction; it must not reopen checkout.
+    const closed = pending(row) && (isLink && local.closed || saved.status === 'FAILED');
     const due = timestamp(saved.nextCheckAt);
     // Archive is a local write even when a previous request has a cooldown.
     if (closed && saved.status !== 'FAILED') return { dispatch: false, value: {
@@ -1060,7 +1062,7 @@ if (!ctx.transactionId) {
   const response = Object.assign({}, msg, {
     statusCode: 200,
     headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: {
+    payload: paymentPolling.response({
       ok: true,
       counterKey: toStr(ctx.counterKey),
       inventoryId: toStr(ctx.inventoryId),
@@ -1072,7 +1074,7 @@ if (!ctx.transactionId) {
       status: currentStatus || "PAYMENT_PENDING",
       paid: false,
       updatedAt: new Date().toISOString(),
-    },
+    }, record),
   });
   return [null, response, response];
 }
