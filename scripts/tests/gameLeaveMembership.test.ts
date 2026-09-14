@@ -1,4 +1,5 @@
 import test from "node:test";
+import { observeGameLeave } from "../../src/components/games/observeGameLeave.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import ts from "typescript";
@@ -103,8 +104,8 @@ const callback = ts.transpileModule(`(${page.slice(handlerStart, handlerEnd + 4)
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
-async function leaveScenario(state: string, freshGame: unknown, refreshError: unknown = null) {
-  const calls = { requests: 0, refreshes: 0, navigations: 0, notices: [] as string[], errors: [] as unknown[] };
+async function leaveScenario(state: string, freshGame: unknown, refreshError: unknown = null, failure: number | "throw" | null = null) {
+  const calls = { updating: [] as boolean[], requests: 0, refreshes: 0, navigations: 0, notices: [] as string[], errors: [] as unknown[] };
   const noop = () => {};
   const scope = {
     subscriptionUsageShadowEnabled: false, canCurrentUserLeaveGameInDetails: true, gameRecordId: "fixture-game",
@@ -113,10 +114,16 @@ async function leaveScenario(state: string, freshGame: unknown, refreshError: un
     profilePhoto: null, profileGrade: null, profileRatingNumeric: null,
     isCurrentUserPlayer: (row: { id: string }) => row.id === actor.id,
     isDetailsOrganizerPlayer: () => false, isSelfLeavePreviewMode: false, selfLeaveAttemptRef: { current: 0 },
-    setUpdatingGameRoster: noop, setGameRosterError: (error: unknown) => calls.errors.push(error), setLeavePendingMessage: noop,
+    setUpdatingGameRoster: (value: boolean) => calls.updating.push(value), setGameRosterError: (error: unknown) => calls.errors.push(error), setLeavePendingMessage: noop,
     SELF_REMOVE_START_NOTICE: "starting", SELF_REMOVE_PENDING_NOTICE: "pending", SELF_REMOVE_SUCCESS_NOTICE: "left",
-    SELF_REMOVE_RETRY_DELAYS_MS: [0],
-    leaveCurrentUserRequest: async () => { calls.requests++; return { data: { state }, error: null }; },
+    leavePendingMessage: null, selfLeavePostInFlightRef: { current: false },
+    selfLeaveObservationRef: { current: null }, observeGameLeave: () => new Promise(() => {}),
+    leaveCurrentUserRequest: async () => {
+      calls.requests++;
+      if (failure === "throw") throw new Error("offline");
+      return failure === null ? { data: { state }, error: null }
+        : { data: null, error: { status: failure, message: "unavailable" }, status: failure };
+    },
     apiFetchPadelGameRecord: async () => { calls.refreshes++; return { data: freshGame, error: refreshError }; },
     upsertGameRecordInStores: noop, hasActiveGameLeaveMembership,
     navigateToCabinetFromGamesDetails: () => { calls.navigations++; return true; },
@@ -127,7 +134,7 @@ async function leaveScenario(state: string, freshGame: unknown, refreshError: un
   return calls;
 }
 
-for (const state of ["RETRY_REQUIRED", "DONE", "RETURN_PENDING"]) {
+for (const state of ["DONE", "RETURN_PENDING"]) {
   test(`${state} cannot announce exit while refreshed split WAITLIST remains`, async () => {
     const calls = await leaveScenario(state, { ...game(), id: "fixture-game" });
     assert.equal(calls.requests, 1, "orphan WAITLIST invokes authenticated server leave");
@@ -173,4 +180,80 @@ test("leave cannot race the current page's unfinished split join", () => {
   const start = page.indexOf("const canCurrentUserLeaveGameInDetails = Boolean(");
   const end = page.indexOf("const detailsTeamSlotKeys", start);
   assert.match(page.slice(start, end), /&& !joiningSplitPayment/);
+});
+
+
+test("pending leave returns after one POST without blocking on another write or read", async () => {
+  const calls = await leaveScenario("RETRY_REQUIRED", { ...game(), id: "fixture-game" });
+  assert.equal(calls.requests, 1);
+  assert.equal(calls.refreshes, 0);
+  assert.deepEqual(calls.updating, [true, false], "GET observation never holds the roster lock");
+  assert.equal(calls.navigations, 0);
+  assert.deepEqual(calls.notices, []);
+});
+
+const observerActor = { id: "fixture-client" };
+const observedRecord = (status: string) => ({ id: "fixture-game", participants: [], waitlist: [],
+  metadata: { splitPayment: { payments: [{ clientId: observerActor.id, status }] } } });
+
+test("read-only observation waits for split payment membership as well as roster", async () => {
+  const states = ["WAITLIST", "PAYMENT_PENDING", "LEFT"];
+  const observed: string[] = [];
+  const result = await observeGameLeave({ gameId: "fixture-game", identity: observerActor,
+    signal: new AbortController().signal, intervalMs: 0, attempts: 3,
+    read: async () => ({ data: observedRecord(states.shift()!), error: null }),
+    onRecord: data => observed.push(data.metadata.splitPayment.payments[0].status),
+  });
+  assert.equal(result, "complete");
+  assert.deepEqual(observed, ["WAITLIST", "PAYMENT_PENDING", "LEFT"]);
+});
+
+test("errors, wrong game and thrown reads cannot confirm exit; observation is bounded", async () => {
+  let reads = 0;
+  const result = await observeGameLeave({ gameId: "fixture-game", identity: observerActor,
+    signal: new AbortController().signal, intervalMs: 0, attempts: 3,
+    read: async () => {
+      reads++;
+      if (reads === 1) throw new Error("offline");
+      return reads === 2 ? { data: observedRecord("LEFT"), error: "unavailable" }
+        : { data: { ...observedRecord("LEFT"), id: "another-game" }, error: null };
+    }, onRecord: () => assert.fail("no valid read"),
+  });
+  assert.equal(result, "unconfirmed");
+  assert.equal(reads, 3);
+});
+
+test("unmount or game switch cancels stale read without updating stores", async () => {
+  const controller = new AbortController();
+  const result = await observeGameLeave({ gameId: "fixture-game", identity: observerActor,
+    signal: controller.signal,
+    read: async () => { controller.abort(); return { data: observedRecord("LEFT"), error: null }; },
+    onRecord: () => assert.fail("cancelled result cannot update UI"),
+  });
+  assert.equal(result, "cancelled");
+});
+
+test("cancelling during delay stops the next GET immediately", async () => {
+  const controller = new AbortController();
+  let reads = 0;
+  const result = await observeGameLeave({ gameId: "fixture-game", identity: observerActor,
+    signal: controller.signal, intervalMs: 60_000,
+    read: async () => { reads++; setTimeout(() => controller.abort(), 0); return { data: observedRecord("WAITLIST"), error: null }; },
+    onRecord: () => {},
+  });
+  assert.equal(result, "cancelled");
+  assert.equal(reads, 1);
+});
+
+
+test("network failures and permission errors unlock without POST retries or false success", async () => {
+  for (const failure of ["throw", 0, 403, 408, 429, 500] as const) {
+    const calls = await leaveScenario("RETRY_REQUIRED", null, null, failure);
+    assert.equal(calls.requests, 1);
+    assert.equal(calls.refreshes, 0);
+    assert.deepEqual(calls.updating, [true, false]);
+    assert.deepEqual(calls.notices, []);
+    assert.equal(calls.navigations, 0);
+    assert.ok(calls.errors.at(-1));
+  }
 });
