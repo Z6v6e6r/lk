@@ -1,9 +1,9 @@
+import { hubGatewaySource } from '../lib/eventPaymentSources.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { nextSubscriptionRejoinId } from '../../src/utils/subscriptionRejoin.ts';
 
-const source = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
+const source = hubGatewaySource();
 const prefix = `
 const isObj = value => value && typeof value === 'object' && !Array.isArray(value);
 const managedActionForTarget = ctx => ctx.managedAction;

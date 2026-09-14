@@ -1,6 +1,14 @@
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.
 const ctx = msg._subscriptionPricePreview;
 if (!ctx) return null;
+// Event identity is checked again against Viva; caller input cannot select a game tariff.
+const eventCategory = ctx.eventCategory || (ctx.groupTraining ? 'GROUP_TRAINING' : null);
+const eventRoute = eventCategory === 'GROUP_TRAINING'
+  ? { category: 'group_training', action: 'BOOK_GROUP_TRAINING', rule: 'groupTrainingDiscountPercent',
+    kind: 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1', error: 'GROUP_DISCOUNT' }
+  : eventCategory === 'TOURNAMENT'
+    ? { category: 'tournament', action: 'BOOK_TOURNAMENT', rule: 'tournamentDiscountPercent',
+      kind: 'TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1', error: 'TOURNAMENT_DISCOUNT' } : null;
 const out = index => { const result = [null, null, null, null, null, null]; result[index] = msg; return result; };
 const stop = (code, status = 503) => { ctx.done = true; ctx.error = code; ctx.statusCode = status; return out(4); };
 const ok = () => !msg.error && Number(msg.statusCode) >= 200 && Number(msg.statusCode) < 300;
@@ -23,12 +31,12 @@ const http = (step, path, admin = false) => {
 const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null) => {
   ctx.quotes.push({ subscriptionId, selectionKey: ctx.selectionKey, status, basePriceMinor: ctx.basePriceMinor,
     amountMinor, freeMinutes, paidMinutes, reasonCode,
-    ...(ctx.groupTraining ? { kind: 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1', exerciseId: ctx.exerciseId,
+    ...(eventRoute ? { kind: eventRoute.kind, exerciseId: ctx.exerciseId,
       actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.catalog[ctx.metadata[subscriptionId].productId],
       discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}), evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
 if (ctx.done) return out(4);
-if (ctx.groupTraining && typeof canonical.identityMoneyOwned !== 'function') return stop('GROUP_DISCOUNT_BACKEND_NOT_READY');
+if (eventRoute && typeof canonical.identityMoneyOwned !== 'function') return stop(eventRoute.error + '_BACKEND_NOT_READY');
 if (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');
 if (Date.now() - ctx.startedAt > 28000) return stop('PRICE_PREVIEW_TIMEOUT');
 if (ctx.step === 'start') return http('profile', `/end-user/api/v1/${ctx.tenantKey}/profile`);
@@ -36,7 +44,7 @@ if (ctx.step === 'profile') {
   const profile = canonical.unwrapRecord(msg.payload);
   if (!ok() || !profile || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(profile.id || profile.clientId || '')) return stop('PRICE_PREVIEW_AUTH_REQUIRED', 401);
   ctx.actorClientId = profile.id || profile.clientId;
-  if (ctx.groupTraining) return http('groupExercise', `/end-user/api/v1/${ctx.tenantKey}/exercises/${ctx.exerciseId}`);
+  if (eventRoute) return http('groupExercise', `/end-user/api/v1/${ctx.tenantKey}/exercises/${ctx.exerciseId}`);
   if (ctx.existingGame) return find('game', { id: ctx.target.gameId }, 5);
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
@@ -45,11 +53,11 @@ if (ctx.step === 'groupExercise') {
   const start = Date.parse(canonical.eventStartsAt(exercise));
   const duration = canonical.eventDurationMinutes(exercise);
   if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
-    || canonical.resolveCategory(exercise) !== 'group_training' || !Number.isFinite(start) || start <= Date.now()
+    || canonical.resolveCategory(exercise) !== eventRoute?.category || !Number.isFinite(start) || start <= Date.now()
     || !Number.isSafeInteger(duration) || duration < 1 || duration > 720
     || !canonical.exerciseRoomId(exercise) || !(exercise.studio?.id || exercise.studioId)
     || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop('GROUP_DISCOUNT_TARGET_UNRESOLVED');
+    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
   ctx.exercise = exercise;
   ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
@@ -106,7 +114,7 @@ if (ctx.step === 'subscriptions') {
       || (body.totalPages !== undefined && ![0, 1].includes(body.totalPages)) || body.last === false || body.hasNext === true))) {
     return stop('PRICE_PREVIEW_SUBSCRIPTIONS_INCOMPLETE');
   }
-  if (ctx.groupTraining && ctx.requestedIds === undefined) {
+  if (eventRoute && ctx.requestedIds === undefined) {
     ctx.requestedIds = list.filter(row => row.status === 'ACTIVE' && (canonical.collectExactProductIds(row).length === 0
       || canonical.collectExactProductIds(row).includes('db7a5250-7369-4f43-8ac5-9111be24bc74'))).map(row => row.subscriptionId || row.clientSubscriptionId || row.id);
     if (ctx.requestedIds.length > 20 || ctx.requestedIds.some(id => typeof id !== 'string'
@@ -116,7 +124,7 @@ if (ctx.step === 'subscriptions') {
   }
   ctx.subscriptions = {};
   for (const id of ctx.requestedIds) {
-    const matches = list.filter(row => (ctx.groupTraining ? row.subscriptionId || row.clientSubscriptionId || row.id : row.subscriptionId) === id);
+    const matches = list.filter(row => (eventRoute ? row.subscriptionId || row.clientSubscriptionId || row.id : row.subscriptionId) === id);
     if (matches.length !== 1 || [matches[0].clientSubscriptionId, matches[0].id].some(v => v !== undefined && v !== id)
       || [matches[0].clientId, matches[0].client?.id].some(v => v !== undefined && v !== ctx.actorClientId)) return stop('PRICE_PREVIEW_OWNERSHIP_UNRESOLVED');
     ctx.subscriptions[id] = matches[0];
@@ -135,7 +143,7 @@ if (ctx.step === 'metadata') {
       || canonical.collectExactProductIds(ctx.subscriptions[id]).some(product => product !== row.productId.toLowerCase())) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     ctx.metadata[id] = row;
   }
-  if (ctx.groupTraining) {
+  if (eventRoute) {
     ctx.requestedIds = ctx.requestedIds.filter(id => ctx.metadata[id].productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74');
     ctx.metadata = Object.fromEntries(ctx.requestedIds.map(id => [id, ctx.metadata[id]]));
     if (!ctx.requestedIds.length) { ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4); }
@@ -170,7 +178,7 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
 if (ctx.step === 'operations') {
   if (msg.error || !Array.isArray(msg.payload)) return stop('LK1_ALLOWANCE_READ_FAILED');
   ctx.operations = msg.payload;
-  if (ctx.groupTraining) return http('groupTariff', `/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${ctx.exerciseId}`);
+  if (eventRoute) return http('groupTariff', `/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${ctx.exerciseId}`);
   return http('room', `/api/v1/studios/${encodeURIComponent(ctx.target.stationId)}/rooms/${encodeURIComponent(ctx.target.roomId)}`, true);
 }
 if (ctx.step === 'room') {
@@ -233,9 +241,9 @@ if (ctx.step === 'evaluate') {
   } else {
     if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
       || decision.benefit.finalPriceMinor > ctx.basePriceMinor) return stop('PRICE_PREVIEW_DECISION_INVALID');
-    if (ctx.groupTraining) {
+    if (eventRoute) {
       if (decision.subscriptionVisitCount !== 0 || (!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)
-        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100)) return stop('GROUP_DISCOUNT_DECISION_INVALID');
+        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100)) return stop(eventRoute.error + '_DECISION_INVALID');
       quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, 0, ctx.target.durationMinutes);
     } else {
       if (!decision.gameMinutes) return stop('PRICE_PREVIEW_DECISION_INVALID');
@@ -257,8 +265,8 @@ while (ctx.step === 'next') {
   const exercise = ctx.exercise || { id: 'preview', studioId: ctx.target.stationId, roomId: ctx.target.roomId,
     timeFrom: ctx.target.startsAt, timeTo: new Date(Date.parse(ctx.target.startsAt) + ctx.target.durationMinutes * 60000).toISOString(),
     directionId: 4588, typeId: 1613, availableClientSubscriptions: [live] };
-  if (!ctx.groupTraining && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
-  if (!ctx.groupTraining && (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
+  if (!eventRoute && ['availableStudios', 'availableTypes', 'availableDirections'].some(field => live[field] != null && !Array.isArray(live[field]))) return stop('PRICE_PREVIEW_SUBSCRIPTION_SCHEMA_INVALID');
+  if (!eventRoute && (canonical.preflightAvailability.resolveSplitSubscriptionLifecycle(live, ctx.target.startsAt.slice(0, 10)) === 'UNAVAILABLE'
     || live.holdUntil || live.frozenUntil || live.isFrozen === true || live.visitsLeft === 0)) {
     quote(id, live.visitsLeft === 0 ? 'LIMIT_USED' : 'UNAVAILABLE', null, 0, 0, live.visitsLeft === 0 ? 'SUBSCRIPTION_VISITS_EXHAUSTED' : 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
@@ -270,7 +278,7 @@ while (ctx.step === 'next') {
     return aliases.length > 0 && aliases.every(value => typeof value === 'string' && canonical.normalizeId(value) === canonical.normalizeId(id));
   }) : [live];
   if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
-  const owned = ctx.groupTraining ? canonical.identityMoneyOwned(bound, available) : canonical.identityOwned(bound, available, exercise);
+  const owned = eventRoute ? canonical.identityMoneyOwned(bound, available) : canonical.identityOwned(bound, available, exercise);
   if (owned.length !== 1) return stop('PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
   if (productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74') {
     const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
@@ -278,7 +286,7 @@ while (ctx.step === 'next') {
   }
   const configured = canonical.lk1Config(owned);
   if (configured.code) return stop(configured.code);
-  if (ctx.groupTraining) {
+  if (eventRoute) {
     const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
     const activation = canonical.lk1LifecycleInstant(live.activationDate);
     const expiry = canonical.lk1LifecycleInstant(live.expirationDate, true);
@@ -289,11 +297,11 @@ while (ctx.step === 'next') {
       || live.holdUntil || live.frozenUntil || live.isFrozen === true) {
       quote(id, 'UNAVAILABLE', null, 0, 0, 'LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN'); continue;
     }
-    ctx.groupDiscountPercent = configured.rule.groupTrainingDiscountPercent;
-    if ((!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)) return stop('GROUP_DISCOUNT_RULE_UNCONFIRMED');
+    ctx.groupDiscountPercent = configured.rule[eventRoute.rule];
+    if ((!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)) return stop(eventRoute.error + '_RULE_UNCONFIRMED');
   }
   const visitCount = configured.matched ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
-  if (!ctx.groupTraining && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),
+  if (!eventRoute && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),
     ctx.target.stationId, visitCount, ctx.target.durationMinutes, ctx.target.startsAt.slice(0, 10)).length !== 1) {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
@@ -318,11 +326,11 @@ while (ctx.step === 'next') {
   }
   ctx.currentId = id;
   const usageContext = { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: id,
-    serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: ctx.groupTraining ? 'BOOK_GROUP_TRAINING' : ctx.existingGame ? 'JOIN_GAME' : 'CREATE_GAME', step: 'lk1_usage_operations',
+    serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: eventRoute ? eventRoute.action : ctx.existingGame ? 'JOIN_GAME' : 'CREATE_GAME', step: 'lk1_usage_operations',
     lk1: { rule: configured.rule, bookings: ctx.bookings, activeBookings: ctx.activeBookings,
-      target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: ctx.groupTraining ? 'GROUP_TRAINING' : 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
+      target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: eventRoute ? eventCategory : 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
         basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes,
-        ...(ctx.groupTraining ? { stationId: ctx.target.stationId, roomId: ctx.target.roomId,
+        ...(eventRoute ? { stationId: ctx.target.stationId, roomId: ctx.target.roomId,
           externalEventTypeId: canonical.managedExternalEventTypeId(exercise), productTypeId: null,
           priceProductId: ctx.priceProductId } : {}) } } };
   if (ctx.operations.some(row => row?.lk1?.rule?.productId !== configured.rule.productId)) return stop('LK1_ALLOWANCE_RECORD_INVALID');

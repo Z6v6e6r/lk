@@ -1,13 +1,14 @@
+import { hubGatewaySource } from '../lib/eventPaymentSources.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const source = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
+const source = hubGatewaySource();
 const productId = 'fixture-group-tariff';
 const hubId = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
 const context = (percent = 50, base = 550000) => ({
   caller: 'http', managedAction: 'BOOK_GROUP_TRAINING', category: 'group_training',
-  step: 'lk1_payment_products', tenantKey: 'fixture', actorClientId: 'fixture-actor',
+  step: 'lk1_group_payment_products', tenantKey: 'fixture', actorClientId: 'fixture-actor',
   actorPhone: 'fixture-phone', authHeader: 'Bearer fixture', studioId: 'fixture-studio',
   exerciseId: 'fixture-event', confirmedBookingId: 'fixture-booking',
   operationId: 'fixture-operation', operationKey: 'fixture-key', clientSubscriptionId: 'fixture-subscription',
@@ -56,9 +57,9 @@ function call(ctx, payload, options = {}) {
 function payment(percent = 50, base = 550000) {
   const ctx = context(percent, base);
   const selected = call(ctx, [service(base), { id: 'fixture-game-carrier', type: 'SERVICE', cost: 1000000 }]);
-  assert.equal(selected.result.step, 'lk1_payment_profile_recheck');
+  assert.equal(selected.result.step, 'lk1_group_payment_profile');
   assert.equal(selected.result.method, 'GET');
-  const payload = selected.msg._splitCtx.transactionPayload;
+  const payload = ctx.lk1EventPayment.transactionPayload;
   const intent = call(ctx, { id: ctx.actorClientId, phone: ctx.actorPhone }, { msg: { _splitCtx: selected.msg._splitCtx } });
   assert.equal(intent.result.step, 'lk1_payment_attempt_saved');
   assert.equal(intent.result.query['lk1.transactionAttemptedAt'].$exists, false);
@@ -91,7 +92,7 @@ test('event payment fails closed for missing/duplicate tariff, cost/type/identit
     [{ ...service(), type: 'SUBSCRIPTION' }], [{ ...service(), productType: 'ONE_TIME' }],
     [{ ...service(), cost: 550000.5 }], { content: [service()], last: false }];
   for (const rows of invalid) assert.equal(call(context(), rows).result.kind, 'stop', JSON.stringify(rows));
-  assert.equal(call(context(), [service()], { msg: { statusCode: 503 } }).result.code, 'LK1_PAYMENT_CARRIER_UNAVAILABLE');
+  assert.equal(call(context(), [service()], { msg: { statusCode: 503 } }).result.code, 'LK1_GROUP_PAYMENT_PRODUCT_UNAVAILABLE');
 });
 
 test('group binding rejects visit debit, altered event, wrong category, and amount outside rule', () => {
@@ -105,14 +106,14 @@ test('group binding rejects visit debit, altered event, wrong category, and amou
 });
 
 test('profile recheck cannot replace group product, discount, rule, actor, or booking', () => {
-  for (const mutate of [msg => msg._splitCtx.transactionPayload.products[0].id = 'fixture-game-carrier',
-    msg => msg._splitCtx.transactionPayload.products[0].discount = 725000,
-    msg => msg._splitCtx.transactionPayload.products[0].bookingIds = ['other'],
-    msg => msg._splitCtx.transactionPayload.products[0].type = 'SUBSCRIPTION',
-    msg => msg._splitCtx.transactionPayload.products.push(service()),
+  for (const mutate of [msg => msg.eventCtx.transactionPayload.products[0].id = 'fixture-game-carrier',
+    msg => msg.eventCtx.transactionPayload.products[0].discount = 725000,
+    msg => msg.eventCtx.transactionPayload.products[0].bookingIds = ['other'],
+    msg => msg.eventCtx.transactionPayload.products[0].type = 'SUBSCRIPTION',
+    msg => msg.eventCtx.transactionPayload.products.push(service()),
     msg => msg.payload.id = 'other', msg => msg.payload.phone = 'other']) {
-    const ctx = context(); const selected = call(ctx, [service()]);
-    const msg = { _splitCtx: selected.msg._splitCtx, payload: { id: ctx.actorClientId, phone: ctx.actorPhone } };
+    const ctx = context(); call(ctx, [service()]);
+    const msg = { eventCtx: ctx.lk1EventPayment, payload: { id: ctx.actorClientId, phone: ctx.actorPhone } };
     mutate(msg);
     assert.equal(call(ctx, msg.payload, { msg }).result.kind, 'stop');
     assert.equal(ctx.lk1.transactionAttemptedAt, undefined);
@@ -142,7 +143,7 @@ test('CAS ambiguity never dispatches transaction; verified readback returns exac
 });
 
 test('game payments still use split serializer and its unchanged 10000 carrier', () => {
-  const ctx = context(); ctx.managedAction = 'JOIN_GAME'; ctx.lk1.target.category = 'GAME';
+  const ctx = context(); ctx.managedAction = 'JOIN_GAME'; ctx.caller = 'split'; ctx.step = 'lk1_payment_products'; ctx.lk1.target.category = 'GAME';
   assert.equal(call(ctx, [service()]).result.kind, 'final');
   ctx.step = 'lk1_payment_profile_recheck';
   const msg = { _splitCtx: { productId, transactionPayload: { clientPhone: ctx.actorPhone, studioId: ctx.studioId,
@@ -178,7 +179,7 @@ test('group payment replay returns verified link or reconciliation without HTTP 
   ctx.step = 'lk1_ingress_operation_find';
   const record = { _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`,
     tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, operationId: ctx.operationId,
-    clientSubscriptionId: ctx.clientSubscriptionId, exerciseId: ctx.exerciseId, bookingId: ctx.confirmedBookingId,
+    category: ctx.category, clientSubscriptionId: ctx.clientSubscriptionId, exerciseId: ctx.exerciseId, bookingId: ctx.confirmedBookingId,
     state: 'CONFIRMED', lk1: ctx.lk1 };
   record.lk1.fingerprint = JSON.stringify({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
     clientSubscriptionId: ctx.clientSubscriptionId, action: ctx.managedAction,
@@ -214,7 +215,7 @@ test('payment product envelopes support existing Viva services shapes and reject
   for (const rows of [{ services: [service()] }, { subServices: [service()] },
     { data: { services: [service()] } }, { result: [service()] },
     { services: [service()], subServices: [{ id: 'other', type: 'SUBSCRIPTION' }] }]) {
-    assert.equal(call(context(), rows).result.step, 'lk1_payment_profile_recheck');
+    assert.equal(call(context(), rows).result.step, 'lk1_group_payment_profile');
   }
   for (const rows of [{ services: [service()], last: false }, { data: [service()], totalElements: 2 },
     { services: [service()], hasNext: true }, { services: [service()], subServices: [service()] }]) {
@@ -232,11 +233,75 @@ test('previously verified legacy group checkout stays replayable without issuing
   ctx.step = 'lk1_ingress_operation_find';
   const record = { _id: `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`,
     tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, operationId: ctx.operationId,
-    clientSubscriptionId: ctx.clientSubscriptionId, exerciseId: ctx.exerciseId, bookingId: ctx.confirmedBookingId,
+    category: ctx.category, clientSubscriptionId: ctx.clientSubscriptionId, exerciseId: ctx.exerciseId, bookingId: ctx.confirmedBookingId,
     state: 'CONFIRMED', lk1: ctx.lk1 };
   record.lk1.fingerprint = JSON.stringify({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
     clientSubscriptionId: ctx.clientSubscriptionId, action: ctx.managedAction, rule: ctx.lk1.rule, target: ctx.lk1.target });
   assert.equal(call(ctx, [record]).result.payload.paymentUrl, 'https://pay.example.test/legacy');
   ctx.step = 'lk1_ingress_operation_find'; delete record.lk1.checkout;
   assert.equal(call(ctx, [record]).result.code, 'LK1_PAYMENT_RECONCILIATION_REQUIRED');
+});
+
+test('tournament route uses its own rule, service and context through verified checkout', () => {
+  for (const percent of [0, 20, 50, 100]) {
+    const ctx = context(50, 630000);
+    ctx.managedAction = 'BOOK_TOURNAMENT'; ctx.category = 'tournament';
+    ctx.lk1.target.category = 'TOURNAMENT'; ctx.lk1.rule.tournamentDiscountPercent = percent;
+    ctx.lk1.decision.benefit.finalPriceMinor = 630000 - Math.floor(630000 * percent / 100);
+    ctx.step = 'fixture_checkout';
+    const checkout = call(ctx, null, {suffix:'\nreturn lk1Checkout(ctx);'});
+    if (percent === 100) { assert.equal(checkout.result.payload.paid, true); continue; }
+    assert.equal(checkout.result.step, 'lk1_tournament_payment_products');
+    const selected = call(ctx, [service(630000), {id:'game-carrier',type:'SERVICE',cost:1000000}]);
+    assert.equal(selected.result.step, 'lk1_tournament_payment_profile');
+    assert.equal(selected.msg._splitCtx, undefined);
+    const intent = call(ctx, {id:ctx.actorClientId,phone:ctx.actorPhone});
+    assert.equal(intent.result.step, 'lk1_payment_attempt_saved');
+    assert.equal(ctx.lk1.transactionIntent.chargeMinor, 630000 - Math.floor(630000 * percent / 100));
+    assert.equal(ctx.lk1.transactionIntent.baseMinor, 630000);
+    assert.equal(ctx.lk1.decision.subscriptionVisitCount, 0);
+  }
+});
+
+test('an event cannot fall through into the open-game serializer or use another category', () => {
+  for (const mutate of [ctx => ctx.step = 'lk1_payment_products', ctx => ctx.category = 'tournament',
+    ctx => ctx.caller = 'split', ctx => ctx.lk1.target.stationId = 'another-station']) {
+    const ctx = context(); mutate(ctx);
+    assert.equal(call(ctx,[service()]).result.kind,'stop');
+  }
+  const ctx=context();call(ctx,[service()]);ctx.step='lk1_payment_profile_recheck';
+  assert.equal(call(ctx,{id:ctx.actorClientId,phone:ctx.actorPhone}).result.kind,'stop');
+});
+
+test('event preview validates actual category and reads its configured percentage', () => {
+  const entry=fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/entry.js',import.meta.url),'utf8');
+  const router=fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js',import.meta.url),'utf8');
+  const id='11111111-1111-4111-8111-111111111111';
+  for(const kind of ['GROUP_TRAINING','TOURNAMENT']) {
+    const msg={req:{headers:{authorization:'Bearer fixture'}},payload:{target:{targetKind:kind,exerciseId:id}}};
+    new Function('msg',entry)(msg);assert.equal(msg._subscriptionPricePreview.eventCategory,kind);
+    const ctx=msg._subscriptionPricePreview;ctx.step='groupExercise';msg.statusCode=200;
+    msg.payload={id,time:'2099-01-01'};
+    const canonical={unwrapRecord:v=>v,eventStartsAt:()=> '2099-01-01',eventDurationMinutes:()=>60,
+      resolveCategory:()=> kind==='TOURNAMENT'?'group_training':'tournament',exerciseRoomId:()=> 'room',managedExternalEventTypeId:()=>1,identityMoneyOwned(){}};
+    new Function('msg','canonical',router)(msg,canonical);
+    assert.equal(ctx.error,kind==='TOURNAMENT'?'TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED':'GROUP_DISCOUNT_TARGET_UNRESOLVED');
+  }
+});
+
+test('displayed tournament expectation cannot select group rule or alter the recomputed charge', () => {
+  const block=source.slice(source.indexOf('  const expectedGroup ='),source.indexOf('  ctx.lk1.decision = JSON.parse'));
+  const valid=context();valid.managedAction='BOOK_TOURNAMENT';valid.category='tournament';valid.lk1.target.category='TOURNAMENT';
+  valid.lk1.rule.tournamentDiscountPercent=20;valid.lk1.decision.benefit.finalPriceMinor=440000;
+  Object.assign(valid.lk1.target,{startsAt:'2099-01-01T12:00:00+03:00',durationMinutes:60});
+  valid.expectedTournamentDiscount={basePriceMinor:550000,amountMinor:440000,productId,
+    startsAt:valid.lk1.target.startsAt,durationMinutes:60,discountPercent:20};
+  const run=ctx=>new Function('ctx','decision','isObj','lk1EventPaymentRoute','finishError',block+'\nreturn "accepted";')(
+    ctx,ctx.lk1.decision,v=>v!==null&&typeof v==='object',()=>({sourceCategory:'tournament',category:'TOURNAMENT',discountField:'tournamentDiscountPercent'}),()=> 'rejected');
+  assert.equal(run(valid),'accepted');
+  for(const mutate of [c=>c.expectedTournamentDiscount.amountMinor=275000,c=>c.expectedTournamentDiscount.discountPercent=50,
+    c=>c.expectedTournamentDiscount.productId='game-carrier',c=>c.expectedGroupDiscount=c.expectedTournamentDiscount,
+    c=>c.category='group_training',c=>c.expectedTournamentDiscount.startsAt='2099-01-02T12:00:00+03:00']) {
+    const ctx=structuredClone(valid);mutate(ctx);assert.equal(run(ctx),'rejected');
+  }
 });

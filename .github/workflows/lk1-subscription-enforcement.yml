@@ -359,6 +359,9 @@ jobs:
           scripts/tests/repeatedBookingLeaveProfile.test.mjs
           scripts/tests/septemberReleaseCandidate.test.mjs
           scripts/tests/groupEventPaymentUpgrade.test.mjs
+          scripts/tests/eventPaymentRoutesUpgrade.test.mjs
+          scripts/tests/eventPaymentReadback.test.mjs
+          scripts/tests/eventPaymentLiveComposition.test.mjs
           scripts/tests/gameLeaveMembership.test.ts
           scripts/tests/gameLeaveCancellation.test.ts
           scripts/tests/legacyRosterBridge.nodered.test.ts
@@ -384,6 +387,8 @@ jobs:
           scripts/tests/groupScheduleApi.test.ts
           scripts/tests/groupEventPayment.test.mjs
           scripts/tests/groupSubscriptionDiscount.test.ts
+          scripts/tests/tournamentSubscriptionDiscount.test.ts
+          scripts/tests/tournamentSignup.checkoutReadiness.test.ts
 
       - name: Run unified candidate and drift-negative tests
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

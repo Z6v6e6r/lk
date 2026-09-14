@@ -1,3 +1,4 @@
+import { hubGatewaySource, bookingReadbackSource } from './lib/eventPaymentSources.mjs';
 import { visitLifecycleRuntimeSource, visitConfirmationSource } from './lib/subscriptionVisitRuntimeSource.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -59,10 +60,10 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
     '([2, 3].includes(index) || (index === 1 && !lk1ReadonlyLookup(value)) || (index === 0 && !preflightReadOnlyHttp(value)))');
   const hooks = sections(snippet('gateway_hooks'));
   const transition = buildHubPolicyTransition(policy);
-  const gateway = snippet('gateway').split('// HUB_STEPS');
+  const gateway = hubGatewaySource().split('// HUB_STEPS');
   if (gateway.length !== 2) throw new Error('HUB gateway fragment drift');
   out.gateway = replace(out.gateway, 'const ctx = isObj(msg._subscriptionBooking)',
-    visitLifecycleRuntimeSource() + visitConfirmationSource() + hooks.HELPERS + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
+    bookingReadbackSource() + visitLifecycleRuntimeSource() + visitConfirmationSource() + hooks.HELPERS + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
   out.gateway = replace(out.gateway, 'if (ctx.step === "profile") {',
     gateway[1] + '\nif (ctx.step === "profile") {');
   out.gateway = replace(out.gateway, '  if (ctx.action === "release") {\n    return prepareUserGet(ctx, "active_bookings"',
@@ -103,9 +104,12 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
     '  if (ctx.lk1 && !bookingId(msg.payload)) return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNKNOWN");\n'
     + '  ctx.correlationId = extractCorrelationId(msg.payload);');
   out.gateway = replace(out.gateway, '  ctx.step = step;\n  msg._subscriptionBooking = ctx;\n  msg.method = method;',
-    '  ctx.step = step;\n  msg._subscriptionBooking = ctx;\n'
+    '  lk1BindConfirmationRead(ctx, step, method, url, headers);\n  ctx.step = step;\n  msg._subscriptionBooking = ctx;\n'
     + '  if (ctx.lk1 || ctx.lk1BeforeCreate || ctx.lk1ReadOnlyQuote) { msg.followRedirects = false; msg.maxRedirects = 0; }\n'
     + '  msg.method = method;');
+
+  out.gateway = replace(out.gateway, 'const adminVersion = ctx.caller === "split" ? "v1" : "v2";',
+    'const adminVersion = ctx.caller === "split" || (lk1EventMoneyBooking(ctx) && payload.paymentType === "ON_PLACE") ? "v1" : "v2";');
 
   out.evaluator = 'if (Object.prototype.hasOwnProperty.call(msg._managedSubscriptionPolicyInput || {}, "lk1Policy")) {\n'
     + '  return (() => {\n' + snippet('evaluator') + '\n})();\n}\n' + out.evaluator;
@@ -239,9 +243,9 @@ export function hubSourceProvenance() {
   if (provenance.sourceDirty) throw new Error('HUB publication requires a clean committed source');
   const closure = ['scripts/patch_live_lk1_hub.mjs', 'scripts/verify_nodered_source_origin.mjs',
     'scripts/lib/release-provenance.mjs', 'scripts/lib/lk1HubPolicyTransition.mjs',
-    'scripts/lib/subscriptionVisitRuntimeSource.mjs', 'scripts/lib/subscriptionVisitLifecycle.mjs',
+    'scripts/lib/subscriptionVisitRuntimeSource.mjs', 'scripts/lib/eventPaymentSources.mjs', 'scripts/lib/subscriptionVisitLifecycle.mjs',
     'scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs',
-    ...['gateway.js', 'gateway_hooks.js', 'visit_confirm.js', 'split.js', 'split_hooks.js', 'finalize.js',
+    ...['booking_readback.js', 'event_payments.js', 'gateway.js', 'gateway_hooks.js', 'visit_confirm.js', 'split.js', 'split_hooks.js', 'finalize.js',
       'evaluator.js', 'preimages.json'].map(name => 'scripts/nodered_lk1_hub_nodes/' + name)];
   const sourceFiles = Object.fromEntries(closure.map(file => {
     const disk = fs.readFileSync(path.join(repo, file));
