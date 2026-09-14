@@ -1,3 +1,59 @@
+// BEGIN generated subscriptionPaymentPolling
+function createSubscriptionPaymentPolling() {
+  const lifetimeMs = 20 * 60_000, maxChecks = 10, intervalMs = 120_000, recoveryMs = 3_600_000;
+  const timestamp = value => typeof value === 'string' && /(?:Z|[+-]\d\d:\d\d)$/.test(value)
+    && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
+  const pending = row => ['PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'UNPAID'].includes(row?.status);
+  const state = (row, now = Date.now()) => {
+    const saved = row?.paymentPolling || {};
+    const created = timestamp(row?.createdAt);
+    const checks = Number.isSafeInteger(saved.checks) && saved.checks >= 0 ? saved.checks : 0;
+    const invalid = created === null || created > now || (saved.checks != null && saved.checks !== checks);
+    const reason = saved.reason || (invalid ? 'INVALID_CREATED_AT' : now >= created + lifetimeMs
+      ? 'PAYMENT_LINK_EXPIRED' : checks >= maxChecks ? 'PAYMENT_CHECK_LIMIT' : null);
+    return { checks, reason, closed: saved.status === 'FAILED' || !!reason,
+      deadlineAt: created === null ? null : new Date(created + lifetimeMs).toISOString() };
+  };
+  const response = (body, row, now = Date.now()) => {
+    // Explicitly verified paid/binding outcomes always win over a local timeout.
+    if (!pending(row) || ['PAID', 'PAID_PENDING_INSTANCE_BINDING'].includes(body?.status) || body?.paid === true) return body;
+    const local = state(row, now);
+    if (!local.closed) return body;
+    // Do not propagate cached nested responses containing a checkout URL.
+    return { ok: true, paymentRef: row.paymentRef || body?.paymentRef || null,
+      transactionId: row.transactionId || body?.transactionId || null,
+      counterKey: row.counterKey || body?.counterKey || null,
+      status: 'FAILED', paid: false, failed: true, archived: true,
+      paymentUrl: null, reason: local.reason || 'PAYMENT_LINK_ARCHIVED',
+      paymentDeadlineAt: local.deadlineAt };
+  };
+  const plan = (row, { now = Date.now(), recovery = false } = {}) => {
+    const saved = row.paymentPolling || {}, local = state(row, now);
+    const nowIso = new Date(now).toISOString();
+    const isLink = pending(row) && !!row.transactionId;
+    const closed = isLink && local.closed;
+    const due = timestamp(saved.nextCheckAt);
+    // Archive is a local write even when a previous request has a cooldown.
+    if (closed && saved.status !== 'FAILED') return { dispatch: false, value: {
+      ...saved, checks: local.checks, status: 'FAILED', reason: local.reason,
+      deadlineAt: local.deadlineAt, archivedAt: nowIso,
+      nextCheckAt: new Date(now + recoveryMs).toISOString(),
+    } };
+    if (due !== null && due > now) return { dispatch: false, value: null };
+    if (closed && !recovery) return { dispatch: false, value: null };
+    const checks = isLink && !closed ? local.checks + 1 : local.checks;
+    const exhausted = isLink && checks >= maxChecks;
+    const value = { ...saved, checks, status: closed || exhausted ? 'FAILED' : 'ACTIVE',
+      lastAttemptAt: nowIso, nextCheckAt: new Date(now + (closed || exhausted || row.status === 'PAID' || row.status === 'REFUNDED' ? recoveryMs : intervalMs)).toISOString() };
+    if (isLink) value.deadlineAt = local.deadlineAt;
+    if (exhausted && !closed) Object.assign(value, { archivedAt: nowIso, reason: 'PAYMENT_CHECK_LIMIT' });
+    if (closed || !isLink) value.recoveryChecks = (Number.isSafeInteger(saved.recoveryChecks) ? saved.recoveryChecks : 0) + 1;
+    return { dispatch: true, value };
+  };
+  return { lifetimeMs, maxChecks, intervalMs, recoveryMs, timestamp, pending, state, response, plan };
+}
+const paymentPolling = createSubscriptionPaymentPolling();
+// END generated subscriptionPaymentPolling
 // BEGIN generated subscriptionCounterEpoch
 function createSubscriptionCounterEpoch() {
   const id = 'subscription-sales-20260910';
@@ -748,6 +804,27 @@ if (!record) {
     campaignKey: ctx.campaignKey || null,
     paymentRef: ctx.paymentRef,
   });
+}
+
+// All selected confirmations pass the durable admission gate before provider I/O.
+// The gate returns here only after a proven CAS or a cached local response.
+if (msg._paymentPollingAdmitted !== true) {
+  msg._paymentPollingRecord = record;
+  return [null, null, null, null, msg];
+}
+delete msg._paymentPollingAdmitted;
+ctx.paymentPolling = record.paymentPolling;
+ctx.paymentPollingRow = { status: record.status, createdAt: record.createdAt,
+  paymentPolling: record.paymentPolling, paymentRef: record.paymentRef,
+  transactionId: record.transactionId, counterKey: record.counterKey };
+if (msg._paymentPollingStopped === true) {
+  delete msg._paymentPollingStopped;
+  if (ctx.reconcile === true) return null;
+  const response = Object.assign({}, msg, { statusCode: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    payload: paymentPolling.response({ ok: true, status: record.status, paid: record.status === 'PAID',
+      paymentRef: record.paymentRef, transactionId: record.transactionId, paymentUrl: record.paymentUrl || null }, record) });
+  return [null, response, null];
 }
 
 if (ctx.annualHistoryJob === true && ctx.reconcile === true && record.documentType === 'ANNUAL_HISTORY_RECONCILIATION_JOB_V1') {

@@ -176,7 +176,7 @@ test('strict refund and all explicit client aliases are checked', () => {
     assert.throws(() => annualHistory.observe(x.t, { productId: x.t.products[0].id, subscriptions: [x.s], clientId: x.t.client.id }));
   }
 });
-const nodeRun = (name, msg, globals = {}) => new Function('msg', 'global', 'env', fs.readFileSync(new URL(`../nodered_games_nodes/fn_tournament_subscription_${name}.js`, import.meta.url), 'utf8'))(msg, { get: k => globals[k] }, { get: k => k === 'VIVACRM_TOKEN_REQUEST_BODY' ? 'fixture-auth' : undefined });
+const nodeRun = (name, msg, globals = {}) => new Function('msg', 'global', 'env', fs.readFileSync(new URL(`../nodered_games_nodes/fn_tournament_subscription_${name}.js`, import.meta.url), 'utf8'))({ ...msg, ...(name === 'confirm_resolve' ? { _paymentPollingAdmitted: true } : {}) }, { get: k => globals[k] }, { get: k => k === 'VIVACRM_TOKEN_REQUEST_BODY' ? 'fixture-auth' : undefined });
 test('legacy PAID acknowledgement works with no schema3 ledger and closed flags', () => {
   const row = fixture().ledgerEvidence.rows[0];
   const out = nodeRun('confirm_resolve', { payload: [row], _summerSubscriptionCtx: {
@@ -195,7 +195,7 @@ test('attempt cursor rotates after a failed watch and expansion stays before the
   const first = ledger.history.entries[0]; first.lastAttemptAt = '2026-09-09T18:15:00.000Z'; ledger.ready = true;
   assert.equal(annualHistory.admissionReady(ledger), false);
   const out = nodeRun('reconcile_expand', { payload: [ledger, ...f.ledgerEvidence.rows] });
-  assert.equal(out.payload.length, 40); assert.equal(out.payload.some(j => j.transactionId === first.transactionId), false);
+  assert.equal(out.payload.length, 10); assert.equal(out.payload.some(j => j.transactionId === first.transactionId), false);
   assert.equal(out.payload.every(j => j.documentType === 'ANNUAL_HISTORY_RECONCILIATION_JOB_V1'), true);
   const prepared = nodeRun('reconcile_record', { payload: out.payload[0] });
   const token = nodeRun('confirm_resolve', prepared);

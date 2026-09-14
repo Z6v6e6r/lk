@@ -26,6 +26,8 @@ class FixedDate extends Date {
   static now() { return stamp; }
 }
 function run(name, msg, values = globals()) {
+  // Exercise frozen financial rules after the separately tested polling gate.
+  if (name === 'confirm_resolve') msg._paymentPollingAdmitted = true;
   const file = new URL(`../nodered_games_nodes/fn_tournament_subscription_${name}.js`, import.meta.url);
   const script = new vm.Script(`(function(msg, global, env) {\n${fs.readFileSync(file, 'utf8')}\n})(msg, global, env)`,
     { filename: file.pathname });

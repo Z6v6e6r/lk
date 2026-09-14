@@ -36,7 +36,7 @@ function createSubscriptionCounterEpoch() {
 }
 const subscriptionCounterEpoch = createSubscriptionCounterEpoch();
 // END generated subscriptionCounterEpoch
-const DEFAULT_RESERVATION_MINUTES = 30;
+const DEFAULT_RESERVATION_MINUTES = 20;
 const DEFAULT_INVENTORY_ID = "ab_leto_2026_50_v1";
 const LEGACY_STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
 const STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_150_v2";
@@ -52,22 +52,8 @@ const toStr = (value) => {
   return text || null;
 };
 
-const toInt = (value, fallback) => {
-  if (value === null || value === undefined) return fallback;
-  const text = String(value).trim();
-  if (!text) return fallback;
-  const parsed = Number(text.replace(",", "."));
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.floor(parsed);
-};
-
-const resolveReservationMinutes = () => {
-  const raw = toInt(global.get("summer_subscription_reservation_minutes"), DEFAULT_RESERVATION_MINUTES);
-  return Math.max(5, Math.min(360, raw));
-};
-
 const inventoryId = toStr(global.get("summer_subscription_inventory_id")) || DEFAULT_INVENTORY_ID;
-const reservationMinutes = resolveReservationMinutes();
+const reservationMinutes = DEFAULT_RESERVATION_MINUTES;
 const nowTs = Date.now();
 const requestedAtIso = new Date(nowTs).toISOString();
 const createdAtCutoffIso = new Date(nowTs - reservationMinutes * 60 * 1000).toISOString();
@@ -90,12 +76,16 @@ const inventoryIdPattern = `^(?:${[
 
 const queryFilter = {
   inventoryId: { $regex: inventoryIdPattern },
+  $and: [{ $or: [
+    { 'paymentPolling.nextCheckAt': { $exists: false } },
+    { 'paymentPolling.nextCheckAt': { $lte: requestedAtIso } },
+  ] }],
   $or: [
     { schemaVersion: 3, "history.version": 1, documentType: { $in: ["HUB_ATOMIC_INVENTORY_LEDGER", "PITER_ATOMIC_INVENTORY_LEDGER"] } },
     {
-      // Provider state, not the local checkout deadline, is authoritative for
-      // releasing bounded inventory. Keep polling expired/ambiguous transactions
-      // until Viva returns an explicit PAID or FAILED terminal state.
+      // Archived links leave the fast lane via durable nextCheckAt. An hourly
+      // exact readback can still settle a late payment without reopening checkout.
+      paymentRef: { $nin: [null, ""] },
       status: { $in: ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
       transactionId: { $nin: [null, ""] },
     },
@@ -133,9 +123,9 @@ const queryFilter = {
   ],
 };
 msg.query = queryFilter;
-msg.payload = queryFilter;
-msg.sort = { updatedAt: 1 };
-msg.limit = 200;
+// mongodb4 passes ONLY payload arguments to collection.find; msg.limit/sort
+// are ignored by the installed adapter. Limit before toArray materialization.
+msg.payload = [queryFilter, { sort: { 'paymentPolling.nextCheckAt': 1, _id: 1 }, limit: 60 }];
 msg._summerSubscriptionReconcile = {
   inventoryId,
   requestedAt: requestedAtIso,
