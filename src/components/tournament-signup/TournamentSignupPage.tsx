@@ -27,6 +27,7 @@ import {
   apiFetchTournamentMyRegistration,
   apiFetchTournamentSignupDetail,
   apiFetchTournamentSignupList,
+  apiFetchTournamentSubscriptionDiscounts,
   apiFetchTournamentVivaCheckout,
   apiFetchTournamentVivaMyRegistration,
   apiFetchTournamentVivaPublicCheckout,
@@ -37,6 +38,12 @@ import {
   type TournamentVivaCheckout,
   type TournamentVivaProduct,
 } from "../../utils/tournamentSignupApi";
+import {
+  buildTournamentSubscriptionDiscountProduct,
+  isTournamentSubscriptionDiscountQuote,
+  matchTournamentSubscriptionDiscount,
+  type TournamentSubscriptionDiscountQuote,
+} from "../../utils/tournamentSubscriptionDiscount";
 import { findTournamentSkinPriceLabel } from "../../utils/tournamentCustomPricing";
 import {
   buildTournamentPromoOnlyOfferFromProducts,
@@ -1052,7 +1059,7 @@ export default function TournamentSignupPage({
   initialTournamentSlug,
   initialDate,
 }: TournamentSignupPageProps) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isRestoringSession, phone } = useAuth();
   const subscriptionUsageShadow = useSubscriptionUsageShadow();
   const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
   const subscriptionUsageShadowPreview = subscriptionUsageShadow.preview;
@@ -1085,7 +1092,13 @@ export default function TournamentSignupPage({
   const [error, setError] = useState<string | null>(null);
   const [cancelDialogBookingId, setCancelDialogBookingId] = useState<string | null>(null);
   const [deepLinkMessage, setDeepLinkMessage] = useState<string | null>(null);
-  const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
+  const [checkoutSnapshot, setCheckout] = useState<TournamentVivaCheckout | null>(null);
+  const [checkoutResolvedFor, setCheckoutResolvedFor] = useState<string | null>(null);
+  const [discountQuotes, setDiscountQuotes] = useState<TournamentSubscriptionDiscountQuote[]>([]);
+  const [discountResolvedFor, setDiscountResolvedFor] = useState<string | null>(null);
+  const [discountLoading, setDiscountLoading] = useState(false);
+  const [discountError, setDiscountError] = useState<string | null>(null);
+  const checkoutRequestIdRef = useRef(0);
   const [activeDetailTab, setActiveDetailTab] = useState<TournamentDetailTab>("roster");
   const [typeFilter, setTypeFilter] = useState(ALL_FILTER_VALUE);
   const [stationFilter, setStationFilter] = useState(ALL_FILTER_VALUE);
@@ -1122,7 +1135,62 @@ export default function TournamentSignupPage({
     ? items.find((item) => item.id === selectedId) ?? null
     : null;
   const selectedTournament = selectedListTournament ?? detail;
-  const selectedExerciseId = detail?.exerciseId ?? selectedListTournament?.exerciseId ?? selectedId;
+  const selectedExerciseId = (detail?.id === selectedId ? detail?.exerciseId : null)
+    ?? selectedListTournament?.exerciseId ?? selectedId;
+  const checkoutContextKey = `${selectedId}:${selectedExerciseId}:${isAuthenticated ? `auth:${phone}` : "public"}:${isRestoringSession}`;
+  const checkout = checkoutResolvedFor === checkoutContextKey ? checkoutSnapshot : null;
+  const discountContextKey = `${checkoutContextKey}:${checkout?.profile?.id}`;
+  const discountPending = Boolean(isAuthenticated && checkout?.profile && !checkout.customPricing
+    && (discountLoading || discountResolvedFor !== discountContextKey));
+  const currentDiscountQuotes = useMemo(
+    () => discountResolvedFor === discountContextKey ? discountQuotes : [],
+    [discountResolvedFor, discountContextKey, discountQuotes],
+  );
+
+  useEffect(() => {
+    checkoutRequestIdRef.current += 1;
+    setCheckout(null);
+    setCheckoutResolvedFor(null);
+    setActionLoading(false);
+    return () => { checkoutRequestIdRef.current += 1; };
+  }, [checkoutContextKey]);
+
+  useEffect(() => {
+    setDiscountQuotes([]);
+    setDiscountResolvedFor(null);
+    setDiscountError(null);
+    setDiscountLoading(false);
+    if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled
+      || !selectedExerciseId || !checkout?.profile?.id || checkout.customPricing) return;
+    const controller = new AbortController();
+    const actorId = checkout.profile.id;
+    const resolvedFor = discountContextKey;
+    setDiscountLoading(true);
+    void apiFetchTournamentSubscriptionDiscounts(selectedExerciseId, controller.signal).then(result => {
+      if (controller.signal.aborted) return;
+      const quotes = result.data?.quotes;
+      if (result.error || !Array.isArray(quotes) || new Set(quotes.map(q => q?.subscriptionId)).size !== quotes.length) {
+        setDiscountError("Не удалось проверить скидку по подписке. Обновите варианты записи.");
+      } else {
+        const available = quotes.filter(q => q?.status === "AVAILABLE");
+        if (available.some(q => !isTournamentSubscriptionDiscountQuote(q, selectedExerciseId, actorId)
+          || Date.parse(q.startsAt) !== Date.parse(String(checkout.exercise.timeFrom || checkout.exercise.startsAt || ""))
+          || !checkout.oneTimes.some(product => matchTournamentSubscriptionDiscount([q], product)))) {
+          setDiscountError("Не удалось подтвердить стоимость по подписке. Обновите варианты записи.");
+        } else {
+          setDiscountQuotes(available);
+        }
+      }
+      setDiscountResolvedFor(resolvedFor);
+      setDiscountLoading(false);
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setDiscountError("Не удалось проверить скидку по подписке. Обновите варианты записи.");
+      setDiscountResolvedFor(resolvedFor);
+      setDiscountLoading(false);
+    });
+    return () => controller.abort();
+  }, [checkout, discountContextKey, selectedExerciseId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
   const previewSubscriptionDiscount = useCallback(async (eventId: string) => {
     await subscriptionUsageShadowPreview({
       action: "BOOK_TOURNAMENT",
@@ -1521,7 +1589,14 @@ export default function TournamentSignupPage({
       setError(null);
       return;
     }
+    if (isRestoringSession || nextCheckout !== checkout
+      || ((product.source === "one-time" || product.tournamentDiscountQuote) && (discountPending || discountError))
+      || (product.tournamentDiscountQuote && !currentDiscountQuotes.includes(product.tournamentDiscountQuote))) {
+      setError("Условия записи изменились. Обновите варианты записи.");
+      return;
+    }
 
+    const requestId = checkoutRequestIdRef.current;
     const profile = nextCheckout.profile;
     const subscriptionProductKey = product.source === "client-subscription"
       ? `${product.source}:${product.id}`
@@ -1542,6 +1617,7 @@ export default function TournamentSignupPage({
         tournament: detail?.raw ?? selectedTournament?.raw ?? selectedTournament,
         exercise: nextCheckout.exercise,
       });
+      if (checkoutRequestIdRef.current !== requestId) return;
       if (result.error || !result.data) {
         if (result.status === 202 && subscriptionProductKey) {
           setError(null);
@@ -1582,13 +1658,20 @@ export default function TournamentSignupPage({
       await loadDetail(selectedId);
       await loadList();
     } finally {
-      setConfirmingSubscriptionProductKey(null);
-      setActionLoading(false);
+      if (checkoutRequestIdRef.current === requestId) {
+        setConfirmingSubscriptionProductKey(null);
+        setActionLoading(false);
+      }
     }
   }, [
     actionLoading,
+    checkout,
+    currentDiscountQuotes,
     detail,
+    discountError,
+    discountPending,
     isAuthenticated,
+    isRestoringSession,
     loadDetail,
     loadList,
     loadPublicRoster,
@@ -1608,6 +1691,7 @@ export default function TournamentSignupPage({
     setActionLoading(true);
     setError(null);
     setCheckout(null);
+    const requestId = ++checkoutRequestIdRef.current;
     const tournamentPayload = detail?.raw ?? selectedTournament?.raw ?? selectedTournament;
     const fetchCheckout = mode === "auth"
       ? apiFetchTournamentVivaCheckout
@@ -1616,6 +1700,7 @@ export default function TournamentSignupPage({
       tournament: tournamentPayload,
       skinPriceLabel: findTournamentSkinPriceLabel(tournamentPayload),
     });
+    if (checkoutRequestIdRef.current !== requestId) return;
     setActionLoading(false);
 
     if (result.error || !result.data) {
@@ -1631,6 +1716,7 @@ export default function TournamentSignupPage({
     if (availableProducts.length === 0) {
       if (mode === "public") {
         setCheckout(result.data);
+        setCheckoutResolvedFor(checkoutContextKey);
         return;
       }
       setError(
@@ -1643,8 +1729,10 @@ export default function TournamentSignupPage({
       return;
     }
     setCheckout(result.data);
+    setCheckoutResolvedFor(checkoutContextKey);
   }, [
     actionLoading,
+    checkoutContextKey,
     detail,
     selectedExerciseId,
     selectedId,
@@ -1792,8 +1880,9 @@ export default function TournamentSignupPage({
       return;
     }
     const mode = isAuthenticated ? "auth" : "public";
-    const checkoutKey = `${selectedId}:${selectedExerciseId}:${mode}`;
-    if (checkoutPreparedFor === checkoutKey && checkout) return;
+    if (isRestoringSession) return;
+    const checkoutKey = checkoutContextKey;
+    if (checkoutPreparedFor === checkoutKey) return;
     if (actionLoading) return;
     setCheckoutPreparedFor(checkoutKey);
     void loadCheckout(mode);
@@ -1802,7 +1891,9 @@ export default function TournamentSignupPage({
     canRegister,
     checkout,
     checkoutPreparedFor,
+    checkoutContextKey,
     isAuthenticated,
+    isRestoringSession,
     loadCheckout,
     registrationResolvedFor,
     selectedExerciseId,
@@ -1812,19 +1903,28 @@ export default function TournamentSignupPage({
 
   useEffect(() => {
     if (subscriptionUsageShadowEnabled) return;
-    if (!pendingPaymentProduct || !isAuthenticated || !checkout?.profile || actionLoading) return;
+    if (!pendingPaymentProduct || !isAuthenticated || !checkout?.profile || actionLoading || discountPending) return;
+    if (discountError) {
+      setPendingPaymentProduct(null);
+      setError(discountError);
+      return;
+    }
     const matchedProduct = findMatchingTournamentPaymentProduct(checkout, pendingPaymentProduct);
     if (!matchedProduct) {
       setPendingPaymentProduct(null);
       setError("После входа выбранный способ оплаты не найден. Выберите способ записи ещё раз.");
       return;
     }
+    const discount = matchTournamentSubscriptionDiscount(currentDiscountQuotes, matchedProduct);
     setPendingPaymentProduct(null);
-    void completeVivaRegistration(checkout, matchedProduct);
+    void completeVivaRegistration(checkout, discount ? buildTournamentSubscriptionDiscountProduct(discount) : matchedProduct);
   }, [
     actionLoading,
     checkout,
     completeVivaRegistration,
+    currentDiscountQuotes,
+    discountError,
+    discountPending,
     isAuthenticated,
     pendingPaymentProduct,
     subscriptionUsageShadowEnabled,
@@ -2270,6 +2370,16 @@ export default function TournamentSignupPage({
                                 })}
                               </div>
                             )}
+                            {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
+                            {discountError && (
+                              <div className="tournament-signup-muted" role="status">
+                                {discountError}
+                                <button type="button" className="tournament-signup-payment-purchase-toggle"
+                                  onClick={() => void loadCheckout("auth")} disabled={actionLoading}>
+                                  Обновить варианты записи
+                                </button>
+                              </div>
+                            )}
                             {purchasableSubscriptionProducts.length > 0 && (
                               <div className="tournament-signup-payment-group">
                                 <button
@@ -2282,21 +2392,35 @@ export default function TournamentSignupPage({
                                 </button>
                                 {isPurchasableListOpen && (
                                   <div className="tournament-signup-payment-purchase-list">
-                                    {purchasableSubscriptionProducts.map((product) => (
+                                    {purchasableSubscriptionProducts.map((product) => {
+                                      const discount = matchTournamentSubscriptionDiscount(currentDiscountQuotes, product);
+                                      const bookingProduct = discount ? buildTournamentSubscriptionDiscountProduct(discount) : product;
+                                      return (
                                       <button
                                         key={`${product.source}-${product.id}`}
                                         className="tournament-signup-payment-option"
                                         type="button"
-                                        onClick={() => void completeVivaRegistration(checkout, product)}
-                                        disabled={actionLoading}
+                                        onClick={() => void completeVivaRegistration(checkout, bookingProduct)}
+                                        disabled={actionLoading || (product.source === "one-time" && (discountPending || Boolean(discountError)))}
                                       >
-                                        <span>{product.name}</span>
-                                        <strong>
-                                          {formatTournamentPaymentProductPrice(product)}
-                                          {formatTournamentPaymentProductVisits(product)}
-                                        </strong>
+                                        <span>
+                                          {product.name}
+                                          {discount && <><br /><span className="tournament-signup-payment-option-note">
+                                            Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}». Посещение не списывается.
+                                          </span></>}
+                                        </span>
+                                        <div className="tournament-signup-payment-option-meta">
+                                          {discount ? <>
+                                            <s className="tournament-signup-payment-option-note">{formatMoneyMinor(discount.basePriceMinor)}</s>
+                                            <strong>{formatMoneyMinor(discount.amountMinor)}</strong>
+                                          </> : <strong>
+                                            {formatTournamentPaymentProductPrice(product)}
+                                            {formatTournamentPaymentProductVisits(product)}
+                                          </strong>}
+                                        </div>
                                       </button>
-                                    ))}
+                                      );
+                                    })}
                                   </div>
                                 )}
                               </div>
@@ -2338,6 +2462,12 @@ export default function TournamentSignupPage({
                         ) : (
                           <div className="tournament-signup-muted">
                             {actionLoading ? "Подбираем способы записи..." : "Способы записи пока недоступны"}
+                            {!actionLoading && checkoutPreparedFor === checkoutContextKey && (
+                              <button type="button" className="tournament-signup-payment-purchase-toggle"
+                                onClick={() => void loadCheckout(isAuthenticated ? "auth" : "public")} disabled={isRestoringSession}>
+                                Повторить загрузку способов записи
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
