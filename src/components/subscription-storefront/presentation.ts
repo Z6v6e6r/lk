@@ -37,7 +37,7 @@ export const friendshipBenefits: readonly SubscriptionBenefitGroup[] = [
 export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день бесплатно:',
+    title: '1 час в день бесплатно на выбор:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -53,7 +53,7 @@ export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
 export const academyBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день бесплатно:',
+    title: '1 час в день бесплатно на выбор:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
