@@ -1,6 +1,6 @@
 /** Authenticated, event-bound monetary quote; amounts are kopecks. */
-export interface GroupSubscriptionDiscountQuote {
-  kind: "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1";
+export interface SubscriptionEventDiscountQuote {
+  kind: "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1" | "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1";
   exerciseId: string;
   actorClientId: string;
   subscriptionId: string;
@@ -16,22 +16,27 @@ export interface GroupSubscriptionDiscountQuote {
   expiresAt: number;
 }
 
-export function isGroupSubscriptionDiscountQuote(
+export interface GroupSubscriptionDiscountQuote extends SubscriptionEventDiscountQuote {
+  kind: "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1";
+}
+
+export function isSubscriptionEventDiscountQuote(
   value: unknown,
+  kind: SubscriptionEventDiscountQuote["kind"],
   exerciseId: string,
   actorClientId: string,
   now = Date.now(),
-): value is GroupSubscriptionDiscountQuote {
+): value is SubscriptionEventDiscountQuote {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const q = value as GroupSubscriptionDiscountQuote;
-  return q.kind === "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1"
+  const q = value as SubscriptionEventDiscountQuote;
+  return q.kind === kind
     && q.exerciseId === exerciseId && q.actorClientId === actorClientId
     && typeof q.subscriptionId === "string" && Boolean(q.subscriptionId.trim())
     && typeof q.subscriptionName === "string" && Boolean(q.subscriptionName.trim())
     && typeof q.productId === "string" && Boolean(q.productId.trim())
-    && q.status === "AVAILABLE" && q.discountPercent === 50
+    && q.status === "AVAILABLE" && Number.isSafeInteger(q.discountPercent) && q.discountPercent >= 0 && q.discountPercent <= 100
     && Number.isSafeInteger(q.basePriceMinor) && q.basePriceMinor > 0 && q.basePriceMinor <= 1_000_000
-    && Number.isSafeInteger(q.amountMinor) && q.amountMinor === Math.round(q.basePriceMinor * 0.5)
+    && Number.isSafeInteger(q.amountMinor) && q.amountMinor === q.basePriceMinor - Math.floor(q.basePriceMinor * q.discountPercent / 100)
     && Number.isFinite(Date.parse(q.startsAt)) && Date.parse(q.startsAt) > now
     && Number.isSafeInteger(q.durationMinutes) && q.durationMinutes > 0 && q.durationMinutes <= 720
     && Number.isFinite(q.evaluatedAt) && Number.isFinite(q.expiresAt)
@@ -39,10 +44,20 @@ export function isGroupSubscriptionDiscountQuote(
     && q.expiresAt > q.evaluatedAt && q.expiresAt - q.evaluatedAt <= 60_000;
 }
 
+export function isGroupSubscriptionDiscountQuote(
+  value: unknown,
+  exerciseId: string,
+  actorClientId: string,
+  now = Date.now(),
+): value is GroupSubscriptionDiscountQuote {
+  return isSubscriptionEventDiscountQuote(value, "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1", exerciseId, actorClientId, now);
+}
+
 export function matchGroupSubscriptionDiscount(
   quotes: GroupSubscriptionDiscountQuote[],
   product: { id: string; cost: number | null; source: string },
 ): GroupSubscriptionDiscountQuote | null {
   if (product.source !== "one-time") return null;
-  return quotes.find(q => q.status === "AVAILABLE" && q.productId === product.id && q.basePriceMinor === product.cost) ?? null;
+  return quotes.find(q => q.kind === "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1"
+    && q.status === "AVAILABLE" && q.productId === product.id && q.basePriceMinor === product.cost) ?? null;
 }
