@@ -25,7 +25,7 @@ const formatSplitSubscriptionValidityLabel = () => 'synthetic expiry';
 const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613, SPLIT_OPEN_GAME_DIRECTION_ID = 4588;
 const detailsSplitShareAmount = null;
 export function useFixture(props) {
- const {activeGameRecord,profileId,profilePhone,updatingGameMeta,updatingGameRoster,joiningSplitPayment} = props;
+ const {activeGameRecord,profileId,profilePhone,updatingGameMeta,updatingGameRoster,joiningSplitPayment,leavePendingMessage=null} = props;
  const gameRecordId=activeGameRecord.id, detailsDateKey=activeGameRecord.booking.date;
  const detailsDurationMinutes=activeGameRecord.booking.durationMinutes, detailsSplitPaymentMetadata=activeGameRecord.metadata.splitPayment;
  const isReadOnlySyntheticGame=false,isDetailsSplitPaymentGame=true,isCurrentUserOrganizerByDetails=false;
@@ -94,7 +94,7 @@ test('new game/metadata object instances do not reload options or reset received
 
 test('temporary save/payment states disable joining without hiding or refetching subscriptions',async()=>{
  const h=harness();await h.resolve();await h.advance(300);
- for(const flag of ['updatingGameMeta','updatingGameRoster','joiningSplitPayment']){
+ for(const flag of ['updatingGameMeta','updatingGameRoster','joiningSplitPayment','leavePendingMessage']){
   h.props[flag]=true;h.render();assert.equal(h.result.canJoin,false);assert.equal(h.result.loading,false);
   assert.equal(h.result.options.length,2);assert.equal(h.result.preview.state,'available');
   h.props[flag]=false;h.render();assert.equal(h.result.canJoin,true);

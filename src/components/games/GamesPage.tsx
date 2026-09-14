@@ -16052,12 +16052,14 @@ export default function GamesPage({
           {leavePendingMessage && (
             <div className="game-empty details-roster-leave-status" role="status" aria-live="polite">
               <span className="details-roster-leave-spinner" aria-hidden="true" />
-              <span>{leavePendingMessage}</span>
-              {!updatingGameRoster && (
-                <button type="button" className="game-button ghost" onClick={() => {
-                  if (!navigateToCabinetFromGamesDetails()) onBack();
-                }}>Вернуться к играм</button>
-              )}
+              <div className="details-roster-actions">
+                <span>{leavePendingMessage}</span>
+                {!updatingGameRoster && (
+                  <button type="button" className="details-roster-action details-roster-move-waitlist" onClick={() => {
+                    if (!navigateToCabinetFromGamesDetails()) onBack();
+                  }}>Вернуться к играм</button>
+                )}
+              </div>
             </div>
           )}
           <div className="details-roster-list">
