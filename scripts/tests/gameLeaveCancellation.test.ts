@@ -41,14 +41,10 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
   const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
   assert.match(gamesPageSource, /selfLeavePreview\?\.request \?\? apiLeavePadelGameAsCurrentUser/);
   assert.match(leaveHandlerSource, /leaveCurrentUserRequest\(gameRecordId\)/);
-  assert.match(leaveHandlerSource, /SELF_REMOVE_RETRY_DELAYS_MS\.length/);
-  assert.match(leaveHandlerSource, /await delay\(retryDelayMs\)/);
-  assert.match(leaveHandlerSource, /\["VIVA_UNVERIFIED", "IN_PROGRESS", "RETRY_REQUIRED"\]\.includes\(state\)/);
-  assert.match(leaveHandlerSource, /transientStatus === 408/);
-  assert.match(leaveHandlerSource, /transientStatus >= 500/);
-  assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED" \|\| leaveResult\.data\.state === "IN_PROGRESS"/);
-  assert.match(leaveHandlerSource, /lastPendingMessage = leaveResult\.data\.message \|\| SELF_REMOVE_PENDING_NOTICE/);
-  assert.match(leaveHandlerSource, /setLeavePendingMessage\(lastPendingMessage\)/);
+  assert.doesNotMatch(leaveHandlerSource, /SELF_REMOVE_RETRY_DELAYS_MS|await delay/);
+  assert.equal((leaveHandlerSource.match(/await leaveCurrentUserRequest\(gameRecordId\)/g) || []).length, 1);
+  assert.match(leaveHandlerSource, /observeGameLeave\(/);
+  assert.match(leaveHandlerSource, /setUpdatingGameRoster\(false\)/);
   assert.match(leaveHandlerSource, /setLeavePendingMessage\(SELF_REMOVE_START_NOTICE\)/);
   assert.doesNotMatch(leaveHandlerSource, /apiCancelPadelSelfRemovalBookings/);
   assert.doesNotMatch(leaveHandlerSource, /patchGameRoster\(/);
@@ -56,7 +52,7 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
   assert.match(leaveHandlerSource, /navigateToCabinetFromGamesDetails\(\)/);
 });
 
-test("exhausted self leave stops the roster spinner instead of pending forever", () => {
+test("completed self leave still verifies fresh membership before success", () => {
   const leaveHandlerStart = gamesPageSource.indexOf("const handleLeaveCurrentUserFromDetails = useCallback");
   const leaveHandlerEnd = gamesPageSource.indexOf("const handleSplitJoinCurrentUserFromDetails = useCallback", leaveHandlerStart);
   const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
@@ -67,13 +63,13 @@ test("exhausted self leave stops the roster spinner instead of pending forever",
   assert.match(leaveHandlerSource, /\.some\(\(player\) => isCurrentUserPlayer\(player\)\)/);
   assert.match(leaveHandlerSource, /finalMessage = SELF_REMOVE_SUCCESS_NOTICE/);
   assert.match(leaveHandlerSource, /setLeavePendingMessage\(null\)/);
-  assert.match(leaveHandlerSource, /setGameRosterError\(lastPendingMessage \|\| SELF_REMOVE_PENDING_NOTICE\)/);
+  assert.match(leaveHandlerSource, /setGameRosterError\(SELF_REMOVE_PENDING_NOTICE\)/);
   assert.doesNotMatch(leaveHandlerSource, /if \(!finalMessage\) \{\s*setLeavePendingMessage\(SELF_REMOVE_PENDING_NOTICE\);\s*return;\s*\}/);
 });
 
 test("self leave renders an in-roster pending spinner and keeps the background state visible", () => {
   assert.match(gamesPageSource, /SELF_REMOVE_START_NOTICE/);
-  assert.match(gamesPageSource, /Ждём подтверждения отмены и освобождения места/);
+  assert.match(gamesPageSource, /Отправляем запрос на выход из игры/);
   assert.match(gamesPageSource, /details-roster-leave-spinner/);
   assert.match(gamesPageSource, /game-empty details-roster-leave-status/);
   assert.match(
@@ -81,7 +77,7 @@ test("self leave renders an in-roster pending spinner and keeps the background s
     /details-roster-leave-status[\s\S]*details-roster-leave-spinner[\s\S]*leavePendingMessage/,
   );
   assert.match(gamesPageSource, /isCurrentUserLeaving \? "Покидает игру"/);
-  assert.match(gamesPageSource, /если закрыть её, повтор продолжится в фоне/);
+  assert.match(gamesPageSource, /Можно вернуться к другим играм/);
 });
 
 test("self leave browser preview is loopback-only and cannot call the real leave API", () => {

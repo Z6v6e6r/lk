@@ -3980,6 +3980,7 @@ export interface PadelSplitParticipantCancelResult {
 }
 
 export type PadelGameSelfLeaveState =
+  | "RETURN_PENDING"
   | "DONE"
   | "IN_PROGRESS"
   | "RETRY_REQUIRED"

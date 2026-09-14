@@ -1,3 +1,5 @@
+import { observeGameLeave } from "./observeGameLeave";
+import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership } from "./gameLeaveMembership";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
 import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
@@ -241,10 +243,10 @@ const MAX_DOUBLES_PLAYERS = 4;
 const MAX_SINGLES_PLAYERS = 2;
 const SELF_REMOVE_SUCCESS_NOTICE = "Вы вышли из игры.";
 const SELF_REMOVE_START_NOTICE =
-  "Запустили процесс выхода из игры. Ждём подтверждения отмены и освобождения места — не закрывайте страницу.";
+  "Отправляем запрос на выход из игры…";
 const SELF_REMOVE_PENDING_NOTICE =
-  "Выход ещё обрабатывается. Можно оставить страницу открытой; если закрыть её, повтор продолжится в фоне.";
-const SELF_REMOVE_RETRY_DELAYS_MS = [0, 1_200, 2_500, 5_000, 10_000] as const;
+  "Запрос на выход принят. Подтверждение ещё не получено. Можно вернуться к другим играм.";
+
 const DETAILS_TEAM_SLOTS_COUNT = 4;
 const MAX_MATCH_RESULT_ATTACHMENTS = 6;
 const MATCH_RESULT_DRAFT_FLUSH_TIMEOUT_MS = 750;
@@ -5049,6 +5051,8 @@ export default function GamesPage({
   const splitSubscriptionSubmitInFlightRef = useRef(false);
   const detailsSubscriptionSubmitInFlightRef = useRef(false);
   const selfLeaveAttemptRef = useRef(0);
+  const selfLeavePostInFlightRef = useRef(false);
+  const selfLeaveObservationRef = useRef<AbortController | null>(null);
   const detailsCameraInputRef = useRef<HTMLInputElement | null>(null);
   const detailsGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const publicCreateEntryHandledRef = useRef(false);
@@ -5108,9 +5112,14 @@ export default function GamesPage({
     profileId,
     profilePhone,
   ]);
-  useEffect(() => () => {
-    selfLeaveAttemptRef.current += 1;
-  }, []);
+  useEffect(() => {
+    setLeavePendingMessage(null);
+    if (selfLeavePostInFlightRef.current) setUpdatingGameRoster(false);
+    return () => {
+      selfLeaveAttemptRef.current += 1;
+      selfLeaveObservationRef.current?.abort();
+    };
+  }, [gameRecordId, profileId, profilePhone, step]);
   const clearPromoState = useCallback((options?: { clearDraft?: boolean }) => {
     setPromoModalOpen(false);
     if (options?.clearDraft !== false) {
@@ -8307,6 +8316,10 @@ export default function GamesPage({
     profilePhone,
     splitPendingNowTs,
   ]);
+  const detailsCurrentUserLeavePayment = useMemo(() => findActiveSplitPaymentForLeave(
+    detailsSplitPaymentMetadata?.payments,
+    { id: profileId, phone: profilePhoneNorm ?? profilePhone },
+  ), [detailsSplitPaymentMetadata, profileId, profilePhoneNorm, profilePhone]);
   const hasCurrentUserActiveSplitPayment = Boolean(detailsCurrentUserActiveSplitPayment);
   const detailsCurrentUserPendingSplitPayment = useMemo<Record<string, unknown> | null>(() => {
     if (!detailsCurrentUserActiveSplitPayment) return null;
@@ -8503,7 +8516,8 @@ export default function GamesPage({
   ]);
   const isDetailsWaitlistEnabled = activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled;
   const canCurrentUserJoinGameInDetails = Boolean(
-    gameRecordId
+    !leavePendingMessage
+    && gameRecordId
     && !isReadOnlySyntheticGame
     && !isCurrentUserOrganizerByDetails
     && !updatingGameRoster
@@ -8527,6 +8541,7 @@ export default function GamesPage({
     && detailsHasFreeSlots
   );
   const canCurrentUserJoinSplitGameInDetails = canCurrentUserCheckSplitSubscriptionsInDetails
+    && !leavePendingMessage
     && !updatingGameRoster
     && !updatingGameMeta
     && !joiningSplitPayment;
@@ -8688,10 +8703,11 @@ export default function GamesPage({
     && shouldShowCurrentUserLeaveActionInDetails
     && !updatingGameRoster
     && !updatingGameMeta
+    && !joiningSplitPayment
     && (
       isCurrentUserConfirmedParticipant
       || detailsWaitlist.some((player) => isCurrentUserPlayer(player))
-      || Boolean(detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired)
+      || Boolean(detailsCurrentUserLeavePayment)
     ),
   );
   const detailsTeamSlotKeys = useMemo(
@@ -13919,45 +13935,25 @@ export default function GamesPage({
       );
       return;
     }
-    if (!canCurrentUserLeaveGameInDetails || !gameRecordId) return;
+    if (!canCurrentUserLeaveGameInDetails || !gameRecordId || leavePendingMessage || selfLeavePostInFlightRef.current) return;
 
     const currentPlayerFromRoster =
       detailsParticipants.find((player) => isCurrentUserPlayer(player))
       ?? detailsWaitlist.find((player) => isCurrentUserPlayer(player))
       ?? null;
-    const currentPlayerFromPendingSplit = (
-      !currentPlayerFromRoster
-      && detailsCurrentUserPendingSplitPayment
-      && !detailsCurrentUserPendingSplitPaymentIsExpired
-    ) ? {
-      id: normalizeBookingId(
-        detailsCurrentUserPendingSplitPayment.clientId
-        ?? detailsCurrentUserPendingSplitPayment.playerId
-        ?? profileId,
-      ),
-      name: (
-        typeof detailsCurrentUserPendingSplitPayment.clientName === "string"
-          ? detailsCurrentUserPendingSplitPayment.clientName
-          : typeof detailsCurrentUserPendingSplitPayment.playerName === "string"
-            ? detailsCurrentUserPendingSplitPayment.playerName
-            : typeof detailsCurrentUserPendingSplitPayment.name === "string"
-              ? detailsCurrentUserPendingSplitPayment.name
-              : profileName
-      ) || "Игрок",
-      phone: normalizePhoneForGame(
-        typeof detailsCurrentUserPendingSplitPayment.phoneNorm === "string"
-          ? detailsCurrentUserPendingSplitPayment.phoneNorm
-          : typeof detailsCurrentUserPendingSplitPayment.phone === "string"
-            ? detailsCurrentUserPendingSplitPayment.phone
-            : profilePhoneNorm ?? profilePhone,
-      ),
-      photo: profilePhoto ?? null,
-      rating: profileGrade ?? null,
-      ratingNumeric: profileRatingNumeric ?? null,
-      source: "INVITE_LINK" as const,
-      status: "PENDING" as const,
-    } satisfies PadelGamePlayer : null;
-    const currentPlayer = currentPlayerFromRoster ?? currentPlayerFromPendingSplit;
+    const currentPlayerFromSplitPayment: PadelGamePlayer | null = detailsCurrentUserLeavePayment
+      ? {
+          id: profileId ?? null,
+          name: profileName || "Игрок",
+          phone: profilePhoneNorm ?? profilePhone ?? null,
+          photo: profilePhoto ?? null,
+          rating: profileGrade ?? null,
+          ratingNumeric: profileRatingNumeric ?? null,
+          source: "INVITE_LINK",
+          status: "PENDING",
+        }
+      : null;
+    const currentPlayer = currentPlayerFromRoster ?? currentPlayerFromSplitPayment;
     if (!currentPlayer) {
       setGameRosterError("Вы не состоите в этой игре");
       return;
@@ -13979,78 +13975,79 @@ export default function GamesPage({
     setLeavePendingMessage(SELF_REMOVE_START_NOTICE);
 
     let finalMessage: string | null = null;
-    let hardError: string | null = null;
-    let lastPendingMessage: string | null = null;
-    for (let attemptIndex = 0; attemptIndex < SELF_REMOVE_RETRY_DELAYS_MS.length; attemptIndex += 1) {
-      const retryDelayMs = SELF_REMOVE_RETRY_DELAYS_MS[attemptIndex];
-      if (retryDelayMs > 0) await delay(retryDelayMs);
-      if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
-
-      const leaveResult = await leaveCurrentUserRequest(gameRecordId);
-      if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
-      if (leaveResult.error || !leaveResult.data) {
-        const state = isRecordObject(leaveResult.error?.raw)
-          ? String(leaveResult.error.raw.state || "").toUpperCase()
-          : "";
-        const transientStatus = Number(leaveResult.error?.status ?? leaveResult.status ?? 0);
-        const shouldRetry = ["VIVA_UNVERIFIED", "IN_PROGRESS", "RETRY_REQUIRED"].includes(state)
-          || !Number.isFinite(transientStatus)
-          || transientStatus === 0
-          || transientStatus === 408
-          || transientStatus === 429
-          || transientStatus >= 500;
-        if (shouldRetry) {
-          lastPendingMessage = leaveResult.error?.message || SELF_REMOVE_PENDING_NOTICE;
-          setLeavePendingMessage(lastPendingMessage);
-          continue;
-        }
-        hardError = leaveResult.error?.message || "Не удалось покинуть игру";
-        break;
-      }
-      if (leaveResult.data.state === "DONE") {
-        finalMessage = leaveResult.data.message || SELF_REMOVE_SUCCESS_NOTICE;
-        break;
-      }
-      if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
-        lastPendingMessage = leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE;
-        setLeavePendingMessage(lastPendingMessage);
-        continue;
-      }
-      hardError = leaveResult.data.message || "Не удалось подтвердить выход из игры";
-      break;
-    }
-
+    selfLeavePostInFlightRef.current = true;
+    const leaveResult = await leaveCurrentUserRequest(gameRecordId)
+      .catch(() => null)
+      .finally(() => { selfLeavePostInFlightRef.current = false; });
     if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
-    if (hardError) {
-      setUpdatingGameRoster(false);
+    // Release the page as soon as the first response arrives. Reconciliation is
+    // read-only and does not hold the roster lock or replay the leave POST.
+    setUpdatingGameRoster(false);
+    if (!leaveResult || leaveResult.error || !leaveResult.data) {
       setLeavePendingMessage(null);
-      setGameRosterError(hardError);
+      setGameRosterError(leaveResult?.error?.message || "Не удалось подтвердить выход. Обновите игру и проверьте участие.");
       return;
     }
-    if (!finalMessage) {
-      // The server may keep answering RETRY_REQUIRED for a state the player has to resolve
-      // (for example when a live Viva booking appeared after a completed exit). Never leave
-      // the roster in a permanently disabled "leaving" state: refresh the game once, treat an
-      // already absent player as exited and otherwise surface the server message.
+    if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
+      setLeavePendingMessage(SELF_REMOVE_PENDING_NOTICE);
+      if (!isSelfLeavePreviewMode) {
+        selfLeaveObservationRef.current?.abort();
+        const controller = new AbortController();
+        selfLeaveObservationRef.current = controller;
+        void observeGameLeave({
+          gameId: gameRecordId,
+          identity: { id: profileId, phone: profilePhoneNorm ?? profilePhone },
+          signal: controller.signal,
+          read: () => apiFetchPadelGameRecord(gameRecordId),
+          onRecord: (record) => upsertGameRecordInStores(record, { communityMode: "if_exists", recordMode: "replace" }),
+        }).then((result) => {
+          if (controller.signal.aborted || selfLeaveAttemptRef.current !== leaveAttemptId) return;
+          setLeavePendingMessage(null);
+          if (result === "complete") {
+            pushCabinetFlashNotice(SELF_REMOVE_SUCCESS_NOTICE);
+            if (!navigateToCabinetFromGamesDetails()) onBack();
+          } else {
+            setGameRosterError("Выход пока не подтверждён. Обновите игру позже; если участие остаётся, обратитесь в поддержку.");
+          }
+        });
+      }
+      return;
+    }
+    if (leaveResult.data.state === "DONE" || leaveResult.data.state === "RETURN_PENDING") {
+      finalMessage = leaveResult.data.message || (leaveResult.data.state === "RETURN_PENDING"
+        ? "Вы вышли из игры. Возврат посещения проверяется"
+        : SELF_REMOVE_SUCCESS_NOTICE);
+    } else {
+      setLeavePendingMessage(null);
+      setGameRosterError(leaveResult.data.message || "Не удалось подтвердить выход из игры");
+      return;
+    }
+
+    if (!isSelfLeavePreviewMode) {
+      // Roster absence alone does not complete leave: WAITLIST/PAYMENT_PENDING can
+      // survive in split payments and keep this game in the personal schedule.
       const refreshed = await apiFetchPadelGameRecord(gameRecordId);
       if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
-      const refreshedRecord = refreshed.data?.id ? (refreshed.data as PadelGameRecord) : null;
+      const refreshedRecord = refreshed.data?.id === gameRecordId ? refreshed.data : null;
       if (refreshedRecord) {
-        upsertGameRecordInStores(refreshedRecord, { communityMode: "if_exists" });
-        const stillActiveMember = [
-          ...(Array.isArray(refreshedRecord.participants) ? refreshedRecord.participants : []),
-          ...(Array.isArray(refreshedRecord.waitlist) ? refreshedRecord.waitlist : []),
-        ].some((player) => isCurrentUserPlayer(player));
-        if (!stillActiveMember) {
-          finalMessage = SELF_REMOVE_SUCCESS_NOTICE;
-        }
+        upsertGameRecordInStores(refreshedRecord, { communityMode: "if_exists", recordMode: "replace" });
       }
-      if (!finalMessage) {
+      if (refreshed.error || !refreshedRecord || hasActiveGameLeaveMembership(refreshedRecord, {
+        id: profileId,
+        phone: profilePhoneNorm ?? profilePhone,
+      })) {
         setUpdatingGameRoster(false);
         setLeavePendingMessage(null);
-        setGameRosterError(lastPendingMessage || SELF_REMOVE_PENDING_NOTICE);
+        setGameRosterError(refreshed.error?.message || "Выход ещё не подтверждён. Повторите выход, чтобы завершить удаление записи участия.");
         return;
       }
+      finalMessage = finalMessage || SELF_REMOVE_SUCCESS_NOTICE;
+    }
+    if (!finalMessage) {
+      setUpdatingGameRoster(false);
+      setLeavePendingMessage(null);
+      setGameRosterError(SELF_REMOVE_PENDING_NOTICE);
+      return;
     }
     setUpdatingGameRoster(false);
     setLeavePendingMessage(null);
@@ -14065,8 +14062,7 @@ export default function GamesPage({
     detailsWaitlist,
     isCurrentUserPlayer,
     isDetailsOrganizerPlayer,
-    detailsCurrentUserPendingSplitPayment,
-    detailsCurrentUserPendingSplitPaymentIsExpired,
+    detailsCurrentUserLeavePayment,
     profileName,
     profileId,
     profilePhone,
@@ -14075,6 +14071,7 @@ export default function GamesPage({
     profileGrade,
     profileRatingNumeric,
     leaveCurrentUserRequest,
+    leavePendingMessage,
     isSelfLeavePreviewMode,
     onBack,
     rejectSubscriptionUsageShadowAction,
@@ -16056,6 +16053,11 @@ export default function GamesPage({
             <div className="game-empty details-roster-leave-status" role="status" aria-live="polite">
               <span className="details-roster-leave-spinner" aria-hidden="true" />
               <span>{leavePendingMessage}</span>
+              {!updatingGameRoster && (
+                <button type="button" className="game-button ghost" onClick={() => {
+                  if (!navigateToCabinetFromGamesDetails()) onBack();
+                }}>Вернуться к играм</button>
+              )}
             </div>
           )}
           <div className="details-roster-list">
@@ -17039,6 +17041,15 @@ export default function GamesPage({
                       Покинуть игру
                     </button>
                   </div>
+                ) : detailsCurrentUserLeavePayment ? (
+                  <button
+                    className="game-join-split-pay-option"
+                    type="button"
+                    disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
+                    onClick={() => { void handleLeaveCurrentUserFromDetails(); }}
+                  >
+                    {leavePendingMessage ? "Покидаем игру..." : "Покинуть игру"}
+                  </button>
                 ) : (
                   <div className="game-join-split-pay-actions">
                     {detailsSplitSubscriptionsLoading && (
