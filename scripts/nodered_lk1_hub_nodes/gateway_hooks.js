@@ -240,13 +240,15 @@ if (ctx.lk1 && ctx.action !== "release") {
 
 // HUB_CONFIRMATION
 if (ctx.lk1) {
+    if (!lk1BookingSelfReadback(ctx)) return lk1Stop(ctx, "LK1_BOOKING_READBACK_UNVERIFIED");
     if (!isHttpOk(msg.statusCode) || !hasCompleteBookingList(msg.payload)) return lk1Stop(ctx, "LK1_BOOKING_READBACK_UNAVAILABLE");
     const expectedBookingId = ctx.immediateBookingId || ctx.confirmedBookingId;
     if (!expectedBookingId) return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
     const matches = extractItems(msg.payload).filter((booking) => isObj(booking)
       && normalizeId(bookingId(booking)) === normalizeId(expectedBookingId)
       && !isInactiveBooking(booking) && normalizeId(bookingExerciseId(booking)) === normalizeId(ctx.exerciseId)
-      && normalizeId(bookingClientId(booking)) === normalizeId(ctx.actorClientId)
+      && lk1BookingOwnerMatches(booking, ctx.actorClientId)
+      && (!lk1EventMoneyBooking(ctx) || lk1BookingUnpaidOnPlace(booking))
       && (ctx.lk1.decision.subscriptionVisitCount === 1
         && (ctx.managedAction !== "JOIN_GAME" || ctx.lk1.decision.benefit.finalPriceMinor === 0)
         ? normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)

@@ -33,6 +33,13 @@ if (ctx?.lk1) {
     return [msg, null];
   }
   if (ctx.step === "lk1_payment_products" && responseStatus === 200) {
+    if (ctx.caller !== "split" || !["JOIN_GAME", "CREATE_GAME"].includes(ctx.managedAction)
+      || ctx.lk1.target?.category !== "GAME") {
+      msg.statusCode = 202;
+      msg.payload = { ok: true, state: "PENDING_CONFIRMATION", operationId: ctx.operationId,
+        details: { code: "LK1_PAYMENT_ROUTE_INVALID" } };
+      return [null, msg];
+    }
     const splitCtx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
     Object.assign(splitCtx, { step: "available_products", clientId: ctx.actorClientId,
       clientPhone: ctx.actorPhone, studioId: ctx.studioId, bookingId: ctx.confirmedBookingId,

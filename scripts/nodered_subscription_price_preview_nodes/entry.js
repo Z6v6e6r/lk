@@ -9,14 +9,14 @@ if (Object.keys(body || {}).some(key => !['target', 'subscriptionIds'].includes(
 if (!auth || !/^Bearer\s+\S+$/i.test(auth) || !body || typeof body !== 'object' || Array.isArray(body)) return bad('PRICE_PREVIEW_AUTH_REQUIRED');
 const target = body.target;
 const ids = body.subscriptionIds;
-const groupTraining = target?.targetKind === 'GROUP_TRAINING';
-if (groupTraining) {
+const eventCategory = ['GROUP_TRAINING', 'TOURNAMENT'].includes(target?.targetKind) ? target.targetKind : null;
+if (eventCategory) {
   if (!target || Object.keys(target).some(key => !['targetKind', 'exerciseId'].includes(key)) || !uuid(target.exerciseId)
     || (ids !== undefined && (!Array.isArray(ids) || ids.length < 1 || ids.length > 20
       || new Set(ids).size !== ids.length || ids.some(id => !uuid(id))))) return bad('PRICE_PREVIEW_REQUEST_INVALID');
   msg._subscriptionPricePreview = { done: false, step: 'start', auth, tenantKey: 'iSkq6G',
-    target: { ...target }, exerciseId: target.exerciseId, groupTraining: true, requestedIds: ids,
-    selectionKey: JSON.stringify(['GROUP_TRAINING', target.exerciseId]), startedAt: Date.now() };
+    target: { ...target }, exerciseId: target.exerciseId, eventCategory, groupTraining: eventCategory === 'GROUP_TRAINING', requestedIds: ids,
+    selectionKey: JSON.stringify([eventCategory, target.exerciseId]), startedAt: Date.now() };
   return msg;
 }
 const existing = target?.targetKind === 'EXISTING_GAME';
