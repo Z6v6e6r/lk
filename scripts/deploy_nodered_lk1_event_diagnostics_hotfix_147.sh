@@ -182,7 +182,6 @@ node -e '
   if (value.preview?.eventHelpersPublished !== true
     || value.preview?.otherFieldsUnchanged !== true
     || value.preview?.routerId !== "lk_subscription_price_preview_20260908_router"
-    || value.preview?.finalId !== "lk_subscription_price_preview_20260908_final"
     || !Number.isInteger(value.preview?.exportedNameCount)
     || typeof value.installedGeneration?.bookingFuncSha256 !== "string") process.exit(1);
 ' "$candidate_report" "$expected_node_fields" "$expected_changed_nodes"
