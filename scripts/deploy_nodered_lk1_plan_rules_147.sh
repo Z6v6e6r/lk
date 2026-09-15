@@ -2,21 +2,21 @@
 
 # Guarded deployment of the focused LK1 plan-rules generation.
 #
-# Publishes one reviewed flow whose only change is two nodes:
+# Publishes one reviewed flow whose only changes are three nodes:
 #   * lk_subscription_booking_router_20260804 — the plan-rules resolver replaces the
 #     single-product `lk1Config`, the legacy cohort stays out of the contour, and the
 #     node `initialize` (setup) gains the reviewed `subscriptions_lk1_plan_rules`
 #     activation block (guard, write, readback) next to the untouched HUB writer;
 #   * lk_subscription_managed_policy_20260820 — the evaluator validates the rule
-#     product and replaces the active-bookings blocker with `aboveActiveLimit`.
-#
-# The price-preview node is deliberately NOT part of this generation: its reviewed
-# delta is owned by scripts/patch_nodered_subscription_price_preview.mjs and must be
-# added here (and to the patcher) before it may ship.
+#     product and replaces the active-bookings blocker with `aboveActiveLimit`;
+#   * lk_subscription_price_preview_20260908_router — the reviewed preview composition
+#     resolves the same plan rule as the booking gateway, so preview and write agree.
+#     It is fed the installed split/join/allowance shas explicitly; see
+#     PLAN_RULES_INSTALLED_GENERATION in scripts/patch_live_lk1_plan_rules.mjs.
 #
 # The candidate carries a `func` *and* `initialize` change on the gateway, so the
 # allowance is expressed with the exact-graph contract (formatVersion 2) instead of
-# the function-only contract.
+# the function-only contract. No node is added.
 #
 # Requires an explicit confirmation variable, a clean main checkout equal to
 # origin/main, and the exact live preimage. Everything else fails closed.
@@ -31,14 +31,16 @@ fi
 
 host="lk-primary-147"
 deployment_id="lk1-plan-rules"
-allow_nodes=(lk_subscription_booking_router_20260804 lk_subscription_managed_policy_20260820)
-expected_changed_nodes=2
-# Field-level allowance: the gateway changes both its function body and its setup.
+allow_nodes=(lk_subscription_booking_router_20260804 lk_subscription_managed_policy_20260820 lk_subscription_price_preview_20260908_router)
+expected_changed_nodes=3
+# Field-level allowance: the gateway changes both its function body and its setup; the
+# preview keeps every field but `func`.
 allow_changes=(
   "lk_subscription_booking_router_20260804:func,initialize"
   "lk_subscription_managed_policy_20260820:func"
+  "lk_subscription_price_preview_20260908_router:func"
 )
-expected_node_fields='{"lk_subscription_booking_router_20260804":["func","initialize"],"lk_subscription_managed_policy_20260820":["func"]}'
+expected_node_fields='{"lk_subscription_booking_router_20260804":["func","initialize"],"lk_subscription_managed_policy_20260820":["func"],"lk_subscription_price_preview_20260908_router":["func"]}'
 smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
@@ -168,9 +170,8 @@ node scripts/patch_live_lk1_plan_rules.mjs \
   --output "$candidate_flow" \
   --report "$candidate_report" >/dev/null
 
-# The generation must be exactly the two reviewed nodes with the reviewed fields: a
-# candidate that also touches the price-preview node (or anything else) is not this
-# generation.
+# The generation must be exactly the three reviewed nodes with the reviewed fields: a
+# candidate that also touches anything else is not this generation.
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
   const expected=JSON.parse(process.argv[2]);
@@ -182,7 +183,10 @@ node -e '
   for (const change of changes) {
     if (JSON.stringify(change.fields) !== JSON.stringify(expected[change.id])) process.exit(1);
   }
-  if (value.previewNodeId === changes.find((change) => change.id === value.previewNodeId)?.id) process.exit(1);
+  if (value.addedNodeCount !== 0) process.exit(1);
+  if (value.previewNode?.otherFieldsUnchanged !== true
+    || value.previewNode?.initializeUnchanged !== true
+    || value.previewNode?.resolverReachable !== true) process.exit(1);
 ' "$candidate_report" "$expected_node_fields" "$expected_changed_nodes"
 
 # Independent exact-graph contract (the candidate changes the gateway `func` *and*

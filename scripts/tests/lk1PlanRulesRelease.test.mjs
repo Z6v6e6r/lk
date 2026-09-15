@@ -11,10 +11,10 @@ import {
   PLAN_RULES_EVALUATOR_NODE_ID,
   PLAN_RULES_GATEWAY_DELTAS,
   PLAN_RULES_GATEWAY_NODE_ID,
+  PLAN_RULES_INSTALLED_GENERATION,
   PLAN_RULES_MODULE_SHA256,
   PLAN_RULES_PENDING_DELTAS,
   PLAN_RULES_PREVIEW_NODE_ID,
-  PLAN_RULES_PREVIEW_PREREQUISITES,
   PLAN_RULES_REVIEWED_EVALUATOR_SHA256,
   PLAN_RULES_SOURCE_NODE_COUNT,
   PLAN_RULES_SOURCE_SHA256,
@@ -24,6 +24,7 @@ import {
   buildGatewayBody,
   buildGatewayInitialize,
   composeLk1PlanRulesArtifacts,
+  composeLk1PlanRulesPreviewBody,
   extractEmbeddedEvaluatorBody,
   patchLk1PlanRulesEvaluatorBody,
   patchLk1PlanRulesGatewayBody,
@@ -70,8 +71,19 @@ function liveArtifacts() {
     liveGateway: fieldOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID, 'func'),
     liveGatewayInitialize: fieldOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID, 'initialize'),
     liveEvaluator: fieldOf(liveFlow, PLAN_RULES_EVALUATOR_NODE_ID, 'func'),
+    preview: fieldOf(built.flow, PLAN_RULES_PREVIEW_NODE_ID, 'func'),
+    livePreview: fieldOf(liveFlow, PLAN_RULES_PREVIEW_NODE_ID, 'func'),
   };
   return cachedArtifacts;
+}
+
+// The installed allowance block of the booking gateway: the composition reuses it
+// verbatim instead of re-applying the paid-join transform.
+function installedAllowanceBlock(flow) {
+  const start = 'if (ctx.step === "lk1_usage_operations") {';
+  const end = 'if (ctx.step === "lk1_policy_decision") {';
+  const body = flow.find((node) => node.id === PLAN_RULES_GATEWAY_NODE_ID).func;
+  return body.slice(body.indexOf(start), body.indexOf(end));
 }
 
 // A stand-in for the Node-RED `global` context: enough to run a setup body.
@@ -108,10 +120,12 @@ test('the reviewed sources are exactly the pinned generation inputs', () => {
   // Generation pins: live and patched bodies must differ for every changed field.
   assert.equal(PLAN_RULES_TARGETS.gateway.id, PLAN_RULES_GATEWAY_NODE_ID);
   assert.equal(PLAN_RULES_TARGETS.evaluator.id, PLAN_RULES_EVALUATOR_NODE_ID);
+  assert.equal(PLAN_RULES_TARGETS.preview.id, PLAN_RULES_PREVIEW_NODE_ID);
   assert.notEqual(PLAN_RULES_TARGETS.gateway.liveFuncSha256, PLAN_RULES_TARGETS.gateway.patchedFuncSha256);
   assert.notEqual(PLAN_RULES_TARGETS.gateway.liveInitializeSha256,
     PLAN_RULES_TARGETS.gateway.patchedInitializeSha256);
   assert.notEqual(PLAN_RULES_TARGETS.evaluator.liveFuncSha256, PLAN_RULES_TARGETS.evaluator.patchedFuncSha256);
+  assert.notEqual(PLAN_RULES_TARGETS.preview.liveFuncSha256, PLAN_RULES_TARGETS.preview.patchedFuncSha256);
   assert.equal(new Set(PLAN_RULES_GATEWAY_DELTAS.map((delta) => delta.id)).size,
     PLAN_RULES_GATEWAY_DELTAS.length);
 });
@@ -250,22 +264,18 @@ test('the transition initialize guards the prior, writes once and reads back', (
   assert.equal(blind.store.get(LK1_PLAN_RULES_KEY).rules[0].maxActiveBookings, 5);
 });
 
-test('the price-preview amendment is a documented pending slot, not part of this generation', () => {
-  assert.equal(PLAN_RULES_PENDING_DELTAS.length, 1);
-  const [pending] = PLAN_RULES_PENDING_DELTAS;
-  assert.equal(pending.nodeId, PLAN_RULES_PREVIEW_NODE_ID);
-  assert.equal(pending.status, 'PENDING_COMPOSITION');
-  assert.equal(pending.owner, 'scripts/patch_nodered_subscription_price_preview.mjs');
-  assert.deepEqual(pending.fields, ['func']);
-  assert.ok(pending.reason.length > 0);
-  // The blocking preconditions are recorded with their measured shas.
-  const prerequisites = PLAN_RULES_PREVIEW_PREREQUISITES;
-  for (const [key, value] of Object.entries(prerequisites)) {
+test('the preview delta pins the installed generation and leaves no pending delta', () => {
+  // The preview amendment is applied, so nothing is deferred for this generation.
+  assert.deepEqual(PLAN_RULES_PENDING_DELTAS, []);
+  // Line C's reviewed defaults are the pre-split-nominal-share preimages, so the
+  // release names the installed postimages explicitly instead of rewriting them.
+  const installed = PLAN_RULES_INSTALLED_GENERATION;
+  for (const [key, value] of Object.entries(installed)) {
     assert.match(value, /^[0-9a-f]{64}$/, key);
   }
-  assert.notEqual(prerequisites.reviewedSplitPinSha256, prerequisites.installedSplitFuncSha256);
-  assert.notEqual(prerequisites.reviewedJoinPinSha256, prerequisites.installedJoinFuncSha256);
-  // The preview node is not changed by this patcher, so it is not in the allow-list.
+  assert.notEqual(installed.reviewedSplitPinSha256, installed.splitFuncSha256);
+  assert.notEqual(installed.reviewedJoinPinSha256, installed.joinFuncSha256);
+  // The preview delta is a composition, not one of the literal gateway string deltas.
   assert.ok(!PLAN_RULES_GATEWAY_DELTAS.some((delta) => delta.id.includes('preview')));
 });
 
@@ -281,22 +291,25 @@ test('anchor handling fails closed on ambiguous or composed deltas', () => {
     /already declares the embedded plan-rules symbol/);
 });
 
-test('the patcher applies to the live 147 snapshot as exactly two changed nodes',
+test('the patcher applies to the live 147 snapshot as exactly three changed nodes',
   { skip: snapshotSkip }, () => {
-    const { built, candidateText, gateway, gatewayInitialize, evaluator,
-      liveGateway, liveGatewayInitialize, liveEvaluator } = liveArtifacts();
-    assert.equal(built.changes.length, 2);
+    const { built, candidateText, gateway, gatewayInitialize, evaluator, preview,
+      liveGateway, liveGatewayInitialize, liveEvaluator, livePreview } = liveArtifacts();
+    assert.equal(built.changes.length, 3);
+    assert.equal(built.addedNodeCount, 0);
     assert.equal(built.flow.length, PLAN_RULES_SOURCE_NODE_COUNT);
-    assert.equal(built.previewNodeUnchanged, true);
     assert.deepEqual(built.changes.map((change) => change.id).sort(),
-      [PLAN_RULES_EVALUATOR_NODE_ID, PLAN_RULES_GATEWAY_NODE_ID].sort());
+      [PLAN_RULES_EVALUATOR_NODE_ID, PLAN_RULES_GATEWAY_NODE_ID, PLAN_RULES_PREVIEW_NODE_ID].sort());
     const gatewayChange = built.changes.find((change) => change.id === PLAN_RULES_GATEWAY_NODE_ID);
     const evaluatorChange = built.changes.find((change) => change.id === PLAN_RULES_EVALUATOR_NODE_ID);
+    const previewChange = built.changes.find((change) => change.id === PLAN_RULES_PREVIEW_NODE_ID);
     assert.deepEqual(gatewayChange.fields, ['func', 'initialize']);
     assert.deepEqual(evaluatorChange.fields, ['func']);
+    assert.deepEqual(previewChange.fields, ['func']);
     assert.notEqual(gatewayChange.func.beforeSha256, gatewayChange.func.afterSha256);
     assert.notEqual(gatewayChange.initialize.beforeSha256, gatewayChange.initialize.afterSha256);
     assert.equal(evaluatorChange.initialize, undefined);
+    assert.equal(previewChange.initialize, undefined);
     // The candidate is the live flow with exactly those fields rewritten.
     assert.equal(candidateText, `${JSON.stringify(built.flow, null, 2)}\n`);
     assert.equal(sha256(liveGateway), PLAN_RULES_TARGETS.gateway.liveFuncSha256);
@@ -305,10 +318,13 @@ test('the patcher applies to the live 147 snapshot as exactly two changed nodes'
     assert.equal(sha256(gatewayInitialize), PLAN_RULES_TARGETS.gateway.patchedInitializeSha256);
     assert.equal(sha256(liveEvaluator), PLAN_RULES_TARGETS.evaluator.liveFuncSha256);
     assert.equal(sha256(evaluator), PLAN_RULES_TARGETS.evaluator.patchedFuncSha256);
+    assert.equal(sha256(livePreview), PLAN_RULES_TARGETS.preview.liveFuncSha256);
+    assert.equal(sha256(preview), PLAN_RULES_TARGETS.preview.patchedFuncSha256);
 
     // A Node-RED function body must stay parseable with the Node-RED arguments.
     new Function('msg', 'node', 'env', 'global', gateway);
     new Function('msg', 'node', 'env', 'global', evaluator);
+    new Function('msg', 'node', 'env', 'global', preview);
     new Function('global', 'env', 'node', 'flow', gatewayInitialize);
 
     // Gateway: the resolver module is embedded once, the reviewed config replaced the
@@ -339,6 +355,26 @@ test('the patcher applies to the live 147 snapshot as exactly two changed nodes'
     // The only remaining occurrence belongs to the untouched managed/CUP path.
     assert.equal(count(evaluator, '"ACTIVE_SERVICES_LIMIT_REACHED"'), 1);
     assert.ok(evaluator.includes('"Достигнут лимит активных услуг по подписке"'));
+
+    // Preview: the reviewed composition reaches the shared resolver, embeds the
+    // installed allowance block verbatim, and touches nothing but `func`.
+    assert.equal(count(preview, 'canonical.resolveLk1Rule'), 2,
+      'the reviewed preview body checks and then calls the shared resolver');
+    assert.equal(count(preview, 'const canonical = (() => {'), 1);
+    const installedBlock = installedAllowanceBlock(built.flow);
+    assert.ok(preview.includes(installedBlock),
+      'the preview must embed the installed allowance block byte for byte');
+    assert.equal(installedBlock, installedAllowanceBlock(JSON.parse(fs.readFileSync(LIVE_SNAPSHOT).toString('utf8'))));
+    assert.equal(sha256(installedBlock), PLAN_RULES_INSTALLED_GENERATION.allowanceBlockSha256);
+    assert.equal(built.previewNode.id, PLAN_RULES_PREVIEW_NODE_ID);
+    assert.deepEqual(built.previewNode.fields, ['func']);
+    assert.equal(built.previewNode.initializeUnchanged, true);
+    assert.equal(built.previewNode.otherFieldsUnchanged, true);
+    assert.equal(built.previewNode.resolverReachable, true);
+    assert.ok(Number.isInteger(built.previewNode.helperCount) && built.previewNode.helperCount > 0);
+    assert.ok(Number.isInteger(built.previewNode.pricingNameCount) && built.previewNode.pricingNameCount > 0);
+    // The composed preview must still carry the resolved config helper exactly once.
+    assert.equal(count(preview, 'canonical.lk1Config'), 1);
   });
 
 test('the released gateway initialize keeps the HUB writer and adds the plan-rules writer',
@@ -416,6 +452,53 @@ test('the embedded evaluator preimage is the base generation source of commit e2
     assert.equal(sha256(embedded), sha256(baseSource));
   });
 
+test('the preview delta is refused on a second run and on any drift',
+  { skip: snapshotSkip }, () => {
+    const { built, livePreview } = liveArtifacts();
+    // The already patched candidate: the resolver marker is present.
+    const patchedFlow = () => structuredClone(built.flow);
+    // The same generation with the live preview body: gateway/evaluator are patched, so
+    // only the preview composition gate is exercised.
+    const freshFlow = () => {
+      const flow = structuredClone(built.flow);
+      flow.find((node) => node.id === PLAN_RULES_PREVIEW_NODE_ID).func = livePreview;
+      return flow;
+    };
+
+    // Re-running the preview composition over its own result is refused.
+    assert.throws(() => composeLk1PlanRulesPreviewBody(patchedFlow()), /already patched/);
+    // A single extra byte in the live preview body is refused by the preimage pin.
+    const drifted = freshFlow();
+    drifted.find((node) => node.id === PLAN_RULES_PREVIEW_NODE_ID).func = `${livePreview} `;
+    assert.throws(() => composeLk1PlanRulesPreviewBody(drifted),
+      /Preview live preimage drift \(func\)/);
+
+    // The installed-generation pins are the review gate: a wrong split/join/allowance
+    // pin must fail closed instead of composing a preview from an unreviewed body.
+    assert.throws(() => composeLk1PlanRulesPreviewBody(freshFlow(),
+      { installedUsageSha256: '0'.repeat(64) }),
+    /Price preview installed allowance block changed/);
+    assert.throws(() => composeLk1PlanRulesPreviewBody(freshFlow(), { pricingSha256: '0'.repeat(64) }),
+      /Price preview canonical pricing source changed/);
+    assert.throws(() => composeLk1PlanRulesPreviewBody(freshFlow(), { joinSha256: '0'.repeat(64) }),
+      /Price preview canonical join source changed/);
+    // booking/evaluator are fixed pins too: a flow that does not carry the reviewed
+    // patched bodies is refused before any pin of line C's composition is consulted.
+    const brokenGateway = freshFlow();
+    brokenGateway.find((node) => node.id === PLAN_RULES_GATEWAY_NODE_ID).func += '\n';
+    assert.throws(() => composeLk1PlanRulesPreviewBody(brokenGateway),
+      /Preview booking pin mismatch/);
+    const brokenEvaluator = freshFlow();
+    brokenEvaluator.find((node) => node.id === PLAN_RULES_EVALUATOR_NODE_ID).func += '\n';
+    assert.throws(() => composeLk1PlanRulesPreviewBody(brokenEvaluator),
+      /Preview evaluator pin mismatch/);
+
+    // A preview node that is missing required fields is refused before composing.
+    const brokenPreview = freshFlow();
+    brokenPreview.find((node) => node.id === PLAN_RULES_PREVIEW_NODE_ID).outputs = 0;
+    assert.throws(() => composeLk1PlanRulesPreviewBody(brokenPreview), /Node contract mismatch/);
+  });
+
 test('a second run and any drift are refused', { skip: snapshotSkip }, () => {
   const { gateway, gatewayInitialize, evaluator, built,
     liveGateway, liveGatewayInitialize, liveEvaluator } = liveArtifacts();
@@ -468,7 +551,7 @@ test('compose refuses a malformed flow and an absent preview node',
       /is absent/);
   });
 
-test('prepare_exact_graph_contract allows initialize on the gateway and keeps two nodes',
+test('prepare_exact_graph_contract allows initialize and keeps exactly three nodes',
   { skip: snapshotSkip }, () => {
     const { liveBytes, built, candidateText } = liveArtifacts();
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-plan-rules-test-'));
@@ -485,10 +568,11 @@ test('prepare_exact_graph_contract allows initialize on the gateway and keeps tw
       '--deployment-id', PLAN_RULES_DEPLOYMENT_ID,
       '--allow-change', `${PLAN_RULES_GATEWAY_NODE_ID}:func,initialize`,
       '--allow-change', `${PLAN_RULES_EVALUATOR_NODE_ID}:func`,
+      '--allow-change', `${PLAN_RULES_PREVIEW_NODE_ID}:func`,
     ], { cwd: repoRoot, encoding: 'utf8' });
     const receipt = JSON.parse(stdout);
     assert.equal(receipt.deploymentId, PLAN_RULES_DEPLOYMENT_ID);
-    assert.equal(receipt.changedNodeCount, 2);
+    assert.equal(receipt.changedNodeCount, 3);
     assert.equal(receipt.addedNodeCount, 0);
     assert.equal(receipt.sourceSha256, PLAN_RULES_SOURCE_SHA256);
     assert.equal(receipt.candidateSha256, sha256(candidateText));
@@ -501,14 +585,16 @@ test('prepare_exact_graph_contract allows initialize on the gateway and keeps tw
     assert.equal(contract.deploymentId, PLAN_RULES_DEPLOYMENT_ID);
     assert.equal(contract.sourceSha256, sha256(liveBytes));
     assert.equal(contract.candidateSha256, sha256(candidateText));
-    assert.equal(contract.allowedChanges.length, 2);
+    assert.equal(contract.allowedChanges.length, 3);
     assert.equal(contract.allowedAdditions.length, 0);
     const byId = new Map(contract.allowedChanges.map((change) => [change.id, change]));
     assert.deepEqual([...byId.keys()].sort(),
-      [PLAN_RULES_EVALUATOR_NODE_ID, PLAN_RULES_GATEWAY_NODE_ID].sort());
-    // The gateway allowance must explicitly permit the setup body.
+      [PLAN_RULES_EVALUATOR_NODE_ID, PLAN_RULES_GATEWAY_NODE_ID, PLAN_RULES_PREVIEW_NODE_ID].sort());
+    // The gateway allowance must explicitly permit the setup body; the preview is a
+    // `func`-only rewrite of an existing node.
     assert.deepEqual(byId.get(PLAN_RULES_GATEWAY_NODE_ID).fields, ['func', 'initialize']);
     assert.deepEqual(byId.get(PLAN_RULES_EVALUATOR_NODE_ID).fields, ['func']);
+    assert.deepEqual(byId.get(PLAN_RULES_PREVIEW_NODE_ID).fields, ['func']);
     // Per-node digests must match the patcher report for the same fields.
     const jsonSha = (value) => sha256(Buffer.from(JSON.stringify(value), 'utf8'));
     const liveFlow = JSON.parse(liveBytes.toString('utf8'));
@@ -525,6 +611,15 @@ test('prepare_exact_graph_contract allows initialize on the gateway and keeps tw
       sha256(nodeOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID).initialize));
     assert.equal(reported.initialize.afterSha256,
       sha256(nodeOf(candidateFlow, PLAN_RULES_GATEWAY_NODE_ID).initialize));
+    const reportedPreview = built.changes.find((item) => item.id === PLAN_RULES_PREVIEW_NODE_ID);
+    assert.equal(reportedPreview.func.beforeSha256,
+      sha256(nodeOf(liveFlow, PLAN_RULES_PREVIEW_NODE_ID).func));
+    assert.equal(reportedPreview.func.afterSha256,
+      sha256(nodeOf(candidateFlow, PLAN_RULES_PREVIEW_NODE_ID).func));
+    // The preview keeps every field but `func` in the candidate.
+    const previewLive = { ...nodeOf(liveFlow, PLAN_RULES_PREVIEW_NODE_ID), func: null };
+    const previewCandidate = { ...nodeOf(candidateFlow, PLAN_RULES_PREVIEW_NODE_ID), func: null };
+    assert.deepEqual(previewCandidate, previewLive);
 
     // The function-only contract cannot express this generation: `initialize` is not
     // a permitted function-only field, which is exactly why the wrapper uses the
@@ -539,6 +634,7 @@ test('prepare_exact_graph_contract allows initialize on the gateway and keeps tw
         '--deployment-id', PLAN_RULES_DEPLOYMENT_ID,
         '--allow-node', PLAN_RULES_GATEWAY_NODE_ID,
         '--allow-node', PLAN_RULES_EVALUATOR_NODE_ID,
+        '--allow-node', PLAN_RULES_PREVIEW_NODE_ID,
       ], { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' });
     } catch (error) {
       functionOnlyError = error;
@@ -554,19 +650,22 @@ test('the deploy wrapper keeps the confirmation gate, the exact allowance and ro
     path.join(repoRoot, 'scripts/deploy_nodered_lk1_plan_rules_147.sh'), 'utf8');
   assert.ok(wrapper.includes('NODE_RED_LK1_PLAN_RULES_DEPLOY:-}" != "CONFIRM_147"'));
   assert.ok(wrapper.includes('clean main checkout'));
-  assert.ok(wrapper.includes(`allow_nodes=(${PLAN_RULES_GATEWAY_NODE_ID} ${PLAN_RULES_EVALUATOR_NODE_ID})`));
+  assert.ok(wrapper.includes(`allow_nodes=(${PLAN_RULES_GATEWAY_NODE_ID} ${PLAN_RULES_EVALUATOR_NODE_ID} ${PLAN_RULES_PREVIEW_NODE_ID})`));
   assert.ok(wrapper.includes(`"${PLAN_RULES_GATEWAY_NODE_ID}:func,initialize"`));
   assert.ok(wrapper.includes(`"${PLAN_RULES_EVALUATOR_NODE_ID}:func"`));
-  // expected_changed_nodes stays the node count (2), not the field count.
-  assert.ok(wrapper.includes('expected_changed_nodes=2'));
+  assert.ok(wrapper.includes(`"${PLAN_RULES_PREVIEW_NODE_ID}:func"`));
+  // expected_changed_nodes is the node count (3), not the field count.
+  assert.ok(wrapper.includes('expected_changed_nodes=3'));
   assert.ok(wrapper.includes('prepare_exact_graph_contract.mjs'));
   assert.equal(wrapper.includes('nodered_reviewed_flow_deploy/prepare_contract.mjs'), false);
   assert.ok(wrapper.includes('patch_live_lk1_plan_rules.mjs'));
   assert.ok(wrapper.includes('rollback --deployment-id'));
   assert.ok(wrapper.includes('sha256sum'));
   assert.ok(wrapper.includes('deploy_reviewed_flow_147_remote.mjs'));
-  // The preview node must not be in the allowance of this generation.
-  assert.equal(wrapper.includes(PLAN_RULES_PREVIEW_NODE_ID), false);
+  // The preview delta must be part of the reviewed allowance.
+  assert.ok(wrapper.includes(PLAN_RULES_PREVIEW_NODE_ID));
+  // The patcher report gate requires the preview node to keep every other field.
+  assert.ok(wrapper.includes('value.previewNode?.otherFieldsUnchanged !== true'));
   // Read-only smoke: HTTP 200 plus the RUB price payload.
   assert.ok(wrapper.includes('smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"'));
   assert.ok(wrapper.includes("value.currency !== \"RUB\""));

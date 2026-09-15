@@ -10,7 +10,7 @@
 // applies reviewed string deltas to the exact live bodies and pins the live
 // preimage and the resulting postimage of both nodes.
 //
-// Generation shape (changedNodeCount === 2 nodes, four changed fields):
+// Generation shape (changedNodeCount === 3 nodes, five changed fields):
 //   1. `lk_subscription_booking_router_20260804` (gateway):
 //      * `func`: the embedded plan-rules module + the resolver-based `lk1Config`,
 //        the `lk1Quote` legacy short-circuit, the money gate and the two
@@ -22,20 +22,19 @@
 //      * `func`: the reviewed `nodered_lk1_hub_nodes/evaluator.js` body, which
 //        validates the rule product instead of the hardcoded HUB id and replaces the
 //        active-bookings blocker with the additive `aboveActiveLimit` verdict.
+//   3. `lk_subscription_price_preview_20260908_router` (preview):
+//      * `func`: the reviewed `previewSources()` composition of line C, run on the
+//        already patched generation, so preview and booking resolve the same plan rule.
 //
 // The `initialize` delta is what makes rule 3 real: without the global the resolver
 // falls back to legacy for every plan product.
 //
-// PENDING DELTA (deliberately NOT applied here): the price-preview node
-// `lk_subscription_price_preview_20260908_router` is amended by the reviewed
-// composition `scripts/patch_nodered_subscription_price_preview.mjs` (line C).
-// `PLAN_RULES_PENDING_DELTAS` is the documented slot for it; when that composition
-// lands this patcher must apply it too and the allow-list of
-// `scripts/deploy_nodered_lk1_plan_rules_147.sh` must grow by exactly that node.
+// The preview composition is fed the *installed* generation explicitly instead of
+// line C's reviewed preimage defaults; see PLAN_RULES_INSTALLED_GENERATION.
 //
 // This is preparation only. It never deploys, imports, restarts or activates
 // anything, and it fails closed unless the supplied preimage is exactly the
-// reviewed live flow (whole-flow sha256 plus both node bodies).
+// reviewed live flow (whole-flow sha256 plus every node body it rewrites).
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -43,6 +42,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { planRulesSource } from "./lib/eventPaymentSources.mjs";
 import { LK1_PLAN_RULES_DESIRED, buildPlanRulesTransition } from "./lib/lk1PlanRulesTransition.mjs";
+import { previewSources } from "./patch_nodered_subscription_price_preview.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +80,10 @@ const HUB_INITIALIZE_MARKERS = Object.freeze([
   '"HUB policy prior mismatch; no overwrite"',
   '"HUB policy readback mismatch"',
 ]);
+// `previewSources()` reaches the shared resolver through the canonical closure; this
+// marker is absent from the installed preview body and present exactly once after the
+// composition, so a second run of the preview delta is refused too.
+const PREVIEW_PATCH_MARKER = "canonical.resolveLk1Rule";
 
 // The live evaluator node keeps the LK1 path as an embedded copy of the base
 // `nodered_lk1_hub_nodes/evaluator.js` inside its own branch, followed by the
@@ -107,6 +111,11 @@ export const PLAN_RULES_TARGETS = Object.freeze({
     // `nodered_lk1_hub_nodes/evaluator.js` of commit e2e5e1e5.
     liveEmbeddedSha256: "cfd614a48e93ad5963974b4e750f273906b5f43a3d49aeb684562ce76b821347",
     patchedFuncSha256: "d410acdba09996926869373c4836cc9ff3676f1cbb5bf074449a47ed3bc3b1ed",
+  },
+  preview: {
+    id: PLAN_RULES_PREVIEW_NODE_ID,
+    liveFuncSha256: "0c51e58924069c0a3a7d5b53e33ea4a3f36c57eaca054cb3ae1fae770e105ab6",
+    patchedFuncSha256: "64f67bad58bd3add870bd3c6012c5f1c9c9256338b23c5a6295cefefc5811856",
   },
 });
 
@@ -273,50 +282,41 @@ export const PLAN_RULES_GATEWAY_DELTAS = Object.freeze([
   },
 ]);
 
-// The price-preview amendment is owned by the reviewed composition of line C
-// (`scripts/patch_nodered_subscription_price_preview.mjs`). It is intentionally
-// empty here so the candidate cannot silently ship a half-applied preview.
-//
-// BLOCKED on two reviewed-generation preconditions that are outside this patcher's
-// authority; both were measured on the live 147 snapshot (2026-09-15, 30bd2873…):
-//   1. `PREVIEW_CANONICAL_SOURCE_SHA256.pricing`/`.join` in C's module are the
-//      pre-`split-nominal-share` preimages (`53c4f6ab…`/`70ec2bdf…`), while the
-//      installed bodies are its documented postimages (`d93de261…`/`8b312b97…`,
-//      docs/NODERED_SPLIT_NOMINAL_SHARE_PACKET_20260912.md:45-46).
+// The preview delta is a composition, not a string delta, and it is fed the
+// *installed* 147 generation instead of the reviewed preimage defaults of line C
+// (`PREVIEW_CANONICAL_SOURCE_SHA256`). Two generations differ, both measured on the
+// live snapshot (2026-09-15, sha256 30bd2873…):
+//   1. the split/join bodies are the documented postimages of the split-nominal-share
+//      release (`d93de261…`/`8b312b97…`, docs/NODERED_SPLIT_NOMINAL_SHARE_PACKET_20260912.md
+//      "Applied (2026-09-12)"), while C's reviewed defaults are that release's
+//      preimages (`53c4f6ab…`/`70ec2bdf…`). The release therefore passes the installed
+//      shas explicitly through `previewSources(flow, { pins })` instead of rewriting
+//      another line's reviewed defaults.
 //   2. `patchPaidBenefitUsage` re-applies the paid-join transform, but the installed
-//      `lk1_usage_operations … lk1_policy_decision` block already carries both the
-//      paid-visit recompute and the AUDIT_BINDING guard, so its reviewed anchors are
-//      absent (`Paid join source anchor drift`). This is NOT caused by the gateway
-//      deltas above: the allowance block is byte-identical in the live and the
-//      patched body (sha256 98229c72…), and every gateway delta sits outside it.
-// Fixing it needs C's module to reuse the installed block under an exact installed-sha
-// pin (an additive, backward-compatible option) plus the two re-pins above.
-export const PLAN_RULES_PREVIEW_PREREQUISITES = Object.freeze({
-  installedSplitFuncSha256: "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
-  installedJoinFuncSha256: "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
-  installedAllowanceBlockSha256: "98229c7224fe81c3856071523307514b8df914440c8bf03a159a2e9a5c72fd8b",
+//      `lk1_usage_operations … lk1_policy_decision` block already carries the paid-visit
+//      recompute *and* the AUDIT_BINDING guard, so its reviewed anchors are absent
+//      (`Paid join source anchor drift`). The composition reuses the installed block
+//      under `installedUsageSha256` (additive option in line C's module; its default
+//      path is unchanged). This is NOT caused by the gateway deltas above: the
+//      allowance block is byte-identical in the live and the patched body, and every
+//      gateway delta sits outside it (live offsets: block 106792-113925, deltas at
+//      62101 / 66320 / 97748 / 136426 / 137430).
+//
+// Reverting the installed block to the pre-patch shape and letting the composition
+// patch it back was rejected: the round trip does not reproduce the installed block
+// (the reversal removes the AUDIT_BINDING guard and `patchPaidBenefitUsage` does not
+// restore it), so it would downgrade the preview allowance and break preview == booking.
+export const PLAN_RULES_INSTALLED_GENERATION = Object.freeze({
+  splitFuncSha256: "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
+  joinFuncSha256: "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
+  allowanceBlockSha256: "98229c7224fe81c3856071523307514b8df914440c8bf03a159a2e9a5c72fd8b",
   reviewedSplitPinSha256: "53c4f6ab309b4287eaded6c6d16a9c0e34f47c8eac625c58bdf423acfb083d42",
   reviewedJoinPinSha256: "70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462",
 });
 
-export const PLAN_RULES_PENDING_DELTAS = Object.freeze([
-  Object.freeze({
-    id: "price-preview-plan-rules-resolver",
-    nodeId: PLAN_RULES_PREVIEW_NODE_ID,
-    fields: Object.freeze(["func"]),
-    status: "PENDING_COMPOSITION",
-    owner: "scripts/patch_nodered_subscription_price_preview.mjs",
-    reason: "The preview node must resolve the same plan rule as the booking gateway, "
-      + "otherwise preview and booking disagree. The reviewed composition exists but is "
-      + "generation-mismatched with the installed 147 flow: its pricing/join pins are the "
-      + "pre-split-nominal-share preimages and its paid-join allowance step targets a "
-      + "pre-AUDIT_BINDING block. Both must be re-pinned/reused before this delta and the "
-      + "third allow-change entry are added.",
-    requiresDecision: "Review the installed generation preconditions described by "
-      + "PLAN_RULES_PREVIEW_PREREQUISITES and let the preview composition reuse the installed "
-      + "allowance block under an exact installed-sha pin.",
-  }),
-]);
+// Empty for this generation: the preview amendment is applied above, not deferred.
+// The slot stays so a future delta cannot be silently dropped from the allow-list.
+export const PLAN_RULES_PENDING_DELTAS = Object.freeze([]);
 
 function deltaText(delta) {
   return typeof delta.after === "function" ? delta.after() : delta.after;
@@ -481,6 +481,49 @@ export function patchLk1PlanRulesEvaluatorBody(source, target = PLAN_RULES_TARGE
   return patched;
 }
 
+// The preview node is produced by line C's reviewed composition. It must be fed the
+// already patched gateway and evaluator (their shas are the composition pins), and the
+// installed split/join/allowance shas, never line C's reviewed preimage defaults.
+export function composeLk1PlanRulesPreviewBody(flow, options = {}) {
+  const target = options.target ?? PLAN_RULES_TARGETS.preview;
+  const bookingSha256 = options.bookingSha256 ?? PLAN_RULES_TARGETS.gateway.patchedFuncSha256;
+  const evaluatorSha256 = options.evaluatorSha256 ?? PLAN_RULES_TARGETS.evaluator.patchedFuncSha256;
+  const preview = flow.find((node) => node.id === target.id);
+  const gateway = flow.find((node) => node.id === PLAN_RULES_GATEWAY_NODE_ID);
+  const evaluator = flow.find((node) => node.id === PLAN_RULES_EVALUATOR_NODE_ID);
+  assertFunctionNode(preview, target.id);
+  assertFunctionNode(gateway, PLAN_RULES_GATEWAY_NODE_ID);
+  assertFunctionNode(evaluator, PLAN_RULES_EVALUATOR_NODE_ID);
+  assertNotPatched(preview.func, PREVIEW_PATCH_MARKER, "LK1 plan-rules preview");
+  assertPreimage(preview.func, target, "Preview");
+  // The preview must be composed on the *reviewed* patched bodies, not on whatever the
+  // caller happens to pass: both shas are fixed pins, not values derived from the flow.
+  for (const [label, node, expected] of [
+    ["booking", gateway, bookingSha256],
+    ["evaluator", evaluator, evaluatorSha256],
+  ]) {
+    if (sha256(node.func) !== expected) {
+      throw new Error(`Preview ${label} pin mismatch: ${sha256(node.func)} != ${expected}`);
+    }
+  }
+  const composed = previewSources(flow, {
+    pins: {
+      booking: bookingSha256,
+      evaluator: evaluatorSha256,
+      pricing: options.pricingSha256 ?? PLAN_RULES_INSTALLED_GENERATION.splitFuncSha256,
+      join: options.joinSha256 ?? PLAN_RULES_INSTALLED_GENERATION.joinFuncSha256,
+    },
+    installedUsageSha256: options.installedUsageSha256
+      ?? PLAN_RULES_INSTALLED_GENERATION.allowanceBlockSha256,
+  });
+  if (!composed.router.includes(PREVIEW_PATCH_MARKER)) {
+    throw new Error("Composed preview body cannot reach the shared plan-rules resolver");
+  }
+  assertFunctionBody(composed.router, "Composed preview body");
+  assertPostimage(composed.router, target, "Preview");
+  return composed;
+}
+
 function assertFunctionNode(node, id) {
   if (!node) throw new Error(`Node contract mismatch: ${id} is absent`);
   if (node.type !== "function" || node.d === true || node.disabled === true
@@ -518,15 +561,25 @@ export function composeLk1PlanRulesArtifacts(liveBytes, options = {}) {
     flow.find((node) => node.id === PLAN_RULES_EVALUATOR_NODE_ID), PLAN_RULES_EVALUATOR_NODE_ID);
   const preview = assertFunctionNode(
     flow.find((node) => node.id === PLAN_RULES_PREVIEW_NODE_ID), PLAN_RULES_PREVIEW_NODE_ID);
-  const previewFuncBefore = preview.func;
   const previewInitializeBefore = preview.initialize;
+  // Everything except `func` must survive the preview delta byte for byte.
+  const previewNodeBefore = JSON.parse(JSON.stringify({ ...preview, func: null }));
 
   const beforeGatewaySha256 = sha256(gateway.func);
   const beforeGatewayInitializeSha256 = sha256(gateway.initialize);
   const beforeEvaluatorSha256 = sha256(evaluator.func);
+  const beforePreviewSha256 = sha256(preview.func);
   gateway.func = patchLk1PlanRulesGatewayBody(gateway.func);
   gateway.initialize = patchLk1PlanRulesGatewayInitialize(gateway.initialize);
   evaluator.func = patchLk1PlanRulesEvaluatorBody(evaluator.func);
+  // The preview composes on the already patched generation: its pins are the patched
+  // gateway and evaluator shas.
+  const composedPreview = composeLk1PlanRulesPreviewBody(flow, {
+    pricingSha256: options.pricingSha256,
+    joinSha256: options.joinSha256,
+    installedUsageSha256: options.installedUsageSha256,
+  });
+  preview.func = composedPreview.router;
 
   const changes = [
     { id: PLAN_RULES_GATEWAY_NODE_ID, fields: ["func", "initialize"],
@@ -535,6 +588,8 @@ export function composeLk1PlanRulesArtifacts(liveBytes, options = {}) {
         afterSha256: sha256(gateway.initialize) } },
     { id: PLAN_RULES_EVALUATOR_NODE_ID, fields: ["func"],
       func: { beforeSha256: beforeEvaluatorSha256, afterSha256: sha256(evaluator.func) } },
+    { id: PLAN_RULES_PREVIEW_NODE_ID, fields: ["func"],
+      func: { beforeSha256: beforePreviewSha256, afterSha256: sha256(preview.func) } },
   ];
 
   return {
@@ -542,10 +597,18 @@ export function composeLk1PlanRulesArtifacts(liveBytes, options = {}) {
     candidateBytes: Buffer.from(`${JSON.stringify(flow, null, 2)}\n`),
     changes,
     pendingDeltas: PLAN_RULES_PENDING_DELTAS.map((delta) => ({ ...delta })),
-    // The preview node is byte-identical to the live snapshot by construction: only
-    // the two allow-listed nodes above were rewritten.
-    previewNodeUnchanged: preview.func === previewFuncBefore
-      && preview.initialize === previewInitializeBefore,
+    previewNode: {
+      id: PLAN_RULES_PREVIEW_NODE_ID,
+      fields: ["func"],
+      initializeUnchanged: preview.initialize === previewInitializeBefore,
+      // Every field other than `func` (wires, z, outputs, name, …) is untouched.
+      otherFieldsUnchanged: JSON.stringify({ ...preview, func: null }) === JSON.stringify(previewNodeBefore),
+      resolverReachable: preview.func.includes(PREVIEW_PATCH_MARKER),
+      helperCount: composedPreview.helperNames.length,
+      pricingNameCount: composedPreview.pricingNames.length,
+    },
+    // No nodes are added: the preview delta rewrites an existing node only.
+    addedNodeCount: 0,
   };
 }
 
@@ -614,6 +677,9 @@ function main(args) {
       evaluator: { id: PLAN_RULES_TARGETS.evaluator.id,
         func: { beforeSha256: PLAN_RULES_TARGETS.evaluator.liveFuncSha256,
           afterSha256: PLAN_RULES_TARGETS.evaluator.patchedFuncSha256 } },
+      preview: { id: PLAN_RULES_TARGETS.preview.id,
+        func: { beforeSha256: PLAN_RULES_TARGETS.preview.liveFuncSha256,
+          afterSha256: PLAN_RULES_TARGETS.preview.patchedFuncSha256 } },
     },
     planRulesActivation: {
       key: "subscriptions_lk1_plan_rules",
@@ -623,14 +689,17 @@ function main(args) {
       hubPolicyWriterPreserved: true,
       appendedToGatewayInitialize: true,
     },
+    installedGeneration: { ...PLAN_RULES_INSTALLED_GENERATION },
     sourceSha256: verified.sourceSha256,
     candidateSha256: sha256(outputText),
     sourceNodeCount: verified.nodeCount,
     candidateNodeCount: built.flow.length,
     changedNodeCount: built.changes.length,
-    expectedChangedNodeCount: 2,
+    expectedChangedNodeCount: 3,
+    addedNodeCount: built.addedNodeCount,
     changes: built.changes,
     pendingDeltas: built.pendingDeltas,
+    previewNode: built.previewNode,
     previewNodeId: PLAN_RULES_PREVIEW_NODE_ID,
     topologyChanged: false,
     routesChanged: false,
