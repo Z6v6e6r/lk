@@ -211,7 +211,16 @@ export function previewSources(flow, options = {}) {
   const usageStart = 'if (ctx.step === "lk1_usage_operations") {';
   const usageEnd = 'if (ctx.step === "lk1_policy_decision") {';
   if (booking.split(usageStart).length !== 2 || booking.split(usageEnd).length !== 2) throw new Error('Price preview allowance source drift');
-  const usage = patchPaidBenefitUsage(booking.slice(booking.indexOf(usageStart), booking.indexOf(usageEnd)));
+  // The installed generation already carries the paid-visit recompute *and* the
+  // AUDIT_BINDING guard, so `patchPaidBenefitUsage` cannot be re-applied to it (its
+  // reviewed preimages are the pre-paid-join shape). When the caller pins the exact
+  // installed block sha, reuse it verbatim: the review gate moves from
+  // "preimage + transform" to "installed block sha", and the preview allowance stays
+  // byte-identical to the booking gateway block by construction.
+  const installedUsage = booking.slice(booking.indexOf(usageStart), booking.indexOf(usageEnd));
+  const usage = options.installedUsageSha256 === undefined ? patchPaidBenefitUsage(installedUsage)
+    : sha(installedUsage) === options.installedUsageSha256 ? installedUsage
+      : (() => { throw new Error(`Price preview installed allowance block changed: actual ${sha(installedUsage)}, expected ${options.installedUsageSha256}`); })();
   const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
