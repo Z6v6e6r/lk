@@ -34,7 +34,18 @@ test('active limit and consumed minutes on A leave B and C available',()=>{
   const active=[1,2,3,4].map(n=>booking(`a-${n}`,'sub-A',{exerciseDate:'2099-09-23'}));
   const options={active,operations:[operation()]};
   const a=calculate('sub-A',options);
-  assert.deepEqual(a.decision.blockers.map(b=>b.code),['ACTIVE_SERVICES_LIMIT_REACHED']);
+  // A full active list is no longer a blocker: A keeps booking at the overage discount
+  // without spending a visit or the day's free hour.
+  assert.equal(a.input.usage.activeServices,4);
+  assert.equal(a.input.usage.usedOrReservedFreeMinutesToday,60);
+  assert.equal(a.decision.eligible,true);
+  assert.equal(a.decision.aboveActiveLimit,true);
+  assert.equal(a.decision.subscriptionVisitCount,0);
+  assert.equal(a.decision.gameMinutes.freeMinutes,0);
+  assert.equal(a.decision.gameMinutes.paidOverageMinutes,60);
+  assert.equal(a.decision.benefit.kind,'PERCENT_DISCOUNT');
+  assert.equal(a.decision.benefit.finalPriceMinor,140000);
+  assert.ok(!a.decision.blockers.some(b=>b.code==='ACTIVE_SERVICES_LIMIT_REACHED'));
   for(const id of ['sub-B','sub-C']){
     const b=calculate(id,options);
     assert.equal(b.input.usage.activeServices,0);

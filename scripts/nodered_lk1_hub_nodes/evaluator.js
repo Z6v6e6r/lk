@@ -13,6 +13,9 @@ const toFiniteDate = (value) => {
   const date = new Date(String(value || ""));
   return Number.isFinite(date.getTime()) ? date : null;
 };
+// The product of the matched rule arrives from the resolver; this node only
+// validates its shape and never recognises a particular HUB/plan product itself.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const floorRatio = (amount, numerator, denominator) => {
   const normalizedAmount = toNonNegativeInt(amount);
   const normalizedNumerator = toNonNegativeInt(numerator);
@@ -52,6 +55,7 @@ const decision = {
     : null,
   dailyUsed: toNonNegativeInt(usage?.dailyUsed),
   dailyLimit: toNonNegativeInt(policy?.dailyUsageLimit),
+  aboveActiveLimit: false,
   benefit: null,
   evaluatedAt: evaluatedAt?.toISOString() || new Date(0).toISOString(),
 };
@@ -91,7 +95,8 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
     const binding = input.lk1ProductBinding;
     const opaqueId = (value) => typeof value === "string"
       && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(value);
-    if (!isObj(binding) || binding.policyProductId !== "db7a5250-7369-4f43-8ac5-9111be24bc74"
+    if (!isObj(binding) || typeof binding.policyProductId !== "string"
+      || !UUID_PATTERN.test(binding.policyProductId)
       || binding.ownedProductId !== binding.policyProductId || !opaqueId(binding.clientSubscriptionId)) {
       block("LK1_PRODUCT_BINDING_INVALID", "Товар правила не совпал с принадлежащим клиенту абонементом Viva");
     }
@@ -119,9 +124,12 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
   if (!Number.isSafeInteger(activeCount) || activeCount < 0
     || usage.activeServiceScope !== "SUBSCRIPTION_BENEFIT_ONLY") {
     block("USAGE_SNAPSHOT_INVALID", "Активные записи выбранной подписки не подтверждены");
-  } else if (activeCount >= rule.maxActiveBookings) {
-    block("ACTIVE_SERVICES_LIMIT_REACHED", "Достигнут лимит активных записей");
+  } else {
+    // A full active-bookings list is not a blocker: further bookings stay
+    // available at the plan discount, without a free hour or a visit.
+    decision.aboveActiveLimit = activeCount >= rule.maxActiveBookings;
   }
+  const aboveActiveLimit = decision.aboveActiveLimit === true;
   let selectedRule = null;
   if (category === "GAME") {
     const used = usage?.usedOrReservedFreeMinutesToday;
@@ -136,21 +144,31 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
     if (!Number.isSafeInteger(used) || used < 0 || !day || usage?.dailyBucketLocalDate !== day) {
       block("USAGE_SNAPSHOT_BUCKET_MISMATCH", "Бесплатные минуты даты игры не подтверждены");
     } else if (duration && Number.isSafeInteger(rule.freeGameMinutesPerDay)) {
-      const freeMinutes = Math.min(duration, Math.max(0, rule.freeGameMinutesPerDay - used));
-      const paidOverageMinutes = duration - freeMinutes;
-      decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
-        freeMinutes, paidOverageMinutes, discountPercent: rule.gameOverageDiscountPercent };
-      decision.subscriptionVisitCount = freeMinutes > 0 ? 1 : 0;
-      selectedRule = { ruleId: "lk1-game", kind: paidOverageMinutes === 0
-        ? "FREE_ENTITLEMENT" : "PERCENT_DISCOUNT", percentage: rule.gameOverageDiscountPercent };
-      if (freeMinutes > 0 && paidOverageMinutes > 0) {
-        if (productBound && target?.priceSource === "VIVA_EXISTING_TARIFF") {
-          selectedRule = { ruleId: "lk1-game", kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
-            partialPrice: { numerator: paidOverageMinutes, denominator: duration },
-            percentage: rule.gameOverageDiscountPercent };
-        } else {
-          block("LK1_GAME_OVERAGE_ALLOCATION_UNBOUND", "Применение услуги к платной части игры не подтверждено");
-          selectedRule = null;
+      if (aboveActiveLimit) {
+        // Past the cap the whole game is a paid overage: the day's free hour
+        // stays untouched and no visit is consumed.
+        decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+          freeMinutes: 0, paidOverageMinutes: duration, discountPercent: rule.gameOverageDiscountPercent };
+        decision.subscriptionVisitCount = 0;
+        selectedRule = { ruleId: "lk1-game", kind: "PERCENT_DISCOUNT",
+          percentage: rule.gameOverageDiscountPercent };
+      } else {
+        const freeMinutes = Math.min(duration, Math.max(0, rule.freeGameMinutesPerDay - used));
+        const paidOverageMinutes = duration - freeMinutes;
+        decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+          freeMinutes, paidOverageMinutes, discountPercent: rule.gameOverageDiscountPercent };
+        decision.subscriptionVisitCount = freeMinutes > 0 ? 1 : 0;
+        selectedRule = { ruleId: "lk1-game", kind: paidOverageMinutes === 0
+          ? "FREE_ENTITLEMENT" : "PERCENT_DISCOUNT", percentage: rule.gameOverageDiscountPercent };
+        if (freeMinutes > 0 && paidOverageMinutes > 0) {
+          if (productBound && target?.priceSource === "VIVA_EXISTING_TARIFF") {
+            selectedRule = { ruleId: "lk1-game", kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+              partialPrice: { numerator: paidOverageMinutes, denominator: duration },
+              percentage: rule.gameOverageDiscountPercent };
+          } else {
+            block("LK1_GAME_OVERAGE_ALLOCATION_UNBOUND", "Применение услуги к платной части игры не подтверждено");
+            selectedRule = null;
+          }
         }
       }
     }
