@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSubscriptionPriceTarget, subscriptionPricePreview, subscriptionPricePreviewsById, subscriptionPriceSelectionKey, type SubscriptionPriceQuote } from "../../src/components/games/subscriptionPricePreview.ts";
+import { createSubscriptionPriceTarget, subscriptionPricePreview, subscriptionPricePreviewsById, subscriptionPriceSelectionKey, subscriptionSurchargeMinor, type SubscriptionPriceQuote } from "../../src/components/games/subscriptionPricePreview.ts";
 
 const now = Date.parse("2026-09-08T12:00:00Z");
 const target = { targetKind: "NEW_GAME" as const, shareCount: 4 as const, slotId: "slot-a", stationId: "station-a", roomId: "room-a",
@@ -16,7 +16,7 @@ const preview = (quotes: SubscriptionPriceQuote[] | null, overrides = {}) => sub
 
 test("90 minute game displays the server amount and paid 30 minutes", () => {
   assert.deepEqual(preview([quote()]), {state: "available", label: "По подписке от 750 ₽", detail: "Доплата за 30 мин",
-    basePriceMinor: 300000, amountMinor: 75000, discounted: true});
+    basePriceMinor: 300000, amountMinor: 75000, paidMinutes: 30, discounted: true});
 });
 test("minimum includes the legacy free subscription without choosing it for checkout", () => {
   const result = preview([quote(), quote("subscription-b", {amountMinor: 0, freeMinutes: 90, paidMinutes: 0})],
@@ -27,6 +27,20 @@ test("minimum includes the legacy free subscription without choosing it for chec
 test("120 minute overage and fractional rubles remain the server values", () => {
   assert.equal(preview([quote("subscription-a", {paidMinutes: 60, amountMinor: 150050})],
     {durationMinutes: 120}).label, "По подписке от 1 500,5 ₽");
+});
+test("confirmed overage is exposed as the surcharge owed on top of the subscription", () => {
+  assert.equal(subscriptionSurchargeMinor(preview([quote()])), 75000);
+  assert.equal(subscriptionSurchargeMinor(preview([quote("subscription-a", {paidMinutes: 60, amountMinor: 150050})],
+    {durationMinutes: 120})), 150050);
+});
+test("a covered, free-of-charge, unconfirmed or foreign subscription never advertises a surcharge", () => {
+  assert.equal(subscriptionSurchargeMinor(preview([quote("subscription-a", {amountMinor: 0, freeMinutes: 90, paidMinutes: 0})])), null);
+  assert.equal(subscriptionSurchargeMinor(preview([quote("subscription-a", {amountMinor: 0})])), null);
+  assert.equal(subscriptionSurchargeMinor(preview([quote("subscription-a", {status: "LIMIT_USED", amountMinor: null})])), null);
+  assert.equal(subscriptionSurchargeMinor(preview([quote()], {loading: true})), null);
+  assert.equal(subscriptionSurchargeMinor(preview([quote("other")])), null);
+  assert.equal(subscriptionSurchargeMinor(preview([quote("subscription-a", {expiresAt: now})])), null);
+  assert.equal(subscriptionSurchargeMinor(undefined), null);
 });
 test("partial, duplicate, foreign, expired and prior-slot quotes never advertise a discount", () => {
   for (const rows of [null, [], [quote(), quote()], [quote("other")], [quote("subscription-a", {expiresAt: now})],

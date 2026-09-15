@@ -65,6 +65,8 @@ export type SubscriptionPricePreview = {
   detail: string | null;
   basePriceMinor: number | null;
   amountMinor: number | null;
+  /** Minutes the server charges on top of the subscription allowance; 0 when nothing is owed. */
+  paidMinutes: number;
   discounted: boolean;
 };
 
@@ -80,7 +82,7 @@ const money = (minor: number): string => new Intl.NumberFormat("ru-RU", {
 const minorUnits = (value: unknown): value is number => Number.isSafeInteger(value)
   && Number(value) >= 0 && Number(value) <= 1_000_000;
 const empty = (state: "checking" | "limit-used" | "unavailable", label: string): SubscriptionPricePreview => ({
-  state, label, detail: null, basePriceMinor: null, amountMinor: null, discounted: false,
+  state, label, detail: null, basePriceMinor: null, amountMinor: null, paidMinutes: 0, discounted: false,
 });
 
 /** Only complete, current server quotes may replace the ordinary price. No local benefit calculation. */
@@ -121,9 +123,19 @@ export function subscriptionPricePreview(input: {
   return {
     state: "available", label: `По подписке от ${money(amountMinor)} ₽`,
     detail: best.paidMinutes > 0 ? `Доплата за ${best.paidMinutes} мин` : null,
-    basePriceMinor: best.basePriceMinor, amountMinor,
+    basePriceMinor: best.basePriceMinor, amountMinor, paidMinutes: best.paidMinutes,
     discounted: amountMinor < best.basePriceMinor,
   };
+}
+
+/**
+ * Surcharge the server confirmed on top of the chosen subscription, or null when the price is
+ * unconfirmed or the subscription covers the whole participation. Presentation only: CREATE
+ * re-evaluates the chosen subscription and never trusts this preview as the amount to charge.
+ */
+export function subscriptionSurchargeMinor(preview: SubscriptionPricePreview | undefined): number | null {
+  if (preview?.state !== "available" || typeof preview.amountMinor !== "number" || preview.amountMinor <= 0) return null;
+  return preview.paidMinutes > 0 ? preview.amountMinor : null;
 }
 
 
