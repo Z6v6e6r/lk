@@ -14,6 +14,7 @@ import {
   PLAN_RULES_MODULE_SHA256,
   PLAN_RULES_PENDING_DELTAS,
   PLAN_RULES_PREVIEW_NODE_ID,
+  PLAN_RULES_PREVIEW_PREREQUISITES,
   PLAN_RULES_REVIEWED_EVALUATOR_SHA256,
   PLAN_RULES_SOURCE_NODE_COUNT,
   PLAN_RULES_SOURCE_SHA256,
@@ -255,7 +256,15 @@ test('the price-preview amendment is a documented pending slot, not part of this
   assert.equal(pending.nodeId, PLAN_RULES_PREVIEW_NODE_ID);
   assert.equal(pending.status, 'PENDING_COMPOSITION');
   assert.equal(pending.owner, 'scripts/patch_nodered_subscription_price_preview.mjs');
+  assert.deepEqual(pending.fields, ['func']);
   assert.ok(pending.reason.length > 0);
+  // The blocking preconditions are recorded with their measured shas.
+  const prerequisites = PLAN_RULES_PREVIEW_PREREQUISITES;
+  for (const [key, value] of Object.entries(prerequisites)) {
+    assert.match(value, /^[0-9a-f]{64}$/, key);
+  }
+  assert.notEqual(prerequisites.reviewedSplitPinSha256, prerequisites.installedSplitFuncSha256);
+  assert.notEqual(prerequisites.reviewedJoinPinSha256, prerequisites.installedJoinFuncSha256);
   // The preview node is not changed by this patcher, so it is not in the allow-list.
   assert.ok(!PLAN_RULES_GATEWAY_DELTAS.some((delta) => delta.id.includes('preview')));
 });

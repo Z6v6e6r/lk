@@ -276,15 +276,45 @@ export const PLAN_RULES_GATEWAY_DELTAS = Object.freeze([
 // The price-preview amendment is owned by the reviewed composition of line C
 // (`scripts/patch_nodered_subscription_price_preview.mjs`). It is intentionally
 // empty here so the candidate cannot silently ship a half-applied preview.
+//
+// BLOCKED on two reviewed-generation preconditions that are outside this patcher's
+// authority; both were measured on the live 147 snapshot (2026-09-15, 30bd2873…):
+//   1. `PREVIEW_CANONICAL_SOURCE_SHA256.pricing`/`.join` in C's module are the
+//      pre-`split-nominal-share` preimages (`53c4f6ab…`/`70ec2bdf…`), while the
+//      installed bodies are its documented postimages (`d93de261…`/`8b312b97…`,
+//      docs/NODERED_SPLIT_NOMINAL_SHARE_PACKET_20260912.md:45-46).
+//   2. `patchPaidBenefitUsage` re-applies the paid-join transform, but the installed
+//      `lk1_usage_operations … lk1_policy_decision` block already carries both the
+//      paid-visit recompute and the AUDIT_BINDING guard, so its reviewed anchors are
+//      absent (`Paid join source anchor drift`). This is NOT caused by the gateway
+//      deltas above: the allowance block is byte-identical in the live and the
+//      patched body (sha256 98229c72…), and every gateway delta sits outside it.
+// Fixing it needs C's module to reuse the installed block under an exact installed-sha
+// pin (an additive, backward-compatible option) plus the two re-pins above.
+export const PLAN_RULES_PREVIEW_PREREQUISITES = Object.freeze({
+  installedSplitFuncSha256: "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
+  installedJoinFuncSha256: "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
+  installedAllowanceBlockSha256: "98229c7224fe81c3856071523307514b8df914440c8bf03a159a2e9a5c72fd8b",
+  reviewedSplitPinSha256: "53c4f6ab309b4287eaded6c6d16a9c0e34f47c8eac625c58bdf423acfb083d42",
+  reviewedJoinPinSha256: "70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462",
+});
+
 export const PLAN_RULES_PENDING_DELTAS = Object.freeze([
   Object.freeze({
     id: "price-preview-plan-rules-resolver",
     nodeId: PLAN_RULES_PREVIEW_NODE_ID,
+    fields: Object.freeze(["func"]),
     status: "PENDING_COMPOSITION",
     owner: "scripts/patch_nodered_subscription_price_preview.mjs",
     reason: "The preview node must resolve the same plan rule as the booking gateway, "
-      + "otherwise preview and booking disagree. It is added by the reviewed preview "
-      + "composition and must then be appended to this patcher and to the deploy allow-list.",
+      + "otherwise preview and booking disagree. The reviewed composition exists but is "
+      + "generation-mismatched with the installed 147 flow: its pricing/join pins are the "
+      + "pre-split-nominal-share preimages and its paid-join allowance step targets a "
+      + "pre-AUDIT_BINDING block. Both must be re-pinned/reused before this delta and the "
+      + "third allow-change entry are added.",
+    requiresDecision: "Review the installed generation preconditions described by "
+      + "PLAN_RULES_PREVIEW_PREREQUISITES and let the preview composition reuse the installed "
+      + "allowance block under an exact installed-sha pin.",
   }),
 ]);
 
