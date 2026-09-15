@@ -4,28 +4,23 @@
 // Node-RED function bodies cannot import, so the release builder embeds the
 // resolver into the router's sandbox scope; this harness reproduces that embed.
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 import vm from 'node:vm';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { buildHubPolicyTransition } from '../lib/lk1HubPolicyTransition.mjs';
+import { PREVIEW_CANONICAL_SOURCE_SHA256, previewSources } from '../patch_nodered_subscription_price_preview.mjs';
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
-// Line A owns scripts/lib/lk1PlanRules.mjs. Until that module lands in this
-// branch the test reads the resolver from the sibling worktree (or from
-// LK1_PLAN_RULES_MODULE) and skips rather than pretending to verify parity.
-const resolverCandidates = [process.env.LK1_PLAN_RULES_MODULE].filter(Boolean)
-  .concat(['../lib/lk1PlanRules.mjs', '/private/tmp/lk1-rules-a-hub/scripts/lib/lk1PlanRules.mjs']);
-const resolverPath = resolverCandidates.find(candidate => {
-  try {
-    fs.accessSync(candidate.startsWith('/') ? candidate : new URL(candidate, import.meta.url));
-    return true;
-  } catch { return false; }
-});
-const requiresResolver = { skip: resolverPath ? false : 'Line A module scripts/lib/lk1PlanRules.mjs is not available in this worktree' };
-const library = resolverPath ? fs.readFileSync(resolverPath.startsWith('/') ? resolverPath
-  : new URL(resolverPath, import.meta.url), 'utf8') : '';
+// Line A owns scripts/lib/lk1PlanRules.mjs and the release composition embeds
+// that exact file. Until it lands in this branch the suite skips rather than
+// grading the router against a hand-written stand-in.
+const resolverPath = new URL('../lib/lk1PlanRules.mjs', import.meta.url);
+const requiresResolver = { skip: fs.existsSync(resolverPath) ? false
+  : 'Line A module scripts/lib/lk1PlanRules.mjs is not in this worktree' };
+const library = fs.existsSync(resolverPath) ? fs.readFileSync(resolverPath, 'utf8') : '';
 const router = read('../nodered_subscription_price_preview_nodes/router.js');
 // Line B owns scripts/nodered_lk1_hub_nodes/evaluator.js and lands the
 // cap-as-discount decision. Until it reaches this branch the parity half of the
@@ -49,11 +44,12 @@ const sources = {
   split: read('../nodered_games_nodes/fn_split_router.js'),
 };
 const constant = name => {
+  if (!library) return null;
   const matched = new RegExp(`(?:export )?const ${name} = ("[^"]*")`).exec(library);
   assert.ok(matched, `Resolver constant ${name} must stay a literal in scripts/lib/lk1PlanRules.mjs`);
   return JSON.parse(matched[1]);
 };
-const RULE_FIELDS = JSON.parse(/const LK1_PLAN_RULE_FIELDS = (\[[^\]]*\])/.exec(library)[1]);
+const RULE_FIELDS = library ? JSON.parse(/const LK1_PLAN_RULE_FIELDS = (\[[^\]]*\])/.exec(library)[1]) : [];
 const HUB_PRODUCT_ID = constant('LK1_HUB_PRODUCT_ID');
 const PLAN_FROM = constant('LK1_PLAN_RULES_FROM');
 const PLAN_RULES_GLOBAL = constant('LK1_PLAN_RULES_GLOBAL');
@@ -74,7 +70,10 @@ const ROOTS = ['isObj', 'unwrapRecord', 'isValidDateKey', 'hasCompleteBookingLis
   'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
   'eventDurationMinutes', 'eventStartsAt', 'exerciseRoomId', 'resolveCategory', 'resolvePlanKey',
   'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode', 'extractItems', 'managedExternalEventTypeId',
-  'identitySelected', 'identityOwned', 'identityMoneyOwned', 'lk1LifecycleInstant', 'lk1Fields', 'lk1Config'];
+  'identitySelected', 'identityOwned', 'identityMoneyOwned', 'lk1LifecycleInstant', 'lk1Fields', 'lk1Config',
+  // Referenced by the product-identity helpers, which never declare it: the
+  // composition has to carry it as a contract constant (see PREVIEW_CONTRACT_ROOTS).
+  'LK1_OVERLAY_HUB_PRODUCT_ID', 'MANAGED_ENFORCEMENT_PURCHASE_FROM'];
 const declared = new Set();
 const parts = [];
 for (const root of ROOTS) {
@@ -105,60 +104,76 @@ for (const root of ROOTS) {
 }
 const helperSource = parts.join('\n');
 // The court tariff extractor is the same canonical helper the release builds in.
-const priceSource = extractSubscriptionPricePreviewSource({ source: sources.split, label: 'pricing',
-  roots: ['extractExactCourtPrice', 'extractList'] }).source;
 // The allowance recompute the preview embeds: the booking gateway's own
 // instance-scoped block, so the free-minute ledger cannot drift between them.
 const usageStart = 'if (ctx.step === "lk1_usage_operations") {';
 const usageEnd = 'if (ctx.step === "lk1_policy_decision") {';
 assert.equal(sources.gateway.split(usageStart).length, 2, 'Booking gateway allowance block must exist');
 assert.equal(sources.gateway.split(usageEnd).length, 2);
-const usageBody = sources.gateway.slice(sources.gateway.indexOf(usageStart), sources.gateway.indexOf(usageEnd));
-const usageSource = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
-  const { isObj, isValidDateKey, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields } = canonical;
-  const OUTPUT_MANAGED_POLICY = 6;
-  const emit = () => msg;
-  const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
-${usageBody}
-};`;
+const gatewayUsage = sources.gateway.slice(sources.gateway.indexOf(usageStart), sources.gateway.indexOf(usageEnd));
 // `resolveSplitSubscriptionLifecycle`/`filterSplitEligibleSubscriptions` reach the
 // node as the transpiled availability helper, exactly like the release build.
 const availability = ts.transpileModule(read('../../src/components/games/splitSubscriptionAvailability.ts'), {
   compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
 }).outputText;
 assert.doesNotMatch(availability, /\brequire\s*\(/);
-// Only the resolver module's own declarations are embedded: the node scope
-// already owns `isValidDateKey` (canonical), so re-declaring it would collide.
-const libraryDeclarations = (() => {
-  const file = ts.createSourceFile('lk1PlanRules.mjs', library, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
-  return file.statements.filter(statement => ts.isFunctionDeclaration(statement)
-    || ts.isVariableStatement(statement)).map(statement => statement.getText(file)
-      .replace(/^export\s+/, '')).join('\n');
-})();
-// One composed scope per request: a factory keeps the resolver, the canonical
-// helper closure and the router body in the same sandbox scope, exactly like
-// the release builder's embedded node body.
+// The release reads the live booking node; this synthetic body carries the same
+// roots and anchors so the real composition path is exercised here.
+const availabilitySource = `const preflightAvailability = (() => { const exports = {}; \n${availability}\n return exports; })();`;
+const configuredParts = parts.filter(text => !/^const lk1Config = /.test(text));
+const helperWithoutConfig = configuredParts.join('\n');
 const entrySource = read('../nodered_subscription_price_preview_nodes/entry.js');
 const finalSource = read('../nodered_subscription_price_preview_nodes/final.js');
-// A stop in the preview is a hard refusal of the whole batch; the driver turns
-// the recorded code into an explicit failure instead of a silent empty quote.
-const tracedRouter = router
-  .replace("const stop = (code, status = 503) => {",
-    "const stop = (code, status = 503) => { if (typeof lk1PlanTrace === 'function') lk1PlanTrace('STOP ' + code);");
-// The resolver and the HUB policy reader live inside the canonical helper
-// closure: the resolver's transitive dependencies are const declarations of that
-// closure and are not visible at node scope, and the reader is the same
-// generated declaration the live gateway calls through `lk1Config`.
-const hubReader = buildHubPolicyTransition({ expectedPrior: null, desired: policy }).reader;
-const routerFactorySource = `const canonical = (() => {\n${hubReader}\n${helperSource}\n${libraryDeclarations}\nconst lk1PlanRulesGlobal = () => global.get(${JSON.stringify(PLAN_RULES_GLOBAL)});\nreturn {${ROOTS.join(',')}, resolveLk1Rule, normalizePlanRules, lk1PlanRulesGlobal}; })();
-const preflightAvailability = (() => { const exports = {}; \n${availability}\n return exports; })();
-Object.assign(canonical, { preflightAvailability });
-${usageSource}
-const pricing = (() => {\n${priceSource}\nreturn { extractExactCourtPrice, extractList }; })();
-const joinPricing = { resolveIsSinglesGame: () => false };
+// The allowance block the installed body carries, restored to the pre-patch
+// shape `patchPaidBenefitUsage` expects; the composition then patches it back to
+// exactly the gateway block this test grades against.
+const installedUsage = gatewayUsage.replace(/ {4}\/\/ AUDIT_BINDING_START[\s\S]*? {4}\/\/ AUDIT_BINDING_END\n/, '')
+  .replace('if (coveredId) benefitBookings.add(coveredId);', 'if (operation.bookingId) benefitBookings.add(normalizeId(operation.bookingId));')
+  .replace('if (coveredId) coveredBookings.add(coveredId);', 'if (operation.bookingId) coveredBookings.add(normalizeId(operation.bookingId));')
+  .replace('activeServices: new Set(active.map(booking => normalizeId(bookingId(booking)))).size,', 'activeServices: active.length,')
+  .replace('\n  const benefitBookings = new Set();', '')
+  .replace('!isValidDateKey(operation.serviceDate)', 'operation.serviceDate !== ctx.serviceDate')
+  .replace('    if (operation.bookingId) benefitBookings.add(normalizeId(operation.bookingId));\n', '')
+  .replace('    if (operation.serviceDate !== ctx.serviceDate) continue;\n', '')
+  .replace('\n    || benefitBookings.has(normalizeId(bookingId(booking)))', '');
+const policyAnchor = 'if (ctx.step === "lk1_policy_decision") { return null; }';
+const bookingBody = ({ base = helperSource, reader = '', config = null } = {}) => [base
+  + (config === null ? '' : `\nconst lk1Config = ${config};`),
+  availabilitySource, reader, installedUsage, policyAnchor].join('\n');
+const syntheticEvaluator = evaluator;
+const syntheticSplit = sources.split;
+const syntheticJoin = read('../nodered_games_nodes/fn_split_join_prepare.js');
+const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const hubTransition = () => buildHubPolicyTransition({ expectedPrior: null, desired: policy });
+const syntheticFlow = ({ body, initialize, evaluatorSource = syntheticEvaluator } = {}) => [
+  { id: 'lk_subscription_booking_router_20260804', type: 'function', func: body, initialize },
+  { id: '8f7bd5b482fe9763', type: 'function', func: syntheticSplit },
+  { id: 'e92e68bf3f08a70c', type: 'function', func: syntheticJoin },
+  { id: 'lk_subscription_managed_policy_20260820', type: 'function', func: evaluatorSource },
+];
+const syntheticPins = body => ({ booking: sha(body), pricing: sha(syntheticSplit), join: sha(syntheticJoin),
+  evaluator: sha(syntheticEvaluator) });
+// The production composition builds the node the preview actually runs. It is
+// lazy so the suite still loads (and skips) before line A's module lands here.
+const syntheticBody = requiresResolver.skip ? null : bookingBody({ reader: hubTransition().reader });
+const composed = requiresResolver.skip ? null : previewSources(syntheticFlow({ body: syntheticBody,
+  initialize: hubTransition().initialize }), { pins: syntheticPins(syntheticBody) });
+const composition = (() => {
+  if (!composed) return null;
+  assert.ok(composed.router.endsWith(router), 'The composed node must end with the preview router body');
+  // The allowance recompute reaches the node through the same paid-join
+  // transformation the booking gateway applies, on the installed block shape.
+  assert.ok(composed.router.includes('activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY"'),
+    'The composed allowance must stay instance-scoped');
+  assert.ok(composed.router.includes('benefitBookings'), 'The composed allowance must count paid benefits');
+  const canonicalPrefix = composed.router.slice(0, composed.router.indexOf('\nconst pricing'));
+  const nodePrefix = composed.router.slice(0, composed.router.length - router.length);
+  const factorySource = `${nodePrefix}
 const lk1PlanTrace = (code, stepName) => { if (global.__trace) global.__trace.push([code, stepName]); };
 const __router = (msg, global, node) => {
-${tracedRouter}
+${router
+  .replace("const stop = (code, status = 503) => {",
+    "const stop = (code, status = 503) => { if (typeof lk1PlanTrace === 'function') lk1PlanTrace('STOP ' + code);")}
 };
 const __entry = (msg, global, node) => {
 ${entrySource}
@@ -167,13 +182,15 @@ const __final = (msg, global, node) => {
 ${finalSource}
 };
 return { canonical, entry: __entry, router: __router, final: __final };`;
-const createScope = vm.compileFunction(routerFactorySource, ['global', 'node'], { parsingContext: vm.createContext({}) });
+  return { canonicalPrefix, nodePrefix, factorySource,
+    createScope: vm.compileFunction(factorySource, ['global', 'node'], { parsingContext: vm.createContext({}) }) };
+})();
 /** One composed sandbox scope with the rule globals the preview reads. */
 const previewScope = (options = {}) => {
   const globals = { [HUB_POLICY_GLOBAL]: options.hubPolicy === undefined ? policy : options.hubPolicy,
     [PLAN_RULES_GLOBAL]: options.planRules === undefined ? planRulesGlobal(options.planRows || []) : options.planRules };
   const host = { get: key => globals[key], __trace: [] };
-  return { host, scope: createScope(host, { warn() {} }) };
+  return { host, scope: composition.createScope(host, { warn() {} }) };
 };
 const routerOutputs = (scope, host, msg) => {
   const outputs = scope.router(msg, host, { warn() {} });
@@ -222,7 +239,7 @@ function preview(options = {}) {
     // The game router reads the room/studio tariff through the admin service token.
     vivacrm_access_token: 'fixture-admin', vivacrm_token_expires_at: Date.now() + 60000 };
   const host = { get: key => globals[key], __trace: [] };
-  const scope = createScope(host, { warn() {} });
+  const scope = composition.createScope(host, { warn() {} });
   const instanceKey = id => JSON.stringify(['instance', 'iSkq6G', actor, id]);
   const instances = options.instances || subscriptions.map(row => ({ _id: instanceKey(row.subscriptionId),
     kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: row.subscriptionId,
@@ -472,4 +489,73 @@ test('the preview keeps the evaluator binding and usage scope the write path use
 test('every preview transport step is a read', requiresResolver, () => {
   assert.doesNotMatch(router, /insertOne|updateOne|\/split\/create|global\.set/);
   assert.match(router, /\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}/);
+});
+
+test('the release composition embeds the resolver inside the canonical closure', requiresResolver, () => {
+  // The generated node must be executable exactly as Node-RED compiles it.
+  new Function('msg', 'node', 'env', 'global', composed.router);
+  const open = composition.canonicalPrefix.indexOf('const canonical = (() => {');
+  const close = composition.canonicalPrefix.lastIndexOf('return {');
+  assert.ok(open >= 0 && close > open, 'The canonical helper closure must be an IIFE');
+  const body = composition.canonicalPrefix.slice(open, close);
+  // Inside the closure, not in a sibling IIFE: the resolver needs the closure's
+  // date and product helpers, which are const declarations of that same scope.
+  assert.ok(body.includes('function resolveLk1Rule'), 'resolveLk1Rule must be declared inside the closure');
+  assert.ok(body.includes('function normalizePlanRules'), 'normalizePlanRules must be declared inside the closure');
+  assert.ok(body.includes('const LK1_PLAN_RULES_GLOBAL'), 'The resolver must own its global name constant');
+  assert.equal(composed.router.split('function resolveLk1Rule').length - 1, 1, 'The resolver must be embedded once');
+  assert.equal(composed.router.split('const lk1ReadBoundPolicy').length - 1, 1, 'The policy reader must be embedded once');
+  assert.equal(composed.router.split('const lk1PlanRulesGlobal').length - 1, 1, 'The global accessor must be embedded once');
+  // The router calls them through `canonical.*`, so they must be on the closure.
+  assert.ok(composition.canonicalPrefix.slice(close).includes('resolveLk1Rule'));
+  assert.ok(composition.canonicalPrefix.slice(close).includes('lk1PlanRulesGlobal'));
+  assert.ok(composed.router.includes(`global.get(${JSON.stringify(PLAN_RULES_GLOBAL)})`));
+  const { scope } = previewScope({ planRows: [{ productId: RA, planKey: 'ra' }] });
+  for (const name of ['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal', 'lk1ReadBoundPolicy']) {
+    assert.equal(typeof scope.canonical[name], 'function', `canonical.${name} must be callable`);
+  }
+  // The embedded resolver really decides both cohorts inside the composed scope.
+  const hub = scope.canonical.resolveLk1Rule({ owned: [{ productId: HUB_PRODUCT_ID }] });
+  assert.equal(hub.source, 'HUB');
+  assert.equal(hub.matched, true);
+  assert.equal(hub.legacy, false);
+  const plan = scope.canonical.resolveLk1Rule({ owned: [{ productId: RA, purchaseDate: `${PLAN_FROM}T00:00:00` }] });
+  assert.equal(plan.source, 'PLAN');
+  assert.equal(plan.legacy, false);
+  assert.equal(plan.productId, RA);
+});
+
+test('the composition injects the reader and accessor the installed body lacks', requiresResolver, () => {
+  // A generation whose helper closure no longer carries the policy reader (for
+  // example because lk1Config moved to the resolver) still has to get one.
+  const body = bookingBody({ base: helperWithoutConfig, config: '() => ({ matched: false })' });
+  const composedWithoutReader = previewSources(syntheticFlow({ body, initialize: hubTransition().initialize }),
+    { pins: syntheticPins(body) });
+  const prefix = composedWithoutReader.router.slice(0, composedWithoutReader.router.indexOf('\nconst pricing'));
+  assert.equal(prefix.split('const lk1ReadBoundPolicy').length - 1, 1);
+  assert.equal(prefix.split('const lk1PlanRulesGlobal').length - 1, 1);
+  new Function('msg', 'node', 'env', 'global', composedWithoutReader.router);
+  // Without an installed policy the composition must refuse instead of shipping a
+  // reader that can never match.
+  assert.throws(() => previewSources(syntheticFlow({ body, initialize: '' }), { pins: syntheticPins(body) }),
+    /no lk1DesiredPolicy initializer/);
+});
+
+test('the composition refuses an unreviewed installed generation', requiresResolver, () => {
+  assert.throws(() => previewSources(syntheticFlow({ body: syntheticBody, initialize: hubTransition().initialize })),
+    /Price preview canonical booking source changed: actual [0-9a-f]{64}, expected [0-9a-f]{64}/);
+  const stale = syntheticPins(syntheticBody);
+  assert.throws(() => previewSources(syntheticFlow({ body: syntheticBody, initialize: hubTransition().initialize }),
+    { pins: { ...stale, evaluator: '0'.repeat(64) } }),
+  /Price preview canonical evaluator source changed: actual [0-9a-f]{64}, expected 0{64}/);
+});
+
+test('the composition reviews exactly the four pinned source texts', requiresResolver, () => {
+  assert.deepEqual(Object.keys(PREVIEW_CANONICAL_SOURCE_SHA256).sort(), ['booking', 'evaluator', 'join', 'pricing']);
+  for (const [label, digest] of Object.entries(PREVIEW_CANONICAL_SOURCE_SHA256)) {
+    assert.match(digest, /^[0-9a-f]{64}$/, `${label} pin must be a sha256`);
+  }
+  const stale = syntheticPins(syntheticBody);
+  assert.equal(PREVIEW_CANONICAL_SOURCE_SHA256.booking === stale.booking, false,
+    'The default pin still points at the installed generation, not at this synthetic body');
 });
