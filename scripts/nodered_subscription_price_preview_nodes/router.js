@@ -285,12 +285,17 @@ if (ctx.step === 'groupTariff') {
   const product = rows[0];
   const productIds = [product.id, product.productId].filter((id) => id !== undefined);
   const eventIds = [product.exerciseId, product.exercise?.id].filter((id) => id !== undefined);
-  const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);
+  const amountFields = ['cost', 'price', 'amount', 'trialCost'].filter((field) => product[field] !== undefined);
+  const amounts = amountFields.map((field) => product[field]);
   const types = [product.productType, product.type].filter((type) => type !== undefined);
   const allowedTypes = ["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"];
+  // Field names and shapes only: an amount is never copied into the refusal, but the
+  // names and the number of distinct (and zero) values are what identifies the rule.
   const observed = { productIds: productIds.length, idsAgree: new Set(productIds).size === 1,
     eventIds: eventIds.length, eventIdMatches: !eventIds.some((id) => id !== ctx.exerciseId),
     types: types.map((type) => String(type).slice(0, 40)), amounts: amounts.length,
+    amountFields, amountDistinct: new Set(amounts).size,
+    amountsZero: amounts.filter((amount) => amount === 0).length,
     amountsAgree: new Set(amounts).size === 1,
     amountsAreNonNegativeIntegers: amounts.every((amount) => Number.isSafeInteger(amount) && amount >= 0) };
   if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
@@ -311,7 +316,13 @@ if (ctx.step === 'evaluate') {
     const code = decision.blockers?.length === 1 ? decision.blockers[0].code : null;
     if (LIMIT_DECISION_BLOCKERS.includes(code)) quote(ctx.currentId, 'LIMIT_USED', null, 0, 0, code);
     else if (UNAVAILABLE_DECISION_BLOCKERS.includes(code)) quote(ctx.currentId, 'UNAVAILABLE', null, 0, 0, code);
-    else return stop('PRICE_PREVIEW_DECISION_UNRESOLVED');
+    else {
+      // Name the blocker (codes only) so an unmapped refusal is diagnosed from the
+      // response instead of reproduced. The verdict itself stays fail-closed.
+      ctx.errorDetails = { stage: 'decision_blockers',
+        blockers: (decision.blockers || []).map((blocker) => String(blocker?.code || 'UNNAMED').slice(0, 60)) };
+      return stop('PRICE_PREVIEW_DECISION_UNRESOLVED');
+    }
   } else {
     if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
       || decision.benefit.finalPriceMinor > ctx.basePriceMinor) return stop('PRICE_PREVIEW_DECISION_INVALID');

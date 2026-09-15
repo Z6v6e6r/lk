@@ -130,13 +130,16 @@ test('a technical blocker stays a fail-closed 503', () => {
     assert.equal(msg._subscriptionPricePreview.error, 'PRICE_PREVIEW_DECISION_UNRESOLVED', code);
     assert.equal(msg._subscriptionPricePreview.statusCode, 503, code);
   }
-  // A blocker list the preview cannot attribute stays fail-closed as well.
+  // A blocker list the preview cannot attribute stays fail-closed and names the codes.
   const ctx = baseCtx({ step: 'evaluate', currentId: SUB, pending: [], quotes: [], groupDiscountPercent: 50 });
   const { msg } = runRouter({
     ctx, canonical: identityStub([]),
     msg: { _managedSubscriptionPolicyDecision: { eligible: false, blockers: [{ code: 'A' }, { code: 'B' }] } },
   });
-  assert.equal(msg._subscriptionPricePreview.error, 'PRICE_PREVIEW_DECISION_UNRESOLVED');
+  const state = msg._subscriptionPricePreview;
+  assert.equal(state.error, 'PRICE_PREVIEW_DECISION_UNRESOLVED');
+  assert.equal(state.errorDetails.stage, 'decision_blockers');
+  assert.equal(JSON.stringify(state.errorDetails.blockers), JSON.stringify(['A', 'B']));
 });
 
 test('a refused event tariff names the sub-condition and the observed shape', () => {
@@ -154,7 +157,14 @@ test('a refused event tariff names the sub-condition and the observed shape', ()
     assert.equal(state.error, 'LK1_EVENT_TARIFF_UNVERIFIED', item.name);
     assert.equal(state.statusCode, 503, item.name);
     assert.equal(state.errorDetails.stage, item.stage, item.name);
-    assert.ok(plain(state.errorDetails.observed), item.name);
+    const observed = plain(state.errorDetails.observed);
+    assert.ok(observed, item.name);
+    assert.ok(observed, item.name);
+    if (item.stage !== 'request_url') {
+      assert.ok(Array.isArray(observed.amountFields), item.name);
+      assert.equal(typeof observed.amountDistinct, 'number', item.name);
+      assert.equal(typeof observed.amountsZero, 'number', item.name);
+    }
   }
   // The accepted shape keeps the proven tariff and never carries a detail.
   const ctx = baseCtx({ step: 'groupTariff' });
