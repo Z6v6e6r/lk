@@ -35,6 +35,31 @@ const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paid
       actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.catalog[ctx.metadata[subscriptionId].productId],
       discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}), evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
+// The preview owns no rule copy. It asks the shared resolver named in the
+// rollout contract (scripts/lib/lk1PlanRules.mjs), which Node-RED receives as a
+// generated declaration inside this node's helper closure. The guarded fallback
+// below only keeps an un-generated runtime on its current HUB-only behaviour and
+// owns no rule constant of its own.
+const previewRule = (owned) => {
+  if (typeof canonical.resolveLk1Rule === 'function') {
+    try {
+      const globalReader = typeof canonical.lk1PlanRulesGlobal === 'function' ? canonical.lk1PlanRulesGlobal : null;
+      const planRules = globalReader ? globalReader() : undefined;
+      return canonical.resolveLk1Rule(planRules === undefined ? { owned } : { owned, planRules });
+    } catch (_) { return { matched: true, code: 'LK1_PLAN_RULES_INVALID' }; }
+  }
+  const configured = canonical.lk1Config(owned);
+  if (!configured.matched || configured.code) return configured;
+  const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
+  if (dates.invalid || dates.dates.length !== 1) return { matched: true, code: 'SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED' };
+  const enforceFrom = '2026-09-01';
+  return dates.dates[0] < enforceFrom
+    ? { matched: true, legacy: true, purchaseDate: dates.dates[0], enforceFrom, source: 'PLAN' }
+    : { matched: true, legacy: false, rule: configured.rule, productId: configured.rule.productId,
+      purchaseDate: dates.dates[0], enforceFrom, source: 'PLAN' };
+};
+const previewRuleCode = (configured) => configured.code === 'LK1_PRODUCT_RULE_SOURCE_MISMATCH'
+  ? 'LK1_PLAN_RULES_INVALID' : configured.code;
 if (ctx.done) return out(4);
 if (eventRoute && typeof canonical.identityMoneyOwned !== 'function') return stop(eventRoute.error + '_BACKEND_NOT_READY');
 if (msg.error) return stop('PRICE_PREVIEW_READ_FAILED');
@@ -115,8 +140,7 @@ if (ctx.step === 'subscriptions') {
     return stop('PRICE_PREVIEW_SUBSCRIPTIONS_INCOMPLETE');
   }
   if (eventRoute && ctx.requestedIds === undefined) {
-    ctx.requestedIds = list.filter(row => row.status === 'ACTIVE' && (canonical.collectExactProductIds(row).length === 0
-      || canonical.collectExactProductIds(row).includes('db7a5250-7369-4f43-8ac5-9111be24bc74'))).map(row => row.subscriptionId || row.clientSubscriptionId || row.id);
+    ctx.requestedIds = list.filter(row => row.status === 'ACTIVE').map(row => row.subscriptionId || row.clientSubscriptionId || row.id);
     if (ctx.requestedIds.length > 20 || ctx.requestedIds.some(id => typeof id !== 'string'
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
       || new Set(ctx.requestedIds).size !== ctx.requestedIds.length) return stop('PRICE_PREVIEW_OWNERSHIP_UNRESOLVED');
@@ -134,18 +158,26 @@ if (ctx.step === 'subscriptions') {
 if (ctx.step === 'metadata') {
   if (msg.error || !Array.isArray(msg.payload)) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
   ctx.metadata = {};
+  // The same resolver decides which products carry a rule; the selected
+  // instance's product comes from its server-owned identity, never from a name.
+  ctx.rules = {};
   for (const id of ctx.requestedIds) {
     const matches = msg.payload.filter(row => row?._id === key('instance', ctx.actorClientId, id));
     const row = matches[0];
     if (matches.length !== 1 || row.kind !== 'instance' || row.tenantKey !== ctx.tenantKey
       || row.actorClientId !== ctx.actorClientId || row.subscriptionId !== id || row.invalid === true
-      || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(row.productId || '')
+      || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[0-9a-f]{12}$/i.test(row.productId || '')
       || canonical.collectExactProductIds(ctx.subscriptions[id]).some(product => product !== row.productId.toLowerCase())) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     ctx.metadata[id] = row;
+    const configured = previewRule([{ ...ctx.subscriptions[id], productId: row.productId.toLowerCase() }]);
+    if (configured.code) return stop(previewRuleCode(configured));
+    ctx.rules[id] = configured;
   }
+  ctx.ruleProductIds = [...new Set(Object.values(ctx.metadata).map(row => row.productId.toLowerCase()))];
   if (eventRoute) {
-    ctx.requestedIds = ctx.requestedIds.filter(id => ctx.metadata[id].productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74');
+    ctx.requestedIds = ctx.requestedIds.filter(id => ctx.rules[id].matched && !ctx.rules[id].legacy);
     ctx.metadata = Object.fromEntries(ctx.requestedIds.map(id => [id, ctx.metadata[id]]));
+    ctx.rules = Object.fromEntries(ctx.requestedIds.map(id => [id, ctx.rules[id]]));
     if (!ctx.requestedIds.length) { ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4); }
   }
   return find('catalog', { _id: { $in: [...new Set(Object.values(ctx.metadata).map(row => key('product', row.productId)))] } });
@@ -173,7 +205,7 @@ if (ctx.step === 'activeBookings' || ctx.step === 'historyBookings') {
   ctx.activeBookings = canonical.mergeBookings(ctx.activePayload, []).filter(row => !canonical.isInactiveBooking(row));
   delete ctx.activePayload;
   return find('operations', { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
-    'lk1.rule.productId': 'db7a5250-7369-4f43-8ac5-9111be24bc74' }, 2);
+    'lk1.rule.productId': { $in: ctx.ruleProductIds } }, 2);
 }
 if (ctx.step === 'operations') {
   if (msg.error || !Array.isArray(msg.payload)) return stop('LK1_ALLOWANCE_READ_FAILED');
@@ -280,19 +312,16 @@ while (ctx.step === 'next') {
   if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
   const owned = eventRoute ? canonical.identityMoneyOwned(bound, available) : canonical.identityOwned(bound, available, exercise);
   if (owned.length !== 1) return stop('PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
-  if (productId.toLowerCase() === 'db7a5250-7369-4f43-8ac5-9111be24bc74') {
-    const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
-    if (dates.invalid || dates.dates.length !== 1) return stop('SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED');
-  }
-  const configured = canonical.lk1Config(owned);
-  if (configured.code) return stop(configured.code);
-  if (eventRoute) {
-    const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
+  const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
+  const configured = previewRule(owned);
+  if (configured.code) return stop(previewRuleCode(configured));
+  ctx.previewResolved = configured.matched && !configured.legacy && productId.toLowerCase() === configured.rule.productId;
+  if (ctx.previewResolved && (dates.invalid || dates.dates.length !== 1)) return stop('SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED');
+  if (eventRoute && ctx.previewResolved) {
     const activation = canonical.lk1LifecycleInstant(live.activationDate);
     const expiry = canonical.lk1LifecycleInstant(live.expirationDate, true);
     const targetStart = Date.parse(ctx.target.startsAt);
-    if (!configured.matched || dates.invalid || dates.dates.length !== 1 || dates.dates[0] < '2026-09-01'
-      || live.status !== 'ACTIVE' || activation === null || expiry === null || activation > Date.now()
+    if (live.status !== 'ACTIVE' || activation === null || expiry === null || activation > Date.now()
       || activation > targetStart || expiry < Date.now() || expiry < targetStart + ctx.target.durationMinutes * 60000 - 1
       || live.holdUntil || live.frozenUntil || live.isFrozen === true) {
       quote(id, 'UNAVAILABLE', null, 0, 0, 'LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN'); continue;
@@ -300,12 +329,12 @@ while (ctx.step === 'next') {
     ctx.groupDiscountPercent = configured.rule[eventRoute.rule];
     if ((!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)) return stop(eventRoute.error + '_RULE_UNCONFIRMED');
   }
-  const visitCount = configured.matched ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
+  const visitCount = ctx.previewResolved ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
   if (!eventRoute && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),
     ctx.target.stationId, visitCount, ctx.target.durationMinutes, ctx.target.startsAt.slice(0, 10)).length !== 1) {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
-  if (!configured.matched) {
+  if (!ctx.previewResolved) {
     const plan = canonical.compatibilityPlanKey(canonical.resolvePlanKey(owned), { enabled: false });
     if (!plan || !canonical.PLAN_CATEGORIES[plan]?.includes('open_game')) return stop('PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED');
     const limit = canonical.resolveLimitMode(plan, ctx.target.startsAt.slice(0, 10));

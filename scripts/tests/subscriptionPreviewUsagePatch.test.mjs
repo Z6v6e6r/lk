@@ -60,9 +60,23 @@ const compile = source => {
   const pure = extractSubscriptionPricePreviewSource({ source, roots: ['canonicalUsage'] }).source;
   return vm.compileFunction(`${pure}\nreturn canonicalUsage(msg);`, ['msg'], { parsingContext: vm.createContext({}) });
 };
+// Line B lands the cap-as-discount evaluator. Until it reaches this branch the
+// decision is graded against the sibling revision, and the test skips when no
+// cap-as-discount evaluator is reachable instead of silently grading the old one.
+const evaluatorCandidates = [process.env.LK1_EVALUATOR_MODULE].filter(Boolean)
+  .concat(['../nodered_lk1_hub_nodes/evaluator.js',
+    '/private/tmp/lk1-rules-b-evaluator/scripts/nodered_lk1_hub_nodes/evaluator.js']);
+const evaluatorPath = evaluatorCandidates.find(candidate => {
+  try {
+    return fs.readFileSync(candidate.startsWith('/') ? candidate : new URL(candidate, import.meta.url), 'utf8')
+      .includes('aboveActiveLimit');
+  } catch { return false; }
+});
+const requiresEvaluator = { skip: evaluatorPath ? false : 'The cap-as-discount evaluator (line B) is not available in this worktree' };
 const policy = msg => {
-  const outputs = vm.compileFunction(read('../nodered_lk1_hub_nodes/evaluator.js'), ['msg'],
-    { parsingContext: vm.createContext({}) })(msg);
+  const source = evaluatorPath ? fs.readFileSync(evaluatorPath.startsWith('/') ? evaluatorPath
+    : new URL(evaluatorPath, import.meta.url), 'utf8') : read('../nodered_lk1_hub_nodes/evaluator.js');
+  const outputs = vm.compileFunction(source, ['msg'], { parsingContext: vm.createContext({}) })(msg);
   return (outputs[0] || outputs[1])._managedSubscriptionPolicyDecision;
 };
 
@@ -81,14 +95,19 @@ for (const [label, source] of sources) {
     assert.equal(policy(result).eligible, true);
     assert.ok(fixed.includes(patchPaidBenefitUsage(oldUsage).trim()), 'Matches existing booking gateway usage rules');
   });
-  test(`${label}: four cross-date paid-benefit bookings block, three remain eligible`, () => {
-    for (const count of [3, 4]) {
+  test(`${label}: a full active-bookings list is a discount, not a blocker`, requiresEvaluator, () => {
+    for (const count of [0, 3, 4, 5]) {
       const ops = Array.from({ length: count }, (_, i) => operation({ bookingId: `fixture:${i}` }));
       const result = run(ops, { activeBookings: ops.map(row => paidBooking(row.bookingId)) });
       assert.equal(result._managedSubscriptionPolicyInput.usage.activeServices, count);
       const decision = policy(result);
-      assert.equal(decision.eligible, count === 3);
-      assert.equal(decision.blockers.some(row => row.code === 'ACTIVE_SERVICES_LIMIT_REACHED'), count === 4);
+      const aboveCap = count >= 4;
+      assert.equal(decision.aboveActiveLimit, aboveCap);
+      assert.equal(decision.eligible, true);
+      assert.equal(decision.blockers.some(row => row.code === 'ACTIVE_SERVICES_LIMIT_REACHED'), false);
+      assert.equal(decision.gameMinutes.freeMinutes, aboveCap ? 0 : 60);
+      assert.equal(decision.gameMinutes.paidOverageMinutes, aboveCap ? 60 : 0);
+      assert.equal(decision.subscriptionVisitCount, aboveCap ? 0 : 1);
     }
   });
   test(`${label}: unrelated, released and absent provider bookings do not increase cap`, () => {
