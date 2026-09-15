@@ -41,7 +41,9 @@ The separate preview-only candidate from `SUBSCRIPTION_PREVIEW_USAGE_FIX.md` is
 included in this combined successor; it is not an additional deployment step.
 
 Current tracked gateway, base service-date helper and leave source are synchronized
-with the relevant pure transforms. Private flow bytes and customer records must
+with the relevant pure transforms. The historical unified candidate records the
+new base-router source hash as an UNBOUND amendment; its frozen candidate hashes
+and activation prohibition are unchanged. Private flow bytes and customer records must
 remain outside Git and logs. The composer performs no transport or deployment.
 
 ## Checks
