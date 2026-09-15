@@ -10,14 +10,21 @@
 // applies reviewed string deltas to the exact live bodies and pins the live
 // preimage and the resulting postimage of both nodes.
 //
-// Generation shape (changedNodeCount === 2):
-//   1. `lk_subscription_booking_router_20260804` (gateway): the embedded plan-rules
-//      module + the resolver-based `lk1Config`, the `lk1Quote` legacy short-circuit,
-//      the money gate and the two `gateway_hooks` gates.
-//   2. `lk_subscription_managed_policy_20260820` (evaluator): the reviewed
-//      `nodered_lk1_hub_nodes/evaluator.js` body, which validates the rule product
-//      instead of the hardcoded HUB id and replaces the active-bookings blocker with
-//      the additive `aboveActiveLimit` verdict.
+// Generation shape (changedNodeCount === 2 nodes, four changed fields):
+//   1. `lk_subscription_booking_router_20260804` (gateway):
+//      * `func`: the embedded plan-rules module + the resolver-based `lk1Config`,
+//        the `lk1Quote` legacy short-circuit, the money gate and the two
+//        `gateway_hooks` gates;
+//      * `initialize`: the reviewed `subscriptions_lk1_plan_rules` activation block
+//        (shape guard, single guarded write, readback) appended after the untouched
+//        HUB policy writer.
+//   2. `lk_subscription_managed_policy_20260820` (evaluator):
+//      * `func`: the reviewed `nodered_lk1_hub_nodes/evaluator.js` body, which
+//        validates the rule product instead of the hardcoded HUB id and replaces the
+//        active-bookings blocker with the additive `aboveActiveLimit` verdict.
+//
+// The `initialize` delta is what makes rule 3 real: without the global the resolver
+// falls back to legacy for every plan product.
 //
 // PENDING DELTA (deliberately NOT applied here): the price-preview node
 // `lk_subscription_price_preview_20260908_router` is amended by the reviewed
@@ -35,6 +42,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { planRulesSource } from "./lib/eventPaymentSources.mjs";
+import { LK1_PLAN_RULES_DESIRED, buildPlanRulesTransition } from "./lib/lk1PlanRulesTransition.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -59,6 +67,19 @@ export const PLAN_RULES_PREVIEW_NODE_ID = "lk_subscription_price_preview_2026090
 // of this patcher is refused instead of produced.
 const GATEWAY_PATCH_MARKER = "resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })";
 const EVALUATOR_PATCH_MARKER = "decision.aboveActiveLimit = activeCount >= rule.maxActiveBookings;";
+// The plan-rules writer the released gateway `initialize` must carry: without it the
+// rollout global is never written and rule 3 (plan products sold from 2026-09-01)
+// stays inert while rules 1/2/4/5 already hold.
+const GATEWAY_INITIALIZE_MARKER = 'const lk1PlanRulesKey = "subscriptions_lk1_plan_rules";';
+// The pre-existing HUB policy writer of the live gateway `initialize`. It must stay
+// untouched: `hubLk1SaleContract` reads that global in six nodes and a shape change
+// breaks `HUB_LK1_SALE_BINDING_DRIFT`.
+const HUB_INITIALIZE_MARKERS = Object.freeze([
+  'const lk1PolicyKey = "subscriptions_lk1_product_policy";',
+  "global.set(lk1PolicyKey, lk1DesiredPolicy);",
+  '"HUB policy prior mismatch; no overwrite"',
+  '"HUB policy readback mismatch"',
+]);
 
 // The live evaluator node keeps the LK1 path as an embedded copy of the base
 // `nodered_lk1_hub_nodes/evaluator.js` inside its own branch, followed by the
@@ -75,6 +96,9 @@ export const PLAN_RULES_TARGETS = Object.freeze({
     // sha256 of the exact live gateway function body pulled from 147 on 2026-09-15.
     liveFuncSha256: "abf46e8b1a05ca4d013ed0c3d9e168a2ae00a1d8eb5e866c3290acc5f47672d9",
     patchedFuncSha256: "ed59d29ecb8af6d917e941b2a5d302c8124024a4ce12b450232206088247a88d",
+    // sha256 of the live gateway `initialize` (setup) body: the HUB policy writer.
+    liveInitializeSha256: "db38f71e2840bf7d959a582df02ddf62810fd3c5b694c9a784a482e787b45a8a",
+    patchedInitializeSha256: "40ead051782bf8409fe9423ad783ec4cb7a1c6ba78fe4aff6231d5d3e5690395",
   },
   evaluator: {
     id: PLAN_RULES_EVALUATOR_NODE_ID,
@@ -300,6 +324,42 @@ export function buildGatewayBody(source) {
   return applyDeltas(source, PLAN_RULES_GATEWAY_DELTAS, "Gateway");
 }
 
+// The released gateway `initialize` (setup): the untouched live HUB policy writer
+// plus the plan-rules activation block. The HUB writer is verified before and after
+// so the annual-HUB sale contract (`hubLk1SaleContract`, 6 nodes) cannot drift.
+// `expectedPrior: null` means "no plan-rules global yet"; a later rule change is a
+// new generation that must name the exact prior it replaces.
+export function buildGatewayInitialize(source) {
+  assertNotPatched(source, GATEWAY_INITIALIZE_MARKER, "LK1 plan-rules gateway initialize");
+  for (const marker of HUB_INITIALIZE_MARKERS) {
+    if (!source.includes(marker)) {
+      throw new Error(`Live gateway initialize is missing the HUB writer anchor: ${marker}`);
+    }
+  }
+  const transition = buildPlanRulesTransition({
+    expectedPrior: null,
+    desired: LK1_PLAN_RULES_DESIRED,
+  });
+  const patched = `${source}${source.endsWith("\n") ? "" : "\n"}${transition.initialize}`;
+  for (const marker of HUB_INITIALIZE_MARKERS) {
+    if (!patched.includes(marker)) {
+      throw new Error(`Patched gateway initialize dropped the HUB writer anchor: ${marker}`);
+    }
+  }
+  for (const marker of [
+    'const lk1PlanRulesKey = "subscriptions_lk1_plan_rules";',
+    "global.set(lk1PlanRulesKey, lk1DesiredPlanRules);",
+    "plan rules prior mismatch; no overwrite",
+    "plan rules readback mismatch",
+  ]) {
+    if (!patched.includes(marker)) {
+      throw new Error(`Patched gateway initialize is missing the plan-rules writer: ${marker}`);
+    }
+  }
+  assertInitializeBody(patched, "Patched gateway initialize");
+  return patched;
+}
+
 // The embedded preimage of the live evaluator LK1 branch. The node-level sha pin
 // above already fixes the whole body, so this extraction is deterministic; the
 // embedded sha is pinned again so a review of this delta sees the exact fragment.
@@ -330,18 +390,20 @@ function assertNotPatched(source, marker, label) {
   if (source.includes(marker)) throw new Error(`${label} body is already patched`);
 }
 
-function assertPreimage(source, target, label) {
-  if (sha256(source) !== target.liveFuncSha256) {
-    throw new Error(`${label} live preimage drift: ${sha256(source)} != ${target.liveFuncSha256}`);
+function assertPreimage(source, target, label, field = "func") {
+  const pin = field === "initialize" ? target.liveInitializeSha256 : target.liveFuncSha256;
+  if (sha256(source) !== pin) {
+    throw new Error(`${label} live preimage drift (${field}): ${sha256(source)} != ${pin}`);
   }
 }
 
-function assertPostimage(source, target, label) {
-  if (target.patchedFuncSha256.startsWith("__")) {
-    throw new Error(`${label} postimage pin is not set`);
+function assertPostimage(source, target, label, field = "func") {
+  const pin = field === "initialize" ? target.patchedInitializeSha256 : target.patchedFuncSha256;
+  if (pin.startsWith("__")) {
+    throw new Error(`${label} ${field} postimage pin is not set`);
   }
-  if (sha256(source) !== target.patchedFuncSha256) {
-    throw new Error(`${label} postimage drift: ${sha256(source)} != ${target.patchedFuncSha256}`);
+  if (sha256(source) !== pin) {
+    throw new Error(`${label} postimage drift (${field}): ${sha256(source)} != ${pin}`);
   }
 }
 
@@ -352,6 +414,23 @@ function assertFunctionBody(body, label) {
   } catch (error) {
     throw new Error(`${label} is not a parseable Node-RED function body: ${error.message}`);
   }
+}
+
+function assertInitializeBody(body, label) {
+  try {
+    // A Node-RED setup (initialize) body must stay parseable with the host arguments.
+    new Function("global", "env", "node", "flow", body);
+  } catch (error) {
+    throw new Error(`${label} is not a parseable Node-RED initialize body: ${error.message}`);
+  }
+}
+
+export function patchLk1PlanRulesGatewayInitialize(source, target = PLAN_RULES_TARGETS.gateway) {
+  assertNotPatched(source, GATEWAY_INITIALIZE_MARKER, "LK1 plan-rules gateway initialize");
+  assertPreimage(source, target, "Gateway initialize", "initialize");
+  const patched = buildGatewayInitialize(source);
+  assertPostimage(patched, target, "Gateway initialize", "initialize");
+  return patched;
 }
 
 export function patchLk1PlanRulesGatewayBody(source, target = PLAN_RULES_TARGETS.gateway) {
@@ -376,7 +455,8 @@ function assertFunctionNode(node, id) {
   if (!node) throw new Error(`Node contract mismatch: ${id} is absent`);
   if (node.type !== "function" || node.d === true || node.disabled === true
     || !Number.isInteger(node.outputs) || node.outputs < 1
-    || node.wires?.length !== node.outputs || typeof node.func !== "string") {
+    || node.wires?.length !== node.outputs || typeof node.func !== "string"
+    || typeof node.initialize !== "string") {
     throw new Error(`Node contract mismatch: ${id}`);
   }
   return node;
@@ -409,17 +489,22 @@ export function composeLk1PlanRulesArtifacts(liveBytes, options = {}) {
   const preview = assertFunctionNode(
     flow.find((node) => node.id === PLAN_RULES_PREVIEW_NODE_ID), PLAN_RULES_PREVIEW_NODE_ID);
   const previewFuncBefore = preview.func;
+  const previewInitializeBefore = preview.initialize;
 
   const beforeGatewaySha256 = sha256(gateway.func);
+  const beforeGatewayInitializeSha256 = sha256(gateway.initialize);
   const beforeEvaluatorSha256 = sha256(evaluator.func);
   gateway.func = patchLk1PlanRulesGatewayBody(gateway.func);
+  gateway.initialize = patchLk1PlanRulesGatewayInitialize(gateway.initialize);
   evaluator.func = patchLk1PlanRulesEvaluatorBody(evaluator.func);
 
   const changes = [
-    { id: PLAN_RULES_GATEWAY_NODE_ID, fields: ["func"],
-      beforeSha256: beforeGatewaySha256, afterSha256: sha256(gateway.func) },
+    { id: PLAN_RULES_GATEWAY_NODE_ID, fields: ["func", "initialize"],
+      func: { beforeSha256: beforeGatewaySha256, afterSha256: sha256(gateway.func) },
+      initialize: { beforeSha256: beforeGatewayInitializeSha256,
+        afterSha256: sha256(gateway.initialize) } },
     { id: PLAN_RULES_EVALUATOR_NODE_ID, fields: ["func"],
-      beforeSha256: beforeEvaluatorSha256, afterSha256: sha256(evaluator.func) },
+      func: { beforeSha256: beforeEvaluatorSha256, afterSha256: sha256(evaluator.func) } },
   ];
 
   return {
@@ -428,8 +513,9 @@ export function composeLk1PlanRulesArtifacts(liveBytes, options = {}) {
     changes,
     pendingDeltas: PLAN_RULES_PENDING_DELTAS.map((delta) => ({ ...delta })),
     // The preview node is byte-identical to the live snapshot by construction: only
-    // the two allow-listed function bodies above were replaced.
-    previewNodeUnchanged: preview.func === previewFuncBefore,
+    // the two allow-listed nodes above were rewritten.
+    previewNodeUnchanged: preview.func === previewFuncBefore
+      && preview.initialize === previewInitializeBefore,
   };
 }
 
@@ -488,12 +574,24 @@ function main(args) {
     kind: PLAN_RULES_KIND,
     deploymentId: PLAN_RULES_DEPLOYMENT_ID,
     targets: {
-      gateway: { id: PLAN_RULES_TARGETS.gateway.id,
-        beforeSha256: PLAN_RULES_TARGETS.gateway.liveFuncSha256,
-        afterSha256: PLAN_RULES_TARGETS.gateway.patchedFuncSha256 },
+      gateway: {
+        id: PLAN_RULES_TARGETS.gateway.id,
+        func: { beforeSha256: PLAN_RULES_TARGETS.gateway.liveFuncSha256,
+          afterSha256: PLAN_RULES_TARGETS.gateway.patchedFuncSha256 },
+        initialize: { beforeSha256: PLAN_RULES_TARGETS.gateway.liveInitializeSha256,
+          afterSha256: PLAN_RULES_TARGETS.gateway.patchedInitializeSha256 },
+      },
       evaluator: { id: PLAN_RULES_TARGETS.evaluator.id,
-        beforeSha256: PLAN_RULES_TARGETS.evaluator.liveFuncSha256,
-        afterSha256: PLAN_RULES_TARGETS.evaluator.patchedFuncSha256 },
+        func: { beforeSha256: PLAN_RULES_TARGETS.evaluator.liveFuncSha256,
+          afterSha256: PLAN_RULES_TARGETS.evaluator.patchedFuncSha256 } },
+    },
+    planRulesActivation: {
+      key: "subscriptions_lk1_plan_rules",
+      expectedPrior: null,
+      ruleCount: LK1_PLAN_RULES_DESIRED.rules.length,
+      enforceFrom: "2026-09-01",
+      hubPolicyWriterPreserved: true,
+      appendedToGatewayInitialize: true,
     },
     sourceSha256: verified.sourceSha256,
     candidateSha256: sha256(outputText),
