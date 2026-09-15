@@ -66,6 +66,27 @@ test('the patcher replaces exactly one step with the reviewed fragment', () => {
   assert.deepEqual(built.changes, [{ id: READBACK_TARGET.id, fields: ['func'] }]);
 });
 
+test('the contract file exposes the allow-list the wrapper asserts', async () => {
+  const { buildFunctionOnlyContract } = await import('../nodered_reviewed_flow_deploy/runtime_contract.mjs');
+  const node = (id, func) => ({ id, type: 'function', outputs: 1, wires: [[]], func });
+  const live = Buffer.from(`${JSON.stringify([node('other', 'const a = 1;\n'), node('gateway', 'const a = 1;\n')], null, 2)}\n`);
+  const candidate = Buffer.from(`${JSON.stringify([node('other', 'const a = 1;\n'), node('gateway', 'const a = 2;\n')], null, 2)}\n`);
+  const contract = buildFunctionOnlyContract({ liveBytes: live, candidateBytes: candidate,
+    deploymentId: 'fixture-readback', allowedNodeIds: ['gateway'] });
+  // The count lives in the receipts, never in the contract file itself.
+  assert.equal(contract.changedNodeCount, undefined);
+  assert.equal(contract.allowedChanges.length, 1);
+  assert.equal(contract.allowedChanges[0].id, 'gateway');
+  assert.deepEqual(contract.allowedChanges[0].fields, ['func']);
+  assert.equal(contract.sourceSha256, sha256(live));
+  assert.equal(contract.candidateSha256, sha256(candidate));
+  const wrapper = fs.readFileSync(path.join(repoRoot, 'scripts/deploy_nodered_lk1_payment_readback_147.sh'), 'utf8');
+  // The contract-file check must read the allow-list, while the preflight
+  // receipt legitimately carries changedNodeCount.
+  assert.ok(wrapper.includes('value.allowedChanges'));
+  assert.ok(wrapper.includes('changes.some((change) => change.id !== process.argv[3]'));
+});
+
 test('the deploy wrapper keeps the confirmation gate, allow-list and rollback', () => {
   const wrapper = fs.readFileSync(path.join(repoRoot, 'scripts/deploy_nodered_lk1_payment_readback_147.sh'), 'utf8');
   assert.ok(wrapper.includes('NODE_RED_LK1_PAYMENT_READBACK_DEPLOY:-}" != "CONFIRM_147"'));
