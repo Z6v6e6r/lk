@@ -105,6 +105,7 @@
     "nodered:lk1-event-diagnostics:deploy-147": "bash scripts/deploy_nodered_lk1_event_diagnostics_hotfix_147.sh",
     "nodered:lk1-event-tariff-amounts:deploy-147": "bash scripts/deploy_nodered_lk1_tariff_amounts_hotfix_147.sh",
     "nodered:lk1-money-validity:deploy-147": "bash scripts/deploy_nodered_lk1_money_validity_hotfix_147.sh",
+    "nodered:lk1-money-evidence:deploy-147": "bash scripts/deploy_nodered_lk1_money_evidence_hotfix_147.sh",
     "nodered:managed-subscription-rules:deploy-147": "bash scripts/deploy_nodered_managed_subscription_rules_147.sh",
     "nodered:managed-subscription-rules:rollback-147": "bash scripts/rollback_nodered_managed_subscription_rules_147.sh",
     "nodered:lk1-subscription-enforcement:packet": "node scripts/prepare_lk1_subscription_enforcement_activation_packet.mjs",

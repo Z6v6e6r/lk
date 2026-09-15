@@ -184,7 +184,20 @@ if (productRule.matched && !productRule.legacy) {
       msg.payload = { state: "LK1_TARIFF_REQUIRED", operationId: ctx.operationId };
       return emit(OUTPUT_FINAL);
     }
-    if (quote.code) return lk1Stop(ctx, quote.code);
+    if (quote.code) {
+      // The money-evidence refusal is the one stop that can mean "the mandate was not
+      // proven in this pass" (for example a resumed operation whose readback phase is
+      // already recorded). Name the state instead of only the code; the verdict is the
+      // same and every other code keeps the previous `{ code }` body.
+      const observed = quote.code === "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN"
+        ? { stage: "money_evidence",
+          evidencePresent: isObj(ctx.lk1MoneyOwnership),
+          readbackPhase: typeof ctx.lk1MoneyReadbackPhase === "string" ? ctx.lk1MoneyReadbackPhase.slice(0, 32) : null,
+          selectedOwned: selectedOwned.length,
+          eventCategory: resolveCategory(exercise) }
+        : undefined;
+      return lk1Stop(ctx, quote.code, observed);
+    }
     if (!quote.legacy) {
       if (ctx.caller === "split_create_readonly_preflight") {
         // Advisory only. Durable allowance is resolved by the mutating detour.
