@@ -1,0 +1,256 @@
+{
+  "formatVersion": 2,
+  "stage": "STOPPED_INSTALL_CANDIDATE",
+  "environment": "DEV",
+  "sourceCommit": null,
+  "target": {
+    "unixUser": "lk1-subscription-dev",
+    "unixGroup": "lk1-subscription-dev",
+    "rootPath": "/srv/lk1-subscription-dev",
+    "fixtureRuntimePath": "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs",
+    "fixtureConfigPath": "/srv/lk1-subscription-dev/private/fixture.json",
+    "tlsKeyPath": "/srv/lk1-subscription-dev/tls/server.key",
+    "tlsCertificatePath": "/srv/lk1-subscription-dev/tls/server.crt",
+    "nodeRedFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
+    "nodeRedSettingsPath": "/srv/lk1-subscription-dev/node-red/settings.js",
+    "nodeRedReleaseReceiptPath": "/srv/lk1-subscription-dev/node-red/release-identity.json",
+    "installedIdentityEnvironmentFile": "/srv/lk1-subscription-dev/runtime/install-identity.env"
+  },
+  "authorizationCustody": {
+    "sourceMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved",
+    "sourceDirectoryOwner": "root:lk1-subscription-dev",
+    "sourceDirectoryMode": "0750",
+    "sourceFileOwner": "root:lk1-subscription-dev",
+    "sourceFileMode": "0440",
+    "transport": "ROOT_OWNED_GROUP_READ_ONLY_FILE",
+    "credentialName": "service-start.approved",
+    "runtimePath": "/srv/lk1-subscription-dev/authorization/service-start.approved",
+    "runtimePathEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE",
+    "credentialSchemaVersion": 1,
+    "maximumLifetimeSeconds": 3600,
+    "systemdMinimumVersion": 245,
+    "authorizationTransportHostSupportVerified": true
+  },
+  "credentialBinding": {
+    "environment": "DEV",
+    "roles": [
+      "cup",
+      "provider",
+      "identity",
+      "nodered"
+    ],
+    "installedSourceEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT",
+    "installedManifestEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256",
+    "requiresExactSourceCommit": true,
+    "requiresExactRuntimeManifestSha256": true,
+    "requiresRootOwnedGroupReadOnlyFile": true,
+    "requiresUnexpiredCredential": true
+  },
+  "units": [
+    "lk1-subscription-dev-cup.service",
+    "lk1-subscription-dev-provider-fixture.service",
+    "lk1-subscription-dev-identity-fixture.service",
+    "lk1-subscription-dev-nodered.service"
+  ],
+  "prerequisites": {
+    "historicalBootstrapReceiptRequired": true,
+    "dedicatedIdentityRequired": true,
+    "unitsDisabledRequired": true,
+    "unitsInactiveRequired": true,
+    "listenersAbsentRequired": true,
+    "authorizationMarkerAbsentRequired": true,
+    "fixtureConfigAbsentRequired": true,
+    "tlsCredentialsAbsentRequired": true,
+    "releaseReceiptAbsentRequired": true,
+    "freshHostReadbackRequired": true
+  },
+  "stoppedInstall": {
+    "exactCandidateParentPrefix": "/srv/lk1-subscription-dev/.stopped-install-",
+    "evidenceRoot": "/srv/lk1-subscription-dev/bootstrap-evidence/stopped-install",
+    "evidenceLayout": "MANIFEST_SHA256/ATTEMPT_ID",
+    "executionLock": "KERNEL_FLOCK_INHERITED_FD_TRUSTED_LAUNCHER",
+    "requiredExistingFiles": [
+      {
+        "path": "/srv/lk1-subscription-dev/node-red/settings.js",
+        "sha256": "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6"
+      }
+    ],
+    "installedFiles": [
+      {
+        "sourcePath": "payload/lk1_subscription_dev_runtime/fixture_runtime.mjs",
+        "targetPath": "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs",
+        "mode": "0550",
+        "owner": "root",
+        "group": "lk1-subscription-dev",
+        "preimage": {
+          "state": "ABSENT",
+          "sha256": null,
+          "mode": null,
+          "owner": null,
+          "group": null,
+          "nlink": null
+        }
+      },
+      {
+        "sourcePath": "payload/node-red/flows.json",
+        "targetPath": "/srv/lk1-subscription-dev/node-red/flows.json",
+        "mode": "0600",
+        "owner": "root",
+        "group": "lk1-subscription-dev",
+        "preimage": {
+          "state": "ABSENT",
+          "sha256": null,
+          "mode": null,
+          "owner": null,
+          "group": null,
+          "nlink": null
+        }
+      },
+      {
+        "sourcePath": "payload/units/lk1-subscription-dev-cup.service",
+        "targetPath": "/etc/systemd/system/lk1-subscription-dev-cup.service",
+        "mode": "0644",
+        "owner": "root",
+        "group": "root",
+        "preimage": {
+          "state": "EXACT_FILE",
+          "sha256": "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",
+          "mode": "0644",
+          "owner": "root",
+          "group": "root",
+          "nlink": 1
+        }
+      },
+      {
+        "sourcePath": "payload/units/lk1-subscription-dev-provider-fixture.service",
+        "targetPath": "/etc/systemd/system/lk1-subscription-dev-provider-fixture.service",
+        "mode": "0644",
+        "owner": "root",
+        "group": "root",
+        "preimage": {
+          "state": "EXACT_FILE",
+          "sha256": "dbf8a46a002b7f478b011b2afeb2a09837d8f44ecd5873a5225a6da6a895bca5",
+          "mode": "0644",
+          "owner": "root",
+          "group": "root",
+          "nlink": 1
+        }
+      },
+      {
+        "sourcePath": "payload/units/lk1-subscription-dev-identity-fixture.service",
+        "targetPath": "/etc/systemd/system/lk1-subscription-dev-identity-fixture.service",
+        "mode": "0644",
+        "owner": "root",
+        "group": "root",
+        "preimage": {
+          "state": "EXACT_FILE",
+          "sha256": "673fa03feb87aa886d408684ca947609263929ef178d395d93480fe096488179",
+          "mode": "0644",
+          "owner": "root",
+          "group": "root",
+          "nlink": 1
+        }
+      },
+      {
+        "sourcePath": "payload/units/lk1-subscription-dev-nodered.service",
+        "targetPath": "/etc/systemd/system/lk1-subscription-dev-nodered.service",
+        "mode": "0644",
+        "owner": "root",
+        "group": "root",
+        "preimage": {
+          "state": "EXACT_FILE",
+          "sha256": "75fafcae24c5aefdca545786967bed12d509d12d2555a37d94e23571732f764a",
+          "mode": "0644",
+          "owner": "root",
+          "group": "root",
+          "nlink": 1
+        }
+      }
+    ],
+    "forbiddenEffects": [
+      "DAEMON_RELOAD",
+      "SERVICE_START",
+      "SERVICE_ENABLE",
+      "INGRESS_CHANGE",
+      "CONFIG_OR_TLS_INSTALL",
+      "START_CREDENTIAL_OR_RELEASE_RECEIPT",
+      "PROVIDER_OR_DATABASE_WRITE"
+    ]
+  },
+  "rollback": {
+    "mode": "RESTORE_EXACT_PREIMAGE_OR_ABSENT",
+    "automaticOnInstallFailure": true,
+    "manualExecutionRequiresSeparateAuthorization": true,
+    "incompleteRecovery": "SEPARATELY_AUTHORIZED_IDEMPOTENT",
+    "preserveEvidence": true,
+    "deleteData": false
+  },
+  "candidateContents": {
+    "nodeRedFlow": "GENERATED_EXACT_SOURCE_CANDIDATE",
+    "sourceCandidateManifest": "INCLUDED_SOURCE_ONLY",
+    "releaseReceiptV2Template": "INCLUDED_SOURCE_ONLY",
+    "installExecutor": "INCLUDED_STOPPED_ONLY",
+    "rollbackExecutor": "INCLUDED_SEPARATELY_AUTHORIZED",
+    "trustedPreExecLauncher": "OUT_OF_BUNDLE_EXACT_SHA",
+    "installedIdentityEnvironmentFile": "NOT_INCLUDED",
+    "fixtureConfig": "NOT_INCLUDED",
+    "tlsCredentials": "NOT_INCLUDED",
+    "releaseReceipt": "NOT_INCLUDED",
+    "serviceStartCredential": "NOT_INCLUDED",
+    "ingress": "NOT_INCLUDED",
+    "activation": "NOT_INCLUDED"
+  },
+  "runtimeCapabilityDisclosure": {
+    "nodeRedExposure": "DORMANT_WRITE_CAPABLE_SOURCE_GRAPH",
+    "httpRoutes": [
+      "POST /lk/subscription-bookings",
+      "OPTIONS /lk/subscription-bookings"
+    ],
+    "outboundHttpNodes": 2,
+    "mongoOperations": [
+      "find",
+      "insertOne",
+      "updateOne"
+    ],
+    "providerFixture": "HEALTH_ONLY_FAIL_CLOSED",
+    "cupManagedContract": "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED_LOCAL_PHYSICAL_VERIFIED",
+    "networkIsolationRuntimeVerified": false,
+    "serviceStartBlocked": true,
+    "serviceStartBlocker": "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
+    "positiveUat": "NOT_AUTHORIZED",
+    "requiresSeparateStartReview": true,
+    "requiresSeparateMutationReview": true
+  },
+  "intendedStoppedPostconditions": {
+    "payloadInstalled": true,
+    "preimagePreserved": true,
+    "installEvidenceCreated": true,
+    "servicesEnabled": false,
+    "servicesActive": false,
+    "listenersOpen": false,
+    "authorizationMarkerCreated": false,
+    "fixtureConfigCreated": false,
+    "releaseReceiptCreated": false,
+    "ingressChanged": false,
+    "activationChanged": false,
+    "canaryIdsInstalled": false,
+    "secretsInstalled": false,
+    "externalWrites": false
+  },
+  "authority": {
+    "bundleBuildAllowed": true,
+    "hostReadAllowed": true,
+    "hostInstallAllowed": true,
+    "manualRollbackAllowed": false,
+    "daemonReloadAllowed": false,
+    "serviceStartAllowed": false,
+    "enableUnitsAllowed": false,
+    "ingressAllowed": false,
+    "activationAllowed": false,
+    "canaryIdsAllowed": false,
+    "secretsAllowed": false,
+    "providerWritesAllowed": false,
+    "paymentWritesAllowed": false,
+    "entitlementMutationsAllowed": false
+  }
+}

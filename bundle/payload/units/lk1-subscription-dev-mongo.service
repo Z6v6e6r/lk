@@ -1,0 +1,25 @@
+[Unit]
+Description=LK1 subscription isolated DEV fixture MongoDB (bootstrap locked)
+ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved
+ConditionPathIsExecutable=/srv/lk1-subscription-dev/runtime/mongodb/bin/mongod
+RefuseManualStart=yes
+
+[Service]
+Type=simple
+User=lk1-subscription-dev
+Group=lk1-subscription-dev
+WorkingDirectory=/srv/lk1-subscription-dev/mongo
+ExecStart=/srv/lk1-subscription-dev/runtime/mongodb/bin/mongod --bind_ip 127.0.0.1 --port 27030 --dbpath /srv/lk1-subscription-dev/mongo --nounixsocket
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/lk1-subscription-dev/mongo
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,110 @@
+[
+  {
+    "id": "lk1-subscription-dev-evidence-tab",
+    "type": "tab",
+    "label": "LK1 Subscription DEV Evidence",
+    "disabled": false,
+    "info": "Read-only release evidence only."
+  },
+  {
+    "id": "lk1-subscription-dev-release-in",
+    "type": "http in",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "GET exact DEV release receipt",
+    "url": "/lk/release-dev.json",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "wires": [
+      [
+        "lk1-subscription-dev-release-file"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-file",
+    "type": "file in",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Read root-owned release receipt",
+    "filename": "/srv/lk1-subscription-dev/node-red/release-identity.json",
+    "filenameType": "str",
+    "format": "utf8",
+    "chunk": false,
+    "sendError": true,
+    "encoding": "none",
+    "allProps": false,
+    "x": 440,
+    "y": 100,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-validate"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-validate",
+    "type": "function",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Validate exact served release identity",
+    "func": "const COMMIT = /^[a-f0-9]{40}$/;\nconst SHA256 = /^[a-f0-9]{64}$/;\nconst exactKeys = (item, expected) => item && typeof item === 'object' && !Array.isArray(item) && JSON.stringify(Object.keys(item).sort()) === JSON.stringify(expected.slice().sort());\nlet value;\ntry { value = JSON.parse(String(msg.payload || '')); } catch { value = null; }\nconst keys = ['schemaVersion', 'environment', 'state', 'sourceCommit', 'sourceFlowSha256', 'candidateSha256', 'manifestSha256', 'hostReadbackSha256', 'servedSha256', 'hostPreimage', 'rollback', 'target', 'authority'];\nconst exact = exactKeys(value, keys)\n  && value.schemaVersion === 2 && value.environment === 'DEV' && value.state === 'SERVED'\n  && COMMIT.test(String(value.sourceCommit || ''))\n  && ['sourceFlowSha256', 'candidateSha256', 'manifestSha256', 'hostReadbackSha256', 'servedSha256'].every((key) => SHA256.test(String(value[key] || '')))\n  && exactKeys(value.hostPreimage, ['state', 'sha256'])\n  && value.hostPreimage.state === 'ABSENT' && value.hostPreimage.sha256 === null\n  && exactKeys(value.rollback, ['mode', 'restoreSha256', 'preserveEvidence', 'deleteData', 'requiresSeparateAuthorization'])\n  && value.rollback.mode === 'RETURN_TO_ABSENT' && value.rollback.restoreSha256 === null\n  && value.rollback.preserveEvidence === true && value.rollback.deleteData === false\n  && value.rollback.requiresSeparateAuthorization === true\n  && exactKeys(value.target, ['hostAlias', 'serviceName', 'flowPath'])\n  && value.target.hostAlias === 'lk-reserve-89'\n  && value.target.serviceName === 'lk1-subscription-dev-nodered.service'\n  && value.target.flowPath === '/srv/lk1-subscription-dev/node-red/flows.json'\n  && exactKeys(value.authority, ['hostInstall', 'serviceStart', 'ingress', 'activation'])\n  && Object.values(value.authority).every((allowed) => allowed === false);\nmsg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\nmsg.statusCode = exact ? 200 : 503;\nmsg.payload = exact ? value : { code: 'DEV_RELEASE_RECEIPT_UNBOUND' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 720,
+    "y": 100,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-out"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-out",
+    "type": "http response",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Return release evidence",
+    "statusCode": "",
+    "headers": {},
+    "x": 1000,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "lk1-subscription-dev-release-error",
+    "type": "catch",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Fail closed when receipt is absent",
+    "scope": [
+      "lk1-subscription-dev-release-file"
+    ],
+    "uncaught": false,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-error-response"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-error-response",
+    "type": "function",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Return unbound release",
+    "func": "msg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\nmsg.statusCode = 503;\nmsg.payload = { code: 'DEV_RELEASE_RECEIPT_UNBOUND' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 720,
+    "y": 180,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-out"
+      ]
+    ]
+  }
+]

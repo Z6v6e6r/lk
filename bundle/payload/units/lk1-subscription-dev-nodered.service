@@ -1,0 +1,27 @@
+[Unit]
+Description=LK1 subscription isolated DEV Node-RED (bootstrap locked)
+ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved
+ConditionPathExists=/srv/lk1-subscription-dev/node-red/flows.json
+RefuseManualStart=yes
+After=lk1-subscription-dev-mongo.service lk1-subscription-dev-cup.service lk1-subscription-dev-provider-fixture.service lk1-subscription-dev-identity-fixture.service
+Requires=lk1-subscription-dev-mongo.service lk1-subscription-dev-cup.service lk1-subscription-dev-provider-fixture.service lk1-subscription-dev-identity-fixture.service
+
+[Service]
+Type=simple
+User=lk1-subscription-dev
+Group=lk1-subscription-dev
+WorkingDirectory=/srv/lk1-subscription-dev/node-red
+ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/runtime/node-red/red.js --userDir /srv/lk1-subscription-dev/node-red --settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/lk1-subscription-dev/node-red /srv/lk1-subscription-dev/evidence
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target
