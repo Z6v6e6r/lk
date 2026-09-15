@@ -192,8 +192,11 @@ The affected bundle compiles with inert `ci.invalid` settings only; it is not a
 DEV/release artifact. An initial synthetic CUA render exposed that the existing
 owned-subscription button ignored the candidate's monetary `priceLabel`. With
 coordinator-approved ownership of the existing component, the flagged candidate
-now shows «Потребуется оплата со скидкой. Посещение не списывается.» before the
-action; ordinary variants and business flow are unchanged. Final desktop and
+shows «Потребуется оплата со скидкой.» before the action; ordinary variants and
+business flow are unchanged. The candidate's closing note «Посещение не
+списывается.» was removed on 2026-09-15 from both the tournament signup and the
+group-training screens; the current copy is the shorter one and no pricing,
+quote or booking behavior changed. Final desktop and
 390px mobile CUA renders confirm the warning is visible and in the accessible
 button text. Mobile validity text still wraps poorly (pre-existing cosmetic
 limitation); no CSS was changed. No booking button was clicked. Playwright CLI
