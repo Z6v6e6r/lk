@@ -27,9 +27,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
+// Namespace import: on a pre-integration base the composition helper does not
+// exist yet, and a named import would make the whole file unloadable.
+import * as eventPaymentSources from '../lib/eventPaymentSources.mjs';
 import {
   HUB_PRODUCT_ID,
   PLAN_PRODUCTS,
@@ -78,12 +81,58 @@ const sourceText = relative => {
       cwd: SOURCE_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch {
-    return fs.readFileSync(path.join(SOURCE_ROOT, relative), 'utf8');
+    try {
+      return fs.readFileSync(path.join(SOURCE_ROOT, relative), 'utf8');
+    } catch {
+      return null;
+    }
   }
 };
 
-const EVALUATOR = sourceText('scripts/nodered_lk1_hub_nodes/evaluator.js');
+/**
+ * Release composition of the hub gateway, mirrored from
+ * `scripts/lib/eventPaymentSources.mjs`: the plan-rules resolver module is
+ * embedded in front of the gateway body. `null` means the composition helper
+ * (or its declared module) is absent, i.e. the contour is not integrated.
+ *
+ * `eventPaymentSources` is resolved against this file, so an explicit
+ * `LK1_MATRIX_SOURCE_ROOT` must be served by the host import below.
+ */
+const planRulesSource = () => {
+  if (typeof eventPaymentSources.planRulesSource !== 'function') return null;
+  try {
+    return eventPaymentSources.planRulesSource();
+  } catch {
+    return null;
+  }
+};
+
+/** Host-side release composition for the same root that `sourceText` reads. */
+const hostComposition = async () => {
+  const absolute = path.join(SOURCE_ROOT, 'scripts', 'lib', 'eventPaymentSources.mjs');
+  if (!fs.existsSync(absolute)) return null;
+  const module = await import(pathToFileURL(absolute).href);
+  return typeof module.hubGatewaySource === 'function' ? module.hubGatewaySource() : null;
+};
+
+// Verification override for cross-branch dry runs (a cherry-pick runs without
+// it): point the matrix at another checkout's evaluator to reproduce the
+// post-integration verdict before the merge lands.
+const EVALUATOR = process.env.LK1_MATRIX_EVALUATOR_SOURCE
+  ? fs.readFileSync(process.env.LK1_MATRIX_EVALUATOR_SOURCE, 'utf8')
+  : sourceText('scripts/nodered_lk1_hub_nodes/evaluator.js');
 const ROUTER = sourceText('scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js');
+const HEAD_GATEWAY = sourceText('scripts/nodered_lk1_hub_nodes/gateway.js');
+const HEAD_PLAN_RULES_MODULE = sourceText('scripts/lib/lk1PlanRules.mjs');
+// The embedded resolver module: prefer the committed copy so the harness stays
+// deterministic, fall back to the release composition when the module is not in
+// the committed tree. `undefined` marks «no embedded resolver available».
+const embeddedPlanRulesSource = () => {
+  if (HEAD_PLAN_RULES_MODULE !== null) return HEAD_PLAN_RULES_MODULE.replace(/^export /gm, '');
+  const composed = planRulesSource();
+  return composed === null ? undefined : composed;
+};
+const COMMITTED_PLAN_RULES = embeddedPlanRulesSource();
 
 // ---------------------------------------------------------------------------
 // Observation harness 1: the real evaluator function body.
@@ -224,11 +273,12 @@ const decide = (input, evaluatorSource = EVALUATOR) => {
 
 const hasDeclaration = (source, name) => new RegExp(`(?:^|\\n)(?:const|let|var|function)\\s+${name}\\b`).test(source);
 
-const buildGatewayHarness = () => {
+const buildGatewayHarness = ({ gatewaySource = HEAD_GATEWAY, embeddedSource = COMMITTED_PLAN_RULES } = {}) => {
+  if (!embeddedSource) return null;
   const files = {
     hooks: sourceText('scripts/nodered_lk1_hub_nodes/gateway_hooks.js'),
     router: ROUTER,
-    gateway: sourceText('scripts/nodered_lk1_hub_nodes/gateway.js'),
+    gateway: gatewaySource,
   };
   const helperRoots = [
     'MANAGED_ENFORCEMENT_PURCHASE_FROM', 'MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE',
@@ -246,6 +296,7 @@ const buildGatewayHarness = () => {
     ['router', files.router, helperRoots],
     ['gateway', files.gateway, gatewayRoots],
   ]) {
+    if (typeof source !== 'string') return null;
     const wanted = roots.filter(name => !taken.has(name) && hasDeclaration(source, name));
     if (!wanted.length) continue;
     const extracted = extractSubscriptionPricePreviewSource({ source, label, roots: wanted });
@@ -253,15 +304,13 @@ const buildGatewayHarness = () => {
     parts.push(`// ${label}\n${extracted.source}`);
   }
   if (!hasDeclaration(files.gateway, 'lk1Quote') || !hasDeclaration(files.gateway, 'lk1Config')) return null;
-  // Production injects the policy readers at generation time; recreate them here
-  // under the frozen names (contract §2): `lk1ReadBoundPolicy()` for
-  // `subscriptions_lk1_product_policy` and `lk1ReadPlanRules()` for
-  // `subscriptions_lk1_plan_rules`.
+  // Mirror the release composition exactly: the resolver module is embedded in
+  // front of the gateway body. The HUB policy reader is still injected by the
+  // generation patch, so recreate only that one under its frozen name.
   const readers = [
     `const lk1ReadBoundPolicy = () => global.get(${JSON.stringify(LK1_HUB_POLICY_GLOBAL)});`,
-    `const lk1ReadPlanRules = () => global.get(${JSON.stringify(LK1_PLAN_RULES_GLOBAL)});`,
   ].join('\n');
-  const body = `${parts.join('\n')}\n${readers}`;
+  const body = `${embeddedSource}\n${parts.join('\n')}\n${readers}`;
   const store = new Map([
     [LK1_HUB_POLICY_GLOBAL, structuredClone(HUB_POLICY)],
     [LK1_PLAN_RULES_GLOBAL, structuredClone(PLAN_RULES_DOCUMENT)],
@@ -271,13 +320,23 @@ const buildGatewayHarness = () => {
     set: (key, value) => { store.set(key, value); },
   };
   const scope = vm.compileFunction(`${body}\nreturn { lk1Config, lk1Quote };`, ['global'])(globalScope);
-  return { ...scope, store };
+  return { ...scope, store, embedded: true };
 };
 
 const harnessBuild = (() => {
   try {
-    const harness = buildGatewayHarness();
-    if (!harness) return { why: 'gateway closure could not be composed from HEAD sources' };
+    const harness = buildGatewayHarness({
+      gatewaySource: gatewayBodyOf(process.env.LK1_MATRIX_GATEWAY_SOURCE
+        ? fs.readFileSync(process.env.LK1_MATRIX_GATEWAY_SOURCE, 'utf8')
+        : HEAD_GATEWAY),
+      embeddedSource: process.env.LK1_MATRIX_PLAN_RULES_SOURCE
+        ? fs.readFileSync(process.env.LK1_MATRIX_PLAN_RULES_SOURCE, 'utf8').replace(/^export /gm, '')
+        : COMMITTED_PLAN_RULES,
+    });
+    if (!harness) {
+      return { why: 'embedded plan-rules module is absent from the committed sources '
+        + '(resolver not integrated); nothing to compose' };
+    }
     const probe = harness.lk1Config([subscriptionRecord({
       productId: RA_PRODUCT_ID,
       purchaseDate: PURCHASE_DATES.boundary,
@@ -377,6 +436,10 @@ const ruleForProduct = productId => {
   const rule = PLAN_RULES_DOCUMENT.rules.find(row => row.productId === productId);
   return rule ? ruleFieldsOf(rule) : null;
 };
+
+// The resolver accepts a record or a list of records; the matrix always drives
+// the list form, exactly as the gateway does with the owned subscriptions.
+const asOwnedList = owned => (Array.isArray(owned) ? owned : [owned]);
 
 // Quote fixtures for the gateway harness.
 const quoteExercise = () => structuredClone(OPEN_GAME_60);
@@ -501,7 +564,8 @@ const gatingCases = [
 test('§7.1/§7.3/§7.6 gating: product × sales date selects enforce / legacy / unmatched', { skip: notIntegrated() }, () => {
   assert.ok(HARNESS, 'gateway harness must be available when the contour is integrated');
   for (const entry of gatingCases) {
-    const configured = HARNESS.lk1Config(entry.owned);
+    const owned = asOwnedList(entry.owned);
+    const configured = HARNESS.lk1Config(owned);
     const label = `${entry.id}: ${entry.expected}`;
     if (entry.expectUnmatched) {
       assert.equal(configured.matched, false, label);
@@ -510,19 +574,19 @@ test('§7.1/§7.3/§7.6 gating: product × sales date selects enforce / legacy /
     }
     assert.equal(configured.matched, true, label);
     if (entry.expectCode) {
-      const quote = HARNESS.lk1Quote(quoteContext(), quoteExercise(), entry.owned);
+      const quote = HARNESS.lk1Quote(quoteContext(), quoteExercise(), owned);
       assert.equal(quote.code, entry.expectCode, label);
       assert.notEqual(quote.legacy, true, label);
       continue;
     }
     assert.equal(configured.code, undefined, label);
     if (entry.expectLegacy) {
-      const quote = HARNESS.lk1Quote(quoteContext(), quoteExercise(), entry.owned);
+      const quote = HARNESS.lk1Quote(quoteContext(), quoteExercise(), owned);
       assert.equal(quote.legacy, true, label);
       assert.equal(quote.code, undefined, label);
       continue;
     }
-    const expectedProduct = entry.owned[0].productId;
+    const expectedProduct = owned[0].productId;
     const expectedRule = expectedProduct === HUB_PRODUCT_ID
       ? HUB_POLICY : PLAN_RULES_DOCUMENT.rules.find(row => row.productId === expectedProduct);
     assert.equal(configured.rule.productId, expectedProduct, label);
@@ -530,7 +594,7 @@ test('§7.1/§7.3/§7.6 gating: product × sales date selects enforce / legacy /
       assert.equal(configured.rule[field], value, `${label} (${field})`);
     }
     assert.equal(configured.planKey ?? expectedRule.planKey, expectedRule.planKey, label);
-    const quote = HARNESS.lk1Quote(quoteContext(), quoteExercise(), entry.owned);
+    const quote = HARNESS.lk1Quote(quoteContext(), quoteExercise(), owned);
     assert.equal(quote.code, undefined, label);
     assert.equal(quote.legacy ?? false, false, label);
     assert.equal(quote.rule.productId, expectedProduct, label);
@@ -628,7 +692,7 @@ const multiIdRecordFor = entry => {
 test('§2.1 priority: the selected instance product decides, disagreements never fail closed', { skip: notIntegrated() }, () => {
   assert.ok(HARNESS, 'gateway harness must be available when the contour is integrated');
   for (const entry of multiIdCases) {
-    const owned = multiIdRecordFor(entry);
+    const owned = asOwnedList(multiIdRecordFor(entry));
     const configured = HARNESS.lk1Config(owned);
     const label = `${entry.id}: ${entry.expected}`;
     assert.notEqual(configured.code, 'LK1_PRODUCT_RULE_INVALID', label);
@@ -993,3 +1057,48 @@ test('postcheck: the expected values are attainable by a contract-conformant eva
   }
   assert.deepEqual(failures, [], failures.join('\n'));
 });
+
+// ---------------------------------------------------------------------------
+// The harness must be the release composition, not a private approximation.
+// ---------------------------------------------------------------------------
+
+test('harness composition mirrors scripts/lib/eventPaymentSources.mjs', { skip: notIntegrated() }, async () => {
+  assert.ok(HARNESS, 'gateway harness must be available when the contour is integrated');
+  const composed = await hostComposition();
+  if (composed === null) {
+    console.log('MATRIX-COMPOSITION release composition is not available in this root; '
+      + 'the harness still embeds the committed resolver module');
+    return;
+  }
+  assert.ok(composed.startsWith(COMMITTED_PLAN_RULES),
+    'hubGatewaySource() must prepend the committed resolver module');
+  // The production body embeds the same module and the same static gateway
+  // declarations; only the `// EVENT_PAYMENT_ROUTES` marker is substituted by
+  // the reviewed route body, so the declarations the harness executes are
+  // compared one by one instead of as one contiguous slice.
+  for (const anchor of [
+    'function isNodeRedHttpsCheckout(',
+    'const lk1Config = (owned) => {',
+    'resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })',
+    'const lk1Quote = (ctx, exercise, owned) => {',
+    'const lk1Fingerprint = (ctx, quote) =>',
+    'const lk1QuoteOwned = (ctx, exercise) => {',
+    'const lk1LifecycleInstant = (value, endOfDay = false) => {',
+    'if (proof.kind === "EVENT_ONE_TIME") target.priceProductId = proof.productId;',
+  ]) {
+    assert.ok(gatewayBodyOf(HEAD_GATEWAY).includes(anchor), `harness gateway body must declare: ${anchor}`);
+    assert.ok(composed.includes(anchor), `release composition must contain: ${anchor}`);
+  }
+  for (const symbol of ['LK1_PLAN_RULES_GLOBAL', 'LK1_HUB_PRODUCT_ID', 'LK1_PLAN_RULES_FROM',
+    'resolveLk1Rule', 'normalizePlanRules', 'lk1ReadPlanRules']) {
+    assert.ok(COMMITTED_PLAN_RULES.includes(symbol), `embedded module must declare ${symbol}`);
+  }
+  assert.ok(!hasDeclaration(HEAD_GATEWAY, 'resolveLk1Rule'),
+    'the gateway must not redeclare the embedded resolver');
+});
+
+/** The gateway body the harness executes, up to the Node-RED step dispatch. */
+function gatewayBodyOf(source) {
+  const parts = String(source).split('// HUB_STEPS');
+  return parts.length === 2 ? parts[0] : String(source);
+}
