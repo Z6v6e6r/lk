@@ -142,6 +142,81 @@ test('CAS ambiguity never dispatches transaction; verified readback returns exac
   assert.equal(confirmed.result.payload.subscriptionVisitCount, 0);
 });
 
+test('split game readback accepts the real Viva transaction evidence shape', () => {
+  const gameCtx = () => ({
+    caller: 'split', managedAction: 'JOIN_GAME', category: 'open_game',
+    step: 'lk1_transaction_readback', tenantKey: 'fixture', actorClientId: 'fixture-actor',
+    actorPhone: 'fixture-phone', studioId: 'fixture-studio', exerciseId: 'fixture-event',
+    confirmedBookingId: 'fixture-booking', operationId: 'fixture-operation', operationKey: 'fixture-key',
+    clientSubscriptionId: 'fixture-subscription',
+    lk1: {
+      transactionId: 'fixture-transaction', transactionAttemptedAt: '2026-09-15T12:26:00.000Z',
+      target: { category: 'GAME', eventId: 'fixture-event', stationId: 'fixture-studio',
+        priceProductId: 'fixture-game-carrier', basePriceMinor: 1000000 },
+      rule: { productId: hubId, maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+        gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 },
+      decision: { eligible: true, subscriptionVisitCount: 0, benefit: { finalPriceMinor: 210000 } },
+      transactionIntent: { productId: 'fixture-game-carrier', bookingId: 'fixture-booking',
+        actorClientId: 'fixture-actor', studioId: 'fixture-studio', chargeMinor: 210000, discountMinor: 790000 },
+    },
+  });
+  // Real Viva admin transaction readback: the checkout link lives in
+  // cardPaymentInfo, the payable amount is the minor `toPay`, and neither the
+  // client nor the booking reference is echoed by this DTO.
+  const transaction = { id: 'fixture-transaction', toPay: 210000,
+    cardPaymentInfo: { paymentId: 'fixture-payment', paymentUrl: 'https://pay.tbank.ru/fixture', status: 'NEW' },
+    paymentDueDate: '2026-09-15T12:36:00.000Z' };
+  const accepted = call(gameCtx(), transaction);
+  assert.equal(accepted.result.step, 'lk1_checkout_saved');
+  assert.deepEqual(accepted.result.update.$set['lk1.checkout'],
+    { transactionId: 'fixture-transaction', paymentUrl: 'https://pay.tbank.ru/fixture', toPayMinor: 210000 });
+  // Nested provider echoes are read exactly like the legacy split lookup reads them.
+  for (const echoed of [
+    { bookingIds: ['fixture-booking'] },
+    { products: [{ paymentBookingIds: ['fixture-booking'] }] },
+    { products: [{ pricingDetails: [{ clientBookingId: 'fixture-booking' }] }] },
+    { client: { id: 'fixture-actor' } },
+    { products: [{ id: 'fixture-game-carrier', type: 'SERVICE', count: 1, discount: 790000 }] },
+  ]) {
+    assert.equal(call(gameCtx(), { ...transaction, ...echoed }).result.step, 'lk1_checkout_saved', JSON.stringify(echoed));
+  }
+  // Every alias the provider does echo still has to agree with the recorded intent.
+  for (const conflict of [
+    { id: 'other' }, { id: 'fixture-transaction', transactionId: 'other' }, { toPay: 209999 },
+    { clientId: 'other' }, { client: { id: 'fixture-actor', uuid: 'other' } },
+    { bookingIds: ['other'] }, { products: [{ bookingId: 'other' }] },
+    { products: [{ pricingDetails: [{ clientBookingId: 'other' }] }] },
+    { products: [{ id: 'other' }] }, { products: [{ discount: 1 }] },
+    { cardPaymentInfo: { paymentUrl: 'javascript:bad' } },
+    { paymentUrl: 'https://pay.example.test/other', cardPaymentInfo: { paymentUrl: 'https://pay.tbank.ru/fixture' } },
+    { currency: 'USD' },
+  ]) {
+    assert.equal(call(gameCtx(), { ...transaction, ...conflict }).result.kind, 'stop', JSON.stringify(conflict));
+  }
+  assert.equal(call(gameCtx(), transaction, { msg: { statusCode: 503 } }).result.kind, 'stop');
+});
+
+test('group training readback accepts the real Viva transaction evidence shape', () => {
+  const { ctx } = payment(50, 550000);
+  ctx.step = 'lk1_transaction_readback'; ctx.lk1.transactionId = 'fixture-transaction';
+  const transaction = { id: 'fixture-transaction', toPay: 275000,
+    cardPaymentInfo: { paymentId: 'fixture-payment', paymentUrl: 'https://pay.tbank.ru/fixture-group', status: 'NEW' },
+    paymentDueDate: '2026-09-15T12:36:00.000Z' };
+  const accepted = call(ctx, transaction);
+  assert.equal(accepted.result.step, 'lk1_checkout_saved');
+  assert.equal(accepted.result.update.$set['lk1.checkout'].paymentUrl, 'https://pay.tbank.ru/fixture-group');
+  assert.equal(accepted.result.update.$set['lk1.checkout'].toPayMinor, 275000);
+  for (const conflict of [
+    { id: 'other' }, { toPay: 274999 }, { clientId: 'other' },
+    { products: [{ paymentBookingIds: ['other'] }] },
+    { products: [{ discount: 1 }] },
+    { cardPaymentInfo: { paymentUrl: 'javascript:bad' } },
+  ]) {
+    ctx.step = 'lk1_transaction_readback';
+    assert.equal(call(ctx, { ...transaction, ...conflict }).result.kind, 'stop', JSON.stringify(conflict));
+  }
+});
+
 test('game payments still use split serializer and its unchanged 10000 carrier', () => {
   const ctx = context(); ctx.managedAction = 'JOIN_GAME'; ctx.caller = 'split'; ctx.step = 'lk1_payment_products'; ctx.lk1.target.category = 'GAME';
   assert.equal(call(ctx, [service()]).result.kind, 'final');
