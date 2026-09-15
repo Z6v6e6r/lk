@@ -354,6 +354,11 @@ const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   msg.followRedirects = false;
   msg.maxRedirects = 0;
   delete msg.error;
+  // A request's provenance must be its own response: Node-RED sets `msg.responseUrl` on
+  // every reply and the gateway/tariff checks compare it with the URL they asked for.
+  // Leaving the previous step's value in place made those checks fail on a stale URL
+  // (`LK1_EVENT_TARIFF_UNVERIFIED` on every group training and tournament).
+  delete msg.responseUrl;
   delete msg.statusCode;
   return emit(OUTPUT_HTTP);
 };

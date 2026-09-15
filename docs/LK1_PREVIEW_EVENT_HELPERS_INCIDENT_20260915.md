@@ -99,3 +99,73 @@ assertion на `canonical.*` отсутствовал.
   обычным фронтовым релизом.
 * Откат 147 на `flows-pre-lk1-plan-rules-20260915T190516+0300.json` не выполнялся
   (решение оператора — фикс-форвард); бэкап и helper остаются доступными.
+
+## Второй слой: событийный маршрут после восстановления хелперов
+
+После хотфикса `lk1-preview-event-helpers` (инсталл `d8bbfe27…`, 21:40 MSK) массовый
+503 `*_DISCOUNT_BACKEND_NOT_READY` исчез, но событийный маршрут оставался нерабочим.
+Разбор живого потока (nginx + перехват тел ответов на loopback, окно 21:41–21:57)
+дал четыре остаточных класса, из них три — регрессии того же релиза:
+
+| код / тело | кол-во за 16 мин | происхождение |
+| --- | --- | --- |
+| `{"quotes":[]}` (200) | 31 | внеконтурные подписки выбрасывались из батча: кабинет показывал «Условия подписки не подтверждены» и блокировал запись |
+| `LK1_EVENT_TARIFF_UNVERIFIED` (503) | 27 в превью + 11 в CREATE | проверка тарифа Viva сравнивала `msg.responseUrl` с URL своего запроса, а поле оставалось от предыдущего шага |
+| `PRICE_PREVIEW_DECISION_UNRESOLVED` (503) | 9 | до превью доходили блокеры, которые маппился только снятый лимитный код |
+| `PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED` (503) | 6 | владение для событий считалось HUB-онли (`identityMoneyOwned`), план-продукты дохли |
+
+Доказательства регрессий: `PRICE_PREVIEW_DECISION_UNRESOLVED` (тело 54 байта) в nginx
+не встречается ни разу до 19:05 и появляется с 19:00 (26/91/12 в час); коды
+`*_DISCOUNT_BACKEND_NOT_READY` (53/58 байт) — только с 19:00.
+
+### Причина по каждому пункту
+
+1. **Внеконтурная когорта.** Шаг `metadata` фильтровал `ctx.requestedIds` до
+   `matched && !legacy`; при пустом остатке роутер отдавал `{"quotes":[]}` с 200, а
+   `isSubscriptionEventDiscountQuote`/`matchGroupSubscriptionDiscount` такое не
+   принимают, и `GameJoinPage.tsx:1288` / `GamesPage.tsx:14141` блокируют запись.
+   Исправлено: контур решает, кого считает managed-оценщик, а не кто видит цену;
+   внеконтурные получают обычный тариф со скидкой 0 % (`status: AVAILABLE`,
+   `amountMinor === basePriceMinor`), что и означает «контур выключен».
+2. **Владение для событий.** `owned` считался через `identityMoneyOwned`, который
+   требует ровно HUB-продукт. Теперь HUB по-прежнему идёт через money-identity (мандат
+   годовой подписки сохранён), остальные продукты — через продуктовую идентичность,
+   которая сама применяет HUB-ограничения для HUB.
+3. **Блокеры оценщика.** Аудит LK1-ветки оценщика: лимит активных записей перестал быть
+   блокером и стал скидкой, из-за чего размаскировался `USAGE_SNAPSHOT_BUCKET_MISMATCH`
+   (у клиента исчерпан лимит активных и не сходится снимок free-минут) — раньше он
+   получал 200 `LIMIT_USED`. Маппинг: `USAGE_SNAPSHOT_BUCKET_MISMATCH` и исторический
+   `ACTIVE_SERVICES_LIMIT_REACHED` → `LIMIT_USED`; `TARGET_NOT_SERVER_RESOLVED`,
+   `EVENT_NOT_INCLUDED`, `LK1_GAME_OVERAGE_ALLOCATION_UNBOUND` → `UNAVAILABLE`; все
+   технические коды (`LK1_POLICY_INVALID`, `LK1_PRODUCT_BINDING_INVALID`,
+   `USAGE_SNAPSHOT_INVALID`, `BASE_PRICE_*`, `BENEFIT_*`, `PRICE_CALCULATION_OVERFLOW`)
+   остаются fail-closed 503.
+4. **Провенанс запроса.** `msg.responseUrl` ставит Node-RED на каждый ответ, а шаг
+   тарифа сверяет его со своим URL; в цепочке шагов поле оставалось от предыдущего
+   запроса, поэтому проверка падала при корректном ответе. Исправлено в обоих путях:
+   `delete msg.responseUrl` в `http()` превью и в `prepareHttp` booking-роутера
+   (create/join). Дополнительно шаг тарифа теперь пишет `error.details.stage`
+   (`request_url|product_identity|product_type|product_amount|amount_ceiling`) и
+   наблюдаемую форму (счётчики и значения перечислений, без сумм и имён), а `final`
+   отдаёт это в теле 503 — следующая остановка диагностируется по ответу, а не догадкой.
+   Решение accept/reject не изменилось.
+
+### Генерация `lk1-event-quotes`
+
+Ровно три узла по одному полю `func`: preview router `3ac29cf0…` → `9b4f69b5…`,
+preview final `5312c424…` → `7c822e2b…`, booking gateway `ed59d29e…` → `44073942…`.
+Preimage — живой flow `d8bbfe27…` (4804 узла); evaluator, split/join и блок
+активации plan-rules не меняются. Обёртка с CONFIRM_147, exact-graph контрактом на три
+узла, бэкапами, readback и авто-rollback: `npm run nodered:lk1-event-quotes:deploy-147`.
+
+### Остаточные риски второго слоя
+
+* `USAGE_SNAPSHOT_BUCKET_MISMATCH` остаётся смешанным случаем (дрейф бакета против
+  реального «лимит исчерпан»); превью отвечает мягким `LIMIT_USED`, CREATE при этом
+  сохраняет собственный fail-closed.
+* Второй сайт подготовки HTTP-запроса в booking-узле (managed-runtime активация,
+  payload-объект) сохраняет ту же привычку не сбрасывать `msg.responseUrl`; его проверки
+  сравнивают поле позитивно (`=== url`) и в этот релиз не входят — отдельная задача.
+* `docs/LK1_ENFORCEMENT_ROLLOUT_COORDINATION.md`, на который ссылаются комментарии
+  `scripts/lib/lk1PlanRules.mjs` и генераций, в репозитории отсутствует: документ нужно
+  восстановить отдельно.
