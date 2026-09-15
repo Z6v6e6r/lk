@@ -87,6 +87,31 @@ test('the contract file exposes the allow-list the wrapper asserts', async () =>
   assert.ok(wrapper.includes('changes.some((change) => change.id !== process.argv[3]'));
 });
 
+test('the wrapper stage and backup paths satisfy the reviewed remote contract', () => {
+  const helper = fs.readFileSync(
+    path.join(repoRoot, 'scripts/nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs'), 'utf8');
+  const stageParent = /const STAGE_PARENT = "([^"]+)";/.exec(helper)?.[1];
+  const patternLiteral = /const STAGE_PATTERN = \/(.+)\/;/.exec(helper)?.[1];
+  const backupDir = /const BACKUP_DIRECTORY = "([^"]+)";/.exec(helper)?.[1];
+  assert.ok(stageParent && patternLiteral && backupDir, 'remote stage/backup constants');
+  const stagePattern = new RegExp(patternLiteral);
+  const wrapper = fs.readFileSync(path.join(repoRoot, 'scripts/deploy_nodered_lk1_payment_readback_147.sh'), 'utf8');
+  const stageLine = /^remote_stage="([^"]*)"$/m.exec(wrapper)?.[1];
+  assert.ok(stageLine, 'remote_stage assignment');
+  const rendered = stageLine
+    .replace('$remote_stamp', '20260915T164214+0300')
+    .replace(/\$\$/g, '76648');
+  assert.equal(rendered.slice(0, rendered.lastIndexOf('/')), stageParent);
+  assert.ok(stagePattern.test(rendered.slice(rendered.lastIndexOf('/') + 1)), rendered);
+  // The helper requires these exact file names inside the stage.
+  assert.ok(wrapper.includes('remote_candidate="$remote_stage/candidate.flow.json"'));
+  assert.ok(wrapper.includes('remote_contract="$remote_stage/contract.json"'));
+  // Recovery artifacts must satisfy the reviewed backup contract as well.
+  assert.ok(wrapper.includes(`remote_backup_dir="${backupDir}"`));
+  assert.ok(wrapper.includes('remote_flow_backup="$remote_backup_dir/flows-pre-$deployment_id-$remote_stamp.json"'));
+  assert.ok(wrapper.includes('remote_contract_backup="$remote_backup_dir/contract-$deployment_id-$remote_stamp.json"'));
+});
+
 test('the deploy wrapper keeps the confirmation gate, allow-list and rollback', () => {
   const wrapper = fs.readFileSync(path.join(repoRoot, 'scripts/deploy_nodered_lk1_payment_readback_147.sh'), 'utf8');
   assert.ok(wrapper.includes('NODE_RED_LK1_PAYMENT_READBACK_DEPLOY:-}" != "CONFIRM_147"'));

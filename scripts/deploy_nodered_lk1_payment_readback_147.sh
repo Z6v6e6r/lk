@@ -50,7 +50,10 @@ preflight_result="$stage_root/preflight.json"
 apply_result="$stage_root/apply.json"
 postcheck_result="$stage_root/postcheck.json"
 remote_stamp="$(date '+%Y%m%dT%H%M%S%z')"
-remote_stage="/root/.node-red/.padlhub-lk1-readback-stage-$remote_stamp-$$"
+# The remote helper only accepts its own reviewed stage shape:
+# /root/.node-red/.padlhub-reviewed-flow-stage-<stamp>-<pid> holding
+# candidate.flow.json and contract.json.
+remote_stage="/root/.node-red/.padlhub-reviewed-flow-stage-$remote_stamp-$$"
 remote_candidate="$remote_stage/candidate.flow.json"
 remote_contract="$remote_stage/contract.json"
 remote_helper="$remote_stage/deploy_reviewed_flow_147_remote.mjs"
