@@ -196,6 +196,27 @@ test('split game readback accepts the real Viva transaction evidence shape', () 
   assert.equal(call(gameCtx(), transaction, { msg: { statusCode: 503 } }).result.kind, 'stop');
 });
 
+test('group training readback accepts the real Viva transaction evidence shape', () => {
+  const { ctx } = payment(50, 550000);
+  ctx.step = 'lk1_transaction_readback'; ctx.lk1.transactionId = 'fixture-transaction';
+  const transaction = { id: 'fixture-transaction', toPay: 275000,
+    cardPaymentInfo: { paymentId: 'fixture-payment', paymentUrl: 'https://pay.tbank.ru/fixture-group', status: 'NEW' },
+    paymentDueDate: '2026-09-15T12:36:00.000Z' };
+  const accepted = call(ctx, transaction);
+  assert.equal(accepted.result.step, 'lk1_checkout_saved');
+  assert.equal(accepted.result.update.$set['lk1.checkout'].paymentUrl, 'https://pay.tbank.ru/fixture-group');
+  assert.equal(accepted.result.update.$set['lk1.checkout'].toPayMinor, 275000);
+  for (const conflict of [
+    { id: 'other' }, { toPay: 274999 }, { clientId: 'other' },
+    { products: [{ paymentBookingIds: ['other'] }] },
+    { products: [{ discount: 1 }] },
+    { cardPaymentInfo: { paymentUrl: 'javascript:bad' } },
+  ]) {
+    ctx.step = 'lk1_transaction_readback';
+    assert.equal(call(ctx, { ...transaction, ...conflict }).result.kind, 'stop', JSON.stringify(conflict));
+  }
+});
+
 test('game payments still use split serializer and its unchanged 10000 carrier', () => {
   const ctx = context(); ctx.managedAction = 'JOIN_GAME'; ctx.caller = 'split'; ctx.step = 'lk1_payment_products'; ctx.lk1.target.category = 'GAME';
   assert.equal(call(ctx, [service()]).result.kind, 'final');
