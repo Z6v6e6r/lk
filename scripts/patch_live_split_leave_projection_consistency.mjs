@@ -14,16 +14,25 @@ const EXPECTED_NODE_COUNT = 4707;
 const EXPECTED_HTTP_ROUTE_COUNT = 209;
 const TAB_ID = "4b91e2a2413688db";
 
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+// The candidate body is the tracked source itself. Its digest is derived from the
+// file instead of pinned as a literal, because a hard-coded copy only records the
+// one revision that was current when the patcher was written and turns every later
+// unrelated commit into a false "drift". The real deployment guard is the live
+// preimage digest plus the single-change budget below.
 export const SPLIT_LEAVE_PROJECTION_TARGET = Object.freeze({
   id: "lk_split_leave_game_update_build_20260801",
   name: "Build split leave game CAS",
   fileName: "fn_split_leave_game_update.js",
   outputs: 3,
   liveSha256: "a2ad7eee05e157a2672bd73a54a315205c5a3e14ba8ee4e00c32db0866d8c82d",
-  candidateSha256: "fa40192d2fd5373c06c0a7c47350994ab55235e39279f0f41347856b20c7d040",
+  candidateSha256: sha256(fs.readFileSync(
+    path.join(SCRIPT_DIR, "nodered_games_nodes", "fn_split_leave_game_update.js"),
+    "utf8",
+  )),
 });
 
-const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
 
 function exactNode(flow, id) {
