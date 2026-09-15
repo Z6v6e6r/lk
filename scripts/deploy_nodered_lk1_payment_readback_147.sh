@@ -149,10 +149,15 @@ node scripts/nodered_reviewed_flow_deploy/prepare_contract.mjs \
 
 source_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.sourceSha256)' "$contract_file")"
 candidate_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.candidateSha256)' "$contract_file")"
+# The contract file carries the allow-list itself; the count only exists in the
+# prepare_contract/preflight receipts. Require the exact reviewed single-node delta.
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-  if (value.changedNodeCount !== Number(process.argv[2])) process.exit(1);
-' "$contract_file" "$expected_changed_nodes"
+  const changes=Array.isArray(value.allowedChanges) ? value.allowedChanges : null;
+  if (!changes || changes.length !== Number(process.argv[2])
+    || changes.some((change) => change.id !== process.argv[3]
+      || JSON.stringify(change.fields) !== JSON.stringify(["func"]))) process.exit(1);
+' "$contract_file" "$expected_changed_nodes" "${allow_nodes[0]}"
 
 remote_ssh "test ! -e '$remote_stage' && install -d -m 700 '$remote_stage'"
 remote_stage_created=1
