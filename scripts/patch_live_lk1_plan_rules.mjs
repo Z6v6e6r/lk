@@ -115,7 +115,12 @@ export const PLAN_RULES_TARGETS = Object.freeze({
   preview: {
     id: PLAN_RULES_PREVIEW_NODE_ID,
     liveFuncSha256: "0c51e58924069c0a3a7d5b53e33ea4a3f36c57eaca054cb3ae1fae770e105ab6",
-    patchedFuncSha256: "64f67bad58bd3add870bd3c6012c5f1c9c9256338b23c5a6295cefefc5811856",
+    // Re-pinned 2026-09-15 (hotfix `lk1-preview-event-helpers`): the reviewed
+    // composition now names the three event-route helpers as extraction roots, so
+    // the same preimage composes to the fixed body. The previously shipped pin
+    // `64f67bad…` is the generation that omitted them and 503'd every group
+    // training and tournament quote.
+    patchedFuncSha256: "3ac29cf0c5133627a3d5d24954b50e574bb32114b0d681d016972f1cda6464a6",
   },
 });
 

@@ -33,6 +33,13 @@ const PREVIEW_INJECTED_EXPORTS = Object.freeze(['resolveLk1Rule', 'normalizePlan
   'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy']);
 const PREVIEW_INJECTED_FUNCTIONS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
   'lk1ReadBoundPolicy', 'lk1NormalizePolicy']);
+// Helpers the event route (group training / tournament quotes) reaches through
+// `canonical.*`. They live in the composed booking graph, not in the preview
+// node's own sources, so the closure has to declare *and* publish them: the
+// router's first guard stops every event quote with `*_DISCOUNT_BACKEND_NOT_READY`
+// when `canonical.identityMoneyOwned` is absent (production incident 2026-09-15),
+// and `lk1LifecycleInstant`/`managedExternalEventTypeId` are called right after.
+const PREVIEW_EVENT_HELPERS = Object.freeze(['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId']);
 const HUB_POLICY_READER_NAMES = Object.freeze(['lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy', 'lk1ReadBoundPolicy']);
 const RULES_MODULE_PATH = path.join(ROOT, 'lib/lk1PlanRules.mjs');
 const normalizeDeclarationText = value => value.replace(/\s+/g, '');
@@ -156,6 +163,25 @@ const replaceEventTariffBlock = source => {
 };
 const node = (z, name, outputs, wires, source = null) => ({ id: `${PREFIX}${name}`, type: 'function', z, name: `Subscription price preview ${name}`, func: source ?? read(name), outputs, timeout: 0, noerr: 0, initialize: '', finalize: '', libs: [], x: 680, y: 1000, wires });
 
+/** Names a router body reaches through `canonical.*`, in first-use order. */
+export function canonicalReferences(body) {
+  return [...new Set([...String(body).matchAll(/\bcanonical\.([A-Za-z_$][\w$]*)/g)].map(match => match[1]))];
+}
+
+/**
+ * The generated helper closure has to publish every `canonical.<name>` the router
+ * body reaches. This is a build-time gate on the exact generated text: a helper
+ * that the composition forgets to export fails the release instead of failing the
+ * first production request (2026-09-15: the event-route guard 503'd every group
+ * training and tournament quote because three installed-only helpers were dropped).
+ */
+export function assertCanonicalExports(body, exported, label = 'Price preview') {
+  const missing = canonicalReferences(body).filter(name => !exported.includes(name));
+  if (missing.length) {
+    throw new Error(`${label} canonical closure is missing referenced helpers: ${missing.join(', ')}`);
+  }
+}
+
 export function previewSources(flow, options = {}) {
   const pins = { ...PREVIEW_CANONICAL_SOURCE_SHA256, ...(options.pins || {}) };
   const pin = (label, actual, expected) => {
@@ -174,7 +200,8 @@ export function previewSources(flow, options = {}) {
   pin('booking', sha(booking), pins.booking);
   pin('pricing', sha(split), pins.pricing);
   const roots = ['isObj', 'isValidDateKey', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
-    'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields', 'preflightAvailability',
+    'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields',
+    ...PREVIEW_EVENT_HELPERS, 'preflightAvailability',
     ...PREVIEW_CONTRACT_ROOTS,
     'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
     'eventDurationMinutes', 'eventStartsAt', 'exerciseRoomId', 'resolveCategory', 'resolvePlanKey', 'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode'];
@@ -234,13 +261,15 @@ export function previewSources(flow, options = {}) {
   pin('evaluator', sha(evaluator), pins.evaluator);
   const router = `${canonical}\n${pricing}\n${joinPricing}\n${usageFunction}\n${read('router')}`;
   // Compose-time proof that the generated node is executable and that the router
-  // can really reach the resolver the way it calls it.
+  // can really reach the resolver the way it calls it. The same proof covers every
+  // other `canonical.*` helper the router reaches, not only the injected ones.
   new Function('msg', 'node', 'env', 'global', router);
   const scope = new Function('global', `${router.slice(0, router.indexOf('\nconst pricing'))}\nreturn canonical;`)({ get: () => null });
-  for (const name of PREVIEW_INJECTED_FUNCTIONS) {
+  for (const name of [...PREVIEW_INJECTED_FUNCTIONS, ...PREVIEW_EVENT_HELPERS]) {
     if (typeof scope[name] !== 'function') throw new Error(`Price preview canonical export is missing: ${name}`);
   }
-  return { router, evaluator, helperNames: helper.names, pricingNames: prices.names };
+  assertCanonicalExports(read('router'), exported);
+  return { router, evaluator, helperNames: helper.names, pricingNames: prices.names, exportedNames: [...exported] };
 }
 
 export function composeSubscriptionPricePreviewFlow(flow, options = {}) {
@@ -360,7 +389,9 @@ export function composeGroupSubscriptionPricePreviewArtifacts(liveBytes, deploym
   const expectedCopy = '  ...(body.expectedGroupDiscount !== undefined ? { expectedGroupDiscount: body.expectedGroupDiscount } : {}),\n';
   if (sha(prepare?.func || '') !== '51c7b349a18ea04300fcc8649d87601e98c3952e6c57c6cb52ae35e2cf689e15'
     || prepare.func.split('  caller: "http",\n').length !== 2) throw new Error('Group quote prepare preimage drift');
-  const extraRoots = ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId'];
+  // The same event-route helpers the paid composition publishes inside the closure;
+  // this historical packet keeps publishing them through the installed overlay.
+  const extraRoots = [...PREVIEW_EVENT_HELPERS];
   const extra = extractSubscriptionPricePreviewSource({ source: moneyGateway, label: 'group lifecycle', roots: extraRoots });
   const existingRouter = flow.find(row => row.id === PREFIX + 'router').func;
   const marker = '// Dedicated advisory graph.';
