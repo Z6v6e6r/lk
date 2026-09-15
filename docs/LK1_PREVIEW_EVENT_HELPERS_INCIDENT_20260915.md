@@ -224,3 +224,34 @@ evaluate `6f4e7aa5…` → `d410acdb…`, booking `44073942…` → `9462ef12…
 генераций (сделано для plan-rules, `lk1-preview-event-helpers`, `lk1-event-quotes` и
 `lk1-event-diagnostics`). Это устранимый источник шума: следующая генерация может
 пинить сам текст исходника роутера, а не результат композиции.
+
+## Проверка после генерации `lk1-event-tariff-amounts` (23:25 MSK)
+
+Установлено: router `976ce14e…` (правило платной цены), evaluate `d410acdb…` (тело
+write-пути, `aboveActiveLimit` есть, HUB-константы нет), booking `9462ef12…`
+(то же правило для create/join), 4804 узла, readback = кандидат `8f4c48bb…`.
+
+Живой поток за окно после деплоя (перехват loopback, 3.5 минуты):
+
+```
+TOURNAMENT      200 AVAILABLE disc=50  ×4
+EXISTING_GAME   200 AVAILABLE          ×2
+GROUP_TRAINING  200 EMPTY              ×1   (у клиента нет активных подписок)
+refusal stages: []   blocker lists: []   PRICE_PREVIEW_*: 0
+```
+
+То есть турнирные и групповые превью снова отдают котировки с реальной скидкой
+(50 %), отказов тарифа и немаршрутизированных блокеров больше нет; оставшиеся в захвате
+ошибки относятся к другим эндпоинтам (истёкшие токены, «Participants refresh is busy»,
+«Legacy logo not found»).
+
+## Что осталось за рамками этой серии
+
+* `LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN` (create/join для денежных годовых HUB
+  подписок) — отдельный слой контура, не превью.
+* `ownedProductId` в binding дублирует productId правила вместо D1-резолва из инстанса
+  (вариант C разбора): проверка принадлежности продукта сейчас фактически тавтологична,
+  хотя расхождение по D1 — квитанция (`extraProductIds`), а не стоп. Требует отдельного
+  ревью денежного контракта.
+* `LK1_REQUEST_IDENTITY_CHANGED` / `LK1_PRODUCT_RULE_CHANGED` в create/join — штатные
+  fail-closed гварды повторного запроса и смены правила; в потоке наблюдались 10 и 2 раза.
