@@ -1000,12 +1000,28 @@ const resolveCategory = (value) => {
   return null;
 };
 
+function normalizeServiceDateMoscow(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  const parts = /^(\d{4})-(\d{2})-(\d{2})(?:[T ]([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,6})?)?(Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?)?$/.exec(text);
+  if (!parts) return null;
+  const calendar = new Date(`${parts[1]}-${parts[2]}-${parts[3]}T00:00:00Z`);
+  if (!Number.isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== text.slice(0, 10)) return null;
+  if (!parts[4] || !parts[7]) return text.slice(0, 10); // Viva local calendar/time is Moscow.
+  const instant = new Date(text.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
+  if (!Number.isFinite(instant.getTime())) return null;
+  const formatted = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(instant);
+  const part = type => formatted.find(row => row.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
 const eventDate = (value) => {
-  if (!isObj(value)) return normalizeDate(value);
+  if (!isObj(value)) return normalizeServiceDateMoscow(value);
   for (const key of [
     "date", "bookingDate", "exerciseDate", "serviceDate", "visitDate", "startsAt", "startAt", "timeFrom", "fromTime",
   ]) {
-    const normalized = normalizeDate(value[key]);
+    const normalized = normalizeServiceDateMoscow(value[key]);
     if (normalized) return normalized;
   }
   for (const key of ["exercise", "event", "tournament"]) {

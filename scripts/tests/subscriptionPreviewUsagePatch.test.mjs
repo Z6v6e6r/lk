@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { patchPaidBenefitUsage } from '../patch_nodered_subscription_paid_join.mjs';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { composeSubscriptionPreviewUsageArtifacts, patchSubscriptionPreviewUsage, PREVIEW_ROUTER_ID } from '../patch_nodered_subscription_preview_usage.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from '../nodered_reviewed_flow_deploy/runtime_contract.mjs';
@@ -18,13 +19,17 @@ const end = gateway.indexOf('if (ctx.step === "lk1_policy_decision") {');
 assert.ok(start >= 0 && end > start);
 const currentUsage = gateway.slice(start, end);
 // Recreate the historical guard from tracked source; no customer flow enters Git.
-const oldUsage = currentUsage.replace('\n  const benefitBookings = new Set();', '')
+export const oldUsage = currentUsage.replace(/ {4}\/\/ AUDIT_BINDING_START[\s\S]*? {4}\/\/ AUDIT_BINDING_END\n/, '')
+  .replace('if (coveredId) benefitBookings.add(coveredId);', 'if (operation.bookingId) benefitBookings.add(normalizeId(operation.bookingId));')
+  .replace('if (coveredId) coveredBookings.add(coveredId);', 'if (operation.bookingId) coveredBookings.add(normalizeId(operation.bookingId));')
+  .replace('activeServices: new Set(active.map(booking => normalizeId(bookingId(booking)))).size,', 'activeServices: active.length,')
+  .replace('\n  const benefitBookings = new Set();', '')
   .replace('!isValidDateKey(operation.serviceDate)', 'operation.serviceDate !== ctx.serviceDate')
   .replace('    if (operation.bookingId) benefitBookings.add(normalizeId(operation.bookingId));\n', '')
   .replace('    if (operation.serviceDate !== ctx.serviceDate) continue;\n', '')
   .replace('\n    || benefitBookings.has(normalizeId(bookingId(booking)))', '');
 const exports = roots.filter(name => name !== 'isValidDateKey');
-const fixture = `const canonical = (() => { ${helpers}\n${fields}\nreturn {${exports.join(',')},lk1Fields}; })();
+export const fixture = `const canonical = (() => { ${helpers}\n${fields}\nreturn {${exports.join(',')},lk1Fields}; })();
 const canonicalUsage = msg => {
   const ctx = msg._subscriptionBooking;
   const { isObj, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields } = canonical;
@@ -74,7 +79,7 @@ for (const [label, source] of sources) {
     assert.equal(result.previewError, undefined);
     assert.equal(result._managedSubscriptionPolicyInput.usage.usedOrReservedFreeMinutesToday, 0);
     assert.equal(policy(result).eligible, true);
-    assert.ok(fixed.includes(currentUsage.trim()), 'Matches existing booking gateway usage rules');
+    assert.ok(fixed.includes(patchPaidBenefitUsage(oldUsage).trim()), 'Matches existing booking gateway usage rules');
   });
   test(`${label}: four cross-date paid-benefit bookings block, three remain eligible`, () => {
     for (const count of [3, 4]) {

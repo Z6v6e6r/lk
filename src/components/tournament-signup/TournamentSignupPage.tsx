@@ -1,3 +1,5 @@
+import { readAuthToken } from "../../utils/authTokenStorage";
+import { canPayTournamentPending, tournamentPaymentSessionIdentity, clearTournamentPendingPayments as clearStoredPendingPayment, mergeTournamentPendingPayment, storeTournamentPendingPayment } from "../../utils/tournamentPendingPayment";
 import { AvatarImage } from "../UI/AvatarImage";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
@@ -498,91 +500,6 @@ function shouldShowSubscriptionHint(product: TournamentVivaProduct) {
 }
 
 const PAYMENT_HOLD_MS = 20 * 60 * 1000;
-const PAYMENT_STORAGE_PREFIX = "padlhub:tournament-payment:";
-
-function getPaymentStorageKey(exerciseId: string) {
-  return `${PAYMENT_STORAGE_PREFIX}${exerciseId}`;
-}
-
-function readStoredPendingPayment(exerciseId: string) {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(getPaymentStorageKey(exerciseId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      paymentUrl?: unknown;
-      paymentExpiresAt?: unknown;
-      bookingId?: unknown;
-    };
-    const paymentUrl = typeof parsed.paymentUrl === "string" && parsed.paymentUrl.trim()
-      ? parsed.paymentUrl.trim()
-      : null;
-    const paymentExpiresAt = typeof parsed.paymentExpiresAt === "string" && parsed.paymentExpiresAt.trim()
-      ? parsed.paymentExpiresAt.trim()
-      : null;
-    const bookingId = typeof parsed.bookingId === "string" && parsed.bookingId.trim()
-      ? parsed.bookingId.trim()
-      : null;
-    if (!paymentUrl && !paymentExpiresAt && !bookingId) return null;
-    return { paymentUrl, paymentExpiresAt, bookingId };
-  } catch {
-    return null;
-  }
-}
-
-function storePendingPayment(exerciseId: string, registration: TournamentRegistrationState) {
-  if (typeof window === "undefined" || registration.status !== "PAYMENT_PENDING") return;
-  const paymentUrl = registration.paymentUrl?.trim() || null;
-  const paymentExpiresAt =
-    registration.paymentExpiresAt?.trim()
-    || new Date(Date.now() + PAYMENT_HOLD_MS).toISOString();
-  try {
-    window.localStorage.setItem(
-      getPaymentStorageKey(exerciseId),
-      JSON.stringify({
-        paymentUrl,
-        paymentExpiresAt,
-        bookingId: registration.bookingId ?? null,
-        savedAt: new Date().toISOString(),
-      }),
-    );
-  } catch {
-    // localStorage can be unavailable in embedded/private contexts.
-  }
-}
-
-function clearStoredPendingPayment(exerciseId: string) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(getPaymentStorageKey(exerciseId));
-  } catch {
-    // no-op
-  }
-}
-
-function mergeStoredPendingPayment(
-  exerciseId: string,
-  registration: TournamentRegistrationState | null,
-): TournamentRegistrationState | null {
-  if (!registration) return null;
-  if (registration.status !== "PAYMENT_PENDING") {
-    clearStoredPendingPayment(exerciseId);
-    return registration;
-  }
-
-  const stored = readStoredPendingPayment(exerciseId);
-  const merged = {
-    ...registration,
-    paymentUrl: registration.paymentUrl?.trim() || stored?.paymentUrl || null,
-    paymentExpiresAt:
-      registration.paymentExpiresAt?.trim()
-      || stored?.paymentExpiresAt
-      || new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
-    bookingId: registration.bookingId ?? stored?.bookingId ?? null,
-  };
-  storePendingPayment(exerciseId, merged);
-  return merged;
-}
 
 function navigateToExternalUrl(urlRaw: string): boolean {
   if (typeof window === "undefined") return false;
@@ -1085,6 +1002,7 @@ export default function TournamentSignupPage({
   const [selectedId, setSelectedId] = useState<string | null>(targetTournamentId);
   const [detail, setDetail] = useState<TournamentSignupDetail | null>(null);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
+  const [registrationSessionIdentity, setRegistrationSessionIdentity] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [deepLinkLookupPending, setDeepLinkLookupPending] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -1352,6 +1270,7 @@ export default function TournamentSignupPage({
   }, [loadList, subscriptionUsageShadowEnabled]);
 
   const loadDetail = useCallback(async (tournamentId: string) => {
+    const requestToken = readAuthToken();
     setLoadingDetail(true);
     setError(null);
     setRegistrationResolvedFor(null);
@@ -1379,10 +1298,15 @@ export default function TournamentSignupPage({
     } else {
       setDetail(detailResult.data ?? null);
     }
-    const resolvedRegistration = mergeStoredPendingPayment(
-      exerciseId,
+    const resolvedRegistration = await mergeTournamentPendingPayment(
+      requestToken, exerciseId,
       vivaRegistrationResult?.data ?? registrationResult?.data ?? detailResult.data?.registration ?? null,
     );
+    if (tournamentPaymentSessionIdentity(requestToken) !== tournamentPaymentSessionIdentity(readAuthToken())) {
+      setLoadingDetail(false);
+      return;
+    }
+    setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(requestToken));
     setRegistration(resolvedRegistration);
     setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
     setLoadingDetail(false);
@@ -1569,9 +1493,10 @@ export default function TournamentSignupPage({
   }, [selectedId]);
 
   useEffect(() => {
+    setRegistration(null);
     if (!selectedId) return;
     void loadDetail(selectedId);
-  }, [loadDetail, selectedId]);
+  }, [loadDetail, selectedId, phone]);
 
   useEffect(() => {
     setInviteFeedback(null);
@@ -1598,6 +1523,7 @@ export default function TournamentSignupPage({
     }
 
     const requestId = checkoutRequestIdRef.current;
+    const paymentToken = readAuthToken();
     const profile = nextCheckout.profile;
     const subscriptionProductKey = product.source === "client-subscription"
       ? `${product.source}:${product.id}`
@@ -1618,7 +1544,7 @@ export default function TournamentSignupPage({
         tournament: detail?.raw ?? selectedTournament?.raw ?? selectedTournament,
         exercise: nextCheckout.exercise,
       });
-      if (checkoutRequestIdRef.current !== requestId) return;
+      if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
         if (result.status === 202 && subscriptionProductKey) {
           setError(null);
@@ -1646,9 +1572,11 @@ export default function TournamentSignupPage({
           paymentUrl: result.data.paymentUrl,
           paymentExpiresAt: result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
         };
-        storePendingPayment(selectedExerciseId, nextRegistration);
+        await storeTournamentPendingPayment(paymentToken, selectedExerciseId, nextRegistration);
+        if (tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
+        setRegistrationSessionIdentity(tournamentPaymentSessionIdentity(paymentToken));
         setRegistration(nextRegistration);
-        if (!navigateToExternalUrl(result.data.paymentUrl)) {
+        if (!canPayTournamentPending(nextRegistration) || !navigateToExternalUrl(result.data.paymentUrl)) {
           setError("Не удалось открыть страницу оплаты");
         }
         return;
@@ -1772,7 +1700,7 @@ export default function TournamentSignupPage({
       return;
     }
     const paymentUrl = registration?.paymentUrl?.trim();
-    if (!paymentUrl) {
+    if (!isAuthenticated || !registrationSessionIdentity || registrationSessionIdentity !== tournamentPaymentSessionIdentity(readAuthToken()) || !canPayTournamentPending(registration) || !paymentUrl) {
       setError("Ссылка на оплату пока не найдена. Обновите статус записи.");
       return;
     }
@@ -1822,7 +1750,17 @@ export default function TournamentSignupPage({
     }
   }, [selectedDateStr, selectedTournament]);
 
-  const canPayPending = Boolean(registration?.status === "PAYMENT_PENDING" && registration?.paymentUrl);
+  useEffect(() => {
+    const expiresAt = Date.parse(registration?.paymentExpiresAt || "");
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
+    const timer = window.setTimeout(() => {
+      setRegistration(current => current && current === registration ? { ...current } : current);
+    }, Math.min(expiresAt - Date.now(), 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [registration]);
+
+  const canPayPending = isAuthenticated && !isRestoringSession && Boolean(registrationSessionIdentity)
+    && registrationSessionIdentity === tournamentPaymentSessionIdentity(readAuthToken()) && canPayTournamentPending(registration);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const canRegister = !subscriptionConfirmationNotice
     && canOfferTournamentRegistration(detail?.status, registration);

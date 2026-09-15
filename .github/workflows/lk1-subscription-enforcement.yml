@@ -349,6 +349,8 @@ jobs:
           scripts/tests/cabinetBookingConversionGuard.test.ts
           scripts/tests/gamesCreateBookingConvertGuard.test.ts
           scripts/tests/subscriptionPreviewUsagePatch.test.mjs
+          scripts/tests/subscriptionAuditFixes.test.mjs
+          scripts/tests/tournamentPendingPayment.test.mjs
           scripts/tests/subscriptionProductIdentity.test.mjs
           scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts
           scripts/tests/subscriptionSharedDailyLimit.test.ts

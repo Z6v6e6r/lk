@@ -36,8 +36,8 @@ if (ctx.localReconciliation) {
   return continueApply(ctx);
 }
 
-if (msg.error || !Array.isArray(msg.payload)) return retry(ctx, "daily_limit_read_unavailable");
-const rows = asArray(msg.payload).filter(isObj);
+if (msg.error || !Array.isArray(msg.payload) || !msg.payload.every(isObj)) return retry(ctx, "daily_limit_read_unavailable");
+const rows = msg.payload;
 if (rows.length === 0) {
   ctx.dailyLimitReleaseOutcome = ctx.dailyLimitReleaseOutcome || "NOT_APPLICABLE";
   return continueApply(ctx);
