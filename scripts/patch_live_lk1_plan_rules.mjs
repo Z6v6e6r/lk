@@ -120,7 +120,7 @@ export const PLAN_RULES_TARGETS = Object.freeze({
     // the same preimage composes to the fixed body. The previously shipped pin
     // `64f67bad…` is the generation that omitted them and 503'd every group
     // training and tournament quote.
-    patchedFuncSha256: "9b4f69b5bd613d7e6072068c49d6d3e80f2ef8b7896846b522d1a615950c07fa",
+    patchedFuncSha256: "ad67484dfc09c1620455fc810cc624344a2e07ed8a6d3561f345b63a8c382ac7",
   },
 });
 
