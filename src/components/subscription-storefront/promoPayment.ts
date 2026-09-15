@@ -12,7 +12,7 @@ export function hasPromoPaymentAttempt(offerKey: string): boolean {
   catch { return true; }
 }
 
-export async function createStorefrontPromoPayment(offerKey: string, phone: string): Promise<
+export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string): Promise<
   { status: 'redirect'; paymentUrl: string } | { status: 'settled'; message: string }
 > {
   const offer = resolveStorefrontPromo(offerKey);
@@ -24,6 +24,11 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
   return navigator.locks.request(`${ATTEMPT_PREFIX}${offer.key}`, { ifAvailable: true }, async lock => {
     if (!lock || hasPromoPaymentAttempt(offer.key)) throw new StorefrontPaymentError(PROMO_PENDING_MESSAGE);
     const returnUrl = appendCurrentAuthModeToNavigableUrl(new URL(buildPromoReturnUrl(window.location.href))).toString();
+    const requestedReturn = checkoutReturnUrl ? new URL(checkoutReturnUrl) : null;
+    if (requestedReturn && (requestedReturn.origin !== window.location.origin || requestedReturn.pathname !== window.location.pathname)) {
+      throw new StorefrontPaymentError('Некорректная страница возврата.');
+    }
+    const paymentReturnUrl = requestedReturn?.toString() || returnUrl;
     try {
       window.localStorage.setItem(`${ATTEMPT_PREFIX}${offer.key}`, 'pending');
       if (!hasPromoPaymentAttempt(offer.key)) throw new Error('Attempt was not saved');
@@ -35,7 +40,7 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
     // retains the browser marker; neither reload nor bank return retries create.
     try {
       const result = await apiBuySubscroption(offer.productId, phone, {
-        baseRedirectUrl: returnUrl, successUrl: returnUrl, failUrl: returnUrl, retries: 0,
+        baseRedirectUrl: paymentReturnUrl, successUrl: paymentReturnUrl, failUrl: paymentReturnUrl, retries: 0,
       });
       if (result.error || !result.data) throw new Error('Purchase outcome unavailable');
       const { paymentUrl, paid, toPay } = result.data;
