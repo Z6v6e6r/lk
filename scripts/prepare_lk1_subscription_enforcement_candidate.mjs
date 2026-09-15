@@ -40,8 +40,10 @@ export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
   }),
   Object.freeze({
     id: "lk_subscription_booking_router_20260804",
-    // Service-date audit correction; the production candidate remains unbound.
-    sourceSha256: "1f43e42d624fbea459eff79a22ea292b5f7f5ca183f65d2b4297d2fa917d773e",
+    // Service-date audit correction plus the 2026-09-15 response-provenance fix
+    // (`prepareHttp` drops `msg.responseUrl`, which otherwise kept the previous step's
+    // URL and failed the event-tariff check); the production candidate remains unbound.
+    sourceSha256: "53592ca60fc738d6ad0b1e9832da0b4cfa88979b80589d562d872b8bf9d1079a",
     reason: "DEV_ROUTER_AMENDMENT_NOT_REBOUND",
   }),
   Object.freeze({

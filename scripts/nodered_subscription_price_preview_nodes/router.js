@@ -11,6 +11,20 @@ const eventRoute = eventCategory === 'GROUP_TRAINING'
       kind: 'TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1', error: 'TOURNAMENT_DISCOUNT' } : null;
 const out = index => { const result = [null, null, null, null, null, null]; result[index] = msg; return result; };
 const stop = (code, status = 503) => { ctx.done = true; ctx.error = code; ctx.statusCode = status; return out(4); };
+// A decision blocker states something about this subscription, not about the request.
+// Only the codes below describe a state the client can act on (book with another
+// subscription, or pay the ordinary price); every other code stays a fail-closed 503.
+// `ACTIVE_SERVICES_LIMIT_REACHED` is the superseded cap blocker: the cap is a discount
+// now (`aboveActiveLimit`), and the code is kept only for generations that still emit it.
+// `USAGE_SNAPSHOT_BUCKET_MISMATCH` is what that cap used to mask for a client whose
+// active bookings are full and whose free-minute snapshot does not prove the day, so it
+// restores the pre-release answer for exactly that cohort.
+const LIMIT_DECISION_BLOCKERS = ['ACTIVE_SERVICES_LIMIT_REACHED', 'USAGE_SNAPSHOT_BUCKET_MISMATCH'];
+// A subscription that cannot be applied to this booking is not a transport failure: the
+// target is outside the rule, the event is not included, or a partial benefit has no
+// proven tariff to attach the paid part to (the contract forbids inventing the surcharge).
+const UNAVAILABLE_DECISION_BLOCKERS = ['TARGET_NOT_SERVER_RESOLVED', 'EVENT_NOT_INCLUDED',
+  'LK1_GAME_OVERAGE_ALLOCATION_UNBOUND'];
 const ok = () => !msg.error && Number(msg.statusCode) >= 200 && Number(msg.statusCode) < 300;
 const rows = () => canonical.extractItems(msg.payload);
 const key = (kind, ...parts) => JSON.stringify([kind, ctx.tenantKey, ...parts]);
@@ -22,7 +36,11 @@ const http = (step, path, admin = false) => {
   const token = admin ? global.get('vivacrm_access_token') : null;
   if (admin && (typeof token !== 'string' || !token
     || !Number.isFinite(Number(global.get('vivacrm_token_expires_at'))) || Number(global.get('vivacrm_token_expires_at')) <= Date.now() + 30000)) return stop('VIVA_SERVICE_TOKEN_UNAVAILABLE');
-  ctx.step = step; delete msg.error; delete msg.statusCode;
+  // A request's provenance must be its own response: Node-RED sets `msg.responseUrl`
+  // on every reply and the group-tariff step compares it with the URL it asked for.
+  // A stale value from the previous step made every event quote fail
+  // `LK1_EVENT_TARIFF_UNVERIFIED` while the response itself was correct.
+  ctx.step = step; delete msg.error; delete msg.responseUrl; delete msg.statusCode;
   msg.method = 'GET'; msg.url = 'https://api.vivacrm.ru' + path;
   msg.headers = { Authorization: admin ? `Bearer ${token}` : ctx.auth, Accept: 'application/json' };
   msg.payload = undefined; msg.requestTimeout = 10000; msg.followRedirects = false; msg.maxRedirects = 0;
@@ -175,10 +193,13 @@ if (ctx.step === 'metadata') {
   }
   ctx.ruleProductIds = [...new Set(Object.values(ctx.metadata).map(row => row.productId.toLowerCase()))];
   if (eventRoute) {
-    ctx.requestedIds = ctx.requestedIds.filter(id => ctx.rules[id].matched && !ctx.rules[id].legacy);
-    ctx.metadata = Object.fromEntries(ctx.requestedIds.map(id => [id, ctx.metadata[id]]));
-    ctx.rules = Object.fromEntries(ctx.requestedIds.map(id => [id, ctx.rules[id]]));
-    if (!ctx.requestedIds.length) { ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4); }
+    // The contour decides which subscriptions the managed evaluator prices, never
+    // which ones the client may see a price for. Out-of-contour subscriptions (a sale
+    // date before the rule, or no plan rule at all) stay in the batch and are quoted at
+    // the ordinary event tariff below. Dropping them produced an empty quote batch and
+    // blocked every group training and tournament booking for that cohort (2026-09-15).
+    ctx.managedIds = ctx.requestedIds.filter(id => ctx.rules[id].matched && !ctx.rules[id].legacy);
+    ctx.outOfContourIds = ctx.requestedIds.filter(id => !ctx.managedIds.includes(id));
   }
   return find('catalog', { _id: { $in: [...new Set(Object.values(ctx.metadata).map(row => key('product', row.productId)))] } });
 }
@@ -246,8 +267,19 @@ if (ctx.step === 'groupTariff') {
   if (!ok() || !canonical.hasCompleteBookingList(msg.payload)) return stop('LK1_EVENT_TARIFF_UNAVAILABLE');
   // Viva scopes this product list by the request, without echoing exerciseId.
   const tariffUrl = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${encodeURIComponent(ctx.exerciseId)}`;
+  // Every refusal below names the exact sub-condition it refused on and the observed
+  // shape (counts and enum values only, never amounts or names). The accept/reject
+  // decision is unchanged: the detail exists so a production refusal can be diagnosed
+  // from the response instead of guessed, without widening what this node accepts.
+  const tariffRefusal = (stage, observed) => {
+    ctx.errorDetails = { stage, observed };
+    return stop('LK1_EVENT_TARIFF_UNVERIFIED');
+  };
   if (msg.method !== 'GET' || msg.url !== tariffUrl
-    || (msg.responseUrl !== undefined && msg.responseUrl !== tariffUrl)) return stop('LK1_EVENT_TARIFF_UNVERIFIED');
+    || (msg.responseUrl !== undefined && msg.responseUrl !== tariffUrl)) {
+    return tariffRefusal('request_url', { method: msg.method || null,
+      urlMatch: msg.url === tariffUrl, responseUrlMatch: msg.responseUrl === undefined || msg.responseUrl === tariffUrl });
+  }
   const rows = canonical.extractItems(msg.payload);
   if (rows.length !== 1 || !canonical.isObj(rows[0])) return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
   const product = rows[0];
@@ -255,20 +287,30 @@ if (ctx.step === 'groupTariff') {
   const eventIds = [product.exerciseId, product.exercise?.id].filter((id) => id !== undefined);
   const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);
   const types = [product.productType, product.type].filter((type) => type !== undefined);
+  const allowedTypes = ["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"];
+  const observed = { productIds: productIds.length, idsAgree: new Set(productIds).size === 1,
+    eventIds: eventIds.length, eventIdMatches: !eventIds.some((id) => id !== ctx.exerciseId),
+    types: types.map((type) => String(type).slice(0, 40)), amounts: amounts.length,
+    amountsAgree: new Set(amounts).size === 1,
+    amountsAreNonNegativeIntegers: amounts.every((amount) => Number.isSafeInteger(amount) && amount >= 0) };
   if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
-    || new Set(productIds).size !== 1 || eventIds.some((id) => id !== ctx.exerciseId)
-    || !types.length || types.some((type) => !["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"].includes(type))
-    || !amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
-    || new Set(amounts).size !== 1) return stop("LK1_EVENT_TARIFF_UNVERIFIED");
+    || new Set(productIds).size !== 1 || eventIds.some((id) => id !== ctx.exerciseId)) {
+    return tariffRefusal('product_identity', observed);
+  }
+  if (!types.length || types.some((type) => !allowedTypes.includes(type))) return tariffRefusal('product_type', observed);
+  if (!amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
+    || new Set(amounts).size !== 1) return tariffRefusal('product_amount', observed);
   ctx.basePriceMinor = amounts[0]; ctx.priceProductId = productIds[0];
-  if (ctx.basePriceMinor > 1000000) return stop('LK1_EVENT_TARIFF_UNVERIFIED');
+  if (ctx.basePriceMinor > 1000000) return tariffRefusal('amount_ceiling', observed);
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
 }
 if (ctx.step === 'evaluate') {
   const decision = msg._managedSubscriptionPolicyDecision;
   if (!canonical.isObj(decision)) return stop('PRICE_PREVIEW_DECISION_INVALID');
   if (!decision.eligible) {
-    if (decision.blockers?.length === 1 && decision.blockers[0].code === 'ACTIVE_SERVICES_LIMIT_REACHED') quote(ctx.currentId, 'LIMIT_USED', null, 0, 0, 'ACTIVE_SERVICES_LIMIT_REACHED');
+    const code = decision.blockers?.length === 1 ? decision.blockers[0].code : null;
+    if (LIMIT_DECISION_BLOCKERS.includes(code)) quote(ctx.currentId, 'LIMIT_USED', null, 0, 0, code);
+    else if (UNAVAILABLE_DECISION_BLOCKERS.includes(code)) quote(ctx.currentId, 'UNAVAILABLE', null, 0, 0, code);
     else return stop('PRICE_PREVIEW_DECISION_UNRESOLVED');
   } else {
     if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
@@ -310,7 +352,15 @@ while (ctx.step === 'next') {
     return aliases.length > 0 && aliases.every(value => typeof value === 'string' && canonical.normalizeId(value) === canonical.normalizeId(id));
   }) : [live];
   if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
-  const owned = eventRoute ? canonical.identityMoneyOwned(bound, available) : canonical.identityOwned(bound, available, exercise);
+  // An annual HUB event quote keeps its money mandate (the strict instance money
+  // identity); every other product is verified by the product identity layer, which
+  // applies the same HUB constraints for HUB and stays product-agnostic otherwise.
+  // Before this split only HUB could ever be owned on the event route, so a plan
+  // product that passed the cohort gate died here with PRODUCT_IDENTITY_UNRESOLVED.
+  const productIsHub = canonical.normalizeId(productId) === canonical.LK1_OVERLAY_HUB_PRODUCT_ID;
+  const owned = eventRoute && productIsHub
+    ? canonical.identityMoneyOwned(bound, available)
+    : canonical.identityOwned(bound, available, exercise);
   if (owned.length !== 1) return stop('PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
   const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
   const configured = previewRule(owned);
@@ -335,6 +385,16 @@ while (ctx.step === 'next') {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
   if (!ctx.previewResolved) {
+    // Contour off for this subscription (sale before the rule, or no plan rule): the
+    // subscription still has to produce a price the client can act on. The group and
+    // tournament validators accept only an AVAILABLE quote whose amount equals the base
+    // price less the quoted discount, so an ordinary-tariff quote at zero discount is
+    // the exact representation of "no managed benefit here".
+    if (eventRoute) {
+      ctx.groupDiscountPercent = 0;
+      quote(id, 'AVAILABLE', ctx.basePriceMinor, 0, ctx.target.durationMinutes);
+      continue;
+    }
     const plan = canonical.compatibilityPlanKey(canonical.resolvePlanKey(owned), { enabled: false });
     if (!plan || !canonical.PLAN_CATEGORIES[plan]?.includes('open_game')) return stop('PRICE_PREVIEW_LEGACY_PLAN_UNRESOLVED');
     const limit = canonical.resolveLimitMode(plan, ctx.target.startsAt.slice(0, 10));
