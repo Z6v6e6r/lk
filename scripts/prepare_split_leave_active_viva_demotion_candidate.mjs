@@ -31,6 +31,14 @@ function readTargetSource(target) {
   return fs.readFileSync(new URL(`./nodered_games_nodes/${target.file}`, import.meta.url), "utf8");
 }
 
+// Candidate bodies are the tracked sources, so their digests are derived from the
+// files instead of pinned literals: a hard-coded digest only records the revision
+// that was current when the patcher was written and turns every later unrelated
+// commit into a false "drift". The deployment guard remains SOURCE_SHA256 above.
+for (const target of TARGETS) {
+  target.candidateSha256 = sha256(readTargetSource(target));
+}
+
 export function buildCandidate(liveBytes) {
   if (sha256(liveBytes) !== SOURCE_SHA256) throw new Error("Live flow preimage drift");
   const candidate = JSON.parse(liveBytes);

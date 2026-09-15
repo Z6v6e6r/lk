@@ -48,6 +48,13 @@ export const TARGETS = Object.freeze([
 ]);
 
 const SOURCE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "nodered_games_nodes");
+// Candidate bodies are the tracked sources. Their digests are derived from the files
+// instead of pinned literals: a hard-coded digest only records the revision that was
+// current when the patcher was written and turns every later unrelated commit into a
+// false "drift". The deployment guard remains the live preimage digest.
+for (const target of TARGETS) {
+  target.candidateSha256 = sha256(fs.readFileSync(path.join(SOURCE_DIR, target.file), "utf8"));
+}
 const fail = (message) => {
   throw new Error(message);
 };
