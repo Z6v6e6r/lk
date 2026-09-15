@@ -147,7 +147,9 @@ test('a refused event tariff names the sub-condition and the observed shape', ()
   const cases = [
     { name: 'url', msg: { statusCode: 200, method: 'GET', url: 'https://api.vivacrm.ru/other', payload: { content: [{}] } }, stage: 'request_url' },
     { name: 'type', msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'TOURNAMENT', cost: BASE }] } }, stage: 'product_type' },
-    { name: 'amount', msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE, trialCost: 0 }] } }, stage: 'product_amount' },
+    { name: 'paid price disagrees', msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE, price: BASE - 5000 }] } }, stage: 'product_amount' },
+    { name: 'trial price only', msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', trialCost: BASE }] } }, stage: 'product_amount' },
+    { name: 'broken trial price', msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE, trialCost: -1 }] } }, stage: 'product_trial_amount' },
     { name: 'event id', msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE, exerciseId: 'other' }] } }, stage: 'product_identity' },
   ];
   for (const item of cases) {
@@ -161,19 +163,34 @@ test('a refused event tariff names the sub-condition and the observed shape', ()
     assert.ok(observed, item.name);
     assert.ok(observed, item.name);
     if (item.stage !== 'request_url') {
-      assert.ok(Array.isArray(observed.amountFields), item.name);
-      assert.equal(typeof observed.amountDistinct, 'number', item.name);
-      assert.equal(typeof observed.amountsZero, 'number', item.name);
+      assert.ok(Array.isArray(observed.paidFields), item.name);
+      assert.equal(typeof observed.paidDistinct, 'number', item.name);
+      assert.equal(typeof observed.paidZero, 'number', item.name);
+      assert.equal(typeof observed.trialPresent, 'boolean', item.name);
     }
   }
-  // The accepted shape keeps the proven tariff and never carries a detail.
+  // The accepted shape keeps the proven tariff and never carries a detail. A trial
+  // price different from the paid price is the live production shape (2026-09-15) and
+  // must not refuse the quote: the paid price is `cost`.
+  for (const trialCost of [BASE, BASE - 100000, 0]) {
+    const ctx = baseCtx({ step: 'groupTariff' });
+    const { msg } = runRouter({
+      ctx, canonical: identityStub([]),
+      msg: { statusCode: 200, method: 'GET', url: tariffUrl,
+        payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE, trialCost }] } },
+    });
+    const state = msg._subscriptionPricePreview;
+    assert.equal(state.error, undefined, `trialCost=${trialCost}`);
+    assert.equal(state.basePriceMinor, BASE, `trialCost=${trialCost}`);
+    assert.equal(state.priceProductId, 'p1', `trialCost=${trialCost}`);
+  }
+  // Without a trial field the paid price still has to prove itself.
   const ctx = baseCtx({ step: 'groupTariff' });
   const { msg } = runRouter({
     ctx, canonical: identityStub([]),
-    msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE, trialCost: BASE }] } },
+    msg: { statusCode: 200, method: 'GET', url: tariffUrl, payload: { content: [{ id: 'p1', productType: 'SERVICE', cost: BASE }] } },
   });
   assert.equal(msg._subscriptionPricePreview.basePriceMinor, BASE);
-  assert.equal(msg._subscriptionPricePreview.priceProductId, 'p1');
   assert.equal(msg._subscriptionPricePreview.error, undefined);
 });
 
