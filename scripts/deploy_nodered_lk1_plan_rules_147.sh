@@ -2,15 +2,21 @@
 
 # Guarded deployment of the focused LK1 plan-rules generation.
 #
-# Publishes one reviewed flow whose only change is two function bodies:
+# Publishes one reviewed flow whose only change is two nodes:
 #   * lk_subscription_booking_router_20260804 — the plan-rules resolver replaces the
-#     single-product `lk1Config`, and the legacy cohort stays out of the contour;
+#     single-product `lk1Config`, the legacy cohort stays out of the contour, and the
+#     node `initialize` (setup) gains the reviewed `subscriptions_lk1_plan_rules`
+#     activation block (guard, write, readback) next to the untouched HUB writer;
 #   * lk_subscription_managed_policy_20260820 — the evaluator validates the rule
 #     product and replaces the active-bookings blocker with `aboveActiveLimit`.
 #
 # The price-preview node is deliberately NOT part of this generation: its reviewed
 # delta is owned by scripts/patch_nodered_subscription_price_preview.mjs and must be
 # added here (and to the patcher) before it may ship.
+#
+# The candidate carries a `func` *and* `initialize` change on the gateway, so the
+# allowance is expressed with the exact-graph contract (formatVersion 2) instead of
+# the function-only contract.
 #
 # Requires an explicit confirmation variable, a clean main checkout equal to
 # origin/main, and the exact live preimage. Everything else fails closed.
@@ -27,6 +33,12 @@ host="lk-primary-147"
 deployment_id="lk1-plan-rules"
 allow_nodes=(lk_subscription_booking_router_20260804 lk_subscription_managed_policy_20260820)
 expected_changed_nodes=2
+# Field-level allowance: the gateway changes both its function body and its setup.
+allow_changes=(
+  "lk_subscription_booking_router_20260804:func,initialize"
+  "lk_subscription_managed_policy_20260820:func"
+)
+expected_node_fields='{"lk_subscription_booking_router_20260804":["func","initialize"],"lk_subscription_managed_policy_20260820":["func"]}'
 smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
@@ -138,8 +150,16 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
+# The node list and the field-level allowance must describe the same two nodes.
+node -e '
+  const expected=JSON.parse(process.argv[1]);
+  const nodes=process.argv.slice(2).sort();
+  if (JSON.stringify(Object.keys(expected).sort()) !== JSON.stringify(nodes)) process.exit(1);
+' "$expected_node_fields" "${allow_nodes[@]}"
+
 # Full-flow preimage: the focused generation pins the exact live flow sha and both
-# live function bodies, so a tab-scoped extraction is not enough.
+# live function bodies plus the live setup body, so a tab-scoped extraction is not
+# enough.
 pull_live_workspace
 
 mkdir -m 700 "$candidate_dir"
@@ -148,40 +168,52 @@ node scripts/patch_live_lk1_plan_rules.mjs \
   --output "$candidate_flow" \
   --report "$candidate_report" >/dev/null
 
-# The generation must be exactly the two reviewed bodies: a candidate that also
-# touches the price-preview node (or anything else) is not this generation.
+# The generation must be exactly the two reviewed nodes with the reviewed fields: a
+# candidate that also touches the price-preview node (or anything else) is not this
+# generation.
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-  const allowed=process.argv.slice(2, -1).sort();
-  const expected=Number(process.argv[process.argv.length-1]);
+  const expected=JSON.parse(process.argv[2]);
+  const expectedCount=Number(process.argv[3]);
   const changes=Array.isArray(value.changes) ? value.changes : null;
   if (value.deploymentPerformed !== false || value.liveMutationPerformed !== false) process.exit(1);
-  if (value.changedNodeCount !== expected || !changes || changes.length !== expected) process.exit(1);
-  if (JSON.stringify(changes.map((change) => change.id).sort()) !== JSON.stringify(allowed)) process.exit(1);
-  if (changes.some((change) => JSON.stringify(change.fields) !== JSON.stringify(["func"]))) process.exit(1);
+  if (value.changedNodeCount !== expectedCount || !changes || changes.length !== expectedCount) process.exit(1);
+  if (JSON.stringify(changes.map((change) => change.id).sort()) !== JSON.stringify(Object.keys(expected).sort())) process.exit(1);
+  for (const change of changes) {
+    if (JSON.stringify(change.fields) !== JSON.stringify(expected[change.id])) process.exit(1);
+  }
   if (value.previewNodeId === changes.find((change) => change.id === value.previewNodeId)?.id) process.exit(1);
-' "$candidate_report" "${allow_nodes[@]}" "$expected_changed_nodes"
+' "$candidate_report" "$expected_node_fields" "$expected_changed_nodes"
 
-# Independent function-only contract; never reuse the patcher's own report.
-node scripts/nodered_reviewed_flow_deploy/prepare_contract.mjs \
+# Independent exact-graph contract (the candidate changes the gateway `func` *and*
+# `initialize`); never reuse the patcher's own report.
+node scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs \
   --live "$source_flow" \
   --candidate "$candidate_flow" \
   --output "$contract_file" \
   --deployment-id "$deployment_id" \
-  $(printf -- "--allow-node %s " "${allow_nodes[@]}") >/dev/null
+  $(printf -- "--allow-change %s " "${allow_changes[@]}") >/dev/null
 
 source_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.sourceSha256)' "$contract_file")"
 candidate_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.candidateSha256)' "$contract_file")"
-# The contract file carries the allow-list itself; the count only exists in the
-# prepare_contract/preflight receipts. Require the exact reviewed two-node delta.
+source_node_count="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(String(value.sourceNodeCount))' "$contract_file")"
+candidate_node_count="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(String(value.candidateNodeCount))' "$contract_file")"
+# The contract file carries the field-level allowance itself; the node count only
+# exists in the preflight receipt. Require the exact reviewed two-node delta with
+# `initialize` explicitly allowed on the gateway and no added nodes.
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-  const allowed=process.argv.slice(3).sort();
+  const expected=JSON.parse(process.argv[2]);
+  const expectedCount=Number(process.argv[3]);
+  if (value.formatVersion !== 2 || value.contractKind !== "exact-graph") process.exit(1);
   const changes=Array.isArray(value.allowedChanges) ? value.allowedChanges : null;
-  if (!changes || changes.length !== Number(process.argv[2])) process.exit(1);
-  if (JSON.stringify(changes.map((change) => change.id).sort()) !== JSON.stringify(allowed)) process.exit(1);
-  if (changes.some((change) => JSON.stringify(change.fields) !== JSON.stringify(["func"]))) process.exit(1);
-' "$contract_file" "$expected_changed_nodes" "${allow_nodes[@]}"
+  if (!changes || changes.length !== expectedCount) process.exit(1);
+  if (JSON.stringify(changes.map((change) => change.id).sort()) !== JSON.stringify(Object.keys(expected).sort())) process.exit(1);
+  for (const change of changes) {
+    if (JSON.stringify(change.fields) !== JSON.stringify(expected[change.id])) process.exit(1);
+  }
+  if ((value.allowedAdditions ?? []).length !== 0) process.exit(1);
+' "$contract_file" "$expected_node_fields" "$expected_changed_nodes"
 
 remote_ssh "test ! -e '$remote_stage' && install -d -m 700 '$remote_stage'"
 remote_stage_created=1
@@ -198,8 +230,10 @@ remote_ssh_capture "$preflight_result" \
 node -e '
   const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
   if (!value.ok || value.action !== "preflight" || value.sourceSha256 !== process.argv[2]
-    || value.candidateSha256 !== process.argv[3] || value.changedNodeCount !== Number(process.argv[4])) process.exit(1);
-' "$preflight_result" "$source_sha" "$candidate_sha" "$expected_changed_nodes"
+    || value.candidateSha256 !== process.argv[3] || value.changedNodeCount !== Number(process.argv[4])
+    || value.addedNodeCount !== 0 || String(value.nodeCount) !== process.argv[5]
+    || String(value.candidateNodeCount) !== process.argv[6]) process.exit(1);
+' "$preflight_result" "$source_sha" "$candidate_sha" "$expected_changed_nodes" "$source_node_count" "$candidate_node_count"
 
 apply_started=1
 # Publish the recovery identifiers before the mutation: on a failed postcheck the

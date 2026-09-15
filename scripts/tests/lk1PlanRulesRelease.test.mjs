@@ -21,15 +21,29 @@ import {
   applyDeltas,
   buildEvaluatorBody,
   buildGatewayBody,
+  buildGatewayInitialize,
   composeLk1PlanRulesArtifacts,
   extractEmbeddedEvaluatorBody,
   patchLk1PlanRulesEvaluatorBody,
   patchLk1PlanRulesGatewayBody,
+  patchLk1PlanRulesGatewayInitialize,
   reviewedConfigFragment,
   reviewedEvaluatorBody,
   reviewedPlanRulesModule,
   sha256,
 } from '../patch_live_lk1_plan_rules.mjs';
+import {
+  LK1_PLAN_RULES_DESIRED,
+  LK1_PLAN_RULES_FIELDS,
+  LK1_PLAN_RULES_KEY,
+  buildPlanRulesTransition,
+} from '../lib/lk1PlanRulesTransition.mjs';
+import { normalizePlanRules } from '../lib/lk1PlanRules.mjs';
+import {
+  HUB_POLICY_KEY,
+  HUB_POLICY_PRODUCT,
+  buildHubPolicyTransition,
+} from '../lib/lk1HubPolicyTransition.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const LIVE_SNAPSHOT = process.env.LK1_PLAN_RULES_LIVE_SNAPSHOT
@@ -44,18 +58,34 @@ function liveArtifacts() {
   const liveBytes = fs.readFileSync(LIVE_SNAPSHOT);
   const built = composeLk1PlanRulesArtifacts(liveBytes);
   const liveFlow = JSON.parse(liveBytes.toString('utf8'));
-  const funcOf = (flow, id) => flow.find((node) => node.id === id).func;
+  const fieldOf = (flow, id, field) => flow.find((node) => node.id === id)[field];
   cachedArtifacts = {
     liveBytes,
     built,
     candidateText: built.candidateBytes.toString('utf8'),
-    gateway: funcOf(built.flow, PLAN_RULES_GATEWAY_NODE_ID),
-    evaluator: funcOf(built.flow, PLAN_RULES_EVALUATOR_NODE_ID),
-    liveGateway: funcOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID),
-    liveEvaluator: funcOf(liveFlow, PLAN_RULES_EVALUATOR_NODE_ID),
+    gateway: fieldOf(built.flow, PLAN_RULES_GATEWAY_NODE_ID, 'func'),
+    gatewayInitialize: fieldOf(built.flow, PLAN_RULES_GATEWAY_NODE_ID, 'initialize'),
+    evaluator: fieldOf(built.flow, PLAN_RULES_EVALUATOR_NODE_ID, 'func'),
+    liveGateway: fieldOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID, 'func'),
+    liveGatewayInitialize: fieldOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID, 'initialize'),
+    liveEvaluator: fieldOf(liveFlow, PLAN_RULES_EVALUATOR_NODE_ID, 'func'),
   };
   return cachedArtifacts;
 }
+
+// A stand-in for the Node-RED `global` context: enough to run a setup body.
+function globalFixture(initial = {}) {
+  const store = new Map(Object.entries(initial));
+  return {
+    store,
+    context: {
+      get: (key) => store.get(key),
+      set: (key, value) => { store.set(key, value); },
+    },
+  };
+}
+
+const runInitialize = (body, context) => new Function('global', 'env', 'node', 'flow', body)(context);
 
 const count = (text, needle) => text.split(needle).length - 1;
 
@@ -74,13 +104,149 @@ test('the reviewed sources are exactly the pinned generation inputs', () => {
   const config = reviewedConfigFragment();
   assert.ok(config.includes('resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })'));
   assert.equal(config.includes('LK1_OVERLAY_HUB_PRODUCT_ID'), false);
-  // Generation pins: live and patched bodies must differ for both nodes.
+  // Generation pins: live and patched bodies must differ for every changed field.
   assert.equal(PLAN_RULES_TARGETS.gateway.id, PLAN_RULES_GATEWAY_NODE_ID);
   assert.equal(PLAN_RULES_TARGETS.evaluator.id, PLAN_RULES_EVALUATOR_NODE_ID);
   assert.notEqual(PLAN_RULES_TARGETS.gateway.liveFuncSha256, PLAN_RULES_TARGETS.gateway.patchedFuncSha256);
+  assert.notEqual(PLAN_RULES_TARGETS.gateway.liveInitializeSha256,
+    PLAN_RULES_TARGETS.gateway.patchedInitializeSha256);
   assert.notEqual(PLAN_RULES_TARGETS.evaluator.liveFuncSha256, PLAN_RULES_TARGETS.evaluator.patchedFuncSha256);
   assert.equal(new Set(PLAN_RULES_GATEWAY_DELTAS.map((delta) => delta.id)).size,
     PLAN_RULES_GATEWAY_DELTAS.length);
+});
+
+test('the frozen plan-rules payload is exactly the reviewed product decision', () => {
+  const ruleNumbers = {
+    maxActiveBookings: 4,
+    freeGameMinutesPerDay: 60,
+    gameOverageDiscountPercent: 30,
+    groupTrainingDiscountPercent: 50,
+    tournamentDiscountPercent: 50,
+  };
+  assert.equal(LK1_PLAN_RULES_KEY, 'subscriptions_lk1_plan_rules');
+  assert.deepEqual(LK1_PLAN_RULES_FIELDS, Object.keys(ruleNumbers));
+  assert.deepEqual(LK1_PLAN_RULES_DESIRED, {
+    formatVersion: 1,
+    rules: [
+      ['b91e14d1-fe6e-4d0b-be39-3e45ad86b759', 'ra'],
+      ['b2e6a9d4-53b5-4f79-87ec-3fb076381e9b', 'friendship'],
+      ['9eb8a7a4-c195-492a-95e4-3fb82899ac10', 'academy'],
+      ['82caad6f-4d19-4d01-852b-932bdbb0f405', 'sport'],
+      ['6bda152b-0a9c-4308-82d0-3cd4e6aa680d', 'promo_academy'],
+      ['c079dc82-c716-4f0e-b9ad-6aab62fb789e', 'promo_friendship'],
+      ['3b4806f1-6f9a-46df-a7d7-45075b4e7274', 'promo_ra'],
+    ].map(([productId, planKey]) => ({
+      productId, planKey, enforceFrom: '2026-09-01', ...ruleNumbers,
+    })),
+  });
+  // The embedded resolver (the single source of truth of the gateway) accepts it.
+  const normalized = normalizePlanRules(LK1_PLAN_RULES_DESIRED);
+  assert.equal(normalized.ok, true);
+  assert.equal(normalized.rules.size, 7);
+  for (const { productId, planKey } of LK1_PLAN_RULES_DESIRED.rules) {
+    assert.equal(normalized.rules.get(productId).planKey, planKey);
+    assert.equal(normalized.rules.get(productId).enforceFrom, '2026-09-01');
+    assert.equal(normalized.rules.get(productId).maxActiveBookings, 4);
+  }
+});
+
+test('the transition initialize guards the prior, writes once and reads back', () => {
+  const transition = buildPlanRulesTransition({ expectedPrior: null, desired: LK1_PLAN_RULES_DESIRED });
+  assert.equal(transition.expectedPrior, null);
+  assert.deepEqual(transition.desired, LK1_PLAN_RULES_DESIRED);
+  const { initialize } = transition;
+  new Function('global', 'env', 'node', 'flow', initialize);
+  for (const marker of [
+    `const lk1PlanRulesKey = ${JSON.stringify(LK1_PLAN_RULES_KEY)};`,
+    `const lk1DesiredPlanRules = ${JSON.stringify(LK1_PLAN_RULES_DESIRED)};`,
+    'const lk1PlanRulesExpectedPrior = null;',
+    'if (JSON.stringify(lk1PlanRulesCurrent) !== JSON.stringify(lk1DesiredPlanRules)) {',
+    'if (JSON.stringify(lk1PlanRulesCurrent) !== JSON.stringify(lk1PlanRulesExpectedPrior)) '
+      + 'throw new Error("plan rules prior mismatch; no overwrite");',
+    'global.set(lk1PlanRulesKey, lk1DesiredPlanRules);',
+    'throw new Error("plan rules readback mismatch");',
+  ]) {
+    assert.ok(initialize.includes(marker), marker);
+  }
+
+  // First activation on an empty context writes the reviewed payload.
+  const empty = globalFixture();
+  runInitialize(initialize, empty.context);
+  assert.deepEqual(empty.store.get(LK1_PLAN_RULES_KEY), LK1_PLAN_RULES_DESIRED);
+
+  // Re-running the same generation is idempotent: nothing is rewritten.
+  let writes = 0;
+  const already = globalFixture({ [LK1_PLAN_RULES_KEY]: structuredClone(LK1_PLAN_RULES_DESIRED) });
+  runInitialize(initialize, { get: already.context.get, set: (key, value) => {
+    writes += 1;
+    already.context.set(key, value);
+  } });
+  assert.equal(writes, 0);
+
+  // A foreign prior is refused instead of overwritten.
+  const foreign = globalFixture({
+    [LK1_PLAN_RULES_KEY]: { formatVersion: 1, rules: [] },
+  });
+  assert.throws(() => runInitialize(initialize, foreign.context), /prior mismatch; no overwrite/);
+  assert.deepEqual(foreign.store.get(LK1_PLAN_RULES_KEY), { formatVersion: 1, rules: [] });
+
+  // A malformed prior is refused by the inlined shape normalizer.
+  const malformed = globalFixture({ [LK1_PLAN_RULES_KEY]: { formatVersion: 2, rules: [] } });
+  assert.throws(() => runInitialize(initialize, malformed.context), /shape mismatch/);
+  for (const bad of [
+    { formatVersion: 1, rules: [], surplus: true },
+    { formatVersion: 1, rules: [{ productId: 'not-a-uuid', planKey: 'ra', enforceFrom: null,
+      maxActiveBookings: 4, freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+      groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 }] },
+    { formatVersion: 1, rules: [{ productId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planKey: '',
+      enforceFrom: null, maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+      gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
+      tournamentDiscountPercent: 50 }] },
+    { formatVersion: 1, rules: [{ productId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planKey: 'ra',
+      enforceFrom: '2026-9-1', maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+      gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
+      tournamentDiscountPercent: 50 }] },
+    { formatVersion: 1, rules: [{ productId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planKey: 'ra',
+      enforceFrom: null, maxActiveBookings: 0, freeGameMinutesPerDay: 60,
+      gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
+      tournamentDiscountPercent: 50 }] },
+    { formatVersion: 1, rules: [{ productId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planKey: 'ra',
+      enforceFrom: null, maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+      gameOverageDiscountPercent: 101, groupTrainingDiscountPercent: 50,
+      tournamentDiscountPercent: 50 }] },
+    { formatVersion: 1, rules: [
+      { productId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planKey: 'ra', enforceFrom: null,
+        maxActiveBookings: 4, freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+        groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 },
+      { productId: 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759', planKey: 'ra', enforceFrom: null,
+        maxActiveBookings: 4, freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+        groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 },
+    ] },
+  ]) {
+    const fixture = globalFixture({ [LK1_PLAN_RULES_KEY]: bad });
+    assert.throws(() => runInitialize(initialize, fixture.context), /shape mismatch/);
+  }
+
+  // Missing options cannot silently become a transition.
+  assert.throws(() => buildPlanRulesTransition({ desired: LK1_PLAN_RULES_DESIRED }),
+    /Explicit plan-rules prior and desired global required/);
+  assert.throws(() => buildPlanRulesTransition({ expectedPrior: null }),
+    /Explicit plan-rules prior and desired global required/);
+  // A later rule change must name its exact prior: declared, it applies; blind, it
+  // is refused at runtime with `expectedPrior: null`.
+  const changed = structuredClone(LK1_PLAN_RULES_DESIRED);
+  changed.rules[0] = { ...changed.rules[0], maxActiveBookings: 5 };
+  const declared = buildPlanRulesTransition({
+    expectedPrior: LK1_PLAN_RULES_DESIRED, desired: changed,
+  });
+  assert.deepEqual(declared.expectedPrior, LK1_PLAN_RULES_DESIRED);
+  const upgrade = globalFixture({ [LK1_PLAN_RULES_KEY]: structuredClone(LK1_PLAN_RULES_DESIRED) });
+  runInitialize(declared.initialize, upgrade.context);
+  assert.equal(upgrade.store.get(LK1_PLAN_RULES_KEY).rules[0].maxActiveBookings, 5);
+  // The frozen generation run against a foreign value refuses instead of rewriting.
+  const blind = globalFixture({ [LK1_PLAN_RULES_KEY]: structuredClone(changed) });
+  assert.throws(() => runInitialize(initialize, blind.context), /prior mismatch; no overwrite/);
+  assert.equal(blind.store.get(LK1_PLAN_RULES_KEY).rules[0].maxActiveBookings, 5);
 });
 
 test('the price-preview amendment is a documented pending slot, not part of this generation', () => {
@@ -106,28 +272,35 @@ test('anchor handling fails closed on ambiguous or composed deltas', () => {
     /already declares the embedded plan-rules symbol/);
 });
 
-test('the patcher applies to the live 147 snapshot as exactly two function-body deltas',
+test('the patcher applies to the live 147 snapshot as exactly two changed nodes',
   { skip: snapshotSkip }, () => {
-    const { built, candidateText, gateway, evaluator, liveGateway, liveEvaluator } = liveArtifacts();
+    const { built, candidateText, gateway, gatewayInitialize, evaluator,
+      liveGateway, liveGatewayInitialize, liveEvaluator } = liveArtifacts();
     assert.equal(built.changes.length, 2);
     assert.equal(built.flow.length, PLAN_RULES_SOURCE_NODE_COUNT);
     assert.equal(built.previewNodeUnchanged, true);
     assert.deepEqual(built.changes.map((change) => change.id).sort(),
       [PLAN_RULES_EVALUATOR_NODE_ID, PLAN_RULES_GATEWAY_NODE_ID].sort());
-    for (const change of built.changes) {
-      assert.deepEqual(change.fields, ['func']);
-      assert.notEqual(change.beforeSha256, change.afterSha256);
-    }
-    // The candidate is the live flow with exactly those two function bodies replaced.
+    const gatewayChange = built.changes.find((change) => change.id === PLAN_RULES_GATEWAY_NODE_ID);
+    const evaluatorChange = built.changes.find((change) => change.id === PLAN_RULES_EVALUATOR_NODE_ID);
+    assert.deepEqual(gatewayChange.fields, ['func', 'initialize']);
+    assert.deepEqual(evaluatorChange.fields, ['func']);
+    assert.notEqual(gatewayChange.func.beforeSha256, gatewayChange.func.afterSha256);
+    assert.notEqual(gatewayChange.initialize.beforeSha256, gatewayChange.initialize.afterSha256);
+    assert.equal(evaluatorChange.initialize, undefined);
+    // The candidate is the live flow with exactly those fields rewritten.
     assert.equal(candidateText, `${JSON.stringify(built.flow, null, 2)}\n`);
     assert.equal(sha256(liveGateway), PLAN_RULES_TARGETS.gateway.liveFuncSha256);
     assert.equal(sha256(gateway), PLAN_RULES_TARGETS.gateway.patchedFuncSha256);
+    assert.equal(sha256(liveGatewayInitialize), PLAN_RULES_TARGETS.gateway.liveInitializeSha256);
+    assert.equal(sha256(gatewayInitialize), PLAN_RULES_TARGETS.gateway.patchedInitializeSha256);
     assert.equal(sha256(liveEvaluator), PLAN_RULES_TARGETS.evaluator.liveFuncSha256);
     assert.equal(sha256(evaluator), PLAN_RULES_TARGETS.evaluator.patchedFuncSha256);
 
     // A Node-RED function body must stay parseable with the Node-RED arguments.
     new Function('msg', 'node', 'env', 'global', gateway);
     new Function('msg', 'node', 'env', 'global', evaluator);
+    new Function('global', 'env', 'node', 'flow', gatewayInitialize);
 
     // Gateway: the resolver module is embedded once, the reviewed config replaced the
     // single-product config, and every legacy gate now reads the resolver verdict.
@@ -159,6 +332,65 @@ test('the patcher applies to the live 147 snapshot as exactly two function-body 
     assert.ok(evaluator.includes('"Достигнут лимит активных услуг по подписке"'));
   });
 
+test('the released gateway initialize keeps the HUB writer and adds the plan-rules writer',
+  { skip: snapshotSkip }, () => {
+    const { gatewayInitialize, liveGatewayInitialize } = liveArtifacts();
+    // The live setup body is exactly the reviewed HUB policy transition, byte for byte.
+    const hubTransition = buildHubPolicyTransition({
+      expectedPrior: null,
+      desired: {
+        productId: HUB_POLICY_PRODUCT,
+        maxActiveBookings: 4,
+        freeGameMinutesPerDay: 60,
+        gameOverageDiscountPercent: 30,
+        groupTrainingDiscountPercent: 50,
+        tournamentDiscountPercent: 50,
+      },
+    });
+    assert.equal(HUB_POLICY_KEY, 'subscriptions_lk1_product_policy');
+    assert.equal(liveGatewayInitialize, hubTransition.initialize);
+    assert.equal(sha256(hubTransition.initialize), PLAN_RULES_TARGETS.gateway.liveInitializeSha256);
+    // The live setup body is exactly the HUB policy writer.
+    for (const marker of [
+      'const lk1PolicyKey = "subscriptions_lk1_product_policy";',
+      'const lk1DesiredPolicy = {"productId":"db7a5250-7369-4f43-8ac5-9111be24bc74",'
+        + '"maxActiveBookings":4,"freeGameMinutesPerDay":60,"gameOverageDiscountPercent":30,'
+        + '"groupTrainingDiscountPercent":50,"tournamentDiscountPercent":50};',
+      'global.set(lk1PolicyKey, lk1DesiredPolicy);',
+      '"HUB policy prior mismatch; no overwrite"',
+      '"HUB policy readback mismatch"',
+    ]) {
+      assert.ok(liveGatewayInitialize.includes(marker), marker);
+      assert.ok(gatewayInitialize.includes(marker), `released: ${marker}`);
+    }
+    // The HUB writer block is byte-identical: the released setup is the live one plus
+    // the plan-rules activation appended at the end.
+    assert.ok(gatewayInitialize.startsWith(liveGatewayInitialize));
+    assert.equal(count(gatewayInitialize, 'const lk1PolicyKey ='), 1);
+    assert.equal(count(gatewayInitialize, 'const lk1PlanRulesKey ='), 1);
+
+    // Running the released setup writes the HUB policy first and the plan-rules
+    // global second, in one pass.
+    const fixture = globalFixture();
+    runInitialize(gatewayInitialize, fixture.context);
+    assert.deepEqual(fixture.store.get('subscriptions_lk1_product_policy'), {
+      productId: 'db7a5250-7369-4f43-8ac5-9111be24bc74',
+      maxActiveBookings: 4,
+      freeGameMinutesPerDay: 60,
+      gameOverageDiscountPercent: 30,
+      groupTrainingDiscountPercent: 50,
+      tournamentDiscountPercent: 50,
+    });
+    assert.deepEqual(fixture.store.get(LK1_PLAN_RULES_KEY), LK1_PLAN_RULES_DESIRED);
+    // Re-running the released setup over its own result is idempotent.
+    runInitialize(gatewayInitialize, fixture.context);
+
+    // A changed plan-rules global fails the setup closed instead of overwriting.
+    const drifted = globalFixture({ [LK1_PLAN_RULES_KEY]: { formatVersion: 1, rules: [] } });
+    assert.throws(() => runInitialize(gatewayInitialize, drifted.context),
+      /prior mismatch; no overwrite/);
+  });
+
 test('the embedded evaluator preimage is the base generation source of commit e2e5e1e5',
   { skip: snapshotSkip }, () => {
     const { liveEvaluator } = liveArtifacts();
@@ -176,17 +408,27 @@ test('the embedded evaluator preimage is the base generation source of commit e2
   });
 
 test('a second run and any drift are refused', { skip: snapshotSkip }, () => {
-  const { gateway, evaluator, built, liveGateway, liveEvaluator } = liveArtifacts();
+  const { gateway, gatewayInitialize, evaluator, built,
+    liveGateway, liveGatewayInitialize, liveEvaluator } = liveArtifacts();
   assert.throws(() => patchLk1PlanRulesGatewayBody(gateway), /already patched/);
   assert.throws(() => patchLk1PlanRulesEvaluatorBody(evaluator), /already patched/);
+  assert.throws(() => patchLk1PlanRulesGatewayInitialize(gatewayInitialize), /already patched/);
   assert.throws(() => buildGatewayBody(gateway), /already patched/);
   assert.throws(() => buildEvaluatorBody(evaluator), /already patched/);
+  assert.throws(() => buildGatewayInitialize(gatewayInitialize), /already patched/);
   // Re-running the whole generation over its own candidate fails closed.
   assert.throws(() => composeLk1PlanRulesArtifacts(built.candidateBytes), /preimage drift/);
 
-  // Node-level drift: a single extra byte in either live body is refused.
+  // Node-level drift: a single extra byte in any live body is refused.
   assert.throws(() => patchLk1PlanRulesGatewayBody(`${liveGateway} `), /live preimage drift/);
   assert.throws(() => patchLk1PlanRulesEvaluatorBody(`${liveEvaluator} `), /live preimage drift/);
+  assert.throws(() => patchLk1PlanRulesGatewayInitialize(`${liveGatewayInitialize} `),
+    /live preimage drift/);
+  // A live setup body that lost the HUB writer is refused even with a matching hash:
+  // the HUB writer marker check is independent of the pin.
+  assert.throws(() => buildGatewayInitialize(liveGatewayInitialize.replace(
+    'global.set(lk1PolicyKey, lk1DesiredPolicy);', '// hub writer removed')),
+  /missing the HUB writer anchor/);
   // A live body with the right node hash but a broken anchor cannot exist; a body
   // that fails the flow-level pin is refused before any node is touched.
   const driftedFlow = JSON.parse(fs.readFileSync(LIVE_SNAPSHOT).toString('utf8'));
@@ -217,7 +459,7 @@ test('compose refuses a malformed flow and an absent preview node',
       /is absent/);
   });
 
-test('prepare_contract builds the reviewed two-node contract for the candidate',
+test('prepare_exact_graph_contract allows initialize on the gateway and keeps two nodes',
   { skip: snapshotSkip }, () => {
     const { liveBytes, built, candidateText } = liveArtifacts();
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-plan-rules-test-'));
@@ -227,50 +469,94 @@ test('prepare_contract builds the reviewed two-node contract for the candidate',
     fs.writeFileSync(livePath, liveBytes, { mode: 0o600 });
     fs.writeFileSync(candidatePath, candidateText, { mode: 0o600 });
     const stdout = execFileSync('node', [
-      path.join(repoRoot, 'scripts/nodered_reviewed_flow_deploy/prepare_contract.mjs'),
+      path.join(repoRoot, 'scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs'),
       '--live', livePath,
       '--candidate', candidatePath,
       '--output', contractPath,
       '--deployment-id', PLAN_RULES_DEPLOYMENT_ID,
-      '--allow-node', PLAN_RULES_GATEWAY_NODE_ID,
-      '--allow-node', PLAN_RULES_EVALUATOR_NODE_ID,
+      '--allow-change', `${PLAN_RULES_GATEWAY_NODE_ID}:func,initialize`,
+      '--allow-change', `${PLAN_RULES_EVALUATOR_NODE_ID}:func`,
     ], { cwd: repoRoot, encoding: 'utf8' });
     const receipt = JSON.parse(stdout);
     assert.equal(receipt.deploymentId, PLAN_RULES_DEPLOYMENT_ID);
     assert.equal(receipt.changedNodeCount, 2);
+    assert.equal(receipt.addedNodeCount, 0);
     assert.equal(receipt.sourceSha256, PLAN_RULES_SOURCE_SHA256);
     assert.equal(receipt.candidateSha256, sha256(candidateText));
-    assert.equal(receipt.nodeCount, PLAN_RULES_SOURCE_NODE_COUNT);
+    assert.equal(receipt.sourceNodeCount, PLAN_RULES_SOURCE_NODE_COUNT);
+    assert.equal(receipt.candidateNodeCount, PLAN_RULES_SOURCE_NODE_COUNT);
 
     const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+    assert.equal(contract.formatVersion, 2);
+    assert.equal(contract.contractKind, 'exact-graph');
     assert.equal(contract.deploymentId, PLAN_RULES_DEPLOYMENT_ID);
     assert.equal(contract.sourceSha256, sha256(liveBytes));
     assert.equal(contract.candidateSha256, sha256(candidateText));
     assert.equal(contract.allowedChanges.length, 2);
-    assert.deepEqual(contract.allowedChanges.map((change) => change.id).sort(),
+    assert.equal(contract.allowedAdditions.length, 0);
+    const byId = new Map(contract.allowedChanges.map((change) => [change.id, change]));
+    assert.deepEqual([...byId.keys()].sort(),
       [PLAN_RULES_EVALUATOR_NODE_ID, PLAN_RULES_GATEWAY_NODE_ID].sort());
+    // The gateway allowance must explicitly permit the setup body.
+    assert.deepEqual(byId.get(PLAN_RULES_GATEWAY_NODE_ID).fields, ['func', 'initialize']);
+    assert.deepEqual(byId.get(PLAN_RULES_EVALUATOR_NODE_ID).fields, ['func']);
+    // Per-node digests must match the patcher report for the same fields.
+    const jsonSha = (value) => sha256(Buffer.from(JSON.stringify(value), 'utf8'));
+    const liveFlow = JSON.parse(liveBytes.toString('utf8'));
+    const candidateFlow = JSON.parse(candidateText);
+    const nodeOf = (flow, id) => flow.find((node) => node.id === id);
     for (const change of contract.allowedChanges) {
-      assert.deepEqual(change.fields, ['func']);
-      const reported = built.changes.find((item) => item.id === change.id);
-      assert.equal(change.sourceFuncSha256, reported.beforeSha256);
-      assert.equal(change.candidateFuncSha256, reported.afterSha256);
+      assert.equal(change.sourceNodeSha256, jsonSha(nodeOf(liveFlow, change.id)));
+      assert.equal(change.candidateNodeSha256, jsonSha(nodeOf(candidateFlow, change.id)));
     }
+    const reported = built.changes.find((item) => item.id === PLAN_RULES_GATEWAY_NODE_ID);
+    assert.equal(reported.func.beforeSha256,
+      sha256(nodeOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID).func));
+    assert.equal(reported.initialize.beforeSha256,
+      sha256(nodeOf(liveFlow, PLAN_RULES_GATEWAY_NODE_ID).initialize));
+    assert.equal(reported.initialize.afterSha256,
+      sha256(nodeOf(candidateFlow, PLAN_RULES_GATEWAY_NODE_ID).initialize));
+
+    // The function-only contract cannot express this generation: `initialize` is not
+    // a permitted function-only field, which is exactly why the wrapper uses the
+    // exact-graph contract.
+    let functionOnlyError = null;
+    try {
+      execFileSync('node', [
+        path.join(repoRoot, 'scripts/nodered_reviewed_flow_deploy/prepare_contract.mjs'),
+        '--live', livePath,
+        '--candidate', candidatePath,
+        '--output', path.join(temp, 'contract-function-only.json'),
+        '--deployment-id', PLAN_RULES_DEPLOYMENT_ID,
+        '--allow-node', PLAN_RULES_GATEWAY_NODE_ID,
+        '--allow-node', PLAN_RULES_EVALUATOR_NODE_ID,
+      ], { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' });
+    } catch (error) {
+      functionOnlyError = error;
+    }
+    assert.ok(functionOnlyError, 'the function-only contract must reject this candidate');
+    assert.match(String(functionOnlyError.stderr),
+      /Function-only candidate changed forbidden fields for .*: func,initialize/);
     fs.rmSync(temp, { recursive: true, force: true });
   });
 
-test('the deploy wrapper keeps the confirmation gate, the exact allow-list and rollback', () => {
+test('the deploy wrapper keeps the confirmation gate, the exact allowance and rollback', () => {
   const wrapper = fs.readFileSync(
     path.join(repoRoot, 'scripts/deploy_nodered_lk1_plan_rules_147.sh'), 'utf8');
   assert.ok(wrapper.includes('NODE_RED_LK1_PLAN_RULES_DEPLOY:-}" != "CONFIRM_147"'));
   assert.ok(wrapper.includes('clean main checkout'));
   assert.ok(wrapper.includes(`allow_nodes=(${PLAN_RULES_GATEWAY_NODE_ID} ${PLAN_RULES_EVALUATOR_NODE_ID})`));
+  assert.ok(wrapper.includes(`"${PLAN_RULES_GATEWAY_NODE_ID}:func,initialize"`));
+  assert.ok(wrapper.includes(`"${PLAN_RULES_EVALUATOR_NODE_ID}:func"`));
+  // expected_changed_nodes stays the node count (2), not the field count.
   assert.ok(wrapper.includes('expected_changed_nodes=2'));
+  assert.ok(wrapper.includes('prepare_exact_graph_contract.mjs'));
+  assert.equal(wrapper.includes('nodered_reviewed_flow_deploy/prepare_contract.mjs'), false);
   assert.ok(wrapper.includes('patch_live_lk1_plan_rules.mjs'));
-  assert.ok(wrapper.includes('prepare_contract.mjs'));
   assert.ok(wrapper.includes('rollback --deployment-id'));
   assert.ok(wrapper.includes('sha256sum'));
   assert.ok(wrapper.includes('deploy_reviewed_flow_147_remote.mjs'));
-  // The preview node must not be in the allow-list of this generation.
+  // The preview node must not be in the allowance of this generation.
   assert.equal(wrapper.includes(PLAN_RULES_PREVIEW_NODE_ID), false);
   // Read-only smoke: HTTP 200 plus the RUB price payload.
   assert.ok(wrapper.includes('smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"'));
