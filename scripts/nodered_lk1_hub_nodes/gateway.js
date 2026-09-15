@@ -745,24 +745,60 @@ if (ctx.step === "lk1_transaction_readback") {
       ? present[0] : undefined;
   };
   const stringId = (value) => typeof value === "string" && value.trim().length > 0;
+  // Viva echoes the same identity flat or inside a referenced record, so every
+  // alias family is collected before it is judged.
+  const collectIds = (value, keys) => {
+    const bucket = [];
+    const visit = (candidate) => {
+      if (candidate === undefined || candidate === null || candidate === "") return;
+      if (Array.isArray(candidate)) { candidate.forEach(visit); return; }
+      if (typeof candidate === "object") { keys.forEach((key) => visit(candidate[key])); return; }
+      if (stringId(candidate)) bucket.push(candidate.trim());
+    };
+    visit(value);
+    return bucket;
+  };
   const id = one([transaction?.id, transaction?.transactionId], stringId);
   const amount = one([transaction?.toPayMinor, transaction?.toPay], Number.isSafeInteger);
-  const clientId = one([transaction?.clientId, transaction?.client?.id], stringId);
-  const paymentUrl = one([transaction?.paymentUrl, transaction?.paymentLink], stringId);
+  // Viva carries the checkout link inside cardPaymentInfo/cardPaymentStatus; the
+  // flat fields are only the older shape of the same bill.
+  const paymentUrl = one([transaction?.paymentUrl, transaction?.paymentLink,
+    transaction?.cardPaymentInfo?.paymentUrl, transaction?.cardPaymentInfo?.paymentLink,
+    transaction?.cardPaymentStatus?.paymentUrl, transaction?.cardPaymentStatus?.paymentLink], stringId);
+  const clientIds = [...collectIds(transaction?.clientId, ["id"]),
+    ...collectIds(transaction?.client, ["id", "uuid", "clientId"])];
+  const clientId = one(clientIds, stringId);
   const products = transaction?.products;
+  // Only the intent fields the provider actually echoes can be compared.
   const productsValid = products === undefined || (Array.isArray(products) && products.length === 1
-    && isObj(products[0]) && products[0].id === intent?.productId
-    && products[0].type === "SERVICE" && products[0].count === 1
-    && products[0].discount === intent?.discountMinor);
-  const bookingEvidence = [transaction?.bookingIds];
-  if (Array.isArray(products)) bookingEvidence.push(...products.map((product) => product?.bookingIds));
-  const suppliedBookings = bookingEvidence.filter((value) => value !== undefined);
-  const bookingsValid = suppliedBookings.length > 0 && suppliedBookings.every((ids) =>
-    Array.isArray(ids) && ids.length === 1 && ids[0] === ctx.confirmedBookingId);
+    && isObj(products[0]) && (products[0].id === undefined || products[0].id === intent?.productId)
+    && (products[0].type === undefined || products[0].type === "SERVICE")
+    && (products[0].count === undefined || products[0].count === 1)
+    && (products[0].discount === undefined || products[0].discount === intent?.discountMinor));
+  const bookingEvidence = [
+    ...collectIds(transaction?.bookingId, ["id", "uuid", "bookingId", "clientBookingId"]),
+    ...collectIds(transaction?.bookingIds, ["id", "uuid", "bookingId", "clientBookingId"]),
+    ...collectIds(transaction?.paymentBookingIds, ["id", "uuid", "bookingId", "clientBookingId"]),
+  ];
+  if (Array.isArray(products)) for (const product of products) {
+    for (const key of ["bookingId", "bookingIds", "paymentBookingIds", "clientBookingId"]) {
+      bookingEvidence.push(...collectIds(product?.[key], ["id", "uuid", "bookingId", "clientBookingId"]));
+    }
+    if (Array.isArray(product?.pricingDetails)) for (const detail of product.pricingDetails) {
+      bookingEvidence.push(...collectIds(detail?.clientBookingId, ["id", "uuid", "bookingId", "clientBookingId"]));
+      bookingEvidence.push(...collectIds(detail?.bookingId, ["id", "uuid", "bookingId", "clientBookingId"]));
+    }
+  }
+  const bookingId = one(bookingEvidence, stringId);
   const safeUrl = isNodeRedHttpsCheckout(paymentUrl);
+  // A provider that omits an echo proves nothing either way: the persisted
+  // intent, the exact transaction id and the exact payable amount already bind
+  // this bill. Every alias the provider does supply must agree with the intent.
   if (!isHttpOk(msg.statusCode) || !isObj(transaction) || !isObj(intent)
-    || id !== ctx.lk1.transactionId || clientId !== ctx.actorClientId
-    || !bookingsValid || !productsValid
+    || id !== ctx.lk1.transactionId
+    || (clientIds.length > 0 && normalizeId(clientId) !== normalizeId(ctx.actorClientId))
+    || (bookingEvidence.length > 0 && normalizeId(bookingId) !== normalizeId(ctx.confirmedBookingId))
+    || !productsValid
     || !Number.isSafeInteger(amount) || amount !== intent.chargeMinor || !safeUrl
     || (transaction.currency !== undefined && transaction.currency !== "RUB")) {
     return lk1Stop(ctx, "LK1_TRANSACTION_READBACK_MISMATCH");
