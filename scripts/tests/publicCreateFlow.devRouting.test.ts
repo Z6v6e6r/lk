@@ -202,6 +202,8 @@ test("public game create flow uses dedicated summary and split checkout selectio
   assert.match(gamesPageSource, /game-payment-choice-card game-payment-choice-card--subscription/);
   assert.match(gamesPageSource, /Создать игру по подписке/);
   assert.match(gamesPageSource, /Создать игру с помощью подписки/);
+  assert.match(gamesPageSource, /const publicCreateSurchargeMinor = subscriptionSurchargeMinor\(/);
+  assert.match(gamesPageSource, /`Создать игру по подписке с доплатой \$\{formatPrice\(publicCreateSurchargeMinor \/ 100\)\} ₽`/);
   assert.match(gamesPageSource, /splitPaymentAvailable && splitPaymentSelected && !usePublicCreateWizard && \(/);
   assert.match(gamesPageSource, /shouldShowPublicationJoinPriceField && \(\s*<label className="game-publish-field">\s*<span className="game-publish-field-label">Стоимость присоединения к игре<\/span>/);
   assert.match(gamesPageSource, /const publicCreateJoinersPillLabel = createInviteSlotsCount > 0/);

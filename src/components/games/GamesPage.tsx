@@ -5,7 +5,7 @@ import { AvatarImage } from "../UI/AvatarImage";
 import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership, hasOtherActiveGameMembers } from "./gameLeaveMembership";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
-import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
+import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget, subscriptionSurchargeMinor } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
 import { SubscriptionPricePreviewAside } from "./SubscriptionPricePreviewAside";
 import type { CSSProperties } from "react";
@@ -7214,12 +7214,20 @@ export default function GamesPage({
     && splitHasSubscriptionPaymentOptions
     && !selectedSplitSubscriptionId,
   );
+  const publicCreateSurchargeMinor = subscriptionSurchargeMinor(
+    selectedSplitSubscriptionId
+      ? publicSplitPricePreview.bySubscriptionId[selectedSplitSubscriptionId]
+      : undefined,
+  );
+  const publicCreateSubscriptionSubmitTitle = publicCreateSurchargeMinor != null
+    ? `Создать игру по подписке с доплатой ${formatPrice(publicCreateSurchargeMinor / 100)} ₽`
+    : "Создать игру с помощью подписки";
   const publicCreateFinalSubmitTitle = publicCreateNeedsSplitSubscriptionSelection
     ? "Выберите абонемент для списания"
     : splitPaymentSelected
     ? (
       splitCheckoutMode === "subscription" && splitHasSubscriptionPaymentOptions
-        ? "Создать игру с помощью подписки"
+        ? publicCreateSubscriptionSubmitTitle
         : `Создать игру и оплатить ${formatPrice(splitShareAmount)} ₽`
     )
     : (
