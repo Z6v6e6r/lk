@@ -2289,7 +2289,7 @@ export default function TournamentSignupPage({
                                           <>
                                             <br />
                                             <span className="tournament-signup-payment-option-note">
-                                              Потребуется оплата со скидкой. Посещение не списывается.
+                                              Потребуется оплата со скидкой.
                                             </span>
                                           </>
                                         )}
@@ -2345,7 +2345,7 @@ export default function TournamentSignupPage({
                                         <span>
                                           {product.name}
                                           {discount && <><br /><span className="tournament-signup-payment-option-note">
-                                            Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}». Посещение не списывается.
+                                            Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}».
                                           </span></>}
                                         </span>
                                         <div className="tournament-signup-payment-option-meta">

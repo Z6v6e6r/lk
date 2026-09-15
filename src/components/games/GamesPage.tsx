@@ -5,7 +5,7 @@ import { AvatarImage } from "../UI/AvatarImage";
 import { findActiveSplitPaymentForLeave, hasActiveGameLeaveMembership, hasOtherActiveGameMembers } from "./gameLeaveMembership";
 import { JoinSubscriptionOptions } from "./JoinSubscriptionOptions";
 import { SubscriptionOptionPrice } from "./SubscriptionOptionPrice";
-import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget } from "./subscriptionPricePreview";
+import { createSubscriptionPriceTarget, createJoinSubscriptionPriceTarget, subscriptionSurchargeMinor } from "./subscriptionPricePreview";
 import { useSubscriptionPricePreview } from "./useSubscriptionPricePreview";
 import { SubscriptionPricePreviewAside } from "./SubscriptionPricePreviewAside";
 import type { CSSProperties } from "react";
@@ -7095,6 +7095,11 @@ export default function GamesPage({
   const publicCreateVisibilityOpenPillLabel = "Быстрее собрать";
   const publicCreateVisibilityPrivatePillLabel = "Для своих";
   const publicCreateGeneralListCardLabel = "Общий список игр";
+  // The cabinet create flow charges the subscription share from the inline option list,
+  // so it needs the same server quote the public wizard shows on its subscription cards.
+  const shouldPreviewSplitSubscriptionPrices = usePublicCreateWizard
+    ? step === "time" || step === "create"
+    : splitPaymentSelected && splitHasSubscriptionPaymentOptions && !subscriptionUsageShadowEnabled;
   const publicSplitPricePreview = useSubscriptionPricePreview({
     target: createSubscriptionPriceTarget({ slotId: selectedSlotId, stationId: studioId, roomId: courtId,
       masterServiceId: studioMasterServiceId, subServiceIds: resolvedSelectedSubServiceIds,
@@ -7102,7 +7107,7 @@ export default function GamesPage({
       durationMinutes: duration, shareCount: splitShareCount }),
     subscriptionIds: splitSubscriptionPaymentOptions.map(option => option.subscriptionId),
     actorId: profileId,
-    enabled: usePublicCreateWizard && (step === "time" || step === "create") && canProceedToPayment && !splitPaymentAvailabilityLabelIsError,
+    enabled: shouldPreviewSplitSubscriptionPrices && canProceedToPayment && !splitPaymentAvailabilityLabelIsError,
     availabilityLoading: splitSubscriptionsLoading,
   });
   const shouldShowPublicSplitSubscriptionInfoBadge = !splitHasSubscriptionPaymentOptions
@@ -7214,12 +7219,20 @@ export default function GamesPage({
     && splitHasSubscriptionPaymentOptions
     && !selectedSplitSubscriptionId,
   );
+  const publicCreateSurchargeMinor = subscriptionSurchargeMinor(
+    selectedSplitSubscriptionId
+      ? publicSplitPricePreview.bySubscriptionId[selectedSplitSubscriptionId]
+      : undefined,
+  );
+  const publicCreateSubscriptionSubmitTitle = publicCreateSurchargeMinor != null
+    ? `Создать игру по подписке с доплатой ${formatPrice(publicCreateSurchargeMinor / 100)} ₽`
+    : "Создать игру по подписке";
   const publicCreateFinalSubmitTitle = publicCreateNeedsSplitSubscriptionSelection
     ? "Выберите абонемент для списания"
     : splitPaymentSelected
     ? (
       splitCheckoutMode === "subscription" && splitHasSubscriptionPaymentOptions
-        ? "Создать игру с помощью подписки"
+        ? publicCreateSubscriptionSubmitTitle
         : `Создать игру и оплатить ${formatPrice(splitShareAmount)} ₽`
     )
     : (
@@ -17872,7 +17885,7 @@ export default function GamesPage({
                     {splitSubscriptionPaymentOptions.map((option) => (
                       <button
                         key={option.subscriptionId}
-                        className="game-split-subscription-option"
+                        className="game-split-subscription-option game-split-subscription-option--preview"
                         onClick={() => {
                           void submitSplitGamePayment("subscription", option.subscriptionId);
                         }}
@@ -17882,8 +17895,16 @@ export default function GamesPage({
                           || splitSubscriptionsLoading
                           || subscriptionUsageShadow.busy}
                       >
-                        <span>{`Списать с «${option.name}»`}</span>
-                        <strong>{option.balanceLabel}</strong>
+                        <span className="game-split-subscription-option-copy">
+                          <strong>{`Списать с «${option.name}»`}</strong>
+                          <span>
+                            <SubscriptionOptionPrice
+                              preview={publicSplitPricePreview.bySubscriptionId[option.subscriptionId]}
+                              shareLabel={splitSharePartLabel}
+                            />
+                          </span>
+                        </span>
+                        <span className="game-split-subscription-option-validity">{option.balanceLabel}</span>
                       </button>
                     ))}
                   </div>
