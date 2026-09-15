@@ -11,7 +11,7 @@ import ts from 'typescript';
 import vm from 'node:vm';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { buildHubPolicyTransition } from '../lib/lk1HubPolicyTransition.mjs';
-import { PREVIEW_CANONICAL_SOURCE_SHA256, previewSources } from '../patch_nodered_subscription_price_preview.mjs';
+import { PREVIEW_CANONICAL_SOURCE_SHA256, assertCanonicalExports, canonicalReferences, previewSources } from '../patch_nodered_subscription_price_preview.mjs';
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 // Line A owns scripts/lib/lk1PlanRules.mjs and the release composition embeds
@@ -558,4 +558,41 @@ test('the composition reviews exactly the four pinned source texts', requiresRes
   const stale = syntheticPins(syntheticBody);
   assert.equal(PREVIEW_CANONICAL_SOURCE_SHA256.booking === stale.booking, false,
     'The default pin still points at the installed generation, not at this synthetic body');
+});
+
+// Regression, production incident 2026-09-15: the released preview body defined
+// the event-route helpers inside the canonical closure but did not publish them,
+// so the router's first guard (`typeof canonical.identityMoneyOwned !== 'function'`)
+// answered every group-training and tournament quote with 503
+// `GROUP_DISCOUNT_BACKEND_NOT_READY` / `TOURNAMENT_DISCOUNT_BACKEND_NOT_READY`.
+test('the composed closure publishes every helper the event route calls', requiresResolver, () => {
+  const prefix = composed.router.slice(0, composed.router.indexOf('\nconst pricing'));
+  const scope = new Function('global', `${prefix}\nreturn canonical;`)({ get: () => null });
+  for (const name of ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId']) {
+    assert.equal(typeof scope[name], 'function', `canonical.${name} must be callable in the preview node`);
+  }
+  // The guard the router runs first: every group/tournament quote depends on it.
+  assert.equal(typeof scope.identityMoneyOwned !== 'function', false);
+  assert.deepEqual(canonicalReferences(router).filter(name => !(name in scope)), []);
+});
+
+test('the composition fails closed when a referenced helper is not published', () => {
+  const exported = ['isObj', 'identityOwned'];
+  assert.deepEqual(canonicalReferences('canonical.isObj(x); canonical.identityOwned(y); canonical.isObj(z);'),
+    ['isObj', 'identityOwned']);
+  assert.doesNotThrow(() => assertCanonicalExports('canonical.isObj(x);', exported));
+  assert.throws(() => assertCanonicalExports('canonical.identityMoneyOwned(a);', exported),
+    /canonical closure is missing referenced helpers: identityMoneyOwned/);
+  // The router of the released generation reaches all three helpers; dropping any
+  // of them from the closure return object is what production hit.
+  const referenced = canonicalReferences(router);
+  for (const name of ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId']) {
+    assert.ok(referenced.includes(name), `the router must still reach canonical.${name}`);
+  }
+});
+
+test('the composition publishes the helpers as named exports of the closure', requiresResolver, () => {
+  for (const name of ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId']) {
+    assert.ok(composed.exportedNames.includes(name), `${name} must be named in the closure return object`);
+  }
 });
