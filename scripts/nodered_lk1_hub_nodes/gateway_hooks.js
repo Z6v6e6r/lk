@@ -136,12 +136,16 @@ if (internalCreate) {
 ctx.step = "lk1_profile_continue";
 
 // HUB_EXERCISE
-const visitOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+// The selected instance is resolved first: it carries the product identity and the
+// sale date of the concrete subscription, not of a sibling the client also owns.
+const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+const selectedRule = lk1Config(selectedOwned);
+const enforcedRule = selectedRule.matched && !selectedRule.legacy;
 let ruleConfigured = false;
-try { ruleConfigured = Boolean(global.get(LK1_PRODUCT_POLICY_GLOBAL)); } catch (_) { /* absent */ }
+try { ruleConfigured = Boolean(lk1ReadPlanRules() || global.get(LK1_PRODUCT_POLICY_GLOBAL)); } catch (_) { /* absent */ }
 if (ctx.caller === "http" && ["group_training", "tournament"].includes(resolveCategory(exercise))
     && ruleConfigured && ctx.lk1MoneyReadbackPhase !== "exercise"
-    && (visitOwned.length === 0 || lk1Config(visitOwned).matched)) {
+    && (selectedOwned.length === 0 || enforcedRule)) {
     ctx.lk1MoneyExercise = exercise;
     ctx.lk1MoneyReturnStep = "exercise";
     return prepareUserGet(ctx, "lk1_money_owned_subscriptions",
@@ -154,10 +158,12 @@ if (ownedSubscriptions.length === 0) {
     });
   }
 const productRule = lk1Config(ownedSubscriptions);
-if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && !productRule.matched) {
+// A legacy cohort is not a rule change: it stays out of the managed contour.
+if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && !productRule.matched
+  && !productRule.legacy) {
   return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
 }
-if (productRule.matched) {
+if (productRule.matched && !productRule.legacy) {
     ctx.managedAction = managedActionForTarget({ ...ctx, category: resolveCategory(exercise) });
     const quote = lk1Quote(ctx, exercise, ownedSubscriptions);
     if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && quote.legacy === true) {
