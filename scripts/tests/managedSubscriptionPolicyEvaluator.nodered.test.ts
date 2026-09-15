@@ -257,12 +257,46 @@ test("LK1 minute allocation counts used and planned minutes; mixed-price binding
   }
 });
 
-test("LK1 active limit requires selected-subscription scope, permits 3 and rejects 4", () => {
+test("LK1 active limit requires selected-subscription scope; 4 and 5 stay bookable at a discount", () => {
   const input = lk1Input();
   input.usage.activeServices = 3;
-  assert.equal(evaluate(input).decision.eligible, true);
-  input.usage.activeServices = 4;
-  assert.ok(blockerCodes(input).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
+  const uncapped = evaluate(input).decision;
+  assert.equal(uncapped.eligible, true);
+  assert.equal(uncapped.aboveActiveLimit, false);
+  assert.equal(uncapped.subscriptionVisitCount, 1);
+  for (const activeServices of [4, 5]) {
+    input.usage.activeServices = activeServices;
+    const capped = evaluate(input).decision;
+    assert.equal(capped.eligible, true, `activeServices ${activeServices}`);
+    assert.equal(capped.aboveActiveLimit, true);
+    assert.equal(capped.activeServices, activeServices);
+    assert.equal(capped.maxActiveServices, 4);
+    assert.equal(capped.subscriptionVisitCount, 0);
+    assert.deepEqual(capped.gameMinutes, { localDate: "2026-08-15",
+      usedOrReservedFreeMinutesToday: 0, freeMinutes: 0, paidOverageMinutes: 60,
+      discountPercent: 30 });
+    assert.equal(capped.benefit.kind, "PERCENT_DISCOUNT");
+    assert.equal(capped.benefit.discountMinor, 300_000);
+    assert.equal(capped.benefit.finalPriceMinor, 700_000);
+    assert.ok(!blockerCodes(input).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
+  }
+  for (const [action, category] of [
+    ["BOOK_GROUP_TRAINING", "GROUP_TRAINING"],
+    ["BOOK_TOURNAMENT", "TOURNAMENT"],
+  ] as const) {
+    const uncappedCategory = lk1Input();
+    uncappedCategory.action = action;
+    uncappedCategory.target.category = category;
+    uncappedCategory.usage.activeServices = 4;
+    const cappedCategory = evaluate(uncappedCategory).decision;
+    assert.equal(cappedCategory.eligible, true, category);
+    assert.equal(cappedCategory.aboveActiveLimit, true);
+    assert.equal(cappedCategory.subscriptionVisitCount, 0);
+    assert.equal(cappedCategory.benefit.kind, "PERCENT_DISCOUNT");
+    assert.equal(cappedCategory.benefit.discountMinor, 500_000);
+    assert.equal(cappedCategory.benefit.finalPriceMinor, 500_000);
+    assert.ok(!blockerCodes(uncappedCategory).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
+  }
   input.usage.activeServices = 0;
   input.usage.activeServiceScope = "ALL_BOOKINGS";
   assert.ok(blockerCodes(input).includes("USAGE_SNAPSHOT_INVALID"));
