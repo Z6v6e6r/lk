@@ -253,10 +253,13 @@ const buildGatewayHarness = () => {
     parts.push(`// ${label}\n${extracted.source}`);
   }
   if (!hasDeclaration(files.gateway, 'lk1Quote') || !hasDeclaration(files.gateway, 'lk1Config')) return null;
-  // Production injects the policy readers at generation time; recreate them here.
+  // Production injects the policy readers at generation time; recreate them here
+  // under the frozen names (contract §2): `lk1ReadBoundPolicy()` for
+  // `subscriptions_lk1_product_policy` and `lk1ReadPlanRules()` for
+  // `subscriptions_lk1_plan_rules`.
   const readers = [
     `const lk1ReadBoundPolicy = () => global.get(${JSON.stringify(LK1_HUB_POLICY_GLOBAL)});`,
-    `const lk1ReadPlanRulesRaw = () => global.get(${JSON.stringify(LK1_PLAN_RULES_GLOBAL)});`,
+    `const lk1ReadPlanRules = () => global.get(${JSON.stringify(LK1_PLAN_RULES_GLOBAL)});`,
   ].join('\n');
   const body = `${parts.join('\n')}\n${readers}`;
   const store = new Map([
