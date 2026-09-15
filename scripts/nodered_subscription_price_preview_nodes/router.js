@@ -285,27 +285,37 @@ if (ctx.step === 'groupTariff') {
   const product = rows[0];
   const productIds = [product.id, product.productId].filter((id) => id !== undefined);
   const eventIds = [product.exerciseId, product.exercise?.id].filter((id) => id !== undefined);
-  const amountFields = ['cost', 'price', 'amount', 'trialCost'].filter((field) => product[field] !== undefined);
-  const amounts = amountFields.map((field) => product[field]);
+  // The DTO carries two kinds of money: the paid price (`cost`/`price`/`amount` are
+  // aliases of one number and must agree) and the trial price (`trialCost`), which
+  // describes a different offer and only has to be a non-negative integer. Requiring the
+  // trial price to equal the paid one refused every exercise whose trial tariff differs
+  // (live evidence 2026-09-15: both fields present, two distinct non-zero integers).
+  const paidFields = ['cost', 'price', 'amount'].filter((field) => product[field] !== undefined);
+  const paidAmounts = paidFields.map((field) => product[field]);
+  const trialPresent = product.trialCost !== undefined;
+  const trialAmount = trialPresent ? product.trialCost : null;
   const types = [product.productType, product.type].filter((type) => type !== undefined);
   const allowedTypes = ["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"];
   // Field names and shapes only: an amount is never copied into the refusal, but the
   // names and the number of distinct (and zero) values are what identifies the rule.
   const observed = { productIds: productIds.length, idsAgree: new Set(productIds).size === 1,
     eventIds: eventIds.length, eventIdMatches: !eventIds.some((id) => id !== ctx.exerciseId),
-    types: types.map((type) => String(type).slice(0, 40)), amounts: amounts.length,
-    amountFields, amountDistinct: new Set(amounts).size,
-    amountsZero: amounts.filter((amount) => amount === 0).length,
-    amountsAgree: new Set(amounts).size === 1,
-    amountsAreNonNegativeIntegers: amounts.every((amount) => Number.isSafeInteger(amount) && amount >= 0) };
+    types: types.map((type) => String(type).slice(0, 40)), paidFields, paidDistinct: new Set(paidAmounts).size,
+    paidZero: paidAmounts.filter((amount) => amount === 0).length,
+    paidAgree: new Set(paidAmounts).size === 1,
+    paidAreNonNegativeIntegers: paidAmounts.every((amount) => Number.isSafeInteger(amount) && amount >= 0),
+    trialPresent, trialIsNonNegativeInteger: !trialPresent || (Number.isSafeInteger(trialAmount) && trialAmount >= 0) };
   if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
     || new Set(productIds).size !== 1 || eventIds.some((id) => id !== ctx.exerciseId)) {
     return tariffRefusal('product_identity', observed);
   }
   if (!types.length || types.some((type) => !allowedTypes.includes(type))) return tariffRefusal('product_type', observed);
-  if (!amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
-    || new Set(amounts).size !== 1) return tariffRefusal('product_amount', observed);
-  ctx.basePriceMinor = amounts[0]; ctx.priceProductId = productIds[0];
+  if (!paidAmounts.length || paidAmounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
+    || new Set(paidAmounts).size !== 1) return tariffRefusal('product_amount', observed);
+  if (trialPresent && (!Number.isSafeInteger(trialAmount) || trialAmount < 0)) {
+    return tariffRefusal('product_trial_amount', observed);
+  }
+  ctx.basePriceMinor = paidAmounts[0]; ctx.priceProductId = productIds[0];
   if (ctx.basePriceMinor > 1000000) return tariffRefusal('amount_ceiling', observed);
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
 }

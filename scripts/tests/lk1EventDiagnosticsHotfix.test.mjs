@@ -63,8 +63,9 @@ test("the generation composes exactly the reviewed postimage", { skip: snapshotS
     EVENT_DIAGNOSTICS_INSTALLED_GENERATION.bookingFuncSha256);
   // The diagnostics name the refusal shape but never an amount.
   const router = candidate.find((node) => node.id === EVENT_DIAGNOSTICS_ROUTER_ID).func;
-  assert.ok(router.includes("amountFields, amountDistinct"));
-  assert.ok(router.includes("amountsZero"));
+  assert.ok(router.includes("paidFields, paidDistinct"));
+  assert.ok(router.includes("paidZero"));
+  assert.ok(router.includes("product_trial_amount"));
   assert.ok(router.includes("stage: 'decision_blockers'"));
 });
 

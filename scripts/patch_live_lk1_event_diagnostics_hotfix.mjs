@@ -50,12 +50,13 @@ export const EVENT_DIAGNOSTICS_INSTALLED_GENERATION = Object.freeze({
 export const EVENT_DIAGNOSTICS_TARGET = Object.freeze({
   id: EVENT_DIAGNOSTICS_ROUTER_ID,
   liveFuncSha256: "9b4f69b5bd613d7e6072068c49d6d3e80f2ef8b7896846b522d1a615950c07fa",
-  patchedFuncSha256: "ad67484dfc09c1620455fc810cc624344a2e07ed8a6d3561f345b63a8c382ac7",
+  patchedFuncSha256: "976ce14ef9d6be1b2c00d818f1048b47a7ef3c61a8dfa6bdbb2a07b2f4c8466d",
 });
 
 const ROUTER_MARKERS = Object.freeze([
-  "amountFields, amountDistinct",
-  "amountsZero",
+  "paidFields, paidDistinct",
+  "paidZero",
+  "tariffRefusal('product_trial_amount'",
   "ctx.errorDetails = { stage: 'decision_blockers',",
   "tariffRefusal('product_amount'",
   "const UNAVAILABLE_DECISION_BLOCKERS = ",

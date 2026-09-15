@@ -395,15 +395,23 @@ if (ctx.step === "lk1_event_tariff") {
   const product = rows[0];
   const productIds = [product.id, product.productId].filter((id) => id !== undefined);
   const eventIds = [product.exerciseId, product.exercise?.id].filter((id) => id !== undefined);
-  const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);
+  const paidAmounts = [product.cost, product.price, product.amount].filter((amount) => amount !== undefined);
+  // The DTO carries two kinds of money: the paid price (`cost`/`price`/`amount` are
+  // aliases of one number and must agree) and the trial price (`trialCost`), which
+  // describes a different offer and only has to be a non-negative integer. Requiring the
+  // trial price to equal the paid one refused every exercise whose trial tariff differs
+  // (live evidence 2026-09-15: both fields present, two distinct non-zero integers).
+  const trialAmountPresent = product.trialCost !== undefined;
+  const trialAmount = trialAmountPresent ? product.trialCost : null;
   const types = [product.productType, product.type].filter((type) => type !== undefined);
   if (!productIds.length || !productIds.every((id) => typeof id === "string" && id.trim())
     || new Set(productIds).size !== 1 || (!eventTariff && !eventIds.length) || eventIds.some((id) => id !== ctx.exerciseId)
     || !types.length || types.some((type) => !["SERVICE", "ONE_TIME", "INSTANT_SUB_SERVICE", "ADVANCE_SUB_SERVICE"].includes(type))
-    || !amounts.length || amounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
-    || new Set(amounts).size !== 1) return lk1Stop(ctx, "LK1_EVENT_TARIFF_UNVERIFIED");
+    || !paidAmounts.length || paidAmounts.some((amount) => !Number.isSafeInteger(amount) || amount < 0)
+    || new Set(paidAmounts).size !== 1
+    || (trialAmountPresent && (!Number.isSafeInteger(trialAmount) || trialAmount < 0))) return lk1Stop(ctx, "LK1_EVENT_TARIFF_UNVERIFIED");
   ctx.lk1TariffProof = { source: "VIVA_EXISTING_TARIFF", kind: "EVENT_ONE_TIME",
-    productId: productIds[0], amountMinor: amounts[0], stationId: toStr(exercise.studio?.id || exercise.studioId),
+    productId: productIds[0], amountMinor: paidAmounts[0], stationId: toStr(exercise.studio?.id || exercise.studioId),
     roomId: exerciseRoomId(exercise), durationMinutes: eventDurationMinutes(exercise),
     startsAt: eventStartsAt(exercise), observedAt: Date.now() };
   if (recheck) {

@@ -188,3 +188,39 @@ Preimage — живой flow `d8bbfe27…` (4804 узла); evaluator, split/joi
 различных значений и число нулевых (значения сумм в ответ не попадают) и к отказу решения —
 коды блокеров оценщика. Решения accept/reject не меняются: это по-прежнему fail-closed,
 меняется только тело отказа, по которому пишется финальное правило.
+
+## Четвёртый слой: тарифные суммы и застрявший preview-оценщик
+
+Живая диагностика (22:50+) дала два точных ответа, и оба закрыты генерацией
+`lk1-event-tariff-amounts`:
+
+1. **Тариф.** Все отказы — `stage: "product_amount"` с формой
+   `amountFields: ["cost","trialCost"], amountDistinct: 2, amountsZero: 0`: Viva отдаёт
+   две суммы, они различны и обе ненулевые, а правило требовало их равенства. Теперь
+   равенство обязательно только для платной цены (`cost`/`price`/`amount` — алиасы
+   одного числа), а `trialCost` обязан быть неотрицательным целым; proof и
+   `basePriceMinor` берут платную цену (`cost`), что совпадает с фронтовым
+   `matchGroupSubscriptionDiscount` (`q.basePriceMinor === product.cost`). Правило
+   живёт в одном месте — `scripts/nodered_lk1_hub_nodes/gateway.js` — и применено к
+   `lk_subscription_booking_router_20260804` тремя литеральными дельтами, поэтому
+   create/join и превью снова считают одинаково.
+2. **Preview-оценщик.** `PRICE_PREVIEW_DECISION_UNRESOLVED` приходил с парой блокеров
+   `["LK1_PRODUCT_BINDING_INVALID","ACTIVE_SERVICES_LIMIT_REACHED"]`, что невозможно в
+   reviewed-оценщике: узел `lk_subscription_price_preview_20260908_evaluate` остался на
+   старой генерации тела (`6f4e7aa5…`), где продукт правила сравнивался с зашитой
+   HUB-константой, а лимитный блокер ещё не был заменён на `aboveActiveLimit`. Релиз
+   plan-rules собрал reviewed-тело, но записал его только в узел
+   `lk_subscription_managed_policy_20260820`; теперь preview-узел несёт то же тело
+   (`d410acdb…`), и превью с записью разрешают одно и то же решение.
+
+Генерация: три узла по одному полю `func` — router `ad67484d…` → `976ce14e…`,
+evaluate `6f4e7aa5…` → `d410acdb…`, booking `44073942…` → `9462ef12…`; preimage
+`0e0d6053…` (4804 узла), кандидат `8f4c48bb…`. Обёртка с CONFIRM_147, exact-graph
+контрактом на три узла, бэкапами, readback и авто-rollback; npm
+`nodered:lk1-event-tariff-amounts:deploy-147`.
+
+Замечание для следующих релизов: пины постимиджей всех фокусных генераций привязаны к
+*текущему* исходнику роутера, поэтому каждая правка роутера требует пере-пина прежних
+генераций (сделано для plan-rules, `lk1-preview-event-helpers`, `lk1-event-quotes` и
+`lk1-event-diagnostics`). Это устранимый источник шума: следующая генерация может
+пинить сам текст исходника роутера, а не результат композиции.
