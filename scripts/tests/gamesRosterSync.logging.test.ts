@@ -18,3 +18,11 @@ test("games roster sync uses reconcile helper and does not hard-stop on leaveEve
   assert.doesNotMatch(gamesPageSource, /if \(detailsLeaveEvents\.length > 0\) return;/);
   assert.doesNotMatch(gamesPageSource, /detailsSourceParticipants\.length >= detailsMaxPlayers/);
 });
+
+test("games roster sync treats the post-stability-window provider read as authoritative for split games", () => {
+  // Reaching this call already passed the recent-create/leave stability guard, so
+  // an admin-imported member absent from Viva must actually be pruned; otherwise
+  // the roster keeps a phantom participant that the exit flow can never clear.
+  assert.match(gamesPageSource, /authoritative:\s*isDetailsSplitPaymentGame,/);
+  assert.match(gamesPageSource, /organizerPlayer:\s*detailsOrganizerPlayer,/);
+});

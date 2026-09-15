@@ -8859,11 +8859,18 @@ export default function GamesPage({
           return;
         }
 
+        // This read is a fresh, exact-exercise provider read taken after the
+        // recent-create/leave stability window above, so a member that Viva no
+        // longer holds is genuinely gone. Without that authority an imported
+        // ADMIN participant was kept forever: Viva returned one player while the
+        // copy still listed two, every pass reported `no_changes`, and the exit
+        // flow had no roster left to clean up.
         const reconciliation = reconcileRosterWithViva({
           sourceParticipants: detailsSourceParticipants,
           vivaParticipants: vivaPlayers,
           leaveEvents: detailsLeaveEvents,
           organizerPlayer: detailsOrganizerPlayer,
+          authoritative: isDetailsSplitPaymentGame,
         });
 
         const mergedParticipants = dedupePlayersByIdentity(reconciliation.mergedCandidates)
