@@ -1,0 +1,22 @@
+.ph-zero-dialog {
+  margin: auto;
+  width: min(520px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  box-sizing: border-box;
+  color: #1a1a1a;
+  font: 16px/1.45 Arial, sans-serif;
+  overscroll-behavior: contain;
+}
+.ph-zero-dialog::backdrop { background: rgba(11, 13, 18, .8); }
+.ph-zero-dialog h2 { padding-right: 28px; margin: 0 0 16px; font: 700 26px/1.15 Arial, sans-serif; }
+.ph-zero-dialog p { margin: 12px 0; }
+.ph-zero-dialog .ph-zero-summary { font-weight: 600; }
+.ph-zero-dialog .ph-zero-price { font-size: 26px; font-weight: 700; }
+.ph-zero-dialog .ph-zero-consent { display: flex; align-items: start; gap: 10px; margin: 18px 0; }
+.ph-zero-dialog .ph-zero-consent input { width: 20px; height: 20px; flex-shrink: 0; }
+.ph-zero-dialog .ph-zero-caption { color: #555; font-size: 14px; }
+.ph-zero-dialog .ph-zero-refresh { padding: 10px 0; background: none; border: 0; text-decoration: underline; cursor: pointer; color: #4c388b; }
+.ph-zero-dialog .ph-zero-cabinet { display: inline-block; padding: 8px 0; color: #4c388b; text-decoration: underline; }
+.ph-zero-dialog :focus-visible { outline: 2px solid #7353d9; outline-offset: 3px; }
+.ph-zero-dialog button:disabled { cursor: not-allowed; }
+.ph-zero-fatal { position: fixed; inset: 16px; z-index: 100000; padding: 24px; background: white; color: #111; }

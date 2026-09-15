@@ -23,7 +23,7 @@ function paymentFixture() {
   const calls: { productId: string; phone: string; options: Record<string, unknown> }[] = [];
   const stored = new Map<string, string>();
   let result: unknown = { data: { paymentUrl: 'https://bank.example/promo', toPay: 490000 }, error: null };
-  let busy = false;
+  const locks = new Set<string>();
   let storageFails = false;
   let transportThrows = false;
   const globals = {
@@ -34,10 +34,10 @@ function paymentFixture() {
         setItem: (key: string, value: string) => { if (storageFails) throw new Error('storage disabled'); stored.set(key, value); },
       },
     },
-    navigator: { locks: { request: async (_key: string, _options: unknown, fn: (lock: unknown) => Promise<unknown>) => {
-      if (busy) return fn(null);
-      busy = true;
-      try { return await fn({}); } finally { busy = false; }
+    navigator: { locks: { request: async (key: string, _options: unknown, fn: (lock: unknown) => Promise<unknown>) => {
+      if (locks.has(key)) return fn(null);
+      locks.add(key);
+      try { return await fn({}); } finally { locks.delete(key); }
     } } },
   };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/promoPayment')>('components/subscription-storefront/promoPayment.ts', {
@@ -184,4 +184,174 @@ test('shared API preserves legacy retry behavior and honors the promo no-retry o
   assert.equal(calls[1][1].retries, 0);
   assert.equal(calls[1][1].auth, true);
   assert.equal(JSON.parse(calls[1][1].body).products[0].id, 'product');
+});
+
+
+const regularPayment = loadModule<typeof import('../../src/components/subscription-storefront/payment')>('components/subscription-storefront/payment.ts', {
+  ...catalog, apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
+  apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
+});
+function zeroFixture() {
+  const f = paymentFixture();
+  let result: any = { data: { paymentUrl: 'https://bank.example/zero' }, error: null };
+  let confirmation: any = { data: { paid: true, failed: false, status: 'PAID' } };
+  let price = 980000;
+  let availability = true;
+  let broken = false;
+  let storageFails = false;
+  const writes: any[] = [], confirms: any[] = [];
+  Object.assign(f.globals.window.location, { origin: 'https://padlhub.ru', pathname: '/spb2', href: 'https://padlhub.ru/spb2?authMode=viva&code=private&summerPaymentRef=foreign&utm_source=tilda#old' });
+  Object.assign(f.globals.window, { crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' } });
+  const setItem = f.globals.window.localStorage.setItem;
+  f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
+  const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
+    ...regularPayment, ...promo, ...f.adapter,
+    canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
+    appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
+    getServ2Origin: () => 'https://fixture.invalid',
+    request: async (path: string) => ({ data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] }),
+    apiBuySubscroption: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
+    apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
+    apiConfirmTournamentSubscriptionPurchase: async (...args: any[]) => { confirms.push(args); return confirmation; },
+  }, { ...f.globals, setTimeout, clearTimeout });
+  return { ...f, adapter, writes, confirms, setResult: (value: any) => { result = value; },
+    setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
+    unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
+}
+
+test('Zero Block resolves exact monthly, annual and promo products; rejects arbitrary IDs', () => {
+  const f = zeroFixture();
+  assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.target?.counterKey, 'network_friendship');
+  assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.billingOptionId, 'annual');
+  assert.equal(f.adapter.resolveZeroOffer('energy5')?.period, '60 дней, 5 занятий');
+  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+});
+
+test('Zero Block persists ref before one counter POST; reopening and concurrent clicks never create again', async () => {
+  const f = zeroFixture();
+  const results = await Promise.allSettled([1, 2].map(() => f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true)));
+  assert.equal(results.filter(item => item.status === 'fulfilled').length, 1);
+  assert.equal(f.writes.length, 1);
+  const body = f.writes[0][0];
+  assert.equal(body.counterKey, 'friendship');
+  const stored = [...f.stored.values()][0];
+  assert.equal(JSON.parse(stored).paymentRef, body.paymentRef);
+  assert.ok(!stored.includes(fixturePhone));
+  assert.ok(!stored.includes('bank.example'));
+  await assert.rejects(f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true));
+  assert.equal(f.writes.length, 1);
+});
+
+test('Zero Block return URL keeps landing path and safe attribution, strips unrelated auth/payment parameters', () => {
+  const url = new URL(zeroFixture().adapter.buildZeroReturnUrl('friendship-year'));
+  assert.equal(url.pathname, '/spb2');
+  assert.equal(url.searchParams.get('phCheckoutReturn'), 'friendship-year');
+  assert.equal(url.searchParams.get('authMode'), 'viva');
+  assert.equal(url.searchParams.get('utm_source'), 'tilda');
+  assert.equal(url.searchParams.has('code'), false);
+  assert.equal(url.searchParams.has('summerPaymentRef'), false);
+  assert.equal(url.hash, '');
+});
+
+test('Zero Block does not create after closing, unavailable inventory, changed price, missing locks/storage', async () => {
+  for (const setup of [
+    (f: ReturnType<typeof zeroFixture>) => f.unavailable(),
+    (f: ReturnType<typeof zeroFixture>) => f.setPrice(1000000),
+    (f: ReturnType<typeof zeroFixture>) => f.failWrite(),
+    (f: ReturnType<typeof zeroFixture>) => Object.assign(f.globals.navigator, { locks: undefined }),
+  ]) {
+    const f = zeroFixture(); setup(f);
+    await assert.rejects(f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true));
+    assert.equal(f.writes.length, 0);
+  }
+  const f = zeroFixture();
+  await assert.rejects(f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => false));
+  assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+});
+
+test('Zero Block direct purchases disable retries and retain unknown outcomes, including malformed/free responses', async () => {
+  for (const data of [{}, { toPay: 0 }, { paid: true, toPay: 100 }, { paymentUrl: 'javascript:alert(1)' }, { paymentUrl: 'http://bank.example/pay' }, { paymentUrl: ['https://user:pass', 'bank.example/pay'].join('@') }]) {
+    const f = zeroFixture(); f.setResult({ data });
+    await assert.rejects(f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true));
+    assert.equal(f.writes[0][2].retries, 0);
+    await assert.rejects(f.adapter.createZeroPayment('academy', fixturePhone, 980000, () => true));
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.adapter.hasZeroAttempt('academy'), true);
+  }
+  const f = zeroFixture(); f.breakTransport();
+  await assert.rejects(f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true));
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+});
+
+test('Zero Block confirmation uses only stored exact ref; missing local evidence and direct plans do not confirm', async () => {
+  const f = zeroFixture();
+  await f.adapter.confirmZeroPayment('friendship');
+  assert.equal(f.confirms.length, 0);
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  f.setConfirmation({ data: { status: 'FAILED', failed: true, paid: false, archived: true } });
+  assert.equal((await f.adapter.confirmZeroPayment('friendship')).status, 'pending');
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  assert.equal(f.confirms[0][0], f.writes[0][0].paymentRef);
+  f.setConfirmation({ data: { status: 'PAID', paid: true, failed: false } });
+  assert.equal((await f.adapter.confirmZeroPayment('friendship')).status, 'paid');
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  await f.adapter.confirmZeroPayment('academy');
+  assert.equal(f.confirms.length, 2);
+});
+
+test('Zero Block empty counter create requires confirmation, never interprets missing price as success', async () => {
+  const f = zeroFixture(); f.setResult({ data: {} }); f.setConfirmation({ data: null, error: { status: 503 } });
+  const result = await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  assert.equal(result.status, 'settled');
+  assert.match('message' in result ? result.message : '', /уже отправлена/);
+  assert.equal(f.confirms.length, 1);
+  assert.equal(JSON.parse([...f.stored.values()][0]).state, 'pending');
+});
+
+test('Zero Block promo uses the existing product/guard and returns to the landing page', async () => {
+  const f = zeroFixture();
+  const result = await f.adapter.createZeroPayment('ra-promo', fixturePhone, 1190000, () => true);
+  assert.equal(result.status, 'redirect');
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].productId, promo.resolveStorefrontPromo('ra-promo').productId);
+  assert.equal(new URL(String(f.calls[0].options.successUrl)).searchParams.get('phCheckoutReturn'), 'ra-promo');
+  assert.equal(f.stored.size, 2);
+});
+
+
+test('Zero Block rejects incomplete raw flags, duplicate/wrong counters and invalid inventory', () => {
+  const f = zeroFixture();
+  const valid = { counterKey: 'friendship', priceMinor: 980000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 1, totalLimit: 10 };
+  assert.equal(f.adapter.parseZeroPrice({ data: { plans: [valid] } }, 'friendship'), 980000);
+  for (const row of [{ ...valid, canPurchase: undefined }, { ...valid, bindingReady: undefined }, { ...valid, unlimited: undefined }, { ...valid, remainingCount: 11 }, { ...valid, priceMinor: null }, { ...valid, counterKey: 'network_friendship' }]) {
+    assert.throws(() => f.adapter.parseZeroPrice([row], 'friendship'));
+  }
+  assert.throws(() => f.adapter.parseZeroPrice([valid, valid], 'friendship'));
+  assert.throws(() => f.adapter.parseZeroPrice({ ok: false, plans: [valid] }, 'friendship'));
+});
+
+test('Zero Block bounded wait rejects a stuck operation and ignores its late result', async () => {
+  const f = zeroFixture();
+  let finish!: (value: string) => void;
+  const pending = new Promise<string>(resolve => { finish = resolve; });
+  await assert.rejects(f.adapter.withZeroDeadline(pending, 5), /Время ожидания/);
+  finish('late bank redirect');
+  assert.equal(await f.adapter.withZeroDeadline(Promise.resolve('ready'), 20), 'ready');
+});
+
+
+test('Zero Block loader rejects preloaded wrong channel and legacy runtime; compatible channel resumes UI only', async () => {
+  const source = readFileSync(new URL('../../docs/zero-block/padlhub-zero-block.js', import.meta.url), 'utf8');
+  for (const checkoutChannel of ['dev', 'prod', undefined]) {
+    let resumed = 0;
+    const document = { querySelectorAll: () => [], dispatchEvent: () => {}, addEventListener: () => {}, removeEventListener: () => {}, hidden: false };
+    const window: any = { document, location: { href: 'https://padlhub.ru/spb2' }, setTimeout: () => 1, clearTimeout: () => {},
+      LKWidgetSubscriptionStorefront: { checkoutVersion: 1, checkoutChannel, openCheckout: () => { throw new Error('No auto-purchase'); }, resumeCheckout: () => { resumed++; }, closeCheckout: () => true } };
+    vm.runInNewContext(source, { window, document, URL, URLSearchParams, AbortController, CustomEvent: class {}, setTimeout, clearTimeout });
+    const instance = window.PadlHubZeroBlock.init({ offerKeys: ['ra-promo'], channel: 'prod' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(instance.getState('ra-promo').checkoutReady, checkoutChannel === 'prod');
+    assert.equal(resumed, checkoutChannel === 'prod' ? 1 : 0);
+    assert.equal(instance.destroy(), true);
+  }
 });

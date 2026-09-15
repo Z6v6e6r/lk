@@ -6,9 +6,10 @@ import { PromoSubscriptionPage } from './components/subscription-storefront/Prom
 import { readStorefrontPromoKey } from './components/subscription-storefront/promo';
 import type { SubscriptionStorefrontView } from './components/subscription-storefront/model';
 import { AuthProvider } from './context/AuthContext';
-import { CABINET_URL } from './consts/api_config';
+import { CABINET_URL, IS_DEV_RELEASE_CHANNEL } from './consts/api_config';
 import { installGlobalErrorTracking, trackAnalyticsEvent } from './utils/analytics';
 import './components/subscription-storefront/storefront-idle-guard.css';
+import { openCheckout, closeCheckout, resumeCheckout } from './components/subscription-storefront/zeroCheckoutMount';
 
 type MountData = { previewView?: SubscriptionStorefrontView; cabinetUrl?: string | null };
 type MountOptions = { targetId?: string; onClose?: () => void; data?: MountData };
@@ -57,6 +58,9 @@ function mount(options: MountOptions = {}) {
   );
 }
 
-declare global { interface Window { LKWidgetSubscriptionStorefront?: { mount: typeof mount; unmount: typeof unmount } } }
-window.LKWidgetSubscriptionStorefront = { mount, unmount };
+declare global { interface Window { LKWidgetSubscriptionStorefront?: {
+  mount: typeof mount; unmount: typeof unmount;
+  checkoutVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout;
+} } }
+window.LKWidgetSubscriptionStorefront = { mount, unmount, checkoutVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod', openCheckout, closeCheckout, resumeCheckout };
 export { mount, unmount };
