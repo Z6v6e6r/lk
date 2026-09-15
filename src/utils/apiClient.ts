@@ -4758,6 +4758,7 @@ export async function apiFetchBookings(
   includeCanceled: boolean,
   options: {
     size?: number;
+    fresh?: boolean;
   } = {},
 ) {
   const size = Number.isFinite(options.size)
@@ -4771,6 +4772,7 @@ export async function apiFetchBookings(
     method: "GET",
     auth: true,
     retries: 1,
+    ...(options.fresh ? { cache: "no-store" as RequestCache } : {}),
   });
 }
 
@@ -5481,13 +5483,14 @@ export async function apiFetchExercisesByVisibleDate(
   };
 }
 
-export async function apiFetchExerciseBookings(exerciseId: string) {
+export async function apiFetchExerciseBookings(exerciseId: string, options: { fresh?: boolean } = {}) {
   return request<ExerciseBooking[]>(
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/${exerciseId}/bookings`,
     {
       method: "GET",
       auth: true,
       retries: 1,
+      ...(options.fresh ? { cache: "no-store" as RequestCache } : {}),
     },
   );
 }
