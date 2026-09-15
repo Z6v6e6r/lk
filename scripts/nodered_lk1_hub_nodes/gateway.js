@@ -5,91 +5,12 @@ function isNodeRedHttpsCheckout(paymentUrl) {
 }
 const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const LK1_PRODUCT_POLICY_GLOBAL = "subscriptions_lk1_product_policy";
-const LK1_PLAN_RULES_GLOBAL = "subscriptions_lk1_plan_rules";
-const LK1_PLAN_RULES_FROM = "2026-09-01";
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
   "groupTrainingDiscountPercent", "tournamentDiscountPercent"];
-// The rollout global is read lazily: an absent global means the plan contour is
-// off, an unreadable one is an invalid rule set (fail-closed).
-const lk1ReadPlanRules = () => {
-  if (typeof global === "undefined" || typeof global?.get !== "function") return undefined;
-  return global.get(LK1_PLAN_RULES_GLOBAL);
-};
-// Fallback used only until the release generation embeds scripts/lib/lk1PlanRules.mjs.
-// It mirrors the resolver's D1 priority for the flat aliases present in these
-// sources; the embedded module still declares resolveLk1Rule, so the real
-// resolver wins for every alias it can see.
-const lk1ConfigRule = (owned, planRules) => {
-  const record = (Array.isArray(owned) ? owned : [owned]).find(isObj);
-  if (!record) return { matched: false };
-  const candidate = (value) => (typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null);
-  const priority = [[record.subscriptionProductId, "SUBSCRIPTION_PRODUCT_ID"], [record.productId, "PRODUCT_ID"],
-    [record.product?.id, "PRODUCT"], [record.templateId, "TEMPLATE_ID"], [record.template?.id, "TEMPLATE"]];
-  const ranked = priority.map(([value, source]) => [candidate(value), source]).filter(([id]) => id !== null);
-  const productId = ranked.length > 0 ? ranked[0][0] : null;
-  const evidence = { productId, productIdSource: ranked.length > 0 ? ranked[0][1] : null,
-    extraProductIds: ranked.length > 0 ? [...new Set(ranked.map(([id]) => id).filter((id) => id !== productId))] : [] };
-  if (productId === null) return { matched: false };
-  if (productId === LK1_OVERLAY_HUB_PRODUCT_ID) {
-    // The HUB rule is carried in from the bound policy global, not from plan rules,
-    // and it never has a sale-date gate: the contour is on for every HUB sale.
-    let hubPolicy;
-    try { hubPolicy = lk1ReadBoundPolicy(); } catch (_) {
-      return { matched: true, code: "LK1_PRODUCT_RULE_SOURCE_MISMATCH", ...evidence };
-    }
-    if (hubPolicy === null) return { matched: true, code: "LK1_PRODUCT_RULE_OFF", ...evidence };
-    try { if (typeof hubPolicy === "string") hubPolicy = JSON.parse(hubPolicy); } catch (_) { hubPolicy = null; }
-    if (!isObj(hubPolicy) || hubPolicy.productId !== LK1_OVERLAY_HUB_PRODUCT_ID
-      || Object.keys(hubPolicy).sort().join() !== ["productId", ...lk1Fields].sort().join()
-      || lk1Fields.some((field) => !Number.isSafeInteger(hubPolicy[field]) || hubPolicy[field] < 0)
-      || hubPolicy.maxActiveBookings < 1 || lk1Fields.slice(2).some((field) => hubPolicy[field] > 100)) {
-      return { matched: true, code: "LK1_PRODUCT_RULE_INVALID", ...evidence };
-    }
-    const hubRule = { productId: hubPolicy.productId };
-    for (const field of lk1Fields) hubRule[field] = hubPolicy[field];
-    return { matched: true, legacy: false, source: "HUB", productId, rule: hubRule, ...evidence };
-  }
-  const raw = planRules === undefined ? lk1ReadPlanRules() : planRules;
-  if (raw === undefined || raw === null || raw === "") return { matched: false, ...evidence };
-  let rules;
-  try { rules = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (_) { rules = null; }
-  if (!isObj(rules) || rules.formatVersion !== 1 || !Array.isArray(rules.rules)
-    || Object.keys(rules).sort().join() !== ["formatVersion", "rules"].sort().join()) {
-    return { matched: true, code: "LK1_PLAN_RULES_INVALID", ...evidence };
-  }
-  let matched = null;
-  for (const item of rules.rules) {
-    if (!isObj(item) || Object.keys(item).sort().join()
-      !== ["enforceFrom", "planKey", "productId", ...lk1Fields].sort().join()) {
-      return { matched: true, code: "LK1_PLAN_RULES_INVALID", ...evidence };
-    }
-    if (candidate(item.productId) === null || typeof item.planKey !== "string" || item.planKey.trim() === ""
-      || (item.enforceFrom !== null
-        && !(typeof item.enforceFrom === "string" && isValidDateKey(item.enforceFrom)))
-      || lk1Fields.some((field) => !Number.isSafeInteger(item[field]) || item[field] < 0)
-      || item.maxActiveBookings < 1 || lk1Fields.slice(2).some((field) => item[field] > 100)) {
-      return { matched: true, code: "LK1_PLAN_RULES_INVALID", ...evidence };
-    }
-    if (candidate(item.productId) === productId) matched = item;
-  }
-  if (!matched) return { matched: false, ...evidence };
-  const dates = collectSubscriptionPurchaseDateEvidence(record);
-  if (dates.invalid || dates.dates.length !== 1) {
-    return { matched: true, code: "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED", ...evidence };
-  }
-  const purchaseDate = dates.dates[0];
-  const enforceFrom = matched.enforceFrom === null ? LK1_PLAN_RULES_FROM : matched.enforceFrom;
-  const legacy = purchaseDate < enforceFrom;
-  const rule = { productId, planKey: matched.planKey, enforceFrom };
-  for (const field of lk1Fields) rule[field] = matched[field];
-  return { matched: true, legacy, source: "PLAN", productId, planKey: matched.planKey,
-    purchaseDate, enforceFrom, ...evidence, ...(legacy ? {} : { rule }) };
-};
 const lk1Config = (owned) => {
-  const planRules = lk1ReadPlanRules();
-  const configured = typeof resolveLk1Rule === "function"
-    ? resolveLk1Rule({ owned, planRules })
-    : lk1ConfigRule(owned, planRules);
+  // The resolver (scripts/lib/lk1PlanRules.mjs) is embedded into this function
+  // body by the release composition, together with its reader.
+  const configured = resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() });
   if (configured.matched !== true) return { matched: false };
   if (configured.legacy === true) return { matched: true, legacy: true };
   if (configured.code) return { matched: true, code: configured.code };

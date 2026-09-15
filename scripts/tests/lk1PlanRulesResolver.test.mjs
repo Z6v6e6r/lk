@@ -354,9 +354,16 @@ const gatewayConfigCall = () => region(GATEWAY_CONFIG, 'const lk1Config = (owned
 
 test('the gateway delegates the rule verdict to the embedded resolver', () => {
   const call = gatewayConfigCall();
-  assert.equal(call.includes('const planRules = lk1ReadPlanRules();'), true, 'plan-rules global read drift');
-  assert.equal(call.includes('resolveLk1Rule({ owned, planRules })'), true, 'embedded resolver not called');
-  assert.equal(call.includes('lk1ConfigRule(owned, planRules)'), true, 'fallback binding drift');
+  assert.equal(call.includes('const configured = resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() });'), true,
+    'the gateway must call the embedded resolver directly');
+  assert.equal(GATEWAY_CONFIG.includes('lk1ConfigRule'), false,
+    'the inline fallback must be gone: the embedded module is the only resolver');
+  // The composed body embeds the reviewed module exactly once (single source of truth).
+  const composed = hubGatewaySource();
+  assert.equal(composed.split('const LK1_PLAN_RULES_GLOBAL =').length, 2, 'module constants declared once');
+  assert.equal(composed.split('function resolveLk1Rule(').length, 2, 'resolver declared once');
+  assert.equal(composed.split('function lk1ReadPlanRules(').length, 2, 'reader declared once');
+  assert.equal(composed.includes('export '), false, 'embedded module must be spliced without ESM exports');
   assert.equal(call.includes('const rule = { productId: configured.productId };'), true,
     'the rule product id must come from the selected rule');
   // The two date gates that used to block a HUB sale before 2026-09-01 are gone.
@@ -395,10 +402,9 @@ test('the policy binding carries the rule product id, never a hardcoded HUB id',
   assert.equal(gatewaySource.includes('policyProductId: "db7a5250'), false, 'hardcoded binding product id');
   assert.equal(gatewaySource.includes('policyProductId: LK1_OVERLAY_HUB_PRODUCT_ID'), false,
     'hardcoded binding product constant');
-  // The fallback keeps the same verdicts as the resolver for the flat aliases.
-  const fallback = region(GATEWAY_CONFIG, 'const lk1ConfigRule = (owned, planRules) => {', 'const lk1Config = (owned)');
-  assert.equal(fallback.includes('return { matched: false, ...evidence };'), true, 'unmatched must stay legacy');
-  assert.equal(fallback.includes('if (productId === LK1_OVERLAY_HUB_PRODUCT_ID) {'), true, 'HUB branch drift');
-  assert.equal(fallback.includes('matched.enforceFrom === null ? LK1_PLAN_RULES_FROM : matched.enforceFrom'), true,
-    'plan cutover default drift');
+  // The D1 priority, the HUB-always branch and the cutover default live in the
+  // embedded module only; the gateway must not duplicate them.
+  assert.equal(source.includes('lk1ProductIdentity'), true, 'D1 priority must live in the module');
+  assert.equal(source.includes('LK1_PLAN_RULES_FROM'), true, 'cutover default must live in the module');
+  assert.equal(GATEWAY_CONFIG.includes('lk1ProductIdentity'), false, 'no duplicated D1 priority in the gateway');
 });

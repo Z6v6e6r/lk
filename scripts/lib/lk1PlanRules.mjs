@@ -136,7 +136,7 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules } = {}) {
   // An explicit rule set wins; otherwise the rollout global is read, and an absent
   // global means the plan contour is off rather than an error.
   const configured = lk1PlanRuleSet(planRules !== undefined ? planRules
-    : typeof lk1InternalPlanRules === "function" ? lk1InternalPlanRules() : undefined);
+    : typeof lk1ReadPlanRules === "function" ? lk1ReadPlanRules() : undefined);
   if (configured.ok !== true) return { matched: true, code: "LK1_PLAN_RULES_INVALID", ...evidence };
   const rule = configured.rules.get(productId);
   // No rule for the selected product: untouched legacy behaviour, not an error.
@@ -159,6 +159,6 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules } = {}) {
 
 // The embedded gateway reads the rollout global through this hook; an unreadable
 // global is an invalid rule set (fail-closed), an absent one means contour off.
-function lk1InternalPlanRules() {
+function lk1ReadPlanRules() {
   try { return global.get(LK1_PLAN_RULES_GLOBAL); } catch { return LK1_PLAN_RULES_INVALID; }
 }
