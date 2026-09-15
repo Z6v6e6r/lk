@@ -1,3 +1,4 @@
+import { BOOKING_CONVERSION_UNVERIFIED, evaluateBookingConversionEvidence } from "./bookingConversionEvidence";
 import { observeGameLeave } from "./observeGameLeave";
 import { GameBookingCancellation } from "./GameBookingCancellation";
 import { AvatarImage } from "../UI/AvatarImage";
@@ -32,6 +33,7 @@ import {
   apiFetchMasterServicePromoDiscounts,
   apiFetchBookings,
   apiFetchExerciseById,
+  apiFetchExerciseBookings,
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
   apiCreatePadelSplitGamePayment,
@@ -10278,6 +10280,7 @@ export default function GamesPage({
   }, [syncPaidGameCommunityMembershipAndPublication]);
 
   useEffect(() => {
+    if (isBookingPresetMode) return;
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) {
       communityAutopublishRepairAttemptRef.current = null;
       return;
@@ -10297,6 +10300,7 @@ export default function GamesPage({
         setGameDetailsMetaError("Не удалось автоматически опубликовать игру в выбранные сообщества");
       });
   }, [
+    isBookingPresetMode,
     step,
     activeGameRecord,
     detailsPendingCommunityAutopublishIds,
@@ -11681,7 +11685,6 @@ export default function GamesPage({
         setGamePaid(existing.payment?.paid ?? null);
         setGameSnapshot(buildMatchSnapshotFromRecord(existing));
         setConfirmCancelUnpaidGame(false);
-        void runPaidGameCommunityMembershipAndPublication(existing, "existing_open");
         setStep("details");
         return;
       }
@@ -11716,46 +11719,64 @@ export default function GamesPage({
       let bookingPaymentTypes: string[] = [];
       let hasSubscriptionBooking = false;
 
-      if (bookingPreset.exerciseId) {
-        const rosterResult = await apiFetchTournamentParticipants(bookingPreset.exerciseId, { sanitize: false });
-        if (rosterResult.data) {
-          const rosterRows = extractExerciseBookingRows(rosterResult.data)
-            .filter((item) => !isRecordObject(item)
-              ? false
-              : !(item.isCancelled === true || item.cancelled === true || item.canceled === true));
-
-          const rosterParticipants = rosterRows
-            .map((item) => normalizeVivaBookingParticipant(item))
-            .filter((item): item is PadelGamePlayer => item !== null)
-            .filter((item) => item.status !== "WAITLIST");
-          if (rosterParticipants.length > 0) {
-            const fallbackOrganizerParticipant = organizerPlayer
-              ? {
-                  ...organizerPlayer,
-                  source: "ORGANIZER" as const,
-                  status: "CONFIRMED" as const,
-                }
-              : null;
-            normalizedParticipants = dedupePlayersByIdentity([
-              fallbackOrganizerParticipant,
-              ...rosterParticipants,
-            ]).slice(0, createMaxPlayers);
-          }
-
-          const rosterBookingIds = rosterRows
-            .map((item) => extractVivaBookingId(item))
-            .filter((item): item is string => Boolean(item));
-          bookingIdsForPayload = Array.from(new Set([
-            bookingPreset.bookingId,
-            ...rosterBookingIds,
-          ].filter(Boolean)));
-
-          bookingPaymentTypes = Array.from(new Set(
-            rosterRows.flatMap((item) => extractVivaBookingPaymentTypes(item)),
-          ));
-          hasSubscriptionBooking = rosterRows.some((item) => hasVivaSubscriptionBookingSignal(item));
-        }
+      if (!bookingPreset.exerciseId || !clientId) {
+        setGameRecordError(BOOKING_CONVERSION_UNVERIFIED);
+        return;
       }
+      const [selfResult, rosterResult] = await Promise.all([
+        apiFetchBookings(false, { fresh: true }),
+        apiFetchExerciseBookings(bookingPreset.exerciseId, { fresh: true }),
+      ]);
+      if (selfResult.error || rosterResult.error) {
+        setGameRecordError(BOOKING_CONVERSION_UNVERIFIED);
+        return;
+      }
+      const conversionEvidence = evaluateBookingConversionEvidence({
+        actorId: clientId,
+        bookingId: bookingPreset.bookingId,
+        exerciseId: bookingPreset.exerciseId,
+        studioId: bookingPreset.studioId,
+        roomId: bookingPreset.roomId,
+        timeFromIso: `${bookingPreset.date}T${bookingPreset.timeFrom}:00+03:00`,
+        timeToIso: `${bookingPreset.date}T${bookingPreset.timeTo}:00+03:00`,
+        selfBookings: selfResult.data,
+        exerciseBookings: rosterResult.data,
+      });
+      if (!conversionEvidence.allowed) {
+        setGameRecordError(conversionEvidence.message);
+        return;
+      }
+      const rosterRows = conversionEvidence.roster;
+      const rosterParticipants = rosterRows
+        .map((item) => normalizeVivaBookingParticipant(item))
+        .filter((item): item is PadelGamePlayer => item !== null)
+        .filter((item) => item.status !== "WAITLIST");
+      if (rosterParticipants.length > 0) {
+        const fallbackOrganizerParticipant = organizerPlayer
+          ? {
+              ...organizerPlayer,
+              source: "ORGANIZER" as const,
+              status: "CONFIRMED" as const,
+            }
+          : null;
+        normalizedParticipants = dedupePlayersByIdentity([
+          fallbackOrganizerParticipant,
+          ...rosterParticipants,
+        ]).slice(0, createMaxPlayers);
+      }
+
+      const rosterBookingIds = rosterRows
+        .map((item) => extractVivaBookingId(item))
+        .filter((item): item is string => Boolean(item));
+      bookingIdsForPayload = Array.from(new Set([
+        bookingPreset.bookingId,
+        ...rosterBookingIds,
+      ].filter(Boolean)));
+
+      bookingPaymentTypes = Array.from(new Set(
+        rosterRows.flatMap((item) => extractVivaBookingPaymentTypes(item)),
+      ));
+      hasSubscriptionBooking = rosterRows.some((item) => hasVivaSubscriptionBookingSignal(item));
       const bookingPresetPaid = bookingPreset.paid;
       const bookingPresetIsPaid = bookingPresetPaid !== false;
 

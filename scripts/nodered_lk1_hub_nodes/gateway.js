@@ -516,7 +516,47 @@ if (ctx.step === "lk1_usage_operations") {
     if (!normalizeId(operation.clientSubscriptionId)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
     if (normalizeId(operation.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)) continue;
     if (["FAILED", "RELEASED"].includes(operation.state)) continue;
-    if (operation.bookingId) benefitBookings.add(normalizeId(operation.bookingId));
+    // AUDIT_BINDING_START
+    const aliases = [operation.bookingId, operation.upstreamBookingId]
+      .filter(value => value !== undefined && value !== null && value !== "");
+    if (aliases.some(value => typeof value !== "string" || !normalizeId(value))
+      || new Set(aliases.map(normalizeId)).size > 1) return lk1Stop(ctx, "LK1_ALLOWANCE_BINDING_INVALID");
+    let coveredId = normalizeId(operation.bookingId);
+    if (!coveredId && normalizeId(operation.upstreamBookingId)) {
+      const upstreamId = normalizeId(operation.upstreamBookingId);
+      const matches = ctx.lk1.bookings.filter(booking => !isInactiveBooking(booking)
+        && normalizeId(bookingId(booking)) === upstreamId);
+      if (matches.length > 1) return lk1Stop(ctx, "LK1_ALLOWANCE_BINDING_AMBIGUOUS");
+      if (matches.length === 1) {
+        const booking = matches[0];
+        const owners = [booking.clientId, booking.actorClientId, booking.profileId, booking.client?.id]
+          .filter(value => value !== undefined && value !== null && value !== "");
+        const exerciseIds = [booking.exerciseId, booking.exercise?.id, booking.exercise?.exerciseId]
+          .filter(value => value !== undefined && value !== null && value !== "");
+        if (owners.some(value => typeof value !== "string" || normalizeId(value) !== normalizeId(ctx.actorClientId))
+          || !normalizeId(operation.exerciseId) || !exerciseIds.length
+          || exerciseIds.some(value => typeof value !== "string" || normalizeId(value) !== normalizeId(operation.exerciseId))
+          || eventDate(booking) !== operation.serviceDate
+          || normalizeId(bookingSubscriptionId(booking)) !== normalizeId(operation.clientSubscriptionId)) {
+          return lk1Stop(ctx, "LK1_ALLOWANCE_BINDING_INVALID");
+        }
+        const decision = operation.lk1.decision;
+        if (decision.benefit?.finalPriceMinor === 0 && decision.subscriptionVisitCount === 1
+          && decision.gameMinutes?.paidOverageMinutes === 0
+          && decision.gameMinutes?.freeMinutes > 0
+          && String(booking.paymentType || booking.paymentMethod || "").toUpperCase() === "SUBSCRIPTION") {
+          const duration = eventDurationMinutes(booking.exercise || booking);
+          const free = decision.gameMinutes.freeMinutes;
+          if (!Number.isSafeInteger(free) || free !== duration || free > ctx.lk1.rule.freeGameMinutesPerDay
+            || (operation.lk1.target?.durationMinutes !== undefined && operation.lk1.target.durationMinutes !== duration)) {
+            return lk1Stop(ctx, "LK1_ALLOWANCE_BINDING_INVALID");
+          }
+          coveredId = upstreamId;
+        }
+      }
+    }
+    // AUDIT_BINDING_END
+    if (coveredId) benefitBookings.add(coveredId);
     if (operation.serviceDate !== ctx.serviceDate) continue;
     const minutes = operation.lk1.decision.gameMinutes;
     if (minutes) {
@@ -524,7 +564,7 @@ if (ctx.step === "lk1_usage_operations") {
         || minutes.freeMinutes < 0) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
       used += minutes.freeMinutes;
     }
-    if (operation.bookingId) coveredBookings.add(normalizeId(operation.bookingId));
+    if (coveredId) coveredBookings.add(coveredId);
   }
   for (const booking of ctx.lk1.bookings) {
     if (isInactiveBooking(booking) || eventDate(booking) !== ctx.serviceDate
@@ -550,7 +590,7 @@ if (ctx.step === "lk1_usage_operations") {
     lk1ProductBinding: { policyProductId: ctx.lk1.rule.productId,
       ownedProductId: ctx.lk1.rule.productId, clientSubscriptionId: ctx.clientSubscriptionId },
     target: ctx.lk1.target, usage: { activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY",
-      dailyBucketLocalDate: ctx.serviceDate, activeServices: active.length,
+      dailyBucketLocalDate: ctx.serviceDate, activeServices: new Set(active.map(booking => normalizeId(bookingId(booking)))).size,
       usedOrReservedFreeMinutesToday: used } };
   delete ctx.lk1.bookings;
   delete ctx.lk1.activeBookings;

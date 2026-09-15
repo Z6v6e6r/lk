@@ -1,3 +1,4 @@
+import { clearTournamentPendingPayments } from "./tournamentPendingPayment";
 import { invalidateSubscriptionSnapshot } from "./subscriptionSessionCache";
 import { deleteCookie, getCookie, setCookie } from "./cookies.ts";
 
@@ -176,6 +177,7 @@ export function persistAuthTokens(
 }
 
 export function clearAuthTokens() {
+  clearTournamentPendingPayments();
   invalidateSubscriptionSnapshot();
   deleteCookiesBySuffix("AuthToken");
   deleteCookiesBySuffix("RefreshToken");
