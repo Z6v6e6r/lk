@@ -27,7 +27,11 @@ const lk1Config = (owned) => {
   // rollout: the durable quote and its recheck compare the five-field rule.
   return { matched: true, rule };
 };
-const lk1Stop = (ctx, code) => finishPending(ctx, "Запись или доплата требуют безопасной сверки", { code });
+// `observed` is additive: it carries the named sub-condition of a refusal (counts,
+// booleans and enum values only) so a production refusal can be diagnosed from the
+// response instead of reproduced. Callers that pass nothing keep the previous body.
+const lk1Stop = (ctx, code, observed) => finishPending(ctx, "Запись или доплата требуют безопасной сверки",
+  observed === undefined ? { code } : { code, observed });
 const lk1ReadonlyLookup = (value) => {
   const ctx = value._subscriptionBooking;
   return ctx?.step === "lk1_ingress_operation_find" && ctx.lk1IngressReplay === true
@@ -360,14 +364,40 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     const duration = eventDurationMinutes(exercise);
     const targetEnd = targetStart + duration * 60_000 - 1;
     const now = Date.now();
-    if (selected.length !== 1 || !instanceIds.length
-      || instanceIds.some((id) => normalizeId(id) !== normalizeId(ctx.clientSubscriptionId))
-      || owners.some((id) => normalizeId(id) !== normalizeId(ctx.actorClientId))
-      || subscription.status !== "ACTIVE" || activation === null || expiry === null
-      || !Number.isFinite(targetStart) || !duration || !Number.isFinite(targetEnd)
-      || activation > now || activation > targetStart || expiry < now || expiry < targetEnd
-      || subscription.holdUntil || subscription.frozenUntil || subscription.isFrozen === true) {
-      return lk1Stop(ctx, "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN");
+    // The verdict is the same conjunction as before, split into named violations so the
+    // refusal reports which condition failed. Every branch below maps 1:1 to the previous
+    // operand order and short-circuiting: a missing activation/expiry or an unresolved
+    // target window still refuses before any instant comparison is evaluated.
+    const violations = [];
+    if (selected.length !== 1) violations.push("instance_count");
+    if (!instanceIds.length) violations.push("instance_id_missing");
+    if (instanceIds.some((id) => normalizeId(id) !== normalizeId(ctx.clientSubscriptionId))) {
+      violations.push("instance_id_mismatch");
+    }
+    if (owners.some((id) => normalizeId(id) !== normalizeId(ctx.actorClientId))) violations.push("owner_mismatch");
+    if (subscription.status !== "ACTIVE") {
+      violations.push(`status_${String(subscription.status || "missing").toLowerCase().slice(0, 24)}`);
+    }
+    if (activation === null) violations.push("activation_unparsed");
+    if (expiry === null) violations.push("expiry_unparsed");
+    if (!Number.isFinite(targetStart) || !duration || !Number.isFinite(targetEnd)) {
+      violations.push("target_window_unresolved");
+    } else {
+      if (activation !== null) {
+        if (activation > now) violations.push("activation_in_future");
+        if (activation > targetStart) violations.push("activation_after_target_start");
+      }
+      if (expiry !== null) {
+        if (expiry < now) violations.push("expired");
+        if (expiry < targetEnd) violations.push("expiry_before_target_end");
+      }
+    }
+    if (subscription.holdUntil) violations.push("hold");
+    if (subscription.frozenUntil) violations.push("frozen_until");
+    if (subscription.isFrozen === true) violations.push("frozen");
+    if (violations.length) {
+      return lk1Stop(ctx, "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN",
+        { stage: "money_validity", violations, targetWindowKnown: Number.isFinite(targetStart) && Boolean(duration) });
     }
     ctx.lk1MoneyOwnership = { exerciseId: ctx.exerciseId, actorClientId: ctx.actorClientId,
       observedAt: Date.now(), subscription };

@@ -255,3 +255,55 @@ refusal stages: []   blocker lists: []   PRICE_PREVIEW_*: 0
   ревью денежного контракта.
 * `LK1_REQUEST_IDENTITY_CHANGED` / `LK1_PRODUCT_RULE_CHANGED` в create/join — штатные
   fail-closed гварды повторного запроса и смены правила; в потоке наблюдались 10 и 2 раза.
+
+## Слой денежных (годовых HUB) подписок на событиях: `LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN`
+
+### Что проверяет слой
+
+Для HTTP-записи на групповую тренировку/турнир шлюз до котировки перечитывает абонементы
+клиента (`lk1_money_owned_subscriptions`) и допускает к managed-скидке ровно один
+выбранный инстанс, если: `status = ACTIVE`, `activationDate` разобран и не в будущем и не
+позже старта события, `expirationDate` разобран, не истёк и покрывает конец события,
+нет `holdUntil`/`frozenUntil`/`isFrozen`, а идентификаторы инстанса и владельца совпадают
+с запросом. Гейт по дате продажи — `>= 2026-09-01` (мандат, существовавший до plan-rules).
+Отказ отдаётся как `lk1Stop(...)` → 202 `PENDING_CONFIRMATION` с сообщением
+«Запись или доплата требуют безопасной сверки».
+
+### Живая картина (16.09, 6 часов)
+
+* `lk_subscription_daily_booking_ops`: 30 записей **CONFIRMED** за 3 часа —
+  `group_training` 17, `tournament` 13, `open_game` 9; `FAILED` 1 (турнир 19:50Z, без кода,
+  окно аварии), `PENDING_CONFIRMATION` за сутки — 2 (обе с истёкшим `pendingUntil` и пустым
+  `lk1`, до фиксов).
+* Отказов money-validity: **0** в телах ответов и **0** документов с таким блокером в
+  решении за всю историю коллекции.
+* HUB-правило (`db7a5250…`) встречается в 9 операциях за сутки, все `open_game` и все
+  CONFIRMED; событийных HUB-записей в окне не было, поэтому путь не проверялся живым
+  трафиком — отсюда решение покрыть его тестами, а не ждать прода.
+
+### Что изменено
+
+Отказ был безымянным, и путь не имел тестов. Теперь:
+
+* `lk1Stop(ctx, code, observed)` принимает **аддитивную** деталь; все прочие вызовы
+  сохраняют прежнее тело `{ code }` (это зафиксировано тестом);
+* конъюнкция разбита на именованные нарушения при **том же вердикте** и том же
+  коротком замыкании: `instance_count`, `instance_id_missing`, `instance_id_mismatch`,
+  `owner_mismatch`, `status_<status>`, `activation_unparsed`, `expiry_unparsed`,
+  `target_window_unresolved`, `activation_in_future`, `activation_after_target_start`,
+  `expired`, `expiry_before_target_end`, `hold`, `frozen_until`, `frozen`;
+  отказ возвращает `{ stage: "money_validity", violations, targetWindowKnown }`.
+
+Генерация `lk1-money-validity`: один узел, одно поле
+(`lk_subscription_booking_router_20260804.func`, `9462ef12…` → `4e8e247a…`, кандидат
+`2d25429b…`), preimage `8f4c48bb…`. Тесты: `lk1MoneySubscriptionValidity` (валидный инстанс,
+10 именованных отказов, `instance_count`, аддитивность тела) — 4/4 и
+`lk1MoneyValidityHotfix` (пины, round-trip дельт, отказ на дрейф, обёртка) — 5/5.
+
+### Остаточное
+
+* Три записи `PENDING_CONFIRMATION` с пустым `lk1` (17:04 и 13:17 MSK 15.09 и 14.09) —
+  следы докризисных попыток; их `pendingUntil` истёк, активной блокировки нет. Массовая
+  очистка — отдельное авторизованное действие (dry-run + postcheck), не выполнялась.
+* `SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED` и прочие fail-closed коды того же шага остаются
+  техническими (503/202 с кодом) — теперь их видно рядом с именованными нарушениями.

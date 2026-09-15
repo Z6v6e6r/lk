@@ -99,7 +99,9 @@ export const PLAN_RULES_TARGETS = Object.freeze({
     id: PLAN_RULES_GATEWAY_NODE_ID,
     // sha256 of the exact live gateway function body pulled from 147 on 2026-09-15.
     liveFuncSha256: "abf46e8b1a05ca4d013ed0c3d9e168a2ae00a1d8eb5e866c3290acc5f47672d9",
-    patchedFuncSha256: "ed59d29ecb8af6d917e941b2a5d302c8124024a4ce12b450232206088247a88d",
+    // Re-pinned 2026-09-16: the composed body embeds the reviewed `lk1Config` fragment,
+    // whose boundary text changed with the money-validity diagnostics.
+    patchedFuncSha256: "09c2c022bda3af0306994670dcfe7791a0df37b4a8b0bec6f2463308975fa68f",
     // sha256 of the live gateway `initialize` (setup) body: the HUB policy writer.
     liveInitializeSha256: "db38f71e2840bf7d959a582df02ddf62810fd3c5b694c9a784a482e787b45a8a",
     patchedInitializeSha256: "40ead051782bf8409fe9423ad783ec4cb7a1c6ba78fe4aff6231d5d3e5690395",
@@ -134,8 +136,10 @@ export const PLAN_RULES_MODULE_SHA256 =
   "abdbe70a81e285fe0f1fa84a69d8339c266a9715be26262a278e26c5e743b455";
 export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
   "c248b8bb6b5bb8a2ec4b7ebe30adf6883f31151ae588deddf9197ab9a26430e1";
+// Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
+// `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =
-  "1c6f22d25037666d1265b0be6370de2d5214c8580652214df5f3d524692d17b1";
+  "9b247275a3f496f36cc203efd7a03898ee0b69138cb77bcc372cc1295c46527f";
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
