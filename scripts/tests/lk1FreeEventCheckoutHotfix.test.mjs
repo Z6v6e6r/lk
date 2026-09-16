@@ -183,4 +183,8 @@ test("the deploy wrapper keeps the confirmation gate, the exact allowance and ro
   assert.ok(wrapper.includes("scripts/patch_live_lk1_free_event_checkout_hotfix.mjs"));
   assert.ok(wrapper.includes("rollback"));
   assert.ok(wrapper.includes("expected_changed_nodes=1"));
+  // The wrapper must assert this generation's report flags, not a previous one's.
+  assert.ok(wrapper.includes("value.booking?.freeEventCarriesZeroChargeBinding !== true"));
+  assert.ok(wrapper.includes("value.booking?.chargedBindingStillExact !== true"));
+  assert.ok(!wrapper.includes("promoInCohort"));
 });
