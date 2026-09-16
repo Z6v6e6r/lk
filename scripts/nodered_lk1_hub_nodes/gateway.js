@@ -11,8 +11,11 @@ const LK1_PRODUCT_POLICY_GLOBAL = "subscriptions_lk1_product_policy";
 // day, and any event once the visits are used up, keeps the configured discount and consumes
 // no visit. The day bucket is proved here and travels to the evaluator in the policy input.
 const LK1_FREE_FIRST_EVENT_PRODUCTS = Object.freeze({
+  // РА and Академия, including their promo variants (owner decision 2026-09-16).
   "b91e14d1-fe6e-4d0b-be39-3e45ad86b759": Object.freeze(["group_training", "tournament"]),
+  "3b4806f1-6f9a-46df-a7d7-45075b4e7274": Object.freeze(["group_training", "tournament"]),
   "9eb8a7a4-c195-492a-95e4-3fb82899ac10": Object.freeze(["group_training"]),
+  "6bda152b-0a9c-4308-82d0-3cd4e6aa680d": Object.freeze(["group_training"]),
 });
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
   "groupTrainingDiscountPercent", "tournamentDiscountPercent"];
