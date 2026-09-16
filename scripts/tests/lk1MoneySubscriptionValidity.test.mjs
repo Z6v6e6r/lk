@@ -16,6 +16,7 @@ const subscriptionId = "1f0d5a3e-0000-4000-8000-000000000002";
 const exerciseId = "1f0d5a3e-0000-4000-8000-000000000003";
 const otherId = "1f0d5a3e-0000-4000-8000-000000000004";
 const HUB_PRODUCT = "db7a5250-7369-4f43-8ac5-9111be24bc74";
+const RA_PRODUCT = "b91e14d1-fe6e-4d0b-be39-3e45ad86b759";
 const EVENT_START = "2099-09-21T08:00:00+03:00";
 
 const hubExercise = () => ({
@@ -36,13 +37,14 @@ function instance(overrides = {}) {
 
 /** Drive the `lk1_money_owned_subscriptions` phase with one row. */
 function runMoneyPhase(row, overrides = {}) {
+  const { deps: depOverrides, ...ctxOverrides } = overrides;
   const ctx = {
     caller: "http", tenantKey: "fixture", actorClientId: actor, clientSubscriptionId: subscriptionId,
     operationId: "fixture-operation", exerciseId, managedAction: "BOOK_GROUP_TRAINING",
     step: "lk1_money_owned_subscriptions",
     lk1MoneyExercise: hubExercise(),
     lk1MoneyReturnStep: "lk1_money_owned_continue",
-    ...overrides,
+    ...ctxOverrides,
   };
   const msg = { payload: { content: [row], totalElements: 1, number: 0, last: true }, statusCode: 200 };
   const stops = [];
@@ -106,6 +108,7 @@ function runMoneyPhase(row, overrides = {}) {
       .filter((row) => [row.clientSubscriptionId, row.subscriptionId, row.clientSubId, row.id, row.uuid]
         .some((value) => value !== undefined && value !== null
           && String(value).trim().toLowerCase() === String(id).trim().toLowerCase())),
+    ...depOverrides,
   };
   const result = new Function(...Object.keys(deps), source)(...Object.values(deps));
   return { result, ctx, stops };
@@ -117,6 +120,32 @@ test("a valid annual instance is proven and the phase continues", () => {
   assert.equal(run.ctx.lk1MoneyOwnership.subscription.subscriptionId, subscriptionId);
   assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
   assert.equal(run.ctx.step, "lk1_money_owned_continue");
+});
+
+test("an enforced instance sold before the plan-rules cutoff still proves the mandate", () => {
+  // The annual HUB rule carries no sale-date gate (`legacy: false` for every sale), so the
+  // resolver marks these instances enforced while this very branch used to skip the proof
+  // for them: the quote required the readback evidence the money phase refused to produce,
+  // and every create/join died with LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN.
+  const run = runMoneyPhase(instance({ purchaseDate: "2026-08-15", purchaseAt: "2026-08-15" }));
+  assert.equal(run.stops.length, 0, JSON.stringify(run.stops));
+  assert.equal(run.ctx.lk1MoneyOwnership.subscription.subscriptionId, subscriptionId);
+  assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
+});
+
+test("a plan instance sold before its own cutoff stays out of the mandate", () => {
+  // The fix must not widen the mandate. A plan product sold before its rule's
+  // `enforceFrom` is legacy, produces no proof, and the quote returns `{ legacy: true }`
+  // before it could ever ask for one.
+  const planRules = { formatVersion: 1, rules: [{ productId: RA_PRODUCT, planKey: "ra",
+    enforceFrom: "2026-09-01", maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+    gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 }] };
+  const run = runMoneyPhase(
+    instance({ productId: RA_PRODUCT, purchaseDate: "2026-08-15", purchaseAt: "2026-08-15" }),
+    { deps: { global: { get: (key) => (key === "subscriptions_lk1_plan_rules" ? planRules : undefined) } } });
+  assert.equal(run.stops.length, 0, JSON.stringify(run.stops));
+  assert.equal(run.ctx.lk1MoneyOwnership, undefined);
+  assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
 });
 
 test("every refused condition is named in the response", () => {
