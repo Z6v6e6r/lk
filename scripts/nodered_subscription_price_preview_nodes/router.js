@@ -337,9 +337,26 @@ if (ctx.step === 'evaluate') {
     if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
       || decision.benefit.finalPriceMinor > ctx.basePriceMinor) return stop('PRICE_PREVIEW_DECISION_INVALID');
     if (eventRoute) {
-      if (decision.subscriptionVisitCount !== 0 || (!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)
-        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100)) return stop(eventRoute.error + '_DECISION_INVALID');
-      quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, 0, ctx.target.durationMinutes);
+      // The first covered event of the subscription's day is carried by the plan itself: one
+      // visit is consumed and nothing is charged. It is quoted as the full benefit at zero (100%
+      // of the base), which is the shape the widget validates and the shape the booking gateway
+      // accepts as the expectation for a free covered event. Every later event of that day keeps
+      // the configured discount.
+      const freeCovered = decision.subscriptionVisitCount === 1
+        && decision.benefit?.kind === 'FREE_ENTITLEMENT' && decision.benefit.finalPriceMinor === 0;
+      if (!freeCovered && (decision.subscriptionVisitCount !== 0
+        || (!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)
+        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100))) {
+        return stop(eventRoute.error + '_DECISION_INVALID');
+      }
+      if (freeCovered) {
+        const configuredPercent = ctx.groupDiscountPercent;
+        ctx.groupDiscountPercent = 100;
+        quote(ctx.currentId, 'AVAILABLE', 0, 0, ctx.target.durationMinutes);
+        ctx.groupDiscountPercent = configuredPercent;
+      } else {
+        quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, 0, ctx.target.durationMinutes);
+      }
     } else {
       if (!decision.gameMinutes) return stop('PRICE_PREVIEW_DECISION_INVALID');
       quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, decision.gameMinutes.freeMinutes, decision.gameMinutes.paidOverageMinutes);
@@ -437,6 +454,14 @@ while (ctx.step === 'next') {
   ctx.currentId = id;
   const usageContext = { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, clientSubscriptionId: id,
     serviceDate: ctx.target.startsAt.slice(0, 10), managedAction: eventRoute ? eventRoute.action : ctx.existingGame ? 'JOIN_GAME' : 'CREATE_GAME', step: 'lk1_usage_operations',
+    // The same instance identity the booking gateway binds before its policy decision: the
+    // shared usage block takes the proven visit balance from it, and a covered product without
+    // that balance would otherwise fail closed on a snapshot the preview could not stand behind.
+    lk1ProductIdentity: { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, subscriptionId: id,
+      productId, name, purchaseDate: live.purchaseDate, subscription: live },
+    // The shared usage block reads the resolved source category for the cohort table; the
+    // gateway sets it during target resolution, the preview has to carry it explicitly.
+    category: eventRoute ? eventRoute.category : 'open_game',
     lk1: { rule: configured.rule, bookings: ctx.bookings, activeBookings: ctx.activeBookings,
       target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: eventRoute ? eventCategory : 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
         basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes,
