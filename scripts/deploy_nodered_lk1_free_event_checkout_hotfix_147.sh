@@ -180,8 +180,8 @@ node -e '
   if (value.addedNodeCount !== 0) process.exit(1);
   if (value.booking?.id !== "lk_subscription_booking_router_20260804"
     || value.booking?.otherFieldsUnchanged !== true
-    || value.booking?.promoInCohort !== true
-    || value.booking?.managedSubscriptionV1 !== true) process.exit(1);
+    || value.booking?.freeEventCarriesZeroChargeBinding !== true
+    || value.booking?.chargedBindingStillExact !== true) process.exit(1);
 ' "$candidate_report" "$expected_node_fields" "$expected_changed_nodes"
 
 # Independent exact-graph contract (the candidate changes one `func` field only);
