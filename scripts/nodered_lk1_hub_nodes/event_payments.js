@@ -24,7 +24,16 @@ const lk1EventPaymentBinding = (ctx, quote = ctx.lk1) => {
     || typeof target.priceProductId !== "string" || !target.priceProductId.trim()
     || !Number.isSafeInteger(base) || base <= 0 || base > 1_000_000
     || !Number.isSafeInteger(percent) || percent < 0 || percent > 100
-    || decision?.eligible !== true || decision.subscriptionVisitCount !== 0
+    || decision?.eligible !== true) return null;
+  // The visit-covered first event of the day costs nothing. It has no payment product to look
+  // up, but it is still carried by this binding, so neither the confirm step nor the replay of
+  // the durable operation demands a charge the client never owes.
+  if (decision.subscriptionVisitCount === 1 && decision.benefit?.kind === "FREE_ENTITLEMENT"
+    && decision.benefit.finalPriceMinor === 0) {
+    return { productId: target.priceProductId, productType: "SERVICE", baseMinor: base,
+      chargeMinor: 0, discountMinor: base };
+  }
+  if (decision.subscriptionVisitCount !== 0
     || decision.benefit?.finalPriceMinor !== base - Math.floor(base * percent / 100)) return null;
   return { productId: target.priceProductId, productType: "SERVICE", baseMinor: base,
     chargeMinor: decision.benefit.finalPriceMinor,
