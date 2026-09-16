@@ -411,6 +411,7 @@ jobs:
           scripts/tests/lk1MoneySubscriptionValidity.test.mjs
           scripts/tests/lk1MoneyCohortHotfix.test.mjs
           scripts/tests/lk1PlanMoneyFirstUseHotfix.test.mjs
+          scripts/tests/lk1FreeFirstEventHotfix.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
           scripts/tests/subscriptionHubLimitPatch.test.mjs

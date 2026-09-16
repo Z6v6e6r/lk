@@ -112,7 +112,10 @@ export const PLAN_RULES_TARGETS = Object.freeze({
     // The embedded LK1-path copy: byte-identical to the base-generation
     // `nodered_lk1_hub_nodes/evaluator.js` of commit e2e5e1e5.
     liveEmbeddedSha256: "cfd614a48e93ad5963974b4e750f273906b5f43a3d49aeb684562ce76b821347",
-    patchedFuncSha256: "d410acdba09996926869373c4836cc9ff3676f1cbb5bf074449a47ed3bc3b1ed",
+    // Re-pinned 2026-09-16 (generation `lk1-free-first-event`): the reviewed evaluator now
+    // carries the free-first-event branch, so this generation composes the same body that
+    // ships in the booking evaluator and the preview evaluate node.
+    patchedFuncSha256: "c20f0e6d792c02bdd0f945b84aaba2ac6405386add6228823cbb30fd2ca38945",
   },
   preview: {
     id: PLAN_RULES_PREVIEW_NODE_ID,
@@ -134,8 +137,11 @@ const REVIEWED_GATEWAY_SOURCE = "scripts/nodered_lk1_hub_nodes/gateway.js";
 const REVIEWED_EVALUATOR_SOURCE = "scripts/nodered_lk1_hub_nodes/evaluator.js";
 export const PLAN_RULES_MODULE_SHA256 =
   "abdbe70a81e285fe0f1fa84a69d8339c266a9715be26262a278e26c5e743b455";
+// Re-pinned 2026-09-16: the reviewed evaluator gained the free-first-event benefit branch
+// (`FREE_ENTITLEMENT` with one visit for a proved first event of the day, discount otherwise),
+// which the `lk1-free-first-event` generation ships into this node and the preview evaluate.
 export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
-  "c248b8bb6b5bb8a2ec4b7ebe30adf6883f31151ae588deddf9197ab9a26430e1";
+  "f1f65a2050523e6104ee0586e1ad62bb0f6945b0ff1dc1583fd52dcf3a9a0433";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =

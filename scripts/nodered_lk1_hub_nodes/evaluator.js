@@ -173,10 +173,27 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
       }
     }
   } else if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)) {
-    decision.subscriptionVisitCount = 0;
-    selectedRule = { ruleId: `lk1-${category.toLowerCase()}`, kind: "PERCENT_DISCOUNT",
-      percentage: category === "GROUP_TRAINING"
-        ? rule.groupTrainingDiscountPercent : rule.tournamentDiscountPercent };
+    // The first covered event of the subscription's local service day is carried by the plan
+    // itself: one visit is consumed and nothing is charged. Every later event that day, and
+    // any event once the visits are used up, keeps the configured discount and consumes no
+    // visit. The gateway proves the day bucket; a covered product whose snapshot is missing
+    // fails closed instead of granting a free event on a guess.
+    const freeFirst = usage?.freeFirstEvent;
+    let freeFirstCovered = false;
+    if (isObj(freeFirst) && freeFirst.covered === true) {
+      if (!Number.isSafeInteger(freeFirst.usedEventsToday) || freeFirst.usedEventsToday < 0
+        || !Number.isSafeInteger(freeFirst.visitsLeft) || freeFirst.visitsLeft < 0) {
+        block("FREE_FIRST_EVENT_SNAPSHOT_INVALID", "Первое бесплатное событие дня не подтверждено");
+      } else {
+        freeFirstCovered = freeFirst.usedEventsToday === 0 && freeFirst.visitsLeft >= 1;
+      }
+    }
+    decision.subscriptionVisitCount = freeFirstCovered ? 1 : 0;
+    selectedRule = freeFirstCovered
+      ? { ruleId: `lk1-${category.toLowerCase()}`, kind: "FREE_ENTITLEMENT" }
+      : { ruleId: `lk1-${category.toLowerCase()}`, kind: "PERCENT_DISCOUNT",
+        percentage: category === "GROUP_TRAINING"
+          ? rule.groupTrainingDiscountPercent : rule.tournamentDiscountPercent };
   }
   return { selectedRule, surchargeMinor: 0, category };
 }

@@ -248,3 +248,60 @@ test('the removed cap blocker never reappears and the existing fail-closed check
   assert.ok(codes(lk1Input({ lk1Policy: null })).includes('LK1_POLICY_INVALID'));
   assert.ok(codes(lk1Input({ rule: { gameOverageDiscountPercent: 101 } })).includes('LK1_POLICY_INVALID'));
 });
+
+// The free-first-event rule (owner decision 2026-09-16): in the covered products the first
+// group-training/tournament event of the subscription's local day is carried by the plan
+// itself — one visit, nothing charged — and every later event that day, or any event once the
+// visits are used up, keeps the configured discount without consuming a visit.
+test('the covered cohort carries the first event of the day with one visit and no charge', () => {
+  for (const category of ['GROUP_TRAINING', 'TOURNAMENT']) {
+    const decision = evaluate(lk1Input({ target: { category },
+      usage: { freeFirstEvent: { covered: true, usedEventsToday: 0, visitsLeft: 30 } } })).decision;
+    assert.equal(decision.eligible, true, category);
+    assert.equal(decision.subscriptionVisitCount, 1, category);
+    assert.equal(decision.benefit.kind, 'FREE_ENTITLEMENT', category);
+    assert.equal(decision.benefit.finalPriceMinor, 0, category);
+    assert.equal(decision.benefit.discountMinor, decision.benefit.basePriceMinor, category);
+  }
+});
+
+test('a later event of the same day, or an exhausted balance, keeps the discount', () => {
+  const cases = [
+    { name: 'second event', usage: { usedEventsToday: 1, visitsLeft: 30 } },
+    { name: 'no visits left', usage: { usedEventsToday: 0, visitsLeft: 0 } },
+  ];
+  for (const item of cases) {
+    const decision = evaluate(lk1Input({ target: { category: 'GROUP_TRAINING' },
+      usage: { freeFirstEvent: { covered: true, ...item.usage } } })).decision;
+    assert.equal(decision.eligible, true, item.name);
+    assert.equal(decision.subscriptionVisitCount, 0, item.name);
+    assert.equal(decision.benefit.kind, 'PERCENT_DISCOUNT', item.name);
+    assert.equal(decision.benefit.finalPriceMinor, 50000, item.name);
+  }
+  const tournament = evaluate(lk1Input({ target: { category: 'TOURNAMENT' },
+    usage: { freeFirstEvent: { covered: true, usedEventsToday: 2, visitsLeft: 3 } } })).decision;
+  assert.equal(tournament.benefit.finalPriceMinor, 50000);
+  assert.equal(tournament.subscriptionVisitCount, 0);
+});
+
+test('a product outside the cohort and an unproved snapshot never grant a free event', () => {
+  for (const usage of [{ freeFirstEvent: { covered: false } }, {}]) {
+    const decision = evaluate(lk1Input({ target: { category: 'GROUP_TRAINING' }, usage })).decision;
+    assert.equal(decision.benefit.kind, 'PERCENT_DISCOUNT', JSON.stringify(usage));
+    assert.equal(decision.subscriptionVisitCount, 0, JSON.stringify(usage));
+  }
+  // A covered product must arrive with a proved day bucket and visit balance.
+  for (const snapshot of [{ covered: true }, { covered: true, usedEventsToday: -1, visitsLeft: 3 },
+    { covered: true, usedEventsToday: 0, visitsLeft: null }]) {
+    assert.ok(codes(lk1Input({ target: { category: 'GROUP_TRAINING' }, usage: { freeFirstEvent: snapshot } }))
+      .includes('FREE_FIRST_EVENT_SNAPSHOT_INVALID'), JSON.stringify(snapshot));
+  }
+});
+
+test('the free-first rule stays outside the game path', () => {
+  const decision = evaluate(lk1Input({ target: { category: 'GAME' },
+    usage: { freeFirstEvent: { covered: true, usedEventsToday: 0, visitsLeft: 30 } } })).decision;
+  assert.equal(decision.benefit.kind, 'FREE_ENTITLEMENT');
+  assert.equal(decision.subscriptionVisitCount, 1);
+  assert.equal(decision.benefit.finalPriceMinor, 0);
+});
