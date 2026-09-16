@@ -5,6 +5,15 @@ function isNodeRedHttpsCheckout(paymentUrl) {
 }
 const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const LK1_PRODUCT_POLICY_GLOBAL = "subscriptions_lk1_product_policy";
+// The free-first-event cohort of the rollout contract: for these plan products the first
+// event of the subscription's local service day in the listed categories is carried by the
+// subscription itself (one visit is consumed and nothing is charged); every later event that
+// day, and any event once the visits are used up, keeps the configured discount and consumes
+// no visit. The day bucket is proved here and travels to the evaluator in the policy input.
+const LK1_FREE_FIRST_EVENT_PRODUCTS = Object.freeze({
+  "b91e14d1-fe6e-4d0b-be39-3e45ad86b759": Object.freeze(["group_training", "tournament"]),
+  "9eb8a7a4-c195-492a-95e4-3fb82899ac10": Object.freeze(["group_training"]),
+});
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
   "groupTrainingDiscountPercent", "tournamentDiscountPercent"];
 const lk1Config = (owned) => {
@@ -547,6 +556,15 @@ if (ctx.step === "lk1_create_booking_bound") {
   return prepareUserGet(ctx, "exercise_recheck", `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`);
 }
 
+// The category of a stored operation, for the day bucket of the free-first-event rule.
+const lk1OperationCategory = (operation) => {
+  const direct = normalizeId(operation?.category);
+  if (direct) return direct;
+  const managed = normalizeId(operation?.lk1?.target?.category);
+  return managed === "group_training" || managed === "tournament" ? managed
+    : managed === "game" ? "open_game" : null;
+};
+
 if (ctx.step === "lk1_usage_operations") {
   if (msg.error || !Array.isArray(msg.payload)) return lk1Stop(ctx, "LK1_ALLOWANCE_READ_FAILED");
   // Resolve membership before filtering: an incomplete/conflicting provider row
@@ -571,6 +589,16 @@ if (ctx.step === "lk1_usage_operations") {
   let used = 0;
   const coveredBookings = new Set();
   const benefitBookings = new Set();
+  // Free-first-event accounting: the covered cohort counts this subscription's events on the
+  // target day from the same two sources the allowance already trusts (reserved operations
+  // and provider bookings), deduplicated by booking identity. The cohort table lives at the
+  // top of this node body; a harness that runs this step on its own simply has no cohort.
+  const freeFirstProducts = typeof LK1_FREE_FIRST_EVENT_PRODUCTS === "object" && LK1_FREE_FIRST_EVENT_PRODUCTS
+    ? LK1_FREE_FIRST_EVENT_PRODUCTS : null;
+  const freeFirstCategories = freeFirstProducts
+    ? freeFirstProducts[normalizeId(ctx.lk1.rule.productId)] || null : null;
+  const freeFirstCovered = Boolean(freeFirstCategories && freeFirstCategories.includes(ctx.category));
+  let freeFirstEventsToday = 0;
   for (const operation of msg.payload) {
     if (!isObj(operation) || operation.actorClientId !== ctx.actorClientId
       || operation.tenantKey !== ctx.tenantKey || !isValidDateKey(operation.serviceDate)
@@ -620,6 +648,9 @@ if (ctx.step === "lk1_usage_operations") {
     // AUDIT_BINDING_END
     if (coveredId) benefitBookings.add(coveredId);
     if (operation.serviceDate !== ctx.serviceDate) continue;
+    if (freeFirstCovered && freeFirstCategories.includes(lk1OperationCategory(operation))) {
+      freeFirstEventsToday += 1;
+    }
     const minutes = operation.lk1.decision.gameMinutes;
     if (minutes) {
       if (minutes.localDate !== ctx.serviceDate || !Number.isSafeInteger(minutes.freeMinutes)
@@ -634,6 +665,7 @@ if (ctx.step === "lk1_usage_operations") {
       || coveredBookings.has(normalizeId(bookingId(booking)))) continue;
     const category = resolveCategory(booking);
     if (!category) return lk1Stop(ctx, "LK1_BOOKING_CATEGORY_UNRESOLVED");
+    if (freeFirstCovered && freeFirstCategories.includes(category)) freeFirstEventsToday += 1;
     if (category !== "open_game") continue;
     const minutes = eventDurationMinutes(booking.exercise || booking);
     if (!minutes) return lk1Stop(ctx, "LK1_ALLOWANCE_PROVIDER_DURATION_UNRESOLVED");
@@ -643,6 +675,14 @@ if (ctx.step === "lk1_usage_operations") {
     normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)
     || benefitBookings.has(normalizeId(bookingId(booking))));
   if (!Number.isSafeInteger(used)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
+  if (!Number.isSafeInteger(freeFirstEventsToday)) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
+  // The visit balance of the selected instance: without a proved balance the evaluator keeps
+  // the discount instead of granting a free event (the rollout contract keeps the booking
+  // available either way).
+  const identityVisitsLeft = ctx.lk1ProductIdentity?.subscription?.visitsLeft;
+  const ownershipVisitsLeft = ctx.lk1MoneyOwnership?.subscription?.visitsLeft;
+  const freeFirstVisitsLeft = Number.isSafeInteger(identityVisitsLeft) ? identityVisitsLeft
+    : Number.isSafeInteger(ownershipVisitsLeft) ? ownershipVisitsLeft : null;
   const policy = {};
   for (const field of lk1Fields) policy[field] = ctx.lk1.rule[field];
   ctx.step = "lk1_policy_decision";
@@ -653,7 +693,10 @@ if (ctx.step === "lk1_usage_operations") {
       ownedProductId: ctx.lk1.rule.productId, clientSubscriptionId: ctx.clientSubscriptionId },
     target: ctx.lk1.target, usage: { activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY",
       dailyBucketLocalDate: ctx.serviceDate, activeServices: new Set(active.map(booking => normalizeId(bookingId(booking)))).size,
-      usedOrReservedFreeMinutesToday: used } };
+      usedOrReservedFreeMinutesToday: used,
+      freeFirstEvent: freeFirstCovered
+        ? { covered: true, usedEventsToday: freeFirstEventsToday, visitsLeft: freeFirstVisitsLeft }
+        : { covered: false } } };
   delete ctx.lk1.bookings;
   delete ctx.lk1.activeBookings;
   return emit(OUTPUT_MANAGED_POLICY);
@@ -738,8 +781,14 @@ if (ctx.step === "lk1_payment_profile_recheck" || (paymentRoute && ctx.step === 
     || product.discount !== (eventPayment ? binding.baseMinor : 1_000_000) - ctx.lk1.decision.benefit.finalPriceMinor) {
     return lk1Stop(ctx, "LK1_PAYMENT_INTENT_INVALID");
   }
-  const configured = lk1Config([{ productId: ctx.lk1.rule.productId }]);
-  if (JSON.stringify(configured.rule) !== JSON.stringify(ctx.lk1.rule)) return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
+  // The rule is re-resolved to prove it did not change, so the sale date of the stored quote
+  // has to travel with it: a plan rule selects its cohort from that date, and without it the
+  // resolver answers with a code instead of the rule and every plan-product checkout is
+  // refused after the booking was already written.
+  const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }]);
+  if (!isObj(configured.rule) || JSON.stringify(configured.rule) !== JSON.stringify(ctx.lk1.rule)) {
+    return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
+  }
   const attemptedAt = new Date().toISOString();
   ctx.lk1.transactionAttemptedAt = attemptedAt;
   ctx.lk1.transactionIntent = { productId: product.id, bookingId: ctx.confirmedBookingId,
