@@ -147,6 +147,13 @@ test("the reviewed sources carry the reviewed deltas verbatim", () => {
   const reviewedHub = fs.readFileSync(path.join(repoRoot, "scripts/nodered_lk1_hub_nodes/gateway.js"), "utf8");
   const reviewedEvaluator = fs.readFileSync(path.join(repoRoot, "scripts/nodered_lk1_hub_nodes/evaluator.js"), "utf8");
   for (const delta of FREE_FIRST_EVENT_BOOKING_DELTAS) {
+    if (delta.id === "free-first-event-cohort") {
+      // The reviewed cohort table has since gained the promo products, so this delta is
+      // compared by its reviewed roots instead of by the full historical text.
+      assert.ok(reviewedHub.includes('"b91e14d1-fe6e-4d0b-be39-3e45ad86b759": Object.freeze(["group_training", "tournament"]),'));
+      assert.ok(reviewedHub.includes('"9eb8a7a4-c195-492a-95e4-3fb82899ac10": Object.freeze(["group_training"]),'));
+      continue;
+    }
     if (delta.id === "free-first-event-policy-input") {
       // The installed body carries the policy input in its reformatted shape, so this delta
       // is compared by its reviewed fragment instead of by the live indentation.

@@ -109,7 +109,8 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
     + '  msg.method = method;');
 
   out.gateway = replace(out.gateway, 'const adminVersion = ctx.caller === "split" ? "v1" : "v2";',
-    'const adminVersion = ctx.caller === "split" || (lk1EventMoneyBooking(ctx) && payload.paymentType === "ON_PLACE") ? "v1" : "v2";');
+    'const adminVersion = ctx.caller === "split" || (ctx.lk1 && payload.paymentType === "SUBSCRIPTION")\n'
+    + '    || (lk1EventMoneyBooking(ctx) && payload.paymentType === "ON_PLACE") ? "v1" : "v2";');
 
   out.evaluator = 'if (Object.prototype.hasOwnProperty.call(msg._managedSubscriptionPolicyInput || {}, "lk1Policy")) {\n'
     + '  return (() => {\n' + snippet('evaluator') + '\n})();\n}\n' + out.evaluator;
