@@ -343,7 +343,7 @@ const region = (text, startMarker, endMarker) => {
   assert.notEqual(end, -1, `fragment end missing: ${startMarker.slice(0, 40)}`);
   return text.slice(start, end);
 };
-const GATEWAY_CONFIG = region(gatewaySource, 'const LK1_OVERLAY_HUB_PRODUCT_ID = ', 'const lk1Stop = (ctx, code)');
+const GATEWAY_CONFIG = region(gatewaySource, 'const LK1_OVERLAY_HUB_PRODUCT_ID = ', 'const lk1Stop = (ctx, code, observed)');
 const GATEWAY_QUOTE = region(gatewaySource, 'const lk1Quote = (ctx, exercise, owned) => {', 'const lk1Finish = (ctx)');
 const MANAGED_BLOCK = region(gatewayHooks, '// HUB_EXERCISE', '// HUB_RECHECK');
 // The gateway calls the embedded resolver; the fallback exists only so the main
@@ -373,6 +373,17 @@ test('the gateway delegates the rule verdict to the embedded resolver', () => {
     'lk1Quote must not keep a sale-date gate');
   assert.equal(GATEWAY_QUOTE.includes('if (configured.legacy) return { legacy: true };'), true,
     'lk1Quote must follow the resolver cohort verdict');
+  // The third gate of the same family lived in the money phase: it skipped the readback
+  // proof for instances the resolver had just marked enforced (annual HUB sold before
+  // 2026-09-01), so the quote demanded evidence the gateway refused to produce and the
+  // whole cohort was refused with LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN. The mandate
+  // now covers exactly the resolver cohort.
+  assert.equal(gatewaySource.includes('if (enforced && dates.dates[0] >= MANAGED_ENFORCEMENT_PURCHASE_FROM)'), false,
+    'the money mandate must not keep a sale-date gate');
+  assert.equal(gatewaySource.includes('const enforced = configured.matched && !configured.legacy;'), true,
+    'the money cohort must come from the resolver verdict');
+  assert.equal(region(gatewaySource, 'delete ctx.lk1MoneyOwnership;', 'const subscription = selected[0];')
+    .includes('if (enforced) {'), true, 'the money proof must be produced for the whole enforced cohort');
 });
 
 test('the gateway enters the managed contour only for matched && !legacy', () => {

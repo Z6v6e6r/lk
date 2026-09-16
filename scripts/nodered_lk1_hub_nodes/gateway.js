@@ -345,15 +345,20 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
   const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
   const configured = lk1Config(selected);
   if (configured.code) return lk1Stop(ctx, configured.code);
-  // The resolver decides the enforced cohort; the date gate below stays only for
-  // the HUB money mandate that existed before the plan rules.
+  // The resolver alone decides the enforced cohort: the annual HUB rule carries no
+  // sale-date gate, while every plan rule enters the contour only from its own
+  // `enforceFrom`. The money mandate has to cover exactly that cohort. Re-applying the
+  // pre-plan-rules sale date here kept the proof unsatisfiable for instances the resolver
+  // had just marked enforced (an annual HUB sold before 2026-09-01: the quote requires the
+  // readback evidence, this branch refused to produce it), so create/join on the event
+  // route was refused with LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN for that whole cohort.
   const enforced = configured.matched && !configured.legacy;
   const dates = enforced ? collectSubscriptionPurchaseDateEvidence(selected) : { invalid: true, dates: [] };
   if (enforced && (dates.invalid || dates.dates.length !== 1)) {
     return lk1Stop(ctx, "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
   }
   delete ctx.lk1MoneyOwnership;
-  if (enforced && dates.dates[0] >= MANAGED_ENFORCEMENT_PURCHASE_FROM) {
+  if (enforced) {
     const subscription = selected[0];
     const instanceIds = [subscription?.clientSubscriptionId, subscription?.subscriptionId, subscription?.id]
       .filter((id) => id !== undefined);
