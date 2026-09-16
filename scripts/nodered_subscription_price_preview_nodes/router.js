@@ -443,7 +443,14 @@ while (ctx.step === 'next') {
         ...(eventRoute ? { stationId: ctx.target.stationId, roomId: ctx.target.roomId,
           externalEventTypeId: canonical.managedExternalEventTypeId(exercise), productTypeId: null,
           priceProductId: ctx.priceProductId } : {}) } } };
-  if (ctx.operations.some(row => row?.lk1?.rule?.productId !== configured.rule.productId)) return stop('LK1_ALLOWANCE_RECORD_INVALID');
+  // The batch is deliberately wider than one product: the query above asks for every product
+  // this client owns (`ctx.ruleProductIds`), because the shared usage builder scopes the day and
+  // minute accounting per subscription. Demanding a single rule product here rejected the whole
+  // batch for a client who owns two managed products (HUB + plan), which surfaced as a 503 and
+  // "Не удалось проверить скидку по подписке" on every group and tournament form.
+  if (ctx.operations.some(row => !ctx.ruleProductIds.includes(String(row?.lk1?.rule?.productId || '').toLowerCase()))) {
+    return stop('LK1_ALLOWANCE_RECORD_INVALID');
+  }
   const usageMessage = { payload: ctx.operations, _subscriptionBooking: usageContext };
   canonicalUsage(usageMessage);
   if (usageMessage.previewError || !usageMessage._managedSubscriptionPolicyInput) return stop(usageMessage.previewError || 'LK1_ALLOWANCE_READ_FAILED');

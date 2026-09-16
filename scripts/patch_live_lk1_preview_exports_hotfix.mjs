@@ -57,7 +57,7 @@ export const PREVIEW_EXPORTS_TARGETS = Object.freeze({
     // sha256 of the exact installed preview body (the broken generation).
     liveFuncSha256: "64f67bad58bd3add870bd3c6012c5f1c9c9256338b23c5a6295cefefc5811856",
     // sha256 of the same composition with the three helpers named as roots.
-    patchedFuncSha256: "976ce14ef9d6be1b2c00d818f1048b47a7ef3c61a8dfa6bdbb2a07b2f4c8466d",
+    patchedFuncSha256: "6bbae1f64480fa9b22c3ca434157af8ea9447b7b486f2699f445bfb776b97331",
   },
 });
 
