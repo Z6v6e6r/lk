@@ -59,24 +59,6 @@ export const PREVIEW_FREE_FIRST_EVENT_CANONICAL_PINS = Object.freeze({
   evaluator: "c20f0e6d792c02bdd0f945b84aaba2ac6405386add6228823cbb30fd2ca38945",
 });
 
-const EXPECTATION_HELPER = `// A visit-covered first event of the day is carried by the plan itself. The widget may quote it
-// as a 100% discount at zero, or — with a bundle holding a quote from before that rule — as the
-// ordinary discount at the configured percentage. Both describe the same decision, so the client
-// expectation is compared against the decision rather than one fixed shape; neither value can
-// raise or lower what the authoritative decision already fixed.
-const lk1ExpectedDiscountMatches = (ctx, route, target, decision, expected) => {
-  const configuredPercent = ctx.lk1.rule[route.discountField];
-  const freeCovered = decision.subscriptionVisitCount === 1
-    && decision.benefit?.kind === "FREE_ENTITLEMENT" && decision.benefit.finalPriceMinor === 0;
-  if (!freeCovered) {
-    return expected.discountPercent === configuredPercent
-      && expected.amountMinor === decision.benefit.finalPriceMinor;
-  }
-  return (expected.discountPercent === 100 && expected.amountMinor === 0)
-    || (expected.discountPercent === configuredPercent
-      && expected.amountMinor === target.basePriceMinor - Math.floor(target.basePriceMinor * configuredPercent / 100));
-};
-`;
 
 export const PREVIEW_FREE_FIRST_EVENT_BOOKING_DELTAS = Object.freeze([
   { id: "free-first-expectation-normalized",
