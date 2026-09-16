@@ -5,8 +5,10 @@
 // expiry yet) selecting the 2026-09-29 group training was refused with
 // `LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN` / `observed.stage: "money_evidence"`. The
 // product-identity projection rejected every non-HUB product, so the readback never
-// produced the proof `lk1Quote` demanded, and the deep validity pass had lost the
-// first-use relaxation the diagnostics generation split away.
+// produced the proof `lk1Quote` demanded, the deep validity pass had lost the first-use
+// relaxation the diagnostics generation split away, and both operation-replay identity
+// checks still required the HUB product id, so no plan-product booking could ever be
+// polled to confirmation.
 //
 // These tests pin the reviewed preimages/postimages, the fail-closed preimage gates, the
 // agreement between the patched live body and the reviewed sources, the behavioural
@@ -42,6 +44,8 @@ const FRIENDSHIP_PRODUCT = "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b";
 const ACTOR = "83756527-cfbe-4b7f-b143-1a6ac96d2a93";
 const SUBSCRIPTION = "54de4878-2e04-4dd3-a1c8-1ecca8e14061";
 const EXERCISE = "eec906d7-8b23-47f0-8d9c-5b0a9590f7e0";
+const OPERATION = "lk-subscription-fixture";
+const ONE_TIME = "p-one-time";
 const RULE_FIELDS = { maxActiveBookings: 4, freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
   groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 };
 
@@ -66,35 +70,87 @@ function globals() {
   ]);
 }
 
-/** Drive the real composed booking body through the direct group-training money step. */
-function runMoneyStep(body, { productId, name, purchaseDate = "2026-09-16T07:26:17.599551", rowChanges = {} }) {
-  const row = { subscriptionId: SUBSCRIPTION, clientSubscriptionId: SUBSCRIPTION, id: SUBSCRIPTION,
+function subscriptionRow(productId, purchaseDate, rowChanges) {
+  return { subscriptionId: SUBSCRIPTION, clientSubscriptionId: SUBSCRIPTION, id: SUBSCRIPTION,
     clientId: ACTOR, subscriptionProductId: productId, productId, product: { id: productId },
     status: "NEW", purchaseDate, purchaseAt: purchaseDate, autoActivationDate: "2026-09-17",
     activationDate: null, expirationDate: null, holdUntil: null, validityDays: 30,
     visitsTotal: 30, visitsLeft: 30, variant: "BY_VISITS", ...rowChanges };
-  const exercise = { id: EXERCISE, typeId: 605, directionId: 3685, studioId: "studio-1", roomId: "room-1",
+}
+
+function groupExercise(row) {
+  return { id: EXERCISE, typeId: 605, directionId: 3685, studioId: "studio-1", roomId: "room-1",
     timeFrom: "2026-09-29T08:00:00+03:00", timeTo: "2026-09-29T09:00:00+03:00",
     availableClientSubscriptions: [row] };
-  const ctx = { caller: "http", tenantKey: "iSkq6G", actorClientId: ACTOR, clientSubscriptionId: SUBSCRIPTION,
-    operationId: "lk-subscription-fixture", exerciseId: EXERCISE, managedAction: "BOOK_GROUP_TRAINING",
-    step: "lk1_money_owned_subscriptions", lk1MoneyExercise: exercise, lk1MoneyReturnStep: "exercise",
+}
+
+function requestContext(productId, name, row, purchaseDate, overrides = {}) {
+  return { caller: "http", tenantKey: "iSkq6G", actorClientId: ACTOR, clientSubscriptionId: SUBSCRIPTION,
+    operationId: OPERATION, exerciseId: EXERCISE, managedAction: "BOOK_GROUP_TRAINING",
     lk1ProductIdentity: { tenantKey: "iSkq6G", actorClientId: ACTOR, subscriptionId: SUBSCRIPTION,
-      productId, name, purchaseDate, subscription: row } };
-  const msg = { payload: { content: [row], totalElements: 1, number: 0, last: true }, statusCode: 200,
-    _subscriptionBooking: ctx };
+      productId, name, purchaseDate, subscription: row }, ...overrides };
+}
+
+/** Run the real composed booking body once and return the messages it emitted. */
+function execBody(body, msg) {
   const store = globals();
   const global = { get: (key) => store.get(key), set: (key, value) => store.set(key, value) };
   const node = { send: () => {}, warn: () => {}, error: () => {}, status: () => {}, log: () => {} };
   const result = new Function("msg", "node", "global", "env", "context", "flow", "RED", body)(
     msg, node, global, { get: () => undefined }, {}, {}, {});
-  const sent = (Array.isArray(result) ? result.flat(3).filter(Boolean) : []).map((message) => ({
-    step: message._subscriptionBooking?.step,
-    statusCode: message.statusCode,
-    code: message.payload?.details?.code,
-    observed: message.payload?.details?.observed,
-  }));
-  return { ownership: ctx.lk1MoneyOwnership ? "SET" : "ABSENT", phase: ctx.lk1MoneyReadbackPhase, sent };
+  return Array.isArray(result) ? result.flat(3).filter(Boolean) : [];
+}
+
+const summarize = (messages) => messages.map((message) => ({
+  step: message._subscriptionBooking?.step,
+  statusCode: message.statusCode,
+  code: message.payload?.details?.code,
+  observed: message.payload?.details?.observed,
+  method: message.method,
+}));
+
+/** Drive the direct group-training money step with one owned row. */
+function runMoneyStep(body, { productId, name, purchaseDate = "2026-09-16T07:26:17.599551", rowChanges = {} }) {
+  const row = subscriptionRow(productId, purchaseDate, rowChanges);
+  const ctx = requestContext(productId, name, row, purchaseDate, {
+    step: "lk1_money_owned_subscriptions", lk1MoneyExercise: groupExercise(row),
+    lk1MoneyReturnStep: "exercise" });
+  const sent = execBody(body, { payload: { content: [row], totalElements: 1, number: 0, last: true },
+    statusCode: 200, _subscriptionBooking: ctx });
+  return { ownership: ctx.lk1MoneyOwnership ? "SET" : "ABSENT", phase: ctx.lk1MoneyReadbackPhase,
+    sent: summarize(sent) };
+}
+
+/**
+ * Money readback, then the event-tariff read the fixed flow now reaches, then the stored
+ * operation lookup. Returns the priced quote the flow persisted in its context.
+ */
+function capturePricedQuote(body, productId, name) {
+  const row = subscriptionRow(productId, "2026-09-16T07:26:17.599551", {});
+  const exercise = groupExercise(row);
+  const ctx = requestContext(productId, name, row, row.purchaseDate, {
+    step: "lk1_money_owned_subscriptions", lk1MoneyExercise: exercise, lk1MoneyReturnStep: "exercise" });
+  execBody(body, { payload: { content: [row], totalElements: 1, number: 0, last: true }, statusCode: 200,
+    _subscriptionBooking: ctx });
+  const tariffUrl = `https://api.vivacrm.ru/end-user/api/v2/iSkq6G/products/one-times?exerciseId=${EXERCISE}`;
+  const tariff = execBody(body, { payload: { content: [{ id: ONE_TIME, productId: ONE_TIME,
+    exerciseId: EXERCISE, cost: 550000, productType: "ONE_TIME" }], totalElements: 1, last: true },
+    statusCode: 200, method: "GET", url: tariffUrl, responseUrl: tariffUrl, _subscriptionBooking: ctx });
+  execBody(body, { payload: [], statusCode: 200, _subscriptionBooking: ctx });
+  return { ctx, quote: ctx.lk1, tariff: summarize(tariff) };
+}
+
+/** Replay a stored, not-yet-confirmed operation through the ingress identity check. */
+function replayStoredOperation(body, productId, name, quote) {
+  const operation = { _id: `lk1-product:${JSON.stringify(["iSkq6G", ACTOR, OPERATION])}`,
+    tenantKey: "iSkq6G", actorClientId: ACTOR, clientSubscriptionId: SUBSCRIPTION, operationId: OPERATION,
+    exerciseId: EXERCISE, serviceDate: "2026-09-29", category: "group_training",
+    state: "PENDING_CONFIRMATION", attempts: 1,
+    lk1: { ...quote, decision: { eligible: true, subscriptionVisitCount: 0,
+      benefit: { finalPriceMinor: 275000, kind: "PERCENT_DISCOUNT" } } } };
+  const ctx = requestContext(productId, name, subscriptionRow(productId, quote.purchaseDate, {}),
+    quote.purchaseDate, { step: "lk1_ingress_operation_find", lk1IngressReplay: true });
+  return summarize(execBody(body, { payload: [operation], statusCode: 200, _subscriptionBooking: ctx }));
 }
 
 test("the generation pins the installed flow and one node field", () => {
@@ -105,22 +161,28 @@ test("the generation pins the installed flow and one node field", () => {
   assert.equal(PLAN_FIRST_USE_TARGET.liveFuncSha256,
     "967185637bf9c5e4d5e44df899edac86ff431f2f1b719d80bbdceee5fd41f19c");
   assert.notEqual(PLAN_FIRST_USE_TARGET.liveFuncSha256, PLAN_FIRST_USE_TARGET.patchedFuncSha256);
-  assert.equal(PLAN_FIRST_USE_DELTAS.length, 2);
+  assert.equal(PLAN_FIRST_USE_DELTAS.length, 4);
   for (const delta of PLAN_FIRST_USE_DELTAS) assert.ok(delta.before && delta.after, delta.id);
 });
 
-test("the reviewed sources carry the two reviewed deltas verbatim", () => {
+test("the reviewed sources carry the reviewed deltas verbatim", () => {
   const reviewedProduct = fs.readFileSync(
     path.join(repoRoot, "scripts/nodered_subscription_product_nodes/gateway.js"), "utf8");
   const reviewedHub = fs.readFileSync(path.join(repoRoot, "scripts/nodered_lk1_hub_nodes/gateway.js"), "utf8");
   assert.ok(reviewedProduct.includes(PLAN_FIRST_USE_DELTAS[0].after), "product identity projection drift");
   assert.ok(reviewedHub.includes(PLAN_FIRST_USE_DELTAS[1].after), "first-use lifecycle guards drift");
+  // The live body is reformatted (four-space operands), so the helper delta is compared by
+  // its reviewed fragment rather than by the live indentation.
+  assert.ok(reviewedHub.includes("|| !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)"),
+    "replay identity helper drift");
   // The reviewed hub source cannot depend on the production `preflightAvailability` library:
   // it names the first-use state directly and documents that it is the same verdict.
   assert.equal(hubGatewaySource().includes("preflightAvailability"), false);
   assert.ok(reviewedHub.includes('const firstUse = String(subscription?.status || "").trim().toUpperCase() === "NEW"'));
-  // The mandate follows the resolver, so no reviewed layer may re-introduce the HUB hardcode.
+  // Neither reviewed layer may re-introduce a HUB-only contour: the mandate and the replay
+  // identity both follow the resolver / the stored fingerprint.
   assert.equal(reviewedProduct.includes("if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];"), false);
+  assert.equal(reviewedHub.includes("quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID"), false);
 });
 
 test("the deltas apply and revert on the installed flow only", { skip: snapshotSkip }, () => {
@@ -133,13 +195,16 @@ test("the deltas apply and revert on the installed flow only", { skip: snapshotS
   let reverted = patched;
   for (const delta of [...PLAN_FIRST_USE_DELTAS].reverse()) reverted = reverted.replace(delta.after, () => delta.before);
   assert.equal(reverted, body);
-  // The plan cohort is judged by the resolver and the first-use state is honoured, while
-  // hold/freeze and a failed row identity still refuse.
+  // The plan cohort is judged by the resolver, the first-use state is honoured, and both
+  // replay checks are contour-bound; hold/freeze and a failed row identity still refuse.
   assert.equal(patched.includes("const configured = lk1Config(projected);"), true);
   assert.equal(patched.includes("if ((!firstUse && row.status !== 'ACTIVE')"), true);
   assert.equal(patched.includes("    if (!firstUse) {"), true);
   assert.equal(patched.includes('violations.push("expiry_before_target_end");'), true);
   assert.equal(patched.includes("if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];"), false);
+  assert.equal(patched.includes("quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID"), false);
+  assert.equal((patched.split("\n    || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)\n").length - 1), 1);
+  assert.equal((patched.split("\n      || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)\n").length - 1), 1);
 });
 
 test("the generation refuses any flow that is not the installed one", () => {
@@ -163,6 +228,7 @@ test("the generation composes exactly the reviewed postimage", { skip: snapshotS
   assert.equal(built.booking.otherFieldsUnchanged, true);
   assert.equal(built.booking.planProjectionResolverBound, true);
   assert.equal(built.booking.firstUseGuarded, true);
+  assert.equal(built.booking.replayContourBound, true);
   assert.equal(built.contract.allowedChanges.length, 1);
   assert.equal((built.contract.allowedAdditions ?? []).length, 0);
   const candidate = JSON.parse(built.candidateBytes.toString("utf8"));
@@ -221,6 +287,32 @@ test("the installed body refuses the live РА first-use booking and the patched
     assert.equal(unknown.sent.some((message) => message.code === "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN"), false);
   });
 
+test("a stored plan-product operation replays instead of being refused on identity",
+  { skip: snapshotSkip }, () => {
+    const bytes = livePreimageBytes();
+    const installed = JSON.parse(bytes.toString("utf8")).find((node) => node.id === PLAN_FIRST_USE_BOOKING_ID).func;
+    const patched = composePlanFirstUseArtifacts(bytes, "lk1-plan-money-first-use")
+      .flow.find((node) => node.id === PLAN_FIRST_USE_BOOKING_ID).func;
+
+    // The installed body cannot even price a plan product, so the replay is built on the
+    // patched body: the quote must exist before an operation can be stored for it.
+    const ra = capturePricedQuote(patched, RA_PRODUCT, "РА");
+    assert.ok(ra.quote?.fingerprint, "the plan-product quote must be priced");
+    const hub = capturePricedQuote(patched, HUB_PRODUCT, "ХАБ");
+    assert.ok(hub.quote?.fingerprint, "the HUB quote must be priced");
+
+    // The client polls the same deterministic operationId until the gateway reports the
+    // confirmed booking; the HUB replay reaches the pending-replay path, and the plan
+    // product must reach the same path instead of `LK1_REQUEST_IDENTITY_CHANGED`.
+    const hubReplay = replayStoredOperation(patched, HUB_PRODUCT, "ХАБ", hub.quote);
+    assert.equal(hubReplay[0].code, "LK1_BOOKING_OUTCOME_UNRESOLVED", JSON.stringify(hubReplay));
+    const raReplay = replayStoredOperation(patched, RA_PRODUCT, "РА", ra.quote);
+    assert.equal(raReplay[0].code, "LK1_BOOKING_OUTCOME_UNRESOLVED", JSON.stringify(raReplay));
+    // The installed body keeps refusing it: the leftover HUB equality is what this pins.
+    const installedReplay = replayStoredOperation(installed, RA_PRODUCT, "РА", ra.quote);
+    assert.equal(installedReplay[0].code, "LK1_REQUEST_IDENTITY_CHANGED", JSON.stringify(installedReplay));
+  });
+
 test("the deploy wrapper keeps the confirmation gate, the exact allowance and rollback", () => {
   const wrapper = fs.readFileSync(
     path.join(repoRoot, "scripts/deploy_nodered_lk1_plan_money_first_use_hotfix_147.sh"), "utf8");
@@ -233,6 +325,7 @@ test("the deploy wrapper keeps the confirmation gate, the exact allowance and ro
   assert.equal(wrapper.includes("nodered_reviewed_flow_deploy/prepare_contract.mjs"), false);
   assert.ok(wrapper.includes("value.booking?.planProjectionResolverBound !== true"));
   assert.ok(wrapper.includes("value.booking?.firstUseGuarded !== true"));
+  assert.ok(wrapper.includes("value.booking?.replayContourBound !== true"));
   assert.ok(wrapper.includes("rollback --deployment-id"));
   assert.ok(wrapper.includes("sha256sum"));
   const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));

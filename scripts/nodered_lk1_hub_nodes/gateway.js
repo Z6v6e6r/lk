@@ -211,7 +211,10 @@ const lk1ReplayIdentityMatches = (ctx, operation, operationId = ctx.operationId)
     return !(!isObj(operation) || operation._id !== `lk1-product:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, operationId])}`
       || operation.tenantKey !== ctx.tenantKey || operation.actorClientId !== ctx.actorClientId
       || operation.operationId !== operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
-      || !isObj(quote) || quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID || !isObj(quote.target)
+      // The stored quote only has to be internally consistent, not HUB-specific: `lk1Fingerprint`
+      // already binds the rule, the sale date and the target, and since the plan-rules rollout
+      // any product the resolver names can be the enforced one.
+      || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)
       || !action || quote.fingerprint !== lk1Fingerprint(identity, quote)
       || (isCreate ? JSON.stringify(quote.createPayload) !== JSON.stringify(ctx.lk1CreatePayload)
         || quote.target.stationId !== ctx.prospectiveTarget?.studioId

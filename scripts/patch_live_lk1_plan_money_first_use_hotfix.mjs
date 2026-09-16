@@ -22,12 +22,17 @@
 //      `NEW_FIRST_USE_CANDIDATE` — was refused with `status_new`, `activation_unparsed` and
 //      `expiry_unparsed`.
 //
-// Two reviewed deltas on `lk_subscription_booking_router_20260804`:
+// Four reviewed deltas on `lk_subscription_booking_router_20260804`:
 //   1. the money projection asks the resolver for the cohort (via the embedded `lk1Config`)
 //      and accepts the first-use state, keeping the visited-row identity, owner, hold/freeze
 //      and event-window proofs untouched;
 //   2. the named lifecycle violations are evaluated only for a non-first-use instance,
-//      exactly as the pre-diagnostics conjunction did.
+//      exactly as the pre-diagnostics conjunction did;
+//   3. both operation-replay identity checks stop requiring the HUB product id. The stored
+//      quote is already bound by `lk1Fingerprint` (rule, sale date, target, actor,
+//      subscription), but the leftover HUB equality refused the replay of every plan-product
+//      operation: the frontend polls the same deterministic `operationId` until the gateway
+//      reports the confirmed booking, so the booking could never be observed as confirmed.
 //
 // One node, one field (`func`). Preparation only: nothing is deployed, imported or
 // restarted here, and the patcher fails closed unless the preimage is exactly the reviewed
@@ -54,7 +59,7 @@ export const PLAN_FIRST_USE_BOOKING_ID = "lk_subscription_booking_router_2026080
 export const PLAN_FIRST_USE_TARGET = Object.freeze({
   id: PLAN_FIRST_USE_BOOKING_ID,
   liveFuncSha256: "967185637bf9c5e4d5e44df899edac86ff431f2f1b719d80bbdceee5fd41f19c",
-  patchedFuncSha256: "f43e4c5ef6a5651dffd54a772a7d88028a4eeb0e2063f56ff3340660544c480c",
+  patchedFuncSha256: "17ec2cac9ad30bb01aab67363349c498f6439fa9d7f4766a5acfdcd5964a429f",
 });
 
 export const PLAN_FIRST_USE_DELTAS = Object.freeze([
@@ -142,6 +147,22 @@ export const PLAN_FIRST_USE_DELTAS = Object.freeze([
         if (expiry < targetEnd) violations.push("expiry_before_target_end");
       }
     }` },
+  { id: "replay-identity-helper-contour",
+    before: `    || operation.operationId !== operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+    || !isObj(quote) || quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID || !isObj(quote.target)`,
+    after: `    || operation.operationId !== operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+    // The stored quote only has to be internally consistent, not HUB-specific: \`lk1Fingerprint\`
+    // already binds the rule, the sale date and the target, and since the plan-rules rollout
+    // any product the resolver names can be the enforced one.
+    || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)` },
+  { id: "replay-identity-ingress-contour",
+    before: `      || operation.operationId !== ctx.operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+      || !isObj(quote) || quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID || !isObj(quote.target)`,
+    after: `      || operation.operationId !== ctx.operationId || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+      // The stored quote only has to be internally consistent, not HUB-specific: \`lk1Fingerprint\`
+      // already binds the rule, the sale date and the target, and since the plan-rules rollout
+      // any product the resolver names can be the enforced one.
+      || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)` },
 ]);
 
 const BOOKING_MARKERS = Object.freeze([
@@ -150,9 +171,12 @@ const BOOKING_MARKERS = Object.freeze([
   "if ((!firstUse && row.status !== 'ACTIVE') || !identitySelected({ content: [row], totalElements: 1 }, ctx)",
   "    if (!firstUse) {",
   "    } else if (!firstUse) {",
+  "\n    || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)\n",
+  "\n      || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)\n",
 ]);
 const BOOKING_ABSENT_MARKERS = Object.freeze([
   "  if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];",
+  "quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID",
   `    if (subscription.status !== "ACTIVE") {
       violations.push(\`status_\${String(subscription.status || "missing").toLowerCase().slice(0, 24)}\`);
     }
@@ -249,7 +273,10 @@ export function composePlanFirstUseArtifacts(liveBytes, deploymentId, options = 
       planProjectionResolverBound: booking.func.includes("const configured = lk1Config(projected);")
         && !booking.func.includes("  if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];"),
       firstUseGuarded: booking.func.includes("    if (!firstUse) {")
-        && booking.func.includes("    } else if (!firstUse) {") } };
+        && booking.func.includes("    } else if (!firstUse) {"),
+      replayContourBound: !booking.func.includes("quote.rule?.productId !== LK1_OVERLAY_HUB_PRODUCT_ID")
+        && booking.func.includes("    || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)")
+        && booking.func.includes("      || !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)") } };
 }
 
 function fail(message) { console.error(message); process.exitCode = 1; }

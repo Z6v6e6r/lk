@@ -8,7 +8,9 @@
 #     non-HUB product while `lk1Quote` demanded the proof, so a plan product sold inside
 #     its `enforceFrom` window was refused with
 #     LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN), and a `NEW` first-use instance is no
-#     longer refused by the named lifecycle violations.
+#     longer refused by the named lifecycle violations, and both operation-replay identity
+#     checks stop requiring the HUB product id, so the plan-product booking can be polled to
+#     confirmation by the client instead of being refused on every retry.
 #
 # The candidate changes exactly one `func` field of one node; every other node and the
 # `subscriptions_lk1_plan_rules` activation stay byte-identical.
@@ -183,7 +185,8 @@ node -e '
   if (value.booking?.id !== "lk_subscription_booking_router_20260804"
     || value.booking?.otherFieldsUnchanged !== true
     || value.booking?.planProjectionResolverBound !== true
-    || value.booking?.firstUseGuarded !== true) process.exit(1);
+    || value.booking?.firstUseGuarded !== true
+    || value.booking?.replayContourBound !== true) process.exit(1);
 ' "$candidate_report" "$expected_node_fields" "$expected_changed_nodes"
 
 # Independent exact-graph contract (the candidate changes one `func` field only);
