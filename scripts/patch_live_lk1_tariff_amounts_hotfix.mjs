@@ -62,7 +62,7 @@ export const TARIFF_AMOUNTS_TARGETS = Object.freeze({
   previewRouter: {
     id: TARIFF_AMOUNTS_ROUTER_ID,
     liveFuncSha256: "ad67484dfc09c1620455fc810cc624344a2e07ed8a6d3561f345b63a8c382ac7",
-    patchedFuncSha256: "6bbae1f64480fa9b22c3ca434157af8ea9447b7b486f2699f445bfb776b97331",
+    patchedFuncSha256: "d2d8b5a495ea01691c5f35a9f80afbffdee543dfeb5c8a9acb23a6c66a663009",
   },
   previewEvaluate: {
     id: TARIFF_AMOUNTS_EVALUATE_ID,

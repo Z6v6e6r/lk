@@ -707,6 +707,21 @@ if (ctx.step === "lk1_usage_operations") {
 
 if (ctx.step === "lk1_policy_decision") {
   const decision = msg._managedSubscriptionPolicyDecision;
+  // A visit-covered first event of the day is carried by the plan itself, and the widget quotes it
+  // as the full benefit at zero (100% of the base). The reviewed comparison below verifies the
+  // configured percentage of a charged quote, so that one shape is normalized to the reviewed
+  // shape here. The amount still has to equal the authoritative decision — zero — and no charged
+  // expectation is touched, so this cannot raise or lower what the decision already fixed.
+  if (isObj(decision) && decision.subscriptionVisitCount === 1
+    && decision.benefit?.kind === "FREE_ENTITLEMENT" && decision.benefit.finalPriceMinor === 0) {
+    for (const [key, discountField] of [["expectedGroupDiscount", "groupTrainingDiscountPercent"],
+      ["expectedTournamentDiscount", "tournamentDiscountPercent"]]) {
+      const quote = ctx[key];
+      if (isObj(quote) && quote.discountPercent === 100 && quote.amountMinor === 0) {
+        ctx[key] = { ...quote, discountPercent: ctx.lk1.rule[discountField] };
+      }
+    }
+  }
   if (!isObj(decision) || decision.eligible !== true || !isObj(decision.benefit)
     || !Number.isSafeInteger(decision.benefit.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
     || decision.benefit.finalPriceMinor > 1_000_000

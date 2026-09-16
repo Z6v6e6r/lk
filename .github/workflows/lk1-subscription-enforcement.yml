@@ -415,6 +415,7 @@ jobs:
           scripts/tests/lk1FreeFirstEventV1CreateHotfix.test.mjs
           scripts/tests/lk1FreeEventCheckoutHotfix.test.mjs
           scripts/tests/lk1PreviewMultiProductHotfix.test.mjs
+          scripts/tests/lk1PreviewFreeFirstEventHotfix.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
           scripts/tests/subscriptionHubLimitPatch.test.mjs

@@ -50,7 +50,7 @@ export const EVENT_DIAGNOSTICS_INSTALLED_GENERATION = Object.freeze({
 export const EVENT_DIAGNOSTICS_TARGET = Object.freeze({
   id: EVENT_DIAGNOSTICS_ROUTER_ID,
   liveFuncSha256: "9b4f69b5bd613d7e6072068c49d6d3e80f2ef8b7896846b522d1a615950c07fa",
-  patchedFuncSha256: "6bbae1f64480fa9b22c3ca434157af8ea9447b7b486f2699f445bfb776b97331",
+  patchedFuncSha256: "d2d8b5a495ea01691c5f35a9f80afbffdee543dfeb5c8a9acb23a6c66a663009",
 });
 
 const ROUTER_MARKERS = Object.freeze([
