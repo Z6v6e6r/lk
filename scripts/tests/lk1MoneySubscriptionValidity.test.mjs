@@ -148,6 +148,32 @@ test("a plan instance sold before its own cutoff stays out of the mandate", () =
   assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
 });
 
+test("a NEW first-use instance is proven without an activation or an expiry yet", () => {
+  // The state Viva puts a freshly bought subscription in: `status: NEW`, no activation and
+  // no expiry, because it writes both with the very booking this mandate authorises. The
+  // diagnostics generation split the conjunction into named violations and dropped this
+  // relaxation, so the live first-use booking was refused on `status_new` /
+  // `activation_unparsed` / `expiry_unparsed` (and, on the production route, earlier still
+  // by the product-identity projection).
+  const run = runMoneyPhase(instance({ status: "NEW", activationDate: null, expirationDate: null }));
+  assert.equal(run.stops.length, 0, JSON.stringify(run.stops));
+  assert.equal(run.ctx.lk1MoneyOwnership.subscription.subscriptionId, subscriptionId);
+  assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
+});
+
+test("a held or frozen first-use instance is still refused by name", () => {
+  for (const [row, violation] of [
+    [instance({ status: "NEW", activationDate: null, expirationDate: null, holdUntil: "2099-01-01" }), "hold"],
+    [instance({ status: "NEW", activationDate: null, expirationDate: null, isFrozen: true }), "frozen"],
+  ]) {
+    const run = runMoneyPhase(row);
+    assert.equal(run.stops.length, 1, violation);
+    assert.equal(run.stops[0].details.code, "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN", violation);
+    assert.deepEqual(run.stops[0].details.observed.violations, [violation]);
+    assert.equal(run.ctx.lk1MoneyOwnership, undefined, violation);
+  }
+});
+
 test("every refused condition is named in the response", () => {
   const cases = [
     { name: "expired", row: instance({ expirationDate: "2026-09-01" }), expect: "expired" },
