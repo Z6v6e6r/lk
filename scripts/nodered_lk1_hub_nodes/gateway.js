@@ -294,18 +294,6 @@ if (ctx.step === "lk1_ingress_operation_find") {
         ? typeof intent.productId === "string" && Boolean(intent.productId.trim()) && intent.discountMinor === 1_000_000 - amount
         : binding && isObj(intent) && intent.productId === binding.productId && intent.productType === binding.productType
           && intent.baseMinor === binding.baseMinor && intent.discountMinor === binding.discountMinor;
-      // A confirmed booking with no payment evidence at all never reached the checkout: the
-      // pass that wrote it stopped before the intent existed. Resume the ordinary validation
-      // (profile, identity, exercise, quote, stored operation) instead of refusing forever;
-      // the confirmed operation is re-found and continues at `lk1Checkout`, which creates
-      // exactly the missing discounted checkout. Any state that already carries a checkout,
-      // an intent or a transaction keeps the strict path below, so nothing can be charged
-      // twice.
-      if (binding && amount > 0 && !isObj(quote.checkout) && !isObj(quote.transactionIntent)
-        && !quote.transactionAttemptedAt && !quote.transactionId) {
-        delete ctx.lk1IngressReplay;
-        return prepareUserGet(ctx, "profile", `/end-user/api/v1/${ctx.tenantKey}/profile`);
-      }
       if (!binding || (amount > 0 && !validIntent)) return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
     }
     if (amount > 0) {
