@@ -368,11 +368,20 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     const targetStart = finiteDate(eventStartsAt(exercise))?.getTime();
     const duration = eventDurationMinutes(exercise);
     const targetEnd = targetStart + duration * 60_000 - 1;
+    // A `NEW` instance without an activation date is the first-use state: Viva writes the
+    // activation and expiry with the very booking this mandate authorises, so those two
+    // fields cannot be required before that write. The composed production layer computes
+    // the identical verdict through its split-lifecycle helper; this reviewed source stays
+    // free of that host library, so it names the state directly.
+    const firstUse = String(subscription?.status || "").trim().toUpperCase() === "NEW"
+      && !String(subscription?.activationDate || "").trim();
     const now = Date.now();
     // The verdict is the same conjunction as before, split into named violations so the
     // refusal reports which condition failed. Every branch below maps 1:1 to the previous
     // operand order and short-circuiting: a missing activation/expiry or an unresolved
     // target window still refuses before any instant comparison is evaluated.
+    // Identity, hold/freeze and a resolvable event window stay unconditional; a first-use
+    // instance is released from the lifecycle checks Viva can only answer after the write.
     const violations = [];
     if (selected.length !== 1) violations.push("instance_count");
     if (!instanceIds.length) violations.push("instance_id_missing");
@@ -380,14 +389,16 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
       violations.push("instance_id_mismatch");
     }
     if (owners.some((id) => normalizeId(id) !== normalizeId(ctx.actorClientId))) violations.push("owner_mismatch");
-    if (subscription.status !== "ACTIVE") {
-      violations.push(`status_${String(subscription.status || "missing").toLowerCase().slice(0, 24)}`);
+    if (!firstUse) {
+      if (subscription.status !== "ACTIVE") {
+        violations.push(`status_${String(subscription.status || "missing").toLowerCase().slice(0, 24)}`);
+      }
+      if (activation === null) violations.push("activation_unparsed");
+      if (expiry === null) violations.push("expiry_unparsed");
     }
-    if (activation === null) violations.push("activation_unparsed");
-    if (expiry === null) violations.push("expiry_unparsed");
     if (!Number.isFinite(targetStart) || !duration || !Number.isFinite(targetEnd)) {
       violations.push("target_window_unresolved");
-    } else {
+    } else if (!firstUse) {
       if (activation !== null) {
         if (activation > now) violations.push("activation_in_future");
         if (activation > targetStart) violations.push("activation_after_target_start");

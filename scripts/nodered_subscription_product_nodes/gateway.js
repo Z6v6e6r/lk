@@ -22,9 +22,21 @@ const identitySelected = (body, ctx) => {
 const identityMoneyOwned = (ctx, rows) => {
   if (!identityBound(ctx) || rows.length !== 1) return [];
   const p = ctx.lk1ProductIdentity;
-  if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];
   const row = rows[0];
-  if (row.status !== 'ACTIVE' || !identitySelected({ content: [row], totalElements: 1 }, ctx)
+  // The mandate follows the resolver, never one hardcoded product: `lk1Quote` asks for the
+  // fresh readback proof of every instance the rules mark enforced, so this projection has
+  // to produce it for exactly that cohort. A plan product sold inside its `enforceFrom`
+  // window was refused here while the quote kept asking; a legacy or unrecognised product
+  // still produces no proof and stays outside the contour.
+  const projected = [{ ...row, productId: p.productId, name: p.name,
+    product: { ...(isObj(row.product) ? row.product : {}), id: p.productId, name: p.name } }];
+  const configured = lk1Config(projected);
+  if (!configured.matched || configured.legacy === true || configured.code) return [];
+  // A `NEW` instance without an activation date is the first-use state: Viva writes the
+  // activation and expiry with the booking this mandate authorises, so neither can be
+  // required before that write. Hold, freeze and the event window are judged below.
+  const firstUse = preflightAvailability.resolveSplitSubscriptionLifecycle(row, null) === 'NEW_FIRST_USE_CANDIDATE';
+  if ((!firstUse && row.status !== 'ACTIVE') || !identitySelected({ content: [row], totalElements: 1 }, ctx)
     || collectExactProductIds(row).some(id => id !== normalizeId(p.productId))) return [];
   const aliases = [row.purchaseDate, row.purchaseAt].filter(value => value !== undefined && value !== null && value !== '');
   const date = normalizePurchaseDateMoscow(p.purchaseDate);
