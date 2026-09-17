@@ -1,7 +1,15 @@
+@font-face {
+  font-family: "Group Schedule RF Dewi";
+  src: url("../subscription-storefront/assets/fonts/RFDewi-Bold.woff") format("woff");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 .group-schedule-page {
   width: min(100%, 760px);
   margin: 0 auto;
-  font-family: var(--ui-font);
+  font-family: "Inter Display", Inter, sans-serif;
 }
 
 .group-schedule-list {
@@ -15,6 +23,13 @@
 
 .group-schedule-page--detail .tournament-signup-header {
   padding-inline: 20px;
+}
+
+.group-schedule-page--detail .page-back {
+  font-family: "Group Schedule RF Dewi", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  font-style: normal;
 }
 
 .group-schedule-type-filter {
@@ -240,7 +255,7 @@
 }
 
 .group-schedule-date-badge strong {
-  font-family: "RF Dewi", "RF Dewi UltraBold", sans-serif;
+  font-family: "Group Schedule RF Dewi", sans-serif;
   font-size: 18px;
   font-weight: 700;
   line-height: 22px;
@@ -343,7 +358,7 @@
 }
 
 .group-schedule-trainer-person-copy strong {
-  font-family: "RF Dewi", "RF Dewi UltraBold", sans-serif;
+  font-family: "Group Schedule RF Dewi", sans-serif;
   font-size: 14px;
   font-weight: 700;
   line-height: 1;
@@ -359,7 +374,7 @@
   border-radius: 24px;
   background: #e2f6fe;
   color: #50b1f9;
-  font-family: "RF Dewi", "RF Dewi UltraBold", sans-serif;
+  font-family: "Group Schedule RF Dewi", sans-serif;
   font-size: 8px;
   font-weight: 700;
   line-height: 1;
@@ -396,7 +411,8 @@
   display: block;
   color: var(--purple);
   font-size: 12px;
-  font-weight: 800;
+  font-family: "Group Schedule RF Dewi", sans-serif;
+  font-weight: 700;
   line-height: 1.2;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -501,10 +517,11 @@
   border-radius: 16px;
   grid-template-columns: 1fr;
   gap: 12px;
-  padding: 16px;
+  padding: 16px 20px;
+  border: 0;
   overflow: visible;
   background: var(--white);
-  box-shadow: none;
+  box-shadow: inset 0 0 0 0.5px #ededed;
 }
 
 .group-schedule-registration--trainer {
@@ -567,14 +584,18 @@
   border-color: var(--border);
   box-shadow: none;
   color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
+  font-family: "Group Schedule RF Dewi", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
 }
 
 .group-schedule-registration .tournament-signup-payment-option strong {
   color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 700;
   text-align: right;
 }
 
@@ -617,6 +638,9 @@
   background: transparent;
   padding: 8px 12px 12px;
   font-size: 12px;
+  font-family: "Inter Display", Inter, sans-serif;
+  font-weight: 500;
+  font-style: normal;
   line-height: 1.4;
   color: #9ca3af;
   text-align: center;
@@ -708,7 +732,28 @@
   text-decoration: line-through;
 }
 
-.group-schedule-registration .tournament-signup-payment-subscription-link,
+.group-schedule-registration .tournament-signup-payment-subscription-link {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 41px;
+  padding: 12px 24px 12px 20px;
+  border: 0;
+  border-radius: 12px;
+  background: #8766eb;
+  box-shadow: none;
+  font-family: "Group Schedule RF Dewi", sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: #fafafa;
+  text-align: center;
+}
+
 .group-schedule-registration .section-cta {
   min-height: 48px;
   border-radius: 14px;
