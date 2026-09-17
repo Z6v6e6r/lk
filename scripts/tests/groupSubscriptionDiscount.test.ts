@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import ts from "typescript";
 import { isGroupSubscriptionDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionDiscountQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
-import { getGroupScheduleOwnedPacks } from "../../src/utils/groupScheduleOwnedPacks.ts";
+import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import type { TournamentVivaProduct } from "../../src/utils/tournamentSignupApi.ts";
 
 test("owned Energy buttons retain eligible visit-pack instances only", () => {
@@ -29,6 +29,27 @@ const quote: GroupSubscriptionDiscountQuote = { kind: "GROUP_TRAINING_SUBSCRIPTI
   subscriptionId: "subscription", subscriptionName: "Падел.Дружба.ХАБ", productId: "one-time", status: "AVAILABLE", discountPercent: 50,
   basePriceMinor: 550000, amountMinor: 275000, startsAt: new Date(now + 3600_000).toISOString(), durationMinutes: 60,
   evaluatedAt: now, expiresAt: now + 30_000 };
+test("a plan outside the money contour keeps its own booking option", () => {
+  const legacyRa: TournamentVivaProduct = { id: "legacy-ra", name: "РА", source: "client-subscription", type: "SUBSCRIPTION", cost: null, visitsTotal: null, raw: { clientSubscriptionId: "legacy-ra", expirationDate: "2026-09-19", visitsLeft: 22 } };
+  const managed = { ...legacyRa, id: "managed-academy", name: "Академия" };
+  const energy = { ...legacyRa, id: "energy-five", name: "Энергия 5 🎾", raw: { clientSubscriptionId: "energy-five", visitsLeft: 3 } };
+  const zeroDiscount: GroupSubscriptionDiscountQuote = { ...quote, subscriptionId: "legacy-ra", subscriptionName: "РА", discountPercent: 0, amountMinor: 550000 };
+  const managedDiscount: GroupSubscriptionDiscountQuote = { ...quote, subscriptionId: "managed-academy", subscriptionName: "Академия" };
+  const products = [legacyRa, managed, energy];
+  // The zero-percent quote is the preview's own "no managed benefit" answer: booking has to
+  // stay possible, and it must not be hidden by a discount that prices nothing.
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions(products, [zeroDiscount, managedDiscount]), [energy, legacyRa]);
+  // While the price check runs only visit packs are shown, so a managed plan is never
+  // offered as an unpriced second option even for one render.
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions(products, null), [energy]);
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions(products, [managedDiscount]), [energy, legacyRa]);
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions(products, []), [energy, legacyRa, managed]);
+  // A zero balance has nothing to book with, and an owned pack is never re-priced.
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions([{ ...legacyRa, raw: { clientSubscriptionId: "legacy-ra", visitsLeft: 0 } }], []), []);
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions([{ ...legacyRa, lk1MoneyDiscountCandidate: true }], []), []);
+  assert.deepEqual(getGroupScheduleOwnedSubscriptions([], []), []);
+  assert.equal(getGroupScheduleOwnedSubscriptions(products, [])[1], legacyRa, "selection must preserve the original owned product for booking");
+});
 test("one-time signup picks the best confirmed subscription price independent of plan order", () => {
   const product = { id: "one-time", cost: 550000, source: "one-time" };
   const free = { ...quote, subscriptionId: "free-subscription", discountPercent: 100, amountMinor: 0 };

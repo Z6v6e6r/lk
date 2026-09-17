@@ -177,3 +177,14 @@ test("detail signup has a single price list and the training subscription storef
   assert.doesNotMatch(groupSchedulePageSource, /group-schedule-trainer-hero/);
   assert.match(groupSchedulePageSource, /purchasableProducts\.length === 0/);
 });
+
+test("an owned plan outside the money contour keeps a booking option of its own", () => {
+  assert.match(groupSchedulePageSource, /getGroupScheduleOwnedSubscriptions/);
+  assert.doesNotMatch(groupSchedulePageSource, /ownedVisitPacks/);
+  assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout/);
+  assert.match(groupSchedulePageSource, /getGroupScheduleOwnedSubscriptions\(checkout\.clientSubscriptions, discountPending \? null : currentDiscountQuotes\)/);
+  assert.match(groupSchedulePageSource, /ownedSubscriptions\.map\(product => \(/);
+  assert.match(groupSchedulePageSource, /validityPrefix: "действует до"/);
+  assert.match(groupSchedulePageSource, /ownedSubscriptions\.length === 0 && purchasableProducts\.length === 0/);
+  assert.match(groupSchedulePageSource, /aria-label="Ваши абонементы"/);
+});
