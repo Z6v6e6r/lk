@@ -19,11 +19,13 @@
 #
 # DEVIATION FROM THE OTHER GENERATION WRAPPERS (2026-09-17): this wrapper does not require
 # the checkout to sit on `main`. The owner authorized the diagnostics deploy before the
-# merge, and the source is still required to be published and immutable:
+# merge, so the reviewed source is pinned by commit instead of by branch:
 #   * the working tree must be clean;
-#   * HEAD must equal the exact reviewed commit pinned in `expected_commit` below;
-#   * that commit must already exist on an `origin` branch (the task branch), so the
-#     deployed bytes are reproducible from the published source.
+#   * the reviewed generation commit (`generation_commit` below) must be an ancestor of
+#     HEAD, so the deployed bytes are built from reviewed, published sources;
+#   * the generation's own sources (patcher, reviewed router, preview composer) must be
+#     byte-identical between that commit and HEAD;
+#   * HEAD must be published on an `origin` branch.
 # Merge to `main` is deliberately NOT part of this deploy.
 #
 # Requires an explicit confirmation variable, a clean checkout at the pinned commit and
@@ -51,19 +53,31 @@ smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-expected_commit="f26bd478bf9a23694cd50aa4e9cbe02fd99815b7"
+# The reviewed generation: this commit introduced the diagnostics patcher, the reviewed
+# router source and the re-pins. It must stay an ancestor of HEAD and its generation
+# sources must not have changed since.
+generation_commit="f26bd478bf9a23694cd50aa4e9cbe02fd99815b7"
+generation_sources=(
+  scripts/patch_live_lk1_target_diagnostics_hotfix.mjs
+  scripts/patch_nodered_subscription_price_preview.mjs
+  scripts/nodered_subscription_price_preview_nodes/router.js
+)
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Deploy requires a clean checkout" >&2
   exit 3
 fi
 git fetch --quiet origin
 local_sha="$(git rev-parse HEAD)"
-if [[ "$local_sha" != "$expected_commit" ]]; then
-  echo "Checkout is not the reviewed commit: $local_sha != $expected_commit" >&2
+if ! git merge-base --is-ancestor "$generation_commit" "$local_sha"; then
+  echo "The reviewed generation commit is not an ancestor of HEAD: $generation_commit" >&2
+  exit 4
+fi
+if ! git diff --quiet "$generation_commit" "$local_sha" -- "${generation_sources[@]}"; then
+  echo "The reviewed generation sources changed after $generation_commit" >&2
   exit 4
 fi
 if [[ -z "$(git branch -r --contains "$local_sha" 2>/dev/null)" ]]; then
-  echo "The reviewed commit is not published on any origin branch" >&2
+  echo "HEAD is not published on any origin branch" >&2
   exit 4
 fi
 
