@@ -5,6 +5,12 @@ function isNodeRedHttpsCheckout(paymentUrl) {
 }
 const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const LK1_PRODUCT_POLICY_GLOBAL = "subscriptions_lk1_product_policy";
+// An ingress replay of a confirmed claim re-reads the provider before it replays the
+// stored checkout: the split payment-timeout cleanup cancels the booking without
+// releasing the claim, and a replay must not send the player to pay for a booking the
+// provider no longer holds.
+const LK1_CONFIRMED_BOOKING_RECHECK = "lk1_ingress_confirmed_booking_recheck";
+const LK1_CONFIRMED_ORPHAN_RELEASE = "lk1_confirmed_orphan_release";
 // The free-first-event cohort of the rollout contract: for these plan products the first
 // event of the subscription's local service day in the listed categories is carried by the
 // subscription itself (one visit is consumed and nothing is charged); every later event that
@@ -316,8 +322,96 @@ if (ctx.step === "lk1_ingress_operation_find") {
     ctx.lk1 = JSON.parse(JSON.stringify(quote));
     ctx.exerciseId = operation.exerciseId;
     ctx.confirmedBookingId = operation.bookingId;
-    return lk1Finish(ctx);
+    // A confirmed claim is replayed with its stored money evidence only after the
+    // provider proves it still holds the booking. The split payment-timeout cleanup
+    // cancels such a booking without touching the claim, so an unverified replay would
+    // send the player to pay for a booking that no longer exists.
+    ctx.lk1ConfirmedReplay = {
+      operationKey: toStr(operation._id), operationId: toStr(operation.operationId),
+      bookingId: toStr(operation.bookingId), fingerprint: toStr(quote.fingerprint),
+      updatedAt: operation.updatedAt ?? null,
+    };
+    return prepareAdminGet(ctx, LK1_CONFIRMED_BOOKING_RECHECK,
+      `/api/v1/exercises/${encodeURIComponent(operation.exerciseId)}/bookings?showCancelled=true&size=200`);
   }
+}
+
+const releaseConfirmedOrphan = (ctx, bound) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, LK1_CONFIRMED_ORPHAN_RELEASE, {
+    _id: bound.operationKey,
+    operationId: bound.operationId,
+    state: "CONFIRMED",
+    bookingId: bound.bookingId,
+    "lk1.fingerprint": bound.fingerprint,
+    updatedAt: bound.updatedAt,
+  }, {
+    $set: {
+      state: "RELEASED",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+      releaseReason: "CONFIRMED_BOOKING_GONE",
+      reconciliation: {
+        source: "hub_confirmed_replay_provider_readback",
+        decision: "SAFE_TO_RELEASE",
+        reconciledAt: nowIso,
+        observedBookingId: bound.bookingId,
+        observedUpdatedAt: bound.updatedAt,
+      },
+    },
+  });
+};
+
+if (ctx.step === LK1_CONFIRMED_BOOKING_RECHECK) {
+  const bound = isObj(ctx.lk1ConfirmedReplay) ? ctx.lk1ConfirmedReplay : null;
+  if (!bound || !bound.operationKey || !bound.operationId || !bound.bookingId || !bound.fingerprint) {
+    return lk1Stop(ctx, "LK1_CONFIRMED_RECHECK_CONTEXT_INVALID");
+  }
+  // "Cannot verify" always means "keep the claim and answer pending": only a complete
+  // provider page may release the seat.
+  if (!isHttpOk(msg.statusCode) || !hasCompleteBookingList(msg.payload)) {
+    return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_EVIDENCE_UNAVAILABLE");
+  }
+  const rows = extractItems(msg.payload).filter((row) => isObj(row));
+  const actor = normalizeId(ctx.actorClientId);
+  const subscription = normalizeId(ctx.clientSubscriptionId);
+  const boundId = normalizeId(bound.bookingId);
+  const matches = rows.filter((row) => [bookingId(row), toStr(row.id), toStr(row.uuid)]
+    .some((id) => normalizeId(id) === boundId));
+  if (matches.length > 1) return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_AMBIGUOUS");
+  if (matches.length === 1) {
+    // The provider still lists the row: a live one is the ordinary replay, a cancelled
+    // one is the orphaned claim this guard has to return.
+    if (!isInactiveBooking(matches[0])) {
+      delete ctx.lk1ConfirmedReplay;
+      return lk1Finish(ctx);
+    }
+    return releaseConfirmedOrphan(ctx, bound);
+  }
+  for (const row of rows) {
+    if (isInactiveBooking(row)) continue;
+    if (normalizeId(bookingClientId(row)) !== actor) continue;
+    const sub = normalizeId(bookingSubscriptionId(row));
+    if (!sub) return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_SUBSCRIPTION_UNRESOLVED");
+    if (sub === subscription) return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_STILL_ACTIVE");
+  }
+  // The complete page neither lists the bound booking nor holds a live booking of this
+  // actor and subscription: the provider deleted it (exactly what the payment-timeout
+  // cleanup does). The claim still holds the seat, so it is the one to return.
+  return releaseConfirmedOrphan(ctx, bound);
+}
+
+if (ctx.step === LK1_CONFIRMED_ORPHAN_RELEASE) {
+  const bound = isObj(ctx.lk1ConfirmedReplay) ? ctx.lk1ConfirmedReplay : {};
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return lk1Stop(ctx, "LK1_CONFIRMED_ORPHAN_RELEASE_CONFLICT");
+  }
+  delete ctx.lk1ConfirmedReplay;
+  return finishError(ctx, 409, "Подтверждённая ранее запись отменена, место освобождено — присоединитесь заново", {
+    code: "SUBSCRIPTION_BOOKING_CONFIRMED_ORPHAN_RELEASED",
+    operationId: toStr(bound.operationId),
+    releasedBookingId: toStr(bound.bookingId),
+  });
 }
 
 if (ctx.step === "lk1_rejoin_predecessor_find") {

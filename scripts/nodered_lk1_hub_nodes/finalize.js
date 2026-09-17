@@ -2,9 +2,28 @@ if (ctx?.lk1IngressReplay === true) {
   // An ingress retry ends here, including readonly CREATE. Never re-enter
   // preflight success or split's write-capable CREATE/checkout path.
   if (responseStatus === 200 && payload.state === "CONFIRMED" && ctx.lk1) {
+    const split = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
+    const checkout = ctx.lk1 && typeof ctx.lk1 === "object"
+      && ctx.lk1.checkout && typeof ctx.lk1.checkout === "object" ? ctx.lk1.checkout : null;
+    // The widget accepts a confirmed replay only with consistent money evidence that
+    // names the same intent. Without `mode`/`paymentRef`/`gameId` a paid replay is
+    // rejected as an unknown state, so the player cannot resume the stored checkout.
+    const toPayMinor = Number.isSafeInteger(payload.toPayMinor) ? payload.toPayMinor
+      : Number.isSafeInteger(checkout?.toPayMinor) ? checkout.toPayMinor : 0;
+    const action = split.action === "create" || split.action === "join" ? split.action
+      : ctx.managedAction === "CREATE_GAME" ? "create"
+        : ctx.managedAction === "JOIN_GAME" ? "join" : null;
     msg.payload = { ...payload,
-      settlementState: payload.toPayMinor > 0 ? "PAYMENT_REQUIRED" : "CONFIRMED",
-      selectedPaymentMode: payload.toPayMinor > 0 ? "one_time" : "subscription" };
+      toPayMinor,
+      toPay: toPayMinor / 100,
+      transactionId: payload.transactionId || checkout?.transactionId || null,
+      paymentUrl: payload.paymentUrl || checkout?.paymentUrl || null,
+      settlementState: toPayMinor > 0 ? "PAYMENT_REQUIRED" : "CONFIRMED",
+      selectedPaymentMode: toPayMinor > 0 ? "one_time" : "subscription",
+      mode: action,
+      paymentRef: split.paymentRef || payload.paymentRef || null,
+      gameId: split.gameId || payload.gameId || null,
+      exerciseId: payload.exerciseId || ctx.exerciseId || null };
   }
   return [null, msg];
 }
