@@ -498,6 +498,24 @@ test('Mongo/CLI rehearsal: fresh evidence, CAS, retry and cursor', { skip: !proc
       assert.equal(result.report.released.length, 0);
       assert.equal((await collection.findOne({})).state, 'PENDING_CONFIRMATION');
     });
+    await t.test('the confirmed class releases an orphaned claim only when enabled', async () => {
+      await collection.deleteMany({}); reads = 0;
+      await collection.insertOne(operation({ _id: 'confirmed-claim', state: 'CONFIRMED',
+        bookingId: 'fixture-booking-0001', updatedAt: '2026-09-11T05:00:00.000Z' }));
+      onRead = async () => ({ content: [booking({ isCancelled: true })], totalElements: 1, last: true });
+      const without = await cli([]);
+      // Without the flag the bounded scan does not even select a CONFIRMED claim.
+      assert.equal(without.report.scanned, 0);
+      assert.equal(without.report.releasable.length, 0);
+      assert.equal((await collection.findOne({ _id: 'confirmed-claim' })).state, 'CONFIRMED');
+      const backup = path.join(dir, 'confirmed');
+      const applied = await cli(['--include-confirmed', '--apply', '--backup-dir', backup]);
+      assert.equal(applied.report.released.length, 1);
+      assert.equal(applied.report.released[0].evidence, 'EXACT_CANCELLED_BOOKING');
+      const released = await collection.findOne({ _id: 'confirmed-claim' });
+      assert.equal(released.state, 'RELEASED');
+      assert.equal(released.releaseReason, RELEASE_REASON);
+    });
     await t.test('cursor progresses past skipped rows to legacy createdAt-only claim', async () => {
       await reset({ _id: 'a', state: 'PRECREATE_RESERVED' });
       const legacy = operation({ _id: 'b', createdAt: '2026-09-01T00:00:00Z', upstreamBookingId: 'fixture-booking-0001' });
