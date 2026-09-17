@@ -394,8 +394,7 @@
   height: 100%;
 }
 
-.group-schedule-trainer-description,
-.group-schedule-trainer-take-note {
+.group-schedule-trainer-description {
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--white);
@@ -453,19 +452,6 @@
   height: 16px;
   color: var(--purple);
   margin-top: 1px;
-}
-
-.group-schedule-trainer-take-note {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 16px;
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 1.25;
 }
 
 .group-schedule-detail-head {
