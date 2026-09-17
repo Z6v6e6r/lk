@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MongoClient } from "mongodb";
-import { buildPublishedEnrollmentPlan, resolveEnrollmentPlayers, inspectMembership, runPublishedTournamentEnrollment, restorePublishedEnrollment, ENROLLMENT_COLLECTION } from "../lib/publishedTournamentEnrollment.mjs";
+import { buildPublishedEnrollmentPlan, resolveEnrollmentPlayers, inspectMembership, runPublishedTournamentEnrollment, restorePublishedEnrollment, ENROLLMENT_COLLECTION, selectProviderBatch } from "../lib/publishedTournamentEnrollment.mjs";
 import { loadTimeForFriendsProviderEnrollment } from "../lib/timeForFriendsRuntimeRoster.mjs";
 
 const player = "11111111-1111-4111-8111-111111111111";
@@ -9,6 +9,14 @@ const other = "22222222-2222-4222-8222-222222222222";
 const tournamentId = "33333333-3333-4333-8333-333333333333";
 const nowIso = "2026-09-17T12:00:00.000Z";
 const scope = { fromIso: "2026-08-31T21:00:00.000Z", toIso: "2026-09-30T21:00:00.000Z", nowIso };
+test("bounded provider batches cover a large September inventory without starvation", () => {
+  const groups = Array.from({ length: 347 }, (_, i) => i), seen = new Set();
+  for (let tick = 0; tick < 18; tick++) {
+    const batch = selectProviderBatch(groups, 20, new Date(Date.parse(nowIso) + tick * 900000).toISOString());
+    assert.equal(batch.length, 20); batch.forEach((id) => seen.add(id));
+  }
+  assert.equal(seen.size, 347);
+});
 function fixtures() {
   const tournament = { _id: "t1", tournamentId, params: { finished: true, finishedAt: "2026-09-16T19:00:00.000Z" },
     participants: [{ id: player, name: "$$ROOT" }], standings: [{ id: player, ratingAfter: 2 }] };
@@ -64,7 +72,7 @@ test("raw provider cancellation status and waitlist markers survive normalizatio
 test("phone collisions and conflicting existing IDs fail closed", () => {
   const f = fixtures(); f.tournaments[0].standings.push({ id: other, phone: "79990000001" }); f.tournaments[0].standings[0].phone = "79990000001";
   assert.equal(buildPublishedEnrollmentPlan(f).operations.length, 0);
-  assert.equal(inspectMembership({ members: [{ id: other, phone: "89990000001" }] }, { playerId: player, phoneNorm: "79990000001" }), "MEMBER_IDENTITY_CONFLICT");
+  assert.equal(inspectMembership({ members: [{ id: other, phone: "9990000001" }] }, { playerId: player, phoneNorm: "79990000001" }), "MEMBER_IDENTITY_CONFLICT");
 });
 test("final standings do not bypass cancelled or waitlisted roster evidence", () => {
   for (const marker of [{ isCancelled: true }, { status: "WAITLIST" }, { isWaitlist: true }, { spot: 9 }]) {

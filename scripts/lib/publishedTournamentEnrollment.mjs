@@ -16,6 +16,10 @@ const hash = (v) => crypto.createHash("sha256").update(typeof v === "string" ? v
 const memberMatch = (r, p) => ids(r).includes(p.playerId) || Boolean(p.phoneNorm && phones(r).includes(p.phoneNorm));
 export const enrollmentId = (t, c, p) => `${ENROLLMENT_VERSION}:${hash(`${t}|${c}|${p}`)}`;
 export const trustedPublication = (p) => p?.kind === "TOURNAMENT" && p?.source === "ADMIN_PANEL" && p?.status === "PUBLISHED" && p?.archived !== true;
+export function selectProviderBatch(candidates, limit, nowIso) {
+  const offset = candidates.length ? (Math.floor(Date.parse(nowIso) / 900000) * limit) % candidates.length : 0;
+  return [...candidates.slice(offset), ...candidates.slice(0, offset)].slice(0, limit);
+}
 
 // Only explicit calendar dates; an edit timestamp never makes a tournament eligible.
 export function publicationDate(post, tournament) {
@@ -149,8 +153,7 @@ export async function runPublishedTournamentEnrollment({ client, db, fromIso, to
   let plan = buildPublishedEnrollmentPlan(inputs);
   const rosters = new Map(), providerErrors = [], candidates = plan.groups.filter((g) => g.providerId && !(isTournamentFinalized(g.tournament) && array(g.tournament?.standings).length));
   // Rotate bounded provider reads so one problematic old tournament cannot starve later ones.
-  const offset = candidates.length ? Math.floor(Date.parse(nowIso) / 900000) % candidates.length : 0;
-  const rotated = [...candidates.slice(offset), ...candidates.slice(0, offset)].slice(0, providerLimit);
+  const rotated = selectProviderBatch(candidates, providerLimit, nowIso);
   const providerStarted = Date.now(); let providerReads = 0;
   for (const group of rotated) {
     if (Date.now() - providerStarted >= providerBudgetMs) break;
