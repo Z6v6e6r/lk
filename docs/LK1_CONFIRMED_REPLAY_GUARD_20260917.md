@@ -33,12 +33,18 @@ Two independent defects:
    the booking still exists, so a valid-looking replay would have sent the player to pay for
    a cancelled booking.
 
+The gateway guard is deliberately scoped to split callers: the payment-timeout cleanup that
+orphans a booking is split-specific, and the group/tournament replay contract ("no provider
+read on a verified replay", pinned by `scripts/tests/groupEventPayment.test.mjs`) stays
+unchanged. The recheck uses only helpers the partial compositions carry, so a harness that
+composes the gateway without the booking-readback layer still runs it.
+
 ## Change
 
 | artifact | change |
 | --- | --- |
 | `scripts/lib/hungClaimRelease.mjs`, `scripts/reconcile_hung_subscription_claims.mjs` | opt-in `--include-confirmed` class: a `CONFIRMED` claim older than `--ttl-minutes` is released by the same provider-verified compare-and-swap only when a complete per-exercise readback shows the exact bound row cancelled (`EXACT_CANCELLED_BOOKING`) or no longer lists it while holding no live booking of this actor and subscription (`BOUND_BOOKING_ABSENT`). Without the flag the claim stays `STATE_TERMINAL`. |
-| `lk_subscription_booking_router_20260804.func` (gateway) | an ingress replay of a `CONFIRMED` claim now reads `GET /api/v1/exercises/{exerciseId}/bookings?showCancelled=true&size=200` first. A live bound row keeps the ordinary replay; a cancelled row, or a complete page without the bound row and without a live booking of this actor and subscription, releases the claim (`state: RELEASED`, `releaseReason: CONFIRMED_BOOKING_GONE`, CAS on `_id + operationId + state + bookingId + lk1.fingerprint + updatedAt`) and answers 409 `SUBSCRIPTION_BOOKING_CONFIRMED_ORPHAN_RELEASED`. Unverified evidence and a live neighbour answer 202 pending; a lost CAS answers `LK1_CONFIRMED_ORPHAN_RELEASE_CONFLICT`. |
+| `lk_subscription_booking_router_20260804.func` (gateway) | a **split** (`ctx.caller === "split"`, i.e. join/create of an open game) ingress replay of a `CONFIRMED` claim now reads `GET /api/v1/exercises/{exerciseId}/bookings?showCancelled=true&size=200` first. A live bound row keeps the ordinary replay; a cancelled row, or a complete page without the bound row and without a live booking of this actor and subscription, releases the claim (`state: RELEASED`, `releaseReason: CONFIRMED_BOOKING_GONE`, CAS on `_id + operationId + state + bookingId + lk1.fingerprint + updatedAt`) and answers 409 `SUBSCRIPTION_BOOKING_CONFIRMED_ORPHAN_RELEASED`. Unverified evidence and a live neighbour answer 202 pending; a lost CAS answers `LK1_CONFIRMED_ORPHAN_RELEASE_CONFLICT`. |
 | `lk_subscription_booking_finalize_20260804.func` (finalizer) | the ingress replay response now carries `toPayMinor`/`toPay`, `transactionId`, `paymentUrl`, `settlementState`, `selectedPaymentMode` **and** `mode`, `paymentRef`, `gameId`, `exerciseId`, so a live unpaid replay passes the widget contract and the player can resume the stored checkout. |
 
 Sources of truth: `scripts/nodered_lk1_hub_nodes/gateway.js` and
@@ -58,8 +64,8 @@ node scripts/patch_live_lk1_confirmed_replay_guard_hotfix.mjs \
 ```
 
 Report: 2 changed nodes, 0 additions, `topologyChanged: false`, `routesChanged: false`,
-candidate sha256 `96e5e6e3d52f0c0b427b71097f893f9d5fba752e12a22d10bb9a6f0fce7e8c56`;
-gateway func `2c8bfbe7…` → `55f748d0…`, finalizer func `72f575fc…` → `2b115412…`.
+candidate sha256 `2c542977e2418956e94d8e232ecc21575cb017430f2431c997a2119b62b59511`;
+gateway func `2c8bfbe7…` → `3920bb21…`, finalizer func `72f575fc…` → `2b115412…`.
 The patched bodies must still pass the exact-graph contract before any install; the install
 itself is a separate owner-approved operation (no deployment, import or restart here).
 
