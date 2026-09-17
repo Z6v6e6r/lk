@@ -125,7 +125,7 @@ test("the deploy wrapper keeps the confirmation gate, the pinned commit and roll
   assert.ok(wrapper.includes('git merge-base --is-ancestor "$generation_commit" "$local_sha"'));
   assert.ok(wrapper.includes('git diff --quiet "$generation_commit" "$local_sha" -- "${generation_sources[@]}"'));
   assert.ok(wrapper.includes('scripts/patch_live_lk1_target_diagnostics_hotfix.mjs\n'));
-  assert.ok(wrapper.includes('git branch -r --contains'));
+  assert.ok(wrapper.includes('git ls-remote --heads origin'));
   assert.ok(wrapper.includes("node '$remote_helper' rollback"));
   assert.ok(wrapper.includes("Installed flow readback does not match the candidate"));
 });

@@ -76,7 +76,9 @@ if ! git diff --quiet "$generation_commit" "$local_sha" -- "${generation_sources
   echo "The reviewed generation sources changed after $generation_commit" >&2
   exit 4
 fi
-if [[ -z "$(git branch -r --contains "$local_sha" 2>/dev/null)" ]]; then
+# The repository fetches only `main` into remote-tracking refs, so ask the remote
+# directly which branch (if any) carries the exact reviewed commit.
+if ! git ls-remote --heads origin | awk -v sha="$local_sha" '$1 == sha { found = 1 } END { exit found ? 0 : 1 }'; then
   echo "HEAD is not published on any origin branch" >&2
   exit 4
 fi
