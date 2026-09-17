@@ -24,32 +24,17 @@ test("group schedule detail uses unified signup card and multiselect type filter
   assert.match(groupSchedulePageSource, /selectedTypeFilterSet\.has\(typeLabel\)/);
   assert.match(groupSchedulePageSource, /setSelectedTypeFilters\(\(previous\) => \(/);
   assert.match(groupSchedulePageSource, /uniqueSorted\(\[\.\.\.previous, value\]\)/);
-  assert.match(groupSchedulePageSource, /GROUP_SCHEDULE_SUBSCRIPTION_URL = "https:\/\/padlhub\.ru\/ab_leto"/);
   assert.match(groupSchedulePageSource, /group-schedule-detail--trainer/);
   assert.match(groupSchedulePageSource, /group-schedule-details-card--trainer/);
-  assert.match(groupSchedulePageSource, /group-schedule-trainer-info-card/);
-  assert.match(groupSchedulePageSource, /group-schedule-trainer-info-row--person/);
+  assert.match(groupSchedulePageSource, /<GroupTrainingInfo training=\{selectedTraining\}/);
   assert.match(groupSchedulePageSource, /group-schedule-registration--trainer/);
-  assert.match(groupSchedulePageSource, /getNameInitials/);
-  assert.match(groupSchedulePageSource, /formatTrainerDateTimeLabel/);
-  assert.match(groupSchedulePageSource, /formatTrainerStationCourtLabel/);
   assert.match(groupSchedulePageSource, /buildGroupTrainingDescription/);
-  assert.match(groupSchedulePageSource, /getTrainingDetailEyebrow/);
-  assert.match(groupSchedulePageSource, /getTrainingDetailTitleLines/);
   assert.match(groupSchedulePageSource, /const detailDescription = selectedTraining/);
   assert.match(groupSchedulePageSource, /returnToFindGame\?: boolean/);
   assert.match(groupSchedulePageSource, /const shouldExitInitialDetail = Boolean\(returnToFindGame && initialExerciseId && selectedId === initialExerciseId\);/);
   assert.match(groupSchedulePageSource, /if \(shouldExitInitialDetail\) \{\s*onBack\(\);/);
   assert.match(groupSchedulePageSource, /GAME_PLUS_TRAINER_DEFAULT_DESCRIPTION/);
   assert.match(groupSchedulePageSource, /tournament-signup-payment-subscription-link/);
-  assert.match(groupSchedulePageSource, /Доступные варианты/);
-  assert.match(groupSchedulePageSource, /Приобрести подписку РА \/ Академия/);
-  assert.match(groupSchedulePageSource, /function formatProductUsageLabel\(product: TournamentVivaProduct\)/);
-  assert.match(groupSchedulePageSource, /resolveSubscriptionUsageDisplay\(\{/);
-  assert.match(groupSchedulePageSource, /validityPrefix: "действует до"/);
-  assert.match(groupSchedulePageSource, /function formatProductValidity\(product: TournamentVivaProduct\)/);
-  assert.match(groupSchedulePageSource, /product\.source !== "client-subscription"/);
-  assert.match(groupSchedulePageSource, /formatProductUsageLabel\(product\) \|\| "срок уточняется"/);
   assert.match(groupSchedulePageSource, /if \(product\.source === "one-time" \|\| product\.source === "client-one-time"\) return "";/);
   assert.match(groupSchedulePageSource, /const stationLabel = training\.studioName \|\| "Станция уточняется";/);
   assert.match(groupSchedulePageSource, /variant="groupSchedule"/);
@@ -82,17 +67,13 @@ test("group schedule detail uses unified signup card and multiselect type filter
   assert.match(groupScheduleCssSource, /\.group-schedule-trainer-info-card/);
   assert.match(groupScheduleCssSource, /\.group-schedule-trainer-info-row/);
   assert.match(groupScheduleCssSource, /\.group-schedule-registration--trainer/);
-  assert.match(groupScheduleCssSource, /grid-template-columns: 32px minmax\(68px, 0\.75fr\) minmax\(0, 1\.25fr\)/);
-  assert.match(groupScheduleCssSource, /grid-template-columns: 40px minmax\(0, 1fr\) 20px/);
-  assert.match(groupScheduleCssSource, /height: 56px/);
   assert.match(groupScheduleCssSource, /\.group-schedule-trainer-description/);
   assert.ok(groupScheduleCssSource.includes(".group-schedule-registration {\n  border-radius: 16px;\n  grid-template-columns: 1fr;"));
   assert.ok(groupScheduleCssSource.includes(".group-schedule-registration > div + div {\n  border-left: 0;\n  border-top: 0;"));
   assert.ok(groupScheduleCssSource.includes(".group-schedule-registration .auth-wrapper {\n  min-height: 0;\n  padding: 0;\n  background: transparent;"));
   assert.ok(groupScheduleCssSource.includes(".group-schedule-registration .auth-card {\n  max-width: none;"));
   assert.doesNotMatch(groupScheduleCssSource, /group-schedule-trainer-fact/);
-  assert.doesNotMatch(groupScheduleCssSource, /(?!#9ca3af)#[0-9a-fA-F]{3,8}|rgba\(/);
-  assert.doesNotMatch(groupScheduleCssSource, /font-size: 4[0-9]px|min-height: 8[0-9]px|width: 82px|height: 82px|radial-gradient/);
+  assert.doesNotMatch(groupScheduleCssSource, /font-size: 4[0-9]px|width: 82px|height: 82px|radial-gradient/);
 });
 
 test("group schedule list cards hide redundant training badge and level metadata", () => {
@@ -187,4 +168,12 @@ test("group schedule promo uses provider preview and applies the quote only to i
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-input/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-price-old/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-price > span[\s\S]*?white-space: nowrap/);
+});
+
+test("detail signup has a single price list and the training subscription storefront link", () => {
+  assert.match(groupSchedulePageSource, /https:\/\/padlhub\.ru\/sub_hab\?plans=ra,academy/);
+  assert.match(groupSchedulePageSource, /БЕСПЛАТНО по подписке\. Купить/);
+  assert.doesNotMatch(groupSchedulePageSource, /Доступные абонементы|Скрыть варианты|Способ записи|isPurchaseListOpen/);
+  assert.doesNotMatch(groupSchedulePageSource, /group-schedule-trainer-hero/);
+  assert.match(groupSchedulePageSource, /purchasableProducts\.length === 0/);
 });

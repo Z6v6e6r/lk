@@ -1,13 +1,8 @@
-import { AvatarImage } from "../UI/AvatarImage";
+import { GroupTrainingInfo } from "./GroupTrainingInfo";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
 import {
-  ChevronRightIcon,
-  GameDateIcon,
-  GameLevelIcon,
-  GameLocationIcon,
-  PeopleIcon,
   TennisRacketIcon,
 } from "../cabinet/community-feed/CommunityIcons";
 import { CommunityTournamentCard } from "../cabinet/community-feed/CommunityTournamentCard";
@@ -55,10 +50,6 @@ import {
 import type {
   BookingCancellationAction,
 } from "../../utils/bookingCancellation";
-import {
-  pickSubscriptionValidityDate,
-  resolveSubscriptionUsageDisplay,
-} from "../../utils/subscriptionValidity";
 import { isGroupSubscriptionDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionDiscountQuote } from "../../utils/groupSubscriptionDiscount";
 import "./GroupSchedulePage.css";
 
@@ -72,7 +63,7 @@ interface GroupSchedulePageProps {
 
 const ALL_FILTER_VALUE = "__all__";
 const TYPE_FILTER_ALL_LABEL = "Все типы";
-const GROUP_SCHEDULE_SUBSCRIPTION_URL = "https://padlhub.ru/ab_leto";
+const GROUP_SCHEDULE_SUBSCRIPTION_URL = "https://padlhub.ru/sub_hab?plans=ra,academy";
 const GROUP_SCHEDULE_PROMO_TRIGGER_TEXT = "у меня есть промокод";
 const GAME_PLUS_TRAINER_DEFAULT_DESCRIPTION = {
   heading: "Игровая тренировка с тренером",
@@ -117,51 +108,6 @@ function formatClock(value: string | null | undefined) {
   return raw.match(/\d{2}:\d{2}/)?.[0] || "";
 }
 
-function formatDateLabel(value: string | null | undefined) {
-  const date = normalizeGroupScheduleDate(value);
-  if (!date) return "Дата уточняется";
-  const parsed = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return "Дата уточняется";
-  return parsed.toLocaleDateString("ru-RU", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
-}
-
-function formatTimeRange(value: string | null | undefined) {
-  return String(value || "").replace(/\s*-\s*/, "–");
-}
-
-function formatTrainerDateTimeLabel(training: GroupTrainingSummary) {
-  const dateLabel = formatDateLabel(training.date);
-  const timeLabel = formatTimeRange(training.timeLabel);
-  return timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel;
-}
-
-function formatTrainerStationCourtLabel(training: GroupTrainingSummary) {
-  const stationLabel = String(training.studioName || "").trim() || "Уточняется";
-  const courtLabel = String(training.roomName || "").trim();
-  return courtLabel ? `${stationLabel} · ${courtLabel}` : stationLabel;
-}
-
-function formatPlaces(count: number) {
-  const safeCount = Math.max(0, Math.floor(count));
-  const lastTwo = safeCount % 100;
-  const last = safeCount % 10;
-  if (lastTwo >= 11 && lastTwo <= 14) return `${safeCount} мест`;
-  if (last === 1) return `${safeCount} место`;
-  if (last >= 2 && last <= 4) return `${safeCount} места`;
-  return `${safeCount} мест`;
-}
-
-function formatAvailabilityLabel(training: GroupTrainingSummary) {
-  if (training.status === "FULL") return "Мест нет";
-  if (training.status === "CANCELLED") return "Отменено";
-  if (training.spotsLeft == null) return "Запись открыта";
-  return `Осталось ${formatPlaces(training.spotsLeft)}`;
-}
-
 function uniqueSorted(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
     .sort((left, right) => left.localeCompare(right, "ru-RU"));
@@ -182,19 +128,6 @@ function formatMoneyMinor(value: number | null) {
   return `${(value / 100).toLocaleString("ru-RU")} ₽`;
 }
 
-function getProductExpirationDate(product: TournamentVivaProduct) {
-  return pickSubscriptionValidityDate(product.raw);
-}
-
-function formatProductUsageLabel(product: TournamentVivaProduct) {
-  return resolveSubscriptionUsageDisplay({
-    subscriptionName: product.name,
-    validityDate: getProductExpirationDate(product),
-    raw: product.raw,
-    validityPrefix: "действует до",
-  })?.label ?? "";
-}
-
 function formatProductPrice(product: TournamentVivaProduct) {
   return product.priceLabel || formatMoneyMinor(product.cost);
 }
@@ -203,11 +136,6 @@ function formatProductVisits(product: TournamentVivaProduct) {
   if (product.source === "one-time" || product.source === "client-one-time") return "";
   if (!product.visitsTotal) return "";
   return ` / ${product.visitsTotal} посещ.`;
-}
-
-function formatProductValidity(product: TournamentVivaProduct) {
-  if (product.source !== "client-subscription") return "";
-  return formatProductUsageLabel(product) || "срок уточняется";
 }
 
 function getErrorMessage(error: { message?: string | null } | null | undefined, fallback: string) {
@@ -271,18 +199,6 @@ function stripDescriptionBullet(value: string) {
   return value.replace(/^\s*[-—•]\s*/, "").trim();
 }
 
-function getNameInitials(value: string | null | undefined) {
-  const parts = String(value || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (parts.length === 0) return "PH";
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || "")
-    .join("");
-}
-
 function buildGamePlusTrainerDescription(training: GroupTrainingSummary) {
   const lines = String(training.directionDescription || "")
     .split(/\r?\n/)
@@ -316,19 +232,6 @@ function buildGroupTrainingDescription(training: GroupTrainingSummary) {
     lead: description,
     bullets: [] as string[],
   };
-}
-
-function getTrainingDetailEyebrow(training: GroupTrainingSummary, isGamePlusTrainer: boolean) {
-  if (isGamePlusTrainer) return "ИГРА+ТРЕНЕР";
-  return (training.typeName || "Групповая тренировка").toLocaleUpperCase("ru-RU");
-}
-
-function getTrainingDetailTitleLines(training: GroupTrainingSummary, isGamePlusTrainer: boolean) {
-  if (!isGamePlusTrainer) return [training.title];
-  return [
-    "Игра+Тренер.",
-    training.levelLabel ? `Уровень ${training.levelLabel}` : training.title,
-  ];
 }
 
 function getTrainingCtaLabel(training: GroupTrainingSummary) {
@@ -447,7 +350,6 @@ export default function GroupSchedulePage({
   const [promoError, setPromoError] = useState<string | null>(null);
   const [appliedPromo, setAppliedPromo] = useState<AppliedGroupSchedulePromo | null>(null);
   const promoRequestIdRef = useRef(0);
-  const [isPurchaseListOpen, setPurchaseListOpen] = useState(true);
   const [isGroupSchedulePromoExpanded, setGroupSchedulePromoExpanded] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelBookingId, setCancelBookingId] = useState<string | null>(null);
@@ -732,9 +634,7 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const detailEyebrow = selectedTraining ? getTrainingDetailEyebrow(selectedTraining, isGamePlusTrainerDetail) : "";
-  const detailTitleLines = selectedTraining ? getTrainingDetailTitleLines(selectedTraining, isGamePlusTrainerDetail) : [];
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && checkout.subscriptions.length > 0);
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout);
   const shouldShowGroupSchedulePromoSection = Boolean(checkout && checkout.oneTimes.some(isGroupSchedulePromoProduct));
   const shouldExitInitialDetail = Boolean(returnToFindGame && initialExerciseId && selectedId === initialExerciseId);
 
@@ -963,7 +863,7 @@ export default function GroupSchedulePage({
   ]);
 
   return (
-    <div className="group-schedule-page tournament-signup-page">
+    <div className={`group-schedule-page tournament-signup-page${selectedId ? " group-schedule-page--detail" : ""}`}>
       <header className="tournament-signup-header">
         <button
           className="page-back"
@@ -972,9 +872,11 @@ export default function GroupSchedulePage({
         >
           ← Назад
         </button>
-        <div className="tournament-signup-header-title">
-          <div className="page-title">Групповые тренировки</div>
-        </div>
+        {!selectedId && (
+          <div className="tournament-signup-header-title">
+            <div className="page-title">Групповые тренировки</div>
+          </div>
+        )}
       </header>
 
       {!selectedId && (
@@ -1139,55 +1041,7 @@ export default function GroupSchedulePage({
           {selectedTraining && (
             <>
               <div className="details-card group-schedule-details-card group-schedule-details-card--trainer">
-                <div className="group-schedule-trainer-hero">
-                  <div className="group-schedule-trainer-eyebrow">{detailEyebrow}</div>
-                  <div className="group-schedule-trainer-title-row">
-                    <h1 className="group-schedule-trainer-title">
-                      {detailTitleLines.map((line) => (
-                        <span key={line}>{line}</span>
-                      ))}
-                    </h1>
-                    {selectedTraining.levelLabel && (
-                      <span className="group-schedule-level-pill">{selectedTraining.levelLabel}</span>
-                    )}
-                  </div>
-                  <div className="group-schedule-trainer-status-pill">
-                    <PeopleIcon className="group-schedule-trainer-status-icon" />
-                    <span>{formatAvailabilityLabel(selectedTraining)}</span>
-                  </div>
-                </div>
-
-                <div className="group-schedule-trainer-info-card" aria-label="Основная информация">
-                  <div className="group-schedule-trainer-info-row">
-                    <span className="group-schedule-trainer-info-icon"><GameDateIcon /></span>
-                    <span className="group-schedule-trainer-info-label">Дата</span>
-                    <strong className="group-schedule-trainer-info-value">{formatTrainerDateTimeLabel(selectedTraining)}</strong>
-                  </div>
-                  <div className="group-schedule-trainer-info-row">
-                    <span className="group-schedule-trainer-info-icon"><GameLocationIcon /></span>
-                    <span className="group-schedule-trainer-info-label">Станция</span>
-                    <strong className="group-schedule-trainer-info-value">{formatTrainerStationCourtLabel(selectedTraining)}</strong>
-                  </div>
-                  <div className="group-schedule-trainer-info-row group-schedule-trainer-info-row--person">
-                    <span className="group-schedule-trainer-avatar" aria-hidden="true">
-                      {selectedTraining.trainerAvatarUrl ? (
-                        <AvatarImage name={selectedTraining.trainerName} src={selectedTraining.trainerAvatarUrl} alt="" />
-                      ) : (
-                        <span>{getNameInitials(selectedTraining.trainerName)}</span>
-                      )}
-                    </span>
-                    <span className="group-schedule-trainer-person-copy">
-                      <span className="group-schedule-trainer-info-label">Тренер</span>
-                      <strong className="group-schedule-trainer-info-value group-schedule-trainer-person-name">{selectedTraining.trainerName || "Уточняется"}</strong>
-                    </span>
-                    <ChevronRightIcon className="group-schedule-trainer-row-arrow" />
-                  </div>
-                  <div className="group-schedule-trainer-info-row">
-                    <span className="group-schedule-trainer-info-icon"><GameLevelIcon /></span>
-                    <span className="group-schedule-trainer-info-label">Уровень</span>
-                    <strong className="group-schedule-trainer-info-value">{selectedTraining.levelLabel || "Уточняется"}</strong>
-                  </div>
-                </div>
+                <GroupTrainingInfo training={selectedTraining} />
 
                 {detailDescription && (
                   <div className="group-schedule-trainer-description">
@@ -1254,7 +1108,7 @@ export default function GroupSchedulePage({
                     <div className="tournament-signup-auth-head">
                       <strong>
                         <span className="tournament-signup-auth-title">
-                          {isGamePlusTrainerDetail ? "Доступные варианты" : "Способ записи"}
+                          Записаться
                         </span>
                       </strong>
                     </div>
@@ -1319,102 +1173,60 @@ export default function GroupSchedulePage({
                       && !isRegistered
                       && checkout && (
                       <div className="tournament-signup-payment-options">
-                        {checkout.clientSubscriptions.length > 0 && (
-                          <div className="tournament-signup-payment-group">
-                            {!isGamePlusTrainerDetail && (
-                              <div className="tournament-signup-payment-title">Доступные абонементы</div>
-                            )}
-                            {checkout.clientSubscriptions.map((product) => (
-                              <button
-                                key={`${product.source}-${product.id}`}
-                                className="tournament-signup-payment-option tournament-signup-payment-option-subscription"
-                                type="button"
-                                onClick={() => void completeRegistration(selectedTraining, checkout, product)}
-                                disabled={actionLoading}
-                              >
-                                <span>
-                                  {product.name}
-                                  {product.lk1MoneyDiscountCandidate === true && (
-                                    <>
-                                      <br />
-                                      <span>
-                                        Потребуется оплата со скидкой.
-                                      </span>
-                                    </>
-                                  )}
-                                </span>
-                                <div className="tournament-signup-payment-option-meta">
-                                  <strong>{formatProductValidity(product)}</strong>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
                         {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
                         {discountError && <div className="tournament-signup-muted" role="status">{discountError}</div>}
                         {purchasableProducts.length > 0 && (
                           <div className="tournament-signup-payment-group">
-                            <button
-                              type="button"
-                              className="tournament-signup-payment-purchase-toggle"
-                              onClick={() => setPurchaseListOpen((current) => !current)}
-                              disabled={actionLoading}
-                            >
-                              {isPurchaseListOpen ? "Скрыть варианты" : "Записаться разово или по абонементу"}
-                            </button>
-                            {isPurchaseListOpen && (
-                              <div className="tournament-signup-payment-purchase-list">
-                                {purchasableProducts.map((product) => {
-                                  const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
-                                  const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product) : null;
-                                  const bookingProduct: TournamentVivaProduct = discount ? {
-                                    id: discount.subscriptionId, name: discount.subscriptionName, source: "client-subscription", type: "SUBSCRIPTION",
-                                    cost: discount.amountMinor, visitsTotal: null, raw: { clientSubscriptionId: discount.subscriptionId },
-                                    lk1MoneyDiscountCandidate: true, groupDiscountQuote: discount,
-                                  } : product;
-                                  return (
-                                    <button
-                                      key={`${product.source}-${product.id}`}
-                                      className="tournament-signup-payment-option"
-                                      type="button"
-                                      onClick={() => void completeRegistration(
-                                        selectedTraining,
-                                        checkout,
-                                        bookingProduct,
-                                        promoPreview ? appliedPromo?.code : null,
+                            <div className="tournament-signup-payment-purchase-list">
+                              {purchasableProducts.map((product) => {
+                                const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
+                                const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product) : null;
+                                const bookingProduct: TournamentVivaProduct = discount ? {
+                                  id: discount.subscriptionId, name: discount.subscriptionName, source: "client-subscription", type: "SUBSCRIPTION",
+                                  cost: discount.amountMinor, visitsTotal: null, raw: { clientSubscriptionId: discount.subscriptionId },
+                                  lk1MoneyDiscountCandidate: true, groupDiscountQuote: discount,
+                                } : product;
+                                return (
+                                  <button
+                                    key={`${product.source}-${product.id}`}
+                                    className="tournament-signup-payment-option"
+                                    type="button"
+                                    onClick={() => void completeRegistration(
+                                      selectedTraining,
+                                      checkout,
+                                      bookingProduct,
+                                      promoPreview ? appliedPromo?.code : null,
+                                    )}
+                                    disabled={actionLoading || promoLoading || discountPending}
+                                  >
+                                    <span className="group-schedule-discount-label">
+                                      <span>{product.name}</span>
+                                      {discount && <span className="group-schedule-discount-description">Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}»</span>}
+                                    </span>
+                                    <strong className={discount ? "group-schedule-promo-price group-schedule-discount-price" : promoPreview ? "group-schedule-promo-price" : undefined}>
+                                      {discount ? (
+                                        <>
+                                          <s className="group-schedule-promo-price-old">{formatMoneyMinor(discount.basePriceMinor)}</s>
+                                          <span>{formatMoneyMinor(discount.amountMinor)}</span>
+                                        </>
+                                      ) : promoPreview ? (
+                                        <>
+                                          <span className="group-schedule-promo-price-old">
+                                            {formatMoneyMinor(promoPreview.sumMinor)}
+                                          </span>
+                                          <span>{formatMoneyMinor(promoPreview.toPayMinor)}</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          {formatProductPrice(product)}
+                                          {formatProductVisits(product)}
+                                        </>
                                       )}
-                                      disabled={actionLoading || promoLoading || discountPending}
-                                    >
-                                      <span className="group-schedule-discount-label">
-                                        <span>{product.name}</span>
-                                        {discount && <span className="group-schedule-discount-description">Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}»</span>}
-                                      </span>
-                                      <strong className={discount ? "group-schedule-promo-price group-schedule-discount-price" : promoPreview ? "group-schedule-promo-price" : undefined}>
-                                        {discount ? (
-                                          <>
-                                            <s className="group-schedule-promo-price-old">{formatMoneyMinor(discount.basePriceMinor)}</s>
-                                            <span>{formatMoneyMinor(discount.amountMinor)}</span>
-                                          </>
-                                        ) : promoPreview ? (
-                                          <>
-                                            <span className="group-schedule-promo-price-old">
-                                              {formatMoneyMinor(promoPreview.sumMinor)}
-                                            </span>
-                                            <span>{formatMoneyMinor(promoPreview.toPayMinor)}</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            {formatProductPrice(product)}
-                                            {formatProductVisits(product)}
-                                          </>
-                                        )}
-                                      </strong>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
+                                    </strong>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
 
@@ -1430,7 +1242,7 @@ export default function GroupSchedulePage({
                               }}
                               disabled={actionLoading}
                             >
-                              Приобрести подписку РА / Академия
+                              БЕСПЛАТНО по подписке. Купить
                             </button>
                           </div>
                         )}
@@ -1492,7 +1304,7 @@ export default function GroupSchedulePage({
                           </>
                         )}
 
-                        {checkout.clientSubscriptions.length === 0 && purchasableProducts.length === 0 && (
+                        {purchasableProducts.length === 0 && (
                           <div className="tournament-signup-muted">Нет доступных способов записи.</div>
                         )}
                       </div>

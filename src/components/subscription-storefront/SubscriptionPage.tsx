@@ -6,7 +6,7 @@ import { SubscriptionStorefront } from './SubscriptionStorefront';
 import { AuthForm } from '../auth/AuthForm';
 import { summerPlanPresentation, friendshipVariantBenefits } from './presentation';
 import {
-  billingFromStatus, canContinue, energy5BillingOptions, requiresAnnualTermsConsent, storefrontPlanKeys,
+  billingFromStatus, canContinue, energy5BillingOptions, requiresAnnualTermsConsent, storefrontPlanKeysForSearch,
   friendshipBillingOptions, scopedStorefrontStatuses,
   type StorefrontStatus,
 } from './catalog';
@@ -187,7 +187,8 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
     setFailure(null);
   }, []);
 
-  const plans = storefrontPlanKeys.flatMap(key => {
+  const planKeys = storefrontPlanKeysForSearch(typeof window === 'undefined' ? '' : window.location.search);
+  const plans = planKeys.flatMap(key => {
     const status = statuses?.find(item => item.counterKey === key);
     if (!status && key !== 'friendship') return [];
     const billingOptions = key === 'friendship'

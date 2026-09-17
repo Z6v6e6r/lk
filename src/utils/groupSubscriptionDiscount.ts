@@ -58,6 +58,10 @@ export function matchGroupSubscriptionDiscount(
   product: { id: string; cost: number | null; source: string },
 ): GroupSubscriptionDiscountQuote | null {
   if (product.source !== "one-time") return null;
-  return quotes.find(q => q.kind === "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1"
-    && q.status === "AVAILABLE" && q.productId === product.id && q.basePriceMinor === product.cost) ?? null;
+  return quotes.reduce<GroupSubscriptionDiscountQuote | null>((best, quote) => {
+    if (quote.kind !== "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1"
+      || quote.status !== "AVAILABLE" || quote.productId !== product.id || quote.basePriceMinor !== product.cost
+      || quote.amountMinor == null) return best;
+    return !best || quote.amountMinor < best.amountMinor! ? quote : best;
+  }, null);
 }

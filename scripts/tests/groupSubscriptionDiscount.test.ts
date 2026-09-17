@@ -8,6 +8,16 @@ const quote: GroupSubscriptionDiscountQuote = { kind: "GROUP_TRAINING_SUBSCRIPTI
   subscriptionId: "subscription", subscriptionName: "Падел.Дружба.ХАБ", productId: "one-time", status: "AVAILABLE", discountPercent: 50,
   basePriceMinor: 550000, amountMinor: 275000, startsAt: new Date(now + 3600_000).toISOString(), durationMinutes: 60,
   evaluatedAt: now, expiresAt: now + 30_000 };
+test("one-time signup picks the best confirmed subscription price independent of plan order", () => {
+  const product = { id: "one-time", cost: 550000, source: "one-time" };
+  const free = { ...quote, subscriptionId: "free-subscription", discountPercent: 100, amountMinor: 0 };
+  assert.equal(matchGroupSubscriptionDiscount([quote, free], product), free);
+  assert.equal(matchGroupSubscriptionDiscount([free, quote], product), free);
+  assert.equal(matchGroupSubscriptionDiscount([quote], product)?.amountMinor, 275000);
+  assert.equal(matchGroupSubscriptionDiscount([], product), null);
+  assert.equal(matchGroupSubscriptionDiscount([{ ...free, status: "LIMIT_USED" }, quote], product), quote);
+  assert.equal(matchGroupSubscriptionDiscount([{ ...free, amountMinor: null }], product), null);
+});
 test("discount requires exact actor, event, tariff, supported percentage and fresh quote", () => {
   assert.ok(isGroupSubscriptionDiscountQuote(quote, "group", "actor", now));
   for (const delta of [{ actorClientId: "other" }, { exerciseId: "other" }, { kind: "GAME" }, { amountMinor: 1 },

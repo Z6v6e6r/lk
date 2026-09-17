@@ -1,3 +1,4 @@
+import { storefrontPlanKeysForSearch } from '../../src/components/subscription-storefront/catalog.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -416,4 +417,10 @@ test('provider rejections keep their own reason and status code', async () => {
     // The adapter lives in another VM realm, so assert on the message, not on `instanceof`.
     (error: unknown) => /I'm a teapot/.test(String((error as { message?: string })?.message)) && /418/.test(String((error as { message?: string })?.message)),
   );
+});
+
+test('training link shows RA and Academy while ordinary storefront keeps its catalogue', () => {
+  assert.deepEqual(storefrontPlanKeysForSearch('?plans=ra,academy'), ['ra', 'academy']);
+  assert.deepEqual(storefrontPlanKeysForSearch(''), ['friendship', 'ra', 'academy', 'energy5']);
+  assert.deepEqual(storefrontPlanKeysForSearch('?plans=unknown'), ['friendship', 'ra', 'academy', 'energy5']);
 });
