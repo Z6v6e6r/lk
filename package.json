@@ -114,6 +114,7 @@
     "nodered:lk1-free-event-checkout:deploy-147": "bash scripts/deploy_nodered_lk1_free_event_checkout_hotfix_147.sh",
     "nodered:lk1-preview-multi-product:deploy-147": "bash scripts/deploy_nodered_lk1_preview_multi_product_hotfix_147.sh",
     "nodered:lk1-preview-free-first-event:deploy-147": "bash scripts/deploy_nodered_lk1_preview_free_first_event_hotfix_147.sh",
+    "nodered:lk1-target-diagnostics:deploy-147": "bash scripts/deploy_nodered_lk1_target_diagnostics_hotfix_147.sh",
     "nodered:managed-subscription-rules:deploy-147": "bash scripts/deploy_nodered_managed_subscription_rules_147.sh",
     "nodered:managed-subscription-rules:rollback-147": "bash scripts/rollback_nodered_managed_subscription_rules_147.sh",
     "nodered:lk1-subscription-enforcement:packet": "node scripts/prepare_lk1_subscription_enforcement_activation_packet.mjs",

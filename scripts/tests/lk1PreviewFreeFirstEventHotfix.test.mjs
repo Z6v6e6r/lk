@@ -80,7 +80,7 @@ test("the generation pins the installed flow and both node fields", () => {
   assert.equal(PREVIEW_FREE_FIRST_EVENT_TARGETS.preview.liveFuncSha256,
     "6bbae1f64480fa9b22c3ca434157af8ea9447b7b486f2699f445bfb776b97331");
   assert.equal(PREVIEW_FREE_FIRST_EVENT_TARGETS.preview.patchedFuncSha256,
-    "fc2f252743fdd9e95bd38554441f70fa4b2cee815a4ce0bddbcb67dbabd4bb82");
+    "c316d6e1ced10afaff89078c30d4f47e453eb7abcc2c510575a4f731576d7fa7");
   assert.equal(PREVIEW_FREE_FIRST_EVENT_BOOKING_DELTAS.length, 1);
   assert.equal(PREVIEW_FREE_FIRST_EVENT_USAGE_BLOCK_SHA256,
     "3436bdd2fa8d47f1d8952ada7e5a996137cc078169053009a6cc1447d7eb26f9");

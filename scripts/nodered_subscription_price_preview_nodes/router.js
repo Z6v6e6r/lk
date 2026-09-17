@@ -11,6 +11,11 @@ const eventRoute = eventCategory === 'GROUP_TRAINING'
       kind: 'TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1', error: 'TOURNAMENT_DISCOUNT' } : null;
 const out = index => { const result = [null, null, null, null, null, null]; result[index] = msg; return result; };
 const stop = (code, status = 503) => { ctx.done = true; ctx.error = code; ctx.statusCode = status; return out(4); };
+// Additive diagnostics: `details` names the sub-condition that has already refused,
+// never amounts, names or client identity. It is attached to the same refusal the
+// node answered before, so no accept/reject decision changes — a production refusal
+// is diagnosed from its response instead of reproduced from live traffic.
+const refuseWith = (code, details) => { ctx.errorDetails = details; return stop(code); };
 // A decision blocker states something about this subscription, not about the request.
 // Only the codes below describe a state the client can act on (book with another
 // subscription, or pay the ordinary price); every other code stays a fail-closed 503.
@@ -100,14 +105,38 @@ if (ctx.step === 'groupExercise') {
     || !Number.isSafeInteger(duration) || duration < 1 || duration > 720
     || !canonical.exerciseRoomId(exercise) || !(exercise.studio?.id || exercise.studioId)
     || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
+    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return refuseWith(eventRoute.error + '_TARGET_UNRESOLVED', {
+      stage: 'event_target',
+      observed: {
+        httpOk: ok(),
+        resolved: Boolean(exercise),
+        idMatch: Boolean(exercise) && String(exercise.id || exercise.exerciseId || '') === ctx.exerciseId,
+        category: (exercise && canonical.resolveCategory(exercise)) || null,
+        expectedCategory: eventRoute.category,
+        startsAtParsed: Number.isFinite(start),
+        startsInPast: Number.isFinite(start) ? start <= Date.now() : null,
+        durationMinutes: Number.isSafeInteger(duration) ? duration : null,
+        hasRoom: Boolean(exercise && canonical.exerciseRoomId(exercise)),
+        hasStudio: Boolean(exercise && (exercise.studio?.id || exercise.studioId)),
+        externalEventTypeId: (exercise && canonical.managedExternalEventTypeId(exercise)) || null,
+        status: String((exercise && exercise.status) || '') || null,
+        cancelled: Boolean(exercise && (exercise.isCancelled === true || exercise.isCanceled === true)),
+      },
+    });
   ctx.exercise = exercise;
   ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
 if (ctx.step === 'game') {
-  if (!Array.isArray(msg.payload) || msg.payload.length !== 1 || msg.payload[0]?.id !== ctx.target.gameId) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+  if (!Array.isArray(msg.payload) || msg.payload.length !== 1 || msg.payload[0]?.id !== ctx.target.gameId) return refuseWith('PRICE_PREVIEW_GAME_UNRESOLVED', {
+    stage: 'game_record',
+    observed: {
+      documents: Array.isArray(msg.payload) ? msg.payload.length : null,
+      idMatch: Array.isArray(msg.payload) && msg.payload.length === 1
+        ? msg.payload[0]?.id === ctx.target.gameId : false,
+    },
+  });
   const game = msg.payload[0];
   const booking = game.booking || {};
   const metadata = game.metadata || {};
@@ -130,7 +159,27 @@ if (ctx.step === 'game') {
     || !uuid(stationId) || !uuid(roomId) || !uuid(masterServiceId)
     || !Array.isArray(subServiceIds) || subServiceIds.length < 1 || subServiceIds.length > 20
     || subServiceIds.some(id => !uuid(id)) || new Set(subServiceIds).size !== subServiceIds.length
-    || Date.parse(start) !== Date.parse(ctx.target.startsAt)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+    || Date.parse(start) !== Date.parse(ctx.target.startsAt)) return refuseWith('PRICE_PREVIEW_GAME_UNRESOLVED', {
+      stage: 'game_metadata',
+      observed: {
+        cancelled: game.isCancelled === true || game.isCanceled === true,
+        status: String(game.status || '') || null,
+        splitPaymentObject: canonical.isObj(metadata.splitPayment),
+        splitPaymentEnabled: splitPayment.enabled !== false,
+        storedDurationMinutes: Number.isFinite(storedDuration) ? storedDuration : null,
+        requestedDurationMinutes: ctx.target.durationMinutes,
+        declaredDurationMinutes: booking.durationMinutes ?? null,
+        exerciseIdCount: exerciseIds.length,
+        exerciseIdsAgree: new Set(exerciseIds).size === 1,
+        stationIdValid: uuid(stationId),
+        roomIdValid: uuid(roomId),
+        masterServiceIdValid: uuid(masterServiceId),
+        subServiceCount: Array.isArray(subServiceIds) ? subServiceIds.length : null,
+        subServicesValid: Array.isArray(subServiceIds) && subServiceIds.length >= 1 && subServiceIds.length <= 20
+          && subServiceIds.every(id => uuid(id)) && new Set(subServiceIds).size === subServiceIds.length,
+        startsAtMatch: Date.parse(start) === Date.parse(ctx.target.startsAt),
+      },
+    });
   ctx.exerciseId = exerciseIds[0];
   ctx.target = { ...ctx.target, stationId, roomId, masterServiceId, subServiceIds: [...subServiceIds].sort(),
     shareCount: joinPricing.resolveIsSinglesGame({game, booking, metadata, splitPayment}) ? 2 : 4 };
@@ -145,7 +194,24 @@ if (ctx.step === 'exercise') {
     || Date.parse(canonical.eventStartsAt(exercise)) !== Date.parse(ctx.target.startsAt)
     || exercise.isCancelled === true || exercise.isCanceled === true
     || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())
-    || !Array.isArray(exercise.availableClientSubscriptions)) return stop('PRICE_PREVIEW_GAME_UNRESOLVED');
+    || !Array.isArray(exercise.availableClientSubscriptions)) return refuseWith('PRICE_PREVIEW_GAME_UNRESOLVED', {
+      stage: 'game_exercise',
+      observed: {
+        httpOk: ok(),
+        resolved: Boolean(exercise),
+        idMatch: Boolean(exercise) && String(exercise.id || exercise.exerciseId || '') === ctx.exerciseId,
+        category: (exercise && canonical.resolveCategory(exercise)) || null,
+        stationMatch: Boolean(exercise)
+          && String(exercise.studio?.id || exercise.studioId || '') === ctx.target.stationId,
+        roomMatch: Boolean(exercise) && canonical.exerciseRoomId(exercise) === ctx.target.roomId,
+        durationMinutes: (exercise && canonical.eventDurationMinutes(exercise)) || null,
+        startsAtMatch: Boolean(exercise)
+          && Date.parse(canonical.eventStartsAt(exercise)) === Date.parse(ctx.target.startsAt),
+        cancelled: Boolean(exercise && (exercise.isCancelled === true || exercise.isCanceled === true)),
+        status: String((exercise && exercise.status) || '') || null,
+        availableClientSubscriptions: Boolean(exercise) && Array.isArray(exercise.availableClientSubscriptions),
+      },
+    });
   ctx.exercise = exercise;
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }

@@ -47,7 +47,9 @@ export const PREVIEW_FREE_FIRST_EVENT_TARGETS = Object.freeze({
     patchedFuncSha256: "2c8bfbe7d1a5873dc85331bf42402c45c0a08de4227630a3450e8a3d770332cd" }),
   preview: Object.freeze({ id: PREVIEW_FREE_FIRST_EVENT_PREVIEW_ID,
     liveFuncSha256: "6bbae1f64480fa9b22c3ca434157af8ea9447b7b486f2699f445bfb776b97331",
-    patchedFuncSha256: "fc2f252743fdd9e95bd38554441f70fa4b2cee815a4ce0bddbcb67dbabd4bb82" }),
+    // Re-pinned 2026-09-17: `lk1-target-diagnostics` changed the reviewed router source
+    // (additive refusal details), so the same preimage composes to this body.
+    patchedFuncSha256: "c316d6e1ced10afaff89078c30d4f47e453eb7abcc2c510575a4f731576d7fa7" }),
 });
 // The composed preview embeds the booking gateway's usage slice verbatim; the slice itself is
 // untouched by this generation (the expectation check lives in the policy-decision step).

@@ -65,9 +65,10 @@ export const EVENT_QUOTES_TARGETS = Object.freeze({
   previewRouter: {
     id: EVENT_QUOTES_PREVIEW_ROUTER_ID,
     liveFuncSha256: "3ac29cf0c5133627a3d5d24954b50e574bb32114b0d681d016972f1cda6464a6",
-    // Re-pinned after `lk1-event-diagnostics` changed the reviewed router source. The
-    // generation as deployed on 2026-09-15 shipped `9b4f69b5…` (see the incident doc).
-    patchedFuncSha256: "d2d8b5a495ea01691c5f35a9f80afbffdee543dfeb5c8a9acb23a6c66a663009",
+    // Re-pinned after `lk1-event-diagnostics` and again after `lk1-target-diagnostics`
+    // changed the reviewed router source. The generation as deployed on 2026-09-15
+    // shipped `9b4f69b5…` (see the incident doc).
+    patchedFuncSha256: "31ae708039f22dc38b02ca1817d7447a38498b6586cd6302f707cf5fb69561d6",
   },
   previewFinal: {
     id: EVENT_QUOTES_PREVIEW_FINAL_ID,

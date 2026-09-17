@@ -62,7 +62,9 @@ export const TARIFF_AMOUNTS_TARGETS = Object.freeze({
   previewRouter: {
     id: TARIFF_AMOUNTS_ROUTER_ID,
     liveFuncSha256: "ad67484dfc09c1620455fc810cc624344a2e07ed8a6d3561f345b63a8c382ac7",
-    patchedFuncSha256: "d2d8b5a495ea01691c5f35a9f80afbffdee543dfeb5c8a9acb23a6c66a663009",
+    // Re-pinned 2026-09-17: the generation `lk1-target-diagnostics` changed the reviewed
+    // router source (additive refusal details), so the same preimage composes to this body.
+    patchedFuncSha256: "31ae708039f22dc38b02ca1817d7447a38498b6586cd6302f707cf5fb69561d6",
   },
   previewEvaluate: {
     id: TARIFF_AMOUNTS_EVALUATE_ID,
