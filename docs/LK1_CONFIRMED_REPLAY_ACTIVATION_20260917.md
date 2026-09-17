@@ -83,7 +83,7 @@ Compare with the reviewed candidate: `sourceSha256` must equal the flow the patc
 
 | node | before | after |
 | --- | --- | --- |
-| `lk_subscription_booking_router_20260804` | `2c8bfbe7…` | `55f748d0…` |
+| `lk_subscription_booking_router_20260804` | `2c8bfbe7…` | `3920bb21…` |
 | `lk_subscription_booking_finalize_20260804` | `72f575fc…` | `2b115412…` |
 
 Then the guarded install with the exact-graph contract prepared from
