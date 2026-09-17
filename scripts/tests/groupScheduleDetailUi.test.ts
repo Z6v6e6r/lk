@@ -172,7 +172,7 @@ test("group schedule promo uses provider preview and applies the quote only to i
 
 test("detail signup has a single price list and the training subscription storefront link", () => {
   assert.match(groupSchedulePageSource, /https:\/\/padlhub\.ru\/sub_hab\?plans=ra,academy/);
-  assert.match(groupSchedulePageSource, /БЕСПЛАТНО по подписке\. Купить/);
+  assert.match(groupSchedulePageSource, /БЕСПЛАТНО по подписке\s*</);
   assert.doesNotMatch(groupSchedulePageSource, /Доступные абонементы|Скрыть варианты|Способ записи|isPurchaseListOpen/);
   assert.doesNotMatch(groupSchedulePageSource, /group-schedule-trainer-hero/);
   assert.match(groupSchedulePageSource, /purchasableProducts\.length === 0/);

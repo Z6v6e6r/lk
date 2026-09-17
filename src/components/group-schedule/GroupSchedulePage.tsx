@@ -1267,7 +1267,7 @@ export default function GroupSchedulePage({
                               }}
                               disabled={actionLoading}
                             >
-                              БЕСПЛАТНО по подписке. Купить
+                              БЕСПЛАТНО по подписке
                             </button>
                           </div>
                         )}
