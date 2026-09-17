@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { annualHistory } from "../lib/annualSubscriptionHistory.mjs";
 
 type NodeRedMsg = Record<string, unknown>;
 type GlobalValues = Record<string, unknown>;
@@ -2822,7 +2823,7 @@ test("Piter atomic ledger CAS reserves before provider and replays the same paym
         reservations: [{
           paymentRef: ctx.paymentRef,
           requestFingerprint,
-          intentFingerprint: [ctx.inventoryId, ctx.counterKey, ctx.clientPhone, ""].join("\n"),
+          intentFingerprint: [ctx.inventoryId, ctx.counterKey, ctx.clientPhone, ""].join("\n").trim(),
           state: "PAYMENT_PENDING",
           transactionId: "tx-1",
           paymentUrl: "https://pay.example.test/tx-1",
@@ -2880,7 +2881,7 @@ test("Piter CLAIMED replay keeps the originally reserved tier before the only Vi
   const clientPhone = "79990000000";
   const requestFingerprint = [
     "piter_friendship_12m_2026_v1", "piter_friendship", paymentRef, clientPhone, "",
-  ].join("\n");
+  ].join("\n").trim();
   const ctx = {
     step: "piter_ledger_find",
     counterKey: "piter_friendship",
@@ -3142,7 +3143,7 @@ test("Piter CLAIMED replay fails closed when the live provider product no longer
   const clientPhone = "79990000000";
   const requestFingerprint = [
     "piter_friendship_12m_2026_v1", "piter_friendship", paymentRef, clientPhone, "",
-  ].join("\n");
+  ].join("\n").trim();
   const out = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
     {
@@ -3155,7 +3156,7 @@ test("Piter CLAIMED replay fails closed when the live provider product no longer
       payload: [{
         ...buildPiterRows(99)[0], reservedCount: 1, takenCount: 100,
         reservations: [{ paymentRef, requestFingerprint,
-          intentFingerprint: ["piter_friendship_12m_2026_v1", "piter_friendship", clientPhone, ""].join("\n"),
+          intentFingerprint: ["piter_friendship_12m_2026_v1", "piter_friendship", clientPhone, ""].join("\n").trim(),
           state: "CLAIMED", clientPhone,
           priceMinor: 1980000, productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
           providerProductCostMinor: 5680000, discountMinor: 3700000 }],
@@ -3394,7 +3395,7 @@ test("Piter deactivation blocks new reservations but keeps provider result durab
   const clientPhone = "79990000000";
   const requestFingerprint = [
     "piter_friendship_12m_2026_v1", "piter_friendship", paymentRef, clientPhone, "",
-  ].join("\n");
+  ].join("\n").trim();
   const replay = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
     {
@@ -3407,7 +3408,7 @@ test("Piter deactivation blocks new reservations but keeps provider result durab
         ...buildPiterRows(42)[0], ready: false, reservedCount: 1, takenCount: 43,
         reservations: [{
           paymentRef, requestFingerprint,
-          intentFingerprint: ["piter_friendship_12m_2026_v1", "piter_friendship", clientPhone, ""].join("\n"),
+          intentFingerprint: ["piter_friendship_12m_2026_v1", "piter_friendship", clientPhone, ""].join("\n").trim(),
           state: "PAYMENT_PENDING", transactionId: "tx-inactive-replay",
           paymentUrl: "https://pay.example.test/inactive-replay", clientPhone,
           priceMinor: 1980000, providerProductCostMinor: 5680000, discountMinor: 3700000,
@@ -3673,7 +3674,7 @@ test("Piter cutover tombstones block replay of every legacy paid paymentRef", ()
 test("Piter blocks a fresh browser paymentRef while the same purchaser has an unresolved attempt", () => {
   const intentFingerprint = [
     "piter_friendship_12m_2026_v1", "piter_friendship", "79990000000", "",
-  ].join("\n");
+  ].join("\n").trim();
   const out = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
     {
@@ -5365,6 +5366,53 @@ test("new LK1 HAB requires exact next-day activation and freezes the Moscow date
     assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE");
   }
 });
+test("HUB annual guest checkout keeps the epoch ledger valid without a clientId", () => {
+  // A phone-only checkout has no clientId, and `join("\n")` used to leave the
+  // trailing separator in the stored fingerprints. annualHistory.validate rejects
+  // an active fingerprint with edge whitespace (`text()` requires
+  // `value.trim() === value`), so one such reservation closed the whole HUB annual
+  // counter on 2026-09-15 and every later guest checkout repeated it.
+  const ledger = JSON.parse(fs.readFileSync(
+    "scripts/tests/fixtures/annualHubLedger.networkFriendshipEpoch.json", "utf8")) as Record<string, unknown>;
+  ledger.dailyDate = "2026-09-12";
+  Object.assign(ledger, annualHistory.counts(ledger));
+  assert.equal(annualHistory.validate(ledger), true, "the epoch fixture must start valid");
+  const ctx = {
+    step: "piter_ledger_find", counterKey: "network_friendship",
+    inventoryId: "network_friendship_12m_20260910_epoch", paymentRef: "guest-checkout-ref",
+    clientPhone: "79990000000", clientId: null, totalLimit: 100, dailyLimit: 1, dailyDropDate: "2026-09-12",
+    batchSize: 1, batchIndex: 1, batchRemainingBefore: 1, providerProductCostMinor: 9800000,
+    hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT),
+    providerPayload: { products: [{ id: HUB_NEXT_DAY_POLICY.productId, discount: 0 }] },
+    tiers: [{ productId: HUB_NEXT_DAY_POLICY.productId, productName: "Падел.Дружба.ХАБ — годовая",
+      priceMinor: 9800000, providerProductCostMinor: 9800000 }],
+  };
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { _summerSubscriptionCtx: ctx, payload: [ledger] },
+    { ...HUB_NEXT_DAY_GLOBALS, subscription_counter_epoch_started_at: "2026-09-11T04:39:55.976Z" },
+  ) as unknown[];
+  const update = asRecord((asRecord(out[1]).payload as unknown[])[1]);
+  const reservation = asRecord(asRecord(update.$push).reservations);
+  assert.equal(reservation.clientId, null);
+  for (const field of ["requestFingerprint", "intentFingerprint"]) {
+    const value = reservation[field];
+    assert.equal(typeof value, "string", `${field} must be stored as a string`);
+    assert.equal(value, (value as string).trim(), `${field} must not carry edge whitespace`);
+  }
+  const withReservation = (candidate: Record<string, unknown>) => {
+    const next = structuredClone(ledger);
+    next.reservations = [...(next.reservations as unknown[]), candidate];
+    next.revision = (next.revision as number) + 1;
+    Object.assign(next, annualHistory.counts(next));
+    return next;
+  };
+  assert.equal(annualHistory.validate(withReservation(reservation)), true);
+  assert.equal(annualHistory.validate(withReservation({ ...reservation,
+    requestFingerprint: `${reservation.requestFingerprint}\n`,
+    intentFingerprint: `${reservation.intentFingerprint}\n` })), false);
+});
+
 test("next-day card alone cannot bypass disabled or mismatched HAB runtime", () => {
   for (const globals of [{ ...HUB_NEXT_DAY_GLOBALS, summer_subscription_hub_lk1_sales_enabled: false },
     { ...HUB_NEXT_DAY_GLOBALS, subscriptions_lk1_product_policy: { ...HUB_NEXT_DAY_POLICY, maxActiveBookings: 4 } },
@@ -5537,7 +5585,7 @@ test("old HAB pending payment replays its frozen receipt and URL under selected-
  const current={...HUB_NEXT_DAY_RECEIPT,bookingUsageScope:"SUBSCRIPTION_BENEFIT_ONLY"};
  const ctx={...quotaPurchaseContext(),counterKey:"network_friendship",inventoryId:"network_friendship_12m_2026_v1",
   totalLimit:100,dailyLimit:1,dailyDropDate:"2026-09-09",hubLk1Sale:current};
- const requestFingerprint=[ctx.inventoryId,ctx.counterKey,ctx.paymentRef,ctx.clientPhone,""].join("\n");
+ const requestFingerprint=[ctx.inventoryId,ctx.counterKey,ctx.paymentRef,ctx.clientPhone,""].join("\n").trim();
  const saleRecord={hubLk1Sale:structuredClone(HUB_NEXT_DAY_RECEIPT)};
  const ledger=buildHubLedger({dailyDate:"2026-09-09",reservedCount:1,takenCount:1,dailyReservedCount:1,
   reservations:[{paymentRef:ctx.paymentRef,requestFingerprint,intentFingerprint:"fixture-old-intent",state:"PAYMENT_PENDING",dailyDate:"2026-09-09",
@@ -5562,7 +5610,7 @@ test("old HAB CLAIMED price cannot dispatch after the provider base changes", ()
     dailyDropDate: "2026-09-09", hubLk1Sale: HUB_NEXT_DAY_RECEIPT,
     providerProductCostMinor: 9800000,
     providerPayload: { products: [{ id: HUB_NEXT_DAY_POLICY.productId, discount: 0 }] } };
-  const requestFingerprint = [ctx.inventoryId, ctx.counterKey, ctx.paymentRef, ctx.clientPhone, ""].join("\n");
+  const requestFingerprint = [ctx.inventoryId, ctx.counterKey, ctx.paymentRef, ctx.clientPhone, ""].join("\n").trim();
   const ledger = buildHubLedger({ dailyDate: "2026-09-09", reservedCount: 1, takenCount: 1, dailyReservedCount: 1,
     reservations: [{ paymentRef: ctx.paymentRef, requestFingerprint, intentFingerprint: "fixture-old-intent",
       state: "CLAIMED", dailyDate: "2026-09-09", clientPhone: ctx.clientPhone,

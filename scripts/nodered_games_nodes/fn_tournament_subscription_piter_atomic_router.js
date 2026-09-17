@@ -776,13 +776,20 @@ const provider = (ctx) => {
   msg.payload = ctx.providerPayload;
   return [null, null, null, null, msg];
 };
+// `join("\n")` emits the separator for an empty part too, so an absent clientId
+// (guest / phone-only checkout) left a trailing newline in the stored value. The
+// annual ledger validator rejects a fingerprint with edge whitespace (`text()`
+// requires `value.trim() === value`), and one such active reservation closed the
+// whole HUB annual counter on 2026-09-15. Trimming the joined result keeps every
+// previously clean fingerprint byte-identical, so stored rows and the
+// active-reservation dedupe keep matching.
 const fingerprint = (ctx) => [
   toStr(ctx.inventoryId), toStr(ctx.counterKey), toStr(ctx.paymentRef),
   toStr(ctx.clientPhone), toStr(ctx.clientId),
-].join("\n");
+].join("\n").trim();
 const intentFingerprint = (ctx) => [
   toStr(ctx.inventoryId), toStr(ctx.counterKey), toStr(ctx.clientPhone), toStr(ctx.clientId),
-].join("\n");
+].join("\n").trim();
 const ACTIVE_RESERVATION_STATES = ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"];
 const ledgerIsStructurallyValid = (ledger, totalLimit, ctx) => {
   if (ledger?.schemaVersion === 3) return annualHistory.validate(ledger)
