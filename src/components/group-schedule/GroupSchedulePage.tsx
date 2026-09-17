@@ -18,7 +18,7 @@ import {
 } from "../../utils/groupScheduleApi";
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
-import { getGroupScheduleOwnedPacks } from "../../utils/groupScheduleOwnedPacks";
+import { getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
 import { hasGroupTrainingSubscription, hasGroupTrainingSubscriptionEvidence } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import {
@@ -646,7 +646,11 @@ export default function GroupSchedulePage({
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const purchasableProducts = checkout ? [...checkout.oneTimes, ...checkout.subscriptions] : [];
-  const ownedVisitPacks = checkout ? getGroupScheduleOwnedPacks(checkout.clientSubscriptions) : [];
+  // Owned subscriptions stay bookable on their own terms when the price check proves no
+  // managed discount for them (a plan sold before the LK1 rule is quoted at zero percent).
+  const ownedSubscriptions = checkout
+    ? getGroupScheduleOwnedSubscriptions(checkout.clientSubscriptions, discountPending ? null : currentDiscountQuotes)
+    : [];
   const isGamePlusTrainerDetail = selectedTraining ? isGamePlusTrainerSummary(selectedTraining) : false;
   const detailDescription = selectedTraining
     ? isGamePlusTrainerDetail
@@ -1188,9 +1192,9 @@ export default function GroupSchedulePage({
                       && !isRegistered
                       && checkout && (
                       <div className="tournament-signup-payment-options">
-                        {ownedVisitPacks.length > 0 && (
+                        {ownedSubscriptions.length > 0 && (
                           <div className="tournament-signup-payment-group" aria-label="Ваши абонементы">
-                            {ownedVisitPacks.map(product => (
+                            {ownedSubscriptions.map(product => (
                               <button
                                 key={`${product.source}-${product.id}`}
                                 className="tournament-signup-payment-option tournament-signup-payment-option-subscription"
@@ -1204,6 +1208,7 @@ export default function GroupSchedulePage({
                                     subscriptionName: product.name,
                                     raw: product.raw,
                                     visitsPrefix: "Осталось",
+                                    validityPrefix: "действует до",
                                   })?.label || "Записаться по абонементу"}
                                 </strong>
                               </button>
@@ -1341,7 +1346,7 @@ export default function GroupSchedulePage({
                           </>
                         )}
 
-                        {ownedVisitPacks.length === 0 && purchasableProducts.length === 0 && (
+                        {ownedSubscriptions.length === 0 && purchasableProducts.length === 0 && (
                           <div className="tournament-signup-muted">Нет доступных способов записи.</div>
                         )}
                       </div>

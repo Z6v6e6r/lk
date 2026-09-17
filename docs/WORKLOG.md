@@ -1,5 +1,12 @@
 # Журнал шагов
 
+## 2026-09-17 — Групповая тренировка: абонемент вне денежного контура снова даёт запись
+
+- Обращение поддержки: клиент с действующей «РА» (покупка 20.08.2026, то есть до границы LK1-контура 01.09.2026) не мог записаться на групповую тренировку; на карточке были только «Разовая 5 500 ₽» с подписью «Скидка 0% по подписке «РА»» и «Энергия 5».
+- Причина — карточка из #106/#107 (`release.json 20260917T151056Z`, sourceCommit `ae86cd9a…`): собственные абонементы как способ записи остались только для Energy-пакетов (`getGroupScheduleOwnedPacks`), а внеконтурная подписка получает от превью обычный тариф с `discountPercent = 0` (намеренная ветка `ctx.outOfContourIds` → `ctx.groupDiscountPercent = 0` в `scripts/nodered_subscription_price_preview_nodes/router.js`), то есть её льгота не выражалась ни скидкой, ни отдельной кнопкой. Серверная часть здорова: операции того же клиента по групповым тренировкам (`lk_subscription_daily_booking_ops`, `planKey: ra`, `managedDecision: null`) — CONFIRMED.
+- Исправление (frontend): `getGroupScheduleOwnedSubscriptions(products, quotes)` возвращает Energy-пакеты плюс собственные подписки без управляемой (>0 %) скидочной квоты; пока проверка цены идёт (`quotes === null`), показываются только пакеты, чтобы управляемый план ни на один рендер не выглядел вторым неоценённым способом записи; метка такой подписки — `действует до DD.MM.YYYY`. Ссылка покупки подписки и денежный путь не менялись.
+- LOCAL: `groupSubscriptionDiscount.test.ts`, `groupScheduleDetailUi.test.ts`, `groupScheduleSubscriptionOffer.test.ts` — 16/16 PASS; `tsc --noEmit -p tsconfig.app.json` PASS; ESLint по изменённым файлам PASS; `vite build --config vite.config.group-schedule.ts` PASS (в собранном бандле есть `действует до`, в текущем прод-бандле — нет). Deploy не выполнялся.
+
 ## 2026-09-15 — LK1: ссылка на доплату по подписке не возвращалась из readback
 
 - Разбор HAR «запись с доплатой» (DEV, `lk-split-join-16zlgtx1anyzm9`): Viva уже создала транзакцию на 2 100 ₽ (ссылка пришла триггерной рассылкой Viva в TG/MAX), но LK1 ответил `202 PENDING_CONFIRMATION` с `LK1_TRANSACTION_READBACK_MISMATCH`, а повторные попытки — `LK1_PAYMENT_RECONCILIATION_REQUIRED`, потому что checkout не был сохранён.
