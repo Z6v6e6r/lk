@@ -6,25 +6,25 @@
       "id": "ca022fd14027a5b0",
       "fileName": "fn_tournament_subscription_confirm_resolve.js",
       "preimageSha256": "28d3c80d0b3bc7f3258b364f94ea580980b615eb5f5f338ca844be654043c301",
-      "candidateSha256": "7d6ea160e72b0b31d60acedc4b0571f68a20b8875f0757370b4f8201a750ce7b"
+      "candidateSha256": "bdbf68b61d67fc13e1976e00cfe42edf88882327043b7a72e7e41a829ce87fd3"
     },
     {
       "id": "566ae4b886c37ae5",
       "fileName": "fn_tournament_subscription_purchase_router.js",
       "preimageSha256": "cc9a047a6cb2f42d0b1e029747ff59a9edfae3438632f00fb37d2c56639ee869",
-      "candidateSha256": "9d34888e6984205562587ac43b598b49903e34d168c08fdd30ac825f22b5990a"
+      "candidateSha256": "cd3b7905bc31df48680eb3dc1fce0481ff6c00afe48d370f94df839ac7e56dea"
     },
     {
       "id": "piter_atomic_router_20260903",
       "fileName": "fn_tournament_subscription_piter_atomic_router.js",
       "preimageSha256": "ec43cd012c82cb6d5d58d74a613631e928b4700b2e9b074ee96a4cce6a603af9",
-      "candidateSha256": "4240860434d637e0e0a6c24719d7504668e45fa0370aad472533c53790ddb7e7"
+      "candidateSha256": "76be8ccba1d149236ffdb9a5df9019a15b153dafe3e626087d86c82b7251c9dd"
     },
     {
       "id": "subscription_poll_admit_20260914",
       "fileName": "fn_tournament_subscription_poll_admit.js",
       "preimageSha256": "4f4677de1733c115ff50e0f8d5c9df61f86a49f5a9089ae74a2c42de84073903",
-      "candidateSha256": "933252ba6e34bf7433a8c72a5efb1b9fa93a3f7ab0ed1953f77f95d3bf16e9e1"
+      "candidateSha256": "1e930b61a436d34e26da4db2330b19585183e7c0be5a2de62f3f79eb09d881bb"
     }
   ]
 }

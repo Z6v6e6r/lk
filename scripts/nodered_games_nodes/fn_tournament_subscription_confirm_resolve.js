@@ -1,6 +1,7 @@
 // BEGIN generated subscriptionPaymentPolling
 function createSubscriptionPaymentPolling() {
-  const lifetimeMs = 20 * 60_000, maxChecks = 10, intervalMs = 120_000, recoveryMs = 3_600_000;
+  const lifetimeMs = 20 * 60_000, maxChecks = 10, intervalMs = 120_000, recoveryMs = 3_600_000,
+    maxRecoveryChecks = 24;
   const timestamp = value => typeof value === 'string' && /(?:Z|[+-]\d\d:\d\d)$/.test(value)
     && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
   const pending = row => ['PAYMENT_PENDING', 'PROVIDER_UNKNOWN', 'UNPAID'].includes(row?.status);
@@ -35,6 +36,16 @@ function createSubscriptionPaymentPolling() {
     // Recovery may still find the transaction; it must not reopen checkout.
     const closed = pending(row) && (isLink && local.closed || saved.status === 'FAILED');
     const due = timestamp(saved.nextCheckAt);
+    const recoveryChecks = Number.isSafeInteger(saved.recoveryChecks) ? saved.recoveryChecks : 0;
+    // Recovery is bounded. A locally archived checkout used to be re-read from the
+    // provider every hour forever: on 2026-09-17 that kept 1 644 sale documents per hour
+    // in a re-check loop (2 495 PAYMENT_PENDING, 2 304 past their deadline, one row at 60
+    // recovery checks) without ever turning one of them paid. After maxRecoveryChecks
+    // attempts the polling closes for good; the sale itself keeps its PAYMENT_PENDING
+    // status, its archive record and its deadline, so the financial state is untouched and
+    // the periodic provider reconciliation (`subscriptions:reconcile-viva`) stays the way
+    // to settle a late payment of this class.
+    if (closed && saved.recoveryClosedAt) return { dispatch: false, value: null };
     // Archive is a local write even when a previous request has a cooldown.
     if (closed && saved.status !== 'FAILED') return { dispatch: false, value: {
       ...saved, checks: local.checks, status: 'FAILED', reason: local.reason,
@@ -43,16 +54,20 @@ function createSubscriptionPaymentPolling() {
     } };
     if (due !== null && due > now) return { dispatch: false, value: null };
     if (closed && !recovery) return { dispatch: false, value: null };
+    if (closed && recoveryChecks >= maxRecoveryChecks) return { dispatch: false, value: {
+      ...saved, checks: local.checks, recoveryChecks, recoveryClosedAt: nowIso,
+      recoveryClosedReason: 'RECOVERY_CHECK_LIMIT', nextCheckAt: null,
+    } };
     const checks = isLink && !closed ? local.checks + 1 : local.checks;
     const exhausted = isLink && checks >= maxChecks;
     const value = { ...saved, checks, status: closed || exhausted ? 'FAILED' : 'ACTIVE',
       lastAttemptAt: nowIso, nextCheckAt: new Date(now + (closed || exhausted || row.status === 'PAID' || row.status === 'REFUNDED' ? recoveryMs : intervalMs)).toISOString() };
     if (isLink) value.deadlineAt = local.deadlineAt;
     if (exhausted && !closed) Object.assign(value, { archivedAt: nowIso, reason: 'PAYMENT_CHECK_LIMIT' });
-    if (closed || !isLink) value.recoveryChecks = (Number.isSafeInteger(saved.recoveryChecks) ? saved.recoveryChecks : 0) + 1;
+    if (closed || !isLink) value.recoveryChecks = recoveryChecks + 1;
     return { dispatch: true, value };
   };
-  return { lifetimeMs, maxChecks, intervalMs, recoveryMs, timestamp, pending, state, response, plan };
+  return { lifetimeMs, maxChecks, intervalMs, recoveryMs, maxRecoveryChecks, timestamp, pending, state, response, plan };
 }
 const paymentPolling = createSubscriptionPaymentPolling();
 // END generated subscriptionPaymentPolling

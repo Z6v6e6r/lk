@@ -57,6 +57,7 @@
     "subscriptions:piter-hub:activation-packet:check": "node scripts/check_piter_hub_activation_packet.mjs --check",
     "subscriptions:reset-limits": "node scripts/reset_ab_leto_limits.mjs",
     "subscriptions:reconcile-hung-claims": "node scripts/reconcile_hung_subscription_claims.mjs",
+    "subscriptions:close-stale-payment-polling": "node scripts/close_subscription_payment_polling_backlog.mjs",
     "subscriptions:reconcile-stale-annual-claims": "node scripts/reconcile_stale_annual_claims.mjs",
     "har:sanitize-viva": "node scripts/sanitize_viva_har.mjs",
     "test:har-sanitizer": "node --test scripts/tests/sanitizeVivaHar.test.mjs",

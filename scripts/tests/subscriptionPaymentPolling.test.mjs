@@ -255,3 +255,58 @@ test('missing-transaction terminal response maps an explicit archive after recov
   assert.equal(response[1].payload.archived, true);
   assert.equal(response[1].payload.paymentUrl, null);
 });
+
+test('an archived checkout stops being re-read once the recovery bound is reached', () => {
+  // 2026-09-17: 2 495 PAYMENT_PENDING sales, 2 304 past their deadline, were re-read from
+  // the provider every hour forever (one row reached 60 recovery checks) without ever
+  // turning paid. The recovery pass is now bounded.
+  assert.equal(policy.maxRecoveryChecks, 24);
+  const archived = (extra = {}) => row({ createdAt: undefined,
+    paymentPolling: { status: 'FAILED', checks: 0, reason: 'PAYMENT_LINK_EXPIRED',
+      archivedAt: new Date(start).toISOString(),
+      nextCheckAt: new Date(start).toISOString(), recoveryChecks: 0, ...extra } });
+  const later = start + policy.recoveryMs;
+  // Below the bound the hourly recovery read still happens.
+  const below = policy.plan(archived({ recoveryChecks: policy.maxRecoveryChecks - 1 }), { now: later, recovery: true });
+  assert.equal(below.dispatch, true);
+  assert.equal(below.value.recoveryChecks, policy.maxRecoveryChecks);
+  assert.equal(below.value.recoveryClosedAt, undefined);
+  // At the bound the polling closes for good and no provider read is admitted.
+  const at = policy.plan(archived({ recoveryChecks: policy.maxRecoveryChecks }), { now: later, recovery: true });
+  assert.equal(at.dispatch, false);
+  assert.equal(at.value.recoveryChecks, policy.maxRecoveryChecks);
+  assert.equal(at.value.recoveryClosedReason, 'RECOVERY_CHECK_LIMIT');
+  assert.equal(at.value.recoveryClosedAt, new Date(later).toISOString());
+  assert.equal(at.value.nextCheckAt, null);
+  // The financial state and the archive record are untouched: only polling stops.
+  assert.equal(at.value.status, 'FAILED');
+  assert.equal(at.value.reason, 'PAYMENT_LINK_EXPIRED');
+  assert.equal(at.value.archivedAt, new Date(start).toISOString());
+  const closedRow = { ...archived({ recoveryChecks: policy.maxRecoveryChecks }), paymentPolling: at.value };
+  assert.equal(closedRow.status, 'PAYMENT_PENDING');
+  // Already closed for polling: never dispatched again, and never rewritten.
+  const again = policy.plan(closedRow, { now: later + policy.recoveryMs, recovery: true });
+  assert.deepEqual(again, { dispatch: false, value: null });
+  // A late provider confirmation still wins over the local closure.
+  assert.equal(policy.response({ status: 'PAID', paid: true },
+    { ...closedRow, paymentPolling: at.value }).status, 'PAID');
+});
+
+test('a closed-for-polling row never reaches the provider through the installed node', () => {
+  const saved = row({ createdAt: undefined,
+    paymentPolling: { status: 'FAILED', checks: 0, reason: 'PAYMENT_LINK_EXPIRED',
+      archivedAt: new Date(start).toISOString(), nextCheckAt: null,
+      recoveryChecks: policy.maxRecoveryChecks, recoveryClosedAt: new Date(start).toISOString(),
+      recoveryClosedReason: 'RECOVERY_CHECK_LIMIT' } });
+  // A reconcile tick admits nothing, so no Viva read is scheduled for this class.
+  assert.equal(runPollingNode('poll_admit', admission(saved), { now: start + policy.recoveryMs }), null);
+  // A foreground request keeps serving the archived answer without a provider read.
+  const foreground = runPollingNode('poll_admit', admission(saved, false), { now: start + policy.recoveryMs });
+  assert.equal(foreground[0], null);
+  assert.equal(foreground[1]._paymentPollingStopped, true);
+  assert.equal(foreground[1]._paymentPollingAdmitted, true);
+  const response = runPollingNode('confirm_resolve', foreground[1], { now: start + policy.recoveryMs });
+  assert.equal(response[1].payload.status, 'FAILED');
+  assert.equal(response[1].payload.archived, true);
+  assert.equal(response[1].payload.paymentUrl, null);
+});
