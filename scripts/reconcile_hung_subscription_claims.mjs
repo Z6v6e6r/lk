@@ -23,6 +23,7 @@ import { createRequire } from 'node:module';
 import {
   DEFAULT_HUNG_CLAIM_TTL_MS,
   HUNG_CLAIM_STATES,
+  CONFIRMED_CLAIM_STATES,
   hasCreateAttempt,
   AUDIT_ONLY_CLAIM_STATES,
   buildHungClaimReleaseCommand,
@@ -50,6 +51,10 @@ Scan options:
   --actor <padlhub uuid>       restrict to one actor
   --subscription <uuid>        restrict to one subscription instance
   --ttl-minutes <n>            hung-claim TTL when the claim declares no deadline (default: ${DEFAULT_HUNG_CLAIM_TTL_MS / 60000})
+  --include-confirmed          also consider CONFIRMED claims older than --ttl-minutes whose
+                              provider booking the readback no longer holds (payment-timeout
+                              cleanup leftovers). Off by default: without it a CONFIRMED claim
+                              stays STATE_TERMINAL exactly as before.
   --limit <n>                  max claims per run (default: 200)
   --sort <oldest|newest>       legacy audit order without a cursor (default: oldest)
   --cursor-file <path>         resume bounded traversal by operation key; dry-run never advances it
@@ -79,6 +84,7 @@ const tenantKey = value('--tenant');
 const actorClientId = value('--actor');
 const clientSubscriptionId = value('--subscription');
 const limit = Number(value('--limit') || 200);
+const includeConfirmed = has('--include-confirmed');
 const sortOrder = value('--sort') || 'oldest';
 const ttlMinutes = Number(value('--ttl-minutes') || DEFAULT_HUNG_CLAIM_TTL_MS / 60000);
 const nowIso = value('--now') || new Date().toISOString();
@@ -175,7 +181,16 @@ async function loadScan() {
   const collection = client.db(databaseName).collection(collectionName);
   // The pure deadline guard handles explicit deadlines, createdAt fallback and
   // missing timestamps. A mandatory updatedAt cutoff used to hide legacy rows.
-  const query = { state: { $in: [...HUNG_CLAIM_STATES, ...AUDIT_ONLY_CLAIM_STATES] } };
+  // The CONFIRMED class is bounded by the same TTL in the query itself: a confirmed
+  // claim only becomes a candidate after it stopped being a live payment/join attempt.
+  const confirmedCutoff = new Date(Date.parse(nowIso) - ttlMs).toISOString();
+  const hungStates = { state: { $in: [...HUNG_CLAIM_STATES, ...AUDIT_ONLY_CLAIM_STATES] } };
+  const query = includeConfirmed
+    ? { $or: [hungStates, {
+      state: { $in: [...CONFIRMED_CLAIM_STATES] },
+      $or: [{ updatedAt: { $lt: confirmedCutoff } }, { updatedAt: null, createdAt: { $lt: confirmedCutoff } }],
+    }] }
+    : hungStates;
   if (tenantKey) query.tenantKey = tenantKey;
   if (actorClientId) query.actorClientId = actorClientId;
   if (clientSubscriptionId) query.clientSubscriptionId = clientSubscriptionId;
@@ -205,6 +220,7 @@ const report = {
   collection: collectionName,
   now: nowIso,
   ttlMinutes,
+  includeConfirmed,
   providerVerification: providerReady ? 'PERFORMED' : 'TOKEN_MISSING',
   applied: null,
   reason: null,
@@ -223,6 +239,7 @@ try {
     bookingsByExercise: bookingsByExercise,
     now: nowIso,
     ttlMs,
+    includeConfirmed,
   });
   report.scanned = summary.total;
   report.byReason = summary.byReason;
@@ -261,6 +278,7 @@ try {
           bookings: freshBookings,
           now: new Date().toISOString(),
           ttlMs,
+          includeConfirmed,
         });
         if (!decision.releasable) {
           report.skipped.push(redactedDecision(operation, decision));

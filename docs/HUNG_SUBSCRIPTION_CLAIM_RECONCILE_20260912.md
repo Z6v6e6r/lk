@@ -233,3 +233,49 @@ Residual runtime boundary: generic confirm/fail continuations currently match
 **after** reconciliation. CAS protects the write preimage, not those future writers.
 Fencing those runtime paths is a separate Node-RED change; do not claim this script
 fixes all delayed continuations or completes CREATE/payment/visit reconciliation.
+
+## Orphaned CONFIRMED claims (2026-09-16, opt-in)
+
+Symptom: the split participant payment-timeout cleanup
+(`SPLIT_PARTICIPANT_TIMEOUT_CLEANUP_APPLIED`, `PAYMENT_TIMEOUT`) cancels the Viva
+booking and expires the split payment, but the claim stays `CONFIRMED` with
+`bookingId` pointing at the deleted booking. Because the runtime releases a claim
+only on a request path, the seat and its free minutes stay consumed. A repeat of the
+same operation (`lk-split-join-<hash>` is deterministic per client, game and
+subscription) then replays the dead `CONFIRMED` claim.
+
+Scanner behaviour: without `--include-confirmed` nothing changes — a `CONFIRMED`
+claim is still `STATE_TERMINAL`.
+
+```sh
+# audit only: how many confirmed claims lost their provider booking
+npm run subscriptions:reconcile-hung-claims -- --mongo-url-file <uri> --token-file <viva-admin-token> \
+  --include-confirmed --ttl-minutes 30 --limit 200 --quiet
+```
+
+With `--include-confirmed` a claim older than `--ttl-minutes` whose state is
+`CONFIRMED` is a candidate, and it is releasable only when the complete per-exercise
+provider readback proves one of two things:
+
+| evidence | meaning |
+| --- | --- |
+| `EXACT_CANCELLED_BOOKING` | the exact bound row is still listed and the provider marks it cancelled (flag, cancellation timestamp, or a `CANCEL…` status the games cleanup accepts) |
+| `BOUND_BOOKING_ABSENT` | the complete readback neither lists the bound row nor holds any active booking of this actor and subscription: the provider deleted it |
+
+Every other outcome keeps the claim, with its own reason: `CONFIRMED_BINDING_UNRESOLVED`,
+`BOOKING_ID_CONFLICT`, `DEADLINE_NOT_REACHED`, `BOUND_BOOKING_NOT_CANCELLED`,
+`BOUND_BOOKING_AMBIGUOUS`, `BOUND_BOOKING_IDENTITY_MISMATCH`, `BOUND_EXERCISE_MISMATCH`,
+`PROVIDER_BOOKING_ACTIVE`, `PROVIDER_SUBSCRIPTION_ID_UNRESOLVED`,
+`PROVIDER_EVIDENCE_MISSING`/`_INCOMPLETE`, `IDENTITY_UNRESOLVED`, `EXERCISE_ID_MISSING`,
+and `RELATED_OPERATION_REQUIRES_RECONCILIATION` for a managed-entitlement, pending
+activation or `visitJob` claim.
+
+The write is the same compare-and-swap on the observed claim and it does not unset
+`lk1`, so the stored checkout (`transactionId`, `paymentUrl`, `toPayMinor`) stays in
+the document for the operator. Enabling this class on the 15-minute schedule is an
+operator decision after the dry run: it changes a `CONFIRMED` claim into `RELEASED`
+and returns the daily seat to the player, who then starts a new attempt.
+
+Residual boundary: releasing the local claim does not cancel or refund the provider
+transaction, and a provider booking this readback genuinely cannot show stays
+protected by the completeness rule only while the page size is respected.
