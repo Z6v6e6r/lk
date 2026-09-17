@@ -51,7 +51,7 @@ cd "$repo_root"
 # The reviewed generation: this commit introduced the diagnostics patcher, the reviewed
 # router source and the re-pins. It must stay an ancestor of HEAD and its generation
 # sources must not have changed since.
-generation_commit="f26bd478bf9a23694cd50aa4e9cbe02fd99815b7"
+generation_commit="d748f9353717394f4c5e3fc198457e5786f650e5"
 generation_sources=(
   scripts/patch_live_lk1_event_started_unavailable_hotfix.mjs
   scripts/patch_nodered_subscription_price_preview.mjs
