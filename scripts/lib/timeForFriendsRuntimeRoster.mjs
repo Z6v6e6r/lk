@@ -43,7 +43,9 @@ function normalizeParticipant(row, rosterIndex) {
     .map(toStringOrNull)
     .filter(Boolean)
     .join(" ") || toStringOrNull(row.name) || "Игрок";
-  const isCancelled = row.isCancelled === true || row.cancelled === true || row.canceled === true
+  const status = String(row.status || row.state || "").trim().toLowerCase();
+  const isWaitlist = row.isWaitlist === true || ["waitlist", "waiting_list"].includes(status);
+  const isCancelled = row.isCancelled === true || row.cancelled === true || row.canceled === true || ["cancelled", "canceled", "cancel"].includes(status)
     ? true
     : row.isCancelled === false || row.cancelled === false || row.canceled === false
       ? false
@@ -60,6 +62,7 @@ function normalizeParticipant(row, rosterIndex) {
     name,
     spot,
     isCancelled,
+    ...(isWaitlist ? { isWaitlist: true } : {}),
   };
 }
 
