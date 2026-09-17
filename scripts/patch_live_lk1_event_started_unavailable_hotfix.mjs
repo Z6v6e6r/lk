@@ -63,9 +63,6 @@ export const EVENT_STARTED_TARGET = Object.freeze({
   patchedFuncSha256: "1bd8d443e483512c4817f8c6c4850ebd50fb314482c072a5d18db7ae11d66de4",
 });
 
-// The single stage this generation changes.
-const EVENT_STARTED_STAGES_LIST = Object.freeze(["event_target"]);
-
 const ROUTER_MARKERS = Object.freeze([
   "const targetChecks = {",
   "const targetHealthy = targetChecks.httpOk && targetChecks.resolved && targetChecks.idMatch",
