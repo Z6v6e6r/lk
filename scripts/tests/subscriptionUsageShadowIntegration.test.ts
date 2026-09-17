@@ -161,7 +161,7 @@ test("group training DEV-shadow checks the exact event before every Viva mutatio
   assertGuardBefore(registration, "apiCreateTournamentVivaTransaction");
   assert.match(groupScheduleSource, /action: "BOOK_GROUP_TRAINING"/);
   assert.match(groupScheduleSource, /targetKind: "EVENT_AGGREGATE"/);
-  assert.match(groupScheduleSource, /Проверить скидку 50% без записи и оплаты/);
+  assert.match(groupScheduleSource, /Проверить скидку по подписке без записи и оплаты/);
   assert.match(groupScheduleSource, /if \(subscriptionUsageShadowEnabled\)[\s\S]*DEV-shadow не изменяет существующие записи/);
 });
 

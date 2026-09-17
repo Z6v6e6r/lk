@@ -76,6 +76,6 @@ test("subscription usage labels route all subscription UI through shared formatt
   assert.match(cabinetCardSource, /resolveSubscriptionUsageDisplay/);
   assert.match(subscriptionInfoSource, /resolveSubscriptionUsageDisplay/);
   assert.match(gamesPageSource, /function formatSplitSubscriptionValidityLabel/);
-  assert.match(groupScheduleSource, /function formatProductValidity/);
+  assert.doesNotMatch(groupScheduleSource, /Доступные абонементы|formatProductValidity/);
   assert.match(tournamentSignupSource, /function formatTournamentPaymentProductValidity/);
 });

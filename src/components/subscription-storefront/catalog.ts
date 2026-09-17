@@ -3,6 +3,13 @@ import type { SubscriptionPlanView } from './model';
 export const storefrontPlanKeys = ['friendship', 'ra', 'academy', 'energy5'] as const;
 export type StorefrontPlanKey = typeof storefrontPlanKeys[number];
 
+/** The training CTA opens the two plans that include group training benefits. */
+export function storefrontPlanKeysForSearch(search: string): readonly StorefrontPlanKey[] {
+  return new URLSearchParams(search).get('plans') === 'ra,academy'
+    ? ['ra', 'academy']
+    : storefrontPlanKeys;
+}
+
 export interface StorefrontStatus {
   counterKey: string | null;
   priceMinor: number | null;
