@@ -2,9 +2,6 @@ import { GroupTrainingInfo } from "./GroupTrainingInfo";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
-import {
-  TennisRacketIcon,
-} from "../cabinet/community-feed/CommunityIcons";
 import { CommunityTournamentCard } from "../cabinet/community-feed/CommunityTournamentCard";
 import type { CommunityTournamentCard as CommunityTournamentCardData } from "../cabinet/community-feed/feedTypes";
 import { useAuth } from "../../context/AuthContext";
@@ -22,7 +19,7 @@ import {
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { getGroupScheduleOwnedPacks } from "../../utils/groupScheduleOwnedPacks";
-import { hasGroupTrainingSubscription } from "../../utils/groupScheduleSubscriptionOffer";
+import { hasGroupTrainingSubscription, hasGroupTrainingSubscriptionEvidence } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import {
   apiFetchTournamentParticipants,
@@ -656,7 +653,9 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && subscriptionOffer?.owner === phone && subscriptionOffer?.show);
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && subscriptionOffer?.owner === phone
+    && subscriptionOffer?.show && !discountPending
+    && !hasGroupTrainingSubscriptionEvidence(checkout.clientSubscriptions, currentDiscountQuotes));
   const shouldShowGroupSchedulePromoSection = Boolean(checkout && checkout.oneTimes.some(isGroupSchedulePromoProduct));
   const shouldExitInitialDetail = Boolean(returnToFindGame && initialExerciseId && selectedId === initialExerciseId);
 
@@ -1106,12 +1105,6 @@ export default function GroupSchedulePage({
                   </div>
                 )}
 
-                {selectedTraining.whatToTake && (
-                  <div className="group-schedule-trainer-take-note">
-                    <span className="group-schedule-trainer-info-icon"><TennisRacketIcon /></span>
-                    <span>Что взять: {selectedTraining.whatToTake}</span>
-                  </div>
-                )}
               </div>
 
               <div className="tournament-signup-registration group-schedule-registration group-schedule-registration--trainer">
