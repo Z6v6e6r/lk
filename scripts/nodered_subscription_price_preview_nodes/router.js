@@ -100,29 +100,61 @@ if (ctx.step === 'groupExercise') {
   const exercise = canonical.unwrapRecord(msg.payload);
   const start = Date.parse(canonical.eventStartsAt(exercise));
   const duration = canonical.eventDurationMinutes(exercise);
-  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
-    || canonical.resolveCategory(exercise) !== eventRoute?.category || !Number.isFinite(start) || start <= Date.now()
-    || !Number.isSafeInteger(duration) || duration < 1 || duration > 720
-    || !canonical.exerciseRoomId(exercise) || !(exercise.studio?.id || exercise.studioId)
-    || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return refuseWith(eventRoute.error + '_TARGET_UNRESOLVED', {
+  // The target checks are named so the same twelve conditions that used to form one
+  // refusal can also answer the one state the client can see for itself. The union is
+  // unchanged: the step refuses exactly when it refused before.
+  const targetChecks = {
+    httpOk: ok(),
+    resolved: Boolean(exercise),
+    idMatch: Boolean(exercise) && String(exercise.id || exercise.exerciseId || '') === ctx.exerciseId,
+    category: Boolean(exercise) && canonical.resolveCategory(exercise) === eventRoute?.category,
+    startsAtParsed: Number.isFinite(start),
+    startsInFuture: Number.isFinite(start) && start > Date.now(),
+    durationValid: Number.isSafeInteger(duration) && duration >= 1 && duration <= 720,
+    hasRoom: Boolean(canonical.exerciseRoomId(exercise)),
+    hasStudio: Boolean(exercise && (exercise.studio?.id || exercise.studioId)),
+    hasExternalEventType: Boolean(exercise && canonical.managedExternalEventTypeId(exercise)),
+    notCancelled: !(exercise?.isCancelled === true || exercise?.isCanceled === true),
+    statusActive: !['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED']
+      .includes(String(exercise?.status || '').toUpperCase()),
+  };
+  const targetHealthy = targetChecks.httpOk && targetChecks.resolved && targetChecks.idMatch
+    && targetChecks.category && targetChecks.startsAtParsed && targetChecks.durationValid
+    && targetChecks.hasRoom && targetChecks.hasStudio && targetChecks.hasExternalEventType
+    && targetChecks.notCancelled && targetChecks.statusActive;
+  if (!targetHealthy || !targetChecks.startsInFuture) {
+    // 2026-09-17: a target that is healthy in every respect except that it has already
+    // started is a state the client sees on the schedule itself. Answering 503 made the
+    // cabinet print "Не удалось проверить скидку по подписке." for a tournament or group
+    // training that simply began (10-22 such refusals a day, all with `startsInPast: true`
+    // and every other check green). The advisory read answers 200 with no quotes instead:
+    // no price is advertised, nothing becomes bookable, and the booking gateway keeps its
+    // own target-window validation. Every other anomaly stays a fail-closed 503.
+    if (targetHealthy) {
+      ctx.quotes = [];
+      ctx.done = true;
+      ctx.statusCode = 200;
+      return out(4);
+    }
+    return refuseWith(eventRoute.error + '_TARGET_UNRESOLVED', {
       stage: 'event_target',
       observed: {
-        httpOk: ok(),
-        resolved: Boolean(exercise),
-        idMatch: Boolean(exercise) && String(exercise.id || exercise.exerciseId || '') === ctx.exerciseId,
+        httpOk: targetChecks.httpOk,
+        resolved: targetChecks.resolved,
+        idMatch: targetChecks.idMatch,
         category: (exercise && canonical.resolveCategory(exercise)) || null,
         expectedCategory: eventRoute.category,
-        startsAtParsed: Number.isFinite(start),
-        startsInPast: Number.isFinite(start) ? start <= Date.now() : null,
+        startsAtParsed: targetChecks.startsAtParsed,
+        startsInPast: targetChecks.startsAtParsed ? !targetChecks.startsInFuture : null,
         durationMinutes: Number.isSafeInteger(duration) ? duration : null,
-        hasRoom: Boolean(exercise && canonical.exerciseRoomId(exercise)),
-        hasStudio: Boolean(exercise && (exercise.studio?.id || exercise.studioId)),
+        hasRoom: targetChecks.hasRoom,
+        hasStudio: targetChecks.hasStudio,
         externalEventTypeId: (exercise && canonical.managedExternalEventTypeId(exercise)) || null,
         status: String((exercise && exercise.status) || '') || null,
-        cancelled: Boolean(exercise && (exercise.isCancelled === true || exercise.isCanceled === true)),
+        cancelled: !targetChecks.notCancelled,
       },
     });
+  }
   ctx.exercise = exercise;
   ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };

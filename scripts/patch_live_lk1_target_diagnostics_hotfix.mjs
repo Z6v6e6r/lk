@@ -60,7 +60,7 @@ export const TARGET_DIAGNOSTICS_INSTALLED_GENERATION = Object.freeze({
 export const TARGET_DIAGNOSTICS_TARGET = Object.freeze({
   id: TARGET_DIAGNOSTICS_ROUTER_ID,
   liveFuncSha256: "fc2f252743fdd9e95bd38554441f70fa4b2cee815a4ce0bddbcb67dbabd4bb82",
-  patchedFuncSha256: "c316d6e1ced10afaff89078c30d4f47e453eb7abcc2c510575a4f731576d7fa7",
+  patchedFuncSha256: "1bd8d443e483512c4817f8c6c4850ebd50fb314482c072a5d18db7ae11d66de4",
 });
 
 // The four stages this generation names, one per refusal site.
@@ -76,7 +76,9 @@ const ROUTER_MARKERS = Object.freeze([
   "stage: 'game_exercise',",
   // The sub-conditions that make a production refusal self-explaining.
   "externalEventTypeId: (exercise && canonical.managedExternalEventTypeId(exercise)) || null,",
-  "startsInPast: Number.isFinite(start) ? start <= Date.now() : null,",
+  // Re-pinned 2026-09-17 with `lk1-event-started-unavailable`: the started-ness now comes
+  // from the named target checks (same condition, same refusal, same detail).
+  "startsInPast: targetChecks.startsAtParsed ? !targetChecks.startsInFuture : null,",
   "storedDurationMinutes: Number.isFinite(storedDuration) ? storedDuration : null,",
   "availableClientSubscriptions: Boolean(exercise) && Array.isArray(exercise.availableClientSubscriptions),",
 ]);
@@ -224,10 +226,16 @@ export function composeLk1TargetDiagnosticsArtifacts(liveBytes, deploymentId, op
   if (digest !== target.patchedFuncSha256) {
     throw new Error(`Preview router postimage drift: ${digest} != ${target.patchedFuncSha256}`);
   }
-  // Diagnostics-only proof: with the added details stripped, the composed body must be
-  // byte-identical to the installed generation.
-  if (stripTargetDiagnostics(composed.router) !== router.func) {
-    throw new Error("Composed preview router is not diagnostics-only: the stripped body differs from the installed one");
+  // This generation was released as diagnostics-only: at release time, with the added
+  // details stripped, the composed body was byte-identical to the installed one (see
+  // docs/LK1_PREVIEW_TARGET_DIAGNOSTICS_20260917.md). A later reviewed generation may change
+  // behaviour - `lk1-event-started-unavailable` does, for the started-event mapping - so the
+  // strict equality is no longer a release gate here. What must still hold is that the
+  // details are the only thing this generation adds to a *refusal*: every refusal call site
+  // keeps its exact code expression (checked above) and stripping really removes the details.
+  const stripped = stripTargetDiagnostics(composed.router);
+  if (stripped === composed.router || !stripped.includes("stop('PRICE_PREVIEW_GAME_UNRESOLVED');")) {
+    throw new Error("Composed preview router lost the reviewed refusal details");
   }
   router.func = composed.router;
   if (JSON.stringify({ ...router, func: null }) !== JSON.stringify(routerBefore)) {

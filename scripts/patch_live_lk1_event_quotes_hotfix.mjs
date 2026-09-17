@@ -68,7 +68,7 @@ export const EVENT_QUOTES_TARGETS = Object.freeze({
     // Re-pinned after `lk1-event-diagnostics` and again after `lk1-target-diagnostics`
     // changed the reviewed router source. The generation as deployed on 2026-09-15
     // shipped `9b4f69b5…` (see the incident doc).
-    patchedFuncSha256: "31ae708039f22dc38b02ca1817d7447a38498b6586cd6302f707cf5fb69561d6",
+    patchedFuncSha256: "1818dc8319144c840c7867b3f8ccce598d38a44d9aa7dc60c5e88a6e945a5d11",
   },
   previewFinal: {
     id: EVENT_QUOTES_PREVIEW_FINAL_ID,

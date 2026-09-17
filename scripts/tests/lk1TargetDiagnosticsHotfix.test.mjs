@@ -84,8 +84,14 @@ test("the generation composes exactly the reviewed postimage", { skip: snapshotS
   const composed = candidate.find((node) => node.id === TARGET_DIAGNOSTICS_ROUTER_ID).func;
   // Decision invariance: no refusal was added, moved or dropped.
   assert.deepEqual(refusalCallSites(composed), refusalCallSites(installed));
-  // Diagnostics-only: with the added details stripped the composed body is the installed one.
-  assert.equal(stripTargetDiagnostics(composed), installed);
+  // With the added details stripped the composed body keeps every refusal site exactly as
+  // the installed one had it: the details are additive, and any later reviewed behaviour
+  // change (the started-event mapping) shows up only as a condition change, never as a new
+  // or moved refusal.
+  const stripped = stripTargetDiagnostics(composed);
+  assert.notEqual(stripped, composed);
+  assert.deepEqual(refusalCallSites(stripped), refusalCallSites(installed));
+  assert.equal(stripped.includes("stage: 'event_target',"), false);
   for (const stage of TARGET_DIAGNOSTICS_STAGES) {
     assert.equal(composed.split(`stage: '${stage}',`).length - 1, 1, `stage ${stage} must appear once`);
   }

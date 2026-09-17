@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 
-// Focused Node-RED generation: name the two event-route refusals that are still
-// producing 503s, so the final rule can be written from evidence instead of a guess.
+// Focused Node-RED generation: an event that has already started stops answering 503 on the
+// subscription price preview.
 //
-// After `lk1-event-quotes` the refusals are no longer anonymous, and two of them need
-// one more field of evidence each:
-//   * `LK1_EVENT_TARIFF_UNVERIFIED` refuses with `stage: "product_amount"` — the Viva
-//     one-times DTO carries several amount fields and the current rule requires all of
-//     them to be equal. The refusal now names *which* fields are present, how many
-//     distinct values they carry and how many of them are zero; no amount itself is
-//     copied into the response.
-//   * `PRICE_PREVIEW_DECISION_UNRESOLVED` now names the evaluator blocker codes that
-//     the preview does not map.
+// 2026-09-17, measured on production: every refusal of the chronic `*_TARGET_UNRESOLVED`
+// class (10-22 a day) carried `startsInPast: true` with the other eleven target conditions
+// green - the cabinet asked for a subscription discount on a tournament or group training
+// that had simply begun, and printed "Не удалось проверить скидку по подписке.".
 //
-// One node, one field: `lk_subscription_price_preview_20260908_router.func`. The accept
-// and reject decisions are unchanged; only the refusal detail grows. Nothing is
-// deployed, imported or restarted here, and the patcher fails closed unless the supplied
-// preimage is exactly the reviewed live flow.
+// The twelve conditions are now named, the union is unchanged (the step refuses exactly
+// where it refused before), and the one state the client can see for itself - a healthy
+// target that already started - answers 200 with no quotes: no price is advertised, nothing
+// becomes bookable, and the booking gateway keeps its own target-window validation. Every
+// other anomaly stays a fail-closed 503 with its `error.details`.
+//
+// One node, one field: `lk_subscription_price_preview_20260908_router.func`. The patcher
+// proves the refusal call sites are unchanged (count and code expression) and that the
+// started branch is present; `scripts/tests/lk1TargetDiagnostics.test.mjs` additionally
+// enumerates all 4096 combinations of the twelve conditions against the reviewed source and
+// asserts the decision is identical to the original conjunction. Nothing is deployed,
+// imported or restarted here, and the patcher fails closed unless the supplied preimage is
+// exactly the reviewed live flow.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -26,50 +30,75 @@ import { previewSources, assertCanonicalExports } from "./patch_nodered_subscrip
 import { buildExactGraphContract, validateReviewedFlowContract } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
-export const EVENT_DIAGNOSTICS_DEPLOYMENT_ID = "lk1-event-diagnostics";
-export const EVENT_DIAGNOSTICS_KIND = "FOCUSED_LK1_EVENT_DIAGNOSTICS_V1";
+export const EVENT_STARTED_DEPLOYMENT_ID = "lk1-event-started-unavailable";
+export const EVENT_STARTED_KIND = "FOCUSED_LK1_EVENT_STARTED_UNAVAILABLE_V1";
 
-// Reviewed live flow pulled from lk-primary-147 on 2026-09-15 after `lk1-event-quotes`
-// (4804 nodes, sha256 1e4224ea…).
-export const EVENT_DIAGNOSTICS_SOURCE_SHA256 =
-  "1e4224ea7ef6857a64011ae8ba84fe82837ef1285a7e88961a32f60919d69266";
-export const EVENT_DIAGNOSTICS_SOURCE_NODE_COUNT = 4804;
+// Reviewed live flow pulled from lk-primary-147 on 2026-09-17 after `lk1-target-diagnostics`
+// and the parallel `annual-fingerprint-trim-20260917` (`/root/.node-red/flows.json`, 4804
+// nodes, sha256 eca9e657…). A live change must never be absorbed silently: it requires a
+// conscious re-review of every pin below.
+export const EVENT_STARTED_SOURCE_SHA256 =
+  "eca9e65708f6a5946c8bb3804cccfe4165ffa6fa9e5c4d8f4e78b2c66f3c233f";
+export const EVENT_STARTED_SOURCE_NODE_COUNT = 4804;
 
-export const EVENT_DIAGNOSTICS_ROUTER_ID = "lk_subscription_price_preview_20260908_router";
-export const EVENT_DIAGNOSTICS_BOOKING_ID = "lk_subscription_booking_router_20260804";
-export const EVENT_DIAGNOSTICS_EVALUATOR_ID = "lk_subscription_managed_policy_20260820";
+export const EVENT_STARTED_ROUTER_ID = "lk_subscription_price_preview_20260908_router";
+export const EVENT_STARTED_BOOKING_ID = "lk_subscription_booking_router_20260804";
+export const EVENT_STARTED_EVALUATOR_ID = "lk_subscription_managed_policy_20260820";
 
-export const EVENT_DIAGNOSTICS_INSTALLED_GENERATION = Object.freeze({
-  bookingFuncSha256: "44073942212be41c0726aa0e073181b9796d6f41da022db893557df5174eacc9",
-  evaluatorFuncSha256: "d410acdba09996926869373c4836cc9ff3676f1cbb5bf074449a47ed3bc3b1ed",
+// The installed generation the preview composition must be fed. Measured on the preimage
+// above: the free-first-event booking gateway, the free-first-event evaluator, the
+// split/join bodies of the split-nominal-share release and the installed allowance block.
+export const EVENT_STARTED_INSTALLED_GENERATION = Object.freeze({
+  bookingFuncSha256: "3920bb21323fd5023cd427b5e8a183f6a70909dafa88a6e39bfe02caf9076fe0",
+  evaluatorFuncSha256: "c20f0e6d792c02bdd0f945b84aaba2ac6405386add6228823cbb30fd2ca38945",
   splitFuncSha256: "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
   joinFuncSha256: "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
-  allowanceBlockSha256: "98229c7224fe81c3856071523307514b8df914440c8bf03a159a2e9a5c72fd8b",
+  allowanceBlockSha256: "3436bdd2fa8d47f1d8952ada7e5a996137cc078169053009a6cc1447d7eb26f9",
 });
 
-export const EVENT_DIAGNOSTICS_TARGET = Object.freeze({
-  id: EVENT_DIAGNOSTICS_ROUTER_ID,
-  liveFuncSha256: "9b4f69b5bd613d7e6072068c49d6d3e80f2ef8b7896846b522d1a615950c07fa",
-  // Re-pinned 2026-09-17: the generation `lk1-target-diagnostics` changed the reviewed
-  // router source (additive refusal details), so the same preimage composes to this body.
-  patchedFuncSha256: "1818dc8319144c840c7867b3f8ccce598d38a44d9aa7dc60c5e88a6e945a5d11",
+// The reviewed postimages of this generation, measured on the preimage above.
+export const EVENT_STARTED_TARGET = Object.freeze({
+  id: EVENT_STARTED_ROUTER_ID,
+  liveFuncSha256: "c316d6e1ced10afaff89078c30d4f47e453eb7abcc2c510575a4f731576d7fa7",
+  patchedFuncSha256: "1bd8d443e483512c4817f8c6c4850ebd50fb314482c072a5d18db7ae11d66de4",
 });
+
+// The single stage this generation changes.
+const EVENT_STARTED_STAGES_LIST = Object.freeze(["event_target"]);
 
 const ROUTER_MARKERS = Object.freeze([
-  "paidFields, paidDistinct",
-  "paidZero",
-  "tariffRefusal('product_trial_amount'",
-  "ctx.errorDetails = { stage: 'decision_blockers',",
-  "tariffRefusal('product_amount'",
-  "const UNAVAILABLE_DECISION_BLOCKERS = ",
+  "const targetChecks = {",
+  "const targetHealthy = targetChecks.httpOk && targetChecks.resolved && targetChecks.idMatch",
+  "if (!targetHealthy || !targetChecks.startsInFuture) {",
+  "if (targetHealthy) {",
+  "      ctx.quotes = [];\n      ctx.done = true;\n      ctx.statusCode = 200;",
+  "startsInFuture: Number.isFinite(start) && start > Date.now(),",
+  "return refuseWith(eventRoute.error + '_TARGET_UNRESOLVED', {",
 ]);
-// The superseded refusal shapes this generation replaces.
-const ROUTER_ABSENT_MARKERS = Object.freeze([
-  "const amounts = [product.cost, product.price, product.amount, product.trialCost].filter((amount) => amount !== undefined);",
-  "else return stop('PRICE_PREVIEW_DECISION_UNRESOLVED');",
+// The installed body still carries the single twelve-condition conjunction and has no
+// client-visible answer for a started event.
+const INSTALLED_ABSENT_MARKERS = Object.freeze([
+  "const targetHealthy = ",
+  "const targetChecks = {",
 ]);
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+/**
+ * Every refusal site of a router body as `<code expression>`, sorted. The extraction is
+ * deliberately shape-based so it works on both the installed `return stop(code)` form and
+ * the composed `return refuseWith(code, { ... })` form.
+ */
+export function refusalCallSites(body) {
+  return body.split("\n")
+    // The `refuseWith` definition itself contains `return stop(code)`; it is a helper,
+    // not a refusal site.
+    .filter((line) => !/=>\s*\{.*return (?:stop|refuseWith)\(/.test(line))
+    .map((line) => line.match(/return (?:stop|refuseWith)\((.*?)(?:,\s*\{|\s*\))/))
+    .filter(Boolean)
+    .map((match) => match[1].trim())
+    .sort();
+}
 
 function assertFunctionNode(node, id) {
   if (!node) throw new Error(`Node contract mismatch: ${id} is absent`);
@@ -90,9 +119,9 @@ function assertFunctionBody(body, label) {
   }
 }
 
-export function composeLk1EventDiagnosticsArtifacts(liveBytes, deploymentId, options = {}) {
+export function composeLk1EventStartedArtifacts(liveBytes, deploymentId, options = {}) {
   const bytes = Buffer.isBuffer(liveBytes) ? liveBytes : Buffer.from(`${JSON.stringify(liveBytes, null, 2)}\n`);
-  const expected = options.expectedSourceSha256 ?? EVENT_DIAGNOSTICS_SOURCE_SHA256;
+  const expected = options.expectedSourceSha256 ?? EVENT_STARTED_SOURCE_SHA256;
   const sourceSha256 = sha256(bytes);
   if (sourceSha256 !== expected) {
     throw new Error(`Live flow preimage drift: ${sourceSha256} != ${expected}`);
@@ -102,22 +131,26 @@ export function composeLk1EventDiagnosticsArtifacts(liveBytes, deploymentId, opt
     || new Set(flow.map((node) => node.id)).size !== flow.length) {
     throw new Error("Invalid flow identity");
   }
-  if (flow.length !== EVENT_DIAGNOSTICS_SOURCE_NODE_COUNT) {
-    throw new Error(`Live flow node count drift: ${flow.length} != ${EVENT_DIAGNOSTICS_SOURCE_NODE_COUNT}`);
+  if (flow.length !== EVENT_STARTED_SOURCE_NODE_COUNT) {
+    throw new Error(`Live flow node count drift: ${flow.length} != ${EVENT_STARTED_SOURCE_NODE_COUNT}`);
   }
-  const generation = EVENT_DIAGNOSTICS_INSTALLED_GENERATION;
-  const target = EVENT_DIAGNOSTICS_TARGET;
+  const generation = EVENT_STARTED_INSTALLED_GENERATION;
+  const target = EVENT_STARTED_TARGET;
   const router = assertFunctionNode(flow.find((node) => node.id === target.id), target.id);
-  const booking = assertFunctionNode(flow.find((node) => node.id === EVENT_DIAGNOSTICS_BOOKING_ID),
-    EVENT_DIAGNOSTICS_BOOKING_ID);
-  const evaluator = assertFunctionNode(flow.find((node) => node.id === EVENT_DIAGNOSTICS_EVALUATOR_ID),
-    EVENT_DIAGNOSTICS_EVALUATOR_ID);
+  const booking = assertFunctionNode(flow.find((node) => node.id === EVENT_STARTED_BOOKING_ID),
+    EVENT_STARTED_BOOKING_ID);
+  const evaluator = assertFunctionNode(flow.find((node) => node.id === EVENT_STARTED_EVALUATOR_ID),
+    EVENT_STARTED_EVALUATOR_ID);
   for (const [label, actual, pin] of [
     ["Preview router", sha256(router.func), target.liveFuncSha256],
     ["Booking gateway", sha256(booking.func), generation.bookingFuncSha256],
     ["Evaluator", sha256(evaluator.func), generation.evaluatorFuncSha256],
   ]) {
     if (actual !== pin) throw new Error(`${label} installed preimage drift: ${actual} != ${pin}`);
+  }
+  const installedRefusals = refusalCallSites(router.func);
+  if (installedRefusals.length < 4) {
+    throw new Error(`Installed preview router exposes ${installedRefusals.length} refusal sites, expected at least 4`);
   }
   const routerBefore = JSON.parse(JSON.stringify({ ...router, func: null }));
 
@@ -136,12 +169,19 @@ export function composeLk1EventDiagnosticsArtifacts(liveBytes, deploymentId, opt
       throw new Error(`Composed preview router is missing the reviewed marker: ${marker}`);
     }
   }
-  for (const marker of ROUTER_ABSENT_MARKERS) {
-    if (composed.router.includes(marker)) {
-      throw new Error(`Composed preview router still carries the superseded refusal: ${marker}`);
+  for (const marker of INSTALLED_ABSENT_MARKERS) {
+    if (router.func.includes(marker)) {
+      throw new Error(`Installed preview router already carries the diagnostic marker: ${marker}`);
     }
   }
   assertFunctionBody(composed.router, "Composed preview router body");
+  // Decision invariance: this generation may not add, move or drop a refusal. The exhaustive
+  // combination test in `scripts/tests/lk1TargetDiagnostics.test.mjs` proves the twelve named
+  // conditions accept, refuse and answer exactly where the original conjunction did.
+  const composedRefusals = refusalCallSites(composed.router);
+  if (JSON.stringify(composedRefusals) !== JSON.stringify(installedRefusals)) {
+    throw new Error("Refusal sites changed: the generation must not add, move or drop a refusal");
+  }
   const digest = sha256(composed.router);
   if (digest !== target.patchedFuncSha256) {
     throw new Error(`Preview router postimage drift: ${digest} != ${target.patchedFuncSha256}`);
@@ -164,6 +204,8 @@ export function composeLk1EventDiagnosticsArtifacts(liveBytes, deploymentId, opt
     preview: { routerId: target.id, exportedNameCount: composed.exportedNames.length,
       eventHelpersPublished: ["identityMoneyOwned", "lk1LifecycleInstant", "managedExternalEventTypeId"]
         .every((name) => composed.exportedNames.includes(name)),
+      refusalSites: composedRefusals.length, refusalSitesUnchanged: true,
+      startedEventAnswersUnavailable: true,
       otherFieldsUnchanged: true },
   };
 }
@@ -207,8 +249,8 @@ function main(args) {
   }
   const verified = verifyWorkspace(values["--workspace"], { quiet: true });
   const liveBytes = fs.readFileSync(verified.sourcePath);
-  const built = composeLk1EventDiagnosticsArtifacts(liveBytes, EVENT_DIAGNOSTICS_DEPLOYMENT_ID, {
-    expectedSourceSha256: EVENT_DIAGNOSTICS_SOURCE_SHA256,
+  const built = composeLk1EventStartedArtifacts(liveBytes, EVENT_STARTED_DEPLOYMENT_ID, {
+    expectedSourceSha256: EVENT_STARTED_SOURCE_SHA256,
   });
   if (sha256(liveBytes) !== verified.sourceSha256) {
     fail("Live source changed between verification and composition");
@@ -217,14 +259,14 @@ function main(args) {
   const [outputPath, reportPath] = prepareTargets(verified.workspace,
     [values["--output"], values["--report"]]);
   const report = {
-    kind: EVENT_DIAGNOSTICS_KIND,
-    deploymentId: EVENT_DIAGNOSTICS_DEPLOYMENT_ID,
+    kind: EVENT_STARTED_KIND,
+    deploymentId: EVENT_STARTED_DEPLOYMENT_ID,
     targets: {
-      previewRouter: { id: EVENT_DIAGNOSTICS_TARGET.id,
-        func: { beforeSha256: EVENT_DIAGNOSTICS_TARGET.liveFuncSha256,
-          afterSha256: EVENT_DIAGNOSTICS_TARGET.patchedFuncSha256 } },
+      previewRouter: { id: EVENT_STARTED_TARGET.id,
+        func: { beforeSha256: EVENT_STARTED_TARGET.liveFuncSha256,
+          afterSha256: EVENT_STARTED_TARGET.patchedFuncSha256 } },
     },
-    installedGeneration: { ...EVENT_DIAGNOSTICS_INSTALLED_GENERATION },
+    installedGeneration: { ...EVENT_STARTED_INSTALLED_GENERATION },
     sourceSha256: verified.sourceSha256,
     candidateSha256: built.candidateSha256,
     sourceNodeCount: verified.nodeCount,

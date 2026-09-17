@@ -122,21 +122,45 @@ test('an accepted group event carries no refusal details', () => {
   assert.equal(ctx.target.durationMinutes, 60);
 });
 
-test('a past group event names the start condition that refused it', () => {
-  const { msg } = runRouter({
+test('an event that has already started answers 200 with no quotes', () => {
+  // 2026-09-17: every observed refusal of this class had `startsInPast: true` with all
+  // other target checks green - the cabinet was told "не удалось проверить скидку" for a
+  // tournament that had simply begun. The advisory read no longer fails on that state and
+  // advertises no price, so nothing becomes bookable.
+  const { outputs, msg } = runRouter({
     ctx: previewCtx(),
     msg: { payload: eventExercise({ timeFromIso: '2020-01-01T08:00:00+03:00' }) },
+    canonical: canonicalStub(),
+  });
+  const ctx = msg._subscriptionPricePreview;
+  assert.equal(JSON.stringify(outputs.map(Boolean)), JSON.stringify([false, false, false, false, true, false]));
+  assert.equal(ctx.done, true);
+  assert.equal(ctx.statusCode, 200);
+  assert.deepEqual(plain(ctx.quotes), []);
+  assert.equal(ctx.error, undefined);
+  assert.equal(ctx.errorDetails, undefined);
+  const body = renderFinal(ctx);
+  assert.deepEqual(body, { quotes: [] });
+});
+
+test('a started event with any other anomaly still fails closed with its details', () => {
+  const { msg } = runRouter({
+    ctx: previewCtx(),
+    msg: { payload: eventExercise({ timeFromIso: '2020-01-01T08:00:00+03:00', externalEventTypeId: undefined }) },
     canonical: canonicalStub(),
   });
   const body = renderFinal(msg._subscriptionPricePreview);
   assert.equal(body.error.code, 'GROUP_DISCOUNT_TARGET_UNRESOLVED');
   assert.equal(body.error.details.stage, 'event_target');
   assert.equal(body.error.details.observed.startsInPast, true);
-  assert.equal(body.error.details.observed.category, 'group_training');
-  assert.equal(body.error.details.observed.expectedCategory, 'group_training');
-  assert.equal(body.error.details.observed.hasRoom, true, 'the refusal names the one failing condition');
-  assert.equal(body.error.details.observed.hasStudio, true);
-  assert.equal(body.error.details.observed.externalEventTypeId, 'viva:direction:4588:type:605');
+  assert.equal(body.error.details.observed.externalEventTypeId, null);
+  const cancelled = runRouter({
+    ctx: previewCtx(),
+    msg: { payload: eventExercise({ timeFromIso: '2020-01-01T08:00:00+03:00', status: 'CANCELLED', isCancelled: true }) },
+    canonical: canonicalStub(),
+  });
+  assert.equal(renderFinal(cancelled.msg._subscriptionPricePreview).error.code,
+    'GROUP_DISCOUNT_TARGET_UNRESOLVED');
 });
 
 test('a tournament event with another category names the category mismatch', () => {
@@ -253,4 +277,64 @@ test('the refusal details never carry a name, an amount or a phone number', () =
   for (const forbidden of ['Иван', 'price', 'amount', 'phone', 'clientId', 'customerName']) {
     assert.equal(serialized.includes(forbidden), false, `details must not carry ${forbidden}`);
   }
+});
+
+// The started-event mapping refactored the twelve-condition target conjunction into named
+// checks. This enumerates all 4096 combinations of those twelve conditions against the
+// reviewed source and asserts the refactor is decision-identical: it accepts, refuses and
+// answers the client-visible "unavailable" exactly where the original conjunction did.
+const TARGET_CHECK_KEYS = Object.freeze(['httpOk', 'resolved', 'idMatch', 'category', 'startsAtParsed',
+  'startsInFuture', 'durationValid', 'hasRoom', 'hasStudio', 'hasExternalEventType', 'notCancelled', 'statusActive']);
+
+const compiledRouterFactory = vm.compileFunction(
+  `return function (canonical) { return function (msg) { ${routerSource} }; };`, [],
+  { parsingContext: vm.createContext({ Date, Math, Number, String, Set, Map, JSON, Intl, Boolean, Array, Object,
+    encodeURIComponent, global: { get: () => undefined } }) });
+
+function runGroupExercise(bits) {
+  const canonical = {
+    isObj,
+    unwrapRecord: (value) => (isObj(value?.exercise) ? value.exercise : value),
+    identityMoneyOwned: () => [],
+    eventStartsAt: () => (bits.startsAtParsed ? (bits.startsInFuture ? '2099-09-21T08:00:00+03:00' : '2020-01-01T08:00:00+03:00') : 'not-a-date'),
+    eventDurationMinutes: () => (bits.durationValid ? 90 : 0),
+    resolveCategory: () => (bits.category ? 'group_training' : 'tournament'),
+    exerciseRoomId: () => (bits.hasRoom ? ROOM : null),
+    managedExternalEventTypeId: () => (bits.hasExternalEventType ? 'viva:direction:4588:type:605' : null),
+  };
+  const exercise = { id: bits.idMatch ? EXERCISE : 'other-id', timeFromIso: 'x', durationMinutes: 90,
+    status: bits.statusActive ? 'ACTIVE' : 'CANCELLED', isCancelled: !bits.notCancelled,
+    studio: bits.hasStudio ? { id: STATION } : {}, room: bits.hasRoom ? { id: ROOM } : {} };
+  const ctx = previewCtx();
+  const msg = { statusCode: bits.httpOk ? 200 : 503, _subscriptionPricePreview: ctx,
+    payload: bits.resolved ? exercise : null };
+  const outputs = compiledRouterFactory()(canonical)(msg);
+  const state = msg._subscriptionPricePreview;
+  const wired = outputs.findIndex(Boolean);
+  if (wired === 0) return 'accepted';
+  if (state.error) return 'refused';
+  if (wired === 4 && state.done === true && state.statusCode === 200
+    && Array.isArray(state.quotes) && state.quotes.length === 0) return 'client-unavailable';
+  return 'unexpected:' + wired;
+}
+
+test('the twelve target conditions keep their exact decision across all 4096 combinations', () => {
+  let accepted = 0; let refused = 0; let unavailable = 0;
+  for (let mask = 0; mask < (1 << TARGET_CHECK_KEYS.length); mask += 1) {
+    const bits = Object.fromEntries(TARGET_CHECK_KEYS.map((key, index) => [key, Boolean(mask & (1 << index))]));
+    const healthy = bits.httpOk && bits.resolved && bits.idMatch && bits.category && bits.startsAtParsed
+      && bits.durationValid && bits.hasRoom && bits.hasStudio && bits.hasExternalEventType
+      && bits.notCancelled && bits.statusActive;
+    const startsInFuture = bits.startsAtParsed && bits.startsInFuture;
+    const expected = !healthy ? 'refused' : startsInFuture ? 'accepted' : 'client-unavailable';
+    assert.equal(runGroupExercise(bits), expected,
+      `combination ${mask} (${JSON.stringify(bits)}) must be ${expected}`);
+    if (expected === 'accepted') accepted += 1;
+    else if (expected === 'refused') refused += 1;
+    else unavailable += 1;
+  }
+  // The enumeration really covers all three outcomes.
+  assert.ok(accepted > 0 && refused > 0 && unavailable > 0,
+    `expected every outcome to appear, got ${accepted}/${refused}/${unavailable}`);
+  assert.equal(accepted + refused + unavailable, 4096);
 });
