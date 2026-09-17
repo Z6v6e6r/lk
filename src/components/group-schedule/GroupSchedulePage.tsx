@@ -22,9 +22,11 @@ import {
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { getGroupScheduleOwnedPacks } from "../../utils/groupScheduleOwnedPacks";
+import { hasGroupTrainingSubscription } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import {
   apiFetchTournamentParticipants,
+  apiFetchSubscriptions,
 } from "../../utils/apiClient";
 import {
   apiFetchGroupSubscriptionDiscounts,
@@ -338,6 +340,7 @@ export default function GroupSchedulePage({
   const [detailRosterLoading, setDetailRosterLoading] = useState(false);
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
+  const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
   const [discountQuotes, setDiscountQuotes] = useState<GroupSubscriptionDiscountQuote[]>([]);
   const [discountResolvedFor, setDiscountResolvedFor] = useState<string | null>(null);
   const [discountLoading, setDiscountLoading] = useState(false);
@@ -594,6 +597,22 @@ export default function GroupSchedulePage({
     };
   }, [isAuthenticated, selectedId]);
 
+  useEffect(() => {
+    setSubscriptionOffer(null);
+    if (!isAuthenticated || isRestoringSession || !selectedId || subscriptionUsageShadowEnabled) return;
+    let cancelled = false;
+    // Read the owned subscription list, independently of exercise availability or daily usage.
+    void apiFetchSubscriptions({ size: 1000 }).then(result => {
+      if (cancelled || result.error || !Array.isArray(result.data?.content)) return;
+      const subscriptions = result.data;
+      setSubscriptionOffer({
+        owner: phone,
+        show: subscriptions.last === true && !hasGroupTrainingSubscription(subscriptions.content),
+      });
+    }).catch(() => { /* Keep this optional offer hidden when ownership cannot be checked. */ });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, isRestoringSession, phone, selectedId, subscriptionUsageShadowEnabled]);
+
   const stationFilterOptions = useMemo(
     () => uniqueSorted(items.map((item) => item.studioName || "Станция уточняется")),
     [items],
@@ -637,7 +656,7 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout);
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && subscriptionOffer?.owner === phone && subscriptionOffer?.show);
   const shouldShowGroupSchedulePromoSection = Boolean(checkout && checkout.oneTimes.some(isGroupSchedulePromoProduct));
   const shouldExitInitialDetail = Boolean(returnToFindGame && initialExerciseId && selectedId === initialExerciseId);
 
