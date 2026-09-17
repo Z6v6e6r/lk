@@ -2,7 +2,7 @@
 
 ## Incident
 
-Client `+7 913 744-32-40` (`24dda8e0-6a68-4b30-a151-2c9ee2ede4ec`, annual ХАБ
+Client `+7913***3240` (`24dda8e0-6a68-4b30-a151-2c9ee2ede4ec`, annual ХАБ
 `db7a5250-7369-4f43-8ac5-9111be24bc74`) joined the open game
 `pay_66a6b649-14b2-4a99-a415-d2ed3827fff4` (2026-09-22 08:30, Корт №4, Терехово) by
 subscription on 2026-09-16 17:57 MSK. The claim `lk-split-join-15a9jcs1x7jvc0` was
