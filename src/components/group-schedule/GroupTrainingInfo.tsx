@@ -51,8 +51,10 @@ export function GroupTrainingInfo({ training }: { training: GroupTrainingSummary
           </div>
         )}
         <div className="group-schedule-capacity-labels">
-          <span><MembersCountIcon />{capacity ? `${count}/${capacity}` : count}</span>
-          <span>{training.status === "CANCELLED" ? "Отменено" : training.status === "FULL" ? "Мест нет" : "Уровень"}</span>
+          <span><MembersCountIcon />{capacity ? `${count} из ${capacity}` : count}</span>
+          {(training.status === "CANCELLED" || training.status === "FULL") && (
+            <span>{training.status === "CANCELLED" ? "Отменено" : "Мест нет"}</span>
+          )}
         </div>
       </div>
 

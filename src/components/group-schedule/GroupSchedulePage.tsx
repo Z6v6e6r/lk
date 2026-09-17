@@ -21,6 +21,8 @@ import {
 } from "../../utils/groupScheduleApi";
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
+import { getGroupScheduleOwnedPacks } from "../../utils/groupScheduleOwnedPacks";
+import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import {
   apiFetchTournamentParticipants,
 } from "../../utils/apiClient";
@@ -628,6 +630,7 @@ export default function GroupSchedulePage({
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const purchasableProducts = checkout ? [...checkout.oneTimes, ...checkout.subscriptions] : [];
+  const ownedVisitPacks = checkout ? getGroupScheduleOwnedPacks(checkout.clientSubscriptions) : [];
   const isGamePlusTrainerDetail = selectedTraining ? isGamePlusTrainerSummary(selectedTraining) : false;
   const detailDescription = selectedTraining
     ? isGamePlusTrainerDetail
@@ -1173,6 +1176,28 @@ export default function GroupSchedulePage({
                       && !isRegistered
                       && checkout && (
                       <div className="tournament-signup-payment-options">
+                        {ownedVisitPacks.length > 0 && (
+                          <div className="tournament-signup-payment-group" aria-label="Ваши абонементы">
+                            {ownedVisitPacks.map(product => (
+                              <button
+                                key={`${product.source}-${product.id}`}
+                                className="tournament-signup-payment-option tournament-signup-payment-option-subscription"
+                                type="button"
+                                onClick={() => void completeRegistration(selectedTraining, checkout, product)}
+                                disabled={actionLoading}
+                              >
+                                <span>{product.name}</span>
+                                <strong>
+                                  {resolveSubscriptionUsageDisplay({
+                                    subscriptionName: product.name,
+                                    raw: product.raw,
+                                    visitsPrefix: "Осталось",
+                                  })?.label || "Записаться по абонементу"}
+                                </strong>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         {discountPending && <div className="tournament-signup-muted" role="status">Проверяем скидку по подписке…</div>}
                         {discountError && <div className="tournament-signup-muted" role="status">{discountError}</div>}
                         {purchasableProducts.length > 0 && (
@@ -1304,7 +1329,7 @@ export default function GroupSchedulePage({
                           </>
                         )}
 
-                        {purchasableProducts.length === 0 && (
+                        {ownedVisitPacks.length === 0 && purchasableProducts.length === 0 && (
                           <div className="tournament-signup-muted">Нет доступных способов записи.</div>
                         )}
                       </div>
