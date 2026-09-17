@@ -51,7 +51,7 @@ smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-expected_commit="__EXPECTED_COMMIT__"
+expected_commit="f26bd478bf9a23694cd50aa4e9cbe02fd99815b7"
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Deploy requires a clean checkout" >&2
   exit 3
