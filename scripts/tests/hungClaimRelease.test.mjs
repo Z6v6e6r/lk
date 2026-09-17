@@ -502,14 +502,28 @@ test('Mongo/CLI rehearsal: fresh evidence, CAS, retry and cursor', { skip: !proc
       await collection.deleteMany({}); reads = 0;
       await collection.insertOne(operation({ _id: 'confirmed-claim', state: 'CONFIRMED',
         bookingId: 'fixture-booking-0001', updatedAt: '2026-09-11T05:00:00.000Z' }));
+      await collection.insertOne(operation({ _id: 'hung-claim' }));
       onRead = async () => ({ content: [booking({ isCancelled: true })], totalElements: 1, last: true });
       const without = await cli([]);
       // Without the flag the bounded scan does not even select a CONFIRMED claim.
-      assert.equal(without.report.scanned, 0);
-      assert.equal(without.report.releasable.length, 0);
+      assert.equal(without.report.scanned, 1);
+      assert.equal(without.report.decisions[0].state, 'PENDING_CONFIRMATION');
+      assert.equal(without.report.releasable.length, 1);
       assert.equal((await collection.findOne({ _id: 'confirmed-claim' })).state, 'CONFIRMED');
+      // A dedicated confirmed-only job sees the confirmed class and nothing else.
+      const scoped = await cli(['--only-confirmed']);
+      assert.equal(scoped.report.onlyConfirmed, true);
+      assert.equal(scoped.report.includeConfirmed, true);
+      assert.equal(scoped.report.scanned, 1);
+      assert.equal(scoped.report.decisions[0].state, 'CONFIRMED');
+      assert.equal((await collection.findOne({ _id: 'hung-claim' })).state, 'PENDING_CONFIRMATION');
+      // --no-cursor keeps the bounded sort order and leaves no cursor behind.
       const backup = path.join(dir, 'confirmed');
-      const applied = await cli(['--include-confirmed', '--apply', '--backup-dir', backup]);
+      const applied = await cli(['--only-confirmed', '--no-cursor', '--sort', 'newest',
+        '--apply', '--backup-dir', backup]);
+      assert.equal(applied.report.scanOrder, 'newest');
+      assert.equal(applied.report.cursorAdvanced, false);
+      assert.equal(fs.existsSync(path.join(backup, '.scan-cursor.json')), false);
       assert.equal(applied.report.released.length, 1);
       assert.equal(applied.report.released[0].evidence, 'EXACT_CANCELLED_BOOKING');
       const released = await collection.findOne({ _id: 'confirmed-claim' });

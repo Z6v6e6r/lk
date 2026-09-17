@@ -55,6 +55,11 @@ Scan options:
                               provider booking the readback no longer holds (payment-timeout
                               cleanup leftovers). Off by default: without it a CONFIRMED claim
                               stays STATE_TERMINAL exactly as before.
+  --only-confirmed             scan the CONFIRMED class alone (implies --include-confirmed).
+                              Use for a dedicated confirmed-claim job so a large CONFIRMED
+                              backlog cannot starve the small hung-claim backlog.
+  --no-cursor                  ignore the keyset cursor and use --sort for a bounded batch
+                              (the fresh orphans first). Recommended with --only-confirmed.
   --limit <n>                  max claims per run (default: 200)
   --sort <oldest|newest>       legacy audit order without a cursor (default: oldest)
   --cursor-file <path>         resume bounded traversal by operation key; dry-run never advances it
@@ -77,14 +82,17 @@ const fixturePath = value('--fixture');
 const backupDir = value('--backup-dir');
 const reportPath = value('--report');
 const quiet = has('--quiet');
-const cursorPath = value('--cursor-file') || (apply && backupDir ? path.join(backupDir, '.scan-cursor.json') : null);
+const noCursor = has('--no-cursor');
+const cursorPath = value('--cursor-file')
+  || (apply && backupDir && !noCursor ? path.join(backupDir, '.scan-cursor.json') : null);
 const databaseName = value('--database') || process.env.GAMES_MONGODB_DB || 'games';
 const collectionName = value('--collection') || 'lk_subscription_daily_booking_ops';
 const tenantKey = value('--tenant');
 const actorClientId = value('--actor');
 const clientSubscriptionId = value('--subscription');
 const limit = Number(value('--limit') || 200);
-const includeConfirmed = has('--include-confirmed');
+const onlyConfirmed = has('--only-confirmed');
+const includeConfirmed = onlyConfirmed || has('--include-confirmed');
 const sortOrder = value('--sort') || 'oldest';
 const ttlMinutes = Number(value('--ttl-minutes') || DEFAULT_HUNG_CLAIM_TTL_MS / 60000);
 const nowIso = value('--now') || new Date().toISOString();
@@ -185,12 +193,15 @@ async function loadScan() {
   // claim only becomes a candidate after it stopped being a live payment/join attempt.
   const confirmedCutoff = new Date(Date.parse(nowIso) - ttlMs).toISOString();
   const hungStates = { state: { $in: [...HUNG_CLAIM_STATES, ...AUDIT_ONLY_CLAIM_STATES] } };
-  const query = includeConfirmed
-    ? { $or: [hungStates, {
-      state: { $in: [...CONFIRMED_CLAIM_STATES] },
-      $or: [{ updatedAt: { $lt: confirmedCutoff } }, { updatedAt: null, createdAt: { $lt: confirmedCutoff } }],
-    }] }
-    : hungStates;
+  const confirmedStates = {
+    state: { $in: [...CONFIRMED_CLAIM_STATES] },
+    $or: [{ updatedAt: { $lt: confirmedCutoff } }, { updatedAt: null, createdAt: { $lt: confirmedCutoff } }],
+  };
+  const query = onlyConfirmed
+    ? confirmedStates
+    : includeConfirmed
+      ? { $or: [hungStates, confirmedStates] }
+      : hungStates;
   if (tenantKey) query.tenantKey = tenantKey;
   if (actorClientId) query.actorClientId = actorClientId;
   if (clientSubscriptionId) query.clientSubscriptionId = clientSubscriptionId;
@@ -221,6 +232,8 @@ const report = {
   now: nowIso,
   ttlMinutes,
   includeConfirmed,
+  onlyConfirmed,
+  scanOrder: cursorPath ? 'operation-key-cursor' : sortOrder,
   providerVerification: providerReady ? 'PERFORMED' : 'TOKEN_MISSING',
   applied: null,
   reason: null,
@@ -229,7 +242,6 @@ const report = {
   skipped: [],
   compareAndSwapFailures: [],
   freshReadFailures: 0,
-  scanOrder: cursor ? 'operation-key-cursor' : sortOrder,
   cursorAdvanced: false,
   backupPath: null,
 };
