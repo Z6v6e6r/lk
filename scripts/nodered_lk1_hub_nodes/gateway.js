@@ -5,6 +5,12 @@ function isNodeRedHttpsCheckout(paymentUrl) {
 }
 const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const LK1_PRODUCT_POLICY_GLOBAL = "subscriptions_lk1_product_policy";
+// An ingress replay of a confirmed claim re-reads the provider before it replays the
+// stored checkout: the split payment-timeout cleanup cancels the booking without
+// releasing the claim, and a replay must not send the player to pay for a booking the
+// provider no longer holds.
+const LK1_CONFIRMED_BOOKING_RECHECK = "lk1_ingress_confirmed_booking_recheck";
+const LK1_CONFIRMED_ORPHAN_RELEASE = "lk1_confirmed_orphan_release";
 // The free-first-event cohort of the rollout contract: for these plan products the first
 // event of the subscription's local service day in the listed categories is carried by the
 // subscription itself (one visit is consumed and nothing is charged); every later event that
@@ -316,8 +322,136 @@ if (ctx.step === "lk1_ingress_operation_find") {
     ctx.lk1 = JSON.parse(JSON.stringify(quote));
     ctx.exerciseId = operation.exerciseId;
     ctx.confirmedBookingId = operation.bookingId;
-    return lk1Finish(ctx);
+    // Split join/create only: the payment-timeout cleanup that orphans a confirmed
+    // booking is split-specific and the group/tournament replay contract is pinned
+    // separately. A split replay re-reads the provider before it replays the stored
+    // checkout, because a replay must not send the player to pay for a booking the
+    // provider no longer holds.
+    if (ctx.caller !== "split") return lk1Finish(ctx);
+    ctx.lk1ConfirmedReplay = {
+      operationKey: operation._id,
+      operationId: operation.operationId,
+      bookingId: operation.bookingId,
+      fingerprint: quote.fingerprint,
+      updatedAt: operation.updatedAt ?? null,
+    };
+    return prepareAdminGet(ctx, LK1_CONFIRMED_BOOKING_RECHECK,
+      `/api/v1/exercises/${encodeURIComponent(operation.exerciseId)}/bookings?showCancelled=true&size=200`);
   }
+}
+
+const releaseConfirmedOrphan = (ctx, bound) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, LK1_CONFIRMED_ORPHAN_RELEASE, {
+    _id: bound.operationKey,
+    operationId: bound.operationId,
+    state: "CONFIRMED",
+    bookingId: bound.bookingId,
+    "lk1.fingerprint": bound.fingerprint,
+    updatedAt: bound.updatedAt,
+  }, {
+    $set: {
+      state: "RELEASED",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+      releaseReason: "CONFIRMED_BOOKING_GONE",
+      reconciliation: {
+        source: "hub_confirmed_replay_provider_readback",
+        decision: "SAFE_TO_RELEASE",
+        reconciledAt: nowIso,
+        observedBookingId: bound.bookingId,
+        observedUpdatedAt: bound.updatedAt,
+      },
+    },
+  });
+};
+
+if (ctx.step === LK1_CONFIRMED_BOOKING_RECHECK) {
+  // Portable helpers: this body is composed both with and without the booking-readback
+  // layer, so the recheck must not depend on helpers a partial composition omits.
+  const recheckKey = (value) => (value === null || value === undefined
+    ? null : String(value).trim().toLowerCase() || null);
+  const recheckRowBookingId = (row) => (isObj(row) ? row.id || row.bookingId || row.uuid || null : null);
+  const recheckRowClientId = (row) => (isObj(row)
+    ? row.clientId || (isObj(row.client) ? row.client.id : null) || row.playerId || row.userId || null
+    : null);
+  const recheckRowSubscriptionId = (row) => {
+    if (!isObj(row)) return null;
+    const nested = isObj(row.subscription) ? row.subscription
+      : isObj(row.clientSubscription) ? row.clientSubscription : {};
+    return row.clientSubscriptionId || row.subscriptionId || row.clientSubId
+      || nested.clientSubscriptionId || nested.subscriptionId || nested.id || nested.uuid || null;
+  };
+  const recheckRowCancelled = (row) => {
+    if (!isObj(row)) return false;
+    if (row.isCancelled === true || row.cancelled === true || row.canceled === true) return true;
+    if ([row.isCancelled, row.cancelled, row.canceled].some((flag) => flag === false)) return false;
+    if (row.cancelledAt || row.cancellationDate) return true;
+    return /cancel/i.test(String(row.bookingStatus || row.status || row.state || ""));
+  };
+  const bound = isObj(ctx.lk1ConfirmedReplay) ? ctx.lk1ConfirmedReplay : null;
+  if (!bound || !bound.operationKey || !bound.operationId || !bound.bookingId || !bound.fingerprint) {
+    return lk1Stop(ctx, "LK1_CONFIRMED_RECHECK_CONTEXT_INVALID");
+  }
+  // "Cannot verify" always means "keep the claim and answer pending": only a complete
+  // provider page may release the seat.
+  if (!isHttpOk(msg.statusCode) || !hasCompleteBookingList(msg.payload)) {
+    return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_EVIDENCE_UNAVAILABLE");
+  }
+  const rows = extractItems(msg.payload).filter((row) => isObj(row));
+  const actor = recheckKey(ctx.actorClientId);
+  const subscription = recheckKey(ctx.clientSubscriptionId);
+  const boundId = recheckKey(bound.bookingId);
+  const matches = rows.filter((row) => recheckKey(recheckRowBookingId(row)) === boundId);
+  if (matches.length > 1) return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_AMBIGUOUS");
+  if (matches.length === 1) {
+    // The provider still lists the row: a live one is the ordinary replay, a cancelled
+    // one is the orphaned claim this guard has to return.
+    if (!recheckRowCancelled(matches[0])) {
+      delete ctx.lk1ConfirmedReplay;
+      return lk1Finish(ctx);
+    }
+    return releaseConfirmedOrphan(ctx, bound);
+  }
+  for (const row of rows) {
+    if (recheckRowCancelled(row)) continue;
+    if (recheckKey(recheckRowClientId(row)) !== actor) continue;
+    const sub = recheckKey(recheckRowSubscriptionId(row));
+    if (!sub) return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_SUBSCRIPTION_UNRESOLVED");
+    if (sub === subscription) return lk1Stop(ctx, "LK1_CONFIRMED_BOOKING_STILL_ACTIVE");
+  }
+  // The complete page neither lists the bound booking nor holds a live booking of this
+  // actor and subscription: the provider deleted it (exactly what the payment-timeout
+  // cleanup does). The claim still holds the seat, so it is the one to return.
+  return releaseConfirmedOrphan(ctx, bound);
+}
+
+if (ctx.step === LK1_CONFIRMED_ORPHAN_RELEASE) {
+  const bound = isObj(ctx.lk1ConfirmedReplay) ? ctx.lk1ConfirmedReplay : {};
+  const ackResults = isObj(msg.payload) ? [msg.payload, msg.payload.result] : [];
+  let matched = 0;
+  for (const result of ackResults) {
+    if (!isObj(result)) continue;
+    for (const value of [result.matchedCount, result.modifiedCount, result.upsertedCount,
+      result.n, result.nModified]) {
+      if (Number.isFinite(Number(value))) { matched = Number(value); break; }
+    }
+    if (matched > 0) break;
+  }
+  if (msg.error || matched < 1) {
+    return lk1Stop(ctx, "LK1_CONFIRMED_ORPHAN_RELEASE_CONFLICT");
+  }
+  delete ctx.lk1ConfirmedReplay;
+  const released = {
+    code: "SUBSCRIPTION_BOOKING_CONFIRMED_ORPHAN_RELEASED",
+    operationId: bound.operationId || null,
+    releasedBookingId: bound.bookingId || null,
+  };
+  // `finishError` belongs to the booking router this body is embedded into; a partial
+  // harness that only carries `finishPending` still gets the same pending contract.
+  return typeof finishError === "function"
+    ? finishError(ctx, 409, "Подтверждённая ранее запись отменена, место освобождено — присоединитесь заново", released)
+    : finishPending(ctx, "Подтверждённая ранее запись отменена, место освобождено — присоединитесь заново", released);
 }
 
 if (ctx.step === "lk1_rejoin_predecessor_find") {

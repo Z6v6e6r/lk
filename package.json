@@ -99,6 +99,7 @@
     "nodered:subscription-hub-limit:deploy-147": "bash scripts/deploy_nodered_subscription_hub_limit_147.sh",
     "nodered:subscription-hub-limit:rollback-147": "bash scripts/rollback_nodered_subscription_hub_limit_147.sh",
     "nodered:lk1-payment-readback:deploy-147": "bash scripts/deploy_nodered_lk1_payment_readback_147.sh",
+    "nodered:lk1-confirmed-replay:deploy-147": "bash scripts/deploy_nodered_lk1_confirmed_replay_guard_147.sh",
     "nodered:lk1-plan-rules:deploy-147": "bash scripts/deploy_nodered_lk1_plan_rules_147.sh",
     "nodered:lk1-preview-exports:deploy-147": "bash scripts/deploy_nodered_lk1_preview_exports_hotfix_147.sh",
     "nodered:lk1-event-quotes:deploy-147": "bash scripts/deploy_nodered_lk1_event_quotes_hotfix_147.sh",

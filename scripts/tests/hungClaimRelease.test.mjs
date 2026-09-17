@@ -235,6 +235,29 @@ test('the CLI rehearses offline, refuses --apply with --fixture and never writes
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('the CLI scans CONFIRMED claims only with --include-confirmed', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hung-claims-confirmed-'));
+  try {
+    const fixturePath = path.join(dir, 'fixture.json');
+    fs.writeFileSync(fixturePath, `${JSON.stringify({
+      operations: [operation({ _id: 'fixture-doc-confirmed', state: 'CONFIRMED', bookingId: 'fixture-booking-0001' })],
+      bookingsByExercise: { [EXERCISE]: [booking({ isCancelled: true })] },
+    }, null, 2)}\n`);
+    const script = fileURLToPath(new URL('../reconcile_hung_subscription_claims.mjs', import.meta.url));
+    const plain = JSON.parse(execFileSync(process.execPath, [script, '--fixture', fixturePath, '--now', NOW], { encoding: 'utf8' }));
+    assert.equal(plain.scanned, 1);
+    assert.equal(plain.includeConfirmed, false);
+    assert.equal(plain.releasable.length, 0);
+    assert.equal(plain.byReason.STATE_TERMINAL, 1);
+    const included = JSON.parse(execFileSync(process.execPath,
+      [script, '--fixture', fixturePath, '--now', NOW, '--include-confirmed'], { encoding: 'utf8' }));
+    assert.equal(included.includeConfirmed, true);
+    assert.equal(included.releasable.length, 1);
+    assert.equal(included.decisions[0].state, 'CONFIRMED');
+    assert.equal(included.decisions[0].evidence, 'EXACT_CANCELLED_BOOKING');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('exact bound cancellation releases only that exhausted pending claim', () => {
   const op = operation({ upstreamBookingId: 'fixture-booking-0001' });
   const cancelled = booking({ isCancelled: true });
@@ -284,6 +307,85 @@ test('CREATE and external side effects remain manual even after exact cancellati
   ]) {
     assert.equal(planHungClaimRelease({ operation: operation({ upstreamBookingId: cancelled.id, ...extra }), bookings: [cancelled], now: NOW }).reason, 'RELATED_OPERATION_REQUIRES_RECONCILIATION');
   }
+});
+
+test('a confirmed claim stays terminal until the confirmed class is enabled', () => {
+  const op = operation({ state: 'CONFIRMED', bookingId: 'fixture-booking-0001' });
+  const cancelled = booking({ isCancelled: true });
+  assert.equal(planHungClaimRelease({ operation: op, bookings: [cancelled], now: NOW, ttlMs }).reason, 'STATE_TERMINAL');
+  const summary = summarizeHungClaims({
+    operations: [op],
+    bookingsByExercise: new Map([[EXERCISE.toLowerCase(), [cancelled]]]),
+    now: NOW,
+    ttlMs,
+  });
+  assert.equal(summary.releasable.length, 0);
+  assert.deepEqual(summary.byReason, { STATE_TERMINAL: 1 });
+});
+
+test('an orphaned confirmed claim is released only with provider proof', () => {
+  const op = operation({ state: 'CONFIRMED', bookingId: 'fixture-booking-0001' });
+  const decide = (bookings, extra = {}) => planHungClaimRelease({
+    operation: { ...op, ...extra }, bookings, now: NOW, ttlMs, includeConfirmed: true,
+  });
+  const flagged = decide([booking({ isCancelled: true })]);
+  assert.equal(flagged.releasable, true);
+  assert.equal(flagged.reason, null);
+  assert.equal(flagged.evidence, 'EXACT_CANCELLED_BOOKING');
+  // The games cleanup accepts its own readback by status; the same row must count here.
+  const statusCancelled = decide([booking({ status: 'CANCELLED_BY_CLIENT' })]);
+  assert.equal(statusCancelled.releasable, true);
+  assert.equal(statusCancelled.evidence, 'EXACT_CANCELLED_BOOKING');
+  // The cleanup deletes the booking: a complete readback without the bound row and
+  // without any live booking of this actor and subscription is the same proof.
+  const foreignNeighbour = decide([booking({ id: 'fixture-booking-0002', clientId: 'fixture-actor-0002' })]);
+  assert.equal(foreignNeighbour.releasable, true);
+  assert.equal(foreignNeighbour.evidence, 'BOUND_BOOKING_ABSENT');
+  const emptyReadback = decide([]);
+  assert.equal(emptyReadback.releasable, true);
+  assert.equal(emptyReadback.evidence, 'BOUND_BOOKING_ABSENT');
+});
+
+test('the confirmed class fails closed on live, fresh, unbound and ambiguous states', () => {
+  const op = operation({ state: 'CONFIRMED', bookingId: 'fixture-booking-0001' });
+  const decide = (extra = {}, bookings = []) => planHungClaimRelease({
+    operation: { ...op, ...extra }, bookings, now: NOW, ttlMs, includeConfirmed: true,
+  });
+  assert.equal(decide({ bookingId: null }).reason, 'CONFIRMED_BINDING_UNRESOLVED');
+  assert.equal(decide({ bookingId: 'a', upstreamBookingId: 'b' }).reason, 'BOOKING_ID_CONFLICT');
+  assert.equal(decide({ updatedAt: '2026-09-12T07:45:00.000Z' }, [booking({ isCancelled: true })]).reason, 'DEADLINE_NOT_REACHED');
+  assert.equal(decide({}, null).reason, 'PROVIDER_EVIDENCE_MISSING');
+  assert.equal(decide({}, { content: [], last: false }).reason, 'PROVIDER_EVIDENCE_INCOMPLETE');
+  assert.equal(decide({}, [booking()]).reason, 'BOUND_BOOKING_NOT_CANCELLED');
+  assert.equal(decide({}, [booking({ clientId: 'fixture-actor-0002' })]).reason, 'BOUND_BOOKING_IDENTITY_MISMATCH');
+  assert.equal(decide({}, [booking({ exerciseId: 'other', isCancelled: true })]).reason, 'BOUND_EXERCISE_MISMATCH');
+  assert.equal(decide({}, [booking({ id: 'other', clientId: ACTOR, clientSubscriptionId: SUB })]).reason, 'PROVIDER_BOOKING_ACTIVE');
+  assert.equal(decide({}, [booking({ id: 'other', clientId: ACTOR, clientSubscriptionId: null, subscription: null })]).reason, 'PROVIDER_SUBSCRIPTION_ID_UNRESOLVED');
+  assert.equal(decide({ lk1: { visitJob: { state: 'PENDING' } } }).reason, 'RELATED_OPERATION_REQUIRES_RECONCILIATION');
+  assert.equal(decide({ actorClientId: null }).reason, 'IDENTITY_UNRESOLVED');
+  assert.equal(decide({ exerciseId: null }).reason, 'EXERCISE_ID_MISSING');
+});
+
+test('a released orphaned claim keeps its money evidence and CAS snapshot', () => {
+  const op = operation({
+    state: 'CONFIRMED',
+    bookingId: 'fixture-booking-0001',
+    lk1: { fingerprint: 'fixture-fingerprint', checkout: { transactionId: 'fixture-tx', paymentUrl: 'https://example.invalid/p', toPayMinor: 70000 } },
+  });
+  const decision = planHungClaimRelease({
+    operation: op,
+    bookings: [booking({ isCancelled: true })],
+    now: NOW,
+    ttlMs,
+    includeConfirmed: true,
+  });
+  assert.equal(decision.releasable, true);
+  const command = buildHungClaimReleaseCommand({ operation: op, now: NOW });
+  // The money leg must survive the release: no `$unset` of lk1, and the CAS pins it.
+  assert.deepEqual(command.query.lk1, { $eq: op.lk1 });
+  assert.deepEqual(Object.keys(command.update.$unset), ['pendingUntil', 'leaseUntil', 'precreateLeaseUntil']);
+  assert.equal(command.update.$set.releaseReason, RELEASE_REASON);
+  assert.equal(command.update.$set.state, 'RELEASED');
 });
 
 test('cursor traverses permanently skipped prefixes and wraps without updatedAt', async () => {
@@ -395,6 +497,38 @@ test('Mongo/CLI rehearsal: fresh evidence, CAS, retry and cursor', { skip: !proc
       assert.equal(result.report.compareAndSwapFailures.length, 1);
       assert.equal(result.report.released.length, 0);
       assert.equal((await collection.findOne({})).state, 'PENDING_CONFIRMATION');
+    });
+    await t.test('the confirmed class releases an orphaned claim only when enabled', async () => {
+      await collection.deleteMany({}); reads = 0;
+      await collection.insertOne(operation({ _id: 'confirmed-claim', state: 'CONFIRMED',
+        bookingId: 'fixture-booking-0001', updatedAt: '2026-09-11T05:00:00.000Z' }));
+      await collection.insertOne(operation({ _id: 'hung-claim' }));
+      onRead = async () => ({ content: [booking({ isCancelled: true })], totalElements: 1, last: true });
+      const without = await cli([]);
+      // Without the flag the bounded scan does not even select a CONFIRMED claim.
+      assert.equal(without.report.scanned, 1);
+      assert.equal(without.report.decisions[0].state, 'PENDING_CONFIRMATION');
+      assert.equal(without.report.releasable.length, 1);
+      assert.equal((await collection.findOne({ _id: 'confirmed-claim' })).state, 'CONFIRMED');
+      // A dedicated confirmed-only job sees the confirmed class and nothing else.
+      const scoped = await cli(['--only-confirmed']);
+      assert.equal(scoped.report.onlyConfirmed, true);
+      assert.equal(scoped.report.includeConfirmed, true);
+      assert.equal(scoped.report.scanned, 1);
+      assert.equal(scoped.report.decisions[0].state, 'CONFIRMED');
+      assert.equal((await collection.findOne({ _id: 'hung-claim' })).state, 'PENDING_CONFIRMATION');
+      // --no-cursor keeps the bounded sort order and leaves no cursor behind.
+      const backup = path.join(dir, 'confirmed');
+      const applied = await cli(['--only-confirmed', '--no-cursor', '--sort', 'newest',
+        '--apply', '--backup-dir', backup]);
+      assert.equal(applied.report.scanOrder, 'newest');
+      assert.equal(applied.report.cursorAdvanced, false);
+      assert.equal(fs.existsSync(path.join(backup, '.scan-cursor.json')), false);
+      assert.equal(applied.report.released.length, 1);
+      assert.equal(applied.report.released[0].evidence, 'EXACT_CANCELLED_BOOKING');
+      const released = await collection.findOne({ _id: 'confirmed-claim' });
+      assert.equal(released.state, 'RELEASED');
+      assert.equal(released.releaseReason, RELEASE_REASON);
     });
     await t.test('cursor progresses past skipped rows to legacy createdAt-only claim', async () => {
       await reset({ _id: 'a', state: 'PRECREATE_RESERVED' });

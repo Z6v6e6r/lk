@@ -38,6 +38,17 @@ export const AUDIT_ONLY_CLAIM_STATES = Object.freeze([
 /** States this reconciler does not change. CONFIRMED can still consume allowance. */
 export const TERMINAL_CLAIM_STATES = Object.freeze(['CONFIRMED', 'FAILED', 'RELEASED']);
 
+/**
+ * A CONFIRMED claim is not terminal by itself: it holds the seat and the consumed
+ * free minutes until the provider cancels the booking. The runtime returns the seat
+ * only on a request path (an explicit cancellation, or a repeat of the same
+ * operation), so a booking that the split payment-timeout cleanup cancelled without a
+ * new request leaves the claim CONFIRMED with a dead booking id and no way back.
+ * This class is opt-in (`includeConfirmed`): the scheduled run keeps its original
+ * hung-claim scope until an operator enables it after a dry run.
+ */
+export const CONFIRMED_CLAIM_STATES = Object.freeze(['CONFIRMED']);
+
 export const DEFAULT_HUNG_CLAIM_TTL_MS = 30 * 60 * 1000;
 export const WRITE_OPTIONS = Object.freeze({ writeConcern: { w: 'majority', j: true } });
 
@@ -102,6 +113,18 @@ export function isExplicitlyCancelled(value) {
     || parseTs(value.cancelledAt) !== null || statuses.length > 0;
 }
 export const isActiveBooking = value => !isExplicitlyCancelled(value);
+
+/** Provider statuses that name a cancellation. The games cleanup uses the same rule to
+ * accept its own cancellation readback, so an explicitly flagged or cancelled-status
+ * row proves the seat was returned even when the exact flag spelling differs. A row
+ * that contradicts the status with `isCancelled: false` stays protected. */
+export function isProviderCancelled(value) {
+  if (isExplicitlyCancelled(value)) return true;
+  if (!value || typeof value !== 'object') return false;
+  if ([value.isCancelled, value.cancelled, value.canceled].includes(false)) return false;
+  const status = String(value.bookingStatus || value.status || value.state || '').trim().toUpperCase();
+  return status.includes('CANCEL');
+}
 
 // Do not choose one convenient alias when the provider supplied conflicting IDs.
 export function exactId(values) {
@@ -179,7 +202,9 @@ export function hasCreateAttempt(operation) {
  *
  * Returns { releasable, reason, deadline, actorClientId, clientSubscriptionId }.
  */
-export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS }) {
+export function planHungClaimRelease({
+  operation, bookings, now, ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS, includeConfirmed = false,
+}) {
   const nowTs = parseTs(now);
   const base = {
     operationKey: toStr(operation?._id),
@@ -196,6 +221,66 @@ export function planHungClaimRelease({ operation, bookings, now, ttlMs = DEFAULT
   if (nowTs === null) return deny('NOW_UNRESOLVED');
   if (!operation || typeof operation !== 'object') return deny('OPERATION_INVALID');
   if (AUDIT_ONLY_CLAIM_STATES.includes(base.state)) return deny('STATE_REQUIRES_MANUAL_RECONCILIATION');
+  if (base.state === 'CONFIRMED' && includeConfirmed) {
+    // A confirmed claim owns a provider booking. It may be returned to the player only
+    // when the provider proves that booking is no longer live: either the exact bound
+    // row is cancelled, or a complete readback of its exercise no longer lists it and
+    // holds no active booking of this actor and subscription.
+    if (operation.lk1 != null && (typeof operation.lk1 !== 'object' || Array.isArray(operation.lk1))) {
+      return deny('OPERATION_INVALID');
+    }
+    if (operation.managedEntitlementOperationId || operation.managedSubscriptionInstanceId
+      || operation.activationState === 'PENDING' || operation.lk1?.visitJob != null) {
+      return deny('RELATED_OPERATION_REQUIRES_RECONCILIATION');
+    }
+    if (!exactId([operation.actorClientId]) || !exactId([operation.clientSubscriptionId])) return deny('IDENTITY_UNRESOLVED');
+    const boundId = exactId([operation.bookingId, operation.upstreamBookingId]);
+    if (!boundId) return deny(claimBookingId(operation) ? 'BOOKING_ID_CONFLICT' : 'CONFIRMED_BINDING_UNRESOLVED');
+    const deadlineTs = hungClaimDeadlineTs(operation, { ttlMs });
+    const deadline = deadlineTs === null ? null : new Date(deadlineTs).toISOString();
+    if (deadlineTs === null) return deny('DEADLINE_MISSING');
+    if (deadlineTs > nowTs) return deny('DEADLINE_NOT_REACHED', deadline);
+    const rows = readCompleteBookingRows(bookings);
+    if (!rows) {
+      return deny(Array.isArray(bookings) || bookings ? 'PROVIDER_EVIDENCE_INCOMPLETE' : 'PROVIDER_EVIDENCE_MISSING', deadline);
+    }
+    if (!base.exerciseId) return deny('EXERCISE_ID_MISSING', deadline);
+    const actor = normalizeId(base.actorClientId);
+    const subscription = normalizeId(base.clientSubscriptionId);
+    // The bound row is judged first, so the reason names the actual provider state of
+    // this claim instead of a neighbouring row.
+    const matches = rows.filter(row => row && typeof row === 'object' && !Array.isArray(row)
+      && [row.id, row.bookingId, row.uuid].some(id => normalizeId(id) === boundId));
+    if (matches.length > 1) return deny('BOUND_BOOKING_AMBIGUOUS', deadline);
+    if (matches.length === 1) {
+      const row = matches[0];
+      if (exactBooking(row) !== boundId) return deny('BOUND_BOOKING_UNRESOLVED', deadline);
+      if (exactClient(row) !== actor || exactSubscription(row) !== subscription) {
+        return deny('BOUND_BOOKING_IDENTITY_MISMATCH', deadline);
+      }
+      const exerciseAliases = [row.exerciseId, row.exercise?.id, row.exercise?.exerciseId].filter(value => value != null);
+      if (exerciseAliases.length && exactId(exerciseAliases) !== normalizeId(base.exerciseId)) {
+        return deny('BOUND_EXERCISE_MISMATCH', deadline);
+      }
+      if (!isProviderCancelled(row)) return deny('BOUND_BOOKING_NOT_CANCELLED', deadline);
+      return { ...base, deadline, releasable: true, reason: null, evidence: 'EXACT_CANCELLED_BOOKING' };
+    }
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return deny('PROVIDER_IDENTITY_UNRESOLVED', deadline);
+      if (!isActiveBooking(row)) continue;
+      const client = exactClient(row);
+      if (!client) return deny('PROVIDER_IDENTITY_UNRESOLVED', deadline);
+      if (client !== actor) continue;
+      const sub = exactSubscription(row);
+      if (!sub) return deny('PROVIDER_SUBSCRIPTION_ID_UNRESOLVED', deadline);
+      if (sub === subscription) return deny('PROVIDER_BOOKING_ACTIVE', deadline);
+    }
+    // The bound booking is not in the complete readback and no active booking of this
+    // actor and subscription remains: the provider deleted it (the payment-timeout
+    // cleanup cancels the booking rather than leaving a cancelled row behind). The
+    // claim still holds the seat, so it is the one to return.
+    return { ...base, deadline, releasable: true, reason: null, evidence: 'BOUND_BOOKING_ABSENT' };
+  }
   if (!HUNG_CLAIM_STATES.includes(base.state)) {
     return deny(TERMINAL_CLAIM_STATES.includes(base.state) ? 'STATE_TERMINAL' : 'STATE_NOT_HUNG');
   }
@@ -283,12 +368,14 @@ export function buildHungClaimReleaseCommand({ operation, now }) {
 }
 
 /** Audit-only view: every claim of a scan with the reason it was or was not released. */
-export function summarizeHungClaims({ operations, bookingsByExercise, now, ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS }) {
+export function summarizeHungClaims({
+  operations, bookingsByExercise, now, ttlMs = DEFAULT_HUNG_CLAIM_TTL_MS, includeConfirmed = false,
+}) {
   const decisions = (Array.isArray(operations) ? operations : []).map((operation) => {
     const exerciseId = toStr(operation?.exerciseId);
     const key = exerciseId ? normalizeId(exerciseId) : '';
     const bookings = bookingsByExercise instanceof Map ? bookingsByExercise.get(key) : null;
-    return planHungClaimRelease({ operation, bookings, now, ttlMs });
+    return planHungClaimRelease({ operation, bookings, now, ttlMs, includeConfirmed });
   });
   const byReason = {};
   for (const decision of decisions) {
