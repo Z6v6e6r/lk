@@ -102,8 +102,14 @@ contractBackup=/root/.node-red/.padlhub-reviewed-flow-backups/contract-lk1-targe
   (`accepted` / `refused` / `client-unavailable`);
 * патчер генерации `lk1-event-started-unavailable` держит 44 места отказа идентичными и пинит
   преimage `eca9e657…`, установленное тело превью `c316d6e1…` и новое тело `1bd8d443…`;
-* обёртка `nodered:lk1-event-started:deploy-147` готова; **деплой не выполнялся** (нужно
-  отдельное разрешение владельца: это изменение решения на платёжном пути).
+* выкачено на 147 по разрешению владельца (`npm run nodered:lk1-event-started:deploy-147`,
+  2026-09-17 21:19 MSK): `deployedGitSha=e7285fbc…`, `sourceFlowSha256=eca9e657…`,
+  `activeFlowSha256=installedFlowReadbackSha256=a948f18b…`, `changedNodeCount=1`, смоук зелёный;
+  установленное тело роутера `1bd8d443…` содержит `targetChecks`, `targetHealthy` и ветку
+  «200 без котировок»; неавторизованный пробник эндпоинта отвечает `400 PRICE_PREVIEW_AUTH_REQUIRED`,
+  то есть маршрут после рестарта Node-RED жив.
+  Бэкапы: `/root/.node-red/.padlhub-reviewed-flow-backups/flows-pre-lk1-event-started-unavailable-20260917T211954+0300.json`
+  и `contract-lk1-event-started-unavailable-20260917T211954+0300.json`.
 
 Альтернатива без изменения сервера — фронтовый guard: не запрашивать скидку для события, у
 которого `Date.parse(summary.timeFrom) <= Date.now()`; требует релиза фронта и правки в двух
@@ -157,9 +163,11 @@ contractBackup=/root/.node-red/.padlhub-reviewed-flow-backups/contract-lk1-targe
 
 * Подусловие всплеска `PRICE_PREVIEW_GAME_UNRESOLVED` (игровой путь) не наблюдено: всплеск не
   повторился. Диагностика включена, при повторе причина будет видна в теле ответа.
-* Фикс «событие уже началось → 200 без котировок» реализован и покрыт тестами, но не
-  выкачен: генерация `lk1-event-started-unavailable` собрана и проверена локально
-  (кандидат `a948f18b…`), деплой требует отдельного разрешения.
+* Фикс «событие уже началось → 200 без котировок» выкачен на 147 (кандидат `a948f18b…`,
+  readback совпал, смоук зелёный). Первое подтверждение по клиентскому трафику требует
+  наблюдения: отказы `*_TARGET_UNRESOLVED` со `startsInPast: true` больше появляться не должны,
+  а ответы 200 в клиентской аналитике не трекаются (она пишет только ошибки), поэтому
+  отсутствие новых отказов этого класса и есть сигнал.
 * Граница `maxRecoveryChecks` не выкачена в Node-RED: хвост закрыт данными, а deployed-поллер
   продолжит планировать час вперёд только для новых архивных строк (7 строк на момент проверки).
   Выкатка генерации поллера — отдельный шаг.
