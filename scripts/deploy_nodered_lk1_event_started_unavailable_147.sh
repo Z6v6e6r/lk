@@ -209,10 +209,13 @@ node -e '
     || value.preview?.otherFieldsUnchanged !== true
     || value.preview?.refusalSitesUnchanged !== true
     || !(value.preview?.refusalSites >= 4)
-    || JSON.stringify(value.preview?.diagnosticStages) !== JSON.stringify(["event_target", "game_record", "game_metadata", "game_exercise"])
+    || value.preview?.startedEventAnswersUnavailable !== true
     || value.preview?.routerId !== "lk_subscription_price_preview_20260908_router"
     || !Number.isInteger(value.preview?.exportedNameCount)
-    || typeof value.installedGeneration?.bookingFuncSha256 !== "string") process.exit(1);
+    || typeof value.installedGeneration?.bookingFuncSha256 !== "string") {
+    console.error("candidate report shape does not describe the reviewed generation");
+    process.exit(1);
+  }
 ' "$candidate_report" "$expected_node_fields" "$expected_changed_nodes"
 
 # Independent exact-graph contract (the candidate changes one `func` field only);
