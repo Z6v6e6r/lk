@@ -4,6 +4,12 @@
 // its API and semantics are frozen by docs/LK1_ENFORCEMENT_ROLLOUT_COORDINATION.md
 // (including decision D1 / section 2.1).
 export const LK1_PLAN_RULES_GLOBAL = "subscriptions_lk1_plan_rules";
+// Station exclusions: named `stationId` x `productId` pairs stay on the legacy path
+// even though the product carries a rule (owner decision 2026-09-18: the Sirius club
+// sells the same Viva product as the base "Лето.Падел.Дружба" plan, and rule 7 of the
+// rollout contract keeps that club legacy). The exclusion only ever *downgrades* a
+// subscription that a rule already covers; a product without a rule is untouched.
+export const LK1_STATION_EXCLUSIONS_GLOBAL = "subscriptions_lk1_station_exclusions";
 export const LK1_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 export const LK1_PLAN_RULES_FROM = "2026-09-01";
 
@@ -13,6 +19,8 @@ const LK1_PLAN_RULE_FIELDS = ["maxActiveBookings", "freeGameMinutesPerDay",
 const LK1_PLAN_PRODUCT_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const LK1_PLAN_RULES_INVALID = Object.freeze({ ok: false, code: "LK1_PLAN_RULES_INVALID" });
+
+const LK1_STATION_EXCLUSIONS_INVALID = Object.freeze({ ok: false, code: "LK1_STATION_EXCLUSIONS_INVALID" });
 
 const lk1IsObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -102,11 +110,66 @@ function lk1PlanRuleSet(value) {
   try { return normalizePlanRules(value); } catch { return LK1_PLAN_RULES_INVALID; }
 }
 
-export function resolveLk1Rule({ owned, hubPolicy, planRules } = {}) {
+// An empty, missing or blank global means "no station exclusion", never an error:
+// the contour keeps exactly the coverage its product rules describe.
+export function normalizeStationExclusions(value) {
+  if (value === undefined || value === null || value === "") return { ok: true, exclusions: new Map() };
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return LK1_STATION_EXCLUSIONS_INVALID; }
+    if (value === null || value === undefined || value === "") return { ok: true, exclusions: new Map() };
+  }
+  if (!lk1IsObject(value) || value.formatVersion !== 1 || !Array.isArray(value.exclusions)
+    || Object.keys(value).sort().join() !== ["exclusions", "formatVersion"].sort().join()) {
+    return LK1_STATION_EXCLUSIONS_INVALID;
+  }
+  const exclusions = new Map();
+  for (const item of value.exclusions) {
+    // Exactly the frozen key set: a missing or surplus key is a hard refusal.
+    if (!lk1IsObject(item) || Object.keys(item).sort().join() !== ["productIds", "stationId"].sort().join()
+      || !Array.isArray(item.productIds) || item.productIds.length === 0) {
+      return LK1_STATION_EXCLUSIONS_INVALID;
+    }
+    const stationId = lk1ProductCandidate(item.stationId);
+    const productIds = item.productIds.map(lk1ProductCandidate);
+    if (!stationId || exclusions.has(stationId)
+      || productIds.some((id) => id === null) || new Set(productIds).size !== productIds.length) {
+      return LK1_STATION_EXCLUSIONS_INVALID;
+    }
+    exclusions.set(stationId, new Set(productIds));
+  }
+  return { ok: true, exclusions };
+}
+
+function lk1StationExclusionSet(value) {
+  if (lk1IsObject(value) && typeof value.ok === "boolean"
+    && (value.ok === false || typeof value.exclusions?.get === "function")) return value;
+  try { return normalizeStationExclusions(value); } catch { return LK1_STATION_EXCLUSIONS_INVALID; }
+}
+
+// The station is the booking target's studio id; a missing or malformed station
+// cannot name an exclusion, so the product rule keeps applying unchanged.
+function lk1StationLegacy(stationId, productId, configured) {
+  const set = lk1StationExclusionSet(configured);
+  if (set.ok !== true) return { ok: false };
+  const station = lk1ProductCandidate(stationId);
+  return { ok: true, value: station !== null && set.exclusions.get(station)?.has(productId) === true };
+}
+
+export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, stationExclusions } = {}) {
   const { record, productId, source, extraProductIds } = lk1ResolveProductIdentity(null, owned);
   // Ownership that names no exact product cannot select a rule: legacy, no error.
   if (productId === null) return { matched: false };
   const evidence = { productId, productIdSource: source, extraProductIds };
+  // An unreadable exclusion global is fail-closed; an absent one excludes nothing.
+  // eslint-disable-next-line no-undef -- injected by the Node-RED host
+  const excluded = lk1StationLegacy(stationId, productId, stationExclusions !== undefined ? stationExclusions
+    : typeof lk1ReadStationExclusions === "function" ? lk1ReadStationExclusions() : undefined);
+  if (excluded.ok !== true) return { matched: true, code: "LK1_STATION_EXCLUSIONS_INVALID", ...evidence };
+  // The station downgrade travels as the same legacy verdict the sale-date cohort
+  // produces, so every existing consumer keeps its branch and no new one appears.
+  const stationLegacy = (ruleProductId) => ({
+    matched: true, legacy: true, stationLegacy: true, stationId: lk1ProductCandidate(stationId),
+    productId: ruleProductId, ...evidence });
   if (productId !== null && productId === LK1_HUB_PRODUCT_ID) {
     try {
       // An explicitly supplied policy wins; otherwise the bound source global is
@@ -126,6 +189,7 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules } = {}) {
         || LK1_PLAN_RULE_FIELDS.slice(2).some((key) => policy[key] > 100)) {
         return { matched: true, code: "LK1_PRODUCT_RULE_INVALID", ...evidence };
       }
+      if (excluded.value === true) return stationLegacy(policy.productId);
       const rule = { productId: policy.productId };
       for (const key of LK1_PLAN_RULE_FIELDS) rule[key] = policy[key];
       // The HUB rule carries no sale-date gate: the contour is on for every sale.
@@ -141,6 +205,12 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules } = {}) {
   const rule = configured.rules.get(productId);
   // No rule for the selected product: untouched legacy behaviour, not an error.
   if (rule === undefined) return { matched: false, ...evidence };
+  // An excluded station keeps the product's pre-rollout behaviour: no rule travels
+  // further and the sale date is never demanded for it.
+  if (excluded.value === true) {
+    return { ...stationLegacy(rule.productId), source: "PLAN",
+      planKey: rule.planKey, enforceFrom: rule.enforceFrom, purchaseDate: null };
+  }
   // The sale date belongs to the selected instance, not to sibling subscriptions.
   let dates;
   // eslint-disable-next-line no-undef -- injected by the Node-RED host
@@ -161,4 +231,11 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules } = {}) {
 // global is an invalid rule set (fail-closed), an absent one means contour off.
 function lk1ReadPlanRules() {
   try { return global.get(LK1_PLAN_RULES_GLOBAL); } catch { return LK1_PLAN_RULES_INVALID; }
+}
+
+// The embedded gateway reads the station exclusions through this hook; an
+// unreadable global is an invalid exclusion set (fail-closed), an absent one
+// excludes nothing.
+function lk1ReadStationExclusions() {
+  try { return global.get(LK1_STATION_EXCLUSIONS_GLOBAL); } catch { return LK1_STATION_EXCLUSIONS_INVALID; }
 }

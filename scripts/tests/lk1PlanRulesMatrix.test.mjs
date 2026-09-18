@@ -1078,8 +1078,9 @@ test('harness composition mirrors scripts/lib/eventPaymentSources.mjs', { skip: 
   // compared one by one instead of as one contiguous slice.
   for (const anchor of [
     'function isNodeRedHttpsCheckout(',
-    'const lk1Config = (owned) => {',
-    'resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })',
+    'const lk1Config = (owned, stationId) => {',
+    'resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,',
+    'stationExclusions: lk1ReadStationExclusions() });',
     'const lk1Quote = (ctx, exercise, owned) => {',
     'const lk1Fingerprint = (ctx, quote) =>',
     'const lk1QuoteOwned = (ctx, exercise) => {',
@@ -1090,7 +1091,8 @@ test('harness composition mirrors scripts/lib/eventPaymentSources.mjs', { skip: 
     assert.ok(composed.includes(anchor), `release composition must contain: ${anchor}`);
   }
   for (const symbol of ['LK1_PLAN_RULES_GLOBAL', 'LK1_HUB_PRODUCT_ID', 'LK1_PLAN_RULES_FROM',
-    'resolveLk1Rule', 'normalizePlanRules', 'lk1ReadPlanRules']) {
+    'LK1_STATION_EXCLUSIONS_GLOBAL', 'resolveLk1Rule', 'normalizePlanRules', 'lk1ReadPlanRules',
+    'normalizeStationExclusions', 'lk1ReadStationExclusions']) {
     assert.ok(COMMITTED_PLAN_RULES.includes(symbol), `embedded module must declare ${symbol}`);
   }
   assert.ok(!hasDeclaration(HEAD_GATEWAY, 'resolveLk1Rule'),

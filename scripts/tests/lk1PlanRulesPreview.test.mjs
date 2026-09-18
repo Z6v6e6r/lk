@@ -298,10 +298,12 @@ const soleQuote = result => {
 
 test('the preview node scope is bound to the shared resolver, not a local rule copy', requiresResolver, () => {
   assert.match(router, /canonical\.resolveLk1Rule\(/);
-  assert.match(router, /owned, planRules/);
+  assert.match(router, /owned, stationId/);
+  assert.match(router, /planRules/);
+  assert.match(router, /canonical\.lk1ReadStationExclusions/);
   assert.doesNotMatch(router, /lk1PolicyKey|lk1DesiredPolicy/);
   // The only local rule knowledge left is the guarded HUB-only legacy fallback.
-  assert.equal((router.match(/canonical\.lk1Config\(owned\)/g) || []).length, 1);
+  assert.equal((router.match(/canonical\.lk1Config\(owned, stationId\)/g) || []).length, 1);
   // The node scope receives the resolver as a generated declaration, not as a
   // `canonical.*` property copy, and it is the resolver the contract names.
   const scope = preview({ subscriptions: [subscription(RA)], planProducts: [RA] }).scope;

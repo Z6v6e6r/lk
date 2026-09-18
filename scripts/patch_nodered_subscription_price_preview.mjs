@@ -30,9 +30,9 @@ export const PREVIEW_CANONICAL_SOURCE_SHA256 = Object.freeze({
 // the HUB policy reader are embedded inside the canonical helper closure, so the
 // closure has to publish them.
 const PREVIEW_INJECTED_EXPORTS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
-  'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy']);
+  'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy']);
 const PREVIEW_INJECTED_FUNCTIONS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
-  'lk1ReadBoundPolicy', 'lk1NormalizePolicy']);
+  'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1NormalizePolicy']);
 // Helpers the event route (group training / tournament quotes) reaches through
 // `canonical.*`. They live in the composed booking graph, not in the preview
 // node's own sources, so the closure has to declare *and* publish them: the

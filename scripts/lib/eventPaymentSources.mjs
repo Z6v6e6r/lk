@@ -8,7 +8,9 @@ export function eventPaymentRoutesSource() {
 export function planRulesSource() {
   const source = fs.readFileSync(new URL('./lk1PlanRules.mjs', import.meta.url), 'utf8');
   for (const symbol of ['const LK1_PLAN_RULES_GLOBAL =', 'const LK1_HUB_PRODUCT_ID =',
-    'function normalizePlanRules(', 'function resolveLk1Rule(', 'function lk1ReadPlanRules(']) {
+    'const LK1_STATION_EXCLUSIONS_GLOBAL =', 'function normalizePlanRules(',
+    'function normalizeStationExclusions(', 'function resolveLk1Rule(',
+    'function lk1ReadPlanRules(', 'function lk1ReadStationExclusions(']) {
     if (!source.includes(symbol)) throw new Error('Plan rules source drift: ' + symbol);
   }
   return source.replace(/^export /gm, '');
@@ -17,7 +19,7 @@ export function hubGatewaySource() {
   const source = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
   const marker = '// EVENT_PAYMENT_ROUTES';
   if (source.split(marker).length !== 2) throw new Error('Event payment source marker drift');
-  if (/(?:const|let|var|function)\s+(?:LK1_PLAN_RULES_GLOBAL|LK1_PLAN_RULES_FROM|resolveLk1Rule|normalizePlanRules|lk1ReadPlanRules)\b/
+  if (/(?:const|let|var|function)\s+(?:LK1_PLAN_RULES_GLOBAL|LK1_PLAN_RULES_FROM|LK1_STATION_EXCLUSIONS_GLOBAL|resolveLk1Rule|normalizePlanRules|normalizeStationExclusions|lk1ReadPlanRules|lk1ReadStationExclusions)\b/
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded plan-rules symbols');
   }

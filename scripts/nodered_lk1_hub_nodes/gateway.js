@@ -25,10 +25,13 @@ const LK1_FREE_FIRST_EVENT_PRODUCTS = Object.freeze({
 });
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
   "groupTrainingDiscountPercent", "tournamentDiscountPercent"];
-const lk1Config = (owned) => {
+const lk1Config = (owned, stationId) => {
   // The resolver (scripts/lib/lk1PlanRules.mjs) is embedded into this function
-  // body by the release composition, together with its reader.
-  const configured = resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() });
+  // body by the release composition, together with its readers. The booking target's
+  // station is what keeps a named station on the product's pre-rollout behaviour
+  // (`subscriptions_lk1_station_exclusions`), so every call site passes it.
+  const configured = resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,
+    stationExclusions: lk1ReadStationExclusions() });
   if (configured.matched !== true) return { matched: false };
   if (configured.legacy === true) return { matched: true, legacy: true };
   if (configured.code) return { matched: true, code: configured.code };
@@ -98,7 +101,9 @@ const lk1LifecycleInstant = (value, endOfDay = false) => {
   return Number.isFinite(instant) ? instant + activationCeiling : null;
 };
 const lk1Quote = (ctx, exercise, owned) => {
-  const configured = lk1Config(owned);
+  // The station of the resolved booking target is part of the contour decision: an
+  // excluded station keeps the product's legacy path for this quote as well.
+  const configured = lk1Config(owned, toStr(exercise?.studio?.id || exercise?.studioId));
   if (!configured.matched || configured.code) return { code: configured.code || "LK1_PRODUCT_RULE_CHANGED" };
   if (configured.legacy) return { legacy: true };
   // The sale-date cohort is decided by the rule: the selected instance for a plan
@@ -492,7 +497,7 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
   };
   if (!rows.every(validIdentityShape)) return lk1Stop(ctx, "LK1_MONEY_OWNERSHIP_DTO_INVALID");
   const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
-  const configured = lk1Config(selected);
+  const configured = lk1Config(selected, toStr(exercise?.studio?.id || exercise?.studioId));
   if (configured.code) return lk1Stop(ctx, configured.code);
   // The resolver alone decides the enforced cohort: the annual HUB rule carries no
   // sale-date gate, while every plan rule enters the contour only from its own
@@ -936,8 +941,10 @@ if (ctx.step === "lk1_payment_profile_recheck" || (paymentRoute && ctx.step === 
   // The rule is re-resolved to prove it did not change, so the sale date of the stored quote
   // has to travel with it: a plan rule selects its cohort from that date, and without it the
   // resolver answers with a code instead of the rule and every plan-product checkout is
-  // refused after the booking was already written.
-  const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }]);
+  // refused after the booking was already written. The station travels with it for the same
+  // reason: it is part of the contour decision the stored quote was priced with.
+  const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }],
+    toStr(ctx.lk1.target?.stationId || ctx.studioId));
   if (!isObj(configured.rule) || JSON.stringify(configured.rule) !== JSON.stringify(ctx.lk1.rule)) {
     return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
   }
