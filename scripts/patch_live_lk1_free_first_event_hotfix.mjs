@@ -333,7 +333,7 @@ export function composeFreeFirstEventArtifacts(liveBytes, deploymentId, options 
         && booking.func.includes("freeFirstEvent: freeFirstCovered"),
       dayBucketProved: booking.func.includes("let freeFirstEventsToday = 0;")
         && booking.func.includes("const freeFirstVisitsLeft = Number.isSafeInteger(identityVisitsLeft) ? identityVisitsLeft"),
-      checkoutCohortBound: booking.func.includes("lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }])")
+      checkoutCohortBound: booking.func.includes("lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }],\n    ctx.lk1.target?.stationId || ctx.studioId || null)")
         && !booking.func.includes("lk1Config([{ productId: ctx.lk1.rule.productId }]);") },
     evaluator: { ids: [...FREE_FIRST_EVENT_EVALUATOR_IDS], otherFieldsUnchanged: true,
       freeFirstBenefitBound: evaluator.func.includes('kind: "FREE_ENTITLEMENT"')

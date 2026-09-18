@@ -29,6 +29,16 @@ const lk1ProductCandidate = (value) => {
   return LK1_PLAN_PRODUCT_PATTERN.test(id) ? id : null;
 };
 
+// A Viva studio id is a UUID too, but it is not a product: the product pattern also
+// pins the version and variant nibbles, and a station outside those nibbles would be
+// silently unexcludable. The station check therefore accepts any UUID shape.
+const LK1_STATION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const lk1StationCandidate = (value) => {
+  const id = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return LK1_STATION_PATTERN.test(id) ? id : null;
+};
+
 const lk1IsDateKey = (value) => {
   const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof value === "string" ? value : "");
   if (!matched) return false;
@@ -129,7 +139,7 @@ export function normalizeStationExclusions(value) {
       || !Array.isArray(item.productIds) || item.productIds.length === 0) {
       return LK1_STATION_EXCLUSIONS_INVALID;
     }
-    const stationId = lk1ProductCandidate(item.stationId);
+    const stationId = lk1StationCandidate(item.stationId);
     const productIds = item.productIds.map(lk1ProductCandidate);
     if (!stationId || exclusions.has(stationId)
       || productIds.some((id) => id === null) || new Set(productIds).size !== productIds.length) {
@@ -151,7 +161,7 @@ function lk1StationExclusionSet(value) {
 function lk1StationLegacy(stationId, productId, configured) {
   const set = lk1StationExclusionSet(configured);
   if (set.ok !== true) return { ok: false };
-  const station = lk1ProductCandidate(stationId);
+  const station = lk1StationCandidate(stationId);
   return { ok: true, value: station !== null && set.exclusions.get(station)?.has(productId) === true };
 }
 
@@ -163,7 +173,7 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, station
   // The station downgrade travels as the same legacy verdict the sale-date cohort
   // produces, so every existing consumer keeps its branch and no new one appears.
   const stationLegacy = (ruleProductId) => ({
-    matched: true, legacy: true, stationLegacy: true, stationId: lk1ProductCandidate(stationId),
+    matched: true, legacy: true, stationLegacy: true, stationId: lk1StationCandidate(stationId),
     productId: ruleProductId, ...evidence });
   // The exclusion global is read only where it can change the verdict — a product a rule
   // already covers — so a runtime that carries neither the global nor the reviewed reader
@@ -194,9 +204,11 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, station
         || LK1_PLAN_RULE_FIELDS.slice(2).some((key) => policy[key] > 100)) {
         return { matched: true, code: "LK1_PRODUCT_RULE_INVALID", ...evidence };
       }
+      // The exclusion can only downgrade a covered pair, and the reviewed payload names
+      // no HUB pair: an unreadable exclusion set must therefore never refuse the annual
+      // product. Plan products keep the fail-closed code below.
       const hubStation = stationVerdict();
-      if (hubStation.code) return { matched: true, code: hubStation.code, ...evidence };
-      if (hubStation.value === true) return stationLegacy(policy.productId);
+      if (hubStation.code === undefined && hubStation.value === true) return stationLegacy(policy.productId);
       const rule = { productId: policy.productId };
       for (const key of LK1_PLAN_RULE_FIELDS) rule[key] = policy[key];
       // The HUB rule carries no sale-date gate: the contour is on for every sale.

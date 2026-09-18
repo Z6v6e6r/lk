@@ -197,7 +197,7 @@ test("the deltas apply and revert on the installed flow only", { skip: snapshotS
   assert.equal(reverted, body);
   // The plan cohort is judged by the resolver, the first-use state is honoured, and both
   // replay checks are contour-bound; hold/freeze and a failed row identity still refuse.
-  assert.equal(patched.includes("const configured = lk1Config(projected);"), true);
+  assert.equal(patched.includes("const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);"), true);
   assert.equal(patched.includes("if ((!firstUse && row.status !== 'ACTIVE')"), true);
   assert.equal(patched.includes("    if (!firstUse) {"), true);
   assert.equal(patched.includes('violations.push("expiry_before_target_end");'), true);
