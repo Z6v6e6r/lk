@@ -6,6 +6,7 @@ import fs from "node:fs";
 import test from "node:test";
 import {
   PRO_TRAINING_CALL_SITE_DELTAS,
+  buildProTrainingReport,
   PRO_TRAINING_EXCLUSIONS_PREVIEW_ID,
   PRO_TRAINING_EXCLUSIONS_BOOKING_ID,
   PRO_TRAINING_EXCLUSIONS_TARGET,
@@ -110,4 +111,75 @@ test("the generation applies to the reviewed upstream flow as exactly two change
   assert.equal(composed.preview.inertStubAbsent, true, "the preview must not fall back to the inert predicate here");
   assert.equal(composed.preview.initializeUnchanged, true);
   assert.equal(composed.contract.deploymentId, "lk1-pro-training-exclusions");
+});
+
+// The guarded wrapper is the release vehicle: it must keep the confirmation gate, the exact
+// two-field allowance, the independent contract, the installed-marker postcheck and rollback,
+// and it must accept exactly the report this generation produces.
+const WRAPPER = read("../deploy_nodered_lk1_pro_training_exclusions_147.sh");
+
+/** Runs the wrapper's inline `node -e` validator against a report. */
+function wrapperReportValidatorAccepts(report) {
+  const start = WRAPPER.indexOf("node -e '\n  const value=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));\n  const expected=JSON.parse(process.argv[2]);");
+  assert.ok(start >= 0, "the wrapper must validate the generation report");
+  const body = WRAPPER.slice(start + "node -e '".length, WRAPPER.indexOf("' \"$candidate_report\"", start));
+  const run = new Function("process", "require", body);
+  // `node -e '<script>' <report> <fields> <count>`: process.argv[1] is the report path.
+  const fakeProcess = { argv: ["node", "report.json",
+    '{"lk_subscription_booking_router_20260804":["func"],"lk_subscription_price_preview_20260908_router":["func"]}', "2"],
+    exit: (code) => { if (code) throw new Error(`wrapper report validator rejected the report (${code})`); },
+    exitCode: 0 };
+  const fakeRequire = () => ({ readFileSync: () => JSON.stringify(report) });
+  run(fakeProcess, fakeRequire);
+}
+
+test("the deploy wrapper keeps the confirmation gate, the exact allowance and rollback", () => {
+  assert.ok(WRAPPER.includes('NODE_RED_LK1_PRO_TRAINING_EXCLUSIONS_DEPLOY:-}" != "CONFIRM_147"'));
+  assert.ok(WRAPPER.includes("clean main checkout"));
+  assert.ok(WRAPPER.includes("allow_nodes=(lk_subscription_booking_router_20260804 lk_subscription_price_preview_20260908_router)"));
+  assert.ok(WRAPPER.includes('"lk_subscription_booking_router_20260804:func"'));
+  assert.ok(WRAPPER.includes('"lk_subscription_price_preview_20260908_router:func"'));
+  assert.equal(WRAPPER.includes('"lk_subscription_booking_router_20260804:initialize"'), false,
+    "this generation changes no initializer");
+  assert.ok(WRAPPER.includes("expected_changed_nodes=2"));
+  assert.ok(WRAPPER.includes("patch_live_lk1_pro_training_exclusions_hotfix.mjs"));
+  assert.ok(WRAPPER.includes("prepare_exact_graph_contract.mjs"));
+  assert.equal(WRAPPER.includes("nodered_reviewed_flow_deploy/prepare_contract.mjs"), false);
+  assert.ok(WRAPPER.includes("rollback --deployment-id"));
+  assert.ok(WRAPPER.includes("sha256sum"));
+  assert.ok(WRAPPER.includes("deploy_reviewed_flow_147_remote.mjs"));
+  assert.ok(WRAPPER.includes("value.booking?.refusalPrecedesContour !== true"));
+  assert.ok(WRAPPER.includes("value.preview?.inertStubAbsent !== true"));
+  assert.ok(WRAPPER.includes('smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"'));
+  assert.ok(WRAPPER.includes('value.currency !== "RUB"'));
+  // The postcheck proves the installed nodes really carry the reviewed refusal.
+  assert.ok(WRAPPER.includes("PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE"));
+  assert.ok(WRAPPER.includes("function isProTrainingExercise(value) {"));
+  assert.ok(WRAPPER.includes("Installed nodes do not carry the reviewed PRO-training refusal"));
+  const pkg = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.scripts["nodered:lk1-pro-training-exclusions:deploy-147"],
+    "bash scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh");
+});
+
+test("the wrapper report contract accepts this generation and rejects drift", { skip: snapshotSkip }, () => {
+  const bytes = fs.readFileSync(UPSTREAM_FLOW);
+  const built = composeProTrainingArtifacts(bytes);
+  const report = buildProTrainingReport({ sourceSha256: sha256(bytes), sourceNodeCount: 4804, built });
+  assert.equal(report.deploymentPerformed, false);
+  assert.equal(report.liveMutationPerformed, false);
+  assert.equal(report.changedNodeCount, 2);
+  assert.equal(report.addedNodeCount, 0);
+  wrapperReportValidatorAccepts(report);
+  for (const mutate of [
+    (value) => { value.changedNodeCount = 3; },
+    (value) => { value.addedNodeCount = 1; },
+    (value) => { value.deploymentPerformed = true; },
+    (value) => { value.booking.refusalPrecedesContour = false; },
+    (value) => { value.preview.inertStubAbsent = false; },
+    (value) => { value.changes[0].fields = ["func", "initialize"]; },
+  ]) {
+    const drifted = JSON.parse(JSON.stringify(report));
+    mutate(drifted);
+    assert.throws(() => wrapperReportValidatorAccepts(drifted));
+  }
 });

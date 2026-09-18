@@ -181,14 +181,25 @@
      (`LK_INSTANCE_LIMITS_FLOW_FIXTURE`).
    - **На авторизованном проходе:** свежие `PREVIEW_CANONICAL_SOURCE_SHA256.booking`,
      `preimages.json`, `HUB_PREIMAGES` для новой генерации.
-4. **Осталось:** guarded deploy-script `scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh`
-   (`CONFIRM_147`, clean main, независимый exact-graph contract, бэкапы, readback, smoke,
-   rollback) и `package.json`-скрипт `nodered:lk1-pro-training-exclusions:deploy-147`.
-5. `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` /
+4. **Guarded deploy-обёртка — сделана:** `scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh`
+   (`NODE_RED_LK1_PRO_TRAINING_EXCLUSIONS_DEPLOY=CONFIRM_147`, чистый main == origin/main,
+   свежий pull, node/field-allowance, независимый exact-graph contract через
+   `prepare_exact_graph_contract.mjs`, бэкапы, readback установленного флоу, постчек маркеров
+   `PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE` + модуль в теле записи и настоящий предикат в
+   превью, smoke LK-backend, авто-rollback) и `package.json`-скрипт
+   `nodered:lk1-pro-training-exclusions:deploy-147`. Локально проверено: независимый contract
+   даёт `sourceSha256 408cd41e…`, `candidateSha256 030e3961…`, `changedNodeCount 2`,
+   `addedNodeCount 0`, `allowedChanges` = booking:func + preview:func; постчек-логика
+   симулирована на подложном `flows.json` (пропуск отказа, пропуск вызова и инертная заглушка
+   в превью — отказ).
+5. **Осталось:** свежий read-only pull `147` на проходе apply (upstream-пин должен
+   воспроизвести `408cd41e…`; иначе — осознанная перепривязка) и явное CRITICAL-разрешение
+   на apply с порядком «станция → ПРО».
+6. `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` /
    `PLAN_RULES_REVIEWED_EVALUATOR_SHA256` (`scripts/patch_live_lk1_plan_rules.mjs`)
    перепиновывать **не** нужно — проверено пересчётом: `lk1PlanRules.mjs`, `lk1Config` и
    `lk1Quote` не менялись.
-6. Базовая (не-HUB) генерация `scripts/patch_nodered_subscription_booking_flow.mjs` пишет
+7. Базовая (не-HUB) генерация `scripts/patch_nodered_subscription_booking_flow.mjs` пишет
    `scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js` без
    встраивания модуля, поэтому при следующей её ревизии гард нужно добавить в её шаг
    `exercise` вместе с `proTrainingExclusionSource()`.

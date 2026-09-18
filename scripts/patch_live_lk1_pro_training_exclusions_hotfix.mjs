@@ -244,42 +244,74 @@ export function composeProTrainingArtifacts(rawSource, options = {}) {
   };
 }
 
-function main() {
-  const [sourcePath, outputPath] = process.argv.slice(2);
-  if (!sourcePath || !outputPath) {
-    throw new Error("Usage: node scripts/patch_live_lk1_pro_training_exclusions_hotfix.mjs <fresh-live-source> <candidate-output>");
+/** The deployment report the guarded wrapper validates; one shape for the CLI and its test. */
+export function buildProTrainingReport({ sourceSha256, sourceNodeCount, built }) {
+  return {
+    kind: PRO_TRAINING_EXCLUSIONS_KIND, deploymentId: PRO_TRAINING_EXCLUSIONS_DEPLOYMENT_ID,
+    targets: {
+      booking: { id: PRO_TRAINING_EXCLUSIONS_BOOKING_ID,
+        func: { beforeSha256: PRO_TRAINING_EXCLUSIONS_TARGET.liveBookingFuncSha256,
+          afterSha256: PRO_TRAINING_EXCLUSIONS_TARGET.patchedBookingFuncSha256 } },
+      preview: { id: PRO_TRAINING_EXCLUSIONS_PREVIEW_ID,
+        func: { beforeSha256: PRO_TRAINING_EXCLUSIONS_TARGET.livePreviewFuncSha256,
+          afterSha256: PRO_TRAINING_EXCLUSIONS_TARGET.patchedPreviewFuncSha256 } },
+    },
+    upstreamFlowSha256: PRO_TRAINING_EXCLUSIONS_UPSTREAM_SHA256,
+    sourceSha256, candidateSha256: built.candidateSha256,
+    sourceNodeCount, candidateNodeCount: built.flow.length,
+    changedNodeCount: built.changes.length, expectedChangedNodeCount: 2, addedNodeCount: built.addedNodeCount,
+    changes: built.changes, booking: built.booking, preview: built.preview,
+    topologyChanged: false, routesChanged: false, policyChanged: true,
+    deploymentPerformed: false, liveMutationPerformed: false,
+  };
+}
+
+function fail(message) { console.error(message); process.exitCode = 1; }
+
+function prepareTargets(workspace, requested) {
+  const canonical = (value) => {
+    if (!path.isAbsolute(value)) throw new Error("Output paths must be absolute");
+    if (path.resolve(value) !== value) throw new Error("Output paths must be canonical");
+    if (fs.existsSync(value)) throw new Error(`Refusing to overwrite output: ${value}`);
+    if (value === workspace || value.startsWith(`${workspace}${path.sep}`)) {
+      throw new Error("Outputs must stay outside the live workspace");
+    }
+    return value;
+  };
+  return requested.map(canonical);
+}
+
+function main(args) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const key = args[index]; const value = args[index + 1];
+    if (!["--workspace", "--output", "--report"].includes(key) || !value || value.startsWith("--")) {
+      fail("Usage: --workspace <fresh-live-workspace> --output <candidate.json> --report <report.json>"); return;
+    }
+    if (values[key] !== undefined) { fail(`Duplicate argument: ${key}`); return; }
+    values[key] = value;
   }
-  verifyWorkspace();
-  const resolvedSource = path.resolve(sourcePath);
-  const resolvedOutput = path.resolve(outputPath);
-  if (resolvedSource === resolvedOutput) throw new Error("Refusing to overwrite the verified live source snapshot");
-  if (fs.existsSync(resolvedOutput)) throw new Error(`Refusing to overwrite an existing candidate: ${resolvedOutput}`);
-  const composed = composeProTrainingArtifacts(fs.readFileSync(resolvedSource));
-  fs.writeFileSync(resolvedOutput, composed.candidateBytes);
-  const reportPath = `${resolvedOutput}.report.json`;
-  fs.writeFileSync(reportPath, `${JSON.stringify({
-    formatVersion: 1,
-    kind: PRO_TRAINING_EXCLUSIONS_KIND,
-    deploymentId: PRO_TRAINING_EXCLUSIONS_DEPLOYMENT_ID,
-    deploymentPerformed: false,
-    liveMutationPerformed: false,
-    sourcePath: resolvedSource,
-    sourceSha256: composed.sourceSha256,
-    candidatePath: resolvedOutput,
-    candidateSha256: composed.candidateSha256,
-    addedNodeCount: composed.addedNodeCount,
-    changes: composed.changes,
-    binding: { booking: composed.booking, preview: composed.preview },
-  }, null, 2)}\n`, "utf8");
-  process.stdout.write(`${JSON.stringify({ candidateSha256: composed.candidateSha256,
-    reportPath, changes: composed.changes.map((row) => ({ id: row.id, fields: row.fields })) })}\n`);
+  if (Object.keys(values).length !== 3) {
+    fail("Usage: --workspace <fresh-live-workspace> --output <candidate.json> --report <report.json>"); return;
+  }
+  const verified = verifyWorkspace(values["--workspace"], { quiet: true });
+  const liveBytes = fs.readFileSync(verified.sourcePath);
+  const built = composeProTrainingArtifacts(liveBytes);
+  if (sha256(liveBytes) !== verified.sourceSha256) {
+    fail("Live source changed between verification and composition"); return;
+  }
+  const [outputPath, reportPath] = prepareTargets(verified.workspace, [values["--output"], values["--report"]]);
+  const report = buildProTrainingReport({ sourceSha256: verified.sourceSha256,
+    sourceNodeCount: verified.nodeCount, built });
+  fs.writeFileSync(outputPath, built.candidateBytes.toString("utf8"), { encoding: "utf8", mode: 0o600, flag: "wx" });
+  fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  console.log(JSON.stringify(report));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    main();
+    main(process.argv.slice(2));
   } catch (error) {
-    process.stderr.write(`PRO training exclusion generation failed: ${error.message}\n`);
-    process.exit(1);
+    fail(`PRO training exclusion generation failed: ${error.message}`);
   }
 }
