@@ -69,7 +69,12 @@ export type BookingConversionEvidence =
   | { allowed: false; message: string }
   | { allowed: true; booking: Row; roster: Row[] };
 
-/** Only fresh authenticated self-bookings and direct Viva exercise bookings belong here. */
+/**
+ * Only fresh authenticated self-bookings and direct Viva exercise bookings belong here.
+ * The organizer's own booking is authoritative: an explicit non-subscription payment is
+ * required, and any subscription signal on it blocks publication. Co-participant
+ * subscription evidence is returned inside `roster` instead of blocking the conversion.
+ */
 export function evaluateBookingConversionEvidence(input: {
   actorId: string;
   bookingId: string;
@@ -111,15 +116,15 @@ export function evaluateBookingConversionEvidence(input: {
     seen.add(bookingId);
     if (cancellation(entry) === "active") active.push(entry);
   }
-  if ([booking, ...active].some(hasSubscription)) {
+  // Guard v2: only the organizer's own booking decides whether an ordinary
+  // (`payMode: self`) publication is safe. Co-participants may hold subscription
+  // bookings for the same open-game exercise; the caller mirrors them into the
+  // roster and records subscription availability in the created game metadata.
+  // Blocking on a foreign subscription used to stop ordinary one-time organizers
+  // whose exercise was shared with subscription players.
+  if (hasSubscription(booking)) {
     return { allowed: false, message: BOOKING_CONVERSION_SUBSCRIPTION };
   }
-  const ownPayment = nonSubscriptionPayment(booking);
-  if (!ownPayment || active.some((entry) => {
-    // The self endpoint can supply payment type when the exact roster row omits it.
-    const payment = paymentAliasesValid(entry) && tokens(entry).length === 0 && entry === joined[0]
-      ? ownPayment : nonSubscriptionPayment(entry);
-    return !payment || (entry === joined[0] && payment !== ownPayment);
-  })) return blocked;
+  if (!nonSubscriptionPayment(booking)) return blocked;
   return { allowed: true, booking, roster: active };
 }

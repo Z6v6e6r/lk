@@ -49,20 +49,27 @@ for (const signal of [
   { clientSubscription: { id: "subscription-1" } }, { subscription: {} },
   { paymentType: "SUBSCRIPTION" }, { detailedPaymentType: "subscription" }, { bookingPaymentType: "ABONEMENT" },
 ]) {
-  test(`blocks subscription evidence ${JSON.stringify(signal)} on self and roster`, () => {
+  test(`blocks subscription evidence ${JSON.stringify(signal)} on the organizer booking`, () => {
     const self = fixture();
     Object.assign(self.selfBookings.content[0], signal);
     reject(self, BOOKING_CONVERSION_SUBSCRIPTION);
+  });
+
+  test(`allows subscription evidence ${JSON.stringify(signal)} on a co-participant roster row`, () => {
     const roster = fixture();
     Object.assign(roster.exerciseBookings[0], signal);
-    reject(roster, BOOKING_CONVERSION_SUBSCRIPTION);
+    const result = evaluateBookingConversionEvidence(roster);
+    assert.equal(result.allowed, true);
+    if (result.allowed) assert.equal(result.roster.length, 1);
   });
 }
 
-test("another active participant subscription also blocks ordinary conversion", () => {
+test("another active participant subscription no longer blocks ordinary conversion", () => {
   const input = fixture();
   input.exerciseBookings.push({ id: "booking-2", client: { id: "actor-2" }, isCancelled: false, paymentType: "SUBSCRIPTION" });
-  reject(input, BOOKING_CONVERSION_SUBSCRIPTION);
+  const result = evaluateBookingConversionEvidence(input);
+  assert.equal(result.allowed, true);
+  if (result.allowed) assert.equal(result.roster.length, 2);
 });
 
 test("historical cancelled participant does not change active non-subscription roster", () => {
@@ -122,14 +129,17 @@ test("cancelled, conflicting and missing cancellation state is not active proof"
   }
 });
 
-test("unknown or conflicting payments do not become non-subscription by default", () => {
+test("unknown or conflicting own payments do not become non-subscription by default", () => {
   for (const fields of [{ paymentType: "FUTURE_METHOD" }, { paymentType: "" },
     { detailedPaymentType: "DEPOSIT" }, { bookingPaymentType: "ON_PLACE" },
   ]) {
     const input = fixture(); Object.assign(input.selfBookings.content[0], fields); reject(input);
   }
-  const conflict = fixture(); conflict.exerciseBookings[0].paymentType = "DEPOSIT"; reject(conflict);
-  const other = fixture(); other.exerciseBookings.push({ id: "booking-2", client: { id: "actor-2" }, isCancelled: false, paymentType: "" }); reject(other);
+  // Roster payment aliases no longer decide the organizer's publication.
+  const conflict = fixture(); conflict.exerciseBookings[0].paymentType = "DEPOSIT";
+  assert.equal(evaluateBookingConversionEvidence(conflict).allowed, true);
+  const other = fixture(); other.exerciseBookings.push({ id: "booking-2", client: { id: "actor-2" }, isCancelled: false, paymentType: "" });
+  assert.equal(evaluateBookingConversionEvidence(other).allowed, true);
 });
 
 test("explicit supported non-subscription payment modes preserve conversion", () => {
@@ -141,7 +151,7 @@ test("explicit supported non-subscription payment modes preserve conversion", ()
   }
 });
 
-test("conflicting cancellation cannot hide a subscription participant", () => {
+test("conflicting cancellation on any roster row still blocks publication", () => {
   const input = fixture();
   input.exerciseBookings.push({ id: "booking-2", client: { id: "actor-2" }, isCancelled: false, paymentType: "SUBSCRIPTION" });
   Object.assign(input.exerciseBookings[1], { cancelled: true });
@@ -154,10 +164,14 @@ test("wrapper needs explicit completeness, not just content", () => {
   assert.equal(evaluateBookingConversionEvidence({ ...fixture(), exerciseBookings: { content: fixture().exerciseBookings, totalElements: 1 } }).allowed, true);
 });
 
-test("malformed present payment and owner fields fail closed rather than disappearing", () => {
-  for (const fields of [{ detailedPaymentType: { type: "SUBSCRIPTION" } }, { bookingPaymentType: false },
-    { client: { id: { value: "other" } } }, { client: "other" }, { clientId: {} },
-  ]) {
+test("malformed own payment fails closed rather than disappearing", () => {
+  for (const fields of [{ detailedPaymentType: { type: "SUBSCRIPTION" } }, { bookingPaymentType: false }]) {
+    const self = fixture(); Object.assign(self.selfBookings.content[0], fields); reject(self);
+  }
+});
+
+test("malformed owner fields fail closed on the organizer and roster rows", () => {
+  for (const fields of [{ client: { id: { value: "other" } } }, { client: "other" }, { clientId: {} }]) {
     const self = fixture(); Object.assign(self.selfBookings.content[0], fields); reject(self);
     const roster = fixture(); Object.assign(roster.exerciseBookings[0], fields); reject(roster);
   }
