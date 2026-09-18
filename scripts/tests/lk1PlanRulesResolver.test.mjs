@@ -50,7 +50,6 @@ const bind = (host = {}) => new Function(
 // The gateway stores each reviewed input in its own global; a test stub answers per
 // key so the plan-rules contract and the station-exclusions contract stay separable.
 const PLAN_RULES_KEY = 'subscriptions_lk1_plan_rules';
-const STATION_EXCLUSIONS_KEY = 'subscriptions_lk1_station_exclusions';
 const globalStore = (values = {}) => ({ get: (key) => values[key] });
 const owned = (...productIds) => productIds.map((productId) => ({ productId }));
 const dateFrom = (dates, invalid = false) => ({

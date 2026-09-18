@@ -141,7 +141,7 @@ export const PLAN_RULES_TARGETS = Object.freeze({
 const REVIEWED_GATEWAY_SOURCE = "scripts/nodered_lk1_hub_nodes/gateway.js";
 const REVIEWED_EVALUATOR_SOURCE = "scripts/nodered_lk1_hub_nodes/evaluator.js";
 export const PLAN_RULES_MODULE_SHA256 =
-  "5017ca9c3dcd000f88e99ce28fe617f09e2eecee2cc732a6e4106b2c0087bf48";
+  "ee080fbce0eaa334810b44eed97f8c6358481ee8635c7bfcedfc7e0e450a54ff";
 // Re-pinned 2026-09-16: the reviewed evaluator gained the free-first-event benefit branch
 // (`FREE_ENTITLEMENT` with one visit for a proved first event of the day, discount otherwise),
 // which the `lk1-free-first-event` generation ships into this node and the preview evaluate.
