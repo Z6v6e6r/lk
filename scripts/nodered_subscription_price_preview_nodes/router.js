@@ -109,6 +109,15 @@ if (ctx.step === 'groupExercise') {
     || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
     || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
   ctx.exercise = exercise;
+  // A PRO group training is outside every subscription benefit (owner decision 2026-09-18):
+  // no plan percentage and no free first event apply to it, so the preview answers with an
+  // empty, successful quote list instead of pricing a discount the booking gateway refuses.
+  // The helper is read defensively: a generation whose canonical closure predates the
+  // exclusion keeps its previous pricing instead of failing the whole quote.
+  if (typeof canonical.isProTrainingExercise === 'function'
+    && eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise)) {
+    ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4);
+  }
   ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
