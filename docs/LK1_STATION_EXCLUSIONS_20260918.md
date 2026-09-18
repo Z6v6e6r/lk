@@ -114,8 +114,12 @@ guarded-запись с readback для `initialize` узла).
   роутера: исключённая станция отдаёт pre-rollout тариф, обычная — managed-вердикт),
   `lk1PlanRulesMatrix` / `lk1PlanRulesEvaluator` / `lk1PlanRulesRelease` — 0 fail
   (матрица читает committed `HEAD`, поэтому зелёная только после коммита);
-- сводный прогон 27 наборов LK1/preview/событийной оплаты: **359 pass / 0 fail / 40 skipped**
-  (скипы — приватные live-фикстуры и снапшот 147);
+- сводный прогон 32 наборов LK1/preview/событийной оплаты и генераций (с живым
+  снапшотом в `LK1_STATION_EXCLUSIONS_LIVE_SNAPSHOT`): **384 pass / 0 fail / 43 skipped**
+  (скипы — приватные live-фикстуры, которых нет на этой машине);
+- генерация против живого снапшота: `lk1StationExclusionsHotfix` 4/4 — кандидат
+  `f89fd3d7…`, ровно 2 узла / 3 поля, 0 добавленных, contract exact-graph принят,
+  повторное применение отказано по имени;
 - ESLint по изменённым файлам — 0 ошибок, `git diff --check` чист;
 - новый тест зарегистрирован в `check_10` workflow
   `.github/workflows/lk1-subscription-enforcement.yml`.
