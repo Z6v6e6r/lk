@@ -74,7 +74,12 @@ export const STATION_EXCLUSIONS_TARGET = Object.freeze({
   patchedBookingInitializeSha256: "f373346fc14ba52988c59269b803bb2297a39db24c81ae6d570ecaf6f5d7728a",
   previewId: STATION_EXCLUSIONS_PREVIEW_ID,
   livePreviewFuncSha256: "1bd8d443e483512c4817f8c6c4850ebd50fb314482c072a5d18db7ae11d66de4",
-  patchedPreviewFuncSha256: "8785e231893961dd73fedbacac46dfaae138bc99ebbdd43511fc1bb31c30be10",
+  // Re-pinned 2026-09-18 for the PRO-training exclusion: the reviewed preview router and the
+  // canonical closure now carry that rule, so the composed preview body of this generation
+  // changed. The value was recomputed from the same reviewed live snapshot
+  // (`a948f18b…`, 4804 nodes) with the reviewed composition; the booking postimage above is
+  // unchanged, so only the preview node of this generation is affected.
+  patchedPreviewFuncSha256: "df5c4ba1b55c471d8b830eac25c8035889720ff954e703d433932878e31c4f22",
 });
 
 // The installed preview composition pins of this generation: the split/join bodies and the

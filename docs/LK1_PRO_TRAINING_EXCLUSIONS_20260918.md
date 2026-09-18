@@ -1,5 +1,15 @@
 # LK1: ПРО-тренировки вне подписок и скидок (2026-09-18)
 
+## База ветки
+
+Ветка `codex/lk-pro-training-exclusions-generation-20260918` уложена **поверх PR #113**
+(«Сириус остаётся legacy для „Лето.Падел.Дружба“», ветка
+`codex/lk1-sirius-station-legacy-20260918`, `0bcda580`), по решению владельца: серверный
+пакет ПРО строится на готовом паттерне focused-генерации и guarded-deploy. Все три коммита
+ПРО перенесены cherry-pick'ом; конфликты были только в `docs/WORKLOG.md` (обе записи
+сохранены) и в списках `PREVIEW_INJECTED_*` (станционные и ПРО-имена объединены).
+После слияния #113 ветку нужно перенацелить на `main`.
+
 ## Что случилось
 
 Обращение по карточке групповой тренировки «ТРЕНИРОВКА ПРО УРОВЕНЬ С/С+» в `/group`:
@@ -127,6 +137,11 @@
 - `npx tsc -b` — PASS; ESLint по изменённым TS-файлам — 0 ошибок.
 - `npx vite build --config vite.config.group-schedule.ts` и `vite.config.games.ts` — PASS;
   в `dist/group-schedule.js` есть маркер правила и текст пояснения.
+- На уложенной ветке (base #113) дополнительно: `lk1StationExclusionsHotfix` 4/4 (снапшот-тест
+  генерации «Сириус» после перепривязки preview-postimage), `lk1SiriusStationLegacy` 12/12,
+  `lk1PlanRulesResolver` 16/16, `lk1PlanRulesMatrix` 10 pass/1 skip, `lk1PlanRulesRelease`
+  7 pass/7 skip, `lk1PlanRulesPreview` 25/25, `groupEventPayment` 18/18, `npm run test:pro-training-exclusion`
+  54/54, `npm run lint` 0 ошибок.
 
 ## Осталось для выпуска (в этой сессии не выполнялось)
 
@@ -143,19 +158,26 @@
    `deploymentPerformed: false`. Дельты: тело
    `lk_subscription_booking_router_20260804.func` (гард первым оператором
    `HUB_EXERCISE`) и `lk_subscription_price_preview_20260908_router.func` (перекомпозиция).
-3. **Перепиновка, которую вызывает это изменение.** `previewSources()` теперь всегда
-   добавляет в canonical closure либо модуль правила, либо инертную заглушку, поэтому
-   каждая ранее зафиксированная postimage-композиция превью изменилась. Перепиновать
-   (значения выводятся только из свежего live-преимиджа) нужно: `PLAN_RULES_TARGETS.preview.patchedFuncSha256`
-   (`scripts/patch_live_lk1_plan_rules.mjs`), те же константы в
-   `patch_live_lk1_event_diagnostics_hotfix.mjs`, `patch_live_lk1_event_quotes_hotfix.mjs`,
-   `patch_live_lk1_preview_exports_hotfix.mjs`, `patch_live_lk1_tariff_amounts_hotfix.mjs`,
-   `patch_live_lk1_preview_free_first_event_hotfix.mjs`, а также фикстуры, сравнивающие
-   композицию побайтово: `scripts/tests/lk1PlanRulesRelease.test.mjs` (нужен
-   `LK1_PLAN_RULES_LIVE_SNAPSHOT`) и `scripts/tests/subscriptionInstanceLimits.test.mjs`
-   (нужен `LK_INSTANCE_LIMITS_FLOW_FIXTURE`). Оба теста fail-closed и локально скипаются без
-   приватных фикстур — то есть рассинхрон поймается, но только на авторизованном проходе.
-   Плюс новые `PREVIEW_CANONICAL_SOURCE_SHA256.booking`, `preimages.json`, `HUB_PREIMAGES`.
+3. **Перепиновка, которую вызывает это изменение.** Любая правка `router.js`/`previewSources()`
+   меняет композицию узла превью, поэтому postimage-константы генераций нужно перепривязывать
+   осознанно.
+   - **Сделано в этой ветке:** `STATION_EXCLUSIONS_TARGET.patchedPreviewFuncSha256` в
+     `scripts/patch_live_lk1_station_exclusions_hotfix.mjs` перепривязан на `df5c4ba1…`.
+     Значение пересчитано из того же выверенного live-снапшота (`a948f18b…`, 4804 узла),
+     которым пользовалась генерация «Сириус», и подтверждено её снапшот-тестом
+     (`lk1StationExclusionsHotfix` 4/4). Booking-postimage этой генерации не изменился
+     (`fc1ca544…`), затронут только узел превью.
+   - **Остаётся при переигрывании исторических генераций** (они уже перекрыты более новыми
+     поколениями и падают fail-closed; их равенство-тесты локально скипаются без приватных
+     фикстур): `PLAN_RULES_TARGETS.preview.patchedFuncSha256` в `patch_live_lk1_plan_rules.mjs`
+     и те же константы в `patch_live_lk1_event_diagnostics_hotfix.mjs`,
+     `patch_live_lk1_event_quotes_hotfix.mjs`, `patch_live_lk1_preview_exports_hotfix.mjs`,
+     `patch_live_lk1_tariff_amounts_hotfix.mjs`, `patch_live_lk1_preview_free_first_event_hotfix.mjs`,
+     а также побайтовые фикстуры `scripts/tests/lk1PlanRulesRelease.test.mjs`
+     (`LK1_PLAN_RULES_LIVE_SNAPSHOT`) и `scripts/tests/subscriptionInstanceLimits.test.mjs`
+     (`LK_INSTANCE_LIMITS_FLOW_FIXTURE`).
+   - **На авторизованном проходе:** свежие `PREVIEW_CANONICAL_SOURCE_SHA256.booking`,
+     `preimages.json`, `HUB_PREIMAGES` для новой генерации.
 4. Guarded deploy-script `scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh`
    (`CONFIRM_147`, clean main, независимый exact-graph contract, бэкапы, readback, smoke,
    rollback) и `package.json`-скрипт `nodered:lk1-pro-training-exclusions:deploy-147`.
