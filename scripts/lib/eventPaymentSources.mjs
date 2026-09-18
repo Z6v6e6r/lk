@@ -13,6 +13,17 @@ export function planRulesSource() {
   }
   return source.replace(/^export /gm, '');
 }
+// The PRO-training exclusion is embedded the same way as the plan rules: the booking
+// body declares it once, and the preview gets its own copy of the same module through
+// `proTrainingEmbedding` in patch_nodered_subscription_price_preview.mjs.
+export function proTrainingExclusionSource() {
+  const source = fs.readFileSync(new URL('./proTrainingExclusion.mjs', import.meta.url), 'utf8');
+  for (const symbol of ['const PRO_TRAINING_DIRECTION_IDS =', 'function isProTrainingName(',
+    'function isProTrainingExercise(']) {
+    if (!source.includes(symbol)) throw new Error('PRO training exclusion source drift: ' + symbol);
+  }
+  return source.replace(/^export /gm, '');
+}
 export function hubGatewaySource() {
   const source = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
   const marker = '// EVENT_PAYMENT_ROUTES';
@@ -21,7 +32,11 @@ export function hubGatewaySource() {
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded plan-rules symbols');
   }
-  return planRulesSource() + source.replace(marker, () => eventPaymentRoutesSource());
+  if (/(?:const|let|var|function)\s+(?:PRO_TRAINING_DIRECTION_IDS|isProTrainingName|isProTrainingExercise)\b/
+    .test(source)) {
+    throw new Error('Gateway must not redeclare the embedded PRO-training exclusion symbols');
+  }
+  return planRulesSource() + proTrainingExclusionSource() + source.replace(marker, () => eventPaymentRoutesSource());
 }
 
 export const bookingReadbackSource = () => fs.readFileSync(new URL("../nodered_lk1_hub_nodes/booking_readback.js", import.meta.url), "utf8");

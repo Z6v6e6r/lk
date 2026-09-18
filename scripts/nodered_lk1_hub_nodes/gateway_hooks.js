@@ -136,6 +136,16 @@ if (internalCreate) {
 ctx.step = "lk1_profile_continue";
 
 // HUB_EXERCISE
+// A PRO training is outside the contour on both paths: the managed quote would grant a
+// discount (up to the free first event of the day) and the legacy path would consume a
+// visit, so the refusal has to precede every subscription decision, not only the plan
+// rule. The category guard keeps the token rule away from an open game or a tournament
+// that merely carries «ПРО» in its title. The client is told to pay the ordinary price.
+if (resolveCategory(exercise) === "group_training" && isProTrainingExercise(exercise)) {
+  return finishError(ctx, 409, "На ПРО-тренировки подписки не действуют: доступна только оплата по полной цене", {
+    code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+  });
+}
 // The selected instance is resolved first: it carries the product identity and the
 // sale date of the concrete subscription, not of a sibling the client also owns.
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
