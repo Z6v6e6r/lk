@@ -170,7 +170,6 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, station
   // keeps exactly its previous behaviour for every other product. An unreadable global is
   // fail-closed; an absent one excludes nothing.
   const stationVerdict = () => {
-    // eslint-disable-next-line no-undef -- injected by the Node-RED host
     const configured = stationExclusions !== undefined ? stationExclusions
       : typeof lk1ReadStationExclusions === "function" ? lk1ReadStationExclusions() : undefined;
     const excluded = lk1StationLegacy(stationId, productId, configured);
