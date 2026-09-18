@@ -8,10 +8,16 @@
  * of this rule.
  *
  * The same rule is embedded in the Node-RED contour
- * (`scripts/lib/proTrainingExclusion.mjs`): the preview refuses the quote and the
- * booking gateway refuses a subscription booking, so hiding the option in the
- * widget is never the only guard. Both sides are pinned by
- * `scripts/tests/proTrainingExclusion.test.ts`.
+ * (`scripts/lib/proTrainingExclusion.mjs`): the booking gateway refuses a
+ * subscription booking with `PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE` and the
+ * advisory preview answers an empty quote list, so the widget is not the only
+ * guard for the booking endpoint. Two paths stay outside that reviewed guard and
+ * are listed as residual risks in
+ * `docs/LK1_PRO_TRAINING_EXCLUSIONS_20260918.md`: a browser-side Viva purchase of
+ * a subscription package for this exercise, and the replay of an already
+ * confirmed subscription booking stored before this rule.
+ *
+ * Both sides are pinned by `scripts/tests/proTrainingExclusion.test.ts`.
  *
  * The direction ids are the Viva "ПРО" directions (owner decision 2026-09-18):
  * «Игра+Тренер ПРО уровень D/D+/C/C+» = 5502/5503/5504 (type 847) and
@@ -53,10 +59,19 @@ export function isProTrainingName(value: unknown): boolean {
  * True for a PRO training, accepting either a normalized
  * `GroupTrainingSummary` or the raw Viva exercise record.
  */
+/**
+ * True for a PRO training, accepting either a normalized
+ * `GroupTrainingSummary` or the raw Viva exercise record. The id is read through the
+ * same aliases the server's `resolveCategory` accepts, including a scalar `direction`,
+ * so the category and the PRO verdict never disagree about which direction this is.
+ */
 export function isProTraining(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  const direction = isRecord(value.direction) ? value.direction : null;
-  const directionId = readNumber(direction?.id ?? direction?.directionId ?? value.directionId);
+  const rawDirection = value.direction ?? value.exerciseDirection;
+  const direction = isRecord(rawDirection) ? rawDirection : null;
+  const directionId = readNumber(direction
+    ? (direction.id ?? direction.directionId)
+    : rawDirection) ?? readNumber(value.directionId ?? value.exerciseDirectionId);
   if (directionId !== null && (PRO_TRAINING_DIRECTION_IDS as readonly number[]).includes(directionId)) {
     return true;
   }

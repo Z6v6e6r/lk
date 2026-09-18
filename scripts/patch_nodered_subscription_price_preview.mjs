@@ -160,15 +160,21 @@ const planRulesEmbedding = declared => {
   return { injected, globalName: globalName[1] };
 };
 // The PRO-training exclusion is embedded the same way as the plan rules, from the one
-// reviewed module `scripts/lib/proTrainingExclusion.mjs`: the composed preview carries its
-// own copy, so the group-training route can refuse a PRO quote even before the booking body
-// of that generation declares the helper. A local copy the installed body already carries
-// must match the module text, otherwise the divergence stops the release.
-const proTrainingEmbedding = declared => {
+// reviewed module `scripts/lib/proTrainingExclusion.mjs`. It is embedded only when the
+// installed booking body of this generation really carries the refusal
+// (`PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE`): a preview that hides the quote while the
+// booking gateway still grants the benefit would hide the price and leave the discount
+// bookable, so a body without the guard gets an inert predicate instead. A local copy the
+// installed body already carries must match the module text, otherwise the divergence
+// stops the release.
+const PRO_TRAINING_INERT_SOURCE = 'const isProTrainingExercise = () => false;';
+const proTrainingEmbedding = (declared, booking) => {
   if (typeof eventPaymentSources.proTrainingExclusionSource !== 'function') {
     throw new Error('Price preview PRO-training source helper is unavailable');
   }
-  const moduleSource = eventPaymentSources.proTrainingExclusionSource();
+  const carriesGuard = /PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE/.test(String(booking));
+  const moduleSource = carriesGuard ? eventPaymentSources.proTrainingExclusionSource()
+    : PRO_TRAINING_INERT_SOURCE;
   const moduleDeclarations = topLevelDeclarations(moduleSource, 'proTrainingExclusion');
   const injected = moduleDeclarations.filter(declaration => !declared.has(declaration.name))
     .map(declaration => declaration.text).join('\n');
@@ -180,7 +186,7 @@ const proTrainingEmbedding = declared => {
     }
     declared.set(declaration.name, text);
   }
-  return { injected };
+  return { injected, carriesGuard };
 };
 const replaceEventTariffBlock = source => {
   const start = 'if (ctx.step === "lk1_event_tariff") {';
@@ -258,7 +264,7 @@ export function previewSources(flow, options = {}) {
   // helpers, and the reader is what HUB quotes fail closed on.
   const declared = declarationMap(helper.source);
   const rules = planRulesEmbedding(declared);
-  const proTraining = proTrainingEmbedding(declared);
+  const proTraining = proTrainingEmbedding(declared, booking);
   const missingReader = HUB_POLICY_READER_NAMES.filter(name => !declared.has(name));
   let reader = '';
   if (missingReader.length === HUB_POLICY_READER_NAMES.length) {
