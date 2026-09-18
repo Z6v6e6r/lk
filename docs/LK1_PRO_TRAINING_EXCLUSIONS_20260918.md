@@ -152,12 +152,15 @@
    `verify_nodered_source_origin.mjs`) — пины установленной генерации в репозитории
    непрозрачны и без pull не проверяемы: `PREVIEW_CANONICAL_SOURCE_SHA256.booking`,
    `scripts/nodered_lk1_hub_nodes/preimages.json`, `HUB_PREIMAGES`.
-2. Focused-генерация `scripts/patch_live_lk1_pro_training_exclusions_hotfix.mjs` по образцу
-   `patch_live_lk1_station_exclusions_hotfix.mjs`: пины live-флоу и по-узловых preimage/
-   postimage, дельты с якорями, `buildExactGraphContract`, отчёт с
-   `deploymentPerformed: false`. Дельты: тело
-   `lk_subscription_booking_router_20260804.func` (гард первым оператором
-   `HUB_EXERCISE`) и `lk_subscription_price_preview_20260908_router.func` (перекомпозиция).
+2. **Focused-генерация — сделана:** `scripts/patch_live_lk1_pro_training_exclusions_hotfix.mjs`
+   (2 узла / 2 поля: booking `func`, preview `func`; пины upstream-флоу и postimage, дельты с
+   якорями «после проверки identity упражнения» и «перед шагом exercise», `buildExactGraphContract`,
+   отчёт с `deploymentPerformed: false`). Она **уложена поверх постобраза генерации «Сириус»**:
+   upstream `408cd41e…` = постобраз `patch_live_lk1_station_exclusions_hotfix.mjs`, поэтому
+   порядок apply — сначала «Сириус», потом ПРО; патчер отказывается работать на до-станционном
+   флоу. Проверено на локальном снапшоте: кандидат `030e3961…`, 0 добавленных узлов,
+   booking `0211ba40…`, preview `1cdeddc3…`, `scripts/tests/proTrainingExclusionHotfix.test.mjs`
+   4/4.
 3. **Перепиновка, которую вызывает это изменение.** Любая правка `router.js`/`previewSources()`
    меняет композицию узла превью, поэтому postimage-константы генераций нужно перепривязывать
    осознанно.
@@ -178,7 +181,7 @@
      (`LK_INSTANCE_LIMITS_FLOW_FIXTURE`).
    - **На авторизованном проходе:** свежие `PREVIEW_CANONICAL_SOURCE_SHA256.booking`,
      `preimages.json`, `HUB_PREIMAGES` для новой генерации.
-4. Guarded deploy-script `scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh`
+4. **Осталось:** guarded deploy-script `scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh`
    (`CONFIRM_147`, clean main, независимый exact-graph contract, бэкапы, readback, smoke,
    rollback) и `package.json`-скрипт `nodered:lk1-pro-training-exclusions:deploy-147`.
 5. `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` /
