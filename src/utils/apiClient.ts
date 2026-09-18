@@ -9048,7 +9048,40 @@ async function requestPadelSplitJoinWithPendingPoll(
   return response;
 }
 
-export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
+// Split create can answer PENDING_CONFIRMATION as well: the gateway may have accepted the
+// request while Viva or the entitlement service still owes the booking readback. The LK game
+// record is created by the browser only after a confirmed response, so a single pending answer
+// used to leave a confirmed booking without a game. Re-issue the same operationId inside the
+// bounded schedule; the operation keeps its atomic claim and one-time creates never poll.
+async function requestPadelSplitCreateWithPendingPoll(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  baseUrl: string,
+  params: PadelSplitPaymentParams,
+  options: PadelSplitPendingPollOptions | null = null,
+): Promise<ApiResult<unknown>> {
+  const resolvedOptions = options ?? {};
+  const delaysMs = resolvedOptions.delaysMs ?? SUBSCRIPTION_BOOKING_CONFIRMATION_DELAYS_MS;
+  const wait = resolvedOptions.wait ?? (async (delayMs) => {
+    await new Promise((resolve) => {
+      globalThis.setTimeout(resolve, delayMs);
+    });
+  });
+  let response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  if (params.paymentMode !== "subscription") return response;
+  for (const delayMs of delaysMs) {
+    if (response.error || !resolvePadelSplitPendingError(response.data, response.status)) {
+      return response;
+    }
+    await wait(delayMs);
+    response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  }
+  return response;
+}
+
+export async function apiCreatePadelSplitGamePayment(
+  params: PadelSplitPaymentParams,
+  options: PadelSplitPendingPollOptions = {},
+) {
   const baseUrl = getServ2Origin() || "";
   const studioId = params.studioId?.trim() || null;
   const roomId = params.roomId?.trim() || null;
@@ -9074,7 +9107,7 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     "create",
     params,
   );
-  const response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
+  const response = await requestPadelSplitCreateWithPendingPoll(splitRequest, baseUrl, params, options);
 
   if (response.error) {
     return {
