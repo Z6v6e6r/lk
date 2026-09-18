@@ -53,6 +53,7 @@ const RULE_FIELDS = library ? JSON.parse(/const LK1_PLAN_RULE_FIELDS = (\[[^\]]*
 const HUB_PRODUCT_ID = constant('LK1_HUB_PRODUCT_ID');
 const PLAN_FROM = constant('LK1_PLAN_RULES_FROM');
 const PLAN_RULES_GLOBAL = constant('LK1_PLAN_RULES_GLOBAL');
+const STATION_EXCLUSIONS_GLOBAL = constant('LK1_STATION_EXCLUSIONS_GLOBAL');
 const policy = { productId: HUB_PRODUCT_ID };
 for (const field of RULE_FIELDS) policy[field] = { maxActiveBookings: 4, freeGameMinutesPerDay: 60,
   gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 }[field];
@@ -188,7 +189,8 @@ return { canonical, entry: __entry, router: __router, final: __final };`;
 /** One composed sandbox scope with the rule globals the preview reads. */
 const previewScope = (options = {}) => {
   const globals = { [HUB_POLICY_GLOBAL]: options.hubPolicy === undefined ? policy : options.hubPolicy,
-    [PLAN_RULES_GLOBAL]: options.planRules === undefined ? planRulesGlobal(options.planRows || []) : options.planRules };
+    [PLAN_RULES_GLOBAL]: options.planRules === undefined ? planRulesGlobal(options.planRows || []) : options.planRules,
+    [STATION_EXCLUSIONS_GLOBAL]: options.stationExclusions };
   const host = { get: key => globals[key], __trace: [] };
   return { host, scope: composition.createScope(host, { warn() {} }) };
 };
@@ -236,6 +238,8 @@ function preview(options = {}) {
     ({ productId, planKey: index === 0 ? 'ra' : 'promo_academy' }));
   const globals = { [HUB_POLICY_GLOBAL]: options.hubPolicy === undefined ? policy : options.hubPolicy,
     [PLAN_RULES_GLOBAL]: options.planRules === undefined ? planRulesGlobal(planRows) : options.planRules,
+    // An absent exclusion global is the released runtime's "no exclusions" state.
+    [STATION_EXCLUSIONS_GLOBAL]: options.stationExclusions,
     // The game router reads the room/studio tariff through the admin service token.
     vivacrm_access_token: 'fixture-admin', vivacrm_token_expires_at: Date.now() + 60000 };
   const host = { get: key => globals[key], __trace: [] };
@@ -597,4 +601,39 @@ test('the composition publishes the helpers as named exports of the closure', re
   for (const name of ['identityMoneyOwned', 'lk1LifecycleInstant', 'managedExternalEventTypeId']) {
     assert.ok(composed.exportedNames.includes(name), `${name} must be named in the closure return object`);
   }
+});
+
+test('an excluded station prices the pre-rollout plan, not the managed contour', requiresResolver, () => {
+  // The owner decision of 2026-09-18: the Sirius club keeps the pre-rollout behaviour for
+  // the friendship product it sells. The station travels through the composed router, so the
+  // preview prices that pair from the plan instead of the managed discount — and the same
+  // instance at any other station keeps the managed verdict.
+  const rows = planRulesGlobal([{ productId: FRIENDSHIP, planKey: 'friendship' }]);
+  const managed = soleQuote(preview({ subscriptions: [subscription(FRIENDSHIP)],
+    planProducts: [FRIENDSHIP], planRules: rows }));
+  const excluded = soleQuote(preview({ subscriptions: [subscription(FRIENDSHIP)],
+    planProducts: [FRIENDSHIP], planRules: rows,
+    stationExclusions: { formatVersion: 1, exclusions: [{ stationId: station, productIds: [FRIENDSHIP] }] } }));
+  // Managed: the free hour of the day plus the configured discount on the paid minutes.
+  assert.equal(managed.status, 'AVAILABLE');
+  assert.equal(managed.freeMinutes, policy.freeGameMinutesPerDay);
+  assert.equal(managed.paidMinutes, target.durationMinutes - policy.freeGameMinutesPerDay);
+  assert.ok(managed.amountMinor > 0);
+  // Excluded: the subscription carries the whole game, exactly as before the contour.
+  assert.equal(excluded.status, 'AVAILABLE');
+  assert.equal(excluded.amountMinor, 0);
+  assert.equal(excluded.freeMinutes, target.durationMinutes);
+  assert.equal(excluded.paidMinutes, 0);
+  // The exclusion is scoped to the pair: another station keeps the managed verdict.
+  const otherStation = soleQuote(preview({ subscriptions: [subscription(FRIENDSHIP)],
+    planProducts: [FRIENDSHIP], planRules: rows,
+    stationExclusions: { formatVersion: 1, exclusions: [{ stationId: uuid(9), productIds: [FRIENDSHIP] }] } }));
+  assert.deepEqual(otherStation, managed);
+  // And another product at the excluded station keeps its rule.
+  const bothRows = planRulesGlobal([{ productId: FRIENDSHIP, planKey: 'friendship' },
+    { productId: RA, planKey: 'ra' }]);
+  const otherProduct = soleQuote(preview({ subscriptions: [subscription(RA)], planProducts: [RA], planRules: bothRows,
+    stationExclusions: { formatVersion: 1, exclusions: [{ stationId: station, productIds: [FRIENDSHIP] }] } }));
+  assert.equal(otherProduct.status, 'AVAILABLE');
+  assert.equal(otherProduct.amountMinor, managed.amountMinor);
 });
