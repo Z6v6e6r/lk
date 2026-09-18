@@ -76,24 +76,33 @@ guarded-запись с readback для `initialize` узла).
 (`scripts/lib/eventPaymentSources.mjs`) проверяет, что модуль объявляет новые символы
 ровно один раз.
 
-## Что осталось до прода
+## Релизный поезд
 
-Правка source сама по себе продакшн не меняет. Нужен штатный релизный поезд:
+Поколение собрано и проверено против **свежего живого флоу** (read-only pull 2026-09-18,
+`a948f18b…`, 4804 узла; тело booking-узла — генерация после `lk1-confirmed-replay-guard`,
+`3920bb21…`):
 
-1. свежий pull живого флоу 147 в приватный внешний workspace (`nodered:modular:pull-147`);
-2. пересборка поколения: `initialize` узла `lk_subscription_booking_router_20260804` уже
-   дописывает writer `subscriptions_lk1_station_exclusions` (`buildGatewayInitialize`), а
-   `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` уже пере-пинованы по
-   reviewed-источникам. По живому телу остаётся пере-пиновать постимиджи
-   (`PLAN_RULES_TARGETS.gateway.patchedFuncSha256`/`patchedInitializeSha256`,
-   `evaluator.patchedFuncSha256`, `preview.patchedFuncSha256`) и подтвердить, что
-   `before`-анкеры дельт (в т.ч. новые `hooks-product-rule-station` и правки
-   `hooks-selected-instance-and-rule-gate`) существуют в свежем теле; затем проверка
-   exact-graph контракта;
-3. rebind `candidate_binding` / `custody_identity` / активационного манифеста (5 sha);
-4. apply на 147 под CONFIRM_147 с бэкапами, readback и авто-rollback, затем приёмка:
-   турнир в Сириусе по «Дружбе» проходит без доплаты, турнир вне Сириуса по той же
-   подписке остаётся со скидкой 50 %, РА/Академия/Спорт в Сириусе не изменились.
+- `scripts/patch_live_lk1_station_exclusions_hotfix.mjs` — focused-генерация
+  (`lk1-station-exclusions`): ровно 2 узла / 3 поля — `booking.func`
+  (`lk1_subscription_booking_router_20260804`), `booking.initialize` и `preview.func`
+  (`lk_subscription_price_preview_20260908_router`). Дельты: смена embedded-модуля и
+  `lk1Config`-фрагмента на reviewed-версии, станция во всех шести решениях о контуре
+  плюс `exercise` в проекции product identity, writer нового глобала в `initialize`;
+  превью пересобирается композицией `previewSources()` на уже пропатченном теле.
+  Кандидат: `f89fd3d7…`, contract exact-graph принят, узлов не добавлено.
+- `scripts/deploy_nodered_lk1_station_exclusions_147.sh` +
+  `npm run nodered:lk1-station-exclusions:deploy-147` — guarded apply под
+  `NODE_RED_LK1_STATION_EXCLUSIONS_DEPLOY=CONFIRM_147`, чистый main, exact-graph
+  контракт, бэкапы, readback, авто-rollback. Постчек (review F6) дополнительно читает
+  установленный `initialize` и требует наличие writer’а и ровно reviewed-пары —
+  установка без активации больше не может выглядеть зелёной.
+
+Осталось (требует явной авторизации владельца): apply из чистого main и приёмка —
+турнир в Сириусе по «Дружбе» без доплаты, турнир вне Сириуса по той же подписке со
+скидкой 50 %, РА/Академия/Спорт/ХАБ в Сириусе без изменений. Отдельно: после apply
+пины `custody_identity` / активационного манифеста, описывающие установленное
+поколение, становятся историческими — их надо перепривязать, если этот пакет ещё
+используется.
 
 ## Проверки (локально)
 
