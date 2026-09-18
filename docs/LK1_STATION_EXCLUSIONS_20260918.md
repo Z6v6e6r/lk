@@ -81,11 +81,15 @@ guarded-запись с readback для `initialize` узла).
 Правка source сама по себе продакшн не меняет. Нужен штатный релизный поезд:
 
 1. свежий pull живого флоу 147 в приватный внешний workspace (`nodered:modular:pull-147`);
-2. пересборка поколения: `initialize` узла `lk_subscription_booking_router_20260804`
-   должен дописать writer `subscriptions_lk1_station_exclusions`; пере-пины
-   `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` и постимиджей
-   (gateway func+initialize, preview) в `scripts/patch_live_lk1_plan_rules.mjs`;
-   проверка exact-graph контракта;
+2. пересборка поколения: `initialize` узла `lk_subscription_booking_router_20260804` уже
+   дописывает writer `subscriptions_lk1_station_exclusions` (`buildGatewayInitialize`), а
+   `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` уже пере-пинованы по
+   reviewed-источникам. По живому телу остаётся пере-пиновать постимиджи
+   (`PLAN_RULES_TARGETS.gateway.patchedFuncSha256`/`patchedInitializeSha256`,
+   `evaluator.patchedFuncSha256`, `preview.patchedFuncSha256`) и подтвердить, что
+   `before`-анкеры дельт (в т.ч. новые `hooks-product-rule-station` и правки
+   `hooks-selected-instance-and-rule-gate`) существуют в свежем теле; затем проверка
+   exact-graph контракта;
 3. rebind `candidate_binding` / `custody_identity` / активационного манифеста (5 sha);
 4. apply на 147 под CONFIRM_147 с бэкапами, readback и авто-rollback, затем приёмка:
    турнир в Сириусе по «Дружбе» проходит без доплаты, турнир вне Сириуса по той же
