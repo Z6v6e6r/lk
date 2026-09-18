@@ -160,16 +160,22 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, station
   // Ownership that names no exact product cannot select a rule: legacy, no error.
   if (productId === null) return { matched: false };
   const evidence = { productId, productIdSource: source, extraProductIds };
-  // An unreadable exclusion global is fail-closed; an absent one excludes nothing.
-  // eslint-disable-next-line no-undef -- injected by the Node-RED host
-  const excluded = lk1StationLegacy(stationId, productId, stationExclusions !== undefined ? stationExclusions
-    : typeof lk1ReadStationExclusions === "function" ? lk1ReadStationExclusions() : undefined);
-  if (excluded.ok !== true) return { matched: true, code: "LK1_STATION_EXCLUSIONS_INVALID", ...evidence };
   // The station downgrade travels as the same legacy verdict the sale-date cohort
   // produces, so every existing consumer keeps its branch and no new one appears.
   const stationLegacy = (ruleProductId) => ({
     matched: true, legacy: true, stationLegacy: true, stationId: lk1ProductCandidate(stationId),
     productId: ruleProductId, ...evidence });
+  // The exclusion global is read only where it can change the verdict — a product a rule
+  // already covers — so a runtime that carries neither the global nor the reviewed reader
+  // keeps exactly its previous behaviour for every other product. An unreadable global is
+  // fail-closed; an absent one excludes nothing.
+  const stationVerdict = () => {
+    // eslint-disable-next-line no-undef -- injected by the Node-RED host
+    const configured = stationExclusions !== undefined ? stationExclusions
+      : typeof lk1ReadStationExclusions === "function" ? lk1ReadStationExclusions() : undefined;
+    const excluded = lk1StationLegacy(stationId, productId, configured);
+    return excluded.ok !== true ? { code: "LK1_STATION_EXCLUSIONS_INVALID" } : excluded;
+  };
   if (productId !== null && productId === LK1_HUB_PRODUCT_ID) {
     try {
       // An explicitly supplied policy wins; otherwise the bound source global is
@@ -189,7 +195,9 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, station
         || LK1_PLAN_RULE_FIELDS.slice(2).some((key) => policy[key] > 100)) {
         return { matched: true, code: "LK1_PRODUCT_RULE_INVALID", ...evidence };
       }
-      if (excluded.value === true) return stationLegacy(policy.productId);
+      const hubStation = stationVerdict();
+      if (hubStation.code) return { matched: true, code: hubStation.code, ...evidence };
+      if (hubStation.value === true) return stationLegacy(policy.productId);
       const rule = { productId: policy.productId };
       for (const key of LK1_PLAN_RULE_FIELDS) rule[key] = policy[key];
       // The HUB rule carries no sale-date gate: the contour is on for every sale.
@@ -207,7 +215,9 @@ export function resolveLk1Rule({ owned, hubPolicy, planRules, stationId, station
   if (rule === undefined) return { matched: false, ...evidence };
   // An excluded station keeps the product's pre-rollout behaviour: no rule travels
   // further and the sale date is never demanded for it.
-  if (excluded.value === true) {
+  const planStation = stationVerdict();
+  if (planStation.code) return { matched: true, code: planStation.code, ...evidence };
+  if (planStation.value === true) {
     return { ...stationLegacy(rule.productId), source: "PLAN",
       planKey: rule.planKey, enforceFrom: rule.enforceFrom, purchaseDate: null };
   }
@@ -237,5 +247,10 @@ function lk1ReadPlanRules() {
 // unreadable global is an invalid exclusion set (fail-closed), an absent one
 // excludes nothing.
 function lk1ReadStationExclusions() {
-  try { return global.get(LK1_STATION_EXCLUSIONS_GLOBAL); } catch { return LK1_STATION_EXCLUSIONS_INVALID; }
+  try {
+    // A runtime without a global context (a bare harness, not Node-RED) excludes
+    // nothing; a store that is present and throws stays fail-closed.
+    if (typeof global === "undefined" || typeof global.get !== "function") return undefined;
+    return global.get(LK1_STATION_EXCLUSIONS_GLOBAL);
+  } catch { return LK1_STATION_EXCLUSIONS_INVALID; }
 }

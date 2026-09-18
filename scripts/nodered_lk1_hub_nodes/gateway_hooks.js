@@ -141,7 +141,7 @@ ctx.step = "lk1_profile_continue";
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
 // The booking target's station is part of the contour verdict: an excluded station keeps
 // the pre-rollout path and must not enter the managed branch below.
-const selectedRule = lk1Config(selectedOwned, toStr(exercise?.studio?.id || exercise?.studioId));
+const selectedRule = lk1Config(selectedOwned, exercise?.studio?.id || exercise?.studioId || null);
 const enforcedRule = selectedRule.matched && !selectedRule.legacy;
 let ruleConfigured = false;
 try { ruleConfigured = Boolean(lk1ReadPlanRules() || global.get(LK1_PRODUCT_POLICY_GLOBAL)); } catch (_) { /* absent */ }
@@ -159,7 +159,7 @@ if (ownedSubscriptions.length === 0) {
       code: "SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE",
     });
   }
-const productRule = lk1Config(ownedSubscriptions, toStr(exercise?.studio?.id || exercise?.studioId));
+const productRule = lk1Config(ownedSubscriptions, exercise?.studio?.id || exercise?.studioId || null);
 // A legacy cohort is not a rule change: it stays out of the managed contour.
 if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && !productRule.matched
   && !productRule.legacy) {

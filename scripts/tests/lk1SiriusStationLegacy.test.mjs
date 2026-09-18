@@ -16,6 +16,7 @@ import {
   resolveLk1Rule,
 } from '../lib/lk1PlanRules.mjs';
 import { LK1_PLAN_RULES_DESIRED } from '../lib/lk1PlanRulesTransition.mjs';
+import { buildGatewayInitialize } from '../patch_live_lk1_plan_rules.mjs';
 import {
   LK1_SIRIUS_FRIENDSHIP_PRODUCT_ID,
   LK1_SIRIUS_STATION_ID,
@@ -212,17 +213,17 @@ test(`${PREFIX}the booking gateway passes the target station to every contour de
   assert.ok(gateway.includes('const lk1Config = (owned, stationId) => {'));
   assert.ok(gateway.includes('resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,'));
   assert.ok(gateway.includes('stationExclusions: lk1ReadStationExclusions() });'));
-  assert.ok(gateway.includes('const configured = lk1Config(owned, toStr(exercise?.studio?.id || exercise?.studioId));'),
+  assert.ok(gateway.includes('const configured = lk1Config(owned, exercise?.studio?.id || exercise?.studioId || null);'),
     'the quote resolves the station of the priced exercise');
-  assert.ok(gateway.includes('const configured = lk1Config(selected, toStr(exercise?.studio?.id || exercise?.studioId));'),
+  assert.ok(gateway.includes('const configured = lk1Config(selected, exercise?.studio?.id || exercise?.studioId || null);'),
     'the money-ownership step resolves the station of the priced exercise');
-  assert.ok(gateway.includes('toStr(ctx.lk1.target?.stationId || ctx.studioId));'),
+  assert.ok(gateway.includes('ctx.lk1.target?.stationId || ctx.studioId || null);'),
     'the checkout re-resolution reuses the station of the stored quote');
   // The ingress gate decides the managed branch before any quote exists: without the
   // station there, an excluded pair would still enter the managed path.
   const hooks = read('../nodered_lk1_hub_nodes/gateway_hooks.js');
-  assert.ok(hooks.includes('const selectedRule = lk1Config(selectedOwned, toStr(exercise?.studio?.id || exercise?.studioId));'));
-  assert.ok(hooks.includes('const productRule = lk1Config(ownedSubscriptions, toStr(exercise?.studio?.id || exercise?.studioId));'));
+  assert.ok(hooks.includes('const selectedRule = lk1Config(selectedOwned, exercise?.studio?.id || exercise?.studioId || null);'));
+  assert.ok(hooks.includes('const productRule = lk1Config(ownedSubscriptions, exercise?.studio?.id || exercise?.studioId || null);'));
   // The release composition embeds the module once, so both readers exist once.
   const composed = hubGatewaySource();
   for (const declaration of ['const LK1_PLAN_RULES_GLOBAL =', 'const LK1_STATION_EXCLUSIONS_GLOBAL =',
@@ -233,9 +234,9 @@ test(`${PREFIX}the booking gateway passes the target station to every contour de
 
 test(`${PREFIX}the money mandate and the preview resolve the same station`, () => {
   const product = read('../nodered_subscription_product_nodes/gateway.js');
-  assert.ok(product.includes('const identityMoneyOwned = (ctx, rows, exercise) => {'));
-  assert.ok(product.includes('const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);'));
-  assert.ok(product.includes("&& resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows, exercise);"));
+  assert.ok(product.includes('const configured = lk1Config(projected, ctx.lk1MoneyExercise?.studio?.id || ctx.lk1MoneyExercise?.studioId || null);'),
+    'the money mandate resolves the station of the readback exercise');
+  assert.ok(product.includes("&& resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows);"));
   const router = read('../nodered_subscription_price_preview_nodes/router.js');
   assert.ok(router.includes('const previewRule = (owned, stationId) => {'));
   assert.ok(router.includes('return canonical.resolveLk1Rule({ owned, stationId,'));
@@ -248,6 +249,35 @@ test(`${PREFIX}the money mandate and the preview resolve the same station`, () =
   const composition = read('../patch_nodered_subscription_price_preview.mjs');
   assert.ok(composition.includes("'lk1ReadStationExclusions'"),
     'the preview canonical closure has to publish the station-exclusions reader');
+});
+
+test(`${PREFIX}the generation activates the exclusion global next to the plan rules`, () => {
+  // The reviewed gateway `initialize` is the live HUB writer plus both generated writers;
+  // this drives the composition with a synthetic HUB writer so the station writer is
+  // proved without the private live snapshot.
+  const liveInitialize = [
+    'const lk1PolicyKey = "subscriptions_lk1_product_policy";',
+    'global.set(lk1PolicyKey, lk1DesiredPolicy);',
+    '"HUB policy prior mismatch; no overwrite"',
+    '"HUB policy readback mismatch"',
+    '',
+  ].join('\n');
+  const initialize = buildGatewayInitialize(liveInitialize);
+  for (const marker of ['const lk1PlanRulesKey = "subscriptions_lk1_plan_rules";',
+    'global.set(lk1PlanRulesKey, lk1DesiredPlanRules);',
+    'const lk1StationExclusionsKey = "subscriptions_lk1_station_exclusions";',
+    'global.set(lk1StationExclusionsKey, lk1DesiredStationExclusions);',
+    'station exclusions prior mismatch; no overwrite',
+    'station exclusions readback mismatch',
+    JSON.stringify(LK1_STATION_EXCLUSIONS_DESIRED)]) {
+    assert.ok(initialize.includes(marker), `initialize must carry: ${marker}`);
+  }
+  for (const anchor of ['const lk1PolicyKey = "subscriptions_lk1_product_policy";',
+    'global.set(lk1PolicyKey, lk1DesiredPolicy);']) {
+    assert.ok(initialize.includes(anchor), `the HUB writer must stay untouched: ${anchor}`);
+  }
+  // A second run is refused: the generation is applied once, against a fresh live body.
+  assert.throws(() => buildGatewayInitialize(initialize), /already patched/);
 });
 
 test(`${PREFIX}the gateway and the preview agree on the Sirius verdict`, () => {
