@@ -97,11 +97,17 @@ guarded-запись с readback для `initialize` узла).
 
 ## Проверки (локально)
 
-- `node --test scripts/tests/lk1SiriusStationLegacy.test.mjs` — 10/10;
-- `node --test scripts/tests/lk1PlanRulesResolver.test.mjs` — 16/16;
-- `node --test scripts/tests/lk1PlanRulesPreview.test.mjs scripts/tests/lk1PlanRulesMatrix.test.mjs
-  scripts/tests/lk1PlanRulesEvaluator.test.mjs` — 46/46 (матрица читает committed `HEAD`,
-  поэтому зелёная только после коммита);
+- `node --test scripts/tests/lk1SiriusStationLegacy.test.mjs` — 11/11 (вердикт пары, изоляция
+  станции и продукта, отсутствие/битый/чужой глобал, форма payload, guarded-запись с readback
+  и отказ на чужом prior, проводка всех call-site, writer глобала в генерации, паритет
+  gateway↔preview);
+- `lk1PlanRulesResolver` 16/16, `lk1PlanRulesPreview` 24/24 (включая новый прогон composed
+  роутера: исключённая станция отдаёт pre-rollout тариф, обычная — managed-вердикт),
+  `lk1PlanRulesMatrix` / `lk1PlanRulesEvaluator` / `lk1PlanRulesRelease` — 0 fail
+  (матрица читает committed `HEAD`, поэтому зелёная только после коммита);
+- сводный прогон 27 наборов LK1/preview/событийной оплаты: **359 pass / 0 fail / 40 skipped**
+  (скипы — приватные live-фикстуры и снапшот 147);
+- ESLint по изменённым файлам — 0 ошибок, `git diff --check` чист;
 - новый тест зарегистрирован в `check_10` workflow
   `.github/workflows/lk1-subscription-enforcement.yml`.
 
