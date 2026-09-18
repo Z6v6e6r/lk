@@ -628,7 +628,11 @@ test('an excluded station prices the pre-rollout plan, not the managed contour',
   const otherStation = soleQuote(preview({ subscriptions: [subscription(FRIENDSHIP)],
     planProducts: [FRIENDSHIP], planRules: rows,
     stationExclusions: { formatVersion: 1, exclusions: [{ stationId: uuid(9), productIds: [FRIENDSHIP] }] } }));
-  assert.deepEqual(otherStation, managed);
+  // The quote is time-stamped per evaluation, so the priced verdict is compared field by field.
+  const priced = quote => ({ status: quote.status, basePriceMinor: quote.basePriceMinor,
+    amountMinor: quote.amountMinor, freeMinutes: quote.freeMinutes, paidMinutes: quote.paidMinutes,
+    subscriptionId: quote.subscriptionId, selectionKey: quote.selectionKey });
+  assert.deepEqual(priced(otherStation), priced(managed));
   // And another product at the excluded station keeps its rule.
   const bothRows = planRulesGlobal([{ productId: FRIENDSHIP, planKey: 'friendship' },
     { productId: RA, planKey: 'ra' }]);

@@ -34,6 +34,8 @@ function normalizeStationExclusionsGlobal(value) {
   if (typeof value === 'string') value = JSON.parse(value);
   const isObject = item => item !== null && typeof item === 'object' && !Array.isArray(item);
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  // Stations are UUIDs without the product version/variant restriction.
+  const stationUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   if (!isObject(value) || value.formatVersion !== 1 || !Array.isArray(value.exclusions)
     || Object.keys(value).sort().join() !== ['exclusions', 'formatVersion'].sort().join()) {
     throw new Error('LK1 station exclusions shape mismatch');
@@ -48,7 +50,7 @@ function normalizeStationExclusionsGlobal(value) {
     const stationId = typeof item.stationId === 'string' ? item.stationId.trim().toLowerCase() : '';
     const productIds = item.productIds.map(productId => (
       typeof productId === 'string' ? productId.trim().toLowerCase() : ''));
-    if (!uuid.test(stationId) || seen.has(stationId)
+    if (!stationUuid.test(stationId) || seen.has(stationId)
       || productIds.some(productId => !uuid.test(productId))
       || new Set(productIds).size !== productIds.length) {
       throw new Error('LK1 station exclusions shape mismatch');

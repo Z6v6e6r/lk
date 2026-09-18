@@ -113,6 +113,14 @@ test(`${PREFIX}a missing or malformed station cannot decide the contour`, () => 
   const upper = released().resolveLk1Rule({ owned: owned(LK1_SIRIUS_FRIENDSHIP_PRODUCT_ID, '2026-09-05'),
     stationId: LK1_SIRIUS_STATION_ID.toUpperCase() });
   assert.equal(upper.legacy, true);
+  // A station UUID without the product version/variant nibbles still matches: the
+  // station pattern is deliberately wider than the product pattern.
+  const oddStation = '233c1405-1eac-00de-00c6-1cf7e24c9276';
+  const odd = released({ global: store({ [LK1_PLAN_RULES_GLOBAL]: LK1_PLAN_RULES_DESIRED,
+    [STATION_KEY]: { formatVersion: 1, exclusions: [{ stationId: oddStation, productIds: [LK1_SIRIUS_FRIENDSHIP_PRODUCT_ID] }] } }) })
+    .resolveLk1Rule({ owned: owned(LK1_SIRIUS_FRIENDSHIP_PRODUCT_ID, '2026-09-05'), stationId: oddStation });
+  assert.equal(odd.legacy, true);
+  assert.equal(odd.stationId, oddStation);
 });
 
 test(`${PREFIX}an absent exclusion global excludes nothing, an unreadable one fails closed`, () => {
@@ -128,6 +136,39 @@ test(`${PREFIX}an absent exclusion global excludes nothing, an unreadable one fa
   assert.equal(failed.matched, true);
   assert.equal(failed.code, 'LK1_STATION_EXCLUSIONS_INVALID');
   assert.equal(failed.legacy, undefined);
+});
+
+test(`${PREFIX}an unreadable exclusion set never refuses the annual HUB`, () => {
+  // The exclusion may only downgrade a pair the rules already cover; the shipped payload
+  // names no HUB pair, so a foreign or unreadable set must not block the annual product.
+  const cases = [
+    ['throwing store', { get: (key) => {
+      if (key === STATION_KEY) throw new Error('global store unavailable');
+      return LK1_PLAN_RULES_DESIRED;
+    } }, 'LK1_STATION_EXCLUSIONS_INVALID'],
+    ['wrong exclusions type', store({ [LK1_PLAN_RULES_GLOBAL]: LK1_PLAN_RULES_DESIRED,
+      [STATION_KEY]: { formatVersion: 1, exclusions: 'nope' } }), 'LK1_STATION_EXCLUSIONS_INVALID'],
+    ['foreign formatVersion', store({ [LK1_PLAN_RULES_GLOBAL]: LK1_PLAN_RULES_DESIRED,
+      [STATION_KEY]: { formatVersion: 2, exclusions: [] } }), 'LK1_STATION_EXCLUSIONS_INVALID'],
+    ['malformed station id', store({ [LK1_PLAN_RULES_GLOBAL]: LK1_PLAN_RULES_DESIRED,
+      [STATION_KEY]: { formatVersion: 1, exclusions: [{ stationId: 'not-a-uuid', productIds: [RA] }] } }),
+      'LK1_STATION_EXCLUSIONS_INVALID'],
+    ['absent global', store({ [LK1_PLAN_RULES_GLOBAL]: LK1_PLAN_RULES_DESIRED }), undefined],
+  ];
+  for (const [label, stored, planCode] of cases) {
+    const hub = bind({ global: stored }).resolveLk1Rule({ owned: owned(LK1_HUB_PRODUCT_ID, '2026-08-15'),
+      stationId: LK1_SIRIUS_STATION_ID });
+    assert.equal(hub.matched, true, label);
+    assert.equal(hub.legacy, false, `${label}: the annual HUB keeps its rule`);
+    assert.equal(hub.rule.productId, LK1_HUB_PRODUCT_ID, label);
+    assert.equal(hub.code, undefined, label);
+    // The same store still decides a plan product: fail-closed on an unreadable set,
+    // and the ordinary rule when the exclusion global is simply absent.
+    const plan = bind({ global: stored }).resolveLk1Rule({ owned: owned(LK1_SIRIUS_FRIENDSHIP_PRODUCT_ID, '2026-09-05'),
+      stationId: LK1_SIRIUS_STATION_ID });
+    assert.equal(plan.code, planCode, label);
+    if (planCode === undefined) assert.equal(plan.legacy, false, label);
+  }
 });
 
 test(`${PREFIX}the exclusion shape is frozen and rejects drift`, () => {
@@ -234,9 +275,10 @@ test(`${PREFIX}the booking gateway passes the target station to every contour de
 
 test(`${PREFIX}the money mandate and the preview resolve the same station`, () => {
   const product = read('../nodered_subscription_product_nodes/gateway.js');
-  assert.ok(product.includes('const configured = lk1Config(projected, ctx.lk1MoneyExercise?.studio?.id || ctx.lk1MoneyExercise?.studioId || null);'),
+  assert.ok(product.includes('const identityMoneyOwned = (ctx, rows, exercise) => {'));
+  assert.ok(product.includes('const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);'),
     'the money mandate resolves the station of the readback exercise');
-  assert.ok(product.includes("&& resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows);"));
+  assert.ok(product.includes("&& resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows, exercise);"));
   const router = read('../nodered_subscription_price_preview_nodes/router.js');
   assert.ok(router.includes('const previewRule = (owned, stationId) => {'));
   assert.ok(router.includes('return canonical.resolveLk1Rule({ owned, stationId,'));

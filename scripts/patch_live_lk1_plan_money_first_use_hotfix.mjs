@@ -86,7 +86,7 @@ const identitySelected = (body, ctx) => {
 };
 // Monetary group discounts verify the freshly read owned row. They neither
 // consume a visit nor use the earlier visit-eligibility snapshot.
-const identityMoneyOwned = (ctx, rows) => {
+const identityMoneyOwned = (ctx, rows, exercise) => {
   if (!identityBound(ctx) || rows.length !== 1) return [];
   const p = ctx.lk1ProductIdentity;
   const row = rows[0];
@@ -98,7 +98,7 @@ const identityMoneyOwned = (ctx, rows) => {
   // verdict: an excluded station emits no mandate, exactly as the quote stops asking for one.
   const projected = [{ ...row, productId: p.productId, name: p.name,
     product: { ...(isObj(row.product) ? row.product : {}), id: p.productId, name: p.name } }];
-  const configured = lk1Config(projected, ctx.lk1MoneyExercise?.studio?.id || ctx.lk1MoneyExercise?.studioId || null);
+  const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);
   if (!configured.matched || configured.legacy === true || configured.code) return [];
   // A \`NEW\` instance without an activation date is the first-use state: Viva writes the
   // activation and expiry with the booking this mandate authorises, so neither can be
@@ -187,7 +187,7 @@ const identityMoneyOwned = (ctx, rows) => {
 ]);
 
 const BOOKING_MARKERS = Object.freeze([
-  "const configured = lk1Config(projected);",
+  "const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);",
   "if (!configured.matched || configured.legacy === true || configured.code) return [];",
   "if ((!firstUse && row.status !== 'ACTIVE') || !identitySelected({ content: [row], totalElements: 1 }, ctx)",
   "    if (!firstUse) {",
@@ -291,7 +291,7 @@ export function composePlanFirstUseArtifacts(liveBytes, deploymentId, options = 
   return { flow, candidateBytes, contract, changes, addedNodeCount: 0, sourceSha256,
     candidateSha256: sha256(candidateBytes), booking: { id: PLAN_FIRST_USE_BOOKING_ID,
       otherFieldsUnchanged: true,
-      planProjectionResolverBound: booking.func.includes("const configured = lk1Config(projected);")
+      planProjectionResolverBound: booking.func.includes("const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);")
         && !booking.func.includes("  if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];"),
       firstUseGuarded: booking.func.includes("    if (!firstUse) {")
         && booking.func.includes("    } else if (!firstUse) {"),
