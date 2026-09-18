@@ -66,7 +66,7 @@ export const PLAN_RULES_PREVIEW_NODE_ID = "lk_subscription_price_preview_2026090
 // The reviewed marker of an already patched gateway body: the resolver call the
 // released `lk1Config` uses. It is absent from the live preimage, so a second run
 // of this patcher is refused instead of produced.
-const GATEWAY_PATCH_MARKER = "resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })";
+const GATEWAY_PATCH_MARKER = "resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,";
 const EVALUATOR_PATCH_MARKER = "decision.aboveActiveLimit = activeCount >= rule.maxActiveBookings;";
 // The plan-rules writer the released gateway `initialize` must carry: without it the
 // rollout global is never written and rule 3 (plan products sold from 2026-09-01)
