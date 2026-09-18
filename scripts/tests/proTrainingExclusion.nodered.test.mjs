@@ -5,7 +5,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import vm from "node:vm";
 import { hubGatewaySource, proTrainingExclusionSource } from "../lib/eventPaymentSources.mjs";
 import { isProTrainingExercise } from "../lib/proTrainingExclusion.mjs";
 
