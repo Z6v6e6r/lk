@@ -245,7 +245,7 @@ export function hubSourceProvenance() {
   const closure = ['scripts/patch_live_lk1_hub.mjs', 'scripts/verify_nodered_source_origin.mjs',
     'scripts/lib/release-provenance.mjs', 'scripts/lib/lk1HubPolicyTransition.mjs',
     'scripts/lib/subscriptionVisitRuntimeSource.mjs', 'scripts/lib/eventPaymentSources.mjs', 'scripts/lib/subscriptionVisitLifecycle.mjs',
-    'scripts/lib/lk1PlanRules.mjs',
+    'scripts/lib/lk1PlanRules.mjs', 'scripts/lib/proTrainingExclusion.mjs',
     'scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs',
     ...['booking_readback.js', 'event_payments.js', 'gateway.js', 'gateway_hooks.js', 'visit_confirm.js', 'split.js', 'split_hooks.js', 'finalize.js',
       'evaluator.js', 'preimages.json'].map(name => 'scripts/nodered_lk1_hub_nodes/' + name)];

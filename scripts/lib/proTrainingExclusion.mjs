@@ -10,11 +10,16 @@
 // free-first-event benefit.
 //
 // This module is embedded verbatim into the booking gateway by the release composition
-// (`hubGatewaySource()` in scripts/lib/eventPaymentSources.mjs) and reached by the
-// preview through the canonical helper closure, so the rule has exactly one reviewed
-// source. The widget carries the same ids and the same token in
-// `src/utils/proTrainingExclusion.ts`; `scripts/tests/proTrainingExclusion.test.ts`
-// pins both sides.
+// (`hubGatewaySource()` in scripts/lib/eventPaymentSources.mjs) and into the advisory price
+// preview's canonical closure, so the rule has exactly one reviewed source. The widget
+// carries the same ids and the same token in `src/utils/proTrainingExclusion.ts`;
+// `scripts/tests/proTrainingExclusion.test.ts` pins both sides.
+//
+// Scope note: the reviewed server guard covers the subscription *booking* endpoint. The
+// "buy a subscription package for this exercise" transaction is created by the browser
+// straight in Viva and is not carried by that endpoint, so it is currently excluded by the
+// widget plus the owner-side Viva product configuration only — see
+// docs/LK1_PRO_TRAINING_EXCLUSIONS_20260918.md («Остаточные риски»).
 export const PRO_TRAINING_DIRECTION_IDS = Object.freeze([5502, 5503, 5504, 5505, 5506, 5507]);
 
 // "ПРО" must be a standalone token: "Профсоюзная", "пробная" and "просто" are ordinary
@@ -47,11 +52,18 @@ export function isProTrainingName(value) {
  * True for a PRO training. Accepts the server-resolved Viva exercise record; the
  * direction id is authoritative, the name token is the fallback for a direction
  * created after this list was reviewed.
+ *
+ * The id is read through the same aliases `resolveCategory` accepts, including a
+ * scalar `direction` (Viva sometimes carries the bare direction id there), so the
+ * category and the PRO verdict can never disagree about which direction this is.
  */
 export function isProTrainingExercise(value) {
   if (!proTrainingIsRecord(value)) return false;
-  const direction = proTrainingIsRecord(value.direction) ? value.direction : null;
-  const directionId = proTrainingNum(direction?.id ?? direction?.directionId ?? value.directionId);
+  const rawDirection = value.direction ?? value.exerciseDirection;
+  const direction = proTrainingIsRecord(rawDirection) ? rawDirection : null;
+  const directionId = proTrainingNum(direction
+    ? (direction.id ?? direction.directionId)
+    : rawDirection) ?? proTrainingNum(value.directionId ?? value.exerciseDirectionId);
   if (directionId !== null && PRO_TRAINING_DIRECTION_IDS.includes(directionId)) return true;
   return [
     direction?.name,

@@ -34,7 +34,7 @@ export function hubGatewaySource() {
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded plan-rules symbols');
   }
-  if (/(?:const|let|var|function)\s+(?:PRO_TRAINING_DIRECTION_IDS|isProTrainingName|isProTrainingExercise)\b/
+  if (/(?:const|let|var|function)\s+(?:PRO_TRAINING_DIRECTION_IDS|PRO_TRAINING_NAME_TOKEN|proTrainingIsRecord|proTrainingStr|proTrainingNum|isProTrainingName|isProTrainingExercise)\b/
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded PRO-training exclusion symbols');
   }

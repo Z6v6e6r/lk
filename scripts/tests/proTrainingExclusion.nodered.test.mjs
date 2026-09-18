@@ -43,6 +43,13 @@ test("the server rule matches the owner-named PRO directions and nothing else", 
   }
   assert.equal(isProTrainingExercise(null), false);
   assert.equal(isProTrainingExercise({}), false);
+  // The direction id is read through the same aliases resolveCategory accepts, including a
+  // scalar direction, so the category and the PRO verdict cannot disagree.
+  assert.equal(isProTrainingExercise({ exerciseDirection: { id: 5505 } }), true);
+  assert.equal(isProTrainingExercise({ exerciseDirectionId: 5505 }), true);
+  assert.equal(isProTrainingExercise({ direction: 5507 }), true);
+  assert.equal(isProTrainingExercise({ direction: "5507" }), true);
+  assert.equal(isProTrainingExercise({ exerciseDirection: 3108, directionId: 3108 }), false);
 });
 
 /**
@@ -111,9 +118,12 @@ test("a PRO training is refused before any subscription decision, on the managed
 
 test("the price preview answers a PRO group training with an empty quote list", () => {
   assert.match(previewRouter, /if \(typeof canonical\.isProTrainingExercise === 'function'\s*&& eventRoute\.category === 'group_training' && canonical\.isProTrainingExercise\(exercise\)\) \{\s*ctx\.quotes = \[\]; ctx\.done = true; ctx\.statusCode = 200; return out\(4\);\s*\}/);
-  // The helper is embedded from the one reviewed module, so the preview carries it even
-  // when the installed booking body of that generation predates the exclusion.
-  assert.match(previewPatch, /const proTraining = proTrainingEmbedding\(declared\);/);
+  // The helper is embedded from the one reviewed module, but only for a booking body
+  // that really carries the refusal; an unguarded body gets an inert predicate so the
+  // preview can never hide a price the gateway still discounts.
+  assert.match(previewPatch, /const proTraining = proTrainingEmbedding\(declared, booking\);/);
+  assert.match(previewPatch, /const carriesGuard = \/PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE\/\.test\(String\(booking\)\);/);
+  assert.match(previewPatch, /const PRO_TRAINING_INERT_SOURCE = 'const isProTrainingExercise = \(\) => false;';/);
   assert.match(previewPatch, /eventPaymentSources\.proTrainingExclusionSource\(\)/);
   assert.match(previewPatch, /\$\{proTraining\.injected\}/);
   assert.match(previewPatch, /const PREVIEW_INJECTED_EXPORTS = Object\.freeze\(\[[^\]]*'isProTrainingExercise'\]\)/);
