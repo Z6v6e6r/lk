@@ -67,8 +67,10 @@ export const FREE_FIRST_EVENT_BOOKING_DELTAS = Object.freeze([
     after: `  // The rule is re-resolved to prove it did not change, so the sale date of the stored quote
   // has to travel with it: a plan rule selects its cohort from that date, and without it the
   // resolver answers with a code instead of the rule and every plan-product checkout is
-  // refused after the booking was already written.
-  const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }]);
+  // refused after the booking was already written. The station travels with it for the same
+  // reason: it is part of the contour decision the stored quote was priced with.
+  const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }],
+    ctx.lk1.target?.stationId || ctx.studioId || null);
   if (!isObj(configured.rule) || JSON.stringify(configured.rule) !== JSON.stringify(ctx.lk1.rule)) {
     return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
   }` },
@@ -188,7 +190,7 @@ export const FREE_FIRST_EVENT_EVALUATOR_DELTAS = Object.freeze([
 ]);
 
 const BOOKING_MARKERS = Object.freeze([
-  "const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }]);",
+  "const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }],",
   "const LK1_FREE_FIRST_EVENT_PRODUCTS = Object.freeze({",
   '"b91e14d1-fe6e-4d0b-be39-3e45ad86b759": Object.freeze(["group_training", "tournament"]),',
   '"9eb8a7a4-c195-492a-95e4-3fb82899ac10": Object.freeze(["group_training"]),',

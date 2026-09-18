@@ -103,7 +103,7 @@ const lk1LifecycleInstant = (value, endOfDay = false) => {
 const lk1Quote = (ctx, exercise, owned) => {
   // The station of the resolved booking target is part of the contour decision: an
   // excluded station keeps the product's legacy path for this quote as well.
-  const configured = lk1Config(owned, toStr(exercise?.studio?.id || exercise?.studioId));
+  const configured = lk1Config(owned, exercise?.studio?.id || exercise?.studioId || null);
   if (!configured.matched || configured.code) return { code: configured.code || "LK1_PRODUCT_RULE_CHANGED" };
   if (configured.legacy) return { legacy: true };
   // The sale-date cohort is decided by the rule: the selected instance for a plan
@@ -497,7 +497,7 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
   };
   if (!rows.every(validIdentityShape)) return lk1Stop(ctx, "LK1_MONEY_OWNERSHIP_DTO_INVALID");
   const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
-  const configured = lk1Config(selected, toStr(exercise?.studio?.id || exercise?.studioId));
+  const configured = lk1Config(selected, exercise?.studio?.id || exercise?.studioId || null);
   if (configured.code) return lk1Stop(ctx, configured.code);
   // The resolver alone decides the enforced cohort: the annual HUB rule carries no
   // sale-date gate, while every plan rule enters the contour only from its own
@@ -944,7 +944,7 @@ if (ctx.step === "lk1_payment_profile_recheck" || (paymentRoute && ctx.step === 
   // refused after the booking was already written. The station travels with it for the same
   // reason: it is part of the contour decision the stored quote was priced with.
   const configured = lk1Config([{ productId: ctx.lk1.rule.productId, purchaseDate: ctx.lk1.purchaseDate }],
-    toStr(ctx.lk1.target?.stationId || ctx.studioId));
+    ctx.lk1.target?.stationId || ctx.studioId || null);
   if (!isObj(configured.rule) || JSON.stringify(configured.rule) !== JSON.stringify(ctx.lk1.rule)) {
     return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
   }
