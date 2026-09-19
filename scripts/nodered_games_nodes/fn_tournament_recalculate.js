@@ -86,9 +86,38 @@ const previousSummary = tournament.summary && typeof tournament.summary === "obj
 const previousParams = tournament.params && typeof tournament.params === "object"
   ? tournament.params
   : {};
+const isPairedMexicanoType = String(tournament.tournamentType || params.tournamentType || "").toLowerCase() === "paired_mexicano"
+  || String(params.mexicanoMode || "").toLowerCase() === "paired";
+const hasExplicitFinishMarker = [
+  params.status,
+  params.state,
+  params.tournamentStatus,
+]
+  .map((value) => toLower(value))
+  .some((status) => status === "completed" || status === "finished" || status === "closed" || status === "done");
+const hasExplicitFinishFlag = [
+  params.finished,
+  params.isFinished,
+  params.tournamentFinished,
+  params.manualFinish,
+  params.finishedAt,
+  params.completedAt,
+].some((value) => (typeof value === "string" ? value.trim() !== "" : isTruthy(value)));
+const isLegacyPairedMexicanoAutoCompleted = isPairedMexicanoType
+  && !hasExplicitFinishMarker
+  && !hasExplicitFinishFlag
+  && toLower(previousSummary.status) === "completed"
+  && !isTruthy(previousSummary.finished)
+  && !isTruthy(previousSummary.manualFinish)
+  && !String(previousSummary.finishedAt || previousSummary.completedAt || "").trim()
+  && toNum(params.totalRounds, 0) > 0
+  && Array.isArray(tournament.rounds)
+  && tournament.rounds.length >= Math.floor(toNum(params.totalRounds, 0));
 const tournamentFinished = resumeRequested
   ? false
-  : isTournamentMarkedFinished(params, previousSummary);
+  : isLegacyPairedMexicanoAutoCompleted
+    ? false
+    : isTournamentMarkedFinished(params, previousSummary);
 if (resumeRequested) {
   params.status = "in_progress";
   params.state = "in_progress";
@@ -697,9 +726,6 @@ const maybeAppendPairedMexicanoRound = () => {
   if (tournamentFinished) return;
   if (!isPairedMexicanoTournament()) return;
 
-  const totalRounds = Math.max(1, Math.floor(toNum(params.totalRounds, 0)));
-  if (!totalRounds || tournament.rounds.length >= totalRounds) return;
-
   const sortedRounds = tournament.rounds
     .filter((round) => round && Array.isArray(round.matches))
     .sort((left, right) => toNum(left?.index, 0) - toNum(right?.index, 0));
@@ -720,7 +746,48 @@ const maybeAppendPairedMexicanoRound = () => {
   const courtCount = completedMatches.length;
   const nextCourtPairs = Array.from({ length: courtCount }, () => []);
 
-  completedMatches.forEach((match, index) => {
+  // Older paired mexicano drafts were created with a finite `totalRounds`
+  // equal to the number of pairs minus one.  Their capped rounds already exist
+  // in the movement format, so the first newly generated round must be seeded
+  // from the accumulated pair standings before normal movement starts.
+  const configuredRoundLimit = toNum(params.totalRounds, 0);
+  const isLegacyCappedSchedule = configuredRoundLimit > 0
+    && sortedRounds.length === Math.floor(configuredRoundLimit);
+  const pairAssignments = Array.isArray(params.pairAssignments)
+    ? params.pairAssignments
+      .map((pair, index) => normalizeIdArray(
+        Array.isArray(pair) ? pair : pair?.players ?? pair?.pair ?? pair?.ids,
+        `pair-assignment-${index + 1}`,
+      ))
+      .filter((pair) => pair.length === 2)
+    : [];
+  if (isLegacyCappedSchedule && pairAssignments.length === courtCount * 2) {
+    const seedById = new Map(participantIds.map((id, index) => [id, index]));
+    const rankedPairs = pairAssignments
+      .map((pair, seed) => {
+        const pairStats = pair.reduce((summary, playerId) => {
+          const stats = players[playerId]?.stats;
+          return {
+            totalPoints: summary.totalPoints + toNum(stats?.playedPoints, 0),
+            pointDiff: summary.pointDiff + toNum(stats?.pointsFor, 0) - toNum(stats?.pointsAgainst, 0),
+            wins: summary.wins + toNum(stats?.wins, 0),
+          };
+        }, { totalPoints: 0, pointDiff: 0, wins: 0 });
+        return { pair, seed, ...pairStats };
+      })
+      .sort((left, right) => (
+        right.totalPoints - left.totalPoints
+        || right.pointDiff - left.pointDiff
+        || right.wins - left.wins
+        || (seedById.get(left.pair[0]) ?? left.seed) - (seedById.get(right.pair[0]) ?? right.seed)
+      ));
+
+    rankedPairs.forEach((entry, index) => {
+      nextCourtPairs[Math.floor(index / 2)].push(entry.pair);
+    });
+  }
+
+  if (nextCourtPairs.every((courtPairs) => courtPairs.length === 0)) completedMatches.forEach((match, index) => {
     const pair1 = normalizeIdArray(match.pair1, `round-${lastRound.index}-pair1-${index + 1}`);
     const pair2 = normalizeIdArray(match.pair2, `round-${lastRound.index}-pair2-${index + 1}`);
     const score1 = toNum(match.score1, 0);
@@ -1111,7 +1178,7 @@ const allScheduledMatchesCompleted =
   && completedRounds === tournament.rounds.length;
 const keepTournamentInProgress =
   resumeRequested
-  || (isClassicMexicanoTournament() && !tournamentFinished);
+  || ((isClassicMexicanoTournament() || isPairedMexicanoTournament()) && !tournamentFinished);
 
 const summary = {
   totalRounds: tournament.rounds.length,
