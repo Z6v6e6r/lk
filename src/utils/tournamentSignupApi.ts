@@ -2866,11 +2866,24 @@ export async function apiFetchTournamentSubscriptionDiscounts(
   signal?: AbortSignal,
   subscriptionId?: string,
 ): Promise<ApiResult<{ quotes: TournamentSubscriptionDiscountQuote[] }>> {
-  return request<{ quotes: TournamentSubscriptionDiscountQuote[] }>("/lk/subscriptions/game-price-preview", {
+  const result = await request<{ quotes: TournamentSubscriptionDiscountQuote[] }>("/lk/subscriptions/game-price-preview", {
     method: "POST", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
     body: JSON.stringify({ target: { targetKind: "TOURNAMENT", exerciseId },
       ...(subscriptionId ? { subscriptionIds: [subscriptionId] } : {}) }),
   });
+  // The preview node resolves the event category server-side and refuses a TOURNAMENT
+  // target it classifies outside the tournament contour (a custom tournament published
+  // over a Viva game: type 840 / direction «Игра …»). That refusal is the business
+  // answer "no tournament subscription benefit applies to this event", not a service
+  // failure, so the ordinary tariff has to stay bookable instead of disabling the whole
+  // payment section. Only this exact refusal is mapped to an empty quote batch;
+  // transport failures and every other preview error stay fail-closed.
+  const errorRaw = result.error?.raw;
+  const errorBody = isRecord(errorRaw) && isRecord(errorRaw.error) ? errorRaw.error : null;
+  if (errorBody?.code === "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED") {
+    return { data: { quotes: [] }, error: null, status: result.status };
+  }
+  return result;
 }
 
 export async function apiCreateTournamentVivaTransaction(

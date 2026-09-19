@@ -81,6 +81,7 @@ test("monetary product preserves the event quote and does not represent visit de
 test("tournament preview requests only the tournament event target with authenticated zero retries", async () => {
   const controller = new AbortController();
   const fetchQuotes = loadFunction("apiFetchTournamentSubscriptionDiscounts", {
+    isRecord: (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value),
     getServ2Origin: () => "https://fixture.invalid",
     request: async (url: string, options: RequestInit & { auth: boolean; retries: number }) => {
       assert.equal(url, "/lk/subscriptions/game-price-preview");
@@ -95,6 +96,43 @@ test("tournament preview requests only the tournament event target with authenti
     },
   });
   assert.equal((await fetchQuotes(quote.exerciseId, controller.signal, quote.subscriptionId)).data.quotes[0], quote);
+});
+
+const previewDependencies = (request: () => Promise<unknown>) => ({
+  isRecord: (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value),
+  getServ2Origin: () => "https://fixture.invalid",
+  request,
+});
+
+test("a tournament-contour refusal keeps the ordinary tariff bookable instead of blocking payment", async () => {
+  // Live case: a custom tournament published over a Viva game (exercise type 840,
+  // direction «Игра юр лицо») is classified `open_game` by the preview node's own
+  // resolver, so a TOURNAMENT target is refused with this code. The category has no
+  // tournament contour, so the signup has to price the ordinary tariff.
+  const raw = { error: { code: "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED" } };
+  const fetchQuotes = loadFunction("apiFetchTournamentSubscriptionDiscounts",
+    previewDependencies(async () => ({ data: null, error: { status: 503, message: "Ошибка запроса (503)", raw }, status: 503 })));
+  const result = await fetchQuotes(quote.exerciseId);
+  assert.equal(result.error, null, "an out-of-contour refusal must not reach the payment gate");
+  assert.deepEqual(result.data, { quotes: [] });
+  assert.equal(result.status, 503);
+});
+
+test("every other preview failure still fails closed for the tournament payment section", async () => {
+  const failures: Array<{ status: number | null; raw: unknown }> = [
+    { status: 503, raw: { error: { code: "PRICE_PREVIEW_READ_FAILED" } } },
+    { status: 503, raw: { error: { code: "TOURNAMENT_DISCOUNT_BACKEND_NOT_READY" } } },
+    { status: 503, raw: { error: { code: "SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE" } } },
+    { status: 500, raw: { message: "upstream failure" } },
+    { status: null, raw: null },
+  ];
+  for (const failure of failures) {
+    const fetchQuotes = loadFunction("apiFetchTournamentSubscriptionDiscounts",
+      previewDependencies(async () => ({ data: null, error: { status: failure.status, message: "failure", raw: failure.raw }, status: failure.status })));
+    const result = await fetchQuotes(quote.exerciseId);
+    assert.ok(result.error, JSON.stringify(failure));
+    assert.equal(result.data, null, JSON.stringify(failure));
+  }
 });
 
 test("tournament dispatch rejects category mixing, changed binding, promo stacking and price mutation", async () => {
