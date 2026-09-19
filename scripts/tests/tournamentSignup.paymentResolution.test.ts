@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { canPayTournamentPending } from "../../src/utils/tournamentPendingPayment.ts";
 
 const source = fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8");
 
@@ -331,4 +332,133 @@ test("payment waits are bounded and link failures name the transaction and the V
   assert.match(source, /signal: ticketController\.signal/);
   assert.match(source, /транзакция \$\{transactionId\}/);
   assert.match(source, /код Viva \$\{vivaFailureCode\}/);
+});
+
+// Captured from the live 2026-09-19 attempt on tournament 6aacf5ed…: the 202 create
+// response carried only the transaction id, the transaction readback 404s and the exercise
+// bookings expose no owning client, so this event is the only source of the booking id.
+const liveTransactionCreatedPayload = {
+  status: "COMPLETED", correlationId: "6bf48740-ae16-4319-98c4-8b3debe489a8", action: "TRANSACTION_CREATED",
+  exerciseId: null, entityId: "6bf48740-ae16-4319-98c4-8b3debe489a8", error: null, progress: null,
+  data: {
+    bookingIds: ["c8421449-10bd-411b-87fc-e322db49f9f4"],
+    paymentUrl: "https://pay.vivacrm.ru/Fw6cae9WH6bYr9bUAtESZQ",
+    paymentDueDate: "2026-09-19T23:03:14.274625208+03:00",
+  },
+  terminal: false,
+};
+
+test("the live TRANSACTION_CREATED event yields booking id and due date, not just the url", () => {
+  const isRecord = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const pickString = (value: Record<string, unknown>, keys: string[]) => {
+    for (const key of keys) {
+      const candidate = value[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return null;
+  };
+
+  const pickFirstStringArray = new Function(
+    // The local harness strips types with a comma-unaware regex, so `Record<string, unknown>`
+    // leaves a `, unknown>` fragment in the signature; drop it before evaluating.
+    `return ${toRunnableFunctionExpression("function pickFirstStringArray").replace(/, unknown>/g, "")};`,
+  )() as (value: Record<string, unknown>, keys: string[]) => string | null;
+
+  const extractBookingId = new Function(
+    "isRecord",
+    "pickString",
+    "pickFirstStringArray",
+    `return ${toRunnableFunctionExpression("function extractBookingId")
+      .replace(/: unknown/g, "")
+      .replace(/: string \| null/g, "")};`,
+  )(isRecord, pickString, pickFirstStringArray) as (payload: unknown) => string | null;
+
+  const isLikelyPaymentUrl = new Function(
+    `return ${toRunnableFunctionExpression("function isLikelyPaymentUrl")};`,
+  )() as (value: string) => boolean;
+  const extractPaymentUrlFromString = new Function(
+    "isLikelyPaymentUrl",
+    `return ${toRunnableFunctionExpression("function extractPaymentUrlFromString")};`,
+  )(isLikelyPaymentUrl) as (value: string) => string | null;
+  const readTrustedPaymentUrl = new Function(
+    `return ${toRunnableFunctionExpression("function readTrustedPaymentUrl")};`,
+  )() as (value: unknown) => string | null;
+  const extractPaymentUrl = new Function(
+    "isRecord",
+    "extractPaymentUrlFromString",
+    "readTrustedPaymentUrl",
+    `return ${toRunnableFunctionExpression("function extractPaymentUrl(payload")
+      .replace(/: unknown/g, "")
+      .replace(/: string \| null/g, "")};`,
+  )(isRecord, extractPaymentUrlFromString, readTrustedPaymentUrl) as (payload: unknown) => string | null;
+
+  const readVivaPaymentDueDate = new Function(
+    "isRecord",
+    "pickString",
+    `return ${toRunnableFunctionExpression("function readVivaPaymentDueDate")
+      .replace(/: unknown/g, "")
+      .replace(/: string \| null/g, "")};`,
+  )(isRecord, pickString) as (value: unknown) => string | null;
+
+  const readVivaPaymentEvent = new Function(
+    "extractPaymentUrl",
+    "extractBookingId",
+    "readVivaPaymentDueDate",
+    `return ${toRunnableFunctionExpression("function readVivaPaymentEvent")
+      .replace(/: unknown/g, "")
+      .replace(/: TournamentVivaPaymentEvent \| null/g, "")};`,
+  )(extractPaymentUrl, extractBookingId, readVivaPaymentDueDate) as (
+    value: unknown,
+  ) => { paymentUrl: string; bookingId: string | null; paymentExpiresAt: string | null } | null;
+
+  // The 202 create body has no booking id, the event does.
+  assert.equal(extractBookingId({ id: "6bf48740-ae16-4319-98c4-8b3debe489a8", exerciseIds: ["a1fed11d-3ae1-4866-9809-aa82ac9fee2f"] }), null);
+  assert.equal(extractBookingId(liveTransactionCreatedPayload), "c8421449-10bd-411b-87fc-e322db49f9f4");
+  assert.equal(extractBookingId({ spot: 6, id: "booking-1", paymentType: "RESERVED" }), "booking-1");
+  assert.equal(extractBookingId({ bookingIds: [null, "  ", "booking-2"] }), "booking-2");
+
+  const event = readVivaPaymentEvent(liveTransactionCreatedPayload);
+  assert.deepEqual(event, {
+    paymentUrl: "https://pay.vivacrm.ru/Fw6cae9WH6bYr9bUAtESZQ",
+    bookingId: "c8421449-10bd-411b-87fc-e322db49f9f4",
+    paymentExpiresAt: "2026-09-19T23:03:14.274625208+03:00",
+  });
+  // Without a payment url there is nothing to open, even with a booking id present.
+  assert.equal(readVivaPaymentEvent({ data: { bookingIds: ["booking-2"] } }), null);
+  // An unusable due date must not reach the pending-payment guard, which parses it.
+  assert.equal(readVivaPaymentDueDate({ data: { paymentDueDate: "not-a-date" } }), null);
+
+  // The state the widget builds from this event has to stay payable: the previous code
+  // dropped the booking id, `canPayTournamentPending` failed and the link was never opened.
+  assert.equal(canPayTournamentPending({
+    status: "PAYMENT_PENDING",
+    bookingId: event?.bookingId ?? null,
+    placeNumber: null,
+    waitlistNumber: null,
+    canRegister: false,
+    canCancel: true,
+    message: null,
+    paymentUrl: event?.paymentUrl ?? null,
+    paymentExpiresAt: event?.paymentExpiresAt ?? null,
+  }), true);
+  assert.equal(canPayTournamentPending({
+    status: "PAYMENT_PENDING",
+    bookingId: null,
+    placeNumber: null,
+    waitlistNumber: null,
+    canRegister: false,
+    canCancel: true,
+    message: null,
+    paymentUrl: event?.paymentUrl ?? null,
+    paymentExpiresAt: event?.paymentExpiresAt ?? null,
+  }), false);
+});
+
+test("the payment watcher carries the booking identity through both resolution paths", () => {
+  assert.match(source, /createVivaSocketWatcher<TournamentVivaPaymentEvent>/);
+  assert.match(source, /bookingId: extractBookingId\(value\)/);
+  assert.match(source, /bookingId: event\.bookingId/);
+  assert.match(source, /bookingId: event\.bookingId \?\? responseBookingId/);
+  assert.match(source, /paymentExpiresAt: event\.paymentExpiresAt \?\? buildPaymentExpiresAt\(transactionStartedAtMs\)/);
+  assert.match(source, /pickFirstStringArray\(value, \["bookingIds", "booking_ids"\]\)/);
 });

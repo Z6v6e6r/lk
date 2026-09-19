@@ -865,6 +865,17 @@ function extractPaymentUrl(payload: unknown): string | null {
   return visit(payload);
 }
 
+function pickFirstStringArray(value: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (!Array.isArray(candidate)) continue;
+    for (const item of candidate) {
+      if (typeof item === "string" && item.trim()) return item.trim();
+    }
+  }
+  return null;
+}
+
 function extractBookingId(payload: unknown): string | null {
   const visit = (value: unknown): string | null => {
     if (value == null) return null;
@@ -880,6 +891,13 @@ function extractBookingId(payload: unknown): string | null {
 
     const direct = pickString(value, ["bookingId", "booking_id"]);
     if (direct) return direct;
+
+    // Viva reports a newly created booking only as `data.bookingIds` inside the
+    // TRANSACTION_CREATED event: the 202 create response carries no booking id, the
+    // transaction readback 404s and the exercise bookings expose no owning client.
+    // Without this id the pending payment could not be opened or cancelled at all.
+    const listed = pickFirstStringArray(value, ["bookingIds", "booking_ids"]);
+    if (listed) return listed;
 
     const bookingLike =
       Object.prototype.hasOwnProperty.call(value, "spot")
@@ -1781,10 +1799,44 @@ async function createVivaSocketWatcher<T>(
   };
 }
 
+interface TournamentVivaPaymentEvent {
+  paymentUrl: string;
+  bookingId: string | null;
+  paymentExpiresAt: string | null;
+}
+
+function readVivaPaymentDueDate(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const direct = pickString(value, ["paymentDueDate", "paymentExpiresAt", "paymentDeadline", "expiresAt"]);
+  if (direct && Number.isFinite(Date.parse(direct))) return direct;
+  for (const key of ["data", "payload", "result", "transaction", "transactionStatus", "cardPaymentInfo", "payment"]) {
+    const nested = readVivaPaymentDueDate(value[key]);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function readVivaPaymentEvent(value: unknown): TournamentVivaPaymentEvent | null {
+  const paymentUrl = extractPaymentUrl(value);
+  if (!paymentUrl) return null;
+  return {
+    paymentUrl,
+    // The URL, the booking id and the due date arrive in the same TRANSACTION_CREATED
+    // event; the URL alone cannot address the created booking afterwards.
+    bookingId: extractBookingId(value),
+    paymentExpiresAt: readVivaPaymentDueDate(value),
+  };
+}
+
 async function createVivaPaymentWatcher(clientId?: string | null) {
-  return createVivaSocketWatcher<string>(
+  return createVivaSocketWatcher<TournamentVivaPaymentEvent>(
     clientId,
-    (payload, rawMessage) => extractPaymentUrl(payload) || extractPaymentUrl(rawMessage),
+    (payload, rawMessage) => {
+      const event = readVivaPaymentEvent(payload);
+      if (event) return event;
+      const fallbackUrl = extractPaymentUrl(rawMessage);
+      return fallbackUrl ? { paymentUrl: fallbackUrl, bookingId: null, paymentExpiresAt: null } : null;
+    },
   );
 }
 
@@ -3028,14 +3080,14 @@ export async function apiCreateTournamentVivaTransaction(
   if (result.error) {
     const outcomeMayBeUnknown = result.status == null || result.status >= 500;
     if (outcomeMayBeUnknown) {
-      const watcherResolution = paymentWatcher?.wait.then((url) => {
-        if (!url) return null;
+      const watcherResolution = paymentWatcher?.wait.then((event) => {
+        if (!event) return null;
         return {
-          paymentUrl: url,
-          bookingId: null,
+          paymentUrl: event.paymentUrl,
+          bookingId: event.bookingId,
           toPay: null,
           paid: false,
-          paymentExpiresAt: buildPaymentExpiresAt(transactionStartedAtMs),
+          paymentExpiresAt: event.paymentExpiresAt ?? buildPaymentExpiresAt(transactionStartedAtMs),
           raw: { source: "payment_watcher_after_ambiguous_create" },
         } satisfies TournamentVivaPaymentResolution;
       }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
@@ -3095,14 +3147,14 @@ export async function apiCreateTournamentVivaTransaction(
   const responseBookingId = extractBookingId(result.data);
   const responseToPay = extractToPay(result.data);
   const directPaymentUrl = extractPaymentUrl(result.data);
-  const watcherResolution = paymentWatcher?.wait.then((url) => {
-    if (!url) return null;
+  const watcherResolution = paymentWatcher?.wait.then((event) => {
+    if (!event) return null;
     return {
-      paymentUrl: url,
-      bookingId: responseBookingId,
+      paymentUrl: event.paymentUrl,
+      bookingId: event.bookingId ?? responseBookingId,
       toPay: responseToPay,
       paid: false,
-      paymentExpiresAt: buildPaymentExpiresAt(transactionStartedAtMs),
+      paymentExpiresAt: event.paymentExpiresAt ?? buildPaymentExpiresAt(transactionStartedAtMs),
       raw: result.data,
     } satisfies TournamentVivaPaymentResolution;
   }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
