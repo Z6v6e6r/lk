@@ -30,9 +30,9 @@ export const PREVIEW_CANONICAL_SOURCE_SHA256 = Object.freeze({
 // the HUB policy reader are embedded inside the canonical helper closure, so the
 // closure has to publish them.
 const PREVIEW_INJECTED_EXPORTS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
-  'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy']);
+  'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy', 'isProTrainingExercise']);
 const PREVIEW_INJECTED_FUNCTIONS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
-  'lk1ReadBoundPolicy', 'lk1NormalizePolicy']);
+  'lk1ReadBoundPolicy', 'lk1NormalizePolicy', 'isProTrainingExercise']);
 // Helpers the event route (group training / tournament quotes) reaches through
 // `canonical.*`. They live in the composed booking graph, not in the preview
 // node's own sources, so the closure has to declare *and* publish them: the
@@ -159,6 +159,35 @@ const planRulesEmbedding = declared => {
   }
   return { injected, globalName: globalName[1] };
 };
+// The PRO-training exclusion is embedded the same way as the plan rules, from the one
+// reviewed module `scripts/lib/proTrainingExclusion.mjs`. It is embedded only when the
+// installed booking body of this generation really carries the refusal
+// (`PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE`): a preview that hides the quote while the
+// booking gateway still grants the benefit would hide the price and leave the discount
+// bookable, so a body without the guard gets an inert predicate instead. A local copy the
+// installed body already carries must match the module text, otherwise the divergence
+// stops the release.
+const PRO_TRAINING_INERT_SOURCE = 'const isProTrainingExercise = () => false;';
+const proTrainingEmbedding = (declared, booking) => {
+  if (typeof eventPaymentSources.proTrainingExclusionSource !== 'function') {
+    throw new Error('Price preview PRO-training source helper is unavailable');
+  }
+  const carriesGuard = /PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE/.test(String(booking));
+  const moduleSource = carriesGuard ? eventPaymentSources.proTrainingExclusionSource()
+    : PRO_TRAINING_INERT_SOURCE;
+  const moduleDeclarations = topLevelDeclarations(moduleSource, 'proTrainingExclusion');
+  const injected = moduleDeclarations.filter(declaration => !declared.has(declaration.name))
+    .map(declaration => declaration.text).join('\n');
+  for (const declaration of moduleDeclarations) {
+    const text = normalizeDeclarationText(declaration.text);
+    const present = declared.get(declaration.name);
+    if (present !== undefined && !present.includes(text)) {
+      throw new Error(`Price preview PRO-training declaration ${declaration.name} differs from the installed body`);
+    }
+    declared.set(declaration.name, text);
+  }
+  return { injected, carriesGuard };
+};
 const replaceEventTariffBlock = source => {
   const start = 'if (ctx.step === "lk1_event_tariff") {';
   const end = 'if (ctx.step === "lk1_operation_find") {';
@@ -235,6 +264,7 @@ export function previewSources(flow, options = {}) {
   // helpers, and the reader is what HUB quotes fail closed on.
   const declared = declarationMap(helper.source);
   const rules = planRulesEmbedding(declared);
+  const proTraining = proTrainingEmbedding(declared, booking);
   const missingReader = HUB_POLICY_READER_NAMES.filter(name => !declared.has(name));
   let reader = '';
   if (missingReader.length === HUB_POLICY_READER_NAMES.length) {
@@ -249,7 +279,7 @@ export function previewSources(flow, options = {}) {
     : `const lk1PlanRulesGlobal = () => global.get(${JSON.stringify(rules.globalName)});`;
   if (accessor) declared.set('lk1PlanRulesGlobal', 'generated');
   const exported = [...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name))];
-  assertNoUndeclaredContractNames(helper.source, declared, rules, reader, accessor);
+  assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}`, declared, rules, reader, accessor);
   const usageStart = 'if (ctx.step === "lk1_usage_operations") {';
   const usageEnd = 'if (ctx.step === "lk1_policy_decision") {';
   if (booking.split(usageStart).length !== 2 || booking.split(usageEnd).length !== 2) throw new Error('Price preview allowance source drift');
@@ -263,7 +293,7 @@ export function previewSources(flow, options = {}) {
   const usage = options.installedUsageSha256 === undefined ? patchPaidBenefitUsage(installedUsage)
     : sha(installedUsage) === options.installedUsageSha256 ? installedUsage
       : (() => { throw new Error(`Price preview installed allowance block changed: actual ${sha(installedUsage)}, expected ${options.installedUsageSha256}`); })();
-  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
+  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
     const { isObj, isValidDateKey, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields${(freeFirstRoots(booking) || []).map(name => `, ${name}`).join('')} } = canonical;
