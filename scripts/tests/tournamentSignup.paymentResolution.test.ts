@@ -265,3 +265,70 @@ test("preferred payment resolution returns fallback booking state when payment u
 
   assert.deepEqual(resolution, fallback);
 });
+
+test("explicit Viva payment fields are trusted while our own redirects stay filtered", () => {
+  const isRecord = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+  const isLikelyPaymentUrl = new Function(
+    `return ${toRunnableFunctionExpression("function isLikelyPaymentUrl")};`,
+  )() as (value: string) => boolean;
+
+  const extractPaymentUrlFromString = new Function(
+    "isLikelyPaymentUrl",
+    `return ${toRunnableFunctionExpression("function extractPaymentUrlFromString")};`,
+  )(isLikelyPaymentUrl) as (value: string) => string | null;
+
+  const readTrustedPaymentUrl = new Function(
+    `return ${toRunnableFunctionExpression("function readTrustedPaymentUrl")};`,
+  )() as (value: unknown) => string | null;
+
+  const extractPaymentUrl = new Function(
+    "isRecord",
+    "extractPaymentUrlFromString",
+    "readTrustedPaymentUrl",
+    `return ${toRunnableFunctionExpression("function extractPaymentUrl(payload")
+      .replace(/: unknown/g, "")
+      .replace(/: string \| null/g, "")};`,
+  )(isRecord, extractPaymentUrlFromString, readTrustedPaymentUrl) as (payload: unknown) => string | null;
+
+  // A URL Viva put into its own payment field is the checkout link even when the host does
+  // not look like an acquirer page and the token lives in the fragment.
+  assert.equal(
+    extractPaymentUrl({ cardPaymentInfo: { paymentUrl: "https://widget.example.com/#/pay/tx-1" } }),
+    "https://widget.example.com/#/pay/tx-1",
+  );
+  assert.equal(
+    extractPaymentUrl({ paymentUrl: "https://gateway.example.net/order/42" }),
+    "https://gateway.example.net/order/42",
+  );
+  // Our own success redirect must never be mistaken for a payment link.
+  assert.equal(extractPaymentUrl({ redirectUrl: "https://padlhub.ru/tournaments?paymentsuccess=true" }), null);
+  assert.equal(extractPaymentUrl({ url: "https://padlhub.ru/lk_new" }), null);
+  // Free-text scanning still recognizes acquirer hosts, and the fragment now counts too.
+  assert.equal(extractPaymentUrl("checkout: https://pay.tbank.ru/abc"), "https://pay.tbank.ru/abc");
+  assert.equal(isLikelyPaymentUrl("https://widget.example.com/#/payment/1"), true);
+  assert.equal(isLikelyPaymentUrl("https://padlhub.ru/lk_new"), false);
+});
+
+test("Viva failure codes are read from flat and nested error payloads", () => {
+  const readVivaFailureCode = new Function(
+    "isRecord",
+    `return ${toRunnableFunctionExpression("function readVivaFailureCode")};`,
+  )((value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)) as (
+    payload: unknown,
+  ) => string | null;
+
+  assert.equal(readVivaFailureCode({ code: "NO_SPOTS" }), "NO_SPOTS");
+  assert.equal(readVivaFailureCode({ error: { code: "CLIENT_NOT_ALLOWED" } }), "CLIENT_NOT_ALLOWED");
+  assert.equal(readVivaFailureCode({ error: { message: "no code" } }), null);
+  assert.equal(readVivaFailureCode(null), null);
+});
+
+test("payment waits are bounded and link failures name the transaction and the Viva code", () => {
+  assert.match(source, /const TOURNAMENT_PAYMENT_RESOLUTION_BUDGET_MS = 25_000;/);
+  assert.match(source, /withTournamentPaymentBudget\(paymentResolutionPromises\)/);
+  assert.match(source, /setTimeout\(\(\) => ticketController\.abort\(\), 3_000\)/);
+  assert.match(source, /signal: ticketController\.signal/);
+  assert.match(source, /транзакция \$\{transactionId\}/);
+  assert.match(source, /код Viva \$\{vivaFailureCode\}/);
+});
