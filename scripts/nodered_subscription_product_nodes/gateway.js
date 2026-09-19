@@ -19,7 +19,7 @@ const identitySelected = (body, ctx) => {
 };
 // Monetary group discounts verify the freshly read owned row. They neither
 // consume a visit nor use the earlier visit-eligibility snapshot.
-const identityMoneyOwned = (ctx, rows) => {
+const identityMoneyOwned = (ctx, rows, exercise) => {
   if (!identityBound(ctx) || rows.length !== 1) return [];
   const p = ctx.lk1ProductIdentity;
   const row = rows[0];
@@ -27,10 +27,11 @@ const identityMoneyOwned = (ctx, rows) => {
   // fresh readback proof of every instance the rules mark enforced, so this projection has
   // to produce it for exactly that cohort. A plan product sold inside its `enforceFrom`
   // window was refused here while the quote kept asking; a legacy or unrecognised product
-  // still produces no proof and stays outside the contour.
+  // still produces no proof and stays outside the contour. The station is part of that same
+  // verdict: an excluded station emits no mandate, exactly as the quote stops asking for one.
   const projected = [{ ...row, productId: p.productId, name: p.name,
     product: { ...(isObj(row.product) ? row.product : {}), id: p.productId, name: p.name } }];
-  const configured = lk1Config(projected);
+  const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);
   if (!configured.matched || configured.legacy === true || configured.code) return [];
   // A `NEW` instance without an activation date is the first-use state: Viva writes the
   // activation and expiry with the booking this mandate authorises, so neither can be
@@ -46,7 +47,7 @@ const identityMoneyOwned = (ctx, rows) => {
 };
 const identityOwned = (ctx, rows, exercise) => {
   if (ctx.caller === 'http' && ctx.step === 'lk1_money_owned_subscriptions'
-    && resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows);
+    && resolveCategory(exercise) === 'group_training') return identityMoneyOwned(ctx, rows, exercise);
   if (ctx.action === 'release') return rows;
   if (!identityBound(ctx)) return [];
   const p = ctx.lk1ProductIdentity;

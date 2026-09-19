@@ -47,6 +47,10 @@ const bind = (host = {}) => new Function(
   host.lk1ReadBoundPolicy || (() => hubPolicy()),
   host.global || { get: () => undefined },
 );
+// The gateway stores each reviewed input in its own global; a test stub answers per
+// key so the plan-rules contract and the station-exclusions contract stay separable.
+const PLAN_RULES_KEY = 'subscriptions_lk1_plan_rules';
+const globalStore = (values = {}) => ({ get: (key) => values[key] });
 const owned = (...productIds) => productIds.map((productId) => ({ productId }));
 const dateFrom = (dates, invalid = false) => ({
   collectSubscriptionPurchaseDateEvidence: () => ({ dates, invalid }),
@@ -158,7 +162,7 @@ test('a product without a rule stays legacy and never fails the request', () => 
 
 test('a missing or empty plan-rules global disables the contour instead of failing', () => {
   for (const stored of [undefined, null, '', 'null']) {
-    for (const host of [{ global: { get: () => stored } }, {}]) {
+    for (const host of [{ global: globalStore({ [PLAN_RULES_KEY]: stored }) }, {}]) {
       assert.equal(bind(host).resolveLk1Rule({ owned: owned(RA) }).matched, false, String(stored));
     }
   }
@@ -169,12 +173,15 @@ test('a missing or empty plan-rules global disables the contour instead of faili
     else assert.equal(result.matched, false, String(planRulesValue));
   }
   // An explicit empty rule set is a valid contour, not a missing global.
-  const empty = bind({ global: { get: () => ({ formatVersion: 1, rules: [] }) } });
+  const empty = bind({ global: globalStore({ [PLAN_RULES_KEY]: { formatVersion: 1, rules: [] } }) });
   assert.equal(empty.resolveLk1Rule({ owned: owned(RA) }).matched, false);
 });
 
 test('an unreadable or malformed plan-rules global fails closed', () => {
-  const unreadable = { global: { get: () => { throw new Error('global store unavailable'); } } };
+  const unreadable = { global: { get: (key) => {
+    if (key === PLAN_RULES_KEY) throw new Error('global store unavailable');
+    return undefined;
+  } } };
   assert.deepEqual(bind(unreadable).resolveLk1Rule({ owned: owned(RA) }),
     { matched: true, code: 'LK1_PLAN_RULES_INVALID', productId: RA, productIdSource: 'PRODUCT_ID', extraProductIds: [] });
   const malformed = [
@@ -350,12 +357,14 @@ const MANAGED_BLOCK = region(gatewayHooks, '// HUB_EXERCISE', '// HUB_RECHECK');
 // sources stay executable until the release generation injects the module.
 // lk1Config is the last declaration of the config fragment, so the slice runs to
 // its end rather than to a marker inside it.
-const gatewayConfigCall = () => region(GATEWAY_CONFIG, 'const lk1Config = (owned) => {', null);
+const gatewayConfigCall = () => region(GATEWAY_CONFIG, 'const lk1Config = (owned, stationId) => {', null);
 
 test('the gateway delegates the rule verdict to the embedded resolver', () => {
   const call = gatewayConfigCall();
-  assert.equal(call.includes('const configured = resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() });'), true,
+  assert.equal(call.includes('const configured = resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,'), true,
     'the gateway must call the embedded resolver directly');
+  assert.equal(call.includes('stationExclusions: lk1ReadStationExclusions() });'), true,
+    'the gateway must hand the station exclusions to the embedded resolver');
   assert.equal(GATEWAY_CONFIG.includes('lk1ConfigRule'), false,
     'the inline fallback must be gone: the embedded module is the only resolver');
   // The composed body embeds the reviewed module exactly once (single source of truth).
@@ -363,6 +372,7 @@ test('the gateway delegates the rule verdict to the embedded resolver', () => {
   assert.equal(composed.split('const LK1_PLAN_RULES_GLOBAL =').length, 2, 'module constants declared once');
   assert.equal(composed.split('function resolveLk1Rule(').length, 2, 'resolver declared once');
   assert.equal(composed.split('function lk1ReadPlanRules(').length, 2, 'reader declared once');
+  assert.equal(composed.split('function lk1ReadStationExclusions(').length, 2, 'station reader declared once');
   assert.equal(composed.includes('export '), false, 'embedded module must be spliced without ESM exports');
   assert.equal(call.includes('const rule = { productId: configured.productId };'), true,
     'the rule product id must come from the selected rule');

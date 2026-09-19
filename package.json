@@ -110,6 +110,7 @@
     "nodered:lk1-money-cohort:deploy-147": "bash scripts/deploy_nodered_lk1_money_cohort_hotfix_147.sh",
     "nodered:lk1-plan-money-first-use:deploy-147": "bash scripts/deploy_nodered_lk1_plan_money_first_use_hotfix_147.sh",
     "nodered:lk1-free-first-event:deploy-147": "bash scripts/deploy_nodered_lk1_free_first_event_hotfix_147.sh",
+    "nodered:lk1-station-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_station_exclusions_147.sh",
     "nodered:lk1-free-first-event-v1-create:deploy-147": "bash scripts/deploy_nodered_lk1_free_first_event_v1_create_hotfix_147.sh",
     "nodered:lk1-free-event-checkout:deploy-147": "bash scripts/deploy_nodered_lk1_free_event_checkout_hotfix_147.sh",
     "nodered:lk1-preview-multi-product:deploy-147": "bash scripts/deploy_nodered_lk1_preview_multi_product_hotfix_147.sh",
