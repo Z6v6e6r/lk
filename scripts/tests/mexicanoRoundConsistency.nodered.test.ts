@@ -599,7 +599,7 @@ test("classic americano: explicit resume request clears manual finish markers wi
   assert.deepEqual(out.payload.rounds, serializedRounds);
 });
 
-test("paired mexicano: backend still auto-appends next round", () => {
+test("paired mexicano: backend appends movement rounds without a fixed limit", () => {
   const participants = createParticipants(8);
   const courts = createCourts(2);
   const pairAssignments: Array<[string, string]> = [
@@ -633,7 +633,9 @@ test("paired mexicano: backend still auto-appends next round", () => {
         courts,
         params: {
           mexicanoMode: "paired",
-          totalRounds: 3,
+          // Paired mexicano has no fixed round limit; the backend keeps
+          // appending movement rounds until the organizer finishes it.
+          totalRounds: 0,
           pairAssignments,
         },
         rounds: serializeAmericanoRounds([completedRound1]),
@@ -646,4 +648,69 @@ test("paired mexicano: backend still auto-appends next round", () => {
   assert.equal(out.payload.rounds.length, 2);
   assert.equal(out.payload.rounds[1].id, "round-2");
   assert.equal(out.payload.rounds[1].matches.length, 2);
+  assert.deepEqual(
+    out.payload.rounds[1].matches.map((match) => [match.pair1, match.pair2]),
+    [
+      [["p1", "p2"], ["p5", "p6"]],
+      [["p3", "p4"], ["p7", "p8"]],
+    ],
+  );
+});
+
+test("paired mexicano: legacy capped schedule seeds its first extra round from pair standings", () => {
+  const participants = createParticipants(16);
+  const courts = createCourts(4);
+  const pairAssignments: Array<[string, string]> = Array.from({ length: 8 }, (_, index) => (
+    [`p${index * 2 + 1}`, `p${index * 2 + 2}`]
+  ));
+  const completedRound = {
+    id: "round-1",
+    index: 1,
+    matches: Array.from({ length: 4 }, (_, index) => ({
+      id: `round-1-match-${index + 1}`,
+      court: courts[index],
+      courtIndex: index,
+      pair1: pairAssignments[index * 2],
+      pair2: pairAssignments[index * 2 + 1],
+      score1: 14,
+      score2: 7,
+      saved: true,
+    })),
+    byes: [],
+    saved: true,
+  };
+
+  const out = asNodeRedOutput(runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_recalculate.js",
+    {
+      payload: {
+        tournamentId: "mex-paired-legacy",
+        tournamentType: "paired_mexicano",
+        participants,
+        courts,
+        params: {
+          mexicanoMode: "paired",
+          totalRounds: 1,
+          pairAssignments,
+        },
+        summary: {
+          status: "completed",
+          finished: false,
+        },
+        rounds: [completedRound],
+      },
+      req: { body: { results: [] } },
+    },
+  ));
+
+  assert.deepEqual(
+    out.payload.rounds[1].matches.map((match) => [match.pair1, match.pair2]),
+    [
+      [["p1", "p2"], ["p5", "p6"]],
+      [["p9", "p10"], ["p13", "p14"]],
+      [["p3", "p4"], ["p7", "p8"]],
+      [["p11", "p12"], ["p15", "p16"]],
+    ],
+  );
+  assert.equal(out.payload.summary?.status, "in_progress");
 });

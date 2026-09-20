@@ -19,6 +19,8 @@ type GroupScheduleMountData = {
   exerciseId?: string | null;
   date?: string | null;
   studioId?: string | null;
+  directionIds?: number[] | null;
+  directionLabel?: string | null;
   returnToFindGame?: boolean;
 };
 type MountOptions = {
@@ -65,6 +67,8 @@ function GroupScheduleContent({ data, onClose }: { data?: GroupScheduleMountData
       initialExerciseId={data?.exerciseId ?? locationData.exerciseId ?? null}
       initialDate={data?.date ?? locationData.date ?? null}
       initialStudioId={data?.studioId ?? locationData.studioId ?? null}
+      initialDirectionIds={data?.directionIds ?? locationData.directionIds ?? null}
+      initialDirectionLabel={data?.directionLabel ?? locationData.directionLabel ?? null}
       returnToFindGame={data?.returnToFindGame ?? locationData.returnToFindGame}
     />
   );

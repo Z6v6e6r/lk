@@ -6,6 +6,7 @@ import {
   normalizeGroupScheduleDate,
   readGroupScheduleEntryDataFromHref,
 } from "../../src/utils/groupScheduleEntry.ts";
+import { GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS } from "../../src/utils/groupScheduleModel.ts";
 
 test("reads current and legacy group schedule query params", () => {
   const data = readGroupScheduleEntryDataFromHref(
@@ -41,6 +42,50 @@ test("detects find game return source on group detail links", () => {
 test("normalizes date-like values", () => {
   assert.equal(normalizeGroupScheduleDate("2026-06-27T10:00:00+03:00"), "2026-06-27");
   assert.equal(normalizeGroupScheduleDate("not-a-date"), null);
+});
+
+test("reads kids academy direction preset from group schedule links", () => {
+  const data = readGroupScheduleEntryDataFromHref(
+    "https://padlhub.ru/group?direction=kids&cabinetUrl=https%3A%2F%2Fpadlhub.ru%2Flk_new&authMode=viva",
+  );
+
+  assert.deepEqual(data.directionIds, GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS);
+  assert.equal(data.directionLabel, "Детская академия падел");
+});
+
+test("reads explicit direction ids from group schedule links", () => {
+  const data = readGroupScheduleEntryDataFromHref(
+    "https://padlhub.ru/group?directionId=2468&directionIds=2975%2C3163&4lGIgL_direction=2468",
+  );
+
+  assert.deepEqual(data.directionIds, [2468, 2975, 3163]);
+  assert.equal(data.directionLabel, null);
+});
+
+test("ignores unknown direction tokens and keeps links without direction filter unchanged", () => {
+  const unknown = readGroupScheduleEntryDataFromHref(
+    "https://padlhub.ru/group?direction=kids-club-2027&date=2026-09-21",
+  );
+  assert.deepEqual(unknown.directionIds, []);
+  assert.equal(unknown.directionLabel, null);
+
+  const empty = readGroupScheduleEntryDataFromHref("https://padlhub.ru/group?date=2026-09-21");
+  assert.deepEqual(empty.directionIds, []);
+  assert.equal(empty.directionLabel, null);
+});
+
+test("keeps direction filter in payment return urls", () => {
+  const url = buildGroupScheduleReturnUrl(
+    "https://padlhub.ru/group?direction=kids&date=2026-09-21",
+    {
+      exerciseId: "exercise-4",
+      date: "2026-09-21",
+      paymentStatus: "success",
+    },
+  );
+
+  assert.equal(url.searchParams.get("direction"), "kids");
+  assert.equal(url.searchParams.get("groupPaymentSuccess"), "true");
 });
 
 test("builds payment return URLs without stale payment flags", () => {

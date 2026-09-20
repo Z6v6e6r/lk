@@ -796,11 +796,24 @@ function isLikelyPaymentUrl(value: string): boolean {
   if (!/^https?:\/\//i.test(value)) return false;
   try {
     const parsed = new URL(value);
-    const searchable = `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+    // The checkout token can live in the fragment (`.../#/pay/<token>`), so the hash takes
+    // part in the host/path heuristic instead of being dropped before the query check.
+    const searchable = `${parsed.hostname}${parsed.pathname}${parsed.hash}`.toLowerCase();
     if (/(pay|tbank|tinkoff|payment|checkout|bank|acquir)/.test(searchable)) return true;
     return ["payment", "transaction", "order", "invoice"].some((key) => parsed.searchParams.has(key));
   } catch {
     return false;
+  }
+}
+
+function readTrustedPaymentUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  try {
+    return new URL(trimmed).toString();
+  } catch {
+    return null;
   }
 }
 
@@ -817,6 +830,11 @@ function extractPaymentUrlFromString(value: string): string | null {
 }
 
 function extractPaymentUrl(payload: unknown): string | null {
+  // A URL Viva placed into an explicit payment field IS the checkout link, even when its
+  // host does not look like an acquirer page. Host filtering here dropped valid links and
+  // the signup surfaced that as "Не удалось получить ссылку на оплату". `url`/`link`/
+  // `redirectUrl` keep the heuristic because they also carry our own success redirects.
+  const trustedUrlKeys = ["paymentUrl", "paymentLink", "checkoutUrl", "cardPaymentUrl", "paymentPageUrl"];
   const visit = (value: unknown): string | null => {
     if (value == null) return null;
     if (typeof value === "string") {
@@ -832,7 +850,10 @@ function extractPaymentUrl(payload: unknown): string | null {
     if (!isRecord(value)) return null;
 
     for (const key of ["paymentUrl", "redirectUrl", "paymentLink", "checkoutUrl", "cardPaymentUrl", "paymentPageUrl", "url", "link"]) {
-      const direct = visit(value[key]);
+      const candidate = value[key];
+      const direct = trustedUrlKeys.includes(key)
+        ? readTrustedPaymentUrl(candidate) ?? visit(candidate)
+        : visit(candidate);
       if (direct) return direct;
     }
     for (const key of ["data", "payload", "result", "transaction", "transactionStatus", "cardPaymentStatus", "cardPaymentInfo", "payment"]) {
@@ -842,6 +863,17 @@ function extractPaymentUrl(payload: unknown): string | null {
     return null;
   };
   return visit(payload);
+}
+
+function pickFirstStringArray(value: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (!Array.isArray(candidate)) continue;
+    for (const item of candidate) {
+      if (typeof item === "string" && item.trim()) return item.trim();
+    }
+  }
+  return null;
 }
 
 function extractBookingId(payload: unknown): string | null {
@@ -859,6 +891,13 @@ function extractBookingId(payload: unknown): string | null {
 
     const direct = pickString(value, ["bookingId", "booking_id"]);
     if (direct) return direct;
+
+    // Viva reports a newly created booking only as `data.bookingIds` inside the
+    // TRANSACTION_CREATED event: the 202 create response carries no booking id, the
+    // transaction readback 404s and the exercise bookings expose no owning client.
+    // Without this id the pending payment could not be opened or cancelled at all.
+    const listed = pickFirstStringArray(value, ["bookingIds", "booking_ids"]);
+    if (listed) return listed;
 
     const bookingLike =
       Object.prototype.hasOwnProperty.call(value, "spot")
@@ -1273,6 +1312,36 @@ async function awaitPreferredTournamentPaymentResolution(
   });
 }
 
+// Individual poll requests have no timeout, so a single unresponsive Viva read could keep the
+// payment section spinning forever. Cap the whole resolution wait and let the caller report a
+// bounded failure instead.
+const TOURNAMENT_PAYMENT_RESOLUTION_BUDGET_MS = 25_000;
+
+async function withTournamentPaymentBudget(
+  promises: Array<Promise<TournamentVivaPaymentResolution | null>>,
+): Promise<TournamentVivaPaymentResolution | null> {
+  let budgetTimer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      awaitPreferredTournamentPaymentResolution(promises),
+      new Promise<null>((resolve) => {
+        budgetTimer = setTimeout(() => resolve(null), TOURNAMENT_PAYMENT_RESOLUTION_BUDGET_MS);
+      }),
+    ]);
+  } finally {
+    if (budgetTimer !== null) clearTimeout(budgetTimer);
+  }
+}
+
+function readVivaFailureCode(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  const nested = isRecord(payload.error) ? payload.error : null;
+  for (const candidate of [payload.code, nested?.code]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return null;
+}
+
 function normalizeVivaOwnBookingRegistration(value: unknown): TournamentRegistrationState | null {
   if (!isRecord(value)) return null;
   if (isTournamentVivaBookingInactive(value)) return null;
@@ -1670,11 +1739,18 @@ async function createVivaSocketWatcher<T>(
   const socketUserId = resolveVivaSocketUserId(clientId);
   if (!socketUserId) return null;
 
+  // The transaction is created only after this watcher resolves, so an unanswered ticket
+  // request used to stall the whole payment: the client saw "ссылка не формируется" with no
+  // error at all. The request itself has no timeout, so bound it here and fall back to the
+  // polling channels below.
+  const ticketController = new AbortController();
+  const ticketTimeout = setTimeout(() => ticketController.abort(), 3_000);
   const ticketResult = await request<unknown>(`${API_BASE}/api/v1/authorization-tickets/eu`, {
     method: "POST",
     auth: true,
     retries: 1,
-  });
+    signal: ticketController.signal,
+  }).finally(() => clearTimeout(ticketTimeout));
   const ticket = ticketResult.error ? null : extractAuthorizationTicket(ticketResult.data);
   if (!ticket) return null;
 
@@ -1723,10 +1799,44 @@ async function createVivaSocketWatcher<T>(
   };
 }
 
+interface TournamentVivaPaymentEvent {
+  paymentUrl: string;
+  bookingId: string | null;
+  paymentExpiresAt: string | null;
+}
+
+function readVivaPaymentDueDate(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const direct = pickString(value, ["paymentDueDate", "paymentExpiresAt", "paymentDeadline", "expiresAt"]);
+  if (direct && Number.isFinite(Date.parse(direct))) return direct;
+  for (const key of ["data", "payload", "result", "transaction", "transactionStatus", "cardPaymentInfo", "payment"]) {
+    const nested = readVivaPaymentDueDate(value[key]);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function readVivaPaymentEvent(value: unknown): TournamentVivaPaymentEvent | null {
+  const paymentUrl = extractPaymentUrl(value);
+  if (!paymentUrl) return null;
+  return {
+    paymentUrl,
+    // The URL, the booking id and the due date arrive in the same TRANSACTION_CREATED
+    // event; the URL alone cannot address the created booking afterwards.
+    bookingId: extractBookingId(value),
+    paymentExpiresAt: readVivaPaymentDueDate(value),
+  };
+}
+
 async function createVivaPaymentWatcher(clientId?: string | null) {
-  return createVivaSocketWatcher<string>(
+  return createVivaSocketWatcher<TournamentVivaPaymentEvent>(
     clientId,
-    (payload, rawMessage) => extractPaymentUrl(payload) || extractPaymentUrl(rawMessage),
+    (payload, rawMessage) => {
+      const event = readVivaPaymentEvent(payload);
+      if (event) return event;
+      const fallbackUrl = extractPaymentUrl(rawMessage);
+      return fallbackUrl ? { paymentUrl: fallbackUrl, bookingId: null, paymentExpiresAt: null } : null;
+    },
   );
 }
 
@@ -2866,11 +2976,24 @@ export async function apiFetchTournamentSubscriptionDiscounts(
   signal?: AbortSignal,
   subscriptionId?: string,
 ): Promise<ApiResult<{ quotes: TournamentSubscriptionDiscountQuote[] }>> {
-  return request<{ quotes: TournamentSubscriptionDiscountQuote[] }>("/lk/subscriptions/game-price-preview", {
+  const result = await request<{ quotes: TournamentSubscriptionDiscountQuote[] }>("/lk/subscriptions/game-price-preview", {
     method: "POST", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
     body: JSON.stringify({ target: { targetKind: "TOURNAMENT", exerciseId },
       ...(subscriptionId ? { subscriptionIds: [subscriptionId] } : {}) }),
   });
+  // The preview node resolves the event category server-side and refuses a TOURNAMENT
+  // target it classifies outside the tournament contour (a custom tournament published
+  // over a Viva game: type 840 / direction «Игра …»). That refusal is the business
+  // answer "no tournament subscription benefit applies to this event", not a service
+  // failure, so the ordinary tariff has to stay bookable instead of disabling the whole
+  // payment section. Only this exact refusal is mapped to an empty quote batch;
+  // transport failures and every other preview error stay fail-closed.
+  const errorRaw = result.error?.raw;
+  const errorBody = isRecord(errorRaw) && isRecord(errorRaw.error) ? errorRaw.error : null;
+  if (errorBody?.code === "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED") {
+    return { data: { quotes: [] }, error: null, status: result.status };
+  }
+  return result;
 }
 
 export async function apiCreateTournamentVivaTransaction(
@@ -2957,18 +3080,18 @@ export async function apiCreateTournamentVivaTransaction(
   if (result.error) {
     const outcomeMayBeUnknown = result.status == null || result.status >= 500;
     if (outcomeMayBeUnknown) {
-      const watcherResolution = paymentWatcher?.wait.then((url) => {
-        if (!url) return null;
+      const watcherResolution = paymentWatcher?.wait.then((event) => {
+        if (!event) return null;
         return {
-          paymentUrl: url,
-          bookingId: null,
+          paymentUrl: event.paymentUrl,
+          bookingId: event.bookingId,
           toPay: null,
           paid: false,
-          paymentExpiresAt: buildPaymentExpiresAt(transactionStartedAtMs),
+          paymentExpiresAt: event.paymentExpiresAt ?? buildPaymentExpiresAt(transactionStartedAtMs),
           raw: { source: "payment_watcher_after_ambiguous_create" },
         } satisfies TournamentVivaPaymentResolution;
       }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
-      const recovered = await awaitPreferredTournamentPaymentResolution([
+      const recovered = await withTournamentPaymentBudget([
         Promise.race([
           watcherResolution,
           wait(6_500).then(() => null),
@@ -3006,7 +3129,15 @@ export async function apiCreateTournamentVivaTransaction(
       };
     }
     paymentWatcher?.close();
-    return { data: null, error: result.error, status: result.status };
+    const vivaFailureCode = readVivaFailureCode(result.error.raw);
+    if (!vivaFailureCode || String(result.error.message || "").includes(vivaFailureCode)) {
+      return { data: null, error: result.error, status: result.status };
+    }
+    return {
+      data: null,
+      error: { ...result.error, message: `${result.error.message} (код Viva ${vivaFailureCode})` },
+      status: result.status,
+    };
   }
 
   const transactionId = extractTransactionId(result.data);
@@ -3016,14 +3147,14 @@ export async function apiCreateTournamentVivaTransaction(
   const responseBookingId = extractBookingId(result.data);
   const responseToPay = extractToPay(result.data);
   const directPaymentUrl = extractPaymentUrl(result.data);
-  const watcherResolution = paymentWatcher?.wait.then((url) => {
-    if (!url) return null;
+  const watcherResolution = paymentWatcher?.wait.then((event) => {
+    if (!event) return null;
     return {
-      paymentUrl: url,
-      bookingId: responseBookingId,
+      paymentUrl: event.paymentUrl,
+      bookingId: event.bookingId ?? responseBookingId,
       toPay: responseToPay,
       paid: false,
-      paymentExpiresAt: buildPaymentExpiresAt(transactionStartedAtMs),
+      paymentExpiresAt: event.paymentExpiresAt ?? buildPaymentExpiresAt(transactionStartedAtMs),
       raw: result.data,
     } satisfies TournamentVivaPaymentResolution;
   }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
@@ -3038,7 +3169,7 @@ export async function apiCreateTournamentVivaTransaction(
   }
   const resolvedPayment = directPaymentUrl
     ? null
-    : await awaitPreferredTournamentPaymentResolution(paymentResolutionPromises);
+    : await withTournamentPaymentBudget(paymentResolutionPromises);
   const paymentUrl = directPaymentUrl || resolvedPayment?.paymentUrl || null;
   const bookingId = resolvedPayment?.bookingId ?? responseBookingId;
   const toPay = resolvedPayment?.toPay ?? responseToPay;
@@ -3055,11 +3186,21 @@ export async function apiCreateTournamentVivaTransaction(
 
   if (!paymentUrl && !paid) {
     const mappedMessage = mapTournamentVivaFailureMessage(bookingEvent?.error);
+    // Name the transaction and Viva's own code on screen: this failure is otherwise
+    // indistinguishable between "Viva created nothing", "Viva refuses this target" and
+    // "the link never arrived over the payment channel".
+    const vivaFailureCode = readVivaFailureCode(result.data)
+      ?? readVivaFailureCode(bookingEvent?.raw)
+      ?? readVivaFailureCode(resolvedPayment?.raw);
+    const diagnosis = [
+      transactionId ? `транзакция ${transactionId}` : null,
+      vivaFailureCode ? `код Viva ${vivaFailureCode}` : null,
+    ].filter(Boolean).join(", ");
     return {
       data: null,
       error: {
         status: result.status,
-        message: mappedMessage || "Не удалось получить ссылку на оплату",
+        message: `${mappedMessage || "Не удалось получить ссылку на оплату"}${diagnosis ? ` (${diagnosis})` : ""}`,
         raw: {
           transaction: result.data,
           event: bookingEvent?.raw ?? null,
