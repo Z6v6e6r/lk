@@ -18,6 +18,7 @@ import {
 } from "../../utils/groupScheduleApi";
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
+import { isProTraining } from "../../utils/proTrainingExclusion";
 import { getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
 import { hasGroupTrainingSubscription, hasGroupTrainingSubscriptionEvidence } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
@@ -371,6 +372,12 @@ export default function GroupSchedulePage({
   const typeFilterRef = useRef<HTMLDivElement | null>(null);
   const typeFilterListboxId = useId();
   const groupSchedulePromoSectionId = useId();
+  // A PRO training is outside every subscription benefit: the screen requests no quote,
+  // offers no owned pack and no package purchase, and the server refuses the booking.
+  const proTrainingSelected = useMemo(
+    () => Boolean(selectedDetail && isProTraining(selectedDetail)),
+    [selectedDetail],
+  );
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -567,6 +574,12 @@ export default function GroupSchedulePage({
     const controller = new AbortController();
     const actorId = checkout.profile.id;
     const resolvedFor = `${selectedId}:${actorId}`;
+    // A PRO training carries no subscription benefit at all: the check is resolved
+    // without a request, so the screen never waits for or renders a discount.
+    if (proTrainingSelected) {
+      setDiscountResolvedFor(resolvedFor);
+      return;
+    }
     setDiscountLoading(true);
     void apiFetchGroupSubscriptionDiscounts(selectedId, controller.signal).then(result => {
       if (controller.signal.aborted) return;
@@ -591,7 +604,7 @@ export default function GroupSchedulePage({
       setDiscountLoading(false);
     });
     return () => controller.abort();
-  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone]);
+  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -684,14 +697,21 @@ export default function GroupSchedulePage({
 
   const selectedTraining = selectedDetail;
   const discountContextKey = `${selectedId}:${checkout?.profile?.id}`;
-  const discountPending = Boolean(checkout && (discountLoading || discountResolvedFor !== discountContextKey));
+  // A PRO training never waits for a quote: there is no subscription benefit to check, so
+  // the pending state (and its "Проверяем скидку по подписке…" line) stays off for it.
+  const discountPending = Boolean(checkout && !proTrainingSelected
+    && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  const purchasableProducts = checkout ? [...checkout.oneTimes, ...checkout.subscriptions] : [];
+  // A PRO training is bought at its full one-time price only: neither a package
+  // purchase nor an owned pack is a way to pay for it.
+  const purchasableProducts = !checkout
+    ? []
+    : proTrainingSelected ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
   // Owned subscriptions stay bookable on their own terms when the price check proves no
   // managed discount for them (a plan sold before the LK1 rule is quoted at zero percent).
-  const ownedSubscriptions = checkout
+  const ownedSubscriptions = checkout && !proTrainingSelected
     ? getGroupScheduleOwnedSubscriptions(checkout.clientSubscriptions, discountPending ? null : currentDiscountQuotes)
     : [];
   const isGamePlusTrainerDetail = selectedTraining ? isGamePlusTrainerSummary(selectedTraining) : false;
@@ -700,7 +720,8 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && subscriptionOffer?.owner === phone
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !proTrainingSelected
+    && subscriptionOffer?.owner === phone
     && subscriptionOffer?.show && !discountPending
     && !hasGroupTrainingSubscriptionEvidence(checkout.clientSubscriptions, currentDiscountQuotes));
   const shouldShowGroupSchedulePromoSection = Boolean(checkout && checkout.oneTimes.some(isGroupSchedulePromoProduct));
@@ -1193,7 +1214,7 @@ export default function GroupSchedulePage({
                         </span>
                       </strong>
                     </div>
-                    {subscriptionUsageShadowEnabled && (
+                    {subscriptionUsageShadowEnabled && !proTrainingSelected && (
                       <div className="tournament-signup-payment-options">
                         <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
                         <button
@@ -1206,6 +1227,11 @@ export default function GroupSchedulePage({
                             ? "Проверяем скидку по подписке…"
                             : "Проверить скидку по подписке без записи и оплаты"}
                         </button>
+                      </div>
+                    )}
+                    {!subscriptionUsageShadowEnabled && proTrainingSelected && (
+                      <div className="tournament-signup-muted" role="note">
+                        ПРО-тренировка оплачивается по полной цене: подписки и скидка по подписке на неё не действуют.
                       </div>
                     )}
                     {!subscriptionUsageShadowEnabled && registrationLoading && (
