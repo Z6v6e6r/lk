@@ -59,11 +59,14 @@ interface GroupSchedulePageProps {
   initialExerciseId?: string | null;
   initialDate?: string | null;
   initialStudioId?: string | null;
+  initialDirectionIds?: number[] | null;
+  initialDirectionLabel?: string | null;
   returnToFindGame?: boolean;
 }
 
 const ALL_FILTER_VALUE = "__all__";
 const TYPE_FILTER_ALL_LABEL = "Все типы";
+const LINK_DIRECTION_FILTER_FALLBACK_LABEL = "Направление из ссылки";
 const GROUP_SCHEDULE_SUBSCRIPTION_URL = "https://padlhub.ru/sub_hab?plans=ra,academy";
 const GROUP_SCHEDULE_PROMO_TRIGGER_TEXT = "у меня есть промокод";
 const GAME_PLUS_TRAINER_DEFAULT_DESCRIPTION = {
@@ -112,6 +115,11 @@ function formatClock(value: string | null | undefined) {
 function uniqueSorted(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
     .sort((left, right) => left.localeCompare(right, "ru-RU"));
+}
+
+function normalizeDirectionIds(values?: number[] | null) {
+  if (!Array.isArray(values)) return [] as number[];
+  return Array.from(new Set(values.filter((value) => Number.isInteger(value) && value > 0)));
 }
 
 function getTrainingTypeFilterLabel(training: GroupTrainingSummary) {
@@ -311,6 +319,8 @@ export default function GroupSchedulePage({
   initialExerciseId,
   initialDate,
   initialStudioId,
+  initialDirectionIds,
+  initialDirectionLabel,
   returnToFindGame = false,
 }: GroupSchedulePageProps) {
   const { isAuthenticated, isRestoringSession, phone } = useAuth();
@@ -328,6 +338,8 @@ export default function GroupSchedulePage({
   const [selectedTypeFilters, setSelectedTypeFilters] = useState<string[]>([]);
   const [typeFilterOptions, setTypeFilterOptions] = useState<string[]>([]);
   const [isTypeFilterOpen, setTypeFilterOpen] = useState(false);
+  const [linkDirectionIds, setLinkDirectionIds] = useState<number[]>(() => normalizeDirectionIds(initialDirectionIds));
+  const [linkDirectionLabel, setLinkDirectionLabel] = useState<string | null>(initialDirectionLabel || null);
   const [stationFilter, setStationFilter] = useState(initialStudioId || ALL_FILTER_VALUE);
   const [selectedId, setSelectedId] = useState<string | null>(initialExerciseId || null);
   const [selectedDetail, setSelectedDetail] = useState<GroupTrainingSummary | null>(null);
@@ -614,29 +626,60 @@ export default function GroupSchedulePage({
     () => uniqueSorted(items.map((item) => item.studioName || "Станция уточняется")),
     [items],
   );
+  const linkDirectionIdSet = useMemo(() => new Set(linkDirectionIds), [linkDirectionIds]);
+  const isLinkDirectionFilterActive = linkDirectionIdSet.size > 0;
+  const linkDirectionNames = useMemo(
+    () => (
+      isLinkDirectionFilterActive
+        ? uniqueSorted(
+          items
+            .filter((item) => item.directionId != null && linkDirectionIdSet.has(item.directionId))
+            .map(getTrainingTypeFilterLabel),
+        )
+        : []
+    ),
+    [isLinkDirectionFilterActive, items, linkDirectionIdSet],
+  );
+  const linkDirectionFilterLabel = linkDirectionLabel
+    || linkDirectionNames.join(", ")
+    || LINK_DIRECTION_FILTER_FALLBACK_LABEL;
   const visibleTypeFilterOptions = useMemo(
-    () => uniqueSorted([...typeFilterOptions, ...selectedTypeFilters]),
-    [selectedTypeFilters, typeFilterOptions],
+    () => {
+      const options = uniqueSorted([...typeFilterOptions, ...selectedTypeFilters]);
+      if (!isLinkDirectionFilterActive) return options;
+      const presetNames = new Set(linkDirectionNames);
+      return options.filter((value) => !presetNames.has(value));
+    },
+    [isLinkDirectionFilterActive, linkDirectionNames, selectedTypeFilters, typeFilterOptions],
   );
   const selectedTypeFilterSet = useMemo(
     () => new Set(selectedTypeFilters),
     [selectedTypeFilters],
   );
-  const typeFilterLabel = formatSelectedTypeFilterLabel(selectedTypeFilters);
-  const typeFilterTitle = selectedTypeFilters.length > 0
-    ? selectedTypeFilters.join(", ")
-    : TYPE_FILTER_ALL_LABEL;
+  const typeFilterLabel = isLinkDirectionFilterActive
+    ? linkDirectionFilterLabel
+    : formatSelectedTypeFilterLabel(selectedTypeFilters);
+  const typeFilterTitle = isLinkDirectionFilterActive
+    ? linkDirectionFilterLabel
+    : selectedTypeFilters.length > 0
+      ? selectedTypeFilters.join(", ")
+      : TYPE_FILTER_ALL_LABEL;
+  const resetLinkDirectionFilter = useCallback(() => {
+    setLinkDirectionIds([]);
+    setLinkDirectionLabel(null);
+  }, []);
   const filteredItems = useMemo(
     () => {
       return items.filter((item) => {
         const typeLabel = getTrainingTypeFilterLabel(item);
         return (
           (selectedTypeFilterSet.size === 0 || selectedTypeFilterSet.has(typeLabel))
+          && (!isLinkDirectionFilterActive || (item.directionId != null && linkDirectionIdSet.has(item.directionId)))
           && (stationFilter === ALL_FILTER_VALUE || (item.studioName || "Станция уточняется") === stationFilter)
         );
       });
     },
-    [items, selectedTypeFilterSet, stationFilter],
+    [isLinkDirectionFilterActive, items, linkDirectionIdSet, selectedTypeFilterSet, stationFilter],
   );
 
   const selectedTraining = selectedDetail;
@@ -965,16 +1008,34 @@ export default function GroupSchedulePage({
                 >
                   <button
                     type="button"
-                    className={`group-schedule-type-filter-option${selectedTypeFilters.length === 0 ? " is-selected" : ""}`}
+                    className={`group-schedule-type-filter-option${selectedTypeFilters.length === 0 && !isLinkDirectionFilterActive ? " is-selected" : ""}`}
                     role="option"
-                    aria-selected={selectedTypeFilters.length === 0}
-                    onClick={() => setSelectedTypeFilters([])}
+                    aria-selected={selectedTypeFilters.length === 0 && !isLinkDirectionFilterActive}
+                    onClick={() => {
+                      resetLinkDirectionFilter();
+                      setSelectedTypeFilters([]);
+                    }}
                   >
                     <span className="group-schedule-type-filter-check" aria-hidden="true">
-                      {selectedTypeFilters.length === 0 ? "✓" : ""}
+                      {selectedTypeFilters.length === 0 && !isLinkDirectionFilterActive ? "✓" : ""}
                     </span>
                     <span>{TYPE_FILTER_ALL_LABEL}</span>
                   </button>
+                  {isLinkDirectionFilterActive && (
+                    <button
+                      type="button"
+                      className="group-schedule-type-filter-option is-selected"
+                      role="option"
+                      aria-selected={true}
+                      onClick={() => {
+                        resetLinkDirectionFilter();
+                        setSelectedTypeFilters([]);
+                      }}
+                    >
+                      <span className="group-schedule-type-filter-check" aria-hidden="true">✓</span>
+                      <span>{linkDirectionFilterLabel}</span>
+                    </button>
+                  )}
                   {visibleTypeFilterOptions.length === 0 ? (
                     <div className="group-schedule-type-filter-empty">Направления не найдены</div>
                   ) : visibleTypeFilterOptions.map((value) => (
@@ -985,6 +1046,7 @@ export default function GroupSchedulePage({
                       role="option"
                       aria-selected={selectedTypeFilterSet.has(value)}
                       onClick={() => {
+                        resetLinkDirectionFilter();
                         setSelectedTypeFilters((previous) => (
                           previous.includes(value)
                             ? previous.filter((item) => item !== value)
