@@ -575,6 +575,17 @@
   letter-spacing: 0.01em;
 }
 
+/* Former price of the club discount: readable, but clearly not the amount to pay. */
+.subscription-card__price-compare {
+  color: var(--subscription-text-muted);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  text-decoration: line-through;
+}
+
 .subscription-card__billing-options {
   display: inline-flex;
   min-height: 42px;

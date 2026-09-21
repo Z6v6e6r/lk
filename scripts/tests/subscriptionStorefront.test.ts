@@ -6,7 +6,8 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {
   billingFromStatus, canContinue, energy5BillingOptions, friendshipBillingOptions, requiresAnnualTermsConsent,
-  scopedStorefrontStatuses,
+  scopedStorefrontStatuses, atlantyBillingOptions, ATLANTY_PLAN_ID, ATLANTY_VARIANT, normalizeStorefrontVariant,
+  ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID,
 } from '../../src/components/subscription-storefront/catalog.ts';
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
@@ -37,7 +38,7 @@ function loadPaymentAdapter(): {
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId } = __stubs;\n${source}`;
+  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -66,6 +67,8 @@ function loadPaymentAdapter(): {
           : value === 'energy5' ? 'dfa72adf-233b-4285-8d69-e5eab4234fbe'
             : null
     ),
+    ATLANTY_MONTHLY_PRODUCT_ID,
+    ATLANTY_ANNUAL_PRODUCT_ID,
   };
   const context = {
     exports: exported,
@@ -423,4 +426,86 @@ test('training link shows RA and Academy while ordinary storefront keeps its cat
   assert.deepEqual(storefrontPlanKeysForSearch('?plans=ra,academy'), ['ra', 'academy']);
   assert.deepEqual(storefrontPlanKeysForSearch(''), ['friendship', 'ra', 'academy', 'energy5']);
   assert.deepEqual(storefrontPlanKeysForSearch('?plans=unknown'), ['friendship', 'ra', 'academy', 'energy5']);
+});
+
+test('atlanty page keeps two discounted direct options and drops the 2-hour placeholder', () => {
+  const options = atlantyBillingOptions();
+  assert.deepEqual(options.map(option => option.id), ['monthly', 'annual']);
+  assert.deepEqual(options.map(option => option.priceMinor), [680000, 6800000]);
+  assert.deepEqual(options.map(option => option.priceCompareMinor), [980000, 9800000]);
+  assert.deepEqual(options.map(option => option.label), ['месяц', 'год']);
+  assert.deepEqual(options.map(option => option.priceSuffix), ['/ 30 дней', '/ год']);
+  assert.equal(options[0].ctaDisabled, undefined);
+  // The buy label lives on the plan so it can switch to «Создаём оплату…» while the CTA is busy.
+  assert.equal(options[0].ctaLabel, undefined);
+  // The annual id is still pending, so its CTA stays closed instead of charging an unknown product.
+  assert.equal(ATLANTY_ANNUAL_PRODUCT_ID, '');
+  assert.equal(options[1].ctaDisabled, true);
+  assert.equal(options[1].ctaLabel, 'Скоро');
+  assert.equal(options[1].statusMessage, 'Годовой вариант появится в продаже позже');
+  assert.equal(options.some(option => option.id === 'monthly-two-hours'), false);
+});
+
+test('atlanty variant and product ids stay the exact operator-issued values', () => {
+  assert.equal(ATLANTY_MONTHLY_PRODUCT_ID, '3907d127-a6b0-419e-a933-4a2857f26356');
+  assert.equal(ATLANTY_PLAN_ID, 'atlanty');
+  assert.equal(ATLANTY_VARIANT, 'atlanty');
+  assert.equal(normalizeStorefrontVariant('  AtLanty '), 'atlanty');
+  assert.equal(normalizeStorefrontVariant(''), null);
+  assert.equal(normalizeStorefrontVariant(null), null);
+});
+
+test('atlanty billing options bind to their own direct Viva products', async () => {
+  const adapter = loadPaymentAdapter();
+  function target(planId: string, optionId: string) {
+    const resolved = adapter.resolveStorefrontBillingTarget(planId, optionId) as Record<string, unknown> | null;
+    return resolved ? { ...resolved } : null;
+  }
+  assert.deepEqual(target('atlanty', 'monthly'), {
+    counterKey: 'atlanty', directProductId: ATLANTY_MONTHLY_PRODUCT_ID, planType: 'friendship',
+  });
+  // Until the operator issues the annual product id, the annual option is not purchasable at all.
+  assert.equal(target('atlanty', 'annual'), null);
+  assert.equal(target('atlanty', 'monthly-two-hours'), null);
+  assert.equal(target('atlanty', 'unknown'), null);
+
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'atlanty', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
+  assert.equal(adapter.calls.bought.length, 1);
+  assert.equal(adapter.calls.bought[0].productId, ATLANTY_MONTHLY_PRODUCT_ID);
+  // A direct product never creates a counter purchase.
+  assert.equal(adapter.calls.created.length, 0);
+});
+
+test('atlanty card is titled ДРУЖБА.АТЛАНТЫ and reuses the friendship benefits', () => {
+  const source = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
+  assert.match(source, /label: 'ДРУЖБА\.АТЛАНТЫ'/);
+  assert.match(source, /shortLabel: 'Дружба\. Атланты'/);
+  assert.match(source, /atlantyPlanPresentation: SummerPlanPresentation = \{[\s\S]*?benefitGroups: friendshipBenefits,/);
+  const cardSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPlanCard.tsx', import.meta.url), 'utf8');
+  assert.match(cardSource, /subscription-card__price-compare/);
+  assert.match(cardSource, /priceCompareMinor/);
+  const cssSource = readFileSync(new URL('../../src/components/subscription-storefront/subscriptions.css', import.meta.url), 'utf8');
+  assert.match(cssSource, /\.subscription-card__price-compare \{[\s\S]*?text-decoration: line-through;/);
+});
+
+test('storefront page owns the atlanty variant instead of the shared catalogue', () => {
+  const pageSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
+  assert.match(pageSource, /normalizeStorefrontVariant\(variant \?\? searchVariant\) === ATLANTY_VARIANT/);
+  assert.match(pageSource, /atlantyBillingOptions\(\)/);
+  assert.match(pageSource, /id: ATLANTY_PLAN_ID/);
+  assert.match(pageSource, /ctaLabel: processing \? 'Создаём оплату…' : 'Оформить подписку'/);
+  // The club card must not depend on the counter status feed at all.
+  assert.match(pageSource, /if \(previewView \|\| isAtlantyVariant\) return;/);
+  const entrySource = readFileSync(new URL('../../src/subscription-storefront.tsx', import.meta.url), 'utf8');
+  assert.match(entrySource, /variant=\{options\.data\?\.variant\}/);
+});
+
+test('atlanty T123 embeds the isolated loader with the club variant', () => {
+  const html = readFileSync(new URL('../../docs/tilda-atlanty-subscription.html', import.meta.url), 'utf8');
+  new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)![1]);
+  assert.match(html, /\/lk\/subscription-storefront\/release-dev\.json/);
+  assert.match(html, /LKWidgetSubscriptionStorefront\.unmount/);
+  assert.match(html, /targetId: "padlhub-subscriptions"/);
+  assert.match(html, /variant: "atlanty"/);
+  assert.doesNotMatch(html, /autoPurchase|productId/);
 });

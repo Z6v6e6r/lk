@@ -148,6 +148,19 @@ export const summerPlanPresentation: Readonly<Record<SummerPlanCounterKey, Summe
 };
 
 
+/**
+ * «ДРУЖБА.АТЛАНТЫ» re-uses the friendship benefits and tone, but the club name
+ * is written as a headline instead of the shared «Дружба» badge artwork.
+ */
+export const atlantyPlanPresentation: SummerPlanPresentation = {
+  label: 'ДРУЖБА.АТЛАНТЫ',
+  shortLabel: 'Дружба. Атланты',
+  labelKind: 'plain',
+  tagTone: '#49d8a1',
+  benefitGroups: friendshipBenefits,
+};
+
+
 // Annual and monthly friendship plans share the same benefit descriptions.
 export const friendshipVariantBenefits: Readonly<Record<string, readonly SubscriptionBenefitGroup[]>> = {
   'monthly-two-hours': [
