@@ -24,6 +24,7 @@ const PROD_RELEASE_ARTIFACTS = [
   "tournaments.js",
   "tournament-signup.js",
   "group-schedule.js",
+  "atlanty-schedule.js",
   "padel-day-schedule.js",
   "tournament-subscription.js",
   "tournament-subscription-referral.js",
