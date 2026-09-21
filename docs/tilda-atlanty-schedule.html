@@ -9,8 +9,17 @@
   3. карточки — ссылки вида #atlanty&exerciseId=<id>, поэтому клик открывает
      запись на конкретное событие.
 
-  Перед публикацией: собрать и выложить dist/atlanty-schedule.js рядом с release.json
-  (npm run build:prod / build:dev:bundles), затем опубликовать страницу в Tilda.
+  Перед публикацией:
+  1. собрать бандл — `npx vite build --config vite.config.atlanty-schedule.ts`
+     (он же входит в `npm run build:prod` / `build:dev:bundles`);
+  2. выложить ОДИН файл `dist/atlanty-schedule.js` в `https://padlhub.su/lk/`
+     (адресно: закреплённый standard frontend-комплект из 16 файлов его пока не
+     включает, поэтому общий `deploy:prod` этот бандл не публикует);
+  3. вставить этот блок в Tilda (T123) и опубликовать страницу.
+
+  Загрузчик берёт версию из `/lk/release.json`; для уже выложенного файла смена
+  версии ничего не ломает — версия работает как cache-bust, а сам бандл остаётся
+  на месте.
 -->
 <div id="atlanty-schedule-root"></div>
 
