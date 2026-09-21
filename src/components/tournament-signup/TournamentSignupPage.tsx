@@ -2054,7 +2054,6 @@ export default function TournamentSignupPage({
                 </button>
               </div>
               <AuthForm
-                allowPhoneLogin={false}
                 onLogin={() => {
                   setAuthRequired(false);
                 }}
