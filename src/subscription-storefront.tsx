@@ -11,7 +11,7 @@ import { installGlobalErrorTracking, trackAnalyticsEvent } from './utils/analyti
 import './components/subscription-storefront/storefront-idle-guard.css';
 import { openCheckout, closeCheckout, resumeCheckout } from './components/subscription-storefront/zeroCheckoutMount';
 
-type MountData = { previewView?: SubscriptionStorefrontView; cabinetUrl?: string | null };
+type MountData = { previewView?: SubscriptionStorefrontView; cabinetUrl?: string | null; variant?: string | null };
 type MountOptions = { targetId?: string; onClose?: () => void; data?: MountData };
 
 let root: Root | null = null;
@@ -50,6 +50,7 @@ function mount(options: MountOptions = {}) {
           {offerKey !== null ? <PromoSubscriptionPage offerKey={offerKey} cabinetUrl={cabinetUrl} onBack={options.onClose} /> : <SubscriptionPage
             cabinetUrl={cabinetUrl}
             onBack={options.onClose}
+            variant={options.data?.variant}
             previewView={localPreview ? options.data?.previewView : undefined}
           />}
         </AuthProvider>
@@ -61,6 +62,11 @@ function mount(options: MountOptions = {}) {
 declare global { interface Window { LKWidgetSubscriptionStorefront?: {
   mount: typeof mount; unmount: typeof unmount;
   checkoutVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout;
+  /** Page variants this bundle can render; blocks must fail closed on a missing one. */
+  storefrontVariants: readonly string[];
 } } }
-window.LKWidgetSubscriptionStorefront = { mount, unmount, checkoutVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod', openCheckout, closeCheckout, resumeCheckout };
+window.LKWidgetSubscriptionStorefront = {
+  mount, unmount, checkoutVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
+  openCheckout, closeCheckout, resumeCheckout, storefrontVariants: ['atlanty'],
+};
 export { mount, unmount };

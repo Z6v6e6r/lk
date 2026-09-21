@@ -15,6 +15,8 @@ export interface SubscriptionBillingOption {
   readonly id: string;
   readonly label: string;
   readonly priceMinor: number | null;
+  /** Crossed-out former price shown next to `priceMinor` when a discount applies. */
+  readonly priceCompareMinor?: number | null;
   readonly ctaDisabled?: boolean;
   readonly ctaLabel?: string;
   readonly statusMessage?: string;

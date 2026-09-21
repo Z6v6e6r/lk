@@ -14,6 +14,7 @@ import {
 } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveTournamentSubscriptionDirectProductId } from '../../utils/tournamentSubscriptionCatalog';
+import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID } from './catalog';
 
 /** Query parameter used by LK1 to resolve the payment after returning from the bank. */
 export const PAYMENT_REF_QUERY_KEY = 'summerPaymentRef';
@@ -25,7 +26,7 @@ const PENDING_PAYMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export type StorefrontBillingOptionId = 'monthly' | 'annual' | 'monthly-two-hours';
 
 export interface StorefrontBillingTarget {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5';
+  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty';
   /** Direct product purchase (`apiBuySubscroption`) when the plan has a catalog product. */
   directProductId: string | null;
   /** Summer-plan purchase mode used for counter based plans. */
@@ -33,7 +34,7 @@ export interface StorefrontBillingTarget {
 }
 
 export interface PendingPaymentEntry {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | null;
+  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | null;
   paymentRef: string;
   planId: StorefrontBillingOptionId | null;
   campaignKey: string | null;
@@ -62,6 +63,23 @@ export function resolveStorefrontBillingTarget(
   billingOptionId: StorefrontBillingOptionId,
 ): StorefrontBillingTarget | null {
   if (billingOptionId === 'monthly-two-hours') return null;
+  if (planId === 'atlanty') {
+    // Both club options are direct Viva products. A blank id must fail closed
+    // instead of falling through to the counter purchase contour.
+    if (billingOptionId === 'monthly') {
+      const monthlyProductId = String(ATLANTY_MONTHLY_PRODUCT_ID || '').trim();
+      return monthlyProductId
+        ? { counterKey: 'atlanty', directProductId: monthlyProductId, planType: 'friendship' }
+        : null;
+    }
+    if (billingOptionId === 'annual') {
+      const annualProductId = String(ATLANTY_ANNUAL_PRODUCT_ID || '').trim();
+      return annualProductId
+        ? { counterKey: 'atlanty', directProductId: annualProductId, planType: 'friendship' }
+        : null;
+    }
+    return null;
+  }
   if (planId === 'friendship' && billingOptionId === 'annual') {
     return { counterKey: 'network_friendship', directProductId: null, planType: 'friendship' };
   }
@@ -116,7 +134,7 @@ export function clearStorefrontPaymentRef(): void {
 
 function normalizePendingCounterKey(value: string): PendingPaymentEntry['counterKey'] {
   return value === 'friendship' || value === 'network_friendship' || value === 'ra' || value === 'academy'
-    || value === 'energy5'
+    || value === 'energy5' || value === 'atlanty'
     ? value
     : null;
 }
@@ -216,6 +234,9 @@ export async function createStorefrontSubscriptionPayment(params: {
       baseRedirectUrl: returnUrl,
       successUrl: returnUrl,
       failUrl: returnUrl,
+      // The provider contract has no idempotency key: retrying an ambiguous
+      // create can charge twice, so a direct product is sent exactly once.
+      retries: 0,
     });
     if (result.error || !result.data) {
       throw new StorefrontPaymentError(
