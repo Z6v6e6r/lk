@@ -64,10 +64,13 @@ export function resolveStorefrontBillingTarget(
 ): StorefrontBillingTarget | null {
   if (billingOptionId === 'monthly-two-hours') return null;
   if (planId === 'atlanty') {
-    // Both club options are direct Viva products; the annual one stays closed
-    // until the operator fills in its exact product id.
+    // Both club options are direct Viva products. A blank id must fail closed
+    // instead of falling through to the counter purchase contour.
     if (billingOptionId === 'monthly') {
-      return { counterKey: 'atlanty', directProductId: ATLANTY_MONTHLY_PRODUCT_ID, planType: 'friendship' };
+      const monthlyProductId = String(ATLANTY_MONTHLY_PRODUCT_ID || '').trim();
+      return monthlyProductId
+        ? { counterKey: 'atlanty', directProductId: monthlyProductId, planType: 'friendship' }
+        : null;
     }
     if (billingOptionId === 'annual') {
       const annualProductId = String(ATLANTY_ANNUAL_PRODUCT_ID || '').trim();
@@ -231,6 +234,9 @@ export async function createStorefrontSubscriptionPayment(params: {
       baseRedirectUrl: returnUrl,
       successUrl: returnUrl,
       failUrl: returnUrl,
+      // The provider contract has no idempotency key: retrying an ambiguous
+      // create can charge twice, so a direct product is sent exactly once.
+      retries: 0,
     });
     if (result.error || !result.data) {
       throw new StorefrontPaymentError(

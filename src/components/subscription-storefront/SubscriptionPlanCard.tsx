@@ -195,7 +195,11 @@ function PlanCardBody(props: {
         <div className={`subscription-card__price-row${props.plan.billingOptions.length > 2 ? " subscription-card__price-row--variants" : ""}`}>
           <p className="subscription-card__price">
             {typeof props.selectedOption.priceCompareMinor === 'number' && props.selectedOption.priceCompareMinor > 0
-              ? <s className="subscription-card__price-compare">{`${rubles(props.selectedOption.priceCompareMinor)} ₽`}</s>
+              ? <>
+                {/* Screen readers must hear which amount applies, not two bare prices. */}
+                <span className="subscription-visually-hidden">{`Прежняя цена: ${rubles(props.selectedOption.priceCompareMinor)} ₽`}</span>
+                <s className="subscription-card__price-compare" aria-hidden="true">{`${rubles(props.selectedOption.priceCompareMinor)} ₽`}</s>
+              </>
               : null}
             <strong>{props.selectedOption.priceMinor === null ? "—" : `${rubles(props.selectedOption.priceMinor)} ₽`}</strong>
             <span>{props.selectedOption.priceSuffix ?? '/ мес.'}</span>

@@ -87,8 +87,9 @@ export function energy5BillingOptions(status: StorefrontStatus | undefined): Sub
 export const ATLANTY_VARIANT = 'atlanty';
 export const ATLANTY_PLAN_ID = 'atlanty';
 /**
- * Direct Viva product of the club's 30-day plan. It stays outside the shared
- * `single_artwork` allowlist: only this variant may sell it.
+ * Direct Viva product of the club's 30-day plan. It stays out of
+ * `TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS`: only this storefront variant
+ * resolves it.
  */
 export const ATLANTY_MONTHLY_PRODUCT_ID = '3907d127-a6b0-419e-a933-4a2857f26356';
 /**

@@ -85,12 +85,22 @@
     var defaultCabinetUrl = channel === "dev" ? "https://padlhub.ru/lk_dev" : "https://padlhub.ru/lk_new";
     var cabinetUrl = defaultCabinetUrl;
 
-    function showError() {
+    function showError(message) {
       var root = document.getElementById("padlhub-subscriptions");
       if (root) {
         root.innerHTML =
-          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить подписки. Попробуйте позже.</div>";
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>"
+          + (message || "Не удалось загрузить подписки. Попробуйте позже.")
+          + "</div>";
       }
+    }
+
+    // Fail closed when the published bundle predates the club variant: without
+    // this the block would silently render the ordinary catalogue instead.
+    function supportsAtlantyVariant() {
+      var widget = window.LKWidgetSubscriptionStorefront;
+      var variants = widget && widget.storefrontVariants;
+      return Array.isArray(variants) && variants.indexOf("atlanty") !== -1;
     }
 
     function addParam(src, key, value) {
@@ -137,6 +147,10 @@
     function mountWidget() {
       if (!window.LKWidgetSubscriptionStorefront || typeof window.LKWidgetSubscriptionStorefront.mount !== "function") {
         showError();
+        return;
+      }
+      if (!supportsAtlantyVariant()) {
+        showError("Клубная страница обновляется. Обновите страницу через минуту.");
         return;
       }
 

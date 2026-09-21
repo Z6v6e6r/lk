@@ -17,7 +17,7 @@ const FIXTURE_PHONE = `+${'7'}${'900000000'}`;
 
 interface PaymentAdapterCalls {
   created: { counterKey: string | null; planType: string | null }[];
-  bought: { productId: string; phone: string }[];
+  bought: { productId: string; phone: string; retries: number | undefined }[];
   /** Provider failure returned by the direct-product purchase stub. */
   buyFailure?: { status: number; message: string } | null;
 }
@@ -28,7 +28,7 @@ function stripImports(source: string): string {
 }
 
 /** Loads the payment adapter in a VM with stubbed LK1 API calls. */
-function loadPaymentAdapter(): {
+function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string } = {}): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
   describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
@@ -45,8 +45,8 @@ function loadPaymentAdapter(): {
   const calls: PaymentAdapterCalls = { created: [], bought: [] };
   const exported: Record<string, (...args: never[]) => unknown> = {};
   const stubs = {
-    apiBuySubscroption: async (productId: string, phone: string) => {
-      calls.bought.push({ productId, phone });
+    apiBuySubscroption: async (productId: string, phone: string, options?: { retries?: number }) => {
+      calls.bought.push({ productId, phone, retries: options?.retries });
       if (calls.buyFailure) return { data: null, error: calls.buyFailure, status: calls.buyFailure.status };
       return { data: { toPay: 2380000, paymentUrl: 'https://bank.example/pay/direct' }, error: null, status: 200 };
     },
@@ -67,8 +67,8 @@ function loadPaymentAdapter(): {
           : value === 'energy5' ? 'dfa72adf-233b-4285-8d69-e5eab4234fbe'
             : null
     ),
-    ATLANTY_MONTHLY_PRODUCT_ID,
-    ATLANTY_ANNUAL_PRODUCT_ID,
+    ATLANTY_MONTHLY_PRODUCT_ID: overrides.atlantyMonthlyProductId ?? ATLANTY_MONTHLY_PRODUCT_ID,
+    ATLANTY_ANNUAL_PRODUCT_ID: overrides.atlantyAnnualProductId ?? ATLANTY_ANNUAL_PRODUCT_ID,
   };
   const context = {
     exports: exported,
@@ -472,8 +472,16 @@ test('atlanty billing options bind to their own direct Viva products', async () 
   await adapter.createStorefrontSubscriptionPayment({ planId: 'atlanty', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
   assert.equal(adapter.calls.bought.length, 1);
   assert.equal(adapter.calls.bought[0].productId, ATLANTY_MONTHLY_PRODUCT_ID);
+  // The provider create is not idempotent, so a direct product is never retried.
+  assert.equal(adapter.calls.bought[0].retries, 0);
   // A direct product never creates a counter purchase.
   assert.equal(adapter.calls.created.length, 0);
+});
+
+test('atlanty fails closed when either product id is blank or whitespace', () => {
+  const adapter = loadPaymentAdapter({ atlantyMonthlyProductId: '   ', atlantyAnnualProductId: '  ' });
+  assert.equal(adapter.resolveStorefrontBillingTarget('atlanty', 'monthly'), null);
+  assert.equal(adapter.resolveStorefrontBillingTarget('atlanty', 'annual'), null);
 });
 
 test('atlanty card is titled ДРУЖБА.АТЛАНТЫ and reuses the friendship benefits', () => {
@@ -490,7 +498,7 @@ test('atlanty card is titled ДРУЖБА.АТЛАНТЫ and reuses the friendsh
 
 test('storefront page owns the atlanty variant instead of the shared catalogue', () => {
   const pageSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
-  assert.match(pageSource, /normalizeStorefrontVariant\(variant \?\? searchVariant\) === ATLANTY_VARIANT/);
+  assert.match(pageSource, /\(normalizeStorefrontVariant\(variant\) \?\? normalizeStorefrontVariant\(searchVariant\)\) === ATLANTY_VARIANT/);
   assert.match(pageSource, /atlantyBillingOptions\(\)/);
   assert.match(pageSource, /id: ATLANTY_PLAN_ID/);
   assert.match(pageSource, /ctaLabel: processing \? 'Создаём оплату…' : 'Оформить подписку'/);
@@ -498,6 +506,8 @@ test('storefront page owns the atlanty variant instead of the shared catalogue',
   assert.match(pageSource, /if \(previewView \|\| isAtlantyVariant\) return;/);
   const entrySource = readFileSync(new URL('../../src/subscription-storefront.tsx', import.meta.url), 'utf8');
   assert.match(entrySource, /variant=\{options\.data\?\.variant\}/);
+  // Blocks fail closed on a bundle that predates the variant, so the support flag must ship.
+  assert.match(entrySource, /storefrontVariants: \['atlanty'\]/);
 });
 
 test('atlanty T123 embeds the isolated loader with the club variant', () => {
@@ -507,5 +517,8 @@ test('atlanty T123 embeds the isolated loader with the club variant', () => {
   assert.match(html, /LKWidgetSubscriptionStorefront\.unmount/);
   assert.match(html, /targetId: "padlhub-subscriptions"/);
   assert.match(html, /variant: "atlanty"/);
+  // A stale bundle without the variant must show the error, never the ordinary catalogue.
+  assert.match(html, /storefrontVariants/);
+  assert.match(html, /variants\.indexOf\("atlanty"\) !== -1/);
   assert.doesNotMatch(html, /autoPurchase|productId/);
 });

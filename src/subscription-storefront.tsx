@@ -62,6 +62,11 @@ function mount(options: MountOptions = {}) {
 declare global { interface Window { LKWidgetSubscriptionStorefront?: {
   mount: typeof mount; unmount: typeof unmount;
   checkoutVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout;
+  /** Page variants this bundle can render; blocks must fail closed on a missing one. */
+  storefrontVariants: readonly string[];
 } } }
-window.LKWidgetSubscriptionStorefront = { mount, unmount, checkoutVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod', openCheckout, closeCheckout, resumeCheckout };
+window.LKWidgetSubscriptionStorefront = {
+  mount, unmount, checkoutVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
+  openCheckout, closeCheckout, resumeCheckout, storefrontVariants: ['atlanty'],
+};
 export { mount, unmount };

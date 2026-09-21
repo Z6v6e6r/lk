@@ -39,7 +39,9 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
 }) {
   const { isAuthenticated } = useAuth();
   const searchVariant = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('variant');
-  const isAtlantyVariant = normalizeStorefrontVariant(variant ?? searchVariant) === ATLANTY_VARIANT;
+  // An empty host value (a Tilda block whose data prop is blank) must not shadow
+  // the documented `?variant=` fallback.
+  const isAtlantyVariant = (normalizeStorefrontVariant(variant) ?? normalizeStorefrontVariant(searchVariant)) === ATLANTY_VARIANT;
   const [statuses, setStatuses] = useState<readonly StorefrontStatus[] | null>(null);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
