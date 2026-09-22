@@ -127,6 +127,6 @@ export function isProTrainingEnergyPack(value) {
       .replace(/[^a-zа-яё0-9]+/gi, " ")
       .replace(/\s+/g, " ")
       .trim();
-    return /^(энергия|energy) (5|25)$/.test(normalized || "");
+    return /^(энергия|energy) (5|25)(?: |$)/.test(normalized || "");
   });
 }
