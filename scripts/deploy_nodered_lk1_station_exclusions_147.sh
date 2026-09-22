@@ -37,8 +37,7 @@ expected_changed_nodes=2
 # Field-level allowance: exactly one `func` field of the gateway and of both evaluator
 # nodes. No other field, node or route may change.
 allow_changes=(
-  "lk_subscription_booking_router_20260804:func"
-  "lk_subscription_booking_router_20260804:initialize"
+  "lk_subscription_booking_router_20260804:func,initialize"
   "lk_subscription_price_preview_20260908_router:func"
 )
 expected_node_fields='{"lk_subscription_booking_router_20260804":["func","initialize"],"lk_subscription_price_preview_20260908_router":["func"]}'
