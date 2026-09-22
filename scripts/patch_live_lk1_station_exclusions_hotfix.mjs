@@ -19,7 +19,7 @@
 // (the HUB stays out on purpose — its legacy category list is empty, so excluding it would
 // block its tournaments instead of making them free).
 //
-// This generation is applied to the *installed* flow (2026-09-18 pull, `a948f18b…`,
+// This generation is applied to the *installed* flow (2026-09-18 pull, `3ecadce7…`,
 // 4804 nodes) and changes exactly three fields of two nodes:
 //   1. `lk_subscription_booking_router_20260804.func` — the reviewed resolver module (the
 //      station-exclusions normalizer, reader and verdict) plus the reviewed `lk1Config`
@@ -61,7 +61,7 @@ export const STATION_EXCLUSIONS_KIND = "FOCUSED_LK1_STATION_EXCLUSIONS_V1";
 // post-`lk1-confirmed-replay-guard` generation (`3920bb21…`). A live change must never be
 // absorbed silently: it requires a conscious re-review of every pin below.
 export const STATION_EXCLUSIONS_SOURCE_SHA256 =
-  "a948f18b8e85c4931d44cf4ecfe52354a19d0c003e8fa8526e9126abb4a2d1ca";
+  "3ecadce7052ff73ab0ccd768760fde9d8a3dd97b8c19e68533ad514c6cb6bd95";
 export const STATION_EXCLUSIONS_SOURCE_NODE_COUNT = 4804;
 export const STATION_EXCLUSIONS_BOOKING_ID = PLAN_RULES_GATEWAY_NODE_ID;
 export const STATION_EXCLUSIONS_PREVIEW_ID = PLAN_RULES_PREVIEW_NODE_ID;
@@ -74,7 +74,7 @@ export const STATION_EXCLUSIONS_TARGET = Object.freeze({
   patchedBookingInitializeSha256: "f373346fc14ba52988c59269b803bb2297a39db24c81ae6d570ecaf6f5d7728a",
   previewId: STATION_EXCLUSIONS_PREVIEW_ID,
   livePreviewFuncSha256: "1bd8d443e483512c4817f8c6c4850ebd50fb314482c072a5d18db7ae11d66de4",
-  patchedPreviewFuncSha256: "8785e231893961dd73fedbacac46dfaae138bc99ebbdd43511fc1bb31c30be10",
+  patchedPreviewFuncSha256: "df5c4ba1b55c471d8b830eac25c8035889720ff954e703d433932878e31c4f22",
 });
 
 // The installed preview composition pins of this generation: the split/join bodies and the

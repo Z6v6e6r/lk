@@ -395,6 +395,9 @@ jobs:
           scripts/tests/tournamentSignupVivaBookingIdentity.test.ts
           scripts/tests/groupScheduleApi.test.ts
           scripts/tests/groupEventPayment.test.mjs
+          scripts/tests/proTrainingExclusion.test.ts
+          scripts/tests/proTrainingExclusion.nodered.test.mjs
+          scripts/tests/proTrainingExclusionHotfix.test.mjs
           scripts/tests/groupSubscriptionDiscount.test.ts
           scripts/tests/tournamentSubscriptionDiscount.test.ts
           scripts/tests/tournamentSignup.checkoutReadiness.test.ts

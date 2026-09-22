@@ -531,6 +531,27 @@ test('the release composition embeds the resolver inside the canonical closure',
   assert.equal(plan.productId, RA);
 });
 
+// The PRO-training quote exclusion may only travel with a booking body that really carries
+// the refusal: a preview that hides the price while the write path still grants the benefit
+// would leave the discount bookable. An unguarded body therefore composes an inert predicate.
+test('the PRO-training quote exclusion follows the booking guard, never precedes it', requiresResolver, () => {
+  const inert = previewScope().scope;
+  assert.equal(typeof inert.canonical.isProTrainingExercise, 'function');
+  assert.equal(inert.canonical.isProTrainingExercise({ direction: { id: 5507, name: 'Тренировка ПРО уровень C/C+' } }), false,
+    'an unguarded booking body must not suppress any quote');
+
+  const guardedBody = `${syntheticBody}\n// PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE`;
+  const guarded = previewSources(syntheticFlow({ body: guardedBody, initialize: hubTransition().initialize }),
+    { pins: syntheticPins(guardedBody) });
+  assert.ok(guarded.router.includes('const PRO_TRAINING_DIRECTION_IDS = Object.freeze([5502, 5503, 5504, 5505, 5506, 5507]);'),
+    'a guarded booking body must carry the reviewed module');
+  const prefix = guarded.router.slice(0, guarded.router.indexOf('\nconst pricing'));
+  const canonical = new Function('global', `${prefix}\nreturn canonical;`)({ get: () => null });
+  assert.equal(canonical.isProTrainingExercise({ direction: { id: 5507, name: 'Тренировка ПРО уровень C/C+' } }), true);
+  assert.equal(canonical.isProTrainingExercise({ direction: { id: 3108, name: 'Первая пробная тренировка' } }), false);
+  assert.equal(canonical.isProTrainingExercise({ direction: { id: 9999, name: 'Аренда со скидкой - Профсоюзная' } }), false);
+});
+
 test('the composition injects the reader and accessor the installed body lacks', requiresResolver, () => {
   // A generation whose helper closure no longer carries the policy reader (for
   // example because lk1Config moved to the resolver) still has to get one.
