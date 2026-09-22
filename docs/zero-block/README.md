@@ -43,11 +43,14 @@
 | `academy` | Академия | 30 дней | API, academy |
 | `ra` | РА | 30 дней | API, ra |
 | `energy5` | Энергия 5 | 60 дней, 5 занятий | API, energy5 |
+| `atlanty` | ДРУЖБА.АТЛАНТЫ | 30 дней | каталог клуба, 6 800 ₽ (прежняя 9 800 ₽) |
 | `friendship-promo` | Дружба, акция Питера | 30 дней | каталог акции, 4 900 ₽ |
 | `academy-promo` | Академия, акция Питера | 30 дней | каталог акции, 11 900 ₽ |
 | `ra-promo` | РА, акция Питера | 30 дней | каталог акции, 11 900 ₽ |
 
 Акционные цены статические; их нужно обновлять вместе с каталогом при изменении акции. Это не персональный расчёт CRM. Счётчики обычных подписок не используются для акций. Применимость предложения проверяется при оформлении. Для годовой Дружбы нельзя подставлять месячный остаток.
+
+`atlanty` — прямой продукт Viva без счётчика: цена тоже статическая (каталог клуба), из status API не читается, а пустой product id закрывает оформление. Годовой клубный вариант (`atlanty-year`) появится вместе с его product id.
 
 ## Настройка вставки
 
@@ -110,6 +113,7 @@ window.phSubscriptions.destroy();
 
 ```js
 window.LKWidgetSubscriptionStorefront.openCheckout('friendship-year');
+window.LKWidgetSubscriptionStorefront.openCheckout('atlanty'); // ДРУЖБА.АТЛАНТЫ, 6 800 ₽
 window.LKWidgetSubscriptionStorefront.closeCheckout();
 window.LKWidgetSubscriptionStorefront.resumeCheckout();
 ```

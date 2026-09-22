@@ -3,6 +3,7 @@ import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveStorefrontBillingTarget, StorefrontPaymentError } from './payment';
 import { createStorefrontPromoPayment, hasPromoPaymentAttempt } from './promoPayment';
 import { resolveStorefrontPromo } from './promo';
+import { ATLANTY_MONTHLY_PRICE_MINOR } from './catalog';
 
 export const ZERO_CHECKOUT_RETURN = 'phCheckoutReturn';
 const ATTEMPT_PREFIX = 'padlhub_zero_checkout_attempt_v1:';
@@ -40,10 +41,28 @@ export async function withZeroDeadline<T>(operation: Promise<T>, timeoutMs = 20_
   } finally { clearTimeout(timer); }
 }
 
-export function resolveZeroOffer(key: string) {
+/** One resolved Zero Block offer. `staticPriceMinor` marks an offer with no LK counter. */
+export interface ZeroOffer {
+  key: string;
+  label: string;
+  period: string;
+  planId: string;
+  billingOptionId: 'monthly' | 'annual';
+  target: ReturnType<typeof resolveStorefrontBillingTarget> | null;
+  promo: ReturnType<typeof resolveStorefrontPromo> | null;
+  /** Catalogue price for direct products the status API does not know about. */
+  staticPriceMinor?: number;
+}
+
+export function resolveZeroOffer(key: string): ZeroOffer | null {
   const promo = resolveStorefrontPromo(key);
   if (promo) return { key, label: `${promo.planKey === 'friendship' ? 'Дружба' : promo.planKey === 'academy' ? 'Академия' : 'РА'} · Питер`,
-    period: '30 дней', promo, planId: promo.planKey, billingOptionId: 'monthly' as const, target: null };
+    period: '30 дней', promo, planId: promo.planKey, billingOptionId: 'monthly', target: null };
+  // The club subscription is a direct product without a counter: its price is the
+  // catalogue price, so it must never be looked up through the status API.
+  if (key === 'atlanty') return { key, label: 'ДРУЖБА.АТЛАНТЫ', period: '30 дней', planId: 'atlanty',
+    billingOptionId: 'monthly', target: resolveStorefrontBillingTarget('atlanty', 'monthly'), promo: null,
+    staticPriceMinor: ATLANTY_MONTHLY_PRICE_MINOR };
   const labels: Record<string, string> = { friendship: 'Дружба', 'friendship-year': 'Дружба', academy: 'Академия', ra: 'РА', energy5: 'Энергия 5' };
   if (!Object.prototype.hasOwnProperty.call(labels, key)) return null;
   const planId = key === 'friendship-year' ? 'friendship' : key;
@@ -56,6 +75,10 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
   const offer = resolveZeroOffer(key);
   if (!offer) throw new StorefrontPaymentError('Предложение не найдено.');
   if (offer.promo) return offer.promo.priceMinor;
+  if (typeof offer.staticPriceMinor === 'number') {
+    if (!Number.isSafeInteger(offer.staticPriceMinor) || offer.staticPriceMinor <= 0) throw new StorefrontPaymentError('Предложение недоступно.');
+    return offer.staticPriceMinor;
+  }
   if (!offer.target) throw new StorefrontPaymentError('Предложение недоступно.');
   const result = await request<unknown>('/lk/tournaments/summer-subscription/status?counterKey=' + encodeURIComponent(offer.target.counterKey),
     { method: 'GET', baseUrl: getServ2Origin() || '', signal, retries: 0 });
