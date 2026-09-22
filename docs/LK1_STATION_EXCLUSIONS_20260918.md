@@ -79,7 +79,7 @@ guarded-запись с readback для `initialize` узла).
 ## Релизный поезд
 
 Поколение собрано и проверено против **свежего живого флоу** (read-only pull 2026-09-18,
-`a948f18b…`, 4804 узла; тело booking-узла — генерация после `lk1-confirmed-replay-guard`,
+`3ecadce7…`, 4804 узла; тело booking-узла — генерация после `lk1-confirmed-replay-guard`,
 `3920bb21…`):
 
 - `scripts/patch_live_lk1_station_exclusions_hotfix.mjs` — focused-генерация
@@ -89,7 +89,7 @@ guarded-запись с readback для `initialize` узла).
   `lk1Config`-фрагмента на reviewed-версии, станция во всех шести решениях о контуре
   плюс `exercise` в проекции product identity, writer нового глобала в `initialize`;
   превью пересобирается композицией `previewSources()` на уже пропатченном теле.
-  Кандидат: `f89fd3d7…`, contract exact-graph принят, узлов не добавлено.
+  Кандидат: `1b3a77de…`, contract exact-graph принят, узлов не добавлено.
 - `scripts/deploy_nodered_lk1_station_exclusions_147.sh` +
   `npm run nodered:lk1-station-exclusions:deploy-147` — guarded apply под
   `NODE_RED_LK1_STATION_EXCLUSIONS_DEPLOY=CONFIRM_147`, чистый main, exact-graph
@@ -118,7 +118,7 @@ guarded-запись с readback для `initialize` узла).
   снапшотом в `LK1_STATION_EXCLUSIONS_LIVE_SNAPSHOT`): **384 pass / 0 fail / 43 skipped**
   (скипы — приватные live-фикстуры, которых нет на этой машине);
 - генерация против живого снапшота: `lk1StationExclusionsHotfix` 4/4 — кандидат
-  `f89fd3d7…`, ровно 2 узла / 3 поля, 0 добавленных, contract exact-graph принят,
+  `1b3a77de…`, ровно 2 узла / 3 поля, 0 добавленных, contract exact-graph принят,
   повторное применение отказано по имени;
 - ESLint по изменённым файлам — 0 ошибок, `git diff --check` чист;
 - новый тест зарегистрирован в `check_10` workflow

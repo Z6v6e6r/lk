@@ -156,9 +156,9 @@
    (2 узла / 2 поля: booking `func`, preview `func`; пины upstream-флоу и postimage, дельты с
    якорями «после проверки identity упражнения» и «перед шагом exercise», `buildExactGraphContract`,
    отчёт с `deploymentPerformed: false`). Она **уложена поверх постобраза генерации «Сириус»**:
-   upstream `408cd41e…` = постобраз `patch_live_lk1_station_exclusions_hotfix.mjs`, поэтому
+   upstream `1b3a77de…` = постобраз `patch_live_lk1_station_exclusions_hotfix.mjs`, поэтому
    порядок apply — сначала «Сириус», потом ПРО; патчер отказывается работать на до-станционном
-   флоу. Проверено на локальном снапшоте: кандидат `030e3961…`, 0 добавленных узлов,
+   флоу. Проверено на локальном снапшоте: кандидат `bcc9fd6b…`, 0 добавленных узлов,
    booking `0211ba40…`, preview `1cdeddc3…`, `scripts/tests/proTrainingExclusionHotfix.test.mjs`
    4/4.
 3. **Перепиновка, которую вызывает это изменение.** Любая правка `router.js`/`previewSources()`
@@ -166,7 +166,7 @@
    осознанно.
    - **Сделано в этой ветке:** `STATION_EXCLUSIONS_TARGET.patchedPreviewFuncSha256` в
      `scripts/patch_live_lk1_station_exclusions_hotfix.mjs` перепривязан на `df5c4ba1…`.
-     Значение пересчитано из того же выверенного live-снапшота (`a948f18b…`, 4804 узла),
+     Значение пересчитано из свежего read-only pull (`3ecadce7…`, 4804 узла),
      которым пользовалась генерация «Сириус», и подтверждено её снапшот-тестом
      (`lk1StationExclusionsHotfix` 4/4). Booking-postimage этой генерации не изменился
      (`fc1ca544…`), затронут только узел превью.
@@ -188,12 +188,12 @@
    `PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE` + модуль в теле записи и настоящий предикат в
    превью, smoke LK-backend, авто-rollback) и `package.json`-скрипт
    `nodered:lk1-pro-training-exclusions:deploy-147`. Локально проверено: независимый contract
-   даёт `sourceSha256 408cd41e…`, `candidateSha256 030e3961…`, `changedNodeCount 2`,
+   даёт `sourceSha256 1b3a77de…`, `candidateSha256 bcc9fd6b…`, `changedNodeCount 2`,
    `addedNodeCount 0`, `allowedChanges` = booking:func + preview:func; постчек-логика
    симулирована на подложном `flows.json` (пропуск отказа, пропуск вызова и инертная заглушка
    в превью — отказ).
 5. **Осталось:** свежий read-only pull `147` на проходе apply (upstream-пин должен
-   воспроизвести `408cd41e…`; иначе — осознанная перепривязка) и явное CRITICAL-разрешение
+   воспроизвести `1b3a77de…`; иначе — осознанная перепривязка) и явное CRITICAL-разрешение
    на apply с порядком «станция → ПРО».
 6. `PLAN_RULES_MODULE_SHA256` / `PLAN_RULES_CONFIG_FRAGMENT_SHA256` /
    `PLAN_RULES_REVIEWED_EVALUATOR_SHA256` (`scripts/patch_live_lk1_plan_rules.mjs`)

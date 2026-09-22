@@ -9,7 +9,7 @@
 // full-price one-time purchase stays; promo codes are untouched.
 //
 // This generation is applied to the *installed* flow (2026-09-18 pull from lk-primary-147,
-// `a948f18b…`, 4804 nodes) and changes exactly two fields of two nodes:
+// `3ecadce7…`, 4804 nodes) and changes exactly two fields of two nodes:
 //   1. `lk_subscription_booking_router_20260804.func` — the reviewed PRO-training module
 //      (scripts/lib/proTrainingExclusion.mjs) embedded once, plus the refusal as the first
 //      statement of the exercise step: after the Viva exercise identity check, before the
@@ -34,15 +34,15 @@ export const PRO_TRAINING_EXCLUSIONS_KIND = "FOCUSED_LK1_PRO_TRAINING_EXCLUSIONS
 
 // Reviewed preimage: the *postimage* of the Sirius station-exclusions generation
 // (`scripts/patch_live_lk1_station_exclusions_hotfix.mjs`) composed on the read-only
-// 2026-09-18 pull from lk-primary-147 (`a948f18b…`, 4804 nodes). PRO is stacked on that
+// 2026-09-18 pull from lk-primary-147 (`3ecadce7…`, 4804 nodes). PRO is stacked on that
 // generation by owner decision, so the two are applied in order and this patcher refuses to
 // run on the pre-station flow. At real apply the fresh pull must reproduce this sha (or the
 // new pins must be re-reviewed as a delta).
 export const PRO_TRAINING_EXCLUSIONS_UPSTREAM_SHA256 =
-  "408cd41eea8a299571f229d0059b0ece884decf42aecd31d2abb09a488a1f308";
+  "1b3a77de8da6bc4c2474bc051317bf12153f796eed7a738dd4c2af8ed3a1299d";
 // Kept for provenance: the flow the upstream generation itself was composed on.
 export const PRO_TRAINING_EXCLUSIONS_SOURCE_SHA256 =
-  "a948f18b8e85c4931d44cf4ecfe52354a19d0c003e8fa8526e9126abb4a2d1ca";
+  "3ecadce7052ff73ab0ccd768760fde9d8a3dd97b8c19e68533ad514c6cb6bd95";
 export const PRO_TRAINING_EXCLUSIONS_SOURCE_NODE_COUNT = 4804;
 export const PRO_TRAINING_EXCLUSIONS_BOOKING_ID = "lk_subscription_booking_router_20260804";
 export const PRO_TRAINING_EXCLUSIONS_PREVIEW_ID = "lk_subscription_price_preview_20260908_router";

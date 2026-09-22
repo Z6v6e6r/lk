@@ -103,7 +103,7 @@ test("the generation applies to the reviewed upstream flow as exactly two change
     { id: PRO_TRAINING_EXCLUSIONS_BOOKING_ID, fields: ["func"] },
     { id: PRO_TRAINING_EXCLUSIONS_PREVIEW_ID, fields: ["func"] },
   ]);
-  assert.equal(composed.candidateSha256, "030e39613ca13e143236a3ac7f71b216ad3bffe3635bd805b54bf52a75b20e0b");
+  assert.equal(composed.candidateSha256, "bcc9fd6b2d2c42da731a8895d8e3b90c2d5f6cfbf0c17f26908ec9a59b935307");
   assert.equal(composed.booking.moduleEmbeddedOnce, true);
   assert.equal(composed.booking.refusalBound, true);
   assert.equal(composed.booking.refusalPrecedesContour, true);

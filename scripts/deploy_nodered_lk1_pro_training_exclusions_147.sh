@@ -16,7 +16,7 @@
 # the existing activation globals stay byte-identical, and no node is added.
 #
 # This generation is stacked on the Sirius station-exclusions generation by owner decision:
-# its reviewed preimage is that generation's postimage (`408cd41e…`), so the two are applied
+# its reviewed preimage is that generation's postimage (`1b3a77de…`), so the two are applied
 # in order and this deployment refuses the pre-station flow.
 #
 # Requires an explicit confirmation variable, a clean main checkout equal to origin/main,
