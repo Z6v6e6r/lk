@@ -1,5 +1,12 @@
 import { API_BASE, TENANT_KEY } from "../consts/api_config";
 import {
+  ATLANTY_SCHEDULE_FALLBACK_MESSAGE,
+  classifyAtlantyFetchError,
+  createAtlantyFailure,
+  shouldRetryAtlantyFailure,
+  type AtlantyScheduleFailure,
+} from "./atlantyScheduleErrors";
+import {
   ATLANTY_DEFAULT_TIME_ZONE,
   buildAtlantyCategoriesSignature,
   buildAtlantyPeriodUrl,
@@ -15,7 +22,12 @@ import {
 
 export type AtlantyScheduleResult = {
   data: AtlantyScheduleEvent[] | null;
-  error: { status?: number; message: string } | null;
+  error: {
+    status?: number;
+    message: string;
+    /** Запрос отменён вызывающей стороной — показывать ошибку не нужно. */
+    aborted?: boolean;
+  } | null;
 };
 
 export type AtlantyScheduleFetchOptions = {
@@ -47,6 +59,9 @@ export const ATLANTY_SCHEDULE_MAX_EVENTS = 24;
 /** 0 — без квоты: витрина берёт ближайшие maxEvents событий подряд. */
 export const ATLANTY_SCHEDULE_MAX_PER_CATEGORY = 0;
 export const ATLANTY_SCHEDULE_REQUEST_TIMEOUT_MS = 12_000;
+export const ATLANTY_SCHEDULE_RETRY_TIMEOUT_MS = 20_000;
+export const ATLANTY_SCHEDULE_REQUEST_ATTEMPTS = 2;
+export const ATLANTY_SCHEDULE_RETRY_DELAY_MS = 700;
 export const ATLANTY_SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const CACHE_STORAGE_KEY = "atlanty-schedule-cache-v2";
@@ -120,10 +135,32 @@ export function buildAtlantyScheduleUrl(params: {
   });
 }
 
-async function fetchJson(url: string, signal?: AbortSignal) {
+function delay(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const timeoutId = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timeoutId);
+      resolve();
+    }, { once: true });
+  });
+}
+
+async function fetchJsonOnce(
+  url: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<unknown> {
+  if (signal?.aborted) {
+    throw createAtlantyFailure("aborted", "caller signal already aborted");
+  }
+
   const controller = typeof AbortController === "function" ? new AbortController() : null;
+  let timedOut = false;
   const timeoutId = controller
-    ? setTimeout(() => controller.abort(), ATLANTY_SCHEDULE_REQUEST_TIMEOUT_MS)
+    ? setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs)
     : null;
   const abortFromCaller = () => controller?.abort();
   signal?.addEventListener("abort", abortFromCaller, { once: true });
@@ -136,15 +173,50 @@ async function fetchJson(url: string, signal?: AbortSignal) {
       signal: controller?.signal,
     });
     if (!response.ok) {
-      throw Object.assign(new Error(`Расписание недоступно (${response.status})`), {
-        status: response.status,
-      });
+      throw createAtlantyFailure("http", `http ${response.status}`, response.status);
     }
     return (await response.json()) as unknown;
+  } catch (error) {
+    throw classifyAtlantyFetchError(error, {
+      timedOut,
+      callerAborted: Boolean(signal?.aborted),
+    });
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     signal?.removeEventListener("abort", abortFromCaller);
   }
+}
+
+/**
+ * Загружает JSON с одной повторной попыткой: короткий обрыв связи или
+ * задумавшийся сервер не должны оставлять витрину пустой.
+ */
+async function fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
+  let lastFailure: AtlantyScheduleFailure = createAtlantyFailure("network", "no attempts made");
+
+  for (let attempt = 0; attempt < ATLANTY_SCHEDULE_REQUEST_ATTEMPTS; attempt += 1) {
+    const timeoutMs = attempt === 0
+      ? ATLANTY_SCHEDULE_REQUEST_TIMEOUT_MS
+      : ATLANTY_SCHEDULE_RETRY_TIMEOUT_MS;
+    try {
+      return await fetchJsonOnce(url, signal, timeoutMs);
+    } catch (error) {
+      const failure = classifyAtlantyFetchError(error);
+      lastFailure = failure;
+      const isLastAttempt = attempt + 1 >= ATLANTY_SCHEDULE_REQUEST_ATTEMPTS;
+      if (failure.kind === "aborted" || isLastAttempt || !shouldRetryAtlantyFailure(failure.kind)) {
+        throw failure;
+      }
+      try {
+        console.warn("[atlanty-schedule] повтор запроса расписания:", failure.reason);
+      } catch {
+        /* консоль может быть недоступна */
+      }
+      await delay(ATLANTY_SCHEDULE_RETRY_DELAY_MS * (attempt + 1), signal);
+    }
+  }
+
+  throw lastFailure;
 }
 
 function readPageState(payload: unknown) {
@@ -220,14 +292,22 @@ export async function apiFetchAtlantyEvents(
     writeCache(cacheKey, events);
     return { data: events, error: null };
   } catch (error) {
-    const status = (error as { status?: number } | null)?.status;
+    const failure = classifyAtlantyFetchError(error);
+    if (failure.kind !== "aborted") {
+      try {
+        console.warn("[atlanty-schedule] не удалось загрузить расписание:", failure.reason);
+      } catch {
+        /* консоль может быть недоступна */
+      }
+    }
     return {
       data: null,
       error: {
-        status,
-        message: error instanceof Error && error.message
-          ? error.message
-          : "Не удалось загрузить расписание",
+        status: failure.status,
+        message: failure.kind === "aborted"
+          ? ""
+          : failure.message || ATLANTY_SCHEDULE_FALLBACK_MESSAGE,
+        ...(failure.kind === "aborted" ? { aborted: true } : {}),
       },
     };
   }

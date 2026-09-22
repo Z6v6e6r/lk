@@ -313,6 +313,8 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
       signal: controller?.signal,
     }).then((result) => {
       if (!active) return;
+      // Отмена запроса (размонтирование или смена конфига) — не ошибка.
+      if (result.error?.aborted) return;
       if (result.error || !result.data) {
         setStatus("error");
         setErrorMessage(result.error?.message || "Не удалось загрузить расписание");
