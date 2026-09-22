@@ -235,7 +235,7 @@ export function composeProTrainingArtifacts(rawSource, options = {}) {
       refusalBound: booking.func.includes("PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE")
         && booking.func.includes('resolveCategory(exercise) === "group_training"'),
       refusalPrecedesContour: booking.func.indexOf("PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE")
-        < booking.func.indexOf("const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);"),
+        < booking.func.indexOf("const selectedRule = lk1Config(selectedOwned, exercise?.studio?.id || exercise?.studioId || null);"),
     },
     preview: {
       id: PRO_TRAINING_ENERGY_EXCLUSIONS_PREVIEW_ID,
