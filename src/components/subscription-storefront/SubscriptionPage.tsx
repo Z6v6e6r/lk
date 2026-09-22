@@ -4,10 +4,11 @@ import { CABINET_URL } from '../../consts/api_config';
 import { useAuth } from '../../context/AuthContext';
 import { SubscriptionStorefront } from './SubscriptionStorefront';
 import { AuthForm } from '../auth/AuthForm';
-import { summerPlanPresentation, friendshipVariantBenefits } from './presentation';
+import { summerPlanPresentation, friendshipVariantBenefits, atlantyPlanPresentation } from './presentation';
 import {
   billingFromStatus, canContinue, energy5BillingOptions, requiresAnnualTermsConsent, storefrontPlanKeysForSearch,
   friendshipBillingOptions, scopedStorefrontStatuses,
+  ATLANTY_PLAN_ID, ATLANTY_VARIANT, atlantyBillingOptions, normalizeStorefrontVariant,
   type StorefrontStatus,
 } from './catalog';
 import type { SubscriptionPlanSelection, SubscriptionStorefrontView } from './model';
@@ -29,12 +30,18 @@ import markUrl from './assets/brand/подписка.svg';
 const PAYMENT_CONFIRM_ATTEMPTS = 3;
 const PAYMENT_CONFIRM_RETRY_MS = 4000;
 
-export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
+export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   onBack?: () => void;
   cabinetUrl?: string | null;
   previewView?: SubscriptionStorefrontView;
+  /** Variant requested by the hosting Tilda block; URL `variant` is the fallback. */
+  variant?: string | null;
 }) {
   const { isAuthenticated } = useAuth();
+  const searchVariant = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('variant');
+  // An empty host value (a Tilda block whose data prop is blank) must not shadow
+  // the documented `?variant=` fallback.
+  const isAtlantyVariant = (normalizeStorefrontVariant(variant) ?? normalizeStorefrontVariant(searchVariant)) === ATLANTY_VARIANT;
   const [statuses, setStatuses] = useState<readonly StorefrontStatus[] | null>(null);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -49,7 +56,8 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
   const confirmationStartedRef = useRef(false);
 
   useEffect(() => {
-    if (previewView) return;
+    // The club page sells direct products, so it has no counter to poll.
+    if (previewView || isAtlantyVariant) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
@@ -79,7 +87,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
     }
     void refresh();
     return () => { cancelled = true; clearTimeout(timer); controller?.abort(); };
-  }, [attempt, previewView]);
+  }, [attempt, previewView, isAtlantyVariant]);
 
   /**
    * Confirms a payment created by this widget once the bank returns the visitor
@@ -188,40 +196,55 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
   }, []);
 
   const planKeys = storefrontPlanKeysForSearch(typeof window === 'undefined' ? '' : window.location.search);
-  const plans = planKeys.flatMap(key => {
-    const status = statuses?.find(item => item.counterKey === key);
-    if (!status && key !== 'friendship') return [];
-    const billingOptions = key === 'friendship'
-      ? friendshipBillingOptions(statuses ?? [], error).map(option => ({
-        ...option,
-        benefitGroups: friendshipVariantBenefits[option.id],
-      }))
-      : key === 'energy5'
-        ? energy5BillingOptions(status)
-        : status ? billingFromStatus(status) : [];
-    if (!billingOptions.length) return [];
-    return [{
-      ...summerPlanPresentation[key], id: key, billingOptions,
-      ctaLabel: processing
-        ? 'Создаём оплату…'
-        : (key === 'energy5' ? 'Оформить абонемент' : 'Оформить подписку'),
-      ctaDisabled: processing || (key === 'friendship' ? error : !status || !canContinue(status, error)),
-    }];
-  });
-  const view = previewView ?? {
-    id: 'lk1-subscriptions', title: 'Играй в падел выгодно',
-    description: 'Выберите подписку под свой ритм игры', markUrl, markAlt: 'Подписка',
-    sections: [{ id: 'subscriptions-monthly', plans }],
-  };
+  const plans = isAtlantyVariant
+    ? [{
+      ...atlantyPlanPresentation,
+      id: ATLANTY_PLAN_ID,
+      billingOptions: atlantyBillingOptions(),
+      ctaLabel: processing ? 'Создаём оплату…' : 'Оформить подписку',
+      ctaDisabled: processing,
+    }]
+    : planKeys.flatMap(key => {
+      const status = statuses?.find(item => item.counterKey === key);
+      if (!status && key !== 'friendship') return [];
+      const billingOptions = key === 'friendship'
+        ? friendshipBillingOptions(statuses ?? [], error).map(option => ({
+          ...option,
+          benefitGroups: friendshipVariantBenefits[option.id],
+        }))
+        : key === 'energy5'
+          ? energy5BillingOptions(status)
+          : status ? billingFromStatus(status) : [];
+      if (!billingOptions.length) return [];
+      return [{
+        ...summerPlanPresentation[key], id: key, billingOptions,
+        ctaLabel: processing
+          ? 'Создаём оплату…'
+          : (key === 'energy5' ? 'Оформить абонемент' : 'Оформить подписку'),
+        ctaDisabled: processing || (key === 'friendship' ? error : !status || !canContinue(status, error)),
+      }];
+    });
+  const view = previewView ?? (isAtlantyVariant
+    ? {
+      id: 'lk1-subscription-atlanty', title: 'ДРУЖБА.АТЛАНТЫ',
+      description: 'Подписка клуба «Атланты»', markUrl, markAlt: 'Подписка',
+      sections: [{ id: 'subscription-atlanty', plans }],
+    }
+    : {
+      id: 'lk1-subscriptions', title: 'Играй в падел выгодно',
+      description: 'Выберите подписку под свой ритм игры', markUrl, markAlt: 'Подписка',
+      sections: [{ id: 'subscriptions-monthly', plans }],
+    });
 
   /**
    * A failed status refresh stays silent: the cards keep the last known data and
    * the 30-second loop retries on its own. Only first load and the genuinely
-   * empty catalogue talk to the visitor.
+   * empty catalogue talk to the visitor. The club page needs no status at all.
    */
-  const statusNotice = error ? null
-    : !statuses ? 'Загружаем подписки…'
-      : !plans.length ? 'Сейчас нет доступных предложений.' : null;
+  const statusNotice = isAtlantyVariant ? null
+    : error ? null
+      : !statuses ? 'Загружаем подписки…'
+        : !plans.length ? 'Сейчас нет доступных предложений.' : null;
 
   return <>
     {!previewView && statusNotice && <div className="subscription-storefront" style={{ minHeight: 0 }}>
@@ -234,7 +257,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView }: {
         </div> : statusNotice}
       </div>
     </div>}
-    {(previewView || statuses) && <>
+    {(previewView || statuses || isAtlantyVariant) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}
       {failure && <p className="subscription-status-message subscription-status-message--error" role="alert">{failure}</p>}
       <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }} />

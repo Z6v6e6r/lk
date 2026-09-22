@@ -1,12 +1,28 @@
+import {
+  parseGroupScheduleDirectionIds,
+  resolveGroupScheduleDirectionPreset,
+  type GroupScheduleDirectionPreset,
+} from "./groupScheduleModel.ts";
+
 const DEFAULT_GROUP_SCHEDULE_ORIGIN = "https://padlhub.ru";
 
 export const DEFAULT_GROUP_SCHEDULE_PATH = "/group";
+
+const GROUP_SCHEDULE_DIRECTION_QUERY_PARAMS = [
+  "direction",
+  "directionId",
+  "directionIds",
+  "directions",
+  "4lGIgL_direction",
+] as const;
 
 export type GroupScheduleEntryData = {
   exerciseId: string | null;
   date: string | null;
   studioId: string | null;
   returnToFindGame: boolean;
+  directionIds: number[];
+  directionLabel: string | null;
 };
 
 function firstNonEmpty(...values: Array<string | null | undefined>) {
@@ -16,6 +32,27 @@ function firstNonEmpty(...values: Array<string | null | undefined>) {
 function isFindGameReturnSource(value: string | null) {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized === "finde_game" || normalized === "find_game";
+}
+
+function readGroupScheduleDirectionFilter(current: URL) {
+  const tokens = GROUP_SCHEDULE_DIRECTION_QUERY_PARAMS
+    .flatMap((param) => current.searchParams.getAll(param))
+    .flatMap((value) => String(value || "").split(/[,;\s]+/))
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const preset = tokens
+    .map((token) => resolveGroupScheduleDirectionPreset(token))
+    .find((value): value is GroupScheduleDirectionPreset => value !== null) ?? null;
+  const directionIds = parseGroupScheduleDirectionIds(tokens);
+  const ids = preset
+    ? Array.from(new Set([...preset.directionIds, ...directionIds]))
+    : directionIds;
+
+  return {
+    directionIds: ids,
+    directionLabel: ids.length > 0 ? preset?.label ?? null : null,
+  };
 }
 
 export function normalizeGroupScheduleDate(value: unknown) {
@@ -33,6 +70,7 @@ export function normalizeGroupScheduleDate(value: unknown) {
 
 export function readGroupScheduleEntryDataFromHref(href: string): GroupScheduleEntryData {
   const current = new URL(href, DEFAULT_GROUP_SCHEDULE_ORIGIN);
+  const directionFilter = readGroupScheduleDirectionFilter(current);
   return {
     exerciseId: firstNonEmpty(
       current.searchParams.get("exerciseId"),
@@ -54,6 +92,8 @@ export function readGroupScheduleEntryDataFromHref(href: string): GroupScheduleE
       current.searchParams.get("returnTo"),
       current.searchParams.get("source"),
     )),
+    directionIds: directionFilter.directionIds,
+    directionLabel: directionFilter.directionLabel,
   };
 }
 

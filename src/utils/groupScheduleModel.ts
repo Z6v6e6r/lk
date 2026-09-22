@@ -15,6 +15,37 @@ export const GROUP_SCHEDULE_AVAILABLE_STUDIO_IDS = [
   GROUP_SCHEDULE_PITER_STUDIO_ID,
 ] as const;
 
+export const GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS: number[] = [2468, 2975, 3163];
+
+export type GroupScheduleDirectionPreset = {
+  label: string;
+  directionIds: number[];
+};
+
+export const GROUP_SCHEDULE_DIRECTION_PRESETS: Record<string, GroupScheduleDirectionPreset> = {
+  kids: {
+    label: "Детская академия падел",
+    directionIds: GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS,
+  },
+};
+
+export function resolveGroupScheduleDirectionPreset(
+  key: string | null | undefined,
+): GroupScheduleDirectionPreset | null {
+  const normalized = String(key ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  return GROUP_SCHEDULE_DIRECTION_PRESETS[normalized] ?? null;
+}
+
+export function parseGroupScheduleDirectionIds(tokens: string[]) {
+  const ids: number[] = [];
+  tokens.forEach((token) => {
+    const parsed = Number(String(token ?? "").trim());
+    if (Number.isInteger(parsed) && parsed > 0) ids.push(parsed);
+  });
+  return Array.from(new Set(ids));
+}
+
 export type GroupTrainingStatus = "AVAILABLE" | "FULL" | "CANCELLED";
 
 export type GroupScheduleTrainer = {

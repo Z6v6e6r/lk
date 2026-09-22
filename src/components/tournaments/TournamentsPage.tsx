@@ -2051,7 +2051,6 @@ function TournamentDetailsModal({
               tournamentFamily: "mexicano",
               tournamentSubtype: "paired",
               mexicanoMode: "paired",
-              totalRounds: Math.max(1, completedMexicanoPairs.length - 1),
               pairAssignments: completedMexicanoPairs,
               readyParticipantIds: readyParticipantIdsForPayload,
               ...(rosterMode === "manual"

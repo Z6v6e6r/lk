@@ -83,6 +83,59 @@ export function energy5BillingOptions(status: StorefrontStatus | undefined): Sub
   }];
 }
 
+/** URL variant that turns the storefront into the single-card «ДРУЖБА.АТЛАНТЫ» page. */
+export const ATLANTY_VARIANT = 'atlanty';
+export const ATLANTY_PLAN_ID = 'atlanty';
+/**
+ * Direct Viva product of the club's 30-day plan. It stays out of
+ * `TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS`: only this storefront variant
+ * resolves it.
+ */
+export const ATLANTY_MONTHLY_PRODUCT_ID = '3907d127-a6b0-419e-a933-4a2857f26356';
+/**
+ * Annual «Дружба.Атланты». The operator has not issued the Viva product id yet,
+ * so the annual option stays disabled until this exact value is filled in.
+ */
+export const ATLANTY_ANNUAL_PRODUCT_ID = '';
+/** Club prices are operator-owned: the API has no counter for these direct products. */
+export const ATLANTY_MONTHLY_PRICE_MINOR = 680000;
+export const ATLANTY_MONTHLY_COMPARE_MINOR = 980000;
+export const ATLANTY_ANNUAL_PRICE_MINOR = 6800000;
+export const ATLANTY_ANNUAL_COMPARE_MINOR = 9800000;
+
+export function normalizeStorefrontVariant(value: string | null | undefined): string | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized || null;
+}
+
+/**
+ * «ДРУЖБА.АТЛАНТЫ» sells two direct Viva products: a discounted 30-day plan and
+ * a discounted annual plan. Both prices are static club prices, so the card is
+ * unavailable whenever its product id is missing; the bank stays the price owner.
+ * The «месяц 2 часа» placeholder of the shared friendship card is intentionally absent.
+ */
+export function atlantyBillingOptions(): SubscriptionPlanView['billingOptions'] {
+  const annualProductId = String(ATLANTY_ANNUAL_PRODUCT_ID || '').trim();
+  return [
+    {
+      id: 'monthly',
+      label: 'месяц',
+      priceMinor: ATLANTY_MONTHLY_PRICE_MINOR,
+      priceCompareMinor: ATLANTY_MONTHLY_COMPARE_MINOR,
+      priceSuffix: '/ 30 дней',
+    },
+    {
+      id: 'annual',
+      label: 'год',
+      priceMinor: ATLANTY_ANNUAL_PRICE_MINOR,
+      priceCompareMinor: ATLANTY_ANNUAL_COMPARE_MINOR,
+      priceSuffix: '/ год',
+      ctaDisabled: !annualProductId,
+      ...(annualProductId ? {} : { ctaLabel: 'Скоро', statusMessage: 'Годовой вариант появится в продаже позже' }),
+    },
+  ];
+}
+
 
 /** Annual inventory is authoritative only when returned by its explicit request. */
 export function scopedStorefrontStatuses<T extends StorefrontStatus>(statuses: T[], counterKey?: string | null): T[] {
