@@ -447,6 +447,7 @@ test("повтор запроса только для восстановимых
 test("пул фото раскладывается в абсолютные URL без дублей", () => {
   const pool = resolveAtlantyCardImages(undefined);
   assert.equal(pool.length, ATLANTY_CARD_IMAGES.length);
+  assert.equal(pool.length, 28);
   assert.ok(pool.every((url) => url.startsWith(ATLANTY_CARD_IMAGE_BASE)));
   assert.ok(pool.includes(`${ATLANTY_CARD_IMAGE_BASE}hero-tournament.webp`));
 

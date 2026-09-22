@@ -1,0 +1,12 @@
+<!--
+  Tilda, «Настройки сайта» → «Ещё» → «HTML-код для вставки внутрь head».
+
+  Необязательный, но полезный блок: витрина грузится цепочкой
+  release.json → бандл → события из Viva → фото, и первые три шага идут на
+  api.vivacrm.ru и padlhub.su. Preconnect убирает DNS/TLS-задержку на каждый
+  из этих доменов (обычно 100–300 мс на первом показе).
+-->
+<link rel="preconnect" href="https://api.vivacrm.ru" crossorigin>
+<link rel="preconnect" href="https://padlhub.su" crossorigin>
+<link rel="dns-prefetch" href="https://api.vivacrm.ru">
+<link rel="dns-prefetch" href="https://padlhub.su">
