@@ -188,6 +188,18 @@ test("binary asset exceptions are exact and content-addressed", async () => {
       "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
     ],
     [
+      "src/assets/piter-subscription-tier-2.webp",
+      "1918332d5cacc149ec72469fc12b3b159646790e68ebbd31392f015bde0b2aa4",
+    ],
+    [
+      "src/assets/piter-subscription-tier-3.webp",
+      "a28240a4cff9b8288c0176b4b869979525d56b869632542f9fd0907b0706ff2a",
+    ],
+    [
+      "src/assets/piter-subscription-tier-4.webp",
+      "da27c600e0985217aa8a1449239edb412728e92b6c4fe0172ae7c7bacc15926e",
+    ],
+    [
       "src/assets/network-subscription.webp",
       "83a8f2ccf39908a6cbe7b5692598fdd1624a9d0a03784cb8a6815fd69b276ef6",
     ],
