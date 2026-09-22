@@ -80,7 +80,7 @@ test("the focused generation and the composed gateway carry the same reviewed re
   const hooks = read("../nodered_lk1_hub_nodes/gateway_hooks.js");
   // The composed gateway hook and the focused generation must state one and the same refusal.
   assert.ok(hooks.includes(refusal) && hooks.includes(code), "the composed gateway hook carries the refusal");
-  assert.ok(hooks.includes('resolveCategory(exercise) === "group_training" && isProTrainingExercise(exercise)'));
+  assert.match(hooks, /resolveCategory\(exercise\) === "group_training"\s*\n\s*&& isProTrainingExercise\(exercise\)\s*\n\s*&& !proTrainingEnergyAllowed/);
   const applyDelta = PRO_TRAINING_CALL_SITE_DELTAS.find((delta) => delta.id === "refuse-pro-training");
   assert.ok(applyDelta.after.includes(refusal) && applyDelta.after.includes(code),
     "the focused generation inserts the identical refusal");

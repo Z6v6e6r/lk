@@ -234,7 +234,9 @@
     "build:subscription-storefront:dev": "vite build --config vite.config.subscription-storefront.ts --mode dev && node scripts/write-release.mjs dist/subscription-storefront release-dev.json",
     "test:pro-training-exclusion": "node --experimental-strip-types --test scripts/tests/proTrainingExclusion.test.ts scripts/tests/proTrainingExclusion.nodered.test.mjs scripts/tests/lk1PlanRulesPreview.test.mjs scripts/tests/groupEventPayment.test.mjs",
     "test:lk1-pro-training-exclusions-generation": "node --experimental-strip-types --test scripts/tests/proTrainingExclusionHotfix.test.mjs",
-    "nodered:lk1-pro-training-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh"
+    "nodered:lk1-pro-training-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh",
+    "nodered:lk1-pro-training-energy-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_energy_exclusions_147.sh",
+    "test:lk1-pro-training-energy-exclusions-generation": "node --test scripts/tests/proTrainingEnergyExclusionHotfix.test.mjs"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

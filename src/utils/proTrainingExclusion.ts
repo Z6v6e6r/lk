@@ -2,10 +2,10 @@
  * PRO-level trainings stay outside every subscription benefit.
  *
  * A PRO training is paid at its full one-time price: the LK1 contour quotes no
- * discount for it (no plan percentage and no free-first-event), no owned
- * subscription can book it, no subscription package can be bought against it,
- * and the "БЕСПЛАТНО по подписке" offer is not shown. Promo codes are not part
- * of this rule.
+ * discount for it (no plan percentage and no free-first-event), while an owned
+ * Energy 5/25 visit pack may consume one visit. Other owned subscriptions and
+ * new subscription packages stay unavailable, and the "БЕСПЛАТНО по подписке"
+ * offer is not shown. Promo codes are not part of this rule.
  *
  * The same rule is embedded in the Node-RED contour
  * (`scripts/lib/proTrainingExclusion.mjs`): the booking gateway refuses a

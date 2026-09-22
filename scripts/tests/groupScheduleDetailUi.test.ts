@@ -180,6 +180,7 @@ test("detail signup has a single price list and the training subscription storef
 
 test("an owned plan outside the money contour keeps a booking option of its own", () => {
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedSubscriptions/);
+  assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);
   assert.doesNotMatch(groupSchedulePageSource, /ownedVisitPacks/);
   assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout/);
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedSubscriptions\(checkout\.clientSubscriptions, discountPending \? null : currentDiscountQuotes\)/);

@@ -19,7 +19,7 @@ import {
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isProTraining } from "../../utils/proTrainingExclusion";
-import { getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
+import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
 import { hasGroupTrainingSubscription, hasGroupTrainingSubscriptionEvidence } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import {
@@ -711,8 +711,10 @@ export default function GroupSchedulePage({
     : proTrainingSelected ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
   // Owned subscriptions stay bookable on their own terms when the price check proves no
   // managed discount for them (a plan sold before the LK1 rule is quoted at zero percent).
-  const ownedSubscriptions = checkout && !proTrainingSelected
-    ? getGroupScheduleOwnedSubscriptions(checkout.clientSubscriptions, discountPending ? null : currentDiscountQuotes)
+  const ownedSubscriptions = checkout
+    ? proTrainingSelected
+      ? getGroupScheduleOwnedPacks(checkout.clientSubscriptions)
+      : getGroupScheduleOwnedSubscriptions(checkout.clientSubscriptions, discountPending ? null : currentDiscountQuotes)
     : [];
   const isGamePlusTrainerDetail = selectedTraining ? isGamePlusTrainerSummary(selectedTraining) : false;
   const detailDescription = selectedTraining
@@ -1231,7 +1233,7 @@ export default function GroupSchedulePage({
                     )}
                     {!subscriptionUsageShadowEnabled && proTrainingSelected && (
                       <div className="tournament-signup-muted" role="note">
-                        ПРО-тренировка оплачивается по полной цене: подписки и скидка по подписке на неё не действуют.
+                        ПРО-тренировка оплачивается по полной цене. Списать посещение можно только с «Энергии 5» или «Энергии 25».
                       </div>
                     )}
                     {!subscriptionUsageShadowEnabled && registrationLoading && (
