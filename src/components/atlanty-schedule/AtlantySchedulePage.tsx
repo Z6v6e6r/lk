@@ -6,15 +6,19 @@ import {
   type AtlantyScheduleEvent,
 } from "../../utils/atlantyScheduleModel";
 import {
+  normalizeAtlantyImagePick,
+  pickAtlantyCardImage,
+  resolveAtlantyCardImages,
+  shuffleAtlantyImages,
+  type AtlantyImagePick,
+} from "../../utils/atlantyScheduleImages";
+import {
   buildAtlantyCardWidth,
   normalizeAtlantyDisplayOptions,
   type AtlantyDisplayOptions,
 } from "../../utils/atlantyScheduleTheme";
-import {
-  ATLANTY_VIVA_INSTANCE,
-  buildAtlantyVivaAnchorHref,
-  rememberAtlantyExercise,
-} from "../../utils/atlantyVivaBridge";
+import { AtlantyEventModal } from "./AtlantyEventModal";
+import { ATLANTY_VIVA_INSTANCE } from "../../utils/atlantyVivaBridge";
 import "./AtlantySchedulePage.css";
 
 export type AtlantyScheduleConfig = {
@@ -43,6 +47,12 @@ export type AtlantyScheduleConfig = {
   levelStyle?: string | null;
   /** Сколько карточек в ряд; 0 — фиксированная ширина. */
   cardsPerView?: number | string | null;
+  /** Свой пул фото для шапки карточки (по умолчанию — клубный набор). */
+  images?: ReadonlyArray<string> | null;
+  /** "shuffle" — перемешать при загрузке | "hash" — стабильно по id события. */
+  imagePick?: string | null;
+  /** Открывать карточку события по клику (по умолчанию да). */
+  detailModal?: boolean;
 };
 
 export type AtlantyCategoryInput = {
@@ -133,30 +143,45 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
 export function AtlantyCard({
   event,
   pillLabel,
-  vivaInstance,
   options,
+  imageUrl = null,
+  onOpen,
 }: {
   event: AtlantyScheduleEvent;
   pillLabel: string;
-  vivaInstance: string;
   options: AtlantyDisplayOptions;
+  imageUrl?: string | null;
+  onOpen?: (event: AtlantyScheduleEvent, imageUrl: string | null) => void;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const mediaUrl = imageUrl || event.photoUrl;
+  const showImage = Boolean(mediaUrl) && !imageFailed;
   const levelStyle = options.levelStyle ?? "meta";
   return (
     <li className="atlanty-slide">
-      <a
+      <button
+        type="button"
         className="atlanty-card"
-        href={buildAtlantyVivaAnchorHref(event.id, vivaInstance)}
         aria-label={`${event.title}, ${event.dateTimeLabel}`}
-        onClick={() => rememberAtlantyExercise(event.id, vivaInstance)}
+        aria-haspopup={onOpen ? "dialog" : undefined}
+        onClick={() => onOpen?.(event, mediaUrl ?? null)}
       >
         <div className="atlanty-card-media">
-          {event.photoUrl ? (
-            <img src={event.photoUrl} alt="" loading="lazy" decoding="async" />
+          {showImage ? (
+            <img
+              src={mediaUrl as string}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              onError={() => setImageFailed(true)}
+            />
           ) : (
             <div className="atlanty-card-media-fallback" aria-hidden="true">
               {event.title}
             </div>
+          )}
+          {event.badgeLabel && (
+            <span className="atlanty-card-badge">{event.badgeLabel}</span>
           )}
           <div className="atlanty-card-date">
             <span className="atlanty-card-date-day">{event.dayLabel}</span>
@@ -234,7 +259,7 @@ export function AtlantyCard({
             </div>
           )}
         </div>
-      </a>
+      </button>
     </li>
   );
 }
@@ -282,6 +307,26 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
       config.cardsPerView,
     ],
   );
+  const imagePick = useMemo<AtlantyImagePick>(
+    () => normalizeAtlantyImagePick(config.imagePick),
+    [config.imagePick],
+  );
+  // Перемешиваем один раз за загрузку: при листании фото не «прыгают».
+  const cardImages = useMemo(
+    () => shuffleAtlantyImages(resolveAtlantyCardImages(config.images)),
+    [config.images],
+  );
+  const detailModalEnabled = config.detailModal !== false;
+  const [openEvent, setOpenEvent] = useState<{ event: AtlantyScheduleEvent; imageUrl: string | null } | null>(null);
+
+  const handleOpenEvent = useCallback(
+    (event: AtlantyScheduleEvent, imageUrl: string | null) => {
+      if (!detailModalEnabled) return;
+      setOpenEvent({ event, imageUrl });
+    },
+    [detailModalEnabled],
+  );
+
   const cardWidth = buildAtlantyCardWidth(displayOptions.cardsPerView);
   const rootStyle = cardWidth
     ? ({ "--atlanty-card-width": cardWidth } as CSSProperties)
@@ -430,16 +475,32 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
         </div>
       )}
 
+      {openEvent && (
+        <AtlantyEventModal
+          event={openEvent.event}
+          imageUrl={openEvent.imageUrl}
+          pillLabel={pillLabel}
+          vivaInstance={vivaInstance}
+          onClose={() => setOpenEvent(null)}
+        />
+      )}
+
       {hasEvents && (
         <div className="atlanty-slider">
           <ul className="atlanty-track" ref={trackRef}>
-            {events.map((event) => (
+            {events.map((event, index) => (
               <AtlantyCard
                 key={event.id}
                 event={event}
                 pillLabel={pillLabel}
-                vivaInstance={vivaInstance}
                 options={displayOptions}
+                imageUrl={pickAtlantyCardImage({
+                  images: cardImages,
+                  seed: event.id,
+                  index,
+                  pick: imagePick,
+                })}
+                onOpen={handleOpenEvent}
               />
             ))}
           </ul>

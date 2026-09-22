@@ -20,6 +20,8 @@ export type AtlantyCategory = {
   typeId?: number | null;
   /** Текст пилюли на карточке; по умолчанию — название направления. */
   label?: string | null;
+  /** Бейдж на шапке карточки, например «50% скидка по подписке». */
+  badge?: string | null;
   /** `false` временно выключает категорию, не удаляя её из конфига. */
   enabled?: boolean;
 };
@@ -33,9 +35,24 @@ export const ATLANTY_DEFAULT_CATEGORIES: readonly AtlantyCategory[] = [
  * `directionId` — направление Viva, `typeId` — тип занятия (нужен попапу записи).
  */
 export const ATLANTY_CATEGORY_PRESETS: Record<string, AtlantyCategory> = {
-  atlanty: { directionId: 6152, typeId: 2349, label: "Время Атланты" },
-  friends: { directionId: 5278, typeId: 839, label: "Время на друзей" },
-  "friends-special": { directionId: 5280, typeId: 1013, label: "Время на друзей" },
+  atlanty: {
+    directionId: 6152,
+    typeId: 2349,
+    label: "Время Атланты",
+    badge: "Бесплатно по подписке",
+  },
+  friends: {
+    directionId: 5278,
+    typeId: 839,
+    label: "Время на друзей",
+    badge: "50% скидка по подписке",
+  },
+  "friends-special": {
+    directionId: 5280,
+    typeId: 1013,
+    label: "Время на друзей",
+    badge: "50% скидка по подписке",
+  },
 };
 
 export function resolveAtlantyCategoryPreset(
@@ -75,6 +92,10 @@ export type AtlantyScheduleEvent = {
   pillLabel: string;
   /** Ключ категории события — для квот по категориям. */
   categoryKey: string;
+  /** Бейдж категории на шапке карточки. */
+  badgeLabel: string | null;
+  /** Описание направления — для карточки события. */
+  description: string | null;
   photoUrl: string | null;
   startAt: string;
   endAt: string;
@@ -193,7 +214,7 @@ export function normalizeAtlantyCategories(value: unknown): AtlantyCategory[] {
 function normalizeAtlantyCategoryEntry(item: unknown): AtlantyCategory | null {
   if (typeof item === "number") {
     return Number.isFinite(item)
-      ? { directionId: Math.trunc(item), typeId: null, label: null }
+      ? { directionId: Math.trunc(item), typeId: null, label: null, badge: null }
       : null;
   }
 
@@ -206,10 +227,13 @@ function normalizeAtlantyCategoryEntry(item: unknown): AtlantyCategory | null {
         directionId: preset.directionId ?? null,
         typeId: preset.typeId ?? null,
         label: preset.label ?? null,
+        badge: preset.badge ?? null,
       };
     }
     const directionId = toCategoryId(raw);
-    return directionId === null ? null : { directionId, typeId: null, label: null };
+    return directionId === null
+      ? null
+      : { directionId, typeId: null, label: null, badge: null };
   }
 
   if (!isRecord(item)) return null;
@@ -227,9 +251,13 @@ function normalizeAtlantyCategoryEntry(item: unknown): AtlantyCategory | null {
     (typeof item.label === "string" && item.label.trim() ? item.label.trim() : null)
     ?? preset?.label
     ?? null;
+  const badge =
+    (typeof item.badge === "string" && item.badge.trim() ? item.badge.trim() : null)
+    ?? preset?.badge
+    ?? null;
 
   if (directionId === null && typeId === null) return null;
-  return { directionId, typeId, label };
+  return { directionId, typeId, label, badge };
 }
 
 /** Категории из конфига или корпоративная по умолчанию. */
@@ -523,6 +551,8 @@ export function normalizeAtlantyEvent(
       || typeName
       || ATLANTY_DEFAULT_PILL_LABEL,
     categoryKey: buildAtlantyCategoryKey(category),
+    badgeLabel: category.badge ? String(category.badge).trim() || null : null,
+    description: pickString(direction, ["description", "body", "text"]),
     photoUrl:
       pickString(direction, ["photoWeb", "photo"])
       || pickString(value, ["photoWeb", "photo", "photoUrl", "imageUrl"]),

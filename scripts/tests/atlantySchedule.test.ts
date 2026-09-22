@@ -31,6 +31,15 @@ import {
   normalizeAtlantyDisplayOptions,
 } from "../../src/utils/atlantyScheduleTheme.ts";
 import {
+  ATLANTY_CARD_IMAGES,
+  ATLANTY_CARD_IMAGE_BASE,
+  hashAtlantyImageIndex,
+  normalizeAtlantyImagePick,
+  pickAtlantyCardImage,
+  resolveAtlantyCardImages,
+  shuffleAtlantyImages,
+} from "../../src/utils/atlantyScheduleImages.ts";
+import {
   buildAtlantyVivaAnchorHref,
   getAtlantyExerciseStorageKey,
   readAtlantyVivaExerciseParam,
@@ -76,16 +85,16 @@ test("категории задаются пресетами, id и объект
   assert.deepEqual(
     normalizeAtlantyCategories(["atlanty", "friends"]),
     [
-      { directionId: 6152, typeId: 2349, label: "Время Атланты" },
-      { directionId: 5278, typeId: 839, label: "Время на друзей" },
+      { directionId: 6152, typeId: 2349, label: "Время Атланты", badge: "Бесплатно по подписке" },
+      { directionId: 5278, typeId: 839, label: "Время на друзей", badge: "50% скидка по подписке" },
     ],
   );
   assert.deepEqual(
     normalizeAtlantyCategories([6152, "5278", { directionId: 7000, typeId: 900, label: "Время Патриотов" }]),
     [
-      { directionId: 6152, typeId: null, label: null },
-      { directionId: 5278, typeId: null, label: null },
-      { directionId: 7000, typeId: 900, label: "Время Патриотов" },
+      { directionId: 6152, typeId: null, label: null, badge: null },
+      { directionId: 5278, typeId: null, label: null, badge: null },
+      { directionId: 7000, typeId: 900, label: "Время Патриотов", badge: null },
     ],
   );
   // Выключенные, пустые и дубли категории отбрасываются.
@@ -97,8 +106,30 @@ test("категории задаются пресетами, id и объект
       { preset: "atlanty" },
       null,
     ]),
-    [{ directionId: 6152, typeId: 2349, label: "Время Атланты" }],
+    [{ directionId: 6152, typeId: 2349, label: "Время Атланты", badge: "Бесплатно по подписке" }],
   );
+});
+
+test("бейдж категории попадает в карточку", () => {
+  const categories = normalizeAtlantyCategories([
+    { directionId: 6152, typeId: 2349, label: "Время Атланты", badge: "Бесплатно по подписке" },
+    { directionId: 5278, typeId: 839, label: "Время на друзей", badge: "50% скидка по подписке" },
+  ]);
+  const atlanty = normalizeAtlantyEvent(corporateExercise, { categories });
+  const friends = normalizeAtlantyEvent(
+    { ...corporateExercise, id: "f1", direction: { id: 5278, name: "Время на друзей", description: "Игровые турниры" }, type: { id: 839 } },
+    { categories },
+  );
+  assert.equal(atlanty?.badgeLabel, "Бесплатно по подписке");
+  assert.equal(friends?.badgeLabel, "50% скидка по подписке");
+  assert.equal(friends?.description, "Игровые турниры");
+  assert.equal(atlanty?.description, "Корпоратинвые мероприятия клуба Атланты");
+
+  // Без бейджа в конфиге карточка остаётся без бейджа.
+  const plain = normalizeAtlantyEvent(corporateExercise, {
+    categories: normalizeAtlantyCategories([{ directionId: 6152, typeId: 2349 }]),
+  });
+  assert.equal(plain?.badgeLabel, null);
 });
 
 test("несколько категорий попадают в один запрос, ручной набор не сводится к directions", () => {
@@ -411,6 +442,64 @@ test("повтор запроса только для восстановимых
   assert.equal(shouldRetryAtlantyFailure("network"), true);
   assert.equal(shouldRetryAtlantyFailure("aborted"), false);
   assert.equal(shouldRetryAtlantyFailure("http"), false);
+});
+
+test("пул фото раскладывается в абсолютные URL без дублей", () => {
+  const pool = resolveAtlantyCardImages(undefined);
+  assert.equal(pool.length, ATLANTY_CARD_IMAGES.length);
+  assert.ok(pool.every((url) => url.startsWith(ATLANTY_CARD_IMAGE_BASE)));
+  assert.ok(pool.includes(`${ATLANTY_CARD_IMAGE_BASE}hero-tournament.webp`));
+
+  const custom = resolveAtlantyCardImages([
+    "my-photo.webp",
+    "https://example.test/abs.png",
+    "/local/root.webp",
+    "my-photo.webp",
+    42,
+  ]);
+  assert.deepEqual(custom, [
+    `${ATLANTY_CARD_IMAGE_BASE}my-photo.webp`,
+    "https://example.test/abs.png",
+    "/local/root.webp",
+  ]);
+  assert.deepEqual(resolveAtlantyCardImages([]), []);
+});
+
+test("перемешивание сохраняет состав и воспроизводится с тем же random", () => {
+  const pool = ["a", "b", "c", "d", "e"];
+  const sequence = () => {
+    const values = [0.1, 0.7, 0.3, 0.9, 0.5];
+    let index = 0;
+    return () => values[index++ % values.length];
+  };
+  const first = shuffleAtlantyImages(pool, sequence());
+  const second = shuffleAtlantyImages(pool, sequence());
+  assert.deepEqual(first, second);
+  assert.notDeepEqual(first, pool);
+  assert.deepEqual([...first].sort(), [...pool].sort());
+});
+
+test("фото на карточке: перемешивание по позиции и стабильный hash по id", () => {
+  const pool = ["a.webp", "b.webp", "c.webp"];
+
+  assert.equal(normalizeAtlantyImagePick("hash"), "hash");
+  assert.equal(normalizeAtlantyImagePick("shuffle"), "shuffle");
+  assert.equal(normalizeAtlantyImagePick("что-то"), "shuffle");
+
+  // Перемешивание: соседние карточки получают разные фото, индекс зацикливается.
+  assert.equal(pickAtlantyCardImage({ images: pool, seed: "x", index: 0 }), "a.webp");
+  assert.equal(pickAtlantyCardImage({ images: pool, seed: "x", index: 2 }), "c.webp");
+  assert.equal(pickAtlantyCardImage({ images: pool, seed: "x", index: 3 }), "a.webp");
+
+  // Hash-режим: одинаковый id — одинаковое фото, в пределах пула.
+  const first = pickAtlantyCardImage({ images: pool, seed: "event-1", index: 0, pick: "hash" });
+  const again = pickAtlantyCardImage({ images: pool, seed: "event-1", index: 2, pick: "hash" });
+  assert.equal(first, again);
+  assert.ok(pool.includes(first as string));
+  assert.ok(hashAtlantyImageIndex("event-1", 3) >= 0 && hashAtlantyImageIndex("event-1", 3) < 3);
+  assert.equal(hashAtlantyImageIndex("event-1", 0), 0);
+
+  assert.equal(pickAtlantyCardImage({ images: [], seed: "x", index: 0 }), null);
 });
 
 test("карточка ссылается на виджет записи Viva", () => {
