@@ -18,7 +18,11 @@ import {
   type AtlantyDisplayOptions,
 } from "../../utils/atlantyScheduleTheme";
 import { AtlantyEventModal } from "./AtlantyEventModal";
-import { ATLANTY_VIVA_INSTANCE } from "../../utils/atlantyVivaBridge";
+import {
+  ATLANTY_VIVA_INSTANCE,
+  buildAtlantyVivaAnchorHref,
+  rememberAtlantyExercise,
+} from "../../utils/atlantyVivaBridge";
 import "./AtlantySchedulePage.css";
 
 export type AtlantyScheduleConfig = {
@@ -146,26 +150,22 @@ export function AtlantyCard({
   options,
   imageUrl = null,
   onOpen,
+  vivaInstance = ATLANTY_VIVA_INSTANCE,
 }: {
   event: AtlantyScheduleEvent;
   pillLabel: string;
   options: AtlantyDisplayOptions;
   imageUrl?: string | null;
   onOpen?: (event: AtlantyScheduleEvent, imageUrl: string | null) => void;
+  /** Нужен для резервного режима, когда карточка события отключена. */
+  vivaInstance?: string;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const mediaUrl = imageUrl || event.photoUrl;
   const showImage = Boolean(mediaUrl) && !imageFailed;
   const levelStyle = options.levelStyle ?? "meta";
-  return (
-    <li className="atlanty-slide">
-      <button
-        type="button"
-        className="atlanty-card"
-        aria-label={`${event.title}, ${event.dateTimeLabel}`}
-        aria-haspopup={onOpen ? "dialog" : undefined}
-        onClick={() => onOpen?.(event, mediaUrl ?? null)}
-      >
+  const cardContent = (
+    <>
         <div className="atlanty-card-media">
           {showImage ? (
             <img
@@ -259,7 +259,31 @@ export function AtlantyCard({
             </div>
           )}
         </div>
-      </button>
+    </>
+  );
+
+  return (
+    <li className="atlanty-slide">
+      {onOpen ? (
+        <button
+          type="button"
+          className="atlanty-card"
+          aria-label={`${event.title}, ${event.dateTimeLabel}`}
+          aria-haspopup="dialog"
+          onClick={() => onOpen(event, mediaUrl ?? null)}
+        >
+          {cardContent}
+        </button>
+      ) : (
+        <a
+          className="atlanty-card"
+          href={buildAtlantyVivaAnchorHref(event.id, vivaInstance)}
+          aria-label={`${event.title}, ${event.dateTimeLabel}`}
+          onClick={() => rememberAtlantyExercise(event.id, vivaInstance)}
+        >
+          {cardContent}
+        </a>
+      )}
     </li>
   );
 }
@@ -321,10 +345,9 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
 
   const handleOpenEvent = useCallback(
     (event: AtlantyScheduleEvent, imageUrl: string | null) => {
-      if (!detailModalEnabled) return;
       setOpenEvent({ event, imageUrl });
     },
-    [detailModalEnabled],
+    [],
   );
 
   const cardWidth = buildAtlantyCardWidth(displayOptions.cardsPerView);
@@ -500,7 +523,8 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
                   index,
                   pick: imagePick,
                 })}
-                onOpen={handleOpenEvent}
+                onOpen={detailModalEnabled ? handleOpenEvent : undefined}
+                vivaInstance={vivaInstance}
               />
             ))}
           </ul>

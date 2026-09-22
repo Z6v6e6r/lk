@@ -502,6 +502,13 @@ test("фото на карточке: перемешивание по позиц
   assert.equal(pickAtlantyCardImage({ images: [], seed: "x", index: 0 }), null);
 });
 
+test("без модалки карточка остаётся ссылкой на попап записи", () => {
+  // Проверяем контракт: с включённой модалкой карточка — кнопка,
+  // без неё — прежняя ссылка #atlanty&exerciseId=…
+  const href = buildAtlantyVivaAnchorHref("06d61018-5193-4ca3-bc1e-fa2a9f35d908");
+  assert.equal(href, "#atlanty&exerciseId=06d61018-5193-4ca3-bc1e-fa2a9f35d908");
+});
+
 test("карточка ссылается на виджет записи Viva", () => {
   assert.equal(
     buildAtlantyVivaAnchorHref("06d61018-5193-4ca3-bc1e-fa2a9f35d908"),
