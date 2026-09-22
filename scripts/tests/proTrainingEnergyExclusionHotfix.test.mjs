@@ -21,7 +21,7 @@ test("the Energy generation replaces the installed all-subscriptions PRO guard",
     { id: "lk_subscription_booking_router_20260804", fields: ["func"] },
     { id: "lk_subscription_price_preview_20260908_router", fields: ["func"] },
   ]);
-  assert.equal(built.candidateSha256, "d227eb3b95758059ca058c5c6c0f64dafb42349c0ed1e86c48ab554f8bb1cfc9");
+  assert.equal(built.candidateSha256, "5b030bf1154eb64bb4de22402e0032ae801a093b03a16276db71ca2db848a601");
   const booking = built.flow.find(node => node.id === "lk_subscription_booking_router_20260804").func;
   assert.match(booking, /function isProTrainingEnergyPack\(value\) \{/);
   assert.match(booking, /PRO_TRAINING_ENERGY_PRODUCT_IDS/);

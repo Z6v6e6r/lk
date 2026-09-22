@@ -42,10 +42,10 @@ export const PRO_TRAINING_ENERGY_EXCLUSIONS_TARGET = Object.freeze({
   bookingId: PRO_TRAINING_ENERGY_EXCLUSIONS_BOOKING_ID,
   // sha256 of the booking body of the reviewed upstream generation (station postimage).
   liveBookingFuncSha256: "0211ba40e79d20a330269777272599e299620de2c295767bbb76677c0fbb2c8c",
-  patchedBookingFuncSha256: "06d8acfce30e4bde9a77476c2c02315da7774ce015ecf724cea4db0c1e511260",
+  patchedBookingFuncSha256: "864c846f69c4ccbcdd44c7b2f68942b47a4a8f67470cb4cb77caf2e46550567e",
   previewId: PRO_TRAINING_ENERGY_EXCLUSIONS_PREVIEW_ID,
   livePreviewFuncSha256: "1cdeddc35c885bbf3fb4fbc5e0914c1a2c44809765c2ef020e7ce01823ccc3ff",
-  patchedPreviewFuncSha256: "e6931b71c7b68723203660d0d3fbf7bf97135716005bfb398817437199b13ec0",
+  patchedPreviewFuncSha256: "794a6ae1113d970dca6844b16952ec7f9a2d84cd2ed45a6f821b5eb2eabb1e7b",
 });
 
 // The installed preview composition pins of this generation: the split/join bodies and the

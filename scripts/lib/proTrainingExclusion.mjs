@@ -27,6 +27,9 @@ export const PRO_TRAINING_DIRECTION_IDS = Object.freeze([5502, 5503, 5504, 5505,
 const PRO_TRAINING_NAME_TOKEN = /(^|[^a-zа-яё0-9])про([^a-zа-яё0-9]|$)/i;
 const PRO_TRAINING_ENERGY_PRODUCT_IDS = new Set([
   "dfa72adf-233b-4285-8d69-e5eab4234fbe",
+  // The live subscription-media flow carries this Energy 25 catalog id alongside
+  // the exact product name; keep the name fallback for providers that omit product ids.
+  "9fb759fd-f70c-4395-84e7-57716df97e14",
 ]);
 
 const proTrainingIsRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);

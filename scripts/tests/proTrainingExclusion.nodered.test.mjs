@@ -52,6 +52,7 @@ test("the server rule matches the owner-named PRO directions and nothing else", 
   assert.equal(isProTrainingEnergyPack({ name: "Энергия 5 🎾" }), true);
   assert.equal(isProTrainingEnergyPack({ product: { name: "Энергия 25" } }), true);
   assert.equal(isProTrainingEnergyPack({ productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe", name: "Энергия 5 🎾" }), true);
+  assert.equal(isProTrainingEnergyPack({ productId: "9fb759fd-f70c-4395-84e7-57716df97e14", name: "Энергия 25" }), true);
   assert.equal(isProTrainingEnergyPack({ productId: "unknown", name: "Энергия 5" }), false);
   assert.equal(isProTrainingEnergyPack({ name: "Энергия 5", visitsLeft: 0 }), false);
   assert.equal(isProTrainingEnergyPack({ name: "Энергия 5", visitsLeft: 1 }), true);
