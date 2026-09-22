@@ -1,0 +1,286 @@
+.atlanty-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  background: rgba(16, 16, 18, 0.55);
+  font-family: var(--atlanty-font-body, "Inter Display", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  color: var(--atlanty-text, #111114);
+  -webkit-font-smoothing: antialiased;
+}
+
+.atlanty-modal *,
+.atlanty-modal *::before,
+.atlanty-modal *::after {
+  box-sizing: border-box;
+}
+
+.atlanty-modal__dialog {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  max-height: 92vh;
+  overflow-y: auto;
+  border-radius: 22px 22px 0 0;
+  background: var(--atlanty-surface, #fff);
+  box-shadow: 0 -10px 40px rgba(16, 16, 18, 0.28);
+}
+
+.atlanty-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--atlanty-text, #111114);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(16, 16, 18, 0.18);
+}
+
+.atlanty-modal__close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.atlanty-modal__media {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 22px 22px 0 0;
+  background: linear-gradient(135deg, #8f5cff 0%, #5b2fd6 55%, #2b1057 100%);
+}
+
+.atlanty-modal__media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.atlanty-modal__media-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 14px 16px;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: var(--atlanty-font-display, "RF Dewi UltraBold", sans-serif);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.atlanty-modal__badge {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #2a203f;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 4px 14px rgba(16, 16, 18, 0.16);
+}
+
+.atlanty-modal__date {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 7px 9px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(6px);
+}
+
+.atlanty-modal__date-day {
+  font-family: var(--atlanty-font-display, "RF Dewi UltraBold", sans-serif);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.atlanty-modal__date-weekday {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--atlanty-muted, #6b6b72);
+  text-transform: uppercase;
+}
+
+.atlanty-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 18px 20px;
+}
+
+.atlanty-modal__title {
+  margin: 0;
+  font-family: var(--atlanty-font-display, "RF Dewi UltraBold", sans-serif);
+  font-size: calc(var(--atlanty-title-size, 22px) + 2px);
+  font-weight: 800;
+  line-height: 1.12;
+  text-transform: var(--atlanty-title-transform, uppercase);
+}
+
+.atlanty-modal__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--atlanty-meta-size, 14px);
+  font-weight: 500;
+}
+
+.atlanty-modal__meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.atlanty-modal__meta-row svg {
+  flex: 0 0 var(--atlanty-meta-icon-size, 18px);
+  width: var(--atlanty-meta-icon-size, 18px);
+  height: var(--atlanty-meta-icon-size, 18px);
+  opacity: 0.85;
+}
+
+.atlanty-modal__slots {
+  display: flex;
+  align-items: stretch;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--atlanty-border, rgba(17, 17, 20, 0.08));
+  border-radius: 999px;
+  background: var(--atlanty-surface, #fff);
+}
+
+.atlanty-modal__slots .atlanty-card-slots-count,
+.atlanty-modal__slots .atlanty-card-slots-places {
+  display: flex;
+  flex: 1 1 50%;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.atlanty-modal__slots .atlanty-card-slots-count {
+  background: var(--atlanty-surface-muted, #f1f2f4);
+  font-size: var(--atlanty-seats-size, 14px);
+  font-weight: 500;
+}
+
+.atlanty-modal__slots .atlanty-card-slots-places {
+  border-left: 1px solid var(--atlanty-border, rgba(17, 17, 20, 0.08));
+  color: var(--atlanty-accent, #7a4df0);
+  font-size: var(--atlanty-seats-places-size, 12px);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.atlanty-modal__slots .atlanty-card-slots-places.is-full {
+  color: var(--atlanty-muted, #6b6b72);
+}
+
+.atlanty-modal__trainer,
+.atlanty-modal__description {
+  margin: 0;
+  font-size: var(--atlanty-meta-size, 14px);
+  line-height: 1.45;
+  color: var(--atlanty-text, #111114);
+}
+
+.atlanty-modal__description {
+  color: var(--atlanty-muted, #6b6b72);
+  white-space: pre-line;
+}
+
+.atlanty-modal__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.atlanty-modal__cta,
+.atlanty-modal__secondary {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.atlanty-modal__cta {
+  border: 0;
+  background: var(--atlanty-accent, #7a4df0);
+  color: #fff;
+}
+
+.atlanty-modal__secondary {
+  flex: 0 0 auto;
+  border: 1px solid var(--atlanty-border, rgba(17, 17, 20, 0.12));
+  background: transparent;
+  color: var(--atlanty-text, #111114);
+}
+
+.atlanty-modal__close:focus-visible,
+.atlanty-modal__cta:focus-visible,
+.atlanty-modal__secondary:focus-visible {
+  outline: 2px solid var(--atlanty-accent, #7a4df0);
+  outline-offset: 2px;
+}
+
+@media (min-width: 640px) {
+  .atlanty-modal {
+    align-items: center;
+    padding: 24px;
+  }
+
+  .atlanty-modal__dialog {
+    border-radius: 22px;
+    max-height: 88vh;
+  }
+
+  .atlanty-modal__media {
+    border-radius: 22px 22px 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atlanty-modal__dialog {
+    scroll-behavior: auto;
+  }
+}
