@@ -19,7 +19,7 @@ import {
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isProTraining } from "../../utils/proTrainingExclusion";
-import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
+import { getProEnergyPackName, getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
 import { hasGroupTrainingSubscription, hasGroupTrainingSubscriptionEvidence } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import {
@@ -1231,7 +1231,7 @@ export default function GroupSchedulePage({
                         </button>
                       </div>
                     )}
-                    {!subscriptionUsageShadowEnabled && proTrainingSelected && (
+                    {!subscriptionUsageShadowEnabled && proTrainingSelected && ownedSubscriptions.length === 0 && (
                       <div className="tournament-signup-muted" role="note">
                         ПРО-тренировка оплачивается по полной цене. Списать посещение можно только с «Энергии 5» или «Энергии 25».
                       </div>
@@ -1292,7 +1292,7 @@ export default function GroupSchedulePage({
                                 onClick={() => void completeRegistration(selectedTraining, checkout, product)}
                                 disabled={actionLoading}
                               >
-                                <span>{product.name}</span>
+                                <span>{proTrainingSelected ? `Списать с «${getProEnergyPackName(product)}»` : product.name}</span>
                                 <strong>
                                   {resolveSubscriptionUsageDisplay({
                                     subscriptionName: product.name,

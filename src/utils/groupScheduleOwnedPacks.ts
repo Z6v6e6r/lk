@@ -1,6 +1,6 @@
 import type { TournamentVivaProduct } from "./tournamentSignupApi";
 import type { GroupSubscriptionDiscountQuote } from "./groupSubscriptionDiscount.ts";
-import { isEnergyVisitPackSubscriptionName, pickSubscriptionVisitsLeft } from "./subscriptionValidity.ts";
+import { pickSubscriptionVisitsLeft } from "./subscriptionValidity.ts";
 
 const ENERGY_VISIT_PRODUCT_IDS = new Set([
   "dfa72adf-233b-4285-8d69-e5eab4234fbe", // Энергия 5
@@ -8,22 +8,43 @@ const ENERGY_VISIT_PRODUCT_IDS = new Set([
 ]);
 
 function normalizeComparableId(value: unknown) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+  return typeof value === "string" ? value.trim().toLowerCase()
+    : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+}
+
+/** Match the catalog identity checked by the server; instance ids are not product ids. */
+export function getProEnergyPackName(product: TournamentVivaProduct): string | null {
+  const raw = asRecord(product.raw);
+  const catalog = asRecord(raw.product);
+  const subscription = asRecord(raw.subscription);
+  const ids = [raw.productId, raw.subscriptionProductId, raw.templateId,
+    catalog.id, catalog.uuid, catalog.productId,
+    subscription.productId, subscription.subscriptionProductId,
+  ].map(normalizeComparableId).filter(Boolean);
+  if (ids.length) {
+    if (!ids.every(id => ENERGY_VISIT_PRODUCT_IDS.has(id))) return null;
+    return ids[0] === "dfa72adf-233b-4285-8d69-e5eab4234fbe" ? "Энергия 5" : "Энергия 25";
+  }
+  const names = [raw.subscriptionName, raw.productName, raw.name, raw.title,
+    subscription.name, catalog.name, asRecord(raw.clientSubscription).name,
+    asRecord(raw.clientSub).name, product.name];
+  for (const name of names) {
+    if (typeof name !== "string") continue;
+    const normalized = name.toLocaleLowerCase("ru-RU")
+      .replace(/[^a-zа-яё0-9]+/gi, " ").replace(/\s+/g, " ").trim();
+    const matched = /^(энергия|energy) (5|25)$/.exec(normalized);
+    if (matched) return `Энергия ${matched[2]}`;
+  }
+  return null;
 }
 
 function isEnergyVisitPackProduct(product: TournamentVivaProduct) {
-  if (isEnergyVisitPackSubscriptionName(product.name)) return true;
-  const raw = product.raw;
-  if (!raw || typeof raw !== "object") return false;
-  const record = raw as Record<string, unknown>;
-  return [
-    product.id,
-    record.id,
-    record.uuid,
-    record.productId,
-    record.subscriptionId,
-    record.clientSubscriptionId,
-  ].some(value => ENERGY_VISIT_PRODUCT_IDS.has(normalizeComparableId(value)));
+  return getProEnergyPackName(product) !== null;
 }
 
 /** Only visit packs already offered for this exercise by the checkout API. */
