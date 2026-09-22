@@ -1,8 +1,8 @@
 // PRO-level trainings stay outside every subscription benefit, on both sides of the
 // contour: the advisory price preview quotes nothing for them and the atomic booking
-// gateway refuses a subscription booking of any product (managed plan or legacy
-// visit pack). A PRO training is paid at its full one-time price; promo codes are not
-// part of this rule.
+// gateway refuses managed plans while allowing only an owned Energy 5/25 visit pack.
+// A PRO training is paid at its full one-time price; promo codes are not part of this
+// rule.
 //
 // Owner decision 2026-09-18: "Тренировка ПРО уровень …" (5505/5506/5507, exercise type
 // 605) and "Игра+Тренер ПРО уровень …" (5502/5503/5504, exercise type 847) must not be
@@ -25,6 +25,9 @@ export const PRO_TRAINING_DIRECTION_IDS = Object.freeze([5502, 5503, 5504, 5505,
 // "ПРО" must be a standalone token: "Профсоюзная", "пробная" and "просто" are ordinary
 // directions in the same catalogue and must never match.
 const PRO_TRAINING_NAME_TOKEN = /(^|[^a-zа-яё0-9])про([^a-zа-яё0-9]|$)/i;
+const PRO_TRAINING_ENERGY_PRODUCT_IDS = new Set([
+  "dfa72adf-233b-4285-8d69-e5eab4234fbe",
+]);
 
 const proTrainingIsRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -72,4 +75,55 @@ export function isProTrainingExercise(value) {
     value.title,
     value.name,
   ].some((candidate) => isProTrainingName(candidate));
+}
+
+// Energy visit packs are the only subscription-like product that may consume a
+// visit for a PRO group training. Keep the match narrow: RA, Academy, Friendship,
+// and arbitrary products that merely contain an energy marker must remain blocked.
+export function isProTrainingEnergyPack(value) {
+  if (!proTrainingIsRecord(value)) return false;
+  const visitsLeft = [
+    value.visitsLeft,
+    value.visitsRemaining,
+    value.remainingVisits,
+    proTrainingIsRecord(value.raw) ? value.raw.visitsLeft : null,
+    proTrainingIsRecord(value.raw) ? value.raw.visitsRemaining : null,
+    proTrainingIsRecord(value.raw) ? value.raw.remainingVisits : null,
+    proTrainingIsRecord(value.subscription) ? value.subscription.visitsLeft : null,
+  ].find((candidate) => candidate !== null && candidate !== undefined);
+  if (visitsLeft !== undefined && visitsLeft !== null) {
+    const numericVisits = Number(visitsLeft);
+    if (!Number.isFinite(numericVisits) || numericVisits <= 0) return false;
+  }
+  const productIds = [
+    value.productId,
+    value.subscriptionProductId,
+    value.templateId,
+    proTrainingIsRecord(value.product) ? value.product.id : null,
+    proTrainingIsRecord(value.product) ? value.product.uuid : null,
+    proTrainingIsRecord(value.product) ? value.product.productId : null,
+    proTrainingIsRecord(value.subscription) ? value.subscription.productId : null,
+    proTrainingIsRecord(value.subscription) ? value.subscription.subscriptionProductId : null,
+  ]
+    .map((candidate) => proTrainingStr(candidate)?.toLocaleLowerCase("en-US"))
+    .filter(Boolean);
+  if (productIds.length > 0) return productIds.every((id) => PRO_TRAINING_ENERGY_PRODUCT_IDS.has(id));
+  const candidates = [
+    value.subscriptionName,
+    value.productName,
+    value.name,
+    value.title,
+    proTrainingIsRecord(value.subscription) ? value.subscription.name : null,
+    proTrainingIsRecord(value.product) ? value.product.name : null,
+    proTrainingIsRecord(value.clientSubscription) ? value.clientSubscription.name : null,
+    proTrainingIsRecord(value.clientSub) ? value.clientSub.name : null,
+  ];
+  return candidates.some((candidate) => {
+    const normalized = proTrainingStr(candidate)
+      ?.toLocaleLowerCase("ru-RU")
+      .replace(/[^a-zа-яё0-9]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return /^(энергия|energy) (5|25)$/.test(normalized || "");
+  });
 }

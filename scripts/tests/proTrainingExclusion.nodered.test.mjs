@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { hubGatewaySource, proTrainingExclusionSource } from "../lib/eventPaymentSources.mjs";
-import { isProTrainingExercise } from "../lib/proTrainingExclusion.mjs";
+import { isProTrainingEnergyPack, isProTrainingExercise } from "../lib/proTrainingExclusion.mjs";
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
 const hooks = read("../nodered_lk1_hub_nodes/gateway_hooks.js");
@@ -49,6 +49,14 @@ test("the server rule matches the owner-named PRO directions and nothing else", 
   assert.equal(isProTrainingExercise({ direction: 5507 }), true);
   assert.equal(isProTrainingExercise({ direction: "5507" }), true);
   assert.equal(isProTrainingExercise({ exerciseDirection: 3108, directionId: 3108 }), false);
+  assert.equal(isProTrainingEnergyPack({ name: "Энергия 5 🎾" }), true);
+  assert.equal(isProTrainingEnergyPack({ product: { name: "Энергия 25" } }), true);
+  assert.equal(isProTrainingEnergyPack({ productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe", name: "Энергия 5 🎾" }), true);
+  assert.equal(isProTrainingEnergyPack({ productId: "unknown", name: "Энергия 5" }), false);
+  assert.equal(isProTrainingEnergyPack({ name: "Энергия 5", visitsLeft: 0 }), false);
+  assert.equal(isProTrainingEnergyPack({ name: "Энергия 5", visitsLeft: 1 }), true);
+  assert.equal(isProTrainingEnergyPack({ name: "Энергия турниры" }), false);
+  assert.equal(isProTrainingEnergyPack({ name: "Лето.Падел.РА" }), false);
 });
 
 /**
@@ -62,6 +70,7 @@ function runExerciseHook(options = {}) {
     ctx: { caller: "http", tenantKey: "iSkq6G", clientSubscriptionId: "sub-1", managedAction: "BOOK_GROUP_TRAINING" },
     msg: {},
     isProTrainingExercise,
+    isProTrainingEnergyPack,
     resolveCategory: () => options.category ?? "group_training",
     findOwnedSubscriptions: () => { calls.findOwnedSubscriptions += 1; return options.selectedOwned ?? []; },
     lk1Config: () => options.rule ?? { matched: false },
@@ -87,7 +96,7 @@ function runExerciseHook(options = {}) {
   return { result: factory(stubs)(stubs.ctx, options.exercise ?? exercise(), stubs.msg), calls };
 }
 
-test("a PRO training is refused before any subscription decision, on the managed and the legacy path", () => {
+test("a PRO training rejects plans but allows an owned Energy 5/25 visit pack", () => {
   // A plan product that would quote the free first event of the day.
   const managed = runExerciseHook({ rule: { matched: true, rule: { productId: "plan" } }, selectedOwned: [{ id: "sub-1" }] });
   assert.deepEqual(managed.calls.finishError, [{
@@ -95,12 +104,24 @@ test("a PRO training is refused before any subscription decision, on the managed
     message: "На ПРО-тренировки подписки не действуют: доступна только оплата по полной цене",
     body: { code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE" },
   }]);
-  assert.equal(managed.calls.findOwnedSubscriptions, 0, "no subscription decision may run before the refusal");
+  assert.equal(managed.calls.findOwnedSubscriptions, 1, "the owner row is resolved before the PRO refusal");
 
-  // A legacy visit pack (Энергия 5) is refused by the same guard.
-  const legacy = runExerciseHook({ rule: { matched: false }, selectedOwned: [{ id: "sub-1" }] });
-  assert.equal(legacy.calls.finishError[0]?.body.code, "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE");
-  assert.equal(legacy.calls.findOwnedSubscriptions, 0);
+  // Energy 5/25 is the explicit visit-pack exception and reaches the normal
+  // ownership/contour path after the PRO guard.
+  const energy = runExerciseHook({ rule: { matched: false }, selectedOwned: [{ id: "sub-1", name: "Энергия 5 🎾" }],
+    quoteOwned: [{ id: "sub-1", name: "Энергия 5 🎾" }] });
+  assert.equal(energy.calls.finishError.length, 0, "Energy 5 reaches the legacy visit path");
+  assert.equal(energy.calls.findOwnedSubscriptions, 1);
+
+  const energy25 = runExerciseHook({ rule: { matched: false }, selectedOwned: [{ id: "sub-1", product: { name: "Энергия 25" } }],
+    quoteOwned: [{ id: "sub-1", product: { name: "Энергия 25" } }] });
+  assert.equal(energy25.calls.finishError.length, 0, "Energy 25 reaches the legacy visit path");
+
+  const exhausted = runExerciseHook({ rule: { matched: false }, selectedOwned: [{ id: "sub-1", name: "Энергия 5", visitsLeft: 0 }] });
+  assert.equal(exhausted.calls.finishError[0]?.body.code, "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE");
+
+  const otherVisitPack = runExerciseHook({ rule: { matched: false }, selectedOwned: [{ id: "sub-1", name: "Энергия турниры" }] });
+  assert.equal(otherVisitPack.calls.finishError[0]?.body.code, "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE");
 
   // The same booking for a plain training keeps the previous path.
   const ordinary = runExerciseHook({ exercise: exercise({ direction: { id: 3108, name: "Первая пробная тренировка" } }) });

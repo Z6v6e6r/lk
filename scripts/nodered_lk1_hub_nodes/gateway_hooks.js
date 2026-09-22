@@ -136,19 +136,23 @@ if (internalCreate) {
 ctx.step = "lk1_profile_continue";
 
 // HUB_EXERCISE
-// A PRO training is outside the contour on both paths: the managed quote would grant a
-// discount (up to the free first event of the day) and the legacy path would consume a
-// visit, so the refusal has to precede every subscription decision, not only the plan
-// rule. The category guard keeps the token rule away from an open game or a tournament
-// that merely carries «ПРО» in its title. The client is told to pay the ordinary price.
-if (resolveCategory(exercise) === "group_training" && isProTrainingExercise(exercise)) {
+// A PRO training is outside the managed subscription contour. The one explicit
+// exception is an owned Energy 5/25 visit pack: it consumes one visit at the
+// ordinary visit-pack rate, without a monetary discount or free-first-event rule.
+// Resolve the actor-owned row before the guard so a client cannot turn an arbitrary
+// product into an Energy exception by changing only the request payload.
+const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+const proTrainingEnergyAllowed = selectedOwned.length === 1
+  && isProTrainingEnergyPack(selectedOwned[0]);
+if (resolveCategory(exercise) === "group_training"
+  && isProTrainingExercise(exercise)
+  && !proTrainingEnergyAllowed) {
   return finishError(ctx, 409, "На ПРО-тренировки подписки не действуют: доступна только оплата по полной цене", {
     code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
   });
 }
 // The selected instance is resolved first: it carries the product identity and the
 // sale date of the concrete subscription, not of a sibling the client also owns.
-const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
 // The booking target's station is part of the contour verdict: an excluded station keeps
 // the pre-rollout path and must not enter the managed branch below.
 const selectedRule = lk1Config(selectedOwned, exercise?.studio?.id || exercise?.studioId || null);

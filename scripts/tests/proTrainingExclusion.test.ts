@@ -72,7 +72,8 @@ test("the group schedule screen offers no subscription path for PRO trainings", 
   // No quote is requested, so no discount row and no subscription booking product can render.
   assert.match(groupSchedulePageSource, /if \(proTrainingSelected\) \{\s*setDiscountResolvedFor\(resolvedFor\);\s*return;\s*\}/);
   assert.match(groupSchedulePageSource, /: proTrainingSelected \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
-  assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout && !proTrainingSelected/);
+  assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout\s*\?\s*proTrainingSelected\s*\?/);
+  assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);
   assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !proTrainingSelected/);
   assert.match(groupSchedulePageSource, /subscriptionUsageShadowEnabled && !proTrainingSelected/);
   assert.match(groupSchedulePageSource, /ПРО-тренировка оплачивается по полной цене/);
