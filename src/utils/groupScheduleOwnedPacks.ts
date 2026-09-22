@@ -37,7 +37,7 @@ export function getProEnergyPackName(product: TournamentVivaProduct): string | n
     if (typeof name !== "string") continue;
     const normalized = name.toLocaleLowerCase("ru-RU")
       .replace(/[^a-zа-яё0-9]+/gi, " ").replace(/\s+/g, " ").trim();
-    const matched = /^(энергия|energy) (5|25)$/.exec(normalized);
+    const matched = /^(энергия|energy) (5|25)(?: |$)/.exec(normalized);
     if (matched) return `Энергия ${matched[2]}`;
   }
   return null;

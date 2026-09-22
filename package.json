@@ -236,6 +236,7 @@
     "test:lk1-pro-training-exclusions-generation": "node --experimental-strip-types --test scripts/tests/proTrainingExclusionHotfix.test.mjs",
     "nodered:lk1-pro-training-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh",
     "nodered:lk1-pro-training-energy-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_energy_exclusions_147.sh",
+    "nodered:lk1-pro-energy-suffix:deploy-147": "bash scripts/deploy_nodered_lk1_pro_energy_suffix_147.sh",
     "test:lk1-pro-training-energy-exclusions-generation": "node --test scripts/tests/proTrainingEnergyExclusionHotfix.test.mjs"
   },
   "dependencies": {
