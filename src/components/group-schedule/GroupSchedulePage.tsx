@@ -1231,6 +1231,11 @@ export default function GroupSchedulePage({
                         </button>
                       </div>
                     )}
+                    {!subscriptionUsageShadowEnabled && proTrainingSelected && ownedSubscriptions.length === 0 && (
+                      <div className="tournament-signup-muted" role="note">
+                        ПРО-тренировка оплачивается по полной цене. Списать посещение можно только с «Энергии 5» или «Энергии 25».
+                      </div>
+                    )}
                     {!subscriptionUsageShadowEnabled && registrationLoading && (
                       <div className="tournament-signup-muted">Проверяем доступные варианты...</div>
                     )}
