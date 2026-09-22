@@ -19,6 +19,13 @@ import {
   resolveAtlantyDirectionsParam,
 } from "../../src/utils/atlantyScheduleModel.ts";
 import {
+  ATLANTY_SCHEDULE_FALLBACK_MESSAGE,
+  classifyAtlantyFetchError,
+  formatAtlantyFailureMessage,
+  isAtlantyAbortError,
+  shouldRetryAtlantyFailure,
+} from "../../src/utils/atlantyScheduleErrors.ts";
+import {
   ATLANTY_DEFAULT_DISPLAY_OPTIONS,
   buildAtlantyCardWidth,
   normalizeAtlantyDisplayOptions,
@@ -359,6 +366,51 @@ test("режим «N в ряд» считается от gap и ограниче
   );
   assert.equal(normalizeAtlantyDisplayOptions({ cardsPerView: 99 }).cardsPerView, 6);
   assert.equal(normalizeAtlantyDisplayOptions({ cardsPerView: -3 }).cardsPerView, 0);
+});
+
+test("сырой AbortError не попадает в интерфейс", () => {
+  const abortError = Object.assign(new Error("signal is aborted without reason"), {
+    name: "AbortError",
+  });
+  assert.equal(isAtlantyAbortError(abortError), true);
+
+  // Наш таймаут — понятное сообщение вместо текста браузера.
+  const timeout = classifyAtlantyFetchError(abortError, { timedOut: true });
+  assert.equal(timeout.kind, "timeout");
+  assert.match(timeout.message, /не ответил/);
+  assert.doesNotMatch(timeout.message, /aborted/i);
+
+  // Отмена вызывающей стороной — ошибку показывать не нужно.
+  const aborted = classifyAtlantyFetchError(abortError, { callerAborted: true });
+  assert.equal(aborted.kind, "aborted");
+  assert.equal(aborted.message, "");
+
+  // Неожиданный обрыв без отмены и без нашего таймаута — это сетевой сбой,
+  // а не «тихая отмена»: иначе витрина молча останется в скелетоне.
+  const unexpected = classifyAtlantyFetchError(abortError);
+  assert.equal(unexpected.kind, "network");
+  assert.ok(unexpected.message.length > 0);
+
+  // HTTP-код и обрыв связи — тоже человеческие тексты.
+  const http = classifyAtlantyFetchError(Object.assign(new Error("boom"), { status: 503 }));
+  assert.equal(http.kind, "http");
+  assert.equal(http.status, 503);
+  assert.match(http.message, /503/);
+
+  const network = classifyAtlantyFetchError(new TypeError("Failed to fetch"));
+  assert.equal(network.kind, "network");
+  assert.match(network.message, /Нет связи/);
+  assert.match(network.reason, /Failed to fetch/);
+
+  assert.equal(formatAtlantyFailureMessage("timeout"), timeout.message);
+  assert.ok(ATLANTY_SCHEDULE_FALLBACK_MESSAGE.length > 0);
+});
+
+test("повтор запроса только для восстановимых отказов", () => {
+  assert.equal(shouldRetryAtlantyFailure("timeout"), true);
+  assert.equal(shouldRetryAtlantyFailure("network"), true);
+  assert.equal(shouldRetryAtlantyFailure("aborted"), false);
+  assert.equal(shouldRetryAtlantyFailure("http"), false);
 });
 
 test("карточка ссылается на виджет записи Viva", () => {
