@@ -1,17 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  ATLANTY_CATEGORY_PRESETS,
   ATLANTY_CORPORATE_DIRECTION_IDS,
   ATLANTY_CORPORATE_TYPE_IDS,
+  buildAtlantyCategoriesSignature,
   buildAtlantyPeriodUrl,
   formatAtlantyPlacesLabel,
   getAtlantyDateParts,
-  isAtlantyCorporateExercise,
+  matchesAtlantyCategories,
+  normalizeAtlantyCategories,
   normalizeAtlantyEvent,
   normalizeAtlantyEventList,
   normalizeAtlantyLevelLabel,
   resolveAtlantyDateFrom,
   resolveAtlantyDateTo,
+  resolveAtlantyDirectionsParam,
 } from "../../src/utils/atlantyScheduleModel.ts";
 import {
   buildAtlantyVivaAnchorHref,
@@ -40,15 +44,136 @@ const corporateExercise = {
   customFields: [],
 };
 
-test("корпоративное расписание определяется по типу 2349 и направлению 6152", () => {
+test("по умолчанию витрина берёт корпоративное направление 6152 и тип 2349", () => {
   assert.deepEqual([...ATLANTY_CORPORATE_TYPE_IDS], [2349]);
   assert.deepEqual([...ATLANTY_CORPORATE_DIRECTION_IDS], [6152]);
-  assert.equal(isAtlantyCorporateExercise(corporateExercise), true);
-  assert.equal(isAtlantyCorporateExercise({ type: { id: "2349", name: "Корпоративные клиенты" } }), true);
-  assert.equal(isAtlantyCorporateExercise({ direction: { id: 6152, name: "Атланты" } }), true);
+  assert.equal(matchesAtlantyCategories(corporateExercise), true);
+  assert.equal(matchesAtlantyCategories({ type: { id: "2349", name: "Корпоративные клиенты" } }), true);
+  assert.equal(matchesAtlantyCategories({ direction: { id: 6152, name: "Атланты" } }), true);
   assert.equal(
-    isAtlantyCorporateExercise({ direction: { id: 3686, name: "Групповая тренировка уровень D+" }, type: { id: 605 } }),
+    matchesAtlantyCategories({ direction: { id: 3686, name: "Групповая тренировка уровень D+" }, type: { id: 605 } }),
     false,
+  );
+});
+
+test("категории задаются пресетами, id и объектами", () => {
+  assert.equal(ATLANTY_CATEGORY_PRESETS.friends.directionId, 5278);
+  assert.equal(ATLANTY_CATEGORY_PRESETS.friends.typeId, 839);
+
+  assert.deepEqual(
+    normalizeAtlantyCategories(["atlanty", "friends"]),
+    [
+      { directionId: 6152, typeId: 2349, label: "Время Атланты" },
+      { directionId: 5278, typeId: 839, label: "Время на друзей" },
+    ],
+  );
+  assert.deepEqual(
+    normalizeAtlantyCategories([6152, "5278", { directionId: 7000, typeId: 900, label: "Время Патриотов" }]),
+    [
+      { directionId: 6152, typeId: null, label: null },
+      { directionId: 5278, typeId: null, label: null },
+      { directionId: 7000, typeId: 900, label: "Время Патриотов" },
+    ],
+  );
+  // Выключенные, пустые и дубли категории отбрасываются.
+  assert.deepEqual(
+    normalizeAtlantyCategories([
+      { directionId: 6152, enabled: false },
+      { label: "без id" },
+      "atlanty",
+      { preset: "atlanty" },
+      null,
+    ]),
+    [{ directionId: 6152, typeId: 2349, label: "Время Атланты" }],
+  );
+});
+
+test("несколько категорий попадают в один запрос, ручной набор не сводится к directions", () => {
+  assert.deepEqual(
+    resolveAtlantyDirectionsParam(normalizeAtlantyCategories(["atlanty", "friends"])),
+    [6152, 5278],
+  );
+  assert.equal(
+    resolveAtlantyDirectionsParam(normalizeAtlantyCategories([{ typeId: 2349 }])),
+    null,
+  );
+  assert.equal(
+    buildAtlantyCategoriesSignature(normalizeAtlantyCategories(["atlanty", "friends"])),
+    "6152:2349:Время Атланты,5278:839:Время на друзей",
+  );
+});
+
+test("URL умеет несколько направлений и умеет их не отправлять", () => {
+  const base = {
+    apiBase: "https://api.vivacrm.ru",
+    tenantKey: "iSkq6G",
+    dateFrom: "2026-09-21",
+    dateTo: "2026-09-28",
+  };
+  const multi = new URL(buildAtlantyPeriodUrl({ ...base, directionIds: [6152, 5278] }));
+  assert.equal(multi.searchParams.get("directions"), "6152,5278");
+
+  const manual = new URL(buildAtlantyPeriodUrl({ ...base, directionIds: null }));
+  assert.equal(manual.searchParams.get("directions"), null);
+  assert.equal(manual.searchParams.get("dateFrom"), "2026-09-21");
+});
+
+test("карточка получает пилюлю своей категории", () => {
+  const friendsExercise = {
+    ...corporateExercise,
+    id: "friends-1",
+    direction: { id: 5278, name: "Время на друзей" },
+    type: { id: 839, name: "Падел Турнир" },
+  };
+  const categories = normalizeAtlantyCategories(["atlanty", "friends"]);
+
+  const corporate = normalizeAtlantyEvent(corporateExercise, { categories });
+  const friends = normalizeAtlantyEvent(friendsExercise, { categories });
+  assert.ok(corporate);
+  assert.ok(friends);
+  assert.equal(corporate.pillLabel, "Время Атланты");
+  assert.equal(friends.pillLabel, "Время на друзей");
+  assert.equal(friends.title, "Время на друзей");
+
+  // Категория без label подписывается названием направления.
+  const unlabeled = normalizeAtlantyEvent(friendsExercise, {
+    categories: normalizeAtlantyCategories([{ directionId: 5278 }]),
+  });
+  assert.equal(unlabeled?.pillLabel, "Время на друзей");
+
+  // Направление, которого нет в конфиге, в витрину не попадает.
+  assert.equal(normalizeAtlantyEvent(friendsExercise, { categories: normalizeAtlantyCategories(["atlanty"]) }), null);
+});
+
+test("смешанный список категорий сортируется по дате", () => {
+  const now = Date.parse("2026-09-21T00:00:00+03:00");
+  const categories = normalizeAtlantyCategories(["atlanty", "friends"]);
+  const friendsLater = {
+    ...corporateExercise,
+    id: "friends-later",
+    direction: { id: 5278, name: "Время на друзей" },
+    type: { id: 839, name: "Падел Турнир" },
+    timeFrom: "2026-10-01T19:00:00+03:00",
+    timeTo: "2026-10-01T20:30:00+03:00",
+  };
+  const friendsSooner = {
+    ...friendsLater,
+    id: "friends-sooner",
+    timeFrom: "2026-09-22T19:00:00+03:00",
+    timeTo: "2026-09-22T20:30:00+03:00",
+  };
+
+  const events = normalizeAtlantyEventList(
+    { content: [friendsLater, corporateExercise, friendsSooner] },
+    { now, categories },
+  );
+  assert.deepEqual(
+    events.map((event) => `${event.id}:${event.pillLabel}`),
+    [
+      "friends-sooner:Время на друзей",
+      `06d61018-5193-4ca3-bc1e-fa2a9f35d908:Время Атланты`,
+      "friends-later:Время на друзей",
+    ],
   );
 });
 

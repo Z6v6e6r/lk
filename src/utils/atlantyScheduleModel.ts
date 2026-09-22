@@ -1,8 +1,10 @@
 /**
- * Модель витрины корпоративного расписания «Время Атланты».
+ * Модель витрины расписания «Время Атланты».
  *
- * Источник данных — публичный end-user API VivaCRM (тип занятия 2349
- * «Корпоративные клиенты», направление 6152 «Атланты»).
+ * Источник данных — публичный end-user API VivaCRM. Набор категорий (направлений)
+ * задаётся конфигом: по умолчанию это тип занятия 2349 «Корпоративные клиенты»
+ * и направление 6152 «Атланты», но в конфиг можно добавить любое направление,
+ * например 5278 «Время на друзей».
  */
 
 export const ATLANTY_CORPORATE_TYPE_IDS = [2349] as const;
@@ -10,6 +12,40 @@ export const ATLANTY_CORPORATE_DIRECTION_IDS = [6152] as const;
 
 export const ATLANTY_DEFAULT_TIME_ZONE = "Europe/Moscow";
 export const ATLANTY_DEFAULT_PILL_LABEL = "Время Атланты";
+
+export type AtlantyCategory = {
+  /** Viva-направление (direction.id). */
+  directionId?: number | null;
+  /** Viva-тип занятия (type.id) — дополнительный признак и состав попапа записи. */
+  typeId?: number | null;
+  /** Текст пилюли на карточке; по умолчанию — название направления. */
+  label?: string | null;
+  /** `false` временно выключает категорию, не удаляя её из конфига. */
+  enabled?: boolean;
+};
+
+export const ATLANTY_DEFAULT_CATEGORIES: readonly AtlantyCategory[] = [
+  { directionId: 6152, typeId: 2349, label: ATLANTY_DEFAULT_PILL_LABEL },
+];
+
+/**
+ * Именованные категории для конфига Tilda: `categories: ["atlanty", "friends"]`.
+ * `directionId` — направление Viva, `typeId` — тип занятия (нужен попапу записи).
+ */
+export const ATLANTY_CATEGORY_PRESETS: Record<string, AtlantyCategory> = {
+  atlanty: { directionId: 6152, typeId: 2349, label: "Время Атланты" },
+  friends: { directionId: 5278, typeId: 839, label: "Время на друзей" },
+  "friends-special": { directionId: 5280, typeId: 1013, label: "Время на друзей" },
+};
+
+export function resolveAtlantyCategoryPreset(
+  key: string | null | undefined,
+): AtlantyCategory | null {
+  const normalized = String(key ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  return ATLANTY_CATEGORY_PRESETS[normalized] ?? null;
+}
+
 
 const MONTHS_SHORT = [
   "янв",
@@ -35,6 +71,8 @@ export type AtlantyScheduleEvent = {
   title: string;
   directionName: string | null;
   typeName: string | null;
+  /** Текст пилюли категории («Время Атланты», «Время на друзей», …). */
+  pillLabel: string;
   photoUrl: string | null;
   startAt: string;
   endAt: string;
@@ -61,8 +99,7 @@ export type AtlantyScheduleEvent = {
 export type AtlantyNormalizeOptions = {
   timeZone?: string;
   now?: number;
-  typeIds?: readonly number[];
-  directionIds?: readonly number[];
+  categories?: readonly AtlantyCategory[];
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -122,21 +159,116 @@ export function getAtlantyDirectionId(value: unknown): number | null {
   return pickNumber(direction, ["id", "directionId"]) ?? pickNumber(value, ["directionId"]);
 }
 
-/** Относится ли упражнение к корпоративному расписанию клуба «Атланты». */
-export function isAtlantyCorporateExercise(
+function toCategoryId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return Math.trunc(parsed);
+  }
+  return null;
+}
+
+/** Приводит конфиг категорий к безопасному виду и отбрасывает пустые/выключенные. */
+export function normalizeAtlantyCategories(value: unknown): AtlantyCategory[] {
+  const source = Array.isArray(value) ? value : [];
+  const result: AtlantyCategory[] = [];
+
+  for (const item of source) {
+    const category = normalizeAtlantyCategoryEntry(item);
+    if (!category) continue;
+    const duplicate = result.some(
+      (existing) =>
+        existing.directionId === category.directionId
+        && existing.typeId === category.typeId,
+    );
+    if (duplicate) continue;
+    result.push(category);
+  }
+
+  return result;
+}
+
+function normalizeAtlantyCategoryEntry(item: unknown): AtlantyCategory | null {
+  if (typeof item === "number") {
+    return Number.isFinite(item)
+      ? { directionId: Math.trunc(item), typeId: null, label: null }
+      : null;
+  }
+
+  if (typeof item === "string") {
+    const raw = item.trim();
+    if (!raw) return null;
+    const preset = resolveAtlantyCategoryPreset(raw);
+    if (preset) {
+      return {
+        directionId: preset.directionId ?? null,
+        typeId: preset.typeId ?? null,
+        label: preset.label ?? null,
+      };
+    }
+    const directionId = toCategoryId(raw);
+    return directionId === null ? null : { directionId, typeId: null, label: null };
+  }
+
+  if (!isRecord(item)) return null;
+  if (item.enabled === false) return null;
+
+  const presetKey = typeof item.preset === "string" ? item.preset : null;
+  const preset = presetKey ? resolveAtlantyCategoryPreset(presetKey) : null;
+
+  const directionId =
+    toCategoryId(item.directionId ?? item.direction ?? item.id)
+    ?? preset?.directionId
+    ?? null;
+  const typeId = toCategoryId(item.typeId ?? item.type) ?? preset?.typeId ?? null;
+  const label =
+    (typeof item.label === "string" && item.label.trim() ? item.label.trim() : null)
+    ?? preset?.label
+    ?? null;
+
+  if (directionId === null && typeId === null) return null;
+  return { directionId, typeId, label };
+}
+
+/** Категории из конфига или корпоративная по умолчанию. */
+export function resolveAtlantyCategories(
+  categories?: readonly AtlantyCategory[] | null,
+): AtlantyCategory[] {
+  const normalized = normalizeAtlantyCategories(categories);
+  return normalized.length > 0 ? normalized : [...ATLANTY_DEFAULT_CATEGORIES];
+}
+
+/** Направления для серверного фильтра `directions` (null — фильтр невыразим). */
+export function resolveAtlantyDirectionsParam(
+  categories: readonly AtlantyCategory[],
+): number[] | null {
+  if (categories.length === 0) return null;
+  if (categories.some((category) => category.directionId == null)) return null;
+  return [...new Set(categories.map((category) => category.directionId as number))];
+}
+
+export function findAtlantyCategory(
   value: unknown,
-  options: Pick<AtlantyNormalizeOptions, "typeIds" | "directionIds"> = {},
+  categories: readonly AtlantyCategory[],
+): AtlantyCategory | null {
+  const directionId = getAtlantyDirectionId(value);
+  const typeId = getAtlantyTypeId(value);
+  return categories.find(
+    (category) =>
+      (category.directionId != null && directionId === category.directionId)
+      || (category.typeId != null && typeId === category.typeId),
+  ) ?? null;
+}
+
+/** Относится ли упражнение к одной из выбранных категорий. */
+export function matchesAtlantyCategories(
+  value: unknown,
+  options: Pick<AtlantyNormalizeOptions, "categories"> = {},
 ): boolean {
   if (!isRecord(value)) return false;
-  const typeIds = options.typeIds ?? ATLANTY_CORPORATE_TYPE_IDS;
-  const directionIds = options.directionIds ?? ATLANTY_CORPORATE_DIRECTION_IDS;
-  const typeId = getAtlantyTypeId(value);
-  const directionId = getAtlantyDirectionId(value);
-  return (
-    (typeId !== null && typeIds.includes(typeId))
-    || (directionId !== null && directionIds.includes(directionId))
-  );
+  return findAtlantyCategory(value, resolveAtlantyCategories(options.categories)) !== null;
 }
+
 
 export function extractAtlantyExerciseItems(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
@@ -163,7 +295,9 @@ export function resolveAtlantyDateFrom(now: number, timeZone?: string) {
 
 /**
  * URL публичного расписания VivaCRM с серверным фильтром по направлениям.
- * `directions` — единственный фильтр, который реально применяет API.
+ * `directions` — единственный фильтр, который реально применяет API; если
+ * категории не сводятся к списку направлений, параметр не отправляется и
+ * отбор идёт на клиенте.
  */
 export function buildAtlantyPeriodUrl(params: {
   apiBase: string;
@@ -172,18 +306,35 @@ export function buildAtlantyPeriodUrl(params: {
   dateTo: string;
   page?: number;
   size?: number;
-  directionIds?: readonly number[];
+  directionIds?: readonly number[] | null;
 }) {
   const query = new URLSearchParams({
     dateFrom: params.dateFrom,
     dateTo: params.dateTo,
     page: String(params.page ?? 0),
     size: String(params.size ?? 500),
-    directions: (params.directionIds ?? ATLANTY_CORPORATE_DIRECTION_IDS).join(","),
   });
+  const directionIds = params.directionIds === undefined
+    ? ATLANTY_CORPORATE_DIRECTION_IDS
+    : params.directionIds;
+  if (directionIds && directionIds.length > 0) {
+    query.set("directions", directionIds.join(","));
+  }
   const base = params.apiBase.replace(/\/+$/, "");
   return `${base}/end-user/api/v1/${encodeURIComponent(params.tenantKey)}/exercises/period?${query.toString()}`;
 }
+
+/** Подпись набора категорий для кеша и диагностики. */
+export function buildAtlantyCategoriesSignature(categories: readonly AtlantyCategory[]) {
+  return categories
+    .map((category) => [
+      category.directionId ?? "",
+      category.typeId ?? "",
+      category.label ?? "",
+    ].join(":"))
+    .join(",");
+}
+
 
 export function resolveAtlantyDateTo(dateFrom: string, daysAhead: number) {
   return addDays(dateFrom, daysAhead);
@@ -292,8 +443,10 @@ export function normalizeAtlantyEvent(
   value: unknown,
   options: AtlantyNormalizeOptions = {},
 ): AtlantyScheduleEvent | null {
-  if (!isAtlantyCorporateExercise(value, options)) return null;
   if (!isRecord(value)) return null;
+  const categories = resolveAtlantyCategories(options.categories);
+  const category = findAtlantyCategory(value, categories);
+  if (!category) return null;
 
   const id = pickString(value, ["id", "exerciseId", "uuid"]);
   const startAt = pickString(value, ["timeFrom", "startsAt", "startAt"]);
@@ -356,9 +509,13 @@ export function normalizeAtlantyEvent(
 
   return {
     id,
-    title: directionName || typeName || "Время Атланты",
+    title: directionName || typeName || category.label || ATLANTY_DEFAULT_PILL_LABEL,
     directionName: directionName || null,
     typeName: typeName || null,
+    pillLabel: category.label
+      || directionName
+      || typeName
+      || ATLANTY_DEFAULT_PILL_LABEL,
     photoUrl:
       pickString(direction, ["photoWeb", "photo"])
       || pickString(value, ["photoWeb", "photo", "photoUrl", "imageUrl"]),
