@@ -76,7 +76,7 @@ test("the group schedule screen offers no subscription path for PRO trainings", 
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);
   assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !proTrainingSelected/);
   assert.match(groupSchedulePageSource, /subscriptionUsageShadowEnabled && !proTrainingSelected/);
-  assert.match(groupSchedulePageSource, /ПРО-тренировка оплачивается по полной цене/);
+  assert.doesNotMatch(groupSchedulePageSource, /ПРО-тренировка оплачивается по полной цене/);
   // Promo codes stay available: the promo section is not part of the PRO exclusion.
   assert.match(groupSchedulePageSource, /const shouldShowGroupSchedulePromoSection = Boolean\(checkout && checkout\.oneTimes\.some\(isGroupSchedulePromoProduct\)\);/);
 });
