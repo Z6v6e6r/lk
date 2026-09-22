@@ -188,7 +188,10 @@ test('shared API preserves legacy retry behavior and honors the promo no-retry o
 
 
 const regularPayment = loadModule<typeof import('../../src/components/subscription-storefront/payment')>('components/subscription-storefront/payment.ts', {
-  ...catalog, apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
+  ...catalog,
+  ATLANTY_MONTHLY_PRODUCT_ID: '3907d127-a6b0-419e-a933-4a2857f26356',
+  ATLANTY_ANNUAL_PRODUCT_ID: '',
+  apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
   apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
 });
 function zeroFixture() {
@@ -206,6 +209,7 @@ function zeroFixture() {
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
     ...regularPayment, ...promo, ...f.adapter,
+    ATLANTY_MONTHLY_PRICE_MINOR: 680000,
     canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
     appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
     getServ2Origin: () => 'https://fixture.invalid',
@@ -224,7 +228,26 @@ test('Zero Block resolves exact monthly, annual and promo products; rejects arbi
   assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.target?.counterKey, 'network_friendship');
   assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.billingOptionId, 'annual');
   assert.equal(f.adapter.resolveZeroOffer('energy5')?.period, '60 дней, 5 занятий');
-  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown', 'atlanty-year']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+});
+
+test('Zero Block sells the Atlanty club offer from the catalogue price, never the friendship counter', async () => {
+  const f = zeroFixture();
+  const offer = f.adapter.resolveZeroOffer('atlanty');
+  assert.equal(offer?.label, 'ДРУЖБА.АТЛАНТЫ');
+  assert.equal(offer?.period, '30 дней');
+  assert.equal(offer?.planId, 'atlanty');
+  assert.equal(offer?.billingOptionId, 'monthly');
+  assert.equal(offer?.target?.counterKey, 'atlanty');
+  assert.equal(offer?.target?.directProductId, '3907d127-a6b0-419e-a933-4a2857f26356');
+  // No status request: the club product has no counter and the price is the catalogue price.
+  assert.equal(await f.adapter.loadZeroOfferPrice('atlanty'), 680000);
+  assert.equal(f.writes.length, 0);
+
+  await f.adapter.createZeroPayment('atlanty', fixturePhone, 680000, () => true);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0][0], '3907d127-a6b0-419e-a933-4a2857f26356');
+  assert.equal(f.writes[0][2].retries, 0);
 });
 
 test('Zero Block persists ref before one counter POST; reopening and concurrent clicks never create again', async () => {
