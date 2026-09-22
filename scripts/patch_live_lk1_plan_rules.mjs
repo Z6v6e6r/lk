@@ -42,6 +42,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { planRulesSource } from "./lib/eventPaymentSources.mjs";
 import { LK1_PLAN_RULES_DESIRED, buildPlanRulesTransition } from "./lib/lk1PlanRulesTransition.mjs";
+import { LK1_STATION_EXCLUSIONS_DESIRED, buildStationExclusionsTransition } from "./lib/lk1StationExclusionsTransition.mjs";
 import { previewSources } from "./patch_nodered_subscription_price_preview.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
@@ -65,12 +66,16 @@ export const PLAN_RULES_PREVIEW_NODE_ID = "lk_subscription_price_preview_2026090
 // The reviewed marker of an already patched gateway body: the resolver call the
 // released `lk1Config` uses. It is absent from the live preimage, so a second run
 // of this patcher is refused instead of produced.
-const GATEWAY_PATCH_MARKER = "resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })";
+const GATEWAY_PATCH_MARKER = "resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,";
 const EVALUATOR_PATCH_MARKER = "decision.aboveActiveLimit = activeCount >= rule.maxActiveBookings;";
 // The plan-rules writer the released gateway `initialize` must carry: without it the
 // rollout global is never written and rule 3 (plan products sold from 2026-09-01)
 // stays inert while rules 1/2/4/5 already hold.
 const GATEWAY_INITIALIZE_MARKER = 'const lk1PlanRulesKey = "subscriptions_lk1_plan_rules";';
+// The station-exclusions writer the released gateway `initialize` must carry: without it
+// the reviewed exclusion global is never written and the named station stays inside the
+// contour. It is appended by the same generation and is refused on a second run.
+const GATEWAY_STATION_INITIALIZE_MARKER = 'const lk1StationExclusionsKey = "subscriptions_lk1_station_exclusions";';
 // The pre-existing HUB policy writer of the live gateway `initialize`. It must stay
 // untouched: `hubLk1SaleContract` reads that global in six nodes and a shape change
 // breaks `HUB_LK1_SALE_BINDING_DRIFT`.
@@ -136,7 +141,7 @@ export const PLAN_RULES_TARGETS = Object.freeze({
 const REVIEWED_GATEWAY_SOURCE = "scripts/nodered_lk1_hub_nodes/gateway.js";
 const REVIEWED_EVALUATOR_SOURCE = "scripts/nodered_lk1_hub_nodes/evaluator.js";
 export const PLAN_RULES_MODULE_SHA256 =
-  "abdbe70a81e285fe0f1fa84a69d8339c266a9715be26262a278e26c5e743b455";
+  "805c8d5692bf2f8457c09af851c2c4eaaa8e1be1f3da691d0eff96dba27be029";
 // Re-pinned 2026-09-16: the reviewed evaluator gained the free-first-event benefit branch
 // (`FREE_ENTITLEMENT` with one visit for a proved first event of the day, discount otherwise),
 // which the `lk1-free-first-event` generation ships into this node and the preview evaluate.
@@ -145,7 +150,7 @@ export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =
-  "9b247275a3f496f36cc203efd7a03898ee0b69138cb77bcc372cc1295c46527f";
+  "2a7cd4e36859b219c6dbbd41bc1a84a7f3860797388f4f531f7adc8ed3096ac4";
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -180,7 +185,7 @@ export function reviewedPlanRulesModule() {
 // The released `lk1Config` fragment, extracted from the reviewed gateway source.
 export function reviewedConfigFragment() {
   const fragment = extractBetween(reviewedFile(REVIEWED_GATEWAY_SOURCE),
-    "const lk1Config = (owned) => {", "\nconst lk1Stop");
+    "const lk1Config = (owned, stationId) => {", "\nconst lk1Stop");
   if (sha256(fragment) !== PLAN_RULES_CONFIG_FRAGMENT_SHA256) {
     throw new Error(`Reviewed config fragment drift: ${sha256(fragment)} != ${PLAN_RULES_CONFIG_FRAGMENT_SHA256}`);
   }
@@ -271,7 +276,7 @@ export const PLAN_RULES_GATEWAY_DELTAS = Object.freeze([
     after: `  // The selected instance is resolved first: it carries the product identity and the
   // sale date of the concrete subscription, not of a sibling the client also owns.
   const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
-  const selectedRule = lk1Config(selectedOwned);
+  const selectedRule = lk1Config(selectedOwned, exercise?.studio?.id || exercise?.studioId || null);
   const enforcedRule = selectedRule.matched && !selectedRule.legacy;
   let ruleConfigured = false;
   try { ruleConfigured = Boolean(lk1ReadPlanRules() || global.get(LK1_PRODUCT_POLICY_GLOBAL)); } catch (_) { /* absent */ }
@@ -293,6 +298,17 @@ export const PLAN_RULES_GATEWAY_DELTAS = Object.freeze([
     return lk1Stop(ctx, "LK1_PRODUCT_RULE_CHANGED");
   }
   if (productRule.matched && !productRule.legacy) {
+`,
+  },
+  {
+    // The second contour decision of the same ingress block. Without the station here the
+    // ingress still enters the managed branch for an excluded pair, while the quote it then
+    // asks for answers `legacy` — a create would stop with LK1_CREATE_COHORT_CHANGED and a
+    // join would run the managed steps on a legacy verdict.
+    id: "hooks-product-rule-station",
+    before: `const productRule = lk1Config(ownedSubscriptions);
+`,
+    after: `const productRule = lk1Config(ownedSubscriptions, exercise?.studio?.id || exercise?.studioId || null);
 `,
   },
 ]);
@@ -376,6 +392,7 @@ export function buildGatewayBody(source) {
 // new generation that must name the exact prior it replaces.
 export function buildGatewayInitialize(source) {
   assertNotPatched(source, GATEWAY_INITIALIZE_MARKER, "LK1 plan-rules gateway initialize");
+  assertNotPatched(source, GATEWAY_STATION_INITIALIZE_MARKER, "LK1 station-exclusions gateway initialize");
   for (const marker of HUB_INITIALIZE_MARKERS) {
     if (!source.includes(marker)) {
       throw new Error(`Live gateway initialize is missing the HUB writer anchor: ${marker}`);
@@ -385,7 +402,14 @@ export function buildGatewayInitialize(source) {
     expectedPrior: null,
     desired: LK1_PLAN_RULES_DESIRED,
   });
-  const patched = `${source}${source.endsWith("\n") ? "" : "\n"}${transition.initialize}`;
+  // The station exclusions are activated by the same reviewed generation and with the
+  // same guarded-write shape: the plan-rules payload alone would leave the named station
+  // inside the contour it was excluded from.
+  const station = buildStationExclusionsTransition({
+    expectedPrior: null,
+    desired: LK1_STATION_EXCLUSIONS_DESIRED,
+  });
+  const patched = `${source}${source.endsWith("\n") ? "" : "\n"}${transition.initialize}${station.initialize}`;
   for (const marker of HUB_INITIALIZE_MARKERS) {
     if (!patched.includes(marker)) {
       throw new Error(`Patched gateway initialize dropped the HUB writer anchor: ${marker}`);
@@ -396,9 +420,13 @@ export function buildGatewayInitialize(source) {
     "global.set(lk1PlanRulesKey, lk1DesiredPlanRules);",
     "plan rules prior mismatch; no overwrite",
     "plan rules readback mismatch",
+    'const lk1StationExclusionsKey = "subscriptions_lk1_station_exclusions";',
+    "global.set(lk1StationExclusionsKey, lk1DesiredStationExclusions);",
+    "station exclusions prior mismatch; no overwrite",
+    "station exclusions readback mismatch",
   ]) {
     if (!patched.includes(marker)) {
-      throw new Error(`Patched gateway initialize is missing the plan-rules writer: ${marker}`);
+      throw new Error(`Patched gateway initialize is missing the reviewed writer: ${marker}`);
     }
   }
   assertInitializeBody(patched, "Patched gateway initialize");

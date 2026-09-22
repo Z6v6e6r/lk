@@ -69,15 +69,36 @@ export const PLAN_FIRST_USE_DELTAS = Object.freeze([
   const row = rows[0];
   if (row.status !== 'ACTIVE' || !identitySelected({ content: [row], totalElements: 1 }, ctx)`,
     after: `  const p = ctx.lk1ProductIdentity;
+  return isObj(p) && p.actorClientId === ctx.actorClientId
+    && p.subscriptionId === ctx.clientSubscriptionId && p.tenantKey === ctx.tenantKey
+    && /^[a-f0-9-]{36}$/i.test(p.productId) && typeof p.name === 'string' && p.name.trim();
+};
+const identitySelected = (body, ctx) => {
+  if (!isObj(body) || !Array.isArray(body.content) || body.totalElements !== body.content.length
+    || (body.number !== undefined && body.number !== 0) || (body.totalPages !== undefined && ![0, 1].includes(body.totalPages))
+    || body.last === false || body.hasNext === true) return null;
+  const rows = body.content.filter(row => isObj(row) && row.subscriptionId === ctx.clientSubscriptionId);
+  if (rows.length !== 1) return null;
+  const row = rows[0];
+  if ([row.subscriptionId, row.clientSubscriptionId, row.id].filter(v => v !== undefined).some(v => v !== ctx.clientSubscriptionId)
+    || [row.clientId, row.client?.id].filter(v => v !== undefined).some(v => v !== ctx.actorClientId)) return null;
+  return row;
+};
+// Monetary group discounts verify the freshly read owned row. They neither
+// consume a visit nor use the earlier visit-eligibility snapshot.
+const identityMoneyOwned = (ctx, rows, exercise) => {
+  if (!identityBound(ctx) || rows.length !== 1) return [];
+  const p = ctx.lk1ProductIdentity;
   const row = rows[0];
   // The mandate follows the resolver, never one hardcoded product: \`lk1Quote\` asks for the
   // fresh readback proof of every instance the rules mark enforced, so this projection has
   // to produce it for exactly that cohort. A plan product sold inside its \`enforceFrom\`
   // window was refused here while the quote kept asking; a legacy or unrecognised product
-  // still produces no proof and stays outside the contour.
+  // still produces no proof and stays outside the contour. The station is part of that same
+  // verdict: an excluded station emits no mandate, exactly as the quote stops asking for one.
   const projected = [{ ...row, productId: p.productId, name: p.name,
     product: { ...(isObj(row.product) ? row.product : {}), id: p.productId, name: p.name } }];
-  const configured = lk1Config(projected);
+  const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);
   if (!configured.matched || configured.legacy === true || configured.code) return [];
   // A \`NEW\` instance without an activation date is the first-use state: Viva writes the
   // activation and expiry with the booking this mandate authorises, so neither can be
@@ -166,7 +187,7 @@ export const PLAN_FIRST_USE_DELTAS = Object.freeze([
 ]);
 
 const BOOKING_MARKERS = Object.freeze([
-  "const configured = lk1Config(projected);",
+  "const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);",
   "if (!configured.matched || configured.legacy === true || configured.code) return [];",
   "if ((!firstUse && row.status !== 'ACTIVE') || !identitySelected({ content: [row], totalElements: 1 }, ctx)",
   "    if (!firstUse) {",
@@ -270,7 +291,7 @@ export function composePlanFirstUseArtifacts(liveBytes, deploymentId, options = 
   return { flow, candidateBytes, contract, changes, addedNodeCount: 0, sourceSha256,
     candidateSha256: sha256(candidateBytes), booking: { id: PLAN_FIRST_USE_BOOKING_ID,
       otherFieldsUnchanged: true,
-      planProjectionResolverBound: booking.func.includes("const configured = lk1Config(projected);")
+      planProjectionResolverBound: booking.func.includes("const configured = lk1Config(projected, exercise?.studio?.id || exercise?.studioId || null);")
         && !booking.func.includes("  if (normalizeId(p.productId) !== LK1_OVERLAY_HUB_PRODUCT_ID) return [];"),
       firstUseGuarded: booking.func.includes("    if (!firstUse) {")
         && booking.func.includes("    } else if (!firstUse) {"),

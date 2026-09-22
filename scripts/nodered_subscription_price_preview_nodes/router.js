@@ -58,15 +58,22 @@ const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paid
 // generated declaration inside this node's helper closure. The guarded fallback
 // below only keeps an un-generated runtime on its current HUB-only behaviour and
 // owns no rule constant of its own.
-const previewRule = (owned) => {
+const previewRule = (owned, stationId) => {
   if (typeof canonical.resolveLk1Rule === 'function') {
     try {
       const globalReader = typeof canonical.lk1PlanRulesGlobal === 'function' ? canonical.lk1PlanRulesGlobal : null;
       const planRules = globalReader ? globalReader() : undefined;
-      return canonical.resolveLk1Rule(planRules === undefined ? { owned } : { owned, planRules });
+      const stationReader = typeof canonical.lk1ReadStationExclusions === 'function' ? canonical.lk1ReadStationExclusions : null;
+      const stationExclusions = stationReader ? stationReader() : undefined;
+      // The station of the priced target travels with the instance: an excluded station has
+      // to reach the same legacy verdict as the booking gateway, otherwise the preview keeps
+      // advertising a discount the write path will not charge.
+      return canonical.resolveLk1Rule({ owned, stationId,
+        ...(planRules === undefined ? {} : { planRules }),
+        ...(stationExclusions === undefined ? {} : { stationExclusions }) });
     } catch (_) { return { matched: true, code: 'LK1_PLAN_RULES_INVALID' }; }
   }
-  const configured = canonical.lk1Config(owned);
+  const configured = canonical.lk1Config(owned, stationId);
   if (!configured.matched || configured.code) return configured;
   const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
   if (dates.invalid || dates.dates.length !== 1) return { matched: true, code: 'SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED' };
@@ -187,7 +194,8 @@ if (ctx.step === 'metadata') {
       || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[0-9a-f]{12}$/i.test(row.productId || '')
       || canonical.collectExactProductIds(ctx.subscriptions[id]).some(product => product !== row.productId.toLowerCase())) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     ctx.metadata[id] = row;
-    const configured = previewRule([{ ...ctx.subscriptions[id], productId: row.productId.toLowerCase() }]);
+    const configured = previewRule([{ ...ctx.subscriptions[id], productId: row.productId.toLowerCase() }],
+      ctx.target.stationId);
     if (configured.code) return stop(previewRuleCode(configured));
     ctx.rules[id] = configured;
   }
@@ -401,7 +409,7 @@ while (ctx.step === 'next') {
     : canonical.identityOwned(bound, available, exercise);
   if (owned.length !== 1) return stop('PRICE_PREVIEW_PRODUCT_IDENTITY_UNRESOLVED');
   const dates = canonical.collectSubscriptionPurchaseDateEvidence(owned);
-  const configured = previewRule(owned);
+  const configured = previewRule(owned, ctx.target.stationId);
   if (configured.code) return stop(previewRuleCode(configured));
   ctx.previewResolved = configured.matched && !configured.legacy && productId.toLowerCase() === configured.rule.productId;
   if (ctx.previewResolved && (dates.invalid || dates.dates.length !== 1)) return stop('SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED');

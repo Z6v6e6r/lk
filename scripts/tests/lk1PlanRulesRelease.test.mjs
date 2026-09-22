@@ -110,12 +110,16 @@ test('the reviewed sources are exactly the pinned generation inputs', () => {
   const module = reviewedPlanRulesModule();
   assert.equal(module.includes('export '), false);
   for (const symbol of ['const LK1_PLAN_RULES_GLOBAL =', 'const LK1_HUB_PRODUCT_ID =',
-    'function normalizePlanRules(', 'function resolveLk1Rule(', 'function lk1ReadPlanRules(']) {
+    'const LK1_STATION_EXCLUSIONS_GLOBAL =', 'function normalizePlanRules(',
+    'function normalizeStationExclusions(', 'function resolveLk1Rule(',
+    'function lk1ReadPlanRules(', 'function lk1ReadStationExclusions(']) {
     assert.ok(module.includes(symbol), symbol);
   }
-  // The released config resolves the rule instead of hardcoding one product id.
+  // The released config resolves the rule instead of hardcoding one product id, and it
+  // hands the resolver both reviewed readers: the plan rules and the station exclusions.
   const config = reviewedConfigFragment();
-  assert.ok(config.includes('resolveLk1Rule({ owned, planRules: lk1ReadPlanRules() })'));
+  assert.ok(config.includes('resolveLk1Rule({ owned, planRules: lk1ReadPlanRules(), stationId,'));
+  assert.ok(config.includes('stationExclusions: lk1ReadStationExclusions() });'));
   assert.equal(config.includes('LK1_OVERLAY_HUB_PRODUCT_ID'), false);
   // Generation pins: live and patched bodies must differ for every changed field.
   assert.equal(PLAN_RULES_TARGETS.gateway.id, PLAN_RULES_GATEWAY_NODE_ID);

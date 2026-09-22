@@ -408,6 +408,8 @@ jobs:
           node --test
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
+          scripts/tests/lk1SiriusStationLegacy.test.mjs
+          scripts/tests/lk1StationExclusionsHotfix.test.mjs
           scripts/tests/lk1MoneySubscriptionValidity.test.mjs
           scripts/tests/lk1MoneyCohortHotfix.test.mjs
           scripts/tests/lk1PlanMoneyFirstUseHotfix.test.mjs
