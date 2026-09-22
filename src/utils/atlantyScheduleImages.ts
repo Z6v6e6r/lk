@@ -6,9 +6,13 @@
  * содержат хэш сборки и меняются при каждом деплое.
  */
 
-export const ATLANTY_CARD_IMAGE_BASE = "https://padlhub.su/lk/atlanty-cards/";
+export const ATLANTY_CARD_IMAGE_BASE = "https://padlhub.su/lk/atlanty-cards/v2/";
 
-/** Полный пул (30 фото): корты Сколково и Нагатинской Премиум, баннеры и промо. */
+/**
+ * Пул фото (28): корты Сколково и Нагатинской Премиум, баннеры и промо.
+ * Все файлы — WebP шириной до 800 px: карточка показывает фото ~320–400 px,
+ * поэтому 1200 px из LK2 были лишними (4 карточки весили ~370 КБ вместо ~150 КБ).
+ */
 export const ATLANTY_CARD_IMAGES: readonly string[] = [
   "skolkovo-game-1.webp",
   "skolkovo-game-2.webp",
@@ -36,10 +40,8 @@ export const ATLANTY_CARD_IMAGES: readonly string[] = [
   "card-art-coach-game.webp",
   "card-art-tournament.webp",
   "card-art-training.webp",
-  "promo-hero-fallback.png",
-  "promo.png",
-  "nagatinskaya-default.webp",
-  "nagatinskaya-tournament.webp",
+  "promo-hero-fallback.webp",
+  "promo.webp",
 ];
 
 export type AtlantyImagePick = "shuffle" | "hash";
