@@ -8,6 +8,7 @@ import {
   buildAtlantyPeriodUrl,
   formatAtlantyPlacesLabel,
   getAtlantyDateParts,
+  limitAtlantyEventsPerCategory,
   matchesAtlantyCategories,
   normalizeAtlantyCategories,
   normalizeAtlantyEvent,
@@ -284,6 +285,36 @@ test("список событий сортируется, дедуплициру
     { now },
   );
   assert.deepEqual(events.map((event) => event.id), ["sooner", "later"]);
+});
+
+test("квота по категориям не даёт плотной категории вытеснить редкую", () => {
+  const categories = normalizeAtlantyCategories(["atlanty", "friends"]);
+  const now = Date.parse("2026-09-21T00:00:00+03:00");
+  const dense = Array.from({ length: 10 }, (_, index) => ({
+    ...corporateExercise,
+    id: `friends-${index}`,
+    direction: { id: 5278, name: "Время на друзей" },
+    type: { id: 839, name: "Падел Турнир" },
+    timeFrom: `2026-09-2${(index % 8) + 2}T19:00:00+03:00`,
+    timeTo: `2026-09-2${(index % 8) + 2}T20:30:00+03:00`,
+  }));
+  const rare = { ...corporateExercise, id: "rare-atlanty" };
+
+  const sorted = normalizeAtlantyEventList({ content: [...dense, rare] }, { now, categories });
+  assert.equal(sorted.length, 11);
+
+  // Без квоты редкое событие выпадает из первых 6 карточек.
+  const withoutQuota = limitAtlantyEventsPerCategory(sorted, 0, 6);
+  assert.equal(withoutQuota.some((event) => event.id === "rare-atlanty"), false);
+
+  // С квотой 3 на категорию редкая категория гарантированно представлена.
+  const withQuota = limitAtlantyEventsPerCategory(sorted, 3, 24);
+  assert.equal(withQuota.length, 4);
+  assert.equal(withQuota.filter((event) => event.pillLabel === "Время на друзей").length, 3);
+  assert.equal(withQuota.filter((event) => event.pillLabel === "Время Атланты").length, 1);
+
+  // Общий лимит maxEvents всё ещё действует.
+  assert.equal(limitAtlantyEventsPerCategory(sorted, 3, 2).length, 2);
 });
 
 test("карточка ссылается на виджет записи Viva", () => {
