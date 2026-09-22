@@ -112,7 +112,10 @@ export function pickSubscriptionVisitsLeft(value: unknown): number | null {
 }
 
 export function isEnergyVisitPackSubscriptionName(value: string | null | undefined) {
-  return /^энергия\s+(5|25)$/.test(normalizeSubscriptionName(value));
+  // Viva appends station/promotion labels to some owned packs, for example
+  // "Энергия 5 🎾 Селигерская Акционная". Keep the pack size as the stable
+  // marker while excluding unrelated products such as "Энергия турниры".
+  return /^энергия\s+(5|25)(?:\s|$)/.test(normalizeSubscriptionName(value));
 }
 
 export function resolveSubscriptionStatusTone(
