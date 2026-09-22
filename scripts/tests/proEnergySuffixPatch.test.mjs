@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { composeEnergySuffix, BEFORE, AFTER } from "../patch_live_lk1_pro_energy_suffix.mjs";
+import { composeEnergySuffix } from "../patch_live_lk1_pro_energy_suffix.mjs";
 import { isProTrainingEnergyPack } from "../lib/proTrainingExclusion.mjs";
 
 test("suffix names allow owned Energy only, and cannot override catalog identity or balance", () => {
