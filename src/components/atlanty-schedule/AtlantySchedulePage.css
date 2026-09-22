@@ -140,6 +140,11 @@
   display: flex;
 }
 
+/* Скрытый якорь события: на него навешивает обработчик виджет записи Viva. */
+.atlanty-card-link {
+  display: none;
+}
+
 .atlanty-card {
   display: flex;
   flex-direction: column;

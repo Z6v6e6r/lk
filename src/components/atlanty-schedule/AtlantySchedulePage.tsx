@@ -264,11 +264,20 @@ export function AtlantyCard({
 
   return (
     <li className="atlanty-slide">
+      {onOpen && (
+        <a
+          className="atlanty-card-link"
+          href={buildAtlantyVivaAnchorHref(event.id, vivaInstance)}
+          data-atlanty-exercise={event.id}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+      )}
       {onOpen ? (
         <button
           type="button"
           className="atlanty-card"
-          aria-label={`${event.title}, ${event.dateTimeLabel}`}
+          aria-label={`${event.title}, ${event.dateTimeLabel}${event.badgeLabel ? `, ${event.badgeLabel}` : ""}`}
           aria-haspopup="dialog"
           onClick={() => onOpen(event, mediaUrl ?? null)}
         >
