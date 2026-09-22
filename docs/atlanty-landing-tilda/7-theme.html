@@ -1,0 +1,70 @@
+<!--
+  Tilda, блок T123 «HTML-код» — ОФОРМЛЕНИЕ ВИТРИНЫ ПОД ЭТУ СТРАНИЦУ.
+
+  Переопределять переменные нужно НА `.atlanty-schedule` (или специфичнее):
+  у элемента объявлены свои значения, правило на `:root` не сработает.
+-->
+<style>
+  .ph-landing .atlanty-schedule {
+    /* палитра страницы */
+    --atlanty-accent: #4b56e0;         /* --ph-indigo */
+    --atlanty-accent-soft: #eceefb;    /* --ph-lavender */
+    --atlanty-text: #101012;           /* --ph-ink */
+    --atlanty-muted: #8b8b93;          /* --ph-muted */
+    --atlanty-border: #ececed;         /* --ph-line */
+    --atlanty-surface-muted: #f4f4f6;
+    --atlanty-font-display: 'PH Dewi', 'RF Dewi UltraBold', sans-serif;
+    --atlanty-font-body: 'PH Inter', 'Inter Display', Inter, -apple-system, sans-serif;
+
+    /* геометрия карточки как у .ph-card */
+    --atlanty-radius: 18px;
+    --atlanty-gap: 20px;
+    --atlanty-card-width: min(84%, 360px);
+    --atlanty-track-padding: 0px;      /* отступ даёт .ph-landing__container */
+    --atlanty-card-shadow: none;
+    --atlanty-card-shadow-hover: 0 18px 40px rgba(16, 16, 18, 0.1);
+    --atlanty-title-size: 16px;
+    --atlanty-title-transform: none;
+    --atlanty-title-line-height: 1.2;
+    --atlanty-meta-size: 12px;
+    --atlanty-meta-icon-size: 13px;
+    --atlanty-pill-size: 9px;
+    --atlanty-pill-bg: transparent;
+    --atlanty-pill-color: #4b56e0;
+    --atlanty-pill-padding: 0;
+    --atlanty-pill-icon-size: 13px;
+    --atlanty-pill-icon-bg: transparent;
+    --atlanty-pill-icon-color: #4b56e0;
+    --atlanty-date-day-size: 18px;
+    --atlanty-date-radius: 12px;
+    --atlanty-seats-size: 12.5px;
+  }
+
+  /* сетка как у .ph-card: 2 → 3 → 4 в ряд */
+  @media (min-width: 761px) and (max-width: 899px) {
+    .ph-landing .atlanty-schedule { --atlanty-card-width: calc((100% - var(--atlanty-gap)) / 2); }
+  }
+  @media (min-width: 761px) and (max-width: 1199px) {
+    .ph-landing .atlanty-schedule { --atlanty-card-width: calc((100% - 2 * var(--atlanty-gap)) / 3); }
+  }
+  @media (min-width: 1200px) {
+    .ph-landing .atlanty-schedule { --atlanty-card-width: calc((100% - 3 * var(--atlanty-gap)) / 4); }
+  }
+  @media (max-width: 760px) {
+    .ph-landing .atlanty-schedule { --atlanty-gap: 16px; }
+  }
+
+  /* мелкая доводка под классы макета */
+  .ph-landing .atlanty-card-pill { letter-spacing: 0.12em; font-weight: 500; }
+  .ph-landing .atlanty-card-date {
+    min-width: 44px;
+    padding: 6px 0 7px;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(6px);
+    box-shadow: none;
+  }
+  .ph-landing .atlanty-card-date-weekday { font-size: 9px; letter-spacing: 0.1em; }
+  .ph-landing .atlanty-card-body { padding: 20px 16px 16px; gap: 10px; }
+  .ph-landing .atlanty-card-title { min-height: 2.4em; letter-spacing: 0.005em; }
+  .ph-landing .atlanty-card-meta-row svg { color: #a5a5ae; opacity: 1; }
+</style>
