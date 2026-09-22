@@ -19,6 +19,11 @@ import {
   resolveAtlantyDirectionsParam,
 } from "../../src/utils/atlantyScheduleModel.ts";
 import {
+  ATLANTY_DEFAULT_DISPLAY_OPTIONS,
+  buildAtlantyCardWidth,
+  normalizeAtlantyDisplayOptions,
+} from "../../src/utils/atlantyScheduleTheme.ts";
+import {
   buildAtlantyVivaAnchorHref,
   getAtlantyExerciseStorageKey,
   readAtlantyVivaExerciseParam,
@@ -315,6 +320,45 @@ test("квота по категориям не даёт плотной кате
 
   // Общий лимит maxEvents всё ещё действует.
   assert.equal(limitAtlantyEventsPerCategory(sorted, 3, 2).length, 2);
+});
+
+test("опции внешнего вида нормализуются и не ломают значения по умолчанию", () => {
+  assert.deepEqual(normalizeAtlantyDisplayOptions(null), ATLANTY_DEFAULT_DISPLAY_OPTIONS);
+  assert.deepEqual(normalizeAtlantyDisplayOptions(undefined), ATLANTY_DEFAULT_DISPLAY_OPTIONS);
+
+  assert.deepEqual(
+    normalizeAtlantyDisplayOptions({
+      pillIcon: "USERS",
+      avatarMode: "none",
+      seatsStyle: "plain",
+      levelStyle: "chip",
+      cardsPerView: "4",
+    }),
+    { pillIcon: "users", avatarMode: "none", seatsStyle: "plain", levelStyle: "chip", cardsPerView: 4 },
+  );
+
+  // Неизвестные значения откатываются к дефолту, а не ломают карточку.
+  assert.deepEqual(
+    normalizeAtlantyDisplayOptions({
+      pillIcon: "sparkles",
+      avatarMode: "initials",
+      seatsStyle: "fancy",
+      levelStyle: "badge",
+      cardsPerView: "много",
+    }),
+    ATLANTY_DEFAULT_DISPLAY_OPTIONS,
+  );
+});
+
+test("режим «N в ряд» считается от gap и ограничен сверху", () => {
+  assert.equal(buildAtlantyCardWidth(0), null);
+  assert.equal(buildAtlantyCardWidth(1), null);
+  assert.equal(
+    buildAtlantyCardWidth(4),
+    "calc((100% - 3 * var(--atlanty-gap)) / 4)",
+  );
+  assert.equal(normalizeAtlantyDisplayOptions({ cardsPerView: 99 }).cardsPerView, 6);
+  assert.equal(normalizeAtlantyDisplayOptions({ cardsPerView: -3 }).cardsPerView, 0);
 });
 
 test("карточка ссылается на виджет записи Viva", () => {
