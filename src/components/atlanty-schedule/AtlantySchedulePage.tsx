@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { apiFetchAtlantyEvents } from "../../utils/atlantyScheduleApi";
 import {
   ATLANTY_DEFAULT_PILL_LABEL,
   normalizeAtlantyCategories,
   type AtlantyScheduleEvent,
 } from "../../utils/atlantyScheduleModel";
+import {
+  buildAtlantyCardWidth,
+  normalizeAtlantyDisplayOptions,
+  type AtlantyDisplayOptions,
+} from "../../utils/atlantyScheduleTheme";
 import {
   ATLANTY_VIVA_INSTANCE,
   buildAtlantyVivaAnchorHref,
@@ -28,6 +33,16 @@ export type AtlantyScheduleConfig = {
    * или объекты `{ directionId, typeId, label }`.
    */
   categories?: ReadonlyArray<string | AtlantyCategoryInput> | null;
+  /** Иконка в пилюле категории: "infinity" | "users" | "none". */
+  pillIcon?: string | null;
+  /** Фото тренера в футере: "photo" | "none". */
+  avatarMode?: string | null;
+  /** Места: "segmented" (чип как в ЛК2) | "plain" (строкой). */
+  seatsStyle?: string | null;
+  /** Уровень: "meta" (строкой с иконкой) | "chip" (плашкой как на лендинге). */
+  levelStyle?: string | null;
+  /** Сколько карточек в ряд; 0 — фиксированная ширина. */
+  cardsPerView?: number | string | null;
 };
 
 export type AtlantyCategoryInput = {
@@ -47,6 +62,21 @@ function InfinityIcon() {
         d="M7.2 15.6c1.9 0 3-1.6 4.8-3.6 1.8-2 2.9-3.6 4.8-3.6a3.6 3.6 0 0 1 0 7.2c-1.9 0-3-1.6-4.8-3.6-1.8-2-2.9-3.6-4.8-3.6a3.6 3.6 0 0 0 0 7.2Z"
         stroke="currentColor"
         strokeWidth="2.1"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function UsersIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="16.5" cy="10.5" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M3.5 19a5.5 5.5 0 0 1 11 0M14 19a4.6 4.6 0 0 1 6.5-4.1"
+        stroke="currentColor"
+        strokeWidth="1.7"
         strokeLinecap="round"
       />
     </svg>
@@ -104,11 +134,14 @@ export function AtlantyCard({
   event,
   pillLabel,
   vivaInstance,
+  options,
 }: {
   event: AtlantyScheduleEvent;
   pillLabel: string;
   vivaInstance: string;
+  options: AtlantyDisplayOptions;
 }) {
+  const levelStyle = options.levelStyle ?? "meta";
   return (
     <li className="atlanty-slide">
       <a
@@ -133,9 +166,11 @@ export function AtlantyCard({
 
         <div className="atlanty-card-body">
           <span className="atlanty-card-pill">
-            <span className="atlanty-card-pill-icon">
-              <InfinityIcon />
-            </span>
+            {options.pillIcon !== "none" && (
+              <span className="atlanty-card-pill-icon">
+                {options.pillIcon === "users" ? <UsersIcon /> : <InfinityIcon />}
+              </span>
+            )}
             <span className="atlanty-card-pill-label">{event.pillLabel || pillLabel}</span>
           </span>
 
@@ -152,7 +187,7 @@ export function AtlantyCard({
                 <span className="atlanty-card-meta-text">{event.locationLabel}</span>
               </li>
             )}
-            {event.levelLabel && (
+            {event.levelLabel && levelStyle === "meta" && (
               <li className="atlanty-card-meta-row">
                 <LevelIcon />
                 <span className="atlanty-card-meta-text">{event.levelLabel}</span>
@@ -160,9 +195,16 @@ export function AtlantyCard({
             )}
           </ul>
 
+          {event.levelLabel && levelStyle === "chip" && (
+            <span className="atlanty-card-level">
+              <LevelIcon />
+              {event.levelLabel}
+            </span>
+          )}
+
           {(event.slotsLabel || event.placesLabel) && (
             <div className="atlanty-card-footer">
-              {event.trainerAvatarUrl && (
+              {options.avatarMode === "photo" && event.trainerAvatarUrl && (
                 <img
                   className="atlanty-card-avatar"
                   src={event.trainerAvatarUrl}
@@ -171,18 +213,24 @@ export function AtlantyCard({
                   decoding="async"
                 />
               )}
-              <div className="atlanty-card-slots">
-                {event.slotsLabel && (
-                  <span className="atlanty-card-slots-count">{event.slotsLabel}</span>
-                )}
-                {event.placesLabel && (
-                  <span
-                    className={`atlanty-card-slots-places${event.isFull ? " is-full" : ""}`}
-                  >
-                    ({event.placesLabel})
-                  </span>
-                )}
-              </div>
+              {options.seatsStyle === "plain" ? (
+                <span className={`atlanty-card-seats${event.isFull ? " is-full" : ""}`}>
+                  {event.slotsLabel} {event.placesLabel && <em>({event.placesLabel})</em>}
+                </span>
+              ) : (
+                <div className="atlanty-card-slots">
+                  {event.slotsLabel && (
+                    <span className="atlanty-card-slots-count">{event.slotsLabel}</span>
+                  )}
+                  {event.placesLabel && (
+                    <span
+                      className={`atlanty-card-slots-places${event.isFull ? " is-full" : ""}`}
+                    >
+                      ({event.placesLabel})
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -218,6 +266,26 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
   const daysAhead = config.daysAhead;
   const maxEvents = config.maxEvents;
   const maxPerCategory = config.maxPerCategory;
+  const displayOptions = useMemo(
+    () => normalizeAtlantyDisplayOptions({
+      pillIcon: config.pillIcon,
+      avatarMode: config.avatarMode,
+      seatsStyle: config.seatsStyle,
+      levelStyle: config.levelStyle,
+      cardsPerView: config.cardsPerView,
+    }),
+    [
+      config.pillIcon,
+      config.avatarMode,
+      config.seatsStyle,
+      config.levelStyle,
+      config.cardsPerView,
+    ],
+  );
+  const cardWidth = buildAtlantyCardWidth(displayOptions.cardsPerView);
+  const rootStyle = cardWidth
+    ? ({ "--atlanty-card-width": cardWidth } as CSSProperties)
+    : undefined;
   const categories = useMemo(
     () => normalizeAtlantyCategories(config.categories),
     [config.categories],
@@ -294,7 +362,8 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
     const element = trackRef.current;
     if (!element) return;
     const slide = element.querySelector<HTMLElement>(".atlanty-slide");
-    const step = slide ? slide.offsetWidth + 12 : element.clientWidth * 0.8;
+    const gap = Number.parseFloat(window.getComputedStyle(element).columnGap) || 12;
+    const step = slide ? slide.offsetWidth + gap : element.clientWidth * 0.8;
     element.scrollBy({ left: step * direction, behavior: "smooth" });
   };
 
@@ -302,7 +371,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
   const hasEvents = status === "ready" && events.length > 0;
 
   return (
-    <div className="atlanty-schedule">
+    <div className="atlanty-schedule" style={rootStyle}>
       {(title || showNav) && (
         <div className="atlanty-schedule-head">
           {title ? <h2 className="atlanty-schedule-heading">{title}</h2> : <span />}
@@ -368,6 +437,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
                 event={event}
                 pillLabel={pillLabel}
                 vivaInstance={vivaInstance}
+                options={displayOptions}
               />
             ))}
           </ul>

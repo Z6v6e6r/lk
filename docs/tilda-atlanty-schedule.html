@@ -55,9 +55,61 @@
     // Горизонт расписания в днях.
     daysAhead: 120,
     // Инстанс виджета записи Viva (ссылки карточек — #atlanty&exerciseId=…).
-    vivaInstance: "atlanty"
+    vivaInstance: "atlanty",
+
+    // --- Внешний вид (всё необязательное) ---
+    // Сколько карточек в ряд: 0 — фиксированная ширина карточки (как в ЛК2),
+    // 3–4 — «N в ряд», как в макете лендинга. Верхняя граница — 6.
+    cardsPerView: 0,
+    // Иконка в пилюле категории: "infinity" (по умолчанию) | "users" | "none".
+    pillIcon: "infinity",
+    // Фото тренера в футере: "photo" (по умолчанию) | "none".
+    avatarMode: "photo",
+    // Места: "segmented" — чип «1/8 | (+7 МЕСТ)» | "plain" — строкой «1/8 (+7 мест)».
+    seatsStyle: "segmented",
+    // Уровень: "meta" — строкой с иконкой | "chip" — отдельной плашкой.
+    levelStyle: "meta"
   };
 </script>
+
+<!--
+  ТЕМИЗАЦИЯ. Все цвета, шрифты, размеры и отступы витрины — CSS-переменные.
+  Переопределять их нужно на `.atlanty-schedule` (или на более специфичном
+  селекторе): у элемента объявлены свои значения, поэтому правило на `:root`
+  не сработает — унаследованное значение проигрывает собственному.
+
+  Пример под палитру лендинга «ПадлхАБ × Бизнес-клуб»:
+
+  <style>
+    .ph-landing .atlanty-schedule {
+      --atlanty-accent: #4b56e0;        /* индиго */
+      --atlanty-accent-soft: #eceefb;
+      --atlanty-text: #101012;
+      --atlanty-muted: #8b8b93;
+      --atlanty-border: #ececed;
+      --atlanty-radius: 18px;
+      --atlanty-card-width: calc((100% - 3 * var(--atlanty-gap)) / 4);
+      --atlanty-gap: 20px;
+      --atlanty-track-padding: 0px;
+      --atlanty-title-size: 16px;
+      --atlanty-title-transform: none;
+      --atlanty-meta-size: 12px;
+      --atlanty-meta-icon-size: 13px;
+      --atlanty-pill-size: 9px;
+      --atlanty-pill-bg: transparent;
+      --atlanty-pill-color: #4b56e0;
+      --atlanty-pill-padding: 0;
+      --atlanty-pill-icon-size: 13px;
+      --atlanty-pill-icon-bg: transparent;
+      --atlanty-pill-icon-color: #4b56e0;
+      --atlanty-date-day-size: 18px;
+      --atlanty-date-radius: 12px;
+      --atlanty-seats-size: 12.5px;
+      --atlanty-font-display: 'PH Dewi', 'RF Dewi UltraBold', sans-serif;
+      --atlanty-font-body: 'PH Inter', 'Inter Display', Inter, sans-serif;
+    }
+  </style>
+-->
 
 <script>
   // Вариант 1: подтянуть бандл витрины с нашего CDN.
