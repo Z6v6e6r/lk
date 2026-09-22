@@ -1,0 +1,242 @@
+<!-- PadlHub · отдельный блок покупки клубной подписки («ДРУЖБА.АТЛАНТЫ» и другие такие же дружбы).
+     Вставить целиком в один блок T123 на странице клуба. Один блок = один клуб.
+
+     Как добавить следующий клуб (по аналогии):
+     1) скопировать этот блок целиком (разметку вместе со скриптом);
+     2) поменять в карточке название, цены, период и список условий;
+     3) поменять data-ph-offer на ключ клуба (для «Атлантов» — atlanty).
+     Ключ обязан быть зарегистрированным в бандле PadlHub: иначе кнопка честно
+     скажет «предложение не подключено», а не продаст не тот тариф.
+
+     Цены в карточке — только для показа. Реальную сумму берёт окно оформления
+     из каталога PadlHub, поэтому держите их синхронными. -->
+
+<style>
+.ph-club-sub{box-sizing:border-box;width:100%;max-width:460px;margin:0 auto;font-family:Inter,Arial,sans-serif;color:#1f1e20}
+.ph-club-sub *,.ph-club-sub *::before,.ph-club-sub *::after{box-sizing:border-box}
+.ph-club-sub .ph-club-card{display:flex;flex-direction:column;gap:16px;padding:28px 24px;border:1px solid #ededed;border-radius:32px;background:#fff;box-shadow:-4px 4px 8px rgba(31,30,32,.02)}
+.ph-club-sub .ph-club-tag{align-self:flex-start;padding:8px 14px;border-radius:999px;background:#eafaf1;color:#1c7a4a;font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+.ph-club-sub .ph-club-price{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin:0}
+.ph-club-sub .ph-club-price s{color:#9a9a9a;font-size:18px}
+.ph-club-sub .ph-club-price strong{font-size:42px;font-weight:800;line-height:1;letter-spacing:-.02em}
+.ph-club-sub .ph-club-price span{color:#777;font-size:15px}
+.ph-club-sub .ph-club-note{margin:0;color:#777;font-size:14px;line-height:1.45}
+.ph-club-sub ul{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+.ph-club-sub li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;font-size:15px;line-height:1.4}
+.ph-club-sub li::before{content:"\2713";color:#1f9d55;font-weight:800}
+.ph-club-sub .ph-club-cta{display:flex;align-items:center;justify-content:center;width:100%;min-height:52px;padding:14px 20px;border:0;border-radius:16px;background:#1f1e20;color:#fff;font:700 16px/1.2 Inter,Arial,sans-serif;cursor:pointer}
+.ph-club-sub .ph-club-cta:hover{background:#000}
+.ph-club-sub .ph-club-cta:disabled{opacity:.5;cursor:not-allowed}
+.ph-club-sub .ph-club-status{margin:0;font-size:14px;color:#777}
+.ph-club-sub .ph-club-status--error{color:#c0392b}
+.ph-club-sub .ph-club-link{align-self:center;font-size:14px;color:#1f1e20}
+.ph-club-sub a:focus-visible,.ph-club-sub button:focus-visible{outline:3px solid #49d8a1;outline-offset:3px}
+</style>
+
+<div class="ph-club-sub">
+  <article class="ph-club-card">
+    <span class="ph-club-tag">ДРУЖБА.АТЛАНТЫ</span>
+    <p class="ph-club-price">
+      <s>9 800 ₽</s><strong>6 800 ₽</strong><span>/ 30 дней</span>
+    </p>
+    <p class="ph-club-note">Корпоративная подписка клуба «Атланты». Вход и оплата — в личном кабинете PadlHub.</p>
+    <ul>
+      <li>1 час в день бесплатно: создание / участие в игре</li>
+      <li>30% на создание / участие в игре сверх часа</li>
+      <li>50% на игру с тренером, группы, «Время на друзей», турниры ПадлхАБ</li>
+      <li>До 4 активных записей</li>
+    </ul>
+    <button type="button" class="ph-club-cta" data-ph-offer="atlanty" disabled>Загружаем оформление…</button>
+    <p class="ph-club-status" role="status"></p>
+    <a class="ph-club-link" href="https://padlhub.ru/lk_new">Личный кабинет</a>
+  </article>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var primaryAssetOrigin = 'https://padlhub.su';
+  var fallbackAssetOrigins = ['https://lk-reserve.89-108-64-209.sslip.io'];
+  var scriptId = 'padlhub-club-subscription-script';
+  var isLocalFilePreview = window.location.protocol === 'file:';
+
+  function normalizeOrigin(value) { return String(value || '').trim().replace(/\/+$/, ''); }
+
+  function dedupeStrings(values) {
+    var seen = {};
+    return values.filter(function (value) {
+      if (!value || seen[value]) return false;
+      seen[value] = true;
+      return true;
+    });
+  }
+
+  function buildLkBaseUrl(origin) {
+    var normalized = normalizeOrigin(origin);
+    return normalized ? normalized + '/lk' : null;
+  }
+
+  function isDevCabinetUrl(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return false;
+    try { return new URL(raw, window.location.origin).pathname.indexOf('/lk_dev') !== -1; }
+    catch (_) { return raw.indexOf('/lk_dev') !== -1; }
+  }
+
+  function resolveChannel() {
+    var url = new URL(window.location.href);
+    var explicitChannel = String(url.searchParams.get('channel') || '').trim().toLowerCase();
+    if (explicitChannel === 'dev' || explicitChannel === 'prod') return explicitChannel;
+    if (isDevCabinetUrl(url.searchParams.get('cabinetUrl'))) return 'dev';
+    if (isDevCabinetUrl(url.searchParams.get('returnUrl'))) return 'dev';
+    if (isDevCabinetUrl(document.referrer || '')) return 'dev';
+    return 'prod';
+  }
+
+  function resolveAssetOrigins(channel) {
+    var primaryOrigin = normalizeOrigin(primaryAssetOrigin);
+    var reserveOrigins = fallbackAssetOrigins.map(normalizeOrigin).filter(Boolean);
+    if (channel === 'dev' && reserveOrigins.length > 0) return reserveOrigins;
+    return primaryOrigin ? [primaryOrigin] : reserveOrigins;
+  }
+
+  function addParam(src, key, value) {
+    var scriptUrl = new URL(src, window.location.href);
+    scriptUrl.searchParams.set(key, value);
+    return scriptUrl.toString();
+  }
+
+  function fetchWithTimeout(src, timeoutMs) {
+    if (typeof AbortController === 'undefined') return fetch(src, { cache: 'no-store' });
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+    return fetch(src, { cache: 'no-store', signal: controller.signal }).finally(function () { clearTimeout(timeoutId); });
+  }
+
+  var channel = resolveChannel();
+  var assetOrigins = dedupeStrings(resolveAssetOrigins(channel));
+  window.__LK_BASE_URLS__ = assetOrigins.map(buildLkBaseUrl).filter(Boolean);
+  window.__LK_API_BASE_URLS__ = assetOrigins.slice();
+  var scriptPath = channel === 'dev'
+    ? '/lk/subscription-storefront/subscription-storefront-dev.js'
+    : '/lk/subscription-storefront/subscription-storefront.js';
+  var releasePath = channel === 'dev'
+    ? '/lk/subscription-storefront/release-dev.json'
+    : '/lk/subscription-storefront/release.json';
+  var localScriptPath = channel === 'dev'
+    ? '../dist/subscription-storefront/subscription-storefront-dev.js'
+    : '../dist/subscription-storefront/subscription-storefront.js';
+
+  function cards() { return document.querySelectorAll('.ph-club-sub'); }
+
+  function setCardStatus(card, text, isError) {
+    var node = card && card.querySelector('.ph-club-status');
+    if (!node) return;
+    node.textContent = text || '';
+    node.className = 'ph-club-status' + (isError ? ' ph-club-status--error' : '');
+  }
+
+  function checkoutApi() {
+    var widget = window.LKWidgetSubscriptionStorefront;
+    return widget && typeof widget.openCheckout === 'function' && widget.checkoutVersion === 1 ? widget : null;
+  }
+
+  function wire() {
+    var widget = checkoutApi();
+    Array.prototype.forEach.call(cards(), function (card) {
+      var button = card.querySelector('[data-ph-offer]');
+      if (!button) return;
+      if (!widget) {
+        setCardStatus(card, 'Оформление временно недоступно. Обновите страницу через минуту.', true);
+        return;
+      }
+      if (button.getAttribute('data-ph-wired') === '1') return;
+      button.setAttribute('data-ph-wired', '1');
+      button.disabled = false;
+      button.textContent = 'Оформить подписку';
+      setCardStatus(card, '', false);
+      button.addEventListener('click', function () {
+        setCardStatus(card, '', false);
+        try { widget.openCheckout(button.getAttribute('data-ph-offer')); }
+        catch (error) { setCardStatus(card, 'Это предложение пока не подключено. Напишите в поддержку.', true); }
+      });
+    });
+    // Возврат из банка или после входа: окно откроется само и не создаст вторую покупку.
+    try { widget.resumeCheckout(); } catch (error) { /* активной попытки нет */ }
+  }
+
+  function fail() {
+    Array.prototype.forEach.call(cards(), function (card) {
+      setCardStatus(card, 'Не удалось загрузить оформление. Попробуйте позже.', true);
+    });
+  }
+
+  function loadScriptFromCandidates(candidates, version, index) {
+    if (index >= candidates.length) { fail(); return; }
+    var origin = candidates[index];
+    var activeBaseUrl = buildLkBaseUrl(origin);
+    if (activeBaseUrl) window.__LK_ACTIVE_BASE_URL__ = activeBaseUrl;
+    else delete window.__LK_ACTIVE_BASE_URL__;
+
+    var old = document.getElementById(scriptId);
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+
+    var script = document.createElement('script');
+    var settled = false;
+    var timeoutId = setTimeout(function () { retry(); }, 10000);
+
+    function retry() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (script.parentNode) script.parentNode.removeChild(script);
+      loadScriptFromCandidates(candidates, version || String(Date.now()), index + 1);
+    }
+
+    var src = isLocalFilePreview ? new URL(localScriptPath, window.location.href).toString() : origin + scriptPath;
+    if (version) {
+      window.__LK_RELEASE_VERSION__ = String(version);
+      src = addParam(src, 'v', String(version));
+    }
+    script.id = scriptId;
+    script.src = addParam(src, 'force_ts', String(Date.now()) + '-' + Math.random().toString(36).slice(2));
+    script.async = true;
+    script.crossOrigin = 'anonymous';
+    script.onload = function () { settled = true; clearTimeout(timeoutId); wire(); };
+    script.onerror = retry;
+    document.head.appendChild(script);
+  }
+
+  function fetchReleaseVersion(index) {
+    if (index >= assetOrigins.length) { loadScriptFromCandidates(assetOrigins, String(Date.now()), 0); return; }
+    var origin = assetOrigins[index];
+    var releaseUrl = addParam(origin + releasePath, 'force_ts', String(Date.now()));
+    fetchWithTimeout(releaseUrl, 5000)
+      .then(function (response) {
+        if (!response.ok) throw new Error('release manifest unavailable');
+        return response.json();
+      })
+      .then(function (release) {
+        var version = release && release.version ? String(release.version) : null;
+        var orderedOrigins = assetOrigins.slice(index).concat(assetOrigins.slice(0, index));
+        loadScriptFromCandidates(orderedOrigins, version, 0);
+      })
+      .catch(function () { fetchReleaseVersion(index + 1); });
+  }
+
+  // Повторная вставка блока на ту же страницу не загружает бандл заново.
+  if (window.__PH_CLUB_SUB__) { window.__PH_CLUB_SUB__.wire(); return; }
+  window.__PH_CLUB_SUB__ = { wire: wire };
+
+  if (checkoutApi()) { wire(); return; }
+
+  Array.prototype.forEach.call(cards(), function (card) {
+    var button = card.querySelector('[data-ph-offer]');
+    if (button && button.getAttribute('data-ph-wired') !== '1') setCardStatus(card, 'Загружаем оформление…', false);
+  });
+
+  if (isLocalFilePreview) { loadScriptFromCandidates([''], String(Date.now()), 0); return; }
+  fetchReleaseVersion(0);
+})();
+</script>

@@ -522,3 +522,18 @@ test('atlanty T123 embeds the isolated loader with the club variant', () => {
   assert.match(html, /variants\.indexOf\("atlanty"\) !== -1/);
   assert.doesNotMatch(html, /autoPurchase|productId/);
 });
+
+test('club purchase T123 sells one offer through the embedded checkout', () => {
+  const html = readFileSync(new URL('../../docs/tilda-club-subscription.html', import.meta.url), 'utf8');
+  new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)![1]);
+  assert.match(html, /class="ph-club-sub"/);
+  assert.match(html, /data-ph-offer="atlanty"/);
+  // The page never supplies a product id, a price or a bank URL to the checkout.
+  assert.doesNotMatch(html, /autoPurchase|productId/);
+  // It loads the same isolated bundle and wires the club key to the checkout API.
+  assert.match(html, /\/lk\/subscription-storefront\/release-dev\.json/);
+  assert.match(html, /widget\.checkoutVersion === 1/);
+  assert.match(html, /widget\.openCheckout\(button\.getAttribute\('data-ph-offer'\)\)/);
+  assert.match(html, /widget\.resumeCheckout\(\)/);
+});
+
