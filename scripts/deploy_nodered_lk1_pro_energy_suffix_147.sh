@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-# Guarded Energy 5/25 name-suffix release. Changes only the fallback name regex
-# in booking.func and preview.func, from the pinned installed flow 5b030bf1….
-# Catalog ID precedence, ownership, balances, route topology and activation remain.
+# Guarded Energy 5/25 compatibility release. Re-embeds the reviewed PRO Energy
+# predicate (including nested balance aliases) and widens only its fallback name
+# suffix in booking.func and preview.func, from the pinned installed flow 5b030bf1….
+# Catalog ID precedence, ownership, route topology and activation remain.
 # Uses the existing reviewed-flow preflight, CAS apply, backup and rollback path.
 
 set -euo pipefail

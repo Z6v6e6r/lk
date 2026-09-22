@@ -85,18 +85,30 @@ export function isProTrainingExercise(value) {
 // and arbitrary products that merely contain an energy marker must remain blocked.
 export function isProTrainingEnergyPack(value) {
   if (!proTrainingIsRecord(value)) return false;
-  const visitsLeft = [
-    value.visitsLeft,
-    value.visitsRemaining,
-    value.remainingVisits,
-    proTrainingIsRecord(value.raw) ? value.raw.visitsLeft : null,
-    proTrainingIsRecord(value.raw) ? value.raw.visitsRemaining : null,
-    proTrainingIsRecord(value.raw) ? value.raw.remainingVisits : null,
-    proTrainingIsRecord(value.subscription) ? value.subscription.visitsLeft : null,
-  ].find((candidate) => candidate !== null && candidate !== undefined);
-  if (visitsLeft !== undefined && visitsLeft !== null) {
-    const numericVisits = Number(visitsLeft);
-    if (!Number.isFinite(numericVisits) || numericVisits <= 0) return false;
+  const visitRecords = [
+    value,
+    value.raw,
+    value.product,
+    proTrainingIsRecord(value.raw) ? value.raw.product : null,
+    value.subscription,
+    value.clientSubscription,
+    value.clientSub,
+    value.subscriptionProduct,
+    value.clientSubscriptionProduct,
+  ].filter(proTrainingIsRecord);
+  const visitValues = visitRecords.flatMap((record) => [
+    record.visitsLeft,
+    record.visitsRemaining,
+    record.remainingVisits,
+    record.availableVisits,
+    record.balance,
+    record.left,
+  ]).filter((candidate) => candidate !== null && candidate !== undefined);
+  if (visitValues.length > 0 && visitValues.some((candidate) => {
+    const numericVisits = Number(candidate);
+    return !Number.isFinite(numericVisits) || numericVisits <= 0;
+  })) {
+    return false;
   }
   const productIds = [
     value.productId,
@@ -107,6 +119,13 @@ export function isProTrainingEnergyPack(value) {
     proTrainingIsRecord(value.product) ? value.product.productId : null,
     proTrainingIsRecord(value.subscription) ? value.subscription.productId : null,
     proTrainingIsRecord(value.subscription) ? value.subscription.subscriptionProductId : null,
+    proTrainingIsRecord(value.raw) && proTrainingIsRecord(value.raw.product) ? value.raw.product.id : null,
+    proTrainingIsRecord(value.raw) && proTrainingIsRecord(value.raw.product) ? value.raw.product.uuid : null,
+    proTrainingIsRecord(value.raw) && proTrainingIsRecord(value.raw.product) ? value.raw.product.productId : null,
+    proTrainingIsRecord(value.clientSubscription) ? value.clientSubscription.productId : null,
+    proTrainingIsRecord(value.clientSubscription) ? value.clientSubscription.subscriptionProductId : null,
+    proTrainingIsRecord(value.clientSub) ? value.clientSub.productId : null,
+    proTrainingIsRecord(value.clientSub) ? value.clientSub.subscriptionProductId : null,
   ]
     .map((candidate) => proTrainingStr(candidate)?.toLocaleLowerCase("en-US"))
     .filter(Boolean);

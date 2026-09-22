@@ -13,11 +13,29 @@ export const PREIMAGES = Object.freeze({
 export const BEFORE = 'return /^(энергия|energy) (5|25)$/.test(normalized || "");';
 export const AFTER = 'return /^(энергия|energy) (5|25)(?: |$)/.test(normalized || "");';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const PRO_MODULE_START = 'const PRO_TRAINING_DIRECTION_IDS =';
+const BOOKING_MODULE_END = 'if (ctx.step === "exercise") {\n';
+const PREVIEW_MODULE_END = 'const lk1PlanRulesGlobal =';
+
+function embeddedModuleSource() {
+  return fs.readFileSync(new URL('./lib/proTrainingExclusion.mjs', import.meta.url), 'utf8')
+    .replace(/^export /gm, '');
+}
+
+function replaceEmbeddedModule(body, endAnchor, label, moduleSource) {
+  const starts = body.split(PRO_MODULE_START).length - 1;
+  const ends = body.split(endAnchor).length - 1;
+  if (starts !== 1 || ends !== 1) throw new Error(`${label} module boundary drift`);
+  const start = body.indexOf(PRO_MODULE_START);
+  const end = body.indexOf(endAnchor, start);
+  if (end <= start) throw new Error(`${label} module ordering drift`);
+  return `${body.slice(0, start)}${moduleSource}\n${body.slice(end)}`;
+}
 
 export function composeEnergySuffix(bytes) {
   if (sha(bytes) !== SOURCE_SHA) throw new Error('Full-flow preimage drift');
   const flow = JSON.parse(bytes);
-  const module = fs.readFileSync(new URL('./lib/proTrainingExclusion.mjs', import.meta.url), 'utf8');
+  const module = embeddedModuleSource();
   if (!module.includes(AFTER) || module.includes(BEFORE)) throw new Error('Source rule drift');
   const changes = [];
   for (const [id, hash] of Object.entries(PREIMAGES)) {
@@ -25,7 +43,9 @@ export function composeEnergySuffix(bytes) {
     if (rows.length !== 1 || rows[0].type !== 'function' || sha(rows[0].func) !== hash) throw new Error('Node preimage drift');
     const node = rows[0];
     if (node.func.split(BEFORE).length !== 2) throw new Error('Rule anchor drift');
-    node.func = node.func.replace(BEFORE, AFTER);
+    node.func = replaceEmbeddedModule(node.func,
+      id === 'lk_subscription_booking_router_20260804' ? BOOKING_MODULE_END : PREVIEW_MODULE_END,
+      id, module).replace(BEFORE, AFTER);
     new Function('msg', 'node', 'env', 'global', node.func);
     changes.push({ id, fields: ['func'], func: { beforeSha256: hash, afterSha256: sha(node.func) } });
   }

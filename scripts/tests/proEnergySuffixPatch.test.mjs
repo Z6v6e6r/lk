@@ -10,6 +10,10 @@ test("suffix names allow owned Energy only, and cannot override catalog identity
     assert.equal(isProTrainingEnergyPack({name, visitsLeft: 0}), false);
     assert.equal(isProTrainingEnergyPack({name, productId: "ra"}), false);
   }
+  for (const holder of ["product", "clientSubscription", "clientSub"]) {
+    assert.equal(isProTrainingEnergyPack({name: "Энергия 5", [holder]: {visitsLeft: 2}}), true);
+    assert.equal(isProTrainingEnergyPack({name: "Энергия 5", [holder]: {visitsLeft: 0}}), false);
+  }
   for (const name of ["Энергия 50", "Энергия 250", "Энергия турниры", "РА", "Академия", "Дружба"]) {
     assert.equal(isProTrainingEnergyPack({name}), false);
   }
@@ -30,9 +34,11 @@ test("fresh reviewed snapshot changes exactly two regexes and refuses replay", {
     if (JSON.stringify(row) === JSON.stringify(after[i])) return;
     changed++;
     assert.deepEqual({...after[i], func: row.func}, row);
-    assert.equal(after[i].func, row.func.replace(BEFORE, AFTER));
+    assert.match(after[i].func, /function isProTrainingEnergyPack\(value\)/);
+    assert.match(after[i].func, /return \/\^\(энергия\|energy\) \(5\|25\)\(\?: \|\$\)\/\.test/);
+    assert.match(after[i].func, /value\.clientSubscription/);
   });
   assert.equal(changed, 2);
-  assert.equal(built.report.candidateSha256, "8af4b1cf16538c712197d031a78db202a9db0762d2ff2bd2a1a94839207449bf");
+  assert.equal(built.report.candidateSha256, "d6df38f3148c576a1602f9d6e9509345d668a725044f0e536411c5b5bcb73dbe");
   assert.throws(() => composeEnergySuffix(built.candidateBytes), /preimage drift/);
 });
