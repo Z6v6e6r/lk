@@ -65,14 +65,33 @@ export function AtlantyEventModalContent({
 
   const handleBook = useCallback(() => {
     rememberAtlantyExercise(event.id, vivaInstance);
+
+    // Штатный путь виджета Viva: у постоянного якоря карточки уже есть его
+    // обработчик, который выставляет выбранное событие и открывает попап.
+    let clickedPersistentLink = false;
     try {
-      const widget = (window as unknown as Record<string, unknown>)[vivaInstance];
-      if (typeof widget === "function") {
-        (widget as (command: string, ...args: unknown[]) => void)("event", "open");
+      const link = document.querySelector<HTMLAnchorElement>(
+        `a[data-atlanty-exercise="${event.id}"]`,
+      );
+      if (link) {
+        link.click();
+        clickedPersistentLink = true;
       }
     } catch {
-      /* виджет записи может быть не подключён — останется переход по хешу */
+      /* селектор может не пережить нестандартный id — уйдём в запасной путь */
     }
+
+    if (!clickedPersistentLink) {
+      try {
+        const widget = (window as unknown as Record<string, unknown>)[vivaInstance];
+        if (typeof widget === "function") {
+          (widget as (command: string, ...args: unknown[]) => void)("event", "open");
+        }
+      } catch {
+        /* виджет записи может быть не подключён — останется переход по хешу */
+      }
+    }
+
     // Закрываем после того, как браузер обработает клик по ссылке.
     window.setTimeout(onClose, 0);
   }, [event.id, onClose, vivaInstance]);
@@ -200,6 +219,32 @@ export function AtlantyEventModal(props: AtlantyEventModalProps) {
       if (keyboardEvent.key === "Escape") {
         keyboardEvent.preventDefault();
         onClose();
+        return;
+      }
+      if (keyboardEvent.key !== "Tab") return;
+
+      const dialog = document.querySelector<HTMLElement>(".atlanty-modal__dialog");
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null || element === document.activeElement);
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      const insideDialog = active instanceof HTMLElement && dialog.contains(active);
+
+      if (keyboardEvent.shiftKey && (!insideDialog || active === first)) {
+        keyboardEvent.preventDefault();
+        last.focus();
+        return;
+      }
+      if (!keyboardEvent.shiftKey && (!insideDialog || active === last)) {
+        keyboardEvent.preventDefault();
+        first.focus();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
