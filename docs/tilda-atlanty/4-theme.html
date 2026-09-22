@@ -1,0 +1,45 @@
+<!--
+  Tilda, блок T123 «HTML-код» — ОФОРМЛЕНИЕ ВИТРИНЫ (необязательный).
+
+  Все цвета, шрифты, размеры и отступы витрины — CSS-переменные, поэтому
+  подогнать блок под дизайн страницы можно без пересборки бандла.
+
+  Переопределять нужно НА `.atlanty-schedule` (или на более специфичном
+  селекторе): у элемента объявлены свои значения, поэтому правило на `:root`
+  не сработает — унаследованное значение проигрывает собственному.
+
+  Ниже — пример под палитру лендинга «ПадлхАБ × Бизнес-клуб». Уберите
+  комментарии вокруг <style>, чтобы он заработал.
+
+  Пример под палитру лендинга «ПадлхАБ × Бизнес-клуб»:
+
+  <style>
+    .ph-landing .atlanty-schedule {
+      --atlanty-accent: #4b56e0;        /* индиго */
+      --atlanty-accent-soft: #eceefb;
+      --atlanty-text: #101012;
+      --atlanty-muted: #8b8b93;
+      --atlanty-border: #ececed;
+      --atlanty-radius: 18px;
+      --atlanty-card-width: calc((100% - 3 * var(--atlanty-gap)) / 4);
+      --atlanty-gap: 20px;
+      --atlanty-track-padding: 0px;
+      --atlanty-title-size: 16px;
+      --atlanty-title-transform: none;
+      --atlanty-meta-size: 12px;
+      --atlanty-meta-icon-size: 13px;
+      --atlanty-pill-size: 9px;
+      --atlanty-pill-bg: transparent;
+      --atlanty-pill-color: #4b56e0;
+      --atlanty-pill-padding: 0;
+      --atlanty-pill-icon-size: 13px;
+      --atlanty-pill-icon-bg: transparent;
+      --atlanty-pill-icon-color: #4b56e0;
+      --atlanty-date-day-size: 18px;
+      --atlanty-date-radius: 12px;
+      --atlanty-seats-size: 12.5px;
+      --atlanty-font-display: 'PH Dewi', 'RF Dewi UltraBold', sans-serif;
+      --atlanty-font-body: 'PH Inter', 'Inter Display', Inter, sans-serif;
+    }
+  </style>
+-->
