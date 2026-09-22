@@ -1,13 +1,25 @@
 <!--
   Tilda, блок T123 «HTML-код».
-  Витрина корпоративного расписания «Время Атланты» (слайдер карточек).
+  Витрина расписания по выбранным категориям (слайдер карточек турнира).
 
   Что делает вставка:
   1. монтирует слайдер карточек из бандла atlanty-schedule.js;
   2. поднимает официальный виджет записи VivaCRM отдельным инстансом «atlanty»
-     в режиме попапа (тип занятия 2349 «Корпоративные клиенты»);
+     в режиме попапа; типы занятий для попапа берутся из списка категорий;
   3. карточки — ссылки вида #atlanty&exerciseId=<id>, поэтому клик открывает
      запись на конкретное событие.
+
+  КАТЕГОРИИ. Список ниже — единственное место, которое надо править, чтобы
+  показывать другой набор расписаний. Менять его можно прямо в Tilda, без
+  пересборки бандла. Нужны два id из Viva: направление (direction.id) и тип
+  занятия (type.id) — тип нужен, чтобы попап записи видел это событие.
+  Готовые пары:
+    Атланты (корпоративные)   directionId 6152, typeId 2349, «Время Атланты»
+    Время на друзей            directionId 5278, typeId 839,  «Время на друзей»
+    Время на друзей (особый)   directionId 5280, typeId 1013, «Время на друзей»
+    Патриоты                   появятся, когда направление создадут в Viva:
+                               { directionId: <id>, typeId: <id>, label: "Время Патриотов" }
+  Чтобы временно выключить категорию, не удаляя её: добавьте enabled: false.
 
   Перед публикацией:
   1. собрать бандл — `npx vite build --config vite.config.atlanty-schedule.ts`
@@ -24,11 +36,23 @@
 <div id="atlanty-schedule-root"></div>
 
 <script>
+  // Выбранные категории расписания. Порядок карточек — по дате события.
+  var ATLANTY_CATEGORIES = [
+    { directionId: 6152, typeId: 2349, label: "Время Атланты" },
+    { directionId: 5278, typeId: 839, label: "Время на друзей" }
+    // { directionId: 7000, typeId: 900, label: "Время Патриотов" },
+  ];
+
   window.LK_ATLANTY_SCHEDULE_CONFIG = {
-    pillLabel: "Время Атланты",
+    categories: ATLANTY_CATEGORIES,
+    // Необязательный заголовок над слайдером.
     title: "",
-    vivaInstance: "atlanty",
-    daysAhead: 120
+    // Сколько ближайших событий показывать.
+    maxEvents: 24,
+    // Горизонт расписания в днях.
+    daysAhead: 120,
+    // Инстанс виджета записи Viva (ссылки карточек — #atlanty&exerciseId=…).
+    vivaInstance: "atlanty"
   };
 </script>
 
@@ -143,7 +167,10 @@
       roomPrefixHidden: false,
       staticWidgetMode: false,
       availableStudios: [],
-      availableTypes: [2349],
+      // Чтобы попап записи видел события всех выбранных категорий.
+      availableTypes: ATLANTY_CATEGORIES
+        .map(function (category) { return category.typeId; })
+        .filter(function (typeId) { return typeof typeId === "number"; }),
       widgetStyles: {
         fontColor: "#111114",
         fontFamily: "Onest",

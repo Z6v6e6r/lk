@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetchAtlantyEvents } from "../../utils/atlantyScheduleApi";
 import {
   ATLANTY_DEFAULT_PILL_LABEL,
+  normalizeAtlantyCategories,
   type AtlantyScheduleEvent,
 } from "../../utils/atlantyScheduleModel";
 import {
@@ -12,12 +13,27 @@ import {
 import "./AtlantySchedulePage.css";
 
 export type AtlantyScheduleConfig = {
-  /** Текст пилюли вместо «Время на друзей». */
+  /** Текст пилюли по умолчанию, если у категории нет своего label. */
   pillLabel?: string;
   /** Необязательный заголовок над слайдером. */
   title?: string | null;
   vivaInstance?: string;
   daysAhead?: number;
+  /** Сколько ближайших событий показывать. */
+  maxEvents?: number;
+  /**
+   * Выбранные категории расписания: имена пресетов ("atlanty", "friends")
+   * или объекты `{ directionId, typeId, label }`.
+   */
+  categories?: ReadonlyArray<string | AtlantyCategoryInput> | null;
+};
+
+export type AtlantyCategoryInput = {
+  directionId?: number | string | null;
+  typeId?: number | string | null;
+  label?: string | null;
+  preset?: string | null;
+  enabled?: boolean;
 };
 
 type LoadStatus = "loading" | "ready" | "error";
@@ -104,7 +120,7 @@ export function AtlantyCard({
             <img src={event.photoUrl} alt="" loading="lazy" decoding="async" />
           ) : (
             <div className="atlanty-card-media-fallback" aria-hidden="true">
-              Атланты
+              {event.title}
             </div>
           )}
           <div className="atlanty-card-date">
@@ -118,7 +134,7 @@ export function AtlantyCard({
             <span className="atlanty-card-pill-icon">
               <InfinityIcon />
             </span>
-            <span className="atlanty-card-pill-label">{pillLabel}</span>
+            <span className="atlanty-card-pill-label">{event.pillLabel || pillLabel}</span>
           </span>
 
           <h3 className="atlanty-card-title">{event.title}</h3>
@@ -198,6 +214,11 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
   const title = config.title?.trim() || "";
   const vivaInstance = config.vivaInstance?.trim() || ATLANTY_VIVA_INSTANCE;
   const daysAhead = config.daysAhead;
+  const maxEvents = config.maxEvents;
+  const categories = useMemo(
+    () => normalizeAtlantyCategories(config.categories),
+    [config.categories],
+  );
 
   const trackRef = useRef<HTMLUListElement | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
@@ -214,6 +235,8 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
 
     apiFetchAtlantyEvents({
       daysAhead,
+      maxEvents,
+      categories,
       forceRefresh: reloadToken > 0,
       signal: controller?.signal,
     }).then((result) => {
@@ -232,7 +255,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
       active = false;
       controller?.abort();
     };
-  }, [daysAhead, reloadToken]);
+  }, [daysAhead, maxEvents, categories, reloadToken]);
 
   const updateNav = useCallback(() => {
     const element = trackRef.current;
