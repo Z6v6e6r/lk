@@ -1,0 +1,62 @@
+<!-- Tilda, блок T123 — скрипты страницы: тарифы, checkout подписки, прокрутка событий. -->
+<script>
+  // Переключатель тарифа, checkout подписки и прокрутка событий.
+  (function () {
+    var root = document.querySelector('.ph-landing');
+    if (!root) return;
+
+    var tabs = root.querySelectorAll('.ph-plan__tab');
+    var oldPrice = root.querySelector('.ph-plan__old-price');
+    var currentPrice = root.querySelector('.ph-plan__current-price');
+    var period = root.querySelector('.ph-plan__period');
+    var buyButton = root.querySelector('.my-buy');
+
+    function setPlan(plan) {
+      var yearly = plan === 'yearly';
+      Array.prototype.forEach.call(tabs, function (tab) {
+        tab.setAttribute('aria-pressed', tab.dataset.plan === plan ? 'true' : 'false');
+      });
+      if (oldPrice) oldPrice.textContent = yearly ? '98 000 ₽' : '9 800 ₽';
+      if (currentPrice) currentPrice.textContent = yearly ? '68 000 ₽' : '6 800 ₽';
+      if (period) period.textContent = yearly ? '/ 365 дней' : '/ 30 дней';
+      if (buyButton) buyButton.dataset.offer = 'atlanty';
+    }
+
+    Array.prototype.forEach.call(tabs, function (tab) {
+      tab.addEventListener('click', function () { setPlan(tab.dataset.plan); });
+    });
+    setPlan('monthly');
+
+    var storefrontScript = document.createElement('script');
+    storefrontScript.src = 'https://padlhub.su/lk/subscription-storefront/subscription-storefront.js?force_ts=' + Date.now();
+    storefrontScript.async = true;
+    storefrontScript.crossOrigin = 'anonymous';
+    storefrontScript.onload = function () {
+      var widget = window.LKWidgetSubscriptionStorefront;
+      if (!widget || widget.checkoutVersion !== 1) return;
+      if (buyButton) {
+        buyButton.addEventListener('click', function () {
+          try { widget.openCheckout(buyButton.dataset.offer); }
+          catch (error) { alert('Это предложение сейчас недоступно'); }
+        });
+        buyButton.disabled = false;
+      }
+      widget.resumeCheckout();
+    };
+    document.head.appendChild(storefrontScript);
+
+    var track = root.querySelector('.ph-events__track');
+    var next = root.querySelector('.ph-events__next');
+    if (!track || !next) return;
+
+    next.addEventListener('click', function () {
+      var card = track.querySelector('.ph-card');
+      var gap = parseFloat(window.getComputedStyle(track).columnGap) || 0;
+      var step = card ? card.getBoundingClientRect().width + gap : track.clientWidth;
+      var max = track.scrollWidth - track.clientWidth;
+      var left = track.scrollLeft + step;
+      var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      track.scrollTo({ left: left > max ? 0 : left, behavior: reducedMotion ? 'auto' : 'smooth' });
+    });
+  })();
+</script>
