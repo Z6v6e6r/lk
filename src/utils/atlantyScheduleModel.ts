@@ -73,6 +73,8 @@ export type AtlantyScheduleEvent = {
   typeName: string | null;
   /** Текст пилюли категории («Время Атланты», «Время на друзей», …). */
   pillLabel: string;
+  /** Ключ категории события — для квот по категориям. */
+  categoryKey: string;
   photoUrl: string | null;
   startAt: string;
   endAt: string;
@@ -245,6 +247,10 @@ export function resolveAtlantyDirectionsParam(
   if (categories.length === 0) return null;
   if (categories.some((category) => category.directionId == null)) return null;
   return [...new Set(categories.map((category) => category.directionId as number))];
+}
+
+export function buildAtlantyCategoryKey(category: AtlantyCategory) {
+  return `${category.directionId ?? "x"}:${category.typeId ?? "x"}`;
 }
 
 export function findAtlantyCategory(
@@ -516,6 +522,7 @@ export function normalizeAtlantyEvent(
       || directionName
       || typeName
       || ATLANTY_DEFAULT_PILL_LABEL,
+    categoryKey: buildAtlantyCategoryKey(category),
     photoUrl:
       pickString(direction, ["photoWeb", "photo"])
       || pickString(value, ["photoWeb", "photo", "photoUrl", "imageUrl"]),
@@ -540,6 +547,30 @@ export function normalizeAtlantyEvent(
       ? pickString(firstTrainer, ["photo", "photoUrl", "avatar", "imageUrl"])
       : null,
   };
+}
+
+/**
+ * Ограничивает число событий каждой категории, чтобы плотная категория
+ * не вытесняла остальные. На входе — уже отсортированный и дедуплицированный
+ * список. `maxPerCategory <= 0` выключает квоту.
+ */
+export function limitAtlantyEventsPerCategory(
+  events: readonly AtlantyScheduleEvent[],
+  maxPerCategory: number,
+  maxEvents: number,
+): AtlantyScheduleEvent[] {
+  if (maxPerCategory <= 0) return events.slice(0, maxEvents);
+
+  const perCategory = new Map<string, number>();
+  const result: AtlantyScheduleEvent[] = [];
+  for (const event of events) {
+    const used = perCategory.get(event.categoryKey) ?? 0;
+    if (used >= maxPerCategory) continue;
+    perCategory.set(event.categoryKey, used + 1);
+    result.push(event);
+    if (result.length >= maxEvents) break;
+  }
+  return result;
 }
 
 export function normalizeAtlantyEventList(

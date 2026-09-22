@@ -19,8 +19,10 @@ export type AtlantyScheduleConfig = {
   title?: string | null;
   vivaInstance?: string;
   daysAhead?: number;
-  /** Сколько ближайших событий показывать. */
+  /** Сколько ближайших событий показывать всего. */
   maxEvents?: number;
+  /** Сколько ближайших событий брать из каждой категории (0 — без квоты). */
+  maxPerCategory?: number;
   /**
    * Выбранные категории расписания: имена пресетов ("atlanty", "friends")
    * или объекты `{ directionId, typeId, label }`.
@@ -215,6 +217,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
   const vivaInstance = config.vivaInstance?.trim() || ATLANTY_VIVA_INSTANCE;
   const daysAhead = config.daysAhead;
   const maxEvents = config.maxEvents;
+  const maxPerCategory = config.maxPerCategory;
   const categories = useMemo(
     () => normalizeAtlantyCategories(config.categories),
     [config.categories],
@@ -236,6 +239,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
     apiFetchAtlantyEvents({
       daysAhead,
       maxEvents,
+      maxPerCategory,
       categories,
       forceRefresh: reloadToken > 0,
       signal: controller?.signal,
@@ -255,7 +259,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
       active = false;
       controller?.abort();
     };
-  }, [daysAhead, maxEvents, categories, reloadToken]);
+  }, [daysAhead, maxEvents, maxPerCategory, categories, reloadToken]);
 
   const updateNav = useCallback(() => {
     const element = trackRef.current;

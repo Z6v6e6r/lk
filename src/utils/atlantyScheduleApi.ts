@@ -3,6 +3,7 @@ import {
   ATLANTY_DEFAULT_TIME_ZONE,
   buildAtlantyCategoriesSignature,
   buildAtlantyPeriodUrl,
+  limitAtlantyEventsPerCategory,
   normalizeAtlantyEventList,
   resolveAtlantyCategories,
   resolveAtlantyDateFrom,
@@ -25,6 +26,11 @@ export type AtlantyScheduleFetchOptions = {
   maxPages?: number;
   pageSize?: number;
   maxEvents?: number;
+  /**
+   * Сколько ближайших событий брать из каждой категории (0 — без квоты).
+   * Нужна, когда одна категория плотнее другой и вытесняет её из витрины.
+   */
+  maxPerCategory?: number;
   /** Выбранные категории (направления) расписания. */
   categories?: readonly AtlantyCategory[] | null;
   timeZone?: string;
@@ -38,6 +44,8 @@ export const ATLANTY_SCHEDULE_DAYS_AHEAD = 120;
 export const ATLANTY_SCHEDULE_MAX_PAGES = 4;
 export const ATLANTY_SCHEDULE_PAGE_SIZE = 500;
 export const ATLANTY_SCHEDULE_MAX_EVENTS = 24;
+/** 0 — без квоты: витрина берёт ближайшие maxEvents событий подряд. */
+export const ATLANTY_SCHEDULE_MAX_PER_CATEGORY = 0;
 export const ATLANTY_SCHEDULE_REQUEST_TIMEOUT_MS = 12_000;
 export const ATLANTY_SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -162,6 +170,10 @@ export async function apiFetchAtlantyEvents(
   const maxPages = Math.max(1, options.maxPages ?? ATLANTY_SCHEDULE_MAX_PAGES);
   const pageSize = Math.max(1, options.pageSize ?? ATLANTY_SCHEDULE_PAGE_SIZE);
   const maxEvents = Math.max(1, options.maxEvents ?? ATLANTY_SCHEDULE_MAX_EVENTS);
+  const maxPerCategory = Math.max(
+    0,
+    options.maxPerCategory ?? ATLANTY_SCHEDULE_MAX_PER_CATEGORY,
+  );
   const now = options.now ?? Date.now();
   const categories = resolveAtlantyCategories(options.categories);
   const cacheKey = buildCacheKey(categories);
@@ -189,19 +201,21 @@ export async function apiFetchAtlantyEvents(
         }),
       );
       if (readPageState(payload).last) break;
-      if (collected.length >= maxEvents) break;
+      // С активной квотой нужно дойти до конца окна, иначе редкая категория
+      // может не попасть в выборку.
+      if (maxPerCategory === 0 && collected.length >= maxEvents) break;
     }
 
-    const events: AtlantyScheduleEvent[] = [];
+    const sorted: AtlantyScheduleEvent[] = [];
     const seen = new Set<string>();
     for (const event of collected.sort(
       (left, right) => Date.parse(left.startAt) - Date.parse(right.startAt),
     )) {
       if (seen.has(event.id)) continue;
       seen.add(event.id);
-      events.push(event);
-      if (events.length >= maxEvents) break;
+      sorted.push(event);
     }
+    const events = limitAtlantyEventsPerCategory(sorted, maxPerCategory, maxEvents);
 
     writeCache(cacheKey, events);
     return { data: events, error: null };
