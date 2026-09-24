@@ -191,6 +191,7 @@ const regularPayment = loadModule<typeof import('../../src/components/subscripti
   ...catalog,
   ATLANTY_MONTHLY_PRODUCT_ID: '3907d127-a6b0-419e-a933-4a2857f26356',
   ATLANTY_ANNUAL_PRODUCT_ID: '',
+  TOPOCRATY_PRODUCT_ID: '14692232-12be-4218-9fa1-2d5b79b62035',
   apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
   apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
 });
@@ -210,6 +211,7 @@ function zeroFixture() {
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
     ...regularPayment, ...promo, ...f.adapter,
     ATLANTY_MONTHLY_PRICE_MINOR: 680000,
+    TOPOCRATY_MONTHLY_PRICE_MINOR: 680000,
     canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
     appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
     getServ2Origin: () => 'https://fixture.invalid',
@@ -248,6 +250,30 @@ test('Zero Block sells the Atlanty club offer from the catalogue price, never th
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0][0], '3907d127-a6b0-419e-a933-4a2857f26356');
   assert.equal(f.writes[0][2].retries, 0);
+});
+
+test('Zero Block sells the Topocrats club subscription by its operator-issued id, without a counter request', async () => {
+  const f = zeroFixture();
+  const offer = f.adapter.resolveZeroOffer('topocraty');
+  assert.equal(offer?.label, 'ДРУЖБА.ТОПОКРАТЫ');
+  assert.equal(offer?.period, '30 дней');
+  assert.equal(offer?.planId, 'topocraty');
+  assert.equal(offer?.billingOptionId, 'monthly');
+  assert.equal(offer?.target?.counterKey, 'topocraty');
+  assert.equal(offer?.target?.directProductId, '14692232-12be-4218-9fa1-2d5b79b62035');
+  assert.equal(await f.adapter.loadZeroOfferPrice('topocraty'), 680000);
+  assert.equal(f.writes.length, 0);
+
+  await f.adapter.createZeroPayment('topocraty', fixturePhone, 680000, () => true);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0][0], '14692232-12be-4218-9fa1-2d5b79b62035');
+  assert.equal(f.writes[0][2].retries, 0);
+});
+
+test('Zero Block rejects a changed Topocrats price instead of charging it', async () => {
+  const f = zeroFixture();
+  await assert.rejects(f.adapter.createZeroPayment('topocraty', fixturePhone, 490000, () => true));
+  assert.equal(f.writes.length, 0);
 });
 
 test('Zero Block persists ref before one counter POST; reopening and concurrent clicks never create again', async () => {

@@ -299,3 +299,32 @@ MODEL_ROUTE: parent
   боевая транзакция по новому продукту не создавалась, годовой id ещё не задан.
   Блок начнёт показывать клубную карточку только после публикации новой сборки
   `subscription-storefront` и её `release.json`/`release-dev.json`.
+
+## Клубная подписка «Дружба Топократы» (2026-09-24)
+
+- Второй клубный оффер Zero Block — `topocraty`: кнопка «Оформить» на странице
+  `https://padlhub.ru/topocraty` открывает витрину без отдельной страницы-карточки
+  (`openCheckout('topocraty')` из `docs/topocraty-tilda/6-subscription-checkout.html`).
+- Продаётся id самой подписки из каталога «Абонементы»:
+  `TOPOCRATY_PRODUCT_ID = '14692232-12be-4218-9fa1-2d5b79b62035'` в
+  `src/components/subscription-storefront/catalog.ts`. Он уходит в
+  `apiBuySubscroption` как продукт типа `SUBSCRIPTION` — тот же контракт, что у
+  «Энергии 5» (`GET /api/v1/products/subscriptions`), поэтому отдельный product id
+  не требуется.
+- Цена статичная, как у «Атлантов»:
+  `TOPOCRATY_MONTHLY_PRICE_MINOR = 680000` (6 800 ₽ вместо зачёркнутых
+  `TOPOCRATY_MONTHLY_COMPARE_MINOR = 980000`), счётчика статуса у подписки нет —
+  `loadZeroOfferPrice` не делает запрос в `/lk/tournaments/summer-subscription/status`.
+- Один вариант на 30 дней: `resolveStorefrontBillingTarget('topocraty', 'annual')`
+  и `'monthly-two-hours'` возвращают `null`, покупка идёт с `retries: 0`.
+- Пустой/пробельный `TOPOCRATY_PRODUCT_ID` закрывает оформление (нет «провала» в
+  counter-контур `apiCreateTournamentSubscriptionPurchase`).
+- LOCAL: `node --experimental-strip-types --test scripts/tests/subscriptionStorefront.test.ts
+  scripts/tests/subscriptionStorefrontPromo.test.ts` — 47/47 PASS (включая оффер
+  `topocraty`: цена из каталога, одна транзакция, отказ при изменённой цене).
+- Остаточный риск: id подписки ещё не подтверждён боевой транзакцией. Если он не
+  продаваемый абонемент, Viva не вернёт `paymentUrl`, витрина покажет ошибку
+  провайдера и оплата не создастся. Проверка — один раз на dev авторизованным
+  профилем; до неё вариант не считается проверенным в бою.
+- НЕ выполнено: бандл `subscription-storefront` с оффером `topocraty` не выкладывался,
+  Tilda-блок вставляется на страницу вручную; боевая транзакция не создавалась.
