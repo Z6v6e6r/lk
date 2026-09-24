@@ -1,0 +1,130 @@
+<!--
+  Tilda, блок T123 «HTML-код» — ПОПАП ЗАПИСИ VIVACRM.
+
+  Ставится ОДИН раз, в самом низу страницы (или в футере сайта).
+  Нужен для кнопки «Записаться» в карточке события.
+
+  Типы занятий берутся из настроек (блок 1), порядок блоков не важен: если
+  настроек на странице нет, попап просто не ограничивается по типам.
+
+  Если на странице уже есть виджет записи Viva с инстансом `atlanty` — этот
+  блок не нужен. Инстанс можно переименовать: замените "atlanty" в конце
+  сниппета и в `vivaInstance` блока 1 на одно и то же имя.
+-->
+<script>
+  // Вариант 2 (опционально): официальный виджет записи VivaCRM в режиме попапа.
+  // Нужен только если карточки должны открывать запись прямо на этой странице.
+  (function (w, d, s, o, f) {
+    function initViva() {
+      var initConfig = {
+        tenantKey: "iSkq6G",
+        theme: "light",
+        title: "Расписание",
+        language: "ru",
+        year: new Date().getFullYear(),
+        month: new Date().getMonth() + 1,
+        vocabulary: {
+          room: "зал",
+          class: "занятие",
+          place: "локация",
+          action: "записаться",
+          master: "исполнитель",
+          service: "тренировка"
+        },
+        bookingDays: 14,
+        defaultView: "day",
+        borderRadius: true,
+        showClassesDuration: true,
+        isExerciseTimeVisible: true,
+        showExerciseDirections: true,
+        firstDirectionIsActive: false,
+        hideAvailableSpots: false,
+        roomNamesHidden: false,
+        roomPrefixHidden: false,
+        staticWidgetMode: false,
+        availableStudios: [],
+        widgetStyles: {
+          fontColor: "#111114",
+          fontFamily: "Onest",
+          accentColor: "#7A4DF0",
+          secondColor: "#7A4DF0",
+          tertiaryColor: "#f34f21",
+          backgroundColor: "#ffffff",
+          secondAccentColor: "#9A6BFF"
+        }
+      };
+
+      var requestedExercise = null;
+      try {
+        requestedExercise = new URLSearchParams(w.location.search).get(o + "_exercise");
+      } catch (e) {
+        requestedExercise = null;
+      }
+      if (requestedExercise) initConfig.exerciseId = requestedExercise;
+
+      // Типы занятий берём из настроек (блок 1), а не из его переменной: блоки
+      // могут стоять в любом порядке. Если настроек нет — попап не ограничиваем.
+      var configuredCategories = w.LK_ATLANTY_SCHEDULE_CONFIG
+        && w.LK_ATLANTY_SCHEDULE_CONFIG.categories;
+      var availableTypes = Array.isArray(configuredCategories)
+        ? configuredCategories
+          .map(function (category) { return category && category.typeId; })
+          .filter(function (typeId) { return typeof typeId === "number"; })
+        : [];
+      if (availableTypes.length > 0) initConfig.availableTypes = availableTypes;
+
+      w[o] = w[o] || function () { (w[o].q = w[o].q || []).push(arguments); };
+      w[o].q = w[o].q || [];
+      w.__vcGroupClassesInstances = w.__vcGroupClassesInstances || [];
+      if (w.__vcGroupClassesInstances.indexOf(o) === -1) w.__vcGroupClassesInstances.push(o);
+      w.__vcGroupClassesInstallScripts = w.__vcGroupClassesInstallScripts || {};
+
+      var install = d.getElementById(o);
+      if (!install) {
+        install = d.createElement(s);
+        install.id = o;
+        install.type = "application/json";
+        (d.body || d.documentElement).appendChild(install);
+      }
+      w.__vcGroupClassesInstallScripts[o] = install;
+
+      // init обязан попасть в очередь раньше, чем бандл Viva выполнится.
+      w[o]("init", initConfig);
+
+      function boot() {
+        if (typeof w.__vcGroupClassesBoot === "function") {
+          w.__vcGroupClassesBoot();
+          return true;
+        }
+        return false;
+      }
+
+      var existing = d.querySelector('script[data-vc-group-classes-bundle="1"]');
+      if (existing) {
+        if (w.__vcGroupClassesBundleReady || existing.getAttribute("data-vc-group-classes-ready") === "1") {
+          boot();
+          return;
+        }
+        existing.addEventListener("load", boot);
+        return;
+      }
+
+      var bundle = d.createElement(s);
+      bundle.src = f;
+      bundle.async = true;
+      bundle.setAttribute("data-vc-group-classes-bundle", "1");
+      bundle.onload = function () {
+        bundle.setAttribute("data-vc-group-classes-ready", "1");
+        boot();
+      };
+      (d.body || d.head || d.documentElement).appendChild(bundle);
+    }
+
+    // Ждём DOMContentLoaded: тогда настройки из блока 1 точно применены.
+    if (d.readyState === "loading") {
+      d.addEventListener("DOMContentLoaded", initViva, { once: true });
+    } else {
+      initViva();
+    }
+  })(window, document, "script", "atlanty", "https://cabinet.vivacrm.ru/vc-widget-group-classes.js");
+</script>

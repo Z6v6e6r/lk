@@ -1,0 +1,90 @@
+<!-- Tilda, блок T123 — загрузчик витрины расписания (контейнер уже в блоке событий). -->
+<script>
+  // Вариант 1: подтянуть бандл витрины с нашего CDN.
+  (function () {
+    var primaryAssetOrigin = "https://padlhub.su";
+    var scriptPath = "/lk/atlanty-schedule.js";
+    var releasePath = "/lk/release.json";
+    var releaseTimeoutMs = 5000;
+    var scriptTimeoutMs = 12000;
+
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    var origin = primaryAssetOrigin.replace(/\/+$/, "");
+
+    function showError() {
+      var root = document.getElementById("atlanty-schedule-root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить расписание. Попробуйте позже.</div>";
+      }
+    }
+
+    function addParam(src, key, value) {
+      var url = new URL(src, window.location.href);
+      url.searchParams.set(key, value);
+      return url.toString();
+    }
+
+    function fetchWithTimeout(src, timeoutMs) {
+      if (typeof AbortController === "undefined") return fetch(src, { cache: "no-store" });
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+      return fetch(src, { cache: "no-store", signal: controller.signal }).finally(function () {
+        clearTimeout(timeoutId);
+      });
+    }
+
+    function loadScript(version) {
+      var script = document.createElement("script");
+      var settled = false;
+      var timeoutId = setTimeout(function () {
+        settled = true;
+        if (script.parentNode) script.parentNode.removeChild(script);
+        showError();
+      }, scriptTimeoutMs);
+
+      script.id = "padlhub-atlanty-schedule-script";
+      script.src = addParam(
+        origin + scriptPath + (version ? "?v=" + encodeURIComponent(version) : ""),
+        "force_ts",
+        cacheBust
+      );
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+      };
+      script.onerror = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        showError();
+      };
+      document.head.appendChild(script);
+    }
+
+    function start() {
+      fetchWithTimeout(addParam(origin + releasePath, "force_ts", cacheBust), releaseTimeoutMs)
+        .then(function (response) {
+          if (!response.ok) throw new Error("release manifest unavailable");
+          return response.json();
+        })
+        .then(function (release) {
+          loadScript(release && release.version ? String(release.version) : null);
+        })
+        .catch(function () {
+          loadScript(null);
+        });
+    }
+
+    // Ждём DOMContentLoaded: тогда настройки точно применены, даже если
+    // конфиг окажется ниже этого блока.
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start, { once: true });
+    } else {
+      start();
+    }
+  })();
+</script>

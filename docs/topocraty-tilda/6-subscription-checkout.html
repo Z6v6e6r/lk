@@ -1,0 +1,71 @@
+<!--
+  Tilda, блок T123 — ОПЛАТА ПОДПИСКИ (витрина) ДЛЯ СТРАНИЦЫ ТОПОКРАТОВ.
+
+  Зачем: в блоке «Первый экран и подписка» у кнопки «Оформить» сейчас пустые
+  `checkoutMonthlyUrl`/`checkoutYearlyUrl`, поэтому `checkout()` показывает
+  диалог-заглушку и оплата не стартует. Прямой ссылки, которая запускает оплату
+  клубной подписки, не существует: `openCheckout()` — это вызов JS витрины,
+  а `?phCheckoutReturn=atlanty` только возобновляет уже начатую оплату после
+  возврата из банка.
+
+  Что делает блок:
+  1. подключает официальную витрину подписок;
+  2. перехватывает «Оформить» (capture-фаза, поэтому обработчик страницы не
+     мешает) и открывает оформление оффера `atlanty` — «ДРУЖБА.АТЛАНТЫ»,
+     6 800 ₽ / 30 дней, тот же продукт, что и на странице подписки;
+  3. на загрузке вызывает `resumeCheckout()`, чтобы возврат из банка или OAuth
+     корректно продолжил оформление.
+
+  Если витрина не загрузилась — перехвата нет, и работает штатная логика
+  страницы (диалог с сообщением), то есть оплата не стартует молча.
+-->
+<script>
+  (function () {
+    'use strict';
+
+    var STOREFRONT_URL = 'https://padlhub.su/lk/subscription-storefront/subscription-storefront.js';
+    var OFFER_KEY = 'atlanty';
+    var widget = null;
+
+    function isReady() {
+      var candidate = window.LKWidgetSubscriptionStorefront;
+      return Boolean(candidate && candidate.checkoutVersion === 1 && typeof candidate.openCheckout === 'function');
+    }
+
+    function loadStorefront() {
+      if (isReady()) {
+        widget = window.LKWidgetSubscriptionStorefront;
+        return;
+      }
+      if (document.getElementById('padlhub-storefront-script')) return;
+
+      var script = document.createElement('script');
+      script.id = 'padlhub-storefront-script';
+      script.src = STOREFRONT_URL + '?force_ts=' + Date.now();
+      script.async = true;
+      script.crossOrigin = 'anonymous';
+      script.onload = function () {
+        if (!isReady()) return;
+        widget = window.LKWidgetSubscriptionStorefront;
+        try { widget.resumeCheckout(); } catch (error) { /* возврат из банка не обязателен */ }
+      };
+      document.head.appendChild(script);
+    }
+
+    // capture: обработчик страницы не должен успеть увести на пустой URL.
+    document.addEventListener('click', function (event) {
+      var target = event.target;
+      var button = target && target.closest ? target.closest('[data-ph-tk-checkout]') : null;
+      if (!button || !widget) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      try {
+        widget.openCheckout(OFFER_KEY);
+      } catch (error) {
+        window.alert('Оформление сейчас недоступно. Обновите страницу или напишите в поддержку.');
+      }
+    }, true);
+
+    loadStorefront();
+  })();
+</script>
