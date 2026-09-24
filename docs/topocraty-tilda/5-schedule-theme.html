@@ -1,0 +1,57 @@
+<!--
+  Tilda, блок T123 — ОФОРМЛЕНИЕ ВИТРИНЫ ПОД ПАЛИТРУ ТОПОКРАТОВ.
+
+  Переопределять переменные нужно НА `.atlanty-schedule`: у элемента объявлены
+  свои значения, правило на `:root` не сработает.
+-->
+<style>
+  .ph-tk .atlanty-schedule,
+  [data-ph-tk-block="events"] .atlanty-schedule {
+    /* палитра страницы */
+    --atlanty-accent: #8a0b0b;         /* --tk-red */
+    --atlanty-accent-soft: #f6eded;    /* --tk-tint */
+    --atlanty-text: #111111;           /* --tk-black */
+    --atlanty-muted: #727278;          /* --tk-muted */
+    --atlanty-border: #e9e8e5;         /* --tk-line */
+    --atlanty-surface-muted: #f6eded;
+    --atlanty-font-display: 'RF Dewi UltraBold', 'PH Dewi', 'Inter', sans-serif;
+    --atlanty-font-body: 'Inter', 'TildaSans', Arial, sans-serif;
+
+    /* геометрия как у .ph-tk-event */
+    --atlanty-radius: 18px;
+    --atlanty-gap: 23px;
+    --atlanty-card-width: min(84%, 360px);
+    --atlanty-track-padding: 0px;
+    --atlanty-card-shadow: none;
+    --atlanty-card-shadow-hover: 0 18px 40px rgba(17, 17, 17, 0.1);
+    --atlanty-title-size: 19px;
+    --atlanty-title-transform: none;
+    --atlanty-title-line-height: 1.2;
+    --atlanty-meta-size: 12px;
+    --atlanty-meta-icon-size: 13px;
+    --atlanty-pill-size: 12px;
+    --atlanty-pill-bg: rgba(255, 255, 255, 0.94);
+    --atlanty-pill-color: #111111;
+    --atlanty-pill-padding: 6px 9px;
+    --atlanty-pill-icon-size: 13px;
+    --atlanty-pill-icon-bg: transparent;
+    --atlanty-pill-icon-color: #8a0b0b;
+    --atlanty-date-day-size: 18px;
+    --atlanty-date-radius: 8px;
+    --atlanty-seats-size: 12px;
+  }
+
+  /* Сетка страницы: 3 в ряд на широком экране, слайдер — на узком. */
+  @media (min-width: 761px) and (max-width: 1100px) {
+    .ph-tk .atlanty-schedule { --atlanty-card-width: calc((100% - var(--atlanty-gap)) / 2); }
+  }
+  @media (min-width: 1101px) {
+    .ph-tk .atlanty-schedule { --atlanty-card-width: calc((100% - 2 * var(--atlanty-gap)) / 3); }
+  }
+
+  /* Мелкая доводка под классы страницы. */
+  .ph-tk .atlanty-card-body { padding: 20px; gap: 12px; }
+  .ph-tk .atlanty-card-title { letter-spacing: -0.02em; font-weight: 700; }
+  .ph-tk .atlanty-card-meta-row svg { color: #6d676b; opacity: 1; }
+  .ph-tk .atlanty-card-pill { font-weight: 600; text-transform: none; letter-spacing: 0; }
+</style>
