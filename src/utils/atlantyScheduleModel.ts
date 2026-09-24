@@ -281,16 +281,30 @@ export function buildAtlantyCategoryKey(category: AtlantyCategory) {
   return `${category.directionId ?? "x"}:${category.typeId ?? "x"}`;
 }
 
+/**
+ * Категория события: сначала по направлению, и только если направления нет —
+ * по типу.
+ *
+ * Так нельзя случайно показать чужой клуб: тип 2349 «Корпоративные клиенты»
+ * общий, например, у «Атлантов» (6152) и у «Топократов» (6180, 6233), поэтому
+ * тип не должен «притягивать» события другого направления.
+ */
 export function findAtlantyCategory(
   value: unknown,
   categories: readonly AtlantyCategory[],
 ): AtlantyCategory | null {
   const directionId = getAtlantyDirectionId(value);
+  if (directionId !== null) {
+    const byDirection = categories.find(
+      (category) => category.directionId != null && category.directionId === directionId,
+    );
+    if (byDirection) return byDirection;
+  }
+
   const typeId = getAtlantyTypeId(value);
+  if (typeId === null) return null;
   return categories.find(
-    (category) =>
-      (category.directionId != null && directionId === category.directionId)
-      || (category.typeId != null && typeId === category.typeId),
+    (category) => category.directionId == null && category.typeId === typeId,
   ) ?? null;
 }
 

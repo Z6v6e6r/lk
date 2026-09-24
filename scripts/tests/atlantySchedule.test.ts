@@ -70,12 +70,33 @@ test("по умолчанию витрина берёт корпоративно
   assert.deepEqual([...ATLANTY_CORPORATE_TYPE_IDS], [2349]);
   assert.deepEqual([...ATLANTY_CORPORATE_DIRECTION_IDS], [6152]);
   assert.equal(matchesAtlantyCategories(corporateExercise), true);
-  assert.equal(matchesAtlantyCategories({ type: { id: "2349", name: "Корпоративные клиенты" } }), true);
   assert.equal(matchesAtlantyCategories({ direction: { id: 6152, name: "Атланты" } }), true);
   assert.equal(
     matchesAtlantyCategories({ direction: { id: 3686, name: "Групповая тренировка уровень D+" }, type: { id: 605 } }),
     false,
   );
+});
+
+test("общий тип не подтягивает события чужого клуба", () => {
+  // 2349 «Корпоративные клиенты» есть и у Атлантов (6152), и у Топократов (6180/6233).
+  const atlantyOnly = normalizeAtlantyCategories([{ directionId: 6152, typeId: 2349 }]);
+  const topocraty = { direction: { id: 6180, name: "Топократы игра" }, type: { id: 2349 } };
+  assert.equal(matchesAtlantyCategories(topocraty, { categories: atlantyOnly }), false);
+
+  const topocratyOnly = normalizeAtlantyCategories([
+    { directionId: 6180, typeId: 2349 },
+    { directionId: 6233, typeId: 2349 },
+  ]);
+  assert.equal(matchesAtlantyCategories(topocraty, { categories: topocratyOnly }), true);
+  assert.equal(
+    matchesAtlantyCategories(corporateExercise, { categories: topocratyOnly }),
+    false,
+  );
+
+  // Категория только по типу (без направления) по-прежнему работает как фильтр типа.
+  const byType = normalizeAtlantyCategories([{ typeId: 2349 }]);
+  assert.equal(matchesAtlantyCategories(topocraty, { categories: byType }), true);
+  assert.equal(matchesAtlantyCategories({ direction: { id: 6180 }, type: { id: 605 } }, { categories: byType }), false);
 });
 
 test("категории задаются пресетами, id и объектами", () => {
