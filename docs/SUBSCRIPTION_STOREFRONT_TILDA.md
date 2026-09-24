@@ -299,3 +299,49 @@ MODEL_ROUTE: parent
   боевая транзакция по новому продукту не создавалась, годовой id ещё не задан.
   Блок начнёт показывать клубную карточку только после публикации новой сборки
   `subscription-storefront` и её `release.json`/`release-dev.json`.
+
+## Клубная подписка «Дружба Топократы» (2026-09-24)
+
+- Второй клубный оффер Zero Block — `topocraty`: кнопка «Оформить» на странице
+  `https://padlhub.ru/topocraty` открывает витрину без отдельной страницы-карточки
+  (`openCheckout('topocraty')` из `docs/topocraty-tilda/6-subscription-checkout.html`).
+- Продаётся id подписки из каталога «Абонементы»:
+  `TOPOCRATY_PRODUCT_ID = '14692232-12be-4218-9fa1-2d5b79b62035'` в
+  `src/components/subscription-storefront/catalog.ts`. Он уходит в
+  `apiBuySubscroption` как продукт типа `SUBSCRIPTION` — тот же контракт, которым
+  кабинет продаёт абонементы из списка для продажи
+  (`src/components/cabinet/BuySubscription.tsx` → `apiGetSubscriptionsForSale()`)
+  и которым идут акционные офферы. Оператор подтвердил, что это продаваемый
+  абонемент из каталога; боевой транзакцией id пока не проверялся.
+- Цена статичная, как у «Атлантов»: `TOPOCRATY_MONTHLY_PRICE_MINOR = 680000`
+  (6 800 ₽, на странице зачёркнуто 9 800 ₽). Счётчика статуса у подписки нет —
+  `loadZeroOfferPrice` не делает запрос в `/lk/tournaments/summer-subscription/status`.
+- Один вариант на 30 дней: `resolveStorefrontBillingTarget('topocraty', 'annual')`
+  и `'monthly-two-hours'` возвращают `null`, покупка идёт с `retries: 0`.
+- Пустой/пробельный `TOPOCRATY_PRODUCT_ID` закрывает оформление до показа цены:
+  `loadZeroOfferPrice` падает на `!offer.target` раньше ветки `staticPriceMinor`,
+  поэтому durable-маркер попытки не пишется и «провала» в counter-контур
+  `apiCreateTournamentSubscriptionPurchase` нет.
+- Годовой тариф страницы Топократов не перехватывается: capture-обработчик блока
+  выходит, если выбран `[data-ph-tk-tariff="year"][aria-pressed="true"]`, и
+  работает штатное пояснение страницы. Иначе «год» оформил бы 30-дневную подписку.
+  `resumeCheckout()` вызывается и когда витрина к моменту выполнения блока уже
+  загружена.
+- LOCAL: `node --experimental-strip-types --test scripts/tests/subscriptionStorefront.test.ts
+  scripts/tests/subscriptionStorefrontPromo.test.ts` — 49/49 PASS (включая оффер
+  `topocraty`: цена из каталога без счётчикового запроса, одна транзакция,
+  отказ при изменённой цене, fail-closed при пустом id, связка `OFFER_KEY` блока
+  с ключами бандла и неперехват годового тарифа).
+- Остаточные риски (не закрыты кодом):
+  - id подписки не подтверждён боевой транзакцией. Если он не продаваемый
+    абонемент, Viva не вернёт `paymentUrl`, витрина покажет ошибку провайдера и
+    оплата не создастся;
+  - статическая цена не сверяется с суммой провайдера автоматически (см. тот же
+    риск у `atlanty` выше): если у подписки другая цена или срок, транзакция
+    создастся, и другая сумма будет видна только на странице банка. Перед
+    публикацией цену и срок нужно сверить в CRM;
+  - смена ключа оффера на той же странице не переносится на прежние маркеры
+    `padlhub_zero_checkout_attempt_v1:atlanty` — при откате на прежний оффер
+    поддержку стоит предупредить, что защита от повтора у них отдельная.
+- НЕ выполнено: бандл `subscription-storefront` с оффером `topocraty` не выкладывался,
+  Tilda-блок вставляется на страницу вручную; боевая транзакция не создавалась.

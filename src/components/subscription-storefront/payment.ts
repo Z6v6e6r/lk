@@ -14,7 +14,7 @@ import {
 } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveTournamentSubscriptionDirectProductId } from '../../utils/tournamentSubscriptionCatalog';
-import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID } from './catalog';
+import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
 
 /** Query parameter used by LK1 to resolve the payment after returning from the bank. */
 export const PAYMENT_REF_QUERY_KEY = 'summerPaymentRef';
@@ -26,7 +26,7 @@ const PENDING_PAYMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export type StorefrontBillingOptionId = 'monthly' | 'annual' | 'monthly-two-hours';
 
 export interface StorefrontBillingTarget {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty';
+  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty';
   /** Direct product purchase (`apiBuySubscroption`) when the plan has a catalog product. */
   directProductId: string | null;
   /** Summer-plan purchase mode used for counter based plans. */
@@ -34,7 +34,7 @@ export interface StorefrontBillingTarget {
 }
 
 export interface PendingPaymentEntry {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | null;
+  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty' | null;
   paymentRef: string;
   planId: StorefrontBillingOptionId | null;
   campaignKey: string | null;
@@ -79,6 +79,14 @@ export function resolveStorefrontBillingTarget(
         : null;
     }
     return null;
+  }
+  if (planId === TOPOCRATY_PLAN_ID) {
+    // Клубная подписка Топократов — один прямой продукт-абонемент. Пустой id
+    // закрывает вариант, а не уводит его в счётчиковый контур покупки.
+    const productId = String(TOPOCRATY_PRODUCT_ID || '').trim();
+    return billingOptionId === 'monthly' && productId
+      ? { counterKey: TOPOCRATY_PLAN_ID, directProductId: productId, planType: 'friendship' }
+      : null;
   }
   if (planId === 'friendship' && billingOptionId === 'annual') {
     return { counterKey: 'network_friendship', directProductId: null, planType: 'friendship' };
@@ -134,7 +142,7 @@ export function clearStorefrontPaymentRef(): void {
 
 function normalizePendingCounterKey(value: string): PendingPaymentEntry['counterKey'] {
   return value === 'friendship' || value === 'network_friendship' || value === 'ra' || value === 'academy'
-    || value === 'energy5' || value === 'atlanty'
+    || value === 'energy5' || value === 'atlanty' || value === TOPOCRATY_PLAN_ID
     ? value
     : null;
 }

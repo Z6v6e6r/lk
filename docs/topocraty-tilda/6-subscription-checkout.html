@@ -3,18 +3,29 @@
 
   Зачем: в блоке «Первый экран и подписка» у кнопки «Оформить» сейчас пустые
   `checkoutMonthlyUrl`/`checkoutYearlyUrl`, поэтому `checkout()` показывает
-  диалог-заглушку и оплата не стартует. Прямой ссылки, которая запускает оплату
+  диалог-заглушку и оплата не стартует. Прямой URL, который запускает оплату
   клубной подписки, не существует: `openCheckout()` — это вызов JS витрины,
-  а `?phCheckoutReturn=atlanty` только возобновляет уже начатую оплату после
+  а `?phCheckoutReturn=topocraty` только возобновляет уже начатую оплату после
   возврата из банка.
 
   Что делает блок:
   1. подключает официальную витрину подписок;
   2. перехватывает «Оформить» (capture-фаза, поэтому обработчик страницы не
-     мешает) и открывает оформление оффера `atlanty` — «ДРУЖБА.АТЛАНТЫ»,
-     6 800 ₽ / 30 дней, тот же продукт, что и на странице подписки;
+     мешает) и открывает оформление оффера `topocraty` — подписка «Дружба
+     Топократы» (`14692232-12be-4218-9fa1-2d5b79b62035`, 6 800 ₽ / 30 дней);
   3. на загрузке вызывает `resumeCheckout()`, чтобы возврат из банка или OAuth
      корректно продолжил оформление.
+
+  Витрина отправляет этот id в Viva как продукт типа `SUBSCRIPTION` — то есть
+  продаётся та самая подписка из каталога «Абонементы», отдельный product id не
+  нужен. Цена берётся из каталога витрины (`TOPOCRATY_MONTHLY_PRICE_MINOR`),
+  а сумму по-прежнему определяет провайдер: перед публикацией цену и срок
+  подписки нужно сверить в CRM.
+
+  Годовой тариф страницы не перехватывается: если выбран переключатель «год»
+  (`[data-ph-tk-tariff="year"]` с `aria-pressed="true"`), блок не вмешивается и
+  работает штатное пояснение страницы. Иначе посетитель, выбравший «год»,
+  оформил бы 30-дневную подписку.
 
   Если витрина не загрузилась — перехвата нет, и работает штатная логика
   страницы (диалог с сообщением), то есть оплата не стартует молча.
@@ -24,7 +35,7 @@
     'use strict';
 
     var STOREFRONT_URL = 'https://padlhub.su/lk/subscription-storefront/subscription-storefront.js';
-    var OFFER_KEY = 'atlanty';
+    var OFFER_KEY = 'topocraty';
     var widget = null;
 
     function isReady() {
@@ -32,9 +43,16 @@
       return Boolean(candidate && candidate.checkoutVersion === 1 && typeof candidate.openCheckout === 'function');
     }
 
+    /** Годового варианта у Топократов нет: в этом режиме кнопка только поясняет. */
+    function isAnnualSelected() {
+      return Boolean(document.querySelector('[data-ph-tk-tariff="year"][aria-pressed="true"]'));
+    }
+
     function loadStorefront() {
       if (isReady()) {
         widget = window.LKWidgetSubscriptionStorefront;
+        // Возврат из банка или OAuth должен продолжить уже начатое оформление.
+        try { widget.resumeCheckout(); } catch (error) { /* возврат не обязателен */ }
         return;
       }
       if (document.getElementById('padlhub-storefront-script')) return;
@@ -57,6 +75,8 @@
       var target = event.target;
       var button = target && target.closest ? target.closest('[data-ph-tk-checkout]') : null;
       if (!button || !widget) return;
+      // Годовой тариф не продаётся этим оффером — не подменяем его месячным.
+      if (isAnnualSelected()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       try {

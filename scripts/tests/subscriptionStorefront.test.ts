@@ -7,7 +7,7 @@ import ts from 'typescript';
 import {
   billingFromStatus, canContinue, energy5BillingOptions, friendshipBillingOptions, requiresAnnualTermsConsent,
   scopedStorefrontStatuses, atlantyBillingOptions, ATLANTY_PLAN_ID, ATLANTY_VARIANT, normalizeStorefrontVariant,
-  ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID,
+  ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID,
 } from '../../src/components/subscription-storefront/catalog.ts';
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
@@ -28,7 +28,7 @@ function stripImports(source: string): string {
 }
 
 /** Loads the payment adapter in a VM with stubbed LK1 API calls. */
-function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string } = {}): {
+function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string } = {}): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
   describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
@@ -38,7 +38,7 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID } = __stubs;\n${source}`;
+  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -69,6 +69,8 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     ),
     ATLANTY_MONTHLY_PRODUCT_ID: overrides.atlantyMonthlyProductId ?? ATLANTY_MONTHLY_PRODUCT_ID,
     ATLANTY_ANNUAL_PRODUCT_ID: overrides.atlantyAnnualProductId ?? ATLANTY_ANNUAL_PRODUCT_ID,
+    TOPOCRATY_PRODUCT_ID: overrides.topocratyProductId ?? TOPOCRATY_PRODUCT_ID,
+    TOPOCRATY_PLAN_ID,
   };
   const context = {
     exports: exported,
@@ -482,6 +484,32 @@ test('atlanty fails closed when either product id is blank or whitespace', () =>
   const adapter = loadPaymentAdapter({ atlantyMonthlyProductId: '   ', atlantyAnnualProductId: '  ' });
   assert.equal(adapter.resolveStorefrontBillingTarget('atlanty', 'monthly'), null);
   assert.equal(adapter.resolveStorefrontBillingTarget('atlanty', 'annual'), null);
+});
+
+test('topocraty subscription id stays the exact operator-issued value and buys the club subscription once', async () => {
+  assert.equal(TOPOCRATY_PLAN_ID, 'topocraty');
+  assert.equal(TOPOCRATY_PRODUCT_ID, '14692232-12be-4218-9fa1-2d5b79b62035');
+  const adapter = loadPaymentAdapter();
+  assert.deepEqual(
+    { ...(adapter.resolveStorefrontBillingTarget('topocraty', 'monthly') as Record<string, unknown>) },
+    { counterKey: 'topocraty', directProductId: TOPOCRATY_PRODUCT_ID, planType: 'friendship' },
+  );
+  // One 30-day club plan only: no annual variant and no counter contour.
+  assert.equal(adapter.resolveStorefrontBillingTarget('topocraty', 'annual'), null);
+  assert.equal(adapter.resolveStorefrontBillingTarget('topocraty', 'monthly-two-hours'), null);
+
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'topocraty', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
+  assert.equal(adapter.calls.bought.length, 1);
+  assert.equal(adapter.calls.bought[0].productId, TOPOCRATY_PRODUCT_ID);
+  assert.equal(adapter.calls.bought[0].retries, 0);
+  assert.equal(adapter.calls.created.length, 0);
+});
+
+test('topocraty fails closed when the subscription id is blank', () => {
+  for (const productId of ['', '   ']) {
+    const adapter = loadPaymentAdapter({ topocratyProductId: productId });
+    assert.equal(adapter.resolveStorefrontBillingTarget('topocraty', 'monthly'), null);
+  }
 });
 
 test('atlanty card is titled ДРУЖБА.АТЛАНТЫ and reuses the friendship benefits', () => {
