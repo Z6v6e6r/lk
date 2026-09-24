@@ -343,5 +343,34 @@ MODEL_ROUTE: parent
   - смена ключа оффера на той же странице не переносится на прежние маркеры
     `padlhub_zero_checkout_attempt_v1:atlanty` — при откате на прежний оффер
     поддержку стоит предупредить, что защита от повтора у них отдельная.
-- НЕ выполнено: бандл `subscription-storefront` с оффером `topocraty` не выкладывался,
-  Tilda-блок вставляется на страницу вручную; боевая транзакция не создавалась.
+- Что осталось вручную: вставить блок `6-subscription-checkout.html` на страницу
+  Топократов (бандл выложен, см. раздел ниже) и один раз проверить оплату
+  авторизованным профилем; боевая транзакция не создавалась.
+
+### Выкладка 2026-09-24 (release 20260924T134737Z / dev 20260924T134738Z)
+
+- Источник: `main` = `ffd4174f3c9afc4fb6860878cdea3b54eeebb9cb` (merge PR #149,
+  чистое дерево), prod-манифест `20260924T134737Z`, dev-манифест
+  `20260924T134738Z`, у обоих `sourceDirty=false`.
+- Куда: `lk-primary-147:/var/www/html/lk/subscription-storefront/` (prod-пара) и
+  `lk-reserve-89:/var/www/html/lk/subscription-storefront/` (prod- и dev-пары).
+  Прежние файлы сохранены рядом как
+  `*.backup-20260922T083224Z-20260924T134737Z` (prod) и
+  `*.backup-20260922T083225Z-20260924T134738Z` (dev).
+- Хеши совпали локально, на обоих хостах и публично: prod
+  `db1a55c494cb716b1c71c2dbd5181bcd0d48d45daf999bbae17290ee1a60a23d`
+  (2 631 530 байт), dev
+  `1aceffaaf56bc81252b383421d5595bf8f9f5387f128f0a9a38fa56ef8ded0e1`
+  (2 632 045 байт); оба отданных файла проходят `node --check`.
+- Публичный readback: `https://padlhub.su/lk/subscription-storefront/release.json`
+  → `20260924T134737Z` / `ffd4174f`; dev-манифест на резервном origin
+  (`https://lk-reserve.89-108-64-209.sslip.io/lk/subscription-storefront/release-dev.json`)
+  → `20260924T134738Z` / `ffd4174f`. В отданном prod-бандле есть
+  `ДРУЖБА.ТОПОКРАТЫ` и `openCheckout`.
+- Живые страницы, использующие бандл, отдают 200: `https://padlhub.ru/sub_hab`
+  (две ссылки на бандл), `https://padlhub.ru/atlants` (одна).
+- Гейт на точном head PR #149: `LK1 exact-head enforcement gate` — pass (5m19s).
+- НЕ проверено живой покупкой: на `https://padlhub.ru/topocraty` блока 6 пока нет
+  (0 ссылок на бандл), поэтому оплата там не запускается — блок вставляется в Tilda
+  вручную. Боевая транзакция не создавалась; после вставки блока нужен один прогон
+  авторизованным профилем со сверкой суммы и срока на странице банка.

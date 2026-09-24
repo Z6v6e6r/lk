@@ -121,9 +121,15 @@ var ATLANTY_CATEGORIES = [
   (25 сентября) приходят с типом `2349` и дают ровно три карточки с пилюлями
   «Топократы игра» / «Топократы тренировка».
 - Витрина: `node --experimental-strip-types --test scripts/tests/subscriptionStorefront.test.ts
-  scripts/tests/subscriptionStorefrontPromo.test.ts` — оффер `topocraty` берёт цену
-  из каталога, покупает подписку ровно один раз без ретраев и падает закрыто при
-  пустом id.
+  scripts/tests/subscriptionStorefrontPromo.test.ts` — 49/49 PASS: оффер `topocraty`
+  берёт цену из каталога (без счётчикового запроса), покупает подписку ровно один
+  раз без ретраев, падает закрыто при пустом id, а блок 6 не перехватывает годовой
+  тариф.
+- Бандл витрины с оффером `topocraty` выложен 2026-09-24 (release
+  `20260924T134737Z`, dev `20260924T134738Z`, `sourceCommit ffd4174f`): прод-пара на
+  `lk-primary-147` и прод/dev-пары на `lk-reserve-89`, публичный readback
+  `https://padlhub.su/lk/subscription-storefront/release.json`. Для блока 6
+  публикация больше не нужна — остаётся вставить его в страницу.
 
 ## Связанные файлы
 
