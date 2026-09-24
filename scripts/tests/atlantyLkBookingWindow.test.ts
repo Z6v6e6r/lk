@@ -72,6 +72,7 @@ test("builds the mount scope for corporate showcases", () => {
       exerciseId: "exercise-1",
       directionIds: [6180, 6233],
       directionLabel: "Топократы",
+      returnToFindGame: true,
       scope: { allowedTypeIds: [2349], availableStudioIds: [] },
     },
   );
@@ -79,7 +80,7 @@ test("builds the mount scope for corporate showcases", () => {
   // Без типов витрины окно работает как штатное и не сужает список.
   assert.deepEqual(
     buildAtlantyLkBookingMountData({ exerciseId: "exercise-2", directionIds: [] }),
-    { exerciseId: "exercise-2", directionIds: null, directionLabel: null },
+    { exerciseId: "exercise-2", directionIds: null, directionLabel: null, returnToFindGame: true },
   );
 });
 
@@ -322,6 +323,7 @@ test("opens the LK booking window in an overlay and closes it", async () => {
       exerciseId: "exercise-1",
       directionIds: [6180],
       directionLabel: null,
+      returnToFindGame: true,
       scope: { allowedTypeIds: [2349], availableStudioIds: [] },
     });
     // Пока окно открыто, стили ЛК подключены (стиль Tilda остаётся на месте).

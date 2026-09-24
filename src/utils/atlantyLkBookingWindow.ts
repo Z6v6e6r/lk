@@ -168,6 +168,9 @@ export function buildAtlantyLkBookingMountData(request: {
     exerciseId: request.exerciseId,
     directionIds: directionIds.length > 0 ? directionIds : null,
     directionLabel: trimString(request.directionLabel),
+    // Витрина открывает окно на конкретном событии, а не список /group: первый
+    // «Назад» внутри окна должен закрывать его, а не показывать список дня.
+    returnToFindGame: true,
     ...(scope ? { scope } : {}),
   };
 }
