@@ -281,6 +281,42 @@ export function buildAtlantyCategoryKey(category: AtlantyCategory) {
   return `${category.directionId ?? "x"}:${category.typeId ?? "x"}`;
 }
 
+/** Способ записи с карточки: официальный попап Viva или окно ЛК1 с контуром. */
+export type AtlantyBookingMode = "viva" | "lk";
+
+export function normalizeAtlantyBookingMode(value: unknown): AtlantyBookingMode {
+  return String(value ?? "").trim().toLowerCase() === "lk" ? "lk" : "viva";
+}
+
+function parseAtlantyIdList(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = value
+    .map((item) => (typeof item === "number" ? item : Number(String(item ?? "").trim())))
+    .filter((item) => Number.isInteger(item));
+  return ids.length > 0 ? [...new Set(ids)] : null;
+}
+
+/** Типы занятий для окна записи ЛК1; по умолчанию — типы категорий витрины. */
+export function resolveAtlantyBookingTypeIds(
+  value: unknown,
+  categories: readonly AtlantyCategory[],
+): number[] | null {
+  const explicit = parseAtlantyIdList(value);
+  if (explicit) return explicit;
+  const typeIds = categories
+    .map((category) => category.typeId)
+    .filter((typeId): typeId is number => typeof typeId === "number");
+  return typeIds.length > 0 ? [...new Set(typeIds)] : null;
+}
+
+/** Направления окна записи ЛК1; по умолчанию — направления категорий витрины. */
+export function resolveAtlantyBookingDirectionIds(
+  value: unknown,
+  categories: readonly AtlantyCategory[],
+): number[] | null {
+  return parseAtlantyIdList(value) ?? resolveAtlantyDirectionsParam(categories);
+}
+
 /**
  * Категория события: сначала по направлению, и только если направления нет —
  * по типу.

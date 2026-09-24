@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useId, useRef, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 import type { AtlantyScheduleEvent } from "../../utils/atlantyScheduleModel";
 import {
   buildAtlantyVivaAnchorHref,
   rememberAtlantyExercise,
 } from "../../utils/atlantyVivaBridge";
+import { openAtlantyLkBookingWindow } from "../../utils/atlantyLkBookingWindow";
 import "./AtlantyEventModal.css";
+
+export type AtlantyBookingMode = "viva" | "lk";
 
 export type AtlantyEventModalProps = {
   event: AtlantyScheduleEvent;
@@ -13,6 +16,13 @@ export type AtlantyEventModalProps = {
   pillLabel: string;
   vivaInstance: string;
   onClose: () => void;
+  /** "viva" — официальный попап VivaCRM, "lk" — окно записи LK1 с контуром. */
+  bookingMode?: AtlantyBookingMode;
+  /** Направления окна записи LK1 (список остаётся в рамках витрины). */
+  bookingDirectionIds?: readonly number[] | null;
+  bookingDirectionLabel?: string | null;
+  /** Типы занятий витрины: корпоративные события вне клубного списка ЛК1. */
+  bookingAllowedTypeIds?: readonly number[] | null;
 };
 
 function CalendarIcon() {
@@ -54,9 +64,15 @@ export function AtlantyEventModalContent({
   pillLabel,
   vivaInstance,
   onClose,
+  bookingMode = "viva",
+  bookingDirectionIds,
+  bookingDirectionLabel,
+  bookingAllowedTypeIds,
 }: AtlantyEventModalProps) {
   const titleId = useId();
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [bookingBusy, setBookingBusy] = useState(false);
+  const [bookingError, setBookingError] = useState<string | null>(null);
   const metaRows: Array<{ icon: ReactElement; text: string }> = [
     { icon: <CalendarIcon />, text: event.dateTimeLabel },
   ];
@@ -95,6 +111,39 @@ export function AtlantyEventModalContent({
     // Закрываем после того, как браузер обработает клик по ссылке.
     window.setTimeout(onClose, 0);
   }, [event.id, onClose, vivaInstance]);
+
+  // Режим LK: та же запись, что в ЛК1, — с входом по телефону, вариантами
+  // оплаты и серверным контуром ограничений вместо попапа Viva.
+  const handleLkBook = useCallback(() => {
+    if (bookingBusy) return;
+    setBookingBusy(true);
+    setBookingError(null);
+    void openAtlantyLkBookingWindow({
+      exerciseId: event.id,
+      directionIds: bookingDirectionIds ?? null,
+      directionLabel: bookingDirectionLabel ?? null,
+      allowedTypeIds: bookingAllowedTypeIds ?? null,
+    })
+      .then((result) => {
+        setBookingBusy(false);
+        if (result.ok) {
+          onClose();
+          return;
+        }
+        setBookingError(result.message);
+      })
+      .catch(() => {
+        setBookingBusy(false);
+        setBookingError("Не удалось открыть окно записи. Попробуйте ещё раз.");
+      });
+  }, [
+    bookingAllowedTypeIds,
+    bookingBusy,
+    bookingDirectionIds,
+    bookingDirectionLabel,
+    event.id,
+    onClose,
+  ]);
 
   return (
     <div
@@ -184,17 +233,34 @@ export function AtlantyEventModalContent({
           )}
 
           <div className="atlanty-modal__actions">
-            <a
-              className="atlanty-modal__cta"
-              href={buildAtlantyVivaAnchorHref(event.id, vivaInstance)}
-              onClick={handleBook}
-            >
-              Записаться
-            </a>
+            {bookingMode === "lk" ? (
+              <button
+                type="button"
+                className="atlanty-modal__cta"
+                onClick={handleLkBook}
+                disabled={bookingBusy}
+                aria-busy={bookingBusy}
+              >
+                {bookingBusy ? "Открываем окно записи…" : "Записаться"}
+              </button>
+            ) : (
+              <a
+                className="atlanty-modal__cta"
+                href={buildAtlantyVivaAnchorHref(event.id, vivaInstance)}
+                onClick={handleBook}
+              >
+                Записаться
+              </a>
+            )}
             <button type="button" className="atlanty-modal__secondary" onClick={onClose}>
               Закрыть
             </button>
           </div>
+          {bookingMode === "lk" && bookingError && (
+            <p className="atlanty-modal__booking-error" role="alert">
+              {bookingError}
+            </p>
+          )}
         </div>
       </div>
     </div>

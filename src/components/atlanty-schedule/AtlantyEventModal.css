@@ -256,6 +256,18 @@
   color: var(--atlanty-text, #111114);
 }
 
+.atlanty-modal__cta:disabled {
+  opacity: 0.72;
+  cursor: progress;
+}
+
+.atlanty-modal__booking-error {
+  margin: 0;
+  font-size: var(--atlanty-meta-size, 14px);
+  line-height: 1.45;
+  color: #b42318;
+}
+
 .atlanty-modal__close:focus-visible,
 .atlanty-modal__cta:focus-visible,
 .atlanty-modal__secondary:focus-visible {

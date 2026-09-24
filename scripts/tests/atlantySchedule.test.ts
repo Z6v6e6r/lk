@@ -11,9 +11,12 @@ import {
   limitAtlantyEventsPerCategory,
   matchesAtlantyCategories,
   normalizeAtlantyCategories,
+  normalizeAtlantyBookingMode,
   normalizeAtlantyEvent,
   normalizeAtlantyEventList,
   normalizeAtlantyLevelLabel,
+  resolveAtlantyBookingDirectionIds,
+  resolveAtlantyBookingTypeIds,
   resolveAtlantyDateFrom,
   resolveAtlantyDateTo,
   resolveAtlantyDirectionsParam,
@@ -546,4 +549,29 @@ test("карточка ссылается на виджет записи Viva", 
     "abc-123",
   );
   assert.equal(readAtlantyVivaExerciseParam("atlanty", "?rjj_exercise=abc-123"), null);
+});
+
+test("режим записи по умолчанию — попап Viva, окно ЛК включается явно", () => {
+  assert.equal(normalizeAtlantyBookingMode(undefined), "viva");
+  assert.equal(normalizeAtlantyBookingMode(""), "viva");
+  assert.equal(normalizeAtlantyBookingMode("viva"), "viva");
+  assert.equal(normalizeAtlantyBookingMode(" VIVA "), "viva");
+  assert.equal(normalizeAtlantyBookingMode("lk"), "lk");
+  assert.equal(normalizeAtlantyBookingMode("LK"), "lk");
+  assert.equal(normalizeAtlantyBookingMode("lkc"), "viva");
+});
+
+test("окно ЛК получает типы и направления категорий витрины", () => {
+  const categories = normalizeAtlantyCategories([
+    { directionId: 6180, typeId: 2349, label: "Топократы игра" },
+    { directionId: 6233, typeId: 2349, label: "Топократы тренировка" },
+  ]);
+
+  assert.deepEqual(resolveAtlantyBookingTypeIds(undefined, categories), [2349]);
+  assert.deepEqual(resolveAtlantyBookingDirectionIds(undefined, categories), [6180, 6233]);
+  // Явные значения из конфига имеют приоритет и нормализуются.
+  assert.deepEqual(resolveAtlantyBookingTypeIds(["2349", 2349, "x"], categories), [2349]);
+  assert.deepEqual(resolveAtlantyBookingDirectionIds(["6180"], categories), [6180]);
+  assert.equal(resolveAtlantyBookingTypeIds([], []), null);
+  assert.equal(resolveAtlantyBookingDirectionIds(undefined, []), null);
 });

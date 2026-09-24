@@ -194,6 +194,35 @@ test("filters out tournaments and academy exercises from group schedule", () => 
   assert.equal(list[0]?.id, "group-1");
 });
 
+test("opens corporate events for a showcase only through the mount scope", () => {
+  const corporate = makeExercise({
+    id: "topocraty-training",
+    type: { id: 2349, name: "Корпоративные клиенты", color: "purple", format: "GROUP" },
+    studio: { id: "corporate-studio", name: "Топократы" },
+  });
+
+  // Штатный список /group корпоративные события не показывает.
+  assert.equal(normalizeGroupTraining(corporate), null);
+  assert.equal(normalizeGroupTrainingList([corporate]).length, 0);
+
+  // Витрина вне ЛК передаёт свою область: тип клуба и снятый фильтр по станции.
+  const scoped = normalizeGroupTraining(corporate, {
+    allowedTypeIds: [2349],
+    availableStudioIds: [],
+  });
+  assert.ok(scoped);
+  assert.equal(scoped.id, "topocraty-training");
+  assert.equal(scoped.typeId, 2349);
+  assert.equal(normalizeGroupTrainingList([corporate], { allowedTypeIds: [2349] }).length, 0);
+  assert.equal(
+    normalizeGroupTrainingList([corporate], {
+      allowedTypeIds: [2349],
+      availableStudioIds: [],
+    }).length,
+    1,
+  );
+});
+
 test("normalizes visible card fields directly from Viva parameters", () => {
   const training = normalizeGroupTraining(makeExercise());
 
