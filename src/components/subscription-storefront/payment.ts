@@ -14,7 +14,7 @@ import {
 } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveTournamentSubscriptionDirectProductId } from '../../utils/tournamentSubscriptionCatalog';
-import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
+import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
 
 /** Query parameter used by LK1 to resolve the payment after returning from the bank. */
 export const PAYMENT_REF_QUERY_KEY = 'summerPaymentRef';
@@ -80,12 +80,12 @@ export function resolveStorefrontBillingTarget(
     }
     return null;
   }
-  if (planId === 'topocraty') {
+  if (planId === TOPOCRATY_PLAN_ID) {
     // Клубная подписка Топократов — один прямой продукт-абонемент. Пустой id
     // закрывает вариант, а не уводит его в счётчиковый контур покупки.
     const productId = String(TOPOCRATY_PRODUCT_ID || '').trim();
     return billingOptionId === 'monthly' && productId
-      ? { counterKey: 'topocraty', directProductId: productId, planType: 'friendship' }
+      ? { counterKey: TOPOCRATY_PLAN_ID, directProductId: productId, planType: 'friendship' }
       : null;
   }
   if (planId === 'friendship' && billingOptionId === 'annual') {
@@ -142,7 +142,7 @@ export function clearStorefrontPaymentRef(): void {
 
 function normalizePendingCounterKey(value: string): PendingPaymentEntry['counterKey'] {
   return value === 'friendship' || value === 'network_friendship' || value === 'ra' || value === 'academy'
-    || value === 'energy5' || value === 'atlanty' || value === 'topocraty'
+    || value === 'energy5' || value === 'atlanty' || value === TOPOCRATY_PLAN_ID
     ? value
     : null;
 }

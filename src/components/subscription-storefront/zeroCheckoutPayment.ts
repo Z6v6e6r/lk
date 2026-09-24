@@ -3,7 +3,7 @@ import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveStorefrontBillingTarget, StorefrontPaymentError } from './payment';
 import { createStorefrontPromoPayment, hasPromoPaymentAttempt } from './promoPayment';
 import { resolveStorefrontPromo } from './promo';
-import { ATLANTY_MONTHLY_PRICE_MINOR, TOPOCRATY_MONTHLY_PRICE_MINOR } from './catalog';
+import { ATLANTY_MONTHLY_PRICE_MINOR, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
 
 export const ZERO_CHECKOUT_RETURN = 'phCheckoutReturn';
 const ATTEMPT_PREFIX = 'padlhub_zero_checkout_attempt_v1:';
@@ -64,8 +64,8 @@ export function resolveZeroOffer(key: string): ZeroOffer | null {
     billingOptionId: 'monthly', target: resolveStorefrontBillingTarget('atlanty', 'monthly'), promo: null,
     staticPriceMinor: ATLANTY_MONTHLY_PRICE_MINOR };
   // Клубная подписка Топократов — такой же прямой продукт без счётчика LK.
-  if (key === 'topocraty') return { key, label: 'ДРУЖБА.ТОПОКРАТЫ', period: '30 дней', planId: 'topocraty',
-    billingOptionId: 'monthly', target: resolveStorefrontBillingTarget('topocraty', 'monthly'), promo: null,
+  if (key === TOPOCRATY_PLAN_ID) return { key, label: 'ДРУЖБА.ТОПОКРАТЫ', period: '30 дней', planId: TOPOCRATY_PLAN_ID,
+    billingOptionId: 'monthly', target: resolveStorefrontBillingTarget(TOPOCRATY_PLAN_ID, 'monthly'), promo: null,
     staticPriceMinor: TOPOCRATY_MONTHLY_PRICE_MINOR };
   const labels: Record<string, string> = { friendship: 'Дружба', 'friendship-year': 'Дружба', academy: 'Академия', ra: 'РА', energy5: 'Энергия 5' };
   if (!Object.prototype.hasOwnProperty.call(labels, key)) return null;
@@ -79,11 +79,14 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
   const offer = resolveZeroOffer(key);
   if (!offer) throw new StorefrontPaymentError('Предложение не найдено.');
   if (offer.promo) return offer.promo.priceMinor;
+  // A direct product without an issued id must fail closed before any price is
+  // shown: otherwise the dialog opens, the visitor starts a purchase and the
+  // durable attempt marker blocks this browser for nothing.
+  if (!offer.target) throw new StorefrontPaymentError('Предложение недоступно.');
   if (typeof offer.staticPriceMinor === 'number') {
     if (!Number.isSafeInteger(offer.staticPriceMinor) || offer.staticPriceMinor <= 0) throw new StorefrontPaymentError('Предложение недоступно.');
     return offer.staticPriceMinor;
   }
-  if (!offer.target) throw new StorefrontPaymentError('Предложение недоступно.');
   const result = await request<unknown>('/lk/tournaments/summer-subscription/status?counterKey=' + encodeURIComponent(offer.target.counterKey),
     { method: 'GET', baseUrl: getServ2Origin() || '', signal, retries: 0 });
   try {

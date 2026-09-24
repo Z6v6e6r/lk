@@ -187,15 +187,20 @@ test('shared API preserves legacy retry behavior and honors the promo no-retry o
 });
 
 
-const regularPayment = loadModule<typeof import('../../src/components/subscription-storefront/payment')>('components/subscription-storefront/payment.ts', {
-  ...catalog,
-  ATLANTY_MONTHLY_PRODUCT_ID: '3907d127-a6b0-419e-a933-4a2857f26356',
-  ATLANTY_ANNUAL_PRODUCT_ID: '',
-  TOPOCRATY_PRODUCT_ID: '14692232-12be-4218-9fa1-2d5b79b62035',
-  apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
-  apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
-});
-function zeroFixture() {
+/** Payment adapter with a configurable Topocrats subscription id (blank = not issued). */
+function loadRegularPayment(topocratyProductId: string) {
+  return loadModule<typeof import('../../src/components/subscription-storefront/payment')>('components/subscription-storefront/payment.ts', {
+    ...catalog,
+    ATLANTY_MONTHLY_PRODUCT_ID: '3907d127-a6b0-419e-a933-4a2857f26356',
+    ATLANTY_ANNUAL_PRODUCT_ID: '',
+    TOPOCRATY_PRODUCT_ID: topocratyProductId,
+    TOPOCRATY_PLAN_ID: 'topocraty',
+    apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
+    apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
+  });
+}
+const regularPayment = loadRegularPayment('14692232-12be-4218-9fa1-2d5b79b62035');
+function zeroFixture(overrides: Record<string, unknown> = {}) {
   const f = paymentFixture();
   let result: any = { data: { paymentUrl: 'https://bank.example/zero' }, error: null };
   let confirmation: any = { data: { paid: true, failed: false, status: 'PAID' } };
@@ -203,7 +208,7 @@ function zeroFixture() {
   let availability = true;
   let broken = false;
   let storageFails = false;
-  const writes: any[] = [], confirms: any[] = [];
+  const writes: any[] = [], confirms: any[] = [], counterRequests: string[] = [];
   Object.assign(f.globals.window.location, { origin: 'https://padlhub.ru', pathname: '/spb2', href: 'https://padlhub.ru/spb2?authMode=viva&code=private&summerPaymentRef=foreign&utm_source=tilda#old' });
   Object.assign(f.globals.window, { crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000001' } });
   const setItem = f.globals.window.localStorage.setItem;
@@ -212,15 +217,17 @@ function zeroFixture() {
     ...regularPayment, ...promo, ...f.adapter,
     ATLANTY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_MONTHLY_PRICE_MINOR: 680000,
+    TOPOCRATY_PLAN_ID: 'topocraty',
     canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
     appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
     getServ2Origin: () => 'https://fixture.invalid',
-    request: async (path: string) => ({ data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] }),
+    request: async (path: string) => { counterRequests.push(path); return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] }; },
     apiBuySubscroption: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
     apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
     apiConfirmTournamentSubscriptionPurchase: async (...args: any[]) => { confirms.push(args); return confirmation; },
+    ...overrides,
   }, { ...f.globals, setTimeout, clearTimeout });
-  return { ...f, adapter, writes, confirms, setResult: (value: any) => { result = value; },
+  return { ...f, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
 }
@@ -244,6 +251,7 @@ test('Zero Block sells the Atlanty club offer from the catalogue price, never th
   assert.equal(offer?.target?.directProductId, '3907d127-a6b0-419e-a933-4a2857f26356');
   // No status request: the club product has no counter and the price is the catalogue price.
   assert.equal(await f.adapter.loadZeroOfferPrice('atlanty'), 680000);
+  assert.equal(f.counterRequests.length, 0);
   assert.equal(f.writes.length, 0);
 
   await f.adapter.createZeroPayment('atlanty', fixturePhone, 680000, () => true);
@@ -262,12 +270,32 @@ test('Zero Block sells the Topocrats club subscription by its operator-issued id
   assert.equal(offer?.target?.counterKey, 'topocraty');
   assert.equal(offer?.target?.directProductId, '14692232-12be-4218-9fa1-2d5b79b62035');
   assert.equal(await f.adapter.loadZeroOfferPrice('topocraty'), 680000);
+  assert.equal(f.counterRequests.length, 0);
   assert.equal(f.writes.length, 0);
 
   await f.adapter.createZeroPayment('topocraty', fixturePhone, 680000, () => true);
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0][0], '14692232-12be-4218-9fa1-2d5b79b62035');
   assert.equal(f.writes[0][2].retries, 0);
+});
+
+test('Zero Block fails closed before a price when the Topocrats subscription id is blank', async () => {
+  const f = zeroFixture({ ...loadRegularPayment('   '), TOPOCRATY_PRODUCT_ID: '   ' });
+  assert.equal(f.adapter.resolveZeroOffer('topocraty')?.target, null);
+  await assert.rejects(f.adapter.loadZeroOfferPrice('topocraty'));
+  // Nothing was written and no durable attempt marker was left behind.
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.stored.size, 0);
+});
+
+test('the Topocrats Tilda block only opens an offer key the bundle resolves', () => {
+  const html = readFileSync(new URL('../../docs/topocraty-tilda/6-subscription-checkout.html', import.meta.url), 'utf8');
+  const offerKey = /OFFER_KEY = '([^']+)'/.exec(html)?.[1];
+  assert.equal(offerKey, 'topocraty');
+  assert.equal(zeroFixture().adapter.resolveZeroOffer(offerKey!)?.planId, 'topocraty');
+  // Годовой тариф страницы не подменяется месячным оффером.
+  assert.match(html, /\[data-ph-tk-tariff="year"\]\[aria-pressed="true"\]/);
+  assert.match(html, /if \(isAnnualSelected\(\)\) return;/);
 });
 
 test('Zero Block rejects a changed Topocrats price instead of charging it', async () => {

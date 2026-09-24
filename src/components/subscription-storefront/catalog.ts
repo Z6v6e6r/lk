@@ -144,8 +144,8 @@ export function atlantyBillingOptions(): SubscriptionPlanView['billingOptions'] 
  */
 export const TOPOCRATY_PLAN_ID = 'topocraty';
 export const TOPOCRATY_PRODUCT_ID = '14692232-12be-4218-9fa1-2d5b79b62035';
+/** 6 800 ₽ / 30 дней, прежняя цена на странице — 9 800 ₽. */
 export const TOPOCRATY_MONTHLY_PRICE_MINOR = 680000;
-export const TOPOCRATY_MONTHLY_COMPARE_MINOR = 980000;
 
 /** Annual inventory is authoritative only when returned by its explicit request. */
 export function scopedStorefrontStatuses<T extends StorefrontStatus>(statuses: T[], counterKey?: string | null): T[] {

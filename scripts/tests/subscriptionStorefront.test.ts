@@ -38,7 +38,7 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID } = __stubs;\n${source}`;
+  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -70,6 +70,7 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     ATLANTY_MONTHLY_PRODUCT_ID: overrides.atlantyMonthlyProductId ?? ATLANTY_MONTHLY_PRODUCT_ID,
     ATLANTY_ANNUAL_PRODUCT_ID: overrides.atlantyAnnualProductId ?? ATLANTY_ANNUAL_PRODUCT_ID,
     TOPOCRATY_PRODUCT_ID: overrides.topocratyProductId ?? TOPOCRATY_PRODUCT_ID,
+    TOPOCRATY_PLAN_ID,
   };
   const context = {
     exports: exported,
