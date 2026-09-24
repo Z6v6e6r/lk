@@ -879,6 +879,17 @@ Runtime ожидает опубликованные backend routes на `/lk/tou
 
 `tournaments.js` и глобал `LKWidgetTournaments` остаются organizer bundle для проведения турнира. Он должен открываться из ЛК/overlay и не должен монтироваться на публичный Tilda-маршрут `/tournaments`, потому что этот маршрут теперь является public signup page на `tournament-signup.js`.
 
+Открывается из ЛК:
+- кнопка «Перейти в турниры» и quick action «🏆 Турниры» — для профилей с Viva-полем «проводит турниры» (`hasTournamentHostingAccess`), остальные пользователи по quick action попадают на публичную страницу `/tournaments`;
+- deep link из пушей/скинов/внешних ссылок (после авторизации в ЛК):
+```text
+https://padlhub.ru/lk_new?openTournaments=1
+https://padlhub.ru/lk_new?openTournaments=1&tournamentId=<TOURNAMENT_ID>
+https://padlhub.ru/lk_new?openTournaments=1&slug=<TOURNAMENT_SLUG>
+https://padlhub.ru/lk_new?openTournaments=1&date=2026-05-05
+```
+Флаг читает `src/utils/tournamentOrganizerEntry.ts`; `openTournaments=0/false/no/off` модуль не открывает.
+
 Legacy-ссылки публичной страницы турнира лучше оставлять рабочими через 301 на публичный домен LK:
 ```nginx
 location ~ ^/api/tournaments/public/([^/?#]+)$ {
