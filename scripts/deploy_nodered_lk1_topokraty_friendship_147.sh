@@ -235,6 +235,14 @@ node -e '
     || String(value.candidateNodeCount) !== process.argv[6]) process.exit(1);
 ' "$preflight_result" "$source_sha" "$candidate_sha" "$expected_changed_nodes" "$source_node_count" "$candidate_node_count"
 
+# The plan-rules writer runs inside the gateway initialize on every restart. 147 keeps the
+# Node-RED context in memory, so a guard that refuses the empty post-restart prior leaves the
+# contour without any plan rules while the flow itself still starts. Count the writer errors
+# before the apply and require that the restart adds none.
+plan_rules_error_pattern='plan rules prior mismatch|plan rules readback mismatch'
+plan_rules_errors_before="$(remote_ssh "grep -hE '$plan_rules_error_pattern' /root/.pm2/logs/*node-red*.log 2>/dev/null | wc -l" | tr -d "[:space:]")"
+plan_rules_errors_before="${plan_rules_errors_before:-0}"
+echo "planRulesErrorsBefore=$plan_rules_errors_before"
 apply_started=1
 echo "stamp=$remote_stamp"
 echo "flowBackup=$remote_flow_backup"
@@ -258,6 +266,17 @@ fi
 if ! remote_ssh "node -e 'const fs=require(\"node:fs\");const flow=JSON.parse(fs.readFileSync(\"/root/.node-red/flows.json\",\"utf8\"));const node=id=>flow.find(row=>row.id===id)||{};const func=n=>(typeof n.func===\"string\"?n.func:\"\");const init=n=>(typeof n.initialize===\"string\"?n.initialize:\"\");const gateway=node(\"lk_subscription_booking_router_20260804\");const evaluator=node(\"lk_subscription_managed_policy_20260820\");const preview=node(\"lk_subscription_price_preview_20260908_router\");const gw=func(gateway);const gwi=init(gateway);const ev=func(evaluator);const pv=func(preview);const wanted=[\"const exerciseDirectionId = (exercise) => {\",\"directionId: exerciseDirectionId(exercise),\",\"lk1ExpectedEventDiscountPercent(decision, route)\"];if(!wanted.every(m=>gw.includes(m)))process.exit(1);if(!gwi.includes(\"14692232-12be-4218-9fa1-2d5b79b62035\"))process.exit(1);if(gwi.includes(\"const lk1PlanRulesExpectedPrior = null;\"))process.exit(1);if(!ev.includes(\"isTopokratyTrainingBenefit\")||!ev.includes(\"eventDiscountPercent\"))process.exit(1);if(!pv.includes(\"canonical.resolveLk1Rule\"))process.exit(1);'"; then
   echo "Installed nodes do not carry the reviewed club rule; ordered rollback required" >&2
   exit 7
+fi
+
+# The flow being online does not prove the plan-rules global was written: the initialize would
+# log "plan rules prior mismatch/readback mismatch" and the contour would run without rules.
+plan_rules_errors_after="$(remote_ssh "grep -hE '$plan_rules_error_pattern' /root/.pm2/logs/*node-red*.log 2>/dev/null | wc -l" | tr -d "[:space:]")"
+plan_rules_errors_after="${plan_rules_errors_after:-0}"
+echo "planRulesErrorsAfter=$plan_rules_errors_after"
+if [[ "$plan_rules_errors_after" -gt "$plan_rules_errors_before" ]]; then
+  echo "Gateway initialize failed to write the plan-rules global (writer error in the Node-RED log); ordered rollback required" >&2
+  ssh "${ssh_opts[@]}" "$host" "tail -n 200 /root/.pm2/logs/*node-red*.log 2>/dev/null | grep -E '$plan_rules_error_pattern' | tail -3" >&2 || true
+  exit 8
 fi
 
 smoke_ok=0
@@ -288,6 +307,8 @@ echo "upstreamFlowSha256=$source_sha"
 echo "clubProductId=14692232-12be-4218-9fa1-2d5b79b62035"
 echo "clubTrainingDirection=6233"
 echo "changedNodeCount=$expected_changed_nodes"
+echo "planRulesErrorsBefore=$plan_rules_errors_before"
+echo "planRulesErrorsAfter=$plan_rules_errors_after"
 echo "flowBackup=$remote_flow_backup"
 echo "contractBackup=$remote_contract_backup"
 echo "smokeUrl=$smoke_url"
