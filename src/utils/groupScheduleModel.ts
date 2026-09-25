@@ -312,12 +312,16 @@ export function isGamePlusTrainerSummary(training: GroupTrainingSummary) {
   return isGamePlusTrainerTraining(training) || isGamePlusTrainerTraining(training.raw);
 }
 
+export type GroupTrainingScope = {
+  /** Типы занятий, которые считаются групповой тренировкой. */
+  allowedTypeIds?: readonly number[];
+  /** Станции расписания; пустой список — без фильтра по станции. */
+  availableStudioIds?: readonly string[];
+};
+
 export function isGroupTrainingAllowed(
   value: unknown,
-  options: {
-    allowedTypeIds?: readonly number[];
-    availableStudioIds?: readonly string[];
-  } = {},
+  options: GroupTrainingScope = {},
 ) {
   if (!isRecord(value)) return false;
   const allowedTypeIds = options.allowedTypeIds ?? GROUP_SCHEDULE_ALLOWED_TYPE_IDS;
@@ -332,8 +336,11 @@ export function isGroupTrainingAllowed(
   return true;
 }
 
-export function normalizeGroupTraining(value: unknown): GroupTrainingSummary | null {
-  if (!isRecord(value) || !isGroupTrainingAllowed(value)) return null;
+export function normalizeGroupTraining(
+  value: unknown,
+  scope: GroupTrainingScope = {},
+): GroupTrainingSummary | null {
+  if (!isRecord(value) || !isGroupTrainingAllowed(value, scope)) return null;
   const id = pickString(value, ["id", "exerciseId", "uuid"]);
   const direction = pickNestedRecord(value, ["direction"]);
   const type = pickNestedRecord(value, ["type", "exerciseType"]);
@@ -391,9 +398,12 @@ export function normalizeGroupTraining(value: unknown): GroupTrainingSummary | n
   };
 }
 
-export function normalizeGroupTrainingList(payload: unknown) {
+export function normalizeGroupTrainingList(
+  payload: unknown,
+  scope: GroupTrainingScope = {},
+) {
   return extractItems(payload)
-    .map((item) => normalizeGroupTraining(item))
+    .map((item) => normalizeGroupTraining(item, scope))
     .filter((item): item is GroupTrainingSummary => item !== null)
     .sort((left, right) => {
       const leftTs = Date.parse(left.timeFrom || "");

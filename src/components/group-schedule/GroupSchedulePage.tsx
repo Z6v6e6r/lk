@@ -14,6 +14,7 @@ import {
   apiFetchGroupTrainingDetail,
   apiFetchGroupTrainingsByDate,
   GROUP_SCHEDULE_BOOKING_DAYS,
+  type GroupTrainingScope,
   type GroupTrainingSummary,
 } from "../../utils/groupScheduleApi";
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
@@ -63,6 +64,12 @@ interface GroupSchedulePageProps {
   initialDirectionIds?: number[] | null;
   initialDirectionLabel?: string | null;
   returnToFindGame?: boolean;
+  /**
+   * Область расписания для витрин вне клубного расписания (например, корпоративные
+   * события направления клуба-партнёра). Пустой `availableStudioIds` — без фильтра
+   * по станции; без `scope` работает штатный список групповых тренировок.
+   */
+  scope?: GroupTrainingScope | null;
 }
 
 const ALL_FILTER_VALUE = "__all__";
@@ -323,12 +330,20 @@ export default function GroupSchedulePage({
   initialDirectionIds,
   initialDirectionLabel,
   returnToFindGame = false,
+  scope,
 }: GroupSchedulePageProps) {
   const { isAuthenticated, isRestoringSession, phone } = useAuth();
   const subscriptionUsageShadow = useSubscriptionUsageShadow();
   const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
   const subscriptionUsageShadowPreview = subscriptionUsageShadow.preview;
   const subscriptionUsageShadowReject = subscriptionUsageShadow.reject;
+  const trainingScope = useMemo<GroupTrainingScope>(() => {
+    if (!scope) return {};
+    return {
+      ...(Array.isArray(scope.allowedTypeIds) ? { allowedTypeIds: scope.allowedTypeIds } : {}),
+      ...(Array.isArray(scope.availableStudioIds) ? { availableStudioIds: scope.availableStudioIds } : {}),
+    };
+  }, [scope]);
   const baseDate = useMemo(() => getInitialDate(initialDate), [initialDate]);
   const dates = useMemo(() => buildDateRange(baseDate), [baseDate]);
   const [dateIndex, setDateIndex] = useState(0);
@@ -382,7 +397,7 @@ export default function GroupSchedulePage({
   const loadList = useCallback(async () => {
     setLoadingList(true);
     setListError(null);
-    const result = await apiFetchGroupTrainingsByDate(selectedDate);
+    const result = await apiFetchGroupTrainingsByDate(selectedDate, trainingScope);
     if (result.error || !result.data) {
       setItems([]);
       setListError(getErrorMessage(result.error, "Не удалось загрузить расписание."));
@@ -399,7 +414,7 @@ export default function GroupSchedulePage({
         initialOpenRef.current = true;
       }
     }
-  }, [selectedDate, selectedId]);
+  }, [selectedDate, selectedId, trainingScope]);
 
   useEffect(() => {
     void loadList();
@@ -450,7 +465,7 @@ export default function GroupSchedulePage({
     let cancelled = false;
     setDetailLoading(true);
     setDetailError(null);
-    void apiFetchGroupTrainingDetail(selectedId).then((result) => {
+    void apiFetchGroupTrainingDetail(selectedId, trainingScope).then((result) => {
       if (cancelled) return;
       setDetailLoading(false);
       if (result.error || !result.data) {
@@ -464,7 +479,7 @@ export default function GroupSchedulePage({
     return () => {
       cancelled = true;
     };
-  }, [items, selectedId]);
+  }, [items, selectedId, trainingScope]);
 
   useEffect(() => {
     if (!selectedId) {

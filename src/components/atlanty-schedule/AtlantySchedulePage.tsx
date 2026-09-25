@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { apiFetchAtlantyEvents } from "../../utils/atlantyScheduleApi";
 import {
   ATLANTY_DEFAULT_PILL_LABEL,
+  normalizeAtlantyBookingMode,
   normalizeAtlantyCategories,
+  resolveAtlantyBookingDirectionIds,
+  resolveAtlantyBookingTypeIds,
   type AtlantyScheduleEvent,
 } from "../../utils/atlantyScheduleModel";
 import {
@@ -57,6 +60,15 @@ export type AtlantyScheduleConfig = {
   imagePick?: string | null;
   /** Открывать карточку события по клику (по умолчанию да). */
   detailModal?: boolean;
+  /**
+   * Чем записывать: "viva" — официальный попап VivaCRM (по умолчанию),
+   * "lk" — окно записи LK1 с входом, вариантами оплаты и контуром ограничений.
+   */
+  booking?: string | null;
+  /** Типы занятий для окна LK1; по умолчанию — typeId категорий витрины. */
+  bookingAllowedTypeIds?: ReadonlyArray<number | string> | null;
+  /** Направления окна LK1; по умолчанию — directionId категорий витрины. */
+  bookingDirectionIds?: ReadonlyArray<number | string> | null;
 };
 
 export type AtlantyCategoryInput = {
@@ -344,12 +356,13 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
     () => normalizeAtlantyImagePick(config.imagePick),
     [config.imagePick],
   );
+  const bookingMode = useMemo(() => normalizeAtlantyBookingMode(config.booking), [config.booking]);
   // Перемешиваем один раз за загрузку: при листании фото не «прыгают».
   const cardImages = useMemo(
     () => shuffleAtlantyImages(resolveAtlantyCardImages(config.images)),
     [config.images],
   );
-  const detailModalEnabled = config.detailModal !== false;
+  const detailModalEnabled = config.detailModal !== false || bookingMode === "lk";
   const [openEvent, setOpenEvent] = useState<{ event: AtlantyScheduleEvent; imageUrl: string | null } | null>(null);
 
   const handleOpenEvent = useCallback(
@@ -366,6 +379,14 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
   const categories = useMemo(
     () => normalizeAtlantyCategories(config.categories),
     [config.categories],
+  );
+  const bookingAllowedTypeIds = useMemo(
+    () => resolveAtlantyBookingTypeIds(config.bookingAllowedTypeIds, categories),
+    [config.bookingAllowedTypeIds, categories],
+  );
+  const bookingDirectionIds = useMemo(
+    () => resolveAtlantyBookingDirectionIds(config.bookingDirectionIds, categories),
+    [config.bookingDirectionIds, categories],
   );
 
   const trackRef = useRef<HTMLUListElement | null>(null);
@@ -514,6 +535,10 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
           pillLabel={pillLabel}
           vivaInstance={vivaInstance}
           onClose={() => setOpenEvent(null)}
+          bookingMode={bookingMode}
+          bookingDirectionIds={bookingDirectionIds}
+          bookingDirectionLabel={title || null}
+          bookingAllowedTypeIds={bookingAllowedTypeIds}
         />
       )}
 

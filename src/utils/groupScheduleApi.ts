@@ -12,6 +12,7 @@ import {
   mergeGroupTrainingLists,
   normalizeGroupTraining,
   normalizeGroupTrainingList,
+  type GroupTrainingScope,
   type GroupTrainingSummary,
 } from "./groupScheduleModel";
 
@@ -32,6 +33,7 @@ export {
 } from "./groupScheduleModel";
 export type {
   GroupScheduleTrainer,
+  GroupTrainingScope,
   GroupTrainingStatus,
   GroupTrainingSummary,
 } from "./groupScheduleModel";
@@ -60,6 +62,7 @@ function requestGroupTrainingsByDateRaw(
 
 export async function apiFetchGroupTrainingsByDate(
   date: string,
+  scope: GroupTrainingScope = {},
 ): Promise<ApiResult<GroupTrainingSummary[]>> {
   const [baseQuery, piterQuery] = buildGroupScheduleSourceQueries(date);
   const [baseResult, piterResult] = await Promise.all([
@@ -75,7 +78,7 @@ export async function apiFetchGroupTrainingsByDate(
     };
   }
 
-  const baseTrainings = normalizeGroupTrainingList(baseResult.data);
+  const baseTrainings = normalizeGroupTrainingList(baseResult.data, scope);
 
   if (piterResult.error) {
     return {
@@ -85,7 +88,7 @@ export async function apiFetchGroupTrainingsByDate(
     };
   }
 
-  const piterTrainings = normalizeGroupTrainingList(piterResult.data);
+  const piterTrainings = normalizeGroupTrainingList(piterResult.data, scope);
 
   return {
     data: mergeGroupTrainingLists(baseTrainings, piterTrainings),
@@ -96,6 +99,7 @@ export async function apiFetchGroupTrainingsByDate(
 
 export async function apiFetchGroupTrainingDetail(
   exerciseId: string,
+  scope: GroupTrainingScope = {},
 ): Promise<ApiResult<GroupTrainingSummary>> {
   const result = await request<unknown>(
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/${encodeURIComponent(exerciseId)}`,
@@ -111,7 +115,7 @@ export async function apiFetchGroupTrainingDetail(
       status: result.status,
     };
   }
-  const training = normalizeGroupTraining(result.data);
+  const training = normalizeGroupTraining(result.data, scope);
   return {
     data: training,
     error: training ? null : { status: result.status, message: "Тренировка не найдена в расписании" },

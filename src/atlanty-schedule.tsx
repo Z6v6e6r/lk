@@ -3,6 +3,16 @@ import { createRoot } from "react-dom/client";
 import AtlantySchedulePage, {
   type AtlantyScheduleConfig,
 } from "./components/atlanty-schedule/AtlantySchedulePage";
+import {
+  normalizeAtlantyBookingMode,
+  normalizeAtlantyCategories,
+  resolveAtlantyBookingDirectionIds,
+  resolveAtlantyBookingTypeIds,
+} from "./utils/atlantyScheduleModel";
+import {
+  readAtlantyLkBookingReturn,
+  resumeAtlantyLkBookingReturn,
+} from "./utils/atlantyLkBookingWindow";
 
 type AtlantyMountOptions = {
   targetId?: string;
@@ -77,6 +87,24 @@ function unmount() {
 }
 
 /**
+ * Возврат из оплаты: ЛК1 дописывает к адресу витрины `groupExerciseId` и статус
+ * платежа. Открываем окно записи на этом событии; параметры убираются только
+ * после успешного открытия (см. `resumeAtlantyLkBookingReturn`).
+ */
+function consumeBookingPaymentReturn(config: AtlantyScheduleConfig) {
+  if (typeof window === "undefined") return;
+  if (normalizeAtlantyBookingMode(config.booking) !== "lk") return;
+  if (!readAtlantyLkBookingReturn(window.location.href)) return;
+
+  const categories = normalizeAtlantyCategories(config.categories);
+  void resumeAtlantyLkBookingReturn({
+    directionIds: resolveAtlantyBookingDirectionIds(config.bookingDirectionIds, categories),
+    directionLabel: config.title?.trim() || null,
+    allowedTypeIds: resolveAtlantyBookingTypeIds(config.bookingAllowedTypeIds, categories),
+  });
+}
+
+/**
  * Tilda рендерит блоки лениво, поэтому ждём появления контейнера блока T123.
  */
 function scheduleAutoMount() {
@@ -101,9 +129,13 @@ if (typeof window !== "undefined") {
   (window as AtlantyWindow).LKWidgetAtlantySchedule = { mount, update, unmount };
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", scheduleAutoMount, { once: true });
+    document.addEventListener("DOMContentLoaded", () => {
+      scheduleAutoMount();
+      consumeBookingPaymentReturn(readRuntimeConfig());
+    }, { once: true });
   } else {
     scheduleAutoMount();
+    consumeBookingPaymentReturn(readRuntimeConfig());
   }
 }
 

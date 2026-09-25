@@ -143,7 +143,15 @@ function runScripts(file: string, sandbox: Sandbox, options: { scripts?: string[
 
 function configOf(sandbox: Sandbox) {
   const config = (sandbox.window as Record<string, unknown>).LK_ATLANTY_SCHEDULE_CONFIG as
-    | { categories?: Array<Record<string, unknown>>; maxPerCategory?: number; imagePick?: string; detailModal?: boolean }
+    | {
+      categories?: Array<Record<string, unknown>>;
+      maxPerCategory?: number;
+      imagePick?: string;
+      detailModal?: boolean;
+      booking?: string;
+      bookingAllowedTypeIds?: number[];
+      bookingDirectionIds?: number[];
+    }
     | undefined;
   assert.ok(config, "конфиг витрины не задан");
   return config;
@@ -190,6 +198,24 @@ test("настройки: категории, бейджи и лимиты", () 
   assert.equal(config.maxPerCategory, 6);
   assert.equal(config.imagePick, "shuffle");
   assert.equal(config.detailModal, true);
+  // Страницы Атлантов остаются на попапе Viva.
+  assert.equal(config.booking, undefined);
+});
+
+test("настройки Топократов включают окно записи ЛК1 и цены клуба", () => {
+  const sandbox = makeSandbox();
+  runScripts(path.join(ROOT, "docs/topocraty-tilda/1-schedule-settings.html"), sandbox);
+  const config = configOf(sandbox);
+
+  assert.equal(config.booking, "lk");
+  assert.equal(config.categories?.length, 2);
+  assert.equal(config.categories?.[0]?.directionId, 6180);
+  assert.equal(config.categories?.[0]?.badge, "По подписке или 2 000 ₽");
+  assert.equal(config.categories?.[1]?.directionId, 6233);
+  assert.equal(config.categories?.[1]?.badge, "4 000 ₽ или по подписке с доплатой");
+  // Тип 2349 вне клубного списка /group — окну записи его нужно передать явно.
+  assert.ok(sameNumbers(config.bookingAllowedTypeIds, [2349]));
+  assert.ok(sameNumbers(config.bookingDirectionIds, [6180, 6233]));
 });
 
 test("витрина ждёт DOMContentLoaded и потом грузит бандл с версией манифеста", async () => {

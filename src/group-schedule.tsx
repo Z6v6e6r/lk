@@ -14,6 +14,7 @@ import {
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
 import { ensureFreshRelease } from "./utils/releaseGuard";
 import { readGroupScheduleEntryDataFromHref } from "./utils/groupScheduleEntry";
+import type { GroupTrainingScope } from "./utils/groupScheduleModel";
 
 type GroupScheduleMountData = {
   exerciseId?: string | null;
@@ -22,6 +23,12 @@ type GroupScheduleMountData = {
   directionIds?: number[] | null;
   directionLabel?: string | null;
   returnToFindGame?: boolean;
+  /**
+   * Область расписания для витрин вне клубного ЛК (корпоративные события):
+   * `allowedTypeIds` расширяет типы занятий, `availableStudioIds: []` снимает
+   * фильтр по станции. Без `scope` поведение окна не меняется.
+   */
+  scope?: GroupTrainingScope | null;
 };
 type MountOptions = {
   targetId?: string;
@@ -70,6 +77,7 @@ function GroupScheduleContent({ data, onClose }: { data?: GroupScheduleMountData
       initialDirectionIds={data?.directionIds ?? locationData.directionIds ?? null}
       initialDirectionLabel={data?.directionLabel ?? locationData.directionLabel ?? null}
       returnToFindGame={data?.returnToFindGame ?? locationData.returnToFindGame}
+      scope={data?.scope ?? null}
     />
   );
 }
