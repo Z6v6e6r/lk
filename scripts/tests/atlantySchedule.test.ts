@@ -575,3 +575,15 @@ test("окно ЛК получает типы и направления кате
   assert.equal(resolveAtlantyBookingTypeIds([], []), null);
   assert.equal(resolveAtlantyBookingDirectionIds(undefined, []), null);
 });
+
+test("пустые токены и нули в конфиге окна записи не становятся id", () => {
+  const categories = normalizeAtlantyCategories([
+    { directionId: 6180, typeId: 2349, label: "Топократы игра" },
+  ]);
+
+  // Опечатка в Tilda не должна превращаться в направление 0 — иначе фильтр
+  // внутри окна останется пустым.
+  assert.deepEqual(resolveAtlantyBookingDirectionIds(["6180", "", " "], categories), [6180]);
+  assert.deepEqual(resolveAtlantyBookingDirectionIds([0, -1, "6180"], categories), [6180]);
+  assert.deepEqual(resolveAtlantyBookingTypeIds(["", 0], categories), [2349]);
+});

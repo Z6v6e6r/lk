@@ -10,9 +10,8 @@ import {
   resolveAtlantyBookingTypeIds,
 } from "./utils/atlantyScheduleModel";
 import {
-  clearAtlantyLkBookingReturn,
-  openAtlantyLkBookingWindow,
   readAtlantyLkBookingReturn,
+  resumeAtlantyLkBookingReturn,
 } from "./utils/atlantyLkBookingWindow";
 
 type AtlantyMountOptions = {
@@ -89,25 +88,16 @@ function unmount() {
 
 /**
  * Возврат из оплаты: ЛК1 дописывает к адресу витрины `groupExerciseId` и статус
- * платежа. Открываем окно записи на этом событии и убираем параметры, чтобы окно
- * не поднималось снова при перезагрузке страницы.
+ * платежа. Открываем окно записи на этом событии; параметры убираются только
+ * после успешного открытия (см. `resumeAtlantyLkBookingReturn`).
  */
 function consumeBookingPaymentReturn(config: AtlantyScheduleConfig) {
   if (typeof window === "undefined") return;
   if (normalizeAtlantyBookingMode(config.booking) !== "lk") return;
-
-  const paymentReturn = readAtlantyLkBookingReturn(window.location.href);
-  if (!paymentReturn) return;
-
-  try {
-    window.history.replaceState(null, "", clearAtlantyLkBookingReturn(window.location.href));
-  } catch {
-    /* replaceState может быть недоступен — параметры просто останутся в адресе */
-  }
+  if (!readAtlantyLkBookingReturn(window.location.href)) return;
 
   const categories = normalizeAtlantyCategories(config.categories);
-  void openAtlantyLkBookingWindow({
-    exerciseId: paymentReturn.exerciseId,
+  void resumeAtlantyLkBookingReturn({
     directionIds: resolveAtlantyBookingDirectionIds(config.bookingDirectionIds, categories),
     directionLabel: config.title?.trim() || null,
     allowedTypeIds: resolveAtlantyBookingTypeIds(config.bookingAllowedTypeIds, categories),

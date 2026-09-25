@@ -15,6 +15,7 @@ import {
   openAtlantyLkBookingWindow,
   readAtlantyLkBookingReturn,
   resetAtlantyLkBookingWindowState,
+  resumeAtlantyLkBookingReturn,
 } from "../../src/utils/atlantyLkBookingWindow.ts";
 
 /**
@@ -23,11 +24,19 @@ import {
  */
 
 test("normalizes bundle origins with the CDN first and without duplicates", () => {
-  assert.deepEqual(normalizeAtlantyLkBookingOrigins(), ["https://padlhub.su"]);
+  assert.deepEqual(normalizeAtlantyLkBookingOrigins(), [
+    "https://padlhub.su",
+    "https://lk-reserve.89-108-64-209.sslip.io",
+  ]);
   assert.deepEqual(
     normalizeAtlantyLkBookingOrigins("https://padlhub.su/", ["https://padlhub.su", "https://lk.example/"]),
     ["https://padlhub.su", "https://lk.example"],
   );
+  assert.deepEqual(normalizeAtlantyLkBookingOrigins(null, []), [
+    "https://padlhub.su",
+    "https://lk-reserve.89-108-64-209.sslip.io",
+  ]);
+  // Явный мусорный список не подменяется резервом: оператор задал origin'ы сам.
   assert.deepEqual(normalizeAtlantyLkBookingOrigins(null, ["  "]), ["https://padlhub.su"]);
 });
 
@@ -188,7 +197,23 @@ async function waitFor<T>(predicate: () => T | undefined | null, timeoutMs = 1_0
   }
 }
 
-function installDom() {
+/**
+ * Бандл не регистрирует окно на каждом origin'е: основной и резервный. Тест
+ * проходит обе попытки, не дожидаясь 15-секундного таймаута скрипта.
+ */
+async function failEveryBundleAttempt(
+  dom: ReturnType<typeof installDom>,
+  attempts = 2,
+) {
+  for (let index = 0; index < attempts; index += 1) {
+    const script = await waitFor(() =>
+      dom.appendedScripts.filter((item) => item.id === ATLANTY_LK_BOOKING_SCRIPT_ID)[index]);
+    script.onload?.();
+  }
+  return dom.appendedScripts.filter((item) => item.id === ATLANTY_LK_BOOKING_SCRIPT_ID);
+}
+
+function installDom(options: { href?: string } = {}) {
   const elements = new Map<string, FakeElement>();
   const bodyClasses = new Set<string>();
   const appendedScripts: FakeElement[] = [];
@@ -241,7 +266,18 @@ function installDom() {
 
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { href: "https://padlhub.ru/topocraty" } } });
+  const historyCalls: string[] = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      location: { href: options.href ?? "https://padlhub.ru/topocraty" },
+      history: {
+        replaceState: (_state: unknown, _title: string, url: string) => {
+          historyCalls.push(url);
+        },
+      },
+    },
+  });
   Object.defineProperty(globalThis, "document", { configurable: true, value: documentStub });
 
   return {
@@ -249,6 +285,7 @@ function installDom() {
     appendedScripts,
     listeners,
     head,
+    historyCalls,
     restore: () => {
       Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow });
       Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument });
@@ -371,9 +408,8 @@ test("reports a failure when the booking bundle never registers the widget", asy
 
   try {
     const pending = openAtlantyLkBookingWindow({ exerciseId: "exercise-1" });
-    const script = await waitFor(() =>
-      dom.appendedScripts.find((item) => item.id === ATLANTY_LK_BOOKING_SCRIPT_ID));
-    script.onload?.();
+    const attempts = await failEveryBundleAttempt(dom);
+    assert.equal(attempts.length, 2, "после основного origin пробуется резервный");
 
     const result = await pending;
     assert.equal(result.ok, false);
@@ -390,4 +426,125 @@ test("rejects an empty exercise id without touching the page", async () => {
   resetAtlantyLkBookingWindowState();
   const result = await openAtlantyLkBookingWindow({ exerciseId: "   " });
   assert.deepEqual(result, { ok: false, message: "Событие не выбрано." });
+});
+
+test("parallel opens share one bundle load and one overlay mount", async () => {
+  resetAtlantyLkBookingWindowState();
+  const dom = installDom();
+  const previousFetch = globalThis.fetch;
+  const widgetWindow = globalThis.window as unknown as Record<string, unknown>;
+  let mountCount = 0;
+
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => ({ ok: true, json: async () => ({ version: "v1" }) }),
+  });
+
+  try {
+    const first = openAtlantyLkBookingWindow({ exerciseId: "exercise-1" });
+    const second = openAtlantyLkBookingWindow({ exerciseId: "exercise-1" });
+    const script = await waitFor(() =>
+      dom.appendedScripts.find((item) => item.id === ATLANTY_LK_BOOKING_SCRIPT_ID));
+    widgetWindow.LKWidgetGroupSchedule = {
+      mount: () => {
+        mountCount += 1;
+      },
+      unmount: () => {},
+    };
+    script.onload?.();
+
+    assert.deepEqual(await first, { ok: true });
+    assert.deepEqual(await second, { ok: true });
+    assert.equal(mountCount, 1, "окно должно смонтироваться один раз");
+    assert.equal(
+      dom.appendedScripts.filter((item) => item.id === ATLANTY_LK_BOOKING_SCRIPT_ID).length,
+      1,
+    );
+  } finally {
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: previousFetch });
+    dom.restore();
+    resetAtlantyLkBookingWindowState();
+  }
+});
+
+test("payment return resumes the window and clears the url only on success", async () => {
+  resetAtlantyLkBookingWindowState();
+  const dom = installDom({
+    href: "https://padlhub.ru/topocraty?groupExerciseId=exercise-9&groupPaymentSuccess=true&keep=1",
+  });
+  const previousFetch = globalThis.fetch;
+  const widgetWindow = globalThis.window as unknown as Record<string, unknown>;
+  const mountData: unknown[] = [];
+
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => ({ ok: true, json: async () => ({ version: "v1" }) }),
+  });
+
+  try {
+    const pending = resumeAtlantyLkBookingReturn({ allowedTypeIds: [2349] });
+    const script = await waitFor(() =>
+      dom.appendedScripts.find((item) => item.id === ATLANTY_LK_BOOKING_SCRIPT_ID));
+    widgetWindow.LKWidgetGroupSchedule = {
+      mount: (options?: { data?: unknown }) => {
+        mountData.push(options?.data);
+      },
+      unmount: () => {},
+    };
+    script.onload?.();
+
+    assert.equal(await pending, "opened");
+    assert.deepEqual(mountData, [{
+      exerciseId: "exercise-9",
+      directionIds: null,
+      directionLabel: null,
+      returnToFindGame: true,
+      scope: { allowedTypeIds: [2349], availableStudioIds: [] },
+    }]);
+    assert.deepEqual(dom.historyCalls, ["/topocraty?keep=1"]);
+  } finally {
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: previousFetch });
+    dom.restore();
+    resetAtlantyLkBookingWindowState();
+  }
+});
+
+test("failed payment return keeps the url so the next load can retry", async () => {
+  resetAtlantyLkBookingWindowState();
+  const dom = installDom({
+    href: "https://padlhub.ru/topocraty?groupExerciseId=exercise-9&groupPaymentFailed=true",
+  });
+  const previousFetch = globalThis.fetch;
+
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => ({ ok: true, json: async () => ({ version: "v1" }) }),
+  });
+
+  try {
+    const pending = resumeAtlantyLkBookingReturn();
+    // Бандл не зарегистрировал окно ни на основном, ни на резервном origin'е.
+    await failEveryBundleAttempt(dom);
+
+    assert.equal(await pending, "failed");
+    assert.deepEqual(dom.historyCalls, [], "параметры оплаты нельзя стирать при сбое");
+  } finally {
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: previousFetch });
+    dom.restore();
+    resetAtlantyLkBookingWindowState();
+  }
+});
+
+test("payment return without params does not load the window bundle", async () => {
+  resetAtlantyLkBookingWindowState();
+  const dom = installDom({ href: "https://padlhub.ru/topocraty?keep=1" });
+
+  try {
+    assert.equal(await resumeAtlantyLkBookingReturn(), "none");
+    assert.deepEqual(dom.appendedScripts, []);
+    assert.deepEqual(dom.historyCalls, []);
+  } finally {
+    dom.restore();
+    resetAtlantyLkBookingWindowState();
+  }
 });

@@ -290,9 +290,14 @@ export function normalizeAtlantyBookingMode(value: unknown): AtlantyBookingMode 
 
 function parseAtlantyIdList(value: unknown): number[] | null {
   if (!Array.isArray(value)) return null;
+  // Пустые токены и нули — это опечатка в конфиге Tilda, а не id направления.
   const ids = value
-    .map((item) => (typeof item === "number" ? item : Number(String(item ?? "").trim())))
-    .filter((item) => Number.isInteger(item));
+    .map((item) => {
+      if (typeof item === "number") return item;
+      const raw = String(item ?? "").trim();
+      return raw ? Number(raw) : Number.NaN;
+    })
+    .filter((item) => Number.isInteger(item) && item > 0);
   return ids.length > 0 ? [...new Set(ids)] : null;
 }
 

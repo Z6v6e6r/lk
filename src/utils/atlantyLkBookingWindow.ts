@@ -93,10 +93,15 @@ export function normalizeAtlantyLkBookingOrigins(
   assetOrigin?: string | null,
   assetOrigins?: readonly string[] | null,
 ): string[] {
+  const activeOrigin = normalizeOrigin(getWindow()?.__LK_ACTIVE_BASE_URL__);
   const candidates = [
-    normalizeOrigin(assetOrigin) ?? ATLANTY_LK_BOOKING_PRIMARY_ORIGIN,
-    ...(Array.isArray(assetOrigins) ? assetOrigins : []).map((origin) => normalizeOrigin(origin)),
-  ].filter((origin): origin is string => Boolean(origin));
+    normalizeOrigin(assetOrigin) ?? activeOrigin ?? ATLANTY_LK_BOOKING_PRIMARY_ORIGIN,
+    ...(Array.isArray(assetOrigins) && assetOrigins.length > 0
+      ? assetOrigins
+      : ATLANTY_LK_BOOKING_FALLBACK_ORIGINS),
+  ]
+    .map((origin) => normalizeOrigin(origin))
+    .filter((origin): origin is string => Boolean(origin));
 
   const seen = new Set<string>();
   const result: string[] = [];
@@ -176,6 +181,7 @@ export function buildAtlantyLkBookingMountData(request: {
 }
 
 let widgetPromise: Promise<AtlantyLkBookingWidget> | null = null;
+let openingPromise: Promise<AtlantyLkBookingOpenResult> | null = null;
 let releaseVersionCache: string | null = null;
 let activeWidget: AtlantyLkBookingWidget | null = null;
 let activeOnClosed: (() => void) | null = null;
@@ -199,6 +205,12 @@ function snapshotHeadStyles() {
 /**
  * Забирает стили, добавленные бандлом окна. Их приходится снимать при закрытии:
  * глобальные правила ЛК (`body *`, `h1…h6`) иначе остаются на странице-витрине.
+ *
+ * Бандл собирается с `cssCodeSplit: false`, поэтому добавляет ровно один стиль.
+ * Если за время загрузки появилось несколько подходящих стилей (например, на
+ * странице параллельно грузится другой ЛК-бандл), принадлежность неоднозначна:
+ * тогда ничего не снимаем — лишний стиль на странице безопаснее, чем снятый
+ * стиль чужого работающего виджета.
  */
 function captureInjectedStyles() {
   const doc = getDocument();
@@ -208,7 +220,9 @@ function captureInjectedStyles() {
     .filter((style) => !snapshot?.has(style))
     .filter((style) => (style.textContent ?? "").includes(LK_STYLE_MARKER))
     .filter((style) => !lkInjectedStyles.includes(style));
-  if (added.length > 0) lkInjectedStyles.push(...added);
+  if (added.length === 1) {
+    lkInjectedStyles = [added[0]];
+  }
 }
 
 function attachLkStyles() {
@@ -455,8 +469,26 @@ export function closeAtlantyLkBookingWindow() {
   if (onClosed) onClosed();
 }
 
-/** Открывает окно записи LK1 на выбранном событии витрины. */
-export async function openAtlantyLkBookingWindow(
+/**
+ * Открывает окно записи LK1 на выбранном событии витрины.
+ *
+ * Параллельные вызовы (карточка и возврат из оплаты, два быстрых нажатия)
+ * получают один и тот же результат: бандл окна поднимается и монтируется один раз.
+ */
+export function openAtlantyLkBookingWindow(
+  request: AtlantyLkBookingRequest,
+): Promise<AtlantyLkBookingOpenResult> {
+  if (openingPromise) return openingPromise;
+
+  const promise: Promise<AtlantyLkBookingOpenResult> = openAtlantyLkBookingWindowOnce(request)
+    .finally(() => {
+      if (openingPromise === promise) openingPromise = null;
+    });
+  openingPromise = promise;
+  return promise;
+}
+
+async function openAtlantyLkBookingWindowOnce(
   request: AtlantyLkBookingRequest,
 ): Promise<AtlantyLkBookingOpenResult> {
   const exerciseId = trimString(request.exerciseId);
@@ -504,6 +536,7 @@ export async function openAtlantyLkBookingWindow(
 /** Сброс состояния загрузки — для тестов и повторного использования на странице. */
 export function resetAtlantyLkBookingWindowState() {
   widgetPromise = null;
+  openingPromise = null;
   releaseVersionCache = null;
   activeWidget = null;
   activeOnClosed = null;
@@ -554,4 +587,42 @@ export function clearAtlantyLkBookingReturn(href: string): string {
   } catch {
     return href;
   }
+}
+
+export type AtlantyLkBookingReturnOutcome = "none" | "opened" | "failed";
+
+/**
+ * Продолжает возврат из оплаты: открывает окно записи на событии из адреса.
+ *
+ * Параметры возврата убираются **только** когда окно действительно открылось.
+ * Если бандл не загрузился, адрес сохраняет состояние оплаты: следующая загрузка
+ * страницы повторит попытку, а запись на сервере уже создана — витрина повторную
+ * оплату не инициирует.
+ */
+export async function resumeAtlantyLkBookingReturn(options: {
+  directionIds?: readonly number[] | null;
+  directionLabel?: string | null;
+  allowedTypeIds?: readonly number[] | null;
+} = {}): Promise<AtlantyLkBookingReturnOutcome> {
+  const currentWindow = getWindow();
+  if (!currentWindow) return "none";
+  const href = String(currentWindow.location?.href ?? "");
+  const paymentReturn = readAtlantyLkBookingReturn(href);
+  if (!paymentReturn) return "none";
+
+  const result = await openAtlantyLkBookingWindow({
+    exerciseId: paymentReturn.exerciseId,
+    directionIds: options.directionIds ?? null,
+    directionLabel: options.directionLabel ?? null,
+    allowedTypeIds: options.allowedTypeIds ?? null,
+  });
+  if (!result.ok) return "failed";
+
+  try {
+    const history = currentWindow.history as History | undefined;
+    history?.replaceState?.(null, "", clearAtlantyLkBookingReturn(href));
+  } catch {
+    /* replaceState может быть недоступен — параметры просто останутся в адресе */
+  }
+  return "opened";
 }
