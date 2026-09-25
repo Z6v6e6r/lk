@@ -50,7 +50,7 @@
 | `src/utils/groupSubscriptionDiscount.ts` | Котировка с оплачиваемой долей: `isPartialSubscriptionEventDiscountQuote`, `subscriptionEventQuoteAmountMinor`; валидатор `isSubscriptionEventDiscountQuote` принимает обе формы (плоскую и долю), добавлены `freeMinutes`/`paidMinutes`. |
 | `src/components/group-schedule/GroupSchedulePage.tsx` | Для доли на кнопке показывается «Доплата за N мин по подписке …» вместо «Скидка N %». |
 | `scripts/patch_live_lk1_plan_rules.mjs` | Перепинён `PLAN_RULES_REVIEWED_EVALUATOR_SHA256` (аддитивные поля `eventDiscountPercent`). |
-| `scripts/tests/lk1TopokratyFriendship.test.mjs` | Новый набор: матрица решений, привязка к продукту/направлению, fail-closed по дневному бакету, payload/transition, маркеры booking/preview/widget. |
+| `scripts/tests/lk1TopokratyFriendship.test.mjs` | Новый набор: матрица решений, привязка к продукту/направлению, fail-closed по дневному бакету, payload/transition, прямой прогон evaluate-шага превью (частичная/полная/обычная/покрытая котировка и подделанные решения), маркеры booking/preview/widget. |
 | `scripts/tests/groupSubscriptionDiscount.test.ts` | Кейс котировки с оплачиваемой долей. |
 | `scripts/tests/lk1PreviewFreeFirstEventHotfix.test.mjs` | Пины reviewed-источника приведены к новой форме сравнения процента. |
 
@@ -71,9 +71,9 @@
 
 ## Проверки (LOCAL)
 
-- `node --experimental-strip-types --test scripts/tests/lk1TopokratyFriendship.test.mjs` — 10/10 PASS.
+- `node --experimental-strip-types --test scripts/tests/lk1TopokratyFriendship.test.mjs` — 11/11 PASS.
 - `node --experimental-strip-types --test scripts/tests/lk1*.test.mjs scripts/tests/lk1*.test.ts` —
-  384 теста, 301 pass, 83 skip (приватные live-фикстуры), 0 fail.
+  385 тестов, 302 pass, 83 skip (приватные live-фикстуры), 0 fail.
 - `node --experimental-strip-types --test` по подписочным наборам (`subscription*`, `managedSubscription*`,
   `groupEventPayment`, `groupScheduleSubscriptionOffer`, `proTrainingExclusion`,
   `tournamentSubscriptionDiscount`, `groupSubscriptionDiscount`) — 718 тестов, 626 pass, 88 skip,
