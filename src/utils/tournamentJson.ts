@@ -1,4 +1,5 @@
 import type { AmericanoTournamentPayload } from "./apiClient";
+import { createPublicPhoneData } from "./publicPhoneData.js";
 
 type TournamentJsonEnvelope = {
   version?: number;
@@ -82,11 +83,24 @@ function normalizeOrganizer(value: unknown, tenantKey: string) {
 }
 
 export function serializeTournamentJson(payload: AmericanoTournamentPayload): string {
+  // Old imported/offline/browser-cached payloads can still contain phone IDs.
+  // File-local random aliases keep the complete graph without publishing a
+  // reversible phone digest. Existing server-issued IDs stay unchanged.
+  const aliases = new Map<string, string>();
+  const privacy = createPublicPhoneData((identity, scope) => {
+    const key = JSON.stringify([scope, identity]);
+    let id = aliases.get(key);
+    if (!id) {
+      id = `manual-participant-public-${crypto.randomUUID()}`;
+      aliases.set(key, id);
+    }
+    return id;
+  });
   const envelope: TournamentJsonEnvelope = {
     version: 1,
     kind: "tournament",
     exportedAt: new Date().toISOString(),
-    payload,
+    payload: privacy.project(payload, { kind: "tournament" }),
   };
   return JSON.stringify(envelope, null, 2);
 }

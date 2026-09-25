@@ -1,4 +1,5 @@
 import { AvatarImage } from "../UI/AvatarImage";
+import { isViewerIdentity } from "../../utils/viewerIdentity";
 import {
   useCallback,
   useEffect,
@@ -486,9 +487,7 @@ function canManageCommunityMember(
   profileId: string,
   profilePhone: string | null,
 ) {
-  const isCurrentUser =
-    (member.id && member.id === profileId)
-    || Boolean(profilePhone && member.phone && member.phone === profilePhone);
+  const isCurrentUser = isViewerIdentity(member, { id: profileId, phone: profilePhone });
 
   if (!managerRole || isCurrentUser || member.role === "OWNER") {
     return false;
@@ -718,11 +717,7 @@ function isCommunityMember(
   profileId: string,
   profilePhone: string | null,
 ) {
-  return community.members.some((member) => {
-    const byId = Boolean(profileId && member.id && member.id === profileId);
-    const byPhone = Boolean(profilePhone && member.phone && member.phone === profilePhone);
-    return byId || byPhone;
-  });
+  return community.members.some((member) => isViewerIdentity(member, { id: profileId, phone: profilePhone }));
 }
 
 function isCommunityAccessible(
@@ -739,11 +734,7 @@ function findCommunityMember(
   profileId: string,
   profilePhone: string | null,
 ) {
-  return community.members.find((member) => {
-    const byId = Boolean(profileId && member.id && member.id === profileId);
-    const byPhone = Boolean(profilePhone && member.phone && member.phone === profilePhone);
-    return byId || byPhone;
-  }) ?? null;
+  return community.members.find((member) => isViewerIdentity(member, { id: profileId, phone: profilePhone })) ?? null;
 }
 
 function buildConnectionsFromMembers(communities: CommunityRecord[]): CommunityConnection[] {
@@ -874,6 +865,7 @@ function buildCommunityRankingDataFromBackend(
         rank: Number.isFinite(item.rank) && item.rank > 0 ? Math.floor(item.rank) : (index + 1),
         id: item.playerId ?? member?.id ?? null,
         phone: member?.phone ?? null,
+        isViewer: item.isViewer ?? member?.isViewer,
         name: item.playerName || member?.name || "Игрок",
         avatar: item.avatarUrl ?? member?.avatar ?? null,
         role: member?.role ?? "MEMBER",
@@ -3110,10 +3102,11 @@ export function CommunitiesSection({
       authorName: comment.authorName,
       text: comment.text,
       createdAt: comment.createdAt,
-      isOwn: Boolean(
-        (authorId && currentUserId && authorId === currentUserId)
-        || (authorPhone && currentUserPhone && authorPhone === currentUserPhone),
-      ),
+      isOwn: isViewerIdentity({
+        id: authorId,
+        phone: authorPhone,
+        isViewer: comment.authorIsViewer,
+      }, { id: currentUserId, phone: currentUserPhone }),
     };
   }, [currentMember.id, currentMember.phone, profile.phone, selectedCommunityMember?.id, selectedCommunityMember?.phone]);
 
@@ -3274,9 +3267,11 @@ export function CommunitiesSection({
 
         const authorId = (message.authorId || "").trim();
         const authorPhone = normalizePhone(message.authorPhone);
-        const isMine =
-          (authorId && authorId === profileId)
-          || Boolean(authorPhone && authorPhone === profilePhone);
+        const isMine = isViewerIdentity({
+          id: authorId,
+          phone: authorPhone,
+          isViewer: message.authorIsViewer,
+        }, { id: profileId, phone: profilePhone });
 
         return isMine ? count : count + 1;
       }, 0);
@@ -3320,11 +3315,7 @@ export function CommunitiesSection({
   ) => {
     if (!onOpenLevelsInfo || !selectedCommunity) return;
 
-    const normalizedRowPhone = normalizePhone(row.phone);
-    const isCurrentUser = Boolean(
-      (row.id && profileId && row.id === profileId)
-      || (normalizedRowPhone && profilePhone && normalizedRowPhone === profilePhone),
-    );
+    const isCurrentUser = isViewerIdentity(row, { id: profileId, phone: profilePhone });
     const defaultTab = activeRankingType === "games"
       ? "games"
       : activeRankingType === "tournaments"
@@ -4098,9 +4089,7 @@ export function CommunitiesSection({
     if (response.data?.community) {
       setEditFormState(buildCommunityFormStateFromRecord(response.data.community));
     }
-    const isCurrentUser =
-      (member.id && member.id === profileId)
-      || Boolean(profilePhone && member.phone && member.phone === profilePhone);
+    const isCurrentUser = isViewerIdentity(member, { id: profileId, phone: profilePhone });
     const removedCurrentUser = action === "REMOVE" && (
       isCurrentUser
       || Boolean(response.data?.community && !isCommunityMember(response.data.community, profileId, profilePhone))
@@ -6005,9 +5994,7 @@ export function CommunitiesSection({
                       profileId,
                       profilePhone,
                     );
-                    const isCurrentUser =
-                      (member.id && member.id === profileId)
-                      || Boolean(profilePhone && member.phone && member.phone === profilePhone);
+                    const isCurrentUser = isViewerIdentity(member, { id: profileId, phone: profilePhone });
                     const pendingRemove = managingMemberKey === `REMOVE:${memberKey}`;
                     const pendingBan = managingMemberKey === `BAN:${memberKey}`;
 
