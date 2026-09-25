@@ -100,6 +100,17 @@ const lk1LifecycleInstant = (value, endOfDay = false) => {
   const activationCeiling = !endOfDay && /[1-9]/.test((timestamp[1] || "").slice(3)) ? 1 : 0;
   return Number.isFinite(instant) ? instant + activationCeiling : null;
 };
+// The Viva direction of the resolved exercise, read through the same aliases
+// `resolveCategory` accepts. The booking target carries it so the managed-policy evaluator
+// can tell the club's training direction from another club's corporate event of the same
+// type (2349 is shared by «Атланты» and «Топократы»).
+const exerciseDirectionId = (exercise) => {
+  const rawDirection = exercise?.direction ?? exercise?.exerciseDirection;
+  const nested = isObj(rawDirection) ? rawDirection : null;
+  const value = nested ? (nested.id ?? nested.directionId) : rawDirection;
+  const numeric = Number(value ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
+  return Number.isInteger(numeric) ? numeric : null;
+};
 const lk1Quote = (ctx, exercise, owned) => {
   // The station of the resolved booking target is part of the contour decision: an
   // excluded station keeps the product's legacy path for this quote as well.
@@ -119,6 +130,7 @@ const lk1Quote = (ctx, exercise, owned) => {
     category: managedTargetCategory(resolveCategory(exercise)),
     externalEventTypeId: managedExternalEventTypeId(exercise), productTypeId: null,
     stationId: toStr(exercise.studio?.id || exercise.studioId), roomId: exerciseRoomId(exercise),
+    directionId: exerciseDirectionId(exercise),
     durationMinutes: eventDurationMinutes(exercise), startsAt: eventStartsAt(exercise),
     basePriceMinor: null, currency: "RUB", priceSource: "VIVA_EXISTING_TARIFF",
   };
@@ -163,7 +175,7 @@ const lk1Finish = (ctx) => {
 // EVENT_PAYMENT_ROUTES
 const lk1Checkout = (ctx) => {
   const route = lk1EventPaymentRoute(ctx);
-  if (route && !lk1EventPaymentBinding(ctx)) return lk1Stop(ctx, route.code + "_BINDING_INVALID");
+  if (route && !lk1EventPaymentQuoteBinding(ctx)) return lk1Stop(ctx, route.code + "_BINDING_INVALID");
   if (!route && (!['JOIN_GAME', 'CREATE_GAME'].includes(ctx.managedAction)
     || ctx.caller !== 'split' || ctx.lk1.target?.category !== 'GAME')) return lk1Stop(ctx, "LK1_PAYMENT_ROUTE_INVALID");
   if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");
@@ -296,7 +308,7 @@ if (ctx.step === "lk1_ingress_operation_find") {
     }
     const amount = quote.decision.benefit.finalPriceMinor;
     if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(managedActionForTarget({ ...ctx, category: operation.category }))) {
-      const binding = lk1EventPaymentBinding({ ...ctx, category: operation.category,
+      const binding = lk1EventPaymentQuoteBinding({ ...ctx, category: operation.category,
         managedAction: managedActionForTarget({ ...ctx, category: operation.category }),
         studioId: quote.target.stationId, exerciseId: operation.exerciseId }, quote);
       const intent = quote.transactionIntent;
@@ -873,6 +885,16 @@ if (ctx.step === "lk1_policy_decision") {
     const expected = expectedGroup !== undefined ? expectedGroup : expectedTournament;
     const expectedAction = expectedGroup !== undefined ? "BOOK_GROUP_TRAINING" : "BOOK_TOURNAMENT";
     const target = ctx.lk1.target;
+    // The percent the advisory preview quotes for a charged event. It is the percent the
+    // decision itself fixed — the club training may charge the full price (0 %), a share of
+    // the price (the quarter-of-court co-pay) or the configured event discount — while a
+    // visit-covered first event keeps the reviewed normalization above, where the widget's
+    // 100 % at zero is rewritten to the configured percent.
+    const lk1ExpectedEventDiscountPercent = (decision, route) => (
+      isObj(decision) && decision.benefit?.kind !== "FREE_ENTITLEMENT"
+        && Number.isInteger(decision.eventDiscountPercent)
+        ? decision.eventDiscountPercent
+        : ctx.lk1.rule[route.discountField]);
     if ((expectedGroup !== undefined && expectedTournament !== undefined)
       || !route || ctx.managedAction !== expectedAction || ctx.caller !== "http"
       || ctx.category !== route.sourceCategory || target.category !== route.category || !isObj(expected)
@@ -880,7 +902,7 @@ if (ctx.step === "lk1_policy_decision") {
       || !Number.isSafeInteger(expected.basePriceMinor) || !Number.isSafeInteger(expected.amountMinor)
       || expected.basePriceMinor !== target.basePriceMinor || expected.amountMinor !== decision.benefit.finalPriceMinor
       || expected.productId !== target.priceProductId
-      || expected.discountPercent !== ctx.lk1.rule[route.discountField]
+      || expected.discountPercent !== lk1ExpectedEventDiscountPercent(decision, route)
       || expected.durationMinutes !== target.durationMinutes || typeof expected.startsAt !== "string"
       || Date.parse(expected.startsAt) !== Date.parse(target.startsAt)) {
       return finishError(ctx, 409, "Стоимость или условия подписки изменились. Обновите варианты записи.", {
@@ -921,7 +943,7 @@ if (ctx.step === "lk1_payment_profile_recheck" || (paymentRoute && ctx.step === 
   const paymentContext = eventPayment ? ctx.lk1EventPayment : msg._splitCtx;
   const payload = paymentContext?.transactionPayload;
   const product = payload?.products?.[0];
-  const binding = eventPayment ? lk1EventPaymentBinding(ctx) : null;
+  const binding = eventPayment ? lk1EventPaymentQuoteBinding(ctx) : null;
   if (eventPayment && (!binding || product?.id !== binding.productId)) return lk1Stop(ctx, paymentRoute.code + "_BINDING_INVALID");
   if (!eventPayment && (!["JOIN_GAME", "CREATE_GAME"].includes(ctx.managedAction)
     || ctx.caller !== "split" || ctx.lk1?.target?.category !== "GAME")) return lk1Stop(ctx, "LK1_PAYMENT_ROUTE_INVALID");
@@ -1000,7 +1022,7 @@ if (ctx.step === "lk1_transaction_readback") {
   const transaction = unwrapRecord(msg.payload);
   const intent = ctx.lk1.transactionIntent;
   if (paymentRoute) {
-    const binding = lk1EventPaymentBinding(ctx);
+    const binding = lk1EventPaymentQuoteBinding(ctx);
     if (!binding || !isObj(intent) || intent.productId !== binding.productId
       || intent.productType !== binding.productType || intent.baseMinor !== binding.baseMinor
       || intent.chargeMinor !== binding.chargeMinor || intent.discountMinor !== binding.discountMinor) {

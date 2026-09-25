@@ -145,8 +145,15 @@ export const PLAN_RULES_MODULE_SHA256 =
 // Re-pinned 2026-09-16: the reviewed evaluator gained the free-first-event benefit branch
 // (`FREE_ENTITLEMENT` with one visit for a proved first event of the day, discount otherwise),
 // which the `lk1-free-first-event` generation ships into this node and the preview evaluate.
+// Re-pinned 2026-09-26 (owner decision «Дружба Топократы»): the reviewed evaluator gained the
+// club training benefit of direction 6233 (the shared free hour plus the quarter-of-court
+// co-pay, and the full one-time price when the free hour is unavailable). The club rule ships
+// into the installed booking evaluator and the preview evaluate node as a new focused
+// generation composed on the fresh live pull; the composed live-body pins above
+// (`liveEmbeddedSha256` / `patchedFuncSha256`) are re-derived and re-reviewed at that apply,
+// exactly as the generation contract requires.
 export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
-  "f1f65a2050523e6104ee0586e1ad62bb0f6945b0ff1dc1583fd52dcf3a9a0433";
+  "2a7878abff5bb5f3618b439191616c4a01a7a592f4322aeb3aaadad3f3d7046a";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =

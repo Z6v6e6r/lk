@@ -30,7 +30,10 @@ export const READBACK_TARGET = Object.freeze({
   // 4afaa7708a4084666626a25ab8437e1ef1b7680a17b010ac044781cbb5d77df3).
   liveGatewaySha256: "7ac1f5f116a46faca5ed9f0664706129166b22b431080c9518aa5949f05ca099",
   liveStepSha256: "b925137d80e1427108e2d2da03c84990785ee7a070ab692b987af1d3007a42a4",
-  reviewedStepSha256: "78d928e81c8efed4244a83bf30890137782dcfd1effe310b984d0129db380c69",
+  // Re-pinned 2026-09-26 (owner decision «Дружба Топократы»): the reviewed readback step now
+  // resolves the event-payment binding through `lk1EventPaymentQuoteBinding`, which prices the
+  // club training co-pay and the club full-price shape before the reviewed binding.
+  reviewedStepSha256: "4cd5744b639aab54f7cd181dbcde5519fae4ac39635d2710b768a6642f84d565",
   patchedGatewaySha256: "abf46e8b1a05ca4d013ed0c3d9e168a2ae00a1d8eb5e866c3290acc5f47672d9",
   reviewedSource: "scripts/nodered_lk1_hub_nodes/gateway.js",
 });

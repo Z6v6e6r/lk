@@ -10,10 +10,51 @@ export interface SubscriptionEventDiscountQuote {
   discountPercent: number;
   basePriceMinor: number;
   amountMinor: number | null;
+  /**
+   * Minutes of the event carried by the subscription's free hour (0 for a flat quote) and
+   * minutes the client pays for (the whole event for a flat quote). The club plan «Дружба
+   * Топократы» quotes its training as the paid share above the free hour.
+   */
+  freeMinutes?: number;
+  paidMinutes?: number;
   startsAt: string;
   durationMinutes: number;
   evaluatedAt: number;
   expiresAt: number;
+}
+
+/**
+ * True when the quote charges only the paid share of the event (the club training co-pay).
+ * The share has to add up to the event, so a quote whose minutes do not cover its own
+ * duration is never treated as a co-pay — neither for the label nor for the amount.
+ */
+export function isPartialSubscriptionEventDiscountQuote(
+  quote: Pick<SubscriptionEventDiscountQuote, "freeMinutes" | "paidMinutes" | "durationMinutes">,
+): boolean {
+  const freeMinutes = quote.freeMinutes as number;
+  const paidMinutes = quote.paidMinutes as number;
+  return Number.isSafeInteger(freeMinutes) && freeMinutes > 0
+    && Number.isSafeInteger(paidMinutes) && paidMinutes > 0
+    && Number.isSafeInteger(quote.durationMinutes) && quote.durationMinutes > 0
+    && freeMinutes + paidMinutes === quote.durationMinutes;
+}
+
+/**
+ * The amount a quote must carry: the whole base less the discount, or — for a paid share —
+ * the charged share of the base less the same discount on it.
+ */
+export function subscriptionEventQuoteAmountMinor(
+  quote: Pick<SubscriptionEventDiscountQuote,
+    "basePriceMinor" | "discountPercent" | "durationMinutes" | "freeMinutes" | "paidMinutes">,
+): number | null {
+  if (!Number.isSafeInteger(quote.basePriceMinor) || quote.basePriceMinor <= 0
+    || !Number.isSafeInteger(quote.discountPercent) || quote.discountPercent < 0 || quote.discountPercent > 100
+    || !Number.isSafeInteger(quote.durationMinutes) || quote.durationMinutes <= 0) return null;
+  const paidShare = isPartialSubscriptionEventDiscountQuote(quote);
+  const chargedMinor = paidShare
+    ? Math.floor(quote.basePriceMinor * (quote.paidMinutes as number) / quote.durationMinutes)
+    : quote.basePriceMinor;
+  return chargedMinor - Math.floor(chargedMinor * quote.discountPercent / 100);
 }
 
 export interface GroupSubscriptionDiscountQuote extends SubscriptionEventDiscountQuote {
@@ -36,7 +77,8 @@ export function isSubscriptionEventDiscountQuote(
     && typeof q.productId === "string" && Boolean(q.productId.trim())
     && q.status === "AVAILABLE" && Number.isSafeInteger(q.discountPercent) && q.discountPercent >= 0 && q.discountPercent <= 100
     && Number.isSafeInteger(q.basePriceMinor) && q.basePriceMinor > 0 && q.basePriceMinor <= 1_000_000
-    && Number.isSafeInteger(q.amountMinor) && q.amountMinor === q.basePriceMinor - Math.floor(q.basePriceMinor * q.discountPercent / 100)
+    && Number.isSafeInteger(q.amountMinor)
+    && q.amountMinor === subscriptionEventQuoteAmountMinor(q)
     && Number.isFinite(Date.parse(q.startsAt)) && Date.parse(q.startsAt) > now
     && Number.isSafeInteger(q.durationMinutes) && q.durationMinutes > 0 && q.durationMinutes <= 720
     && Number.isFinite(q.evaluatedAt) && Number.isFinite(q.expiresAt)

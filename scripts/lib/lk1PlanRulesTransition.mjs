@@ -38,6 +38,37 @@ export const LK1_PLAN_RULES_DESIRED = Object.freeze({
   ]),
 });
 
+// Owner decision 2026-09-26: the club plan «Дружба Топократы» (Viva
+// `14692232-12be-4218-9fa1-2d5b79b62035`) enters the same contour as «Дружба» — the five
+// standard numbers above and the standard sale-date cohort — and its training direction
+// 6233 additionally carries the club co-pay of a quarter of the court price
+// (`nodered_lk1_hub_nodes/evaluator.js`). The installed generation above stays frozen: the
+// club rule ships as a new generation whose guarded writer replaces that exact prior, so a
+// runtime that still carries the previous global is never silently overwritten.
+export const LK1_TOPOKRATY_PRODUCT_ID = '14692232-12be-4218-9fa1-2d5b79b62035';
+export const LK1_PLAN_RULES_WITH_TOPOKRATY = Object.freeze({
+  formatVersion: 1,
+  rules: Object.freeze([
+    ...LK1_PLAN_RULES_DESIRED.rules,
+    rule(LK1_TOPOKRATY_PRODUCT_ID, 'topocraty'),
+  ]),
+});
+
+export const buildTopokratyPlanRulesTransition = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_DESIRED,
+  desired: LK1_PLAN_RULES_WITH_TOPOKRATY,
+});
+
+// The paired revert of the club rule. A rollback of the evaluator alone would leave the
+// global naming the club product while the older evaluator has no club branch, and a
+// direction-6233 training would then be priced at the ordinary 50 % instead of the quarter
+// co-pay; so the release contract rolls the global back first (this guard), then the
+// evaluator.
+export const buildTopokratyPlanRulesRevert = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  desired: LK1_PLAN_RULES_DESIRED,
+});
+
 // Missing/empty means "no plan-rules global yet", which is a legitimate prior.
 // Everything else must match the frozen shape exactly: a surplus, missing or
 // mistyped key is a hard refusal, never a silent coercion.

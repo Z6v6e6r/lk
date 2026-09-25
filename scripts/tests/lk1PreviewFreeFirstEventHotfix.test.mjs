@@ -96,7 +96,12 @@ test("the reviewed sources carry the reviewed change", () => {
   assert.ok(hub.includes("ctx[key] = { ...quote, discountPercent: ctx.lk1.rule[discountField] };"));
   // The reviewed comparison the release packet pins stays byte-identical.
   assert.ok(hub.includes("|| expected.amountMinor !== decision.benefit.finalPriceMinor"));
-  assert.ok(hub.includes("|| expected.discountPercent !== ctx.lk1.rule[route.discountField]"));
+  // The compared percent is the decision's own for a charged share (the «Дружба Топократы»
+  // club training co-pay) and the configured rule percent otherwise; the amount check above
+  // still pins the money, and the free-first normalization above is untouched.
+  assert.ok(hub.includes("|| expected.discountPercent !== lk1ExpectedEventDiscountPercent(decision, route)"));
+  assert.ok(hub.includes("const lk1ExpectedEventDiscountPercent = (decision, route) => ("));
+  assert.ok(hub.includes("const expected = expectedGroup !== undefined ? expectedGroup : expectedTournament;"));
   assert.ok(router.includes("lk1ProductIdentity: { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, subscriptionId: id,"));
   assert.ok(router.includes("category: eventRoute ? eventRoute.category : 'open_game',"));
   assert.ok(router.includes("const freeCovered = decision.subscriptionVisitCount === 1"));

@@ -39,6 +39,49 @@ const lk1EventPaymentBinding = (ctx, quote = ctx.lk1) => {
     chargeMinor: decision.benefit.finalPriceMinor,
     discountMinor: base - decision.benefit.finalPriceMinor };
 };
+
+// The club training («Дружба Топократы», direction 6233) spends the free hour and bills the
+// minutes above it, and without a free hour it bills the whole event. Both shapes differ from
+// the configured event percent the reviewed binding proves, so they are resolved here: the
+// visit-covered share is priced by its own fraction and the decision's own percent, and the
+// whole-event shape by the decision's percent. Everything else falls through to the reviewed
+// binding, which keeps its exact contract.
+const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {
+  const route = lk1EventPaymentRoute(ctx);
+  const target = quote?.target;
+  const decision = quote?.decision;
+  const base = target?.basePriceMinor;
+  if (!route || ctx.caller !== "http" || ctx.category !== route.sourceCategory
+    || target?.category !== route.category || target.eventId !== ctx.exerciseId
+    || target.stationId !== ctx.studioId
+    || typeof target.priceProductId !== "string" || !target.priceProductId.trim()
+    || !Number.isSafeInteger(base) || base <= 0 || base > 1_000_000
+    || decision?.eligible !== true
+    || !Number.isInteger(decision.eventDiscountPercent)
+    || decision.eventDiscountPercent < 0 || decision.eventDiscountPercent > 100) return null;
+  const percent = decision.eventDiscountPercent;
+  const share = decision.benefit?.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT"
+    && decision.subscriptionVisitCount === 1 ? decision.gameMinutes : null;
+  let chargeMinor = null;
+  if (share
+    && Number.isSafeInteger(share.freeMinutes) && share.freeMinutes > 0
+    && Number.isSafeInteger(share.paidOverageMinutes) && share.paidOverageMinutes > 0) {
+    const totalMinutes = share.freeMinutes + share.paidOverageMinutes;
+    const chargedMinor = Math.floor(base * share.paidOverageMinutes / totalMinutes);
+    chargeMinor = chargedMinor - Math.floor(chargedMinor * percent / 100);
+  } else if (!share && decision.subscriptionVisitCount === 0
+    && decision.benefit?.kind === "PERCENT_DISCOUNT") {
+    chargeMinor = base - Math.floor(base * percent / 100);
+  }
+  if (chargeMinor === null || decision.benefit.finalPriceMinor !== chargeMinor) return null;
+  return { productId: target.priceProductId, productType: "SERVICE", baseMinor: base,
+    chargeMinor, discountMinor: base - chargeMinor };
+};
+// Every event-payment decision goes through this resolver: the club shapes above first, then
+// the reviewed binding, which still prices every other event and refuses a shape it cannot
+// prove (a visit with a charge the club branch did not resolve).
+const lk1EventPaymentQuoteBinding = (ctx, quote = ctx.lk1) =>
+  lk1ClubEventPaymentBinding(ctx, quote) || lk1EventPaymentBinding(ctx, quote);
 // Payment products use Viva's services/subServices envelopes as well as lists.
 const lk1PaymentProductRows = (value, seen = new Set()) => {
   if (Array.isArray(value)) return value;
@@ -59,7 +102,7 @@ const lk1PaymentProductRows = (value, seen = new Set()) => {
 };
 
 const lk1PrepareEventPayment = (ctx, route) => {
-  const binding = lk1EventPaymentBinding(ctx);
+  const binding = lk1EventPaymentQuoteBinding(ctx);
   const products = lk1PaymentProductRows(msg.payload);
   if (!isHttpOk(msg.statusCode)) return lk1Stop(ctx, route.code + "_PRODUCT_UNAVAILABLE");
   if (!binding || !products) return lk1Stop(ctx, route.code + "_BINDING_INVALID");
