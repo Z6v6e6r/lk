@@ -98,6 +98,12 @@
 - `npx tsc --noEmit -p tsconfig.app.json` — 0 ошибок.
 - `npx eslint` по изменённым файлам — 0 ошибок (три Node-RED источника исключены конфигом ESLint,
   как и раньше).
+- Ядро CI-группы `check_9` локально — 482 теста: 468 pass, 12 skip, 2 fail; оба падения
+  (`eventPaymentRoutesUpgrade`: «CLI refuses raw flow export inside Git», «legacy CLI…») —
+  окружение: путь воркспейса содержит пробел (`lstat '/Users/zver/Desktop/project-fixed%206'`),
+  на чистом `origin/main` они падают так же.
+- CI PR #153, голова `b510917a`: «LK1 exact-head enforcement gate» — **pass** (5m14s,
+  run 36127169892).
 
 ## RELEASE (не выполнялся)
 
