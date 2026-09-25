@@ -27,6 +27,43 @@ const floorRatio = (amount, numerator, denominator) => {
   return result <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(result) : null;
 };
 
+// «Дружба Топократы» (Viva product `14692232-…`) carries the five standard friendship
+// numbers, and its club training direction 6233 is covered like an open game: the shared
+// free hour of the day (60 minutes) is spent first and one visit is consumed, while the
+// minutes above it are charged at a quarter of the event's court price, pro rata to the
+// event duration. When no free hour is available — the day's 60 minutes are already spent
+// or the active-booking cap is reached — the training is paid at its full one-time price
+// and consumes no visit (owner decision 2026-09-26).
+const TOPOKRATY_FRIENDSHIP_PRODUCT_ID = "14692232-12be-4218-9fa1-2d5b79b62035";
+const TOPOKRATY_TRAINING_DIRECTION_IDS = [6233];
+const TOPOKRATY_TRAINING_COURT_PAY_PERCENT = 25;
+const TOPOKRATY_TRAINING_DISCOUNT_PERCENT = 100 - TOPOKRATY_TRAINING_COURT_PAY_PERCENT;
+// The rule is bound to the product that owns the selected instance, never to the client's
+// payload: the resolver's `policyProductId` is the only product identity this node trusts.
+// The direction is read through the aliases the booking target and the raw Viva exercise
+// both use, so a generation that carries the exercise instead of the resolved target cannot
+// silently fall back to the ordinary discount.
+const topokratyDirectionId = (target) => {
+  const rawDirection = target?.direction ?? target?.exerciseDirection;
+  const nested = isObj(rawDirection) ? rawDirection : null;
+  const value = nested ? (nested.id ?? nested.directionId) : rawDirection;
+  return toNonNegativeInt(value ?? target?.directionId ?? target?.exerciseDirectionId);
+};
+const isTopokratyTrainingBenefit = (binding, target) => {
+  if (!isObj(binding)
+    || toStr(binding.policyProductId)?.toLowerCase() !== TOPOKRATY_FRIENDSHIP_PRODUCT_ID) return false;
+  return TOPOKRATY_TRAINING_DIRECTION_IDS.includes(topokratyDirectionId(target));
+};
+// The subscription's free-minute bucket is a Moscow calendar day, exactly as for a game.
+const moscowLocalDate = (value) => {
+  const date = toFiniteDate(value);
+  if (!date) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow",
+    year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+};
+
 const input = isObj(msg._managedSubscriptionPolicyInput)
   ? msg._managedSubscriptionPolicyInput
   : null;
@@ -133,14 +170,7 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
   let selectedRule = null;
   if (category === "GAME") {
     const used = usage?.usedOrReservedFreeMinutesToday;
-    const startsAt = toFiniteDate(target?.startsAt);
-    let day = null;
-    if (startsAt) {
-      const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow",
-        year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(startsAt);
-      const date = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-      day = `${date.year}-${date.month}-${date.day}`;
-    }
+    const day = moscowLocalDate(target?.startsAt);
     if (!Number.isSafeInteger(used) || used < 0 || !day || usage?.dailyBucketLocalDate !== day) {
       block("USAGE_SNAPSHOT_BUCKET_MISMATCH", "Бесплатные минуты даты игры не подтверждены");
     } else if (duration && Number.isSafeInteger(rule.freeGameMinutesPerDay)) {
@@ -172,6 +202,41 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
         }
       }
     }
+  } else if (category === "GROUP_TRAINING"
+    && isTopokratyTrainingBenefit(input?.lk1ProductBinding, target)) {
+    // The club's «Дружба Топократы» training is covered by the free-minute mechanism of a
+    // game instead of the free-first-event mechanism of every other group event: the shared
+    // day bucket and the visit follow the game rules, and the minutes above the free hour
+    // carry the club co-pay. The rule keeps its own branch, so the reviewed free-first-event
+    // text of the standard branch stays byte-identical.
+    const used = usage?.usedOrReservedFreeMinutesToday;
+    const day = moscowLocalDate(target?.startsAt);
+    if (!Number.isSafeInteger(used) || used < 0 || !day || usage?.dailyBucketLocalDate !== day) {
+      block("USAGE_SNAPSHOT_BUCKET_MISMATCH", "Бесплатные минуты даты тренировки не подтверждены");
+    } else if (duration && Number.isSafeInteger(rule.freeGameMinutesPerDay)) {
+      const freeMinutes = aboveActiveLimit
+        ? 0 : Math.min(duration, Math.max(0, rule.freeGameMinutesPerDay - used));
+      const paidOverageMinutes = duration - freeMinutes;
+      decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+        freeMinutes, paidOverageMinutes, discountPercent: TOPOKRATY_TRAINING_DISCOUNT_PERCENT };
+      decision.subscriptionVisitCount = freeMinutes > 0 ? 1 : 0;
+      if (freeMinutes === 0) {
+        // No free hour left: the full one-time price, no visit and no discount.
+        selectedRule = { ruleId: "lk1-topokraty-training", kind: "PERCENT_DISCOUNT", percentage: 0 };
+      } else if (paidOverageMinutes === 0) {
+        selectedRule = { ruleId: "lk1-topokraty-training", kind: "FREE_ENTITLEMENT" };
+      } else if (productBound && target?.priceSource === "VIVA_EXISTING_TARIFF") {
+        // The co-pay is a quarter of the court price for the time above the free hour,
+        // pro rata to the event duration (1 - 1/4 stays as the discount on that part).
+        selectedRule = { ruleId: "lk1-topokraty-training", kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+          partialPrice: { numerator: paidOverageMinutes, denominator: duration },
+          percentage: TOPOKRATY_TRAINING_DISCOUNT_PERCENT };
+      } else {
+        block("LK1_GAME_OVERAGE_ALLOCATION_UNBOUND",
+          "Применение услуги к платной части тренировки не подтверждено");
+        selectedRule = null;
+      }
+    }
   } else if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)) {
     // The first covered event of the subscription's local service day is carried by the plan
     // itself: one visit is consumed and nothing is charged. Every later event that day, and
@@ -200,6 +265,14 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
 return { selectedRule: null, surchargeMinor: 0, category: null };
 };
 const { selectedRule, surchargeMinor, category } = selectBenefit();
+// The percent the client-facing quote carries for this decision: 100 for a fully covered
+// event, the charged share's own percent otherwise. The advisory preview and the booking
+// quote verification both read it, so a rule that changes the charged share (the club
+// co-pay) can never drift between the two paths.
+decision.eventDiscountPercent = !selectedRule ? 0
+  : selectedRule.kind === "FREE_ENTITLEMENT" ? 100
+    : ["PERCENT_DISCOUNT", "PARTIAL_PRICE_PERCENT_DISCOUNT"].includes(selectedRule.kind)
+      && Number.isFinite(Number(selectedRule.percentage)) ? Number(selectedRule.percentage) : 0;
 const productBoundInput = input && Object.prototype.hasOwnProperty.call(input, "lk1ProductBinding");
 if (!input || !target || !usage || !evaluatedAt
   || (!productBoundInput && (!policy || !instance))

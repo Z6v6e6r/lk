@@ -100,6 +100,17 @@ const lk1LifecycleInstant = (value, endOfDay = false) => {
   const activationCeiling = !endOfDay && /[1-9]/.test((timestamp[1] || "").slice(3)) ? 1 : 0;
   return Number.isFinite(instant) ? instant + activationCeiling : null;
 };
+// The Viva direction of the resolved exercise, read through the same aliases
+// `resolveCategory` accepts. The booking target carries it so the managed-policy evaluator
+// can tell the club's training direction from another club's corporate event of the same
+// type (2349 is shared by «Атланты» and «Топократы»).
+const exerciseDirectionId = (exercise) => {
+  const rawDirection = exercise?.direction ?? exercise?.exerciseDirection;
+  const nested = isObj(rawDirection) ? rawDirection : null;
+  const value = nested ? (nested.id ?? nested.directionId) : rawDirection;
+  const numeric = Number(value ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
+  return Number.isInteger(numeric) ? numeric : null;
+};
 const lk1Quote = (ctx, exercise, owned) => {
   // The station of the resolved booking target is part of the contour decision: an
   // excluded station keeps the product's legacy path for this quote as well.
@@ -119,6 +130,7 @@ const lk1Quote = (ctx, exercise, owned) => {
     category: managedTargetCategory(resolveCategory(exercise)),
     externalEventTypeId: managedExternalEventTypeId(exercise), productTypeId: null,
     stationId: toStr(exercise.studio?.id || exercise.studioId), roomId: exerciseRoomId(exercise),
+    directionId: exerciseDirectionId(exercise),
     durationMinutes: eventDurationMinutes(exercise), startsAt: eventStartsAt(exercise),
     basePriceMinor: null, currency: "RUB", priceSource: "VIVA_EXISTING_TARIFF",
   };
@@ -873,6 +885,15 @@ if (ctx.step === "lk1_policy_decision") {
     const expected = expectedGroup !== undefined ? expectedGroup : expectedTournament;
     const expectedAction = expectedGroup !== undefined ? "BOOK_GROUP_TRAINING" : "BOOK_TOURNAMENT";
     const target = ctx.lk1.target;
+    // The percent the advisory preview quotes for a charged event. It is the configured event
+    // discount, except when the decision charges only a share of the price (the club training
+    // co-pay): there the evaluator's own percent — the one applied to that share — is the only
+    // correct expectation, and the amount below still pins the money.
+    const lk1ExpectedEventDiscountPercent = (decision, route) => (
+      isObj(decision) && decision.benefit?.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT"
+        && Number.isInteger(decision.eventDiscountPercent)
+        ? decision.eventDiscountPercent
+        : ctx.lk1.rule[route.discountField]);
     if ((expectedGroup !== undefined && expectedTournament !== undefined)
       || !route || ctx.managedAction !== expectedAction || ctx.caller !== "http"
       || ctx.category !== route.sourceCategory || target.category !== route.category || !isObj(expected)
@@ -880,7 +901,7 @@ if (ctx.step === "lk1_policy_decision") {
       || !Number.isSafeInteger(expected.basePriceMinor) || !Number.isSafeInteger(expected.amountMinor)
       || expected.basePriceMinor !== target.basePriceMinor || expected.amountMinor !== decision.benefit.finalPriceMinor
       || expected.productId !== target.priceProductId
-      || expected.discountPercent !== ctx.lk1.rule[route.discountField]
+      || expected.discountPercent !== lk1ExpectedEventDiscountPercent(decision, route)
       || expected.durationMinutes !== target.durationMinutes || typeof expected.startsAt !== "string"
       || Date.parse(expected.startsAt) !== Date.parse(target.startsAt)) {
       return finishError(ctx, 409, "Стоимость или условия подписки изменились. Обновите варианты записи.", {

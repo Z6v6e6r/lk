@@ -53,7 +53,7 @@ import {
 import type {
   BookingCancellationAction,
 } from "../../utils/bookingCancellation";
-import { isGroupSubscriptionDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionDiscountQuote } from "../../utils/groupSubscriptionDiscount";
+import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionDiscountQuote } from "../../utils/groupSubscriptionDiscount";
 import "./GroupSchedulePage.css";
 
 interface GroupSchedulePageProps {
@@ -1343,7 +1343,13 @@ export default function GroupSchedulePage({
                                   >
                                     <span className="group-schedule-discount-label">
                                       <span>{product.name}</span>
-                                      {discount && <span className="group-schedule-discount-description">Скидка {discount.discountPercent}% по подписке «{discount.subscriptionName}»</span>}
+                                      {discount && (
+                                        <span className="group-schedule-discount-description">
+                                          {isPartialSubscriptionEventDiscountQuote(discount)
+                                            ? `Доплата за ${discount.paidMinutes} мин по подписке «${discount.subscriptionName}»`
+                                            : `Скидка ${discount.discountPercent}% по подписке «${discount.subscriptionName}»`}
+                                        </span>
+                                      )}
                                     </span>
                                     <strong className={discount ? "group-schedule-promo-price group-schedule-discount-price" : promoPreview ? "group-schedule-promo-price" : undefined}>
                                       {discount ? (

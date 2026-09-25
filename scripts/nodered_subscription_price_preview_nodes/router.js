@@ -53,6 +53,15 @@ const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paid
       actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.catalog[ctx.metadata[subscriptionId].productId],
       discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}), evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
+// The Viva direction of the event, read through the same aliases the booking gateway uses,
+// so the advisory quote and the booking evaluate the club direction identically.
+const previewDirectionId = (canonical, exercise) => {
+  const rawDirection = exercise?.direction ?? exercise?.exerciseDirection;
+  const nested = canonical.isObj(rawDirection) ? rawDirection : null;
+  const value = nested ? (nested.id ?? nested.directionId) : rawDirection;
+  const numeric = Number(value ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
+  return Number.isInteger(numeric) ? numeric : null;
+};
 // The preview owns no rule copy. It asks the shared resolver named in the
 // rollout contract (scripts/lib/lk1PlanRules.mjs), which Node-RED receives as a
 // generated declaration inside this node's helper closure. The guarded fallback
@@ -361,12 +370,32 @@ if (ctx.step === 'evaluate') {
       // the configured discount.
       const freeCovered = decision.subscriptionVisitCount === 1
         && decision.benefit?.kind === 'FREE_ENTITLEMENT' && decision.benefit.finalPriceMinor === 0;
-      if (!freeCovered && (decision.subscriptionVisitCount !== 0
+      // A club training («Дружба Топократы», direction 6233) is charged like a game: the free
+      // hour is spent first and the minutes above it carry the co-pay, so the event quote is a
+      // partial price with its own percent instead of the configured event discount.
+      const paidShare = decision.benefit?.kind === 'PARTIAL_PRICE_PERCENT_DISCOUNT'
+        && decision.subscriptionVisitCount === 1 && canonical.isObj(decision.gameMinutes)
+        && Number.isSafeInteger(decision.gameMinutes.freeMinutes) && decision.gameMinutes.freeMinutes > 0
+        && Number.isSafeInteger(decision.gameMinutes.paidOverageMinutes) && decision.gameMinutes.paidOverageMinutes > 0
+        && Number.isInteger(decision.eventDiscountPercent)
+        && decision.eventDiscountPercent >= 0 && decision.eventDiscountPercent <= 100;
+      if (!freeCovered && !paidShare && (decision.subscriptionVisitCount !== 0
         || (!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)
         || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100))) {
         return stop(eventRoute.error + '_DECISION_INVALID');
       }
-      if (freeCovered) {
+      if (paidShare) {
+        const freeMinutes = decision.gameMinutes.freeMinutes;
+        const paidMinutes = decision.gameMinutes.paidOverageMinutes;
+        const chargedMinor = Math.floor(ctx.basePriceMinor * paidMinutes / (freeMinutes + paidMinutes));
+        if (chargedMinor - Math.floor(chargedMinor * decision.eventDiscountPercent / 100) !== decision.benefit.finalPriceMinor) {
+          return stop(eventRoute.error + '_DECISION_INVALID');
+        }
+        const configuredPercent = ctx.groupDiscountPercent;
+        ctx.groupDiscountPercent = decision.eventDiscountPercent;
+        quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, freeMinutes, paidMinutes);
+        ctx.groupDiscountPercent = configuredPercent;
+      } else if (freeCovered) {
         const configuredPercent = ctx.groupDiscountPercent;
         ctx.groupDiscountPercent = 100;
         quote(ctx.currentId, 'AVAILABLE', 0, 0, ctx.target.durationMinutes);
@@ -484,6 +513,9 @@ while (ctx.step === 'next') {
         basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes,
         ...(eventRoute ? { stationId: ctx.target.stationId, roomId: ctx.target.roomId,
           externalEventTypeId: canonical.managedExternalEventTypeId(exercise), productTypeId: null,
+          // The club training co-pay is bound to the Viva direction of the event, which the
+          // booking gateway carries in the same field of its server-resolved target.
+          directionId: previewDirectionId(canonical, exercise),
           priceProductId: ctx.priceProductId } : {}) } } };
   // The batch is deliberately wider than one product: the query above asks for every product
   // this client owns (`ctx.ruleProductIds`), because the shared usage builder scopes the day and
