@@ -105,11 +105,25 @@
 - CI PR #153, голова `b510917a`: «LK1 exact-head enforcement gate» — **pass** (5m14s,
   run 36127169892).
 
-## RELEASE (не выполнялся)
+## RELEASE
 
-Живой флоу `147` не читался, ничего не деплоилось, не импортировалось и не рестартилось; глобал
-`subscriptions_lk1_plan_rules` на серверах не менялся. Для включения нужен авторизованный
-CRITICAL-проход:
+**Focused-генерация подготовлена** (`scripts/patch_live_lk1_topokraty_friendship_hotfix.mjs`,
+`scripts/deploy_nodered_lk1_topokraty_friendship_147.sh`,
+`scripts/rollback_nodered_lk1_topokraty_friendship_147.sh`,
+тест `scripts/tests/topokratyFriendshipHotfix.test.mjs`). Она стэкается на установленную
+plan-rules-генерацию: предimage — свежий pull `d6df38f3…` (4804 узла), кандидат `d39a1489…`
+меняет ровно три узла / пять полей (шлюз `func`+`initialize`, решатель `func`, превью `func`),
+ничего не добавляет и не трогает маршруты.
+
+Применение — guarded: `NODE_RED_LK1_TOPOKRATY_FRIENDSHIP_DEPLOY=CONFIRM_147 npm run
+nodered:lk1-topokraty-friendship:deploy-147` из чистого `main` == `origin/main`; свежий pull
+делает сам скрипт. Откат — упорядоченный и одной командой:
+`NODE_RED_LK1_TOPOKRATY_FRIENDSHIP_ROLLBACK=CONFIRM_147 npm run
+nodered:lk1-topokraty-friendship:rollback-147 -- <stamp>` (сначала глобал → 7 правил, затем
+генерация решателя).
+
+Пока генерация не применена, прод остаётся на предыдущей plan-rules-генерации, а клубная
+доплата не действует. Ниже — исходный чеклист прохода:
 
 1. Свежий read-only pull флоу с `147` (`nodered:modular:pull-147`) в приватный внешний воркспейс,
    сверка sha и числа узлов; `HUB_PREIMAGES`, `preimages.json` и пины поколений — только по нему.
