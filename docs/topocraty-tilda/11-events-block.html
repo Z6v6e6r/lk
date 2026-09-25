@@ -1,0 +1,182 @@
+<!--
+  ТОПОКРАТЫ / T123 — БЛИЖАЙШИЕ СОБЫТИЯ (блок целиком, вставлять одним куском).
+
+  Состав и порядок обязательны:
+    1) скрипт настроек витрины (категории, booking, бейджи) — правится руками;
+    2) разметка секции с контейнером #atlanty-schedule-root;
+    3) загрузчик бандла /lk/atlanty-schedule.js.
+
+  Правьте только первый блок кода. Если удалить разметку — витрине некуда
+  монтироваться; если удалить загрузчик — бандл не загрузится. В обоих случаях
+  секция «Ближайшие события» останется пустой.
+-->
+<script>
+  // Выбранные категории расписания. Порядок карточек — по дате события.
+  // Категории страницы Топократов — направления Viva:
+  //   6180 «Топократы игра»         — по подписке «Дружба Топократы» или 2 000 ₽;
+  //   6233 «Топократы тренировка»   — разовая 4 000 ₽ или по подписке с доплатой
+  //                                   за 1/4 корта.
+  // Тип у обоих 2349 «Корпоративные клиенты»: он же у «Атлантов», поэтому
+  // направление — основной признак, и события другого клуба сюда не попадут.
+  // Для окна записи ЛК1 этот тип передаётся как разрешённый (bookingAllowedTypeIds
+  // ниже), иначе окно не увидит корпоративные события.
+  var ATLANTY_CATEGORIES = [
+    {
+      directionId: 6180,
+      typeId: 2349,
+      label: "Топократия игра",
+      badge: "По подписке или 2 000 ₽"
+    },
+    {
+      directionId: 6233,
+      typeId: 2349,
+      label: "Топократия тренировка + игра",
+      badge: "4 000 ₽ или по подписке с доплатой"
+    }
+  ];
+
+  window.LK_ATLANTY_SCHEDULE_CONFIG = {
+    categories: ATLANTY_CATEGORIES,
+    // Необязательный заголовок над слайдером.
+    title: "",
+    // Сколько ближайших событий показывать всего.
+    maxEvents: 24,
+    // Сколько брать из каждой категории: не даёт плотной категории вытеснить
+    // остальные (0 — выключить квоту и брать просто ближайшие maxEvents).
+    maxPerCategory: 6,
+    // Горизонт расписания в днях.
+    daysAhead: 120,
+
+    // --- Запись ---
+    // "lk" — карточка открывает окно записи ЛК1: вход по телефону, разовая
+    // оплата или абонемент, скидка/доплата по подписке и серверный контур
+    // ограничений (/lk/subscription-bookings). "viva" — прежний попап VivaCRM.
+    booking: "lk",
+    // Типы занятий, которые окно ЛК1 должно видеть: тип 2349 «Корпоративные
+    // клиенты» вне клубного списка /group. Без этой строки берутся typeId
+    // категорий выше.
+    bookingAllowedTypeIds: [2349],
+    // Направления окна ЛК1: список внутри окна остаётся в рамках витрины.
+    // Без этой строки берутся directionId категорий выше.
+    bookingDirectionIds: [6180, 6233],
+    // Инстанс попапа Viva — нужен только при booking: "viva".
+    vivaInstance: "atlanty",
+
+    // --- Внешний вид (всё необязательное) ---
+    // Сколько карточек в ряд: 0 — фиксированная ширина карточки, 3–4 — «N в ряд»
+    // (верхняя граница 6). «N в ряд» действует только с 768px; на мобильном
+    // всегда одна карточка в кадре и свайп в сторону.
+    // На этой странице раскладку по брейкпоинтам задаёт тема (блок 5):
+    // 1 карточка на мобильном, 2 до 1100px, 3 от 1101px. Поэтому здесь 0 —
+    // иначе значение перебило бы мобильную ширину карточки.
+    cardsPerView: 0,
+    // Иконка в пилюле категории: "infinity" (по умолчанию) | "users" | "none".
+    pillIcon: "infinity",
+    // Фото тренера в футере: "photo" (по умолчанию) | "none".
+    avatarMode: "photo",
+    // Места: "segmented" — чип «1/8 | (+7 МЕСТ)» | "plain" — строкой «1/8 (+7 мест)».
+    seatsStyle: "segmented",
+    // Уровень: "meta" — строкой с иконкой | "chip" — отдельной плашкой.
+    levelStyle: "meta",
+    // Клик по карточке открывает карточку события с кнопкой «Записаться».
+    // В режиме booking: "lk" модалка нужна всегда: в ней живёт кнопка записи.
+    detailModal: true,
+    // Фото на шапке: "shuffle" — перемешать клубный набор при загрузке
+    // (стабильно при листании) | "hash" — стабильно по id события, как в LK2.
+    imagePick: "shuffle"
+    // images: ["https://…/photo-1.webp", "https://…/photo-2.webp"] — свой пул
+  };
+</script>
+<div class="ph-tk ph-tk--events" data-ph-tk-block="events"> <section class="ph-tk-shell ph-tk-events" id="tk-events" aria-labelledby="tk-events-title" data-ph-tk-align="events"> <div class="ph-tk-events__head"><h2 class="ph-tk-display ph-tk-events__title" id="tk-events-title">Ближайшие события</h2><a class="ph-tk-link" href="https://padlhub.ru/community_join?invite=%D0%B0%D1%82%D0%BE%D0%BC-z93dko" data-ph-tk-join>Смотреть в сообществе<svg class="ph-tk-icon " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h16M14 6l6 6-6 6"/></svg></a></div> <div id="atlanty-schedule-root"><p class="ph-tk-schedule-status" role="status">Загружаем расписание…</p></div> </section> </div>
+<script>
+  // Вариант 1: подтянуть бандл витрины с нашего CDN.
+  (function () {
+    var primaryAssetOrigin = "https://padlhub.su";
+    var scriptPath = "/lk/atlanty-schedule.js";
+    var releasePath = "/lk/release.json";
+    var releaseTimeoutMs = 5000;
+    var scriptTimeoutMs = 12000;
+
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    var origin = primaryAssetOrigin.replace(/\/+$/, "");
+
+    function showError() {
+      var root = document.getElementById("atlanty-schedule-root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить расписание. Попробуйте позже.</div>";
+      }
+    }
+
+    function addParam(src, key, value) {
+      var url = new URL(src, window.location.href);
+      url.searchParams.set(key, value);
+      return url.toString();
+    }
+
+    function fetchWithTimeout(src, timeoutMs) {
+      if (typeof AbortController === "undefined") return fetch(src, { cache: "no-store" });
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+      return fetch(src, { cache: "no-store", signal: controller.signal }).finally(function () {
+        clearTimeout(timeoutId);
+      });
+    }
+
+    function loadScript(version) {
+      var script = document.createElement("script");
+      var settled = false;
+      var timeoutId = setTimeout(function () {
+        settled = true;
+        if (script.parentNode) script.parentNode.removeChild(script);
+        showError();
+      }, scriptTimeoutMs);
+
+      script.id = "padlhub-atlanty-schedule-script";
+      script.src = addParam(
+        origin + scriptPath + (version ? "?v=" + encodeURIComponent(version) : ""),
+        "force_ts",
+        cacheBust
+      );
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+      };
+      script.onerror = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        showError();
+      };
+      document.head.appendChild(script);
+    }
+
+    function start() {
+      if (window.__PH_TOP_SCHEDULE_LOADER_STARTED) return;
+      window.__PH_TOP_SCHEDULE_LOADER_STARTED = true;
+      if (document.getElementById("padlhub-atlanty-schedule-script")) return;
+      fetchWithTimeout(addParam(origin + releasePath, "force_ts", cacheBust), releaseTimeoutMs)
+        .then(function (response) {
+          if (!response.ok) throw new Error("release manifest unavailable");
+          return response.json();
+        })
+        .then(function (release) {
+          loadScript(release && release.version ? String(release.version) : null);
+        })
+        .catch(function () {
+          loadScript(null);
+        });
+    }
+
+    // Ждём DOMContentLoaded: тогда настройки точно применены, даже если
+    // конфиг окажется ниже этого блока.
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start, { once: true });
+    } else {
+      start();
+    }
+  })();
+</script>

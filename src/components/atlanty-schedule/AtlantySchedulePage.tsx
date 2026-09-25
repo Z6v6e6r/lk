@@ -373,8 +373,11 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
   );
 
   const cardWidth = buildAtlantyCardWidth(displayOptions.cardsPerView);
+  // «N в ряд» — только широкая раскладка: переменная с суффиксом `-wide`
+  // применяется из CSS начиная с 768px и не перебивает `--atlanty-card-width`,
+  // которым на мобильном задаётся одна карточка в кадре со свайпом.
   const rootStyle = cardWidth
-    ? ({ "--atlanty-card-width": cardWidth } as CSSProperties)
+    ? ({ "--atlanty-card-width-wide": cardWidth } as CSSProperties)
     : undefined;
   const categories = useMemo(
     () => normalizeAtlantyCategories(config.categories),

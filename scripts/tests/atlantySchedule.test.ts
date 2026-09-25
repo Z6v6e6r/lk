@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
   ATLANTY_CATEGORY_PRESETS,
   ATLANTY_CORPORATE_DIRECTION_IDS,
@@ -586,4 +588,30 @@ test("пустые токены и нули в конфиге окна запи�
   assert.deepEqual(resolveAtlantyBookingDirectionIds(["6180", "", " "], categories), [6180]);
   assert.deepEqual(resolveAtlantyBookingDirectionIds([0, -1, "6180"], categories), [6180]);
   assert.deepEqual(resolveAtlantyBookingTypeIds(["", 0], categories), [2349]);
+});
+
+test("«N в ряд» из конфига не ломает мобильную раскладку карточек", () => {
+  const root = path.resolve(import.meta.dirname, "../..");
+  const pageSource = fs.readFileSync(
+    path.join(root, "src/components/atlanty-schedule/AtlantySchedulePage.tsx"),
+    "utf8",
+  );
+  const cssSource = fs.readFileSync(
+    path.join(root, "src/components/atlanty-schedule/AtlantySchedulePage.css"),
+    "utf8",
+  );
+
+  // Ширина «N в ряд» пишется в отдельную переменную: значение `--atlanty-card-width`
+  // задаётся темой/брейкпоинтами, и inline-значение перебило бы мобильную ширину
+  // (три узкие карточки вместо одной со свайпом).
+  assert.match(pageSource, /"--atlanty-card-width-wide": cardWidth/);
+  assert.doesNotMatch(pageSource, /"--atlanty-card-width": cardWidth/);
+
+  const wideRule = cssSource.match(
+    /@media \(min-width: 768px\) \{[\s\S]*?\.atlanty-slide \{\s*width: var\(--atlanty-card-width-wide/,
+  );
+  assert.ok(wideRule, "ожидается применение --atlanty-card-width-wide внутри @media (min-width: 768px)");
+
+  // Базовая (мобильная) ширина карточки остаётся за --atlanty-card-width.
+  assert.match(cssSource, /\.atlanty-slide \{[\s\S]*?width: var\(--atlanty-card-width\)/);
 });
