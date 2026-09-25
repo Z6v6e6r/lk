@@ -60,7 +60,8 @@ var ATLANTY_CATEGORIES = [
 
 Остальные ключи конфига: `maxEvents` (всего карточек), `maxPerCategory` (сколько
 из каждой категории; `0` — без квоты), `daysAhead` (горизонт), `cardsPerView`
-(сколько карточек в ряд; `0` — фиксированная ширина), `pillIcon`, `avatarMode`,
+(сколько карточек в ряд с 768px; `0` — фиксированная ширина, на мобильном
+всегда одна карточка и свайп), `pillIcon`, `avatarMode`,
 `seatsStyle`, `levelStyle`, `detailModal`, `images`, `imagePick`, `title`,
 `vivaInstance`, `booking` (`"viva"` — попап VivaCRM, `"lk"` — окно записи ЛК1
 с контуром ограничений; подробности — `docs/ATLANTY_SCHEDULE_WIDGET.md`).

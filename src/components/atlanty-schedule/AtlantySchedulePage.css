@@ -521,6 +521,15 @@
     --atlanty-track-padding: 24px;
   }
 
+  /*
+   * «N в ряд» из конфига (`cardsPerView`) включается только на широком экране.
+   * На мобильном карточка остаётся шириной `--atlanty-card-width` (одна в кадре,
+   * свайп в сторону): иначе три узкие карточки ломают вёрстку карточки.
+   */
+  .atlanty-slide {
+    width: var(--atlanty-card-width-wide, var(--atlanty-card-width));
+  }
+
   .atlanty-schedule-head {
     padding: 0 24px 8px;
   }
