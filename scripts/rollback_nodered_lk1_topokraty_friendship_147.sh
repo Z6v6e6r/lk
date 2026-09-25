@@ -203,7 +203,7 @@ if [[ "$(tr -d '\n' < "$stage_root/revert-readback.txt")" != "$revert_candidate_
   echo "Revert readback mismatch: the plan-rules global was not restored; stop and inspect" >&2
   exit 6
 fi
-if ! remote_ssh "node -e 'const fs=require(\"node:fs\");const flow=JSON.parse(fs.readFileSync(\"/root/.node-red/flows.json\",\"utf8\"));const g=flow.find(r=>r.id===\"lk_subscription_booking_router_20260804\");const i=typeof g.initialize===\"string\"?g.initialize:\"\";if(i.includes(\"planKey\\\":\\\"topocraty\\\")){}else process.exit(1);if(!i.includes(\"const lk1PlanRulesExpectedPrior = {\"))process.exit(1);'"; then
+if ! remote_ssh "node -e 'const fs=require(\"node:fs\");const flow=JSON.parse(fs.readFileSync(\"/root/.node-red/flows.json\",\"utf8\"));const g=flow.find(r=>r.id===\"lk_subscription_booking_router_20260804\");const i=typeof g.initialize===\"string\"?g.initialize:\"\";const key=\"const lk1DesiredPlanRules = \";const at=i.indexOf(key);if(at<0)process.exit(1);const desired=JSON.parse(i.slice(at+key.length).split(\";\n\")[0]);if(desired.rules.length!==7)process.exit(1);if(desired.rules.some(r=>r.productId===\"14692232-12be-4218-9fa1-2d5b79b62035\"))process.exit(1);if(!i.includes(\"const lk1PlanRulesExpectedPrior = {\"))process.exit(1);if(!i.includes(\"14692232-12be-4218-9fa1-2d5b79b62035\"))process.exit(1);'"; then
   echo "Installed initialize does not carry the club prior; stop and inspect" >&2
   exit 7
 fi
