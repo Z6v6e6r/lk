@@ -265,6 +265,45 @@ const lk1ReplayIdentityMatches = (ctx, operation, operationId = ctx.operationId)
 // REJOIN_HELPERS_END
 
 // HUB_STEPS
+// A stored attempt whose provider write was cleanly refused, or that never reached the
+// provider at all, is terminal and unambiguous. The request id is deterministic
+// (clientId|subscription|exercise), so without this reclaim a single refusal would make the
+// exercise permanently unbookable for that client: every retry replays the same document and
+// the ingress answers an unresolvable pending (production incident 2026-09-25, direction 6233
+// «Топократы тренировка»: Viva refused «Абонемент «РА» не действует на этом занятии: другой тип
+// занятия, другое направление», and neither the subscription, the co-pay nor a one-off could be
+// booked afterwards).
+// Portable on purpose: this fragment is composed both with and without the hook helpers, so it
+// brings its own two readers instead of relying on isObj/toStr.
+const lk1ReclaimIsRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const lk1ReclaimText = (value) => (typeof value === "string" && value.trim()) ? value.trim()
+  : (typeof value === "number" && Number.isFinite(value)) ? String(value) : null;
+const LK1_RECLAIM_ATTEMPT_CAP = 5;
+const lk1ReclaimableAttempt = (operation) => {
+  if (!lk1ReclaimIsRecord(operation)) return false;
+  // A bounded number of restarts: an attempt that keeps failing on unchanged conditions must
+  // not be replayed forever.
+  if ((Number(operation.attempts) || 0) >= LK1_RECLAIM_ATTEMPT_CAP) return false;
+  // An attempt that ever reached a booking, an accepted provider write or a money leg is never
+  // replayed: its outcome is not ours to repeat.
+  if (lk1ReclaimText(operation.bookingId) || lk1ReclaimText(operation.upstreamBookingId)) return false;
+  if (lk1ReclaimText(operation.acceptedAt) || lk1ReclaimText(operation.correlationId)) return false;
+  if (lk1ReclaimText(operation.lk1?.createAttemptedAt) || lk1ReclaimText(operation.lk1?.bookingAttemptedAt)) return false;
+  if (lk1ReclaimText(operation.lk1?.transactionAttemptedAt) || lk1ReclaimText(operation.lk1?.transactionId)
+    || lk1ReclaimIsRecord(operation.lk1?.transactionIntent) || lk1ReclaimIsRecord(operation.lk1?.checkout)
+    || lk1ReclaimIsRecord(operation.lk1?.visitJob)) return false;
+  if (operation.state === "FAILED") {
+    const failure = operation.failure;
+    if (!lk1ReclaimIsRecord(failure)) return false;
+    const status = Number(failure.statusCode);
+    // Only an explicit provider refusal (4xx) is a clean verdict. A 5xx or a transport failure
+    // leaves the outcome unknown and keeps the existing reconciliation path.
+    if (!Number.isInteger(status) || status < 400 || status >= 500) return false;
+    return Boolean(lk1ReclaimText(operation.upstreamAttemptedAt) && lk1ReclaimText(operation.failedAt));
+  }
+  // Nothing was ever attempted: the document only reserved the deterministic id.
+  return operation.state === "PREPARED" && !lk1ReclaimText(operation.upstreamAttemptedAt);
+};
 if (ctx.step === "lk1_ingress_operation_find") {
   // Existing operations are only read. A new explicit successor must prove
   // its predecessor below before entering ordinary fresh validation.
@@ -299,6 +338,27 @@ if (ctx.step === "lk1_ingress_operation_find") {
       }
       return finishError(ctx, 409, "Предыдущая запись отменена. Для новой записи нажмите «Присоединиться снова».", {
         code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId, nextOperationId,
+      });
+    }
+    // The refusal is terminal, so the stored attempt is handed back to PREPARED under its own
+    // id: the failure is kept for audit, the attempt counter is incremented, and the request
+    // continues as a real new attempt instead of an unresolvable pending claim.
+    if (ctx.caller !== "split_create_readonly_preflight" && lk1ReclaimableAttempt(operation)) {
+      const reclaimedAt = new Date().toISOString();
+      const reclaimQuery = {
+        // The ingress path proves the document id but never sets ctx.operationKey, so the
+        // validated _id of the found document is what the compare-and-set fences on.
+        _id: operation._id, operationId: ctx.operationId, actorClientId: ctx.actorClientId,
+        state: operation.state, bookingId: { $in: [null, ""] }, upstreamBookingId: { $in: [null, ""] },
+        ...(Number.isSafeInteger(operation.attempts) ? { attempts: operation.attempts } : {}),
+      };
+      return prepareMongoUpdate(ctx, "lk1_ingress_reclaim", reclaimQuery, {
+        $set: {
+          state: "PREPARED", updatedAt: reclaimedAt, reclaimedAt,
+          previousFailure: operation.failure || null, previousFailureAt: lk1ReclaimText(operation.failedAt) || null,
+        },
+        $unset: { failedAt: "", upstreamAttemptedAt: "", leaseUntil: "", pendingUntil: "", failure: "" },
+        $inc: { attempts: 1, reclaimCount: 1 },
       });
     }
     if (operation.state !== "CONFIRMED" || typeof operation.bookingId !== "string" || !operation.bookingId.trim()
@@ -355,6 +415,17 @@ if (ctx.step === "lk1_ingress_operation_find") {
     return prepareAdminGet(ctx, LK1_CONFIRMED_BOOKING_RECHECK,
       `/api/v1/exercises/${encodeURIComponent(operation.exerciseId)}/bookings?showCancelled=true&size=200`);
   }
+}
+
+if (ctx.step === "lk1_ingress_reclaim") {
+  if (msg.error || lk1MongoMatched(msg.payload) !== 1 || msg.payload.modifiedCount !== 1) {
+    // Another request owns this attempt now: never overwrite it, and report the same
+    // reconciliation stop the replay used before this generation.
+    return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
+  }
+  // The claim is handed back: continue as a fresh attempt of the same deterministic id.
+  delete ctx.lk1IngressReplay;
+  ctx.step = "lk1_profile_continue";
 }
 
 const releaseConfirmedOrphan = (ctx, bound) => {

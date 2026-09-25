@@ -26,6 +26,17 @@ export function proTrainingExclusionSource() {
   }
   return source.replace(/^export /gm, '');
 }
+// The Topokraty exclusion is embedded exactly like the PRO-training one: the booking body
+// declares it once, and the preview gets its own copy of the same module through
+// `topokratyEmbedding` in patch_nodered_subscription_price_preview.mjs.
+export function topokratyExclusionSource() {
+  const source = fs.readFileSync(new URL('./topokratyExclusion.mjs', import.meta.url), 'utf8');
+  for (const symbol of ['const TOPOKRATY_DIRECTION_IDS =', 'function isTopokratyName(',
+    'function isTopokratyExercise(', 'function isTopokratyClubPack(']) {
+    if (!source.includes(symbol)) throw new Error('Topokraty exclusion source drift: ' + symbol);
+  }
+  return source.replace(/^export /gm, '');
+}
 export function hubGatewaySource() {
   const source = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
   const marker = '// EVENT_PAYMENT_ROUTES';
@@ -38,7 +49,12 @@ export function hubGatewaySource() {
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded PRO-training exclusion symbols');
   }
-  return planRulesSource() + proTrainingExclusionSource() + source.replace(marker, () => eventPaymentRoutesSource());
+  if (/(?:const|let|var|function)\s+(?:TOPOKRATY_DIRECTION_IDS|TOPOKRATY_CLUB_PRODUCT_IDS|TOPOKRATY_NAME_TOKEN|topokratyIsRecord|topokratyStr|topokratyNum|isTopokratyName|isTopokratyExercise|isTopokratyClubPack)\b/
+    .test(source)) {
+    throw new Error('Gateway must not redeclare the embedded Topokraty exclusion symbols');
+  }
+  return planRulesSource() + proTrainingExclusionSource() + topokratyExclusionSource()
+    + source.replace(marker, () => eventPaymentRoutesSource());
 }
 
 export const bookingReadbackSource = () => fs.readFileSync(new URL("../nodered_lk1_hub_nodes/booking_readback.js", import.meta.url), "utf8");

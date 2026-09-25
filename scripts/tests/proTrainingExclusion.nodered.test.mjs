@@ -7,6 +7,7 @@ import fs from "node:fs";
 import test from "node:test";
 import { hubGatewaySource, proTrainingExclusionSource } from "../lib/eventPaymentSources.mjs";
 import { isProTrainingEnergyPack, isProTrainingExercise } from "../lib/proTrainingExclusion.mjs";
+import { isTopokratyClubPack, isTopokratyExercise } from "../lib/topokratyExclusion.mjs";
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
 const hooks = read("../nodered_lk1_hub_nodes/gateway_hooks.js");
@@ -72,6 +73,10 @@ function runExerciseHook(options = {}) {
     msg: {},
     isProTrainingExercise,
     isProTrainingEnergyPack,
+    // The Topokraty exclusion (2026-09-25) sits in the same reviewed step; these trainings are
+    // never Topokraty, so the guard must stay silent here.
+    isTopokratyExercise,
+    isTopokratyClubPack,
     resolveCategory: () => options.category ?? "group_training",
     findOwnedSubscriptions: () => { calls.findOwnedSubscriptions += 1; return options.selectedOwned ?? []; },
     lk1Config: () => options.rule ?? { matched: false },
