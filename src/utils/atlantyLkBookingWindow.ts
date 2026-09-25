@@ -26,9 +26,6 @@ export const ATLANTY_LK_BOOKING_BODY_CLASS = "lk-overlay-open";
 export const ATLANTY_LK_BOOKING_WIDGET_GLOBAL = "LKWidgetGroupSchedule";
 export const ATLANTY_LK_BOOKING_SCRIPT_ID = "padlhub-atlanty-lk-booking-script";
 export const ATLANTY_LK_BOOKING_PRIMARY_ORIGIN = "https://padlhub.su";
-export const ATLANTY_LK_BOOKING_FALLBACK_ORIGINS = [
-  "https://lk-reserve.89-108-64-209.sslip.io",
-] as const;
 export const ATLANTY_LK_BOOKING_SCRIPT_PATH = "/lk/group-schedule.js";
 export const ATLANTY_LK_BOOKING_RELEASE_PATH = "/lk/release.json";
 export const ATLANTY_LK_BOOKING_RELEASE_TIMEOUT_MS = 5_000;
@@ -88,17 +85,38 @@ function normalizeOrigin(value: unknown): string | null {
   }
 }
 
+/**
+ * Origin бандлов окна: явный, затем `__LK_ACTIVE_BASE_URL__`, затем CDN витрины.
+ *
+ * Резервный origin (`lk-reserve-89`) здесь не подставляется: он держит dev-комплект
+ * и отдаёт 404 на prod-имена (`/lk/group-schedule.js`), а витрина расписания
+ * публикуется только prod-бандлом. Кросс-канальный откат загрузил бы на prod
+ * чужой комплект, поэтому при недоступности CDN окно честно сообщает об ошибке.
+ */
+function resolveAtlantyLkBookingAssetOrigin(): string | null {
+  const activeOrigin = normalizeOrigin(getWindow()?.__LK_ACTIVE_BASE_URL__);
+  if (activeOrigin) return activeOrigin;
+
+  if (typeof document !== "undefined") {
+    const scripts = Array.from(document.scripts ?? []);
+    for (let index = scripts.length - 1; index >= 0; index -= 1) {
+      const src = String(scripts[index]?.src || "");
+      if (!src.includes("atlanty-schedule")) continue;
+      const scriptOrigin = normalizeOrigin(src);
+      if (scriptOrigin) return scriptOrigin;
+    }
+  }
+  return null;
+}
+
 /** Список origin'ов бандла: основной первым, дубликаты убираются. */
 export function normalizeAtlantyLkBookingOrigins(
   assetOrigin?: string | null,
   assetOrigins?: readonly string[] | null,
 ): string[] {
-  const activeOrigin = normalizeOrigin(getWindow()?.__LK_ACTIVE_BASE_URL__);
   const candidates = [
-    normalizeOrigin(assetOrigin) ?? activeOrigin ?? ATLANTY_LK_BOOKING_PRIMARY_ORIGIN,
-    ...(Array.isArray(assetOrigins) && assetOrigins.length > 0
-      ? assetOrigins
-      : ATLANTY_LK_BOOKING_FALLBACK_ORIGINS),
+    normalizeOrigin(assetOrigin) ?? resolveAtlantyLkBookingAssetOrigin() ?? ATLANTY_LK_BOOKING_PRIMARY_ORIGIN,
+    ...(Array.isArray(assetOrigins) ? assetOrigins : []),
   ]
     .map((origin) => normalizeOrigin(origin))
     .filter((origin): origin is string => Boolean(origin));

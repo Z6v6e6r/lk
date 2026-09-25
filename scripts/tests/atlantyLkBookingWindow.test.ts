@@ -24,20 +24,17 @@ import {
  */
 
 test("normalizes bundle origins with the CDN first and without duplicates", () => {
-  assert.deepEqual(normalizeAtlantyLkBookingOrigins(), [
-    "https://padlhub.su",
-    "https://lk-reserve.89-108-64-209.sslip.io",
-  ]);
+  // Резервный (dev) origin не подставляется: он отдаёт 404 на prod-имя бандла.
+  assert.deepEqual(normalizeAtlantyLkBookingOrigins(), ["https://padlhub.su"]);
   assert.deepEqual(
     normalizeAtlantyLkBookingOrigins("https://padlhub.su/", ["https://padlhub.su", "https://lk.example/"]),
     ["https://padlhub.su", "https://lk.example"],
   );
-  assert.deepEqual(normalizeAtlantyLkBookingOrigins(null, []), [
-    "https://padlhub.su",
-    "https://lk-reserve.89-108-64-209.sslip.io",
-  ]);
-  // Явный мусорный список не подменяется резервом: оператор задал origin'ы сам.
   assert.deepEqual(normalizeAtlantyLkBookingOrigins(null, ["  "]), ["https://padlhub.su"]);
+  assert.deepEqual(
+    normalizeAtlantyLkBookingOrigins(null, ["https://reserve.example/"]),
+    ["https://padlhub.su", "https://reserve.example"],
+  );
 });
 
 test("builds versioned bundle and manifest urls", () => {
@@ -198,12 +195,13 @@ async function waitFor<T>(predicate: () => T | undefined | null, timeoutMs = 1_0
 }
 
 /**
- * Бандл не регистрирует окно на каждом origin'е: основной и резервный. Тест
- * проходит обе попытки, не дожидаясь 15-секундного таймаута скрипта.
+ * Бандл не регистрирует окно: тест закрывает попытку за попыткой, не дожидаясь
+ * 15-секундного таймаута скрипта. По умолчанию origin один — резервный
+ * (dev) origin в prod-режиме не подставляется.
  */
 async function failEveryBundleAttempt(
   dom: ReturnType<typeof installDom>,
-  attempts = 2,
+  attempts = 1,
 ) {
   for (let index = 0; index < attempts; index += 1) {
     const script = await waitFor(() =>
@@ -409,7 +407,7 @@ test("reports a failure when the booking bundle never registers the widget", asy
   try {
     const pending = openAtlantyLkBookingWindow({ exerciseId: "exercise-1" });
     const attempts = await failEveryBundleAttempt(dom);
-    assert.equal(attempts.length, 2, "после основного origin пробуется резервный");
+    assert.equal(attempts.length, 1, "prod-витрина использует только свой origin");
 
     const result = await pending;
     assert.equal(result.ok, false);
