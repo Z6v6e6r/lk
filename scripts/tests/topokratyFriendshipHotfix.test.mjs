@@ -25,6 +25,8 @@ import {
   LK1_PLAN_RULES_DESIRED,
   LK1_PLAN_RULES_WITH_TOPOKRATY,
   buildPlanRulesTransition,
+  buildTopokratyPlanRulesRevert,
+  buildTopokratyPlanRulesTransition,
 } from "../lib/lk1PlanRulesTransition.mjs";
 
 const UPSTREAM_FLOW = process.env.LK1_TOPOKRATY_FRIENDSHIP_UPSTREAM_FLOW
@@ -172,8 +174,10 @@ test("the generation composes the live flow into exactly three changed nodes", {
   assert.equal(sha256(bytes), TOPOKRATY_UPSTREAM_SHA256, "the upstream flow must be the reviewed pull");
   const composed = composeTopokratyArtifacts(bytes);
   assert.equal(composed.candidateSha256,
-    "d39a14893e18e8c48000dc8e844f3d1725f3793068c95f85529d549577d80311",
+    "68debf146be1fcad65a6fd17fc38113d7f97158b0607c16cdd6887bb356043b5",
     "the candidate is the reviewed one");
+  assert.equal(composed.gateway.acceptsEmptyPrior, true,
+    "the plan-rules writer must accept the post-restart empty context");
   assert.equal(composed.changes.length, 3);
   assert.deepEqual(composed.changes.map((change) => change.id).sort(),
     [TOPOKRATY_GATEWAY_ID, TOPOKRATY_EVALUATOR_ID, TOPOKRATY_PREVIEW_ID].sort());
@@ -194,4 +198,60 @@ test("the generation composes the live flow into exactly three changed nodes", {
   assert.equal(revert.sourceSha256, TOPOKRATY_REVERT_UPSTREAM_SHA256);
   assert.equal(revert.changes.length, 1);
   assert.deepEqual(revert.changes[0].fields, ["initialize"]);
+});
+
+/** Runs a generated plan-rules writer against a fake Node-RED global and returns the written payload. */
+function runPlanRulesWriter(initialize, current) {
+  const store = new Map();
+  if (current !== undefined) store.set("subscriptions_lk1_plan_rules", current);
+  const fakeGlobal = {
+    get: (key) => store.get(key),
+    set: (key, value) => store.set(key, value),
+  };
+  new Function("global", "env", "node", "flow", initialize)(fakeGlobal);
+  return store.get("subscriptions_lk1_plan_rules");
+}
+
+test("план-рулы writer принимает пустой контекст после рестарта и установленный payload", () => {
+  // 147 держит контекст Node-RED в памяти (contextStorage не настроен), поэтому рестарт,
+  // который делает сам apply, обнуляет глобал. Writer обязан принять и пустое состояние,
+  // и установленные 7 правил — иначе контур остаётся вообще без plan rules.
+  const transition = buildTopokratyPlanRulesTransition();
+  assert.equal(transition.acceptEmptyPrior, true);
+  assert.ok(transition.initialize.includes("const lk1PlanRulesAcceptedPriors = [null,"),
+    "the writer must accept the empty prior");
+
+  const afterRestart = runPlanRulesWriter(transition.initialize, undefined);
+  assert.deepEqual(afterRestart, LK1_PLAN_RULES_WITH_TOPOKRATY,
+    "a fresh process gets the club payload");
+  const sameProcess = runPlanRulesWriter(transition.initialize, JSON.stringify(LK1_PLAN_RULES_DESIRED));
+  assert.deepEqual(sameProcess, LK1_PLAN_RULES_WITH_TOPOKRATY,
+    "the installed 7-rule payload is replaced by the club payload");
+
+  const foreign = {
+    formatVersion: 1,
+    rules: LK1_PLAN_RULES_DESIRED.rules.slice(0, 6),
+  };
+  assert.throws(() => runPlanRulesWriter(transition.initialize, JSON.stringify(foreign)),
+    /plan rules prior mismatch; no overwrite/,
+  "an unlisted prior is still refused instead of overwritten");
+
+  // The ordered rollback writer has the same two-prior contract in the other direction.
+  const revert = buildTopokratyPlanRulesRevert();
+  assert.equal(revert.acceptEmptyPrior, true);
+  assert.deepEqual(runPlanRulesWriter(revert.initialize, undefined), LK1_PLAN_RULES_DESIRED);
+  assert.deepEqual(runPlanRulesWriter(revert.initialize, JSON.stringify(LK1_PLAN_RULES_WITH_TOPOKRATY)),
+    LK1_PLAN_RULES_DESIRED);
+  assert.throws(() => runPlanRulesWriter(revert.initialize, JSON.stringify(foreign)),
+    /plan rules prior mismatch; no overwrite/);
+});
+
+test("одиночный prior сохраняет прежнюю генерацию байт-в-байт", () => {
+  // Существующие генерации (7 правил, prior=null) должны остаться неизменными:
+  // новая опция аддитивна и не трогает их форму.
+  const single = buildPlanRulesTransition({ expectedPrior: null, desired: LK1_PLAN_RULES_DESIRED });
+  assert.equal(single.acceptEmptyPrior, false);
+  assert.ok(single.initialize.includes("const lk1PlanRulesExpectedPrior = null;"));
+  assert.ok(!single.initialize.includes("lk1PlanRulesAcceptedPriors"));
+  assert.deepEqual(runPlanRulesWriter(single.initialize, undefined), LK1_PLAN_RULES_DESIRED);
 });

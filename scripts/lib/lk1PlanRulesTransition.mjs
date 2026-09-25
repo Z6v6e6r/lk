@@ -57,6 +57,9 @@ export const LK1_PLAN_RULES_WITH_TOPOKRATY = Object.freeze({
 export const buildTopokratyPlanRulesTransition = () => buildPlanRulesTransition({
   expectedPrior: LK1_PLAN_RULES_DESIRED,
   desired: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  // The apply restart clears the in-memory context on 147, so both the installed payload
+  // (same process) and the empty state (fresh process) are legitimate priors here.
+  acceptEmptyPrior: true,
 });
 
 // The paired revert of the club rule. A rollback of the evaluator alone would leave the
@@ -67,6 +70,7 @@ export const buildTopokratyPlanRulesTransition = () => buildPlanRulesTransition(
 export const buildTopokratyPlanRulesRevert = () => buildPlanRulesTransition({
   expectedPrior: LK1_PLAN_RULES_WITH_TOPOKRATY,
   desired: LK1_PLAN_RULES_DESIRED,
+  acceptEmptyPrior: true,
 });
 
 // Missing/empty means "no plan-rules global yet", which is a legitimate prior.
@@ -106,11 +110,14 @@ function normalizePlanRulesGlobal(value, fields) {
   return { formatVersion: 1, rules };
 }
 
-export function buildPlanRulesTransition({ expectedPrior, desired } = {}) {
+export function buildPlanRulesTransition({ expectedPrior, desired, acceptEmptyPrior = false } = {}) {
   // Explicit null means "no global yet". Missing options cannot silently become a
   // transition, and a later rule change must name the exact prior it replaces.
   if (expectedPrior === undefined || desired === undefined) {
     throw new Error('Explicit plan-rules prior and desired global required');
+  }
+  if (typeof acceptEmptyPrior !== 'boolean') {
+    throw new Error('acceptEmptyPrior must be a boolean');
   }
   const prior = normalizePlanRulesGlobal(expectedPrior, LK1_PLAN_RULES_FIELDS);
   const next = normalizePlanRulesGlobal(desired, LK1_PLAN_RULES_FIELDS);
@@ -118,15 +125,28 @@ export function buildPlanRulesTransition({ expectedPrior, desired } = {}) {
 const lk1DesiredPlanRules = ${JSON.stringify(next)};
 const lk1NormalizePlanRules = value => (${normalizePlanRulesGlobal.toString()})(value, ${JSON.stringify(LK1_PLAN_RULES_FIELDS)});
 `;
-  const initialize = declarations + `const lk1PlanRulesExpectedPrior = ${JSON.stringify(prior)};
+  // The installed 147 runtime keeps its context in memory (settings.js leaves
+  // `contextStorage` unconfigured), so the apply restart clears the global before the
+  // writer runs. A generation that names only the in-memory prior would fail closed and
+  // leave the contour without any plan rules — accept the empty state as well.
+  const priorGuard = acceptEmptyPrior
+    ? `const lk1PlanRulesAcceptedPriors = ${JSON.stringify([null, prior])};
+const lk1PlanRulesCurrent = lk1NormalizePlanRules(global.get(lk1PlanRulesKey));
+if (JSON.stringify(lk1PlanRulesCurrent) !== JSON.stringify(lk1DesiredPlanRules)) {
+  if (!lk1PlanRulesAcceptedPriors.some(prior => JSON.stringify(lk1PlanRulesCurrent) === JSON.stringify(prior))) throw new Error("plan rules prior mismatch; no overwrite");
+  global.set(lk1PlanRulesKey, lk1DesiredPlanRules);
+}
+`
+    : `const lk1PlanRulesExpectedPrior = ${JSON.stringify(prior)};
 const lk1PlanRulesCurrent = lk1NormalizePlanRules(global.get(lk1PlanRulesKey));
 if (JSON.stringify(lk1PlanRulesCurrent) !== JSON.stringify(lk1DesiredPlanRules)) {
   if (JSON.stringify(lk1PlanRulesCurrent) !== JSON.stringify(lk1PlanRulesExpectedPrior)) throw new Error("plan rules prior mismatch; no overwrite");
   global.set(lk1PlanRulesKey, lk1DesiredPlanRules);
 }
-if (JSON.stringify(lk1NormalizePlanRules(global.get(lk1PlanRulesKey))) !== JSON.stringify(lk1DesiredPlanRules)) {
+`;
+  const initialize = declarations + priorGuard + `if (JSON.stringify(lk1NormalizePlanRules(global.get(lk1PlanRulesKey))) !== JSON.stringify(lk1DesiredPlanRules)) {
   throw new Error("plan rules readback mismatch");
 }
 `;
-  return { expectedPrior: prior, desired: next, initialize };
+  return { expectedPrior: prior, desired: next, acceptEmptyPrior, initialize };
 }

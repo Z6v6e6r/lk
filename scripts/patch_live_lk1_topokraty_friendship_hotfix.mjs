@@ -63,7 +63,7 @@ export const TOPOKRATY_TARGET = Object.freeze({
   liveFuncSha256: "a230800da9b144d3f51ff02929e63d0c21e01c2f59e3485091aab5b46d21fae0",
   patchedFuncSha256: "f4ac7aae5623f8c7cbd0ae9206a72b985ad85a8beeba49899242b801767d3cc2",
   liveInitializeSha256: "f373346fc14ba52988c59269b803bb2297a39db24c81ae6d570ecaf6f5d7728a",
-  patchedInitializeSha256: "c368927ce518ff3f7efb396ef6ce00ed5e6995c14c44dc7115d65f668db616a6",
+  patchedInitializeSha256: "08f6b84d73e1fc0c74f9c27b285e050ff65f2513e4aec938bc9ccb2a1dfd5602",
   evaluatorId: TOPOKRATY_EVALUATOR_ID,
   liveEvaluatorFuncSha256: "c20f0e6d792c02bdd0f945b84aaba2ac6405386add6228823cbb30fd2ca38945",
   liveEmbeddedSha256: "f1f65a2050523e6104ee0586e1ad62bb0f6945b0ff1dc1583fd52dcf3a9a0433",
@@ -123,6 +123,7 @@ const PLAN_RULES_BLOCK_START = 'const lk1PlanRulesKey = "subscriptions_lk1_plan_
 const PLAN_RULES_BLOCK_END = "const lk1StationExclusionsKey";
 const PLAN_RULES_DESIRED_LITERAL = "const lk1DesiredPlanRules = ";
 const PLAN_RULES_PRIOR_LITERAL = "const lk1PlanRulesExpectedPrior = ";
+const PLAN_RULES_ACCEPTED_PRIORS_LITERAL = "const lk1PlanRulesAcceptedPriors = ";
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -377,6 +378,7 @@ export function composeTopokratyArtifacts(rawSource, options = {}) {
       decisionPercentBound: gateway.func.includes("lk1ExpectedEventDiscountPercent(decision, route)"),
       planRulesPayloadReplaced: gateway.initialize.includes('"planKey":"topocraty"')
         && !gateway.initialize.includes('const lk1PlanRulesExpectedPrior = null;'),
+      acceptsEmptyPrior: gateway.initialize.includes("const lk1PlanRulesAcceptedPriors = [null,"),
     },
     evaluator: {
       id: TOPOKRATY_EVALUATOR_ID,
@@ -402,11 +404,11 @@ export function composeTopokratyArtifacts(rawSource, options = {}) {
  * writer with the guarded `LK1_PLAN_RULES_WITH_TOPOKRATY -> LK1_PLAN_RULES_DESIRED` block.
  */
 export const TOPOKRATY_REVERT_UPSTREAM_SHA256 =
-  "d39a14893e18e8c48000dc8e844f3d1725f3793068c95f85529d549577d80311";
+  "68debf146be1fcad65a6fd17fc38113d7f97158b0607c16cdd6887bb356043b5";
 export const TOPOKRATY_REVERT_GATEWAY_INITIALIZE_SHA256 =
-  "c368927ce518ff3f7efb396ef6ce00ed5e6995c14c44dc7115d65f668db616a6";
+  "08f6b84d73e1fc0c74f9c27b285e050ff65f2513e4aec938bc9ccb2a1dfd5602";
 export const TOPOKRATY_REVERT_INITIALIZE_POSTIMAGE_SHA256 =
-  "c3e2b485107624ede0ebc38e9b812eb10f5550457c54753b5146670debd24414";
+  "5d93ae8a62ad8c2e4a9892b77730c8cbbd3858e92e4172e0d3e6bdc949133da5";
 
 /** Replaces the club plan-rules writer with the guarded revert writer. */
 export function patchTopokratyGatewayInitializeRevert(source, target = TOPOKRATY_TARGET) {
@@ -426,23 +428,24 @@ export function patchTopokratyGatewayInitializeRevert(source, target = TOPOKRATY
   }
   const revert = buildTopokratyPlanRulesRevert();
   const patched = `${source.slice(0, start)}${revert.initialize}${source.slice(end)}`;
-  // The guarded revert keeps the club payload as the exact PRIOR and writes the installed
-  // 7-rule payload back; the desired side must not name the club product any more.
+  // The guarded revert keeps the club payload as an accepted PRIOR and writes the installed
+  // 7-rule payload back. The empty prior is accepted too: 147 keeps its context in memory, so
+  // the restart that publishes this candidate clears the global before the writer runs.
   const patchedStart = patched.indexOf(PLAN_RULES_BLOCK_START);
   const patchedEnd = patched.indexOf(PLAN_RULES_BLOCK_END);
   if (patchedStart < 0 || patchedEnd <= patchedStart) throw new Error("Reverted plan-rules block drift");
   const patchedBlock = patched.slice(patchedStart, patchedEnd);
   const revertDesiredIndex = patchedBlock.indexOf(PLAN_RULES_DESIRED_LITERAL);
-  const revertPriorIndex = patchedBlock.indexOf(PLAN_RULES_PRIOR_LITERAL);
-  if (revertDesiredIndex < 0 || revertPriorIndex < 0) {
+  const revertPriorsIndex = patchedBlock.indexOf(PLAN_RULES_ACCEPTED_PRIORS_LITERAL);
+  if (revertDesiredIndex < 0 || revertPriorsIndex < 0) {
     throw new Error("Reverted gateway initialize payload anchors are absent");
   }
   const revertDesired = JSON.parse(patchedBlock.slice(revertDesiredIndex + PLAN_RULES_DESIRED_LITERAL.length)
     .split(";\n")[0]);
-  const revertPrior = JSON.parse(patchedBlock.slice(revertPriorIndex + PLAN_RULES_PRIOR_LITERAL.length)
+  const revertPriors = JSON.parse(patchedBlock.slice(revertPriorsIndex + PLAN_RULES_ACCEPTED_PRIORS_LITERAL.length)
     .split(";\n")[0]);
   if (JSON.stringify(revertDesired) !== JSON.stringify(LK1_PLAN_RULES_DESIRED)
-    || JSON.stringify(revertPrior) !== JSON.stringify(LK1_PLAN_RULES_WITH_TOPOKRATY)) {
+    || JSON.stringify(revertPriors) !== JSON.stringify([null, LK1_PLAN_RULES_WITH_TOPOKRATY])) {
     throw new Error("The revert writer must restore the installed payload from the club prior");
   }
   assertInitializeBody(patched, "Reverted gateway initialize body");
