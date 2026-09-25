@@ -226,6 +226,68 @@ test('the club transition replaces exactly the installed payload and refuses a f
   assert.deepEqual(foreign.get('subscriptions_lk1_plan_rules'), { formatVersion: 1, rules: [] });
 });
 
+test('the preview quotes the decision a club training actually commits', () => {
+  const previewEvaluate = (decision, overrides = {}) => {
+    const ctx = { step: 'evaluate', eventCategory: 'GROUP_TRAINING', pending: [],
+      currentId: 'sub-club', basePriceMinor: BASE_PRICE_MINOR, groupDiscountPercent: 50,
+      target: { durationMinutes: 120, startsAt: '2099-01-01T12:00:00+03:00', stationId: 'station-club', roomId: 'court-club' },
+      selectionKey: 'preview:club', priceProductId: 'one-time-carrier', exerciseId: 'club-exercise',
+      actorClientId: 'club-actor', quotes: [], catalog: { 'club-product': 'Дружба Топократы' },
+      metadata: { 'sub-club': { productId: 'club-product' } }, ...overrides };
+    const msg = { _subscriptionPricePreview: ctx, _managedSubscriptionPolicyDecision: decision };
+    new Function('msg', 'canonical', previewRouterSource)(msg,
+      { isObj: (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value),
+        identityMoneyOwned: () => [] });
+    return ctx;
+  };
+  const benefit = (finalPriceMinor, kind) => ({ kind, ruleId: 'lk1-topokraty-training',
+    basePriceMinor: BASE_PRICE_MINOR, discountMinor: BASE_PRICE_MINOR - finalPriceMinor,
+    surchargeMinor: 0, finalPriceMinor, partialPriceCalculation: null, currency: 'RUB' });
+  // A 4 000 ₽ two-hour training: the free hour plus a quarter of the court for the second.
+  const partial = previewEvaluate({ eligible: true, subscriptionVisitCount: 1, eventDiscountPercent: 75,
+    benefit: { ...benefit(50000, 'PARTIAL_PRICE_PERCENT_DISCOUNT'), partialPriceCalculation: { numerator: 60, denominator: 120 } },
+    gameMinutes: { freeMinutes: 60, paidOverageMinutes: 60 } });
+  assert.equal(partial.error, undefined);
+  const [partialQuote] = partial.quotes;
+  assert.deepEqual({ ...partialQuote, subscriptionName: undefined, evaluatedAt: undefined, expiresAt: undefined }, {
+    subscriptionId: 'sub-club', selectionKey: 'preview:club', status: 'AVAILABLE',
+    basePriceMinor: BASE_PRICE_MINOR, amountMinor: 50000, freeMinutes: 60, paidMinutes: 60, reasonCode: null,
+    kind: 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1', exerciseId: 'club-exercise', actorClientId: 'club-actor',
+    productId: 'one-time-carrier', subscriptionName: undefined, discountPercent: 75,
+    startsAt: '2099-01-01T12:00:00+03:00', durationMinutes: 120, evaluatedAt: undefined, expiresAt: undefined });
+  // Without the free hour the decision charges the full one-time price at 0 %, not the rule's 50 %.
+  const fullPrice = previewEvaluate({ eligible: true, subscriptionVisitCount: 0, eventDiscountPercent: 0,
+    benefit: benefit(BASE_PRICE_MINOR, 'PERCENT_DISCOUNT') });
+  assert.equal(fullPrice.error, undefined);
+  assert.equal(fullPrice.quotes[0].amountMinor, BASE_PRICE_MINOR);
+  assert.equal(fullPrice.quotes[0].discountPercent, 0);
+  assert.equal(fullPrice.quotes[0].freeMinutes, 0);
+  // The ordinary answers are unchanged: a configured discount and a visit-covered event.
+  const flat = previewEvaluate({ eligible: true, subscriptionVisitCount: 0, eventDiscountPercent: 50,
+    benefit: benefit(200000, 'PERCENT_DISCOUNT') });
+  assert.equal(flat.error, undefined);
+  assert.equal(flat.quotes[0].amountMinor, 200000);
+  assert.equal(flat.quotes[0].discountPercent, 50);
+  const covered = previewEvaluate({ eligible: true, subscriptionVisitCount: 1, eventDiscountPercent: 100,
+    benefit: benefit(0, 'FREE_ENTITLEMENT') });
+  assert.equal(covered.error, undefined);
+  assert.equal(covered.quotes[0].amountMinor, 0);
+  assert.equal(covered.quotes[0].discountPercent, 100);
+  // A decision whose amount does not follow its own percent never reaches the widget.
+  for (const tampered of [
+    { eligible: true, subscriptionVisitCount: 1, eventDiscountPercent: 75,
+      benefit: { ...benefit(40000, 'PARTIAL_PRICE_PERCENT_DISCOUNT'), partialPriceCalculation: { numerator: 60, denominator: 120 } },
+      gameMinutes: { freeMinutes: 60, paidOverageMinutes: 60 } },
+    { eligible: true, subscriptionVisitCount: 0, eventDiscountPercent: 0,
+      benefit: benefit(200000, 'PERCENT_DISCOUNT') },
+    { eligible: true, subscriptionVisitCount: 1, eventDiscountPercent: 75,
+      benefit: benefit(50000, 'PARTIAL_PRICE_PERCENT_DISCOUNT'),
+      gameMinutes: { freeMinutes: 0, paidOverageMinutes: 120 } },
+  ]) {
+    assert.equal(previewEvaluate(tampered).error, 'GROUP_DISCOUNT_DECISION_INVALID', JSON.stringify(tampered));
+  }
+});
+
 test('the contour sources carry the club rule on the booking, preview and widget paths', () => {
   for (const marker of [
     'const TOPOKRATY_FRIENDSHIP_PRODUCT_ID = "14692232-12be-4218-9fa1-2d5b79b62035";',

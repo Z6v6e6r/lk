@@ -379,9 +379,16 @@ if (ctx.step === 'evaluate') {
         && Number.isSafeInteger(decision.gameMinutes.paidOverageMinutes) && decision.gameMinutes.paidOverageMinutes > 0
         && Number.isInteger(decision.eventDiscountPercent)
         && decision.eventDiscountPercent >= 0 && decision.eventDiscountPercent <= 100;
+      // The percent a flat quote must satisfy is the one the decision itself fixed: the club
+      // training can charge the full price (0 %) where the configured event percent would
+      // have priced a discount the decision did not grant. A visit-covered first event keeps
+      // the reviewed normalization below.
+      const quotedPercent = !freeCovered && Number.isInteger(decision.eventDiscountPercent)
+        && decision.eventDiscountPercent >= 0 && decision.eventDiscountPercent <= 100
+        ? decision.eventDiscountPercent : ctx.groupDiscountPercent;
       if (!freeCovered && !paidShare && (decision.subscriptionVisitCount !== 0
-        || (!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)
-        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * ctx.groupDiscountPercent / 100))) {
+        || (!Number.isSafeInteger(quotedPercent) || quotedPercent < 0 || quotedPercent > 100)
+        || decision.benefit.finalPriceMinor !== ctx.basePriceMinor - Math.floor(ctx.basePriceMinor * quotedPercent / 100))) {
         return stop(eventRoute.error + '_DECISION_INVALID');
       }
       if (paidShare) {
@@ -401,7 +408,10 @@ if (ctx.step === 'evaluate') {
         quote(ctx.currentId, 'AVAILABLE', 0, 0, ctx.target.durationMinutes);
         ctx.groupDiscountPercent = configuredPercent;
       } else {
+        const configuredPercent = ctx.groupDiscountPercent;
+        ctx.groupDiscountPercent = quotedPercent;
         quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor, 0, ctx.target.durationMinutes);
+        ctx.groupDiscountPercent = configuredPercent;
       }
     } else {
       if (!decision.gameMinutes) return stop('PRICE_PREVIEW_DECISION_INVALID');

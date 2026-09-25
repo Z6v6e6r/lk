@@ -885,12 +885,13 @@ if (ctx.step === "lk1_policy_decision") {
     const expected = expectedGroup !== undefined ? expectedGroup : expectedTournament;
     const expectedAction = expectedGroup !== undefined ? "BOOK_GROUP_TRAINING" : "BOOK_TOURNAMENT";
     const target = ctx.lk1.target;
-    // The percent the advisory preview quotes for a charged event. It is the configured event
-    // discount, except when the decision charges only a share of the price (the club training
-    // co-pay): there the evaluator's own percent — the one applied to that share — is the only
-    // correct expectation, and the amount below still pins the money.
+    // The percent the advisory preview quotes for a charged event. It is the percent the
+    // decision itself fixed — the club training may charge the full price (0 %), a share of
+    // the price (the quarter-of-court co-pay) or the configured event discount — while a
+    // visit-covered first event keeps the reviewed normalization above, where the widget's
+    // 100 % at zero is rewritten to the configured percent.
     const lk1ExpectedEventDiscountPercent = (decision, route) => (
-      isObj(decision) && decision.benefit?.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT"
+      isObj(decision) && decision.benefit?.kind !== "FREE_ENTITLEMENT"
         && Number.isInteger(decision.eventDiscountPercent)
         ? decision.eventDiscountPercent
         : ctx.lk1.rule[route.discountField]);
