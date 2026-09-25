@@ -59,6 +59,16 @@ export const buildTopokratyPlanRulesTransition = () => buildPlanRulesTransition(
   desired: LK1_PLAN_RULES_WITH_TOPOKRATY,
 });
 
+// The paired revert of the club rule. A rollback of the evaluator alone would leave the
+// global naming the club product while the older evaluator has no club branch, and a
+// direction-6233 training would then be priced at the ordinary 50 % instead of the quarter
+// co-pay; so the release contract rolls the global back first (this guard), then the
+// evaluator.
+export const buildTopokratyPlanRulesRevert = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  desired: LK1_PLAN_RULES_DESIRED,
+});
+
 // Missing/empty means "no plan-rules global yet", which is a legitimate prior.
 // Everything else must match the frozen shape exactly: a surplus, missing or
 // mistyped key is a hard refusal, never a silent coercion.

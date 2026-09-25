@@ -23,12 +23,20 @@ export interface SubscriptionEventDiscountQuote {
   expiresAt: number;
 }
 
-/** True when the quote charges only the paid share of the event (the club training co-pay). */
+/**
+ * True when the quote charges only the paid share of the event (the club training co-pay).
+ * The share has to add up to the event, so a quote whose minutes do not cover its own
+ * duration is never treated as a co-pay — neither for the label nor for the amount.
+ */
 export function isPartialSubscriptionEventDiscountQuote(
-  quote: Pick<SubscriptionEventDiscountQuote, "freeMinutes" | "paidMinutes">,
+  quote: Pick<SubscriptionEventDiscountQuote, "freeMinutes" | "paidMinutes" | "durationMinutes">,
 ): boolean {
-  return Number.isSafeInteger(quote.freeMinutes) && (quote.freeMinutes as number) > 0
-    && Number.isSafeInteger(quote.paidMinutes) && (quote.paidMinutes as number) > 0;
+  const freeMinutes = quote.freeMinutes as number;
+  const paidMinutes = quote.paidMinutes as number;
+  return Number.isSafeInteger(freeMinutes) && freeMinutes > 0
+    && Number.isSafeInteger(paidMinutes) && paidMinutes > 0
+    && Number.isSafeInteger(quote.durationMinutes) && quote.durationMinutes > 0
+    && freeMinutes + paidMinutes === quote.durationMinutes;
 }
 
 /**
@@ -42,12 +50,9 @@ export function subscriptionEventQuoteAmountMinor(
   if (!Number.isSafeInteger(quote.basePriceMinor) || quote.basePriceMinor <= 0
     || !Number.isSafeInteger(quote.discountPercent) || quote.discountPercent < 0 || quote.discountPercent > 100
     || !Number.isSafeInteger(quote.durationMinutes) || quote.durationMinutes <= 0) return null;
-  const freeMinutes = quote.freeMinutes as number;
-  const paidMinutes = quote.paidMinutes as number;
-  const paidShare = isPartialSubscriptionEventDiscountQuote(quote)
-    && freeMinutes + paidMinutes === quote.durationMinutes;
+  const paidShare = isPartialSubscriptionEventDiscountQuote(quote);
   const chargedMinor = paidShare
-    ? Math.floor(quote.basePriceMinor * paidMinutes / quote.durationMinutes)
+    ? Math.floor(quote.basePriceMinor * (quote.paidMinutes as number) / quote.durationMinutes)
     : quote.basePriceMinor;
   return chargedMinor - Math.floor(chargedMinor * quote.discountPercent / 100);
 }

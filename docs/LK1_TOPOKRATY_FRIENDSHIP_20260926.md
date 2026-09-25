@@ -45,12 +45,14 @@
 | --- | --- |
 | `scripts/lib/lk1PlanRulesTransition.mjs` | `LK1_TOPOKRATY_PRODUCT_ID`, `LK1_PLAN_RULES_WITH_TOPOKRATY` (установленный payload + клубное правило) и `buildTopokratyPlanRulesTransition()` с guarded-записью поверх точного prior. Установленный `LK1_PLAN_RULES_DESIRED` не тронут. |
 | `scripts/nodered_lk1_hub_nodes/evaluator.js` | Отдельная ветка `category === "GROUP_TRAINING" && isTopokratyTrainingBenefit(...)` (до стандартной ветки, поэтому reviewed-текст free-first-event остаётся байт-в-байт), помощники `topokratyDirectionId`/`moscowLocalDate` и аддитивное поле решения `eventDiscountPercent` (100 для полного покрытия, иначе процент платной части). |
-| `scripts/nodered_lk1_hub_nodes/gateway.js` | `directionId` в серверно-разрешённом `lk1.target` (алиасы `direction.id` / `direction` / `directionId` / `exerciseDirectionId`), и проверка клиентской котировки сравнивает процент с `lk1ExpectedEventDiscountPercent(decision, route)` — для частичной оплаты это процент решения, иначе прежнее поле правила; сумма по-прежнему сверяется с `decision.benefit.finalPriceMinor`. |
+| `scripts/nodered_lk1_hub_nodes/gateway.js` | `directionId` в серверно-разрешённом `lk1.target` (алиасы `direction.id` / `direction` / `directionId` / `exerciseDirectionId`), и проверка клиентской котировки сравнивает процент с `lk1ExpectedEventDiscountPercent(decision, route)` — для частичной оплаты это процент решения, иначе прежнее поле правила; сумма по-прежнему сверяется с `decision.benefit.finalPriceMinor`. Все точки денежного мандата переведены на `lk1EventPaymentQuoteBinding`. |
+| `scripts/nodered_lk1_hub_nodes/event_payments.js` | Новые `lk1ClubEventPaymentBinding` (частичная доля с процентом решения и полная цена при 0 %) и `lk1EventPaymentQuoteBinding` (клубная форма → reviewed-binding). Reviewed-функция `lk1EventPaymentBinding` оставлена байт-в-байт, поэтому пины поколения `lk1-free-event-checkout` не двигаются. |
+| `scripts/patch_live_lk1_payment_readback.mjs` | Перепин `reviewedStepSha256` шага `lk1_transaction_readback` (в нём сменился вызов мандата). |
 | `scripts/nodered_subscription_price_preview_nodes/router.js` | `previewDirectionId` в target превью и ветка `paidShare` для событийной котировки: проверяет арифметику решения и отдаёт `amountMinor`, `freeMinutes`, `paidMinutes`, `discountPercent`. |
-| `src/utils/groupSubscriptionDiscount.ts` | Котировка с оплачиваемой долей: `isPartialSubscriptionEventDiscountQuote`, `subscriptionEventQuoteAmountMinor`; валидатор `isSubscriptionEventDiscountQuote` принимает обе формы (плоскую и долю), добавлены `freeMinutes`/`paidMinutes`. |
+| `src/utils/groupSubscriptionDiscount.ts` | Котировка с оплачиваемой долей: `isPartialSubscriptionEventDiscountQuote` (минуты обязаны покрывать длительность события), `subscriptionEventQuoteAmountMinor`; валидатор `isSubscriptionEventDiscountQuote` принимает обе формы (плоскую и долю), добавлены `freeMinutes`/`paidMinutes`. Подпись «Доплата за N мин» использует тот же предикат, что и расчёт суммы. |
 | `src/components/group-schedule/GroupSchedulePage.tsx` | Для доли на кнопке показывается «Доплата за N мин по подписке …» вместо «Скидка N %». |
 | `scripts/patch_live_lk1_plan_rules.mjs` | Перепинён `PLAN_RULES_REVIEWED_EVALUATOR_SHA256` (аддитивные поля `eventDiscountPercent`). |
-| `scripts/tests/lk1TopokratyFriendship.test.mjs` | Новый набор: матрица решений, привязка к продукту/направлению, fail-closed по дневному бакету, payload/transition, прямой прогон evaluate-шага превью (частичная/полная/обычная/покрытая котировка и подделанные решения), маркеры booking/preview/widget. |
+| `scripts/tests/lk1TopokratyFriendship.test.mjs` | Новый набор: матрица решений, прямой тест денежного мандата (доля/полная цена/подделанные вердикты), привязка к продукту/направлению, fail-closed по дневному бакету, payload/transition, прямой прогон evaluate-шага превью (частичная/полная/обычная/покрытая котировка и подделанные решения), маркеры booking/preview/widget. |
 | `scripts/tests/groupSubscriptionDiscount.test.ts` | Кейс котировки с оплачиваемой долей. |
 | `scripts/tests/lk1PreviewFreeFirstEventHotfix.test.mjs` | Пины reviewed-источника приведены к новой форме сравнения процента. |
 
@@ -59,6 +61,20 @@
 всегда сверяется с `decision.benefit.finalPriceMinor`, поэтому клубная доплата не может
 разойтись между превью и записью, а несовпадение закрывается отказом (`GROUP_DISCOUNT_QUOTE_CHANGED`),
 не списанием.
+
+## Денежный мандат клубной тренировки
+
+Клубные формы отличаются от конфигурируемого процента события, поэтому reviewed-мандат
+`lk1EventPaymentBinding` (он требовал «посещение не списывается и скидка равна полю правила»)
+их бы отверг — и уже **после** подтверждённой записи в Viva, оставляя неоплаченную бронь.
+Поэтому мандат разрешается через `lk1EventPaymentQuoteBinding`:
+
+- доля выше бесплатного часа: посещение списывается, к оплате идёт
+  `floor(база × paid / (free + paid))` минус процент решения (75 %), и запись остаётся
+  `paymentType=SUBSCRIPTION` (посещение тратится, доплата выставляется транзакцией);
+- нет бесплатного часа: `decision.eventDiscountPercent = 0`, к оплате полная базовая цена;
+- пустой/непроверяемый вердикт по-прежнему возвращает `null` и закрывает шаг
+  (`LK1_GROUP_PAYMENT_BINDING_INVALID` / `LK1_TOURNAMENT_PAYMENT_BINDING_INVALID`), не проводя денег.
 
 ## Затронутые узлы и endpoint'ы
 
@@ -71,7 +87,7 @@
 
 ## Проверки (LOCAL)
 
-- `node --experimental-strip-types --test scripts/tests/lk1TopokratyFriendship.test.mjs` — 11/11 PASS.
+- `node --experimental-strip-types --test scripts/tests/lk1TopokratyFriendship.test.mjs` — 12/12 PASS.
 - `node --experimental-strip-types --test scripts/tests/lk1*.test.mjs scripts/tests/lk1*.test.ts` —
   385 тестов, 302 pass, 83 skip (приватные live-фикстуры), 0 fail.
 - `node --experimental-strip-types --test` по подписочным наборам (`subscription*`, `managedSubscription*`,
@@ -105,7 +121,11 @@ CRITICAL-проход:
    `preimages.json`, `HUB_PREIMAGES` — по свежему телу; exact-graph contract и postcheck.
 5. Приёмка: read-only превью и запись по абонементу клуба дают одинаковую сумму; проверяются
    четыре сценария (полный час, 90 минут после 30 израсходованных, исчерпанный день, ≥ 4 активных
-   записей), откат — предыдущей генерацией.
+   записей).
+6. Откат — упорядоченный: сначала `buildTopokratyPlanRulesRevert()` (guarded-возврат
+   установленного payload из 7 правил), затем откат генерации решателя. Обратный порядок
+   оставил бы в глобале клубный продукт, а старый решатель без клубной ветки посчитал бы
+   тренировку 6233 обычными 50 % вместо доплаты.
 
 ## Остаточные риски
 
@@ -122,5 +142,17 @@ CRITICAL-проход:
 - **Пины поколений.** Локально доступны только source-пины; live-body пины пересчитываются на
   свежем pull (см. RELEASE). До этого момента патчеры старших поколений на новом теле не пройдут
   preimage-guard — это ожидаемый fail-closed.
+- **Доплата против SUBSCRIPTION-брони (нужно живое подтверждение).** В клубной частичной форме
+  запись идёт с `paymentType=SUBSCRIPTION`, а `lk1PrepareEventPayment` ищет разовый продукт Viva
+  по `bookingId` и требует `cost === basePriceMinor`. Если Viva не отдаёт разовый продукт против
+  подписочной брони, шаг остановится на `LK1_GROUP_PAYMENT_PRODUCT_UNAVAILABLE` (деньги не
+  двигаются, но бронь уже подтверждена). Альтернатива — вести клубную доплату «платной игрой»
+  (ON_PLACE + visit job); выбор подтверждается первым живым прогоном.
+- **Правило требует направления в DTO.** Если боевое упражнение придёт без `direction`/`directionId`,
+  клубная ветка не сработает (без блокера) и превью/запись согласованно посчитают 50 % вместо
+  доплаты — нужна read-only приёмка на направлении 6233 после включения.
+- **В строгом prior нет «пустого» состояния.** `buildTopokratyPlanRulesTransition` требует ровно
+  установленный payload из 7 правил; рантайм без глобала (невозможный на живом 147, но возможный
+  на свежем стенде) будет отвергнут, а не молча перезаписан.
 - Красный baseline `subscriptionBindingPatch`/`subscriptionReturnVerificationPatch` (4 теста) не
   связан с изменением, но остаётся в наборе.

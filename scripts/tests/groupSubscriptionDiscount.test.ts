@@ -135,10 +135,16 @@ test("a club training co-pay is quoted as the paid share above the free hour", (
   assert.equal(subscriptionEventQuoteAmountMinor(partial), 50000);
   // The paid share must add up to the event, and its amount is not the flat one.
   for (const delta of [{ amountMinor: 100000 }, { freeMinutes: 0 }, { paidMinutes: 0 },
-    { freeMinutes: 60, paidMinutes: 30 }, { freeMinutes: 60.5 }, { paidMinutes: null }]) {
+    { freeMinutes: 60, paidMinutes: 30 }, { freeMinutes: 200, paidMinutes: 60 },
+    { freeMinutes: 60.5 }, { paidMinutes: null }]) {
     assert.equal(isGroupSubscriptionDiscountQuote({ ...partial, ...delta }, "group", "actor", now), false,
       JSON.stringify(delta));
   }
+  // Minutes that do not cover the event are never a co-pay: a quote that happens to be
+  // arithmetically flat is accepted as flat, and the label follows the same predicate.
+  const misaligned = { ...partial, paidMinutes: 30, amountMinor: 100000 };
+  assert.equal(isPartialSubscriptionEventDiscountQuote(misaligned), false);
+  assert.ok(isGroupSubscriptionDiscountQuote(misaligned, "group", "actor", now));
   // A fully covered hour and an ordinary discounted event keep the flat formula.
   assert.ok(isGroupSubscriptionDiscountQuote({ ...partial, discountPercent: 100, amountMinor: 0,
     freeMinutes: 0, paidMinutes: 120 }, "group", "actor", now));

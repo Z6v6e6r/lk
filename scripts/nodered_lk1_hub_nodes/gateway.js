@@ -175,7 +175,7 @@ const lk1Finish = (ctx) => {
 // EVENT_PAYMENT_ROUTES
 const lk1Checkout = (ctx) => {
   const route = lk1EventPaymentRoute(ctx);
-  if (route && !lk1EventPaymentBinding(ctx)) return lk1Stop(ctx, route.code + "_BINDING_INVALID");
+  if (route && !lk1EventPaymentQuoteBinding(ctx)) return lk1Stop(ctx, route.code + "_BINDING_INVALID");
   if (!route && (!['JOIN_GAME', 'CREATE_GAME'].includes(ctx.managedAction)
     || ctx.caller !== 'split' || ctx.lk1.target?.category !== 'GAME')) return lk1Stop(ctx, "LK1_PAYMENT_ROUTE_INVALID");
   if (lk1NeedsVisitJob(ctx) && !ctx.lk1.visitJob) return lk1Stop(ctx, "LK1_VISIT_JOB_MISSING");
@@ -308,7 +308,7 @@ if (ctx.step === "lk1_ingress_operation_find") {
     }
     const amount = quote.decision.benefit.finalPriceMinor;
     if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(managedActionForTarget({ ...ctx, category: operation.category }))) {
-      const binding = lk1EventPaymentBinding({ ...ctx, category: operation.category,
+      const binding = lk1EventPaymentQuoteBinding({ ...ctx, category: operation.category,
         managedAction: managedActionForTarget({ ...ctx, category: operation.category }),
         studioId: quote.target.stationId, exerciseId: operation.exerciseId }, quote);
       const intent = quote.transactionIntent;
@@ -943,7 +943,7 @@ if (ctx.step === "lk1_payment_profile_recheck" || (paymentRoute && ctx.step === 
   const paymentContext = eventPayment ? ctx.lk1EventPayment : msg._splitCtx;
   const payload = paymentContext?.transactionPayload;
   const product = payload?.products?.[0];
-  const binding = eventPayment ? lk1EventPaymentBinding(ctx) : null;
+  const binding = eventPayment ? lk1EventPaymentQuoteBinding(ctx) : null;
   if (eventPayment && (!binding || product?.id !== binding.productId)) return lk1Stop(ctx, paymentRoute.code + "_BINDING_INVALID");
   if (!eventPayment && (!["JOIN_GAME", "CREATE_GAME"].includes(ctx.managedAction)
     || ctx.caller !== "split" || ctx.lk1?.target?.category !== "GAME")) return lk1Stop(ctx, "LK1_PAYMENT_ROUTE_INVALID");
@@ -1022,7 +1022,7 @@ if (ctx.step === "lk1_transaction_readback") {
   const transaction = unwrapRecord(msg.payload);
   const intent = ctx.lk1.transactionIntent;
   if (paymentRoute) {
-    const binding = lk1EventPaymentBinding(ctx);
+    const binding = lk1EventPaymentQuoteBinding(ctx);
     if (!binding || !isObj(intent) || intent.productId !== binding.productId
       || intent.productType !== binding.productType || intent.baseMinor !== binding.baseMinor
       || intent.chargeMinor !== binding.chargeMinor || intent.discountMinor !== binding.discountMinor) {

@@ -13,6 +13,7 @@ import {
   LK1_PLAN_RULES_DESIRED,
   LK1_PLAN_RULES_WITH_TOPOKRATY,
   LK1_TOPOKRATY_PRODUCT_ID,
+  buildTopokratyPlanRulesRevert,
   buildTopokratyPlanRulesTransition,
 } from '../lib/lk1PlanRulesTransition.mjs';
 
@@ -224,6 +225,50 @@ test('the club transition replaces exactly the installed payload and refuses a f
   const foreign = store({ subscriptions_lk1_plan_rules: { formatVersion: 1, rules: [] } });
   assert.throws(() => runInitialize({ get: foreign.get, set: foreign.set }), /prior mismatch; no overwrite/);
   assert.deepEqual(foreign.get('subscriptions_lk1_plan_rules'), { formatVersion: 1, rules: [] });
+  // The paired revert restores the installed payload, so an evaluator rollback can never
+  // leave the club rule in the global with an evaluator that has no club branch.
+  const revert = buildTopokratyPlanRulesRevert();
+  assert.deepEqual(revert.expectedPrior, LK1_PLAN_RULES_WITH_TOPOKRATY);
+  assert.deepEqual(revert.desired, LK1_PLAN_RULES_DESIRED);
+  const rolledBack = store({ subscriptions_lk1_plan_rules: structuredClone(LK1_PLAN_RULES_WITH_TOPOKRATY) });
+  new Function('global', 'env', 'node', 'flow', revert.initialize)({ get: rolledBack.get, set: rolledBack.set });
+  assert.deepEqual(rolledBack.get('subscriptions_lk1_plan_rules'), LK1_PLAN_RULES_DESIRED);
+});
+
+test('the event payment binding accepts the charged club shapes', () => {
+  const bindingSource = fs.readFileSync(
+    new URL('../nodered_lk1_hub_nodes/event_payments.js', import.meta.url), 'utf8');
+  const lk1EventPaymentBinding = new Function('isObj',
+    `${bindingSource}\nreturn lk1EventPaymentQuoteBinding;`)(
+    (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value));
+  const ctxOf = (decision, rule = { groupTrainingDiscountPercent: 50 }) => ({ caller: 'http',
+    category: 'group_training', managedAction: 'BOOK_GROUP_TRAINING', exerciseId: 'club-exercise',
+    studioId: 'station-club', lk1: { rule, decision, target: { category: 'GROUP_TRAINING',
+      eventId: 'club-exercise', stationId: 'station-club', priceProductId: 'one-time-carrier',
+      basePriceMinor: BASE_PRICE_MINOR } } });
+  const decisionOf = (over = {}) => ({ eligible: true, subscriptionVisitCount: 1,
+    eventDiscountPercent: 75, benefit: { kind: 'PARTIAL_PRICE_PERCENT_DISCOUNT', finalPriceMinor: 50000 },
+    gameMinutes: { freeMinutes: 60, paidOverageMinutes: 60 }, ...over });
+  const flat = (finalPriceMinor, eventDiscountPercent, kind = 'PERCENT_DISCOUNT') => decisionOf({
+    subscriptionVisitCount: 0, eventDiscountPercent, gameMinutes: undefined,
+    benefit: { kind, finalPriceMinor } });
+  // The co-pay of a two-hour training: one visit spent, 500 ₽ billed on the second hour.
+  assert.equal(lk1EventPaymentBinding(ctxOf(decisionOf())).chargeMinor, 50000);
+  assert.equal(lk1EventPaymentBinding(ctxOf(decisionOf())).discountMinor, BASE_PRICE_MINOR - 50000);
+  // Without the free hour the whole event is billed at the decision's 0 %, not the rule's 50 %.
+  assert.equal(lk1EventPaymentBinding(ctxOf(flat(BASE_PRICE_MINOR, 0))).chargeMinor, BASE_PRICE_MINOR);
+  // Unchanged answers: a visit-covered event and an ordinary configured discount.
+  assert.equal(lk1EventPaymentBinding(ctxOf(decisionOf({ eventDiscountPercent: 100,
+    benefit: { kind: 'FREE_ENTITLEMENT', finalPriceMinor: 0 }, gameMinutes: undefined }))).chargeMinor, 0);
+  assert.equal(lk1EventPaymentBinding(ctxOf(flat(200000, 50))).chargeMinor, 200000);
+  // A share that does not add up, a visit with no share, or a wrongly priced amount is refused.
+  for (const bad of [
+    decisionOf({ benefit: { kind: 'PARTIAL_PRICE_PERCENT_DISCOUNT', finalPriceMinor: 40000 } }),
+    decisionOf({ gameMinutes: { freeMinutes: 60, paidOverageMinutes: 30 } }),
+    decisionOf({ gameMinutes: { freeMinutes: 0, paidOverageMinutes: 120 } }),
+    decisionOf({ eventDiscountPercent: 50 }),
+    decisionOf({ subscriptionVisitCount: 0 }),
+  ]) assert.equal(lk1EventPaymentBinding(ctxOf(bad)), null, JSON.stringify(bad));
 });
 
 test('the preview quotes the decision a club training actually commits', () => {
