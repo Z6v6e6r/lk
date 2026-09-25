@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import vm from "node:vm";
 import fs from "node:fs";
+import { ObjectId } from "mongodb";
+import { isConfirmedPaymentReadbackBound } from "../../src/utils/paymentSyncDraftRecovery.ts";
 import { createServerPhonePrivacy, responsePrivacySource, tournamentRestorePrivacySource, tournamentExportPrivacySource, communityRestorePrivacySource, resultRestorePrivacySource } from "../lib/publicPhonePrivacy.mjs";
 
 const KEY = "synthetic-test-key-not-production-identity-key";
@@ -195,6 +197,145 @@ test("safe UUIDs, same-name authors and a phone-shaped UUID span survive project
   assert.equal(output.members[0].id, uuid);
   assert.equal(output.members[1].id, "second-id");
   phoneFree(output);
+});
+
+test("already-issued opaque aliases survive repeated projection and still resolve", () => {
+  // This real HMAC output contains a coincidental phone-shaped digit sequence.
+  const raw = tournament();
+  raw.tournamentId = "scope-240";
+  const safe = privacy.project(raw, { kind: "tournament" });
+  assert.equal(safe.participants[0].id, "pp_d8a1097dbf33bfd30898f81956957728");
+  const repeated = privacy.project(safe, { kind: "tournament" });
+  assert.deepEqual(repeated, safe);
+  const restored = privacy.restore(repeated, raw, "tournament:synthetic-tenant:scope-240");
+  assert.equal(restored.participants[0].id, PHONE);
+  assert.equal(restored.rounds[0].matches[0].pair1[0], PHONE);
+  assert.equal(restored.totals[PHONE].points, 12);
+  phoneFree(repeated);
+});
+
+test("BSON document identities keep their wire format across projection and JSON round trips", () => {
+  const id = new ObjectId("aaaa" + "70000000003" + "b".repeat(9));
+  const original = { messages: [{ _id: id, id: id.toHexString(), text: "Привет", authorPhone: PHONE }] };
+  const projected = privacy.project(original, { kind: "chat" });
+  assert.equal(projected.messages[0]._id, id);
+  assert.equal(projected.messages[0].id, id.toHexString());
+  const json = JSON.parse(JSON.stringify(projected));
+  assert.equal(json.messages[0]._id, id.toHexString());
+  assert.deepEqual(privacy.project(json, { kind: "chat" }), json);
+  phoneFree(json);
+  phoneFree(privacy.project({ metadata: { _bsontype: "ObjectId", toHexString: "not-a-function", phone: PHONE } }));
+});
+
+test("successful split payment replies preserve provider references without exposing roster contacts", () => {
+  const references = {
+    paymentUrl: "https://pay.example.invalid/checkout/70000000003?orderId=70000000003",
+    bookingId: "70000000003", transactionId: "70000000004", productId: "70000000005", exerciseId: "70000000006",
+  };
+  for (const path of ["/lk/games/split/create", "/lk/games/:gameId/split/join", "/lk/games/game-id/split/join"]) {
+    const msg = { req: { method: "POST", route: { path } }, statusCode: 201,
+      payload: { ...references, participants: [{ id: PHONE, phone: PHONE }], metadata: { transactionId: PHONE } } };
+    run(responsePrivacySource(), msg);
+    assert.equal(msg.statusCode, 201);
+    for (const [field, value] of Object.entries(references)) assert.equal(msg.payload[field], value, field);
+    assert.match(msg.payload.participants[0].id, /^pp_/);
+    assert.match(msg.payload.metadata.transactionId, /^pp_/);
+    phoneFree(msg.payload);
+  }
+});
+
+test("payment reference exceptions cannot bypass normal roster or error projection", () => {
+  const paymentUrl = "https://pay.example.invalid/checkout/70000000003?phone=" + PHONE;
+  const ok = { req: { method: "POST", route: { path: "/lk/games/split/create" } }, statusCode: 201, payload: { paymentUrl } };
+  run(responsePrivacySource(), ok);
+  assert.equal(ok.payload.paymentUrl, "https://pay.example.invalid/checkout/70000000003?phone=[redacted]");
+  phoneFree(ok.payload);
+  for (const request of [
+    { method: "GET", path: "/lk/games/split/create", status: 200 },
+    { method: "POST", path: "/lk/games/split/create", status: 400 },
+    { method: "POST", path: "/lk/games/game-id/join", status: 201 },
+  ]) {
+    const msg = { req: { method: request.method, route: { path: request.path } }, statusCode: request.status,
+      payload: { transactionId: PHONE, paymentUrl: "https://example.invalid/" + PHONE } };
+    run(responsePrivacySource(), msg);
+    phoneFree(msg.payload);
+  }
+});
+
+test("confirmed subscription replays keep the original payment references", () => {
+  const paymentUrl = "https://pay.example.invalid/checkout/70000000003?orderId=70000000003";
+  for (const path of ["/lk/games/split/create", "/lk/games/:gameId/split/join", "/lk/subscription-bookings"]) {
+    const msg = { req: { method: "POST", route: { path } }, statusCode: 200,
+      _subscriptionBooking: { lk1IngressReplay: true, lk1: {} },
+      payload: { state: "CONFIRMED", paymentUrl, transactionId: "70000000003", toPay: 100 } };
+    run(responsePrivacySource(), msg);
+    assert.equal(msg.statusCode, 200);
+    assert.equal(msg.payload.paymentUrl, paymentUrl);
+    assert.equal(msg.payload.transactionId, "70000000003");
+    assert.equal(msg.payload.toPay, 100);
+  }
+  const unrecognized = { req: { method: "POST", route: { path: "/lk/subscription-bookings" } }, statusCode: 200,
+    payload: { state: "CONFIRMED", paymentUrl: "https://example.invalid/" + PHONE, transactionId: PHONE } };
+  run(responsePrivacySource(), unrecognized);
+  phoneFree(unrecognized.payload);
+});
+
+test("new subscription checkout responses preserve only the matching server-owned references", () => {
+  const checkout = { paymentUrl: "https://pay.example.invalid/checkout/70000000003", transactionId: "70000000003" };
+  const original = { req: { method: "POST", route: { path: "/lk/subscription-bookings" } }, statusCode: 200,
+    _subscriptionBooking: { step: "lk1_checkout_saved", lk1: { checkout } },
+    payload: { ok: true, state: "CONFIRMED", ...checkout, bookingId: "70000000004", exerciseId: "70000000005", toPay: 100 } };
+  const msg = structuredClone(original);
+  run(responsePrivacySource(), msg);
+  assert.deepEqual(JSON.parse(JSON.stringify(msg.payload)), original.payload);
+  for (const mismatch of [{ paymentUrl: "https://example.invalid/" + PHONE }, { transactionId: PHONE }]) {
+    const inconsistent = structuredClone(original);
+    Object.assign(inconsistent.payload, mismatch);
+    run(responsePrivacySource(), inconsistent);
+    phoneFree(inconsistent.payload);
+  }
+});
+
+test("game payment records keep numeric provider IDs while member identity remains private", () => {
+  const references = { bookingId: "1234567890", transactionId: "1234567891", productId: "1234567892", exerciseId: "1234567893" };
+  const game = { id: "game", payment: { ...references, phone: PHONE },
+    metadata: { splitPayment: { payments: [{ ...references, clientId: PHONE, phone: PHONE }] } },
+    "metadata.splitPayment.payments": [{ transactionId: PHONE }],
+    participants: [{ id: PHONE, phone: PHONE, payment: { transactionId: PHONE } }] };
+  for (const source of [game, { games: [game] }, { game }, { items: [game] }]) {
+    const projected = privacy.project(source, { kind: "game" });
+    const row = projected.games?.[0] || projected.game || projected.items?.[0] || projected;
+    for (const [field, value] of Object.entries(references)) {
+      assert.equal(row.payment[field], value);
+      assert.equal(row.metadata.splitPayment.payments[0][field], value);
+    }
+    assert.match(row.metadata.splitPayment.payments[0].clientId, /^pp_/);
+    phoneFree(projected);
+  }
+  phoneFree(privacy.project({ metadata: { game: { id: "nested", payment: { transactionId: PHONE } } } }, { kind: "game" }));
+  phoneFree(privacy.project({ payment: { transactionId: PHONE } }, { kind: "game" }));
+});
+
+test("projected game bookings remain bound to payment confirmation readback", () => {
+  const bookingId = "1234567890";
+  const placements = [
+    ["booking", "bookingId"], ["booking", "bookingIds"], ["metadata", "bookingIds"], ["payment", "bookingIds"],
+    ["metadata", "splitPayment", "payments", "bookingId"], ["metadata", "splitPayment", "payments", "bookingIds"],
+  ];
+  for (const fields of placements) {
+    const raw = { id: "game", metadata: { paymentRef: "synthetic-payment-ref" } };
+    let row = raw;
+    for (const field of fields.slice(0, -1)) {
+      if (field === "payments") { row[field] = [{}]; row = row[field][0]; }
+      else { row[field] ||= {}; row = row[field]; }
+    }
+    row[fields.at(-1)] = fields.at(-1) === "bookingIds" ? [bookingId] : bookingId;
+    const expected = { gameId: raw.id, paymentRef: raw.metadata.paymentRef, bookingIds: [bookingId] };
+    assert.equal(isConfirmedPaymentReadbackBound(raw, expected), true);
+    const safe = privacy.project(raw, { kind: "game" });
+    assert.equal(isConfirmedPaymentReadbackBound(safe, expected), true, fields.join("."));
+    assert.equal(isConfirmedPaymentReadbackBound(safe, { ...expected, bookingIds: ["foreign-booking"] }), false);
+  }
 });
 
 test("canonical alternate IDs, tournament metadata and pending-member identity survive", () => {

@@ -111,7 +111,8 @@ test("cached phone identities never enter a JSON file and all tournament referen
 });
 
 test("JSON export keeps server-issued opaque identities usable for resave", () => {
-  const id = "pp_" + "a".repeat(32);
+  // A valid alias may contain a phone-shaped digit sequence by chance.
+  const id = "pp_d8a1097dbf33bfd30898f81956957728";
   const payload = { tournamentId: "safe-tournament", tenantKey: "tenant", tournamentType: "mexicano",
     participants: [{ id, name: "Игрок" }], rounds: [{ matches: [{ pair1: [id], pair2: [] }] }],
     params: { readyParticipantIds: [id] } } as unknown as AmericanoTournamentPayload;

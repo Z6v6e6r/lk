@@ -15,6 +15,18 @@ change membership/role rules, deploy a flow, rotate a secret, or migrate data.
 - Phone-valued IDs, dictionary keys and embedded legacy identifiers become
   scoped `pp_` HMAC aliases. The old enumerable `rm_*` result-member hashes are
   also wrapped, including persisted session references returned by game reads.
+- Issued `pp_` aliases, UUIDs and BSON ObjectIds retain their exact value and
+  normal JSON representation, including after repeated projection/export. A
+  coincidental phone-shaped digit sequence inside an opaque ID is not a phone.
+- Successful split-payment responses and server-confirmed subscription checkout
+  responses/replays retain their root provider `paymentUrl`, `bookingId`,
+  `transactionId`, `productId` and `exerciseId`. The exception is limited to
+  exact POST routes and recognized success contexts. Explicit phone query
+  parameters, roster contacts, unrecognized metadata, other routes and errors
+  remain filtered. Known game `booking`, `payment`, `metadata`,
+  `metadata.splitPayment` and `metadata.splitPayment.payments[]` records also
+  retain their declared booking/exercise/transaction/product references so
+  payment confirmation readback can still match the original booking IDs.
 - Personalized responses include presentation-only `isViewer`/`authorIsViewer`
   flags. These flags and public IDs are never authorization credentials.
 - HTTP projection runs after existing response/cache branches and sets
@@ -61,7 +73,9 @@ consistent, but this ID cannot recover a private identity on an existing server
 tournament. Such an overwrite fails with 409 until the current server data is
 refreshed or the participant is selected again. Public/file-local aliases must
 not be sent to Viva as client IDs; manual Viva synchronization requires selecting
-the actual client. No provider lookup or write is performed by these projections.
+the actual client. This also applies to a stable local `manual-participant-*`
+record without a canonical Viva client ID: its phone is intentionally absent
+from the exported file. No provider lookup or write is performed by these projections.
 
 ## Guarded candidate and release boundary
 
@@ -89,7 +103,9 @@ Before activation, verify the secret is configured, Node-RED can load its built-
 rollback custody is available. Check anonymous list/detail/roster access, own
 chat/unread display, moderation of a phone-only target, tournament continuation,
 offline result retry, export, and absence of phone/legacy-hash material in actual
-responses. Do not remove the key while this candidate is active. Rolling back
+responses. On staging, also check split create/join payment redirects, confirmed
+subscription checkout/replay and chat message identity after a reload. Do not
+remove the key while this candidate is active. Rolling back
 the backend restores the old disclosure behavior and needs a deliberate incident
 decision. Previously obtained client data cannot be revoked by this patch.
 

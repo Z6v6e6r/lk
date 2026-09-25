@@ -16,10 +16,13 @@ export function createPublicPhoneData(aliasForPhone) {
     return null;
   };
   const idKey = (key) => /(?:^id$|(?:Id|Ids|Key|Keys)$|^(?:id|ids|key|keys|pair1|pair2|byes|pairAssignments|readyParticipantIds|participantReadyIds|teamSlots|initialTeamSlots|slots)$)/.test(key);
+  const referenceValue = (value) => typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
   const textWithoutPhone = (value) => value
     .replace(/([?&][^=&#]*(?:phone|mobile|telephone|msisdn)[^=&#]*=)[^&#]*/gi, "$1[redacted]")
     .replace(/\btel:[+\d(). -]+/gi, "[redacted]")
-    .split(/((?<![0-9a-f])[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?![0-9a-f]))/gi)
+    // Reprocessing an issued HMAC must preserve it even when its random hex
+    // happens to contain a phone-shaped digit sequence.
+    .split(/((?<![0-9a-f])(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{24})(?![0-9a-f])|(?<![a-z0-9_])pp_[0-9a-f]{32}(?![0-9a-f]))/gi)
     .map((part, index) => index % 2 === 1 ? part : part.replace(/(^|[^\d])((?:\+?7|8)(?:[\s().-]*\d){10})(?!\d)/g, "$1[redacted]"))
     .join("");
   const alias = (value, scope) => {
@@ -48,18 +51,23 @@ export function createPublicPhoneData(aliasForPhone) {
   const tournamentFields = ["tournamentId", "exerciseId", "id", "tenantKey", "tournamentType", "targetScore", "courts", "organizer", "participants", "rounds", "params", "playerLogs", "totals", "standings", "summary", "createdAt", "updatedAt", "startRatingChanges", "publishedCommunities", "ratingCommunityId", "ratingCommunityStatus", "title", "name", "displayName", "tournamentName", "label", "participantsCount", "joinedCount", "clientsCount", "maxParticipants", "maxClientsCount", "maxPlayers", "playersLimit", "limit", "minRating", "maxRating", "genderLabel", "gender", "sex", "category", "division", "girlsOnly", "womenOnly", "femaleOnly", "mixed", "mix", "isMixed"];
   function project(value, options = {}) {
     const { scope = "legacy", viewer = null, kind = "generic" } = options;
-    function walk(input, currentScope, key = "", parent = "") {
-      if (Array.isArray(input)) return input.map((item) => walk(item, currentScope, key, parent));
+    function walk(input, currentScope, key = "", parent = "", path = [], gameDepth = null) {
+      if (Array.isArray(input)) return input.map((item) => walk(item, currentScope, key, parent, path, gameDepth));
       if (record(input)) {
-        // Preserve Date/BSON instances without walking their implementation fields.
+        // Preserve Date/BSON ObjectId instances and their normal JSON wire format.
         if (Object.prototype.toString.call(input) !== "[object Object]") return input;
+        if (input._bsontype === "ObjectId" && typeof input.toHexString === "function"
+          && /^[0-9a-f]{24}$/i.test(input.toHexString())) return input;
+        const game = kind === "game" && gameDepth === null && input.id
+          && (path.length === 0 || (path.length === 1 && ["games", "game", "items"].includes(path[0])));
+        if (game) gameDepth = path.length;
         if (input.tournamentId && Array.isArray(input.participants)) {
           currentScope = `tournament:${input.tenantKey || "legacy"}:${input.tournamentId}`;
         } else if (key === "communities" || (Array.isArray(input.members) && input.id)) {
           currentScope = `community:legacy:${input.id || input.communityId}`;
         } else if (input.gameId && key === "chats") {
           currentScope = `game:legacy:${input.gameId}`;
-        } else if (kind === "game" && input.id && (key === "" || ["games", "game", "items"].includes(key))) {
+        } else if (game) {
           currentScope = `game:legacy:${input.id}`;
         }
         const member = ["members", "pendingMembers", "memberPreview", "participants", "waitlist", "sender", "author", "organizer", "member"].includes(key);
@@ -71,13 +79,26 @@ export function createPublicPhoneData(aliasForPhone) {
         else if (rating) source = pick(input, ratingFields);
         else if (kind === "tournament" && input.tournamentId && Array.isArray(input.participants)) source = pick(input, tournamentFields);
         if (key === "vivaSync") source = pick(input, ["status", "attempts", "lastAttemptAt", "lastSuccessAt", "totalPlayers", "syncedPlayers"]);
+        const gamePath = gameDepth === null ? [] : path.slice(gameDepth);
+        let providerFields = [];
+        if (gameDepth !== null) {
+          if (gamePath.length === 1 && gamePath[0] === "booking") providerFields = ["bookingId", "bookingIds", "exerciseId", "vivaExerciseId"];
+          else if (gamePath.length === 1 && gamePath[0] === "payment") providerFields = ["bookingId", "bookingIds", "transactionId", "productId", "exerciseId"];
+          else if ((gamePath.length === 1 && gamePath[0] === "metadata")
+            || (gamePath.length === 2 && gamePath[0] === "metadata" && gamePath[1] === "splitPayment")) providerFields = ["bookingIds", "exerciseId", "vivaExerciseId"];
+          else if (gamePath.length === 3 && gamePath[0] === "metadata" && gamePath[1] === "splitPayment" && gamePath[2] === "payments") providerFields = ["bookingId", "bookingIds", "transactionId", "productId", "exerciseId"];
+        }
         const output = {};
         for (const [field, child] of Object.entries(source)) {
           const identityField = identityToken(field);
           if (phoneKey(field) && !identityField) continue;
           const safeField = identityField ? alias(field, currentScope) : field;
+          // These exact game records contain provider references. A numeric
+          // transaction/booking ID is not a participant's phone identity.
+          const providerReference = providerFields.includes(field)
+            && (referenceValue(child) || (field === "bookingIds" && Array.isArray(child) && child.every(referenceValue)));
           // Do not permit dictionary keys to mutate object prototypes.
-          Object.defineProperty(output, safeField, { value: walk(child, currentScope, field, key), enumerable: true, configurable: true, writable: true });
+          Object.defineProperty(output, safeField, { value: providerReference ? child : walk(child, currentScope, field, key, [...path, field], gameDepth), enumerable: true, configurable: true, writable: true });
         }
         if (member && !output.id) {
           const stableId = ["clientId", "userId", "uuid", "playerId"].map((field) => output[field]).find(Boolean);

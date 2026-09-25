@@ -40,7 +40,34 @@ try {
   const viewer = { id: context.clientId || context.id || context.senderId || null, phone: context.phoneNorm || context.phone || context.senderPhone || null };
   const kind = path.includes("/tournaments/americano") ? "tournament" : /\\/(ranking|rating)$/.test(path) ? "rating" : path.includes("/chat") ? "chat" : path.includes("/lk/games") ? "game" : "generic";
   const scope = msg._phonePrivacyScope || (communityId ? "community:legacy:" + communityId : gameId ? "game:legacy:" + gameId : tournamentId ? "tournament:legacy:" + tournamentId : "legacy");
-  msg.payload = privacy.project(msg.payload, { scope, viewer, kind });
+  const references = {};
+  let payload = msg.payload;
+  // Successful split responses and confirmed replays contain provider references, not
+  // person identities. Numeric payment tokens must remain usable by the client.
+  // Keep the exception at these exact POST routes and root fields; nested game,
+  // participant, metadata and error fields still use the normal projection.
+  const splitRoute = /^\\/lk\\/games\\/(?:split\\/create|[^/?]+\\/split\\/join)$/.test(path);
+  const confirmedReplay = msg.statusCode === 200 && payload.state === "CONFIRMED"
+    && msg._subscriptionBooking?.lk1IngressReplay === true && msg._subscriptionBooking?.lk1;
+  const checkout = msg._subscriptionBooking?.lk1?.checkout;
+  const confirmedCheckout = path === "/lk/subscription-bookings" && msg.statusCode === 200 && payload.state === "CONFIRMED"
+    && msg._subscriptionBooking?.step === "lk1_checkout_saved" && checkout
+    && payload.paymentUrl === checkout.paymentUrl && payload.transactionId === checkout.transactionId;
+  if (String(msg.req?.method || "").toUpperCase() === "POST" && !Array.isArray(payload)
+    && ((splitRoute && msg.statusCode === 201) || ((splitRoute || path === "/lk/subscription-bookings") && confirmedReplay) || confirmedCheckout)) {
+    payload = { ...payload };
+    for (const field of ["bookingId", "transactionId", "productId", "exerciseId"]) {
+      if (typeof payload[field] === "string" || (typeof payload[field] === "number" && Number.isFinite(payload[field]))) {
+        references[field] = payload[field];
+        delete payload[field];
+      }
+    }
+    if (typeof payload.paymentUrl === "string" && /^https?:\\/\\/[^/?#\\s]+(?:[/?#][^\\s]*)?$/i.test(payload.paymentUrl)) {
+      references.paymentUrl = payload.paymentUrl.replace(/([?&][^=&#]*(?:phone|mobile|telephone|msisdn)[^=&#]*=)[^&#]*/gi, "$1[redacted]");
+      delete payload.paymentUrl;
+    }
+  }
+  msg.payload = Object.assign(privacy.project(payload, { scope, viewer, kind }), references);
   msg.headers = { ...(msg.headers || {}), "Cache-Control": "no-store" };
   return msg;
 } catch (error) { ${privacyErrorSource} return msg; }
