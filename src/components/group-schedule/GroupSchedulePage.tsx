@@ -20,6 +20,7 @@ import {
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isProTraining } from "../../utils/proTrainingExclusion";
+import { isTopokratyClubPack, isTopokratyExercise } from "../../utils/topokratyExclusion";
 import { getProEnergyPackName, getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
 import { hasGroupTrainingSubscription, hasGroupTrainingSubscriptionEvidence } from "../../utils/groupScheduleSubscriptionOffer";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
@@ -393,6 +394,17 @@ export default function GroupSchedulePage({
     () => Boolean(selectedDetail && isProTraining(selectedDetail)),
     [selectedDetail],
   );
+  // Топократы: общие подписки («РА», «Академия», «Дружба») Viva не переносит на клубные
+  // направления 6180/6233 и отклоняет запись. Событие остаётся записываемым разовой
+  // оплатой; подписка предлагается только клубная «Дружба Топократы», в правилах которой
+  // живёт доплата за 1/4 корта. Поэтому при её отсутствии окно ведёт себя как для ПРО.
+  const topokratyTrainingSelected = useMemo(
+    () => Boolean(selectedDetail && isTopokratyExercise(selectedDetail)),
+    [selectedDetail],
+  );
+  const topokratyClubOwned = Boolean(checkout
+    && (checkout.clientSubscriptions ?? []).some((row) => isTopokratyClubPack(row)));
+  const topokratyExcluded = topokratyTrainingSelected && !topokratyClubOwned;
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -589,9 +601,10 @@ export default function GroupSchedulePage({
     const controller = new AbortController();
     const actorId = checkout.profile.id;
     const resolvedFor = `${selectedId}:${actorId}`;
-    // A PRO training carries no subscription benefit at all: the check is resolved
-    // without a request, so the screen never waits for or renders a discount.
-    if (proTrainingSelected) {
+    // A PRO training carries no subscription benefit at all, and a Topokraty event has
+    // none outside the club product: the check is resolved without a request, so the
+    // screen never waits for or renders a discount it cannot get.
+    if (proTrainingSelected || topokratyExcluded) {
       setDiscountResolvedFor(resolvedFor);
       return;
     }
@@ -619,7 +632,7 @@ export default function GroupSchedulePage({
       setDiscountLoading(false);
     });
     return () => controller.abort();
-  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected]);
+  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, topokratyExcluded]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -714,7 +727,7 @@ export default function GroupSchedulePage({
   const discountContextKey = `${selectedId}:${checkout?.profile?.id}`;
   // A PRO training never waits for a quote: there is no subscription benefit to check, so
   // the pending state (and its "Проверяем скидку по подписке…" line) stays off for it.
-  const discountPending = Boolean(checkout && !proTrainingSelected
+  const discountPending = Boolean(checkout && !proTrainingSelected && !topokratyExcluded
     && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
@@ -723,12 +736,13 @@ export default function GroupSchedulePage({
   // purchase nor an owned pack is a way to pay for it.
   const purchasableProducts = !checkout
     ? []
-    : proTrainingSelected ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
+    : proTrainingSelected || topokratyExcluded ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
   // Owned subscriptions stay bookable on their own terms when the price check proves no
   // managed discount for them (a plan sold before the LK1 rule is quoted at zero percent).
   const ownedSubscriptions = checkout
     ? proTrainingSelected
       ? getGroupScheduleOwnedPacks(checkout.clientSubscriptions)
+      : topokratyExcluded ? []
       : getGroupScheduleOwnedSubscriptions(checkout.clientSubscriptions, discountPending ? null : currentDiscountQuotes)
     : [];
   const isGamePlusTrainerDetail = selectedTraining ? isGamePlusTrainerSummary(selectedTraining) : false;
@@ -737,7 +751,7 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !proTrainingSelected
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !proTrainingSelected && !topokratyExcluded
     && subscriptionOffer?.owner === phone
     && subscriptionOffer?.show && !discountPending
     && !hasGroupTrainingSubscriptionEvidence(checkout.clientSubscriptions, currentDiscountQuotes));

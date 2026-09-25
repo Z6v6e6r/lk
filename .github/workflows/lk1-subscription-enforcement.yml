@@ -407,6 +407,7 @@ jobs:
           scripts/tests/proTrainingExclusion.test.ts
           scripts/tests/proTrainingExclusion.nodered.test.mjs
           scripts/tests/proTrainingExclusionHotfix.test.mjs
+          scripts/tests/topokratyExclusion.test.ts
           scripts/tests/groupSubscriptionDiscount.test.ts
           scripts/tests/tournamentSubscriptionDiscount.test.ts
           scripts/tests/tournamentSignup.checkoutReadiness.test.ts
@@ -432,6 +433,7 @@ jobs:
           scripts/tests/lk1PreviewFreeFirstEventHotfix.test.mjs
           scripts/tests/lk1TopokratyFriendship.test.mjs
           scripts/tests/topokratyFriendshipHotfix.test.mjs
+          scripts/tests/topokratyRejectionReclaimHotfix.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
           scripts/tests/subscriptionHubLimitPatch.test.mjs

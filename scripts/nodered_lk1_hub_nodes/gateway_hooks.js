@@ -151,6 +151,20 @@ if (resolveCategory(exercise) === "group_training"
     code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
   });
 }
+// A Topokraty event is outside every non-club subscription. Viva scopes a sold plan to its
+// own directions and exercise types, so carrying «РА», «Академия» or «Дружба» to direction
+// 6180/6233 is refused by the provider with 400 BAD_REQUEST after the contour has already
+// promised the benefit. The club product «Дружба Топократы» keeps its own plan rule (the
+// quarter-of-court co-pay) and is therefore the only owned row allowed here; every other
+// attempt is refused before the write and the event stays bookable as a one-off.
+if (resolveCategory(exercise) === "group_training"
+  && isTopokratyExercise(exercise)
+  && !(selectedOwned.length === 1 && isTopokratyClubPack(selectedOwned[0]))) {
+  return finishError(ctx, 409,
+    "На тренировки Топократов общие подписки не действуют: доступна разовая оплата или клубная подписка «Дружба Топократы»", {
+      code: "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
+    });
+}
 // The selected instance is resolved first: it carries the product identity and the
 // sale date of the concrete subscription, not of a sibling the client also owns.
 // The booking target's station is part of the contour verdict: an excluded station keeps

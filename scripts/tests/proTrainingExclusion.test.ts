@@ -70,11 +70,13 @@ test("the group schedule screen offers no subscription path for PRO trainings", 
   assert.match(groupSchedulePageSource, /import \{ isProTraining \} from "\.\.\/\.\.\/utils\/proTrainingExclusion";/);
   assert.match(groupSchedulePageSource, /const proTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isProTraining\(selectedDetail\)\),/);
   // No quote is requested, so no discount row and no subscription booking product can render.
-  assert.match(groupSchedulePageSource, /if \(proTrainingSelected\) \{\s*setDiscountResolvedFor\(resolvedFor\);\s*return;\s*\}/);
-  assert.match(groupSchedulePageSource, /: proTrainingSelected \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
+  // The Topokraty exclusion (2026-09-25) shares this branch: both flags resolve the discount
+  // without a request.
+  assert.match(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\) \{\s*setDiscountResolvedFor\(resolvedFor\);\s*return;\s*\}/);
+  assert.match(groupSchedulePageSource, /: proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
   assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout\s*\?\s*proTrainingSelected\s*\?/);
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);
-  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !proTrainingSelected/);
+  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !proTrainingSelected && !topokratyExcluded/);
   assert.match(groupSchedulePageSource, /subscriptionUsageShadowEnabled && !proTrainingSelected/);
   assert.doesNotMatch(groupSchedulePageSource, /ПРО-тренировка оплачивается по полной цене/);
   // Promo codes stay available: the promo section is not part of the PRO exclusion.
