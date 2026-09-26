@@ -91,7 +91,6 @@ export const TOPOKRATY_COPAY_PREVIEW_INSTALLED = Object.freeze({
 export const TOPOKRATY_COPAY_PATCH_MARKER = "lk1EventPaymentQuoteBinding";
 export const TOPOKRATY_COPAY_CLUB_MARKER = "lk1ClubEventPaymentBinding";
 
-const REVIEWED_EVENT_PAYMENTS = "scripts/nodered_lk1_hub_nodes/event_payments.js";
 const CLUB_FRAGMENT_START = "// The club training («Дружба Топократы», direction 6233) spends the free hour";
 const CLUB_FRAGMENT_END = "  lk1ClubEventPaymentBinding(ctx, quote) || lk1EventPaymentBinding(ctx, quote);\n";
 export const TOPOKRATY_COPAY_CLUB_FRAGMENT_SHA256 =
