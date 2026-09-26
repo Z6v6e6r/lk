@@ -434,6 +434,7 @@ jobs:
           scripts/tests/lk1TopokratyFriendship.test.mjs
           scripts/tests/topokratyFriendshipHotfix.test.mjs
           scripts/tests/topokratyRejectionReclaimHotfix.test.mjs
+          scripts/tests/lk1TopokratyCopayHotfix.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
           scripts/tests/subscriptionHubLimitPatch.test.mjs
