@@ -470,6 +470,10 @@ jobs:
           node --test
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
+          scripts/tests/publicPhonePrivacy.test.mjs
+          scripts/tests/phonePrivacyCandidate.test.mjs
+          scripts/tests/tournamentJson.test.ts
+          scripts/tests/frontendPhoneIdentity.test.mjs
 
       - name: Run Partner membership R4 gates
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

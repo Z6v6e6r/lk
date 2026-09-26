@@ -12,6 +12,7 @@ import {
   type UIEventHandler,
 } from "react";
 import type { CommunityChatMessage, CommunityRecord } from "../../../utils/communityApi";
+import { getIdentityKey, isViewerIdentity } from "../../../utils/viewerIdentity";
 import { MembersCountIcon } from "./CommunityIcons";
 import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from "./CommunitySecondaryNav";
 import { formatFeedDayLabel, formatFeedTimeLabel } from "./feedFormatters";
@@ -150,28 +151,18 @@ function isMineMessage(
   const authorId = normalizeIdentity(message.authorId);
   const authorPhone = normalizePhone(message.authorPhone);
 
-  return Boolean(
-    (authorId && currentUserId && authorId === currentUserId)
-    || (authorPhone && currentUserPhone && authorPhone === currentUserPhone),
-  );
+  return isViewerIdentity({ id: authorId, phone: authorPhone, isViewer: message.authorIsViewer }, {
+    id: currentUserId,
+    phone: currentUserPhone,
+  });
 }
 
 function areMessagesFromSameAuthor(left: CommunityChatMessage | null, right: CommunityChatMessage) {
   if (!left) return false;
 
-  const leftAuthorId = normalizeIdentity(left.authorId);
-  const rightAuthorId = normalizeIdentity(right.authorId);
-  if (leftAuthorId && rightAuthorId && leftAuthorId === rightAuthorId) {
-    return true;
-  }
-
-  const leftAuthorPhone = normalizePhone(left.authorPhone);
-  const rightAuthorPhone = normalizePhone(right.authorPhone);
-  return Boolean(
-    leftAuthorPhone
-    && rightAuthorPhone
-    && leftAuthorPhone === rightAuthorPhone,
-  );
+  const leftKey = getIdentityKey({ id: left.authorId, phone: left.authorPhone });
+  const rightKey = getIdentityKey({ id: right.authorId, phone: right.authorPhone });
+  return Boolean(leftKey && leftKey === rightKey);
 }
 
 function buildChatDisplayItems(

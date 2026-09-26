@@ -703,6 +703,7 @@ function mergePadelGamePlayers(current: PadelGamePlayer[] = [], incoming: PadelG
       memberKey: player.memberKey ?? existing.memberKey ?? null,
       membershipId: player.membershipId ?? existing.membershipId ?? null,
       id: player.id ?? existing.id,
+      isViewer: player.isViewer ?? existing.isViewer,
       name: player.name || existing.name,
       phone: player.phone ?? existing.phone,
       photo: player.photo ?? existing.photo,
@@ -3106,6 +3107,7 @@ export interface PadelGamePlayer {
   id: string | null;
   name: string;
   phone: string | null;
+  isViewer?: boolean;
   photo?: string | null;
   rating?: string | null;
   ratingNumeric?: number | null;
@@ -3125,6 +3127,7 @@ export interface PadelGameRecordPayload {
     id: string | null;
     name: string | null;
     phone: string | null;
+    isViewer?: boolean;
     photo?: string | null;
     rating?: string | null;
     ratingNumeric?: number | null;
@@ -3195,6 +3198,7 @@ export interface PadelGameRecord {
     id: string | null;
     name: string | null;
     phone: string | null;
+    isViewer?: boolean;
     photo: string | null;
     rating: string | null;
     ratingNumeric?: number | null;
@@ -3393,6 +3397,7 @@ export interface PadelLiveRatingItem {
 export interface PadelGameChatMessageSender {
   id: string | null;
   phoneNorm: string | null;
+  isViewer?: boolean;
   name: string | null;
   role: string | null;
 }
@@ -3433,6 +3438,8 @@ export interface PadelChatSummaryItem {
   lastMessageAt: string | null;
   lastMessageText: string;
   lastMessageSenderPhone: string | null;
+  lastMessageSenderId?: string | null;
+  lastMessageIsViewer?: boolean;
 }
 
 export interface PadelChatsByPhoneResponse {
@@ -6174,6 +6181,7 @@ function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
     memberKey: memberKey ?? null,
     membershipId: membershipId ?? null,
     id: id ?? null,
+    ...(typeof item.isViewer === "boolean" ? { isViewer: item.isViewer } : {}),
     name: fullName || "Игрок",
     phone: phone ?? null,
     photo: photo ?? null,
@@ -6320,6 +6328,7 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
               return [nameValue, lastName].filter(Boolean).join(" ").trim() || nameValue;
             })() ?? null,
             phone: pickString(organizerPayload, ["phone", "phoneNumber", "mobile"]),
+            ...(typeof organizerPayload.isViewer === "boolean" ? { isViewer: organizerPayload.isViewer } : {}),
             photo: pickString(organizerPayload, ["photo", "avatar", "imageUrl"]),
             rating: normalizedRating.rating,
             ratingNumeric: normalizedRating.ratingNumeric,
@@ -6333,6 +6342,7 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
         id: organizer.id ?? null,
         name: organizer.name || "Организатор",
         phone: organizer.phone ?? null,
+        isViewer: organizer.isViewer,
         photo: organizer.photo ?? null,
         rating: organizer.rating ?? null,
         ratingNumeric: organizer.ratingNumeric ?? null,
@@ -6561,6 +6571,7 @@ function normalizeChatMessageSender(payload: unknown): PadelGameChatMessageSende
   return {
     id: pickString(payload, ["id", "clientId", "userId", "uuid"]),
     phoneNorm: pickString(payload, ["phoneNorm", "phone", "phoneNumber"]),
+    ...(typeof payload.isViewer === "boolean" ? { isViewer: payload.isViewer } : {}),
     name: pickString(payload, ["name", "fullName", "displayName"]),
     role: pickString(payload, ["role", "type", "source"]),
   };
@@ -6644,7 +6655,7 @@ function extractPadelChatsByPhone(payload: unknown): PadelChatsByPhoneResponse |
         : [];
 
   const chats = rowsRaw
-    .map((item) => {
+    .map((item): PadelChatSummaryItem | null => {
       if (!isRecord(item)) return null;
       const gameId = pickString(item, ["gameId", "id"]);
       if (!gameId) return null;
@@ -6661,6 +6672,10 @@ function extractPadelChatsByPhone(payload: unknown): PadelChatsByPhoneResponse |
         lastMessageText: pickString(lastMessagePayload, ["text", "message", "body"]) ?? "",
         lastMessageSenderPhone:
           pickString(senderPayload ?? {}, ["phoneNorm", "phone", "phoneNumber"]) ?? null,
+        lastMessageSenderId: pickString(senderPayload ?? {}, ["id", "clientId", "userId", "uuid"]),
+        ...(typeof senderPayload?.isViewer === "boolean"
+          ? { lastMessageIsViewer: senderPayload.isViewer }
+          : {}),
       } satisfies PadelChatSummaryItem;
     })
     .filter((item): item is PadelChatSummaryItem => item !== null)
