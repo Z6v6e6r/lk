@@ -51,14 +51,19 @@ if (viewerIdentityFilters.length > 0) {
 
 const summaryProjection = {
   _id: 0,
+  archived: 1,
   id: 1,
   communityId: 1,
   name: 1,
   title: 1,
   slug: 1,
+  logo: 1,
   logoUrl: 1,
   logoThumbUrl: 1,
+  logoThumb: 1,
+  thumbnailUrl: 1,
   logoAssetId: 1,
+  logoLegacyDataUrl: 1,
   imageUrl: 1,
   visibility: 1,
   description: 1,
@@ -88,16 +93,63 @@ const summaryProjection = {
   verificationStatus: 1,
   statusVerification: 1,
   verifiedAt: 1,
+  _summaryMemberCount: { $size: { $cond: [{ $isArray: '$members' }, '$members', []] } },
+  _summaryPendingCount: { $size: { $cond: [{ $isArray: '$pendingMembers' }, '$pendingMembers', []] } },
+  _summaryBannedCount: { $size: { $cond: [{ $isArray: '$bannedMembers' }, '$bannedMembers', []] } },
 };
 if (viewerIdentityFilters.length > 0) {
-  const viewerMatch = { $or: viewerIdentityFilters };
-  summaryProjection.members = { $elemMatch: viewerMatch };
-  summaryProjection.pendingMembers = { $elemMatch: viewerMatch };
+  // $elemMatch returns the first raw match, which may not be the member chosen by
+  // buildMember/matchesIdentity when older rows contain conflicting ID aliases.
+  const unsupported = '__community_identity_conversion_error__';
+  const asString = (field) => ({
+    $convert: { input: field, to: 'string', onError: unsupported, onNull: '' },
+  });
+  const matchesPattern = (field, pattern) => ({
+    $let: {
+      vars: { value: asString(field) },
+      in: {
+        $or: [
+          { $eq: ['$$value', unsupported] },
+          { $regexMatch: { input: '$$value', regex: pattern } },
+        ],
+      },
+    },
+  });
+  const idPattern = msg._communityList.clientId
+    ? new RegExp('^\\s*' + msg._communityList.clientId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$')
+    : null;
+  const phoneVariants = msg._communityList.phone
+    ? [
+      msg._communityList.phone,
+      ...(msg._communityList.phone.length === 11 && msg._communityList.phone.startsWith('7')
+        ? [msg._communityList.phone.slice(1), '8' + msg._communityList.phone.slice(1)]
+        : []),
+    ]
+    : [];
+  const phonePattern = phoneVariants.length
+    ? new RegExp('^\\D*(?:' + Array.from(new Set(phoneVariants))
+      .map((variant) => variant.split('').join('\\D*')).join('|') + ')\\D*$')
+    : null;
+  const memberMatches = [
+    ...(idPattern ? ['id', 'clientId', 'userId', 'uuid']
+      .map((field) => matchesPattern('$$candidate.' + field, idPattern)) : []),
+    ...(phonePattern ? ['phone', 'phoneNorm', 'phoneNumber', 'mobile']
+      .map((field) => matchesPattern('$$candidate.' + field, phonePattern)) : []),
+  ];
+  const matchingRoster = (field) => ({
+    $filter: {
+      input: { $cond: [{ $isArray: '$' + field }, '$' + field, []] },
+      as: 'candidate',
+      cond: { $or: memberMatches },
+    },
+  });
+  summaryProjection.members = matchingRoster('members');
+  summaryProjection.pendingMembers = matchingRoster('pendingMembers');
 }
 
-msg.payload = {
+const summaryQuery = {
   ...listQuery,
   $or: accessFilters,
 };
-msg.projection = summaryProjection;
+msg.payload = [summaryQuery, { projection: summaryProjection }];
 return [msg, null, msg];

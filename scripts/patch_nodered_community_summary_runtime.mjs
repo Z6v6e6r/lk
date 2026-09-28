@@ -83,8 +83,8 @@ const patchedResponseFunc = replaceTail(
   'communities list response',
 );
 
-if (!patchedPrepareFunc.includes('msg.projection = summaryProjection;')) {
-  throw new Error('Patched prepare function does not set msg.projection');
+if (!patchedPrepareFunc.includes('msg.payload = [summaryQuery, { projection: summaryProjection }];')) {
+  throw new Error('Canonical community summary source does not pass MongoDB projection options');
 }
 if (!patchedResponseFunc.includes('connections: isSummaryMode ? [] : buildConnections(scopedRows)')) {
   throw new Error('Patched response function still builds summary connections');
@@ -133,9 +133,10 @@ if (JSON.stringify(collectEndpoints(sourceFlow)) !== JSON.stringify(collectEndpo
 const prepareSmokeMsg = { req: { query: { view: 'summary' } } };
 new Function('msg', patchedPrepareFunc)(prepareSmokeMsg);
 if (
-  !prepareSmokeMsg.projection
-  || prepareSmokeMsg.projection.members !== undefined
-  || prepareSmokeMsg.payload?.archived?.$ne !== true
+  !Array.isArray(prepareSmokeMsg.payload)
+  || prepareSmokeMsg.payload[0]?.archived?.$ne !== true
+  || !prepareSmokeMsg.payload[1]?.projection
+  || prepareSmokeMsg.payload[1].projection.members !== undefined
 ) {
   throw new Error('Summary prepare runtime smoke-check failed');
 }

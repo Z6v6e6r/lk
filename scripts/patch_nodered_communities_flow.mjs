@@ -12,6 +12,10 @@ const listPrepareTail = fs.readFileSync(
   path.resolve(workspaceRoot, 'scripts/nodered_community_list_nodes/fn_list_prepare_tail.js'),
   'utf8',
 );
+const listResponseTail = fs.readFileSync(
+  path.resolve(workspaceRoot, 'scripts/nodered_community_list_nodes/fn_list_response_tail.js'),
+  'utf8',
+);
 
 const commonHelpers = String.raw`
 const isObj = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -1541,30 +1545,7 @@ const fnListPrepare = `${commonHelpers}
 ${listPrepareTail}`;
 
 const fnListResponse = `${commonHelpers}
-const ctx = isObj(msg._communityList) ? msg._communityList : {};
-const publicBaseUrl = buildPublicBaseUrl(msg.req);
-const rows = toArray(msg.payload).filter((item) => !item?.archived);
-const isSummaryMode = ctx.listMode === 'SUMMARY';
-const scopedRows = isSummaryMode
-  ? rows.filter((item) => canListCommunityForViewer(item, ctx.clientId, ctx.phone))
-  : rows;
-const communities = scopedRows
-  .map((item) => (
-    isSummaryMode
-      ? normalizeCommunitySummaryForResponse(item, ctx.clientId, ctx.phone, { publicBaseUrl })
-      : normalizeCommunityForResponse(item, { publicBaseUrl })
-  ))
-  .sort((left, right) => Date.parse(right.createdAt || nowIso) - Date.parse(left.createdAt || nowIso));
-
-msg.statusCode = 200;
-msg.headers = jsonHeaders;
-msg.payload = {
-  communities,
-  connections: isSummaryMode ? [] : buildConnections(scopedRows),
-  total: communities.length,
-};
-return [msg, msg];
-`;
+${listResponseTail}`;
 
 const fnGetPrepare = `${commonHelpers}
 const communityId = toStr(msg.req?.params?.communityId);
