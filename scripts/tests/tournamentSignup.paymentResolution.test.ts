@@ -168,31 +168,62 @@ test("transaction payload includes redirect aliases used by working Viva flows",
   assert.equal(payload.promoCode, "PIK-PADELHUB");
 });
 
+function buildVivaStatusReader() {
+  const isRecord = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const pickString = (value: Record<string, unknown> | null, keys: string[]) => {
+    if (!value) return null;
+    for (const key of keys) {
+      const candidate = value[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return null;
+  };
+
+  const readConstArray = (name: string) => {
+    const match = source.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
+    assert.ok(match, `Cannot find const ${name}`);
+    return JSON.parse(`[${match[1]}]`) as string[];
+  };
+
+  const readVivaTransactionStatus = new Function(
+    "isRecord",
+    "pickString",
+    `return ${toRunnableFunctionExpression("function readVivaTransactionStatus")};`,
+  )(isRecord, pickString) as (payload: unknown) => string | null;
+
+  const readVivaTransactionPaid = new Function(
+    "readVivaTransactionStatus",
+    "VIVA_PAID_TRANSACTION_STATUSES",
+    "VIVA_UNPAID_TRANSACTION_STATUSES",
+    `return ${toRunnableFunctionExpression("function readVivaTransactionPaid")};`,
+  )(
+    readVivaTransactionStatus,
+    readConstArray("VIVA_PAID_TRANSACTION_STATUSES"),
+    readConstArray("VIVA_UNPAID_TRANSACTION_STATUSES"),
+  ) as (payload: unknown) => boolean | null;
+
+  return { isRecord, readVivaTransactionPaid };
+}
+
 test("transaction status is read from the v2 /status route used by the official widget", async () => {
-  const seenRequests: Array<{ url: string; options: { method?: string; auth?: boolean } }> = [];
+  const { readVivaTransactionPaid } = buildVivaStatusReader();
+  const { extractPaymentUrl } = buildReadVivaOperationResolution();
+  const seenRequests: Array<{ url: string; options: unknown }> = [];
+  let payload: unknown = { transactionStatus: "PAID", toPay: 0 };
   const fetchStatus = new Function(
     "TENANT_KEY",
     "request",
-    "normalizeTournamentVivaTransactionResolution",
+    "readVivaTransactionPaid",
+    "extractPaymentUrl",
     `return ${toRunnableFunctionExpression("async function fetchTournamentVivaTransactionResolution")};`,
   )(
     "iSkq6G",
-    async (url: string, options: { method?: string; auth?: boolean }) => {
+    async (url: string, options: unknown) => {
       seenRequests.push({ url, options });
-      return {
-        data: { transactionStatus: "PAID", toPay: 0 },
-        error: null,
-        status: 200,
-      };
+      return { data: payload, error: null, status: 200 };
     },
-    (payload: Record<string, unknown>, fallbackPaymentExpiresAt: string | null) => ({
-      paymentUrl: typeof payload.paymentUrl === "string" ? payload.paymentUrl : null,
-      bookingId: typeof payload.bookingId === "string" ? payload.bookingId : null,
-      toPay: typeof payload.toPay === "number" ? payload.toPay : null,
-      paid: payload.transactionStatus === "PAID",
-      paymentExpiresAt: fallbackPaymentExpiresAt,
-      raw: payload,
-    }),
+    readVivaTransactionPaid,
+    extractPaymentUrl,
   ) as (
     transactionId: string,
     fallbackPaymentExpiresAt: string | null,
@@ -205,15 +236,48 @@ test("transaction status is read from the v2 /status route used by the official 
     raw: unknown;
   } | null>;
 
-  const resolution = await fetchStatus("tx-1", "2026-06-03T10:00:00.000Z");
+  const paid = await fetchStatus("tx-1", "2026-06-03T10:00:00.000Z");
 
   // The flat `/transactions/{id}` route queried before is not part of the partner
   // end-user API (it answered 404 for every id); the official widget uses `/status`.
   assert.deepEqual(seenRequests, [
     { url: "/end-user/api/v2/iSkq6G/transactions/tx-1/status", options: { method: "GET", auth: true, retries: 1 } },
   ]);
-  assert.equal(resolution?.paid, true);
-  assert.equal(resolution?.paymentExpiresAt, "2026-06-03T10:00:00.000Z");
+  assert.equal(paid?.paid, true);
+  assert.equal(paid?.paymentExpiresAt, "2026-06-03T10:00:00.000Z");
+
+  // The live incident state: Viva answers UNPAID while the link is still unpaid. The
+  // channel must return nothing instead of reporting a completed payment.
+  for (const status of ["UNPAID", "WAITING", "REFUND", "CANCELLED"]) {
+    payload = { transactionStatus: status, toPay: 101000 };
+    assert.equal(await fetchStatus("tx-1", null), null, `status ${status} must not resolve`);
+  }
+});
+
+test("Viva status tokens are classified exactly and UNPAID is never a payment", () => {
+  const { isRecord, readVivaTransactionPaid } = buildVivaStatusReader();
+
+  assert.equal(readVivaTransactionPaid({ transactionStatus: "PAID" }), true);
+  assert.equal(readVivaTransactionPaid({ transactionStatus: "COMPLETED" }), true);
+  assert.equal(readVivaTransactionPaid({ transactionStatus: "UNPAID" }), false);
+  assert.equal(readVivaTransactionPaid({ data: { transactionStatus: "UNPAID" } }), false);
+  assert.equal(readVivaTransactionPaid({ transactionStatus: "WAITING" }), false);
+  assert.equal(readVivaTransactionPaid({ transactionStatus: "REFUND" }), false);
+  assert.equal(readVivaTransactionPaid({ status: "CANCELLED" }), false);
+  assert.equal(readVivaTransactionPaid({ transactionStatus: "SOMETHING_NEW" }), null);
+  assert.equal(readVivaTransactionPaid(null), null);
+
+  // Why the exact classification exists: the shared heuristic matches substrings, so
+  // "UNPAID" also contains "PAID" and would have reported the incident transaction as
+  // paid. This pin fails if that heuristic is ever tightened (then the local classifier
+  // may be redundant, but never wrong).
+  const hasPaidPaymentStatus = new Function(
+    "isRecord",
+    `return ${toRunnableFunctionExpression("function hasPaidPaymentStatus")
+      .replace(/: unknown/g, "")
+      .replace(/: boolean \| null/g, "")};`,
+  )(isRecord) as (payload: unknown) => boolean;
+  assert.equal(hasPaidPaymentStatus({ transactionStatus: "UNPAID" }), true);
 });
 
 function buildReadVivaOperationResolution() {
@@ -304,19 +368,25 @@ function buildReadVivaOperationResolution() {
     raw: unknown;
   } | null;
 
-  return { isRecord, readVivaOperationResolution };
+  return { isRecord, extractPaymentUrl, readVivaOperationResolution };
 }
 
-// Live 2026-09-28 case: the transaction bb95f4f5… was created in Viva with
-// cardPaymentInfo.paymentUrl, the websocket event never reached the client and the client
-// had no operation readback, so the payer saw "Не удалось получить ссылку на оплату".
+// Live 2026-09-28 case (Viva Admin API, read-only): transaction bb95f4f5… was created at
+// 13:19:22 MSK with cardPaymentInfo.paymentUrl (host pay.vivacrm.ru) and
+// paymentDueDate 13:39:22; the websocket event never reached the client and the client had
+// no operation readback, so the payer saw "Не удалось получить ссылку на оплату".
+// The contract itself is first-party: Viva's own widget bundle
+// (cabinet.vivacrm.ru/vc-widget-group-classes.js) creates the transaction, uses its `id`
+// as `correlationId` and polls `GET /end-user/api/v2/{tenant}/operations/{correlationId}`,
+// reading `result.paymentUrl` / `result.paymentDueDate`. The checkout token itself is not
+// committed: this fixture keeps the observed shape with a synthetic token.
 const liveOperationStatusPayload = {
   correlationId: "bb95f4f5-8aed-4433-8971-8a34df0b54af",
   status: "ACCEPTED",
   progress: { current: 1, total: 1 },
   result: {
     bookingId: "a7d40555-6e7c-4e0b-a17f-3c4988e46e34",
-    paymentUrl: "https://pay.vivacrm.ru/Fw6cae9WH6bYr9bUAtESZQ",
+    paymentUrl: "https://pay.vivacrm.ru/SYNTHETICcheckoutToken0000000000",
     paymentDueDate: "2026-09-28T13:39:22.513+03:00",
   },
   error: null,
@@ -361,7 +431,7 @@ test("the Viva operation status carries the checkout link the socket event may m
       options: { method: "GET", auth: true, retries: 1 },
     },
   ]);
-  assert.equal(resolution?.paymentUrl, "https://pay.vivacrm.ru/Fw6cae9WH6bYr9bUAtESZQ");
+  assert.equal(resolution?.paymentUrl, "https://pay.vivacrm.ru/SYNTHETICcheckoutToken0000000000");
   assert.equal(resolution?.bookingId, "a7d40555-6e7c-4e0b-a17f-3c4988e46e34");
   assert.equal(resolution?.paymentExpiresAt, "2026-09-28T13:39:22.513+03:00");
   assert.equal(resolution?.paid, false);
@@ -373,6 +443,18 @@ test("the Viva operation status carries the checkout link the socket event may m
   );
   assert.equal(failed?.paymentUrl, null);
   assert.equal(readVivaFailureCode(failed?.raw), "NO_AVAILABLE_SPOTS");
+
+  // A failed operation must never hand a leftover link to the payer as a success.
+  const failedWithLeftoverLink = readVivaOperationResolution(
+    {
+      status: "FAILED",
+      error: { code: "NO_AVAILABLE_SPOTS" },
+      result: { paymentUrl: "https://pay.vivacrm.ru/leftover" },
+    },
+    null,
+  );
+  assert.equal(failedWithLeftoverLink?.paymentUrl, null);
+  assert.equal(readVivaFailureCode(failedWithLeftoverLink?.raw), "NO_AVAILABLE_SPOTS");
 
   // Nothing to resolve while the operation is in flight, and unusable values stay out.
   assert.equal(readVivaOperationResolution({ status: "IN_PROGRESS", result: {} }, null), null);
@@ -397,14 +479,16 @@ test("the payment flow polls the Viva operation status and the corrected status 
   );
   assert.match(
     source,
-    /"\/end-user\/api\/v2\/" \+ TENANT_KEY \+ "\/transactions\/" \+ encodedTransactionId \+ "\/status"/,
+    /\/end-user\/api\/v2\/\$\{TENANT_KEY\}\/transactions\/\$\{encodeURIComponent\(normalizedTransactionId\)\}\/status/,
   );
+  // Only a confirmed payment may resolve the status channel.
+  assert.match(source, /readVivaTransactionPaid\(result\.data\) !== true/);
   assert.match(source, /pollTournamentVivaOperationResolution\(transactionId, transactionStartedAtMs\)/);
   assert.match(source, /pollTournamentVivaTransactionResolution\(transactionId, transactionStartedAtMs\)/);
   // The dead flat route must not come back: it answered 404 for every transaction id.
   assert.doesNotMatch(
     source,
-    /"\/end-user\/api\/v2\/" \+ TENANT_KEY \+ "\/transactions\/" \+ encodedTransactionId,/,
+    /transactions\/\$\{encodeURIComponent\(normalizedTransactionId\)\}`/,
   );
 });
 
