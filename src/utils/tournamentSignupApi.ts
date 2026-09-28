@@ -1208,6 +1208,56 @@ async function fetchTournamentVivaPaymentResolution(
   return null;
 }
 
+function isVivaFailedOperation(payload: unknown): boolean {
+  return isRecord(payload)
+    && String(pickString(payload, ["status"]) || "").toUpperCase() === "FAILED";
+}
+
+// Viva's own widget resolves the checkout link from the operation status; the websocket
+// `TRANSACTION_CREATED` event is only its fast path. This client had no operation readback
+// at all, so a missed event left the payer with "Не удалось получить ссылку на оплату"
+// although Viva had already created the link (live 2026-09-28 case).
+function readVivaOperationResolution(
+  payload: unknown,
+  fallbackPaymentExpiresAt: string | null,
+): TournamentVivaPaymentResolution | null {
+  if (!isRecord(payload)) return null;
+
+  const paymentUrl = extractPaymentUrl(payload);
+  // A failed operation carries no link, but its payload must reach the caller so the
+  // screen can name Viva's own error code instead of a bare transaction id.
+  if (!paymentUrl && !isVivaFailedOperation(payload)) return null;
+
+  return {
+    paymentUrl,
+    bookingId: extractBookingId(payload),
+    toPay: null,
+    paid: false,
+    paymentExpiresAt: readVivaPaymentDueDate(payload) ?? fallbackPaymentExpiresAt,
+    raw: payload,
+  };
+}
+
+async function fetchTournamentVivaOperationResolution(
+  transactionId: string,
+  fallbackPaymentExpiresAt: string | null,
+): Promise<TournamentVivaPaymentResolution | null> {
+  const normalizedTransactionId = String(transactionId || "").trim();
+  if (!normalizedTransactionId) return null;
+
+  const result = await request<unknown>(
+    `/end-user/api/v2/${TENANT_KEY}/operations/${encodeURIComponent(normalizedTransactionId)}`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+    },
+  );
+  if (result.error) return null;
+
+  return readVivaOperationResolution(result.data, fallbackPaymentExpiresAt);
+}
+
 async function fetchTournamentVivaTransactionResolution(
   transactionId: string,
   fallbackPaymentExpiresAt: string | null,
@@ -1216,9 +1266,12 @@ async function fetchTournamentVivaTransactionResolution(
   if (!normalizedTransactionId) return null;
 
   const encodedTransactionId = encodeURIComponent(normalizedTransactionId);
+  // Viva's own widget reads the terminal state from `transactionStatus` on
+  // `/transactions/{id}/status` (PAID/UNPAID/WAITING/REFUND). The flat
+  // `/transactions/{id}` route this client queried before is not part of the partner
+  // end-user API and answered 404 for every id, so the lookup could never resolve.
   const paths = [
-    "/end-user/api/v2/" + TENANT_KEY + "/transactions/" + encodedTransactionId,
-    "/end-user/api/v1/" + TENANT_KEY + "/transactions/" + encodedTransactionId,
+    "/end-user/api/v2/" + TENANT_KEY + "/transactions/" + encodedTransactionId + "/status",
   ];
 
   for (const path of paths) {
@@ -1271,6 +1324,31 @@ async function pollTournamentVivaTransactionResolution(
     if (isResolvedTournamentVivaPayment(resolution)) return resolution;
     if (resolution) lastResolution = resolution;
     await wait(750);
+  }
+  return lastResolution;
+}
+
+async function pollTournamentVivaOperationResolution(
+  transactionId: string | null,
+  transactionStartedAtMs: number,
+): Promise<TournamentVivaPaymentResolution | null> {
+  const normalizedTransactionId = String(transactionId || "").trim();
+  if (!normalizedTransactionId) return null;
+
+  const fallbackPaymentExpiresAt = buildPaymentExpiresAt(transactionStartedAtMs);
+  let lastResolution: TournamentVivaPaymentResolution | null = null;
+  // Viva creates the checkout link asynchronously right after the transaction, so poll
+  // a little longer than the booking readback while the 25s budget still bounds it.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const resolution = await fetchTournamentVivaOperationResolution(
+      normalizedTransactionId,
+      fallbackPaymentExpiresAt,
+    );
+    if (isResolvedTournamentVivaPayment(resolution)) return resolution;
+    if (resolution) lastResolution = resolution;
+    // A failed operation is terminal: keep its payload for the diagnosis and stop.
+    if (isVivaFailedOperation(resolution?.raw)) return resolution;
+    await wait(1_000);
   }
   return lastResolution;
 }
@@ -3163,7 +3241,10 @@ export async function apiCreateTournamentVivaTransaction(
     pollTournamentVivaPaymentResolution(params.exerciseId, transactionId),
   ];
   if (transactionId) {
+    // The operation status is Viva's own checkout-link source; the websocket event alone
+    // cannot recover a link that was created but never delivered.
     paymentResolutionPromises.unshift(
+      pollTournamentVivaOperationResolution(transactionId, transactionStartedAtMs),
       pollTournamentVivaTransactionResolution(transactionId, transactionStartedAtMs),
     );
   }
