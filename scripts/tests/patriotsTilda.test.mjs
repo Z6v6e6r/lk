@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 const readBlock = name => readFileSync(new URL(`../../docs/patriots-tilda/${name}`, import.meta.url), 'utf8');
+const readTopocratyBlock = name => readFileSync(new URL(`../../docs/topocraty-tilda/${name}`, import.meta.url), 'utf8');
 const scripts = html => [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
 
 test('Patriots schedule contains the four exact Viva directions and LK booking filters', () => {
@@ -29,6 +30,32 @@ test('Patriots schedule contains the four exact Viva directions and LK booking f
   for (const category of active.window.LK_ATLANTY_SCHEDULE_CONFIG.categories.slice(1)) assert.match(category.badge, /2 750 ₽/);
   assert.match(html, /id="atlanty-schedule-root"/);
   assert.match(html, /\/lk\/atlanty-schedule\.js/);
+});
+
+test('Patriots cards retain Topocraty presentation settings and theme', () => {
+  const patriots = { window: {} };
+  const topocraty = { window: {} };
+  vm.runInNewContext(scripts(readBlock('2-events.html'))[0], patriots);
+  vm.runInNewContext(scripts(readTopocratyBlock('1-schedule-settings.html'))[0], topocraty);
+  for (const key of ['cardsPerView', 'pillIcon', 'avatarMode', 'seatsStyle', 'levelStyle', 'detailModal', 'imagePick']) {
+    assert.equal(patriots.window.LK_ATLANTY_SCHEDULE_CONFIG[key], topocraty.window.LK_ATLANTY_SCHEDULE_CONFIG[key], key);
+  }
+
+  const patriotTheme = readBlock('4-theme.html');
+  const topocratyTheme = readTopocratyBlock('5-schedule-theme.html');
+  const tokens = html => {
+    const block = html.match(/\.atlanty-schedule\s*\{([^}]*)\}/)?.[1];
+    assert.ok(block);
+    return Object.fromEntries([...block.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--atlanty-[\w-]+):\s*([^;]+);/g)]
+      .map(([, key, value]) => [key, value.trim()]));
+  };
+  assert.deepEqual(tokens(patriotTheme), tokens(topocratyTheme));
+  assert.deepEqual(patriotTheme.match(/--atlanty-card-width:\s*[^;]+;/g),
+    topocratyTheme.match(/--atlanty-card-width:\s*[^;]+;/g));
+  for (const selector of ['.atlanty-card-body', '.atlanty-card-title', '.atlanty-card-meta-row svg', '.atlanty-card-pill']) {
+    const rule = html => html.split('\n').find(line => line.includes(`${selector} {`))?.split('{')[1].trim();
+    assert.equal(rule(patriotTheme), rule(topocratyTheme), selector);
+  }
 });
 
 test('Patriots copy has the actual monthly subscription and no demo checkout or invented annual offer', () => {

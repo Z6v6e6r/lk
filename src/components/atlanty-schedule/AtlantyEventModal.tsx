@@ -232,8 +232,13 @@ export function AtlantyEventModalContent({
 
           <div className="atlanty-modal__actions">
             {bookingMode === "disabled" ? (
-              <button type="button" className="atlanty-modal__cta" disabled>
-                Запись подключается
+              <button
+                type="button"
+                className="atlanty-modal__cta atlanty-modal__cta--pending"
+                disabled
+                title="Запись откроется после подключения условий"
+              >
+                Записаться
               </button>
             ) : bookingMode === "lk" ? (
               <button

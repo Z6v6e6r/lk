@@ -261,6 +261,11 @@
   cursor: progress;
 }
 
+.atlanty-modal__cta--pending:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
 .atlanty-modal__booking-error {
   margin: 0;
   font-size: var(--atlanty-meta-size, 14px);

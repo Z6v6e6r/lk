@@ -54,7 +54,7 @@ test('disabled booking keeps event details but exposes no Viva booking link', ()
     onClose() {},
     bookingMode: 'disabled',
   }));
-  assert.match(modal, /<button[^>]*disabled=""[^>]*>Запись подключается<\/button>/);
-  assert.doesNotMatch(modal, /Записаться|href=/);
+  assert.match(modal, /<button[^>]*disabled=""[^>]*>Записаться<\/button>/);
+  assert.doesNotMatch(modal, /href=/);
   assert.match(modal, />Закрыть<\/button>/);
 });
