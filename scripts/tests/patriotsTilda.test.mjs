@@ -17,7 +17,7 @@ test('Patriots schedule contains the four exact Viva directions and LK booking f
   ]);
   assert.deepEqual(Array.from(config.bookingDirectionIds), [6181, 6306, 6307, 5278]);
   assert.deepEqual(Array.from(config.bookingAllowedTypeIds), [2349, 839]);
-  assert.equal(config.booking, 'lk');
+  assert.equal(config.booking, 'disabled');
   assert.equal(config.maxPerCategory, 6);
   for (const category of config.categories) assert.equal(category.badge, 'Условия подключаются');
   const active = { window: {} };
@@ -25,6 +25,7 @@ test('Patriots schedule contains the four exact Viva directions and LK booking f
     'window.PH_PATRIOTS_ENTITLEMENTS_READY = true;'))[0], active);
   assert.equal(active.window.LK_ATLANTY_SCHEDULE_CONFIG.categories[0].badge,
     'Первый час в день — 0 ₽ при менее 4 активных записях');
+  assert.equal(active.window.LK_ATLANTY_SCHEDULE_CONFIG.booking, 'lk');
   for (const category of active.window.LK_ATLANTY_SCHEDULE_CONFIG.categories.slice(1)) assert.match(category.badge, /2 750 ₽/);
   assert.match(html, /id="atlanty-schedule-root"/);
   assert.match(html, /\/lk\/atlanty-schedule\.js/);

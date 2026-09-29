@@ -281,11 +281,12 @@ export function buildAtlantyCategoryKey(category: AtlantyCategory) {
   return `${category.directionId ?? "x"}:${category.typeId ?? "x"}`;
 }
 
-/** Способ записи с карточки: официальный попап Viva или окно ЛК1 с контуром. */
-export type AtlantyBookingMode = "viva" | "lk";
+/** Способ записи с карточки: официальный попап Viva, окно ЛК1 или показ без записи. */
+export type AtlantyBookingMode = "viva" | "lk" | "disabled";
 
 export function normalizeAtlantyBookingMode(value: unknown): AtlantyBookingMode {
-  return String(value ?? "").trim().toLowerCase() === "lk" ? "lk" : "viva";
+  const mode = String(value ?? "").trim().toLowerCase();
+  return mode === "lk" || mode === "disabled" ? mode : "viva";
 }
 
 function parseAtlantyIdList(value: unknown): number[] | null {
