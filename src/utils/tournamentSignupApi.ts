@@ -1102,13 +1102,19 @@ function normalizeTournamentVivaPaymentResolution(value: unknown): TournamentViv
   if (!isRecord(value)) return null;
   const paymentUrl = extractPaymentUrl(value);
   const toPay = extractToPay(value);
-  const paid = hasPaidPaymentStatus(value)
-    ? true
-    : hasPendingPaymentStatus(value) || paymentUrl
-      ? false
-      : toPay != null && toPay <= 0
-        ? true
-        : null;
+  // Exact provider tokens decide first: a booking whose nested `transactionStatus` says
+  // "UNPAID" must stay unpaid and must not suppress a real checkout link. The legacy
+  // heuristics only cover payloads whose status vocabulary we do not recognise.
+  const exactPaid = readVivaPaymentPaidState(value);
+  const paid = exactPaid !== null
+    ? exactPaid
+    : hasPaidPaymentStatus(value)
+      ? true
+      : hasPendingPaymentStatus(value) || paymentUrl
+        ? false
+        : toPay != null && toPay <= 0
+          ? true
+          : null;
 
   return {
     paymentUrl,
@@ -1120,20 +1126,48 @@ function normalizeTournamentVivaPaymentResolution(value: unknown): TournamentViv
   };
 }
 
-function normalizeTournamentVivaTransactionResolution(
-  value: unknown,
-  fallbackPaymentExpiresAt: string | null,
-): TournamentVivaPaymentResolution | null {
-  if (!isRecord(value)) return null;
-  const normalized = normalizeServerTournamentTransactionResult(value, fallbackPaymentExpiresAt);
-  return {
-    paymentUrl: normalized.paymentUrl,
-    bookingId: normalized.bookingId,
-    toPay: normalized.toPay,
-    paid: normalized.paid,
-    paymentExpiresAt: normalized.paymentExpiresAt,
-    raw: normalized.raw,
+// Viva answers the payment state with an exact enum token. The legacy
+// `hasPaidPaymentStatus`/`hasPendingPaymentStatus` heuristics match substrings, so "UNPAID"
+// also contains "PAID"; a booking or transaction payload carrying "UNPAID" was therefore
+// reported as a completed payment and could suppress a real checkout link.
+const VIVA_PAID_TRANSACTION_STATUSES = ["PAID", "COMPLETED", "CONFIRMED", "SUCCESS", "SUCCEEDED"];
+const VIVA_UNPAID_TRANSACTION_STATUSES = ["UNPAID", "NOT_PAID", "WAITING", "PENDING", "CREATED",
+  "NEW", "RESERVED", "REFUND", "REFUNDED", "CANCELLED", "CANCELED", "FAILED", "DECLINED", "EXPIRED"];
+
+// Exact-token classifier with the same traversal as the legacy visitor: an inconclusive
+// token (a booking `status: "ACTIVE"`, for example) keeps the search going into nested
+// `transactionStatus`/`cardPaymentInfo` records instead of stopping at the first string.
+function readVivaPaymentPaidState(payload: unknown): boolean | null {
+  const visit = (value: unknown): boolean | null => {
+    if (value == null) return null;
+    if (typeof value === "string") {
+      const status = value.trim().toUpperCase();
+      if (!status) return null;
+      if (VIVA_PAID_TRANSACTION_STATUSES.includes(status)) return true;
+      if (VIVA_UNPAID_TRANSACTION_STATUSES.includes(status)) return false;
+      return null;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = visit(item);
+        if (nested !== null) return nested;
+      }
+      return null;
+    }
+    if (!isRecord(value)) return null;
+
+    for (const key of ["transactionStatus", "paymentStatus", "status", "originalStatus", "cardPaymentStatus", "cardPaymentInfo", "paymentType"]) {
+      const direct = visit(value[key]);
+      if (direct !== null) return direct;
+    }
+    for (const key of ["transaction", "transactionStatus", "cardPaymentStatus", "cardPaymentInfo", "payment", "paymentInfo", "data", "payload", "result"]) {
+      const nested = visit(value[key]);
+      if (nested !== null) return nested;
+    }
+    return null;
   };
+
+  return visit(payload);
 }
 
 function isResolvedTournamentVivaPayment(value: TournamentVivaPaymentResolution | null | undefined) {
@@ -1208,6 +1242,79 @@ async function fetchTournamentVivaPaymentResolution(
   return null;
 }
 
+function isVivaFailedOperation(payload: unknown): boolean {
+  const visit = (value: unknown): boolean => {
+    if (value == null || typeof value === "string") return false;
+    if (Array.isArray(value)) return value.some(visit);
+    if (!isRecord(value)) return false;
+
+    const status = pickString(value, ["status", "state"]);
+    if (status && status.toUpperCase() === "FAILED") return true;
+    for (const key of ["transactionStatus", "cardPaymentStatus", "payment", "paymentInfo", "data", "payload", "result"]) {
+      if (visit(value[key])) return true;
+    }
+    return false;
+  };
+
+  return visit(payload);
+}
+
+// Viva's own widget resolves the checkout link from the operation status; the websocket
+// `TRANSACTION_CREATED` event is only its fast path. This client had no operation readback
+// at all, so a missed event left the payer with "Не удалось получить ссылку на оплату"
+// although Viva had already created the link (live 2026-09-28 case).
+function readVivaOperationResolution(
+  payload: unknown,
+  fallbackPaymentExpiresAt: string | null,
+): TournamentVivaPaymentResolution | null {
+  if (!isRecord(payload)) return null;
+
+  // A failed operation is terminal: its payload must reach the caller so the screen can
+  // name Viva's own error code, and any leftover link must not be opened as success.
+  if (isVivaFailedOperation(payload)) {
+    return {
+      paymentUrl: null,
+      bookingId: extractBookingId(payload),
+      toPay: null,
+      paid: false,
+      paymentExpiresAt: readVivaPaymentDueDate(payload) ?? fallbackPaymentExpiresAt,
+      raw: payload,
+    };
+  }
+
+  const paymentUrl = extractPaymentUrl(payload);
+  if (!paymentUrl) return null;
+
+  return {
+    paymentUrl,
+    bookingId: extractBookingId(payload),
+    toPay: null,
+    paid: false,
+    paymentExpiresAt: readVivaPaymentDueDate(payload) ?? fallbackPaymentExpiresAt,
+    raw: payload,
+  };
+}
+
+async function fetchTournamentVivaOperationResolution(
+  transactionId: string,
+  fallbackPaymentExpiresAt: string | null,
+): Promise<TournamentVivaPaymentResolution | null> {
+  const normalizedTransactionId = String(transactionId || "").trim();
+  if (!normalizedTransactionId) return null;
+
+  const result = await request<unknown>(
+    `/end-user/api/v2/${TENANT_KEY}/operations/${encodeURIComponent(normalizedTransactionId)}`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+    },
+  );
+  if (result.error) return null;
+
+  return readVivaOperationResolution(result.data, fallbackPaymentExpiresAt);
+}
+
 async function fetchTournamentVivaTransactionResolution(
   transactionId: string,
   fallbackPaymentExpiresAt: string | null,
@@ -1215,25 +1322,31 @@ async function fetchTournamentVivaTransactionResolution(
   const normalizedTransactionId = String(transactionId || "").trim();
   if (!normalizedTransactionId) return null;
 
-  const encodedTransactionId = encodeURIComponent(normalizedTransactionId);
-  const paths = [
-    "/end-user/api/v2/" + TENANT_KEY + "/transactions/" + encodedTransactionId,
-    "/end-user/api/v1/" + TENANT_KEY + "/transactions/" + encodedTransactionId,
-  ];
-
-  for (const path of paths) {
-    const result = await request<unknown>(path, {
+  // Viva's own widget reads the terminal state from `transactionStatus` on
+  // `/transactions/{id}/status`. The flat `/transactions/{id}` route this client queried
+  // before is not part of the partner end-user API and answered 404 for every id.
+  const result = await request<unknown>(
+    `/end-user/api/v2/${TENANT_KEY}/transactions/${encodeURIComponent(normalizedTransactionId)}/status`,
+    {
       method: "GET",
       auth: true,
       retries: 1,
-    });
-    if (result.error) continue;
+    },
+  );
+  if (result.error) return null;
 
-    const normalized = normalizeTournamentVivaTransactionResolution(result.data, fallbackPaymentExpiresAt);
-    if (normalized) return normalized;
-  }
+  // Only a confirmed payment resolves this channel: `UNPAID`/`WAITING`/`REFUND` is the
+  // normal pre-payment state and must never be reported as a completed payment.
+  if (readVivaPaymentPaidState(result.data) !== true) return null;
 
-  return null;
+  return {
+    paymentUrl: extractPaymentUrl(result.data),
+    bookingId: null,
+    toPay: null,
+    paid: true,
+    paymentExpiresAt: fallbackPaymentExpiresAt,
+    raw: result.data,
+  };
 }
 
 function wait(ms: number) {
@@ -1275,6 +1388,32 @@ async function pollTournamentVivaTransactionResolution(
   return lastResolution;
 }
 
+async function pollTournamentVivaOperationResolution(
+  transactionId: string | null,
+  transactionStartedAtMs: number,
+): Promise<TournamentVivaPaymentResolution | null> {
+  const normalizedTransactionId = String(transactionId || "").trim();
+  if (!normalizedTransactionId) return null;
+
+  const fallbackPaymentExpiresAt = buildPaymentExpiresAt(transactionStartedAtMs);
+  let lastResolution: TournamentVivaPaymentResolution | null = null;
+  // Viva creates the checkout link asynchronously right after the transaction; ~8 s of
+  // polling is enough for the link while the 25 s budget still ends the whole wait (this
+  // loop itself is not cancelled when the budget fires, so it stays intentionally short).
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const resolution = await fetchTournamentVivaOperationResolution(
+      normalizedTransactionId,
+      fallbackPaymentExpiresAt,
+    );
+    // A failed operation is terminal: keep its payload for the diagnosis and stop.
+    if (isVivaFailedOperation(resolution?.raw)) return resolution;
+    if (isResolvedTournamentVivaPayment(resolution)) return resolution;
+    if (resolution) lastResolution = resolution;
+    await wait(1_000);
+  }
+  return lastResolution;
+}
+
 async function awaitPreferredTournamentPaymentResolution(
   promises: Array<Promise<TournamentVivaPaymentResolution | null>>,
 ): Promise<TournamentVivaPaymentResolution | null> {
@@ -1299,7 +1438,12 @@ async function awaitPreferredTournamentPaymentResolution(
             finish(value);
             return;
           }
-          if (!fallback && value) fallback = value;
+          // Prefer a payload that carries Viva's own failure code: the first non-null
+          // state may be an unrelated booking summary without one.
+          if (value && (!fallback
+            || (!readVivaFailureCode(fallback.raw) && readVivaFailureCode(value.raw)))) {
+            fallback = value;
+          }
           pending -= 1;
           if (pending === 0) finish(fallback);
         })
@@ -1334,12 +1478,22 @@ async function withTournamentPaymentBudget(
 }
 
 function readVivaFailureCode(payload: unknown): string | null {
-  if (!isRecord(payload)) return null;
-  const nested = isRecord(payload.error) ? payload.error : null;
-  for (const candidate of [payload.code, nested?.code]) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-  }
-  return null;
+  const visit = (value: unknown): string | null => {
+    if (!isRecord(value)) return null;
+    const nestedError = isRecord(value.error) ? value.error : null;
+    for (const candidate of [value.code, nestedError?.code]) {
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    // Provider responses arrive wrapped (`data`/`result`) in several flows; the code is
+    // what the screen names, so look one level deeper instead of losing it.
+    for (const key of ["data", "payload", "result", "transaction", "event"]) {
+      const nested = visit(value[key]);
+      if (nested) return nested;
+    }
+    return null;
+  };
+
+  return visit(payload);
 }
 
 function normalizeVivaOwnBookingRegistration(value: unknown): TournamentRegistrationState | null {
@@ -3163,7 +3317,10 @@ export async function apiCreateTournamentVivaTransaction(
     pollTournamentVivaPaymentResolution(params.exerciseId, transactionId),
   ];
   if (transactionId) {
+    // The operation status is Viva's own checkout-link source; the websocket event alone
+    // cannot recover a link that was created but never delivered.
     paymentResolutionPromises.unshift(
+      pollTournamentVivaOperationResolution(transactionId, transactionStartedAtMs),
       pollTournamentVivaTransactionResolution(transactionId, transactionStartedAtMs),
     );
   }
