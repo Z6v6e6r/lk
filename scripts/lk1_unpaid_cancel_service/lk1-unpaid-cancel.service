@@ -1,0 +1,23 @@
+[Unit]
+Description=PadlHub LK1 unpaid event booking cancellation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/padlhub-lk1-unpaid-cancel/current
+Environment=LK1_UNPAID_CANCEL_MODE=OFF
+EnvironmentFile=-/etc/padlhub/lk1-unpaid-cancel.env
+ExecStart=/usr/local/bin/node /opt/padlhub-lk1-unpaid-cancel/current/launch_lk1_unpaid_booking_cancellation.mjs --run
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=90
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -6,7 +6,7 @@ const same = (values, expected) => values.filter(value => value !== undefined &&
   .every(value => text(record(value) ? value.id : value) === expected);
 const iso = value => {
   if (typeof value !== 'string') return null;
-  const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d{1,6})?(Z|[+-]\d\d:\d\d)$/.exec(value);
+  const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d{1,9})?(Z|[+-]\d\d:\d\d)$/.exec(value);
   if (!match) return null;
   const [, year, month, day, hour, minute, second, zone] = match;
   const calendar = new Date(Date.UTC(+year, +month - 1, +day));
@@ -36,8 +36,14 @@ export function buildLk1UnpaidScanQuery({ tenantKey, cohortFrom, afterId = null 
 export function eligibleLk1UnpaidOperation(op, cohortFrom, now = nowIso(), allowStarted = false) {
   const cutoff = iso(cohortFrom), current = iso(now);
   if (cutoff === null || current === null) return { reason: 'CONFIG_INVALID' };
-  if (!record(op) || op.state !== 'CONFIRMED' || !['group_training', 'tournament'].includes(op.category)
-    || op.action !== (op.category === 'group_training' ? 'BOOK_GROUP_TRAINING' : 'BOOK_TOURNAMENT')) return { reason: 'OUT_OF_SCOPE' };
+  if (!record(op) || op.state !== 'CONFIRMED' || !['group_training', 'tournament'].includes(op.category)) {
+    return { reason: 'OUT_OF_SCOPE' };
+  }
+  // The live durable operation does not store an action. If an action alias is
+  // present, it still has to agree with the category and target binding below.
+  const expectedAction = op.category === 'group_training' ? 'BOOK_GROUP_TRAINING' : 'BOOK_TOURNAMENT';
+  if ((op.action && op.action !== expectedAction)
+    || (op.managedAction && op.managedAction !== expectedAction)) return { reason: 'OUT_OF_SCOPE' };
   if (iso(op.createdAt) === null || iso(op.createdAt) < cutoff) return { reason: 'BEFORE_COHORT' };
   const lk1 = op.lk1, intent = lk1?.transactionIntent, checkout = lk1?.checkout;
   if (!text(op.tenantKey) || !text(op.actorClientId) || !text(op.operationId)
@@ -121,8 +127,11 @@ export function classifyLk1Booking(op, booking) {
   const ids = [booking.id, booking.bookingId].filter(value => value !== undefined);
   const owners = [booking.clientId, booking.client?.id, booking.client?.clientId].filter(value => value !== undefined);
   const exercises = [booking.exerciseId, booking.exercise?.id].filter(value => value !== undefined);
+  // Viva's exercise-scoped bookings list omits exerciseId on each row. The
+  // adapter adds this proof only after finding one exact row in that list.
+  const scopedExercise = booking.__lk1ScopedExerciseId;
   if (!ids.length || !same(ids, op.bookingId) || !owners.length || !same(owners, op.actorClientId)
-    || !exercises.length || !same(exercises, op.exerciseId)
+    || (exercises.length ? !same(exercises, op.exerciseId) : scopedExercise !== op.exerciseId)
     || booking.isSubscriptionBooking === true || booking.clientSubscriptionId
     || (booking.paymentType !== 'ON_PLACE' && booking.paymentMethod !== 'ON_PLACE')
     || (booking.paymentType !== undefined && booking.paymentType !== 'ON_PLACE')
@@ -177,8 +186,9 @@ async function markReview(op, operations, attemptedAt, reason, now) {
 // One attempt per operation. The majority-committed INTENT precedes the Viva PUT.
 // A crash or unknown PUT response is reconciled by exact readback, never a second PUT.
 export async function reconcileLk1UnpaidBooking({ op, operations, provider, cohortFrom,
-  mode = 'SHADOW', now = nowIso }) {
+  mode = 'SHADOW', now = nowIso, shouldStop = () => false }) {
   if (!['SHADOW', 'ENFORCE_NEW'].includes(mode)) return { state: 'OFF' };
+  if (shouldStop()) return { state: 'STOPPED' };
   const prior = op?.lk1?.unpaidCancellation;
   const eligible = eligibleLk1UnpaidOperation(op, cohortFrom, now(), prior?.phase === 'INTENT');
   if (eligible.reason !== 'ELIGIBLE') return { state: 'SKIPPED', reason: eligible.reason };
@@ -201,6 +211,7 @@ export async function reconcileLk1UnpaidBooking({ op, operations, provider, coho
     return { state: 'SKIPPED', reason: 'CANCELLATION_ONLY_UNAVAILABLE' };
   }
   if (mode === 'SHADOW') return { state: 'ELIGIBLE' };
+  if (shouldStop()) return { state: 'STOPPED' };
   const attemptedAt = now();
   const ack = await operations.updateOne({ _id: op._id, state: 'CONFIRMED', bookingId: op.bookingId,
     updatedAt: op.updatedAt, 'lk1.checkout.transactionId': op.lk1.checkout.transactionId,
@@ -226,7 +237,11 @@ export async function reconcileLk1UnpaidBooking({ op, operations, provider, coho
   if (iso(op.lk1.target.startsAt) <= iso(now())) {
     return markReview(op, operations, attemptedAt, 'SERVICE_STARTED', now);
   }
-  try { await provider.cancelBooking(op); } catch { /* Readback resolves known success. */ }
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
+  try {
+    const result = await provider.cancelBooking(op, shouldStop);
+    if (result?.stopped) return { state: 'STOPPED_AFTER_INTENT' };
+  } catch { /* Readback resolves known success. */ }
   const after = classifyLk1Booking(op, await provider.readBooking(op));
   if (after.reason !== 'CANCELLED') return markReview(op, operations, attemptedAt, 'CANCEL_OUTCOME_UNKNOWN', now);
   const finalTx = classifyLk1Transaction(op, await provider.readTransaction(op), now());
@@ -240,12 +255,14 @@ export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://ap
   if (!(base.origin === 'https://api.vivacrm.ru'
     || (base.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(base.hostname)))
     || base.pathname !== '/' || base.search || base.hash || base.username || base.password) throw new Error('VIVA_ORIGIN_INVALID');
-  async function request(method, path, body) {
+  async function request(method, path, body, shouldStop) {
     const credential = await token();
     if (!text(credential) || /[\r\n]/.test(credential)) throw new Error('VIVA_TOKEN_UNAVAILABLE');
+    if (method === 'PUT' && shouldStop?.()) return { status: 0, stopped: true };
     const response = await fetchImpl(new URL(path, base), { method, redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs), headers: { Authorization: `Bearer ${credential}`, Accept: 'application/json',
         'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    if (response.status === 401) token.invalidate?.();
     let payload;
     try { payload = await response.json(); } catch { payload = null; }
     return { status: response.status, payload };
@@ -273,7 +290,7 @@ export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://ap
         if (!last) continue;
         const exact = rows.filter(row => row?.id === op.bookingId || row?.bookingId === op.bookingId);
         if (exact.length !== 1) throw new Error('BOOKING_NOT_UNIQUELY_FOUND');
-        return exact[0];
+        return { ...exact[0], __lk1ScopedExerciseId: op.exerciseId };
       }
       throw new Error('BOOKING_PAGE_LIMIT');
     },
@@ -282,8 +299,8 @@ export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://ap
       if (result.status !== 200 || !record(result.payload)) throw new Error('CANCEL_OPTIONS_UNAVAILABLE');
       return result.payload;
     },
-    async cancelBooking(op) {
-      return request('PUT', `${bookingPath(op)}/cancel`, { refundMethod: 'NONE', cancelExercise: false });
+    async cancelBooking(op, shouldStop) {
+      return request('PUT', `${bookingPath(op)}/cancel`, { refundMethod: 'NONE', cancelExercise: false }, shouldStop);
     },
   };
 }
