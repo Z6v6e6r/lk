@@ -9,6 +9,10 @@ const nodeRedListPrepareSource = fs.readFileSync(
   "scripts/nodered_community_list_nodes/fn_list_prepare_tail.js",
   "utf8",
 );
+const nodeRedListResponseSource = fs.readFileSync(
+  "scripts/nodered_community_list_nodes/fn_list_response_tail.js",
+  "utf8",
+);
 
 function sourceSlice(source: string, start: string, end: string) {
   const startIndex = source.indexOf(start);
@@ -35,23 +39,21 @@ test("community list always requests the summary projection", () => {
   assert.doesNotMatch(listSource, /maybeAppendCacheBuster/);
 });
 
-test("Node-RED summary mode narrows rows and projects at most the current viewer", () => {
-  const listResponseSource = sourceSlice(
-    nodeRedPatchSource,
-    "const fnListResponse =",
-    "const fnGetPrepare =",
-  );
-
+test("Node-RED summary mode narrows rows and projects possible viewer matches", () => {
+  assert.match(nodeRedPatchSource, /fn_list_response_tail\.js/);
   assert.match(nodeRedListPrepareSource, /visibility: \{ \$not: \/\^\\s\*CLOSED\\s\*\$\/i \}/);
   assert.match(nodeRedListPrepareSource, /accessFilters\.push\(\{ members: \{ \$elemMatch: viewerMatch \} \}\)/);
   assert.match(nodeRedListPrepareSource, /accessFilters\.push\(\{ pendingMembers: \{ \$elemMatch: viewerMatch \} \}\)/);
-  assert.match(nodeRedListPrepareSource, /msg\.projection = summaryProjection/);
-  assert.match(nodeRedListPrepareSource, /summaryProjection\.members = \{ \$elemMatch: viewerMatch \}/);
-  assert.match(nodeRedListPrepareSource, /summaryProjection\.pendingMembers = \{ \$elemMatch: viewerMatch \}/);
-  assert.doesNotMatch(nodeRedListPrepareSource, /^\s*logo:\s*1,/m);
-  assert.doesNotMatch(nodeRedListPrepareSource, /^\s*logoLegacyDataUrl:\s*1,/m);
-  assert.match(listResponseSource, /connections: isSummaryMode \? \[\] : buildConnections\(scopedRows\)/);
-  assert.match(listResponseSource, /rows\.filter\(\(item\) => canListCommunityForViewer/);
+  assert.match(nodeRedListPrepareSource, /msg\.payload = \[summaryQuery, \{ projection: summaryProjection \}\]/);
+  assert.doesNotMatch(nodeRedListPrepareSource, /msg\.projection =/);
+  assert.match(nodeRedListPrepareSource, /summaryProjection\.members = matchingRoster\('members'\)/);
+  assert.match(nodeRedListPrepareSource, /summaryProjection\.pendingMembers = matchingRoster\('pendingMembers'\)/);
+  assert.match(nodeRedListPrepareSource, /^\s*logo:\s*1,/m);
+  assert.match(nodeRedListPrepareSource, /^\s*logoLegacyDataUrl:\s*1,/m);
+  assert.match(nodeRedListPrepareSource, /^\s*archived:\s*1,/m);
+  assert.match(nodeRedListPrepareSource, /_summaryMemberCount: \{ \$size:/);
+  assert.match(nodeRedListResponseSource, /connections: isSummaryMode \? \[\] : buildConnections\(scopedRows\)/);
+  assert.match(nodeRedListResponseSource, /rows\.filter\(\(item\) => canListCommunityForViewer/);
 });
 
 test("ordinary community reads reuse stable URLs", () => {

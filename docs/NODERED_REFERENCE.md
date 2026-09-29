@@ -284,6 +284,9 @@ npm run nodered:modular:build
 
 ## API эндпоинты (SERV2 / support)
 
+Для `GET /lk/communities?view=summary` и подготовки исправления MongoDB-проекции
+см. [Community SUMMARY MongoDB projection](NODERED_COMMUNITY_SUMMARY_PROJECTION.md).
+
 ### Игры
 - `GET /api/games` — список игр
 - `GET /api/games/:id` — игра по ID
