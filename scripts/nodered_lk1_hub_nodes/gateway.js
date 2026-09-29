@@ -160,6 +160,7 @@ const lk1Quote = (ctx, exercise, owned) => {
   return { ...quote, fingerprint: lk1Fingerprint(ctx, quote) };
 };
 const lk1Finish = (ctx) => {
+  if (isObj(ctx.lk1?.unpaidCancellation)) return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
   const payment = ctx.lk1?.checkout;
   if (!ctx.confirmedBookingId || (ctx.lk1.decision.benefit.finalPriceMinor > 0 && !payment)) {
     return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
