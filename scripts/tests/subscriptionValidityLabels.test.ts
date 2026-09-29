@@ -24,7 +24,7 @@ test("subscription validity picker reads direct and nested Viva date aliases", (
   );
 });
 
-test("subscription usage labels keep date by default and visits for Energy packs", () => {
+test("subscription usage labels keep date for subscriptions and visits for lesson packs", () => {
   assert.deepEqual(
     resolveSubscriptionUsageDisplay({
       subscriptionName: "Лето.Падел.РА",
@@ -41,6 +41,22 @@ test("subscription usage labels keep date by default and visits for Energy packs
       visitsLeft: 8,
     }),
     { kind: "visits", label: "8 занятий" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Теннис 8 занятий",
+      validityDate: "2026-07-12",
+      visitsLeft: 2,
+    }),
+    { kind: "visits", label: "2 занятия" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Теннисная подписка",
+      validityDate: "2026-07-12",
+      visitsLeft: 8,
+    }),
+    { kind: "validity", label: "до 12.07.2026" },
   );
 });
 
