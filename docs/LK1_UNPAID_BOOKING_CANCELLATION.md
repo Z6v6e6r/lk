@@ -109,8 +109,9 @@ installed dependency version, `current` target, service status, and sanitized
 SHADOW log are the deployment readback. No source file or credential is edited
 on the host. A failed service start restores the prior symlink and unit, reloads
 systemd, and restarts the prior release; any ambiguous `INTENT` is reconciled
-before restart. A detected runtime drift exits nonzero with a fixed reason so
-systemd reports failure instead of silently leaving the worker inactive.
+before restart. A detected runtime drift exits with code 78 and a fixed reason;
+the unit explicitly prevents automatic restart for that code. An operator must
+review the changed flow and restart the service deliberately.
 
 The unit defaults to `OFF`. Activate `SHADOW` with a root-owned mode-0600
 `/etc/padlhub/lk1-unpaid-cancel.env` containing only mode, tenant, and a fresh

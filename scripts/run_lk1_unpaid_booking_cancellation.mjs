@@ -92,6 +92,7 @@ try {
   await client.close();
   if (guardDrift) {
     process.stdout.write('{"state":"STOPPED","reason":"LIVE_RUNTIME_CHANGED"}\n');
-    process.exitCode = 1;
+    // systemd must not re-baseline a changed live flow after this stop.
+    process.exitCode = 78;
   }
 }

@@ -11,6 +11,7 @@ Environment=LK1_UNPAID_CANCEL_MODE=OFF
 EnvironmentFile=-/etc/padlhub/lk1-unpaid-cancel.env
 ExecStart=/usr/local/bin/node /opt/padlhub-lk1-unpaid-cancel/current/launch_lk1_unpaid_booking_cancellation.mjs --run
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=30
 TimeoutStopSec=90
 UMask=0077
