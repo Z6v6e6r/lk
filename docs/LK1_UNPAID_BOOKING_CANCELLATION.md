@@ -12,7 +12,8 @@ The worker checks the exact operation, checkout, transaction intent, amount, own
 exercise, and booking. Viva does not always echo the owner and booking in its
 transaction GET; the stored intent and exact transaction ID bind those fields,
 and any aliases Viva does return must match. Viva's fresh transaction must be exactly `UNPAID`, have a
-valid zoned `paymentDueDate` at least 60 seconds in the past, and contain no paid
+valid zoned `paymentDueDate` at least 60 seconds in the past, plus a valid
+`createDate` at least 26 minutes in the past, and contain no paid
 or refund evidence. Unknown, partial, `WAITING`, and `PAID` statuses never cancel.
 The event must not have started when a new cancellation is claimed.
 
@@ -129,10 +130,17 @@ transactions were not `UNPAID` and three other operations failed closed on
 binding/state checks. That probe did not authorize writes or satisfy the full
 new-cohort observation window.
 
-The remaining provider race is a payment arriving between the last transaction
-GET and cancellation PUT. The final transaction GET prevents a local claim
-release if payment appears, leaving the operation for manual reconciliation.
-Do not enable `ENFORCE_NEW` until Viva confirms that an expired `UNPAID`
-transaction cannot capture a late payment, or a proven provider operation
-closes that window before booking cancellation. One sampled absence of late
-payments is not that guarantee.
+The operator confirmed on 2026-09-29 that a Viva payment link lives 25 minutes
+and a transaction cannot be paid after expiry. The classifier therefore waits
+until both `paymentDueDate + 60 seconds` and `createDate + 26 minutes` and
+requires a fresh exact `UNPAID` immediately before cancel. This confirmation
+does not yet establish whether a payment started before link expiry can settle
+afterward, or whether the 25 minutes always start no later than `createDate`.
+Confirm both points before `ENFORCE_NEW`; if provider behavior changes, stop the
+worker.
+An aggregate read-only 147 probe found `createDate` and `paymentDueDate` in all
+nine sampled LK1 event transactions; their provider due time was 20 minutes
+after creation. The 26-minute bound protects the extra five minutes of link
+life even when the earlier provider due time has passed.
+The final transaction GET prevents local claim release if an unexpected payment
+appears and leaves that operation for manual reconciliation.

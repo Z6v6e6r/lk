@@ -116,9 +116,14 @@ export function classifyLk1Transaction(op, transaction, now = nowIso(), graceMs 
       return { reason: 'PAYMENT_OR_REFUND_EVIDENCE' };
     }
   }
-  const due = iso(transaction.paymentDueDate), current = iso(now);
-  if (due === null || current === null || !Number.isSafeInteger(graceMs) || graceMs < 0) return { reason: 'DEADLINE_INVALID' };
-  return current >= due + graceMs ? { reason: 'DUE', deadlineAt: transaction.paymentDueDate }
+  const due = iso(transaction.paymentDueDate), created = iso(transaction.createDate), current = iso(now);
+  if (due === null || created === null || due < created || current === null
+    || (transaction.createdAt !== undefined && iso(transaction.createdAt) !== created)
+    || !Number.isSafeInteger(graceMs) || graceMs < 60_000) return { reason: 'DEADLINE_INVALID' };
+  // The operator-confirmed Viva payment link lives for 25 minutes. The Admin
+  // paymentDueDate can be earlier, so require both bounds plus clock slack.
+  const earliestCancel = Math.max(due + graceMs, created + 25 * 60_000 + graceMs);
+  return current >= earliestCancel ? { reason: 'DUE', deadlineAt: transaction.paymentDueDate }
     : { reason: 'NOT_DUE' };
 }
 

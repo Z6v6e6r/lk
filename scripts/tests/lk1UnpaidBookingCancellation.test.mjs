@@ -28,6 +28,7 @@ const fixture = () => {
       checkout: { transactionId: 'transaction', toPayMinor: 275000, paymentUrl: 'https://pay.example.test/fixture' } } };
   op._id = `lk1-product:${JSON.stringify([op.tenantKey, op.actorClientId, op.operationId])}`;
   const transaction = { id: 'transaction', status: 'UNPAID', toPay: 275000,
+    createDate: '2099-01-01T11:30:00.000Z',
     paymentDueDate: '2099-01-01T11:58:00.000Z', cardPaymentInfo: { status: 'NEW' } };
   const booking = { id: 'booking', clientId: 'actor', exerciseId: 'exercise',
     paymentType: 'ON_PLACE', isCancelled: false };
@@ -105,7 +106,9 @@ test('transaction requires exact UNPAID, due date, amount and supplied aliases',
     ...transaction, paymentDueDate: '2099-01-01T14:58:00.274625208+03:00',
   }, instant).reason, 'DUE');
   for (const change of [{ status: 'PAID' }, { status: 'WAITING' }, { status: 'PARTIALLY_PAID' },
-    { paymentDueDate: undefined }, { paymentDueDate: '2099-01-01T12:00:30.000Z' },
+    { paymentDueDate: undefined }, { createDate: undefined },
+    { createdAt: '2099-01-01T11:29:00.000Z' },
+    { paymentDueDate: '2099-01-01T12:00:30.000Z' },
     { paymentDueDate: '2099-02-30T11:58:00.000Z' },
     { clientId: 'other' }, { bookingIds: ['other'] }, { exerciseId: 'other' },
     { toPay: 1 }, { id: 'other' },
@@ -114,6 +117,24 @@ test('transaction requires exact UNPAID, due date, amount and supplied aliases',
     { paidAmountMinor: 100 }, { cardPaymentInfo: { status: 'NEW', paidAmountMinor: 100 } }]) {
     assert.notEqual(classifyLk1Transaction(op, { ...transaction, ...change }, instant).reason, 'DUE');
   }
+});
+
+test('UNPAID is not due while its 25-minute payment link may still work', () => {
+  const { op, transaction } = fixture();
+  const shortProviderDue = { ...transaction, createDate: '2099-01-01T11:40:00.000Z' };
+  assert.equal(classifyLk1Transaction(op, shortProviderDue, instant).reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, shortProviderDue, '2099-01-01T12:05:59.999Z').reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, shortProviderDue, '2099-01-01T12:06:00.000Z').reason, 'DUE');
+  assert.equal(classifyLk1Transaction(op, { ...shortProviderDue,
+    createDate: '2099-01-01T11:58:01.000Z' }, instant).reason, 'DEADLINE_INVALID');
+  assert.equal(classifyLk1Transaction(op, { ...transaction,
+    paymentDueDate: '2099-01-01T12:00:30.000Z' }, instant).reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, { ...transaction,
+    paymentDueDate: '2099-01-01T12:00:30.000Z' }, '2099-01-01T12:01:30.000Z').reason, 'DUE');
+  const nanoZone = { ...transaction, createDate: '2099-01-01T14:30:00.123456789+03:00',
+    paymentDueDate: '2099-01-01T14:55:00.000000000+03:00' };
+  assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.122Z').reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.123Z').reason, 'DUE');
 });
 
 test('booking requires exact owner, exercise, ON_PLACE carrier and explicit cancellation proof', () => {
@@ -190,6 +211,19 @@ test('payment arriving on the second read stops before Viva cancellation', async
   assert.deepEqual(await run(seed.op, store, provider), { state: 'REVIEW', reason: 'PAID' });
   assert.equal(provider.calls.includes('cancel'), false);
   assert.equal(store.row.state, 'CONFIRMED');
+});
+
+test('a later provider deadline on the second read stops before Viva cancellation', async () => {
+  const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
+  let reads = 0;
+  provider.readTransaction = async () => {
+    reads += 1;
+    return { ...seed.transaction,
+      paymentDueDate: reads === 1 ? seed.transaction.paymentDueDate : '2099-01-01T12:00:30.000Z' };
+  };
+  assert.deepEqual(await run(seed.op, store, provider), { state: 'REVIEW', reason: 'NOT_DUE' });
+  assert.equal(provider.calls.includes('cancel'), false);
+  assert.equal(store.row.lk1.unpaidCancellation.phase, 'REVIEW');
 });
 
 test('loss of cancellation-only option after intent stops before Viva cancellation', async () => {
