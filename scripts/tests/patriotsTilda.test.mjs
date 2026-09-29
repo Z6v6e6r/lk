@@ -23,7 +23,8 @@ test('Patriots schedule contains the four exact Viva directions and LK booking f
   const active = { window: {} };
   vm.runInNewContext(scripts(html.replace('window.PH_PATRIOTS_ENTITLEMENTS_READY = false;',
     'window.PH_PATRIOTS_ENTITLEMENTS_READY = true;'))[0], active);
-  assert.equal(active.window.LK_ATLANTY_SCHEDULE_CONFIG.categories[0].badge, '0 ₽ по подписке');
+  assert.equal(active.window.LK_ATLANTY_SCHEDULE_CONFIG.categories[0].badge,
+    'Первый час в день — 0 ₽ при менее 4 активных записях');
   for (const category of active.window.LK_ATLANTY_SCHEDULE_CONFIG.categories.slice(1)) assert.match(category.badge, /2 750 ₽/);
   assert.match(html, /id="atlanty-schedule-root"/);
   assert.match(html, /\/lk\/atlanty-schedule\.js/);
@@ -34,9 +35,11 @@ test('Patriots copy has the actual monthly subscription and no demo checkout or 
   const footer = readBlock('3-footer.html');
   assert.match(hero, /6 800 ₽/);
   assert.match(hero, /30 посещений за 30 дней/);
+  assert.match(hero, /первый час в день за 0 ₽, если активных записей меньше 4/);
+  assert.match(hero, /скидка 30 % на платную часть игры/);
   assert.match(hero, /Все события «Время на друзей» — доплата 2 750 ₽/);
   assert.equal((hero.match(/2 750 ₽/g) || []).length, 3);
-  assert.doesNotMatch(hero + footer, /checkout-preview|data-period="year"|30%|50%|1 час игры|До 4 активных/);
+  assert.doesNotMatch(hero + footer, /checkout-preview|data-period="year"/);
   assert.equal((hero + footer).match(/data-patriots-checkout[^>]*disabled/g)?.length, 2);
 });
 
