@@ -36,14 +36,17 @@ const protectedJson = (filePath) => {
   return JSON.parse(fs.readFileSync(absolute, "utf8"));
 };
 
-const protectedReceipt = (filePath) => {
+export const protectedReceipt = (filePath) => {
   const absolute = path.resolve(String(filePath || ""));
   const stat = fs.lstatSync(absolute);
   if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077)) {
     throw new Error("Receipt must be a private regular file (mode 0600)");
   }
-  const lines = fs.readFileSync(absolute, "utf8").trimEnd().split("\n");
-  return JSON.parse(lines.at(-1));
+  const journal = fs.readFileSync(absolute, "utf8");
+  const lastCompleteLineEnd = journal.lastIndexOf("\n");
+  if (lastCompleteLineEnd < 0) throw new Error("Receipt journal has no complete record");
+  const previousLineEnd = journal.lastIndexOf("\n", lastCompleteLineEnd - 1);
+  return JSON.parse(journal.slice(previousLineEnd + 1, lastCompleteLineEnd));
 };
 
 export const appendReport = (descriptor, report) => {
@@ -140,8 +143,10 @@ export function buildApplyReceipt(operationId, after) {
 
 export function validateApplyReceipt(report, current) {
   const receipt = report?.applyReceipt;
-  if (report?.mode !== "APPLY" || report?.outcome !== "SUCCEEDED" || !receipt) {
-    throw new Error("Successful apply receipt is required");
+  if (report?.mode !== "APPLY"
+    || !["SUCCEEDED", "CATALOG_VERIFIED", "POSTCHECK_FAILED_INDEX_PRESENT"].includes(report?.outcome)
+    || !receipt) {
+    throw new Error("Verified apply catalog receipt is required");
   }
   const { digest, ...body } = receipt;
   if (digest !== sha256(stableStringify(body))
@@ -296,13 +301,28 @@ export async function runCli() {
       } else {
         await collection.dropIndex(INDEX_NAME);
       }
-      const afterRead = mode === "rollback"
-        ? await readCatalog(db, collection, connection)
-        : await readContext(db, collection, connection);
-      const after = afterRead.context;
+      const catalogRead = await readCatalog(db, collection, connection);
+      const catalogAfter = catalogRead.context;
+      if (catalogAfter.targetFingerprint !== before.targetFingerprint
+        || catalogAfter.planDigest !== expectedAfterDigest
+        || catalogAfter.indexState !== (mode === "apply" ? "matching" : "missing")) {
+        throw new Error("Post-mutation target or catalog changed unexpectedly");
+      }
+      if (mode === "apply") {
+        report = {
+          schemaVersion: 1, mode: "APPLY", outcome: "CATALOG_VERIFIED",
+          operationId: report.operationId, createdIndex: INDEX_NAME,
+          applyReceipt: buildApplyReceipt(report.operationId, catalogAfter),
+          before, after: catalogAfter,
+        };
+        appendReport(reportDescriptor, report);
+      }
+      const after = mode === "rollback"
+        ? catalogAfter
+        : (await readContext(db, collection, connection)).context;
       if (after.targetFingerprint !== before.targetFingerprint
         || after.planDigest !== expectedAfterDigest) {
-        throw new Error("Post-mutation target or catalog changed unexpectedly");
+        throw new Error("Postcheck target or catalog changed unexpectedly");
       }
       if (mode === "apply") assertIndexUsed(after);
       else if (after.indexState !== "missing") throw new Error("Post-rollback catalog mismatch");
@@ -311,14 +331,16 @@ export async function runCli() {
         operationId: report.operationId,
         createdIndex: mode === "apply" ? INDEX_NAME : null,
         droppedIndex: mode === "rollback" ? INDEX_NAME : null,
-        applyReceipt: mode === "apply" ? buildApplyReceipt(report.operationId, after) : null,
+        applyReceipt: mode === "apply" ? report.applyReceipt : null,
         before, after,
       };
     }
   } catch (error) {
     report = {
       ...(report || { schemaVersion: 1, mode: mode.toUpperCase() }),
-      outcome: mutationAttempted ? "UNKNOWN_RECONCILIATION_REQUIRED" : "FAILED_NO_MUTATION",
+      outcome: report?.outcome === "CATALOG_VERIFIED"
+        ? "POSTCHECK_FAILED_INDEX_PRESENT"
+        : mutationAttempted ? "UNKNOWN_RECONCILIATION_REQUIRED" : "FAILED_NO_MUTATION",
       error: String(error?.message || error).replace(/mongodb(?:\+srv)?:\/\/\S+/gi, "[REDACTED_MONGO_URI]").slice(0, 500),
     };
     process.exitCode = 1;

@@ -38,8 +38,10 @@ need separate evidence and changes.
 3. Run the tool's `plan` against that live flow. Review `readyForApply`,
    `planDigest`, `targetFingerprint`, probe count and baseline `explain`. The
    private `--out` file is an append-only JSONL journal: the last complete
-   line is the final report, and an earlier `MUTATION_PENDING` line remains
-   after an interrupted write. Stop
+   line is the final report; an incomplete tail is ignored only when reading a
+   rollback receipt. `MUTATION_PENDING` remains after an interrupted
+   write; after exact catalog readback, a durable `CATALOG_VERIFIED` line
+   contains the rollback receipt even if the query postcheck fails. Stop
    on a binding mismatch, missing future public probe, catalog conflict,
    Mongo unavailability or other source drift.
 4. Obtain explicit authorization for the exact production schema action:
@@ -55,8 +57,11 @@ need separate evidence and changes.
    no Node-RED restart.
 6. Stop if the index is unused, errors increase, or unrelated production state
    drifts. Reconcile an `UNKNOWN_RECONCILIATION_REQUIRED` receipt before any
-   retry. A rollback requires separate exact authorization and the successful
-   apply receipt: `LK_GAMES_PUBLIC_INDEX_ROLLBACK=ROLLBACK_LK_GAMES_PUBLIC_DATE_STATION_V1`
+   retry. A verified catalog receipt (`SUCCEEDED`, `CATALOG_VERIFIED`, or
+   `POSTCHECK_FAILED_INDEX_PRESENT`) can authorize an exact guarded rollback;
+   a pending or unknown receipt cannot. A rollback requires separate exact
+   authorization and the verified apply receipt:
+   `LK_GAMES_PUBLIC_INDEX_ROLLBACK=ROLLBACK_LK_GAMES_PUBLIC_DATE_STATION_V1`
    with `rollback --flow-path ... --expected-plan-digest ... --apply-receipt ... --out ...`.
    Never drop a foreign or changed index.
 

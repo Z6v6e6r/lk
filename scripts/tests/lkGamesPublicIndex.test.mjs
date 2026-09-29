@@ -13,6 +13,7 @@ import {
   buildApplyReceipt,
   classifyIndex,
   planDigest,
+  protectedReceipt,
   publicDateStationQuery,
   syncJournalDirectory,
   validateApplyReceipt,
@@ -76,12 +77,15 @@ test("plan digest changes with catalog, target and source binding", () => {
   ] }));
 });
 
-test("rollback requires a successful receipt for the exact catalog and target", () => {
+test("rollback requires a verified receipt for the exact catalog and target", () => {
   const current = { planDigest: "catalog-a", targetFingerprint: "target-a" };
   const receipt = buildApplyReceipt("operation-a", current);
   const report = { mode: "APPLY", outcome: "SUCCEEDED", applyReceipt: receipt };
   assert.deepEqual(validateApplyReceipt(report, current), receipt);
+  assert.deepEqual(validateApplyReceipt({ ...report, outcome: "CATALOG_VERIFIED" }, current), receipt);
+  assert.deepEqual(validateApplyReceipt({ ...report, outcome: "POSTCHECK_FAILED_INDEX_PRESENT" }, current), receipt);
   assert.throws(() => validateApplyReceipt({ ...report, outcome: "FAILED" }, current));
+  assert.throws(() => validateApplyReceipt({ ...report, outcome: "UNKNOWN_RECONCILIATION_REQUIRED" }, current));
   assert.throws(() => validateApplyReceipt(report, { ...current, planDigest: "catalog-b" }));
   assert.throws(() => validateApplyReceipt(report, { ...current, targetFingerprint: "target-b" }));
   assert.throws(() => validateApplyReceipt({
@@ -103,6 +107,24 @@ test("durable journal keeps mutation-pending evidence when final append fails", 
     assert.deepEqual(JSON.parse(fs.readFileSync(reportPath, "utf8").trim()), pending);
   } finally {
     try { fs.closeSync(descriptor); } catch { /* already closed */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("rollback reads the last complete receipt despite an interrupted journal tail", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lk-public-index-receipt-"));
+  const reportPath = path.join(directory, "report.jsonl");
+  const current = { planDigest: "catalog-a", targetFingerprint: "target-a" };
+  const verified = {
+    mode: "APPLY", outcome: "CATALOG_VERIFIED",
+    applyReceipt: buildApplyReceipt("operation-a", current),
+  };
+  try {
+    fs.writeFileSync(reportPath, `${JSON.stringify(verified)}\n{"mode":"APPLY"`, { mode: 0o600 });
+    assert.deepEqual(validateApplyReceipt(protectedReceipt(reportPath), current), verified.applyReceipt);
+    fs.writeFileSync(reportPath, `${JSON.stringify(verified)}\n{broken}\n`, { mode: 0o600 });
+    assert.throws(() => protectedReceipt(reportPath), SyntaxError);
+  } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
