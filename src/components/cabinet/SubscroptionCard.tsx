@@ -35,6 +35,7 @@ export function SubscroptionCard({ subscription, phone, openSubInfo }: Subscropt
     subscriptionName: displayName,
     validityDate: subscription.expirationDate,
     visitsLeft: subscription.visitsLeft,
+    showTennisVisits: true,
   });
 
   return (

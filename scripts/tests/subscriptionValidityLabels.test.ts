@@ -47,6 +47,7 @@ test("subscription usage labels keep date for subscriptions and visits for lesso
       subscriptionName: "Теннис 8 занятий",
       validityDate: "2026-07-12",
       visitsLeft: 2,
+      showTennisVisits: true,
     }),
     { kind: "visits", label: "2 занятия" },
   );
@@ -55,6 +56,15 @@ test("subscription usage labels keep date for subscriptions and visits for lesso
       subscriptionName: "Теннисная подписка",
       validityDate: "2026-07-12",
       visitsLeft: 8,
+      showTennisVisits: true,
+    }),
+    { kind: "validity", label: "до 12.07.2026" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Теннис 8 занятий",
+      validityDate: "2026-07-12",
+      visitsLeft: 2,
     }),
     { kind: "validity", label: "до 12.07.2026" },
   );
@@ -91,6 +101,8 @@ test("subscription usage labels route all subscription UI through shared formatt
   assert.match(appCssSource, /\.sub-status-badge\.inactive\.sub-status-badge--gold/);
   assert.match(cabinetCardSource, /resolveSubscriptionUsageDisplay/);
   assert.match(subscriptionInfoSource, /resolveSubscriptionUsageDisplay/);
+  assert.match(cabinetCardSource, /showTennisVisits: true/);
+  assert.match(subscriptionInfoSource, /showTennisVisits: true/);
   assert.match(gamesPageSource, /function formatSplitSubscriptionValidityLabel/);
   assert.doesNotMatch(groupScheduleSource, /Доступные абонементы|formatProductValidity/);
   assert.match(tournamentSignupSource, /function formatTournamentPaymentProductValidity/);

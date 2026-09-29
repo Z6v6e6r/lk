@@ -115,7 +115,7 @@ export function isEnergyVisitPackSubscriptionName(value: string | null | undefin
   return /^энергия\s+(5|25)$/.test(normalizeSubscriptionName(value));
 }
 
-export function isTennisVisitPackSubscriptionName(value: string | null | undefined) {
+function isTennisVisitPackSubscriptionName(value: string | null | undefined) {
   const tokens = normalizeSubscriptionName(value).split(" ").filter(Boolean);
   return tokens.some((token) => token.startsWith("теннис"))
     && !tokens.some((token) => token.startsWith("подписк"));
@@ -187,11 +187,12 @@ export function resolveSubscriptionUsageDisplay(params: {
   raw?: unknown;
   validityPrefix?: string;
   visitsPrefix?: string;
+  showTennisVisits?: boolean;
   fallback?: string;
 }): SubscriptionUsageDisplay | null {
   const visitsLeft = params.visitsLeft ?? pickSubscriptionVisitsLeft(params.raw);
   if (isEnergyVisitPackSubscriptionName(params.subscriptionName)
-    || isTennisVisitPackSubscriptionName(params.subscriptionName)) {
+    || (params.showTennisVisits && isTennisVisitPackSubscriptionName(params.subscriptionName))) {
     const visitsLabel = formatSubscriptionVisitsLeftLabel(visitsLeft, params.visitsPrefix || "");
     if (visitsLabel) return { kind: "visits", label: visitsLabel };
   }
