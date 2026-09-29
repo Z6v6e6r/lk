@@ -10,6 +10,12 @@ Read-only production check on `lk-primary-147`, 2026-09-29 16:26 MSK:
 - Representative future public date/station query: 6 returned, 19,007 documents examined, 0 keys examined, `COLLSCAN`, 1,128 ms in `executionStats`.
 - Existing `schedule_station_date_time_v1` starts with `booking.studioName`; it does not serve the dominant `booking.date` + `booking.studioId` query. The payment/booking wildcard index covers different fields.
 
+Isolated MongoDB 7.0 rehearsal on 19,007 synthetic games passed: the same
+date/station query examined 19,007 documents before the index and 6 documents
+plus 6 keys after it; `COLLSCAN` became `IXSCAN`. Server execution times in
+that local fixture were 16 ms and 0 ms. These times are not a production
+latency claim. The temporary database/container was removed after the test.
+
 `scripts/manage_lk_games_public_index.mjs` manages only
 `{ "booking.date": 1, "booking.studioId": 1 }` named
 `lk_games_public_date_station_v1`. It does not change game documents, Node-RED,
@@ -19,10 +25,10 @@ need separate evidence and changes.
 
 ## Ordered activation and stop conditions
 
-1. On a private isolated MongoDB, run the focused test and a real 19k-document
-   explain before/after rehearsal. Preserve the receipt. If the real Mongo
-   server is unavailable, record this missing gate; unit tests alone do not
-   prove the planner chooses the index.
+1. Review the preserved result of
+   `LK_GAMES_PUBLIC_INDEX_TEST_ISOLATED=YES LK_GAMES_PUBLIC_INDEX_TEST_MONGO_URI=mongodb://127.0.0.1:27018 node --test scripts/tests/lkGamesPublicIndex.mongo.test.mjs`.
+   Repeat on a loopback isolated MongoDB if the index/query contract changes;
+   the test refuses a non-loopback URI or absent isolation confirmation.
 2. Run the index tool on `lk-primary-147` from the reviewed checkout with its
    locked Node.js dependencies, using the current mode-0600
    `/root/.node-red/flows.json` as `--flow-path`. Verify the source function
