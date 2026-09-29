@@ -39,6 +39,7 @@ export const SubscriptionInformation: React.FC<
       subscriptionName: subName || sub.name,
       validityDate: sub.expirationDate,
       visitsLeft: sub.visitsLeft,
+      showTennisVisits: true,
     });
   };
 

@@ -22,7 +22,7 @@ test("subscription validity helper reads nested Viva client subscription dates",
   );
 });
 
-test("subscription usage helper shows visits for Energy visit packs only", () => {
+test("subscription usage helper shows visits for Energy and tennis visit packs", () => {
   assert.deepEqual(
     resolveSubscriptionUsageDisplay({
       subscriptionName: "Энергия 5",
@@ -39,6 +39,50 @@ test("subscription usage helper shows visits for Energy visit packs only", () =>
       visitsPrefix: "осталось",
     }),
     { kind: "visits", label: "осталось 11 занятий" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Абонемент на теннис 10",
+      visitsLeft: 4,
+      validityDate: "2026-07-31",
+      showTennisVisits: true,
+    }),
+    { kind: "visits", label: "4 занятия" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Абонемент по теннису",
+      raw: { clientSubscription: { visitsLeft: 1 } },
+      validityDate: "2026-07-31",
+      showTennisVisits: true,
+    }),
+    { kind: "visits", label: "1 занятие" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Теннисный абонемент",
+      visitsLeft: 0,
+      validityDate: "2026-07-31",
+      visitsPrefix: "осталось",
+      showTennisVisits: true,
+    }),
+    { kind: "visits", label: "осталось 0 занятий" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Подписка на теннис",
+      visitsLeft: 10,
+      validityDate: "2026-07-31",
+      showTennisVisits: true,
+    }),
+    { kind: "validity", label: "до 31.07.2026" },
+  );
+  assert.deepEqual(
+    resolveSubscriptionUsageDisplay({
+      subscriptionName: "Теннис 10",
+      validityDate: "2026-07-31",
+    }),
+    { kind: "validity", label: "до 31.07.2026" },
   );
   assert.deepEqual(
     resolveSubscriptionUsageDisplay({
