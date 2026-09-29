@@ -14,6 +14,7 @@ const sources = new Map([
   ['lib/lk1UnpaidBookingCancellation.mjs', 'scripts/lib/lk1UnpaidBookingCancellation.mjs'],
   ['lib/lk1VivaServiceToken.mjs', 'scripts/lib/lk1VivaServiceToken.mjs'],
   ['lib/lk1LiveGatewayGuard.mjs', 'scripts/lib/lk1LiveGatewayGuard.mjs'],
+  ['lib/lk1UnpaidScanCursor.mjs', 'scripts/lib/lk1UnpaidScanCursor.mjs'],
   ['package.json', 'scripts/lk1_unpaid_cancel_service/package.json'],
   ['package-lock.json', 'scripts/lk1_unpaid_cancel_service/package-lock.json'],
   ['lk1-unpaid-cancel.service', 'scripts/lk1_unpaid_cancel_service/lk1-unpaid-cancel.service'],

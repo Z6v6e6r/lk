@@ -5,6 +5,7 @@
 // reading either the live flow or PM2 environment.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { lk1VivaBinding } from './lib/lk1LiveGatewayGuard.mjs';
 
 const mode = process.env.LK1_UNPAID_CANCEL_MODE || 'OFF';
 if (process.argv.slice(2).some(arg => ['--mode', '--tenant', '--cohort-from'].includes(arg))) {
@@ -30,14 +31,16 @@ if (mode !== 'OFF') {
   } catch { throw new Error('NODE_RED_PROCESS_READ_UNAVAILABLE'); }
   const nodeRed = processes.find(item => item?.name === 'node-red');
   if (nodeRed?.pm2_env?.status !== 'online') throw new Error('NODE_RED_NOT_ONLINE');
-  const source = nodeRed.pm2_env;
-  for (const name of ['VIVA_SERVICE_TOKEN_URL', 'VIVA_SERVICE_CLIENT_ID',
-    'VIVA_SERVICE_USERNAME', 'VIVA_SERVICE_PASSWORD']) {
-    const value = source[name] || source.env?.[name];
-    if (typeof value !== 'string' || !value.trim() || /[\r\n]/.test(value)) {
-      throw new Error('VIVA_SERVICE_BINDING_INVALID');
-    }
-    process.env[name] = value;
+  const binding = lk1VivaBinding(nodeRed);
+  if (!binding) throw new Error('VIVA_SERVICE_BINDING_INVALID');
+  if (mode === 'ENFORCE_NEW'
+    && binding.sha256 !== process.env.LK1_UNPAID_CANCEL_BINDING_SHA256) {
+    process.stdout.write('{"state":"STOPPED","reason":"VIVA_SERVICE_BINDING_DRIFT"}\n');
+    process.exit(78);
+  }
+  for (const [index, name] of ['VIVA_SERVICE_TOKEN_URL', 'VIVA_SERVICE_CLIENT_ID',
+    'VIVA_SERVICE_USERNAME', 'VIVA_SERVICE_PASSWORD'].entries()) {
+    process.env[name] = binding.values[index];
   }
   if (process.env.VIVA_SERVICE_TOKEN_URL
     !== 'https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token') {

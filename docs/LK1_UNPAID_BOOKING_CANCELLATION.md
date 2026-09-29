@@ -26,21 +26,37 @@ bearer token file, a protected service-credential JSON file, or the existing
 `VIVA_SERVICE_*` environment. The service-credential path obtains and refreshes
 its bearer token; its local cache is capped at 15 minutes even when Viva reports
 a longer token lifetime. `LK1_UNPAID_CANCEL_DB` defaults to `games`. `--once`
-processes one bounded page for inspection. The code never starts during a build
+processes one bounded cycle of at most 100 rows. The code never starts during a build
 or import.
 
 The production launcher `scripts/launch_lk1_unpaid_booking_cancellation.mjs`
 uses no additional file containing Viva credentials. At startup it reads the
 existing Node-RED PM2 environment and the exact Mongo client config in the
 live flow **in memory**, checks that Node-RED is online, and passes them to the
-worker. In `ENFORCE_NEW` the worker pins the exact deployed gateway function,
-complete live flow bytes, and Node-RED PM2 process identity. It rechecks these
-at every candidate and immediately before each Viva cancellation request; a
-flow change, process restart, or outage stops further work. Its
+worker. In `ENFORCE_NEW` the worker pins the reviewed full-flow SHA, exact
+gateway function, Node-RED PM2 process identity, and a protected SHA-256 of
+the existing Viva service binding. At startup, authenticated read-only Admin
+`GET /flows` responses must match the pinned disk flow and revision before and
+after an empty request without Bearer to the direct Node-RED route. That route
+must return `401 SUBSCRIPTION_BOOKING_AUTH_REQUIRED` before any Viva or Mongo
+step. Stable PM2 snapshots bracket all three requests. The
+worker rechecks its pins at every candidate, after provider awaits, and
+immediately before each Viva cancellation request. Changed flow, binding, or
+route stops with exit 78. A PM2 restart or temporary unavailability stops the
+current attempt with exit 75; a fresh worker verifies the same pins before
+processing. The systemd rate limit bounds rapid retries. Its
 [systemd unit](../scripts/lk1_unpaid_cancel_service/lk1-unpaid-cancel.service)
 defaults to `OFF`; `/etc/padlhub/lk1-unpaid-cancel.env` is for nonsecret mode,
-tenant, and cutoff values only. A service-credential password rotation requires
-a worker restart to pick up the refreshed Node-RED PM2 environment.
+tenant, cutoff, and binding digest only. A service-credential password rotation
+requires a reviewed binding digest update and worker restart.
+
+Each 120-second scan reserves at most 20 of its 100 rows for outstanding
+`INTENT`, then scans unclaimed operations with the remaining capacity. Both
+cursor positions are fsynced in the root-only systemd state directory. A worker
+restart resumes those positions; a new tenant or cutoff stops until outstanding
+`INTENT` is reconciled and the cursor state is deliberately replaced. An
+interrupted page can be revisited because the durable operation state prevents
+a second provider PUT.
 
 Modes:
 
@@ -89,7 +105,7 @@ wide modular regeneration or an older LK1 hotfix wrapper.
 
 Build the worker only from a clean, pushed commit with
 `node scripts/lk1_unpaid_cancel_service/build_bundle.mjs ABSOLUTE_NEW_PRIVATE_DIR`.
-The bundle contains the launcher, runner, three libraries, pinned MongoDB 7.2.0
+The bundle contains the launcher, runner, four libraries, pinned MongoDB 7.2.0
 package and lockfile, systemd unit, and an exact SHA-256 manifest. Run
 `node verify_bundle.mjs ABSOLUTE_BUNDLE_DIR` before transfer and again on 147,
 passing the locally recorded manifest digest as `--expect-manifest-sha256 SHA`
@@ -114,6 +130,18 @@ before restart. A detected runtime drift exits with code 78 and a fixed reason;
 the unit explicitly prevents automatic restart for that code. An operator must
 review the changed flow and restart the service deliberately.
 
+Before `ENFORCE_NEW`, compute `LK1_UNPAID_CANCEL_BINDING_SHA256` from the four
+existing Node-RED PM2 `VIVA_SERVICE_*` values with the worker's
+`lk1VivaBinding()` helper and put only the digest in the root-owned mode-0600
+activation environment file. Set `LK1_UNPAID_CANCEL_NODE_RED_ADMIN_TOKEN_FILE`
+to an existing root-owned mode-0600 file in a root-owned mode-0700 directory,
+containing a valid Admin Bearer token for
+read-only `GET /flows`. Never write or log credential values in a release
+artifact. Without that file, `ENFORCE_NEW` stops before Mongo or Viva access.
+The current
+reviewed full-flow SHA is
+`d9764f7b6a883a644ee319a6fed44c1b087e701d030aef2c7d7c718751840087`.
+
 The unit defaults to `OFF`. Activate `SHADOW` with a root-owned mode-0600
 `/etc/padlhub/lk1-unpaid-cancel.env` containing only mode, tenant, and a fresh
 new-cohort cutoff. Keep the service stopped while applying or rolling back any
@@ -130,14 +158,12 @@ transactions were not `UNPAID` and three other operations failed closed on
 binding/state checks. That probe did not authorize writes or satisfy the full
 new-cohort observation window.
 
-The operator confirmed on 2026-09-29 that a Viva payment link lives 25 minutes
-and a transaction cannot be paid after expiry. The classifier therefore waits
+The operator confirmed on 2026-09-29 that a Viva payment link lives 25 minutes,
+an expired transaction cannot be paid, and a payment begun before expiry cannot
+settle as `PAID` afterward. The classifier therefore waits
 until both `paymentDueDate + 60 seconds` and `createDate + 26 minutes` and
-requires a fresh exact `UNPAID` immediately before cancel. This confirmation
-does not yet establish whether a payment started before link expiry can settle
-afterward, or whether the 25 minutes always start no later than `createDate`.
-Confirm both points before `ENFORCE_NEW`; if provider behavior changes, stop the
-worker.
+requires a fresh exact `UNPAID` immediately before cancel. If provider behavior
+changes, stop the worker.
 An aggregate read-only 147 probe found `createDate` and `paymentDueDate` in all
 nine sampled LK1 event transactions; their provider due time was 20 minutes
 after creation. The 26-minute bound protects the extra five minutes of link

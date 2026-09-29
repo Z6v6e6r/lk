@@ -20,16 +20,20 @@ export const isValidLk1ZonedInstant = value => iso(value) !== null;
 const nowIso = () => new Date().toISOString();
 const writeOptions = { writeConcern: { w: 'majority', j: true } };
 
-export function buildLk1UnpaidScanQuery({ tenantKey, cohortFrom, afterId = null }) {
+export function buildLk1UnpaidScanQuery({ tenantKey, cohortFrom, afterId = null, phase = 'ALL' }) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(tenantKey || '') || iso(cohortFrom) === null) {
     throw new Error('COHORT_OR_TENANT_INVALID');
   }
+  if (!['ALL', 'INTENT', 'UNCLAIMED'].includes(phase)) throw new Error('SCAN_PHASE_INVALID');
   return { tenantKey, state: 'CONFIRMED', createdAt: { $gte: new Date(cohortFrom).toISOString() },
     category: { $in: ['group_training', 'tournament'] },
     'lk1.checkout.toPayMinor': { $gt: 0 },
     'lk1.decision.subscriptionVisitCount': 0,
     ...(afterId ? { _id: { $gt: afterId } } : {}),
-    $or: [{ 'lk1.unpaidCancellation': { $exists: false } }, { 'lk1.unpaidCancellation.phase': 'INTENT' }],
+    ...(phase === 'INTENT' ? { 'lk1.unpaidCancellation.phase': 'INTENT' }
+      : phase === 'UNCLAIMED' ? { 'lk1.unpaidCancellation': { $exists: false } }
+        : { $or: [{ 'lk1.unpaidCancellation': { $exists: false } },
+          { 'lk1.unpaidCancellation.phase': 'INTENT' }] }),
   };
 }
 
@@ -171,7 +175,8 @@ const intentQuery = (op, attemptedAt) => ({ _id: op._id, state: 'CONFIRMED', boo
   'lk1.unpaidCancellation.phase': 'INTENT', 'lk1.unpaidCancellation.attemptedAt': attemptedAt });
 const matched = ack => ack?.acknowledged === true && ack.matchedCount === 1 && ack.modifiedCount === 1;
 
-async function releaseConfirmed(op, operations, attemptedAt, now) {
+async function releaseConfirmed(op, operations, attemptedAt, now, shouldStop) {
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   const at = now();
   const ack = await operations.updateOne(intentQuery(op, attemptedAt), { $set: {
     state: 'RELEASED', releaseReason: 'LK1_UNPAID_CHECKOUT_EXPIRED', releasedAt: at, updatedAt: at,
@@ -180,7 +185,8 @@ async function releaseConfirmed(op, operations, attemptedAt, now) {
   return { state: matched(ack) ? 'CANCELLED' : 'RETRY_STORE' };
 }
 
-async function markReview(op, operations, attemptedAt, reason, now) {
+async function markReview(op, operations, attemptedAt, reason, now, shouldStop) {
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   const ack = await operations.updateOne(intentQuery(op, attemptedAt), { $set: {
     'lk1.unpaidCancellation.phase': 'REVIEW', 'lk1.unpaidCancellation.reason': reason,
     updatedAt: now(),
@@ -200,17 +206,21 @@ export async function reconcileLk1UnpaidBooking({ op, operations, provider, coho
   if (prior && prior.phase !== 'INTENT') return { state: 'SKIPPED', reason: 'ALREADY_HANDLED' };
   if (prior && mode === 'SHADOW') return { state: 'SKIPPED', reason: 'INTENT_REQUIRES_ENFORCE_OR_REVIEW' };
   const tx = classifyLk1Transaction(op, await provider.readTransaction(op), now());
+  if (shouldStop()) return { state: prior ? 'STOPPED_AFTER_INTENT' : 'STOPPED' };
   if (prior) {
-    if (tx.reason !== 'DUE') return markReview(op, operations, prior.attemptedAt, tx.reason, now);
+    if (tx.reason !== 'DUE') return markReview(op, operations, prior.attemptedAt, tx.reason, now, shouldStop);
     const booking = classifyLk1Booking(op, await provider.readBooking(op));
-    if (booking.reason === 'CANCELLED') return releaseConfirmed(op, operations, prior.attemptedAt, now);
-    if (booking.reason === 'ACTIVE') return markReview(op, operations, prior.attemptedAt, 'CANCEL_OUTCOME_UNKNOWN', now);
+    if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
+    if (booking.reason === 'CANCELLED') return releaseConfirmed(op, operations, prior.attemptedAt, now, shouldStop);
+    if (booking.reason === 'ACTIVE') return markReview(op, operations, prior.attemptedAt, 'CANCEL_OUTCOME_UNKNOWN', now, shouldStop);
     return { state: 'PRECHECK_REQUIRED', reason: booking.reason };
   }
   if (tx.reason !== 'DUE') return { state: 'SKIPPED', reason: tx.reason };
   const booking = classifyLk1Booking(op, await provider.readBooking(op));
+  if (shouldStop()) return { state: 'STOPPED' };
   if (booking.reason !== 'ACTIVE') return { state: 'SKIPPED', reason: booking.reason };
   const options = await provider.readCancelOptions(op);
+  if (shouldStop()) return { state: 'STOPPED' };
   if ((options?.bookingId !== undefined && options.bookingId !== op.bookingId)
     || options?.cancellationOptions?.cancellationOnly?.available !== true) {
     return { state: 'SKIPPED', reason: 'CANCELLATION_ONLY_UNAVAILABLE' };
@@ -227,31 +237,38 @@ export async function reconcileLk1UnpaidBooking({ op, operations, provider, coho
     },
   } }, writeOptions);
   if (!matched(ack)) return { state: 'RETRY_STORE' };
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   // Re-read after the durable intent so a payment arriving during the first probe
   // prevents the provider write. Booking cancellation is a single-attempt command.
   const freshTx = classifyLk1Transaction(op, await provider.readTransaction(op), now());
-  if (freshTx.reason !== 'DUE') return markReview(op, operations, attemptedAt, freshTx.reason, now);
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
+  if (freshTx.reason !== 'DUE') return markReview(op, operations, attemptedAt, freshTx.reason, now, shouldStop);
   const freshBooking = classifyLk1Booking(op, await provider.readBooking(op));
-  if (freshBooking.reason === 'CANCELLED') return releaseConfirmed(op, operations, attemptedAt, now);
-  if (freshBooking.reason !== 'ACTIVE') return markReview(op, operations, attemptedAt, freshBooking.reason, now);
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
+  if (freshBooking.reason === 'CANCELLED') return releaseConfirmed(op, operations, attemptedAt, now, shouldStop);
+  if (freshBooking.reason !== 'ACTIVE') return markReview(op, operations, attemptedAt, freshBooking.reason, now, shouldStop);
   const freshOptions = await provider.readCancelOptions(op);
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   if ((freshOptions?.bookingId !== undefined && freshOptions.bookingId !== op.bookingId)
     || freshOptions?.cancellationOptions?.cancellationOnly?.available !== true) {
-    return markReview(op, operations, attemptedAt, 'CANCELLATION_ONLY_UNAVAILABLE', now);
+    return markReview(op, operations, attemptedAt, 'CANCELLATION_ONLY_UNAVAILABLE', now, shouldStop);
   }
   if (iso(op.lk1.target.startsAt) <= iso(now())) {
-    return markReview(op, operations, attemptedAt, 'SERVICE_STARTED', now);
+    return markReview(op, operations, attemptedAt, 'SERVICE_STARTED', now, shouldStop);
   }
   if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   try {
     const result = await provider.cancelBooking(op, shouldStop);
     if (result?.stopped) return { state: 'STOPPED_AFTER_INTENT' };
   } catch { /* Readback resolves known success. */ }
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
   const after = classifyLk1Booking(op, await provider.readBooking(op));
-  if (after.reason !== 'CANCELLED') return markReview(op, operations, attemptedAt, 'CANCEL_OUTCOME_UNKNOWN', now);
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
+  if (after.reason !== 'CANCELLED') return markReview(op, operations, attemptedAt, 'CANCEL_OUTCOME_UNKNOWN', now, shouldStop);
   const finalTx = classifyLk1Transaction(op, await provider.readTransaction(op), now());
-  if (finalTx.reason !== 'DUE') return markReview(op, operations, attemptedAt, finalTx.reason, now);
-  return releaseConfirmed(op, operations, attemptedAt, now);
+  if (shouldStop()) return { state: 'STOPPED_AFTER_INTENT' };
+  if (finalTx.reason !== 'DUE') return markReview(op, operations, attemptedAt, finalTx.reason, now, shouldStop);
+  return releaseConfirmed(op, operations, attemptedAt, now, shouldStop);
 }
 
 export function createLk1VivaCancellationProvider({ token, baseUrl = 'https://api.vivacrm.ru',

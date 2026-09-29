@@ -10,7 +10,8 @@ import { classifyLk1Transaction, classifyLk1Booking, eligibleLk1UnpaidOperation,
   reconcileLk1UnpaidBooking, createLk1VivaCancellationProvider,
   buildLk1UnpaidScanQuery } from '../lib/lk1UnpaidBookingCancellation.mjs';
 import { createLk1VivaServiceToken } from '../lib/lk1VivaServiceToken.mjs';
-import { createLk1LiveGatewayGuard } from '../lib/lk1LiveGatewayGuard.mjs';
+import { createLk1LiveGatewayGuard, lk1VivaBinding } from '../lib/lk1LiveGatewayGuard.mjs';
+import { openLk1UnpaidScanCursor, scanLk1UnpaidPage } from '../lib/lk1UnpaidScanCursor.mjs';
 
 const instant = '2099-01-01T12:01:00.000Z';
 const cohort = '2099-01-01T00:00:00.000Z';
@@ -97,6 +98,50 @@ test('scan cutoff is normalized to UTC before the Mongo string comparison', () =
   assert.equal(query.createdAt.$gte, '2099-01-01T12:00:00.000Z');
   assert.throws(() => buildLk1UnpaidScanQuery({ tenantKey: 'fixture', cohortFrom: '2099-02-30T12:00:00Z' }),
     /COHORT_OR_TENANT_INVALID/);
+  assert.equal(buildLk1UnpaidScanQuery({ tenantKey: 'fixture', cohortFrom: cohort,
+    phase: 'INTENT' })['lk1.unpaidCancellation.phase'], 'INTENT');
+  assert.deepEqual(buildLk1UnpaidScanQuery({ tenantKey: 'fixture', cohortFrom: cohort,
+    phase: 'UNCLAIMED' })['lk1.unpaidCancellation'], { $exists: false });
+});
+
+test('scan cursors persist across restarts and reject cohort changes', async t => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-cursor-')));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const file = path.join(folder, 'cursor.json');
+  const config = { file, tenantKey: 'fixture', cohortFrom: cohort };
+  const first = await openLk1UnpaidScanCursor(config);
+  assert.equal(first.afterId('UNCLAIMED'), null);
+  await first.advance('UNCLAIMED', 'lk1-product:later-page');
+  await first.advance('INTENT', 'lk1-product:pending-intent');
+  const restarted = await openLk1UnpaidScanCursor(config);
+  assert.equal(restarted.afterId('UNCLAIMED'), 'lk1-product:later-page');
+  assert.equal(restarted.afterId('INTENT'), 'lk1-product:pending-intent');
+  await assert.rejects(openLk1UnpaidScanCursor({ ...config,
+    cohortFrom: '2099-01-02T00:00:00.000Z' }), /SCAN_CURSOR_COHORT_DRIFT/);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  fs.chmodSync(file, 0o644);
+  await assert.rejects(openLk1UnpaidScanCursor(config), /SCAN_CURSOR_FILE_UNSAFE/);
+});
+
+test('scanner restart in the middle of a page resumes without skipping a row', async t => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-page-')));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const config = { file: path.join(folder, 'cursor.json'), tenantKey: 'fixture', cohortFrom: cohort };
+  const rows = ['a', 'b', 'c'].map(id => ({ _id: `lk1-product:${id}` }));
+  const visited = [];
+  let stopped = false;
+  const loadRows = (afterId, limit) => rows.filter(row => !afterId || row._id > afterId).slice(0, limit);
+  const first = await openLk1UnpaidScanCursor(config);
+  await scanLk1UnpaidPage({ phase: 'UNCLAIMED', limit: 3, cursor: first, loadRows,
+    shouldStop: () => stopped, visit: async row => { visited.push(row._id);
+      if (row._id === 'lk1-product:b') stopped = true; } });
+  assert.equal(first.afterId('UNCLAIMED'), 'lk1-product:a');
+  stopped = false;
+  const restarted = await openLk1UnpaidScanCursor(config);
+  await scanLk1UnpaidPage({ phase: 'UNCLAIMED', limit: 3, cursor: restarted, loadRows,
+    shouldStop: () => stopped, visit: async row => { visited.push(row._id); } });
+  assert.deepEqual(visited, ['lk1-product:a', 'lk1-product:b', 'lk1-product:b', 'lk1-product:c']);
+  assert.equal(restarted.afterId('UNCLAIMED'), null);
 });
 
 test('transaction requires exact UNPAID, due date, amount and supplied aliases', () => {
@@ -270,6 +315,37 @@ test('stop after the durable intent prevents Viva PUT and keeps recovery evidenc
   assert.equal(store.row.lk1.unpaidCancellation.phase, 'INTENT');
 });
 
+test('runtime change during provider reads leaves no premature write or repeat PUT', async () => {
+  const seed = fixture();
+  for (const boundary of ['before-intent', 'after-intent', 'after-put']) {
+    const store = fakeStore(seed.op), provider = fakeProvider(seed);
+    let stopped = false;
+    if (boundary === 'before-intent') {
+      const read = provider.readTransaction;
+      provider.readTransaction = async () => { const result = await read(); stopped = true; return result; };
+    } else if (boundary === 'after-intent') {
+      const read = provider.readTransaction;
+      let count = 0;
+      provider.readTransaction = async () => { const result = await read();
+        if (++count === 2) stopped = true; return result; };
+    } else {
+      const cancel = provider.cancelBooking;
+      provider.cancelBooking = async () => { const result = await cancel(); stopped = true; return result; };
+    }
+    const result = await reconcileLk1UnpaidBooking({ op: seed.op, operations: store,
+      provider, cohortFrom: cohort, mode: 'ENFORCE_NEW', now: () => instant,
+      shouldStop: () => stopped });
+    assert.equal(result.state, boundary === 'before-intent' ? 'STOPPED' : 'STOPPED_AFTER_INTENT');
+    assert.equal(store.calls.length, boundary === 'before-intent' ? 0 : 1);
+    assert.equal(provider.calls.filter(call => call === 'cancel').length, boundary === 'after-put' ? 1 : 0);
+    if (boundary === 'after-put') {
+      stopped = false;
+      assert.equal((await run(store.row, store, provider)).state, 'CANCELLED');
+      assert.equal(provider.calls.filter(call => call === 'cancel').length, 1);
+    }
+  }
+});
+
 test('restart after accepted Viva cancel releases from exact provider readback without a new PUT', async () => {
   const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
   store.row.lk1.unpaidCancellation = { phase: 'INTENT', attemptedAt: '2099-01-01T12:00:00.000Z' };
@@ -355,10 +431,12 @@ test('service token accepts Viva seven-day TTL but refreshes its cache within fi
   assert.equal(await token(), 'token-2');
 });
 
-test('ENFORCE guard stops after flow change, Node-RED restart or process outage', t => {
-  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-guard-'));
+test('ENFORCE guard pins flow, Viva binding and runtime route across PM2 restarts', async t => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-guard-')));
   t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
   const flowPath = path.join(folder, 'flows.json');
+  const adminTokenFile = path.join(folder, 'admin.token');
+  fs.writeFileSync(adminTokenFile, 'fixture-admin-1234', { mode: 0o600 });
   const functionBody = 'fixture gateway';
   const expectedGatewaySha = crypto.createHash('sha256').update(functionBody).digest('hex');
   const writeFlow = body => {
@@ -369,25 +447,61 @@ test('ENFORCE guard stops after flow change, Node-RED restart or process outage'
   };
   let process = { name: 'node-red', pid: 123, pm2_env: {
     status: 'online', pm_uptime: 1000, restart_time: 1,
+    VIVA_SERVICE_TOKEN_URL: 'https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token',
+    VIVA_SERVICE_CLIENT_ID: 'fixture', VIVA_SERVICE_USERNAME: 'fixture-user',
+    VIVA_SERVICE_PASSWORD: 'fixture-password',
   } };
-  const create = () => createLk1LiveGatewayGuard({ flowPath,
-    processes: () => [process], expectedGatewaySha });
   writeFlow(functionBody);
-  const guard = create();
-  assert.equal(guard.check(), true);
+  const expectedFlowSha = crypto.createHash('sha256').update(fs.readFileSync(flowPath)).digest('hex');
+  const expectedBindingSha = lk1VivaBinding(process).sha256;
+  let activeFlow = JSON.parse(fs.readFileSync(flowPath, 'utf8'));
+  const create = (readinessStatus = 401, fetchOverride) =>
+    createLk1LiveGatewayGuard({ flowPath, processes: () => [process], expectedGatewaySha,
+      expectedFlowSha, expectedBindingSha, adminTokenFile,
+      fetchImpl: fetchOverride || (async (url, options) => url.endsWith('/flows')
+        ? { status: options.headers.Authorization === 'Bearer fixture-admin-1234' ? 200 : 401,
+          json: async () => ({ rev: 'fixture-revision', flows: structuredClone(activeFlow) }) }
+        : { status: readinessStatus,
+          json: async () => ({ details: { code: 'SUBSCRIPTION_BOOKING_AUTH_REQUIRED' } }) }) });
+  const guard = await create();
+  assert.equal(guard.check(), 'HEALTHY');
   writeFlow('removed guard');
-  assert.equal(guard.check(), false);
-  assert.throws(create, /LIVE_GATEWAY_GUARD_NOT_VERIFIED/);
+  assert.equal(guard.check(), 'DRIFT');
+  await assert.rejects(create(), /LIVE_GATEWAY_DRIFT/);
   writeFlow(functionBody);
-  assert.equal(guard.check(), true);
+  assert.equal(guard.check(), 'HEALTHY');
   fs.utimesSync(flowPath, new Date(2000), new Date(2000));
-  assert.equal(guard.check(), false);
+  assert.equal(guard.check(), 'DRIFT');
   writeFlow(functionBody);
   process = { ...process, pid: 456, pm2_env: { ...process.pm2_env, restart_time: 2 } };
-  assert.equal(guard.check(), false);
+  assert.equal(guard.check(), 'RESTART_PENDING');
+  assert.equal((await create()).check(), 'HEALTHY');
   process = { ...process, pid: 123, pm2_env: { ...process.pm2_env, restart_time: 1,
     status: 'offline' } };
-  assert.equal(guard.check(), false);
+  assert.equal(guard.check(), 'RESTART_PENDING');
+  await assert.rejects(create(), /LIVE_GATEWAY_RESTART_PENDING/);
+  process = { ...process, pm2_env: { ...process.pm2_env, status: 'online',
+    VIVA_SERVICE_PASSWORD: 'rotated' } };
+  assert.equal(guard.check(), 'DRIFT');
+  await assert.rejects(create(), /LIVE_GATEWAY_DRIFT/);
+  process = { ...process, pm2_env: { ...process.pm2_env,
+    VIVA_SERVICE_PASSWORD: 'fixture-password' } };
+  process = { ...process, pm2_env: { ...process.pm2_env,
+    pm_uptime: Date.now() - 1000 } };
+  await assert.rejects(create(), /LIVE_GATEWAY_RESTART_PENDING/);
+  process = { ...process, pm2_env: { ...process.pm2_env,
+    pm_uptime: 1000 } };
+  await assert.rejects(create(401, async () => { throw new Error('connection refused'); }),
+    /LIVE_GATEWAY_ACTIVE_FLOW_UNVERIFIED/);
+  await assert.rejects(create(401, async url => url.endsWith('/flows')
+    ? { status: 200, json: async () => ({ rev: 'fixture-revision', flows: structuredClone(activeFlow) }) }
+    : Promise.reject(new Error('route unavailable'))), /LIVE_GATEWAY_ROUTE_UNVERIFIED/);
+  await assert.rejects(create(404),
+    /LIVE_GATEWAY_ROUTE_UNVERIFIED/);
+  activeFlow = [{ ...activeFlow[0], func: 'stale gateway' }];
+  await assert.rejects(create(), /LIVE_GATEWAY_ACTIVE_FLOW_UNVERIFIED/);
+  fs.chmodSync(adminTokenFile, 0o644);
+  await assert.rejects(create(), /LIVE_GATEWAY_ADMIN_AUTH_UNAVAILABLE/);
 });
 
 test('production launcher rejects a CLI mode override before reading live state', () => {

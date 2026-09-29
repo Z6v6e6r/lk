@@ -9,6 +9,7 @@ export const BUNDLE_FILES = [
   'lib/lk1UnpaidBookingCancellation.mjs',
   'lib/lk1VivaServiceToken.mjs',
   'lib/lk1LiveGatewayGuard.mjs',
+  'lib/lk1UnpaidScanCursor.mjs',
   'package.json',
   'package-lock.json',
   'lk1-unpaid-cancel.service',
