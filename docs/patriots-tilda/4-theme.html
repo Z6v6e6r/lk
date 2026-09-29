@@ -1,0 +1,34 @@
+<!-- New T123 before the events block, or append to the existing page style block. -->
+<style>
+  .ph-landing[data-ph-partner="patriots"] .ph-patriots-plan-note,
+  .ph-landing[data-ph-partner="patriots"] .ph-patriots-plan-footnote { font: 500 12px/1.5 Inter,Arial,sans-serif; color: #55565c; margin: 12px 0 0; }
+  .ph-landing[data-ph-partner="patriots"] .ph-patriots-plan-footnote { border-top: 1px solid #e7e7eb; padding-top: 14px; }
+  .ph-landing[data-ph-partner="patriots"] .ph-patriots-checkout-status { min-height: 18px; font: 500 12px/1.4 Inter,Arial,sans-serif; color: #8a1e16; margin: 8px 0 12px; }
+  .ph-landing[data-ph-partner="patriots"] [data-patriots-checkout]:disabled { cursor: not-allowed; opacity: .55; }
+  .ph-landing[data-ph-partner="patriots"] .ph-hero__feature-icon { color: #d42c1b; }
+  #atlanty-schedule-root .atlanty-schedule {
+    --atlanty-accent: #d42c1b;
+    --atlanty-accent-soft: #fff1ee;
+    --atlanty-text: #101114;
+    --atlanty-muted: #6d6e73;
+    --atlanty-border: #e7e7eb;
+    --atlanty-surface-muted: #fff1ee;
+    --atlanty-font-display: Inter,Arial,sans-serif;
+    --atlanty-font-body: Inter,Arial,sans-serif;
+    --atlanty-radius: 18px;
+    --atlanty-gap: 24px;
+    --atlanty-card-width: min(84%, 360px);
+    --atlanty-track-padding: 0px;
+    --atlanty-card-shadow: none;
+    --atlanty-card-shadow-hover: 0 18px 40px rgba(17,17,17,.1);
+    --atlanty-pill-bg: rgba(255,255,255,.94);
+    --atlanty-pill-color: #101114;
+    --atlanty-pill-icon-color: #d42c1b;
+  }
+  @media (min-width: 761px) and (max-width: 1100px) {
+    #atlanty-schedule-root .atlanty-schedule { --atlanty-card-width: calc((100% - var(--atlanty-gap)) / 2); }
+  }
+  @media (min-width: 1101px) {
+    #atlanty-schedule-root .atlanty-schedule { --atlanty-card-width: calc((100% - 2 * var(--atlanty-gap)) / 3); }
+  }
+</style>

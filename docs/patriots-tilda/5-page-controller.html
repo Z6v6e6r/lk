@@ -1,0 +1,108 @@
+<!-- T123 rec4149547901: replace the current demo controller after all media/content blocks. -->
+<script>
+(function () {
+  'use strict';
+  if (window.__PH_PATRIOTS_PAGE_SPLIT_V3__) return;
+  window.__PH_PATRIOTS_PAGE_SPLIT_V3__ = true;
+  var scope = '.ph-landing[data-ph-split="page"][data-ph-partner="patriots"]';
+  var offerKey = 'patriots';
+  // The preceding events block carries the single rollout flag for copy and checkout.
+  var entitlementsReady = window.PH_PATRIOTS_ENTITLEMENTS_READY === true;
+  var storefrontUrl = 'https://padlhub.su/lk/subscription-storefront/subscription-storefront.js';
+  var widget = null;
+
+  function readMedia(key) {
+    var item = (window.__PH_PATRIOTS_MEDIA_V2__ || {})[key];
+    if (!item || !Array.isArray(item.chunks)) return null;
+    for (var i = 0; i < item.total; i++) if (typeof item.chunks[i] !== 'string') return null;
+    var data = item.chunks.join('');
+    return data.length === item.length ? 'data:' + item.mime + ';base64,' + data : null;
+  }
+  function hydrate() {
+    document.querySelectorAll(scope + ' [data-ph-media]').forEach(function (img) {
+      var source = readMedia(img.getAttribute('data-ph-media'));
+      if (source && img.getAttribute('src') !== source) img.setAttribute('src', source);
+    });
+    document.querySelectorAll(scope + ' [data-ph-background]').forEach(function (node) {
+      var source = readMedia(node.getAttribute('data-ph-background'));
+      if (source && node.getAttribute('data-ph-photo-ready') !== '1') {
+        node.style.backgroundImage = 'url("' + source + '")';
+        node.setAttribute('data-ph-photo-ready', '1');
+      }
+    });
+  }
+  window.addEventListener('ph:patriots-media', hydrate);
+
+  function status(message) {
+    var element = document.querySelector(scope + ' [data-patriots-checkout-status]');
+    if (element) element.textContent = message;
+  }
+  function ready() {
+    var candidate = window.LKWidgetSubscriptionStorefront;
+    return !!(entitlementsReady && candidate && candidate.checkoutVersion === 1 && candidate.checkoutChannel === 'prod'
+      && typeof candidate.supportsCheckoutOffer === 'function' && candidate.supportsCheckoutOffer(offerKey)
+      && typeof candidate.openCheckout === 'function' && typeof candidate.resumeCheckout === 'function');
+  }
+  function activate() {
+    if (!entitlementsReady) { status('Оформление откроется после подтверждения условий записи.'); return; }
+    if (!ready()) { status('Оформление пока недоступно. Попробуйте позже.'); return; }
+    widget = window.LKWidgetSubscriptionStorefront;
+    document.querySelectorAll(scope + ' [data-patriots-checkout]').forEach(function (button) { button.disabled = false; });
+    document.querySelectorAll(scope + ' [data-patriots-pending-note]').forEach(function (note) { note.hidden = true; });
+    document.querySelectorAll(scope + ' [data-patriots-benefits-title]').forEach(function (title) { title.textContent = 'Условия участия'; });
+    status('');
+    try { widget.resumeCheckout(offerKey); } catch (error) { /* Возврата может не быть. */ }
+  }
+  function loadStorefront() {
+    if (!entitlementsReady) return activate();
+    if (ready()) return activate();
+    var script = document.createElement('script');
+    script.id = 'padlhub-patriots-storefront-script';
+    script.src = storefrontUrl + '?force_ts=' + Date.now();
+    script.async = true;
+    script.crossOrigin = 'anonymous';
+    script.onload = activate;
+    script.onerror = function () { status('Оформление пока недоступно. Попробуйте позже.'); };
+    document.head.appendChild(script);
+  }
+  function placePhoto() {
+    var hero = document.querySelector(scope + ' .ph-hero');
+    var content = document.querySelector(scope + ' .ph-hero__content');
+    if (!hero || !content) return;
+    hero.style.setProperty('--mobile-photo-top', (content.offsetHeight - 24) + 'px');
+    hero.style.setProperty('--mobile-photo-height', '440px');
+  }
+  function boot() {
+    hydrate();
+    placePhoto();
+    var content = document.querySelector(scope + ' .ph-hero__content');
+    if (content && typeof ResizeObserver !== 'undefined') new ResizeObserver(placePhoto).observe(content);
+    else window.addEventListener('resize', placePhoto);
+    document.querySelectorAll(scope + ' [data-patriots-checkout]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        if (!widget) return;
+        try { widget.openCheckout(offerKey); }
+        catch (error) { status('Не удалось открыть оформление. Обновите страницу или обратитесь в поддержку.'); }
+      });
+    });
+    document.querySelectorAll(scope + ' a[href^="#"]').forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        var target = document.getElementById(link.getAttribute('href').slice(1));
+        if (!target) return;
+        event.preventDefault();
+        target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+        if (link.classList.contains('skip-link')) { target.setAttribute('tabindex', '-1'); target.focus({ preventScroll: true }); }
+      });
+    });
+    loadStorefront();
+    window.setTimeout(function () {
+      var missing = ['logo', 'badge', 'hero', 'hub', 'avatar1', 'avatar2', 'avatar3']
+        .filter(function (key) { return !readMedia(key); });
+      if (missing.length) console.error('[Патриоты] Не хватает блоков изображений:', missing.join(', '));
+    }, 2000);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+  else boot();
+})();
+</script>
