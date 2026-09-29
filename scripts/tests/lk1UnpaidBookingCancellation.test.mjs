@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { classifyLk1Transaction, classifyLk1Booking, eligibleLk1UnpaidOperation,
   reconcileLk1UnpaidBooking, createLk1VivaCancellationProvider,
   buildLk1UnpaidScanQuery } from '../lib/lk1UnpaidBookingCancellation.mjs';
+import { createLk1VivaServiceToken } from '../lib/lk1VivaServiceToken.mjs';
+import { createLk1LiveGatewayGuard, lk1VivaBinding } from '../lib/lk1LiveGatewayGuard.mjs';
+import { openLk1UnpaidScanCursor, scanLk1UnpaidPage } from '../lib/lk1UnpaidScanCursor.mjs';
 
 const instant = '2099-01-01T12:01:00.000Z';
 const cohort = '2099-01-01T00:00:00.000Z';
@@ -20,6 +29,7 @@ const fixture = () => {
       checkout: { transactionId: 'transaction', toPayMinor: 275000, paymentUrl: 'https://pay.example.test/fixture' } } };
   op._id = `lk1-product:${JSON.stringify([op.tenantKey, op.actorClientId, op.operationId])}`;
   const transaction = { id: 'transaction', status: 'UNPAID', toPay: 275000,
+    createDate: '2099-01-01T11:30:00.000Z',
     paymentDueDate: '2099-01-01T11:58:00.000Z', cardPaymentInfo: { status: 'NEW' } };
   const booking = { id: 'booking', clientId: 'actor', exerciseId: 'exercise',
     paymentType: 'ON_PLACE', isCancelled: false };
@@ -65,7 +75,12 @@ const run = (op, store, provider, mode = 'ENFORCE_NEW') => reconcileLk1UnpaidBoo
 test('only a post-cutoff LK1 money event with no visit debit is eligible', () => {
   const { op } = fixture();
   assert.equal(eligibleLk1UnpaidOperation(op, cohort, instant).reason, 'ELIGIBLE');
+  const withoutAction = structuredClone(op);
+  delete withoutAction.action;
+  assert.equal(eligibleLk1UnpaidOperation(withoutAction, cohort, instant).reason, 'ELIGIBLE');
   for (const mutate of [
+    row => { row.action = 'BOOK_TOURNAMENT'; },
+    row => { row.managedAction = 'BOOK_TOURNAMENT'; },
     row => { row.createdAt = '2098-12-31T23:59:59.999Z'; },
     row => { row.lk1.decision.subscriptionVisitCount = 1; },
     row => { delete row.lk1.checkout; },
@@ -83,13 +98,62 @@ test('scan cutoff is normalized to UTC before the Mongo string comparison', () =
   assert.equal(query.createdAt.$gte, '2099-01-01T12:00:00.000Z');
   assert.throws(() => buildLk1UnpaidScanQuery({ tenantKey: 'fixture', cohortFrom: '2099-02-30T12:00:00Z' }),
     /COHORT_OR_TENANT_INVALID/);
+  assert.equal(buildLk1UnpaidScanQuery({ tenantKey: 'fixture', cohortFrom: cohort,
+    phase: 'INTENT' })['lk1.unpaidCancellation.phase'], 'INTENT');
+  assert.deepEqual(buildLk1UnpaidScanQuery({ tenantKey: 'fixture', cohortFrom: cohort,
+    phase: 'UNCLAIMED' })['lk1.unpaidCancellation'], { $exists: false });
+});
+
+test('scan cursors persist across restarts and reject cohort changes', async t => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-cursor-')));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const file = path.join(folder, 'cursor.json');
+  const config = { file, tenantKey: 'fixture', cohortFrom: cohort };
+  const first = await openLk1UnpaidScanCursor(config);
+  assert.equal(first.afterId('UNCLAIMED'), null);
+  await first.advance('UNCLAIMED', 'lk1-product:later-page');
+  await first.advance('INTENT', 'lk1-product:pending-intent');
+  const restarted = await openLk1UnpaidScanCursor(config);
+  assert.equal(restarted.afterId('UNCLAIMED'), 'lk1-product:later-page');
+  assert.equal(restarted.afterId('INTENT'), 'lk1-product:pending-intent');
+  await assert.rejects(openLk1UnpaidScanCursor({ ...config,
+    cohortFrom: '2099-01-02T00:00:00.000Z' }), /SCAN_CURSOR_COHORT_DRIFT/);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  fs.chmodSync(file, 0o644);
+  await assert.rejects(openLk1UnpaidScanCursor(config), /SCAN_CURSOR_FILE_UNSAFE/);
+});
+
+test('scanner restart in the middle of a page resumes without skipping a row', async t => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-page-')));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const config = { file: path.join(folder, 'cursor.json'), tenantKey: 'fixture', cohortFrom: cohort };
+  const rows = ['a', 'b', 'c'].map(id => ({ _id: `lk1-product:${id}` }));
+  const visited = [];
+  let stopped = false;
+  const loadRows = (afterId, limit) => rows.filter(row => !afterId || row._id > afterId).slice(0, limit);
+  const first = await openLk1UnpaidScanCursor(config);
+  await scanLk1UnpaidPage({ phase: 'UNCLAIMED', limit: 3, cursor: first, loadRows,
+    shouldStop: () => stopped, visit: async row => { visited.push(row._id);
+      if (row._id === 'lk1-product:b') stopped = true; } });
+  assert.equal(first.afterId('UNCLAIMED'), 'lk1-product:a');
+  stopped = false;
+  const restarted = await openLk1UnpaidScanCursor(config);
+  await scanLk1UnpaidPage({ phase: 'UNCLAIMED', limit: 3, cursor: restarted, loadRows,
+    shouldStop: () => stopped, visit: async row => { visited.push(row._id); } });
+  assert.deepEqual(visited, ['lk1-product:a', 'lk1-product:b', 'lk1-product:b', 'lk1-product:c']);
+  assert.equal(restarted.afterId('UNCLAIMED'), null);
 });
 
 test('transaction requires exact UNPAID, due date, amount and supplied aliases', () => {
   const { op, transaction } = fixture();
   assert.equal(classifyLk1Transaction(op, transaction, instant).reason, 'DUE');
+  assert.equal(classifyLk1Transaction(op, {
+    ...transaction, paymentDueDate: '2099-01-01T14:58:00.274625208+03:00',
+  }, instant).reason, 'DUE');
   for (const change of [{ status: 'PAID' }, { status: 'WAITING' }, { status: 'PARTIALLY_PAID' },
-    { paymentDueDate: undefined }, { paymentDueDate: '2099-01-01T12:00:30.000Z' },
+    { paymentDueDate: undefined }, { createDate: undefined },
+    { createdAt: '2099-01-01T11:29:00.000Z' },
+    { paymentDueDate: '2099-01-01T12:00:30.000Z' },
     { paymentDueDate: '2099-02-30T11:58:00.000Z' },
     { clientId: 'other' }, { bookingIds: ['other'] }, { exerciseId: 'other' },
     { toPay: 1 }, { id: 'other' },
@@ -100,10 +164,35 @@ test('transaction requires exact UNPAID, due date, amount and supplied aliases',
   }
 });
 
+test('UNPAID is not due while its 25-minute payment link may still work', () => {
+  const { op, transaction } = fixture();
+  const shortProviderDue = { ...transaction, createDate: '2099-01-01T11:40:00.000Z' };
+  assert.equal(classifyLk1Transaction(op, shortProviderDue, instant).reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, shortProviderDue, '2099-01-01T12:05:59.999Z').reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, shortProviderDue, '2099-01-01T12:06:00.000Z').reason, 'DUE');
+  assert.equal(classifyLk1Transaction(op, { ...shortProviderDue,
+    createDate: '2099-01-01T11:58:01.000Z' }, instant).reason, 'DEADLINE_INVALID');
+  assert.equal(classifyLk1Transaction(op, { ...transaction,
+    paymentDueDate: '2099-01-01T12:00:30.000Z' }, instant).reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, { ...transaction,
+    paymentDueDate: '2099-01-01T12:00:30.000Z' }, '2099-01-01T12:01:30.000Z').reason, 'DUE');
+  const nanoZone = { ...transaction, createDate: '2099-01-01T14:30:00.123456789+03:00',
+    paymentDueDate: '2099-01-01T14:55:00.000000000+03:00' };
+  assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.122Z').reason, 'NOT_DUE');
+  assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.123Z').reason, 'DUE');
+});
+
 test('booking requires exact owner, exercise, ON_PLACE carrier and explicit cancellation proof', () => {
   const { op, booking } = fixture();
   assert.equal(classifyLk1Booking(op, booking).reason, 'ACTIVE');
   assert.equal(classifyLk1Booking(op, { ...booking, isCancelled: true }).reason, 'CANCELLED');
+  const scoped = { ...booking, __lk1ScopedExerciseId: op.exerciseId };
+  delete scoped.exerciseId;
+  assert.equal(classifyLk1Booking(op, scoped).reason, 'ACTIVE');
+  assert.equal(classifyLk1Booking(op, { ...scoped, __lk1ScopedExerciseId: 'other' }).reason,
+    'BOOKING_BINDING_INVALID');
+  assert.equal(classifyLk1Booking(op, { ...scoped, exerciseId: 'other' }).reason,
+    'BOOKING_BINDING_INVALID');
   for (const change of [{ clientId: 'other' }, { exerciseId: 'other' }, { id: 'other' },
     { paymentType: 'SUBSCRIPTION' }, { isCancelled: null },
     { isCancelled: false, status: 'CANCELLED' }, { transactionStatus: 'PAID' },
@@ -169,6 +258,19 @@ test('payment arriving on the second read stops before Viva cancellation', async
   assert.equal(store.row.state, 'CONFIRMED');
 });
 
+test('a later provider deadline on the second read stops before Viva cancellation', async () => {
+  const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
+  let reads = 0;
+  provider.readTransaction = async () => {
+    reads += 1;
+    return { ...seed.transaction,
+      paymentDueDate: reads === 1 ? seed.transaction.paymentDueDate : '2099-01-01T12:00:30.000Z' };
+  };
+  assert.deepEqual(await run(seed.op, store, provider), { state: 'REVIEW', reason: 'NOT_DUE' });
+  assert.equal(provider.calls.includes('cancel'), false);
+  assert.equal(store.row.lk1.unpaidCancellation.phase, 'REVIEW');
+});
+
 test('loss of cancellation-only option after intent stops before Viva cancellation', async () => {
   const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
   let probes = 0;
@@ -195,6 +297,55 @@ test('service start during preflight stops before Viva cancellation', async () =
   assert.equal(provider.calls.includes('cancel'), false);
 });
 
+test('stop after the durable intent prevents Viva PUT and keeps recovery evidence', async () => {
+  const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
+  let stopped = false;
+  const originalProbe = provider.readCancelOptions;
+  let probes = 0;
+  provider.readCancelOptions = async () => {
+    const result = await originalProbe();
+    if (++probes === 2) stopped = true;
+    return result;
+  };
+  const result = await reconcileLk1UnpaidBooking({ op: seed.op, operations: store,
+    provider, cohortFrom: cohort, mode: 'ENFORCE_NEW', now: () => instant,
+    shouldStop: () => stopped });
+  assert.deepEqual(result, { state: 'STOPPED_AFTER_INTENT' });
+  assert.equal(provider.calls.includes('cancel'), false);
+  assert.equal(store.row.lk1.unpaidCancellation.phase, 'INTENT');
+});
+
+test('runtime change during provider reads leaves no premature write or repeat PUT', async () => {
+  const seed = fixture();
+  for (const boundary of ['before-intent', 'after-intent', 'after-put']) {
+    const store = fakeStore(seed.op), provider = fakeProvider(seed);
+    let stopped = false;
+    if (boundary === 'before-intent') {
+      const read = provider.readTransaction;
+      provider.readTransaction = async () => { const result = await read(); stopped = true; return result; };
+    } else if (boundary === 'after-intent') {
+      const read = provider.readTransaction;
+      let count = 0;
+      provider.readTransaction = async () => { const result = await read();
+        if (++count === 2) stopped = true; return result; };
+    } else {
+      const cancel = provider.cancelBooking;
+      provider.cancelBooking = async () => { const result = await cancel(); stopped = true; return result; };
+    }
+    const result = await reconcileLk1UnpaidBooking({ op: seed.op, operations: store,
+      provider, cohortFrom: cohort, mode: 'ENFORCE_NEW', now: () => instant,
+      shouldStop: () => stopped });
+    assert.equal(result.state, boundary === 'before-intent' ? 'STOPPED' : 'STOPPED_AFTER_INTENT');
+    assert.equal(store.calls.length, boundary === 'before-intent' ? 0 : 1);
+    assert.equal(provider.calls.filter(call => call === 'cancel').length, boundary === 'after-put' ? 1 : 0);
+    if (boundary === 'after-put') {
+      stopped = false;
+      assert.equal((await run(store.row, store, provider)).state, 'CANCELLED');
+      assert.equal(provider.calls.filter(call => call === 'cancel').length, 1);
+    }
+  }
+});
+
 test('restart after accepted Viva cancel releases from exact provider readback without a new PUT', async () => {
   const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
   store.row.lk1.unpaidCancellation = { phase: 'INTENT', attemptedAt: '2099-01-01T12:00:00.000Z' };
@@ -218,6 +369,12 @@ test('provider sends only scoped NONE cancellation and rejects unexpected origin
   assert.equal(new URL(calls[0].url).pathname, '/api/v1/clients/actor/bookings/booking/cancel');
   assert.deepEqual(JSON.parse(calls[0].options.body), { refundMethod: 'NONE', cancelExercise: false });
   assert.throws(() => createLk1VivaCancellationProvider({ baseUrl: 'https://example.test/', token: async () => 'x' }), /VIVA_ORIGIN_INVALID/);
+  let stopped = false, writes = 0;
+  const guarded = createLk1VivaCancellationProvider({ baseUrl: 'http://127.0.0.1/',
+    token: async () => { stopped = true; return 'fixture-token'; },
+    fetchImpl: async () => { writes += 1; throw new Error('PUT must not start'); } });
+  assert.deepEqual(await guarded.cancelBooking(seed.op, () => stopped), { status: 0, stopped: true });
+  assert.equal(writes, 0);
 });
 
 test('provider readback uses complete inclusive exercise pages and exact booking', async () => {
@@ -226,9 +383,132 @@ test('provider readback uses complete inclusive exercise pages and exact booking
     fetchImpl: async url => { paths.push(String(url)); return { status: 200, json: async () => ({
       content: [seed.booking], last: true, totalElements: 1,
     }) }; } });
-  assert.deepEqual(await provider.readBooking(seed.op), seed.booking);
+  assert.deepEqual(await provider.readBooking(seed.op), { ...seed.booking, __lk1ScopedExerciseId: seed.op.exerciseId });
   assert.match(paths[0], /\/api\/v1\/exercises\/exercise\/bookings\?showCancelled=true&page=0&size=200$/);
   const incomplete = createLk1VivaCancellationProvider({ baseUrl: 'http://127.0.0.1/', token: async () => 'fixture-token',
     fetchImpl: async () => ({ status: 200, json: async () => ({ content: [seed.booking], last: false }) }) });
   await assert.rejects(incomplete.readBooking(seed.op), /BOOKING_PAGE_INCOMPLETE/);
+});
+
+test('service token refreshes before expiry, accepts rotation and rejects unsafe config', async () => {
+  let current = 0, requests = 0;
+  let config = { tokenUrl: 'https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token',
+    clientId: 'service', username: 'user', password: 'first' };
+  const token = createLk1VivaServiceToken({ readConfig: async () => config, now: () => current,
+    fetchImpl: async (url, options) => {
+      assert.equal(url, config.tokenUrl);
+      assert.equal(options.method, 'POST');
+      assert.equal(options.body.get('password'), config.password);
+      requests += 1;
+      return { status: 200, json: async () => ({ access_token: `token-${requests}`, expires_in: 300 }) };
+    } });
+  assert.equal(await token(), 'token-1');
+  assert.equal(await token(), 'token-1');
+  assert.equal(requests, 1);
+  config = { ...config, password: 'rotated' };
+  current = 271_000;
+  assert.equal(await token(), 'token-2');
+  assert.equal(requests, 2);
+  token.invalidate();
+  assert.equal(await token(), 'token-3');
+  config = { ...config, tokenUrl: 'https://example.test/token' };
+  current = 542_000;
+  await assert.rejects(token(), /VIVA_TOKEN_CONFIG_INVALID/);
+  assert.equal(requests, 3);
+});
+
+test('service token accepts Viva seven-day TTL but refreshes its cache within fifteen minutes', async () => {
+  let current = 0, requests = 0;
+  const token = createLk1VivaServiceToken({ now: () => current,
+    readConfig: async () => ({ tokenUrl: 'https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token',
+      clientId: 'service', username: 'user', password: 'password' }),
+    fetchImpl: async () => ({ status: 200, json: async () => ({ access_token: `token-${++requests}`,
+      expires_in: 604800 }) }) });
+  assert.equal(await token(), 'token-1');
+  current = 869_000;
+  assert.equal(await token(), 'token-1');
+  current = 871_000;
+  assert.equal(await token(), 'token-2');
+});
+
+test('ENFORCE guard pins flow, Viva binding and runtime route across PM2 restarts', async t => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lk1-unpaid-guard-')));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const flowPath = path.join(folder, 'flows.json');
+  const adminTokenFile = path.join(folder, 'admin.token');
+  fs.writeFileSync(adminTokenFile, 'fixture-admin-1234', { mode: 0o600 });
+  const functionBody = 'fixture gateway';
+  const expectedGatewaySha = crypto.createHash('sha256').update(functionBody).digest('hex');
+  const writeFlow = body => {
+    fs.writeFileSync(flowPath, JSON.stringify([{
+      id: 'lk_subscription_booking_router_20260804', type: 'function', func: body,
+    }]));
+    fs.utimesSync(flowPath, new Date(0), new Date(0));
+  };
+  let process = { name: 'node-red', pid: 123, pm2_env: {
+    status: 'online', pm_uptime: 1000, restart_time: 1,
+    VIVA_SERVICE_TOKEN_URL: 'https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token',
+    VIVA_SERVICE_CLIENT_ID: 'fixture', VIVA_SERVICE_USERNAME: 'fixture-user',
+    VIVA_SERVICE_PASSWORD: 'fixture-password',
+  } };
+  writeFlow(functionBody);
+  const expectedFlowSha = crypto.createHash('sha256').update(fs.readFileSync(flowPath)).digest('hex');
+  const expectedBindingSha = lk1VivaBinding(process).sha256;
+  let activeFlow = JSON.parse(fs.readFileSync(flowPath, 'utf8'));
+  const create = (readinessStatus = 401, fetchOverride) =>
+    createLk1LiveGatewayGuard({ flowPath, processes: () => [process], expectedGatewaySha,
+      expectedFlowSha, expectedBindingSha, adminTokenFile,
+      fetchImpl: fetchOverride || (async (url, options) => url.endsWith('/flows')
+        ? { status: options.headers.Authorization === 'Bearer fixture-admin-1234' ? 200 : 401,
+          json: async () => ({ rev: 'fixture-revision', flows: structuredClone(activeFlow) }) }
+        : { status: readinessStatus,
+          json: async () => ({ details: { code: 'SUBSCRIPTION_BOOKING_AUTH_REQUIRED' } }) }) });
+  const guard = await create();
+  assert.equal(guard.check(), 'HEALTHY');
+  writeFlow('removed guard');
+  assert.equal(guard.check(), 'DRIFT');
+  await assert.rejects(create(), /LIVE_GATEWAY_DRIFT/);
+  writeFlow(functionBody);
+  assert.equal(guard.check(), 'HEALTHY');
+  fs.utimesSync(flowPath, new Date(2000), new Date(2000));
+  assert.equal(guard.check(), 'DRIFT');
+  writeFlow(functionBody);
+  process = { ...process, pid: 456, pm2_env: { ...process.pm2_env, restart_time: 2 } };
+  assert.equal(guard.check(), 'RESTART_PENDING');
+  assert.equal((await create()).check(), 'HEALTHY');
+  process = { ...process, pid: 123, pm2_env: { ...process.pm2_env, restart_time: 1,
+    status: 'offline' } };
+  assert.equal(guard.check(), 'RESTART_PENDING');
+  await assert.rejects(create(), /LIVE_GATEWAY_RESTART_PENDING/);
+  process = { ...process, pm2_env: { ...process.pm2_env, status: 'online',
+    VIVA_SERVICE_PASSWORD: 'rotated' } };
+  assert.equal(guard.check(), 'DRIFT');
+  await assert.rejects(create(), /LIVE_GATEWAY_DRIFT/);
+  process = { ...process, pm2_env: { ...process.pm2_env,
+    VIVA_SERVICE_PASSWORD: 'fixture-password' } };
+  process = { ...process, pm2_env: { ...process.pm2_env,
+    pm_uptime: Date.now() - 1000 } };
+  await assert.rejects(create(), /LIVE_GATEWAY_RESTART_PENDING/);
+  process = { ...process, pm2_env: { ...process.pm2_env,
+    pm_uptime: 1000 } };
+  await assert.rejects(create(401, async () => { throw new Error('connection refused'); }),
+    /LIVE_GATEWAY_ACTIVE_FLOW_UNVERIFIED/);
+  await assert.rejects(create(401, async url => url.endsWith('/flows')
+    ? { status: 200, json: async () => ({ rev: 'fixture-revision', flows: structuredClone(activeFlow) }) }
+    : Promise.reject(new Error('route unavailable'))), /LIVE_GATEWAY_ROUTE_UNVERIFIED/);
+  await assert.rejects(create(404),
+    /LIVE_GATEWAY_ROUTE_UNVERIFIED/);
+  activeFlow = [{ ...activeFlow[0], func: 'stale gateway' }];
+  await assert.rejects(create(), /LIVE_GATEWAY_ACTIVE_FLOW_UNVERIFIED/);
+  fs.chmodSync(adminTokenFile, 0o644);
+  await assert.rejects(create(), /LIVE_GATEWAY_ADMIN_AUTH_UNAVAILABLE/);
+});
+
+test('production launcher rejects a CLI mode override before reading live state', () => {
+  const launcher = fileURLToPath(new URL('../launch_lk1_unpaid_booking_cancellation.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [launcher, '--run', '--mode', 'ENFORCE_NEW'], {
+    encoding: 'utf8', env: { ...process.env, LK1_UNPAID_CANCEL_MODE: 'OFF' }, timeout: 5000,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /LAUNCH_ARGUMENT_OVERRIDE_FORBIDDEN/);
 });
