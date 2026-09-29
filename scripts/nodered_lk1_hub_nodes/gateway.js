@@ -160,6 +160,7 @@ const lk1Quote = (ctx, exercise, owned) => {
   return { ...quote, fingerprint: lk1Fingerprint(ctx, quote) };
 };
 const lk1Finish = (ctx) => {
+  if (isObj(ctx.lk1?.unpaidCancellation)) return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
   const payment = ctx.lk1?.checkout;
   if (!ctx.confirmedBookingId || (ctx.lk1.decision.benefit.finalPriceMinor > 0 && !payment)) {
     return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
@@ -366,6 +367,9 @@ if (ctx.step === "lk1_ingress_operation_find") {
       || operation.exerciseId.startsWith("preflight:") || quote.target.eventId !== operation.exerciseId) {
       return lk1Stop(ctx, "LK1_BOOKING_OUTCOME_UNRESOLVED");
     }
+    // Once the unpaid worker owns cancellation, this stored checkout must not
+    // be offered again while Viva and Mongo are being reconciled.
+    if (isObj(quote.unpaidCancellation)) return lk1Stop(ctx, "LK1_PAYMENT_RECONCILIATION_REQUIRED");
     const amount = quote.decision.benefit.finalPriceMinor;
     if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(managedActionForTarget({ ...ctx, category: operation.category }))) {
       const binding = lk1EventPaymentQuoteBinding({ ...ctx, category: operation.category,

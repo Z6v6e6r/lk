@@ -262,6 +262,15 @@ test('group payment replay returns verified link or reconciliation without HTTP 
   const accepted = call(ctx, [record]);
   assert.equal(accepted.result.kind, 'final');
   assert.equal(accepted.result.payload.paymentUrl, 'https://pay.example.test/group');
+  const cancelStarted = structuredClone(record);
+  cancelStarted.lk1.unpaidCancellation = { phase: 'INTENT', attemptedAt: '2026-09-29T09:40:00Z' };
+  ctx.step = 'lk1_ingress_operation_find';
+  assert.equal(call(ctx, [cancelStarted]).result.code, 'LK1_PAYMENT_RECONCILIATION_REQUIRED');
+  const normalReplay = structuredClone(ctx);
+  normalReplay.lk1 = structuredClone(cancelStarted.lk1);
+  normalReplay.step = 'fixture_checkout';
+  assert.equal(call(normalReplay, null, { suffix: '\nreturn lk1Checkout(ctx);' }).result.code,
+    'LK1_PAYMENT_RECONCILIATION_REQUIRED');
   for (const change of [r => delete r.lk1.checkout, r => delete r.lk1.transactionIntent.baseMinor,
     r => r.lk1.transactionIntent.productId = 'other', r => r.lk1.transactionIntent.discountMinor = 1]) {
     const broken = structuredClone(record); change(broken);
