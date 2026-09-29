@@ -53,10 +53,19 @@ function toRunnableFunctionExpression(marker: string) {
 
 const awaitPreferredTournamentPaymentResolution = new Function(
   "isResolvedTournamentVivaPayment",
+  "readVivaFailureCode",
   `return ${toRunnableFunctionExpression("async function awaitPreferredTournamentPaymentResolution")};`,
 )(
   (value: { paymentUrl?: string | null; paid?: boolean | null } | null | undefined) =>
     Boolean(value?.paymentUrl || value?.paid === true),
+  (payload: unknown) => {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const record = payload as { code?: unknown; error?: { code?: unknown } };
+    for (const candidate of [record.code, record.error?.code]) {
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return null;
+  },
 ) as <T extends { paymentUrl?: string | null; paid?: boolean | null }>(
   promises: Array<Promise<T | null>>,
 ) => Promise<T | null>;
@@ -170,14 +179,6 @@ test("transaction payload includes redirect aliases used by working Viva flows",
 
 function buildVivaStatusReader() {
   const isRecord = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
-  const pickString = (value: Record<string, unknown> | null, keys: string[]) => {
-    if (!value) return null;
-    for (const key of keys) {
-      const candidate = value[key];
-      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-    }
-    return null;
-  };
 
   const readConstArray = (name: string) => {
     const match = source.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
@@ -185,35 +186,31 @@ function buildVivaStatusReader() {
     return JSON.parse(`[${match[1]}]`) as string[];
   };
 
-  const readVivaTransactionStatus = new Function(
+  const readVivaPaymentPaidState = new Function(
     "isRecord",
-    "pickString",
-    `return ${toRunnableFunctionExpression("function readVivaTransactionStatus")};`,
-  )(isRecord, pickString) as (payload: unknown) => string | null;
-
-  const readVivaTransactionPaid = new Function(
-    "readVivaTransactionStatus",
     "VIVA_PAID_TRANSACTION_STATUSES",
     "VIVA_UNPAID_TRANSACTION_STATUSES",
-    `return ${toRunnableFunctionExpression("function readVivaTransactionPaid")};`,
+    `return ${toRunnableFunctionExpression("function readVivaPaymentPaidState")
+      .replace(/: unknown/g, "")
+      .replace(/: boolean \| null/g, "")};`,
   )(
-    readVivaTransactionStatus,
+    isRecord,
     readConstArray("VIVA_PAID_TRANSACTION_STATUSES"),
     readConstArray("VIVA_UNPAID_TRANSACTION_STATUSES"),
   ) as (payload: unknown) => boolean | null;
 
-  return { isRecord, readVivaTransactionPaid };
+  return { isRecord, readVivaPaymentPaidState };
 }
 
 test("transaction status is read from the v2 /status route used by the official widget", async () => {
-  const { readVivaTransactionPaid } = buildVivaStatusReader();
+  const { readVivaPaymentPaidState } = buildVivaStatusReader();
   const { extractPaymentUrl } = buildReadVivaOperationResolution();
   const seenRequests: Array<{ url: string; options: unknown }> = [];
   let payload: unknown = { transactionStatus: "PAID", toPay: 0 };
   const fetchStatus = new Function(
     "TENANT_KEY",
     "request",
-    "readVivaTransactionPaid",
+    "readVivaPaymentPaidState",
     "extractPaymentUrl",
     `return ${toRunnableFunctionExpression("async function fetchTournamentVivaTransactionResolution")};`,
   )(
@@ -222,7 +219,7 @@ test("transaction status is read from the v2 /status route used by the official 
       seenRequests.push({ url, options });
       return { data: payload, error: null, status: 200 };
     },
-    readVivaTransactionPaid,
+    readVivaPaymentPaidState,
     extractPaymentUrl,
   ) as (
     transactionId: string,
@@ -255,29 +252,74 @@ test("transaction status is read from the v2 /status route used by the official 
 });
 
 test("Viva status tokens are classified exactly and UNPAID is never a payment", () => {
-  const { isRecord, readVivaTransactionPaid } = buildVivaStatusReader();
+  const { readVivaPaymentPaidState } = buildVivaStatusReader();
 
-  assert.equal(readVivaTransactionPaid({ transactionStatus: "PAID" }), true);
-  assert.equal(readVivaTransactionPaid({ transactionStatus: "COMPLETED" }), true);
-  assert.equal(readVivaTransactionPaid({ transactionStatus: "UNPAID" }), false);
-  assert.equal(readVivaTransactionPaid({ data: { transactionStatus: "UNPAID" } }), false);
-  assert.equal(readVivaTransactionPaid({ transactionStatus: "WAITING" }), false);
-  assert.equal(readVivaTransactionPaid({ transactionStatus: "REFUND" }), false);
-  assert.equal(readVivaTransactionPaid({ status: "CANCELLED" }), false);
-  assert.equal(readVivaTransactionPaid({ transactionStatus: "SOMETHING_NEW" }), null);
-  assert.equal(readVivaTransactionPaid(null), null);
+  assert.equal(readVivaPaymentPaidState({ transactionStatus: "PAID" }), true);
+  assert.equal(readVivaPaymentPaidState({ transactionStatus: "COMPLETED" }), true);
+  assert.equal(readVivaPaymentPaidState({ transactionStatus: "UNPAID" }), false);
+  assert.equal(readVivaPaymentPaidState({ data: { transactionStatus: "UNPAID" } }), false);
+  assert.equal(readVivaPaymentPaidState({ transactionStatus: "WAITING" }), false);
+  assert.equal(readVivaPaymentPaidState({ transactionStatus: "REFUND" }), false);
+  assert.equal(readVivaPaymentPaidState({ status: "CANCELLED" }), false);
+  assert.equal(readVivaPaymentPaidState({ transactionStatus: "SOMETHING_NEW" }), null);
+  assert.equal(readVivaPaymentPaidState(null), null);
 
-  // Why the exact classification exists: the shared heuristic matches substrings, so
-  // "UNPAID" also contains "PAID" and would have reported the incident transaction as
-  // paid. This pin fails if that heuristic is ever tightened (then the local classifier
-  // may be redundant, but never wrong).
-  const hasPaidPaymentStatus = new Function(
+  // Booking payloads: `status: "ACTIVE"` is inconclusive and must not stop the search
+  // before the nested payment token, which is the shape the bookings channel reads.
+  assert.equal(readVivaPaymentPaidState({
+    status: "ACTIVE",
+    paymentType: "RESERVED",
+    transactionStatus: { transactionId: "tx-1", transactionStatus: "UNPAID" },
+    cardPaymentInfo: { status: "NEW" },
+  }), false);
+  assert.equal(readVivaPaymentPaidState({ status: "ACTIVE", transactionStatus: { transactionStatus: "PAID" } }), true);
+  assert.equal(readVivaPaymentPaidState({ cardPaymentInfo: { paymentUrl: "https://pay.example/x" } }), null);
+});
+
+test("a booking whose nested transactionStatus says UNPAID is not a completed payment", () => {
+  const { isRecord, readVivaPaymentPaidState } = buildVivaStatusReader();
+  const { extractPaymentUrl } = buildReadVivaOperationResolution();
+
+  // The legacy substring heuristic is modelled as claiming "paid" here (exactly what
+  // `hasPaidPaymentStatus` does with "UNPAID"); the exact provider token must win so the
+  // bookings channel cannot resolve the flow and suppress the /operations link.
+  const normalize = new Function(
     "isRecord",
-    `return ${toRunnableFunctionExpression("function hasPaidPaymentStatus")
+    "extractPaymentUrl",
+    "extractToPay",
+    "extractBookingId",
+    "pickString",
+    "readVivaPaymentPaidState",
+    "hasPaidPaymentStatus",
+    "hasPendingPaymentStatus",
+    `return ${toRunnableFunctionExpression("function normalizeTournamentVivaPaymentResolution")
       .replace(/: unknown/g, "")
-      .replace(/: boolean \| null/g, "")};`,
-  )(isRecord) as (payload: unknown) => boolean;
-  assert.equal(hasPaidPaymentStatus({ transactionStatus: "UNPAID" }), true);
+      .replace(/: string \| null/g, "")
+      .replace(/: TournamentVivaPaymentResolution \| null/g, "")};`,
+  )(
+    isRecord,
+    extractPaymentUrl,
+    () => null,
+    () => null,
+    () => null,
+    readVivaPaymentPaidState,
+    () => true,
+    () => false,
+  ) as (value: unknown) => { paymentUrl: string | null; paid: boolean | null } | null;
+
+  const booking = {
+    id: "a7d40555-6e7c-4e0b-a17f-3c4988e46e34",
+    status: "ACTIVE",
+    paymentType: "RESERVED",
+    transactionStatus: { transactionId: "bb95f4f5-8aed-4433-8971-8a34df0b54af", transactionStatus: "UNPAID" },
+    cardPaymentInfo: { status: "NEW" },
+  };
+
+  const resolved = normalize(booking);
+  assert.equal(resolved?.paid, false);
+  assert.equal(resolved?.paymentUrl, null);
+  // Not resolved means the bookings channel waits and the operation link can win.
+  assert.equal(Boolean(resolved?.paymentUrl || resolved?.paid === true), false);
 });
 
 function buildReadVivaOperationResolution() {
@@ -336,7 +378,9 @@ function buildReadVivaOperationResolution() {
   const isVivaFailedOperation = new Function(
     "isRecord",
     "pickString",
-    `return ${toRunnableFunctionExpression("function isVivaFailedOperation")};`,
+    `return ${toRunnableFunctionExpression("function isVivaFailedOperation")
+      .replace(/: unknown/g, "")
+      .replace(/: boolean/g, "")};`,
   )(isRecord, pickString) as (payload: unknown) => boolean;
 
   const readVivaOperationResolution = new Function(
@@ -396,7 +440,9 @@ test("the Viva operation status carries the checkout link the socket event may m
   const { isRecord, readVivaOperationResolution } = buildReadVivaOperationResolution();
   const readVivaFailureCode = new Function(
     "isRecord",
-    `return ${toRunnableFunctionExpression("function readVivaFailureCode")};`,
+    `return ${toRunnableFunctionExpression("function readVivaFailureCode")
+      .replace(/: unknown/g, "")
+      .replace(/: string \| null/g, "")};`,
   )(isRecord) as (payload: unknown) => string | null;
 
   const seenRequests: Array<{ url: string; options: unknown }> = [];
@@ -456,6 +502,15 @@ test("the Viva operation status carries the checkout link the socket event may m
   assert.equal(failedWithLeftoverLink?.paymentUrl, null);
   assert.equal(readVivaFailureCode(failedWithLeftoverLink?.raw), "NO_AVAILABLE_SPOTS");
 
+  // The FAILED detector also sees a wrapped provider response, so a leftover link inside
+  // `result` cannot be opened as success.
+  const wrappedFailed = readVivaOperationResolution(
+    { data: { status: "FAILED", error: { code: "NO_AVAILABLE_SPOTS" }, result: { paymentUrl: "https://pay.vivacrm.ru/leftover" } } },
+    null,
+  );
+  assert.equal(wrappedFailed?.paymentUrl, null);
+  assert.equal(readVivaFailureCode(wrappedFailed?.raw), "NO_AVAILABLE_SPOTS");
+
   // Nothing to resolve while the operation is in flight, and unusable values stay out.
   assert.equal(readVivaOperationResolution({ status: "IN_PROGRESS", result: {} }, null), null);
   assert.equal(
@@ -481,8 +536,10 @@ test("the payment flow polls the Viva operation status and the corrected status 
     source,
     /\/end-user\/api\/v2\/\$\{TENANT_KEY\}\/transactions\/\$\{encodeURIComponent\(normalizedTransactionId\)\}\/status/,
   );
-  // Only a confirmed payment may resolve the status channel.
-  assert.match(source, /readVivaTransactionPaid\(result\.data\) !== true/);
+  // Only a confirmed payment may resolve the status channel, and the booking channel
+  // classifies the same exact tokens instead of the substring heuristic.
+  assert.match(source, /readVivaPaymentPaidState\(result\.data\) !== true/);
+  assert.match(source, /const exactPaid = readVivaPaymentPaidState\(value\)/);
   assert.match(source, /pollTournamentVivaOperationResolution\(transactionId, transactionStartedAtMs\)/);
   assert.match(source, /pollTournamentVivaTransactionResolution\(transactionId, transactionStartedAtMs\)/);
   // The dead flat route must not come back: it answered 404 for every transaction id.
@@ -529,6 +586,34 @@ test("preferred payment resolution returns fallback booking state when payment u
   ]);
 
   assert.deepEqual(resolution, fallback);
+});
+
+test("preferred payment resolution keeps a fallback that names Viva's failure code", async () => {
+  const withoutCode = {
+    paymentUrl: null,
+    bookingId: "booking-9",
+    toPay: 101000,
+    paid: false,
+    paymentExpiresAt: null,
+    raw: { status: "ACTIVE" },
+  };
+  const withCode = {
+    paymentUrl: null,
+    bookingId: null,
+    toPay: null,
+    paid: false,
+    paymentExpiresAt: null,
+    raw: { status: "FAILED", error: { code: "NO_AVAILABLE_SPOTS" } },
+  };
+
+  const resolution = await awaitPreferredTournamentPaymentResolution([
+    Promise.resolve(withoutCode),
+    new Promise((resolve) => {
+      setTimeout(() => resolve(withCode), 5);
+    }),
+  ]);
+
+  assert.deepEqual(resolution, withCode);
 });
 
 test("explicit Viva payment fields are trusted while our own redirects stay filtered", () => {
@@ -578,7 +663,9 @@ test("explicit Viva payment fields are trusted while our own redirects stay filt
 test("Viva failure codes are read from flat and nested error payloads", () => {
   const readVivaFailureCode = new Function(
     "isRecord",
-    `return ${toRunnableFunctionExpression("function readVivaFailureCode")};`,
+    `return ${toRunnableFunctionExpression("function readVivaFailureCode")
+      .replace(/: unknown/g, "")
+      .replace(/: string \| null/g, "")};`,
   )((value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)) as (
     payload: unknown,
   ) => string | null;
@@ -601,12 +688,14 @@ test("payment waits are bounded and link failures name the transaction and the V
 // Captured from the live 2026-09-19 attempt on tournament 6aacf5ed…: the 202 create
 // response carried only the transaction id, the transaction readback 404s and the exercise
 // bookings expose no owning client, so this event is the only source of the booking id.
+// The checkout token of that live event is not kept: the shape is preserved with a
+// synthetic token.
 const liveTransactionCreatedPayload = {
   status: "COMPLETED", correlationId: "6bf48740-ae16-4319-98c4-8b3debe489a8", action: "TRANSACTION_CREATED",
   exerciseId: null, entityId: "6bf48740-ae16-4319-98c4-8b3debe489a8", error: null, progress: null,
   data: {
     bookingIds: ["c8421449-10bd-411b-87fc-e322db49f9f4"],
-    paymentUrl: "https://pay.vivacrm.ru/Fw6cae9WH6bYr9bUAtESZQ",
+    paymentUrl: "https://pay.vivacrm.ru/SYNTHETICsocketToken000000000000",
     paymentDueDate: "2026-09-19T23:03:14.274625208+03:00",
   },
   terminal: false,
@@ -683,7 +772,7 @@ test("the live TRANSACTION_CREATED event yields booking id and due date, not jus
 
   const event = readVivaPaymentEvent(liveTransactionCreatedPayload);
   assert.deepEqual(event, {
-    paymentUrl: "https://pay.vivacrm.ru/Fw6cae9WH6bYr9bUAtESZQ",
+    paymentUrl: "https://pay.vivacrm.ru/SYNTHETICsocketToken000000000000",
     bookingId: "c8421449-10bd-411b-87fc-e322db49f9f4",
     paymentExpiresAt: "2026-09-19T23:03:14.274625208+03:00",
   });
