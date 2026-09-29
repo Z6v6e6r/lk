@@ -560,6 +560,8 @@ test("режим записи по умолчанию — попап Viva, ок�
   assert.equal(normalizeAtlantyBookingMode(" VIVA "), "viva");
   assert.equal(normalizeAtlantyBookingMode("lk"), "lk");
   assert.equal(normalizeAtlantyBookingMode("LK"), "lk");
+  assert.equal(normalizeAtlantyBookingMode("disabled"), "disabled");
+  assert.equal(normalizeAtlantyBookingMode(" DISABLED "), "disabled");
   assert.equal(normalizeAtlantyBookingMode("lkc"), "viva");
 });
 

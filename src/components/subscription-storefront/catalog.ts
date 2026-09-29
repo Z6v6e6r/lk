@@ -147,6 +147,11 @@ export const TOPOCRATY_PRODUCT_ID = '14692232-12be-4218-9fa1-2d5b79b62035';
 /** 6 800 ₽ / 30 дней, прежняя цена на странице — 9 800 ₽. */
 export const TOPOCRATY_MONTHLY_PRICE_MINOR = 680000;
 
+/** Viva Patriots product. Checkout verifies all promised directions before purchase. */
+export const PATRIOTS_PLAN_ID = 'patriots';
+export const PATRIOTS_PRODUCT_ID = '37ab3713-4431-4815-96ba-d7ece76a9241';
+export const PATRIOTS_MONTHLY_PRICE_MINOR = 680000;
+
 /** Annual inventory is authoritative only when returned by its explicit request. */
 export function scopedStorefrontStatuses<T extends StorefrontStatus>(statuses: T[], counterKey?: string | null): T[] {
   return statuses.filter(status => counterKey

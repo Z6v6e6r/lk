@@ -8,6 +8,7 @@ import {
   billingFromStatus, canContinue, energy5BillingOptions, friendshipBillingOptions, requiresAnnualTermsConsent,
   scopedStorefrontStatuses, atlantyBillingOptions, ATLANTY_PLAN_ID, ATLANTY_VARIANT, normalizeStorefrontVariant,
   ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID,
+  PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID,
 } from '../../src/components/subscription-storefront/catalog.ts';
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
@@ -28,7 +29,7 @@ function stripImports(source: string): string {
 }
 
 /** Loads the payment adapter in a VM with stubbed LK1 API calls. */
-function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string } = {}): {
+function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string } = {}): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
   describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
@@ -38,7 +39,7 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID } = __stubs;\n${source}`;
+  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -71,6 +72,8 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     ATLANTY_ANNUAL_PRODUCT_ID: overrides.atlantyAnnualProductId ?? ATLANTY_ANNUAL_PRODUCT_ID,
     TOPOCRATY_PRODUCT_ID: overrides.topocratyProductId ?? TOPOCRATY_PRODUCT_ID,
     TOPOCRATY_PLAN_ID,
+    PATRIOTS_PRODUCT_ID: overrides.patriotsProductId ?? PATRIOTS_PRODUCT_ID,
+    PATRIOTS_PLAN_ID,
   };
   const context = {
     exports: exported,
@@ -510,6 +513,28 @@ test('topocraty fails closed when the subscription id is blank', () => {
     const adapter = loadPaymentAdapter({ topocratyProductId: productId });
     assert.equal(adapter.resolveStorefrontBillingTarget('topocraty', 'monthly'), null);
   }
+});
+
+test('patriots checkout targets only the confirmed 30-day Viva subscription', async () => {
+  assert.equal(PATRIOTS_PLAN_ID, 'patriots');
+  assert.equal(PATRIOTS_PRODUCT_ID, '37ab3713-4431-4815-96ba-d7ece76a9241');
+  const adapter = loadPaymentAdapter();
+  assert.deepEqual(
+    { ...(adapter.resolveStorefrontBillingTarget(PATRIOTS_PLAN_ID, 'monthly') as Record<string, unknown>) },
+    { counterKey: PATRIOTS_PLAN_ID, directProductId: PATRIOTS_PRODUCT_ID, planType: 'friendship' },
+  );
+  assert.equal(adapter.resolveStorefrontBillingTarget(PATRIOTS_PLAN_ID, 'annual'), null);
+  assert.equal(adapter.resolveStorefrontBillingTarget(PATRIOTS_PLAN_ID, 'monthly-two-hours'), null);
+  await adapter.createStorefrontSubscriptionPayment({ planId: PATRIOTS_PLAN_ID, billingOptionId: 'monthly', phone: FIXTURE_PHONE });
+  assert.equal(adapter.calls.bought.length, 1);
+  assert.equal(adapter.calls.bought[0].productId, PATRIOTS_PRODUCT_ID);
+  assert.equal(adapter.calls.bought[0].retries, 0);
+  assert.equal(adapter.calls.created.length, 0);
+});
+
+test('patriots checkout fails closed when the Viva subscription id is absent', () => {
+  const adapter = loadPaymentAdapter({ patriotsProductId: '   ' });
+  assert.equal(adapter.resolveStorefrontBillingTarget(PATRIOTS_PLAN_ID, 'monthly'), null);
 });
 
 test('atlanty card is titled ДРУЖБА.АТЛАНТЫ and reuses the friendship benefits', () => {

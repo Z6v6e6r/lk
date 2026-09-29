@@ -45,15 +45,17 @@ export function openCheckout(offerKey: string): boolean {
 }
 
 /** Bank/OAuth return may reopen UI; it must never call a purchase API. */
-export function resumeCheckout(): boolean {
+export function resumeCheckout(expectedOfferKey?: string): boolean {
   const keys = new URLSearchParams(window.location.search).getAll(ZERO_CHECKOUT_RETURN);
   if (keys.length) {
     const key = keys[0];
-    return keys.length === 1 && Boolean(resolveZeroOffer(key)) && hasZeroAttempt(key) ? openCheckout(key) : false;
+    return keys.length === 1 && (!expectedOfferKey || key === expectedOfferKey)
+      && Boolean(resolveZeroOffer(key)) && hasZeroAttempt(key) ? openCheckout(key) : false;
   }
   try {
     const selected = JSON.parse(window.sessionStorage.getItem(SELECTION_KEY) || 'null');
-    if (selected && typeof selected.key === 'string' && resolveZeroOffer(selected.key)
+    if (selected && typeof selected.key === 'string' && (!expectedOfferKey || selected.key === expectedOfferKey)
+      && resolveZeroOffer(selected.key)
       && typeof selected.at === 'number' && Date.now() - selected.at >= 0 && Date.now() - selected.at < 30 * 60_000) return openCheckout(selected.key);
   } catch { /* Invalid UI state does not start checkout. */ }
   return false;

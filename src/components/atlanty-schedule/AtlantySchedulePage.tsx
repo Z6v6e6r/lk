@@ -62,7 +62,8 @@ export type AtlantyScheduleConfig = {
   detailModal?: boolean;
   /**
    * Чем записывать: "viva" — официальный попап VivaCRM (по умолчанию),
-   * "lk" — окно записи LK1 с входом, вариантами оплаты и контуром ограничений.
+   * "lk" — окно записи LK1 с входом, вариантами оплаты и контуром ограничений;
+   * "disabled" — карточки видны, запись недоступна до подтверждения условий.
    */
   booking?: string | null;
   /** Типы занятий для окна LK1; по умолчанию — typeId категорий витрины. */
@@ -162,6 +163,7 @@ export function AtlantyCard({
   options,
   imageUrl = null,
   onOpen,
+  showVivaAnchor = true,
   vivaInstance = ATLANTY_VIVA_INSTANCE,
 }: {
   event: AtlantyScheduleEvent;
@@ -169,6 +171,7 @@ export function AtlantyCard({
   options: AtlantyDisplayOptions;
   imageUrl?: string | null;
   onOpen?: (event: AtlantyScheduleEvent, imageUrl: string | null) => void;
+  showVivaAnchor?: boolean;
   /** Нужен для резервного режима, когда карточка события отключена. */
   vivaInstance?: string;
 }) {
@@ -276,7 +279,7 @@ export function AtlantyCard({
 
   return (
     <li className="atlanty-slide">
-      {onOpen && (
+      {onOpen && showVivaAnchor && (
         <a
           className="atlanty-card-link"
           href={buildAtlantyVivaAnchorHref(event.id, vivaInstance)}
@@ -362,7 +365,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
     () => shuffleAtlantyImages(resolveAtlantyCardImages(config.images)),
     [config.images],
   );
-  const detailModalEnabled = config.detailModal !== false || bookingMode === "lk";
+  const detailModalEnabled = config.detailModal !== false || bookingMode !== "viva";
   const [openEvent, setOpenEvent] = useState<{ event: AtlantyScheduleEvent; imageUrl: string | null } | null>(null);
 
   const handleOpenEvent = useCallback(
@@ -561,6 +564,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
                   pick: imagePick,
                 })}
                 onOpen={detailModalEnabled ? handleOpenEvent : undefined}
+                showVivaAnchor={bookingMode !== "disabled"}
                 vivaInstance={vivaInstance}
               />
             ))}

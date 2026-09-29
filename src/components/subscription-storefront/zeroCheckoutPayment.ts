@@ -1,9 +1,10 @@
 import { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, request, getServ2Origin } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
+import { API_BASE, TENANT_KEY } from '../../consts/api_config';
 import { resolveStorefrontBillingTarget, StorefrontPaymentError } from './payment';
 import { createStorefrontPromoPayment, hasPromoPaymentAttempt } from './promoPayment';
 import { resolveStorefrontPromo } from './promo';
-import { ATLANTY_MONTHLY_PRICE_MINOR, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
+import { ATLANTY_MONTHLY_PRICE_MINOR, PATRIOTS_MONTHLY_PRICE_MINOR, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
 
 export const ZERO_CHECKOUT_RETURN = 'phCheckoutReturn';
 const ATTEMPT_PREFIX = 'padlhub_zero_checkout_attempt_v1:';
@@ -67,12 +68,33 @@ export function resolveZeroOffer(key: string): ZeroOffer | null {
   if (key === TOPOCRATY_PLAN_ID) return { key, label: 'ДРУЖБА.ТОПОКРАТЫ', period: '30 дней', planId: TOPOCRATY_PLAN_ID,
     billingOptionId: 'monthly', target: resolveStorefrontBillingTarget(TOPOCRATY_PLAN_ID, 'monthly'), promo: null,
     staticPriceMinor: TOPOCRATY_MONTHLY_PRICE_MINOR };
+  if (key === PATRIOTS_PLAN_ID) return { key, label: 'ДРУЖБА.ПАТРИОТЫ', period: '30 дней', planId: PATRIOTS_PLAN_ID,
+    billingOptionId: 'monthly', target: resolveStorefrontBillingTarget(PATRIOTS_PLAN_ID, 'monthly'), promo: null,
+    staticPriceMinor: PATRIOTS_MONTHLY_PRICE_MINOR };
   const labels: Record<string, string> = { friendship: 'Дружба', 'friendship-year': 'Дружба', academy: 'Академия', ra: 'РА', energy5: 'Энергия 5' };
   if (!Object.prototype.hasOwnProperty.call(labels, key)) return null;
   const planId = key === 'friendship-year' ? 'friendship' : key;
   const billingOptionId = key === 'friendship-year' ? 'annual' as const : 'monthly' as const;
   return { key, label: labels[key], period: key === 'friendship-year' ? 'год' : key === 'energy5' ? '60 дней, 5 занятий' : '30 дней',
     planId, billingOptionId, target: resolveStorefrontBillingTarget(planId, billingOptionId), promo: null };
+}
+
+/** The public Viva product must prove every benefit promised on the Patriots page. */
+export function parsePatriotsProductPrice(payload: unknown): number {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Product unavailable');
+  const product = payload as Record<string, unknown>;
+  const ids = (value: unknown): number[] => Array.isArray(value)
+    ? value.map(row => row && typeof row === 'object' && !Array.isArray(row)
+      ? (row as Record<string, unknown>).id : null).filter((id): id is number => Number.isSafeInteger(id))
+    : [];
+  const directions = ids(product.availableDirections);
+  const types = ids(product.availableTypes);
+  if (product.id !== PATRIOTS_PRODUCT_ID || product.cost !== PATRIOTS_MONTHLY_PRICE_MINOR
+    || product.validityDays !== 30 || product.visits !== 30
+    || product.hasDirectionLimitation !== true || product.hasTypeLimitation !== true
+    || ![6181, 6306, 6307, 5278].every(id => directions.includes(id))
+    || ![2349, 839].every(id => types.includes(id))) throw new Error('Product terms mismatch');
+  return product.cost;
 }
 
 export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Promise<number> {
@@ -83,6 +105,16 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
   // shown: otherwise the dialog opens, the visitor starts a purchase and the
   // durable attempt marker blocks this browser for nothing.
   if (!offer.target) throw new StorefrontPaymentError('Предложение недоступно.');
+  if (key === PATRIOTS_PLAN_ID) {
+    const result = await request<unknown>(
+      `${API_BASE}/end-user/api/v1/${TENANT_KEY}/products/subscriptions/${encodeURIComponent(PATRIOTS_PRODUCT_ID)}`,
+      { method: 'GET', signal, retries: 0 },
+    );
+    try {
+      if (result.error) throw new Error('Product unavailable');
+      return parsePatriotsProductPrice(result.data);
+    } catch { throw new StorefrontPaymentError('Условия подписки пока не подтверждены. Попробуйте позже.'); }
+  }
   if (typeof offer.staticPriceMinor === 'number') {
     if (!Number.isSafeInteger(offer.staticPriceMinor) || offer.staticPriceMinor <= 0) throw new StorefrontPaymentError('Предложение недоступно.');
     return offer.staticPriceMinor;
@@ -168,6 +200,9 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
         });
         if (result.error || !result.data) throw new Error('Unknown result');
         const { paymentUrl, paid, toPay } = result.data;
+        // The read-only product check precedes the write; the transaction response
+        // must still confirm the amount before the visitor is sent to the bank.
+        if (key === PATRIOTS_PLAN_ID && toPay !== price) throw new Error('Transaction price mismatch');
         if (paymentUrl) return { status: 'redirect' as const, paymentUrl: bankUrl(paymentUrl) };
         if (paid === true && (toPay == null || toPay === 0)) {
           saveAttempt({ ...attempt, state: 'paid' });

@@ -195,6 +195,8 @@ function loadRegularPayment(topocratyProductId: string) {
     ATLANTY_ANNUAL_PRODUCT_ID: '',
     TOPOCRATY_PRODUCT_ID: topocratyProductId,
     TOPOCRATY_PLAN_ID: 'topocraty',
+    PATRIOTS_PRODUCT_ID: '37ab3713-4431-4815-96ba-d7ece76a9241',
+    PATRIOTS_PLAN_ID: 'patriots',
     apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
     apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
   });
@@ -202,10 +204,15 @@ function loadRegularPayment(topocratyProductId: string) {
 const regularPayment = loadRegularPayment('14692232-12be-4218-9fa1-2d5b79b62035');
 function zeroFixture(overrides: Record<string, unknown> = {}) {
   const f = paymentFixture();
-  let result: any = { data: { paymentUrl: 'https://bank.example/zero' }, error: null };
+  let result: any = { data: { paymentUrl: 'https://bank.example/zero', toPay: 680000 }, error: null };
   let confirmation: any = { data: { paid: true, failed: false, status: 'PAID' } };
   let price = 980000;
   let availability = true;
+  let patriotProduct: Record<string, unknown> = {
+    id: '37ab3713-4431-4815-96ba-d7ece76a9241', cost: 680000, validityDays: 30, visits: 30,
+    hasDirectionLimitation: true, availableDirections: [6181, 6306, 6307, 5278].map(id => ({ id })),
+    hasTypeLimitation: true, availableTypes: [2349, 839].map(id => ({ id })),
+  };
   let broken = false;
   let storageFails = false;
   const writes: any[] = [], confirms: any[] = [], counterRequests: string[] = [];
@@ -218,10 +225,18 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     ATLANTY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_PLAN_ID: 'topocraty',
+    PATRIOTS_MONTHLY_PRICE_MINOR: 680000,
+    PATRIOTS_PLAN_ID: 'patriots',
+    PATRIOTS_PRODUCT_ID: '37ab3713-4431-4815-96ba-d7ece76a9241',
+    API_BASE: 'https://api.vivacrm.ru', TENANT_KEY: 'iSkq6G',
     canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
     appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
     getServ2Origin: () => 'https://fixture.invalid',
-    request: async (path: string) => { counterRequests.push(path); return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] }; },
+    request: async (path: string) => {
+      counterRequests.push(path);
+      if (path.includes('/products/subscriptions/')) return { data: patriotProduct, error: null };
+      return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] };
+    },
     apiBuySubscroption: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
     apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
     apiConfirmTournamentSubscriptionPurchase: async (...args: any[]) => { confirms.push(args); return confirmation; },
@@ -229,6 +244,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   }, { ...f.globals, setTimeout, clearTimeout });
   return { ...f, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
+    setPatriotProduct: (value: Record<string, unknown>) => { patriotProduct = value; },
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
 }
 
@@ -302,6 +318,56 @@ test('Zero Block rejects a changed Topocrats price instead of charging it', asyn
   const f = zeroFixture();
   await assert.rejects(f.adapter.createZeroPayment('topocraty', fixturePhone, 490000, () => true));
   assert.equal(f.writes.length, 0);
+});
+
+test('Zero Block Patriots offer verifies provider terms, buys once and rejects a changed price', async () => {
+  const f = zeroFixture();
+  const offer = f.adapter.resolveZeroOffer('patriots');
+  assert.equal(offer?.label, 'ДРУЖБА.ПАТРИОТЫ');
+  assert.equal(offer?.period, '30 дней');
+  assert.equal(offer?.target?.directProductId, '37ab3713-4431-4815-96ba-d7ece76a9241');
+  assert.equal(await f.adapter.loadZeroOfferPrice('patriots'), 680000);
+  assert.equal(f.counterRequests.length, 1);
+  assert.match(f.counterRequests[0], /\/products\/subscriptions\/37ab3713-4431-4815-96ba-d7ece76a9241$/);
+  await assert.rejects(f.adapter.createZeroPayment('patriots', fixturePhone, 490000, () => true));
+  assert.equal(f.writes.length, 0);
+  await f.adapter.createZeroPayment('patriots', fixturePhone, 680000, () => true);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0][0], '37ab3713-4431-4815-96ba-d7ece76a9241');
+  assert.equal(f.writes[0][2].retries, 0);
+  await assert.rejects(f.adapter.createZeroPayment('patriots', fixturePhone, 680000, () => true));
+  assert.equal(f.writes.length, 1);
+});
+
+test('Zero Block Patriots offer fails before a transaction if the provider price, term or coverage differs', async () => {
+  for (const change of [
+    { cost: 690000 }, { validityDays: 31 }, { visits: 29 },
+    { availableDirections: [6181, 6306, 6307].map(id => ({ id })) },
+    { availableTypes: [{ id: 2349 }] }, { hasDirectionLimitation: false },
+  ]) {
+    const f = zeroFixture();
+    f.setPatriotProduct({
+      id: '37ab3713-4431-4815-96ba-d7ece76a9241', cost: 680000, validityDays: 30, visits: 30,
+      hasDirectionLimitation: true, availableDirections: [6181, 6306, 6307, 5278].map(id => ({ id })),
+      hasTypeLimitation: true, availableTypes: [2349, 839].map(id => ({ id })), ...change,
+    });
+    await assert.rejects(f.adapter.loadZeroOfferPrice('patriots'));
+    await assert.rejects(f.adapter.createZeroPayment('patriots', fixturePhone, 680000, () => true));
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.stored.size, 0);
+  }
+});
+
+test('Zero Block Patriots never redirects to the bank if transaction amount differs or is absent', async () => {
+  for (const toPay of [undefined, 690000]) {
+    const f = zeroFixture();
+    f.setResult({ data: { paymentUrl: 'https://bank.example/zero', toPay }, error: null });
+    await assert.rejects(f.adapter.createZeroPayment('patriots', fixturePhone, 680000, () => true));
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.stored.size, 1);
+    await assert.rejects(f.adapter.createZeroPayment('patriots', fixturePhone, 680000, () => true));
+    assert.equal(f.writes.length, 1);
+  }
 });
 
 test('Zero Block persists ref before one counter POST; reopening and concurrent clicks never create again', async () => {

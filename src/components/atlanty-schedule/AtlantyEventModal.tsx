@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
-import type { AtlantyScheduleEvent } from "../../utils/atlantyScheduleModel";
+import type { AtlantyBookingMode, AtlantyScheduleEvent } from "../../utils/atlantyScheduleModel";
 import {
   buildAtlantyVivaAnchorHref,
   rememberAtlantyExercise,
@@ -8,15 +8,13 @@ import {
 import { openAtlantyLkBookingWindow } from "../../utils/atlantyLkBookingWindow";
 import "./AtlantyEventModal.css";
 
-export type AtlantyBookingMode = "viva" | "lk";
-
 export type AtlantyEventModalProps = {
   event: AtlantyScheduleEvent;
   imageUrl: string | null;
   pillLabel: string;
   vivaInstance: string;
   onClose: () => void;
-  /** "viva" — официальный попап VivaCRM, "lk" — окно записи LK1 с контуром. */
+  /** "viva" — попап VivaCRM, "lk" — окно ЛК1, "disabled" — только карточка. */
   bookingMode?: AtlantyBookingMode;
   /** Направления окна записи LK1 (список остаётся в рамках витрины). */
   bookingDirectionIds?: readonly number[] | null;
@@ -233,7 +231,16 @@ export function AtlantyEventModalContent({
           )}
 
           <div className="atlanty-modal__actions">
-            {bookingMode === "lk" ? (
+            {bookingMode === "disabled" ? (
+              <button
+                type="button"
+                className="atlanty-modal__cta atlanty-modal__cta--pending"
+                disabled
+                title="Запись откроется после подключения условий"
+              >
+                Записаться
+              </button>
+            ) : bookingMode === "lk" ? (
               <button
                 type="button"
                 className="atlanty-modal__cta"
