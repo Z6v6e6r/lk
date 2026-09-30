@@ -1,0 +1,19 @@
+{
+  "kind": "SUBSCRIPTION_FRIENDSHIP_TWO_HOURS_GENERATION_V1",
+  "predecessor": "patch_live_subscription_hub_limit.mjs (subscription-hub-daily-limit-20260911)",
+  "note": "The 2026-09-30 «Дружба 2 часа» generation extended both reviewed status sources: the prepare node gained the plan's own counter and its name/price globals, the response node gained the counter itself. The older hub-limit and status-price bindings keep their historical hashes; this file owns the current text of both sources.",
+  "targets": [
+    {
+      "id": "8fdc7076a0c436a2",
+      "fileName": "fn_tournament_subscription_status_prepare.js",
+      "preimageSha256": "752ebf525a267ab86b9a9aa0c63dd8f5c7de6e023d34e21f0c2641d52cb5fcd2",
+      "candidateSha256": "92dec6b2efeea8036e3dcb1fc1599bb834f6136fdc367a3a357d8c34dde7b29f"
+    },
+    {
+      "id": "c165e43eba668c25",
+      "fileName": "fn_tournament_subscription_status_response.js",
+      "preimageSha256": "cf4beffffedcd2fb8efaa2efff6564cdbf2d8417c9d71d9305d8533448c69d3d",
+      "candidateSha256": "79619c18af89530713be9b771b753daf892bdcc69d26b46932521c4ae5603a34"
+    }
+  ]
+}

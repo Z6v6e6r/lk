@@ -67,7 +67,14 @@ test("the reviewed sources carry the reviewed deltas verbatim", () => {
   const reviewedComposition = fs.readFileSync(path.join(repoRoot, "scripts/patch_live_lk1_hub.mjs"), "utf8");
   // The cohort table travels verbatim in the reviewed gateway; the admin-version condition
   // lives in the reviewed hub composition that builds this body.
-  assert.ok(reviewedHub.includes(FREE_FIRST_EVENT_V1_DELTAS[0].after), "reviewed cohort drift");
+  // The 2026-09-30 «Дружба 2 часа» generation appended its own entry to that table, so the
+  // historical delta keeps its own text (it composes from its own snapshot) and is compared by
+  // the cohort rows it owns, which must still be verbatim in the reviewed gateway.
+  const cohortRows = FREE_FIRST_EVENT_V1_DELTAS[0].after.split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^"[0-9a-f-]{36}": Object\.freeze\(\[/.test(line));
+  assert.ok(cohortRows.length >= 4, "the reviewed cohort table lost its rows");
+  for (const row of cohortRows) assert.ok(reviewedHub.includes(row), `reviewed cohort drift: ${row}`);
   assert.ok(reviewedComposition.includes('(ctx.lk1 && payload.paymentType === "SUBSCRIPTION")'),
     "reviewed hub composition drift");
   assert.equal(reviewedComposition.includes(FREE_FIRST_EVENT_V1_DELTAS[1].before), false);

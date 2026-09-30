@@ -11,6 +11,7 @@ import {
   HUB_LIMIT_LIVE_CONTRACT,
   HUB_LIMIT_TARGETS,
 } from "../patch_live_subscription_hub_limit.mjs";
+import { newestReviewedSourceSha256 } from "../lib/subscriptionSourceGenerationPins.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const FN_DIR = path.join(ROOT, "scripts", "nodered_games_nodes");
@@ -32,7 +33,11 @@ test("hub limit generation pins the four reviewed live function nodes", () => {
   for (const target of HUB_LIMIT_TARGETS) {
     assert.match(target.liveSha256, /^[a-f0-9]{64}$/);
     const source = fs.readFileSync(path.join(FN_DIR, target.fileName), "utf8");
-    assert.equal(sha256(source), target.candidateSha256, target.fileName);
+    // The 2026-09-30 «Дружба 2 часа» generation extended the two reviewed status sources this
+    // binding owns; the historical candidate stays frozen and the current text is checked
+    // against the newest generation pin instead, exactly like the status-price binding.
+    assert.equal(sha256(source), newestReviewedSourceSha256(target.fileName) ?? target.candidateSha256,
+      target.fileName);
     // Every node must read the same configurable global with the same default.
     assert.match(source, /summer_subscription_network_friendship_daily_limit/);
     assert.doesNotThrow(() => new Function("msg", "flow", "global", "node", "env", source));
@@ -40,7 +45,10 @@ test("hub limit generation pins the four reviewed live function nodes", () => {
 });
 
 test("hub limit builder changes only the selected function body", () => {
-  const reviewed = HUB_LIMIT_TARGETS[0];
+  // The 2026-09-30 «Дружба 2 часа» generation owns this file now, so the builder is exercised
+  // against a target pinned to the current reviewed text; the package pin stays historical.
+  const shipped = HUB_LIMIT_TARGETS[0];
+  const reviewed = { ...shipped, candidateSha256: sha256(fs.readFileSync(path.join(FN_DIR, shipped.fileName), "utf8")) };
   const oldSource = "return msg;";
   const target = { ...reviewed, id: "synthetic-hub-limit", name: "Synthetic hub limit target", outputs: 1, liveSha256: sha256(oldSource) };
   const source = [{
@@ -58,7 +66,8 @@ test("hub limit builder changes only the selected function body", () => {
 });
 
 test("hub limit builder fails closed on preimage, candidate and budget drift", () => {
-  const reviewed = HUB_LIMIT_TARGETS[0];
+  const shipped = HUB_LIMIT_TARGETS[0];
+  const reviewed = { ...shipped, candidateSha256: sha256(fs.readFileSync(path.join(FN_DIR, shipped.fileName), "utf8")) };
   const node = (func) => ({ id: reviewed.id, type: "function", z: TAB_ID, name: reviewed.name,
     outputs: reviewed.outputs, wires: Array.from({ length: reviewed.outputs }, () => []), func });
   assert.throws(() => buildFocusedHubLimitCandidate([node("drifted")], [reviewed]), /Live function preimage changed/);
