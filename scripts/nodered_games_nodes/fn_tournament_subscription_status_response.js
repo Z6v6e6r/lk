@@ -451,6 +451,15 @@ const DIRECT_COUNTER_DEFAULTS = {
     productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe",
     productCostMinor: 1980000,
   },
+  friendship_two_hours: {
+    counterKey: "friendship_two_hours",
+    saleType: "direct_product",
+    planKey: null,
+    campaignKey: null,
+    productName: "Падел.Дружба 2.0",
+    productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e",
+    productCostMinor: 1980000,
+  },
   academy: {
     counterKey: "academy",
     saleType: "direct_product",
@@ -602,6 +611,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "friendship_two_hours"
     || normalized === "kotelniki_friendship"
     || normalized === "network_friendship"
     || normalized === "piter_friendship"
@@ -629,6 +639,25 @@ const readGlobalFirst = (keys) => {
     if (value) return value;
   }
   return null;
+};
+
+const FRIENDSHIP_TWO_HOURS_COUNTER_KEY = "friendship_two_hours";
+// «Дружба 2 часа» is sellable only while its LK1 booking rule is installed: a
+// matching price alone cannot prove the gateway will honour the promised
+// formats, so readiness has to read the plan rules global itself and prove a
+// rule for the configured product.
+const isFriendshipTwoHoursPlanRuleInstalled = (productId) => {
+  const expectedProductId = toStr(productId);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expectedProductId || "")) {
+    return false;
+  }
+  const planRules = global.get("subscriptions_lk1_plan_rules");
+  if (!planRules || typeof planRules !== "object" || Array.isArray(planRules)
+    || planRules.formatVersion !== 1 || !Array.isArray(planRules.rules)) {
+    return false;
+  }
+  return planRules.rules.some((rule) => rule && typeof rule === "object"
+    && toStr(rule.productId)?.toLowerCase() === expectedProductId.toLowerCase());
 };
 
 const managedSaleReadinessConfig = () => {
@@ -931,7 +960,7 @@ const readRegionalFriendshipConfig = (counterKey) => {
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
-  const unlimited = counterKey === "academy" || counterKey === "energy5";
+  const unlimited = counterKey === "academy" || counterKey === "energy5" || counterKey === "friendship_two_hours";
   return withAbLetoStagedRelease({
     counterKey,
     inventoryId: readAbLetoInventoryId(counterKey),
@@ -963,6 +992,7 @@ const buildCounterConfigMap = () => {
   const academy = readDirectCounterConfig("academy");
   const energy5 = readDirectCounterConfig("energy5");
   const ra = readDirectCounterConfig("ra");
+  const friendshipTwoHours = readDirectCounterConfig("friendship_two_hours");
   const kotelnikiFriendship = readRegionalFriendshipConfig("kotelniki_friendship");
   const networkFriendship = readRegionalFriendshipConfig("network_friendship");
   const piterFriendship = readRegionalFriendshipConfig("piter_friendship");
@@ -971,6 +1001,7 @@ const buildCounterConfigMap = () => {
     academy,
     energy5,
     friendship,
+    friendship_two_hours: friendshipTwoHours,
     kotelniki_friendship: kotelnikiFriendship,
     network_friendship: networkFriendship,
     piter_friendship: piterFriendship,
@@ -1186,10 +1217,17 @@ const selectedCounterFromPlan = (() => {
   }
   return null;
 })();
-const selectedCounterKey = normalizeCounterKey(ctx.selectedCounterKey)
+const explicitSelectedCounterKey = normalizeCounterKey(ctx.selectedCounterKey);
+const selectedCounterKey = explicitSelectedCounterKey
   || selectedCounterFromPlan
   || countersOrder[0]
   || "sport";
+// An explicit request never borrows another plan's row: the named counter gets
+// its own state even when the caller's counter list did not carry it.
+if (explicitSelectedCounterKey && !statesByCounterKey[explicitSelectedCounterKey]
+  && configMap[explicitSelectedCounterKey]) {
+  statesByCounterKey[explicitSelectedCounterKey] = createCounterState(configMap[explicitSelectedCounterKey]);
+}
 const now = Date.now();
 const reservationMinutes = Math.max(
   5,
@@ -1437,7 +1475,11 @@ for (const state of Object.values(statesByCounterKey)) {
   if (!subscriptionCounterEpoch.admission(state, global)) state.canPurchase = false;
 }
 
-const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
+const plansPayload = (singleCounter
+  ? [selectedCounterKey]
+  : explicitSelectedCounterKey && !countersOrder.includes(selectedCounterKey)
+    ? countersOrder.concat(selectedCounterKey)
+    : countersOrder)
   .map((counterKey) => {
     const state = statesByCounterKey[counterKey];
     if (!state) return null;
@@ -1536,6 +1578,14 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       state.bindingError = state.bindingReady
         ? null
         : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
+    }
+    if (state.counterKey === FRIENDSHIP_TWO_HOURS_COUNTER_KEY) {
+      const priceMinor = state.priceMinor;
+      state.bindingReady = Number.isSafeInteger(priceMinor) && priceMinor > 0
+        && isFriendshipTwoHoursPlanRuleInstalled(state.productId);
+      state.bindingError = state.bindingReady
+        ? null
+        : "Правило плана «Дружба 2 часа» ещё не установлено в LK1";
     }
     state.canPurchase = !(["ra", "friendship"].includes(state.counterKey)
       && global.get(`summer_subscription_${state.counterKey}_admission_closed`) === true)

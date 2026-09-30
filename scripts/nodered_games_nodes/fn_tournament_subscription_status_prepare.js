@@ -109,6 +109,15 @@ const DIRECT_COUNTER_DEFAULTS = {
     productId: "dfa72adf-233b-4285-8d69-e5eab4234fbe",
     productCostMinor: 1980000,
   },
+  friendship_two_hours: {
+    counterKey: "friendship_two_hours",
+    saleType: "direct_product",
+    planKey: null,
+    campaignKey: null,
+    productName: "Падел.Дружба 2.0",
+    productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e",
+    productCostMinor: 1980000,
+  },
   academy: {
     counterKey: "academy",
     saleType: "direct_product",
@@ -337,6 +346,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "friendship_two_hours"
     || normalized === "kotelniki_friendship"
     || normalized === "network_friendship"
     || normalized === "piter_friendship"
@@ -501,7 +511,8 @@ const readRegionalFriendshipConfig = (counterKey) => {
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
-  const unlimited = counterKey === "academy" || counterKey === "energy5";
+  const unlimited = counterKey === "academy" || counterKey === "energy5"
+    || counterKey === "friendship_two_hours";
   return withAbLetoStagedRelease({
     counterKey,
     inventoryId: readAbLetoInventoryId(counterKey),
@@ -532,6 +543,7 @@ const buildCounterConfigMap = () => {
   const siriusFriendship = readSiriusFriendshipConfig(friendship);
   const academy = readDirectCounterConfig("academy");
   const energy5 = readDirectCounterConfig("energy5");
+  const friendshipTwoHours = readDirectCounterConfig("friendship_two_hours");
   const ra = readDirectCounterConfig("ra");
   const kotelnikiFriendship = readRegionalFriendshipConfig("kotelniki_friendship");
   const networkFriendship = readRegionalFriendshipConfig("network_friendship");
@@ -541,6 +553,7 @@ const buildCounterConfigMap = () => {
     academy,
     energy5,
     friendship,
+    friendship_two_hours: friendshipTwoHours,
     kotelniki_friendship: kotelnikiFriendship,
     network_friendship: networkFriendship,
     piter_friendship: piterFriendship,
