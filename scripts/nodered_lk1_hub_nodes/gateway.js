@@ -22,6 +22,16 @@ const LK1_FREE_FIRST_EVENT_PRODUCTS = Object.freeze({
   "3b4806f1-6f9a-46df-a7d7-45075b4e7274": Object.freeze(["group_training", "tournament"]),
   "9eb8a7a4-c195-492a-95e4-3fb82899ac10": Object.freeze(["group_training"]),
   "6bda152b-0a9c-4308-82d0-3cd4e6aa680d": Object.freeze(["group_training"]),
+  // «Дружба 2 часа» (owner decision 2026-09-30): the day's covered event may also be a
+  // «Время на друзей» session. Only that direction is covered, so the direction scope
+  // below keeps a ПадлхАБ tournament of the same category on its plain discount.
+  "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze(["tournament"]),
+});
+// A product listed here covers only the named directions of its categories; a product
+// absent from this table keeps the whole category covered.
+const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = Object.freeze({
+  // «Время на друзей» of the club.
+  "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze([5278]),
 });
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
   "groupTrainingDiscountPercent", "tournamentDiscountPercent"];
@@ -110,6 +120,21 @@ const exerciseDirectionId = (exercise) => {
   const value = nested ? (nested.id ?? nested.directionId) : rawDirection;
   const numeric = Number(value ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
   return Number.isInteger(numeric) ? numeric : null;
+};
+// The free-first-event verdict of one product: the category must be in the cohort table
+// and, when the product also carries a direction scope, the event must be one of those
+// directions. A harness without the tables simply has no covered cohort.
+const lk1FreeFirstEventCovers = (productId, category, directionId) => {
+  const products = typeof LK1_FREE_FIRST_EVENT_PRODUCTS === "object" && LK1_FREE_FIRST_EVENT_PRODUCTS
+    ? LK1_FREE_FIRST_EVENT_PRODUCTS : null;
+  const scopes = typeof LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES === "object" && LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES
+    ? LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES : null;
+  if (!products || !category) return false;
+  const categories = products[normalizeId(productId)] || null;
+  if (!categories || !categories.includes(category)) return false;
+  const scope = scopes ? scopes[normalizeId(productId)] || null : null;
+  if (!Array.isArray(scope) || scope.length === 0) return true;
+  return scope.includes(Number(directionId));
 };
 const lk1Quote = (ctx, exercise, owned) => {
   // The station of the resolved booking target is part of the contour decision: an
@@ -819,11 +844,9 @@ if (ctx.step === "lk1_usage_operations") {
   // target day from the same two sources the allowance already trusts (reserved operations
   // and provider bookings), deduplicated by booking identity. The cohort table lives at the
   // top of this node body; a harness that runs this step on its own simply has no cohort.
-  const freeFirstProducts = typeof LK1_FREE_FIRST_EVENT_PRODUCTS === "object" && LK1_FREE_FIRST_EVENT_PRODUCTS
-    ? LK1_FREE_FIRST_EVENT_PRODUCTS : null;
-  const freeFirstCategories = freeFirstProducts
-    ? freeFirstProducts[normalizeId(ctx.lk1.rule.productId)] || null : null;
-  const freeFirstCovered = Boolean(freeFirstCategories && freeFirstCategories.includes(ctx.category));
+  // The target's own direction decides coverage for a direction-scoped product.
+  const freeFirstCovered = lk1FreeFirstEventCovers(ctx.lk1.rule.productId, ctx.category,
+    ctx.lk1.target?.directionId);
   let freeFirstEventsToday = 0;
   for (const operation of msg.payload) {
     if (!isObj(operation) || operation.actorClientId !== ctx.actorClientId
@@ -874,9 +897,8 @@ if (ctx.step === "lk1_usage_operations") {
     // AUDIT_BINDING_END
     if (coveredId) benefitBookings.add(coveredId);
     if (operation.serviceDate !== ctx.serviceDate) continue;
-    if (freeFirstCovered && freeFirstCategories.includes(lk1OperationCategory(operation))) {
-      freeFirstEventsToday += 1;
-    }
+    if (freeFirstCovered && lk1FreeFirstEventCovers(ctx.lk1.rule.productId,
+      lk1OperationCategory(operation), operation.lk1?.target?.directionId)) freeFirstEventsToday += 1;
     const minutes = operation.lk1.decision.gameMinutes;
     if (minutes) {
       if (minutes.localDate !== ctx.serviceDate || !Number.isSafeInteger(minutes.freeMinutes)
@@ -891,7 +913,8 @@ if (ctx.step === "lk1_usage_operations") {
       || coveredBookings.has(normalizeId(bookingId(booking)))) continue;
     const category = resolveCategory(booking);
     if (!category) return lk1Stop(ctx, "LK1_BOOKING_CATEGORY_UNRESOLVED");
-    if (freeFirstCovered && freeFirstCategories.includes(category)) freeFirstEventsToday += 1;
+    if (freeFirstCovered && lk1FreeFirstEventCovers(ctx.lk1.rule.productId, category,
+      exerciseDirectionId(booking.exercise || booking))) freeFirstEventsToday += 1;
     if (category !== "open_game") continue;
     const minutes = eventDurationMinutes(booking.exercise || booking);
     if (!minutes) return lk1Stop(ctx, "LK1_ALLOWANCE_PROVIDER_DURATION_UNRESOLVED");
