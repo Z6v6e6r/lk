@@ -91,12 +91,49 @@ ssh lk-primary-147 "cd /root/.node-red && node <stage>/deploy_reviewed_flow_147_
 `scripts/tests/friendshipTwoHoursHotfix.test.mjs` доказывает, что `revert(apply(live)) === live`
 байт-в-байт (в том числе на реальных телах из живого снимка).
 
+## Публикация frontend (2026-09-30, после merge)
+
+PR #169 влит в `main` merge-коммитом `6cf842c81e4ebc3684b49860398d0b063843fbd6`; exact-head гейт
+(`LK1 exact-head enforcement gate`) завершился `success` на `363ef11f`.
+
+Сборка выполнена из чистого checkout этого коммита (DETACHED, рабочее дерево чистое —
+`release:preflight` подтвердил источник).
+
+| Артефакт | Версия / хеш | Куда |
+| --- | --- | --- |
+| Основной prod-комплект | `release.json` `20260930T151748Z`, `bundle.js` `a6310172…` | `lk-primary-147:/var/www/html/lk/` (`npm run deploy:all`) |
+| Основной dev-комплект | `release-dev.json` `20260930T151803Z` | `lk-reserve-89:/var/www/html/lk/` (см. ограничение ниже) |
+| Витрина prod | `release.json` `20260930T151806Z`, `subscription-storefront.js` `b13d42ff…` | `lk-primary-147:/var/www/html/lk/subscription-storefront/` |
+| Витрина dev | `release-dev.json` `20260930T151807Z`, `subscription-storefront-dev.js` `a602200d…` | `lk-reserve-89:/var/www/html/lk/subscription-storefront/` |
+
+Подмена файлов витрины — с бэкапами по штатному соглашению о именах
+(`subscription-storefront.js.backup-20260930T114514Z-20260930T151806Z`, `release.json.backup-…`) и
+атомарным `mv` из временного файла в каталоге, чтобы не отдать частично записанный бандл.
+
+Проверено по HTTPS: серверные хеши совпадают с локальной сборкой (`bundle.js`, `games.js`,
+`tournaments.js`, `release.json`, оба бандла витрины), а доставленный prod-бандл витрины содержит
+текст карточки — `Одно событие в день: игра 60, 90 или 120 минут либо «Время на друзей»` — и ключ
+счётчика `friendship_two_hours`.
+
+Допуск продукта прочитан заново в Viva: направления `{4588, 5278}`, типы `{1613, 839}`,
+`hasDirectionLimitation`/`hasTypeLimitation` = `true`, `cost 1980000`, `validityDays 30`,
+`visits 30` — то есть `parseFriendshipTwoHoursProduct()` пропускает карточку, и она открывается для
+покупки вместе с серверным счётчиком (`bindingReady: true`).
+
+Откат витрины: вернуть пару `.backup-<старая версия>-<новая версия>` (`subscription-storefront.js`
+и `release.json`, на 89 — `-dev`-варианты) и повторить чтение манифеста.
+
 ## Что ещё НЕ сделано
 
-- **Витрина**: карточка «Дружба 2 часа» живёт только в ветке `codex/friendship-two-hours-20260930`.
-  Публичный бандл виджета не пересобирался, поэтому в кабинете карточка ещё не появилась — нужен
-  отдельный frontend-релиз (`npm run build` + публикация бандла).
 - **Проверка «одно событие в день»** на живых записях (две игры 60 в один день) не воспроизводилась
   end-to-end: доказательство — тесты путей + установленное правило, не реальная запись.
+- **DEV-канал основного комплекта**: `deploy:dev` выложил файлы в `/var/www/html/lk/` на 89, но nginx
+  на 89 отдаёт dev-бандлы из неизменяемого namespace `lk-frontend-dev-releases/<sha>-<hash>` через
+  ссылку `lk-frontend-dev-current` (сейчас `5fecc7dc…`, 2026-09-15). То есть dev-канал основного
+  виджета не обновился; публикация туда — отдельный шаг (frontend-delivery pilot или осознанная
+  публикация в namespace). Витрина dev обновилась штатно: её каталог отдаётся напрямую.
 - `npm run build` в ветке падает из-за отсутствующих `VITE_*`, `npm run nodered:modular:validate`
   требует `--workspace` — обе проверки не запускались.
+- Манифест витрины `/lk/subscription-storefront/release.json` отдаётся с `max-age=31536000,
+  immutable`; T123 пробивает кэш параметром `force_ts`, но правило `no-store` из
+  `docs/README_DEPLOY.md` на этот путь не распространено.
