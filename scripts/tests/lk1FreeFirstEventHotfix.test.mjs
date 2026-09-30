@@ -161,11 +161,68 @@ test("the reviewed sources carry the reviewed deltas verbatim", () => {
       assert.ok(reviewedHub.includes("? { covered: true, usedEventsToday: freeFirstEventsToday, visitsLeft: freeFirstVisitsLeft }"));
       continue;
     }
+    if (["free-first-event-counters", "free-first-event-reserved-operation",
+      "free-first-event-provider-booking"].includes(delta.id)) {
+      // The 2026-09-30 «Дружба 2 часа» generation extended these reviewed fragments with the
+      // direction scope of the day's covered event. The historical delta keeps its own text so
+      // the installed generation still composes from its own snapshot; only the anchors that
+      // the newer generation must still honour are compared here.
+      assert.ok(reviewedHub.includes("const freeFirstCovered = lk1FreeFirstEventCovers("), delta.id);
+      assert.ok(reviewedHub.includes("freeFirstEventsToday += 1;"), delta.id);
+      assert.ok(reviewedHub.includes("if (!categories || !categories.includes(category)) return false;"), delta.id);
+      continue;
+    }
     assert.ok(reviewedHub.includes(delta.after), `reviewed gateway drift for ${delta.id}`);
   }
   for (const delta of FREE_FIRST_EVENT_EVALUATOR_DELTAS) {
-    assert.ok(reviewedEvaluator.includes(delta.after), `reviewed evaluator drift for ${delta.id}`);
+    // The 2026-09-30 «Дружба 2 часа» generation added the active-bookings cap to the covered
+    // verdict (a plan past its cap keeps the discount instead of a free event). The historical
+    // delta keeps its own text so the installed generation still composes from its snapshot;
+    // the anchors below are what the newer generation must still honour.
+    assert.ok(reviewedEvaluator.includes("} else if ([\"GROUP_TRAINING\", \"TOURNAMENT\"].includes(category)) {"),
+      `reviewed evaluator drift for ${delta.id}`);
+    assert.ok(reviewedEvaluator.includes("freeFirstCovered = !aboveActiveLimit && freeFirst.usedEventsToday === 0"),
+      `reviewed evaluator drift for ${delta.id}`);
+    assert.ok(reviewedEvaluator.includes("block(\"FREE_FIRST_EVENT_SNAPSHOT_INVALID\""),
+      `reviewed evaluator drift for ${delta.id}`);
   }
+});
+
+test("«Дружба 2 часа» covers only «Время на друзей» in the day cohort", () => {
+  const source = fs.readFileSync(path.join(repoRoot, "scripts/nodered_lk1_hub_nodes/gateway.js"), "utf8");
+  const tables = source.slice(source.indexOf("const LK1_FREE_FIRST_EVENT_PRODUCTS"),
+    source.indexOf("const lk1Fields"));
+  // The 2026-09-30 generation moved the day-cohort verdict helper inside the usage step itself,
+  // because the regression harnesses execute exactly that block on its own and the price-preview
+  // closure extracts declarations from the same body: a helper declared at the top of the node
+  // body was invisible to both. The historical free-first-event packet keeps its own text (it
+  // composes from its own snapshot), so the helper is read from the step here.
+  const usageStart = source.indexOf('if (ctx.step === "lk1_usage_operations") {');
+  const usageEnd = source.indexOf('if (ctx.step === "lk1_policy_decision") {');
+  const usage = source.slice(usageStart, usageEnd);
+  assert.ok(usage.includes("const lk1FreeFirstEventCovers = (productId, category, directionId) => {"),
+    "the day-cohort verdict helper must be declared inside the usage step");
+  const helperStart = usage.indexOf("const lk1FreeFirstEventCovers");
+  const helpers = usage.slice(helperStart, usage.indexOf("const freeFirstCovered =", helperStart));
+  assert.ok(tables.includes("const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = Object.freeze({"));
+  const normalizeId = (value) => {
+    const text = value === null || value === undefined ? "" : String(value).trim().toLowerCase();
+    return text || null;
+  };
+  const covers = new Function("normalizeId", `${tables}\n${helpers}\nreturn lk1FreeFirstEventCovers;`)(normalizeId);
+  const TWO_HOURS = "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e";
+  // The day's covered event may be a «Время на друзей» session (direction 5278)...
+  assert.equal(covers(TWO_HOURS, "tournament", 5278), true);
+  // ...but never a ПадлхАБ tournament, a group training or a game of the same product.
+  for (const [category, directionId] of [["tournament", 2617], ["tournament", 4769],
+    ["group_training", 3685], ["open_game", 4588], ["tournament", null]]) {
+    assert.equal(covers(TWO_HOURS, category, directionId), false, `${category}/${directionId}`);
+  }
+  // The pre-existing cohort keeps its whole-category behaviour.
+  assert.equal(covers(RA_PRODUCT, "tournament", 2617), true);
+  assert.equal(covers(RA_PRODUCT, "group_training", 3685), true);
+  assert.equal(covers(RA_PRODUCT, "open_game", 4588), false);
+  assert.equal(covers(HUB_PRODUCT, "tournament", 5278), false);
 });
 
 test("the deltas apply and revert on the installed bodies only", { skip: snapshotSkip }, () => {

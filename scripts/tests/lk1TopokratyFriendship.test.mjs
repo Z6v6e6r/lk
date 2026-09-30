@@ -12,10 +12,37 @@ import test from 'node:test';
 import {
   LK1_PLAN_RULES_DESIRED,
   LK1_PLAN_RULES_WITH_TOPOKRATY,
+  LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+  buildFriendshipTwoHoursPlanRulesTransition,
+  buildFriendshipTwoHoursPlanRulesRevert,
   LK1_TOPOKRATY_PRODUCT_ID,
   buildTopokratyPlanRulesRevert,
   buildTopokratyPlanRulesTransition,
 } from '../lib/lk1PlanRulesTransition.mjs';
+
+test('two-hour Friendship has its own Viva identity, 120 free minutes and six active bookings', () => {
+  const productId = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+  assert.equal(LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID, productId);
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.find(item => item.productId === productId);
+  assert.deepEqual(rule, {
+    productId, planKey: 'friendship_two_hours', enforceFrom: '2026-09-01',
+    maxActiveBookings: 6, freeGameMinutesPerDay: 120,
+    gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
+    tournamentDiscountPercent: 50,
+  });
+  assert.equal(LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.length,
+    LK1_PLAN_RULES_WITH_TOPOKRATY.rules.length + 1);
+});
+
+test('two-hour rule replaces exactly the eight-rule generation and can revert', () => {
+  const forward = buildFriendshipTwoHoursPlanRulesTransition();
+  assert.deepEqual(forward.expectedPrior, LK1_PLAN_RULES_WITH_TOPOKRATY);
+  assert.deepEqual(forward.desired, LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS);
+  const revert = buildFriendshipTwoHoursPlanRulesRevert();
+  assert.deepEqual(revert.expectedPrior, LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS);
+  assert.deepEqual(revert.desired, LK1_PLAN_RULES_WITH_TOPOKRATY);
+});
 
 const EVALUATOR_FILE = new URL('../nodered_lk1_hub_nodes/evaluator.js', import.meta.url);
 const GATEWAY_FILE = new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url);
@@ -83,6 +110,77 @@ function evaluate(input) {
 const clubMinutes = (freeMinutes, paidOverageMinutes, usedOrReservedFreeMinutesToday = 0) => ({
   localDate: '2026-08-15', usedOrReservedFreeMinutesToday, freeMinutes, paidOverageMinutes,
   discountPercent: 75 });
+
+test('the two-hour day is one event: a game of 60/90/120 minutes, then the cap is discount-only', () => {
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
+  const input = (used, activeServices, durationMinutes) => lk1Input({
+    productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID, rule,
+    target: { category: 'GAME', durationMinutes, directionId: 4588 },
+    usage: { usedOrReservedFreeMinutesToday: used, activeServices },
+  });
+  // The day's single event may last 60, 90 or 120 minutes inside the 120-minute bucket.
+  // A second same-day game never reaches this evaluator: the plan holds one daily seat
+  // (shared_day) and the booking router refuses it — see subscriptionBookingGateway.
+  for (const [durationMinutes, freeMinutes, visitCount] of [[60, 60, 1], [90, 90, 1], [120, 120, 1]]) {
+    const single = evaluate(input(0, 0, durationMinutes)).decision;
+    assert.equal(single.eligible, true, `${durationMinutes} minutes`);
+    assert.equal(single.gameMinutes.freeMinutes, freeMinutes, `${durationMinutes} minutes`);
+    assert.equal(single.subscriptionVisitCount, visitCount, `${durationMinutes} minutes`);
+  }
+  const seventh = evaluate(input(120, 6, 60)).decision;
+  assert.equal(seventh.eligible, true);
+  assert.equal(seventh.gameMinutes.freeMinutes, 0);
+  assert.equal(seventh.gameMinutes.discountPercent, 30);
+  assert.equal(seventh.subscriptionVisitCount, 0);
+});
+
+test('group, tournament and «Время на друзей» give 50% without consuming a visit', () => {
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
+  // The plan's own benefit for these formats is the discount alone: the visit stays
+  // untouched (owner decision 2026-09-30), both below and at the active-bookings cap.
+  // The gateway never marks this product as a free-first-event cohort member, so the
+  // decision is taken from the snapshot it really produces (`covered: false`).
+  for (const [category, directionId, activeServices, snapshot] of [
+    ['GROUP_TRAINING', 3685, 0, { covered: false }],
+    ['TOURNAMENT', 2617, 0, { covered: false }],
+    ['TOURNAMENT', 5278, 0, { covered: false }],
+    ['TOURNAMENT', 5278, 6, { covered: false }],
+    // Defensive: even a covered snapshot cannot hand out a free event at the cap.
+    ['TOURNAMENT', 5278, 6, { covered: true, usedEventsToday: 0, visitsLeft: 5 }],
+  ]) {
+    const decision = evaluate(lk1Input({ productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+      rule, target: { category, directionId },
+      usage: { activeServices, freeFirstEvent: snapshot },
+    })).decision;
+    const label = `${category}/${directionId}/active ${activeServices}`;
+    assert.equal(decision.eligible, true, label);
+    assert.equal(decision.subscriptionVisitCount, 0, label);
+    assert.equal(decision.benefit.finalPriceMinor, BASE_PRICE_MINOR / 2, label);
+    assert.equal(decision.eventDiscountPercent, 50, label);
+  }
+});
+
+test('«Время на друзей» is the day’s free event until that day is spent', () => {
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
+  const scene = (snapshot) => evaluate(lk1Input({ productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+    rule, target: { category: 'TOURNAMENT', directionId: 5278 },
+    usage: { activeServices: 0, freeFirstEvent: snapshot } })).decision;
+  // The day's free event is still unspent: the «Время на друзей» session is carried by the
+  // plan — one visit, nothing charged (owner decision 2026-09-30).
+  const free = scene({ covered: true, usedEventsToday: 0, visitsLeft: 10 });
+  assert.equal(free.eligible, true);
+  assert.equal(free.benefit.kind, 'FREE_ENTITLEMENT');
+  assert.equal(free.benefit.finalPriceMinor, 0);
+  assert.equal(free.subscriptionVisitCount, 1);
+  // The day is already spent (or this is a ПадлхАБ tournament): 50 %, no visit.
+  for (const snapshot of [{ covered: false }, { covered: true, usedEventsToday: 1, visitsLeft: 10 }]) {
+    const paid = scene(snapshot);
+    assert.equal(paid.eligible, true, JSON.stringify(snapshot));
+    assert.equal(paid.benefit.kind, 'PERCENT_DISCOUNT', JSON.stringify(snapshot));
+    assert.equal(paid.benefit.finalPriceMinor, BASE_PRICE_MINOR / 2, JSON.stringify(snapshot));
+    assert.equal(paid.subscriptionVisitCount, 0, JSON.stringify(snapshot));
+  }
+});
 
 test('a club training charges a quarter of the court price only for the minutes above the free hour', () => {
   const result = evaluate(lk1Input()).decision;

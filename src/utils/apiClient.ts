@@ -11260,6 +11260,18 @@ export async function apiGetSubscriptionsForSale() {
   });
 }
 
+/**
+ * Provider terms of one subscription product. The Viva end-user endpoint answers
+ * anonymous reads, so a public page can verify the exact product identity, price,
+ * period and the direction/type scope it promises before it offers the plan.
+ */
+export async function apiGetSubscriptionProduct(productId: string, options: { signal?: AbortSignal } = {}) {
+  return request<unknown>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/products/subscriptions/${encodeURIComponent(productId)}`,
+    { method: "GET", retries: 1, signal: options.signal },
+  );
+}
+
 export async function apiGetAdvertisement() {
   const candidates = buildProjectUrlCandidates(`${SERV2}?type=advertisement`, SERV2, SERV2_FALLBACK);
   return requestAbsoluteUrlCandidates<AdvertisementType>(candidates, {

@@ -43,12 +43,19 @@ export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
     // Service-date audit correction plus the 2026-09-15 response-provenance fix
     // (`prepareHttp` drops `msg.responseUrl`, which otherwise kept the previous step's
     // URL and failed the event-tariff check); the production candidate remains unbound.
-    sourceSha256: "53592ca60fc738d6ad0b1e9832da0b4cfa88979b80589d562d872b8bf9d1079a",
+    // Re-pinned 2026-09-30 (owner decision «Дружба 2 часа»): the reviewed router source gained
+    // the two-hour plan and its day cohort — the plan keeps one event a day (a game of 60/90/120
+    // minutes or a «Время на друзей» session), and the day's covered event is scoped to the
+    // «Время на друзей» direction instead of the whole tournament category. The production
+    // candidate still stays unbound until the full recomposition.
+    sourceSha256: "d8175e9a7b83293c33d33ad9902bbfd5ca515f33255084fd7aeb0c8e564a0292",
     reason: "DEV_ROUTER_AMENDMENT_NOT_REBOUND",
   }),
   Object.freeze({
     id: "c165e43eba668c25",
-    sourceSha256: "cf4beffffedcd2fb8efaa2efff6564cdbf2d8417c9d71d9305d8533448c69d3d",
+    // Re-pinned 2026-09-30 (owner decision «Дружба 2 часа»): the reviewed status response gained
+    // the plan's own counter, whose readiness proves the installed plan rule instead of a price.
+    sourceSha256: "79619c18af89530713be9b771b753daf892bdcc69d26b46932521c4ae5603a34",
     reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
   }),
   Object.freeze({

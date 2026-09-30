@@ -61,6 +61,12 @@ const PREVIEW_CONTRACT_ROOTS = Object.freeze(['LK1_OVERLAY_HUB_PRODUCT_ID', 'MAN
 // declares them, so a reviewed composition of an older generation still composes.
 const FREE_FIRST_ROOT_DECLARATIONS = Object.freeze([
   ['LK1_FREE_FIRST_EVENT_PRODUCTS', /(?:^|\n)\s*const LK1_FREE_FIRST_EVENT_PRODUCTS\s*=/],
+  // The 2026-09-30 «Дружба 2 часа» generation scopes the day's covered event to one direction,
+  // so the usage block reads a second table beside the cohort: without it the extracted closure
+  // would fail the undeclared-constant guard (or, worse, the day's free event would go back to
+  // covering every club tournament of that category). Read only when that body declares it, so
+  // a composition from an older generation still composes.
+  ['LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES', /(?:^|\n)\s*const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES\s*=/],
   ['lk1OperationCategory', /(?:^|\n)\s*const lk1OperationCategory\s*=/],
 ]);
 const freeFirstRoots = (booking) => FREE_FIRST_ROOT_DECLARATIONS

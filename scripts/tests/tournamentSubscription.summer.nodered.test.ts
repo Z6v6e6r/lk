@@ -5623,3 +5623,241 @@ test("old HAB CLAIMED price cannot dispatch after the provider base changes", ()
   assert.equal(asRecord(asRecord(asRecord(out[3]).payload).details).code, "PITER_CLAIMED_TIER_DRIFT");
   assert.deepEqual(ledger, before);
 });
+
+const FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID = "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e";
+const FRIENDSHIP_TWO_HOURS_STATUS_RULE = {
+  productId: FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID,
+  planKey: "friendship_two_hours",
+  enforceFrom: "2026-09-01",
+  maxActiveBookings: 4,
+  freeGameMinutesPerDay: 120,
+  gameOverageDiscountPercent: 50,
+  groupTrainingDiscountPercent: 50,
+  tournamentDiscountPercent: 50,
+};
+
+/** Production shape of the LK1 plan-rules global the binding proof reads. */
+const planRulesGlobal = (rules: unknown) => ({
+  subscriptions_lk1_plan_rules: rules,
+});
+const installedPlanRules = (rules: Array<Record<string, unknown>> = [FRIENDSHIP_TWO_HOURS_STATUS_RULE]) => (
+  planRulesGlobal({ formatVersion: 1, rules })
+);
+
+const friendshipTwoHoursCounterConfig = () => ({
+  counterKey: "friendship_two_hours",
+  saleType: "direct_product",
+  planKey: null,
+  campaignKey: null,
+  productName: "Падел.Дружба 2.0",
+  productId: FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID,
+  productCostMinor: 1980000,
+  unlimited: true,
+  totalLimit: 0,
+  manualPaidCount: 0,
+});
+
+const friendshipTwoHoursStatusMessage = (counters: Array<Record<string, unknown>>) => ({
+  _summerSubscriptionCtx: {
+    action: "status",
+    singleCounter: true,
+    selectedCounterKey: "friendship_two_hours",
+    counters,
+  },
+  payload: [],
+});
+
+const readFriendshipTwoHoursStatusRow = (
+  globalValues: GlobalValues,
+  counters: Array<Record<string, unknown>> = [friendshipTwoHoursCounterConfig()],
+) => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    friendshipTwoHoursStatusMessage(counters),
+    globalValues,
+  ) as unknown[];
+  return asRecord(asRecord(out[0]).payload);
+};
+
+test("friendship_two_hours status row stays closed until its LK1 plan rule is installed", () => {
+  const payload = readFriendshipTwoHoursStatusRow({});
+
+  assert.equal(payload.counterKey, "friendship_two_hours");
+  assert.equal(payload.productId, FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID);
+  assert.equal(payload.productName, "Падел.Дружба 2.0");
+  assert.equal(payload.priceMinor, 1980000);
+  assert.equal(payload.unlimited, true);
+  assert.equal(payload.totalLimit, 0);
+  assert.equal(payload.saleType, "direct_product");
+  assert.equal(payload.planKey, null);
+  assert.equal(payload.campaignKey, null);
+  // The manager-sale gate must not be what closes it.
+  assert.equal(payload.managedSaleReady, true);
+  assert.equal(payload.bindingReady, false);
+  assert.equal(payload.canPurchase, false);
+});
+
+test("friendship_two_hours status opens exactly when its own product rule is installed", () => {
+  const payload = readFriendshipTwoHoursStatusRow(installedPlanRules());
+
+  assert.equal(payload.counterKey, "friendship_two_hours");
+  assert.equal(payload.productId, FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID);
+  assert.equal(payload.productName, "Падел.Дружба 2.0");
+  assert.equal(payload.priceMinor, 1980000);
+  assert.equal(payload.unlimited, true);
+  assert.equal(payload.counterKey, "friendship_two_hours");
+  assert.equal(payload.bindingReady, true);
+  assert.equal(payload.bindingError, null);
+  assert.equal(payload.canPurchase, true);
+});
+
+test("friendship_two_hours rule matching is case-insensitive and ignores other products", () => {
+  const upperCased = readFriendshipTwoHoursStatusRow(installedPlanRules([{
+    ...FRIENDSHIP_TWO_HOURS_STATUS_RULE,
+    productId: FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID.toUpperCase(),
+  }]));
+  assert.equal(upperCased.bindingReady, true);
+  assert.equal(upperCased.canPurchase, true);
+
+  const foreign = readFriendshipTwoHoursStatusRow(installedPlanRules([
+    { ...FRIENDSHIP_TWO_HOURS_STATUS_RULE, productId: "db7a5250-7369-4f43-8ac5-9111be24bc74" },
+    { ...FRIENDSHIP_TWO_HOURS_STATUS_RULE, productId: "82caad6f-4d19-4d01-852b-932bdbb0f405" },
+  ]));
+  assert.equal(foreign.bindingReady, false);
+  assert.equal(foreign.canPurchase, false);
+});
+
+test("friendship_two_hours status fails closed on a malformed or mismatched plan-rules global", () => {
+  const malformed: unknown[] = [
+    "{\"formatVersion\":1}",
+    [FRIENDSHIP_TWO_HOURS_STATUS_RULE],
+    { formatVersion: 2, rules: [FRIENDSHIP_TWO_HOURS_STATUS_RULE] },
+    { formatVersion: 1 },
+    { formatVersion: 1, rules: {} },
+    { formatVersion: 1, rules: [null, "rule"] },
+    { formatVersion: 1, rules: [{ ...FRIENDSHIP_TWO_HOURS_STATUS_RULE, productId: 42 }] },
+    { formatVersion: 1, rules: [{ ...FRIENDSHIP_TWO_HOURS_STATUS_RULE, productId: null }] },
+  ];
+  for (const rules of malformed) {
+    const payload = readFriendshipTwoHoursStatusRow(planRulesGlobal(rules));
+    assert.equal(payload.bindingReady, false, `rules=${JSON.stringify(rules)}`);
+    assert.equal(payload.canPurchase, false, `rules=${JSON.stringify(rules)}`);
+    assert.equal(payload.counterKey, "friendship_two_hours");
+    assert.equal(payload.priceMinor, 1980000);
+  }
+
+  // A configured product that is not a UUID cannot prove any rule; the config
+  // is read from the globals here, so the request omits the caller's list.
+  const nonUuidProduct = readFriendshipTwoHoursStatusRow({
+    ...installedPlanRules(),
+    summer_subscription_friendship_two_hours_product_id: "forged-product",
+  }, []);
+  assert.equal(nonUuidProduct.bindingReady, false);
+  assert.equal(nonUuidProduct.canPurchase, false);
+});
+
+test("friendship_two_hours name and price follow their configuration globals", () => {
+  const payload = readFriendshipTwoHoursStatusRow({
+    ...installedPlanRules(),
+    summer_subscription_friendship_two_hours_product_name: "Падел.Дружба 2.0 (акция)",
+    summer_subscription_friendship_two_hours_product_cost_minor: "1980000",
+  }, []);
+  assert.equal(payload.productName, "Падел.Дружба 2.0 (акция)");
+  assert.equal(payload.priceMinor, 1980000);
+  assert.equal(payload.bindingReady, true);
+  assert.equal(payload.canPurchase, true);
+});
+
+test("explicit friendship_two_hours selection returns its own row instead of the sport fallback", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    {
+      _summerSubscriptionCtx: {
+        action: "status",
+        singleCounter: true,
+        selectedCounterKey: "friendship_two_hours",
+        // The caller's list does not carry the two-hour counter; the response
+        // node still must not borrow the sport row (price also 1980000).
+        counters: [{
+          counterKey: "sport",
+          saleType: "summer_campaign",
+          planKey: "sport",
+          campaignKey: "summer_padel_sport_2026",
+          productId: "82caad6f-4d19-4d01-852b-932bdbb0f405",
+          productName: "Лето.Падел.Спорт",
+          productCostMinor: 1980000,
+          totalLimit: 132,
+          manualPaidCount: 0,
+        }],
+      },
+      payload: [],
+    },
+    installedPlanRules(),
+  ) as unknown[];
+
+  const payload = asRecord(asRecord(out[0]).payload);
+  assert.equal(payload.counterKey, "friendship_two_hours");
+  assert.equal(payload.productId, FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID);
+  assert.equal(payload.bindingReady, true);
+  assert.equal(payload.canPurchase, true);
+  const plans = payload.plans as Array<Record<string, unknown>>;
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].counterKey, "friendship_two_hours");
+  assert.equal(plans[0].priceMinor, 1980000);
+});
+
+test("aggregate status keeps the five existing counters and never surfaces friendship_two_hours as a card", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: { action: "status" }, payload: [] },
+    installedPlanRules(),
+  ) as unknown[];
+  const payload = asRecord(asRecord(out[0]).payload);
+  const plans = payload.plans as Array<Record<string, unknown>>;
+
+  assert.deepEqual(plans.map((plan) => plan.counterKey), ["friendship", "sport", "academy", "ra", "energy5"]);
+  const sport = asRecord(plans.find((plan) => plan.counterKey === "sport"));
+  assert.equal(sport.counterKey, "sport");
+  assert.equal(sport.productId, "82caad6f-4d19-4d01-852b-932bdbb0f405");
+  assert.equal(sport.priceMinor, 1980000);
+  assert.equal(sport.canPurchase, true);
+  assert.equal(sport.bindingReady, true);
+});
+
+test("the status prepare node accepts the friendship_two_hours counter and forwards it", () => {
+  const prepareOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "friendship_two_hours" } } },
+  ) as unknown[];
+
+  // The key is no longer answered with the 400 branch: the prepare node carries it.
+  assert.equal(prepareOut[1], null);
+  const ctx = asRecord(asRecord(prepareOut[0])._summerSubscriptionCtx);
+  assert.equal(ctx.selectedCounterKey, "friendship_two_hours");
+  const counter = asRecord((ctx.counters as Array<Record<string, unknown>>)
+    .find((candidate) => candidate.counterKey === "friendship_two_hours"));
+  assert.equal(counter.productId, FRIENDSHIP_TWO_HOURS_STATUS_PRODUCT_ID);
+  assert.equal(counter.productName, "Падел.Дружба 2.0");
+  assert.equal(counter.planKey, null);
+  assert.equal(counter.campaignKey, null);
+
+  // The response node then builds its own row from that context.
+  const responseOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: ctx, payload: [] },
+    installedPlanRules(),
+  ) as unknown[];
+  const payload = asRecord(asRecord(responseOut[0]).payload);
+  assert.equal(payload.counterKey, "friendship_two_hours");
+  assert.equal(payload.priceMinor, 1980000);
+  assert.equal(payload.unlimited, true);
+  assert.equal(payload.bindingReady, true);
+  assert.equal(payload.canPurchase, true);
+
+  // Any other unknown key still fails closed on the prepare node.
+  const unsupported = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "not_a_counter" } } },
+  ) as unknown[];
+  assert.equal(asRecord(unsupported[1]).statusCode, 400);
+});

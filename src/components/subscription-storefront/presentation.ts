@@ -167,7 +167,12 @@ export const friendshipVariantBenefits: Readonly<Record<string, readonly Subscri
     { id: 'daily-two-hours', title: '2 часа в день бесплатно:',
       items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }] },
     { ...discounts, title: 'СВЕРХ 2-ух ЧАСОВ:' },
-    planning,
+    { ...planning, items: [
+      { id: 'active-bookings', label: 'До 6 активных записей' },
+      // The day carries one event: the 120-minute bucket is not two separate games.
+      { id: 'one-event-a-day', label: 'Одно событие в день: игра 60, 90 или 120 минут либо «Время на друзей»' },
+      { id: 'discount-only', label: 'С 7-й записи — только скидка, без бесплатных часов' },
+    ] },
   ],
   annual: friendshipBenefits,
 };

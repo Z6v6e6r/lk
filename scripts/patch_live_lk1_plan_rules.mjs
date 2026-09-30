@@ -153,7 +153,12 @@ export const PLAN_RULES_MODULE_SHA256 =
 // (`liveEmbeddedSha256` / `patchedFuncSha256`) are re-derived and re-reviewed at that apply,
 // exactly as the generation contract requires.
 export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
-  "2a7878abff5bb5f3618b439191616c4a01a7a592f4322aeb3aaadad3f3d7046a";
+  // Re-pinned 2026-09-30 (owner decision «Дружба 2 часа»): the reviewed evaluator no longer
+  // grants the day's covered event once the plan is past its active-bookings cap — the plan
+  // keeps the discount instead (`freeFirstCovered = !aboveActiveLimit && …`). The rule shipped
+  // into the installed booking evaluator as the `lk1-friendship-two-hours` generation, whose
+  // live-body pins are re-derived and re-reviewed at that apply.
+  "ecc81fb6ee14e5948a61c54157c124408928935d9b9008c6e939238f43be89f3";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =

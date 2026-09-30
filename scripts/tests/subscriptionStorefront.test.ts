@@ -9,9 +9,28 @@ import {
   scopedStorefrontStatuses, atlantyBillingOptions, ATLANTY_PLAN_ID, ATLANTY_VARIANT, normalizeStorefrontVariant,
   ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID,
   PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID,
+  FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_DIRECTION_IDS, FRIENDSHIP_TWO_HOURS_TYPE_IDS,
+  parseFriendshipTwoHoursProduct,
 } from '../../src/components/subscription-storefront/catalog.ts';
 
 const available = { counterKey: 'ra', priceMinor: 2380000, canPurchase: true, bindingReady: true, unlimited: false, remainingCount: 12, totalLimit: 100 };
+
+/**
+ * The Viva product record the plan promises: the two free hours of open game
+ * (direction 4588, type 1613) plus «Время на друзей» (direction 5278, type 839).
+ */
+const friendshipTwoHoursProduct = (overrides: Record<string, unknown> = {}) => ({
+  id: FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+  cost: 1980000,
+  validityDays: 30,
+  visits: 30,
+  showToUser: true,
+  hasDirectionLimitation: true,
+  availableDirections: [{ id: 4588 }, { id: 5278 }],
+  hasTypeLimitation: true,
+  availableTypes: [{ id: 1613 }, { id: 839 }],
+  ...overrides,
+});
 
 /** Synthetic fixture number, built at runtime to keep source free of phone literals. */
 const FIXTURE_PHONE = `+${'7'}${'900000000'}`;
@@ -29,7 +48,7 @@ function stripImports(source: string): string {
 }
 
 /** Loads the payment adapter in a VM with stubbed LK1 API calls. */
-function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string } = {}): {
+function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string; twoHourProduct?: Record<string, unknown> | null; twoHourReady?: boolean } = {}): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
   describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
@@ -39,13 +58,21 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
+  const withStubs = `const { apiBuySubscroption, apiGetSubscriptionProduct, apiFetchTournamentSubscriptionStatus, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, parseFriendshipTwoHoursProduct, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const calls: PaymentAdapterCalls = { created: [], bought: [] };
   const exported: Record<string, (...args: never[]) => unknown> = {};
   const stubs = {
+    // The real parser runs inside the VM: the fixture is a provider record, not a verdict.
+    apiGetSubscriptionProduct: async (productId: string) => (overrides.twoHourProduct === null
+      ? { data: null, error: { status: 404, message: 'not found' }, status: 404 }
+      : { data: overrides.twoHourProduct ?? friendshipTwoHoursProduct(), error: null, status: 200, productId }),
+    apiFetchTournamentSubscriptionStatus: async () => ({ data: overrides.twoHourReady === false ? [] : [{ ...available, counterKey: 'friendship_two_hours', priceMinor: 1980000 }], error: null }),
+    parseFriendshipTwoHoursProduct,
+    FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+    FRIENDSHIP_TWO_HOURS_PRICE_MINOR: 1980000,
     apiBuySubscroption: async (productId: string, phone: string, options?: { retries?: number }) => {
       calls.bought.push({ productId, phone, retries: options?.retries });
       if (calls.buyFailure) return { data: null, error: calls.buyFailure, status: calls.buyFailure.status };
@@ -269,7 +296,7 @@ test('friendship variants retain independent prices, inventory and availability'
   assert.deepEqual(options.map(option => option.priceMinor), [980000, 1980000, 5680000]);
   assert.deepEqual(options.map(option => option.ctaDisabled), [false, true, true]);
   assert.equal(options[1].progress, undefined);
-  assert.equal(options[1].ctaLabel, 'Скоро. Может быть');
+  assert.equal(options[1].ctaLabel, 'Сейчас недоступно');
   assert.equal(options[2].progress?.current, 10);
   assert.equal(options[2].priceSuffix, '/ год');
   assert.ok(friendshipBillingOptions([monthly, { ...annual, canPurchase: true }], true).every(option => option.ctaDisabled));
@@ -280,6 +307,71 @@ test('friendship variants retain independent prices, inventory and availability'
     assert.equal(option.priceMinor, null);
     assert.equal(option.ctaDisabled, true);
   }
+});
+
+test('the two-hour plan needs «Время на друзей» inside the Viva product scope', () => {
+  // The scope the plan promises in the club: open game plus «Время на друзей».
+  assert.deepEqual([...FRIENDSHIP_TWO_HOURS_DIRECTION_IDS].sort((left, right) => left - right), [4588, 5278]);
+  assert.deepEqual([...FRIENDSHIP_TWO_HOURS_TYPE_IDS].sort((left, right) => left - right), [839, 1613]);
+  assert.equal(parseFriendshipTwoHoursProduct(friendshipTwoHoursProduct()), 1980000);
+  // The live product still carries only the open game, so the format is not sellable yet.
+  for (const [reason, product] of [
+    ['direction 5278 missing', friendshipTwoHoursProduct({ availableDirections: [{ id: 4588 }] })],
+    ['type 839 missing', friendshipTwoHoursProduct({ availableTypes: [{ id: 1613 }] })],
+    ['scope flag absent', friendshipTwoHoursProduct({ hasDirectionLimitation: undefined })],
+    ['scope flag not boolean', friendshipTwoHoursProduct({ hasTypeLimitation: 'yes' })],
+    ['scope list empty', friendshipTwoHoursProduct({ availableDirections: [] })],
+    ['scope list unparsable', friendshipTwoHoursProduct({ availableTypes: [{ id: 'игра' }] })],
+    ['wrong product', friendshipTwoHoursProduct({ id: 'other' })],
+    ['wrong price', friendshipTwoHoursProduct({ cost: 980000 })],
+    ['wrong period', friendshipTwoHoursProduct({ validityDays: 60 })],
+  ] as const) {
+    assert.equal(parseFriendshipTwoHoursProduct(product), null, reason);
+  }
+  // An unlimited scope covers every direction and type; string ids are accepted.
+  assert.equal(parseFriendshipTwoHoursProduct(friendshipTwoHoursProduct({
+    hasDirectionLimitation: false, hasTypeLimitation: false, availableDirections: [], availableTypes: [],
+  })), 1980000);
+  assert.equal(parseFriendshipTwoHoursProduct(friendshipTwoHoursProduct({
+    availableDirections: ['4588', '5278'], availableTypes: ['1613', '839'],
+  })), 1980000);
+  for (const payload of [undefined, null, [], 'text', 0]) {
+    assert.equal(parseFriendshipTwoHoursProduct(payload), null, String(payload));
+  }
+});
+
+test('two-hour Friendship is purchasable only with the verified Viva product and the readiness counter', () => {
+  const monthly = { ...available, counterKey: 'friendship', priceMinor: 980000 };
+  const ready = { ...available, counterKey: 'friendship_two_hours', priceMinor: 1980000 };
+  const price = parseFriendshipTwoHoursProduct(friendshipTwoHoursProduct());
+  assert.equal(friendshipBillingOptions([monthly], false, price)[1].ctaDisabled, true);
+  const option = friendshipBillingOptions([monthly, ready], false, price)[1];
+  assert.equal(option.ctaDisabled, false);
+  assert.equal(option.priceMinor, 1980000);
+  for (const bad of [undefined, null, 980000]) {
+    assert.equal(friendshipBillingOptions([monthly, ready], false, bad)[1].ctaDisabled, true);
+  }
+  assert.equal(friendshipBillingOptions([monthly, { ...ready, bindingReady: false }], false, price)[1].ctaDisabled, true);
+  // The current server may answer an unknown explicit counter with the sport
+  // fallback; neither that answer nor a same-price aggregate is readiness.
+  const sportFallback = { ...ready, counterKey: 'sport' };
+  assert.equal(friendshipBillingOptions(scopedStorefrontStatuses([sportFallback], 'friendship_two_hours'), false, price)[1].ctaDisabled, true);
+  assert.deepEqual(scopedStorefrontStatuses([ready]), []);
+});
+
+test('storefront checks the two-hour Viva product separately from summer counters', () => {
+  const source = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
+  assert.match(source, /apiGetSubscriptionProduct\(FRIENDSHIP_TWO_HOURS_PRODUCT_ID/);
+  assert.match(source, /parseFriendshipTwoHoursProduct\(twoHourProduct\.data\)/);
+  assert.match(source, /friendshipBillingOptions\(statuses \?\? \[\], error, twoHourProductPriceMinor\)/);
+});
+
+test('two-hour card shows six active bookings rather than the original friendship cap', () => {
+  const source = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
+  assert.match(source, /'monthly-two-hours':[\s\S]*?До 6 активных записей/);
+  // The 120-minute bucket is one event a day, never two 60-minute games.
+  assert.match(source, /'monthly-two-hours':[\s\S]*?Одно событие в день: игра 60, 90 или 120 минут либо «Время на друзей»/);
+  assert.match(source, /'monthly-two-hours':[\s\S]*?С 7-й записи — только скидка/);
 });
 
 test('payment adapter binds every sold billing option to its own LK1 counter', async () => {
@@ -309,7 +401,9 @@ test('payment adapter binds every sold billing option to its own LK1 counter', a
     target(adapter, 'academy', 'monthly'),
     { counterKey: 'academy', directProductId: '9eb8a7a4-c195-492a-95e4-3fb82899ac10', planType: 'friendship' },
   );
-  for (const [planId, optionId] of [['friendship', 'monthly-two-hours'], ['sport', 'monthly'], ['ra', 'annual'], ['friendship', 'unknown']] as const) {
+  assert.deepEqual(target(adapter, 'friendship', 'monthly-two-hours'),
+    { counterKey: 'friendship_two_hours', directProductId: FRIENDSHIP_TWO_HOURS_PRODUCT_ID, planType: 'friendship' });
+  for (const [planId, optionId] of [['sport', 'monthly'], ['ra', 'annual'], ['friendship', 'unknown']] as const) {
     assert.equal(adapter.resolveStorefrontBillingTarget(planId, optionId), null, `${planId}/${optionId}`);
   }
 
@@ -327,6 +421,32 @@ test('payment adapter binds every sold billing option to its own LK1 counter', a
   await adapter.createStorefrontSubscriptionPayment({ planId: 'energy5', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
   assert.equal(adapter.calls.bought.length, 2);
   assert.equal(adapter.calls.bought[1].productId, 'dfa72adf-233b-4285-8d69-e5eab4234fbe');
+});
+
+test('two-hour checkout rechecks the provider product scope before any transaction', async () => {
+  const valid = loadPaymentAdapter();
+  await valid.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'monthly-two-hours', phone: FIXTURE_PHONE });
+  assert.deepEqual(valid.calls.bought.map(item => item.productId), [FRIENDSHIP_TWO_HOURS_PRODUCT_ID]);
+  assert.equal(valid.calls.bought[0].retries, 0);
+  const changed = loadPaymentAdapter({ twoHourProduct: friendshipTwoHoursProduct({ cost: 980000 }) });
+  await assert.rejects(changed.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'monthly-two-hours', phone: FIXTURE_PHONE }),
+    /недоступен|стоимост/i);
+  assert.equal(changed.calls.bought.length, 0);
+  // A product that lost «Время на друзей» must not be sold as this variant either.
+  for (const [reason, product] of [
+    ['direction removed', friendshipTwoHoursProduct({ availableDirections: [{ id: 4588 }] })],
+    ['type removed', friendshipTwoHoursProduct({ availableTypes: [{ id: 1613 }] })],
+    ['product missing', null],
+  ] as const) {
+    const adapter = loadPaymentAdapter({ twoHourProduct: product });
+    await assert.rejects(adapter.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'monthly-two-hours', phone: FIXTURE_PHONE }),
+      /недоступен|стоимост/i, reason);
+    assert.equal(adapter.calls.bought.length, 0, reason);
+  }
+  const notReady = loadPaymentAdapter({ twoHourReady: false });
+  await assert.rejects(notReady.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'monthly-two-hours', phone: FIXTURE_PHONE }),
+    /недоступно|правила/i);
+  assert.equal(notReady.calls.bought.length, 0);
 });
 
 test('five-visit pass keeps its API price and disables the CTA without one', () => {

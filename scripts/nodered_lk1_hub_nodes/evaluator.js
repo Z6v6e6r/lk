@@ -250,7 +250,7 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
         || !Number.isSafeInteger(freeFirst.visitsLeft) || freeFirst.visitsLeft < 0) {
         block("FREE_FIRST_EVENT_SNAPSHOT_INVALID", "Первое бесплатное событие дня не подтверждено");
       } else {
-        freeFirstCovered = freeFirst.usedEventsToday === 0 && freeFirst.visitsLeft >= 1;
+        freeFirstCovered = !aboveActiveLimit && freeFirst.usedEventsToday === 0 && freeFirst.visitsLeft >= 1;
       }
     }
     decision.subscriptionVisitCount = freeFirstCovered ? 1 : 0;

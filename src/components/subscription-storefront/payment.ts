@@ -11,10 +11,12 @@ import {
   apiConfirmTournamentSubscriptionPurchase,
   apiCreateTournamentSubscriptionPurchase,
   apiFetchProfile,
+  apiGetSubscriptionProduct,
+  apiFetchTournamentSubscriptionStatus,
 } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveTournamentSubscriptionDirectProductId } from '../../utils/tournamentSubscriptionCatalog';
-import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
+import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, parseFriendshipTwoHoursProduct, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
 
 /** Query parameter used by LK1 to resolve the payment after returning from the bank. */
 export const PAYMENT_REF_QUERY_KEY = 'summerPaymentRef';
@@ -26,7 +28,7 @@ const PENDING_PAYMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export type StorefrontBillingOptionId = 'monthly' | 'annual' | 'monthly-two-hours';
 
 export interface StorefrontBillingTarget {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty' | 'patriots';
+  counterKey: 'friendship' | 'friendship_two_hours' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty' | 'patriots';
   /** Direct product purchase (`apiBuySubscroption`) when the plan has a catalog product. */
   directProductId: string | null;
   /** Summer-plan purchase mode used for counter based plans. */
@@ -34,7 +36,7 @@ export interface StorefrontBillingTarget {
 }
 
 export interface PendingPaymentEntry {
-  counterKey: 'friendship' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty' | 'patriots' | null;
+  counterKey: 'friendship' | 'friendship_two_hours' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty' | 'patriots' | null;
   paymentRef: string;
   planId: StorefrontBillingOptionId | null;
   campaignKey: string | null;
@@ -62,7 +64,9 @@ export function resolveStorefrontBillingTarget(
   planId: string,
   billingOptionId: StorefrontBillingOptionId,
 ): StorefrontBillingTarget | null {
-  if (billingOptionId === 'monthly-two-hours') return null;
+  if (billingOptionId === 'monthly-two-hours') return planId === 'friendship'
+    ? { counterKey: 'friendship_two_hours', directProductId: FRIENDSHIP_TWO_HOURS_PRODUCT_ID, planType: 'friendship' }
+    : null;
   if (planId === 'atlanty') {
     // Both club options are direct Viva products. A blank id must fail closed
     // instead of falling through to the counter purchase contour.
@@ -147,7 +151,7 @@ export function clearStorefrontPaymentRef(): void {
 }
 
 function normalizePendingCounterKey(value: string): PendingPaymentEntry['counterKey'] {
-  return value === 'friendship' || value === 'network_friendship' || value === 'ra' || value === 'academy'
+  return value === 'friendship' || value === 'friendship_two_hours' || value === 'network_friendship' || value === 'ra' || value === 'academy'
     || value === 'energy5' || value === 'atlanty' || value === TOPOCRATY_PLAN_ID || value === PATRIOTS_PLAN_ID
     ? value
     : null;
@@ -244,6 +248,22 @@ export async function createStorefrontSubscriptionPayment(params: {
   const returnUrl = buildStorefrontReturnUrl(paymentRef);
 
   if (target.directProductId) {
+    if (target.counterKey === 'friendship_two_hours') {
+      // A static card price is not purchase authority. Re-read the provider product
+      // — identity, price, period and the promised direction scope, including
+      // «Время на друзей» — immediately before the non-idempotent transaction.
+      const product = await apiGetSubscriptionProduct(target.directProductId);
+      if (product.error || parseFriendshipTwoHoursProduct(product.data) !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR) {
+        throw new StorefrontPaymentError('Стоимость подписки не подтверждена; оформление временно недоступно');
+      }
+      const readiness = await apiFetchTournamentSubscriptionStatus({ counterKey: 'friendship_two_hours' });
+      const exact = readiness.data?.find(status => status.counterKey === 'friendship_two_hours');
+      if (readiness.error || !exact || !exact.bindingReady || !exact.canPurchase
+        || exact.priceMinor !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR
+        || (!exact.unlimited && exact.remainingCount <= 0)) {
+        throw new StorefrontPaymentError('Правила подписки не подтверждены; оформление временно недоступно');
+      }
+    }
     const result = await apiBuySubscroption(target.directProductId, params.phone, {
       baseRedirectUrl: returnUrl,
       successUrl: returnUrl,

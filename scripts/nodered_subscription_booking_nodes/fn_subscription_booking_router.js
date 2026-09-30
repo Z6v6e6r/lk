@@ -789,6 +789,7 @@ const pickName = (value) => {
 
 const PLAN_PRODUCT_IDS = {
   friendship: "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
+  friendship_two_hours: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e",
   sport: "82caad6f-4d19-4d01-852b-932bdbb0f405",
   academy: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
@@ -909,6 +910,7 @@ const resolvePlanKey = (value) => {
     if (markers.some((marker) => normalizeId(marker) === productId)) return planKey;
   }
   const normalized = markers.map(normalizeMarker).filter(Boolean);
+  if (normalized.some((marker) => marker.includes("friendshiptwohours") || marker.includes("дружба2часа"))) return "friendship_two_hours";
   if (normalized.some((marker) => (
     (marker.includes("котельник") || marker.includes("kotelniki") || marker.includes("kotelnik"))
     && (marker.includes("дружба") || marker.includes("friendship") || marker.includes("druzhba"))
@@ -934,6 +936,10 @@ const resolvePlanKey = (value) => {
 
 const PLAN_CATEGORIES = {
   friendship: ["open_game", "tournament"],
+  // «Дружба 2 часа» carries one event a day, exactly like «Дружба»: a game of
+  // 60/90/120 minutes or a «Время на друзей» event. Both categories consume that
+  // single daily seat, so a second game — even a second 60-minute one — is refused.
+  friendship_two_hours: ["open_game", "tournament"],
   kotelniki_friendship: [],
   network_friendship: [],
   piter_friendship: [],
@@ -948,6 +954,8 @@ const MANAGED_PLAN_KEYS = new Set([
 
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
+  // Owner decision 2026-09-30: the two-hour plan gives ONE event a day, so it keeps
+  // the same daily seat as «Дружба» instead of a per-event operation.
   return serviceDate >= SHARED_LIMIT_FROM ? "shared_day" : "category_day";
 };
 
