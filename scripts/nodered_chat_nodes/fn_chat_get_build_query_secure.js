@@ -74,5 +74,8 @@ if (
   msg.payload = { error: "Access denied for this game" };
   return [null, msg, msg];
 }
-msg.payload = { gameId: ctx.gameId, deleted: { $ne: true }, createdTs: { $lt: ctx.beforeTs } };
+msg.payload = [
+  { gameId: ctx.gameId, deleted: { $ne: true }, createdTs: { $lt: ctx.beforeTs } },
+  { sort: { createdTs: -1 }, limit: ctx.limit + 1 },
+];
 return [msg, null, msg];
