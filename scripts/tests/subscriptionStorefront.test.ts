@@ -369,6 +369,8 @@ test('storefront checks the two-hour Viva product separately from summer counter
 test('two-hour card shows six active bookings rather than the original friendship cap', () => {
   const source = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
   assert.match(source, /'monthly-two-hours':[\s\S]*?До 6 активных записей/);
+  // The 120-minute bucket is one event a day, never two 60-minute games.
+  assert.match(source, /'monthly-two-hours':[\s\S]*?Одно событие в день: игра 60, 90 или 120 минут либо «Время на друзей»/);
   assert.match(source, /'monthly-two-hours':[\s\S]*?С 7-й записи — только скидка/);
 });
 

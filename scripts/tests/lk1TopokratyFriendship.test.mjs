@@ -111,34 +111,52 @@ const clubMinutes = (freeMinutes, paidOverageMinutes, usedOrReservedFreeMinutesT
   localDate: '2026-08-15', usedOrReservedFreeMinutesToday, freeMinutes, paidOverageMinutes,
   discountPercent: 75 });
 
-test('two-hour game allowance spans two bookings and the seventh is discount-only', () => {
+test('the two-hour day is one event: a game of 60/90/120 minutes, then the cap is discount-only', () => {
   const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
-  const input = (used, activeServices, durationMinutes = 60) => lk1Input({
+  const input = (used, activeServices, durationMinutes) => lk1Input({
     productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID, rule,
     target: { category: 'GAME', durationMinutes, directionId: 4588 },
     usage: { usedOrReservedFreeMinutesToday: used, activeServices },
   });
-  const first = evaluate(input(0, 0)).decision;
-  const second = evaluate(input(60, 1)).decision;
-  const seventh = evaluate(input(60, 6)).decision;
-  assert.equal(first.gameMinutes.freeMinutes, 60);
-  assert.equal(second.gameMinutes.freeMinutes, 60);
+  // The day's single event may last 60, 90 or 120 minutes inside the 120-minute bucket.
+  // A second same-day game never reaches this evaluator: the plan holds one daily seat
+  // (shared_day) and the booking router refuses it — see subscriptionBookingGateway.
+  for (const [durationMinutes, freeMinutes, visitCount] of [[60, 60, 1], [90, 90, 1], [120, 120, 1]]) {
+    const single = evaluate(input(0, 0, durationMinutes)).decision;
+    assert.equal(single.eligible, true, `${durationMinutes} minutes`);
+    assert.equal(single.gameMinutes.freeMinutes, freeMinutes, `${durationMinutes} minutes`);
+    assert.equal(single.subscriptionVisitCount, visitCount, `${durationMinutes} minutes`);
+  }
+  const seventh = evaluate(input(120, 6, 60)).decision;
   assert.equal(seventh.eligible, true);
   assert.equal(seventh.gameMinutes.freeMinutes, 0);
   assert.equal(seventh.gameMinutes.discountPercent, 30);
   assert.equal(seventh.subscriptionVisitCount, 0);
 });
 
-test('seventh group or tournament booking remains 50% discount even with a free-first snapshot', () => {
+test('group, tournament and «Время на друзей» give 50% without consuming a visit', () => {
   const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
-  for (const category of ['GROUP_TRAINING', 'TOURNAMENT']) {
+  // The plan's own benefit for these formats is the discount alone: the visit stays
+  // untouched (owner decision 2026-09-30), both below and at the active-bookings cap.
+  // The gateway never marks this product as a free-first-event cohort member, so the
+  // decision is taken from the snapshot it really produces (`covered: false`).
+  for (const [category, directionId, activeServices, snapshot] of [
+    ['GROUP_TRAINING', 3685, 0, { covered: false }],
+    ['TOURNAMENT', 2617, 0, { covered: false }],
+    ['TOURNAMENT', 5278, 0, { covered: false }],
+    ['TOURNAMENT', 5278, 6, { covered: false }],
+    // Defensive: even a covered snapshot cannot hand out a free event at the cap.
+    ['TOURNAMENT', 5278, 6, { covered: true, usedEventsToday: 0, visitsLeft: 5 }],
+  ]) {
     const decision = evaluate(lk1Input({ productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
-      rule, target: { category, directionId: 3685 },
-      usage: { activeServices: 6, freeFirstEvent: { covered: true, usedEventsToday: 0, visitsLeft: 5 } },
+      rule, target: { category, directionId },
+      usage: { activeServices, freeFirstEvent: snapshot },
     })).decision;
-    assert.equal(decision.eligible, true, category);
-    assert.equal(decision.subscriptionVisitCount, 0, category);
-    assert.equal(decision.benefit.finalPriceMinor, BASE_PRICE_MINOR / 2, category);
+    const label = `${category}/${directionId}/active ${activeServices}`;
+    assert.equal(decision.eligible, true, label);
+    assert.equal(decision.subscriptionVisitCount, 0, label);
+    assert.equal(decision.benefit.finalPriceMinor, BASE_PRICE_MINOR / 2, label);
+    assert.equal(decision.eventDiscountPercent, 50, label);
   }
 });
 

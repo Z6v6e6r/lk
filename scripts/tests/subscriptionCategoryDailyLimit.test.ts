@@ -34,14 +34,31 @@ test("recognizes tracked summer subscription products by ids and names", () => {
   );
 });
 
-test("two-hour Friendship uses its own product identity and does not block another game in the day", () => {
+test("two-hour Friendship keeps one event a day: a game or «Время на друзей»", () => {
   const product = { productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e", name: "Дружба 2 часа" };
   assert.equal(resolveSubscriptionCategoryDailyLimitPlanKey(product), "friendship_two_hours");
   assert.equal(subscriptionPlanAllowsDailyLimitCategory(product, SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME), true);
-  const bookings = [{ id: "previous", clientSubscriptionId: "same", paymentType: "SUBSCRIPTION",
-    exercise: { id: "first", timeFrom: "2026-10-02T10:00:00+03:00", type: { id: 1613 } } }];
-  assert.equal(resolveSubscriptionCategoryDailyLimitConflictFromBookings(bookings, {
-    targetDate: "2026-10-02", category: SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
+  assert.equal(subscriptionPlanAllowsDailyLimitCategory(product, SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT), true);
+  // Group training stays a discounted booking outside the single daily event.
+  assert.equal(subscriptionPlanAllowsDailyLimitCategory(product, SUBSCRIPTION_CATEGORY_LIMIT_GROUP_TRAINING), false);
+
+  const booked = (typeId: number) => [{ id: "previous", clientSubscriptionId: "same", paymentType: "SUBSCRIPTION",
+    exercise: { id: "first", timeFrom: "2026-10-02T10:00:00+03:00", type: { id: typeId } } }];
+  const conflictCode = (bookings: ReturnType<typeof booked>, category: typeof SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME) =>
+    resolveSubscriptionCategoryDailyLimitConflictFromBookings(bookings, {
+      targetDate: "2026-10-02", category,
+      currentSubscription: product, currentClientSubscriptionId: "same",
+    })?.code;
+
+  // A game already booked that day refuses the second game — even a second 60-minute one.
+  assert.equal(conflictCode(booked(1613), SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME), SUBSCRIPTION_CATEGORY_DAILY_LIMIT_CODE);
+  // «Время на друзей» (the club's tournament type 839) occupies the same single seat…
+  assert.equal(conflictCode(booked(839), SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT), SUBSCRIPTION_CATEGORY_DAILY_LIMIT_CODE);
+  // …so a game cannot follow it on the same day.
+  assert.equal(conflictCode(booked(839), SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME), SUBSCRIPTION_CATEGORY_DAILY_LIMIT_CODE);
+  // A group training neither consumes the seat nor blocks a game.
+  assert.equal(resolveSubscriptionCategoryDailyLimitConflictFromBookings(booked(1613), {
+    targetDate: "2026-10-02", category: SUBSCRIPTION_CATEGORY_LIMIT_GROUP_TRAINING,
     currentSubscription: product, currentClientSubscriptionId: "same",
   }), null);
   assert.equal(resolveSubscriptionCategoryDailyLimitPlanKey({ productId: SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS.friendship }), "friendship");

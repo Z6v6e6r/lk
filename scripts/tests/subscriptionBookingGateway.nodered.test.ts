@@ -701,7 +701,7 @@ test("Friendship is allowed for tournaments but remains blocked for group traini
   assert.equal(groupTraining[4].payload.details.category, "group_training");
 });
 
-test("two-hour Friendship allows a second same-day game through its per-event LK1 operation", () => {
+test("two-hour Friendship keeps one event a day: a game of 60/90/120 minutes or «Время на друзей»", () => {
   const owned = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
     id: "exercise-target", timeFrom: "2026-09-30T18:00:00+03:00",
     direction: { id: 4588 }, type: { id: 1613 },
@@ -710,16 +710,28 @@ test("two-hour Friendship allows a second same-day game through its per-event LK
   }, _subscriptionBooking: baseContext("exercise", { serviceDate: undefined, category: undefined,
     planKey: undefined, trackedDailyLimit: undefined, limitMode: undefined }) });
   assert.equal(owned[0]._subscriptionBooking.planKey, "friendship_two_hours");
-  assert.equal(owned[0]._subscriptionBooking.limitMode, "event");
+  // The plan holds the same daily seat as «Дружба» instead of a per-event operation.
+  assert.equal(owned[0]._subscriptionBooking.limitMode, "shared_day");
+  assert.equal(owned[0]._subscriptionBooking.trackedDailyLimit, true);
+  // A game already booked that day refuses the second game — even a second 60-minute one.
   const history = runFunction(ROUTER_FILE, { statusCode: 200,
     payload: [flatBooking({ exerciseDate: "2026-09-30" })],
-    _subscriptionBooking: { ...owned[0]._subscriptionBooking, step: "bookings", serviceDate: "2026-09-30" } });
-  assert.notEqual(history[4]?.payload?.details?.code, "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED");
-  for (const [directionId, typeId, category] of [
-    [3685, 605, "group_training"],
-    [2617, 839, "tournament"],
+    _subscriptionBooking: { ...owned[0]._subscriptionBooking, step: "history_bookings", serviceDate: "2026-09-30" } });
+  assert.equal(history[4]?.payload?.details?.code, "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED");
+  // A club group training stays outside the plan's own categories exactly as it does for
+  // «Дружба»: its 50 % benefit is priced by the LK1 contour, not by a subscription seat.
+  const groupTraining = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
+    id: "exercise-target", timeFrom: "2026-09-30T18:00:00+03:00",
+    direction: { id: 3685 }, type: { id: 605 },
+    availableClientSubscriptions: [{ clientSubscriptionId: "client-subscription-1",
+      productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e" }],
+  }, _subscriptionBooking: baseContext("exercise", { serviceDate: undefined, category: undefined,
+    planKey: undefined, trackedDailyLimit: undefined, limitMode: undefined }) });
+  assert.equal(groupTraining[4].payload.details.code, "SUBSCRIPTION_CATEGORY_NOT_ALLOWED");
+  for (const [directionId, typeId] of [
+    [2617, 839],
     // «Время на друзей» — the club format the two-hour plan now also carries.
-    [5278, 839, "tournament"],
+    [5278, 839],
   ] as const) {
     const allowed = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
       id: "exercise-target", timeFrom: "2026-09-30T18:00:00+03:00",
@@ -728,9 +740,10 @@ test("two-hour Friendship allows a second same-day game through its per-event LK
         productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e" }],
     }, _subscriptionBooking: baseContext("exercise", { serviceDate: undefined, category: undefined,
       planKey: undefined, trackedDailyLimit: undefined, limitMode: undefined }) });
-    assert.equal(allowed[0]._subscriptionBooking.category, category, `direction ${directionId} type ${typeId}`);
+    assert.equal(allowed[0]._subscriptionBooking.category, "tournament", `direction ${directionId} type ${typeId}`);
     assert.equal(allowed[0]._subscriptionBooking.planKey, "friendship_two_hours");
-    assert.equal(allowed[0]._subscriptionBooking.limitMode, "event");
+    // The day's single seat also gates a tournament/«Время на друзей» event: one event a day.
+    assert.equal(allowed[0]._subscriptionBooking.limitMode, "shared_day");
   }
 });
 

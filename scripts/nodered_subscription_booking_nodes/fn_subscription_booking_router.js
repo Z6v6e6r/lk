@@ -936,7 +936,10 @@ const resolvePlanKey = (value) => {
 
 const PLAN_CATEGORIES = {
   friendship: ["open_game", "tournament"],
-  friendship_two_hours: ["open_game", "group_training", "tournament"],
+  // «Дружба 2 часа» carries one event a day, exactly like «Дружба»: a game of
+  // 60/90/120 minutes or a «Время на друзей» event. Both categories consume that
+  // single daily seat, so a second game — even a second 60-minute one — is refused.
+  friendship_two_hours: ["open_game", "tournament"],
   kotelniki_friendship: [],
   network_friendship: [],
   piter_friendship: [],
@@ -951,9 +954,8 @@ const MANAGED_PLAN_KEYS = new Set([
 
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
-  // LK1 reserves minutes by subscription/day and writes one operation per game;
-  // the legacy shared-day seat would reject the second of two one-hour games.
-  if (planKey === "friendship_two_hours") return "event";
+  // Owner decision 2026-09-30: the two-hour plan gives ONE event a day, so it keeps
+  // the same daily seat as «Дружба» instead of a per-event operation.
   return serviceDate >= SHARED_LIMIT_FROM ? "shared_day" : "category_day";
 };
 

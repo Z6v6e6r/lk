@@ -54,7 +54,10 @@ const CATEGORY_TITLE_LABELS: Record<SubscriptionCategoryDailyLimitCategory, stri
 
 const PLAN_CATEGORIES: Record<SubscriptionCategoryDailyLimitPlanKey, readonly SubscriptionCategoryDailyLimitCategory[]> = {
   friendship: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME],
-  friendship_two_hours: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_GROUP_TRAINING, SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT],
+  // One event a day, like «Дружба»: a game or a «Время на друзей» event (the club
+  // classification of that format is `tournament`). Group training stays a discounted
+  // booking outside the daily seat.
+  friendship_two_hours: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT],
   sport: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT],
   academy: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_GROUP_TRAINING],
   ra: [
@@ -451,9 +454,6 @@ export function resolveSubscriptionCategoryDailyLimitConflictFromBookings(
   const targetDate = normalizeSubscriptionCategoryDailyLimitDate(options.targetDate);
   const category = options.category ?? null;
   const planKey = resolveSubscriptionCategoryDailyLimitPlanKey(options.currentSubscription);
-  // The new plan accounts for the daily 120-minute bucket and later discounted
-  // bookings in the LK1 evaluator, not the legacy one-event-per-day precheck.
-  if (planKey === "friendship_two_hours") return null;
   const planCategories = planKey ? PLAN_CATEGORIES[planKey] : [];
   if (!targetDate || !category || !planKey || !planCategories.includes(category) || !Array.isArray(bookings)) {
     return null;
