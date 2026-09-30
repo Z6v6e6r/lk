@@ -210,8 +210,9 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   let availability = true;
   let patriotProduct: Record<string, unknown> = {
     id: '37ab3713-4431-4815-96ba-d7ece76a9241', cost: 680000, validityDays: 30, visits: 30,
-    hasDirectionLimitation: true, availableDirections: [6181, 6306, 6307, 5278].map(id => ({ id })),
-    hasTypeLimitation: true, availableTypes: [2349, 839].map(id => ({ id })),
+    // Live Viva redemption scope: 5278/839 has a booking discount, not a visit debit.
+    hasDirectionLimitation: true, availableDirections: [4588, 6181, 6306, 6307].map(id => ({ id })),
+    hasTypeLimitation: true, availableTypes: [1613, 2349].map(id => ({ id })),
   };
   let broken = false;
   let storageFails = false;
@@ -320,7 +321,7 @@ test('Zero Block rejects a changed Topocrats price instead of charging it', asyn
   assert.equal(f.writes.length, 0);
 });
 
-test('Zero Block Patriots offer verifies provider terms, buys once and rejects a changed price', async () => {
+test('Zero Block Patriots offer accepts the live redemption scope, buys once and rejects a changed price', async () => {
   const f = zeroFixture();
   const offer = f.adapter.resolveZeroOffer('patriots');
   assert.equal(offer?.label, 'ДРУЖБА.ПАТРИОТЫ');
@@ -341,15 +342,20 @@ test('Zero Block Patriots offer verifies provider terms, buys once and rejects a
 
 test('Zero Block Patriots offer fails before a transaction if the provider price, term or coverage differs', async () => {
   for (const change of [
-    { cost: 690000 }, { validityDays: 31 }, { visits: 29 },
-    { availableDirections: [6181, 6306, 6307].map(id => ({ id })) },
-    { availableTypes: [{ id: 2349 }] }, { hasDirectionLimitation: false },
+    { id: 'wrong-product' }, { cost: 690000 }, { validityDays: 31 }, { visits: 29 },
+    { availableDirections: [4588, 6306, 6307].map(id => ({ id })) },
+    { availableDirections: [4588, 6181, 6307].map(id => ({ id })) },
+    { availableDirections: [4588, 6181, 6306].map(id => ({ id })) },
+    { availableDirections: [4588, 6181, 6306, 6307, 5278].map(id => ({ id })) },
+    { availableTypes: [{ id: 1613 }] },
+    { availableTypes: [1613, 2349, 839].map(id => ({ id })) },
+    { hasDirectionLimitation: false }, { hasTypeLimitation: false },
   ]) {
     const f = zeroFixture();
     f.setPatriotProduct({
       id: '37ab3713-4431-4815-96ba-d7ece76a9241', cost: 680000, validityDays: 30, visits: 30,
-      hasDirectionLimitation: true, availableDirections: [6181, 6306, 6307, 5278].map(id => ({ id })),
-      hasTypeLimitation: true, availableTypes: [2349, 839].map(id => ({ id })), ...change,
+      hasDirectionLimitation: true, availableDirections: [4588, 6181, 6306, 6307].map(id => ({ id })),
+      hasTypeLimitation: true, availableTypes: [1613, 2349].map(id => ({ id })), ...change,
     });
     await assert.rejects(f.adapter.loadZeroOfferPrice('patriots'));
     await assert.rejects(f.adapter.createZeroPayment('patriots', fixturePhone, 680000, () => true));

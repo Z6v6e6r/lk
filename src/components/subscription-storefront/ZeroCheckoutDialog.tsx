@@ -4,6 +4,7 @@ import { AuthForm } from '../auth/AuthForm';
 import { CABINET_URL } from '../../consts/api_config';
 import { resolvePaymentPhone, StorefrontPaymentError } from './payment';
 import { resolvePromoCabinetUrl } from './promo';
+import { PATRIOTS_PLAN_ID } from './catalog';
 import { confirmZeroPayment, createZeroPayment, hasZeroAttempt, loadZeroOfferPrice, resolveZeroOffer, withZeroDeadline, ZERO_PENDING_MESSAGE } from './zeroCheckoutPayment';
 import './zero-checkout.css';
 
@@ -12,6 +13,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
 }) {
   const auth = useAuth();
   const offer = resolveZeroOffer(offerKey)!;
+  const patriotsPendingBenefits = offerKey === PATRIOTS_PLAN_ID;
   const [price, setPrice] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +57,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
   }, [offerKey, revision]);
 
   async function submit(checkOnly = false) {
-    if (!authenticated || busy.current || (!checkOnly && (blocked || loading || price === null || (offer.billingOptionId === 'annual' && !terms)))) return;
+    if (!authenticated || busy.current || (!checkOnly && (blocked || loading || price === null || ((offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms)))) return;
     busy.current = true; onBusy(true); setProcessing(true); setError(null);
     let operationActive = true;
     try {
@@ -90,6 +92,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
     <p className="ph-zero-summary">{offer.label} · {offer.period}</p>
     <p className="ph-zero-price">{price === null ? 'Проверяем предложение…' : `${new Intl.NumberFormat('ru-RU').format(price / 100)} ₽`}</p>
     {offer.promo && <p>Акционная цена. Применимость предложения проверяется при оформлении.</p>}
+    {patriotsPendingBenefits && <p>Подписка содержит 30 посещений на 30 дней. Бесплатный час и скидки при записи пока не действуют; дата запуска не определена. «Время на друзей» не списывает посещения из подписки.</p>}
     {error && <p className="auth-error" role="alert">{error}</p>}
     {(message || blocked) && <p role="status">{message || ZERO_PENDING_MESSAGE}</p>}
     {auth.isRestoringSession ? <p role="status">Проверяем вход…</p> : !authenticated ? <AuthForm onLogin={() => {}} /> : <>
@@ -97,7 +100,11 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
         <input type="checkbox" checked={terms} disabled={processing} onChange={event => setTerms(event.target.checked)} />
         <span>Я ознакомился(ась) и согласен(на) с условиями годовой подписки</span>
       </label>}
-      {!blocked && <button className="auth-btn" type="button" disabled={loading || price === null || processing || (offer.billingOptionId === 'annual' && !terms)} onClick={() => { void submit(); }}>
+      {!blocked && patriotsPendingBenefits && <label className="ph-zero-consent">
+        <input type="checkbox" checked={terms} disabled={processing} onChange={event => setTerms(event.target.checked)} />
+        <span>Я понимаю, что бесплатный час и скидки пока не действуют, а дата запуска не определена.</span>
+      </label>}
+      {!blocked && <button className="auth-btn" type="button" disabled={loading || price === null || processing || ((offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms)} onClick={() => { void submit(); }}>
         {processing ? 'Создаём оплату…' : 'Перейти к оплате'}
       </button>}
       {blocked && offer.target && !offer.target.directProductId && <button className="auth-btn" type="button" disabled={processing} onClick={() => { void submit(true); }}>
