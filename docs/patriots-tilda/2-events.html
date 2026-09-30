@@ -1,15 +1,16 @@
 <!-- T123 rec4149533401: replace the static sample cards with the live Viva schedule. -->
 <script>
-  // Flip only after Viva coverage and LK booking prices pass the README checks.
+  // Sales and booking benefits have separate rollout gates.
+  window.PH_PATRIOTS_SALES_READY = true;
   window.PH_PATRIOTS_ENTITLEMENTS_READY = false;
   var patriotsTermsReady = window.PH_PATRIOTS_ENTITLEMENTS_READY === true;
-  var patriotsPendingBadge = "Условия подключаются";
+  var patriotsPendingBadge = "Условия записи уточняются";
   window.LK_ATLANTY_SCHEDULE_CONFIG = {
     categories: [
       { directionId: 6181, typeId: 2349, label: "Предприниматели-патриоты: игры", badge: patriotsTermsReady ? "Первый час в день — 0 ₽ при менее 4 активных записях" : patriotsPendingBadge },
-      { directionId: 6306, typeId: 2349, label: "Предприниматели-патриоты: турниры", badge: patriotsTermsReady ? "Доплата 2 750 ₽ по подписке" : patriotsPendingBadge },
-      { directionId: 6307, typeId: 2349, label: "Предприниматели-патриоты: тренировки", badge: patriotsTermsReady ? "Доплата 2 750 ₽ по подписке" : patriotsPendingBadge },
-      { directionId: 5278, typeId: 839, label: "Время на друзей", badge: patriotsTermsReady ? "Доплата 2 750 ₽ по подписке" : patriotsPendingBadge }
+      { directionId: 6306, typeId: 2349, label: "Предприниматели-патриоты: турниры", badge: patriotsTermsReady ? "Скидка 50 % по подписке" : patriotsPendingBadge },
+      { directionId: 6307, typeId: 2349, label: "Предприниматели-патриоты: тренировки", badge: patriotsTermsReady ? "Скидка 50 % по подписке" : patriotsPendingBadge },
+      { directionId: 5278, typeId: 839, label: "Время на друзей", badge: patriotsTermsReady ? "Скидка 50 % по подписке" : patriotsPendingBadge }
     ],
     title: "",
     maxEvents: 24,

@@ -79,7 +79,7 @@ export function resolveZeroOffer(key: string): ZeroOffer | null {
     planId, billingOptionId, target: resolveStorefrontBillingTarget(planId, billingOptionId), promo: null };
 }
 
-/** The public Viva product must prove every benefit promised on the Patriots page. */
+/** The public Viva product proves visit redemption coverage; discounts are priced separately at booking. */
 export function parsePatriotsProductPrice(payload: unknown): number {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Product unavailable');
   const product = payload as Record<string, unknown>;
@@ -89,11 +89,12 @@ export function parsePatriotsProductPrice(payload: unknown): number {
     : [];
   const directions = ids(product.availableDirections);
   const types = ids(product.availableTypes);
+  // 5278/839 grants a booking discount only; adding either to Viva redemption would change the offer.
   if (product.id !== PATRIOTS_PRODUCT_ID || product.cost !== PATRIOTS_MONTHLY_PRICE_MINOR
     || product.validityDays !== 30 || product.visits !== 30
     || product.hasDirectionLimitation !== true || product.hasTypeLimitation !== true
-    || ![6181, 6306, 6307, 5278].every(id => directions.includes(id))
-    || ![2349, 839].every(id => types.includes(id))) throw new Error('Product terms mismatch');
+    || ![6181, 6306, 6307].every(id => directions.includes(id))
+    || directions.includes(5278) || !types.includes(2349) || types.includes(839)) throw new Error('Product terms mismatch');
   return product.cost;
 }
 

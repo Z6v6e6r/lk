@@ -6,7 +6,8 @@
   window.__PH_PATRIOTS_PAGE_SPLIT_V3__ = true;
   var scope = '.ph-landing[data-ph-split="page"][data-ph-partner="patriots"]';
   var offerKey = 'patriots';
-  // The preceding events block carries the single rollout flag for copy and checkout.
+  // The preceding events block gates sales separately from booking benefits.
+  var salesReady = window.PH_PATRIOTS_SALES_READY === true;
   var entitlementsReady = window.PH_PATRIOTS_ENTITLEMENTS_READY === true;
   var storefrontUrl = 'https://padlhub.su/lk/subscription-storefront/subscription-storefront.js';
   var widget = null;
@@ -39,22 +40,24 @@
   }
   function ready() {
     var candidate = window.LKWidgetSubscriptionStorefront;
-    return !!(entitlementsReady && candidate && candidate.checkoutVersion === 1 && candidate.checkoutChannel === 'prod'
+    return !!(salesReady && candidate && candidate.checkoutVersion === 1 && candidate.checkoutChannel === 'prod'
       && typeof candidate.supportsCheckoutOffer === 'function' && candidate.supportsCheckoutOffer(offerKey)
       && typeof candidate.openCheckout === 'function' && typeof candidate.resumeCheckout === 'function');
   }
   function activate() {
-    if (!entitlementsReady) { status('Оформление откроется после подтверждения условий записи.'); return; }
+    if (!salesReady) { status('Оформление пока недоступно. Попробуйте позже.'); return; }
     if (!ready()) { status('Оформление пока недоступно. Попробуйте позже.'); return; }
     widget = window.LKWidgetSubscriptionStorefront;
     document.querySelectorAll(scope + ' [data-patriots-checkout]').forEach(function (button) { button.disabled = false; });
-    document.querySelectorAll(scope + ' [data-patriots-pending-note]').forEach(function (note) { note.hidden = true; });
-    document.querySelectorAll(scope + ' [data-patriots-benefits-title]').forEach(function (title) { title.textContent = 'Условия участия'; });
+    if (entitlementsReady) {
+      document.querySelectorAll(scope + ' [data-patriots-pending-note]').forEach(function (note) { note.hidden = true; });
+      document.querySelectorAll(scope + ' [data-patriots-benefits-title]').forEach(function (title) { title.textContent = 'Условия участия'; });
+    }
     status('');
     try { widget.resumeCheckout(offerKey); } catch (error) { /* Возврата может не быть. */ }
   }
   function loadStorefront() {
-    if (!entitlementsReady) return activate();
+    if (!salesReady) return activate();
     if (ready()) return activate();
     var script = document.createElement('script');
     script.id = 'padlhub-patriots-storefront-script';
