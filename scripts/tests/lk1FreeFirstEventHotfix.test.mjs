@@ -192,8 +192,18 @@ test("«Дружба 2 часа» covers only «Время на друзей» i
   const source = fs.readFileSync(path.join(repoRoot, "scripts/nodered_lk1_hub_nodes/gateway.js"), "utf8");
   const tables = source.slice(source.indexOf("const LK1_FREE_FIRST_EVENT_PRODUCTS"),
     source.indexOf("const lk1Fields"));
-  const helpers = source.slice(source.indexOf("const lk1FreeFirstEventCovers"),
-    source.indexOf("\nconst lk1Quote = (ctx, exercise, owned) => {"));
+  // The 2026-09-30 generation moved the day-cohort verdict helper inside the usage step itself,
+  // because the regression harnesses execute exactly that block on its own and the price-preview
+  // closure extracts declarations from the same body: a helper declared at the top of the node
+  // body was invisible to both. The historical free-first-event packet keeps its own text (it
+  // composes from its own snapshot), so the helper is read from the step here.
+  const usageStart = source.indexOf('if (ctx.step === "lk1_usage_operations") {');
+  const usageEnd = source.indexOf('if (ctx.step === "lk1_policy_decision") {');
+  const usage = source.slice(usageStart, usageEnd);
+  assert.ok(usage.includes("const lk1FreeFirstEventCovers = (productId, category, directionId) => {"),
+    "the day-cohort verdict helper must be declared inside the usage step");
+  const helperStart = usage.indexOf("const lk1FreeFirstEventCovers");
+  const helpers = usage.slice(helperStart, usage.indexOf("const freeFirstCovered =", helperStart));
   assert.ok(tables.includes("const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = Object.freeze({"));
   const normalizeId = (value) => {
     const text = value === null || value === undefined ? "" : String(value).trim().toLowerCase();

@@ -121,21 +121,6 @@ const exerciseDirectionId = (exercise) => {
   const numeric = Number(value ?? exercise?.directionId ?? exercise?.exerciseDirectionId);
   return Number.isInteger(numeric) ? numeric : null;
 };
-// The free-first-event verdict of one product: the category must be in the cohort table
-// and, when the product also carries a direction scope, the event must be one of those
-// directions. A harness without the tables simply has no covered cohort.
-const lk1FreeFirstEventCovers = (productId, category, directionId) => {
-  const products = typeof LK1_FREE_FIRST_EVENT_PRODUCTS === "object" && LK1_FREE_FIRST_EVENT_PRODUCTS
-    ? LK1_FREE_FIRST_EVENT_PRODUCTS : null;
-  const scopes = typeof LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES === "object" && LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES
-    ? LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES : null;
-  if (!products || !category) return false;
-  const categories = products[normalizeId(productId)] || null;
-  if (!categories || !categories.includes(category)) return false;
-  const scope = scopes ? scopes[normalizeId(productId)] || null : null;
-  if (!Array.isArray(scope) || scope.length === 0) return true;
-  return scope.includes(Number(directionId));
-};
 const lk1Quote = (ctx, exercise, owned) => {
   // The station of the resolved booking target is part of the contour decision: an
   // excluded station keeps the product's legacy path for this quote as well.
@@ -842,9 +827,24 @@ if (ctx.step === "lk1_usage_operations") {
   const benefitBookings = new Set();
   // Free-first-event accounting: the covered cohort counts this subscription's events on the
   // target day from the same two sources the allowance already trusts (reserved operations
-  // and provider bookings), deduplicated by booking identity. The cohort table lives at the
-  // top of this node body; a harness that runs this step on its own simply has no cohort.
+  // and provider bookings), deduplicated by booking identity.
+  // The verdict helper is declared here, inside the step, because the step is executed on its
+  // own by the regression harnesses (they slice this block) and by the price-preview closure:
+  // a helper living at the top of the node body is invisible to both. The cohort tables stay at
+  // the top of the body and are read defensively, so a harness without them has no cohort.
   // The target's own direction decides coverage for a direction-scoped product.
+  const lk1FreeFirstEventCovers = (productId, category, directionId) => {
+    const products = typeof LK1_FREE_FIRST_EVENT_PRODUCTS === "object" && LK1_FREE_FIRST_EVENT_PRODUCTS
+      ? LK1_FREE_FIRST_EVENT_PRODUCTS : null;
+    const scopes = typeof LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES === "object" && LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES
+      ? LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES : null;
+    if (!products || !category) return false;
+    const categories = products[normalizeId(productId)] || null;
+    if (!categories || !categories.includes(category)) return false;
+    const scope = scopes ? scopes[normalizeId(productId)] || null : null;
+    if (!Array.isArray(scope) || scope.length === 0) return true;
+    return scope.includes(Number(directionId));
+  };
   const freeFirstCovered = lk1FreeFirstEventCovers(ctx.lk1.rule.productId, ctx.category,
     ctx.lk1.target?.directionId);
   let freeFirstEventsToday = 0;
