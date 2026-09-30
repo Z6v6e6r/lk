@@ -54,6 +54,32 @@ export const LK1_PLAN_RULES_WITH_TOPOKRATY = Object.freeze({
   ]),
 });
 
+// A separate Viva product: the previous eight rules remain unchanged.
+export const LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+export const LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS = Object.freeze({
+  formatVersion: 1,
+  rules: Object.freeze([
+    ...LK1_PLAN_RULES_WITH_TOPOKRATY.rules,
+    Object.freeze({
+      ...rule(LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID, 'friendship_two_hours'),
+      maxActiveBookings: 6,
+      freeGameMinutesPerDay: 120,
+    }),
+  ]),
+});
+
+export const buildFriendshipTwoHoursPlanRulesTransition = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  desired: LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  acceptEmptyPrior: true,
+});
+
+export const buildFriendshipTwoHoursPlanRulesRevert = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  desired: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  acceptEmptyPrior: true,
+});
+
 export const buildTopokratyPlanRulesTransition = () => buildPlanRulesTransition({
   expectedPrior: LK1_PLAN_RULES_DESIRED,
   desired: LK1_PLAN_RULES_WITH_TOPOKRATY,

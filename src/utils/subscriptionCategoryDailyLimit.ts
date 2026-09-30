@@ -17,6 +17,7 @@ export const SUBSCRIPTION_CATEGORY_DAILY_LIMIT_SHARED_FROM = "2026-08-01";
 
 export const SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS = {
   friendship: "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
+  friendship_two_hours: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e",
   sport: "82caad6f-4d19-4d01-852b-932bdbb0f405",
   academy: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
@@ -53,6 +54,7 @@ const CATEGORY_TITLE_LABELS: Record<SubscriptionCategoryDailyLimitCategory, stri
 
 const PLAN_CATEGORIES: Record<SubscriptionCategoryDailyLimitPlanKey, readonly SubscriptionCategoryDailyLimitCategory[]> = {
   friendship: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME],
+  friendship_two_hours: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_GROUP_TRAINING, SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT],
   sport: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT],
   academy: [SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME, SUBSCRIPTION_CATEGORY_LIMIT_GROUP_TRAINING],
   ra: [
@@ -209,6 +211,9 @@ export function resolveSubscriptionCategoryDailyLimitPlanKey(
   }
 
   const normalizedMarkers = markers.map(normalizeMarker).filter(Boolean);
+  if (normalizedMarkers.some((marker) => marker.includes("friendshiptwohours") || marker.includes("дружба2часа"))) {
+    return "friendship_two_hours";
+  }
   if (normalizedMarkers.some((marker) => (
     marker.includes("friendship") || marker.includes("дружба") || marker.includes("druzhba")
   ))) {
@@ -446,6 +451,9 @@ export function resolveSubscriptionCategoryDailyLimitConflictFromBookings(
   const targetDate = normalizeSubscriptionCategoryDailyLimitDate(options.targetDate);
   const category = options.category ?? null;
   const planKey = resolveSubscriptionCategoryDailyLimitPlanKey(options.currentSubscription);
+  // The new plan accounts for the daily 120-minute bucket and later discounted
+  // bookings in the LK1 evaluator, not the legacy one-event-per-day precheck.
+  if (planKey === "friendship_two_hours") return null;
   const planCategories = planKey ? PLAN_CATEGORIES[planKey] : [];
   if (!targetDate || !category || !planKey || !planCategories.includes(category) || !Array.isArray(bookings)) {
     return null;

@@ -37,6 +37,54 @@ export function canContinue(status: StorefrontStatus, stale = false): boolean {
 
 /** Billing option that requires an explicit terms confirmation before payment. */
 export const ANNUAL_TERMS_OPTION_ID = 'annual';
+export const FRIENDSHIP_TWO_HOURS_PRODUCT_ID = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+export const FRIENDSHIP_TWO_HOURS_PRICE_MINOR = 1980000;
+export const FRIENDSHIP_TWO_HOURS_VALIDITY_DAYS = 30;
+/**
+ * The plan promises two free hours of open game a day and the 50 % formats on
+ * top, so the Viva product has to carry both scopes: the open game
+ * (direction `4588`, type `1613`) and «Время на друзей» (direction `5278`,
+ * type `839`, the format the club sells under that direction). A card price
+ * without that scope is not the product this variant sells.
+ */
+export const FRIENDSHIP_TWO_HOURS_DIRECTION_IDS = [4588, 5278] as const;
+export const FRIENDSHIP_TWO_HOURS_TYPE_IDS = [1613, 839] as const;
+
+/** Provider id lists arrive either as bare ids or as `{ id }` records. */
+function productScopeIds(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = value
+    .map((row) => (row && typeof row === 'object' ? (row as { id?: unknown }).id : row))
+    .map((id) => (typeof id === 'number' ? id : typeof id === 'string' ? Number(id.trim()) : NaN));
+  return ids.every((id) => Number.isSafeInteger(id)) ? ids : null;
+}
+
+/**
+ * An unlimited scope covers every value; a limited one must name every required
+ * id. A missing flag is never read as "unlimited".
+ */
+function productScopeCovers(limited: unknown, listed: unknown, required: readonly number[]): boolean {
+  if (limited === false) return true;
+  if (limited !== true) return false;
+  const ids = productScopeIds(listed);
+  return Boolean(ids) && required.every((id) => (ids as number[]).includes(id));
+}
+
+/**
+ * Provider price of the exact two-hour plan product, or null when the record is
+ * not that product. Availability and the checkout both read it, so a product
+ * without «Время на друзей» inside its scope can never be sold as this variant.
+ */
+export function parseFriendshipTwoHoursProduct(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const product = payload as Record<string, unknown>;
+  if (product.id !== FRIENDSHIP_TWO_HOURS_PRODUCT_ID
+    || product.cost !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR
+    || product.validityDays !== FRIENDSHIP_TWO_HOURS_VALIDITY_DAYS
+    || !productScopeCovers(product.hasDirectionLimitation, product.availableDirections, FRIENDSHIP_TWO_HOURS_DIRECTION_IDS)
+    || !productScopeCovers(product.hasTypeLimitation, product.availableTypes, FRIENDSHIP_TWO_HOURS_TYPE_IDS)) return null;
+  return product.cost;
+}
 
 /**
  * Annual terms are confirmed at checkout: the confirmation is requested by the
@@ -46,9 +94,18 @@ export function requiresAnnualTermsConsent(billingOptionId: string, termsAccepte
   return billingOptionId === ANNUAL_TERMS_OPTION_ID && !termsAccepted;
 }
 
-export function friendshipBillingOptions(statuses: readonly StorefrontStatus[], stale = false): SubscriptionPlanView['billingOptions'] {
+export function friendshipBillingOptions(
+  statuses: readonly StorefrontStatus[], stale = false,
+  /** Provider price of the two-hour product, already verified against its scope. */
+  twoHourProductPriceMinor?: number | null,
+): SubscriptionPlanView['billingOptions'] {
   const monthly = statuses.find(status => status.counterKey === 'friendship');
   const annual = statuses.find(status => status.counterKey === 'network_friendship');
+  const twoHourStatus = statuses.find(status => status.counterKey === 'friendship_two_hours');
+  // A verified product price alone cannot prove that the booking rules are live.
+  const twoHourAvailable = !stale && twoHourProductPriceMinor === FRIENDSHIP_TWO_HOURS_PRICE_MINOR
+    && Boolean(twoHourStatus && canContinue(twoHourStatus)
+      && twoHourStatus.priceMinor === FRIENDSHIP_TWO_HOURS_PRICE_MINOR);
   function availableOption(status: StorefrontStatus | undefined, id: string, label: string, priceSuffix: string) {
     const billing = status && billingFromStatus(status)[0];
     return {
@@ -61,9 +118,9 @@ export function friendshipBillingOptions(statuses: readonly StorefrontStatus[], 
   }
   return [
     availableOption(monthly, 'monthly', 'месяц', '/ 30 дней'),
-    { id: 'monthly-two-hours', label: 'месяц 2 часа', priceMinor: 1980000, priceSuffix: '/ 30 дней',
-      ctaDisabled: true, ctaLabel: 'Скоро. Может быть',
-      statusMessage: 'Дружба 2.0 скоро появится в продаже' },
+    { id: 'monthly-two-hours', label: 'месяц 2 часа', priceMinor: FRIENDSHIP_TWO_HOURS_PRICE_MINOR, priceSuffix: '/ 30 дней',
+      ctaDisabled: !twoHourAvailable, ctaLabel: twoHourAvailable ? 'Оформить подписку' : 'Сейчас недоступно',
+      ...(!twoHourAvailable ? { statusMessage: 'Предложение временно недоступно' } : {}) },
     availableOption(annual, 'annual', 'год', '/ год'),
   ];
 }
@@ -156,5 +213,5 @@ export const PATRIOTS_MONTHLY_PRICE_MINOR = 680000;
 export function scopedStorefrontStatuses<T extends StorefrontStatus>(statuses: T[], counterKey?: string | null): T[] {
   return statuses.filter(status => counterKey
     ? status.counterKey === counterKey
-    : status.counterKey !== 'network_friendship');
+    : status.counterKey !== 'network_friendship' && status.counterKey !== 'friendship_two_hours');
 }

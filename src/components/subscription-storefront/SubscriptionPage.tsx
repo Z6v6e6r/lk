@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiFetchTournamentSubscriptionStatus } from '../../utils/apiClient';
+import { apiFetchTournamentSubscriptionStatus, apiGetSubscriptionProduct } from '../../utils/apiClient';
 import { CABINET_URL } from '../../consts/api_config';
 import { useAuth } from '../../context/AuthContext';
 import { SubscriptionStorefront } from './SubscriptionStorefront';
@@ -8,8 +8,8 @@ import { summerPlanPresentation, friendshipVariantBenefits, atlantyPlanPresentat
 import {
   billingFromStatus, canContinue, energy5BillingOptions, requiresAnnualTermsConsent, storefrontPlanKeysForSearch,
   friendshipBillingOptions, scopedStorefrontStatuses,
-  ATLANTY_PLAN_ID, ATLANTY_VARIANT, atlantyBillingOptions, normalizeStorefrontVariant,
-  type StorefrontStatus,
+  ATLANTY_PLAN_ID, ATLANTY_VARIANT, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, atlantyBillingOptions, normalizeStorefrontVariant,
+  parseFriendshipTwoHoursProduct, type StorefrontStatus,
 } from './catalog';
 import type { SubscriptionPlanSelection, SubscriptionStorefrontView } from './model';
 import { loadTournamentSubscriptionStatuses } from '../../utils/tournamentSubscriptionStatusLoader';
@@ -43,6 +43,8 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   // the documented `?variant=` fallback.
   const isAtlantyVariant = (normalizeStorefrontVariant(variant) ?? normalizeStorefrontVariant(searchVariant)) === ATLANTY_VARIANT;
   const [statuses, setStatuses] = useState<readonly StorefrontStatus[] | null>(null);
+  /** Provider price of the two-hour product, verified together with its direction scope. */
+  const [twoHourProductPriceMinor, setTwoHourProductPriceMinor] = useState<number | null>(null);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [annualTermsAccepted, setAnnualTermsAccepted] = useState(false);
@@ -66,19 +68,26 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
       const deadline = setTimeout(() => controller?.abort(), 12_000);
       try {
         const signal = controller.signal;
-        const result = await loadTournamentSubscriptionStatuses(
+        const [result, twoHourProduct, twoHourStatus] = await Promise.all([loadTournamentSubscriptionStatuses(
           [{ counterKey: 'network_friendship' }],
           async params => {
             const response = await apiFetchTournamentSubscriptionStatus(params ?? {}, { signal });
             return { ...response, data: response.data ? scopedStorefrontStatuses(response.data, params?.counterKey) : null };
           },
-        );
+        ), apiGetSubscriptionProduct(FRIENDSHIP_TWO_HOURS_PRODUCT_ID, { signal }).catch(() => null),
+        apiFetchTournamentSubscriptionStatus({ counterKey: 'friendship_two_hours' }, { signal }).catch(() => null)]);
         if (cancelled) return;
+        setTwoHourProductPriceMinor(twoHourProduct && !twoHourProduct.error
+          ? parseFriendshipTwoHoursProduct(twoHourProduct.data) : null);
         if (result.aggregateResult.error || !result.aggregateResult.data) throw new Error('Status unavailable');
-        setStatuses(result.statuses.filter(status => !result.failedExplicitCounterKeys.includes(status.counterKey ?? '')));
+        setStatuses([
+          ...result.statuses.filter(status => !result.failedExplicitCounterKeys.includes(status.counterKey ?? '')),
+          ...(!twoHourStatus?.error && Array.isArray(twoHourStatus?.data)
+            ? scopedStorefrontStatuses(twoHourStatus.data, 'friendship_two_hours') : []),
+        ]);
         setError(false);
       } catch {
-        if (!cancelled) setError(true);
+        if (!cancelled) { setTwoHourProductPriceMinor(null); setError(true); }
       } finally {
         clearTimeout(deadline);
         // A request completes before another is scheduled: responses cannot race.
@@ -208,7 +217,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
       const status = statuses?.find(item => item.counterKey === key);
       if (!status && key !== 'friendship') return [];
       const billingOptions = key === 'friendship'
-        ? friendshipBillingOptions(statuses ?? [], error).map(option => ({
+        ? friendshipBillingOptions(statuses ?? [], error, twoHourProductPriceMinor).map(option => ({
           ...option,
           benefitGroups: friendshipVariantBenefits[option.id],
         }))

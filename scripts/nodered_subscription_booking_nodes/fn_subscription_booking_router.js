@@ -789,6 +789,7 @@ const pickName = (value) => {
 
 const PLAN_PRODUCT_IDS = {
   friendship: "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
+  friendship_two_hours: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e",
   sport: "82caad6f-4d19-4d01-852b-932bdbb0f405",
   academy: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
@@ -909,6 +910,7 @@ const resolvePlanKey = (value) => {
     if (markers.some((marker) => normalizeId(marker) === productId)) return planKey;
   }
   const normalized = markers.map(normalizeMarker).filter(Boolean);
+  if (normalized.some((marker) => marker.includes("friendshiptwohours") || marker.includes("дружба2часа"))) return "friendship_two_hours";
   if (normalized.some((marker) => (
     (marker.includes("котельник") || marker.includes("kotelniki") || marker.includes("kotelnik"))
     && (marker.includes("дружба") || marker.includes("friendship") || marker.includes("druzhba"))
@@ -934,6 +936,7 @@ const resolvePlanKey = (value) => {
 
 const PLAN_CATEGORIES = {
   friendship: ["open_game", "tournament"],
+  friendship_two_hours: ["open_game", "group_training", "tournament"],
   kotelniki_friendship: [],
   network_friendship: [],
   piter_friendship: [],
@@ -948,6 +951,9 @@ const MANAGED_PLAN_KEYS = new Set([
 
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
+  // LK1 reserves minutes by subscription/day and writes one operation per game;
+  // the legacy shared-day seat would reject the second of two one-hour games.
+  if (planKey === "friendship_two_hours") return "event";
   return serviceDate >= SHARED_LIMIT_FROM ? "shared_day" : "category_day";
 };
 

@@ -701,6 +701,39 @@ test("Friendship is allowed for tournaments but remains blocked for group traini
   assert.equal(groupTraining[4].payload.details.category, "group_training");
 });
 
+test("two-hour Friendship allows a second same-day game through its per-event LK1 operation", () => {
+  const owned = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
+    id: "exercise-target", timeFrom: "2026-09-30T18:00:00+03:00",
+    direction: { id: 4588 }, type: { id: 1613 },
+    availableClientSubscriptions: [{ clientSubscriptionId: "client-subscription-1",
+      productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e", name: "Дружба 2 часа" }],
+  }, _subscriptionBooking: baseContext("exercise", { serviceDate: undefined, category: undefined,
+    planKey: undefined, trackedDailyLimit: undefined, limitMode: undefined }) });
+  assert.equal(owned[0]._subscriptionBooking.planKey, "friendship_two_hours");
+  assert.equal(owned[0]._subscriptionBooking.limitMode, "event");
+  const history = runFunction(ROUTER_FILE, { statusCode: 200,
+    payload: [flatBooking({ exerciseDate: "2026-09-30" })],
+    _subscriptionBooking: { ...owned[0]._subscriptionBooking, step: "bookings", serviceDate: "2026-09-30" } });
+  assert.notEqual(history[4]?.payload?.details?.code, "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED");
+  for (const [directionId, typeId, category] of [
+    [3685, 605, "group_training"],
+    [2617, 839, "tournament"],
+    // «Время на друзей» — the club format the two-hour plan now also carries.
+    [5278, 839, "tournament"],
+  ] as const) {
+    const allowed = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
+      id: "exercise-target", timeFrom: "2026-09-30T18:00:00+03:00",
+      direction: { id: directionId }, type: { id: typeId },
+      availableClientSubscriptions: [{ clientSubscriptionId: "client-subscription-1",
+        productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e" }],
+    }, _subscriptionBooking: baseContext("exercise", { serviceDate: undefined, category: undefined,
+      planKey: undefined, trackedDailyLimit: undefined, limitMode: undefined }) });
+    assert.equal(allowed[0]._subscriptionBooking.category, category, `direction ${directionId} type ${typeId}`);
+    assert.equal(allowed[0]._subscriptionBooking.planKey, "friendship_two_hours");
+    assert.equal(allowed[0]._subscriptionBooking.limitMode, "event");
+  }
+});
+
 test("Piter split create resolves a server target and requests the actor-owned CUP runtime context", () => {
   const out = runFunction(ROUTER_FILE, {
     statusCode: 200,

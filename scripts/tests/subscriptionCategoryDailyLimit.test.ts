@@ -34,6 +34,19 @@ test("recognizes tracked summer subscription products by ids and names", () => {
   );
 });
 
+test("two-hour Friendship uses its own product identity and does not block another game in the day", () => {
+  const product = { productId: "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e", name: "Дружба 2 часа" };
+  assert.equal(resolveSubscriptionCategoryDailyLimitPlanKey(product), "friendship_two_hours");
+  assert.equal(subscriptionPlanAllowsDailyLimitCategory(product, SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME), true);
+  const bookings = [{ id: "previous", clientSubscriptionId: "same", paymentType: "SUBSCRIPTION",
+    exercise: { id: "first", timeFrom: "2026-10-02T10:00:00+03:00", type: { id: 1613 } } }];
+  assert.equal(resolveSubscriptionCategoryDailyLimitConflictFromBookings(bookings, {
+    targetDate: "2026-10-02", category: SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
+    currentSubscription: product, currentClientSubscriptionId: "same",
+  }), null);
+  assert.equal(resolveSubscriptionCategoryDailyLimitPlanKey({ productId: SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS.friendship }), "friendship");
+});
+
 test("maps subscription products to allowed daily categories", () => {
   const friendship = { name: "Лето.Падел.Дружба" };
   const sport = { name: "Лето.Падел.Спорт" };

@@ -12,10 +12,37 @@ import test from 'node:test';
 import {
   LK1_PLAN_RULES_DESIRED,
   LK1_PLAN_RULES_WITH_TOPOKRATY,
+  LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+  buildFriendshipTwoHoursPlanRulesTransition,
+  buildFriendshipTwoHoursPlanRulesRevert,
   LK1_TOPOKRATY_PRODUCT_ID,
   buildTopokratyPlanRulesRevert,
   buildTopokratyPlanRulesTransition,
 } from '../lib/lk1PlanRulesTransition.mjs';
+
+test('two-hour Friendship has its own Viva identity, 120 free minutes and six active bookings', () => {
+  const productId = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
+  assert.equal(LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID, productId);
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.find(item => item.productId === productId);
+  assert.deepEqual(rule, {
+    productId, planKey: 'friendship_two_hours', enforceFrom: '2026-09-01',
+    maxActiveBookings: 6, freeGameMinutesPerDay: 120,
+    gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50,
+    tournamentDiscountPercent: 50,
+  });
+  assert.equal(LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.length,
+    LK1_PLAN_RULES_WITH_TOPOKRATY.rules.length + 1);
+});
+
+test('two-hour rule replaces exactly the eight-rule generation and can revert', () => {
+  const forward = buildFriendshipTwoHoursPlanRulesTransition();
+  assert.deepEqual(forward.expectedPrior, LK1_PLAN_RULES_WITH_TOPOKRATY);
+  assert.deepEqual(forward.desired, LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS);
+  const revert = buildFriendshipTwoHoursPlanRulesRevert();
+  assert.deepEqual(revert.expectedPrior, LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS);
+  assert.deepEqual(revert.desired, LK1_PLAN_RULES_WITH_TOPOKRATY);
+});
 
 const EVALUATOR_FILE = new URL('../nodered_lk1_hub_nodes/evaluator.js', import.meta.url);
 const GATEWAY_FILE = new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url);
@@ -83,6 +110,37 @@ function evaluate(input) {
 const clubMinutes = (freeMinutes, paidOverageMinutes, usedOrReservedFreeMinutesToday = 0) => ({
   localDate: '2026-08-15', usedOrReservedFreeMinutesToday, freeMinutes, paidOverageMinutes,
   discountPercent: 75 });
+
+test('two-hour game allowance spans two bookings and the seventh is discount-only', () => {
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
+  const input = (used, activeServices, durationMinutes = 60) => lk1Input({
+    productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID, rule,
+    target: { category: 'GAME', durationMinutes, directionId: 4588 },
+    usage: { usedOrReservedFreeMinutesToday: used, activeServices },
+  });
+  const first = evaluate(input(0, 0)).decision;
+  const second = evaluate(input(60, 1)).decision;
+  const seventh = evaluate(input(60, 6)).decision;
+  assert.equal(first.gameMinutes.freeMinutes, 60);
+  assert.equal(second.gameMinutes.freeMinutes, 60);
+  assert.equal(seventh.eligible, true);
+  assert.equal(seventh.gameMinutes.freeMinutes, 0);
+  assert.equal(seventh.gameMinutes.discountPercent, 30);
+  assert.equal(seventh.subscriptionVisitCount, 0);
+});
+
+test('seventh group or tournament booking remains 50% discount even with a free-first snapshot', () => {
+  const rule = LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules.at(-1);
+  for (const category of ['GROUP_TRAINING', 'TOURNAMENT']) {
+    const decision = evaluate(lk1Input({ productId: LK1_FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
+      rule, target: { category, directionId: 3685 },
+      usage: { activeServices: 6, freeFirstEvent: { covered: true, usedEventsToday: 0, visitsLeft: 5 } },
+    })).decision;
+    assert.equal(decision.eligible, true, category);
+    assert.equal(decision.subscriptionVisitCount, 0, category);
+    assert.equal(decision.benefit.finalPriceMinor, BASE_PRICE_MINOR / 2, category);
+  }
+});
 
 test('a club training charges a quarter of the court price only for the minutes above the free hour', () => {
   const result = evaluate(lk1Input()).decision;
