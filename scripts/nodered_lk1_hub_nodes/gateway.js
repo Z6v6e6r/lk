@@ -623,6 +623,12 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     // free of that host library, so it names the state directly.
     const firstUse = String(subscription?.status || "").trim().toUpperCase() === "NEW"
       && !String(subscription?.activationDate || "").trim();
+    // Patriots event benefits do not consume a visit. A NEW subscription would
+    // otherwise remain unactivated while receiving an unbounded 50% discount.
+    // The first game can activate the 30-day Viva window; event discounts then
+    // use the same ACTIVE-window proof as every other money benefit.
+    const patriotsMoneyOnlyEvent = configured.rule?.productId === "37ab3713-4431-4815-96ba-d7ece76a9241"
+      && ["group_training", "tournament"].includes(resolveCategory(exercise));
     const now = Date.now();
     // The verdict is the same conjunction as before, split into named violations so the
     // refusal reports which condition failed. Every branch below maps 1:1 to the previous
@@ -637,6 +643,7 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
       violations.push("instance_id_mismatch");
     }
     if (owners.some((id) => normalizeId(id) !== normalizeId(ctx.actorClientId))) violations.push("owner_mismatch");
+    if (firstUse && patriotsMoneyOnlyEvent) violations.push("patriots_activation_required");
     if (!firstUse) {
       if (subscription.status !== "ACTIVE") {
         violations.push(`status_${String(subscription.status || "missing").toLowerCase().slice(0, 24)}`);

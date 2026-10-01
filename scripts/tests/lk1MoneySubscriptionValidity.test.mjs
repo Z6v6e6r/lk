@@ -17,6 +17,7 @@ const exerciseId = "1f0d5a3e-0000-4000-8000-000000000003";
 const otherId = "1f0d5a3e-0000-4000-8000-000000000004";
 const HUB_PRODUCT = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const RA_PRODUCT = "b91e14d1-fe6e-4d0b-be39-3e45ad86b759";
+const PATRIOTS_PRODUCT = "37ab3713-4431-4815-96ba-d7ece76a9241";
 const EVENT_START = "2099-09-21T08:00:00+03:00";
 
 const hubExercise = () => ({
@@ -159,6 +160,31 @@ test("a NEW first-use instance is proven without an activation or an expiry yet"
   assert.equal(run.stops.length, 0, JSON.stringify(run.stops));
   assert.equal(run.ctx.lk1MoneyOwnership.subscription.subscriptionId, subscriptionId);
   assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
+});
+
+test("Patriots money-only events require activation before the 50 percent discount", () => {
+  const planRules = { formatVersion: 1, rules: [{ productId: PATRIOTS_PRODUCT,
+    planKey: "patriots", enforceFrom: "2026-09-01", maxActiveBookings: 4,
+    freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+    groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 }] };
+  const deps = { resolveCategory: () => "tournament",
+    global: { get: (key) => key === "subscriptions_lk1_plan_rules" ? planRules : undefined } };
+  const options = { managedAction: "BOOK_TOURNAMENT", deps };
+  const fresh = runMoneyPhase(instance({ productId: PATRIOTS_PRODUCT, status: "NEW",
+    activationDate: null, expirationDate: null, visitsLeft: 30 }), options);
+  assert.equal(fresh.stops.length, 1);
+  assert.equal(fresh.stops[0].details.code, "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN");
+  assert.deepEqual(fresh.stops[0].details.observed.violations, ["patriots_activation_required"]);
+  assert.equal(fresh.ctx.lk1MoneyOwnership, undefined);
+
+  const active = runMoneyPhase(instance({ productId: PATRIOTS_PRODUCT, visitsLeft: 0 }), options);
+  assert.equal(active.stops.length, 0, JSON.stringify(active.stops));
+  assert.equal(active.ctx.lk1MoneyOwnership.subscription.productId, PATRIOTS_PRODUCT);
+
+  const expired = runMoneyPhase(instance({ productId: PATRIOTS_PRODUCT,
+    expirationDate: "2026-09-01" }), options);
+  assert.equal(expired.stops.length, 1);
+  assert.ok(expired.stops[0].details.observed.violations.includes("expired"));
 });
 
 test("a held or frozen first-use instance is still refused by name", () => {

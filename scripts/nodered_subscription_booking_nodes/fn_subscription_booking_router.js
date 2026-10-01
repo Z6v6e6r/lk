@@ -1001,6 +1001,9 @@ const resolveCategory = (value) => {
   const direction = exercise.direction || exercise.exerciseDirection || value?.exerciseDirection;
   const typeId = numericId(type ?? exercise.typeId ?? value?.exerciseTypeId);
   const directionId = numericId(direction ?? exercise.directionId ?? value?.exerciseDirectionId);
+  if (typeId === 2349 && directionId === 6181) return "open_game";
+  if (typeId === 2349 && directionId === 6306) return "tournament";
+  if (typeId === 2349 && directionId === 6307) return "group_training";
   if ([1613].includes(typeId) || [4588].includes(directionId)) return "open_game";
   if ([839, 1013].includes(typeId) || [2617, 3284, 4769].includes(directionId)) return "tournament";
   if ([605, 847, 963, 1208].includes(typeId)) return "group_training";

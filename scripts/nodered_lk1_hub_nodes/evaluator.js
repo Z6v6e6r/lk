@@ -38,6 +38,15 @@ const TOPOKRATY_FRIENDSHIP_PRODUCT_ID = "14692232-12be-4218-9fa1-2d5b79b62035";
 const TOPOKRATY_TRAINING_DIRECTION_IDS = [6233];
 const TOPOKRATY_TRAINING_COURT_PAY_PERCENT = 25;
 const TOPOKRATY_TRAINING_DISCOUNT_PERCENT = 100 - TOPOKRATY_TRAINING_COURT_PAY_PERCENT;
+const PATRIOTS_FRIENDSHIP_PRODUCT_ID = "37ab3713-4431-4815-96ba-d7ece76a9241";
+// The product permits visit redemption for the club directions, while 5278/839
+// is a monetary discount on every «Время на друзей» event. Neither branch may
+// grant a discount to another event just because it shares the same category.
+const PATRIOTS_DISCOUNT_EVENTS = Object.freeze({
+  GAME: ["viva:direction:6181:type:2349", "viva:direction:4588:type:1613"],
+  GROUP_TRAINING: ["viva:direction:6307:type:2349"],
+  TOURNAMENT: ["viva:direction:6306:type:2349", "viva:direction:5278:type:839"],
+});
 // The rule is bound to the product that owns the selected instance, never to the client's
 // payload: the resolver's `policyProductId` is the only product identity this node trusts.
 // The direction is read through the aliases the booking target and the raw Viva exercise
@@ -146,6 +155,12 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
     // historical 10k carrier input for a newly verified event tariff.
     block("BASE_PRICE_UNRESOLVED", "Существующая услуга 10 000 рублей не подтверждена");
   }
+  if (toStr(input?.lk1ProductBinding?.policyProductId)?.toLowerCase() === PATRIOTS_FRIENDSHIP_PRODUCT_ID
+    && ["GAME", "GROUP_TRAINING", "TOURNAMENT"].includes(category)
+    && !PATRIOTS_DISCOUNT_EVENTS[category].includes(target?.externalEventTypeId)) {
+    block("EVENT_NOT_INCLUDED", "Направление или тип события не входит в скидку Патриотов");
+    return { selectedRule: null, surchargeMinor: 0, category };
+  }
   if (!productBound && (!policy || !instance || policy.subscriptionTypeId !== instance.subscriptionTypeId
     || !toStr(instance.subscriptionInstanceId) || !toStr(instance.subscriptionTypeId)
     || policy.policyVersion !== instance.policyVersion
@@ -237,6 +252,15 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
         selectedRule = null;
       }
     }
+  } else if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)
+    && toStr(input?.lk1ProductBinding?.policyProductId)?.toLowerCase() === PATRIOTS_FRIENDSHIP_PRODUCT_ID) {
+    // The club's event benefit is monetary on every booking, including 5278/839,
+    // which is outside Viva's visit-redemption scope. A stale free-first snapshot
+    // cannot turn this into a visit-covered booking.
+    decision.subscriptionVisitCount = 0;
+    selectedRule = { ruleId: `lk1-patriots-${category.toLowerCase()}`,
+      kind: "PERCENT_DISCOUNT", percentage: category === "GROUP_TRAINING"
+        ? rule.groupTrainingDiscountPercent : rule.tournamentDiscountPercent };
   } else if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)) {
     // The first covered event of the subscription's local service day is carried by the plan
     // itself: one visit is consumed and nothing is charged. Every later event that day, and
