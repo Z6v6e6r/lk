@@ -14,6 +14,7 @@ import { composePatriotsArtifacts, PATRIOTS_NODES,
 const evaluatorSource = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/evaluator.js', import.meta.url), 'utf8');
 const paymentSource = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/event_payments.js', import.meta.url), 'utf8');
 const bookingRouterSource = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
+const gatewayHooksSource = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway_hooks.js', import.meta.url), 'utf8');
 const rule = { maxActiveBookings: 4, freeGameMinutesPerDay: 60,
   gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 };
 
@@ -145,6 +146,55 @@ test('a 5278 discount binds the one-time SERVICE tariff, not a subscription visi
     decision: { ...decision, subscriptionVisitCount: 1 } } }), null);
 });
 
+test('the exercise hook sends Patriots money events to fresh ownership readback before legacy routing', () => {
+  const section = gatewayHooksSource.slice(gatewayHooksSource.indexOf('// HUB_EXERCISE') + '// HUB_EXERCISE'.length,
+    gatewayHooksSource.indexOf('// HUB_RECHECK'));
+  const actor = 'fixture-actor';
+  const subscriptionId = 'fixture-subscription';
+  const tenantKey = 'fixture-tenant';
+  const exercise = { id: 'fixture-exercise', studioId: 'fixture-station' };
+  function run(productId, rule, selectedOwned = [{ subscriptionId, productId }]) {
+    const ctx = { caller: 'http', actorClientId: actor, clientSubscriptionId: subscriptionId,
+      tenantKey, lk1ProductIdentity: { actorClientId: actor, subscriptionId, tenantKey, productId } };
+    const stubs = new Proxy({
+      ctx, exercise, msg: {},
+      findOwnedSubscriptions: () => selectedOwned,
+      isProTrainingExercise: () => false,
+      isProTrainingEnergyPack: () => false,
+      isTopokratyExercise: () => false,
+      isTopokratyClubPack: () => false,
+      resolveCategory: () => 'tournament',
+      identityBound: value => value.lk1ProductIdentity?.actorClientId === actor
+        && value.lk1ProductIdentity?.subscriptionId === subscriptionId
+        && value.lk1ProductIdentity?.tenantKey === tenantKey,
+      normalizeId: value => String(value || '').toLowerCase(),
+      lk1Config: () => rule,
+      lk1ReadPlanRules: () => (rule.matched ? {} : null),
+      lk1QuoteOwned: () => [],
+      lk1Stop: (_ctx, code) => ({ stopped: code }),
+      finishError: (_ctx, _status, _message, body) => ({ error: body.code }),
+      prepareUserGet: (_ctx, step) => ({ prepared: step }),
+      global: { get: () => null },
+      LK1_PRODUCT_POLICY_GLOBAL: 'subscriptions_lk1_product_policy',
+    }, { has: () => true, get: (target, key) => key in target ? target[key] : globalThis[key] });
+    return new Function('stubs', `with (stubs) { return (ctx, exercise, msg) => {\n${section}\n}; }`)(stubs)(ctx, exercise, stubs.msg);
+  }
+  for (const ruleState of [{ matched: false }, { matched: true, legacy: true }]) {
+    assert.deepEqual(run(LK1_PATRIOTS_PRODUCT_ID, ruleState),
+      { prepared: 'lk1_money_owned_subscriptions' });
+  }
+  assert.deepEqual(run(LK1_PATRIOTS_PRODUCT_ID, { matched: true, rule }),
+    { prepared: 'lk1_money_owned_subscriptions' });
+  for (const ruleState of [{ matched: false }, { matched: true, rule }]) {
+    assert.deepEqual(run(LK1_PATRIOTS_PRODUCT_ID, ruleState, []),
+      { prepared: 'lk1_money_owned_subscriptions' });
+    assert.deepEqual(run(LK1_PATRIOTS_PRODUCT_ID, ruleState, [{ subscriptionId }]),
+      { prepared: 'lk1_money_owned_subscriptions' });
+  }
+  assert.deepEqual(run('b91e14d1-fe6e-4d0b-be39-3e45ad86b759', { matched: false }),
+    { error: 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE' });
+});
+
 const privateLiveFlow = process.env.LK1_PATRIOTS_LIVE_FLOW;
 test('the private live snapshot yields only the reviewed four-node candidate',
   { skip: !privateLiveFlow || !fs.existsSync(privateLiveFlow) }, () => {
@@ -158,7 +208,13 @@ test('the private live snapshot yields only the reviewed four-node candidate',
     ]);
     assert.deepEqual(built.postimages, PATRIOTS_POSTIMAGE);
     const candidate = JSON.parse(built.candidateBytes.toString('utf8'));
+    const gateway = candidate.find(node => node.id === PATRIOTS_NODES.gateway);
+    assert.match(gateway.func, /LK1_PATRIOTS_RULE_UNAVAILABLE/);
+    assert.match(gateway.func, /identityBound\(ctx\)[\s\S]*LK1_PATRIOTS_RULE_UNAVAILABLE/);
+    assert.match(gateway.func, /patriotsMoneyOnlyIdentity \|\| ruleConfigured/);
     const preview = candidate.find(node => node.id === PATRIOTS_NODES.preview);
     assert.match(preview.func, /typeId === 2349 && directionId === 6181/);
+    assert.match(preview.func, /patriotsClubGame \? '2349' : '1613'/);
+    assert.match(preview.func, /externalEventTypeId: canonical\.managedExternalEventTypeId\(exercise\) \}\) \} \} \};/);
     assert.throws(() => composePatriotsArtifacts(built.candidateBytes), /Live flow preimage drift/);
   });

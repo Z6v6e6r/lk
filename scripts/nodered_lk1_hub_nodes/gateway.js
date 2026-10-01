@@ -590,9 +590,20 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     return true;
   };
   if (!rows.every(validIdentityShape)) return lk1Stop(ctx, "LK1_MONEY_OWNERSHIP_DTO_INVALID");
-  const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
+  const selectedRows = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
+  const patriotsMoneyOnlyIdentity = ["group_training", "tournament"].includes(resolveCategory(exercise))
+    && String(ctx.lk1ProductIdentity?.productId || "").trim().toLowerCase() === "37ab3713-4431-4815-96ba-d7ece76a9241"
+    && identityBound(ctx);
+  // The fresh general subscription read may omit the product id. Project only the
+  // server-confirmed identity; identityOwned checks owner, instance and aliases.
+  const selected = patriotsMoneyOnlyIdentity ? identityOwned(ctx, selectedRows, exercise) : selectedRows;
   const configured = lk1Config(selected, exercise?.studio?.id || exercise?.studioId || null);
   if (configured.code) return lk1Stop(ctx, configured.code);
+  // An event discount outside Viva's visit scope must never fall back to legacy
+  // booking if the Patriots rule is missing or excluded at runtime.
+  if (patriotsMoneyOnlyIdentity && (!configured.matched || configured.legacy)) {
+    return lk1Stop(ctx, "LK1_PATRIOTS_RULE_UNAVAILABLE");
+  }
   // The resolver alone decides the enforced cohort: the annual HUB rule carries no
   // sale-date gate, while every plan rule enters the contour only from its own
   // `enforceFrom`. The money mandate has to cover exactly that cohort. Re-applying the

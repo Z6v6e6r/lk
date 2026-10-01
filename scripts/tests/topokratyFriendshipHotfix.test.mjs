@@ -147,26 +147,16 @@ test("the plan-rules writer is replaced, not appended: 7 installed rules become 
   /installed plan-rules payload is not the reviewed prior|installed preimage drift/);
 });
 
-test("the evaluator generation swaps the embedded LK1 copy for the reviewed club body", async () => {
+test("the earlier evaluator generation refuses the newer Patriots source", async () => {
   const { reviewedEvaluatorBody } = await import("../patch_live_lk1_plan_rules.mjs");
-  const reviewed = reviewedEvaluatorBody();
+  assert.throws(() => reviewedEvaluatorBody(), /Reviewed evaluator drift/);
   const embedded = "const lk1Old = true;\n";
   const source = `const head = 1;\n${EVALUATOR_BRANCH_OPEN}${embedded}${EVALUATOR_BRANCH_CLOSE}\nconst tail = 2;\n`;
-  const patched = patchTopokratyEvaluatorBody(source, {
+  assert.throws(() => patchTopokratyEvaluatorBody(source, {
     ...TOPOKRATY_TARGET,
     liveEvaluatorFuncSha256: sha256(source),
     liveEmbeddedSha256: sha256(embedded),
-  });
-  assert.ok(patched.includes(reviewed), "the reviewed evaluator body is embedded");
-  assert.ok(!patched.includes(embedded), "the previous embedded copy is gone");
-  assert.ok(patched.includes("isTopokratyTrainingBenefit"), "the club branch is present");
-  assert.ok(patched.startsWith("const head = 1;\n") && patched.endsWith("const tail = 2;\n"),
-    "the surrounding branch envelope stays untouched");
-  new Function("msg", "node", "env", "global", patched);
-
-  assert.throws(() => patchTopokratyEvaluatorBody(patched, {
-    ...TOPOKRATY_TARGET, liveEvaluatorFuncSha256: sha256(patched),
-  }), /already embedded|installed preimage drift/);
+  }), /Reviewed evaluator drift/);
 });
 
 test("the generation composes the live flow into exactly three changed nodes", { skip: snapshotSkip }, () => {

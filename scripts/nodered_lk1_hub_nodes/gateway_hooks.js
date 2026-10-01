@@ -171,11 +171,18 @@ if (resolveCategory(exercise) === "group_training"
 // the pre-rollout path and must not enter the managed branch below.
 const selectedRule = lk1Config(selectedOwned, exercise?.studio?.id || exercise?.studioId || null);
 const enforcedRule = selectedRule.matched && !selectedRule.legacy;
+// The product identity was confirmed by the server before this exercise read.
+// Every Patriots money benefit needs a fresh general-list ownership and rule read,
+// even when Viva does not offer the subscription for visit redemption here.
+const patriotsMoneyOnlyIdentity = ctx.caller === "http"
+  && ["group_training", "tournament"].includes(resolveCategory(exercise))
+  && String(ctx.lk1ProductIdentity?.productId || "").trim().toLowerCase() === "37ab3713-4431-4815-96ba-d7ece76a9241"
+  && identityBound(ctx);
 let ruleConfigured = false;
 try { ruleConfigured = Boolean(lk1ReadPlanRules() || global.get(LK1_PRODUCT_POLICY_GLOBAL)); } catch (_) { /* absent */ }
 if (ctx.caller === "http" && ["group_training", "tournament"].includes(resolveCategory(exercise))
-    && ruleConfigured && ctx.lk1MoneyReadbackPhase !== "exercise"
-    && (selectedOwned.length === 0 || enforcedRule)) {
+    && (patriotsMoneyOnlyIdentity || ruleConfigured) && ctx.lk1MoneyReadbackPhase !== "exercise"
+    && (patriotsMoneyOnlyIdentity || selectedOwned.length === 0 || enforcedRule)) {
     ctx.lk1MoneyExercise = exercise;
     ctx.lk1MoneyReturnStep = "exercise";
     return prepareUserGet(ctx, "lk1_money_owned_subscriptions",

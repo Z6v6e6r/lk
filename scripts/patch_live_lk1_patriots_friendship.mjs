@@ -36,15 +36,17 @@ export const PATRIOTS_PREIMAGE = Object.freeze({
   pricingFunc: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b',
   joinFunc: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
   usageBlock: '5fce82de1d012254f863a90388c75f581f9dcf843e520b10d17a968bc6b3f1ef',
-  reviewedGatewaySource: '73b55b247159acdac7c068b51c78403492f277fa6df7456431ce3c786140ed9a',
+  reviewedGatewaySource: '4fe733191d82b174665033c3cd48f6614b44673ef404d695e4150cdfe9710e38',
+  reviewedGatewayHooksSource: '13672a94ac3c96ccdd5492dd86b82dc6d4df874d167685513c2607559904c7a5',
   reviewedEvaluatorSource: '777f8dfbca1e2e88df3f4a24c57792cac371797bd583b91f65c63b129fe3ea15',
   reviewedBookingRouterSource: 'c4da6e1300d25057807aee4badab045669bc00c6ed91ce550ab745325a6c6a76',
+  reviewedPreviewSource: '9d07924befd426aa18b80d5322bc377c19918108ff8af3a512e74f7f50d7ebe4',
 });
 export const PATRIOTS_POSTIMAGE = Object.freeze({
-  gatewayFunc: '31fc0770ba1073a68e951d23cbd8927b852277f2c522fae399bbcf85e5370384',
+  gatewayFunc: '660b48b3774149bfc28809206d44a4dfb74fefd1ced37bbf6824d7be3d89d120',
   gatewayInitialize: '283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3',
   evaluatorFunc: '131de088b7b1cf97947cc5f86cbc75287a81b77d424e1e2947f7fa6760984ab9',
-  previewFunc: 'fb2fc8772c8983558abd8a91cc511b21ec807b28272b69be5352585d4328139c',
+  previewFunc: 'f2851f3d459f258c3a63782822d0a93bd1c3e99df182f45b721be6d34ff46d25',
   previewEvaluatorFunc: '131de088b7b1cf97947cc5f86cbc75287a81b77d424e1e2947f7fa6760984ab9',
 });
 
@@ -54,12 +56,27 @@ const EVALUATOR_OPEN = 'if (Object.prototype.hasOwnProperty.call(msg._managedSub
 const EVALUATOR_CLOSE = '\n})();\n}';
 const FIRST_USE_ANCHOR = '    const firstUse = preflightAvailability.resolveSplitSubscriptionLifecycle(subscription, eventDate(exercise)) === "NEW_FIRST_USE_CANDIDATE";\n';
 const OWNER_GUARD_ANCHOR = '    if (owners.some((id) => normalizeId(id) !== normalizeId(ctx.actorClientId))) violations.push("owner_mismatch");\n';
+const PATRIOTS_MONEY_SCOPE_OLD = '  const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);\n';
+const PATRIOTS_MONEY_SCOPE_NEW = '  const selectedRows = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);\n';
+const PATRIOTS_MONEY_SCOPE_END = '  // The resolver alone decides the enforced cohort:';
+const PATRIOTS_EARLY_GUARD_ANCHOR = '  const enforcedRule = selectedRule.matched && !selectedRule.legacy;\n';
+const PATRIOTS_EARLY_GUARD_START = '// The product identity was confirmed by the server before this exercise read.\n';
+const PATRIOTS_EARLY_GUARD_END = 'let ruleConfigured = false;';
+const PATRIOTS_DETOUR_OLD = '    && ruleConfigured && ctx.lk1MoneyReadbackPhase !== "exercise"\n'
+  + '    && (selectedOwned.length === 0 || enforcedRule)) {';
+const PATRIOTS_DETOUR_NEW = '    && (patriotsMoneyOnlyIdentity || ruleConfigured) && ctx.lk1MoneyReadbackPhase !== "exercise"\n'
+  + '    && (patriotsMoneyOnlyIdentity || selectedOwned.length === 0 || enforcedRule)) {';
 const PATRIOTS_MONEY_ONLY_GUARD = '    const patriotsMoneyOnlyEvent = configured.rule?.productId === "37ab3713-4431-4815-96ba-d7ece76a9241"\n      && ["group_training", "tournament"].includes(resolveCategory(exercise));\n';
 const PATRIOTS_FIRST_USE_REFUSAL = '    if (firstUse && patriotsMoneyOnlyEvent) violations.push("patriots_activation_required");\n';
 const CATEGORY_ANCHOR = '  if ([1613].includes(typeId) || [4588].includes(directionId)) return "open_game";\n';
 const PATRIOTS_CATEGORY_MAPPING = '  if (typeId === 2349 && directionId === 6181) return "open_game";\n'
   + '  if (typeId === 2349 && directionId === 6306) return "tournament";\n'
   + '  if (typeId === 2349 && directionId === 6307) return "group_training";\n';
+const PREVIEW_GAME_SCOPE_START = '  const visitCount = ctx.previewResolved ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;\n';
+const PREVIEW_GAME_SCOPE_END = '  if (!ctx.previewResolved) {';
+const PREVIEW_GAME_TARGET_OLD = 'priceProductId: ctx.priceProductId } : {}) } } };';
+const PREVIEW_GAME_TARGET_NEW = 'priceProductId: ctx.priceProductId } : {\n'
+  + '          externalEventTypeId: canonical.managedExternalEventTypeId(exercise) }) } } };';
 
 function assertHash(value, expected, label) {
   const actual = sha256(value);
@@ -111,7 +128,10 @@ export function patchPatriotsGatewayBody(source) {
   const reviewed = fs.readFileSync(path.join(ROOT, 'nodered_lk1_hub_nodes/gateway.js'), 'utf8');
   const reviewedRouter = fs.readFileSync(path.join(ROOT,
     'nodered_subscription_booking_nodes/fn_subscription_booking_router.js'), 'utf8');
+  const reviewedHooks = fs.readFileSync(path.join(ROOT,
+    'nodered_lk1_hub_nodes/gateway_hooks.js'), 'utf8');
   assertHash(reviewed, PATRIOTS_PREIMAGE.reviewedGatewaySource, 'Reviewed Patriots gateway');
+  assertHash(reviewedHooks, PATRIOTS_PREIMAGE.reviewedGatewayHooksSource, 'Reviewed Patriots gateway hooks');
   assertHash(reviewedRouter, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, 'Reviewed booking router');
   if (!reviewed.includes(PATRIOTS_MONEY_ONLY_GUARD)
     || !reviewed.includes(PATRIOTS_FIRST_USE_REFUSAL)
@@ -121,9 +141,29 @@ export function patchPatriotsGatewayBody(source) {
   if (source.split(FIRST_USE_ANCHOR).length !== 2 || source.split(OWNER_GUARD_ANCHOR).length !== 2) {
     throw new Error('Gateway money-validity anchors drifted');
   }
+  if (source.split(PATRIOTS_EARLY_GUARD_ANCHOR).length !== 2) {
+    throw new Error('Gateway Patriots early guard anchor drifted');
+  }
+  if (source.split(PATRIOTS_DETOUR_OLD).length !== 2
+    || !reviewedHooks.includes(PATRIOTS_DETOUR_NEW)) {
+    throw new Error('Gateway Patriots readback detour drifted');
+  }
   if (source.split(CATEGORY_ANCHOR).length !== 2) throw new Error('Gateway category anchor drifted');
-  const patched = source.replace(FIRST_USE_ANCHOR, FIRST_USE_ANCHOR + PATRIOTS_MONEY_ONLY_GUARD)
+  const installedMoneyRange = replacementRange(source,
+    PATRIOTS_MONEY_SCOPE_OLD, PATRIOTS_MONEY_SCOPE_END, 'Installed Patriots money scope');
+  const reviewedMoneyRange = replacementRange(reviewed,
+    PATRIOTS_MONEY_SCOPE_NEW, PATRIOTS_MONEY_SCOPE_END, 'Reviewed Patriots money scope');
+  const earlyGuardRange = replacementRange(reviewedHooks,
+    PATRIOTS_EARLY_GUARD_START, PATRIOTS_EARLY_GUARD_END, 'Reviewed Patriots early guard');
+  const earlyGuard = reviewedHooks.slice(earlyGuardRange.start, earlyGuardRange.end)
+    .trimEnd().split('\n').map(line => `  ${line}`).join('\n') + '\n';
+  const patchedMoneyScope = source.slice(0, installedMoneyRange.start)
+    + reviewed.slice(reviewedMoneyRange.start, reviewedMoneyRange.end)
+    + source.slice(installedMoneyRange.end);
+  const patched = patchedMoneyScope.replace(FIRST_USE_ANCHOR, FIRST_USE_ANCHOR + PATRIOTS_MONEY_ONLY_GUARD)
     .replace(OWNER_GUARD_ANCHOR, OWNER_GUARD_ANCHOR + PATRIOTS_FIRST_USE_REFUSAL)
+    .replace(PATRIOTS_EARLY_GUARD_ANCHOR, PATRIOTS_EARLY_GUARD_ANCHOR + earlyGuard)
+    .replace(PATRIOTS_DETOUR_OLD, PATRIOTS_DETOUR_NEW)
     .replace(CATEGORY_ANCHOR, PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR);
   assertBody(patched, 'Patriots gateway body');
   return patched;
@@ -132,6 +172,16 @@ export function patchPatriotsGatewayBody(source) {
 function reviewedEvaluator() {
   const source = fs.readFileSync(path.join(ROOT, 'nodered_lk1_hub_nodes/evaluator.js'), 'utf8');
   assertHash(source, PATRIOTS_PREIMAGE.reviewedEvaluatorSource, 'Reviewed Patriots evaluator');
+  return source;
+}
+
+function reviewedPreview() {
+  const source = fs.readFileSync(path.join(ROOT,
+    'nodered_subscription_price_preview_nodes/router.js'), 'utf8');
+  assertHash(source, PATRIOTS_PREIMAGE.reviewedPreviewSource, 'Reviewed Patriots preview');
+  if (!source.includes(PREVIEW_GAME_TARGET_NEW)) {
+    throw new Error('Reviewed Patriots preview game target is missing');
+  }
   return source;
 }
 
@@ -179,6 +229,18 @@ export function composePatriotsArtifacts(rawSource, { assertPostimages = true } 
     PATRIOTS_PREIMAGE.evaluatorFunc, PATRIOTS_PREIMAGE.evaluatorEmbedded);
   previewEvaluator.func = patchPatriotsEvaluator(previewEvaluator.func,
     PATRIOTS_PREIMAGE.previewEvaluatorFunc, PATRIOTS_PREIMAGE.previewEvaluatorEmbedded);
+  const previewSource = reviewedPreview();
+  const installedScope = replacementRange(preview.func,
+    PREVIEW_GAME_SCOPE_START, PREVIEW_GAME_SCOPE_END, 'Installed preview game scope');
+  const reviewedScope = replacementRange(previewSource,
+    PREVIEW_GAME_SCOPE_START, PREVIEW_GAME_SCOPE_END, 'Reviewed preview game scope');
+  if (preview.func.split(PREVIEW_GAME_TARGET_OLD).length !== 2) {
+    throw new Error('Installed preview game target drifted');
+  }
+  preview.func = preview.func.slice(0, installedScope.start)
+    + previewSource.slice(reviewedScope.start, reviewedScope.end)
+    + preview.func.slice(installedScope.end);
+  preview.func = preview.func.replace(PREVIEW_GAME_TARGET_OLD, PREVIEW_GAME_TARGET_NEW);
   preview.func = preview.func.replace(CATEGORY_ANCHOR,
     PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR);
   // Both routes receive the same exact three-case delta. Preserve every other
@@ -187,6 +249,7 @@ export function composePatriotsArtifacts(rawSource, { assertPostimages = true } 
     || preview.func.split(PATRIOTS_CATEGORY_MAPPING).length !== 2) {
     throw new Error('Booking and preview category deltas differ');
   }
+  assertBody(preview.func, 'Patriots preview router');
   if (assertPostimages) {
     assertHash(gateway.func, PATRIOTS_POSTIMAGE.gatewayFunc, 'Gateway body postimage');
     assertHash(gateway.initialize, PATRIOTS_POSTIMAGE.gatewayInitialize, 'Gateway initialize postimage');
