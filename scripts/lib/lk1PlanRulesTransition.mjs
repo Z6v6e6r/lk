@@ -106,20 +106,20 @@ export const LK1_PATRIOTS_PRODUCT_ID = '37ab3713-4431-4815-96ba-d7ece76a9241';
 export const LK1_PLAN_RULES_WITH_PATRIOTS = Object.freeze({
   formatVersion: 1,
   rules: Object.freeze([
-    ...LK1_PLAN_RULES_WITH_TOPOKRATY.rules,
+    ...LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules,
     rule(LK1_PATRIOTS_PRODUCT_ID, 'patriots'),
   ]),
 });
 
 export const buildPatriotsPlanRulesTransition = () => buildPlanRulesTransition({
-  expectedPrior: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  expectedPrior: LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
   desired: LK1_PLAN_RULES_WITH_PATRIOTS,
   acceptEmptyPrior: true,
 });
 
 export const buildPatriotsPlanRulesRevert = () => buildPlanRulesTransition({
   expectedPrior: LK1_PLAN_RULES_WITH_PATRIOTS,
-  desired: LK1_PLAN_RULES_WITH_TOPOKRATY,
+  desired: LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
   acceptEmptyPrior: true,
 });
 

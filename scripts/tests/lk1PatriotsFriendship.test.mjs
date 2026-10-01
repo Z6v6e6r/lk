@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   LK1_PATRIOTS_PRODUCT_ID,
   LK1_PLAN_RULES_WITH_PATRIOTS,
-  LK1_PLAN_RULES_WITH_TOPOKRATY,
+  LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
   buildPatriotsPlanRulesRevert,
   buildPatriotsPlanRulesTransition,
 } from '../lib/lk1PlanRulesTransition.mjs';
@@ -61,21 +61,21 @@ test('Viva Patriots exercises are classified by direction and type, independent 
   }
 });
 
-test('Patriots rule is an exact guarded addition to the installed Topokraty rules', () => {
-  assert.deepEqual(LK1_PLAN_RULES_WITH_PATRIOTS.rules.slice(0, 8), LK1_PLAN_RULES_WITH_TOPOKRATY.rules);
-  assert.deepEqual(LK1_PLAN_RULES_WITH_PATRIOTS.rules[8], {
+test('Patriots rule is an exact guarded addition to the installed two-hour rules', () => {
+  assert.deepEqual(LK1_PLAN_RULES_WITH_PATRIOTS.rules.slice(0, 9), LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules);
+  assert.deepEqual(LK1_PLAN_RULES_WITH_PATRIOTS.rules[9], {
     productId: LK1_PATRIOTS_PRODUCT_ID, planKey: 'patriots', enforceFrom: '2026-09-01', ...rule,
   });
   const transition = buildPatriotsPlanRulesTransition();
-  assert.deepEqual(transition.expectedPrior, LK1_PLAN_RULES_WITH_TOPOKRATY);
-  const live = context(structuredClone(LK1_PLAN_RULES_WITH_TOPOKRATY));
+  assert.deepEqual(transition.expectedPrior, LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS);
+  const live = context(structuredClone(LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS));
   new Function('global', transition.initialize)(live);
   assert.deepEqual(live.get('subscriptions_lk1_plan_rules'), LK1_PLAN_RULES_WITH_PATRIOTS);
   assert.throws(() => new Function('global', transition.initialize)(context({ formatVersion: 1, rules: [] })),
     /prior mismatch; no overwrite/);
   const revert = buildPatriotsPlanRulesRevert();
   new Function('global', revert.initialize)(live);
-  assert.deepEqual(live.get('subscriptions_lk1_plan_rules'), LK1_PLAN_RULES_WITH_TOPOKRATY);
+  assert.deepEqual(live.get('subscriptions_lk1_plan_rules'), LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS);
 });
 
 test('Patriots games spend the free hour and discount only the paid minutes', () => {

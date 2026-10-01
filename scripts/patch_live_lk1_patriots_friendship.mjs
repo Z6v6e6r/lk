@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 
-// Focused, read-only candidate for «Дружба.Патриоты». The installed Topokraty
-// graph remains the preimage; the money-validity guard, guarded plan rule,
-// and policy evaluators change. The preview router is recomposed and proved unchanged.
+// Focused, read-only candidate for «Дружба.Патриоты». The installed two-hour
+// friendship graph is the preimage; the money-validity guard, guarded plan rule,
+// event classifier, and policy evaluators change. The installed preview keeps
+// its two-hour generation and receives only the same scoped classifier delta.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
-import { previewSources } from './patch_nodered_subscription_price_preview.mjs';
-import { patchTopokratyCopayPreviewBody } from './patch_live_lk1_topokraty_copay_hotfix.mjs';
-import { LK1_PLAN_RULES_WITH_TOPOKRATY, buildPatriotsPlanRulesTransition } from './lib/lk1PlanRulesTransition.mjs';
+import { LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  buildPatriotsPlanRulesTransition } from './lib/lk1PlanRulesTransition.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 export const PATRIOTS_DEPLOYMENT_ID = 'lk1-patriots-friendship';
-export const PATRIOTS_SOURCE_SHA256 = '845e03694c10a14b966a47179ee01afd20d42e85bef61239b43550afaa550acd';
+export const PATRIOTS_SOURCE_SHA256 = 'cc2d76f4ad9b7462cb5534434a52d9e8a58633a9c2134b179cb7b921b871c80f';
 export const PATRIOTS_SOURCE_NODE_COUNT = 4804;
 export const PATRIOTS_NODES = Object.freeze({
   gateway: 'lk_subscription_booking_router_20260804',
@@ -26,26 +26,26 @@ export const PATRIOTS_NODES = Object.freeze({
   join: 'e92e68bf3f08a70c',
 });
 export const PATRIOTS_PREIMAGE = Object.freeze({
-  gatewayFunc: 'e3b46e691517118cabbe259bb3831b99896b3f8a32202b437fa452d8349f17ee',
-  gatewayInitialize: '08f6b84d73e1fc0c74f9c27b285e050ff65f2513e4aec938bc9ccb2a1dfd5602',
-  evaluatorFunc: '443f2633e92f1aa4ce2f2df85b6e100a216a9cebcbc136a30c4c7a2ec8284a63',
-  evaluatorEmbedded: '2a7878abff5bb5f3618b439191616c4a01a7a592f4322aeb3aaadad3f3d7046a',
-  previewFunc: '7605df8c0f89c68cbf865b490e5437260c5b2cc8495cd2a5127ad04e09d30dab',
+  gatewayFunc: 'cfce248c5573aa5d9d85d4ff291fd25e9f7bd4896e04c9d99d2200a220a7790b',
+  gatewayInitialize: 'd7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5',
+  evaluatorFunc: '2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602',
+  evaluatorEmbedded: 'ecc81fb6ee14e5948a61c54157c124408928935d9b9008c6e939238f43be89f3',
+  previewFunc: '0681948096431961e141b98e35f4c3c26c834bafbb4054b52fe7dd5d963eb1f3',
   previewEvaluatorFunc: 'c20f0e6d792c02bdd0f945b84aaba2ac6405386add6228823cbb30fd2ca38945',
   previewEvaluatorEmbedded: 'f1f65a2050523e6104ee0586e1ad62bb0f6945b0ff1dc1583fd52dcf3a9a0433',
   pricingFunc: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b',
   joinFunc: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
-  usageBlock: '3436bdd2fa8d47f1d8952ada7e5a996137cc078169053009a6cc1447d7eb26f9',
-  reviewedGatewaySource: 'd14dca132b57398b4ab1c1476f28e2d20fd94d70fdc0eb0ea5a664e891dc8ebb',
-  reviewedEvaluatorSource: 'fe6ce3f622eb9c4b72e62374c128b3b73c092b6c1d0f7409f59710651020beb2',
-  reviewedBookingRouterSource: '17f9684f55f02a2ededbaef0171144e6a3ec7861c7ba7804c8ab2b7bf41315a3',
+  usageBlock: '5fce82de1d012254f863a90388c75f581f9dcf843e520b10d17a968bc6b3f1ef',
+  reviewedGatewaySource: '73b55b247159acdac7c068b51c78403492f277fa6df7456431ce3c786140ed9a',
+  reviewedEvaluatorSource: '777f8dfbca1e2e88df3f4a24c57792cac371797bd583b91f65c63b129fe3ea15',
+  reviewedBookingRouterSource: 'c4da6e1300d25057807aee4badab045669bc00c6ed91ce550ab745325a6c6a76',
 });
 export const PATRIOTS_POSTIMAGE = Object.freeze({
-  gatewayFunc: '8edc5c73c8c329c2c2a3f0e7e82e1c6972b58561e4873f2a110af2411e841bb7',
-  gatewayInitialize: '21ec4149ae17b2e514f705c40f3d4f0d8878c12005043047e0baeded4b2c6561',
-  evaluatorFunc: 'a955350ed397bc2f173782f80e3eaa173f22f4835325b1476394db6b523d829a',
-  previewFunc: '78f31a157cf6b77356bd7f6af77db01d38ddfd58407f32daf3426a0cffa2b2e9',
-  previewEvaluatorFunc: 'a955350ed397bc2f173782f80e3eaa173f22f4835325b1476394db6b523d829a',
+  gatewayFunc: '31fc0770ba1073a68e951d23cbd8927b852277f2c522fae399bbcf85e5370384',
+  gatewayInitialize: '283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3',
+  evaluatorFunc: '131de088b7b1cf97947cc5f86cbc75287a81b77d424e1e2947f7fa6760984ab9',
+  previewFunc: 'fb2fc8772c8983558abd8a91cc511b21ec807b28272b69be5352585d4328139c',
+  previewEvaluatorFunc: '131de088b7b1cf97947cc5f86cbc75287a81b77d424e1e2947f7fa6760984ab9',
 });
 
 const PLAN_START = 'const lk1PlanRulesKey = "subscriptions_lk1_plan_rules";';
@@ -97,8 +97,8 @@ export function patchPatriotsGatewayInitialize(source) {
   const literal = 'const lk1DesiredPlanRules = ';
   if (block.split(literal).length !== 2) throw new Error('Installed plan payload anchor drift');
   const installed = JSON.parse(block.slice(block.indexOf(literal) + literal.length).split(';\n')[0]);
-  if (JSON.stringify(installed) !== JSON.stringify(LK1_PLAN_RULES_WITH_TOPOKRATY)) {
-    throw new Error('Installed plan rules are not the reviewed eight-rule prior');
+  if (JSON.stringify(installed) !== JSON.stringify(LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS)) {
+    throw new Error('Installed plan rules are not the reviewed nine-rule prior');
   }
   const patched = source.slice(0, start) + buildPatriotsPlanRulesTransition().initialize + source.slice(end);
   if (patched.split('"planKey":"patriots"').length !== 2) throw new Error('Patriots plan rule is not unique');
@@ -169,11 +169,9 @@ export function composePatriotsArtifacts(rawSource, { assertPostimages = true } 
   assertHash(assertNode(flow, PATRIOTS_NODES.pricing).func, PATRIOTS_PREIMAGE.pricingFunc, 'Pricing preimage');
   assertHash(assertNode(flow, PATRIOTS_NODES.join).func, PATRIOTS_PREIMAGE.joinFunc, 'Join preimage');
   assertHash(usageBlock(gateway.func), PATRIOTS_PREIMAGE.usageBlock, 'Usage preimage');
-  const pins = { booking: PATRIOTS_PREIMAGE.gatewayFunc, evaluator: PATRIOTS_PREIMAGE.evaluatorFunc,
-    pricing: PATRIOTS_PREIMAGE.pricingFunc, join: PATRIOTS_PREIMAGE.joinFunc };
-  const installedPreview = patchTopokratyCopayPreviewBody(previewSources(flow,
-    { pins, installedUsageSha256: PATRIOTS_PREIMAGE.usageBlock }).router);
-  if (installedPreview !== preview.func) throw new Error('Installed preview provenance drift');
+  if (preview.func.split(CATEGORY_ANCHOR).length !== 2) {
+    throw new Error('Preview category anchor drifted');
+  }
 
   gateway.func = patchPatriotsGatewayBody(gateway.func);
   gateway.initialize = patchPatriotsGatewayInitialize(gateway.initialize);
@@ -181,14 +179,14 @@ export function composePatriotsArtifacts(rawSource, { assertPostimages = true } 
     PATRIOTS_PREIMAGE.evaluatorFunc, PATRIOTS_PREIMAGE.evaluatorEmbedded);
   previewEvaluator.func = patchPatriotsEvaluator(previewEvaluator.func,
     PATRIOTS_PREIMAGE.previewEvaluatorFunc, PATRIOTS_PREIMAGE.previewEvaluatorEmbedded);
-  const recomposedPreview = patchTopokratyCopayPreviewBody(previewSources(flow, {
-    pins: { ...pins, booking: sha256(gateway.func), evaluator: sha256(evaluator.func) },
-    installedUsageSha256: PATRIOTS_PREIMAGE.usageBlock,
-  }).router);
-  if (!recomposedPreview.includes(PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR)) {
-    throw new Error('Patriots preview category mapping is absent');
+  preview.func = preview.func.replace(CATEGORY_ANCHOR,
+    PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR);
+  // Both routes receive the same exact three-case delta. Preserve every other
+  // installed preview helper, including the two-hour plan's day bucket.
+  if (gateway.func.split(PATRIOTS_CATEGORY_MAPPING).length !== 2
+    || preview.func.split(PATRIOTS_CATEGORY_MAPPING).length !== 2) {
+    throw new Error('Booking and preview category deltas differ');
   }
-  preview.func = recomposedPreview;
   if (assertPostimages) {
     assertHash(gateway.func, PATRIOTS_POSTIMAGE.gatewayFunc, 'Gateway body postimage');
     assertHash(gateway.initialize, PATRIOTS_POSTIMAGE.gatewayInitialize, 'Gateway initialize postimage');
