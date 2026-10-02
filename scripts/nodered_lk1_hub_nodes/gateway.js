@@ -886,7 +886,17 @@ if (ctx.step === "lk1_usage_operations") {
           && String(booking.paymentType || booking.paymentMethod || "").toUpperCase() === "SUBSCRIPTION") {
           const duration = eventDurationMinutes(booking.exercise || booking);
           const free = decision.gameMinutes.freeMinutes;
-          if (!Number.isSafeInteger(free) || free !== duration || free > ctx.lk1.rule.freeGameMinutesPerDay
+          // The club game of «Дружба Топократы» carries a game of up to 90 minutes with one
+          // visit, so its free minutes legitimately exceed the day's 60-minute bucket. The
+          // exemption is bound to the club pack and to a club direction, and the free minutes
+          // still have to equal the whole event; every other covered game keeps the reviewed
+          // ceiling. `typeof` keeps an un-composed body on the reviewed behaviour.
+          const clubFreeVisit = typeof isTopokratyClubPack === "function"
+            && typeof isTopokratyExercise === "function"
+            && isTopokratyClubPack({ productId: operation.lk1.rule?.productId })
+            && isTopokratyExercise(operation.lk1.target);
+          const freeCeiling = clubFreeVisit ? duration : ctx.lk1.rule.freeGameMinutesPerDay;
+          if (!Number.isSafeInteger(free) || free !== duration || free > freeCeiling
             || (operation.lk1.target?.durationMinutes !== undefined && operation.lk1.target.durationMinutes !== duration)) {
             return lk1Stop(ctx, "LK1_ALLOWANCE_BINDING_INVALID");
           }

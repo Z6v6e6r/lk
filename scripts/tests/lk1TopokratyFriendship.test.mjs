@@ -658,3 +658,15 @@ test('the booking router classifies the club directions without the Viva name', 
   assert.equal(resolve({ type: { id: 2349 } }), null);
   assert.equal(resolve({ direction: { id: 6152, name: 'Атланты' } }), null);
 });
+
+test('the allowance binding admits the club free-visit game and keeps the ordinary ceiling', () => {
+  // A 90-minute club game records freeMinutes = duration, which exceeds the day's 60-minute
+  // bucket. The resumed-operation allowance must accept exactly that club pair and nothing else.
+  for (const marker of [
+    'const clubFreeVisit = typeof isTopokratyClubPack === "function"',
+    '&& isTopokratyExercise(operation.lk1.target);',
+    'const freeCeiling = clubFreeVisit ? duration : ctx.lk1.rule.freeGameMinutesPerDay;',
+    '|| free > freeCeiling',
+  ]) assert.ok(gatewaySource.includes(marker), marker);
+  assert.equal(gatewaySource.includes('free > ctx.lk1.rule.freeGameMinutesPerDay'), false);
+});
