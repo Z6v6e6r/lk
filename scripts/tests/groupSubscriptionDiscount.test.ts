@@ -150,3 +150,12 @@ test("a club training co-pay is quoted as the paid share above the free hour", (
     freeMinutes: 0, paidMinutes: 120 }, "group", "actor", now));
   assert.ok(isGroupSubscriptionDiscountQuote({ ...quote, freeMinutes: 0, paidMinutes: 60 }, "group", "actor", now));
 });
+
+
+test("equal automatic group prices have stable instance selection and ignore unavailable quotes", () => {
+  const product = { id: quote.productId, cost: quote.basePriceMinor, source: "one-time" };
+  const tie = { ...quote, subscriptionId: "000-first" };
+  const unavailable = { ...quote, subscriptionId: "bad", status: "UNAVAILABLE" as const, amountMinor: null };
+  assert.equal(matchGroupSubscriptionDiscount([quote, tie, unavailable], product), tie);
+  assert.equal(matchGroupSubscriptionDiscount([unavailable, tie, quote], product), tie);
+});

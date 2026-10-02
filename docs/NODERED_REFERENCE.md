@@ -36,6 +36,42 @@ The existing distinct-operation read/decide/insert race is unchanged: these
 calculations are instance-scoped, but atomic quota reservation under concurrent
 requests is not proven. This remains separate follow-up work.
 
+## Subscription calculation repair (2026-10-02, activation separate)
+
+`POST /lk/subscriptions/game-price-preview` derives all lexical dependencies of the
+installed booking usage block and uses the exact installed managed evaluator.
+This keeps per-instance counters and first-event/Topokraty rules aligned with
+booking, including provider bookings that already reserve an allowance.
+
+After ownership is proven for every requested instance, a successful metadata
+lookup with no matching row makes only that instance `UNAVAILABLE`. Conflicting,
+duplicate, foreign or malformed metadata, failed common reads and an unconfirmed
+tariff still reject the whole preview. An unavailable quote never supplies a
+discount. Failure logs contain only a bounded code, stage and correlation ID.
+
+Interfaces without a subscription selector rank confirmed eligible quotes by
+amount (free first, then cheapest), with instance ID as a stable tie-breaker.
+The selected quote's exact instance ID goes into booking. Interfaces with a
+selector retain the explicit selection. Game candidate filtering requires one
+visit; the authoritative evaluator determines the charge and overage.
+
+`scripts/patch_live_subscription_calculation_repair.mjs` prepares a candidate from
+a fresh verified private workspace; it never applies it. It pins the reviewed
+full source and function preimages and changes only `func` on these four nodes:
+`lk_subscription_price_preview_20260908_router`, `_evaluate`, `_final`, `_error`.
+The booking router/evaluator, topology, initializers and data remain unchanged.
+The focused composer also retains the installed club-only refusal through the
+existing reviewed Topokraty generation wrapper; it does not change booking policy.
+Usage: `node scripts/patch_live_subscription_calculation_repair.mjs --workspace
+/private/live --output /private/new/candidate.json --report /private/new/report.json`
+(output parent must exist, be canonical and mode 0700; outputs must be new).
+Source drift requires a new audit, never a hash override. Before separately
+authorized activation, validate the exact graph contract and fresh live source;
+retain the private preimage for a guarded four-function rollback. Rollback of
+source cannot reverse subsequent provider bookings. Concurrency guarantees are
+unchanged. Offline production-snapshot tests use the private
+`LK_CALCULATION_REPAIR_FLOW_FIXTURE`; portable regression tests run in CI.
+
 ## Subscription product identity (implementation, activation separate)
 
 Owner: LK subscription gateway. Audience: LK users of the existing Viva tenant.

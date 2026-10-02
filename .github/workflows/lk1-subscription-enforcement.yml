@@ -358,6 +358,15 @@ jobs:
           scripts/tests/cabinetBookingConversionGuard.test.ts
           scripts/tests/gamesCreateBookingConvertGuard.test.ts
           scripts/tests/subscriptionPreviewUsagePatch.test.mjs
+          scripts/tests/subscriptionPricePreview.test.ts
+          scripts/tests/subscriptionPricePreviewHook.test.mjs
+          scripts/tests/subscriptionPricePreview.apiClient.test.mjs
+          scripts/tests/subscriptionPricePreviewBackend.test.mjs
+          scripts/tests/subscriptionPricePreviewAside.test.mjs
+          scripts/tests/subscriptionPricePreviewIngress.test.mjs
+          scripts/tests/subscriptionSchedulePrefetch.test.mjs
+          scripts/tests/publicCreateFlow.devRouting.test.ts
+          scripts/tests/splitSubscriptionAvailability.test.ts
           scripts/tests/subscriptionAuditFixes.test.mjs
           scripts/tests/tournamentPendingPayment.test.mjs
           scripts/tests/subscriptionProductIdentity.test.mjs
@@ -424,6 +433,10 @@ jobs:
           node --test
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
+          scripts/tests/lk1PlanRulesPreview.test.mjs
+          scripts/tests/subscriptionPricePreviewSources.test.mjs
+          scripts/tests/subscriptionInstanceLimits.test.mjs
+          scripts/tests/subscriptionCalculationRepair.test.mjs
           scripts/tests/lk1SiriusStationLegacy.test.mjs
           scripts/tests/lk1StationExclusionsHotfix.test.mjs
           scripts/tests/lk1MoneySubscriptionValidity.test.mjs

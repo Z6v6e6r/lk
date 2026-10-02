@@ -50,7 +50,7 @@ const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paid
   ctx.quotes.push({ subscriptionId, selectionKey: ctx.selectionKey, status, basePriceMinor: ctx.basePriceMinor,
     amountMinor, freeMinutes, paidMinutes, reasonCode,
     ...(eventRoute ? { kind: eventRoute.kind, exerciseId: ctx.exerciseId,
-      actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.catalog[ctx.metadata[subscriptionId].productId],
+      actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.metadata[subscriptionId] ? ctx.catalog[ctx.metadata[subscriptionId].productId] : undefined,
       discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}), evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
 // The Viva direction of the event, read through the same aliases the booking gateway uses,
@@ -193,16 +193,23 @@ if (ctx.step === 'subscriptions') {
 if (ctx.step === 'metadata') {
   if (msg.error || !Array.isArray(msg.payload)) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
   ctx.metadata = {};
+  ctx.instanceErrors = {};
   // The same resolver decides which products carry a rule; the selected
   // instance's product comes from its server-owned identity, never from a name.
   ctx.rules = {};
   for (const id of ctx.requestedIds) {
+    const providerProductIds = canonical.collectExactProductIds(ctx.subscriptions[id]);
+    if (new Set(providerProductIds).size > 1) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     const matches = msg.payload.filter(row => row?._id === key('instance', ctx.actorClientId, id));
     const row = matches[0];
+    if (matches.length === 0) {
+      ctx.instanceErrors[id] = 'SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE';
+      continue;
+    }
     if (matches.length !== 1 || row.kind !== 'instance' || row.tenantKey !== ctx.tenantKey
       || row.actorClientId !== ctx.actorClientId || row.subscriptionId !== id || row.invalid === true
       || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[0-9a-f]{12}$/i.test(row.productId || '')
-      || canonical.collectExactProductIds(ctx.subscriptions[id]).some(product => product !== row.productId.toLowerCase())) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
+      || providerProductIds.some(product => product !== row.productId.toLowerCase())) return stop('SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     ctx.metadata[id] = row;
     const configured = previewRule([{ ...ctx.subscriptions[id], productId: row.productId.toLowerCase() }],
       ctx.target.stationId);
@@ -216,7 +223,7 @@ if (ctx.step === 'metadata') {
     // date before the rule, or no plan rule at all) stay in the batch and are quoted at
     // the ordinary event tariff below. Dropping them produced an empty quote batch and
     // blocked every group training and tournament booking for that cohort (2026-09-15).
-    ctx.managedIds = ctx.requestedIds.filter(id => ctx.rules[id].matched && !ctx.rules[id].legacy);
+    ctx.managedIds = ctx.requestedIds.filter(id => ctx.rules[id]?.matched && !ctx.rules[id].legacy);
     ctx.outOfContourIds = ctx.requestedIds.filter(id => !ctx.managedIds.includes(id));
   }
   return find('catalog', { _id: { $in: [...new Set(Object.values(ctx.metadata).map(row => key('product', row.productId)))] } });
@@ -416,6 +423,10 @@ if (ctx.step === 'evaluate') {
 while (ctx.step === 'next') {
   const id = ctx.pending.shift();
   if (!id) { ctx.done = true; ctx.statusCode = 200; return out(4); }
+  if (ctx.instanceErrors?.[id]) {
+    quote(id, 'UNAVAILABLE', null, 0, 0, ctx.instanceErrors[id]);
+    continue;
+  }
   const live = ctx.subscriptions[id];
   const productId = ctx.metadata[id].productId;
   const name = ctx.catalog[productId];

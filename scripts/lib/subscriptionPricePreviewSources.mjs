@@ -56,7 +56,7 @@ const collectDeclarations = (source, label) => {
   return { file, declarations };
 };
 
-const dependenciesFor = (record, declarations) => {
+const dependenciesFor = (record, declarations, unbound = null) => {
   const dependencies = new Set();
   const scope = parent => ({ bindings: new Set(), parent });
   const isBound = (current, name) => {
@@ -75,7 +75,10 @@ const dependenciesFor = (record, declarations) => {
   };
   const visit = (node, current) => {
     if (ts.isIdentifier(node)) {
-      if (!isNonReferenceName(node) && !isBound(current, node.text) && declarations.has(node.text)) dependencies.add(node.text);
+      if (!isNonReferenceName(node) && !isBound(current, node.text)) {
+        if (declarations.has(node.text)) dependencies.add(node.text);
+        else unbound?.add(node.text);
+      }
       return;
     }
     if (ts.isFunctionLike(node)) {
@@ -88,6 +91,21 @@ const dependenciesFor = (record, declarations) => {
     }
     if (ts.isBlock(node) || ts.isSourceFile(node)) {
       const inner = scope(current); visitList(node.statements, inner); return;
+    }
+    if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
+      const inner = scope(current);
+      if (node.initializer && ts.isVariableDeclarationList(node.initializer)) {
+        for (const declaration of node.initializer.declarations) {
+          for (const name of bindingNames(declaration.name)) inner.bindings.add(name);
+        }
+      }
+      if (node.initializer) visit(node.initializer, inner);
+      if (ts.isForStatement(node)) {
+        if (node.condition) visit(node.condition, inner);
+        if (node.incrementor) visit(node.incrementor, inner);
+      } else visit(node.expression, inner);
+      visit(node.statement, inner);
+      return;
     }
     if (ts.isCatchClause(node)) {
       const inner = scope(current);
@@ -134,4 +152,24 @@ export function extractSubscriptionPricePreviewSources(inputs) {
     seen.add(input.name);
     return { name: input.name, ...extractSubscriptionPricePreviewSource(input) };
   });
+}
+
+/** Find the lexical dependencies of the exact allowance block, including bare helper calls. */
+export function subscriptionPreviewUsageRoots(source, usage) {
+  const probeName = '__subscriptionPreviewUsageProbe';
+  const probe = `const ${probeName} = msg => {
+    const ctx = msg._subscriptionBooking;
+    const OUTPUT_MANAGED_POLICY = 6;
+    const emit = () => msg;
+    const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
+    ${usage}
+  };`;
+  const { declarations } = collectDeclarations(`${source}\n${probe}`, 'preview allowance');
+  const unbound = new Set();
+  const roots = dependenciesFor(declarations.get(probeName), declarations, unbound);
+  const host = new Set(['Array', 'Boolean', 'Date', 'JSON', 'Math', 'Number', 'Object', 'Set', 'String',
+    'undefined', 'NaN', 'Infinity']);
+  const missing = [...unbound].filter(name => !host.has(name));
+  if (missing.length) throw new Error(`Preview allowance has undeclared dependencies: ${missing.join(', ')}`);
+  return [...roots];
 }

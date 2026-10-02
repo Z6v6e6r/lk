@@ -1,4 +1,4 @@
-import { isSubscriptionEventDiscountQuote, type SubscriptionEventDiscountQuote } from "./groupSubscriptionDiscount.ts";
+import { isSubscriptionEventDiscountQuote, matchSubscriptionEventDiscount, type SubscriptionEventDiscountQuote } from "./groupSubscriptionDiscount.ts";
 import type { TournamentVivaProduct } from "./tournamentSignupApi.ts";
 
 export interface TournamentSubscriptionDiscountQuote extends SubscriptionEventDiscountQuote {
@@ -18,9 +18,7 @@ export function matchTournamentSubscriptionDiscount(
   quotes: TournamentSubscriptionDiscountQuote[],
   product: { id: string; cost: number | null; source: string },
 ): TournamentSubscriptionDiscountQuote | null {
-  if (product.source !== "one-time") return null;
-  return quotes.find(q => q.kind === "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1"
-    && q.status === "AVAILABLE" && q.productId === product.id && q.basePriceMinor === product.cost) ?? null;
+  return matchSubscriptionEventDiscount(quotes, "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1", product);
 }
 
 export function buildTournamentSubscriptionDiscountProduct(

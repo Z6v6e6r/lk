@@ -73,6 +73,7 @@ const ROOTS = ['isObj', 'unwrapRecord', 'isValidDateKey', 'hasCompleteBookingLis
   'eventDurationMinutes', 'eventStartsAt', 'exerciseRoomId', 'resolveCategory', 'resolvePlanKey',
   'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode', 'extractItems', 'managedExternalEventTypeId',
   'identitySelected', 'identityOwned', 'identityMoneyOwned', 'lk1LifecycleInstant', 'lk1Fields', 'lk1Config',
+  'exerciseDirectionId', 'LK1_FREE_FIRST_EVENT_PRODUCTS', 'LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES', 'lk1OperationCategory',
   // Referenced by the product-identity helpers, which never declare it: the
   // composition has to carry it as a contract constant (see PREVIEW_CONTRACT_ROOTS).
   'LK1_OVERLAY_HUB_PRODUCT_ID', 'MANAGED_ENFORCEMENT_PURCHASE_FROM'];
@@ -122,6 +123,8 @@ assert.doesNotMatch(availability, /\brequire\s*\(/);
 // The release reads the live booking node; this synthetic body carries the same
 // roots and anchors so the real composition path is exercised here.
 const availabilitySource = `const preflightAvailability = (() => { const exports = {}; \n${availability}\n return exports; })();`;
+const topokratySource = read('../lib/topokratyExclusion.mjs').replace(/^export /gm, '')
+  + '\n// TOPOKRATY_SUBSCRIPTION_UNAVAILABLE';
 const configuredParts = parts.filter(text => !/^const lk1Config = /.test(text));
 const helperWithoutConfig = configuredParts.join('\n');
 const entrySource = read('../nodered_subscription_price_preview_nodes/entry.js');
@@ -140,10 +143,11 @@ const installedUsage = gatewayUsage.replace(/ {4}\/\/ AUDIT_BINDING_START[\s\S]*
   .replace('\n    || benefitBookings.has(normalizeId(bookingId(booking)))', '');
 const policyAnchor = 'if (ctx.step === "lk1_policy_decision") { return null; }';
 const defaultCoverageTables = ['LK1_FREE_FIRST_EVENT_PRODUCTS', 'LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES']
+  .filter(name => !declared.has(name))
   .map(name => new RegExp(`const ${name} = Object\\.freeze\\(\\{[\\s\\S]*?\\}\\);`).exec(sources.gateway)[0]).join('\n');
 const bookingBody = ({ base = helperSource, reader = '', config = null } = {}) => [base
   + (config === null ? '' : `\nconst lk1Config = ${config};`),
-  availabilitySource, reader, defaultCoverageTables, installedUsage, policyAnchor].join('\n');
+  availabilitySource, topokratySource, reader, defaultCoverageTables, installedUsage, policyAnchor].join('\n');
 const syntheticEvaluator = evaluator;
 const syntheticSplit = sources.split;
 const syntheticJoin = read('../nodered_games_nodes/fn_split_join_prepare.js');
@@ -182,7 +186,8 @@ const coverageTables = `const LK1_FREE_FIRST_EVENT_PRODUCTS = {
   'fixture-scoped': ['group_training', 'tournament']
 };
 const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = { 'fixture-scoped': [5278] };`;
-const hoistedBody = [helperSource, availabilitySource, hubTransition().reader,
+const hoistedBase = parts.filter(text => !/^const (LK1_FREE_FIRST_EVENT_PRODUCTS|LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES|exerciseDirectionId|lk1OperationCategory)\s*=/.test(text)).join('\n');
+const hoistedBody = [hoistedBase, availabilitySource, topokratySource, hubTransition().reader,
   coverageTables, usageHelpers, coverageDeclaration, hoistedUsage + policyAnchor].join('\n');
 const hoistedPreview = previewSources(syntheticFlow({ body: hoistedBody, initialize: hubTransition().initialize }), {
   pins: syntheticPins(hoistedBody), installedUsageSha256: sha(hoistedUsage),
@@ -265,7 +270,7 @@ test('generated usage retains fail-closed membership validation', () => {
 test('a reviewed generation with step-local coverage still composes and executes', () => {
   // The same helper can remain inside the step in an older generation. It must
   // not be requested as a top-level extraction root merely because text matches.
-  const body = [helperSource, availabilitySource, hubTransition().reader,
+  const body = [hoistedBase, availabilitySource, topokratySource, hubTransition().reader,
     coverageTables, usageHelpers, gatewayUsage + policyAnchor].join('\n');
   const preview = previewSources(syntheticFlow({ body, initialize: hubTransition().initialize }), {
     pins: syntheticPins(body), installedUsageSha256: sha(gatewayUsage),
@@ -374,12 +379,12 @@ function preview(options = {}) {
     ({ _id: JSON.stringify(['product', 'iSkq6G', productId]), kind: 'product', tenantKey: 'iSkq6G',
       productId, name: 'Fixture plan' }));
   const provider = {
-    groupExercise: options.groupExercise,
-    groupTariff: [{ id: service, name: 'Разовая', cost: 550000, productType: 'SERVICE' }],
     subscriptions: { content: subscriptions, totalElements: subscriptions.length },
     activeBookings: { content: options.active || [], totalElements: (options.active || []).length },
     historyBookings: { content: options.history || [], totalElements: (options.history || []).length },
     metadata: instances, catalog, operations: options.operations || [],
+    groupExercise: options.exercise || options.groupExercise,
+    groupTariff: [{ id: options.exercise ? uuid(99) : service, productType: 'SERVICE', cost: options.exercise ? 600000 : 550000 }],
     room: { id: room }, studios: [{ id: station }], subservices: [{ id: service }],
     // Viva scopes the exact tariff by sub-service id; the canonical extractor
     // reads that envelope (major units) and the router converts to minor ones.
@@ -389,13 +394,14 @@ function preview(options = {}) {
   };
   const findings = [];
   const request = { req: { headers: { authorization: 'Bearer fixture-user' } },
-    // Both target shapes are fixtures: the club/PRO-training suite drives a synthetic
+    // The target shapes are fixtures: the club/PRO-training suite drives a synthetic
     // GROUP_TRAINING exercise, the Patriots suite drives an already-resolved EXISTING_GAME
-    // (whose direction must stay the one the server resolved). Everything else keeps the
-    // plain create-game target merge.
-    payload: { target: options.groupExercise
+    // (whose direction must stay the one the server resolved), and the independent-limits
+    // suite passes a fully-formed eventTarget. Everything else keeps the plain
+    // create-game target merge.
+    payload: { target: options.eventTarget || (options.groupExercise
       ? { targetKind: "GROUP_TRAINING", exerciseId: options.groupExercise.id }
-      : options.target?.targetKind === 'EXISTING_GAME' ? options.target : { ...target, ...options.target },
+      : options.target?.targetKind === 'EXISTING_GAME' ? options.target : { ...target, ...options.target }),
       subscriptionIds: options.ids || subscriptions.map(row => row.subscriptionId) } };
   // entry/final return `msg`; the router returns one message per output port.
   let message = scope.entry(request, host, { warn() {} });
@@ -824,6 +830,73 @@ test('an excluded station prices the pre-rollout plan, not the managed contour',
     stationExclusions: { formatVersion: 1, exclusions: [{ stationId: station, productIds: [FRIENDSHIP] }] } }));
   assert.equal(otherProduct.status, 'AVAILABLE');
   assert.equal(otherProduct.amountMinor, managed.amountMinor);
+});
+
+
+test('an owned instance missing metadata cannot disable the healthy instance, in either order', requiresResolver, () => {
+  const a = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(20) });
+  const b = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(21) });
+  const metadata = [{ _id: JSON.stringify(['instance', 'iSkq6G', actor, a.subscriptionId]),
+    kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: a.subscriptionId, productId: HUB_PRODUCT_ID }];
+  for (const subscriptions of [[a, b], [b, a]]) {
+    const result = preview({ subscriptions, instances: metadata });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.quotes.length, 2);
+    assert.equal(result.quotes.find(q => q.subscriptionId === a.subscriptionId).status, 'AVAILABLE');
+    const unavailable = result.quotes.find(q => q.subscriptionId === b.subscriptionId);
+    assert.equal(unavailable.status, 'UNAVAILABLE');
+    assert.equal(unavailable.amountMinor, null);
+    assert.equal(unavailable.reasonCode, 'SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
+    assert.equal(unavailable.basePriceMinor, result.quotes[0].basePriceMinor);
+  }
+  const exercise = { id: uuid(90), typeId: 605, directionId: 3108, studioId: station, roomId: room,
+    timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [a, b] };
+  const event = preview({ subscriptions: [b, a], instances: metadata, exercise,
+    eventTarget: { targetKind: 'GROUP_TRAINING', exerciseId: exercise.id } });
+  assert.equal(event.statusCode, 200);
+  assert.equal(event.quotes.find(q => q.subscriptionId === a.subscriptionId).status, 'AVAILABLE');
+  const unavailableEvent = event.quotes.find(q => q.subscriptionId === b.subscriptionId);
+  assert.equal(unavailableEvent.status, 'UNAVAILABLE');
+  assert.equal(unavailableEvent.amountMinor, null);
+  assert.equal(unavailableEvent.basePriceMinor, 600000);
+});
+
+test('contradictory metadata stays a whole-request refusal', requiresResolver, () => {
+  const a = subscription(HUB_PRODUCT_ID);
+  const row = { _id: JSON.stringify(['instance', 'iSkq6G', actor, a.subscriptionId]), kind: 'instance',
+    tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: a.subscriptionId, productId: HUB_PRODUCT_ID };
+  for (const delta of [{ actorClientId: uuid(999) }, { tenantKey: 'foreign' }, { invalid: true }, { productId: RA }]) {
+    assert.throws(() => preview({ instances: [{ ...row, ...delta }] }), /SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE/);
+  }
+  assert.throws(() => preview({ instances: [row, row] }), /SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE/);
+});
+
+test('conflicting provider product aliases fail globally even when metadata is absent', requiresResolver, () => {
+  const a = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(20) });
+  const b = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(21), templateId: RA });
+  const metadata = [{ _id: JSON.stringify(['instance', 'iSkq6G', actor, a.subscriptionId]),
+    kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: a.subscriptionId, productId: HUB_PRODUCT_ID }];
+  for (const subscriptions of [[a, b], [b, a]]) {
+    assert.throws(() => preview({ subscriptions, instances: metadata }), /SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE/);
+  }
+});
+
+test('generated event usage resolves RA and Academy provider-booking direction without ReferenceError', requiresResolver, () => {
+  const academy = '9eb8a7a4-c195-492a-95e4-3fb82899ac10';
+  for (const productId of [RA, academy]) {
+    const sub = subscription(productId);
+    const exercise = { id: uuid(90), typeId: 605, directionId: 3108, studioId: station, roomId: room,
+      timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [sub] };
+    const booking = { id: uuid(91), clientSubscriptionId: sub.subscriptionId, paymentType: 'SUBSCRIPTION',
+      exercise: { ...exercise, id: uuid(92) } };
+    const result = preview({ subscriptions: [sub], planProducts: [productId], active: [booking], exercise,
+      eventTarget: { targetKind: 'GROUP_TRAINING', exerciseId: exercise.id } });
+    assert.equal(result.error, undefined);
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.quotes[0].amountMinor, 300000, 'existing event uses the discount, not another free event');
+    assert.equal(result.findings[0].input.usage.freeFirstEvent.usedEventsToday, 1);
+    assert.equal(result.scope.canonical.exerciseDirectionId(exercise), 3108);
+  }
 });
 
 const proGroupExercise = (extra = {}) => ({ id: uuid(60), type: { id: 605 },
