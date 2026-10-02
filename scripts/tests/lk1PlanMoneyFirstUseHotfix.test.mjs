@@ -170,7 +170,12 @@ test("the reviewed sources carry the reviewed deltas verbatim", () => {
     path.join(repoRoot, "scripts/nodered_subscription_product_nodes/gateway.js"), "utf8");
   const reviewedHub = fs.readFileSync(path.join(repoRoot, "scripts/nodered_lk1_hub_nodes/gateway.js"), "utf8");
   assert.ok(reviewedProduct.includes(PLAN_FIRST_USE_DELTAS[0].after), "product identity projection drift");
-  assert.ok(reviewedHub.includes(PLAN_FIRST_USE_DELTAS[1].after), "first-use lifecycle guards drift");
+  // The later Patriots refusal is inserted into this otherwise frozen lifecycle
+  // fragment. Remove that one additive line before comparing the older release.
+  const baselineHub = reviewedHub.replace(
+    '    if (firstUse && patriotsMoneyOnlyEvent) violations.push("patriots_activation_required");\n', '');
+  assert.ok(baselineHub.includes(PLAN_FIRST_USE_DELTAS[1].after), "first-use lifecycle guards drift");
+  assert.ok(reviewedHub.includes('if (firstUse && patriotsMoneyOnlyEvent) violations.push("patriots_activation_required");'));
   // The live body is reformatted (four-space operands), so the helper delta is compared by
   // its reviewed fragment rather than by the live indentation.
   assert.ok(reviewedHub.includes("|| !isObj(quote) || !isObj(quote.rule) || !isObj(quote.target)"),

@@ -1006,6 +1006,11 @@ const resolveCategory = (value) => {
   // to `group_training` even if a Viva rename drops the «игра»/«тренировка» token from the
   // label. The shared exercise type 2349 of «Атланты» (direction 6152) is deliberately not
   // added: only the club direction ids are pinned.
+  // Patriots friendship pins its own direction ids of the same shared type 2349 narrow
+  // enough that direction 6152 stays unresolved.
+  if (typeId === 2349 && directionId === 6181) return "open_game";
+  if (typeId === 2349 && directionId === 6306) return "tournament";
+  if (typeId === 2349 && directionId === 6307) return "group_training";
   if ([1613].includes(typeId) || [4588, 6180].includes(directionId)) return "open_game";
   if ([839, 1013].includes(typeId) || [2617, 3284, 4769].includes(directionId)) return "tournament";
   if ([605, 847, 963, 1208].includes(typeId) || [6233].includes(directionId)) return "group_training";

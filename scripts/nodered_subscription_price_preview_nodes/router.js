@@ -485,7 +485,16 @@ while (ctx.step === 'next') {
     if ((!Number.isSafeInteger(ctx.groupDiscountPercent) || ctx.groupDiscountPercent < 0 || ctx.groupDiscountPercent > 100)) return stop(eventRoute.error + '_RULE_UNCONFIRMED');
   }
   const visitCount = ctx.previewResolved ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
-  if (!eventRoute && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned, new Set(['1613']), new Set(['4588']),
+  // Existing Patriots games have their own Viva direction/type. Both values come from
+  // the resolved exercise; a client-provided target cannot widen the product scope.
+  const patriotsGameType = !eventRoute && productId.toLowerCase() === '37ab3713-4431-4815-96ba-d7ece76a9241'
+    ? canonical.managedExternalEventTypeId(exercise) : null;
+  if (patriotsGameType && !['viva:direction:4588:type:1613', 'viva:direction:6181:type:2349'].includes(patriotsGameType)) {
+    quote(id, 'UNAVAILABLE', null, 0, 0, 'EVENT_NOT_INCLUDED'); continue;
+  }
+  const patriotsClubGame = patriotsGameType === 'viva:direction:6181:type:2349';
+  if (!eventRoute && canonical.preflightAvailability.filterSplitEligibleSubscriptions(owned,
+    new Set([patriotsClubGame ? '2349' : '1613']), new Set([patriotsClubGame ? '6181' : '4588']),
     ctx.target.stationId, visitCount, ctx.target.durationMinutes, ctx.target.startsAt.slice(0, 10)).length !== 1) {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue;
   }
@@ -538,7 +547,8 @@ while (ctx.step === 'next') {
           // booking gateway carries in the same field of its server-resolved target.
           directionId: previewDirectionId(canonical, exercise),
           ...(ctx.target.proTraining === true ? { proTraining: true } : {}),
-          priceProductId: ctx.priceProductId } : {}) } } };
+          priceProductId: ctx.priceProductId } : {
+          externalEventTypeId: canonical.managedExternalEventTypeId(exercise) }) } } };
   // The batch is deliberately wider than one product: the query above asks for every product
   // this client owns (`ctx.ruleProductIds`), because the shared usage builder scopes the day and
   // minute accounting per subscription. Demanding a single rule product here rejected the whole

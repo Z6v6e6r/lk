@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { EVENT_ROUTE_TARGETS as targets, patchEventPaymentBody, composeEventPaymentRoutes as compose,
   writeEventPaymentRoutes } from '../prepare_event_payment_routes_upgrade.mjs';
 import { GROUP_UPGRADE_TARGETS, hash } from '../prepare_group_event_payment_upgrade.mjs';
@@ -62,7 +63,7 @@ test('release refuses unknown preimages, non-function drift, repeat apply and ba
   const built=compose(bytes,'event-fixture',pins);assert.throws(()=>compose(built.candidateBytes,'event-fixture',pins),/Preimage drift/);
 });
 test('CLI refuses raw flow export inside Git',()=>{
-  const root=new URL('../../',import.meta.url).pathname.replace(/\/$/,'');
+  const root=fileURLToPath(new URL('../../',import.meta.url)).replace(/\/$/,'');
   assert.throws(()=>writeEventPaymentRoutes('/missing',root+'/forbidden-event-output','event-fixture'),/outside Git/);
 });
 test('fresh private live snapshot matches all frozen pins and preserves split function byte-for-byte',{
