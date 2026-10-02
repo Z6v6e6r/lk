@@ -23,6 +23,20 @@ test('the focused composer refuses an unreviewed preimage before generation', ()
   assert.throws(() => composeSubscriptionCalculationRepair(Buffer.from('[]')), /preimage drift/);
 });
 
+test('event failure log allowlist excludes raw provider details and invalid identifiers', () => {
+  const warnings = [];
+  const message = { _msgid: 'fixture-correlation', _subscriptionPricePreview: {
+    done: true, statusCode: 503, error: 'LK1_EVENT_TARIFF_UNVERIFIED', step: 'groupTariff',
+    exerciseId: 'fixture-sensitive-identity', tariffCount: -1,
+    errorDetails: { reason: 'fixture-sensitive-provider-message', observed: { token: 'fixture-sensitive-token' } },
+  } };
+  new Function('msg', 'node', source('final'))(message, { warn: text => warnings.push(text) });
+  assert.deepEqual(JSON.parse(warnings[0]), { event: 'subscription_price_preview_failed',
+    code: 'LK1_EVENT_TARIFF_UNVERIFIED', step: 'groupTariff', exerciseId: null,
+    tariffCount: null, reason: 'LK1_EVENT_TARIFF_UNVERIFIED', correlationId: 'fixture-correlation' });
+  assert.ok(!warnings[0].includes('fixture-sensitive'));
+});
+
 const fixture = process.env.LK_CALCULATION_REPAIR_FLOW_FIXTURE;
 test('exact reviewed flow changes only four preview bodies and preserves the booking evaluator', { skip: !fixture }, () => {
   const bytes = fs.readFileSync(fixture);

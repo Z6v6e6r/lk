@@ -289,7 +289,19 @@ if (ctx.step === 'price') {
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
 }
 if (ctx.step === 'groupTariff') {
-  if (!ok() || !canonical.hasCompleteBookingList(msg.payload)) return stop('LK1_EVENT_TARIFF_UNAVAILABLE');
+  const tariffDetails = (reason, stage, observed = {}) => ({
+    exerciseId: ctx.exerciseId, tariffCount: ctx.tariffCount ?? null, reason, stage, observed,
+  });
+  if (!ok()) {
+    ctx.errorDetails = tariffDetails('upstream_error', 'tariff_response');
+    return stop('LK1_EVENT_TARIFF_UNAVAILABLE');
+  }
+  if (!canonical.hasCompleteBookingList(msg.payload)) {
+    ctx.errorDetails = tariffDetails('incomplete_tariff_list', 'tariff_response');
+    return stop('LK1_EVENT_TARIFF_UNAVAILABLE');
+  }
+  const rows = canonical.extractItems(msg.payload);
+  ctx.tariffCount = rows.length;
   // Viva scopes this product list by the request, without echoing exerciseId.
   const tariffUrl = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${encodeURIComponent(ctx.exerciseId)}`;
   // Every refusal below names the exact sub-condition it refused on and the observed
@@ -297,7 +309,7 @@ if (ctx.step === 'groupTariff') {
   // decision is unchanged: the detail exists so a production refusal can be diagnosed
   // from the response instead of guessed, without widening what this node accepts.
   const tariffRefusal = (stage, observed) => {
-    ctx.errorDetails = { stage, observed };
+    ctx.errorDetails = tariffDetails(stage, stage, observed);
     return stop('LK1_EVENT_TARIFF_UNVERIFIED');
   };
   if (msg.method !== 'GET' || msg.url !== tariffUrl
@@ -305,8 +317,12 @@ if (ctx.step === 'groupTariff') {
     return tariffRefusal('request_url', { method: msg.method || null,
       urlMatch: msg.url === tariffUrl, responseUrlMatch: msg.responseUrl === undefined || msg.responseUrl === tariffUrl });
   }
-  const rows = canonical.extractItems(msg.payload);
-  if (rows.length !== 1 || !canonical.isObj(rows[0])) return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
+  if (rows.length !== 1 || !canonical.isObj(rows[0])) {
+    const reason = rows.length === 0 ? 'empty_tariff_list'
+      : rows.length > 1 ? 'multiple_tariffs' : 'invalid_tariff_record';
+    ctx.errorDetails = tariffDetails(reason, 'tariff_shape');
+    return stop("LK1_EVENT_TARIFF_AMBIGUOUS");
+  }
   const product = rows[0];
   const productIds = [product.id, product.productId].filter((id) => id !== undefined);
   const eventIds = [product.exerciseId, product.exercise?.id].filter((id) => id !== undefined);
