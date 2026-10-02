@@ -399,7 +399,11 @@ function preview(options = {}) {
   };
   const findings = [];
   const request = { req: { headers: { authorization: 'Bearer fixture-user' } },
-    // Keep the explicit event fixture and the server-resolved existing-game identity.
+    // The target shapes are fixtures: the club/PRO-training suite drives a synthetic
+    // GROUP_TRAINING exercise, the Patriots suite drives an already-resolved EXISTING_GAME
+    // (whose direction must stay the one the server resolved), and the independent-limits
+    // suite passes a fully-formed eventTarget. Everything else keeps the plain
+    // create-game target merge.
     payload: { target: options.eventTarget || (options.groupExercise
       ? { targetKind: "GROUP_TRAINING", exerciseId: options.groupExercise.id }
       : options.target?.targetKind === 'EXISTING_GAME' ? options.target : { ...target, ...options.target }),
