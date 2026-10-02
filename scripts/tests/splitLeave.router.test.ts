@@ -1096,7 +1096,11 @@ test("background retry atomically claims and increments an eligible local apply"
   assert.equal(hydrated._splitLeaveCtx.backgroundRetry, true);
 });
 
-test("legacy local-only self membership without an immutable key fails closed", () => {
+test("legacy local-only self membership without any anchor proceeds through a fresh snapshot generation", () => {
+  // This shape used to dead end on a 409 while recording nothing, so a player
+  // that the provider never billed could never leave the game. With no booking
+  // or membership identifier left anywhere in the game there is nothing to
+  // reconcile, so the frozen snapshot becomes the generation anchor.
   const game = selfGame();
   delete game.metadata.splitPayment.payments[0].bookingId;
   delete game.booking.bookingId;
@@ -1109,9 +1113,14 @@ test("legacy local-only self membership without an immutable key fails closed", 
   msg.statusCode = 200;
   msg.payload = { content: [] };
   const result = run("fn_split_leave_router.js", msg).result;
-  assert.equal(result[4], null);
-  assert.equal(result[1].statusCode, 409);
-  assert.match(result[1].payload.message, /поколение записи/);
+  assert.equal(result[1], null);
+  const operation = result[4];
+  assert.ok(operation);
+  assert.equal(operation._splitLeaveCtx.vivaTargetMode, "NONE");
+  const started = run("fn_split_leave_operation_start.js", operation).result[0];
+  const inserted = started.payload[1].$setOnInsert;
+  assert.equal(inserted.membershipVersion, operation._splitLeaveCtx.membershipVersion);
+  assert.deepEqual(inserted.bookingIds, []);
 });
 
 test("local-only self membership uses participant membershipId as its immutable generation", () => {
@@ -1711,6 +1720,52 @@ test("first leave of imported Viva player without prior operation still discover
   msg = run("fn_split_leave_router.js", msg).result[4];
   assert.equal(msg._splitLeaveCtx.vivaTargetMode, "BOOKINGS");
   assert.deepEqual(msg._splitLeaveCtx.initialBookingIds, ["first-booking"]);
+});
+
+function routeSelfLeaveToNoLiveBooking(game: Msg): Msg {
+  let msg = authorizeSelf(game);
+  msg.payload = [];
+  msg = run("fn_split_leave_operation_route.js", msg).result[0];
+  assert.equal(msg._splitLeaveCtx.localReconciliation, undefined);
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  assert.equal(msg.method, "GET");
+  // No live booking at all for this exercise in the provider read.
+  msg.statusCode = 200;
+  msg.payload = { content: [], last: true, totalElements: 0 };
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  assert.equal(msg.method, "GET");
+  const result = run("fn_split_leave_router.js", msg).result;
+  assert.equal(result[1], null, `expected a durable operation, got ${result[1]?.statusCode} ${result[1]?.payload?.message}`);
+  const operation = result[4];
+  assert.ok(operation);
+  return operation;
+}
+
+test("self leave without any live Viva booking still starts a durable operation", () => {
+  // Regression: a participant imported into the roster that the provider never
+  // billed (no booking id, no payment, no prior operation) used to dead end on
+  // "Не удалось зафиксировать поколение записи" and record nothing, so every
+  // retry failed the same way and the player could never leave the game.
+  const msg = routeSelfLeaveToNoLiveBooking(phantomGame());
+  assert.equal(msg._splitLeaveCtx.vivaTargetMode, "NONE");
+  assert.equal(msg._splitLeaveCtx.vivaVerification, "no_active_booking_for_exercise");
+  assert.match(String(msg._splitLeaveCtx.membershipVersion || ""), /^[a-z0-9]+$/);
+
+  const started = run("fn_split_leave_operation_start.js", msg).result[0];
+  assert.ok(started && Array.isArray(started.payload));
+  const inserted = started.payload[1].$setOnInsert;
+  assert.equal(inserted.vivaTargetMode, "NONE");
+  assert.deepEqual(inserted.bookingIds, []);
+  assert.equal(inserted.membershipVersion, msg._splitLeaveCtx.membershipVersion);
+  assert.equal(inserted._id, `${msg._splitLeaveCtx.gameId}:${msg._splitLeaveCtx.operationId}`);
+
+  // A retry of the same snapshot must reuse one idempotent generation...
+  assert.equal(routeSelfLeaveToNoLiveBooking(phantomGame())._splitLeaveCtx.operationId, msg._splitLeaveCtx.operationId);
+
+  // ...while a changed roster snapshot (for example a rejoin) gets a new one.
+  const rejoined = phantomGame();
+  rejoined.updatedAt = "2026-08-02T10:00:00.000Z";
+  assert.notEqual(routeSelfLeaveToNoLiveBooking(rejoined)._splitLeaveCtx.operationId, msg._splitLeaveCtx.operationId);
 });
 
 

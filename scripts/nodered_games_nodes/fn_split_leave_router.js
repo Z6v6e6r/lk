@@ -581,14 +581,50 @@ if (ctx.step === "verify_history") {
     ctx.discoveredHistoryBookingIds = Array.from(new Set(
       exactHistoryRows.map((row) => toStr(row?.id || row?.bookingId || row?.uuid)).filter(Boolean),
     ));
+    // Read-back proved this exercise holds no live booking, so there is no Viva
+    // booking id to anchor the membership generation. For a participant that was
+    // imported into the roster without any locally recorded booking of their own
+    // there is nothing left to reconcile, and without an anchor every attempt
+    // died here with 409 while leaving nothing durable - the player could never
+    // leave the game at all. Anchor that shape on the frozen game snapshot: a
+    // rejoin or roster move bumps `updatedAt` and yields a new generation, while
+    // retries of the same snapshot reuse one idempotent operation. A payment row
+    // of this very player that does carry a booking identifier still fails
+    // closed, because that identifier can be reconciled elsewhere.
+    const sameValue = (left, right) => Boolean(
+      left && right && String(left).trim().toLowerCase() === String(right).trim().toLowerCase(),
+    );
+    const paymentBelongsToTarget = (item) => {
+      const clientId = item.clientId || item.playerId || item.userId;
+      const phone = item.phoneNorm || item.phone || item.clientPhoneNorm || item.clientPhone;
+      if (!toStr(clientId) && !toStr(phone)) return true;
+      return sameValue(clientId, ctx.targetClientId) || sameValue(phone, ctx.targetPhoneNorm);
+    };
+    const hasTargetLocalBookingAnchor = asArray(ctx.game?.metadata?.splitPayment?.payments)
+      .filter(isObj)
+      .filter(paymentBelongsToTarget)
+      .some((item) => Boolean(
+        toStr(item.bookingId)
+        || asArray(item.bookingIds).some((bookingId) => Boolean(toStr(bookingId))),
+      ));
+    if (!ctx.membershipVersion) {
+      if (hasTargetLocalBookingAnchor) {
+        return fail(ctx, 202, "RETRY_REQUIRED", "Не удалось подтвердить отмену записи Viva. Обновите игру и повторите выход.");
+      }
+      if (!assignMembershipVersion(ctx, [
+        "no-active-booking",
+        ctx.gameId,
+        ctx.targetClientId || ctx.targetPhoneNorm,
+        ctx.game?.updatedAt,
+      ])) {
+        return fail(ctx, 409, "CONFLICT", "Не удалось зафиксировать поколение записи");
+      }
+    }
     ctx.preCancelVerification = false;
     ctx.vivaVerifiedAt = new Date().toISOString();
     ctx.vivaVerification = "no_active_booking_for_exercise";
     ctx.successMessage = "Вы вышли из игры";
     appendTrace(ctx, { step: "viva_verified_no_active_booking" });
-    if (!ctx.membershipVersion) {
-      return fail(ctx, 409, "CONFLICT", "Не удалось зафиксировать поколение записи");
-    }
     ctx.vivaTargetMode = "NONE";
     if (ctx.preOperationDiscovery === true) {
       ctx.preOperationDiscovery = false;
