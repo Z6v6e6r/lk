@@ -56,7 +56,7 @@ const planRulesModuleText = () => (typeof eventPaymentSources.planRulesSource ==
 // moved to the resolver, nothing pulled that declaration into the closure and the
 // composed node failed at runtime with a bare ReferenceError.
 const PREVIEW_CONTRACT_ROOTS = Object.freeze(['LK1_OVERLAY_HUB_PRODUCT_ID', 'MANAGED_ENFORCEMENT_PURCHASE_FROM']);
-// The free-first-event rule lives in the shared usage block, but its two inputs were added to the
+// The free-first-event rule lives in the shared usage block, but its dependencies were added to the
 // booking body after the first preview generations: they are extracted only when that body
 // declares them, so a reviewed composition of an older generation still composes.
 const FREE_FIRST_ROOT_DECLARATIONS = Object.freeze([
@@ -68,9 +68,16 @@ const FREE_FIRST_ROOT_DECLARATIONS = Object.freeze([
   // a composition from an older generation still composes.
   ['LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES', /(?:^|\n)\s*const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES\s*=/],
   ['lk1OperationCategory', /(?:^|\n)\s*const lk1OperationCategory\s*=/],
+  // Some installed generations hoist coverage out of the usage step. Both that
+  // helper and booking direction must be exported and bound in canonicalUsage.
+  ['lk1FreeFirstEventCovers', /(?:^|\n)\s*const lk1FreeFirstEventCovers\s*=/],
+  ['exerciseDirectionId', /(?:^|\n)\s*const exerciseDirectionId\s*=/],
 ]);
-const freeFirstRoots = (booking) => FREE_FIRST_ROOT_DECLARATIONS
-  .filter(([, pattern]) => pattern.test(booking)).map(([name]) => name);
+const freeFirstRoots = (booking) => {
+  const declared = declarationMap(booking);
+  return FREE_FIRST_ROOT_DECLARATIONS
+    .filter(([name, pattern]) => pattern.test(booking) && declared.has(name)).map(([name]) => name);
+};
 // Host globals the Node-RED VM provides that look like contract constants.
 const PREVIEW_HOST_CONSTANTS = Object.freeze(['JSON', 'NaN', 'Infinity']);
 // Any other undeclared SCREAMING_CASE name in the closure means the composition
@@ -247,9 +254,9 @@ export function previewSources(flow, options = {}) {
   const roots = ['isObj', 'isValidDateKey', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
     'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields',
     // The first covered event of the day is priced by the shared usage block, which reads the
-    // cohort table and the operation category helper: without them the preview silently kept the
+    // cohort tables and coverage/category/direction helpers: without those dependencies the preview kept the
     // configured discount for the first event (the booking gateway grants it for free). A booking
-    // body from before that rule declares neither, so both stay optional and the closure falls
+    // body from before that rule omits those roots, so they stay optional and the closure falls
     // back to the discount-only behaviour of that generation.
     ...freeFirstRoots(booking),
     ...PREVIEW_EVENT_HELPERS, 'preflightAvailability',
