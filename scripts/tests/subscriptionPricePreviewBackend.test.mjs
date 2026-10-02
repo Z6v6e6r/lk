@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import ts from 'typescript';
+import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
 
@@ -86,6 +88,76 @@ function harness(options={}) {
 test('preview source never calls CREATE or a product cache miss resolver',()=>{
   const router=fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/router.js',import.meta.url),'utf8');
   assert.doesNotMatch(router,/\/split\/create|\/seliger|insertOne|updateOne|global\.set/);
+});
+
+// Run the actual router and final with the booking graph's list helpers, without
+// a private production flow or any provider/database access.
+function tariffDiagnostic(payload, overrides = {}) {
+  const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
+  const bookingSource = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
+  const roots = ['extractItems', 'hasCompleteBookingList', 'isObj'];
+  const helpers = extractSubscriptionPricePreviewSource({ source: bookingSource, roots }).source;
+  const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
+  canonical.identityMoneyOwned = () => assert.fail('Tariff diagnostics must not reach ownership evaluation');
+  const url = `https://api.vivacrm.ru/end-user/api/v2/fixture/products/one-times?exerciseId=${exerciseId}`;
+  const ctx = { step: 'groupTariff', exerciseId, tenantKey: 'fixture', eventCategory: 'GROUP_TRAINING', requestedIds: [] };
+  const msg = { _msgid: 'fixture-correlation', _subscriptionPricePreview: ctx, payload, statusCode: 200,
+    method: 'GET', url, responseUrl: url, ...overrides };
+  const outputs = new Function('msg', 'canonical', source('router'))(msg, canonical);
+  assert.equal(outputs[4], msg);
+  const warnings = [];
+  new Function('msg', 'node', source('final'))(msg, { warn: text => warnings.push(JSON.parse(text)) });
+  return { msg, ctx, warnings };
+}
+
+test('ambiguous tariff diagnostics survive final response, server log and analytics summary', () => {
+  const apiSource = fs.readFileSync(new URL('../../src/utils/apiClient.ts', import.meta.url), 'utf8');
+  const summarySource = apiSource.slice(apiSource.indexOf('function summarizeApiErrorPayload('), apiSource.indexOf('function pickNumeric('));
+  const summarize = new Function(ts.transpileModule(summarySource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+    + '; return summarizeApiErrorPayload;')();
+  for (const [payload, count, reason] of [[[], 0, 'empty_tariff_list'], [[{}, {}], 2, 'multiple_tariffs'],
+    [[null], 1, 'invalid_tariff_record'], [['fixture-sensitive'], 1, 'invalid_tariff_record'],
+    [{ content: [null], totalElements: 1 }, 1, 'invalid_tariff_record']]) {
+    const { msg, ctx, warnings } = tariffDiagnostic(payload);
+    assert.equal(msg.statusCode, 503);
+    assert.deepEqual(msg.payload, { error: { code: 'LK1_EVENT_TARIFF_AMBIGUOUS',
+      details: { exerciseId, tariffCount: count, reason, stage: 'tariff_shape', observed: {} } } });
+    assert.equal(ctx.basePriceMinor, undefined);
+    assert.deepEqual(warnings, [{ event: 'subscription_price_preview_failed', code: 'LK1_EVENT_TARIFF_AMBIGUOUS',
+      step: 'groupTariff', exerciseId, tariffCount: count, reason, correlationId: 'fixture-correlation' }]);
+    assert.deepEqual(JSON.parse(summarize(msg.payload)), msg.payload);
+    assert.ok(!JSON.stringify([msg.payload, warnings]).includes('fixture-sensitive'));
+  }
+  const refused = tariffDiagnostic([{ id: 'fixture-product', type: 'INVALID', cost: 12345 }]);
+  const summary = summarize(refused.msg.payload);
+  assert.ok(summary.endsWith('...'), 'Exercise diagnostics must survive a truncated provider-shape summary');
+  assert.ok(summary.includes(`"exerciseId":"${exerciseId}"`));
+  assert.ok(summary.includes('"tariffCount":1'));
+  assert.ok(summary.includes('"reason":"product_type"'));
+});
+
+test('other tariff refusals retain their verdict and distinguish unknown count from zero', () => {
+  for (const [payload, overrides, code, count, reason] of [
+    [[], { statusCode: 502 }, 'LK1_EVENT_TARIFF_UNAVAILABLE', null, 'upstream_error'],
+    [{ content: [{}], totalElements: 2 }, {}, 'LK1_EVENT_TARIFF_UNAVAILABLE', null, 'incomplete_tariff_list'],
+    [[{}], { responseUrl: 'https://other.invalid' }, 'LK1_EVENT_TARIFF_UNVERIFIED', 1, 'request_url'],
+    [[{}], {}, 'LK1_EVENT_TARIFF_UNVERIFIED', 1, 'product_identity'],
+    [[{ id: 'fixture-product', type: 'SERVICE', cost: -1 }], {}, 'LK1_EVENT_TARIFF_UNVERIFIED', 1, 'product_amount'],
+  ]) {
+    const { msg, warnings } = tariffDiagnostic(payload, overrides);
+    assert.equal(msg.statusCode, 503);
+    assert.equal(msg.payload.error.code, code);
+    assert.equal(msg.payload.error.details.exerciseId, exerciseId);
+    assert.equal(msg.payload.error.details.tariffCount, count);
+    assert.equal(msg.payload.error.details.reason, reason);
+    assert.equal(warnings[0].tariffCount, count);
+    assert.equal(warnings[0].reason, reason);
+  }
+  const accepted = tariffDiagnostic([{ id: 'fixture-product', type: 'SERVICE', cost: 12345 }]);
+  assert.equal(accepted.msg.statusCode, 200);
+  assert.equal(accepted.ctx.basePriceMinor, 12345);
+  assert.deepEqual(accepted.msg.payload, { quotes: [] });
+  assert.deepEqual(accepted.warnings, []);
 });
 liveTest('90 minute preview uses actual state machine, exact tariff DTO and canonical evaluator',()=>{
   const {response,calls}=harness(); assert.equal(response.statusCode,200);const q=response.payload.quotes[0];

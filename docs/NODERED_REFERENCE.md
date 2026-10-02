@@ -47,7 +47,20 @@ After ownership is proven for every requested instance, a successful metadata
 lookup with no matching row makes only that instance `UNAVAILABLE`. Conflicting,
 duplicate, foreign or malformed metadata, failed common reads and an unconfirmed
 tariff still reject the whole preview. An unavailable quote never supplies a
-discount. Failure logs contain only a bounded code, stage and correlation ID.
+discount. Failure logs contain a bounded code, stage and correlation ID. Event
+preview failures also log the validated `exerciseId`, `tariffCount` and `reason`.
+An unknown count is `null`, never zero. Tariff refusal response details carry
+these same fields before the existing shape observations, so the client's
+400-character error summary retains them in `client_error.context.response`.
+`LK1_EVENT_TARIFF_AMBIGUOUS` distinguishes `empty_tariff_list`, `multiple_tariffs`
+and `invalid_tariff_record`; the HTTP status and accept/reject rules are unchanged.
+The source nodes touched for this diagnostic change are
+`lk_subscription_price_preview_20260908_router` and `_final` on
+`POST /lk/subscriptions/game-price-preview`. No flow import/export is generated;
+activation requires a fresh verified live preimage and a separately authorized
+focused candidate. Owner: LK1 backend; audience: incident investigation. Stop on
+unexpected data in diagnostics; restore the reviewed function preimage to stop
+logging the new fields. Logs exclude request bodies, tokens and raw tariff rows.
 
 Interfaces without a subscription selector rank confirmed eligible quotes by
 amount (free first, then cheapest), with instance ID as a stable tie-breaker.
