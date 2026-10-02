@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import ts from "typescript";
+import { isTrialGroupTraining } from "../../src/utils/trialGroupTraining.ts";
 import { isGroupSubscriptionDiscountQuote, matchGroupSubscriptionDiscount } from "../../src/utils/groupSubscriptionDiscount.ts";
 import {
   buildTournamentSubscriptionDiscountProduct,
@@ -28,6 +29,7 @@ const params = {
 };
 
 function loadFunction(name: string, dependencies: Record<string, unknown> = {}) {
+  dependencies = { isTrialGroupTraining, ...dependencies };
   const source = ts.createSourceFile("api.ts", fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(declaration, name);

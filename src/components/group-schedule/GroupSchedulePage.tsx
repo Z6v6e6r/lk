@@ -19,6 +19,7 @@ import {
 } from "../../utils/groupScheduleApi";
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
+import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { isProTraining } from "../../utils/proTrainingExclusion";
 import { isTopokratyClubPack, isTopokratyExercise } from "../../utils/topokratyExclusion";
 import { getProEnergyPackName, getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
@@ -1222,6 +1223,11 @@ export default function GroupSchedulePage({
               </div>
 
               <div className="tournament-signup-registration group-schedule-registration group-schedule-registration--trainer">
+                {isTrialGroupTraining(selectedTraining) && (
+                  <p className="tournament-signup-muted">
+                    Условие пробной тренировки: не более двух подтверждённых посещений занятий в сети за 6 месяцев до записи.
+                  </p>
+                )}
                 {isRestoringSession && <div className="tournament-signup-muted">Проверяем сессию...</div>}
                 {!isRestoringSession && !isAuthenticated && (
                   <div className="tournament-signup-auth">
