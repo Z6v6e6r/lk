@@ -36,11 +36,17 @@ export const PATRIOTS_PREIMAGE = Object.freeze({
   pricingFunc: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b',
   joinFunc: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
   usageBlock: '5fce82de1d012254f863a90388c75f581f9dcf843e520b10d17a968bc6b3f1ef',
-  reviewedGatewaySource: '4fe733191d82b174665033c3cd48f6614b44673ef404d695e4150cdfe9710e38',
-  reviewedGatewayHooksSource: '13672a94ac3c96ccdd5492dd86b82dc6d4df874d167685513c2607559904c7a5',
-  reviewedEvaluatorSource: '777f8dfbca1e2e88df3f4a24c57792cac371797bd583b91f65c63b129fe3ea15',
-  reviewedBookingRouterSource: 'c4da6e1300d25057807aee4badab045669bc00c6ed91ce550ab745325a6c6a76',
-  reviewedPreviewSource: '9d07924befd426aa18b80d5322bc377c19918108ff8af3a512e74f7f50d7ebe4',
+  // The `reviewed*Source` pins track the bytes of the tracked reviewed sources the candidate is
+  // composed from; the `*Func`/`*Embedded`/`usageBlock` pins above are the live 147 preimage and
+  // stay frozen. Re-pinned 2026-10-02 (integration `codex/lk1-train-20261002`): the reviewed
+  // gateway/hooks/router/preview/evaluator now also carry main's club game 6180 rule and the
+  // PR #175 PRO 50 % rule, so the Patriots candidate must be re-derived from a fresh live pull
+  // before any apply (its live preimage and postimage pins are unchanged and will refuse).
+  reviewedGatewaySource: '9ca4057541048f24384e2b6cea992387cabc3b838f58a4fcfe97ebd66363274c',
+  reviewedGatewayHooksSource: '636e005f02d2632cda10187784ad2379769f4eff418f7f0a8c55159e0d430a2e',
+  reviewedEvaluatorSource: '26a138bec5eff962ec478f6ab2d91be04cc8e17eda0f47ac7a4e6ccac758ad1c',
+  reviewedBookingRouterSource: 'd39953a34b9d4fb6372de6f05293c4b44fc7169bcd26895113311d64d793c937',
+  reviewedPreviewSource: '9a3d48d3f26f0d9869aebf98690874a4874964e21b5f4c8f033c2f198c5a1f9d',
 });
 export const PATRIOTS_POSTIMAGE = Object.freeze({
   gatewayFunc: '660b48b3774149bfc28809206d44a4dfb74fefd1ced37bbf6824d7be3d89d120',
@@ -69,6 +75,9 @@ const PATRIOTS_DETOUR_NEW = '    && (patriotsMoneyOnlyIdentity || ruleConfigured
 const PATRIOTS_MONEY_ONLY_GUARD = '    const patriotsMoneyOnlyEvent = configured.rule?.productId === "37ab3713-4431-4815-96ba-d7ece76a9241"\n      && ["group_training", "tournament"].includes(resolveCategory(exercise));\n';
 const PATRIOTS_FIRST_USE_REFUSAL = '    if (firstUse && patriotsMoneyOnlyEvent) violations.push("patriots_activation_required");\n';
 const CATEGORY_ANCHOR = '  if ([1613].includes(typeId) || [4588].includes(directionId)) return "open_game";\n';
+// The reviewed source carries main's club game direction 6180 in the same anchor line (the
+// installed preimage above does not), so the reviewed-text assertions have their own constant.
+const CATEGORY_ANCHOR_REVIEWED = '  if ([1613].includes(typeId) || [4588, 6180].includes(directionId)) return "open_game";\n';
 const PATRIOTS_CATEGORY_MAPPING = '  if (typeId === 2349 && directionId === 6181) return "open_game";\n'
   + '  if (typeId === 2349 && directionId === 6306) return "tournament";\n'
   + '  if (typeId === 2349 && directionId === 6307) return "group_training";\n';
@@ -135,7 +144,7 @@ export function patchPatriotsGatewayBody(source) {
   assertHash(reviewedRouter, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, 'Reviewed booking router');
   if (!reviewed.includes(PATRIOTS_MONEY_ONLY_GUARD)
     || !reviewed.includes(PATRIOTS_FIRST_USE_REFUSAL)
-    || !reviewedRouter.includes(PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR)) {
+    || !reviewedRouter.includes(PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR_REVIEWED)) {
     throw new Error('Reviewed Patriots money-validity guard is missing');
   }
   if (source.split(FIRST_USE_ANCHOR).length !== 2 || source.split(OWNER_GUARD_ANCHOR).length !== 2) {

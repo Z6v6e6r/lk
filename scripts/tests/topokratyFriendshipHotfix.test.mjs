@@ -11,6 +11,7 @@ import {
   TOPOKRATY_PREVIEW_ID,
   TOPOKRATY_TARGET,
   TOPOKRATY_PATCH_MARKER,
+  TOPOKRATY_REVIEWED_EVALUATOR_SHA256,
   TOPOKRATY_UPSTREAM_SHA256,
   TOPOKRATY_REVERT_UPSTREAM_SHA256,
   buildTopokratyReport,
@@ -148,8 +149,13 @@ test("the plan-rules writer is replaced, not appended: 7 installed rules become 
 });
 
 test("the earlier evaluator generation refuses the newer Patriots source", async () => {
-  const { reviewedEvaluatorBody } = await import("../patch_live_lk1_plan_rules.mjs");
-  assert.throws(() => reviewedEvaluatorBody(), /Reviewed evaluator drift/);
+  const { PLAN_RULES_REVIEWED_EVALUATOR_SHA256, reviewedEvaluatorBody } =
+    await import("../patch_live_lk1_plan_rules.mjs");
+  // The reviewed evaluator tracks the merged source (main's plan-rules release contract), while
+  // this focused generation was reviewed against the pre-Patriots body and must still refuse it:
+  // the generation-level pin, not the shared review pin, carries that refusal after the merge.
+  assert.equal(sha256(reviewedEvaluatorBody()), PLAN_RULES_REVIEWED_EVALUATOR_SHA256);
+  assert.notEqual(sha256(reviewedEvaluatorBody()), TOPOKRATY_REVIEWED_EVALUATOR_SHA256);
   const embedded = "const lk1Old = true;\n";
   const source = `const head = 1;\n${EVALUATOR_BRANCH_OPEN}${embedded}${EVALUATOR_BRANCH_CLOSE}\nconst tail = 2;\n`;
   assert.throws(() => patchTopokratyEvaluatorBody(source, {

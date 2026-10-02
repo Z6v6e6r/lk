@@ -162,7 +162,11 @@ export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
   // evaluator gained the club game branch — a game of up to 90 minutes is one visit, a longer
   // game spends the shared hour and charges the minutes above it at 100 % of the player's share
   // (`percentage: 0`), and without a free visit the game is the full base price with no visit.
-  "9ea4061cb747f6a10dee0bc7a5bd2c8993d138e9df87e35f82ab1814964da823";
+  // Re-pinned 2026-10-02 (integration `codex/lk1-train-20261002`, PR #171 «Дружба.Патриоты»): the
+  // reviewed evaluator gained the Patriots constants and the club-direction classifier pins. The
+  // plan-rules generation itself must be re-derived from a fresh live pull before any apply
+  // (its live-body pins below are unchanged and will refuse).
+  "26a138bec5eff962ec478f6ab2d91be04cc8e17eda0f47ac7a4e6ccac758ad1c";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =
