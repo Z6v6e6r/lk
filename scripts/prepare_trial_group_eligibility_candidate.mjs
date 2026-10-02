@@ -47,7 +47,14 @@ export function composeTrialGroupCandidate(raw, expectedSourceSha, expectedBooki
   const flow = JSON.parse(raw); assertFlowArray(flow, 'Trial source');
   const booking = flow.find(row => row.id === TRIAL_BOOKING_ID);
   const mongo = flow.find(row => row.id === 'lk_subscription_booking_find_20260804');
-  if (booking?.type !== 'function' || booking.outputs !== 7 || booking.wires?.length !== 7
+  const productRouterId = 'lk_subscription_product_router_20260907';
+  const productRouter = flow.find(row => row.id === productRouterId);
+  const knownProductOutput = booking?.outputs !== 8 || (
+    JSON.stringify(booking.wires?.[7]) === JSON.stringify([productRouterId])
+    && productRouter?.type === 'function' && productRouter.z === booking.z
+    && productRouter.d !== true && productRouter.disabled !== true);
+  if (booking?.type !== 'function' || ![7, 8].includes(booking.outputs)
+    || booking.wires?.length !== booking.outputs || !knownProductOutput
     || booking.d === true || booking.disabled === true || trialSha256(booking.func || '') !== expectedBookingSha
     || mongo?.type !== 'mongodb4' || mongo.z !== booking.z || mongo.operation !== 'find'
     || typeof mongo.clientNode !== 'string'
