@@ -1001,9 +1001,14 @@ const resolveCategory = (value) => {
   const direction = exercise.direction || exercise.exerciseDirection || value?.exerciseDirection;
   const typeId = numericId(type ?? exercise.typeId ?? value?.exerciseTypeId);
   const directionId = numericId(direction ?? exercise.directionId ?? value?.exerciseDirectionId);
-  if ([1613].includes(typeId) || [4588].includes(directionId)) return "open_game";
+  // The club directions are listed explicitly, like the PRO-training exclusion: direction
+  // 6180 «Топократы игра» must keep resolving to `open_game` and 6233 «Топократы тренировка»
+  // to `group_training` even if a Viva rename drops the «игра»/«тренировка» token from the
+  // label. The shared exercise type 2349 of «Атланты» (direction 6152) is deliberately not
+  // added: only the club direction ids are pinned.
+  if ([1613].includes(typeId) || [4588, 6180].includes(directionId)) return "open_game";
   if ([839, 1013].includes(typeId) || [2617, 3284, 4769].includes(directionId)) return "tournament";
-  if ([605, 847, 963, 1208].includes(typeId)) return "group_training";
+  if ([605, 847, 963, 1208].includes(typeId) || [6233].includes(directionId)) return "group_training";
   const markers = [markerName(type), markerName(direction), exercise.name, exercise.title]
     .map(normalizeMarker)
     .filter(Boolean);

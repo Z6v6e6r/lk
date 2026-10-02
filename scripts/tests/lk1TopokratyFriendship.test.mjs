@@ -20,6 +20,7 @@ import {
   buildTopokratyPlanRulesRevert,
   buildTopokratyPlanRulesTransition,
 } from '../lib/lk1PlanRulesTransition.mjs';
+import { isTopokratyClubPack, isTopokratyExercise } from '../lib/topokratyExclusion.mjs';
 
 test('two-hour Friendship has its own Viva identity, 120 free minutes and six active bookings', () => {
   const productId = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
@@ -453,4 +454,207 @@ test('the contour sources carry the club rule on the booking, preview and widget
     'directionId: previewDirectionId(canonical, exercise),',
     "const paidShare = decision.benefit?.kind === 'PARTIAL_PRICE_PERCENT_DISCOUNT'",
   ]) assert.ok(previewRouterSource.includes(marker), marker);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The club game direction 6180 (owner decision 2026-10-01): the same visit-based mechanism as a
+// game, priced against the player's share (`target.basePriceMinor`), never against a quarter of
+// the court. A game of up to 90 minutes is the visit; a longer one spends the shared day bucket
+// first and charges the minutes above it at 100 % of that share.
+test('a club game of up to 90 minutes is carried by the plan with exactly one visit', () => {
+  for (const durationMinutes of [30, 60, 90]) {
+    const decision = evaluate(lk1Input({
+      target: { category: 'GAME', directionId: CLUB_GAME_DIRECTION_ID, durationMinutes },
+    })).decision;
+    const label = `${durationMinutes} minutes`;
+    assert.equal(decision.eligible, true, label);
+    assert.equal(decision.subscriptionVisitCount, 1, label);
+    assert.equal(decision.eventDiscountPercent, 100, label);
+    assert.equal(decision.benefit.kind, 'FREE_ENTITLEMENT', label);
+    assert.equal(decision.benefit.basePriceMinor, BASE_PRICE_MINOR, label);
+    assert.equal(decision.benefit.finalPriceMinor, 0, label);
+    assert.equal(decision.benefit.discountMinor, BASE_PRICE_MINOR, label);
+    assert.deepEqual(decision.gameMinutes, { localDate: '2026-08-15',
+      usedOrReservedFreeMinutesToday: 0, freeMinutes: durationMinutes, paidOverageMinutes: 0,
+      discountPercent: 0 }, label);
+  }
+});
+
+test('a longer club game charges 100 % of the player share for the minutes above the shared hour', () => {
+  const game = (used, durationMinutes = 120) => evaluate(lk1Input({
+    target: { category: 'GAME', directionId: CLUB_GAME_DIRECTION_ID, durationMinutes },
+    usage: { usedOrReservedFreeMinutesToday: used },
+  })).decision;
+  const full = game(0);
+  assert.equal(full.eligible, true);
+  assert.equal(full.subscriptionVisitCount, 1);
+  assert.equal(full.eventDiscountPercent, 0);
+  assert.equal(full.benefit.kind, 'PARTIAL_PRICE_PERCENT_DISCOUNT');
+  assert.deepEqual(full.gameMinutes, { localDate: '2026-08-15',
+    usedOrReservedFreeMinutesToday: 0, freeMinutes: 60, paidOverageMinutes: 60, discountPercent: 0 });
+  // The partial price is `base * paid / duration` at the decision's 0 % — for a GAME the base
+  // already is the player's share, so there is no second division by the court share.
+  assert.deepEqual(full.benefit.partialPriceCalculation, { numerator: 60, denominator: 120,
+    chargeBeforeDiscountMinor: Math.floor(BASE_PRICE_MINOR * 60 / 120), percentageDiscountMinor: 0 });
+  assert.equal(full.benefit.finalPriceMinor, Math.floor(BASE_PRICE_MINOR * 60 / 120));
+  // 30 of the 60 minutes already spent: only the remaining half hour is free.
+  const shared = game(30);
+  assert.equal(shared.subscriptionVisitCount, 1);
+  assert.equal(shared.eventDiscountPercent, 0);
+  assert.equal(shared.benefit.kind, 'PARTIAL_PRICE_PERCENT_DISCOUNT');
+  assert.deepEqual(shared.gameMinutes, { localDate: '2026-08-15',
+    usedOrReservedFreeMinutesToday: 30, freeMinutes: 30, paidOverageMinutes: 90, discountPercent: 0 });
+  assert.equal(shared.benefit.finalPriceMinor, Math.floor(BASE_PRICE_MINOR * 90 / 120));
+  // Purity: re-evaluating the same snapshot consumes nothing.
+  const input = lk1Input({ target: { category: 'GAME', directionId: CLUB_GAME_DIRECTION_ID, durationMinutes: 120 },
+    usage: { usedOrReservedFreeMinutesToday: 30 } });
+  assert.deepEqual(evaluate(input).decision, shared);
+});
+
+test('without a free visit the club game is the full base price and consumes no visit', () => {
+  for (const [label, usage] of [
+    ['day minutes spent', { usedOrReservedFreeMinutesToday: 60 }],
+    ['active cap reached', { activeServices: 4 }],
+  ]) {
+    const decision = evaluate(lk1Input({
+      target: { category: 'GAME', directionId: CLUB_GAME_DIRECTION_ID, durationMinutes: 120 },
+      usage,
+    })).decision;
+    assert.equal(decision.eligible, true, label);
+    assert.equal(decision.subscriptionVisitCount, 0, label);
+    assert.equal(decision.eventDiscountPercent, 0, label);
+    assert.equal(decision.benefit.kind, 'PERCENT_DISCOUNT', label);
+    assert.equal(decision.benefit.finalPriceMinor, BASE_PRICE_MINOR, label);
+    assert.equal(decision.benefit.discountMinor, 0, label);
+    assert.deepEqual(decision.gameMinutes, { localDate: '2026-08-15',
+      usedOrReservedFreeMinutesToday: usage.usedOrReservedFreeMinutesToday || 0,
+      freeMinutes: 0, paidOverageMinutes: 120, discountPercent: 0 }, label);
+  }
+});
+
+test('the club game rule stays bound to the club product and to direction 6180', () => {
+  const game = (options = {}) => evaluate(lk1Input({
+    ...options,
+    target: { category: 'GAME', directionId: CLUB_GAME_DIRECTION_ID, durationMinutes: 120,
+      ...options.target },
+  })).decision;
+  // Another plan product on the club game direction keeps the standard GAME branch: the
+  // configured overage discount, not the club visit.
+  const friendship = game({ productId: FRIENDSHIP_PRODUCT_ID });
+  assert.equal(friendship.eligible, true);
+  assert.equal(friendship.eventDiscountPercent, 30);
+  assert.equal(friendship.gameMinutes.discountPercent, 30);
+  assert.equal(friendship.benefit.kind, 'PARTIAL_PRICE_PERCENT_DISCOUNT');
+  assert.equal(friendship.benefit.finalPriceMinor, 140000);
+  // The club product on a foreign game direction keeps the standard branch too.
+  const foreignDirection = game({ target: { directionId: 4588 } });
+  assert.equal(foreignDirection.eventDiscountPercent, 30);
+  assert.equal(foreignDirection.gameMinutes.discountPercent, 30);
+  // A club tournament keeps its own configured discount.
+  const tournament = game({ target: { category: 'TOURNAMENT' } });
+  assert.equal(tournament.eventDiscountPercent, 50);
+});
+
+test('the club game fails closed when the paid share has no proven tariff', () => {
+  const decision = evaluate(lk1Input({
+    target: { category: 'GAME', directionId: CLUB_GAME_DIRECTION_ID, durationMinutes: 120,
+      priceSource: undefined },
+  })).decision;
+  assert.equal(decision.eligible, false);
+  assert.ok(decision.blockers.some((item) => item.code === 'LK1_GAME_OVERAGE_ALLOCATION_UNBOUND'),
+    JSON.stringify(decision.blockers));
+});
+
+// ---------------------------------------------------------------------------------------------
+// The club-only gate is the reviewed HUB_EXERCISE hook, run here on the real control flow with
+// intercepting stubs so the refusal is proven rather than matched as text.
+const hooksSource = fs.readFileSync(
+  new URL('../nodered_lk1_hub_nodes/gateway_hooks.js', import.meta.url), 'utf8');
+
+function hookSections(source) {
+  const parts = source.split(/^\/\/ HUB_([A-Z]+)\s*$/m);
+  const result = {};
+  for (let i = 1; i < parts.length; i += 2) result[parts[i]] = parts[i + 1].trim();
+  return result;
+}
+
+function runExerciseHook(options = {}) {
+  const calls = { finishError: [] };
+  const stubs = new Proxy({
+    ctx: { caller: 'http', tenantKey: 'iSkq6G', clientSubscriptionId: 'sub-1', managedAction: 'JOIN_GAME' },
+    msg: {},
+    isProTrainingExercise: () => false,
+    isProTrainingEnergyPack: () => false,
+    isTopokratyExercise,
+    isTopokratyClubPack,
+    resolveCategory: () => options.category ?? 'open_game',
+    findOwnedSubscriptions: () => options.selectedOwned ?? [],
+    lk1Config: () => options.rule ?? { matched: false },
+    lk1ReadPlanRules: () => options.planRules ?? null,
+    lk1QuoteOwned: () => options.quoteOwned ?? [],
+    lk1Quote: () => ({ code: 'LK1_EVENT_TARIFF_UNVERIFIED' }),
+    managedActionForTarget: () => 'JOIN_GAME',
+    finishError: (ctx, status, message, body) => {
+      calls.finishError.push({ status, message, body }); return { finished: true };
+    },
+    lk1Stop: (ctx, code) => ({ stopped: code }),
+    prepareUserGet: (ctx, step) => ({ prepared: step }),
+    emit: index => ({ emitted: index }),
+    global: { get: () => null },
+    LK1_PRODUCT_POLICY_GLOBAL: 'subscriptions_lk1_product_policy',
+    OUTPUT_FINAL: 4,
+    OUTPUT_MANAGED_POLICY: 6,
+  }, {
+    has: () => true,
+    get: (target, key) => (key in target ? target[key] : globalThis[key]),
+  });
+  const section = hookSections(hooksSource).EXERCISE;
+  const factory = new Function('stubs', `with (stubs) { return (ctx, exercise, msg) => {\n${section}\n}; }`);
+  return {
+    result: factory(stubs)(stubs.ctx,
+      options.exercise ?? { direction: { id: CLUB_GAME_DIRECTION_ID, name: 'Топократы игра' } },
+      stubs.msg),
+    calls,
+  };
+}
+
+test('the club gate refuses a non-club subscription on a 6180 game and allows the club pack', () => {
+  // The 6180 game resolves to `open_game`, so the widened gate must fire for it too.
+  const foreign = runExerciseHook({ selectedOwned: [{ productId: FRIENDSHIP_PRODUCT_ID }] });
+  assert.equal(foreign.calls.finishError.length, 1);
+  assert.equal(foreign.calls.finishError[0].status, 409);
+  assert.equal(foreign.calls.finishError[0].body.code, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE');
+  assert.match(foreign.calls.finishError[0].message, /На занятия Топократов общие подписки не действуют/);
+  // The club pack keeps the club game benefit and reaches the plan-rule path.
+  const club = runExerciseHook({ selectedOwned: [{ productId: CLUB_PRODUCT_ID }],
+    quoteOwned: [{ productId: CLUB_PRODUCT_ID }], rule: { matched: false } });
+  assert.equal(club.calls.finishError.length, 0);
+  // The training direction of the club stays gated on the same condition.
+  const training = runExerciseHook({ category: 'group_training',
+    exercise: { direction: { id: CLUB_TRAINING_DIRECTION_ID, name: 'Топократы тренировка' } },
+    selectedOwned: [{ productId: FRIENDSHIP_PRODUCT_ID }] });
+  assert.equal(training.calls.finishError[0].body.code, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE');
+  // A game on another direction is untouched by the club gate.
+  const ordinary = runExerciseHook({ exercise: { direction: { id: 4588, name: 'Открытая игра' } },
+    selectedOwned: [{ productId: FRIENDSHIP_PRODUCT_ID }] });
+  assert.equal(ordinary.calls.finishError[0]?.body.code, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE');
+});
+
+test('the booking router classifies the club directions without the Viva name', () => {
+  const router = fs.readFileSync(
+    new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url),
+    'utf8');
+  const categorySource = router.slice(router.indexOf('const resolveCategory ='),
+    router.indexOf('const eventDate ='));
+  const resolve = new Function('isObj', 'numericId', 'markerName', 'normalizeMarker',
+    `${categorySource}; return resolveCategory;`)(
+    (value) => Boolean(value) && typeof value === 'object',
+    (value) => { const id = Number(value?.id ?? value); return Number.isFinite(id) ? Math.trunc(id) : null; },
+    () => null, (value) => String(value || '').trim().toLowerCase());
+  // A rename in Viva that drops «игра»/«тренировка» cannot move the club contour.
+  assert.equal(resolve({ direction: { id: 6180, name: 'Клубная встреча' } }), 'open_game');
+  assert.equal(resolve({ directionId: 6233, title: 'Клубная встреча' }), 'group_training');
+  // Type 2349 is shared with «Атланты» (direction 6152): the type alone is never a category.
+  assert.equal(resolve({ type: { id: 2349 } }), null);
+  assert.equal(resolve({ direction: { id: 6152, name: 'Атланты' } }), null);
 });

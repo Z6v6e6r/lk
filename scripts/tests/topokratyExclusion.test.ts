@@ -16,6 +16,13 @@ import {
   isTopokratyName,
   isTopokratySubscriptionExcluded,
 } from "../../src/utils/topokratyExclusion.ts";
+import {
+  EXERCISE_CATEGORY_GROUP_TRAINING,
+  EXERCISE_CATEGORY_GROUP_TRAINING_DIRECTION_IDS,
+  EXERCISE_CATEGORY_OPEN_GAME,
+  EXERCISE_CATEGORY_OPEN_GAME_DIRECTION_IDS,
+  resolveExerciseCategoryFromValue,
+} from "../../src/utils/exerciseCategory.ts";
 
 const groupSchedulePageSource = fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8");
 const serverSource = fs.readFileSync("scripts/lib/topokratyExclusion.mjs", "utf8");
@@ -73,6 +80,23 @@ test("only the club product unlocks the subscription path for a Topokraty event"
   assert.equal(isTopokratySubscriptionExcluded(summary({ directionId: 5507, directionName: "Тренировка ПРО", title: null }), [ra]), false);
 });
 
+test("the widget classifies the club directions explicitly, not by the Viva name", () => {
+  assert.deepEqual([...EXERCISE_CATEGORY_OPEN_GAME_DIRECTION_IDS], [4588, 6180]);
+  assert.deepEqual([...EXERCISE_CATEGORY_GROUP_TRAINING_DIRECTION_IDS], [6233]);
+  // A Viva rename that drops «игра»/«тренировка» from the label cannot move a club event out
+  // of its category: the direction id decides before any name marker is consulted.
+  assert.equal(resolveExerciseCategoryFromValue({ direction: { id: 6180, name: "Клубная встреча" } }),
+    EXERCISE_CATEGORY_OPEN_GAME);
+  assert.equal(resolveExerciseCategoryFromValue({ directionId: 6180, title: "Клубная встреча" }),
+    EXERCISE_CATEGORY_OPEN_GAME);
+  assert.equal(resolveExerciseCategoryFromValue({ direction: { id: 6233, name: "Клубная встреча" } }),
+    EXERCISE_CATEGORY_GROUP_TRAINING);
+  // Type 2349 is shared with «Атланты» (direction 6152): only the club direction ids may be
+  // pinned, so the type alone never classifies.
+  assert.equal(resolveExerciseCategoryFromValue({ type: { id: 2349 } }), null);
+  assert.equal(resolveExerciseCategoryFromValue({ direction: { id: 6152, name: "Атланты" } }), null);
+});
+
 test("the widget offers no subscription for an excluded Topokraty event", () => {
   assert.match(groupSchedulePageSource,
     /import \{ isTopokratyClubPack, isTopokratyExercise \} from "\.\.\/\.\.\/utils\/topokratyExclusion";/);
@@ -93,6 +117,13 @@ test("the server mirror keeps the same ids, the same token and the same club pro
   assert.match(gatewayGuardSource, /isTopokratyExercise\(exercise\)/);
   assert.match(gatewayGuardSource, /isTopokratyClubPack\(selectedOwned\[0\]\)/);
   assert.match(gatewayGuardSource, /TOPOKRATY_SUBSCRIPTION_UNAVAILABLE/);
+  // The refusal covers the club game as well: direction 6180 resolves to `open_game`, so the
+  // gate cannot be scoped to the group-training category alone.
+  assert.match(gatewayGuardSource,
+    /if \(\["group_training", "open_game"\]\.includes\(resolveCategory\(exercise\)\)/);
+  assert.doesNotMatch(gatewayGuardSource,
+    /if \(resolveCategory\(exercise\) === "group_training"\s*\n\s*&& isTopokratyExercise\(exercise\)/);
+  assert.match(gatewayGuardSource, /На занятия Топократов общие подписки не действуют/);
   // The refusal precedes every subscription decision of the booking step.
   assert.ok(gatewayGuardSource.indexOf("TOPOKRATY_SUBSCRIPTION_UNAVAILABLE")
     < gatewayGuardSource.indexOf("const selectedRule = lk1Config(selectedOwned"),
@@ -100,18 +131,21 @@ test("the server mirror keeps the same ids, the same token and the same club pro
 });
 
 test("the advisory preview refuses to quote a Topokraty event for a non-club subscription", () => {
-  // The shared preview sources stay byte-identical to the installed generation (a recomposition
-  // would move the frozen candidate of the club contour and its ordered rollback contract), so
-  // the exclusion is this generation's own delta on the composed preview body.
+  // The refusal now lives in the reviewed preview source itself (widened from the 2026-09-26
+  // training rule to the club game), so the shared router carries the condition on both the
+  // event and the game route.
+  assert.match(previewRouterSource,
+    /if \(typeof isTopokratyExercise === 'function' && isTopokratyExercise\(exercise\)\) \{/);
+  assert.match(previewRouterSource, /isTopokratyClubPack\(topokratyClubRow\)/);
+  assert.match(previewRouterSource, /TOPOKRATY_SUBSCRIPTION_UNAVAILABLE/);
+  // The generation only embeds the reviewed club module the router calls; it no longer adds a
+  // second refusal of its own.
   const previewPatch = fs.readFileSync("scripts/patch_live_lk1_topokraty_rejection_reclaim_hotfix.mjs", "utf8");
-  assert.match(previewPatch, /isTopokratyExercise\(exercise\)/);
-  assert.match(previewPatch, /TOPOKRATY_SUBSCRIPTION_UNAVAILABLE/);
   assert.match(previewPatch, /buildTopokratyReclaimPreviewDeltas/);
-  assert.ok(previewPatch.indexOf("isTopokratyExercise(exercise)")
-    < previewPatch.indexOf("PREVIEW_QUOTE_ANCHOR ="),
-  "the exclusion must precede the quote of the owned row");
-  assert.doesNotMatch(previewRouterSource, /isTopokratyExercise/,
-    "the shared preview router must stay untouched by this generation");
+  assert.match(previewPatch, /TOPOKRATY_PREVIEW_GATE/);
+  assert.match(previewPatch, /topokratyExclusionSource\(\)/);
+  assert.doesNotMatch(previewPatch, /preview-refusal/,
+    "the refusal belongs to the reviewed router, not to the generation delta");
 });
 
 test("both composed bodies embed the reviewed module exactly once", () => {

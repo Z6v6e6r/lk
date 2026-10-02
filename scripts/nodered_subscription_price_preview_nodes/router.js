@@ -446,6 +446,22 @@ while (ctx.step === 'next') {
     return aliases.length > 0 && aliases.every(value => typeof value === 'string' && canonical.normalizeId(value) === canonical.normalizeId(id));
   }) : [live];
   if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
+  // A Topokraty event — club direction 6180 «Топократы игра» or 6233 «Топократы тренировка» —
+  // is outside every non-club subscription: Viva scopes «РА», «Академия» and «Дружба» to their
+  // own directions and refuses a carried write on those directions with 400 BAD_REQUEST, so the
+  // advisory quote must not promise that benefit on the training or the game route. Only the club
+  // product «Дружба Топократы» keeps its own rule (the club game visit mechanism and the training
+  // co-pay) and stays quoted. The predicate comes from the reviewed club module
+  // (`scripts/lib/topokratyExclusion.mjs`), which the composition of this generation embeds into
+  // the body; the `typeof` guard keeps a body without that module on its previous pricing instead
+  // of failing the whole quote.
+  if (typeof isTopokratyExercise === 'function' && isTopokratyExercise(exercise)) {
+    const topokratyClubRow = Object.assign({}, canonical.isObj(live) ? live : {},
+      { productId: productId || live?.productId });
+    if (!(typeof isTopokratyClubPack === 'function' && isTopokratyClubPack(topokratyClubRow))) {
+      quote(id, 'UNAVAILABLE', null, 0, 0, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE'); continue;
+    }
+  }
   // An annual HUB event quote keeps its money mandate (the strict instance money
   // identity); every other product is verified by the product identity layer, which
   // applies the same HUB constraints for HUB and stays product-agnostic otherwise.

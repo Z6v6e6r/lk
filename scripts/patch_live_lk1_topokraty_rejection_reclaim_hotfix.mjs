@@ -95,15 +95,18 @@ const PRO_GUARD_ANCHOR = `  const selectedOwned = findOwnedSubscriptions(exercis
 
 const TOPOKRATY_GUARD = `  // A Topokraty event is outside every non-club subscription. Viva scopes a sold plan to its
   // own directions and exercise types, so carrying «РА», «Академия» or «Дружба» to direction
-  // 6180/6233 is refused by the provider with 400 BAD_REQUEST after the contour has already
-  // promised the benefit. The club product «Дружба Топократы» keeps its own plan rule (the
-  // quarter-of-court co-pay) and is therefore the only owned row allowed here; every other
-  // attempt is refused before the write and the event stays bookable as a one-off.
-  if (resolveCategory(exercise) === "group_training"
+  // 6180 «Топократы игра» or 6233 «Топократы тренировка» is refused by the provider with
+  // 400 BAD_REQUEST after the contour has already promised the benefit. The club product
+  // «Дружба Топократы» keeps its own plan rule (the club game visit mechanism and the
+  // quarter-of-court co-pay on the training) and is therefore the only owned row allowed here;
+  // every other attempt is refused before the write and the event stays bookable as a one-off.
+  // The gate covers both categories: the club game direction resolves to \`open_game\`, not
+  // \`group_training\`, so it is matched explicitly instead of relying on the category alone.
+  if (["group_training", "open_game"].includes(resolveCategory(exercise))
     && isTopokratyExercise(exercise)
     && !(selectedOwned.length === 1 && isTopokratyClubPack(selectedOwned[0]))) {
     return finishError(ctx, 409,
-      "На тренировки Топократов общие подписки не действуют: доступна разовая оплата или клубная подписка «Дружба Топократы»", {
+      "На занятия Топократов общие подписки не действуют: доступна разовая оплата или клубная подписка «Дружба Топократы»", {
         code: "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
       });
   }
@@ -192,26 +195,16 @@ const RECLAIM_BRANCH = `    // The refusal is terminal, so the stored attempt is
 
 const ORPHAN_HELPER_ANCHOR = `const releaseConfirmedOrphan = (ctx, bound) => {`;
 
-// The advisory preview's own two anchors. The shared preview sources are deliberately left
-// byte-identical to the installed generation: recomposing them would move the frozen candidate
-// of an already-reviewed generation (and with it the ordered rollback contract of the club
-// contour), so the exclusion enters the composed preview body as this generation's own delta.
+// The advisory preview's own anchor. The refusal itself now lives in the reviewed preview source
+// (`nodered_subscription_price_preview_nodes/router.js`, widened from the 2026-09-26 training rule
+// to the club game of 2026-10-01), so this generation only embeds the reviewed club module the
+// router calls; the shared preview sources are otherwise left byte-identical to the installed
+// generation (recomposing them would move the frozen candidate of an already-reviewed generation
+// and with it the ordered rollback contract of the club contour).
 const PREVIEW_KEY_ANCHOR = `const key = (kind, ...parts) => JSON.stringify([kind, ctx.tenantKey, ...parts]);`;
-const PREVIEW_QUOTE_ANCHOR = `  if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }`;
 
-const PREVIEW_EXCLUSION_BLOCK = `  // A Topokraty event is outside every non-club subscription (owner decision 2026-09-26):
-  // Viva scopes «РА», «Академия» and «Дружба» to their own directions and refuses a carried
-  // write on 6180/6233 with 400 BAD_REQUEST, so the advisory quote must not promise that
-  // benefit either. The club product «Дружба Топократы» keeps its own rule and stays quoted
-  // (the quarter-of-court co-pay).
-  if (eventRoute && eventRoute.category === 'group_training' && isTopokratyExercise(exercise)) {
-    const topokratyClubRow = Object.assign({}, canonical.isObj(live) ? live : {},
-      { productId: productId || live?.productId });
-    if (!isTopokratyClubPack(topokratyClubRow)) {
-      quote(id, 'UNAVAILABLE', null, 0, 0, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE'); continue;
-    }
-  }
-`;
+const TOPOKRATY_PREVIEW_GATE =
+  "if (typeof isTopokratyExercise === 'function' && isTopokratyExercise(exercise)) {";
 
 const RECLAIM_STEP = `if (ctx.step === "lk1_ingress_reclaim") {
   if (msg.error || lk1MongoMatched(msg.payload) !== 1 || msg.payload.modifiedCount !== 1) {
@@ -273,7 +266,6 @@ function applyDeltas(source, deltas, label) {
 // live body and the reviewed gateway source carry exactly the same reviewed text.
 export const TOPOKRATY_RECLAIM_FRAGMENTS = Object.freeze({
   helper: RECLAIM_HELPER, branch: RECLAIM_BRANCH, step: RECLAIM_STEP, guard: TOPOKRATY_GUARD,
-  previewBlock: PREVIEW_EXCLUSION_BLOCK,
 });
 
 /** Every change of this generation, in application order. */
@@ -298,24 +290,28 @@ export function buildTopokratyReclaimPreviewDeltas() {
   const moduleSource = assertReviewedSource(topokratyExclusionSource(), "Topokraty exclusion module");
   return [
     { id: "preview-module", before: PREVIEW_KEY_ANCHOR, after: `${moduleSource}\n${PREVIEW_KEY_ANCHOR}` },
-    { id: "preview-refusal", before: PREVIEW_QUOTE_ANCHOR, after: `${PREVIEW_EXCLUSION_BLOCK}${PREVIEW_QUOTE_ANCHOR}` },
   ];
 }
 
 /** The composed preview body of this generation. */
 export function patchTopokratyReclaimPreviewBody(source) {
-  if (source.includes(TOPOKRATY_EXCLUSION_PATCH_MARKER) || source.includes("function isTopokratyExercise(value) {")) {
+  if (source.includes("function isTopokratyExercise(value) {")) {
     throw new Error("Preview body already carries this generation");
+  }
+  if (source.split(TOPOKRATY_PREVIEW_GATE).length !== 2) {
+    throw new Error("The reviewed preview source must carry the club refusal exactly once");
   }
   const patched = applyDeltas(source, buildTopokratyReclaimPreviewDeltas(), "Topokraty preview");
   if (patched.split("function isTopokratyExercise(value) {").length !== 2) {
     throw new Error("The preview must embed the Topokraty module exactly once");
   }
-  if (patched.split(TOPOKRATY_EXCLUSION_PATCH_MARKER).length !== 2) {
-    throw new Error("The preview refusal must enter the body exactly once");
+  // The refusal itself is the reviewed router's own condition, not a delta of this generation:
+  // it must stay present (and single) after the module is embedded.
+  if (patched.split(TOPOKRATY_PREVIEW_GATE).length !== 2) {
+    throw new Error("The preview Topokraty guard must survive the module embedding");
   }
-  if (patched.split("if (eventRoute && eventRoute.category === 'group_training' && isTopokratyExercise(exercise))").length !== 2) {
-    throw new Error("The preview Topokraty guard must enter the body exactly once");
+  if (patched.split(TOPOKRATY_EXCLUSION_PATCH_MARKER).length !== 2) {
+    throw new Error("The preview refusal must be quoted exactly once");
   }
   assertFunctionBody(patched, "Patched preview body");
   return patched;
@@ -456,7 +452,11 @@ export function composeTopokratyReclaimArtifacts(rawSource, options = {}) {
       topokratyBound: preview.func.includes("isTopokratyExercise(exercise)")
         && preview.func.includes("isTopokratyClubPack(topokratyClubRow)"),
       proTrainingKept: preview.func.includes("canonical.isProTrainingExercise"),
-      sharedPreviewSourcesUnchanged: !composed.router.includes("isTopokratyExercise(exercise)"),
+      // The refusal now lives in the reviewed preview source, so the composed router carries it
+      // before this generation embeds the module it calls. The shared preview *composition*
+      // (`previewSources`) is still untouched; its reviewed router input is what changed.
+      sharedPreviewSourceCarriesGuard: composed.router.includes(TOPOKRATY_PREVIEW_GATE),
+      sharedPreviewSourcesUnchanged: !composed.router.includes(TOPOKRATY_PREVIEW_GATE),
       helperCount: composed.helperNames.length,
     },
   };
