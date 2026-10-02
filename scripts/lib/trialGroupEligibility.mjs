@@ -14,9 +14,11 @@ export function trialId(value) {
 export function isTrialGroupExercise(exercise) {
   if (!trialRecord(exercise)) return false;
   const types = [exercise.type?.id, exercise.exerciseType?.id, exercise.typeId, exercise.exerciseTypeId,
-    typeof exercise.type !== 'object' ? exercise.type : undefined];
+    typeof exercise.type !== 'object' ? exercise.type : undefined,
+    typeof exercise.exerciseType !== 'object' ? exercise.exerciseType : undefined];
   const directions = [exercise.direction?.id, exercise.exerciseDirection?.id, exercise.directionId,
-    exercise.exerciseDirectionId, typeof exercise.direction !== 'object' ? exercise.direction : undefined];
+    exercise.exerciseDirectionId, typeof exercise.direction !== 'object' ? exercise.direction : undefined,
+    typeof exercise.exerciseDirection !== 'object' ? exercise.exerciseDirection : undefined];
   return types.some(value => trialId(value) === String(TRIAL_GROUP_TYPE_ID))
     || directions.some(value => trialId(value) === String(TRIAL_GROUP_DIRECTION_ID));
 }

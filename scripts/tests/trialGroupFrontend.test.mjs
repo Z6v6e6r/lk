@@ -34,8 +34,9 @@ const params = (trial = true) => ({ exerciseId: 'fixture-event', clientId: 'fixt
   product: { id: 'fixture-product', type: 'SERVICE', source: 'one-time' } });
 
 test('frontend and backend recognize the same catalogue aliases', () => {
-  for (const value of [{ typeId: 1755 }, { exerciseType: { id: 1755 } }, { directionId: 4971 },
-    { direction: 4971 }, { exerciseDirectionId: 4971 }, {}, { name: 'Пробная групповая' }]) {
+  for (const value of [{ typeId: 1755 }, { exerciseType: { id: 1755 } }, { exerciseType: 1755 },
+    { exerciseType: ' 1755 ' }, { directionId: 4971 }, { exerciseDirection: 4971 },
+    { direction: 4971 }, { exerciseDirectionId: 4971 }, [], {}, { name: 'Пробная групповая' }]) {
     assert.equal(helpers.isTrialGroupTraining(value), isTrialGroupExercise(value));
   }
 });

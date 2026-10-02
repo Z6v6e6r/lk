@@ -3,14 +3,14 @@ export const TRIAL_GROUP_TYPE_ID = 1755;
 export const TRIAL_GROUP_DIRECTION_ID = 4971;
 
 export function isTrialGroupTraining(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   const id = (item: unknown) => item && typeof item === "object"
     ? (item as Record<string, unknown>).id : item;
   return [id(row.type), id(row.exerciseType), row.typeId, row.exerciseTypeId]
-    .some(item => String(item ?? "") === String(TRIAL_GROUP_TYPE_ID))
+    .some(item => String(item ?? "").trim() === String(TRIAL_GROUP_TYPE_ID))
     || [id(row.direction), id(row.exerciseDirection), row.directionId, row.exerciseDirectionId]
-      .some(item => String(item ?? "") === String(TRIAL_GROUP_DIRECTION_ID));
+      .some(item => String(item ?? "").trim() === String(TRIAL_GROUP_DIRECTION_ID));
 }
 
 const attempts = new Map<string, string>();
