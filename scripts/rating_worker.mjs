@@ -40,6 +40,7 @@ import {
   collectTournamentIds,
 } from "./lib/timeForFriendsCommunityBackfill.mjs";
 import { loadTimeForFriendsProviderEnrollment } from "./lib/timeForFriendsRuntimeRoster.mjs";
+import { runPublishedTournamentEnrollment } from "./lib/publishedTournamentEnrollment.mjs";
 
 export const RATING_WORKER_JOB_KEY = "rating-worker-incremental";
 export const RATING_WORKER_FULL_JOB_KEY = "rating-worker-full-safety";
@@ -1212,6 +1213,16 @@ async function runWorker() {
       providerRosterMaxFetches: tffProviderRosterMaxFetches,
     });
     const eventProjection = await projectChangedLedgerPlayers(db, overlapStart, startedAt, dryRun);
+    const publishedTournamentEnrollment = String(process.env.PUBLISHED_TOURNAMENT_AUTO_ENROLLMENT_ENABLED).toLowerCase() === "true"
+      ? await runPublishedTournamentEnrollment({ client, db, dryRun, nowIso: startedAt,
+        fromIso: process.env.PUBLISHED_TOURNAMENT_AUTO_ENROLLMENT_CUTOVER_ISO,
+        toIso: "9999-12-31T00:00:00.000Z", providerLimit: 20 })
+      : { enabled: false, affectedCommunityIds: [] };
+    if (publishedTournamentEnrollment.issues) {
+      publishedTournamentEnrollment.issuesByReason = publishedTournamentEnrollment.issues.reduce((counts, row) => ({ ...counts, [row.reason]: (counts[row.reason] || 0) + 1 }), {});
+      publishedTournamentEnrollment.quarantined = publishedTournamentEnrollment.issues.length;
+      delete publishedTournamentEnrollment.issues;
+    }
     const compatibilityReconciliation = mode === "full"
       ? await reconcileCompatibilityProjection(db, startedAt, dryRun)
       : { scanned: 0, changed: 0, skipped: true };
@@ -1219,6 +1230,7 @@ async function runWorker() {
       ? await activeCommunityIds(db)
       : await resolveIncrementalCommunityIds(db, overlapStart, !registry?.watermark);
     timeForFriendsEnrollment.affectedCommunityIds.forEach((communityId) => communityIds.push(communityId));
+    publishedTournamentEnrollment.affectedCommunityIds.forEach((communityId) => communityIds.push(communityId));
     const uniqueCommunityIds = unique(communityIds);
     const community = await recalculateCommunities(db, uniqueCommunityIds, startedAt, dryRun);
     const vivaProjection = await processProjectionOutbox(db, projectionUrl, startedAt, dryRun);
@@ -1236,6 +1248,7 @@ async function runWorker() {
       watermarkAfter: startedAt,
       ledger,
       timeForFriendsEnrollment,
+      publishedTournamentEnrollment,
       eventProjection,
       compatibilityReconciliation,
       community,
@@ -1244,7 +1257,7 @@ async function runWorker() {
     if (!dryRun) {
       await db.collection(PLAYER_RATING_COLLECTIONS.jobRuns).updateOne(
         { runId },
-        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
+        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, publishedTournamentEnrollment, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
       );
       await releaseLease(db, jobKey, owner, {
         jobKey,
