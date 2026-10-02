@@ -418,6 +418,7 @@ jobs:
           scripts/tests/proTrainingExclusion.nodered.test.mjs
           scripts/tests/proTrainingExclusionHotfix.test.mjs
           scripts/tests/proTrainingDiscountRelease.test.mjs
+          scripts/tests/proTrainingInitialization.test.mjs
           scripts/tests/topokratyExclusion.test.ts
           scripts/tests/groupSubscriptionDiscount.test.ts
           scripts/tests/tournamentSubscriptionDiscount.test.ts
