@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { proTrainingExclusionSource, topokratyExclusionSource } from './lib/eventPaymentSources.mjs';
 import { PRO_TRAINING_ENERGY_CALL_SITE_DELTAS } from './patch_live_lk1_pro_training_energy_exclusions_hotfix.mjs';
 import { previewSources } from './patch_nodered_subscription_price_preview.mjs';
+import { initializeProTrainingBeforeSteps } from './lib/proTrainingInitialization.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
 export const TARGET = Object.freeze({
@@ -64,8 +65,7 @@ export function patchBookingBody(source) {
     'if (freeFirstCovered && operation.lk1?.target?.proTraining !== true\n      && lk1FreeFirstEventCovers(ctx.lk1.rule.productId,\n      lk1OperationCategory');
   source = replaceExact(source, 'if (freeFirstCovered && lk1FreeFirstEventCovers(ctx.lk1.rule.productId, category,',
     'if (freeFirstCovered && !(category === "group_training"\n      && typeof isProTrainingExercise === "function" && isProTrainingExercise(booking.exercise || booking))\n      && lk1FreeFirstEventCovers(ctx.lk1.rule.productId, category,');
-  new Function('msg', 'node', 'global', source);
-  return source;
+  return initializeProTrainingBeforeSteps(source);
 }
 export function compose(raw) {
   if (sha256(raw) !== TARGET.source) throw new Error('Live flow source drift');
