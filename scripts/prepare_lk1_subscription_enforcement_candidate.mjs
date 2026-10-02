@@ -48,7 +48,10 @@ export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
     // minutes or a «Время на друзей» session), and the day's covered event is scoped to the
     // «Время на друзей» direction instead of the whole tournament category. The production
     // candidate still stays unbound until the full recomposition.
-    sourceSha256: "d8175e9a7b83293c33d33ad9902bbfd5ca515f33255084fd7aeb0c8e564a0292",
+    // Re-pinned 2026-10-01 (owner decision «Дружба Топократы» / game direction 6180): the
+    // reviewed router lists the club directions explicitly, so a Viva rename of 6180/6233 can no
+    // longer move the contour. The production candidate still stays unbound.
+    sourceSha256: "e4cce2e52a514f887616fe1f3916d3705c57391f85c88b951a12592f3f0fdd98",
     reason: "DEV_ROUTER_AMENDMENT_NOT_REBOUND",
   }),
   Object.freeze({

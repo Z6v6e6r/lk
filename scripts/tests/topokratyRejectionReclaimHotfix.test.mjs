@@ -14,7 +14,9 @@ import {
   TOPOKRATY_RECLAIM_PREVIEW_ID,
   TOPOKRATY_RECLAIM_TARGET,
   TOPOKRATY_RECLAIM_UPSTREAM_SHA256,
+  buildTopokratyReclaimPreviewDeltas,
   composeTopokratyReclaimArtifacts,
+  patchTopokratyReclaimPreviewBody,
   sha256,
 } from "../patch_live_lk1_topokraty_rejection_reclaim_hotfix.mjs";
 import { hubGatewaySource } from "../lib/eventPaymentSources.mjs";
@@ -46,6 +48,31 @@ test("the reviewed gateway source carries the same reclaim predicate, branch, st
     "the reviewed hooks source must carry the Topokraty refusal");
   assert.match(gatewaySource, /const LK1_RECLAIM_ATTEMPT_CAP = 5;/);
   assert.match(patcherSource, /reviewed, versioned code|Reviewed live preimage/);
+});
+
+test("the preview generation embeds the reviewed club module and keeps the reviewed refusal", () => {
+  // The refusal now comes from the reviewed preview router; the generation only brings the
+  // club module the router's `typeof` guard reaches. The delta list proves it carries no
+  // refusal of its own.
+  assert.deepEqual(buildTopokratyReclaimPreviewDeltas().map((delta) => delta.id), ["preview-module"]);
+  const composedRouter = `const key = (kind, ...parts) => JSON.stringify([kind, ctx.tenantKey, ...parts]);\n`
+    + "while (ctx.step === 'next') {\n"
+    + "  if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }\n"
+    + "  if (typeof isTopokratyExercise === 'function' && isTopokratyExercise(exercise)) {\n"
+    + "    const topokratyClubRow = Object.assign({}, canonical.isObj(live) ? live : {},\n"
+    + "      { productId: productId || live?.productId });\n"
+    + "    if (!(typeof isTopokratyClubPack === 'function' && isTopokratyClubPack(topokratyClubRow))) {\n"
+    + "      quote(id, 'UNAVAILABLE', null, 0, 0, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE'); continue;\n"
+    + "    }\n  }\n}";
+  const patched = patchTopokratyReclaimPreviewBody(composedRouter);
+  assert.equal(patched.split("function isTopokratyExercise(value) {").length, 2,
+    "the reviewed club module must enter the preview exactly once");
+  assert.equal(patched.split("function isTopokratyClubPack(value) {").length, 2);
+  assert.equal(patched.split("TOPOKRATY_SUBSCRIPTION_UNAVAILABLE").length, 2,
+    "the reviewed refusal must stay the single one");
+  assert.ok(patched.includes("if (typeof isTopokratyExercise === 'function' && isTopokratyExercise(exercise)) {"));
+  // A second run on its own postimage is refused instead of produced.
+  assert.throws(() => patchTopokratyReclaimPreviewBody(patched), /already carries this generation/);
 });
 
 test("the composed hub body carries the reclaim for every reviewed composition path", () => {
@@ -251,9 +278,10 @@ test("the candidate is composed against the live flow with only two changed node
   assert.equal(built.booking.refusalBound, true);
   assert.equal(built.preview.topokratyBound, true);
   assert.equal(built.preview.proTrainingKept, true);
-  // The shared preview composition stays byte-identical to the installed generation: the
-  // exclusion enters the composed body as this generation's own delta.
-  assert.equal(built.preview.sharedPreviewSourcesUnchanged, true);
+  // The refusal now lives in the reviewed preview source: the composed router carries it before
+  // this generation embeds the club module. The shared preview *composition* stays untouched.
+  assert.equal(built.preview.sharedPreviewSourceCarriesGuard, true);
+  assert.equal(built.preview.sharedPreviewSourcesUnchanged, false);
   const booking = built.flow.find((node) => node.id === TOPOKRATY_RECLAIM_GATEWAY_ID).func;
   assert.equal(sha256(booking), TOPOKRATY_RECLAIM_TARGET.patchedFuncSha256);
   const preview = built.flow.find((node) => node.id === TOPOKRATY_RECLAIM_PREVIEW_ID).func;

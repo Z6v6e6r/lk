@@ -11,9 +11,14 @@ export type ExerciseCategory =
 
 export type CabinetBookingCategory = "games" | "trainings" | "tournaments" | "other";
 
-export const EXERCISE_CATEGORY_OPEN_GAME_DIRECTION_IDS = [4588] as const;
+// The club directions of «Дружба Топократы» are pinned explicitly beside the generic ids:
+// 6180 «Топократы игра» must stay an open game and 6233 «Топократы тренировка» a group
+// training even if a Viva rename drops the «игра»/«тренировка» token from the label. The
+// shared exercise type 2349 of «Атланты» (direction 6152) is deliberately not listed.
+export const EXERCISE_CATEGORY_OPEN_GAME_DIRECTION_IDS = [4588, 6180] as const;
 export const EXERCISE_CATEGORY_OPEN_GAME_TYPE_IDS = [1613] as const;
 export const EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS = [605, 847, 963, 1208] as const;
+export const EXERCISE_CATEGORY_GROUP_TRAINING_DIRECTION_IDS = [6233] as const;
 export const EXERCISE_CATEGORY_TOURNAMENT_DIRECTION_IDS = [2617, 3284, 4769] as const;
 export const EXERCISE_CATEGORY_TOURNAMENT_TYPE_IDS = [839, 1013] as const;
 
@@ -167,7 +172,10 @@ export function resolveExerciseCategoryFromValue(value: unknown): ExerciseCatego
     return EXERCISE_CATEGORY_TOURNAMENT;
   }
 
-  if (includesNumber(EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS, typeId)) {
+  if (
+    includesNumber(EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS, typeId)
+    || includesNumber(EXERCISE_CATEGORY_GROUP_TRAINING_DIRECTION_IDS, directionId)
+  ) {
     return EXERCISE_CATEGORY_GROUP_TRAINING;
   }
 
