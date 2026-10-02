@@ -7,16 +7,19 @@
 // The harness composes the reviewed gateway body with stubbed channels, exactly like
 // scripts/tests/groupEventPayment.test.mjs, so it runs without production fixtures.
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import { hubGatewaySource } from "../lib/eventPaymentSources.mjs";
 
 const source = hubGatewaySource();
+const identitySource = fs.readFileSync(new URL('../nodered_subscription_product_nodes/gateway.js', import.meta.url), 'utf8');
 const actor = "1f0d5a3e-0000-4000-8000-000000000001";
 const subscriptionId = "1f0d5a3e-0000-4000-8000-000000000002";
 const exerciseId = "1f0d5a3e-0000-4000-8000-000000000003";
 const otherId = "1f0d5a3e-0000-4000-8000-000000000004";
 const HUB_PRODUCT = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const RA_PRODUCT = "b91e14d1-fe6e-4d0b-be39-3e45ad86b759";
+const PATRIOTS_PRODUCT = "37ab3713-4431-4815-96ba-d7ece76a9241";
 const EVENT_START = "2099-09-21T08:00:00+03:00";
 
 const hubExercise = () => ({
@@ -37,11 +40,14 @@ function instance(overrides = {}) {
 
 /** Drive the `lk1_money_owned_subscriptions` phase with one row. */
 function runMoneyPhase(row, overrides = {}) {
-  const { deps: depOverrides, ...ctxOverrides } = overrides;
+  const { deps: depOverrides, useRealIdentity = false, ...ctxOverrides } = overrides;
   const ctx = {
     caller: "http", tenantKey: "fixture", actorClientId: actor, clientSubscriptionId: subscriptionId,
     operationId: "fixture-operation", exerciseId, managedAction: "BOOK_GROUP_TRAINING",
     step: "lk1_money_owned_subscriptions",
+    lk1ProductIdentity: row.productId === PATRIOTS_PRODUCT
+      ? { actorClientId: actor, subscriptionId, tenantKey: "fixture", productId: PATRIOTS_PRODUCT,
+        name: "Fixture Patriots", purchaseDate: row.purchaseDate } : null,
     lk1MoneyExercise: hubExercise(),
     lk1MoneyReturnStep: "lk1_money_owned_continue",
     ...ctxOverrides,
@@ -59,7 +65,13 @@ function runMoneyPhase(row, overrides = {}) {
     isValidDateKey: (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").slice(0, 10)),
     finiteDate: (value) => { const ms = Date.parse(String(value || "")); return Number.isFinite(ms) ? new Date(ms) : null; },
     normalizePhone: (value) => value,
-    collectExactProductIds: (value) => [value.productId],
+    collectExactProductIds: (value) => [value.productId, value.product?.id].filter(Boolean),
+    normalizePurchaseDateMoscow: value => typeof value === "string" ? value.slice(0, 10) : null,
+    identityBound: (value) => value.lk1ProductIdentity?.actorClientId === value.actorClientId
+      && value.lk1ProductIdentity?.subscriptionId === value.clientSubscriptionId
+      && value.lk1ProductIdentity?.tenantKey === value.tenantKey,
+    identityOwned: (value, rows) => rows.map(item => ({ ...item,
+      productId: value.lk1ProductIdentity.productId })),
     collectSubscriptionPurchaseDateEvidence: (value) => {
       const rows = Array.isArray(value) ? value : [value];
       const dates = [...new Set(rows.map((row) => String(row.purchaseDate || "").slice(0, 10)).filter(Boolean))];
@@ -110,7 +122,11 @@ function runMoneyPhase(row, overrides = {}) {
           && String(value).trim().toLowerCase() === String(id).trim().toLowerCase())),
     ...depOverrides,
   };
-  const result = new Function(...Object.keys(deps), source)(...Object.values(deps));
+  if (useRealIdentity) {
+    delete deps.identityBound;
+    delete deps.identityOwned;
+  }
+  const result = new Function(...Object.keys(deps), (useRealIdentity ? identitySource : "") + source)(...Object.values(deps));
   return { result, ctx, stops };
 }
 
@@ -159,6 +175,63 @@ test("a NEW first-use instance is proven without an activation or an expiry yet"
   assert.equal(run.stops.length, 0, JSON.stringify(run.stops));
   assert.equal(run.ctx.lk1MoneyOwnership.subscription.subscriptionId, subscriptionId);
   assert.equal(run.ctx.lk1MoneyReadbackPhase, "lk1_money_owned_continue");
+});
+
+test("Patriots money-only events require activation before the 50 percent discount", () => {
+  const planRules = { formatVersion: 1, rules: [{ productId: PATRIOTS_PRODUCT,
+    planKey: "patriots", enforceFrom: "2026-09-01", maxActiveBookings: 4,
+    freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+    groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 }] };
+  const deps = { resolveCategory: () => "tournament",
+    global: { get: (key) => key === "subscriptions_lk1_plan_rules" ? planRules : undefined } };
+  const options = { managedAction: "BOOK_TOURNAMENT", deps };
+  const fresh = runMoneyPhase(instance({ productId: PATRIOTS_PRODUCT, status: "NEW",
+    activationDate: null, expirationDate: null, visitsLeft: 30 }), options);
+  assert.equal(fresh.stops.length, 1);
+  assert.equal(fresh.stops[0].details.code, "LK1_MONEY_SUBSCRIPTION_VALIDITY_UNPROVEN");
+  assert.deepEqual(fresh.stops[0].details.observed.violations, ["patriots_activation_required"]);
+  assert.equal(fresh.ctx.lk1MoneyOwnership, undefined);
+
+  const active = runMoneyPhase(instance({ productId: PATRIOTS_PRODUCT, visitsLeft: 0 }), options);
+  assert.equal(active.stops.length, 0, JSON.stringify(active.stops));
+  assert.equal(active.ctx.lk1MoneyOwnership.subscription.productId, PATRIOTS_PRODUCT);
+
+  const expired = runMoneyPhase(instance({ productId: PATRIOTS_PRODUCT,
+    expirationDate: "2026-09-01" }), options);
+  assert.equal(expired.stops.length, 1);
+  assert.ok(expired.stops[0].details.observed.violations.includes("expired"));
+});
+
+test("Patriots money-only events cannot use legacy booking when the rule is absent", () => {
+  const row = instance({ productId: PATRIOTS_PRODUCT, visitsLeft: 30 });
+  const deps = { resolveCategory: () => "tournament",
+    global: { get: (key) => key === "subscriptions_lk1_plan_rules"
+      ? { formatVersion: 1, rules: [] } : undefined } };
+  const run = runMoneyPhase(row, { managedAction: "BOOK_TOURNAMENT", deps });
+  assert.equal(run.stops.length, 1);
+  assert.equal(run.stops[0].details.code, "LK1_PATRIOTS_RULE_UNAVAILABLE");
+  assert.equal(run.ctx.lk1MoneyOwnership, undefined);
+});
+
+test("Patriots 5278 discount uses a general-list readback even when the event has no available subscription", () => {
+  const planRules = { formatVersion: 1, rules: [{ productId: PATRIOTS_PRODUCT,
+    planKey: "patriots", enforceFrom: "2026-09-01", maxActiveBookings: 4,
+    freeGameMinutesPerDay: 60, gameOverageDiscountPercent: 30,
+    groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 }] };
+  const exercise = { ...hubExercise(), directionId: 5278, typeId: 839,
+    availableClientSubscriptions: [] };
+  const identity = { actorClientId: actor, subscriptionId, tenantKey: "fixture", productId: PATRIOTS_PRODUCT,
+    name: "Fixture Patriots", purchaseDate: "2026-09-05" };
+  const deps = { resolveCategory: () => "tournament",
+    global: { get: key => key === "subscriptions_lk1_plan_rules" ? planRules : undefined } };
+  const options = { managedAction: "BOOK_TOURNAMENT", lk1MoneyExercise: exercise, useRealIdentity: true,
+    lk1ProductIdentity: identity, deps };
+  const active = runMoneyPhase(instance({ productId: undefined, visitsLeft: 0 }), options);
+  assert.equal(active.stops.length, 0, JSON.stringify(active.stops));
+  assert.equal(active.ctx.lk1MoneyOwnership.subscription.productId, PATRIOTS_PRODUCT);
+  const noRule = runMoneyPhase(instance({ productId: undefined, visitsLeft: 0 }), {
+    ...options, deps: { ...deps, global: { get: () => ({ formatVersion: 1, rules: [] }) } } });
+  assert.equal(noRule.stops[0]?.details.code, "LK1_PATRIOTS_RULE_UNAVAILABLE");
 });
 
 test("a held or frozen first-use instance is still refused by name", () => {

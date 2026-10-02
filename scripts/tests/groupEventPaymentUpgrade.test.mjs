@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { GROUP_UPGRADE_TARGETS as targets, composeGroupEventPaymentUpgrade as compose,
   writeGroupUpgradeArtifacts } from '../prepare_group_event_payment_upgrade.mjs';
 
@@ -9,6 +10,6 @@ test('superseded group-only release packet keeps its frozen pins and refuses evo
   assert.throws(()=>compose(Buffer.from(JSON.stringify(rows)),'old-group-packet'),/Canonical source drift/);
 });
 test('legacy CLI still rejects repository destination before reading private data',()=>{
-  const root=new URL('../../',import.meta.url).pathname.replace(/\/$/,'');
+  const root=fileURLToPath(new URL('../../',import.meta.url)).replace(/\/$/,'');
   assert.throws(()=>writeGroupUpgradeArtifacts('/nonexistent-source',root+'/forbidden-upgrade-output','old-group-packet'),/outside Git/);
 });

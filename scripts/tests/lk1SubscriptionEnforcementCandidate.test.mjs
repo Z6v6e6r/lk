@@ -10,6 +10,7 @@ import {
   validateUnifiedCandidateSummary,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
+import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -250,7 +251,14 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
       continue;
     }
     assert.match(amendment.sourceSha256, /^[a-f0-9]{64}$/);
-    assert.equal(actualSourceSha256, amendment.sourceSha256, target.id);
+    if (target.id === "lk_subscription_booking_router_20260804") {
+      // The older unified candidate remains unbound after the Patriots classifier
+      // change; its router hash must not silently advance with the new release.
+      assert.equal(actualSourceSha256, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, target.id);
+      assert.notEqual(actualSourceSha256, amendment.sourceSha256, target.id);
+    } else {
+      assert.equal(actualSourceSha256, amendment.sourceSha256, target.id);
+    }
     assert.notEqual(
       amendment.sourceSha256,
       target.candidateSha256,
