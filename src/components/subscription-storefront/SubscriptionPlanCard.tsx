@@ -91,7 +91,12 @@ function BillingOptions(props: {
             tabIndex={checked ? 0 : -1}
             onClick={() => props.onChange(option.id)}
           >
-            {option.label}
+            <span className="subscription-card__billing-label">{option.label}</span>
+            {option.id === 'monthly-two-hours' ? (
+              <svg className="subscription-card__billing-fire" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M13 2c1 5-3 6-3 10 0 1 .5 2 1.5 2.5C11 11 14 9 15 7c3 3 5 6 5 9a8 8 0 0 1-16 0c0-4 3-7 5-9-1 4 0 5 1 5 0-4 3-5 3-10Z" />
+              </svg>
+            ) : null}
           </button>
         );
       })}

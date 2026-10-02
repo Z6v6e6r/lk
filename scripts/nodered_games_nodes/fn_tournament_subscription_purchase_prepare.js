@@ -85,9 +85,6 @@ const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
 const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260903_release_enabled";
 // Enabled only by the reviewed sales configuration operation, after provider price readback.
 const SALES_QUOTAS_20260909_ENABLED = global.get("summer_subscription_sales_20260909_enabled") === true;
-// Change only new HAB purchase prices; quota and admission flags remain independent.
-const HUB_PRICE_98000_ENABLED = !!subscriptionCounterEpoch.startedAt(global) || SALES_QUOTAS_20260909_ENABLED
-  || global.get("summer_subscription_network_friendship_price_98000_enabled") === true;
 const SALES_QUOTAS_20260909_START = "2026-09-09T07:00:00.000Z";
 // The daily annual seat count is configuration, not code: read it from the same
 // style of global the other subscription limits use, and keep the current
@@ -184,12 +181,12 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
   network_friendship: {
     inventoryId: "network_friendship_12m_2026_v1",
     batchSize: 100,
-    tierPricesMinor: [HUB_PRICE_98000_ENABLED ? 9800000 : 5680000],
+    tierPricesMinor: [6800000],
     productName: "Падел.Дружба.ХАБ",
     launchEnabled: true,
     providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
     providerProductName: "Падел.Дружба.ХАБ — годовая",
-    providerProductCostMinor: HUB_PRICE_98000_ENABLED ? 9800000 : 5680000,
+    providerProductCostMinor: 6800000,
     dailyCapEnabled: true,
     dailyLimit: NETWORK_FRIENDSHIP_DAILY_LIMIT,
   },
@@ -531,10 +528,15 @@ const readRegionalFriendshipConfig = (counterKey) => {
   const providerProductName = readGlobalFirst([`summer_subscription_${counterKey}_product_name`])
     || regional.providerProductName
     || regional.productName;
-  const providerProductCostMinor = toMoneyMinor(
+  const configuredProductCostMinor = toMoneyMinor(
     global.get(`summer_subscription_${counterKey}_product_cost_minor`),
     regional.providerProductCostMinor,
   );
+  // HAB is sold at its exact current Viva base, never as an implicit discount
+  // against a stale override. Invalid bases keep admission closed.
+  const providerProductCostMinor = counterKey === "network_friendship"
+    && configuredProductCostMinor !== regional.providerProductCostMinor
+    ? null : configuredProductCostMinor;
   const tiers = regional.tierPricesMinor.map((priceMinor, index) => {
     const tierNumber = index + 1;
     return {

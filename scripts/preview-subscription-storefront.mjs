@@ -71,11 +71,10 @@ ${bare ? '' : `<header>Preview /subsription · оплата на заглушк�
       }
       var scoped = url.indexOf('counterKey=') !== -1;
       var payload = scoped
-        // Approved HAB annual price (98 000 RUB); the live counter still returns
-        // 56 800 RUB until the price-98000 flag is enabled in Node-RED.
+        // Current HAB annual price: 68 000 RUB, shared with the backend.
         ? [{ counterKey: 'network_friendship', inventoryId: 'preview', unlimited: false,
              planType: 'friendship', campaignKey: 'preview', productId: null,
-             priceMinor: 9800000, canPurchase: true, bindingReady: true,
+             priceMinor: 6800000, canPurchase: true, bindingReady: true,
              remainingCount: 10, totalLimit: 10, paidCount: 0, status: 'READY' }]
         : [
             { counterKey: 'friendship', inventoryId: 'preview', unlimited: false, planType: 'friendship',

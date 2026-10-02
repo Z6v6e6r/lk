@@ -369,9 +369,9 @@ test('storefront checks the two-hour Viva product separately from summer counter
 test('two-hour card shows six active bookings rather than the original friendship cap', () => {
   const source = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
   assert.match(source, /'monthly-two-hours':[\s\S]*?До 6 активных записей/);
-  // The 120-minute bucket is one event a day, never two 60-minute games.
-  assert.match(source, /'monthly-two-hours':[\s\S]*?Одно событие в день: игра 60, 90 или 120 минут либо «Время на друзей»/);
-  assert.match(source, /'monthly-two-hours':[\s\S]*?С 7-й записи — только скидка/);
+  const twoHourCopy = source.slice(source.indexOf("'monthly-two-hours':"));
+  assert.match(twoHourCopy, /id: 'friends-time', icon: 'friends-time', label: '«Время на друзей»'/);
+  assert.doesNotMatch(twoHourCopy, /one-event-a-day|discount-only/);
 });
 
 test('payment adapter binds every sold billing option to its own LK1 counter', async () => {
@@ -473,10 +473,10 @@ test('five-visit pass keeps its API price and disables the CTA without one', () 
   assert.deepEqual(monthly.map(option => option.priceSuffix), ['/ 30 дней', '/ 30 дней', '/ год']);
 });
 
-test('card copy follows the approved mock: free hour, footer note and five-visit pass', () => {
+test('card copy follows the approved daily-hour headings, footer note and five-visit pass', () => {
   const presentationSource = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
-  assert.equal((presentationSource.match(/title: '1 час в день бесплатно:'/g) || []).length, 2);
-  assert.equal((presentationSource.match(/title: '1 час в день бесплатно на выбор:'/g) || []).length, 2);
+  assert.equal((presentationSource.match(/title: '1 час в день:'/g) || []).length, 2);
+  assert.equal((presentationSource.match(/title: '1 час в день на выбор:'/g) || []).length, 2);
   assert.match(presentationSource, /kind: 'note'/);
   assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*shortLabel: 'Энергия',\s*labelKind: 'plain',/);
   assert.match(presentationSource, /title: 'Форматы на выбор:'/);

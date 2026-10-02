@@ -4837,9 +4837,9 @@ test("network status caps the existing 100-seat inventory at 10 sales per Moscow
   assert.equal(payload.inventoryPaidCount, 9);
   assert.equal(payload.inventoryReservedCount, 3);
   assert.equal(payload.inventoryRemainingCount, 88);
-  assert.equal(payload.priceMinor, 5680000);
+  assert.equal(payload.priceMinor, 6800000);
   assert.equal(payload.productId, "db7a5250-7369-4f43-8ac5-9111be24bc74");
-  assert.equal(payload.providerProductCostMinor, 5680000);
+  assert.equal(payload.providerProductCostMinor, 6800000);
   assert.equal(payload.discountMinor, 0);
   assert.equal(payload.bindingReady, true);
   assert.equal(payload.managedSaleReady, false);
@@ -5040,12 +5040,12 @@ function readPriceOnlyViews(counterKey: string, globals: GlobalValues) {
   });
 }
 
-test("HAB price-only flag changes new prices to 98000 without changing quotas or opening sales", () => {
+test("HAB new prices stay at 68000 independently of the legacy price flag and sales admission", () => {
   const before = readPriceOnlyViews("network_friendship", {});
   const after = readPriceOnlyViews("network_friendship", HAB_PRICE_ONLY_GLOBALS);
   for (const view of [after.status, after.refresh]) {
-    assert.equal(view.priceMinor, 9800000);
-    assert.equal(view.providerProductCostMinor, 9800000);
+    assert.equal(view.priceMinor, 6800000);
+    assert.equal(view.providerProductCostMinor, 6800000);
     assert.equal(view.discountMinor, 0);
     assert.equal(view.totalLimit, 10);
     assert.equal(view.dailyLimit, 10);
@@ -5053,8 +5053,8 @@ test("HAB price-only flag changes new prices to 98000 without changing quotas or
   }
   assert.equal(asRecord(after.purchase.details).code, "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
   const admitted = readPriceOnlyViews("network_friendship", { ...HUB_NEXT_DAY_GLOBALS, ...HAB_PRICE_ONLY_GLOBALS });
-  assert.equal(admitted.purchase.productCostMinor, 9800000);
-  assert.equal(asRecord((admitted.purchase.tiers as NodeRedMsg[])[0]).priceMinor, 9800000);
+  assert.equal(admitted.purchase.productCostMinor, 6800000);
+  assert.equal(asRecord((admitted.purchase.tiers as NodeRedMsg[])[0]).priceMinor, 6800000);
   assert.equal(admitted.purchase.dailyLimit, 1);
   const withoutPrices = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(withoutPrices);
@@ -5066,7 +5066,7 @@ test("HAB price-only flag changes new prices to 98000 without changing quotas or
   assert.deepEqual(withoutObservationTime(withoutPrices(after)), withoutObservationTime(withoutPrices(before)));
 });
 
-test("HAB price-only flag is strict and leaves every other configured sale unchanged", () => {
+test("retired HAB price flag cannot change current prices or other configured sales", () => {
   for (const value of [undefined, false, "true", 1, null]) {
     assert.deepEqual(withoutObservationTime(readPriceOnlyViews("network_friendship", { summer_subscription_network_friendship_price_98000_enabled: value })),
       withoutObservationTime(readPriceOnlyViews("network_friendship", {})));
@@ -5078,21 +5078,27 @@ test("HAB price-only flag is strict and leaves every other configured sale uncha
     withoutObservationTime(readPriceOnlyViews("network_friendship", SALES_QUOTA_GLOBALS)));
 });
 
-test("HAB price-only flag rejects an old provider base instead of creating a discount", () => {
-  const mismatch = readPriceOnlyViews("network_friendship", {
-    ...HAB_PRICE_ONLY_GLOBALS, summer_subscription_network_friendship_product_cost_minor: 5680000,
-  });
-  assert.equal(mismatch.status.priceMinor, 9800000);
-  assert.equal(mismatch.status.bindingReady, false);
-  assert.equal(mismatch.status.canPurchase, false);
+test("HAB current price rejects both stale provider bases instead of creating a discount", () => {
+  for (const oldCost of [5680000, 9800000]) {
+    const globals = { ...HUB_NEXT_DAY_GLOBALS, summer_subscription_network_friendship_product_cost_minor: oldCost };
+    const mismatch = readPriceOnlyViews("network_friendship", globals);
+    assert.equal(mismatch.status.priceMinor, 6800000);
+    assert.equal(mismatch.status.bindingReady, false);
+    assert.equal(mismatch.status.canPurchase, false);
+    assert.equal(mismatch.refresh.bindingReady, false);
+    const limit = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+      { _summerSubscriptionCtx: mismatch.purchase, payload: [] }, globals) as NodeRedMsg[];
+    assert.equal(limit[0], null);
+    assert.equal(asRecord(limit[1]).statusCode, 503);
+  }
   const matched = readPriceOnlyViews("network_friendship", {
-    ...HAB_PRICE_ONLY_GLOBALS, summer_subscription_network_friendship_product_cost_minor: 9800000,
+    ...HAB_PRICE_ONLY_GLOBALS, summer_subscription_network_friendship_product_cost_minor: 6800000,
   });
   assert.equal(matched.status.bindingReady, true);
   assert.equal(matched.status.discountMinor, 0);
 });
 
-test("HAB price-only flag preserves the amount and provider base of previously accepted payments", () => {
+test("HAB current price preserves the amount and provider base of previously accepted payments", () => {
   for (const status of ["PAID", "PAYMENT_PENDING"]) {
     const record = { counterKey: "network_friendship", inventoryId: "network_friendship_12m_2026_v1",
       paymentRef: "old-price", transactionId: "fixture-old-transaction", status,
@@ -5237,7 +5243,7 @@ test("sales quota flag changes only the approved products and requires strict tr
   });
 });
 
-test("HAB quota flag sets 1 of 1 at 98000 RUB and preserves historical prices and sales guards", () => {
+test("HAB quota flag sets 1 of 1 at 68000 RUB and preserves historical prices and sales guards", () => {
   withFixedNow("2026-09-09T08:00:00.000Z", () => {
     const globals = { ...SALES_QUOTA_GLOBALS, ...NETWORK_PRODUCT_GLOBALS };
     const prepare = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
@@ -5262,15 +5268,15 @@ test("HAB quota flag sets 1 of 1 at 98000 RUB and preserves historical prices an
     assert.equal(emptyDay.totalLimit, 1);
     assert.equal(emptyDay.remainingCount, 1);
     assert.equal(emptyDay.inventoryPaidCount, 1);
-    assert.equal(emptyDay.priceMinor, 9800000);
-    assert.equal(emptyDay.price, 98000);
+    assert.equal(emptyDay.priceMinor, 6800000);
+    assert.equal(emptyDay.price, 68000);
     assert.equal(emptyDay.canPurchase, false);
     assert.equal(emptyDay.managedSaleReady, false);
     const used = read([historical, { ...historical, paidAt: "2026-09-09T07:30:00.000Z" }]);
     assert.equal(used.remainingCount, 0);
     assert.deepEqual(historical, original);
     const mismatch = read([], { summer_subscription_network_friendship_product_cost_minor: 5680000 });
-    assert.equal(mismatch.priceMinor, 9800000);
+    assert.equal(mismatch.priceMinor, 6800000);
     assert.equal(mismatch.bindingReady, false);
     assert.equal(mismatch.canPurchase, false);
   });
@@ -5340,17 +5346,29 @@ const HUB_NEXT_DAY_RECEIPT = { bookingUsageScope: "ALL_BOOKINGS", mode: "LK1_VIV
 const HUB_NEXT_DAY_GLOBALS = { ...NETWORK_PRODUCT_GLOBALS, summer_subscription_sales_20260909_enabled: true,
   summer_subscription_hub_lk1_sales_enabled: true, subscriptions_lk1_product_policy: HUB_NEXT_DAY_POLICY,
   subscriptions_lk1_hub_sale_runtime: HUB_NEXT_DAY_RECEIPT };
-function nextDayHubProduct(activationDays: unknown, date = "2026-09-09T20:59:59.000Z", globals = HUB_NEXT_DAY_GLOBALS) {
+function nextDayHubProduct(activationDays: unknown, date = "2026-09-09T20:59:59.000Z", globals = HUB_NEXT_DAY_GLOBALS, providerCost = 6800000) {
   return withFixedNow(date, () => runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js", {
     statusCode: 200,
-    payload: [{ id: HUB_NEXT_DAY_POLICY.productId, name: "Падел.Дружба.ХАБ — годовая", cost: 9800000,
+    payload: [{ id: HUB_NEXT_DAY_POLICY.productId, name: "Падел.Дружба.ХАБ — годовая", cost: providerCost,
       productType: "SUBSCRIPTION", activationDays, validityDays: 365, visits: 365 }],
     _summerSubscriptionCtx: { action: "purchase", step: "load_products", token: "fixture-token", saleType: "tiered_direct_product",
       counterKey: "network_friendship", inventoryId: "network_friendship_12m_2026_v1", clientPhone: "79990000000",
-      productId: HUB_NEXT_DAY_POLICY.productId, productCostMinor: 9800000, priceMinor: 9800000,
+      productId: HUB_NEXT_DAY_POLICY.productId, productCostMinor: 6800000, priceMinor: 6800000,
       hubLk1Sale: structuredClone(globals.subscriptions_lk1_hub_sale_runtime || HUB_NEXT_DAY_RECEIPT), batchIndex: 1 },
   }, globals)) as NodeRedMsg[];
 }
+test("HAB current checkout rejects stale Viva prices before transaction dispatch", () => {
+  for (const providerCost of [5680000, 9800000]) {
+    const out = nextDayHubProduct(1, undefined, HUB_NEXT_DAY_GLOBALS, providerCost);
+    assert.equal(out[0], null);
+    assert.equal(out[1], null);
+    assert.equal(out[4], undefined);
+    const error = asRecord(out[2]);
+    assert.equal(error.statusCode, 503);
+    assert.equal(asRecord(asRecord(error.payload).details).expectedProductCostMinor, 6800000);
+  }
+});
+
 test("new LK1 HAB requires exact next-day activation and freezes the Moscow date", () => {
   for (const [date, expected] of [["2026-09-09T20:59:59.000Z", "2026-09-10"],
     ["2026-09-09T21:00:00.000Z", "2026-09-11"], ["2026-10-02T09:00:00.000Z", "2026-10-03"]]) {
@@ -5358,7 +5376,7 @@ test("new LK1 HAB requires exact next-day activation and freezes the Moscow date
     const ctx = asRecord(asRecord(out[4])._summerSubscriptionCtx);
     assert.equal(ctx.providerActivationDays, 1); assert.equal(ctx.providerAutoActivationDate, expected);
     assert.equal(ctx.activationNotBeforeDate, expected); assert.equal(ctx.providerValidityDays, 365);
-    assert.equal(ctx.providerVisits, 365); assert.equal(ctx.priceMinor, 9800000);
+    assert.equal(ctx.providerVisits, 365); assert.equal(ctx.priceMinor, 6800000);
     assert.deepEqual(ctx.hubLk1Sale, HUB_NEXT_DAY_RECEIPT);
   }
   for (const days of [0, 2, 365, "1", null, undefined]) {
@@ -5381,11 +5399,11 @@ test("HUB annual guest checkout keeps the epoch ledger valid without a clientId"
     step: "piter_ledger_find", counterKey: "network_friendship",
     inventoryId: "network_friendship_12m_20260910_epoch", paymentRef: "guest-checkout-ref",
     clientPhone: "79990000000", clientId: null, totalLimit: 100, dailyLimit: 1, dailyDropDate: "2026-09-12",
-    batchSize: 1, batchIndex: 1, batchRemainingBefore: 1, providerProductCostMinor: 9800000,
+    batchSize: 1, batchIndex: 1, batchRemainingBefore: 1, providerProductCostMinor: 6800000,
     hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT),
     providerPayload: { products: [{ id: HUB_NEXT_DAY_POLICY.productId, discount: 0 }] },
     tiers: [{ productId: HUB_NEXT_DAY_POLICY.productId, productName: "Падел.Дружба.ХАБ — годовая",
-      priceMinor: 9800000, providerProductCostMinor: 9800000 }],
+      priceMinor: 6800000, providerProductCostMinor: 6800000 }],
   };
   const out = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
@@ -5581,7 +5599,7 @@ test("selected-subscription HAB receipt admits new purchase and preserves old pa
 });
 
 test("old HAB pending payment replays its frozen receipt and URL under selected-subscription runtime",()=>{
- for(const frozenPrice of [5680000,9800000]){
+ for(const frozenPrice of [5680000,9800000,6800000]){
  const current={...HUB_NEXT_DAY_RECEIPT,bookingUsageScope:"SUBSCRIPTION_BENEFIT_ONLY"};
  const ctx={...quotaPurchaseContext(),counterKey:"network_friendship",inventoryId:"network_friendship_12m_2026_v1",
   totalLimit:100,dailyLimit:1,dailyDropDate:"2026-09-09",hubLk1Sale:current};
@@ -5608,13 +5626,13 @@ test("old HAB CLAIMED price cannot dispatch after the provider base changes", ()
   const ctx = { ...quotaPurchaseContext(), counterKey: "network_friendship",
     inventoryId: "network_friendship_12m_2026_v1", totalLimit: 100, dailyLimit: 1,
     dailyDropDate: "2026-09-09", hubLk1Sale: HUB_NEXT_DAY_RECEIPT,
-    providerProductCostMinor: 9800000,
+    providerProductCostMinor: 6800000,
     providerPayload: { products: [{ id: HUB_NEXT_DAY_POLICY.productId, discount: 0 }] } };
   const requestFingerprint = [ctx.inventoryId, ctx.counterKey, ctx.paymentRef, ctx.clientPhone, ""].join("\n").trim();
   const ledger = buildHubLedger({ dailyDate: "2026-09-09", reservedCount: 1, takenCount: 1, dailyReservedCount: 1,
     reservations: [{ paymentRef: ctx.paymentRef, requestFingerprint, intentFingerprint: "fixture-old-intent",
       state: "CLAIMED", dailyDate: "2026-09-09", clientPhone: ctx.clientPhone,
-      priceMinor: 5680000, providerProductCostMinor: 5680000, discountMinor: 0,
+      priceMinor: 9800000, providerProductCostMinor: 9800000, discountMinor: 0,
       productId: HUB_NEXT_DAY_POLICY.productId, saleRecord: { hubLk1Sale: structuredClone(HUB_NEXT_DAY_RECEIPT) } }] });
   const before = structuredClone(ledger);
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",

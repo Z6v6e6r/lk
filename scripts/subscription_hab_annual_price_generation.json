@@ -1,0 +1,31 @@
+{
+  "kind": "SUBSCRIPTION_HAB_ANNUAL_PRICE_68000_GENERATION_V1",
+  "predecessor": "subscription_friendship_two_hours_generation.json",
+  "note": "Current HAB annual price and exact provider base are 6800000 minor units. Historical payments and historical generation hashes remain frozen. Source-only generation; live-flow preflight and deployment are separate.",
+  "targets": [
+    {
+      "id": "8fdc7076a0c436a2",
+      "fileName": "fn_tournament_subscription_status_prepare.js",
+      "preimageSha256": "92dec6b2efeea8036e3dcb1fc1599bb834f6136fdc367a3a357d8c34dde7b29f",
+      "candidateSha256": "361129c501017476417567ad3df8cb3242f51c4da0206f0349ae536010300589"
+    },
+    {
+      "id": "c165e43eba668c25",
+      "fileName": "fn_tournament_subscription_status_response.js",
+      "preimageSha256": "79619c18af89530713be9b771b753daf892bdcc69d26b46932521c4ae5603a34",
+      "candidateSha256": "4d762e726e60fb38d9070fc6c4588161a0e51f4a8c79f568939a4f8127f3e129"
+    },
+    {
+      "id": "91dded2dc8cfebe4",
+      "fileName": "fn_tournament_subscription_purchase_prepare.js",
+      "preimageSha256": "7d8e8e1f067e46845824f86471749565c9dde83b48e8915480ea0f92af049004",
+      "candidateSha256": "ce0740ee6f72fbd4b1ad9cb8a27d97a7eab1aa45d5403ddfe5aabe279de9ca21"
+    },
+    {
+      "id": "519b6a6ca208e281",
+      "fileName": "fn_tournament_subscription_counter_refresh_prepare.js",
+      "preimageSha256": "bd6332ca15aa62b639f91ece36eafe76b7465a078d68312d33996666ff38f0a4",
+      "candidateSha256": "525d0ef8891862e654978f3d82177d7198688b6e68bd925dd6ac84220197a58a"
+    }
+  ]
+}
