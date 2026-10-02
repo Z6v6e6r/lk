@@ -128,6 +128,7 @@ import { createLocalMembershipId } from "./localMembershipGeneration";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
+import { getIdentityKey, getIdentityMessageKey, isViewerIdentity } from "../../utils/viewerIdentity";
 import { A3PayGameCreateDemo } from "./A3PayGameCreateDemo";
 import {
   SubscriptionUsageShadowPanel,
@@ -3290,21 +3291,17 @@ function isCommunityMemberForAutopublish(
     members: Array<{
       id: string | null;
       phone: string | null;
+      isViewer?: boolean;
     }>;
   },
   profileId: string | null,
   profilePhoneNorm: string | null,
 ) {
   const normalizedProfileId = (profileId || "").trim();
-  return community.members.some((member) => {
-    const byId = Boolean(normalizedProfileId && member.id && member.id === normalizedProfileId);
-    const byPhone = Boolean(
-      profilePhoneNorm
-      && member.phone
-      && normalizePhoneForGame(member.phone) === profilePhoneNorm,
-    );
-    return byId || byPhone;
-  });
+  return community.members.some((member) => isViewerIdentity(member, {
+    id: normalizedProfileId,
+    phone: profilePhoneNorm,
+  }));
 }
 
 function getCommunityAutopublishInitials(name: string): string {
@@ -3534,8 +3531,10 @@ function mergeChatMessages(
   incoming: PadelGameChatMessage[],
 ): PadelGameChatMessage[] {
   const keyFor = (message: PadelGameChatMessage) => {
-    const sender = message.sender?.phoneNorm || message.sender?.id || "unknown";
-    return `${message.createdTs}|${sender}|${message.text}`;
+    return getIdentityMessageKey({
+      ...message,
+      sender: { id: message.sender?.id, phone: message.sender?.phoneNorm },
+    });
   };
 
   const bucket = new Map<string, PadelGameChatMessage>();
@@ -3591,10 +3590,8 @@ function formatChatDateLabel(value: string | null, fallbackTs: number): string {
 }
 
 function getChatSenderStableKey(message: PadelGameChatMessage): string {
-  const phone = normalizePhoneForGame(message.sender?.phoneNorm ?? null);
-  if (phone) return `phone:${phone}`;
-  const senderId = (message.sender?.id || "").trim();
-  if (senderId) return `id:${senderId}`;
+  const identityKey = getIdentityKey({ id: message.sender?.id, phone: message.sender?.phoneNorm });
+  if (identityKey) return identityKey;
   const senderName = (message.sender?.name || "").trim().toLowerCase();
   if (senderName) return `name:${senderName}`;
   return "unknown";
@@ -5447,15 +5444,18 @@ export default function GamesPage({
       if (!Number.isFinite(chat.lastMessageTs) || chat.lastMessageTs <= 0) return;
 
       const lastReadTs = chatReadMap[chat.gameId] ?? 0;
-      const senderPhone = normalizePhoneForGame(chat.lastMessageSenderPhone);
-      const isMine = Boolean(senderPhone && senderPhone === profilePhoneNorm);
+      const isMine = isViewerIdentity({
+        id: chat.lastMessageSenderId,
+        phone: chat.lastMessageSenderPhone,
+        isViewer: chat.lastMessageIsViewer,
+      }, { id: profileId, phone: profilePhoneNorm });
       if (!isMine && chat.lastMessageTs > lastReadTs) {
         nextUnread[chat.gameId] = 1;
       }
     });
 
     setChatUnreadByGame(nextUnread);
-  }, [chatReadMap, communityGames, gameRecordId, profilePhoneNorm]);
+  }, [chatReadMap, communityGames, gameRecordId, profileId, profilePhoneNorm]);
 
   const resolveGamePaymentByVivaBookings = useCallback(async (
     game: PadelGameRecord | null | undefined,
@@ -7548,18 +7548,13 @@ export default function GamesPage({
   const matchesCurrentUserByIdentity = useCallback((
     idRaw: string | null | undefined,
     phoneRaw: string | null | undefined,
+    isViewer?: boolean,
   ) => {
-    const normalizedProfileId = (profileId || "").trim();
-    const normalizedEntityId = (idRaw || "").trim();
-    if (normalizedProfileId && normalizedEntityId && normalizedProfileId === normalizedEntityId) {
-      return true;
-    }
-    const normalizedEntityPhone = normalizePhoneForGame(phoneRaw ?? null);
-    return Boolean(profilePhoneNorm && normalizedEntityPhone && normalizedEntityPhone === profilePhoneNorm);
+    return isViewerIdentity({ id: idRaw, phone: phoneRaw, isViewer }, { id: profileId, phone: profilePhoneNorm });
   }, [profileId, profilePhoneNorm]);
   const isCurrentUserOrganizerOfGame = useCallback((game: PadelGameRecord | null | undefined) => {
     if (!game) return false;
-    if (matchesCurrentUserByIdentity(game.organizer?.id ?? null, game.organizer?.phone ?? null)) {
+    if (matchesCurrentUserByIdentity(game.organizer?.id ?? null, game.organizer?.phone ?? null, game.organizer?.isViewer)) {
       return true;
     }
 
@@ -7569,7 +7564,7 @@ export default function GamesPage({
     });
     if (
       organizerFromParticipants
-      && matchesCurrentUserByIdentity(organizerFromParticipants.id, organizerFromParticipants.phone)
+      && matchesCurrentUserByIdentity(organizerFromParticipants.id, organizerFromParticipants.phone, organizerFromParticipants.isViewer)
     ) {
       return true;
     }
@@ -7608,6 +7603,7 @@ export default function GamesPage({
       const organizerIsCurrentUser = matchesCurrentUserByIdentity(
         activeGameRecord.organizer.id ?? null,
         activeGameRecord.organizer.phone ?? null,
+        activeGameRecord.organizer.isViewer,
       );
       const resolvedNumeric = organizerIsCurrentUser
         ? normalizeRatingNumeric(profileRatingNumeric ?? activeGameRecord.organizer.ratingNumeric)
@@ -7622,6 +7618,7 @@ export default function GamesPage({
         id: activeGameRecord.organizer.id ?? null,
         name: activeGameRecord.organizer.name || "Организатор",
         phone: activeGameRecord.organizer.phone ?? null,
+        isViewer: activeGameRecord.organizer.isViewer,
         photo: activeGameRecord.organizer.photo ?? null,
         rating: resolvedRating ?? null,
         ratingNumeric: resolvedNumeric ?? null,
@@ -7637,6 +7634,7 @@ export default function GamesPage({
     const organizerIsCurrentUser = matchesCurrentUserByIdentity(
       organizerFallback.id,
       organizerFallback.phone,
+      organizerFallback.isViewer,
     );
     const resolvedNumeric = organizerIsCurrentUser
       ? normalizeRatingNumeric(profileRatingNumeric ?? organizerFallback.ratingNumeric)
@@ -7660,8 +7658,8 @@ export default function GamesPage({
     profileRatingNumeric,
   ]);
   const isCurrentUserOrganizerByDetails = useMemo(
-    () => matchesCurrentUserByIdentity(detailsOrganizerPlayer?.id, detailsOrganizerPlayer?.phone),
-    [detailsOrganizerPlayer?.id, detailsOrganizerPlayer?.phone, matchesCurrentUserByIdentity],
+    () => matchesCurrentUserByIdentity(detailsOrganizerPlayer?.id, detailsOrganizerPlayer?.phone, detailsOrganizerPlayer?.isViewer),
+    [detailsOrganizerPlayer?.id, detailsOrganizerPlayer?.phone, detailsOrganizerPlayer?.isViewer, matchesCurrentUserByIdentity],
   );
   const detailsOrganizerPayload = useMemo(
     () => ({
@@ -8268,13 +8266,7 @@ export default function GamesPage({
     ) {
       return true;
     }
-    const normalizedProfileId = normalizeComparableId(profileId);
-    const playerId = normalizeComparableId(player.id);
-    if (normalizedProfileId && playerId && normalizedProfileId === playerId) {
-      return true;
-    }
-    const playerPhoneNorm = normalizePhoneForGame(player.phone);
-    return Boolean(profilePhoneNorm && playerPhoneNorm && profilePhoneNorm === playerPhoneNorm);
+    return isViewerIdentity(player, { id: profileId, phone: profilePhoneNorm });
   }, [isSelfLeavePreviewMode, profileId, profilePhoneNorm, selfLeavePreview?.playerId]);
   const detailsLeaveEvents = useMemo(
     () => normalizeGameLeaveEvents(
@@ -15462,8 +15454,11 @@ export default function GamesPage({
 
                 const message = item.message;
                 const senderPhone = normalizePhoneForGame(message.sender?.phoneNorm ?? null);
-                const myPhone = normalizePhoneForGame(profilePhone);
-                const isMine = Boolean(senderPhone && myPhone && senderPhone === myPhone);
+                const isMine = isViewerIdentity({
+                  id: message.sender?.id,
+                  phone: message.sender?.phoneNorm,
+                  isViewer: message.sender?.isViewer,
+                }, { id: profileId, phone: profilePhone });
                 const isUnread = !isMine && message.createdTs > currentChatReadTs;
                 const senderName = (message.sender?.name || (isMine ? "Вы" : "Игрок")).trim() || "Игрок";
                 const senderId = (message.sender?.id || "").trim();
@@ -15472,8 +15467,8 @@ export default function GamesPage({
                 const senderColor = pickChatSenderColor(senderKey);
                 const senderPhoto = (
                   (isMine && profilePhoto)
-                  || (senderPhone ? chatSenderPhotoByIdentity.get(`phone:${senderPhone}`) : null)
                   || (senderId ? chatSenderPhotoByIdentity.get(`id:${senderId}`) : null)
+                  || (senderPhone ? chatSenderPhotoByIdentity.get(`phone:${senderPhone}`) : null)
                   || (senderNameKey ? chatSenderPhotoByIdentity.get(`name:${senderNameKey}`) : null)
                   || null
                 );

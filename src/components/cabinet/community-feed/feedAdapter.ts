@@ -20,6 +20,7 @@ import {
 import { stripNewsTextMarkup } from "./newsTextFormatting";
 import { appendCurrentAuthModeToNavigableUrl } from "../../../utils/authMode";
 import { normalizeTournamentSignupPublicUrl } from "../../../utils/tournamentSignupEntry";
+import { isViewerIdentity } from "../../../utils/viewerIdentity";
 
 const PUBLIC_TOURNAMENT_ORIGIN = PUBLIC_INVITE_ORIGIN || "https://padlhub.ru";
 
@@ -254,10 +255,11 @@ function playerMatchesIdentity(
   currentUserPhone: string | null,
 ) {
   if (isInactiveGameMembershipStatus(player.status)) return false;
-  const byId = Boolean(currentUserId && normalizeIdentityId(player.id) === currentUserId);
-  const playerPhone = normalizePhone(player.phone);
-  const byPhone = Boolean(currentUserPhone && playerPhone && playerPhone === currentUserPhone);
-  return byId || byPhone;
+  return isViewerIdentity({
+    id: normalizeIdentityId(player.id),
+    phone: player.phone,
+    isViewer: player.isViewer,
+  }, { id: currentUserId, phone: currentUserPhone });
 }
 
 function splitPaymentItemMatchesIdentity(
@@ -1100,10 +1102,11 @@ function isCurrentUserInGame(
   const normalizedPhone = normalizePhone(currentUserPhone);
   const normalizedId = normalizeIdentityId(currentUserId);
 
-  const organizerId = normalizeIdentityId(game?.organizer?.id);
-  if (normalizedId && organizerId && normalizedId === organizerId) return true;
-  const organizerPhone = normalizePhone(game?.organizer?.phone);
-  if (normalizedPhone && organizerPhone && normalizedPhone === organizerPhone) return true;
+  if (isViewerIdentity({
+    id: normalizeIdentityId(game?.organizer?.id),
+    phone: game?.organizer?.phone,
+    isViewer: game?.organizer?.isViewer,
+  }, { id: normalizedId, phone: normalizedPhone })) return true;
 
   if ((game?.participants ?? []).some((player) => playerMatchesIdentity(player, normalizedId, normalizedPhone))) {
     return true;
@@ -1530,10 +1533,11 @@ function isCurrentUserAuthorOfPost(
   const postAuthorId = (post.memberPreview?.id || post.authorId || "").trim() || null;
   const postAuthorPhone = normalizePhone(post.memberPreview?.phone || post.authorPhone);
 
-  return Boolean(
-    (normalizedCurrentUserId && postAuthorId && normalizedCurrentUserId === postAuthorId)
-    || (normalizedCurrentUserPhone && postAuthorPhone && normalizedCurrentUserPhone === postAuthorPhone),
-  );
+  return isViewerIdentity({
+    id: postAuthorId,
+    phone: postAuthorPhone,
+    isViewer: post.authorIsViewer ?? post.memberPreview?.isViewer,
+  }, { id: normalizedCurrentUserId, phone: normalizedCurrentUserPhone });
 }
 
 function buildNews(

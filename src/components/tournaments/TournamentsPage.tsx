@@ -5226,6 +5226,7 @@ function TournamentManagerModal({
         value.startsWith("manual-participant-")
         || value.startsWith("manual-tournament-")
         || value.startsWith("participant-")
+        || /^pp_[a-f0-9]{32}$/.test(value)
       );
 
       const resolvedParticipants: Array<{
@@ -5255,7 +5256,7 @@ function TournamentManagerModal({
         }
 
         if (!participantPhoneDigits) {
-          throw new Error(`У игрока "${participant.name}" не указан телефон для синхронизации`);
+          throw new Error(`Выберите игрока "${participant.name}" из справочника перед синхронизацией с Viva`);
         }
 
         const lookupQueries = Array.from(new Set([

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { CommunityMember, CommunityRecord } from "../../../utils/communityApi";
 import { formatScoreDisplay } from "../../../utils/customFields";
+import { isViewerIdentity } from "../../../utils/viewerIdentity";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import { CommunityHeader } from "./CommunityHeader";
 import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
@@ -16,14 +17,6 @@ interface CommunityTableScreenProps {
   onClose: () => void;
   onSelectBottomNav: (itemId: CommunityBottomNavItemId) => void;
   navActionSlot?: ReactNode;
-}
-
-function normalizePhone(value: string | null | undefined) {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.length === 10) return `7${digits}`;
-  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
-  return digits;
 }
 
 function getCommunityRoleLabel(role: CommunityMember["role"]) {
@@ -44,8 +37,6 @@ export function CommunityTableScreen({
   onSelectBottomNav,
   navActionSlot,
 }: CommunityTableScreenProps) {
-  const normalizedCurrentUserPhone = normalizePhone(currentUserPhone);
-
   return (
     <div className="community-feed-screen community-table-screen">
       <div className="community-feed-screen-glow" aria-hidden="true" />
@@ -72,9 +63,7 @@ export function CommunityTableScreen({
           <div className="community-members-list">
             {members.map((member) => {
               const memberKey = member.id ?? member.phone ?? member.name;
-              const isCurrentUser =
-                (member.id && currentUserId && member.id === currentUserId)
-                || Boolean(normalizedCurrentUserPhone && member.phone && normalizePhone(member.phone) === normalizedCurrentUserPhone);
+              const isCurrentUser = isViewerIdentity(member, { id: currentUserId, phone: currentUserPhone });
 
               return (
                 <div key={`table-member-${memberKey}`} className="community-member-row">

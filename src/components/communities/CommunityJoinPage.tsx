@@ -17,6 +17,7 @@ import {
   parseNumericLevel,
 } from "../../utils/customFields";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
+import { isViewerIdentity } from "../../utils/viewerIdentity";
 
 interface CommunityJoinPageProps {
   inviteCode?: string | null;
@@ -139,11 +140,7 @@ function isCommunityMember(community: CommunityRecord, profile: UserProfileType 
   const profileId = profile.id?.trim() || "";
   const profilePhone = normalizePhone(profile.phone);
 
-  return community.members.some((member) => {
-    const byId = Boolean(profileId && member.id && member.id === profileId);
-    const byPhone = Boolean(profilePhone && member.phone && member.phone === profilePhone);
-    return byId || byPhone;
-  });
+  return community.members.some((member) => isViewerIdentity(member, { id: profileId, phone: profilePhone }));
 }
 
 function findInviteCommunity(
