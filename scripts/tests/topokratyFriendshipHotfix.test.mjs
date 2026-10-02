@@ -11,6 +11,7 @@ import {
   TOPOKRATY_PREVIEW_ID,
   TOPOKRATY_TARGET,
   TOPOKRATY_PATCH_MARKER,
+  TOPOKRATY_REVIEWED_EVALUATOR_SHA256,
   TOPOKRATY_UPSTREAM_SHA256,
   TOPOKRATY_REVERT_UPSTREAM_SHA256,
   buildTopokratyReport,
@@ -147,26 +148,21 @@ test("the plan-rules writer is replaced, not appended: 7 installed rules become 
   /installed plan-rules payload is not the reviewed prior|installed preimage drift/);
 });
 
-test("the evaluator generation swaps the embedded LK1 copy for the reviewed club body", async () => {
-  const { reviewedEvaluatorBody } = await import("../patch_live_lk1_plan_rules.mjs");
-  const reviewed = reviewedEvaluatorBody();
+test("the earlier evaluator generation refuses the newer Patriots source", async () => {
+  const { PLAN_RULES_REVIEWED_EVALUATOR_SHA256, reviewedEvaluatorBody } =
+    await import("../patch_live_lk1_plan_rules.mjs");
+  // The reviewed evaluator tracks the merged source (main's plan-rules release contract), while
+  // this focused generation was reviewed against the pre-Patriots body and must still refuse it:
+  // the generation-level pin, not the shared review pin, carries that refusal after the merge.
+  assert.equal(sha256(reviewedEvaluatorBody()), PLAN_RULES_REVIEWED_EVALUATOR_SHA256);
+  assert.notEqual(sha256(reviewedEvaluatorBody()), TOPOKRATY_REVIEWED_EVALUATOR_SHA256);
   const embedded = "const lk1Old = true;\n";
   const source = `const head = 1;\n${EVALUATOR_BRANCH_OPEN}${embedded}${EVALUATOR_BRANCH_CLOSE}\nconst tail = 2;\n`;
-  const patched = patchTopokratyEvaluatorBody(source, {
+  assert.throws(() => patchTopokratyEvaluatorBody(source, {
     ...TOPOKRATY_TARGET,
     liveEvaluatorFuncSha256: sha256(source),
     liveEmbeddedSha256: sha256(embedded),
-  });
-  assert.ok(patched.includes(reviewed), "the reviewed evaluator body is embedded");
-  assert.ok(!patched.includes(embedded), "the previous embedded copy is gone");
-  assert.ok(patched.includes("isTopokratyTrainingBenefit"), "the club branch is present");
-  assert.ok(patched.startsWith("const head = 1;\n") && patched.endsWith("const tail = 2;\n"),
-    "the surrounding branch envelope stays untouched");
-  new Function("msg", "node", "env", "global", patched);
-
-  assert.throws(() => patchTopokratyEvaluatorBody(patched, {
-    ...TOPOKRATY_TARGET, liveEvaluatorFuncSha256: sha256(patched),
-  }), /already embedded|installed preimage drift/);
+  }), /Reviewed evaluator drift/);
 });
 
 test("the generation composes the live flow into exactly three changed nodes", { skip: snapshotSkip }, () => {

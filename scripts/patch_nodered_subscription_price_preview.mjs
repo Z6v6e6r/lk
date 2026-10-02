@@ -314,9 +314,17 @@ export function previewSources(flow, options = {}) {
   const accessor = declared.has('lk1PlanRulesGlobal') ? ''
     : `const lk1PlanRulesGlobal = () => global.get(${JSON.stringify(rules.globalName)});`;
   if (accessor) declared.set('lk1PlanRulesGlobal', 'generated');
-  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name))])];
+  const evaluator = nodeOf('lk_subscription_managed_policy_20260820').func;
+  pin('evaluator', sha(evaluator), pins.evaluator);
+  // A newer router must not introduce a product scope into an older installed
+  // booking generation. Both the booking classifier and evaluator own this scope.
+  const supportsPatriotsGameScope = (bookingDeclarations.get('resolveCategory') || '')
+    .includes('if(typeId===2349&&directionId===6181)return"open_game";')
+    && declarationMap(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
+  const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`;
+  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope'])];
   assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}`, declared, rules, reader, accessor);
-  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
+  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
     const { ${usageRoots.join(', ')} } = canonical;
@@ -325,8 +333,6 @@ export function previewSources(flow, options = {}) {
     const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
     ${usage}
   };`;
-  const evaluator = nodeOf('lk_subscription_managed_policy_20260820').func;
-  pin('evaluator', sha(evaluator), pins.evaluator);
   const router = `${canonical}\n${pricing}\n${joinPricing}\n${usageFunction}\n${read('router')}`;
   // Compose-time proof that the generated node is executable and that the router
   // can really reach the resolver the way it calls it. The same proof covers every

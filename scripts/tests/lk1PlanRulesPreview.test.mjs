@@ -61,6 +61,7 @@ const HUB_POLICY_GLOBAL = 'subscriptions_lk1_product_policy';
 // Plan products named by the rollout contract (docs/LK1_ENFORCEMENT_ROLLOUT_COORDINATION.md §1).
 const RA = 'b91e14d1-fe6e-4d0b-be39-3e45ad86b759';
 const FRIENDSHIP = 'b2e6a9d4-53b5-4f79-87ec-3fb076381e9b';
+const PATRIOTS = '37ab3713-4431-4815-96ba-d7ece76a9241';
 const PROMO = '6bda152b-0a9c-4308-82d0-3cd4e6aa680d';
 const UNKNOWN = '5a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d';
 
@@ -369,7 +370,7 @@ function preview(options = {}) {
     // The game router reads the room/studio tariff through the admin service token.
     vivacrm_access_token: 'fixture-admin', vivacrm_token_expires_at: Date.now() + 60000 };
   const host = { get: key => globals[key], __trace: [] };
-  const scope = (options.groupExercise ? guardedComposition : composition).createScope(host, { warn() {} });
+  const scope = (options.composition || (options.groupExercise ? guardedComposition : composition)).createScope(host, { warn() {} });
   const instanceKey = id => JSON.stringify(['instance', 'iSkq6G', actor, id]);
   const instances = options.instances || subscriptions.map(row => ({ _id: instanceKey(row.subscriptionId),
     kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: row.subscriptionId,
@@ -388,10 +389,15 @@ function preview(options = {}) {
     // Viva scopes the exact tariff by sub-service id; the canonical extractor
     // reads that envelope (major units) and the router converts to minor ones.
     price: options.price || { [service]: { calculation: { fixture: { basePrice: { valueFrom: 2800 }, impacts: [] } } } },
+    ...(options.game ? { game: [options.game] } : {}),
+    ...(options.exercise ? { exercise: options.exercise } : {}),
   };
   const findings = [];
   const request = { req: { headers: { authorization: 'Bearer fixture-user' } },
-    payload: { target: options.eventTarget || (options.groupExercise ? { targetKind: "GROUP_TRAINING", exerciseId: options.groupExercise.id } : { ...target, ...options.target }),
+    // Keep the explicit event fixture and the server-resolved existing-game identity.
+    payload: { target: options.eventTarget || (options.groupExercise
+      ? { targetKind: "GROUP_TRAINING", exerciseId: options.groupExercise.id }
+      : options.target?.targetKind === 'EXISTING_GAME' ? options.target : { ...target, ...options.target }),
       subscriptionIds: options.ids || subscriptions.map(row => row.subscriptionId) } };
   // entry/final return `msg`; the router returns one message per output port.
   let message = scope.entry(request, host, { warn() {} });
@@ -507,6 +513,64 @@ test('the quote equals the evaluator decision the write path commits', requiresR
   assert.equal(finding.decision.benefit.kind, 'PARTIAL_PRICE_PERCENT_DISCOUNT');
   assert.equal(finding.decision.benefit.partialPriceCalculation.percentageDiscountMinor,
     Math.floor(Math.floor(70000 * 30 / 90) * policy.gameOverageDiscountPercent / 100));
+});
+
+test('Patriots existing game preview uses the resolved 6181/2349 scope and matches the decision', requiresResolver, () => {
+  const gameId = uuid(30);
+  const exerciseId = uuid(31);
+  const owned = subscription(PATRIOTS, { visitsLeft: 30,
+    availableTypes: [{ id: 2349 }], availableDirections: [{ id: 6181 }] });
+  const game = { id: gameId, booking: { date: '2099-09-21', timeFrom: '07:00', timeTo: '08:30',
+    studioId: station, roomId: room, masterServiceId: master, subServiceIds: [service] },
+    metadata: { splitPayment: { enabled: true, vivaExerciseId: exerciseId } } };
+  const exercise = { id: exerciseId, studioId: station, roomId: room, directionId: 6181, typeId: 2349,
+    timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [owned] };
+  const result = preview({ subscriptions: [owned],
+    planRules: planRulesGlobal([{ productId: PATRIOTS, planKey: 'patriots' }]),
+    target: { targetKind: 'EXISTING_GAME', gameId, startsAt, durationMinutes: 90 },
+    game, exercise });
+  const quote = soleQuote(result);
+  const [finding] = result.findings;
+  assert.equal(quote.status, 'AVAILABLE');
+  assert.equal(finding.input.target.externalEventTypeId, 'viva:direction:6181:type:2349');
+  assert.equal(finding.decision.eligible, true);
+  assert.equal(quote.amountMinor, finding.decision.benefit.finalPriceMinor);
+  assert.deepEqual([quote.freeMinutes, quote.paidMinutes], [60, 30]);
+
+  const wrongType = preview({ subscriptions: [owned],
+    planRules: planRulesGlobal([{ productId: PATRIOTS, planKey: 'patriots' }]),
+    target: { targetKind: 'EXISTING_GAME', gameId, startsAt, durationMinutes: 90 },
+    game, exercise: { ...exercise, directionId: 4588 } });
+  assert.equal(soleQuote(wrongType).status, 'UNAVAILABLE');
+  assert.equal(soleQuote(wrongType).reasonCode, 'EVENT_NOT_INCLUDED');
+  assert.equal(wrongType.findings.length, 0);
+});
+
+test('an older booking or evaluator generation cannot gain Patriots club-game scope through preview', requiresResolver, () => {
+  const mapping = 'if (typeId === 2349 && directionId === 6181) return "open_game";';
+  assert.ok(syntheticBody.includes(mapping));
+  const olderBody = syntheticBody.replace(mapping, '');
+  const older = makeComposition(previewSources(syntheticFlow({ body: olderBody,
+    initialize: hubTransition().initialize }), { pins: syntheticPins(olderBody) }));
+  const oldEvaluator = 'return msg;';
+  const olderPolicy = makeComposition(previewSources(syntheticFlow({ body: syntheticBody,
+    evaluatorSource: oldEvaluator, initialize: hubTransition().initialize }),
+  { pins: { ...syntheticPins(syntheticBody), evaluator: sha(oldEvaluator) } }));
+  const gameId = uuid(30), exerciseId = uuid(31);
+  const owned = subscription(PATRIOTS, { visitsLeft: 30,
+    availableTypes: [{ id: 2349 }], availableDirections: [{ id: 6181 }] });
+  const game = { id: gameId, booking: { date: '2099-09-21', timeFrom: '07:00', timeTo: '08:30',
+    studioId: station, roomId: room, masterServiceId: master, subServiceIds: [service] },
+    metadata: { splitPayment: { enabled: true, vivaExerciseId: exerciseId } } };
+  const exercise = { id: exerciseId, name: 'Патриоты игра', studioId: station, roomId: room, directionId: 6181, typeId: 2349,
+    timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [owned] };
+  for (const generation of [older, olderPolicy]) {
+    const result = preview({ composition: generation, subscriptions: [owned], planRules: null,
+      target: { targetKind: 'EXISTING_GAME', gameId, startsAt, durationMinutes: 90 }, game, exercise });
+    assert.equal(soleQuote(result).status, 'UNAVAILABLE');
+    assert.equal(soleQuote(result).reasonCode, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE');
+    assert.equal(result.findings.length, 0);
+  }
 });
 
 test('four and five active bookings stay bookable at the discount, without a visit', requiresResolver, () => {

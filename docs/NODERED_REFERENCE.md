@@ -62,6 +62,9 @@ full source and function preimages and changes only `func` on these four nodes:
 The booking router/evaluator, topology, initializers and data remain unchanged.
 The focused composer also retains the installed club-only refusal through the
 existing reviewed Topokraty generation wrapper; it does not change booking policy.
+Patriots club-game scope is enabled only when both the supplied booking classifier
+and evaluator support it. Composing against the earlier PRO-only generation keeps
+its existing game eligibility; refreshing a router cannot activate a newer policy.
 Usage: `node scripts/patch_live_subscription_calculation_repair.mjs --workspace
 /private/live --output /private/new/candidate.json --report /private/new/report.json`
 (output parent must exist, be canonical and mode 0700; outputs must be new).

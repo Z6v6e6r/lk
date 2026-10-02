@@ -1001,6 +1001,9 @@ const resolveCategory = (value) => {
   const direction = exercise.direction || exercise.exerciseDirection || value?.exerciseDirection;
   const typeId = numericId(type ?? exercise.typeId ?? value?.exerciseTypeId);
   const directionId = numericId(direction ?? exercise.directionId ?? value?.exerciseDirectionId);
+  if (typeId === 2349 && directionId === 6181) return "open_game";
+  if (typeId === 2349 && directionId === 6306) return "tournament";
+  if (typeId === 2349 && directionId === 6307) return "group_training";
   // The club directions are listed explicitly, like the PRO-training exclusion: direction
   // 6180 «Топократы игра» must keep resolving to `open_game` and 6233 «Топократы тренировка»
   // to `group_training` even if a Viva rename drops the «игра»/«тренировка» token from the

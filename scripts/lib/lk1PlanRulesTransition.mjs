@@ -99,6 +99,30 @@ export const buildTopokratyPlanRulesRevert = () => buildPlanRulesTransition({
   acceptEmptyPrior: true,
 });
 
+// «Дружба.Патриоты» uses the same five-number plan policy. Its event discounts are
+// scoped to the server-resolved Viva directions by the evaluator; direction 5278
+// is deliberately absent from the product's visit-redemption scope.
+export const LK1_PATRIOTS_PRODUCT_ID = '37ab3713-4431-4815-96ba-d7ece76a9241';
+export const LK1_PLAN_RULES_WITH_PATRIOTS = Object.freeze({
+  formatVersion: 1,
+  rules: Object.freeze([
+    ...LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS.rules,
+    rule(LK1_PATRIOTS_PRODUCT_ID, 'patriots'),
+  ]),
+});
+
+export const buildPatriotsPlanRulesTransition = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  desired: LK1_PLAN_RULES_WITH_PATRIOTS,
+  acceptEmptyPrior: true,
+});
+
+export const buildPatriotsPlanRulesRevert = () => buildPlanRulesTransition({
+  expectedPrior: LK1_PLAN_RULES_WITH_PATRIOTS,
+  desired: LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS,
+  acceptEmptyPrior: true,
+});
+
 // Missing/empty means "no plan-rules global yet", which is a legitimate prior.
 // Everything else must match the frozen shape exactly: a surplus, missing or
 // mistyped key is a hard refusal, never a silent coercion.

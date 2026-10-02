@@ -162,7 +162,12 @@ export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
   // evaluator gained the club game branch — a game of up to 90 minutes is one visit, a longer
   // game spends the shared hour and charges the minutes above it at 100 % of the player's share
   // (`percentage: 0`), and without a free visit the game is the full base price with no visit.
-  "9ea4061cb747f6a10dee0bc7a5bd2c8993d138e9df87e35f82ab1814964da823";
+  // Re-pinned 2026-10-02 (merge of origin/main into codex/patriots-benefits-20260930): the
+  // reviewed evaluator is now the union of main's club game branch (#174), main's PRO-training
+  // 50 % discount (#175) and the Patriots «Дружба.Патриоты» branch (`PATRIOTS_FRIENDSHIP_PRODUCT_ID`,
+  // `PATRIOTS_DISCOUNT_EVENTS`). Both rule sets ship in one body, so this generation must be
+  // re-reviewed as a whole and its live-body pins re-derived at that apply.
+  "45b7ef57ea24b211d528f31e7ff54a590e912c9e6b172ea47272324a1bf48366";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =
