@@ -79,7 +79,7 @@ test("the widget offers no subscription for an excluded Topokraty event", () => 
   assert.match(groupSchedulePageSource,
     /const topokratyTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isTopokratyExercise\(selectedDetail\)\),/);
   assert.match(groupSchedulePageSource, /const topokratyExcluded = topokratyTrainingSelected && !topokratyClubOwned;/);
-  assert.match(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\) \{/);
+  assert.match(groupSchedulePageSource, /if \(topokratyExcluded\) \{/);
   assert.match(groupSchedulePageSource,
     /: proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
   assert.match(groupSchedulePageSource, /: topokratyExcluded \? \[\]/);
