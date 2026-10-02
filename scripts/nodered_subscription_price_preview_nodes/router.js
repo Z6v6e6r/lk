@@ -118,16 +118,8 @@ if (ctx.step === 'groupExercise') {
     || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
     || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
   ctx.exercise = exercise;
-  // A PRO group training is outside every subscription benefit (owner decision 2026-09-18):
-  // no plan percentage and no free first event apply to it, so the preview answers with an
-  // empty, successful quote list instead of pricing a discount the booking gateway refuses.
-  // The helper is read defensively: a generation whose canonical closure predates the
-  // exclusion keeps its previous pricing instead of failing the whole quote.
-  if (typeof canonical.isProTrainingExercise === 'function'
-    && eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise)) {
-    ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4);
-  }
-  ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
+  const proTraining = eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise);
+  ctx.target = { ...ctx.target, ...(proTraining ? { proTraining: true } : {}), startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
@@ -446,6 +438,22 @@ while (ctx.step === 'next') {
     return aliases.length > 0 && aliases.every(value => typeof value === 'string' && canonical.normalizeId(value) === canonical.normalizeId(id));
   }) : [live];
   if (!available.length) { quote(id, 'UNAVAILABLE', null, 0, 0, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE'); continue; }
+  // A Topokraty event — club direction 6180 «Топократы игра» or 6233 «Топократы тренировка» —
+  // is outside every non-club subscription: Viva scopes «РА», «Академия» and «Дружба» to their
+  // own directions and refuses a carried write on those directions with 400 BAD_REQUEST, so the
+  // advisory quote must not promise that benefit on the training or the game route. Only the club
+  // product «Дружба Топократы» keeps its own rule (the club game visit mechanism and the training
+  // co-pay) and stays quoted. The predicate comes from the reviewed club module
+  // (`scripts/lib/topokratyExclusion.mjs`), which the composition of this generation embeds into
+  // the body; the `typeof` guard keeps a body without that module on its previous pricing instead
+  // of failing the whole quote.
+  if (typeof isTopokratyExercise === 'function' && isTopokratyExercise(exercise)) {
+    const topokratyClubRow = Object.assign({}, canonical.isObj(live) ? live : {},
+      { productId: productId || live?.productId });
+    if (!(typeof isTopokratyClubPack === 'function' && isTopokratyClubPack(topokratyClubRow))) {
+      quote(id, 'UNAVAILABLE', null, 0, 0, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE'); continue;
+    }
+  }
   // An annual HUB event quote keeps its money mandate (the strict instance money
   // identity); every other product is verified by the product identity layer, which
   // applies the same HUB constraints for HUB and stays product-agnostic otherwise.
@@ -460,6 +468,9 @@ while (ctx.step === 'next') {
   const configured = previewRule(owned, ctx.target.stationId);
   if (configured.code) return stop(previewRuleCode(configured));
   ctx.previewResolved = configured.matched && !configured.legacy && productId.toLowerCase() === configured.rule.productId;
+  // Never expose a legacy/full-price subscription path or another plan on PRO.
+  if (ctx.target.proTraining === true
+    && !(ctx.previewResolved && canonical.isProTrainingDiscountRule(configured.rule))) continue;
   if (ctx.previewResolved && (dates.invalid || dates.dates.length !== 1)) return stop('SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED');
   if (eventRoute && ctx.previewResolved) {
     const activation = canonical.lk1LifecycleInstant(live.activationDate);
@@ -535,6 +546,10 @@ while (ctx.step === 'next') {
           // The club training co-pay is bound to the Viva direction of the event, which the
           // booking gateway carries in the same field of its server-resolved target.
           directionId: previewDirectionId(canonical, exercise),
+          // PRO-training scope (main) and the Patriots existing-game scope (branch) both ride
+          // on this server-resolved usage context; the else-branch keeps the resolved exercise
+          // identity so a Patriots game cannot be priced off a client-supplied target.
+          ...(ctx.target.proTraining === true ? { proTraining: true } : {}),
           priceProductId: ctx.priceProductId } : {
           externalEventTypeId: canonical.managedExternalEventTypeId(exercise) }) } } };
   // The batch is deliberately wider than one product: the query above asks for every product

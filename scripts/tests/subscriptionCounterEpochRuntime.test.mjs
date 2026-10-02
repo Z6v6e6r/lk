@@ -214,7 +214,7 @@ const quotaView = state => Object.fromEntries(['inventoryId', 'totalLimit', 'pai
   'takenCount', 'remainingCount', 'inventoryPaidCount', 'inventoryReservedCount', 'inventoryRemainingCount',
   'batchRemainingCount'].map(key => [key, state[key]]));
 
-test('status and refresh agree on empty RA10/F7/HAB1 at98000/Piter48 first batch with zero paid history', () => {
+test('status and refresh agree on empty RA10/F7/HAB1 at68000/Piter48 first batch with zero paid history', () => {
   const rows = emptyAnnualLedgers();
   const refreshed = refresh(rows);
   for (const counterKey of ['ra', 'friendship', 'network_friendship', 'piter_friendship']) {
@@ -228,7 +228,7 @@ test('status and refresh agree on empty RA10/F7/HAB1 at98000/Piter48 first batch
     assert.deepEqual(quotaView(cached), quotaView(live), counterKey);
     // A new epoch starts with no sale rows, so status must publish the configured
     // price instead of falling back to the latest paid/pending document amount.
-    const expectedPriceMinor = { ra: 2380000, friendship: 980000, network_friendship: 9800000,
+    const expectedPriceMinor = { ra: 2380000, friendship: 980000, network_friendship: 6800000,
       piter_friendship: 1980000 }[counterKey];
     assert.equal(live.priceMinor, expectedPriceMinor, `${counterKey} status price with zero paid history`);
     assert.equal(live.price, expectedPriceMinor / 100, `${counterKey} status price with zero paid history`);

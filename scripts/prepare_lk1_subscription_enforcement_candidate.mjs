@@ -48,19 +48,23 @@ export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
     // minutes or a «Время на друзей» session), and the day's covered event is scoped to the
     // «Время на друзей» direction instead of the whole tournament category. The production
     // candidate still stays unbound until the full recomposition.
-    sourceSha256: "d8175e9a7b83293c33d33ad9902bbfd5ca515f33255084fd7aeb0c8e564a0292",
+    // Re-pinned 2026-10-01 (owner decision «Дружба Топократы» / game direction 6180): the
+    // reviewed router lists the club directions explicitly, so a Viva rename of 6180/6233 can no
+    // longer move the contour. The production candidate still stays unbound.
+    sourceSha256: "e4cce2e52a514f887616fe1f3916d3705c57391f85c88b951a12592f3f0fdd98",
     reason: "DEV_ROUTER_AMENDMENT_NOT_REBOUND",
   }),
   Object.freeze({
     id: "c165e43eba668c25",
-    // Re-pinned 2026-09-30 (owner decision «Дружба 2 часа»): the reviewed status response gained
-    // the plan's own counter, whose readiness proves the installed plan rule instead of a price.
-    sourceSha256: "79619c18af89530713be9b771b753daf892bdcc69d26b46932521c4ae5603a34",
+    // Re-pinned 2026-10-02: HAB annual price is 68000 RUB with exact Viva base checks.
+    // The source keeps the two-hour counter/readiness; the full candidate stays unbound.
+    sourceSha256: "4d762e726e60fb38d9070fc6c4588161a0e51f4a8c79f568939a4f8127f3e129",
     reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
   }),
   Object.freeze({
     id: "91dded2dc8cfebe4",
-    sourceSha256: "7d8e8e1f067e46845824f86471749565c9dde83b48e8915480ea0f92af049004",
+    // Current HAB annual-price source; historical candidate pins remain frozen.
+    sourceSha256: "ce0740ee6f72fbd4b1ad9cb8a27d97a7eab1aa45d5403ddfe5aabe279de9ca21",
     reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
   }),
   Object.freeze({

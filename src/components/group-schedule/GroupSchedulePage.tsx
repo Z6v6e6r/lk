@@ -601,10 +601,9 @@ export default function GroupSchedulePage({
     const controller = new AbortController();
     const actorId = checkout.profile.id;
     const resolvedFor = `${selectedId}:${actorId}`;
-    // A PRO training carries no subscription benefit at all, and a Topokraty event has
-    // none outside the club product: the check is resolved without a request, so the
-    // screen never waits for or renders a discount it cannot get.
-    if (proTrainingSelected || topokratyExcluded) {
+    // Topokraty events keep their separate club-product rule. PRO training quotes
+    // are requested normally and only the server's confirmed 50% price is shown.
+    if (topokratyExcluded) {
       setDiscountResolvedFor(resolvedFor);
       return;
     }
@@ -725,15 +724,12 @@ export default function GroupSchedulePage({
 
   const selectedTraining = selectedDetail;
   const discountContextKey = `${selectedId}:${checkout?.profile?.id}`;
-  // A PRO training never waits for a quote: there is no subscription benefit to check, so
-  // the pending state (and its "Проверяем скидку по подписке…" line) stays off for it.
-  const discountPending = Boolean(checkout && !proTrainingSelected && !topokratyExcluded
+  const discountPending = Boolean(checkout && !topokratyExcluded
     && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  // A PRO training is bought at its full one-time price only: neither a package
-  // purchase nor an owned pack is a way to pay for it.
+  // PRO offers one-time monetary quotes and existing owned Energy visit packs.
   const purchasableProducts = !checkout
     ? []
     : proTrainingSelected || topokratyExcluded ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];

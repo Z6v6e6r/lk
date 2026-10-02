@@ -597,11 +597,18 @@
 }
 
 .subscription-card__billing-options button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  overflow: hidden;
+  isolation: isolate;
   min-height: 34px;
   padding: 9px 16px 11px;
   border: 0;
   border-radius: 40px;
-  color: rgb(53 52 54 / 40%);
+  color: #66636c;
   background: transparent;
   cursor: pointer;
   font-family: 'Subscription Inter Display', sans-serif;
@@ -616,6 +623,40 @@
   color: var(--subscription-text-secondary);
   background: #fff;
   box-shadow: inset 0 0 0 0.5px var(--subscription-border);
+}
+
+
+.subscription-card__billing-options button::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(110deg, transparent 20%, rgb(73 216 161 / 24%) 38%, rgb(255 210 117 / 36%) 50%, rgb(154 116 239 / 22%) 62%, transparent 80%);
+  background-size: 250% 100%;
+  content: '';
+  pointer-events: none;
+  animation: subscription-billing-shimmer 4s ease-in-out infinite;
+}
+
+.subscription-card__billing-options button:nth-child(2)::before { animation-delay: -1.3s; }
+.subscription-card__billing-options button:nth-child(3)::before { animation-delay: -2.6s; }
+.subscription-card__billing-label { min-width: 0; }
+.subscription-card__billing-fire {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 18px;
+  color: #df601b;
+  animation: subscription-billing-fire 2.4s ease-in-out infinite;
+}
+
+@keyframes subscription-billing-shimmer {
+  0%, 100% { background-position: 100% 0; }
+  50% { background-position: 0 0; }
+}
+
+@keyframes subscription-billing-fire {
+  0%, 100% { color: #df601b; filter: drop-shadow(0 0 1px rgb(255 146 38 / 35%)); }
+  50% { color: #eea329; filter: drop-shadow(0 0 3px rgb(255 146 38 / 65%)); }
 }
 
 .subscription-card__cta {
@@ -660,6 +701,17 @@
   background: #fff;
   border-color: #ececf0;
 }
+
+/* Use the exact logo fills for the two newly highlighted plan buttons. */
+.subscription-card[data-plan-id='friendship'] .subscription-card__cta:not(:disabled),
+.subscription-card[data-plan-id='academy'] .subscription-card__cta:not(:disabled) {
+  border-color: transparent;
+  color: #202022;
+  background: #4ad494;
+}
+.subscription-card[data-plan-id='academy'] .subscription-card__cta:not(:disabled) { background: #9ad926; }
+.subscription-card[data-plan-id='friendship'] .subscription-card__cta:not(:disabled):hover { background: #3bc184; }
+.subscription-card[data-plan-id='academy'] .subscription-card__cta:not(:disabled):hover { background: #8bc51e; }
 
 /* Figma marks РА as the featured plan: only its CTA keeps the accent fill. */
 .subscription-card--featured .subscription-card__cta {
@@ -888,6 +940,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .subscription-card__billing-options button::before,
+  .subscription-card__billing-fire { animation: none; }
   .subscription-card__cta {
     transition: none;
   }

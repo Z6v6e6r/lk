@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { hubGatewaySource, proTrainingExclusionSource } from "../lib/eventPaymentSources.mjs";
-import { isProTrainingEnergyPack, isProTrainingExercise } from "../lib/proTrainingExclusion.mjs";
+import { isProTrainingEnergyPack, isProTrainingExercise, isProTrainingDiscountRule } from "../lib/proTrainingExclusion.mjs";
 import { isTopokratyClubPack, isTopokratyExercise } from "../lib/topokratyExclusion.mjs";
 
 const read = relative => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
@@ -73,6 +73,7 @@ function runExerciseHook(options = {}) {
     msg: {},
     isProTrainingExercise,
     isProTrainingEnergyPack,
+    isProTrainingDiscountRule,
     // The Topokraty exclusion (2026-09-25) sits in the same reviewed step; these trainings are
     // never Topokraty, so the guard must stay silent here.
     isTopokratyExercise,
@@ -81,7 +82,7 @@ function runExerciseHook(options = {}) {
     findOwnedSubscriptions: () => { calls.findOwnedSubscriptions += 1; return options.selectedOwned ?? []; },
     lk1Config: () => options.rule ?? { matched: false },
     lk1ReadPlanRules: () => options.planRules ?? null,
-    lk1QuoteOwned: () => options.quoteOwned ?? [],
+    lk1QuoteOwned: () => options.quoteOwned ?? options.selectedOwned ?? [],
     lk1Quote: () => ({ code: "LK1_EVENT_TARIFF_UNVERIFIED" }),
     managedActionForTarget: () => "BOOK_GROUP_TRAINING",
     finishError: (ctx, status, message, body) => { calls.finishError.push({ status, message, body }); return { finished: true }; },
@@ -107,7 +108,7 @@ test("a PRO training rejects plans but allows an owned Energy 5/25 visit pack", 
   const managed = runExerciseHook({ rule: { matched: true, rule: { productId: "plan" } }, selectedOwned: [{ id: "sub-1" }] });
   assert.deepEqual(managed.calls.finishError, [{
     status: 409,
-    message: "На ПРО-тренировки подписки не действуют: доступна только оплата по полной цене",
+    message: "На ПРО-тренировки доступна скидка 50% по РА или Академии, разовая оплата или Энергия 5/25",
     body: { code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE" },
   }]);
   assert.equal(managed.calls.findOwnedSubscriptions, 1, "the owner row is resolved before the PRO refusal");
@@ -142,18 +143,30 @@ test("a PRO training rejects plans but allows an owned Energy 5/25 visit pack", 
   assert.equal(tournament.calls.finishError[0]?.body.code, "SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE");
 });
 
-test("the price preview answers a PRO group training with an empty quote list", () => {
-  assert.match(previewRouter, /if \(typeof canonical\.isProTrainingExercise === 'function'\s*&& eventRoute\.category === 'group_training' && canonical\.isProTrainingExercise\(exercise\)\) \{\s*ctx\.quotes = \[\]; ctx\.done = true; ctx\.statusCode = 200; return out\(4\);\s*\}/);
-  // The helper is embedded from the one reviewed module, but only for a booking body
-  // that really carries the refusal; an unguarded body gets an inert predicate so the
-  // preview can never hide a price the gateway still discounts.
+test("the preview exports the exact PRO discount predicate alongside direction detection", () => {
+  assert.match(previewRouter, /canonical\.isProTrainingDiscountRule\(configured\.rule\)/);
+  assert.match(previewPatch, /'isProTrainingExercise', 'isProTrainingDiscountRule'/);
   assert.match(previewPatch, /const proTraining = proTrainingEmbedding\(declared, booking\);/);
-  assert.match(previewPatch, /const carriesGuard = \/PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE\/\.test\(String\(booking\)\);/);
-  assert.match(previewPatch, /const PRO_TRAINING_INERT_SOURCE = 'const isProTrainingExercise = \(\) => false;';/);
-  assert.match(previewPatch, /eventPaymentSources\.proTrainingExclusionSource\(\)/);
-  assert.match(previewPatch, /\$\{proTraining\.injected\}/);
-  assert.match(previewPatch, /const PREVIEW_INJECTED_EXPORTS = Object\.freeze\(\[[^\]]*'isProTrainingExercise'\]\)/);
-  assert.match(previewPatch, /const PREVIEW_INJECTED_FUNCTIONS = Object\.freeze\(\[[^\]]*'isProTrainingExercise'\]\)/);
+});
+
+test("PRO permits only managed RA/Academy 50% rules after owned-instance resolution", () => {
+  const products = ["b91e14d1-fe6e-4d0b-be39-3e45ad86b759", "3b4806f1-6f9a-46df-a7d7-45075b4e7274",
+    "9eb8a7a4-c195-492a-95e4-3fb82899ac10", "6bda152b-0a9c-4308-82d0-3cd4e6aa680d"];
+  for (const productId of products) {
+    const rule = { matched: true, rule: { productId, groupTrainingDiscountPercent: 50 } };
+    const owned = [{ id: "sub-1", productId, name: "arbitrary name" }];
+    const accepted = runExerciseHook({ rule, selectedOwned: owned });
+    assert.equal(accepted.calls.finishError.length, 0);
+    assert.equal(accepted.result.prepared, "lk1_event_tariff");
+    const absent = runExerciseHook({ rule, planRules: {}, selectedOwned: [] });
+    assert.equal(absent.result.prepared, "lk1_money_owned_subscriptions");
+    for (const badRule of [{ ...rule, legacy: true }, { ...rule, code: "RULE_INVALID" },
+      { ...rule, rule: { ...rule.rule, groupTrainingDiscountPercent: 100 } },
+      { ...rule, rule: { ...rule.rule, productId: "unknown" } }]) {
+      assert.equal(runExerciseHook({ rule: badRule, selectedOwned: owned }).calls.finishError[0]?.body.code,
+        "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE");
+    }
+  }
 });
 
 test("the booking body embeds the reviewed exclusion module exactly once", () => {
@@ -161,7 +174,7 @@ test("the booking body embeds the reviewed exclusion module exactly once", () =>
   assert.equal(gateway.split("const PRO_TRAINING_DIRECTION_IDS =").length, 2,
     "the module must be embedded once and not redeclared by the gateway");
   assert.equal(gateway.split("function isProTrainingExercise(").length, 2);
-  assert.equal(gateway.split("PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE").length, 1,
+  assert.equal(gateway.split("PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE").length, 2,
     "the refusal code belongs to the hook, not to the embedded module");
   assert.match(proTrainingExclusionSource(), /PRO_TRAINING_DIRECTION_IDS = Object\.freeze\(\[5502, 5503, 5504, 5505, 5506, 5507\]\)/);
   assert.match(proTrainingExclusionSource(), /function isProTrainingExercise\(value\) \{/);

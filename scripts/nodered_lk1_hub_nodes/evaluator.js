@@ -38,6 +38,15 @@ const TOPOKRATY_FRIENDSHIP_PRODUCT_ID = "14692232-12be-4218-9fa1-2d5b79b62035";
 const TOPOKRATY_TRAINING_DIRECTION_IDS = [6233];
 const TOPOKRATY_TRAINING_COURT_PAY_PERCENT = 25;
 const TOPOKRATY_TRAINING_DISCOUNT_PERCENT = 100 - TOPOKRATY_TRAINING_COURT_PAY_PERCENT;
+// Owner decision 2026-10-01: the club game direction 6180 «Топократы игра» is covered by the
+// visit mechanism of a game instead of the free-first-event rule of a group event. A game of
+// up to 90 minutes is carried whole by exactly one visit; a longer game keeps the shared
+// 60-minute day bucket of the existing GAME branch and bills the minutes above it at 100 % of
+// the player's share (percentage 0 — for a game the base price already is that share, so the
+// quarter-of-court co-pay of the training direction must never be applied here). Without a free
+// visit the whole game stays at the full one-time price and consumes no visit.
+const TOPOKRATY_GAME_DIRECTION_IDS = [6180];
+const TOPOKRATY_GAME_FREE_VISIT_MINUTES = 90;
 const PATRIOTS_FRIENDSHIP_PRODUCT_ID = "37ab3713-4431-4815-96ba-d7ece76a9241";
 // The product permits visit redemption for the club directions, while 5278/839
 // is a monetary discount on every «Время на друзей» event. Neither branch may
@@ -58,11 +67,12 @@ const topokratyDirectionId = (target) => {
   const value = nested ? (nested.id ?? nested.directionId) : rawDirection;
   return toNonNegativeInt(value ?? target?.directionId ?? target?.exerciseDirectionId);
 };
-const isTopokratyTrainingBenefit = (binding, target) => {
-  if (!isObj(binding)
-    || toStr(binding.policyProductId)?.toLowerCase() !== TOPOKRATY_FRIENDSHIP_PRODUCT_ID) return false;
-  return TOPOKRATY_TRAINING_DIRECTION_IDS.includes(topokratyDirectionId(target));
-};
+const topokratyClubBound = (binding) => isObj(binding)
+  && toStr(binding.policyProductId)?.toLowerCase() === TOPOKRATY_FRIENDSHIP_PRODUCT_ID;
+const isTopokratyTrainingBenefit = (binding, target) => topokratyClubBound(binding)
+  && TOPOKRATY_TRAINING_DIRECTION_IDS.includes(topokratyDirectionId(target));
+const isTopokratyGameBenefit = (binding, target) => topokratyClubBound(binding)
+  && TOPOKRATY_GAME_DIRECTION_IDS.includes(topokratyDirectionId(target));
 // The subscription's free-minute bucket is a Moscow calendar day, exactly as for a game.
 const moscowLocalDate = (value) => {
   const date = toFiniteDate(value);
@@ -188,6 +198,44 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
     const day = moscowLocalDate(target?.startsAt);
     if (!Number.isSafeInteger(used) || used < 0 || !day || usage?.dailyBucketLocalDate !== day) {
       block("USAGE_SNAPSHOT_BUCKET_MISMATCH", "Бесплатные минуты даты игры не подтверждены");
+    } else if (duration && Number.isSafeInteger(rule.freeGameMinutesPerDay)
+      && isTopokratyGameBenefit(input?.lk1ProductBinding, target)) {
+      // The club game direction of «Дружба Топократы» (owner decision 2026-10-01). The free
+      // visit is the game's own mechanism: while one is available a game of up to 90 minutes
+      // is carried whole (the event is the visit, not a slice of the minute bucket), and a
+      // longer game spends the shared day bucket first and charges the minutes above it at
+      // 100 % of the player's share. The branch never divides the base price by the court
+      // share: for a GAME `target.basePriceMinor` already is that share.
+      const freeVisitAvailable = !aboveActiveLimit && used < rule.freeGameMinutesPerDay;
+      if (!freeVisitAvailable) {
+        // The day's minutes are spent (or the plan is past its active-bookings cap): the
+        // whole game is the full one-time price, no visit is consumed and nothing is free.
+        decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+          freeMinutes: 0, paidOverageMinutes: duration, discountPercent: 0 };
+        decision.subscriptionVisitCount = 0;
+        selectedRule = { ruleId: "lk1-topokraty-game", kind: "PERCENT_DISCOUNT", percentage: 0 };
+      } else if (duration <= TOPOKRATY_GAME_FREE_VISIT_MINUTES) {
+        decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+          freeMinutes: duration, paidOverageMinutes: 0, discountPercent: 0 };
+        decision.subscriptionVisitCount = 1;
+        selectedRule = { ruleId: "lk1-topokraty-game", kind: "FREE_ENTITLEMENT" };
+      } else {
+        // The shared 60-minute day bucket, exactly as the standard GAME branch computes it.
+        const freeMinutes = Math.min(duration, Math.max(0, rule.freeGameMinutesPerDay - used));
+        const paidOverageMinutes = duration - freeMinutes;
+        decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+          freeMinutes, paidOverageMinutes, discountPercent: 0 };
+        decision.subscriptionVisitCount = 1;
+        if (productBound && target?.priceSource === "VIVA_EXISTING_TARIFF") {
+          // Percentage 0: the player pays 100 % of their share for the minutes above the free
+          // hour, so the partial-price discount is the charged share itself.
+          selectedRule = { ruleId: "lk1-topokraty-game", kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+            partialPrice: { numerator: paidOverageMinutes, denominator: duration }, percentage: 0 };
+        } else {
+          block("LK1_GAME_OVERAGE_ALLOCATION_UNBOUND", "Применение услуги к платной части игры не подтверждено");
+          selectedRule = null;
+        }
+      }
     } else if (duration && Number.isSafeInteger(rule.freeGameMinutesPerDay)) {
       if (aboveActiveLimit) {
         // Past the cap the whole game is a paid overage: the day's free hour

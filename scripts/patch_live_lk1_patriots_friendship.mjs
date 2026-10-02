@@ -36,11 +36,15 @@ export const PATRIOTS_PREIMAGE = Object.freeze({
   pricingFunc: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b',
   joinFunc: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
   usageBlock: '5fce82de1d012254f863a90388c75f581f9dcf843e520b10d17a968bc6b3f1ef',
-  reviewedGatewaySource: '4fe733191d82b174665033c3cd48f6614b44673ef404d695e4150cdfe9710e38',
-  reviewedGatewayHooksSource: '13672a94ac3c96ccdd5492dd86b82dc6d4df874d167685513c2607559904c7a5',
-  reviewedEvaluatorSource: '777f8dfbca1e2e88df3f4a24c57792cac371797bd583b91f65c63b129fe3ea15',
-  reviewedBookingRouterSource: 'c4da6e1300d25057807aee4badab045669bc00c6ed91ce550ab745325a6c6a76',
-  reviewedPreviewSource: '9d07924befd426aa18b80d5322bc377c19918108ff8af3a512e74f7f50d7ebe4',
+  // Reviewed-source pins (working tree, not the live flow). Re-pinned 2026-10-02 after merging
+  // origin/main: every one of these five files now also carries main's #174 club game / club gate
+  // and #175 PRO-training 50 % discount, so the reviewed bytes the generation copies are the
+  // union. The live-node preimages above stay untouched until a fresh 147 pull is reviewed.
+  reviewedGatewaySource: '9ca4057541048f24384e2b6cea992387cabc3b838f58a4fcfe97ebd66363274c',
+  reviewedGatewayHooksSource: '636e005f02d2632cda10187784ad2379769f4eff418f7f0a8c55159e0d430a2e',
+  reviewedEvaluatorSource: '45b7ef57ea24b211d528f31e7ff54a590e912c9e6b172ea47272324a1bf48366',
+  reviewedBookingRouterSource: '86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991',
+  reviewedPreviewSource: '28edb2ac6e08c989b92ccba2fe1c75a419bbe3463230fc8bb2474cec4112eb15',
 });
 export const PATRIOTS_POSTIMAGE = Object.freeze({
   gatewayFunc: '660b48b3774149bfc28809206d44a4dfb74fefd1ced37bbf6824d7be3d89d120',
@@ -72,6 +76,11 @@ const CATEGORY_ANCHOR = '  if ([1613].includes(typeId) || [4588].includes(direct
 const PATRIOTS_CATEGORY_MAPPING = '  if (typeId === 2349 && directionId === 6181) return "open_game";\n'
   + '  if (typeId === 2349 && directionId === 6306) return "tournament";\n'
   + '  if (typeId === 2349 && directionId === 6307) return "group_training";\n';
+// The merged reviewed booking router carries main's club-direction pin (#174, club game 6180
+// and club training 6233) on the same line the Patriots mapping is inserted before, so the
+// reviewed-source assertion needs that merged text. `CATEGORY_ANCHOR` above stays the pinned
+// installed-preimage literal: the delta is still applied to the live flow pulled before #174.
+const REVIEWED_CATEGORY_ANCHOR = '  if ([1613].includes(typeId) || [4588, 6180].includes(directionId)) return "open_game";\n';
 const PREVIEW_GAME_SCOPE_START = '  const visitCount = ctx.previewResolved ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;\n';
 const PREVIEW_GAME_SCOPE_END = '  if (!ctx.previewResolved) {';
 const PREVIEW_GAME_TARGET_OLD = 'priceProductId: ctx.priceProductId } : {}) } } };';
@@ -135,7 +144,8 @@ export function patchPatriotsGatewayBody(source) {
   assertHash(reviewedRouter, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, 'Reviewed booking router');
   if (!reviewed.includes(PATRIOTS_MONEY_ONLY_GUARD)
     || !reviewed.includes(PATRIOTS_FIRST_USE_REFUSAL)
-    || !reviewedRouter.includes(PATRIOTS_CATEGORY_MAPPING + CATEGORY_ANCHOR)) {
+    || !reviewedRouter.includes(PATRIOTS_CATEGORY_MAPPING)
+    || !reviewedRouter.includes(REVIEWED_CATEGORY_ANCHOR)) {
     throw new Error('Reviewed Patriots money-validity guard is missing');
   }
   if (source.split(FIRST_USE_ANCHOR).length !== 2 || source.split(OWNER_GUARD_ANCHOR).length !== 2) {

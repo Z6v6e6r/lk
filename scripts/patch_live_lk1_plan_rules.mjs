@@ -158,7 +158,16 @@ export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
   // keeps the discount instead (`freeFirstCovered = !aboveActiveLimit && …`). The rule shipped
   // into the installed booking evaluator as the `lk1-friendship-two-hours` generation, whose
   // live-body pins are re-derived and re-reviewed at that apply.
-  "ecc81fb6ee14e5948a61c54157c124408928935d9b9008c6e939238f43be89f3";
+  // Re-pinned 2026-10-01 (owner decision «Дружба Топократы» / game direction 6180): the reviewed
+  // evaluator gained the club game branch — a game of up to 90 minutes is one visit, a longer
+  // game spends the shared hour and charges the minutes above it at 100 % of the player's share
+  // (`percentage: 0`), and without a free visit the game is the full base price with no visit.
+  // Re-pinned 2026-10-02 (merge of origin/main into codex/patriots-benefits-20260930): the
+  // reviewed evaluator is now the union of main's club game branch (#174), main's PRO-training
+  // 50 % discount (#175) and the Patriots «Дружба.Патриоты» branch (`PATRIOTS_FRIENDSHIP_PRODUCT_ID`,
+  // `PATRIOTS_DISCOUNT_EVENTS`). Both rule sets ship in one body, so this generation must be
+  // re-reviewed as a whole and its live-body pins re-derived at that apply.
+  "45b7ef57ea24b211d528f31e7ff54a590e912c9e6b172ea47272324a1bf48366";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =
