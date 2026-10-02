@@ -88,6 +88,13 @@ export const TOPOKRATY_DIRECTION_HELPER_SHA256 =
 export const TOPOKRATY_PERCENT_HELPER_SHA256 =
   "6df43d89a0756750dbe02efc85a00b8002f8c23d2dcb1ade35407c639a5b1588";
 
+// The reviewed evaluator body this generation was built against. `PLAN_RULES_REVIEWED_EVALUATOR_SHA256`
+// keeps tracking the current reviewed source, but this focused generation must keep refusing once
+// that source moves past the body it was reviewed with, otherwise it would silently embed a newer
+// evaluator (the Patriots classifier) into the installed Topokraty graph.
+export const TOPOKRATY_REVIEWED_EVALUATOR_SHA256 =
+  "9ea4061cb747f6a10dee0bc7a5bd2c8993d138e9df87e35f82ab1814964da823";
+
 // Present only after this generation: the gateway quote comparison and the initialize
 // payload. A second run is refused instead of produced.
 export const TOPOKRATY_PATCH_MARKER = "lk1ExpectedEventDiscountPercent";
@@ -275,6 +282,9 @@ export function patchTopokratyGatewayInitialize(source, target = TOPOKRATY_TARGE
 /** The evaluator body of this generation: the embedded LK1 copy is replaced. */
 export function patchTopokratyEvaluatorBody(source, target = TOPOKRATY_TARGET) {
   const reviewed = reviewedEvaluatorBody();
+  if (sha256(reviewed) !== TOPOKRATY_REVIEWED_EVALUATOR_SHA256) {
+    throw new Error(`Reviewed evaluator drift: ${sha256(reviewed)} != ${TOPOKRATY_REVIEWED_EVALUATOR_SHA256}`);
+  }
   if (source.includes(reviewed)) {
     throw new Error("Reviewed evaluator body is already embedded in the live body");
   }
