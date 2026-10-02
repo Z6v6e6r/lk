@@ -16,6 +16,16 @@ Provider history uses the same instance filter; covered bookings are deduplicate
 against operations, and FAILED/RELEASED operations do not reserve minutes. A ledger
 row without an instance ID fails closed instead of granting an unproven allowance.
 
+The preview generator `scripts/patch_nodered_subscription_price_preview.mjs`
+exports and binds the booking gateway's top-level `lk1FreeFirstEventCovers` and
+`exerciseDirectionId` in `canonicalUsage`. Missing bindings caused runtime
+`ReferenceError` exceptions reported as `PRICE_PREVIEW_UNAVAILABLE`. Optional roots
+are selected from top-level declarations, so older gateways with step-local
+coverage still compose. Synthetic execution checks live in
+`scripts/tests/lk1PlanRulesPreview.test.mjs`; source generation does not activate
+the fix. Production activation requires a separately approved candidate from a
+fresh exact live flow, preserving the installed usage block and direction scopes.
+
 `patch_nodered_subscription_instance_limits.mjs` exports a local candidate composer
 for four function bodies: booking router, managed evaluator, preview router and
 preview evaluator. It requires exact function preimages and preserves the graph,

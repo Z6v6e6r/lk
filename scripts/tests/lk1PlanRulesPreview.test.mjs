@@ -159,6 +159,120 @@ const syntheticPins = body => ({ booking: sha(body), pricing: sha(syntheticSplit
 const syntheticBody = requiresResolver.skip ? null : bookingBody({ reader: hubTransition().reader });
 const composed = requiresResolver.skip ? null : previewSources(syntheticFlow({ body: syntheticBody,
   initialize: hubTransition().initialize }), { pins: syntheticPins(syntheticBody) });
+
+// October 2 incident: the installed gateway moved the coverage helper out of the
+// usage step. Compose that layout from tracked, pure helpers and synthetic data;
+// no private flow, provider reads or writes are needed for this regression.
+const usageFile = ts.createSourceFile('usage.js', gatewayUsage, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+const coverageDeclaration = usageFile.statements[0].thenStatement.statements.find(statement =>
+  ts.isVariableStatement(statement) && statement.declarationList.declarations.some(declaration =>
+    declaration.name.getText(usageFile) === 'lk1FreeFirstEventCovers')).getText(usageFile);
+const hoistedUsage = gatewayUsage.replace(coverageDeclaration, '');
+const gatewayFile = ts.createSourceFile('gateway.js', sources.gateway, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+const usageHelpers = ['exerciseDirectionId', 'lk1OperationCategory'].map(name =>
+  gatewayFile.statements.find(statement => ts.isVariableStatement(statement)
+    && statement.declarationList.declarations.some(declaration => declaration.name.getText(gatewayFile) === name))
+    .getText(gatewayFile)).join('\n');
+const coverageTables = `const LK1_FREE_FIRST_EVENT_PRODUCTS = {
+  'fixture-covered': ['group_training', 'tournament'],
+  'fixture-scoped': ['group_training', 'tournament']
+};
+const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = { 'fixture-scoped': [5278] };`;
+const hoistedBody = [helperSource, availabilitySource, hubTransition().reader,
+  coverageTables, usageHelpers, coverageDeclaration, hoistedUsage + policyAnchor].join('\n');
+const hoistedPreview = previewSources(syntheticFlow({ body: hoistedBody, initialize: hubTransition().initialize }), {
+  pins: syntheticPins(hoistedBody), installedUsageSha256: sha(hoistedUsage),
+});
+const composedUsage = body => new Function('global', `${body.slice(0, body.length - router.length)}
+return canonicalUsage;`)({ get: () => null });
+const generatedUsage = composedUsage(hoistedPreview.router);
+const usageMessage = ({ productId = 'fixture-covered', category = 'group_training', directionId = 5278,
+  bookings = [], activeBookings = [], operations = [] } = {}) => ({ payload: operations,
+  _subscriptionBooking: { step: 'lk1_usage_operations', tenantKey: 'fixture-tenant', actorClientId: 'fixture-actor',
+    clientSubscriptionId: 'fixture-instance', serviceDate: '2026-10-02', category,
+    managedAction: category === 'open_game' ? 'BOOK_GAME' : 'BOOK_GROUP_TRAINING',
+    lk1ProductIdentity: { subscription: { visitsLeft: 3 } },
+    lk1: { rule: { ...policy, productId }, bookings, activeBookings,
+      target: { category: category.toUpperCase(), directionId } } } });
+const usageBooking = (directionId = 5278, subscriptionId = 'fixture-instance') => ({
+  id: 'fixture-booking', clientSubscriptionId: subscriptionId, paymentType: 'SUBSCRIPTION',
+  exerciseDate: '2026-10-02', exercise: { id: 'fixture-event', typeId: 839, direction: { id: directionId } },
+});
+const usageOperation = (state = 'CONFIRMED', subscriptionId = 'fixture-instance') => ({
+  tenantKey: 'fixture-tenant', actorClientId: 'fixture-actor', clientSubscriptionId: subscriptionId,
+  state, serviceDate: '2026-10-02', category: 'tournament', bookingId: 'fixture-booking',
+  lk1: { decision: {}, target: { directionId: 5278 } },
+});
+
+test('generated usage resolves hoisted coverage helpers on an empty day for every category', () => {
+  for (const category of ['open_game', 'group_training', 'tournament']) {
+    const message = usageMessage({ category });
+    generatedUsage(message);
+    assert.equal(message.previewError, undefined);
+    assert.deepEqual(message._managedSubscriptionPolicyInput.usage.freeFirstEvent,
+      category === 'open_game' ? { covered: false } : { covered: true, usedEventsToday: 0, visitsLeft: 3 });
+  }
+});
+
+test('generated usage resolves booking direction without widening scoped coverage', () => {
+  for (const direction of [5278, 2617, undefined]) {
+    const message = usageMessage({ productId: 'fixture-scoped', category: 'tournament',
+      bookings: [{ ...usageBooking(), exercise: { typeId: 839, direction: { id: direction } } }] });
+    generatedUsage(message);
+    assert.equal(message.previewError, undefined);
+    assert.equal(message._managedSubscriptionPolicyInput.usage.freeFirstEvent.usedEventsToday,
+      direction === 5278 ? 1 : 0);
+    const operationMessage = usageMessage({ productId: 'fixture-scoped', category: 'tournament',
+      operations: [{ ...usageOperation(), lk1: { decision: {}, target: { directionId: direction } } }] });
+    generatedUsage(operationMessage);
+    assert.equal(operationMessage.previewError, undefined);
+    assert.equal(operationMessage._managedSubscriptionPolicyInput.usage.freeFirstEvent.usedEventsToday,
+      direction === 5278 ? 1 : 0);
+  }
+  const outside = usageMessage({ productId: 'fixture-scoped', category: 'tournament', directionId: 2617 });
+  generatedUsage(outside);
+  assert.deepEqual(outside._managedSubscriptionPolicyInput.usage.freeFirstEvent, { covered: false });
+});
+
+test('generated usage preserves instance filtering, operation states and booking deduplication', () => {
+  for (const state of ['CONFIRMED', 'FAILED', 'RELEASED']) {
+    const message = usageMessage({ category: 'tournament', bookings: [usageBooking(), usageBooking(5278, 'other-instance')],
+      activeBookings: [usageBooking(), usageBooking()],
+      operations: [usageOperation(state), usageOperation('CONFIRMED', 'other-instance')] });
+    generatedUsage(message);
+    assert.equal(message.previewError, undefined);
+    const usage = message._managedSubscriptionPolicyInput.usage;
+    assert.equal(usage.freeFirstEvent.usedEventsToday, 1);
+    assert.equal(usage.activeServices, 1);
+    assert.equal(usage.usedOrReservedFreeMinutesToday, 0);
+  }
+  const released = usageMessage({ operations: [usageOperation('RELEASED')] });
+  generatedUsage(released);
+  assert.equal(released._managedSubscriptionPolicyInput.usage.freeFirstEvent.usedEventsToday, 0);
+});
+
+test('generated usage retains fail-closed membership validation', () => {
+  const message = usageMessage({ bookings: [{ ...usageBooking(), subscriptionId: 'conflicting-instance' }] });
+  generatedUsage(message);
+  assert.equal(message.previewError, 'LK1_BOOKING_SUBSCRIPTION_ID_UNRESOLVED');
+  assert.equal(message._managedSubscriptionPolicyInput, undefined);
+});
+
+test('a reviewed generation with step-local coverage still composes and executes', () => {
+  // The same helper can remain inside the step in an older generation. It must
+  // not be requested as a top-level extraction root merely because text matches.
+  const body = [helperSource, availabilitySource, hubTransition().reader,
+    coverageTables, usageHelpers, gatewayUsage + policyAnchor].join('\n');
+  const preview = previewSources(syntheticFlow({ body, initialize: hubTransition().initialize }), {
+    pins: syntheticPins(body), installedUsageSha256: sha(gatewayUsage),
+  });
+  const message = usageMessage();
+  composedUsage(preview.router)(message);
+  assert.equal(message.previewError, undefined);
+  assert.deepEqual(message._managedSubscriptionPolicyInput.usage.freeFirstEvent,
+    { covered: true, usedEventsToday: 0, visitsLeft: 3 });
+});
+
 const composition = (() => {
   if (!composed) return null;
   assert.ok(composed.router.endsWith(router), 'The composed node must end with the preview router body');
