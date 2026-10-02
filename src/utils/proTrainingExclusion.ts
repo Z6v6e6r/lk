@@ -1,17 +1,17 @@
 /**
- * PRO-level trainings stay outside every subscription benefit.
+ * PRO-level trainings are outside every subscription benefit except the two reviewed ones.
  *
- * A PRO training is paid at its full one-time price: the LK1 contour quotes no
- * discount for it (no plan percentage and no free-first-event), while an owned
- * Energy 5/25 visit pack may consume one visit. Other owned subscriptions and
- * new subscription packages stay unavailable, and the "БЕСПЛАТНО по подписке"
- * offer is not shown. Promo codes are not part of this rule.
+ * Owner decision 2026-10-02 (PR #175): a managed «РА»/«Академия» plan — including its promo
+ * variant — quotes exactly the server-confirmed 50 % monetary discount, with no visit
+ * consumed and no free-first-event benefit. Owner decision 2026-09-22 (main): an owned
+ * Energy 5/25 visit pack may still consume one visit at the ordinary visit-pack rate.
+ * Other owned subscriptions and new subscription packages stay unavailable.
  *
  * The same rule is embedded in the Node-RED contour
- * (`scripts/lib/proTrainingExclusion.mjs`): the booking gateway refuses a
- * subscription booking with `PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE` and the
- * advisory preview answers an empty quote list, so the widget is not the only
- * guard for the booking endpoint. Two paths stay outside that reviewed guard and
+ * (`scripts/lib/proTrainingExclusion.mjs`): the booking gateway refuses every PRO
+ * subscription booking outside that exact rule with `PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE`
+ * and the advisory preview quotes only RA/Academy monetary discounts, so the widget is not
+ * the only guard for the booking endpoint. Two paths stay outside that reviewed guard and
  * are listed as residual risks in
  * `docs/LK1_PRO_TRAINING_EXCLUSIONS_20260918.md`: a browser-side Viva purchase of
  * a subscription package for this exercise, and the replay of an already

@@ -167,7 +167,8 @@ test("the reviewed sources carry the reviewed deltas verbatim", () => {
       // direction scope of the day's covered event. The historical delta keeps its own text so
       // the installed generation still composes from its own snapshot; only the anchors that
       // the newer generation must still honour are compared here.
-      assert.ok(reviewedHub.includes("const freeFirstCovered = lk1FreeFirstEventCovers("), delta.id);
+      // PRO now explicitly preserves the free-first allowance for ordinary events.
+      assert.ok(reviewedHub.includes("const freeFirstCovered = ctx.lk1.target?.proTraining !== true && lk1FreeFirstEventCovers("), delta.id);
       assert.ok(reviewedHub.includes("freeFirstEventsToday += 1;"), delta.id);
       assert.ok(reviewedHub.includes("if (!categories || !categories.includes(category)) return false;"), delta.id);
       continue;

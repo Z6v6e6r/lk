@@ -31,9 +31,9 @@ export const PREVIEW_CANONICAL_SOURCE_SHA256 = Object.freeze({
 // closure has to publish them.
 const PREVIEW_INJECTED_EXPORTS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
   'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy',
-  'isProTrainingExercise']);
+  'isProTrainingExercise', 'isProTrainingDiscountRule']);
 const PREVIEW_INJECTED_FUNCTIONS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
-  'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1NormalizePolicy', 'isProTrainingExercise']);
+  'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1NormalizePolicy', 'isProTrainingExercise', 'isProTrainingDiscountRule']);
 // Helpers the event route (group training / tournament quotes) reaches through
 // `canonical.*`. They live in the composed booking graph, not in the preview
 // node's own sources, so the closure has to declare *and* publish them: the
@@ -181,7 +181,7 @@ const planRulesEmbedding = declared => {
 // bookable, so a body without the guard gets an inert predicate instead. A local copy the
 // installed body already carries must match the module text, otherwise the divergence
 // stops the release.
-const PRO_TRAINING_INERT_SOURCE = 'const isProTrainingExercise = () => false;';
+const PRO_TRAINING_INERT_SOURCE = 'const isProTrainingExercise = () => false; const isProTrainingDiscountRule = () => false;';
 const proTrainingEmbedding = (declared, booking) => {
   if (typeof eventPaymentSources.proTrainingExclusionSource !== 'function') {
     throw new Error('Price preview PRO-training source helper is unavailable');
@@ -310,7 +310,7 @@ export function previewSources(flow, options = {}) {
   const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
-    const { isObj, isValidDateKey, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields${(freeFirstRoots(booking) || []).map(name => `, ${name}`).join('')} } = canonical;
+    const { isObj, isValidDateKey, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, isProTrainingExercise, lk1Fields${(freeFirstRoots(booking) || []).map(name => `, ${name}`).join('')} } = canonical;
     const OUTPUT_MANAGED_POLICY = 6;
     const emit = () => msg;
     const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
