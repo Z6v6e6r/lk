@@ -143,15 +143,18 @@ const proTrainingEnergyAllowed = selectedOwned.length === 1
   && isProTrainingEnergyPack(selectedOwned[0]);
 // A Topokraty event is outside every non-club subscription. Viva scopes a sold plan to its
 // own directions and exercise types, so carrying «РА», «Академия» or «Дружба» to direction
-// 6180/6233 is refused by the provider with 400 BAD_REQUEST after the contour has already
-// promised the benefit. The club product «Дружба Топократы» keeps its own plan rule (the
-// quarter-of-court co-pay) and is therefore the only owned row allowed here; every other
-// attempt is refused before the write and the event stays bookable as a one-off.
-if (resolveCategory(exercise) === "group_training"
+// 6180 «Топократы игра» or 6233 «Топократы тренировка» is refused by the provider with
+// 400 BAD_REQUEST after the contour has already promised the benefit. The club product
+// «Дружба Топократы» keeps its own plan rule (the club game visit mechanism and the
+// quarter-of-court co-pay on the training) and is therefore the only owned row allowed here;
+// every other attempt is refused before the write and the event stays bookable as a one-off.
+// The gate covers both categories: the club game direction resolves to `open_game`, not
+// `group_training`, so it is matched explicitly instead of relying on the category alone.
+if (["group_training", "open_game"].includes(resolveCategory(exercise))
   && isTopokratyExercise(exercise)
   && !(selectedOwned.length === 1 && isTopokratyClubPack(selectedOwned[0]))) {
   return finishError(ctx, 409,
-    "На тренировки Топократов общие подписки не действуют: доступна разовая оплата или клубная подписка «Дружба Топократы»", {
+    "На занятия Топократов общие подписки не действуют: доступна разовая оплата или клубная подписка «Дружба Топократы»", {
       code: "TOPOKRATY_SUBSCRIPTION_UNAVAILABLE",
     });
 }
