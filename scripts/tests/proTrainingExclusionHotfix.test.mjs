@@ -74,13 +74,14 @@ test("the generation refuses a body that is not the reviewed upstream postimage"
     /anchor drift for embed-module/);
 });
 
-test("the focused generation and the composed gateway carry the same reviewed refusal", () => {
+test("the historical generation keeps its refusal while the gateway permits the new 50 percent exception", () => {
   const refusal = '"На ПРО-тренировки подписки не действуют: доступна только оплата по полной цене"';
   const code = "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE";
   const hooks = read("../nodered_lk1_hub_nodes/gateway_hooks.js");
-  // The composed gateway hook and the focused generation must state one and the same refusal.
-  assert.ok(hooks.includes(refusal) && hooks.includes(code), "the composed gateway hook carries the refusal");
-  assert.match(hooks, /resolveCategory\(exercise\) === "group_training"\s*\n\s*&& isProTrainingExercise\(exercise\)\s*\n\s*&& !proTrainingEnergyAllowed/);
+  // Historical release pins stay frozen; the current guard has a separately tested exception.
+  assert.ok(hooks.includes(code) && hooks.includes("isProTrainingDiscountRule(productRule.rule)"),
+    "the current gateway retains a refusal outside the exact RA/Academy 50 percent rule");
+  assert.match(hooks, /isProTrainingExercise\(exercise\)/);
   const applyDelta = PRO_TRAINING_CALL_SITE_DELTAS.find((delta) => delta.id === "refuse-pro-training");
   assert.ok(applyDelta.after.includes(refusal) && applyDelta.after.includes(code),
     "the focused generation inserts the identical refusal");
