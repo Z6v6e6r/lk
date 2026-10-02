@@ -127,6 +127,8 @@ const lk1Quote = (ctx, exercise, owned) => {
   const configured = lk1Config(owned, exercise?.studio?.id || exercise?.studioId || null);
   if (!configured.matched || configured.code) return { code: configured.code || "LK1_PRODUCT_RULE_CHANGED" };
   if (configured.legacy) return { legacy: true };
+  if (resolveCategory(exercise) === "group_training" && isProTrainingExercise(exercise)
+    && !isProTrainingDiscountRule(configured.rule)) return { code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE" };
   // The sale-date cohort is decided by the rule: the selected instance for a plan
   // product, never a date gate for HUB. The date still travels in the quote.
   const dates = collectSubscriptionPurchaseDateEvidence(owned);
@@ -141,6 +143,8 @@ const lk1Quote = (ctx, exercise, owned) => {
     externalEventTypeId: managedExternalEventTypeId(exercise), productTypeId: null,
     stationId: toStr(exercise.studio?.id || exercise.studioId), roomId: exerciseRoomId(exercise),
     directionId: exerciseDirectionId(exercise),
+    ...(resolveCategory(exercise) === "group_training" && isProTrainingExercise(exercise)
+      ? { proTraining: true } : {}),
     durationMinutes: eventDurationMinutes(exercise), startsAt: eventStartsAt(exercise),
     basePriceMinor: null, currency: "RUB", priceSource: "VIVA_EXISTING_TARIFF",
   };
@@ -839,13 +843,14 @@ if (ctx.step === "lk1_usage_operations") {
     const scopes = typeof LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES === "object" && LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES
       ? LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES : null;
     if (!products || !category) return false;
+    if (category === "group_training" && [5502, 5503, 5504, 5505, 5506, 5507].includes(Number(directionId))) return false;
     const categories = products[normalizeId(productId)] || null;
     if (!categories || !categories.includes(category)) return false;
     const scope = scopes ? scopes[normalizeId(productId)] || null : null;
     if (!Array.isArray(scope) || scope.length === 0) return true;
     return scope.includes(Number(directionId));
   };
-  const freeFirstCovered = lk1FreeFirstEventCovers(ctx.lk1.rule.productId, ctx.category,
+  const freeFirstCovered = ctx.lk1.target?.proTraining !== true && lk1FreeFirstEventCovers(ctx.lk1.rule.productId, ctx.category,
     ctx.lk1.target?.directionId);
   let freeFirstEventsToday = 0;
   for (const operation of msg.payload) {
@@ -897,7 +902,8 @@ if (ctx.step === "lk1_usage_operations") {
     // AUDIT_BINDING_END
     if (coveredId) benefitBookings.add(coveredId);
     if (operation.serviceDate !== ctx.serviceDate) continue;
-    if (freeFirstCovered && lk1FreeFirstEventCovers(ctx.lk1.rule.productId,
+    if (freeFirstCovered && operation.lk1?.target?.proTraining !== true
+      && lk1FreeFirstEventCovers(ctx.lk1.rule.productId,
       lk1OperationCategory(operation), operation.lk1?.target?.directionId)) freeFirstEventsToday += 1;
     const minutes = operation.lk1.decision.gameMinutes;
     if (minutes) {
@@ -913,7 +919,9 @@ if (ctx.step === "lk1_usage_operations") {
       || coveredBookings.has(normalizeId(bookingId(booking)))) continue;
     const category = resolveCategory(booking);
     if (!category) return lk1Stop(ctx, "LK1_BOOKING_CATEGORY_UNRESOLVED");
-    if (freeFirstCovered && lk1FreeFirstEventCovers(ctx.lk1.rule.productId, category,
+    if (freeFirstCovered && !(category === "group_training"
+      && typeof isProTrainingExercise === "function" && isProTrainingExercise(booking.exercise || booking))
+      && lk1FreeFirstEventCovers(ctx.lk1.rule.productId, category,
       exerciseDirectionId(booking.exercise || booking))) freeFirstEventsToday += 1;
     if (category !== "open_game") continue;
     const minutes = eventDurationMinutes(booking.exercise || booking);

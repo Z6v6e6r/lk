@@ -1,27 +1,6 @@
-/**
- * PRO-level trainings stay outside every subscription benefit.
- *
- * A PRO training is paid at its full one-time price: the LK1 contour quotes no
- * discount for it (no plan percentage and no free-first-event), while an owned
- * Energy 5/25 visit pack may consume one visit. Other owned subscriptions and
- * new subscription packages stay unavailable, and the "БЕСПЛАТНО по подписке"
- * offer is not shown. Promo codes are not part of this rule.
- *
- * The same rule is embedded in the Node-RED contour
- * (`scripts/lib/proTrainingExclusion.mjs`): the booking gateway refuses a
- * subscription booking with `PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE` and the
- * advisory preview answers an empty quote list, so the widget is not the only
- * guard for the booking endpoint. Two paths stay outside that reviewed guard and
- * are listed as residual risks in
- * `docs/LK1_PRO_TRAINING_EXCLUSIONS_20260918.md`: a browser-side Viva purchase of
- * a subscription package for this exercise, and the replay of an already
- * confirmed subscription booking stored before this rule.
- *
- * Both sides are pinned by `scripts/tests/proTrainingExclusion.test.ts`.
- *
- * The direction ids are the Viva "ПРО" directions (owner decision 2026-09-18):
- * «Игра+Тренер ПРО уровень D/D+/C/C+» = 5502/5503/5504 (type 847) and
- * «Тренировка ПРО уровень D/D+/C/C+» = 5505/5506/5507 (type 605).
+/** PRO trainings allow a server-confirmed 50% RA/Academy monetary discount.
+ * Free-first-event benefits and other plans stay excluded; owned Energy packs
+ * retain their visit path. The server mirrors direction detection below.
  */
 export const PRO_TRAINING_DIRECTION_IDS = [5502, 5503, 5504, 5505, 5506, 5507] as const;
 

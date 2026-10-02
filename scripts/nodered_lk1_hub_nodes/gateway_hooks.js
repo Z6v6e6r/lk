@@ -136,21 +136,11 @@ if (internalCreate) {
 ctx.step = "lk1_profile_continue";
 
 // HUB_EXERCISE
-// A PRO training is outside the managed subscription contour. The one explicit
-// exception is an owned Energy 5/25 visit pack: it consumes one visit at the
-// ordinary visit-pack rate, without a monetary discount or free-first-event rule.
-// Resolve the actor-owned row before the guard so a client cannot turn an arbitrary
-// product into an Energy exception by changing only the request payload.
+// Resolve the instance first. PRO monetary eligibility is checked only after fresh
+// actor-bound ownership below, since Viva may omit it from visit eligibility.
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
 const proTrainingEnergyAllowed = selectedOwned.length === 1
   && isProTrainingEnergyPack(selectedOwned[0]);
-if (resolveCategory(exercise) === "group_training"
-  && isProTrainingExercise(exercise)
-  && !proTrainingEnergyAllowed) {
-  return finishError(ctx, 409, "На ПРО-тренировки подписки не действуют: доступна только оплата по полной цене", {
-    code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
-  });
-}
 // A Topokraty event is outside every non-club subscription. Viva scopes a sold plan to its
 // own directions and exercise types, so carrying «РА», «Академия» or «Дружба» to direction
 // 6180/6233 is refused by the provider with 400 BAD_REQUEST after the contour has already
@@ -188,6 +178,14 @@ if (ownedSubscriptions.length === 0) {
     });
   }
 const productRule = lk1Config(ownedSubscriptions, exercise?.studio?.id || exercise?.studioId || null);
+if (resolveCategory(exercise) === "group_training" && isProTrainingExercise(exercise)
+  && !proTrainingEnergyAllowed
+  && !(productRule.matched && !productRule.legacy && !productRule.code
+    && isProTrainingDiscountRule(productRule.rule))) {
+  return finishError(ctx, 409, "На ПРО-тренировки доступна скидка 50% по РА или Академии, разовая оплата или Энергия 5/25", {
+    code: "PRO_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+  });
+}
 // A legacy cohort is not a rule change: it stays out of the managed contour.
 if ((ctx.lk1BeforeCreate === true || ctx.lk1CreateBinding) && !productRule.matched
   && !productRule.legacy) {

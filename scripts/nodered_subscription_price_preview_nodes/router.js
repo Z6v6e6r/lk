@@ -118,16 +118,8 @@ if (ctx.step === 'groupExercise') {
     || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
     || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
   ctx.exercise = exercise;
-  // A PRO group training is outside every subscription benefit (owner decision 2026-09-18):
-  // no plan percentage and no free first event apply to it, so the preview answers with an
-  // empty, successful quote list instead of pricing a discount the booking gateway refuses.
-  // The helper is read defensively: a generation whose canonical closure predates the
-  // exclusion keeps its previous pricing instead of failing the whole quote.
-  if (typeof canonical.isProTrainingExercise === 'function'
-    && eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise)) {
-    ctx.quotes = []; ctx.done = true; ctx.statusCode = 200; return out(4);
-  }
-  ctx.target = { ...ctx.target, startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
+  const proTraining = eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise);
+  ctx.target = { ...ctx.target, ...(proTraining ? { proTraining: true } : {}), startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
 }
@@ -460,6 +452,9 @@ while (ctx.step === 'next') {
   const configured = previewRule(owned, ctx.target.stationId);
   if (configured.code) return stop(previewRuleCode(configured));
   ctx.previewResolved = configured.matched && !configured.legacy && productId.toLowerCase() === configured.rule.productId;
+  // Never expose a legacy/full-price subscription path or another plan on PRO.
+  if (ctx.target.proTraining === true
+    && !(ctx.previewResolved && canonical.isProTrainingDiscountRule(configured.rule))) continue;
   if (ctx.previewResolved && (dates.invalid || dates.dates.length !== 1)) return stop('SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED');
   if (eventRoute && ctx.previewResolved) {
     const activation = canonical.lk1LifecycleInstant(live.activationDate);
@@ -526,6 +521,7 @@ while (ctx.step === 'next') {
           // The club training co-pay is bound to the Viva direction of the event, which the
           // booking gateway carries in the same field of its server-resolved target.
           directionId: previewDirectionId(canonical, exercise),
+          ...(ctx.target.proTraining === true ? { proTraining: true } : {}),
           priceProductId: ctx.priceProductId } : {}) } } };
   // The batch is deliberately wider than one product: the query above asks for every product
   // this client owns (`ctx.ruleProductIds`), because the shared usage builder scopes the day and
