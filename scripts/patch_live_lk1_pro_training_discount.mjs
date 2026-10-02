@@ -9,9 +9,9 @@ import { previewSources } from './patch_nodered_subscription_price_preview.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
 export const TARGET = Object.freeze({
-  source: 'd72dc13b3a641a2de979b36d931742d620a4cc61a6a569c693dba0d4e37cec98',
+  source: '23be4d01c8a388a92265e9cfb0b78d0327d7bd5cd29d2bd13a1c4dcefb4cd4a5',
   booking: 'cfce248c5573aa5d9d85d4ff291fd25e9f7bd4896e04c9d99d2200a220a7790b',
-  preview: '0681948096431961e141b98e35f4c3c26c834bafbb4054b52fe7dd5d963eb1f3',
+  preview: 'c56fef557f0497a6be7f3c400f0a86273c08f9303e6af05122b07142b65d9a65',
   evaluator: '2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602',
   pricing: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b',
   join: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
