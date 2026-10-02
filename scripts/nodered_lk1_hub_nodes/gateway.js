@@ -594,9 +594,20 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     return true;
   };
   if (!rows.every(validIdentityShape)) return lk1Stop(ctx, "LK1_MONEY_OWNERSHIP_DTO_INVALID");
-  const selected = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
+  const selectedRows = findOwnedSubscriptions({ ...exercise, availableClientSubscriptions: rows }, ctx.clientSubscriptionId);
+  const patriotsMoneyOnlyIdentity = ["group_training", "tournament"].includes(resolveCategory(exercise))
+    && String(ctx.lk1ProductIdentity?.productId || "").trim().toLowerCase() === "37ab3713-4431-4815-96ba-d7ece76a9241"
+    && identityBound(ctx);
+  // The fresh general subscription read may omit the product id. Project only the
+  // server-confirmed identity; identityOwned checks owner, instance and aliases.
+  const selected = patriotsMoneyOnlyIdentity ? identityOwned(ctx, selectedRows, exercise) : selectedRows;
   const configured = lk1Config(selected, exercise?.studio?.id || exercise?.studioId || null);
   if (configured.code) return lk1Stop(ctx, configured.code);
+  // An event discount outside Viva's visit scope must never fall back to legacy
+  // booking if the Patriots rule is missing or excluded at runtime.
+  if (patriotsMoneyOnlyIdentity && (!configured.matched || configured.legacy)) {
+    return lk1Stop(ctx, "LK1_PATRIOTS_RULE_UNAVAILABLE");
+  }
   // The resolver alone decides the enforced cohort: the annual HUB rule carries no
   // sale-date gate, while every plan rule enters the contour only from its own
   // `enforceFrom`. The money mandate has to cover exactly that cohort. Re-applying the
@@ -627,6 +638,12 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
     // free of that host library, so it names the state directly.
     const firstUse = String(subscription?.status || "").trim().toUpperCase() === "NEW"
       && !String(subscription?.activationDate || "").trim();
+    // Patriots event benefits do not consume a visit. A NEW subscription would
+    // otherwise remain unactivated while receiving an unbounded 50% discount.
+    // The first game can activate the 30-day Viva window; event discounts then
+    // use the same ACTIVE-window proof as every other money benefit.
+    const patriotsMoneyOnlyEvent = configured.rule?.productId === "37ab3713-4431-4815-96ba-d7ece76a9241"
+      && ["group_training", "tournament"].includes(resolveCategory(exercise));
     const now = Date.now();
     // The verdict is the same conjunction as before, split into named violations so the
     // refusal reports which condition failed. Every branch below maps 1:1 to the previous
@@ -641,6 +658,7 @@ if (ctx.step === "lk1_money_owned_subscriptions") {
       violations.push("instance_id_mismatch");
     }
     if (owners.some((id) => normalizeId(id) !== normalizeId(ctx.actorClientId))) violations.push("owner_mismatch");
+    if (firstUse && patriotsMoneyOnlyEvent) violations.push("patriots_activation_required");
     if (!firstUse) {
       if (subscription.status !== "ACTIVE") {
         violations.push(`status_${String(subscription.status || "missing").toLowerCase().slice(0, 24)}`);
