@@ -72,6 +72,7 @@ const ROOTS = ['isObj', 'unwrapRecord', 'isValidDateKey', 'hasCompleteBookingLis
   'eventDurationMinutes', 'eventStartsAt', 'exerciseRoomId', 'resolveCategory', 'resolvePlanKey',
   'compatibilityPlanKey', 'PLAN_CATEGORIES', 'resolveLimitMode', 'extractItems', 'managedExternalEventTypeId',
   'identitySelected', 'identityOwned', 'identityMoneyOwned', 'lk1LifecycleInstant', 'lk1Fields', 'lk1Config',
+  'exerciseDirectionId', 'LK1_FREE_FIRST_EVENT_PRODUCTS', 'LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES', 'lk1OperationCategory',
   // Referenced by the product-identity helpers, which never declare it: the
   // composition has to carry it as a contract constant (see PREVIEW_CONTRACT_ROOTS).
   'LK1_OVERLAY_HUB_PRODUCT_ID', 'MANAGED_ENFORCEMENT_PURCHASE_FROM'];
@@ -256,6 +257,8 @@ function preview(options = {}) {
     activeBookings: { content: options.active || [], totalElements: (options.active || []).length },
     historyBookings: { content: options.history || [], totalElements: (options.history || []).length },
     metadata: instances, catalog, operations: options.operations || [],
+    groupExercise: options.exercise,
+    groupTariff: [{ id: uuid(99), productType: 'SERVICE', cost: 600000 }],
     room: { id: room }, studios: [{ id: station }], subservices: [{ id: service }],
     // Viva scopes the exact tariff by sub-service id; the canonical extractor
     // reads that envelope (major units) and the router converts to minor ones.
@@ -263,7 +266,7 @@ function preview(options = {}) {
   };
   const findings = [];
   const request = { req: { headers: { authorization: 'Bearer fixture-user' } },
-    payload: { target: { ...target, ...options.target },
+    payload: { target: options.eventTarget || { ...target, ...options.target },
       subscriptionIds: options.ids || subscriptions.map(row => row.subscriptionId) } };
   // entry/final return `msg`; the router returns one message per output port.
   let message = scope.entry(request, host, { warn() {} });
@@ -661,4 +664,71 @@ test('an excluded station prices the pre-rollout plan, not the managed contour',
     stationExclusions: { formatVersion: 1, exclusions: [{ stationId: station, productIds: [FRIENDSHIP] }] } }));
   assert.equal(otherProduct.status, 'AVAILABLE');
   assert.equal(otherProduct.amountMinor, managed.amountMinor);
+});
+
+
+test('an owned instance missing metadata cannot disable the healthy instance, in either order', requiresResolver, () => {
+  const a = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(20) });
+  const b = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(21) });
+  const metadata = [{ _id: JSON.stringify(['instance', 'iSkq6G', actor, a.subscriptionId]),
+    kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: a.subscriptionId, productId: HUB_PRODUCT_ID }];
+  for (const subscriptions of [[a, b], [b, a]]) {
+    const result = preview({ subscriptions, instances: metadata });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.quotes.length, 2);
+    assert.equal(result.quotes.find(q => q.subscriptionId === a.subscriptionId).status, 'AVAILABLE');
+    const unavailable = result.quotes.find(q => q.subscriptionId === b.subscriptionId);
+    assert.equal(unavailable.status, 'UNAVAILABLE');
+    assert.equal(unavailable.amountMinor, null);
+    assert.equal(unavailable.reasonCode, 'SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
+    assert.equal(unavailable.basePriceMinor, result.quotes[0].basePriceMinor);
+  }
+  const exercise = { id: uuid(90), typeId: 605, directionId: 6233, studioId: station, roomId: room,
+    timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [a, b] };
+  const event = preview({ subscriptions: [b, a], instances: metadata, exercise,
+    eventTarget: { targetKind: 'GROUP_TRAINING', exerciseId: exercise.id } });
+  assert.equal(event.statusCode, 200);
+  assert.equal(event.quotes.find(q => q.subscriptionId === a.subscriptionId).status, 'AVAILABLE');
+  const unavailableEvent = event.quotes.find(q => q.subscriptionId === b.subscriptionId);
+  assert.equal(unavailableEvent.status, 'UNAVAILABLE');
+  assert.equal(unavailableEvent.amountMinor, null);
+  assert.equal(unavailableEvent.basePriceMinor, 600000);
+});
+
+test('contradictory metadata stays a whole-request refusal', requiresResolver, () => {
+  const a = subscription(HUB_PRODUCT_ID);
+  const row = { _id: JSON.stringify(['instance', 'iSkq6G', actor, a.subscriptionId]), kind: 'instance',
+    tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: a.subscriptionId, productId: HUB_PRODUCT_ID };
+  for (const delta of [{ actorClientId: uuid(999) }, { tenantKey: 'foreign' }, { invalid: true }, { productId: RA }]) {
+    assert.throws(() => preview({ instances: [{ ...row, ...delta }] }), /SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE/);
+  }
+  assert.throws(() => preview({ instances: [row, row] }), /SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE/);
+});
+
+test('conflicting provider product aliases fail globally even when metadata is absent', requiresResolver, () => {
+  const a = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(20) });
+  const b = subscription(HUB_PRODUCT_ID, { subscriptionId: uuid(21), templateId: RA });
+  const metadata = [{ _id: JSON.stringify(['instance', 'iSkq6G', actor, a.subscriptionId]),
+    kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: a.subscriptionId, productId: HUB_PRODUCT_ID }];
+  for (const subscriptions of [[a, b], [b, a]]) {
+    assert.throws(() => preview({ subscriptions, instances: metadata }), /SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE/);
+  }
+});
+
+test('generated event usage resolves RA and Academy provider-booking direction without ReferenceError', requiresResolver, () => {
+  const academy = '9eb8a7a4-c195-492a-95e4-3fb82899ac10';
+  for (const productId of [RA, academy]) {
+    const sub = subscription(productId);
+    const exercise = { id: uuid(90), typeId: 605, directionId: 6233, studioId: station, roomId: room,
+      timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [sub] };
+    const booking = { id: uuid(91), clientSubscriptionId: sub.subscriptionId, paymentType: 'SUBSCRIPTION',
+      exercise: { ...exercise, id: uuid(92) } };
+    const result = preview({ subscriptions: [sub], planProducts: [productId], active: [booking], exercise,
+      eventTarget: { targetKind: 'GROUP_TRAINING', exerciseId: exercise.id } });
+    assert.equal(result.error, undefined);
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.quotes[0].amountMinor, 300000, 'existing event uses the discount, not another free event');
+    assert.equal(result.findings[0].input.usage.freeFirstEvent.usedEventsToday, 1);
+    assert.equal(result.scope.canonical.exerciseDirectionId(exercise), 6233);
+  }
 });

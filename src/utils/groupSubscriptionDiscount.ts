@@ -95,15 +95,25 @@ export function isGroupSubscriptionDiscountQuote(
   return isSubscriptionEventDiscountQuote(value, "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1", exerciseId, actorClientId, now);
 }
 
+export function matchSubscriptionEventDiscount<T extends SubscriptionEventDiscountQuote>(
+  quotes: T[],
+  kind: SubscriptionEventDiscountQuote["kind"],
+  product: { id: string; cost: number | null; source: string },
+): T | null {
+  if (product.source !== "one-time") return null;
+  return quotes.reduce<T | null>((best, quote) => {
+    if (quote.kind !== kind
+      || quote.status !== "AVAILABLE" || quote.productId !== product.id || quote.basePriceMinor !== product.cost
+      || !Number.isSafeInteger(quote.amountMinor) || quote.amountMinor! < 0
+      || quote.amountMinor! > quote.basePriceMinor) return best;
+    return !best || quote.amountMinor! < best.amountMinor!
+      || (quote.amountMinor === best.amountMinor && quote.subscriptionId < best.subscriptionId) ? quote : best;
+  }, null);
+}
+
 export function matchGroupSubscriptionDiscount(
   quotes: GroupSubscriptionDiscountQuote[],
   product: { id: string; cost: number | null; source: string },
 ): GroupSubscriptionDiscountQuote | null {
-  if (product.source !== "one-time") return null;
-  return quotes.reduce<GroupSubscriptionDiscountQuote | null>((best, quote) => {
-    if (quote.kind !== "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1"
-      || quote.status !== "AVAILABLE" || quote.productId !== product.id || quote.basePriceMinor !== product.cost
-      || quote.amountMinor == null) return best;
-    return !best || quote.amountMinor < best.amountMinor! ? quote : best;
-  }, null);
+  return matchSubscriptionEventDiscount(quotes, "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1", product);
 }

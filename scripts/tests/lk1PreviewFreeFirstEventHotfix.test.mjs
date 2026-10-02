@@ -110,7 +110,10 @@ test("the reviewed sources carry the reviewed change", () => {
   assert.ok(composition.includes("...freeFirstRoots(booking),"));
   assert.ok(composition.includes("const FREE_FIRST_ROOT_DECLARATIONS = Object.freeze(["));
   assert.ok(composition.includes("['LK1_FREE_FIRST_EVENT_PRODUCTS', /(?:^|\\n)\\s*const LK1_FREE_FIRST_EVENT_PRODUCTS\\s*=/]"));
-  assert.ok(composition.includes("${(freeFirstRoots(booking) || []).map(name => `, ${name}`).join('')}"));
+  // The full usage dependency graph now supplies these bindings; portable VM
+  // regression tests exercise bare helpers and the free-first provider branch.
+  assert.ok(composition.includes("const usageRoots = subscriptionPreviewUsageRoots(booking, usage);"));
+  assert.ok(composition.includes("${usageRoots.join(', ')}"));
 });
 
 test("the booking delta applies and reverts on the installed body only", { skip: liveSkip }, () => {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import ts from 'typescript';
 import { fileURLToPath } from 'node:url';
-import { extractSubscriptionPricePreviewSource } from './lib/subscriptionPricePreviewSources.mjs';
+import { extractSubscriptionPricePreviewSource, subscriptionPreviewUsageRoots } from './lib/subscriptionPricePreviewSources.mjs';
 import { buildHubPolicyTransition } from './lib/lk1HubPolicyTransition.mjs';
 import * as eventPaymentSources from './lib/eventPaymentSources.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
@@ -244,6 +244,20 @@ export function previewSources(flow, options = {}) {
   const split = nodeOf('8f7bd5b482fe9763').func;
   pin('booking', sha(booking), pins.booking);
   pin('pricing', sha(split), pins.pricing);
+  const usageStart = 'if (ctx.step === "lk1_usage_operations") {';
+  const usageEnd = 'if (ctx.step === "lk1_policy_decision") {';
+  if (booking.split(usageStart).length !== 2 || booking.split(usageEnd).length !== 2) throw new Error('Price preview allowance source drift');
+  // The installed generation already carries the paid-visit recompute *and* the
+  // AUDIT_BINDING guard, so `patchPaidBenefitUsage` cannot be re-applied to it (its
+  // reviewed preimages are the pre-paid-join shape). When the caller pins the exact
+  // installed block sha, reuse it verbatim: the review gate moves from
+  // "preimage + transform" to "installed block sha", and the preview allowance stays
+  // byte-identical to the booking gateway block by construction.
+  const installedUsage = booking.slice(booking.indexOf(usageStart), booking.indexOf(usageEnd));
+  const usage = options.installedUsageSha256 === undefined ? patchPaidBenefitUsage(installedUsage)
+    : sha(installedUsage) === options.installedUsageSha256 ? installedUsage
+      : (() => { throw new Error(`Price preview installed allowance block changed: actual ${sha(installedUsage)}, expected ${options.installedUsageSha256}`); })();
+  const usageRoots = subscriptionPreviewUsageRoots(booking, usage);
   const roots = ['isObj', 'isValidDateKey', 'unwrapRecord', 'extractItems', 'hasCompleteBookingList', 'bookingId', 'bookingClientId',
     'normalizeId', 'collectExactProductIds', 'collectSubscriptionPurchaseDateEvidence', 'identityOwned', 'lk1Config', 'lk1Fields',
     // The first covered event of the day is priced by the shared usage block, which reads the
@@ -251,7 +265,7 @@ export function previewSources(flow, options = {}) {
     // configured discount for the first event (the booking gateway grants it for free). A booking
     // body from before that rule declares neither, so both stay optional and the closure falls
     // back to the discount-only behaviour of that generation.
-    ...freeFirstRoots(booking),
+    ...freeFirstRoots(booking), ...usageRoots,
     ...PREVIEW_EVENT_HELPERS, 'preflightAvailability',
     ...PREVIEW_CONTRACT_ROOTS,
     'mergeBookings', 'isInactiveBooking', 'isSubscriptionBooking', 'bookingSubscriptionId', 'eventDate',
@@ -285,25 +299,12 @@ export function previewSources(flow, options = {}) {
   const accessor = declared.has('lk1PlanRulesGlobal') ? ''
     : `const lk1PlanRulesGlobal = () => global.get(${JSON.stringify(rules.globalName)});`;
   if (accessor) declared.set('lk1PlanRulesGlobal', 'generated');
-  const exported = [...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name))];
+  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name))])];
   assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}`, declared, rules, reader, accessor);
-  const usageStart = 'if (ctx.step === "lk1_usage_operations") {';
-  const usageEnd = 'if (ctx.step === "lk1_policy_decision") {';
-  if (booking.split(usageStart).length !== 2 || booking.split(usageEnd).length !== 2) throw new Error('Price preview allowance source drift');
-  // The installed generation already carries the paid-visit recompute *and* the
-  // AUDIT_BINDING guard, so `patchPaidBenefitUsage` cannot be re-applied to it (its
-  // reviewed preimages are the pre-paid-join shape). When the caller pins the exact
-  // installed block sha, reuse it verbatim: the review gate moves from
-  // "preimage + transform" to "installed block sha", and the preview allowance stays
-  // byte-identical to the booking gateway block by construction.
-  const installedUsage = booking.slice(booking.indexOf(usageStart), booking.indexOf(usageEnd));
-  const usage = options.installedUsageSha256 === undefined ? patchPaidBenefitUsage(installedUsage)
-    : sha(installedUsage) === options.installedUsageSha256 ? installedUsage
-      : (() => { throw new Error(`Price preview installed allowance block changed: actual ${sha(installedUsage)}, expected ${options.installedUsageSha256}`); })();
   const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
-    const { isObj, isValidDateKey, normalizeId, isInactiveBooking, eventDate, bookingSubscriptionId, bookingId, resolveCategory, eventDurationMinutes, lk1Fields${(freeFirstRoots(booking) || []).map(name => `, ${name}`).join('')} } = canonical;
+    const { ${usageRoots.join(', ')} } = canonical;
     const OUTPUT_MANAGED_POLICY = 6;
     const emit = () => msg;
     const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
@@ -344,7 +345,7 @@ export function composeSubscriptionPricePreviewFlow(flow, options = {}) {
     mongo('operations', 'lk_subscription_daily_booking_ops'),
     mongo('games', 'lk_games'),
     { id: id('catch'), type: 'catch', z, name: 'Subscription price preview I/O failure', scope: [id('entry'), id('router'), id('evaluate'), id('http'), id('metadata'), id('operations'), id('games')], uncaught: false, x: 950, y: 1100, wires: [[id('error')]] },
-    node(z, 'error', 1, [[id('final')]], "msg._subscriptionPricePreview = { done: true, statusCode: 503, error: 'PRICE_PREVIEW_UNAVAILABLE' }; return msg;"),
+    node(z, 'error', 1, [[id('final')]]),
     { id: id('response'), type: 'http response', z, name: '', statusCode: '', headers: {}, x: 1250, y: 1000, wires: [] },
     { id: id('options-in'), type: 'http in', z, name: 'OPTIONS subscription game price preview', url: PATH, method: 'options', upload: false, swaggerDoc: '', x: 300, y: 1180, wires: [[id('options')]] },
     node(z, 'options', 1, [[id('response')]]),

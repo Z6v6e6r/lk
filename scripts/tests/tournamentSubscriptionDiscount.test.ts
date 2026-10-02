@@ -238,3 +238,23 @@ test("tournament UI binds asynchronous checkout and quotes to actor/event and di
   assert.match(page, /product\.source === "one-time" && \(discountPending \|\| Boolean\(discountError\)\)/);
   assert.match(page, /completeVivaRegistration\(checkout, discount \? buildTournamentSubscriptionDiscountProduct\(discount\) : matchedProduct\)/);
 });
+
+
+test("automatic tournament offer prefers free then cheapest and keeps the exact chosen instance", () => {
+  const product = { id: quote.productId, source: "one-time", cost: quote.basePriceMinor };
+  const free = { ...quote, subscriptionId: "sub-free", discountPercent: 100, amountMinor: 0 };
+  const cheaper = { ...quote, subscriptionId: "sub-cheaper", discountPercent: 70, amountMinor: 210001 };
+  for (const quotes of [[quote, cheaper, free], [free, cheaper, quote]]) {
+    const selected = matchTournamentSubscriptionDiscount(quotes, product);
+    assert.equal(selected, free);
+    const booking = buildTournamentSubscriptionDiscountProduct(selected!);
+    assert.equal(booking.id, free.subscriptionId);
+    assert.equal(booking.raw.clientSubscriptionId, free.subscriptionId);
+    assert.equal(booking.tournamentDiscountQuote, free);
+  }
+  assert.equal(matchTournamentSubscriptionDiscount([quote, cheaper], product), cheaper);
+  assert.equal(matchTournamentSubscriptionDiscount([{ ...free, status: "UNAVAILABLE" }, quote], product), quote);
+  const tie = { ...quote, subscriptionId: "000-first" };
+  assert.equal(matchTournamentSubscriptionDiscount([quote, tie], product), tie);
+  assert.equal(matchTournamentSubscriptionDiscount([tie, quote], product), tie);
+});

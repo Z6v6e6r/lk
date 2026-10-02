@@ -112,6 +112,26 @@ test('ordinary non-public flow keeps its existing payer-selection trigger', asyn
   h.state.splitPaymentSelected = true; h.render(); assert.equal(h.calls(), 1);
 });
 
+test('both game loaders retain a one-visit instance for 90/120-minute server evaluation', async () => {
+  for (const publicWizard of [true, false]) {
+    for (const duration of [90, 120]) {
+      const h = harness();
+      h.state.usePublicCreateWizard = publicWizard;
+      h.state.splitPaymentSelected = true;
+      h.state.duration = duration;
+      // The previous cabinet loader required two visits for these durations.
+      h.state.splitRequiredSubscriptionVisits = 2;
+      h.state.filterSplitEligibleSubscriptions = (values, _types, _directions, _station, visits) =>
+        values.filter(value => value.visitsLeft >= visits);
+      h.timetable.resolve({ data: [], error: null }); await tick(); h.render();
+      h.subscriptions.resolve({ data: { content: [{ subscriptionId: 'one-visit', visitsLeft: 1 }] }, error: null });
+      await tick();
+      assert.equal(h.state.splitSubscriptions.length, 1);
+      assert.equal(h.state.splitSubscriptions[0].subscriptionId, 'one-visit');
+    }
+  }
+});
+
 
 test('same-flush schedule restart blocks an obsolete prefetch before queued React state resets commit', async () => {
   const h = harness(); h.timetable.resolve({ data: [], error: null }); await tick(); h.render();

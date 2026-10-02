@@ -300,13 +300,6 @@ function resolveSplitBaseShareAmount(config: PadelSplitPaymentPromoConfig, durat
   return Math.round(config.baseShareAmount * Math.max(durationMinutes, 1) / 60);
 }
 
-function resolveSplitSubscriptionVisitCharge(durationMinutes: number | null | undefined): number {
-  const normalizedDuration = Number.isFinite(durationMinutes)
-    ? Math.max(0, Math.floor(Number(durationMinutes)))
-    : 0;
-  return normalizedDuration >= 90 ? 2 : 1;
-}
-
 function buildComparableIdSet(values: Array<string | number | null | undefined>): Set<string> {
   return new Set(
     values
@@ -355,21 +348,19 @@ function resolveSplitJoinPendingReason(
 function buildSplitSubscriptionStatusLabel(
   subscriptions: Subscription[],
   subscriptionNamesById: Record<string, string>,
-  requiredVisits: number,
 ): string {
   const primary = subscriptions[0];
   if (!primary) return "Найдено доступных абонементов: 0";
 
   const name = resolveSplitSubscriptionDisplayName(primary, subscriptionNamesById);
   const balanceLabel = formatSplitSubscriptionValidityLabel(primary, name, { includePrefix: true });
-  const visitsToWriteLabel = requiredVisits > 1 ? ` · списание: ${requiredVisits} посещ.` : "";
   const extraCount = Math.max(0, subscriptions.length - 1);
   const extraLabel = extraCount > 0 ? ` · еще ${extraCount}` : "";
 
   if (balanceLabel) {
-    return `Абонемент «${name}» · ${balanceLabel}${visitsToWriteLabel}${extraLabel}`;
+    return `Абонемент «${name}» · ${balanceLabel}${extraLabel}`;
   }
-  return `Абонемент «${name}»${visitsToWriteLabel}${extraLabel}`;
+  return `Абонемент «${name}»${extraLabel}`;
 }
 
 function splitConfigListAllows(
@@ -6902,7 +6893,6 @@ export default function GamesPage({
   const splitPaymentAvailable = ENABLE_SPLIT_GAME_PAYMENT;
   const splitPaymentSelected = splitPaymentAvailable && paymentMode === "split";
   const splitSharePartLabel = `1/${splitShareCount}`;
-  const splitRequiredSubscriptionVisits = resolveSplitSubscriptionVisitCharge(duration);
   const paymentModeSubLabel = splitPaymentSelected
     ? `Разделить оплату на ${splitShareCount === 2 ? "двоих" : "четверых"}`
     : "Оплачу игру один";
@@ -7054,7 +7044,6 @@ export default function GamesPage({
             ? buildSplitSubscriptionStatusLabel(
               splitSubscriptions,
               splitSubscriptionNamesById,
-              splitRequiredSubscriptionVisits,
             )
             : `Подходящий абонемент не найден, доступна оплата ${splitSharePartLabel} стоимости.`
     )
@@ -7265,7 +7254,7 @@ export default function GamesPage({
         studioId,
         // Candidates only: HAB needs one visit even for 90/120 minutes.
         // The server preview and CREATE determine the actual entitlement.
-        usePublicCreateWizard ? 1 : splitRequiredSubscriptionVisits,
+        1,
         duration,
         selectedDate ? formatDateLocalIso(selectedDate) : null,
       );
@@ -7335,10 +7324,8 @@ export default function GamesPage({
     duration,
     selectedDate,
     splitRequiredDirectionIds,
-    splitRequiredSubscriptionVisits,
     splitRequiredTypeIds,
     studioId,
-    usePublicCreateWizard,
   ]);
   const handlePaymentModeSwitchTap = useCallback(() => {
     setPaymentMode((current) => {

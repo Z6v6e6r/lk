@@ -76,7 +76,7 @@ test("opening a group training upgrades the list summary with the full detail re
   assert.match(detailEffect, /const fromList = items\.find/);
   assert.match(detailEffect, /setSelectedDetail\(fromList\)/);
   assert.doesNotMatch(detailEffect, /setSelectedDetail\(fromList\);[\s\S]{0,80}return;/);
-  assert.match(detailEffect, /apiFetchGroupTrainingDetail\(selectedId\)/);
+  assert.match(detailEffect, /apiFetchGroupTrainingDetail\(selectedId, trainingScope\)/);
   assert.match(source, /apiFetchTournamentParticipants\(selectedId, \{[\s\S]*auth: false,[\s\S]*retries: 0,[\s\S]*signal: controller\.signal/);
   assert.match(source, /normalizeTournamentSignupPublicRoster\(result\.data\)/);
   assert.match(source, /aria-label="Состав игры"/);
@@ -290,6 +290,9 @@ test("production time-step quote does not depend on the DEV payment demo", () =>
   assert.doesNotMatch(block, /IS_DEV_RELEASE_CHANNEL|a3Pay|subscriptionUsageShadowCreatePreview/);
 });
 
-test("public price preview retains one-visit candidates for authoritative HAB overage evaluation", () => {
-  assert.match(gamesPageSource, /usePublicCreateWizard \? 1 : splitRequiredSubscriptionVisits/);
+test("all game price previews retain one-visit candidates for authoritative HAB overage evaluation", () => {
+  const start = gamesPageSource.indexOf("const loadSplitSubscriptions = useCallback");
+  const loader = gamesPageSource.slice(start, gamesPageSource.indexOf("const handlePaymentModeSwitchTap", start));
+  assert.doesNotMatch(loader, /splitRequiredSubscriptionVisits|usePublicCreateWizard \?/);
+  assert.doesNotMatch(gamesPageSource, /списание: \$\{requiredVisits\}/);
 });

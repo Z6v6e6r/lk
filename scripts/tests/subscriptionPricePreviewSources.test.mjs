@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractSubscriptionPricePreviewSource, extractSubscriptionPricePreviewSources } from '../lib/subscriptionPricePreviewSources.mjs';
+import { extractSubscriptionPricePreviewSource, extractSubscriptionPricePreviewSources, subscriptionPreviewUsageRoots } from '../lib/subscriptionPricePreviewSources.mjs';
 
 test('extracts top-level dependency closure in source order without execution', () => {
   const source = `const base = 10;\nconst helper = input => input + base;\nconst unused = () => process.exit(1);\nfunction quote(value) { return helper(value); }`;
@@ -41,4 +41,23 @@ test('does not pull declarations shadowed by parameters, locals, catches, or des
 
 test('rejects invalid JavaScript source before extraction', () => {
   assert.throws(() => extractSubscriptionPricePreviewSource({ source: 'const = ;', roots: ['anything'] }), /source parse diagnostics/);
+});
+
+
+test('allowance extraction carries bare helpers and respects loop-local bindings', () => {
+  const source = `const exerciseDirectionId = row => row.directionId;
+    const lk1FreeFirstEventCovers = id => id === 'covered';`;
+  const usage = `for (const booking of ctx.bookings) {
+    if (lk1FreeFirstEventCovers(ctx.product)) msg.direction = exerciseDirectionId(booking);
+  }
+  return emit(OUTPUT_MANAGED_POLICY);`;
+  const roots = subscriptionPreviewUsageRoots(source, usage);
+  assert.deepEqual([...roots].sort(), ['exerciseDirectionId', 'lk1FreeFirstEventCovers']);
+  const helpers = extractSubscriptionPricePreviewSource({ source, roots }).source;
+  const canonical = new Function(`${helpers}; return {${roots.join(',')}};`)();
+  const execute = new Function('canonical', 'msg', `const {${roots.join(',')}} = canonical;
+    const ctx = msg; const OUTPUT_MANAGED_POLICY = 6; const emit = () => msg; ${usage}`);
+  assert.equal(execute(canonical, { product: 'covered', bookings: [{ directionId: 6233 }] }).direction, 6233);
+  assert.throws(() => subscriptionPreviewUsageRoots(source, usage.replace('exerciseDirectionId(booking)',
+    'missingDirectionHelper(booking)')), /undeclared dependencies: missingDirectionHelper/);
 });
