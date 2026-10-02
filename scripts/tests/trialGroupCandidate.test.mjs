@@ -46,6 +46,23 @@ test('source hash, booking preimage, route conflicts and topology drift block co
   }
   assert.throws(() => compose(compose(rows).candidate), /drift|already installed/);
 });
+test('live eight-output gateway preserves its exact subscription-product continuation', () => {
+  const rows = flow(); const booking = rows.find(row => row.id === TRIAL_BOOKING_ID);
+  booking.outputs = 8; booking.wires.push(['lk_subscription_product_router_20260907']);
+  const product = { id: 'lk_subscription_product_router_20260907', z: 'fixture-tab',
+    type: 'function', func: 'return msg;', outputs: 1, wires: [[]] };
+  rows.push(product);
+  const { candidate } = compose(rows);
+  const after = candidate.find(row => row.id === TRIAL_BOOKING_ID);
+  assert.equal(after.outputs, 8); assert.deepEqual(after.wires, booking.wires);
+  assert.deepEqual(candidate.find(row => row.id === product.id), product);
+  for (const mutate of [f => f.find(row => row.id === TRIAL_BOOKING_ID).outputs = 9,
+    f => f.find(row => row.id === TRIAL_BOOKING_ID).wires[7] = ['fixture-http'],
+    f => f.find(row => row.id === product.id).disabled = true]) {
+    const copy = structuredClone(rows); mutate(copy);
+    assert.throws(() => compose(copy), /topology drift/);
+  }
+});
 test('CLI writer never substitutes a stale local snapshot for verified fresh live origin', () => {
   assert.throws(() => writeTrialGroupCandidate('/private/tmp/does-not-exist-trial-fixture', '/private/tmp/trial-output-fixture', 'wrong', 'wrong'));
 });
