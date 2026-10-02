@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { previewSources } from './patch_nodered_subscription_price_preview.mjs';
+import { patchTopokratyReclaimPreviewBody } from './patch_live_lk1_topokraty_rejection_reclaim_hotfix.mjs';
 import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
@@ -39,7 +40,9 @@ export function composeSubscriptionCalculationRepair(liveBytes) {
     }
   }
   const sources = previewSources(flow, { pins, installedUsageSha256: usageSha256 });
-  const bodies = { router: sources.router, evaluate: sources.evaluator,
+  // Preserve the already installed club-only refusal using its existing reviewed
+  // generation wrapper. The shared preview composer does not own that policy.
+  const bodies = { router: patchTopokratyReclaimPreviewBody(sources.router), evaluate: sources.evaluator,
     final: fs.readFileSync(path.join(root, 'nodered_subscription_price_preview_nodes/final.js'), 'utf8'),
     error: fs.readFileSync(path.join(root, 'nodered_subscription_price_preview_nodes/error.js'), 'utf8') };
   const changes = [];

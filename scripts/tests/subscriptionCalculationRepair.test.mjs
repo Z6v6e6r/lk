@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { composeSubscriptionCalculationRepair } from '../patch_live_subscription_calculation_repair.mjs';
+import { patchTopokratyReclaimPreviewBody } from '../patch_live_lk1_topokraty_rejection_reclaim_hotfix.mjs';
 
 const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
 test('runtime catch preserves only a safe stage and final logs no credentials or provider messages', () => {
@@ -73,4 +74,37 @@ test('production-composed usage keeps A and B independent and resolves covered p
     assert.equal(msg.previewError, undefined);
     assert.equal(msg._managedSubscriptionPolicyInput.usage.freeFirstEvent.usedEventsToday, 1);
   }
+});
+
+function assertClubRefusal(router) {
+  assert.equal(router.split('function isTopokratyExercise(value) {').length - 1, 1);
+  const run = new Function('msg', 'node', 'env', 'global', router);
+  for (const productId of ['b91e14d1-fe6e-4d0b-be39-3e45ad86b759', '9eb8a7a4-c195-492a-95e4-3fb82899ac10']) {
+    for (const directionId of [6180, 6233]) {
+      const ctx = { step: 'next', pending: ['fixture-instance'], subscriptions: { 'fixture-instance': {} },
+        metadata: { 'fixture-instance': { productId } }, catalog: { [productId]: 'Fixture plan' },
+        actorClientId: 'fixture-actor', tenantKey: 'fixture', eventCategory: 'GROUP_TRAINING',
+        startedAt: Date.now(), quotes: [], basePriceMinor: 600000, selectionKey: 'fixture-key',
+        target: { startsAt: '2099-09-21T07:00:00+03:00', durationMinutes: 90 },
+        exercise: { directionId } };
+      const msg = { _subscriptionPricePreview: ctx };
+      run(msg, {}, {}, { get: () => undefined });
+      assert.equal(ctx.statusCode, 200);
+      assert.equal(ctx.quotes.length, 1);
+      assert.equal(ctx.quotes[0].status, 'UNAVAILABLE');
+      assert.equal(ctx.quotes[0].amountMinor, null);
+      assert.equal(ctx.quotes[0].reasonCode, 'TOPOKRATY_SUBSCRIPTION_UNAVAILABLE');
+    }
+  }
+}
+
+test('the preserved club generation refuses other plans before quota or write helpers', () => {
+  const canonical = 'const canonical = { isObj: value => value !== null && typeof value === "object", identityMoneyOwned: () => true };\n';
+  assertClubRefusal(patchTopokratyReclaimPreviewBody(canonical + source('router')));
+});
+
+test('production-composed preview retains the installed club-only refusal for RA and Academy', { skip: !fixture }, () => {
+  const { candidateBytes } = composeSubscriptionCalculationRepair(fs.readFileSync(fixture));
+  const router = JSON.parse(candidateBytes).find(n => n.id === 'lk_subscription_price_preview_20260908_router').func;
+  assertClubRefusal(router);
 });

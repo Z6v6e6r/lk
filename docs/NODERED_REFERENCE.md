@@ -60,6 +60,8 @@ a fresh verified private workspace; it never applies it. It pins the reviewed
 full source and function preimages and changes only `func` on these four nodes:
 `lk_subscription_price_preview_20260908_router`, `_evaluate`, `_final`, `_error`.
 The booking router/evaluator, topology, initializers and data remain unchanged.
+The focused composer also retains the installed club-only refusal through the
+existing reviewed Topokraty generation wrapper; it does not change booking policy.
 Usage: `node scripts/patch_live_subscription_calculation_repair.mjs --workspace
 /private/live --output /private/new/candidate.json --report /private/new/report.json`
 (output parent must exist, be canonical and mode 0700; outputs must be new).

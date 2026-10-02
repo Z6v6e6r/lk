@@ -122,6 +122,8 @@ assert.doesNotMatch(availability, /\brequire\s*\(/);
 // The release reads the live booking node; this synthetic body carries the same
 // roots and anchors so the real composition path is exercised here.
 const availabilitySource = `const preflightAvailability = (() => { const exports = {}; \n${availability}\n return exports; })();`;
+const topokratySource = read('../lib/topokratyExclusion.mjs').replace(/^export /gm, '')
+  + '\n// TOPOKRATY_SUBSCRIPTION_UNAVAILABLE';
 const configuredParts = parts.filter(text => !/^const lk1Config = /.test(text));
 const helperWithoutConfig = configuredParts.join('\n');
 const entrySource = read('../nodered_subscription_price_preview_nodes/entry.js');
@@ -141,7 +143,7 @@ const installedUsage = gatewayUsage.replace(/ {4}\/\/ AUDIT_BINDING_START[\s\S]*
 const policyAnchor = 'if (ctx.step === "lk1_policy_decision") { return null; }';
 const bookingBody = ({ base = helperSource, reader = '', config = null } = {}) => [base
   + (config === null ? '' : `\nconst lk1Config = ${config};`),
-  availabilitySource, reader, installedUsage, policyAnchor].join('\n');
+  availabilitySource, topokratySource, reader, installedUsage, policyAnchor].join('\n');
 const syntheticEvaluator = evaluator;
 const syntheticSplit = sources.split;
 const syntheticJoin = read('../nodered_games_nodes/fn_split_join_prepare.js');
@@ -179,7 +181,8 @@ const coverageTables = `const LK1_FREE_FIRST_EVENT_PRODUCTS = {
   'fixture-scoped': ['group_training', 'tournament']
 };
 const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = { 'fixture-scoped': [5278] };`;
-const hoistedBody = [helperSource, availabilitySource, hubTransition().reader,
+const hoistedBase = parts.filter(text => !/^const (LK1_FREE_FIRST_EVENT_PRODUCTS|LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES|exerciseDirectionId|lk1OperationCategory)\s*=/.test(text)).join('\n');
+const hoistedBody = [hoistedBase, availabilitySource, topokratySource, hubTransition().reader,
   coverageTables, usageHelpers, coverageDeclaration, hoistedUsage + policyAnchor].join('\n');
 const hoistedPreview = previewSources(syntheticFlow({ body: hoistedBody, initialize: hubTransition().initialize }), {
   pins: syntheticPins(hoistedBody), installedUsageSha256: sha(hoistedUsage),
@@ -262,7 +265,7 @@ test('generated usage retains fail-closed membership validation', () => {
 test('a reviewed generation with step-local coverage still composes and executes', () => {
   // The same helper can remain inside the step in an older generation. It must
   // not be requested as a top-level extraction root merely because text matches.
-  const body = [helperSource, availabilitySource, hubTransition().reader,
+  const body = [hoistedBase, availabilitySource, topokratySource, hubTransition().reader,
     coverageTables, usageHelpers, gatewayUsage + policyAnchor].join('\n');
   const preview = previewSources(syntheticFlow({ body, initialize: hubTransition().initialize }), {
     pins: syntheticPins(body), installedUsageSha256: sha(gatewayUsage),
@@ -797,7 +800,7 @@ test('an owned instance missing metadata cannot disable the healthy instance, in
     assert.equal(unavailable.reasonCode, 'SUBSCRIPTION_PRODUCT_CURRENT_STATE_UNAVAILABLE');
     assert.equal(unavailable.basePriceMinor, result.quotes[0].basePriceMinor);
   }
-  const exercise = { id: uuid(90), typeId: 605, directionId: 6233, studioId: station, roomId: room,
+  const exercise = { id: uuid(90), typeId: 605, directionId: 3108, studioId: station, roomId: room,
     timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [a, b] };
   const event = preview({ subscriptions: [b, a], instances: metadata, exercise,
     eventTarget: { targetKind: 'GROUP_TRAINING', exerciseId: exercise.id } });
@@ -833,7 +836,7 @@ test('generated event usage resolves RA and Academy provider-booking direction w
   const academy = '9eb8a7a4-c195-492a-95e4-3fb82899ac10';
   for (const productId of [RA, academy]) {
     const sub = subscription(productId);
-    const exercise = { id: uuid(90), typeId: 605, directionId: 6233, studioId: station, roomId: room,
+    const exercise = { id: uuid(90), typeId: 605, directionId: 3108, studioId: station, roomId: room,
       timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [sub] };
     const booking = { id: uuid(91), clientSubscriptionId: sub.subscriptionId, paymentType: 'SUBSCRIPTION',
       exercise: { ...exercise, id: uuid(92) } };
@@ -843,6 +846,6 @@ test('generated event usage resolves RA and Academy provider-booking direction w
     assert.equal(result.statusCode, 200);
     assert.equal(result.quotes[0].amountMinor, 300000, 'existing event uses the discount, not another free event');
     assert.equal(result.findings[0].input.usage.freeFirstEvent.usedEventsToday, 1);
-    assert.equal(result.scope.canonical.exerciseDirectionId(exercise), 6233);
+    assert.equal(result.scope.canonical.exerciseDirectionId(exercise), 3108);
   }
 });
