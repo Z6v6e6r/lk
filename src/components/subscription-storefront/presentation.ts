@@ -27,7 +27,7 @@ const planning: SubscriptionBenefitGroup = {
 export const friendshipBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день бесплатно:',
+    title: '1 час в день:',
     items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }],
   },
   discounts,
@@ -37,7 +37,7 @@ export const friendshipBenefits: readonly SubscriptionBenefitGroup[] = [
 export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день бесплатно на выбор:',
+    title: '1 час в день на выбор:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -53,7 +53,7 @@ export const fullBenefits: readonly SubscriptionBenefitGroup[] = [
 export const academyBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день бесплатно на выбор:',
+    title: '1 час в день на выбор:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -67,7 +67,7 @@ export const academyBenefits: readonly SubscriptionBenefitGroup[] = [
 export const sportBenefits: readonly SubscriptionBenefitGroup[] = [
   {
     id: 'daily',
-    title: '1 час в день бесплатно:',
+    title: '1 час в день:',
     items: [
       { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
       { id: 'training', icon: 'training', label: 'Игра + тренер' },
@@ -164,14 +164,14 @@ export const atlantyPlanPresentation: SummerPlanPresentation = {
 // Annual and monthly friendship plans share the same benefit descriptions.
 export const friendshipVariantBenefits: Readonly<Record<string, readonly SubscriptionBenefitGroup[]>> = {
   'monthly-two-hours': [
-    { id: 'daily-two-hours', title: '2 часа в день бесплатно:',
-      items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }] },
+    { id: 'daily-two-hours', title: '2 часа в день:',
+      items: [
+        { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
+        { id: 'friends-time', icon: 'friends-time', label: '«Время на друзей»' },
+      ] },
     { ...discounts, title: 'СВЕРХ 2-ух ЧАСОВ:' },
     { ...planning, items: [
       { id: 'active-bookings', label: 'До 6 активных записей' },
-      // The day carries one event: the 120-minute bucket is not two separate games.
-      { id: 'one-event-a-day', label: 'Одно событие в день: игра 60, 90 или 120 минут либо «Время на друзей»' },
-      { id: 'discount-only', label: 'С 7-й записи — только скидка, без бесплатных часов' },
     ] },
   ],
   annual: friendshipBenefits,
