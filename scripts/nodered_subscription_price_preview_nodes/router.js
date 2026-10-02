@@ -498,7 +498,8 @@ while (ctx.step === 'next') {
   const visitCount = ctx.previewResolved ? 1 : ctx.target.durationMinutes >= 90 ? 2 : 1;
   // Existing Patriots games have their own Viva direction/type. Both values come from
   // the resolved exercise; a client-provided target cannot widen the product scope.
-  const patriotsGameType = !eventRoute && productId.toLowerCase() === '37ab3713-4431-4815-96ba-d7ece76a9241'
+  const patriotsGameType = canonical.supportsPatriotsGameScope === true && !eventRoute
+    && productId.toLowerCase() === '37ab3713-4431-4815-96ba-d7ece76a9241'
     ? canonical.managedExternalEventTypeId(exercise) : null;
   if (patriotsGameType && !['viva:direction:4588:type:1613', 'viva:direction:6181:type:2349'].includes(patriotsGameType)) {
     quote(id, 'UNAVAILABLE', null, 0, 0, 'EVENT_NOT_INCLUDED'); continue;

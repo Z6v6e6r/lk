@@ -140,6 +140,26 @@ const topLevelDeclarations = (source, label) => {
 const declarationMap = source => new Map(topLevelDeclarations(source, 'closure')
   .map(declaration => [declaration.name, normalizeDeclarationText(declaration.text)]));
 
+// Installed evaluators wrap the LK1 body in its own policy-guarded IIFE. Inspect
+// that enclosure, never declarations belonging to an unrelated policy branch.
+const lk1EvaluatorDeclarations = source => {
+  const file = ts.createSourceFile('evaluator.js', source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const condition = 'Object.prototype.hasOwnProperty.call(msg._managedSubscriptionPolicyInput||{},"lk1Policy")';
+  const branches = file.statements.filter(statement => ts.isIfStatement(statement)
+    && normalizeDeclarationText(statement.expression.getText(file)) === condition);
+  if (!branches.length) return declarationMap(source);
+  if (branches.length !== 1) throw new Error('Price preview LK1 evaluator branch is ambiguous');
+  const block = branches[0].thenStatement;
+  const returned = ts.isBlock(block) && block.statements.length === 1 ? block.statements[0] : null;
+  const call = returned && ts.isReturnStatement(returned) ? returned.expression : null;
+  let body = call && ts.isCallExpression(call) && call.arguments.length === 0 ? call.expression : null;
+  while (body && ts.isParenthesizedExpression(body)) body = body.expression;
+  if (!body || !ts.isArrowFunction(body) || body.parameters.length || !ts.isBlock(body.body)) {
+    throw new Error('Price preview LK1 evaluator enclosure drift');
+  }
+  return declarationMap(body.body.statements.map(statement => statement.getText(file)).join('\n'));
+};
+
 /** The installed HUB policy the booking gateway binds in its node initializer. */
 const installedHubPolicy = node => {
   const text = typeof node?.initialize === 'string' ? node.initialize : '';
@@ -314,9 +334,17 @@ export function previewSources(flow, options = {}) {
   const accessor = declared.has('lk1PlanRulesGlobal') ? ''
     : `const lk1PlanRulesGlobal = () => global.get(${JSON.stringify(rules.globalName)});`;
   if (accessor) declared.set('lk1PlanRulesGlobal', 'generated');
-  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name))])];
+  const evaluator = nodeOf('lk_subscription_managed_policy_20260820').func;
+  pin('evaluator', sha(evaluator), pins.evaluator);
+  // A newer router must not introduce a product scope into an older installed
+  // booking generation. Both the booking classifier and evaluator own this scope.
+  const supportsPatriotsGameScope = (bookingDeclarations.get('resolveCategory') || '')
+    .includes('if(typeId===2349&&directionId===6181)return"open_game";')
+    && lk1EvaluatorDeclarations(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
+  const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`;
+  const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope'])];
   assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}`, declared, rules, reader, accessor);
-  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\nreturn {${exported.join(',')}}; })();`;
+  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
     const { ${usageRoots.join(', ')} } = canonical;
@@ -325,8 +353,6 @@ export function previewSources(flow, options = {}) {
     const lk1Stop = (_context, code) => { msg.previewError = code; return msg; };
     ${usage}
   };`;
-  const evaluator = nodeOf('lk_subscription_managed_policy_20260820').func;
-  pin('evaluator', sha(evaluator), pins.evaluator);
   const router = `${canonical}\n${pricing}\n${joinPricing}\n${usageFunction}\n${read('router')}`;
   // Compose-time proof that the generated node is executable and that the router
   // can really reach the resolver the way it calls it. The same proof covers every

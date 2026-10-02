@@ -360,6 +360,11 @@ const evaluation = input => {
 
 /** Drive the real preview state machine with stubbed provider reads. */
 function preview(options = {}) {
+  const evaluate = options.evaluatorBody ? input => {
+    const message = { _managedSubscriptionPolicyInput: input };
+    new Function('msg', options.evaluatorBody)(message);
+    return message._managedSubscriptionPolicyDecision;
+  } : evaluation;
   const subscriptions = options.subscriptions || [subscription(HUB_PRODUCT_ID)];
   const planRows = (options.planProducts || []).map((productId, index) =>
     ({ productId, planKey: index === 0 ? 'ra' : 'promo_academy' }));
@@ -370,7 +375,7 @@ function preview(options = {}) {
     // The game router reads the room/studio tariff through the admin service token.
     vivacrm_access_token: 'fixture-admin', vivacrm_token_expires_at: Date.now() + 60000 };
   const host = { get: key => globals[key], __trace: [] };
-  const scope = (options.groupExercise ? guardedComposition : composition).createScope(host, { warn() {} });
+  const scope = (options.composition || (options.groupExercise ? guardedComposition : composition)).createScope(host, { warn() {} });
   const instanceKey = id => JSON.stringify(['instance', 'iSkq6G', actor, id]);
   const instances = options.instances || subscriptions.map(row => ({ _id: instanceKey(row.subscriptionId),
     kind: 'instance', tenantKey: 'iSkq6G', actorClientId: actor, subscriptionId: row.subscriptionId,
@@ -410,7 +415,7 @@ function preview(options = {}) {
     assert.ok(ctx, `Preview lost its state machine at hop ${hop}`);
     if (ctx.step === 'profile') message = { ...message, statusCode: 200, payload: { id: actor } };
     else if (ctx.step === 'evaluate') {
-      const decided = evaluation(message._managedSubscriptionPolicyInput);
+      const decided = evaluate(message._managedSubscriptionPolicyInput);
       findings.push({ input: message._managedSubscriptionPolicyInput, decision: decided });
       message = { ...message, _managedSubscriptionPolicyDecision: decided };
     } else if (provider[ctx.step]) {
@@ -529,17 +534,23 @@ test('Patriots existing game preview uses the resolved 6181/2349 scope and match
     metadata: { splitPayment: { enabled: true, vivaExerciseId: exerciseId } } };
   const exercise = { id: exerciseId, studioId: station, roomId: room, directionId: 6181, typeId: 2349,
     timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [owned] };
-  const result = preview({ subscriptions: [owned],
-    planRules: planRulesGlobal([{ productId: PATRIOTS, planKey: 'patriots' }]),
-    target: { targetKind: 'EXISTING_GAME', gameId, startsAt, durationMinutes: 90 },
-    game, exercise });
-  const quote = soleQuote(result);
-  const [finding] = result.findings;
-  assert.equal(quote.status, 'AVAILABLE');
-  assert.equal(finding.input.target.externalEventTypeId, 'viva:direction:6181:type:2349');
-  assert.equal(finding.decision.eligible, true);
-  assert.equal(quote.amountMinor, finding.decision.benefit.finalPriceMinor);
-  assert.deepEqual([quote.freeMinutes, quote.paidMinutes], [60, 30]);
+  const wrappedEvaluator = 'if (Object.prototype.hasOwnProperty.call(msg._managedSubscriptionPolicyInput || {}, "lk1Policy")) {\n'
+    + `  return (() => {\n${evaluator}\n})();\n}\nreturn msg;`;
+  const wrapped = makeComposition(previewSources(syntheticFlow({ body: syntheticBody,
+    evaluatorSource: wrappedEvaluator, initialize: hubTransition().initialize }),
+  { pins: { ...syntheticPins(syntheticBody), evaluator: sha(wrappedEvaluator) } }));
+  for (const layout of [{}, { composition: wrapped, evaluatorBody: wrappedEvaluator }]) {
+    const result = preview({ ...layout, subscriptions: [owned],
+      planRules: planRulesGlobal([{ productId: PATRIOTS, planKey: 'patriots' }]),
+      target: { targetKind: 'EXISTING_GAME', gameId, startsAt, durationMinutes: 90 }, game, exercise });
+    const quote = soleQuote(result);
+    const [finding] = result.findings;
+    assert.equal(quote.status, 'AVAILABLE');
+    assert.equal(finding.input.target.externalEventTypeId, 'viva:direction:6181:type:2349');
+    assert.equal(finding.decision.eligible, true);
+    assert.equal(quote.amountMinor, finding.decision.benefit.finalPriceMinor);
+    assert.deepEqual([quote.freeMinutes, quote.paidMinutes], [60, 30]);
+  }
 
   const wrongType = preview({ subscriptions: [owned],
     planRules: planRulesGlobal([{ productId: PATRIOTS, planKey: 'patriots' }]),
@@ -548,6 +559,35 @@ test('Patriots existing game preview uses the resolved 6181/2349 scope and match
   assert.equal(soleQuote(wrongType).status, 'UNAVAILABLE');
   assert.equal(soleQuote(wrongType).reasonCode, 'EVENT_NOT_INCLUDED');
   assert.equal(wrongType.findings.length, 0);
+});
+
+test('an older booking or evaluator generation cannot gain Patriots club-game scope through preview', requiresResolver, () => {
+  const mapping = 'if (typeId === 2349 && directionId === 6181) return "open_game";';
+  assert.ok(syntheticBody.includes(mapping));
+  const olderBody = syntheticBody.replace(mapping, '');
+  const older = makeComposition(previewSources(syntheticFlow({ body: olderBody,
+    initialize: hubTransition().initialize }), { pins: syntheticPins(olderBody) }));
+  const evaluatorLayouts = ['return msg;',
+    'if (Object.prototype.hasOwnProperty.call(msg._managedSubscriptionPolicyInput || {}, "lk1Policy")) {\n'
+      + '  return (() => {\nreturn msg;\n})();\n}\nconst PATRIOTS_DISCOUNT_EVENTS = {};\nreturn msg;'];
+  const olderPolicies = evaluatorLayouts.map(body => makeComposition(previewSources(syntheticFlow({ body: syntheticBody,
+    evaluatorSource: body, initialize: hubTransition().initialize }),
+    { pins: { ...syntheticPins(syntheticBody), evaluator: sha(body) } })));
+  const gameId = uuid(30), exerciseId = uuid(31);
+  const owned = subscription(PATRIOTS, { visitsLeft: 30,
+    availableTypes: [{ id: 2349 }], availableDirections: [{ id: 6181 }] });
+  const game = { id: gameId, booking: { date: '2099-09-21', timeFrom: '07:00', timeTo: '08:30',
+    studioId: station, roomId: room, masterServiceId: master, subServiceIds: [service] },
+    metadata: { splitPayment: { enabled: true, vivaExerciseId: exerciseId } } };
+  const exercise = { id: exerciseId, name: 'Патриоты игра', studioId: station, roomId: room, directionId: 6181, typeId: 2349,
+    timeFrom: startsAt, timeTo: '2099-09-21T08:30:00+03:00', availableClientSubscriptions: [owned] };
+  for (const generation of [older, ...olderPolicies]) {
+    const result = preview({ composition: generation, subscriptions: [owned], planRules: null,
+      target: { targetKind: 'EXISTING_GAME', gameId, startsAt, durationMinutes: 90 }, game, exercise });
+    assert.equal(soleQuote(result).status, 'UNAVAILABLE');
+    assert.equal(soleQuote(result).reasonCode, 'SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE');
+    assert.equal(result.findings.length, 0);
+  }
 });
 
 test('four and five active bookings stay bookable at the discount, without a visit', requiresResolver, () => {
