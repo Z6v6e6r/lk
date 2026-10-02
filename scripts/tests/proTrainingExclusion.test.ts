@@ -66,13 +66,12 @@ test("a record without a resolvable direction is not PRO", () => {
   assert.equal(isProTraining({ directionId: "5507" }), true, "a numeric string id stays usable");
 });
 
-test("the group schedule screen offers no subscription path for PRO trainings", () => {
+test("the group schedule requests monetary quotes for PRO while preserving Energy visits", () => {
   assert.match(groupSchedulePageSource, /import \{ isProTraining \} from "\.\.\/\.\.\/utils\/proTrainingExclusion";/);
   assert.match(groupSchedulePageSource, /const proTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isProTraining\(selectedDetail\)\),/);
-  // No quote is requested, so no discount row and no subscription booking product can render.
-  // The Topokraty exclusion (2026-09-25) shares this branch: both flags resolve the discount
-  // without a request.
-  assert.match(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\) \{\s*setDiscountResolvedFor\(resolvedFor\);\s*return;\s*\}/);
+  assert.match(groupSchedulePageSource, /if \(topokratyExcluded\) \{/);
+  assert.doesNotMatch(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\)/);
+  assert.match(groupSchedulePageSource, /apiFetchGroupSubscriptionDiscounts\(selectedId/);
   assert.match(groupSchedulePageSource, /: proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
   assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout\s*\?\s*proTrainingSelected\s*\?/);
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);

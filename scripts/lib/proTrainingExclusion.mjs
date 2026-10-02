@@ -1,26 +1,21 @@
-// PRO-level trainings stay outside every subscription benefit, on both sides of the
-// contour: the advisory price preview quotes nothing for them and the atomic booking
-// gateway refuses managed plans while allowing only an owned Energy 5/25 visit pack.
-// A PRO training is paid at its full one-time price; promo codes are not part of this
-// rule.
-//
-// Owner decision 2026-09-18: "Тренировка ПРО уровень …" (5505/5506/5507, exercise type
-// 605) and "Игра+Тренер ПРО уровень …" (5502/5503/5504, exercise type 847) must not be
-// bookable with a subscription and must not receive the plan discount or the
-// free-first-event benefit.
-//
-// This module is embedded verbatim into the booking gateway by the release composition
-// (`hubGatewaySource()` in scripts/lib/eventPaymentSources.mjs) and into the advisory price
-// preview's canonical closure, so the rule has exactly one reviewed source. The widget
-// carries the same ids and the same token in `src/utils/proTrainingExclusion.ts`;
-// `scripts/tests/proTrainingExclusion.test.ts` pins both sides.
-//
-// Scope note: the reviewed server guard covers the subscription *booking* endpoint. The
-// "buy a subscription package for this exercise" transaction is created by the browser
-// straight in Viva and is not carried by that endpoint, so it is currently excluded by the
-// widget plus the owner-side Viva product configuration only — see
-// docs/LK1_PRO_TRAINING_EXCLUSIONS_20260918.md («Остаточные риски»).
+// PRO trainings allow exactly 50% monetary discounts for managed RA/Academy
+// subscriptions, including promo variants. Free-first-event visits stay excluded.
+// Energy 5/25 keeps its existing visit-pack path; other plans stay unavailable.
+// Embedded in booking and preview from this single source.
 export const PRO_TRAINING_DIRECTION_IDS = Object.freeze([5502, 5503, 5504, 5505, 5506, 5507]);
+
+const PRO_TRAINING_DISCOUNT_PRODUCT_IDS = Object.freeze([
+  "b91e14d1-fe6e-4d0b-be39-3e45ad86b759", // RA
+  "3b4806f1-6f9a-46df-a7d7-45075b4e7274", // promo RA
+  "9eb8a7a4-c195-492a-95e4-3fb82899ac10", // Academy
+  "6bda152b-0a9c-4308-82d0-3cd4e6aa680d", // promo Academy
+]);
+export function isProTrainingDiscountRule(rule) {
+  return rule !== null && typeof rule === "object"
+    && typeof rule.productId === "string"
+    && PRO_TRAINING_DISCOUNT_PRODUCT_IDS.includes(rule.productId.toLowerCase())
+    && rule.groupTrainingDiscountPercent === 50;
+}
 
 // "ПРО" must be a standalone token: "Профсоюзная", "пробная" and "просто" are ordinary
 // directions in the same catalogue and must never match.

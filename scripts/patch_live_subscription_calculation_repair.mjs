@@ -12,20 +12,20 @@ import { buildExactGraphContract, validateReviewedFlowContract } from './nodered
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const root = path.dirname(fileURLToPath(import.meta.url));
 const prefix = 'lk_subscription_price_preview_20260908_';
-export const SOURCE_SHA256 = 'd72dc13b3a641a2de979b36d931742d620a4cc61a6a569c693dba0d4e37cec98';
+export const SOURCE_SHA256 = '0dacc3d0264a1d243b163996ef13939ef523e69a44b8f2cfe60729547570e268';
 const pins = Object.freeze({
-  booking: 'cfce248c5573aa5d9d85d4ff291fd25e9f7bd4896e04c9d99d2200a220a7790b',
+  booking: 'f97b4b2ec40db022257571a0b69f82bc5236ea96013719708cb0d076d7197bb9',
   evaluator: '2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602',
   pricing: 'd93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b',
   join: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
 });
 const preimages = Object.freeze({
-  router: '0681948096431961e141b98e35f4c3c26c834bafbb4054b52fe7dd5d963eb1f3',
+  router: '85fce3897ca1069f17c052402a7887cb37fede88dc476b28a1e1742141a47400',
   evaluate: 'c20f0e6d792c02bdd0f945b84aaba2ac6405386add6228823cbb30fd2ca38945',
   final: '7c822e2bb7efa35f8877b66656e367686a930867b6781d7e97ddaa29dba933b8',
   error: 'b9e9bb3845fb16f54093d8226189fcf550375f6e42cab14649efc443adc5bfd3',
 });
-const usageSha256 = '5fce82de1d012254f863a90388c75f581f9dcf843e520b10d17a968bc6b3f1ef';
+const usageSha256 = 'a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1';
 
 export function composeSubscriptionCalculationRepair(liveBytes) {
   if (sha(liveBytes) !== SOURCE_SHA256) throw new Error('Subscription calculation live preimage drift');
