@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { assertNoInstalledTrialGateOverwrite } from "./lib/trialGroupSources.mjs";
 import {
   matchesManagedSubscriptionRouterTopology,
   resolveManagedSubscriptionRouterContract,
@@ -250,6 +251,7 @@ function validateCandidate(flow, tabId, mongoClientId) {
 
 const { flow, sourceHash } = verifyLiveSource();
 if (!Array.isArray(flow)) throw new Error("Node-RED source flow must be an array");
+assertNoInstalledTrialGateOverwrite(flow);
 const tabs = flow.filter((node) => node.type === "tab" && node.disabled !== true && node.label === "LK Games");
 if (tabs.length !== 1) throw new Error(`Expected one enabled LK Games tab, found ${tabs.length}`);
 const tabId = tabs[0].id;

@@ -17,7 +17,7 @@ export type CabinetBookingCategory = "games" | "trainings" | "tournaments" | "ot
 // shared exercise type 2349 of «Атланты» (direction 6152) is deliberately not listed.
 export const EXERCISE_CATEGORY_OPEN_GAME_DIRECTION_IDS = [4588, 6180] as const;
 export const EXERCISE_CATEGORY_OPEN_GAME_TYPE_IDS = [1613] as const;
-export const EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS = [605, 847, 963, 1208] as const;
+export const EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS = [605, 847, 963, 1208, 1755] as const;
 export const EXERCISE_CATEGORY_GROUP_TRAINING_DIRECTION_IDS = [6233] as const;
 export const EXERCISE_CATEGORY_TOURNAMENT_DIRECTION_IDS = [2617, 3284, 4769] as const;
 export const EXERCISE_CATEGORY_TOURNAMENT_TYPE_IDS = [839, 1013] as const;

@@ -17,6 +17,7 @@ import {
   type UserProfileType,
 } from "./apiClient";
 import { readAuthToken } from "./authTokenStorage";
+import { isTrialGroupTraining, trialGroupCheckoutOperationId, clearTrialGroupCheckoutOperations } from "./trialGroupTraining";
 import { appendCurrentAuthModeToNavigableUrl } from "./authMode";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
 import {
@@ -2374,6 +2375,8 @@ export async function apiCancelTournamentVivaRegistration(
     }
   }
 
+  clearTrialGroupCheckoutOperations(exerciseId);
+
   return {
     data: {
       status: "NONE",
@@ -3153,6 +3156,11 @@ export async function apiFetchTournamentSubscriptionDiscounts(
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
+  const trialGroupTarget = isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament);
+  if (trialGroupTarget && !["client-subscription", "one-time", "client-one-time"].includes(params.product.source)) {
+    return { data: null, error: { status: 409,
+      message: "Этот способ записи на пробную тренировку недоступен. Выберите разовую услугу или имеющийся абонемент." }, status: 409 };
+  }
   if ((params.product.groupDiscountQuote || params.product.tournamentDiscountQuote)
     && (params.product.lk1MoneyDiscountCandidate !== true
       || (params.product.groupDiscountQuote && params.product.tournamentDiscountQuote))) {
@@ -3221,16 +3229,30 @@ export async function apiCreateTournamentVivaTransaction(
   const successUrl = params.successUrl?.trim() || returnUrls.successUrl;
   const failUrl = params.failUrl?.trim() || returnUrls.failUrl;
   const payload = buildTournamentVivaTransactionPayload(params, successUrl, failUrl);
+  const trialOperationId = trialGroupTarget
+    ? trialGroupCheckoutOperationId(params.exerciseId, params.clientId || params.profile?.id || "", params.product.id, params.promoCode ?? null, params.product.source)
+    : null;
 
   const result = await request<unknown>(
-    `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
+    trialOperationId
+      ? `/lk/trial-group-bookings?operationId=${encodeURIComponent(trialOperationId)}`
+      : `${API_BASE}/end-user/api/v2/${TENANT_KEY}/transactions`,
     {
+      ...(trialOperationId ? { baseUrl: getServ2Origin() } : {}),
       method: "POST",
       auth: true,
       retries: 0,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(trialOperationId ? {
+        exerciseId: params.exerciseId, productId: params.product.id,
+        source: params.product.source, promoCode: params.promoCode ?? null,
+      } : payload),
     },
   );
+  if (trialOperationId && (result.error || pickString(result.data, ["state"]) === "PENDING_CONFIRMATION")) {
+    paymentWatcher?.close();
+    return { data: null, error: result.error || { status: 202,
+      message: "Запись ожидает подтверждения. Повторите проверку; повторная оплата не создаётся.", raw: result.data }, status: result.status };
+  }
   if (result.error) {
     const outcomeMayBeUnknown = result.status == null || result.status >= 500;
     if (outcomeMayBeUnknown) {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import ts from "typescript";
+import { isTrialGroupTraining } from "../../src/utils/trialGroupTraining.ts";
 import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, subscriptionEventQuoteAmountMinor, type GroupSubscriptionDiscountQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
 import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import type { TournamentVivaProduct } from "../../src/utils/tournamentSignupApi.ts";
@@ -72,6 +73,7 @@ test("discount requires exact actor, event, tariff, supported percentage and fre
     { id: "one-time", cost: 550000, source: "subscription" }]) assert.equal(matchGroupSubscriptionDiscount([quote], product), null);
 });
 function checkout(dependencies: Record<string, unknown>) {
+  dependencies = { isTrialGroupTraining, ...dependencies };
   const source = ts.createSourceFile("api.ts", fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const node = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === "apiCreateTournamentVivaTransaction")!;
   const code = ts.transpileModule(node.getText(source).replace(/^export /, ""), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
