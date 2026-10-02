@@ -140,6 +140,26 @@ const topLevelDeclarations = (source, label) => {
 const declarationMap = source => new Map(topLevelDeclarations(source, 'closure')
   .map(declaration => [declaration.name, normalizeDeclarationText(declaration.text)]));
 
+// Installed evaluators wrap the LK1 body in its own policy-guarded IIFE. Inspect
+// that enclosure, never declarations belonging to an unrelated policy branch.
+const lk1EvaluatorDeclarations = source => {
+  const file = ts.createSourceFile('evaluator.js', source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const condition = 'Object.prototype.hasOwnProperty.call(msg._managedSubscriptionPolicyInput||{},"lk1Policy")';
+  const branches = file.statements.filter(statement => ts.isIfStatement(statement)
+    && normalizeDeclarationText(statement.expression.getText(file)) === condition);
+  if (!branches.length) return declarationMap(source);
+  if (branches.length !== 1) throw new Error('Price preview LK1 evaluator branch is ambiguous');
+  const block = branches[0].thenStatement;
+  const returned = ts.isBlock(block) && block.statements.length === 1 ? block.statements[0] : null;
+  const call = returned && ts.isReturnStatement(returned) ? returned.expression : null;
+  let body = call && ts.isCallExpression(call) && call.arguments.length === 0 ? call.expression : null;
+  while (body && ts.isParenthesizedExpression(body)) body = body.expression;
+  if (!body || !ts.isArrowFunction(body) || body.parameters.length || !ts.isBlock(body.body)) {
+    throw new Error('Price preview LK1 evaluator enclosure drift');
+  }
+  return declarationMap(body.body.statements.map(statement => statement.getText(file)).join('\n'));
+};
+
 /** The installed HUB policy the booking gateway binds in its node initializer. */
 const installedHubPolicy = node => {
   const text = typeof node?.initialize === 'string' ? node.initialize : '';
@@ -320,7 +340,7 @@ export function previewSources(flow, options = {}) {
   // booking generation. Both the booking classifier and evaluator own this scope.
   const supportsPatriotsGameScope = (bookingDeclarations.get('resolveCategory') || '')
     .includes('if(typeId===2349&&directionId===6181)return"open_game";')
-    && declarationMap(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
+    && lk1EvaluatorDeclarations(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
   const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`;
   const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope'])];
   assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}`, declared, rules, reader, accessor);
