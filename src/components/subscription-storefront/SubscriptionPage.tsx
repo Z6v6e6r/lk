@@ -1,3 +1,4 @@
+import { SubscriptionPromoCodeDialog } from './SubscriptionPromoCodeDialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetchTournamentSubscriptionStatus, apiGetSubscriptionProduct } from '../../utils/apiClient';
 import { CABINET_URL } from '../../consts/api_config';
@@ -52,7 +53,9 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   const [consentRequested, setConsentRequested] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<SubscriptionPlanSelection | null>(null);
   const [processing, setProcessing] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [promoSelection, setPromoSelection] = useState<{ productId: string; title: string; planId: string; billingOptionId: StorefrontBillingOptionId } | null>(null);
+  const [notice, setNotice] = useState<string | null>(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('subscriptionPromoReturn') === '1'
+    ? 'Покупка отправлена в Viva. Проверьте абонементы в личном кабинете; если результат неясен, обратитесь в поддержку.' : null);
   const [failure, setFailure] = useState<string | null>(null);
   const paymentInFlightRef = useRef(false);
   const confirmationStartedRef = useRef(false);
@@ -256,6 +259,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
         : !plans.length ? 'Сейчас нет доступных предложений.' : null;
 
   return <>
+    {promoSelection && <SubscriptionPromoCodeDialog key={promoSelection.productId} {...promoSelection} onClose={() => setPromoSelection(null)} />}
     {!previewView && statusNotice && <div className="subscription-storefront" style={{ minHeight: 0 }}>
       <div className="subscription-status-message" role="status">
         {!statuses ? <div className="subscription-loading" aria-label={statusNotice}>
@@ -269,7 +273,17 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     {(previewView || statuses || isAtlantyVariant) && <>
       {notice && <p className="subscription-status-message" role="status">{notice}</p>}
       {failure && <p className="subscription-status-message subscription-status-message--error" role="alert">{failure}</p>}
-      <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }} />
+      <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }}
+        renderCheckoutAddon={previewView ? undefined : (selection, disabled) => {
+          const target = resolveStorefrontBillingTarget(selection.planId, selection.billingOptionId as StorefrontBillingOptionId);
+          if (!target?.directProductId) return null;
+          const plan = plans.find(item => item.id === selection.planId);
+          const option = plan?.billingOptions.find(item => item.id === selection.billingOptionId);
+          return <button type="button" className="subscription-card__promo-trigger" disabled={disabled || processing}
+            onClick={() => setPromoSelection({ planId: selection.planId, billingOptionId: selection.billingOptionId as StorefrontBillingOptionId, productId: target.directProductId!, title: `${plan?.label ?? ''} · ${option?.label ?? ''}` })}>
+            у меня есть промокод
+          </button>;
+        }} />
     </>}
     {!previewView && authRequested && (
       <div className="subscription-auth-overlay" role="dialog" aria-modal="true" aria-labelledby="subscription-auth-title">

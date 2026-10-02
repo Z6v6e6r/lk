@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { CSSProperties } from 'react';
 
 import type { SubscriptionBenefitIcon, SubscriptionBillingOption, SubscriptionPlanView } from './model.js';
@@ -167,6 +168,7 @@ function PlanCardBody(props: {
   readonly selectedOption: SubscriptionBillingOption;
   readonly onBillingOptionChange: (optionId: string) => void;
   readonly onChoose: () => void;
+  readonly checkoutAddon?: ReactNode;
 }): React.JSX.Element {
   return (
     <div className="subscription-card__panel">
@@ -226,6 +228,7 @@ function PlanCardBody(props: {
         >
           {props.selectedOption.ctaLabel ?? props.plan.ctaLabel ?? 'Оформить подписку'}
         </button>
+        {props.checkoutAddon}
 
         {props.selectedOption.statusMessage && <p className="subscription-card__availability" role="status">{props.selectedOption.statusMessage}</p>}
         <div className="subscription-card__benefits">
@@ -261,6 +264,7 @@ export function SubscriptionPlanCard(props: {
   readonly selectedBillingOptionId: string;
   readonly onBillingOptionChange: (optionId: string) => void;
   readonly onChoose: () => void;
+  readonly checkoutAddon?: ReactNode;
 }): React.JSX.Element {
   const selectedOption =
     props.plan.billingOptions.find((option) => option.id === props.selectedBillingOptionId) ??
@@ -286,6 +290,7 @@ export function SubscriptionPlanCard(props: {
         selectedOption={selectedOption}
         onBillingOptionChange={props.onBillingOptionChange}
         onChoose={props.onChoose}
+        checkoutAddon={props.checkoutAddon}
       />
     </article>
   );

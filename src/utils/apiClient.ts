@@ -3658,6 +3658,8 @@ export interface SubscriptionName {
 }
 
 export interface PaymentUrl {
+  id?: string;
+  transactionId?: string;
   toPay: number;
   paymentUrl: string | null;
   bookingIds?: string[];
@@ -10421,6 +10423,7 @@ export async function apiBuySubscroption(
     baseRedirectUrl?: string | null;
     /** Non-idempotent promo purchases must not retry an ambiguous create. */
     retries?: 0 | 1;
+    promoCode?: string | null;
   } = {},
 ) {
   const successUrl = options.successUrl?.trim() || options.baseRedirectUrl?.trim() || SUCCESS_URL;
@@ -10432,9 +10435,10 @@ export async function apiBuySubscroption(
     {
       method: "POST",
       auth: true,
-      retries: options.retries ?? 1,
+      retries: options.promoCode?.trim() ? 0 : options.retries ?? 1,
       body: JSON.stringify({
         clientPhone: phone,
+        ...(options.promoCode?.trim() ? { promoCode: options.promoCode.trim() } : {}),
         failUrl,
         failRedirectUrl: failUrl,
         failureRedirectUrl: failUrl,

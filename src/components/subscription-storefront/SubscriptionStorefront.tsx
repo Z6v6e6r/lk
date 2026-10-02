@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
@@ -47,6 +48,7 @@ export function SubscriptionStorefront(props: {
   readonly onBack?: () => void;
   readonly onMore?: () => void;
   readonly onChoose: (selection: SubscriptionPlanSelection) => void;
+  readonly renderCheckoutAddon?: (selection: SubscriptionPlanSelection, disabled: boolean) => ReactNode;
 }): React.JSX.Element {
   const defaults = useMemo(() => initialBillingOptions(props.view), [props.view]);
   const [selectedBillingOptions, setSelectedBillingOptions] =
@@ -128,6 +130,7 @@ export function SubscriptionStorefront(props: {
                 selectedBillingOptions={selectedBillingOptions}
                 onBillingOptionChange={selectBillingOption}
                 onChoose={props.onChoose}
+                renderCheckoutAddon={props.renderCheckoutAddon}
               />
             ))}
           </div>

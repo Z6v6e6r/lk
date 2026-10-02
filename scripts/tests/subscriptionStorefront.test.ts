@@ -48,7 +48,7 @@ function stripImports(source: string): string {
 }
 
 /** Loads the payment adapter in a VM with stubbed LK1 API calls. */
-function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string; twoHourProduct?: Record<string, unknown> | null; twoHourReady?: boolean } = {}): {
+function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string; twoHourProduct?: Record<string, unknown> | null; twoHourReady?: boolean; pendingPromo?: boolean } = {}): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
   describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
@@ -58,13 +58,17 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { apiBuySubscroption, apiGetSubscriptionProduct, apiFetchTournamentSubscriptionStatus, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, parseFriendshipTwoHoursProduct, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
+  const withStubs = `const { withSubscriptionPromoLock, apiBuySubscroption, apiGetSubscriptionProduct, apiFetchTournamentSubscriptionStatus, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, parseFriendshipTwoHoursProduct, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const calls: PaymentAdapterCalls = { created: [], bought: [] };
   const exported: Record<string, (...args: never[]) => unknown> = {};
   const stubs = {
+    withSubscriptionPromoLock: async (_productId: string, _phone: string, create: () => Promise<unknown>) => {
+      if (overrides.pendingPromo) throw new Error('pending');
+      return create();
+    },
     // The real parser runs inside the VM: the fixture is a provider record, not a verdict.
     apiGetSubscriptionProduct: async (productId: string) => (overrides.twoHourProduct === null
       ? { data: null, error: { status: 404, message: 'not found' }, status: 404 }
@@ -112,6 +116,7 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     Math,
     JSON,
     Promise,
+    Error,
     setTimeout,
     clearTimeout,
     window: {
@@ -694,4 +699,15 @@ test('atlanty T123 embeds the isolated loader with the club variant', () => {
   assert.match(html, /storefrontVariants/);
   assert.match(html, /variants\.indexOf\("atlanty"\) !== -1/);
   assert.doesNotMatch(html, /autoPurchase|productId/);
+});
+
+
+test('ordinary CTA refuses a product with an unresolved promo purchase', async () => {
+  const adapter = loadPaymentAdapter({ pendingPromo: true });
+  await assert.rejects(adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: FIXTURE_PHONE }), (failure: unknown) => {
+    assert.equal((failure as Error).constructor.name, 'StorefrontPaymentError');
+    assert.equal((failure as Error).message, 'pending');
+    return true;
+  });
+  assert.equal(adapter.calls.bought.length, 0);
 });
