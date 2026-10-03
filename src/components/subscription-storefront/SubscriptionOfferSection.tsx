@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { SubscriptionPlanCard } from './SubscriptionPlanCard.js';
 import type { SubscriptionOfferSectionView, SubscriptionPlanSelection } from './model.js';
@@ -8,6 +9,7 @@ export function SubscriptionOfferSection(props: {
   readonly selectedBillingOptions: Readonly<Record<string, string>>;
   readonly onBillingOptionChange: (planId: string, optionId: string) => void;
   readonly onChoose: (selection: SubscriptionPlanSelection) => void;
+  readonly renderCheckoutAddon?: (selection: SubscriptionPlanSelection, disabled: boolean) => ReactNode;
 }): React.JSX.Element {
   const railRef = useRef<HTMLDivElement>(null);
   const railId = useId();
@@ -129,6 +131,7 @@ export function SubscriptionOfferSection(props: {
               <SubscriptionPlanCard
                 plan={plan}
                 selectedBillingOptionId={selectedBillingOptionId}
+                checkoutAddon={props.renderCheckoutAddon?.({ planId: plan.id, billingOptionId: selectedBillingOptionId }, Boolean(plan.ctaDisabled || plan.billingOptions.find(option => option.id === selectedBillingOptionId)?.ctaDisabled))}
                 onBillingOptionChange={(optionId) => props.onBillingOptionChange(plan.id, optionId)}
                 onChoose={() =>
                   props.onChoose({ planId: plan.id, billingOptionId: selectedBillingOptionId })

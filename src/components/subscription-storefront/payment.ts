@@ -1,3 +1,4 @@
+import { withSubscriptionPromoLock } from './promoCodeAttempt';
 /**
  * Storefront-owned payment adapter.
  *
@@ -229,6 +230,26 @@ export async function resolvePaymentPhone(fallbackPhone = ''): Promise<string> {
   return phone;
 }
 
+export async function validateStorefrontDirectPurchase(target: StorefrontBillingTarget): Promise<void> {
+  if (!target.directProductId) throw new StorefrontPaymentError('Промокод недоступен для этого варианта подписки.');
+  if (target.counterKey === 'friendship_two_hours') {
+    // A static card price is not purchase authority. Re-read the provider product
+    // — identity, price, period and the promised direction scope, including
+    // «Время на друзей» — immediately before the non-idempotent transaction.
+    const product = await apiGetSubscriptionProduct(target.directProductId);
+    if (product.error || parseFriendshipTwoHoursProduct(product.data) !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR) {
+      throw new StorefrontPaymentError('Стоимость подписки не подтверждена; оформление временно недоступно');
+    }
+    const readiness = await apiFetchTournamentSubscriptionStatus({ counterKey: 'friendship_two_hours' });
+    const exact = readiness.data?.find(status => status.counterKey === 'friendship_two_hours');
+    if (readiness.error || !exact || !exact.bindingReady || !exact.canPurchase
+      || exact.priceMinor !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR
+      || (!exact.unlimited && exact.remainingCount <= 0)) {
+      throw new StorefrontPaymentError('Правила подписки не подтверждены; оформление временно недоступно');
+    }
+  }
+}
+
 /**
  * Creates the LK1 payment for the chosen billing option and returns the bank URL.
  * Mirrors the `/ab_leto` purchase branches so price, inventory and reservation
@@ -248,42 +269,32 @@ export async function createStorefrontSubscriptionPayment(params: {
   const returnUrl = buildStorefrontReturnUrl(paymentRef);
 
   if (target.directProductId) {
-    if (target.counterKey === 'friendship_two_hours') {
-      // A static card price is not purchase authority. Re-read the provider product
-      // — identity, price, period and the promised direction scope, including
-      // «Время на друзей» — immediately before the non-idempotent transaction.
-      const product = await apiGetSubscriptionProduct(target.directProductId);
-      if (product.error || parseFriendshipTwoHoursProduct(product.data) !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR) {
-        throw new StorefrontPaymentError('Стоимость подписки не подтверждена; оформление временно недоступно');
+    const directProductId = target.directProductId;
+    return withSubscriptionPromoLock<StorefrontPurchaseOutcome>(directProductId, params.phone, async () => {
+      await validateStorefrontDirectPurchase(target);
+      const result = await apiBuySubscroption(directProductId, params.phone, {
+        baseRedirectUrl: returnUrl,
+        successUrl: returnUrl,
+        failUrl: returnUrl,
+        // The provider contract has no idempotency key: retrying an ambiguous
+        // create can charge twice, so a direct product is sent exactly once.
+        retries: 0,
+      });
+      if (result.error || !result.data) {
+        throw new StorefrontPaymentError(
+          describePaymentFailure(result.error, 'Не удалось создать оплату абонемента'),
+        );
       }
-      const readiness = await apiFetchTournamentSubscriptionStatus({ counterKey: 'friendship_two_hours' });
-      const exact = readiness.data?.find(status => status.counterKey === 'friendship_two_hours');
-      if (readiness.error || !exact || !exact.bindingReady || !exact.canPurchase
-        || exact.priceMinor !== FRIENDSHIP_TWO_HOURS_PRICE_MINOR
-        || (!exact.unlimited && exact.remainingCount <= 0)) {
-        throw new StorefrontPaymentError('Правила подписки не подтверждены; оформление временно недоступно');
+      if (result.data.paymentUrl) {
+        return { status: 'redirect', paymentUrl: result.data.paymentUrl, paymentRef };
       }
-    }
-    const result = await apiBuySubscroption(target.directProductId, params.phone, {
-      baseRedirectUrl: returnUrl,
-      successUrl: returnUrl,
-      failUrl: returnUrl,
-      // The provider contract has no idempotency key: retrying an ambiguous
-      // create can charge twice, so a direct product is sent exactly once.
-      retries: 0,
+      if (result.data.paid === true || result.data.toPay <= 0) {
+        return { status: 'settled', message: 'Оплата подтверждена без перехода в банк.' };
+      }
+      throw new StorefrontPaymentError('Банк не вернул ссылку на оплату');
+    }).catch(failure => {
+      throw failure instanceof Error ? new StorefrontPaymentError(failure.message) : failure;
     });
-    if (result.error || !result.data) {
-      throw new StorefrontPaymentError(
-        describePaymentFailure(result.error, 'Не удалось создать оплату абонемента'),
-      );
-    }
-    if (result.data.paymentUrl) {
-      return { status: 'redirect', paymentUrl: result.data.paymentUrl, paymentRef };
-    }
-    if (result.data.paid === true || result.data.toPay <= 0) {
-      return { status: 'settled', message: 'Оплата подтверждена без перехода в банк.' };
-    }
-    throw new StorefrontPaymentError('Банк не вернул ссылку на оплату');
   }
 
   const result = await apiCreateTournamentSubscriptionPurchase({

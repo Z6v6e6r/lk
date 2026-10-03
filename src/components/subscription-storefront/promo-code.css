@@ -1,0 +1,27 @@
+.subscription-card__promo-trigger {
+  display: block;
+  margin: 10px auto 0;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--subscription-text, #171717);
+  font: inherit;
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.subscription-card__promo-trigger:disabled { opacity: .5; cursor: default; }
+.subscription-card__promo-trigger:focus-visible,
+.subscription-code-overlay button:focus-visible,
+.subscription-code-overlay input:focus-visible { outline: 2px solid #171717; outline-offset: 3px; }
+.subscription-code-controls { display: flex; gap: 10px; margin-top: 8px; }
+.subscription-code-controls input { min-width: 0; width: 100%; padding: 12px; border: 1px solid #aaa; border-radius: 8px; font: inherit; font-size: 16px; }
+.subscription-code-controls .auth-btn { width: auto; margin: 0; }
+.subscription-code-price { margin-top: 20px; }
+.subscription-code-price s { margin-right: 12px; color: #666; }
+@media (max-width: 420px) { .subscription-code-controls { flex-direction: column; } }
+
+.subscription-code-overlay { color: #171717; font-family: var(--ui-font, sans-serif); }
+.subscription-code-controls input { box-sizing: border-box; color: #171717; background: #fff; }
+
+.subscription-code-overlay .subscription-auth-block { box-sizing: border-box; }
