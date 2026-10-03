@@ -346,6 +346,17 @@ jobs:
         id: check_8
         run: npm run test:delivery
 
+      - name: Validate Codex main worktree guard
+        id: check_worktree_guard
+        run: npm run test:codex-main-worktree-guard
+
+      - name: Validate leave generation regressions
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_leave_generations
+        run: npm run test:leave-generation-regressions
+
       - name: Run critical subscription regression matrix
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:

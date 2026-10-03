@@ -26,10 +26,12 @@ identities can still require manual diagnosis rather than automatic removal.
 - 155 focused LK leave, membership, subscription-return and graph tests pass.
 - CUP removal tests and build pass (separate ph-admin change).
 - LK lint: zero errors, existing warnings. Full build uses inert CI configuration.
-- Broader historical candidate tests remain pinned to old immutable releases:
-  cupBookinglessStaffLeaveCandidate and splitLeaveProjectionPatch already disagree
-  with base HEAD game-update source; splitLeaveActiveVivaDemotionCandidate rejects
-  this successor router. Their release pins are deliberately not updated.
+- Historical candidate tests validate their immutable source commits separately
+  from the reviewed repeated-booking successor. Their production release pins remain
+  unchanged; old CUP/projection builders reject successor source even when their
+  historical function preimages match. Tests require full Git history and run in the
+  `test:leave-generation-regressions` CI gate; no historical live-flow regeneration
+  or candidate reauthorization is implied.
 - No authenticated provider, live Mongo, browser or deployment proof is claimed.
 
 ## Release boundary
