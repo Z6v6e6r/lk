@@ -20,6 +20,29 @@ const step = (name) => steps.find((candidate) => candidate.name === name);
 const binaryScanStep = () => step("Scan changed paths for secrets, PII, binaries, and runtime artifacts");
 const binaryScan = () => binaryScanStep().run;
 
+function assertFocusedGate(candidateJob, name, id, run, condition, category) {
+  assert.equal(candidateJob.if, undefined, "enforcement job must remain unconditional");
+  assert.equal(candidateJob["continue-on-error"], undefined, "enforcement job must not soft-fail");
+  const matches = candidateJob.steps.filter((candidate) => candidate.name === name || candidate.id === id);
+  assert.equal(matches.length, 1, `${name} must occur exactly once`);
+  const gate = matches[0];
+  assert.equal(gate.name, name);
+  assert.equal(gate.id, id);
+  assert.equal(gate.if, condition);
+  assert.equal(gate.env?.DELIVERY_CATEGORY, category);
+  assert.equal(gate["continue-on-error"], undefined, `${name} must not soft-fail`);
+  assert.equal(gate.run.trim(), run);
+}
+
+const appCondition = "steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''";
+const focusedGates = [
+  ["Validate Codex main worktree guard", "check_worktree_guard", "npm run test:codex-main-worktree-guard", undefined, undefined],
+  ["Validate leave generation regressions", "check_leave_generations", "npm run test:leave-generation-regressions", appCondition, "app"],
+  ["Frontend loader and community regressions", "check_frontend",
+    "npm run test:community-list-performance\nnode --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts\nnode --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs",
+    appCondition, "app"],
+];
+
 async function createBinaryDiffRepo(t, entries) {
   const repoDirectory = await mkdtemp(join(tmpdir(), "lk1-binary-diff-"));
   t.after(() => rm(repoDirectory, { recursive: true, force: true }));
@@ -409,6 +432,9 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Validate combined legacy game command prerequisites",
     "Validate combined split draft persistence",
     "Validate referral attribution compatibility",
+    "Validate Codex main worktree guard",
+    "Validate leave generation regressions",
+    "Frontend loader and community regressions",
     "Fetch pinned legacy build image",
     "Validate reviewed-flow and legacy custody boundaries",
     "Typecheck",
@@ -488,6 +514,34 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Fetch pinned legacy build image").run,
     "docker pull node@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
   );
+});
+
+test("focused CI gates reject removal, duplicate identity, conditional execution and soft failures", () => {
+  for (const args of focusedGates) {
+    const [name] = args;
+    assertFocusedGate(job, ...args);
+    const mutations = [
+      (value) => { value.steps = value.steps.filter((candidate) => candidate.name !== name); },
+      (value) => { value.steps.push(structuredClone(value.steps.find((candidate) => candidate.name === name))); },
+      (value) => { value.steps.find((candidate) => candidate.name === name).run = "true"; },
+      (value) => { value.steps.find((candidate) => candidate.name === name).if = "github.event_name == 'pull_request'"; },
+      (value) => { value.steps.find((candidate) => candidate.name === name)["continue-on-error"] = true; },
+      (value) => { value.if = "false"; },
+      (value) => { value["continue-on-error"] = true; },
+      (value) => { value.steps.find((candidate) => candidate.name === name).env = { DELIVERY_CATEGORY: "docs" }; },
+    ];
+    for (const mutate of mutations) {
+      const weakened = structuredClone(job);
+      mutate(weakened);
+      assert.throws(() => assertFocusedGate(weakened, ...args), assert.AssertionError);
+    }
+  }
+  const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+  assert.equal(scripts["test:codex-main-worktree-guard"], "node --test scripts/tests/codexMainWorktreeGuard.test.mjs");
+  assert.equal(scripts["test:leave-generation-regressions"],
+    "node --experimental-strip-types --test scripts/tests/cupBookinglessStaffLeaveCandidate.test.mjs scripts/tests/splitLeaveActiveVivaDemotionCandidate.test.mjs scripts/tests/splitLeaveProjectionPatch.test.mjs scripts/tests/gameJoinRosterSync.test.ts scripts/tests/splitPaymentRecovery.test.mjs");
+  assert.equal(scripts["test:community-list-performance"],
+    "node --experimental-strip-types --test scripts/tests/communitySummaryLazyLoad.test.ts scripts/tests/expiringSingleFlight.test.ts scripts/tests/communityListPerformance.test.mjs");
 });
 
 test("workflow contains no manual or production mutation path", () => {

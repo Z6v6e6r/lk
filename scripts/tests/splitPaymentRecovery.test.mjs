@@ -112,7 +112,7 @@ test('join preserves the participant deadline and detects singles from stored sp
 
 test('join prepare never fabricates the nominal share when no price is stored or requested', () => {
   const outputs = run('join', {
-    _splitJoinBody: { clientPhone: '+7 960 000 00 03' },
+    _splitJoinBody: { clientPhone: '9600000003' },
     payload: [{
       metadata: { splitPayment: { vivaExerciseId: 'exercise-1', shareCount: 4 } },
       booking: { studioId: 'studio-1', roomId: 'room-1', date: '2026-08-01', timeFrom: '10:00', timeTo: '11:00' },
@@ -128,7 +128,7 @@ test('create prepare never fabricates the nominal share when the court total is 
   const outputs = run('create', {
     payload: {
       date: '2026-08-01', fromTime: '10:00', toTime: '11:00', roomId: 'room-1',
-      clientPhone: '8 960 000 00 04',
+      clientPhone: '9600000004',
     },
   });
   assert.equal(outputs[0]._splitCtx.shareAmount, null);
@@ -941,7 +941,7 @@ test('join rejects a malformed stored pricing snapshot before any external reque
 
 test('join ignores browser share count for a stored four-player game', () => {
   const msg = {
-    _splitJoinBody: { clientPhone: '+7 960 000 00 03', shareCount: 2, gameFormat: 'singles' },
+    _splitJoinBody: { clientPhone: '9600000003', shareCount: 2, gameFormat: 'singles' },
     payload: [{
       metadata: { splitPayment: { vivaExerciseId: 'exercise-2', shareCount: 4 } },
       booking: { studioId: 'studio-1', roomId: 'room-1', date: '2026-08-01', timeFrom: '10:00', timeTo: '12:00' },

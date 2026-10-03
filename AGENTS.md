@@ -100,6 +100,7 @@ Read specialized documents only when their domain trigger applies:
 ## Git Discipline
 
 - Work on focused branches when possible.
+- Use `governance:worktree:check` to verify a clean task worktree before editing. When coordinating an authorized merge from a dedicated linked `main` worktree, claim and verify the exact main SHA/tree with the generation-bound guard; see `docs/MERGE_OWNER_GUARD.md`. The guard grants no merge, push, deploy or repository-settings authority.
 - Do not commit unrelated changes.
 - Do not amend commits unless explicitly requested.
 - Final reports must list changed files, checks run, and residual risks.
