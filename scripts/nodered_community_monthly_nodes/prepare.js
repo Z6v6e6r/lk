@@ -1,0 +1,10 @@
+const communityId = CommunityMonthly.text(msg.req?.params?.communityId);
+const json = (statusCode, error) => Object.assign({}, msg, { statusCode, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, payload: { error } });
+if (!communityId || communityId.length > 512) return [null, json(400, 'COMMUNITY_ID_REQUIRED')];
+const scope = msg.req?.query?.scope || 'upcoming';
+if (!['upcoming', 'all'].includes(scope)) return [null, json(400, 'INVALID_EVENT_SCOPE')];
+const cursor = CommunityMonthly.text(msg.req?.query?.cursor);
+if (cursor.length > 1024) return [null, json(400, 'INVALID_EVENT_CURSOR')];
+msg._communityMonthly = { communityId, scope, cursor, nowTs: Date.now() };
+msg.payload = [{ id: communityId, archived: { $ne: true } }, { limit: 2, projection: { id: 1, name: 1, visibility: 1 } }];
+return [msg, null];

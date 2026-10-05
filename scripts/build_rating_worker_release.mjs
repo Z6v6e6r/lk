@@ -18,6 +18,13 @@ const outDir = path.resolve(outArg);
 if (fs.existsSync(outDir)) throw new Error(`Release directory already exists: ${outDir}`);
 
 const files = [
+  ["scripts/lib/communityMonthlyFinalization.mjs", "scripts/lib/communityMonthlyFinalization.mjs"],
+  ["scripts/community_monthly_worker.mjs", "scripts/community_monthly_worker.mjs"],
+  ["deploy/rating-worker/run-monthly.sh", "deploy/rating-worker/run-monthly.sh"],
+  ["deploy/rating-worker/community-monthly.service", "deploy/rating-worker/community-monthly.service"],
+  ["deploy/rating-worker/community-monthly.timer", "deploy/rating-worker/community-monthly.timer"],
+  ["src/services/community-rating/monthly.ts", "src/services/community-rating/monthly.ts"],
+  ["src/services/community-rating/monthlyContract.ts", "src/services/community-rating/monthlyContract.ts"],
   ["deploy/rating-worker/README.md", "deploy/rating-worker/README.md"],
   ["deploy/rating-worker/configure-runtime-env.mjs", "deploy/rating-worker/configure-runtime-env.mjs"],
   ["deploy/rating-worker/run-full.sh", "deploy/rating-worker/run-full.sh"],
@@ -83,6 +90,7 @@ files.forEach(([sourcePath, targetPath]) => {
 });
 
 [
+  "deploy/rating-worker/run-monthly.sh",
   "deploy/rating-worker/run-full.sh",
   "deploy/rating-worker/run-incremental.sh",
   "deploy/rating-worker/run-game-results.sh",

@@ -119,6 +119,13 @@ test("rating-worker release packages the community postcheck and watchdog helper
   );
 
   [
+    "scripts/community_monthly_worker.mjs",
+    "scripts/lib/communityMonthlyFinalization.mjs",
+    "src/services/community-rating/monthly.ts",
+    "src/services/community-rating/monthlyContract.ts",
+    "deploy/rating-worker/run-monthly.sh",
+    "deploy/rating-worker/community-monthly.service",
+    "deploy/rating-worker/community-monthly.timer",
     "deploy/rating-worker/run-with-watchdog.sh",
     "scripts/lib/ratingWorkerChildProcess.mjs",
   ].forEach((relativePath) => {
@@ -127,6 +134,7 @@ test("rating-worker release packages the community postcheck and watchdog helper
     assert.equal(fs.existsSync(path.join(releaseDir, relativePath)), true);
     assert.equal(entries[0].sha256, sha256File(path.join(releaseDir, relativePath)));
   });
+  assert.notEqual(fs.statSync(path.join(releaseDir, "deploy/rating-worker/run-monthly.sh")).mode & 0o111, 0, "systemd entrypoint must be executable");
   assert.notEqual(
     fs.statSync(path.join(releaseDir, "deploy/rating-worker/run-with-watchdog.sh")).mode & 0o111,
     0,
