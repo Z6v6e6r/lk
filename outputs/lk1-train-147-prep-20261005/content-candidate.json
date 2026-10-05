@@ -1,0 +1,60 @@
+{
+  "sourceSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
+  "sourceNodeCount": 4815,
+  "before": {
+    "evaluator": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+    "previewEvaluate": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+    "previewRouter": "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70",
+    "gateway": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
+    "usageBlock": "a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1"
+  },
+  "after": {
+    "evaluator": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1",
+    "previewEvaluate": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1",
+    "previewRouter": "f83f4a988d4874f10c39ed5092616e87938288b0c4c0c91021da7ec3abf32fd6"
+  },
+  "changes": [
+    {
+      "id": "lk_subscription_managed_policy_20260820",
+      "fields": [
+        "func"
+      ],
+      "func": {
+        "beforeSha256": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+        "afterSha256": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
+      }
+    },
+    {
+      "id": "lk_subscription_price_preview_20260908_evaluate",
+      "fields": [
+        "func"
+      ],
+      "func": {
+        "beforeSha256": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+        "afterSha256": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
+      }
+    },
+    {
+      "id": "lk_subscription_price_preview_20260908_router",
+      "fields": [
+        "func"
+      ],
+      "func": {
+        "beforeSha256": "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70",
+        "afterSha256": "f83f4a988d4874f10c39ed5092616e87938288b0c4c0c91021da7ec3abf32fd6"
+      }
+    }
+  ],
+  "candidateSha256": "0da79aa8355666dd7d35d93c751ec1f827e2d59f584bd5dff3fba1d21d3b6673",
+  "markers": {
+    "evaluatorCourtBranch": true,
+    "evaluatorCourtRefusal": true,
+    "previewCourtWindowStep": false,
+    "previewCourtQuote": true,
+    "previewTopokratyExclusion": true,
+    "previewProTraining": true,
+    "previewResolverReachable": true,
+    "previewHelperCount": 85,
+    "gatewayStillLacksCourtProof": true
+  }
+}
