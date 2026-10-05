@@ -139,3 +139,10 @@ test("live result guard also captures concurrent root cancellation/lifecycle fie
   const result = new Function("msg", fn)({ payload: [fixture()], req: { body: { results: [] } } });
   for (const field of ["cancelled", "archived", "status", "finishedAt"]) assert.ok(result.mongoQuery.$and.some(row => Object.hasOwn(row, field)));
 });
+
+test("Mongo root variables survive source-generation string replacement", () => {
+  const fn = buildCommunityMonthlyFlow(baseline()).candidate.find(node => node.id === "4f0f1ce8189a9e8c").func;
+  const msg = new Function("msg", fn)({ payload: fixture() })[0];
+  const expression = msg.payload[1][0].$replaceWith.$cond;
+  assert.equal(expression[1], "$$ROOT"); assert.equal(expression[2].$mergeObjects[0], "$$ROOT");
+});

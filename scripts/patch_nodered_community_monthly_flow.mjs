@@ -56,7 +56,7 @@ export function buildCommunityMonthlyFlow(flow) {
     } else if (kind === "create") {
       if (!source.trimEnd().endsWith("return [msg, null];") || !source.includes("msg._tournamentLegacySuccessPayload = msg.payload;")) throw new Error("TOURNAMENT_CREATE_PREIMAGE_MISMATCH");
       const tail = read("tournament_create_tail").replace("MONTHLY_CLOSED_EXPRESSION", JSON.stringify(tournamentClosedExpression()));
-      source = source.replace(/return \[msg, null\];\s*$/, tail + "\nreturn [msg, null];\n");
+      source = source.replace(/return \[msg, null\];\s*$/, () => tail + "\nreturn [msg, null];\n");
     } else {
       const anchor = "const legacyPayload = ";
       if (source.split(anchor).length !== 2) throw new Error("TOURNAMENT_ACK_PREIMAGE_MISMATCH");
