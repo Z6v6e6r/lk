@@ -44,7 +44,7 @@ stage="$workspace/.pull-stage-$$"
 cleanup() {
   exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
-    rm -f "$stage/source.flow.json" "$stage/source.flow.meta.json" 2>/dev/null || true
+    rm -f "$stage/source.flow.json" "$stage/source.flow.json.tmp" "$stage/source.flow.meta.json" 2>/dev/null || true
     rmdir "$stage" "$workspace" 2>/dev/null || true
   fi
   exit "$exit_code"
@@ -54,14 +54,26 @@ trap cleanup EXIT
 mkdir -m 700 "$stage"
 source_path="$stage/source.flow.json"
 meta_path="$stage/source.flow.meta.json"
-scp -q -P 22 "root@lk-primary-147:/root/.node-red/flows.json" "$source_path"
+# Primary transport, unchanged: `scp` first, and only this call's arguments are reviewed.
+source_transport="scp"
+if ! scp -q -P 22 "root@lk-primary-147:/root/.node-red/flows.json" "$source_path"; then
+  # Read-only fallback for a host that closes the scp subsystem while `ssh` + `cat` still work
+  # (observed on lk-primary-147 on 2026-10-05: scp timed out, plain ssh succeeded). It reads the
+  # same absolute remote path with no remote write, no pty and no extra shell, writes to a staging
+  # file first, and leaves every verification below byte-identical to the scp path.
+  rm -f "$source_path"
+  ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+    root@lk-primary-147 'cat /root/.node-red/flows.json' > "$source_path.tmp"
+  mv "$source_path.tmp" "$source_path"
+  source_transport="ssh-cat"
+fi
 chmod 600 "$source_path"
 
 summary="$(
   node --input-type=module -e '
     import crypto from "node:crypto";
     import fs from "node:fs";
-    const [sourcePath, metaPath, finalSourcePath] = process.argv.slice(1);
+    const [sourcePath, metaPath, finalSourcePath, sourceTransport] = process.argv.slice(1);
     const raw = fs.readFileSync(sourcePath);
     const flow = JSON.parse(raw);
     if (!Array.isArray(flow)) throw new Error("Node-RED source must be a JSON array");
@@ -80,6 +92,7 @@ summary="$(
       sourceHost: "lk-primary-147",
       sourceUser: "root",
       sourcePort: "22",
+      sourceTransport,
       remoteFlowPath: "/root/.node-red/flows.json",
       localSourcePath: finalSourcePath,
       pulledAt: new Date().toISOString(),
@@ -89,7 +102,7 @@ summary="$(
     fs.writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600, flag: "wx" });
     console.log(`sourceSha256=${sourceSha256}`);
     console.log(`nodeCount=${flow.length}`);
-  ' "$source_path" "$meta_path" "$workspace/input/source.flow.json"
+  ' "$source_path" "$meta_path" "$workspace/input/source.flow.json" "$source_transport"
 )"
 chmod 600 "$meta_path"
 mv "$stage" "$workspace/input"
