@@ -4,7 +4,7 @@
 #
 # G2 is the top of the stack, so its rollback is a single restore: read back the recorded
 # pre-candidate backup (`flows-pre-lk1-train-g2-<stamp>.json`, written by the forward G2 deploy),
-# require its bytes to be exactly G1's postimage `fc4a46a6…`, import those bytes and restart. The
+# require its bytes to be exactly G1's postimage `99b5d5b5…`, import those bytes and restart. The
 # restored G1 postimage keeps the Patriots plan-rules writer, so the runtime global (ten rules from
 # G1) stays exactly consistent; G1 itself is then rolled back separately with the ordered
 # `nodered:lk1-train-g1:rollback-147`, which reverts the plan-rules global first.
@@ -103,8 +103,8 @@ expected_node_fields='{"lk_subscription_managed_policy_20260820":["func"],"lk_su
 evaluator_id="lk_subscription_managed_policy_20260820"
 evaluate_id="lk_subscription_price_preview_20260908_evaluate"
 router_id="lk_subscription_price_preview_20260908_router"
-applied_flow_sha="24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05"
-preimage_flow_sha="fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5"
+applied_flow_sha="0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192"
+preimage_flow_sha="99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3"
 source_node_count=4815
 evaluator_func_applied_sha="e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
 evaluator_func_preimage_sha="2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602"
@@ -185,8 +185,12 @@ const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
 if (hash(func("lk_subscription_managed_policy_20260820")) !== "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602") process.exit(1);
 if (hash(func("lk_subscription_price_preview_20260908_evaluate")) !== "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602") process.exit(1);
 if (hash(func("lk_subscription_price_preview_20260908_router")) !== "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70") process.exit(1);
+// The restored generation is G1's postimage: its gateway body and plan-rules writer must be
+// exactly G1's, or the G1 ordered rollback would run against the wrong prior.
+if (hash(func("lk_subscription_booking_router_20260804")) !== "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4") process.exit(1);
 const initValue = node("lk_subscription_booking_router_20260804").initialize;
 const init = typeof initValue === "string" ? initValue : "";
+if (hash(init) !== "283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3") process.exit(1);
 if (!init.includes("\"planKey\":\"patriots\"")) process.exit(1);
 const key = "const lk1DesiredPlanRules = ";
 const at = init.indexOf(key);

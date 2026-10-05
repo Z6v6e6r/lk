@@ -6,12 +6,14 @@
 # (`lk_subscription_booking_router_20260804.func` + `.initialize`):
 #   * `func` — the reviewed court-window proof (`lk1CourtMasterServices`,
 #     `hourlyCourtPriceMinor`, `LK1_COURT_PRICE_UNRESOLVED`), the #174 club gate widened to
-#     `open_game`, the Patriots money-only identity guard and the two reviewed allowance deltas;
+#     `open_game`, the Patriots money-only identity guard, the reviewed club money mandate
+#     (`COURT_HOURLY_COPAY` spliced into `lk1ClubEventPaymentBinding`) and the two reviewed
+#     allowance deltas; the court dispatch runs after the target's station and room are assigned;
 #   * `initialize` — the plan-rules writer replaced by the guarded
 #     `friendship_two_hours -> patriots` transition (9 rules -> 10 rules).
 #
 # The reviewed preimage is the read-only 2026-10-05 snapshot of lk-primary-147
-# (`7e8a9570…`, 4815 nodes); the composed candidate is `fc4a46a6…`. G1 is followed by G2
+# (`7e8a9570…`, 4815 nodes); the composed candidate is `99b5d5b5…`. G1 is followed by G2
 # (`nodered:lk1-train-g2:deploy-147`) immediately after — G2 refuses any flow other than G1's
 # postimage. The shared reviewed-flow soak lease is the only pacing between the two applies: the
 # runtime refuses a second preflight/apply until G1's 15-minute lease expires, so "immediately"
@@ -67,12 +69,12 @@ allow_changes=("lk_subscription_booking_router_20260804:func,initialize")
 expected_node_fields='{"lk_subscription_booking_router_20260804":["func","initialize"]}'
 gateway_id="lk_subscription_booking_router_20260804"
 preimage_flow_sha="7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1"
-candidate_flow_sha="fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5"
+candidate_flow_sha="99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3"
 source_node_count=4815
 preimage_node_sha="f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b"
-postimage_node_sha="6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777"
+postimage_node_sha="d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0"
 gateway_func_before_sha="21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2"
-gateway_func_after_sha="b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514"
+gateway_func_after_sha="7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4"
 gateway_initialize_before_sha="d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5"
 gateway_initialize_after_sha="283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3"
 allowance_before_sha="a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1"
@@ -143,15 +145,39 @@ stage_pinned_workspace() {
 write_gateway_postcheck() {
   local out="$1"
   cat > "$out" <<'CJS'
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const flow = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const gateway = flow.find((node) => node.id === "lk_subscription_booking_router_20260804") || {};
 const func = typeof gateway.func === "string" ? gateway.func : "";
 const init = typeof gateway.initialize === "string" ? gateway.initialize : "";
+const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
+if (hash(func) !== "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4") process.exit(1);
 const wanted = ["lk1CourtMasterServices", "lk1CourtWindowNeeded", "hourlyCourtPriceMinor",
   "[\"group_training\", \"open_game\"]", "patriotsMoneyOnlyIdentity",
   "operation.lk1.decision.courtMinutes"];
 if (!wanted.every((marker) => func.includes(marker))) process.exit(1);
+// Step-1 postcheck 3 (F1/F5): the club money mandate must live INSIDE the installed
+// lk1ClubEventPaymentBinding definition — a marker anywhere else in the function must not pass.
+const bindingStart = "const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {";
+const bindingEnd = "\n};\n";
+const bindingAt = func.indexOf(bindingStart);
+if (bindingAt < 0 || func.indexOf(bindingStart, bindingAt + 1) >= 0) process.exit(1);
+const bindingClose = func.indexOf(bindingEnd, bindingAt + bindingStart.length);
+if (bindingClose < 0) process.exit(1);
+const binding = func.slice(bindingAt, bindingClose + bindingEnd.length);
+if (func.split("COURT_HOURLY_COPAY").length !== 2) process.exit(1);
+if (!binding.includes("if (decision.benefit?.kind === \"COURT_HOURLY_COPAY\")")) process.exit(1);
+if (!binding.includes("perHour === Math.floor(hourly / 4)")) process.exit(1);
+// The installed body must still carry the quote resolver and its five call sites exactly.
+if (func.split("const lk1EventPaymentQuoteBinding = (ctx, quote = ctx.lk1) =>").length !== 2) process.exit(1);
+if (func.split("lk1EventPaymentQuoteBinding(").length !== 6) process.exit(1);
+// Step-1 postcheck 4 (F2/F5): the dispatch runs after the target's station AND room are assigned,
+// so the stored proof binds a non-null station/room instead of refusing LK1_COURT_PRICE_UNRESOLVED.
+const stationAt = func.indexOf("      ctx.studioId = quote.target.stationId;\n");
+const roomAt = func.indexOf("      ctx.roomId = quote.target.roomId;\n");
+const dispatchAt = func.indexOf("      if (lk1CourtWindowNeeded(ctx)) ctx.lk1CourtExercise = exercise;\n");
+if (!(stationAt >= 0 && stationAt < roomAt && roomAt < dispatchAt)) process.exit(1);
 if (init.split("\"planKey\":\"patriots\"").length !== 2) process.exit(1);
 if (!init.includes("\"planKey\":\"topocraty\"")) process.exit(1);
 if (!init.includes("\"planKey\":\"friendship_two_hours\"")) process.exit(1);
@@ -266,7 +292,7 @@ compose_and_validate() {
     const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
     const gate="lk_subscription_booking_router_20260804";
     const funcBefore="21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2";
-    const funcAfter="b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514";
+    const funcAfter="7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4";
     const initBefore="d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5";
     const initAfter="283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3";
     const allowanceBefore="a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1";
@@ -287,7 +313,7 @@ compose_and_validate() {
     if(t.func.beforeSha256!==funcBefore||t.func.afterSha256!==funcAfter)process.exit(1);
     if(t.initialize.beforeSha256!==initBefore||t.initialize.afterSha256!==initAfter)process.exit(1);
     const g=value.gateway||{};
-    for(const key of ["courtHelpersBound","courtDispatchBound","courtResponseBound","courtQuoteBound","clubGateOpenGame","patriotsMoneyOnlyIdentity","patriotsPlanRule","courtMinutesAccumulated","clubFreeCeiling"]){if(g[key]!==true)process.exit(1);}
+    for(const key of ["courtHelpersBound","courtDispatchBound","courtResponseBound","courtQuoteBound","clubGateOpenGame","patriotsMoneyOnlyIdentity","patriotsPlanRule","courtMinutesAccumulated","clubFreeCeiling","clubMoneyMandateBound","clubDispatchAfterTargetIdentity"]){if(g[key]!==true)process.exit(1);}
     if(g.usageBlockBeforeSha256!==allowanceBefore||g.usageBlockSha256!==allowanceAfter)process.exit(1);
     const p=value.planRulesActivation||{};
     if(p.key!=="subscriptions_lk1_plan_rules"||p.expectedPriorRuleCount!==9||p.desiredRuleCount!==10)process.exit(1);
@@ -319,7 +345,7 @@ compose_and_validate() {
     if(!changes||changes.length!==1)process.exit(1);
     if(changes[0].id!==gate||JSON.stringify(changes[0].fields)!==JSON.stringify(["func","initialize"]))process.exit(1);
     if(changes[0].sourceNodeSha256!=="f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b")process.exit(1);
-    if(changes[0].candidateNodeSha256!=="6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777")process.exit(1);
+    if(changes[0].candidateNodeSha256!=="d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0")process.exit(1);
     if((value.allowedAdditions||[]).length!==0)process.exit(1);
   ' "$contract_file" "$preimage_flow_sha" "$candidate_flow_sha"
 

@@ -126,6 +126,19 @@ test("the wrappers declare exactly the reviewed node/field allow-list and frozen
   assert.match(deployG1, new RegExp(LK1_TRAIN_G1_TARGET.patchedFuncSha256));
   assert.match(deployG1, new RegExp(LK1_TRAIN_G1_TARGET.patchedInitializeSha256));
   assert.match(deployG1, /NODE_RED_LK1_TRAIN_G1_DEPLOY/);
+  // F1/F5: the Step-1 postcheck must prove the club money mandate inside the installed binding, the
+  // quote resolver call sites and the F2 dispatch order — not a whole-function marker grep.
+  for (const marker of [
+    "const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {",
+    'decision.benefit?.kind === \\"COURT_HOURLY_COPAY\\"',
+    "perHour === Math.floor(hourly / 4)",
+    "lk1EventPaymentQuoteBinding(",
+    "      ctx.roomId = quote.target.roomId;",
+    "clubMoneyMandateBound",
+    "clubDispatchAfterTargetIdentity",
+  ]) {
+    assert.ok(deployG1.includes(marker), `G1 wrapper missing mandate/dispatch marker: ${marker}`);
+  }
 
   const deployG2 = raw(DEPLOY_G2);
   for (const node of [
@@ -139,12 +152,25 @@ test("the wrappers declare exactly the reviewed node/field allow-list and frozen
   assert.match(deployG2, new RegExp(LK1_TRAIN_G2_POSTIMAGE_SHA256));
   assert.match(deployG2, /e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1/);
   assert.match(deployG2, /0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221/);
-  assert.match(deployG2, /preimage_flow_sha="fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5"/);
+  assert.match(deployG2, /preimage_flow_sha="99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3"/);
   assert.match(deployG2, /wait_for_soak_lease "lk1-train-g1"/);
+  // Corrected Step-2 postcheck 4: G2 must re-assert G1's gateway postimage, the club money mandate
+  // and the resolved dispatch order on the installed flow.
+  assert.match(deployG2, /7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4/);
+  for (const marker of [
+    'decision.benefit?.kind === \\"COURT_HOURLY_COPAY\\"',
+    "perHour === Math.floor(hourly / 4)",
+    "      ctx.roomId = quote.target.roomId;",
+  ]) {
+    assert.ok(deployG2.includes(marker), `G2 wrapper missing gateway-preservation marker: ${marker}`);
+  }
 
   const rollbackG1 = raw(ROLLBACK_G1);
   assert.match(rollbackG1, new RegExp(LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256));
   assert.match(rollbackG1, new RegExp(LK1_TRAIN_G1_REVERT_INITIALIZE_SHA256));
+  // The plan documents G1-revert as one allowed `initialize` change over node sha d4d84655 -> ac01f156.
+  assert.ok(rollbackG1.includes("d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0"));
+  assert.ok(rollbackG1.includes("ac01f1561abcb7b546014a7e57a102564c03448d0f54b74a9979d22e72d9c70a"));
   assert.match(rollbackG1, /expectedPriorRuleCount!==10/);
   assert.match(rollbackG1, /desiredRuleCount!==9/);
   assert.match(rollbackG1, /orderedRollbackStep!==1/);
@@ -158,7 +184,7 @@ test("the wrappers declare exactly the reviewed node/field allow-list and frozen
 
   const rollbackG2 = raw(ROLLBACK_G2);
   assert.match(rollbackG2, new RegExp(LK1_TRAIN_G2_POSTIMAGE_SHA256));
-  assert.match(rollbackG2, /preimage_flow_sha="fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5"/);
+  assert.match(rollbackG2, /preimage_flow_sha="99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3"/);
   assert.match(rollbackG2, /wait_for_soak_lease "\$deployment_id"/);
 
   // Every wait is bounded and refuses a lease that cannot auto-expire.

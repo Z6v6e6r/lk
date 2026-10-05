@@ -7,10 +7,12 @@
 # Restoring the preimage flow first would leave that global naming the Patriots product while the
 # restored gateway has no Patriots money guard, so:
 #
-# Step 1 (this script, first half): import G1's revert candidate `a5a3149f…` — the same G1 bodies
+# Step 1 (this script, first half): import G1's revert candidate `0e74cd11…` — the same G1 bodies
 #   with the plan-rules writer replaced by the guarded `patriots -> friendship_two_hours` block —
 #   and restart, so the global goes back to the installed nine-rule payload. Readback must be
-#   exactly `a5a3149f…` and the installed writer must name nine rules without the Patriots product.
+#   exactly `0e74cd11…` and the installed writer must name nine rules without the Patriots product.
+#   The revert candidate keeps G1's `func` (`7f1539bf…`) and replaces **only** `initialize`: it is a
+#   plan-rules step, not a body restore, so pre-G1 body bytes come only from the Step 2 restore.
 # Step 2 (this script, second half): read back the recorded pre-candidate backup
 #   (`flows-pre-lk1-train-g1-<stamp>.json`), require its bytes to be exactly the reviewed preimage
 #   `7e8a9570…`, import those bytes and restart. The restored initialize now finds its exact
@@ -104,11 +106,14 @@ expected_changed_nodes=1
 allow_changes=("lk_subscription_booking_router_20260804:initialize")
 expected_node_fields='{"lk_subscription_booking_router_20260804":["initialize"]}'
 gateway_id="lk_subscription_booking_router_20260804"
-applied_flow_sha="fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5"
-revert_candidate_sha="a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4"
+applied_flow_sha="99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3"
+revert_candidate_sha="0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f"
 revert_initialize_sha="2c2c0c89e3562fff985c388d7bbd0f55f9deaf5cc002ae86974ce59f43c6caf1"
 preimage_flow_sha="7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1"
 applied_initialize_sha="283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3"
+applied_func_sha="7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4"
+applied_node_sha="d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0"
+revert_node_sha="ac01f1561abcb7b546014a7e57a102564c03448d0f54b74a9979d22e72d9c70a"
 preimage_func_sha="21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2"
 preimage_initialize_sha="d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5"
 source_node_count=4815
@@ -175,10 +180,15 @@ stage_pinned_workspace() {
 write_initialize_postcheck() {
   local out="$1"
   cat > "$out" <<'CJS'
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const flow = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const gateway = flow.find((node) => node.id === "lk_subscription_booking_router_20260804") || {};
+const func = typeof gateway.func === "string" ? gateway.func : "";
 const init = typeof gateway.initialize === "string" ? gateway.initialize : "";
+// The revert is a plan-rules step: G1's body (func) must survive it untouched.
+if (crypto.createHash("sha256").update(func).digest("hex")
+  !== "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4") process.exit(1);
 const key = "const lk1DesiredPlanRules = ";
 const at = init.indexOf(key);
 if (at < 0) process.exit(1);
@@ -384,8 +394,9 @@ compose_and_validate_revert() {
     const changes=Array.isArray(value.allowedChanges)?value.allowedChanges:null;
     if(!changes||changes.length!==1)process.exit(1);
     if(changes[0].id!==gate||JSON.stringify(changes[0].fields)!==JSON.stringify(["initialize"]))process.exit(1);
+    if(changes[0].sourceNodeSha256!==process.argv[4]||changes[0].candidateNodeSha256!==process.argv[5])process.exit(1);
     if((value.allowedAdditions||[]).length!==0)process.exit(1);
-  ' "$revert_contract" "$applied_flow_sha" "$revert_candidate_sha"
+  ' "$revert_contract" "$applied_flow_sha" "$revert_candidate_sha" "$applied_node_sha" "$revert_node_sha"
 
   node "$initialize_postcheck" "$revert_flow"
 }

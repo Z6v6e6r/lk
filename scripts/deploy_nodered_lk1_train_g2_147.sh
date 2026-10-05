@@ -2,7 +2,7 @@
 
 # Guarded deployment of G2 of the 2026-10-05 LK1 train (server 147).
 #
-# G2 stacks the reviewed *content* of the train on G1's postimage (`fc4a46a6…`) and changes exactly
+# G2 stacks the reviewed *content* of the train on G1's postimage (`99b5d5b5…`) and changes exactly
 # one field (`func`) of three nodes:
 #   * `lk_subscription_managed_policy_20260820.func` — the reviewed evaluator (club court-hourly
 #     co-pay for directions 6233/6180 plus the Patriots money-validity branch the G1 gateway guard
@@ -12,7 +12,7 @@
 #     (court-window step, Topokraty exclusion, PRO-training and shared plan-rules resolver).
 #
 # G2 must never run unless G1's readback passed: the wrapper requires the installed flow to be
-# exactly G1's postimage `fc4a46a6…` before composing, and the shared reviewed-flow runtime refuses
+# exactly G1's postimage `99b5d5b5…` before composing, and the shared reviewed-flow runtime refuses
 # the apply while G1's 15-minute soak lease is active. The wrapper waits out that lease
 # (docs/NODERED_MODULAR_WORKFLOW.md: "wait for expiry") so G1 and G2 run back to back without
 # leaving the Patriots plan rules alone in the runtime.
@@ -66,8 +66,8 @@ expected_node_fields='{"lk_subscription_managed_policy_20260820":["func"],"lk_su
 evaluator_id="lk_subscription_managed_policy_20260820"
 evaluate_id="lk_subscription_price_preview_20260908_evaluate"
 router_id="lk_subscription_price_preview_20260908_router"
-preimage_flow_sha="fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5"
-candidate_flow_sha="24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05"
+preimage_flow_sha="99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3"
+candidate_flow_sha="0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192"
 source_node_count=4815
 evaluator_func_before_sha="2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602"
 evaluator_func_after_sha="e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
@@ -75,7 +75,7 @@ evaluate_func_before_sha="2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd
 evaluate_func_after_sha="e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
 router_func_before_sha="43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70"
 router_func_after_sha="0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221"
-gateway_postimage_func_sha="b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514"
+gateway_postimage_func_sha="7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4"
 allowance_after_sha="2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813"
 smoke_url="https://padlhub.su/lk/advertising/split-payment-promo"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -140,6 +140,7 @@ stage_pinned_workspace() {
 write_g2_postcheck() {
   local out="$1"
   cat > "$out" <<'CJS'
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const flow = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const node = (id) => flow.find((row) => row.id === id) || {};
@@ -156,6 +157,23 @@ for (const marker of ["COURT_HOURLY_COPAY", "if (ctx.step === 'courtWindow') {",
   "isTopokratyClubPack", "canonical.isProTrainingExercise", "canonical.resolveLk1Rule"]) {
   if (!previewRouter.includes(marker)) process.exit(1);
 }
+// Corrected Step-2 postcheck 4: G2 does not touch the gateway, so G1's postimage body — including
+// the club money mandate and the resolved court dispatch order — must survive the G2 apply.
+const gateway = func(node("lk_subscription_booking_router_20260804"));
+const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
+if (hash(gateway) !== "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4") process.exit(1);
+const bindingStart = "const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {";
+const bindingAt = gateway.indexOf(bindingStart);
+const bindingClose = gateway.indexOf("\n};\n", bindingAt + bindingStart.length);
+if (bindingAt < 0 || bindingClose < 0) process.exit(1);
+const binding = gateway.slice(bindingAt, bindingClose + 4);
+if (gateway.split("COURT_HOURLY_COPAY").length !== 2) process.exit(1);
+if (!binding.includes("if (decision.benefit?.kind === \"COURT_HOURLY_COPAY\")")) process.exit(1);
+if (!binding.includes("perHour === Math.floor(hourly / 4)")) process.exit(1);
+const stationAt = gateway.indexOf("      ctx.studioId = quote.target.stationId;\n");
+const roomAt = gateway.indexOf("      ctx.roomId = quote.target.roomId;\n");
+const dispatchAt = gateway.indexOf("      if (lk1CourtWindowNeeded(ctx)) ctx.lk1CourtExercise = exercise;\n");
+if (!(stationAt >= 0 && stationAt < roomAt && roomAt < dispatchAt)) process.exit(1);
 CJS
   chmod 600 "$out"
 }
@@ -327,7 +345,7 @@ compose_and_validate() {
     const p=value.preview||{};
     if(p.id!==router||p.courtWindowStepBound!==true||p.courtQuoteBound!==true
       ||p.topokratyExclusionKept!==true||p.proTrainingKept!==true||p.resolverReachable!==true)process.exit(1);
-    if(value.gatewayPostimageSha256!=="b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514")process.exit(1);
+    if(value.gatewayPostimageSha256!=="7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4")process.exit(1);
     if(value.usageBlockSha256!=="2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813")process.exit(1);
     if(value.planRulesActivation!==null)process.exit(1);
     if(value.topologyChanged!==false||value.routesChanged!==false||value.policyChanged!==true)process.exit(1);
