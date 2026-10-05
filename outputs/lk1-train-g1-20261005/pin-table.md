@@ -19,14 +19,14 @@ leave a fail-closed but misleading patcher (preparation-branch finding, unchange
 | `LK1_TRAIN_G1_SOURCE_NODE_COUNT` | — (new) | `4815` | derived |
 | `LK1_TRAIN_G1_TARGET.liveFuncSha256` | — (new) | `21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2` | derived |
 | `LK1_TRAIN_G1_TARGET.liveInitializeSha256` | — (new) | `d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5` | derived |
-| `LK1_TRAIN_G1_TARGET.patchedFuncSha256` | `PENDING_COMPOSITION` | `b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514` | derived |
+| `LK1_TRAIN_G1_TARGET.patchedFuncSha256` | `PENDING_COMPOSITION` | `7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4` | derived |
 | `LK1_TRAIN_G1_TARGET.patchedInitializeSha256` | `PENDING_COMPOSITION` | `283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3` | derived — **equals `PATRIOTS_POSTIMAGE.gatewayInitialize`** |
 | `LK1_TRAIN_G1_PREIMAGE_NODE_SHA256` | — (new) | `f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b` | derived |
-| `LK1_TRAIN_G1_POSTIMAGE_NODE_SHA256` | — (new) | `6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777` | derived |
-| `LK1_TRAIN_G1_POSTIMAGE_SHA256` (candidate) | — (new) | `fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5` | derived |
-| `LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256` | — (new) | `a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4` | derived |
+| `LK1_TRAIN_G1_POSTIMAGE_NODE_SHA256` | — (new) | `d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0` | derived |
+| `LK1_TRAIN_G1_POSTIMAGE_SHA256` (candidate) | — (new) | `99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3` | derived |
+| `LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256` | — (new) | `0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f` | derived |
 | `LK1_TRAIN_G1_REVERT_INITIALIZE_SHA256` | — (new) | `2c2c0c89e3562fff985c388d7bbd0f55f9deaf5cc002ae86974ce59f43c6caf1` | derived |
-| gateway `func` | `21c50a8d…` | `b39de6aa…` | derived |
+| gateway `func` | `21c50a8d…` | `7f1539bf…` | derived |
 | gateway `initialize` | `d7aec140…` | `283f9e8a…` | derived |
 | shared allowance block (`lk1_usage_operations … lk1_policy_decision`) | `a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1` | `2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813` | derived |
 
@@ -45,6 +45,7 @@ Reviewed fragments G1 embeds (all verified against their own sha before use):
 | club gate (#174 `open_game` + reviewed refusal text) | `520e3486922e735ff0d82cf5503ae39a18ad00068b6806069b26c9f5e30c5e1c` |
 | Patriots money-only identity guard | `9a417b05213e1fe3e891f2063aa69a14699854790016a1196ae18f97fafda8e2` |
 | focused court-window continuation block | `b3342f91b20d64c7bdf6e9fc53e27ba8f40b5011088bf68364b6517cb3c02f9e` |
+| club money mandate `COURT_HOURLY_COPAY` branch (F1) | `d239076989eca25526f0c51865c36e976baf6ed533add7485f6d782976a76d50` |
 
 Plan-rules: installed prior **9 rules** (`LK1_PLAN_RULES_WITH_FRIENDSHIP_TWO_HOURS`, planKeys
 `ra, friendship, academy, sport, promo_academy, promo_friendship, promo_ra, topocraty,
@@ -55,8 +56,8 @@ product `37ab3713-4431-4815-96ba-d7ece76a9241`). Writer replaced, not appended.
 
 | Pin | Old | New | State |
 | --- | --- | --- | --- |
-| `LK1_TRAIN_G2_UPSTREAM_SHA256` | — (new) | `fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5` (G1 postimage) | derived |
-| `LK1_TRAIN_G2_TARGET.gatewayFuncSha256` | — (new) | `b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514` | derived |
+| `LK1_TRAIN_G2_UPSTREAM_SHA256` | — (new) | `99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3` (G1 postimage) | derived |
+| `LK1_TRAIN_G2_TARGET.gatewayFuncSha256` | — (new) | `7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4` | derived |
 | `LK1_TRAIN_G2_TARGET.usageBlockSha256` | — (new) | `2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813` | derived |
 | `LK1_TRAIN_G2_TARGET.pricingFuncSha256` | — (new) | `d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b` | unchanged |
 | `LK1_TRAIN_G2_TARGET.joinFuncSha256` | — (new) | `8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074` | unchanged |
@@ -67,14 +68,14 @@ product `37ab3713-4431-4815-96ba-d7ece76a9241`). Writer replaced, not appended.
 | `livePreviewRouterFuncSha256` | — (new) | `43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70` | derived |
 | `patchedEvaluatorFuncSha256` | — (new) | `e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1` | derived |
 | `patchedPreviewEvaluateFuncSha256` | — (new) | `e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1` | derived |
-| `patchedPreviewRouterFuncSha256` | `PENDING_COMPOSITION` | `0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221` | derived (**differs from the preparation candidate `f83f4a98…`** because G1 changed the allowance block the preview embeds) |
-| `LK1_TRAIN_G2_POSTIMAGE_SHA256` (candidate) | — (new) | `24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05` | derived |
+| `patchedPreviewRouterFuncSha256` | `PENDING_COMPOSITION` | `0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221` | derived — **recomposed over the F1/F2 gateway body and byte-identical**: the changed club-binding/dispatch code does not enter the preview helper closure, only the (unchanged) allowance block does |
+| `LK1_TRAIN_G2_POSTIMAGE_SHA256` (candidate) | — (new) | `0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192` | derived |
 
 ## C. Cross-generation pins the new body moves
 
 | Owner | Pin | Old (2026-10-05 prep) | New | State |
 | --- | --- | --- | --- | --- |
-| `scripts/patch_nodered_subscription_price_preview.mjs` | `PREVIEW_CANONICAL_SOURCE_SHA256.booking` | `8848722f…` | `b39de6aa…` (after G1; G2 passes it through `pins.booking`) | derived |
+| `scripts/patch_nodered_subscription_price_preview.mjs` | `PREVIEW_CANONICAL_SOURCE_SHA256.booking` | `8848722f…` | `7f1539bf…` (after G1; G2 passes it through `pins.booking`) | derived |
 | `…` | `.evaluator` | `6f4e7aa5…` | `e876ba07…` (G2) | derived |
 | `…` | `.pricing` | `53c4f6ab…` | `d93de261…` | derived |
 | `…` | `.join` | `70ec2bdf…` | `8b312b97…` | derived |
@@ -83,7 +84,7 @@ product `37ab3713-4431-4815-96ba-d7ece76a9241`). Writer replaced, not appended.
 | `…` | `reviewedEvaluatorSource` | `45b7ef57…` | `ac05d7cd876523d19ec380cd3f7d68c78ea48320cf5586160b19e6cb3e613d9d` | **derived + committed** |
 | `…` | `PATRIOTS_POSTIMAGE.gatewayInitialize` | `283f9e8a…` | unchanged `283f9e8a…` | derived — proven applicable to the 2026-10-05 initialize |
 | `scripts/patch_live_lk1_hub.mjs` | `HUB_PREIMAGES.split` | `c6ecc73d…` | `d93de261…` | derived (composition still refuses) |
-| `…` | `HUB_PREIMAGES.gateway` | `818817e0…` | `b39de6aa…` after G1 / `21c50a8d…` before | derived |
+| `…` | `HUB_PREIMAGES.gateway` | `818817e0…` | `7f1539bf…` after G1 / `21c50a8d…` before | derived |
 | `…` | `HUB_PREIMAGES.finalize` | `37b05b0a…` | `2b115412…` | derived |
 | `…` | `HUB_PREIMAGES.evaluator` | `47c5e8b7…` | `e876ba07…` after G2 | derived |
 | `scripts/nodered_lk1_hub_nodes/preimages.json` | `nodes` | 7 of 20 drifted | 7 drifted (unchanged set) + no new node moved | derived |

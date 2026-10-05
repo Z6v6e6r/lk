@@ -56,6 +56,7 @@ import {
   TOPOKRATY_COURT_STEPS_SHA256,
   reviewedCourtFragments,
 } from "./patch_live_lk1_topokraty_friendship_hotfix.mjs";
+import { clubMoneyFragment } from "./patch_live_lk1_topokraty_copay_hotfix.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -74,7 +75,7 @@ export const LK1_TRAIN_G1_TARGET = Object.freeze({
   gatewayId: LK1_TRAIN_G1_GATEWAY_ID,
   liveFuncSha256: "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
   liveInitializeSha256: "d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5",
-  patchedFuncSha256: "b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514",
+  patchedFuncSha256: "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4",
   patchedInitializeSha256: "283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3",
 });
 
@@ -83,14 +84,14 @@ export const LK1_TRAIN_G1_TARGET = Object.freeze({
 export const LK1_TRAIN_G1_PREIMAGE_NODE_SHA256 =
   "f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b";
 export const LK1_TRAIN_G1_POSTIMAGE_NODE_SHA256 =
-  "6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777";
+  "d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0";
 
 // The composed postimage of G1; G2 stacks on it and the G1 rollback refuses any other applied flow.
 export const LK1_TRAIN_G1_POSTIMAGE_SHA256 =
-  "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5";
+  "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3";
 // The ordered G1 rollback composes on that postimage and writes the installed nine-rule payload back.
 export const LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256 =
-  "a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4";
+  "0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f";
 // The reverted initialize body and the installed nine-rule payload it writes back.
 export const LK1_TRAIN_G1_REVERT_INITIALIZE_SHA256 =
   "2c2c0c89e3562fff985c388d7bbd0f55f9deaf5cc002ae86974ce59f43c6caf1";
@@ -118,12 +119,27 @@ export const LK1_TRAIN_G1_REVIEWED_PATRIOTS_GUARD_SHA256 =
 // The focused continuation block that replaces the reviewed writer's HUB `profile` re-entry.
 export const LK1_TRAIN_G1_CONTINUATION_SHA256 =
   "b3342f91b20d64c7bdf6e9fc53e27ba8f40b5011088bf68364b6517cb3c02f9e";
+// The reviewed club money mandate (the `COURT_HOURLY_COPAY` branch). The installed 2026-10-05 body
+// already carries the rest of `lk1ClubEventPaymentBinding`, the quote resolver and the five call
+// sites, so this branch is the only money-mandate delta the reviewed club contour was missing.
+export const LK1_TRAIN_G1_CLUB_COPAY_BLOCK_SHA256 =
+  "d239076989eca25526f0c51865c36e976baf6ed533add7485f6d782976a76d50";
 
 export const LK1_TRAIN_G1_PATRIOTS_PRODUCT_ID = "37ab3713-4431-4815-96ba-d7ece76a9241";
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 // --- reviewed fragments -----------------------------------------------------
+
+// The installed club money mandate shape and the reviewed `COURT_HOURLY_COPAY` branch inside it.
+// Both are read out of the reviewed payment source through `clubMoneyFragment()`, so the G1 splice
+// can only ever embed bytes this repository reviewed.
+const CLUB_BINDING_START = "const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {";
+const CLUB_BINDING_END = "\n};\n";
+const CLUB_COPAY_ANCHOR = "  const percent = decision.eventDiscountPercent;\n";
+const CLUB_COPAY_NEXT =
+  '  const share = decision.benefit?.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT"\n';
+const QUOTE_RESOLVER_START = "const lk1EventPaymentQuoteBinding = (ctx, quote = ctx.lk1) =>";
 
 function reviewedSource(relative, pin, label) {
   const source = fs.readFileSync(path.join(HERE, relative), "utf8");
@@ -149,6 +165,34 @@ function reviewedSlice(source, startMarker, endMarker, pin, label) {
 
 const indent = (fragment, spaces) => fragment.split("\n")
   .map((line) => (line.trim() === "" ? line : `${" ".repeat(spaces)}${line}`)).join("\n");
+
+/** The reviewed `lk1ClubEventPaymentBinding` definition, extracted verbatim from the money mandate. */
+export function reviewedClubBinding() {
+  const fragment = clubMoneyFragment();
+  const start = fragment.indexOf(CLUB_BINDING_START);
+  if (start < 0) throw new Error("Reviewed club money binding is absent");
+  const end = fragment.indexOf(CLUB_BINDING_END, start + CLUB_BINDING_START.length);
+  if (end < 0) throw new Error("Reviewed club money binding end is absent");
+  return fragment.slice(start, end + CLUB_BINDING_END.length);
+}
+
+/**
+ * The reviewed `COURT_HOURLY_COPAY` branch of the club money mandate. The installed 147 body
+ * already carries the rest of the binding (and the quote resolver with its five call sites), so
+ * this branch — and nothing else — is the missing money-mandate delta.
+ */
+export function reviewedClubCoPayBlock() {
+  const binding = reviewedClubBinding();
+  const start = binding.indexOf(CLUB_COPAY_ANCHOR);
+  if (start < 0) throw new Error("Reviewed club co-pay anchor is absent");
+  const end = binding.indexOf(CLUB_COPAY_NEXT, start + CLUB_COPAY_ANCHOR.length);
+  if (end < 0) throw new Error("Reviewed club co-pay end anchor is absent");
+  const block = binding.slice(start + CLUB_COPAY_ANCHOR.length, end);
+  if (sha256(block) !== LK1_TRAIN_G1_CLUB_COPAY_BLOCK_SHA256) {
+    throw new Error(`Reviewed club co-pay block drift: ${sha256(block)}`);
+  }
+  return block;
+}
 
 /** The reviewed fragments of `gateway.js` / `gateway_hooks.js` this generation composes in. */
 export function reviewedTrainFragments() {
@@ -224,7 +268,16 @@ const USAGE_CLUB_FREE_ANCHOR =
   "          if (!Number.isSafeInteger(free) || free !== duration || free > ctx.lk1.rule.freeGameMinutesPerDay\n";
 
 const COURT_STEPS_ANCHOR = 'if (ctx.step === "lk1_operation_find") {';
-const COURT_DISPATCH_ANCHOR = "      ctx.lk1 = quote;\n";
+// The court dispatch runs after the target's station AND room are assigned: the reviewed
+// `startLk1CourtWindowFetch` binds both into the master-service URL and into the stored proof
+// (`gateway_hooks.js:259-296`), and the http ingress sends neither, so dispatching right after
+// `ctx.lk1 = quote;` would write a null station/room proof and refuse every club request with
+// `LK1_COURT_PRICE_UNRESOLVED`. `ctx.roomId` is written nowhere else in this body, so the added
+// assignment is additive.
+const COURT_DISPATCH_ANCHOR = "      ctx.studioId = quote.target.stationId;\n";
+// The room the reviewed proof binds, assigned from the same server-resolved target as the station.
+export const LK1_TRAIN_G1_ROOM_ASSIGNMENT = "      ctx.roomId = quote.target.roomId;\n";
+const COURT_DISPATCH_GUARD = "      if (lk1CourtWindowNeeded(ctx)) ctx.lk1CourtExercise = exercise;\n";
 
 // The single continuation delta of the reviewed court-window writer. The reviewed fragment asks for
 // the HUB `profile` re-entry, which this focused lineage does not have: the profile handler would
@@ -255,6 +308,7 @@ export const LK1_TRAIN_G1_PATCH_MARKERS = Object.freeze({
   patriotsGuard: "patriotsMoneyOnlyIdentity",
   courtMinutes: "operation.lk1.decision.courtMinutes",
   clubFreeCeiling: "const freeCeiling = clubFreeVisit ? duration : ctx.lk1.rule.freeGameMinutesPerDay;",
+  clubMoneyMandate: "COURT_HOURLY_COPAY",
 });
 
 // --- helpers ----------------------------------------------------------------
@@ -334,10 +388,13 @@ export function patchLk1TrainG1GatewayBody(source, target = LK1_TRAIN_G1_TARGET)
       after: `${fragments.courtHelpers}\n${courtSteps}\n${COURT_STEPS_ANCHOR}` },
     { id: "court-dispatch",
       before: COURT_DISPATCH_ANCHOR,
-      after: `      ctx.lk1 = quote;
+      after: `      ctx.studioId = quote.target.stationId;
       // The club court-hourly co-pay proves its own hour of court for the raw event window: only the
       // exercise read carries the Viva-local \`timeFrom\`/\`timeTo\` the price request binds, and the
-      // quote is already resolved here. \`lk1CourtWindowNeeded\` still gates every other event.
+      // quote is already resolved here. The proof binds the target's station and room, so both are
+      // assigned before the dispatch: a null station or room makes the fetch refuse with the
+      // court-price code. \`lk1CourtWindowNeeded\` still gates every other event.
+      ctx.roomId = quote.target.roomId;
       if (lk1CourtWindowNeeded(ctx)) ctx.lk1CourtExercise = exercise;
 ${indent(fragments.courtDispatch, 6)}
       delete ctx.lk1CourtExercise;
@@ -354,7 +411,14 @@ ${indent(fragments.courtDispatch, 6)}
       after: PATRIOTS_EARLY_GUARD_ANCHOR + indent(fragments.patriotsGuard, 2) },
     { id: "patriots-detour", before: PATRIOTS_DETOUR_OLD, after: PATRIOTS_DETOUR_NEW },
   ], "LK1 train G1 Patriots guard");
-  const patched = applyDeltas(withPatriots, [
+  const withMoney = applyDeltas(withPatriots, [
+    // The reviewed club money mandate: the installed body carries `lk1ClubEventPaymentBinding`
+    // without the `COURT_HOURLY_COPAY` branch, so the branch (and only the branch) is spliced in
+    // here. The binding then matches the reviewed definition byte-for-byte (asserted below).
+    { id: "club-copay", before: CLUB_COPAY_ANCHOR,
+      after: CLUB_COPAY_ANCHOR + reviewedClubCoPayBlock() },
+  ], "LK1 train G1 club money mandate");
+  const patched = applyDeltas(withMoney, [
     { id: "usage-court-minutes", before: USAGE_GAME_MINUTES_BLOCK,
       after: USAGE_GAME_MINUTES_BLOCK + fragments.usageCourtMinutes },
     { id: "usage-club-free", before: USAGE_CLUB_FREE_ANCHOR,
@@ -371,14 +435,34 @@ ${indent(fragments.courtDispatch, 6)}
     ["Patriots guard", "const patriotsMoneyOnlyIdentity = ctx.caller === \"http\"", 2],
     ["court minutes", "operation.lk1.decision.courtMinutes", 2],
     ["club free ceiling", "const freeCeiling = clubFreeVisit ? duration : ctx.lk1.rule.freeGameMinutesPerDay;", 2],
+    ["club money mandate", "COURT_HOURLY_COPAY", 2],
   ]) {
     if (patched.split(marker).length !== expected) {
       throw new Error(`The ${label} delta must enter the body exactly once`);
     }
   }
-  if (patched.split("const lk1EventPaymentQuoteBinding = (ctx, quote = ctx.lk1) =>").length !== 2
-    || patched.split("const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {").length !== 2) {
+  if (patched.split(QUOTE_RESOLVER_START).length !== 2) {
+    throw new Error("The installed quote resolver must stay declared exactly once");
+  }
+  if (patched.split(CLUB_BINDING_START).length !== 2) {
     throw new Error("The installed club money mandate must stay declared exactly once");
+  }
+  // The composed club binding must be the reviewed one byte-for-byte: the delivered money mandate
+  // is the branch this generation splices, never a locally rewritten variant.
+  const patchedClub = patched.slice(patched.indexOf(CLUB_BINDING_START));
+  const patchedClubEnd = patchedClub.indexOf(CLUB_BINDING_END);
+  if (patchedClubEnd < 0
+    || patchedClub.slice(0, patchedClubEnd + CLUB_BINDING_END.length) !== reviewedClubBinding()) {
+    throw new Error("The G1 club money mandate is not the reviewed binding");
+  }
+  // F2: the court dispatch must run after the target's station AND room are assigned, otherwise the
+  // pinned proof writer stores a null station/room and `startLk1CourtWindowFetch` refuses every
+  // club request with `LK1_COURT_PRICE_UNRESOLVED`.
+  const targetIdentityAt = patched.indexOf(COURT_DISPATCH_ANCHOR);
+  const roomAssignedAt = patched.indexOf(LK1_TRAIN_G1_ROOM_ASSIGNMENT);
+  const dispatchGuardAt = patched.indexOf(COURT_DISPATCH_GUARD);
+  if (!(targetIdentityAt >= 0 && targetIdentityAt < roomAssignedAt && roomAssignedAt < dispatchGuardAt)) {
+    throw new Error("The court dispatch must run after the target station and room are assigned");
   }
   assertFunctionBody(patched, "Patched G1 booking gateway body");
   assertPostimage(patched, target.patchedFuncSha256, "G1 booking gateway");
@@ -474,6 +558,15 @@ export function composeLk1TrainG1Artifacts(rawSource, options = {}) {
         && gateway.initialize.split('"planKey":"patriots"').length === 2,
       courtMinutesAccumulated: gateway.func.includes("operation.lk1.decision.courtMinutes"),
       clubFreeCeiling: gateway.func.includes(LK1_TRAIN_G1_PATCH_MARKERS.clubFreeCeiling),
+      // F1: the composed club binding carries the reviewed `COURT_HOURLY_COPAY` branch inside
+      // `lk1ClubEventPaymentBinding`, and the delivered definition is the reviewed one.
+      clubMoneyMandateBound: gateway.func.split("COURT_HOURLY_COPAY").length === 2
+        && reviewedClubBinding() !== ""
+        && gateway.func.slice(gateway.func.indexOf(CLUB_BINDING_START))
+          .startsWith(reviewedClubBinding()),
+      clubDispatchAfterTargetIdentity:
+        gateway.func.split(`${COURT_DISPATCH_ANCHOR}      // The club court-hourly co-pay`).length === 2
+        && gateway.func.split(`${LK1_TRAIN_G1_ROOM_ASSIGNMENT}${COURT_DISPATCH_GUARD}`).length === 2,
       usageBlockSha256: usageBlockSha(gateway.func),
       usageBlockBeforeSha256,
     },
@@ -521,7 +614,7 @@ export function patchLk1TrainG1InitializeRevert(source) {
 }
 
 /** Composes the G1 revert candidate: the G1 postimage with only the plan-rules writer reverted. */
-export function composeLk1TrainG1RevertArtifacts(rawSource) {
+export function composeLk1TrainG1RevertArtifacts(rawSource, options = {}) {
   const bytes = Buffer.isBuffer(rawSource) ? rawSource : Buffer.from(rawSource);
   const sourceSha256 = sha256(bytes);
   if (sourceSha256 !== LK1_TRAIN_G1_POSTIMAGE_SHA256) {
@@ -545,7 +638,7 @@ export function composeLk1TrainG1RevertArtifacts(rawSource) {
     allowedChanges: changes.map((row) => ({ id: row.id, fields: [...row.fields] })), allowedAdditionIds: [] });
   validateReviewedFlowContract({ liveBytes: bytes, candidateBytes, contract });
   const candidateSha256 = sha256(candidateBytes);
-  if (candidateSha256 !== LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256) {
+  if (options.assertPostimages !== false && candidateSha256 !== LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256) {
     throw new Error(`G1 revert candidate drift: ${candidateSha256} != ${LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256}`);
   }
   return { flow, candidateBytes, contract, changes, sourceSha256, candidateSha256 };

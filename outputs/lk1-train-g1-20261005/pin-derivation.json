@@ -128,6 +128,7 @@
   },
   "markers": {
     "clubMoneyMandate": 2,
+    "clubMoneyMandateBranch": 0,
     "quoteBindingCallSites": 5,
     "reclaim": 2,
     "topokratyGateGroupTrainingOnly": 4,
@@ -157,12 +158,12 @@
   },
   "g1": {
     "upstreamFlowSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
-    "candidateSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+    "candidateSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
     "preimageNodeSha256": "f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b",
-    "postimageNodeSha256": "6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777",
+    "postimageNodeSha256": "d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0",
     "gatewayFunc": {
       "before": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
-      "after": "b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514"
+      "after": "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4"
     },
     "gatewayInitialize": {
       "before": "d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5",
@@ -172,7 +173,7 @@
       "before": "a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1",
       "after": "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813"
     },
-    "revertCandidateSha256": "a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4",
+    "revertCandidateSha256": "0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f",
     "revertInitializeSha256": "2c2c0c89e3562fff985c388d7bbd0f55f9deaf5cc002ae86974ce59f43c6caf1",
     "reviewedFragmentPins": {
       "gateway": "430dbb09b3df1379c1100a0af784720abfdb9687b89662999d982db4aedeef8a",
@@ -182,12 +183,14 @@
       "usageClubFree": "e363c97b76ec48d955673fb8bcba303bc7563b578d0e9e4f9674f1ab0de9387a",
       "clubGate": "520e3486922e735ff0d82cf5503ae39a18ad00068b6806069b26c9f5e30c5e1c",
       "patriotsGuard": "9a417b05213e1fe3e891f2063aa69a14699854790016a1196ae18f97fafda8e2",
+      "clubMoneyMandateBranch": "d239076989eca25526f0c51865c36e976baf6ed533add7485f6d782976a76d50",
       "continuation": "b3342f91b20d64c7bdf6e9fc53e27ba8f40b5011088bf68364b6517cb3c02f9e"
     }
   },
   "g2": {
-    "upstreamFlowSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
-    "candidateSha256": "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05",
+    "upstreamFlowSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+    "candidateSha256": "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192",
+    "compositionCandidateSha256": "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192",
     "evaluator": {
       "before": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
       "node": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
@@ -200,7 +203,7 @@
       "before": "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70",
       "node": "0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221"
     },
-    "g1GatewayFunc": "b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514",
+    "g1GatewayFunc": "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4",
     "g1UsageBlock": "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813",
     "pricingFunc": "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
     "joinFunc": "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074"
