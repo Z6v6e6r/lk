@@ -27,6 +27,14 @@
 //   4. `lk_subscription_price_preview_20260908_router.func` — recomposed on the patched
 //      generation so the advisory quote and the write path agree.
 //
+// Owner decision 2026-10-05 (this patcher's companion, see
+// `docs/LK1_TOPOKRATY_COURT_HOURLY_COPAY_20261005.md`): the co-pay base became the HOURLY court
+// price proved server-side, so `patchTopokratyCourtWindowBody()` here also embeds the reviewed
+// court-window fragments into the installed gateway. The reviewed-source pins of the evaluator
+// and of the court fragments are the ones this branch reviewed; the installed live-body pins
+// (`liveFuncSha256` / `livePreviewFuncSha256` / `patched*`) are re-derived and re-reviewed at a
+// fresh pull, exactly as the generation contract requires.
+//
 // Preparation only: nothing is deployed, imported, restarted or activated here, and the
 // patcher fails closed unless the preimage is exactly the reviewed installed flow.
 
@@ -87,13 +95,35 @@ export const TOPOKRATY_DIRECTION_HELPER_SHA256 =
   "7d694c04f90d8a6382e1bfbe507586bd5663020e3ef45fb7f9890a8f2c293bc7";
 export const TOPOKRATY_PERCENT_HELPER_SHA256 =
   "6df43d89a0756750dbe02efc85a00b8002f8c23d2dcb1ade35407c639a5b1588";
+// The reviewed court-window helpers of the club co-pay (owner decision 2026-10-05): the
+// whole-window master-service price lookup that makes the HOURLY court price provable on both
+// club directions. They are extracted from the reviewed hooks source and embedded verbatim, so
+// the focused generation ships exactly the code this repository reviewed.
+const REVIEWED_HOOKS_SOURCE = "scripts/nodered_lk1_hub_nodes/gateway_hooks.js";
+export const TOPOKRATY_COURT_HELPERS_START = "const lk1CourtMasterServices = Object.freeze({";
+export const TOPOKRATY_COURT_HELPERS_END = "  return total;\n};\n";
+export const TOPOKRATY_COURT_HELPERS_SHA256 =
+  "dea0323fb7535e821d74af271339ef5d3c4db65622ec865384637fbbad6d86dd";
+export const TOPOKRATY_COURT_DISPATCH_START = "// The club co-pay needs one more server-owned number";
+export const TOPOKRATY_COURT_DISPATCH_END = "  return startLk1CourtWindowFetch(ctx);\n}\n";
+export const TOPOKRATY_COURT_DISPATCH_SHA256 =
+  "bd02267fe48e9646db1e13eaf09c9e834850aa657c78ab85a8c89586ea91ab0e";
+export const TOPOKRATY_COURT_STEPS_START = "const lk1CourtWindowEndTime = (exercise) => {";
+export const TOPOKRATY_COURT_STEPS_END = "  return false;\n}\n";
+export const TOPOKRATY_COURT_STEPS_SHA256 =
+  "1e8684b49d52022e4c8c19e1ec686e6c03b9366caa4a40c36291cf4a106112c1";
+// The installed-body anchors the court-window code is inserted at. None of them is a reviewed
+// contour delta of an earlier generation.
+export const TOPOKRATY_COURT_HELPERS_ANCHOR = "// HUB_STEPS";
+export const TOPOKRATY_COURT_DISPATCH_ANCHOR = 'ctx.step = "lk1_profile_continue";';
+export const TOPOKRATY_COURT_STEPS_ANCHOR = 'if (ctx.step === "lk1_operation_find") {';
 
 // The reviewed evaluator body this generation was built against. `PLAN_RULES_REVIEWED_EVALUATOR_SHA256`
 // keeps tracking the current reviewed source, but this focused generation must keep refusing once
 // that source moves past the body it was reviewed with, otherwise it would silently embed a newer
 // evaluator (the Patriots classifier) into the installed Topokraty graph.
 export const TOPOKRATY_REVIEWED_EVALUATOR_SHA256 =
-  "9ea4061cb747f6a10dee0bc7a5bd2c8993d138e9df87e35f82ab1814964da823";
+  "ac05d7cd876523d19ec380cd3f7d68c78ea48320cf5586160b19e6cb3e613d9d";
 
 // Present only after this generation: the gateway quote comparison and the initialize
 // payload. A second run is refused instead of produced.
@@ -194,6 +224,60 @@ function applyDeltas(source, deltas, label) {
   return patched;
 }
 
+/**
+ * The reviewed court-window fragments of the club co-pay (owner decision 2026-10-05). They are
+ * read from the reviewed hooks source and verified against their own pins, so the focused
+ * generation can only embed the code this repository reviewed.
+ */
+export function reviewedCourtFragments() {
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..",
+    REVIEWED_HOOKS_SOURCE), "utf8");
+  const slice = (startMarker, endMarker, pin, label) => {
+    if (source.split(startMarker).length !== 2) {
+      throw new Error(`Reviewed ${label} start anchor drift`);
+    }
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start + startMarker.length);
+    if (end < 0) throw new Error(`Reviewed ${label} end anchor drift`);
+    const fragment = source.slice(start, end + endMarker.length);
+    if (sha256(fragment) !== pin) {
+      throw new Error(`Reviewed ${label} drift: ${sha256(fragment)} != ${pin}`);
+    }
+    return fragment;
+  };
+  return {
+    helpers: slice(TOPOKRATY_COURT_HELPERS_START, TOPOKRATY_COURT_HELPERS_END,
+      TOPOKRATY_COURT_HELPERS_SHA256, "court window helpers"),
+    dispatch: slice(TOPOKRATY_COURT_DISPATCH_START, TOPOKRATY_COURT_DISPATCH_END,
+      TOPOKRATY_COURT_DISPATCH_SHA256, "court window dispatch"),
+    steps: slice(TOPOKRATY_COURT_STEPS_START, TOPOKRATY_COURT_STEPS_END,
+      TOPOKRATY_COURT_STEPS_SHA256, "court window steps"),
+  };
+}
+
+/** The court-window code of the club co-pay, embedded verbatim into the installed gateway. */
+export function patchTopokratyCourtWindowBody(source) {
+  if (source.includes("const lk1CourtMasterServices = Object.freeze({")) {
+    throw new Error("Booking gateway already carries the court window proof");
+  }
+  const fragments = reviewedCourtFragments();
+  const patched = applyDeltas(source, [
+    { id: "court-helpers", before: TOPOKRATY_COURT_HELPERS_ANCHOR,
+      after: `${fragments.helpers}\n${TOPOKRATY_COURT_HELPERS_ANCHOR}` },
+    { id: "court-dispatch", before: TOPOKRATY_COURT_DISPATCH_ANCHOR,
+      after: `${TOPOKRATY_COURT_DISPATCH_ANCHOR}\n${fragments.dispatch}` },
+    { id: "court-steps", before: TOPOKRATY_COURT_STEPS_ANCHOR,
+      after: `${fragments.steps}\n${TOPOKRATY_COURT_STEPS_ANCHOR}` },
+  ], "Topokraty court window");
+  if (patched.split("const lk1CourtWindowNeeded = (ctx) => {").length !== 2
+    || patched.split("return startLk1CourtWindowFetch(ctx);").length !== 2
+    || patched.split('if (ctx.step === "lk1_court_window") {').length !== 2) {
+    throw new Error("The court window code must be embedded exactly once");
+  }
+  assertFunctionBody(patched, "Patched court window gateway body");
+  return patched;
+}
+
 function extractEmbeddedEvaluator(source, target = TOPOKRATY_TARGET) {
   if (source.split(EVALUATOR_LK1_BRANCH_OPEN).length !== 2) {
     throw new Error("Evaluator LK1 branch preimage drift");
@@ -282,8 +366,10 @@ export function patchTopokratyGatewayInitialize(source, target = TOPOKRATY_TARGE
 /** The evaluator body of this generation: the embedded LK1 copy is replaced. */
 export function patchTopokratyEvaluatorBody(source, target = TOPOKRATY_TARGET) {
   const reviewed = reviewedEvaluatorBody();
-  if (sha256(reviewed) !== TOPOKRATY_REVIEWED_EVALUATOR_SHA256) {
-    throw new Error(`Reviewed evaluator drift: ${sha256(reviewed)} != ${TOPOKRATY_REVIEWED_EVALUATOR_SHA256}`);
+  const reviewedSha256 = typeof target.reviewedEvaluatorSha256 === "string"
+    ? target.reviewedEvaluatorSha256 : TOPOKRATY_REVIEWED_EVALUATOR_SHA256;
+  if (sha256(reviewed) !== reviewedSha256) {
+    throw new Error(`Reviewed evaluator drift: ${sha256(reviewed)} != ${reviewedSha256}`);
   }
   if (source.includes(reviewed)) {
     throw new Error("Reviewed evaluator body is already embedded in the live body");

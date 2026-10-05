@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import ts from "typescript";
 import { isTrialGroupTraining } from "../../src/utils/trialGroupTraining.ts";
-import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, subscriptionEventQuoteAmountMinor, type GroupSubscriptionDiscountQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
+import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, subscriptionEventQuoteAmountMinor, isSubscriptionEventDiscountQuote, courtHourlyCoPayAmountMinor, type GroupSubscriptionDiscountQuote, type GroupTrainingCourtCoPayQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
 import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
 import type { TournamentVivaProduct } from "../../src/utils/tournamentSignupApi.ts";
 
@@ -151,6 +151,57 @@ test("a club training co-pay is quoted as the paid share above the free hour", (
   assert.ok(isGroupSubscriptionDiscountQuote({ ...partial, discountPercent: 100, amountMinor: 0,
     freeMinutes: 0, paidMinutes: 120 }, "group", "actor", now));
   assert.ok(isGroupSubscriptionDiscountQuote({ ...quote, freeMinutes: 0, paidMinutes: 60 }, "group", "actor", now));
+});
+
+test("a Skolkovo court-hourly co-pay is accepted as its own kind, never as a percentage", () => {
+  // Owner decision 2026-10-05: the Skolkovo court costs 6 000 ₽/hour, so a 4 000 ₽ two-hour club
+  // training with a free visit pays one quarter of that hour — 1 500 ₽ — and consumes one visit.
+  // The co-pay is the court's money, not a share of the event tariff, so it carries its own kind.
+  const courtCoPay: GroupTrainingCourtCoPayQuote = { ...quote, kind: "GROUP_TRAINING_COURT_COPAY_V1",
+    subscriptionName: "Дружба Топократы", discountPercent: 0, basePriceMinor: 400000, amountMinor: 150000,
+    durationMinutes: 120, freeMinutes: 60, paidMinutes: 60,
+    chargeableHours: 1, hourlyCourtPriceMinor: 600000, perHourMinor: 150000 };
+  assert.ok(isGroupSubscriptionDiscountQuote(courtCoPay, "group", "actor", now));
+  assert.equal(courtHourlyCoPayAmountMinor(courtCoPay), 150000);
+  // Three hours: two started hours above the free one charge 2 × 1 500 = 3 000 ₽.
+  assert.ok(isGroupSubscriptionDiscountQuote({ ...courtCoPay, amountMinor: 300000,
+    durationMinutes: 180, paidMinutes: 120, chargeableHours: 2 }, "group", "actor", now));
+  // The co-pay never exceeds the event's own base price.
+  assert.ok(isGroupSubscriptionDiscountQuote({ ...courtCoPay, amountMinor: 400000, durationMinutes: 300,
+    paidMinutes: 240, chargeableHours: 4 }, "group", "actor", now));
+  // The club subscription becomes an offered price for the one-time tariff, and the cheapest offer
+  // still wins across both group kinds.
+  const oneTime = { id: "one-time", cost: 400000, source: "one-time" };
+  assert.equal(matchGroupSubscriptionDiscount([courtCoPay], oneTime)?.amountMinor, 150000);
+  const flatHalf = { ...quote, basePriceMinor: 400000, amountMinor: 200000, discountPercent: 50 };
+  assert.equal(matchGroupSubscriptionDiscount([flatHalf, courtCoPay], oneTime)?.amountMinor, 150000);
+  assert.equal(subscriptionEventQuoteAmountMinor(flatHalf), 200000);
+  assert.equal(isSubscriptionEventDiscountQuote(courtCoPay, "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1",
+    "group", "actor", now), false);
+  // Identity and freshness stay enforced for the new kind too.
+  for (const delta of [{ actorClientId: "other" }, { exerciseId: "other" }, { expiresAt: now - 1 },
+    { evaluatedAt: now + 6000 }, { subscriptionName: "" }, { productId: "" }, { status: "LIMIT_USED" },
+    { durationMinutes: 0 }, { basePriceMinor: 0 }]) {
+    assert.equal(isGroupSubscriptionDiscountQuote({ ...courtCoPay, ...delta }, "group", "actor", now), false,
+      JSON.stringify(delta));
+  }
+  // Tampered variants: a wrong amount, a missing or non-positive court number, a fractional or zero
+  // hour count, minutes that do not add up with the event, and a percentage the kind cannot carry.
+  for (const delta of [
+    { amountMinor: 200000 }, { amountMinor: 600000 },
+    { chargeableHours: undefined }, { chargeableHours: 0 }, { chargeableHours: 1.5 },
+    { hourlyCourtPriceMinor: undefined }, { hourlyCourtPriceMinor: 0 }, { hourlyCourtPriceMinor: 600000.5 },
+    { perHourMinor: undefined }, { perHourMinor: 0 }, { perHourMinor: 200000 },
+    { freeMinutes: undefined }, { paidMinutes: undefined }, { freeMinutes: 0 }, { paidMinutes: 30 },
+    { paidMinutes: 90 },
+    { discountPercent: 50 },
+  ]) {
+    assert.equal(isGroupSubscriptionDiscountQuote({ ...courtCoPay, ...delta }, "group", "actor", now), false,
+      JSON.stringify(delta));
+  }
+  // The same numbers under the percentage kind are refused: the flat formula wants 200 000.
+  assert.equal(isGroupSubscriptionDiscountQuote({ ...courtCoPay, kind: "GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1" },
+    "group", "actor", now), false);
 });
 
 

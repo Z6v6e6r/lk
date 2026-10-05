@@ -164,6 +164,22 @@ const lk1Quote = (ctx, exercise, owned) => {
     || Date.now() - proof.observedAt > 30_000) return { code: "LK1_EVENT_TARIFF_UNVERIFIED" };
   target.basePriceMinor = proof.amountMinor;
   if (proof.kind === "EVENT_ONE_TIME") target.priceProductId = proof.productId;
+  // The club co-pay of «Дружба Топократы» is charged against the HOUR of court, never against
+  // the event's one-time tariff (owner decision 2026-10-05). The hour has exactly one
+  // server-owned source here: the whole court window the gateway proved for this station, room
+  // and time through the master-service price lookup. The window total travels in the proof as
+  // `windowTotalMinor`, so the stored fingerprint and the charge both describe the same window
+  // and the derived hour is reproducible on a resumed request. A proof without a whole window
+  // leaves the target without an hourly price and the evaluator refuses the club charge
+  // (`LK1_COURT_PRICE_UNRESOLVED`) instead of falling back to the tariff that produced 500 ₽.
+  const courtWindowTotalMinor = Number.isSafeInteger(proof.windowTotalMinor) && proof.windowTotalMinor > 0
+    ? proof.windowTotalMinor : null;
+  if (courtWindowTotalMinor !== null) {
+    const hourlyCourtPriceMinor = Math.round(courtWindowTotalMinor * 60 / proof.durationMinutes);
+    if (Number.isSafeInteger(hourlyCourtPriceMinor) && hourlyCourtPriceMinor > 0) {
+      target.hourlyCourtPriceMinor = hourlyCourtPriceMinor;
+    }
+  }
   if (lk1DiscountOwned(ctx, exercise).length) {
     const subscription = ctx.lk1MoneyOwnership.subscription;
     target.subscriptionValidity = { status: subscription.status,
@@ -938,6 +954,16 @@ if (ctx.step === "lk1_usage_operations") {
       if (minutes.localDate !== ctx.serviceDate || !Number.isSafeInteger(minutes.freeMinutes)
         || minutes.freeMinutes < 0) return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
       used += minutes.freeMinutes;
+    }
+    // The club training records its free hour in its own reviewed field: the shared day bucket
+    // is spent by a training exactly as it is by a game, so the accumulator reads both.
+    const courtMinutes = operation.lk1.decision.courtMinutes;
+    if (courtMinutes) {
+      if (courtMinutes.localDate !== ctx.serviceDate
+        || !Number.isSafeInteger(courtMinutes.freeMinutes) || courtMinutes.freeMinutes < 0) {
+        return lk1Stop(ctx, "LK1_ALLOWANCE_RECORD_INVALID");
+      }
+      used += courtMinutes.freeMinutes;
     }
     if (coveredId) coveredBookings.add(coveredId);
   }

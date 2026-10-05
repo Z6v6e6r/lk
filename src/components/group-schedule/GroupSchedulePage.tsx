@@ -55,7 +55,7 @@ import {
 import type {
   BookingCancellationAction,
 } from "../../utils/bookingCancellation";
-import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionDiscountQuote } from "../../utils/groupSubscriptionDiscount";
+import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionQuote } from "../../utils/groupSubscriptionDiscount";
 import "./GroupSchedulePage.css";
 
 interface GroupSchedulePageProps {
@@ -368,7 +368,7 @@ export default function GroupSchedulePage({
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
-  const [discountQuotes, setDiscountQuotes] = useState<GroupSubscriptionDiscountQuote[]>([]);
+  const [discountQuotes, setDiscountQuotes] = useState<GroupSubscriptionQuote[]>([]);
   const [discountResolvedFor, setDiscountResolvedFor] = useState<string | null>(null);
   const [discountLoading, setDiscountLoading] = useState(false);
   const [discountError, setDiscountError] = useState<string | null>(null);
@@ -1361,9 +1361,11 @@ export default function GroupSchedulePage({
                                       <span>{product.name}</span>
                                       {discount && (
                                         <span className="group-schedule-discount-description">
-                                          {isPartialSubscriptionEventDiscountQuote(discount)
-                                            ? `Доплата за ${discount.paidMinutes} мин по подписке «${discount.subscriptionName}»`
-                                            : `Скидка ${discount.discountPercent}% по подписке «${discount.subscriptionName}»`}
+                                          {discount.kind === "GROUP_TRAINING_COURT_COPAY_V1"
+                                            ? `Доплата ${formatMoneyMinor(discount.amountMinor)} за ${discount.chargeableHours} ч по подписке «${discount.subscriptionName}»`
+                                            : isPartialSubscriptionEventDiscountQuote(discount)
+                                              ? `Доплата за ${discount.paidMinutes} мин по подписке «${discount.subscriptionName}»`
+                                              : `Скидка ${discount.discountPercent}% по подписке «${discount.subscriptionName}»`}
                                         </span>
                                       )}
                                     </span>

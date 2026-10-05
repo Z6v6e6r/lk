@@ -189,3 +189,17 @@ test("an owned plan outside the money contour keeps a booking option of its own"
   assert.match(groupSchedulePageSource, /ownedSubscriptions\.length === 0 && purchasableProducts\.length === 0/);
   assert.match(groupSchedulePageSource, /aria-label="Ваши абонементы"/);
 });
+
+test("the court-hourly co-pay is labelled as a co-pay, not as a percentage discount", () => {
+  // The club court-hourly co-pay carries no percentage: `discountPercent` is 0, so the partial
+  // branch (which reads minutes) and the flat branch (which prints «Скидка 0 %») must not take it.
+  assert.match(groupSchedulePageSource,
+    /discount\.kind === "GROUP_TRAINING_COURT_COPAY_V1"[\s\S]*?Доплата \$\{formatMoneyMinor\(discount\.amountMinor\)\} за \$\{discount\.chargeableHours\} ч по подписке/);
+  assert.match(groupSchedulePageSource,
+    /isPartialSubscriptionEventDiscountQuote\(discount\)[\s\S]*?Доплата за \$\{discount\.paidMinutes\} мин по подписке/);
+  assert.match(groupSchedulePageSource, /Скидка \$\{discount\.discountPercent\}% по подписке/);
+  const coPayBranch = groupSchedulePageSource.indexOf('discount.kind === "GROUP_TRAINING_COURT_COPAY_V1"');
+  const partialBranch = groupSchedulePageSource.indexOf("isPartialSubscriptionEventDiscountQuote(discount)");
+  assert.ok(coPayBranch > 0 && coPayBranch < partialBranch,
+    "the co-pay kind must be checked before the minutes-based partial branch");
+});
