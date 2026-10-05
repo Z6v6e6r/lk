@@ -22,11 +22,6 @@ const init = (id) => byId.get(id).initialize;
 
 let source = fs.readFileSync(path.join(ROOT, "scripts", patcherName), "utf8");
 const repl = [];
-const setConst = (name, value) => {
-  const re = new RegExp(`(export const ${name} = Object\\.freeze\\(\\{[\\s\\S]*?\\}\\);)`, "m");
-  if (!re.test(source)) { repl.push(`!! could not locate ${name}`); return; }
-  // handled separately
-};
 // Replace a simple `export const NAME = 'value';` (or double quotes).
 const setSimple = (name, value, quote = "'") => {
   const re = new RegExp(`(export const ${name}\\s*=\\s*)(['"\`])([^'"\`]*)\\2(;)`, "m");

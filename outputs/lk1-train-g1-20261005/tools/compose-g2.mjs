@@ -1,7 +1,6 @@
 // Compose the G2 candidate on G1's postimage and report the derived pins.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const { composeLk1TrainG2Artifacts } = await import(path.join(ROOT, "scripts/patch_live_lk1_train_g2_20261005.mjs"));
