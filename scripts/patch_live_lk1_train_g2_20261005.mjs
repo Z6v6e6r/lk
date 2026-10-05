@@ -2,7 +2,7 @@
 
 // Focused generation G2 of the 2026-10-05 LK1 train for server 147.
 //
-// G2 stacks the reviewed *content* of the train on G1's postimage (`fc4a46a6…`, see
+// G2 stacks the reviewed *content* of the train on G1's postimage (`99b5d5b5…`, see
 // `patch_live_lk1_train_g1_20261005.mjs`). It is the composition the preparation branch already
 // produced as `0da79aa8…` on the raw snapshot, re-derived here because
 // G1 changes the booking gateway and its shared allowance block, which the price preview embeds
