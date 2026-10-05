@@ -76,6 +76,20 @@ chargeBeforeDiscountMinor, percentageDiscountMinor }, currency: "RUB" }`, сво
 | `scripts/tests/lk1TopokratyFriendship.test.mjs` | Явные числа Skolkovo, отказ без цены корта, игра, мандат, превью, маркеры |
 | `scripts/tests/topokratyFriendshipHotfix.test.mjs` | Пин поколения решателя и отказ на чужом теле |
 
+## Проверки (LOCAL)
+
+- `node --experimental-strip-types --test scripts/tests/lk1TopokratyFriendship.test.mjs` — 28/28 PASS.
+- `node --experimental-strip-types --test` по `scripts/tests/lk1*.test.{mjs,ts}` — 478 тестов,
+  387 pass, 91 skip, 0 fail.
+- Подписочные наборы (`topokraty*`, `proTraining*`, `patriots*`, `groupEventPayment*`,
+  `subscription*`, `groupSubscriptionDiscount*`) — 741 тест, 619 pass, 118 skip, 4 fail; все 4
+  (`subscriptionBindingPatch` ×2, `subscriptionReturnVerificationPatch` ×2) падают одинаково на
+  чистом `origin/main` (`7779e163`).
+- `tsc --noEmit -p tsconfig.app.json` — 0 ошибок; `eslint` по изменённым файлам — 0 ошибок
+  (Node-RED источники исключены конфигом); `git diff --check` — чисто.
+- `new Function` parse-check каждого изменённого тела Node-RED (решатель, платёжный мандат,
+  шлюз, собранные хуки, роутер превью).
+
 ## Остаточные риски
 
 - **Схема живого Viva не проверена на сервере 147.** Запрос цены окна корта и таблица станций
