@@ -471,6 +471,7 @@ jobs:
           scripts/tests/lk1TopokratyCopayHotfix.test.mjs
           scripts/tests/lk1TrainG1Hotfix.test.mjs
           scripts/tests/lk1TrainG2Hotfix.test.mjs
+          scripts/tests/lk1TrainG1Wrappers.test.mjs
           scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/subscriptionSaleOpening.test.mjs
           scripts/tests/subscriptionHubLimitPatch.test.mjs
