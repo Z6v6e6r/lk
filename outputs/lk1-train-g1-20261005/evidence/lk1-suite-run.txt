@@ -1770,10 +1770,10 @@ test at scripts/tests/subscriptionBindingPatch.test.mjs:17:1
 ✖ subscription binding patch pins six unique reviewed live function nodes (2.993458ms)
   AssertionError [ERR_ASSERTION]: fn_split_join_prepare.js
   + actual - expected
-  
+
   + '515dca2fdb427ff5e56dda7b47372a45056ece3fcdbdba00a70074c7a3b36010'
   - '003bafe6a0fcdae03f1fcc6cfb1bb8392984e4d8cb880fc6fa884a45bc89e028'
-  
+
       at TestContext.<anonymous> (file:///Users/zver/Desktop/project-fixed%206/.worktrees/lk1-train-g1-20261005/scripts/tests/subscriptionBindingPatch.test.mjs:28:12)
       at Test.runInAsyncScope (node:async_hooks:226:14)
       at Test.run (node:internal/test_runner/test:1402:25)
@@ -1805,10 +1805,10 @@ test at scripts/tests/subscriptionReturnVerificationPatch.test.mjs:16:1
 ✖ subscription return patch pins 14 unique reviewed live function nodes (2.379292ms)
   AssertionError [ERR_ASSERTION]: fn_split_leave_authorize.js
   + actual - expected
-  
+
   + 'ea9d1877528e2d1592fd04f1f5788aa910ecca4bb633d685f9ff2e516083346e'
   - 'c012028a32628f8ecd0154c53582001abdae4e9fb71e3bdb67c53fbeb5a7a2d9'
-  
+
       at TestContext.<anonymous> (file:///Users/zver/Desktop/project-fixed%206/.worktrees/lk1-train-g1-20261005/scripts/tests/subscriptionReturnVerificationPatch.test.mjs:22:12)
       at Test.runInAsyncScope (node:async_hooks:226:14)
       at Test.run (node:internal/test_runner/test:1402:25)
