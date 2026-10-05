@@ -117,6 +117,16 @@ chargeBeforeDiscountMinor, percentageDiscountMinor }, currency: "RUB" }`, сво
 - `new Function` parse-check каждого изменённого тела Node-RED (решатель, платёжный мандат,
   шлюз, собранные хуки, роутер превью).
 
+Проверки клиентской котировки (2026-10-05, тот же день):
+
+- `groupSubscriptionDiscount.test.ts` — 10/10 PASS (Skolkovo 1 500 ₽, 3 000 ₽, кэп базой и
+  отклонение подделанных вариантов); `groupScheduleDetailUi.test.ts` — 6/6 PASS (метка);
+  `lk1TopokratyFriendship.test.mjs` — 28/28 PASS (вид и поля событийной котировки).
+- `scripts/tests/lk1*` — 478 тестов, 387 pass, 91 skip, 0 fail;
+  `topokraty*` + `groupSchedule*` + `groupSubscriptionDiscount*` — 92/71/21/0;
+  `subscription*` — 619/525/90/4 (те же 4 базовых падения на `origin/main`).
+- `tsc --noEmit -p tsconfig.app.json`, `eslint` по изменённым файлам, `git diff --check` — чисто.
+
 ## Остаточные риски
 
 - **Схема живого Viva не проверена на сервере 147.** Запрос цены окна корта и таблица станций
@@ -131,6 +141,13 @@ chargeBeforeDiscountMinor, percentageDiscountMinor }, currency: "RUB" }`, сво
 - **Живые пины.** `live*Sha256`/`patched*Sha256` в `patch_live_lk1_topokraty_*_hotfix.mjs` и
   `HUB_PREIMAGES`/`preimages.json`/`PLAN_RULES_TARGETS` не тронуты: они пересчитываются при
   свежем pull и повторном review, иначе патчеры падают на preimage-guard.
+- **Reviewed-пины поколения Patriots.** В `patch_live_lk1_patriots_friendship.mjs` перепинён
+  только `reviewedPreviewSource` (изменённые байты роутера, 2026-10-05). Остальные его
+  reviewed-source пины (`reviewedGatewaySource`, `reviewedGatewayHooksSource`,
+  `reviewedEvaluatorSource`) остаются от 2026-10-02 и уже не совпадают с рабочим деревом после
+  изменений предыдущих коммитов этой ветки; Patriots-композиция поэтому и раньше не проходила
+  локально. Перед применением Patriots их надо пересчитать вместе с живым preimage, а не
+  подтягивать к текущей ветке вслепую.
 - **Кэш станции вне таблицы.** Резолвер читает кэш из
   `global "subscriptions_lk1_court_service:<stationId>"` со значением
   `JSON.stringify({ masterServiceId, subServiceIds: [subServiceId], roomId })`, но ни один
