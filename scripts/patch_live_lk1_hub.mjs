@@ -63,7 +63,8 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
   const gateway = hubGatewaySource().split('// HUB_STEPS');
   if (gateway.length !== 2) throw new Error('HUB gateway fragment drift');
   out.gateway = replace(out.gateway, 'const ctx = isObj(msg._subscriptionBooking)',
-    bookingReadbackSource() + visitLifecycleRuntimeSource() + visitConfirmationSource() + hooks.HELPERS + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
+    bookingReadbackSource() + visitLifecycleRuntimeSource() + visitConfirmationSource()
+    + hooks.HELPERS + '\n' + hooks.COURT_WINDOW + '\n' + transition.reader + '\n' + gateway[0] + '\nconst ctx = isObj(msg._subscriptionBooking)');
   out.gateway = replace(out.gateway, 'if (ctx.step === "profile") {',
     gateway[1] + '\nif (ctx.step === "profile") {');
   out.gateway = replace(out.gateway, '  if (ctx.action === "release") {\n    return prepareUserGet(ctx, "active_bookings"',
@@ -78,6 +79,10 @@ export function patchHubSources(source, policy = { expectedPrior: null, desired:
     hooks.EXERCISE + '\n  const ownedSubscription = findOwnedSubscription(exercise, ctx.clientSubscriptionId);');
   out.gateway = replace(out.gateway, 'if (ctx.step === "exercise_recheck") {',
     'if (ctx.step === "exercise_recheck") {\n' + hooks.RECHECK);
+  // The court-window proof steps are dispatched by `ctx.step` like every other step, so they
+  // are carried beside the recheck rather than inside a step body of another generation.
+  out.gateway = replace(out.gateway, 'if (ctx.step === "exercise_recheck") {',
+    'if (ctx.step === "exercise_recheck") {\n' + hooks.COURT_WINDOW_RESPONSE);
   out.gateway = replace(out.gateway, '  delete ctx.activeBookingsPayload;',
     '  delete ctx.activeBookingsPayload;\n' + hooks.HISTORY);
   out.gateway = replace(out.gateway, 'const preparePreaccept = (ctx) => {\n  const now = new Date();',

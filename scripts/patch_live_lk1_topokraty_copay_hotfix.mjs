@@ -1,36 +1,44 @@
 #!/usr/bin/env node
 
-// Focused Node-RED generation: the club co-pay of «Дружба Топократы» becomes chargeable.
+// Focused Node-RED generation: the club co-pay of «Дружба Топократы» becomes chargeable at the
+// court hour the owner fixed on 2026-10-05.
 //
 // Owner decision 2026-09-26 / incident 2026-09-25: a Topokraty training (direction 6233) is
 // bookable with the club product 14692232-12be-4218-9fa1-2d5b79b62035 — the free hour is carried
-// by the subscription visit and everything above it is billed as a quarter-of-court co-pay with
-// the decision's own percent. The contour that priced that rule was generated and then rolled
-// back because the *money mandate* it needs was never installed: the live body carried only the
-// reviewed `lk1EventPaymentBinding`, while `lk1ClubEventPaymentBinding` / `lk1EventPaymentQuoteBinding`
-// (PR #153, already in `scripts/nodered_lk1_hub_nodes/event_payments.js` and called from
-// `gateway.js`) were missing from the installed flow. Without them a charged club event fails
-// the money readback, so the co-pay could not be collected at all.
+// by the subscription visit and everything above it is billed as a co-pay. The contour that
+// priced that rule was generated and then rolled back because the *money mandate* it needs was
+// never installed: the live body carried only the reviewed `lk1EventPaymentBinding`, while
+// `lk1ClubEventPaymentBinding` / `lk1EventPaymentQuoteBinding` (PR #153, already in
+// `scripts/nodered_lk1_hub_nodes/event_payments.js` and called from `gateway.js`) were missing
+// from the installed flow. Without them a charged club event fails the money readback, so the
+// co-pay could not be collected at all.
+//
+// Owner decision 2026-10-05 corrects the co-pay itself: the second hour of a Skolkovo training
+// costs 1 500 ₽ (a quarter of the 6 000 ₽ hourly court price), not the pro-rata quarter of the
+// 4 000 ₽ exercise one-time tariff that produced 500 ₽. The co-pay base therefore has to be the
+// HOURLY COURT PRICE proven server-side for the event's station, room and window, and the
+// reviewed gateway proves it through the same master-service price lookup the split game uses.
+// An unprovable court price fails closed with `LK1_COURT_PRICE_UNRESOLVED`.
 //
 // This generation stacks on the installed 2026-09-25 rejection/reclaim generation
-// (`9d2487a4…`) and changes exactly three fields of three nodes:
+// (`9d2487a4…`) and changes exactly four fields of four nodes:
 //   1. `lk_subscription_booking_router_20260804.func` — the reviewed club money mandate
 //      (both functions, inserted verbatim from the reviewed source, plus the five call sites
-//      switched to the quote resolver) and the reviewed club contour deltas
+//      switched to the quote resolver), the reviewed club contour deltas
 //      (`exerciseDirectionId` helper, `directionId` in the server-resolved target, the
-//      decision-percent helper and the quote comparison that uses it);
+//      decision-percent helper and the quote comparison that uses it), and the reviewed
+//      court-window proof (the master-service window price plus its anchored steps);
 //   2. `lk_subscription_booking_router_20260804.initialize` — the plan-rules writer is
 //      replaced by the guarded 7→8 rule transition naming the club product (`planKey`
 //      `topocraty`), accepting the empty post-restart context of 147;
 //   3. `lk_subscription_managed_policy_20260820.func` — the embedded LK1 copy is replaced by
-//      the reviewed evaluator with the club training branch (shared free hour + quarter-of-court
-//      co-pay, full price once the hour is unavailable);
-// The preview node is deliberately NOT changed. Recomposing it on the patched generation and
-// re-applying the 2026-09-25 Topokraty exclusion reproduces the installed body byte for byte
-// (`7605df8c…`), so the generation proves that equality instead of rewriting the node: the club
-// recomposition result is exactly the reviewed club preview (`272b32b9…`) plus the exclusion
-// delta the installed generation already carries. The shared preview sources stay untouched, so
-// the frozen candidates of the earlier generations cannot move.
+//      the reviewed evaluator with the club training and club game branches (shared free hour
+//      plus the quarter-of-the-hourly-court-price co-pay, full price once the hour is
+//      unavailable);
+//   4. `lk_subscription_price_preview_20260908_router.func` — recomposed on the patched
+//      generation and re-applying the installed Topokraty exclusion, because the advisory
+//      quote must prove the same court hour and quote the same co-pay as the write path. The
+//      recomposition is refused unless it reproduces the installed body plus that one delta.
 //
 // Preparation only: nothing is deployed, imported or restarted here, and the patcher fails
 // closed unless the preimage is exactly the reviewed installed flow (`9d2487a4…`).
@@ -47,6 +55,7 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import {
   TOPOKRATY_REVERT_INITIALIZE_POSTIMAGE_SHA256,
   TOPOKRATY_TARGET as REVIEWED_CLUB_TARGET,
+  patchTopokratyCourtWindowBody,
   patchTopokratyEvaluatorBody,
   patchTopokratyGatewayBody,
   patchTopokratyGatewayInitialize,
@@ -94,7 +103,7 @@ export const TOPOKRATY_COPAY_CLUB_MARKER = "lk1ClubEventPaymentBinding";
 const CLUB_FRAGMENT_START = "// The club training («Дружба Топократы», direction 6233) spends the free hour";
 const CLUB_FRAGMENT_END = "  lk1ClubEventPaymentBinding(ctx, quote) || lk1EventPaymentBinding(ctx, quote);\n";
 export const TOPOKRATY_COPAY_CLUB_FRAGMENT_SHA256 =
-  "e4408e472ec708a8587ad3f343f0bb8c3bcfdaff64a8058903f314d33cf61017";
+  "7c2ae5e1b83bea1153a45b5874f0978490eff946946163146ae6a86b41e7de51";
 
 // The end of the installed legacy binding: the club mandate is inserted right after it, so the
 // quote resolver can fall back to the reviewed binding it already knows.
@@ -220,7 +229,11 @@ export function patchTopokratyCopayBookingBody(source, target = TOPOKRATY_COPAY_
   const withMoney = applyDeltas(withContour,
     [{ id: "club-money-fragment", before: LEGACY_BINDING_END,
       after: `${LEGACY_BINDING_END}\n${clubMoneyFragment()}` }], "Topokraty co-pay money");
-  const patched = applyDeltas(withMoney, CALL_SITE_DELTAS, "Topokraty co-pay call sites");
+  const withCalls = applyDeltas(withMoney, CALL_SITE_DELTAS, "Topokraty co-pay call sites");
+  // 3. The court-window proof of the 2026-10-05 owner decision: the same reviewed hooks code
+  //    the hub composition embeds, anchored on the installed body. Without it the club co-pay
+  //    would have no server-proven hourly court price and would fail closed.
+  const patched = patchTopokratyCourtWindowBody(withCalls);
   if (patched.split("const lk1EventPaymentBinding = (ctx, quote = ctx.lk1) => {").length !== 2) {
     throw new Error("The legacy binding must stay declared exactly once");
   }
@@ -302,21 +315,9 @@ export function composeTopokratyCopayArtifacts(rawSource, options = {}) {
   if (JSON.stringify({ ...preview, func: null }) !== JSON.stringify(previewShape)) {
     throw new Error("Preview node changed a field other than func");
   }
-  assertFunctionBody(booking.func, "Patched booking gateway body");
-  assertFunctionBody(booking.initialize, "Patched gateway initialize body");
-  assertFunctionBody(evaluator.func, "Patched evaluator body");
-  assertFunctionBody(preview.func, "Patched preview body");
-  if (options.assertPostimages !== false) {
-    assertPostimage(booking.func, options.patchedFuncSha256 ?? TOPOKRATY_COPAY_TARGET.patchedFuncSha256, "Booking");
-    assertPostimage(booking.initialize, options.patchedInitializeSha256 ?? TOPOKRATY_COPAY_TARGET.patchedInitializeSha256, "Initialize");
-    assertPostimage(evaluator.func, options.patchedEvaluatorFuncSha256 ?? TOPOKRATY_COPAY_TARGET.patchedEvaluatorFuncSha256, "Evaluator");
-    if (sha256(preview.func) !== TOPOKRATY_COPAY_TARGET.livePreviewFuncSha256) {
-      throw new Error("Preview must stay byte-identical to the installed body");
-    }
-  }
-
-  // Provenance of the untouched preview: the club recomposition of the patched generation plus
-  // the installed exclusion delta has to reproduce the installed body exactly.
+  // The advisory preview must quote the same co-pay the write path commits, so it is
+  // recomposed from the patched bodies and re-applies the installed Topokraty exclusion: a
+  // recomposition that does not reproduce the installed body plus that one delta is refused.
   const recomposed = previewSources(flow, {
     pins: {
       booking: sha256(booking.func),
@@ -326,12 +327,26 @@ export function composeTopokratyCopayArtifacts(rawSource, options = {}) {
     },
     installedUsageSha256: options.installedUsageSha256 ?? TOPOKRATY_COPAY_PREVIEW_INSTALLED.allowanceBlockSha256,
   });
-  const recomposedWithExclusion = patchTopokratyCopayPreviewBody(recomposed.router);
-  if (recomposedWithExclusion !== preview.func) {
-    throw new Error(`Installed preview is not the club recomposition plus the exclusion delta: `
-      + `${sha256(recomposedWithExclusion)} != ${sha256(preview.func)}`);
+  preview.func = patchTopokratyCopayPreviewBody(recomposed.router);
+  if (JSON.stringify({ ...preview, func: null }) !== JSON.stringify(previewShape)) {
+    throw new Error("Preview node changed a field other than func");
   }
-  if (sha256(preview.func) !== beforePreviewFunc) throw new Error("Preview changed while proving provenance");
+  assertFunctionBody(booking.func, "Patched booking gateway body");
+  assertFunctionBody(booking.initialize, "Patched gateway initialize body");
+  assertFunctionBody(evaluator.func, "Patched evaluator body");
+  assertFunctionBody(preview.func, "Patched preview body");
+  if (options.assertPostimages !== false) {
+    assertPostimage(booking.func, options.patchedFuncSha256 ?? TOPOKRATY_COPAY_TARGET.patchedFuncSha256, "Booking");
+    assertPostimage(booking.initialize, options.patchedInitializeSha256 ?? TOPOKRATY_COPAY_TARGET.patchedInitializeSha256, "Initialize");
+    assertPostimage(evaluator.func, options.patchedEvaluatorFuncSha256 ?? TOPOKRATY_COPAY_TARGET.patchedEvaluatorFuncSha256, "Evaluator");
+    assertPostimage(preview.func, options.patchedPreviewFuncSha256 ?? TOPOKRATY_COPAY_TARGET.patchedPreviewFuncSha256, "Preview");
+  }
+  if (sha256(preview.func) === beforePreviewFunc) {
+    throw new Error("The preview must change with the club court-hourly decision");
+  }
+  if (!preview.func.includes("const courtCoPay = decision.benefit?.kind === 'COURT_HOURLY_COPAY'")) {
+    throw new Error("The preview must carry the club court-hourly decision");
+  }
 
   const changes = [
     { id: TOPOKRATY_COPAY_GATEWAY_ID, fields: ["func", "initialize"],
@@ -339,6 +354,8 @@ export function composeTopokratyCopayArtifacts(rawSource, options = {}) {
       initialize: { beforeSha256: beforeInitialize, afterSha256: sha256(booking.initialize) } },
     { id: TOPOKRATY_COPAY_EVALUATOR_ID, fields: ["func"],
       func: { beforeSha256: beforeEvaluatorFunc, afterSha256: sha256(evaluator.func) } },
+    { id: TOPOKRATY_COPAY_PREVIEW_ID, fields: ["func"],
+      func: { beforeSha256: beforePreviewFunc, afterSha256: sha256(preview.func) } },
   ];
   const allowedChanges = changes.map((row) => ({ id: row.id, fields: [...row.fields] }));
   const candidateBytes = Buffer.from(`${JSON.stringify(flow, null, 2)}\n`);
@@ -370,8 +387,8 @@ export function composeTopokratyCopayArtifacts(rawSource, options = {}) {
     },
     preview: {
       id: TOPOKRATY_COPAY_PREVIEW_ID,
-      unchanged: true,
-      matchesClubRecomposition: recomposedWithExclusion === preview.func,
+      courtHourlyBound: preview.func.includes("const courtCoPay = decision.benefit?.kind === 'COURT_HOURLY_COPAY'")
+        && preview.func.includes("LK1_COURT_PRICE_UNRESOLVED"),
       topokratyExclusionKept: preview.func.includes("isTopokratyExercise(exercise)")
         && preview.func.includes("isTopokratyClubPack(topokratyClubRow)"),
       proTrainingKept: preview.func.includes("canonical.isProTrainingExercise"),
@@ -447,14 +464,14 @@ export function buildTopokratyCopayReport({ sourceSha256, sourceNodeCount, built
       evaluator: { id: TOPOKRATY_COPAY_EVALUATOR_ID,
         func: { beforeSha256: TOPOKRATY_COPAY_TARGET.liveEvaluatorFuncSha256,
           afterSha256: built.changes[1].func.afterSha256 } },
-      preview: { id: TOPOKRATY_COPAY_PREVIEW_ID, unchanged: true,
+      preview: { id: TOPOKRATY_COPAY_PREVIEW_ID,
         func: { beforeSha256: TOPOKRATY_COPAY_TARGET.livePreviewFuncSha256,
-          afterSha256: TOPOKRATY_COPAY_TARGET.livePreviewFuncSha256 } },
+          afterSha256: built.changes[2].func.afterSha256 } },
     },
     upstreamFlowSha256: TOPOKRATY_COPAY_UPSTREAM_SHA256,
     sourceSha256, candidateSha256: built.candidateSha256,
     sourceNodeCount, candidateNodeCount: built.flow.length,
-    changedNodeCount: built.changes.length, expectedChangedNodeCount: 2, addedNodeCount: built.addedNodeCount,
+    changedNodeCount: built.changes.length, expectedChangedNodeCount: 3, addedNodeCount: built.addedNodeCount,
     changes: built.changes, booking: built.booking, evaluator: built.evaluator, preview: built.preview,
     planRulesActivation: { key: "subscriptions_lk1_plan_rules", expectedPriorRuleCount: 7, desiredRuleCount: 8,
       clubProductId: "14692232-12be-4218-9fa1-2d5b79b62035" },

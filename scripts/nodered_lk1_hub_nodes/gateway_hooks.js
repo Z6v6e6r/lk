@@ -94,6 +94,99 @@ const lk1MongoInserted = (value, expectedId) => isObj(value)
   && Object.keys(value).length === 2 && value.acknowledged === true
   && typeof value.insertedId === "string" && value.insertedId === expectedId;
 
+// HUB_COURT_WINDOW
+// The club co-pay of «Дружба Топократы» (directions 6233 training and 6180 game) is charged
+// against the HOURLY court price (owner decision 2026-10-05). The only server-owned money a
+// booking can prove is the whole total of a station+room+window master-service price lookup,
+// so the hub performs the same lookup the split game already performs for its ordinary share
+// and keeps the verified window total. `lk1Quote` derives the hourly price from it
+// (`total x 60 / durationMinutes`), never from the exercise one-time tariff. A station whose
+// master service is not resolvable stays unresolved and the club charge fails closed with
+// `LK1_COURT_PRICE_UNRESOLVED`; nothing here falls back to the tariff that produced the 500 P
+// co-pay. A static station table (the same one the onboarding node publishes) answers in one
+// request and the resolved pair is cached per station, because the mapping is static.
+const lk1CourtMasterServices = Object.freeze({
+  "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1": { masterServiceId: "2f4155ad-7bc0-4a15-a12c-da7fce15c37a", subServiceId: "415edff9-b4ad-4d88-8709-75f1ab7d4081" },
+  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab": { masterServiceId: "e2caa535-6660-479a-bd32-3638ba7f6b89", subServiceId: "96d2179a-5a96-41bd-a0c9-1df9e5890e16" },
+  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab": { masterServiceId: "22b928b2-1ba6-4491-bc43-756676fcd723", subServiceId: "4d1df04c-774f-46ff-93bd-fd1cca0cb1c4" },
+  "42c6d4df-833d-480a-bdc8-986716569884": { masterServiceId: "1c54e3b4-0421-482e-8faf-0c1cd5fdaf3d", subServiceId: "59fdd182-ce16-4c37-a814-a45cb026d24d" },
+  "588b6151-f4f5-47d9-9449-80edf8cbc748": { masterServiceId: "d9a5061a-e027-4960-9029-4bf5ec8a0c64", subServiceId: "2689586b-e7f6-4389-bdd2-5c1a35d4c0e7" },
+  "3656cbaa-6426-490f-a44f-915404cbdd2b": { masterServiceId: "cf54da75-52dd-48bb-861e-c6d53abc052a", subServiceId: "8fd8fe7b-9563-4b56-836c-1b63fe4698f5" },
+  "1ea77cbf-bc36-49a1-96d6-f35c216a409b": { masterServiceId: "899db365-5286-43f6-a3a4-efcf406a28eb", subServiceId: "6a16a7a8-db84-422d-b5f8-5fd00fe0d54c" },
+  "233c1405-1eac-40de-8ec6-1cf7e24c9276": { masterServiceId: "86e13da6-2282-4daf-9239-c0cd3ddefaf7", subServiceId: "50d7e7a0-39ea-4ccd-a912-a6ddb77fa3ed" },
+});
+const LK1_COURT_WINDOW_CACHE_PREFIX = "subscriptions_lk1_court_service:";
+const lk1CourtWindowClubProductId = "14692232-12be-4218-9fa1-2d5b79b62035";
+const lk1CourtWindowClubDirections = [6233, 6180];
+const lk1CourtWindowId = (value) => {
+  const text = toStr(value);
+  return text && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(text) ? text : null;
+};
+// The master service is answered from the reviewed table so the hub needs no extra round trip;
+// `global` only allows a future station to be resolved once without a code change. An unknown
+// station stays unresolved: the price is never guessed from the event tariff.
+const lk1CourtWindowService = (stationId, roomId) => {
+  const mapped = stationId ? lk1CourtMasterServices[toStr(stationId)] || null : null;
+  if (mapped && lk1CourtWindowId(mapped.masterServiceId) && lk1CourtWindowId(mapped.subServiceId)) {
+    return { masterServiceId: mapped.masterServiceId, subServiceIds: [mapped.subServiceId] };
+  }
+  try {
+    const raw = global.get(`${LK1_COURT_WINDOW_CACHE_PREFIX}${toStr(stationId)}`);
+    const cached = typeof raw === "string" ? JSON.parse(raw) : null;
+    if (isObj(cached) && cached.roomId === toStr(roomId) && lk1CourtWindowId(cached.masterServiceId)
+      && Array.isArray(cached.subServiceIds) && cached.subServiceIds.length === 1
+      && lk1CourtWindowId(cached.subServiceIds[0])) {
+      return { masterServiceId: cached.masterServiceId, subServiceIds: [cached.subServiceIds[0]] };
+    }
+  } catch (_) { /* unresolved */ }
+  return { masterServiceId: null, subServiceIds: [] };
+};
+const lk1CourtWindowTime = (exercise, kind) => {
+  const text = toStr(kind === "from" ? exercise?.timeFrom : exercise?.timeTo);
+  const clock = text && text.length >= 16 && text[10] === "T" ? text.slice(11, 16) : null;
+  return clock && /^([01]\d|2[0-3]):[0-5]\d$/.test(clock) ? clock : null;
+};
+const lk1CourtWindowDate = (exercise) => {
+  const text = toStr(exercise?.timeFrom);
+  return text && text.length >= 10 ? text.slice(0, 10) : null;
+};
+const lk1CourtWindowUrl = (service, stationId, roomId, exercise) => {
+  const date = lk1CourtWindowDate(exercise);
+  const fromTime = lk1CourtWindowTime(exercise, "from");
+  const toTime = lk1CourtWindowTime(exercise, "to");
+  if (!service.masterServiceId || !service.subServiceIds.length || !date || !fromTime || !toTime) return null;
+  return `${VIVA_API_BASE}/api/v1/studios/${encodeURIComponent(stationId)}`
+    + `/rooms/${encodeURIComponent(roomId)}/sub-services/${encodeURIComponent(service.subServiceIds[0])}/price`
+    + `?fromDate=${encodeURIComponent(date)}&fromTime=${encodeURIComponent(fromTime)}`
+    + `&toTime=${encodeURIComponent(toTime)}&size=100`;
+};
+// The club co-pay needs the hour of court for the training direction 6233 and for the club
+// game direction 6180 alike (owner decision 2026-10-05), and only for those directions: a club
+// tournament keeps its configured discount and must not pay for a court hour. The price is
+// fetched once per request: a target that already carries the hour (or a proof that already
+// carries the whole window) is left alone, so a resumed request is priced from the same evidence.
+const lk1CourtWindowNeeded = (ctx) => {
+  if (!ctx.lk1 || !ctx.lk1TariffProof) return false;
+  if (toStr(ctx.lk1.rule?.productId)?.toLowerCase() !== lk1CourtWindowClubProductId) return false;
+  if (!["GROUP_TRAINING", "GAME"].includes(ctx.lk1.target?.category)) return false;
+  if (!lk1CourtWindowClubDirections.includes(Number(ctx.lk1.target?.directionId))) return false;
+  if (Number.isSafeInteger(ctx.lk1.target?.hourlyCourtPriceMinor)
+    && ctx.lk1.target.hourlyCourtPriceMinor > 0) return false;
+  return !(Number.isSafeInteger(ctx.lk1TariffProof.windowTotalMinor)
+    && ctx.lk1TariffProof.windowTotalMinor > 0);
+};
+// The window total is the only money this proof may carry, and it must be a whole positive
+// number of minor units. The response is not repeated against the request identity here: the
+// request URL already binds station, room and window, and the step that consumes this payload
+// has proved the URL it answered. The ceiling keeps a malformed or promotional payload from
+// entering the shared arithmetic as an absurd amount.
+const lk1CourtWindowTotal = (payload) => {
+  if (!isObj(payload)) return null;
+  const total = Number(payload.total);
+  if (!Number.isSafeInteger(total) || total <= 0 || total > 10_000_000) return null;
+  return total;
+};
+
 // HUB_PROFILE
 // HTTP and split ingress rebuild server contexts from explicit allowlists.
 // Never honor a client-supplied skip/read-complete marker at profile entry.
@@ -134,6 +227,78 @@ if (internalCreate) {
   });
 }
 ctx.step = "lk1_profile_continue";
+// The club co-pay needs one more server-owned number than the event tariff: the whole price
+// of the event's court window. It is proved before the ownership readback, so every later
+// step (including the stored fingerprint) prices the same target.
+if (ctx.lk1 && ctx.actorClientId && lk1CourtWindowNeeded(ctx)) {
+  return startLk1CourtWindowFetch(ctx);
+}
+
+// HUB_COURT_WINDOW_RESPONSE
+// The court-window proof sits beside the tariff steps because it is the same kind of evidence:
+// one server GET, bound to the event's station, room and window and consumed through
+// `lk1Quote`. A club game already proves its window through the split master-service price
+// lookup (`lk1TariffProof.windowTotalMinor`), so only a club event without that proof fetches
+// here. Every failed or ambiguous answer refuses with `LK1_COURT_PRICE_UNRESOLVED`.
+const lk1CourtWindowEndTime = (exercise) => {
+  const clock = lk1CourtWindowTime(exercise, "from");
+  const duration = Number(exercise?.durationMinutes);
+  if (!clock || !Number.isInteger(duration) || duration <= 0) return null;
+  const [hour, minute] = clock.split(":").map(Number);
+  const end = hour * 60 + minute + duration;
+  const endHour = String(Math.floor(end / 60) % 24).padStart(2, "0");
+  const endMinute = String(end % 60).padStart(2, "0");
+  return `${endHour}:${endMinute}`;
+};
+function startLk1CourtWindowFetch(ctx) {
+  const proof = isObj(ctx.lk1TariffProof) ? ctx.lk1TariffProof : null;
+  const exercise = ctx.lk1CourtExercise || (proof
+    ? { id: ctx.exerciseId, timeFrom: proof.startsAt, timeTo: lk1CourtWindowEndTime(proof),
+      durationMinutes: proof.durationMinutes, roomId: proof.roomId, studioId: proof.stationId }
+    : null);
+  const stationId = toStr(ctx.studioId || exercise?.studioId);
+  const roomId = toStr(ctx.roomId || exercise?.roomId || exerciseRoomId(exercise));
+  const service = lk1CourtWindowService(stationId, roomId);
+  const url = service.masterServiceId && service.subServiceIds.length && exercise
+    ? lk1CourtWindowUrl(service, stationId, roomId, exercise) : null;
+  if (!lk1CourtWindowId(stationId) || !lk1CourtWindowId(roomId) || !url) {
+    return lk1Stop(ctx, "LK1_COURT_PRICE_UNRESOLVED");
+  }
+  ctx.lk1CourtExercise = exercise;
+  ctx.lk1CourtService = service;
+  ctx.step = "lk1_court_window";
+  return prepareAdminGet(ctx, "lk1_court_window", url);
+}
+if (ctx.step === "lk1_court_window") {
+  const exercise = ctx.lk1CourtExercise;
+  const service = isObj(ctx.lk1CourtService) ? ctx.lk1CourtService
+    : lk1CourtWindowService(ctx.studioId, ctx.roomId);
+  const requestedUrl = lk1CourtWindowUrl(service, toStr(ctx.studioId), toStr(ctx.roomId), exercise);
+  if (!isHttpOk(msg.statusCode) || !requestedUrl
+    || (msg.url !== undefined && msg.url !== requestedUrl)
+    || (msg.responseUrl !== undefined && msg.responseUrl !== requestedUrl)) {
+    return lk1Stop(ctx, "LK1_COURT_PRICE_UNRESOLVED");
+  }
+  const total = lk1CourtWindowTotal(msg.payload);
+  if (total === null) return lk1Stop(ctx, "LK1_COURT_PRICE_UNRESOLVED");
+  return lk1CourtWindowStoreProof(ctx, exercise, total);
+}
+function lk1CourtWindowStoreProof(ctx, exercise, total) {
+  const durationMinutes = eventDurationMinutes(exercise);
+  const startsAt = eventStartsAt(exercise);
+  if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(durationMinutes)
+    || durationMinutes <= 0 || !startsAt || !Number.isFinite(Date.parse(startsAt))) {
+    return lk1Stop(ctx, "LK1_COURT_PRICE_UNRESOLVED");
+  }
+  ctx.lk1TariffProof = { ...(isObj(ctx.lk1TariffProof) ? ctx.lk1TariffProof : {}),
+    source: "VIVA_EXISTING_TARIFF", windowTotalMinor: total,
+    stationId: toStr(ctx.studioId), roomId: toStr(ctx.roomId),
+    durationMinutes, startsAt, observedAt: Date.now() };
+  delete ctx.lk1CourtExercise;
+  delete ctx.lk1CourtService;
+  ctx.step = "profile";
+  return false;
+}
 
 // HUB_EXERCISE
 // Resolve the instance first. PRO monetary eligibility is checked only after fresh

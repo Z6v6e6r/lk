@@ -60,6 +60,27 @@ const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {
     || !Number.isInteger(decision.eventDiscountPercent)
     || decision.eventDiscountPercent < 0 || decision.eventDiscountPercent > 100) return null;
   const percent = decision.eventDiscountPercent;
+  // Owner decision 2026-10-05: the club co-pay is a quarter of the HOURLY court price for every
+  // chargeable hour, not a share of the event tariff. Its amount is reproduced here from the
+  // decision's own numbers so the carrier can never be asked for a charge the decision did not
+  // fix; the discount stays `base - charge` and therefore stays non-negative because the amount
+  // is bounded by the base price.
+  if (decision.benefit?.kind === "COURT_HOURLY_COPAY") {
+    const calculation = decision.benefit.partialPriceCalculation;
+    const hourly = calculation?.hourlyCourtPriceMinor;
+    const perHour = calculation?.perHourMinor;
+    const hours = calculation?.chargeableHours;
+    const chargeMinor = Number.isSafeInteger(hourly) && hourly > 0
+      && Number.isSafeInteger(perHour) && perHour === Math.floor(hourly / 4)
+      && Number.isSafeInteger(hours) && hours > 0
+      ? perHour * hours : null;
+    // The co-pay exists only over a spent free visit: a charge with no visit is not this shape.
+    if (decision.subscriptionVisitCount !== 1
+      || chargeMinor === null || chargeMinor <= 0 || chargeMinor > base
+      || decision.benefit.finalPriceMinor !== chargeMinor) return null;
+    return { productId: target.priceProductId, productType: "SERVICE", baseMinor: base,
+      chargeMinor, discountMinor: base - chargeMinor };
+  }
   const share = decision.benefit?.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT"
     && decision.subscriptionVisitCount === 1 ? decision.gameMinutes : null;
   let chargeMinor = null;

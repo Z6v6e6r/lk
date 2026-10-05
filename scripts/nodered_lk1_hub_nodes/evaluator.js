@@ -36,8 +36,42 @@ const floorRatio = (amount, numerator, denominator) => {
 // and consumes no visit (owner decision 2026-09-26).
 const TOPOKRATY_FRIENDSHIP_PRODUCT_ID = "14692232-12be-4218-9fa1-2d5b79b62035";
 const TOPOKRATY_TRAINING_DIRECTION_IDS = [6233];
-const TOPOKRATY_TRAINING_COURT_PAY_PERCENT = 25;
-const TOPOKRATY_TRAINING_DISCOUNT_PERCENT = 100 - TOPOKRATY_TRAINING_COURT_PAY_PERCENT;
+// Owner decision 2026-10-05 (supersedes the pro-rata co-pay of 2026-09-26): every chargeable
+// hour above the free visit costs exactly ONE QUARTER OF THE HOURLY COURT PRICE. The base of
+// the co-pay is the hourly court price proven server-side for the event's station, room and
+// time (`target.hourlyCourtPriceMinor`, the verified window total divided by the window
+// hours) — never the exercise one-time tariff and never the player's court share. The free
+// visit logic of the club branch (the shared daily bucket, the active-bookings cap and the
+// 90-minute club game visit) stays exactly as reviewed: only the charged amount changes.
+const TOPOKRATY_COURT_HOUR_PAY_DIVISOR = 4;
+const TOPOKRATY_HOURLY_COURT_PRICE_REQUIRED =
+  "Стоимость часа корта для клубной доплаты не подтверждена";
+// Every started chargeable hour costs the same quarter of the hourly court price; a
+// fractional hourly court price is floored once, so the arithmetic is a flat hourly price
+// and never a re-scaling of a longer window.
+const topokratyChargeableHours = (paidOverageMinutes) => {
+  const minutes = toNonNegativeInt(paidOverageMinutes);
+  return minutes === null || minutes <= 0 ? 0 : Math.ceil(minutes / 60);
+};
+const topokratyChargePerHourMinor = (hourlyCourtPriceMinor) => {
+  const hourly = toNonNegativeInt(hourlyCourtPriceMinor);
+  return hourly === null || hourly <= 0
+    ? null : Math.floor(hourly / TOPOKRATY_COURT_HOUR_PAY_DIVISOR);
+};
+const topokratyCourtCoPayMinor = (hourlyCourtPriceMinor, paidOverageMinutes) => {
+  const perHour = topokratyChargePerHourMinor(hourlyCourtPriceMinor);
+  const hours = topokratyChargeableHours(paidOverageMinutes);
+  return perHour === null || hours <= 0 ? null : perHour * hours;
+};
+// The hourly court price of a verified court window: a whole window total is the only
+// server-owned money, so the hour is derived from it exactly as the gateway and the preview
+// do, and the result must stay an exact integer number of minor units.
+const topokratyHourlyCourtPriceMinor = (courtWindowTotalMinor, durationMinutes) => {
+  const total = toNonNegativeInt(courtWindowTotalMinor);
+  const minutes = toNonNegativeInt(durationMinutes);
+  if (total === null || total <= 0 || minutes === null || minutes <= 0) return null;
+  return Math.round(total * 60 / minutes);
+};
 // Owner decision 2026-10-01: the club game direction 6180 «Топократы игра» is covered by the
 // visit mechanism of a game instead of the free-first-event rule of a group event. A game of
 // up to 90 minutes is carried whole by exactly one visit; a longer game keeps the shared
@@ -223,17 +257,24 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
         // The shared 60-minute day bucket, exactly as the standard GAME branch computes it.
         const freeMinutes = Math.min(duration, Math.max(0, rule.freeGameMinutesPerDay - used));
         const paidOverageMinutes = duration - freeMinutes;
+        const chargeableHours = topokratyChargeableHours(paidOverageMinutes);
+        const perHourMinor = topokratyChargePerHourMinor(target?.hourlyCourtPriceMinor);
         decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
           freeMinutes, paidOverageMinutes, discountPercent: 0 };
         decision.subscriptionVisitCount = 1;
-        if (productBound && target?.priceSource === "VIVA_EXISTING_TARIFF") {
-          // Percentage 0: the player pays 100 % of their share for the minutes above the free
-          // hour, so the partial-price discount is the charged share itself.
-          selectedRule = { ruleId: "lk1-topokraty-game", kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
-            partialPrice: { numerator: paidOverageMinutes, denominator: duration }, percentage: 0 };
-        } else {
-          block("LK1_GAME_OVERAGE_ALLOCATION_UNBOUND", "Применение услуги к платной части игры не подтверждено");
+        if (chargeableHours <= 0) {
+          selectedRule = { ruleId: "lk1-topokraty-game", kind: "FREE_ENTITLEMENT" };
+        } else if (!productBound || target?.priceSource !== "VIVA_EXISTING_TARIFF"
+          || perHourMinor === null) {
+          // Owner decision 2026-10-05: the paid part is the hour of court, not the player's
+          // share. Without a server-proven hourly court price the club rule fails closed
+          // instead of inventing a base.
+          block("LK1_COURT_PRICE_UNRESOLVED", TOPOKRATY_HOURLY_COURT_PRICE_REQUIRED);
           selectedRule = null;
+        } else {
+          selectedRule = { ruleId: "lk1-topokraty-game", kind: "COURT_HOURLY_COPAY",
+            courtCoPay: { hourlyCourtPriceMinor: toNonNegativeInt(target.hourlyCourtPriceMinor),
+              chargeableHours, perHourMinor } };
         }
       }
     } else if (duration && Number.isSafeInteger(rule.freeGameMinutesPerDay)) {
@@ -280,24 +321,30 @@ if (input && Object.prototype.hasOwnProperty.call(input, "lk1Policy")) {
       const freeMinutes = aboveActiveLimit
         ? 0 : Math.min(duration, Math.max(0, rule.freeGameMinutesPerDay - used));
       const paidOverageMinutes = duration - freeMinutes;
-      decision.gameMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
-        freeMinutes, paidOverageMinutes, discountPercent: TOPOKRATY_TRAINING_DISCOUNT_PERCENT };
+      // The free hour is spent first under the shared daily bucket; the day accounting reads
+      // exactly the free minutes this decision consumes, in its own reviewed field, so the
+      // club co-pay and the allowance accumulator cannot drift apart.
+      decision.courtMinutes = { localDate: day, usedOrReservedFreeMinutesToday: used,
+        freeMinutes, paidOverageMinutes };
       decision.subscriptionVisitCount = freeMinutes > 0 ? 1 : 0;
+      const chargeableHours = topokratyChargeableHours(paidOverageMinutes);
+      const perHourMinor = topokratyChargePerHourMinor(target?.hourlyCourtPriceMinor);
       if (freeMinutes === 0) {
         // No free hour left: the full one-time price, no visit and no discount.
         selectedRule = { ruleId: "lk1-topokraty-training", kind: "PERCENT_DISCOUNT", percentage: 0 };
-      } else if (paidOverageMinutes === 0) {
+      } else if (chargeableHours <= 0) {
         selectedRule = { ruleId: "lk1-topokraty-training", kind: "FREE_ENTITLEMENT" };
-      } else if (productBound && target?.priceSource === "VIVA_EXISTING_TARIFF") {
-        // The co-pay is a quarter of the court price for the time above the free hour,
-        // pro rata to the event duration (1 - 1/4 stays as the discount on that part).
-        selectedRule = { ruleId: "lk1-topokraty-training", kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
-          partialPrice: { numerator: paidOverageMinutes, denominator: duration },
-          percentage: TOPOKRATY_TRAINING_DISCOUNT_PERCENT };
-      } else {
-        block("LK1_GAME_OVERAGE_ALLOCATION_UNBOUND",
-          "Применение услуги к платной части тренировки не подтверждено");
+      } else if (!productBound || target?.priceSource !== "VIVA_EXISTING_TARIFF"
+        || perHourMinor === null) {
+        // Owner decision 2026-10-05: the co-pay is a quarter of the court hour. A missing or
+        // unverifiable court price is a refusal, never a silent fallback to the event tariff
+        // that produced the 500 ₽ bug.
+        block("LK1_COURT_PRICE_UNRESOLVED", TOPOKRATY_HOURLY_COURT_PRICE_REQUIRED);
         selectedRule = null;
+      } else {
+        selectedRule = { ruleId: "lk1-topokraty-training", kind: "COURT_HOURLY_COPAY",
+          courtCoPay: { hourlyCourtPriceMinor: toNonNegativeInt(target.hourlyCourtPriceMinor),
+            chargeableHours, perHourMinor } };
       }
     }
   } else if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)
@@ -422,6 +469,39 @@ if (!selectedRule) {
     } else {
       discountMinor = Math.min(basePriceMinor, fixedDiscount);
       finalBeforeSurcharge = Math.max(0, basePriceMinor - discountMinor);
+    }
+  } else if (selectedRule.kind === "COURT_HOURLY_COPAY") {
+    // The club co-pay is not a discount on the exercise tariff: it is the court's own money
+    // (chargeable hours × quarter of the hourly court price). The fraction carried for the
+    // client quote stays the flat 0 % the club decision fixes, because the charged share
+    // under this rule has no relation to the event tariff.
+    const hours = toNonNegativeInt(selectedRule.courtCoPay?.chargeableHours);
+    const hourly = toNonNegativeInt(selectedRule.courtCoPay?.hourlyCourtPriceMinor);
+    const perHour = toNonNegativeInt(selectedRule.courtCoPay?.perHourMinor);
+    const expectedPerHour = hourly === null ? null
+      : Math.floor(hourly / TOPOKRATY_COURT_HOUR_PAY_DIVISOR);
+    const chargeMinor = perHour === null || hours === null || hours <= 0
+      ? null : perHour * hours;
+    if (basePriceMinor === null) {
+      block("BASE_PRICE_UNRESOLVED", "Для расчёта доли сервер должен подтвердить базовую цену");
+    } else if (hourly === null || hourly <= 0 || perHour === null || perHour <= 0
+      || hours === null || hours <= 0 || perHour !== expectedPerHour) {
+      block("BENEFIT_VALUE_INVALID", "Доля стоимости льготы некорректна");
+    } else if (chargeMinor === null || !Number.isSafeInteger(chargeMinor)) {
+      block("PRICE_CALCULATION_OVERFLOW", "Цена события выходит за допустимый диапазон");
+    } else {
+      finalBeforeSurcharge = Math.max(0, Math.min(chargeMinor, basePriceMinor));
+      // The discount is the part of the event tariff the subscription carries. It can never be
+      // negative: the co-pay is bounded by the base price above, so the payment carrier always
+      // receives a valid discount.
+      discountMinor = basePriceMinor - finalBeforeSurcharge;
+      partialPriceCalculation = {
+        chargeableHours: hours,
+        hourlyCourtPriceMinor: hourly,
+        perHourMinor: perHour,
+        chargeBeforeDiscountMinor: chargeMinor,
+        percentageDiscountMinor: chargeMinor - finalBeforeSurcharge,
+      };
     }
   } else if (selectedRule.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT") {
     const numerator = toNonNegativeInt(selectedRule.partialPrice?.numerator);
