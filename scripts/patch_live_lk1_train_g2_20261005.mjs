@@ -32,7 +32,7 @@ export const LK1_TRAIN_G2_KIND = "FOCUSED_LK1_TRAIN_G2_V1";
 
 // G1's postimage is the reviewed preimage of G2.
 export const LK1_TRAIN_G2_UPSTREAM_SHA256 =
-  "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5";
+  "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3";
 export const LK1_TRAIN_G2_SOURCE_NODE_COUNT = 4815;
 
 export const LK1_TRAIN_G2_NODES = Object.freeze({
@@ -46,7 +46,7 @@ export const LK1_TRAIN_G2_NODES = Object.freeze({
 
 export const LK1_TRAIN_G2_TARGET = Object.freeze({
   // G1's postimage fields the preview composition pins.
-  gatewayFuncSha256: "b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514",
+  gatewayFuncSha256: "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4",
   usageBlockSha256: "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813",
   pricingFuncSha256: "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
   joinFuncSha256: "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
@@ -65,7 +65,7 @@ export const LK1_TRAIN_G2_TARGET = Object.freeze({
 // The composed G2 postimage; the G2 rollback refuses any other applied flow and restores G1's
 // candidate (`LK1_TRAIN_G2_UPSTREAM_SHA256`) with a sha readback.
 export const LK1_TRAIN_G2_POSTIMAGE_SHA256 =
-  "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05";
+  "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192";
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 

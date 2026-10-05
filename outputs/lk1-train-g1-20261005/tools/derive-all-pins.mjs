@@ -29,10 +29,10 @@ const gateway = byId.get("lk_subscription_booking_router_20260804").func;
 const initialize = byId.get("lk_subscription_booking_router_20260804").initialize;
 const evaluator = byId.get("lk_subscription_managed_policy_20260820").func;
 const previewRouter = byId.get("lk_subscription_price_preview_20260908_router").func;
-const previewEvaluate = byId.get("lk_subscription_price_preview_20260908_evaluate").func;
 
 const {
   LK1_TRAIN_G1_CONTINUATION_SHA256, LK1_TRAIN_G1_COURT_QUOTE_BLOCK_SHA256,
+  LK1_TRAIN_G1_CLUB_COPAY_BLOCK_SHA256,
   LK1_TRAIN_G1_POSTIMAGE_NODE_SHA256, LK1_TRAIN_G1_POSTIMAGE_SHA256,
   LK1_TRAIN_G1_PREIMAGE_NODE_SHA256, LK1_TRAIN_G1_REVERT_INITIALIZE_SHA256,
   LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256, LK1_TRAIN_G1_REVIEWED_CLUB_GATE_SHA256,
@@ -47,7 +47,6 @@ const {
 
 const g1 = composeLk1TrainG1Artifacts(bytes);
 const g2 = composeLk1TrainG2Artifacts(g1.candidateBytes);
-const checkoutFlow = JSON.parse(fs.readFileSync("/private/tmp/lk1-train-147-prep/input/source.flow.json", "utf8"));
 
 const result = {
   provenance: {
@@ -82,6 +81,7 @@ const result = {
   },
   markers: {
     clubMoneyMandate: occ(gateway, "lk1ClubEventPaymentBinding"),
+    clubMoneyMandateBranch: occ(gateway, "COURT_HOURLY_COPAY"),
     quoteBindingCallSites: occ(gateway, "lk1EventPaymentQuoteBinding("),
     reclaim: occ(gateway, "lk1ReclaimableAttempt"),
     topokratyGateGroupTrainingOnly: occ(gateway, "resolveCategory(exercise) === \"group_training\""),
@@ -124,12 +124,14 @@ const result = {
       usageClubFree: LK1_TRAIN_G1_USAGE_CLUB_FREE_SHA256,
       clubGate: LK1_TRAIN_G1_REVIEWED_CLUB_GATE_SHA256,
       patriotsGuard: LK1_TRAIN_G1_REVIEWED_PATRIOTS_GUARD_SHA256,
+      clubMoneyMandateBranch: LK1_TRAIN_G1_CLUB_COPAY_BLOCK_SHA256,
       continuation: LK1_TRAIN_G1_CONTINUATION_SHA256,
     },
   },
   g2: {
     upstreamFlowSha256: LK1_TRAIN_G1_POSTIMAGE_SHA256,
     candidateSha256: LK1_TRAIN_G2_POSTIMAGE_SHA256,
+    compositionCandidateSha256: g2.candidateSha256,
     evaluator: { before: LK1_TRAIN_G2_TARGET.liveEvaluatorFuncSha256, node: LK1_TRAIN_G2_TARGET.patchedEvaluatorFuncSha256 },
     previewEvaluate: { before: LK1_TRAIN_G2_TARGET.livePreviewEvaluateFuncSha256, node: LK1_TRAIN_G2_TARGET.patchedPreviewEvaluateFuncSha256 },
     previewRouter: { before: LK1_TRAIN_G2_TARGET.livePreviewRouterFuncSha256, node: LK1_TRAIN_G2_TARGET.patchedPreviewRouterFuncSha256 },

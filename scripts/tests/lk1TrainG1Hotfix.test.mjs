@@ -22,6 +22,8 @@ import {
   composeLk1TrainG1RevertArtifacts,
   patchLk1TrainG1GatewayBody,
   patchLk1TrainG1GatewayInitialize,
+  reviewedClubBinding,
+  reviewedClubCoPayBlock,
   sha256,
   usageBlockSha,
 } from "../patch_live_lk1_train_g1_20261005.mjs";
@@ -67,6 +69,9 @@ const USAGE_GAME_MINUTES_BLOCK = `    const minutes = operation.lk1.decision.gam
 const USAGE_CLUB_FREE_ANCHOR =
   "          if (!Number.isSafeInteger(free) || free !== duration || free > ctx.lk1.rule.freeGameMinutesPerDay\n";
 
+/** The installed club money mandate: the reviewed binding without the `COURT_HOURLY_COPAY` branch. */
+const INSTALLED_CLUB_BINDING = reviewedClubBinding().replace(reviewedClubCoPayBlock(), "");
+
 /** A body carrying exactly the live G1 anchors, so every delta can be driven hermetically. */
 const syntheticGatewayBody = () => `const isObj = (value) => Boolean(value);
 const finishError = (ctx, status, message, details) => ({ status, message, details });
@@ -76,10 +81,7 @@ const isTopokratyClubPack = (row) => row.club === true;
 const lk1Stop = (ctx, code) => ({ stopped: code });
 const lk1EventPaymentQuoteBinding = (ctx, quote = ctx.lk1) =>
   lk1ClubEventPaymentBinding(ctx, quote) || lk1EventPaymentBinding(ctx, quote);
-const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {
-  return null;
-};
-const lk1Quote = (ctx, exercise, owned) => {
+${INSTALLED_CLUB_BINDING}const lk1Quote = (ctx, exercise, owned) => {
   const target = { stationId: "s" };
   const proof = ctx.lk1TariffProof;
   target.basePriceMinor = proof.amountMinor;
@@ -101,6 +103,7 @@ ${LIVE_CLUB_GATE}  if (productRule.matched && !productRule.legacy) {
   }
     if (!quote.legacy) {
       ctx.lk1 = quote;
+      ctx.studioId = quote.target.stationId;
       return { find: true };
     }
   }
@@ -148,6 +151,7 @@ const installedNineRuleWriter = () => {
 test("G1 embeds the reviewed court window, gate, Patriots guard and allowance deltas exactly once", () => {
   const body = syntheticGatewayBody();
   assert.equal(body.includes("const lk1CourtMasterServices = Object.freeze({"), false);
+  assert.equal(occurrences(body, "COURT_HOURLY_COPAY"), 0);
   const patched = patchLk1TrainG1GatewayBody(body, syntheticTarget(body));
   for (const marker of [
     "const lk1CourtMasterServices = Object.freeze({",
@@ -158,16 +162,25 @@ test("G1 embeds the reviewed court window, gate, Patriots guard and allowance de
     "const patriotsMoneyOnlyIdentity = ctx.caller === \"http\"",
     "operation.lk1.decision.courtMinutes",
     "const freeCeiling = clubFreeVisit ? duration : ctx.lk1.rule.freeGameMinutesPerDay;",
+    "COURT_HOURLY_COPAY",
   ]) {
     assert.equal(occurrences(patched, marker), 1, marker);
   }
   assert.equal(occurrences(patched, "LK1_COURT_PRICE_UNRESOLVED"), 5);
   // The reviewed continuation replaces the HUB `profile` re-entry with the focused `exercise` step.
   assert.ok(patched.includes('ctx.step = "exercise";\n  msg.payload = exercise;'));
-  // The installed money mandate is untouched: the resolver declaration and its call site are
-  // already in the live body and none is added.
+  // The installed money mandate stays declared exactly once, the resolver is not duplicated, and
+  // the delivered club binding is the reviewed one byte-for-byte (F1).
   assert.equal(occurrences(patched, "const lk1EventPaymentQuoteBinding = (ctx, quote = ctx.lk1) =>"), 1);
   assert.equal(occurrences(patched, "const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {"), 1);
+  const patchedClub = patched.slice(
+    patched.indexOf("const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {"));
+  assert.ok(patchedClub.startsWith(reviewedClubBinding()), "the club binding must be the reviewed one");
+  // F2: the dispatch runs after the target's station and room are assigned.
+  assert.ok(patched.includes("      ctx.studioId = quote.target.stationId;\n"
+    + "      // The club court-hourly co-pay proves its own hour of court for the raw event window"));
+  assert.ok(patched.includes("      ctx.roomId = quote.target.roomId;\n"
+    + "      if (lk1CourtWindowNeeded(ctx)) ctx.lk1CourtExercise = exercise;"));
   // A second run refuses instead of producing a double delta.
   assert.throws(() => patchLk1TrainG1GatewayBody(patched, syntheticTarget(patched)),
     /already carries the courtHelpers delta/);
@@ -183,6 +196,16 @@ test("G1 refuses a body whose live anchors drifted", () => {
   const missingUsage = body.replace(USAGE_GAME_MINUTES_BLOCK, "");
   assert.throws(() => patchLk1TrainG1GatewayBody(missingUsage, syntheticTarget(missingUsage)),
     /anchor drift for usage-court-minutes: 0/);
+  // A body that already carries the branch is refused instead of double-spliced.
+  const alreadyPaid = body.replace("  const percent = decision.eventDiscountPercent;\n",
+    `  const percent = decision.eventDiscountPercent;\n${reviewedClubCoPayBlock()}`);
+  assert.throws(() => patchLk1TrainG1GatewayBody(alreadyPaid, syntheticTarget(alreadyPaid)),
+    /already carries the clubMoneyMandate delta/);
+  // A body whose club binding is not the installed shape is refused.
+  const tampered = body.replace("const percent = decision.eventDiscountPercent;",
+    "const percent = decision.eventDiscountPercent || 0;");
+  assert.throws(() => patchLk1TrainG1GatewayBody(tampered, syntheticTarget(tampered)),
+    /anchor drift for club-copay: 0/);
 });
 
 test("G1 replaces the plan-rules writer with the guarded Patriots transition and can revert it", () => {
@@ -247,6 +270,18 @@ test("G1 composes against the read-only 147 snapshot with the pinned postimages"
   assert.equal(built.flow.length, 4815);
   // The plan-rules payload is the ten-rule Patriots set, and every nine-rule row survives.
   const gateway = built.flow.find((node) => node.id === "lk_subscription_booking_router_20260804");
+  // F1: the composed gateway body delivers the reviewed club money mandate, once, in the club binding.
+  assert.equal(built.gateway.clubMoneyMandateBound, true);
+  assert.equal(occurrences(gateway.func, "COURT_HOURLY_COPAY"), 1);
+  assert.ok(gateway.func.slice(gateway.func.indexOf("const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {"))
+    .startsWith(reviewedClubBinding()));
+  // F2: the dispatch runs after the target's station and room are assigned.
+  assert.equal(built.gateway.clubDispatchAfterTargetIdentity, true);
+  assert.ok(gateway.func.includes("      ctx.studioId = quote.target.stationId;\n"
+    + "      // The club court-hourly co-pay proves its own hour of court for the raw event window"));
+  assert.ok(gateway.func.includes("      ctx.roomId = quote.target.roomId;\n"
+    + "      if (lk1CourtWindowNeeded(ctx)) ctx.lk1CourtExercise = exercise;"));
+  assert.equal(occurrences(gateway.func, "ctx.roomId = quote.target.roomId;"), 1);
   assert.ok(gateway.initialize.includes(JSON.stringify(LK1_PLAN_RULES_WITH_PATRIOTS)));
   assert.equal(occurrences(gateway.initialize, '"planKey":"friendship_two_hours"'), 2);
   assert.equal(occurrences(gateway.initialize, '"planKey":"topocraty"'), 2);
@@ -279,4 +314,138 @@ test("the G1 ordered rollback restores the installed nine-rule payload on the pi
     assert.throws(() => composeLk1TrainG1RevertArtifacts(bytes), /G1 applied flow preimage drift/);
     // The usage block moves with the gateway body, which is why G2 pins it.
     assert.equal(usageBlockSha(gateway.func), "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813");
+  });
+
+// --- F1/F2 write-path execution -------------------------------------------------------------
+//
+// The composed G1 fragments are executed in-process against a club-training request, the way the
+// payment-safety review did: F1 needs the reviewed club money mandate to resolve, and F2 needs the
+// dispatch to see a resolved station/room so the proof (and the second pass) never refuses.
+
+const G1_GATEWAY_ID = "lk_subscription_booking_router_20260804";
+const COURT_STATION = "0d5504f6-ea6f-44bb-a9e4-947faf0273ab";
+const COURT_ROOM = "7c1f0a2e-2b3c-4d5e-8f90-1234567890ab";
+const COURT_CLUB_PRODUCT = "14692232-12be-4218-9fa1-2d5b79b62035";
+const COURT_HELPERS_START = "const lk1CourtMasterServices = Object.freeze({";
+const COURT_HELPERS_END = "  return total;\n};\n";
+const COURT_STEPS_START = "const lk1CourtWindowEndTime = (exercise) => {";
+const COURT_STEPS_END = "  return false;\n}\n";
+const COURT_DISPATCH_START = "      ctx.studioId = quote.target.stationId;\n";
+const COURT_DISPATCH_END = "      delete ctx.lk1CourtExercise;\n";
+
+const RUNTIME_PRELUDE = `  const VIVA_API_BASE = "https://viva.test";
+  const toStr = (value) => (value === undefined || value === null ? "" : String(value));
+  const isObj = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  const lk1Stop = (ctx, code) => ({ stop: code });
+  const prepareAdminGet = (ctx, step, url) => ({ adminGet: url, step });
+  const isHttpOk = (status) => status === 200;
+  const exerciseRoomId = (exercise) => toStr(exercise?.room?.id || exercise?.roomId);
+  const eventDurationMinutes = (exercise) => Number(exercise?.durationMinutes);
+  const eventStartsAt = (exercise) => toStr(exercise?.timeFrom);
+`;
+
+function sliceFragment(body, startAnchor, endAnchor) {
+  const start = body.indexOf(startAnchor);
+  assert.ok(start >= 0, `missing anchor: ${startAnchor}`);
+  const end = body.indexOf(endAnchor, start + startAnchor.length);
+  assert.ok(end >= 0, `missing end anchor: ${endAnchor}`);
+  return body.slice(start, end + endAnchor.length);
+}
+
+function composedG1GatewayFunc() {
+  const built = composeLk1TrainG1Artifacts(fs.readFileSync(UPSTREAM_FLOW));
+  return built.flow.find((node) => node.id === G1_GATEWAY_ID).func;
+}
+
+/** Runs the composed court steps and the exactly-shipped dispatch region of the G1 body. */
+function composedCourtRuntime(body) {
+  const helpers = sliceFragment(body, COURT_HELPERS_START, COURT_HELPERS_END);
+  const steps = sliceFragment(body, COURT_STEPS_START, COURT_STEPS_END);
+  const dispatchStart = body.indexOf(COURT_DISPATCH_START);
+  assert.ok(dispatchStart >= 0, "missing composed dispatch anchor");
+  const dispatchEnd = body.indexOf(COURT_DISPATCH_END, dispatchStart);
+  assert.ok(dispatchEnd >= 0, "missing composed dispatch end");
+  const dispatch = body.slice(dispatchStart, dispatchEnd + COURT_DISPATCH_END.length);
+  const factory = new Function("global", `
+${RUNTIME_PRELUDE}${helpers}
+  return (ctx, msg, quote, exercise) => {
+${steps}${dispatch}    return { step: ctx.step, proof: ctx.lk1TariffProof ?? null,
+      service: ctx.lk1CourtService ?? null };
+  };
+`);
+  return factory({ get: () => undefined });
+}
+
+/** Exposes the composed court functions alone, to drive the pre-fix (null station/room) order. */
+function composedCourtFunctions(body) {
+  const helpers = sliceFragment(body, COURT_HELPERS_START, COURT_HELPERS_END);
+  const steps = sliceFragment(body, COURT_STEPS_START, COURT_STEPS_END);
+  const factory = new Function("global", `
+${RUNTIME_PRELUDE}${helpers}
+  const ctx = { step: "__idle__" };
+  const msg = {};
+${steps}  return { startLk1CourtWindowFetch, lk1CourtWindowNeeded, lk1CourtWindowStoreProof };
+`);
+  return factory({ get: () => undefined });
+}
+
+test("the composed G1 club mandate resolves the co-pay and the dispatch proves a non-null station/room",
+  { skip: snapshotSkip }, () => {
+    const body = composedG1GatewayFunc();
+    const runtime = composedCourtRuntime(body);
+    const exercise = { id: "ex-1", timeFrom: "2026-10-06T10:00:00", timeTo: "2026-10-06T12:00:00",
+      durationMinutes: 120, studio: { id: COURT_STATION }, room: { id: COURT_ROOM } };
+    const quote = { target: { stationId: COURT_STATION, roomId: COURT_ROOM,
+      category: "GROUP_TRAINING", directionId: 6233, basePriceMinor: 400000 } };
+    const ctx = { caller: "http", actorClientId: "client-1", step: "exercise",
+      lk1: { rule: { productId: COURT_CLUB_PRODUCT }, target: quote.target },
+      lk1TariffProof: { kind: "EVENT_ONE_TIME", amountMinor: 400000 } };
+
+    // Pass 1 — the dispatch must build the master-service URL from the target's station and room.
+    const first = runtime(ctx, { statusCode: 200 }, quote, exercise);
+    assert.equal(first.step, "lk1_court_window");
+    assert.equal(Object.hasOwn(first, "stop"), false);
+    assert.ok(first.adminGet.includes(`/studios/${COURT_STATION}/rooms/${COURT_ROOM}/`), first.adminGet);
+
+    // Pass 2 — the reviewed response handler stores a proof binding the same station and room, the
+    // continuation re-enters `exercise`, and the second dispatch pass neither re-fetches nor refuses.
+    const second = runtime(ctx, { statusCode: 200, payload: { total: 600000 } }, quote, exercise);
+    assert.equal(second.step, "exercise");
+    assert.equal(Object.hasOwn(second, "stop"), false);
+    assert.equal(second.proof.stationId, COURT_STATION);
+    assert.equal(second.proof.roomId, COURT_ROOM);
+    assert.equal(second.proof.windowTotalMinor, 600000);
+
+    // The pre-fix order (dispatch before the target identity is assigned) refuses with the null
+    // station/room proof — the F2 defect this relocation closes.
+    const legacy = composedCourtFunctions(body);
+    const legacyCtx = { caller: "http", actorClientId: "client-1",
+      lk1: ctx.lk1, lk1TariffProof: ctx.lk1TariffProof, lk1CourtExercise: exercise };
+    assert.deepEqual(legacy.startLk1CourtWindowFetch(legacyCtx),
+      { stop: "LK1_COURT_PRICE_UNRESOLVED" });
+
+    // F1 — the composed club binding resolves the reviewed `COURT_HOURLY_COPAY` shape and refuses a
+    // charge it cannot reproduce from the decision's own numbers.
+    const clubStart = body.indexOf("const lk1ClubEventPaymentBinding = (ctx, quote = ctx.lk1) => {");
+    const clubEnd = body.indexOf("\n};\n", clubStart);
+    const bindingFactory = new Function("lk1EventPaymentRoute",
+      `${body.slice(clubStart, clubEnd + "\n};\n".length)}
+      return lk1ClubEventPaymentBinding;`);
+    const binding = bindingFactory(() => ({ sourceCategory: "group_training", category: "GROUP_TRAINING" }));
+    const bindingTarget = { category: "GROUP_TRAINING", eventId: "ex-1", stationId: COURT_STATION,
+      priceProductId: "price-product-1", basePriceMinor: 400000 };
+    const bindingCtx = { caller: "http", category: "group_training", exerciseId: "ex-1",
+      studioId: COURT_STATION, lk1: {} };
+    const paid = binding(bindingCtx, { target: bindingTarget, decision: { eligible: true,
+      subscriptionVisitCount: 1, eventDiscountPercent: 0,
+      benefit: { kind: "COURT_HOURLY_COPAY", finalPriceMinor: 150000,
+        partialPriceCalculation: { hourlyCourtPriceMinor: 600000, perHourMinor: 150000, chargeableHours: 1 } } } });
+    assert.deepEqual(paid, { productId: "price-product-1", productType: "SERVICE",
+      baseMinor: 400000, chargeMinor: 150000, discountMinor: 250000 });
+    // The same decision with a charge the branch cannot reproduce must refuse, not mis-charge.
+    const refused = binding(bindingCtx, { target: bindingTarget, decision: { eligible: true,
+      subscriptionVisitCount: 1, eventDiscountPercent: 0,
+      benefit: { kind: "COURT_HOURLY_COPAY", finalPriceMinor: 50000,
+        partialPriceCalculation: { hourlyCourtPriceMinor: 600000, perHourMinor: 150000, chargeableHours: 1 } } } });
+    assert.equal(refused, null);
   });

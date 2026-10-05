@@ -9,8 +9,8 @@
   "generations": [
     {
       "id": "lk1-train-g1",
-      "candidateSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
-      "contractSha256": "55a861d39ba8476564cf872800b541130245ba27cbcceb5ab94d552e84cd57a5",
+      "candidateSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+      "contractSha256": "50280edc3ef67dbed979a2f0162338e37842e08a1c8ab9a34501aa0fca24dc3a",
       "changedNodes": [
         {
           "id": "lk_subscription_booking_router_20260804",
@@ -20,7 +20,7 @@
           ],
           "func": {
             "beforeSha256": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
-            "afterSha256": "b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514"
+            "afterSha256": "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4"
           },
           "initialize": {
             "beforeSha256": "d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5",
@@ -34,7 +34,7 @@
         "contractKind": "exact-graph",
         "deploymentId": "lk1-train-g1",
         "sourceSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
-        "candidateSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+        "candidateSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
         "sourceNodeCount": 4815,
         "candidateNodeCount": 4815,
         "httpInputCount": 221,
@@ -46,7 +46,7 @@
               "initialize"
             ],
             "sourceNodeSha256": "f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b",
-            "candidateNodeSha256": "6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777"
+            "candidateNodeSha256": "d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0"
           }
         ],
         "allowedAdditions": []
@@ -62,14 +62,16 @@
         "patriotsPlanRule": true,
         "courtMinutesAccumulated": true,
         "clubFreeCeiling": true,
+        "clubMoneyMandateBound": true,
+        "clubDispatchAfterTargetIdentity": true,
         "usageBlockSha256": "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813",
         "usageBlockBeforeSha256": "a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1"
       }
     },
     {
       "id": "lk1-train-g1-revert",
-      "upstreamSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
-      "candidateSha256": "a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4",
+      "upstreamSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+      "candidateSha256": "0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f",
       "changedNodes": [
         {
           "id": "lk_subscription_booking_router_20260804",
@@ -87,8 +89,8 @@
         "formatVersion": 2,
         "contractKind": "exact-graph",
         "deploymentId": "lk1-train-g1-revert",
-        "sourceSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
-        "candidateSha256": "a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4",
+        "sourceSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+        "candidateSha256": "0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f",
         "sourceNodeCount": 4815,
         "candidateNodeCount": 4815,
         "httpInputCount": 221,
@@ -98,8 +100,8 @@
             "fields": [
               "initialize"
             ],
-            "sourceNodeSha256": "6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777",
-            "candidateNodeSha256": "05767844b962eb3fb522e990007b0a31b4dc72827281146e7fcf5abb3cc2bf81"
+            "sourceNodeSha256": "d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0",
+            "candidateNodeSha256": "ac01f1561abcb7b546014a7e57a102564c03448d0f54b74a9979d22e72d9c70a"
           }
         ],
         "allowedAdditions": []
@@ -107,8 +109,8 @@
     },
     {
       "id": "lk1-train-g2",
-      "upstreamSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
-      "candidateSha256": "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05",
+      "upstreamSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+      "candidateSha256": "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192",
       "changedNodes": [
         {
           "id": "lk_subscription_managed_policy_20260820",
@@ -146,8 +148,8 @@
         "formatVersion": 2,
         "contractKind": "exact-graph",
         "deploymentId": "lk1-train-g2",
-        "sourceSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
-        "candidateSha256": "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05",
+        "sourceSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+        "candidateSha256": "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192",
         "sourceNodeCount": 4815,
         "candidateNodeCount": 4815,
         "httpInputCount": 221,
