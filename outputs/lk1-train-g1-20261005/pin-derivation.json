@@ -1,0 +1,277 @@
+{
+  "provenance": {
+    "host": "lk-primary-147",
+    "remotePath": "/root/.node-red/flows.json",
+    "transport": "ssh -o BatchMode=yes root@lk-primary-147 'cat /root/.node-red/flows.json'",
+    "localReadOnlyCopy": "/private/tmp/lk1-train-147-prep/input/source.flow.json",
+    "sourceSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
+    "nodeCount": 4815,
+    "remoteSha256Reverified20261005": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1"
+  },
+  "live": {
+    "flowSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
+    "nodeCount": 4815,
+    "gatewayFunc": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
+    "gatewayInitialize": "d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5",
+    "gatewayNode": "f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b",
+    "evaluatorFunc": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+    "previewRouterFunc": "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70",
+    "previewEvaluateFunc": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+    "pricingFunc": "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
+    "joinFunc": "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
+    "usageBlock": "a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1",
+    "planRules": {
+      "formatVersion": 1,
+      "rules": [
+        {
+          "productId": "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
+          "planKey": "ra",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
+          "planKey": "friendship",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
+          "planKey": "academy",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "82caad6f-4d19-4d01-852b-932bdbb0f405",
+          "planKey": "sport",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "6bda152b-0a9c-4308-82d0-3cd4e6aa680d",
+          "planKey": "promo_academy",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "c079dc82-c716-4f0e-b9ad-6aab62fb789e",
+          "planKey": "promo_friendship",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "3b4806f1-6f9a-46df-a7d7-45075b4e7274",
+          "planKey": "promo_ra",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "14692232-12be-4218-9fa1-2d5b79b62035",
+          "planKey": "topocraty",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 4,
+          "freeGameMinutesPerDay": 60,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        },
+        {
+          "productId": "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e",
+          "planKey": "friendship_two_hours",
+          "enforceFrom": "2026-09-01",
+          "maxActiveBookings": 6,
+          "freeGameMinutesPerDay": 120,
+          "gameOverageDiscountPercent": 30,
+          "groupTrainingDiscountPercent": 50,
+          "tournamentDiscountPercent": 50
+        }
+      ]
+    }
+  },
+  "reviewedSource": {
+    "scripts/nodered_lk1_hub_nodes/gateway.js": "430dbb09b3df1379c1100a0af784720abfdb9687b89662999d982db4aedeef8a",
+    "scripts/nodered_lk1_hub_nodes/gateway_hooks.js": "2225ca5234313613e1e5ede2d767dcbfacddc03bb0976a45ae4a970c7bf9dfef",
+    "scripts/nodered_lk1_hub_nodes/evaluator.js": "ac05d7cd876523d19ec380cd3f7d68c78ea48320cf5586160b19e6cb3e613d9d",
+    "scripts/nodered_lk1_hub_nodes/event_payments.js": "ca3d0c74d4c6f6a79b542d6cc920dd671e0f4ce3866030d68172e47a1c0b7c9c",
+    "scripts/nodered_subscription_price_preview_nodes/router.js": "523edd57298808df05aafee33f2fe1177d34c5df947e8f8c4f8b6878452f0af4",
+    "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js": "86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991",
+    "scripts/lib/eventPaymentSources.mjs": "fe9bafda1c3d1fce6d21f2d31f1d5f528457a7babce1397fdf6f12a2e58df777",
+    "scripts/lib/lk1PlanRulesTransition.mjs": "fc674ff615873f367d7681730c50813dc003d102d296c4adb1e4c149616570cd"
+  },
+  "markers": {
+    "clubMoneyMandate": 2,
+    "clubMoneyMandateBranch": 0,
+    "quoteBindingCallSites": 5,
+    "reclaim": 2,
+    "topokratyGateGroupTrainingOnly": 4,
+    "topokratyGateOpenGame": 0,
+    "courtWindowHelpers": 0,
+    "hourlyCourtPriceMinor": 0,
+    "courtMinutes": 0,
+    "patriotsMoneyValidity": 0,
+    "planRulesPatriots": 0,
+    "evaluatorCourtBranch": 0,
+    "previewCourtQuote": 0,
+    "hubStepsMarker": 0
+  },
+  "anchorUniqueness": {
+    "gatewayLiveFuncSha256": [
+      0
+    ],
+    "profileContinueAssignment": 4,
+    "profileContinueHandler": 1,
+    "operationFindHandler": 1,
+    "exerciseHandler": 1,
+    "quoteAssignment": 1,
+    "enforcedRuleAnchor": 1,
+    "courtQuoteAnchor": 1,
+    "usageGameMinutesAnchor": 1,
+    "usageClubFreeAnchor": 1
+  },
+  "g1": {
+    "upstreamFlowSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
+    "candidateSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+    "preimageNodeSha256": "f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b",
+    "postimageNodeSha256": "d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0",
+    "gatewayFunc": {
+      "before": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
+      "after": "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4"
+    },
+    "gatewayInitialize": {
+      "before": "d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5",
+      "after": "283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3"
+    },
+    "usageBlock": {
+      "before": "a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1",
+      "after": "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813"
+    },
+    "revertCandidateSha256": "0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f",
+    "revertInitializeSha256": "2c2c0c89e3562fff985c388d7bbd0f55f9deaf5cc002ae86974ce59f43c6caf1",
+    "reviewedFragmentPins": {
+      "gateway": "430dbb09b3df1379c1100a0af784720abfdb9687b89662999d982db4aedeef8a",
+      "hooks": "2225ca5234313613e1e5ede2d767dcbfacddc03bb0976a45ae4a970c7bf9dfef",
+      "courtQuoteBlock": "bb0959709507c07d5a77123a4cbb18f9140b5f11ae200f3c7bee656854101ec9",
+      "usageCourtMinutes": "5b179145ca50cd9e2f19422fe7e9e898027b9a419d88bf5a2efdba3008e9ed3a",
+      "usageClubFree": "e363c97b76ec48d955673fb8bcba303bc7563b578d0e9e4f9674f1ab0de9387a",
+      "clubGate": "520e3486922e735ff0d82cf5503ae39a18ad00068b6806069b26c9f5e30c5e1c",
+      "patriotsGuard": "9a417b05213e1fe3e891f2063aa69a14699854790016a1196ae18f97fafda8e2",
+      "clubMoneyMandateBranch": "d239076989eca25526f0c51865c36e976baf6ed533add7485f6d782976a76d50",
+      "continuation": "b3342f91b20d64c7bdf6e9fc53e27ba8f40b5011088bf68364b6517cb3c02f9e"
+    }
+  },
+  "g2": {
+    "upstreamFlowSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+    "candidateSha256": "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192",
+    "compositionCandidateSha256": "0f95fbd3f050d45173c8f2642a4b0dc34ec1fea0384933473ed3b70750777192",
+    "evaluator": {
+      "before": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+      "node": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
+    },
+    "previewEvaluate": {
+      "before": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+      "node": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
+    },
+    "previewRouter": {
+      "before": "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70",
+      "node": "0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221"
+    },
+    "g1GatewayFunc": "7f1539bfbeb6ba9ed3a068e6706ca7af23454f29e28055d5fade8f538d00f0d4",
+    "g1UsageBlock": "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813",
+    "pricingFunc": "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
+    "joinFunc": "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074"
+  },
+  "crossGeneration": {
+    "note": "Pins of the other focused generations after the 2026-10-05 body. `derived` means the value is proven from the snapshot or the reviewed sources; `not-derivable` means the generation refuses on this snapshot and re-pinning without re-authoring would leave a fail-closed but misleading patcher (preparation-branch finding, unchanged).",
+    "hubPreimages": {
+      "split": {
+        "value": "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
+        "state": "derived (unchanged)"
+      },
+      "gateway": {
+        "value": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
+        "state": "derived"
+      },
+      "finalize": {
+        "value": "2b11541259acf223cbfa2fe8cc81ad268dc26213e4b171d1bd6726fa9515dc3d",
+        "state": "derived"
+      },
+      "evaluator": {
+        "value": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+        "state": "derived"
+      },
+      "note": "composeHubFlow still refuses: the 2026-10-05 body is not the HUB body."
+    },
+    "previewCanonicalSourceSha256": {
+      "booking": {
+        "value": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
+        "state": "derived"
+      },
+      "evaluator": {
+        "value": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+        "state": "derived"
+      },
+      "pricing": {
+        "value": "d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba81b20f5c3eb7206b",
+        "state": "derived (unchanged)"
+      },
+      "join": {
+        "value": "8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074",
+        "state": "derived (unchanged)"
+      }
+    },
+    "topic": {
+      "topokratyCopayApplied": {
+        "value": null,
+        "state": "not-derivable: the co-pay generation refuses on this snapshot"
+      },
+      "planRulesTargetsPatched": {
+        "value": null,
+        "state": "not-derivable: the plan-rules gateway body is already patched"
+      },
+      "eventQuotesPreviewFinalPatched": {
+        "value": "e7c174ea631ff47060a92a660851b876963e9f1473a2e932562415239f27b339",
+        "state": "derived (equals the reviewed final.js)"
+      },
+      "patriotsReviewedSourceRepin": {
+        "value": {
+          "gateway": "430dbb09b3df1379c1100a0af784720abfdb9687b89662999d982db4aedeef8a",
+          "hooks": "2225ca5234313613e1e5ede2d767dcbfacddc03bb0976a45ae4a970c7bf9dfef",
+          "evaluator": "ac05d7cd876523d19ec380cd3f7d68c78ea48320cf5586160b19e6cb3e613d9d"
+        },
+        "state": "derived and committed (owner decision 2026-10-05)"
+      },
+      "patriotsPostimageGatewayInitialize": {
+        "value": "283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3",
+        "state": "derived: identical to G1's initialize postimage"
+      }
+    }
+  }
+}

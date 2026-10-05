@@ -37,12 +37,14 @@ export const PATRIOTS_PREIMAGE = Object.freeze({
   joinFunc: '8b312b97a75112d8e10d13642be649cd795f77a506c4925152338b6854c2b074',
   usageBlock: '5fce82de1d012254f863a90388c75f581f9dcf843e520b10d17a968bc6b3f1ef',
   // Reviewed-source pins (working tree, not the live flow). Re-pinned 2026-10-02 after merging
-  // origin/main: every one of these five files now also carries main's #174 club game / club gate
-  // and #175 PRO-training 50 % discount, so the reviewed bytes the generation copies are the
-  // union. The live-node preimages above stay untouched until a fresh 147 pull is reviewed.
-  reviewedGatewaySource: '9ca4057541048f24384e2b6cea992387cabc3b838f58a4fcfe97ebd66363274c',
-  reviewedGatewayHooksSource: '636e005f02d2632cda10187784ad2379769f4eff418f7f0a8c55159e0d430a2e',
-  reviewedEvaluatorSource: '45b7ef57ea24b211d528f31e7ff54a590e912c9e6b172ea47272324a1bf48366',
+  // origin/main, and again 2026-10-05 with the club court-hourly co-pay owner decision (the
+  // reviewed gateway, hooks and evaluator now carry the court-window proof, the #174 open_game
+  // club gate and the club game/training branches). The live-node preimages above stay untouched
+  // until a fresh 147 pull is reviewed: the Patriots generation itself composes only on its own
+  // 2026-10-02 live preimage, which the 2026-10-05 focused body has replaced.
+  reviewedGatewaySource: '430dbb09b3df1379c1100a0af784720abfdb9687b89662999d982db4aedeef8a',
+  reviewedGatewayHooksSource: '2225ca5234313613e1e5ede2d767dcbfacddc03bb0976a45ae4a970c7bf9dfef',
+  reviewedEvaluatorSource: 'ac05d7cd876523d19ec380cd3f7d68c78ea48320cf5586160b19e6cb3e613d9d',
   reviewedBookingRouterSource: '86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991',
   // Re-pinned again 2026-10-05 for the club court-hourly co-pay (owner decision of the same day):
   // the event preview now quotes a `COURT_HOURLY_COPAY` decision under its own kind

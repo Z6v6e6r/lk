@@ -1,0 +1,21 @@
+{
+  "formatVersion": 2,
+  "contractKind": "exact-graph",
+  "deploymentId": "lk1-train-g1-revert",
+  "sourceSha256": "99b5d5b5c2617e77f654c68ac12c9d7f834e0a65334feb1d9b12dc5a6d267ba3",
+  "candidateSha256": "0e74cd1179163db2d73d7a1726b96b41cdfb867d34434ba9a73260f398cd423f",
+  "sourceNodeCount": 4815,
+  "candidateNodeCount": 4815,
+  "httpInputCount": 221,
+  "allowedChanges": [
+    {
+      "id": "lk_subscription_booking_router_20260804",
+      "fields": [
+        "initialize"
+      ],
+      "sourceNodeSha256": "d4d84655a24c6dd79c64501ff7359c4a56f86f88d28d80f60d9ccf61d022aea0",
+      "candidateNodeSha256": "ac01f1561abcb7b546014a7e57a102564c03448d0f54b74a9979d22e72d9c70a"
+    }
+  ],
+  "allowedAdditions": []
+}

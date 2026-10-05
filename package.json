@@ -213,6 +213,8 @@
     "test:lk1-topokraty-friendship": "node --experimental-strip-types --test scripts/tests/topokratyFriendshipHotfix.test.mjs scripts/tests/lk1TopokratyFriendship.test.mjs",
     "test:lk1-topokraty-reclaim": "node --experimental-strip-types --test scripts/tests/topokratyRejectionReclaimHotfix.test.mjs scripts/tests/topokratyExclusion.test.ts",
     "test:lk1-topokraty-copay": "node --experimental-strip-types --test scripts/tests/lk1TopokratyCopayHotfix.test.mjs",
+    "test:lk1-train-g1": "node --experimental-strip-types --test scripts/tests/lk1TrainG1Hotfix.test.mjs",
+    "test:lk1-train-g2": "node --experimental-strip-types --test scripts/tests/lk1TrainG2Hotfix.test.mjs",
     "test:lk1-subscription-dev-candidate": "node --test scripts/tests/lk1SubscriptionDevCandidate.test.mjs",
     "test:lk1-subscription-dev-provisioning": "node --test scripts/tests/lk1SubscriptionDevProvisioning.test.mjs",
     "test:lk1-subscription-dev-bootstrap": "node --test scripts/tests/lk1SubscriptionDevBootstrap.test.mjs",
