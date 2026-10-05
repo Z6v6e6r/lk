@@ -15,7 +15,7 @@ type GatewayResult = {
 };
 
 function loadCheckoutFunction(name: string, dependencies: Record<string, unknown>) {
-  dependencies = { isTrialGroupTraining, ...dependencies };
+  dependencies = { isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
   const source = ts.createSourceFile("tournamentSignupApi.ts",
     fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
