@@ -28,7 +28,7 @@ test('Patriots schedule shows four Viva directions while booking benefits are pe
     'window.PH_PATRIOTS_ENTITLEMENTS_READY = true;'))[0], enabled);
   assert.equal(enabled.window.LK_ATLANTY_SCHEDULE_CONFIG.booking, 'lk');
   assert.equal(enabled.window.LK_ATLANTY_SCHEDULE_CONFIG.categories[0].badge,
-    'Первый час в день — 0 ₽ при менее 4 активных записях');
+    'Первый час в день — 0 ₽ при менее 8 активных записях');
   for (const category of enabled.window.LK_ATLANTY_SCHEDULE_CONFIG.categories.slice(1)) assert.match(category.badge, /Скидка 50 %/);
   assert.match(html, /id="atlanty-schedule-root"/);
   assert.match(html, /\/lk\/atlanty-schedule\.js/);

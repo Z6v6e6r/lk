@@ -7,7 +7,7 @@ export const ACTOR = '00000000-0000-4000-8000-000000000001';
 export const TENANT = 'iSkq6G';
 export const PRODUCT = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
 export const SUBSCRIPTIONS = ['00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000b'];
-export const RULE = { productId: PRODUCT, maxActiveBookings: 4, freeGameMinutesPerDay: 60,
+export const RULE = { productId: PRODUCT, maxActiveBookings: 8, freeGameMinutesPerDay: 60,
   gameOverageDiscountPercent: 30, groupTrainingDiscountPercent: 50, tournamentDiscountPercent: 50 };
 export function initialState() {
   const serviceDate = new Date(Date.now()+14*86400000).toISOString().slice(0,10);

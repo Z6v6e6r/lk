@@ -33,9 +33,9 @@ test("ab_leto storefront groups four short plans and only the HUB annual plan", 
     assert.doesNotMatch(defaultPage, new RegExp(`counterKey: "${counterKey}"`));
     assert.match(page, new RegExp(`variant === "${counterKey}"`));
   }
-  assert.match(page, /subscriptionRulesGreenImage/);
-  assert.match(page, /subscriptionRulesGoldImage/);
-  assert.match(page, /subscriptionRulesRedImage/);
+  assert.doesNotMatch(page, /subscriptionRulesGreenImage/);
+  assert.doesNotMatch(page, /subscriptionRulesGoldImage/);
+  assert.doesNotMatch(page, /subscriptionRulesRedImage/);
   assert.match(page, /aria-label=\{isArtworkFlipped \? `Вернуться к карточке/);
   assert.match(page, /aria-hidden=\{!isArtworkFlipped\}/);
 });

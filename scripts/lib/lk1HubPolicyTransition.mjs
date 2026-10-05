@@ -17,9 +17,10 @@ function normalizePolicy(value, product, keys) {
   return Object.fromEntries([['productId', product], ...keys.map(key => [key, value[key]])]);
 }
 
-export function buildHubPolicyTransition({ expectedPrior, desired } = {}) {
+export function buildHubPolicyTransition({ expectedPrior, desired, acceptEmptyPrior = false } = {}) {
   // Explicit null means OFF. Missing options cannot silently become a transition.
   if (expectedPrior === undefined || desired === undefined) throw new Error('Explicit HUB prior and desired policy required');
+  if (typeof acceptEmptyPrior !== 'boolean') throw new Error('acceptEmptyPrior must be a boolean');
   const prior = normalizePolicy(expectedPrior, HUB_POLICY_PRODUCT, fields);
   const next = normalizePolicy(desired, HUB_POLICY_PRODUCT, fields);
   const declarations = `const lk1PolicyKey = ${JSON.stringify(HUB_POLICY_KEY)};
@@ -29,7 +30,7 @@ const lk1NormalizePolicy = value => (${normalizePolicy.toString()})(value, ${JSO
   const initialize = declarations + `const expectedPrior = ${JSON.stringify(prior)};
 const current = lk1NormalizePolicy(global.get(lk1PolicyKey));
 if (JSON.stringify(current) !== JSON.stringify(lk1DesiredPolicy)) {
-  if (JSON.stringify(current) !== JSON.stringify(expectedPrior)) throw new Error("HUB policy prior mismatch; no overwrite");
+  if (${acceptEmptyPrior ? 'current !== null && ' : ''}JSON.stringify(current) !== JSON.stringify(expectedPrior)) throw new Error("HUB policy prior mismatch; no overwrite");
   global.set(lk1PolicyKey, lk1DesiredPolicy);
 }
 if (JSON.stringify(lk1NormalizePolicy(global.get(lk1PolicyKey))) !== JSON.stringify(lk1DesiredPolicy)) {

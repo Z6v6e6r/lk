@@ -152,7 +152,7 @@ function PlanTagBadge({ label }: { readonly label: string }): React.JSX.Element 
   );
 }
 
-/** Circled exclamation used by the compact «До 4 активных записей…» footer line. */
+/** Circled exclamation used by the compact «До 8 активных записей…» footer line. */
 function PlanNoteIcon(): React.JSX.Element {
   return (
     <svg className="subscription-card__note-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">

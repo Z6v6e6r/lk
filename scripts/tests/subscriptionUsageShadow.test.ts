@@ -161,7 +161,7 @@ test("shadow quote sends identifiers only to the loopback server resolver", asyn
       startsAt: "2026-08-30T10:00:00+03:00",
       durationMinutes: 90,
     },
-    activeServices: 4,
+    activeServices: 8,
     dailyGameUsage: 0,
   });
   assert.doesNotMatch(String(capturedInit?.body), /price|amount|token/i);
