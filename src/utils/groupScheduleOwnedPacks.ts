@@ -1,5 +1,5 @@
 import type { TournamentVivaProduct } from "./tournamentSignupApi";
-import type { GroupSubscriptionDiscountQuote } from "./groupSubscriptionDiscount.ts";
+import type { GroupSubscriptionQuote } from "./groupSubscriptionDiscount.ts";
 import { pickSubscriptionVisitsLeft } from "./subscriptionValidity.ts";
 
 const ENERGY_VISIT_PRODUCT_IDS = new Set([
@@ -58,14 +58,16 @@ export function getGroupScheduleOwnedPacks(products: TournamentVivaProduct[]): T
 }
 
 /**
- * A positive discount quote already prices this subscription on the one-time option,
- * so the owned button would be a second, unpriced way to book the same instance.
+ * A positive discount quote — or the club court-hourly co-pay, which carries its own kind
+ * instead of a percentage — already prices this subscription on the one-time option, so the
+ * owned button would be a second, unpriced way to book the same instance.
  */
 function hasManagedGroupDiscount(
-  quotes: GroupSubscriptionDiscountQuote[],
+  quotes: GroupSubscriptionQuote[],
   product: TournamentVivaProduct,
 ): boolean {
-  return quotes.some(quote => quote.subscriptionId === product.id && quote.discountPercent > 0);
+  return quotes.some(quote => quote.subscriptionId === product.id
+    && (quote.discountPercent > 0 || quote.kind === "GROUP_TRAINING_COURT_COPAY_V1"));
 }
 
 /**
@@ -81,7 +83,7 @@ function hasManagedGroupDiscount(
  */
 export function getGroupScheduleOwnedSubscriptions(
   products: TournamentVivaProduct[],
-  quotes: GroupSubscriptionDiscountQuote[] | null,
+  quotes: GroupSubscriptionQuote[] | null,
 ): TournamentVivaProduct[] {
   const visitPacks = getGroupScheduleOwnedPacks(products);
   if (quotes === null) return visitPacks;

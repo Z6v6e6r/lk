@@ -9,6 +9,11 @@ const eventRoute = eventCategory === 'GROUP_TRAINING'
   : eventCategory === 'TOURNAMENT'
     ? { category: 'tournament', action: 'BOOK_TOURNAMENT', rule: 'tournamentDiscountPercent',
       kind: 'TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1', error: 'TOURNAMENT_DISCOUNT' } : null;
+// The club court-hourly co-pay (owner decision 2026-10-05) is not a percentage of the event
+// tariff, so an event quote that carries it gets its own kind and its own numbers instead of a
+// percent: `discountPercent` stays 0, and `chargeableHours`/`hourlyCourtPriceMinor`/`perHourMinor`
+// are what the widget validates and displays. The percentage kinds above stay byte-compatible.
+const COURT_COPAY_QUOTE_KIND = 'GROUP_TRAINING_COURT_COPAY_V1';
 const out = index => { const result = [null, null, null, null, null, null]; result[index] = msg; return result; };
 const stop = (code, status = 503) => { ctx.done = true; ctx.error = code; ctx.statusCode = status; return out(4); };
 // A decision blocker states something about this subscription, not about the request.
@@ -46,12 +51,17 @@ const http = (step, path, admin = false) => {
   msg.payload = undefined; msg.requestTimeout = 10000; msg.followRedirects = false; msg.maxRedirects = 0;
   return out(0);
 };
-const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null) => {
+const quote = (subscriptionId, status, amountMinor = null, freeMinutes = 0, paidMinutes = 0, reasonCode = null, courtCoPay = null) => {
   ctx.quotes.push({ subscriptionId, selectionKey: ctx.selectionKey, status, basePriceMinor: ctx.basePriceMinor,
     amountMinor, freeMinutes, paidMinutes, reasonCode,
-    ...(eventRoute ? { kind: eventRoute.kind, exerciseId: ctx.exerciseId,
+    ...(eventRoute ? { kind: courtCoPay ? COURT_COPAY_QUOTE_KIND : eventRoute.kind, exerciseId: ctx.exerciseId,
       actorClientId: ctx.actorClientId, productId: ctx.priceProductId, subscriptionName: ctx.metadata[subscriptionId] ? ctx.catalog[ctx.metadata[subscriptionId].productId] : undefined,
-      discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}), evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
+      discountPercent: ctx.groupDiscountPercent, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes } : {}),
+    // Only the court co-pay carries the court's own numbers; every other event and game quote keeps
+    // exactly the fields it had before, so the existing client validators see the same shape.
+    ...(eventRoute && courtCoPay ? { chargeableHours: courtCoPay.chargeableHours,
+      hourlyCourtPriceMinor: courtCoPay.hourlyCourtPriceMinor, perHourMinor: courtCoPay.perHourMinor } : {}),
+    evaluatedAt: Date.now(), expiresAt: Date.now() + 30000 });
 };
 // The Viva direction of the event, read through the same aliases the booking gateway uses,
 // so the advisory quote and the booking evaluate the club direction identically.
@@ -497,9 +507,15 @@ if (ctx.step === 'evaluate') {
         return stop(eventRoute ? eventRoute.error + '_DECISION_INVALID' : 'PRICE_PREVIEW_DECISION_INVALID');
       }
       const configuredPercent = ctx.groupDiscountPercent;
+      // `discountPercent` is 0 for this quote: the co-pay is the court's own money, not a share of
+      // the event tariff, and the new kind plus these numbers carry its meaning.
       ctx.groupDiscountPercent = 0;
+      const courtCalculation = decision.benefit.partialPriceCalculation;
       quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor,
-        minutes.freeMinutes, minutes.paidOverageMinutes);
+        minutes.freeMinutes, minutes.paidOverageMinutes, null,
+        { chargeableHours: courtCalculation.chargeableHours,
+          hourlyCourtPriceMinor: courtCalculation.hourlyCourtPriceMinor,
+          perHourMinor: courtCalculation.perHourMinor });
       ctx.groupDiscountPercent = configuredPercent;
     } else if (eventRoute) {
       // The first covered event of the subscription's day is carried by the plan itself: one

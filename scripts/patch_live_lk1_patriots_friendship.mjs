@@ -44,12 +44,12 @@ export const PATRIOTS_PREIMAGE = Object.freeze({
   reviewedGatewayHooksSource: '636e005f02d2632cda10187784ad2379769f4eff418f7f0a8c55159e0d430a2e',
   reviewedEvaluatorSource: '45b7ef57ea24b211d528f31e7ff54a590e912c9e6b172ea47272324a1bf48366',
   reviewedBookingRouterSource: '86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991',
-  // Re-pinned again 2026-10-02 when #176 (`codex/subscription-calculation-repair-20261002`,
-  // independent per-instance preview limits and cheapest-offer quoting) merged its router deltas
-  // into main's Patriots-aware preview router. The reviewed game scope this generation splices
-  // is now the union of both, so the pin moves to the merged bytes; the installed preview
-  // preimages and the postimages above stay untouched until a fresh 147 pull is reviewed.
-  reviewedPreviewSource: '021d6588ff3251b382673328131a4ba6c1925a8ec5a77e692f3a589599bd576c',
+  // Re-pinned again 2026-10-05 for the club court-hourly co-pay (owner decision of the same day):
+  // the event preview now quotes a `COURT_HOURLY_COPAY` decision under its own kind
+  // (`GROUP_TRAINING_COURT_COPAY_V1`) with the proved court numbers. This generation copies the
+  // reviewed router bytes verbatim, so its reviewed-source pin moves with the file; the installed
+  // preview preimages and the postimages above stay untouched until a fresh 147 pull is reviewed.
+  reviewedPreviewSource: '523edd57298808df05aafee33f2fe1177d34c5df947e8f8c4f8b6878452f0af4',
 });
 export const PATRIOTS_POSTIMAGE = Object.freeze({
   gatewayFunc: '660b48b3774149bfc28809206d44a4dfb74fefd1ced37bbf6824d7be3d89d120',

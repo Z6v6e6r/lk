@@ -470,22 +470,28 @@ test('the preview quotes the court-hourly decision the club training commits', (
     benefit: courtBenefit(hours, finalPriceMinor),
     courtMinutes: { localDate: '2099-01-01', usedOrReservedFreeMinutesToday: 0,
       freeMinutes, paidOverageMinutes: paidMinutes } });
-  // Skolkovo 6 000 ₽/hour, 2-hour training: the free hour, then 1 500 ₽ for the second hour.
+  // Skolkovo 6 000 ₽/hour, 2-hour training: the free hour, then 1 500 ₽ for the second hour. The
+  // quote carries its own kind and the court numbers the widget validates and displays, and its
+  // `discountPercent` stays 0 because the co-pay is not a percentage of the event tariff.
   const partial = previewEvaluate(courtDecision(60, 60, 1, 150000));
   assert.equal(partial.error, undefined);
   const [partialQuote] = partial.quotes;
   assert.deepEqual({ ...partialQuote, subscriptionName: undefined, evaluatedAt: undefined, expiresAt: undefined }, {
     subscriptionId: 'sub-club', selectionKey: 'preview:club', status: 'AVAILABLE',
     basePriceMinor: BASE_PRICE_MINOR, amountMinor: 150000, freeMinutes: 60, paidMinutes: 60, reasonCode: null,
-    kind: 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1', exerciseId: 'club-exercise', actorClientId: 'club-actor',
+    kind: 'GROUP_TRAINING_COURT_COPAY_V1', exerciseId: 'club-exercise', actorClientId: 'club-actor',
     productId: 'one-time-carrier', subscriptionName: undefined, discountPercent: 0,
+    chargeableHours: 1, hourlyCourtPriceMinor: COURT_HOURLY_MINOR, perHourMinor: 150000,
     startsAt: '2099-01-01T12:00:00+03:00', durationMinutes: 120, evaluatedAt: undefined, expiresAt: undefined });
-  // Skolkovo, 3-hour training: two chargeable hours -> 3 000 ₽.
+  assert.equal(partialQuote.subscriptionName, 'Дружба Топократы');
+  // Skolkovo, 3-hour training: two chargeable hours -> 3 000 ₽ in the same kind and shape.
   const threeHours = previewEvaluate(courtDecision(60, 120, 2, 300000),
     { target: { durationMinutes: 180, startsAt: '2099-01-01T12:00:00+03:00', stationId: 'station-club', roomId: 'court-club' } });
   assert.equal(threeHours.error, undefined);
   assert.equal(threeHours.quotes[0].amountMinor, 300000);
   assert.equal(threeHours.quotes[0].paidMinutes, 120);
+  assert.equal(threeHours.quotes[0].chargeableHours, 2);
+  assert.equal(threeHours.quotes[0].kind, 'GROUP_TRAINING_COURT_COPAY_V1');
   assert.equal(threeHours.quotes[0].discountPercent, 0);
   // Without the free hour the decision charges the full one-time price at 0 %, not the rule's 50 %.
   const fullPrice = previewEvaluate({ eligible: true, subscriptionVisitCount: 0, eventDiscountPercent: 0,
@@ -494,17 +500,21 @@ test('the preview quotes the court-hourly decision the club training commits', (
   assert.equal(fullPrice.quotes[0].amountMinor, BASE_PRICE_MINOR);
   assert.equal(fullPrice.quotes[0].discountPercent, 0);
   assert.equal(fullPrice.quotes[0].freeMinutes, 0);
-  // The ordinary answers are unchanged: a configured discount and a visit-covered event.
+  // The ordinary answers keep their reviewed kind, fields and percent: a configured discount and a
+  // visit-covered event are not court co-pays.
   const flat = previewEvaluate({ eligible: true, subscriptionVisitCount: 0, eventDiscountPercent: 50,
     benefit: benefit(200000, 'PERCENT_DISCOUNT') });
   assert.equal(flat.error, undefined);
   assert.equal(flat.quotes[0].amountMinor, 200000);
   assert.equal(flat.quotes[0].discountPercent, 50);
+  assert.equal(flat.quotes[0].kind, 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1');
   const covered = previewEvaluate({ eligible: true, subscriptionVisitCount: 1, eventDiscountPercent: 100,
     benefit: benefit(0, 'FREE_ENTITLEMENT') });
   assert.equal(covered.error, undefined);
   assert.equal(covered.quotes[0].amountMinor, 0);
   assert.equal(covered.quotes[0].discountPercent, 100);
+  assert.equal(covered.quotes[0].kind, 'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1');
+  assert.equal(covered.quotes[0].chargeableHours, undefined, 'only the court co-pay carries court fields');
   // A decision whose amount does not follow its own court arithmetic never reaches the widget.
   for (const tampered of [
     // 2 hours charged instead of 1.
@@ -636,6 +646,12 @@ test('the contour sources carry the club rule on the booking, preview and widget
     'const previewDirectionId = (canonical, exercise) => {',
     'directionId: previewDirectionId(canonical, exercise),',
     "const courtCoPay = decision.benefit?.kind === 'COURT_HOURLY_COPAY'",
+    // The advisory quote carries the co-pay as its own kind plus the court numbers, so the widget
+    // can validate and display it without inventing a percentage of the event tariff.
+    "const COURT_COPAY_QUOTE_KIND = 'GROUP_TRAINING_COURT_COPAY_V1';",
+    'chargeableHours: courtCalculation.chargeableHours,',
+    'hourlyCourtPriceMinor: courtCalculation.hourlyCourtPriceMinor,',
+    'perHourMinor: courtCalculation.perHourMinor',
   ]) assert.ok(previewRouterSource.includes(marker), marker);
 });
 

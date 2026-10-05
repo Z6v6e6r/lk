@@ -60,6 +60,30 @@ chargeBeforeDiscountMinor, percentageDiscountMinor }, currency: "RUB" }`, сво
 - Дневной учёт: `courtMinutes.freeMinutes` читает и шлюз (`lk1_usage_operations`), и превью;
   связывающий блок (`AUDIT_BINDING`) продолжает защищать игру бесплатного визита.
 
+## Котировка превью для виджета
+
+Событийная котировка клубной доплаты несёт собственный вид вместо процента:
+
+```json
+{ "kind": "GROUP_TRAINING_COURT_COPAY_V1", "amountMinor": 150000, "basePriceMinor": 400000,
+  "discountPercent": 0, "durationMinutes": 120, "freeMinutes": 60, "paidMinutes": 60,
+  "chargeableHours": 1, "hourlyCourtPriceMinor": 600000, "perHourMinor": 150000 }
+```
+
+- `discountPercent` здесь всегда `0`: доплата — деньги корта, а не доля тарифа события, поэтому
+  процент её не выражает, и смысл несёт вид котировки вместе с полями часа.
+- Клиент (`src/utils/groupSubscriptionDiscount.ts`) принимает новый вид только при
+  `amountMinor === min(perHourMinor × chargeableHours, basePriceMinor)`, положительных целых
+  `perHourMinor` и `hourlyCourtPriceMinor`, `chargeableHours >= 1` и
+  `freeMinutes + paidMinutes === durationMinutes`, плюс прежние проверки личности и свежести.
+  Виды `GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1` / `TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1` сохраняют
+  прежнюю арифметику без ослабления.
+- В окне записи (`GroupSchedulePage.tsx`) новый вид показывается как
+  «Доплата 1 500 ₽ за 1 ч по подписке «Дружба Топократы»», а не как «Скидка N %».
+- В шлюз по-прежнему уходят только `basePriceMinor`, `amountMinor`, `productId`, `startsAt`,
+  `durationMinutes`, `discountPercent`; `discountPercent = 0` совпадает с
+  `decision.eventDiscountPercent` клубного решения.
+
 ## Затронутые файлы
 
 | Файл | Что |
@@ -68,7 +92,10 @@ chargeBeforeDiscountMinor, percentageDiscountMinor }, currency: "RUB" }`, сво
 | `scripts/nodered_lk1_hub_nodes/gateway.js` | `target.hourlyCourtPriceMinor` из `lk1TariffProof.windowTotalMinor`; чтение `decision.courtMinutes` в дневном учёте |
 | `scripts/nodered_lk1_hub_nodes/gateway_hooks.js` | Проверка окна корта: таблица станций, шаги `lk1_court_service`/`lk1_court_window`, запрос в profile-шаге |
 | `scripts/nodered_lk1_hub_nodes/event_payments.js` | `lk1ClubEventPaymentBinding` принимает `COURT_HOURLY_COPAY` |
-| `scripts/nodered_subscription_price_preview_nodes/router.js` | Тот же запрос окна корта, проверка арифметики и цитирование `COURT_HOURLY_COPAY` |
+| `scripts/nodered_subscription_price_preview_nodes/router.js` | Тот же запрос окна корта, проверка арифметики и цитирование `COURT_HOURLY_COPAY`; событийная котировка нового вида |
+| `src/utils/groupSubscriptionDiscount.ts` | `GROUP_TRAINING_COURT_COPAY_V1`: тип, строгая проверка суммы и полей часа |
+| `src/components/group-schedule/GroupSchedulePage.tsx` | Метка «Доплата … за N ч по подписке» для нового вида |
+| `scripts/patch_live_lk1_patriots_friendship.mjs` | Перепин `reviewedPreviewSource` на изменённые байты роутера |
 | `scripts/patch_live_lk1_hub.mjs` | Композиция несёт новые хуки |
 | `scripts/patch_live_lk1_topokraty_friendship_hotfix.mjs` | `patchTopokratyCourtWindowBody()`, пины фрагментов окна корта, перепин reviewed-решателя |
 | `scripts/patch_live_lk1_topokraty_copay_hotfix.mjs` | Генерация внедряет окно корта и пересобирает превью (4 узла) |

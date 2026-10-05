@@ -1,5 +1,5 @@
 import { resolveSubscriptionCategoryDailyLimitPlanKey } from "./subscriptionCategoryDailyLimit.ts";
-import type { GroupSubscriptionDiscountQuote } from "./groupSubscriptionDiscount.ts";
+import type { GroupSubscriptionQuote } from "./groupSubscriptionDiscount.ts";
 import type { TournamentVivaProduct } from "./tournamentSignupApi.ts";
 
 /** Marketing visibility only; booking prices and eligibility remain server-owned. */
@@ -13,7 +13,7 @@ export function hasGroupTrainingSubscription(subscriptions: Array<{ status: stri
 /** Checkout availability and validated quotes can identify a plan missing from the profile list. */
 export function hasGroupTrainingSubscriptionEvidence(
   products: TournamentVivaProduct[],
-  quotes: GroupSubscriptionDiscountQuote[],
+  quotes: GroupSubscriptionQuote[],
 ): boolean {
   return hasGroupTrainingSubscription([
     ...products.filter(product => product.source === "client-subscription")

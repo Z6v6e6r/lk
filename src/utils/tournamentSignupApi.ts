@@ -64,7 +64,7 @@ import {
 } from "./tournamentSignupListSnapshot";
 import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
-import { isGroupSubscriptionDiscountQuote, type GroupSubscriptionDiscountQuote } from "./groupSubscriptionDiscount";
+import { isGroupSubscriptionDiscountQuote, type GroupSubscriptionQuote } from "./groupSubscriptionDiscount";
 import { isTournamentSubscriptionDiscountQuote, type TournamentSubscriptionDiscountQuote } from "./tournamentSubscriptionDiscount";
 
 // B-owned rollout interlock, not a runtime capability signal. Keep DEV/PROD
@@ -156,7 +156,7 @@ export interface TournamentVivaProduct {
   source: "client-subscription" | "client-one-time" | "one-time" | "subscription" | "custom-tournament-energy";
   raw: unknown;
   lk1MoneyDiscountCandidate?: boolean;
-  groupDiscountQuote?: GroupSubscriptionDiscountQuote;
+  groupDiscountQuote?: GroupSubscriptionQuote;
   tournamentDiscountQuote?: TournamentSubscriptionDiscountQuote;
   priceLabel?: TournamentCustomPricingProductFields["priceLabel"];
   baseAmount?: TournamentCustomPricingProductFields["baseAmount"];
@@ -3120,8 +3120,8 @@ export async function apiFetchGroupSubscriptionDiscounts(
   exerciseId: string,
   signal?: AbortSignal,
   subscriptionId?: string,
-): Promise<ApiResult<{ quotes: GroupSubscriptionDiscountQuote[] }>> {
-  return request<{ quotes: GroupSubscriptionDiscountQuote[] }>("/lk/subscriptions/game-price-preview", {
+): Promise<ApiResult<{ quotes: GroupSubscriptionQuote[] }>> {
+  return request<{ quotes: GroupSubscriptionQuote[] }>("/lk/subscriptions/game-price-preview", {
     method: "POST", baseUrl: getServ2Origin(), auth: true, retries: 0, signal,
     body: JSON.stringify({ target: { targetKind: "GROUP_TRAINING", exerciseId },
       ...(subscriptionId ? { subscriptionIds: [subscriptionId] } : {}) }),
