@@ -1,0 +1,37 @@
+{
+  "formatVersion": 2,
+  "contractKind": "exact-graph",
+  "deploymentId": "lk1-train-g2",
+  "sourceSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+  "candidateSha256": "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05",
+  "sourceNodeCount": 4815,
+  "candidateNodeCount": 4815,
+  "httpInputCount": 221,
+  "allowedChanges": [
+    {
+      "id": "lk_subscription_managed_policy_20260820",
+      "fields": [
+        "func"
+      ],
+      "sourceNodeSha256": "02d15e144303ac897c6e885d2bb853ebc187d78673dba4bae94e5d47987bf991",
+      "candidateNodeSha256": "85de098e5c58f4e7109005d84cc5efbab948f3dc84148abb74cd3bd13ff4637f"
+    },
+    {
+      "id": "lk_subscription_price_preview_20260908_evaluate",
+      "fields": [
+        "func"
+      ],
+      "sourceNodeSha256": "c90c201c993fc3c6a2465141c3fe0feefd1c7ff97d901a5ffb0663e910484b7e",
+      "candidateNodeSha256": "c3edab7c897a0674ca56dceacace90d1335521c4f5b50e1ef99ee0f990bb3584"
+    },
+    {
+      "id": "lk_subscription_price_preview_20260908_router",
+      "fields": [
+        "func"
+      ],
+      "sourceNodeSha256": "aa9fda117c6d491555db7622496a8e71c199f03e6800c407d8e43c3fde122457",
+      "candidateNodeSha256": "f02b6dcb9695f24e2386c5c167bbac1cec125d6738ac5d0a51488f6d92daa9b4"
+    }
+  ],
+  "allowedAdditions": []
+}

@@ -1,0 +1,204 @@
+{
+  "kind": "LK1_TRAIN_147_G1_G2_CANDIDATE_EVIDENCE",
+  "preparedAt": "2026-10-05",
+  "source": {
+    "sha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
+    "nodeCount": 4815,
+    "path": "/private/tmp/lk1-train-147-prep/input/source.flow.json"
+  },
+  "generations": [
+    {
+      "id": "lk1-train-g1",
+      "candidateSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+      "contractSha256": "55a861d39ba8476564cf872800b541130245ba27cbcceb5ab94d552e84cd57a5",
+      "changedNodes": [
+        {
+          "id": "lk_subscription_booking_router_20260804",
+          "fields": [
+            "func",
+            "initialize"
+          ],
+          "func": {
+            "beforeSha256": "21c50a8d4240060f4e491f42526c14a2586b0fbf2edf2c324a97a946e9176cc2",
+            "afterSha256": "b39de6aa00d9eeea3f29e9bbe5280ca7644e2f883d279b69c5096e263d83a514"
+          },
+          "initialize": {
+            "beforeSha256": "d7aec140d29a33411e416f05652aa09f23f2f436a491d76827afb3b17282f7a5",
+            "afterSha256": "283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3"
+          }
+        }
+      ],
+      "addedNodes": 0,
+      "contract": {
+        "formatVersion": 2,
+        "contractKind": "exact-graph",
+        "deploymentId": "lk1-train-g1",
+        "sourceSha256": "7e8a9570dbc8b7cfabe3340c81a9274e407f9fbc1de2d9e963f92db67ae32ff1",
+        "candidateSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+        "sourceNodeCount": 4815,
+        "candidateNodeCount": 4815,
+        "httpInputCount": 221,
+        "allowedChanges": [
+          {
+            "id": "lk_subscription_booking_router_20260804",
+            "fields": [
+              "func",
+              "initialize"
+            ],
+            "sourceNodeSha256": "f3e1b807a13b1d404a8ecf5119c9cb03c63217f64986201c4e52440d4a0f107b",
+            "candidateNodeSha256": "6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777"
+          }
+        ],
+        "allowedAdditions": []
+      },
+      "markers": {
+        "id": "lk_subscription_booking_router_20260804",
+        "courtHelpersBound": true,
+        "courtDispatchBound": true,
+        "courtResponseBound": true,
+        "courtQuoteBound": true,
+        "clubGateOpenGame": true,
+        "patriotsMoneyOnlyIdentity": true,
+        "patriotsPlanRule": true,
+        "courtMinutesAccumulated": true,
+        "clubFreeCeiling": true,
+        "usageBlockSha256": "2916f13c5987a6d056d198ab539ccff6127f43d875c8ae9c0328d03187dbc813",
+        "usageBlockBeforeSha256": "a3fc39f013d0380d16466fe140061042e0bb307fac14315086b765cfc1f1adf1"
+      }
+    },
+    {
+      "id": "lk1-train-g1-revert",
+      "upstreamSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+      "candidateSha256": "a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4",
+      "changedNodes": [
+        {
+          "id": "lk_subscription_booking_router_20260804",
+          "fields": [
+            "initialize"
+          ],
+          "initialize": {
+            "beforeSha256": "283f9e8a3468e8e4ebad56e479aacd13084a60006783b55e578c3c36fe8847d3",
+            "afterSha256": "2c2c0c89e3562fff985c388d7bbd0f55f9deaf5cc002ae86974ce59f43c6caf1"
+          }
+        }
+      ],
+      "addedNodes": 0,
+      "contract": {
+        "formatVersion": 2,
+        "contractKind": "exact-graph",
+        "deploymentId": "lk1-train-g1-revert",
+        "sourceSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+        "candidateSha256": "a5a3149f351e509e5534a7993f7ebb21991290f64d1159288fe813ba8ff5c2c4",
+        "sourceNodeCount": 4815,
+        "candidateNodeCount": 4815,
+        "httpInputCount": 221,
+        "allowedChanges": [
+          {
+            "id": "lk_subscription_booking_router_20260804",
+            "fields": [
+              "initialize"
+            ],
+            "sourceNodeSha256": "6d16a8efb111c4dfa0ce1298529e6c4d8dc4b11b0b8930e8820ed880c93d3777",
+            "candidateNodeSha256": "05767844b962eb3fb522e990007b0a31b4dc72827281146e7fcf5abb3cc2bf81"
+          }
+        ],
+        "allowedAdditions": []
+      }
+    },
+    {
+      "id": "lk1-train-g2",
+      "upstreamSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+      "candidateSha256": "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05",
+      "changedNodes": [
+        {
+          "id": "lk_subscription_managed_policy_20260820",
+          "fields": [
+            "func"
+          ],
+          "func": {
+            "beforeSha256": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+            "afterSha256": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
+          }
+        },
+        {
+          "id": "lk_subscription_price_preview_20260908_evaluate",
+          "fields": [
+            "func"
+          ],
+          "func": {
+            "beforeSha256": "2d3f5b5080152c07ace9e4aaf31e7b0280878576c027ca7f5c30dd15d9b45602",
+            "afterSha256": "e876ba0722e09798f5f065d1c3bf55ae6df408b84a78f56345f011bbf419f5e1"
+          }
+        },
+        {
+          "id": "lk_subscription_price_preview_20260908_router",
+          "fields": [
+            "func"
+          ],
+          "func": {
+            "beforeSha256": "43c21f70844b795a4f53af43d1c9e18afaff34ff243690d74ef260cec39c9a70",
+            "afterSha256": "0f2e528de34f4b7ebf134ac219743b02905585cb74779f91863a8d2806d44221"
+          }
+        }
+      ],
+      "addedNodes": 0,
+      "contract": {
+        "formatVersion": 2,
+        "contractKind": "exact-graph",
+        "deploymentId": "lk1-train-g2",
+        "sourceSha256": "fc4a46a6d1cbda022e8d3ce503d019bc4d0d1e366ff44ba53612a0809256efc5",
+        "candidateSha256": "24d263fd4b92b72251c2f1b636fa3c0e4b7636efed3aa802acd7df3ce944ce05",
+        "sourceNodeCount": 4815,
+        "candidateNodeCount": 4815,
+        "httpInputCount": 221,
+        "allowedChanges": [
+          {
+            "id": "lk_subscription_managed_policy_20260820",
+            "fields": [
+              "func"
+            ],
+            "sourceNodeSha256": "02d15e144303ac897c6e885d2bb853ebc187d78673dba4bae94e5d47987bf991",
+            "candidateNodeSha256": "85de098e5c58f4e7109005d84cc5efbab948f3dc84148abb74cd3bd13ff4637f"
+          },
+          {
+            "id": "lk_subscription_price_preview_20260908_evaluate",
+            "fields": [
+              "func"
+            ],
+            "sourceNodeSha256": "c90c201c993fc3c6a2465141c3fe0feefd1c7ff97d901a5ffb0663e910484b7e",
+            "candidateNodeSha256": "c3edab7c897a0674ca56dceacace90d1335521c4f5b50e1ef99ee0f990bb3584"
+          },
+          {
+            "id": "lk_subscription_price_preview_20260908_router",
+            "fields": [
+              "func"
+            ],
+            "sourceNodeSha256": "aa9fda117c6d491555db7622496a8e71c199f03e6800c407d8e43c3fde122457",
+            "candidateNodeSha256": "f02b6dcb9695f24e2386c5c167bbac1cec125d6738ac5d0a51488f6d92daa9b4"
+          }
+        ],
+        "allowedAdditions": []
+      },
+      "evaluator": {
+        "id": "lk_subscription_managed_policy_20260820",
+        "courtBranchBound": true,
+        "courtRefusalBound": true,
+        "patriotsBranchBound": true
+      },
+      "preview": {
+        "id": "lk_subscription_price_preview_20260908_router",
+        "courtWindowStepBound": true,
+        "courtQuoteBound": true,
+        "topokratyExclusionKept": true,
+        "proTrainingKept": true,
+        "resolverReachable": true,
+        "helperCount": 94
+      }
+    }
+  ],
+  "validation": {
+    "exactGraphContract": "buildExactGraphContract + validateReviewedFlowContract passed for all three candidates",
+    "anchorUniqueness": "every delta anchor asserted exactly once before use (see pin-derivation.json)",
+    "failClosed": "wrong preimage sha, wrong node count, missing/duplicate anchor, wrong usage block or wrong postimage all refuse"
+  }
+}
