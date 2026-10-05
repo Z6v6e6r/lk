@@ -37,7 +37,7 @@ export const HUB_LK1_SALE_SOURCE_FILES = [
 ];
 
 // Preserve historical receipts, but attest only the scope agreed by both installed nodes.
-export function buildHubRuntimeEvidence(flow) {
+export function buildHubRuntimeEvidence(flow, options = {}) {
   const ids = ['8f7bd5b482fe9763','lk_subscription_booking_router_20260804',
     'lk_subscription_booking_finalize_20260804','lk_subscription_managed_policy_20260820','lk_subscription_product_router_20260907'];
   const hash = value => createHash('sha256').update(value).digest('hex');
@@ -46,11 +46,14 @@ export function buildHubRuntimeEvidence(flow) {
     if (matches.length !== 1) throw Error('HUB runtime dependency identity');
     return {id,nodeSha256:hash(JSON.stringify(matches[0]))};
   });
-  const policy = {productId:'db7a5250-7369-4f43-8ac5-9111be24bc74',maxActiveBookings:4,
+  const historicalPolicy = {productId:'db7a5250-7369-4f43-8ac5-9111be24bc74',maxActiveBookings:4,
     freeGameMinutesPerDay:60,gameOverageDiscountPercent:30,groupTrainingDiscountPercent:50,tournamentDiscountPercent:50};
-  const transition = buildHubPolicyTransition({expectedPrior:null,desired:policy});
+  const transition = buildHubPolicyTransition(options.policyTransition ?? {expectedPrior:null,desired:historicalPolicy});
+  const policy = normalizeHubSalePolicy(transition.desired);
+  if (!policy) throw Error('HUB runtime policy invalid');
   const gateway = flow.find(n => n.id === ids[1]);
-  if (!gateway.func.includes(transition.reader) || gateway.initialize !== transition.initialize) throw Error('HUB runtime policy mismatch');
+  const expectedInitialize = transition.initialize + (options.initializerSuffix ?? '');
+  if (!gateway.func.includes(transition.reader) || gateway.initialize !== expectedInitialize) throw Error('HUB runtime policy mismatch');
   const evaluator = flow.find(n => n.id === ids[3]);
   const scopes = ['ALL_BOOKINGS', 'SUBSCRIPTION_BENEFIT_ONLY'];
   const gatewayScopes = scopes.filter(scope => gateway.func.includes('activeServiceScope: "' + scope + '"'));

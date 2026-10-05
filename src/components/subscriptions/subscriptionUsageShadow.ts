@@ -216,7 +216,7 @@ export async function fetchSubscriptionUsageShadowQuote({
       body: JSON.stringify({
         action: preview.action,
         target: preview.target,
-        activeServices: normalizeSubscriptionUsageShadowCounter(activeServices, 4),
+        activeServices: normalizeSubscriptionUsageShadowCounter(activeServices, 8),
         dailyGameUsage: normalizeSubscriptionUsageShadowCounter(dailyGameUsage, 4),
       }),
       cache: "no-store",

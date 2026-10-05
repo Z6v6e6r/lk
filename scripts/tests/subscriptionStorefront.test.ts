@@ -371,9 +371,9 @@ test('storefront checks the two-hour Viva product separately from summer counter
   assert.match(source, /friendshipBillingOptions\(statuses \?\? \[\], error, twoHourProductPriceMinor\)/);
 });
 
-test('two-hour card shows six active bookings rather than the original friendship cap', () => {
+test('two-hour card shares the eight-active-bookings limit', () => {
   const source = readFileSync(new URL('../../src/components/subscription-storefront/presentation.ts', import.meta.url), 'utf8');
-  assert.match(source, /'monthly-two-hours':[\s\S]*?До 6 активных записей/);
+  assert.match(source, /'monthly-two-hours':[\s\S]*?До 8 активных записей/);
   const twoHourCopy = source.slice(source.indexOf("'monthly-two-hours':"));
   assert.match(twoHourCopy, /id: 'friends-time', icon: 'friends-time', label: '«Время на друзей»'/);
   assert.doesNotMatch(twoHourCopy, /one-event-a-day|discount-only/);
@@ -485,7 +485,7 @@ test('card copy follows the approved daily-hour headings, footer note and five-v
   assert.match(presentationSource, /kind: 'note'/);
   assert.match(presentationSource, /energy5: \{\s*label: 'Абонемент «Энергия 5»',\s*shortLabel: 'Энергия',\s*labelKind: 'plain',/);
   assert.match(presentationSource, /title: 'Форматы на выбор:'/);
-  assert.match(presentationSource, /label: 'До 4 активных записей'/);
+  assert.match(presentationSource, /label: 'До 8 активных записей'/);
   assert.doesNotMatch(presentationSource, /на 2 недели вперёд/);
   // The five-visit pass has no booking limit, so it must not reuse the note.
   const energy5Block = presentationSource.slice(

@@ -20,7 +20,7 @@ export const discounts: SubscriptionBenefitGroup = {
 const planning: SubscriptionBenefitGroup = {
   id: 'booking-limit',
   title: 'Планирование:',
-  items: [{ id: 'active-bookings', label: 'До 4 активных записей' }],
+  items: [{ id: 'active-bookings', label: 'До 8 активных записей' }],
   kind: 'note',
 };
 
@@ -171,7 +171,7 @@ export const friendshipVariantBenefits: Readonly<Record<string, readonly Subscri
       ] },
     { ...discounts, title: 'СВЕРХ 2-ух ЧАСОВ:' },
     { ...planning, items: [
-      { id: 'active-bookings', label: 'До 6 активных записей' },
+      { id: 'active-bookings', label: 'До 8 активных записей' },
     ] },
   ],
   annual: friendshipBenefits,

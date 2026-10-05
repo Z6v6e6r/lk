@@ -40,17 +40,12 @@ test("Piter page exposes the requested terms through an accessible flip control"
     "Один час игры в день бесплатно: создание или присоединение.",
     "Игры длительностью 90 или 120 минут можно создать или присоединиться к ним со скидкой 30%.",
     "Скидка 50% действует на игру с тренером, групповые тренировки и формат «Время на друзей».",
-    "По подписке можно сделать до 4 активных записей на 2 недели вперёд.",
+    "По подписке можно сделать до 8 активных записей на 2 недели вперёд.",
   ]) {
     assert.ok(page.includes(phrase), `missing term: ${phrase}`);
   }
-  const rulesArtwork = "src/assets/piter-subscription-rules-from-20260901.webp";
-  assert.ok(fs.statSync(rulesArtwork).size > 0 && fs.statSync(rulesArtwork).size < 200_000);
-  assert.equal(
-    sha256(rulesArtwork),
-    "3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12",
-  );
-  assert.match(page, /piter-subscription-rules-from-20260901\.webp/);
+  assert.doesNotMatch(page, /piter-subscription-rules-from-20260901\.webp/);
+  assert.match(page, /plan\.terms \|\| \[\]/);
   assert.match(page, /проданных с 01\.09\.2026 по московскому времени/);
   assert.match(router, /MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01"/);
   assert.match(page, /Узнать условия подписки/);
