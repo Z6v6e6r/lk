@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { buildActiveBookingLimitTransitions, HUB_POLICY_PRIOR, HUB_POLICY_LIMIT_8,
   PLAN_RULES_LIMIT_8, PLAN_RULES_WITH_PATRIOTS_LIMIT_8 } from '../lib/lk1ActiveBookingLimit.mjs';
@@ -145,7 +147,7 @@ test('fresh reviewed live snapshot changes only three nodes; rollback restores l
 function isEqual(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 
 test('raw-flow output refuses primary, sibling and nested Git checkouts before creating files', () => {
-  const root = fs.mkdtempSync('/private/tmp/lk-limit8-output-');
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'lk-limit8-output-'));
   try {
     for (const kind of ['file', 'directory']) {
       const repo = `${root}/${kind}`;
