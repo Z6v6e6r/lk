@@ -5,7 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const sha = (v) => crypto.createHash("sha256").update(v).digest("hex");
+export const sha = (v) => crypto.createHash("sha256").update(v).digest("hex");
 
 const source = process.argv[2];
 const outDir = process.argv[3];
