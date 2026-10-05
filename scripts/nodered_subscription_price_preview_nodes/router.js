@@ -119,6 +119,9 @@ if (ctx.step === 'groupExercise') {
     || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
   ctx.exercise = exercise;
   const proTraining = eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise);
+  // The direction decides whether this event is the club direction whose co-pay is charged
+  // against the hour of court; it is read here once, by the same helper the target carries.
+  ctx.directionId = previewDirectionId(canonical, exercise);
   ctx.target = { ...ctx.target, ...(proTraining ? { proTraining: true } : {}), startsAt: new Date(start + 180 * 60000).toISOString().slice(0, 23) + '+03:00',
     durationMinutes: duration, stationId: exercise.studio?.id || exercise.studioId, roomId: canonical.exerciseRoomId(exercise) };
   return http('subscriptions', `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`);
@@ -259,6 +262,65 @@ if (ctx.step === 'operations') {
   if (eventRoute) return http('groupTariff', `/end-user/api/v2/${ctx.tenantKey}/products/one-times?exerciseId=${ctx.exerciseId}`);
   return http('room', `/api/v1/studios/${encodeURIComponent(ctx.target.stationId)}/rooms/${encodeURIComponent(ctx.target.roomId)}`, true);
 }
+// The club co-pay of «Дружба Топократы» is charged against the HOURLY court price, so the
+// advisory quote needs the same whole-window court total the booking gateway proves before it
+// prices the club training (owner decision 2026-10-05). The preview uses the same master
+// service table and the same verified price route as the write path; the two are separate
+// processes, so parity comes from the shared table plus the shared formula, not from a shared
+// cache. An unresolvable station or an invalid lookup stops the quote with the same code the
+// booking refuses with.
+const lk1CourtMasterServices = Object.freeze({
+  '6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1': { masterServiceId: '2f4155ad-7bc0-4a15-a12c-da7fce15c37a', subServiceId: '415edff9-b4ad-4d88-8709-75f1ab7d4081' },
+  '0d5504f6-ea6f-44bb-a9e4-947faf0273ab': { masterServiceId: 'e2caa535-6660-479a-bd32-3638ba7f6b89', subServiceId: '96d2179a-5a96-41bd-a0c9-1df9e5890e16' },
+  '6b2d7e60-caff-4b22-89f6-6f19d7d311ab': { masterServiceId: '22b928b2-1ba6-4491-bc43-756676fcd723', subServiceId: '4d1df04c-774f-46ff-93bd-fd1cca0cb1c4' },
+  '42c6d4df-833d-480a-bdc8-986716569884': { masterServiceId: '1c54e3b4-0421-482e-8faf-0c1cd5fdaf3d', subServiceId: '59fdd182-ce16-4c37-a814-a45cb026d24d' },
+  '588b6151-f4f5-47d9-9449-80edf8cbc748': { masterServiceId: 'd9a5061a-e027-4960-9029-4bf5ec8a0c64', subServiceId: '2689586b-e7f6-4389-bdd2-5c1a35d4c0e7' },
+  '3656cbaa-6426-490f-a44f-915404cbdd2b': { masterServiceId: 'cf54da75-52dd-48bb-861e-c6d53abc052a', subServiceId: '8fd8fe7b-9563-4b56-836c-1b63fe4698f5' },
+  '1ea77cbf-bc36-49a1-96d6-f35c216a409b': { masterServiceId: '899db365-5286-43f6-a3a4-efcf406a28eb', subServiceId: '6a16a7a8-db84-422d-b5f8-5fd00fe0d54c' },
+  '233c1405-1eac-40de-8ec6-1cf7e24c9276': { masterServiceId: '86e13da6-2282-4daf-9239-c0cd3ddefaf7', subServiceId: '50d7e7a0-39ea-4ccd-a912-a6ddb77fa3ed' },
+});
+const lk1CourtWindowId = value => {
+  const text = String(value ?? '').trim();
+  return text && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(text) ? text : null;
+};
+// The window total is the only money this quote may carry and it must be a whole positive
+// number of minor units, exactly as the write path validates it. The step that consumes this
+// payload has already proved the URL it answered, so the request identity is not re-asserted
+// from the body.
+const lk1CourtWindowTotal = payload => {
+  if (!canonical.isObj(payload)) return null;
+  const total = Number(payload.total);
+  if (!Number.isSafeInteger(total) || total <= 0 || total > 10_000_000) return null;
+  return total;
+};
+
+const lk1CourtWindowAmounts = (payload, durationMinutes) => {
+  const windowTotalMinor = lk1CourtWindowTotal(payload);
+  if (windowTotalMinor === null) return null;
+  const hourlyCourtPriceMinor = Math.round(windowTotalMinor * 60 / durationMinutes);
+  return Number.isSafeInteger(hourlyCourtPriceMinor) && hourlyCourtPriceMinor > 0
+    ? { windowTotalMinor, hourlyCourtPriceMinor } : null;
+};
+const lk1StartCourtWindow = () => {
+  const mapped = lk1CourtMasterServices[String(ctx.target.stationId || '')] || null;
+  const masterServiceId = mapped ? lk1CourtWindowId(mapped.masterServiceId) : null;
+  const subServiceId = mapped ? lk1CourtWindowId(mapped.subServiceId) : null;
+  const fromTime = ctx.target.startsAt.slice(11, 16);
+  const durationMinutes = Number(ctx.target.durationMinutes);
+  if (!masterServiceId || !subServiceId || !/^([01]\d|2[0-3]):[0-5]\d$/.test(fromTime)
+    || !Number.isSafeInteger(durationMinutes) || durationMinutes <= 0) {
+    return stop('LK1_COURT_PRICE_UNRESOLVED');
+  }
+  const endMinutes = Number(fromTime.slice(0, 2)) * 60 + Number(fromTime.slice(3, 5)) + durationMinutes;
+  const toTime = `${String(Math.floor(endMinutes / 60) % 24).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
+  // Function nodes do not expose Node.js URLSearchParams in their sandbox.
+  const query = Object.entries({ studioId: ctx.target.stationId, roomId: ctx.target.roomId,
+    subServiceIds: subServiceId, fromTime, toTime, fromDate: ctx.target.startsAt.slice(0, 10) })
+    .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&');
+  ctx.courtWindowUrl = `/end-user/api/v1/${ctx.tenantKey}/products/master-services/`
+    + `${encodeURIComponent(masterServiceId)}/price?${query}`;
+  return http('courtWindow', ctx.courtWindowUrl);
+};
 if (ctx.step === 'room') {
   if (!ok() || String(msg.payload?.id || msg.payload?.roomId || '') !== ctx.target.roomId) return stop('SPLIT_PRICING_ROOM_STUDIO_MISMATCH');
   return http('studios', `/end-user/api/v1/${ctx.tenantKey}/products/master-services/${ctx.target.masterServiceId}/studios?`);
@@ -286,6 +348,22 @@ if (ctx.step === 'price') {
   if (!ok() || total === null || total < 0) return stop('SPLIT_EXACT_PRICE_INVALID');
   ctx.basePriceMinor = Math.round(total / ctx.target.shareCount * 100);
   if (!Number.isSafeInteger(ctx.basePriceMinor) || ctx.basePriceMinor > 1000000) return stop('SPLIT_EXACT_PRICE_INVALID');
+  // The club game direction is charged against the same court hour: the preview derives it from
+  // the whole window it just verified, exactly as the write path derives it from the split
+  // proof. An unproven hour keeps the game on its base share and lets the evaluator fail closed.
+  const gameAmounts = lk1CourtWindowAmounts(msg.payload, ctx.target.durationMinutes);
+  if (gameAmounts !== null) ctx.hourlyCourtPriceMinor = gameAmounts.hourlyCourtPriceMinor;
+  ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
+}
+if (ctx.step === 'courtWindow') {
+  if (!ok() || !ctx.courtWindowUrl || (msg.url !== undefined && msg.url !== ctx.courtWindowUrl)
+    || (msg.responseUrl !== undefined && msg.responseUrl !== ctx.courtWindowUrl)) {
+    return stop('LK1_COURT_PRICE_UNRESOLVED');
+  }
+  const amounts = lk1CourtWindowAmounts(msg.payload, ctx.target.durationMinutes);
+  if (amounts === null) return stop('LK1_COURT_PRICE_UNRESOLVED');
+  ctx.windowTotalMinor = amounts.windowTotalMinor;
+  ctx.hourlyCourtPriceMinor = amounts.hourlyCourtPriceMinor;
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
 }
 if (ctx.step === 'groupTariff') {
@@ -358,6 +436,14 @@ if (ctx.step === 'groupTariff') {
   }
   ctx.basePriceMinor = paidAmounts[0]; ctx.priceProductId = productIds[0];
   if (ctx.basePriceMinor > 1000000) return tariffRefusal('amount_ceiling', observed);
+  // A club training of direction 6233 (priced by the club product) is charged against the
+  // hour of court, so the quote has to prove that hour before it prices the event. Every other
+  // event keeps this exact flow.
+  if (eventRoute.category === 'group_training' && Number(ctx.directionId) === 6233
+    && ctx.requestedIds.some(id => ctx.rules[id]?.matched && !ctx.rules[id].legacy
+      && String(ctx.rules[id].rule?.productId || '').toLowerCase() === '14692232-12be-4218-9fa1-2d5b79b62035')) {
+    return lk1StartCourtWindow();
+  }
   ctx.pending = [...ctx.requestedIds]; ctx.quotes = []; ctx.step = 'next';
 }
 if (ctx.step === 'evaluate') {
@@ -377,7 +463,45 @@ if (ctx.step === 'evaluate') {
   } else {
     if (!Number.isSafeInteger(decision.benefit?.finalPriceMinor) || decision.benefit.finalPriceMinor < 0
       || decision.benefit.finalPriceMinor > ctx.basePriceMinor) return stop('PRICE_PREVIEW_DECISION_INVALID');
-    if (eventRoute) {
+    // The club co-pay (owner decision 2026-10-05) is not a discount on the event tariff: it is
+    // the hour of court, so the server amount may legitimately exceed the configured percent's
+    // price. It is accepted only when the decision's own numbers reproduce it from the hourly
+    // court price this quote proved, and every other shape keeps the reviewed arithmetic.
+    const courtCoPay = decision.benefit?.kind === 'COURT_HOURLY_COPAY';
+    const courtQuote = courtCoPay && Number.isInteger(decision.eventDiscountPercent)
+      && decision.eventDiscountPercent === 0
+      && Number.isSafeInteger(decision.benefit?.partialPriceCalculation?.hourlyCourtPriceMinor)
+      && Number.isSafeInteger(decision.benefit?.partialPriceCalculation?.perHourMinor)
+      && Number.isSafeInteger(decision.benefit?.partialPriceCalculation?.chargeableHours)
+      && decision.benefit.partialPriceCalculation.chargeableHours > 0
+      && Number.isSafeInteger(ctx.hourlyCourtPriceMinor) && ctx.hourlyCourtPriceMinor > 0
+      && decision.benefit.partialPriceCalculation.hourlyCourtPriceMinor === ctx.hourlyCourtPriceMinor
+      && decision.benefit.partialPriceCalculation.perHourMinor
+        === Math.floor(ctx.hourlyCourtPriceMinor / 4)
+      && decision.benefit.finalPriceMinor
+        === decision.benefit.partialPriceCalculation.perHourMinor
+          * decision.benefit.partialPriceCalculation.chargeableHours;
+    if (courtCoPay && !courtQuote) return stop(eventRoute ? eventRoute.error + '_DECISION_INVALID'
+      : 'PRICE_PREVIEW_DECISION_INVALID');
+    if (courtQuote) {
+      // The club co-pay: the charged amount is the court's own money, so the free minutes are
+      // the decision's own reviewed field (`courtMinutes` for a training, the shared game
+      // bucket for a club game) and the hour count has to add up with the paid minutes.
+      const minutes = canonical.isObj(decision.courtMinutes) ? decision.courtMinutes : decision.gameMinutes;
+      if (!canonical.isObj(minutes) || !Number.isSafeInteger(minutes.freeMinutes) || minutes.freeMinutes < 0
+        || !Number.isSafeInteger(minutes.paidOverageMinutes) || minutes.paidOverageMinutes < 0
+        || minutes.freeMinutes + minutes.paidOverageMinutes !== ctx.target.durationMinutes
+        || decision.subscriptionVisitCount !== 1
+        || Math.ceil(minutes.paidOverageMinutes / 60)
+          !== decision.benefit.partialPriceCalculation.chargeableHours) {
+        return stop(eventRoute ? eventRoute.error + '_DECISION_INVALID' : 'PRICE_PREVIEW_DECISION_INVALID');
+      }
+      const configuredPercent = ctx.groupDiscountPercent;
+      ctx.groupDiscountPercent = 0;
+      quote(ctx.currentId, 'AVAILABLE', decision.benefit.finalPriceMinor,
+        minutes.freeMinutes, minutes.paidOverageMinutes);
+      ctx.groupDiscountPercent = configuredPercent;
+    } else if (eventRoute) {
       // The first covered event of the subscription's day is carried by the plan itself: one
       // visit is consumed and nothing is charged. It is quoted as the full benefit at zero (100%
       // of the base), which is the shape the widget validates and the shape the booking gateway
@@ -569,6 +693,11 @@ while (ctx.step === 'next') {
     lk1: { rule: configured.rule, bookings: ctx.bookings, activeBookings: ctx.activeBookings,
       target: { resolutionSource: 'SERVER', eventId: ctx.exerciseId || 'preview', category: eventRoute ? eventCategory : 'GAME', currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF',
         basePriceMinor: ctx.basePriceMinor, startsAt: ctx.target.startsAt, durationMinutes: ctx.target.durationMinutes,
+        // The club co-pay base: the hourly court price this quote proved for the event window,
+        // or for the game window the split price lookup returned. It is absent when no server
+        // lookup proved it, and the shared evaluator refuses the club charge then.
+        ...(Number.isSafeInteger(ctx.hourlyCourtPriceMinor) && ctx.hourlyCourtPriceMinor > 0
+          ? { hourlyCourtPriceMinor: ctx.hourlyCourtPriceMinor } : {}),
         ...(eventRoute ? { stationId: ctx.target.stationId, roomId: ctx.target.roomId,
           externalEventTypeId: canonical.managedExternalEventTypeId(exercise), productTypeId: null,
           // The club training co-pay is bound to the Viva direction of the event, which the

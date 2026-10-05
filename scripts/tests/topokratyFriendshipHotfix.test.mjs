@@ -148,20 +148,25 @@ test("the plan-rules writer is replaced, not appended: 7 installed rules become 
   /installed plan-rules payload is not the reviewed prior|installed preimage drift/);
 });
 
-test("the earlier evaluator generation refuses the newer Patriots source", async () => {
+test("a focused generation embeds only the evaluator body it was reviewed with", async () => {
   const { PLAN_RULES_REVIEWED_EVALUATOR_SHA256, reviewedEvaluatorBody } =
     await import("../patch_live_lk1_plan_rules.mjs");
-  // The reviewed evaluator tracks the merged source (main's plan-rules release contract), while
-  // this focused generation was reviewed against the pre-Patriots body and must still refuse it:
-  // the generation-level pin, not the shared review pin, carries that refusal after the merge.
+  // The reviewed evaluator tracks the source this branch released (the plan-rules release pin),
+  // and the focused generation carries its own generation-level pin of the same body. That
+  // generation-level pin is what refuses a silent embed of a *newer* reviewed evaluator: the two
+  // move together only when the generation is re-reviewed against a fresh live pull, which is
+  // exactly the apply-time contract in the patcher header.
   assert.equal(sha256(reviewedEvaluatorBody()), PLAN_RULES_REVIEWED_EVALUATOR_SHA256);
-  assert.notEqual(sha256(reviewedEvaluatorBody()), TOPOKRATY_REVIEWED_EVALUATOR_SHA256);
+  assert.equal(sha256(reviewedEvaluatorBody()), TOPOKRATY_REVIEWED_EVALUATOR_SHA256);
   const embedded = "const lk1Old = true;\n";
   const source = `const head = 1;\n${EVALUATOR_BRANCH_OPEN}${embedded}${EVALUATOR_BRANCH_CLOSE}\nconst tail = 2;\n`;
+  // The generation pin is what refuses a reviewed body it was not reviewed with: a pin naming a
+  // different body stops the composition before any embedded-body comparison can answer.
   assert.throws(() => patchTopokratyEvaluatorBody(source, {
     ...TOPOKRATY_TARGET,
     liveEvaluatorFuncSha256: sha256(source),
     liveEmbeddedSha256: sha256(embedded),
+    reviewedEvaluatorSha256: "0".repeat(64),
   }), /Reviewed evaluator drift/);
 });
 
