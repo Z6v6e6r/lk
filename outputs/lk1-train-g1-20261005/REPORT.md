@@ -1,8 +1,9 @@
 # LK1 train 147 — G1/G2 preparation report (2026-10-05)
 
 Status: **prepared, not applied.** 147 was read only (`ssh -o BatchMode=yes root@lk-primary-147
-'sha256sum /root/.node-red/flows.json'` → `7e8a9570…`, 9 872 180 bytes, 4815 nodes; `scp` remains
-refused). No deploy, no flow import, no Node-RED restart, no global write, no push.
+'sha256sum /root/.node-red/flows.json'` → `7e8a9570…`, 9 872 180 bytes, 4815 nodes; `scp` is refused
+in this environment, per the preparation branch). No deploy, no flow import, no Node-RED restart, no
+global write, no push.
 
 Branch: `codex/lk1-train-g1-20261005`, worktree `.worktrees/lk1-train-g1-20261005`, created from the
 tip of `codex/lk1-train-147-prep-20261005` (`daf678ea`, current main `6f2f6c80` plus the prep
