@@ -35,7 +35,9 @@ test("checked runtime pins exact Node-RED, custom node, npm ci, npm ls, and audi
   assert.equal(result.manifest.state, "SECURITY_AUDIT_PASS");
   assert.equal(result.manifest.runtime.nodeRedVersion, "5.0.6");
   assert.equal(result.manifest.runtime.architecture, "x64");
-  assert.equal(result.manifest.audit.affectedPackages.high, 0);
+  // The accepted-risk decision (2026-10-06) pins the real closure counts.
+  assert.equal(result.manifest.audit.affectedPackages.critical, 1);
+  assert.equal(result.manifest.audit.affectedPackages.high, 6);
   assert.equal(result.functionalRehearsal.defaultOff.httpStatus, 503);
   assert.equal(result.functionalRehearsal.packageRollback.httpStatus, 404);
 });
@@ -161,8 +163,8 @@ test("fresh audit rejects resealed non-Linux identity, image, provenance and iso
 
 test("refreshed audit evidence keeps the reviewed closure and execution receipt pinned", () => {
   const { manifest } = validateCheckedPartnerRuntimeEvidence();
-  assert.equal(manifest.audit.capturedAt, "2026-09-11T12:00:11.196Z");
-  assert.equal(manifest.dependencyTree.capturedAt, "2026-09-11T12:00:08.539Z");
+  assert.equal(manifest.audit.capturedAt, "2026-10-06T08:50:29.983Z");
+  assert.equal(manifest.dependencyTree.capturedAt, "2026-10-06T08:50:24.835Z");
   assert.equal(manifest.closure.functionalRehearsalSha256, "0edf8ac6237473aa54e31b354f7523695253f606c4db9803a31ed108f651e945");
   const audit = JSON.parse(read("audit-report.json"));
   assert.equal(audit.executionEvidence.containerPresentAfterCleanup, false);

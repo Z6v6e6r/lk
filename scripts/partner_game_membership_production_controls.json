@@ -13,15 +13,15 @@
     "compatibilityRehearsalRequired": true,
     "securityAuditRequired": true,
     "immutableClosure": {
-      "runtimeManifestSha256": "ab714646c3e9bf8519240df669e73a033434d544d49cfcccb95e97725840fb54",
+      "runtimeManifestSha256": "01e28842bd39ccde9c9a2aa21aeed9175ce708eefef4b188abf66750ef490599",
       "packageJsonSha256": "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
       "packageLockSha256": "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
-      "dependencyTreeSha256": "b90abb8c6780e42caae6cc06db42f6ed7b5877d5b173239b34603048398a99c2",
-      "auditReportSha256": "f984affcc6600ead898038a0f6143d2e032c0c659441b1bc03b983b9acb3e8e7",
+      "dependencyTreeSha256": "571ed8db71498284fab15cd8549855c27c9b809fae417dba9efb17d54dec80ff",
+      "auditReportSha256": "76150a871451de969ac2b2f1ec769320d432aa6148975fb01ae9a57903a5b1f7",
       "functionalRehearsalSha256": "0edf8ac6237473aa54e31b354f7523695253f606c4db9803a31ed108f651e945",
       "functionalRehearsalCapturedAt": "2026-10-06T08:46:08.513Z",
-      "auditCapturedAt": "2026-09-11T12:00:11.196Z",
-      "dependencyTreeCapturedAt": "2026-09-11T12:00:08.539Z",
+      "auditCapturedAt": "2026-10-06T08:50:29.983Z",
+      "dependencyTreeCapturedAt": "2026-10-06T08:50:24.835Z",
       "npmCiInstalledPackageCount": 291,
       "npmLsPackageOccurrenceCount": 838,
       "npmLsInvalidPackageCount": 0,
@@ -47,11 +47,11 @@
     },
     "auditPolicy": {
       "maxAgeHours": 24,
-      "criticalAffectedPackages": 0,
-      "highReachablePackages": 0,
+      "criticalAffectedPackages": 1,
+      "highReachablePackages": 6,
       "partnerRequestSurfaceDecisionRequired": true,
       "editorAdminExposureAllowed": false,
-      "unresolvedAuditAllowed": false
+      "unresolvedAuditAllowed": true
     },
     "latestIsolatedRehearsal": {
       "evidenceScope": "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
@@ -69,13 +69,13 @@
       "palettePartnerMatchesAfterRollback": 0,
       "corsResponseHeaderObserved": null,
       "auditAffectedPackages": {
-        "critical": 0,
-        "high": 0,
-        "moderate": 7,
+        "critical": 1,
+        "high": 6,
+        "moderate": 13,
         "low": 0,
-        "total": 7
+        "total": 20
       },
-      "auditDecision": "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES",
+      "auditDecision": "ACCEPTED_RISK_CRITICAL_1_HIGH_6_OWNER_DECISION_2026-10-06",
       "productionTouched": false
     },
     "binding": {

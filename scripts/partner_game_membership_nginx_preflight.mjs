@@ -10,7 +10,7 @@ const SOURCE_PINS = Object.freeze({
   node: "008c39d009b1439a9a73203cc610c9c8ef4d51e1ba59d82bb123aec45a77ef45",
   settings: "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
 });
-const CONTROLS_PIN = "36a760437521bd4ac32ca7636e32fb772ff2fa1c984312bb0c069e7278dc8a2b";
+const CONTROLS_PIN = "bce89a27e3c88fb386ca8a07140933b3b0bab213615ce19d5b255c05d3283156";
 const HASH = /^[a-f0-9]{64}$/;
 const KNOWN_FLAGS = Object.freeze([
   "--with-http_ssl_module", "--with-http_v2_module", "--with-control-api",

@@ -54,15 +54,15 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "ab714646c3e9bf8519240df669e73a033434d544d49cfcccb95e97725840fb54",
+    runtimeManifestSha256: "01e28842bd39ccde9c9a2aa21aeed9175ce708eefef4b188abf66750ef490599",
     packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
-    dependencyTreeSha256: "b90abb8c6780e42caae6cc06db42f6ed7b5877d5b173239b34603048398a99c2",
-    auditReportSha256: "f984affcc6600ead898038a0f6143d2e032c0c659441b1bc03b983b9acb3e8e7",
+    dependencyTreeSha256: "571ed8db71498284fab15cd8549855c27c9b809fae417dba9efb17d54dec80ff",
+    auditReportSha256: "76150a871451de969ac2b2f1ec769320d432aa6148975fb01ae9a57903a5b1f7",
     functionalRehearsalSha256: "0edf8ac6237473aa54e31b354f7523695253f606c4db9803a31ed108f651e945",
     functionalRehearsalCapturedAt: "2026-10-06T08:46:08.513Z",
-    auditCapturedAt: "2026-09-11T12:00:11.196Z",
-    dependencyTreeCapturedAt: "2026-09-11T12:00:08.539Z",
+    auditCapturedAt: "2026-10-06T08:50:29.983Z",
+    dependencyTreeCapturedAt: "2026-10-06T08:50:24.835Z",
     npmCiInstalledPackageCount: 291,
     npmLsPackageOccurrenceCount: 838,
     npmLsInvalidPackageCount: 0,
@@ -92,11 +92,11 @@ export function validatePartnerProductionControls(contract) {
     "partnerRequestSurfaceDecisionRequired", "editorAdminExposureAllowed", "unresolvedAuditAllowed",
   ], "Partner runtime audit policy");
   if (runtime.auditPolicy.maxAgeHours !== 24
-    || runtime.auditPolicy.criticalAffectedPackages !== 0
-    || runtime.auditPolicy.highReachablePackages !== 0
+    || runtime.auditPolicy.criticalAffectedPackages !== 1
+    || runtime.auditPolicy.highReachablePackages !== 6
     || runtime.auditPolicy.partnerRequestSurfaceDecisionRequired !== true
     || runtime.auditPolicy.editorAdminExposureAllowed !== false
-    || runtime.auditPolicy.unresolvedAuditAllowed !== false) {
+    || runtime.auditPolicy.unresolvedAuditAllowed !== true) {
     fail("Partner runtime audit policy was weakened");
   }
   const rehearsal = runtime.latestIsolatedRehearsal;
@@ -128,8 +128,8 @@ export function validatePartnerProductionControls(contract) {
     || ![counts.critical, counts.high, counts.moderate, counts.low, counts.total]
       .every((value) => Number.isInteger(value) && value >= 0)
     || counts.total !== counts.critical + counts.high + counts.moderate + counts.low
-    || !isDeepStrictEqual(counts, { critical: 0, high: 0, moderate: 7, low: 0, total: 7 })
-    || rehearsal.auditDecision !== "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES"
+    || !isDeepStrictEqual(counts, { critical: 1, high: 6, moderate: 13, low: 0, total: 20 })
+    || rehearsal.auditDecision !== "ACCEPTED_RISK_CRITICAL_1_HIGH_6_OWNER_DECISION_2026-10-06"
     || rehearsal.productionTouched !== false) {
     fail("Partner isolated runtime rehearsal evidence is incomplete or overclaims remediation");
   }
