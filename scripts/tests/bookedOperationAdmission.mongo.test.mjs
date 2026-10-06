@@ -61,7 +61,7 @@ test('real session/PG -> owning source admission -> physical Mongo -> authorized
   const mockProvider=http.createServer((req,res)=>{
     providerCalls++;if(req.method!=='GET'){providerWrites++;res.writeHead(405);return res.end();}
     res.setHeader('Content-Type','application/json');
-    assert.equal(req.headers.authorization,'Bearer b1-synthetic-provider');
+    assert.equal(req.headers.authorization,'Bearer fixture');
     const pathname=new URL(req.url,'http://127.0.0.1').pathname;
     let body;
     if(pathname.endsWith('/profile'))body={id:actor,phone:'0000000000'};
@@ -96,7 +96,7 @@ test('real session/PG -> owning source admission -> physical Mongo -> authorized
     const globalContext={get:key=>key==='subscriptions_lk1_plan_rules'?PLAN_RULES_LIMIT_8:key==='subscriptions_lk1_product_policy'?HUB_POLICY_LIMIT_8:undefined};
     const admit=createBookedOperationAdmissionOwner({
       collection:{find:(...args)=>collection.find(...args),insertOne:async(...args)=>{inserts++;const result=await collection.insertOne(...args);if(loseNextAck){loseNextAck=false;throw Error('Synthetic lost ACK');}return result;}},
-      globalContext,onMetric:({phase})=>phases.push(phase),resolveProviderAuthorization:async()=> 'Bearer b1-synthetic-provider',
+      globalContext,onMetric:({phase})=>phases.push(phase),resolveProviderAuthorization:async()=> 'Bearer fixture',
       providerRead:async(path,{authorization,signal})=>{
         const response=await fetch(providerBase+path,{method:'GET',redirect:'error',signal,headers:{Authorization:authorization}});
         return {status:response.status,body:await response.json()};
