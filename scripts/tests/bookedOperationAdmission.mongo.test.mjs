@@ -120,7 +120,7 @@ test(focused?'PREPARED + lost response -> UNKNOWN, same attempt/key recovery wit
       cwd:checkout,env:{PATH:process.env.PATH,TMPDIR:process.env.TMPDIR,NODE_OPTIONS:'--max-old-space-size=768'},stdio:['pipe','pipe','pipe']});
     let output='';let error='';child.stdout.on('data',c=>{output+=c;assert.ok(output.length<10000);});child.stderr.on('data',c=>{error+=c;assert.ok(error.length<20000);});
     child.stdin.end(JSON.stringify({baseUrl,pgUrl,privateKeyPem:privateKey.export({type:'pkcs8',format:'pem'}),issuer,audience,tenantId,tenantKey,userId,providerClientId:actor,mappingId,gameId,providerExerciseId,targetMappingId,
-      startsAt,durationMinutes:60,capacity:4,targetVersion:'fixture-v1',controlUrl:controlBase,scenario}));
+      startsAt,durationMinutes:60,capacity:4,targetVersion:'fixture-v1',controlUrl:controlBase,...(focused?{scenario}:{})}));
     const watchdog=setTimeout(()=>child.kill('SIGTERM'),35000);
     const code=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);}).finally(()=>clearTimeout(watchdog));
     // Child failure diagnostics have no credential input echo; errors remain in private LOCAL logs.
