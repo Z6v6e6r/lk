@@ -6,7 +6,7 @@ import { PartnerIngressEvidenceError, parseCanonicalIngressJson } from "./partne
 // It still does not observe a live guard or effective ingress configuration.
 // Updating the packet controls pin must never promote its NOT_PROVEN results.
 const SOURCE_PINS = Object.freeze({
-  core: "5e022c11ae6e67be74c4a4bb5fac7d9e7366d40519e47abf4fcf07eefd3d255b",
+  core: "3755b07576f796020b37ed7c99f08cacdd69bf546a20813c8a277f04956b3e37",
   node: "008c39d009b1439a9a73203cc610c9c8ef4d51e1ba59d82bb123aec45a77ef45",
   settings: "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
 });
