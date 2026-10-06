@@ -142,6 +142,10 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
                 games: clientConfig?.games && typeof clientConfig.games === "object" && !Array.isArray(clientConfig.games)
                   ? clientConfig.games
                   : {},
+                // Pass denials through untouched so a malformed list fails closed in the
+                // service instead of being silently dropped here.
+                deniedGames: clientConfig?.deniedGames === undefined ? [] : clientConfig.deniedGames,
+                deniedStations: clientConfig?.deniedStations === undefined ? [] : clientConfig.deniedStations,
               };
             };
             const service = new core.PartnerGameMembershipApiService({

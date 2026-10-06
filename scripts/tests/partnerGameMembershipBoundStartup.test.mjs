@@ -331,6 +331,26 @@ test("bound active startup admits a declared client whose game set is a subset",
   assert.equal(f.handles.size, 0);
 });
 
+test("bound active startup admits an anchored wildcard game grant", (t) => {
+  const f = activeFixture(t, {
+    authorizedClients: { "padlhub-canary": ["*"] },
+    keyring: canaryKeyring({ "*": { tenantKey: null, capacity: null } }),
+  });
+  const result = startup.validateGuardedStartup(f.input);
+  assert.equal(result.expectedHost, f.anchor.expectedHost);
+  assert.equal(f.handles.size, 0);
+});
+
+test("an anchored wildcard grant also admits an explicitly keyed game and denial lists", (t) => {
+  const f = activeFixture(t, { authorizedClients: { "padlhub-canary": ["*"] } });
+  const entry = canaryKeyring()["padlhub-canary"];
+  f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify({
+    "padlhub-canary": { ...entry, deniedGames: [SECOND_GAME], deniedStations: [ACTIVE_STATION] },
+  });
+  startup.validateGuardedStartup(f.input);
+  assert.equal(f.handles.size, 0);
+});
+
 test("bound active startup admits a fully gated canary release", (t) => {
   const f = activeFixture(t);
   const result = startup.validateGuardedStartup(f.input);
@@ -374,6 +394,21 @@ for (const [name, mutate] of [
   ["keyring enables an undeclared second client", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify({ ...canaryKeyring(), "second-client": secondClientEntry }); }],
   ["keyring game outside the declared set", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify(canaryKeyring({ "other-game": { tenantKey: null, capacity: 4 } })); }],
   ["keyring without games", (f) => { f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify(canaryKeyring({})); }],
+  ["keyring wildcard without an anchored wildcard", (f) => {
+    f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify(canaryKeyring({ "*": { tenantKey: null, capacity: null } }));
+  }],
+  ["malformed game denial list", (f) => {
+    const entry = canaryKeyring()["padlhub-canary"];
+    f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify({
+      "padlhub-canary": { ...entry, deniedGames: "not-a-list" },
+    });
+  }],
+  ["repeated station denial", (f) => {
+    const entry = canaryKeyring()["padlhub-canary"];
+    f.input.env.LK_PARTNER_GAME_API_KEYRING_JSON = JSON.stringify({
+      "padlhub-canary": { ...entry, deniedStations: [ACTIVE_STATION, ACTIVE_STATION] },
+    });
+  }],
   ["second client uses another client's game", (f) => {
     f.anchor.authorizedClients = { "padlhub-canary": [ACTIVE_GAME], "partner-second": [SECOND_GAME] };
     f.writeAnchor();
