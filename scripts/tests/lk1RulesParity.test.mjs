@@ -22,6 +22,22 @@ function totalReader(source, canonical = false) {
     canonical ? { isObj } : isObj);
 }
 
+function refusalMessage() {
+  const productId = '14692232-12be-4218-9fa1-2d5b79b62035';
+  const msg = { _subscriptionBooking: { caller: 'http', lk1: {} }, _managedSubscriptionPolicyInput: {
+    evaluatedAt: '2026-08-14T08:00:00.000Z', action: 'BOOK_GROUP_TRAINING',
+    lk1Policy: PLAN_RULES_LIMIT_8.rules.find(r => r.productId === productId),
+    lk1ProductBinding: { policyProductId: productId, ownedProductId: productId, clientSubscriptionId: 'fixture:club-sub' },
+    target: { resolutionSource: 'SERVER', stationId: 'station-club', category: 'GROUP_TRAINING',
+      externalEventTypeId: 'viva:direction:6233:type:2349', durationMinutes: 120,
+      startsAt: '2026-08-15T07:00:00.000Z', basePriceMinor: 100000, currency: 'RUB',
+      priceSource: 'VIVA_EXISTING_TARIFF', directionId: 6233, hourlyCourtPriceMinor: 600000 },
+    usage: { activeServiceScope: 'SUBSCRIPTION_BENEFIT_ONLY', dailyBucketLocalDate: '2026-08-15',
+      activeServices: 0, usedOrReservedFreeMinutesToday: 0 },
+  } };
+  return msg;
+}
+
 test('booking and preview convert the existing ruble total exactly once, including kopecks', () => {
   for (const reader of [totalReader(hooks), totalReader(preview, true)]) {
     for (const [amount, minor] of [[12000, 1200000], ['12000.50', 1200050], [0.29, 29], [100000, 10000000]]) {
@@ -57,6 +73,28 @@ test('the current composer refuses unknown full-flow bytes; old train generation
   assert.throws(() => composeLk1TrainG2Artifacts(Buffer.from('[]')), /postimage drift/);
 });
 
+test('the source denied graph preserves pending/code and never opens payment on repeated refusal', () => {
+  const evaluator = new Function('msg', read('../nodered_lk1_hub_nodes/evaluator.js'));
+  const blocked = new Function('msg', read('../nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js'));
+  const finalize = new Function('msg', 'const ctx = msg._subscriptionBooking;\n'
+    + 'const payload = msg.payload;\nconst responseStatus = Number(msg.statusCode) || 0;\n'
+    + read('../nodered_lk1_hub_nodes/finalize.js'));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const msg = refusalMessage();
+    msg._subscriptionBooking.operationId = 'fixture-court-refusal';
+    const outputs = evaluator(msg);
+    assert.equal(outputs[0], null, 'no admission output on initial or repeated command');
+    assert.equal(outputs[1]._managedSubscriptionPolicyDecision.eligible, false);
+    const response = finalize(blocked(outputs[1]));
+    assert.equal(response[0], null, 'no create/payment continuation');
+    assert.equal(response[1].statusCode, 202);
+    assert.equal(response[1].payload.state, 'PENDING_CONFIRMATION');
+    assert.equal(response[1].payload.operationId, 'fixture-court-refusal');
+    assert.equal(response[1].payload.details.code, 'LK1_COURT_COPAY_UNREPRESENTABLE');
+    for (const field of ['paymentUrl', 'transactionId', 'bookingId']) assert.equal(response[1].payload[field], undefined);
+  }
+});
+
 const snapshot = process.env.LK1_RULES_PARITY_SNAPSHOT;
 const skip = !snapshot || !fs.existsSync(snapshot) ? 'private reviewed snapshot not supplied' : false;
 test('one current graph composes money parity, keeps dormant cap8 policies and refreshes matching receipt', { skip }, () => {
@@ -78,18 +116,7 @@ test('one current graph composes money parity, keeps dormant cap8 policies and r
   assert.ok(gateway.indexOf('if (ctx.step === "lk1_court_window")') < gateway.indexOf('if (ctx.step === "exercise")'));
   assert.ok(gateway.includes('ctx.step = "exercise";\n  msg.payload = exercise;'));
   // Exercise the installed denied-output graph as well as the defensive gateway guard above.
-  const productId = '14692232-12be-4218-9fa1-2d5b79b62035';
-  const msg = { _subscriptionBooking: { caller: 'http', lk1: {} }, _managedSubscriptionPolicyInput: {
-    evaluatedAt: '2026-08-14T08:00:00.000Z', action: 'BOOK_GROUP_TRAINING',
-    lk1Policy: PLAN_RULES_LIMIT_8.rules.find(r => r.productId === productId),
-    lk1ProductBinding: { policyProductId: productId, ownedProductId: productId, clientSubscriptionId: 'fixture:club-sub' },
-    target: { resolutionSource: 'SERVER', stationId: 'station-club', category: 'GROUP_TRAINING',
-      externalEventTypeId: 'viva:direction:6233:type:2349', durationMinutes: 120,
-      startsAt: '2026-08-15T07:00:00.000Z', basePriceMinor: 100000, currency: 'RUB',
-      priceSource: 'VIVA_EXISTING_TARIFF', directionId: 6233, hourlyCourtPriceMinor: 600000 },
-    usage: { activeServiceScope: 'SUBSCRIPTION_BENEFIT_ONLY', dailyBucketLocalDate: '2026-08-15',
-      activeServices: 0, usedOrReservedFreeMinutesToday: 0 },
-  } };
+  const msg = refusalMessage();
   const requestInput = structuredClone(msg._managedSubscriptionPolicyInput);
   const evaluate = new Function('msg', node(built.flow, 'evaluator').func);
   const outputs = evaluate(msg);
