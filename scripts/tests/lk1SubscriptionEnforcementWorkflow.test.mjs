@@ -35,12 +35,22 @@ function assertFocusedGate(candidateJob, name, id, run, condition, category) {
 }
 
 const appCondition = "steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''";
+const bookedOwnerSuite = "scripts/tests/bookedOperationRead.test.mjs";
+function assertBookedOwnerArgument(run) {
+  const args = run.trim().split(/\s+/);
+  assert.deepEqual(args.slice(0, 3), ["node", "--experimental-strip-types", "--test"]);
+  assert.ok(args.slice(3).every((arg) => /^scripts\/tests\/.+\.test\.(?:ts|mjs)$/.test(arg)));
+  assert.equal(args.filter((arg) => arg === bookedOwnerSuite).length, 1,
+    "deterministic commercial receipt owner suite must run exactly once");
+}
 const focusedGates = [
   ["Validate Codex main worktree guard", "check_worktree_guard", "npm run test:codex-main-worktree-guard", undefined, undefined],
   ["Validate leave generation regressions", "check_leave_generations", "npm run test:leave-generation-regressions", appCondition, "app"],
   ["Frontend loader and community regressions", "check_frontend",
     "npm run test:community-list-performance\nnode --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts\nnode --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs",
     appCondition, "app"],
+  ["Run critical subscription regression matrix", "check_9",
+    step("Run critical subscription regression matrix").run.trim(), appCondition, "app"],
 ];
 
 async function createBinaryDiffRepo(t, entries) {
@@ -514,6 +524,20 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Fetch pinned legacy build image").run,
     "docker pull node@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
   );
+});
+
+test("critical matrix owner regression cannot be removed, renamed, duplicated or soft-failed", () => {
+  const run = step("Run critical subscription regression matrix").run;
+  assertBookedOwnerArgument(run);
+  const mutations = [
+    run.replace(bookedOwnerSuite, ""),
+    run.replace(bookedOwnerSuite, "scripts/tests/bookedOperationRead.mongo.test.mjs"),
+    `${run} ${bookedOwnerSuite}`,
+    `${run} || true`,
+  ];
+  for (const mutated of mutations) {
+    assert.throws(() => assertBookedOwnerArgument(mutated), assert.AssertionError);
+  }
 });
 
 test("focused CI gates reject removal, duplicate identity, conditional execution and soft failures", () => {
