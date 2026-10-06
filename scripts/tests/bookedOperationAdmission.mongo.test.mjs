@@ -11,6 +11,9 @@ import {createBookedOperationDelegationVerifier,createBookedOperationMongoReader
 import {PLAN_RULES_LIMIT_8,HUB_POLICY_LIMIT_8} from '../lib/lk1ActiveBookingLimit.mjs';
 
 const task='b1-booked-operation-admission-20261006';
+const scenario=process.env.B1_ADMISSION_SCENARIO||'full';
+assert.ok(['full','lost-response-recovery'].includes(scenario));
+const focused=scenario==='lost-response-recovery';
 const mongoUrl=process.env.B1_ADMISSION_MONGO_URL;
 const pgUrl=process.env.B1_ADMISSION_PG_URL;
 const checkout=process.env.B1_ADMISSION_LK2_CHECKOUT;
@@ -42,12 +45,12 @@ function ownFixtures() {
     for(const [root,head] of [[checkout,process.env.B1_ADMISSION_LK2_HEAD],[fileURLToPath(new URL('../../',import.meta.url)),process.env.B1_ADMISSION_LK1_HEAD]]) {
       assert.match(head||'',/^[a-f0-9]{40}$/);assert.equal(execFileSync('git',['-C',root,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),head);
     }
-  } else assert.equal(execFileSync('git',['-C',checkout,'branch','--show-current'],{encoding:'utf8'}).trim(),'codex/lk2-booked-operation-admission-20261006');
+  } else assert.equal(execFileSync('git',['-C',checkout,'branch','--show-current'],{encoding:'utf8'}).trim(),focused?'codex/lk2-admission-uncertain-response-20261006':'codex/lk2-booked-operation-admission-20261006');
   assert.ok(fs.existsSync(checkout+'/scripts/b1-booked-operation-admission-rehearsal.ts'));
 }
 const listen=async server=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));return `http://127.0.0.1:${server.address().port}`;};
 const close=server=>new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));
-test('real session/PG -> owning source admission -> physical Mongo -> authorized B1 SDK read, with no business continuation', {skip:!mongoUrl||!pgUrl||!checkout,timeout:45000}, async()=>{
+test(focused?'PREPARED + lost response -> UNKNOWN, same attempt/key recovery without new purchase or owner/provider writes':'real session/PG -> owning source admission -> physical Mongo -> authorized B1 SDK read, with no business continuation', {skip:!mongoUrl||!pgUrl||!checkout,timeout:45000}, async()=>{
   ownFixtures();
   const client=new MongoClient(mongoUrl,{serverSelectionTimeoutMS:2000,connectTimeoutMS:2000,monitorCommands:true,maxPoolSize:4});
   const commands=[];client.on('commandStarted',e=>commands.push(e.commandName));
@@ -83,6 +86,7 @@ test('real session/PG -> owning source admission -> physical Mongo -> authorized
     else if(action==='restore')providerDrift=false;
     else if(action==='lose_next_insert_ack')loseNextAck=true;
     else if(action==='lose_next_http_response')loseNextHttpResponse=true;
+    else if(action==='assert_single_prepared'&&focused){try{const snapshot=await readSnapshot();assert.equal(snapshot.rows.length,1);assert.equal(snapshot.rows[0].state,'PREPARED');assert.equal(snapshot.rows[0].attempts,0);assert.equal(snapshot.inserts,1);assert.equal(snapshot.providerWrites,0);}catch{res.writeHead(500);return res.end();}}
     else if(action==='checkpoint_get')getSnapshot=await readSnapshot();
     else if(action==='assert_get_unchanged'){try{assert.deepEqual(await readSnapshot(),getSnapshot);}catch{res.writeHead(500);return res.end();}}
     else {res.writeHead(400);return res.end();}
@@ -116,13 +120,13 @@ test('real session/PG -> owning source admission -> physical Mongo -> authorized
       cwd:checkout,env:{PATH:process.env.PATH,TMPDIR:process.env.TMPDIR,NODE_OPTIONS:'--max-old-space-size=768'},stdio:['pipe','pipe','pipe']});
     let output='';let error='';child.stdout.on('data',c=>{output+=c;assert.ok(output.length<10000);});child.stderr.on('data',c=>{error+=c;assert.ok(error.length<20000);});
     child.stdin.end(JSON.stringify({baseUrl,pgUrl,privateKeyPem:privateKey.export({type:'pkcs8',format:'pem'}),issuer,audience,tenantId,tenantKey,userId,providerClientId:actor,mappingId,gameId,providerExerciseId,targetMappingId,
-      startsAt,durationMinutes:60,capacity:4,targetVersion:'fixture-v1',controlUrl:controlBase}));
+      startsAt,durationMinutes:60,capacity:4,targetVersion:'fixture-v1',controlUrl:controlBase,scenario}));
     const watchdog=setTimeout(()=>child.kill('SIGTERM'),35000);
     const code=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);}).finally(()=>clearTimeout(watchdog));
     // Child failure diagnostics have no credential input echo; errors remain in private LOCAL logs.
     assert.equal(code,0,error+'\nOwner result codes: '+JSON.stringify(ownerResults)+'\nPhases: '+JSON.stringify(phases));
-    const proof=JSON.parse(output.trim());assert.equal(proof.result,'PASS');assert.equal(proof.acceptedOperations,4);
-    const rows=await collection.find({}).toArray();assert.equal(rows.length,4);
+    const proof=JSON.parse(output.trim());assert.equal(proof.result,'PASS');assert.equal(proof.acceptedOperations,focused?1:4);if(focused){assert.equal(proof.scenario,scenario);assert.equal(proof.operationStatusAfterLoss,'UNKNOWN');assert.equal(proof.retainedAttemptAndKey,true);assert.equal(proof.canStartNewPurchase,false);assert.equal(proof.noAdditionalOwnerOrProviderWrites,true);}
+    const rows=await collection.find({}).toArray();assert.equal(rows.length,focused?1:4);
     for(const row of rows) {
       assert.equal(row.state,'PREPARED');assert.equal(row.admissionOnly,true);assert.equal(row.attempts,0);assert.match(row._id,/^lk1-product-v2:/);
       assert.equal(row.padlHubOperation.userId,userId);assert.equal(row.padlHubOperation.tenantId,tenantId);assert.equal(row.padlHubOperation.providerMappingId,mappingId);
@@ -130,8 +134,8 @@ test('real session/PG -> owning source admission -> physical Mongo -> authorized
       for(const field of ['bookingId','upstreamBookingId','transactionId'])assert.equal(row[field],undefined);
       for(const field of ['createAttemptedAt','bookingAttemptedAt','transactionAttemptedAt','checkout'])assert.equal(row.lk1[field],undefined);
     }
-    assert.equal(providerWrites,0);assert.ok(providerCalls>0);assert.ok(inserts>=4);assert.equal(commands.includes('update'),false);
-    console.log(JSON.stringify({proof:'LOCAL_PHYSICAL_AUTH_PG_MONGO_B1',ownerRecords:rows.length,providerWrites,ownerUpdates:0,sourcePath:true}));
+    assert.equal(providerWrites,0);assert.ok(providerCalls>0);assert.ok(inserts>=(focused?1:4));if(focused)assert.equal(inserts,1);assert.equal(commands.includes('update'),false);
+    console.log(JSON.stringify({proof:focused?'LOCAL_PHYSICAL_ADMISSION_LOST_RESPONSE_RECOVERY':'LOCAL_PHYSICAL_AUTH_PG_MONGO_B1',ownerRecords:rows.length,providerWrites,ownerUpdates:0,sourcePath:true}));
   } finally {
     if(ownerServer?.listening)await close(ownerServer);
     if(mockProvider.listening)await close(mockProvider);if(control.listening)await close(control);
