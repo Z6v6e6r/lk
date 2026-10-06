@@ -19,7 +19,8 @@ function decode(part) {
 }
 
 // Trust is injected by the host. No key discovery, service-token fallback or live activation.
-export function createBookedOperationDelegationVerifier({ keys, issuer, audience, tenantBindings, now = Date.now }) {
+export function createBookedOperationDelegationVerifier({ keys, issuer, audience, tenantBindings, now = Date.now, admission = false }) {
+  const expectedPath = admission ? '/lk/integrations/v1/booked-operation-admissions' : null;
   if (typeof issuer !== 'string' || !/^[!-~]{1,512}$/.test(issuer)
     || typeof audience !== 'string' || !/^[!-~]{1,256}$/.test(audience)
     || !keys || !tenantBindings || Object.keys(keys).length === 0
@@ -37,7 +38,7 @@ export function createBookedOperationDelegationVerifier({ keys, issuer, audience
   return ({ token, operationId, path, correlationId }) => {
     try {
       if (typeof token !== 'string' || token.length > 4096 || !uuid.test(operationId)
-        || path !== BOOKED_OPERATION_READ_PREFIX + operationId || !correlation.test(correlationId)) return null;
+        || path !== (expectedPath ?? BOOKED_OPERATION_READ_PREFIX + operationId) || !correlation.test(correlationId)) return null;
       const parts = token.split('.');
       if (parts.length !== 3) return null;
       const [headerPart, payloadPart, signaturePart] = parts;
@@ -53,8 +54,8 @@ export function createBookedOperationDelegationVerifier({ keys, issuer, audience
       const claims = decode(payloadPart);
       const seconds = Math.floor(now() / 1000);
       if (claims.iss !== issuer || claims.aud !== audience || claims.caller !== 'lk2-api'
-        || claims.scope !== BOOKED_OPERATION_READ_SCOPE || claims.contract_version !== 1
-        || claims.method !== 'GET' || claims.path !== path || claims.operation_id !== operationId
+        || claims.scope !== (admission ? 'subscription-runtime.booked-operation.admit' : BOOKED_OPERATION_READ_SCOPE) || claims.contract_version !== 1
+        || claims.method !== (admission ? 'POST' : 'GET') || claims.path !== path || claims.operation_id !== operationId
         || claims.correlation_id !== correlationId || claims.provider !== 'VIVA'
         || !uuid.test(claims.sub) || !uuid.test(claims.tenant_id) || !uuid.test(claims.sid)
         || !uuid.test(claims.provider_mapping_id) || !uuid.test(claims.jti)
