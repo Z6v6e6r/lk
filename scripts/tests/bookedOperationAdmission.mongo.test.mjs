@@ -29,7 +29,9 @@ function ownFixtures() {
     if(ci) {
       assert.equal(owned.Config.Labels['padlhub.ci-run'],process.env.GITHUB_RUN_ID);
       const image=JSON.parse(execFileSync('docker',['image','inspect',owned.Image],{encoding:'utf8'}))[0];
-      assert.ok(image.RepoDigests.includes(`${name==='pg'?'postgres':'mongo'}@${digest}`),'Pinned CI manifest required');
+      assert.equal(image.Os,'linux');assert.equal(image.Architecture,'amd64');assert.equal(image.Id,owned.Image);
+      const reference=name==='mongo'?'mongo@sha256:a3ba70fe8da14d155e158245fc89a9dd6adf92ae34976ebce24464a3c1573c78':`postgres@${digest}`;
+      assert.ok(image.RepoDigests.map(r=>r.replace(/^docker\.io\/library\//,'')).includes(reference),'Pinned CI manifest required');
     } else assert.equal(owned.Image,digest);
     const expectedVolumes=name==='mongo'?['b1-admission-mongo-20261006-data','b1-admission-mongo-20261006-configdb']:['b1-admission-pg-20261006-data'];
     assert.deepEqual(owned.Mounts.map(m=>m.Name).sort(),expectedVolumes.sort());assert.ok(owned.Mounts.every(m=>m.Type==='volume'));
