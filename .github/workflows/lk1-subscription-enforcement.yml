@@ -440,6 +440,21 @@ jobs:
           scripts/tests/tournamentSubscriptionDiscount.test.ts
           scripts/tests/tournamentSignup.checkoutReadiness.test.ts
           scripts/tests/tournamentSignup.paymentResolution.test.ts
+          scripts/tests/bookedOperationRead.test.mjs
+          scripts/tests/bookedOperationAdmission.test.mjs
+          scripts/tests/b1BookedOperationAdmissionCiContract.test.mjs
+
+      - name: Run physical booked-operation admission with owned fixtures
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        id: check_b1_admission
+        env:
+          DELIVERY_CATEGORY: business
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          B1_ADMISSION_LK1_HEAD: ${{ env.EXPECTED_HEAD_SHA }}
+          B1_ADMISSION_LK1_SOURCE_HEAD: ef4d9fced42badbc35106f4589ac2e99ecf6d9f5
+          B1_ADMISSION_LK2_HEAD: b012d5ac84c5750255f0141636114890048ec2e3
+          B1_ADMISSION_LK2_HELPER_BLOB: 1ec17962d8acb3060861af05f44450b1b6c1c9ca
+        run: node scripts/runB1BookedOperationAdmissionCi.mjs
 
       - name: Run unified candidate and drift-negative tests
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

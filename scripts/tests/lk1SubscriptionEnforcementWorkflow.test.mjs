@@ -35,12 +35,25 @@ function assertFocusedGate(candidateJob, name, id, run, condition, category) {
 }
 
 const appCondition = "steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''";
+const bookedOwnerSuite = "scripts/tests/bookedOperationRead.test.mjs";
+function assertBookedOwnerArgument(run) {
+  const args = run.trim().split(/\s+/);
+  assert.deepEqual(args.slice(0, 3), ["node", "--experimental-strip-types", "--test"]);
+  assert.ok(args.slice(3).every((arg) => /^scripts\/tests\/.+\.test\.(?:ts|mjs)$/.test(arg)));
+  assert.equal(args.filter((arg) => arg === bookedOwnerSuite).length, 1,
+    "deterministic commercial receipt owner suite must run exactly once");
+}
 const focusedGates = [
   ["Validate Codex main worktree guard", "check_worktree_guard", "npm run test:codex-main-worktree-guard", undefined, undefined],
   ["Validate leave generation regressions", "check_leave_generations", "npm run test:leave-generation-regressions", appCondition, "app"],
   ["Frontend loader and community regressions", "check_frontend",
     "npm run test:community-list-performance\nnode --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts\nnode --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs",
     appCondition, "app"],
+  ["Run critical subscription regression matrix", "check_9",
+    step("Run critical subscription regression matrix").run.trim(), appCondition, "app"],
+  ["Run physical booked-operation admission with owned fixtures", "check_b1_admission",
+    "node scripts/runB1BookedOperationAdmissionCi.mjs",
+    "steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'", "business"],
 ];
 
 async function createBinaryDiffRepo(t, entries) {
@@ -423,6 +436,7 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
   const mandatorySteps = [
     "Validate LK1 workflow event and identity contract",
     "Run critical subscription regression matrix",
+    "Run physical booked-operation admission with owned fixtures",
     "Run unified candidate and drift-negative tests",
     "Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT",
     "Run tracked credential and authenticated-route security tests",
@@ -516,6 +530,20 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
   );
 });
 
+test("critical matrix owner regression cannot be removed, renamed, duplicated or soft-failed", () => {
+  const run = step("Run critical subscription regression matrix").run;
+  assertBookedOwnerArgument(run);
+  const mutations = [
+    run.replace(bookedOwnerSuite, ""),
+    run.replace(bookedOwnerSuite, "scripts/tests/bookedOperationRead.mongo.test.mjs"),
+    `${run} ${bookedOwnerSuite}`,
+    `${run} || true`,
+  ];
+  for (const mutated of mutations) {
+    assert.throws(() => assertBookedOwnerArgument(mutated), assert.AssertionError);
+  }
+});
+
 test("focused CI gates reject removal, duplicate identity, conditional execution and soft failures", () => {
   for (const args of focusedGates) {
     const [name] = args;
@@ -555,4 +583,26 @@ test("workflow contains no manual or production mutation path", () => {
     /(?:^|\n)\s*(?:ssh|scp|rsync|docker|kubectl|helm|systemctl|pm2|npm run deploy(?::|\s))/,
   );
   assert.doesNotMatch(runCommands, /(?:node-red|flows\.json).*(?:import|restart)/i);
+});
+
+test("physical admission is an exact-source required business gate with no skip fallback", () => {
+  const physical = step("Run physical booked-operation admission with owned fixtures");
+  assert.deepEqual(physical.env, {
+    DELIVERY_CATEGORY: "business", RUNNER_ENVIRONMENT: "${{ runner.environment }}",
+    B1_ADMISSION_LK1_HEAD: "${{ env.EXPECTED_HEAD_SHA }}",
+    B1_ADMISSION_LK1_SOURCE_HEAD: "ef4d9fced42badbc35106f4589ac2e99ecf6d9f5",
+    B1_ADMISSION_LK2_HEAD: "b012d5ac84c5750255f0141636114890048ec2e3",
+    B1_ADMISSION_LK2_HELPER_BLOB: "1ec17962d8acb3060861af05f44450b1b6c1c9ca",
+  });
+  const matrix = step("Run critical subscription regression matrix").run.split(/\s+/);
+  for (const path of ["scripts/tests/bookedOperationAdmission.test.mjs", "scripts/tests/b1BookedOperationAdmissionCiContract.test.mjs"])
+    assert.equal(matrix.filter((arg) => arg === path).length, 1);
+  const source = readFileSync(new URL("../runB1BookedOperationAdmissionCi.mjs", import.meta.url), "utf8");
+  assert.match(source, /assert\.equal\(process\.env\.GITHUB_REPOSITORY, "Z6v6e6r\/lk"\)/);
+  assert.match(source, /assert\.equal\(process\.env\.RUNNER_ENVIRONMENT, "github-hosted"\)/);
+  assert.match(source, /B1_ADMISSION_REQUIRED: "1"/);
+  assert.match(source, /assertAdmissionPhysicalProof\(tap, 0\)/);
+  assert.match(source, /assertAdmissionCleanup\(contract, cleanupProof\)/);
+  assert.doesNotMatch(source, /docker[^\n]*(?:prune|--privileged|--network=host)|continue-on-error|GITHUB_TOKEN|NPM_TOKEN|ssh|scp|rsync/);
+  assert.match(step("Required delivery result").run, /^node scripts\/delivery-check-result\.mjs$/);
 });
