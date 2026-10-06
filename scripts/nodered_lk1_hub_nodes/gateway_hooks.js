@@ -175,14 +175,19 @@ const lk1CourtWindowNeeded = (ctx) => {
   return !(Number.isSafeInteger(ctx.lk1TariffProof.windowTotalMinor)
     && ctx.lk1TariffProof.windowTotalMinor > 0);
 };
-// The window total is the only money this proof may carry, and it must be a whole positive
-// number of minor units. The response is not repeated against the request identity here: the
+// Viva's master-service total is in rubles, as in the exact split price contract. Convert once
+// to minor units before deriving the court hour. The response is not repeated against identity:
 // request URL already binds station, room and window, and the step that consumes this payload
 // has proved the URL it answered. The ceiling keeps a malformed or promotional payload from
 // entering the shared arithmetic as an absurd amount.
 const lk1CourtWindowTotal = (payload) => {
   if (!isObj(payload)) return null;
-  const total = Number(payload.total);
+  const amount = payload.total;
+  if (!((typeof amount === "number" && Number.isFinite(amount))
+    || (typeof amount === "string" && /^\d+(?:\.\d{1,2})?$/.test(amount)))) return null;
+  const rubles = Number(amount);
+  const total = Math.round(rubles * 100);
+  if (Math.abs(rubles * 100 - total) > 1e-7) return null;
   if (!Number.isSafeInteger(total) || total <= 0 || total > 10_000_000) return null;
   return total;
 };
