@@ -298,3 +298,19 @@ test("unreachable files and caller-supplied worker/application claims are not pr
     rejected(() => verifyLocalNginxSharedOverlayChange({ ...change(), [key]: true }), "INPUT_INVALID");
   }
 });
+
+test("rate ceilings stay at the reviewed defaults unless the caller pins them", () => {
+  assert.match(overlay.configuration, /limit_req_zone \$pgm_v02_client zone=pgm_v02_client_rate:1m rate=2r\/s;/);
+  assert.match(overlay.configuration, /limit_req_zone \$binary_remote_addr zone=pgm_v02_source_rate:1m rate=5r\/s;/);
+  const raised = generatePartnerNginxSharedOverlay({ ...input, ratePerClient: 10, ratePerSource: 20 });
+  assert.match(raised.configuration, /zone=pgm_v02_client_rate:1m rate=10r\/s;/);
+  assert.match(raised.configuration, /zone=pgm_v02_source_rate:1m rate=20r\/s;/);
+  // Raising the rate must not change the zone key, otherwise a reload would be refused.
+  assert.equal(raised.configuration.match(/\$pgm_v02_client \{/g).length, 1);
+  for (const delta of [
+    { ratePerClient: 0 }, { ratePerClient: 101 }, { ratePerClient: 2.5 }, { ratePerClient: "10" },
+    { ratePerSource: 0 }, { ratePerSource: 101 }, { ratePerSource: "20" },
+  ]) {
+    assert.throws(() => generatePartnerNginxSharedOverlay({ ...input, ...delta }), /INPUT_INVALID/);
+  }
+});

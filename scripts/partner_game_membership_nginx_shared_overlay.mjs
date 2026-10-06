@@ -25,6 +25,17 @@ const exact = (value, keys) => {
     || !isDeepStrictEqual(Reflect.ownKeys(value).sort(), [...keys].sort())
     || Object.values(Object.getOwnPropertyDescriptors(value)).some(d => !Object.hasOwn(d, "value"))) fail("INPUT_INVALID");
 };
+// Required keys must all be present and no unknown key may appear; the listed optional keys
+// may be absent, so reviewed defaults stay byte-identical to the previous generator output.
+const exactWithOptional = (value, keys, optionalKeys) => {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype
+    || Reflect.ownKeys(value).some(key => typeof key !== "string")
+    || Object.values(Object.getOwnPropertyDescriptors(value)).some(d => !Object.hasOwn(d, "value"))) fail("INPUT_INVALID");
+  const present = Reflect.ownKeys(value).filter(key => value[key] !== undefined);
+  const allowed = new Set([...keys, ...optionalKeys]);
+  if (present.some(key => !allowed.has(key))
+    || keys.some(key => !present.includes(key))) fail("INPUT_INVALID");
+};
 const list = (value, min, max) => {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < min || value.length > max
     || Reflect.ownKeys(value).length !== value.length + 1
@@ -58,9 +69,15 @@ function publicCertificates(bytes, maxCount) {
 }
 
 export function generatePartnerNginxSharedOverlay(input) {
-  exact(input, ["scope", "exactHost", "clients", "sourceAddresses", "generationMarker", "now",
+  exactWithOptional(input, ["scope", "exactHost", "clients", "sourceAddresses", "generationMarker", "now",
     "clientCaCertificateBytes", "serverCertificateChainBytes",
-    "approvedClientCaSha256", "approvedServerChainSha256"]);
+    "approvedClientCaSha256", "approvedServerChainSha256"], ["ratePerClient", "ratePerSource"]);
+  // Rate ceilings stay reviewed constants unless the caller states them explicitly.
+  const ratePerClient = input.ratePerClient === undefined ? 2 : input.ratePerClient;
+  const ratePerSource = input.ratePerSource === undefined ? 5 : input.ratePerSource;
+  if (![ratePerClient, ratePerSource].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 100)) {
+    fail("INPUT_INVALID");
+  }
   if (input.scope !== "LOCAL_PREPARATION" || typeof input.exactHost !== "string" || input.exactHost.length > 253
     || !HOST.test(input.exactHost)
     || !Number.isSafeInteger(input.now) || input.now < 0
@@ -122,8 +139,8 @@ map "$request_method:$request_uri" $pgm_v02_route {
   "~^DELETE:${PARTNER_API_BASE_PATH}/open-games/[A-Za-z0-9_-]{1,160}/members/[A-Za-z0-9_-]{1,160}$" 1;
   "~^GET:${PARTNER_API_BASE_PATH}/operations/[A-Za-z0-9_-]{1,160}$" 1;
 }
-limit_req_zone $pgm_v02_client zone=pgm_v02_client_rate:1m rate=2r/s;
-limit_req_zone $binary_remote_addr zone=pgm_v02_source_rate:1m rate=5r/s;
+limit_req_zone $pgm_v02_client zone=pgm_v02_client_rate:1m rate=${ratePerClient}r/s;
+limit_req_zone $binary_remote_addr zone=pgm_v02_source_rate:1m rate=${ratePerSource}r/s;
 limit_conn_zone $pgm_v02_client zone=pgm_v02_client_connections:1m;
 limit_conn_zone $binary_remote_addr zone=pgm_v02_source_connections:1m;
 log_format pgm_v02_audit escape=json '{"admitted":"$pgm_v02_admitted","client":"$pgm_v02_client","clientVerified":"$pgm_v02_verified","concurrency":"$limit_conn_status","generation":"${input.generationMarker}","rate":"$limit_req_status","requestId":"$request_id","status":"$status","upstream":"$upstream_status","worker":"$pid"}';

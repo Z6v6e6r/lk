@@ -47,8 +47,8 @@
 | --- | --- |
 | `SCOPE_DENIED` | У клиента нет нужного scope |
 | `CLIENT_DISABLED` | Integration client отключён |
-| `STATION_ACCESS_DENIED` | Станция игры не в allowlist клиента |
-| `GAME_ACCESS_DENIED` | Игра не в allowlist клиента |
+| `STATION_ACCESS_DENIED` | Станция исключена для клиента |
+| `GAME_ACCESS_DENIED` | Игра исключена для клиента |
 | `MEMBERSHIP_NOT_OWNED` | Membership создан не этим client |
 
 **Повтор:** не повторять. Проверить доступ с владельцем интеграции.
