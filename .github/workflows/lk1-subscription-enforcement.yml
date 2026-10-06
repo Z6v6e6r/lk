@@ -440,6 +440,7 @@ jobs:
           scripts/tests/tournamentSubscriptionDiscount.test.ts
           scripts/tests/tournamentSignup.checkoutReadiness.test.ts
           scripts/tests/tournamentSignup.paymentResolution.test.ts
+          scripts/tests/bookedOperationRead.test.mjs
 
       - name: Run unified candidate and drift-negative tests
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
