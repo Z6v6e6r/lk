@@ -136,6 +136,16 @@ test('four disjoint cohorts, UTM and ready messages are mandatory', () => {
   t.config.campaigns[0].fileId = '';
   assert.throws(() => t.engine.validate(t.manifest, t.config, true), /message_not_ready/);
 });
+test('confirmed existing UTM labels are preserved and full URL mismatches fail', () => {
+  const s = setup();
+  const m = s.config.campaigns[0];
+  m.utm = { source: 'tg', medium: 'messenger', campaign: 'existing_academy' };
+  m.link = 'https://example.test/offer?utm_source=tg&utm_medium=messenger&utm_campaign=existing_academy';
+  m.text = `Test ${m.link}`;
+  assert.deepEqual(s.engine.validate(s.manifest, s.config, true).messages[0].utm, m.utm);
+  m.utm.campaign = 'different';
+  assert.throws(() => s.engine.validate(s.manifest, s.config, true), /utm_mismatch/);
+});
 test('preparation is idempotent and cannot reset completed recipients', async () => {
   const s = setup();
   await s.engine.prepare(s.manifest, s.config);

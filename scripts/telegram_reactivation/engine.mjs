@@ -35,8 +35,8 @@ export function createCampaignEngine({ db, crypto, https, token, sendEnabled = f
           (m.type !== 'message' && (typeof m.fileId !== 'string' || !/^[a-zA-Z0-9_-]{20,512}$/.test(m.fileId)))) fail('message_not_ready');
         if (m.utmConfirmed !== true || typeof m.link !== 'string' || !m.text.includes(m.link) ||
           !/^https:\/\//.test(m.link) || !m.utm ||
-          m.utm.source !== 'telegram' || m.utm.medium !== 'bot' ||
-          typeof m.utm.campaign !== 'string' || !m.utm.campaign.trim()) fail('utm_not_confirmed');
+          !['source', 'medium', 'campaign'].every(key => typeof m.utm[key] === 'string' &&
+            m.utm[key].trim().length > 0 && m.utm[key].length <= 128)) fail('utm_not_confirmed');
         // Full tracking URLs must agree with the separately recorded attribution key.
         // Short links require explicit utmConfirmed after their destination is checked.
         const query = m.link.includes('?') ? m.link.split('?')[1].split('#')[0] : '';
