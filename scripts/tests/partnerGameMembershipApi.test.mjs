@@ -951,6 +951,24 @@ test("a wildcard grant admits any paid game while explicit denials still win", a
   assert.equal(malformedDenial.repository.operations.size, 0);
 });
 
+test("an explicit game denial blocks deletion of an existing owned membership", async () => {
+  const repository = new MemoryRepository();
+  const provider = new CountingProvider();
+  const allowed = buildFixture({ repository, provider });
+  const added = await allowed.service.handle(signedRequest());
+  const denied = buildFixture({ repository, provider, games: { "*": { tenantKey: null, capacity: null } },
+    stationIds: ["*"], deniedGames: [GAME_ID] });
+  const before = structuredClone(repository.games.get(GAME_ID));
+  await assert.rejects(() => denied.service.handle(signedRequest({ method: "DELETE",
+    path: `/lk/integrations/v1/open-games/${GAME_ID}/members/${added.body.membership.membershipId}`,
+    body: {} })), { code: "GAME_ACCESS_DENIED", httpStatus: 403 });
+  assert.equal(provider.removeCalls, 0);
+  assert.equal(repository.operations.size, 1);
+  assert.deepEqual(repository.games.get(GAME_ID), before);
+  assert.equal(repository.memberships.get(added.body.membership.membershipId).state, "ACTIVE");
+  assert.equal(repository.audit.at(-1).code, "GAME_ACCESS_DENIED");
+});
+
 test("only the exact membership created by the same client can be removed", async () => {
   const fixture = buildFixture();
   const added = await fixture.service.handle(signedRequest());

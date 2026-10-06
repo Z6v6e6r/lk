@@ -475,6 +475,10 @@ export class PartnerGameMembershipApiService {
       throw new PartnerApiError("SCOPE_DENIED", "Integration client lacks the required scope", { httpStatus: 403 });
     }
     let routeAuthorization = route;
+    if (route.action === "REMOVE_MEMBER" && auth.deniedGames.includes(route.gameId)) {
+      await this.auditIngress(request, auth, "REJECTED", "GAME_ACCESS_DENIED");
+      throw new PartnerApiError("GAME_ACCESS_DENIED", "Integration client cannot mutate this game", { httpStatus: 403 });
+    }
     if (route.action === "ADD_MEMBER") {
       try {
         const gamePolicy = authorizedGamePolicy(auth, route.gameId);

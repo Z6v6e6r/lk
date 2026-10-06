@@ -5,6 +5,8 @@ import {
   MINIMUM_RETENTION_DAYS,
   RETENTION_POLICY_DAYS,
   TERMINAL_MEMBERSHIP_STATES,
+  TERMINAL_OPERATION_STATES,
+  RETENTION_TARGETS,
   parseRetentionArgs,
   retentionCutoff,
   retentionFilter,
@@ -30,12 +32,16 @@ test("the cutoff is exact and a dry run never deletes", () => {
   assert.equal(parseRetentionArgs([]).apply, false);
 });
 
-test("only terminal memberships age out, while operations and audit age by timestamp", () => {
+test("only terminal memberships and operations age out, while audit ages by timestamp", () => {
   const cutoff = new Date("2025-10-06T09:00:00.000Z");
   assert.deepEqual(retentionFilter({ collection: "lk_partner_game_memberships", timeField: "createdAt", terminalStatesOnly: true }, cutoff),
     { createdAt: { $lt: cutoff }, state: { $in: [...TERMINAL_MEMBERSHIP_STATES] } });
-  assert.deepEqual(retentionFilter({ collection: "lk_partner_game_operations", timeField: "createdAt", terminalStatesOnly: false }, cutoff),
-    { createdAt: { $lt: cutoff } });
+  const operationTarget = RETENTION_TARGETS.find((target) => target.collection === "lk_partner_game_operations");
+  assert.deepEqual(retentionFilter(operationTarget, cutoff),
+    { updatedAt: { $lt: cutoff }, state: { $in: ["COMPLETED", "FAILED"] } });
+  for (const state of ["UNKNOWN", "RECEIVED", "SLOT_RESERVED", "VIVA_PENDING"]) {
+    assert.ok(!TERMINAL_OPERATION_STATES.includes(state));
+  }
   assert.deepEqual(retentionFilter({ collection: "lk_partner_api_audit", timeField: "at", terminalStatesOnly: false }, cutoff),
     { at: { $lt: cutoff } });
   // An active membership must never match the retention filter.

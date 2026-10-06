@@ -18,9 +18,10 @@ import { fileURLToPath } from "node:url";
 export const RETENTION_POLICY_DAYS = 365;
 export const MINIMUM_RETENTION_DAYS = 31;
 export const TERMINAL_MEMBERSHIP_STATES = Object.freeze(["REMOVED", "REJECTED", "FAILED", "CANCELLED"]);
+export const TERMINAL_OPERATION_STATES = Object.freeze(["COMPLETED", "FAILED"]);
 export const RETENTION_TARGETS = Object.freeze([
   Object.freeze({ collection: "lk_partner_game_memberships", timeField: "createdAt", terminalStatesOnly: true }),
-  Object.freeze({ collection: "lk_partner_game_operations", timeField: "createdAt", terminalStatesOnly: false }),
+  Object.freeze({ collection: "lk_partner_game_operations", timeField: "updatedAt", terminalStatesOnly: true }),
   Object.freeze({ collection: "lk_partner_api_audit", timeField: "at", terminalStatesOnly: false }),
 ]);
 
@@ -52,7 +53,8 @@ export function retentionCutoff(now, days) {
 // operation or an active membership is never deleted, however old it looks.
 export function retentionFilter(target, cutoff) {
   const filter = { [target.timeField]: { $lt: cutoff } };
-  if (target.terminalStatesOnly) filter.state = { $in: [...TERMINAL_MEMBERSHIP_STATES] };
+  if (target.terminalStatesOnly) filter.state = { $in: [...(target.collection === "lk_partner_game_operations"
+    ? TERMINAL_OPERATION_STATES : TERMINAL_MEMBERSHIP_STATES)] };
   return filter;
 }
 
