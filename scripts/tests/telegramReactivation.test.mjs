@@ -100,7 +100,7 @@ const sends = s => s.calls.filter(c => c.method.startsWith('send'));
 
 test('source-driven flow is disabled, has no auto timers/routes/credentials and compiles', () => {
   const flow = buildFlow();
-  assert.equal(flow.length, 11);
+  assert.equal(flow.length, 12);
   assert.equal(flow[0].disabled, true);
   assert.ok(flow.filter(n => n.type === 'inject').every(n => n.once === false && !n.repeat && !n.crontab));
   assert.ok(!flow.some(n => n.type.startsWith('http')));
@@ -119,7 +119,7 @@ test('CLI actually exports its disabled flow from paths containing spaces', () =
     assert.equal(result.status, 0, result.stderr);
     const exported = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(exported[0].disabled, true);
-    assert.equal(exported.length, 11);
+    assert.equal(exported.length, 12);
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.notEqual(spawnSync(process.execPath, [cli, file]).status, 0);
   } finally { fs.rmSync(directory, { recursive: true }); }
@@ -253,6 +253,59 @@ test('shutdown after outstanding Mongo claim never begins a new API send', async
   assert.equal(sends(s).length, 0);
   assert.ok(result.campaigns.every(c => c.pending === 1 && c.attempts === 0));
   assert.equal(result.lock, null);
+  assert.equal(result.pauseReason, 'stopped');
+});
+test('STOP remains usable while a full campaign is busy', async () => {
+  const source = buildFlow().find(n => n.type === 'function').func;
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'done', 'mongo', 'https', 'crypto', 'fs', source);
+  const emitted = [];
+  let stopped = false;
+  await fn({ action: 'stop' }, { send: m => emitted.push(m) },
+    { get: key => key === 'busy' ? true : { stop: () => { stopped = true; } }, set: () => {} },
+    {}, () => {}, {}, {}, {}, {});
+  assert.equal(stopped, true);
+  assert.deepEqual(emitted, [{ payload: { status: 'stop_requested' } }]);
+});
+test('STOP and shutdown during deferred Mongo connection cancel START before sending', async () => {
+  for (const action of ['stop', 'finalize']) {
+  const source = buildFlow().find(n => n.type === 'function').func;
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'done', 'mongo', 'https', 'crypto', 'fs', source);
+  const values = new Map();
+  const context = { get: key => values.get(key), set: (key, value) => values.set(key, value) };
+  const emitted = [];
+  const node = { send: m => emitted.push(m) };
+  let resolveConnect;
+  const connecting = new Promise(resolve => { resolveConnect = resolve; });
+  let closed = false;
+  class Client {
+    connect() { return connecting; }
+    db() { return {}; }
+    async close() { closed = true; }
+  }
+  const env = { get: () => '/private/synthetic.json' };
+  const fsMock = { lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false, mode: 0o600 }), readFileSync: () => '{}' };
+  const running = fn({ action: 'start', campaignId: 'academy' }, node, context, env, () => {}, { MongoClient: Client }, {}, crypto, fsMock);
+  assert.equal(context.get('busy'), true);
+  const newEngine = { stop: () => {} };
+  if (action === 'stop') {
+    await fn({ action: 'stop' }, node, context, env, () => {}, {}, {}, crypto, fsMock);
+    assert.deepEqual(emitted, [{ payload: { status: 'stop_requested' } }]);
+  } else {
+    new Function('context', buildFlow().find(n => n.type === 'function').finalize)(context);
+    // A new invocation registering its own job must not cancel the old cancellation.
+    context.set('job', { stopped: false });
+    context.set('busy', true);
+    context.set('engine', newEngine);
+  }
+  resolveConnect();
+  await running;
+  assert.equal(closed, true);
+  assert.equal(context.get('busy'), action === 'finalize');
+  if (action === 'finalize') assert.equal(context.get('engine'), newEngine);
+  assert.deepEqual(emitted.at(-1), { payload: { error: 'operation_stopped', action: 'start' } });
+  }
 });
 test('Function emits fixed error codes, never arbitrary lowercase provider/user text', async () => {
   const source = buildFlow().find(n => n.type === 'function').func;

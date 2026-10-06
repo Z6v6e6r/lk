@@ -195,7 +195,7 @@ export function createCampaignEngine({ db, crypto, https, token, sendEnabled = f
     if (await rows.countDocuments({ botId: v.botId, status: 'sending' })) fail('unresolved_send_lock_retained');
     const released = ack(await batches.deleteOne({ _id: lockId, owner }));
     if (released.deletedCount !== 1) fail('lock_release_failed');
-    return { ...await report(v.batchId), pauseReason };
+    return { ...await report(v.batchId), pauseReason: closed ? 'stopped' : pauseReason };
   }
 
   async function recover(botId, owner, workerStopped) {

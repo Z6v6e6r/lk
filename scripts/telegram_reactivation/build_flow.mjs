@@ -17,15 +17,31 @@ export function buildFlow() {
     id: `tg_reactivation_start_${campaignId}_v1`, z, type: 'inject', name: `START ${campaignId} (full cohort)`,
     props: [{ p: 'action', v: 'start', vt: 'str' }, { p: 'campaignId', v: campaignId, vt: 'str' }],
     repeat: '', crontab: '', once: false, onceDelay: 0.1, x: 200, y: 350 + 60 * i, wires: [[f]] });
+  nodes.push({ id: 'tg_reactivation_stop_v1', z, type: 'inject', name: 'STOP after current request',
+    props: [{ p: 'action', v: 'stop', vt: 'str' }], repeat: '', crontab: '', once: false,
+    onceDelay: 0.1, x: 200, y: 620, wires: [[f]] });
   nodes.push({ id: f, z, type: 'function', name: 'Durable campaigns (aggregate output only)', outputs: 1,
     timeout: 0, x: 590, y: 170, wires: [['tg_reactivation_totals_v1']],
     initialize: `context.set('busy', false);`,
-    finalize: `const engine = context.get('engine'); if (engine) engine.stop();`,
+    finalize: `const job = context.get('job'); if (job) job.stopped = true; const engine = context.get('engine'); if (engine) engine.stop();`,
     libs: [{ var: 'mongo', module: 'mongodb' }, { var: 'https', module: 'https' },
       { var: 'crypto', module: 'crypto' }, { var: 'fs', module: 'fs' }],
     func: `const createCampaignEngine = ${createCampaignEngine.toString()};
+if (msg.action === 'stop') {
+  const running = context.get('engine');
+  const busy = context.get('busy');
+  const job = context.get('job');
+  if (job) job.stopped = true;
+  if (running) running.stop();
+  node.send({ payload: { status: running || busy ? 'stop_requested' : 'idle' } });
+  done();
+  return;
+}
 if (context.get('busy')) { node.warn('reactivation_busy'); return null; }
 context.set('busy', true);
+// Keep cancellation on this invocation's object, so a redeploy/new job cannot clear it.
+const job = { stopped: false };
+context.set('job', job);
 let client;
 try {
   const readPrivate = name => {
@@ -46,6 +62,7 @@ try {
     await client.connect();
     db = client.db(database);
   }
+  if (job.stopped) throw new Error('operation_stopped');
   const engine = createCampaignEngine({ db, crypto, https, token: env.get('TG_REACTIVATION_BOT_TOKEN'),
     sendEnabled: env.get('TG_REACTIVATION_SEND_ENABLED') === 'true' });
   context.set('engine', engine);
@@ -71,7 +88,7 @@ try {
   node.send({ payload: result });
 } catch (e) {
   // Allow only our fixed codes, never driver/provider errors, URI, token, or incoming msg.
-  const allowed = new Set(['private_file_path_missing','private_file_permissions_required','mongo_not_configured',
+  const allowed = new Set(['private_file_path_missing','private_file_permissions_required','mongo_not_configured','operation_stopped',
     'unknown_action','reactivation_busy','invalid_manifest_or_bot_id','four_campaigns_required','invalid_campaign',
     'invalid_or_duplicate_endpoint','message_not_ready','utm_not_confirmed','utm_mismatch','unique_utm_campaigns_required',
     'mongo_ack_missing','mongo_cas_failed','telegram_token_missing','immutable_batch_mismatch','audience_count_mismatch',
@@ -82,8 +99,11 @@ try {
   node.send({ payload: { error: code, action: ['preview','prepare','run','start','report','recover'].includes(msg.action) ? msg.action : 'invalid' } });
 } finally {
   if (client) { try { await client.close(); } catch { /* no raw driver logs */ } }
-  context.set('busy', false);
-  context.set('engine', null);
+  if (context.get('job') === job) {
+    context.set('busy', false);
+    context.set('engine', null);
+    context.set('job', null);
+  }
 }
 done();
 return;` });
@@ -97,5 +117,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const output = process.argv[2];
   if (!output || !path.isAbsolute(output)) throw new Error('Absolute external output path required');
   await fs.writeFile(output, JSON.stringify(buildFlow(), null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-  console.log('Created disabled standalone flow; 11 nodes; no credentials or recipients included.');
+  console.log('Created disabled standalone flow; 12 nodes; no credentials or recipients included.');
 }
