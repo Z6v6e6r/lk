@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { linuxProcessIdentity, sameOwnedProcess } from "../runB1BookedOperationAdmissionCi.mjs";
+import { cleanupAdmissionFixtures, linuxProcessIdentity, sameOwnedProcess } from "../runB1BookedOperationAdmissionCi.mjs";
 import {
   admissionCiImages, createAdmissionCiContract, assertAdmissionCheckout, assertAdmissionImage,
   assertAdmissionRunnerEnvironment, assertAdmissionResourcesAbsent,
@@ -205,4 +205,50 @@ test("actual runner denies a non-GHA host before any fixture, checkout or depend
   });
   assert.equal(result.status, 1); assert.equal(result.stdout, "");
   assert.match(result.stderr, /^B1_ADMISSION_CI_PREFLIGHT_FAILURE ERR_ASSERTION\n$/);
+});
+
+test("partial fixture cleanup preserves foreign resources and continues after an owned removal failure", async () => {
+  const c = contract(); const removed = []; const present = new Map();
+  for (const f of Object.values(c.fixtures)) for (const name of f.volumes)
+    present.set(name, { Name: name, Driver: "local", Options: {}, Labels: { ...f.labels } });
+  const mongo = c.fixtures.mongo; const pg = c.fixtures.pg;
+  present.delete(mongo.volumes[1]); // second create failed, first owned volume exists
+  const createdVolumes = new Set([...mongo.volumes, ...pg.volumes]);
+  const fixture = {
+    contract: c, created: {}, createdVolumes, cleanupDeadline: Date.now() + 5000,
+    portFree: async () => {},
+    inspect: async (_label, _kind, name) => { if (!present.has(name)) throw Error("missing"); return present.get(name); },
+    docker: async (_label, args) => {
+      if (args[0] === "container") return "";
+      if (args[1] === "ls") return [...present.keys()].filter(name => !args.includes("--filter") || args.includes(`name=^${name}$`)).join("\n");
+      assert.deepEqual(args.slice(0, 2), ["volume", "rm"]);
+      if (args[2] === mongo.volumes[0]) throw Error("synthetic removal failure");
+      removed.push(args[2]); present.delete(args[2]); return args[2];
+    },
+  };
+  const failures = await cleanupAdmissionFixtures(fixture);
+  assert.ok(failures.some(error => error.stage === `volume:${mongo.volumes[0]}`));
+  assert.deepEqual(removed, pg.volumes); // later resource cleaned despite Mongo failure
+  present.set(pg.volumes[0], { Name: pg.volumes[0], Driver: "local", Labels: { ...pg.labels, "padlhub.ci.owner": "foreign" } });
+  removed.length = 0;
+  const foreign = await cleanupAdmissionFixtures(fixture);
+  assert.ok(foreign.some(error => error.stage === `volume:${pg.volumes[0]}`));
+  assert.deepEqual(removed, []);
+});
+
+test("container cleanup uses fresh exact identities and handles later containers after inspect failure", async () => {
+  const c = contract(); const removed = []; const ids = { mongo: "a".repeat(64), pg: "b".repeat(64) };
+  const result = await cleanupAdmissionFixtures({ contract: c, created: ids, createdVolumes: new Set(),
+    cleanupDeadline: Date.now() + 5000, portFree: async () => {},
+    inspect: async (_label, kind, value) => {
+      if (kind === "volume") { const f = value.includes("-mongo-") ? c.fixtures.mongo : c.fixtures.pg;
+        return { Name: value, Driver: "local", Labels: f.labels }; }
+      if (value === ids.mongo) throw Error("synthetic inspect failure");
+      const f = c.fixtures.pg;
+      return { Id: ids.pg, Name: `/${f.name}`, Image: f.imageId, Config: { Image: f.image, Labels: f.labels } };
+    },
+    docker: async (_label, args) => { if (["stop", "rm"].includes(args[0])) removed.push(args); return ""; },
+  });
+  assert.ok(result.some(error => error.stage === "container:mongo"));
+  assert.deepEqual(removed, [["stop", "--time=10", ids.pg], ["rm", ids.pg]]);
 });

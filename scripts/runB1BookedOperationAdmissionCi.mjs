@@ -35,6 +35,42 @@ const processIdentity = (pid) => {
   catch { return null; }
 };
 
+export async function cleanupAdmissionFixtures({ contract, created, createdVolumes, inspect, docker, portFree, cleanupDeadline }) {
+  const failures = [];
+  const cleanAttempt = async (stage, action) => {
+    try { await action(); } catch (error) { failures.push({ stage, code: error.code ?? error.name }); }
+  };
+  for (const kind of ["mongo", "pg"]) {
+    const f = contract.fixtures[kind];
+    if (created[kind]) await cleanAttempt(`container:${kind}`, async () => {
+      const volumes = await Promise.all(f.volumes.map((name) => inspect(`cleanup_volume_${kind}`, "volume", name, true)));
+      assertAdmissionCleanupIdentity(contract, kind, created[kind], await inspect(`cleanup_container_${kind}`, "container", created[kind], true), volumes);
+      await docker(`stop_${kind}`, ["stop", "--time=10", created[kind]], { cleanup: true });
+      await docker(`remove_${kind}`, ["rm", created[kind]], { cleanup: true });
+    });
+    for (const name of f.volumes.filter((value) => createdVolumes.has(value))) {
+      await cleanAttempt(`volume:${name}`, async () => {
+        assert.ok(Date.now() < cleanupDeadline, "cleanup deadline");
+        const present = await docker(`volume_present_${kind}`, ["volume", "ls", "--filter", `name=^${name}$`, "--format", "{{.Name}}"], { cleanup: true });
+        if (present === "") return;
+        assert.equal(present, name);
+        const volume = await inspect(`delete_volume_${kind}`, "volume", name, true);
+        for (const [key, value] of Object.entries(f.labels)) assert.equal(volume.Labels?.[key], value);
+        assert.equal(volume.Name, name); assert.equal(volume.Driver, "local"); assert.deepEqual(volume.Options ?? {}, {});
+        await docker(`remove_volume_${kind}`, ["volume", "rm", name], { cleanup: true });
+      });
+    }
+    await cleanAttempt(`fixed_identity:${kind}`, async () => {
+      await portFree(Number(f.hostPort));
+      const fixedContainer = await docker(`fixed_container_${kind}`, ["container", "ls", "-a", "--filter", `name=^/${f.name}$`, "--format", "{{.ID}}"], { cleanup: true });
+      assert.equal(fixedContainer, "");
+      const fixedVolumes = (await docker(`fixed_volumes_${kind}`, ["volume", "ls", "--format", "{{.Name}}"], { cleanup: true })).split("\n").filter((name) => f.volumes.includes(name));
+      assert.deepEqual(fixedVolumes, []);
+    });
+  }
+  return failures;
+}
+
 export async function runAdmissionCi() {
   // This guard precedes every directory, network, dependency or Docker action.
   assert.equal(process.env.GITHUB_ACTIONS, "true");
@@ -205,34 +241,7 @@ export async function runAdmissionCi() {
     cleanupDeadline = Date.now() + 180_000;
     try {
       if (contract) {
-        for (const kind of ["mongo", "pg"]) {
-          const f = contract.fixtures[kind];
-          if (created[kind]) await cleanAttempt(`container:${kind}`, async () => {
-            const volumes = await Promise.all(f.volumes.map((name) => inspect(`cleanup_volume_${kind}`, "volume", name, true)));
-            assertAdmissionCleanupIdentity(contract, kind, created[kind], await inspect(`cleanup_container_${kind}`, "container", created[kind], true), volumes);
-            await docker(`stop_${kind}`, ["stop", "--time=10", created[kind]], { cleanup: true });
-            await docker(`remove_${kind}`, ["rm", created[kind]], { cleanup: true });
-          });
-          for (const name of f.volumes.filter((value) => createdVolumes.has(value))) {
-            await cleanAttempt(`volume:${name}`, async () => {
-            assert.ok(Date.now() < cleanupDeadline, "cleanup deadline");
-            const present = await docker(`volume_present_${kind}`, ["volume", "ls", "--filter", `name=^${name}$`, "--format", "{{.Name}}"], { cleanup: true });
-            if (present === "") return;
-            assert.equal(present, name);
-            const volume = await inspect(`delete_volume_${kind}`, "volume", name, true);
-            for (const [key, value] of Object.entries(f.labels)) assert.equal(volume.Labels?.[key], value);
-            assert.equal(volume.Name, name); assert.equal(volume.Driver, "local"); assert.deepEqual(volume.Options ?? {}, {});
-            await docker(`remove_volume_${kind}`, ["volume", "rm", name], { cleanup: true });
-            });
-          }
-          await cleanAttempt(`fixed_identity:${kind}`, async () => {
-            await portFree(Number(f.hostPort));
-            const fixedContainer = await docker(`fixed_container_${kind}`, ["container", "ls", "-a", "--filter", `name=^/${f.name}$`, "--format", "{{.ID}}"], { cleanup: true });
-            assert.equal(fixedContainer, "");
-            const fixedVolumes = (await docker(`fixed_volumes_${kind}`, ["volume", "ls", "--format", "{{.Name}}"], { cleanup: true })).split("\n").filter((name) => f.volumes.includes(name));
-            assert.deepEqual(fixedVolumes, []);
-          });
-        }
+        cleanupFailures.push(...await cleanupAdmissionFixtures({ contract, created, createdVolumes, inspect, docker, portFree, cleanupDeadline }));
         const filter = ["--filter", `label=padlhub.ci.owner=${contract.owner}`];
         const containers = await docker("container_residue", ["container", "ls", "-a", ...filter, "--format", "{{.ID}}"], { cleanup: true });
         const volumes = await docker("volume_residue", ["volume", "ls", ...filter, "--format", "{{.Name}}"], { cleanup: true });
