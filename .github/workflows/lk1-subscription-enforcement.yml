@@ -468,6 +468,7 @@ jobs:
           scripts/tests/lk1PreviewFreeFirstEventHotfix.test.mjs
           scripts/tests/lk1PlanRulesPreview.test.mjs
           scripts/tests/lk1TopokratyFriendship.test.mjs
+          scripts/tests/lk1RulesParity.test.mjs
           scripts/tests/topokratyFriendshipHotfix.test.mjs
           scripts/tests/topokratyRejectionReclaimHotfix.test.mjs
           scripts/tests/lk1TopokratyCopayHotfix.test.mjs

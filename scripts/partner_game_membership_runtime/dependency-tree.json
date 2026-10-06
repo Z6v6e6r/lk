@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "capturedAt": "2026-09-11T12:00:08.539Z",
+  "capturedAt": "2026-10-06T08:50:24.835Z",
   "command": "npm ls --all --json --omit=dev",
   "root": {
     "name": "padlhub-partner-game-membership-runtime",

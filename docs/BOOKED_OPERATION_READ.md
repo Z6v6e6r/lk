@@ -40,3 +40,37 @@ Run `node --test scripts/tests/bookedOperationRead.test.mjs` with Node22 for the
 loopback HTTP regressions. Physical Mongo tests require an explicitly task-owned synthetic
 database and separate resource allocation; a stubbed collection is not physical evidence.
 B2 quote/slot authority and B3 booking/settlement/game association remain separate work.
+
+## Server-owned admission increment
+
+`POST /lk/integrations/v1/booked-operation-admissions` is an optional, default-disabled owner
+handler. Its distinct RS256 scope is `subscription-runtime.booked-operation.admit`. The only
+command is `JOIN_GAME` with a canonical target UUID, expected revision and `USE_SUBSCRIPTION`.
+LK2 resolves the current actor and an existing synced/versioned game mapping; callers never
+supply provider, subscription, user or operation identifiers. The tenant/user/key digest yields
+a server UUID, while the owner compares the immutable request/mapping association on replay.
+A rotated session or mutable game lifecycle cannot rewrite that association. A changed mapping
+fails closed. New admissions require the currently signed admissibility condition.
+
+The owning router/gateway/evaluator emits its existing `PREPARED` receipt, augmented atomically
+with the canonical B1 association, admission binding, initial target snapshot and original
+correlation/time/source-digest audit envelope. Majority Mongo insert ACK or exact majority
+readback is required before `202 PENDING`. No preaccept, booking, capacity, payment, entitlement
+or projection continuation is permitted. This is not a quote or completed commercial operation.
+Existing untagged receipts and the existing GET contract are unchanged.
+
+The admission composer pins the executable source digest. It reuses the #194 RUB court-total
+proof and extracts the unchanged existing split share calculation. Source drift requires an
+explicit reviewed pin update. Admission chooses exactly one owner-proved subscription; every
+accepted alias and nested owner must agree in both provider pages. Ambiguous facts fail closed.
+Owner execution is bounded below the client deadline; writes are never automatically retried.
+
+Ordinary guard tests: `node --test scripts/tests/bookedOperationAdmission.test.mjs`.
+The separately opt-in physical test is `scripts/tests/bookedOperationAdmission.mongo.test.mjs`
+with LK2 `scripts/b1-booked-operation-admission-rehearsal.ts`: real AuthService/session, physical
+NOBYPASSRLS PostgreSQL mappings, owner-written Mongo receipt and HTTP/SDK B1. The test requires
+explicit task fixture custody, uses raw synthetic provider DTOs, verifies a two-GET exact
+before/after no-write window, and cleans only its synthetic tenant/role/database. No live keys,
+Mongo indexes, ACLs, flags or provider writes are introduced. Before activation, bounded
+per-principal admission/storage limits, owner hosting/trust/transport and operator approval
+remain a separate operational requirement.
