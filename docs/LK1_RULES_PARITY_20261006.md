@@ -20,6 +20,14 @@ unresolved to a consumer; making it terminal needs separately assigned finalizer
 ownership and recovery review. The snapshot regression uses the actual LK1
 context, rather than claiming the generic non-LK1 HTTP409 response.
 
+The leading owner confirmed preservation of HTTP202 in this scope. Follow-up
+owner: `scripts/nodered_lk1_hub_nodes/finalize.js` and its installed finalizer.
+Condition: the existing `ctx.lk1` error wrapper handles this confirmed source
+refusal as pending. The separate B operation GET must retain that uncertainty;
+it must not infer FAILED, paid settlement or permission for a new purchase.
+The focused fixture proves that repeating the same refused input still yields
+no booking/create/payment continuation and no booking/transaction/payment URL.
+
 ## One preparation graph
 
 `scripts/prepare_lk1_rules_parity_20261006.mjs` composes against the reviewed

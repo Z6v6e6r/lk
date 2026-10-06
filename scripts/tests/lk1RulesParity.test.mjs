@@ -90,7 +90,9 @@ test('one current graph composes money parity, keeps dormant cap8 policies and r
     usage: { activeServiceScope: 'SUBSCRIPTION_BENEFIT_ONLY', dailyBucketLocalDate: '2026-08-15',
       activeServices: 0, usedOrReservedFreeMinutesToday: 0 },
   } };
-  const outputs = new Function('msg', node(built.flow, 'evaluator').func)(msg);
+  const requestInput = structuredClone(msg._managedSubscriptionPolicyInput);
+  const evaluate = new Function('msg', node(built.flow, 'evaluator').func);
+  const outputs = evaluate(msg);
   assert.equal(outputs[0], null, 'no admission continuation');
   assert.equal(outputs[1], msg);
   const deniedId = node(built.flow, 'evaluator').wires[1][0];
@@ -102,6 +104,22 @@ test('one current graph composes money parity, keeps dormant cap8 policies and r
   assert.equal(finalized[1].statusCode, 202, 'existing LK1 finalize keeps pending semantics');
   assert.equal(finalized[1].payload.state, 'PENDING_CONFIRMATION');
   assert.equal(finalized[1].payload.details.code, 'LK1_COURT_COPAY_UNREPRESENTABLE');
+  assert.equal(finalized[1].payload.paymentUrl, undefined);
+  assert.equal(finalized[1].payload.transactionId, undefined);
+  assert.equal(finalized[1].payload.bookingId, undefined);
+  // Pending is the existing response envelope, not authority for a fresh purchase. The same
+  // definite refusal on a repeated command still cannot reach admission/create/payment output.
+  const repeat = { _subscriptionBooking: { caller: 'http', lk1: {} },
+    _managedSubscriptionPolicyInput: requestInput };
+  const repeatOutputs = evaluate(repeat);
+  assert.equal(repeatOutputs[0], null);
+  assert.equal(repeatOutputs[1]._managedSubscriptionPolicyDecision.eligible, false);
+  const repeated = new Function('msg', finalizer.func)(new Function('msg', denied.func)(repeatOutputs[1]));
+  assert.equal(repeated[0], null);
+  assert.equal(repeated[1].statusCode, 202);
+  assert.equal(repeated[1].payload.state, 'PENDING_CONFIRMATION');
+  assert.equal(repeated[1].payload.details.code, 'LK1_COURT_COPAY_UNREPRESENTABLE');
+  for (const field of ['paymentUrl', 'transactionId', 'bookingId']) assert.equal(repeated[1].payload[field], undefined);
   assert.throws(() => composeRulesParityArtifacts(built.candidateBytes), /preimage drift/);
   assert.throws(() => composeLk1TrainG1Artifacts(source), /preimage drift/);
   assert.throws(() => composeLk1TrainG2Artifacts(source), /postimage drift/);
