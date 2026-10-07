@@ -4,6 +4,7 @@ export interface CommunityRankingRowModel {
   rank: number;
   id: string | null;
   phone: string | null;
+  isViewer?: boolean;
   name: string;
   avatar: string | null;
   role: string;

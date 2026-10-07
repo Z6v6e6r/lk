@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CommunityRatingPeriod, CommunityRecord } from "../../../utils/communityApi";
+import { isViewerIdentity } from "../../../utils/viewerIdentity";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import { CommunityHeader } from "./CommunityHeader";
 import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from "./CommunitySecondaryNav";
@@ -85,14 +86,6 @@ function getRowScoreValue(row: CommunityRankingRowModel, activeType: CommunityRa
   if (activeType === "games") return formatUnsignedNumber(row.gamesScore);
   if (activeType === "tournaments") return formatUnsignedNumber(row.tournamentScore);
   return formatUnsignedNumber(row.overallScore);
-}
-
-function normalizePhone(value: string | null | undefined) {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.length === 10) return `7${digits}`;
-  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
-  return digits;
 }
 
 function getGamesCountLabel(value: number) {
@@ -208,11 +201,7 @@ export function CommunityRankingScreen({
   const deferredSearchValue = useDeferredValue(searchValue);
   const normalizedSearchValue = normalizeSearchValue(deferredSearchValue);
   const isCurrentUserRow = useCallback((row: CommunityRankingRowModel) => {
-    const normalizedRowPhone = normalizePhone(row.phone);
-    return Boolean(
-      (row.id && currentUserId && row.id === currentUserId)
-      || (normalizedRowPhone && currentUserPhone && normalizedRowPhone === currentUserPhone),
-    );
+    return isViewerIdentity(row, { id: currentUserId, phone: currentUserPhone });
   }, [currentUserId, currentUserPhone]);
 
   const handleOpenRatingBreakdown = useCallback((
