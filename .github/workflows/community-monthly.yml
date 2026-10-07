@@ -1,0 +1,65 @@
+name: Community monthly MongoDB integration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "src/services/community-rating/**"
+      - "scripts/community_monthly_worker.mjs"
+      - "scripts/lib/communityMonthlyFinalization.mjs"
+      - "scripts/nodered_community_monthly_nodes/**"
+      - "scripts/patch_nodered_community_monthly_flow.mjs"
+      - "scripts/tests/communityMonthly*"
+      - "deploy/rating-worker/**"
+      - "package*.json"
+      - ".github/workflows/community-monthly.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/services/community-rating/**"
+      - "scripts/community_monthly_worker.mjs"
+      - "scripts/nodered_community_monthly_nodes/**"
+      - "scripts/patch_nodered_community_monthly_flow.mjs"
+      - "scripts/tests/communityMonthly*"
+      - "scripts/lib/communityMonthlyFinalization.mjs"
+      - "deploy/rating-worker/**"
+      - "package*.json"
+      - ".github/workflows/community-monthly.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: community-monthly-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  monthly-mongodb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mongo:
+        image: mongo:8.0
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      COMMUNITY_MONTHLY_TEST_MONGO_URI: mongodb://127.0.0.1:27017
+      TZ: Europe/Moscow
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Install locked dependencies
+        run: npm ci --include=optional --no-audit --no-fund
+      - name: Test calendar rating, public routes and real Mongo write conflicts
+        run: npm run test:community-monthly
+      - name: Test worker release and schedule wrappers
+        run: npm run test:rating-worker-release
