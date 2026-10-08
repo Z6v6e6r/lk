@@ -100,7 +100,7 @@ const sends = s => s.calls.filter(c => c.method.startsWith('send'));
 
 test('source-driven flow is disabled, has no auto timers/routes/credentials and compiles', () => {
   const flow = buildFlow();
-  assert.equal(flow.length, 12);
+  assert.equal(flow.length, 13);
   assert.equal(flow[0].disabled, true);
   assert.ok(flow.filter(n => n.type === 'inject').every(n => n.once === false && !n.repeat && !n.crontab));
   assert.ok(!flow.some(n => n.type.startsWith('http')));
@@ -119,7 +119,7 @@ test('CLI actually exports its disabled flow from paths containing spaces', () =
     assert.equal(result.status, 0, result.stderr);
     const exported = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(exported[0].disabled, true);
-    assert.equal(exported.length, 12);
+    assert.equal(exported.length, 13);
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.notEqual(spawnSync(process.execPath, [cli, file]).status, 0);
   } finally { fs.rmSync(directory, { recursive: true }); }
@@ -329,4 +329,189 @@ test('Function emits fixed error codes, never arbitrary lowercase provider/user 
     { get: () => '/private/test-config.json' }, {}, {}, crypto,
     { lstatSync: () => { throw new Error('private_user_name'); } });
   assert.deepEqual(emitted, [{ payload: { error: 'reactivation_operation_failed', action: 'preview' } }]);
+});
+
+function cohortSizes(s, sizes) {
+  let endpoint = 2001;
+  for (const campaign of s.manifest.campaigns) {
+    campaign.recipients = Array.from({ length: sizes[campaign.campaignId] ?? 1 }, () => ({ chatId: String(endpoint++) }));
+  }
+}
+
+function orchestrationHarness(s, { sendEnabled = true, afterRun } = {}) {
+  const original = buildFlow().find(n => n.type === 'function').func;
+  const factorySource = `const createCampaignEngine = ${createCampaignEngine.toString()};`;
+  assert.ok(original.includes(factorySource));
+  const source = original.replace(factorySource, 'const createCampaignEngine = injectedEngineFactory;');
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'mongo', 'https', 'crypto', 'fs', 'injectedEngineFactory', source);
+  const state = new Map();
+  const context = { get: key => state.get(key), set: (key, value) => state.set(key, value) };
+  const emitted = [];
+  const runs = [];
+  let closedClients = 0;
+  class Client {
+    async connect() {}
+    db() { return s.db; }
+    async close() { closedClients++; }
+  }
+  const settings = {
+    TG_REACTIVATION_MANIFEST: '/private/synthetic-manifest.json',
+    TG_REACTIVATION_CONFIG: '/private/synthetic-config.json',
+    TG_REACTIVATION_MONGO_URI: 'mongodb://synthetic.invalid',
+    TG_REACTIVATION_MONGO_DB: 'synthetic',
+    TG_REACTIVATION_SEND_ENABLED: sendEnabled ? 'true' : 'false',
+  };
+  const privateFiles = {
+    lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false, mode: 0o600 }),
+    readFileSync: file => JSON.stringify(file === settings.TG_REACTIVATION_CONFIG ? s.config : s.manifest),
+  };
+  const injectedEngineFactory = options => {
+    const engine = createCampaignEngine({ ...s.dependencies, ...options, transport: s.dependencies.transport });
+    return { ...engine, run: async (...args) => {
+      runs.push({ campaignId: args[3], limit: args[2] });
+      const report = await engine.run(...args);
+      return afterRun ? afterRun(report, args[3]) : report;
+    } };
+  };
+  return {
+    state, emitted, runs, closedClients: () => closedClients,
+    execute: msg => fn(msg, { send: m => emitted.push(structuredClone(m)), warn: () => {} }, context,
+      { get: key => settings[key] }, { MongoClient: Client }, {}, crypto, privateFiles, injectedEngineFactory),
+  };
+}
+
+test('START ALL drains larger cohorts in sequential 25-recipient chunks without duplicates', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 52, group: 2, return: 26, academy: 27 });
+  await s.engine.prepare(s.manifest, s.config);
+  const h = orchestrationHarness(s);
+  await h.execute({ action: 'start_all' });
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship', 'friendship', 'friendship', 'group', 'return', 'return', 'academy', 'academy']);
+  assert.ok(h.runs.every(r => r.limit === 25));
+  assert.equal(sends(s).length, 107);
+  assert.equal(new Set(sends(s).map(c => c.payload.chat_id)).size, 107);
+  const final = h.emitted.at(-1).payload;
+  assert.ok(final.campaigns.every(c => c.pending === 0 && c.accepted === c.eligible));
+  assert.equal(final.lock, null);
+  assert.equal(h.state.get('busy'), false);
+  assert.equal(h.closedClients(), 1);
+});
+
+test('START ALL skips completed campaigns and a second invocation cannot resend them', async () => {
+  const s = setup();
+  await s.engine.prepare(s.manifest, s.config);
+  await s.engine.run(s.manifest, s.config, 25, 'group');
+  s.calls.length = 0;
+  const h = orchestrationHarness(s);
+  await h.execute({ action: 'start_all' });
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship', 'return', 'academy']);
+  assert.equal(sends(s).length, 3);
+  await h.execute({ action: 'start_all' });
+  assert.equal(h.runs.length, 3);
+  assert.equal(sends(s).length, 3);
+  assert.ok(h.emitted.at(-1).payload.campaigns.every(c => c.accepted === 1));
+});
+
+test('START ALL initial unknown, sending or bot lock fences every campaign before an API call', async () => {
+  for (const fence of ['unknown', 'sending', 'lock']) {
+    const s = setup();
+    await s.engine.prepare(s.manifest, s.config);
+    if (fence === 'lock') {
+      await s.db.collection('tg_reactivation_batches').insertOne({ _id: `lock:${s.config.botId}`,
+        botId: s.config.botId, batchId: s.manifest.batchId, owner: 'another-worker', startedAt: s.dependencies.now() });
+    } else {
+      await s.db.collection('tg_reactivation_recipients').updateOne({ _id: `${s.manifest.batchId}:1001` },
+        { $set: { status: fence } });
+    }
+    const h = orchestrationHarness(s);
+    await h.execute({ action: 'start_all' });
+    assert.deepEqual(h.emitted, [{ payload: { error: 'campaign_requires_review', action: 'start_all' } }]);
+    assert.equal(h.runs.length, 0);
+    assert.equal(s.calls.length, 0);
+    assert.equal(h.state.get('busy'), false);
+  }
+});
+
+test('START ALL aborts all remaining campaigns after a 429 or uncertain send', async () => {
+  for (const response of [{ ok: false, error_code: 429, parameters: { retry_after: 60 } }, new Error('synthetic-network-failure')]) {
+    const s = setup();
+    await s.engine.prepare(s.manifest, s.config);
+    s.result.current = response;
+    const h = orchestrationHarness(s);
+    await h.execute({ action: 'start_all' });
+    assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+    assert.equal(sends(s).length, 1);
+    const final = h.emitted.at(-1).payload;
+    assert.equal(final.pauseReason, response instanceof Error ? 'send_requires_review' : 'rate_limited');
+    assert.ok(final.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.pending === 1 && c.attempts === 0));
+    assert.equal(final.lock, null);
+  }
+});
+
+test('STOP during START ALL finishes its in-flight send and aborts the remaining queue', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 26 });
+  await s.engine.prepare(s.manifest, s.config);
+  let releaseSend;
+  let beganSend;
+  const pendingSend = new Promise(resolve => { releaseSend = resolve; });
+  const sendStarted = new Promise(resolve => { beganSend = resolve; });
+  const transport = s.dependencies.transport;
+  s.dependencies.transport = async (method, payload) => {
+    if (method.startsWith('send')) { beganSend(); await pendingSend; }
+    return transport(method, payload);
+  };
+  const h = orchestrationHarness(s);
+  const running = h.execute({ action: 'start_all' });
+  await sendStarted;
+  await h.execute({ action: 'stop' });
+  releaseSend();
+  await running;
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+  assert.equal(sends(s).length, 1);
+  assert.ok(h.emitted.some(m => m.payload.status === 'stop_requested'));
+  const final = h.emitted.at(-1).payload;
+  assert.equal(final.pauseReason, 'stopped');
+  assert.equal(final.campaigns.find(c => c.campaignId === 'friendship').pending, 25);
+  assert.ok(final.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.pending === 1 && c.attempts === 0));
+  assert.equal(final.lock, null);
+  assert.equal(h.state.get('busy'), false);
+});
+
+test('START ALL with sending disabled cannot call Telegram or claim a recipient', async () => {
+  const s = setup();
+  await s.engine.prepare(s.manifest, s.config);
+  const h = orchestrationHarness(s, { sendEnabled: false });
+  await h.execute({ action: 'start_all' });
+  assert.deepEqual(h.emitted, [{ payload: { error: 'sending_disabled', action: 'start_all' } }]);
+  assert.equal(s.calls.length, 0);
+  const report = await s.engine.report(s.manifest.batchId);
+  assert.ok(report.campaigns.every(c => c.pending === 1 && c.attempts === 0));
+  assert.equal(report.lock, null);
+});
+
+test('START ALL fences a future retry_wait with no claim instead of spinning', async () => {
+  const s = setup();
+  await s.engine.prepare(s.manifest, s.config);
+  await s.db.collection('tg_reactivation_recipients').updateOne({ _id: `${s.manifest.batchId}:1002` },
+    { $set: { status: 'retry_wait', nextAttemptAt: new Date(s.dependencies.now().getTime() + 60000) } });
+  const h = orchestrationHarness(s);
+  await h.execute({ action: 'start_all' });
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+  assert.equal(sends(s).length, 0);
+  assert.deepEqual(h.emitted.at(-1), { payload: { error: 'campaign_no_progress', action: 'start_all' } });
+  assert.equal(h.state.get('busy'), false);
+});
+
+test('START ALL aborts a chunk report with unresolved sending before a further chunk or campaign', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 26 });
+  await s.engine.prepare(s.manifest, s.config);
+  const h = orchestrationHarness(s, { afterRun: report => ({ ...report,
+    campaigns: report.campaigns.map(c => c.campaignId === 'friendship' ? { ...c, sending: 1 } : c) }) });
+  await h.execute({ action: 'start_all' });
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+  assert.equal(sends(s).length, 25);
+  assert.ok(h.emitted.at(-1).payload.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.pending === 1));
 });

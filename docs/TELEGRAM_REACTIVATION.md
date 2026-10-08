@@ -121,8 +121,43 @@ Async Function завершается средствами Node-RED после �
 Сначала SEND_ENABLED=false; PREVIEW не подключается к Mongo/Telegram,
 PREPARE создаёт журнал, после проверки PREPARE и конфигурации включается отправка.
 Не записывать токен/URI в Function, flow JSON или переписку.
+В Node-RED 4.0.9 можно использовать environment properties самой вкладки:
+URI и BOT_TOKEN имеют тип `cred`, DB и SEND_ENABLED — тип `str`.
+Штатный редактор переносит значения `cred` в отдельный encrypted credential store
+и удаляет их из `env.value`; проверить, что шифрование credentials не отключено.
+SEND_ENABLED должен содержать строку `false`/`true`: boolean не проходит строгую
+проверку wrapper. Настройки вкладки позволяют узкий deploy; глобальные env
+меняют global-config и требуют полного deploy.
 По адресу редактора без авторизованной сессии доступны только поля входа;
 права на модули и процессные переменные этим не подтверждаются.
+
+Для явно разрешённого переноса существующих Mongo/Telegram credentials между
+config nodes и новой вкладкой доступен одноразовый административный CLI
+`scripts/telegram_reactivation/configure_cloud.mjs`. Он работает на самом сервере,
+читает только указанные config IDs из decrypted in-memory store и использует
+существующую действующую сессию указанного оператора из `.sessions.json`.
+Чтение этих приватных хранилищ и сохранение credentials требуют отдельного
+разрешения на точный источник и получателя. CLI не является библиотекой Function.
+Он не создаёт токены, ключи, пароли, plaintext-файлы, не пишет секреты в stdout.
+
+Plan JSON содержит только userDir, port, adminRoot, username, flowId, controllerId,
+controllerHash (SHA-256 JSON из func, initialize, finalize, libs), mongoId,
+mongoHash (SHA-256 JSON из hostname, port, db, connectOptions, topology),
+botConfigId, botId и database. Секретные поля и
+внешний API host запрещены. `node configure_cloud.mjs /absolute/plan.json --check`
+проверяет конфигурацию без записи; `--apply` передаёт только credentials новой
+вкладки в loopback API. GET/POST `/flows` использует v2 revision CAS и deployment
+type `nodes`; остальные узлы сохраняются точно. При конфликте нет автоматического
+повтора. SEND остаётся строкой `false`. Поддерживается literal Telegram token и
+legacy Mongo `dnscluster` с существующим host/path?query и пустым connectOptions;
+неподдерживаемая topology, projects, safeMode,
+неизвестный ключ, существующие credentials назначения или другой controller
+останавливают операцию. Ошибки CLI всегда представлены одним фиксированным кодом.
+После apply проверяются неизменность остальных узлов и encrypted credential
+readback, затем необходимы реальный PREVIEW/PREPARE/REPORT нового потока.
+Ответ deploy не доказывает завершение запуска runtime. При неполном readback
+сохранить SEND=false, проверить текущую вкладку и core backup; не переписывать
+credential store и не перезапускать весь Node-RED вслепую.
 
 Переменные окружения:
 
@@ -144,11 +179,15 @@ PREPARE создаёт `tg_reactivation_batches`, `tg_reactivation_recipients` �
 
 RUN отправляет до 25 адресатам выбранной кампании (по умолчанию academy),
 START academy/friendship/group/return проходит выбранный сегмент полностью,
-публикуя агрегаты после каждых 25 адресатов. Ручной запуск, без inject-once,
+публикуя агрегаты после каждых 25 адресатов. START ALL последовательно проходит
+friendship → group → return → academy, пропуская уже завершённые сегменты.
+Он запрещён при оставшемся lock, sending или unknown в любой кампании.
+Любая пауза, неопределённый результат или отсутствие прогресса останавливает
+всю очередь; автоматического возобновления нет. Ручной запуск, без inject-once,
 cron или автозапуска при импорте/перезапуске. Одновременно работает один
 отправитель этого бота. Отключить параллельные старые рассылки: они не участвуют
 в новом ограничителе. Скорость до одного запроса в 1,1 секунды; для всей базы
-минимум около 3,7 часа плюс ответы Telegram/Mongo.
+минимум около 4,15 часа для 13 569 адресатов плюс ответы Telegram/Mongo.
 
 STOP доступна во время полного прохода: завершает текущий запрос и сохраняет
 результат, затем прекращает новые отправки. Для продолжения снова нажать START.
