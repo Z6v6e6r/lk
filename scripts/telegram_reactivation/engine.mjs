@@ -1,11 +1,24 @@
 // Embedded verbatim into the standalone Node-RED Function by build_flow.mjs.
 // Dependencies are injected so tests never need MongoDB or Telegram access.
 export function createCampaignEngine({ db, crypto, https, token, sendEnabled = false,
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => new Date(), transport }) {
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => new Date(), transport, sendWindow }) {
   const campaignIds = ['academy', 'friendship', 'group', 'return'];
   const states = ['pending', 'sending', 'accepted', 'blocked', 'unreachable', 'failed', 'retry_wait', 'unknown', 'suppressed_blocked'];
   let closed = false;
   const fail = code => { throw new Error(code); };
+  let quietWindow;
+  if (sendWindow !== undefined) {
+    if (!sendWindow || Object.keys(sendWindow).sort().join(',') !== 'resumeAt,stopAt' ||
+      !['stopAt', 'resumeAt'].every(k => typeof sendWindow[k] === 'string' &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(sendWindow[k]) &&
+        Number.isFinite(Date.parse(sendWindow[k])) && new Date(sendWindow[k]).toISOString() === sendWindow[k]) ||
+      Date.parse(sendWindow.stopAt) >= Date.parse(sendWindow.resumeAt)) fail('invalid_send_window');
+    quietWindow = { stopAt: Date.parse(sendWindow.stopAt), resumeAt: Date.parse(sendWindow.resumeAt) };
+  }
+  const windowPaused = () => {
+    const time = now().getTime();
+    return quietWindow && time >= quietWindow.stopAt && time < quietWindow.resumeAt;
+  };
   const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
   const ack = result => { if (!result?.acknowledged) fail('mongo_ack_missing'); return result; };
   const changed = result => { if (ack(result).matchedCount !== 1) fail('mongo_cas_failed'); };
@@ -142,6 +155,7 @@ export function createCampaignEngine({ db, crypto, https, token, sendEnabled = f
     const v = validate(manifest, config, true);
     const batch = await matchingBatch(v);
     if (!batch.prepared) fail('batch_not_prepared');
+    if (windowPaused()) return { ...await report(v.batchId), pauseReason: 'schedule_paused' };
     if (batch.rateLimitedUntil && batch.rateLimitedUntil > now()) fail('telegram_rate_limit_wait');
     const identity = await api('getMe', {});
     if (identity?.ok !== true || String(identity.result?.id) !== v.botId || identity.result?.is_bot !== true) fail('bot_identity_mismatch');
@@ -153,6 +167,7 @@ export function createCampaignEngine({ db, crypto, https, token, sendEnabled = f
     let pauseReason = null;
     // Intentionally no finally unlock: any uncertain persistence keeps the bot fenced.
     for (let i = 0; i < limit && !closed; i++) {
+      if (windowPaused()) { pauseReason = 'schedule_paused'; break; }
       const row = await rows.findOneAndUpdate({ batchId: v.batchId,
         ...(campaignId ? { campaignId } : {}),
         $or: [{ status: 'pending' }, { status: 'retry_wait', nextAttemptAt: { $lte: now() } }] },
@@ -161,10 +176,11 @@ export function createCampaignEngine({ db, crypto, https, token, sendEnabled = f
       if (!row) break;
       if (row.status !== 'sending' || row.owner !== owner) fail('claim_not_confirmed');
       const blockedBefore = await rows.findOne({ botId: v.botId, chatId: row.chatId, status: 'blocked' });
-      if (closed) {
+      if (closed || windowPaused()) {
         // No API call began. Returning this acknowledged claim to pending is safe.
         changed(await rows.updateOne({ _id: row._id, status: 'sending', owner },
           { $set: { status: 'pending', attempts: row.attempts - 1 }, $unset: { owner: '', claimedAt: '' } }));
+        if (!closed) pauseReason = 'schedule_paused';
         break;
       }
       let outcome;

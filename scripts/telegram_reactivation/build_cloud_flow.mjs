@@ -6,7 +6,7 @@ import { buildFlow as buildStandaloneFlow } from './build_flow.mjs';
 import { createCampaignEngine } from './engine.mjs';
 import { compatibleDatabase } from './mongo_compat.mjs';
 
-export function buildCloudFlow(manifest,config,{mongoModule='mongodb'}={}) {
+export function buildCloudFlow(manifest,config,{mongoModule='mongodb',sendWindow,schedule}={}) {
   if (!/^[a-z][a-z0-9-]*$/.test(mongoModule)) throw new Error('invalid_mongo_module');
   // Reject secret-bearing extras and strip provenance not needed by the sender.
   const audience = { schemaVersion: manifest.schemaVersion, batchId: manifest.batchId,
@@ -20,7 +20,8 @@ export function buildCloudFlow(manifest,config,{mongoModule='mongodb'}={}) {
   createCampaignEngine({crypto}).validate(audience,messages,true);
   if (/\b\d{5,15}:[A-Za-z0-9_-]{20,}\b/.test(JSON.stringify(messages)) ||
     JSON.stringify(messages).includes('https://api.telegram.org/file/bot')) throw new Error('credential_in_message_config');
-  const nodes=buildStandaloneFlow();
+  if (schedule && schedule.batchId !== audience.batchId) throw new Error('schedule_batch_mismatch');
+  const nodes=buildStandaloneFlow({sendWindow,schedule});
   const controller=nodes.find(n=>n.type==='function');
   const start=controller.func.indexOf("  const readPrivate = name => {");
   const end=controller.func.indexOf('  let db;',start);

@@ -98,6 +98,59 @@ function setup() {
 }
 const sends = s => s.calls.filter(c => c.method.startsWith('send'));
 
+test('quiet window validates absolute instants and refuses sends/claims at the cutoff', async () => {
+  const s = setup();
+  const sendWindow = { stopAt: '2026-10-06T20:00:00.000Z', resumeAt: '2026-10-07T08:00:00.000Z' };
+  for (const invalid of [null, {}, { ...sendWindow, stopAt: '2026-10-06' },
+    { ...sendWindow, stopAt: sendWindow.resumeAt }, { ...sendWindow, extra: true }])
+    assert.throws(() => createCampaignEngine({ ...s.dependencies, sendWindow: invalid }), /invalid_send_window/);
+  const engine = createCampaignEngine({ ...s.dependencies, sendWindow });
+  await engine.prepare(s.manifest, s.config);
+  const paused = await engine.run(s.manifest, s.config);
+  assert.equal(paused.pauseReason, 'schedule_paused');
+  assert.equal(s.calls.length, 0);
+  assert.equal(paused.campaigns.reduce((n, c) => n + c.attempts, 0), 0);
+  assert.equal(paused.lock, null);
+  s.tick(12 * 3600);
+  await engine.run(s.manifest, s.config, 1);
+  assert.equal(sends(s).length, 1);
+});
+
+test('cutoff during the claim restores untouched pending and attempts without sending', async () => {
+  const s = setup();
+  const engine = createCampaignEngine({ ...s.dependencies, sendWindow: {
+    stopAt: '2026-10-06T20:00:01.000Z', resumeAt: '2026-10-07T08:00:00.000Z'
+  } });
+  await engine.prepare(s.manifest, s.config);
+  const rows = s.db.collection('tg_reactivation_recipients');
+  const original = rows.findOneAndUpdate.bind(rows);
+  rows.findOneAndUpdate = async (...args) => { const row = await original(...args); s.tick(1); return row; };
+  const paused = await engine.run(s.manifest, s.config);
+  assert.equal(paused.pauseReason, 'schedule_paused');
+  assert.equal(sends(s).length, 0);
+  assert.equal(paused.lock, null);
+  assert.equal(paused.campaigns.reduce((n, c) => n + c.pending, 0), 4);
+  assert.equal(paused.campaigns.reduce((n, c) => n + c.attempts + c.sending, 0), 0);
+});
+
+test('a request begun before cutoff persists its success then prevents the next send', async () => {
+  const s = setup();
+  const transport = s.dependencies.transport;
+  const engine = createCampaignEngine({ ...s.dependencies, sendWindow: {
+    stopAt: '2026-10-06T20:00:01.000Z', resumeAt: '2026-10-07T08:00:00.000Z'
+  }, transport: async (method, payload) => {
+    if (method.startsWith('send')) s.tick(2);
+    return transport(method, payload);
+  } });
+  await engine.prepare(s.manifest, s.config);
+  const paused = await engine.run(s.manifest, s.config);
+  assert.equal(paused.pauseReason, 'schedule_paused');
+  assert.equal(sends(s).length, 1);
+  assert.equal(paused.lock, null);
+  assert.equal(paused.campaigns.reduce((n, c) => n + c.accepted, 0), 1);
+  assert.equal(paused.campaigns.reduce((n, c) => n + c.pending, 0), 3);
+});
+
 test('source-driven flow is disabled, has no auto timers/routes/credentials and compiles', () => {
   const flow = buildFlow();
   assert.equal(flow.length, 14);

@@ -2,8 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCampaignEngine } from './engine.mjs';
+import { buildDatedScheduleNode } from './schedule.mjs';
 
-export function buildFlow() {
+export function buildFlow({ sendWindow, schedule } = {}) {
+  createCampaignEngine({ sendWindow });
+  if (schedule && (!schedule.sendWindow || schedule.sendWindow.stopAt !== sendWindow?.stopAt || schedule.sendWindow.resumeAt !== sendWindow?.resumeAt))
+    throw new Error('schedule_window_mismatch');
   const z = 'tg_reactivation_v1';
   const f = 'tg_reactivation_engine_v1';
   const actions = ['preview', 'prepare', 'run', 'report'];
@@ -33,10 +37,19 @@ export function buildFlow() {
     libs: [{ var: 'mongo', module: 'mongodb' }, { var: 'https', module: 'https' },
       { var: 'crypto', module: 'crypto' }, { var: 'fs', module: 'fs' }],
     func: `const createCampaignEngine = ${createCampaignEngine.toString()};
+const scheduledBatchId = ${JSON.stringify(schedule?.batchId)};
+if (msg.scheduledBatchId !== undefined && msg.scheduledBatchId !== scheduledBatchId) {
+  node.send({ payload: { error: 'schedule_batch_mismatch', action: 'invalid' } });
+  return;
+}
 if (msg.action === 'stop') {
   const running = context.get('engine');
   const busy = context.get('busy');
   const job = context.get('job');
+  if (msg.scheduledBatchId !== undefined && job && job.batchId !== msg.scheduledBatchId) {
+    node.send({ payload: { error: 'schedule_batch_mismatch', action: 'stop' } });
+    return;
+  }
   if (job) job.stopped = true;
   if (running) running.stop();
   node.send({ payload: { status: running || busy ? 'stop_requested' : 'idle' } });
@@ -59,6 +72,9 @@ try {
   const manifest = readPrivate('TG_REACTIVATION_MANIFEST');
   const config = readPrivate('TG_REACTIVATION_CONFIG');
   let db;
+  if (msg.scheduledBatchId !== undefined && msg.scheduledBatchId !== manifest.batchId)
+    throw new Error('schedule_batch_mismatch');
+  job.batchId = manifest.batchId;
   if (msg.action !== 'preview') {
     const uri = env.get('TG_REACTIVATION_MONGO_URI');
     const database = env.get('TG_REACTIVATION_MONGO_DB');
@@ -69,7 +85,8 @@ try {
   }
   if (job.stopped) throw new Error('operation_stopped');
   const engine = createCampaignEngine({ db, crypto, https, token: env.get('TG_REACTIVATION_BOT_TOKEN'),
-    sendEnabled: env.get('TG_REACTIVATION_SEND_ENABLED') === 'true' });
+    sendEnabled: env.get('TG_REACTIVATION_SEND_ENABLED') === 'true',
+    sendWindow: ${JSON.stringify(sendWindow)} });
   context.set('engine', engine);
   let result;
   if (msg.action === 'preview') {
@@ -130,7 +147,7 @@ try {
     'mongo_ack_missing','mongo_cas_failed','telegram_token_missing','immutable_batch_mismatch','audience_count_mismatch',
     'sending_disabled','invalid_batch_limit','batch_not_prepared','telegram_rate_limit_wait','bot_identity_mismatch',
     'bot_locked','claim_not_confirmed','unresolved_send_lock_retained','lock_release_failed',
-    'recovery_requires_stopped_worker','recovery_lock_mismatch','batch_missing','unknown_ledger_state']);
+    'recovery_requires_stopped_worker','recovery_lock_mismatch','batch_missing','unknown_ledger_state','invalid_send_window','schedule_batch_mismatch']);
   const code = allowed.has(e.message) ? e.message : 'reactivation_operation_failed';
   node.send({ payload: { error: code, action: ['preview','prepare','run','start','start_all','resume_all','report','recover'].includes(msg.action) ? msg.action : 'invalid' } });
 } finally {
@@ -146,6 +163,7 @@ return;` });
   nodes.push({ id: 'tg_reactivation_totals_v1', z, type: 'debug', name: 'Campaign totals (no recipient data)',
     active: true, tosidebar: true, console: false, complete: 'payload', targetType: 'msg',
     x: 980, y: 170, wires: [] });
+  if (schedule) nodes.push(buildDatedScheduleNode(schedule, { z, controllerId: f }));
   return nodes;
 }
 

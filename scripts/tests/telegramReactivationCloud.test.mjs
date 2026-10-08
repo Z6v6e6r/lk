@@ -133,3 +133,18 @@ test('cloud import accepts only a bare installed module name, never an npm insta
   for(const mongoModule of ['tg-reactivation-mongodb@npm:mongodb@3.7.4','../mongodb',''])
     assert.throws(()=>buildCloudFlow(manifest,config,{mongoModule}),/invalid_mongo_module/);
 });
+
+test('cloud dated schedule is bound to the immutable batch and every controller send path',()=>{
+  const {manifest,config}=fixture();
+  const sendWindow={stopAt:'2026-10-08T19:00:00.000Z',resumeAt:'2026-10-09T07:00:00.000Z'};
+  const schedule={batchId:manifest.batchId,sendWindow,acknowledgedUnknown:{academy:2,friendship:1,group:0,return:0}};
+  const flow=buildCloudFlow(manifest,config,{sendWindow,schedule,mongoModule:'tg-reactivation-mongodb'});
+  const controller=flow.find(n=>n.id==='tg_reactivation_engine_cloud_v2');
+  const timer=flow.find(n=>n.id==='tg_reactivation_schedule_cloud_v2');
+  assert.ok(controller.func.includes('sendWindow: '+JSON.stringify(sendWindow)));
+  assert.deepEqual(timer.wires,[[controller.id]]);
+  assert.ok(timer.initialize.includes(JSON.stringify(schedule.acknowledgedUnknown)));
+  assert.throws(()=>buildCloudFlow(manifest,config,{sendWindow,schedule:{...schedule,batchId:'reactivation-20261008-other'}}),
+    /schedule_batch_mismatch/);
+  assert.throws(()=>buildCloudFlow(manifest,config,{sendWindow:{},schedule}),/invalid_send_window/);
+});
