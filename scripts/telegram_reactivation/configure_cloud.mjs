@@ -75,8 +75,6 @@ export function buildUpdate(snapshot, credentials, plan) {
   if (new Set(env.map(e => e.name)).size !== env.length) fail('setup_target_mismatch');
   if (!env.some(e => e.name === 'TG_REACTIVATION_SEND_ENABLED' && e.type === 'str' && e.value === 'false') ||
       !env.some(e => e.name === 'TG_REACTIVATION_MONGO_DB' && e.type === 'str' && e.value === plan.database)) fail('sender_must_be_disabled');
-  if (env.some(e => names.includes(e.name))) fail('destination_credentials_already_present');
-  if (credentials[plan.flowId] && Object.keys(credentials[plan.flowId]).length) fail('destination_credentials_already_present');
   const m = credentials[plan.mongoId], t = credentials[plan.botConfigId];
   if (!m || typeof m.user !== 'string' || !m.user || typeof m.password !== 'string' || !m.password ||
       !t || typeof t.token !== 'string' || !new RegExp('^' + plan.botId + ':[A-Za-z0-9_-]{20,}$').test(t.token.trim())) fail('source_credentials_unavailable');
@@ -90,10 +88,18 @@ export function buildUpdate(snapshot, credentials, plan) {
   if (!options.length || new Set(options.map(([k])=>k)).size !== options.length ||
       options.some(([k,v])=>!validOptions[k]?.test(v))) fail('unsupported_mongo_configuration');
   const uri = 'mongodb+srv://' + encodeURIComponent(m.user) + ':' + encodeURIComponent(m.password) + '@' + mongoNode.hostname;
+  const wanted = { TG_REACTIVATION_MONGO_URI: uri, TG_REACTIVATION_BOT_TOKEN: t.token.trim() };
+  const declared = env.filter(e => names.includes(e.name));
+  const current = credentials[plan.flowId] ?? {};
+  if (declared.length || Object.keys(current).length) {
+    if (declared.length !== names.length || declared.some(e => e.type !== 'cred' || e.value !== undefined) ||
+        Object.keys(current).length !== names.length || names.some(name => current[name] !== wanted[name])) fail('destination_credentials_mismatch');
+    return {rev:snapshot.rev,flows:structuredClone(source),alreadyConfigured:true};
+  }
   const flows = structuredClone(source);
   const target = flows.find(n => n.id === tab.id);
   target.env = [...env, ...names.map(name => ({name,type:'cred'}))];
-  target.credentials = { TG_REACTIVATION_MONGO_URI: uri, TG_REACTIVATION_BOT_TOKEN: t.token.trim() };
+  target.credentials = wanted;
   return { rev: snapshot.rev, flows };
 }
 
@@ -146,20 +152,29 @@ export async function configure(plan, {apply=false, request=loopbackRequest} = {
   const credentials = decodeStore(jsonFile(path.join(plan.userDir,'flows_cred.json')), secrets);
   const bearer = chooseSession(jsonFile(path.join(plan.userDir,'.sessions.json')), plan.username);
   const before = await request(plan,bearer,'GET','/flows');
-  const update = buildUpdate(before,credentials,plan);
-  if (!apply) return { checked:true, changed:false, targetFlow:plan.flowId, sendingEnabled:false };
-  const applied = await request(plan,bearer,'POST','/flows',update);
-  const after = await request(plan,bearer,'GET','/flows');
+  const {alreadyConfigured,...update} = buildUpdate(before,credentials,plan);
   const others = snapshot => digest(JSON.stringify(snapshot.flows.filter(n => n.id !== plan.flowId)));
-  const tab = after?.flows?.find(n => n.id === plan.flowId);
-  const expectedTab = structuredClone(update.flows.find(n => n.id === plan.flowId));
-  delete expectedTab.credentials;
-  if (!tab || typeof applied?.rev !== 'string' || after.rev !== applied.rev ||
-      others(before) !== others(after) || JSON.stringify(tab) !== JSON.stringify(expectedTab)) fail('setup_readback_failed');
-  const persisted = decodeStore(jsonFile(path.join(plan.userDir,'flows_cred.json')), secrets)[plan.flowId];
-  const wanted = update.flows.find(n => n.id === plan.flowId).credentials;
-  if (!persisted || names.some(name => persisted[name] !== wanted[name])) fail('setup_readback_failed');
-  return { configured:true, changed:true, targetFlow:plan.flowId, sendingEnabled:false, otherNodesUnchanged:true };
+  const receiptPath = path.join(plan.userDir,'.tg-reactivation-' + plan.flowId + '-setup.json');
+  const receipt = {version:1,flowId:plan.flowId,controllerHash:plan.controllerHash,mongoHash:plan.mongoHash,otherNodesHash:others(before)};
+  if (fs.existsSync(receiptPath)) {
+    if (JSON.stringify(jsonFile(receiptPath)) !== JSON.stringify(receipt)) fail('setup_baseline_mismatch');
+  } else if (alreadyConfigured) fail('setup_baseline_unavailable');
+  if (alreadyConfigured) return {configured:true,changed:false,targetFlow:plan.flowId,sendingEnabled:false,otherNodesUnchanged:true};
+  if (!apply) return { checked:true, changed:false, targetFlow:plan.flowId, sendingEnabled:false };
+  if (!fs.existsSync(receiptPath)) fs.writeFileSync(receiptPath,JSON.stringify(receipt),{mode:0o600,flag:'wx'});
+  try {
+    const applied = await request(plan,bearer,'POST','/flows',update);
+    const after = await request(plan,bearer,'GET','/flows');
+    const tab = after?.flows?.find(n => n.id === plan.flowId);
+    const expectedTab = structuredClone(update.flows.find(n => n.id === plan.flowId));
+    delete expectedTab.credentials;
+    if (!tab || typeof applied?.rev !== 'string' || after.rev !== applied.rev ||
+        others(before) !== others(after) || JSON.stringify(tab) !== JSON.stringify(expectedTab)) fail('setup_readback_failed');
+    const persisted = decodeStore(jsonFile(path.join(plan.userDir,'flows_cred.json')), secrets)[plan.flowId];
+    const wanted = update.flows.find(n => n.id === plan.flowId).credentials;
+    if (!persisted || names.some(name => persisted[name] !== wanted[name])) fail('setup_readback_failed');
+    return { configured:true, changed:true, targetFlow:plan.flowId, sendingEnabled:false, otherNodesUnchanged:true };
+  } catch { fail('cloud_configuration_apply_state_uncertain'); }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -168,9 +183,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (!planPath || !path.isAbsolute(planPath) || !['--check','--apply'].includes(mode)) fail('invalid_setup_arguments');
     const result = await configure(jsonFile(planPath),{apply:mode === '--apply'});
     console.log(JSON.stringify(result));
-  } catch {
+  } catch (e) {
     // Deliberately suppress every driver, response, stack and filesystem detail.
-    console.error('cloud_configuration_failed');
+    console.error(e?.message === 'cloud_configuration_apply_state_uncertain' ? e.message : 'cloud_configuration_failed');
     process.exitCode = 1;
   }
 }

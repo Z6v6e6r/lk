@@ -68,7 +68,10 @@ test('update changes only target tab, preserves revision and percent-encodes sou
   assert.deepEqual(result.flows.filter(n=>n.id!=='target'),before.flows.filter(n=>n.id!=='target'));
   const target=result.flows.find(n=>n.id==='target');
   assert.deepEqual(Object.keys(target.credentials).sort(),['TG_REACTIVATION_BOT_TOKEN','TG_REACTIVATION_MONGO_URI']);
-  assert.ok(target.credentials.TG_REACTIVATION_MONGO_URI.includes('offline%20user:offline%2Fpassword@cluster.example.invalid/legacy?retryWrites=true'));
+  const uri=new URL(target.credentials.TG_REACTIVATION_MONGO_URI);
+  assert.equal(uri.username,'offline%20user');assert.equal(uri.password,'offline%2Fpassword');
+  assert.equal(uri.hostname,'cluster.example.invalid');assert.equal(uri.pathname,'/legacy');
+  assert.equal(uri.searchParams.get('retryWrites'),'true');
   assert.equal(target.credentials.TG_REACTIVATION_BOT_TOKEN,credentials.bot.token);
   assert.deepEqual(target.env.slice(-2),[
     {name:'TG_REACTIVATION_MONGO_URI',type:'cred'},{name:'TG_REACTIVATION_BOT_TOKEN',type:'cred'}]);
@@ -135,7 +138,9 @@ test('check never writes; apply uses CAS and returns only sanitized receipt with
     assert.deepEqual(calls,['GET','GET','POST','GET']);
     assert.equal(JSON.stringify(result).includes('offline-bearer'),false);
     assert.equal(JSON.stringify(result).includes('offline/password'),false);
-    assert.deepEqual(fs.readdirSync(f.directory).sort(),['.config.runtime.json','.sessions.json','flows_cred.json','settings.js'].sort());
+    assert.deepEqual(await configure(f.plan,{apply:true,request}),{configured:true,changed:false,targetFlow:'target',sendingEnabled:false,otherNodesUnchanged:true});
+    assert.deepEqual(calls,['GET','GET','POST','GET','GET']);
+    assert.deepEqual(fs.readdirSync(f.directory).sort(),['.config.runtime.json','.sessions.json','.tg-reactivation-target-setup.json','flows_cred.json','settings.js'].sort());
   } finally {fs.rmSync(f.directory,{recursive:true,force:true});}
 });
 
@@ -157,7 +162,7 @@ test('CAS rejection has no retry and invalid source credentials cannot reach POS
   try {
     await assert.rejects(configure(f.plan,{apply:true,request:async(p,b,m)=>{
       calls.push(m);if(m==='GET')return f.snapshot;throw new Error('admin_request_rejected');
-    }}),/admin_request_rejected/);
+    }}),/cloud_configuration_apply_state_uncertain/);
     assert.deepEqual(calls,['GET','POST']);
     fs.writeFileSync(path.join(f.directory,'flows_cred.json'),JSON.stringify(encrypted({},f.secret)));
     calls.length=0;
@@ -177,9 +182,31 @@ test('concurrent target-only deploy cannot pass the disabled sender readback',as
         posted.rev=changedEnv?'our-revision':'someone-else-revision';
         if(changedEnv)posted.flows[0].env.push({name:'TG_REACTIVATION_SEND_ENABLED',type:'str',value:'true'});
         return posted;
-      }}),/setup_readback_failed/);
+      }}),/cloud_configuration_apply_state_uncertain/);
     } finally {fs.rmSync(f.directory,{recursive:true,force:true});}
   }
+});
+
+test('POST accepted then transport failed is reconciled by read-only check, never another POST',async()=>{
+  const f=diskFixture(),calls=[];
+  let current=structuredClone(f.snapshot);
+  const request=async(p,b,method,r,body)=>{
+    calls.push(method);
+    if(method==='GET')return structuredClone(current);
+    const tab=body.flows.find(n=>n.id==='target');
+    fs.writeFileSync(path.join(f.directory,'flows_cred.json'),JSON.stringify(encrypted({...f.credentials,target:tab.credentials},f.secret)));
+    current=structuredClone(body);delete current.flows[0].credentials;current.rev='accepted-unknown-reply';
+    throw new Error('private-sensitive-network-message');
+  };
+  try {
+    await assert.rejects(configure(f.plan,{apply:true,request}),/^Error: cloud_configuration_apply_state_uncertain$/);
+    assert.deepEqual(calls,['GET','POST']);
+    assert.deepEqual(await configure(f.plan,{request}),{configured:true,changed:false,targetFlow:'target',sendingEnabled:false,otherNodesUnchanged:true});
+    assert.deepEqual(calls,['GET','POST','GET']);
+    current.flows.find(n=>n.id==='unrelated').label='someone else changed this';
+    await assert.rejects(configure(f.plan,{request}),/setup_baseline_mismatch/);
+    assert.equal(calls.filter(m=>m==='POST').length,1);
+  } finally {fs.rmSync(f.directory,{recursive:true,force:true});}
 });
 
 test('CLI suppresses arbitrary private parse/filesystem diagnostics',()=>{

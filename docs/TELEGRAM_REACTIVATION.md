@@ -138,7 +138,7 @@ config nodes и новой вкладкой доступен одноразов�
 существующую действующую сессию указанного оператора из `.sessions.json`.
 Чтение этих приватных хранилищ и сохранение credentials требуют отдельного
 разрешения на точный источник и получателя. CLI не является библиотекой Function.
-Он не создаёт токены, ключи, пароли, plaintext-файлы, не пишет секреты в stdout.
+Он не создаёт токены, ключи, пароли или plaintext-файлы с секретами, не пишет секреты в stdout.
 
 Plan JSON содержит только userDir, port, adminRoot, username, flowId, controllerId,
 controllerHash (SHA-256 JSON из func, initialize, finalize, libs), mongoId,
@@ -151,8 +151,14 @@ type `nodes`; остальные узлы сохраняются точно. П�
 повтора. SEND остаётся строкой `false`. Поддерживается literal Telegram token и
 legacy Mongo `dnscluster` с существующим host/path?query и пустым connectOptions;
 неподдерживаемая topology, projects, safeMode,
-неизвестный ключ, существующие credentials назначения или другой controller
-останавливают операцию. Ошибки CLI всегда представлены одним фиксированным кодом.
+неизвестный ключ, отличающиеся credentials назначения или другой controller
+останавливают операцию. До POST сохраняется служебный файл 0600 только с хэшами
+controller/Mongo/остальных узлов, без секретов. Если POST или readback прерван,
+CLI выдаёт фиксированный `cloud_configuration_apply_state_uncertain`.
+Повторный `--check` подтверждает уже настроенное точное назначение и baseline
+только чтением. Даже `--apply` для подтверждённого назначения не повторяет POST.
+При несовпадении baseline требуется проверка текущего состояния; автоматического
+повтора, удаления credentials или восстановления backup нет.
 После apply проверяются неизменность остальных узлов и encrypted credential
 readback, затем необходимы реальный PREVIEW/PREPARE/REPORT нового потока.
 Ответ deploy не доказывает завершение запуска runtime. При неполном readback
