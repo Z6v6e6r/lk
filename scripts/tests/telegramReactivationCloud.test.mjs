@@ -82,6 +82,8 @@ test('cloud flow is portable, private, disabled and retains durable runtime cont
   assert.ok(fn.func.includes('compatibleDatabase(client.db(database))'));
   assert.ok(fn.func.includes("env.get('TG_REACTIVATION_SEND_ENABLED') === 'true'"));
   assert.ok(fn.func.includes("if (context.get('job') === job)"));
+  const resume=flow.find(n=>n.type==='inject'&&n.props.some(p=>p.p==='action'&&p.v==='resume_all'));
+  assert.deepEqual(resume.props.find(p=>p.p==='acknowledgedUnknown'),{p:'acknowledgedUnknown',v:'{}',vt:'json'});
   assert.ok(fn.finalize.includes('job.stopped = true'));
   assert.doesNotThrow(()=>new (Object.getPrototypeOf(async function(){}).constructor)('msg',fn.func));
   for(const n of flow) {

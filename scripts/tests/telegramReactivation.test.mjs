@@ -100,7 +100,7 @@ const sends = s => s.calls.filter(c => c.method.startsWith('send'));
 
 test('source-driven flow is disabled, has no auto timers/routes/credentials and compiles', () => {
   const flow = buildFlow();
-  assert.equal(flow.length, 13);
+  assert.equal(flow.length, 14);
   assert.equal(flow[0].disabled, true);
   assert.ok(flow.filter(n => n.type === 'inject').every(n => n.once === false && !n.repeat && !n.crontab));
   assert.ok(!flow.some(n => n.type.startsWith('http')));
@@ -119,7 +119,7 @@ test('CLI actually exports its disabled flow from paths containing spaces', () =
     assert.equal(result.status, 0, result.stderr);
     const exported = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(exported[0].disabled, true);
-    assert.equal(exported.length, 13);
+    assert.equal(exported.length, 14);
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.notEqual(spawnSync(process.execPath, [cli, file]).status, 0);
   } finally { fs.rmSync(directory, { recursive: true }); }
@@ -514,4 +514,171 @@ test('START ALL aborts a chunk report with unresolved sending before a further c
   assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
   assert.equal(sends(s).length, 25);
   assert.ok(h.emitted.at(-1).payload.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.pending === 1));
+});
+
+const reviewedUnknown = { academy: 0, friendship: 1, group: 0, return: 0 };
+async function markReviewedUnknown(s) {
+  const chatId = s.manifest.campaigns.find(c => c.campaignId === 'friendship').recipients[0].chatId;
+  await s.db.collection('tg_reactivation_recipients').updateOne({ _id: `${s.manifest.batchId}:${chatId}` },
+    { $set: { status: 'unknown', attempts: 1, errorCode: null } });
+  return chatId;
+}
+
+test('RESUME drains pending over multiple chunks and never changes or resends reviewed unknown', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 53, group: 2, return: 26, academy: 2 });
+  await s.engine.prepare(s.manifest, s.config);
+  const unknownChat = await markReviewedUnknown(s);
+  const rows = s.db.collection('tg_reactivation_recipients');
+  const preimage = structuredClone(await rows.findOne({ _id: `${s.manifest.batchId}:${unknownChat}` }));
+  const h = orchestrationHarness(s);
+  const acknowledgement = { ...reviewedUnknown };
+  await h.execute({ action: 'resume_all', acknowledgedUnknown: acknowledgement });
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship', 'friendship', 'friendship', 'group', 'return', 'return', 'academy']);
+  assert.equal(sends(s).length, 82);
+  assert.equal(new Set(sends(s).map(c => c.payload.chat_id)).size, 82);
+  assert.ok(sends(s).every(c => c.payload.chat_id !== unknownChat));
+  assert.deepEqual(await rows.findOne({ _id: `${s.manifest.batchId}:${unknownChat}` }), preimage);
+  assert.deepEqual(acknowledgement, reviewedUnknown);
+  const final = h.emitted.at(-1).payload;
+  assert.ok(final.campaigns.every(c => c.pending === 0 && c.sending === 0));
+  assert.equal(final.campaigns.find(c => c.campaignId === 'friendship').unknown, 1);
+  assert.equal(final.lock, null);
+  await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+  assert.equal(sends(s).length, 82);
+});
+
+test('RESUME rejects absent, partial, extra, unsafe or stale acknowledgement before any API call', async () => {
+  const inputs = [undefined, null, '{}', [], {}, { ...reviewedUnknown, extra: 0 },
+    Object.assign(Object.create({ friendship: 1 }), { academy: 0, group: 0, return: 0, extra: 0 }),
+    { ...reviewedUnknown, group: '0' }, { ...reviewedUnknown, group: -1 },
+    { ...reviewedUnknown, group: 0.5 }, { ...reviewedUnknown, group: Number.MAX_SAFE_INTEGER + 1 },
+    { ...reviewedUnknown, friendship: 0 }, { ...reviewedUnknown, friendship: 2 }];
+  for (const acknowledgedUnknown of inputs) {
+    const s = setup();
+    await s.engine.prepare(s.manifest, s.config);
+    await markReviewedUnknown(s);
+    const h = orchestrationHarness(s);
+    await h.execute({ action: 'resume_all', acknowledgedUnknown });
+    assert.deepEqual(h.emitted, [{ payload: { error: 'campaign_requires_review', action: 'resume_all' } }]);
+    assert.equal(h.runs.length, 0);
+    assert.equal(s.calls.length, 0);
+  }
+});
+
+test('RESUME stops a new uncertain send and cannot reuse the old acknowledgement', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 3 });
+  await s.engine.prepare(s.manifest, s.config);
+  const oldUnknown = await markReviewedUnknown(s);
+  s.result.current = new Error('synthetic-network-failure');
+  const h = orchestrationHarness(s);
+  await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+  assert.equal(sends(s).length, 1);
+  assert.notEqual(sends(s)[0].payload.chat_id, oldUnknown);
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+  const final = h.emitted.at(-1).payload;
+  assert.equal(final.pauseReason, 'send_requires_review');
+  assert.equal(final.campaigns.find(c => c.campaignId === 'friendship').unknown, 2);
+  assert.ok(final.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.pending === 1));
+  await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+  assert.equal(sends(s).length, 1);
+  assert.deepEqual(h.emitted.at(-1), { payload: { error: 'campaign_requires_review', action: 'resume_all' } });
+});
+
+test('RESUME aborts changes in another cohort, decreases, sending or lock after a chunk', async () => {
+  for (const change of ['other_unknown', 'decrease', 'sending', 'lock']) {
+    const s = setup();
+    cohortSizes(s, { friendship: 28 });
+    await s.engine.prepare(s.manifest, s.config);
+    await markReviewedUnknown(s);
+    const h = orchestrationHarness(s, { afterRun: report => ({ ...report,
+      lock: change === 'lock' ? { owner: 'synthetic-other-worker' } : report.lock,
+      campaigns: report.campaigns.map(c =>
+        change === 'other_unknown' && c.campaignId === 'group' ? { ...c, unknown: 1 } :
+        change === 'decrease' && c.campaignId === 'friendship' ? { ...c, unknown: 0 } :
+        change === 'sending' && c.campaignId === 'group' ? { ...c, sending: 1 } : c) }) });
+    await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+    assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+    assert.equal(sends(s).length, 25);
+    assert.ok(h.emitted.at(-1).payload.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.attempts === 0));
+  }
+});
+
+test('RESUME refuses existing lock, sending or retry_wait even with exact unknown acknowledgement', async () => {
+  for (const fence of ['lock', 'sending', 'retry_wait']) {
+    const s = setup();
+    await s.engine.prepare(s.manifest, s.config);
+    await markReviewedUnknown(s);
+    if (fence === 'lock') await s.db.collection('tg_reactivation_batches').insertOne({ _id: `lock:${s.config.botId}`, owner: 'other' });
+    else await s.db.collection('tg_reactivation_recipients').updateOne({ _id: `${s.manifest.batchId}:1001` },
+      { $set: { status: fence, nextAttemptAt: s.dependencies.now() } });
+    const h = orchestrationHarness(s);
+    await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+    assert.equal(s.calls.length, 0);
+    assert.equal(h.runs.length, 0);
+    assert.deepEqual(h.emitted.at(-1), { payload: { error: 'campaign_requires_review', action: 'resume_all' } });
+  }
+});
+
+test('RESUME honours disabled sending and stops all later campaigns on 429', async () => {
+  for (const scenario of ['disabled', 'rate_limit']) {
+    const s = setup();
+    cohortSizes(s, { friendship: 2 });
+    await s.engine.prepare(s.manifest, s.config);
+    await markReviewedUnknown(s);
+    if (scenario === 'rate_limit') s.result.current = { ok: false, error_code: 429, parameters: { retry_after: 60 } };
+    const h = orchestrationHarness(s, { sendEnabled: scenario !== 'disabled' });
+    await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+    assert.equal(sends(s).length, scenario === 'disabled' ? 0 : 1);
+    assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+    if (scenario === 'disabled') assert.deepEqual(h.emitted.at(-1), { payload: { error: 'sending_disabled', action: 'resume_all' } });
+    else assert.equal(h.emitted.at(-1).payload.pauseReason, 'rate_limited');
+  }
+});
+
+test('RESUME checks a fresh report before the next chunk when the previous snapshot becomes stale', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 28 });
+  await s.engine.prepare(s.manifest, s.config);
+  await markReviewedUnknown(s);
+  const groupChat = s.manifest.campaigns.find(c => c.campaignId === 'group').recipients[0].chatId;
+  const h = orchestrationHarness(s, { afterRun: async report => {
+    await s.db.collection('tg_reactivation_recipients').updateOne({ _id: `${s.manifest.batchId}:${groupChat}` },
+      { $set: { status: 'unknown', attempts: 1 } });
+    return report;
+  } });
+  await h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+  assert.equal(sends(s).length, 25);
+  assert.deepEqual(h.emitted.at(-1), { payload: { error: 'campaign_requires_review', action: 'resume_all' } });
+});
+
+test('STOP during RESUME cancels all later pending without changing reviewed unknown', async () => {
+  const s = setup();
+  cohortSizes(s, { friendship: 28 });
+  await s.engine.prepare(s.manifest, s.config);
+  const oldUnknown = await markReviewedUnknown(s);
+  let releaseSend, beganSend;
+  const pending = new Promise(resolve => { releaseSend = resolve; });
+  const began = new Promise(resolve => { beganSend = resolve; });
+  const transport = s.dependencies.transport;
+  s.dependencies.transport = async (method, payload) => {
+    if (method.startsWith('send')) { beganSend(); await pending; }
+    return transport(method, payload);
+  };
+  const h = orchestrationHarness(s);
+  const running = h.execute({ action: 'resume_all', acknowledgedUnknown: reviewedUnknown });
+  await began;
+  await h.execute({ action: 'stop' });
+  releaseSend();
+  await running;
+  assert.equal(sends(s).length, 1);
+  assert.notEqual(sends(s)[0].payload.chat_id, oldUnknown);
+  assert.deepEqual(h.runs.map(r => r.campaignId), ['friendship']);
+  const final = h.emitted.at(-1).payload;
+  assert.equal(final.pauseReason, 'stopped');
+  assert.equal(final.campaigns.find(c => c.campaignId === 'friendship').unknown, 1);
+  assert.ok(final.campaigns.filter(c => c.campaignId !== 'friendship').every(c => c.attempts === 0));
+  assert.equal(final.lock, null);
 });

@@ -23,6 +23,9 @@ export function buildFlow() {
   nodes.push({ id: 'tg_reactivation_start_all_v1', z, type: 'inject', name: 'START ALL (four campaigns sequentially)',
     props: [{ p: 'action', v: 'start_all', vt: 'str' }], repeat: '', crontab: '', once: false,
     onceDelay: 0.1, x: 220, y: 710, wires: [[f]] });
+  nodes.push({ id: 'tg_reactivation_resume_all_v1', z, type: 'inject', name: 'RESUME pending (keep reviewed unknown excluded)',
+    props: [{ p: 'action', v: 'resume_all', vt: 'str' }, { p: 'acknowledgedUnknown', v: '{}', vt: 'json' }],
+    repeat: '', crontab: '', once: false, onceDelay: 0.1, x: 240, y: 780, wires: [[f]] });
   nodes.push({ id: f, z, type: 'function', name: 'Durable campaigns (aggregate output only)', outputs: 1,
     timeout: 0, x: 590, y: 170, wires: [['tg_reactivation_totals_v1']],
     initialize: `context.set('busy', false);`,
@@ -75,25 +78,44 @@ try {
       counts: manifest.campaigns.map(c => ({ campaignId: c.campaignId, eligible: c.recipients.length })) };
   } else if (msg.action === 'prepare') result = await engine.prepare(manifest, config);
   else if (msg.action === 'run') result = await engine.run(manifest, config, 25, msg.campaignId);
-  else if (msg.action === 'start' || msg.action === 'start_all') {
-    const order = msg.action === 'start_all' ? ['friendship','group','return','academy'] : [msg.campaignId];
+  else if (msg.action === 'start' || msg.action === 'start_all' || msg.action === 'resume_all') {
+    const resume = msg.action === 'resume_all';
+    const sequential = resume || msg.action === 'start_all';
+    const order = sequential ? ['friendship','group','return','academy'] : [msg.campaignId];
     if (order.some(c => !['academy','friendship','group','return'].includes(c))) throw new Error('invalid_campaign');
     result = await engine.report(manifest.batchId);
-    if (msg.action === 'start_all' && (result.lock || result.campaigns.some(c => c.sending || c.unknown)))
+    let acknowledgedUnknown;
+    if (resume) {
+      const input = msg.acknowledgedUnknown;
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 4 ||
+        !order.every(id => Object.hasOwn(input, id) && Number.isSafeInteger(input[id]) && input[id] >= 0))
+        throw new Error('campaign_requires_review');
+      acknowledgedUnknown = Object.fromEntries(order.map(id => [id, input[id]]));
+    }
+    // Resume acknowledges a fixed aggregate snapshot, never changes or claims unknown rows.
+    const requiresReview = report => report.lock || report.campaigns.some(c => c.sending ||
+      (resume ? c.unknown !== acknowledgedUnknown[c.campaignId] || c.retry_wait : c.unknown));
+    if (sequential && requiresReview(result))
       throw new Error('campaign_requires_review');
     for (const campaignId of order) {
       let totals = result.campaigns.find(c => c.campaignId === campaignId);
       if (!totals.pending && !totals.retry_wait) continue;
       do {
+        if (resume) {
+          result = await engine.report(manifest.batchId);
+          if (requiresReview(result)) throw new Error('campaign_requires_review');
+          totals = result.campaigns.find(c => c.campaignId === campaignId);
+        }
         const before = { pending: totals.pending, retry_wait: totals.retry_wait, attempts: totals.attempts };
         result = await engine.run(manifest, config, 25, campaignId);
         node.send({ payload: result });
         totals = result.campaigns.find(c => c.campaignId === campaignId);
-        if (result.pauseReason || (!totals.pending && !totals.retry_wait) || totals.unknown || totals.sending) break;
+        if (result.pauseReason || (!totals.pending && !totals.retry_wait) ||
+          (resume ? requiresReview(result) : totals.unknown || totals.sending)) break;
         if (totals.pending === before.pending && totals.retry_wait === before.retry_wait && totals.attempts === before.attempts)
           throw new Error('campaign_no_progress');
       } while (true);
-      if (result.pauseReason || totals.unknown || totals.sending) break;
+      if (result.pauseReason || (resume ? requiresReview(result) : totals.unknown || totals.sending)) break;
     }
   }
   else if (msg.action === 'report') result = await engine.report(manifest.batchId);
@@ -110,7 +132,7 @@ try {
     'bot_locked','claim_not_confirmed','unresolved_send_lock_retained','lock_release_failed',
     'recovery_requires_stopped_worker','recovery_lock_mismatch','batch_missing','unknown_ledger_state']);
   const code = allowed.has(e.message) ? e.message : 'reactivation_operation_failed';
-  node.send({ payload: { error: code, action: ['preview','prepare','run','start','start_all','report','recover'].includes(msg.action) ? msg.action : 'invalid' } });
+  node.send({ payload: { error: code, action: ['preview','prepare','run','start','start_all','resume_all','report','recover'].includes(msg.action) ? msg.action : 'invalid' } });
 } finally {
   if (client) { try { await client.close(); } catch { /* no raw driver logs */ } }
   if (context.get('job') === job) {
@@ -131,5 +153,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const output = process.argv[2];
   if (!output || !path.isAbsolute(output)) throw new Error('Absolute external output path required');
   await fs.writeFile(output, JSON.stringify(buildFlow(), null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-  console.log('Created disabled standalone flow; 13 nodes; no credentials or recipients included.');
+  console.log('Created disabled standalone flow; 14 nodes; no credentials or recipients included.');
 }
