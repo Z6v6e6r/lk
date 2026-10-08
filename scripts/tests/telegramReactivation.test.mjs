@@ -105,7 +105,7 @@ test('source-driven flow is disabled, has no auto timers/routes/credentials and 
   assert.ok(flow.filter(n => n.type === 'inject').every(n => n.once === false && !n.repeat && !n.crontab));
   assert.ok(!flow.some(n => n.type.startsWith('http')));
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  for (const node of flow.filter(n => n.type === 'function')) new AsyncFunction('msg', 'node', 'context', 'env', 'done', node.func);
+  for (const node of flow.filter(n => n.type === 'function')) new AsyncFunction('msg', 'node', 'context', 'env', node.func);
   const ids = new Set(flow.map(n => n.id));
   assert.equal(ids.size, flow.length);
   assert.ok(flow.every(n => (n.wires ?? []).flat().every(id => ids.has(id))));
@@ -268,12 +268,12 @@ test('shutdown after outstanding Mongo claim never begins a new API send', async
 test('STOP remains usable while a full campaign is busy', async () => {
   const source = buildFlow().find(n => n.type === 'function').func;
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'done', 'mongo', 'https', 'crypto', 'fs', source);
+  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'mongo', 'https', 'crypto', 'fs', source);
   const emitted = [];
   let stopped = false;
   await fn({ action: 'stop' }, { send: m => emitted.push(m) },
     { get: key => key === 'busy' ? true : { stop: () => { stopped = true; } }, set: () => {} },
-    {}, () => {}, {}, {}, {}, {});
+    {}, {}, {}, {}, {});
   assert.equal(stopped, true);
   assert.deepEqual(emitted, [{ payload: { status: 'stop_requested' } }]);
 });
@@ -281,7 +281,7 @@ test('STOP and shutdown during deferred Mongo connection cancel START before sen
   for (const action of ['stop', 'finalize']) {
   const source = buildFlow().find(n => n.type === 'function').func;
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'done', 'mongo', 'https', 'crypto', 'fs', source);
+  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'mongo', 'https', 'crypto', 'fs', source);
   const values = new Map();
   const context = { get: key => values.get(key), set: (key, value) => values.set(key, value) };
   const emitted = [];
@@ -296,11 +296,11 @@ test('STOP and shutdown during deferred Mongo connection cancel START before sen
   }
   const env = { get: () => '/private/synthetic.json' };
   const fsMock = { lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false, mode: 0o600 }), readFileSync: () => '{}' };
-  const running = fn({ action: 'start', campaignId: 'academy' }, node, context, env, () => {}, { MongoClient: Client }, {}, crypto, fsMock);
+  const running = fn({ action: 'start', campaignId: 'academy' }, node, context, env, { MongoClient: Client }, {}, crypto, fsMock);
   assert.equal(context.get('busy'), true);
   const newEngine = { stop: () => {} };
   if (action === 'stop') {
-    await fn({ action: 'stop' }, node, context, env, () => {}, {}, {}, crypto, fsMock);
+    await fn({ action: 'stop' }, node, context, env, {}, {}, crypto, fsMock);
     assert.deepEqual(emitted, [{ payload: { status: 'stop_requested' } }]);
   } else {
     new Function('context', buildFlow().find(n => n.type === 'function').finalize)(context);
@@ -320,13 +320,13 @@ test('STOP and shutdown during deferred Mongo connection cancel START before sen
 test('Function emits fixed error codes, never arbitrary lowercase provider/user text', async () => {
   const source = buildFlow().find(n => n.type === 'function').func;
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'done', 'mongo', 'https', 'crypto', 'fs', source);
+  const fn = new AsyncFunction('msg', 'node', 'context', 'env', 'mongo', 'https', 'crypto', 'fs', source);
   const context = new Map();
   const emitted = [];
   await fn({ action: 'preview', privateIncomingData: 'do_not_echo' },
     { send: message => emitted.push(message), warn: () => {} },
     { get: key => context.get(key), set: (key, value) => context.set(key, value) },
-    { get: () => '/private/test-config.json' }, () => {}, {}, {}, crypto,
+    { get: () => '/private/test-config.json' }, {}, {}, crypto,
     { lstatSync: () => { throw new Error('private_user_name'); } });
   assert.deepEqual(emitted, [{ payload: { error: 'reactivation_operation_failed', action: 'preview' } }]);
 });

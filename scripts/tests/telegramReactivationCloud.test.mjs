@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { test } from 'node:test';
 import { compatibleDatabase } from '../telegram_reactivation/mongo_compat.mjs';
 import { buildCloudFlow } from '../telegram_reactivation/build_cloud_flow.mjs';
@@ -97,4 +98,36 @@ test('invalid audiences, unconfirmed posts and token-bearing captions cannot be 
   assert.throws(()=>buildCloudFlow(b.manifest,b.config),/utm_not_confirmed/);
   const c=fixture();c.config.campaigns[0].text+=' '+String(10_000_000)+':'+ 'A'.repeat(32);
   assert.throws(()=>buildCloudFlow(c.manifest,c.config),/credential_in_message_config/);
+});
+
+test('generated Function executes with Node-RED globals and automatic async completion',async()=>{
+  const {manifest,config}=fixture();
+  const source=buildCloudFlow(manifest,config).find(n=>n.type==='function').func;
+  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+  const execute=new AsyncFunction('msg','node','context','env','mongo','https','crypto',source);
+  for(const action of ['preview','prepare','stop','busy']) {
+    const state=new Map(action==='busy'?[['busy',true]]:[]);
+    const emitted=[],warnings=[];
+    await execute({action:action==='busy'?'preview':action},
+      {send:m=>emitted.push(m),warn:m=>warnings.push(m),done:()=>{throw new Error('manual_completion_unexpected');}},
+      {get:k=>state.get(k),set:(k,v)=>state.set(k,v)}, {get:()=>undefined}, {}, {}, crypto);
+    if(action==='preview') {
+      assert.equal(emitted.length,1);
+      assert.deepEqual(emitted[0].payload.counts,manifest.campaigns.map(c=>({campaignId:c.campaignId,eligible:1})));
+      assert.equal(state.get('busy'),false);
+      assert.equal(state.get('job'),null);
+    } else if(action==='prepare') {
+      assert.deepEqual(emitted,[{payload:{error:'mongo_not_configured',action:'prepare'}}]);
+      assert.equal(state.get('busy'),false);
+    } else if(action==='stop') assert.deepEqual(emitted,[{payload:{status:'idle'}}]);
+    else {assert.deepEqual(emitted,[]);assert.deepEqual(warnings,['reactivation_busy']);}
+  }
+});
+
+test('cloud import accepts only a bare installed module name, never an npm install spec',()=>{
+  const {manifest,config}=fixture();
+  const fn=buildCloudFlow(manifest,config,{mongoModule:'tg-reactivation-mongodb'}).find(n=>n.type==='function');
+  assert.deepEqual(fn.libs.find(n=>n.var==='mongo'),{var:'mongo',module:'tg-reactivation-mongodb'});
+  for(const mongoModule of ['tg-reactivation-mongodb@npm:mongodb@3.7.4','../mongodb',''])
+    assert.throws(()=>buildCloudFlow(manifest,config,{mongoModule}),/invalid_mongo_module/);
 });

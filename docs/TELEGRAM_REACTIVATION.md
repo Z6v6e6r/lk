@@ -105,6 +105,16 @@ node scripts/telegram_reactivation/build_cloud_flow.mjs \
 Topology, установленные библиотеки и настройки целевого облака требуют проверки.
 
 Function требует разрешённых модулей `mongodb`, `https`, `crypto`; fs не используется.
+Если корневой `mongodb` повреждён, не обновлять его вслепую: он общий для других
+узлов. После отдельно разрешённой установки официального npm alias
+`tg-reactivation-mongodb@npm:mongodb@3.7.4` в shared userDir Function должен
+ссылаться на **bare** `tg-reactivation-mongodb`, import as `mongo`. Полный npm spec
+при загрузке Function не является именем модуля. Установка alias всё равно может
+пересобрать общие npm зависимости. Генератор принимает bare alias четвёртым
+аргументом CLI после пути output. Не повторять npm install при ошибке загрузки
+уже зарегистрированного alias; проверить результат установки и остановить этот путь.
+Async Function завершается средствами Node-RED после выполнения promise;
+глобальная функция `done` в редакторе не предоставляется.
 Четыре переменные окружения процесса/секретных настроек хостинга:
 `TG_REACTIVATION_MONGO_URI`, `TG_REACTIVATION_MONGO_DB`,
 `TG_REACTIVATION_BOT_TOKEN`, `TG_REACTIVATION_SEND_ENABLED`.

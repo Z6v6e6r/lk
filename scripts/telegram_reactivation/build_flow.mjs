@@ -34,7 +34,6 @@ if (msg.action === 'stop') {
   if (job) job.stopped = true;
   if (running) running.stop();
   node.send({ payload: { status: running || busy ? 'stop_requested' : 'idle' } });
-  done();
   return;
 }
 if (context.get('busy')) { node.warn('reactivation_busy'); return null; }
@@ -105,7 +104,7 @@ try {
     context.set('job', null);
   }
 }
-done();
+// Node-RED completes the async Function promise; no bare done global is exposed.
 return;` });
   nodes.push({ id: 'tg_reactivation_totals_v1', z, type: 'debug', name: 'Campaign totals (no recipient data)',
     active: true, tosidebar: true, console: false, complete: 'payload', targetType: 'msg',

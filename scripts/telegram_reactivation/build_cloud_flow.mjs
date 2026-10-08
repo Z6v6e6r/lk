@@ -6,7 +6,8 @@ import { buildFlow as buildStandaloneFlow } from './build_flow.mjs';
 import { createCampaignEngine } from './engine.mjs';
 import { compatibleDatabase } from './mongo_compat.mjs';
 
-export function buildCloudFlow(manifest,config) {
+export function buildCloudFlow(manifest,config,{mongoModule='mongodb'}={}) {
+  if (!/^[a-z][a-z0-9-]*$/.test(mongoModule)) throw new Error('invalid_mongo_module');
   // Reject secret-bearing extras and strip provenance not needed by the sender.
   const audience = { schemaVersion: manifest.schemaVersion, batchId: manifest.batchId,
     audienceSnapshotDate: manifest.audienceSnapshotDate,
@@ -32,6 +33,7 @@ export function buildCloudFlow(manifest,config) {
     "writeConcern: { w: 'majority', j: true }, readConcern: { level: 'majority' }, readPreference: 'primary'");
   controller.func=controller.func.replace('db = client.db(database);','db = compatibleDatabase(client.db(database));');
   controller.libs=controller.libs.filter(lib=>lib.var!=='fs');
+  controller.libs.find(lib=>lib.var==='mongo').module=mongoModule;
   controller.name='Cloud campaigns — durable ledger';
   nodes[0].label='TG — FULL 4 campaigns — cloud';
   nodes[0].info='Private import contains fixed chatIds and 4 posts. No filesystem files or token/URI embedded. Uses Mongo driver already installed by the Mongo nodes (3.7.4 or modern drivers) through real acknowledgements, majority+journal and majority primary reads. Set 4 secret/service environment variables. Import disabled; manual PREVIEW → PREPARE → RUN/START. Never reset the batchId after beginning this campaign.';
@@ -45,10 +47,10 @@ export function buildCloudFlow(manifest,config) {
 }
 
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
-  const [audienceFile,configFile,output]=process.argv.slice(2);
+  const [audienceFile,configFile,output,mongoModule='mongodb']=process.argv.slice(2);
   if(![audienceFile,configFile,output].every(p=>p && path.isAbsolute(p))) throw new Error('absolute_paths_required');
   const nodes=buildCloudFlow(JSON.parse(await fs.readFile(audienceFile,'utf8')),
-    JSON.parse(await fs.readFile(configFile,'utf8')));
+    JSON.parse(await fs.readFile(configFile,'utf8')),{mongoModule});
   await fs.writeFile(output,JSON.stringify(nodes,null,2)+'\n',{mode:0o600,flag:'wx'});
   console.log('Created disabled private cloud import; no credentials, filesystem or automatic sends.');
 }
