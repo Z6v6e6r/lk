@@ -22,5 +22,5 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22'
-      - run: node --test scripts/tests/telegramReactivation.test.mjs
+      - run: node --test scripts/tests/telegramReactivation.test.mjs scripts/tests/telegramReactivationCloud.test.mjs
       - run: python3 scripts/tests/telegramReactivationAudience.test.py

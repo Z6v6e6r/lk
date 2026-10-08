@@ -72,6 +72,8 @@ def choose_campaign(age):
 
 
 def build_audience(csv_path, xlsx_path, snapshot, unknown_policy="exclude"):
+    if unknown_policy not in ("exclude", "return", "academy"):
+        raise ValueError("invalid_unknown_visit_policy")
     with Path(csv_path).open(encoding="utf-8-sig", newline="") as source:
         source_rows = list(csv.DictReader(source))
     endpoints = defaultdict(list)
@@ -119,7 +121,7 @@ def build_audience(csv_path, xlsx_path, snapshot, unknown_policy="exclude"):
                 active_rows += category == "active"
             else:
                 age, last_visit = None, None
-                category = "return" if unknown_policy == "return" else "unknown_visit"
+                category = unknown_policy if unknown_policy in ("return", "academy") else "unknown_visit"
             classified[chat].append({"category": category, "sourceSheet": sheet, "sourceRow": rownum,
                                      "hiatusDays": age, "lastVisit": str(last_visit) if last_visit else None})
     if xlsx_count != len(source_rows):
@@ -174,7 +176,7 @@ def main():
     parser.add_argument("--xlsx", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--snapshot", default="2026-09-30")
-    parser.add_argument("--unknown-visits", choices=("exclude", "return"), default="exclude")
+    parser.add_argument("--unknown-visits", choices=("exclude", "return", "academy"), default="exclude")
     args = parser.parse_args()
     destination = Path(args.output_dir)
     if not destination.is_absolute() or destination.exists():

@@ -85,6 +85,20 @@ class CohortBoundaries(unittest.TestCase):
             _, _, included = audience.build_audience(csv_path, xlsx_path, dt.date(2026, 9, 30), "return")
             self.assertEqual(included["campaigns"]["return"], 2)
 
+    def test_explicit_academy_policy_includes_only_unknown_visit_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = fixture(Path(directory))
+            manifest, exclusions, summary = audience.build_audience(*paths, dt.date(2026, 9, 30), "academy")
+            self.assertEqual(summary["campaigns"], {"academy": 2, "friendship": 1, "group": 1, "return": 1})
+            self.assertEqual(summary["exclusions"], {"active": 1, "phone_present_unclassified": 1})
+            self.assertEqual(summary["unknownVisitPolicy"], "academy")
+            academy = manifest["campaigns"][0]["recipients"]
+            self.assertEqual({r["chatId"] for r in academy}, {"1001", "1003"})
+            self.assertIsNone(next(r for r in academy if r["chatId"] == "1003")["lastVisit"])
+            self.assertEqual(len(exclusions), 2)
+            with self.assertRaisesRegex(ValueError, "invalid_unknown_visit_policy"):
+                audience.build_audience(*paths, dt.date(2026, 9, 30), "all")
+
     def test_snapshot_mismatch_is_rejected_instead_of_silently_resegmenting(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = fixture(Path(directory))
