@@ -101,7 +101,7 @@ export const LK1_TRAIN_G1_REVERT_INITIALIZE_SHA256 =
 export const LK1_TRAIN_G1_REVIEWED_GATEWAY_SHA256 =
   "430dbb09b3df1379c1100a0af784720abfdb9687b89662999d982db4aedeef8a";
 export const LK1_TRAIN_G1_REVIEWED_HOOKS_SHA256 =
-  "2225ca5234313613e1e5ede2d767dcbfacddc03bb0976a45ae4a970c7bf9dfef";
+  "50c0421143e56e87ff183f95302f309510c2f25b15d7c6b60a1d12294d7ab8c9";
 export const LK1_TRAIN_G1_REVIEWED_COURT_HELPERS_SHA256 = TOPOKRATY_COURT_HELPERS_SHA256;
 export const LK1_TRAIN_G1_REVIEWED_COURT_DISPATCH_SHA256 = TOPOKRATY_COURT_DISPATCH_SHA256;
 export const LK1_TRAIN_G1_REVIEWED_COURT_STEPS_SHA256 = TOPOKRATY_COURT_STEPS_SHA256;
@@ -367,7 +367,7 @@ export function usageBlockSha(body) {
 }
 
 /** The composed G1 gateway body: every reviewed delta re-anchored on the live 2026-10-05 body. */
-export function patchLk1TrainG1GatewayBody(source, target = LK1_TRAIN_G1_TARGET) {
+export function patchLk1TrainG1GatewayBody(source, target = LK1_TRAIN_G1_TARGET, { includePatriots = true } = {}) {
   const fragments = reviewedTrainFragments();
   if (sha256(source) !== target.liveFuncSha256) {
     throw new Error(`Booking gateway installed preimage drift: ${sha256(source)} != ${target.liveFuncSha256}`);
@@ -406,11 +406,11 @@ ${indent(fragments.courtDispatch, 6)}
   const withGate = applyDeltas(withQuote,
     [{ id: "club-gate", before: LIVE_CLUB_GATE, after: `${indent(fragments.clubGate, 2)}\n` }],
     "LK1 train G1 club gate");
-  const withPatriots = applyDeltas(withGate, [
+  const withPatriots = includePatriots ? applyDeltas(withGate, [
     { id: "patriots-guard", before: PATRIOTS_EARLY_GUARD_ANCHOR,
       after: PATRIOTS_EARLY_GUARD_ANCHOR + indent(fragments.patriotsGuard, 2) },
     { id: "patriots-detour", before: PATRIOTS_DETOUR_OLD, after: PATRIOTS_DETOUR_NEW },
-  ], "LK1 train G1 Patriots guard");
+  ], "LK1 train G1 Patriots guard") : withGate;
   const withMoney = applyDeltas(withPatriots, [
     // The reviewed club money mandate: the installed body carries `lk1ClubEventPaymentBinding`
     // without the `COURT_HOURLY_COPAY` branch, so the branch (and only the branch) is spliced in
@@ -432,7 +432,7 @@ ${indent(fragments.courtDispatch, 6)}
     ["court dispatch", "return startLk1CourtWindowFetch(ctx);", 2],
     ["court quote", "target.hourlyCourtPriceMinor = hourlyCourtPriceMinor;", 2],
     ["club gate", '["group_training", "open_game"].includes(resolveCategory(exercise))', 2],
-    ["Patriots guard", "const patriotsMoneyOnlyIdentity = ctx.caller === \"http\"", 2],
+    ["Patriots guard", "const patriotsMoneyOnlyIdentity = ctx.caller === \"http\"", includePatriots ? 2 : 1],
     ["court minutes", "operation.lk1.decision.courtMinutes", 2],
     ["club free ceiling", "const freeCeiling = clubFreeVisit ? duration : ctx.lk1.rule.freeGameMinutesPerDay;", 2],
     ["club money mandate", "COURT_HOURLY_COPAY", 2],
