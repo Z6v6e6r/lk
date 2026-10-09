@@ -10,6 +10,8 @@ import {
 } from "./calculations.ts";
 import {
   COMMUNITY_RATING_CALCULATION_VERSION,
+  COMMUNITY_RATING_PERIODS,
+  getCommunityRatingMonthStartTs,
   normalizeCommunityRatingPeriod,
   normalizeCommunityRatingTab,
   type CommunityRatingPeriod,
@@ -117,13 +119,21 @@ export function getCommunityRatingPeriodStartTs(
 ): number | null {
   const safePeriod = normalizeCommunityRatingPeriod(period);
   if (safePeriod === "all") return null;
+  if (safePeriod === "month") return getCommunityRatingMonthStartTs(nowTs);
   return nowTs - (30 * DAY_MS);
+}
+
+function getFactPeriodTimestamp(fact: CommunityRatingFact, period: CommunityRatingPeriod): number {
+  return period === "month" && fact.eventType === "tournament"
+    ? (fact.eventStartedAtTs ?? fact.occurredAtTs)
+    : fact.occurredAtTs;
 }
 
 function isFactInPeriod(fact: CommunityRatingFact, period: CommunityRatingPeriod, nowTs: number): boolean {
   const periodStartTs = getCommunityRatingPeriodStartTs(period, nowTs);
   if (periodStartTs == null) return true;
-  return fact.occurredAtTs >= periodStartTs && fact.occurredAtTs <= nowTs;
+  const eventTs = getFactPeriodTimestamp(fact, period);
+  return eventTs >= periodStartTs && eventTs <= nowTs && fact.occurredAtTs <= nowTs;
 }
 
 function createEmptyState(fact: CommunityRatingFact): AggregateState {
@@ -437,12 +447,11 @@ export function buildCommunityRatingSnapshot(
     ...row,
     rank: index + 1,
   }));
-  const periodStartTs = getCommunityRatingPeriodStartTs(period, nowTs);
   const dataThroughTs = params.facts.reduce<number | null>((latest, fact) => {
     if (fact.communityId !== communityId || fact.calculationVersion !== calculationVersion) return latest;
-    if (periodStartTs != null && fact.occurredAtTs < periodStartTs) return latest;
-    if (fact.occurredAtTs > nowTs) return latest;
-    return latest == null ? fact.occurredAtTs : Math.max(latest, fact.occurredAtTs);
+    if (!isFactInPeriod(fact, period, nowTs) || fact.occurredAtTs > nowTs) return latest;
+    const eventTs = getFactPeriodTimestamp(fact, period);
+    return latest == null ? eventTs : Math.max(latest, eventTs);
   }, null);
 
   return {
@@ -466,7 +475,7 @@ export function buildCommunityRatingSnapshots(
 ): CommunityRatingSnapshot[] {
   const tabs = (params.tabs?.length ? params.tabs : ["overall", "dynamics", "games", "tournaments"])
     .map((tab) => normalizeCommunityRatingTab(tab));
-  const periods = (params.periods?.length ? params.periods : ["all", "30d"])
+  const periods = (params.periods?.length ? params.periods : [...COMMUNITY_RATING_PERIODS])
     .map((period) => normalizeCommunityRatingPeriod(period));
   const snapshots: CommunityRatingSnapshot[] = [];
 
