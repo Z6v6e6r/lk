@@ -483,3 +483,63 @@ test("keeps current community members in every period without inventing activity
     assert.deepEqual(snapshot.rows[0]?.badges, ["no_activity"]);
   });
 });
+
+test("calendar month starts at Moscow midnight, including year and leap-month boundaries", () => {
+  for (const [now, start] of [
+    ["2026-09-30T20:59:59.999Z", "2026-08-31T21:00:00.000Z"],
+    ["2026-09-30T21:00:00.000Z", "2026-09-30T21:00:00.000Z"],
+    ["2026-12-31T21:00:00.000Z", "2026-12-31T21:00:00.000Z"],
+    ["2028-02-29T21:00:00.000Z", "2028-02-29T21:00:00.000Z"],
+  ]) assert.equal(getCommunityRatingPeriodStartTs("month", Date.parse(now)), Date.parse(start));
+});
+
+test("calendar snapshot matches monthly awards and excludes September, future events and late September closures", () => {
+  const nowTs = Date.parse("2026-10-09T12:00:00.000Z");
+  const player = { playerKey: "id:p1", playerId: "p1", playerName: "Player 1" };
+  const stats = { gamesWon: 1 as const, gamesLost: 0 as const, setsWon: 2, gamesWonCount: 12, gamesDiff: 4, levelDelta: 0.1 };
+  const tourStats = { place: 1, tournamentRawScore: 100, tournamentMatchesWon: 3, tournamentPointsScored: 30, tournamentPointsDiff: 10 };
+  const septemberTour = {
+    ...tournamentFact(player, tourStats, { eventId: "late-september", occurredAt: "2026-10-08T12:00:00.000Z" }),
+    eventStartedAtTs: Date.parse("2026-09-28T12:00:00.000Z"),
+  };
+  const octoberTour = {
+    ...tournamentFact(player, tourStats, { eventId: "october-tour", occurredAt: "2026-10-03T12:00:00.000Z" }),
+    eventStartedAtTs: Date.parse("2026-10-02T12:00:00.000Z"),
+  };
+  const selectedFacts = [
+    gameFact(player, stats, { eventId: "boundary", occurredAt: "2026-09-30T21:00:00.000Z" }),
+    visitFact(player, { eventId: "visit", occurredAt: "2026-10-03T12:00:00.000Z" }),
+    octoberTour,
+  ];
+  const allFacts = [
+    ...selectedFacts,
+    gameFact(player, stats, { eventId: "september", occurredAt: "2026-09-30T20:59:59.999Z" }),
+    gameFact(player, stats, { eventId: "future", occurredAt: "2026-10-10T12:00:00.000Z" }),
+    septemberTour,
+  ];
+  const snapshot = buildCommunityRatingSnapshot({ communityId: "community-1", facts: allFacts, period: "month", nowTs });
+  const awards = buildCommunityRatingSnapshot({ communityId: "community-1", facts: selectedFacts, period: "all", nowTs });
+  for (const field of ["overallScore", "gamesScore", "tournamentScore", "activityScore", "gamesPlayed", "tournamentsPlayed", "visitsAttended"] as const) {
+    assert.equal(snapshot.rows[0][field], awards.rows[0][field], field);
+  }
+  assert.equal(snapshot.rows[0].gamesPlayed, 1);
+  assert.equal(snapshot.rows[0].tournamentsPlayed, 1);
+  assert.equal(snapshot.dataThrough, "2026-10-03T12:00:00.000Z");
+  const rolling = buildCommunityRatingSnapshot({ communityId: "community-1", facts: allFacts, period: "30d", nowTs });
+  assert.equal(rolling.rows[0].gamesPlayed, 2);
+  assert.equal(rolling.rows[0].tournamentsPlayed, 2);
+});
+
+test("new month retains inactive members with zero points and creates monthly snapshots by default", () => {
+  const snapshots = buildCommunityRatingSnapshots({
+    communityId: "community-1", facts: [],
+    nowTs: Date.parse("2026-10-31T21:00:00.000Z"),
+    members: [{ playerKey: "id:p0", playerId: "p0", playerPhone: null, playerName: "Player 0", playerAvatarUrl: null, currentLevel: 4 }],
+  });
+  const month = snapshots.find((s) => s.period === "month" && s.tab === "overall");
+  assert.ok(month);
+  assert.equal(month.rows[0].overallScore, 0);
+  assert.equal(month.rows[0].rank, 1);
+  assert.equal(month.dataThrough, null);
+  assert.equal(snapshots.length, 12);
+});

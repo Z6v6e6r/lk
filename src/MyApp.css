@@ -13601,6 +13601,11 @@ h6,
   flex: none;
 }
 
+.community-ranking-filter-bar--period .community-ranking-filter-chip--month {
+  width: auto;
+  min-width: 69px;
+}
+
 .community-ranking-filter-chip--quarter {
   width: 88px;
   flex: none;

@@ -830,3 +830,29 @@ test("keeps the latest ledger event separate from the net source rating delta", 
   assert.equal(game?.lastRatingChangedAt, "2026-07-02T13:00:00.000Z");
   assert.equal(game?.lastRatingEventId, "rating-game-correction");
 });
+
+test("calendar tournament date prefers the published schedule and keeps closing timestamp for existing periods", () => {
+  const starts = [
+    { startAt: "2026-09-28T12:00:00.000Z" },
+    { details: { publicTournament: { startsAt: "2026-09-28T12:00:00.000Z" } } },
+    { startAt: "invalid", details: { sourceTournamentSnapshot: { startsAt: "2026-09-28T12:00:00.000Z" } } },
+    {},
+  ];
+  for (const schedule of starts) {
+    const facts = extractCommunityRatingFacts({
+      community: { id: "community-1", members: [{ id: "p-calendar", name: "Player Calendar" }] },
+      collectedAt: "2026-10-09T12:00:00.000Z",
+      feedPosts: [{ id: "post-calendar", kind: "TOURNAMENT", relatedTournamentId: "tour-calendar", ...schedule }],
+      tournaments: [{
+        tournamentId: "tour-calendar",
+        summary: { finishedAt: "2026-10-08T12:00:00.000Z" },
+        standings: [{ playerId: "p-calendar", place: 1, wins: 1, pointsFor: 10, pointsAgainst: 5 }],
+      }],
+    });
+    assert.equal(facts.length, 1);
+    assert.equal(facts[0].eventType, "tournament");
+    if (facts[0].eventType !== "tournament") throw new Error("expected tournament fact");
+    assert.equal(facts[0].occurredAt, "2026-10-08T12:00:00.000Z");
+    assert.equal(facts[0].eventStartedAtTs, Date.parse(Object.keys(schedule).length ? "2026-09-28T12:00:00.000Z" : "2026-10-08T12:00:00.000Z"));
+  }
+});

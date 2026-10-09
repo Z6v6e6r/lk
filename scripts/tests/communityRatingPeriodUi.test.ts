@@ -7,10 +7,10 @@ const communitiesSectionSource = fs.readFileSync("src/components/cabinet/Communi
 const ratingBreakdownSource = fs.readFileSync("src/components/levels-info/RatingBreakdownPage.tsx", "utf8");
 const communityApiSource = fs.readFileSync("src/utils/communityApi.ts", "utf8");
 
-test("community ranking screen exposes only all-time and last-month period controls", () => {
-  assert.match(rankingScreenSource, /RATING_PERIOD_OPTIONS/);
+test("community ranking screen exposes only all-time and current calendar month period controls", () => {
+  assert.match(rankingScreenSource, /getRatingPeriodOptions/);
   assert.match(rankingScreenSource, /id: "all", label: "Все время"/);
-  assert.match(rankingScreenSource, /id: "30d", label: "Месяц"/);
+  assert.match(rankingScreenSource, /id: "month", label: getCommunityRatingMonthLabel\(monthStartTs\)/);
   assert.match(rankingScreenSource, /activePeriod === option\.id/);
   assert.match(rankingScreenSource, /onChangePeriod\(option\.id\)/);
 });
@@ -19,8 +19,8 @@ test("community ranking frontend requests and caches by period plus rating type"
   assert.match(communitiesSectionSource, /const COMMUNITY_RATING_DEFAULT_PERIOD: CommunityRatingPeriod = "all"/);
   assert.match(communitiesSectionSource, /activeRankingPeriod/);
   assert.match(communitiesSectionSource, /period: activeRankingPeriod/);
-  assert.match(communitiesSectionSource, /type CommunityRankingCacheKey = `\$\{CommunityRatingPeriod\}:\$\{CommunityRankingTypeId\}`/);
-  assert.match(communitiesSectionSource, /buildCommunityRankingCacheKey\(activeRankingPeriod, activeRankingType\)/);
+  assert.match(communitiesSectionSource, /type CommunityRankingCacheKey = `\$\{CommunityRatingPeriod\}:\$\{CommunityRankingTypeId\}:\$\{number \| "all"\}`/);
+  assert.match(communitiesSectionSource, /buildCommunityRankingCacheKey\(activeRankingPeriod, activeRankingType, rankingMonthStartTs\)/);
   assert.match(communitiesSectionSource, /activePeriod=\{activeRankingPeriod\}/);
   assert.match(communitiesSectionSource, /onChangePeriod=\{setActiveRankingPeriod\}/);
 });

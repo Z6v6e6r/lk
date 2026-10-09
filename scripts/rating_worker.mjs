@@ -11,6 +11,7 @@ import {
   COMMUNITY_RATING_SOURCE_COLLECTIONS,
   COMMUNITY_RATING_TABS,
   COMMUNITY_RATING_VISIT_SCOPE_BY_COMMUNITY_ID,
+  getCommunityRatingMonthStartTs,
   ensureCommunityRatingStorageIndexes,
   recalculateCommunityRating,
 } from "../src/services/community-rating/index.ts";
@@ -1045,6 +1046,15 @@ export async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
   return [...ids].filter(Boolean);
 }
 
+export async function resolveRatingWorkerCommunityIds(db, { mode, sinceIso, registry, nowTs }) {
+  const monthStartTs = getCommunityRatingMonthStartTs(nowTs);
+  // Refresh quiet communities too. An absent marker bootstraps the new period.
+  if (mode === "full" || registry?.communityRatingMonthStartTs !== monthStartTs) {
+    return activeCommunityIds(db);
+  }
+  return resolveIncrementalCommunityIds(db, sinceIso, !registry?.watermark);
+}
+
 async function recalculateCommunities(db, communityIds, nowIso, dryRun) {
   const collections = buildCollections(db);
   if (!dryRun) await ensureCommunityRatingStorageIndexes(collections.storage);
@@ -1056,7 +1066,8 @@ async function recalculateCommunities(db, communityIds, nowIso, dryRun) {
       const result = await recalculateCommunityRating({
         collections,
         communityId,
-        periods: ["all", "30d"],
+        periods: [...COMMUNITY_RATING_PERIODS],
+        nowTs: Date.parse(nowIso),
         tabs: ["overall", "dynamics", "games", "tournaments"],
         updatedAt: nowIso,
         dryRun,
@@ -1215,9 +1226,10 @@ async function runWorker() {
     const compatibilityReconciliation = mode === "full"
       ? await reconcileCompatibilityProjection(db, startedAt, dryRun)
       : { scanned: 0, changed: 0, skipped: true };
-    const communityIds = mode === "full"
-      ? await activeCommunityIds(db)
-      : await resolveIncrementalCommunityIds(db, overlapStart, !registry?.watermark);
+    const communityRatingMonthStartTs = getCommunityRatingMonthStartTs(Date.parse(startedAt));
+    const communityIds = await resolveRatingWorkerCommunityIds(db, {
+      mode, sinceIso: overlapStart, registry, nowTs: Date.parse(startedAt),
+    });
     timeForFriendsEnrollment.affectedCommunityIds.forEach((communityId) => communityIds.push(communityId));
     const uniqueCommunityIds = unique(communityIds);
     const community = await recalculateCommunities(db, uniqueCommunityIds, startedAt, dryRun);
@@ -1248,6 +1260,7 @@ async function runWorker() {
       );
       await releaseLease(db, jobKey, owner, {
         jobKey,
+        communityRatingMonthStartTs,
         version: PLAYER_RATING_WORKER_VERSION,
         schedule: mode === "full" ? "17 3 * * *" : "*/15 * * * *",
         lastRunId: runId,
@@ -1398,6 +1411,9 @@ async function buildPostcheck(db, nowIso) {
     && Date.parse(nowIso) - Date.parse(incrementalJob.lastFinishedAt) <= 30 * 60 * 1000;
   const fullHealthy = fullJob?.lastStatus === "SUCCEEDED" && Boolean(fullJob.lastStartedAt);
   const snapshotsComplete = snapshotRows.length === expectedSnapshots && snapshotKeys.size === expectedSnapshots;
+  const monthStartTs = getCommunityRatingMonthStartTs(Date.parse(nowIso));
+  const monthlySnapshotsCurrent = snapshotRows.filter((row) => row.period === "month")
+    .every((row) => Date.parse(row.updatedAt) >= monthStartTs);
   const snapshotsCoverLastFull = fullHealthy
     && oldestSnapshotUpdatedAt != null
     && Date.parse(oldestSnapshotUpdatedAt) >= Date.parse(fullJob.lastStartedAt);
@@ -1411,6 +1427,7 @@ async function buildPostcheck(db, nowIso) {
       && incrementalFresh
       && fullHealthy
       && snapshotsComplete
+      && monthlySnapshotsCurrent
       && snapshotsCoverLastFull,
     checkedAt: nowIso,
     version: PLAYER_RATING_WORKER_VERSION,
@@ -1433,6 +1450,7 @@ async function buildPostcheck(db, nowIso) {
       incrementalFresh,
       fullHealthy,
       snapshotsComplete,
+      monthlySnapshotsCurrent,
       snapshotsCoverLastFull,
       oldestSnapshotUpdatedAt,
       newestSnapshotUpdatedAt,

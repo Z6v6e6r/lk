@@ -28,7 +28,7 @@ test("community rating snapshot query is versioned by tab, period, and calculati
   assert.match(flowPatchSource, /calculationVersion: COMMUNITY_RATING_CALCULATION_VERSION/);
 });
 
-test("community rating Node-RED flow keeps only all-time and last-month periods", () => {
+test("community rating Node-RED flow supports calendar month and preserves rolling-period aliases", () => {
   assert.match(flowPatchSource, /normalized === 'all'/);
   assert.match(flowPatchSource, /normalized === '30d'/);
   assert.match(flowPatchSource, /normalized === '7d'/);
