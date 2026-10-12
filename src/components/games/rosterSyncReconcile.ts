@@ -1,4 +1,5 @@
 import type { PadelGamePlayer } from "../../utils/apiClient";
+import { projectPartnerVivaRoster } from "../../utils/partnerRosterProjection.ts";
 
 type ComparableRosterPlayer = Pick<PadelGamePlayer, "id" | "phone" | "name"> | null | undefined;
 
@@ -14,6 +15,7 @@ export type RosterSyncLeaveEvent = {
 };
 
 export type RosterSyncReconcileResult = {
+  canSync: boolean;
   mergedCandidates: PadelGamePlayer[];
   nextLeaveEvents: RosterSyncLeaveEvent[];
   staleLeaveEventsRemoved: number;
@@ -102,6 +104,10 @@ function mergePlayer(existing: PadelGamePlayer, incoming: PadelGamePlayer): Pade
   const sameComparableId = Boolean(existingId && incomingId && existingId === incomingId);
 
   return {
+    ...existing,
+    membershipId: existing.membershipId ?? incoming.membershipId,
+    vivaBookingId: existing.vivaBookingId ?? incoming.vivaBookingId,
+    membershipGeneration: existing.membershipGeneration ?? incoming.membershipGeneration,
     id: existing.id || incoming.id || null,
     name: isGenericComparableName(existing.name) && !isGenericComparableName(incoming.name)
       ? incoming.name
@@ -200,12 +206,11 @@ export function reconcileRosterWithViva(params: {
   organizerPlayer?: ComparableRosterPlayer;
   authoritative?: boolean;
 }): RosterSyncReconcileResult {
-  const sourceParticipants = Array.isArray(params.sourceParticipants)
-    ? params.sourceParticipants
-    : [];
-  const vivaParticipants = Array.isArray(params.vivaParticipants)
-    ? params.vivaParticipants
-    : [];
+  const projection = projectPartnerVivaRoster(
+    Array.isArray(params.sourceParticipants) ? params.sourceParticipants : [],
+    Array.isArray(params.vivaParticipants) ? params.vivaParticipants : [],
+  );
+  const { sourceParticipants, vivaParticipants } = projection;
   const leaveEvents = Array.isArray(params.leaveEvents)
     ? params.leaveEvents
     : [];
@@ -265,9 +270,11 @@ export function reconcileRosterWithViva(params: {
     if (source === "ADMIN" || source === "INVITE_LINK" || source === "VIVA") return false;
     return true;
   });
-  const staleSourcePlayersRemoved = Math.max(0, filteredSourceParticipants.length - nextSourceParticipants.length);
+  const staleSourcePlayersRemoved = projection.removedTechnicalDuplicates
+    + Math.max(0, filteredSourceParticipants.length - nextSourceParticipants.length);
 
   return {
+    canSync: projection.canSync,
     mergedCandidates: dedupePlayers([...nextSourceParticipants, ...vivaParticipants]),
     nextLeaveEvents,
     staleLeaveEventsRemoved,
