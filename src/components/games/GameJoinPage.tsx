@@ -556,6 +556,7 @@ function normalizeVivaBookingParticipant(raw: unknown): PadelGamePlayer | null {
   if (!id && !phone && !name.trim()) return null;
 
   return {
+    vivaBookingId: normalizeComparableId(raw.id) ?? normalizeComparableId(raw.bookingId),
     id,
     name,
     phone,
@@ -950,6 +951,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           leaveEvents,
           organizerPlayer,
         });
+        if (!reconciliation.canSync) return;
         const mergedParticipants = dedupePlayers(reconciliation.mergedCandidates).slice(0, maxPlayers);
         const nextWaitlist = excludePlayersAlreadyInRoster(
           dedupePlayers(game.waitlist ?? []),

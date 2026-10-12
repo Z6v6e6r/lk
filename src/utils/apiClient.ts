@@ -1,3 +1,4 @@
+import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
 import {
   TENANT_KEY,
@@ -702,6 +703,8 @@ function mergePadelGamePlayers(current: PadelGamePlayer[] = [], incoming: PadelG
     merged.set(key, {
       memberKey: player.memberKey ?? existing.memberKey ?? null,
       membershipId: player.membershipId ?? existing.membershipId ?? null,
+      vivaBookingId: player.vivaBookingId ?? existing.vivaBookingId ?? null,
+      membershipGeneration: player.membershipGeneration ?? existing.membershipGeneration ?? null,
       id: player.id ?? existing.id,
       name: player.name || existing.name,
       phone: player.phone ?? existing.phone,
@@ -3103,13 +3106,15 @@ export interface AmericanoResultsResponse {
 export interface PadelGamePlayer {
   memberKey?: string | null;
   membershipId?: string | null;
+  vivaBookingId?: string | null;
+  membershipGeneration?: number | null;
   id: string | null;
   name: string;
   phone: string | null;
   photo?: string | null;
   rating?: string | null;
   ratingNumeric?: number | null;
-  source?: "ORGANIZER" | "INVITE_LINK" | "MANUAL_LIST" | "MANUAL_PHONE" | "ADMIN";
+  source?: "ORGANIZER" | "INVITE_LINK" | "MANUAL_LIST" | "MANUAL_PHONE" | "ADMIN" | "PARTNER_API";
   status?: "CONFIRMED" | "WAITLIST" | "PENDING";
 }
 
@@ -6175,6 +6180,8 @@ function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
   return {
     memberKey: memberKey ?? null,
     membershipId: membershipId ?? null,
+    vivaBookingId: pickString(item, ["vivaBookingId", "bookingId"]) ?? null,
+    membershipGeneration: pickNumeric(item, ["membershipGeneration"]) ?? null,
     id: id ?? null,
     name: fullName || "Игрок",
     phone: phone ?? null,
@@ -6258,7 +6265,10 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
     const participantsRaw = extractPadelGamePlayerItems(participantsPayload)
       .map((item) => normalizePadelGamePlayer(item))
       .filter((item): item is PadelGamePlayer => item !== null);
-    const participants = mergePadelGamePlayers([], participantsRaw);
+    const participants = restorePartnerBookingBindings(
+      mergePadelGamePlayers([], participantsRaw),
+      payload.payments ?? dataPayload?.payments,
+    );
     const participantKeys = new Set(
       participants.map((player) => buildPadelGamePlayerKey(player)),
     );
