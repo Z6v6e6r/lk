@@ -14,7 +14,7 @@ export const contract = {
   read: '8b64bb43086a39e1',
   readSha: 'b6d383271f2cbb545f6ce2b67102dc5e6abc2201cdfb6666fcdd991f2fc0b7c8',
   write: '591234d213742276',
-  writeSha: '2431488c00119972c852d182d847e3e1489466eb0aedb3461a72302fa0889ffa57',
+  writeSha: '2431488c00119972c85a1d2847e3e1489466eb0aedb3461a72302fa0889ffa57',
   http: 'e17f8a411d4dfa91', debug: '3b822085d5f18e97', autojoin: '5fc5eaeab97f3f88',
 };
 export const ids = Object.fromEntries(['preflight', 'read', 'authorize', 'write', 'ack', 'catch'].map((key) => [key, `partner_roster_${key}_20261012`]));
