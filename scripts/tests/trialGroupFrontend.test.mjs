@@ -68,6 +68,16 @@ test('trial one-time checkout never falls back to direct Viva after a failed gat
   assert.equal(calls[0].options.retries, 0); assert.equal(closed, true); assert.equal(result.status, 503);
   assert.deepEqual(JSON.parse(calls[0].options.body), { exerciseId: 'fixture-event', productId: 'fixture-product', source: 'one-time', promoCode: null });
 });
+test('the trial schedule direction routes through the gate without a type or name marker', async () => {
+  const target = params();
+  target.exercise = { id: 'fixture-event', direction: { id: helpers.TRIAL_GROUP_DIRECTION_ID } };
+  const { calls, result } = await invoke(target);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /^\/lk\/trial-group-bookings\?operationId=trial-/);
+  assert.equal(calls[0].options.baseUrl, 'https://lk.example.test');
+  assert.equal(calls[0].options.retries, 0);
+  assert.equal(result.status, 503);
+});
 test('uncertain checkout stops before client polling or a second provider POST', async () => {
   const { result, calls } = await invoke(params(), { error: null, status: 202, data: { state: 'PENDING_CONFIRMATION' } });
   assert.equal(result.error.status, 202); assert.equal(calls.length, 1);
