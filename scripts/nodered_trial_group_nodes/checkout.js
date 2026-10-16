@@ -6,9 +6,10 @@ function trialCheckoutMongo(ctx, step, output, payload) {
   const out = [null, null, null, null, null, null, null]; out[output] = msg; return out;
 }
 function trialCheckoutFind(ctx) {
-  return trialCheckoutMongo(ctx, 'checkout_find', 1, [{ _id: ctx.operationKey }, { limit: 2 }]);
+  return trialCheckoutMongo(ctx, 'checkout_find_target', 1, [{ _id: ctx.targetKey }, { limit: 2 }]);
 }
 function trialCheckoutPending() {
+  delete msg._subscriptionBooking;
   msg.statusCode = 202;
   msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*' };
@@ -17,6 +18,7 @@ function trialCheckoutPending() {
   return [null, null, null, null, msg, null, null];
 }
 function trialCheckoutResponse(payload) {
+  delete msg._subscriptionBooking;
   msg.statusCode = 200;
   msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*' };
@@ -39,6 +41,9 @@ function trialCheckoutTargetBinding(exercise) {
   return JSON.stringify([exercise?.id, exercise?.type?.id ?? exercise?.typeId,
     exercise?.direction?.id ?? exercise?.directionId, exercise?.timeFrom, exercise?.timeTo, exercise?.studio?.id]);
 }
+function trialCheckoutOfferBinding(product) {
+  return JSON.stringify([product?.id, product?.productType ?? product?.type, product?.name]);
+}
 function trialCheckoutTargetValid(ctx, exercise) {
   return trialRecord(exercise) && exercise.id === ctx.exerciseId && isTrialGroupExercise(exercise)
     && typeof exercise.studio?.id === 'string' && Boolean(exercise.studio.id)
@@ -51,9 +56,8 @@ if (!trialCtx) {
   const authHeader = msg.req?.headers?.authorization;
   const operationId = trialId(msg.req?.query?.operationId);
   const action = body.action || 'checkout';
-  const tenantKey = trialId(env.get('VIVA_TENANT_KEY'));
+  const envTenantKey = trialId(env.get('VIVA_TENANT_KEY'));
   if (!/^Bearer\s+\S+$/i.test(authHeader || '')) return trialFinish(401, 'TRIAL_CHECKOUT_AUTH_REQUIRED');
-  if (!/^[A-Za-z0-9_-]+$/.test(tenantKey)) return trialFinish(503, 'TRIAL_CHECKOUT_TENANT_UNCONFIGURED');
   if (!['check', 'checkout'].includes(action) || !/^[A-Za-z0-9._:-]{1,200}$/.test(body.exerciseId || '')
     || (action === 'checkout' && (!/^[A-Za-z0-9._:-]{8,200}$/.test(operationId)
       || !/^[A-Za-z0-9._:-]{1,200}$/.test(body.productId || '')
@@ -61,12 +65,22 @@ if (!trialCtx) {
     || (body.promoCode != null && (typeof body.promoCode !== 'string' || body.promoCode.length > 100))) {
     return trialFinish(400, 'TRIAL_CHECKOUT_REQUEST_INVALID');
   }
-  const ctx = { caller: 'trial_checkout', action, tenantKey, authHeader, operationId,
+  const ctx = { caller: 'trial_checkout', action, authHeader, operationId,
     trialRequestedAt: new Date().toISOString(),
     exerciseId: body.exerciseId, productId: body.productId, source: body.source,
     promoCode: body.promoCode || null };
+  ctx.checkoutPolicy = trialReadPolicy();
+  if (ctx.checkoutPolicy.code) return trialFinish(503, ctx.checkoutPolicy.code);
+  if (envTenantKey && ctx.checkoutPolicy.tenantKey && envTenantKey !== ctx.checkoutPolicy.tenantKey) {
+    return trialFinish(503, 'TRIAL_CHECKOUT_TENANT_CONFLICT');
+  }
+  ctx.tenantKey = envTenantKey || ctx.checkoutPolicy.tenantKey;
+  if (!/^[A-Za-z0-9_-]+$/.test(ctx.tenantKey || '')) return trialFinish(503, 'TRIAL_CHECKOUT_TENANT_UNCONFIGURED');
+  if (action === 'checkout' && ctx.checkoutPolicy.checkoutMode !== 'enabled') {
+    return trialFinish(503, 'TRIAL_CHECKOUT_DISABLED');
+  }
   // No client identity, price, redirect, category or skip flag is copied.
-  return trialHttp(ctx, 'checkout_profile', `https://api.vivacrm.ru/end-user/api/v1/${tenantKey}/profile`);
+  return trialHttp(ctx, 'checkout_profile', `https://api.vivacrm.ru/end-user/api/v1/${ctx.tenantKey}/profile`);
 }
 const ctx = trialCtx;
 if (ctx.caller !== 'trial_checkout') return trialFinish(400, 'TRIAL_CHECKOUT_CONTEXT_INVALID');
@@ -76,21 +90,21 @@ if (ctx.step === 'checkout_profile') {
     || typeof msg.payload.phone !== 'string' || !msg.payload.phone) return trialFinish(503, 'TRIAL_CHECKOUT_PROFILE_UNVERIFIED');
   ctx.actorClientId = msg.payload.id; ctx.actorPhone = msg.payload.phone;
   if (ctx.action === 'checkout') {
-    ctx.operationKey = `trial-group:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.operationId])}`;
+    ctx.targetKey = `trial-group-target-v2:${JSON.stringify([ctx.tenantKey, ctx.actorClientId, ctx.exerciseId])}`;
     ctx.fingerprint = JSON.stringify([ctx.exerciseId, ctx.productId, ctx.source, ctx.promoCode]);
     return trialCheckoutFind(ctx);
   }
   return trialHttp(ctx, 'checkout_exercise',
     `https://api.vivacrm.ru/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`);
 }
-if (ctx.step === 'checkout_find') {
+if (ctx.step === 'checkout_find_target') {
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return trialCheckoutPending();
   const saved = msg.payload[0];
   if (saved) {
-    if (saved._id !== ctx.operationKey || saved.actorClientId !== ctx.actorClientId
-      || saved.fingerprint !== ctx.fingerprint) return trialFinish(409, 'TRIAL_CHECKOUT_OPERATION_CONFLICT');
-    if (!['ATTEMPTING', 'CREATED', 'REJECTED'].includes(saved.state)) return trialCheckoutPending();
-    if (saved.state === 'REJECTED') return trialFinish(409, 'TRIAL_CHECKOUT_PROVIDER_REJECTED');
+    if (saved._id !== ctx.targetKey || saved.actorClientId !== ctx.actorClientId
+      || saved.tenantKey !== ctx.tenantKey || saved.exerciseId !== ctx.exerciseId) return trialCheckoutPending();
+    if (saved.fingerprint !== ctx.fingerprint) return trialFinish(409, 'TRIAL_CHECKOUT_TARGET_CONFLICT');
+    if (!['ATTEMPTING', 'CREATED'].includes(saved.state)) return trialCheckoutPending();
     // Replay bypasses a new eligibility decision: the transaction already exists.
     if (typeof saved.transactionId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(saved.transactionId)) {
       ctx.transactionId = saved.transactionId;
@@ -99,6 +113,14 @@ if (ctx.step === 'checkout_find') {
     }
     return trialCheckoutPending();
   }
+  return trialCheckoutMongo(ctx, 'checkout_find_legacy', 1,
+    [{ actorClientId: ctx.actorClientId, exerciseId: ctx.exerciseId, schemaVersion: { $ne: 2 } }, { limit: 2 }]);
+}
+if (ctx.step === 'checkout_find_legacy') {
+  // Old operation-id documents cannot prove that a target has no in-flight
+  // checkout.  Conservatively reconcile them outside this request.
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return trialCheckoutPending();
+  if (msg.payload[0]) return trialCheckoutPending();
   return trialHttp(ctx, 'checkout_exercise',
     `https://api.vivacrm.ru/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`);
 }
@@ -137,6 +159,7 @@ if (ctx.step === 'checkout_products') {
     || typeof product.name !== 'string') {
     return trialFinish(409, 'TRIAL_CHECKOUT_PRODUCT_UNAVAILABLE');
   }
+  ctx.offerBinding = trialCheckoutOfferBinding(product);
   ctx.transactionPayload = { products: [{ id: product.id, name: product.name, type: types[0], count: 1,
     bookingRequests: [{ exerciseId: ctx.exerciseId, client: null, comment: null, marketingAttribution: {} }] }],
   clientPhone: ctx.actorPhone, paymentMethod: 'WIDGET', exerciseId: ctx.exerciseId,
@@ -152,20 +175,35 @@ if (ctx.step === 'checkout_exercise_recheck') {
     || !trialCheckoutTargetValid(ctx, msg.payload)
     || trialCheckoutTargetBinding(msg.payload) !== trialCheckoutTargetBinding(ctx.exercise)
     || JSON.stringify(trialReadPolicy()) !== JSON.stringify(ctx.checkoutPolicy)
+    || ctx.checkoutPolicy.checkoutMode !== 'enabled'
     || (ctx.checkoutPolicy.mode !== 'off' && !trialEvidenceMatches(ctx))) {
     return trialFinish(409, 'TRIAL_CHECKOUT_CONDITIONS_CHANGED');
   }
+  if (ctx.source === 'client-one-time') {
+    const current = Array.isArray(msg.payload.availableClientOneTimes) ? msg.payload.availableClientOneTimes : [];
+    const chosen = current.filter(row => row?.id === ctx.productId);
+    const types = [chosen[0]?.productType, chosen[0]?.type].filter(value => value !== undefined);
+    if (chosen.length !== 1 || types.length === 0 || new Set(types).size !== 1 || trialCheckoutOfferBinding(chosen[0]) !== ctx.offerBinding
+      || !['SERVICE', 'INSTANT_SUB_SERVICE', 'ADVANCE_SUB_SERVICE', 'FULL_PAYMENT_SERVICE'].includes(types[0])) {
+      return trialFinish(409, 'TRIAL_CHECKOUT_PRODUCT_UNAVAILABLE');
+    }
+    // Use only the row read immediately before the durable fence.
+    ctx.transactionPayload.products[0] = { id: chosen[0].id, name: chosen[0].name, type: types[0], count: 1,
+      bookingRequests: [{ exerciseId: ctx.exerciseId, client: null, comment: null, marketingAttribution: {} }] };
+  }
   // _id uniqueness is the concurrency boundary. No lease can reopen an attempt.
-  return trialCheckoutMongo(ctx, 'checkout_insert', 2, [{ _id: ctx.operationKey,
-    actorClientId: ctx.actorClientId, exerciseId: ctx.exerciseId, fingerprint: ctx.fingerprint,
+  return trialCheckoutMongo(ctx, 'checkout_insert', 2, [{ _id: ctx.targetKey, schemaVersion: 2,
+    tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, exerciseId: ctx.exerciseId,
+    operationId: ctx.operationId, fingerprint: ctx.fingerprint, generation: 1, revision: 1,
     state: 'ATTEMPTING', evidence: ctx.trialVisitEvidence || { mode: 'off' }, createdAt: new Date().toISOString() },
   { writeConcern: { w: 'majority', j: true } }]);
 }
 if (ctx.step === 'checkout_insert') {
-  if (msg.error || msg.payload?.acknowledged !== true || msg.payload.insertedId !== ctx.operationKey) {
+  if (msg.error || msg.payload?.acknowledged !== true || msg.payload.insertedId !== ctx.targetKey) {
     return trialCheckoutFind(ctx);
   }
-  if (JSON.stringify(trialReadPolicy()) !== JSON.stringify(ctx.checkoutPolicy)) return trialCheckoutPending();
+  if (JSON.stringify(trialReadPolicy()) !== JSON.stringify(ctx.checkoutPolicy)
+    || ctx.checkoutPolicy.checkoutMode !== 'enabled') return trialCheckoutPending();
   ctx.step = 'checkout_post'; msg._subscriptionBooking = ctx;
   msg.method = 'POST'; msg.url = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/transactions`;
   msg.headers = { Authorization: ctx.authHeader, 'Content-Type': 'application/json' };
@@ -178,19 +216,22 @@ if (ctx.step === 'checkout_post') {
     || msg.url !== `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/transactions`
     || (msg.responseUrl !== undefined && msg.responseUrl !== msg.url)
     || msg.followRedirects !== false || msg.maxRedirects !== 0) return trialCheckoutPending();
-  const rejected = [400, 401, 403, 404, 409, 422].includes(msg.statusCode);
   const transactionId = msg.payload?.id ?? msg.payload?.transactionId;
-  if (!rejected && (!(msg.statusCode >= 200 && msg.statusCode < 300)
-    || typeof transactionId !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(transactionId))) return trialCheckoutPending();
-  ctx.transactionId = rejected ? null : transactionId;
-  return trialCheckoutMongo(ctx, 'checkout_save', 3, [{ _id: ctx.operationKey, state: 'ATTEMPTING', fingerprint: ctx.fingerprint },
-    { $set: { state: rejected ? 'REJECTED' : 'CREATED', transactionId: ctx.transactionId,
-      updatedAt: new Date().toISOString() } }, { writeConcern: { w: 'majority', j: true } }]);
+  const created = msg.statusCode >= 200 && msg.statusCode < 300
+    && typeof transactionId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(transactionId);
+  if (!created && (!Number.isInteger(msg.statusCode) || msg.statusCode < 400 || msg.statusCode > 499)) {
+    return trialCheckoutPending();
+  }
+  ctx.transactionId = created ? transactionId : null;
+  ctx.postOutcome = created ? 'CREATED' : 'REJECTED_UNVERIFIED';
+  return trialCheckoutMongo(ctx, 'checkout_save', 3, [{ _id: ctx.targetKey, state: 'ATTEMPTING', fingerprint: ctx.fingerprint,
+    generation: 1, revision: 1 }, { $set: { state: ctx.postOutcome, transactionId: ctx.transactionId,
+      revision: 2, updatedAt: new Date().toISOString() } }, { writeConcern: { w: 'majority', j: true } }]);
 }
 if (ctx.step === 'checkout_save') {
   if (msg.error || msg.payload?.acknowledged !== true || msg.payload.matchedCount !== 1
     || msg.payload.modifiedCount !== 1) return trialCheckoutPending();
-  if (!ctx.transactionId) return trialFinish(409, 'TRIAL_CHECKOUT_PROVIDER_REJECTED');
+  if (!ctx.transactionId) return trialCheckoutPending();
   return trialHttp(ctx, 'checkout_readback',
     `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/transactions/${encodeURIComponent(ctx.transactionId)}/status`);
 }

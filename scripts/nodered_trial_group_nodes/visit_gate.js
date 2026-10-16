@@ -1,5 +1,6 @@
 // Embedded after the policy library. Outputs match the existing booking gateway.
 function trialFinish(status, code, details) {
+  delete msg._subscriptionBooking;
   msg.statusCode = status;
   msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*' };
@@ -18,7 +19,7 @@ function trialHttp(ctx, step, url) {
   ctx.step = step;
   msg._subscriptionBooking = ctx;
   msg.method = 'GET'; msg.url = url;
-  msg.headers = { Authorization: ctx.authHeader, Accept: 'application/json' };
+  msg.headers = { Authorization: ctx.authHeader, Accept: 'application/json', 'User-Agent': 'PadlHub-LK/1.0' };
   msg.payload = undefined;
   delete msg.error;
   msg.requestTimeout = 10000; msg.followRedirects = false; msg.maxRedirects = 0;
@@ -26,8 +27,11 @@ function trialHttp(ctx, step, url) {
 }
 function trialReadHistory(ctx) {
   const gate = ctx.trialVisitGate;
+  if (Date.now() > gate.deadlineAt || gate.page >= 10 || gate.rows.length >= 10000) {
+    return trialFinish(503, 'TRIAL_TRAINING_HISTORY_INCOMPLETE');
+  }
   const url = `https://api.vivacrm.ru/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000&page=${gate.page}`;
-  gate.read = { url, actorId: ctx.actorClientId, authHeader: ctx.authHeader };
+  gate.read = { url, actorId: ctx.actorClientId };
   return trialHttp(ctx, 'trial_visit_history', url);
 }
 function trialBeginGate(ctx, exercise, resume) {
@@ -37,9 +41,20 @@ function trialBeginGate(ctx, exercise, resume) {
   if (policy.mode === 'off') return null;
   if (!ctx.actorClientId || !/^Bearer\s+\S+$/i.test(ctx.authHeader || '')
     || trialId(exercise?.id) !== ctx.exerciseId) return trialFinish(503, 'TRIAL_TRAINING_TARGET_UNVERIFIED');
+  if (!ctx.trialBudgetGranted) {
+    try {
+      const budgetKey = 'trial_group_history_budget_v1';
+      const budget = trialConsumeHistoryBudget(global.get(budgetKey), JSON.stringify([ctx.tenantKey, ctx.actorClientId]), Date.now());
+      if (!budget) return trialFinish(503, 'TRIAL_TRAINING_RATE_UNVERIFIED');
+      global.set(budgetKey, budget.rows);
+      if (!budget.allowed) return trialFinish(429, 'TRIAL_TRAINING_RATE_LIMITED');
+      ctx.trialBudgetGranted = true;
+    } catch { return trialFinish(503, 'TRIAL_TRAINING_RATE_UNVERIFIED'); }
+  }
   // Created by this server gate, never accepted from an HTTP body.
   ctx.trialRequestedAt ||= new Date().toISOString();
-  ctx.trialVisitGate = { policy, exercise, resume, page: 0, rows: [], requestedAt: ctx.trialRequestedAt };
+  ctx.trialVisitGate = { policy, exercise, resume, page: 0, rows: [], requestedAt: ctx.trialRequestedAt,
+    deadlineAt: Date.now() + 25000 };
   return trialReadHistory(ctx);
 }
 function trialHistoryOutcome(ctx) {
@@ -50,7 +65,7 @@ function trialHistoryOutcome(ctx) {
     || msg.method !== 'GET' || msg.url !== gate.read?.url
     || (msg.responseUrl !== undefined && msg.responseUrl !== gate.read.url)
     || msg.followRedirects !== false || msg.maxRedirects !== 0
-    || gate.read.actorId !== ctx.actorClientId || gate.read.authHeader !== ctx.authHeader) {
+    || gate.read.actorId !== ctx.actorClientId || Date.now() > gate.deadlineAt) {
     return { code: 'TRIAL_TRAINING_HISTORY_UNAVAILABLE' };
   }
   const page = trialHistoryPage(msg.payload, gate.page, gate.total, gate.totalPages);
@@ -61,6 +76,7 @@ function trialHistoryOutcome(ctx) {
     if (!id || rowIds.has(id)) return { code: 'TRIAL_TRAINING_HISTORY_INCOMPLETE' };
     rowIds.add(id);
   }
+  if (page.total > 10000 || gate.rows.length + page.rows.length > 10000) return { code: 'TRIAL_TRAINING_HISTORY_INCOMPLETE' };
   gate.total = page.total; gate.totalPages = page.totalPages; gate.rows.push(...page.rows);
   if (!page.last) { gate.page += 1; return { next: true }; }
   if (gate.rows.length !== gate.total) return { code: 'TRIAL_TRAINING_HISTORY_INCOMPLETE' };
@@ -81,6 +97,9 @@ function trialGateDecision(ctx, outcome) {
   ctx.trialVisitEvidence = { version: gate.policy.version, mode: gate.policy.mode,
     requestedAt: gate.requestedAt, actorId: ctx.actorClientId, exerciseId: ctx.exerciseId,
     count: outcome.count ?? null, code: outcome.code ?? null };
+  // Raw provider history and per-request timing state are never retained past
+  // the policy decision.
+  delete gate.rows; delete gate.read;
   return null;
 }
 function trialEvidenceMatches(ctx) {

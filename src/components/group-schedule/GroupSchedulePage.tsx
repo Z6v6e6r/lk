@@ -11,6 +11,7 @@ import {
 } from "../subscriptions/SubscriptionUsageShadowPanel";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import {
+  apiCheckTrialGroupEligibility,
   apiFetchGroupTrainingDetail,
   apiFetchGroupTrainingsByDate,
   GROUP_SCHEDULE_BOOKING_DAYS,
@@ -20,6 +21,7 @@ import {
 import { buildGroupScheduleReturnUrl, normalizeGroupScheduleDate } from "../../utils/groupScheduleEntry";
 import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
+import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
 import { TRIAL_GROUP_CHECKOUT_ENABLED } from "../../consts/api_config";
 import { isProTraining } from "../../utils/proTrainingExclusion";
 import { isTopokratyClubPack, isTopokratyExercise } from "../../utils/topokratyExclusion";
@@ -368,6 +370,8 @@ export default function GroupSchedulePage({
   const [detailRosterLoading, setDetailRosterLoading] = useState(false);
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
+  const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
+  const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
   const [discountQuotes, setDiscountQuotes] = useState<GroupSubscriptionQuote[]>([]);
   const [discountResolvedFor, setDiscountResolvedFor] = useState<string | null>(null);
@@ -731,6 +735,26 @@ export default function GroupSchedulePage({
   const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
+  const requiresTrialEligibility = TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(selectedTraining);
+  const trialEligibilityKey = requiresTrialEligibility && selectedId && checkout?.profile?.id
+    && checkout.exercise.id === selectedId && !isRegistered && !registrationLoading
+    ? `${checkout.profile.id}:${selectedId}` : null;
+  const currentTrialEligibility = trialEligibility?.key === trialEligibilityKey ? trialEligibility : null;
+  const trialBookingBlocked = requiresTrialEligibility
+    && (!trialEligibilityKey || currentTrialEligibility?.status !== "allowed");
+
+  useEffect(() => {
+    if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled || !trialEligibilityKey || !selectedId) return;
+    let cancelled = false;
+    setTrialEligibility(null);
+    void apiCheckTrialGroupEligibility(selectedId).then((result) => {
+      if (!cancelled) setTrialEligibility({ key: trialEligibilityKey, ...resolveTrialGroupEligibilityCheck(result) });
+    }).catch(() => {
+      if (!cancelled) setTrialEligibility({ key: trialEligibilityKey,
+        ...resolveTrialGroupEligibilityCheck({ data: null, error: {}, status: null }) });
+    });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, isRestoringSession, selectedId, subscriptionUsageShadowEnabled, trialEligibilityKey, trialEligibilityRetry]);
   // PRO offers one-time monetary quotes and existing owned Energy visit packs.
   const purchasableProducts = !checkout
     ? []
@@ -861,6 +885,11 @@ export default function GroupSchedulePage({
       setDetailError("Тренировка изменилась. Дождитесь обновления вариантов записи.");
       return;
     }
+    if (TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(training)
+      && (trialBookingBlocked || trialEligibilityKey !== `${activeCheckout.profile.id}:${training.id}`)) {
+      setDetailError(currentTrialEligibility?.message || "Дождитесь проверки возможности пробной тренировки.");
+      return;
+    }
 
     setActionLoading(true);
     setDetailError(null);
@@ -910,6 +939,9 @@ export default function GroupSchedulePage({
     previewSubscriptionDiscount,
     selectedId,
     subscriptionUsageShadowEnabled,
+    trialBookingBlocked,
+    trialEligibilityKey,
+    currentTrialEligibility,
   ]);
 
   const openCancelDialog = useCallback(async () => {
@@ -1266,6 +1298,18 @@ export default function GroupSchedulePage({
                     {!subscriptionUsageShadowEnabled && registrationLoading && (
                       <div className="tournament-signup-muted">Проверяем доступные варианты...</div>
                     )}
+                    {!subscriptionUsageShadowEnabled && requiresTrialEligibility && !isRegistered && checkout && !registrationLoading && (
+                      <div className="tournament-signup-muted" role="status" aria-live="polite">
+                        {!currentTrialEligibility && "Проверяем возможность пробной тренировки…"}
+                        {currentTrialEligibility?.message}
+                        {currentTrialEligibility?.status === "error" && (
+                          <button type="button" className="section-cta"
+                            onClick={() => setTrialEligibilityRetry(value => value + 1)}>
+                            Повторить проверку
+                          </button>
+                        )}
+                      </div>
+                    )}
                     {!subscriptionUsageShadowEnabled && actionMessage && (
                       <div className="group-schedule-success">{actionMessage}</div>
                     )}
@@ -1307,6 +1351,7 @@ export default function GroupSchedulePage({
                     {!subscriptionUsageShadowEnabled
                       && !registrationLoading
                       && !isRegistered
+                      && !trialBookingBlocked
                       && checkout && (
                       <div className="tournament-signup-payment-options">
                         {ownedSubscriptions.length > 0 && (
