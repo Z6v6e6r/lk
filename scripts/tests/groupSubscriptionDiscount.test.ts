@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import ts from "typescript";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { isTrialGroupTraining } from "../../src/utils/trialGroupTraining.ts";
 import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, subscriptionEventQuoteAmountMinor, isSubscriptionEventDiscountQuote, courtHourlyCoPayAmountMinor, type GroupSubscriptionDiscountQuote, type GroupTrainingCourtCoPayQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
 import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
@@ -60,6 +62,71 @@ test("one-time signup picks the best confirmed subscription price independent of
   assert.equal(matchGroupSubscriptionDiscount([], product), null);
   assert.equal(matchGroupSubscriptionDiscount([{ ...free, status: "LIMIT_USED" }, quote], product), quote);
   assert.equal(matchGroupSubscriptionDiscount([{ ...free, amountMinor: null }], product), null);
+});
+test("Ariadna direction 6538 keeps the full one-time price despite a subscription quote", () => {
+  const product = { id: "one-time", cost: 550000, source: "one-time" };
+  const clubQuote = { ...quote, subscriptionName: "Дружба.Топократ" };
+  assert.equal(matchGroupSubscriptionDiscount([clubQuote], product, 6538), null);
+  // Other training directions keep their existing automatic subscription prices.
+  for (const directionId of [1001, 6233, 5507, null]) {
+    assert.equal(matchGroupSubscriptionDiscount([clubQuote], product, directionId), clubQuote);
+  }
+  assert.equal(product.cost, 550000);
+});
+test("Ariadna one-time button renders full price and dispatches the original tariff", () => {
+  const source = ts.createSourceFile("page.tsx", fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let callback: ts.Node | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "purchasableProducts.map") callback = node.arguments[0];
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(callback, "exercise the actual payment-option render callback");
+  const formatters = source.statements.filter(node => ts.isFunctionDeclaration(node)
+    && ["formatMoneyMinor", "formatProductPrice", "formatProductVisits"].includes(node.name?.text ?? ""));
+  const code = ts.transpileModule(`${formatters.map(node => node.getText(source)).join("\n")}\nreturn (${callback.getText(source)});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
+  }).outputText;
+  const product = { id: "one-time", name: "Разовая🎾", cost: 550000, source: "one-time", visitsTotal: null };
+  for (const directionId of [6538, 1001]) {
+    const calls: unknown[][] = [];
+    const dependencies = { React, matchGroupSubscriptionDiscount, isPartialSubscriptionEventDiscountQuote,
+      currentDiscountQuotes: [{ ...quote, subscriptionName: "Дружба.Топократ" }], selectedTraining: { directionId },
+      getAppliedGroupSchedulePromoPreview: () => null, appliedPromo: null, checkout: {},
+      completeRegistration: (...args: unknown[]) => { calls.push(args); },
+      actionLoading: false, promoLoading: false, discountPending: false };
+    const render = new Function(...Object.keys(dependencies), code)(...Object.values(dependencies));
+    const button = render(product);
+    const html = renderToStaticMarkup(button).replace(/\s|&nbsp;/g, "");
+    if (directionId === 6538) {
+      assert.doesNotMatch(html, /Скидка|<s[ >]|2750/);
+      assert.match(html, /5500/);
+      button.props.onClick();
+      assert.equal(calls[0][2], product, "full-price signup must not become a subscription booking");
+    } else {
+      assert.match(html, /Скидка50%/);
+      assert.match(html, /2750/);
+      button.props.onClick();
+      assert.equal((calls[0][2] as TournamentVivaProduct).groupDiscountQuote?.amountMinor, 275000);
+    }
+  }
+});
+test("Ariadna does not advertise a subscription purchase for a discarded benefit", () => {
+  const source = ts.createSourceFile("page.tsx", fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let expression: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "shouldShowSubscriptionPurchaseLink") expression = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(expression, "exercise the actual subscription-purchase visibility condition");
+  for (const directionId of [6538, 1001]) {
+    const dependencies = { checkout: { clientSubscriptions: [] }, proTrainingSelected: false, topokratyExcluded: false,
+      selectedTraining: { directionId }, subscriptionOffer: { owner: "synthetic-actor", show: true }, phone: "synthetic-actor",
+      discountPending: false, currentDiscountQuotes: [], hasGroupTrainingSubscriptionEvidence: () => false };
+    const visible = new Function(...Object.keys(dependencies), `return ${expression.getText(source)};`)(...Object.values(dependencies));
+    assert.equal(visible, directionId !== 6538);
+  }
 });
 test("discount requires exact actor, event, tariff, supported percentage and fresh quote", () => {
   assert.ok(isGroupSubscriptionDiscountQuote(quote, "group", "actor", now));

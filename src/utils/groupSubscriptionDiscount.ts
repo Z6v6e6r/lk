@@ -182,6 +182,10 @@ export function matchSubscriptionEventDiscount<T extends SubscriptionEventDiscou
 export function matchGroupSubscriptionDiscount(
   quotes: GroupSubscriptionQuote[],
   product: { id: string; cost: number | null; source: string },
+  directionId?: number | null,
 ): GroupSubscriptionQuote | null {
+  // Guest-coach training with Ariadna: the one-time tariff has no subscription discount.
+  // Keep owned visit packs and promo-code pricing on their separate checkout paths.
+  if (directionId === 6538) return null;
   return matchSubscriptionEventDiscount(quotes, GROUP_TRAINING_QUOTE_KINDS, product);
 }
