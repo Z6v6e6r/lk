@@ -1,5 +1,11 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## «Дружба.Пулково»
+
+Focused candidate for the existing booking gateway and game-price-preview router:
+[policy, exact preimage, verification and guarded recovery](LK1_PULKOVO_FRIENDSHIP_20261016.md).
+The candidate copies the installed ordinary Friendship rule; source readiness is not activation.
+
 ## Subscription instance limits
 
 The LK1 HUB rule counts active bookings and used/reserved daily free game minutes
