@@ -7,6 +7,7 @@
   var STATUS_URL = 'https://padlhub.su/lk/tournaments/summer-subscription/status';
   var runtimePromise = null;
   var runtimeChannel = null;
+  var runtimeIsolationRequired = false, runtimeScriptStarted = false, runtimeIntegrityProtected = false;
   function compatible(api, channel, isolated) {
     return api && api.checkoutVersion === 1 && api.checkoutChannel === channel && (!isolated || (api.checkoutIsolationVersion === 1 && typeof api.isCheckoutOpen === 'function'))
       && ['openCheckout', 'closeCheckout', 'resumeCheckout'].every(function (key) { return typeof api[key] === 'function'; });
@@ -17,6 +18,10 @@
     var widget = window.LKWidgetSubscriptionStorefront;
     if (widget) return compatible(widget, channel, isolated)
       ? Promise.resolve(widget) : Promise.reject(new Error('Уже подключён несовместимый модуль оформления или другой канал. Уберите старую вставку и обновите страницу.'));
+    if (isolated) {
+      if (runtimeScriptStarted && !runtimeIntegrityProtected) return Promise.reject(new Error('Неизолированный модуль уже загружается. Уберите вторую вставку.'));
+      runtimeIsolationRequired = true;
+    }
     if (runtimePromise) return runtimePromise.then(function (api) {
       if (!compatible(api, channel, isolated)) throw new Error('Нужна изолированная версия оформления');
       return api;
@@ -36,6 +41,12 @@
         if (!response.ok) throw new Error('Не удалось загрузить версию оформления');
         release = await response.json();
         if (!release || typeof release.version !== 'string' || !release.version) throw new Error('Неизвестная версия оформления');
+        // Check before execution: an old bundle can inject global CSS during evaluation.
+        if (runtimeIsolationRequired && (release.checkoutVersion !== 1 || release.checkoutIsolationVersion !== 1 || release.checkoutChannel !== channel
+            || !release.script || release.script.fileName !== 'subscription-storefront' + suffix + '.js'
+            || typeof release.script.integrity !== 'string' || !/^sha384-[A-Za-z0-9+/]{64}$/.test(release.script.integrity))) {
+          throw new Error('Нужен опубликованный манифест изолированной версии оформления');
+        }
       } finally { window.clearTimeout(timeout); }
       return new Promise(function (resolve, reject) {
         var script = document.createElement('script');
@@ -51,6 +62,7 @@
         script.src = base + 'subscription-storefront' + suffix + '.js?v=' + encodeURIComponent(release.version);
         script.async = true;
         script.crossOrigin = 'anonymous';
+        if (runtimeIsolationRequired) script.integrity = release.script.integrity;
         script.onload = function () {
           if (settled) return;
           window.clearTimeout(deadline);
@@ -59,6 +71,7 @@
           else { settled = true; resolve(api); }
         };
         script.onerror = function () { fail('Не удалось загрузить оформление'); };
+        runtimeScriptStarted = true; runtimeIntegrityProtected = runtimeIsolationRequired;
         document.head.appendChild(script);
       });
     })();

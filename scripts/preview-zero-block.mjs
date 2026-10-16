@@ -4,6 +4,7 @@
  */
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 
 const port = Number(process.env.PREVIEW_PORT || 5197);
 const fixturePhone = `+${'7'}${'900000000'}`;
@@ -13,6 +14,7 @@ const files = {
   '/main.js': new URL('../docs/zero-block/padlhub-main-subscriptions.js', import.meta.url),
   '/bindings.js': new URL('../docs/zero-block/padlhub-zero-block.js', import.meta.url),
 };
+const runtimeIntegrity = 'sha384-' + createHash('sha384').update(await readFile(files['/subscription-storefront.js'])).digest('base64');
 function page(main = false) {
   return `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Zero Block · локальная проверка</title>
@@ -42,7 +44,7 @@ if(query.get('auth')==='1') login();
 const reply=data=>Promise.resolve(new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}}));
 window.fetch=async function(input,init={}){
   const url=String(typeof input==='string'?input:input.url||input);
-  if(url.includes('subscription-storefront/release')){note('GET manifest (fixture only)');if(query.get('fail')==='module')return new Response('{}',{status:503});return reply({version:'fixture'});}
+  if(url.includes('subscription-storefront/release')){note('GET manifest (fixture only)');if(query.get('fail')==='module')return new Response('{}',{status:503});return reply({version:'fixture',checkoutVersion:1,checkoutIsolationVersion:1,checkoutChannel:'prod',script:{fileName:'subscription-storefront.js',integrity:${JSON.stringify(runtimeIntegrity)}}});}
   if(url.includes('summer-subscription/status')) {
     const key=new URL(url,location.href).searchParams.get('counterKey')||'friendship';
     note('GET counter '+key);

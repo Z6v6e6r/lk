@@ -49,7 +49,7 @@ class Element {
     return !event.defaultPrevented;
   }
 }
-async function fixture({ failed = false, unavailable = false, binding = true, duplicate = false, runtime = 'prod', isolated = true, preloaded = true, failManifest = false, disabled = false, missingRoot = false, hash = '', saved = null, attempt = false, storageFails = false, search = '?channel=dev&offer=academy-promo&productId=untrusted' } = {}) {
+async function fixture({ failed = false, unavailable = false, binding = true, duplicate = false, runtime = 'prod', isolated = true, preloaded = true, failManifest = false, manifest = {}, disabled = false, missingRoot = false, hash = '', saved = null, attempt = false, storageFails = false, search = '?channel=dev&offer=academy-promo&productId=untrusted' } = {}) {
   const roles = ['price', 'remaining', 'total', 'status', 'buy', 'counter', 'card'];
   const elements = [], root = new Element(), outside = new Element('ph-buy-friendship', 'A');
   const twins = [0, 1].map(() => Object.fromEntries(roles.map(role => {
@@ -92,7 +92,7 @@ async function fixture({ failed = false, unavailable = false, binding = true, du
     location: { href: 'https://padlhub.ru/' + search + hash, search, hash, assign: url => navigated.push(url) },
     fetch: async (url, options) => {
       requests.push({ url, options });
-      if (url.includes('release.json')) return { ok: !failManifest, json: async () => ({ version: 'fixture' }) };
+      if (url.includes('release.json')) return { ok: !failManifest, json: async () => ({ version: 'fixture', checkoutVersion: 1, checkoutIsolationVersion: 1, checkoutChannel: 'prod', script: { fileName: 'subscription-storefront.js', integrity: 'sha384-' + 'a'.repeat(64) }, ...manifest }) };
       const key = new URL(url).searchParams.get('counterKey');
       const row = { counterKey: key, priceMinor: key === 'network_friendship' ? 6800000 : 980000, unlimited: false, remainingCount: unavailable ? 0 : key === 'network_friendship' ? 1 : 7, totalLimit: 11, bindingReady: binding, canPurchase: !unavailable };
       return { ok: !failed, status: failed ? 503 : 200, json: async () => duplicate ? [row, row] : [row] };
@@ -167,8 +167,43 @@ test('runtime loads once for repeated clicks; no purchase requests are sent by t
   const f = await fixture({ preloaded: false });
   f.click(f.twins[0].buy.child); f.click(f.twins[1].buy.child); await flush();
   assert.equal(f.scripts.length, 1); assert.equal(f.twins[0].buy.child.getAttribute('aria-busy'), 'true');
+  assert.equal(f.scripts[0].integrity, 'sha384-' + 'a'.repeat(64));
+  assert.equal(f.scripts[0].crossOrigin, 'anonymous'); assert.equal(f.scripts[0].async, true);
   await f.loadRuntime(); assert.deepEqual(f.opened, ['friendship']); assert.equal(f.navigated.length, 0);
   assert.ok(f.requests.every(request => !request.options?.method || request.options.method === 'GET'));
+});
+
+test('legacy or mismatched manifests never execute a script and use the catalog fallback', async () => {
+  for (const manifest of [
+    { checkoutIsolationVersion: undefined }, { checkoutVersion: 2 }, { checkoutChannel: 'dev' },
+    { script: undefined }, { script: { fileName: '../other.js', integrity: 'sha384-' + 'a'.repeat(64) } },
+    { script: { fileName: 'subscription-storefront.js', integrity: 'sha384-invalid' } },
+  ]) {
+    const f = await fixture({ preloaded: false, manifest });
+    f.click(f.twins[0].buy.child); await flush();
+    assert.equal(f.scripts.length, 0); assert.deepEqual(f.navigated, ['https://padlhub.ru/sub_hab']);
+  }
+});
+
+test('an isolated caller upgrades a generic in-flight manifest before any script can execute', async () => {
+  for (const manifest of [{ checkoutIsolationVersion: undefined }, {}]) {
+    const f = await fixture({ preloaded: false, manifest });
+    vm.runInContext("window.PadlHubZeroBlock.init({offerKeys:['friendship'],channel:'prod'})", f.context);
+    f.click(f.twins[0].buy.child); await flush();
+    assert.equal(f.requests.filter(request => request.url.includes('release.json')).length, 1);
+    if (manifest.checkoutIsolationVersion === undefined && Object.hasOwn(manifest, 'checkoutIsolationVersion')) {
+      assert.equal(f.scripts.length, 0); assert.deepEqual(f.navigated, ['https://padlhub.ru/sub_hab']);
+    } else {
+      assert.equal(f.scripts.length, 1); assert.equal(f.scripts[0].integrity, 'sha384-' + 'a'.repeat(64));
+    }
+  }
+  const started = await fixture({ preloaded: false });
+  vm.runInContext("window.PadlHubZeroBlock.init({offerKeys:['friendship'],channel:'prod'})", started.context);
+  await flush(); // Another insertion has already appended an unprotected script.
+  assert.equal(started.scripts.length, 1); assert.equal(started.scripts[0].integrity, undefined);
+  started.click(started.twins[0].buy.child); await flush();
+  assert.deepEqual(started.navigated, ['https://padlhub.ru/sub_hab']);
+  await started.loadRuntime(); assert.deepEqual(started.opened, []);
 });
 
 test('opening an available offer does not wait for an unrelated hung counter or claim it is unavailable', async () => {
