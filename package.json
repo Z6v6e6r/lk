@@ -215,6 +215,7 @@
     "test:night-e-acceptance": "node --experimental-strip-types --test scripts/tests/gameAtlasAcceptance.test.ts scripts/tests/gameAtlasAvailableGamesQuery.test.ts scripts/tests/gameAtlasUi.test.ts scripts/tests/publicCreateFlow.devRouting.test.ts scripts/tests/subscriptionCriticalMatrix.test.ts scripts/tests/subscriptionDecisionJourneySource.test.ts scripts/tests/managedSubscriptionDevRuntime.test.ts scripts/tests/subscriptionUsageShadow.test.ts scripts/tests/subscriptionUsageShadowIntegration.test.ts scripts/tests/requestTimeout.test.ts scripts/tests/splitPaymentAmbiguityGuard.test.ts scripts/tests/splitPayment.apiClient.test.ts",
     "test:lk1-subscription-activation-packet": "node --test scripts/tests/lk1SubscriptionActivationPacket.test.mjs",
     "test:lk1-topokraty-friendship": "node --experimental-strip-types --test scripts/tests/topokratyFriendshipHotfix.test.mjs scripts/tests/lk1TopokratyFriendship.test.mjs",
+    "test:lk1-pulkovo-friendship": "node --test scripts/tests/pulkovoFriendship.test.mjs",
     "test:lk1-topokraty-reclaim": "node --experimental-strip-types --test scripts/tests/topokratyRejectionReclaimHotfix.test.mjs scripts/tests/topokratyExclusion.test.ts",
     "test:lk1-topokraty-copay": "node --experimental-strip-types --test scripts/tests/lk1TopokratyCopayHotfix.test.mjs",
     "test:lk1-train-g1": "node --experimental-strip-types --test scripts/tests/lk1TrainG1Hotfix.test.mjs",
