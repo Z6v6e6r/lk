@@ -16,6 +16,7 @@ import {
 import {
   prepareFrontendBootstrapAuditKit,
   prepareFrontendBootstrapExecution,
+  productionHostCustodyValid,
 } from "../prepare_frontend_bootstrap_execution.mjs";
 import {
   buildFrontendStaticCandidate,
@@ -44,7 +45,7 @@ const stat = (target) => {
 };
 const mapped = (root, target) => path.join(root, target.slice(1));
 
-const fixture = (t, { failFirstReload = false } = {}) => {
+const fixture = (t, { failFirstReload = false, absentLegacy = [] } = {}) => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "lk-frontend-bootstrap-runtime-"));
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
   const root = path.join(fs.realpathSync(sandbox), "host");
@@ -79,6 +80,7 @@ const fixture = (t, { failFirstReload = false } = {}) => {
   }
   const preservedBytes = {};
   for (const name of ["index.html", "ffc-academy-lk.js", "ffc-academy-lk-dev.js", "release-dev.json"]) {
+    if (absentLegacy.includes(name)) continue;
     const bytes = Buffer.from(`preserved ${name}\n`);
     preservedBytes[name] = bytes;
     write(path.join(legacyRoot, name), bytes);
@@ -98,7 +100,7 @@ const fixture = (t, { failFirstReload = false } = {}) => {
     return { path: logicalPath, realPath: logicalPath, stat: stat(target), sha256: digest(fs.readFileSync(target)) };
   };
   const host = {
-    formatVersion: 1,
+    formatVersion: 2,
     kind: "lk-frontend-static-bootstrap-host-snapshot",
     capturedAt: new Date().toISOString(),
     hostname: "fixture-host",
@@ -123,9 +125,10 @@ const fixture = (t, { failFirstReload = false } = {}) => {
     installed: { source, version,
       hashes: Object.fromEntries(files.map((name) => [name, digest(publicBytes[name])])) },
     installedStats: Object.fromEntries(files.map((name) => [name, stat(path.join(legacyRoot, name))])),
-    preservedLegacy: Object.entries(preservedBytes).map(([name, bytes]) => ({
-      name, sha256: digest(bytes), stat: stat(path.join(legacyRoot, name)),
-    })),
+    preservedLegacy: ["index.html", "ffc-academy-lk.js", "ffc-academy-lk-dev.js", "release-dev.json"].map((name) => {
+      if (absentLegacy.includes(name)) return { name, absent: true };
+      const bytes = preservedBytes[name]; return { name, sha256: digest(bytes), stat: stat(path.join(legacyRoot, name)) };
+    }),
     bootstrapState: { releasesExists: false, currentExists: false,
       globalLeaseExists: false, stagingEntries: [], orphanEntries: [] },
   };
@@ -169,6 +172,10 @@ const fixture = (t, { failFirstReload = false } = {}) => {
     if (command.endsWith("/curl")) {
       if (args.includes("-X")) {
         if (args[args.indexOf("-X") + 1] === "OPTIONS") return "204";
+        if (args[args.indexOf("-X") + 1] === "GET") {
+          const name = decodeURIComponent(new URL(args.at(-1)).pathname.split("/lk/")[1]);
+          return absentLegacy.includes(name) ? "404" : "200";
+        }
         return fs.readFileSync(configPath).equals(candidateConfig) ? "403" : "405";
       }
       if (args.includes("-I") || args.includes("-fsSI")) {
@@ -225,6 +232,31 @@ test("bootstrap holds both leases after server success until explicit finalize",
   assert.equal(value.runtime.finalize({ attemptId }).state, "SUCCESS");
   assert.equal(fs.existsSync(value.runtime.paths.globalLease), false);
   assert.equal(fs.existsSync(value.runtime.paths.releaseLease), false);
+});
+
+test("explicitly absent legacy release-dev stays absent through postcheck", (t) => {
+  const value = fixture(t, { absentLegacy: ["release-dev.json"] });
+  value.runtime.initialize({ attemptId });
+  assert.equal(value.runtime.apply({ attemptId }).state, "SERVER_SUCCESS");
+  assert.equal(value.runtime.finalize({ attemptId }).state, "SUCCESS");
+});
+test("an explicitly absent legacy path appearing later blocks bootstrap", (t) => {
+  const value = fixture(t, { absentLegacy: ["release-dev.json"] });
+  write(path.join(mapped(value.root, "/var/www/html/lk"), "release-dev.json"), "unexpected\n");
+  assert.throws(() => value.runtime.preflight(), /(nlink drift|unexpectedly present)/);
+});
+test("production custody accepts an absent fixed legacy row but rejects malformed present rows", (t) => {
+  const value = fixture(t); const rootOwned = structuredClone(value.host);
+  const rootStat = { ...rootOwned.config.stat, uid: 0, gid: 0, mode: 0o644, nlink: 1 };
+  for (const item of [rootOwned.config, rootOwned.nginx, rootOwned.systemctl, rootOwned.node, rootOwned.curl,
+    ...Object.values(rootOwned.launcherTools)]) item.stat = { ...rootStat };
+  rootOwned.htmlRoot.stat = { ...rootStat, mode: 0o755 }; rootOwned.legacyRoot.stat = { ...rootStat, mode: 0o755 };
+  for (const name of Object.keys(rootOwned.installedStats)) rootOwned.installedStats[name] = { ...rootStat };
+  rootOwned.preservedLegacy = rootOwned.preservedLegacy.map((row) => row.name === "release-dev.json"
+    ? { name: row.name, absent: true } : { ...row, stat: { ...rootStat } });
+  assert.equal(productionHostCustodyValid(rootOwned), true);
+  rootOwned.preservedLegacy.find((row) => row.name === "index.html").stat.mode = 0o666;
+  assert.equal(productionHostCustodyValid(rootOwned), false);
 });
 
 test("explicit rollback remains available after server success and before finalize", (t) => {
@@ -557,6 +589,31 @@ test("standalone host audit captures every launcher tool and exact legacy preima
     digest(fs.readFileSync(new URL("../audit_frontend_bootstrap_host.mjs", import.meta.url))));
   assert.equal(snapshot.producer.nodeSha256, snapshot.node.sha256);
 });
+test("host audit records only the fixed release-dev legacy name as explicitly absent", (t) => {
+  const value = fixture(t); const tool = (target) => mapped(value.root, target);
+  fs.unlinkSync(path.join(tool("/var/www/html/lk"), "release-dev.json"));
+  const snapshot = auditFrontendBootstrapHost({ configPath: tool("/etc/nginx/sites-enabled/padlhub.su"), htmlRoot: tool("/var/www/html"),
+    legacyRoot: tool("/var/www/html/lk"), nginxPath: tool("/usr/sbin/nginx"), systemctlPath: tool("/usr/bin/systemctl"),
+    nodePath: tool("/usr/bin/node"), curlPath: tool("/usr/bin/curl"), machineIdPath: tool("/etc/machine-id"), hostname: "fixture-host",
+    bashPath: tool("/usr/bin/bash"), realpathPath: tool("/usr/bin/realpath"), sha256sumPath: tool("/usr/bin/sha256sum"),
+    statPath: tool("/usr/bin/stat"), readlinkPath: tool("/usr/bin/readlink"), chownPath: tool("/usr/bin/chown"),
+    chmodPath: tool("/usr/bin/chmod"), flockPath: tool("/usr/bin/flock"), envPath: tool("/usr/bin/env") });
+  assert.equal(snapshot.formatVersion, 2);
+  assert.deepEqual(snapshot.preservedLegacy.find((row) => row.name === "release-dev.json"), { name: "release-dev.json", absent: true });
+});
+test("host audit refuses a release-dev directory or symlink instead of treating it as absent", (t) => {
+  for (const kind of ["directory", "symlink"]) {
+    const value = fixture(t); const target = path.join(mapped(value.root, "/var/www/html/lk"), "release-dev.json");
+    fs.rmSync(target); if (kind === "directory") fs.mkdirSync(target); else fs.symlinkSync("index.html", target);
+    const tool = (name) => mapped(value.root, name);
+    assert.throws(() => auditFrontendBootstrapHost({ configPath: tool("/etc/nginx/sites-enabled/padlhub.su"), htmlRoot: tool("/var/www/html"),
+      legacyRoot: tool("/var/www/html/lk"), nginxPath: tool("/usr/sbin/nginx"), systemctlPath: tool("/usr/bin/systemctl"),
+      nodePath: tool("/usr/bin/node"), curlPath: tool("/usr/bin/curl"), machineIdPath: tool("/etc/machine-id"), hostname: "fixture-host",
+      bashPath: tool("/usr/bin/bash"), realpathPath: tool("/usr/bin/realpath"), sha256sumPath: tool("/usr/bin/sha256sum"),
+      statPath: tool("/usr/bin/stat"), readlinkPath: tool("/usr/bin/readlink"), chownPath: tool("/usr/bin/chown"),
+      chmodPath: tool("/usr/bin/chmod"), flockPath: tool("/usr/bin/flock"), envPath: tool("/usr/bin/env") }), /(Unexpected path type|ELOOP)/);
+  }
+});
 
 test("audit-kit builder emits a private exact launcher and committed-source payload", (t) => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "lk-frontend-audit-kit-"));
@@ -692,4 +749,10 @@ test("static guard pins executable hashes, lock descriptors, clean env and atomi
   assert.match(source, /CONFIRM_EXACT_BOOTSTRAP/);
   assert.match(source, /PR_SET_CHILD_SUBREAPER/);
   assert.match(source, /kill\(-child, SIGKILL\)/);
+});
+test("production custody helper is available before the direct CLI entry executes", () => {
+  const source = fs.readFileSync(new URL("../prepare_frontend_bootstrap_execution.mjs", import.meta.url), "utf8");
+  const cli = source.indexOf('\nif (process.argv[1] && fs.realpathSync(process.argv[1])');
+  const helper = source.indexOf('\nexport function productionHostCustodyValid(host)');
+  assert.ok(helper >= 0 && helper < cli);
 });

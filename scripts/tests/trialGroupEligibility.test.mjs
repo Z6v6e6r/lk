@@ -3,12 +3,29 @@ import test from 'node:test';
 import {
   isTrialGroupExercise, normalizeTrialGroupPolicy, trialVisitWindow, trialHistoryPage,
   evaluateTrialGroupVisits, trialAttendance, TRIAL_GROUP_HISTORY_CONTRACT,
+  trialConsumeHistoryBudget,
 } from '../lib/trialGroupEligibility.mjs';
 
 const requestedAt = '2026-10-02T10:00:00.000Z';
 const row = (id, overrides = {}) => ({ id: `booking-${id}`, clientId: 'fixture-actor',
   exerciseId: `event-${id}`, timeTo: '2026-07-02T10:00:00+03:00', visitConfirmed: true, ...overrides });
 const evaluate = rows => evaluateTrialGroupVisits({ rows, actorId: 'fixture-actor', requestedAt });
+
+test('history budget permits six requests per actor/minute and bounds stored actors', () => {
+  let rows;
+  for (let count = 1; count <= 6; count++) {
+    const budget = trialConsumeHistoryBudget(rows, 'fixture-actor', 100000);
+    assert.equal(budget.allowed, true); rows = budget.rows;
+    assert.equal(rows[0].count, count);
+  }
+  assert.equal(trialConsumeHistoryBudget(rows, 'fixture-actor', 100001).allowed, false);
+  assert.equal(trialConsumeHistoryBudget(rows, 'other-actor', 100001).allowed, true);
+  assert.equal(trialConsumeHistoryBudget(rows, 'fixture-actor', 160000).rows[0].count, 1);
+  const full = Array.from({ length: 2000 }, (_, key) => ({ key: String(key), at: 100000, count: 1 }));
+  assert.equal(trialConsumeHistoryBudget(full, 'new-actor', 100001).allowed, false);
+  assert.equal(trialConsumeHistoryBudget(full, 'new-actor', 160000).allowed, true);
+  assert.equal(trialConsumeHistoryBudget({ unexpected: true }, 'fixture', 100000), null);
+});
 
 test('trial selection uses stable catalogue IDs and ignores names and price markers', () => {
   for (const value of [{ type: { id: 1755 } }, { typeId: 1755 }, { exerciseType: { id: '1755' } },
@@ -17,8 +34,9 @@ test('trial selection uses stable catalogue IDs and ignores names and price mark
     assert.equal(isTrialGroupExercise(value), false);
   }
 });
-test('off by default; activation requires a known version and verified history contract', () => {
+test('off and checkout disabled by default; activation requires a known version and verified history contract', () => {
   assert.equal(normalizeTrialGroupPolicy(undefined).mode, 'off');
+  assert.equal(normalizeTrialGroupPolicy(undefined).checkoutMode, 'disabled');
   for (const mode of ['shadow', 'enforce']) {
     assert.ok(normalizeTrialGroupPolicy({ mode, version: 'trial-group-v1' }).code);
     assert.equal(normalizeTrialGroupPolicy({ mode, version: 'trial-group-v1', historyContract: TRIAL_GROUP_HISTORY_CONTRACT }).mode, mode);
@@ -46,6 +64,24 @@ test('lower bound inclusive, request instant exclusive, future and older visits 
 test('deduplication counts one actor/event and rejects conflicting attendance facts', () => {
   assert.equal(evaluate([row(1), row(1, { id: 'other-booking' })]).count, 1);
   assert.equal(evaluate([row(1), row(1, { visitConfirmed: false })]).code, 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED');
+});
+test('three independently confirmed visits deny even when another row is contradictory', () => {
+  const result = evaluate([row(1), row(2), row(3), row(4, { isCancelled: true })]);
+  assert.equal(result.code, 'TRIAL_TRAINING_VISIT_LIMIT_EXCEEDED');
+  assert.equal(result.count, 3);
+  assert.equal(evaluate([row(1), row(2), row(3, { isCancelled: true })]).code,
+    'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED');
+});
+test('a contradictory duplicate never remains a definite attendance fact', () => {
+  const twoAndConflict = evaluate([row(1), row(2), row(3), row(3, { id: 'duplicate-3', isCancelled: true })]);
+  assert.equal(twoAndConflict.code, 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED');
+  assert.equal(twoAndConflict.count, 2);
+  const threeAndConflict = evaluate([row(1), row(2), row(3), row(4), row(4, { id: 'duplicate-4', isCancelled: true })]);
+  assert.equal(threeAndConflict.code, 'TRIAL_TRAINING_VISIT_LIMIT_EXCEEDED');
+  assert.equal(threeAndConflict.count, 3);
+  const unknownTimeDuplicate = evaluate([row(1), row(2), row(3), row(3, { id: 'unknown-time', timeTo: undefined })]);
+  assert.equal(unknownTimeDuplicate.code, 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED');
+  assert.equal(unknownTimeDuplicate.count, 2);
 });
 test('explicit attendance required; refunds retain attended visits', () => {
   assert.equal(evaluate([row(1, { status: 'REFUNDED' })]).count, 1);

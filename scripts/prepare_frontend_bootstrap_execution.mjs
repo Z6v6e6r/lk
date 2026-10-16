@@ -301,7 +301,7 @@ const validateHostSnapshot = (host) => {
     "Frontend bootstrap host producer");
   exactKeys(host.bootstrapState, ["releasesExists", "currentExists", "globalLeaseExists",
     "stagingEntries", "orphanEntries"], "Frontend bootstrap host state");
-  if (host?.formatVersion !== 1 || host?.kind !== "lk-frontend-static-bootstrap-host-snapshot"
+  if (host?.formatVersion !== 2 || host?.kind !== "lk-frontend-static-bootstrap-host-snapshot"
     || typeof host.hostname !== "string"
     || !/^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/.test(host.hostname)
     || host.hostname.includes("..")
@@ -375,16 +375,16 @@ const validateHostSnapshot = (host) => {
   }
   const preservedNames = host.preservedLegacy.map((row) => row?.name).sort();
   for (const row of host.preservedLegacy) {
-    exactKeys(row, ["name", "sha256", "stat"], "Frontend bootstrap preserved legacy row");
+    exactKeys(row, row?.absent === true ? ["name", "absent"] : ["name", "sha256", "stat"], "Frontend bootstrap preserved legacy row");
   }
   if (JSON.stringify(preservedNames) !== JSON.stringify([
     "ffc-academy-lk-dev.js", "ffc-academy-lk.js", "index.html", "release-dev.json",
-  ]) || host.preservedLegacy.some((row) => !/^[a-f0-9]{64}$/.test(String(row?.sha256 || ""))
-    || !row.stat)) {
+  ]) || host.preservedLegacy.some((row) => row?.absent !== true
+    && (!/^[a-f0-9]{64}$/.test(String(row?.sha256 || "")) || !row.stat))) {
     fail("Frontend bootstrap preserved legacy contract is invalid");
   }
   for (const value of [...Object.values(host.installedStats),
-    ...host.preservedLegacy.map((row) => row.stat)]) {
+    ...host.preservedLegacy.filter((row) => row.absent !== true).map((row) => row.stat)]) {
     exactKeys(value, ["uid", "gid", "mode", "dev", "ino", "nlink"],
       "Frontend bootstrap legacy stat");
     for (const key of ["uid", "gid", "mode", "dev", "ino", "nlink"]) {
@@ -421,12 +421,7 @@ export function prepareFrontendBootstrapExecution({ candidateDirectory, hostSnap
     ? JSON.parse(regularBytes(hostSnapshot).toString("utf8"))
     : structuredClone(hostSnapshot);
   validateHostSnapshot(host);
-  if (production && ([host.config, host.nginx, host.systemctl, host.node, host.curl,
-    ...Object.values(host.launcherTools)]
-    .some((item) => !safeRootOwnedRegular(item.stat))
-    || [host.htmlRoot, host.legacyRoot].some((item) => !safeRootOwnedDirectory(item.stat))
-    || Object.values(host.installedStats).some((value) => !safeRootOwnedRegular(value))
-    || host.preservedLegacy.some((row) => !safeRootOwnedRegular(row.stat)))) {
+  if (production && !productionHostCustodyValid(host)) {
     fail("Frontend bootstrap production custody must remain root-owned");
   }
   const planBytes = regularBytes(path.join(candidate, "bootstrap.json"));
@@ -644,6 +639,14 @@ export function prepareFrontendBootstrapAuditKit({ outputDirectory, production =
   }
   return { output, manifestSha256: sha256(manifestBytes), launcherSha256: launcher.sha256,
     auditSourceSha256: sha256(auditBytes), repositoryCommit: repository.commit };
+}
+
+export function productionHostCustodyValid(host) {
+  return !([host.config, host.nginx, host.systemctl, host.node, host.curl,
+    ...Object.values(host.launcherTools)].some((item) => !safeRootOwnedRegular(item.stat))
+    || [host.htmlRoot, host.legacyRoot].some((item) => !safeRootOwnedDirectory(item.stat))
+    || Object.values(host.installedStats).some((value) => !safeRootOwnedRegular(value))
+    || host.preservedLegacy.some((row) => row.absent !== true && !safeRootOwnedRegular(row.stat)));
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

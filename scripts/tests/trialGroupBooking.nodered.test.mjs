@@ -6,9 +6,9 @@ import { TRIAL_GROUP_HISTORY_CONTRACT } from '../lib/trialGroupEligibility.mjs';
 
 const base = fs.readFileSync(new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8');
 const gateway = patchTrialGroupBookingSource(base);
-const policy = { version: 'trial-group-v1', mode: 'enforce', historyContract: TRIAL_GROUP_HISTORY_CONTRACT };
+const policy = { version: 'trial-group-v1', mode: 'enforce', checkoutMode: 'enabled', historyContract: TRIAL_GROUP_HISTORY_CONTRACT };
 const run = (source, msg, configured = policy) => new Function('msg', 'global', 'node', 'env', source)(msg,
-  { get: key => key === 'trial_group_visit_policy' ? configured : undefined }, { warn() {} }, { get: () => 'fixture' });
+  { get: key => key === 'trial_group_visit_policy' ? configured : undefined, set() {} }, { warn() {} }, { get: () => 'fixture' });
 const checkout = trialGroupCheckoutSource();
 const exercise = () => ({ id: 'fixture-event', type: { id: 1755 }, direction: { id: 4971 },
   studio: { id: 'fixture-station' }, timeFrom: new Date(Date.now() + 86400000).toISOString(),
@@ -21,14 +21,17 @@ function reply(msg, payload, statusCode = 200, source = checkout, configured = p
   delete msg.error; msg.payload = payload; msg.statusCode = statusCode;
   return run(source, msg, configured);
 }
-function begin(action = 'checkout', extra = {}, savedRows = []) {
-  const msg = { req: { headers: { authorization: 'Bearer fixture' }, query: { operationId: 'fixture-operation' } },
+function begin(action = 'checkout', extra = {}, savedRows = [], operationId = 'fixture-operation', legacyRows = []) {
+  const msg = { req: { headers: { authorization: 'Bearer fixture' }, query: { operationId } },
     payload: { action, exerciseId: 'fixture-event', productId: 'fixture-product', source: 'one-time', ...extra } };
   assert.equal(run(checkout, msg)[0], msg);
   assert.match(msg.url, /\/profile$/);
   const profile = reply(msg, { id: 'fixture-actor', phone: 'fixture-phone' });
-  if (action === 'checkout') { assert.ok(profile[1]); reply(msg, savedRows); }
-  if (savedRows.length === 0) assert.match(msg.url, /\/exercises\/fixture-event$/);
+  if (action === 'checkout') {
+    assert.ok(profile[1]); reply(msg, savedRows);
+    if (savedRows.length === 0) reply(msg, legacyRows);
+  }
+  if (savedRows.length === 0 && legacyRows.length === 0) assert.match(msg.url, /\/exercises\/fixture-event$/);
   return msg;
 }
 function acceptedInsert() {
@@ -151,7 +154,7 @@ test('verified transaction ID persists before response; replay readback bypasses
   reply(retry, { clientId: 'other' }); assert.equal(retry.statusCode, 202);
 });
 test('shadow reports without blocking; configuration drift never bypasses the gate', () => {
-  const shadow = { ...policy, mode: 'shadow' };
+  const shadow = { ...policy, mode: 'shadow', checkoutMode: 'disabled' };
   const msg = begin('check'); reply(msg, exercise());
   reply(msg, history(0), 200, checkout, shadow);
   assert.equal(msg.statusCode, 503);
@@ -181,4 +184,76 @@ test('wrong event/product or missing auth cannot dispatch a provider write', () 
   assert.equal(msg.statusCode, 409);
   const badProduct = begin(); reply(badProduct, exercise()); reply(badProduct, history(0));
   reply(badProduct, [{ id: 'fixture-product', type: 'SUBSCRIPTION', name: 'Bad' }]); assert.equal(badProduct.statusCode, 409);
+});
+test('disabled checkout returns before profile, Mongo, or provider access', () => {
+  const msg = { req: { headers: { authorization: 'Bearer fixture' }, query: { operationId: 'fixture-operation' } },
+    payload: { action: 'checkout', exerciseId: 'fixture-event', productId: 'fixture-product', source: 'one-time' } };
+  const disabled = { ...policy, checkoutMode: 'disabled' };
+  const out = run(checkout, msg, disabled);
+  assert.ok(out[4]); assert.equal(msg.statusCode, 503);
+  assert.equal(msg.payload.details.code, 'TRIAL_CHECKOUT_DISABLED');
+  assert.equal(msg.method, undefined); assert.equal(msg.url, undefined);
+});
+test('all provider 4xx outcomes are durably unresolved and cannot reopen the target', () => {
+  for (const status of [400, 401, 403, 404, 409, 422]) {
+    const msg = acceptedInsert(); const doc = msg.payload[0];
+    reply(msg, { acknowledged: true, insertedId: doc._id });
+    const save = reply(msg, {}, status);
+    assert.ok(save[3]); assert.equal(msg.payload[1].$set.state, 'REJECTED_UNVERIFIED');
+    const pending = reply(msg, { acknowledged: true, matchedCount: 1, modifiedCount: 1 });
+    assert.ok(pending[4]); assert.equal(msg.statusCode, 202);
+  }
+});
+test('one target fence blocks a second operation id before another provider POST', () => {
+  const first = acceptedInsert(); const target = first.payload[0];
+  const second = begin('checkout', {}, [target], 'independent-operation');
+  assert.equal(second.statusCode, 202);
+  assert.notEqual(second.method, 'POST');
+  for (const change of [{ productId: 'other-product' }, { source: 'client-one-time' }, { promoCode: 'fixture-promo' }]) {
+    const changed = begin('checkout', change, [target], 'changed-operation');
+    assert.equal(changed.statusCode, 409);
+    assert.equal(changed.payload.details.code, 'TRIAL_CHECKOUT_TARGET_CONFLICT');
+    assert.notEqual(changed.method, 'POST');
+    assert.equal(changed._subscriptionBooking, undefined);
+  }
+});
+test('a legacy target record blocks a v2 operation before exercise read or provider write', () => {
+  const msg = begin('checkout', {}, [], 'new-device-operation', [{
+    _id: 'trial-group:legacy-operation', actorClientId: 'fixture-actor', exerciseId: 'fixture-event', state: 'ATTEMPTING',
+  }]);
+  assert.equal(msg.statusCode, 202);
+  assert.equal(msg.payload.details.code, 'TRIAL_CHECKOUT_OUTCOME_UNRESOLVED');
+  assert.doesNotMatch(msg.url, /\/exercises\//);
+  assert.notEqual(msg.method, 'POST'); assert.equal(msg._subscriptionBooking, undefined);
+});
+test('server policy tenant works without env; conflicting or missing tenant performs no I/O', () => {
+  const invoke = (envValue, configured) => {
+    const msg = { req: { headers: { authorization: 'Bearer fixture' } }, payload: { action: 'check', exerciseId: 'fixture-event' } };
+    const out = new Function('msg', 'global', 'node', 'env', checkout)(msg,
+      { get: () => configured }, { warn() {} }, { get: () => envValue });
+    return { msg, out };
+  };
+  const fallback = invoke(undefined, { ...policy, tenantKey: 'fixture' });
+  assert.equal(fallback.out[0], fallback.msg);
+  assert.equal(fallback.msg.url, 'https://api.vivacrm.ru/end-user/api/v1/fixture/profile');
+  for (const [value, configured, code] of [
+    ['other', { ...policy, tenantKey: 'fixture' }, 'TRIAL_CHECKOUT_TENANT_CONFLICT'],
+    [undefined, policy, 'TRIAL_CHECKOUT_TENANT_UNCONFIGURED'],
+  ]) {
+    const result = invoke(value, configured);
+    assert.ok(result.out[4]); assert.equal(result.msg.statusCode, 503);
+    assert.equal(result.msg.payload.details.code, code); assert.equal(result.msg.url, undefined);
+  }
+});
+test('owned one-time service must still be offered on the final exercise read', () => {
+  for (const remaining of [[], [{ id: 'fixture-product', productType: 'SERVICE', name: 'Changed' }]]) {
+    const msg = begin('checkout', { source: 'client-one-time' });
+    const target = { ...exercise(), availableClientOneTimes: [{ id: 'fixture-product', productType: 'SERVICE', name: 'Fixture service' }] };
+    reply(msg, target); reply(msg, history(0)); reply(msg, []);
+    assert.equal(msg._subscriptionBooking.step, 'checkout_exercise_recheck');
+    const out = reply(msg, { ...target, availableClientOneTimes: remaining });
+    assert.ok(out[4]); assert.equal(msg.statusCode, 409);
+    assert.equal(msg.payload.details.code, 'TRIAL_CHECKOUT_PRODUCT_UNAVAILABLE');
+    assert.equal(out[2], null);
+  }
 });

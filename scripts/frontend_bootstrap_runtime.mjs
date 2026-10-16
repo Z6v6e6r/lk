@@ -432,6 +432,11 @@ export function createFrontendBootstrapRuntime({
     }
     for (const row of host.preservedLegacy) {
       const target = path.join(paths.legacyRoot, row.name);
+      if (row.absent === true) {
+        try { fsApi.lstatSync(target); fail(`Preserved legacy unexpectedly present: ${row.name}`); }
+        catch (error) { if (error?.code !== "ENOENT") throw error; }
+        continue;
+      }
       const value = assertRegular(target, `Preserved legacy ${row.name}`, { nlink: 1 }, fsApi);
       assertObjectStat(value, row.stat, `Preserved legacy ${row.name}`);
       if (sha256(fsApi.readFileSync(target)) !== row.sha256) fail(`Preserved legacy drift: ${row.name}`);
@@ -819,6 +824,10 @@ export function createFrontendBootstrapRuntime({
     }
     for (const row of host.preservedLegacy) {
       const url = `${host.assetBase.replace(/\/$/, "")}/${row.name}?bootstrap-preserved=1`;
+      if (row.absent === true) {
+        if (fetchStatus("GET", url, originPinned) !== "404") fail(`Preserved absent public legacy mismatch: ${row.name}`);
+        continue;
+      }
       if (sha256(fetchBytes(url, originPinned)) !== row.sha256) {
         fail(`Preserved public legacy mismatch: ${row.name}`);
       }
