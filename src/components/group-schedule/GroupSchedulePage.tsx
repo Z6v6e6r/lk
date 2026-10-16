@@ -774,6 +774,7 @@ export default function GroupSchedulePage({
       : buildGroupTrainingDescription(selectedTraining)
     : null;
   const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !proTrainingSelected && !topokratyExcluded
+    && selectedTraining?.directionId !== 6538
     && subscriptionOffer?.owner === phone
     && subscriptionOffer?.show && !discountPending
     && !hasGroupTrainingSubscriptionEvidence(checkout.clientSubscriptions, currentDiscountQuotes));

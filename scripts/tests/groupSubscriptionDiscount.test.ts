@@ -111,6 +111,23 @@ test("Ariadna one-time button renders full price and dispatches the original tar
     }
   }
 });
+test("Ariadna does not advertise a subscription purchase for a discarded benefit", () => {
+  const source = ts.createSourceFile("page.tsx", fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let expression: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "shouldShowSubscriptionPurchaseLink") expression = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(expression, "exercise the actual subscription-purchase visibility condition");
+  for (const directionId of [6538, 1001]) {
+    const dependencies = { checkout: { clientSubscriptions: [] }, proTrainingSelected: false, topokratyExcluded: false,
+      selectedTraining: { directionId }, subscriptionOffer: { owner: "synthetic-actor", show: true }, phone: "synthetic-actor",
+      discountPending: false, currentDiscountQuotes: [], hasGroupTrainingSubscriptionEvidence: () => false };
+    const visible = new Function(...Object.keys(dependencies), `return ${expression.getText(source)};`)(...Object.values(dependencies));
+    assert.equal(visible, directionId !== 6538);
+  }
+});
 test("discount requires exact actor, event, tariff, supported percentage and fresh quote", () => {
   assert.ok(isGroupSubscriptionDiscountQuote(quote, "group", "actor", now));
   for (const delta of [{ actorClientId: "other" }, { exerciseId: "other" }, { kind: "GAME" }, { amountMinor: 1 },
