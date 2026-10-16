@@ -1,5 +1,5 @@
 /* global window, document */
-/* PadlHub Zero Block adapter v2.0.1 — designer bindings + embedded authenticated checkout. */
+/* PadlHub Zero Block adapter v2.1.0 — scoped bindings + optional lazy checkout/fallback. */
 (function (window, document) {
   'use strict';
   if (window.PadlHubZeroBlock) return;
@@ -7,13 +7,20 @@
   var STATUS_URL = 'https://padlhub.su/lk/tournaments/summer-subscription/status';
   var runtimePromise = null;
   var runtimeChannel = null;
-  function loadCheckout(channel) {
+  function compatible(api, channel, isolated) {
+    return api && api.checkoutVersion === 1 && api.checkoutChannel === channel && (!isolated || (api.checkoutIsolationVersion === 1 && typeof api.isCheckoutOpen === 'function'))
+      && ['openCheckout', 'closeCheckout', 'resumeCheckout'].every(function (key) { return typeof api[key] === 'function'; });
+  }
+  function loadCheckout(channel, isolated) {
     if (runtimeChannel && runtimeChannel !== channel) return Promise.reject(new Error('Нельзя смешивать PROD и DEV на одной странице'));
     runtimeChannel = channel;
     var widget = window.LKWidgetSubscriptionStorefront;
-    if (widget) return widget.checkoutVersion === 1 && widget.checkoutChannel === channel
+    if (widget) return compatible(widget, channel, isolated)
       ? Promise.resolve(widget) : Promise.reject(new Error('Уже подключён несовместимый модуль оформления или другой канал. Уберите старую вставку и обновите страницу.'));
-    if (runtimePromise) return runtimePromise;
+    if (runtimePromise) return runtimePromise.then(function (api) {
+      if (!compatible(api, channel, isolated)) throw new Error('Нужна изолированная версия оформления');
+      return api;
+    });
     runtimePromise = (async function () {
       var origin = channel === 'dev' ? 'https://lk-reserve.89-108-64-209.sslip.io' : 'https://padlhub.su';
       var base = origin + '/lk/subscription-storefront/';
@@ -32,18 +39,26 @@
       } finally { window.clearTimeout(timeout); }
       return new Promise(function (resolve, reject) {
         var script = document.createElement('script');
-        var deadline = window.setTimeout(function () { reject(new Error('Не удалось загрузить оформление. Обновите страницу.')); }, 20000);
+        var settled = false;
+        function fail(message) {
+          if (settled) return;
+          settled = true; window.clearTimeout(deadline);
+          script.onload = null; script.onerror = null;
+          if (script.parentNode) script.parentNode.removeChild(script);
+          reject(new Error(message));
+        }
+        var deadline = window.setTimeout(function () { fail('Не удалось загрузить оформление. Обновите страницу.'); }, 12000);
         script.src = base + 'subscription-storefront' + suffix + '.js?v=' + encodeURIComponent(release.version);
         script.async = true;
         script.crossOrigin = 'anonymous';
         script.onload = function () {
+          if (settled) return;
           window.clearTimeout(deadline);
           var api = window.LKWidgetSubscriptionStorefront;
-          if (!api || api.checkoutVersion !== 1 || api.checkoutChannel !== channel || typeof api.openCheckout !== 'function') {
-            reject(new Error('Нужна опубликованная версия модуля с поддержкой Zero Block'));
-          } else resolve(api);
+          if (!compatible(api, channel, isolated)) fail('Нужна опубликованная изолированная версия оформления');
+          else { settled = true; resolve(api); }
         };
-        script.onerror = function () { window.clearTimeout(deadline); reject(new Error('Не удалось загрузить оформление')); };
+        script.onerror = function () { fail('Не удалось загрузить оформление'); };
         document.head.appendChild(script);
       });
     })();
@@ -115,8 +130,13 @@
     var channel = options.channel || 'prod';
     if (channel !== 'prod' && channel !== 'dev') throw new Error('channel: prod или dev');
     var checkout = null, checkoutError = null;
+    var lazy = options.lazyCheckout === true;
+    var fallback = options.fallbackToCatalog === true && channel === 'prod' ? 'https://padlhub.ru/sub_hab' : null;
+    var opening = null, intent = 0, intentTimer = null;
+    var sectionVisible = options.observeVisibility !== true;
+    var observer = null, failures = 0;
     var refreshMs = Math.max(30000, Number(options.refreshMs) || 30000);
-    var states = {}, lastGood = {}, active = true, pending = null, timer = null;
+    var states = {}, lastGood = {}, active = true, pending = null, timer = null, pendingByKey = {};
     var controllers = new Set(), restorers = [], remembered = new WeakMap();
     var liveKeys = keys.filter(function (key) { return !definitions[key].promo; });
     function remember(element, name, restore) {
@@ -148,14 +168,20 @@
       var state = states[key], data = state.data || lastGood[key];
       var promo = definitions[key].promo === true;
       var usable = checkout && (promo || (state.status === 'ready' && data && data.canPurchase));
+      var unavailable = !promo && state.status === 'ready' && data && !data.canPurchase;
+      var recovery = lazy && hasAttempt(key);
+      var interactive = usable || recovery || (fallback && !unavailable);
       text('price', key, data ? money.format(data.priceMinor / 100) + ' ₽' : '—');
       text('remaining', key, data && data.remaining !== null ? String(data.remaining) : '—');
       text('total', key, data && data.total !== null ? String(data.total) : '—');
       var message = promo ? 'Акция · условия проверяются при оформлении'
         : state.status === 'loading' ? 'Проверяем доступность…'
         : state.status === 'error' ? 'Не удалось обновить данные. Попробуйте позже.'
-        : usable ? '' : 'Сейчас недоступно';
-      if (!checkout) message = checkoutError || 'Загружаем оформление…';
+        : interactive ? '' : 'Сейчас недоступно';
+      if (!checkout && !lazy) message = checkoutError || 'Загружаем оформление…';
+      if (recovery) message = 'Откройте оформление для проверки предыдущей попытки.';
+      if (opening && opening.key === key) message = 'Открываем оформление…';
+      else if (checkoutError) message = checkoutError;
       text('status', key, message);
       elements('counter', key).forEach(function (element) {
         attribute(element, 'data-ph-hidden', data && data.remaining !== null ? null : 'true');
@@ -165,15 +191,16 @@
       elements('buy', key).forEach(function (wrapper) {
         var element = wrapper.matches('a,button') ? wrapper : wrapper.querySelector('a,button,.tn-atom') || wrapper;
         attribute(wrapper, 'data-ph-state', state.status);
-        attribute(element, 'aria-disabled', usable ? 'false' : 'true');
-        attribute(element, 'tabindex', usable ? '0' : '-1');
+        attribute(element, 'aria-disabled', interactive ? 'false' : 'true');
+        attribute(element, 'aria-busy', opening && opening.key === key ? 'true' : null);
+        attribute(element, 'tabindex', interactive ? '0' : '-1');
         if (element.tagName === 'A') {
-          attribute(element, 'href', usable ? '#ph-checkout' : null);
+          attribute(element, 'href', fallback || (usable ? '#ph-checkout=' + key : null));
           attribute(element, 'target', '_self');
           attribute(element, 'role', 'button');
         } else {
           attribute(element, 'role', 'button');
-          if (element.tagName === 'BUTTON') attribute(element, 'disabled', usable ? null : '');
+          if (element.tagName === 'BUTTON') attribute(element, 'disabled', interactive ? null : '');
         }
       });
       emit(key);
@@ -196,6 +223,13 @@
     function onClick(event) {
       var key = matchTarget(event);
       if (!key) return;
+      // Preserve open-in-new-tab/window and middle-click semantics of the real fallback link.
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || (event.button !== undefined && event.button !== 0)) return;
+      if (lazy) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        void open(key, event.target.closest('a,button') || event.target.closest(selector('buy', key)));
+        return;
+      }
       var state = states[key];
       if (!checkout || (!definitions[key].promo && (state.status !== 'ready' || !state.data.canPurchase))) {
         event.preventDefault(); event.stopImmediatePropagation(); return;
@@ -216,13 +250,12 @@
     root.addEventListener('click', onClick, true);
     root.addEventListener('keydown', onKey, true);
     function schedule() {
-      if (active && liveKeys.length && !document.hidden) timer = window.setTimeout(refresh, refreshMs);
+      if (active && sectionVisible && liveKeys.length && !document.hidden) timer = window.setTimeout(refresh, Math.min(300000, refreshMs * Math.pow(2, failures)));
     }
-    function refresh() {
-      if (!active) return Promise.resolve();
-      if (pending) return pending;
-      window.clearTimeout(timer);
-      pending = Promise.all(liveKeys.map(async function (key) {
+    function refreshKey(key) {
+      if (!active || definitions[key].promo) return Promise.resolve();
+      if (pendingByKey[key]) return pendingByKey[key];
+      pendingByKey[key] = (async function () {
         var controller = new AbortController(); controllers.add(controller);
         var timeout = window.setTimeout(function () { controller.abort(); }, 12000);
         try {
@@ -234,19 +267,91 @@
           if (!active) return;
           states[key] = { status: 'error', data: null };
         } finally {
-          window.clearTimeout(timeout); controllers.delete(controller);
+          window.clearTimeout(timeout); controllers.delete(controller); delete pendingByKey[key];
         }
         if (active) render(key);
-      })).finally(function () { pending = null; schedule(); });
+      })();
+      return pendingByKey[key];
+    }
+    function refresh() {
+      if (!active) return Promise.resolve();
+      if (pending) return pending;
+      window.clearTimeout(timer);
+      pending = Promise.all(liveKeys.map(refreshKey)).finally(function () {
+        failures = liveKeys.some(function (key) { return states[key].status === 'error'; }) ? Math.min(failures + 1, 4) : 0;
+        pending = null; schedule();
+      });
       return pending;
     }
     function onVisibility() {
       window.clearTimeout(timer);
-      if (!document.hidden) void refresh();
+      if (document.hidden) cancelOpening();
+      else if (sectionVisible) void refresh();
     }
     document.addEventListener('visibilitychange', onVisibility);
+    function cancelOpening() {
+      intent++; window.clearTimeout(intentTimer); opening = null;
+      if (active) keys.forEach(render);
+    }
+    function onEscape(event) { if (event.key === 'Escape' && opening) cancelOpening(); }
+    document.addEventListener('keydown', onEscape, true);
+    function hasAttempt(key) {
+      try { return window.localStorage.getItem('padlhub_zero_checkout_attempt_v1:' + key) !== null; }
+      catch { return true; } // Unknown custody must never cause an automatic alternative purchase path.
+    }
+    function open(key, trigger, resume) {
+      if (!active || keys.indexOf(key) < 0 || opening) return Promise.resolve();
+      if (checkout && typeof checkout.isCheckoutOpen === 'function' && checkout.isCheckoutOpen()) {
+        checkout.openCheckout(key); return Promise.resolve();
+      }
+      var state = states[key];
+      var recovery = resume || hasAttempt(key);
+      if (!recovery && !definitions[key].promo && state.status === 'ready' && !state.data.canPurchase) return Promise.resolve();
+      var generation = ++intent;
+      opening = { key: key };
+      checkoutError = null;
+      root.dispatchEvent(new CustomEvent('padlhub:checkout-intent', { detail: { key: key } }));
+      keys.forEach(render);
+      function current() { return active && generation === intent && !document.hidden; }
+      function failed(error) {
+        if (!current()) return;
+        cancelOpening();
+        checkoutError = error.message || 'Оформление недоступно';
+        keys.forEach(render);
+        // This only covers loading/opening UI. Payment/auth errors remain inside checkout.
+        var runtime = window.LKWidgetSubscriptionStorefront;
+        var openAlready = runtime && typeof runtime.isCheckoutOpen === 'function' && runtime.isCheckoutOpen();
+        if (fallback && !recovery && !openAlready && !hasAttempt(key)) window.location.assign(fallback);
+      }
+      var deadline = new Promise(function (_resolve, reject) {
+        intentTimer = window.setTimeout(function () { reject(new Error('Оформление загружается слишком долго')); }, 12000);
+      });
+      return Promise.race([Promise.all([recovery ? Promise.resolve() : refreshKey(key), loadCheckout(channel, options.requireIsolation === true)]), deadline]).then(function (result) {
+        if (!current()) { if (active && generation === intent) cancelOpening(); return; }
+        checkout = result[1];
+        var currentState = states[key];
+        if (!recovery && !definitions[key].promo && (currentState.status !== 'ready' || !currentState.data)) throw new Error('Не удалось проверить доступность');
+        if (!recovery && !definitions[key].promo && !currentState.data.canPurchase) { cancelOpening(); return; }
+        window.clearTimeout(intentTimer); opening = null;
+        keys.forEach(render);
+        if (trigger && typeof trigger.focus === 'function') trigger.focus();
+        if (resume) checkout.resumeCheckout(key); else checkout.openCheckout(key);
+      }).catch(failed);
+    }
+    function hashKey() {
+      if (new URLSearchParams(window.location.search || '').has('phCheckoutReturn')) return null;
+      var match = /^#ph-checkout=([a-z0-9-]+)$/.exec(window.location.hash || '');
+      return match && keys.indexOf(match[1]) >= 0 ? match[1] : null;
+    }
+    function onHash() {
+      var key = hashKey();
+      if (opening && opening.key !== key) cancelOpening();
+      if (key) void open(key);
+    }
+    if (lazy) window.addEventListener('hashchange', onHash);
     var api = {
       refresh: refresh,
+      openCheckout: function (key) { return open(key); },
       refreshBindings: function () { if (active) keys.forEach(render); },
       getState: function (key) {
         if (!states[key]) return null;
@@ -256,9 +361,13 @@
         if (!active) return true;
         if (checkout && !checkout.closeCheckout()) return false;
         active = false; window.clearTimeout(timer);
+        cancelOpening();
+        if (observer) observer.disconnect();
         controllers.forEach(function (controller) { controller.abort(); });
         root.removeEventListener('click', onClick, true);
         root.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('keydown', onEscape, true);
+        if (lazy) window.removeEventListener('hashchange', onHash);
         document.removeEventListener('visibilitychange', onVisibility);
         restorers.reverse().forEach(function (restore) { restore(); });
         instances.delete(root);
@@ -266,7 +375,9 @@
       }
     };
     instances.set(root, api);
-    void loadCheckout(channel).then(function (value) {
+    var marker = root === document ? document.documentElement : root;
+    if (marker && marker.setAttribute) attribute(marker, 'data-ph-zero-root', '');
+    if (!lazy) void loadCheckout(channel, options.requireIsolation === true).then(function (value) {
       if (!active) return;
       checkout = value;
       keys.forEach(render);
@@ -276,8 +387,29 @@
       checkoutError = error.message || 'Оформление недоступно';
       keys.forEach(render);
     });
-    void refresh();
+    if (options.observeVisibility === true && root !== document && typeof window.IntersectionObserver === 'function') {
+      observer = new window.IntersectionObserver(function (entries) {
+        sectionVisible = entries.some(function (entry) { return entry.isIntersecting; });
+        window.clearTimeout(timer);
+        if (sectionVisible && !document.hidden) void refresh();
+      });
+      observer.observe(root);
+    } else if (sectionVisible) void refresh();
+    if (lazy) {
+      var selected = null, resume = false;
+      var returns = new URLSearchParams(window.location.search || '').getAll('phCheckoutReturn');
+      if (returns.length === 1 && keys.indexOf(returns[0]) >= 0) { selected = returns[0]; resume = true; }
+      else if (!returns.length) {
+        selected = hashKey();
+        try {
+          var saved = JSON.parse(window.sessionStorage.getItem('padlhub_zero_checkout_selection_v1') || 'null');
+          var age = saved && Date.now() - saved.at;
+          if (saved && (!selected || selected === saved.key) && keys.indexOf(saved.key) >= 0 && typeof saved.at === 'number' && age >= 0 && age < 1800000) { selected = saved.key; resume = true; }
+        } catch { /* A malformed selection must not load checkout. */ }
+      }
+      if (selected) void open(selected, null, resume);
+    }
     return api;
   }
-  window.PadlHubZeroBlock = Object.freeze({ version: '2.0.1', init: init });
+  window.PadlHubZeroBlock = Object.freeze({ version: '2.1.0', init: init });
 })(window, document);

@@ -3,10 +3,10 @@
 (function (window, document) {
   'use strict';
   function boot() {
-    if (window.phSubscriptions) return;
-    if (!window.PadlHubZeroBlock || window.PadlHubZeroBlock.version !== '2.0.1') {
-      throw new Error('Подключите актуальный PadlHub Zero Block перед вставкой главной');
-    }
+    if (window.phSubscriptions || window.PADLHUB_MAIN_CHECKOUT_DISABLED === true) return;
+    // Missing/new Tilda block or another adapter must leave the real catalog links working.
+    var root = document.getElementById('rec4807682401');
+    if (!root || !window.PadlHubZeroBlock || window.PadlHubZeroBlock.version !== '2.1.0') return;
     var period = 'month';
     var restorers = [];
     function rememberAttribute(element, name) {
@@ -17,7 +17,7 @@
     var bindings = roles.map(function (role) {
       return {
         role: role,
-        elements: Array.from(document.querySelectorAll(
+        elements: Array.from(root.querySelectorAll(
           '.ph-' + role + '-friendship,.ph-' + role + '-friendship-year,' +
           '[data-ph-' + role + '="friendship"],[data-ph-' + role + '="friendship-year"]'
         ))
@@ -27,16 +27,16 @@
     bindings.forEach(function (binding) {
       binding.elements.forEach(function (element) { rememberAttribute(element, 'class'); rememberAttribute(element, 'data-ph-' + binding.role); });
     });
-    document.querySelectorAll('.ph-period-month,.ph-period-year').forEach(function (element) {
+    root.querySelectorAll('.ph-period-month,.ph-period-year').forEach(function (element) {
       rememberAttribute(element, 'class'); rememberAttribute(atom(element), 'aria-pressed');
       rememberAttribute(atom(element), 'role'); rememberAttribute(atom(element), 'tabindex');
       atom(element).setAttribute('role', 'button'); atom(element).setAttribute('tabindex', '0');
     });
-    document.querySelectorAll('.ph-period-label').forEach(function (element) {
+    root.querySelectorAll('.ph-period-label').forEach(function (element) {
       var target = atom(element), before = target.innerHTML;
       restorers.push(function () { target.innerHTML = before; });
     });
-    document.querySelectorAll('.count-box').forEach(function (element) { rememberAttribute(element, 'class'); });
+    root.querySelectorAll('.count-box').forEach(function (element) { rememberAttribute(element, 'class'); });
     function renderPeriod() {
       var annual = period === 'year';
       var key = annual ? 'friendship-year' : 'friendship';
@@ -47,21 +47,32 @@
           element.setAttribute('data-ph-' + binding.role, key);
         });
       });
-      document.querySelectorAll('.ph-period-month,.ph-period-year').forEach(function (element) {
+      root.querySelectorAll('.ph-period-month,.ph-period-year').forEach(function (element) {
         var selected = element.classList.contains(annual ? 'ph-period-year' : 'ph-period-month');
         element.classList.toggle('active', selected);
         atom(element).setAttribute('aria-pressed', selected ? 'true' : 'false');
       });
-      document.querySelectorAll('.ph-period-label').forEach(function (element) { atom(element).textContent = annual ? '/ год' : '/ мес'; });
+      root.querySelectorAll('.ph-period-label').forEach(function (element) { atom(element).textContent = annual ? '/ год' : '/ мес'; });
       // Existing main-page artwork reserves the count-box for the monthly offer.
-      document.querySelectorAll('.count-box').forEach(function (element) { element.classList.toggle('is-hidden', annual); });
+      root.querySelectorAll('.count-box').forEach(function (element) { element.classList.toggle('is-hidden', annual); });
       window.phSubscriptionsActiveKey = key;
       if (window.phSubscriptions) window.phSubscriptions.refreshBindings();
     }
     renderPeriod();
+    function onIntent(event) {
+      if (event.detail.key === 'friendship' || event.detail.key === 'friendship-year') {
+        period = event.detail.key === 'friendship-year' ? 'year' : 'month'; renderPeriod();
+      }
+    }
+    root.addEventListener('padlhub:checkout-intent', onIntent);
     window.phSubscriptions = window.PadlHubZeroBlock.init({
+      root: root,
       offerKeys: ['friendship', 'friendship-year', 'ra', 'academy', 'energy5'],
       channel: 'prod',
+      lazyCheckout: true,
+      fallbackToCatalog: true,
+      requireIsolation: true,
+      observeVisibility: true,
       refreshMs: 30000
     });
     function onPeriodClick(event) {
@@ -80,13 +91,14 @@
       if (control.tagName === 'BUTTON' || (control.tagName === 'A' && event.key === 'Enter')) return;
       onPeriodClick(event);
     }
-    document.addEventListener('click', onPeriodClick);
-    document.addEventListener('keydown', onPeriodKey);
+    root.addEventListener('click', onPeriodClick);
+    root.addEventListener('keydown', onPeriodKey);
     var destroy = window.phSubscriptions.destroy;
     window.phSubscriptions.destroy = function () {
       if (!destroy()) return false;
-      document.removeEventListener('click', onPeriodClick);
-      document.removeEventListener('keydown', onPeriodKey);
+      root.removeEventListener('click', onPeriodClick);
+      root.removeEventListener('keydown', onPeriodKey);
+      root.removeEventListener('padlhub:checkout-intent', onIntent);
       restorers.reverse().forEach(function (restore) { restore(); });
       delete window.phSubscriptionsActiveKey;
       window.phSubscriptions = null;
