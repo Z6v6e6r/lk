@@ -1,5 +1,5 @@
 /* global window, document */
-/* PadlHub Zero Block adapter v2.0 — designer bindings + embedded authenticated checkout. */
+/* PadlHub Zero Block adapter v2.0.1 — designer bindings + embedded authenticated checkout. */
 (function (window, document) {
   'use strict';
   if (window.PadlHubZeroBlock) return;
@@ -247,6 +247,7 @@
     document.addEventListener('visibilitychange', onVisibility);
     var api = {
       refresh: refresh,
+      refreshBindings: function () { if (active) keys.forEach(render); },
       getState: function (key) {
         if (!states[key]) return null;
         return { status: states[key].status, data: states[key].data ? Object.assign({}, states[key].data) : null, checkoutReady: Boolean(checkout), checkoutError: checkoutError };
@@ -278,5 +279,5 @@
     void refresh();
     return api;
   }
-  window.PadlHubZeroBlock = Object.freeze({ version: '2.0.0', init: init });
+  window.PadlHubZeroBlock = Object.freeze({ version: '2.0.1', init: init });
 })(window, document);
