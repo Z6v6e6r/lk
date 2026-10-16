@@ -1384,7 +1384,7 @@ export default function GroupSchedulePage({
                             <div className="tournament-signup-payment-purchase-list">
                               {purchasableProducts.map((product) => {
                                 const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
-                                const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product) : null;
+                                const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product, selectedTraining.directionId) : null;
                                 const bookingProduct: TournamentVivaProduct = discount ? {
                                   id: discount.subscriptionId, name: discount.subscriptionName, source: "client-subscription", type: "SUBSCRIPTION",
                                   cost: discount.amountMinor, visitsTotal: null, raw: { clientSubscriptionId: discount.subscriptionId },
