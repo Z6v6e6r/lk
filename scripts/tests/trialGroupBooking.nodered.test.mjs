@@ -257,3 +257,13 @@ test('owned one-time service must still be offered on the final exercise read', 
     assert.equal(out[2], null);
   }
 });
+test('matching type aliases in an owned service remain valid at the final recheck', () => {
+  const msg = begin('checkout', { source: 'client-one-time' });
+  const target = { ...exercise(), availableClientOneTimes: [{
+    id: 'fixture-product', productType: 'SERVICE', type: 'SERVICE', name: 'Fixture service',
+  }] };
+  reply(msg, target); reply(msg, history(0)); reply(msg, []);
+  assert.ok(reply(msg, target)[2]);
+  assert.equal(msg._subscriptionBooking.step, 'checkout_insert');
+  assert.equal(msg._subscriptionBooking.transactionPayload.products[0].type, 'SERVICE');
+});

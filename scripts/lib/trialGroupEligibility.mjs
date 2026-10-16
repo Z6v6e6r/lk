@@ -54,7 +54,7 @@ export function normalizeTrialGroupPolicy(value) {
   }
   if (value.checkoutMode !== undefined && !['disabled', 'enabled'].includes(value.checkoutMode)
     || value.checkoutMode === 'enabled' && value.mode !== 'enforce'
-    || value.tenantKey !== undefined && !/^[A-Za-z0-9_-]+$/.test(value.tenantKey)) {
+    || value.tenantKey !== undefined && (typeof value.tenantKey !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(value.tenantKey))) {
     return { code: 'TRIAL_TRAINING_POLICY_UNVERIFIED' };
   }
   return { mode: value.mode, version: value.version,

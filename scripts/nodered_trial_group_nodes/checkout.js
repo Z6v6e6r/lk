@@ -183,7 +183,7 @@ if (ctx.step === 'checkout_exercise_recheck') {
     const current = Array.isArray(msg.payload.availableClientOneTimes) ? msg.payload.availableClientOneTimes : [];
     const chosen = current.filter(row => row?.id === ctx.productId);
     const types = [chosen[0]?.productType, chosen[0]?.type].filter(value => value !== undefined);
-    if (chosen.length !== 1 || types.length !== 1 || trialCheckoutOfferBinding(chosen[0]) !== ctx.offerBinding
+    if (chosen.length !== 1 || types.length === 0 || new Set(types).size !== 1 || trialCheckoutOfferBinding(chosen[0]) !== ctx.offerBinding
       || !['SERVICE', 'INSTANT_SUB_SERVICE', 'ADVANCE_SUB_SERVICE', 'FULL_PAYMENT_SERVICE'].includes(types[0])) {
       return trialFinish(409, 'TRIAL_CHECKOUT_PRODUCT_UNAVAILABLE');
     }
