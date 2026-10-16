@@ -7,15 +7,15 @@
  * что и на остальных страницах LK1 (копия блока из MyApp.css).
  */
 @font-face {
-  font-family: 'RF Dewi UltraBold';
+  font-family: 'Subscription Auth RF Dewi UltraBold';
   src: url('./assets/fonts/RFDewi-Ultrabold.ttf') format('truetype');
   font-display: swap;
   font-style: normal;
   font-weight: 800;
 }
 
-:root {
-  --btn-font: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host, .lk-idle-data-guard) {
+  --btn-font: "Subscription Auth RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 body.lk-idle-data-stale {
@@ -55,7 +55,7 @@ body.lk-idle-data-stale {
 
 .lk-idle-data-guard__title {
   margin: 0;
-  font-family: "RF Dewi UltraBold", var(--ui-font);
+  font-family: "Subscription Auth RF Dewi UltraBold", var(--ui-font);
   font-size: 24px;
   font-weight: 800;
   line-height: 1.15;

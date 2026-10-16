@@ -1,6 +1,6 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { Component, type ReactNode } from 'react';
-import { AuthProvider } from '../../context/AuthContext';
+import { CheckoutAuthProvider } from './CheckoutAuthProvider';
 import { ZeroCheckoutDialog } from './ZeroCheckoutDialog';
 import { hasZeroAttempt, resolveZeroOffer, ZERO_CHECKOUT_RETURN } from './zeroCheckoutPayment';
 
@@ -19,6 +19,7 @@ class CheckoutBoundary extends Component<{ children: ReactNode }, { failed: bool
 }
 
 function setBusy(value: boolean) { busy = value; }
+export function isCheckoutOpen(): boolean { return checkoutRoot !== null; }
 
 /** Refuse teardown during a payment call; it cannot be safely cancelled/repeated. */
 export function closeCheckout(): boolean {
@@ -40,7 +41,7 @@ export function openCheckout(offerKey: string): boolean {
   host.className = 'ph-zero-checkout-host';
   document.body.appendChild(host);
   checkoutRoot = createRoot(host);
-  checkoutRoot.render(<CheckoutBoundary><AuthProvider><ZeroCheckoutDialog offerKey={offerKey} onClose={closeCheckout} onBusy={setBusy} /></AuthProvider></CheckoutBoundary>);
+  checkoutRoot.render(<CheckoutBoundary><CheckoutAuthProvider><ZeroCheckoutDialog offerKey={offerKey} onClose={closeCheckout} onBusy={setBusy} /></CheckoutAuthProvider></CheckoutBoundary>);
   return true;
 }
 

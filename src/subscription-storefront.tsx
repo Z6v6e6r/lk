@@ -9,13 +9,14 @@ import { AuthProvider } from './context/AuthContext';
 import { CABINET_URL, IS_DEV_RELEASE_CHANNEL } from './consts/api_config';
 import { installGlobalErrorTracking, trackAnalyticsEvent } from './utils/analytics';
 import './components/subscription-storefront/storefront-idle-guard.css';
-import { openCheckout, closeCheckout, resumeCheckout } from './components/subscription-storefront/zeroCheckoutMount';
+import { openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen } from './components/subscription-storefront/zeroCheckoutMount';
 import { resolveZeroOffer } from './components/subscription-storefront/zeroCheckoutPayment';
 
 type MountData = { previewView?: SubscriptionStorefrontView; cabinetUrl?: string | null; variant?: string | null };
 type MountOptions = { targetId?: string; onClose?: () => void; data?: MountData };
 
 let root: Root | null = null;
+let restoreScope: (() => void) | null = null;
 
 class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -32,7 +33,7 @@ function resolveCabinetUrl(data?: MountData): string {
   return fromQuery || CABINET_URL || '';
 }
 
-function unmount() { root?.unmount(); root = null; }
+function unmount() { root?.unmount(); root = null; restoreScope?.(); restoreScope = null; }
 
 function mount(options: MountOptions = {}) {
   const container = document.getElementById(options.targetId ?? 'padlhub-subscriptions');
@@ -44,6 +45,9 @@ function mount(options: MountOptions = {}) {
   trackAnalyticsEvent('widget_bundle_loaded', { entry: 'subscription-storefront' });
   unmount();
   root = createRoot(container);
+  const hadScope = container.classList.contains('subscription-storefront-runtime');
+  restoreScope = () => { if (!hadScope) container.classList.remove('subscription-storefront-runtime'); };
+  container.classList.add('subscription-storefront-runtime');
   root.render(
     <StrictMode>
       <Boundary>
@@ -62,14 +66,14 @@ function mount(options: MountOptions = {}) {
 
 declare global { interface Window { LKWidgetSubscriptionStorefront?: {
   mount: typeof mount; unmount: typeof unmount;
-  checkoutVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout;
+  checkoutVersion: 1; checkoutIsolationVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout; isCheckoutOpen: typeof isCheckoutOpen;
   supportsCheckoutOffer: (offerKey: string) => boolean;
   /** Page variants this bundle can render; blocks must fail closed on a missing one. */
   storefrontVariants: readonly string[];
 } } }
 window.LKWidgetSubscriptionStorefront = {
-  mount, unmount, checkoutVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
-  openCheckout, closeCheckout, resumeCheckout, supportsCheckoutOffer: (offerKey: string) => {
+  mount, unmount, checkoutVersion: 1, checkoutIsolationVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
+  openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, supportsCheckoutOffer: (offerKey: string) => {
     const offer = resolveZeroOffer(offerKey);
     return Boolean(offer && (offer.promo || offer.target));
   },

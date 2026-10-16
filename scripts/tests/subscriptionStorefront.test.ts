@@ -216,9 +216,9 @@ test('storefront ships the cabinet idle-data guard and hides status errors', () 
   ]) {
     assert.ok(guardSource.includes(selector), `storefront-idle-guard.css lost ${selector}`);
   }
-  // The copied rules must stay identical to the cabinet ones, otherwise the
+  // Aside from a private font alias, copied rules stay identical to cabinet ones; otherwise the
   // widget would render the same block differently from every other LK1 page.
-  const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
+  const normalize = (value: string) => value.replace(/Subscription Auth RF Dewi UltraBold/g, 'RF Dewi UltraBold').replace(/\s+/g, ' ').trim();
   assert.equal(
     normalize(guardSource.slice(guardSource.indexOf('body.lk-idle-data-stale'))),
     normalize(block),
