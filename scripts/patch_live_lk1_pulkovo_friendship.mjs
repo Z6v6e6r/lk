@@ -48,11 +48,13 @@ function replaceOnce(source, before, after, label) {
 }
 
 export function patchPulkovoRouterBody(source) {
-  // UUID-only records must get the same daily bucket even without a product label.
-  const markers = '  const markers = collectPlanMarkers(value);\n';
-  let result = replaceOnce(source, markers, markers
-    + `  if (markers.some((marker) => normalizeId(marker) === "${PULKOVO_PRODUCT_ID}")\n`
-    + `    || collectExactProductIds(value).includes("${PULKOVO_PRODUCT_ID}")) return "friendship";\n`, 'Plan identity');
+  // UUID-only records must get the same plan even without a product label.
+  // Preserve every existing exact-id match before adding the Pulkovo alias.
+  const normalized = '  const normalized = markers.map(normalizeMarker).filter(Boolean);\n';
+  let result = replaceOnce(source, normalized,
+    `  if (markers.some((marker) => normalizeId(marker) === "${PULKOVO_PRODUCT_ID}")\n`
+    + `    || collectExactProductIds(value).includes("${PULKOVO_PRODUCT_ID}")) return "friendship";\n`
+    + normalized, 'Plan identity');
   const category = '  if ([1613].includes(typeId) || [4588].includes(directionId)) return "open_game";\n';
   // Provider scope: 6182/2349 = Pulkovo game, 6246/2349 = Pulkovo tournament.
   // Do not classify every corporate event (2349) or grant a free tournament visit.

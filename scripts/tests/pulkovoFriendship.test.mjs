@@ -5,7 +5,7 @@ import test from 'node:test';
 const moduleUrl = new URL('../patch_live_lk1_pulkovo_friendship.mjs', import.meta.url);
 const livePath = process.env.PULKOVO_LIVE_FLOW;
 
-test('actual installed history step refuses a second Pulkovo game in the same day', { skip: !livePath }, async () => {
+test('legacy history step preserves the ordinary Friendship daily refusal', { skip: !livePath }, async () => {
   const { composePulkovoArtifacts } = await import(moduleUrl);
   const { candidateBytes } = composePulkovoArtifacts(fs.readFileSync(livePath));
   const source = JSON.parse(candidateBytes).find(node => node.id === 'lk_subscription_booking_router_20260804').func;
@@ -23,6 +23,41 @@ test('actual installed history step refuses a second Pulkovo game in the same da
     const out = execute(msg, { get: key => key === 'vivacrm_access_token' ? 'fixture-service-token' : undefined });
     assert.equal(out[4]?.payload?.details?.code, 'SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED', category);
   }
+});
+
+test('enforced second game uses actual history and usage steps and keeps only the 30 percent discount', { skip: !livePath }, async () => {
+  const { composePulkovoArtifacts, PULKOVO_PRODUCT_ID } = await import(moduleUrl);
+  const { candidateBytes, transition } = composePulkovoArtifacts(fs.readFileSync(livePath));
+  const flow = JSON.parse(candidateBytes);
+  const execute = new Function('msg', 'global', flow.find(node => node.id === 'lk_subscription_booking_router_20260804').func);
+  const rule = transition.desired.rules.find(rule => rule.productId === PULKOVO_PRODUCT_ID);
+  const msg = { statusCode: 200, payload: [{ id: 'fixture-booking', paymentType: 'SUBSCRIPTION',
+    clientSubscriptionId: 'fixture-sub', exerciseId: 'fixture-previous',
+    exerciseDate: '2026-10-17T10:00:00+03:00', exerciseDateTo: '2026-10-17T11:00:00+03:00',
+    timeFrom: '2026-10-17T10:00:00+03:00', timeTo: '2026-10-17T11:00:00+03:00',
+    exerciseType: { id: 2349 }, exerciseDirection: { id: 6182 } }],
+  _subscriptionBooking: { caller: 'http', step: 'history_bookings', tenantKey: 'fixture',
+    operationId: 'fixture-operation', exerciseId: 'fixture-next', clientSubscriptionId: 'fixture-sub',
+    actorClientId: 'fixture-actor', serviceDate: '2026-10-17', category: 'open_game', planKey: 'friendship',
+    action: 'join', managedAction: 'JOIN_GAME', trackedDailyLimit: true, limitMode: 'shared_day',
+    lk1: { rule, target: { resolutionSource: 'SERVER', category: 'GAME',
+      externalEventTypeId: 'viva:direction:6182:type:2349', stationId: 'fixture-station',
+      eventId: 'fixture-next', durationMinutes: 60, startsAt: '2026-10-17T15:00:00.000Z',
+      currency: 'RUB', priceSource: 'VIVA_EXISTING_TARIFF', basePriceMinor: 300000 } } } };
+  const globals = { get: key => key === 'vivacrm_access_token' ? 'fixture-service-token' : undefined };
+  const history = execute(msg, globals);
+  assert.equal(history[1]?._subscriptionBooking.step, 'lk1_usage_operations');
+  msg.payload = [];
+  const usage = execute(msg, globals);
+  const input = usage[6]?._managedSubscriptionPolicyInput;
+  assert.equal(input?.usage.usedOrReservedFreeMinutesToday, 60);
+  new Function('msg', flow.find(node => node.id === 'lk_subscription_managed_policy_20260820').func)(usage[6]);
+  const decision = usage[6]._managedSubscriptionPolicyDecision;
+  assert.equal(decision.eligible, true);
+  assert.equal(decision.subscriptionVisitCount, 0);
+  assert.equal(decision.gameMinutes.freeMinutes, 0);
+  assert.equal(decision.gameMinutes.discountPercent, 30);
+  assert.equal(decision.benefit.finalPriceMinor, 210000);
 });
 
 test('real resolver preserves ordinary Friendship purchase cutoff and refuses unknown purchase dates', async () => {
@@ -110,6 +145,8 @@ test('both installed routers resolve unnamed Pulkovo records into the ordinary d
       { name: 'Дружба.Пулково' }]) {
       assert.equal(api.resolvePlanKey(record), 'friendship', id);
     }
+    assert.equal(api.resolvePlanKey({ productId: '82caad6f-4d19-4d01-852b-932bdbb0f405',
+      product: { id: PULKOVO_PRODUCT_ID } }), 'sport', 'do not override an existing exact-id match');
     assert.equal(api.resolveLimitMode('friendship', '2026-10-17'), 'shared_day');
     assert.deepEqual(api.PLAN_CATEGORIES.friendship, ['open_game', 'tournament']);
     for (const [direction, category] of [[6182, 'open_game'], [6246, 'tournament']]) {
