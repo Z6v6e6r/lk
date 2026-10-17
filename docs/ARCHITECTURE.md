@@ -243,6 +243,22 @@ Cabinet.onOpenGames()
   → widget.mount({ targetId: "lk-overlay", data: { openGameId } })
 ```
 
+### Проведение турниров из ЛК
+```
+URL: /lk_new?openTournaments=1
+  (+ опционально tournamentId | exerciseId, slug | tournamentSlug, date)
+MyApp (useEffect) → readTournamentOrganizerEntryFromHref()
+  → clearTournamentOrganizerEntryFromUrl() → window.history.replaceState()
+  → openOverlayModule("tournaments", TOURNAMENTS_BUNDLE_URL)
+  → loadWidget() → script tag → window.LKWidgetTournaments
+  → widget.mount({ targetId: "lk-overlay", data: { tournamentId, tournamentSlug, date } })
+
+Cabinet quick action "🏆 Турниры" для профиля с правом «проводит турниры»
+  → handleOpenTournaments() → тот же overlay вместо публичной страницы /tournaments
+```
+Флаг `openTournaments=0/false/no/off` модуль не открывает; без флага параметры
+`tournamentId`/`slug`/`date` в ЛК игнорируются.
+
 ### Чат поддержки
 ```
 SupportChatWidget (mount)

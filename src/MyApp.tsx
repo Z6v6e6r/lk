@@ -35,6 +35,10 @@ import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish"
 import { resolveCommunityJoinRouteData } from "./utils/communityJoinRoute";
 import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import { readPostAuthReturnUrl } from "./utils/authReturn";
+import {
+  clearTournamentOrganizerEntryFromUrl,
+  readTournamentOrganizerEntryFromHref,
+} from "./utils/tournamentOrganizerEntry";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
 import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
 import type { OpenTournamentsOptions, TournamentsMountData } from "./types/tournamentsOverlay";
@@ -719,6 +723,37 @@ function AppContent() {
     void openOverlayModule("games", GAMES_BUNDLE_URL, "LKWidgetGames", {
       openGameId,
     });
+  }, [view, openOverlayModule]);
+
+  useEffect(() => {
+    if (view !== "cabinet") return;
+    if (typeof window === "undefined") return;
+
+    const currentUrl = new URL(window.location.href);
+    const tournamentOrganizerEntry = readTournamentOrganizerEntryFromHref(currentUrl.toString());
+    if (!tournamentOrganizerEntry.enabled) return;
+
+    const nextUrl = clearTournamentOrganizerEntryFromUrl(currentUrl);
+    window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+
+    const hasTournamentTarget = Boolean(
+      tournamentOrganizerEntry.tournamentId
+      || tournamentOrganizerEntry.tournamentSlug
+      || tournamentOrganizerEntry.date,
+    );
+
+    void openOverlayModule(
+      "tournaments",
+      TOURNAMENTS_BUNDLE_URL,
+      "LKWidgetTournaments",
+      hasTournamentTarget
+        ? {
+            tournamentId: tournamentOrganizerEntry.tournamentId,
+            tournamentSlug: tournamentOrganizerEntry.tournamentSlug,
+            date: tournamentOrganizerEntry.date,
+          }
+        : undefined,
+    );
   }, [view, openOverlayModule]);
 
   useEffect(() => {
