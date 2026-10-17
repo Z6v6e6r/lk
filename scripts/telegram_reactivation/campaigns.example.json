@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "botId": "REPLACE_WITH_GETME_BOT_ID",
+  "campaigns": [
+    {"campaignId":"academy","type":"photo","fileId":"","text":"","link":"https://clck.ru/3WKmXa","utmConfirmed":false,"utm":{"source":"telegram","medium":"bot","campaign":"reactivation_20260930_academy"}},
+    {"campaignId":"friendship","type":"photo","fileId":"","text":"","link":"https://clck.ru/3WKmic","utmConfirmed":false,"utm":{"source":"telegram","medium":"bot","campaign":"reactivation_20260930_friendship"}},
+    {"campaignId":"group","type":"photo","fileId":"","text":"","link":"https://clck.ru/3WKmq6","utmConfirmed":false,"utm":{"source":"telegram","medium":"bot","campaign":"reactivation_20260930_group"}},
+    {"campaignId":"return","type":"photo","fileId":"","text":"","link":"https://clck.ru/3WKNNT","utmConfirmed":false,"utm":{"source":"telegram","medium":"bot","campaign":"reactivation_20260930_return"}}
+  ]
+}
