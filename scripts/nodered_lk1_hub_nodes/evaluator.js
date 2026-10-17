@@ -489,10 +489,14 @@ if (!selectedRule) {
       block("BENEFIT_VALUE_INVALID", "Доля стоимости льготы некорректна");
     } else if (chargeMinor === null || !Number.isSafeInteger(chargeMinor)) {
       block("PRICE_CALCULATION_OVERFLOW", "Цена события выходит за допустимый диапазон");
+    } else if (chargeMinor > basePriceMinor) {
+      // The existing event carrier can only express a discount from its base. Never silently
+      // lower the approved court co-pay to fit it, or authorize a visit/payment on that quote.
+      block("LK1_COURT_COPAY_UNREPRESENTABLE", "Доплата за корт превышает подтверждённую цену занятия");
     } else {
-      finalBeforeSurcharge = Math.max(0, Math.min(chargeMinor, basePriceMinor));
+      finalBeforeSurcharge = chargeMinor;
       // The discount is the part of the event tariff the subscription carries. It can never be
-      // negative: the co-pay is bounded by the base price above, so the payment carrier always
+      // negative: the co-pay was checked against the base above, so the payment carrier always
       // receives a valid discount.
       discountMinor = basePriceMinor - finalBeforeSurcharge;
       partialPriceCalculation = {

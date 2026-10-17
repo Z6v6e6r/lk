@@ -293,13 +293,18 @@ const lk1CourtWindowId = value => {
   const text = String(value ?? '').trim();
   return text && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(text) ? text : null;
 };
-// The window total is the only money this quote may carry and it must be a whole positive
-// number of minor units, exactly as the write path validates it. The step that consumes this
+// Viva's master-service total is in rubles. Convert once to minor units, exactly as the write
+// path validates it and as the existing split price contract does. The step that consumes this
 // payload has already proved the URL it answered, so the request identity is not re-asserted
 // from the body.
 const lk1CourtWindowTotal = payload => {
   if (!canonical.isObj(payload)) return null;
-  const total = Number(payload.total);
+  const amount = payload.total;
+  if (!((typeof amount === 'number' && Number.isFinite(amount))
+    || (typeof amount === 'string' && /^\d+(?:\.\d{1,2})?$/.test(amount)))) return null;
+  const rubles = Number(amount);
+  const total = Math.round(rubles * 100);
+  if (Math.abs(rubles * 100 - total) > 1e-7) return null;
   if (!Number.isSafeInteger(total) || total <= 0 || total > 10_000_000) return null;
   return total;
 };
@@ -461,6 +466,7 @@ if (ctx.step === 'evaluate') {
   if (!canonical.isObj(decision)) return stop('PRICE_PREVIEW_DECISION_INVALID');
   if (!decision.eligible) {
     const code = decision.blockers?.length === 1 ? decision.blockers[0].code : null;
+    if (code === 'LK1_COURT_COPAY_UNREPRESENTABLE') return stop(code);
     if (LIMIT_DECISION_BLOCKERS.includes(code)) quote(ctx.currentId, 'LIMIT_USED', null, 0, 0, code);
     else if (UNAVAILABLE_DECISION_BLOCKERS.includes(code)) quote(ctx.currentId, 'UNAVAILABLE', null, 0, 0, code);
     else {

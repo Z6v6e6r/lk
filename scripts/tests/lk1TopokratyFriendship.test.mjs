@@ -206,6 +206,14 @@ test('Skolkovo 6 000 ₽/hour, 2-hour club training, free visit: co-pay 1 500 �
   assert.deepEqual(result.benefit, clubPartial(1, 150000));
 });
 
+test('court co-pay above the event carrier base refuses instead of clipping the approved price', () => {
+  const result = evaluate(lk1Input({ target: { basePriceMinor: 100000 } }));
+  assert.equal(result.allowed, null);
+  assert.ok(result.blocked);
+  assert.equal(result.decision.eligible, false);
+  assert.deepEqual(result.decision.blockers.map(b => b.code), ['LK1_COURT_COPAY_UNREPRESENTABLE']);
+});
+
 test('Skolkovo 6 000 ₽/hour, 3-hour club training: two chargeable hours -> 3 000 ₽', () => {
   const result = evaluate(lk1Input({ target: { durationMinutes: 180 } })).decision;
   assert.equal(result.eligible, true);
@@ -598,7 +606,7 @@ test('the hub court-window step proves the Skolkovo hour through the verified pr
       subServiceIds: ['96d2179a-5a96-41bd-a0c9-1df9e5890e16'] } };
   const requestedUrl = dispatch.url;
   const response = runStep(ctx, { statusCode: 200, url: requestedUrl, responseUrl: requestedUrl,
-    payload: { from: 1200000, total: 1200000 } });
+    payload: { from: 12000, total: 12000 } });
   assert.equal(response, false);
   assert.equal(ctx.step, 'profile');
   assert.equal(ctx.lk1TariffProof.windowTotalMinor, 1200000);
@@ -608,7 +616,7 @@ test('the hub court-window step proves the Skolkovo hour through the verified pr
     ['no total', { from: 1200000 }],
     ['zero total', { from: 0, total: 0 }],
     ['negative total', { from: 100, total: -1 }],
-    ['fractional total', { from: 100, total: 1200000.5 }],
+    ['fractional kopeck', { from: 100, total: 12000.001 }],
     ['implausible total', { from: 100, total: 10_000_001 }],
   ]) {
     const refused = { ...ctx, step: 'lk1_court_window', lk1CourtExercise: exercise,
