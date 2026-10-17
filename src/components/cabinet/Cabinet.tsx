@@ -95,6 +95,7 @@ import {
 import type { BookingCancellationAction } from "../../utils/bookingCancellation";
 import { forceAppRefresh } from "../../utils/forceAppRefresh";
 import { consumeCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
+import { isViewerIdentity } from "../../utils/viewerIdentity";
 import {
   EXERCISE_CATEGORY_OPEN_GAME,
   isExerciseConvertibleToGameFromBooking,
@@ -2134,8 +2135,11 @@ export function Cabinet({
 
       result.data.chats.forEach((chat) => {
         if (!gameIds.has(chat.gameId)) return;
-        const senderPhone = normalizePhoneForGame(chat.lastMessageSenderPhone);
-        const isMine = Boolean(senderPhone && senderPhone === profilePhoneNorm);
+        const isMine = isViewerIdentity({
+          id: chat.lastMessageSenderId,
+          phone: chat.lastMessageSenderPhone,
+          isViewer: chat.lastMessageIsViewer,
+        }, { id: profile?.id, phone: profilePhoneNorm });
         const readTs = latestReadMap[chat.gameId] ?? 0;
         if (!isMine && chat.lastMessageTs > readTs) {
           nextUnread[chat.gameId] = 1;
@@ -2157,7 +2161,7 @@ export function Cabinet({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [createdGames, profilePhoneNorm]);
+  }, [createdGames, profile?.id, profilePhoneNorm]);
 
   const gameByBookingId = useMemo(() => {
     return buildUniqueGameLookup(
@@ -3247,13 +3251,7 @@ export function Cabinet({
   };
 
   const isCurrentUserOrganizer = (game: PadelGameRecord): boolean => {
-    const profileId = (profile?.id || "").trim();
-    const organizerId = (game.organizer?.id || "").trim();
-    if (profileId && organizerId && profileId === organizerId) {
-      return true;
-    }
-    const organizerPhoneNorm = normalizePhoneForGame(game.organizer?.phone ?? null);
-    return Boolean(profilePhoneNorm && organizerPhoneNorm && profilePhoneNorm === organizerPhoneNorm);
+    return isViewerIdentity(game.organizer, { id: profile?.id, phone: profilePhoneNorm });
   };
 
   const handleOpenTournaments = (options?: OpenTournamentsOptions) => {
@@ -3337,14 +3335,7 @@ export function Cabinet({
         ? `${game.settings.minRating}/${game.settings.maxRating}`
         : null;
     const isCurrentUserPlayer = (player: PadelGamePlayer | null | undefined): boolean => {
-      if (!player) return false;
-      const normalizedProfileId = (profile?.id || "").trim();
-      const playerId = (player.id || "").trim();
-      if (normalizedProfileId && playerId && normalizedProfileId === playerId) {
-        return true;
-      }
-      const playerPhoneNorm = normalizePhoneForGame(player.phone);
-      return Boolean(profilePhoneNorm && playerPhoneNorm && profilePhoneNorm === playerPhoneNorm);
+      return isViewerIdentity(player, { id: profile?.id, phone: profilePhoneNorm });
     };
     const linkedBooking = resolveBookingForGameCancellation(game);
     const organizerPlayer: PadelGamePlayer | null = game.organizer
@@ -3352,6 +3343,7 @@ export function Cabinet({
           id: game.organizer.id ?? null,
           name: game.organizer.name || "Организатор",
           phone: game.organizer.phone ?? null,
+          isViewer: game.organizer.isViewer,
           photo: game.organizer.photo ?? null,
           rating: game.organizer.rating ?? null,
           source: "ORGANIZER",

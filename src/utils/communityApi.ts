@@ -46,6 +46,7 @@ export function isVisibleCommunityPostKind(
 export interface CommunityMember {
   id: string | null;
   phone: string | null;
+  isViewer?: boolean;
   name: string;
   avatar: string | null;
   role: CommunityRole;
@@ -104,6 +105,7 @@ export interface CommunityPost {
   details: Record<string, unknown> | null;
   authorId: string | null;
   authorPhone: string | null;
+  authorIsViewer?: boolean;
   authorName: string | null;
   authorAvatar: string | null;
   memberPreview: CommunityPostMemberPreview | null;
@@ -116,6 +118,7 @@ export interface CommunityPost {
 export interface CommunityPostMemberPreview {
   id: string | null;
   phone: string | null;
+  isViewer?: boolean;
   name: string;
   avatar: string | null;
   levelScore: number;
@@ -145,6 +148,7 @@ export interface CommunityPostComment {
   createdTs: number;
   authorId: string | null;
   authorPhone: string | null;
+  authorIsViewer?: boolean;
   authorName: string;
   authorAvatar: string | null;
 }
@@ -175,6 +179,7 @@ export interface CommunityRatingItem {
   rank: number;
   communityId: string | null;
   playerId: string | null;
+  isViewer?: boolean;
   playerName: string;
   avatarUrl: string | null;
   currentLevel: number;
@@ -250,6 +255,7 @@ export interface CommunityChatMessage {
   createdTs: number;
   authorId: string | null;
   authorPhone: string | null;
+  authorIsViewer?: boolean;
   authorName: string;
   authorAvatar: string | null;
 }
@@ -655,6 +661,7 @@ function normalizeCommunityMember(value: unknown): CommunityMember | null {
   return {
     id: id ?? null,
     phone,
+    ...(typeof value.isViewer === "boolean" ? { isViewer: value.isViewer } : {}),
     name: name ?? "Игрок",
     avatar: pickString(value, ["avatar", "photo", "imageUrl"]),
     role: normalizeRole(value.role),
@@ -737,6 +744,12 @@ function normalizeCommunityConnection(value: unknown): CommunityConnection | nul
   return { left, right, overlap };
 }
 
+function communityAuthorViewerMarker(value: Record<string, unknown>): { authorIsViewer?: boolean } {
+  const author = isRecord(value.author) ? value.author : isRecord(value.sender) ? value.sender : null;
+  const flag = typeof value.authorIsViewer === "boolean" ? value.authorIsViewer : author?.isViewer;
+  return typeof flag === "boolean" ? { authorIsViewer: flag } : {};
+}
+
 function normalizeCommunityPost(value: unknown): CommunityPost | null {
   if (!isRecord(value)) return null;
   const id = pickString(value, ["id", "postId", "uuid"]);
@@ -789,6 +802,7 @@ function normalizeCommunityPost(value: unknown): CommunityPost | null {
     authorId:
       pickString(value, ["authorId"]) ??
       (isRecord(value.author) ? pickString(value.author, ["id", "clientId", "userId", "uuid"]) : null),
+    ...communityAuthorViewerMarker(value),
     authorPhone: normalizePhone(
       value.authorPhone
       ?? (isRecord(value.author) ? value.author.phone ?? value.author.phoneNorm ?? value.author.phoneNumber ?? value.author.mobile : null),
@@ -815,6 +829,7 @@ function normalizeCommunityPost(value: unknown): CommunityPost | null {
 
       return {
         id: pickString(memberPreview, ["id", "clientId", "userId", "uuid"]),
+        ...(typeof memberPreview.isViewer === "boolean" ? { isViewer: memberPreview.isViewer } : {}),
         phone: normalizePhone(
           memberPreview.phone ?? memberPreview.phoneNorm ?? memberPreview.phoneNumber ?? memberPreview.mobile,
         ),
@@ -865,6 +880,7 @@ function normalizeCommunityPostComment(value: unknown): CommunityPostComment | n
     createdAt,
     createdTs,
     authorId: pickString(value, ["authorId"]) ?? (isRecord(value.author) ? pickString(value.author, ["id", "clientId", "userId"]) : null),
+    ...communityAuthorViewerMarker(value),
     authorPhone: normalizePhone(
       value.authorPhone
       ?? (isRecord(value.author) ? value.author.phone ?? value.author.phoneNorm : null),
@@ -907,6 +923,7 @@ function normalizeCommunityChatMessage(value: unknown): CommunityChatMessage | n
     authorId:
       pickString(value, ["authorId"]) ??
       (author ? pickString(author, ["id", "clientId", "userId", "uuid"]) : null),
+    ...communityAuthorViewerMarker(value),
     authorPhone: normalizePhone(
       value.authorPhone
       ?? (author ? author.phone ?? author.phoneNorm ?? author.phoneNumber ?? author.mobile : null),
@@ -942,6 +959,7 @@ function normalizeCommunityRatingItem(
     rank: pickNumber(value, ["rank", "overallPlace", "place", "position"]) ?? (index + 1),
     communityId: pickString(value, ["communityId"]) ?? fallbackCommunityId,
     playerId: pickString(value, ["playerId", "id", "clientId", "userId", "uuid"]),
+    ...(typeof value.isViewer === "boolean" ? { isViewer: value.isViewer } : {}),
     playerName,
     avatarUrl: pickString(value, ["avatarUrl", "avatar", "photo", "imageUrl"]),
     currentLevel: toNumeric(value.currentLevel ?? value.levelScore ?? value.ratingNumeric ?? value.levelNumeric) ?? 0,
