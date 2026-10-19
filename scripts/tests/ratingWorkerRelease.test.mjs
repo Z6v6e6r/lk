@@ -119,6 +119,10 @@ test("rating-worker release packages the community postcheck and watchdog helper
   );
 
   [
+    "scripts/community_monthly_reports.mjs",
+    "deploy/rating-worker/run-monthly-reports.sh",
+    "deploy/rating-worker/community-monthly-reports.service",
+    "deploy/rating-worker/community-monthly-reports.timer",
     "scripts/community_monthly_worker.mjs",
     "scripts/lib/communityMonthlyFinalization.mjs",
     "src/services/community-rating/monthly.ts",
