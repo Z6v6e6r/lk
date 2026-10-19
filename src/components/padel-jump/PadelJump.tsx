@@ -5,6 +5,7 @@ import type { Game, GameMode } from './engine';
 import { drawGame } from './render';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import type { TiltStatus } from './tilt';
+import logoHab from '../../assets/logo-hab-compact.svg';
 import './padel-jump.css';
 
 function storage(): Storage | undefined {
@@ -172,7 +173,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       <div className="pj-device" id="padel-jump">
         <header className="pj-topbar">
           <button type="button" className="pj-icon-button" onClick={onBack ?? menu} aria-label={onBack ? 'Вернуться в личный кабинет' : 'На стартовый экран'}>‹</button>
-          <div className="pj-logo">Padl<span>Hub</span><small>JUMP</small></div>
+          <div className="pj-logo"><img src={logoHab} alt="ПадлхАБ" /><small>Jump</small></div>
           <button type="button" className="pj-icon-button pj-pause" onClick={pause} aria-label="Пауза" disabled={!playing}>Ⅱ</button>
         </header>
         <div className="pj-stats">
@@ -201,7 +202,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
           {(view.mode !== 'running' || renderError) && (
             <div className={`pj-overlay pj-overlay-${view.mode}`}>
               <div className="pj-dialog" role="group" aria-label={view.mode === 'over' ? 'Результат игры' : 'Управление игрой'}>
-                <span className="pj-pill">{renderError ? 'НУЖЕН ДРУГОЙ БРАУЗЕР' : view.mode === 'paused' ? 'ПЕРЕРЫВ МЕЖДУ СЕТАМИ' : view.mode === 'over' ? 'ОТЛИЧНЫЙ РОЗЫГРЫШ' : 'PADLHUB JUMP'}</span>
+                <span className="pj-pill">{renderError ? 'НУЖЕН ДРУГОЙ БРАУЗЕР' : view.mode === 'paused' ? 'ПЕРЕРЫВ МЕЖДУ СЕТАМИ' : view.mode === 'over' ? 'ОТЛИЧНЫЙ РОЗЫГРЫШ' : 'ПаделхАБ JUMP'}</span>
                 <div className="pj-hero-ball" aria-hidden="true"><span /></div>
                 <h2>{renderError ? 'Поле не загрузилось' : view.mode === 'paused' ? 'Выдохни.\nИ снова вверх.' : view.mode === 'over' ? `${view.score} метров.\nЭто только начало.` : 'Выше.\nЕщё выше.'}</h2>
                 <p>{renderError ? 'Открой игру в актуальной версии Safari или Chrome.' : view.mode === 'paused' ? 'Продолжим с того же места.' : view.mode === 'over' ? 'Следующая попытка может стать рекордной.' : 'Прыгай по ракеткам. Лови сетки-пружины.\nНайди свой путь к рекорду.'}</p>
@@ -224,7 +225,6 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
             onKeyDown={event => { if (playing && ['Space', 'Enter'].includes(event.code)) { event.preventDefault(); inputs.current.set('button:right', 1); } }}
             onKeyUp={() => inputs.current.delete('button:right')} onBlur={() => inputs.current.delete('button:right')}>›</button>
         </footer>
-        <div className="pj-device-note">БЕЗ СОПЕРНИКОВ. БЕЗ ОЖИДАНИЯ. ПРОСТО ИГРАЙ.</div>
       </div>
       <div className="pj-mobile-label" aria-hidden="true">PADEL MEETS PLAY · PADLHUB</div>
     </section>
