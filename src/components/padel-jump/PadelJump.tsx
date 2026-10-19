@@ -3,6 +3,8 @@ import type { KeyboardEvent, PointerEvent } from 'react';
 import { createGame, FIXED_STEP, readBest, saveBest, stepGame } from './engine';
 import type { Game, GameMode } from './engine';
 import { drawGame } from './render';
+import { browserTiltEnvironment, createTiltController } from './tilt';
+import type { TiltStatus } from './tilt';
 import './padel-jump.css';
 
 function storage(): Storage | undefined {
@@ -21,6 +23,8 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const [view, setView] = useState<Snapshot>({ mode: 'ready', score: 0, boost: false });
   const [best, setBest] = useState(() => readBest(storage()));
   const [renderError, setRenderError] = useState(false);
+  const [tilt] = useState(() => createTiltController(browserTiltEnvironment()));
+  const [tiltStatus, setTiltStatus] = useState<TiltStatus>('off');
 
   const pause = useCallback(() => {
     inputs.current.clear();
@@ -28,10 +32,12 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       game.current.mode = 'paused';
       setView(snapshot(game.current));
     }
-  }, []);
+    tilt.recalibrate();
+  }, [tilt]);
 
   const play = () => {
     if (game.current.mode !== 'paused') game.current = createGame();
+    tilt.recalibrate();
     game.current.mode = 'running';
     inputs.current.clear();
     setView(snapshot(game.current));
@@ -43,6 +49,14 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     game.current = createGame();
     setView(snapshot(game.current));
   };
+
+  useEffect(() => {
+    const unsubscribe = tilt.subscribe(status => {
+      setTiltStatus(status);
+      if (status === 'calibrating' || status === 'unavailable') pause();
+    });
+    return () => { unsubscribe(); tilt.dispose(); };
+  }, [pause, tilt]);
 
   useEffect(() => {
     const activeInputs = inputs.current;
@@ -67,6 +81,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
         accumulator += previous ? Math.min((now - previous) / 1000, 0.05) : 0;
         let direction = 0;
         for (const input of inputs.current.values()) direction += input;
+        if (inputs.current.size === 0) direction = tilt.direction();
         while (accumulator >= FIXED_STEP) {
           stepGame(current, direction);
           accumulator -= FIXED_STEP;
@@ -99,7 +114,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       window.removeEventListener('pagehide', pause);
       activeInputs.clear();
     };
-  }, [pause]);
+  }, [pause, tilt]);
 
   useEffect(() => {
     if (view.mode !== 'running' && region.current?.contains(document.activeElement)) {
@@ -128,6 +143,16 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   };
   const release = (event: PointerEvent<HTMLElement>) => { inputs.current.delete(`pointer:${event.pointerId}`); };
   const playing = view.mode === 'running';
+  const tiltSelected = ['requesting', 'calibrating', 'active'].includes(tiltStatus);
+  const tiltMessage: Record<TiltStatus, string> = {
+    off: 'Можно включить управление наклоном телефона.',
+    requesting: 'Разрешите браузеру доступ к датчикам движения.',
+    calibrating: 'Держите телефон удобно. Ожидаем сигнал датчика…',
+    active: 'Наклоняйте телефон влево и вправо. «Центр» — калибровка.',
+    denied: 'Доступ к датчикам не выдан. Касание и стрелки работают.',
+    unavailable: 'Нет сигнала датчика. Откройте игру напрямую или играйте касанием.',
+    insecure: 'Для наклона откройте игру по HTTPS. Касание работает и здесь.',
+  };
 
   return (
     <section className="pj" aria-label="PadlHub Jump — падел-аркада" ref={region} tabIndex={-1}
@@ -156,9 +181,20 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
           <span className={`pj-boost${view.boost ? ' pj-boost-active' : ''}`}>{view.boost ? 'СЕТКА ×2' : '↗ ВЫШЕ!'}</span>
         </div>
 
+        <div className="pj-input-settings">
+          <div className="pj-input-modes" role="group" aria-label="Способ управления">
+            <button type="button" aria-pressed={!tiltSelected} onClick={() => tilt.disable()}>Касание</button>
+            <button type="button" aria-pressed={tiltSelected} disabled={tiltStatus === 'requesting'}
+              onClick={() => { pause(); void tilt.enable(); }}>{tiltStatus === 'requesting' ? 'Подключаем…' : 'Наклон телефона'}</button>
+            {tiltSelected && <button type="button" className="pj-recenter" disabled={tiltStatus !== 'active'}
+              onClick={pause} aria-label="Откалибровать наклон телефона">◎ Центр</button>}
+          </div>
+          <p className="pj-sensor-status" role="status">{tiltMessage[tiltStatus]}</p>
+        </div>
+
         <div className="pj-field">
           <canvas ref={canvas} className="pj-canvas" width={420} height={640}
-            aria-label="Игровое поле: мяч прыгает по ракеткам и сеткам. Управляйте стрелками или кнопками под полем."
+            aria-label="Игровое поле: мяч прыгает по ракеткам и сеткам. Управляйте наклоном телефона, стрелками или кнопками под полем."
             onPointerDown={event => pointer(event)} onPointerMove={event => { if (inputs.current.has(`pointer:${event.pointerId}`)) pointer(event); }}
             onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} />
           {playing && <div className="pj-field-caption" aria-hidden="true">{view.boost ? 'ХОРОШИЙ ОТСКОК!' : view.score < 15 ? 'ПОЙМАЙ СЛЕДУЮЩУЮ РАКЕТКУ' : 'ПРОДОЛЖАЙ В СВОЁМ РИТМЕ'}</div>}
@@ -182,7 +218,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
             onPointerDown={event => pointer(event, -1)} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
             onKeyDown={event => { if (playing && ['Space', 'Enter'].includes(event.code)) { event.preventDefault(); inputs.current.set('button:left', -1); } }}
             onKeyUp={() => inputs.current.delete('button:left')} onBlur={() => inputs.current.delete('button:left')}>‹</button>
-          <div><strong>Веди мяч влево и вправо</strong><span>Касайся краёв поля или используй ← →</span></div>
+          <div><strong>{tiltSelected ? 'Наклоняй телефон влево и вправо' : 'Веди мяч влево и вправо'}</strong><span>{tiltSelected ? 'Касание и стрелки тоже работают' : 'Касайся краёв поля или используй ← →'}</span></div>
           <button type="button" aria-label="Двигаться вправо" disabled={!playing}
             onPointerDown={event => pointer(event, 1)} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
             onKeyDown={event => { if (playing && ['Space', 'Enter'].includes(event.code)) { event.preventDefault(); inputs.current.set('button:right', 1); } }}
