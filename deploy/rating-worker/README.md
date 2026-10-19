@@ -125,6 +125,49 @@ strict checks for active community matrix, uniqueness, formula, and last-change.
 
 ## Calendar-month reports at 05:00 and 14:00 Moscow
 
+### API reports without tournament closure
+
+For an API-only release use `scripts/community_monthly_reports.mjs`. It reads the
+actual persisted sources and writes **only** `community_monthly_reports`. It never
+projects unfinished tournaments as finished, invokes finalization, enrolls players,
+calls Viva, or writes canonical ratings. Dry-run is the default. Its `--apply`
+requires the shared lock environment and matching inherited FD9; always invoke
+`deploy/rating-worker/run-monthly-reports.sh`, which acquires the real existing
+`/var/lock/padlhub-rating-worker.lock` and keeps the child inside a 780s watchdog.
+
+Install a clean source-only release separately under
+`/opt/padlhub-community-monthly/releases/<release-id>` and point its `current` at
+that release. Do not replace `/opt/padlhub-rating-worker/current`: deployed
+compatibility releases can contain published-tournament enrollment fixes absent
+from the main package. Preserve canonical worker files, environment and cron.
+Reuse verified production Mongo dependencies without running package installation
+or `configure-runtime-env.mjs`. Check manifest hashes and actual Node22 imports.
+
+Rehearse the report-only CLI without `--apply`, then deploy the reviewed API flow,
+run the reports wrapper once, and read back both public APIs. Every write retains
+a protected fsynced EJSON preimage under `/var/lib/padlhub-community-monthly/`.
+Existing reports use full-document BSON-preserving CAS; absent reports use one
+insert attempt. Conflicts and failed whole-document readback fail the run without
+retry. Private per-run receipts distinguish verified publications, acknowledged
+writes and failures, including partial multi-community runs.
+
+Only after the initial run/API checks install and enable
+`community-monthly-reports.service` / `.timer` (05:00 and 14:00 Europe/Moscow).
+This separate timer publishes reports only. The existing `community-monthly`
+auto-close timer/flag remain unchanged. Failed runs restart after 60s, bounded by
+three starts per 30min; each new run reads fresh sources/preimages, while an
+individual CAS/insert is never retried. Before updating or rolling back, stop both
+the reports timer **and service**, cancelling any queued/active invocation; then
+restore its previous package pointer under the same lock. Stopping the timer alone
+does not cancel a service already waiting for the lock.
+The durable EJSON envelope contains both the previous and intended new document;
+successful receipts also retain the postimage hash. Derived reports are retained
+on source rollback. Any necessary report restore
+must compare the exact current document with the reviewed postimage, and must
+not restore tournaments, participant lists or rating ledgers.
+
+### Optional tournament finalization worker
+
 The source-only release includes `run-monthly.sh` (executable),
 `community-monthly.service`, `community-monthly.timer` and the monthly worker.
 The timer uses explicit `Europe/Moscow` calendar times and `Persistent=true`.

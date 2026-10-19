@@ -6,6 +6,8 @@ on:
     paths:
       - "src/services/community-rating/**"
       - "scripts/community_monthly_worker.mjs"
+      - "scripts/community_monthly_reports.mjs"
+      - "scripts/build_rating_worker_release.mjs"
       - "scripts/lib/communityMonthlyFinalization.mjs"
       - "scripts/nodered_community_monthly_nodes/**"
       - "scripts/patch_nodered_community_monthly_flow.mjs"
@@ -18,6 +20,8 @@ on:
     paths:
       - "src/services/community-rating/**"
       - "scripts/community_monthly_worker.mjs"
+      - "scripts/community_monthly_reports.mjs"
+      - "scripts/build_rating_worker_release.mjs"
       - "scripts/nodered_community_monthly_nodes/**"
       - "scripts/patch_nodered_community_monthly_flow.mjs"
       - "scripts/tests/communityMonthly*"

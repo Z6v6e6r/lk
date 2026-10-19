@@ -18,6 +18,10 @@ const outDir = path.resolve(outArg);
 if (fs.existsSync(outDir)) throw new Error(`Release directory already exists: ${outDir}`);
 
 const files = [
+  ["scripts/community_monthly_reports.mjs", "scripts/community_monthly_reports.mjs"],
+  ["deploy/rating-worker/run-monthly-reports.sh", "deploy/rating-worker/run-monthly-reports.sh"],
+  ["deploy/rating-worker/community-monthly-reports.service", "deploy/rating-worker/community-monthly-reports.service"],
+  ["deploy/rating-worker/community-monthly-reports.timer", "deploy/rating-worker/community-monthly-reports.timer"],
   ["scripts/lib/communityMonthlyFinalization.mjs", "scripts/lib/communityMonthlyFinalization.mjs"],
   ["scripts/community_monthly_worker.mjs", "scripts/community_monthly_worker.mjs"],
   ["deploy/rating-worker/run-monthly.sh", "deploy/rating-worker/run-monthly.sh"],
@@ -90,6 +94,7 @@ files.forEach(([sourcePath, targetPath]) => {
 });
 
 [
+  "deploy/rating-worker/run-monthly-reports.sh",
   "deploy/rating-worker/run-monthly.sh",
   "deploy/rating-worker/run-full.sh",
   "deploy/rating-worker/run-incremental.sh",
