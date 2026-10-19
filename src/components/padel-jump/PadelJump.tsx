@@ -157,15 +157,6 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const release = (event: PointerEvent<HTMLElement>) => { inputs.current.delete(`pointer:${event.pointerId}`); };
   const playing = view.mode === 'running';
   const tiltSelected = ['requesting', 'calibrating', 'active'].includes(tiltStatus);
-  const tiltMessage: Record<TiltStatus, string> = {
-    off: 'Можно включить управление наклоном телефона.',
-    requesting: 'Разрешите браузеру доступ к датчикам движения.',
-    calibrating: 'Держите телефон удобно. Ожидаем сигнал датчика…',
-    active: 'Наклоняйте телефон влево и вправо. «Центр» — калибровка.',
-    denied: 'Доступ к датчикам не выдан. Касание и стрелки работают.',
-    unavailable: 'Нет сигнала датчика. Откройте игру напрямую или играйте касанием.',
-    insecure: 'Для наклона откройте игру по HTTPS. Касание работает и здесь.',
-  };
 
   return (
     <section className="pj" aria-label="PadlHub Jump — падел-аркада" ref={region} tabIndex={-1}
@@ -194,17 +185,6 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
           <span className={`pj-boost${view.boost ? ' pj-boost-active' : ''}`}>{view.boost ? 'СЕТКА ×2' : '↗ ВЫШЕ!'}</span>
         </div>
 
-        <div className="pj-input-settings">
-          <div className="pj-input-modes" role="group" aria-label="Способ управления">
-            <button type="button" aria-pressed={!tiltSelected} onClick={() => { starter.current?.touch(); tilt.disable(); }}>Касание</button>
-            <button type="button" aria-pressed={tiltSelected} disabled={tiltStatus === 'requesting'}
-              onClick={() => { pause(); void tilt.enable(); }}>{tiltStatus === 'requesting' ? 'Подключаем…' : 'Наклон телефона'}</button>
-            {tiltSelected && <button type="button" className="pj-recenter" disabled={tiltStatus !== 'active'}
-              onClick={pause} aria-label="Откалибровать наклон телефона">◎ Центр</button>}
-          </div>
-          <p className="pj-sensor-status" role="status">{tiltMessage[tiltStatus]}</p>
-        </div>
-
         <div className="pj-field">
           <canvas ref={canvas} className="pj-canvas" width={420} height={640}
             aria-label="Игровое поле: мяч прыгает по ракеткам и сеткам. Управляйте наклоном телефона, стрелками или кнопками под полем."
@@ -217,7 +197,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
                 <span className="pj-pill">{renderError ? 'НУЖЕН ДРУГОЙ БРАУЗЕР' : view.mode === 'paused' ? 'ПЕРЕРЫВ МЕЖДУ СЕТАМИ' : view.mode === 'over' ? 'ОТЛИЧНЫЙ РОЗЫГРЫШ' : 'ПаделхАБ JUMP'}</span>
                 <div className="pj-hero-ball" aria-hidden="true"><span /></div>
                 <h2>{renderError ? 'Поле не загрузилось' : view.mode === 'paused' ? 'Выдохни.\nИ снова вверх.' : view.mode === 'over' ? `${view.score} метров.\nЭто только начало.` : 'Выше.\nЕщё выше.'}</h2>
-                <p>{renderError ? 'Открой игру в актуальной версии Safari или Chrome.' : view.mode === 'paused' ? 'Продолжим с того же места.' : view.mode === 'over' ? 'Следующая попытка может стать рекордной.' : 'Прыгай по ракеткам. Лови сетки-пружины.\nНайди свой путь к рекорду.'}</p>
+                <p role={starting ? 'status' : undefined}>{starting ? (tiltStatus === 'requesting' ? 'Разрешите браузеру доступ к датчикам движения.' : 'Держите телефон удобно. Подключаем управление наклоном…') : renderError ? 'Открой игру в актуальной версии Safari или Chrome.' : view.mode === 'paused' ? 'Продолжим с того же места.' : view.mode === 'over' ? 'Следующая попытка может стать рекордной.' : 'Прыгай по ракеткам. Лови сетки-пружины.\nНайди свой путь к рекорду.'}</p>
                 {view.mode === 'over' && <div className="pj-result" role="status">Твой рекорд: <strong>{best} м</strong></div>}
                 {!renderError && <button ref={primaryButton} type="button" className="pj-play" disabled={starting} aria-busy={starting} onClick={() => starter.current?.play()}>{starting ? 'Подключаем…' : view.mode === 'paused' ? 'Продолжить' : view.mode === 'over' ? 'Ещё попытка' : 'Полетели'}<span aria-hidden="true">↗</span></button>}
                 <span className="pj-dialog-note">{view.mode === 'paused' ? 'P / Esc — пауза во время игры' : 'Прыжки — автоматически. Рекорды — твои.'}</span>
@@ -231,7 +211,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
             onPointerDown={event => pointer(event, -1)} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
             onKeyDown={event => { if (playing && ['Space', 'Enter'].includes(event.code)) { event.preventDefault(); inputs.current.set('button:left', -1); } }}
             onKeyUp={() => inputs.current.delete('button:left')} onBlur={() => inputs.current.delete('button:left')}>‹</button>
-          <div><strong>{tiltSelected ? 'Наклоняй телефон влево и вправо' : 'Веди мяч влево и вправо'}</strong><span>{tiltSelected ? 'Касание и стрелки тоже работают' : 'Касайся краёв поля или используй ← →'}</span></div>
+          <div><strong>{tiltSelected ? 'Наклоняй телефон влево и вправо' : 'Веди мяч влево и вправо'}</strong><span>{tiltSelected ? 'Пауза — калибровка. Касание тоже работает' : 'Касайся краёв поля или используй ← →'}</span></div>
           <button type="button" aria-label="Двигаться вправо" disabled={!playing}
             onPointerDown={event => pointer(event, 1)} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
             onKeyDown={event => { if (playing && ['Space', 'Enter'].includes(event.code)) { event.preventDefault(); inputs.current.set('button:right', 1); } }}

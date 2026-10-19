@@ -99,17 +99,6 @@
 }
 @media (prefers-reduced-motion: reduce) { .pj-play { transition: none; } }
 
-.pj-input-settings { padding: 0 16px 8px; flex-shrink: 0; }
-.pj-input-modes { display: flex; gap: 5px; align-items: center; }
-.pj-input-modes button { min-height: 32px; padding: 6px 9px; border-radius: 9px; font-size: 10px; font-weight: 650; background: #f0ebf5; color: #665c77; }
-.pj-input-modes button[aria-pressed="true"] { background: #e7d6fc; color: #6122b7; }
-.pj-input-modes button:disabled { opacity: .6; }
-.pj-input-modes .pj-recenter { margin-left: auto; background: transparent; }
-.pj-sensor-status { min-height: 24px; margin: 5px 0 0; font-size: 10px; line-height: 1.4; color: #6b617c; }
-@media (orientation: landscape) and (max-height: 520px) {
-  .pj-input-settings { padding-bottom: 3px; }
-  .pj-sensor-status { min-height: 0; font-size: 9px; margin-top: 2px; }
-}
 .pj-dialog { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 @media (max-height: 680px) {
   .pj-dialog .pj-hero-ball, .pj-dialog-note { display: none; }
