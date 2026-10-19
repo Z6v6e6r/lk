@@ -182,8 +182,11 @@ function eventCardFields(post: PublicRecord, source: PublicRecord | undefined, s
   const date = (ts: number) => new Date(ts + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const time = (ts: number) => new Date(ts).toLocaleTimeString("ru-RU", { timeZone: COMMUNITY_MONTHLY_TIME_ZONE, hour: "2-digit", minute: "2-digit" });
   const timeFrom = time(startsTs), timeTo = time(endsTs);
-  const direction = details.some(row => String(row.directionId || record(row.direction).id || "") === "5278");
-  const cardKind = direction || firstText(details, ["cardKind"]) === "friends" ? "friends" : kind === "TOURNAMENT" ? "tournament" : kind === "GAME" ? "game" : null;
+  const classification = (rows: PublicRecord[]) => ({ marker: firstText(rows, ["cardKind"]), direction: rows.map(row => String(row.directionId ?? record(row.direction).id ?? "").trim()).find(Boolean) || null });
+  const current = classification(sourceDetails);
+  const category = current.marker || current.direction ? current : classification(postDetails);
+  const friends = category.marker ? category.marker === "friends" : category.direction === "5278";
+  const cardKind = friends ? "friends" : kind === "TOURNAMENT" ? "tournament" : kind === "GAME" ? "game" : null;
   const hasGameRoster = kind === "GAME" || cardKind === "friends";
   const roster = hasGameRoster ? confirmedRoster(records) : { present: false, players: [] };
   const capacityKeys = ["spotsTotal", "maxPlayers", "maxParticipants", "maxClientsCount", "playersLimit", "limit"];

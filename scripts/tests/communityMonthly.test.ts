@@ -262,6 +262,12 @@ test("friends stored as a tournament still returns a safe game roster and capaci
   assert.equal(item.spotsTaken, 1); assert.equal(item.spotsTotal, 4);
   assert.deepEqual(item.players, [{ playerName: "Участник", avatarUrl: "https://media.example.test/p.webp" }]);
   assert.doesNotMatch(JSON.stringify(item), /79990000000|pending|Скрытый/);
+  const stalePublication = { ...post("ordinary"), details: { publicTournament: { startsAt: "2026-10-06T17:00:00+03:00", direction: { id: "5278" }, cardKind: "friends" } } };
+  for (const params of [{ direction: { id: "other" } }, { cardKind: "tournament" }]) {
+    const ordinary = publicPublishedEvent(stalePublication, now, "upcoming", { params, participants: [{ name: "Скрытый состав" }] })!;
+    assert.equal(ordinary.cardKind, "tournament"); assert.deepEqual(ordinary.players, []);
+    assert.equal(ordinary.spotsTotal, null);
+  }
 });
 
 test("events HTTP response includes fresh community header and keeps existing pagination", () => {
