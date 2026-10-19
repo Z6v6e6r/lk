@@ -3,6 +3,7 @@ import type { KeyboardEvent, PointerEvent } from 'react';
 import { createGame, FIXED_STEP, readBest, saveBest, stepGame } from './engine';
 import type { Game, GameMode } from './engine';
 import { drawGame } from './render';
+import { createJumpStarter } from './start';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import type { TiltStatus } from './tilt';
 import logoHab from '../../assets/logo-hab-compact.svg';
@@ -26,6 +27,8 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const [renderError, setRenderError] = useState(false);
   const [tilt] = useState(() => createTiltController(browserTiltEnvironment()));
   const [tiltStatus, setTiltStatus] = useState<TiltStatus>('off');
+  const [starting, setStarting] = useState(false);
+  const starter = useRef<ReturnType<typeof createJumpStarter> | null>(null);
 
   const pause = useCallback(() => {
     inputs.current.clear();
@@ -36,28 +39,36 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     tilt.recalibrate();
   }, [tilt]);
 
-  const play = () => {
-    if (game.current.mode !== 'paused') game.current = createGame();
-    tilt.recalibrate();
-    game.current.mode = 'running';
-    inputs.current.clear();
-    setView(snapshot(game.current));
-    region.current?.focus({ preventScroll: true });
-  };
-
   const menu = () => {
+    starter.current?.cancel();
     inputs.current.clear();
     game.current = createGame();
     setView(snapshot(game.current));
   };
 
   useEffect(() => {
+    const coordinator = createJumpStarter({
+      autoTilt: () => navigator.maxTouchPoints > 0,
+      enableTilt: () => { void tilt.enable(); },
+      recalibrate: () => tilt.recalibrate(),
+      canBegin: () => !document.hidden && document.hasFocus(),
+      pending: setStarting,
+      begin: () => {
+        if (game.current.mode !== 'paused') game.current = createGame();
+        game.current.mode = 'running';
+        inputs.current.clear();
+        setView(snapshot(game.current));
+        region.current?.focus({ preventScroll: true });
+      },
+    });
+    starter.current = coordinator;
     const unsubscribe = tilt.subscribe(status => {
       setTiltStatus(status);
       if (status === 'calibrating' || status === 'unavailable') pause();
+      coordinator.status(status);
     });
-    return () => { unsubscribe(); tilt.dispose(); };
-  }, [pause, tilt]);
+    return () => { coordinator.cancel(); starter.current = null; unsubscribe(); tilt.dispose(); };
+  }, [pause, starter, tilt]);
 
   useEffect(() => {
     const activeInputs = inputs.current;
@@ -103,19 +114,20 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    const hidden = () => { if (document.hidden) pause(); };
+    const suspend = () => { starter.current?.cancel(); pause(); };
+    const hidden = () => { if (document.hidden) suspend(); };
     document.addEventListener('visibilitychange', hidden);
     window.addEventListener('blur', pause);
-    window.addEventListener('pagehide', pause);
+    window.addEventListener('pagehide', suspend);
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
       document.removeEventListener('visibilitychange', hidden);
       window.removeEventListener('blur', pause);
-      window.removeEventListener('pagehide', pause);
+      window.removeEventListener('pagehide', suspend);
       activeInputs.clear();
     };
-  }, [pause, tilt]);
+  }, [pause, starter, tilt]);
 
   useEffect(() => {
     if (view.mode !== 'running' && region.current?.contains(document.activeElement)) {
@@ -172,7 +184,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
 
       <div className="pj-device" id="padel-jump">
         <header className="pj-topbar">
-          <button type="button" className="pj-icon-button" onClick={onBack ?? menu} aria-label={onBack ? 'Вернуться в личный кабинет' : 'На стартовый экран'}>‹</button>
+          <button type="button" className="pj-icon-button" onClick={() => { starter.current?.cancel(); (onBack ?? menu)(); }} aria-label={onBack ? 'Вернуться в личный кабинет' : 'На стартовый экран'}>‹</button>
           <div className="pj-logo"><img src={logoHab} alt="ПадлхАБ" /><small>Jump</small></div>
           <button type="button" className="pj-icon-button pj-pause" onClick={pause} aria-label="Пауза" disabled={!playing}>Ⅱ</button>
         </header>
@@ -184,7 +196,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
 
         <div className="pj-input-settings">
           <div className="pj-input-modes" role="group" aria-label="Способ управления">
-            <button type="button" aria-pressed={!tiltSelected} onClick={() => tilt.disable()}>Касание</button>
+            <button type="button" aria-pressed={!tiltSelected} onClick={() => { starter.current?.touch(); tilt.disable(); }}>Касание</button>
             <button type="button" aria-pressed={tiltSelected} disabled={tiltStatus === 'requesting'}
               onClick={() => { pause(); void tilt.enable(); }}>{tiltStatus === 'requesting' ? 'Подключаем…' : 'Наклон телефона'}</button>
             {tiltSelected && <button type="button" className="pj-recenter" disabled={tiltStatus !== 'active'}
@@ -207,7 +219,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
                 <h2>{renderError ? 'Поле не загрузилось' : view.mode === 'paused' ? 'Выдохни.\nИ снова вверх.' : view.mode === 'over' ? `${view.score} метров.\nЭто только начало.` : 'Выше.\nЕщё выше.'}</h2>
                 <p>{renderError ? 'Открой игру в актуальной версии Safari или Chrome.' : view.mode === 'paused' ? 'Продолжим с того же места.' : view.mode === 'over' ? 'Следующая попытка может стать рекордной.' : 'Прыгай по ракеткам. Лови сетки-пружины.\nНайди свой путь к рекорду.'}</p>
                 {view.mode === 'over' && <div className="pj-result" role="status">Твой рекорд: <strong>{best} м</strong></div>}
-                {!renderError && <button ref={primaryButton} type="button" className="pj-play" onClick={play}>{view.mode === 'paused' ? 'Продолжить' : view.mode === 'over' ? 'Ещё попытка' : 'Полетели'}<span aria-hidden="true">↗</span></button>}
+                {!renderError && <button ref={primaryButton} type="button" className="pj-play" disabled={starting} aria-busy={starting} onClick={() => starter.current?.play()}>{starting ? 'Подключаем…' : view.mode === 'paused' ? 'Продолжить' : view.mode === 'over' ? 'Ещё попытка' : 'Полетели'}<span aria-hidden="true">↗</span></button>}
                 <span className="pj-dialog-note">{view.mode === 'paused' ? 'P / Esc — пауза во время игры' : 'Прыжки — автоматически. Рекорды — твои.'}</span>
               </div>
             </div>

@@ -81,7 +81,9 @@ function scenery(ctx: CanvasRenderingContext2D, game: Game) {
     }
     ctx.save(); ctx.translate(4, 330); ctx.rotate(-0.04);
     rounded(ctx, 0, 0, 19, 116, 3, '#8b52f0');
-    ctx.fillStyle = '#e4d5ff'; ctx.font = 'bold 12px Arial'; ctx.translate(14, 99); ctx.rotate(-Math.PI / 2); ctx.fillText('PADLHUB', 0, 0);
+    ctx.fillStyle = '#e4d5ff'; ctx.font = 'bold 12px Arial'; ctx.translate(right ? 5 : 14, 99); ctx.rotate(-Math.PI / 2);
+    if (right) ctx.scale(1, -1); // Undo the court reflection in the text's rotated coordinates.
+    ctx.fillText('ПадлхАБ', 0, 0);
     ctx.restore(); ctx.restore();
   }
 }
