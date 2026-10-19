@@ -184,10 +184,11 @@ function eventCardFields(post: PublicRecord, source: PublicRecord | undefined, s
   const timeFrom = time(startsTs), timeTo = time(endsTs);
   const direction = details.some(row => String(row.directionId || record(row.direction).id || "") === "5278");
   const cardKind = direction || firstText(details, ["cardKind"]) === "friends" ? "friends" : kind === "TOURNAMENT" ? "tournament" : kind === "GAME" ? "game" : null;
-  const roster = kind === "GAME" ? confirmedRoster(records) : { present: false, players: [] };
+  const hasGameRoster = kind === "GAME" || cardKind === "friends";
+  const roster = hasGameRoster ? confirmedRoster(records) : { present: false, players: [] };
   const capacityKeys = ["spotsTotal", "maxPlayers", "maxParticipants", "maxClientsCount", "playersLimit", "limit"];
-  const formatCapacity = (rows: PublicRecord[]) => kind === "GAME" && firstText(rows, ["gameFormat"]) ? (firstText(rows, ["gameFormat"])?.toLowerCase() === "singles" ? 2 : 4) : null;
-  const spotsTotal = nonnegativeCount(sourceDetails, capacityKeys) ?? formatCapacity(sourceDetails) ?? nonnegativeCount(postDetails, capacityKeys) ?? formatCapacity(postDetails) ?? (kind === "GAME" ? 4 : null);
+  const formatCapacity = (rows: PublicRecord[]) => hasGameRoster && firstText(rows, ["gameFormat"]) ? (firstText(rows, ["gameFormat"])?.toLowerCase() === "singles" ? 2 : 4) : null;
+  const spotsTotal = nonnegativeCount(sourceDetails, capacityKeys) ?? formatCapacity(sourceDetails) ?? nonnegativeCount(postDetails, capacityKeys) ?? formatCapacity(postDetails) ?? (hasGameRoster ? 4 : null);
   const spotsTaken = roster.present ? roster.players.length : nonnegativeCount(details, ["spotsTaken", "participantsCount", "joinedCount", "clientsCount"]);
   const stationName = locationValue(sourceRecords, ["stationName", "studioName", "locationName"], ["name"]) || locationValue(postRecords, ["stationName", "studioName", "locationName"], ["name"]);
   const stationId = locationValue(sourceRecords, ["stationId", "studioId"], ["id"]) || locationValue(postRecords, ["stationId", "studioId"], ["id"]);

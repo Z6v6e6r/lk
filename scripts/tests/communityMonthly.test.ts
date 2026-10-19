@@ -256,6 +256,14 @@ test("friends classification, overnight Moscow time and roster redaction are ind
   assert.deepEqual(item.players, [{ playerName: "Игрок", avatarUrl: null }, { playerName: "Игрок", avatarUrl: null }]);
 });
 
+test("friends stored as a tournament still returns a safe game roster and capacity", () => {
+  const item = publicPublishedEvent(post("friends"), now, "upcoming", { params: { direction: { id: "5278" } }, participants: [{ id: "p", name: "Участник", photo: "https://media.example.test/p.webp", phone: syntheticPhone }, { id: "pending", name: "Скрытый", status: "PENDING" }] })!;
+  assert.equal(item.kind, "TOURNAMENT"); assert.equal(item.cardKind, "friends");
+  assert.equal(item.spotsTaken, 1); assert.equal(item.spotsTotal, 4);
+  assert.deepEqual(item.players, [{ playerName: "Участник", avatarUrl: "https://media.example.test/p.webp" }]);
+  assert.doesNotMatch(JSON.stringify(item), /79990000000|pending|Скрытый/);
+});
+
 test("events HTTP response includes fresh community header and keeps existing pagination", () => {
   const built = buildCommunityMonthlyFlow(flow());
   const run = (name: string, msg: unknown) => new Function("msg", built.nodes.find(node => node.name === name)!.func)(msg);
