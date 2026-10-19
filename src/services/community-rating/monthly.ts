@@ -2,7 +2,7 @@ import { buildCommunityRatingSnapshot } from "./aggregates.ts";
 import { COMMUNITY_RATING_CALCULATION_VERSION } from "./contract.ts";
 import { extractCommunityRatingFacts, extractCommunityRatingMemberSeeds } from "./facts.ts";
 import type { CommunityRatingSourceData } from "./recalculation.ts";
-import { COMMUNITY_MONTHLY_SCHEMA, COMMUNITY_MONTHLY_COLUMNS, communityMonthWindow, monthlyReportId, publishedEventStartTs, publicRankingRow } from "./monthlyContract.ts";
+import { COMMUNITY_MONTHLY_SCHEMA, COMMUNITY_MONTHLY_COLUMNS, communityMonthWindow, monthlyReportId, publishedEventStartTs, publicCommunityHeader, publicRankingRow } from "./monthlyContract.ts";
 
 export function buildCommunityMonthlyReport(source: CommunityRatingSourceData, nowTs = Date.now()) {
   const communityId = String(source.community.id || "").trim();
@@ -23,7 +23,7 @@ export function buildCommunityMonthlyReport(source: CommunityRatingSourceData, n
   const snapshot = buildCommunityRatingSnapshot({ communityId, facts, members, period: "all", tab: "overall", nowTs, updatedAt });
   return {
     _id: monthlyReportId(communityId, window.month), schemaVersion: COMMUNITY_MONTHLY_SCHEMA,
-    communityId, communityName: String(source.community.name || "Сообщество"), period: "calendar_month", month: window.month,
+    communityId, ...publicCommunityHeader(source.community), period: "calendar_month", month: window.month,
     timeZone: window.timeZone, from: window.from, until: window.until, updatedAt, dataThrough: snapshot.dataThrough,
     calculationVersion: COMMUNITY_RATING_CALCULATION_VERSION, columns: COMMUNITY_MONTHLY_COLUMNS,
     totalMembers: snapshot.rows.length, activeMembers: snapshot.rows.filter(row => row.totalEventsPlayed > 0).length,

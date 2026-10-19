@@ -6,5 +6,5 @@ if (!['upcoming', 'all'].includes(scope)) return [null, json(400, 'INVALID_EVENT
 const cursor = CommunityMonthly.text(msg.req?.query?.cursor);
 if (cursor.length > 1024) return [null, json(400, 'INVALID_EVENT_CURSOR')];
 msg._communityMonthly = { communityId, scope, cursor, nowTs: Date.now() };
-msg.payload = [{ id: communityId, archived: { $ne: true } }, { limit: 2, projection: { id: 1, name: 1, visibility: 1 } }];
+msg.payload = [{ id: communityId, archived: { $ne: true } }, { limit: 2, projection: { _id: 0, id: 1, name: 1, visibility: 1, logo: 1, logoUrl: 1, imageUrl: 1, logoThumbUrl: 1, logoThumb: 1, thumbnailUrl: 1, logoLegacyDataUrl: 1 } }];
 return [msg, null];

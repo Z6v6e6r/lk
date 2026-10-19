@@ -12,5 +12,5 @@ for (const post of ctx.posts) {
 }
 items.sort((a, b) => a.startsAt.localeCompare(b.startsAt) || a.eventId.localeCompare(b.eventId));
 msg.statusCode = 200; msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
-msg.payload = { communityId: ctx.communityId, scope: ctx.scope, timeZone: 'Europe/Moscow', updatedAt: new Date(ctx.nowTs).toISOString(), items, hasMore: ctx.hasMore, nextCursor: ctx.nextCursor, scannedPublications: ctx.posts.length };
+msg.payload = { communityId: ctx.communityId, communityName: ctx.communityName, communityLogoUrl: ctx.communityLogoUrl, scope: ctx.scope, timeZone: 'Europe/Moscow', updatedAt: new Date(ctx.nowTs).toISOString(), items, hasMore: ctx.hasMore, nextCursor: ctx.nextCursor, scannedPublications: ctx.posts.length };
 return msg;

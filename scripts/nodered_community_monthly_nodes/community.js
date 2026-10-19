@@ -5,7 +5,7 @@ if (Array.isArray(msg.payload) && msg.payload.length > 1) return [null, error(40
 if (!community) return [null, error(404, 'COMMUNITY_NOT_FOUND')];
 // Public endpoints never authorize a private community using caller-supplied identity.
 if (CommunityMonthly.text(community.visibility).toUpperCase() !== 'OPEN') return [null, error(403, 'COMMUNITY_NOT_PUBLIC')];
-ctx.communityName = CommunityMonthly.text(community.name);
+Object.assign(ctx, CommunityMonthly.publicCommunityHeader(community));
 if (ctx.route === 'monthly') {
   const window = CommunityMonthly.communityMonthWindow(ctx.nowTs);
   ctx.month = window.month;

@@ -265,18 +265,32 @@ entire community before the first 20 rows are selected. Members with no points
 remain eligible for rows. `totalMembers`, `activeMembers` and `tournamentsCount`
 refer to the complete monthly population.
 
-Response fields: `communityId`, `communityName`, `month` (`YYYY-MM`),
+Response fields: `communityId`, `communityName`, `communityLogoUrl`, `month` (`YYYY-MM`),
 `period=calendar_month`, `timeZone`, `from`, `until`, `updatedAt`, `dataThrough`,
 `stale`, `calculationVersion`, `columns`, `totalMembers`, `activeMembers`,
 `tournamentsCount`, `limit=20`, `items`.
 
-Each item matches the report columns: `rank`, `initials`, `playerName`,
+Each item matches the report columns: `rank`, `initials`, `playerName`, `avatarUrl`,
 `overallScore`, `scoreDisplay` (decimal comma), `currentLevel`, `levelDirection`
 (`up|down|flat`), `lastRatingDelta`, `tournamentsPlayed`,
 `tournamentMatchesWon`, `tournamentPointsScored`, `tournamentPointsDiff`.
 The arrow uses the existing last personal rating delta, rather than position
 movement. Phone numbers and internal player identities are excluded, including
 phone-only name fallbacks. Numeric scores are rounded to at most two decimals.
+
+The HTTP response sorts by numeric `rank` before selecting up to 20 rows. A
+community with at least 10 members therefore supplies at least 10 rows, including
+members with zero points. Smaller/empty communities return their actual members;
+clients must not invent players to pad the table. Old prepared v1 reports remain
+readable with `avatarUrl=null`; avatars become available after the next authorized
+monthly worker run with this source. No rating formula or write schedule changes.
+
+Header fields come from the current community document on each request, so changing
+the name/logo does not wait for the monthly worker. Both new endpoints include
+`communityName` and nullable `communityLogoUrl`; use the same logo for the screen
+header and event card scale. Relative `/lk/...` media paths resolve against
+`https://padlhub.su`, as in the existing community media API. Legacy embedded logos
+use `/lk/media/community-logo-legacy/:communityId` instead of returning base64 data.
 
 Reports are atomically replaced in `community_monthly_reports` using the
 unique `_id` derived from community ID and month. They do not enter the legacy
@@ -295,6 +309,62 @@ Viva capacity or reserve a place. Each item includes `postId`, `eventId`, `kind`
 `title`, `startsAt`, `endsAt`, `timeZone`, `status`, `signupUrl`, `canRegister`,
 `availabilitySource=published_community_data`.
 
+The response also includes `communityName` and `communityLogoUrl` at the top level.
+Card additions are backward compatible; the original uppercase `kind` stays intact:
+
+| Field | Screen use / contract |
+| --- | --- |
+| `cardKind` | `game`, `tournament`, or `friends`; `friends` requires the explicit marker or the existing “Время для друзей” direction ID `5278`. Other training/generic events have `null`; screens showing only these three card types can filter them out. |
+| `title` | Current source title (`metadata.gameTitle` for games), then published title; a friends event without a title uses its Moscow time range. |
+| `startsAt`, `endsAt`, `timeZone` | ISO instants and `Europe/Moscow`; current stored source schedule takes precedence over a saved publication snapshot. Existing one-hour / three-hour fallback durations remain when no end is stored. |
+| `date`, `endsDate`, `dateLabel` | Moscow `YYYY-MM-DD` start/end dates and Russian start badge, e.g. `6 октября`. Different dates identify an overnight event. |
+| `timeFrom`, `timeTo`, `timeDisplay` | Moscow `HH:mm` and ready label, e.g. `20:00–22:00`, independent of the consumer/server timezone. |
+| `photo` | Safe public image URL from source or publication; `null` when absent. The screen may select from its prepared placeholder images when null or on image load failure. The API does not invent a photo or request an external image service. |
+| `stationId`, `stationName`, `address` | Stored station/studio identity, name and street address. Missing values are `null`; a court/room name is never substituted for a street address. Many old game bookings contain no address. |
+| `levelFrom`, `levelTo` | Numeric level or label (`D+`, `C+`, etc.), nullable. Games use `settings.minRating/maxRating`; tournaments use explicit bounds or sorted `accessLevels`. Zero is a valid lower bound. |
+| `spotsTaken`, `spotsTotal` | Nullable nonnegative integers from current stored source, with publication fallback. Game occupancy counts the deduplicated confirmed roster, excluding waitlist/pending/cancelled players. Capacity uses `invite.maxPlayers`, then singles=2 / doubles=4. A present empty roster means zero. Tournament counts use the stored counters; unknown counts remain null. |
+| `players` | Up to four confirmed game players in roster order, each **only** `{playerName, avatarUrl}`. Occupancy counts the whole roster, even when more than four players exist. Other event types return `[]`. Missing avatars are null, identity/phone-only names become `Игрок`; IDs, phones, booking/payment fields and waitlist are never returned. |
+
+Media URLs accept HTTP(S) only, reject embedded credentials, executable schemes
+and credential query parameters. Names and titles are text: consumers must render
+them using `textContent`/escaped text, not HTML. Game `settings.isPrivate` is checked
+before exposing any event/card/roster. Data remains a stored snapshot of availability;
+`canRegister` is the existing publication registration hint, not a live capacity guarantee.
+
+For example, the additional fields on an upcoming game item can be:
+
+```json
+{
+  "kind": "GAME",
+  "cardKind": "game",
+  "title": "Вечерняя игра",
+  "startsAt": "2026-10-20T17:00:00.000Z",
+  "endsAt": "2026-10-20T19:00:00.000Z",
+  "timeZone": "Europe/Moscow",
+  "date": "2026-10-20",
+  "endsDate": "2026-10-20",
+  "dateLabel": "20 октября",
+  "timeFrom": "20:00",
+  "timeTo": "22:00",
+  "timeDisplay": "20:00–22:00",
+  "photo": null,
+  "stationId": "example-station",
+  "stationName": "Станция",
+  "address": null,
+  "levelFrom": "D+",
+  "levelTo": "C+",
+  "spotsTaken": 1,
+  "spotsTotal": 4,
+  "players": [{ "playerName": "Участник", "avatarUrl": null }]
+}
+```
+
+For both screen ranking tables bind `items[].rank`, `playerName`, `avatarUrl`,
+`tournamentsPlayed` (“Турниры”), `tournamentMatchesWon` (“Победы”), `scoreDisplay`
+(“Очки”, or format numeric `overallScore`), `levelDirection` and `lastRatingDelta`.
+The logo for each card comes from the top-level `communityLogoUrl`, avoiding
+duplicate values and extra `GET /communities/:id` requests.
+
 Registration links use the published stable event ID and the existing routes:
 `https://padlhub.ru/tournaments?tournamentId=...`,
 `https://padlhub.ru/game_join?gameId=...`,
@@ -308,6 +378,15 @@ Pages scan up to 200 publications sorted by publication `id`. Follow
 Items are sorted by start time within each page and deduplicated by kind/event ID
 within that page; consumers merging pages should use the same key. Conflicting
 source aliases are excluded rather than guessing a registration target.
+
+Touched Node-RED source functions: `prepare`, `community`, `monthly_response`,
+`events_response`; `events_query` / `tournaments_query` consume the extended
+`publicEventSourceProjection` allowlist from `monthlyContract.ts`. The focused
+builder `patch_nodered_community_monthly_flow.mjs` bundles these sources and checks
+compilation, IDs, wires and idempotency in the regression fixtures. No tracked
+flow JSON/import is regenerated here. A real release still requires a fresh live
+preimage and separately authorized import/worker activation; the older modular
+validator checks unchanged-tab extraction and cannot validate additive routes.
 
 ### Recalculation and completion
 

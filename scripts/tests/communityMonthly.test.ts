@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { communityMonthWindow, eventInstant, publicPublishedEvent, publicRankingRow } from "../../src/services/community-rating/monthlyContract.ts";
+import vm from "node:vm";
+import { communityMonthWindow, eventInstant, publicCommunityHeader, publicMediaUrl, publicPublishedEvent, publicRankingRow } from "../../src/services/community-rating/monthlyContract.ts";
 import { buildCommunityMonthlyReport } from "../../src/services/community-rating/monthly.ts";
 import type { CommunityRatingSourceData } from "../../src/services/community-rating/recalculation.ts";
 import { buildCommunityMonthlyFlow } from "../patch_nodered_community_monthly_flow.mjs";
@@ -104,15 +105,28 @@ test("game booking schedule selects calendar month and gives correct signup time
 });
 
 function projectedSource(source: Record<string, unknown>, projection: Record<string, number>) {
+  const projectPath = (value: unknown, path: string[]): unknown => {
+    if (!path.length) return value;
+    if (Array.isArray(value)) return value.map(item => projectPath(item, path));
+    if (!value || typeof value !== "object") return undefined;
+    const nested = projectPath((value as Record<string, unknown>)[path[0]], path.slice(1));
+    return nested === undefined ? undefined : { [path[0]]: nested };
+  };
+  const merge = (target: Record<string, unknown>, patch: Record<string, unknown>) => {
+    for (const [key, value] of Object.entries(patch)) {
+      if (Array.isArray(value)) {
+        const current = Array.isArray(target[key]) ? target[key] as Record<string, unknown>[] : [];
+        target[key] = value.map((item, index) => item === undefined ? current[index] || {} : item && typeof item === "object" ? merge(current[index] || {}, item as Record<string, unknown>) : item);
+      } else if (value && typeof value === "object") target[key] = merge((target[key] || {}) as Record<string, unknown>, value as Record<string, unknown>);
+      else target[key] = value;
+    }
+    return target;
+  };
   const projected: Record<string, unknown> = {};
   for (const [field, included] of Object.entries(projection)) {
     if (!included) continue;
-    const path = field.split("."); let cursor: unknown = source;
-    for (const key of path) cursor = cursor && typeof cursor === "object" ? (cursor as Record<string, unknown>)[key] : undefined;
-    if (cursor === undefined) continue;
-    let target = projected;
-    for (const key of path.slice(0, -1)) target = target[key] as Record<string, unknown> || (target[key] = {}) as Record<string, unknown>;
-    target[path[path.length - 1]] = cursor;
+    const patch = projectPath(source, field.split("."));
+    if (patch) merge(projected, patch as Record<string, unknown>);
   }
   return projected;
 }
@@ -130,6 +144,134 @@ test("source Mongo projections retain every privacy/registration check before pu
       assert.equal(publicPublishedEvent(publication, now, "upcoming", projectedSource(forbidden, projection))?.canRegister, false);
     }
   }
+});
+
+test("monthly worker and HTTP mapper retain avatars, live header and sorted top20", () => {
+  const input = source(Array.from({ length: 26 }, (_, i) => ({ id: "p" + i, name: "Участник " + i, avatar: "https://media.example.test/avatar.webp" })));
+  input.community.logoUrl = "/lk/media/community-logo/example";
+  const report = buildCommunityMonthlyReport(input, now);
+  assert.equal(report.communityLogoUrl, "https://padlhub.su/lk/media/community-logo/example");
+  assert.ok(report.items.every(row => row.avatarUrl === "https://media.example.test/avatar.webp"));
+  const built = buildCommunityMonthlyFlow(flow());
+  const run = (name: string, msg: unknown) => new Function("msg", built.nodes.find(node => node.name === name)!.func)(msg);
+  const prepared = run("Prepare monthly", { req: { params: { communityId: "c" } } })[0];
+  prepared._communityMonthly.nowTs = now;
+  const freshCommunity = { id: "c", visibility: "OPEN", name: "Новое имя", logoUrl: "/lk/media/community-logo/new", members: [{ phone: syntheticPhone }] };
+  prepared.payload = [projectedSource(freshCommunity, prepared.payload[1].projection)];
+  const verified = run("Verify public community", prepared)[0];
+  verified.payload = [{ ...report, items: report.items.toReversed() }];
+  const result = run("Monthly top20 response", verified);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.payload.communityName, "Новое имя");
+  assert.equal(result.payload.communityLogoUrl, "https://padlhub.su/lk/media/community-logo/new");
+  assert.deepEqual(result.payload.items.map((row: { rank: number }) => row.rank), Array.from({ length: 20 }, (_, i) => i + 1));
+  assert.doesNotMatch(JSON.stringify(result.payload), /playerKey|playerId|playerPhone|79990000000/);
+  assert.equal(buildCommunityMonthlyReport(source([]), now).items.length, 0);
+});
+
+test("public media and names reject executable URLs, credentials and identity fallbacks", () => {
+  for (const url of ["javascript:alert(1)", "data:image/svg+xml,unsafe", "file:///tmp/private", "https://user:password" + "@" + "media.example.test/p.webp", "https://media.example.test/p.webp?access_token=private", "//evil.example.test/p.webp", "/\\evil.example.test/p.webp"]) assert.equal(publicMediaUrl(url), null);
+  assert.equal(publicMediaUrl("https://media.example.test/p.webp?width=128"), "https://media.example.test/p.webp?width=128");
+  assert.equal(publicRankingRow({ playerName: syntheticPhone, avatarUrl: "javascript:alert(1)" }).playerName, "Игрок");
+  assert.equal(publicRankingRow({ playerName: "internal", playerId: "internal" }).playerName, "Игрок");
+  assert.equal(publicCommunityHeader({ id: "c", logo: "data:image/png;base64,legacy" }).communityLogoUrl, "https://padlhub.su/lk/media/community-logo-legacy/c");
+  assert.equal(publicCommunityHeader({ name: "Клуб" }).communityLogoUrl, null);
+});
+
+test("bundled Node-RED functions retain media inside a VM without Node URL globals", () => {
+  const built = buildCommunityMonthlyFlow(flow());
+  const fn = built.nodes.find(node => node.name === "Verify public community")!;
+  const result = vm.runInNewContext("(function(msg) {" + fn.func + "})(msg)", {
+    msg: { payload: [{ id: "c", name: "Клуб", visibility: "OPEN", logoUrl: "/lk/media/community-logo/c" }], _communityMonthly: { communityId: "c", route: "events", nowTs: now } },
+  });
+  assert.equal(result[1]._communityMonthly.communityLogoUrl, "https://padlhub.su/lk/media/community-logo/c");
+  const response = built.nodes.find(node => node.name === "Monthly top20 response")!;
+  const doc = buildCommunityMonthlyReport(source([{ id: "p", name: "Участник", avatar: "https://media.example.test/p.webp" }]), now);
+  const monthly = vm.runInNewContext("(function(msg) {" + response.func + "})(msg)", { msg: { payload: [doc], _communityMonthly: { communityId: "c", month: "2026-10", nowTs: now } } });
+  assert.equal(monthly.payload.items[0].avatarUrl, "https://media.example.test/p.webp");
+});
+
+test("projected canonical game supplies card data and only four safe confirmed player previews", () => {
+  const built = buildCommunityMonthlyFlow(flow());
+  const query = built.nodes.find(node => node.name === "Resolve published game sources")!;
+  const publication = { ...post("g"), kind: "GAME", relatedGameId: "g", title: "Старое имя", details: { publicGame: { spotsTaken: 4, levelFrom: 1, startsAt: "2026-10-06T11:00:00Z" } } };
+  const raw = {
+    id: "g", metadata: { gameTitle: "Вечерняя игра", gameFormat: "doubles", privateNote: "private" },
+    booking: { date: "2026-10-06", timeFrom: "20:00", timeTo: "22:00", studioId: "station", studioName: "Станция", studioAddress: "Адрес станции", paymentRef: "private" },
+    settings: { minRating: "D+", maxRating: "C+", isPrivate: false }, invite: { maxPlayers: 8, inviteCode: "private" },
+    participants: [
+      { id: "p0", name: "Участник 0", photo: "https://media.example.test/p.webp", phone: syntheticPhone },
+      { id: "p0", name: "Дубликат" },
+      ...Array.from({ length: 4 }, (_, i) => ({ id: "p" + (i + 1), name: "Участник " + (i + 1) })),
+      { id: "phone-player", name: syntheticPhone },
+      ...["WAITLIST", "PENDING", "CANCELLED"].map(status => ({ id: status, name: "Скрытый", status })),
+    ],
+    photo: "https://media.example.test/game.webp", payment: { url: "private" },
+  };
+  const msg = new Function("msg", query.func)({ payload: [publication], _communityMonthly: {} });
+  const canonical = projectedSource(raw, msg.payload[1].projection);
+  assert.doesNotMatch(JSON.stringify(canonical), /privateNote|paymentRef|inviteCode|private/);
+  const item = publicPublishedEvent(publication, now, "upcoming", canonical)!;
+  assert.equal(item.kind, "GAME"); assert.equal(item.cardKind, "game");
+  assert.equal(item.title, "Вечерняя игра"); assert.equal(item.photo, raw.photo);
+  assert.equal(item.startsAt, "2026-10-06T17:00:00.000Z"); assert.equal(item.endsAt, "2026-10-06T19:00:00.000Z");
+  assert.equal(item.date, "2026-10-06"); assert.equal(item.dateLabel, "6 октября"); assert.equal(item.timeDisplay, "20:00–22:00");
+  assert.equal(item.stationId, "station"); assert.equal(item.stationName, "Станция"); assert.equal(item.address, "Адрес станции");
+  assert.equal(item.levelFrom, "D+"); assert.equal(item.levelTo, "C+");
+  assert.equal(item.spotsTaken, 6); assert.equal(item.spotsTotal, 8); assert.equal(item.players.length, 4);
+  assert.deepEqual(item.players[0], { playerName: "Участник 0", avatarUrl: "https://media.example.test/p.webp" });
+  assert.doesNotMatch(JSON.stringify(item), /phone-player|79990000000|Дубликат|Скрытый|payment|memberKey|clientId/);
+  const hidden = projectedSource({ ...raw, settings: { isPrivate: true } }, msg.payload[1].projection);
+  assert.equal(publicPublishedEvent(publication, now, "upcoming", hidden), null);
+  assert.equal(publicPublishedEvent({ ...publication, details: { game: { settings: { isPrivate: true } } } }, now), null);
+  const empty = publicPublishedEvent(publication, now, "upcoming", { ...canonical, participants: [], organizer: { name: "Наблюдатель" } })!;
+  assert.equal(empty.spotsTaken, 0); assert.deepEqual(empty.players, []);
+});
+
+test("tournament fields use current source counters and ranges; absent card data remains null", () => {
+  const built = buildCommunityMonthlyFlow(flow());
+  const query = built.nodes.find(node => node.name === "Resolve published tournament sources")!;
+  const raw = { tournamentId: "t", params: { name: "Кубок", participantsCount: 0, maxParticipants: 16, accessLevels: ["4.0", "3.0", "3.5"], direction: { id: "5278" }, studio: { id: "station", name: "Станция", address: "Адрес" }, skin: { imageUrl: "https://media.example.test/cup.webp" } } };
+  const msg = new Function("msg", query.func)({ payload: [], _communityMonthly: { posts: [post("t")] } });
+  const publication = { ...post("t"), details: { publicTournament: { startsAt: "2026-10-06T17:00:00+03:00", stationId: "old", stationName: "Старое место", participantsCount: 9, levelFrom: 1, levelTo: 2, accessLevels: ["1.0", "5.0"] } } };
+  const item = publicPublishedEvent(publication, now, "upcoming", projectedSource(raw, msg.payload[1].projection))!;
+  assert.equal(item.kind, "TOURNAMENT"); assert.equal(item.cardKind, "friends"); assert.equal(item.title, "Кубок");
+  assert.equal(item.spotsTaken, 0); assert.equal(item.spotsTotal, 16);
+  assert.equal(item.levelFrom, 3); assert.equal(item.levelTo, 4);
+  assert.equal(item.stationId, "station"); assert.equal(item.stationName, "Станция"); assert.equal(item.address, "Адрес");
+  assert.equal(item.photo, "https://media.example.test/cup.webp"); assert.deepEqual(item.players, []);
+  const unrestricted = publicPublishedEvent(publication, now, "upcoming", { params: { accessLevels: [] } })!;
+  assert.equal(unrestricted.levelFrom, null); assert.equal(unrestricted.levelTo, null);
+  const unknown = publicPublishedEvent(post("unknown"), now)!;
+  for (const key of ["photo", "address", "stationName", "levelFrom", "levelTo", "spotsTaken", "spotsTotal"] as const) assert.equal(unknown[key], null);
+});
+
+test("friends classification, overnight Moscow time and roster redaction are independent of host timezone", () => {
+  const publication = { ...post("g"), kind: "GAME", relatedGameId: "g", title: "", details: { spotsTotal: 4 } };
+  const item = publicPublishedEvent(publication, now, "upcoming", { booking: { date: "2026-10-06", timeFrom: "23:30", timeTo: "01:30", directionId: 5278 }, participants: [{ id: "internal", name: "internal", photo: "javascript:alert(1)" }, { name: syntheticPhone }], settings: { minRating: 0, maxRating: "3,5" }, metadata: { gameFormat: "singles" } })!;
+  assert.equal(item.kind, "GAME"); assert.equal(item.cardKind, "friends"); assert.equal(item.title, "23:30–01:30");
+  assert.equal(item.date, "2026-10-06"); assert.equal(item.endsDate, "2026-10-07");
+  assert.equal(item.endsAt, "2026-10-06T22:30:00.000Z"); assert.equal(item.timeDisplay, "23:30–01:30");
+  assert.equal(item.spotsTaken, 2); assert.equal(item.spotsTotal, 2); assert.equal(item.levelFrom, 0); assert.equal(item.levelTo, 3.5);
+  assert.deepEqual(item.players, [{ playerName: "Игрок", avatarUrl: null }, { playerName: "Игрок", avatarUrl: null }]);
+});
+
+test("events HTTP response includes fresh community header and keeps existing pagination", () => {
+  const built = buildCommunityMonthlyFlow(flow());
+  const run = (name: string, msg: unknown) => new Function("msg", built.nodes.find(node => node.name === name)!.func)(msg);
+  const prepared = run("Prepare events", { req: { params: { communityId: "c" }, query: { scope: "all" } } })[0];
+  prepared._communityMonthly.nowTs = now;
+  prepared.payload = [{ id: "c", visibility: "OPEN", name: "Клуб", logoUrl: "/lk/media/community-logo/c" }];
+  const verified = run("Verify public community", prepared)[1];
+  verified.payload = [post("t")];
+  const games = run("Resolve published game sources", verified);
+  games.payload = [];
+  const tournaments = run("Resolve published tournament sources", games);
+  tournaments.payload = [];
+  const response = run("Published events and signup links", tournaments).payload;
+  assert.equal(response.communityName, "Клуб"); assert.equal(response.communityLogoUrl, "https://padlhub.su/lk/media/community-logo/c");
+  assert.equal(response.items[0].cardKind, "tournament"); assert.equal(response.items[0].timeFrom, "17:00");
+  assert.equal(response.scope, "all"); assert.equal(response.hasMore, false); assert.equal(response.nextCursor, null);
 });
 test("duplicate community ID fails closed and incompatible prepared report cannot be served", () => {
   const built = buildCommunityMonthlyFlow(flow());
