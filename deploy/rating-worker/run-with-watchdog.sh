@@ -23,8 +23,13 @@ case "$RUN_KIND" in
     HARD_TIMEOUT_SECONDS=${RATING_WORKER_FULL_HARD_TIMEOUT_SECONDS:-780}
     WORKER_ARGS=(--mode full)
     ;;
+  monthly)
+    LOG_FILE="$LOG_DIR/monthly.log"
+    HARD_TIMEOUT_SECONDS=${RATING_WORKER_MONTHLY_HARD_TIMEOUT_SECONDS:-780}
+    WORKER_ARGS=(--monthly-only)
+    ;;
   *)
-    echo "Usage: run-with-watchdog.sh <game-results|incremental|full>" >&2
+    echo "Usage: run-with-watchdog.sh <game-results|incremental|full|monthly>" >&2
     exit 64
     ;;
 esac
@@ -45,7 +50,13 @@ mkdir -p "$LOG_DIR" "$(dirname "$LOCK_FILE")"
     fi
   done
 
-  if ! flock -n 9; then
+  if [[ "$RUN_KIND" == monthly ]]; then
+    # Wait rather than lose a 05:00/14:00 run to the 15-minute safety job.
+    if ! flock -w 840 9; then
+      printf '{"event":"community_monthly_lock_timeout"}\n'
+      exit 75
+    fi
+  elif ! flock -n 9; then
     printf '{"event":"rating_worker_lock_skipped","runKind":"%s","at":"%s"}\n' \
       "$RUN_KIND" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     exit 0
@@ -53,7 +64,7 @@ mkdir -p "$LOG_DIR" "$(dirname "$LOCK_FILE")"
 
   set +e
   timeout --signal=TERM --kill-after=30s "${HARD_TIMEOUT_SECONDS}s" \
-    /usr/bin/env node \
+    /usr/bin/env RATING_WORKER_SHARED_LOCK_HELD=1 node \
     "$INSTALL_ROOT/current/scripts/run_rating_worker_147.mjs" \
     "${WORKER_ARGS[@]}"
   status=$?

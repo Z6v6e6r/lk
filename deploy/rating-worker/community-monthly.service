@@ -1,0 +1,12 @@
+[Unit]
+Description=PadlHub calendar-month community report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/padlhub-rating-worker/current/deploy/rating-worker/run-monthly.sh
+TimeoutStartSec=30min
+Restart=on-failure
+RestartSec=60s
+UMask=0077

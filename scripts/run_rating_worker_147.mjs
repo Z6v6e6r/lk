@@ -14,6 +14,7 @@ const envFile = process.env.RATING_WORKER_ENV_FILE || "/etc/padlhub-rating-worke
 const modeIndex = process.argv.indexOf("--mode");
 const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : "incremental";
 const gameResultsOnly = process.argv.includes("--game-results-only");
+const monthlyOnly = process.argv.includes("--monthly-only");
 
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -112,6 +113,17 @@ fs.chmodSync(outDir, 0o700);
 const gameResultWorkerEnabled = String(runtimeEnv.GAME_RESULT_RATING_WORKER_ENABLED || "")
   .trim()
   .toLowerCase() === "true";
+if (monthlyOnly) {
+  if (runtimeEnv.COMMUNITY_MONTHLY_WORKER_ENABLED !== "true") {
+    console.log(JSON.stringify({ ok: true, mode: "monthly", skipped: true, reason: "MONTHLY_WORKER_DISABLED" }));
+    process.exit(0);
+  }
+  const monthlyOut = path.join(outDir, `community-monthly-${runStamp}.json`);
+  const result = runNode(["--experimental-strip-types", path.join(rootDir, "scripts/community_monthly_worker.mjs"), "--apply"], runtimeEnv, `${monthlyOut}.stdout`);
+  console.log(JSON.stringify(result));
+  process.exit(0);
+}
+
 let gameResults = {
   skipped: true,
   reason: gameResultWorkerEnabled ? "NOT_RUN" : "GAME_RESULT_RATING_WORKER_DISABLED",

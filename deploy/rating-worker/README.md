@@ -121,3 +121,58 @@ switch `current` only after `scripts/postcheck_community_rating_147.mjs` succeed
 The postcheck report now treats orphan community snapshots as non-blocking
 aggregates (`orphanSnapshots` / `orphanSnapshotCommunities`) while keeping
 strict checks for active community matrix, uniqueness, formula, and last-change.
+
+
+## Calendar-month reports at 05:00 and 14:00 Moscow
+
+The source-only release includes `run-monthly.sh` (executable),
+`community-monthly.service`, `community-monthly.timer` and the monthly worker.
+The timer uses explicit `Europe/Moscow` calendar times and `Persistent=true`.
+It shares the existing worker lock. A monthly run waits up to 840 seconds for
+that lock; lock timeout exits 75 and systemd retries. Once started, its watchdog
+is 780 seconds. The monthly path does not run Viva attendance/provider sync or
+the game-result job. Monthly reports and tournament preimages are stored under
+`/var/lib/padlhub-rating-worker/monthly/<run>/` with directories 0700/files 0600.
+The schedule does not become active merely by building or committing this code.
+
+Flag (default-off):
+
+```env
+COMMUNITY_MONTHLY_WORKER_ENABLED=false
+RATING_WORKER_MONTHLY_HARD_TIMEOUT_SECONDS=780
+```
+
+Before authorized activation:
+
+1. Pass the rating/release tests and the isolated real-Mongo conflict CI job.
+2. Pull a fresh active flow from `lk-primary-147` into a private external
+   workspace; preserve its exact SHA256. Generate the additive candidate with
+   `node --experimental-strip-types scripts/patch_nodered_community_monthly_flow.mjs
+   --source <private-fresh-flow> --source-sha256 <sha256> --output <private-candidate>`.
+   It adds the two GET routes and guards the existing result/create writers;
+   it must not replace unrelated live functions from a stale repository export.
+3. Install the immutable worker release with the flag off and deploy the reviewed
+   flow candidate with the normal flow backup/lease and API postchecks. Apply
+   refuses an active flow without the writer guards.
+4. Run `node --experimental-strip-types scripts/community_monthly_worker.mjs`
+   without `--apply` on the intended host. Inspect per-community totals, due
+   tournament candidates and every skip reason. No closure/report writes happen
+   in dry-run. Quarantined historical/reopened/incomplete tournaments require
+   separate reconciliation; do not loosen this guard for broad activation.
+5. After approval, enable the flag in the existing protected runtime environment,
+   install/enable the supplied timer units and run through `run-monthly.sh`
+   (including any approved initial run). Never bypass the shared lock by passing
+   `--apply` directly. Preserve preimages and report receipts.
+6. Read back `community_monthly_reports`, both public APIs, closed tournament
+   scores/standings and conditional-write conflicts. Verify the next timer times
+   and monitor the first 05:00/14:00 runs. The existing canonical rating worker
+   processes newly completed tournaments on its own schedule; this job does not
+   replay or overwrite player levels.
+
+Rollback: disable the flag and timer first, retain the guarded flow until all
+in-flight writes have stopped, then restore the reviewed worker/flow preimage if
+needed. Already closed tournaments, reports and ledger events remain data to
+reconcile explicitly; never blindly restore an old tournament over newer results.
+The HTTP routes deny closed communities and do not accept caller-supplied member
+identity as permission. Missing current-month data returns 503, rather than the
+previous month's ranking.
