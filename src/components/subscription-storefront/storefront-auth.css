@@ -1,13 +1,13 @@
 /*
  * Кабинетное окно авторизации (AuthForm) для витрины /subsription.
  *
- * Стили скопированы из src/MyApp.css без изменений, чтобы окно входа выглядело
+ * Стили основаны на src/MyApp.css и ограничены контейнерами витрины/checkout, чтобы окно входа выглядело
  * ровно так же, как на /ab_leto: на Tilda-странице витрины стили кабинета не
  * подключены, а сам компонент AuthForm общий.
  *
  * Тематические переменные ниже — начальные значения из :root MyApp.css.
  */
-:root {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host, .lk-idle-data-guard) {
   --purple: #7353D9;
   --purple-dark: #5B3FB5;
   --purple-light: #EDE9FF;
@@ -23,7 +23,7 @@
 }
 
 /* ─── AUTH ─── */
-.auth-wrapper {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-wrapper {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -33,7 +33,7 @@
   background: var(--white);
 }
 
-.auth-logo {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-logo {
   font-size: 28px;
   font-weight: 800;
   color: var(--purple);
@@ -41,13 +41,13 @@
   letter-spacing: -0.5px;
 }
 
-.auth-tagline {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-tagline {
   font-size: 14px;
   color: var(--text-secondary);
   margin-bottom: 40px;
 }
 
-.auth-title {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-title {
   font-size: 22px;
   font-weight: 700;
   color: var(--text);
@@ -55,7 +55,7 @@
   text-align: center;
 }
 
-.auth-subtitle {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-subtitle {
   font-size: 14px;
   color: var(--text-secondary);
   margin-bottom: 28px;
@@ -63,7 +63,7 @@
   line-height: 1.5;
 }
 
-.auth-card {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-card {
   width: 100%;
   max-width: 360px;
   display: flex;
@@ -71,7 +71,7 @@
   gap: 12px;
 }
 
-.auth-input {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-input {
   width: 80%;
   padding: 20x 16px;
   font-size: 20px;
@@ -83,18 +83,18 @@
   transition: border-color 0.2s;
 }
 
-.auth-input:focus {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-input:focus {
   border-color: var(--purple);
   background: var(--white);
 }
 
-.phone-input {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .phone-input {
   /* твои стили */
   width: 100%;
   font-size: 20px;
 }
 
-.auth-btn {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-btn {
   width: 100%;
   padding: 15px;
   font-size: 16px;
@@ -107,21 +107,21 @@
   transition: background 0.2s, transform 0.1s;
 }
 
-.auth-btn:hover { background: var(--purple-dark); }
-.auth-btn:active { transform: scale(0.98); }
-.auth-btn:disabled { background: #C4C4C4; cursor: not-allowed; }
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-btn:hover { background: var(--purple-dark); }
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-btn:active { transform: scale(0.98); }
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-btn:disabled { background: #C4C4C4; cursor: not-allowed; }
 
-.auth-btn-secondary {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-btn-secondary {
   background: var(--white);
   color: var(--purple);
   border: 1.5px solid var(--purple);
 }
 
-.auth-btn-secondary:hover {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-btn-secondary:hover {
   background: rgba(135, 102, 235, 0.06);
 }
 
-.auth-link {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-link {
   text-align: center;
   font-size: 14px;
   color: var(--purple);
@@ -129,32 +129,32 @@
   text-decoration: none;
 }
 
-.auth-link-btn {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-link-btn {
   border: none;
   background: none;
   padding: 0;
   font: inherit;
 }
 
-.auth-error {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-error {
   font-size: 14px;
   color: var(--red);
   text-align: center;
   min-height: 18px;
 }
 
-.resend-row {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .resend-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.auth-card-chooser {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-card-chooser {
   gap: 10px;
   position: relative;
 }
 
-.auth-oauth-btn {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-oauth-btn {
   width: 100%;
   min-height: 48px;
   padding: 14px 18px;
@@ -172,25 +172,25 @@
   transition: border-color 0.2s, transform 0.1s, background 0.2s;
 }
 
-.auth-oauth-btn:hover {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-oauth-btn:hover {
   border-color: var(--purple);
   background: rgba(135, 102, 235, 0.04);
 }
 
-.auth-oauth-btn:active {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-oauth-btn:active {
   transform: scale(0.98);
 }
 
-.auth-oauth-btn:disabled {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-oauth-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.auth-oauth-btn__content {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-oauth-btn__content {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Subscription Auth RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 18px;
   font-style: normal;
   font-weight: 700;
@@ -200,7 +200,7 @@
   white-space: nowrap;
 }
 
-.auth-oauth-btn__icon {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-oauth-btn__icon {
   width: 22px;
   height: 22px;
   display: inline-flex;
@@ -209,14 +209,14 @@
   flex: 0 0 22px;
 }
 
-.auth-provider-icon-image {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-provider-icon-image {
   width: 22px;
   height: 22px;
   display: block;
   object-fit: contain;
 }
 
-.auth-consents {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consents {
   min-width: 0;
   margin: 10px 0 2px;
   padding: 0;
@@ -226,7 +226,7 @@
   gap: 14px;
 }
 
-.auth-consents__legend {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consents__legend {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -238,14 +238,14 @@
   border: 0;
 }
 
-.auth-consent {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consent {
   min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
 
-.auth-consent__checkbox {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consent__checkbox {
   width: 20px;
   height: 20px;
   margin: 0;
@@ -254,12 +254,12 @@
   cursor: pointer;
 }
 
-.auth-consent__checkbox:focus-visible {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consent__checkbox:focus-visible {
   outline: 2px solid rgba(118, 73, 255, 0.38);
   outline-offset: 2px;
 }
 
-.auth-consent__label {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consent__label {
   min-width: 0;
   color: var(--text-secondary);
   font-family: var(--ui-font);
@@ -269,7 +269,7 @@
   cursor: pointer;
 }
 
-.auth-consent__link {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consent__link {
   color: #587651;
   font-weight: 600;
   text-decoration: underline;
@@ -277,13 +277,13 @@
   text-underline-offset: 2px;
 }
 
-.auth-consent__link:focus-visible {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-consent__link:focus-visible {
   outline: 2px solid rgba(88, 118, 81, 0.4);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
-.auth-brand-lockup {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-brand-lockup {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -291,16 +291,16 @@
   margin-bottom: 10px;
 }
 
-.auth-brand-logo {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-brand-logo {
   width: min(182px, 72vw);
   height: auto;
   display: block;
 }
 
-.auth-title--brand {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-title--brand {
   max-width: 320px;
   margin: 0;
-  font-family: "RF Dewi", "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Subscription RF Dewi", "Subscription Auth RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 18px;
   font-weight: 700;
   line-height: 1;
@@ -308,11 +308,11 @@
   text-align: center;
 }
 
-.auth-more-options {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options {
   position: relative;
 }
 
-.auth-more-options-btn {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -325,18 +325,18 @@
   font-weight: 600;
 }
 
-.auth-more-options-btn svg {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-btn svg {
   width: 18px;
   height: 18px;
   color: var(--text-secondary);
   transition: transform 0.2s ease;
 }
 
-.auth-more-options-btn[aria-expanded="true"] svg {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-btn[aria-expanded="true"] svg {
   transform: rotate(180deg);
 }
 
-.auth-more-options-popover {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
@@ -349,7 +349,7 @@
   z-index: 4;
 }
 
-.auth-more-options-item {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-item {
   width: 100%;
   min-height: 44px;
   border: none;
@@ -366,22 +366,22 @@
   font-weight: 600;
 }
 
-.auth-more-options-item:hover {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-item:hover {
   background: #F0EDFF;
 }
 
-.auth-more-options-item:active {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-more-options-item:active {
   transform: scale(0.98);
 }
 
-.auth-icon-btn {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .auth-icon-btn {
   background: none;
   border: none;
   cursor: pointer;
   padding: 0;
 }
 
-.resend-img {
+:where(.subscription-storefront-runtime, .ph-zero-checkout-host) .resend-img {
   width: 24px;
   height: 24px;
   cursor: pointer;

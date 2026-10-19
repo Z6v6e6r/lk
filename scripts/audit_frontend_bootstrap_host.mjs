@@ -105,9 +105,7 @@ export function auditFrontendBootstrapHost(options = {}) {
   ].map(([name, option]) => [name, regularRecord(path.resolve(options[option] || DEFAULTS[option]))]));
   const machineIdPath = path.resolve(options.machineIdPath || "/etc/machine-id");
   const machineId = readRegular(machineIdPath).bytes;
-  const auditedFiles = new Map([...files, ...PRESERVED_LEGACY_FILES].map((name) => [
-    name, readRegular(path.join(legacyRoot, name)),
-  ]));
+  const auditedFiles = new Map(files.map((name) => [name, readRegular(path.join(legacyRoot, name))]));
   const releaseManifest = JSON.parse(auditedFiles.get("release.json").bytes.toString("utf8"));
   if (!/^[a-f0-9]{40}$/.test(String(releaseManifest.sourceCommit || ""))
     || releaseManifest.sourceDirty !== false
@@ -119,8 +117,13 @@ export function auditFrontendBootstrapHost(options = {}) {
   const installedStats = Object.fromEntries(files.map((name) => [name,
     auditedFiles.get(name).stat]));
   const preservedLegacy = PRESERVED_LEGACY_FILES.map((name) => {
-    const value = auditedFiles.get(name);
-    return { name, sha256: sha256(value.bytes), stat: value.stat };
+    try {
+      const value = readRegular(path.join(legacyRoot, name));
+      return { name, sha256: sha256(value.bytes), stat: value.stat };
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { name, absent: true };
+      throw error;
+    }
   });
   const config = regularRecord(configPath);
   const node = regularRecord(nodePath);
@@ -136,7 +139,7 @@ export function auditFrontendBootstrapHost(options = {}) {
     fail("Host audit producer identity mismatch");
   }
   const snapshot = {
-    formatVersion: 1,
+    formatVersion: 2,
     kind: "lk-frontend-static-bootstrap-host-snapshot",
     capturedAt: new Date().toISOString(),
     hostname: options.hostname || os.hostname(),

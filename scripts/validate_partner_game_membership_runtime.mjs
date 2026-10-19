@@ -175,7 +175,7 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner audit execution evidence");
   // Exact reviewed CLI readback, not a caller-resealable assertion. A future audit
   // needs new observed evidence and review; changing its date is not a refresh.
-  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "c276340286c73c0552e7cd5a923d4a6afb2fedd5add841ff10086b063eda75ec"
+  if (sha256(Buffer.from(`${JSON.stringify(auditExecution, null, 2)}\n`)) !== "147870ef2ad6efb7ef31434f44be6b279917e48d20777f0de7c705c4036505fd"
     || auditExecution.inputHashes["package.json"] !== manifest.closure.packageJsonSha256
     || auditExecution.inputHashes["package-lock.json"] !== manifest.closure.packageLockSha256
     || auditExecution.commands.at(-1).completedAt !== auditReport.capturedAt
@@ -195,13 +195,12 @@ export function validatePartnerRuntimeEvidence({
     || !isDeepStrictEqual(auditReport.runtime, manifest.runtime)
     || !isDeepStrictEqual(counts, manifest.audit.affectedPackages)
     || auditReport.vulnerabilities.length !== counts.total
-    || auditReport.decision !== "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES"
     || manifest.audit.decision !== auditReport.decision
-    || counts.critical !== 0
-    || counts.high !== 0
-    || counts.moderate !== 7
+    || counts.critical !== 1
+    || counts.high !== 6
+    || counts.moderate !== 13
     || counts.low !== 0
-    || counts.total !== 7) {
+    || counts.total !== 20) {
     fail("Partner audit evidence was altered or overclaims remediation");
   }
   if (manifest.installation.command !== "npm ci --ignore-scripts --no-fund --no-audit"

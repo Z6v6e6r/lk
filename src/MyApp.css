@@ -13601,6 +13601,11 @@ h6,
   flex: none;
 }
 
+.community-ranking-filter-bar--period .community-ranking-filter-chip--month {
+  width: auto;
+  min-width: 69px;
+}
+
 .community-ranking-filter-chip--quarter {
   width: 88px;
   flex: none;
@@ -20848,6 +20853,7 @@ h6,
 
 .piter-subscription-face--back {
   display: flex;
+  overflow-y: auto;
   flex-direction: column;
   box-sizing: border-box;
   padding: clamp(22px, 5vw, 38px);
@@ -20880,6 +20886,7 @@ h6,
 }
 
 .piter-subscription-face--back h2 {
+  flex-shrink: 0;
   margin: 0 0 clamp(18px, 4vw, 28px);
   font-size: clamp(28px, 7vw, 44px);
   line-height: 0.98;

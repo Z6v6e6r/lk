@@ -7,6 +7,7 @@ import {
   readGroupScheduleEntryDataFromHref,
 } from "../../src/utils/groupScheduleEntry.ts";
 import { GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS } from "../../src/utils/groupScheduleModel.ts";
+import { isTrialGroupTraining, TRIAL_GROUP_DIRECTION_ID } from "../../src/utils/trialGroupTraining.ts";
 
 test("reads current and legacy group schedule query params", () => {
   const data = readGroupScheduleEntryDataFromHref(
@@ -60,6 +61,37 @@ test("reads explicit direction ids from group schedule links", () => {
 
   assert.deepEqual(data.directionIds, [2468, 2975, 3163]);
   assert.equal(data.directionLabel, null);
+});
+
+test("trial preset direction matches the explicit link and is recognized by checkout", () => {
+  const preset = readGroupScheduleEntryDataFromHref(
+    "https://padlhub.ru/group?direction=trial&date=2026-10-26",
+  );
+  const explicit = readGroupScheduleEntryDataFromHref(
+    `https://padlhub.ru/group?directionId=${TRIAL_GROUP_DIRECTION_ID}&date=2026-10-26`,
+  );
+
+  assert.deepEqual(preset.directionIds, [4971]);
+  assert.deepEqual(preset.directionIds, explicit.directionIds);
+  assert.equal(preset.directionLabel, "Пробные групповые тренировки");
+  assert.equal(preset.date, "2026-10-26");
+  assert.equal(isTrialGroupTraining({ directionId: preset.directionIds[0] }), true);
+});
+
+test("frontend return-url helper preserves the trial filter, selected exercise and date", () => {
+  // Dedicated server checkout return URLs have a separate, unchanged contract.
+  const url = buildGroupScheduleReturnUrl("https://padlhub.ru/group?direction=trial", {
+    exerciseId: "trial-exercise",
+    date: "2026-10-26",
+    paymentStatus: "failed",
+  });
+  const returned = readGroupScheduleEntryDataFromHref(url.href);
+
+  assert.equal(url.searchParams.get("direction"), "trial");
+  assert.equal(url.searchParams.get("groupPaymentFailed"), "true");
+  assert.deepEqual(returned.directionIds, [TRIAL_GROUP_DIRECTION_ID]);
+  assert.equal(returned.exerciseId, "trial-exercise");
+  assert.equal(returned.date, "2026-10-26");
 });
 
 test("ignores unknown direction tokens and keeps links without direction filter unchanged", () => {

@@ -14,9 +14,10 @@ const entry = source.statements.find(node => ts.isFunctionDeclaration(node) && n
 const compiled = ts.transpileModule(entry.getText(source).replace(/^export /, ''), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
-async function invoke(params, response = { error: { status: 503, message: 'Fixture unavailable' }, status: 503 }) {
+async function invoke(params, response = { error: { status: 503, message: 'Fixture unavailable' }, status: 503 }, enabled = true) {
   const calls = []; let closed = false;
   const dependencies = { ...helpers,
+    TRIAL_GROUP_CHECKOUT_ENABLED: enabled,
     API_BASE: 'https://viva.example.test', TENANT_KEY: 'fixture',
     getServ2Origin: () => 'https://lk.example.test',
     apiCreateTournamentVivaBookingFromSubscription: async value => ({ routedSubscription: value }),
@@ -24,6 +25,7 @@ async function invoke(params, response = { error: { status: 503, message: 'Fixtu
     buildTournamentPaymentReturnUrls: () => ({ successUrl: null, failUrl: null }),
     buildTournamentVivaTransactionPayload: () => ({ fixtureTransaction: true }),
     pickString: (value, keys) => keys.map(key => value?.[key]).find(value => typeof value === 'string') || null,
+    readVivaFailureCode: () => null,
     request: async (url, options) => { calls.push({ url, options }); return response; },
   };
   const fn = new Function(...Object.keys(dependencies), compiled + '\nreturn apiCreateTournamentVivaTransaction;')(...Object.values(dependencies));
@@ -40,6 +42,24 @@ test('frontend and backend recognize the same catalogue aliases', () => {
     assert.equal(helpers.isTrialGroupTraining(value), isTrialGroupExercise(value));
   }
 });
+test('unprovisioned trial checkout preserves the existing one-time route', async () => {
+  const { calls, result, closed } = await invoke(params(), { error: { status: 400, message: 'Fixture validation' }, status: 400 }, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://viva.example.test/end-user/api/v2/fixture/transactions');
+  assert.equal(calls[0].options.baseUrl, undefined);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { fixtureTransaction: true });
+  assert.equal(calls[0].options.retries, 0);
+  assert.equal(result.status, 400); assert.equal(closed, true);
+});
+test('trial route and eligibility copy require the same explicit build flag', () => {
+  const config = ts.createSourceFile('config.tsx', read('../../src/consts/api_config.tsx'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declaration = config.statements.filter(ts.isVariableStatement)
+    .flatMap(node => [...node.declarationList.declarations]).find(node => node.name.getText(config) === 'TRIAL_GROUP_CHECKOUT_ENABLED');
+  const enabled = new Function('value', 'return ' + declaration.initializer.getText(config).replace('import.meta.env.VITE_TRIAL_GROUP_CHECKOUT_ENABLED', 'value'));
+  for (const value of [undefined, '', 'false', 'TRUE', true]) assert.equal(enabled(value), false);
+  assert.equal(enabled('true'), true);
+  assert.match(read('../../src/components/group-schedule/GroupSchedulePage.tsx'), /TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining\(selectedTraining\)/);
+});
 test('trial one-time checkout never falls back to direct Viva after a failed gate', async () => {
   const { calls, result, closed } = await invoke(params());
   assert.equal(calls.length, 1);
@@ -47,6 +67,16 @@ test('trial one-time checkout never falls back to direct Viva after a failed gat
   assert.equal(calls[0].options.baseUrl, 'https://lk.example.test');
   assert.equal(calls[0].options.retries, 0); assert.equal(closed, true); assert.equal(result.status, 503);
   assert.deepEqual(JSON.parse(calls[0].options.body), { exerciseId: 'fixture-event', productId: 'fixture-product', source: 'one-time', promoCode: null });
+});
+test('the trial schedule direction routes through the gate without a type or name marker', async () => {
+  const target = params();
+  target.exercise = { id: 'fixture-event', direction: { id: helpers.TRIAL_GROUP_DIRECTION_ID } };
+  const { calls, result } = await invoke(target);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /^\/lk\/trial-group-bookings\?operationId=trial-/);
+  assert.equal(calls[0].options.baseUrl, 'https://lk.example.test');
+  assert.equal(calls[0].options.retries, 0);
+  assert.equal(result.status, 503);
 });
 test('uncertain checkout stops before client polling or a second provider POST', async () => {
   const { result, calls } = await invoke(params(), { error: null, status: 202, data: { state: 'PENDING_CONFIRMATION' } });
@@ -65,4 +95,39 @@ test('attempt stays stable on retry and only confirmed cancellation clears it', 
   assert.notEqual(helpers.trialGroupCheckoutOperationId('fixture-event-cache', 'fixture-actor', 'fixture-product', null, 'client-one-time'), first);
   helpers.clearTrialGroupCheckoutOperations('fixture-event-cache');
   assert.notEqual(helpers.trialGroupCheckoutOperationId('fixture-event-cache', 'fixture-actor', 'fixture-product', null), first);
+});
+
+const eligibilityModule = ts.transpileModule(read('../../src/utils/trialGroupEligibilityCheck.ts'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const { resolveTrialGroupEligibilityCheck: decide } = new Function('exports', eligibilityModule + '\nreturn exports;')({});
+test('eligibility UI allows only a successful enforced decision with zero to two visits', () => {
+  for (const count of [0, 1, 2]) {
+    assert.equal(decide({ status: 200, error: null, data: { eligible: true, mode: 'enforce', count } }).status, 'allowed');
+  }
+  for (const data of [null, {}, { eligible: true, mode: 'off', count: 0 },
+    { eligible: true, mode: 'shadow', count: 0 }, { eligible: true, mode: 'enforce', count: 3 },
+    { eligible: true, mode: 'enforce', count: -1 }, { eligible: true, mode: 'enforce', count: '0' },
+    { eligible: false, mode: 'enforce', count: 0 }]) {
+    assert.equal(decide({ status: 200, error: null, data }).status, 'error');
+  }
+  assert.equal(decide({ status: 202, error: null, data: { eligible: true, mode: 'enforce', count: 0 } }).status, 'error');
+  assert.equal(decide({ status: 409, data: null,
+    error: { raw: { details: { code: 'TRIAL_TRAINING_VISIT_LIMIT_EXCEEDED' } } } }).status, 'denied');
+  assert.equal(decide({ status: 503, data: null, error: { raw: {} } }).status, 'error');
+});
+test('eligibility precheck sends only the target to the authenticated read-only action without retries', async () => {
+  const source = ts.createSourceFile('group.ts', read('../../src/utils/groupScheduleApi.ts'), ts.ScriptTarget.Latest, true);
+  const entry = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'apiCheckTrialGroupEligibility');
+  const compiled = ts.transpileModule(entry.getText(source).replace(/^export /, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const calls = [];
+  const check = new Function('request', 'getServ2Origin', compiled + '\nreturn apiCheckTrialGroupEligibility;')(
+    async (...args) => { calls.push(args); return { status: 503 }; }, () => 'https://lk.example.test');
+  await check('fixture-event');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], '/lk/trial-group-bookings');
+  assert.deepEqual(calls[0][1], { baseUrl: 'https://lk.example.test', method: 'POST', auth: true,
+    retries: 0, cache: 'no-store', body: JSON.stringify({ action: 'check', exerciseId: 'fixture-event' }) });
 });

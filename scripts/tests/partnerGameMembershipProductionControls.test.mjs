@@ -56,14 +56,18 @@ test("production controls reject relaxed request limits and duplicate-header han
   }
 });
 
-test("production controls reject an unreviewed Node-RED floor or unresolved audit waiver", () => {
+test("production controls pin the reviewed Node-RED floor and the accepted audit risk", () => {
   const downgraded = clone();
   downgraded.runtime.minimumRehearsedNodeRedVersion = "4.0.9";
   assert.throws(() => validatePartnerProductionControls(downgraded), /rehearsed floor/);
 
-  const waived = clone();
-  waived.runtime.auditPolicy.unresolvedAuditAllowed = true;
-  assert.throws(() => validatePartnerProductionControls(waived), /audit policy/);
+  // The accepted-risk decision is pinned: claiming the audit is resolved again must fail.
+  const relowered = clone();
+  relowered.runtime.auditPolicy.unresolvedAuditAllowed = false;
+  assert.throws(() => validatePartnerProductionControls(relowered), /audit policy/);
+  const understated = clone();
+  understated.runtime.auditPolicy.criticalAffectedPackages = 0;
+  assert.throws(() => validatePartnerProductionControls(understated), /audit policy/);
 });
 
 test("production controls reject false remediation claims", () => {

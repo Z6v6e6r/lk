@@ -2895,6 +2895,8 @@ function dedupePlayersByIdentity(
     ...current,
     memberKey: current.memberKey ?? incoming.memberKey ?? null,
     membershipId: incoming.membershipId ?? current.membershipId ?? null,
+    vivaBookingId: current.vivaBookingId ?? incoming.vivaBookingId ?? null,
+    membershipGeneration: current.membershipGeneration ?? incoming.membershipGeneration ?? null,
     id: current.id ?? incoming.id ?? null,
     name: isGenericName(current.name) && !isGenericName(incoming.name)
       ? incoming.name
@@ -4147,6 +4149,7 @@ function normalizeVivaBookingParticipant(raw: unknown): PadelGamePlayer | null {
   if (!id && !phone && !name.trim()) return null;
 
   return {
+    vivaBookingId: normalizeBookingId(raw.id) ?? normalizeBookingId(raw.bookingId),
     id,
     name,
     phone,
@@ -8865,6 +8868,7 @@ export default function GamesPage({
           leaveEvents: detailsLeaveEvents,
           organizerPlayer: detailsOrganizerPlayer,
         });
+        if (!reconciliation.canSync) return;
 
         const mergedParticipants = dedupePlayersByIdentity(reconciliation.mergedCandidates)
           .slice(0, detailsMaxPlayers);

@@ -222,12 +222,12 @@ const createAnnualRuntime = () => {
   return createManagedSubscriptionDevRuntime({ policyLoader: async () => source });
 };
 
-test("Piter annual shadow policy fixes the 14-day booking window and four active services", () => {
+test("Piter annual shadow policy fixes the 14-day booking window and eight active services", () => {
   const source = buildAnnualShadowPolicySource(["station-piter"]);
   assert.deepEqual(source.policy.bookingWindow, { enabled: true, days: 14 });
   assert.deepEqual(source.policy.activeServicesLimit, {
     enabled: true,
-    max: 4,
+    max: 8,
     scope: "SUBSCRIPTION_BENEFIT_ONLY",
   });
   assert.deepEqual(source.policy.dailyUsagePolicy, {
@@ -237,6 +237,18 @@ test("Piter annual shadow policy fixes the 14-day booking window and four active
     usageDurationsMinutes: [60],
     discountDurationsMinutes: [90, 120],
   });
+});
+
+test("DEV can seed all eight active services and refuses a ninth without losing state", async () => {
+  const runtime = createManagedSubscriptionDevRuntime({
+    policyLoader: async () => buildAnnualShadowPolicySource(["station-piter"]),
+  });
+  await runtime.initialize();
+  const snapshot = await runtime.seed(8);
+  assert.equal(snapshot.limits.activeServices, 8);
+  assert.equal(snapshot.limits.maxActiveServices, 8);
+  await assert.rejects(() => runtime.seed(9), /от 0 до 8 активных услуг/);
+  assert.equal((await runtime.snapshot()).limits.activeServices, 8);
 });
 
 test("DRAFT policy is promoted only to an in-memory published runtime snapshot", () => {
@@ -653,7 +665,7 @@ test("server-resolved 90 minute create uses provider price and applies a full-pr
   assert.equal(afterFreeHour.decision.benefit?.kind, "PERCENT_DISCOUNT");
   assert.equal(afterFreeHour.decision.benefit?.finalPriceMinor, 210_000);
 
-  const overActiveLimit = await runtime.quoteResolved(target, { activeServices: 4, dailyGameUsage: 0 });
+  const overActiveLimit = await runtime.quoteResolved(target, { activeServices: 8, dailyGameUsage: 0 });
   assert.ok(overActiveLimit.decision.blockers.some(
     (blocker) => blocker.code === "ACTIVE_SERVICES_LIMIT_REACHED",
   ));
@@ -775,7 +787,7 @@ test("server-resolved group training uses its exact fixture while an unmapped to
 
   const overActiveLimit = await runtime.quoteResolved(
     groupTarget,
-    { activeServices: 4, dailyGameUsage: 0 },
+    { activeServices: 8, dailyGameUsage: 0 },
   );
   assert.deepEqual(buildShadowBookingOutcome(groupTarget, overActiveLimit.decision), {
     allowed: true,

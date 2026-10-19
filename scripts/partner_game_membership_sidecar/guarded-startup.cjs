@@ -25,6 +25,8 @@ const ANCHOR_ACTIVE_FIELDS = Object.freeze([...ANCHOR_FIELDS, "activationAuthori
 const MAX_AUTHORIZED_CLIENTS = 16;
 const CLIENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
 const GAME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+// The single anchor token that grants a client every game the platform serves.
+const GAME_POLICY_WILDCARD = "*";
 const exactKeys = (value, keys) => {
   if (!value || Array.isArray(value) || typeof value !== "object"
     || Object.keys(value).sort().join(",") !== [...keys].sort().join(",")) fail();
@@ -93,8 +95,10 @@ function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, i
     // Activation is bounded to the clients the anchor names and to the game set each of them
     // is declared for. The running keyring must match that declaration exactly: every enabled
     // client is declared, nothing is declared that is not enabled, and no client may hold a
-    // game outside its own declared set. Enabling a client therefore always requires a fresh
-    // root-owned anchor. The packet manifest never authorizes activation.
+    // game outside its own declared set. A single "*" entry is the root-owned anchor's grant
+    // of every game; it still requires a fresh anchor and never comes from the packet manifest.
+    // Enabling a client therefore always requires a fresh root-owned anchor. The packet
+    // manifest never authorizes activation.
     if (anchor.activationAuthorized !== true) fail();
     const declared = anchor.authorizedClients;
     if (!declared || Array.isArray(declared) || typeof declared !== "object") fail();
@@ -105,7 +109,7 @@ function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, i
       if (!CLIENT_ID_PATTERN.test(clientId)
         || !Array.isArray(gameIds) || gameIds.length < 1 || gameIds.length > 8
         || new Set(gameIds).size !== gameIds.length
-        || gameIds.some(id => typeof id !== "string" || !GAME_ID_PATTERN.test(id))) fail();
+        || gameIds.some(id => typeof id !== "string" || (id !== GAME_POLICY_WILDCARD && !GAME_ID_PATTERN.test(id)))) fail();
     }
     let keyring;
     try { keyring = parsePartnerRawJson(Buffer.from(String(env.LK_PARTNER_GAME_API_KEYRING_JSON || ""), "utf8")); }
@@ -118,7 +122,19 @@ function validateBoundRelease({ anchor, sidecarDirectory, candidateBytes, env, i
       const games = credential.games && typeof credential.games === "object" && !Array.isArray(credential.games)
         ? Object.keys(credential.games)
         : [];
-      if (games.length < 1 || games.some(gameId => !declared[clientId].includes(gameId))) fail();
+      // A wildcard grant accepts any keyed game; otherwise the keyring must stay inside the
+      // anchor's declared set. Denials only narrow the grant, so their shape is enforced here
+      // without letting a malformed list widen the client.
+      const declaredGames = declared[clientId];
+      const grantsAll = declaredGames.includes(GAME_POLICY_WILDCARD);
+      if (games.length < 1
+        || games.some(gameId => gameId !== GAME_POLICY_WILDCARD && !grantsAll && !declaredGames.includes(gameId))
+        || (games.includes(GAME_POLICY_WILDCARD) && !grantsAll)) fail();
+      for (const denied of [credential.deniedGames, credential.deniedStations]) {
+        if (denied === undefined || denied === null) continue;
+        if (!Array.isArray(denied) || denied.length > 64 || new Set(denied).size !== denied.length
+          || denied.some(id => typeof id !== "string" || id.length < 1 || id.length > 128)) fail();
+      }
     }
   }
   const manifestBytes = readPinnedFile(path.join(root, "packet.manifest.json"), 16384, { io, rootOwned: true, snapshot });

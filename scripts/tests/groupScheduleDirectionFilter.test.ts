@@ -7,6 +7,7 @@ import {
   parseGroupScheduleDirectionIds,
   resolveGroupScheduleDirectionPreset,
 } from "../../src/utils/groupScheduleModel.ts";
+import { TRIAL_GROUP_DIRECTION_ID } from "../../src/utils/trialGroupTraining.ts";
 
 const groupSchedulePageSource = fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8");
 const groupScheduleEntrySource = fs.readFileSync("src/group-schedule.tsx", "utf8");
@@ -24,6 +25,15 @@ test("resolves the kids academy direction preset", () => {
 test("parses direction id lists and drops invalid tokens", () => {
   assert.deepEqual(parseGroupScheduleDirectionIds(["2468", "2975", "3163", "2468"]), [2468, 2975, 3163]);
   assert.deepEqual(parseGroupScheduleDirectionIds(["kids", "", "0", "-5", "2.5", "abc"]), []);
+});
+
+test("resolves the trial preset using the checkout catalogue direction", () => {
+  for (const token of ["trial", " TRIAL "]) {
+    assert.deepEqual(resolveGroupScheduleDirectionPreset(token), {
+      label: "Пробные групповые тренировки",
+      directionIds: [TRIAL_GROUP_DIRECTION_ID],
+    });
+  }
 });
 
 test("group schedule page applies direction filter from link and keeps it clearable", () => {

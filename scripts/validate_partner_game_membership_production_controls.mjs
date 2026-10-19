@@ -54,15 +54,15 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "7a789a6308e10f11b22f0ca9d5979435ebda6ad65bd510f3002c629bd8f3bb91",
+    runtimeManifestSha256: "33f7300a822a85ce4df1770324e037b369f02b1803dd2b014f12efcfdc75bce0",
     packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
     packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
-    dependencyTreeSha256: "b90abb8c6780e42caae6cc06db42f6ed7b5877d5b173239b34603048398a99c2",
-    auditReportSha256: "f984affcc6600ead898038a0f6143d2e032c0c659441b1bc03b983b9acb3e8e7",
-    functionalRehearsalSha256: "fed34bc90e9e536d12bd58d84cbcf78ca7eaa75389849e2dce809dd273ebeb7d",
-    functionalRehearsalCapturedAt: "2026-09-12T06:26:07.247Z",
-    auditCapturedAt: "2026-09-11T12:00:11.196Z",
-    dependencyTreeCapturedAt: "2026-09-11T12:00:08.539Z",
+    dependencyTreeSha256: "571ed8db71498284fab15cd8549855c27c9b809fae417dba9efb17d54dec80ff",
+    auditReportSha256: "76150a871451de969ac2b2f1ec769320d432aa6148975fb01ae9a57903a5b1f7",
+    functionalRehearsalSha256: "ff38afe83029b441aca6d9cb35e759208372b4a33ee81a3ccaa0b23870d1f428",
+    functionalRehearsalCapturedAt: "2026-10-06T09:55:35.350Z",
+    auditCapturedAt: "2026-10-06T08:50:29.983Z",
+    dependencyTreeCapturedAt: "2026-10-06T08:50:24.835Z",
     npmCiInstalledPackageCount: 291,
     npmLsPackageOccurrenceCount: 838,
     npmLsInvalidPackageCount: 0,
@@ -78,13 +78,13 @@ export function validatePartnerProductionControls(contract) {
     serviceUnitSha256: "3abbb557f2be9565ff115436107de08e4d8f0e566179700eb47bb1a1a01503dc",
     settingsRuntimeSha256: "cabd3d1867311ae0bfa8165687d7911ebc60a0e84f54959192dacfead67451c1",
     settingsGuardedSha256: "1ad5eeaf32ddb703b12f88c31151ff7b7fe9960a55a61a5433000ca92b24ee49",
-    guardedStartupSha256: "4c4248f9ac3e849ffde03e9e23353e5f573fc78bb3200a2fa5547617ecbf0582",
+    guardedStartupSha256: "a8c8b99050aa781e9af2b475a58a7e6225c36f238954c79aa8248507c12d8521",
     rawRequestGuardSha256: "74437f13a36fe583f6265553a6d06b8e7a91b0abae06ca755c335080c4368871",
     rawAuditSha256: "a89b4d36d49f8f06e8163368b3e7c4d7a774d494100748fce1a25bdc7884eead",
     guardedPolicySha256: "abd5f0aefda8cc83570ac9c202bfac65717fe6546a158861b2beaf0c50db2a40",
     candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
-    rehearsalSha256: "d612cf7b0ef2ac0af11e43ed596753295a90b3ec96730d34d98cf618274019fb",
-    rehearsalCapturedAt: "2026-09-12T07:42:54.634Z",
+    rehearsalSha256: "69803d857f7765e1daa5a59c1d0fef927dc812ab049be40c7e08ab1944ee67ad",
+    rehearsalCapturedAt: "2026-10-06T08:46:43.067Z",
     sharedFlowMutationAllowed: false,
   })) fail("Partner sidecar immutable closure identity changed");
   exactKeys(runtime.auditPolicy, [
@@ -92,11 +92,11 @@ export function validatePartnerProductionControls(contract) {
     "partnerRequestSurfaceDecisionRequired", "editorAdminExposureAllowed", "unresolvedAuditAllowed",
   ], "Partner runtime audit policy");
   if (runtime.auditPolicy.maxAgeHours !== 24
-    || runtime.auditPolicy.criticalAffectedPackages !== 0
-    || runtime.auditPolicy.highReachablePackages !== 0
+    || runtime.auditPolicy.criticalAffectedPackages !== 1
+    || runtime.auditPolicy.highReachablePackages !== 6
     || runtime.auditPolicy.partnerRequestSurfaceDecisionRequired !== true
     || runtime.auditPolicy.editorAdminExposureAllowed !== false
-    || runtime.auditPolicy.unresolvedAuditAllowed !== false) {
+    || runtime.auditPolicy.unresolvedAuditAllowed !== true) {
     fail("Partner runtime audit policy was weakened");
   }
   const rehearsal = runtime.latestIsolatedRehearsal;
@@ -114,11 +114,11 @@ export function validatePartnerProductionControls(contract) {
   if (rehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || rehearsal.functionalRehearsalSha256 !== runtime.immutableClosure.functionalRehearsalSha256
     || rehearsal.capturedAt !== runtime.immutableClosure.functionalRehearsalCapturedAt
-    || rehearsal.sourceCommit !== "aaca89270d1ac3a8d8adc622226026df6f9c32ef"
+    || rehearsal.sourceCommit !== "b0ee37b30fb9d7c078b8b92af95829730bfe4fbc"
     || rehearsal.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
     || rehearsal.nodeVersion !== runtime.requiredNodeVersion
     || rehearsal.nodeRedVersion !== runtime.minimumRehearsedNodeRedVersion
-    || rehearsal.customNodeReleaseSha256 !== "15361530654e2f4f0f20d83481991bc2402a3ccc0e47cef95b1729b305ab77f4"
+    || rehearsal.customNodeReleaseSha256 !== "f5252c1a8cb57fae7fa89b67944da0b9d37e660618c69549db9c95d28b3c1a20"
     || rehearsal.defaultOffHttpStatus !== 503
     || rehearsal.flowRollbackHttpStatus !== 404
     || rehearsal.packageRollbackHttpStatus !== 404
@@ -128,8 +128,8 @@ export function validatePartnerProductionControls(contract) {
     || ![counts.critical, counts.high, counts.moderate, counts.low, counts.total]
       .every((value) => Number.isInteger(value) && value >= 0)
     || counts.total !== counts.critical + counts.high + counts.moderate + counts.low
-    || !isDeepStrictEqual(counts, { critical: 0, high: 0, moderate: 7, low: 0, total: 7 })
-    || rehearsal.auditDecision !== "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES"
+    || !isDeepStrictEqual(counts, { critical: 1, high: 6, moderate: 13, low: 0, total: 20 })
+    || rehearsal.auditDecision !== "ACCEPTED_RISK_CRITICAL_1_HIGH_6_OWNER_DECISION_2026-10-06"
     || rehearsal.productionTouched !== false) {
     fail("Partner isolated runtime rehearsal evidence is incomplete or overclaims remediation");
   }

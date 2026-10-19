@@ -11,6 +11,27 @@ export function trialRecord(value) {
 export function trialId(value) {
   return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
 }
+// A bounded server-owned budget shared by both gateways. No token, phone or
+// raw history is retained. Function-node execution updates it synchronously.
+export function trialConsumeHistoryBudget(previous, key, now) {
+  if (typeof key !== 'string' || key.length > 512 || !Number.isSafeInteger(now)
+    || previous !== undefined && (!Array.isArray(previous) || previous.length > 2000)) return null;
+  const rows = [];
+  for (const row of previous || []) {
+    if (!trialRecord(row) || typeof row.key !== 'string' || row.key.length > 512
+      || !Number.isSafeInteger(row.at) || !Number.isSafeInteger(row.count) || row.count < 1 || row.count > 6) return null;
+    if (now - row.at < 60000) rows.push({ ...row });
+  }
+  const matches = rows.filter(row => row.key === key);
+  if (matches.length > 1) return null;
+  const current = matches[0];
+  if (current && (current.at > now || current.count >= 6) || !current && rows.length >= 2000) {
+    return { allowed: false, rows };
+  }
+  if (current) current.count += 1;
+  else rows.push({ key, at: now, count: 1 });
+  return { allowed: true, rows };
+}
 export function isTrialGroupExercise(exercise) {
   if (!trialRecord(exercise)) return false;
   const types = [exercise.type?.id, exercise.exerciseType?.id, exercise.typeId, exercise.exerciseTypeId,
@@ -23,13 +44,23 @@ export function isTrialGroupExercise(exercise) {
     || directions.some(value => trialId(value) === String(TRIAL_GROUP_DIRECTION_ID));
 }
 export function normalizeTrialGroupPolicy(value) {
-  if (value === undefined || value === null) return { mode: 'off', version: 'trial-group-v1' };
+  // Checkout is a separate, server-owned rollout boundary.  In particular an
+  // old policy document must never turn a newly deployed checkout endpoint on.
+  if (value === undefined || value === null) return { mode: 'off', version: 'trial-group-v1', checkoutMode: 'disabled' };
   if (!trialRecord(value) || !['off', 'shadow', 'enforce'].includes(value.mode)
     || value.version !== 'trial-group-v1'
     || (value.mode !== 'off' && value.historyContract !== TRIAL_GROUP_HISTORY_CONTRACT)) {
     return { code: 'TRIAL_TRAINING_POLICY_UNVERIFIED' };
   }
-  return { mode: value.mode, version: value.version };
+  if (value.checkoutMode !== undefined && !['disabled', 'enabled'].includes(value.checkoutMode)
+    || value.checkoutMode === 'enabled' && value.mode !== 'enforce'
+    || value.tenantKey !== undefined && (typeof value.tenantKey !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(value.tenantKey))) {
+    return { code: 'TRIAL_TRAINING_POLICY_UNVERIFIED' };
+  }
+  return { mode: value.mode, version: value.version,
+    checkoutMode: value.checkoutMode === 'enabled' ? 'enabled' : 'disabled',
+    ...(value.historyContract === TRIAL_GROUP_HISTORY_CONTRACT ? { historyContract: value.historyContract } : {}),
+    ...(value.tenantKey ? { tenantKey: value.tenantKey } : {}) };
 }
 export function trialVisitWindow(requestedAt) {
   const instant = Date.parse(requestedAt);
@@ -99,19 +130,33 @@ export function evaluateTrialGroupVisits({ rows, actorId, requestedAt }) {
   const window = trialVisitWindow(requestedAt);
   const from = Date.parse(window.from), to = Date.parse(window.to);
   const visits = new Map();
+  const ambiguousEvents = new Set();
+  let uncertain = false;
   for (const row of rows) {
     if (!trialRecord(row) || !trialOwnerMatches(row, actorId)) return { code: 'TRIAL_TRAINING_HISTORY_IDENTITY_UNVERIFIED' };
+    const eventId = trialId(row.exercise?.id ?? row.exerciseId);
     const at = trialVisitTime(row);
-    if (!Number.isFinite(at)) return { code: 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED' };
+    if (!Number.isFinite(at)) {
+      uncertain = true;
+      if (eventId) { ambiguousEvents.add(eventId); visits.delete(eventId); }
+      continue;
+    }
     if (at < from || at >= to) continue;
     const attended = trialAttendance(row);
-    const eventId = trialId(row.exercise?.id ?? row.exerciseId);
-    if (attended === null || !eventId) return { code: 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED' };
+    if (attended === null || !eventId) {
+      uncertain = true;
+      if (eventId) { ambiguousEvents.add(eventId); visits.delete(eventId); }
+      continue;
+    }
+    if (ambiguousEvents.has(eventId)) continue;
     const fact = `${at}:${attended}`;
-    if (visits.has(eventId) && visits.get(eventId) !== fact) return { code: 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED' };
+    if (visits.has(eventId) && visits.get(eventId) !== fact) {
+      uncertain = true; ambiguousEvents.add(eventId); visits.delete(eventId); continue;
+    }
     visits.set(eventId, fact);
   }
   const count = [...visits.values()].filter(fact => fact.endsWith(':true')).length;
+  if (count <= 2 && uncertain) return { code: 'TRIAL_TRAINING_ATTENDANCE_UNVERIFIED', count, maxVisits: 2, window };
   return { eligible: count <= 2, count, maxVisits: 2, window,
     code: count > 2 ? 'TRIAL_TRAINING_VISIT_LIMIT_EXCEEDED' : null };
 }

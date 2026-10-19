@@ -4,6 +4,7 @@ import {
   TENANT_KEY,
 } from "../consts/api_config";
 import {
+  getServ2Origin,
   request,
   type ApiResult,
 } from "./apiClient";
@@ -50,6 +51,17 @@ const groupScheduleRequestOptions = {
         cache: "no-store" as RequestCache,
       }),
 };
+
+export function apiCheckTrialGroupEligibility(exerciseId: string): Promise<ApiResult<unknown>> {
+  return request<unknown>("/lk/trial-group-bookings", {
+    baseUrl: getServ2Origin(),
+    method: "POST",
+    auth: true,
+    retries: 0,
+    cache: "no-store",
+    body: JSON.stringify({ action: "check", exerciseId }),
+  });
+}
 
 function requestGroupTrainingsByDateRaw(
   query: string,

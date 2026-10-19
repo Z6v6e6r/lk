@@ -359,7 +359,7 @@ export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySourc
     joinGame: { enabled: true, minDurationMinutes: 60, maxDurationMinutes: 120 },
     activeServicesLimit: {
       enabled: true,
-      max: 4,
+      max: 8,
       scope: "SUBSCRIPTION_BENEFIT_ONLY",
     },
     bookingWindow: { enabled: true, days: 14 },
@@ -854,8 +854,8 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
 
   const seedUnlocked = async (count: number) => {
     await requireContext();
-    if (!Number.isInteger(count) || count < 0 || count > 4) {
-      throw new DevRuntimeError(400, "DEV_SEED_INVALID", "Допустимо от 0 до 4 активных услуг");
+    if (!Number.isInteger(count) || count < 0 || count > 8) {
+      throw new DevRuntimeError(400, "DEV_SEED_INVALID", "Допустимо от 0 до 8 активных услуг");
     }
     reservations.clear();
     operations.clear();
@@ -864,6 +864,10 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
       "2026-08-16T06:00:00.000Z",
       "2026-08-17T06:00:00.000Z",
       "2026-08-19T06:00:00.000Z",
+      "2026-08-20T06:00:00.000Z",
+      "2026-08-21T06:00:00.000Z",
+      "2026-08-22T06:00:00.000Z",
+      "2026-08-23T06:00:00.000Z",
     ];
     for (let index = 0; index < count; index += 1) {
       const startsAt = seedDates[index];
@@ -1286,10 +1290,10 @@ const assertLocalOrigin = (request: IncomingMessage) => {
   }
 };
 
-const normalizeShadowCounter = (value: unknown): number => {
+const normalizeShadowCounter = (value: unknown, max = 4): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
-  return Math.min(4, Math.max(0, Math.floor(parsed)));
+  return Math.min(max, Math.max(0, Math.floor(parsed)));
 };
 
 const parseShadowStationIds = (value: unknown): string[] => (
@@ -1691,7 +1695,7 @@ export const managedSubscriptionDevPlugin = (options: {
             joinFixtures: shadowJoinFixtures,
           });
           const result = await runtime.quoteResolved(target, {
-            activeServices: normalizeShadowCounter(body.activeServices),
+            activeServices: normalizeShadowCounter(body.activeServices, 8),
             dailyGameUsage: normalizeShadowCounter(body.dailyGameUsage),
           });
           sendJson(response, 200, {

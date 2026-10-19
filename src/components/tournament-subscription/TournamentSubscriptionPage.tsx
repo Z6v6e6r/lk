@@ -33,15 +33,11 @@ import piterSubscriptionTier1Image from "../../assets/piter-subscription-tier-1.
 import piterSubscriptionTier2Image from "../../assets/piter-subscription-tier-2.webp";
 import piterSubscriptionTier3Image from "../../assets/piter-subscription-tier-3.webp";
 import piterSubscriptionTier4Image from "../../assets/piter-subscription-tier-4.webp";
-import piterSubscriptionRulesFrom20260901Image from "../../assets/piter-subscription-rules-from-20260901.webp";
 import kotelnikiSubscriptionTier1Image from "../../assets/kotelniki-subscription-tier-1.webp";
 import kotelnikiSubscriptionTier2Image from "../../assets/kotelniki-subscription-tier-2.webp";
 import kotelnikiSubscriptionTier3Image from "../../assets/kotelniki-subscription-tier-3.webp";
 import kotelnikiSubscriptionTier4Image from "../../assets/kotelniki-subscription-tier-4.webp";
 import networkSubscriptionImage from "../../assets/network-subscription.webp";
-import subscriptionRulesGoldImage from "../../assets/subscription-rules-gold.webp";
-import subscriptionRulesGreenImage from "../../assets/subscription-rules-green.webp";
-import subscriptionRulesRedImage from "../../assets/subscription-rules-red.webp";
 
 export type SubscriptionPlanId = "friendship" | "sport";
 export type SubscriptionCounterKey = "academy" | "energy5" | "friendship" | "kotelniki_friendship" | "network_friendship" | "piter_friendship" | "ra" | "sirius_friendship" | "sport";
@@ -193,7 +189,7 @@ const PITER_FRIENDSHIP_TERMS = [
   "Один час игры в день бесплатно: создание или присоединение.",
   "Игры длительностью 90 или 120 минут можно создать или присоединиться к ним со скидкой 30%.",
   "Скидка 50% действует на игру с тренером, групповые тренировки и формат «Время на друзей».",
-  "По подписке можно сделать до 4 активных записей на 2 недели вперёд.",
+  "По подписке можно сделать до 8 активных записей на 2 недели вперёд.",
 ] as const;
 
 const PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL =
@@ -312,8 +308,8 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Лето.Падел.Академия за 23 800 ₽",
         artworkSrc: summerSubscriptionAcademyImage,
+        terms: [...PITER_FRIENDSHIP_TERMS],
         guardedStorefrontRulesArtworkAlt: `Новые правила подписки Академия. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-        guardedStorefrontRulesArtworkSrc: subscriptionRulesGoldImage,
         directSubscriptionProductId: resolveTournamentSubscriptionDirectProductId("academy"),
         headClassName: "tournament-subscription-plan-head--sport",
         purchaseMode: "catalog_subscription",
@@ -335,8 +331,8 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Лето.Падел.РА за 23 800 ₽",
         artworkSrc: summerSubscriptionRaImage,
+        terms: [...PITER_FRIENDSHIP_TERMS],
         guardedStorefrontRulesArtworkAlt: `Новые правила подписки РА. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-        guardedStorefrontRulesArtworkSrc: subscriptionRulesGoldImage,
         directSubscriptionProductId: resolveTournamentSubscriptionDirectProductId("ra"),
         headClassName: "tournament-subscription-plan-head--sport",
         purchaseMode: "catalog_subscription",
@@ -357,8 +353,8 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Лето.Падел.Дружба за 9 800 ₽",
         artworkSrc: summerSubscriptionFriendshipImage,
+        terms: [...PITER_FRIENDSHIP_TERMS],
         guardedStorefrontRulesArtworkAlt: `Новые правила подписки Дружба. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-        guardedStorefrontRulesArtworkSrc: subscriptionRulesGreenImage,
         headClassName: "tournament-subscription-plan-head--friendship",
         purchaseMode: "summer_campaign",
         accent: "ДРУЖБА",
@@ -400,7 +396,6 @@ function buildDefaultPageViewConfig(): PageViewConfig {
           batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
           remainingLabel: "Доступно",
           rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Хаб. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-          rulesArtworkSrc: subscriptionRulesRedImage,
           terms: PITER_FRIENDSHIP_TERMS,
           sectionLabel: "Годовые подписки",
         }),
@@ -666,7 +661,6 @@ function resolvePageViewConfig(
       batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
       fallbackTotalLimit: PITER_FRIENDSHIP_FALLBACK_TOTAL,
       rulesArtworkAlt: `Правила подписки Падел.Дружба.Питер. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-      rulesArtworkSrc: piterSubscriptionRulesFrom20260901Image,
       terms: PITER_FRIENDSHIP_TERMS,
       termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
     });
@@ -1536,8 +1530,7 @@ export default function TournamentSubscriptionPage({
           const boundPlanId = plan.planId ?? null;
           const status = plan.counterKey ? statusByCounterKey[plan.counterKey] : null;
           const isGuardedStorefront = plan.purchaseMode === "tiered_counter";
-          const rulesArtworkSrc = plan.guardedStorefrontRulesArtworkSrc || null;
-          const hasRulesArtwork = Boolean(rulesArtworkSrc);
+          const hasRulesArtwork = Boolean(plan.terms?.length);
           const isArtworkFlipped = flippedDisplayId === plan.id;
           const usesSummerCampaignPurchase = plan.purchaseMode !== "catalog_subscription";
           const usesTrackedCounter = Boolean(plan.counterKey);
@@ -1623,24 +1616,14 @@ export default function TournamentSubscriptionPage({
                         />
                       </div>
                       <div
-                        className={`piter-subscription-face piter-subscription-face--back ${rulesArtworkSrc ? "piter-subscription-face--rules-artwork" : ""}`}
+                        className="piter-subscription-face piter-subscription-face--back"
                         aria-hidden={!isArtworkFlipped}
                       >
-                        {rulesArtworkSrc ? (
-                          <img
-                            src={rulesArtworkSrc}
-                            alt={plan.guardedStorefrontRulesArtworkAlt || "Правила подписки"}
-                            className="piter-subscription-rules-artwork"
-                          />
-                        ) : (
-                          <>
-                            <span className="piter-subscription-kicker">{plan.guardedStorefrontKicker}</span>
-                            <h2>Условия подписки</h2>
-                            <ul>
-                              {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
-                            </ul>
-                          </>
-                        )}
+                        <span className="piter-subscription-kicker">{plan.guardedStorefrontKicker}</span>
+                        <h2>Условия подписки</h2>
+                        <ul>
+                          {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
+                        </ul>
                       </div>
                     </div>
                   </button>
@@ -1677,14 +1660,13 @@ export default function TournamentSubscriptionPage({
                           />
                         </div>
                         <div
-                          className="piter-subscription-face piter-subscription-face--back piter-subscription-face--rules-artwork"
+                          className="piter-subscription-face piter-subscription-face--back"
                           aria-hidden={!isArtworkFlipped}
                         >
-                          <img
-                            src={rulesArtworkSrc || ""}
-                            alt={plan.guardedStorefrontRulesArtworkAlt || `Правила подписки ${plan.accent}`}
-                            className="piter-subscription-rules-artwork"
-                          />
+                          <h2>Условия подписки</h2>
+                          <ul>
+                            {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
+                          </ul>
                         </div>
                       </div>
                     </button>

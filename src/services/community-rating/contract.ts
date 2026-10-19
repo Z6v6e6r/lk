@@ -13,7 +13,7 @@ export const COMMUNITY_RATING_VISIT_SCOPE_BY_COMMUNITY_ID: Readonly<Record<strin
 
 export const COMMUNITY_RATING_TABS = ["overall", "dynamics", "games", "tournaments"] as const;
 export const COMMUNITY_RATING_LEGACY_TABS = ["level"] as const;
-export const COMMUNITY_RATING_PERIODS = ["all", "30d"] as const;
+export const COMMUNITY_RATING_PERIODS = ["all", "30d", "month"] as const;
 export const DEFAULT_COMMUNITY_RATING_PERIOD = "30d";
 
 export type CommunityRatingTab = (typeof COMMUNITY_RATING_TABS)[number];
@@ -89,10 +89,10 @@ export function toCommunityRatingTransportTab(tab: CommunityRatingTab): Communit
 
 export function normalizeCommunityRatingPeriod(value: unknown): CommunityRatingPeriod {
   const normalized = normalize(value);
+  if (normalized === "month") return "month";
   if (
     normalized === "30d"
     || normalized === "30days"
-    || normalized === "month"
     || normalized === "7d"
     || normalized === "7days"
     || normalized === "week"
@@ -102,4 +102,22 @@ export function normalizeCommunityRatingPeriod(value: unknown): CommunityRatingP
   ) return "30d";
   if (normalized === "all" || normalized === "alltime" || normalized === "year") return "all";
   return DEFAULT_COMMUNITY_RATING_PERIOD;
+}
+
+// Moscow has used UTC+3 without seasonal changes since 2014.
+export function getCommunityRatingMonthStartTs(nowTs: number): number {
+  const moscowDate = new Date(nowTs + 3 * 60 * 60 * 1000);
+  return Date.UTC(moscowDate.getUTCFullYear(), moscowDate.getUTCMonth(), 1) - 3 * 60 * 60 * 1000;
+}
+
+export function isCommunityRatingSnapshotForPeriod(
+  requestedPeriod: CommunityRatingPeriod,
+  snapshotPeriod: CommunityRatingPeriod,
+  updatedAt: string | null,
+  nowTs: number,
+): boolean {
+  if (requestedPeriod !== snapshotPeriod) return false;
+  if (requestedPeriod !== "month") return true;
+  const updatedAtTs = Date.parse(updatedAt || "");
+  return updatedAtTs >= getCommunityRatingMonthStartTs(nowTs) && updatedAtTs <= nowTs;
 }

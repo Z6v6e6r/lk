@@ -33,6 +33,7 @@ import {
   assertGameAllowsExternalMember,
   isIsolatedSyntheticRuntime,
   operationTouchesOnlyOwnedMembership,
+  stationAllowed,
 } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs";
 
 const NOW = new Date("2026-09-01T09:00:00.000Z");
@@ -129,6 +130,7 @@ class MemoryRepository {
       input.allowedStationIds,
       input.now,
       input.authorizedCapacity,
+      input.deniedStationIds,
     );
     if (game.participants.length >= gameInfo.capacity) throw new PartnerApiError("GAME_FULL", "full", { httpStatus: 409 });
     const duplicate = [...this.memberships.values()].find((membership) => (
@@ -225,9 +227,7 @@ class MemoryRepository {
       || membership.state !== "ACTIVE") {
       throw new PartnerApiError("MEMBERSHIP_NOT_OWNED", "not owned", { httpStatus: 403 });
     }
-    if (!membership.stationId
-      || !Array.isArray(input.allowedStationIds)
-      || !input.allowedStationIds.includes(membership.stationId)) {
+    if (!stationAllowed(membership.stationId, input.allowedStationIds, input.deniedStationIds)) {
       throw new PartnerApiError("STATION_ACCESS_DENIED", "denied", { httpStatus: 403 });
     }
     membership.state = "REMOVAL_PENDING";
@@ -323,6 +323,8 @@ const buildFixture = (overrides = {}) => {
       scopes: overrides.scopes || ["members:add", "members:remove", "operations:read"],
       stationIds: overrides.stationIds || [STATION_ID],
       games: overrides.games === undefined ? { [GAME_ID]: { tenantKey: null, capacity: 4 } } : overrides.games,
+      deniedGames: overrides.deniedGames === undefined ? [] : overrides.deniedGames,
+      deniedStations: overrides.deniedStations === undefined ? [] : overrides.deniedStations,
     }),
   });
   return { repository, provider, service };
@@ -377,11 +379,17 @@ test("canonical JSON is stable and rejects ambiguous numeric input", () => {
   assert.throws(() => canonicalJson({ amount: Number.MAX_SAFE_INTEGER + 1 }), { code: "INVALID_JSON_NUMBER" });
 });
 
-test("canonical paid and pending public games remain joinable until their end time", () => {
-  for (const status of ["PAID", "PAYMENT_PENDING", "OPEN"]) {
-    assert.deepEqual(
-      assertGameAllowsExternalMember(openGame({ status }), [STATION_ID], NOW, 4),
-      { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+test("only a paid public game stays joinable until its end time", () => {
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame(), [STATION_ID], NOW, 4),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+  );
+  // The platform marks a formed and paid game as PAID. Every other lifecycle alias is
+  // refused so an integration client cannot join an unformed, draft or cancelled game.
+  for (const status of ["PAYMENT_PENDING", "OPEN", "PUBLISHED", "ACTIVE", "CREATED", "CANCELLED"]) {
+    assert.throws(
+      () => assertGameAllowsExternalMember(openGame({ status }), [STATION_ID], NOW, 4),
+      { code: "GAME_NOT_OPEN", httpStatus: 409 },
     );
   }
   assert.doesNotThrow(() => assertGameAllowsExternalMember(openGame({
@@ -393,6 +401,52 @@ test("canonical paid and pending public games remain joinable until their end ti
       invite: { maxPlayers: 4, waitlistEnabled: true },
       metadata: { gameFormat: "doubles" },
     }), [STATION_ID], NOW, 4),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+  );
+});
+
+test("a wildcard station grant admits every station while an explicit denial still wins", () => {
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame({ stationId: "station-any-9" }), ["*"], NOW, 4),
+    { stationId: "station-any-9", exerciseId: "viva-exercise-1", capacity: 4 },
+  );
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame({ stationId: "station-any-9" }), ["*"], NOW, 4, ["station-any-9"]),
+    { code: "STATION_ACCESS_DENIED", httpStatus: 403 },
+  );
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame({ stationId: "station-any-9" }), ["station-spb-1"], NOW, 4),
+    { code: "STATION_ACCESS_DENIED", httpStatus: 403 },
+  );
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame(), [], NOW, 4),
+    { code: "STATION_ACCESS_DENIED", httpStatus: 403 },
+  );
+});
+
+test("an absent authorized capacity is derived from the game and still bounded to 2 or 4", () => {
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame({ stationId: STATION_ID }), [STATION_ID], NOW, null),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+  );
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame({ maxPlayers: 2 }), [STATION_ID], NOW, undefined),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 2 },
+  );
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame({ maxPlayers: 8 }), [STATION_ID], NOW, null),
+    { code: "GAME_CAPACITY_INVALID", httpStatus: 409 },
+  );
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame({
+      maxPlayers: undefined,
+      invite: {},
+      metadata: {},
+    }), [STATION_ID], NOW, null),
+    { code: "GAME_CAPACITY_UNKNOWN", httpStatus: 409 },
+  );
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame(), [STATION_ID], NOW, null, undefined),
     { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
   );
 });
@@ -427,9 +481,10 @@ test("archived, ended, private, visibility-conflicted, and incomplete games fail
     assertGameAllowsExternalMember(openGame({ maxPlayers: undefined }), [STATION_ID], NOW, 4),
     { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
   );
-  assert.throws(
-    () => assertGameAllowsExternalMember(openGame(), [STATION_ID], NOW),
-    { code: "GAME_CAPACITY_POLICY_INVALID", httpStatus: 503 },
+  // No pinned capacity means "derive it from the game"; the game's own 4 is accepted.
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame(), [STATION_ID], NOW),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
   );
   for (const maxPlayers of [0, 1, 3, 64, 2.5, "4"]) {
     assert.throws(
@@ -829,6 +884,89 @@ test("scope, station, and server-owned game allowlists fail closed", async () =>
   assert.equal(invalidTenant.provider.addCalls, 0);
   assert.equal(invalidTenant.repository.operations.size, 0);
   assert.equal(invalidTenant.repository.audit.at(-1).code, "GAME_TENANT_POLICY_INVALID");
+});
+
+test("a wildcard grant admits any paid game while explicit denials still win", async () => {
+  const wildcardGames = { "*": { tenantKey: null, capacity: null } };
+  const otherGameId = "another-paid-game-1";
+  const repositoryWithOtherGame = () => {
+    const repository = new MemoryRepository();
+    repository.games.set(otherGameId, openGame({
+      _id: "memory-game-document-2",
+      id: otherGameId,
+      stationId: "station-other-7",
+    }));
+    return repository;
+  };
+  const otherPath = `/lk/integrations/v1/open-games/${otherGameId}/members`;
+
+  const wildcard = buildFixture({
+    repository: repositoryWithOtherGame(),
+    games: wildcardGames,
+    stationIds: ["*"],
+  });
+  const admitted = await wildcard.service.handle(signedRequest({ path: otherPath }));
+  assert.equal(admitted.statusCode, 201);
+  assert.equal(wildcard.provider.addCalls, 1);
+  assert.equal(admitted.body.membership.gameId, otherGameId);
+
+  const deniedGame = buildFixture({
+    repository: repositoryWithOtherGame(),
+    games: wildcardGames,
+    stationIds: ["*"],
+    deniedGames: [otherGameId],
+  });
+  await assert.rejects(
+    () => deniedGame.service.handle(signedRequest({ path: otherPath })),
+    { code: "GAME_ACCESS_DENIED", httpStatus: 403 },
+  );
+  assert.equal(deniedGame.provider.addCalls, 0);
+  assert.equal(deniedGame.repository.operations.size, 0);
+  assert.equal(deniedGame.repository.audit.at(-1).code, "GAME_ACCESS_DENIED");
+
+  const deniedStation = buildFixture({
+    repository: repositoryWithOtherGame(),
+    games: wildcardGames,
+    stationIds: ["*"],
+    deniedStations: ["station-other-7"],
+  });
+  await assert.rejects(
+    () => deniedStation.service.handle(signedRequest({ path: otherPath })),
+    { code: "STATION_ACCESS_DENIED", httpStatus: 403 },
+  );
+  assert.equal(deniedStation.provider.addCalls, 0);
+  assert.equal(deniedStation.repository.memberships.size, 0);
+
+  const malformedDenial = buildFixture({
+    repository: repositoryWithOtherGame(),
+    games: wildcardGames,
+    stationIds: ["*"],
+    deniedGames: "not-a-list",
+  });
+  await assert.rejects(
+    () => malformedDenial.service.handle(signedRequest({ path: otherPath })),
+    { code: "INTEGRATION_POLICY_INVALID", httpStatus: 503 },
+  );
+  assert.equal(malformedDenial.provider.addCalls, 0);
+  assert.equal(malformedDenial.repository.operations.size, 0);
+});
+
+test("an explicit game denial blocks deletion of an existing owned membership", async () => {
+  const repository = new MemoryRepository();
+  const provider = new CountingProvider();
+  const allowed = buildFixture({ repository, provider });
+  const added = await allowed.service.handle(signedRequest());
+  const denied = buildFixture({ repository, provider, games: { "*": { tenantKey: null, capacity: null } },
+    stationIds: ["*"], deniedGames: [GAME_ID] });
+  const before = structuredClone(repository.games.get(GAME_ID));
+  await assert.rejects(() => denied.service.handle(signedRequest({ method: "DELETE",
+    path: `/lk/integrations/v1/open-games/${GAME_ID}/members/${added.body.membership.membershipId}`,
+    body: {} })), { code: "GAME_ACCESS_DENIED", httpStatus: 403 });
+  assert.equal(provider.removeCalls, 0);
+  assert.equal(repository.operations.size, 1);
+  assert.deepEqual(repository.games.get(GAME_ID), before);
+  assert.equal(repository.memberships.get(added.body.membership.membershipId).state, "ACTIVE");
+  assert.equal(repository.audit.at(-1).code, "GAME_ACCESS_DENIED");
 });
 
 test("only the exact membership created by the same client can be removed", async () => {

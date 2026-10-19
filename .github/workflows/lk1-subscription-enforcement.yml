@@ -402,6 +402,9 @@ jobs:
           scripts/tests/legacyRosterBridge.nodered.test.ts
           scripts/tests/gamesPatchCancelGuard.test.ts
           scripts/tests/gamesPatchRecovery.test.mjs
+          scripts/tests/partnerRosterProjection.test.ts
+          scripts/tests/partnerRosterGuard.test.mjs
+          scripts/tests/partnerRosterDuplicateRepair.test.mjs
           scripts/tests/splitPaymentOccupancy.test.ts
           scripts/tests/splitOrdinaryPricing.test.ts
           scripts/tests/splitOrdinaryPriceHook.test.mjs
@@ -449,6 +452,8 @@ jobs:
         run: >-
           node --test
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
+          scripts/tests/lk1ActiveBookingLimit.test.mjs
+          scripts/tests/pulkovoFriendship.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
           scripts/tests/lk1PlanRulesPreview.test.mjs
           scripts/tests/subscriptionPricePreviewSources.test.mjs

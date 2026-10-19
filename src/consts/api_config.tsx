@@ -41,6 +41,8 @@ export const SERV2_FALLBACK =
   || (IS_DEV_RELEASE_CHANNEL ? PROD_SERV2_URL : DEV_SERV2_URL);
 export const LEGACY_ROSTER_BRIDGE_ENABLED =
   String(import.meta.env.VITE_LEGACY_ROSTER_BRIDGE_ENABLED ?? "false").trim().toLowerCase() === "true";
+// Enable only after the trial checkout ingress and backend readiness are verified.
+export const TRIAL_GROUP_CHECKOUT_ENABLED = import.meta.env.VITE_TRIAL_GROUP_CHECKOUT_ENABLED === "true";
 
 export const SUCCESS_URL = resolveReleaseChannelUrl(
   import.meta.env.VITE_SUCCESS_URL as string | undefined,

@@ -30,7 +30,7 @@ Usage:
 
 Options:
   --db <name>          Mongo database name, default: games
-  --periods <csv>      Rating periods, default: all,30d
+  --periods <csv>      Rating periods, default: all,30d,month
   --tabs <csv>         Rating tabs, default: overall,dynamics,games,tournaments
   --dry-run            Build the batch and print summary without writes
   --skip-indexes       Do not create/update rating indexes before writes

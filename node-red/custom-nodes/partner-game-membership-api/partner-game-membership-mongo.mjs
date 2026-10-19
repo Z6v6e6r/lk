@@ -37,15 +37,14 @@ export const PARTNER_MEMBERSHIP_INDEX_SPECS = Object.freeze({
   ],
 });
 
+// The platform lifecycle marks a formed, paid and joinable game as PAID. The other
+// historical aliases stay out on purpose: they never occur in production and only widen
+// the surface an integration client could reach.
 const JOINABLE_GAME_STATUSES = new Set([
-  "OPEN",
-  "PUBLISHED",
-  "ACTIVE",
-  "CREATED",
   "PAID",
-  "PAYMENT_PENDING",
 ]);
 const ACTIVE_MEMBER_STATES = new Set(["SLOT_RESERVED", "VIVA_PENDING", "ACTIVE", "REMOVAL_PENDING", "UNKNOWN"]);
+const STATION_POLICY_WILDCARD = "*";
 
 const isDuplicateKey = (error) => Number(error?.code) === 11000;
 const toText = (value) => (value === null || value === undefined ? "" : String(value).trim());
@@ -106,16 +105,20 @@ const gameExerciseId = (game) => toText(
 );
 
 const gameCapacity = (game, authorizedCapacity) => {
-  if (typeof authorizedCapacity !== "number"
-    || !Number.isSafeInteger(authorizedCapacity)
-    || ![2, 4].includes(authorizedCapacity)) {
+  // null/undefined means the client's policy does not pin a capacity and it must be
+  // derived from the game's own signals. A pinned value is still enforced exactly.
+  const pinned = authorizedCapacity !== null && authorizedCapacity !== undefined;
+  if (pinned
+    && (typeof authorizedCapacity !== "number"
+      || !Number.isSafeInteger(authorizedCapacity)
+      || ![2, 4].includes(authorizedCapacity))) {
     throw new PartnerApiError("GAME_CAPACITY_POLICY_INVALID", "Authorized game capacity is invalid", {
       httpStatus: 503,
       expose: false,
     });
   }
   const rawSignals = [
-    ["authorization.capacity", authorizedCapacity],
+    ...(pinned ? [["authorization.capacity", authorizedCapacity]] : []),
     ["maxPlayers", game?.maxPlayers],
     ["capacity", game?.capacity],
     ["invite.maxPlayers", game?.invite?.maxPlayers],
@@ -165,7 +168,22 @@ const activeParticipants = (game) => asArray(game?.participants).filter((partici
   return status !== "LEFT" && status !== "REMOVED" && status !== "CANCELLED";
 });
 
-export const assertGameAllowsExternalMember = (game, allowedStationIds, now = new Date(), authorizedCapacity) => {
+// A client may hold an explicit station list or the "*" wildcard. An explicit denial
+// always wins, so a single station can be carved out of an all-stations grant.
+export const stationAllowed = (stationId, allowedStationIds, deniedStationIds) => {
+  if (!stationId || !Array.isArray(allowedStationIds) || allowedStationIds.length === 0) return false;
+  if (Array.isArray(deniedStationIds) && deniedStationIds.includes(stationId)) return false;
+  if (allowedStationIds.includes(STATION_POLICY_WILDCARD)) return true;
+  return allowedStationIds.includes(stationId);
+};
+
+export const assertGameAllowsExternalMember = (
+  game,
+  allowedStationIds,
+  now = new Date(),
+  authorizedCapacity,
+  deniedStationIds = [],
+) => {
   if (!game) throw new PartnerApiError("GAME_NOT_FOUND", "Game not found", { httpStatus: 404 });
   const statuses = [game.status, game.state]
     .map((value) => toText(value).toUpperCase())
@@ -198,7 +216,7 @@ export const assertGameAllowsExternalMember = (game, allowedStationIds, now = ne
     throw new PartnerApiError("GAME_NOT_OPEN", "Only an open game can accept integration members", { httpStatus: 409 });
   }
   const stationId = gameStationId(game);
-  if (!stationId || !Array.isArray(allowedStationIds) || !allowedStationIds.includes(stationId)) {
+  if (!stationAllowed(stationId, allowedStationIds, deniedStationIds)) {
     throw new PartnerApiError("STATION_ACCESS_DENIED", "Integration client cannot mutate this station", { httpStatus: 403 });
   }
   const exerciseId = gameExerciseId(game);
@@ -348,6 +366,7 @@ export class MongoPartnerGameMembershipRepository {
           input.allowedStationIds,
           input.now,
           input.authorizedCapacity,
+          input.deniedStationIds,
         );
         const pendingCount = await memberships.countDocuments({
           tenantKey: input.authorizedTenantKey,
@@ -545,9 +564,7 @@ export class MongoPartnerGameMembershipRepository {
         if (!membership) {
           throw new PartnerApiError("MEMBERSHIP_NOT_OWNED", "Only an active membership created by this integration client can be removed", { httpStatus: 403 });
         }
-        if (!membership.stationId
-          || !Array.isArray(input.allowedStationIds)
-          || !input.allowedStationIds.includes(membership.stationId)) {
+        if (!stationAllowed(membership.stationId, input.allowedStationIds, input.deniedStationIds)) {
           throw new PartnerApiError("STATION_ACCESS_DENIED", "Integration client cannot mutate this station", { httpStatus: 403 });
         }
         if (!membership.bookingId || !membership.exerciseId || !membership.technicalVivaClientId

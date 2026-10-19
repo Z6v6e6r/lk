@@ -1,3 +1,4 @@
+import { useCommunityRatingMonth } from "./community-feed/useCommunityRatingMonth";
 import { AvatarImage } from "../UI/AvatarImage";
 import {
   useCallback,
@@ -832,13 +833,14 @@ interface CommunityRankingData {
   confirmedGamesCount: number;
 }
 
-type CommunityRankingCacheKey = `${CommunityRatingPeriod}:${CommunityRankingTypeId}`;
+type CommunityRankingCacheKey = `${CommunityRatingPeriod}:${CommunityRankingTypeId}:${number | "all"}`;
 
 function buildCommunityRankingCacheKey(
   period: CommunityRatingPeriod,
   type: CommunityRankingTypeId,
+  monthStartTs: number,
 ): CommunityRankingCacheKey {
-  return `${period}:${type}`;
+  return `${period}:${type}:${period === "month" ? monthStartTs : "all"}`;
 }
 
 function buildCommunityRankingDataFromBackend(
@@ -1645,6 +1647,7 @@ export function CommunitiesSection({
   const [joiningCommunityId, setJoiningCommunityId] = useState<string | null>(null);
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityDetailTab>("RANKING");
   const [activeRankingType, setActiveRankingType] = useState<CommunityRankingTypeId>("overall");
+  const rankingMonthStartTs = useCommunityRatingMonth();
   const [activeRankingPeriod, setActiveRankingPeriod] = useState<CommunityRatingPeriod>(COMMUNITY_RATING_DEFAULT_PERIOD);
   const [isFeedComposerOpen, setIsFeedComposerOpen] = useState(false);
   const [graphZoomOverride, setGraphZoomOverride] = useState<number | null>(null);
@@ -2037,7 +2040,7 @@ export function CommunitiesSection({
         ...current,
         [communityId]: {
           ...(current[communityId] ?? {}),
-          [buildCommunityRankingCacheKey(activeRankingPeriod, activeRankingType)]: response.data,
+          [buildCommunityRankingCacheKey(activeRankingPeriod, activeRankingType, rankingMonthStartTs)]: response.data,
         },
       }));
       setRankingRefreshLoadingId(null);
@@ -2052,6 +2055,7 @@ export function CommunitiesSection({
     activeCommunityTab,
     activeRankingPeriod,
     activeRankingType,
+    rankingMonthStartTs,
     profile.id,
     profile.phone,
     profileId,
@@ -3289,7 +3293,7 @@ export function CommunitiesSection({
     : 0;
   const currentChatUnreadBadgeCount = Math.min(9, currentChatUnreadCount);
   const currentBackendRanking = selectedCommunity
-    ? (rankingByCommunityId[selectedCommunity.id]?.[buildCommunityRankingCacheKey(activeRankingPeriod, activeRankingType)] ?? null)
+    ? (rankingByCommunityId[selectedCommunity.id]?.[buildCommunityRankingCacheKey(activeRankingPeriod, activeRankingType, rankingMonthStartTs)] ?? null)
     : null;
   const currentRankingData = useMemo(() => {
     if (!selectedCommunity) {
@@ -5691,6 +5695,7 @@ export function CommunitiesSection({
                 rows={currentRankingRows}
                 activeType={activeRankingType}
                 activePeriod={activeRankingPeriod}
+                monthStartTs={rankingMonthStartTs}
                 gamesCount={currentRankingGamesCount}
                 chatBadgeCount={currentChatUnreadBadgeCount}
                 isLoading={isCurrentRankingLoading}

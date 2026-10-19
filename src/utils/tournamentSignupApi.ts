@@ -4,6 +4,7 @@ import {
   SERV2,
   SERV2_FALLBACK,
   TENANT_KEY,
+  TRIAL_GROUP_CHECKOUT_ENABLED,
 } from "../consts/api_config";
 import {
   apiFetchSubscriptionDailyLimitBookings,
@@ -3156,7 +3157,8 @@ export async function apiFetchTournamentSubscriptionDiscounts(
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
-  const trialGroupTarget = isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament);
+  const trialGroupTarget = TRIAL_GROUP_CHECKOUT_ENABLED
+    && (isTrialGroupTraining(params.exercise) || isTrialGroupTraining(params.tournament));
   if (trialGroupTarget && !["client-subscription", "one-time", "client-one-time"].includes(params.product.source)) {
     return { data: null, error: { status: 409,
       message: "Этот способ записи на пробную тренировку недоступен. Выберите разовую услугу или имеющийся абонемент." }, status: 409 };

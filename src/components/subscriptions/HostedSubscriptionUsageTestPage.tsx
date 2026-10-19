@@ -285,7 +285,7 @@ export function HostedSubscriptionUsageTestPage({
     await load();
   };
 
-  const activeLimit = scenario?.limits.maxActiveServices ?? 4;
+  const activeLimit = scenario?.limits.maxActiveServices ?? 8;
   const stateOptions = useMemo(() => Array.from({ length: activeLimit + 1 }, (_, value) => value), [activeLimit]);
 
   if (loading && !scenario) {

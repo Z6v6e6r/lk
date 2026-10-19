@@ -534,9 +534,9 @@ const normalizeRatingTab = (value) => {
 const normalizeRatingPeriod = (value) => {
   const normalized = toStr(value)?.toLowerCase();
   if (normalized === 'all' || normalized === 'alltime' || normalized === 'year') return 'all';
+  if (normalized === 'month') return 'month';
   if (
-    normalized === 'month'
-    || normalized === '30days'
+    normalized === '30days'
     || normalized === '30d'
     || normalized === '7d'
     || normalized === '7days'
@@ -549,6 +549,10 @@ const normalizeRatingPeriod = (value) => {
 };
 const getRatingPeriodStartTs = (period) => {
   if (period === 'all') return null;
+  if (period === 'month') {
+    const moscowDate = new Date(nowTs + 3 * 60 * 60 * 1000);
+    return Date.UTC(moscowDate.getUTCFullYear(), moscowDate.getUTCMonth(), 1) - 3 * 60 * 60 * 1000;
+  }
   return nowTs - 30 * 24 * 60 * 60 * 1000;
 };
 const memberIdentityKeys = (value) => {
@@ -3624,6 +3628,9 @@ msg.payload = {
   period: normalizeRatingPeriod(ctx.period),
   calculationVersion: COMMUNITY_RATING_CALCULATION_VERSION,
 };
+if (msg.payload.period === 'month') {
+  msg.payload.updatedAtTs = { $gte: getRatingPeriodStartTs('month'), $lte: nowTs };
+}
 return [msg, null, msg];
 `;
 

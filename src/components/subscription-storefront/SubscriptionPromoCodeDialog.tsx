@@ -100,7 +100,7 @@ export function SubscriptionPromoCodeDialog({ productId, title, planId, billingO
     } finally { operationActive = false; busy.current = false; paying.current = false; setProcessing(false); }
   }
 
-  return createPortal(<div className="subscription-auth-overlay subscription-code-overlay" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}
+  return createPortal(<div className="subscription-storefront-runtime subscription-auth-overlay subscription-code-overlay" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}
     onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); close(); }
       if (event.key !== 'Tab') return;

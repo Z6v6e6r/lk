@@ -152,6 +152,8 @@ export type CommunityRatingFact =
   })
   | (CommunityRatingFactBase & {
     eventType: "tournament";
+    // Calendar-month awards use the scheduled event date, not the later closing date.
+    eventStartedAtTs?: number;
     metrics: CommunityRatingTournamentFactMetrics;
   })
   | (CommunityRatingFactBase & {
@@ -1306,6 +1308,21 @@ function resolveTournamentTimestamp(tournament: Record<string, unknown>, fallbac
   );
 }
 
+function resolveTournamentStartTimestamp(post: Record<string, unknown>, tournament: Record<string, unknown>): number | null {
+  const details = isRecord(post.details) ? post.details : {};
+  const publicTournament = isRecord(details.publicTournament) ? details.publicTournament : {};
+  const sourceSnapshot = isRecord(details.sourceTournamentSnapshot) ? details.sourceTournamentSnapshot : {};
+  const params = isRecord(tournament.params) ? tournament.params : {};
+  // Match the calendar selection used by the monthly awards report.
+  const candidates = [
+    post.startAt, post.startsAt, details.startsAt, details.startAt,
+    publicTournament.startsAt, publicTournament.startAt, sourceSnapshot.startsAt,
+    tournament.startsAt, tournament.startAt, tournament.timeFrom,
+    params.startsAt, params.startAt, params.timeFrom,
+  ];
+  return candidates.map(parseTs).find((ts) => ts != null && ts > 0) ?? null;
+}
+
 function extractTournamentFacts(input: {
   communityId: string;
   post: Record<string, unknown>;
@@ -1324,6 +1341,7 @@ function extractTournamentFacts(input: {
   if (rows.length === 0 || participantsCount <= 0) return [];
 
   const occurredAtTs = resolveTournamentTimestamp(input.tournament, resolvePostTimestamp(input.post));
+  const eventStartedAtTs = resolveTournamentStartTimestamp(input.post, input.tournament) ?? occurredAtTs;
   if (occurredAtTs <= 0) return [];
 
   const sourcePostId = pickString(input.post, ["id", "postId"]) || null;
@@ -1355,6 +1373,7 @@ function extractTournamentFacts(input: {
           collectedAt: input.collectedAt,
         }),
         eventType: "tournament",
+        eventStartedAtTs,
         metrics: {
           tournamentsPlayed: 1,
           participantsCount,

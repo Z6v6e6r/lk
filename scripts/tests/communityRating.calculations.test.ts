@@ -74,7 +74,7 @@ function createItem(overrides: Partial<CommunityRatingItem>): CommunityRatingIte
 test("rating contract exposes approved version, tabs, and periods", () => {
   assert.equal(COMMUNITY_RATING_CALCULATION_VERSION, "community-rating-v1.3.0");
   assert.deepEqual([...COMMUNITY_RATING_TABS], ["overall", "dynamics", "games", "tournaments"]);
-  assert.deepEqual([...COMMUNITY_RATING_PERIODS], ["all", "30d"]);
+  assert.deepEqual([...COMMUNITY_RATING_PERIODS], ["all", "30d", "month"]);
 });
 
 test("rating contract locks approved formula weights", () => {
@@ -140,7 +140,7 @@ test("rating transport keeps backend compatibility for dynamics tab", () => {
 
 test("rating period normalizer accepts product aliases", () => {
   assert.equal(normalizeCommunityRatingPeriod("week"), "30d");
-  assert.equal(normalizeCommunityRatingPeriod("month"), "30d");
+  assert.equal(normalizeCommunityRatingPeriod("month"), "month");
   assert.equal(normalizeCommunityRatingPeriod("quarter"), "30d");
   assert.equal(normalizeCommunityRatingPeriod("year"), "all");
   assert.equal(normalizeCommunityRatingPeriod("unknown"), "30d");

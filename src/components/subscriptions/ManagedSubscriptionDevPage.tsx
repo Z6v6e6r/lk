@@ -434,7 +434,7 @@ export function ManagedSubscriptionDevPage() {
         <label>
           Активных услуг
           <select value={seedCount} onChange={(event) => setSeedCount(Number(event.target.value))}>
-            {[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{value}</option>)}
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
         </label>
         <button type="button" onClick={() => void seed()} disabled={busyKey !== null}>

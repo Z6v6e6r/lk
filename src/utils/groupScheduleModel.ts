@@ -1,4 +1,5 @@
 import { EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS } from "./exerciseCategory.ts";
+import { TRIAL_GROUP_DIRECTION_ID } from "./trialGroupTraining.ts";
 
 export const GROUP_SCHEDULE_BOOKING_DAYS = 14;
 export const GROUP_SCHEDULE_GAME_PLUS_TRAINER_TYPE_ID = 847;
@@ -26,6 +27,10 @@ export const GROUP_SCHEDULE_DIRECTION_PRESETS: Record<string, GroupScheduleDirec
   kids: {
     label: "Детская академия падел",
     directionIds: GROUP_SCHEDULE_KIDS_ACADEMY_DIRECTION_IDS,
+  },
+  trial: {
+    label: "Пробные групповые тренировки",
+    directionIds: [TRIAL_GROUP_DIRECTION_ID],
   },
 };
 

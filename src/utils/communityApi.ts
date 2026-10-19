@@ -15,6 +15,8 @@ import {
 } from "../consts/api_config";
 import {
   COMMUNITY_RATING_CALCULATION_VERSION,
+  getCommunityRatingMonthStartTs,
+  isCommunityRatingSnapshotForPeriod,
   normalizeCommunityRatingPeriod,
   normalizeCommunityRatingTab,
   toCommunityRatingTransportTab,
@@ -2152,6 +2154,7 @@ export async function apiFetchCommunityRanking(
   if (clientId) query.set("clientId", clientId);
   query.set("tab", toCommunityRatingTransportTab(tab));
   query.set("period", period);
+  if (period === "month") query.set("monthStartTs", String(getCommunityRatingMonthStartTs(Date.now())));
   query.set("calculationVersion", COMMUNITY_RATING_CALCULATION_VERSION);
   const requestOptions = {
     method: "GET" as const,
@@ -2190,7 +2193,8 @@ export async function apiFetchCommunityRanking(
   if (!parsed) {
     return errorResult<CommunityRankingResponse>(response.status, "Не удалось разобрать рейтинг сообщества", null);
   }
-  if (!isCurrentCommunityRatingCalculationVersion(parsed.calculationVersion)) {
+  if (!isCurrentCommunityRatingCalculationVersion(parsed.calculationVersion)
+    || !isCommunityRatingSnapshotForPeriod(period, parsed.period, parsed.updatedAt, Date.now())) {
     return errorResult<CommunityRankingResponse>(409, "Рейтинг обновляется. Попробуйте ещё раз через минуту.", null);
   }
 

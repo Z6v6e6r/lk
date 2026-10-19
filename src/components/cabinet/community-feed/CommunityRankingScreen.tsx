@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { getCommunityRatingMonthLabel } from "./useCommunityRatingMonth";
 import type { CommunityRatingPeriod, CommunityRecord } from "../../../utils/communityApi";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import { CommunityHeader } from "./CommunityHeader";
@@ -22,6 +23,7 @@ interface CommunityRankingScreenProps {
   rows: CommunityRankingRowModel[];
   activeType: CommunityRankingTypeId;
   activePeriod: CommunityRatingPeriod;
+  monthStartTs: number;
   gamesCount: number;
   chatBadgeCount: number;
   isLoading: boolean;
@@ -47,10 +49,12 @@ const RATING_TYPE_OPTIONS: Array<{ id: CommunityRankingTypeId; label: string }> 
   { id: "tournaments", label: "Турниры" },
 ];
 
-const RATING_PERIOD_OPTIONS: Array<{ id: CommunityRatingPeriod; label: string; layoutClass: string }> = [
-  { id: "all", label: "Все время", layoutClass: "period-all" },
-  { id: "30d", label: "Месяц", layoutClass: "month" },
-];
+function getRatingPeriodOptions(monthStartTs: number): Array<{ id: CommunityRatingPeriod; label: string; layoutClass: string }> {
+  return [
+    { id: "all", label: "Все время", layoutClass: "period-all" },
+    { id: "month", label: getCommunityRatingMonthLabel(monthStartTs), layoutClass: "month" },
+  ];
+}
 
 const RATING_TYPE_LAYOUT_CLASS: Record<CommunityRankingTypeId, string> = {
   overall: "month",
@@ -187,6 +191,7 @@ export function CommunityRankingScreen({
   rows,
   activeType,
   activePeriod,
+  monthStartTs,
   gamesCount,
   chatBadgeCount,
   isLoading,
@@ -202,6 +207,7 @@ export function CommunityRankingScreen({
   onSelectBottomNav,
   navActionSlot,
 }: CommunityRankingScreenProps) {
+  const ratingPeriodOptions = getRatingPeriodOptions(monthStartTs);
   const screenRef = useRef<HTMLDivElement | null>(null);
   const [searchValue, setSearchValue] = useState("");
   const [stickyOffsets, setStickyOffsets] = useState({ top: 0, bottom: 88 });
@@ -324,11 +330,13 @@ export function CommunityRankingScreen({
 
         <div className="community-ranking-box">
           <div className="community-ranking-filter-bar community-ranking-filter-bar--period" aria-label="Период рейтинга">
-            {RATING_PERIOD_OPTIONS.map((option) => (
+            {ratingPeriodOptions.map((option) => (
               <button
                 key={option.id}
                 type="button"
                 className={`community-ranking-filter-chip community-ranking-filter-chip--${option.layoutClass}${activePeriod === option.id ? " is-active" : ""}`}
+                aria-pressed={activePeriod === option.id}
+                aria-label={option.id === "month" ? `Текущий месяц: ${option.label}` : option.label}
                 onClick={() => onChangePeriod(option.id)}
               >
                 {option.label}

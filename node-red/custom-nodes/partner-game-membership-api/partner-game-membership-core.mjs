@@ -12,6 +12,12 @@ const SIGNATURE_PATTERN = /^v2=([A-Za-z0-9_-]{43})$/;
 const EXTERNAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
+// A single "*" entry widens an integration client from an explicit id list to every
+// game or station the platform may serve. Only the root-owned activation anchor grants
+// the wildcard; this module never invents one and always lets explicit denials win.
+export const PARTNER_GAME_POLICY_WILDCARD = "*";
+export const PARTNER_STATION_POLICY_WILDCARD = "*";
+
 export class PartnerApiError extends Error {
   constructor(code, message, options = {}) {
     super(message);
@@ -47,6 +53,21 @@ const hasControlCharacter = (value) => [...String(value || "")].some((character)
   const code = character.charCodeAt(0);
   return code <= 31 || code === 127;
 });
+
+// Denials narrow a wildcard grant, so a malformed list fails closed instead of
+// silently widening the client back to every game or station.
+const normalizeDenialList = (value, kind) => {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)
+    || value.length > 64
+    || value.some((entry) => typeof entry !== "string" || entry.length === 0 || entry.length > 128)) {
+    throw new PartnerApiError("INTEGRATION_POLICY_INVALID", `Integration client ${kind} denial list is invalid`, {
+      httpStatus: 503,
+      expose: false,
+    });
+  }
+  return [...new Set(value)];
+};
 
 export function canonicalJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
@@ -311,18 +332,29 @@ export async function verifyPartnerRequestProof(request, options) {
     games: credential.games && typeof credential.games === "object" && !Array.isArray(credential.games)
       ? credential.games
       : {},
+    deniedGames: normalizeDenialList(credential.deniedGames, "game"),
+    deniedStations: normalizeDenialList(credential.deniedStations, "station"),
   };
 }
 
 const authorizedGamePolicy = (auth, gameId) => {
-  if (!auth.games || !Object.hasOwn(auth.games, gameId)) {
+  const games = auth.games || {};
+  if (Array.isArray(auth.deniedGames) && auth.deniedGames.includes(gameId)) {
     throw new PartnerApiError("GAME_ACCESS_DENIED", "Integration client cannot mutate this game", { httpStatus: 403 });
   }
-  const policy = auth.games[gameId];
-  const capacity = policy && typeof policy === "object" && !Array.isArray(policy)
-    ? policy.capacity
+  const explicit = Object.hasOwn(games, gameId) ? games[gameId] : null;
+  const wildcard = explicit === null && Object.hasOwn(games, PARTNER_GAME_POLICY_WILDCARD)
+    ? games[PARTNER_GAME_POLICY_WILDCARD]
     : null;
-  if (typeof capacity !== "number" || !Number.isSafeInteger(capacity) || ![2, 4].includes(capacity)) {
+  const policy = explicit === null ? wildcard : explicit;
+  if (policy === null || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new PartnerApiError("GAME_ACCESS_DENIED", "Integration client cannot mutate this game", { httpStatus: 403 });
+  }
+  // A pinned capacity keeps the authorised number; null derives it from the game itself
+  // and still refuses any capacity other than 2 (singles) or 4 (doubles).
+  const capacity = policy.capacity === undefined ? null : policy.capacity;
+  if (capacity !== null
+    && (typeof capacity !== "number" || !Number.isSafeInteger(capacity) || ![2, 4].includes(capacity))) {
     throw new PartnerApiError("GAME_CAPACITY_POLICY_INVALID", "Authorized game capacity is invalid", {
       httpStatus: 503,
       expose: false,
@@ -443,6 +475,10 @@ export class PartnerGameMembershipApiService {
       throw new PartnerApiError("SCOPE_DENIED", "Integration client lacks the required scope", { httpStatus: 403 });
     }
     let routeAuthorization = route;
+    if (route.action === "REMOVE_MEMBER" && auth.deniedGames.includes(route.gameId)) {
+      await this.auditIngress(request, auth, "REJECTED", "GAME_ACCESS_DENIED");
+      throw new PartnerApiError("GAME_ACCESS_DENIED", "Integration client cannot mutate this game", { httpStatus: 403 });
+    }
     if (route.action === "ADD_MEMBER") {
       try {
         const gamePolicy = authorizedGamePolicy(auth, route.gameId);
@@ -525,6 +561,7 @@ export class PartnerGameMembershipApiService {
         displayName: body.displayName,
         payment: body.payment,
         allowedStationIds: auth.stationIds,
+        deniedStationIds: auth.deniedStations,
         authorizedCapacity: route.authorizedCapacity,
         authorizedTenantKey: route.authorizedTenantKey,
         now: this.now(),
@@ -586,6 +623,7 @@ export class PartnerGameMembershipApiService {
         gameId: route.gameId,
         membershipId: route.membershipId,
         allowedStationIds: auth.stationIds,
+        deniedStationIds: auth.deniedStations,
         now: this.now(),
       });
       try {
