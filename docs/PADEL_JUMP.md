@@ -1,12 +1,14 @@
 # PadlHub Jump — exhibition prototype
 
+Campaign update (20 October): see [the implementation, balance, tests and human-test protocol](PADEL_JUMP_CAMPAIGN.md). Rackets now give one bounce and fall; the default route is the 11-station campaign.
+
 Target event: 13 November 2026. This branch provides a playable local prototype, not a published exhibition release.
 
 ## Implemented
 
 - A shared TypeScript simulation and Canvas renderer for web and Capacitor WebViews.
 - Auto-jumping ball, racket/court platforms, spring nets, moving platforms later in the course, an endless generated route, height and game over/retry.
-- Left/right touch or pointer hold on the field or buttons; desktop arrows or A/D. P or Escape pauses. The ball wraps horizontally at the field edges.
+- Left/right touch or pointer hold on the field or buttons; desktop arrows or A/D. P or Escape pauses. The ball wraps horizontally at the field edges in endless mode; the campaign has side walls.
 - Explicit pause/resume, automatic pause on blur, hidden document and pagehide, bounded fixed-step simulation, resize and animation cleanup on unmount.
 - Device-local personal best with a storage-denied fallback. This record is not authoritative for prizes and is not linked to a player account.
 - Cabinet entry card, guest entry above the home sign-in form, and `?padelJump=1` guest route. Android's existing tournament-only home also has a guest entry card before sign-in and an entry above tournaments after sign-in. Return removes only the game query parameter.
