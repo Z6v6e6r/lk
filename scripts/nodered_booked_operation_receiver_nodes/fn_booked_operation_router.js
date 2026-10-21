@@ -4,11 +4,19 @@
 // collection. The first accepted admission is written with `$setOnInsert`, so a
 // repeated or racing POST can never overwrite the binding and never creates a
 // second attempt. Missing/ambiguous storage fails closed and never reports
-// CONFIRMED. No provider call happens anywhere in this flow.
+// CONFIRMED.
+//
+// Output 3 forwards a PENDING admission to the disabled-by-default execution
+// adapter. It only does so when the verified delegation carried the complete
+// actor-token/subscription binding (`execution.enabled`), the target is
+// admissible and still in the future. The adapter itself writes the ATTEMPTING
+// dispatch marker before any provider POST; an ATTEMPTING or terminal operation
+// is never forwarded again.
 
 const OUTPUT_UPSERT = 0;
 const OUTPUT_RESPONSE = 1;
 const OUTPUT_FIND = 2;
+const OUTPUT_EXECUTE = 3;
 
 const isObject = (value) => Boolean(value)
   && typeof value === "object"
@@ -31,14 +39,14 @@ const respond = (msg, statusCode, body) => {
   };
   msg.payload = body;
   delete msg._bookedOperation;
-  return [null, msg, null];
+  return [null, msg, null, null];
 };
 const reject = (msg, statusCode, code) => respond(msg, statusCode, { error: code, code });
 const unavailable = (msg, code) => reject(msg, 503, code);
 
-// Strict read outcome: only contractVersion, operationId, status, asOf, reason.
-// REJECTED is deliberately reported as UNKNOWN/RECONCILIATION_REQUIRED: it is
-// not confirmed booking evidence and never authorizes another purchase.
+// Strict read outcome: PENDING/ATTEMPTING -> PENDING, CONFIRMED -> CONFIRMED,
+// UNKNOWN -> UNKNOWN. REJECTED is a stable terminal 409 error payload: it is not
+// confirmation evidence and never authorizes another purchase.
 const outcome = (document, operationId) => {
   const state = toText(document && document.state);
   // asOf is durable updatedAt only: never the read clock and never a fallback
@@ -46,29 +54,67 @@ const outcome = (document, operationId) => {
   const asOf = isCanonicalIso(document && document.updatedAt) ? document.updatedAt : null;
   if (state === "CONFIRMED" && asOf) {
     return {
-      asOf,
-      contractVersion: 1,
-      operationId,
-      reason: "OWNER_BOOKING_CONFIRMED",
       status: "CONFIRMED",
+      statusCode: 200,
+      payload: {
+        asOf,
+        contractVersion: 1,
+        operationId,
+        reason: "OWNER_BOOKING_CONFIRMED",
+        status: "CONFIRMED",
+      },
     };
   }
-  if (state === "PENDING" && asOf) {
+  if (state === "PENDING" || state === "ATTEMPTING") {
     return {
-      asOf,
-      contractVersion: 1,
-      operationId,
-      reason: "OWNER_PENDING",
       status: "PENDING",
+      statusCode: 202,
+      payload: {
+        asOf,
+        contractVersion: 1,
+        operationId,
+        reason: "OWNER_PENDING",
+        status: "PENDING",
+      },
+    };
+  }
+  if (state === "REJECTED") {
+    return {
+      status: "REJECTED",
+      statusCode: 409,
+      payload: {
+        asOf,
+        code: "BOOKED_OPERATION_REJECTED",
+        contractVersion: 1,
+        error: "BOOKED_OPERATION_REJECTED",
+        operationId,
+        rejectionCode: toText(document && document.rejectionCode)
+          || "PROVIDER_BOOKING_REJECTED",
+      },
     };
   }
   return {
-    asOf,
-    contractVersion: 1,
-    operationId,
-    reason: "RECONCILIATION_REQUIRED",
     status: "UNKNOWN",
+    statusCode: 202,
+    payload: {
+      asOf,
+      contractVersion: 1,
+      operationId,
+      reason: "RECONCILIATION_REQUIRED",
+      status: "UNKNOWN",
+    },
   };
+};
+const respondOutcome = (msg, context, document) => {
+  const mapped = outcome(document, context.operationId);
+  if (mapped.status === "REJECTED") {
+    return respond(msg, 409, mapped.payload);
+  }
+  return respond(
+    msg,
+    context.mode === "read" ? 200 : mapped.statusCode,
+    mapped.payload,
+  );
 };
 const bindingMatches = (document, context) => {
   if (
@@ -88,6 +134,28 @@ const bindingMatches = (document, context) => {
   return context.mode === "read"
     ? true
     : document.delegationBindingSha256 === context.bindingSha256;
+};
+// Only a PENDING admission with the complete, already verified token/subscription
+// binding moves to the adapter. ATTEMPTING (a dispatched or in-flight write) and
+// every terminal state are answered from the durable document instead.
+const executionStart = (document, context) => {
+  if (context.mode !== "admit" || context.executionSuppressed === true) return null;
+  const execution = isObject(context.execution) ? context.execution : null;
+  if (!execution || execution.enabled !== true || !toText(execution.actorToken)) return null;
+  if (!isObject(document) || document.state !== "PENDING") return null;
+  if (document.targetAdmissible !== true) return null;
+  const startsAt = Date.parse(document.targetStartsAt);
+  if (!Number.isFinite(startsAt) || startsAt <= Date.now()) return null;
+  if (
+    !toText(document.providerExerciseId)
+    || !toText(document.providerClientId)
+    || !toText(document.providerClientSubscriptionId)
+    || !toText(document.tenantKey)
+  ) {
+    return null;
+  }
+  msg._bookedOperation = { ...context, step: "execute", stored: document };
+  return [null, null, null, msg];
 };
 
 const context = isObject(msg._bookedOperation) ? msg._bookedOperation : null;
@@ -129,7 +197,7 @@ if (context.step === "find" || context.step === "readback") {
       { $setOnInsert: context.document },
       { upsert: true },
     ];
-    return [msg, null, null];
+    return [msg, null, null, null];
   }
   const document = rows[0];
   if (!bindingMatches(document, context)) {
@@ -137,11 +205,11 @@ if (context.step === "find" || context.step === "readback") {
       ? reject(msg, 404, "BOOKED_OPERATION_NOT_FOUND")
       : reject(msg, 409, "BOOKED_OPERATION_BINDING_CONFLICT");
   }
-  return respond(
-    msg,
-    context.mode === "read" ? 200 : 202,
-    outcome(document, context.operationId),
-  );
+  if (context.step === "find" && context.mode === "admit") {
+    const start = executionStart(document, context);
+    if (start) return start;
+  }
+  return respondOutcome(msg, context, document);
 }
 
 if (context.step === "write") {
@@ -160,14 +228,18 @@ if (context.step === "write") {
   const exactExisting = acknowledgement.upsertedCount === 0
     && Number(acknowledgement.matchedCount) === 1;
   if (exactInsert) {
-    return respond(msg, 202, outcome(context.document, context.operationId));
+    if (isObject(context.document) && context.mode === "admit") {
+      const start = executionStart(context.document, context);
+      if (start) return start;
+    }
+    return respondOutcome(msg, context, context.document);
   }
   if (exactExisting) {
     // Lost the race or lost the insert acknowledgement: recover by reading the
     // durable document. Never attempt a second write.
     msg._bookedOperation = { ...context, step: "readback" };
     msg.payload = { _id: context.operationId };
-    return [null, null, msg];
+    return [null, null, msg, null];
   }
   return unavailable(msg, "BOOKED_OPERATION_STORE_UNAVAILABLE");
 }

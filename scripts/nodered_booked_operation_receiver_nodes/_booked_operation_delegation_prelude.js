@@ -43,6 +43,16 @@ const BOOKED_OP_READ_CLAIMS = [
   "tenant_id", "tenant_key", "sid", "provider", "provider_client_id",
   "provider_mapping_id", "correlation_id",
 ];
+// Contract extension negotiated with LK2 for real execution. They are optional in
+// the signed delegation so the current PENDING-only contract keeps verifying
+// unchanged; the executor only runs when all required bindings are present.
+const BOOKED_OP_ADMIT_OPTIONAL_CLAIMS = [
+  "actor_token_sha256", "actor_token_expires_at", "provider_client_subscription_id",
+];
+const BOOKED_OP_ACTOR_TOKEN_HEADER = "x-subscription-actor-token";
+const BOOKED_OP_ACTOR_TOKEN_HEADER_UPPER = "X-Subscription-Actor-Token";
+const BOOKED_OP_ACTOR_TOKEN = /^[!-~]{16,4096}$/;
+const BOOKED_OP_EXECUTION_ENABLED_VALUES = ["1", "true", "yes", "on"];
 
 const bookedOperationIsObject = (value) => Boolean(value)
   && typeof value === "object"
@@ -81,6 +91,26 @@ const bookedOperationScrubDelegation = (msg) => {
   if (bookedOperationIsObject(msg.req) && bookedOperationIsObject(msg.req.headers)) {
     delete msg.req.headers["x-subscription-actor-delegation"];
     delete msg.req.headers["X-Subscription-Actor-Delegation"];
+    delete msg.req.headers[BOOKED_OP_ACTOR_TOKEN_HEADER];
+    delete msg.req.headers[BOOKED_OP_ACTOR_TOKEN_HEADER_UPPER];
+  }
+};
+const bookedOperationExecutionFlagEnabled = (env) => BOOKED_OP_EXECUTION_ENABLED_VALUES.includes(
+  String(bookedOperationEnv(env, "BOOKED_OPERATION_EXECUTION_ENABLED") || "").toLowerCase(),
+);
+// Constant-time comparison of the header token hash with the signed claim.
+const bookedOperationTokenBindingMatches = (token, claim) => {
+  if (!BOOKED_OP_SHA256.test(bookedOperationToText(claim) || "")) return false;
+  if (!BOOKED_OP_ACTOR_TOKEN.test(bookedOperationToText(token) || "")) return false;
+  const expected = String(claim).slice("sha256:".length);
+  const actual = nodeCrypto.createHash("sha256").update(token, "utf8").digest("hex");
+  try {
+    return nodeCrypto.timingSafeEqual(
+      Buffer.from(actual, "hex"),
+      Buffer.from(expected, "hex"),
+    );
+  } catch (_error) {
+    return false;
   }
 };
 const bookedOperationDecode = (part) => {
@@ -170,6 +200,9 @@ const bookedOperationBindingSha256 = (claims) => bookedOperationSha256(
     claims.target_duration_minutes === undefined ? null : claims.target_duration_minutes,
     claims.target_capacity === undefined ? null : claims.target_capacity,
     claims.target_admissible === undefined ? null : claims.target_admissible,
+    claims.provider_client_subscription_id === undefined
+      ? null
+      : claims.provider_client_subscription_id,
   ]),
 );
 
@@ -234,13 +267,30 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   if (!claims) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
-  const expectedClaims = (mode === "admit" ? BOOKED_OP_ADMIT_CLAIMS : BOOKED_OP_READ_CLAIMS)
+  const requiredClaims = (mode === "admit" ? BOOKED_OP_ADMIT_CLAIMS : BOOKED_OP_READ_CLAIMS)
     .slice()
     .sort();
+  const optionalClaims = mode === "admit" ? BOOKED_OP_ADMIT_OPTIONAL_CLAIMS : [];
   const actualClaims = Object.keys(claims).sort();
   if (
-    actualClaims.length !== expectedClaims.length
-    || actualClaims.some((key, index) => key !== expectedClaims[index])
+    requiredClaims.some((key) => !Object.hasOwn(claims, key))
+    || actualClaims.some((key) => !requiredClaims.includes(key) && !optionalClaims.includes(key))
+  ) {
+    return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
+  }
+  if (
+    mode === "admit"
+    && (
+      (claims.actor_token_sha256 !== undefined
+        && !BOOKED_OP_SHA256.test(bookedOperationToText(claims.actor_token_sha256) || ""))
+      || (claims.actor_token_expires_at !== undefined
+        && !bookedOperationIsCanonicalIso(claims.actor_token_expires_at))
+      || (claims.actor_token_expires_at !== undefined && claims.actor_token_sha256 === undefined)
+      || (claims.provider_client_subscription_id !== undefined
+        && !BOOKED_OP_ID.test(
+          bookedOperationToText(claims.provider_client_subscription_id) || "",
+        ))
+    )
   ) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
@@ -294,8 +344,36 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   if (!correlationHeader || correlationHeader !== claims.correlation_id) {
     return bookedOperationInvalid(403, "BOOKED_OPERATION_DELEGATION_CONTEXT_MISMATCH");
   }
+  // Contract extension for real execution: the signed delegation binds the exact
+  // user-scoped Viva token the caller must present in the wire header. A token
+  // without that claim is never used, and a header token must never be swapped
+  // across delegations.
+  let actorToken = null;
+  if (mode === "admit" && claims.actor_token_sha256 !== undefined) {
+    const headerToken = bookedOperationHeader(msg, BOOKED_OP_ACTOR_TOKEN_HEADER);
+    if (!headerToken) {
+      return bookedOperationInvalid(403, "BOOKED_OPERATION_ACTOR_TOKEN_REQUIRED");
+    }
+    if (!bookedOperationTokenBindingMatches(headerToken, claims.actor_token_sha256)) {
+      return bookedOperationInvalid(403, "BOOKED_OPERATION_ACTOR_TOKEN_MISMATCH");
+    }
+    if (claims.actor_token_expires_at !== undefined) {
+      const expiry = Date.parse(claims.actor_token_expires_at);
+      if (!Number.isFinite(expiry) || expiry <= Date.now() + config.clockSkewSeconds * 1000) {
+        return bookedOperationInvalid(403, "BOOKED_OPERATION_ACTOR_TOKEN_EXPIRED");
+      }
+    }
+    actorToken = headerToken;
+  }
   return {
     ok: true,
+    actorToken,
+    actorTokenExpiresAt: claims.actor_token_expires_at === undefined
+      ? null
+      : claims.actor_token_expires_at,
+    actorTokenSha256: claims.actor_token_sha256 === undefined
+      ? null
+      : claims.actor_token_sha256,
     claims,
     config,
     bindingSha256: bookedOperationBindingSha256(claims),

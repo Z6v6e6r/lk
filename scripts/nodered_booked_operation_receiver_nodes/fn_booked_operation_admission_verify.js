@@ -80,6 +80,26 @@ if (
 }
 
 const nowIso = new Date().toISOString();
+// Execution adapter context. It is valid only when the activation flag is on AND
+// the signed delegation bound the exact user-scoped token AND the operation maps
+// a Viva clientSubscriptionId. Anything else keeps the operation fail-closed at
+// PENDING with no provider call, as today.
+const providerClientSubscriptionId = claims.provider_client_subscription_id === undefined
+  ? null
+  : bookedOperationToText(claims.provider_client_subscription_id);
+const executionFlagEnabled = bookedOperationExecutionFlagEnabled(env);
+const executionBlockedReason = !executionFlagEnabled
+  ? "EXECUTION_FLAG_OFF"
+  : (!verification.actorToken
+    ? "ACTOR_TOKEN_BINDING_MISSING"
+    : (!providerClientSubscriptionId ? "SUBSCRIPTION_MAPPING_MISSING" : null));
+const execution = {
+  actorToken: executionBlockedReason === null ? verification.actorToken : null,
+  actorTokenExpiresAt: verification.actorTokenExpiresAt,
+  actorTokenSha256: verification.actorTokenSha256,
+  blockedReason: executionBlockedReason,
+  enabled: executionBlockedReason === null,
+};
 const document = {
   _id: claims.operation_id,
   kind: "BOOKED_OPERATION_ADMISSION",
@@ -93,6 +113,7 @@ const document = {
   sessionId: claims.sid,
   provider: "VIVA",
   providerClientId: claims.provider_client_id,
+  providerClientSubscriptionId,
   providerMappingId: claims.provider_mapping_id,
   providerExerciseId: claims.provider_exercise_id,
   targetMappingId: claims.target_mapping_id,
@@ -116,6 +137,9 @@ const document = {
     issuedAt: new Date(claims.iat * 1000).toISOString(),
     notBefore: new Date(claims.nbf * 1000).toISOString(),
     expiresAt: new Date(claims.exp * 1000).toISOString(),
+    // Binding evidence only: the token itself is never stored.
+    actorTokenSha256: verification.actorTokenSha256,
+    actorTokenExpiresAt: verification.actorTokenExpiresAt,
   },
   // Read-side association expected by the LK2 booked-operation read contract.
   padlHubOperation: {
@@ -134,6 +158,8 @@ const document = {
     kind: "ADMISSION_ACCEPTED",
     correlationId: claims.correlation_id,
     delegationBindingSha256: verification.bindingSha256,
+    executionBlockedReason: execution.blockedReason,
+    executionEnabled: execution.enabled,
   }],
   receipts: [],
 };
@@ -143,6 +169,7 @@ msg._bookedOperation = {
   step: "find",
   operationId: claims.operation_id,
   bindingSha256: verification.bindingSha256,
+  execution,
   identity: {
     tenantId: claims.tenant_id,
     userId: claims.sub,

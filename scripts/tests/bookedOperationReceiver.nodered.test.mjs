@@ -236,6 +236,11 @@ test("valid admission verifies and produces only a Mongo lookup", () => {
   assert.equal(document.padlHubOperation.caller, "lk2-api");
   assert.equal(JSON.stringify(document).includes("Bearer"), false);
   assert.equal(JSON.stringify(document).includes("authorization"), false);
+  // Without the LK2 token contract the adapter is disabled: no provider path.
+  assert.equal(request._bookedOperation.execution.enabled, false);
+  assert.equal(request._bookedOperation.execution.blockedReason, "EXECUTION_FLAG_OFF");
+  assert.equal(request._bookedOperation.execution.actorToken, null);
+  assert.equal(request._bookedOperation.execution.actorTokenSha256, null);
 });
 
 test("delegation signature and header matrix fails closed with stable codes", () => {
@@ -409,12 +414,15 @@ test("first admission writes exactly one PENDING document with setOnInsert", () 
   assert.ok(write, "empty store must start exactly one guarded write");
   assert.equal(result[1], null);
   assert.equal(result[2], null);
+  assert.equal(result[3], null, "execution is disabled by default: no dispatch");
   const [query, update, options] = write.payload;
   assert.deepEqual(query, { _id: operationId });
   assert.deepEqual(options, { upsert: true });
   assert.equal(update.$setOnInsert.state, "PENDING");
   assert.equal(update.$setOnInsert.kind, "BOOKED_OPERATION_ADMISSION");
   assert.equal(update.$setOnInsert.delegationBindingSha256, admitted._bookedOperation.bindingSha256);
+  assert.equal(update.$setOnInsert.providerClientSubscriptionId, null);
+  assert.equal(update.$setOnInsert.attempts[0].executionEnabled, false);
   assert.equal("$set" in update, false);
   assert.equal(write._bookedOperation.step, "write");
 });
@@ -424,6 +432,7 @@ test("repeat admission returns the stored state and never a second attempt", () 
   const result = runFunction("router", admitContext(document));
   assert.equal(result[0], null, "repeat must not write again");
   assert.equal(result[2], null);
+  assert.equal(result[3], null, "repeat must not dispatch a second attempt");
   assert.equal(result[1].statusCode, 202);
   assert.equal(Object.keys(result[1].payload).sort().join(","), exactOutcomeKeys);
   assert.deepEqual(result[1].payload, {
@@ -525,9 +534,20 @@ test("read maps durable states to the strict outcome and hides foreign operation
     status: "UNKNOWN",
   });
 
-  const rejected = runFunction("router", readContext(storedDocument({ state: "REJECTED" })));
-  assert.equal(rejected[1].payload.status, "UNKNOWN");
-  assert.equal(rejected[1].payload.reason, "RECONCILIATION_REQUIRED");
+  const rejectedDocument = storedDocument({
+    rejectionCode: "PROVIDER_BOOKING_REJECTED",
+    state: "REJECTED",
+  });
+  const rejected = runFunction("router", readContext(rejectedDocument));
+  assert.equal(rejected[1].statusCode, 409);
+  assert.deepEqual(rejected[1].payload, {
+    asOf: rejectedDocument.updatedAt,
+    code: "BOOKED_OPERATION_REJECTED",
+    contractVersion: 1,
+    error: "BOOKED_OPERATION_REJECTED",
+    operationId,
+    rejectionCode: "PROVIDER_BOOKING_REJECTED",
+  });
 
   const missing = runFunction("router", {
     _bookedOperation: readContext(storedDocument())._bookedOperation,
@@ -566,7 +586,7 @@ test("response guard scrubs context and enforces fail-closed JSON", () => {
   assert.equal(fault[0].payload.code, "BOOKED_OPERATION_RESPONSE_INVALID");
 });
 
-test("candidate adds one isolated receiver tab and no provider write node", () => {
+test("candidate adds one isolated receiver tab and a gated execution adapter", () => {
   const source = [
     { id: "tab-games", type: "tab", label: "LK Games" },
     { id: "mongo-client", type: "mongodb4-client", name: "games" },
@@ -583,17 +603,19 @@ test("candidate adds one isolated receiver tab and no provider write node", () =
   const { candidate, report } = buildReceiverCandidate(source);
   const added = candidate.slice(source.length);
   const addedByType = new Set(added.map((node) => node.type));
-  assert.equal(addedByType.has("http request"), false);
   assert.equal(addedByType.has("exec"), false);
   assert.deepEqual(
     [...addedByType].sort(),
-    ["catch", "comment", "function", "http in", "http response", "mongodb4", "tab"],
+    ["catch", "comment", "function", "http in", "http request", "http response", "mongodb4", "tab"],
   );
-  assert.equal(report.invariants.addedProviderWriteNodeCount, 0);
+  assert.equal(report.mode, "FAIL_CLOSED_EXECUTION_ADAPTER");
+  assert.equal(report.executionEnabledByDefault, false);
+  assert.equal(report.executionFlag, "BOOKED_OPERATION_EXECUTION_ENABLED");
+  assert.equal(report.providerCallsWhenExecutionDisabled, 0);
+  assert.equal(report.invariants.addedProviderWriteNodeCount, 1);
+  assert.equal(report.invariants.addedExecutorNodeCount, 1);
   assert.equal(report.invariants.brokenWireCount, 0);
   assert.equal(report.invariants.addedHttpInRouteCount, 2);
-  assert.equal(report.mode, "PENDING_ONLY_FAIL_CLOSED");
-  assert.equal(report.executionDeferredToContractExtension, true);
   assert.equal(
     report.addedNodeIds.includes(NODE_IDS.admissionVerify),
     true,
@@ -607,7 +629,21 @@ test("candidate adds one isolated receiver tab and no provider write node", () =
     assert.match(node.func, /nodeCrypto\.verify/);
     assert.match(node.func, /bookedOperationVerifyDelegation/);
   }
+  const providerRequests = added.filter((node) => node.type === "http request");
+  assert.equal(providerRequests.length, 1);
+  assert.equal(providerRequests[0].method, "use");
+  assert.equal(providerRequests[0].senderr, true);
+  assert.deepEqual(providerRequests[0].wires, [[NODE_IDS.executor]]);
   for (const node of added.filter((item) => item.type === "function")) {
+    if (node.id === NODE_IDS.executor) {
+      assert.match(node.func, /BOOKED_OPERATION_EXECUTION_ENABLED/);
+      assert.match(node.func, /bookedOperationVivaBookingPayload/);
+      assert.equal(node.outputs, 5);
+      continue;
+    }
     assert.doesNotMatch(node.func, /vivacrm|api\.viva/i);
   }
+  const routerNode = added.find((node) => node.id === NODE_IDS.router);
+  assert.equal(routerNode.outputs, 4);
+  assert.deepEqual(routerNode.wires[3], [NODE_IDS.executor]);
 });

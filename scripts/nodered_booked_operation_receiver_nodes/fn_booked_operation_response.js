@@ -12,6 +12,16 @@ delete msg._bookedOperation;
 if (isObject(msg.req) && isObject(msg.req.headers)) {
   delete msg.req.headers["x-subscription-actor-delegation"];
   delete msg.req.headers["X-Subscription-Actor-Delegation"];
+  delete msg.req.headers["x-subscription-actor-token"];
+  delete msg.req.headers["X-Subscription-Actor-Token"];
+}
+// A failed provider transport keeps the request headers on the message; never
+// echo an Authorization or actor-token header into the HTTP reply.
+if (isObject(msg.headers)) {
+  delete msg.headers.authorization;
+  delete msg.headers.Authorization;
+  delete msg.headers["x-subscription-actor-token"];
+  delete msg.headers["X-Subscription-Actor-Token"];
 }
 if (!Number.isInteger(msg.statusCode) || msg.statusCode < 200 || msg.statusCode > 599) {
   msg.statusCode = 503;

@@ -7,9 +7,15 @@
 //   GET  /lk/integrations/v1/booked-operations/:operationId
 //
 // The tab reuses the existing `lk_subscription_daily_booking_ops` Mongo client.
-// No existing node is edited, no provider node is added and no live flow, server
-// or database is touched: the script only turns a privately supplied preimage
-// into a candidate flow plus a report.
+// No existing node is edited, no live flow, server or database is touched: the
+// script only turns a privately supplied preimage into a candidate flow plus a
+// report.
+//
+// The execution adapter is wired but disabled by default: the single provider
+// request node is only reachable from the executor, which requires
+// `BOOKED_OPERATION_EXECUTION_ENABLED` plus the signed actor-token binding in the
+// delegation. Without both, admission still stops at PENDING and no provider
+// request is ever emitted.
 //
 // Runtime prerequisites (checked before any import, not by this script):
 //   - Node-RED settings.js must not set `functionExternalModules: false`
@@ -39,8 +45,12 @@ export const NODE_IDS = Object.freeze({
   readIn: "lk_booked_operation_read_in_20261021",
   readVerify: "lk_booked_operation_read_verify_20261021",
   router: "lk_booked_operation_router_20261021",
+  executor: "lk_booked_operation_executor_20261021",
+  providerRequest: "lk_booked_operation_provider_request_20261021",
   mongoFind: "lk_booked_operation_find_20261021",
   mongoUpsert: "lk_booked_operation_upsert_20261021",
+  mongoAttempt: "lk_booked_operation_attempt_20261021",
+  mongoFinalize: "lk_booked_operation_finalize_20261021",
   respond: "lk_booked_operation_respond_20261021",
   response: "lk_booked_operation_response_20261021",
   catch: "lk_booked_operation_catch_20261021",
@@ -50,13 +60,22 @@ export const NODE_IDS = Object.freeze({
 const FUNCTION_FILES = Object.freeze({
   admission_verify: {
     file: "fn_booked_operation_admission_verify.js",
-    prelude: true,
+    preludes: ["_booked_operation_delegation_prelude.js"],
     outputs: 2,
   },
-  read_verify: { file: "fn_booked_operation_read_verify.js", prelude: true, outputs: 2 },
-  router: { file: "fn_booked_operation_router.js", prelude: false, outputs: 3 },
-  response: { file: "fn_booked_operation_response.js", prelude: false, outputs: 1 },
-  store_error: { file: "fn_booked_operation_store_error.js", prelude: false, outputs: 1 },
+  read_verify: {
+    file: "fn_booked_operation_read_verify.js",
+    preludes: ["_booked_operation_delegation_prelude.js"],
+    outputs: 2,
+  },
+  router: { file: "fn_booked_operation_router.js", preludes: [], outputs: 4 },
+  executor: {
+    file: "fn_booked_operation_executor.js",
+    preludes: ["_booked_operation_viva_contract.js"],
+    outputs: 5,
+  },
+  response: { file: "fn_booked_operation_response.js", preludes: [], outputs: 1 },
+  store_error: { file: "fn_booked_operation_store_error.js", preludes: [], outputs: 1 },
 });
 const CRYPTO_LIBS = Object.freeze([{ var: "nodeCrypto", module: "crypto" }]);
 
@@ -65,14 +84,20 @@ const PRELUDE_SHA256 = crypto
   .createHash("sha256")
   .update(readSource("_booked_operation_delegation_prelude.js"))
   .digest("hex");
+const VIVA_CONTRACT_SHA256 = crypto
+  .createHash("sha256")
+  .update(readSource("_booked_operation_viva_contract.js"))
+  .digest("hex");
 
-// The single reviewed verification implementation is embedded into both
-// verification nodes; mode-specific behavior stays in the read/admit bodies.
+// The reviewed verification/contract sources are prepended to their node bodies;
+// mode-specific behavior stays in the node body itself.
 export const receiverFunctionSource = (name) => {
   const spec = FUNCTION_FILES[name];
   if (!spec) throw new Error(`Unknown receiver function ${name}`);
   const body = readSource(spec.file);
-  return spec.prelude ? `${readSource("_booked_operation_delegation_prelude.js")}\n${body}` : body;
+  if (!spec.preludes || spec.preludes.length === 0) return body;
+  const prelude = spec.preludes.map((file) => readSource(file)).join("\n");
+  return `${prelude}\n${body}`;
 };
 
 const functionNode = (id, name, outputs, func, libs, x, y, wires) => ({
@@ -123,8 +148,9 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
         "GET /lk/integrations/v1/booked-operations/:operationId",
         "RS256 actor-delegation verification against an env public key; no key in git.",
         "One durable document per operation_id in " + COLLECTION + ".",
-        "Admission stops at PENDING/OWNER_PENDING: no Viva call, no invented booking.",
-        "Requires the LK2 actor token/service-impersonation contract extension for execution.",
+        "Execution adapter is disabled by default (BOOKED_OPERATION_EXECUTION_ENABLED unset).",
+        "When enabled it requires the signed actor-token/subscription binding and writes the",
+        "ATTEMPTING dispatch marker before the single Viva booking POST; no retry after UNKNOWN.",
       ].join("\n"),
       x: 200,
       y: 900,
@@ -194,23 +220,79 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       1080,
       [[ids.router]],
     ),
+    mongoNode(
+      ids.mongoAttempt,
+      "Claim booked-operation attempt",
+      "updateOne",
+      mongoClientNodeId,
+      1420,
+      1080,
+      [[ids.executor]],
+    ),
+    mongoNode(
+      ids.mongoFinalize,
+      "Finalize booked-operation receipt",
+      "updateOne",
+      mongoClientNodeId,
+      1420,
+      1160,
+      [[ids.executor]],
+    ),
     functionNode(
       ids.router,
       "Route booked-operation receipt",
-      3,
+      4,
       receiverFunctionSource("router"),
       [],
       1120,
       1000,
-      [[ids.mongoUpsert], [ids.respond], [ids.mongoFind]],
+      [[ids.mongoUpsert], [ids.respond], [ids.mongoFind], [ids.executor]],
     ),
+    functionNode(
+      ids.executor,
+      "Execute booked-operation booking",
+      5,
+      receiverFunctionSource("executor"),
+      CRYPTO_LIBS,
+      1120,
+      1080,
+      [
+        [ids.providerRequest],
+        [ids.mongoAttempt],
+        [ids.mongoFinalize],
+        [ids.respond],
+        [ids.mongoFind],
+      ],
+    ),
+    {
+      // The single provider-facing node of the receiver. method "use" mirrors the
+      // existing subscription-booking gateway: the executor sets msg.method,
+      // msg.url and msg.headers. senderr lets the executor classify a transport
+      // failure as UNKNOWN instead of throwing after a possible write.
+      id: ids.providerRequest,
+      type: "http request",
+      z: tabId,
+      name: "Viva booked-operation request",
+      method: "use",
+      ret: "obj",
+      paytoqs: "ignore",
+      url: "",
+      requestTimeout: "15000",
+      senderr: true,
+      persist: false,
+      authType: "",
+      insecureHTTPParser: false,
+      x: 1420,
+      y: 1000,
+      wires: [[ids.executor]],
+    },
     functionNode(
       ids.respond,
       "Guard booked-operation response",
       1,
       receiverFunctionSource("response"),
       [],
-      1420,
+      1720,
       1000,
       respondWires,
     ),
@@ -221,7 +303,7 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       name: "",
       statusCode: "",
       headers: {},
-      x: 1700,
+      x: 1980,
       y: 1000,
       wires: [],
     },
@@ -230,10 +312,19 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       type: "catch",
       z: tabId,
       name: "Catch booked-operation faults",
-      scope: [ids.admissionVerify, ids.readVerify, ids.router, ids.mongoFind, ids.mongoUpsert],
+      scope: [
+        ids.admissionVerify,
+        ids.readVerify,
+        ids.router,
+        ids.executor,
+        ids.mongoFind,
+        ids.mongoUpsert,
+        ids.mongoAttempt,
+        ids.mongoFinalize,
+      ],
       uncaught: false,
       x: 820,
-      y: 1160,
+      y: 1240,
       wires: [[ids.storeError]],
     },
     functionNode(
@@ -243,7 +334,7 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       receiverFunctionSource("store_error"),
       [],
       1120,
-      1160,
+      1240,
       [[ids.respond]],
     ),
   ];
@@ -334,16 +425,46 @@ export function buildReceiverCandidate(sourceFlow) {
     throw new Error(`Expected two added HTTP routes, found ${addedHttpRoutes.length}`);
   }
   const forbidden = additions.filter((node) => (
-    ["http request", "exec", "mongodb4-client"].includes(node.type)
+    ["exec", "mongodb4-client"].includes(node.type)
   ));
   if (forbidden.length > 0) {
-    throw new Error("Receiver additions must not perform provider or host I/O");
+    throw new Error("Receiver additions must not perform host I/O");
   }
+  // Exactly one provider request node is allowed, and only the executor may emit
+  // into it: the adapter's activation/binding gates are the single provider path.
+  const providerRequests = additions.filter((node) => node.type === "http request");
+  if (providerRequests.length !== 1) {
+    throw new Error(`Expected one provider request node, found ${providerRequests.length}`);
+  }
+  const providerRequest = providerRequests[0];
+  if (providerRequest.method !== "use" || providerRequest.senderr !== true) {
+    throw new Error("Provider request node must use msg.method/msg.url and senderr");
+  }
+  const providerWiredFrom = additions.filter((node) => (
+    (Array.isArray(node.wires) ? node.wires : []).some((row) => (
+      Array.isArray(row) && row.includes(providerRequest.id)
+    ))
+  ));
+  if (providerWiredFrom.length !== 1 || providerWiredFrom[0].id !== NODE_IDS.executor) {
+    throw new Error("Provider request node must only be driven by the executor");
+  }
+  const executorSource = receiverFunctionSource("executor");
+  if (
+    !/BOOKED_OPERATION_EXECUTION_ENABLED/.test(executorSource)
+    || !/LK1_BOOKED_OPERATION_VIVA_API_BASE/.test(executorSource)
+    || !/DISPATCH_ATTEMPTING/.test(executorSource)
+  ) {
+    throw new Error("Executor source must carry the activation, endpoint and attempt marker contract");
+  }
+  // Only the executor/contract source may name provider endpoints; only the
+  // executor may construct an Authorization header. The response guard is allowed
+  // to scrub such headers defensively.
   const providerReferences = additions.filter((node) => (
-    /vivacrm|api\.viva|Authorization/i.test(String(node.func || ""))
+    node.id !== NODE_IDS.executor
+    && /vivacrm|api\.viva|Authorization:\s*`Bearer/.test(String(node.func || ""))
   ));
   if (providerReferences.length > 0) {
-    throw new Error("Receiver function sources must not reference provider endpoints");
+    throw new Error("Only the executor may reference provider endpoints or build a Bearer header");
   }
   // Every added message edge must stay inside the receiver tab.
   const addedIds = new Set(additions.map((node) => node.id));
@@ -363,18 +484,26 @@ export function buildReceiverCandidate(sourceFlow) {
       mongoClientNodeId,
       collection: COLLECTION,
       routes: [ROUTES.admission, `${ROUTES.readPrefix}:operationId`],
-      mode: "PENDING_ONLY_FAIL_CLOSED",
-      providerCallsOnAdmission: 0,
-      executionDeferredToContractExtension: true,
+      mode: "FAIL_CLOSED_EXECUTION_ADAPTER",
+      executionEnabledByDefault: false,
+      executionFlag: "BOOKED_OPERATION_EXECUTION_ENABLED",
+      providerRequestNodeCount: providerRequests.length,
+      providerCallsWhenExecutionDisabled: 0,
       preludeSha256: PRELUDE_SHA256,
+      vivaContractSha256: VIVA_CONTRACT_SHA256,
       runtimePrerequisites: [
         "Node-RED settings.js must not set functionExternalModules:false",
         "LK1_BOOKED_OPERATION_RECEIVER_ENABLED, LK2_BOOKED_OPERATION_DELEGATION_ISSUER, "
           + "LK2_BOOKED_OPERATION_DELEGATION_AUDIENCE, "
           + "LK2_BOOKED_OPERATION_DELEGATION_KEY_ID and "
           + "LK2_BOOKED_OPERATION_DELEGATION_PUBLIC_KEY_PEM must be configured",
-        "LK1 must receive a backend-issued user-scoped actor token or an explicit "
-          + "service-impersonation claim before any booking execution",
+        "BOOKED_OPERATION_EXECUTION_ENABLED must stay unset until LK2 delivers "
+          + "X-Subscription-Actor-Token plus the signed actor_token_sha256, "
+          + "actor_token_expires_at and provider_client_subscription_id claims",
+        "Execution uses LK1_BOOKED_OPERATION_VIVA_API_BASE (default "
+          + "https://api.vivacrm.ru) and the documented profile/booking/readback paths",
+        "LK1 must receive a backend-issued user-scoped actor token; the shared "
+          + "service token is never substituted",
       ],
       invariants: {
         sourceNodeCount: sourceFlow.length,
@@ -384,7 +513,8 @@ export function buildReceiverCandidate(sourceFlow) {
         sourceNodesUnchanged: true,
         addedTabOnly: true,
         brokenWireCount: 0,
-        addedProviderWriteNodeCount: forbidden.length,
+        addedProviderWriteNodeCount: providerRequests.length,
+        addedExecutorNodeCount: additions.filter((node) => node.id === NODE_IDS.executor).length,
       },
       addedNodeTypes: [...new Set(addedTyped.map((node) => node.type))].sort(),
     },

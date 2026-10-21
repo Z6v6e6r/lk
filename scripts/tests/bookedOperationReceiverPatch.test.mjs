@@ -74,12 +74,15 @@ test("adds one isolated booked-operation receiver tab without touching the preim
   assert.equal(report.ok, true);
   assert.equal(report.addedTabId, TAB_ID);
   assert.equal(report.addedTabLabel, TAB_LABEL);
-  assert.equal(report.mode, "PENDING_ONLY_FAIL_CLOSED");
-  assert.equal(report.providerCallsOnAdmission, 0);
+  assert.equal(report.mode, "FAIL_CLOSED_EXECUTION_ADAPTER");
+  assert.equal(report.executionEnabledByDefault, false);
+  assert.equal(report.executionFlag, "BOOKED_OPERATION_EXECUTION_ENABLED");
+  assert.equal(report.providerCallsWhenExecutionDisabled, 0);
+  assert.equal(report.providerRequestNodeCount, 1);
   assert.equal(report.invariants.sourceNodeCount, source.length);
   assert.equal(report.invariants.brokenWireCount, 0);
   assert.equal(report.invariants.addedHttpInRouteCount, 2);
-  assert.equal(report.invariants.addedProviderWriteNodeCount, 0);
+  assert.equal(report.invariants.addedProviderWriteNodeCount, 1);
   for (let index = 0; index < source.length; index += 1) {
     assert.deepEqual(candidate[index], source[index], `source node ${source[index].id} changed`);
   }
@@ -93,11 +96,18 @@ test("adds one isolated booked-operation receiver tab without touching the preim
     ["get:/lk/integrations/v1/booked-operations/:operationId", "post:/lk/integrations/v1/booked-operation-admissions"].sort(),
   );
   const mongoNodes = added.filter((node) => node.type === "mongodb4");
-  assert.equal(mongoNodes.length, 2);
+  assert.equal(mongoNodes.length, 4);
   for (const node of mongoNodes) {
     assert.equal(node.collection, COLLECTION);
     assert.equal(node.clientNode, "mongo-client");
   }
+  const providerRequests = added.filter((node) => node.type === "http request");
+  assert.equal(providerRequests.length, 1);
+  assert.equal(providerRequests[0].method, "use");
+  assert.equal(providerRequests[0].senderr, true);
+  const providerWiredFrom = added.filter((node) => (node.wires || [])
+    .some((row) => row.includes(providerRequests[0].id)));
+  assert.deepEqual(providerWiredFrom.map((node) => node.id), [NODE_IDS.executor]);
   const verifyNodes = added.filter((node) => (
     node.id === NODE_IDS.admissionVerify || node.id === NODE_IDS.readVerify
   ));
@@ -107,10 +117,20 @@ test("adds one isolated booked-operation receiver tab without touching the preim
     assert.match(node.func, /functionExternalModules/i);
     assert.match(node.func, /BOOKED_OP_ADMISSION_PREFIX/);
   }
+  const executorNode = added.find((node) => node.id === NODE_IDS.executor);
+  assert.equal(executorNode.outputs, 5);
+  assert.deepEqual(executorNode.libs, [{ var: "nodeCrypto", module: "crypto" }]);
+  assert.match(executorNode.func, /BOOKED_OPERATION_EXECUTION_ENABLED/);
+  assert.match(executorNode.func, /LK1_BOOKED_OPERATION_VIVA_API_BASE/);
+  assert.match(executorNode.func, /DISPATCH_ATTEMPTING/);
   assert.ok(report.runtimePrerequisites.some((entry) => /functionExternalModules/.test(entry)));
   assert.ok(
-    report.runtimePrerequisites.some((entry) => /service-impersonation/.test(entry)),
-    "handoff must record the missing LK2 execution contract",
+    report.runtimePrerequisites.some((entry) => /X-Subscription-Actor-Token/.test(entry)),
+    "handoff must record the LK2 wire contract required for execution",
+  );
+  assert.ok(
+    report.runtimePrerequisites.some((entry) => /provider_client_subscription_id/.test(entry)),
+    "handoff must record the mapped subscription identifier claim",
   );
 });
 
