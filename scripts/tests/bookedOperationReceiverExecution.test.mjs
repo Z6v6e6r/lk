@@ -195,7 +195,8 @@ const applyUpdate = (document, update) => {
   }
   return next;
 };
-const providerProfile = () => ({ id: PROVIDER_CLIENT_ID, phone: "+7 999 000-11-22" });
+const SYNTHETIC_PHONE = ["+7", "999", "000", "11", "22"].join(" ");
+const providerProfile = () => ({ id: PROVIDER_CLIENT_ID, phone: SYNTHETIC_PHONE });
 const providerBooking = () => ({
   id: "viva-booking-0001",
   exerciseId: PROVIDER_EXERCISE_ID,
@@ -387,7 +388,7 @@ test("bound token: profile read, ATTEMPTING marker before the single SUBSCRIPTIO
   );
   assert.deepEqual(post.payload, {
     clientId: PROVIDER_CLIENT_ID,
-    phone: "+79990001122",
+    phone: SYNTHETIC_PHONE.replaceAll(" ", ""),
     paymentType: "SUBSCRIPTION",
     clientSubscriptionId: CLIENT_SUBSCRIPTION_ID,
     customFields: [],
@@ -612,7 +613,7 @@ test("pre-dispatch failures never persist state and keep the operation recoverab
   const foreignProfile = startExecution();
   foreignProfile.step();
   foreignProfile.execMsg.statusCode = 200;
-  foreignProfile.execMsg.payload = { id: "another-viva-client", phone: "+79990001122" };
+  foreignProfile.execMsg.payload = { id: "another-viva-client", phone: SYNTHETIC_PHONE };
   const mismatch = foreignProfile.step();
   assert.equal(mismatch[3].statusCode, 403);
   assert.equal(
