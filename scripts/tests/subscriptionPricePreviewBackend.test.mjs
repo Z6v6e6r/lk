@@ -51,7 +51,7 @@ function harness(options={}) {
       current=nodes.find(row=>row.id===current.wires[port][0]); assert.ok(current); continue;
     }
     if(current.type==='http request') {
-      assert.equal(current.method,'GET'); assert.equal(msg.method,'GET');
+      assert.equal(current.method,'use'); assert.equal(msg.method,'GET');
       const url=new URL(msg.url); assert.equal(url.origin,'https://api.vivacrm.ru');
       calls.push({kind:'GET',path:url.pathname,query:url.search});
       let payload;
@@ -176,8 +176,9 @@ test('successful preview publishes its own response clock without changing quote
 });
 
 test('server-clock upgrade changes only the exact installed final function', () => {
-  const source = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8');
-  const oldSource = source.replace(', serverTimeMs: Date.now()', '');
+  const oldSource = fs.readFileSync(new URL('./fixtures/subscriptionPreviewLegacyFinal.txt', import.meta.url), 'utf8');
+  const source = oldSource.replace(': { quotes: ctx.quotes || [] };',
+    ': { quotes: ctx.quotes || [], serverTimeMs: Date.now() };');
   const final = { id: 'lk_subscription_price_preview_20260908_final', type: 'function', func: oldSource,
     wires: [['fixture-response']], initialize: '', finalize: '' };
   const flow = [final, { id: 'fixture-response', type: 'http response', wires: [] },
@@ -243,7 +244,7 @@ liveTest('graph cannot reach an existing node or a business write; evaluator byt
   assert.equal(packet.contract.allowedChanges.length,0);
   const ids=new Set(nodes.map(n=>n.id));
   for(const n of nodes){for(const id of (n.wires||[]).flat()) assert.ok(ids.has(id));
-    if(n.type==='mongodb4')assert.equal(n.operation,'find');if(n.type==='http request')assert.equal(n.method,'GET');}
+    if(n.type==='mongodb4')assert.equal(n.operation,'find');if(n.type==='http request')assert.equal(n.method,'use');}
   assert.equal(nodes.find(n=>n.id.endsWith('_evaluate')).func, original.find(n=>n.id==='lk_subscription_managed_policy_20260820').func);
   assert.ok(nodes.some(n=>n.type==='http in'&&n.url===PATH&&n.method==='post'));
 });

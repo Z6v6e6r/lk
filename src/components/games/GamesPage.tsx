@@ -48,7 +48,6 @@ import {
   apiFetchPadelGamesByPhone,
   apiMarkPadelGameChatRead,
   apiPayMasterService,
-  apiSearchPadelPlayers,
   apiUpdatePadelGameRecord,
   apiSendPadelGameChatMessage,
   apiFetchMasterServicePrice,
@@ -8005,42 +8004,6 @@ export default function GamesPage({
           ratingNumeric: normalizeRatingNumeric(item.ratingNumeric),
         });
       });
-
-      const playersMissingRating = players.filter((player) => {
-        const fresh = getPadelPlayerLookupKeys(player)
-          .map((key) => enrichedByKey.get(key))
-          .find(Boolean);
-        return !fresh?.rating && fresh?.ratingNumeric == null;
-      });
-
-      if (playersMissingRating.length > 0) {
-        const searchResults = await Promise.all(
-          playersMissingRating.slice(0, 12).map(async (player) => {
-            const query = (player.id || "").trim()
-              || normalizePhoneForGame(player.phone)
-              || player.name.trim();
-            if (!query) return null;
-            const result = await apiSearchPadelPlayers(query, 8);
-            const playerKeys = new Set(getPadelPlayerLookupKeys(player));
-            const match = result.data.find((candidate) => (
-              getPadelPlayerLookupKeys(candidate).some((key) => playerKeys.has(key))
-            )) ?? null;
-            if (!match) return null;
-            return {
-              id: match.id ?? null,
-              phone: normalizePhoneForGame(match.phone),
-              name: match.name ?? null,
-              photo: match.photo ?? null,
-              rating: match.rating || mapNumericToRatingGrade(match.ratingNumeric) || null,
-              ratingNumeric: normalizeRatingNumeric(match.ratingNumeric),
-            } satisfies EnrichedPadelPlayerData;
-          }),
-        );
-
-        searchResults.forEach((item) => {
-          if (item) upsertEnriched(item);
-        });
-      }
 
       if (cancelled) return;
 

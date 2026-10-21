@@ -157,7 +157,8 @@ const nodes = [
     z: tabId,
     name: "Verify consent bearer via Keycloak userinfo",
     method: "use",
-    ret: "obj",
+    // Parse in the verifier so malformed/empty responses remain service errors.
+    ret: "txt",
     paytoqs: "ignore",
     url: "",
     tls: "",

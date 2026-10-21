@@ -1,3 +1,4 @@
+import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
 import { AvatarImage } from "../UI/AvatarImage";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
@@ -9,7 +10,6 @@ import {
   apiFetchExercisesByVisibleDate,
   apiFetchPadelLiveRatings,
   apiFetchProfile,
-  apiSearchPadelPlayers,
   apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
   apiRefreshTournamentParticipants,
@@ -3219,44 +3219,15 @@ function TournamentDetailsModal({
       return;
     }
 
-    let cancelled = false;
-    setReplaceSearchLoading(true);
+    const activeClientIds = new Set(participantEntries.map((player) => player.clientId).filter(Boolean));
+    const roster = [...baseParticipantEntries, ...replacementWaitlist]
+      .filter((entry) => entry.clientId && !activeClientIds.has(entry.clientId))
+      .map((entry) => ({ ...entry, id: entry.clientId, phone: entry.phone ?? null,
+        photo: entry.photo ?? null, rating: entry.rating ?? null, ratingNumeric: null }));
+    setReplaceSearchResults(searchTournamentRosterPlayers(query, roster, 8));
+    setReplaceSearchLoading(false);
     setReplaceSearchError(null);
-    const timeoutId = window.setTimeout(() => {
-      void apiSearchPadelPlayers(query, 8)
-        .then((result) => {
-          if (cancelled) return;
-          if (result.error) {
-            setReplaceSearchResults([]);
-            setReplaceSearchError(result.error.message || "Не удалось найти игроков Viva.");
-            return;
-          }
-          const unique = new Map<string, PadelPlayerCandidate>();
-          (result.data ?? []).forEach((item, index) => {
-            const key =
-              String(item.id || "").trim()
-              || `${String(item.phone || "").trim()}::${String(item.name || "").trim().toLowerCase()}::${index}`;
-            unique.set(key, item);
-          });
-          setReplaceSearchResults(Array.from(unique.values()));
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setReplaceSearchResults([]);
-          setReplaceSearchError("Не удалось найти игроков Viva.");
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setReplaceSearchLoading(false);
-          }
-        });
-    }, 280);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [replaceSearchQuery, replaceTargetParticipant]);
+  }, [replaceSearchQuery, replaceTargetParticipant, participantEntries, baseParticipantEntries, replacementWaitlist]);
 
   useEffect(() => {
     if (!replaceParticipantId) return;
@@ -3874,7 +3845,7 @@ function TournamentDetailsModal({
                             <input
                               className="tournament-replace-panel-input"
                               type="text"
-                              placeholder="Найти игрока в Viva"
+                              placeholder="Участник текущего турнира"
                               value={replaceSearchQuery}
                               onChange={(e) => setReplaceSearchQuery(e.target.value)}
                             />
@@ -3889,7 +3860,7 @@ function TournamentDetailsModal({
                               && !replaceSearchError
                               && replaceSearchQuery.trim().length >= 2
                               && replaceSearchResults.length === 0 && (
-                              <div className="tournaments-muted">Игроки не найдены.</div>
+                              <div className="tournaments-muted">В составе и листе ожидания текущего турнира нет подходящей замены.</div>
                             )}
                             {!replaceSearchLoading && replaceSearchResults.length > 0 && (
                               <div className="tournament-replace-results">
@@ -5222,11 +5193,6 @@ function TournamentManagerModal({
 
     try {
       const normalizePhoneDigits = (value: string | null | undefined) => String(value ?? "").replace(/\D/g, "");
-      const isSyntheticParticipantId = (value: string) => (
-        value.startsWith("manual-participant-")
-        || value.startsWith("manual-tournament-")
-        || value.startsWith("participant-")
-      );
 
       const resolvedParticipants: Array<{
         originalId: string;
@@ -5242,7 +5208,7 @@ function TournamentManagerModal({
         const trimmedPhone = String(participant.phone || "").trim();
         const participantPhoneDigits = normalizePhoneDigits(trimmedPhone);
 
-        if (originalId && !isSyntheticParticipantId(originalId)) {
+        if (isStableTournamentClientId(originalId)) {
           resolvedParticipants.push({
             originalId,
             clientId: originalId,
@@ -5258,26 +5224,14 @@ function TournamentManagerModal({
           throw new Error(`У игрока "${participant.name}" не указан телефон для синхронизации`);
         }
 
-        const lookupQueries = Array.from(new Set([
+        const { candidate: resolvedCandidate } = resolveTournamentRosterPhone(
           trimmedPhone,
-          participantPhoneDigits,
-        ].filter((value): value is string => Boolean(value))));
-
-        let resolvedCandidate: PadelPlayerCandidate | null = null;
-        for (const query of lookupQueries) {
-          const searchResult = await apiSearchPadelPlayers(query, 8);
-          if (searchResult.error) {
-            continue;
-          }
-          resolvedCandidate = (searchResult.data ?? []).find((candidate) => {
-            const candidateDigits = normalizePhoneDigits(candidate.phone);
-            return candidateDigits === participantPhoneDigits;
-          }) ?? (searchResult.data?.[0] ?? null);
-          if (resolvedCandidate?.id) break;
-        }
+          normalizedParticipants.map((entry) => ({ ...entry, phone: entry.phone ?? null,
+            photo: entry.photo ?? null, rating: entry.rating ?? null, ratingNumeric: null })),
+        );
 
         if (!resolvedCandidate?.id) {
-          throw new Error(`Не удалось найти игрока "${participant.name}" в Viva по телефону ${trimmedPhone}`);
+          throw new Error(`Не удалось однозначно связать игрока "${participant.name}" с профилем участника текущего турнира`);
         }
 
         resolvedParticipants.push({

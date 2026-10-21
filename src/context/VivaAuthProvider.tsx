@@ -423,6 +423,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           grant_type: "password",
+          scope: "openid",
           phone_number: phoneNumber,
           code,
           client_id: "widget",
