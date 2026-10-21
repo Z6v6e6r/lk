@@ -30,8 +30,8 @@ export function yasenevoScenery(ctx: CanvasRenderingContext2D, game: Game, art: 
   const sleeveSpacing = 900, sleeveShift = game.camera * 0.55 % sleeveSpacing;
   for (let y = 210 + sleeveShift - sleeveSpacing; y < HEIGHT + 24; y += sleeveSpacing) {
     if (y <= -24) continue;
-    ctx.globalAlpha = 0.38; ctx.fillStyle = '#4e356d'; ctx.fillRect(20, y - 20, WIDTH - 40, 40);
-    ctx.globalAlpha = 0.8; yasenevoSprite(ctx, art, 'padel_sleeve', WIDTH / 2, y, WIDTH - 84);
+    ctx.globalAlpha = 0.38; ctx.fillStyle = '#4e356d'; ctx.fillRect(17, y - 25, WIDTH - 34, 50);
+    ctx.globalAlpha = 0.8; yasenevoSprite(ctx, art, 'padel_sleeve', WIDTH / 2, y, WIDTH - 36);
   }
   ctx.restore();
   ctx.save(); ctx.globalAlpha = 0.85;
