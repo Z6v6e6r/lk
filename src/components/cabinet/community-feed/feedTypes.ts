@@ -96,6 +96,7 @@ export type CommunityTournamentCard = {
 };
 
 export type CommunityNewsCard = {
+  eventSignupUrl?: string;
   id: string;
   badgeLabel: string;
   publishedAt: string;

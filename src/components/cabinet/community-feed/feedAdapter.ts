@@ -1541,6 +1541,11 @@ function buildNews(
   communityName: string,
   currentUser: BuildFeedEntriesParams["currentUser"],
 ): News {
+  const policyEvent = (post.kind === 'EVENT' || post.kind === 'TRAINING') && post.details?.source === 'COMMUNITY_POLICY';
+  const eventEndsAt = typeof post.details?.endsAt === 'string' ? Date.parse(post.details.endsAt) : NaN;
+  const exerciseId = typeof post.details?.exerciseId === 'string' ? post.details.exerciseId : '';
+  const eventSignupUrl = policyEvent && exerciseId && Number.isFinite(eventEndsAt) && eventEndsAt > Date.now()
+    ? 'https://padlhub.ru/group_schedule?exerciseId=' + encodeURIComponent(exerciseId) : undefined;
   const fullText = (post.body || "Обновление сообщества").trim();
   const plainText = stripNewsTextMarkup(fullText);
   const fallbackLikes = Math.max(4, Math.min(18, Math.round((post.body || post.title).length / 12)));
@@ -1553,7 +1558,8 @@ function buildNews(
   const previewText = buildNewsPreviewText(plainText || fullText);
   return {
     id: post.id,
-    badgeLabel: formatNewsBadgeLabel(post.publishedAt),
+    eventSignupUrl,
+    badgeLabel: post.kind === "TRAINING" ? "Тренировка" : post.kind === "EVENT" ? "Событие" : formatNewsBadgeLabel(post.publishedAt),
     publishedAt: post.publishedAt,
     title: post.title,
     text: fullText,
@@ -1801,7 +1807,7 @@ export function buildFeedEntries({
       return;
     }
 
-    if (post.kind === "PHOTO") {
+    if (post.kind === "PHOTO" || post.kind === "TRAINING" || post.kind === "EVENT") {
       entries.push({
         id: `news:${post.id}`,
         item: {

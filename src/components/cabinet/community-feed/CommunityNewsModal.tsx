@@ -151,6 +151,7 @@ export function CommunityNewsModal({
           ) : null}
         </div>
 
+        {news.eventSignupUrl && <a className="community-ranking-filter-chip" href={news.eventSignupUrl}>Открыть запись</a>}
         <div className="community-news-modal-actions">
           <button
             type="button"

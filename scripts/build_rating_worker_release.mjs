@@ -18,6 +18,11 @@ const outDir = path.resolve(outArg);
 if (fs.existsSync(outDir)) throw new Error(`Release directory already exists: ${outDir}`);
 
 const files = [
+  ['src/services/community-policy.ts', 'src/services/community-policy.ts'],
+  ['src/services/community-rating/league.ts', 'src/services/community-rating/league.ts'],
+  ['src/utils/exerciseCategory.ts', 'src/utils/exerciseCategory.ts'],
+  ['scripts/lib/communityPolicyProjection.mjs', 'scripts/lib/communityPolicyProjection.mjs'],
+  ['scripts/lib/communitySchedule.mjs', 'scripts/lib/communitySchedule.mjs'],
   ["scripts/community_monthly_reports.mjs", "scripts/community_monthly_reports.mjs"],
   ["deploy/rating-worker/run-monthly-reports.sh", "deploy/rating-worker/run-monthly-reports.sh"],
   ["deploy/rating-worker/community-monthly-reports.service", "deploy/rating-worker/community-monthly-reports.service"],

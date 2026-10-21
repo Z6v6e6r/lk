@@ -124,3 +124,21 @@ test("community feed game card resolves result teams from latest set pairing and
     },
   );
 });
+
+test('managed corporate events and trainings render as news with a bounded canonical signup link', () => {
+  for (const kind of ['EVENT', 'TRAINING'] as const) {
+    for (const [endsAt, hasLink] of [['2099-01-01T12:00:00Z', true], ['2000-01-01T12:00:00Z', false], [undefined, false]] as const) {
+      const entries = buildFeedEntries({
+        community: { id: 'corporate', name: 'Корпорация', members: [], minimumLevel: 'D' },
+        posts: [{ id: 'policy-post', kind, title: 'Событие', body: 'Описание', imageUrl: null, publishedAt: '2026-10-21T09:00:00Z', createdAt: '2026-10-21T09:00:00Z',
+          details: { source: 'COMMUNITY_POLICY', exerciseId: 'exercise/test', endsAt } }] as never,
+        games: [], tournamentStats: {}, currentUser: {},
+      });
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]?.item.type, 'news');
+      if (entries[0]?.item.type !== 'news') throw new Error('expected managed event news');
+      assert.equal(entries[0].item.data.badgeLabel, kind === 'TRAINING' ? 'Тренировка' : 'Событие');
+      assert.equal(entries[0].item.data.eventSignupUrl, hasLink ? 'https://padlhub.ru/group_schedule?exerciseId=exercise%2Ftest' : undefined);
+    }
+  }
+});

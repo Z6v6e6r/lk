@@ -141,6 +141,7 @@ export function CommunityNewsCard({
           </div>
         ) : null}
 
+        {card.eventSignupUrl && <a className="community-ranking-filter-chip" href={card.eventSignupUrl} onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>Открыть запись</a>}
         <div className="community-news-feed-footer">
           <div className="community-news-feed-actions">
             <button

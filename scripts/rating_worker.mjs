@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { processCommunityPolicies } from './lib/communityPolicyProjection.mjs';
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -942,6 +943,7 @@ async function projectChangedLedgerPlayers(db, sinceIso, nowIso, dryRun) {
 function buildCollections(db) {
   return {
     source: {
+      community_league_results: db.collection('community_league_results'),
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.communities]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.communities),
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.feed]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.feed),
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.games]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.games),
@@ -951,6 +953,7 @@ function buildCollections(db) {
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.ratingState]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.ratingState),
     },
     storage: {
+      community_league_results: db.collection('community_league_results'),
       [COMMUNITY_RATING_COLLECTIONS.facts]: db.collection(COMMUNITY_RATING_COLLECTIONS.facts),
       [COMMUNITY_RATING_COLLECTIONS.aggregates]: db.collection(COMMUNITY_RATING_COLLECTIONS.aggregates),
       [COMMUNITY_RATING_COLLECTIONS.snapshots]: db.collection(COMMUNITY_RATING_COLLECTIONS.snapshots),
@@ -1213,6 +1216,7 @@ async function runWorker() {
       nowIso: startedAt,
       dryRun,
     });
+    const communityPolicies = await processCommunityPolicies(db, { sinceIso: mode === 'full' ? notBeforeIso : overlapStart, nowIso: startedAt, dryRun });
     const timeForFriendsEnrollment = await processTimeForFriendsAutoEnrollments(db, {
       sinceIso: mode === "full" ? notBeforeIso : overlapStart,
       nowIso: startedAt,
@@ -1230,6 +1234,7 @@ async function runWorker() {
     const communityIds = await resolveRatingWorkerCommunityIds(db, {
       mode, sinceIso: overlapStart, registry, nowTs: Date.parse(startedAt),
     });
+    communityPolicies.affectedCommunityIds.forEach(id => communityIds.push(id));
     timeForFriendsEnrollment.affectedCommunityIds.forEach((communityId) => communityIds.push(communityId));
     const uniqueCommunityIds = unique(communityIds);
     const community = await recalculateCommunities(db, uniqueCommunityIds, startedAt, dryRun);
@@ -1248,6 +1253,7 @@ async function runWorker() {
       watermarkAfter: startedAt,
       ledger,
       timeForFriendsEnrollment,
+      communityPolicies,
       eventProjection,
       compatibilityReconciliation,
       community,
@@ -1256,7 +1262,7 @@ async function runWorker() {
     if (!dryRun) {
       await db.collection(PLAYER_RATING_COLLECTIONS.jobRuns).updateOne(
         { runId },
-        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
+        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, communityPolicies, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
       );
       await releaseLease(db, jobKey, owner, {
         jobKey,
