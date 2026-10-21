@@ -91,6 +91,7 @@ export interface TournamentSignupSummary {
   address: string | null;
   format: string | null;
   levelLabel: string | null;
+  genderLabel: string | null;
   priceLabel: string | null;
   participantsCount: number | null;
   maxParticipants: number | null;
@@ -263,20 +264,33 @@ function normalizeStringArray(value: unknown) {
 
 function parseTournamentAccessLevel(value: string) {
   const normalized = value.replace(",", ".").trim();
-  const parsed = Number.parseFloat(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+  const parsed = Number(normalized);
+  return normalized && Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatTournamentAccessLevel(value: string) {
   const parsed = parseTournamentAccessLevel(value);
   if (parsed === null) return value;
-  if (parsed < 2) return "D1";
-  if (parsed < 3) return "D+";
-  if (parsed < 3.5) return "C";
-  if (parsed <= 4) return "C+";
-  if (parsed < 4.7) return "B";
-  if (parsed < 5.5) return "B+";
-  return "A";
+
+  // Match the four divisions used by CUP's public tournament level badges.
+  const bands = [
+    { label: "D", min: 1, max: 2 },
+    { label: "D+", min: 2, max: 3 },
+    { label: "C", min: 3, max: 3.5 },
+    { label: "C+", min: 3.5, max: 4 },
+    { label: "B", min: 4, max: 4.7 },
+    { label: "B+", min: 4.7, max: 5.5 },
+    { label: "A", min: 5.5, max: 6.3 },
+  ];
+  const band = bands.find((item, index) => (
+    parsed >= item.min
+    && (index === bands.length - 1 ? parsed <= item.max : parsed < item.max)
+  ));
+  if (!band) return value;
+
+  const progress = (parsed - band.min) / (band.max - band.min);
+  const division = Math.max(1, Math.min(4, Math.ceil(progress * 4 - 1e-9)));
+  return `${band.label}${division}`;
 }
 
 function formatAccessLevelRange(value: unknown): string | null {
@@ -295,8 +309,9 @@ function formatAccessLevelRange(value: unknown): string | null {
       return left.numeric - right.numeric;
     });
 
-  if (normalizedLevels.length === 1) return normalizedLevels[0].label;
-  return `${normalizedLevels[0].label}/${normalizedLevels[normalizedLevels.length - 1].label}`;
+  const first = normalizedLevels[0].label;
+  const last = normalizedLevels[normalizedLevels.length - 1].label;
+  return first === last ? first : `${first}/${last}`;
 }
 
 function normalizeTournamentRatingLabel(value: string | null | undefined) {
@@ -550,6 +565,20 @@ function buildTournamentLevelLabel(value: unknown): string | null {
   return null;
 }
 
+function buildTournamentGenderLabel(value: unknown): string | null {
+  for (const state of collectTournamentStateRecords(value)) {
+    const gender = pickString(state, ["gender"])?.toUpperCase();
+    if (gender === "FEMALE") return "Ж";
+    if (gender === "MALE") return "М";
+    if (gender === "MIXED") return "М/Ж";
+
+    const label = pickString(state, ["genderLabel"]);
+    if (label) return label;
+    if (state.girlsOnly === true) return "Ж";
+  }
+  return null;
+}
+
 function isCancelledTournamentPayload(value: unknown) {
   return isTournamentSignupPayloadCancelled(value);
 }
@@ -655,6 +684,7 @@ function normalizeTournamentSummary(value: unknown): TournamentSignupSummary | n
     address: pickString(value, ["address", "studioAddress"]) || pickString(studio, ["address", "fullAddress"]),
     format: pickString(value, ["format", "tournamentType", "type", "category"]),
     levelLabel: buildTournamentLevelLabel(value),
+    genderLabel: buildTournamentGenderLabel(value),
     priceLabel: pickString(value, ["priceLabel", "priceText"]) || (price != null ? `${price.toLocaleString("ru-RU")} ${currency}` : null),
     participantsCount,
     maxParticipants,

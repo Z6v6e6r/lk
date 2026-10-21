@@ -924,7 +924,7 @@ function toCommunityTournamentCard(
     stationLabel: getTournamentStationLabel(tournament) || tournament.address || "Станция уточняется",
     tournamentTypeLabel: tournament.format || "Турнир",
     ratingLabel: tournament.levelLabel || undefined,
-    genderLabel: undefined,
+    genderLabel: tournament.genderLabel || undefined,
     slotsLabel: maxParticipants > 0 ? `${participants}/${maxParticipants} мест` : `${participants} участников`,
     ctaLabel: "Открыть",
     trainerName: tournament.trainerName || "PadelHub",
