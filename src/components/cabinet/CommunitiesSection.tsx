@@ -1,3 +1,4 @@
+import { BuySupscription } from "./BuySubscription";
 import { useCommunityRatingMonth } from "./community-feed/useCommunityRatingMonth";
 import { AvatarImage } from "../UI/AvatarImage";
 import {
@@ -56,7 +57,6 @@ import {
   type CommunityMemberAction,
   type CommunityPost,
   type CommunityPostComment,
-  type CommunityPostKind,
   type CommunityPostReaction,
   type CommunityPostThread,
   type CommunityRatingPeriod,
@@ -115,7 +115,7 @@ interface CommunityFormState {
 }
 
 interface FeedFormState {
-  kind: Exclude<CommunityPostKind, "SYSTEM">;
+  kind: "PHOTO" | "GAME" | "TOURNAMENT";
   title: string;
   body: string;
   imageUrl: string | null;
@@ -3295,6 +3295,12 @@ export function CommunitiesSection({
   const currentBackendRanking = selectedCommunity
     ? (rankingByCommunityId[selectedCommunity.id]?.[buildCommunityRankingCacheKey(activeRankingPeriod, activeRankingType, rankingMonthStartTs)] ?? null)
     : null;
+  const [communitySubscriptionOpen, setCommunitySubscriptionOpen] = useState(false);
+  useEffect(() => { setCommunitySubscriptionOpen(false); }, [selectedCommunityId]);
+  const [activeLeagueDivision, setActiveLeagueDivision] = useState<string | null>(null);
+  useEffect(() => { setActiveLeagueDivision(null); }, [selectedCommunityId]);
+  const leagueTables = selectedCommunity?.communityType === 'LEAGUE' ? currentBackendRanking?.leagueTables ?? [] : [];
+  const leagueTable = leagueTables.find(table => table.id === activeLeagueDivision) ?? leagueTables[0];
   const currentRankingData = useMemo(() => {
     if (!selectedCommunity) {
       return { rows: [], confirmedGamesCount: 0 } satisfies CommunityRankingData;
@@ -3303,8 +3309,12 @@ export function CommunitiesSection({
     if (!currentBackendRanking) {
       return { rows: [], confirmedGamesCount: 0 } satisfies CommunityRankingData;
     }
+    if (selectedCommunity.communityType === 'LEAGUE') {
+      return leagueTable ? buildCommunityRankingDataFromBackend(selectedCommunity, { ...currentBackendRanking, items: leagueTable.rows, rows: leagueTable.rows })
+        : { rows: [], confirmedGamesCount: 0 } satisfies CommunityRankingData;
+    }
     return buildCommunityRankingDataFromBackend(selectedCommunity, currentBackendRanking);
-  }, [currentBackendRanking, selectedCommunity]);
+  }, [currentBackendRanking, selectedCommunity, leagueTable]);
   const currentRankingRows = currentRankingData.rows;
   const currentRankingGamesCount = currentRankingData.confirmedGamesCount;
   const isCurrentRankingLoading = selectedCommunity
@@ -5560,6 +5570,13 @@ export function CommunitiesSection({
               </>
             )}
 
+            {selectedCommunity.communityType === 'CORPORATE' && selectedCommunity.typeSettings?.vivaSubscriptionId && isCommunityMember(selectedCommunity, profileId, profilePhone) && (
+              <div className="community-ranking-box">
+                <button type="button" className="community-ranking-filter-chip" onClick={() => setCommunitySubscriptionOpen(true)}>Специальная подписка сообщества</button>
+                <BuySupscription isOpen={communitySubscriptionOpen} onClose={() => setCommunitySubscriptionOpen(false)} phone={profile.phone || ''} subscriptionId={selectedCommunity.typeSettings.vivaSubscriptionId} />
+              </div>
+            )}
+
             {activeCommunityTab === "FEED" && (
               <>
                 {detailError && (
@@ -5692,6 +5709,9 @@ export function CommunitiesSection({
             {activeCommunityTab === "RANKING" && (
               <CommunityRankingScreen
                 community={selectedCommunity}
+                divisions={leagueTables.map(table => ({ id: table.id, name: table.name }))}
+                activeDivision={leagueTable?.id ?? null}
+                onChangeDivision={setActiveLeagueDivision}
                 rows={currentRankingRows}
                 activeType={activeRankingType}
                 activePeriod={activeRankingPeriod}
@@ -5699,7 +5719,7 @@ export function CommunitiesSection({
                 gamesCount={currentRankingGamesCount}
                 chatBadgeCount={currentChatUnreadBadgeCount}
                 isLoading={isCurrentRankingLoading}
-                error={rankingRefreshError}
+                error={rankingRefreshError ?? (selectedCommunity.communityType === 'LEAGUE' && !isCurrentRankingLoading && !leagueTables.length ? 'Таблицы дивизионов ещё не подготовлены.' : null)}
                 currentUserId={profileId}
                 currentUserPhone={profilePhone}
                 onChangeType={setActiveRankingType}

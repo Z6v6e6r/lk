@@ -1,3 +1,5 @@
+import { assignLeagueResults, buildLeagueRatingTables, type LeagueResultAssignment } from './league.ts';
+import { communityType, parseCommunityTypeSettings } from '../community-policy.ts';
 import {
   COMMUNITY_RATING_CALCULATION_VERSION,
   COMMUNITY_RATING_VISIT_SCOPE_BY_COMMUNITY_ID,
@@ -46,6 +48,7 @@ export type CommunityRatingFindResult<TDocument> =
   | CommunityRatingFindCursor<TDocument>;
 
 export interface CommunityRatingReadableCollection<TDocument = Record<string, unknown>> {
+  updateOne?(filter: Record<string, unknown>, update: Record<string, unknown>): Promise<{ matchedCount: number }>;
   find(filter: CommunityRatingQuery): CommunityRatingFindResult<TDocument> | Promise<CommunityRatingFindResult<TDocument>>;
 }
 
@@ -58,6 +61,7 @@ export interface CommunityRatingWritableCollection {
 }
 
 export interface CommunityRatingSourceCollections {
+  community_league_results?: CommunityRatingReadableCollection;
   [COMMUNITY_RATING_SOURCE_COLLECTIONS.communities]: CommunityRatingReadableCollection;
   [COMMUNITY_RATING_SOURCE_COLLECTIONS.feed]: CommunityRatingReadableCollection;
   [COMMUNITY_RATING_SOURCE_COLLECTIONS.games]: CommunityRatingReadableCollection;
@@ -68,6 +72,7 @@ export interface CommunityRatingSourceCollections {
 }
 
 export interface CommunityRatingStorageCollections {
+  community_league_results?: { bulkWrite(operations: Array<{ updateOne: { filter: Record<string, unknown>; update: Record<string, unknown>; upsert: boolean } }>): Promise<unknown> };
   [COMMUNITY_RATING_COLLECTIONS.facts]: CommunityRatingWritableCollection;
   [COMMUNITY_RATING_COLLECTIONS.aggregates]: CommunityRatingWritableCollection;
   [COMMUNITY_RATING_COLLECTIONS.snapshots]: CommunityRatingWritableCollection;
@@ -79,6 +84,7 @@ export interface CommunityRatingRecalculationCollections {
 }
 
 export interface CommunityRatingSourceData {
+  leagueResults?: LeagueResultAssignment[];
   community: Record<string, unknown>;
   feedPosts: Record<string, unknown>[];
   games: Record<string, unknown>[];
@@ -89,6 +95,7 @@ export interface CommunityRatingSourceData {
 }
 
 export interface CommunityRatingRecalculationPlan {
+  leagueAssignments?: LeagueResultAssignment[];
   communityId: string;
   source: CommunityRatingSourceData;
   facts: CommunityRatingFact[];
@@ -351,6 +358,8 @@ export async function collectCommunityRatingSourceData(
   });
   const community = communities[0] ?? null;
   if (!community) return null;
+  const leagueResults = collections.community_league_results && Number(community.typeSettingsRevision) > 0
+    ? await findAll(collections.community_league_results, { communityId: normalizedCommunityId }) as unknown as LeagueResultAssignment[] : undefined;
 
   const feedPosts = await findAll(collections.lk_community_feed, {
     communityId: normalizedCommunityId,
@@ -408,6 +417,7 @@ export async function collectCommunityRatingSourceData(
 
   return {
     community,
+    ...(leagueResults ? { leagueResults } : {}),
     feedPosts,
     games,
     tournaments,
@@ -423,7 +433,7 @@ export function buildCommunityRatingRecalculationPlan(
   const communityId = params.communityId.trim();
   const calculationVersion = params.calculationVersion || COMMUNITY_RATING_CALCULATION_VERSION;
   const updatedAt = params.updatedAt || new Date(params.nowTs ?? Date.now()).toISOString();
-  const facts = extractCommunityRatingFacts({
+  const extracted = extractCommunityRatingFacts({
     community: params.source.community,
     feedPosts: params.source.feedPosts,
     games: params.source.games,
@@ -433,6 +443,10 @@ export function buildCommunityRatingRecalculationPlan(
     ratingStates: params.source.ratingStates,
     collectedAt: updatedAt,
   }).filter((fact) => fact.calculationVersion === calculationVersion);
+  const assigned = assignLeagueResults({ community: params.source.community, facts: extracted,
+    existing: params.source.leagueResults, ratingEvents: params.source.ratingEvents,
+    records: [...params.source.games, ...params.source.tournaments], nowIso: updatedAt });
+  const facts = assigned.facts;
   const members = extractCommunityRatingMemberSeeds({
     community: params.source.community,
     ratingStates: params.source.ratingStates,
@@ -448,9 +462,21 @@ export function buildCommunityRatingRecalculationPlan(
     calculationVersion,
   });
 
+  const configured = communityType(params.source.community.communityType) === 'LEAGUE'
+    ? parseCommunityTypeSettings('LEAGUE', params.source.community.typeSettings).divisions : undefined;
+  if (configured || facts.some(fact => fact.leagueDivision)) {
+    for (const operation of batch.operations.community_rating_snapshots) {
+      if ('replaceOne' in operation) {
+        const snapshot = operation.replaceOne.replacement;
+        Object.assign(snapshot, { leagueTables: buildLeagueRatingTables(snapshot, facts, configured) });
+      }
+    }
+  }
+
   return {
     communityId,
     source: params.source,
+    ...(assigned.assignments.length ? { leagueAssignments: assigned.assignments } : {}),
     facts,
     batch,
     summary: {
@@ -508,7 +534,7 @@ export async function recalculateCommunityRating(
   const source = await collectCommunityRatingSourceData(params.collections.source, params.communityId);
   if (!source) return null;
 
-  const plan = buildCommunityRatingRecalculationPlan({
+  let plan = buildCommunityRatingRecalculationPlan({
     communityId: params.communityId,
     source,
     periods: params.periods,
@@ -524,6 +550,43 @@ export async function recalculateCommunityRating(
       applied: false,
       applyResult: null,
     };
+  }
+
+  if (plan.leagueAssignments?.length || (Array.isArray(source.community.leagueAssignmentOutbox) && source.community.leagueAssignmentOutbox.length)) {
+    const storage = params.collections.storage.community_league_results;
+    const reader = params.collections.source.community_league_results;
+    if (!storage || !reader) throw new Error('COMMUNITY_LEAGUE_STORAGE_REQUIRED');
+    const communities = params.collections.source.lk_communities;
+    if (!communities.updateOne) throw new Error('COMMUNITY_LEAGUE_CLAIM_STORAGE_REQUIRED');
+    const pending = Array.isArray(source.community.leagueAssignmentOutbox)
+      ? source.community.leagueAssignmentOutbox as LeagueResultAssignment[] : [];
+    for (const assignment of [...pending, ...(plan.leagueAssignments ?? [])]) {
+      let approved = pending.find(row => row._id === assignment._id);
+      if (!approved) {
+        const claim = await communities.updateOne({ id: params.communityId, archived: { $ne: true }, communityType: 'LEAGUE',
+          typeSettingsRevision: assignment.settingsRevision,
+          leagueAssignmentOutbox: { $not: { $elemMatch: { _id: assignment._id } } },
+          $expr: { $lt: [{ $size: { $ifNull: ['$leagueAssignmentOutbox', []] } }, 100] },
+        }, { $push: { leagueAssignmentOutbox: assignment } });
+        if (claim.matchedCount === 1) approved = assignment;
+        else {
+          const current = (await findAll(communities, { id: params.communityId }))[0];
+          approved = (Array.isArray(current?.leagueAssignmentOutbox) ? current.leagueAssignmentOutbox as LeagueResultAssignment[] : []).find(row => row._id === assignment._id);
+          if (!approved) throw new Error('COMMUNITY_LEAGUE_POLICY_CHANGED');
+        }
+      }
+      // The atomic claim is the authorization point. CUP config writes update
+      // only their own fields and preserve a crash-recoverable bounded intent.
+      await storage.bulkWrite([{ updateOne: { filter: { _id: approved._id }, update: { $setOnInsert: approved }, upsert: true } }]);
+      const persisted = await findAll(reader, { _id: approved._id, communityId: params.communityId });
+      if (persisted.length !== 1) throw new Error('COMMUNITY_LEAGUE_ASSIGNMENT_READBACK_FAILED');
+      await communities.updateOne({ id: params.communityId }, { $pull: { leagueAssignmentOutbox: { _id: approved._id } } });
+    }
+    // Concurrent recalculations use the first persisted assignment, never their
+    // own losing proposal. Result corrections preserve this separate collection.
+    source.leagueResults = await findAll(reader, { communityId: params.communityId }) as unknown as LeagueResultAssignment[];
+    plan = buildCommunityRatingRecalculationPlan({ communityId: params.communityId, source,
+      periods: params.periods, tabs: params.tabs, nowTs: params.nowTs, updatedAt: params.updatedAt, calculationVersion: params.calculationVersion });
   }
 
   if (params.ensureIndexes !== false) {

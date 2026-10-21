@@ -1,3 +1,5 @@
+import { readAuthToken } from "./authTokenStorage";
+import { communityType, type CommunityType, type CommunityTypeSettings } from "../services/community-policy";
 import {
   getServ2Origin,
   request,
@@ -33,14 +35,14 @@ export type CommunityVisibility = "OPEN" | "CLOSED";
 export type CommunityJoinRule = "INSTANT" | "MODERATED" | "INVITE_ONLY";
 export type CommunityRole = "OWNER" | "ADMIN" | "MODERATOR" | "MEMBER";
 export type CommunityMembershipStatus = "ACTIVE" | "PENDING";
-export type CommunityPostKind = "SYSTEM" | "PHOTO" | "GAME" | "TOURNAMENT";
+export type CommunityPostKind = "SYSTEM" | "PHOTO" | "GAME" | "TOURNAMENT" | "TRAINING" | "EVENT";
 export type CommunityMemberAction = "REMOVE" | "BAN";
 export type CommunityPostReaction = "LIKE" | "DISLIKE";
 
 export function isVisibleCommunityPostKind(
   value: CommunityPostKind | null | undefined,
 ): value is Exclude<CommunityPostKind, "SYSTEM"> {
-  return value === "PHOTO" || value === "GAME" || value === "TOURNAMENT";
+  return value === "PHOTO" || value === "GAME" || value === "TOURNAMENT" || value === "TRAINING" || value === "EVENT";
 }
 
 export interface CommunityMember {
@@ -56,6 +58,9 @@ export interface CommunityMember {
 }
 
 export interface CommunityRecord {
+  communityType?: CommunityType;
+  typeSettings?: CommunityTypeSettings;
+  typeSettingsRevision?: number;
   id: string;
   name: string;
   slug: string | null;
@@ -216,6 +221,7 @@ export interface CommunityListResponse {
 }
 
 export interface CommunityRankingResponse {
+  leagueTables?: Array<{ id: string; name: string; rows: CommunityRatingItem[] }>;
   communityId: string;
   updatedAt: string | null;
   calculationVersion: string | null;
@@ -320,7 +326,7 @@ export interface ManageCommunityMemberPayload {
 
 export interface CreateCommunityFeedPostPayload {
   member: CommunityActorPayload;
-  kind: Exclude<CommunityPostKind, "SYSTEM">;
+  kind: "PHOTO" | "GAME" | "TOURNAMENT";
   title: string;
   body: string;
   imageUrl?: string | null;
@@ -610,7 +616,7 @@ function normalizeJoinRule(value: unknown, fallbackVisibility: CommunityVisibili
 
 function normalizePostKind(value: unknown): CommunityPostKind {
   const raw = toTrimmedString(value)?.toUpperCase();
-  if (raw === "PHOTO" || raw === "GAME" || raw === "TOURNAMENT" || raw === "SYSTEM") {
+  if (raw === "PHOTO" || raw === "GAME" || raw === "TOURNAMENT" || raw === "SYSTEM" || raw === "TRAINING" || raw === "EVENT") {
     return raw;
   }
   return "SYSTEM";
@@ -708,6 +714,9 @@ function normalizeCommunityRecord(value: unknown): CommunityRecord | null {
     logoUrl: explicitLogoUrl ?? logo,
     logoThumbUrl: explicitLogoThumbUrl ?? explicitLogoUrl ?? logo,
     isVerified: normalizeCommunityVerified(value),
+    communityType: communityType(value.communityType),
+    typeSettings: isRecord(value.typeSettings) ? value.typeSettings as CommunityTypeSettings : {},
+    typeSettingsRevision: pickNumber(value, ["typeSettingsRevision"]) ?? 0,
     visibility,
     description: pickString(value, ["description", "body"]) ?? "",
     city: pickString(value, ["city"]) ?? "Москва",
@@ -1113,7 +1122,13 @@ function extractCommunityRanking(payload: unknown): CommunityRankingResponse | n
   const confirmedGamesCount = pickNumber(payload, ["confirmedGamesCount", "gamesCount", "matchesCount"])
     ?? (payloadMeta ? pickNumber(payloadMeta, ["confirmedGamesCount", "gamesCount", "matchesCount"]) : null);
 
+  const leagueTables = extractArray(payload.leagueTables).filter(isRecord).slice(0, 24).map(table => ({
+    id: pickString(table, ['id']) ?? '', name: pickString(table, ['name']) ?? '',
+    rows: extractArray(table.rows).map((row, index) => normalizeCommunityRatingItem(row, index, communityId))
+      .filter((row): row is CommunityRatingItem => row !== null),
+  })).filter(table => table.id && table.name);
   return {
+    leagueTables,
     communityId,
     tab: normalizeRatingTab(pickString(payload, ["tab"])),
     period: normalizeRatingPeriod(pickString(payload, ["period"])),
@@ -1264,6 +1279,7 @@ async function requestCommunityMutation<T>(
   path: string,
   options: RequestOptions,
 ): Promise<ApiResult<T>> {
+  options = { ...options, auth: Boolean(readAuthToken()) };
   const baseUrls = buildCommunityMutationBaseUrls();
   let finalResult: ApiResult<T>;
   if (baseUrls.length === 0) {
@@ -1322,10 +1338,11 @@ function appendForceFreshCacheBuster(query: URLSearchParams) {
 
 function buildCommunityGetOptions(ttlMs: number): Pick<
   RequestOptions,
-  "baseUrl" | "retries" | "cache" | "cacheTtlMs" | "dedupe"
+  "baseUrl" | "auth" | "retries" | "cache" | "cacheTtlMs" | "dedupe"
 > {
   return {
     baseUrl: buildBaseUrl(),
+    auth: Boolean(readAuthToken()),
     retries: 1,
     ...(IS_DEV_RELEASE_CHANNEL
       ? {
@@ -1340,10 +1357,11 @@ function buildCommunityGetOptions(ttlMs: number): Pick<
 
 function buildCommunityReadGetOptions(ttlMs: number): Pick<
   RequestOptions,
-  "baseUrl" | "retries" | "cacheTtlMs" | "dedupe"
+  "baseUrl" | "auth" | "retries" | "cacheTtlMs" | "dedupe"
 > {
   return {
     baseUrl: buildBaseUrl(),
+    auth: Boolean(readAuthToken()),
     retries: 1,
     ...(IS_DEV_RELEASE_CHANNEL
       ? {
@@ -1354,9 +1372,10 @@ function buildCommunityReadGetOptions(ttlMs: number): Pick<
   };
 }
 
-function buildForceFreshCommunityGetOptions(): Pick<RequestOptions, "baseUrl" | "retries" | "cache"> {
+function buildForceFreshCommunityGetOptions(): Pick<RequestOptions, "baseUrl" | "auth" | "retries" | "cache"> {
   return {
     baseUrl: buildBaseUrl(),
+    auth: Boolean(readAuthToken()),
     retries: 1,
     cache: "no-store",
   };

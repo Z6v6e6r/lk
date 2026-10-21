@@ -13,6 +13,12 @@ const ctx = msg._communityPlayerRating || {};
 const community = toRows(msg.payload)[0];
 if (!community) return [null, jsonError(404, 'COMMUNITY_NOT_FOUND')];
 
+// COMMUNITY_TYPED_PLAYER_RATING_ACCESS
+if (['STATION','CORPORATE','LEAGUE'].includes(community.communityType) && String(community.visibility || '').toUpperCase() === 'CLOSED') {
+  const actorId = toTrimmed(msg._verifiedCommunityActor?.id);
+  if (!actorId || !toRows(community.members).some(row => exactMemberIds(row).includes(actorId))) return [null, jsonError(403, 'COMMUNITY_ACCESS_DENIED')];
+}
+
 const member = toRows(community.members).find((item) => exactMemberIds(item).includes(ctx.playerId));
 if (!member) return [null, jsonError(404, 'PLAYER_NOT_FOUND_IN_COMMUNITY')];
 const snapshotPlayerId = exactMemberIds(member)[0] || ctx.playerId;
