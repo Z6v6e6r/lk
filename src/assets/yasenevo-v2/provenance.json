@@ -1,7 +1,7 @@
 {
   "source": "PadlHub_Yasenevo_Assets_v2.zip",
   "archiveSha256": "35f7c300d5f5032793bba7fd6c93aea6b21cae9c51e29e88cf89f41d8e3329e4",
-  "format": "Original supplied SVGs, copied unchanged. Supplied JavaScript/demo not imported.",
+  "format": "Supplied SVG artwork and documented local adaptations. Supplied JavaScript/demo not imported.",
   "files": {
     "platform_blue.svg": {
       "source": "assets/svg/platform_blue.svg",
@@ -70,8 +70,10 @@
     },
     "poster_build_ourselves.svg": {
       "source": "assets/svg/poster_build_ourselves.svg",
-      "sha256": "6b3c15fe6d7d91ededc42506fd3a8a723afa1f3d8f097b23bd7985ec064c4eef",
-      "bytes": 9229
+      "sha256": "738a80fbfa400992b63e3fc94eacdbb118d6a03e213f92deeefcadc4a19b7d3b",
+      "bytes": 8901,
+      "sourceSha256": "6b3c15fe6d7d91ededc42506fd3a8a723afa1f3d8f097b23bd7985ec064c4eef",
+      "modification": "Racket pictogram replaced with a stylized claw hammer; logo, text and poster background preserved."
     },
     "worker_navy_walk_00.svg": {
       "source": "assets/svg/worker_navy_walk_00.svg",

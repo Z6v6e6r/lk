@@ -37,7 +37,8 @@ export function yasenevoScenery(ctx: CanvasRenderingContext2D, game: Game, art: 
   ctx.save(); ctx.globalAlpha = 0.85;
   yasenevoSprite(ctx, art, 'flag_padlhub', 34, 163, 52);
   yasenevoSprite(ctx, art, 'flag_padlhub', WIDTH - 34, 330, 52);
-  yasenevoSprite(ctx, art, 'poster_build_ourselves', WIDTH - 43, HEIGHT - 150, 44);
+  // Screen-space poster: its anchor intentionally does not depend on the camera.
+  yasenevoSprite(ctx, art, 'poster_build_ourselves', WIDTH - 62, HEIGHT - 150, 88);
   ctx.restore();
 }
 export function yasenevoCage(ctx: CanvasRenderingContext2D, game: Game, art: YasenevoArt) {
