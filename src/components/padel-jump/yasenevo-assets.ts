@@ -23,9 +23,10 @@ import decor_toolcase from '../../assets/yasenevo-v2/decor_toolcase.svg';
 import dome_loop from '../../assets/yasenevo-v2/dome_loop.svg';
 import station_start from '../../assets/yasenevo-v2/station_start.svg';
 import cage_left from '../../assets/yasenevo-v2/cage_left.svg';
+import padel_sleeve from '../../assets/yasenevo-v2/padel_sleeve.svg';
 import cage_right from '../../assets/yasenevo-v2/cage_right.svg';
 
-/** Original supplied v2 SVGs. Only image data is imported; the supplied demo/loader is not executed. */
+/** Original supplied SVGs. Only image data is imported; the supplied demo/loader is not executed. */
 export const YASENEVO_SPRITES = {
   platform_blue: { url: platform_blue, w: 192, h: 64, surface: {"x": 14, "y": 12, "width": 164} },
   platform_blue_wide: { url: platform_blue_wide, w: 240, h: 64, surface: {"x": 14, "y": 12, "width": 212} },
@@ -53,6 +54,7 @@ export const YASENEVO_SPRITES = {
   station_start: { url: station_start, w: 720, h: 1440 },
   cage_left: { url: cage_left, w: 112, h: 1440 },
   cage_right: { url: cage_right, w: 112, h: 1440 },
+  padel_sleeve: { url: padel_sleeve, w: 2834.6, h: 283.5 },
 } as const;
 export type YasenevoSprite = keyof typeof YASENEVO_SPRITES;
 export type YasenevoArt = { images: Record<YasenevoSprite, HTMLImageElement> };

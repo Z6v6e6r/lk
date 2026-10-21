@@ -9,7 +9,7 @@ import { surfaceRect } from '../../src/components/padel-jump/yasenevo-layout.ts'
 test('supplied SVG art retains exact provenance and contains no executable or external content', () => {
   const base = new URL('../../src/assets/yasenevo-v2/', import.meta.url);
   const manifest = JSON.parse(readFileSync(new URL('provenance.json', base), 'utf8'));
-  assert.equal(Object.keys(manifest.files).length, 26);
+  assert.equal(Object.keys(manifest.files).length, 27);
   for (const [name, item] of Object.entries(manifest.files) as [string, { sha256: string; bytes: number }][]) {
     const data = readFileSync(new URL(name, base)), svg = data.toString('utf8');
     assert.equal(data.length, item.bytes, name); assert.equal(createHash('sha256').update(data).digest('hex'), item.sha256, name);

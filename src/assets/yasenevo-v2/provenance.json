@@ -132,6 +132,19 @@
       "source": "backgrounds/yasenevo_cage_right.svg",
       "sha256": "666a69a6d08be2f44e7700f1ae9dae4a5db232e57300a8e94366f0ec1129e52e",
       "bytes": 15916
+    },
+    "padel_sleeve.svg": {
+      "source": "Рукав Падел.svg",
+      "sha256": "129c5907288396d6f3203543a539a7855e2db8d1d547c83e73a07c3515120ea0",
+      "bytes": 429225,
+      "normalization": "CRLF to LF and trailing whitespace removed; SVG element/attribute/content semantics verified unchanged."
     }
-  }
+  },
+  "additionalSources": [
+    {
+      "source": "Рукав Падел.svg",
+      "sha256": "537dd08a1e2a00c2eb87a56ecffc61fc3b5a61b738ce07253988dd1a40b4c830",
+      "format": "Original user-supplied SVG; imported artwork has LF/trailing-whitespace normalization only."
+    }
+  ]
 }

@@ -25,9 +25,18 @@ export function yasenevoScenery(ctx: CanvasRenderingContext2D, game: Game, art: 
     yasenevoSprite(ctx, art, 'banner_padlhub', 210, floor - 13, 118);
     ctx.restore();
   }
+  // Repeating wall artwork scrolls behind all playable objects, with gaps between bands.
+  ctx.save();
+  const sleeveSpacing = 900, sleeveShift = game.camera * 0.55 % sleeveSpacing;
+  for (let y = 210 + sleeveShift - sleeveSpacing; y < HEIGHT + 24; y += sleeveSpacing) {
+    if (y <= -24) continue;
+    ctx.globalAlpha = 0.38; ctx.fillStyle = '#4e356d'; ctx.fillRect(20, y - 20, WIDTH - 40, 40);
+    ctx.globalAlpha = 0.8; yasenevoSprite(ctx, art, 'padel_sleeve', WIDTH / 2, y, WIDTH - 84);
+  }
+  ctx.restore();
   ctx.save(); ctx.globalAlpha = 0.85;
-  yasenevoSprite(ctx, art, 'flag_padlhub', 22, 163, 26);
-  yasenevoSprite(ctx, art, 'flag_padlhub', WIDTH - 22, 330, 26);
+  yasenevoSprite(ctx, art, 'flag_padlhub', 34, 163, 52);
+  yasenevoSprite(ctx, art, 'flag_padlhub', WIDTH - 34, 330, 52);
   yasenevoSprite(ctx, art, 'poster_build_ourselves', WIDTH - 43, HEIGHT - 150, 44);
   ctx.restore();
 }
