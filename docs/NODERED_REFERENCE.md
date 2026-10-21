@@ -1,5 +1,13 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## «Дружба.Патриоты»: обычная механика «Дружбы»
+
+Owner decision 2026-10-21: product `37ab3713-4431-4815-96ba-d7ece76a9241`
+copies the installed ordinary Friendship rule and daily seat. The focused
+[candidate, checks and recovery](LK1_PATRIOTS_FRIENDSHIP_20261021.md) supersedes
+the older bespoke Patriots rollout. It changes only the existing booking and
+price-preview routers; preparation does not activate production or fix the landing routes.
+
 ## «Дружба.Пулково»
 
 Focused candidate for the existing booking gateway and game-price-preview router:
