@@ -385,8 +385,27 @@ const resolveCommunityLogoFields = (community, options = {}) => {
   const logoUrlRaw = toStr(community?.logoUrl || community?.imageUrl);
   const logoThumbUrlRaw = toStr(community?.logoThumbUrl || community?.logoThumb || community?.thumbnailUrl);
   const legacyDataUrl = toStr(community?.logoLegacyDataUrl || community?.logo);
-  const assetLogoUrl = toPublicUrl(logoUrlRaw, publicBaseUrl);
-  const assetLogoThumbUrl = toPublicUrl(logoThumbUrlRaw, publicBaseUrl) || assetLogoUrl;
+  // A stored legacy URL is only an alias to inline data, not an uploaded asset.
+  // Do not publish that alias after its backing data has been removed.
+  const originalData = community?.logoLegacyDataUrl || community?.logoDataUrl
+    || (isDataUrl(community?.logoUrl) ? community.logoUrl : null)
+    || (isDataUrl(community?.logo) ? community.logo : null);
+  const thumbData = community?.logoThumbLegacyDataUrl || community?.logoThumbDataUrl
+    || community?.logoLegacyDataUrl
+    || (isDataUrl(community?.logoThumbUrl) ? community.logoThumbUrl : null)
+    || (isDataUrl(community?.logo) ? community.logo : null);
+  const availableLogoUrl = value => {
+    if (!value) return null;
+    if (/^https?:\/\//i.test(value) && (!publicBaseUrl || !value.startsWith(publicBaseUrl + '/'))) return value;
+    const path = value.replace(/^https?:\/\/[^/]+/i, '').split(/[?#]/)[0];
+    const legacy = path.match(/^\/lk\/media\/community-logo-legacy\/([^/]+)(\/thumb)?$/);
+    if (!legacy) return value;
+    // Keep foreign aliases: this record cannot establish whether their data exists.
+    if (legacy[1] !== encodeURIComponent(communityId || '')) return value;
+    return parseDataUrl(legacy[2] ? thumbData : originalData) ? value : null;
+  };
+  const assetLogoUrl = toPublicUrl(availableLogoUrl(logoUrlRaw), publicBaseUrl);
+  const assetLogoThumbUrl = toPublicUrl(availableLogoUrl(logoThumbUrlRaw), publicBaseUrl) || assetLogoUrl;
 
   if (assetLogoUrl || assetLogoThumbUrl) {
     return {
@@ -396,7 +415,7 @@ const resolveCommunityLogoFields = (community, options = {}) => {
     };
   }
 
-  if (legacyDataUrl && isDataUrl(legacyDataUrl) && communityId) {
+  if (parseDataUrl(legacyDataUrl) && communityId) {
     const legacyLogoUrl = buildCommunityLegacyLogoUrl(publicBaseUrl, communityId, 'original');
     const legacyLogoThumbUrl = buildCommunityLegacyLogoUrl(publicBaseUrl, communityId, 'thumb');
     return {
@@ -406,7 +425,8 @@ const resolveCommunityLogoFields = (community, options = {}) => {
     };
   }
 
-  const directLogo = toPublicUrl(legacyDataUrl, publicBaseUrl);
+  const directLogo = isDataUrl(legacyDataUrl) && !parseDataUrl(legacyDataUrl)
+    ? null : toPublicUrl(availableLogoUrl(legacyDataUrl), publicBaseUrl);
   return {
     logoUrl: directLogo,
     logoThumbUrl: directLogo,

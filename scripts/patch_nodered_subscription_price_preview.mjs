@@ -381,7 +381,7 @@ export function composeSubscriptionPricePreviewFlow(flow, options = {}) {
     { ...node(z, 'router', 6, [[id('http')], [id('metadata')], [id('operations')], [id('evaluate')], [id('final')], [id('games')]]), func: sources.router },
     node(z, 'evaluate', 2, [[id('router')], [id('router')]], sources.evaluator),
     node(z, 'final', 1, [[id('response')]]),
-    { id: id('http'), type: 'http request', z, name: 'Subscription price preview Viva reads only', method: 'GET', ret: 'obj', paytoqs: 'ignore', url: '', tls: '', persist: false, proxy: '', insecureHTTPParser: false, authType: '', senderr: true, headers: [], requestTimeout: '10000', x: 970, y: 960, wires: [[id('router')]] },
+    { id: id('http'), type: 'http request', z, name: 'Subscription price preview Viva reads only', method: 'use', ret: 'obj', paytoqs: 'ignore', url: '', tls: '', persist: false, proxy: '', insecureHTTPParser: false, authType: '', senderr: true, headers: [], requestTimeout: '10000', x: 970, y: 960, wires: [[id('router')]] },
     mongo('metadata', 'lk_subscription_product_identity'),
     mongo('operations', 'lk_subscription_daily_booking_ops'),
     mongo('games', 'lk_games'),
@@ -413,7 +413,9 @@ export function composeSubscriptionPreviewServerTimeArtifacts(liveBytes, deploym
   if (final?.type !== 'function' || sha(final.func || '') !== PREVIEW_SERVER_TIME_FINAL_PREIMAGE) {
     throw new Error('Preview server time final preimage drift');
   }
-  final.func = read('final');
+  // This historical upgrader must remain clock-only when final.js evolves.
+  final.func = final.func.replace(': { quotes: ctx.quotes || [] };',
+    ': { quotes: ctx.quotes || [], serverTimeMs: Date.now() };');
   new Function('msg', 'node', final.func);
   const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
   const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId,

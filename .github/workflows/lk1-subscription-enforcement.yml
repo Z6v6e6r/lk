@@ -373,6 +373,11 @@ jobs:
           scripts/tests/subscriptionPricePreviewHook.test.mjs
           scripts/tests/subscriptionPricePreview.apiClient.test.mjs
           scripts/tests/subscriptionPricePreviewBackend.test.mjs
+          scripts/tests/productionErrorCauses.test.mjs
+          scripts/tests/errorCauseCandidateAndRoster.test.mjs
+          scripts/tests/communityLegacyLogoAliases.test.mjs
+          scripts/tests/authConsentAudit.test.ts
+          scripts/tests/communitySummaryProjection.test.mjs
           scripts/tests/subscriptionPricePreviewAside.test.mjs
           scripts/tests/subscriptionPricePreviewIngress.test.mjs
           scripts/tests/subscriptionSchedulePrefetch.test.mjs
