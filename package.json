@@ -217,6 +217,7 @@
     "test:lk1-subscription-activation-packet": "node --test scripts/tests/lk1SubscriptionActivationPacket.test.mjs",
     "test:lk1-topokraty-friendship": "node --experimental-strip-types --test scripts/tests/topokratyFriendshipHotfix.test.mjs scripts/tests/lk1TopokratyFriendship.test.mjs",
     "test:lk1-pulkovo-friendship": "node --test scripts/tests/pulkovoFriendship.test.mjs",
+    "test:lk1-patriots-friendship-parity": "node --test scripts/tests/patriotsFriendshipParity.test.mjs",
     "test:lk1-topokraty-reclaim": "node --experimental-strip-types --test scripts/tests/topokratyRejectionReclaimHotfix.test.mjs scripts/tests/topokratyExclusion.test.ts",
     "test:lk1-topokraty-copay": "node --experimental-strip-types --test scripts/tests/lk1TopokratyCopayHotfix.test.mjs",
     "test:lk1-train-g1": "node --experimental-strip-types --test scripts/tests/lk1TrainG1Hotfix.test.mjs",
