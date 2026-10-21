@@ -1,6 +1,8 @@
 import { BALANCE, STATIONS } from './campaign';
 import { BALL_RADIUS, HEIGHT, landingHint, WIDTH } from './engine';
 import type { Game, Platform } from './engine';
+import type { YasenevoArt } from './yasenevo-assets';
+import { yasenevoBall, yasenevoCage, yasenevoPlatform, yasenevoScenery, yasenevoSprite } from './yasenevo-render';
 
 const INK = '#23214d';
 
@@ -93,17 +95,18 @@ function scenery(ctx: CanvasRenderingContext2D, game: Game) {
   }
 }
 
-function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduced: boolean) {
+function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduced: boolean, art: YasenevoArt | null) {
   const fall = p.spent ?? 0;
   const y = HEIGHT - p.y + game.camera + (fall ? fall * 75 + fall * fall * 400 : 0);
-  if (y < -35 || y > HEIGHT + 30) return;
+  if (y < -(art ? 200 : 35) || y > HEIGHT + 30) return;
   ctx.save(); ctx.translate(p.x, y);
   if (p.spent !== undefined) { ctx.globalAlpha = Math.max(0, 1 - fall / BALANCE.collapseSeconds); if (!reduced) ctx.rotate(fall * 0.65); }
   if (p.flash > 0 && !reduced) {
     ctx.shadowColor = p.kind === 'net' ? '#d9ff52' : '#a66dff';
     ctx.shadowBlur = 18;
   }
-  if (p.kind === 'court' || p.kind === 'crumble') {
+  if (art) yasenevoPlatform(ctx, p, art);
+  else if (p.kind === 'court' || p.kind === 'crumble') {
     rounded(ctx, 3, 1, p.width - 6, 15, 7, '#a9a6a0', INK);
     const c = game.campaign, grey = c && STATIONS[c.station].construction && game.mode !== 'complete';
     const color = grey ? '#b8b9b9' : p.kind === 'crumble' ? (p.width <= 100 ? '#66b9df' : '#e777bd') : c && [3, 4].includes(c.station) ? '#f4bd58' : '#b6e75c';
@@ -145,14 +148,24 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
   ctx.restore();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false) {
+export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null) {
   // Preserve physics proportions, including narrow embeds and landscape phones.
   const scale = Math.min(width / WIDTH, height / HEIGHT);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale,
     dpr * (width - WIDTH * scale) / 2, dpr * (height - HEIGHT * scale) / 2);
-  scenery(ctx, game);
-  campaignObjects(ctx, game, reducedMotion);
-  for (const p of game.platforms) platform(ctx, p, game, reducedMotion);
+  const art = game.campaign?.station === 0 ? yasenevoArt : null;
+  if (art) yasenevoScenery(ctx, game, art, reducedMotion); else scenery(ctx, game);
+  if (!art) campaignObjects(ctx, game, reducedMotion);
+  ctx.save();
+  if (art) { ctx.beginPath(); ctx.rect(0, 0, WIDTH, HEIGHT); ctx.clip(); }
+  // The deeper racket artwork must sit behind the next lower landing surface.
+  for (let i = 0; i < game.platforms.length; i++) {
+    const p = game.platforms[art ? game.platforms.length - 1 - i : i];
+    platform(ctx, p, game, reducedMotion, art);
+  }
+  if (art) { campaignObjects(ctx, game, reducedMotion, art); yasenevoCage(ctx, game, art); yasenevoBall(ctx, game, art, reducedMotion); }
+  ctx.restore();
+  if (art) return;
   const { ball } = game;
   const x = ball.x, y = HEIGHT - ball.y + game.camera;
   if (!reducedMotion && ball.vy > 0 && game.mode === 'running') {
@@ -173,12 +186,13 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
   }
 }
 
-function starShape(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, ghost: boolean) {
+function starShape(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, ghost: boolean, art?: YasenevoArt) {
+  if (art) { ctx.save(); ctx.globalAlpha = ghost ? 0.35 : 1; yasenevoSprite(ctx, art, 'star_gold', x, y, size * 96 / 29); ctx.restore(); return; }
   ctx.save(); ctx.translate(x, y); ctx.beginPath();
   for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? size * 0.46 : size; const xx = Math.cos(a) * r, yy = Math.sin(a) * r; if (!i) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy); }
   ctx.closePath(); ctx.fillStyle = ghost ? '#ffef9b55' : '#ffe14c'; ctx.strokeStyle = '#b48221'; ctx.lineWidth = 1.4; ctx.fill(); ctx.stroke(); ctx.restore();
 }
-function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boolean) {
+function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boolean, art?: YasenevoArt) {
   const c = game.campaign; if (!c) return;
   const sy = (y: number) => HEIGHT - y + game.camera;
   if (c.assist) {
@@ -188,7 +202,7 @@ function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boo
       ctx.beginPath(); ctx.moveTo(game.ball.x, sy(game.ball.y)); ctx.quadraticCurveTo(game.ball.x, sy(game.ball.y + 110), next.x, sy(next.y + 20)); ctx.stroke(); ctx.restore();
     }
   }
-  for (const s of c.stars) if (!s.collected && sy(s.y) > -25 && sy(s.y) < HEIGHT + 25) starShape(ctx, s.x, sy(s.y), 12, s.claimed);
+  for (const s of c.stars) if (!s.collected && sy(s.y) > -25 && sy(s.y) < HEIGHT + 25) starShape(ctx, s.x, sy(s.y), 12, s.claimed, art);
   for (const wall of c.metals) {
     const y = sy(wall.y + wall.h); if (y < -40 || y > HEIGHT + 30) continue;
     rounded(ctx, wall.x, y, wall.w, wall.h, 2, '#414457', '#242438');
