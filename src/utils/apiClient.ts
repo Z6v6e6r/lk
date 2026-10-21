@@ -10380,14 +10380,14 @@ export async function apiFetchSubscriptionPricePreview(
   target: SubscriptionPriceTarget,
   subscriptionIds: string[],
   signal: AbortSignal,
-): Promise<ApiResult<{ quotes: SubscriptionPriceQuote[] }>> {
+): Promise<ApiResult<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }>> {
   const candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
-  let result: ApiResult<{ quotes: SubscriptionPriceQuote[] }> = {
+  let result: ApiResult<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }> = {
     data: null, error: { status: null, message: "Не удалось проверить условия подписок" }, status: null,
   };
   for (const baseUrl of candidates.length ? candidates : [getServ2Origin()]) {
     if (signal.aborted) break;
-    result = await rawRequest<{ quotes: SubscriptionPriceQuote[] }>("/lk/subscriptions/game-price-preview", {
+    result = await rawRequest<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }>("/lk/subscriptions/game-price-preview", {
       method: "POST", auth: true, baseUrl, signal, body: JSON.stringify({ target, subscriptionIds }),
     });
     if (signal.aborted || result.status !== null) break;

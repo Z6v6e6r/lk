@@ -402,6 +402,26 @@ export function composeSubscriptionPricePreviewArtifacts(liveBytes, deploymentId
   return { candidate, candidateBytes, contract, sourceSha256: sha(liveBytes) };
 }
 
+// Verified against the installed final body on 147; never rebuild the shared router
+// to add an advisory response clock. Candidate generation performs no live writes.
+export const PREVIEW_SERVER_TIME_FINAL_PREIMAGE = 'e7c174ea631ff47060a92a660851b876963e9f1473a2e932562415239f27b339';
+export function composeSubscriptionPreviewServerTimeArtifacts(liveBytes, deploymentId) {
+  const candidate = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
+  if (!Array.isArray(candidate) || candidate.some(row => !row || typeof row.id !== 'string')
+    || new Set(candidate.map(row => row.id)).size !== candidate.length) throw new Error('Invalid preview source');
+  const final = candidate.find(row => row.id === PREFIX + 'final');
+  if (final?.type !== 'function' || sha(final.func || '') !== PREVIEW_SERVER_TIME_FINAL_PREIMAGE) {
+    throw new Error('Preview server time final preimage drift');
+  }
+  final.func = read('final');
+  new Function('msg', 'node', final.func);
+  const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+  const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId,
+    allowedChanges: [{ id: PREFIX + 'final', fields: ['func'] }] });
+  validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
+  return { candidate, candidateBytes, contract };
+}
+
 /** Upgrade an existing preview without replacing routes, shared gateways or policy state. */
 export function composeSubscriptionJoinPricePreviewArtifacts(liveBytes, deploymentId, options = {}) {
   const flow = JSON.parse(Buffer.from(liveBytes).toString('utf8'));

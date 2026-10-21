@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
-import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
+import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
 const legacyOriginal = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
@@ -156,8 +156,41 @@ test('other tariff refusals retain their verdict and distinguish unknown count f
   const accepted = tariffDiagnostic([{ id: 'fixture-product', type: 'SERVICE', cost: 12345 }]);
   assert.equal(accepted.msg.statusCode, 200);
   assert.equal(accepted.ctx.basePriceMinor, 12345);
-  assert.deepEqual(accepted.msg.payload, { quotes: [] });
+  assert.deepEqual(accepted.msg.payload.quotes, []);
+  assert.ok(Number.isSafeInteger(accepted.msg.payload.serverTimeMs));
   assert.deepEqual(accepted.warnings, []);
+});
+
+test('successful preview publishes its own response clock without changing quotes or errors', () => {
+  const source = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8');
+  const serverTimeMs = 1893456000000;
+  const finish = vm.compileFunction(source, ['msg', 'node'], {
+    parsingContext: vm.createContext({ Date: class extends Date { static now() { return serverTimeMs; } } }),
+  });
+  const quote = { subscriptionId: 'fixture-subscription', evaluatedAt: serverTimeMs - 1, expiresAt: serverTimeMs + 29999 };
+  const response = finish({ _subscriptionPricePreview: { done: true, quotes: [quote] } }, { warn() {} });
+  assert.deepEqual(structuredClone(response.payload), { quotes: [quote], serverTimeMs });
+  assert.equal(response.headers['Cache-Control'], 'no-store');
+  const refused = finish({ _subscriptionPricePreview: { done: true, error: 'PRICE_PREVIEW_TIMEOUT', statusCode: 503 } }, { warn() {} });
+  assert.deepEqual(structuredClone(refused.payload), { error: { code: 'PRICE_PREVIEW_TIMEOUT' } });
+});
+
+test('server-clock upgrade changes only the exact installed final function', () => {
+  const source = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8');
+  const oldSource = source.replace(', serverTimeMs: Date.now()', '');
+  const final = { id: 'lk_subscription_price_preview_20260908_final', type: 'function', func: oldSource,
+    wires: [['fixture-response']], initialize: '', finalize: '' };
+  const flow = [final, { id: 'fixture-response', type: 'http response', wires: [] },
+    { id: 'fixture-unrelated', type: 'function', func: 'return msg;', wires: [] }];
+  const liveBytes = Buffer.from(JSON.stringify(flow));
+  const packet = composeSubscriptionPreviewServerTimeArtifacts(liveBytes, 'preview-server-time-test');
+  assert.deepEqual(packet.candidate, [{ ...final, func: source }, ...flow.slice(1)]);
+  assert.equal(final.func, oldSource);
+  assert.equal(liveBytes.toString(), JSON.stringify(flow));
+  for (const invalid of [[], [null], [final, final], [{ ...final, type: 'http response' }],
+    [{ ...final, func: oldSource + '\n' }], packet.candidate]) {
+    assert.throws(() => composeSubscriptionPreviewServerTimeArtifacts(Buffer.from(JSON.stringify(invalid)), 'negative-test'), /Invalid|drift/);
+  }
 });
 liveTest('90 minute preview uses actual state machine, exact tariff DTO and canonical evaluator',()=>{
   const {response,calls}=harness(); assert.equal(response.statusCode,200);const q=response.payload.quotes[0];

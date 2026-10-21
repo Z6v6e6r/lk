@@ -27,7 +27,7 @@ if (ctx.done && ctx.error) {
 msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'X-Correlation-ID': msg._msgid, 'Access-Control-Expose-Headers': 'X-Correlation-ID' };
 msg.payload = ctx.done && ctx.error
   ? { error: { code: ctx.error, ...(ctx.errorDetails ? { details: ctx.errorDetails } : {}) } }
-  : { quotes: ctx.quotes || [] };
+  : { quotes: ctx.quotes || [], serverTimeMs: Date.now() };
 delete msg._subscriptionPricePreview;
 delete msg.url; delete msg.method; delete msg.error;
 delete msg._managedSubscriptionPolicyInput; delete msg._managedSubscriptionPolicyDecision;
