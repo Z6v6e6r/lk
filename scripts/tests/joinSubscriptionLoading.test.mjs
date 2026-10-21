@@ -58,14 +58,14 @@ function harness() {
   useEffect(callback,deps){const i=cursor++;if(same(hooks[i]?.deps,deps))return;effects.push(()=>{hooks[i]?.cleanup?.();hooks[i]={deps,cleanup:callback()};});},
  };
  const context=vm.createContext({module:{exports:{}},exports:{},AbortController,
- require:name=>{assert.equal(name,'react');return React;},Date:class extends Date{static now(){return now;}},
+ require:name=>{assert.equal(name,'react');return React;},Date:class extends Date{static now(){return now;}},performance:{now:()=>now},
  setTimeout:(callback,delay)=>{timers.set(++timerId,{at:now+delay,callback});return timerId;},clearTimeout:id=>timers.delete(id),
  loadSubscriptions:()=>new Promise(resolve=>subscriptions.push({resolve})),
  loadName:id=>{names.push(id);return Promise.resolve({data:{sertName:'Subscription '+id}});},
  loadPreview:(target,ids,signal)=>{previews.push({target,ids,signal});return Promise.resolve({data:{quotes:ids.map(subscriptionId=>({
  subscriptionId,selectionKey:JSON.stringify([target.targetKind,target.gameId,target.startsAt,target.durationMinutes]),
  status:'AVAILABLE',basePriceMinor:37500,amountMinor:26250,freeMinutes:60,paidMinutes:target.durationMinutes-60,reasonCode:'ALLOWED',evaluatedAt:now,expiresAt:now+30000,
- }))}});},
+ })),serverTimeMs:now}});},
  });
  vm.runInContext(bundle.outputFiles[0].text,context);
  const h={subscriptions,names,previews,result:null,props:{profileId:'actor-a',profilePhone:'synthetic-phone',updatingGameMeta:false,

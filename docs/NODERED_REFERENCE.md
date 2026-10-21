@@ -1,5 +1,29 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Game subscription preview server clock
+
+Successful `POST /lk/subscriptions/game-price-preview` responses add `serverTimeMs`
+(epoch milliseconds sampled in `lk_subscription_price_preview_20260908_final`
+when constructing the response). Quote fields, error envelopes and `no-store`
+remain unchanged. Existing clients ignore the additive field. Game CREATE/JOIN
+preview validates freshness against that server clock, conservatively adding the
+whole request duration measured by `performance.now()`; device wall-clock changes
+do not affect eligibility. Future quote timestamps are also checked against the
+unadjusted server timestamp. Slow responses may therefore be refused conservatively.
+An accepted display snapshot remains stable for the unchanged selection; the
+authoritative CREATE/JOIN independently revalidates price and allowance.
+
+Deploy the backend capability before the frontend: the new client rejects missing
+or malformed `serverTimeMs`. For an existing graph, use
+`composeSubscriptionPreviewServerTimeArtifacts` from
+`scripts/patch_nodered_subscription_price_preview.mjs` with a fresh verified live
+snapshot. It pins the installed final-function SHA-256 and permits only that node's
+`func` to change; it returns candidate bytes and an exact graph contract, without
+deployment, policy changes or generated imports/exports. The historical composers
+remain unchanged. On rollback, restore the frontend before removing the backend
+clock field. TLS, `no-store` and final server validation remain necessary; the
+response clock itself does not authenticate a replayed response.
+
 ## «Дружба.Патриоты»: обычная механика «Дружбы»
 
 Owner decision 2026-10-21: product `37ab3713-4431-4815-96ba-d7ece76a9241`

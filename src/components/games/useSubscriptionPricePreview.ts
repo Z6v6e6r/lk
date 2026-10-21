@@ -25,13 +25,24 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
     setState({scope, loading: true, quotes: null, receivedAt: 0});
     const deadline = setTimeout(() => controller.abort(), 30_000);
     const debounce = setTimeout(() => {
+      const requestStartedAt = performance.now();
       void apiFetchSubscriptionPricePreview(target, ids, controller.signal).then(result => {
         if (!current) return;
-        const quotes = !result.error && Array.isArray(result.data?.quotes) ? result.data.quotes : null;
-        // Validate freshness at receipt, then retain this display snapshot for the
+        const elapsedMs = performance.now() - requestStartedAt;
+        const serverTimeMs = result.data?.serverTimeMs;
+        const hasServerTime = typeof serverTimeMs === "number" && Number.isSafeInteger(serverTimeMs)
+          && serverTimeMs > 0 && Number.isFinite(elapsedMs) && elapsedMs >= 0
+          && serverTimeMs + elapsedMs <= Number.MAX_SAFE_INTEGER;
+        // The whole request duration conservatively covers response transit, including
+        // a sequential fallback. Never consult the device wall clock for quote age.
+        const receivedAt = hasServerTime ? serverTimeMs + elapsedMs : 0;
+        const quotes = !result.error && hasServerTime && Array.isArray(result.data?.quotes)
+          && result.data.quotes.every(quote => typeof quote?.evaluatedAt === "number"
+            && quote.evaluatedAt <= serverTimeMs + 5000) ? result.data.quotes : null;
+        // Validate freshness against the server clock at receipt, then retain this display snapshot for the
         // unchanged selection. CREATE/JOIN independently checks the chosen subscription;
         // this preview is never sent as authorization or as the amount to charge.
-        setState({scope, loading: false, quotes, receivedAt: Date.now()});
+        setState({scope, loading: false, quotes, receivedAt});
       }).catch(() => {
         if (current) setState({scope, loading: false, quotes: null, receivedAt: 0});
       }).finally(() => clearTimeout(deadline));
