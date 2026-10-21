@@ -454,6 +454,7 @@ jobs:
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/lk1ActiveBookingLimit.test.mjs
           scripts/tests/pulkovoFriendship.test.mjs
+          scripts/tests/patriotsFriendshipParity.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
           scripts/tests/lk1PlanRulesPreview.test.mjs
           scripts/tests/subscriptionPricePreviewSources.test.mjs
