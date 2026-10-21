@@ -235,13 +235,16 @@ export function createCampaignGame(station = 0, section = 0, options: { assist?:
     const small = station === 3 && section > 0 && i > cfg.count / 2 && i % 4 === 0;
     const lessonRecovery = (station === 4 && section === 0 && i >= 6 && i <= 9)
       || (station === 5 && section === 0 && (i === 18 || i === 19));
-    const width = lessonRecovery ? 230 : small ? 98 : cfg.width;
-    const x = Math.max(26, Math.min(WIDTH - width - 26, center - width / 2));
+    const slotWidth = lessonRecovery ? 230 : small ? 98 : cfg.width;
+    const slotX = Math.max(26, Math.min(WIDTH - slotWidth - 26, center - slotWidth / 2));
     const finish = i === cfg.count;
     let kind: Platform['kind'] = i <= 3 || i % 6 === 0 || finish ? 'court' : 'racket';
     if (lessonRecovery) kind = 'court';
     if (cfg.crumbleEvery && i > 4 && i % cfg.crumbleEvery === 0 && !finish) kind = 'crumble';
     if (cfg.springEvery && i > 5 && i % cfg.springEvery === 0 && !finish) kind = 'net';
+    // Match the smaller Yasenevo artwork and its supporting surface; retain each route centre.
+    const width = station === 0 && kind === 'racket' ? slotWidth / 4 : slotWidth;
+    const x = slotX + (slotWidth - width) / 2;
     const moving = !!cfg.movingEvery && i >= 5 && i % cfg.movingEvery === 0 && !finish;
     const p: Platform = { id: i, x, baseX: x, y: 50 + i * cfg.gap, width, kind, moving, flash: 0, finish,
       amplitude: cfg.amplitude, omega: cfg.omega, rhythm: cfg.rhythm };

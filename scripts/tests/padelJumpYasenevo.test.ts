@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { BALL_RADIUS, createCampaignGame, JUMP_SPEED, stepGame, WIDTH } from '../../src/components/padel-jump/engine.ts';
+import { sectionBalance } from '../../src/components/padel-jump/campaign.ts';
 import { surfaceRect } from '../../src/components/padel-jump/yasenevo-layout.ts';
 
 test('supplied SVG art retains exact provenance and contains no executable or external content', () => {
@@ -24,5 +26,36 @@ test('surface alignment preserves existing collider spans and sprite proportions
       assert.ok(Math.abs(rect.y + sprite.surface.y * scale) < 1e-9);
       assert.ok(Math.abs(rect.w / rect.h - sprite.w / sprite.h) < 1e-9);
     }
+  }
+});
+
+
+test('Yasenevo rackets and landing heads are quarter size at the same route centres; courts and other stations stay unchanged', () => {
+  const sprite = { w: 240, h: 88, surface: { x: 20, y: 11, width: 114 } };
+  for (let section = 0; section < 3; section++) {
+    const cfg = sectionBalance(0, section), game = createCampaignGame(0, section);
+    for (const p of game.platforms.filter(p => p.id > 0)) {
+      const centre = 210 + Math.sin(p.id * cfg.phase) * (section === 0 && p.id < 10 ? 20 : cfg.sway);
+      const oldX = Math.max(26, Math.min(WIDTH - cfg.width - 26, centre - cfg.width / 2));
+      assert.equal(p.x + p.width / 2, oldX + cfg.width / 2);
+      if (p.kind === 'racket') {
+        assert.equal(p.width, cfg.width / 4);
+        const before = surfaceRect(cfg.width, sprite), after = surfaceRect(p.width, sprite);
+        assert.equal(after.w, before.w / 4); assert.equal(after.h, before.h / 4);
+      } else assert.equal(p.width, cfg.width);
+    }
+    assert.equal(game.platforms[0].width, 200);
+    assert.ok(createCampaignGame(1, section).platforms.filter(p => p.kind === 'racket').every(p => p.width === 160));
+  }
+});
+test('the reduced racket catches one head landing but no longer catches the former wide invisible edge', () => {
+  for (const inside of [false, true]) {
+    const g = createCampaignGame(), p = g.platforms.find(p => p.kind === 'racket')!;
+    g.platforms = [p]; g.mode = 'running';
+    g.ball = { x: p.x + (inside ? p.width / 2 : p.width + BALL_RADIUS + 2), y: p.y + BALL_RADIUS + 1, vx: 0, vy: -300 };
+    stepGame(g, 0);
+    assert.equal(g.bounces, inside ? 1 : 0);
+    if (inside) { assert.equal(g.ball.vy, JUMP_SPEED); assert.equal(p.spent, 0); }
+    else { assert.ok(g.ball.vy < 0); assert.equal(p.spent, undefined); }
   }
 });
