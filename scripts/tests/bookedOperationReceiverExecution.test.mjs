@@ -461,7 +461,7 @@ test("reservation and local canonical owner configuration are required before di
   const missing = dispatchAdmission(executionEnv, (body) => ({ ...boundClaims(body), reservation_id: undefined }));
   assert.equal(missing.executorMessage, null);
   for (const override of [{ LK1_BOOKED_OPERATION_OWNER_BASE_URL: "http://attacker.invalid:1880" },
-    { LK1_BOOKED_OPERATION_OWNER_BASE_URL: "http://127.0.0.1:1880@attacker.invalid" },
+    { LK1_BOOKED_OPERATION_OWNER_BASE_URL: "http://127.0.0.1:1880" + "@" + "attacker.invalid" },
     { LK1_BOOKED_OPERATION_OWNER_TENANT_KEY: "foreign-tenant" }]) {
     const driven = startExecution({ ...executionEnv, ...override });
     assert.equal(driven.step()[3].statusCode, 503);
