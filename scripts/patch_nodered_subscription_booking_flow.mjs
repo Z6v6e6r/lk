@@ -48,6 +48,8 @@ const IDS = {
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const readFunction = (name) => fs.readFileSync(path.join(functionsDir, name), "utf8");
+const readOwnerRouter = () => readFunction("fn_subscription_booking_owner_contract_probe.js")
+  + readFunction("fn_subscription_booking_router.js");
 const writeJson = (filePath, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -169,7 +171,7 @@ function buildManagedNodes(tabId, mongoClientId) {
       x: 760, y: 5100, wires: [[IDS.router]],
     },
     functionNode(
-      tabId, IDS.router, "Route atomic subscription booking", readFunction("fn_subscription_booking_router.js"),
+      tabId, IDS.router, "Route atomic subscription booking", readOwnerRouter(),
       7, 1060, 5120,
       [[IDS.http], [IDS.mongoFind], [IDS.mongoInsert], [IDS.mongoUpdate], [IDS.finalize], [IDS.debug], [IDS.managedPolicy]],
     ),
@@ -252,7 +254,7 @@ function validateCandidate(flow, tabId, mongoClientId) {
   if (options?.outputs !== 2
     || JSON.stringify(options.wires) !== JSON.stringify([[IDS.optionsResponse], [IDS.router]])
     || options.func !== readFunction("fn_subscription_booking_options.js")
-    || ownerRouter?.func !== readFunction("fn_subscription_booking_router.js")) {
+    || ownerRouter?.func !== readOwnerRouter()) {
     throw new Error("Canonical owner capability probe must use the exact reviewed functions and topology");
   }
 }

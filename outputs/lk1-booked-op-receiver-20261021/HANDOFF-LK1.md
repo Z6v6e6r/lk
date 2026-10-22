@@ -1,10 +1,10 @@
 # HANDOFF — LK1 booked-operation receiver (LK2 commercial JOIN)
 
-Branch: `codex/booked-operation-receiver-20261021` (based on LK1 `origin/main`).
-Status: **LOCAL only**. No flow import, no deploy, no Node-RED restart, no live
-Node-RED/Mongo/Viva provider access, no secrets in Git. The execution adapter is
-**disabled by default** (`BOOKED_OPERATION_EXECUTION_ENABLED` unset): with the
-current LK2 envelope the flow still stops at `PENDING` and sends no provider call.
+Branch: `codex/join-activation-ready-20261022`; Draft LK1 PR #217, paired with LK2 PR #455.
+Status: **source preparation; runtime activation NO-GO** until the canonical-owner upgrade below.
+Fresh live flow/settings were read through the existing authorized connection; private snapshots
+and generated candidates stay outside Git. No import, deploy, restart, env/settings mutation,
+real booking or debit occurred. Execution remains **disabled by default**.
 
 ## What was delivered
 
@@ -94,7 +94,7 @@ Unknown/failed storage and invalid router context remain `503`. The admission
 `POST` returns the same mapping (`202` PENDING/UNKNOWN, `200` CONFIRMED, `409`
 REJECTED); a repeat admission of a terminal/`ATTEMPTING` operation never dispatches.
 
-## Still required on the LK2 side (before turning the flag on)
+## Coordinated LK2 wire contract (implemented in Draft LK2 PR #455; deploy together)
 
 1. Header `X-Subscription-Actor-Token` on the admission request: the raw,
    backend-issued, short-lived (≤60 s) **user-scoped Viva access token**.
@@ -193,39 +193,25 @@ independent booking flow is introduced.
 
 LOCAL (executed from the task worktree):
 
-```bash
-node --test scripts/tests/bookedOperationReceiver*.test.mjs
-# 27 pass, 1 skipped (Node-RED 4.0.9 runtime test needs NODERED_RUNTIME_ROOT)
-# covers: JWT verification matrix, idempotent repeat (no second write/dispatch),
-# binding 409, strict read mapping + 404, REJECTED 409 payload, flag-off and
-# missing-token PENDING/no-POST, actor-token hash mismatch 403, one POST with
-# SUBSCRIPTION payload, ATTEMPTING marker before POST, timeout/5xx -> UNKNOWN with
-# no retry on repeat/read, definitive 4xx -> terminal REJECTED, lost marker claim
-# -> readback with no second POST, pre-dispatch failures persist nothing, token
-# scrubbed from responses and durable documents, provider-contract characterisation.
-```
+- `NODERED_RUNTIME_ROOT=/private/tmp/join-node-red-4.0.9 npm run test:booked-operation-receiver`:
+  39 passed, zero skipped. Runtime is isolated and all transports are synthetic.
+- Canonical gateway and legacy patcher regressions: 84 passed, one optional live-parity case skipped.
+- Scoped ESLint, `git diff --check`, pinned Gitleaks and manual outgoing scope/PII review: passed.
+- The explicit network-free fresh-live HUB parity comparison **fails** against the installed
+  older router. This is a deployment blocker, not a skipped acceptance requirement.
+- Exact-head CI is attached to Draft PR #217; read its latest run before merge.
 
-```bash
-npx eslint scripts/patch_nodered_booked_operation_receiver_flow.mjs \
-  scripts/tests/bookedOperationReceiver*.test.mjs
-# 0 problems (nodered_*_nodes function bodies are ignored by eslint.config.js)
-# Full `eslint .` in this worktree still reports pre-existing unrelated failures in
-# src/** (89 errors, 398 warnings at this head, none in files touched here).
-```
-
-CI: `.github/workflows/lk1-subscription-enforcement.yml` does not run this task;
-no CI run was possible from this session. The candidate flow has **not** been
-imported or deployed; the live flow was not read or modified. No live Node-RED,
-Mongo or Viva request was made.
+The capability prefix is composed only with the exact reviewed canonical source by the patcher.
+The historical router source/hash and Patriots operational pins remain unchanged; the normal
+CORS response stays 204. Generated candidates must use the two-output OPTIONS topology.
 
 ## Residual risks / deliberately deferred
 
 - Import, `functionExternalModules` settings, env provisioning, Nginx/HTTP
   exposure and Mongo indexes remain deployment work.
-- Managed subscription enforcement / entitlement policy (DEV allowlist, ЦУП
-  reserve/activation) is **not** applied by this adapter; LK2 owns admissibility
-  (`target_admissible`) and Viva rejects an invalid subscription. Revisit before
-  enabling for products covered by that policy.
+- Managed entitlement, activation and trial/legacy guards require the separately reviewed
+  canonical-owner upgrade described below. The receiver relies on that single owner and refuses
+  an old/partial owner before any profile read or booking dispatch.
 - Stale `ATTEMPTING` after a process crash (marker written, POST never sent, or
   POST result lost) is not auto-reconciled: a repeat admission returns `PENDING`
   and sends no POST. Ops reconciliation must read the provider bookings and close

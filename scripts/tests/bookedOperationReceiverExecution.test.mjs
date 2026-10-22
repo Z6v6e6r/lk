@@ -593,7 +593,8 @@ test("old/partial owner versions stop before any actor profile, marker or bookin
 
 test("special OPTIONS probe reaches canonical router; ordinary CORS stays 204 and the probe is inert", () => {
   const optionsSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_options.js"), "utf8");
-  const routerSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_router.js"), "utf8");
+  const routerSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_owner_contract_probe.js"), "utf8")
+    + fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_router.js"), "utf8");
   const ordinary = new Function("msg", optionsSource)({ req: { method: "OPTIONS", headers: {} } });
   assert.equal(ordinary[0].statusCode, 204); assert.equal(ordinary[1], null);
   const probe = new Function("msg", optionsSource)({ req: { method: "OPTIONS", headers: { "x-booked-operation-owner-contract": "1" } } });
