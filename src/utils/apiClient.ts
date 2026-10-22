@@ -5217,7 +5217,8 @@ export async function apiFetchSubscriptions(options: SubscriptionFetchOptions = 
     token: readAuthToken(),
     currentToken: readAuthToken,
     sanitize: sanitizeSubscriptionSnapshot,
-    load: () => request<SubscriptionResponse>(url, { method: "GET", auth: true, retries: 1 }),
+    cacheResult: false,
+    load: () => request<SubscriptionResponse>(url, { method: "GET", auth: true, retries: 1, cache: "no-store" }),
   });
 }
 
