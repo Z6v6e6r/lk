@@ -201,13 +201,7 @@ const applyUpdate = (document, update) => {
 };
 const SYNTHETIC_PHONE = ["+7", "999", "000", "11", "22"].join(" ");
 const providerProfile = () => ({ id: PROVIDER_CLIENT_ID, phone: SYNTHETIC_PHONE });
-const providerBooking = () => ({
-  id: "viva-booking-0001",
-  exerciseId: PROVIDER_EXERCISE_ID,
-  clientSubscriptionId: CLIENT_SUBSCRIPTION_ID,
-  paymentType: "SUBSCRIPTION",
-  status: "ACTIVE",
-});
+
 
 // admission -> verify -> find (empty) -> guarded insert -> execution dispatch
 const dispatchAdmission = (values = executionEnv, claims = boundClaims, headers = boundHeaders) => {
