@@ -550,6 +550,13 @@ jobs:
         id: check_16
         run: npm run test:legacy-game-command-prerequisites
 
+      - name: Validate LK2 booked-operation receiver and execution adapter
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_16b
+        run: npm run test:booked-operation-receiver
+
       - name: Validate combined split draft persistence
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:

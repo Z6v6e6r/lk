@@ -1,0 +1,461 @@
+// Disabled-by-default execution adapter for the LK2 booked-operation receiver.
+//
+// This node is the only place in the receiver that may talk to Viva. It runs
+// only when the router forwards an admission whose durable state is PENDING, the
+// delegation carried the user-scoped token binding
+// (`actor_token_sha256` + `X-Subscription-Actor-Token`), and the activation flag
+// `BOOKED_OPERATION_EXECUTION_ENABLED` is on. Otherwise no message ever reaches
+// the provider request node.
+//
+// Durable state machine on the SAME operation document (`_id = operationId`,
+// kind BOOKED_OPERATION_ADMISSION):
+//   PENDING -> ATTEMPTING  (CAS marker written BEFORE the provider POST)
+//           -> CONFIRMED | UNKNOWN | REJECTED
+//   CONFIRMED / REJECTED are terminal; UNKNOWN is never retried or released.
+// The attempt marker is the single dispatch gate: a repeat or racing admission
+// that lost the CAS is reconciled by a durable readback and never sends a second
+// provider POST. Every terminal state is derived from the provider response or
+// an explicit provider readback, never assumed.
+//
+// Secrets: the actor token lives only in `msg._bookedOperation.execution`, is
+// sent as a Bearer header, is scrubbed before every response and is never
+// written to Mongo, receipts or attempts (only its sha256 binding is recorded).
+
+const EXEC_OUTPUT_HTTP = 0;
+const EXEC_OUTPUT_ATTEMPT = 1;
+const EXEC_OUTPUT_FINALIZE = 2;
+const EXEC_OUTPUT_RESPOND = 3;
+const EXEC_OUTPUT_FIND = 4;
+const EXEC_ATTEMPT_PREFIX = "booked-operation-attempt:v1\0";
+const EXEC_STEPS = [
+  "execute",
+  "profile",
+  "attempt_claim",
+  "booking_create",
+  "confirmation_bookings",
+  "finalize",
+];
+
+const execOutput = (index, value = msg) => {
+  const outputs = [null, null, null, null, null];
+  outputs[index] = value;
+  return outputs;
+};
+const execResponseHeaders = () => ({
+  "Content-Type": "application/json; charset=utf-8",
+  "Cache-Control": "no-store",
+});
+const execOutcome = (state, asOf) => {
+  if (state === "CONFIRMED") {
+    return {
+      asOf: asOf || null,
+      contractVersion: 1,
+      operationId,
+      reason: "OWNER_BOOKING_CONFIRMED",
+      status: "CONFIRMED",
+    };
+  }
+  if (state === "UNKNOWN") {
+    return {
+      asOf: asOf || null,
+      contractVersion: 1,
+      operationId,
+      reason: "RECONCILIATION_REQUIRED",
+      status: "UNKNOWN",
+    };
+  }
+  return {
+    asOf: asOf || null,
+    contractVersion: 1,
+    operationId,
+    reason: "OWNER_PENDING",
+    status: "PENDING",
+  };
+};
+const execRejectionPayload = (rejectionCode, asOf) => ({
+  asOf: asOf || null,
+  code: "BOOKED_OPERATION_REJECTED",
+  contractVersion: 1,
+  error: "BOOKED_OPERATION_REJECTED",
+  operationId,
+  rejectionCode: bookedOperationVivaToText(rejectionCode) || "PROVIDER_BOOKING_REJECTED",
+});
+// A direct response always rebuilds msg.headers, so a provider response header
+// set (or a request Authorization header kept by a failed transport) cannot leak
+// into the HTTP reply.
+const execRespond = (statusCode, payload) => {
+  msg.statusCode = statusCode;
+  msg.headers = execResponseHeaders();
+  msg.payload = payload;
+  delete msg._bookedOperation;
+  delete msg.method;
+  delete msg.url;
+  delete msg.requestTimeout;
+  delete msg.followRedirects;
+  delete msg.maxRedirects;
+  delete msg.responseUrl;
+  delete msg.error;
+  return execOutput(EXEC_OUTPUT_RESPOND);
+};
+const execReject = (statusCode, code) => execRespond(statusCode, { error: code, code });
+const execPending = (asOf) => execRespond(202, execOutcome("PENDING", asOf));
+const execScrubRequest = () => {
+  delete msg.method;
+  delete msg.url;
+  delete msg.headers;
+  delete msg.requestTimeout;
+  delete msg.followRedirects;
+  delete msg.maxRedirects;
+  delete msg.statusCode;
+  delete msg.responseUrl;
+  delete msg.error;
+};
+
+const execContext = bookedOperationVivaIsObject(msg._bookedOperation)
+  ? msg._bookedOperation
+  : null;
+if (
+  !execContext
+  || execContext.mode !== "admit"
+  || !EXEC_STEPS.includes(execContext.step)
+  || !bookedOperationVivaIsObject(execContext.execution)
+  || !bookedOperationVivaIsObject(execContext.stored)
+) {
+  return execReject(503, "BOOKED_OPERATION_EXECUTION_CONTEXT_INVALID");
+}
+const operationId = bookedOperationVivaToText(execContext.operationId);
+const execution = execContext.execution;
+const stored = execContext.stored;
+if (
+  !operationId
+  || !BOOKED_OP_VIVA_ID.test(operationId)
+  || execution.enabled !== true
+  || stored.kind !== "BOOKED_OPERATION_ADMISSION"
+  || stored.contractVersion !== 1
+  || stored.operationId !== operationId
+  || stored.state !== "PENDING"
+  || stored.targetAdmissible !== true
+  || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.providerExerciseId) || "")
+  || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.providerClientId) || "")
+  || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.providerClientSubscriptionId) || "")
+  || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.tenantKey) || "")
+  || !bookedOperationVivaIsCanonicalIso(bookedOperationVivaToText(stored.targetStartsAt))
+) {
+  return execReject(503, "BOOKED_OPERATION_EXECUTION_CONTEXT_INVALID");
+}
+if (execContext.step !== "execute" && !bookedOperationVivaIsObject(execution.config)) {
+  return execReject(503, "BOOKED_OPERATION_EXECUTION_CONTEXT_INVALID");
+}
+const actorToken = bookedOperationVivaToText(execution.actorToken);
+const actorTokenSha256 = bookedOperationVivaToText(execution.actorTokenSha256);
+if (
+  !actorToken
+  || !BOOKED_OP_VIVA_TOKEN.test(actorToken)
+  || !BOOKED_OP_VIVA_SHA256.test(actorTokenSha256 || "")
+) {
+  return execReject(503, "BOOKED_OPERATION_EXECUTION_CONTEXT_INVALID");
+}
+// Re-check the delegation binding in this node too: the token is only usable when
+// its own sha256 is the claim the signed delegation carried.
+if (`sha256:${bookedOperationVivaSha256Hex(actorToken)}` !== actorTokenSha256) {
+  return execReject(403, "BOOKED_OPERATION_ACTOR_TOKEN_MISMATCH");
+}
+const actorTokenExpiresAt = bookedOperationVivaToText(execution.actorTokenExpiresAt);
+if (actorTokenExpiresAt && !(Date.parse(actorTokenExpiresAt) > Date.now())) {
+  // Pre-dispatch: nothing was written and nothing may be released; a fresh
+  // delegation can be retried for the same operation id.
+  return execReject(403, "BOOKED_OPERATION_ACTOR_TOKEN_EXPIRED");
+}
+const attemptId = `sha256:${bookedOperationVivaSha256Hex(
+  EXEC_ATTEMPT_PREFIX + operationId + "\0"
+  + (bookedOperationVivaToText(stored.idempotencyKeySha256) || ""),
+)}`;
+const asOfStored = bookedOperationVivaIsCanonicalIso(
+  bookedOperationVivaToText(stored.updatedAt),
+) ? stored.updatedAt : null;
+execution.attemptId = attemptId;
+
+const execProviderRequest = (method, url, payload, nextStep) => {
+  if (!url || !bookedOperationVivaToText(execution.config?.apiBase)) {
+    return null;
+  }
+  execContext.step = nextStep;
+  msg._bookedOperation = execContext;
+  execScrubRequest();
+  msg.method = method;
+  msg.url = url;
+  msg.headers = {
+    Authorization: `Bearer ${actorToken}`,
+    Accept: "application/json",
+    ...(payload === undefined ? {} : { "Content-Type": "application/json" }),
+  };
+  msg.payload = payload;
+  msg.requestTimeout = execution.config.timeoutMs;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  return execOutput(EXEC_OUTPUT_HTTP);
+};
+
+// The only writer of terminal state. It runs after the dispatch marker exists, so
+// a failed final write leaves ATTEMPTING (an honest uncertainty) and the caller
+// gets UNKNOWN rather than a fabricated CONFIRMED/REJECTED.
+const execFinalize = (state, details = {}) => {
+  const at = new Date().toISOString();
+  const attempt = { at, attemptId, kind: "PROVIDER_UNKNOWN" };
+  if (state === "CONFIRMED") attempt.kind = "CONFIRMED_READBACK";
+  if (state === "REJECTED") attempt.kind = "PROVIDER_REJECTED";
+  if (details.statusCode) attempt.statusCode = Number(details.statusCode);
+  if (details.reason) attempt.reason = details.reason;
+  if (details.rejectionCode) attempt.rejectionCode = details.rejectionCode;
+  if (details.bookingId) attempt.bookingId = details.bookingId;
+  const set = {
+    state,
+    stateReason: state === "CONFIRMED"
+      ? "OWNER_BOOKING_CONFIRMED"
+      : (state === "REJECTED" ? "OWNER_BOOKING_REJECTED" : "RECONCILIATION_REQUIRED"),
+    updatedAt: at,
+  };
+  let receipt = null;
+  if (state === "CONFIRMED") {
+    set.bookingId = details.bookingId;
+    set.confirmedAt = at;
+    receipt = {
+      bookingId: details.bookingId,
+      confirmedAt: at,
+      operationId,
+      source: "PROVIDER_BOOKING_READBACK",
+    };
+  }
+  if (state === "REJECTED") {
+    set.rejectedAt = at;
+    set.rejectionCode = details.rejectionCode || "PROVIDER_BOOKING_REJECTED";
+  }
+  if (state === "UNKNOWN") {
+    set.unknownAt = at;
+    set.unknownReason = details.reason || "PROVIDER_RESULT_UNKNOWN";
+  }
+  execution.finalState = {
+    asOf: at,
+    bookingId: details.bookingId || null,
+    rejectionCode: set.rejectionCode || null,
+    state,
+  };
+  execContext.step = "finalize";
+  msg._bookedOperation = execContext;
+  execScrubRequest();
+  const update = { $set: set, $push: { attempts: attempt } };
+  if (receipt) update.$push.receipts = receipt;
+  msg.payload = [
+    {
+      _id: operationId,
+      kind: "BOOKED_OPERATION_ADMISSION",
+      state: "ATTEMPTING",
+      "attempt.attemptId": attemptId,
+    },
+    update,
+    {},
+  ];
+  return execOutput(EXEC_OUTPUT_FINALIZE);
+};
+
+if (execContext.step === "execute") {
+  const loaded = bookedOperationVivaReadExecutionConfig(env);
+  if (!loaded.ok) {
+    // Flag off between verification and dispatch, or an unusable endpoint
+    // configuration: no provider call and no durable state change.
+    if (loaded.code === "BOOKED_OPERATION_EXECUTION_DISABLED") {
+      return execPending(asOfStored);
+    }
+    return execReject(503, "BOOKED_OPERATION_EXECUTION_UNAVAILABLE");
+  }
+  execution.config = loaded.config;
+  const profileUrl = bookedOperationVivaExpandPath(
+    loaded.config.apiBase + loaded.config.profilePath,
+    { tenant_key: stored.tenantKey },
+  );
+  if (!profileUrl) return execReject(503, "BOOKED_OPERATION_EXECUTION_UNAVAILABLE");
+  return execProviderRequest("GET", profileUrl, undefined, "profile");
+}
+
+if (execContext.step === "profile") {
+  const statusCode = Number(msg.statusCode) || null;
+  if (msg.error || !statusCode) return execPending(asOfStored);
+  if (statusCode >= 500 || statusCode === 408) return execPending(asOfStored);
+  if (statusCode >= 400) {
+    // The user-scoped credential itself was refused. Nothing has been written, so
+    // no terminal state is persisted; the same operation id may be retried with a
+    // fresh delegation.
+    return execReject(
+      statusCode === 401 || statusCode === 403 ? 403 : 502,
+      statusCode === 401 || statusCode === 403
+        ? "BOOKED_OPERATION_ACTOR_TOKEN_REJECTED"
+        : "BOOKED_OPERATION_ACTOR_PROFILE_UNAVAILABLE",
+    );
+  }
+  if (!bookedOperationVivaIsHttpOk(statusCode)) {
+    // A redirect (followRedirects is off) is not a usable profile: keep the
+    // operation PENDING and never write from an unexpected reply.
+    return execReject(502, "BOOKED_OPERATION_ACTOR_PROFILE_UNAVAILABLE");
+  }
+  const profile = bookedOperationVivaUnwrapRecord(msg.payload);
+  const profileClientId = bookedOperationVivaToText(profile?.id || profile?.clientId);
+  const profilePhone = bookedOperationVivaNormalizePhone(
+    profile?.phone || profile?.phoneNumber || profile?.mobile,
+  );
+  if (
+    !profileClientId
+    || bookedOperationVivaNormalizeId(profileClientId)
+      !== bookedOperationVivaNormalizeId(stored.providerClientId)
+  ) {
+    return execReject(403, "BOOKED_OPERATION_ACTOR_PROFILE_IDENTITY_MISMATCH");
+  }
+  if (!profilePhone) {
+    return execReject(502, "BOOKED_OPERATION_ACTOR_PROFILE_INCOMPLETE");
+  }
+  execution.actorClientId = profileClientId;
+  execution.actorPhone = profilePhone;
+  // Durable dispatch marker BEFORE the provider POST: exactly one racing/repeat
+  // admission can claim PENDING -> ATTEMPTING, and the provider write happens
+  // only after that claim is acknowledged.
+  execContext.step = "attempt_claim";
+  msg._bookedOperation = execContext;
+  execScrubRequest();
+  const markerAt = new Date().toISOString();
+  msg.payload = [
+    { _id: operationId, kind: "BOOKED_OPERATION_ADMISSION", state: "PENDING" },
+    {
+      $set: {
+        attempt: { actorTokenSha256, attemptId, startedAt: markerAt },
+        state: "ATTEMPTING",
+        stateReason: "DISPATCH_ATTEMPTING",
+        updatedAt: markerAt,
+      },
+      $push: {
+        attempts: {
+          at: markerAt,
+          attemptId,
+          correlationId: bookedOperationVivaToText(stored.delegation?.correlationId),
+          kind: "DISPATCH_ATTEMPTING",
+        },
+      },
+    },
+    {},
+  ];
+  return execOutput(EXEC_OUTPUT_ATTEMPT);
+}
+
+if (execContext.step === "attempt_claim") {
+  if (msg.error) return execReject(503, "BOOKED_OPERATION_STORE_UNAVAILABLE");
+  const claimed = bookedOperationVivaMongoUpdateAck(msg.payload, "MATCHED");
+  if (!claimed) {
+    const beaten = bookedOperationVivaMongoUpdateAck(msg.payload, "NONE");
+    if (!beaten) return execReject(503, "BOOKED_OPERATION_STORE_UNAVAILABLE");
+    // A concurrent or repeated admission already owns the attempt (or the
+    // operation reached a terminal state): reconcile by durable readback only.
+    execContext.executionSuppressed = true;
+    execContext.step = "readback";
+    msg._bookedOperation = execContext;
+    execScrubRequest();
+    msg.payload = { _id: operationId };
+    return execOutput(EXEC_OUTPUT_FIND);
+  }
+  const bookingUrl = bookedOperationVivaExpandPath(
+    execution.config.apiBase + execution.config.bookingPath,
+    { provider_exercise_id: stored.providerExerciseId },
+  );
+  if (!bookingUrl) {
+    return execFinalize("UNKNOWN", { reason: "BOOKED_OPERATION_EXECUTION_UNAVAILABLE" });
+  }
+  const payload = bookedOperationVivaBookingPayload({
+    clientId: execution.actorClientId,
+    phone: execution.actorPhone,
+    clientSubscriptionId: stored.providerClientSubscriptionId,
+  });
+  return execProviderRequest("POST", bookingUrl, payload, "booking_create");
+}
+
+if (execContext.step === "booking_create") {
+  const statusCode = Number(msg.statusCode) || null;
+  if (msg.error || !statusCode) {
+    return execFinalize("UNKNOWN", { reason: "PROVIDER_TRANSPORT_ERROR" });
+  }
+  if (statusCode >= 500 || statusCode === 408 || statusCode === 429) {
+    return execFinalize("UNKNOWN", { reason: "PROVIDER_UNAVAILABLE", statusCode });
+  }
+  if (statusCode >= 400) {
+    return execFinalize("REJECTED", {
+      rejectionCode: bookedOperationVivaRejectionCode(msg.payload),
+      statusCode,
+    });
+  }
+  if (!bookedOperationVivaIsHttpOk(statusCode)) {
+    // A redirect reply is not acceptance evidence for a write request.
+    return execFinalize("UNKNOWN", { reason: "PROVIDER_RESULT_UNKNOWN", statusCode });
+  }
+  // The provider accepted the request, but acceptance is not confirmation: a
+  // readback (same contract as the subscription-booking gateway) decides between
+  // CONFIRMED and UNKNOWN. UNKNOWN is never retried.
+  execution.providerAcceptedAt = new Date().toISOString();
+  execution.immediateBookingId = bookedOperationVivaBookingId(msg.payload);
+  const readbackUrl = bookedOperationVivaExpandPath(
+    execution.config.apiBase + execution.config.readbackPath,
+    { tenant_key: stored.tenantKey },
+  );
+  if (!readbackUrl) {
+    return execFinalize("UNKNOWN", {
+      reason: "CONFIRMATION_READBACK_UNAVAILABLE",
+      statusCode,
+    });
+  }
+  return execProviderRequest("GET", readbackUrl, undefined, "confirmation_bookings");
+}
+
+if (execContext.step === "confirmation_bookings") {
+  const statusCode = Number(msg.statusCode) || null;
+  if (
+    msg.error
+    || !statusCode
+    || !bookedOperationVivaIsHttpOk(statusCode)
+    || !bookedOperationVivaHasBookingList(msg.payload)
+  ) {
+    return execFinalize("UNKNOWN", { reason: "CONFIRMATION_READBACK_UNAVAILABLE" });
+  }
+  const booking = bookedOperationVivaExtractItems(msg.payload).find((item) => (
+    !bookedOperationVivaIsInactiveBooking(item)
+    && bookedOperationVivaNormalizeId(bookedOperationVivaBookingExerciseId(item))
+      === bookedOperationVivaNormalizeId(stored.providerExerciseId)
+    && bookedOperationVivaNormalizeId(bookedOperationVivaBookingSubscriptionId(item))
+      === bookedOperationVivaNormalizeId(stored.providerClientSubscriptionId)
+  ));
+  if (!booking) {
+    return execFinalize("UNKNOWN", { reason: "BOOKING_NOT_CONFIRMED_BY_READBACK" });
+  }
+  const bookingId = bookedOperationVivaBookingId(booking) || execution.immediateBookingId;
+  if (!bookingId) {
+    return execFinalize("UNKNOWN", { reason: "BOOKING_REFERENCE_MISSING" });
+  }
+  return execFinalize("CONFIRMED", { bookingId });
+}
+
+if (execContext.step === "finalize") {
+  const finalState = bookedOperationVivaIsObject(execution.finalState)
+    ? execution.finalState
+    : { state: "UNKNOWN" };
+  const confirmed = msg.error
+    ? null
+    : bookedOperationVivaMongoUpdateAck(msg.payload, "MATCHED");
+  if (!confirmed) {
+    // The provider write already happened; an unpersisted terminal state must
+    // never be reported as terminal.
+    return execRespond(202, execOutcome("UNKNOWN", null));
+  }
+  if (finalState.state === "CONFIRMED") {
+    return execRespond(200, execOutcome("CONFIRMED", finalState.asOf));
+  }
+  if (finalState.state === "REJECTED") {
+    return execRespond(409, execRejectionPayload(finalState.rejectionCode, finalState.asOf));
+  }
+  return execRespond(202, execOutcome("UNKNOWN", finalState.asOf));
+}
+
+return execReject(503, "BOOKED_OPERATION_EXECUTION_CONTEXT_INVALID");
