@@ -1,7 +1,9 @@
 # HANDOFF — LK1 booked-operation receiver (LK2 commercial JOIN)
 
 Branch: `codex/join-activation-ready-20261022`; Draft LK1 PR #217, paired with LK2 PR #455.
-Status: **source preparation; runtime activation NO-GO** until the canonical-owner upgrade below.
+Status: **source preparation; runtime activation remains OFF**. The exact canonical-owner + receiver
+compatibility candidate below implements the user-confirmed precedence rules; import and activation
+are separate operations.
 Fresh live flow/settings were read through the existing authorized connection; private snapshots
 and generated candidates stay outside Git. No import, deploy, restart, env/settings mutation,
 real booking or debit occurred. Execution remains **disabled by default**.
@@ -234,21 +236,67 @@ retry from a timeout or release the seat; any resumption involving a real bookin
 explicit authority. A CONFIRMED provider booking with a cancelled/full local game also needs an
 operator decision and must not be settled or refunded automatically.
 
-## Mandatory canonical owner version gate (fresh runtime drift)
+## Canonical owner compatibility (rules confirmed by the product owner)
 
-The fresh preimage has canonical router hash
-`ad423f72fdee9d76d11d141774d5f3e1588c35417e7edc5f28d1dd3bbf7dd5c4`,
-which differs from the reviewed source and includes installed trial/legacy wrappers. The existing
-fresh-live HUB parity test does not pass; do not treat this owner as interchangeable with source.
-Its source also lacks the expected managed-entitlement durable fields. Activation is **NO-GO**
-until a separately reviewed canonical-owner upgrade preserves those installed guards and establishes
-the new contract. Never bypass `assertNoInstalledTrialGateOverwrite` or overwrite the wrappers.
+The observed router `ad423f72fdee9d76d11d141774d5f3e1588c35417e7edc5f28d1dd3bbf7dd5c4`
+has installed product/HUB/legacy/trial behavior and an eighth product continuation. The generic
+seven-output subscription patcher must continue refusing this source. It is not a deploy path.
 
-Before any real JOIN, perform read-only `OPTIONS /lk/subscription-bookings` on loopback with
-`X-Booked-Operation-Owner-Contract: 1`. Require HTTP 200, JSON content type and exactly
+The user confirmed these rules on 2026-10-22:
+
+1. Preserve all existing plan/station/Topokraty/PRO/free-event/HUB/trial restrictions. Use exactly
+   the selected actor-owned subscription; identity/product/category ambiguity refuses before reserve.
+2. Actor/subscription and all live guards precede entitlement reserve/bind; environment is checked
+   again before at most one Viva booking POST. A rejection blocks later steps.
+3. Ambiguous sends retain PENDING/UNKNOWN without automatic entitlement release or booking retry.
+   Confirmation requires the exact original durable owner proof and completed mandatory entitlement/activation.
+
+`scripts/prepare_booked_operation_owner_compatibility.mjs` performs the exact-preimage source graft.
+It composes the new canonical entitlement/environment logic with the installed statements, preserves
+standalone protected wrappers and asserts embedded guards, keeps the eighth product continuation,
+and adds the capability prefix plus the two-output OPTIONS route. Both initial and fresh recheck
+require exactly one matching subscription; conflicting explicit or fallback aliases refuse. Unclear
+entitlement reserve responses stay pending rather than creating false failure/retry permission.
+
+The existing product-ledger cohort retains its single installed owner and its existing rules;
+external CUP entitlement applies only to the existing canonical managed cohort. This patch does not
+widen managed policy, activate a product or introduce a second booking writer.
+
+The final artifact is ONE reviewed graph: six exact existing-node changes plus the isolated receiver
+(17 appended nodes including its tab). No sequence of partial imports is accepted. No existing HTTP
+route identity, node initialization, Mongo configuration or unrelated node is modified.
+
+From a clean committed task source and fresh private read-only pull:
+
+```bash
+node scripts/prepare_booked_operation_owner_compatibility.mjs \
+  <fresh-private-live-workspace> <new-private-output-directory>
+```
+
+Outputs `candidate.flow.json`, `contract.json` and `report.json` stay outside Git (directory 0700,
+files 0600). The report binds source commit/closure, whole-flow preimage/candidate, function hashes,
+canonical additions, conflict resolutions and embedded-guard evidence. It is source-only and states
+`activationAuthorized:false`, `imported:false`, `providerWritesPerformed:false`.
+The builder rejects source, Git, topology, statement, canonical hash, alias or output-path drift.
+At actual import, re-pull and re-verify exact source/identity and use the existing guarded import,
+backup/readback/rollback procedure with separate exact-target authorization.
+
+LOCAL: private exact-preimage compatibility tests **18/18 passed**; combined receiver suite
+**56 passed, 1 skipped** (isolated Node-RED 4.0.9 installation unavailable in that local run;
+its earlier unchanged receiver runtime proof remains separate). Canonical/legacy enforcement
+regressions: **92 passed, 1 optional skipped**. Pinned ESLint 9.39.2, diff check and independent
+integration/security/reliability delta review passed. Full latest exact-head CI is attached to PR #217.
+The opt-in private fixture cases never run against a real provider and are not committed to Git.
+
+```bash
+LK1_BOOKED_OWNER_COMPATIBILITY_FIXTURE=<private-source.flow.json> \
+  npm run test:booked-operation-receiver
+```
+
+Before activation, read-only `OPTIONS /lk/subscription-bookings` on loopback with
+`X-Booked-Operation-Owner-Contract: 1` must return HTTP 200, JSON and exactly
 `{contractVersion:1,owner:"LK1_SUBSCRIPTION_BOOKING_OWNER",policy:"ATOMIC_MANAGED_V1"}`.
-The special OPTIONS output must reach the SAME canonical booking router. The reviewed router handles
-this probe before any global/provider/Mongo lookup; ordinary CORS remains its existing 204 response.
-The receiver requires this capability before the profile read, dispatch marker or sole booking POST.
-Old 204, partial/malformed/extra capability, transport failure or token expiry stops without booking.
-Changing only the advertised version on an old router is not an upgrade or acceptance evidence.
+The special OPTIONS output must reach the SAME grafted eight-output canonical router. The response
+runs before global/provider/Mongo lookup; ordinary CORS remains 204. The receiver requires it before
+profile/CAS/POST. Old 204, extra/malformed capability, transport failure or expiry refuses safely.
+Changing only an old router's advertised capability is never an accepted upgrade.
