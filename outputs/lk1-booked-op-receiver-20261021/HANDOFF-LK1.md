@@ -57,40 +57,28 @@ that is not wired exclusively from the executor.
   `attempts`/`receipts`). First admission uses `updateOne` + `$setOnInsert` +
   `upsert:true`; a repeat/race only reads and returns the same state.
 
-## Execution adapter — state machine (same operation document)
+## Execution adapter — one canonical owner
 
-```
-PENDING --(durable CAS marker, written BEFORE the provider POST)--> ATTEMPTING
-ATTEMPTING --(provider 2xx + provider readback shows the booking)--> CONFIRMED
-ATTEMPTING --(timeout / transport error / 5xx / 408 / 429)--------> UNKNOWN
-ATTEMPTING --(definitive 4xx rejection, e.g. 409 full)-------------> REJECTED
-```
+`PENDING -> ATTEMPTING` is a durable CAS written before one loopback
+`POST /lk/subscription-bookings` with the same operation ID, exact exercise/subscription and
+user bearer. The existing canonical owner performs profile authentication, subscription ownership,
+exercise/category/date/daily-limit checks, atomic claims and managed policy/entitlement rechecks;
+its Viva Admin POST uses the service token. The receiver never constructs an Admin booking request.
 
-- The marker CAS filter is `{_id, kind, state:"PENDING"}` with
-  `$set.state="ATTEMPTING"` + `$push.attempts{kind:"DISPATCH_ATTEMPTING", attemptId}`.
-  The provider POST is emitted only after the marker write is acknowledged.
-  `attemptId = "sha256:"+sha256("booked-operation-attempt:v1\0"+operationId+"\0"+idempotencyKeySha256)`.
-- A repeat or racing admission that finds `ATTEMPTING`/terminal state never
-  dispatches again; the loser of the marker CAS reconciles by durable readback
-  (`executionSuppressed` prevents a dispatch loop) and never sends a second POST.
-- `CONFIRMED` requires a provider readback (`GET /end-user/api/v2/{tenant_key}/bookings?size=1000`)
-  matching the operation's `provider_exercise_id` + `provider_client_subscription_id`
-  with an active booking and a stable `bookingId`. The receipt written to the
-  document is `{operationId, bookingId, confirmedAt, source:"PROVIDER_BOOKING_READBACK"}`.
-  Provider acceptance alone (2xx create) is **not** confirmation.
-- `UNKNOWN` is terminal: never auto-retried, never released, never reported as
-  CONFIRMED. `CONFIRMED`/`REJECTED` are terminal.
-- Attempt entries are append-only and redacted: kind, attemptId, timestamp,
-  optional HTTP status/reason/rejection code (bounded upper-case token) and
-  `correlationId`. No tokens, no Authorization headers, no full provider payloads.
-- Pre-dispatch failures (profile read 4xx/5xx/timeout, profile identity mismatch,
-  token rejected, unresolved marker write) persist **no** state change: the
-  operation stays `PENDING` (202) or the request is rejected with a stable code
-  (403/502/503). No terminal state is written before the dispatch marker.
-- The executor is a closed state machine over Node-RED messages: `execute` →
-  `profile` → `attempt_claim` → `booking_create` → `confirmation_bookings` →
-  `finalize`. All steps are driven by the same single `http request` node
-  (`method: "use"`, `senderr: true`).
+A strictly matching canonical CONFIRMED result produces a durable binding receipt. Every timeout,
+transport failure, non-success or mismatched response after dispatch stays UNKNOWN. Neither replay
+nor receipt reconciliation sends another booking. Pre-dispatch profile/marker failures leave PENDING.
+Token expiry after dispatch cannot discard an already confirmed result.
+
+Admission now optionally signs `reservation_id`; execution requires it. Legacy admissions without
+this claim stay PENDING. Signed read claim `receipt_version: 1` opts into an internal receipt;
+legacy reads retain their exact five fields. The opted-in reader performs only two bounded Mongo
+FINDs: the immutable admission plus exactly one canonical owner row with matching tenant, actor,
+operation, subscription and exercise, CONFIRMED state, stable booking/timestamp and completed or
+not-required activation/managed entitlement. It reconstructs the strict receipt from those durable
+bindings even after an outer timeout/crash. Missing, duplicate or partial evidence stays UNKNOWN.
+No read writes Mongo or contacts Viva. Receipt fields match the LK2 strict internal receipt contract;
+credentials, phone and raw provider responses are excluded.
 
 ## READ maps
 
@@ -135,16 +123,19 @@ Verification failures are stable: `403 BOOKED_OPERATION_ACTOR_TOKEN_REQUIRED`,
    `settings.js` must **not** set `functionExternalModules: false` (builtin
    `crypto` is loaded through the function-node external-module entry).
 4. Point `LK1_BOOKED_OPERATION_VIVA_API_BASE` at the intended Viva endpoint
-   (production default `https://api.vivacrm.ru`); verify the three path envs.
+   (production default `https://api.vivacrm.ru`); verify the profile path. Provision `LK1_BOOKED_OPERATION_OWNER_BASE_URL=http://127.0.0.1:1880`
+   (use the actual Node-RED loopback port) and `LK1_BOOKED_OPERATION_OWNER_TENANT_KEY=iSkq6G`.
+   Verify that the canonical `/lk/subscription-bookings` owner, its admin service credential and
+   the selected tenant/managed policy are installed. No settings.js auth exemption is implied.
 5. Rehearse with `BOOKED_OPERATION_EXECUTION_ENABLED` **off**: admission returns
    `PENDING`, Mongo document has `state=PENDING`, exactly one insert, zero Viva
    requests.
 6. Enable `BOOKED_OPERATION_EXECUTION_ENABLED=true` for one exact tenant/actor
-   canary; verify exactly one Viva booking POST, a CONFIRMED read, and a receipt
-   `{bookingId, confirmedAt, operationId}` in `lk_subscription_daily_booking_ops`.
+   canary; verify exactly one Viva booking POST, a CONFIRMED read, and the exact bound receipt in `lk_subscription_daily_booking_ops`.
 7. Verify the repeat path (same delegation/operation id) returns the stored state
    with no second POST, and that a rejected/timeout scenario maps to
-   `REJECTED`/`UNKNOWN` without retry.
+   `UNKNOWN` without retry. A real canary requires separate authorization; the current task permits
+   no real booking or debit. Test this matrix with synthetic transports locally.
 8. Stop method: unset `BOOKED_OPERATION_EXECUTION_ENABLED` (new admissions stop at
    PENDING immediately; in-flight operations finish or remain `ATTEMPTING` for
    readback reconciliation). Disabling the flag never undoes a provider booking.
@@ -172,10 +163,9 @@ Execution adapter (all default to the fail-closed behaviour):
   must be `https://`, no credentials, no trailing slash required.
 - `LK1_BOOKED_OPERATION_VIVA_PROFILE_PATH` — optional, default
   `/end-user/api/v1/{tenant_key}/profile`
-- `LK1_BOOKED_OPERATION_VIVA_BOOKING_PATH` — optional, default
-  `/api/v2/exercises/{provider_exercise_id}/bookings`
-- `LK1_BOOKED_OPERATION_VIVA_READBACK_PATH` — optional, default
-  `/end-user/api/v2/{tenant_key}/bookings?size=1000`
+- `LK1_BOOKED_OPERATION_OWNER_BASE_URL` — required for execution; only
+  `http://127.0.0.1:<port>` or `http://localhost:<port>`, no userinfo/path/query/fragment.
+- `LK1_BOOKED_OPERATION_OWNER_TENANT_KEY` — required `iSkq6G`, the canonical owner's fixed tenant.
 - `LK1_BOOKED_OPERATION_EXECUTION_TIMEOUT_MS` — optional, 1000–60000, default 15000
 
 No secret is configurable here beyond the server env public key; the actor token is
@@ -244,3 +234,16 @@ Mongo or Viva request was made.
   provider mapping but does not re-resolve the active session.
 - `outputs/` keeps this handoff; no ADR/runbook/`docs/NODERED_REFERENCE.md` update
   was made to keep the diff to the receiver concern (follow-up for the ops owner).
+
+## Release custody and recovery
+
+This revision changes source only. Pull a fresh private preimage on `lk-primary-147`, verify its
+identity/hash, build the focused receiver candidate and inspect exact graph preservation before an
+independently authorized import. Keep both execution flags off during no-write smoke.
+The observed shared settings.js had no active httpNodeAuth; no settings.js change is part of this patch.
+
+If no admission was durably created after LK2 reserved a seat (for example actor-token issuance
+failed), keep the original operation/key and require operator reconciliation. Do not infer a safe
+retry from a timeout or release the seat; any resumption involving a real booking needs its own
+explicit authority. A CONFIRMED provider booking with a cancelled/full local game also needs an
+operator decision and must not be settled or refunded automatically.

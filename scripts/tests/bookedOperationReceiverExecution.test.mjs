@@ -47,6 +47,7 @@ const sessionId = crypto.randomUUID();
 const providerMappingId = crypto.randomUUID();
 const targetMappingId = crypto.randomUUID();
 const targetId = crypto.randomUUID();
+const reservationId = crypto.randomUUID();
 const correlationId = "booked-op-correlation-0001";
 
 const baseEnv = {
@@ -60,6 +61,8 @@ const executionEnv = {
   ...baseEnv,
   BOOKED_OPERATION_EXECUTION_ENABLED: "true",
   LK1_BOOKED_OPERATION_VIVA_API_BASE: VIVA_API_BASE,
+  LK1_BOOKED_OPERATION_OWNER_BASE_URL: "http://127.0.0.1:1880",
+  LK1_BOOKED_OPERATION_OWNER_TENANT_KEY: TENANT_KEY,
 };
 const envOf = (values) => ({
   get: (key) => (key in values ? values[key] : (baseEnv[key] ?? null)),
@@ -128,6 +131,7 @@ const boundClaims = (body) => admissionClaims(body, {
   actor_token_expires_at: futureIso(45 * 1000),
   actor_token_sha256: actorTokenSha256,
   provider_client_subscription_id: CLIENT_SUBSCRIPTION_ID,
+  reservation_id: reservationId,
 });
 const readClaims = () => ({
   contract_version: 1,
@@ -350,209 +354,119 @@ test("actor-token binding failures are 403 at verification and never dispatch", 
   assert.equal(expired[1].payload.code, "BOOKED_OPERATION_ACTOR_TOKEN_EXPIRED");
 });
 
-test("bound token: profile read, ATTEMPTING marker before the single SUBSCRIPTION POST, CONFIRMED receipt", () => {
+const gatewayConfirmed = () => ({ ok: true, state: "CONFIRMED", operationId,
+  exerciseId: PROVIDER_EXERCISE_ID, clientSubscriptionId: CLIENT_SUBSCRIPTION_ID, bookingId: "viva-booking-0001" });
+const gatewayRow = () => ({ ...gatewayConfirmed(), tenantKey: TENANT_KEY, actorClientId: PROVIDER_CLIENT_ID,
+  confirmedAt: new Date().toISOString(), activationState: "NOT_REQUIRED" });
+
+test("one canonical owner POST follows the durable marker; complete binding receipt is persisted", () => {
   const driven = driveToProviderPost();
-  const { execMsg, document } = driven;
-  const profileRequest = driven.profileRequest;
-  const markerResult = driven.markerRequest;
-  const postResult = driven.postRequest;
-
-  // 1. The actor's own Viva profile is resolved with the user-scoped token.
-  assert.equal(profileRequest[0].method, "GET");
-  assert.equal(profileRequest[0].url, `${VIVA_API_BASE}/end-user/api/v1/${TENANT_KEY}/profile`);
-  assert.equal(profileRequest[0].headers.Authorization, `Bearer ${ACTOR_TOKEN}`);
-  assert.equal(profileRequest[0].payload, undefined);
-  assert.equal(profileRequest[1], null, "profile read must not write durable state");
-  assert.equal(JSON.stringify(profileRequest[0]._bookedOperation).includes(ACTOR_TOKEN), true);
-
-  // 2. ATTEMPTING is written BEFORE the provider POST is emitted.
-  const [markerFilter, markerUpdate] = markerResult[1].payload;
-  assert.deepEqual(markerFilter, {
-    _id: operationId,
-    kind: "BOOKED_OPERATION_ADMISSION",
-    state: "PENDING",
-  });
-  assert.equal(markerUpdate.$set.state, "ATTEMPTING");
-  assert.equal(markerUpdate.$set.stateReason, "DISPATCH_ATTEMPTING");
-  assert.equal(markerUpdate.$push.attempts.kind, "DISPATCH_ATTEMPTING");
-  assert.match(markerUpdate.$push.attempts.attemptId, /^sha256:[a-f0-9]{64}$/);
-  assert.equal(JSON.stringify(markerResult[1].payload).includes(ACTOR_TOKEN), false);
-  assert.equal(markerResult[0], null, "no provider POST may precede the marker");
-
-  // 3. Exactly one booking POST with the mapped identifiers from the op document.
-  const post = postResult[0];
-  assert.equal(post.method, "POST");
-  assert.equal(
-    post.url,
-    `${VIVA_API_BASE}/api/v2/exercises/${PROVIDER_EXERCISE_ID}/bookings`,
-  );
-  assert.deepEqual(post.payload, {
-    clientId: PROVIDER_CLIENT_ID,
-    phone: SYNTHETIC_PHONE.replaceAll(" ", ""),
-    paymentType: "SUBSCRIPTION",
-    clientSubscriptionId: CLIENT_SUBSCRIPTION_ID,
-    customFields: [],
-  });
+  const post = driven.postRequest[0];
+  assert.equal(driven.profileRequest[0].headers.Authorization, `Bearer ${ACTOR_TOKEN}`);
+  assert.equal(driven.markerRequest[1].payload[1].$set.state, "ATTEMPTING");
+  assert.equal(driven.markerRequest[0], null);
+  assert.equal(post.url, "http://127.0.0.1:1880/lk/subscription-bookings");
+  assert.equal(post.headers["Idempotency-Key"], operationId);
   assert.equal(post.headers.Authorization, `Bearer ${ACTOR_TOKEN}`);
-
-  // 4. The provider acceptance is confirmed by the readback, never assumed.
-  execMsg.statusCode = 201;
-  execMsg.payload = { id: "viva-booking-0001", correlationId: "provider-corr-1" };
-  delete execMsg.error;
-  const readback = driven.step();
-  assert.equal(readback[0].method, "GET");
-  assert.equal(
-    readback[0].url,
-    `${VIVA_API_BASE}/end-user/api/v2/${TENANT_KEY}/bookings?size=1000`,
-  );
-
-  // 5. Only the observed booking confirms the operation, with a durable receipt.
-  execMsg.statusCode = 200;
-  execMsg.payload = { content: [providerBooking()] };
+  assert.deepEqual(post.payload, { operationId, exerciseId: PROVIDER_EXERCISE_ID,
+    clientSubscriptionId: CLIENT_SUBSCRIPTION_ID });
+  driven.execMsg.statusCode = 200;
+  driven.execMsg.payload = gatewayConfirmed();
   const finalize = driven.step();
-  const [finalFilter, finalUpdate] = finalize[2].payload;
-  assert.deepEqual(finalFilter, {
-    _id: operationId,
-    "attempt.attemptId": markerUpdate.$push.attempts.attemptId,
-    kind: "BOOKED_OPERATION_ADMISSION",
-    state: "ATTEMPTING",
-  });
-  assert.equal(finalUpdate.$set.state, "CONFIRMED");
-  assert.equal(finalUpdate.$set.bookingId, "viva-booking-0001");
-  assert.equal(finalUpdate.$push.attempts.kind, "CONFIRMED_READBACK");
-  assert.deepEqual(finalUpdate.$push.receipts, {
-    bookingId: "viva-booking-0001",
-    confirmedAt: finalUpdate.$set.confirmedAt,
-    operationId,
-    source: "PROVIDER_BOOKING_READBACK",
-  });
+  const update = finalize[2].payload[1];
+  assert.equal(update.$set.state, "CONFIRMED");
+  assert.equal(update.$push.receipts.reservationId, reservationId);
+  assert.equal(update.$push.receipts.providerClientId, PROVIDER_CLIENT_ID);
+  assert.equal(update.$push.receipts.providerClientSubscriptionId, CLIENT_SUBSCRIPTION_ID);
+  assert.equal(update.$push.receipts.targetMappingId, targetMappingId);
+  assert.equal(update.$push.receipts.source, "LK1_SUBSCRIPTION_BOOKING_OWNER");
   assert.equal(JSON.stringify(finalize[2].payload).includes(ACTOR_TOKEN), false);
-
-  execMsg.payload = mongoAck();
+  assert.equal(JSON.stringify(finalize[2].payload).includes("phone"), false);
+  driven.execMsg.payload = mongoAck();
   const response = driven.step();
-  assert.equal(response[3].statusCode, 200);
-  assert.deepEqual(response[3].payload, {
-    asOf: finalUpdate.$set.updatedAt,
-    contractVersion: 1,
-    operationId,
-    reason: "OWNER_BOOKING_CONFIRMED",
-    status: "CONFIRMED",
-  });
-  assert.equal(JSON.stringify(execMsg).includes(ACTOR_TOKEN), false, "token must be scrubbed");
+  assert.equal(response[3].payload.status, "CONFIRMED");
+  assert.equal(JSON.stringify(response).includes(ACTOR_TOKEN), false);
   assert.equal(driven.providerCalls.filter((call) => call.method === "POST").length, 1);
-
-  const guarded = runFunction("response", response[3], executionEnv);
-  assert.equal(guarded[0].statusCode, 200);
-  assert.equal(guarded[0].headers["Cache-Control"], "no-store");
-
-  // Terminal CONFIRMED: a repeat admission and a read never dispatch again.
-  const persisted = applyUpdate(applyUpdate(document, markerUpdate), finalUpdate);
-  assert.equal(persisted.state, "CONFIRMED");
-  assert.equal(persisted.receipts.length, 1);
-  const repeat = runFunction("router", {
-    _bookedOperation: { ...driven.findContext, step: "find" },
-    payload: [persisted],
-  }, executionEnv);
-  assert.equal(repeat[3], null, "CONFIRMED is terminal: no second dispatch");
-  assert.equal(repeat[1].statusCode, 200);
-  assert.equal(repeat[1].payload.status, "CONFIRMED");
-  const read = readOutcome(persisted);
-  assert.equal(read[3], null);
-  assert.equal(read[1].statusCode, 200);
-  assert.equal(read[1].payload.status, "CONFIRMED");
-  assert.equal(read[1].payload.reason, "OWNER_BOOKING_CONFIRMED");
+  const persisted = applyUpdate(applyUpdate(driven.document, driven.markerRequest[1].payload[1]), update);
+  const repeat = runFunction("router", { _bookedOperation: { ...driven.findContext, step: "find" }, payload: [persisted] }, executionEnv);
+  assert.equal(repeat[3], null);
+  assert.equal(readOutcome(persisted)[1].payload.status, "CONFIRMED");
 });
 
-test("provider timeout or 5xx after the POST becomes terminal UNKNOWN and is never retried", () => {
-  const driven = driveToProviderPost();
-  const { execMsg } = driven;
-  execMsg.error = { message: "connect ETIMEDOUT" };
-  delete execMsg.statusCode;
-  const finalize = driven.step();
-  const finalUpdate = finalize[2].payload[1];
-  assert.equal(finalUpdate.$set.state, "UNKNOWN");
-  assert.equal(finalUpdate.$set.unknownReason, "PROVIDER_TRANSPORT_ERROR");
-  assert.equal(finalUpdate.$set.stateReason, "RECONCILIATION_REQUIRED");
-  assert.equal("receipts" in finalUpdate.$push, false);
-
-  execMsg.payload = mongoAck();
-  delete execMsg.error;
-  const response = driven.step();
-  assert.equal(response[3].statusCode, 202);
-  assert.deepEqual(response[3].payload, {
-    asOf: finalUpdate.$set.updatedAt,
-    contractVersion: 1,
-    operationId,
-    reason: "RECONCILIATION_REQUIRED",
-    status: "UNKNOWN",
+for (const reply of [
+  { error: { message: "timeout" } }, { statusCode: 502 }, { statusCode: 409 },
+  { statusCode: 200, payload: { ...gatewayConfirmed(), exerciseId: "another-exercise" } },
+  { statusCode: 200, payload: { ...gatewayConfirmed(), clientSubscriptionId: "another-product" } },
+  { statusCode: 200, payload: { ...gatewayConfirmed(), operationId: crypto.randomUUID() } },
+  { statusCode: 200, payload: { ok: true, state: "PENDING_CONFIRMATION" } },
+]) {
+  test(`ambiguous/mismatched canonical reply remains UNKNOWN (${JSON.stringify(reply)})`, () => {
+    const driven = driveToProviderPost();
+    delete driven.execMsg.statusCode;
+    Object.assign(driven.execMsg, reply);
+    const update = driven.step()[2].payload[1];
+    assert.equal(update.$set.state, "UNKNOWN");
+    assert.equal("receipts" in update.$push, false);
+    const persisted = applyUpdate(driven.document, update);
+    const repeat = runFunction("router", { _bookedOperation: { ...driven.findContext, step: "find" }, payload: [persisted] }, executionEnv);
+    assert.equal(repeat[3], null);
+    assert.equal(driven.providerCalls.filter((call) => call.method === "POST").length, 1);
   });
+}
 
-  const persisted = applyUpdate(
-    applyUpdate(driven.document, driven.markerRequest[1].payload[1]),
-    finalUpdate,
-  );
-  assert.equal(persisted.state, "UNKNOWN");
-  const repeat = runFunction("router", {
-    _bookedOperation: { ...driven.findContext, step: "find" },
-    payload: [persisted],
-  }, executionEnv);
-  assert.equal(repeat[3], null, "UNKNOWN is never retried by a repeat admission");
-  assert.equal(repeat[1].statusCode, 202);
-  assert.equal(repeat[1].payload.status, "UNKNOWN");
-  const read = readOutcome(persisted);
-  assert.equal(read[1].payload.status, "UNKNOWN");
-  assert.equal(read[1].payload.reason, "RECONCILIATION_REQUIRED");
+const receiptRead = (stored, rows, claimOverrides = {}) => {
+  const verify = runFunction("read_verify", readMessage(sign({ ...readClaims(), receipt_version: 1, ...claimOverrides })), baseEnv);
+  assert.equal(verify[1], null);
+  const find = runFunction("router", { _bookedOperation: verify[0]._bookedOperation, payload: [stored] }, baseEnv);
+  assert.ok(find[2], "receipt lookup must be read-only Mongo FIND");
+  assert.equal(find[0], null); assert.equal(find[3], null);
+  assert.deepEqual(find[2].payload, { operationId, tenantKey: TENANT_KEY,
+    actorClientId: PROVIDER_CLIENT_ID, exerciseId: PROVIDER_EXERCISE_ID,
+    clientSubscriptionId: CLIENT_SUBSCRIPTION_ID, state: "CONFIRMED" });
+  find[2].payload = rows;
+  const result = runFunction("router", find[2], baseEnv);
+  assert.equal(result[0], null); assert.equal(result[2], null); assert.equal(result[3], null);
+  return result[1];
+};
 
-  // The same classification applies to a definitive 5xx response.
-  const second = driveToProviderPost();
-  second.execMsg.statusCode = 502;
-  second.execMsg.payload = { message: "bad gateway" };
-  const secondFinalize = second.step();
-  assert.equal(secondFinalize[2].payload[1].$set.state, "UNKNOWN");
-  assert.equal(secondFinalize[2].payload[1].$set.unknownReason, "PROVIDER_UNAVAILABLE");
+test("read-only receipt recovery after outer timeout/crash accepts only the complete canonical result", () => {
+  const driven = driveToAttemptMarker();
+  const stored = applyUpdate(driven.document, driven.markerRequest[1].payload[1]);
+  const result = receiptRead(stored, [gatewayRow()]);
+  assert.equal(result.payload.status, "CONFIRMED");
+  assert.equal(result.payload.receipt.reservationId, reservationId);
+  assert.equal(result.payload.receipt.providerExerciseId, PROVIDER_EXERCISE_ID);
+  assert.equal(JSON.stringify(result).includes(ACTOR_TOKEN), false);
+  // Legacy signed reads keep the exact original five-field contract.
+  assert.deepEqual(Object.keys(readOutcome(stored)[1].payload).sort(),
+    ["asOf", "contractVersion", "operationId", "reason", "status"]);
+  for (const rows of [[], [gatewayRow(), gatewayRow()],
+    ...["operationId", "tenantKey", "actorClientId", "exerciseId", "clientSubscriptionId", "state", "bookingId", "confirmedAt", "activationState"]
+      .map((key) => [{ ...gatewayRow(), [key]: key === "bookingId" ? "" : "wrong" }]),
+    [{ ...gatewayRow(), managedEntitlementOperationId: "entitlement-1", managedEntitlementState: "RESERVED" }]]) {
+    const rejected = receiptRead(stored, rows);
+    assert.equal(rejected.payload.status, "UNKNOWN");
+    assert.equal(rejected.payload.receipt, undefined);
+  }
 });
 
-test("definitive provider rejection becomes terminal REJECTED with a stable 409 payload", () => {
+test("token expiry after dispatch does not strand a confirmed canonical result", () => {
   const driven = driveToProviderPost();
-  const { execMsg } = driven;
-  execMsg.statusCode = 409;
-  execMsg.payload = { code: "exercise_full", message: "No free slots" };
-  const finalize = driven.step();
-  const finalUpdate = finalize[2].payload[1];
-  assert.equal(finalUpdate.$set.state, "REJECTED");
-  assert.equal(finalUpdate.$set.stateReason, "OWNER_BOOKING_REJECTED");
-  assert.equal(finalUpdate.$set.rejectionCode, "EXERCISE_FULL");
-  assert.equal(finalUpdate.$push.attempts.kind, "PROVIDER_REJECTED");
-  assert.equal(finalUpdate.$push.attempts.statusCode, 409);
-  assert.equal("receipts" in finalUpdate.$push, false);
-  assert.equal(JSON.stringify(finalize[2].payload).includes("No free slots"), false);
+  driven.execMsg._bookedOperation.execution.actorTokenExpiresAt = new Date(Date.now()-1000).toISOString();
+  driven.execMsg.statusCode = 200; driven.execMsg.payload = gatewayConfirmed();
+  assert.equal(driven.step()[2].payload[1].$set.state, "CONFIRMED");
+});
 
-  execMsg.payload = mongoAck();
-  const response = driven.step();
-  assert.equal(response[3].statusCode, 409);
-  assert.deepEqual(response[3].payload, {
-    asOf: finalUpdate.$set.rejectedAt,
-    code: "BOOKED_OPERATION_REJECTED",
-    contractVersion: 1,
-    error: "BOOKED_OPERATION_REJECTED",
-    operationId,
-    rejectionCode: "EXERCISE_FULL",
-  });
-
-  const persisted = applyUpdate(
-    applyUpdate(driven.document, driven.markerRequest[1].payload[1]),
-    finalUpdate,
-  );
-  const repeat = runFunction("router", {
-    _bookedOperation: { ...driven.findContext, step: "find" },
-    payload: [persisted],
-  }, executionEnv);
-  assert.equal(repeat[3], null, "REJECTED is terminal");
-  assert.equal(repeat[1].statusCode, 409);
-  assert.equal(repeat[1].payload.code, "BOOKED_OPERATION_REJECTED");
-  const read = readOutcome(persisted);
-  assert.equal(read[1].statusCode, 409);
-  assert.equal(read[1].payload.rejectionCode, "EXERCISE_FULL");
+test("reservation and local canonical owner configuration are required before dispatch", () => {
+  const missing = dispatchAdmission(executionEnv, (body) => ({ ...boundClaims(body), reservation_id: undefined }));
+  assert.equal(missing.executorMessage, null);
+  for (const override of [{ LK1_BOOKED_OPERATION_OWNER_BASE_URL: "http://attacker.invalid:1880" },
+    { LK1_BOOKED_OPERATION_OWNER_BASE_URL: "http://127.0.0.1:1880@attacker.invalid" },
+    { LK1_BOOKED_OPERATION_OWNER_TENANT_KEY: "foreign-tenant" }]) {
+    const driven = startExecution({ ...executionEnv, ...override });
+    assert.equal(driven.step()[3].statusCode, 503);
+    assert.equal(driven.providerCalls.length, 0);
+  }
 });
 
 test("a lost or repeated attempt claim reconciles by readback and sends no second POST", () => {
@@ -642,28 +556,13 @@ test("executor stays fail-closed when the activation flag is off at dispatch tim
   assert.equal(result[3].payload.status, "PENDING");
 });
 
-test("the adapter reuses the existing subscription-booking provider contract", () => {
-  const prepareSource = fs.readFileSync(
-    path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js"),
-    "utf8",
-  );
-  const routerSource = fs.readFileSync(
-    path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_router.js"),
-    "utf8",
-  );
-  const contractSource = fs.readFileSync(
-    path.join(ROOT, "nodered_booked_operation_receiver_nodes/_booked_operation_viva_contract.js"),
-    "utf8",
-  );
-  // Same profile read, same booking endpoint shape and same payload contract.
-  assert.match(prepareSource, /end-user\/api\/v1\/\$\{TENANT_KEY\}\/profile/);
-  assert.match(routerSource, /\/api\/\$\{adminVersion\}\/exercises\/\$\{encodeURIComponent\(ctx\.exerciseId\)\}\/bookings/);
-  assert.match(routerSource, /paymentType: "SUBSCRIPTION"/);
-  assert.match(routerSource, /clientSubscriptionId: ctx\.clientSubscriptionId/);
-  assert.match(routerSource, /end-user\/api\/v2\/\$\{ctx\.tenantKey\}\/bookings\?size=1000/);
-  assert.match(contractSource, /BOOKED_OP_VIVA_PAYMENT_TYPE = "SUBSCRIPTION"/);
-  assert.match(contractSource, /"\/api\/v2\/exercises\/\{provider_exercise_id\}\/bookings"/);
-  assert.match(contractSource, /"\/end-user\/api\/v1\/\{tenant_key\}\/profile"/);
-  assert.match(contractSource, /"\/end-user\/api\/v2\/\{tenant_key\}\/bookings\?size=1000"/);
-  assert.match(contractSource, /customFields: \[\]/);
+test("canonical owner retains subscription rechecks, atomic claim and separate admin credential", () => {
+  const router = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_router.js"), "utf8");
+  const executor = receiverFunctionSource("executor");
+  assert.match(executor, /\/lk\/subscription-bookings/);
+  assert.doesNotMatch(executor.slice(executor.indexOf('const EXEC_OUTPUT_HTTP')), /\/api\/v2\/exercises/);
+  assert.match(router, /exercise_recheck/);
+  assert.match(router, /findOwnedSubscriptions/);
+  assert.match(router, /vivacrm_access_token/);
+  assert.match(router, /operation_preaccept/);
 });

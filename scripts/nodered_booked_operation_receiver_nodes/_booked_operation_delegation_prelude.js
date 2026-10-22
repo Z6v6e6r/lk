@@ -47,7 +47,7 @@ const BOOKED_OP_READ_CLAIMS = [
 // the signed delegation so the current PENDING-only contract keeps verifying
 // unchanged; the executor only runs when all required bindings are present.
 const BOOKED_OP_ADMIT_OPTIONAL_CLAIMS = [
-  "actor_token_sha256", "actor_token_expires_at", "provider_client_subscription_id",
+  "actor_token_sha256", "actor_token_expires_at", "provider_client_subscription_id", "reservation_id",
 ];
 const BOOKED_OP_ACTOR_TOKEN_HEADER = "x-subscription-actor-token";
 const BOOKED_OP_ACTOR_TOKEN_HEADER_UPPER = "X-Subscription-Actor-Token";
@@ -203,6 +203,7 @@ const bookedOperationBindingSha256 = (claims) => bookedOperationSha256(
     claims.provider_client_subscription_id === undefined
       ? null
       : claims.provider_client_subscription_id,
+    claims.reservation_id === undefined ? null : claims.reservation_id,
   ]),
 );
 
@@ -270,7 +271,7 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   const requiredClaims = (mode === "admit" ? BOOKED_OP_ADMIT_CLAIMS : BOOKED_OP_READ_CLAIMS)
     .slice()
     .sort();
-  const optionalClaims = mode === "admit" ? BOOKED_OP_ADMIT_OPTIONAL_CLAIMS : [];
+  const optionalClaims = mode === "admit" ? BOOKED_OP_ADMIT_OPTIONAL_CLAIMS : ["receipt_version"];
   const actualClaims = Object.keys(claims).sort();
   if (
     requiredClaims.some((key) => !Object.hasOwn(claims, key))
@@ -292,6 +293,10 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
         ))
     )
   ) {
+    return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
+  }
+  if ((claims.reservation_id !== undefined && !bookedOperationIsLowerUuid(claims.reservation_id))
+    || (claims.receipt_version !== undefined && (mode !== "read" || claims.receipt_version !== 1))) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
   const now = Math.floor(Date.now() / 1000);

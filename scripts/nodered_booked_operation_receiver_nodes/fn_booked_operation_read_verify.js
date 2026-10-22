@@ -22,6 +22,7 @@ if (!operationId || operationId !== claims.operation_id) {
 
 msg._bookedOperation = {
   mode: "read",
+  includeReceipt: claims.receipt_version === 1,
   step: "find",
   operationId: claims.operation_id,
   bindingSha256: verification.bindingSha256,

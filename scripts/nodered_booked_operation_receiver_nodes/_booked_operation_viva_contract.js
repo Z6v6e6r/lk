@@ -1,27 +1,9 @@
-// Shared Viva provider request contract for the booked-operation execution adapter.
-//
-// This file is a function body (not a module). The patch script concatenates it
-// in front of fn_booked_operation_executor.js, so the exact profile read, booking
-// write and confirmation readback contract is defined once for the receiver.
-//
-// The contract is factored from the existing atomic subscription-booking
-// machinery and must stay identical to it (characterisation test:
-// bookedOperationReceiverExecution.test.mjs):
-//   - fn_subscription_booking_prepare.js: user Bearer -> GET end-user profile
-//   - fn_subscription_booking_router.js: POST /api/v2/exercises/{id}/bookings
-//     with paymentType "SUBSCRIPTION", clientId, clientSubscriptionId,
-//     customFields [], then a GET bookings readback for confirmation.
-//
-// No key, credential or environment-specific value is stored here. The API base
-// and the path templates come from the server env (see HANDOFF-LK1.md); the
-// defaults below are the public production endpoints already hardcoded by the
-// existing subscription-booking sources.
+// Profile verification and local canonical subscription-booking owner contract.
+// Concatenated into the executor Function node. The canonical owner alone owns
+// subscription policy, daily claims, admin service credentials and provider readback.
 
 const BOOKED_OP_VIVA_DEFAULT_API_BASE = "https://api.vivacrm.ru";
 const BOOKED_OP_VIVA_DEFAULT_PROFILE_PATH = "/end-user/api/v1/{tenant_key}/profile";
-const BOOKED_OP_VIVA_DEFAULT_BOOKING_PATH = "/api/v2/exercises/{provider_exercise_id}/bookings";
-const BOOKED_OP_VIVA_DEFAULT_READBACK_PATH = "/end-user/api/v2/{tenant_key}/bookings?size=1000";
-const BOOKED_OP_VIVA_PAYMENT_TYPE = "SUBSCRIPTION";
 const BOOKED_OP_VIVA_DEFAULT_TIMEOUT_MS = 15000;
 const BOOKED_OP_VIVA_MIN_TIMEOUT_MS = 1000;
 const BOOKED_OP_VIVA_MAX_TIMEOUT_MS = 60000;
@@ -30,7 +12,6 @@ const BOOKED_OP_VIVA_TOKEN = /^[!-~]{16,4096}$/;
 const BOOKED_OP_VIVA_SHA256 = /^sha256:[a-f0-9]{64}$/;
 const BOOKED_OP_VIVA_API_BASE = /^https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253})(?::\d{2,5})?(?:\/[!-~]*)?$/;
 const BOOKED_OP_VIVA_PATH = /^\/[!-~]*$/;
-const BOOKED_OP_VIVA_REJECTION = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 const bookedOperationVivaIsObject = (value) => Boolean(value)
   && typeof value === "object"
@@ -83,17 +64,19 @@ const bookedOperationVivaReadExecutionConfig = (env) => {
   ).replace(/\/+$/, "");
   const profilePath = bookedOperationVivaEnv(env, "LK1_BOOKED_OPERATION_VIVA_PROFILE_PATH")
     || BOOKED_OP_VIVA_DEFAULT_PROFILE_PATH;
-  const bookingPath = bookedOperationVivaEnv(env, "LK1_BOOKED_OPERATION_VIVA_BOOKING_PATH")
-    || BOOKED_OP_VIVA_DEFAULT_BOOKING_PATH;
-  const readbackPath = bookedOperationVivaEnv(env, "LK1_BOOKED_OPERATION_VIVA_READBACK_PATH")
-    || BOOKED_OP_VIVA_DEFAULT_READBACK_PATH;
+  // Credential-bearing delegation stays on the local canonical booking owner. The owner
+  // owns the admin service token, subscription eligibility, claims and provider readback.
+  const ownerBase = bookedOperationVivaEnv(env, "LK1_BOOKED_OPERATION_OWNER_BASE_URL");
+  const ownerTenantKey = bookedOperationVivaEnv(env, "LK1_BOOKED_OPERATION_OWNER_TENANT_KEY");
+  if (!/^http:\/\/(?:127\.0\.0\.1|localhost):[0-9]{2,5}$/.test(ownerBase || "")
+    || ownerTenantKey !== "iSkq6G") {
+    return { ok: false, code: "BOOKED_OPERATION_EXECUTION_CONFIG_INVALID" };
+  }
   const timeoutText = bookedOperationVivaEnv(env, "LK1_BOOKED_OPERATION_EXECUTION_TIMEOUT_MS");
   const timeoutMs = timeoutText === null ? BOOKED_OP_VIVA_DEFAULT_TIMEOUT_MS : Number(timeoutText);
   if (
     apiBase.length > 256 || !BOOKED_OP_VIVA_API_BASE.test(apiBase) || apiBase.includes("@")
     || !BOOKED_OP_VIVA_PATH.test(profilePath) || profilePath.length > 512 || profilePath.includes("#")
-    || !BOOKED_OP_VIVA_PATH.test(bookingPath) || bookingPath.length > 512 || bookingPath.includes("#")
-    || !BOOKED_OP_VIVA_PATH.test(readbackPath) || readbackPath.length > 512 || readbackPath.includes("#")
     || !Number.isSafeInteger(timeoutMs)
     || timeoutMs < BOOKED_OP_VIVA_MIN_TIMEOUT_MS || timeoutMs > BOOKED_OP_VIVA_MAX_TIMEOUT_MS
   ) {
@@ -101,7 +84,7 @@ const bookedOperationVivaReadExecutionConfig = (env) => {
   }
   return {
     ok: true,
-    config: { apiBase, profilePath, bookingPath, readbackPath, timeoutMs },
+    config: { apiBase, profilePath, ownerBase, ownerTenantKey, timeoutMs },
   };
 };
 
@@ -121,20 +104,6 @@ const bookedOperationVivaExpandPath = (template, values) => {
   return unresolved ? null : expanded;
 };
 
-// Mirrors prepareBookingCreate in the subscription-booking router: the user
-// profile supplies clientId/phone, the operation supplies the exercise and the
-// exact clientSubscriptionId. No spot, no service identity, no full-price path.
-const bookedOperationVivaBookingPayload = ({ clientId, phone, clientSubscriptionId }) => {
-  const digits = bookedOperationVivaNormalizePhone(phone);
-  return {
-    clientId,
-    ...(digits ? { phone: `+${digits}` } : {}),
-    paymentType: BOOKED_OP_VIVA_PAYMENT_TYPE,
-    clientSubscriptionId,
-    customFields: [],
-  };
-};
-
 const bookedOperationVivaIsHttpOk = (status) => Number(status) >= 200 && Number(status) < 300;
 const bookedOperationVivaUnwrapRecord = (value) => {
   if (!bookedOperationVivaIsObject(value)) return null;
@@ -148,90 +117,6 @@ const bookedOperationVivaUnwrapRecord = (value) => {
   }
   return value;
 };
-const bookedOperationVivaExtractItems = (value, seen = new Set()) => {
-  if (Array.isArray(value)) return value;
-  if (!bookedOperationVivaIsObject(value) || seen.has(value)) return [];
-  seen.add(value);
-  for (const key of ["content", "items", "records", "bookings", "data", "payload", "result"]) {
-    if (Array.isArray(value[key])) return value[key];
-    const nested = bookedOperationVivaExtractItems(value[key], seen);
-    if (nested.length > 0) return nested;
-  }
-  return [];
-};
-const bookedOperationVivaHasBookingList = (value, seen = new Set()) => {
-  if (Array.isArray(value)) return true;
-  if (!bookedOperationVivaIsObject(value) || seen.has(value)) return false;
-  seen.add(value);
-  for (const key of ["content", "items", "records", "bookings"]) {
-    if (Array.isArray(value[key])) return true;
-  }
-  return ["data", "payload", "result"].some((key) => (
-    bookedOperationVivaHasBookingList(value[key], seen)
-  ));
-};
-const bookedOperationVivaBookingId = (value) => (
-  bookedOperationVivaIsObject(value)
-    ? bookedOperationVivaToText(value.id || value.bookingId || value.uuid)
-    : null
-);
-const bookedOperationVivaBookingExerciseId = (value) => {
-  if (!bookedOperationVivaIsObject(value)) return null;
-  const exercise = bookedOperationVivaIsObject(value.exercise) ? value.exercise : null;
-  return bookedOperationVivaToText(
-    exercise?.id || exercise?.uuid || value.exerciseId || value.vivaExerciseId || value.eventId,
-  );
-};
-const bookedOperationVivaBookingSubscriptionId = (value) => {
-  if (!bookedOperationVivaIsObject(value)) return null;
-  const subscription = bookedOperationVivaIsObject(value.subscription)
-    ? value.subscription
-    : (
-      bookedOperationVivaIsObject(value.clientSubscription)
-        ? value.clientSubscription
-        : null
-    );
-  return bookedOperationVivaToText(
-    value.clientSubscriptionId
-    || value.subscriptionId
-    || value.clientSubId
-    || subscription?.clientSubscriptionId
-    || subscription?.subscriptionId
-    || subscription?.id
-    || subscription?.uuid,
-  );
-};
-const bookedOperationVivaIsInactiveBooking = (value) => {
-  if (!bookedOperationVivaIsObject(value)) return true;
-  const exercise = bookedOperationVivaIsObject(value.exercise) ? value.exercise : null;
-  if (
-    value.isCancelled === true
-    || value.cancelled === true
-    || value.canceled === true
-    || value.archived === true
-    || bookedOperationVivaToText(value.cancellationDate)
-    || bookedOperationVivaToText(value.cancelledAt)
-    || exercise?.isCancelled === true
-    || exercise?.cancelled === true
-    || exercise?.canceled === true
-    || exercise?.archived === true
-  ) return true;
-  const statuses = [
-    value.status,
-    value.state,
-    value.bookingStatus,
-    value.cancellationReason,
-    exercise?.status,
-    exercise?.state,
-    value.transactionStatus?.transactionStatus,
-    value.transactionStatus?.cardPaymentStatus?.status,
-    value.transactionStatus?.cardPaymentStatus?.originalStatus,
-  ];
-  return statuses.some((status) => (
-    /CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|ARCHIVE|REMOV/i.test(String(status || ""))
-  ));
-};
-
 // Strict mongodb4 updateOne acknowledgement. Only a definite non-upsert match is
 // a dispatch/confirm claim; anything else is an ambiguity, never success.
 const bookedOperationVivaMongoUpdateAck = (value, expected) => {
@@ -254,21 +139,22 @@ const bookedOperationVivaMongoUpdateAck = (value, expected) => {
   return { matched: value.matchedCount };
 };
 
-// A provider rejection body may only become a bounded upper-case code; raw text
-// and the full payload never reach Mongo or the response.
-const bookedOperationVivaRejectionCode = (payload) => {
-  const raw = bookedOperationVivaIsObject(payload)
-    ? bookedOperationVivaToText(
-      payload.code
-      || (bookedOperationVivaIsObject(payload.error) ? payload.error.code : payload.error)
-      || payload.message,
-    )
-    : null;
-  if (!raw) return null;
-  const normalised = raw
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 64);
-  return BOOKED_OP_VIVA_REJECTION.test(normalised) ? normalised : null;
-};
+const bookedOperationOwnerReceipt = (stored, bookingId, verifiedAt) => ({
+  contractVersion: 1,
+  source: "LK1_SUBSCRIPTION_BOOKING_OWNER",
+  operationId: stored.operationId,
+  tenantId: stored.tenantId,
+  userId: stored.userId,
+  gameId: stored.targetId,
+  reservationId: stored.reservationId,
+  providerClientId: stored.providerClientId,
+  providerClientSubscriptionId: stored.providerClientSubscriptionId,
+  providerExerciseId: stored.providerExerciseId,
+  providerMappingId: stored.providerMappingId,
+  targetMappingId: stored.targetMappingId,
+  targetVersion: stored.targetVersion,
+  requestSha256: stored.requestSha256,
+  idempotencyKeySha256: stored.idempotencyKeySha256,
+  bookingId,
+  verifiedAt,
+});

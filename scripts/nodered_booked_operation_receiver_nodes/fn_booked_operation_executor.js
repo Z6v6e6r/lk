@@ -1,6 +1,6 @@
 // Disabled-by-default execution adapter for the LK2 booked-operation receiver.
 //
-// This node is the only place in the receiver that may talk to Viva. It runs
+// This node verifies the Viva profile and delegates once to the local canonical owner. It runs
 // only when the router forwards an admission whose durable state is PENDING, the
 // delegation carried the user-scoped token binding
 // (`actor_token_sha256` + `X-Subscription-Actor-Token`), and the activation flag
@@ -9,13 +9,12 @@
 //
 // Durable state machine on the SAME operation document (`_id = operationId`,
 // kind BOOKED_OPERATION_ADMISSION):
-//   PENDING -> ATTEMPTING  (CAS marker written BEFORE the provider POST)
+//   PENDING -> ATTEMPTING  (CAS marker written BEFORE the canonical-owner POST)
 //           -> CONFIRMED | UNKNOWN | REJECTED
 //   CONFIRMED / REJECTED are terminal; UNKNOWN is never retried or released.
 // The attempt marker is the single dispatch gate: a repeat or racing admission
 // that lost the CAS is reconciled by a durable readback and never sends a second
-// provider POST. Every terminal state is derived from the provider response or
-// an explicit provider readback, never assumed.
+// canonical-owner POST. Every confirmation is derived from the canonical owner result, never assumed.
 //
 // Secrets: the actor token lives only in `msg._bookedOperation.execution`, is
 // sent as a Bearer header, is scrubbed before every response and is never
@@ -32,7 +31,6 @@ const EXEC_STEPS = [
   "profile",
   "attempt_claim",
   "booking_create",
-  "confirmation_bookings",
   "finalize",
 ];
 
@@ -161,7 +159,8 @@ if (`sha256:${bookedOperationVivaSha256Hex(actorToken)}` !== actorTokenSha256) {
   return execReject(403, "BOOKED_OPERATION_ACTOR_TOKEN_MISMATCH");
 }
 const actorTokenExpiresAt = bookedOperationVivaToText(execution.actorTokenExpiresAt);
-if (actorTokenExpiresAt && !(Date.parse(actorTokenExpiresAt) > Date.now())) {
+if (["execute", "profile"].includes(execContext.step)
+  && actorTokenExpiresAt && !(Date.parse(actorTokenExpiresAt) > Date.now())) {
   // Pre-dispatch: nothing was written and nothing may be released; a fresh
   // delegation can be retried for the same operation id.
   return execReject(403, "BOOKED_OPERATION_ACTOR_TOKEN_EXPIRED");
@@ -219,12 +218,7 @@ const execFinalize = (state, details = {}) => {
   if (state === "CONFIRMED") {
     set.bookingId = details.bookingId;
     set.confirmedAt = at;
-    receipt = {
-      bookingId: details.bookingId,
-      confirmedAt: at,
-      operationId,
-      source: "PROVIDER_BOOKING_READBACK",
-    };
+    receipt = bookedOperationOwnerReceipt(stored, details.bookingId, at);
   }
   if (state === "REJECTED") {
     set.rejectedAt = at;
@@ -266,6 +260,9 @@ if (execContext.step === "execute") {
     if (loaded.code === "BOOKED_OPERATION_EXECUTION_DISABLED") {
       return execPending(asOfStored);
     }
+    return execReject(503, "BOOKED_OPERATION_EXECUTION_UNAVAILABLE");
+  }
+  if (stored.tenantKey !== loaded.config.ownerTenantKey || !stored.reservationId) {
     return execReject(503, "BOOKED_OPERATION_EXECUTION_UNAVAILABLE");
   }
   execution.config = loaded.config;
@@ -314,7 +311,7 @@ if (execContext.step === "profile") {
   }
   execution.actorClientId = profileClientId;
   execution.actorPhone = profilePhone;
-  // Durable dispatch marker BEFORE the provider POST: exactly one racing/repeat
+  // Durable dispatch marker BEFORE the canonical-owner POST: exactly one racing/repeat
   // admission can claim PENDING -> ATTEMPTING, and the provider write happens
   // only after that claim is acknowledged.
   execContext.step = "attempt_claim";
@@ -359,82 +356,45 @@ if (execContext.step === "attempt_claim") {
     msg.payload = { _id: operationId };
     return execOutput(EXEC_OUTPUT_FIND);
   }
-  const bookingUrl = bookedOperationVivaExpandPath(
-    execution.config.apiBase + execution.config.bookingPath,
-    { provider_exercise_id: stored.providerExerciseId },
-  );
-  if (!bookingUrl) {
-    return execFinalize("UNKNOWN", { reason: "BOOKED_OPERATION_EXECUTION_UNAVAILABLE" });
-  }
-  const payload = bookedOperationVivaBookingPayload({
-    clientId: execution.actorClientId,
-    phone: execution.actorPhone,
+  // The marker is now durable. Only this single loopback POST may dispatch the
+  // canonical owner; neither a timeout nor a replay can send another purchase.
+  execContext.step = "booking_create";
+  execScrubRequest();
+  msg.method = "POST";
+  msg.url = execution.config.ownerBase + "/lk/subscription-bookings";
+  msg.headers = {
+    Authorization: `Bearer ${actorToken}`,
+    "Idempotency-Key": operationId,
+    "X-Correlation-ID": stored.delegation.correlationId,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  msg.payload = {
+    operationId,
+    exerciseId: stored.providerExerciseId,
     clientSubscriptionId: stored.providerClientSubscriptionId,
-  });
-  return execProviderRequest("POST", bookingUrl, payload, "booking_create");
+  };
+  msg.requestTimeout = execution.config.timeoutMs;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  return execOutput(EXEC_OUTPUT_HTTP);
 }
 
 if (execContext.step === "booking_create") {
   const statusCode = Number(msg.statusCode) || null;
-  if (msg.error || !statusCode) {
-    return execFinalize("UNKNOWN", { reason: "PROVIDER_TRANSPORT_ERROR" });
+  const body = msg.payload;
+  // A gateway error may follow a provider side effect. Preserve uncertainty on
+  // every refusal/error; read-only reconciliation can consume its durable receipt.
+  if (msg.error || !bookedOperationVivaIsHttpOk(statusCode)
+    || !bookedOperationVivaIsObject(body)
+    || body.ok !== true || body.state !== "CONFIRMED"
+    || body.operationId !== operationId
+    || body.exerciseId !== stored.providerExerciseId
+    || body.clientSubscriptionId !== stored.providerClientSubscriptionId
+    || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(body.bookingId) || "")) {
+    return execFinalize("UNKNOWN", { reason: "CANONICAL_OWNER_RECONCILIATION_REQUIRED" });
   }
-  if (statusCode >= 500 || statusCode === 408 || statusCode === 429) {
-    return execFinalize("UNKNOWN", { reason: "PROVIDER_UNAVAILABLE", statusCode });
-  }
-  if (statusCode >= 400) {
-    return execFinalize("REJECTED", {
-      rejectionCode: bookedOperationVivaRejectionCode(msg.payload),
-      statusCode,
-    });
-  }
-  if (!bookedOperationVivaIsHttpOk(statusCode)) {
-    // A redirect reply is not acceptance evidence for a write request.
-    return execFinalize("UNKNOWN", { reason: "PROVIDER_RESULT_UNKNOWN", statusCode });
-  }
-  // The provider accepted the request, but acceptance is not confirmation: a
-  // readback (same contract as the subscription-booking gateway) decides between
-  // CONFIRMED and UNKNOWN. UNKNOWN is never retried.
-  execution.providerAcceptedAt = new Date().toISOString();
-  execution.immediateBookingId = bookedOperationVivaBookingId(msg.payload);
-  const readbackUrl = bookedOperationVivaExpandPath(
-    execution.config.apiBase + execution.config.readbackPath,
-    { tenant_key: stored.tenantKey },
-  );
-  if (!readbackUrl) {
-    return execFinalize("UNKNOWN", {
-      reason: "CONFIRMATION_READBACK_UNAVAILABLE",
-      statusCode,
-    });
-  }
-  return execProviderRequest("GET", readbackUrl, undefined, "confirmation_bookings");
-}
-
-if (execContext.step === "confirmation_bookings") {
-  const statusCode = Number(msg.statusCode) || null;
-  if (
-    msg.error
-    || !statusCode
-    || !bookedOperationVivaIsHttpOk(statusCode)
-    || !bookedOperationVivaHasBookingList(msg.payload)
-  ) {
-    return execFinalize("UNKNOWN", { reason: "CONFIRMATION_READBACK_UNAVAILABLE" });
-  }
-  const booking = bookedOperationVivaExtractItems(msg.payload).find((item) => (
-    !bookedOperationVivaIsInactiveBooking(item)
-    && bookedOperationVivaNormalizeId(bookedOperationVivaBookingExerciseId(item))
-      === bookedOperationVivaNormalizeId(stored.providerExerciseId)
-    && bookedOperationVivaNormalizeId(bookedOperationVivaBookingSubscriptionId(item))
-      === bookedOperationVivaNormalizeId(stored.providerClientSubscriptionId)
-  ));
-  if (!booking) {
-    return execFinalize("UNKNOWN", { reason: "BOOKING_NOT_CONFIRMED_BY_READBACK" });
-  }
-  const bookingId = bookedOperationVivaBookingId(booking) || execution.immediateBookingId;
-  if (!bookingId) {
-    return execFinalize("UNKNOWN", { reason: "BOOKING_REFERENCE_MISSING" });
-  }
-  return execFinalize("CONFIRMED", { bookingId });
+  return execFinalize("CONFIRMED", { bookingId: body.bookingId });
 }
 
 if (execContext.step === "finalize") {

@@ -92,7 +92,8 @@ const executionBlockedReason = !executionFlagEnabled
   ? "EXECUTION_FLAG_OFF"
   : (!verification.actorToken
     ? "ACTOR_TOKEN_BINDING_MISSING"
-    : (!providerClientSubscriptionId ? "SUBSCRIPTION_MAPPING_MISSING" : null));
+    : (!providerClientSubscriptionId ? "SUBSCRIPTION_MAPPING_MISSING"
+      : (!claims.reservation_id ? "RESERVATION_BINDING_MISSING" : null)));
 const execution = {
   actorToken: executionBlockedReason === null ? verification.actorToken : null,
   actorTokenExpiresAt: verification.actorTokenExpiresAt,
@@ -114,6 +115,7 @@ const document = {
   provider: "VIVA",
   providerClientId: claims.provider_client_id,
   providerClientSubscriptionId,
+  reservationId: claims.reservation_id || null,
   providerMappingId: claims.provider_mapping_id,
   providerExerciseId: claims.provider_exercise_id,
   targetMappingId: claims.target_mapping_id,
