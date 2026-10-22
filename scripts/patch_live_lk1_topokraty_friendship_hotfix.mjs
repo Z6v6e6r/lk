@@ -103,7 +103,7 @@ const REVIEWED_HOOKS_SOURCE = "scripts/nodered_lk1_hub_nodes/gateway_hooks.js";
 export const TOPOKRATY_COURT_HELPERS_START = "const lk1CourtMasterServices = Object.freeze({";
 export const TOPOKRATY_COURT_HELPERS_END = "  return total;\n};\n";
 export const TOPOKRATY_COURT_HELPERS_SHA256 =
-  "dea0323fb7535e821d74af271339ef5d3c4db65622ec865384637fbbad6d86dd";
+  "633d57a5c59b676249a328652cbf842cc99be0321d77947c4c21eeecad18a4b0";
 export const TOPOKRATY_COURT_DISPATCH_START = "// The club co-pay needs one more server-owned number";
 export const TOPOKRATY_COURT_DISPATCH_END = "  return startLk1CourtWindowFetch(ctx);\n}\n";
 export const TOPOKRATY_COURT_DISPATCH_SHA256 =

@@ -409,7 +409,7 @@ test("the composed G1 club mandate resolves the co-pay and the dispatch proves a
 
     // Pass 2 — the reviewed response handler stores a proof binding the same station and room, the
     // continuation re-enters `exercise`, and the second dispatch pass neither re-fetches nor refuses.
-    const second = runtime(ctx, { statusCode: 200, payload: { total: 600000 } }, quote, exercise);
+    const second = runtime(ctx, { statusCode: 200, payload: { total: 6000 } }, quote, exercise);
     assert.equal(second.step, "exercise");
     assert.equal(Object.hasOwn(second, "stop"), false);
     assert.equal(second.proof.stationId, COURT_STATION);

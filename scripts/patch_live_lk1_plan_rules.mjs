@@ -167,7 +167,7 @@ export const PLAN_RULES_REVIEWED_EVALUATOR_SHA256 =
   // 50 % discount (#175) and the Patriots «Дружба.Патриоты» branch (`PATRIOTS_FRIENDSHIP_PRODUCT_ID`,
   // `PATRIOTS_DISCOUNT_EVENTS`). Both rule sets ship in one body, so this generation must be
   // re-reviewed as a whole and its live-body pins re-derived at that apply.
-  "ac05d7cd876523d19ec380cd3f7d68c78ea48320cf5586160b19e6cb3e613d9d";
+  "404fc3c087820bc28f794702ead9ddfba4eba62ca72c834729356441fc552243";
 // Re-pinned 2026-09-16: the fragment boundary is `const lk1Config … const lk1Stop`, and
 // `lk1Stop` gained the additive `observed` detail used by the money-validity diagnostics.
 export const PLAN_RULES_CONFIG_FRAGMENT_SHA256 =
