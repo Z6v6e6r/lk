@@ -492,6 +492,8 @@ export function buildReceiverCandidate(sourceFlow) {
       preludeSha256: PRELUDE_SHA256,
       vivaContractSha256: VIVA_CONTRACT_SHA256,
       runtimePrerequisites: [
+        "Before activation the canonical owner must answer the read-only OPTIONS contract probe "
+          + "with exact ATOMIC_MANAGED_V1 capability; old/partial owners are refused before any profile or booking",
         "Node-RED settings.js must not set functionExternalModules:false",
         "LK1_BOOKED_OPERATION_RECEIVER_ENABLED, LK2_BOOKED_OPERATION_DELEGATION_ISSUER, "
           + "LK2_BOOKED_OPERATION_DELEGATION_AUDIENCE, "

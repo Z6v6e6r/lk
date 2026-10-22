@@ -247,3 +247,22 @@ failed), keep the original operation/key and require operator reconciliation. Do
 retry from a timeout or release the seat; any resumption involving a real booking needs its own
 explicit authority. A CONFIRMED provider booking with a cancelled/full local game also needs an
 operator decision and must not be settled or refunded automatically.
+
+## Mandatory canonical owner version gate (fresh runtime drift)
+
+The fresh preimage has canonical router hash
+`ad423f72fdee9d76d11d141774d5f3e1588c35417e7edc5f28d1dd3bbf7dd5c4`,
+which differs from the reviewed source and includes installed trial/legacy wrappers. The existing
+fresh-live HUB parity test does not pass; do not treat this owner as interchangeable with source.
+Its source also lacks the expected managed-entitlement durable fields. Activation is **NO-GO**
+until a separately reviewed canonical-owner upgrade preserves those installed guards and establishes
+the new contract. Never bypass `assertNoInstalledTrialGateOverwrite` or overwrite the wrappers.
+
+Before any real JOIN, perform read-only `OPTIONS /lk/subscription-bookings` on loopback with
+`X-Booked-Operation-Owner-Contract: 1`. Require HTTP 200, JSON content type and exactly
+`{contractVersion:1,owner:"LK1_SUBSCRIPTION_BOOKING_OWNER",policy:"ATOMIC_MANAGED_V1"}`.
+The special OPTIONS output must reach the SAME canonical booking router. The reviewed router handles
+this probe before any global/provider/Mongo lookup; ordinary CORS remains its existing 204 response.
+The receiver requires this capability before the profile read, dispatch marker or sole booking POST.
+Old 204, partial/malformed/extra capability, transport failure or token expiry stops without booking.
+Changing only the advertised version on an old router is not an upgrade or acceptance evidence.

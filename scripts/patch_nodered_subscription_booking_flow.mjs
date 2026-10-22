@@ -210,7 +210,7 @@ function buildManagedNodes(tabId, mongoClientId) {
     },
     functionNode(
       tabId, IDS.options, "Subscription booking CORS", readFunction("fn_subscription_booking_options.js"),
-      1, 500, 5310, [[IDS.optionsResponse]],
+      2, 500, 5310, [[IDS.optionsResponse], [IDS.router]],
     ),
     {
       id: IDS.optionsResponse, type: "http response", z: tabId, name: "", statusCode: "", headers: {},
@@ -246,6 +246,14 @@ function validateCandidate(flow, tabId, mongoClientId) {
   const splitRouter = flow.find((node) => node.id === ROUTER_ID);
   if (!matchesManagedSubscriptionRouterTopology(splitRouter)) {
     throw new Error("Split subscription dispatch was not wired to the atomic gateway");
+  }
+  const options = flow.find((node) => node.id === IDS.options);
+  const ownerRouter = flow.find((node) => node.id === IDS.router);
+  if (options?.outputs !== 2
+    || JSON.stringify(options.wires) !== JSON.stringify([[IDS.optionsResponse], [IDS.router]])
+    || options.func !== readFunction("fn_subscription_booking_options.js")
+    || ownerRouter?.func !== readFunction("fn_subscription_booking_router.js")) {
+    throw new Error("Canonical owner capability probe must use the exact reviewed functions and topology");
   }
 }
 

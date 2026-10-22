@@ -28,6 +28,7 @@ const EXEC_OUTPUT_FIND = 4;
 const EXEC_ATTEMPT_PREFIX = "booked-operation-attempt:v1\0";
 const EXEC_STEPS = [
   "execute",
+  "owner_contract",
   "profile",
   "attempt_claim",
   "booking_create",
@@ -159,7 +160,7 @@ if (`sha256:${bookedOperationVivaSha256Hex(actorToken)}` !== actorTokenSha256) {
   return execReject(403, "BOOKED_OPERATION_ACTOR_TOKEN_MISMATCH");
 }
 const actorTokenExpiresAt = bookedOperationVivaToText(execution.actorTokenExpiresAt);
-if (["execute", "profile"].includes(execContext.step)
+if (["execute", "owner_contract", "profile"].includes(execContext.step)
   && actorTokenExpiresAt && !(Date.parse(actorTokenExpiresAt) > Date.now())) {
   // Pre-dispatch: nothing was written and nothing may be released; a fresh
   // delegation can be retried for the same operation id.
@@ -266,8 +267,30 @@ if (execContext.step === "execute") {
     return execReject(503, "BOOKED_OPERATION_EXECUTION_UNAVAILABLE");
   }
   execution.config = loaded.config;
+  execContext.step = "owner_contract";
+  execScrubRequest();
+  msg.method = "OPTIONS";
+  msg.url = loaded.config.ownerBase + "/lk/subscription-bookings";
+  msg.headers = { "X-Booked-Operation-Owner-Contract": "1", Accept: "application/json" };
+  msg.payload = undefined;
+  msg.requestTimeout = loaded.config.timeoutMs;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  return execOutput(EXEC_OUTPUT_HTTP);
+}
+
+if (execContext.step === "owner_contract") {
+  const body = msg.payload;
+  const contentType = bookedOperationVivaToText(msg.headers?.["content-type"] || msg.headers?.["Content-Type"]);
+  if (!contentType || !/^application\/json(?:;\s*charset=utf-8)?$/i.test(contentType)
+    || msg.error || Number(msg.statusCode) !== 200 || !bookedOperationVivaIsObject(body)
+    || Object.keys(body).sort().join(",") !== "contractVersion,owner,policy"
+    || body.contractVersion !== 1 || body.owner !== "LK1_SUBSCRIPTION_BOOKING_OWNER"
+    || body.policy !== "ATOMIC_MANAGED_V1") {
+    return execReject(503, "BOOKED_OPERATION_OWNER_CONTRACT_UNAVAILABLE");
+  }
   const profileUrl = bookedOperationVivaExpandPath(
-    loaded.config.apiBase + loaded.config.profilePath,
+    execution.config.apiBase + execution.config.profilePath,
     { tenant_key: stored.tenantKey },
   );
   if (!profileUrl) return execReject(503, "BOOKED_OPERATION_EXECUTION_UNAVAILABLE");

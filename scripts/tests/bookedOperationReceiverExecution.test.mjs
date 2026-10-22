@@ -268,8 +268,18 @@ const startExecution = (values = executionEnv) => {
   };
   return { ...dispatched, execMsg, providerCalls, step };
 };
-const driveToAttemptMarker = (values = executionEnv) => {
+const startVerifiedOwnerExecution = (values = executionEnv) => {
   const driven = startExecution(values);
+  const probeRequest = driven.step();
+  assert.equal(probeRequest[0].method, "OPTIONS");
+  assert.equal(probeRequest[0].headers.Authorization, undefined);
+  driven.execMsg.statusCode = 200;
+  driven.execMsg.headers = { "content-type": "application/json; charset=utf-8" };
+  driven.execMsg.payload = { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" };
+  return { ...driven, probeRequest };
+};
+const driveToAttemptMarker = (values = executionEnv) => {
+  const driven = startVerifiedOwnerExecution(values);
   const profileRequest = driven.step();
   provideProfile(driven.execMsg);
   const markerRequest = driven.step();
@@ -499,7 +509,7 @@ test("a lost or repeated attempt claim reconciles by readback and sends no secon
 });
 
 test("pre-dispatch failures never persist state and keep the operation recoverable", () => {
-  const tokenRejected = startExecution();
+  const tokenRejected = startVerifiedOwnerExecution();
   tokenRejected.step();
   tokenRejected.execMsg.statusCode = 401;
   tokenRejected.execMsg.payload = { message: "invalid token" };
@@ -509,7 +519,7 @@ test("pre-dispatch failures never persist state and keep the operation recoverab
   assert.equal(rejected[1], null, "no marker write before a provider POST");
   assert.equal(rejected[0], null);
 
-  const transient = startExecution();
+  const transient = startVerifiedOwnerExecution();
   transient.step();
   transient.execMsg.error = { message: "ECONNRESET" };
   delete transient.execMsg.statusCode;
@@ -518,7 +528,7 @@ test("pre-dispatch failures never persist state and keep the operation recoverab
   assert.equal(pending[3].payload.status, "PENDING");
   assert.equal(pending[1], null);
 
-  const foreignProfile = startExecution();
+  const foreignProfile = startVerifiedOwnerExecution();
   foreignProfile.step();
   foreignProfile.execMsg.statusCode = 200;
   foreignProfile.execMsg.payload = { id: "another-viva-client", phone: SYNTHETIC_PHONE };
@@ -559,4 +569,51 @@ test("canonical owner retains subscription rechecks, atomic claim and separate a
   assert.match(router, /findOwnedSubscriptions/);
   assert.match(router, /vivacrm_access_token/);
   assert.match(router, /operation_preaccept/);
+});
+
+test("old/partial owner versions stop before any actor profile, marker or booking POST", () => {
+  for (const reply of [{ error: { message: "timeout" } }, { statusCode: 302, payload: {} }, { statusCode: 204, payload: "" }, { statusCode: 503, payload: {} },
+    { statusCode: 200, payload: { contractVersion: 0, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" } },
+    { statusCode: 200, payload: { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1", extra: true } },
+    { statusCode: 200, payload: "malformed" },
+    { statusCode: 200, payload: { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "LEGACY" } }]) {
+    const driven = startExecution();
+    const probe = driven.step();
+    assert.equal(probe[0].method, "OPTIONS");
+    assert.equal(probe[0].headers.Authorization, undefined);
+    driven.execMsg.headers = { "content-type": "application/json" };
+    Object.assign(driven.execMsg, reply);
+    const stopped = driven.step();
+    assert.equal(stopped[3].payload.code, "BOOKED_OPERATION_OWNER_CONTRACT_UNAVAILABLE");
+    assert.equal(stopped[0], null); assert.equal(stopped[1], null);
+    assert.equal(driven.providerCalls.filter(call => call.method === "GET" || call.method === "POST").length, 0);
+    assert.equal(driven.document.state, "PENDING");
+  }
+});
+
+test("special OPTIONS probe reaches canonical router; ordinary CORS stays 204 and the probe is inert", () => {
+  const optionsSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_options.js"), "utf8");
+  const routerSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_router.js"), "utf8");
+  const ordinary = new Function("msg", optionsSource)({ req: { method: "OPTIONS", headers: {} } });
+  assert.equal(ordinary[0].statusCode, 204); assert.equal(ordinary[1], null);
+  const probe = new Function("msg", optionsSource)({ req: { method: "OPTIONS", headers: { "x-booked-operation-owner-contract": "1" } } });
+  assert.equal(probe[0], null);
+  const response = new Function("msg", "global", routerSource)(probe[1], { get() { throw new Error("probe must not read runtime/provider state"); } });
+  assert.equal(response[4].statusCode, 200);
+  assert.deepEqual(response[4].payload, { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" });
+  assert.equal(response.filter(Boolean).length, 1);
+});
+
+test("probe expiry and non-JSON capability both stop before profile or marker", () => {
+  for (const expired of [true, false]) {
+    const driven = startExecution(); driven.step();
+    driven.execMsg.statusCode = 200;
+    driven.execMsg.headers = { "content-type": expired ? "application/json" : "text/html" };
+    driven.execMsg.payload = { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" };
+    if (expired) driven.execMsg._bookedOperation.execution.actorTokenExpiresAt = new Date(Date.now()-1000).toISOString();
+    const stopped = driven.step();
+    assert.equal(stopped[0], null); assert.equal(stopped[1], null);
+    assert.equal(stopped[3].statusCode, expired ? 403 : 503);
+    assert.equal(driven.providerCalls.filter(call => call.method === "GET" || call.method === "POST").length, 0);
+  }
 });
