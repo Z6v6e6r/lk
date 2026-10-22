@@ -794,6 +794,12 @@ if (!ctx || ctx.action !== "confirm") {
   return failMsg(500, "Summer subscription confirm context is missing");
 }
 
+// A missing/malformed storage response is not a proven empty successful read.
+if (msg.error || !Array.isArray(msg.payload)
+  || msg.payload.some(row => !row || typeof row !== "object" || Array.isArray(row))) {
+  return failMsg(503, "Не удалось проверить платеж", { code: "SUBSCRIPTION_CONFIRM_READ_FAILED" });
+}
+
 const configMap = buildCounterConfigMap();
 const docs = rows
   .filter((item) => item && typeof item === "object")

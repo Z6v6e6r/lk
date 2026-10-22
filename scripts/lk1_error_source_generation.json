@@ -1,0 +1,44 @@
+{
+  "kind": "LK1_ERROR_SOURCE_FIXES_GENERATION_V1",
+  "predecessor": "subscription_hab_annual_price_generation.json",
+  "note": "Source-only R05/R03/H06 candidate. Historical causes remain open; no live-flow, rollout or operation acceptance.",
+  "historicalCausesClosed": false,
+  "deploymentAuthorized": false,
+  "targets": [
+    {
+      "id": "4cc92586174530d5",
+      "fileName": "fn_deal_list_result.js",
+      "source": "nodered_bitrix_nodes/fn_deal_list_result.js",
+      "preimageSha256": "1fff442a95178d8ff1ffc073b19e269a5b1f84db3c1b043553b1492f2a425a9a",
+      "candidateSha256": "f5df45798de2217329339410521bbc5f05776761304ac7db88d78ec13f3f9fbf"
+    },
+    {
+      "id": "566ae4b886c37ae5",
+      "fileName": "fn_tournament_subscription_purchase_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      "preimageSha256": "9d34888e6984205562587ac43b598b49903e34d168c08fdd30ac825f22b5990a",
+      "candidateSha256": "ba280998bb37c3446271ae1f8bd9d25f8b244fbda82c358b7c201c7f71867ef8"
+    },
+    {
+      "id": "piter_atomic_router_20260903",
+      "fileName": "fn_tournament_subscription_piter_atomic_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      "preimageSha256": "10a86299f807943f905cfd9846d35875b370cd94c186205c4eefd6f2e764760e",
+      "candidateSha256": "399e95cd6864c0d865a977be18773bef24b140d74c12b661682e01181769bb39"
+    },
+    {
+      "id": "ca022fd14027a5b0",
+      "fileName": "fn_tournament_subscription_confirm_resolve.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+      "preimageSha256": "7d6ea160e72b0b31d60acedc4b0571f68a20b8875f0757370b4f8201a750ce7b",
+      "candidateSha256": "d76cdb6391bc8ffb4514dc61c60b9360aa03da5fa5d2f3f9e16df30bbb404674"
+    },
+    {
+      "id": "piter_atomic_error_20260903",
+      "fileName": "fn_tournament_subscription_piter_atomic_error.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_piter_atomic_error.js",
+      "preimageSha256": "2e27be3e1b560b41c3000f2c76e4ee2a410e8a2f2d5b86ef960c00f552c51787",
+      "candidateSha256": "87338a2f7642a6d674c5393bfef4d0507819bdb0cdb17be9ccea5c8aac845057"
+    }
+  ]
+}

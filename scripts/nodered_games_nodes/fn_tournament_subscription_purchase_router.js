@@ -714,8 +714,11 @@ const managedBindingPending = (ctx, code) => {
   delete atomicMsg.headers;
   delete atomicMsg.url;
   delete atomicMsg.method;
-  delete atomicMsg.req;
-  delete atomicMsg.res;
+  // Foreground projection owns the original HTTP response through ACK/readback.
+  if (ctx.reconcile === true) {
+    delete atomicMsg.req;
+    delete atomicMsg.res;
+  }
   delete atomicMsg.statusCode;
   return [null, null, null, null, atomicMsg];
 };
@@ -2195,8 +2198,11 @@ if (ctx.step === "managed_sale_binding_confirm") {
   delete atomicMsg.headers;
   delete atomicMsg.url;
   delete atomicMsg.method;
-  delete atomicMsg.req;
-  delete atomicMsg.res;
+  // Foreground projection owns the original HTTP response through ACK/readback.
+  if (ctx.reconcile === true) {
+    delete atomicMsg.req;
+    delete atomicMsg.res;
+  }
   delete atomicMsg.statusCode;
   return [null, null, null, null, atomicMsg];
 }
