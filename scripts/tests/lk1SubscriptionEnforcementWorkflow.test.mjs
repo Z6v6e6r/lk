@@ -203,6 +203,46 @@ test("binary asset exceptions are exact and content-addressed", async () => {
   )].map((match) => [match[1].slice(0, -1), match[2]]);
   const expectedEntries = [
     [
+      "src/assets/station-backgrounds/seligerskaya.webp",
+      "79627cd04c86e77000f486feedceb29a57027f8e7ebb484df8f491fde76c5ad8",
+    ],
+    [
+      "src/assets/station-backgrounds/skolkovo.webp",
+      "d0164b69e6b005f00043e338b92f1bdfbdbf95b15eab36babf1db018af3ea03f",
+    ],
+    [
+      "src/assets/station-backgrounds/terekhovo.webp",
+      "ddc11bec4e77c8f93976d779660f7e14fa028b3d0a28531cc5dbf9571e63d2d6",
+    ],
+    [
+      "src/assets/station-backgrounds/nagatinskaya.webp",
+      "6dd383412506bceba372cc06dd0cc6ae3e112d117fd4f08ec2cf8a9958bd9df1",
+    ],
+    [
+      "src/assets/station-backgrounds/nagatinskaya-premium.webp",
+      "73a502b934521dc605b99166494d42e12fbb5f8e57c1eeb4910866166115b645",
+    ],
+    [
+      "src/assets/station-backgrounds/piter.webp",
+      "dc4e107cd5f3424536c351bad08dbf7a52d0e99ff30c04026d3f5a59a73af58b",
+    ],
+    [
+      "src/assets/station-backgrounds/sochi.webp",
+      "5a8bdc339e54ca01194bed44c8274d57e639b058d6e2f653318d04e83c231fe2",
+    ],
+    [
+      "src/assets/station-backgrounds/kotelniki.webp",
+      "ce671e8edb6da0ac28afed6c968fe5f67ea2e13a3612ff47377e44463966f5a1",
+    ],
+    [
+      "src/assets/station-backgrounds/zavidovo.webp",
+      "84c263052eb3c10410d53bd3e4b264eac525d9bcb25a2c3fe6c1ee6d136eec71",
+    ],
+    [
+      "src/assets/station-backgrounds/kolomenskoe.webp",
+      "4234d832dd51883f6428c5a293ca711d648e740ac31375d82655d03b27cb1cca",
+    ],
+    [
       "src/assets/yasenevo-v2/station_construction_panorama.webp",
       "57e55fa931dd251cd4d2d7bb8366904ae290fd71a60450c3be559a7c1aff13f2",
     ],

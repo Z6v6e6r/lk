@@ -2,6 +2,8 @@ import { BALANCE, STATIONS } from './campaign';
 import { BALL_RADIUS, HEIGHT, landingHint, WIDTH } from './engine';
 import type { Game, Platform } from './engine';
 import type { YasenevoArt } from './yasenevo-assets';
+import type { StationPainting } from './station-art';
+import { stationScenery } from './station-scenery';
 import { yasenevoBall, yasenevoCage, yasenevoPlatform, yasenevoScenery, yasenevoSprite } from './yasenevo-render';
 
 const INK = '#23214d';
@@ -148,13 +150,17 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
   ctx.restore();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null) {
+export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null, stationPainting: StationPainting | null = null) {
   // Preserve physics proportions, including narrow embeds and landscape phones.
   const scale = Math.min(width / WIDTH, height / HEIGHT);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale,
     dpr * (width - WIDTH * scale) / 2, dpr * (height - HEIGHT * scale) / 2);
   const art = game.campaign?.station === 0 ? yasenevoArt : null;
-  if (art) yasenevoScenery(ctx, game, art, Math.max(0, (height / scale - HEIGHT) / 2)); else scenery(ctx, game);
+  const painting = game.campaign && stationPainting?.station === game.campaign.station ? stationPainting : null;
+  const overscanY = Math.max(0, (height / scale - HEIGHT) / 2);
+  if (art) yasenevoScenery(ctx, game, art, overscanY);
+  else if (painting) stationScenery(ctx, game, painting, overscanY);
+  else scenery(ctx, game);
   if (!art) campaignObjects(ctx, game, reducedMotion);
   ctx.save();
   if (art) { ctx.beginPath(); ctx.rect(0, 0, WIDTH, HEIGHT); ctx.clip(); }
@@ -173,7 +179,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
     ctx.beginPath(); ctx.moveTo(x - ball.vx * 0.04, y + 32); ctx.quadraticCurveTo(x - ball.vx * 0.08, y + 14, x, y + 8); ctx.stroke(); ctx.restore();
   }
   ctx.save(); ctx.translate(x, y); if (!reducedMotion) ctx.rotate(game.time * 2.5);
-  ctx.shadowColor = '#8ba53166'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.shadowColor = painting ? '#0b1b3c99' : '#8ba53166'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
   const gradient = ctx.createRadialGradient(-4, -5, 1, 0, 0, BALL_RADIUS);
   gradient.addColorStop(0, '#f5ff98'); gradient.addColorStop(0.6, '#d5f347'); gradient.addColorStop(1, '#99bc1e');
   ctx.fillStyle = gradient; ctx.strokeStyle = '#7e9d21'; ctx.lineWidth = 1;

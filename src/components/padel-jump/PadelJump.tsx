@@ -9,6 +9,8 @@ import type { JournalEvent } from './session';
 import { drawGame } from './render';
 import { loadYasenevoArt } from './yasenevo-assets';
 import type { YasenevoArt } from './yasenevo-assets';
+import { loadStationPainting } from './station-art';
+import type { StationPainting } from './station-art';
 import { createJumpStarter } from './start';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import type { TiltStatus } from './tilt';
@@ -40,6 +42,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const attempt = useRef(partResult(initial.progress, initial.progress.current.station, initial.progress.current.section).failures + 1);
   const reduced = useRef(false);
   const yasenevoArt = useRef<YasenevoArt | null>(null);
+  const stationPainting = useRef<StationPainting | null>(null);
   const [visit] = useState(() => createVisit(globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)));
   const [view, setView] = useState(() => snapshot(initial.game));
   const [saved, setSaved] = useState(() => structuredClone(initial.progress));
@@ -51,9 +54,10 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const starter = useRef<ReturnType<typeof createJumpStarter> | null>(null);
 
   useEffect(() => {
-    if (view.station !== 0) return;
     let active = true;
-    void loadYasenevoArt().then(art => { if (active) yasenevoArt.current = art; });
+    stationPainting.current = null;
+    if (view.station === 0) void loadYasenevoArt().then(art => { if (active) yasenevoArt.current = art; });
+    else void loadStationPainting(view.station).then(art => { if (active) stationPainting.current = art; });
     return () => { active = false; };
   }, [view.station]);
 
@@ -145,7 +149,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     const activeInputs = inputs.current, currentProgress = progress.current, element = canvas.current, ctx = element?.getContext('2d');
     if (!element || !ctx) { setRenderError(true); return; }
     let width = 420, height = 640, dpr = 1;
-    const draw = () => drawGame(ctx, game.current, width, height, dpr, reduced.current || !progress.current.settings.effects, yasenevoArt.current);
+    const draw = () => drawGame(ctx, game.current, width, height, dpr, reduced.current || !progress.current.settings.effects, yasenevoArt.current, stationPainting.current);
     const resize = () => {
       const rect = element.getBoundingClientRect(); width = Math.max(1, rect.width); height = Math.max(1, rect.height);
       dpr = Math.min(window.devicePixelRatio || 1, 2); element.width = Math.round(width * dpr); element.height = Math.round(height * dpr); draw();
