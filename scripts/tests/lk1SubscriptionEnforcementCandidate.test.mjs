@@ -14,6 +14,27 @@ import { PATRIOTS_PREIMAGE } from "../patch_live_lk1_patriots_friendship.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
+// Preserve frozen release contracts while separately pinning observer-only sources.
+const observerPins = {
+  'scripts/nodered_games_nodes/fn_patch.js': ['04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b', 'const isObj ='],
+  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['e5d43710933ddb90768b7b495fd3a2a19bda1dd53cabba894b430631b1ed4e2f', 'const VIVA_API_BASE'],
+  'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js': ['d5606ece01b42d4275e5d53b7a40fb5fb78be015b92d9675d41ae8f984226e16', 'const TOKEN_URL'],
+};
+function frozenBusinessHash(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  const pin = observerPins[file];
+  if (!pin) return sha256(text);
+  assert.equal(sha256(text), pin[0], file);
+  const business = text.slice(text.indexOf(pin[1]))
+    .replace('  lkDiagnostic({ code: details?.code, httpStatus: statusCode, outcome: "refused" });\n', '')
+    .replace('  lkDiagnostic({ code: "OUTCOME_UNKNOWN", outcome: "outcome_unknown" });\n', '')
+    .replace('  lkDiagnostic({ code, httpStatus: statusCode, outcome: "refused" });\n', '');
+  const hash = sha256(business);
+  assert.ok(text.includes(`sourceHash: "${hash}"`), file);
+  assert.notEqual(hash, pin[0], file);
+  return hash;
+}
+
 function syntheticContract() {
   const flow = [
     { id: "games", type: "tab", label: "LK Games", disabled: false },
@@ -244,7 +265,7 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
     ],
   );
   for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
-    const actualSourceSha256 = sha256(fs.readFileSync(target.sourceFile));
+    const actualSourceSha256 = frozenBusinessHash(target.sourceFile);
     const amendment = amendments.get(target.id);
     if (!amendment) {
       assert.equal(actualSourceSha256, target.candidateSha256, target.id);
@@ -274,7 +295,7 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
   }
   assert.equal(LK1_ENFORCEMENT_CONTRACT.composedSources.length, 8);
   for (const source of LK1_ENFORCEMENT_CONTRACT.composedSources) {
-    assert.equal(sha256(fs.readFileSync(source.sourceFile)), source.candidateSha256, source.id);
+    assert.equal(frozenBusinessHash(source.sourceFile), source.candidateSha256, source.id);
   }
 });
 

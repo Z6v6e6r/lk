@@ -666,7 +666,8 @@
         "amount_ceiling",
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
-        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "PRICE_PREVIEW_UNAVAILABLE"
       ]
     },
     "reason": {
@@ -909,6 +910,7 @@
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
         "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "PRICE_PREVIEW_UNAVAILABLE",
         "target_missing",
         "target_upstream_error",
         "target_identity",
@@ -1161,7 +1163,8 @@
         "amount_ceiling",
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
-        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "PRICE_PREVIEW_UNAVAILABLE"
       ]
     },
     "transportCode1": {
@@ -1403,7 +1406,8 @@
         "amount_ceiling",
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
-        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "PRICE_PREVIEW_UNAVAILABLE"
       ]
     },
     "transportCode2": {
@@ -1645,7 +1649,8 @@
         "amount_ceiling",
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
-        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "PRICE_PREVIEW_UNAVAILABLE"
       ]
     },
     "transportCode3": {
@@ -1887,7 +1892,8 @@
         "amount_ceiling",
         "target_not_future",
         "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
-        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "PRICE_PREVIEW_UNAVAILABLE"
       ]
     },
     "responseKind": {

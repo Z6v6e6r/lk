@@ -4,19 +4,25 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { composeSubscriptionCalculationRepair } from '../patch_live_subscription_calculation_repair.mjs';
 import { patchTopokratyReclaimPreviewBody } from '../patch_live_lk1_topokraty_rejection_reclaim_hotfix.mjs';
+import { createDiagnostics } from '../diagnostics/runtime.mjs';
 
 const source = name => fs.readFileSync(new URL(`../nodered_subscription_price_preview_nodes/${name}.js`, import.meta.url), 'utf8');
 test('runtime catch preserves only a safe stage and final logs no credentials or provider messages', () => {
   const warnings = [];
+  const events = [];
+  const observer = createDiagnostics({ sink: event => events.push(event) });
   const message = { _msgid: 'fixture-correlation', error: { message: 'fixture-sensitive-provider-error' },
     _subscriptionPricePreview: { step: 'metadata' } };
   new Function('msg', source('error'))(message);
-  new Function('msg', 'node', source('final'))(message, { warn: value => warnings.push(value) });
+  new Function('msg', 'node', 'global', source('final'))(message, { warn: value => warnings.push(value) }, { get: () => observer });
   assert.equal(message.statusCode, 503);
   assert.deepEqual(message.payload, { error: { code: 'PRICE_PREVIEW_UNAVAILABLE' } });
-  assert.deepEqual(JSON.parse(warnings[0]), { event: 'subscription_price_preview_failed',
-    code: 'PRICE_PREVIEW_UNAVAILABLE', step: 'metadata', correlationId: 'fixture-correlation' });
-  assert.ok(!warnings[0].includes('fixture-sensitive'));
+  assert.deepEqual(warnings, []);
+  const refusal = events.find(event => event.outcome === 'refused');
+  assert.equal(refusal.code, 'PRICE_PREVIEW_UNAVAILABLE');
+  assert.equal(refusal.operationStage, 'metadata');
+  assert.ok(!JSON.stringify(events).includes('fixture-sensitive'));
+  assert.ok(!JSON.stringify(events).includes('fixture-correlation'));
 });
 
 test('the focused composer refuses an unreviewed preimage before generation', () => {
@@ -25,16 +31,22 @@ test('the focused composer refuses an unreviewed preimage before generation', ()
 
 test('event failure log allowlist excludes raw provider details and invalid identifiers', () => {
   const warnings = [];
+  const events = [];
+  const observer = createDiagnostics({ sink: event => events.push(event) });
   const message = { _msgid: 'fixture-correlation', _subscriptionPricePreview: {
     done: true, statusCode: 503, error: 'LK1_EVENT_TARIFF_UNVERIFIED', step: 'groupTariff',
     exerciseId: 'fixture-sensitive-identity', tariffCount: -1,
     errorDetails: { reason: 'fixture-sensitive-provider-message', observed: { token: 'fixture-sensitive-token' } },
   } };
-  new Function('msg', 'node', source('final'))(message, { warn: text => warnings.push(text) });
-  assert.deepEqual(JSON.parse(warnings[0]), { event: 'subscription_price_preview_failed',
-    code: 'LK1_EVENT_TARIFF_UNVERIFIED', step: 'groupTariff', exerciseId: null,
-    tariffCount: null, reason: 'LK1_EVENT_TARIFF_UNVERIFIED', correlationId: 'fixture-correlation' });
-  assert.ok(!warnings[0].includes('fixture-sensitive'));
+  new Function('msg', 'node', 'global', source('final'))(message, { warn: text => warnings.push(text) }, { get: () => observer });
+  assert.deepEqual(warnings, []);
+  const refusal = events.find(event => event.outcome === 'refused');
+  assert.equal(refusal.code, 'LK1_EVENT_TARIFF_UNVERIFIED');
+  assert.equal(refusal.operationStage, 'groupTariff');
+  assert.equal(refusal.reason, 'UNKNOWN');
+  assert.equal(refusal.tariffCount, undefined);
+  assert.equal(refusal.exerciseId, undefined);
+  assert.ok(!JSON.stringify(events).includes('fixture-sensitive'));
 });
 
 const fixture = process.env.LK_CALCULATION_REPAIR_FLOW_FIXTURE;
