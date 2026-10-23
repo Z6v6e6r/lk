@@ -59,13 +59,16 @@ function run(payload, gameId = 'game-42') {
   return new Function('msg', 'Date', source())(msg, FixedDate);
 }
 
-test('tracked patch source is a pinned candidate after the exact verified live function', () => {
-  assert.equal(crypto.createHash('sha256').update(source()).digest('hex'), PATCH_CANDIDATE_SHA256);
+test('tracked diagnostic candidate preserves the pinned business preimage without widening the release contract', () => {
+  const current = source();
+  assert.equal(sha256(current), '04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b');
+  assert.equal(sha256(current.slice(current.indexOf('const isObj ='))), PATCH_CANDIDATE_SHA256);
   assert.equal(GAMES_PATCH_CONTRACT.wholeFlowSha256, LIVE_FLOW_SHA256);
   assert.equal(GAMES_PATCH_CONTRACT.nodeCount, 4762);
   assert.equal(GAMES_PATCH_CONTRACT.httpRouteCount, 215);
   assert.equal(GAMES_PATCH_CONTRACT.target.preimageSha256, LIVE_PATCH_SHA256);
   assert.equal(GAMES_PATCH_CONTRACT.target.sourceSha256, PATCH_CANDIDATE_SHA256);
+  assert.notEqual(GAMES_PATCH_CONTRACT.target.sourceSha256, sha256(current));
 });
 
 test('both PATCH routes remain the only verified production inputs', () => {

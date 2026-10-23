@@ -1516,9 +1516,14 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
   const candidateOnePath = path.join(root, "candidate-one.json");
   const candidateTwoPath = path.join(root, "candidate-two.json");
   const contractPath = path.join(root, "contract.json");
-  const splitRouterSource = fs.readFileSync(
+  const diagnosticRouterSource = fs.readFileSync(
     "scripts/nodered_games_nodes/fn_split_router.js", "utf8",
-  )
+  );
+  assert.equal(sha256(diagnosticRouterSource), "5c436951dfa273e5fb9753c144d242ec06c6b95aad957aebb9773d7f69262bfb");
+  const businessRouterSource = diagnosticRouterSource.slice(diagnosticRouterSource.indexOf("const ADMIN_API"))
+    .replace('  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });\n', '');
+  assert.equal(sha256(businessRouterSource), "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5");
+  const splitRouterSource = businessRouterSource
     .replace("  ctx.operationId = operationId;\n", "")
     .replace("  const settlementState = toPayMinor > 0 ? \"PAYMENT_REQUIRED\" : \"CONFIRMED\";\n", "")
     .replace("    gameId: toStr(ctx.gameId) || null,\n", "")

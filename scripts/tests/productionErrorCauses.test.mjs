@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
+import { createDiagnostics } from '../diagnostics/runtime.mjs';
 
 const read = path => fs.readFileSync(path, 'utf8');
 const authSource = read('scripts/nodered_auth_consent_nodes/fn_auth_consent_build_upsert.js');
@@ -101,11 +102,17 @@ test('event target diagnostics identify every guard without weakening the refusa
       assert.equal(ctx.errorDetails.upstreamStatus, status);
       assert.equal(ctx.error, `${category === 'TOURNAMENT' ? 'TOURNAMENT' : 'GROUP'}_DISCOUNT_TARGET_UNRESOLVED`);
       const warnings = [];
-      new Function('msg', 'node', final)(msg, { warn: x => warnings.push(JSON.parse(x)) });
+      const diagnosticEvents = [];
+      const observer = createDiagnostics({ sink: event => diagnosticEvents.push(event) });
+      new Function('msg', 'node', 'global', final)(msg, { warn: x => warnings.push(JSON.parse(x)) }, { get: () => observer });
       assert.equal(msg.statusCode, 503);
-      assert.equal(warnings[0].reason, reason);
-      assert.equal(warnings[0].upstreamStatus, status);
-      assert.ok(!JSON.stringify(warnings).includes('fixture-room'));
+      assert.deepEqual(warnings, []);
+      const refusal = diagnosticEvents.find(event => event.outcome === 'refused');
+      assert.equal(refusal.reason, reason);
+      assert.equal(refusal.upstreamStatus, status);
+      for (const privateValue of ['fixture-room', 'fixture-event', 'fixture-studio']) {
+        assert.ok(!JSON.stringify(diagnosticEvents).includes(privateValue));
+      }
     }
   }
   const valid = exercisePreview();

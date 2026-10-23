@@ -17,6 +17,8 @@ import { invalidateSubscriptionSnapshot, readSubscriptionSnapshot, requestChange
 import { sanitizeSubscriptionSnapshot, sanitizeSubscriptionName } from "./subscriptionSnapshotData";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
+import { UUID } from "./errorDiagnosticsCore.mjs";
+import { abortCause, diagnosticId, routeTemplate } from "./errorDiagnostics";
 import type {
   BookingCancellationAction,
   BookingCancellationOptionsResponse,
@@ -402,19 +404,6 @@ function toBoolean(value: unknown): boolean | null {
   return null;
 }
 
-function summarizeApiErrorPayload(payload: unknown): string | null {
-  if (payload === null || payload === undefined) return null;
-  if (typeof payload === "string") {
-    const text = payload.trim();
-    return text.length > 400 ? `${text.slice(0, 400)}...` : text;
-  }
-  try {
-    const serialized = JSON.stringify(payload);
-    return serialized.length > 400 ? `${serialized.slice(0, 400)}...` : serialized;
-  } catch {
-    return null;
-  }
-}
 
 function pickNumeric(source: Record<string, unknown>, keys: string[]): number | null {
   for (const key of keys) {
@@ -4080,6 +4069,7 @@ export interface ApiResult<T> {
 }
 
 export interface RequestOptions extends RequestInit {
+  diagnosticContext?: { logicalOperation: string; attempt: number };
   auth?: boolean;
   retries?: number;
   baseUrl?: string;
@@ -4164,6 +4154,7 @@ async function rawRequest<T>(
 ): Promise<ApiResult<T>> {
   const {
     auth = false,
+    diagnosticContext,
     baseUrl = API_BASE,
     retries: _retries,
     cacheTtlMs: _cacheTtlMs,
@@ -4202,6 +4193,16 @@ async function rawRequest<T>(
   const changesSubscriptions = requestChangesSubscriptions(fullUrl, fetchOptions.method, fetchOptions.body);
   if (changesSubscriptions) invalidateSubscriptionSnapshot();
   let response: Response;
+  // Correlation is diagnostic only; never sent as auth/idempotency or forwarded to a provider.
+  const requestStarted = performance.now();
+  let diagnosticRequestId: string | undefined;
+  try { diagnosticRequestId = diagnosticId(); } catch { /* unavailable crypto -> UNKNOWN */ }
+  const diagnosticAttempt = diagnosticContext ? ++diagnosticContext.attempt : 1;
+  let diagnosticRoute = "UNKNOWN";
+  try { diagnosticRoute = routeTemplate(new URL(fullUrl, window.location.href).pathname); } catch { /* unknown */ }
+  const requestDiagnostic = () => ({ requestId: diagnosticRequestId, logicalOperation: diagnosticContext?.logicalOperation,
+    attempt: diagnosticAttempt, routeTemplate: diagnosticRoute, method: fetchOptions.method ?? "GET",
+    durationMs: performance.now() - requestStarted, abortCause: abortCause(fetchOptions.signal), stage: "api_request" });
 
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
@@ -4213,8 +4214,7 @@ async function rawRequest<T>(
         "api.request_network_error",
         err,
         {
-          url: fullUrl,
-          method: fetchOptions.method ?? "GET",
+          ...requestDiagnostic(),
         },
         { handled: true, severity: "error" },
       );
@@ -4259,10 +4259,10 @@ async function rawRequest<T>(
       "api.request_http_error",
       new Error(message),
       {
-        url: fullUrl,
-        method: fetchOptions.method ?? "GET",
-        status,
-        response: summarizeApiErrorPayload(payload),
+        ...requestDiagnostic(),
+        httpStatus: status,
+        serverRequestId: response.headers.get("X-LK-Request-ID"),
+        serverLinked: UUID.test(response.headers.get("X-LK-Request-ID") ?? "") && /(?:^|,)\s*no-store(?:,|$)/i.test(response.headers.get("Cache-Control") ?? ""),
       },
       { handled: true, severity: status >= 500 ? "error" : "warning" },
     );
@@ -4285,6 +4285,7 @@ export async function request<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
+  try { options = { ...options, diagnosticContext: { logicalOperation: diagnosticId(), attempt: 0 } }; } catch { /* no crypto */ }
   const cacheConfig = resolveRequestCacheConfig(url, options);
 
   if (cacheConfig) {
@@ -10292,6 +10293,8 @@ export async function apiFetchSubscriptionPricePreview(
   subscriptionIds: string[],
   signal: AbortSignal,
 ): Promise<ApiResult<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }>> {
+  let diagnosticContext: RequestOptions["diagnosticContext"];
+  try { diagnosticContext = { logicalOperation: diagnosticId(), attempt: 0 }; } catch { /* unknown */ }
   const candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
   let result: ApiResult<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }> = {
     data: null, error: { status: null, message: "Не удалось проверить условия подписок" }, status: null,
@@ -10299,7 +10302,7 @@ export async function apiFetchSubscriptionPricePreview(
   for (const baseUrl of candidates.length ? candidates : [getServ2Origin()]) {
     if (signal.aborted) break;
     result = await rawRequest<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }>("/lk/subscriptions/game-price-preview", {
-      method: "POST", auth: true, baseUrl, signal, body: JSON.stringify({ target, subscriptionIds }),
+      method: "POST", auth: true, baseUrl, signal, diagnosticContext, body: JSON.stringify({ target, subscriptionIds }),
     });
     if (signal.aborted || result.status !== null) break;
   }

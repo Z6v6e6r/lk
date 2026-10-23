@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "auth_verify", { sourceHash: "29cfbd1854788b26632f348f20ea10e21f52481073b397dbeef49a66d03a9981", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+try { if (typeof global !== "undefined") global.get("lkDiagnostics")?.upstream(msg, "auth_verify"); } catch { /* no-throw */ }
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -21,10 +30,11 @@ const responseType = !contentType ? "missing"
     : /^text\/html(?:;|$)/.test(contentType) ? "html"
       : /^text\//.test(contentType) ? "text" : "other";
 const fail = (statusCode, error, code, reason) => {
+  lkDiagnostic({ code, reason, httpStatus: statusCode, upstreamStatus: safeUpstreamStatus, responseKind: typeof msg.payload === "string" ? "text" : "object", subjectPresent: typeof msg.payload?.sub === "string" });
   // Fixed enums only: never log the bearer, claims, headers, body or subject.
   if (typeof node !== "undefined" && typeof node?.warn === "function") {
-    node.warn(JSON.stringify({ event: "auth_consent_verification_failed", code, reason,
-      upstreamStatus: safeUpstreamStatus, responseType, retryable: statusCode === 503 }));
+    try { node.warn(JSON.stringify({ event: "auth_consent_verification_failed", code, reason,
+      upstreamStatus: safeUpstreamStatus, responseType, retryable: statusCode === 503 })); } catch { /* no-throw */ }
   }
   msg.statusCode = statusCode;
   msg.headers = {

@@ -1,3 +1,11 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    global.get("lkDiagnostics")?.observe(msg, "confirm", { sourceHash: "a956766184f16afb4b6185fd5956776ba7a98c00140a44f207e4b470ebccf324", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const KEY_TOKEN = "vivacrm_access_token";
@@ -101,6 +109,7 @@ const findExactTransactionRecord = (payload, expectedTransactionId) => {
   return { record: matches[0], reason: null };
 };
 const fail = (ctx, statusCode, code, error, details = null) => {
+  lkDiagnostic({ code, httpStatus: statusCode, outcome: "refused" });
   const response = Object.assign({}, msg, {
     statusCode,
     headers: { "Content-Type": "application/json; charset=utf-8" },

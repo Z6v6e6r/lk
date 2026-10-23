@@ -1,3 +1,11 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const END_USER_API = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const CUP_API_DEFAULT = "https://padlhub.su/api";
@@ -307,6 +315,7 @@ const extractConflictExerciseId = (value, ctx) => {
 };
 
 const fail = (status, error, details) => {
+  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });
   msg.statusCode = status;
   msg.headers = {
     "Content-Type": "application/json; charset=utf-8",

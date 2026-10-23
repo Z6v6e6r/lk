@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "purchase_limit", { sourceHash: "0d642886d06a7e04c9c9dfc8c64015cf1f0ced778d1ddab53368138a5770446d", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const DEFAULT_HTTP_TIMEOUT_MS = 20000;
 const TOTAL_LIMIT = 1;
@@ -83,6 +92,7 @@ const isFinalized = (row) => {
 };
 
 const fail = (status, error, details) => {
+  lkDiagnostic({ code: "UPSTREAM_REFUSED", httpStatus: status, reason: details?.code, outcome: "refused" });
   const response = Object.assign({}, msg, {
     statusCode: status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
