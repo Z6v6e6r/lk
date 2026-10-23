@@ -5,12 +5,24 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { preparePatch } from '../prepare_max_outbox_receipts.mjs';
 const require = createRequire(import.meta.url);
-const register = require('../../node-red/max-outbox-adapter/max-outbox-send.cjs');
+const register = require('../../node-red/max-outbox-adapter/max-outbox-send.js');
 const { deliver } = register;
 const command = () => ({ id: 'synthetic-command', leaseToken: randomUUID(), text: 'synthetic text',
   targetExternalChatId: 'chat-fixture', leasedUntil: new Date(Date.now() + 60000).toISOString() });
 const provider = (status, body, headers) => new Response(JSON.stringify(body), { status, headers });
 const run = (file, msg) => new Function('msg', 'env', fs.readFileSync(file, 'utf8'))(msg, { get: () => null });
+
+test('adapter package maps a CommonJS .js runtime to its sibling editor template', () => {
+  const root = new URL('../../node-red/max-outbox-adapter/', import.meta.url);
+  const manifest = JSON.parse(fs.readFileSync(new URL('package.json', root), 'utf8'));
+  const runtime = manifest['node-red'].nodes['max-outbox-send'];
+  assert.equal(manifest.type, 'commonjs');
+  assert.equal(runtime, 'max-outbox-send.js');
+  assert.equal(typeof register, 'function');
+  const template = fs.readFileSync(new URL(runtime.replace(/\.js$/, '.html'), root), 'utf8');
+  assert.match(template, /data-template-name=["']max-outbox-send/);
+  assert.equal(fs.existsSync(new URL('max-outbox-send.cjs', root)), false);
+});
 
 test('one provider accepted response produces only ACK receipt; no body/target/token export', async () => {
   const c = command(); let calls = 0;

@@ -59,11 +59,29 @@ no provider call. A process/node restart loses local cache; backend atomic claim
 and the no-reclaim policy remain the persistent boundary. Do not restart old
 pollers as rollback or strip lease fields to bypass fencing.
 
+## Runtime/editor packaging
+
+The package explicitly declares `type: commonjs` and maps `max-outbox-send` to
+`max-outbox-send.js`. Its sibling `max-outbox-send.html` is the editor definition.
+Node-RED4.0.9 derives the template with a `.js` suffix replacement: `.cjs` registers
+at runtime but incorrectly exposes the JavaScript file as the editor template.
+The package boundary preserves CommonJS despite the parent repository's ESM type.
+
 ## Tests
 
 node --test scripts/tests/maxOutboxReceipts.test.mjs scripts/tests/maxSupportBridge.nodered.test.ts
 
 Transport is fully mocked: success,403/429/5xx/network,privacy,oversized/broken body,
 invalid input,user fallback,abort/late completion,node close,duplicate inputs,output
-failure,receipt fencing,graph drift. Tests load the runtime CJS registration with a
-fake RED; actual target Node-RED loading is a staging acceptance gap, not claimed PASS.
+failure,receipt fencing,graph drift and the package mapping/CommonJS boundary.
+
+The dedicated editor regression uses actual Node-RED4.0.9 with the editor enabled:
+
+NODE_RED_TEST_PACKAGE=/absolute/isolated/node_modules/node-red node --test scripts/tests/maxOutboxEditorLoader.test.mjs
+
+CI installs that pinned test runtime outside this repository with lifecycle scripts
+disabled; the adapter has no new runtime dependency. The test asserts runtime
+registration plus editor HTML/help presence and absence of runtime-source leakage.
+It uses a temporary user directory, no listening server/installed flow/credentials,
+and blocks provider fetches. Local paired Node-RED/Nest/disposable Mongo acceptance
+is separate from external installed-staging and future authorized rollout checks.
