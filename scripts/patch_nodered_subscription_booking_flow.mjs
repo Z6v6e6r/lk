@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { assertNoInstalledTrialGateOverwrite } from "./lib/trialGroupSources.mjs";
+import { buildOwnerCapabilityGetNode, OWNER_CAPABILITY_GET_ID } from "./lib/subscriptionBookingOwnerProbe.mjs";
 import {
   matchesManagedSubscriptionRouterTopology,
   resolveManagedSubscriptionRouterContract,
@@ -41,6 +42,7 @@ const IDS = {
   catch: "lk_subscription_booking_catch_20260804",
   mongoError: "lk_subscription_booking_mongo_error_20260804",
   optionsIn: "lk_subscription_booking_options_in_20260804",
+  ownerProbeGet: OWNER_CAPABILITY_GET_ID,
   options: "lk_subscription_booking_options_20260804",
   optionsResponse: "lk_subscription_booking_options_response_20260804",
   debug: "lk_subscription_booking_debug_20260804",
@@ -214,6 +216,7 @@ function buildManagedNodes(tabId, mongoClientId) {
       tabId, IDS.options, "Subscription booking CORS", readFunction("fn_subscription_booking_options.js"),
       2, 500, 5310, [[IDS.optionsResponse], [IDS.router]],
     ),
+    buildOwnerCapabilityGetNode(tabId),
     {
       id: IDS.optionsResponse, type: "http response", z: tabId, name: "", statusCode: "", headers: {},
       x: 800, y: 5310, wires: [],
@@ -235,7 +238,7 @@ function validateCandidate(flow, tabId, mongoClientId) {
       }
     }
   }
-  for (const [method, url] of [["post", "/lk/subscription-bookings"], ["options", "/lk/subscription-bookings"]]) {
+  for (const [method, url] of [["post", "/lk/subscription-bookings"], ["get", "/lk/subscription-bookings"], ["options", "/lk/subscription-bookings"]]) {
     const count = flow.filter((node) => node.type === "http in" && node.method === method && node.url === url).length;
     if (count !== 1) throw new Error(`Expected one ${method.toUpperCase()} ${url}, found ${count}`);
   }
@@ -251,10 +254,13 @@ function validateCandidate(flow, tabId, mongoClientId) {
   }
   const options = flow.find((node) => node.id === IDS.options);
   const ownerRouter = flow.find((node) => node.id === IDS.router);
+  const probe = flow.find((node) => node.id === IDS.ownerProbeGet);
   if (options?.outputs !== 2
     || JSON.stringify(options.wires) !== JSON.stringify([[IDS.optionsResponse], [IDS.router]])
     || options.func !== readFunction("fn_subscription_booking_options.js")
-    || ownerRouter?.func !== readOwnerRouter()) {
+    || ownerRouter?.func !== readOwnerRouter()
+    || options.z !== ownerRouter.z || options.z !== tabId
+    || JSON.stringify(probe) !== JSON.stringify(buildOwnerCapabilityGetNode(tabId))) {
     throw new Error("Canonical owner capability probe must use the exact reviewed functions and topology");
   }
 }
@@ -281,7 +287,7 @@ const mongoClientIds = Array.from(new Set(flow
 if (mongoClientIds.length !== 1) throw new Error(`Expected one LK Games Mongo client, found ${mongoClientIds.length}`);
 const mongoClientId = mongoClientIds[0];
 const managedIds = new Set(Object.values(IDS));
-const managedRoutes = new Set(["post:/lk/subscription-bookings", "options:/lk/subscription-bookings"]);
+const managedRoutes = new Set(["post:/lk/subscription-bookings", "get:/lk/subscription-bookings", "options:/lk/subscription-bookings"]);
 const unmanagedDuplicate = flow.some((node) => (
   !managedIds.has(node.id)
   && node.type === "http in"
