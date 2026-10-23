@@ -72,10 +72,10 @@ test("frontend result confirm path does not call onboarding level save API or cl
   assert.doesNotMatch(gamesPageSource, /handleRetryMatchResultVivaSync/);
 });
 
-test("frontend freezes starting lineup after the first completed set and keeps next-set lineup as a separate block", () => {
+test("frontend keeps the starting lineup repairable until submission and next-set lineup as a separate block", () => {
   assert.match(
     gamesPageSource,
-    /const isEditableStartPairing = canEditMatchResult\s*&& index === 0\s*&& detailsCompletedMatchResultSets\.length === 0;/,
+    /const isEditableStartPairing = canEditMatchResult\s*&& index === 0;/,
   );
   assert.match(
     gamesPageSource,

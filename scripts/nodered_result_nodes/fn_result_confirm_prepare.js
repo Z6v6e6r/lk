@@ -34,19 +34,21 @@ const trustedActor = (msg._resultActor && typeof msg._resultActor === 'object')
 const actorHint = (body.actor && typeof body.actor === 'object')
   ? body.actor
   : (body.submittedBy && typeof body.submittedBy === 'object' ? body.submittedBy : {});
-const actor = {
+const actor = trustedActor ? {
+  id: toStr(trustedActor.id),
+  phoneNorm: normPhone(trustedActor.phoneNorm || trustedActor.phone),
+  name: toStr(trustedActor.name),
+  verified: trustedActor.verified === true,
+} : {
   id: toStr(
-    trustedActor?.id
-    || actorHint.id
+    actorHint.id
     || actorHint.clientId
     || actorHint.uuid
     || actorHint.userId
     || actorHint.playerId,
   ),
   phoneNorm: normPhone(
-    trustedActor?.phoneNorm
-    || trustedActor?.phone
-    || actorHint.phoneNorm
+    actorHint.phoneNorm
     || actorHint.phone
     || body.phone
     || body.confirmerPhone
@@ -54,8 +56,8 @@ const actor = {
     || body.playerPhone
     || msg.req?.query?.phone,
   ),
-  name: toStr(trustedActor?.name || actorHint.name || actorHint.fullName || actorHint.title),
-  verified: trustedActor?.verified === true,
+  name: toStr(actorHint.name || actorHint.fullName || actorHint.title),
+  verified: false,
 };
 const phone = actor.phoneNorm;
 if (!actor.id && !phone) {
