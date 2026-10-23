@@ -4,8 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test:booked-operation-receiver": "node --test scripts/tests/bookedOperationReceiver.nodered.test.mjs scripts/tests/bookedOperationReceiverExecution.test.mjs scripts/tests/bookedOperationReceiverPatch.test.mjs scripts/tests/bookedOperationReceiverRuntime.test.mjs scripts/tests/bookedOperationOwnerCompatibility.test.mjs",
-    "test:community-types": "node --experimental-strip-types --test scripts/tests/communityTypes.test.ts",
+    "test:community-types": "node --experimental-strip-types --test scripts/tests/communityTypes.test.ts scripts/tests/eventCommunity.test.ts",
     "dev": "vite",
     "build": "npm run build:prod && npm run build:dev:bundles",
     "build:prod": "node scripts/assert-build-env.mjs production && tsc -b && vite build && vite build --config vite.config.games.ts && vite build --config vite.config.tournaments.ts && vite build --config vite.config.tournament-signup.ts && vite build --config vite.config.group-schedule.ts && vite build --config vite.config.atlanty-schedule.ts && vite build --config vite.config.padel-day-schedule.ts && vite build --config vite.config.tournament-subscription.ts && vite build --config vite.config.tournament-subscription-referral.ts && vite build --config vite.config.onboarding.ts && vite build --config vite.config.levels-info.ts && vite build --config vite.config.communities.ts && vite build --config vite.config.academy.ts && node scripts/write-release.mjs dist release.json && node scripts/write-release.mjs dist release-ffc-academy.json",
@@ -198,6 +197,7 @@
     "test:community-rating": "node --experimental-strip-types --test scripts/tests/communityRating.calculations.test.ts scripts/tests/communityRating.facts.test.ts scripts/tests/communityRating.aggregates.test.ts scripts/tests/communityRating.persistence.test.ts scripts/tests/communityRating.recalculation.test.ts scripts/tests/communityRating.noderedFlow.test.ts scripts/tests/communityPlayerRatingApi.nodered.test.ts scripts/tests/trainingVisitsSync.test.ts scripts/tests/communityMonthly.test.ts scripts/tests/communityMonthlyFinalization.test.mjs scripts/tests/communityMonthlyReports.test.mjs scripts/tests/communityRatingCalendarMonth.test.ts scripts/tests/communityRatingPeriodUi.test.ts",
     "test:community-player-rating-api": "node --experimental-strip-types --test scripts/tests/communityPlayerRatingApi.nodered.test.ts",
     "test:community-media-response": "node --experimental-strip-types --test scripts/tests/communityMediaResponse.nodered.test.ts scripts/tests/communityMediaResponsePatcher.test.mjs",
+    "test:booked-operation-receiver": "node --test scripts/tests/bookedOperationReceiver.nodered.test.mjs scripts/tests/bookedOperationReceiverExecution.test.mjs scripts/tests/bookedOperationReceiverPatch.test.mjs scripts/tests/bookedOperationReceiverRuntime.test.mjs scripts/tests/bookedOperationOwnerCompatibility.test.mjs",
     "test:community-list-performance": "node --experimental-strip-types --test scripts/tests/communitySummaryLazyLoad.test.ts scripts/tests/expiringSingleFlight.test.ts scripts/tests/communityListPerformance.test.mjs",
     "governance:worktree:check": "node scripts/codex_main_worktree_guard.mjs check-task",
     "governance:main-owner:claim": "node scripts/codex_main_worktree_guard.mjs claim",
