@@ -154,7 +154,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale,
     dpr * (width - WIDTH * scale) / 2, dpr * (height - HEIGHT * scale) / 2);
   const art = game.campaign?.station === 0 ? yasenevoArt : null;
-  if (art) yasenevoScenery(ctx, game, art, reducedMotion); else scenery(ctx, game);
+  if (art) yasenevoScenery(ctx, game, art, Math.max(0, (height / scale - HEIGHT) / 2)); else scenery(ctx, game);
   if (!art) campaignObjects(ctx, game, reducedMotion);
   ctx.save();
   if (art) { ctx.beginPath(); ctx.rect(0, 0, WIDTH, HEIGHT); ctx.clip(); }

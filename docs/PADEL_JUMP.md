@@ -12,7 +12,7 @@ Target event: 13 November 2026. This branch provides a playable local prototype,
 - Explicit pause/resume, automatic pause on blur, hidden document and pagehide, bounded fixed-step simulation, resize and animation cleanup on unmount.
 - Device-local personal best with a storage-denied fallback. This record is not authoritative for prizes and is not linked to a player account.
 - Cabinet entry card, guest entry above the home sign-in form, and `?padelJump=1` guest route. Android's existing tournament-only home also has a guest entry card before sign-in and an entry above tournaments after sign-in. Return removes only the game query parameter.
-- A standalone guest page without LK auth/API dependencies. All graphics are local Canvas/CSS shapes; no external fonts, assets, SDKs or new dependencies are needed.
+- A standalone guest page without LK auth/API dependencies. Graphics use local Canvas/CSS, original SVG sprites and the prepared Yasenevo painting; no external fonts, asset services, SDKs or new dependencies are needed.
 
 ## Local preview and checks
 

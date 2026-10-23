@@ -2,26 +2,19 @@ import { BALL_RADIUS, HEIGHT, WIDTH } from './engine';
 import type { Game, Platform } from './engine';
 import { YASENEVO_SPRITES } from './yasenevo-assets';
 import type { YasenevoArt, YasenevoSprite } from './yasenevo-assets';
-import { surfaceRect } from './yasenevo-layout';
+import { panoramaRect, surfaceRect } from './yasenevo-layout';
 
 export function yasenevoSprite(ctx: CanvasRenderingContext2D, art: YasenevoArt, id: YasenevoSprite, x: number, y: number, width: number) {
   const sprite = YASENEVO_SPRITES[id], height = width * sprite.h / sprite.w;
   ctx.drawImage(art.images[id], x - width / 2, y - height / 2, width, height);
 }
-export function yasenevoScenery(ctx: CanvasRenderingContext2D, game: Game, art: YasenevoArt, reduced: boolean) {
-  ctx.fillStyle = '#dce3e9'; ctx.fillRect(-WIDTH * 5, -HEIGHT * 5, WIDTH * 11, HEIGHT * 11);
-  const h = WIDTH * 2, shift = game.camera * 0.12 % h;
-  for (let y = shift - h; y < HEIGHT; y += h) ctx.drawImage(art.images.dome_loop, 0, y, WIDTH, h);
+export function yasenevoScenery(ctx: CanvasRenderingContext2D, game: Game, art: YasenevoArt, overscanY = 0) {
+  ctx.fillStyle = '#217ac1'; ctx.fillRect(-WIDTH * 5, -HEIGHT * 5, WIDTH * 11, HEIGHT * 11);
+  const scene = panoramaRect(game.camera, game.campaign?.goalY ?? HEIGHT, WIDTH, HEIGHT, overscanY);
+  ctx.drawImage(art.images.station_construction_panorama, scene.x, scene.y, scene.w, scene.h);
   const floor = HEIGHT + game.camera * 0.14;
-  if (floor - h < HEIGHT) {
-    ctx.drawImage(art.images.station_start, 0, floor - h, WIDTH, h);
-    ctx.save(); ctx.globalAlpha = 0.72;
-    const walkers = ['worker_navy_walk_00', 'worker_navy_walk_01', 'worker_navy_walk_02', 'worker_navy_walk_03'] as const;
-    yasenevoSprite(ctx, art, walkers[reduced ? 0 : Math.floor(game.time / 0.18) % 4], 45, floor - 43, 29);
-    yasenevoSprite(ctx, art, 'worker_green_panel', 369, floor - 48, 28);
-    yasenevoSprite(ctx, art, 'worker_cream_inspector', 335, floor - 34, 23);
-    yasenevoSprite(ctx, art, 'decor_stepladder', 76, floor - 42, 26);
-    yasenevoSprite(ctx, art, 'decor_toolcase', 59, floor - 15, 29);
+  if (floor - 30 < HEIGHT) {
+    ctx.save(); ctx.globalAlpha = 0.95;
     yasenevoSprite(ctx, art, 'banner_padlhub', 210, floor - 13, 118);
     ctx.restore();
   }
@@ -63,6 +56,7 @@ export function yasenevoBall(ctx: CanvasRenderingContext2D, game: Game, art: Yas
   }
   const landed = game.platforms.some(p => p.flash > 0.19 && Math.abs(p.y + BALL_RADIUS - y) < 30);
   ctx.save(); ctx.translate(x, screenY); if (!reduced && !landed) ctx.rotate(game.time * 2.5);
+  ctx.shadowColor = 'rgba(9, 27, 60, 0.65)'; ctx.shadowBlur = 7;
   yasenevoSprite(ctx, art, !reduced && landed ? 'ball_squash' : 'ball', 0, 0, BALL_RADIUS * 128 / 43);
   ctx.restore();
 }

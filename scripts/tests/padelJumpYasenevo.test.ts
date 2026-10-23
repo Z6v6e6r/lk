@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { BALL_RADIUS, createCampaignGame, JUMP_SPEED, stepGame, WIDTH } from '../../src/components/padel-jump/engine.ts';
 import { sectionBalance } from '../../src/components/padel-jump/campaign.ts';
-import { surfaceRect } from '../../src/components/padel-jump/yasenevo-layout.ts';
+import { panoramaRect, surfaceRect } from '../../src/components/padel-jump/yasenevo-layout.ts';
 
 test('supplied SVG art retains exact provenance and contains no executable or external content', () => {
   const base = new URL('../../src/assets/yasenevo-v2/', import.meta.url);
@@ -27,6 +27,42 @@ test('surface alignment preserves existing collider spans and sprite proportions
       assert.ok(Math.abs(rect.w / rect.h - sprite.w / sprite.h) < 1e-9);
     }
   }
+});
+
+test('painted panorama covers every ascent without wrapping, gaps or a sky-only fallback', () => {
+  for (let section = 0; section < 3; section++) {
+    const game = createCampaignGame(0, section), goal = game.campaign!.goalY;
+    const end = goal - 640 * 0.43;
+    let previous = -620;
+    for (let camera = 0; camera <= end + 200; camera += 1) {
+      const rect = panoramaRect(camera, goal, 420, 640);
+      assert.ok(rect.y <= 0 && rect.y + rect.h >= 640);
+      assert.ok(rect.y >= previous && rect.y - previous <= 1);
+      previous = rect.y;
+    }
+    assert.deepEqual(panoramaRect(0, goal, 420, 640), { x: 0, y: -620, w: 420, h: 1260 });
+    assert.equal(panoramaRect(end, goal, 420, 640).y, 0);
+    assert.equal(panoramaRect(end * 2, goal, 420, 640).y, 0);
+    for (const overscan of [36, 250, 500]) {
+      for (const camera of [0, end / 2, end]) {
+        const rect = panoramaRect(camera, goal, 420, 640, overscan);
+        assert.ok(rect.y <= -overscan && rect.y + rect.h >= 640 + overscan);
+        assert.ok(rect.x <= 0 && rect.x + rect.w >= 420);
+        assert.equal(rect.h / rect.w, 3);
+      }
+    }
+  }
+});
+
+test('prepared painted environment matches the pinned image provenance', () => {
+  const base = new URL('../../src/assets/yasenevo-v2/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('panorama-provenance.json', base), 'utf8'));
+  const data = readFileSync(new URL(manifest.file, base));
+  assert.equal(data.subarray(0, 4).toString(), 'RIFF');
+  assert.equal(data.subarray(8, 12).toString(), 'WEBP');
+  assert.equal(data.length, manifest.bytes);
+  assert.equal(createHash('sha256').update(data).digest('hex'), manifest.sha256);
+  assert.equal(manifest.height / manifest.width, 3);
 });
 
 
