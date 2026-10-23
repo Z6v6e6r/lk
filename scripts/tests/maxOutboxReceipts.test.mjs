@@ -95,8 +95,8 @@ test('dispatch and receipt preparation preserve fencing and drop private send co
 });
 
 function fixture() {
-  const dispatch = fs.readFileSync('scripts/tests/fixtures/max-outbox/dispatch-before.js', 'utf8');
-  const pull = fs.readFileSync('scripts/tests/fixtures/max-outbox/pull-before.js', 'utf8');
+  const dispatch = fs.readFileSync('scripts/tests/fixtures/max-outbox/dispatch-before.function.txt', 'utf8');
+  const pull = fs.readFileSync('scripts/tests/fixtures/max-outbox/pull-before.function.txt', 'utf8');
   return [
     ['47c460de0db646e6','f64e5818bc8d7aa6','41be3d2c95b57295'],
     ['0006d5707259bc5b','466e8a3ac76c2fab','2e547e998eee631f']

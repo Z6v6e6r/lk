@@ -6,9 +6,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = s => crypto.createHash('sha256').update(s).digest('hex');
 const source = n => fs.readFileSync(path.join(root, 'scripts/nodered_max_nodes', n), 'utf8');
 const fixture = n => fs.readFileSync(path.join(root, 'scripts/tests/fixtures/max-outbox', n), 'utf8');
-const dispatchHashes = new Set(['4dd5179f64eeb568e929248623ccbe742a1eb090e1762462cde8c02a97b687b0', hash(fixture('dispatch-before.js'))]);
+const dispatchHashes = new Set(['4dd5179f64eeb568e929248623ccbe742a1eb090e1762462cde8c02a97b687b0', hash(fixture('dispatch-before.function.txt'))]);
 const pullHashes = new Set(['ddfc26e5012e7ca5ae1e00ffaa8059cd3f3954a5220ff98dd40b14bb4c575cf2',
-  '5c4b8edd814195cbc144c575a5f28959eab0c68ffc13502fd7c0c1f733046c52', hash(fixture('pull-before.js'))]);
+  '5c4b8edd814195cbc144c575a5f28959eab0c68ffc13502fd7c0c1f733046c52', hash(fixture('pull-before.function.txt'))]);
 const pairs = [
   ['47c460de0db646e6', 'f64e5818bc8d7aa6', '41be3d2c95b57295', 'MAX_BOT', 'main'],
   ['0006d5707259bc5b', '466e8a3ac76c2fab', '2e547e998eee631f', 'MAX_ACADEMY_BOT', 'academy']
