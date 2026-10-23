@@ -1,3 +1,4 @@
+import { eventGameCommandBody } from '../services/eventJumpContract';
 import { readAuthToken } from "./authTokenStorage";
 import { communityType, type CommunityType, type CommunityTypeSettings } from "../services/community-policy";
 import {
@@ -293,11 +294,16 @@ export interface CreateCommunityPayload {
   creator: CommunityActorPayload;
 }
 
+export interface EventRegistration { fullName: string; company: string; email: string }
+export type EventReplay = Array<[number, number]>;
+
 export interface JoinCommunityPayload {
+  eventRegistration?: EventRegistration;
   member: CommunityActorPayload;
 }
 
 export interface JoinCommunityByInvitePayload {
+  eventRegistration?: EventRegistration;
   inviteCode?: string | null;
   inviteLink?: string | null;
   member: CommunityActorPayload;
@@ -1605,6 +1611,7 @@ export async function apiAddCommunityMember(communityId: string, payload: JoinCo
     retries: 1,
     body: JSON.stringify({
       member: buildMemberPayload(payload.member),
+      eventRegistration: payload.eventRegistration,
     }),
   });
 
@@ -1638,6 +1645,7 @@ export async function apiJoinCommunityByInvite(payload: JoinCommunityByInvitePay
       inviteCode,
       inviteLink,
       member: buildMemberPayload(payload.member),
+      eventRegistration: payload.eventRegistration,
     }),
   });
 
@@ -2230,4 +2238,11 @@ export function communityErrorMessage(error: ApiError | null, fallback: string) 
   }
 
   return error?.message || fallback;
+}
+
+export function apiEventGame<T>(communityId: string, action: 'start' | 'finish' | 'ranking', body?: Record<string, unknown>, requestId?: string) {
+  return requestCommunityMutation<T>(`/lk/communities/${encodeURIComponent(communityId)}/event-game/${action}`, {
+    method: action === 'ranking' ? 'GET' : 'POST', retries: 0,
+    ...(action === 'ranking' ? {} : { headers: { 'Idempotency-Key': requestId || '' }, body: JSON.stringify(eventGameCommandBody(body)) }),
+  });
 }

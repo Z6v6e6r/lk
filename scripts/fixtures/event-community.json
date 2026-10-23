@@ -1,0 +1,13 @@
+{
+  "id": "c8dad2db-0f2a-4cdd-967f-80bfe86c0cd5",
+  "name": "Корпоративный спорт ПадлхАБ",
+  "communityType": "EVENT",
+  "typeSettings": {"gameIds": ["padel-jump", "time-for-friends"]},
+  "typeSettingsRevision": 1,
+  "typeSettingsEffectiveAt": "2026-10-23T09:00:00.000Z",
+  "visibility": "OPEN",
+  "joinRule": "INSTANT",
+  "members": [], "pendingMembers": [], "bannedMembers": [], "eventEntries": [],
+  "archived": false,
+  "syntheticFixture": true
+}

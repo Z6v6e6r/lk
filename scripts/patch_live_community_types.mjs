@@ -1,3 +1,4 @@
+import { addEventRegistration, addEventGameRoutes } from './lib/eventCommunity.mjs';
 import { addTypedCommunityResponseRedaction } from './lib/communityResponseRedaction.mjs';
 import { addCommunityRosterWrites } from './lib/communityRosterWrites.mjs';
 import { addCommunityPolicyAuth } from './lib/communityPolicyAuth.mjs';
@@ -15,25 +16,26 @@ function insertOnce(body, anchor, addition, marker) {
   return body.replace(anchor, anchor + addition);
 }
 /** Focused function-body patch only. No graph regeneration, config edits or deploy. */
-export function patchCommunityTypesFlow(input) {
+export function patchCommunityTypesFlow(input, { eventGames = false } = {}) {
   if (!Array.isArray(input) || new Set(input.map(node => node.id)).size !== input.length) throw new Error('COMMUNITY_TYPES_INVALID_FLOW');
   const flow = structuredClone(input), changes = [];
   const required = new Set(['Build community create docs', 'Prepare community update', 'Use rating snapshot or fallback', 'Prepare communities list query', 'Prepare game station autojoin']);
   for (const node of flow) {
     if (node.type !== 'function' || typeof node.func !== 'string') continue;
     const before = node.func;
+    node.func = node.func.replaceAll("['STATION','CORPORATE','LEAGUE']", "['STATION','CORPORATE','LEAGUE','EVENT']").replaceAll("['STATION', 'CORPORATE', 'LEAGUE']", "['STATION', 'CORPORATE', 'LEAGUE', 'EVENT']");
     if (node.func.includes('const normalizeCommunityForResponse =')) {
       if (!node.func.includes('const typed =')) {
-        node.func = node.func.replace('  const community = isObj(value) ? value : {};', "  const community = isObj(value) ? value : {};\n  const typed = ['STATION','CORPORATE','LEAGUE'].includes(community.communityType);\n  const redact = (item) => typed ? Object.assign({}, buildMember(item, item?.role || 'MEMBER'), { phone: null }) : item;");
+        node.func = node.func.replace('  const community = isObj(value) ? value : {};', "  const community = isObj(value) ? value : {};\n  const typed = ['STATION','CORPORATE','LEAGUE','EVENT'].includes(community.communityType);\n  const redact = (item) => typed ? Object.assign({}, buildMember(item, item?.role || 'MEMBER'), { phone: null }) : item;");
         node.func = node.func.replace("  const members = toArray(community.members).map((item) => buildMember(item, item?.role || 'MEMBER'));", "  const members = toArray(community.members).map((item) => redact(buildMember(item, item?.role || 'MEMBER')));");
         node.func = node.func.replace("  const pendingMembers = toArray(community.pendingMembers).map((item) => buildMember(item, 'MEMBER'));", "  const pendingMembers = toArray(community.pendingMembers).map((item) => redact(buildMember(item, 'MEMBER')));");
         node.func = node.func.replace('  const bannedMembers = toArray(community.bannedMembers);', '  const bannedMembers = toArray(community.bannedMembers).map(redact);');
-        node.func = insertOnce(node.func, 'const resolveCommunityViewerMembership = (community, clientId, phone) => {', "\n  if (['STATION','CORPORATE','LEAGUE'].includes(community?.communityType) && !msg._verifiedCommunityActor) return { status: null, member: null };", "community?.communityType) && !msg._verifiedCommunityActor");
+        node.func = insertOnce(node.func, 'const resolveCommunityViewerMembership = (community, clientId, phone) => {', "\n  if (['STATION','CORPORATE','LEAGUE','EVENT'].includes(community?.communityType) && !msg._verifiedCommunityActor) return { status: null, member: null };", "community?.communityType) && !msg._verifiedCommunityActor");
       }
-      node.func = insertOnce(node.func, "    name: toStr(community.name || community.title) || 'Сообщество',", "\n    communityType: ['STATION', 'CORPORATE', 'LEAGUE'].includes(community.communityType) ? community.communityType : 'FRIENDS',\n    typeSettings: isObj(community.typeSettings) ? community.typeSettings : {},\n    typeSettingsRevision: Number(community.typeSettingsRevision) || 0,", 'communityType: [');
+      node.func = insertOnce(node.func, "    name: toStr(community.name || community.title) || 'Сообщество',", "\n    communityType: ['STATION', 'CORPORATE', 'LEAGUE', 'EVENT'].includes(community.communityType) ? community.communityType : 'FRIENDS',\n    typeSettings: isObj(community.typeSettings) ? community.typeSettings : {},\n    typeSettingsRevision: Number(community.typeSettingsRevision) || 0,", 'communityType: [');
     }
     if (node.name === 'Build communities list response' && !node.func.includes(": rows.filter(item => !['STATION'")) {
-      node.func = node.func.replace('  : rows;', "  : rows.filter(item => !['STATION','CORPORATE','LEAGUE'].includes(item.communityType) || canListCommunityForViewer(item, ctx.clientId, ctx.phone));");
+      node.func = node.func.replace('  : rows;', "  : rows.filter(item => !['STATION','CORPORATE','LEAGUE','EVENT'].includes(item.communityType) || canListCommunityForViewer(item, ctx.clientId, ctx.phone));");
     }
     if (node.name === 'Build feed query') node.func = node.func.replace("kind: { $in: ['PHOTO', 'GAME', 'TOURNAMENT'] }", "kind: { $in: ['PHOTO', 'GAME', 'TOURNAMENT', 'TRAINING', 'EVENT'] }");
     if (required.has(node.name)) {
@@ -56,7 +58,8 @@ export function patchCommunityTypesFlow(input) {
     }
   }
   if (required.size) throw new Error('COMMUNITY_TYPES_REQUIRED_NODES_MISSING: ' + [...required].join(', '));
-  const authenticated = addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth(flow)));
+  const communityGraph = addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth(addEventRegistration(flow))));
+  const authenticated = eventGames ? addTypedCommunityResponseRedaction(addCommunityPolicyAuth(addEventGameRoutes(communityGraph))) : communityGraph;
   const beforeById = new Map(input.map(node => [node.id, node]));
   const completeChanges = authenticated.flatMap(node => {
     const before = beforeById.get(node.id);
@@ -71,7 +74,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (!args.includes('--input') || !args.includes('--out') || !input || !output) throw new Error('Use --input /external/live-preimage.json --out /external/candidate.json');
   const source = path.resolve(input), target = path.resolve(output);
   if ([source, target].some(value => value === root || value.startsWith(root + path.sep)) || source === target) throw new Error('COMMUNITY_TYPES_EXTERNAL_WORKSPACE_REQUIRED');
-  const result = patchCommunityTypesFlow(JSON.parse(fs.readFileSync(source, 'utf8')));
+  const result = patchCommunityTypesFlow(JSON.parse(fs.readFileSync(source, 'utf8')), { eventGames: true });
   fs.writeFileSync(target, JSON.stringify(result.flow, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   fs.writeFileSync(target + '.changes.json', JSON.stringify(result.changes, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   console.log(JSON.stringify({ changedNodes: result.changes.length, candidateSha256: digest(fs.readFileSync(target)), deployed: false }));
