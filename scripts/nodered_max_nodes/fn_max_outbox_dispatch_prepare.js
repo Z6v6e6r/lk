@@ -1,25 +1,7 @@
-const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
-const toStr = (value) => {
-  if (value === null || value === undefined) return null;
-  const normalized = String(value).trim();
-  return normalized ? normalized : null;
-};
-
-const command = isObj(msg.payload) ? msg.payload : null;
-if (!command) {
-  return [null, msg];
+const command = msg.payload;
+if (!command || typeof command !== 'object' || Array.isArray(command)
+  || typeof command.id !== 'string') {
+  return [null, { payload: { code: 'MAX_OUTBOX_INVALID_COMMAND' } }];
 }
-
-const chatId = toStr(command.targetExternalChatId) || toStr(command.targetExternalUserId);
-const content = toStr(command.text);
-if (!chatId || !content) {
-  return [null, Object.assign({}, msg, { payload: { error: "Missing target or text", command } })];
-}
-
-const sendMsg = Object.assign({}, msg, {
-  supportOutbox: command,
-  chatId,
-  payload: content,
-});
-
-return [sendMsg, null];
+// The controlled sender owns validation and emits a fail receipt for bad target/text.
+return [{ supportOutbox: command }, null];

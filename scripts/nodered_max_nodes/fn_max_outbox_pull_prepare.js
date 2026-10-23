@@ -21,7 +21,7 @@ const integrationToken = (() => {
 
 const baseUrl = apiBase || "http://127.0.0.1:3000/api";
 msg.method = "GET";
-msg.url = `${baseUrl}/support/outbox/pull?connector=MAX_BOT&limit=10&leaseSec=60`;
+msg.url = `${baseUrl}/support/outbox/pull?connector=MAX_BOT&limit=10&leaseSec=60&receiptProtocol=max-lease-v1`;
 msg.headers = Object.assign(
   { Accept: "application/json" },
   integrationToken ? { "x-integration-token": integrationToken } : {},

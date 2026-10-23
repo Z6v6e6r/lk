@@ -1,0 +1,16 @@
+<script type="text/javascript">
+RED.nodes.registerType('max-outbox-send', {
+  category: 'network', color: '#b7d9a8', defaults: {
+    name: { value: '' }, bot: { value: '', type: 'maxbot-config', required: true }
+  }, inputs: 1, outputs: 1, icon: 'bridge.svg',
+  label: function () { return this.name || 'MAX outbox send'; }
+});
+</script>
+<script type="text/html" data-template-name="max-outbox-send">
+  <div class="form-row"><label for="node-input-name">Name</label><input id="node-input-name"></div>
+  <div class="form-row"><label for="node-input-bot">MAX bot</label><input id="node-input-bot"></div>
+</script>
+<script type="text/html" data-help-name="max-outbox-send">
+  <p>One MAX text send per fenced outbox lease. Output is a sanitized backend receipt.
+  Transport uncertainty is quarantined. No automatic message retry.</p>
+</script>
