@@ -47,7 +47,7 @@ export function EventCommunityPanel({ community, onRegister }: {community: Commu
   return <section className="community-ranking-box community-event-panel" aria-label="Игры и рейтинг мероприятия">
     <h2>Игры мероприятия</h2>
     {community.typeSettings?.gameIds?.includes('padel-jump') && <button type="button" className="btn-primary" disabled={busy || !!pending} onClick={() => void start()}>Падл Jump — играть</button>}
-    {community.typeSettings?.gameIds?.includes('time-for-friends') && <p><a className="btn-secondary" href={new URL('/padel/', getServ2Origin()).href} target="_blank" rel="noopener noreferrer">Падел: Время на друзей ↗</a></p>}
+    {community.typeSettings?.gameIds?.includes('time-for-friends') && <p><a className="btn-secondary" href={new URL('/padel/', getServ2Origin()).href} target="_blank" rel="noopener noreferrer">Падел Микс ↗</a></p>}
     <h3>Рейтинг Падл Jump</h3><p>Лучший результат каждого участника.</p>
     {loading && <p role="status">Загружаем рейтинг…</p>}
     {error && <p role="alert" className="community-form-error">{error}</p>}

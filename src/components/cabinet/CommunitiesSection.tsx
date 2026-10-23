@@ -1,4 +1,5 @@
 import { EventRegistrationForm } from './EventRegistrationForm';
+import { parseEventNotice, type EventNotice } from '../../utils/communityApi';
 import { EventCommunityPanel } from './EventCommunityPanel';
 import type { EventRegistration } from '../../utils/communityApi';
 import { BuySupscription } from "./BuySubscription";
@@ -1647,7 +1648,7 @@ export function CommunitiesSection({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [rankingRefreshLoadingId, setRankingRefreshLoadingId] = useState<string | null>(null);
   const [rankingRefreshError, setRankingRefreshError] = useState<string | null>(null);
-  const [eventJoin, setEventJoin] = useState<{community?: CommunityRecord; inviteCode?: string; inviteLink?: string} | null>(null);
+  const [eventJoin, setEventJoin] = useState<{community?: CommunityRecord; inviteCode?: string; inviteLink?: string; notice?: EventNotice} | null>(null);
   const [joiningCommunityId, setJoiningCommunityId] = useState<string | null>(null);
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityDetailTab>("RANKING");
   const [activeRankingType, setActiveRankingType] = useState<CommunityRankingTypeId>("overall");
@@ -3807,7 +3808,7 @@ export function CommunitiesSection({
     setInviteSubmitting(false);
 
     if (response.error) {
-      if (response.status === 422) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink: inviteValue}); return; }
+      if (response.status === 422) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink: inviteValue, notice: response.data?.eventNotice}); return; }
       setInviteError(
         communityErrorMessage(response.error, "Не удалось войти по приглашению"),
       );
@@ -3854,7 +3855,7 @@ export function CommunitiesSection({
       setInviteSubmitting(false);
 
       if (response.error) {
-        if (response.status === 422) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink}); return; }
+        if (response.status === 422) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink, notice: response.data?.eventNotice}); return; }
         setInviteError(
           communityErrorMessage(response.error, "Не удалось войти в сообщество по ссылке"),
         );
@@ -5192,7 +5193,7 @@ export function CommunitiesSection({
       </div>
 
       <Modal isOpen={!!eventJoin} onClose={() => setEventJoin(null)} title="Анкета участника мероприятия">
-        {eventJoin && <EventRegistrationForm onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
+        {eventJoin && <EventRegistrationForm notice={eventJoin.notice || parseEventNotice({policy:eventJoin.community?.typeSettings?.registrationPolicy,revision:eventJoin.community?.typeSettingsRevision})} onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
       </Modal>
 
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Создать сообщество">
