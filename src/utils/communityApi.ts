@@ -1,6 +1,6 @@
 import { eventGameCommandBody } from '../services/eventJumpContract';
 import { readAuthToken } from "./authTokenStorage";
-import { communityType, type CommunityType, type CommunityTypeSettings } from "../services/community-policy";
+import { parseEventRegistrationPolicy, type EventRegistrationPolicy, communityType, type CommunityType, type CommunityTypeSettings } from "../services/community-policy";
 import {
   getServ2Origin,
   request,
@@ -240,7 +240,9 @@ export interface ArchiveCommunityFeedPostResponse {
   archived: boolean;
 }
 
+export interface EventNotice { policy: EventRegistrationPolicy; revision: number }
 export interface CommunityActionResponse {
+  eventNotice?: EventNotice;
   ok: boolean;
   membershipStatus: CommunityMembershipStatus | null;
   message: string | null;
@@ -294,7 +296,7 @@ export interface CreateCommunityPayload {
   creator: CommunityActorPayload;
 }
 
-export interface EventRegistration { fullName: string; company: string; email: string }
+export interface EventRegistration { fullName: string; company: string; email: string; policyRevision: number }
 export type EventReplay = Array<[number, number]>;
 
 export interface JoinCommunityPayload {
@@ -1600,6 +1602,19 @@ export async function apiJoinCommunity(communityId: string, payload: JoinCommuni
   return apiAddCommunityMember(communityId, payload);
 }
 
+export function parseEventNotice(value: unknown): EventNotice | undefined {
+  if (!isRecord(value) || !Number.isSafeInteger(value.revision) || Number(value.revision) < 1) return undefined;
+  try { return { policy: parseEventRegistrationPolicy(value.policy), revision: Number(value.revision) }; }
+  catch { return undefined; }
+}
+function eventRegistrationError(response: ApiResult<unknown>): ApiResult<CommunityActionResponse> {
+  const raw = response.error?.raw;
+  const notice = response.status === 422 && isRecord(raw) ? parseEventNotice(raw.eventNotice) : undefined;
+  return errorResult<CommunityActionResponse>(response.status, response.error?.message || 'EVENT_REGISTRATION_REQUIRED', notice ? {
+    ok: false, membershipStatus: null, message: null, community: null, feedPost: null, ranking: null, eventNotice: notice,
+  } : null);
+}
+
 export async function apiAddCommunityMember(communityId: string, payload: JoinCommunityPayload) {
   const normalizedCommunityId = communityId.trim();
   if (!normalizedCommunityId) {
@@ -1616,7 +1631,7 @@ export async function apiAddCommunityMember(communityId: string, payload: JoinCo
   });
 
   if (response.error) {
-    return errorResult<CommunityActionResponse>(response.status, response.error.message, null);
+    return eventRegistrationError(response);
   }
 
   const parsed = normalizeActionResponse(response.data);
@@ -1650,7 +1665,7 @@ export async function apiJoinCommunityByInvite(payload: JoinCommunityByInvitePay
   });
 
   if (response.error) {
-    return errorResult<CommunityActionResponse>(response.status, response.error.message, null);
+    return eventRegistrationError(response);
   }
 
   const parsed = normalizeActionResponse(response.data);

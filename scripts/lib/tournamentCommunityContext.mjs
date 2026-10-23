@@ -268,7 +268,7 @@ export function resolveTimeForFriendsProviderRosterRequest({ tournament, feedPos
   const community = asArray(communities).find((row) => (
     !isArchived(row) && toStringOrNull(row.id ?? row.communityId) === context.ratingCommunityId
   ));
-  if (!community) return null;
+  if (!community || community.communityType === "EVENT") return null;
   const ratingProgram = resolveCommunityRatingProgram(community);
   if (ratingProgram.programKey !== "TIME_FOR_FRIENDS" || !ratingProgram.autoEnrollmentEnabled) return null;
   if (!ratingProgram.stationId) return null;
@@ -353,6 +353,10 @@ export function planTimeForFriendsAutoEnrollment({ tournament, feedPosts, commun
   ));
   if (!community) {
     quarantined.push({ tournamentId, communityId: context.ratingCommunityId, reason: "COMMUNITY_NOT_ACTIVE" });
+    return { context, operations: [], skipped, quarantined };
+  }
+  if (community.communityType === "EVENT") {
+    quarantined.push({ tournamentId, communityId: context.ratingCommunityId, reason: "EVENT_REGISTRATION_REQUIRED" });
     return { context, operations: [], skipped, quarantined };
   }
   const publication = context.publishedCommunities.find((row) => row.communityId === context.ratingCommunityId);

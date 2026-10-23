@@ -628,6 +628,10 @@ export function buildTimeForFriendsCommunityBackfillPlan({
 
     const communityId = eligibleCommunityIds[0];
     const community = communityById.get(communityId);
+    if (community.communityType === "EVENT") {
+      quarantined.push(quarantine(tournamentId, "EVENT_REGISTRATION_REQUIRED", { communityId }));
+      return;
+    }
     const publicationIds = unique(eligiblePublications.map((post) => toStringOrNull(post.id ?? post._id)));
     const ratingEligible = hasFinalStandings
       && eligiblePublications.some((post) => !isArchived(post));
@@ -830,6 +834,7 @@ export function buildTimeForFriendsAtomicMembershipMutation(operation, nowIso) {
     filter: {
       id: communityId,
       archived: { $ne: true },
+      communityType: { $ne: "EVENT" },
       members: { $not: { $elemMatch: { $or: identityClauses } } },
       bannedMembers: { $not: { $elemMatch: { $or: identityClauses } } },
       ...(!phoneNorm ? {

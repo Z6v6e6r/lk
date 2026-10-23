@@ -1,3 +1,4 @@
+import {isDeepStrictEqual} from 'node:util';
 // Source-only optional Viva-profile authentication subflow. Guest reads retain
 // the legacy FRIENDS contract; typed private reads and typed writes require it.
 export const COMMUNITY_AUTH_SUBFLOW = 'community-policy-verified-actor-v1';
@@ -60,16 +61,23 @@ export function addCommunityPolicyAuth(input) {
     if (node.type !== 'http in' || !/^\/(?:lk\/)?communities(?:\/|$)/.test(node.url || '') || /\/public(?:\/|$)/.test(node.url)) continue;
     const instanceId = id + '-entry-' + node.id;
     if (byId.has(instanceId)) {
-      if (node.wires?.[0]?.[0] !== instanceId) throw new Error('COMMUNITY_AUTH_INGRESS_DRIFT');
+      const instance = byId.get(instanceId);
+      if (instance.type !== 'subflow:' + id || instance.z !== node.z || instance.d === true || !Array.isArray(instance.wires) || instance.wires.length !== 1 || !Array.isArray(instance.wires[0]) || instance.wires[0].length !== 1 || instance.wires[0].some(target => !byId.has(target))) throw new Error('COMMUNITY_AUTH_INSTANCE_DRIFT');
+      const expectedPrepare = /\/add-member$/.test(node.url) ? 'Prepare community join' : /\/join-by-invite$/.test(node.url) ? 'Prepare invite join' : null;
+      if (expectedPrepare && (byId.get(instance.wires[0][0])?.type !== 'function' || byId.get(instance.wires[0][0])?.name !== expectedPrepare)) throw new Error('COMMUNITY_AUTH_JOIN_TARGET_DRIFT');
+      if (node.wires?.[0]?.length !== 1 || node.wires?.[0]?.[0] !== instanceId) throw new Error('COMMUNITY_AUTH_INGRESS_DRIFT');
       continue;
     }
+    if (node.wires?.length !== 1 || node.wires[0]?.length !== 1 || !byId.has(node.wires[0][0])) throw new Error('COMMUNITY_AUTH_INGRESS_TARGET_DRIFT');
+    const expectedPrepare = /\/add-member$/.test(node.url) ? 'Prepare community join' : /\/join-by-invite$/.test(node.url) ? 'Prepare invite join' : null;
+    if (expectedPrepare && (byId.get(node.wires[0][0])?.type !== 'function' || byId.get(node.wires[0][0])?.name !== expectedPrepare)) throw new Error('COMMUNITY_AUTH_JOIN_TARGET_DRIFT');
     instances.push({ id: instanceId, type: 'subflow:' + id, z: node.z, name: 'Verify community caller', wires: structuredClone(node.wires), x: (node.x || 0) + 100, y: node.y || 0 });
     node.wires = [[instanceId]];
   }
   if (instances.length && !byId.has(id)) flow.push(...definitions);
   for (const expected of definitions) {
     const existing = byId.get(expected.id);
-    if (existing && (existing.type !== expected.type || (expected.func && existing.func !== expected.func))) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
+    if (existing && !isDeepStrictEqual(existing,expected)) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
   }
   flow.push(...instances);
   const allNodes = new Map(flow.map(node => [node.id, node]));

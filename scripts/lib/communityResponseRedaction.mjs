@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import { COMMUNITY_AUTH_SUBFLOW } from './communityPolicyAuth.mjs';
 /** Public typed payloads never expose contact identities from legacy records. */
 export function sanitizeTypedCommunityPayload(value, typed = false) {
@@ -15,24 +16,9 @@ export function sanitizeTypedCommunityPayload(value, typed = false) {
   }
   return result;
 }
-export function addTypedCommunityResponseRedaction(input) {
-  const flow = structuredClone(input), byId = new Map(flow.map(node => [node.id, node]));
-  for (const node of flow) {
-    if (node.z === COMMUNITY_AUTH_SUBFLOW || node.type !== 'function' || typeof node.func !== 'string') continue;
-    if (node.func.includes('COMMUNITY_TYPED_RESPONSE_REDACTION')) {
-      const start = node.func.indexOf('const redact = '), end = node.func.indexOf(';\nconst output = ', start);
-      if (start < 0 || end < 0) throw new Error('EVENT_REDACTION_WRAPPER_DRIFT');
-      node.func = node.func.slice(0, start) + 'const redact = ' + sanitizeTypedCommunityPayload.toString() + node.func.slice(end);
-      continue;
-    }
-    const responsePorts = (node.wires || []).map((group, index) => group.some(id => byId.get(id)?.type === 'http response') ? index : -1).filter(index => index >= 0);
-    if (!responsePorts.length) continue;
-    // Restrict to community graph functions, including verified-actor/commit
-    // nodes. Unrelated flow responses are preserved byte for byte.
-    const communityFunction = /Community|community/.test(node.name || '') || node.func.includes('normalizeCommunityForResponse') || node.func.includes('_communityPlayerRating');
-    if (!communityFunction) continue;
-    node.func = `// COMMUNITY_TYPED_RESPONSE_REDACTION\nconst redact = ${sanitizeTypedCommunityPayload.toString()};\nconst output = (function() {\n${node.func}\n}).call(this);\n` + `
-const ports = ${JSON.stringify(responsePorts)};
+function redactionSuffix(ports) {
+  return '\n}).call(this);\n' + `
+const ports = ${JSON.stringify(ports)};
 const outputs = Array.isArray(output) ? output : [output];
 for (const port of ports) {
   const messages = Array.isArray(outputs[port]) ? outputs[port] : [outputs[port]];
@@ -40,6 +26,28 @@ for (const port of ports) {
 }
 return output;
 `;
+}
+function wrapRedacted(body,ports) {
+  return '// COMMUNITY_TYPED_RESPONSE_REDACTION\nconst redact = ' + sanitizeTypedCommunityPayload.toString() + ';\nconst output = (function() {\n' + body + redactionSuffix(ports);
+}
+export function addTypedCommunityResponseRedaction(input) {
+  const flow = structuredClone(input), byId = new Map(flow.map(node => [node.id, node]));
+  for (const node of flow) {
+    if (node.z === COMMUNITY_AUTH_SUBFLOW || node.type !== 'function' || typeof node.func !== 'string') continue;
+    const responsePorts = (node.wires || []).map((group, index) => group.some(id => byId.get(id)?.type === 'http response') ? index : -1).filter(index => index >= 0);
+    if (node.func.includes('COMMUNITY_TYPED_RESPONSE_REDACTION')) {
+      const prefix = '// COMMUNITY_TYPED_RESPONSE_REDACTION\nconst redact = ', separator = ';\nconst output = (function() {\n';
+      const end = node.func.indexOf(separator,prefix.length), suffix = redactionSuffix(responsePorts);
+      if (!node.func.startsWith(prefix) || end < 0 || !node.func.endsWith(suffix)) throw new Error('EVENT_REDACTION_WRAPPER_DRIFT');
+      const sanitizer = node.func.slice(prefix.length,end);
+      if (sanitizer !== sanitizeTypedCommunityPayload.toString() && !["9ca1ae941b8cd7f01c1be2e1bc23c472676c1629e5baf48ea646e68e65aae152", "aec9d94d0b792b78076a0bcb2960e63b330c5cb3384e47ed5c3570ae8e243a5d"].includes(createHash('sha256').update(sanitizer).digest('hex'))) throw new Error('EVENT_REDACTION_SANITIZER_DRIFT');
+      node.func = wrapRedacted(node.func.slice(end+separator.length,-suffix.length),responsePorts);
+      continue;
+    }
+    if (!responsePorts.length) continue;
+    const communityFunction = /Community|community/.test(node.name || '') || node.func.includes('normalizeCommunityForResponse') || node.func.includes('_communityPlayerRating');
+    if (!communityFunction) continue;
+    node.func = wrapRedacted(node.func,responsePorts);
   }
   return flow;
 }
