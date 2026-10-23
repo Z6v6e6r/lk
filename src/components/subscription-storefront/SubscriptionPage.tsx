@@ -23,6 +23,7 @@ import {
   readStorefrontPaymentRef,
   resolvePaymentPhone,
   resolveStorefrontBillingTarget,
+  resolveStorefrontPromoTarget,
   type PendingPaymentEntry,
   type StorefrontBillingOptionId,
 } from './payment';
@@ -275,7 +276,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
       {failure && <p className="subscription-status-message subscription-status-message--error" role="alert">{failure}</p>}
       <SubscriptionStorefront view={view} onBack={onBack} onChoose={selection => { void handleChoose(selection); }}
         renderCheckoutAddon={previewView ? undefined : (selection, disabled) => {
-          const target = resolveStorefrontBillingTarget(selection.planId, selection.billingOptionId as StorefrontBillingOptionId);
+          const target = resolveStorefrontPromoTarget(selection.planId, selection.billingOptionId as StorefrontBillingOptionId);
           if (!target?.directProductId) return null;
           const plan = plans.find(item => item.id === selection.planId);
           const option = plan?.billingOptions.find(item => item.id === selection.billingOptionId);

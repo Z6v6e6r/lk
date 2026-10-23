@@ -1,0 +1,37 @@
+{
+  "kind": "SUB_HAB_FRIENDSHIP_PROMO_GENERATION_V1",
+  "predecessor": "lk1_error_source_generation.json",
+  "deploymentAuthorized": false,
+  "providerContractVerified": false,
+  "note": "Source-only candidate; promo flag stays disabled until provider preview compatibility and focused live preimage review.",
+  "targets": [
+    {
+      "id": "91dded2dc8cfebe4",
+      "fileName": "fn_tournament_subscription_purchase_prepare.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+      "preimageSha256": "ce0740ee6f72fbd4b1ad9cb8a27d97a7eab1aa45d5403ddfe5aabe279de9ca21",
+      "candidateSha256": "2dcfa0f33bccbb234e9942f806120c493aceaa87a679d6cbdd9edf356016b815"
+    },
+    {
+      "id": "f8679e53edadc39b",
+      "fileName": "fn_tournament_subscription_purchase_limit.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+      "preimageSha256": "c8f9d764e4ab976ea17bed2047a735991a078f07d648df8c71b8ed2f72200850",
+      "candidateSha256": "0c3256af3a27ab76d0e5743b7c8dd9fc329793bf7cd0e9f5e792331521fe332e"
+    },
+    {
+      "id": "566ae4b886c37ae5",
+      "fileName": "fn_tournament_subscription_purchase_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      "preimageSha256": "ba280998bb37c3446271ae1f8bd9d25f8b244fbda82c358b7c201c7f71867ef8",
+      "candidateSha256": "a873bef357a07f4388f667f09d5bce55a30eb0d66d168b4c2f2903b12d4a5dcf"
+    },
+    {
+      "id": "c165e43eba668c25",
+      "fileName": "fn_tournament_subscription_status_response.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_status_response.js",
+      "preimageSha256": "4d762e726e60fb38d9070fc6c4588161a0e51f4a8c79f568939a4f8127f3e129",
+      "candidateSha256": "82f691e6d2ca2d2af77ad7a372f67a2b1e5789a0143f4d34407c655cabffc9f7"
+    }
+  ]
+}

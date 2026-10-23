@@ -96,7 +96,10 @@ test("legacy sales retirement records exact Piter amendments without advancing f
     assert.ok(amendment);
     assert.equal(target.candidateSha256, frozenCandidateSha256);
     assert.equal(amendment.reason, "PITER_ATOMIC_SALES_NOT_COMPOSED");
-    assert.equal(sha256(fs.readFileSync(target.sourceFile)), amendment.sourceSha256);
+    const promo = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'scripts/subscription_friendship_promo_generation.json')));
+    const successor = promo.targets.find(item => item.id === id);
+    if (successor) assert.equal(successor.preimageSha256, amendment.sourceSha256);
+    assert.equal(sha256(fs.readFileSync(target.sourceFile)), successor?.candidateSha256 ?? amendment.sourceSha256);
     assert.notEqual(amendment.sourceSha256, frozenCandidateSha256);
   }
 });

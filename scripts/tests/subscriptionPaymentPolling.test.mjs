@@ -236,13 +236,16 @@ test('archive successor pins match current sources without rewriting the origina
   const { newestReviewedSourceSha256 } = await import('../lib/subscriptionSourceGenerationPins.mjs');
   const archive = JSON.parse(fs.readFileSync(new URL('../subscription_payment_archive_generation.json', import.meta.url)));
   const errors = JSON.parse(fs.readFileSync(new URL('../lk1_error_source_generation.json', import.meta.url)));
+  const promo = JSON.parse(fs.readFileSync(new URL('../subscription_friendship_promo_generation.json', import.meta.url)));
   const oldTargets = [...pollingGeneration.targets, ...pollingGeneration.additions];
   assert.equal(archive.targets.length, 4);
   for (const target of archive.targets) {
     assert.equal(target.preimageSha256, oldTargets.find(t => t.fileName === target.fileName).candidateSha256);
     const successor = errors.targets.find(t => t.fileName === target.fileName);
     if (successor) assert.equal(successor.preimageSha256, target.candidateSha256);
-    const currentHash = successor?.candidateSha256 ?? target.candidateSha256;
+    const promoSuccessor = promo.targets.find(t => t.fileName === target.fileName);
+    if (promoSuccessor) assert.equal(promoSuccessor.preimageSha256, successor?.candidateSha256 ?? target.candidateSha256);
+    const currentHash = promoSuccessor?.candidateSha256 ?? successor?.candidateSha256 ?? target.candidateSha256;
     assert.equal(currentHash, createHash('sha256').update(fs.readFileSync(new URL('../nodered_games_nodes/' + target.fileName, import.meta.url))).digest('hex'));
     assert.equal(newestReviewedSourceSha256(target.fileName), currentHash);
   }

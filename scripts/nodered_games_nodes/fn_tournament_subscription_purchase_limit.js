@@ -305,7 +305,11 @@ const failMsg = (status, error, details) => {
   const response = Object.assign({}, msg, {
     statusCode: status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: { error, details: details || null },
+    payload: { error, details: details || null,
+      ...(msg._summerSubscriptionCtx?.promoCode ? { promoAttempt: {
+        schemaVersion: 1, providerAttempted: false, paymentRef: msg._summerSubscriptionCtx.paymentRef,
+      } } : {}),
+    },
   });
   return [null, response, response];
 };

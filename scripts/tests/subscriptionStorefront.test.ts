@@ -9,7 +9,7 @@ import {
   scopedStorefrontStatuses, atlantyBillingOptions, ATLANTY_PLAN_ID, ATLANTY_VARIANT, normalizeStorefrontVariant,
   ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID,
   PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID,
-  FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_DIRECTION_IDS, FRIENDSHIP_TWO_HOURS_TYPE_IDS,
+  FRIENDSHIP_MONTHLY_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_DIRECTION_IDS, FRIENDSHIP_TWO_HOURS_TYPE_IDS,
   parseFriendshipTwoHoursProduct,
 } from '../../src/components/subscription-storefront/catalog.ts';
 
@@ -48,8 +48,10 @@ function stripImports(source: string): string {
 }
 
 /** Loads the payment adapter in a VM with stubbed LK1 API calls. */
-function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string; twoHourProduct?: Record<string, unknown> | null; twoHourReady?: boolean; pendingPromo?: boolean } = {}): {
+function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlantyAnnualProductId?: string; topocratyProductId?: string; patriotsProductId?: string; twoHourProduct?: Record<string, unknown> | null; twoHourReady?: boolean; pendingPromo?: boolean; friendshipStatus?: Record<string, unknown> } = {}): {
   resolveStorefrontBillingTarget: (planId: string, optionId: string) => unknown;
+  resolveStorefrontPromoTarget: (planId: string, optionId: string) => unknown;
+  validateStorefrontDirectPurchase: (target: unknown) => Promise<void>;
   createStorefrontSubscriptionPayment: (params: { planId: string; billingOptionId: string; phone: string }) => Promise<unknown>;
   describePaymentFailure: (error: { status?: number | null; message?: string | null } | null, fallback: string) => string;
   calls: PaymentAdapterCalls;
@@ -58,7 +60,7 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url),
     'utf8',
   ));
-  const withStubs = `const { withSubscriptionPromoLock, apiBuySubscroption, apiGetSubscriptionProduct, apiFetchTournamentSubscriptionStatus, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, parseFriendshipTwoHoursProduct, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
+  const withStubs = `const { withSubscriptionPromoLock, apiBuySubscroption, apiGetSubscriptionProduct, apiFetchTournamentSubscriptionStatus, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, apiFetchProfile, appendCurrentAuthModeToNavigableUrl, resolveTournamentSubscriptionDirectProductId, parseFriendshipTwoHoursProduct, FRIENDSHIP_MONTHLY_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID } = __stubs;\n${source}`;
   const compiled = ts.transpileModule(withStubs, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -73,8 +75,9 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
     apiGetSubscriptionProduct: async (productId: string) => (overrides.twoHourProduct === null
       ? { data: null, error: { status: 404, message: 'not found' }, status: 404 }
       : { data: overrides.twoHourProduct ?? friendshipTwoHoursProduct(), error: null, status: 200, productId }),
-    apiFetchTournamentSubscriptionStatus: async () => ({ data: overrides.twoHourReady === false ? [] : [{ ...available, counterKey: 'friendship_two_hours', priceMinor: 1980000 }], error: null }),
+    apiFetchTournamentSubscriptionStatus: async () => overrides.friendshipStatus ? { data: [overrides.friendshipStatus], error: null } : ({ data: overrides.twoHourReady === false ? [] : [{ ...available, counterKey: 'friendship_two_hours', priceMinor: 1980000 }], error: null }),
     parseFriendshipTwoHoursProduct,
+    FRIENDSHIP_MONTHLY_PRODUCT_ID,
     FRIENDSHIP_TWO_HOURS_PRODUCT_ID,
     FRIENDSHIP_TWO_HOURS_PRICE_MINOR: 1980000,
     apiBuySubscroption: async (productId: string, phone: string, options?: { retries?: number }) => {
@@ -136,6 +139,8 @@ function loadPaymentAdapter(overrides: { atlantyMonthlyProductId?: string; atlan
   return {
     calls,
     resolveStorefrontBillingTarget: exported.resolveStorefrontBillingTarget as never,
+    resolveStorefrontPromoTarget: exported.resolveStorefrontPromoTarget as never,
+    validateStorefrontDirectPurchase: exported.validateStorefrontDirectPurchase as never,
     createStorefrontSubscriptionPayment: exported.createStorefrontSubscriptionPayment as never,
     describePaymentFailure: exported.describePaymentFailure as never,
   };
@@ -710,4 +715,34 @@ test('ordinary CTA refuses a product with an unresolved promo purchase', async (
     return true;
   });
   assert.equal(adapter.calls.bought.length, 0);
+});
+
+
+test('ordinary monthly Friendship shares the pending-promo lock without bypassing the counter gateway', async () => {
+  const adapter = loadPaymentAdapter();
+  await adapter.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
+  assert.equal(adapter.calls.created.length, 1);
+  assert.equal(adapter.calls.bought.length, 0);
+  assert.equal(adapter.calls.created[0].counterKey, 'friendship');
+  const pending = loadPaymentAdapter({ pendingPromo: true });
+  await assert.rejects(pending.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'monthly', phone: FIXTURE_PHONE }));
+  assert.equal(pending.calls.created.length, 0);
+  assert.equal(pending.calls.bought.length, 0);
+});
+
+
+test('monthly promo requires explicit backend capability, exact product and available inventory', async () => {
+  const status = { ...available, counterKey: 'friendship', productId: FRIENDSHIP_MONTHLY_PRODUCT_ID, promoCodeSupported: true };
+  const ready = loadPaymentAdapter({ friendshipStatus: status });
+  const selected = ready.resolveStorefrontPromoTarget('friendship', 'monthly');
+  assert.equal((selected as Record<string, unknown>).directProductId, FRIENDSHIP_MONTHLY_PRODUCT_ID);
+  assert.equal((ready.resolveStorefrontBillingTarget('friendship', 'monthly') as Record<string, unknown>).directProductId, null);
+  await ready.validateStorefrontDirectPurchase(selected);
+  for (const patch of [{ promoCodeSupported: undefined }, { promoCodeSupported: false }, { productId: 'wrong' },
+    { bindingReady: false }, { canPurchase: false }, { remainingCount: 0 }]) {
+    const blocked = loadPaymentAdapter({ friendshipStatus: { ...status, ...patch } });
+    await assert.rejects(blocked.validateStorefrontDirectPurchase(selected));
+    assert.equal(blocked.calls.created.length + blocked.calls.bought.length, 0);
+  }
+  assert.equal((ready.resolveStorefrontPromoTarget('friendship', 'annual') as Record<string, unknown>).directProductId, null);
 });
