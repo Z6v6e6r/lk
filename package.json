@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test:booked-operation-receiver": "node --test scripts/tests/bookedOperationReceiver.nodered.test.mjs scripts/tests/bookedOperationReceiverExecution.test.mjs scripts/tests/bookedOperationReceiverPatch.test.mjs scripts/tests/bookedOperationReceiverRuntime.test.mjs scripts/tests/bookedOperationOwnerCompatibility.test.mjs",
     "test:community-types": "node --experimental-strip-types --test scripts/tests/communityTypes.test.ts",
     "dev": "vite",
     "build": "npm run build:prod && npm run build:dev:bundles",
