@@ -87,9 +87,8 @@ const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
 const trustedActor = msg._resultActor && typeof msg._resultActor === "object"
   ? normalizeActor(msg._resultActor, null)
   : null;
-const phone = normPhone(
-  trustedActor?.phoneNorm
-  || body.phone
+const phone = trustedActor ? trustedActor.phoneNorm : normPhone(
+  body.phone
   || body.senderPhone
   || body.playerPhone
   || body.actor?.phone

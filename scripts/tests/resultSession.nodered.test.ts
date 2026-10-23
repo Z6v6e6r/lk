@@ -395,3 +395,83 @@ test("submit persists session metadata and stores only sanitized roster snapshot
     assert.equal("id" in player, false);
   });
 });
+
+test("verified result identities never inherit missing fields from request hints", () => {
+  for (const [file, context] of [
+    ["fn_result_submit_prepare.js", "_resultSubmit"],
+    ["fn_result_confirm_prepare.js", "_resultConfirm"],
+    ["fn_result_session_open_prepare.js", "_resultSessionOpen"],
+    ["fn_result_session_update_prepare.js", "_resultSessionPatch"],
+  ]) {
+    for (const actor of [
+      { id: "outsider", phoneNorm: null, verified: true },
+      { id: null, phoneNorm: "79000000099", verified: true },
+      { id: "p1", phoneNorm: null, verified: true },
+    ]) {
+      const msg = {
+        _resultActor: actor,
+        req: { params: { gameId: "game-1", sessionId: "result_session_game-1" }, query: { phone: "79000000001" } },
+        payload: {
+          phone: "79000000001",
+          actor: { id: "p1", phone: "79000000001" },
+          submittedBy: { id: "p1", phone: "79000000001" },
+          sets: [{ left: 6, right: 4 }],
+          draftSets: [{ left: 6, right: 4 }],
+          revision: 1,
+        },
+      };
+      const out = runNodeRedFunction(`scripts/nodered_result_nodes/${file}`, msg) as any[];
+      assert.ok(out[0], `${file} supports verified ID-only/phone-only profiles`);
+      const ctx = out[0][context];
+      assert.equal(ctx.actor.id, actor.id, file);
+      assert.equal(ctx.actor.phoneNorm, actor.phoneNorm, file);
+      assert.equal(ctx.phone, actor.phoneNorm, file);
+      if (file === "fn_result_submit_prepare.js" && actor.id === "outsider") {
+        out[0].payload = [sessionGame()];
+        const queryOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_build_query.js", out[0]) as any[];
+        assert.equal(queryOut[0], null);
+        assert.equal(queryOut[1].statusCode, 403);
+      }
+    }
+  }
+});
+
+test("result session lookup and writes are bound to the requested game", () => {
+  const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_session_open_prepare_session_query.js", {
+    payload: [sessionGame()],
+    _resultSessionOpen: { gameId: "game-1", requestedSessionId: "other-session", actor: { id: "p1" } },
+  }) as any[];
+  assert.deepEqual(out[0].payload, { _id: "other-session", gameId: "game-1", deleted: { $ne: true } });
+  const prepared = out[0];
+  prepared.payload = [{ _id: "other-session", gameId: "game-2", draftSets: [{ left: 99, right: 1 }] }];
+  const rejected = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_session_open_build.js", prepared) as any[];
+  assert.equal(rejected[0], null, "must never write an unrelated session");
+  assert.equal(rejected[1].statusCode, 409);
+  assert.equal(rejected[1].payload.code, "RESULT_SESSION_GAME_MISMATCH");
+  assert.equal(rejected[1].payload.draftSets, undefined, "must not disclose other game drafts");
+
+  prepared.payload = [];
+  const created = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_session_open_build.js", prepared) as any[];
+  assert.deepEqual(created[0].payload[0], { _id: "other-session", gameId: "game-1" });
+});
+
+test("session restoration resolves the same verified player after legacy member-key migration", () => {
+  for (const [gameKey, sessionKey] of [["phone:79000000001", "id:p1"], ["id:p1", "phone:79000000001"]]) {
+    const member = { id: "p1", phoneNorm: "79000000001", name: "Player 1" };
+    const game = sessionGame({ resultRosterSnapshot: { members: [{ ...member, memberKey: gameKey }] } });
+    const query = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_session_open_prepare_session_query.js", {
+      payload: [game],
+      _resultSessionOpen: { gameId: "game-1", actor: { id: "p1", phoneNorm: "79000000001" } },
+    }) as any[];
+    query[0].payload = [{
+      _id: "result_session_game-1", gameId: "game-1", revision: 4,
+      resultRosterSnapshot: { members: [{ ...member, memberKey: sessionKey }] },
+      draftSets: [{ left: 6, right: 4 }],
+    }];
+    const restored = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_session_open_build.js", query[0]) as any[];
+    assert.ok(restored[0], `${gameKey} -> ${sessionKey} must restore`);
+    assert.equal(restored[0]._resultSessionResponse.revision, 4);
+    assert.deepEqual(restored[0]._resultSessionResponse.draftSets, [{ left: 6, right: 4 }]);
+    assert.equal(restored[0].payload[1].$set.resultRosterSnapshot.members.filter((p: any) => p.id === "p1").length, 1);
+  }
+});
