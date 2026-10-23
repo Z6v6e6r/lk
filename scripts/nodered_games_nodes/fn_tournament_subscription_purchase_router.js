@@ -1495,11 +1495,22 @@ if (ctx.step === "load_products") {
   return request;
 }
 
+// Viva preview reports kopecks explicitly; reject contradictory aliases instead
+// of guessing which financial value the provider intended.
+const readPromoPreviewAmount = (preview, keys) => {
+  const values = keys.filter(key => preview?.[key] !== undefined).map(key => preview[key]);
+  if (!values.length || values.some(value => !Number.isSafeInteger(value) || value < 0)
+    || values.some(value => value !== values[0])) return null;
+  return values[0];
+};
+
 if (ctx.step === "preview_promo") {
   const expected = ctx.expectedPromoQuote;
   const preview = msg.payload;
   if (!isOk(msg.statusCode) || !expected || !preview
-    || preview.sum !== expected.sumMinor || preview.discount !== expected.discountMinor || preview.toPay !== expected.toPayMinor
+    || readPromoPreviewAmount(preview, ["sumKopecks", "sumMinor", "sum"]) !== expected.sumMinor
+    || readPromoPreviewAmount(preview, ["discountKopecks", "discountMinor", "discount"]) !== expected.discountMinor
+    || readPromoPreviewAmount(preview, ["toPayKopecks", "toPayMinor", "toPay"]) !== expected.toPayMinor
     || global.get("summer_subscription_friendship_promo_enabled") !== true) {
     return fail(409, "Стоимость изменилась или промокод не подтверждён. Примените его снова.");
   }

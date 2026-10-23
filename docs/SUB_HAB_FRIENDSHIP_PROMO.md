@@ -45,7 +45,7 @@ Node-RED; нельзя выкладывать целый stale локальны�
 ## Граница готовности и остановка
 
 Флаг по умолчанию выключен. До включения обязательны проверка реального контракта
-admin preview (endpoint, поля `sum/discount/toPay`, единицы и `WIDGET`) и сравнение
+admin preview (endpoint, поля `sumKopecks/discountKopecks/toPayKopecks`, единицы и `WIDGET`) и сравнение
 с end-user preview на разрешённом тестовом контуре. Эти live проверки в данной
 сессии не выполнены: публичный API и SSH сервера 147 недоступны. Реальная покупка
 не выполнялась. Успех VM-тестов не подтверждает доступность provider endpoint.
@@ -108,3 +108,17 @@ CI на первом commit подтвердил полную critical regressio
 - `scripts/lib/piterAtomicTopologyContract.mjs`
 - `scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs`
 - `scripts/tests/piterAtomicTopologyContract.test.mjs`
+
+## Проверка реального API 2026-10-23
+
+Доступ к 147 восстановлен через существующий SOCKS `127.0.0.1:17892`;
+настройки сети, SSH и сервера не менялись. Свежий live preimage: 4857 узлов;
+все четыре исходные функции совпадают с закреплёнными preimage hashes.
+Сервисный GET Viva подтвердил точный monthly product: стоимость 980000 копеек,
+срок 30 дней. Авторизованный `POST /api/v1/transactions/preview` с `WIDGET`
+и синтетическим нескидочным кодом ответил 200: `sumKopecks=980000`,
+`discountKopecks=0`, `toPayKopecks=980000`, строка exact product совпала.
+Short aliases отсутствуют. Backend исправлен для реальных `*Kopecks` и
+сохранения отказа при противоречивых/нецелых/отрицательных суммах.
+Проверка реальной скидки и parity admin/end-user preview требует действующий
+код; запрос действующего кода отправлен владельцу. Create не вызывался.

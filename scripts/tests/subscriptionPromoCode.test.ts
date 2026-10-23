@@ -290,3 +290,20 @@ test('gateway no-create receipts disappear once the provider transaction has bee
   const ambiguous = node(router, { ...create, statusCode: 500, payload: {} });
   assert.equal('promoAttempt' in ambiguous[2].payload, false);
 });
+
+
+test('real Viva preview kopeck fields authorize only the exact agreed quote', () => {
+  const actualShape = { sumKopecks: 980000, discountKopecks: 98000, toPayKopecks: 882000,
+    depositKopecks: 0, bonusKopecks: 0, lines: [] };
+  const valid = node(router, { ...loadPromo(), statusCode: 200, payload: actualShape });
+  assert.equal(valid[0]._summerSubscriptionCtx.step, 'create_transaction');
+  assert.equal(valid[0]._summerSubscriptionCtx.promoProviderAttempted, true);
+  for (const payload of [{ ...actualShape, sum: 1 }, { ...actualShape, discountMinor: 1 },
+    { ...actualShape, toPay: 1 }, { ...actualShape, toPayKopecks: '882000' },
+    { ...actualShape, discountKopecks: -1 }, { ...actualShape, sumKopecks: undefined }]) {
+    const invalid = node(router, { ...loadPromo(), statusCode: 200, payload });
+    assert.equal(invalid[0], null);
+    assert.equal(invalid[2].statusCode, 409);
+    assert.equal(invalid[2].payload.promoAttempt.providerAttempted, false);
+  }
+});
