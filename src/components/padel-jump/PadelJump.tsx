@@ -301,7 +301,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
             <label><input type="checkbox" checked={saved.settings.journal} onChange={e => { progress.current.settings.journal = e.target.checked; save(); }} /> Локальный журнал игры <small>Без имени и телефона, только на этом устройстве</small></label>
             <button type="button" onClick={() => choose(-1, 0)}>Бесконечный подъём · рекорд {best} м</button>
             {storageIssue && <p role="status">Браузер не сохраняет данные. Этот заход работает, но прогресс может потеряться после закрытия.</p>}
-            <p>Фоны — черновые векторные эскизы по референсам.</p>
+            <p>Пройди все 11 станций и собери свои медали.</p>
           </div>
         </div>}
       </div>
