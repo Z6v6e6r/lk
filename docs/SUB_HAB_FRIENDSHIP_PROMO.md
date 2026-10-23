@@ -68,7 +68,7 @@ status/диалога и наблюдение. Merge, deploy и изменени
 Локально: `npm run build` (prod/dev, публичные VITE-настройки существующего checkout),
 `npx tsc -b`, обе сборки `build:subscription-storefront`, scoped ESLint,
 `git diff --check`. Профильные promo/storefront/Node-RED тесты пройдены.
-Полная critical matrix обнаружила три несовпадения исторических source pins:
+Первый локальный проход critical matrix обнаружил три несовпадения исторических source pins:
 добавлен отдельный successor, исторический error patch проверяется на его
 immutable candidate; исправленные historical/source-chain проверки пройдены.
 Private live-preimage composition, provider preview и реальные платежи не проверены.
@@ -96,3 +96,15 @@ Private live-preimage composition, provider preview и реальные плат
 - `src/components/subscription-storefront/payment.ts`
 - `src/components/subscription-storefront/promoCodePayment.ts`
 - `src/utils/apiClient.ts`
+
+CI на первом commit подтвердил полную critical regression matrix. В следующем
+шаге обнаружены ещё два source-generation/topology несовпадения. Новый hash
+роутера добавлен в существующий guard: function-only композиция по-прежнему
+запрещена, старый unified production candidate остаётся UNBOUND. Целевые
+13 тестов и scoped ESLint после исправления пройдены.
+
+Дополнительно изменены:
+
+- `scripts/lib/piterAtomicTopologyContract.mjs`
+- `scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs`
+- `scripts/tests/piterAtomicTopologyContract.test.mjs`
