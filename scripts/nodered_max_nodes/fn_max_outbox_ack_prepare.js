@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "max_ack_prepare", { sourceHash: "048b78a5bfea883f51d5d40ca8240cf9aa0b20a631259cc199972dfe32f0d331", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -10,6 +19,7 @@ if (!command || !command.id) {
   return null;
 }
 
+lkDiagnostic({ connector: command.connector, leaseAttempt: command.attempts, code: "UPSTREAM_OBSERVED", outcome: "outcome_unknown", botIdentityKnown: false, accessEvidenceKnown: false });
 const apiBase = (() => {
   try {
     return toStr(env.get("SUPPORT_API_BASE_URL"));

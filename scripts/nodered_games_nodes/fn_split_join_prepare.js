@@ -1,3 +1,11 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    global.get("lkDiagnostics")?.observe(msg, "join_prepare", { sourceHash: "515dca2fdb427ff5e56dda7b47372a45056ece3fcdbdba00a70074c7a3b36010", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
@@ -258,6 +266,7 @@ const resolveIsSinglesGame = ({ metadata, splitPayment, booking, game }) => {
 };
 
 const fail = (status, error, details) => {
+  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
   msg.payload = { error, details: details || null };

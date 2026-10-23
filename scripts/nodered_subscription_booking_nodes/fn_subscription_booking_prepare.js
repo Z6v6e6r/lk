@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "booking_prepare", { sourceHash: "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const VIVA_API_BASE = "https://api.vivacrm.ru";
 const TENANT_KEY = "iSkq6G";
 

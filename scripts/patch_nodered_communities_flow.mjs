@@ -1481,6 +1481,7 @@ return [msg, null, msg];
 `;
 
 const fnMediaAssetGetResponse = `${commonHelpers}
+try { global.get("lkDiagnostics")?.media(msg, "media_asset"); } catch { /* no-throw diagnostic observer */ }
 const rows = toArray(msg.payload).filter((item) => !item?.archived);
 const ctx = isObj(msg._communityLogoAsset) ? msg._communityLogoAsset : {};
 if (rows.length === 0) {
@@ -1533,6 +1534,7 @@ return [msg, null, msg];
 `;
 
 const fnMediaLegacyGetResponse = `${commonHelpers}
+try { global.get("lkDiagnostics")?.media(msg, "media_legacy"); } catch { /* no-throw diagnostic observer */ }
 const rows = toArray(msg.payload).filter((item) => !item?.archived);
 const ctx = isObj(msg._communityLegacyLogo) ? msg._communityLegacyLogo : {};
 if (rows.length === 0) {
