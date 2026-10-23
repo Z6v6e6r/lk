@@ -16,7 +16,7 @@ import {
 const ROOT = path.resolve(import.meta.dirname, "../..");
 // Historical topology bindings stay frozen. Explicitly pin the current atomic
 // function for this core-topology fixture; the polling graph has its own tests.
-const atomicOptions = { atomicRouterSha256: JSON.parse(fs.readFileSync(new URL('../subscription_payment_archive_generation.json', import.meta.url))).targets
+const atomicOptions = { atomicRouterSha256: JSON.parse(fs.readFileSync(new URL('../lk1_error_source_generation.json', import.meta.url))).targets
   .find(t => t.fileName === 'fn_tournament_subscription_piter_atomic_router.js').candidateSha256 };
 const FUNCTION_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
 
