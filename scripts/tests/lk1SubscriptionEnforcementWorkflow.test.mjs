@@ -203,6 +203,10 @@ test("binary asset exceptions are exact and content-addressed", async () => {
   )].map((match) => [match[1].slice(0, -1), match[2]]);
   const expectedEntries = [
     [
+      "src/assets/yasenevo-v2/station_construction_panorama.webp",
+      "57e55fa931dd251cd4d2d7bb8366904ae290fd71a60450c3be559a7c1aff13f2",
+    ],
+    [
       "src/assets/piter-subscription-rules-from-20260901.webp",
       "3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12",
     ],
