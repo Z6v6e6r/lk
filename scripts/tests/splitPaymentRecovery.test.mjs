@@ -11,6 +11,10 @@ const SOURCES = {
   join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', '515dca2fdb427ff5e56dda7b47372a45056ece3fcdbdba00a70074c7a3b36010'],
   router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', 'f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5'],
 };
+const DIAGNOSTIC_CANDIDATES = {
+  join: '4a44d0866125fdf800c9bbf7a8a93166beb799d4e4f1e1f97ad062ada35650d3',
+  router: '5c436951dfa273e5fb9753c144d242ec06c6b95aad957aebb9773d7f69262bfb',
+};
 
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T12:20:00.000Z'])); }
@@ -39,10 +43,19 @@ function run(key, msg) {
   );
 }
 
-test('split-payment candidates stay pinned against the verified live preimages', () => {
+test('split-payment business preimages and observer candidates remain separately pinned', () => {
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
     assert.notEqual(candidate, livePreimage, key);
-    assert.equal(crypto.createHash('sha256').update(source(key)).digest('hex'), candidate, key);
+    const current = source(key);
+    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), DIAGNOSTIC_CANDIDATES[key] || candidate, key);
+    if (DIAGNOSTIC_CANDIDATES[key]) {
+      assert.ok(current.includes(`sourceHash: "${candidate}"`), key);
+      const marker = key === 'join' ? 'const TOKEN_URL_DEFAULT' : 'const ADMIN_API';
+      const business = current.slice(current.indexOf(marker)).replace(
+        '  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });\n', '',
+      );
+      assert.equal(crypto.createHash('sha256').update(business).digest('hex'), candidate, key);
+    }
   }
 });
 

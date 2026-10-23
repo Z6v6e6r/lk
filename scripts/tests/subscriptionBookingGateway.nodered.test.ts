@@ -3669,10 +3669,16 @@ test("managed rejection never deletes an owned exercise with an ambiguous bookin
 });
 
 
-test("guarded patcher accepts the exact current tracked split router", () => {
+test("guarded patcher retains the business preimage and rejects an unregistered diagnostic candidate", () => {
+  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_split_router.js", "utf8");
   const funcSha256 = crypto.createHash("sha256")
-    .update(fs.readFileSync("scripts/nodered_games_nodes/fn_split_router.js", "utf8"))
+    .update(source)
     .digest("hex");
+  const businessSha256 = crypto.createHash("sha256").update(
+    source.slice(source.indexOf("const ADMIN_API")).replace(
+      '  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });\n', '',
+    ),
+  ).digest("hex");
   const router = {
     id: "8f7bd5b482fe9763",
     type: "function",
@@ -3687,8 +3693,10 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5");
-  assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
+  assert.equal(businessSha256, "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5");
+  assert.equal(funcSha256, "5c436951dfa273e5fb9753c144d242ec06c6b95aad957aebb9773d7f69262bfb");
+  assert.equal(resolveManagedSubscriptionRouterContract(router, businessSha256)?.managedActionCandidateSha256, null);
+  assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256), null);
 });
 
 test("guarded patcher accepts the exact reviewed five-output router without dropping canonical payment", () => {

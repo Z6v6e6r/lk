@@ -664,7 +664,9 @@
         "product_amount",
         "product_trial_amount",
         "amount_ceiling",
-        "target_not_future"
+        "target_not_future",
+        "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
       ]
     },
     "reason": {
@@ -904,7 +906,20 @@
         "product_amount",
         "product_trial_amount",
         "amount_ceiling",
-        "target_not_future"
+        "target_not_future",
+        "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED",
+        "target_missing",
+        "target_upstream_error",
+        "target_identity",
+        "target_category",
+        "target_start_invalid",
+        "target_duration",
+        "target_room",
+        "target_studio",
+        "target_type",
+        "target_cancelled",
+        "target_lifecycle"
       ]
     },
     "providerCode": {
@@ -1144,7 +1159,9 @@
         "product_amount",
         "product_trial_amount",
         "amount_ceiling",
-        "target_not_future"
+        "target_not_future",
+        "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
       ]
     },
     "transportCode1": {
@@ -1384,7 +1401,9 @@
         "product_amount",
         "product_trial_amount",
         "amount_ceiling",
-        "target_not_future"
+        "target_not_future",
+        "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
       ]
     },
     "transportCode2": {
@@ -1624,7 +1643,9 @@
         "product_amount",
         "product_trial_amount",
         "amount_ceiling",
-        "target_not_future"
+        "target_not_future",
+        "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
       ]
     },
     "transportCode3": {
@@ -1864,7 +1885,9 @@
         "product_amount",
         "product_trial_amount",
         "amount_ceiling",
-        "target_not_future"
+        "target_not_future",
+        "TOURNAMENT_DISCOUNT_TARGET_UNRESOLVED",
+        "GROUP_DISCOUNT_TARGET_UNRESOLVED"
       ]
     },
     "responseKind": {
