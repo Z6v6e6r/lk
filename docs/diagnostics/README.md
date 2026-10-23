@@ -54,7 +54,7 @@ sink; deployment must inventory them separately and must not connect new events 
 
 | Boundary | Previously indistinguishable | Added SOURCE fields/point | Synthetic test | Remaining UNKNOWN/prerequisite |
 | --- | --- | --- | --- | --- |
-| Referral purchase418 | Owner lookup vs subscription load vs transaction refusal | owner step, upstreamStatus, responseKind, DTO flags; fail stage/status | correlatedErrorDiagnostics purchase418/body-kind cases, existing referral suite | Provider root cause if no safe code; no purchase success inferred; real reservation ACK needs an observed DB result |
+| Referral purchase418 | Owner lookup vs subscription load vs transaction refusal | owner step, upstreamStatus, responseKind, DTO flags; fail stage/status; current-preimage prepare/owner overlays | correlatedErrorDiagnostics purchase418/body-kind, opaque-byte preservation/logger failure, stale/graph refusal; existing referral suite | Provider root cause if no safe code; no purchase success inferred; real reservation ACK needs an observed DB result; loaded runtime remains UNKNOWN |
 | Auth-consents403/text | Userinfo transport/status/claims/client/tenant refusal | auth_verify, safe upstream code, response kind, stable refusal, subject-present flag | auth403 with/without code; authConsentAudit | No introspection/refresh; provider explanation may remain unresolved |
 | PATCH409 | Read/binding/precondition/version/CAS mismatch | lookup cardinality, equality/presence/type flags, code, sourceHash, matched/modified/acknowledged | authorizer and ACK differential tests; partnerRosterGuard | Historical preimage/expected values remain unavailable; no old root cause is inferred |
 | Split/join409 | Several server guards shared status | join_prepare/split_router, closed guard code catalog, operationStage | existing split router/critical matrix | A dynamic/unlisted upstream code is UNKNOWN; no retries changed |
@@ -75,11 +75,36 @@ The shared helper never changes a business return value or invokes another busin
 calls catch synchronous logging failures; asynchronous sink rejection is counted. Source tests compare
 business outputs against the immutable LK base with synthetic inputs. Graph transforms are pure:
 exact source/node hashes, route/type/topology checks and conflict checks fail closed before output.
-`applySourceHooks` also requires the tracked business preimage, an exact route hash and same-tab
-wire reachability (unproven cross-tab links fail closed), so drift cannot authorize replacing
-newer owner/prepare logic with this snapshot. Prepare/owner parity from the incident packet is a
-**dated report**, not current verification. Scoped SSH hash inspection was rejected by automatic
-approval review; current runtime parity is UNKNOWN. No whole live flow was downloaded or regenerated.
+`applySourceHooks` requires the tracked business preimage for 28 hooks, an exact route hash and
+same-tab wire reachability (unproven cross-tab links fail closed). Referral prepare/owner use the
+current-preimage overlay below instead of replacing a function from tracked source.
+
+### Scoped referral preimages, 2026-10-23
+
+After explicit read-only authorization, scoped disk hashes and server-sanitized structural differences
+were observed at 12:02 MSK; a pure, non-executing string overlay was verified at 12:06 MSK. Only two
+function fingerprints and five-node topology metadata were exported. All source literals/auth-related
+lines were withheld before the structural diff left the server. No whole flow, function body,
+credential value, settings/env file or provider response was exported or added to Git.
+
+The recorded prepare/owner hashes differ from the sanitized tracked source in auth-request
+construction. That opaque text must be preserved, not replaced or migrated by diagnostics.
+`referral-observer-overlay.mjs` adds only the optional no-throw observer prefix and one refusal
+observer. `applySourceHooks` admits these two functions only when the exact current node IDs,
+preimage hashes, candidate hashes, route hash, active tab and five-node topology hash match.
+An old tracked replacement, repeated observer, changed anchor or unknown drift is rejected.
+The two tracked prepare/owner files remain sanitized, **uninstrumented offline fixtures**; their
+contents are not the current production preimage and are never selected as replacements by this path.
+Do not use the legacy whole-referral generator as a current production diagnostic candidate.
+
+`referral-preimages.20261023.json` contains the scoped receipt and observer-edit hashes only. The
+server-side string operation recovered each original preimage byte-for-byte after removing exactly
+the observer additions; no business function was executed. LOCAL tests use structurally equivalent
+synthetic auth bodies, preserve outputs including token-request construction and upstream418, and
+exercise throwing loggers and stale/topology refusals. Local fixtures cannot prove the private body
+hash; the dated scoped receipt supplies that separate evidence. A loopback Admin API read returned
+401, so loaded in-memory runtime parity remains **UNKNOWN**. Disk evidence is point-in-time and must
+be refreshed before any separately authorized rollout. No production change or provider call occurred.
 
 ## Collector and bounded volume
 
@@ -128,8 +153,9 @@ and sink provisioning require the separately authorized rollout; no production s
 
 1. Obtain exact-target rollout authority. Freeze pushed source/CI and both companion heads. Inspect
    new scoped hashes/graph metadata for each installed boundary and its current process/release.
-   Prepare/owner mismatch must be resolved by porting observer-only changes to a guarded preimage;
-   these hooks must refuse unknown drift. Full private flow capture, if a runbook requires it, is a
+   Prepare/owner use only the exact-hash overlay on the existing function, with fresh scoped source
+   and topology verification; never substitute their tracked fixture bodies. These hooks refuse
+   unknown drift. Full private flow capture, if a runbook requires it, is a
    separate guarded release prerequisite; never regenerate from this repository's stale snapshots.
 2. Provision a dedicated diagnostic key/config only with explicit authority. LK runtime accepts a
    Buffer; companion config names: LK_DIAGNOSTICS_ENABLED, LK_DIAGNOSTICS_SOURCE_RELEASE and

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { ROUTES } from "../../src/utils/errorDiagnosticsCore.mjs";
 import { createHash } from "node:crypto";
+import { referralObserverBindings, applyCurrentReferralObserver } from "./referral-observer-overlay.mjs";
 export const hooks = {
   "scripts/nodered_games_nodes/fn_split_join_prepare.js": "join_prepare",
   "scripts/nodered_games_nodes/fn_split_router.js": "split_router",
@@ -57,6 +58,11 @@ export function applySourceHooks(flow, attestations, root = process.cwd()) {
     if (!Object.hasOwn(hooks, path) || seen.has(id)) throw new Error("DIAGNOSTIC_SCOPE_INVALID");
     seen.add(id);
     const matches = candidate.filter(n => n.id === id && n.type === "function");
+    if (Object.hasOwn(referralObserverBindings, path)) {
+      if (matches.length !== 1) throw new Error("DIAGNOSTIC_SOURCE_DRIFT");
+      matches[0].func = applyCurrentReferralObserver(candidate, attestation, matches[0].func);
+      continue;
+    }
     const source = fs.readFileSync(`${root}/${path}`, "utf8");
     const businessPreimage = source.match(/sourceHash: "([a-f0-9]{64})"/)?.[1];
     if (!businessPreimage || businessPreimage !== preimageHash || matches.length !== 1 || sha(matches[0].func) !== preimageHash || sha(source) !== candidateHash) throw new Error("DIAGNOSTIC_SOURCE_DRIFT");

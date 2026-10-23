@@ -1,12 +1,3 @@
-// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
-const lkDiagnostic = (fields = {}) => {
-  try {
-    if (typeof global === "undefined" || typeof global.get !== "function") return;
-    const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "purchase_prepare", { sourceHash: "9c30221e828275817b85806466346aea8a77fd229788d839c7ea708191409628", ...fields });
-  } catch { /* Observability cannot alter business execution. */ }
-};
-lkDiagnostic({ code: "STAGE_ENTER" });
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const DEFAULT_RESERVATION_MINUTES = 30;
 
@@ -113,7 +104,6 @@ const resolveReservationMinutes = () => {
 };
 
 const fail = (status, error, details) => {
-  lkDiagnostic({ code: "UPSTREAM_REFUSED", httpStatus: status, reason: details?.code, outcome: "refused" });
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
   msg.payload = { error, details: details || null };

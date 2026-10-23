@@ -10,10 +10,14 @@ import { composeDiagnosticSettings } from '../diagnostics/compose.mjs';
 import { createCollector } from '../diagnostics/collector.mjs';
 import { applySourceHooks, hooks, sha } from '../diagnostics/source-hooks.mjs';
 import { addMaxObservers } from '../diagnostics/max-observers.mjs';
+import { referralObserverBindings, referralObserverEdits, instrumentReferralFunction,
+  referralGraphHash, referralRouteHash, scopedReferralGraphHash, assertCurrentReferralBinding,
+  applyCurrentReferralObserver } from '../diagnostics/referral-observer-overlay.mjs';
 const base = () => ({ schemaVersion: 1, diagnosticEventId: randomUUID(), requestId: randomUUID(), eventKind: 'client_error', source: 'browser', stage: 'api_request', code: 'CLIENT_HTTP_ERROR' });
 const read = path => fs.readFileSync(path, 'utf8');
 function run(path, input, observer, original = false, extra = {}) {
-  const source = original ? execFileSync('git', ['show', `91b016eb84be8269abc2b21d05a791dbfb87f4c3:${path}`], { encoding: 'utf8' }) : read(path);
+  let source = original ? execFileSync('git', ['show', `91b016eb84be8269abc2b21d05a791dbfb87f4c3:${path}`], { encoding: 'utf8' }) : read(path);
+  if (!original && Object.hasOwn(referralObserverBindings, path)) source = instrumentReferralFunction(source, referralObserverBindings[path].stage);
   const msg = structuredClone(input);
   const globals = { get: key => key === 'lkDiagnostics' ? observer : extra[key] ?? null, set() {} };
   const node = { warn() {}, error() {}, send() {}, ...extra.node };
@@ -137,6 +141,113 @@ test('auth403/text with and without allowlisted provider reason has no refresh/c
     assert(events.some(e => e.httpStatus === 401 && e.upstreamStatus === 403));
     const throws = run(file, input, observer, false, { node: { warn() { throw Error('logger'); } } });
     assert.equal(throws.msg.statusCode, 401);
+  }
+});
+
+// Reproduce only the observed structural difference with an explicitly synthetic
+// auth body. No installed function body or auth literal is a repository fixture.
+function syntheticCurrentReferral(path) {
+  let source = execFileSync('git', ['show', `91b016eb84be8269abc2b21d05a791dbfb87f4c3:${path}`], { encoding: 'utf8' });
+  const start = source.indexOf('const readVivaServiceEnv =');
+  const end = source.indexOf(path.includes('purchase_prepare') ? 'const toInt =' : 'const normalizePhone =', start);
+  assert(start > 0 && end > start);
+  source = source.slice(0, start) + source.slice(end);
+  const authStart = source.indexOf('msg.payload = buildVivaServiceTokenRequestBody();');
+  const authEnd = source.indexOf('\n}', authStart) + 2;
+  assert(authStart > 0 && authEnd > authStart);
+  return source.slice(0, authStart) + 'msg.payload = "SYNTHETIC_OPAQUE_AUTH_BODY";' + source.slice(authEnd);
+}
+function executeReferral(source, input, observer) {
+  const msg = structuredClone(input);
+  const globals = { get: key => key === 'lkDiagnostics' ? observer : null, set() {} };
+  class FixedDate extends Date { static now() { return 1792713600000; } }
+  const result = new Function('msg', 'global', 'env', 'Date', source)(msg, globals,
+    { get() { assert.fail('current synthetic preimage must not acquire credentials'); } }, FixedDate);
+  return { msg, result };
+}
+test('current referral overlay preserves every opaque business byte and synthetic outcome on logger failure', () => {
+  for (const [path, binding] of Object.entries(referralObserverBindings)) {
+    const source = syntheticCurrentReferral(path), candidate = instrumentReferralFunction(source, binding.stage);
+    const edits = referralObserverEdits(binding.stage, sha(source));
+    assert(candidate.startsWith(edits.prefix));
+    assert.equal(candidate.slice(edits.prefix.length).replace(edits.needle + edits.addition, edits.needle), source);
+    assert(candidate.includes('SYNTHETIC_OPAQUE_AUTH_BODY'));
+    const inputs = binding.stage === 'purchase_prepare' ? [
+      { payload: { paymentRef: 'synthetic-operation' } },
+      { payload: { inviteId: 'synthetic-invite', clientPhone: '7' + '0'.repeat(10), planKey: 'academy', paymentRef: 'synthetic-operation' } },
+      { payload: { ownerPhone: '7' + '0'.repeat(10), ownerSubscriptionId: 'synthetic-subscription',
+        clientPhone: '7' + '0'.repeat(10), planKey: 'academy', paymentRef: 'synthetic-operation' } },
+    ] : ['token_owner', 'find_owner_client', 'load_owner_subscription'].map(step => ({
+      statusCode: 418, payload: { error: 'SYNTHETIC_PRIVATE_RESPONSE', token: 'SYNTHETIC_PRIVATE_RESPONSE' },
+      _referralSubscriptionCtx: { action: 'purchase', step },
+    }));
+    for (const input of inputs) {
+      const events = [], observer = createDiagnostics({ sink: event => events.push(event) });
+      const original = executeReferral(source, input);
+      assert.deepEqual(executeReferral(candidate, input, observer), original);
+      assert.deepEqual(executeReferral(candidate, input, { observe() { throw Error('sink'); }, upstream() { throw Error('sink'); } }), original);
+      assert(events.length > 0);
+      assert(!JSON.stringify(events).includes('SYNTHETIC_'));
+      if (binding.stage === 'owner_resolve') assert(events.some(event => event.upstreamStatus === 418));
+    }
+    assert.throws(() => instrumentReferralFunction(candidate, binding.stage), /SOURCE_DRIFT/);
+    assert.throws(() => instrumentReferralFunction(source + edits.needle, binding.stage), /SOURCE_DRIFT/);
+    assert.throws(() => instrumentReferralFunction(source, 'arbitrary-stage'), /SCOPE_INVALID/);
+  }
+});
+test('scoped receipt binds both opaque preimages and exact candidate hashes without exporting function/config values', () => {
+  const receipt = JSON.parse(read('docs/diagnostics/referral-preimages.20261023.json'));
+  assert.equal(receipt.readStable, true); assert.equal(receipt.tabDisabled, false);
+  assert.equal(receipt.loadedRuntimeParity, 'UNKNOWN');
+  assert.equal(receipt.routeHash, referralRouteHash);
+  assert.equal(receipt.graphHash, referralGraphHash);
+  assert.equal(scopedReferralGraphHash(receipt.graph), referralGraphHash);
+  for (const binding of Object.values(referralObserverBindings)) {
+    const target = receipt.targets.find(target => target.id === binding.id);
+    assert.equal(target.preimageHash, binding.preimageHash); assert.equal(target.candidateHash, binding.candidateHash);
+    assert.equal(target.recoveredPreimageMatches, true);
+    assert.equal(target.observerEditsHash, sha(JSON.stringify(referralObserverEdits(binding.stage, binding.preimageHash))));
+  }
+  assert(!/"(?:func|payload|headers|uri|password|username|credentials)"\s*:/.test(JSON.stringify(receipt)));
+  const drift = structuredClone(receipt.graph); drift[2].wires = [[]];
+  assert.notEqual(scopedReferralGraphHash(drift), referralGraphHash);
+});
+test('current referral application refuses stale tracked replacement, synthetic lookalikes and topology drift without mutation', () => {
+  const receipt = JSON.parse(read('docs/diagnostics/referral-preimages.20261023.json'));
+  for (const [path, binding] of Object.entries(referralObserverBindings)) {
+    const flow = [...structuredClone(receipt.graph), { id: 'ac5d37d8ebd616ca', type: 'tab', disabled: false }];
+    flow[0].url = '/lk/tournaments/referral-subscription/purchase'; flow[0].method = 'post';
+    const old = execFileSync('git', ['show', `91b016eb84be8269abc2b21d05a791dbfb87f4c3:${path}`], { encoding: 'utf8' });
+    flow.find(node => node.id === binding.id).func = old;
+    const original = structuredClone(flow);
+    const attestation = { id: binding.id, path, routeId: flow[0].id, routeHash: sha(JSON.stringify(flow[0])),
+      preimageHash: sha(old), candidateHash: sha(read(path)) };
+    assert.throws(() => applySourceHooks(flow, [attestation]), /SOURCE_DRIFT/);
+    assert.deepEqual(flow, original);
+    assert.throws(() => applySourceHooks(flow, [{ ...attestation, ...binding }]), /SOURCE_DRIFT/);
+    flow[2].wires = [[]];
+    assert.throws(() => applySourceHooks(flow, [{ ...attestation, ...binding }]), /BINDING|SOURCE_DRIFT/);
+  }
+});
+test('current referral metadata admission accepts only exact observed identities, hashes and active scoped graph', () => {
+  const receipt = JSON.parse(read('docs/diagnostics/referral-preimages.20261023.json'));
+  for (const [path, binding] of Object.entries(referralObserverBindings)) {
+    const flow = [...structuredClone(receipt.graph), { id: 'ac5d37d8ebd616ca', type: 'tab', disabled: false }];
+    const attestation = { path, id: binding.id, routeId: receipt.graph[0].id, routeHash: receipt.routeHash,
+      preimageHash: binding.preimageHash, candidateHash: binding.candidateHash };
+    assert.doesNotThrow(() => assertCurrentReferralBinding(flow, attestation, binding.preimageHash));
+    for (const delta of [{ id: 'other' }, { routeId: 'other' }, { routeHash: '0'.repeat(64) },
+      { preimageHash: '0'.repeat(64) }, { candidateHash: '0'.repeat(64) }, { path: 'unregistered' }]) {
+      assert.throws(() => assertCurrentReferralBinding(flow, { ...attestation, ...delta }, binding.preimageHash), /SOURCE_DRIFT/);
+    }
+    assert.throws(() => assertCurrentReferralBinding(flow, attestation, '0'.repeat(64)), /SOURCE_DRIFT/);
+    assert.throws(() => applyCurrentReferralObserver(flow, attestation, syntheticCurrentReferral(path)), /SOURCE_DRIFT/);
+    const disabled = structuredClone(flow); disabled.at(-1).disabled = true;
+    assert.throws(() => assertCurrentReferralBinding(disabled, attestation, binding.preimageHash), /SOURCE_DRIFT/);
+    const rewired = structuredClone(flow); rewired[2].wires = [[]];
+    assert.throws(() => assertCurrentReferralBinding(rewired, attestation, binding.preimageHash), /SOURCE_DRIFT/);
+    assert.throws(() => assertCurrentReferralBinding([...flow, flow[1]], attestation, binding.preimageHash), /SOURCE_DRIFT/);
+    assert.throws(() => assertCurrentReferralBinding([...flow, { id: flow.at(-1).id, type: 'function' }], attestation, binding.preimageHash), /SOURCE_DRIFT/);
   }
 });
 test('guarded source application rejects drift/ambiguous identity without modifying supplied flow', () => {
