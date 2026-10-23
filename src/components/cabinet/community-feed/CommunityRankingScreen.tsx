@@ -19,6 +19,9 @@ import { useStickyCurrentUserRow } from "./useStickyCurrentUserRow";
 import type { CommunityRankingRowModel, CommunityRankingTypeId } from "./communityRankingModel";
 
 interface CommunityRankingScreenProps {
+  divisions?: Array<{ id: string; name: string }>;
+  activeDivision?: string | null;
+  onChangeDivision?: (id: string) => void;
   community: Pick<CommunityRecord, "name" | "logo" | "memberCount">;
   rows: CommunityRankingRowModel[];
   activeType: CommunityRankingTypeId;
@@ -193,6 +196,9 @@ export function CommunityRankingScreen({
   activePeriod,
   monthStartTs,
   gamesCount,
+  divisions = [],
+  activeDivision,
+  onChangeDivision,
   chatBadgeCount,
   isLoading,
   error,
@@ -329,6 +335,14 @@ export function CommunityRankingScreen({
         <CommunitySecondaryNav activeItem="ranking" onSelect={onSelectSectionNav} />
 
         <div className="community-ranking-box">
+          {divisions.length > 0 && (
+            <label className="community-ranking-search">
+              <span>Дивизион</span>
+              <select aria-label="Дивизион Лиги" className="community-ranking-search-input" value={activeDivision ?? ''} onChange={event => onChangeDivision?.(event.target.value)}>
+                {divisions.map(division => <option key={division.id} value={division.id}>{division.name}</option>)}
+              </select>
+            </label>
+          )}
           <div className="community-ranking-filter-bar community-ranking-filter-bar--period" aria-label="Период рейтинга">
             {ratingPeriodOptions.map((option) => (
               <button

@@ -48,7 +48,6 @@ import {
   apiFetchPadelGamesByPhone,
   apiMarkPadelGameChatRead,
   apiPayMasterService,
-  apiSearchPadelPlayers,
   apiUpdatePadelGameRecord,
   apiSendPadelGameChatMessage,
   apiFetchMasterServicePrice,
@@ -3128,6 +3127,44 @@ function buildVisibleMatchResultSetPairings(
   }
 
   return Array.from({ length: visibleSetCount }, () => cloneTeamSlots(fallbackPairing));
+}
+
+function replaceMatchResultTeamSlot(
+  slots: Array<PadelGamePlayer | null>,
+  slotIndex: number,
+  player: PadelGamePlayer | null,
+): Array<PadelGamePlayer | null> {
+  const nextSlots = cloneTeamSlots(slots);
+  if (slotIndex < 0 || slotIndex >= DETAILS_TEAM_SLOTS_COUNT) return nextSlots;
+  const targetKey = getPadelPlayerIdentityKey(player);
+  const previousPlayer = nextSlots[slotIndex] ?? null;
+  const previousKey = getPadelPlayerIdentityKey(previousPlayer);
+  // Swap occupied positions and clear any duplicate legacy references.
+  let swapped = false;
+  nextSlots.forEach((candidate, index) => {
+    if (index === slotIndex || !targetKey || getPadelPlayerIdentityKey(candidate) !== targetKey) return;
+    nextSlots[index] = !swapped && previousKey !== targetKey ? previousPlayer : null;
+    swapped = true;
+  });
+  nextSlots[slotIndex] = player;
+  return nextSlots;
+}
+
+function replaceMatchResultStartingPairings(
+  pairings: Array<MatchResultSetPairingSlots | null>,
+  previousStart: Array<PadelGamePlayer | null>,
+  nextStart: Array<PadelGamePlayer | null>,
+): Array<MatchResultSetPairingSlots | null> {
+  const nextPairings = pairings.map((slots) => slots ? cloneTeamSlots(slots) : null);
+  nextPairings[0] = cloneTeamSlots(nextStart);
+  // Restored drafts materialize inherited lineups. Carry a repair through those
+  // sets, stopping at the first distinct lineup chosen for a later set.
+  for (let index = 1; index < nextPairings.length; index += 1) {
+    const slots = nextPairings[index];
+    if (slots?.some(Boolean) && !areTeamSlotsEqualByIdentity(slots, previousStart)) break;
+    if (slots) nextPairings[index] = cloneTeamSlots(nextStart);
+  }
+  return nextPairings;
 }
 
 function buildMatchResultSubmitSetPairingsPayload(
@@ -8006,42 +8043,6 @@ export default function GamesPage({
         });
       });
 
-      const playersMissingRating = players.filter((player) => {
-        const fresh = getPadelPlayerLookupKeys(player)
-          .map((key) => enrichedByKey.get(key))
-          .find(Boolean);
-        return !fresh?.rating && fresh?.ratingNumeric == null;
-      });
-
-      if (playersMissingRating.length > 0) {
-        const searchResults = await Promise.all(
-          playersMissingRating.slice(0, 12).map(async (player) => {
-            const query = (player.id || "").trim()
-              || normalizePhoneForGame(player.phone)
-              || player.name.trim();
-            if (!query) return null;
-            const result = await apiSearchPadelPlayers(query, 8);
-            const playerKeys = new Set(getPadelPlayerLookupKeys(player));
-            const match = result.data.find((candidate) => (
-              getPadelPlayerLookupKeys(candidate).some((key) => playerKeys.has(key))
-            )) ?? null;
-            if (!match) return null;
-            return {
-              id: match.id ?? null,
-              phone: normalizePhoneForGame(match.phone),
-              name: match.name ?? null,
-              photo: match.photo ?? null,
-              rating: match.rating || mapNumericToRatingGrade(match.ratingNumeric) || null,
-              ratingNumeric: normalizeRatingNumeric(match.ratingNumeric),
-            } satisfies EnrichedPadelPlayerData;
-          }),
-        );
-
-        searchResults.forEach((item) => {
-          if (item) upsertEnriched(item);
-        });
-      }
-
       if (cancelled) return;
 
       const enrichPlayerArray = (list: PadelGamePlayer[]) => {
@@ -8280,6 +8281,13 @@ export default function GamesPage({
     [detailsParticipants, isCurrentUserPlayer],
   );
   const isCurrentUserConfirmedParticipant = Boolean(detailsCurrentUserParticipant);
+  // Result eligibility follows actual membership, even when legacy UI metadata
+  // incorrectly marks a participating organizer as out of the match.
+  const isCurrentUserResultParticipant = isCurrentUserConfirmedParticipant
+    || detailsSourceParticipants.some((player) => (
+      (!player.status || player.status === "CONFIRMED") && isCurrentUserPlayer(player)
+    ));
+
   const isCurrentUserInWaitlist = useMemo(
     () => detailsWaitlist.some((player) => isCurrentUserPlayer(player)),
     [detailsWaitlist, isCurrentUserPlayer],
@@ -8738,7 +8746,7 @@ export default function GamesPage({
   const canCurrentUserFetchResultState = Boolean(
     !isReadOnlySyntheticGame
     && profilePhoneNorm
-    && (isCurrentUserOrganizerByDetails || isCurrentUserConfirmedParticipant),
+    && (isCurrentUserOrganizerByDetails || isCurrentUserResultParticipant),
   );
 
   useEffect(() => {
@@ -9118,6 +9126,7 @@ export default function GamesPage({
         : null;
     const rosterPlayers = dedupePlayersByIdentity([
       ...extractMatchResultSnapshotPlayers(sessionRosterSnapshot),
+      ...detailsSourceParticipants,
       ...detailsParticipants,
       ...detailsWaitlist,
       ...detailsPlayerPool,
@@ -9178,7 +9187,7 @@ export default function GamesPage({
       if (!key) return;
       if (!participantByKey.has(key)) return;
       if (usedKeys.has(key)) return;
-      if (detailsOrganizerKey && key === detailsOrganizerKey) return;
+      if (detailsOrganizerInMatch && detailsOrganizerKey && key === detailsOrganizerKey) return;
       if (detailsOrganizerInMatch && index === 0 && detailsOrganizerKey) return;
       nextSlotKeys[index] = key;
       usedKeys.add(key);
@@ -9344,6 +9353,7 @@ export default function GamesPage({
     detailsMatchResultSession,
     detailsPlayerPool,
     detailsParticipants,
+    detailsSourceParticipants,
     detailsWaitlist,
     detailsOrganizerInMatch,
     detailsOrganizerKey,
@@ -9427,7 +9437,7 @@ export default function GamesPage({
     return Math.max(0, detailsMatchResultDisputeDeadlineTs - matchResultNowTs);
   }, [detailsMatchResultDisputeDeadlineTs, matchResultNowTs]);
   const canEditMatchResult = isDetailsMatchStarted
-    && isCurrentUserConfirmedParticipant
+    && isCurrentUserResultParticipant
     && !isMatchResultPendingReview
     && !isMatchResultAgreed
     && (detailsMatchResultStatus !== "CORRECTION_PENDING" || isMatchResultSubmittedByCurrentUser);
@@ -9443,19 +9453,19 @@ export default function GamesPage({
     && !detailsMatchResultValidationError
     && !updatingGameMeta;
   const canDisputeMatchResult = isDetailsMatchStarted
-    && isCurrentUserConfirmedParticipant
+    && isCurrentUserResultParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
     && (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0)
     && !updatingGameMeta;
   const canConfirmMatchResult = isDetailsMatchStarted
-    && isCurrentUserConfirmedParticipant
+    && isCurrentUserResultParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
     && (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0)
     && !updatingGameMeta;
   const canAcceptMatchResultCorrection = isDetailsMatchStarted
-    && isCurrentUserConfirmedParticipant
+    && isCurrentUserResultParticipant
     && isMatchResultSubmittedByCurrentUser
     && detailsMatchResultStatus === "CORRECTION_PENDING"
     && detailsMatchResultModelVersion < 2
@@ -9685,6 +9695,14 @@ export default function GamesPage({
   ]);
   const detailsTeamMenuOptions = useMemo(() => {
     if (detailsTeamMenuSlotIndex == null) return [] as PadelGamePlayer[];
+    if (detailsActiveTab === "result" && canEditMatchResultTeamsInDetails) {
+      const snapshot = detailsMatchResultSession?.rosterSnapshot;
+      const snapshotPlayers = extractMatchResultSnapshotPlayers(snapshot);
+      return dedupePlayersByIdentity(snapshotPlayers.length > 0
+        ? snapshotPlayers
+        : [...detailsSourceParticipants, ...detailsParticipants, ...detailsWaitlist, ...detailsPlayerPool]);
+    }
+
     const availablePlayers = new Map<string, PadelGamePlayer>();
 
     const pushAvailablePlayer = (player: PadelGamePlayer | null | undefined) => {
@@ -9731,6 +9749,10 @@ export default function GamesPage({
       return true;
     });
   }, [
+    detailsActiveTab,
+    canEditMatchResultTeamsInDetails,
+    detailsMatchResultSession,
+    detailsSourceParticipants,
     detailsHasFreeSlots,
     detailsOrganizerInMatch,
     detailsOrganizerPlayer,
@@ -12939,6 +12961,37 @@ export default function GamesPage({
     saveDetailsMetadata,
   ]);
 
+  const handleResultTeamSlotPick = useCallback((
+    slotIndex: number,
+    player: PadelGamePlayer | null,
+  ) => {
+    if (!canEditMatchResultTeamsInDetails || updatingGameMeta) return;
+    if (slotIndex < 0 || slotIndex >= DETAILS_TEAM_SLOTS_COUNT) return;
+    if (player && !detailsTeamMenuOptions.some((candidate) => (
+      getPadelPlayerIdentityKey(candidate) === getPadelPlayerIdentityKey(player)
+    ))) return;
+
+    const startSlots = detailsMatchResultSetPairings[0] ?? detailsTeamSlots;
+    const nextSlots = replaceMatchResultTeamSlot(startSlots, slotIndex, player);
+    const nextPairings = replaceMatchResultStartingPairings(detailsMatchResultSetPairings, startSlots, nextSlots);
+    detailsMatchResultDraftDirtyRef.current = true;
+    setDetailsMatchResultSetPairings(nextPairings);
+    // With no later lineup, the corrected starting team also applies to the next set.
+    if (!detailsMatchResultSetPairings.slice(1).some((slots) => (
+      slots?.some(Boolean) && !areTeamSlotsEqualByIdentity(slots, startSlots)
+    ))) {
+      setDetailsTeamSlots(nextSlots);
+    }
+    setDetailsTeamMenuSlotIndex(null);
+    setGameDetailsMetaError(null);
+  }, [
+    canEditMatchResultTeamsInDetails,
+    updatingGameMeta,
+    detailsTeamMenuOptions,
+    detailsMatchResultSetPairings,
+    detailsTeamSlots,
+  ]);
+
   const handleTeamSlotPick = useCallback(async (
     slotIndex: number,
     player: PadelGamePlayer | null,
@@ -13278,7 +13331,7 @@ export default function GamesPage({
   ) => {
     if (!files || files.length === 0) return;
     if (
-      !isCurrentUserConfirmedParticipant
+      !isCurrentUserResultParticipant
       || isMatchResultPendingReview
       || isMatchResultAgreed
       || updatingGameMeta
@@ -13344,7 +13397,7 @@ export default function GamesPage({
       setDetailsMatchResultAttachmentsLoading(false);
     }
   }, [
-    isCurrentUserConfirmedParticipant,
+    isCurrentUserResultParticipant,
     isMatchResultAgreed,
     isMatchResultPendingReview,
     updatingGameMeta,
@@ -15738,7 +15791,7 @@ export default function GamesPage({
             : "Внести результат"
       )
       : "Отлично";
-    const canUploadMatchResultPhotos = isCurrentUserConfirmedParticipant
+    const canUploadMatchResultPhotos = isCurrentUserResultParticipant
       && !isMatchResultPendingReview
       && !isMatchResultAgreed
       && !updatingGameMeta
@@ -16692,14 +16745,12 @@ export default function GamesPage({
                   const previousSetPairing = index > 0
                     ? (matchResultSetPairingsForDisplay[index - 1] ?? null)
                   : null;
-                  const isEditableStartPairing = canEditMatchResult
-                    && index === 0
-                    && detailsCompletedMatchResultSets.length === 0;
+                  const isEditableStartPairing = canEditMatchResult && index === 0;
                   const isUpcomingSetPairingBlock = canEditMatchResult
                     && index > 0
                     && index === detailsCompletedMatchResultSets.length;
                   const setPairingSlotsForDisplay = isEditableStartPairing
-                    ? cloneTeamSlots(detailsTeamSlots)
+                    ? cloneTeamSlots(detailsMatchResultSetPairings[0] ?? detailsTeamSlots)
                     : setPairing;
                   const setPairingTeamAPlayers = setPairingSlotsForDisplay
                     ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [0, 1])
@@ -16847,7 +16898,7 @@ export default function GamesPage({
                                     type="button"
                                     className="details-team-picker-item"
                                     onClick={() => {
-                                      void handleTeamSlotPick(detailsTeamMenuSlotIndex, player);
+                                      handleResultTeamSlotPick(detailsTeamMenuSlotIndex, player);
                                     }}
                                     disabled={updatingGameMeta}
                                   >
@@ -16857,12 +16908,12 @@ export default function GamesPage({
                                   </button>
                                 );
                               })}
-                              {detailsTeamMenuSlotIndex !== 0 && detailsTeamSlots[detailsTeamMenuSlotIndex] && (
+                              {(detailsMatchResultSetPairings[0] ?? detailsTeamSlots)[detailsTeamMenuSlotIndex] && (
                                 <button
                                   type="button"
                                   className="details-team-picker-item danger"
                                   onClick={() => {
-                                    void handleTeamSlotPick(detailsTeamMenuSlotIndex, null);
+                                    handleResultTeamSlotPick(detailsTeamMenuSlotIndex, null);
                                   }}
                                   disabled={updatingGameMeta}
                                 >

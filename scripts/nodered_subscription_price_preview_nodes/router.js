@@ -121,12 +121,28 @@ if (ctx.step === 'groupExercise') {
   const exercise = canonical.unwrapRecord(msg.payload);
   const start = Date.parse(canonical.eventStartsAt(exercise));
   const duration = canonical.eventDurationMinutes(exercise);
-  if (!ok() || !exercise || String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId
-    || canonical.resolveCategory(exercise) !== eventRoute?.category || !Number.isFinite(start) || start <= Date.now()
-    || !Number.isSafeInteger(duration) || duration < 1 || duration > 720
-    || !canonical.exerciseRoomId(exercise) || !(exercise.studio?.id || exercise.studioId)
-    || !canonical.managedExternalEventTypeId(exercise) || exercise.isCancelled === true || exercise.isCanceled === true
-    || ['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) return stop(eventRoute.error + '_TARGET_UNRESOLVED');
+  const targetUnresolved = reason => {
+    const upstreamStatus = Number(msg.statusCode);
+    ctx.errorDetails = { reason,
+      upstreamStatus: Number.isInteger(upstreamStatus) && upstreamStatus >= 100 && upstreamStatus <= 599
+        ? upstreamStatus : null };
+    return stop(eventRoute.error + '_TARGET_UNRESOLVED');
+  };
+  // Preserve the fail-closed guard and its order, while identifying its failed predicate.
+  if (!ok()) return targetUnresolved('target_upstream_error');
+  if (!exercise) return targetUnresolved('target_missing');
+  if (String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId) return targetUnresolved('target_identity');
+  if (canonical.resolveCategory(exercise) !== eventRoute?.category) return targetUnresolved('target_category');
+  if (!Number.isFinite(start)) return targetUnresolved('target_start_invalid');
+  if (start <= Date.now()) return targetUnresolved('target_not_future');
+  if (!Number.isSafeInteger(duration) || duration < 1 || duration > 720) return targetUnresolved('target_duration');
+  if (!canonical.exerciseRoomId(exercise)) return targetUnresolved('target_room');
+  if (!(exercise.studio?.id || exercise.studioId)) return targetUnresolved('target_studio');
+  if (!canonical.managedExternalEventTypeId(exercise)) return targetUnresolved('target_type');
+  if (exercise.isCancelled === true || exercise.isCanceled === true) return targetUnresolved('target_cancelled');
+  if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) {
+    return targetUnresolved('target_lifecycle');
+  }
   ctx.exercise = exercise;
   const proTraining = eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise);
   // The direction decides whether this event is the club direction whose co-pay is charged

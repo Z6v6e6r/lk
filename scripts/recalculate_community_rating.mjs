@@ -40,6 +40,7 @@ Options:
 function buildCollections(db) {
   return {
     source: {
+      community_league_results: db.collection("community_league_results"),
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.communities]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.communities),
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.feed]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.feed),
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.games]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.games),
@@ -49,6 +50,7 @@ function buildCollections(db) {
       [COMMUNITY_RATING_SOURCE_COLLECTIONS.ratingState]: db.collection(COMMUNITY_RATING_SOURCE_COLLECTIONS.ratingState),
     },
     storage: {
+      community_league_results: db.collection("community_league_results"),
       [COMMUNITY_RATING_COLLECTIONS.facts]: db.collection(COMMUNITY_RATING_COLLECTIONS.facts),
       [COMMUNITY_RATING_COLLECTIONS.aggregates]: db.collection(COMMUNITY_RATING_COLLECTIONS.aggregates),
       [COMMUNITY_RATING_COLLECTIONS.snapshots]: db.collection(COMMUNITY_RATING_COLLECTIONS.snapshots),

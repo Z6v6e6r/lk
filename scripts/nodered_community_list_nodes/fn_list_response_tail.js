@@ -12,7 +12,7 @@ if (isSummaryMode && rows.some((item) => [
 }
 const scopedRows = isSummaryMode
   ? rows.filter((item) => canListCommunityForViewer(item, ctx.clientId, ctx.phone))
-  : rows;
+  : rows.filter(item => !['STATION','CORPORATE','LEAGUE'].includes(item.communityType) || canListCommunityForViewer(item, ctx.clientId, ctx.phone));
 const communities = scopedRows
   .map((item) => {
     const normalized = isSummaryMode

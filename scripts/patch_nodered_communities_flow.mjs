@@ -1,3 +1,6 @@
+import { addTypedCommunityResponseRedaction } from './lib/communityResponseRedaction.mjs';
+import { addCommunityRosterWrites } from './lib/communityRosterWrites.mjs';
+import { addCommunityPolicyAuth } from './lib/communityPolicyAuth.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { transformFlowToMongo4 } from './nodered_mongodb4_transform.mjs';
@@ -382,8 +385,27 @@ const resolveCommunityLogoFields = (community, options = {}) => {
   const logoUrlRaw = toStr(community?.logoUrl || community?.imageUrl);
   const logoThumbUrlRaw = toStr(community?.logoThumbUrl || community?.logoThumb || community?.thumbnailUrl);
   const legacyDataUrl = toStr(community?.logoLegacyDataUrl || community?.logo);
-  const assetLogoUrl = toPublicUrl(logoUrlRaw, publicBaseUrl);
-  const assetLogoThumbUrl = toPublicUrl(logoThumbUrlRaw, publicBaseUrl) || assetLogoUrl;
+  // A stored legacy URL is only an alias to inline data, not an uploaded asset.
+  // Do not publish that alias after its backing data has been removed.
+  const originalData = community?.logoLegacyDataUrl || community?.logoDataUrl
+    || (isDataUrl(community?.logoUrl) ? community.logoUrl : null)
+    || (isDataUrl(community?.logo) ? community.logo : null);
+  const thumbData = community?.logoThumbLegacyDataUrl || community?.logoThumbDataUrl
+    || community?.logoLegacyDataUrl
+    || (isDataUrl(community?.logoThumbUrl) ? community.logoThumbUrl : null)
+    || (isDataUrl(community?.logo) ? community.logo : null);
+  const availableLogoUrl = value => {
+    if (!value) return null;
+    if (/^https?:\/\//i.test(value) && (!publicBaseUrl || !value.startsWith(publicBaseUrl + '/'))) return value;
+    const path = value.replace(/^https?:\/\/[^/]+/i, '').split(/[?#]/)[0];
+    const legacy = path.match(/^\/lk\/media\/community-logo-legacy\/([^/]+)(\/thumb)?$/);
+    if (!legacy) return value;
+    // Keep foreign aliases: this record cannot establish whether their data exists.
+    if (legacy[1] !== encodeURIComponent(communityId || '')) return value;
+    return parseDataUrl(legacy[2] ? thumbData : originalData) ? value : null;
+  };
+  const assetLogoUrl = toPublicUrl(availableLogoUrl(logoUrlRaw), publicBaseUrl);
+  const assetLogoThumbUrl = toPublicUrl(availableLogoUrl(logoThumbUrlRaw), publicBaseUrl) || assetLogoUrl;
 
   if (assetLogoUrl || assetLogoThumbUrl) {
     return {
@@ -393,7 +415,7 @@ const resolveCommunityLogoFields = (community, options = {}) => {
     };
   }
 
-  if (legacyDataUrl && isDataUrl(legacyDataUrl) && communityId) {
+  if (parseDataUrl(legacyDataUrl) && communityId) {
     const legacyLogoUrl = buildCommunityLegacyLogoUrl(publicBaseUrl, communityId, 'original');
     const legacyLogoThumbUrl = buildCommunityLegacyLogoUrl(publicBaseUrl, communityId, 'thumb');
     return {
@@ -403,7 +425,8 @@ const resolveCommunityLogoFields = (community, options = {}) => {
     };
   }
 
-  const directLogo = toPublicUrl(legacyDataUrl, publicBaseUrl);
+  const directLogo = isDataUrl(legacyDataUrl) && !parseDataUrl(legacyDataUrl)
+    ? null : toPublicUrl(availableLogoUrl(legacyDataUrl), publicBaseUrl);
   return {
     logoUrl: directLogo,
     logoThumbUrl: directLogo,
@@ -412,9 +435,11 @@ const resolveCommunityLogoFields = (community, options = {}) => {
 };
 const normalizeCommunityForResponse = (value, options = {}) => {
   const community = isObj(value) ? value : {};
-  const members = toArray(community.members).map((item) => buildMember(item, item?.role || 'MEMBER'));
-  const pendingMembers = toArray(community.pendingMembers).map((item) => buildMember(item, 'MEMBER'));
-  const bannedMembers = toArray(community.bannedMembers);
+  const typed = ['STATION','CORPORATE','LEAGUE','EVENT'].includes(community.communityType);
+  const redact = (item) => typed ? Object.assign({}, buildMember(item, item?.role || 'MEMBER'), { phone: null }) : item;
+  const members = toArray(community.members).map((item) => redact(buildMember(item, item?.role || 'MEMBER')));
+  const pendingMembers = toArray(community.pendingMembers).map((item) => redact(buildMember(item, 'MEMBER')));
+  const bannedMembers = toArray(community.bannedMembers).map(redact);
   const visibility = toVisibility(community.visibility);
   const lastVisibleFeedActivityAt = toStr(community.lastVisibleFeedActivityAt);
   const resolvedLastVisibleFeedActivityTs = toTs(community.lastVisibleFeedActivityTs)
@@ -423,6 +448,9 @@ const normalizeCommunityForResponse = (value, options = {}) => {
   return {
     id: toStr(community.id || community.communityId) || 'community',
     name: toStr(community.name || community.title) || 'Сообщество',
+    communityType: ['STATION', 'CORPORATE', 'LEAGUE'].includes(community.communityType) ? community.communityType : 'FRIENDS',
+    typeSettings: isObj(community.typeSettings) ? community.typeSettings : {},
+    typeSettingsRevision: Number(community.typeSettingsRevision) || 0,
     slug: toStr(community.slug) || buildSlug(community.name || community.title || 'community'),
     logo: logoFields.logo,
     logoUrl: logoFields.logoUrl,
@@ -449,6 +477,7 @@ const normalizeCommunityForResponse = (value, options = {}) => {
   };
 };
 const resolveCommunityViewerMembership = (community, clientId, phone) => {
+  if (['STATION','CORPORATE','LEAGUE','EVENT'].includes(community?.communityType) && !msg._verifiedCommunityActor) return { status: null, member: null };
   const members = toArray(community?.members).map((item) => buildMember(item, item?.role || 'MEMBER'));
   const pendingMembers = toArray(community?.pendingMembers).map((item) => buildMember(item, 'MEMBER'));
   const activeMember = members.find((item) => matchesIdentity(item, clientId, phone)) || null;
@@ -1595,6 +1624,11 @@ return [msg, msg];
 
 const fnCreate = `${commonHelpers}
 const body = isObj(msg.payload) ? msg.payload : {};
+if ('communityType' in body || 'typeSettings' in body) {
+  const denied = withJson(msg, 403, { error: 'COMMUNITY_POLICY_CUP_ONLY' });
+  return [null, null, null, null, denied, denied];
+}
+
 const name = toStr(body.name);
 const description = toStr(body.description);
 const city = toStr(body.city);
@@ -1720,11 +1754,12 @@ if (!member.id && !member.phone) {
 
 msg._communityJoin = {
   viaInvite: false,
+  eventRegistration: body.eventRegistration,
   communityId,
   member,
 };
 msg.payload = { id: communityId, archived: { $ne: true } };
-return [msg, null, msg];
+return [msg, null, null];
 `;
 
 const fnInvitePrepare = `${commonHelpers}
@@ -1743,11 +1778,12 @@ if (!member.id && !member.phone) {
 
 msg._communityJoin = {
   viaInvite: true,
+  eventRegistration: body.eventRegistration,
   inviteCode,
   member,
 };
 msg.payload = { inviteCode, archived: { $ne: true } };
-return [msg, null, msg];
+return [msg, null, null];
 `;
 
 const fnJoinGamesQuery = `${commonHelpers}
@@ -1771,7 +1807,7 @@ msg._communityJoin = Object.assign({}, ctx, {
 // Skip lk_games lookup in join flow: it may be slow and should never block membership.
 // Member stats will be empty when joining and can be refreshed asynchronously later.
 msg.payload = [];
-return [msg, null, msg];
+return [msg, null, null];
 `;
 
 const fnJoinApply = `${commonHelpers}
@@ -1999,6 +2035,11 @@ if (!communityId) {
 }
 
 const body = isObj(msg.payload) ? msg.payload : {};
+if ('communityType' in body || 'typeSettings' in body) {
+  const denied = withJson(msg, 403, { error: 'COMMUNITY_POLICY_CUP_ONLY' });
+  return [null, denied, denied];
+}
+
 const actor = buildMember(body.actor || body.member || body.user, 'MEMBER');
 if (!actor.id && !actor.phone) {
   const errorMsg = withJson(msg, 400, { error: 'actor id or phone is required' });
@@ -2378,7 +2419,7 @@ const beforeTs = Number.isFinite(Number(ctx.beforeTs)) ? Number(ctx.beforeTs) : 
 msg._communityFeed = Object.assign({}, ctx, { communityId: toStr(community.id) || ctx.communityId, beforeTs });
 msg.payload = {
   communityId: toStr(community.id),
-  kind: { $in: ['PHOTO', 'GAME', 'TOURNAMENT'] },
+  kind: { $in: ['PHOTO', 'GAME', 'TOURNAMENT', 'TRAINING', 'EVENT'] },
   archived: { $ne: true },
   $or: [
     { createdTs: { $lt: beforeTs } },
@@ -2881,7 +2922,7 @@ const remainingPostsMsg = Object.assign({}, msg, {
   payload: {
     id: { $ne: ctx.postId },
     communityId: ctx.communityId,
-    kind: { $in: ['PHOTO', 'GAME', 'TOURNAMENT'] },
+    kind: { $in: ['PHOTO', 'GAME', 'TOURNAMENT', 'TRAINING', 'EVENT'] },
     archived: { $ne: true },
   },
 });
@@ -3663,6 +3704,7 @@ if (snapshot && (Array.isArray(snapshot.rows) || Array.isArray(snapshot.items)))
     calculationVersion: toStr(snapshot.calculationVersion) || COMMUNITY_RATING_CALCULATION_VERSION,
     items: snapshotRows,
     rows: snapshotRows,
+    leagueTables: toArray(snapshot.leagueTables).map((table) => ({ id: table.id, name: table.name, rows: toArray(table.rows) })),
   };
   return [msg, null, msg];
 }
@@ -4686,8 +4728,8 @@ const raw = fs.readFileSync(srcPath, 'utf8');
 const flow = JSON.parse(raw);
 const filteredFlow = flow.filter((node) => !newIds.has(node.id));
 
-const mongo4ImportNodes = transformFlowToMongo4(nodes);
-const mongo4Flow = transformFlowToMongo4([...filteredFlow, ...nodes]);
+const mongo4ImportNodes = transformFlowToMongo4(addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth(nodes))));
+const mongo4Flow = transformFlowToMongo4(addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth([...filteredFlow, ...nodes]))));
 
 fs.writeFileSync(importPath, `${JSON.stringify(mongo4ImportNodes, null, 2)}\n`);
 fs.writeFileSync(outPath, `${JSON.stringify(mongo4Flow, null, 2)}\n`);

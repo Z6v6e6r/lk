@@ -359,13 +359,20 @@ const rows = asArray(msg.payload);
 const existing = rows.find((item) => item && typeof item === "object" && item.deleted !== true) || null;
 const ctx = msg._resultSessionOpen || {};
 const game = ctx.game || {};
+if (existing && toStr(existing.gameId) !== toStr(ctx.gameId)) {
+  msg.statusCode = 409;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = { error: "Result session belongs to another game", code: "RESULT_SESSION_GAME_MISMATCH" };
+  return [null, msg, msg];
+}
+
 const now = new Date();
 const nowIso = now.toISOString();
 const nowTs = now.getTime();
 const baseSnapshot = buildGameSnapshot(game, nowIso, nowTs);
 const resultRosterSnapshot = migrateSnapshot(existing?.resultRosterSnapshot || existing?.rosterSnapshot, baseSnapshot);
 const lookup = buildLookup(resultRosterSnapshot);
-const actorMemberKey = toStr(ctx.actorMemberKey)
+const actorMemberKey = (lookup.byMemberKey.has(toStr(ctx.actorMemberKey)) ? toStr(ctx.actorMemberKey) : null)
   || (() => {
     const actorId = toStr(ctx.actor?.id);
     const actorPhone = normPhone(ctx.actor?.phoneNorm || ctx.phone);
@@ -461,7 +468,7 @@ const update = existing
 const writeMsg = Object.assign({}, msg, {
   _resultSessionResponse: responsePayload,
   payload: [
-    { _id: sessionId },
+    { _id: sessionId, gameId: ctx.gameId },
     update,
     { upsert: true },
   ],

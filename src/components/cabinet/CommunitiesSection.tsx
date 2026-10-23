@@ -1,3 +1,8 @@
+import { EventRegistrationForm } from './EventRegistrationForm';
+import { parseEventNotice, type EventNotice } from '../../utils/communityApi';
+import { EventCommunityPanel } from './EventCommunityPanel';
+import type { EventRegistration } from '../../utils/communityApi';
+import { BuySupscription } from "./BuySubscription";
 import { useCommunityRatingMonth } from "./community-feed/useCommunityRatingMonth";
 import { AvatarImage } from "../UI/AvatarImage";
 import {
@@ -56,7 +61,6 @@ import {
   type CommunityMemberAction,
   type CommunityPost,
   type CommunityPostComment,
-  type CommunityPostKind,
   type CommunityPostReaction,
   type CommunityPostThread,
   type CommunityRatingPeriod,
@@ -115,7 +119,7 @@ interface CommunityFormState {
 }
 
 interface FeedFormState {
-  kind: Exclude<CommunityPostKind, "SYSTEM">;
+  kind: "PHOTO" | "GAME" | "TOURNAMENT";
   title: string;
   body: string;
   imageUrl: string | null;
@@ -1644,6 +1648,7 @@ export function CommunitiesSection({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [rankingRefreshLoadingId, setRankingRefreshLoadingId] = useState<string | null>(null);
   const [rankingRefreshError, setRankingRefreshError] = useState<string | null>(null);
+  const [eventJoin, setEventJoin] = useState<{community?: CommunityRecord; inviteCode?: string; inviteLink?: string; notice?: EventNotice} | null>(null);
   const [joiningCommunityId, setJoiningCommunityId] = useState<string | null>(null);
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityDetailTab>("RANKING");
   const [activeRankingType, setActiveRankingType] = useState<CommunityRankingTypeId>("overall");
@@ -3295,6 +3300,12 @@ export function CommunitiesSection({
   const currentBackendRanking = selectedCommunity
     ? (rankingByCommunityId[selectedCommunity.id]?.[buildCommunityRankingCacheKey(activeRankingPeriod, activeRankingType, rankingMonthStartTs)] ?? null)
     : null;
+  const [communitySubscriptionOpen, setCommunitySubscriptionOpen] = useState(false);
+  useEffect(() => { setCommunitySubscriptionOpen(false); }, [selectedCommunityId]);
+  const [activeLeagueDivision, setActiveLeagueDivision] = useState<string | null>(null);
+  useEffect(() => { setActiveLeagueDivision(null); }, [selectedCommunityId]);
+  const leagueTables = selectedCommunity?.communityType === 'LEAGUE' ? currentBackendRanking?.leagueTables ?? [] : [];
+  const leagueTable = leagueTables.find(table => table.id === activeLeagueDivision) ?? leagueTables[0];
   const currentRankingData = useMemo(() => {
     if (!selectedCommunity) {
       return { rows: [], confirmedGamesCount: 0 } satisfies CommunityRankingData;
@@ -3303,8 +3314,12 @@ export function CommunitiesSection({
     if (!currentBackendRanking) {
       return { rows: [], confirmedGamesCount: 0 } satisfies CommunityRankingData;
     }
+    if (selectedCommunity.communityType === 'LEAGUE') {
+      return leagueTable ? buildCommunityRankingDataFromBackend(selectedCommunity, { ...currentBackendRanking, items: leagueTable.rows, rows: leagueTable.rows })
+        : { rows: [], confirmedGamesCount: 0 } satisfies CommunityRankingData;
+    }
     return buildCommunityRankingDataFromBackend(selectedCommunity, currentBackendRanking);
-  }, [currentBackendRanking, selectedCommunity]);
+  }, [currentBackendRanking, selectedCommunity, leagueTable]);
   const currentRankingRows = currentRankingData.rows;
   const currentRankingGamesCount = currentRankingData.confirmedGamesCount;
   const isCurrentRankingLoading = selectedCommunity
@@ -3724,6 +3739,7 @@ export function CommunitiesSection({
   };
 
   const handleJoinOpenCommunity = useCallback(async (community: CommunityRecord) => {
+    if (community.communityType === 'EVENT') { setEventJoin({community}); return; }
     setJoiningCommunityId(community.id);
     setDetailError(null);
     setAccessMessage(null);
@@ -3759,6 +3775,19 @@ export function CommunitiesSection({
     }
   }, [currentMember, redirectToInviteCabinet]);
 
+  const handleEventRegistration = async (registration: EventRegistration): Promise<string | null> => {
+    if (!eventJoin) return 'Выберите мероприятие заново.';
+    const response = eventJoin.community
+      ? await apiAddCommunityMember(eventJoin.community.id, {member: currentMember, eventRegistration: registration})
+      : await apiJoinCommunityByInvite({inviteCode: eventJoin.inviteCode, inviteLink: eventJoin.inviteLink, member: currentMember, eventRegistration: registration});
+    if (response.error) return response.status === 422 ? 'Проверьте ФИО, компанию и электронную почту.' : communityErrorMessage(response.error, 'Не удалось сохранить анкету. Повторите попытку.');
+    applyActionResponse(response.data);
+    if (response.data?.community) { setFocusedCommunityId(response.data.community.id); setSelectedCommunityId(response.data.community.id); }
+    setEventJoin(null); setIsInviteOpen(false); setInviteValue('');
+    setAccessMessage(response.data?.message || 'Анкета сохранена.');
+    return null;
+  };
+
   const handleInviteSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const inviteCode = extractInviteCode(inviteValue);
@@ -3779,6 +3808,7 @@ export function CommunitiesSection({
     setInviteSubmitting(false);
 
     if (response.error) {
+      if (response.status === 422) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink: inviteValue, notice: response.data?.eventNotice}); return; }
       setInviteError(
         communityErrorMessage(response.error, "Не удалось войти по приглашению"),
       );
@@ -3825,6 +3855,7 @@ export function CommunitiesSection({
       setInviteSubmitting(false);
 
       if (response.error) {
+        if (response.status === 422) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink, notice: response.data?.eventNotice}); return; }
         setInviteError(
           communityErrorMessage(response.error, "Не удалось войти в сообщество по ссылке"),
         );
@@ -5161,6 +5192,10 @@ export function CommunitiesSection({
         ))}
       </div>
 
+      <Modal isOpen={!!eventJoin} onClose={() => setEventJoin(null)} title="Анкета участника мероприятия">
+        {eventJoin && <EventRegistrationForm notice={eventJoin.notice || parseEventNotice({policy:eventJoin.community?.typeSettings?.registrationPolicy,revision:eventJoin.community?.typeSettingsRevision})} onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
+      </Modal>
+
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Создать сообщество">
         <form className="community-form" onSubmit={(event) => void handleCreateCommunity(event)}>
           <div className="community-form-intro">
@@ -5560,6 +5595,15 @@ export function CommunitiesSection({
               </>
             )}
 
+            {selectedCommunity.communityType === 'CORPORATE' && selectedCommunity.typeSettings?.vivaSubscriptionId && isCommunityMember(selectedCommunity, profileId, profilePhone) && (
+              <div className="community-ranking-box">
+                <button type="button" className="community-ranking-filter-chip" onClick={() => setCommunitySubscriptionOpen(true)}>Специальная подписка сообщества</button>
+                <BuySupscription isOpen={communitySubscriptionOpen} onClose={() => setCommunitySubscriptionOpen(false)} phone={profile.phone || ''} subscriptionId={selectedCommunity.typeSettings.vivaSubscriptionId} />
+              </div>
+            )}
+
+            {selectedCommunity.communityType === 'EVENT' && activeCommunityTab === 'FEED' && <EventCommunityPanel key={selectedCommunity.id} community={selectedCommunity} onRegister={() => setEventJoin({community:selectedCommunity})} />}
+
             {activeCommunityTab === "FEED" && (
               <>
                 {detailError && (
@@ -5689,9 +5733,16 @@ export function CommunitiesSection({
               />
             )}
 
-            {activeCommunityTab === "RANKING" && (
+            {activeCommunityTab === 'RANKING' && selectedCommunity.communityType === 'EVENT' && <>
+              <button type="button" className="btn-secondary" onClick={() => setActiveCommunityTab('FEED')}>К ленте мероприятия</button>
+              <EventCommunityPanel key={selectedCommunity.id} community={selectedCommunity} onRegister={() => setEventJoin({community:selectedCommunity})} />
+            </>}
+            {activeCommunityTab === "RANKING" && selectedCommunity.communityType !== 'EVENT' && (
               <CommunityRankingScreen
                 community={selectedCommunity}
+                divisions={leagueTables.map(table => ({ id: table.id, name: table.name }))}
+                activeDivision={leagueTable?.id ?? null}
+                onChangeDivision={setActiveLeagueDivision}
                 rows={currentRankingRows}
                 activeType={activeRankingType}
                 activePeriod={activeRankingPeriod}
@@ -5699,7 +5750,7 @@ export function CommunitiesSection({
                 gamesCount={currentRankingGamesCount}
                 chatBadgeCount={currentChatUnreadBadgeCount}
                 isLoading={isCurrentRankingLoading}
-                error={rankingRefreshError}
+                error={rankingRefreshError ?? (selectedCommunity.communityType === 'LEAGUE' && !isCurrentRankingLoading && !leagueTables.length ? 'Таблицы дивизионов ещё не подготовлены.' : null)}
                 currentUserId={profileId}
                 currentUserPhone={profilePhone}
                 onChangeType={setActiveRankingType}

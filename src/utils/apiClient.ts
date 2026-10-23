@@ -9434,95 +9434,6 @@ export async function apiCleanupPadelGameByOrganizer(
   });
 }
 
-function extractPadelPlayerItems(payload: unknown): unknown[] {
-  if (Array.isArray(payload)) return payload;
-  if (!isRecord(payload)) return [];
-
-  const listKeys = ["content", "data", "result", "items", "players", "clients", "records"];
-  for (const key of listKeys) {
-    const candidate = payload[key];
-    if (Array.isArray(candidate)) return candidate;
-  }
-
-  return [];
-}
-
-function normalizePadelPlayerCandidate(item: unknown): PadelPlayerCandidate | null {
-  if (!isRecord(item)) return null;
-  const id = pickString(item, ["id", "clientId", "userId", "uuid"]);
-  const firstName = pickString(item, ["firstName", "name"]);
-  const lastName = pickString(item, ["lastName", "surname"]);
-  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
-  const name = fullName || pickString(item, ["displayName", "title"]) || "Игрок";
-  const phone = pickString(item, ["phone", "phoneNumber", "mobile"]);
-  const photo = pickString(item, ["photo", "avatar", "imageUrl"]);
-  const ratingRaw = pickString(item, ["rating", "level", "grade"]);
-  const ratingNumericRaw = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
-  const normalizedRating = normalizePadelRating(ratingRaw, ratingNumericRaw);
-
-  return {
-    id: id ?? null,
-    name,
-    phone: phone ?? null,
-    photo: photo ?? null,
-    rating: normalizedRating.rating,
-    ratingNumeric: normalizedRating.ratingNumeric,
-  };
-}
-
-export async function apiSearchPadelPlayers(query: string, limit = 8) {
-  const normalizedQuery = query.trim();
-  if (!normalizedQuery) {
-    return {
-      data: [] as PadelPlayerCandidate[],
-      error: null,
-      status: 200 as ApiStatus,
-    };
-  }
-
-  const baseUrl = getServ2Origin() || "";
-  const encodedQuery = encodeURIComponent(normalizedQuery);
-  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(20, Math.floor(limit))) : 8;
-  const endpoints = [
-    `/lk/games/players/search?q=${encodedQuery}&limit=${safeLimit}`,
-    `/lk/players/search?q=${encodedQuery}&limit=${safeLimit}`,
-    `/lk/clients/search?q=${encodedQuery}&limit=${safeLimit}`,
-  ];
-
-  let firstError: ApiError | null = null;
-  let firstStatus: ApiStatus = null;
-
-  for (const endpoint of endpoints) {
-    const response = await request<unknown>(endpoint, {
-      method: "GET",
-      baseUrl,
-      retries: 1,
-    });
-    if (response.error) {
-      if (!firstError) {
-        firstError = response.error;
-        firstStatus = response.status;
-      }
-      continue;
-    }
-
-    const items = extractPadelPlayerItems(response.data)
-      .map((item) => normalizePadelPlayerCandidate(item))
-      .filter((item): item is PadelPlayerCandidate => item !== null);
-    return {
-      data: items,
-      error: null,
-      status: response.status,
-    };
-  }
-
-  return {
-    data: [] as PadelPlayerCandidate[],
-    error: firstError,
-    status: firstStatus,
-  };
-}
-
 function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null {
   if (!isRecord(item)) return null;
   const clientId = pickString(item, ["clientId", "id", "playerId"]);
@@ -10380,14 +10291,14 @@ export async function apiFetchSubscriptionPricePreview(
   target: SubscriptionPriceTarget,
   subscriptionIds: string[],
   signal: AbortSignal,
-): Promise<ApiResult<{ quotes: SubscriptionPriceQuote[] }>> {
+): Promise<ApiResult<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }>> {
   const candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
-  let result: ApiResult<{ quotes: SubscriptionPriceQuote[] }> = {
+  let result: ApiResult<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }> = {
     data: null, error: { status: null, message: "Не удалось проверить условия подписок" }, status: null,
   };
   for (const baseUrl of candidates.length ? candidates : [getServ2Origin()]) {
     if (signal.aborted) break;
-    result = await rawRequest<{ quotes: SubscriptionPriceQuote[] }>("/lk/subscriptions/game-price-preview", {
+    result = await rawRequest<{ quotes: SubscriptionPriceQuote[]; serverTimeMs: number }>("/lk/subscriptions/game-price-preview", {
       method: "POST", auth: true, baseUrl, signal, body: JSON.stringify({ target, subscriptionIds }),
     });
     if (signal.aborted || result.status !== null) break;

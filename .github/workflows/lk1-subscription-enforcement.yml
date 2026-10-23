@@ -376,6 +376,11 @@ jobs:
           scripts/tests/subscriptionPricePreviewHook.test.mjs
           scripts/tests/subscriptionPricePreview.apiClient.test.mjs
           scripts/tests/subscriptionPricePreviewBackend.test.mjs
+          scripts/tests/productionErrorCauses.test.mjs
+          scripts/tests/errorCauseCandidateAndRoster.test.mjs
+          scripts/tests/communityLegacyLogoAliases.test.mjs
+          scripts/tests/authConsentAudit.test.ts
+          scripts/tests/communitySummaryProjection.test.mjs
           scripts/tests/subscriptionPricePreviewAside.test.mjs
           scripts/tests/subscriptionPricePreviewIngress.test.mjs
           scripts/tests/subscriptionSchedulePrefetch.test.mjs
@@ -457,6 +462,7 @@ jobs:
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/lk1ActiveBookingLimit.test.mjs
           scripts/tests/pulkovoFriendship.test.mjs
+          scripts/tests/patriotsFriendshipParity.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
           scripts/tests/lk1PlanRulesPreview.test.mjs
           scripts/tests/subscriptionPricePreviewSources.test.mjs
@@ -513,6 +519,13 @@ jobs:
         id: check_12
         run: >-
           node --test
+          scripts/tests/resultLifecycle.nodered.test.ts
+          scripts/tests/resultSession.nodered.test.ts
+          scripts/tests/resultSubmitP0.regression.test.ts
+          scripts/tests/matchResult.playerSelection.test.ts
+          scripts/tests/matchResult.ratingSync.test.ts
+          scripts/tests/matchResult.submitPairingsPayload.test.ts
+          scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
 
@@ -546,6 +559,13 @@ jobs:
           DELIVERY_CATEGORY: business
         id: check_16
         run: npm run test:legacy-game-command-prerequisites
+
+      - name: Validate LK2 booked-operation receiver and execution adapter
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        env:
+          DELIVERY_CATEGORY: app
+        id: check_16b
+        run: npm run test:booked-operation-receiver
 
       - name: Validate combined split draft persistence
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''

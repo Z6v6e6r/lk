@@ -13,7 +13,9 @@ if (ctx.done && ctx.error) {
     tariffCount: Number.isSafeInteger(ctx.tariffCount) && ctx.tariffCount >= 0 ? ctx.tariffCount : null,
     reason: ['upstream_error', 'incomplete_tariff_list', 'empty_tariff_list', 'multiple_tariffs',
       'invalid_tariff_record', 'request_url', 'product_identity', 'product_type', 'product_amount',
-      'product_trial_amount', 'amount_ceiling'].includes(ctx.errorDetails?.reason)
+      'product_trial_amount', 'amount_ceiling', 'target_upstream_error', 'target_missing', 'target_identity',
+      'target_category', 'target_start_invalid', 'target_not_future', 'target_duration', 'target_room',
+      'target_studio', 'target_type', 'target_cancelled', 'target_lifecycle'].includes(ctx.errorDetails?.reason)
       ? ctx.errorDetails.reason : safeCode,
   };
   // `node` is always present in Node-RED, but the body is also executed by bare test
@@ -21,13 +23,16 @@ if (ctx.done && ctx.error) {
   if (typeof node !== 'undefined' && node && typeof node.warn === 'function') {
     node.warn(JSON.stringify({ event: 'subscription_price_preview_failed', code: safeCode, step: safeStep,
       ...eventDiagnostics,
+      ...(Number.isInteger(ctx.errorDetails?.upstreamStatus)
+        && ctx.errorDetails.upstreamStatus >= 100 && ctx.errorDetails.upstreamStatus <= 599
+        ? { upstreamStatus: ctx.errorDetails.upstreamStatus } : {}),
       correlationId: /^[A-Za-z0-9._:-]{1,100}$/.test(msg._msgid || '') ? msg._msgid : null }));
   }
 }
 msg.headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'X-Correlation-ID': msg._msgid, 'Access-Control-Expose-Headers': 'X-Correlation-ID' };
 msg.payload = ctx.done && ctx.error
   ? { error: { code: ctx.error, ...(ctx.errorDetails ? { details: ctx.errorDetails } : {}) } }
-  : { quotes: ctx.quotes || [] };
+  : { quotes: ctx.quotes || [], serverTimeMs: Date.now() };
 delete msg._subscriptionPricePreview;
 delete msg.url; delete msg.method; delete msg.error;
 delete msg._managedSubscriptionPolicyInput; delete msg._managedSubscriptionPolicyDecision;

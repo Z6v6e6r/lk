@@ -167,3 +167,11 @@ test("focused patcher adds both routes idempotently to the canonical live tab sh
   }
   assert.equal(JSON.parse(fs.readFileSync(importPath, "utf8")).length, 11);
 });
+
+
+test("typed closed player ratings require a verified exact-ID member", () => {
+  const request = { _communityPlayerRating: { playerId: "target" }, payload: [{ id: "private", communityType: "LEAGUE", visibility: "CLOSED", members: [{ id: "target" }, { id: "real" }] }] };
+  assert.equal(runFunction("fn_community_player_rating_community.js", { ...request, req: { query: { clientId: "real" } } })[1].statusCode, 403);
+  assert.equal(runFunction("fn_community_player_rating_community.js", { ...request, _verifiedCommunityActor: { id: "stranger" } })[1].statusCode, 403);
+  assert.equal(runFunction("fn_community_player_rating_community.js", { ...request, _verifiedCommunityActor: { id: "real" } })[1], null);
+});

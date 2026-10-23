@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
-import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
+import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
 
 const fixturePath = process.env.LK_PRICE_PREVIEW_FLOW_FIXTURE;
 const legacyOriginal = fixturePath ? JSON.parse(fs.readFileSync(fixturePath)) : null;
@@ -51,7 +51,7 @@ function harness(options={}) {
       current=nodes.find(row=>row.id===current.wires[port][0]); assert.ok(current); continue;
     }
     if(current.type==='http request') {
-      assert.equal(current.method,'GET'); assert.equal(msg.method,'GET');
+      assert.equal(current.method,'use'); assert.equal(msg.method,'GET');
       const url=new URL(msg.url); assert.equal(url.origin,'https://api.vivacrm.ru');
       calls.push({kind:'GET',path:url.pathname,query:url.search});
       let payload;
@@ -156,8 +156,42 @@ test('other tariff refusals retain their verdict and distinguish unknown count f
   const accepted = tariffDiagnostic([{ id: 'fixture-product', type: 'SERVICE', cost: 12345 }]);
   assert.equal(accepted.msg.statusCode, 200);
   assert.equal(accepted.ctx.basePriceMinor, 12345);
-  assert.deepEqual(accepted.msg.payload, { quotes: [] });
+  assert.deepEqual(accepted.msg.payload.quotes, []);
+  assert.ok(Number.isSafeInteger(accepted.msg.payload.serverTimeMs));
   assert.deepEqual(accepted.warnings, []);
+});
+
+test('successful preview publishes its own response clock without changing quotes or errors', () => {
+  const source = fs.readFileSync(new URL('../nodered_subscription_price_preview_nodes/final.js', import.meta.url), 'utf8');
+  const serverTimeMs = 1893456000000;
+  const finish = vm.compileFunction(source, ['msg', 'node'], {
+    parsingContext: vm.createContext({ Date: class extends Date { static now() { return serverTimeMs; } } }),
+  });
+  const quote = { subscriptionId: 'fixture-subscription', evaluatedAt: serverTimeMs - 1, expiresAt: serverTimeMs + 29999 };
+  const response = finish({ _subscriptionPricePreview: { done: true, quotes: [quote] } }, { warn() {} });
+  assert.deepEqual(structuredClone(response.payload), { quotes: [quote], serverTimeMs });
+  assert.equal(response.headers['Cache-Control'], 'no-store');
+  const refused = finish({ _subscriptionPricePreview: { done: true, error: 'PRICE_PREVIEW_TIMEOUT', statusCode: 503 } }, { warn() {} });
+  assert.deepEqual(structuredClone(refused.payload), { error: { code: 'PRICE_PREVIEW_TIMEOUT' } });
+});
+
+test('server-clock upgrade changes only the exact installed final function', () => {
+  const oldSource = fs.readFileSync(new URL('./fixtures/subscriptionPreviewLegacyFinal.txt', import.meta.url), 'utf8');
+  const source = oldSource.replace(': { quotes: ctx.quotes || [] };',
+    ': { quotes: ctx.quotes || [], serverTimeMs: Date.now() };');
+  const final = { id: 'lk_subscription_price_preview_20260908_final', type: 'function', func: oldSource,
+    wires: [['fixture-response']], initialize: '', finalize: '' };
+  const flow = [final, { id: 'fixture-response', type: 'http response', wires: [] },
+    { id: 'fixture-unrelated', type: 'function', func: 'return msg;', wires: [] }];
+  const liveBytes = Buffer.from(JSON.stringify(flow));
+  const packet = composeSubscriptionPreviewServerTimeArtifacts(liveBytes, 'preview-server-time-test');
+  assert.deepEqual(packet.candidate, [{ ...final, func: source }, ...flow.slice(1)]);
+  assert.equal(final.func, oldSource);
+  assert.equal(liveBytes.toString(), JSON.stringify(flow));
+  for (const invalid of [[], [null], [final, final], [{ ...final, type: 'http response' }],
+    [{ ...final, func: oldSource + '\n' }], packet.candidate]) {
+    assert.throws(() => composeSubscriptionPreviewServerTimeArtifacts(Buffer.from(JSON.stringify(invalid)), 'negative-test'), /Invalid|drift/);
+  }
 });
 liveTest('90 minute preview uses actual state machine, exact tariff DTO and canonical evaluator',()=>{
   const {response,calls}=harness(); assert.equal(response.statusCode,200);const q=response.payload.quotes[0];
@@ -210,7 +244,7 @@ liveTest('graph cannot reach an existing node or a business write; evaluator byt
   assert.equal(packet.contract.allowedChanges.length,0);
   const ids=new Set(nodes.map(n=>n.id));
   for(const n of nodes){for(const id of (n.wires||[]).flat()) assert.ok(ids.has(id));
-    if(n.type==='mongodb4')assert.equal(n.operation,'find');if(n.type==='http request')assert.equal(n.method,'GET');}
+    if(n.type==='mongodb4')assert.equal(n.operation,'find');if(n.type==='http request')assert.equal(n.method,'use');}
   assert.equal(nodes.find(n=>n.id.endsWith('_evaluate')).func, original.find(n=>n.id==='lk_subscription_managed_policy_20260820').func);
   assert.ok(nodes.some(n=>n.type==='http in'&&n.url===PATH&&n.method==='post'));
 });

@@ -89,5 +89,10 @@ msg.headers = {
   Accept: "application/json",
 };
 msg.payload = null;
+msg.requestTimeout = 10000;
+msg.followRedirects = false;
+msg.maxRedirects = 0;
+delete msg.error;
+delete msg.statusCode;
 
 return [msg, null];

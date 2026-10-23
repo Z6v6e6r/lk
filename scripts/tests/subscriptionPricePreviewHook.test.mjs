@@ -20,6 +20,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function harness() {
   let now = Date.parse('2030-01-01T00:00:00Z');
+  const startedAt = now;
+  let wallClockOffsetMs = 0, monotonicOffsetMs = 0;
   let cursor = 0, dirty = false, timerId = 0;
   let effects = [];
   const hooks = [], timers = new Map(), requests = [];
@@ -46,7 +48,8 @@ function harness() {
   };
   const context = vm.createContext({ module: { exports: {} }, exports: {},
     require: name => { assert.equal(name, 'react'); return React; }, AbortController,
-    Date: class extends Date { static now() { return now; } },
+    Date: class extends Date { static now() { return now + wallClockOffsetMs; } },
+    performance: { now: () => now - startedAt + monotonicOffsetMs },
     setTimeout: (callback, delay) => { timers.set(++timerId, { at: now + delay, callback }); return timerId; },
     clearTimeout: id => timers.delete(id),
     requestPreview: (selection, ids, signal) => new Promise((resolve, reject) => {
@@ -75,13 +78,15 @@ function harness() {
       }
       now = end; await tick(); h.render();
     },
-    async resolve(index = requests.length - 1, change = {}) {
+    setDeviceClockOffset(ms) { wallClockOffsetMs = ms; },
+    setMonotonicOffset(ms) { monotonicOffsetMs = ms; },
+    async resolve(index = requests.length - 1, change = {}, envelope = { serverTimeMs: now }) {
       const request = requests[index];
       request.resolve({ error: null, data: { quotes: request.ids.map((subscriptionId, i) => ({
         subscriptionId, selectionKey: key(request.selection), status: 'AVAILABLE', basePriceMinor: 75000,
         amountMinor: i ? 25000 : 0, freeMinutes: 60, paidMinutes: 0, reasonCode: 'ALLOWED',
         evaluatedAt: now, expiresAt: now + 30000, ...change,
-      })) } });
+      })), ...envelope } });
       await tick(); h.render();
     },
     unmount() { hooks.forEach(value => value.cleanup?.()); },
@@ -96,6 +101,57 @@ test('received prices survive TTL and unrelated renders without automatic reads'
   h.props = { ...h.props, subscriptionIds: ['subscription-b', 'subscription-a'] }; h.render();
   assert.equal(h.result.state, 'available'); assert.equal(h.result.bySubscriptionId['subscription-b'].amountMinor, 25000);
   assert.equal(h.requests.length, 1);
+});
+
+test('new-game and join prices use server time despite device clocks being ahead or behind', async () => {
+  for (const selection of [target, { targetKind: 'EXISTING_GAME', gameId: 'fixture-game', startsAt: target.startsAt, durationMinutes: 60 }]) {
+    for (const offset of [132000, -132000, 86400000, -86400000]) {
+      const h = harness(); h.setDeviceClockOffset(offset);
+      h.props = { ...h.props, target: selection }; h.render();
+      await h.advance(300); await h.resolve();
+      assert.equal(h.result.state, 'available');
+      assert.equal(h.result.bySubscriptionId['subscription-b'].amountMinor, 25000);
+    }
+  }
+});
+
+test('changing the device wall clock during a request cannot invalidate fresh server prices', async () => {
+  const h = harness(); await h.advance(300);
+  h.setDeviceClockOffset(86400000); await h.advance(1000); await h.resolve();
+  assert.equal(h.result.state, 'available');
+  h.setDeviceClockOffset(-86400000); h.render();
+  assert.equal(h.result.state, 'available'); assert.equal(h.requests.length, 1);
+});
+
+test('missing or invalid server time never enables a subscription option', async () => {
+  for (const serverTimeMs of [undefined, null, '1893456000000', NaN, Infinity, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const h = harness(); await h.advance(300); await h.resolve(0, {}, { serverTimeMs });
+    assert.equal(h.result.state, 'unavailable'); assert.equal(h.result.amountMinor, null);
+  }
+  const h = harness(); await h.advance(300); await h.resolve(0, {}, {});
+  assert.equal(h.result.state, 'unavailable');
+});
+
+test('invalid elapsed time and an overflowing server-time estimate fail closed', async () => {
+  for (const offset of [-1, NaN, Infinity]) {
+    const h = harness(); await h.advance(300); h.setMonotonicOffset(offset); await h.resolve();
+    assert.equal(h.result.state, 'unavailable');
+  }
+  const h = harness(); await h.advance(300); await h.advance(1000);
+  await h.resolve(0, {}, { serverTimeMs: Number.MAX_SAFE_INTEGER });
+  assert.equal(h.result.state, 'unavailable');
+});
+
+test('request duration conservatively expires slow responses without relaxing future-timestamp checks', async () => {
+  const serverNow = Date.parse('2030-01-01T00:00:00Z') + 20300;
+  for (const quote of [
+    { evaluatedAt: serverNow, expiresAt: serverNow + 15000 },
+    { evaluatedAt: serverNow - 30000, expiresAt: serverNow },
+    { evaluatedAt: serverNow + 6000, expiresAt: serverNow + 36000 },
+  ]) {
+    const h = harness(); await h.advance(300); await h.advance(20000); await h.resolve(0, quote);
+    assert.equal(h.result.state, 'unavailable');
+  }
 });
 
 test('already expired or malformed responses are not retained as valid prices', async () => {
