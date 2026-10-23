@@ -3663,6 +3663,7 @@ export interface PaymentUrl {
 }
 
 export interface TournamentSubscriptionStatus {
+  promoCodeSupported?: boolean;
   counterKey: string | null;
   inventoryId: string | null;
   unlimited: boolean;
@@ -3700,6 +3701,8 @@ export interface TournamentSubscriptionStatus {
 }
 
 export interface TournamentSubscriptionPurchaseParams {
+  promoCode?: string;
+  expectedPromoQuote?: { productId: string; sumMinor: number; discountMinor: number; toPayMinor: number };
   clientPhone: string;
   clientId?: string | null;
   counterKey?: string | null;
@@ -10449,6 +10452,7 @@ function normalizeTournamentSubscriptionStatusEntry(
     takenCount,
     remainingCount,
     canPurchase: canPurchaseRaw ?? remainingCount > 0,
+    promoCodeSupported: data.promoCodeSupported === true,
     bindingReady: bindingReadyRaw ?? true,
     bindingError: pickString(data, ["bindingError"]),
     batchSize: Math.max(0, Math.floor(pickNumeric(data, ["batchSize"]) ?? 0)),
@@ -10694,6 +10698,7 @@ export async function apiCreateTournamentSubscriptionPurchase(
       trainerQrCode: params.trainerQrCode ?? null,
       referralToken: params.referralToken ?? null,
       referralVisitId: params.referralVisitId ?? null,
+      ...(params.promoCode ? { promoCode: params.promoCode.trim(), expectedPromoQuote: params.expectedPromoQuote } : {}),
     }),
   });
 

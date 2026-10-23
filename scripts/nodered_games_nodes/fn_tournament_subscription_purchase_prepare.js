@@ -649,7 +649,10 @@ const buildCounterQuery = (counter) => {
 const fail = (status, error, details) => {
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { error, details: details || null };
+  const body = msg.payload;
+  const promoAttempt = typeof body?.promoCode === "string" && typeof body?.paymentRef === "string"
+    ? { schemaVersion: 1, providerAttempted: false, paymentRef: body.paymentRef } : null;
+  msg.payload = { error, details: details || null, ...(promoAttempt ? { promoAttempt } : {}) };
   return [null, msg, msg];
 };
 
@@ -740,6 +743,23 @@ if (MANAGED_SALE_BLOCKED_COUNTER_KEYS.has(activeCounter.counterKey)) {
 const productId = REGIONAL_FRIENDSHIP_COUNTER_KEYS.has(activeCounter.counterKey)
   ? null
   : activeCounter.productId || requestedProductId;
+let promoCode = null;
+let expectedPromoQuote = null;
+if (body.promoCode != null || body.expectedPromoQuote != null) {
+  const quote = body.expectedPromoQuote;
+  if (activeCounter.counterKey !== "friendship" || typeof body.promoCode !== "string"
+    || !body.promoCode.trim() || body.promoCode.length > 100 || !quote || typeof quote !== "object"
+    || quote.productId !== productId
+    || ![quote.sumMinor, quote.discountMinor, quote.toPayMinor].every(value => Number.isSafeInteger(value) && value >= 0)
+    || quote.discountMinor <= 0 || quote.toPayMinor <= 0 || quote.sumMinor !== quote.discountMinor + quote.toPayMinor) {
+    return fail(400, "Некорректный промокод или расчёт стоимости");
+  }
+  if (global.get("summer_subscription_friendship_promo_enabled") !== true) {
+    return fail(503, "Промокоды для этой подписки временно недоступны");
+  }
+  promoCode = body.promoCode.trim();
+  expectedPromoQuote = { productId, sumMinor: quote.sumMinor, discountMinor: quote.discountMinor, toPayMinor: quote.toPayMinor };
+}
 const totalLimit = activeCounter.totalLimit;
 const reservationMinutes = Math.max(
   5,
@@ -823,6 +843,8 @@ msg._summerSubscriptionCtx = {
   campaignKey: activeCounter.campaignKey,
   productName: activeCounter.productName,
   productId,
+  promoCode,
+  expectedPromoQuote,
   productCostMinor: activeCounter.productCostMinor,
   batchSize: Math.max(0, Math.floor(Number(activeCounter.batchSize) || 0)),
   tiers: Array.isArray(activeCounter.tiers) ? activeCounter.tiers : [],
@@ -841,7 +863,7 @@ msg._summerSubscriptionCtx = {
   trainerQrCode,
   referralToken: referralAttribution.referralToken,
   referralVisitId: referralAttribution.referralVisitId,
-  transactionPaymentMethod,
+  transactionPaymentMethod: promoCode ? "WIDGET" : transactionPaymentMethod,
   successUrl,
   failUrl,
   studioId: toStr(global.get("summer_subscription_studio_id")) || null,

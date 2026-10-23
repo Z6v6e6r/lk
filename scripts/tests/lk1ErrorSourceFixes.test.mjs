@@ -169,7 +169,25 @@ function flowFixture() {
         : execFileSync('git', ['show', `${baseline}:scripts/${target.source}`], { encoding: 'utf8' }) }))];
 }
 
-test('offline source binding changes exactly five function bodies and preserves input/graph', () => {
+// Exercise the immutable older patch with its immutable candidate sources. Newer
+// generations must not silently rebind this historical release helper.
+const historicalCandidateRevision = '504d008502c9f40c96526b761b4e3de0a31f01dc';
+function historicalCandidateSource(target) {
+  return execFileSync('git', ['show', `${historicalCandidateRevision}:scripts/${target.source}`], { encoding: 'utf8' });
+}
+function useHistoricalCandidates(t) {
+  const original = fs.readFileSync;
+  const sources = new Map(LK1_ERROR_SOURCE_TARGETS.map(target => [
+    new URL(`../${target.source}`, import.meta.url).pathname, historicalCandidateSource(target),
+  ]));
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    const key = file instanceof URL ? file.pathname : String(file);
+    return sources.has(key) ? sources.get(key) : original(file, ...args);
+  });
+}
+
+test('offline source binding changes exactly five function bodies and preserves input/graph', t => {
+  useHistoricalCandidates(t);
   const flow = flowFixture(), before = structuredClone(flow);
   const candidate = patchLk1ErrorSources(flow);
   assert.deepEqual(flow, before); assert.equal(candidate.length, flow.length);
@@ -180,7 +198,8 @@ test('offline source binding changes exactly five function bodies and preserves 
   assert.throws(() => patchLk1ErrorSources(candidate), /FUNCTION_PREIMAGE_CHANGED/);
 });
 
-test('offline source binding rejects missing/duplicate/type/preimage drift without mutating input', () => {
+test('offline source binding rejects missing/duplicate/type/preimage drift without mutating input', t => {
+  useHistoricalCandidates(t);
   for (const mutate of [flow => flow.pop(), flow => flow.push({ ...flow[1] }),
     flow => { flow[1].func += '\n// drift'; }, flow => { flow[1].type = 'http request'; }]) {
     const flow = flowFixture(); mutate(flow); const before = structuredClone(flow);
@@ -208,4 +227,11 @@ test('R03 Mongo catch preserves foreground503 and internal output, suppressing o
       assert.deepEqual(warnings, []);
     }
   }
+});
+
+
+test('historical error-source patch refuses the newer Friendship promo generation', () => {
+  const flow = flowFixture(), before = structuredClone(flow);
+  assert.throws(() => patchLk1ErrorSources(flow), /FUNCTION_CANDIDATE_CHANGED/);
+  assert.deepEqual(flow, before);
 });

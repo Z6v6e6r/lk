@@ -4,7 +4,7 @@ import { AuthForm } from '../auth/AuthForm';
 import { useAuth } from '../../context/AuthContext';
 import { readAuthToken } from '../../utils/authTokenStorage';
 import { previewSubscriptionPromoCode, type SubscriptionPromoQuote } from '../../utils/subscriptionPromoCode';
-import { resolvePaymentPhone, resolveStorefrontBillingTarget, validateStorefrontDirectPurchase, type StorefrontBillingOptionId } from './payment';
+import { resolvePaymentPhone, resolveStorefrontPromoTarget, validateStorefrontDirectPurchase, type StorefrontBillingOptionId } from './payment';
 import { createSubscriptionPromoPayment } from './promoCodePayment';
 import { withZeroDeadline } from './zeroCheckoutPayment';
 import './promo-code.css';
@@ -59,10 +59,13 @@ export function SubscriptionPromoCodeDialog({ productId, title, planId, billingO
     try {
       const { phone, price } = await withZeroDeadline((async () => {
         const phone = await resolvePaymentPhone();
-        const target = resolveStorefrontBillingTarget(planId, billingOptionId);
+        const target = resolveStorefrontPromoTarget(planId, billingOptionId);
         if (!target || target.directProductId !== productId) throw new Error('Предложение изменилось.');
         await validateStorefrontDirectPurchase(target);
         const price = await previewSubscriptionPromoCode(productId, phone, draft);
+        if (target.counterKey === 'friendship' && price.toPayMinor <= 0) {
+          throw new Error('Этот промокод нельзя использовать для выбранного варианта подписки.');
+        }
         return { phone, price };
       })(), 12_000);
       if (generation.current !== requestGeneration || readAuthToken() !== requestActor) return;
@@ -85,11 +88,12 @@ export function SubscriptionPromoCodeDialog({ productId, title, planId, billingO
       const result = await withZeroDeadline((async () => {
         const phone = await resolvePaymentPhone();
         if (phone !== selected.phone) throw new Error('Профиль изменился. Примените промокод снова.');
-        const target = resolveStorefrontBillingTarget(planId, billingOptionId);
+        const target = resolveStorefrontPromoTarget(planId, billingOptionId);
         if (!target || target.directProductId !== productId) throw new Error('Предложение изменилось.');
         await validateStorefrontDirectPurchase(target);
         return createSubscriptionPromoPayment(selected.price, phone,
-          () => operationActive && generation.current === requestGeneration && readAuthToken() === selected.actor);
+          () => operationActive && generation.current === requestGeneration && readAuthToken() === selected.actor,
+          target.counterKey === 'friendship' ? 'friendship' : undefined);
       })());
       if (generation.current !== requestGeneration) return;
       if (result.status === 'redirect') { window.location.href = result.paymentUrl; return; }
