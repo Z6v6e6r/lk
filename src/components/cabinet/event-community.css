@@ -1,0 +1,11 @@
+.community-event-panel { padding: 20px; border: 1px solid var(--border, #e5e7eb); border-radius: 20px; background: var(--white, #fff); display: flex; flex-direction: column; gap: 14px; margin: 16px 0; }
+.community-event-panel h2, .community-event-panel h3, .community-event-panel p { margin: 0; }
+.community-event-panel h2 { font-size: 22px; }
+.community-event-panel h3 { font-size: 18px; }
+.community-event-panel ol { padding-left: 28px; margin: 0; display: grid; gap: 12px; }
+.community-event-panel a { display: inline-flex; text-decoration: none; justify-content: center; max-width: 100%; white-space: normal; }
+.pj-event { max-width: 640px; margin: auto; }
+.pj-event .form-actions { justify-content: center; flex-wrap: wrap; }
+.pj-event p { text-align: center; margin-bottom: 12px; }
+.community-event-registration > label { display: flex; flex-direction: column; gap: 6px; }
+.community-event-registration .form-input { width: 100%; box-sizing: border-box; }

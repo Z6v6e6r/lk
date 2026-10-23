@@ -435,7 +435,7 @@ const resolveCommunityLogoFields = (community, options = {}) => {
 };
 const normalizeCommunityForResponse = (value, options = {}) => {
   const community = isObj(value) ? value : {};
-  const typed = ['STATION','CORPORATE','LEAGUE'].includes(community.communityType);
+  const typed = ['STATION','CORPORATE','LEAGUE','EVENT'].includes(community.communityType);
   const redact = (item) => typed ? Object.assign({}, buildMember(item, item?.role || 'MEMBER'), { phone: null }) : item;
   const members = toArray(community.members).map((item) => redact(buildMember(item, item?.role || 'MEMBER')));
   const pendingMembers = toArray(community.pendingMembers).map((item) => redact(buildMember(item, 'MEMBER')));
@@ -477,7 +477,7 @@ const normalizeCommunityForResponse = (value, options = {}) => {
   };
 };
 const resolveCommunityViewerMembership = (community, clientId, phone) => {
-  if (['STATION','CORPORATE','LEAGUE'].includes(community?.communityType) && !msg._verifiedCommunityActor) return { status: null, member: null };
+  if (['STATION','CORPORATE','LEAGUE','EVENT'].includes(community?.communityType) && !msg._verifiedCommunityActor) return { status: null, member: null };
   const members = toArray(community?.members).map((item) => buildMember(item, item?.role || 'MEMBER'));
   const pendingMembers = toArray(community?.pendingMembers).map((item) => buildMember(item, 'MEMBER'));
   const activeMember = members.find((item) => matchesIdentity(item, clientId, phone)) || null;
@@ -1754,11 +1754,12 @@ if (!member.id && !member.phone) {
 
 msg._communityJoin = {
   viaInvite: false,
+  eventRegistration: body.eventRegistration,
   communityId,
   member,
 };
 msg.payload = { id: communityId, archived: { $ne: true } };
-return [msg, null, msg];
+return [msg, null, null];
 `;
 
 const fnInvitePrepare = `${commonHelpers}
@@ -1777,11 +1778,12 @@ if (!member.id && !member.phone) {
 
 msg._communityJoin = {
   viaInvite: true,
+  eventRegistration: body.eventRegistration,
   inviteCode,
   member,
 };
 msg.payload = { inviteCode, archived: { $ne: true } };
-return [msg, null, msg];
+return [msg, null, null];
 `;
 
 const fnJoinGamesQuery = `${commonHelpers}
@@ -1805,7 +1807,7 @@ msg._communityJoin = Object.assign({}, ctx, {
 // Skip lk_games lookup in join flow: it may be slow and should never block membership.
 // Member stats will be empty when joining and can be refreshed asynchronously later.
 msg.payload = [];
-return [msg, null, msg];
+return [msg, null, null];
 `;
 
 const fnJoinApply = `${commonHelpers}
