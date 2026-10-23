@@ -492,6 +492,8 @@ export function buildReceiverCandidate(sourceFlow) {
       preludeSha256: PRELUDE_SHA256,
       vivaContractSha256: VIVA_CONTRACT_SHA256,
       runtimePrerequisites: [
+        "Before activation the canonical owner must answer the read-only OPTIONS contract probe "
+          + "with exact ATOMIC_MANAGED_V1 capability; old/partial owners are refused before any profile or booking",
         "Node-RED settings.js must not set functionExternalModules:false",
         "LK1_BOOKED_OPERATION_RECEIVER_ENABLED, LK2_BOOKED_OPERATION_DELEGATION_ISSUER, "
           + "LK2_BOOKED_OPERATION_DELEGATION_AUDIENCE, "
@@ -499,9 +501,10 @@ export function buildReceiverCandidate(sourceFlow) {
           + "LK2_BOOKED_OPERATION_DELEGATION_PUBLIC_KEY_PEM must be configured",
         "BOOKED_OPERATION_EXECUTION_ENABLED must stay unset until LK2 delivers "
           + "X-Subscription-Actor-Token plus the signed actor_token_sha256, "
-          + "actor_token_expires_at and provider_client_subscription_id claims",
-        "Execution uses LK1_BOOKED_OPERATION_VIVA_API_BASE (default "
-          + "https://api.vivacrm.ru) and the documented profile/booking/readback paths",
+          + "actor_token_expires_at, provider_client_subscription_id and reservation_id claims",
+        "Execution verifies the actor profile via LK1_BOOKED_OPERATION_VIVA_API_BASE; "
+          + "LK1_BOOKED_OPERATION_OWNER_BASE_URL must be the canonical loopback owner "
+          + "and LK1_BOOKED_OPERATION_OWNER_TENANT_KEY must be iSkq6G",
         "LK1 must receive a backend-issued user-scoped actor token; the shared "
           + "service token is never substituted",
       ],

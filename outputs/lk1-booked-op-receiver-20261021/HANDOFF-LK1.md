@@ -1,10 +1,12 @@
 # HANDOFF — LK1 booked-operation receiver (LK2 commercial JOIN)
 
-Branch: `codex/booked-operation-receiver-20261021` (based on LK1 `origin/main`).
-Status: **LOCAL only**. No flow import, no deploy, no Node-RED restart, no live
-Node-RED/Mongo/Viva provider access, no secrets in Git. The execution adapter is
-**disabled by default** (`BOOKED_OPERATION_EXECUTION_ENABLED` unset): with the
-current LK2 envelope the flow still stops at `PENDING` and sends no provider call.
+Branch: `codex/join-activation-ready-20261022`; Draft LK1 PR #217, paired with LK2 PR #455.
+Status: **source preparation; runtime activation remains OFF**. The exact canonical-owner + receiver
+compatibility candidate below implements the user-confirmed precedence rules; import and activation
+are separate operations.
+Fresh live flow/settings were read through the existing authorized connection; private snapshots
+and generated candidates stay outside Git. No import, deploy, restart, env/settings mutation,
+real booking or debit occurred. Execution remains **disabled by default**.
 
 ## What was delivered
 
@@ -57,40 +59,28 @@ that is not wired exclusively from the executor.
   `attempts`/`receipts`). First admission uses `updateOne` + `$setOnInsert` +
   `upsert:true`; a repeat/race only reads and returns the same state.
 
-## Execution adapter — state machine (same operation document)
+## Execution adapter — one canonical owner
 
-```
-PENDING --(durable CAS marker, written BEFORE the provider POST)--> ATTEMPTING
-ATTEMPTING --(provider 2xx + provider readback shows the booking)--> CONFIRMED
-ATTEMPTING --(timeout / transport error / 5xx / 408 / 429)--------> UNKNOWN
-ATTEMPTING --(definitive 4xx rejection, e.g. 409 full)-------------> REJECTED
-```
+`PENDING -> ATTEMPTING` is a durable CAS written before one loopback
+`POST /lk/subscription-bookings` with the same operation ID, exact exercise/subscription and
+user bearer. The existing canonical owner performs profile authentication, subscription ownership,
+exercise/category/date/daily-limit checks, atomic claims and managed policy/entitlement rechecks;
+its Viva Admin POST uses the service token. The receiver never constructs an Admin booking request.
 
-- The marker CAS filter is `{_id, kind, state:"PENDING"}` with
-  `$set.state="ATTEMPTING"` + `$push.attempts{kind:"DISPATCH_ATTEMPTING", attemptId}`.
-  The provider POST is emitted only after the marker write is acknowledged.
-  `attemptId = "sha256:"+sha256("booked-operation-attempt:v1\0"+operationId+"\0"+idempotencyKeySha256)`.
-- A repeat or racing admission that finds `ATTEMPTING`/terminal state never
-  dispatches again; the loser of the marker CAS reconciles by durable readback
-  (`executionSuppressed` prevents a dispatch loop) and never sends a second POST.
-- `CONFIRMED` requires a provider readback (`GET /end-user/api/v2/{tenant_key}/bookings?size=1000`)
-  matching the operation's `provider_exercise_id` + `provider_client_subscription_id`
-  with an active booking and a stable `bookingId`. The receipt written to the
-  document is `{operationId, bookingId, confirmedAt, source:"PROVIDER_BOOKING_READBACK"}`.
-  Provider acceptance alone (2xx create) is **not** confirmation.
-- `UNKNOWN` is terminal: never auto-retried, never released, never reported as
-  CONFIRMED. `CONFIRMED`/`REJECTED` are terminal.
-- Attempt entries are append-only and redacted: kind, attemptId, timestamp,
-  optional HTTP status/reason/rejection code (bounded upper-case token) and
-  `correlationId`. No tokens, no Authorization headers, no full provider payloads.
-- Pre-dispatch failures (profile read 4xx/5xx/timeout, profile identity mismatch,
-  token rejected, unresolved marker write) persist **no** state change: the
-  operation stays `PENDING` (202) or the request is rejected with a stable code
-  (403/502/503). No terminal state is written before the dispatch marker.
-- The executor is a closed state machine over Node-RED messages: `execute` →
-  `profile` → `attempt_claim` → `booking_create` → `confirmation_bookings` →
-  `finalize`. All steps are driven by the same single `http request` node
-  (`method: "use"`, `senderr: true`).
+A strictly matching canonical CONFIRMED result produces a durable binding receipt. Every timeout,
+transport failure, non-success or mismatched response after dispatch stays UNKNOWN. Neither replay
+nor receipt reconciliation sends another booking. Pre-dispatch profile/marker failures leave PENDING.
+Token expiry after dispatch cannot discard an already confirmed result.
+
+Admission now optionally signs `reservation_id`; execution requires it. Legacy admissions without
+this claim stay PENDING. Signed read claim `receipt_version: 1` opts into an internal receipt;
+legacy reads retain their exact five fields. The opted-in reader performs only two bounded Mongo
+FINDs: the immutable admission plus exactly one canonical owner row with matching tenant, actor,
+operation, subscription and exercise, CONFIRMED state, stable booking/timestamp and completed or
+not-required activation/managed entitlement. It reconstructs the strict receipt from those durable
+bindings even after an outer timeout/crash. Missing, duplicate or partial evidence stays UNKNOWN.
+No read writes Mongo or contacts Viva. Receipt fields match the LK2 strict internal receipt contract;
+credentials, phone and raw provider responses are excluded.
 
 ## READ maps
 
@@ -106,7 +96,7 @@ Unknown/failed storage and invalid router context remain `503`. The admission
 `POST` returns the same mapping (`202` PENDING/UNKNOWN, `200` CONFIRMED, `409`
 REJECTED); a repeat admission of a terminal/`ATTEMPTING` operation never dispatches.
 
-## Still required on the LK2 side (before turning the flag on)
+## Coordinated LK2 wire contract (implemented in Draft LK2 PR #455; deploy together)
 
 1. Header `X-Subscription-Actor-Token` on the admission request: the raw,
    backend-issued, short-lived (≤60 s) **user-scoped Viva access token**.
@@ -135,16 +125,19 @@ Verification failures are stable: `403 BOOKED_OPERATION_ACTOR_TOKEN_REQUIRED`,
    `settings.js` must **not** set `functionExternalModules: false` (builtin
    `crypto` is loaded through the function-node external-module entry).
 4. Point `LK1_BOOKED_OPERATION_VIVA_API_BASE` at the intended Viva endpoint
-   (production default `https://api.vivacrm.ru`); verify the three path envs.
+   (production default `https://api.vivacrm.ru`); verify the profile path. Provision `LK1_BOOKED_OPERATION_OWNER_BASE_URL=http://127.0.0.1:1880`
+   (use the actual Node-RED loopback port) and `LK1_BOOKED_OPERATION_OWNER_TENANT_KEY=iSkq6G`.
+   Verify that the canonical `/lk/subscription-bookings` owner, its admin service credential and
+   the selected tenant/managed policy are installed. No settings.js auth exemption is implied.
 5. Rehearse with `BOOKED_OPERATION_EXECUTION_ENABLED` **off**: admission returns
    `PENDING`, Mongo document has `state=PENDING`, exactly one insert, zero Viva
    requests.
 6. Enable `BOOKED_OPERATION_EXECUTION_ENABLED=true` for one exact tenant/actor
-   canary; verify exactly one Viva booking POST, a CONFIRMED read, and a receipt
-   `{bookingId, confirmedAt, operationId}` in `lk_subscription_daily_booking_ops`.
+   canary; verify exactly one Viva booking POST, a CONFIRMED read, and the exact bound receipt in `lk_subscription_daily_booking_ops`.
 7. Verify the repeat path (same delegation/operation id) returns the stored state
    with no second POST, and that a rejected/timeout scenario maps to
-   `REJECTED`/`UNKNOWN` without retry.
+   `UNKNOWN` without retry. A real canary requires separate authorization; the current task permits
+   no real booking or debit. Test this matrix with synthetic transports locally.
 8. Stop method: unset `BOOKED_OPERATION_EXECUTION_ENABLED` (new admissions stop at
    PENDING immediately; in-flight operations finish or remain `ATTEMPTING` for
    readback reconciliation). Disabling the flag never undoes a provider booking.
@@ -172,10 +165,9 @@ Execution adapter (all default to the fail-closed behaviour):
   must be `https://`, no credentials, no trailing slash required.
 - `LK1_BOOKED_OPERATION_VIVA_PROFILE_PATH` — optional, default
   `/end-user/api/v1/{tenant_key}/profile`
-- `LK1_BOOKED_OPERATION_VIVA_BOOKING_PATH` — optional, default
-  `/api/v2/exercises/{provider_exercise_id}/bookings`
-- `LK1_BOOKED_OPERATION_VIVA_READBACK_PATH` — optional, default
-  `/end-user/api/v2/{tenant_key}/bookings?size=1000`
+- `LK1_BOOKED_OPERATION_OWNER_BASE_URL` — required for execution; only
+  `http://127.0.0.1:<port>` or `http://localhost:<port>`, no userinfo/path/query/fragment.
+- `LK1_BOOKED_OPERATION_OWNER_TENANT_KEY` — required `iSkq6G`, the canonical owner's fixed tenant.
 - `LK1_BOOKED_OPERATION_EXECUTION_TIMEOUT_MS` — optional, 1000–60000, default 15000
 
 No secret is configurable here beyond the server env public key; the actor token is
@@ -203,39 +195,25 @@ independent booking flow is introduced.
 
 LOCAL (executed from the task worktree):
 
-```bash
-node --test scripts/tests/bookedOperationReceiver*.test.mjs
-# 27 pass, 1 skipped (Node-RED 4.0.9 runtime test needs NODERED_RUNTIME_ROOT)
-# covers: JWT verification matrix, idempotent repeat (no second write/dispatch),
-# binding 409, strict read mapping + 404, REJECTED 409 payload, flag-off and
-# missing-token PENDING/no-POST, actor-token hash mismatch 403, one POST with
-# SUBSCRIPTION payload, ATTEMPTING marker before POST, timeout/5xx -> UNKNOWN with
-# no retry on repeat/read, definitive 4xx -> terminal REJECTED, lost marker claim
-# -> readback with no second POST, pre-dispatch failures persist nothing, token
-# scrubbed from responses and durable documents, provider-contract characterisation.
-```
+- `NODERED_RUNTIME_ROOT=/private/tmp/join-node-red-4.0.9 npm run test:booked-operation-receiver`:
+  39 passed, zero skipped. Runtime is isolated and all transports are synthetic.
+- Canonical gateway and legacy patcher regressions: 84 passed, one optional live-parity case skipped.
+- Scoped ESLint, `git diff --check`, pinned Gitleaks and manual outgoing scope/PII review: passed.
+- The explicit network-free fresh-live HUB parity comparison **fails** against the installed
+  older router. This is a deployment blocker, not a skipped acceptance requirement.
+- Exact-head CI is attached to Draft PR #217; read its latest run before merge.
 
-```bash
-npx eslint scripts/patch_nodered_booked_operation_receiver_flow.mjs \
-  scripts/tests/bookedOperationReceiver*.test.mjs
-# 0 problems (nodered_*_nodes function bodies are ignored by eslint.config.js)
-# Full `eslint .` in this worktree still reports pre-existing unrelated failures in
-# src/** (89 errors, 398 warnings at this head, none in files touched here).
-```
-
-CI: `.github/workflows/lk1-subscription-enforcement.yml` does not run this task;
-no CI run was possible from this session. The candidate flow has **not** been
-imported or deployed; the live flow was not read or modified. No live Node-RED,
-Mongo or Viva request was made.
+The capability prefix is composed only with the exact reviewed canonical source by the patcher.
+The historical router source/hash and Patriots operational pins remain unchanged; the normal
+CORS response stays 204. Generated candidates must use the two-output OPTIONS topology.
 
 ## Residual risks / deliberately deferred
 
 - Import, `functionExternalModules` settings, env provisioning, Nginx/HTTP
   exposure and Mongo indexes remain deployment work.
-- Managed subscription enforcement / entitlement policy (DEV allowlist, ЦУП
-  reserve/activation) is **not** applied by this adapter; LK2 owns admissibility
-  (`target_admissible`) and Viva rejects an invalid subscription. Revisit before
-  enabling for products covered by that policy.
+- Managed entitlement, activation and trial/legacy guards require the separately reviewed
+  canonical-owner upgrade described below. The receiver relies on that single owner and refuses
+  an old/partial owner before any profile read or booking dispatch.
 - Stale `ATTEMPTING` after a process crash (marker written, POST never sent, or
   POST result lost) is not auto-reconciled: a repeat admission returns `PENDING`
   and sends no POST. Ops reconciliation must read the provider bookings and close
@@ -244,3 +222,81 @@ Mongo or Viva request was made.
   provider mapping but does not re-resolve the active session.
 - `outputs/` keeps this handoff; no ADR/runbook/`docs/NODERED_REFERENCE.md` update
   was made to keep the diff to the receiver concern (follow-up for the ops owner).
+
+## Release custody and recovery
+
+This revision changes source only. Pull a fresh private preimage on `lk-primary-147`, verify its
+identity/hash, build the focused receiver candidate and inspect exact graph preservation before an
+independently authorized import. Keep both execution flags off during no-write smoke.
+The observed shared settings.js had no active httpNodeAuth; no settings.js change is part of this patch.
+
+If no admission was durably created after LK2 reserved a seat (for example actor-token issuance
+failed), keep the original operation/key and require operator reconciliation. Do not infer a safe
+retry from a timeout or release the seat; any resumption involving a real booking needs its own
+explicit authority. A CONFIRMED provider booking with a cancelled/full local game also needs an
+operator decision and must not be settled or refunded automatically.
+
+## Canonical owner compatibility (rules confirmed by the product owner)
+
+The observed router `ad423f72fdee9d76d11d141774d5f3e1588c35417e7edc5f28d1dd3bbf7dd5c4`
+has installed product/HUB/legacy/trial behavior and an eighth product continuation. The generic
+seven-output subscription patcher must continue refusing this source. It is not a deploy path.
+
+The user confirmed these rules on 2026-10-22:
+
+1. Preserve all existing plan/station/Topokraty/PRO/free-event/HUB/trial restrictions. Use exactly
+   the selected actor-owned subscription; identity/product/category ambiguity refuses before reserve.
+2. Actor/subscription and all live guards precede entitlement reserve/bind; environment is checked
+   again before at most one Viva booking POST. A rejection blocks later steps.
+3. Ambiguous sends retain PENDING/UNKNOWN without automatic entitlement release or booking retry.
+   Confirmation requires the exact original durable owner proof and completed mandatory entitlement/activation.
+
+`scripts/prepare_booked_operation_owner_compatibility.mjs` performs the exact-preimage source graft.
+It composes the new canonical entitlement/environment logic with the installed statements, preserves
+standalone protected wrappers and asserts embedded guards, keeps the eighth product continuation,
+and adds the capability prefix plus the two-output OPTIONS route. Both initial and fresh recheck
+require exactly one matching subscription; conflicting explicit or fallback aliases refuse. Unclear
+entitlement reserve responses stay pending rather than creating false failure/retry permission.
+
+The existing product-ledger cohort retains its single installed owner and its existing rules;
+external CUP entitlement applies only to the existing canonical managed cohort. This patch does not
+widen managed policy, activate a product or introduce a second booking writer.
+
+The final artifact is ONE reviewed graph: six exact existing-node changes plus the isolated receiver
+(17 appended nodes including its tab). No sequence of partial imports is accepted. No existing HTTP
+route identity, node initialization, Mongo configuration or unrelated node is modified.
+
+From a clean committed task source and fresh private read-only pull:
+
+```bash
+node scripts/prepare_booked_operation_owner_compatibility.mjs \
+  <fresh-private-live-workspace> <new-private-output-directory>
+```
+
+Outputs `candidate.flow.json`, `contract.json` and `report.json` stay outside Git (directory 0700,
+files 0600). The report binds source commit/closure, whole-flow preimage/candidate, function hashes,
+canonical additions, conflict resolutions and embedded-guard evidence. It is source-only and states
+`activationAuthorized:false`, `imported:false`, `providerWritesPerformed:false`.
+The builder rejects source, Git, topology, statement, canonical hash, alias or output-path drift.
+At actual import, re-pull and re-verify exact source/identity and use the existing guarded import,
+backup/readback/rollback procedure with separate exact-target authorization.
+
+LOCAL: private exact-preimage compatibility tests **18/18 passed**; combined receiver suite
+**56 passed, 1 skipped** (isolated Node-RED 4.0.9 installation unavailable in that local run;
+its earlier unchanged receiver runtime proof remains separate). Canonical/legacy enforcement
+regressions: **92 passed, 1 optional skipped**. Pinned ESLint 9.39.2, diff check and independent
+integration/security/reliability delta review passed. Full latest exact-head CI is attached to PR #217.
+The opt-in private fixture cases never run against a real provider and are not committed to Git.
+
+```bash
+LK1_BOOKED_OWNER_COMPATIBILITY_FIXTURE=<private-source.flow.json> \
+  npm run test:booked-operation-receiver
+```
+
+Before activation, read-only `OPTIONS /lk/subscription-bookings` on loopback with
+`X-Booked-Operation-Owner-Contract: 1` must return HTTP 200, JSON and exactly
+`{contractVersion:1,owner:"LK1_SUBSCRIPTION_BOOKING_OWNER",policy:"ATOMIC_MANAGED_V1"}`.
+The special OPTIONS output must reach the SAME grafted eight-output canonical router. The response
+runs before global/provider/Mongo lookup; ordinary CORS remains 204. The receiver requires it before
+profile/CAS/POST. Old 204, extra/malformed capability, transport failure or expiry refuses safely.
+Changing only an old router's advertised capability is never an accepted upgrade.

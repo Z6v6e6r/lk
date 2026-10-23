@@ -637,7 +637,7 @@ test("candidate adds one isolated receiver tab and a gated execution adapter", (
   for (const node of added.filter((item) => item.type === "function")) {
     if (node.id === NODE_IDS.executor) {
       assert.match(node.func, /BOOKED_OPERATION_EXECUTION_ENABLED/);
-      assert.match(node.func, /bookedOperationVivaBookingPayload/);
+      assert.match(node.func, /\/lk\/subscription-bookings/);
       assert.equal(node.outputs, 5);
       continue;
     }

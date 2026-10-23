@@ -107,6 +107,20 @@ const outcome = (document, operationId) => {
 };
 const respondOutcome = (msg, context, document) => {
   const mapped = outcome(document, context.operationId);
+  if (context.mode === "read" && context.includeReceipt && document.reservationId
+    && ["ATTEMPTING", "UNKNOWN", "CONFIRMED"].includes(document.state)
+    && context.step !== "owner_receipt") {
+    msg._bookedOperation = { ...context, step: "owner_receipt", stored: document };
+    msg.payload = {
+      operationId: document.operationId,
+      tenantKey: document.tenantKey,
+      actorClientId: document.providerClientId,
+      exerciseId: document.providerExerciseId,
+      clientSubscriptionId: document.providerClientSubscriptionId,
+      state: "CONFIRMED",
+    };
+    return [null, null, msg, null];
+  }
   if (mapped.status === "REJECTED") {
     return respond(msg, 409, mapped.payload);
   }
@@ -162,10 +176,46 @@ const context = isObject(msg._bookedOperation) ? msg._bookedOperation : null;
 if (
   !context
   || !["admit", "read"].includes(context.mode)
-  || !["find", "write", "readback"].includes(context.step)
+  || !["find", "write", "readback", "owner_receipt"].includes(context.step)
   || !isObject(context.identity)
 ) {
   return reject(msg, 503, "BOOKED_OPERATION_ROUTER_CONTEXT_INVALID");
+}
+
+if (context.step === "owner_receipt") {
+  const stored = context.stored;
+  const rows = !msg.error && Array.isArray(msg.payload) ? msg.payload : [];
+  const row = rows.length === 1 ? rows[0] : null;
+  // Never treat the admission document or an incomplete managed entitlement as
+  // proof. Bind the canonical owner's durable result to the exact original actor,
+  // tenant, operation, exercise and subscription. No user token is needed here.
+  if (row && row.kind !== "BOOKED_OPERATION_ADMISSION"
+    && row.operationId === stored.operationId && row.tenantKey === stored.tenantKey
+    && row.actorClientId === stored.providerClientId
+    && row.exerciseId === stored.providerExerciseId
+    && row.clientSubscriptionId === stored.providerClientSubscriptionId
+    && row.state === "CONFIRMED" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(row.bookingId || "")
+    && isCanonicalIso(row.confirmedAt)
+    && ["NOT_REQUIRED", "CONFIRMED"].includes(row.activationState)
+    && (!row.managedEntitlementOperationId || row.managedEntitlementState === "CONFIRMED")) {
+    const receipt = {
+      contractVersion: 1, source: "LK1_SUBSCRIPTION_BOOKING_OWNER",
+      operationId: stored.operationId, tenantId: stored.tenantId, userId: stored.userId,
+      gameId: stored.targetId, reservationId: stored.reservationId,
+      providerClientId: stored.providerClientId,
+      providerClientSubscriptionId: stored.providerClientSubscriptionId,
+      providerExerciseId: stored.providerExerciseId, providerMappingId: stored.providerMappingId,
+      targetMappingId: stored.targetMappingId, targetVersion: stored.targetVersion,
+      requestSha256: stored.requestSha256, idempotencyKeySha256: stored.idempotencyKeySha256,
+      bookingId: row.bookingId, verifiedAt: row.confirmedAt,
+    };
+    return respond(msg, 200, { asOf: row.confirmedAt, contractVersion: 1,
+      operationId: context.operationId, reason: "OWNER_BOOKING_CONFIRMED", status: "CONFIRMED", receipt });
+  }
+  // Missing/ambiguous or subsequently cancelled owner result is never settlement
+  // evidence, including when an older outer CONFIRMED document exists.
+  return respond(msg, 200, { asOf: null, contractVersion: 1,
+    operationId: context.operationId, reason: "RECONCILIATION_REQUIRED", status: "UNKNOWN" });
 }
 
 if (context.step === "find" || context.step === "readback") {
