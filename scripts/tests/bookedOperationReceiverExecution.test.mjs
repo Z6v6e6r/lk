@@ -271,7 +271,7 @@ const startExecution = (values = executionEnv) => {
 const startVerifiedOwnerExecution = (values = executionEnv) => {
   const driven = startExecution(values);
   const probeRequest = driven.step();
-  assert.equal(probeRequest[0].method, "OPTIONS");
+  assert.equal(probeRequest[0].method, "GET");
   assert.equal(probeRequest[0].headers.Authorization, undefined);
   driven.execMsg.statusCode = 200;
   driven.execMsg.headers = { "content-type": "application/json; charset=utf-8" };
@@ -579,30 +579,53 @@ test("old/partial owner versions stop before any actor profile, marker or bookin
     { statusCode: 200, payload: { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "LEGACY" } }]) {
     const driven = startExecution();
     const probe = driven.step();
-    assert.equal(probe[0].method, "OPTIONS");
+    assert.equal(probe[0].method, "GET");
     assert.equal(probe[0].headers.Authorization, undefined);
     driven.execMsg.headers = { "content-type": "application/json" };
     Object.assign(driven.execMsg, reply);
     const stopped = driven.step();
     assert.equal(stopped[3].payload.code, "BOOKED_OPERATION_OWNER_CONTRACT_UNAVAILABLE");
     assert.equal(stopped[0], null); assert.equal(stopped[1], null);
-    assert.equal(driven.providerCalls.filter(call => call.method === "GET" || call.method === "POST").length, 0);
+    assert.equal(driven.providerCalls.filter(call => call.url.startsWith("https://api.vivacrm.ru/")).length, 0);
     assert.equal(driven.document.state, "PENDING");
   }
 });
 
-test("special OPTIONS probe reaches canonical router; ordinary CORS stays 204 and the probe is inert", () => {
+test("special GET probe reaches canonical router; ordinary CORS stays 204 and the probe is inert", () => {
   const optionsSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_options.js"), "utf8");
   const routerSource = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_owner_contract_probe.js"), "utf8")
     + fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_router.js"), "utf8");
   const ordinary = new Function("msg", optionsSource)({ req: { method: "OPTIONS", headers: {} } });
   assert.equal(ordinary[0].statusCode, 204); assert.equal(ordinary[1], null);
-  const probe = new Function("msg", optionsSource)({ req: { method: "OPTIONS", headers: { "x-booked-operation-owner-contract": "1" } } });
+  const probe = new Function("msg", optionsSource)({ req: { method: "GET", headers: { "x-booked-operation-owner-contract": "1" } } });
   assert.equal(probe[0], null);
   const response = new Function("msg", "global", routerSource)(probe[1], { get() { throw new Error("probe must not read runtime/provider state"); } });
   assert.equal(response[4].statusCode, 200);
   assert.deepEqual(response[4].payload, { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" });
   assert.equal(response.filter(Boolean).length, 1);
+});
+
+test("non-exact owner GET markers refuse before any runtime state or provider access", () => {
+  const options = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_options.js"), "utf8");
+  const prefix = fs.readFileSync(path.join(ROOT, "nodered_subscription_booking_nodes/fn_subscription_booking_owner_contract_probe.js"), "utf8");
+  const router = prefix + "throw new Error('Probe escaped into booking state');";
+  for (const value of [undefined, "01", " 1 ", "1, 1", ["1", "1"], "true"]) {
+    const msg = { req: { method: "GET", headers: { "x-booked-operation-owner-contract": value,
+      authorization: "Bearer fixture-only" } } };
+    const request = new Function("msg", options)(msg)[1];
+    const out = new Function("msg", router)(request);
+    assert.equal(out[4].statusCode, 404);
+    assert.equal(out[4]._subscriptionBooking, undefined);
+    assert.deepEqual(out[4].payload, { code: "BOOKED_OPERATION_OWNER_PROBE_NOT_FOUND" });
+    assert.equal(out.filter(Boolean).length, 1);
+  }
+  const post = new Function("msg", router)({ _subscriptionBooking: { step: "booked_operation_contract_probe" },
+    req: { method: "POST", headers: { "x-booked-operation-owner-contract": "1" } } });
+  assert.equal(post[4].statusCode, 404);
+  const cors = new Function("msg", options)({ req: { method: "OPTIONS", headers: { "x-booked-operation-owner-contract": "1" } } });
+  assert.equal(cors[0].statusCode, 204);
+  assert.equal(cors[1], null);
+  assert.doesNotMatch(cors[0].headers["Access-Control-Allow-Headers"], /booked-operation/i);
 });
 
 test("probe expiry and non-JSON capability both stop before profile or marker", () => {
@@ -615,6 +638,6 @@ test("probe expiry and non-JSON capability both stop before profile or marker", 
     const stopped = driven.step();
     assert.equal(stopped[0], null); assert.equal(stopped[1], null);
     assert.equal(stopped[3].statusCode, expired ? 403 : 503);
-    assert.equal(driven.providerCalls.filter(call => call.method === "GET" || call.method === "POST").length, 0);
+    assert.equal(driven.providerCalls.filter(call => call.url.startsWith("https://api.vivacrm.ru/")).length, 0);
   }
 });

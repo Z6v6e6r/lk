@@ -1,6 +1,6 @@
 # HANDOFF — LK1 booked-operation receiver (LK2 commercial JOIN)
 
-Branch: `codex/join-activation-ready-20261022`; Draft LK1 PR #217, paired with LK2 PR #455.
+Branch: `codex/join-owner-get-probe-20261023`; follow-up to merged LK1 #217 / LK2 #455.
 Status: **source preparation; runtime activation remains OFF**. The exact canonical-owner + receiver
 compatibility candidate below implements the user-confirmed precedence rules; import and activation
 are separate operations.
@@ -96,7 +96,7 @@ Unknown/failed storage and invalid router context remain `503`. The admission
 `POST` returns the same mapping (`202` PENDING/UNKNOWN, `200` CONFIRMED, `409`
 REJECTED); a repeat admission of a terminal/`ATTEMPTING` operation never dispatches.
 
-## Coordinated LK2 wire contract (implemented in Draft LK2 PR #455; deploy together)
+## Coordinated LK2 wire contract (implemented in merged LK2 PR #455; deploy together)
 
 1. Header `X-Subscription-Actor-Token` on the admission request: the raw,
    backend-issued, short-lived (≤60 s) **user-scoped Viva access token**.
@@ -193,7 +193,7 @@ independent booking flow is introduced.
 
 ## Evidence
 
-LOCAL (executed from the task worktree):
+Historical LOCAL baseline before the compatibility/HTTP follow-ups:
 
 - `NODERED_RUNTIME_ROOT=/private/tmp/join-node-red-4.0.9 npm run test:booked-operation-receiver`:
   39 passed, zero skipped. Runtime is isolated and all transports are synthetic.
@@ -201,11 +201,11 @@ LOCAL (executed from the task worktree):
 - Scoped ESLint, `git diff --check`, pinned Gitleaks and manual outgoing scope/PII review: passed.
 - The explicit network-free fresh-live HUB parity comparison **fails** against the installed
   older router. This is a deployment blocker, not a skipped acceptance requirement.
-- Exact-head CI is attached to Draft PR #217; read its latest run before merge.
+- Exact-head CI for merged PR #217 is historical baseline evidence; the GET follow-up requires its own exact-head CI.
 
 The capability prefix is composed only with the exact reviewed canonical source by the patcher.
 The historical router source/hash and Patriots operational pins remain unchanged; the normal
-CORS response stays 204. Generated candidates must use the two-output OPTIONS topology.
+CORS response stays 204. Generated candidates must use the GET input into the two-output CORS/probe function.
 
 ## Residual risks / deliberately deferred
 
@@ -254,7 +254,7 @@ The user confirmed these rules on 2026-10-22:
 `scripts/prepare_booked_operation_owner_compatibility.mjs` performs the exact-preimage source graft.
 It composes the new canonical entitlement/environment logic with the installed statements, preserves
 standalone protected wrappers and asserts embedded guards, keeps the eighth product continuation,
-and adds the capability prefix plus the two-output OPTIONS route. Both initial and fresh recheck
+and adds the capability prefix plus the GET input into the two-output CORS/probe function. Both initial and fresh recheck
 require exactly one matching subscription; conflicting explicit or fallback aliases refuse. Unclear
 entitlement reserve responses stay pending rather than creating false failure/retry permission.
 
@@ -263,7 +263,7 @@ external CUP entitlement applies only to the existing canonical managed cohort. 
 widen managed policy, activate a product or introduce a second booking writer.
 
 The final artifact is ONE reviewed graph: six exact existing-node changes plus the isolated receiver
-(17 appended nodes including its tab). No sequence of partial imports is accepted. No existing HTTP
+(18 appended nodes: 16 receiver nodes, its tab, and one owner-tab GET input). No sequence of partial imports is accepted. No existing HTTP
 route identity, node initialization, Mongo configuration or unrelated node is modified.
 
 From a clean committed task source and fresh private read-only pull:
@@ -282,21 +282,47 @@ At actual import, re-pull and re-verify exact source/identity and use the existi
 backup/readback/rollback procedure with separate exact-target authorization.
 
 LOCAL: private exact-preimage compatibility tests **18/18 passed**; combined receiver suite
-**56 passed, 1 skipped** (isolated Node-RED 4.0.9 installation unavailable in that local run;
-its earlier unchanged receiver runtime proof remains separate). Canonical/legacy enforcement
+**58 passed, zero skipped**, including real isolated Node-RED 4.0.9 HTTP routing over the
+actual private grafted owner functions. Canonical/legacy enforcement
 regressions: **92 passed, 1 optional skipped**. Pinned ESLint 9.39.2, diff check and independent
-integration/security/reliability delta review passed. Full latest exact-head CI is attached to PR #217.
+integration/security/reliability delta review passed. Historical baseline CI is attached to PR #217; follow-up CI is separate.
 The opt-in private fixture cases never run against a real provider and are not committed to Git.
 
 ```bash
+NODERED_RUNTIME_ROOT=<private-node-red-4.0.9-installation> \
 LK1_BOOKED_OWNER_COMPATIBILITY_FIXTURE=<private-source.flow.json> \
   npm run test:booked-operation-receiver
 ```
 
-Before activation, read-only `OPTIONS /lk/subscription-bookings` on loopback with
+Before activation, read-only `GET /lk/subscription-bookings` on loopback with
 `X-Booked-Operation-Owner-Contract: 1` must return HTTP 200, JSON and exactly
 `{contractVersion:1,owner:"LK1_SUBSCRIPTION_BOOKING_OWNER",policy:"ATOMIC_MANAGED_V1"}`.
-The special OPTIONS output must reach the SAME grafted eight-output canonical router. The response
+The GET input and probe output must reach the SAME grafted eight-output canonical router. The response
 runs before global/provider/Mongo lookup; ordinary CORS remains 204. The receiver requires it before
 profile/CAS/POST. Old 204, extra/malformed capability, transport failure or expiry refuses safely.
 Changing only an old router's advertised capability is never an accepted upgrade.
+
+## 2026-10-23 HTTP routing correction and actual rollback
+
+The guarded 147 import of the prior `9e20f958...` candidate was rolled back after the owner probe
+returned 204 instead of the exact JSON200. Backup/lease/source restoration confirmed `de181b41...`,
+PM2 online, and lease released. No JOIN activation or test booking/debit occurred.
+
+Node-RED4.0.9 HTTP In registers GET/POST/PUT/PATCH/DELETE, not OPTIONS. Express/CORS can answer
+OPTIONS without running the function. Pure function tests did not establish an actual HTTP route.
+Capability now uses credential-free GET to the same canonical URI and owner; OPTIONS remains normal
+CORS. The shared GET-node builder is used by both supported composers. The new GET input reaches
+the existing CORS/probe function, then the same router's first executable prefix, then finalize and
+the booking HTTP response. Only exact GET/header1 returns the static JSON; absent/malformed marker
+returns404/no-store before global/profile/Mongo/provider access. POST booking authorization is unchanged.
+The static capability is not a user authorization proof and does not authorize any booking.
+
+The Node-RED4.0.9 runtime test now exercises real HTTP and the complete finalizer/response path,
+including normal OPTIONS204, exact GET200 and missing/wrong-marker404. With the private fixture, it
+loads only the actual grafted owner functions; no provider transport, Mongo configuration or startup
+inject nodes are loaded. Local transports and signing keys are synthetic.
+
+Previous candidate and CI evidence do not certify this follow-up. Read the new PR exact-head CI
+and current-task test evidence. Source remains preparation only until a separately approved merge
+and guarded import, fresh inactive-managed proof, key provisioning, authenticated no-write smoke
+and soak. Existing Timeweb staging runtime/env/monitoring prerequisites remain separate.

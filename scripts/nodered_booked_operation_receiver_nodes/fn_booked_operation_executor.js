@@ -269,7 +269,7 @@ if (execContext.step === "execute") {
   execution.config = loaded.config;
   execContext.step = "owner_contract";
   execScrubRequest();
-  msg.method = "OPTIONS";
+  msg.method = "GET";
   msg.url = loaded.config.ownerBase + "/lk/subscription-bookings";
   msg.headers = { "X-Booked-Operation-Owner-Contract": "1", Accept: "application/json" };
   msg.payload = undefined;
