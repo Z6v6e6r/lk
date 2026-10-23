@@ -116,5 +116,5 @@ ctx.sessionId = ctx.requestedSessionId || `result_session_${toStr(game.id) || ct
 ctx.allowedMemberKeys = uniq(snapshot.allowedMemberKeys);
 ctx.actorMemberKey = actorMemberKey;
 msg._resultSessionOpen = ctx;
-msg.payload = { _id: ctx.sessionId, deleted: { $ne: true } };
+msg.payload = { _id: ctx.sessionId, gameId: ctx.gameId, deleted: { $ne: true } };
 return [msg, null, msg];

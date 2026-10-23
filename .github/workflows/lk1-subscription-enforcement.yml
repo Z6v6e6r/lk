@@ -516,6 +516,13 @@ jobs:
         id: check_12
         run: >-
           node --test
+          scripts/tests/resultLifecycle.nodered.test.ts
+          scripts/tests/resultSession.nodered.test.ts
+          scripts/tests/resultSubmitP0.regression.test.ts
+          scripts/tests/matchResult.playerSelection.test.ts
+          scripts/tests/matchResult.ratingSync.test.ts
+          scripts/tests/matchResult.submitPairingsPayload.test.ts
+          scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
 
