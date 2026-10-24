@@ -242,7 +242,7 @@ test('archive successor pins match current sources without rewriting the origina
     assert.equal(target.preimageSha256, oldTargets.find(t => t.fileName === target.fileName).candidateSha256);
     const successor = errors.targets.find(t => t.fileName === target.fileName);
     if (successor) assert.equal(successor.preimageSha256, target.candidateSha256);
-    const currentHash = successor?.candidateSha256 ?? target.candidateSha256;
+    const currentHash = newestReviewedSourceSha256(target.fileName) ?? successor?.candidateSha256 ?? target.candidateSha256;
     assert.equal(currentHash, createHash('sha256').update(fs.readFileSync(new URL('../nodered_games_nodes/' + target.fileName, import.meta.url))).digest('hex'));
     assert.equal(newestReviewedSourceSha256(target.fileName), currentHash);
   }

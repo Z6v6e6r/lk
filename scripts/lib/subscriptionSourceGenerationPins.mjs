@@ -6,6 +6,7 @@
 // pinned by the newest generation that consumed it instead. Generations are
 // listed newest first, and the first entry for a file wins.
 import fs from 'node:fs';
+const R03_RESPONSE_TARGETS = JSON.parse(fs.readFileSync(new URL('../lk1_r03_response_generation.json', import.meta.url))).targets;
 const ERROR_SOURCE_TARGETS = JSON.parse(fs.readFileSync(new URL('../lk1_error_source_generation.json', import.meta.url))).targets;
 const HAB_ANNUAL_PRICE_TARGETS = JSON.parse(fs.readFileSync(new URL('../subscription_hab_annual_price_generation.json', import.meta.url))).targets;
 const FRIENDSHIP_TWO_HOURS_TARGETS = JSON.parse(fs.readFileSync(new URL('../subscription_friendship_two_hours_generation.json', import.meta.url))).targets;
@@ -14,7 +15,7 @@ const PAYMENT_POLLING_TARGETS = JSON.parse(fs.readFileSync(new URL('../subscript
 import { HUB_LIMIT_TARGETS } from '../patch_live_subscription_hub_limit.mjs';
 import { STATUS_PRICE_TARGETS } from '../patch_live_subscription_status_price.mjs';
 
-const GENERATIONS_NEWEST_FIRST = [ERROR_SOURCE_TARGETS, HAB_ANNUAL_PRICE_TARGETS, FRIENDSHIP_TWO_HOURS_TARGETS, PAYMENT_ARCHIVE_TARGETS, PAYMENT_POLLING_TARGETS, HUB_LIMIT_TARGETS, STATUS_PRICE_TARGETS];
+const GENERATIONS_NEWEST_FIRST = [R03_RESPONSE_TARGETS, ERROR_SOURCE_TARGETS, HAB_ANNUAL_PRICE_TARGETS, FRIENDSHIP_TWO_HOURS_TARGETS, PAYMENT_ARCHIVE_TARGETS, PAYMENT_POLLING_TARGETS, HUB_LIMIT_TARGETS, STATUS_PRICE_TARGETS];
 const NEWEST_SOURCE_SHA256_BY_FILE = new Map();
 for (const generation of GENERATIONS_NEWEST_FIRST) {
   for (const target of generation) {

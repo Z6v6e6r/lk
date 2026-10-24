@@ -171,11 +171,13 @@ function flowFixture() {
 
 test('offline source binding changes exactly five function bodies and preserves input/graph', () => {
   const flow = flowFixture(), before = structuredClone(flow);
-  const candidate = patchLk1ErrorSources(flow);
+  const sourceTexts = Object.fromEntries(LK1_ERROR_SOURCE_TARGETS.map(target => [target.source,
+    execFileSync('git', ['show', `504d008502c9f40c96526b761b4e3de0a31f01dc:scripts/${target.source}`], { encoding: 'utf8' })]));
+  const candidate = patchLk1ErrorSources(flow, { sourceTexts });
   assert.deepEqual(flow, before); assert.equal(candidate.length, flow.length);
   for (let i = 0; i < candidate.length; i++) {
     assert.deepEqual({ ...candidate[i], func: flow[i].func }, { ...flow[i], func: flow[i].func });
-    if (i > 0) assert.equal(candidate[i].func, source(LK1_ERROR_SOURCE_TARGETS[i - 1].source));
+    if (i > 0) assert.equal(candidate[i].func, sourceTexts[LK1_ERROR_SOURCE_TARGETS[i - 1].source]);
   }
   assert.throws(() => patchLk1ErrorSources(candidate), /FUNCTION_PREIMAGE_CHANGED/);
 });
@@ -184,7 +186,8 @@ test('offline source binding rejects missing/duplicate/type/preimage drift witho
   for (const mutate of [flow => flow.pop(), flow => flow.push({ ...flow[1] }),
     flow => { flow[1].func += '\n// drift'; }, flow => { flow[1].type = 'http request'; }]) {
     const flow = flowFixture(); mutate(flow); const before = structuredClone(flow);
-    assert.throws(() => patchLk1ErrorSources(flow), /FLOW_SHAPE_INVALID|FUNCTION_PREIMAGE_CHANGED/);
+    assert.throws(() => patchLk1ErrorSources(flow, { sourceTexts: Object.fromEntries(LK1_ERROR_SOURCE_TARGETS.map(target => [target.source,
+      execFileSync('git', ['show', `504d008502c9f40c96526b761b4e3de0a31f01dc:scripts/${target.source}`], { encoding: 'utf8' })])) }), /FLOW_SHAPE_INVALID|FUNCTION_PREIMAGE_CHANGED/);
     assert.deepEqual(flow, before);
   }
 });
