@@ -2,6 +2,10 @@ import { BALANCE, STATIONS } from './campaign';
 import { BALL_RADIUS, HEIGHT, landingHint, WIDTH } from './engine';
 import type { Game, Platform } from './engine';
 import type { YasenevoArt } from './yasenevo-assets';
+import type { StationPainting } from './station-art';
+import { drawRacket } from './racket-art';
+import type { RacketArt } from './racket-art';
+import { stationScenery } from './station-scenery';
 import { yasenevoBall, yasenevoCage, yasenevoPlatform, yasenevoScenery, yasenevoSprite } from './yasenevo-render';
 
 const INK = '#23214d';
@@ -95,10 +99,10 @@ function scenery(ctx: CanvasRenderingContext2D, game: Game) {
   }
 }
 
-function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduced: boolean, art: YasenevoArt | null) {
+function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduced: boolean, art: YasenevoArt | null, rackets: RacketArt | null) {
   const fall = p.spent ?? 0;
   const y = HEIGHT - p.y + game.camera + (fall ? fall * 75 + fall * fall * 400 : 0);
-  if (y < -(art ? 200 : 35) || y > HEIGHT + 30) return;
+  if (y < -(art || rackets ? 200 : 35) || y > HEIGHT + 30) return;
   ctx.save(); ctx.translate(p.x, y);
   if (p.spent !== undefined) { ctx.globalAlpha = Math.max(0, 1 - fall / BALANCE.collapseSeconds); if (!reduced) ctx.rotate(fall * 0.65); }
   if (p.flash > 0 && !reduced) {
@@ -106,6 +110,7 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
     ctx.shadowBlur = 18;
   }
   if (art) yasenevoPlatform(ctx, p, art);
+  else if (p.kind === 'racket' && rackets) drawRacket(ctx, p.id, p.width, rackets);
   else if (p.kind === 'court' || p.kind === 'crumble') {
     rounded(ctx, 3, 1, p.width - 6, 15, 7, '#a9a6a0', INK);
     const c = game.campaign, grey = c && STATIONS[c.station].construction && game.mode !== 'complete';
@@ -148,20 +153,25 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
   ctx.restore();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null) {
+export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null, stationPainting: StationPainting | null = null, racketArt: RacketArt | null = null) {
   // Preserve physics proportions, including narrow embeds and landscape phones.
   const scale = Math.min(width / WIDTH, height / HEIGHT);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale,
     dpr * (width - WIDTH * scale) / 2, dpr * (height - HEIGHT * scale) / 2);
   const art = game.campaign?.station === 0 ? yasenevoArt : null;
-  if (art) yasenevoScenery(ctx, game, art, reducedMotion); else scenery(ctx, game);
+  const rackets = game.campaign ? racketArt : null;
+  const painting = game.campaign && stationPainting?.station === game.campaign.station ? stationPainting : null;
+  const overscanY = Math.max(0, (height / scale - HEIGHT) / 2);
+  if (art) yasenevoScenery(ctx, game, art, overscanY);
+  else if (painting) stationScenery(ctx, game, painting, overscanY);
+  else scenery(ctx, game);
   if (!art) campaignObjects(ctx, game, reducedMotion);
   ctx.save();
   if (art) { ctx.beginPath(); ctx.rect(0, 0, WIDTH, HEIGHT); ctx.clip(); }
   // The deeper racket artwork must sit behind the next lower landing surface.
   for (let i = 0; i < game.platforms.length; i++) {
-    const p = game.platforms[art ? game.platforms.length - 1 - i : i];
-    platform(ctx, p, game, reducedMotion, art);
+    const p = game.platforms[art || rackets ? game.platforms.length - 1 - i : i];
+    platform(ctx, p, game, reducedMotion, art, rackets);
   }
   if (art) { campaignObjects(ctx, game, reducedMotion, art); yasenevoCage(ctx, game, art); yasenevoBall(ctx, game, art, reducedMotion); }
   ctx.restore();
@@ -173,7 +183,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
     ctx.beginPath(); ctx.moveTo(x - ball.vx * 0.04, y + 32); ctx.quadraticCurveTo(x - ball.vx * 0.08, y + 14, x, y + 8); ctx.stroke(); ctx.restore();
   }
   ctx.save(); ctx.translate(x, y); if (!reducedMotion) ctx.rotate(game.time * 2.5);
-  ctx.shadowColor = '#8ba53166'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.shadowColor = painting ? '#0b1b3c99' : '#8ba53166'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
   const gradient = ctx.createRadialGradient(-4, -5, 1, 0, 0, BALL_RADIUS);
   gradient.addColorStop(0, '#f5ff98'); gradient.addColorStop(0.6, '#d5f347'); gradient.addColorStop(1, '#99bc1e');
   ctx.fillStyle = gradient; ctx.strokeStyle = '#7e9d21'; ctx.lineWidth = 1;

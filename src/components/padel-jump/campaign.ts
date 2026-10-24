@@ -1,6 +1,6 @@
 /** Balance is in the existing 420×640 world, seconds and world units per second. */
 export const BALANCE = {
-  version: 2, gameVersion: 'campaign-2', sections: 3, intermission: 1.6,
+  version: 3, gameVersion: 'campaign-3', sections: 3, intermission: 1.6,
   collapseSeconds: 0.72, glassSpeed: 860, glassInward: 180, glassRecovery: 0.28, maxSpeedX: 420,
   dropWarning: 1, dropSpeed: 360, dropKnockdown: 240, hitProtection: 0.85,
   adminWarning: 1.3, adminCatch: 0.8, adminRetreat: 0.6,

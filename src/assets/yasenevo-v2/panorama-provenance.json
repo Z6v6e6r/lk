@@ -1,0 +1,10 @@
+{
+  "file": "station_construction_panorama.webp",
+  "sha256": "57e55fa931dd251cd4d2d7bb8366904ae290fd71a60450c3be559a7c1aff13f2",
+  "bytes": 605052,
+  "width": 724,
+  "height": 2172,
+  "origin": "Generated with the built-in imagegen tool on 2026-10-23 using the user-supplied four-station art board as a style and composition reference, focused on Yasenevo.",
+  "preparation": "Original PNG encoded as WebP with cwebp -q 90 -metadata none. No cropping, compositing, text, logos or gameplay objects baked into the image.",
+  "prompt": "Use case: stylized-concept. Finished 1:3 continuous portrait background for a vertical scrolling padel game, based on the leftmost Yasenevo construction-court reference. Saturated cobalt blue court at the very bottom, bold dark steel side frames, climbing leaves, scaffolding and workers in hard hats throughout lower, middle and upper regions. Construction cranes and Moscow residential city depth in the center; warm directed sunlight from upper right, cool blue shadows, intricate foreground, soft distant city. Calmer cyan blue central gameplay lane. Upper region retains elevated scaffolds and steel beams. One unified painting, no stacked panels or dividers. No white dome, empty upper half, lettering, logos, signs, brand marks, banners, flags, UI, balls, stars, floating platforms, rackets or watermark. Branding and playable objects are separate original asset layers."
+}
