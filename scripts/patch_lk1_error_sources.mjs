@@ -10,7 +10,7 @@ const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 
 // Preimages belong to the historical inspected source, not an assertion of current runtime.
 // The caller must separately review whole-flow identity/topology before any future release.
-export function patchLk1ErrorSources(flow) {
+export function patchLk1ErrorSources(flow, { sourceTexts = null } = {}) {
   if (!Array.isArray(flow) || flow.some(n => !n || typeof n.id !== 'string')
     || new Set(flow.map(n => n.id)).size !== flow.length) throw new Error('FLOW_SHAPE_INVALID');
   const replacements = new Map();
@@ -18,8 +18,11 @@ export function patchLk1ErrorSources(flow) {
     const node = flow.find(n => n.id === target.id);
     if (!node || node.type !== 'function' || typeof node.func !== 'string'
       || sha(node.func) !== target.before) throw new Error('FUNCTION_PREIMAGE_CHANGED');
-    const source = fs.readFileSync(new URL(target.source, import.meta.url), 'utf8');
-    if (sha(source) !== target.after) throw new Error('FUNCTION_CANDIDATE_CHANGED');
+    // Explicit source texts allow replaying this frozen predecessor offline.
+    // Newer source generations must not silently change its pinned candidate.
+    const source = sourceTexts === null
+      ? fs.readFileSync(new URL(target.source, import.meta.url), 'utf8') : sourceTexts[target.source];
+    if (typeof source !== 'string' || sha(source) !== target.after) throw new Error('FUNCTION_CANDIDATE_CHANGED');
     new Function('msg', 'node', 'global', 'env', source);
     replacements.set(target.id, source);
   }
