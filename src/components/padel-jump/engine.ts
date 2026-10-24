@@ -242,8 +242,8 @@ export function createCampaignGame(station = 0, section = 0, options: { assist?:
     if (lessonRecovery) kind = 'court';
     if (cfg.crumbleEvery && i > 4 && i % cfg.crumbleEvery === 0 && !finish) kind = 'crumble';
     if (cfg.springEvery && i > 5 && i % cfg.springEvery === 0 && !finish) kind = 'net';
-    // Match the smaller Yasenevo artwork and its supporting surface; retain each route centre.
-    const width = station === 0 && kind === 'racket' ? slotWidth / 4 : slotWidth;
+    // Use the Yasenevo-sized racket on every station; retain each route centre.
+    const width = kind === 'racket' ? 40 : slotWidth;
     const x = slotX + (slotWidth - width) / 2;
     const moving = !!cfg.movingEvery && i >= 5 && i % cfg.movingEvery === 0 && !finish;
     const p: Platform = { id: i, x, baseX: x, y: 50 + i * cfg.gap, width, kind, moving, flash: 0, finish,

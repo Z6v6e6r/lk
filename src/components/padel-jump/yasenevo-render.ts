@@ -3,6 +3,7 @@ import type { Game, Platform } from './engine';
 import { YASENEVO_SPRITES } from './yasenevo-assets';
 import type { YasenevoArt, YasenevoSprite } from './yasenevo-assets';
 import { panoramaRect, surfaceRect } from './yasenevo-layout';
+import { drawRacket } from './racket-art';
 
 export function yasenevoSprite(ctx: CanvasRenderingContext2D, art: YasenevoArt, id: YasenevoSprite, x: number, y: number, width: number) {
   const sprite = YASENEVO_SPRITES[id], height = width * sprite.h / sprite.w;
@@ -42,8 +43,8 @@ export function yasenevoCage(ctx: CanvasRenderingContext2D, game: Game, art: Yas
   }
 }
 export function yasenevoPlatform(ctx: CanvasRenderingContext2D, p: Platform, art: YasenevoArt) {
-  const id = p.kind === 'racket' ? (p.id % 2 ? 'racket_red_platform' : 'racket_black_platform')
-    : p.kind === 'net' ? (p.flash > 0.16 ? 'spring_pressed' : p.flash > 0.06 ? 'spring_rebound' : 'spring_idle')
+  if (p.kind === 'racket') { drawRacket(ctx, p.id, p.width, art); return; }
+  const id = p.kind === 'net' ? (p.flash > 0.16 ? 'spring_pressed' : p.flash > 0.06 ? 'spring_rebound' : 'spring_idle')
       : p.width >= 180 ? 'platform_blue_wide' : 'platform_blue';
   const rect = surfaceRect(p.width, YASENEVO_SPRITES[id]);
   ctx.drawImage(art.images[id], rect.x, rect.y, rect.w, rect.h);

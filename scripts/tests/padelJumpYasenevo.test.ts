@@ -66,7 +66,7 @@ test('prepared painted environment matches the pinned image provenance', () => {
 });
 
 
-test('Yasenevo rackets and landing heads are quarter size at the same route centres; courts and other stations stay unchanged', () => {
+test('all stations use Yasenevo-sized racket heads at the same route centres; other platform widths stay unchanged', () => {
   const sprite = { w: 240, h: 88, surface: { x: 20, y: 11, width: 114 } };
   for (let section = 0; section < 3; section++) {
     const cfg = sectionBalance(0, section), game = createCampaignGame(0, section);
@@ -81,12 +81,19 @@ test('Yasenevo rackets and landing heads are quarter size at the same route cent
       } else assert.equal(p.width, cfg.width);
     }
     assert.equal(game.platforms[0].width, 200);
-    assert.ok(createCampaignGame(1, section).platforms.filter(p => p.kind === 'racket').every(p => p.width === 160));
+    for (let station = 0; station < 11; station++) {
+      const route = createCampaignGame(station, section);
+      assert.ok(route.platforms.filter(p => p.kind === 'racket').every(p => p.width === 40));
+      for (const p of route.platforms.filter(p => p.kind === 'racket')) {
+        assert.equal(surfaceRect(p.width, sprite).w, surfaceRect(40, sprite).w);
+        assert.ok(p.baseX >= 26 && p.baseX + p.width <= WIDTH - 26);
+      }
+    }
   }
 });
 test('the reduced racket catches one head landing but no longer catches the former wide invisible edge', () => {
-  for (const inside of [false, true]) {
-    const g = createCampaignGame(), p = g.platforms.find(p => p.kind === 'racket')!;
+  for (let station = 0; station < 11; station++) for (const inside of [false, true]) {
+    const g = createCampaignGame(station), p = g.platforms.find(p => p.kind === 'racket')!;
     g.platforms = [p]; g.mode = 'running';
     g.ball = { x: p.x + (inside ? p.width / 2 : p.width + BALL_RADIUS + 2), y: p.y + BALL_RADIUS + 1, vx: 0, vy: -300 };
     stepGame(g, 0);

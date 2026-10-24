@@ -114,3 +114,12 @@ Standalone после общего build: `dist/padel-jump/padel-jump.html` + о
 Публикация для телефона — отдельный новый неизменяемый HTTPS-каталог `/lk/padel-jump-test-<source-sha>/`. Выпускается только standalone production artifact из чистого отправленного коммита с успешным exact-head CI. В пакет входят HTML, действительные относительные assets и отдельный манифест с хешами; лишние public-файлы Vite исключены. Перед атомарным no-clobber rename проверяются свежие preimage/hashes/владелец/тип/lock и выполняется репетиция RENAME_NOREPLACE. После — публичные TLS/MIME/SHA и браузерные проверки. Старые тестовые каталоги, LK bundles/current/release.json, nginx и сервисы не меняются. Для возврата к предыдущей версии используется прежний неизменяемый URL; автоматического переключения общего указателя нет.
 
 В standalone изображения остаются отдельными файлами и загружаются по станции. Общие IIFE-бандлы LK по существующей конфигурации встраивают изображения и увеличиваются примерно до11,8МБ; они не входят в этот тестовый пакет и не публикуются в LK. Перед отдельным rollout в LK нужно решить внешнюю доставку этих изображений и проверить её на слабых телефонах. Физические Safari/Android и слабые устройства остаются отдельной приёмкой.
+
+
+### 24 October: shared racket textures and artist asset pack
+
+All 11 stations use Yasenevo's original red/black SVG rackets. Supporting heads are 40 world units on every station; the visible SVG is 84.21 by 30.88. Existing route centres, other platforms, single-use bounce and collapse are preserved. Balance/gameVersion is 3/`campaign-3`; previous checkpoints load without reset and older tabs cannot overwrite newer saves. Endless and server-verified EventJump retain their renderer without campaign art.
+
+The independent shared loader caches only two SVG images, handles errors/timeouts and allows retry. Missing artwork falls back to procedural drawing at the current collider width. Other station scenery loads independently of the rackets and Yasenevo's environment.
+
+The separate artist pack contains 18 SVG images (including the original logo), 11 production WebP backgrounds and 11 original PNG masters. `catalog.html` shows each image and its purpose; `manifest.json` records dimensions, hashes and source paths. Unused worker/decor/dome/start assets are excluded. Procedural hazards and UI are described separately in the README. The ZIP and PNG masters remain outside Git and webroot.
