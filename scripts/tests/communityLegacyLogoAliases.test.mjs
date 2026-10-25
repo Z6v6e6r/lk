@@ -69,7 +69,7 @@ test('configured LK fallback self aliases require the original or thumb backing 
 });
 
 test('fallback lookalikes, other records and modern external assets stay unchanged', () => {
-  for (const authority of ['lk-reserve.89-108-64-209.sslip.io.evil.test', 'lk-reserve.89-108-64-209.sslip.io:8443', 'lk-reserve.89-108-64-209.sslip.io@evil.test']) {
+  for (const authority of ['lk-reserve.89-108-64-209.sslip.io.evil.test', 'lk-reserve.89-108-64-209.sslip.io:8443', 'lk-reserve.89-108-64-209.sslip.io' + '@' + 'evil.test']) {
     const url = 'https://' + authority + legacy;
     assert.equal(resolve({ id: 'fixture', logoUrl: url }).logoUrl, url);
   }
