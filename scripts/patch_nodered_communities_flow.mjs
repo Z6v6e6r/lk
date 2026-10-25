@@ -405,7 +405,9 @@ const resolveCommunityLogoFields = (community, options = {}) => {
       const authority = httpParts[2].toLowerCase();
       const baseParts = publicBaseUrl?.match(/^(https?:)\/\/([^/?#]+)/i);
       const normalizeAuthority = (authority, protocol) => authority.toLowerCase().replace(protocol?.toLowerCase() === 'http:' ? /:80$/ : /:443$/, '');
-      const trusted = ['padlhub.ru', 'padlhub.su'];
+      // The deployed SERV2_FALLBACK is also an LK media origin. Persisted
+      // self aliases from that origin use these same local backing fields.
+      const trusted = ['padlhub.ru', 'padlhub.su', 'lk-reserve.89-108-64-209.sslip.io'];
       if (baseParts) trusted.push(normalizeAuthority(baseParts[2], baseParts[1]));
       // Userinfo and nonstandard ports never inherit a public host's identity.
       if (authority.includes('@') || !trusted.includes(normalizeAuthority(authority, httpParts[1]))) return value;
