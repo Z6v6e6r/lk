@@ -7,6 +7,8 @@ import { canPlayPart, claimStar, finishPart, loadProgress, partResult, recordFai
 import { createVisit } from './session';
 import type { JournalEvent } from './session';
 import { drawGame } from './render';
+import { addFeedback, advanceFeedback, createFeedback } from './feedback';
+import { createJumpAudio } from './audio';
 import { loadYasenevoArt } from './yasenevo-assets';
 import type { YasenevoArt } from './yasenevo-assets';
 import { loadStationPainting } from './station-art';
@@ -46,6 +48,11 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const yasenevoArt = useRef<YasenevoArt | null>(null);
   const stationPainting = useRef<StationPainting | null>(null);
   const racketArt = useRef<RacketArt | null>(null);
+  const feedback = useRef(createFeedback()), redraw = useRef(() => {});
+  const mapOpener = useRef<HTMLElement | null>(null);
+  const [audio] = useState(createJumpAudio);
+  const [artStatus, setArtStatus] = useState<'loading' | 'ready' | 'fallback'>('loading');
+  const [artAttempt, setArtAttempt] = useState(0);
   const [visit] = useState(() => createVisit(globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)));
   const [view, setView] = useState(() => snapshot(initial.game));
   const [saved, setSaved] = useState(() => structuredClone(initial.progress));
@@ -59,15 +66,21 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     let active = true;
     stationPainting.current = null;
-    if (view.station >= 0) void loadRacketArt().then(art => { if (active) racketArt.current = art; });
-    if (view.station === 0) void loadYasenevoArt().then(art => { if (active) yasenevoArt.current = art; });
-    else void loadStationPainting(view.station).then(art => { if (active) stationPainting.current = art; });
+    setArtStatus(view.station < 0 ? 'ready' : 'loading');
+    if (view.station >= 0) void Promise.all([
+      loadRacketArt().then(art => { if (active) { racketArt.current = art; redraw.current(); } return art; }),
+      view.station === 0
+        ? loadYasenevoArt().then(art => { if (active) { yasenevoArt.current = art; redraw.current(); } return art; })
+        : loadStationPainting(view.station).then(art => { if (active) { stationPainting.current = art; redraw.current(); } return art; }),
+    ]).then(parts => { if (active) setArtStatus(parts.every(Boolean) ? 'ready' : 'fallback'); });
     return () => { active = false; };
-  }, [view.station]);
+  }, [view.station, artAttempt]);
+  useEffect(() => { audio.setEnabled(saved.settings.sound); tilt.setSensitivity(saved.settings.tiltSensitivity); }, [audio, tilt, saved.settings.sound, saved.settings.tiltSensitivity]);
+  useEffect(() => () => audio.dispose(), [audio]);
 
   const save = useCallback(() => {
     setStorageIssue(!writeProgress(progress.current, storage()));
-    setSaved(structuredClone(progress.current));
+    setSaved(structuredClone(progress.current)); redraw.current();
   }, []);
   const log = useCallback((name: string, reason?: string) => {
     const c = game.current.campaign;
@@ -78,10 +91,10 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     if (manual) explicitPause.current = true;
     inputs.current.clear();
     if (game.current.mode === 'running') { game.current.mode = 'paused'; setView(snapshot(game.current)); }
-    tilt.recalibrate();
-  }, [tilt]);
+    tilt.recalibrate(); audio.pause();
+  }, [tilt, audio]);
   const prepare = useCallback((station: number, section: number, practice = false) => {
-    starter.current?.cancel(); inputs.current.clear(); transition.current = 0; explicitPause.current = false;
+    starter.current?.cancel(); feedback.current.bursts.length = 0; audio.pause(); inputs.current.clear(); transition.current = 0; explicitPause.current = false;
     if (station < 0) game.current = createGame();
     else {
       if (!canPlayPart(progress.current, station, section)) return;
@@ -89,28 +102,30 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     }
     attempt.current = station < 0 ? 1 : partResult(progress.current, station, section).failures + 1;
     setJourneyComplete(false); mapRef.current = false; setMapOpen(false); setView(snapshot(game.current));
-  }, []);
+  }, [audio]);
   const start = useCallback(() => {
     if (visit.start()) log('visit_start');
     explicitPause.current = false;
     if (game.current.mode === 'over') {
       const c = game.current.campaign; prepare(c?.station ?? -1, c?.section ?? 0, c?.practice); log('retry');
     }
-    starter.current?.play();
-  }, [log, prepare, visit]);
+    audio.unlock(); starter.current?.play();
+  }, [audio, log, prepare, visit]);
   const continueRoute = useCallback(() => {
     const c = game.current.campaign;
     if (!c) return;
     const next = c.practice ? { station: c.station, section: c.section } : nextSection(c.station, c.section);
     if (!next) return;
-    prepare(next.station, next.section, c.practice); starter.current?.play();
-  }, [prepare]);
+    prepare(next.station, next.section, c.practice); audio.unlock(); starter.current?.play();
+  }, [audio, prepare]);
   const openMap = () => {
+    mapOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     starter.current?.cancel(); pause(true); mapRef.current = true; setMapOpen(true); save();
   };
   const closeMap = () => {
-    mapRef.current = false; setMapOpen(false);
+    mapRef.current = false; setMapOpen(false); redraw.current();
     if (game.current.mode !== 'paused') explicitPause.current = false;
+    requestAnimationFrame(() => (mapOpener.current?.isConnected ? mapOpener.current : primaryButton.current)?.focus({ preventScroll: true }));
   };
   const choose = (station: number, section: number, practice = false) => { prepare(station, section, practice); };
   const toggleAssist = (enabled: boolean) => {
@@ -122,7 +137,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const update = () => { reduced.current = query.matches; }; update(); query.addEventListener('change', update);
+    const update = () => { reduced.current = query.matches; if (query.matches) feedback.current.bursts.length = 0; redraw.current(); }; update(); query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
   }, []);
   useEffect(() => {
@@ -132,7 +147,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       pending: setStarting,
       begin: () => {
         const entering = game.current.mode === 'ready';
-        game.current.mode = 'running'; inputs.current.clear(); explicitPause.current = false;
+        game.current.mode = 'running'; audio.unlock(); inputs.current.clear(); explicitPause.current = false;
         setView(snapshot(game.current)); region.current?.focus({ preventScroll: true });
         log('field_ready');
         const c = game.current.campaign;
@@ -147,13 +162,18 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       coordinator.status(status);
     });
     return () => { coordinator.cancel(); starter.current = null; unsubscribe(); tilt.dispose(); };
-  }, [log, pause, tilt]);
+  }, [audio, log, pause, tilt]);
 
   useEffect(() => {
     const activeInputs = inputs.current, currentProgress = progress.current, element = canvas.current, ctx = element?.getContext('2d');
     if (!element || !ctx) { setRenderError(true); return; }
     let width = 420, height = 640, dpr = 1;
-    const draw = () => drawGame(ctx, game.current, width, height, dpr, reduced.current || !progress.current.settings.effects, yasenevoArt.current, stationPainting.current, racketArt.current);
+    let dirty = true, drawnGame: Game | undefined, drawnMode: Game['mode'] | undefined;
+    redraw.current = () => { dirty = true; };
+    const draw = () => {
+      drawGame(ctx, game.current, width, height, dpr, reduced.current || !progress.current.settings.effects, yasenevoArt.current, stationPainting.current, racketArt.current, feedback.current);
+      dirty = false; drawnGame = game.current; drawnMode = game.current.mode;
+    };
     const resize = () => {
       const rect = element.getBoundingClientRect(); width = Math.max(1, rect.width); height = Math.max(1, rect.height);
       dpr = Math.min(window.devicePixelRatio || 1, 2); element.width = Math.round(width * dpr); element.height = Math.round(height * dpr); draw();
@@ -173,6 +193,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
         if (inputs.current.size === 0) { direction = tilt.direction(); if (Math.abs(direction) > 0.05) inputType.current = 'tilt'; }
         while (accumulator >= FIXED_STEP && current.mode === 'running') { stepGame(current, direction); accumulator -= FIXED_STEP; }
         for (const event of drainEvents(current)) {
+          if (current.campaign) { if (progress.current.settings.effects && !reduced.current) addFeedback(feedback.current, event, current); audio.cue(event); }
           if (event.type === 'landing') {
             if (event.controlled && visit.first('landing')) log('first_controlled_landing');
             if (event.moving && current.campaign?.station === 1 && visit.first('moving')) log('first_moving_landing');
@@ -199,7 +220,11 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
         transition.current += seconds;
         if (transition.current >= BALANCE.intermission) continueRoute();
       }
-      previous = now; draw(); frame = requestAnimationFrame(tick);
+      const effectsEnabled = progress.current.settings.effects && !reduced.current;
+      if (current.mode !== 'paused' && !mapRef.current && !document.hidden) advanceFeedback(feedback.current, seconds, effectsEnabled);
+      const animating = current.mode !== 'paused' && feedback.current.bursts.length > 0;
+      if (!document.hidden && !mapRef.current && (dirty || current.mode === 'running' || animating || drawnGame !== current || drawnMode !== current.mode)) draw();
+      previous = now; frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     const blur = () => pause();
@@ -207,17 +232,27 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     const hidden = () => { previous = 0; if (document.hidden) suspend(); };
     document.addEventListener('visibilitychange', hidden); window.addEventListener('blur', blur); window.addEventListener('pagehide', suspend);
     return () => {
-      cancelAnimationFrame(frame); observer.disconnect(); activeInputs.clear();
+      cancelAnimationFrame(frame); observer.disconnect(); activeInputs.clear(); redraw.current = () => {};
       document.removeEventListener('visibilitychange', hidden); window.removeEventListener('blur', blur); window.removeEventListener('pagehide', suspend);
       writeProgress(currentProgress, storage());
     };
-  }, [continueRoute, log, pause, save, tilt, visit]);
+  }, [audio, continueRoute, log, pause, save, tilt, visit]);
   useEffect(() => {
     if (mapOpen) { region.current?.querySelector<HTMLButtonElement>('.pj-map-heading button')?.focus({ preventScroll: true }); return; }
     if (view.mode !== 'running' && region.current?.contains(document.activeElement)) primaryButton.current?.focus({ preventScroll: true });
   }, [view.mode, mapOpen]);
 
   const key = (event: KeyboardEvent<HTMLElement>, down: boolean) => {
+    if (mapRef.current) {
+      if (down && event.code === 'Escape') { event.preventDefault(); closeMap(); }
+      if (down && event.key === 'Tab') {
+        const controls = Array.from(region.current?.querySelectorAll<HTMLElement>('.pj-map button:not(:disabled), .pj-map input') ?? []);
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+      return;
+    }
     const direction = ['ArrowLeft', 'KeyA'].includes(event.code) ? -1 : ['ArrowRight', 'KeyD'].includes(event.code) ? 1 : 0;
     if (direction && game.current.mode === 'running' && !mapRef.current) {
       event.preventDefault(); inputType.current = 'keyboard';
@@ -255,25 +290,27 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
       <div className="pj-editorial-bottom"><span>ПРОГРЕСС СОХРАНЯЕТСЯ НА УСТРОЙСТВЕ</span><p>Короткие участки.<br />Твой собственный темп.</p></div>
     </aside>
     <div className="pj-device" id="padel-jump">
-      <header className="pj-topbar">
+      <header className="pj-topbar" inert={mapOpen}>
         <button type="button" className="pj-icon-button" onClick={() => { starter.current?.cancel(); if (onBack) onBack(); else openMap(); }} aria-label={onBack ? 'Вернуться в личный кабинет' : 'Карта станций'}>‹</button>
         <div className="pj-logo"><img src={logoHab} alt="ПадлхАБ" /><small>Jump</small></div>
         <button type="button" className="pj-icon-button pj-pause" onClick={() => pause(true)} aria-label="Пауза" disabled={!playing}>Ⅱ</button>
       </header>
-      {campaign ? <><div className="pj-campaign-hud">
+      {campaign ? <><div className="pj-campaign-hud" inert={mapOpen}>
         <button type="button" className="pj-station" onClick={openMap} aria-label={`Карта станций: ${station?.name}`}><b>{String(view.station + 1).padStart(2, '0')}</b><span>{station?.name}<small>Участок {view.section + 1}/3{view.practice ? ' · тренировка' : view.assist ? ' · с подсветкой' : station?.construction ? ' · черновой арт' : ''}</small></span></button>
-        <strong aria-label="Звёзды">★ {view.practice ? view.stars : saved.claimed.length}</strong><span className="pj-percent">{Math.floor(view.progress * 100)}%</span>
+        <strong aria-label={`Звёзды участка: ${view.stars} из ${view.totalStars}`}>★ {view.stars}/{view.totalStars}</strong><span className="pj-height">{view.score} м</span><span className="pj-percent">{Math.floor(view.progress * 100)}%</span>
       </div><progress className="pj-route-progress" max={1} value={view.progress} aria-label="Прогресс участка" /></>
-        : <div className="pj-stats"><div><span className="pj-stat-label">ВЫСОТА</span><strong data-testid="jump-score">{view.score}<small> м</small></strong></div><div className="pj-best"><span className="pj-stat-label">РЕКОРД</span><strong>{best}<small> м</small></strong></div><button type="button" className="pj-boost" onClick={openMap}>КАРТА</button></div>}
+        : <div className="pj-stats" inert={mapOpen}><div><span className="pj-stat-label">ВЫСОТА</span><strong data-testid="jump-score">{view.score}<small> м</small></strong></div><div className="pj-best"><span className="pj-stat-label">РЕКОРД</span><strong>{best}<small> м</small></strong></div><button type="button" className="pj-boost" onClick={openMap}>КАРТА</button></div>}
       <div className="pj-field">
         <canvas ref={canvas} className="pj-canvas" width={420} height={640} aria-label="Игровое поле: мяч прыгает по опорам. Управляйте наклоном телефона, стрелками или кнопками под полем."
           onPointerDown={e => pointer(e)} onPointerMove={e => { if (inputs.current.has(`pointer:${e.pointerId}`)) pointer(e); }} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release} />
-        {playing && <div className="pj-field-caption" aria-hidden="true">{view.boost ? 'ВЫСОКИЙ ОТСКОК!' : view.practice ? 'ТРЕНИРОВКА · ПРОГРЕСС СОХРАНЁН' : view.assist ? 'ПОДСВЕТКА МАРШРУТА' : view.progress < 0.08 ? station?.skill ?? 'РАКЕТКА — ОДИН ОТСКОК' : view.progress > 0.98 ? view.hint : 'СМОТРИ НА СЛЕДУЮЩУЮ ОПОРУ'}</div>}
+        {playing && <div className="pj-field-caption" aria-hidden="true">{view.boost ? 'ВЫСОКИЙ ОТСКОК!' : view.practice ? 'ТРЕНИРОВКА · ПРОГРЕСС СОХРАНЁН' : view.assist ? 'ПОДСВЕТКА МАРШРУТА' : view.station === 0 && !game.current.campaign?.difficultySeen ? (game.current.campaign?.controlledLandings && !game.current.campaign.directionChanges ? 'Теперь смени направление' : (game.current.campaign?.controlledLandings ?? 0) >= 3 ? 'Отлично! Выбирай следующую опору' : `Освой управление: ${game.current.campaign?.controlledLandings ?? 0}/3 приземлений`) : view.progress < 0.08 ? station?.skill ?? 'РАКЕТКА — ОДИН ОТСКОК' : view.progress > 0.98 ? view.hint : 'СМОТРИ НА СЛЕДУЮЩУЮ ОПОРУ'}</div>}
         {!mapOpen && (view.mode !== 'running' || renderError || journeyComplete) && <div className={`pj-overlay pj-overlay-${view.mode}`}>
           <div className="pj-dialog" role="group" aria-label={view.mode === 'over' ? 'Результат игры' : 'Управление игрой'}>
             <span className="pj-pill">{journeyComplete ? 'МАРШРУТ ЗАВЕРШЁН' : campaign ? `${station?.name} · ${view.section + 1}/3` : 'ПаделхАБ JUMP'}</span>
             <div className="pj-hero-ball" aria-hidden="true"><span /></div><h2>{title}</h2>
             <p role={starting ? 'status' : undefined}>{body}</p>
+            {view.mode === 'ready' && <div className="pj-legend" aria-label="Обозначения опор"><span>Ракетка · 1 отскок</span><span>Площадка · можно вернуться</span><span>Сетка · ускорение</span></div>}
+            {view.mode === 'ready' && artStatus !== 'ready' && <div className="pj-art-status" role="status">{artStatus === 'loading' ? 'Готовим оформление. Играть уже можно.' : <>Упрощённая графика. <button type="button" onClick={() => setArtAttempt(n => n + 1)}>Загрузить снова</button></>}</div>}
             {view.mode === 'over' && campaign && <div className="pj-result">Участок {view.section + 1}/3 · {Math.floor(view.progress * 100)}% пути · ★ {view.stars}/{view.totalStars}</div>}
             {view.aided && finished && <div className="pj-result">С подсветкой · прохождение сохранено</div>}
             {!renderError && <button ref={primaryButton} type="button" className="pj-play" disabled={starting} aria-busy={starting}
@@ -286,9 +323,10 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
             <span className="pj-dialog-note">{finished && !view.practice && !journeyComplete ? 'Продолжим автоматически. Можно нажать «Дальше».' : 'Прыжки — автоматически. Ракетки — на один раз.'}</span>
           </div>
         </div>}
-        {mapOpen && <div className="pj-map" role="dialog" aria-label="Карта станций">
-          <div className="pj-map-heading"><div><span className="pj-eyebrow">ТВОЙ МАРШРУТ</span><h2>11 станций ПадлхАБ</h2></div><button type="button" aria-label="Закрыть карту" onClick={closeMap}>×</button></div>
+        {mapOpen && <div className="pj-map" role="dialog" aria-modal="true" aria-label="Карта станций">
+          <div className="pj-map-heading"><div><span className="pj-eyebrow">ТВОЙ МАРШРУТ</span><h2>11 станций ПадлхАБ</h2><p className="pj-map-total">Собрано звёзд: {saved.claimed.length}</p></div><button type="button" aria-label="Закрыть карту" onClick={closeMap}>×</button></div>
           {saved.completed && <p className="pj-map-complete">Все станции пройдены. Возвращайся за звёздами и медалями!</p>}
+          <button type="button" className="pj-settings-link" onClick={() => { const settings = region.current?.querySelector<HTMLElement>('.pj-map-settings'); settings?.scrollIntoView({ block: 'start' }); settings?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true }); }}>Звук и управление ↘</button>
           <div className="pj-station-list">{STATIONS.map((s, index) => {
             const unlocked = index <= saved.unlocked, medal = stationMedal(saved, index);
             const first = !saved.completed && index === saved.unlocked ? saved.current.section : 0;
@@ -302,6 +340,8 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
           <div className="pj-map-settings">
             <label><input type="checkbox" checked={saved.settings.assist} onChange={e => toggleAssist(e.target.checked)} /> Подсветка маршрута <small>Помогает пройти, без идеальной медали</small></label>
             <label><input type="checkbox" checked={saved.settings.effects} onChange={e => { progress.current.settings.effects = e.target.checked; save(); }} /> Декоративные эффекты</label>
+            <label><input type="checkbox" checked={saved.settings.sound} onChange={e => { progress.current.settings.sound = e.target.checked; audio.setEnabled(e.target.checked); if (e.target.checked) audio.unlock(); save(); }} /> Звуки игры <small>Короткие сигналы прыжка, звёзд и финиша</small></label>
+            <label className="pj-sensitivity">Чувствительность наклона <output>{saved.settings.tiltSensitivity.toFixed(2)}×</output><input type="range" min="0.65" max="1.5" step="0.05" value={saved.settings.tiltSensitivity} aria-label="Чувствительность наклона" onChange={e => { progress.current.settings.tiltSensitivity = Number(e.target.value); tilt.setSensitivity(Number(e.target.value)); save(); }} /></label>
             <label><input type="checkbox" checked={saved.settings.journal} onChange={e => { progress.current.settings.journal = e.target.checked; save(); }} /> Локальный журнал игры <small>Без имени и телефона, только на этом устройстве</small></label>
             <button type="button" onClick={() => choose(-1, 0)}>Бесконечный подъём · рекорд {best} м</button>
             {storageIssue && <p role="status">Браузер не сохраняет данные. Этот заход работает, но прогресс может потеряться после закрытия.</p>}
@@ -309,7 +349,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
           </div>
         </div>}
       </div>
-      <footer className="pj-controls">
+      <footer className="pj-controls" inert={mapOpen}>
         <button type="button" aria-label="Двигаться влево" disabled={!playing} onPointerDown={e => pointer(e, -1)} onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
           onKeyDown={e => { if (playing && ['Space', 'Enter'].includes(e.code)) { e.preventDefault(); inputType.current = 'keyboard'; inputs.current.set('button:left', -1); } }} onKeyUp={() => inputs.current.delete('button:left')} onBlur={() => inputs.current.delete('button:left')}>‹</button>
         <div><strong>{tiltSelected ? 'Наклоняй телефон влево и вправо' : 'Веди мяч влево и вправо'}</strong><span>{tiltSelected ? 'Пауза — калибровка. Касание тоже работает' : 'Касайся краёв поля или используй ← →'}</span></div>

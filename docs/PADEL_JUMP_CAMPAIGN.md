@@ -123,3 +123,7 @@ All 11 stations use Yasenevo's original red/black SVG rackets. Supporting heads 
 The independent shared loader caches only two SVG images, handles errors/timeouts and allows retry. Missing artwork falls back to procedural drawing at the current collider width. Other station scenery loads independently of the rackets and Yasenevo's environment.
 
 The separate artist pack contains 18 SVG images (including the original logo), 11 production WebP backgrounds and 11 original PNG masters. `catalog.html` shows each image and its purpose; `manifest.json` records dimensions, hashes and source paths. Unused worker/decor/dome/start assets are excluded. Procedural hazards and UI are described separately in the README. The ZIP and PNG masters remain outside Git and webroot.
+
+###25 октября: game-dev аудит и balance4
+
+Полный разбор, выбранные навыки, изменения, измерения и ограничения: [PADEL_JUMP_AUDIT_20261025.md](PADEL_JUMP_AUDIT_20261025.md). Устранён скачок длительности, восстановлены постоянные recovery courts, звёзды привязаны к головке движущихся ракеток. Физические скорости и40-wide головки сохранены. Появились feedback без изменения симуляции, опциональные SFX, чувствительность, доступная карта и инвалидация статичного canvas. Balance4 читает прежние сохранения. Старые таблицы длительности относятся к прежней геометрии.

@@ -115,3 +115,11 @@ test('repeat enable and StrictMode dispose/remount keep exactly one sensor liste
   h.tilt.disable(); assert.equal(h.states.at(-1), 'off');
   assert.equal(h.listeners(), 0); assert.equal(h.timers(), 0);
 });
+
+test('sensitivity changes response without reattaching sensors or changing calibration', async () => {
+  const h = harness(); await h.tilt.enable(); h.emit(20, 0); h.emit(20, 12, 300);
+  const normal = h.tilt.direction(); h.tilt.setSensitivity(0.65);
+  assert.ok(Math.abs(h.tilt.direction() - normal * 0.65) < 1e-9);
+  h.tilt.setSensitivity(1.5); assert.ok(h.tilt.direction() >= normal);
+  h.tilt.setSensitivity(NaN); assert.equal(h.tilt.direction(), normal); assert.equal(h.listeners(), 1);
+});

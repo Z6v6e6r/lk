@@ -46,7 +46,7 @@ export type Game = {
   failure?: 'fall' | 'metal' | 'admin' | 'drop-fall';
 };
 export type GameEvent = { type: 'landing' | 'star' | 'difficulty' | 'finish' | 'failure' | 'glass' | 'drop' | 'admin-warning'; id?: string; moving?: boolean; controlled?: boolean; reason?: string };
-export type Star = { id: string; x: number; y: number; collected: boolean; claimed: boolean };
+export type Star = { id: string; x: number; y: number; collected: boolean; claimed: boolean; platform?: number; offset?: number };
 export type Metal = { x: number; y: number; w: number; h: number };
 export type Glass = { id: number; side: -1 | 1; y: number; h: number; broken: boolean };
 export type Drop = { id: number; x: number; y: number; triggerY: number; phase: 'waiting' | 'warning' | 'falling' | 'spent'; age: number };
@@ -138,6 +138,13 @@ export function stepGame(game: Game, direction: number, dt = FIXED_STEP): void {
     if (p.moving && p.spent === undefined) p.x = movingX(p, game.time);
   }
 
+  // Collectibles stay over their support, including moving rackets.
+  if (game.campaign) for (const star of game.campaign.stars) {
+    if (star.collected || star.platform === undefined) continue;
+    const support = game.platforms.find(p => p.id === star.platform);
+    if (support && support.spent === undefined) star.x = support.x + support.width / 2 + (star.offset ?? 0);
+  }
+
   if (ball.vy < 0) {
     // Highest crossed platform wins, and collision is only with its upper surface.
     for (let i = game.platforms.length - 1; i >= 0; i--) {
@@ -160,7 +167,7 @@ export function stepGame(game: Game, direction: number, dt = FIXED_STEP): void {
           if (p.finish) {
             if (c.station !== 0 || (c.controlledLandings >= 3 && c.directionChanges >= 1)) {
               game.mode = 'complete'; event(game, { type: 'finish' });
-            } else c.hint = 'Скорректируй направление влево и вправо: нужны три управляемых приземления.';
+            } else c.hint = `Финиш рядом: ${Math.min(3, c.controlledLandings)}/3 управляемых приземлений. Смени направление влево и вправо.`;
           }
         }
         if (p.kind === 'net') game.boost = 0.9;
@@ -238,21 +245,23 @@ export function createCampaignGame(station = 0, section = 0, options: { assist?:
     const slotWidth = lessonRecovery ? 230 : small ? 98 : cfg.width;
     const slotX = Math.max(26, Math.min(WIDTH - slotWidth - 26, center - slotWidth / 2));
     const finish = i === cfg.count;
-    let kind: Platform['kind'] = i <= 3 || i % 6 === 0 || finish ? 'court' : 'racket';
+    const recovery = i <= 3 || i % 6 === 0 || finish || lessonRecovery;
+    let kind: Platform['kind'] = recovery ? 'court' : 'racket';
     if (lessonRecovery) kind = 'court';
-    if (cfg.crumbleEvery && i > 4 && i % cfg.crumbleEvery === 0 && !finish) kind = 'crumble';
-    if (cfg.springEvery && i > 5 && i % cfg.springEvery === 0 && !finish) kind = 'net';
+    if (cfg.crumbleEvery && i > 4 && i % cfg.crumbleEvery === 0 && !recovery) kind = 'crumble';
+    if (cfg.springEvery && i > 5 && i % cfg.springEvery === 0 && !recovery) kind = 'net';
     // Use the Yasenevo-sized racket on every station; retain each route centre.
     const width = kind === 'racket' ? 40 : slotWidth;
     const x = slotX + (slotWidth - width) / 2;
-    const moving = !!cfg.movingEvery && i >= 5 && i % cfg.movingEvery === 0 && !finish;
+    const moving = !!cfg.movingEvery && i >= 5 && i % cfg.movingEvery === 0 && !recovery;
     const p: Platform = { id: i, x, baseX: x, y: 50 + i * cfg.gap, width, kind, moving, flash: 0, finish,
       amplitude: cfg.amplitude, omega: cfg.omega, rhythm: cfg.rhythm };
     if (moving) p.x = movingX(p, 0);
     game.platforms.push(p);
     if (i === 1 || i % 4 === 0) {
       const id = `${sectionKey(station, section)}:${i}`;
-      c.stars.push({ id, x: center + (i === 1 ? 27 : i % 8 ? -28 : 28), y: p.y + 40, collected: false, claimed: claimed.has(id) });
+      const offset = (i % 8 ? -1 : 1) * (kind === 'racket' ? 12 : 27);
+      c.stars.push({ id, x: p.x + p.width / 2 + offset, y: p.y + 40, collected: false, claimed: claimed.has(id), platform: i, offset });
     }
     const outside = center > 210 ? 30 : WIDTH - 112;
     if (cfg.metalEvery && i >= 6 && i % cfg.metalEvery === 0) c.metals.push({ x: outside, y: p.y + cfg.gap * 0.4, w: 82, h: 19 });

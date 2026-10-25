@@ -1,4 +1,6 @@
 import { BALANCE, STATIONS } from './campaign';
+import { ballHalo, drawFeedback } from './feedback';
+import type { Feedback } from './feedback';
 import { BALL_RADIUS, HEIGHT, landingHint, WIDTH } from './engine';
 import type { Game, Platform } from './engine';
 import type { YasenevoArt } from './yasenevo-assets';
@@ -144,6 +146,7 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
       ctx.beginPath(); ctx.ellipse(x, yy, 1.6, 1, 0, 0, Math.PI * 2); ctx.fill();
     }
   }
+  if (p.kind === 'racket' && p.spent === undefined && (art || rackets)) { ctx.strokeStyle = '#e7f9ab'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(1, 0); ctx.lineTo(p.width - 1, 0); ctx.stroke(); }
   if (p.kind === 'racket' && p.spent === undefined) { ctx.fillStyle = '#fff'; ctx.font = 'bold 8px Arial'; ctx.fillText('1×', p.width * 0.71, 1); }
   if (p.finish) {
     ctx.strokeStyle = '#6642b0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(p.width / 2, -3); ctx.lineTo(p.width / 2, -44); ctx.stroke();
@@ -153,7 +156,7 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
   ctx.restore();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null, stationPainting: StationPainting | null = null, racketArt: RacketArt | null = null) {
+export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null, stationPainting: StationPainting | null = null, racketArt: RacketArt | null = null, feedback?: Feedback) {
   // Preserve physics proportions, including narrow embeds and landscape phones.
   const scale = Math.min(width / WIDTH, height / HEIGHT);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale,
@@ -173,9 +176,10 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
     const p = game.platforms[art || rackets ? game.platforms.length - 1 - i : i];
     platform(ctx, p, game, reducedMotion, art, rackets);
   }
-  if (art) { campaignObjects(ctx, game, reducedMotion, art); yasenevoCage(ctx, game, art); yasenevoBall(ctx, game, art, reducedMotion); }
+  if (art) { campaignObjects(ctx, game, reducedMotion, art); yasenevoCage(ctx, game, art); ballHalo(ctx, game); yasenevoBall(ctx, game, art, reducedMotion); if (!reducedMotion && feedback) drawFeedback(ctx, feedback, game.camera); }
   ctx.restore();
   if (art) return;
+  if (game.campaign) ballHalo(ctx, game);
   const { ball } = game;
   const x = ball.x, y = HEIGHT - ball.y + game.camera;
   if (!reducedMotion && ball.vy > 0 && game.mode === 'running') {
@@ -190,6 +194,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
   ctx.beginPath(); ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.strokeStyle = '#ffffd8'; ctx.lineWidth = 1.8;
   ctx.beginPath(); ctx.moveTo(-11, -4); ctx.bezierCurveTo(0, -8, -2, 8, 10, 6); ctx.stroke(); ctx.restore();
+  if (!reducedMotion && feedback) drawFeedback(ctx, feedback, game.camera);
   if (game.boost > 0) {
     ctx.save(); ctx.fillStyle = '#fff'; ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center';
     ctx.shadowColor = '#8249ee'; ctx.shadowBlur = reducedMotion ? 0 : 8; ctx.fillText('↑ УСКОРЕНИЕ', x, y + 55); ctx.restore();

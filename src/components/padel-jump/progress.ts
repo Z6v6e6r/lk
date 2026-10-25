@@ -6,13 +6,13 @@ export type PartResult = { done: boolean; clean: boolean; perfect: boolean; best
 export type Progress = {
   schema: 1; balance: number; unsupported?: boolean; unlocked: number; current: { station: number; section: number };
   parts: Record<string, PartResult>; claimed: string[]; completed: boolean; tutorial: boolean;
-  settings: { assist: boolean; effects: boolean; journal: boolean }; activeSeconds: number;
+  settings: { assist: boolean; effects: boolean; journal: boolean; sound: boolean; tiltSensitivity: number }; activeSeconds: number;
 };
 type Store = Pick<Storage, 'getItem' | 'setItem'>;
 const emptyPart = (): PartResult => ({ done: false, clean: false, perfect: false, bestStars: 0, failures: 0 });
 export function freshProgress(): Progress {
   return { schema: 1, balance: BALANCE.version, unlocked: 0, current: { station: 0, section: 0 }, parts: {}, claimed: [],
-    completed: false, tutorial: false, settings: { assist: false, effects: true, journal: true }, activeSeconds: 0 };
+    completed: false, tutorial: false, settings: { assist: false, effects: true, journal: true, sound: false, tiltSensitivity: 1 }, activeSeconds: 0 };
 }
 function frontier(progress: Progress) {
   progress.unlocked = 0; progress.completed = true;
@@ -46,7 +46,7 @@ export function loadProgress(storage?: Pick<Storage, 'getItem'>): Progress {
     if (Array.isArray(v.claimed)) p.claimed = [...new Set(v.claimed.filter((x): x is string => typeof x === 'string' && /^\d{1,2}:[0-2]:\d{1,3}$/.test(x)))].slice(0, 2000);
     if (v.settings && typeof v.settings === 'object') {
       const a = v.settings as Record<string, unknown>;
-      p.settings = { assist: a.assist === true, effects: a.effects !== false, journal: a.journal !== false };
+      p.settings = { assist: a.assist === true, effects: a.effects !== false, journal: a.journal !== false, sound: a.sound === true, tiltSensitivity: typeof a.tiltSensitivity === 'number' && Number.isFinite(a.tiltSensitivity) ? Math.max(0.65, Math.min(1.5, a.tiltSensitivity)) : 1 };
     }
     p.tutorial = v.tutorial === true; p.activeSeconds = typeof v.activeSeconds === 'number' && Number.isFinite(v.activeSeconds) ? Math.max(0, Math.min(v.activeSeconds, 1e8)) : 0;
     return p;

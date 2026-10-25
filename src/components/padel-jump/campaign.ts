@@ -1,6 +1,6 @@
 /** Balance is in the existing 420×640 world, seconds and world units per second. */
 export const BALANCE = {
-  version: 3, gameVersion: 'campaign-3', sections: 3, intermission: 1.6,
+  version: 4, gameVersion: 'campaign-4', sections: 3, intermission: 1.6,
   collapseSeconds: 0.72, glassSpeed: 860, glassInward: 180, glassRecovery: 0.28, maxSpeedX: 420,
   dropWarning: 1, dropSpeed: 360, dropKnockdown: 240, hitProtection: 0.85,
   adminWarning: 1.3, adminCatch: 0.8, adminRetreat: 0.6,
@@ -27,19 +27,19 @@ export type SectionBalance = {
   metalEvery: number; crumbleEvery: number; glassEvery: number; dropsEvery: number; adminEvery: number; springEvery: number;
 };
 export function sectionBalance(station: number, section: number): SectionBalance {
-  const c: SectionBalance = { count: 78 + section * 6, gap: 82, width: 158, sway: 112, phase: 0.55,
+  const c: SectionBalance = { count: (station <= 4 ? 34 : station <= 7 ? 36 : 38) + section * 2, gap: [80, 84, 88][section], width: 158, sway: [85, 100, 112][section], phase: [0.55, 0.50, 0.59, 0.52, 0.46, 0.58, 0.64, 0.60, 0.56, 0.62, 0.66][station],
     movingEvery: 0, amplitude: 18, omega: 0.9, rhythm: false, metalEvery: 0, crumbleEvery: 0,
     glassEvery: 0, dropsEvery: 0, adminEvery: 0, springEvery: station >= 2 ? 13 : 0 };
-  if (station === 0) return { ...c, count: [32, 34, 36][section], gap: section === 2 ? 90 : 78,
-    width: 160, sway: section === 0 ? 40 : 115 };
-  if (station === 1) return { ...c, gap: section === 0 ? 78 : 90, width: 160, sway: 40,
+  if (station === 0) return { ...c, count: [24, 28, 32][section], gap: section === 2 ? 90 : 78,
+    width: 160, sway: section === 0 ? 40 : 95 };
+  if (station === 1) return { ...c, count: [32, 34, 36][section], gap: section === 0 ? 78 : 90, width: 160, sway: [40, 55, 70][section],
     movingEvery: 8, amplitude: section === 2 ? 28 : 16, adminEvery: section === 2 ? 28 : 0, springEvery: section === 2 ? 16 : 0 };
   if (station === 2) { c.metalEvery = section === 0 ? 16 : 9; c.movingEvery = section === 2 ? 7 : 0; }
   if (station === 3) { c.crumbleEvery = section === 0 ? 5 : 2; c.width = section === 2 ? 124 : 158; }
   if (station === 4) { c.glassEvery = 12; c.width = 174; c.springEvery = 0; }
   if (station === 5) { c.glassEvery = section === 2 ? 17 : 0; c.dropsEvery = section === 0 ? 20 : 12; c.metalEvery = section === 2 ? 18 : 0; }
   if (station === 6) { c.movingEvery = 3; c.rhythm = true; c.amplitude = 20 + section * 5; c.metalEvery = section === 2 ? 15 : 0; }
-  if (station === 7) { c.glassEvery = 14; c.movingEvery = section === 2 ? 6 : 0; }
+  if (station === 7) { c.glassEvery = 14; c.movingEvery = section === 2 ? 7 : 0; }
   if (station === 8) { c.width = 138 - section * 12; c.sway = 78; c.metalEvery = 11 - section; }
   if (station === 9) { c.movingEvery = 4; c.crumbleEvery = 3; c.amplitude = 20; }
   if (station === 10) {

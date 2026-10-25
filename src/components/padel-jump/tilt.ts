@@ -61,6 +61,7 @@ export function createTiltController(env: TiltEnvironment) {
   let generation = 0;
   let neutral: number | null = null;
   let filtered = 0;
+  let sensitivity = 1;
   let receivedAt: number | null = null;
   let detach: (() => void) | undefined;
   let cancelTimeout: (() => void) | undefined;
@@ -123,8 +124,9 @@ export function createTiltController(env: TiltEnvironment) {
     },
     disable() { stop(); publish('off'); },
     recalibrate,
+    setSensitivity(value: number) { sensitivity = Number.isFinite(value) ? Math.max(0.65, Math.min(1.5, value)) : 1; },
     direction() {
-      return status === 'active' && receivedAt !== null && env.now() - receivedAt <= TILT_STALE_MS ? filtered : 0;
+      return status === 'active' && receivedAt !== null && env.now() - receivedAt <= TILT_STALE_MS ? Math.max(-1, Math.min(1, filtered * sensitivity)) : 0;
     },
     dispose() { stop(); subscribers.clear(); status = 'off'; },
   };

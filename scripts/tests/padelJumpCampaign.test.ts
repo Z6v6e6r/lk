@@ -184,8 +184,8 @@ test('reproducible clean and two-mistake first visits reach and play Seliger in 
 });
 
 test('real first glass panel has a reachable wide ordinary continuation from low/middle/high side contacts', () => {
-  for (const y of [405, 495, 580]) {
-    const g = createCampaignGame(4, 0); g.mode = 'running'; g.ball = { x: 12, y, vx: 0, vy: 0 }; g.camera = y - 275;
+  for (const offset of [-10, 80, 165]) {
+    const g = createCampaignGame(4, 0), y = g.campaign!.glass[0].y + offset; g.mode = 'running'; g.ball = { x: 12, y, vx: 0, vy: 0 }; g.camera = y - 275;
     stepGame(g, -1); assert.ok(g.campaign!.glass[0].broken); drainEvents(g);
     let landing: number | undefined;
     for (let i = 0; i < 240 && landing === undefined && g.mode === 'running'; i++) {
