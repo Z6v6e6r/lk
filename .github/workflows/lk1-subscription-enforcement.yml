@@ -526,6 +526,7 @@ jobs:
           scripts/tests/matchResult.submitPairingsPayload.test.ts
           scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
+          scripts/tests/vivaSessionCompatibility.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
 
       - name: Run Partner membership R4 gates

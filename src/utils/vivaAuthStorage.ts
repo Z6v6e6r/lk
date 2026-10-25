@@ -1,6 +1,7 @@
 import { AUTH_RUNTIME_TENANT_KEY } from "../consts/authRuntime.ts";
 import {
   clearAuthTokens,
+  clearAuthSessionTokens,
   persistAuthTokens,
   readAuthToken,
   readRefreshToken,
@@ -56,4 +57,8 @@ export function clearVivaAuthTokens() {
   clearAuthTokens();
   deleteCookie(LEGACY_AUTH_COOKIE);
   deleteCookie(LEGACY_REFRESH_COOKIE);
+}
+
+export function clearVivaSessionTokens() {
+  clearAuthSessionTokens();
 }
