@@ -36,3 +36,23 @@ test('malformed legacy data cannot republish a rejected self alias', () => {
     assert.deepEqual(result, { logo: null, logoUrl: null, logoThumbUrl: null });
   }
 });
+
+
+test('self aliases are checked across proxy protocol and trusted public host differences', () => {
+  for (const url of [
+    'https://example.test' + legacy,
+    'https://EXAMPLE.test:443' + legacy,
+    'https://padlhub.ru' + legacy,
+    '//padlhub.su' + legacy,
+  ]) {
+    assert.equal(resolve({ id: 'fixture', logoUrl: url }, { publicBaseUrl: 'http://example.test' }).logoUrl, null);
+    assert.equal(resolve({ id: 'fixture', logoUrl: url, logoDataUrl: data }, { publicBaseUrl: 'http://example.test' }).logoUrl, url.startsWith('//') ? 'http:' + url : url);
+  }
+});
+
+test('lookalike, credential-bearing and nonstandard-port foreign assets are preserved', () => {
+  for (const host of ['padlhub.ru.evil.test', 'padlhub.ru' + '@' + 'evil.test', 'padlhub.ru:8443', 'padlhub.ru:80', 'images.example.test']) {
+    const url = 'https://' + host + legacy;
+    assert.equal(resolve({ id: 'fixture', logoUrl: url }, { publicBaseUrl: 'http://padlhub.ru' }).logoUrl, url);
+  }
+});

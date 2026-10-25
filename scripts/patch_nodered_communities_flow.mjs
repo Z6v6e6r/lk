@@ -396,13 +396,27 @@ const resolveCommunityLogoFields = (community, options = {}) => {
     || (isDataUrl(community?.logo) ? community.logo : null);
   const availableLogoUrl = value => {
     if (!value) return null;
-    if (/^https?:\/\//i.test(value) && (!publicBaseUrl || !value.startsWith(publicBaseUrl + '/'))) return value;
-    const path = value.replace(/^https?:\/\/[^/]+/i, '').split(/[?#]/)[0];
+    // Node-RED function sandboxes do not always expose the WHATWG URL global.
+    // Compare exact authorities, not string prefixes. Only known public aliases
+    // and the response base can be classified using this record's backing data.
+    const httpParts = value.match(/^(https?:)?\/\/([^/?#]+)([^?#]*)/i);
+    let path = value.split(/[?#]/)[0];
+    if (httpParts) {
+      const authority = httpParts[2].toLowerCase();
+      const baseParts = publicBaseUrl?.match(/^(https?:)\/\/([^/?#]+)/i);
+      const normalizeAuthority = (authority, protocol) => authority.toLowerCase().replace(protocol?.toLowerCase() === 'http:' ? /:80$/ : /:443$/, '');
+      const trusted = ['padlhub.ru', 'padlhub.su'];
+      if (baseParts) trusted.push(normalizeAuthority(baseParts[2], baseParts[1]));
+      // Userinfo and nonstandard ports never inherit a public host's identity.
+      if (authority.includes('@') || !trusted.includes(normalizeAuthority(authority, httpParts[1]))) return value;
+      path = httpParts[3];
+    }
     const legacy = path.match(/^\/lk\/media\/community-logo-legacy\/([^/]+)(\/thumb)?$/);
     if (!legacy) return value;
     // Keep foreign aliases: this record cannot establish whether their data exists.
     if (legacy[1] !== encodeURIComponent(communityId || '')) return value;
-    return parseDataUrl(legacy[2] ? thumbData : originalData) ? value : null;
+    if (!parseDataUrl(legacy[2] ? thumbData : originalData)) return null;
+    return value.startsWith('//') ? (publicBaseUrl?.match(/^https?:/i)?.[0] || 'https:') + value : value;
   };
   const assetLogoUrl = toPublicUrl(availableLogoUrl(logoUrlRaw), publicBaseUrl);
   const assetLogoThumbUrl = toPublicUrl(availableLogoUrl(logoThumbUrlRaw), publicBaseUrl) || assetLogoUrl;
