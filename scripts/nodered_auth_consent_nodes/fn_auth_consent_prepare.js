@@ -85,6 +85,17 @@ msg._authConsent = {
   acceptedAtClient: toStr(body.acceptedAtClient),
   authMethodReported: authMethod,
   documents: DOCUMENTS,
+  // Unverified hints only. No raw token/claims are emitted and these booleans
+  // must never participate in authorization or provider-refusal classification.
+  tokenDiagnosticFlags: {
+    unverifiedHints: true,
+    openidPresent: typeof tokenPayload.scope === "string" ? tokenPayload.scope.split(/\s+/).includes("openid") : null,
+    expiredByClaim: typeof tokenPayload.exp === "number" && Number.isFinite(tokenPayload.exp)
+      ? tokenPayload.exp * 1000 <= Date.now() : null,
+    clientMatchesClaim: typeof tokenPayload.azp === "string" ? tokenPayload.azp === "widget" : null,
+    issuerMatchesClaim: typeof tokenPayload.iss === "string"
+      ? tokenPayload.iss === "https://kc.vivacrm.ru/realms/clients" : null,
+  },
   verifiedTokenContext: {
     authorizedParty: toStr(tokenPayload.azp),
     audience: tokenPayload.aud || null,
