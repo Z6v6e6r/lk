@@ -1,6 +1,7 @@
 import { clearTournamentPendingPayments } from "./tournamentPendingPayment";
 import { invalidateSubscriptionSnapshot } from "./subscriptionSessionCache";
-import { deleteCookie, getCookie, setCookie } from "./cookies.ts";
+import { deleteCookie, setCookie } from "./cookies.ts";
+import { AUTH_RUNTIME_TENANT_KEY } from "../consts/authRuntime.ts";
 
 const AUTH_TOKEN_COOKIE_NAME = "padlhubAuthToken";
 const REFRESH_TOKEN_COOKIE_NAME = "padlhubRefreshToken";
@@ -91,13 +92,13 @@ function parseTokenEnvelope(raw: string | null): StoredTokenEnvelope | null {
   return { token, expiresAt: null };
 }
 
-function readCookieBySuffix(cookieNameSuffix: string): string | null {
+function readExactCookie(cookieName: string): string | null {
   if (typeof document === "undefined") return null;
-  const cookies = String(document.cookie || "").split("; ");
+  const cookies = String(document.cookie || "").split(/;\s*/);
   for (const row of cookies) {
     if (!row) continue;
     const [name, ...rest] = row.split("=");
-    if (!name || !name.endsWith(cookieNameSuffix)) continue;
+    if (name !== cookieName) continue;
     const value = rest.join("=");
     const normalized = normalizeToken(value);
     if (normalized) return normalized;
@@ -105,15 +106,10 @@ function readCookieBySuffix(cookieNameSuffix: string): string | null {
   return null;
 }
 
-function deleteCookiesBySuffix(cookieNameSuffix: string) {
+function deleteOwnedCookies(canonicalName: string, tenantSuffix: string) {
   if (typeof document === "undefined") return;
-  const cookies = String(document.cookie || "").split("; ");
-  for (const row of cookies) {
-    if (!row) continue;
-    const [name] = row.split("=");
-    if (!name || !name.endsWith(cookieNameSuffix)) continue;
-    deleteCookie(name);
-  }
+  deleteCookie(canonicalName);
+  deleteCookie(`${AUTH_RUNTIME_TENANT_KEY}${tenantSuffix}`);
 }
 
 function readStoredToken(key: string): string | null {
@@ -137,17 +133,17 @@ function writeStoredToken(key: string, token: string | null, maxAgeSeconds?: num
 
 export function readAuthToken(): string | null {
   return (
-    normalizeToken(getCookie(AUTH_TOKEN_COOKIE_NAME))
-    || readCookieBySuffix("AuthToken")
+    readExactCookie(AUTH_TOKEN_COOKIE_NAME)
     || readStoredToken(AUTH_TOKEN_STORAGE_KEY)
+    || readExactCookie(`${AUTH_RUNTIME_TENANT_KEY}AuthToken`)
   );
 }
 
 export function readRefreshToken(): string | null {
   return (
-    normalizeToken(getCookie(REFRESH_TOKEN_COOKIE_NAME))
-    || readCookieBySuffix("RefreshToken")
+    readExactCookie(REFRESH_TOKEN_COOKIE_NAME)
     || readStoredToken(REFRESH_TOKEN_STORAGE_KEY)
+    || readExactCookie(`${AUTH_RUNTIME_TENANT_KEY}RefreshToken`)
   );
 }
 
@@ -162,7 +158,7 @@ export function persistAuthTokens(
     setCookie(AUTH_TOKEN_COOKIE_NAME, normalizedAccessToken, toCookieMaxAge(accessExpiresIn));
     writeStoredToken(AUTH_TOKEN_STORAGE_KEY, normalizedAccessToken, accessExpiresIn);
   } else {
-    deleteCookiesBySuffix("AuthToken");
+    deleteOwnedCookies(AUTH_TOKEN_COOKIE_NAME, "AuthToken");
     writeStorage(AUTH_TOKEN_STORAGE_KEY, null);
   }
 
@@ -171,7 +167,7 @@ export function persistAuthTokens(
     setCookie(REFRESH_TOKEN_COOKIE_NAME, normalizedRefreshToken, toCookieMaxAge(refreshExpiresIn));
     writeStoredToken(REFRESH_TOKEN_STORAGE_KEY, normalizedRefreshToken, refreshExpiresIn);
   } else {
-    deleteCookiesBySuffix("RefreshToken");
+    deleteOwnedCookies(REFRESH_TOKEN_COOKIE_NAME, "RefreshToken");
     writeStorage(REFRESH_TOKEN_STORAGE_KEY, null);
   }
 }
@@ -179,8 +175,13 @@ export function persistAuthTokens(
 export function clearAuthTokens() {
   clearTournamentPendingPayments();
   invalidateSubscriptionSnapshot();
-  deleteCookiesBySuffix("AuthToken");
-  deleteCookiesBySuffix("RefreshToken");
+  clearAuthSessionTokens();
+}
+
+// Session incompatibility must not delete pending payments or consent evidence.
+export function clearAuthSessionTokens() {
+  deleteOwnedCookies(AUTH_TOKEN_COOKIE_NAME, "AuthToken");
+  deleteOwnedCookies(REFRESH_TOKEN_COOKIE_NAME, "RefreshToken");
   writeStorage(AUTH_TOKEN_STORAGE_KEY, null);
   writeStorage(REFRESH_TOKEN_STORAGE_KEY, null);
 }
