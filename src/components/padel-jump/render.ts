@@ -247,10 +247,15 @@ function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boo
     const y = sy(d.y); if (y < -50 || y > HEIGHT + 30) continue;
     ctx.save();
     if (d.phase === 'warning') {
-      ctx.fillStyle = '#fff3'; ctx.fillRect(d.x - 12, y, 24, HEIGHT - y);
-      ctx.fillStyle = '#173c69'; ctx.font = 'bold 18px Arial'; ctx.fillText('!', d.x - 3, y + 18);
+      const top = Math.max(48, y);
+      ctx.fillStyle = '#80e6ff38'; ctx.fillRect(d.x - 12, top, 24, HEIGHT - top);
+      ctx.setLineDash([6, 5]); ctx.lineWidth = 3; ctx.strokeStyle = '#123655';
+      ctx.beginPath(); ctx.moveTo(d.x, top + 23); ctx.lineTo(d.x, HEIGHT); ctx.stroke();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#b8f6ff'; ctx.stroke(); ctx.setLineDash([]);
+      rounded(ctx, d.x - 28, top, 56, 21, 5, '#123655', '#b8f6ff');
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'center'; ctx.fillText('КАПЛЯ ↓', d.x, top + 14); ctx.textAlign = 'start';
     } else {
-      ctx.fillStyle = '#9ce9ff'; ctx.strokeStyle = '#427fbd'; ctx.beginPath(); ctx.moveTo(d.x, y - 12); ctx.quadraticCurveTo(d.x + 16, y + 10, d.x, y + 9); ctx.quadraticCurveTo(d.x - 16, y + 10, d.x, y - 12); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#9ce9ff'; ctx.strokeStyle = '#173c69'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(d.x, y - 12); ctx.quadraticCurveTo(d.x + 16, y + 10, d.x, y + 9); ctx.quadraticCurveTo(d.x - 16, y + 10, d.x, y - 12); ctx.fill(); ctx.stroke();
     }
     ctx.restore();
   }
@@ -268,10 +273,11 @@ function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boo
       ctx.fillStyle = '#edbf9e'; ctx.beginPath(); ctx.ellipse(a.x, y - 29, 18, 22, 0, 0, Math.PI * 2); ctx.fill();
     }
     // The marked circle is the only active catch area; the full body is decorative.
-    ctx.strokeStyle = a.phase === 'catch' ? '#ff525f' : '#ffd45a'; ctx.lineWidth = 3;
+    ctx.strokeStyle = '#2e183e'; ctx.lineWidth = 6;
     ctx.setLineDash(a.phase === 'warning' ? [5, 4] : []);
     ctx.fillStyle = a.phase === 'catch' ? '#f640542b' : '#ffdb5520';
-    ctx.beginPath(); ctx.arc(a.x, y, 31, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(a.x, y, 31, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = a.phase === 'catch' ? '#ff525f' : '#ffd45a'; ctx.lineWidth = 3; ctx.stroke(); ctx.setLineDash([]);
     rounded(ctx, a.x - 58, y - 74, 116, 19, 5, '#fff8ea', '#4f315a');
     ctx.fillStyle = '#3a3151'; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'center';
     ctx.fillText(a.phase === 'warning' ? 'ЛОВЛЮ ЗДЕСЬ! ' + Math.max(0, BALANCE.adminWarning - a.age).toFixed(1) : a.phase === 'catch' ? 'ЛОВЛЮ!' : 'ДО ВСТРЕЧИ', a.x, y - 61);
