@@ -1,0 +1,133 @@
+import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../../src/components/padel-jump/engine.ts';
+import { nextSection } from '../../../src/components/padel-jump/campaign.ts';
+import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIMIT } from '../../../src/components/padel-jump/live-contract.ts';
+
+export const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+const ttl = 10000, retention = 48 * 3600000;
+function aliasOf(value) {
+  if (typeof value !== 'string' || [...value].length < 1 || [...value].length > 48 || /[\p{C}<>]/u.test(value)) fail(422, 'ALIAS_INVALID');
+  const alias = value.trim().replace(/\s+/g, ' '); if (!alias) fail(422, 'ALIAS_INVALID'); return alias;
+}
+function cleanGame(game) {
+  const g = structuredClone(game), lo = g.camera - 130, hi = g.camera + 770;
+  const visible = x => x.y >= lo && x.y <= hi;
+  g.events = []; g.platforms = g.platforms.filter(visible);
+  for (const key of ['stars', 'glass', 'metals', 'drops', 'admins', 'boosters']) g.campaign[key] = g.campaign[key].filter(visible);
+  return g;
+}
+
+/** One isolated event; no LK accounts, community writes or client-supplied score/time. */
+export function createRegistry({ now = () => performance.now(), wall = () => Date.now(), directory, communityId = null } = {}) {
+  const runs = new Map(), results = new Map();
+  const pruneResults = () => {
+    for (const [id, row] of results) if (wall() - Date.parse(row.finishedAt) >= retention) {
+      if (directory) {
+        const file = join(directory, id + '.json');
+        try { unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      results.delete(id);
+    }
+  };
+  if (directory) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    for (const name of readdirSync(directory)) {
+      if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
+      const row = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isFinite(Date.parse(row.finishedAt))) results.set(row.id, row);
+    }
+    pruneResults();
+    if (results.size > 500) fail(503, 'RESULT_STORE_CAPACITY');
+  }
+  const elapsed = run => run.finalMs ?? run.activeMs + (run.paused || run.finished ? 0 : Math.max(0, now() - run.segment));
+  const sweep = () => { pruneResults(); for (const [id, run] of runs) if (now() - run.seen > (run.completed === 33 && !run.finished ? 600000 : ttl)) runs.delete(id); };
+  const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
+  const player = run => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
+    elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, completedParts: run.completed, game: cleanGame(run.game) });
+  function persist(row) {
+    if (!directory) return;
+    const path = join(directory, row.id + '.json');
+    let fd; try { fd = openSync(path, 'wx', 0o600); writeFileSync(fd, JSON.stringify(row) + '\n'); fsyncSync(fd); closeSync(fd); fd = undefined;
+      const dir = openSync(directory, 'r'); try { fsyncSync(dir); } finally { closeSync(dir); }
+    } catch (error) {
+      if (fd !== undefined) { closeSync(fd); unlinkSync(path); }
+      if (error.code === 'EEXIST' && readFileSync(path, 'utf8') === JSON.stringify(row) + '\n') {
+        const file = openSync(path, 'r'); try { fsyncSync(file); } finally { closeSync(file); }
+        const dir = openSync(directory, 'r'); try { fsyncSync(dir); } finally { closeSync(dir); }
+        return;
+      }
+      throw error;
+    }
+  }
+  return {
+    join(body, actor) {
+      sweep();
+      if (!body || Object.keys(body).some(k => !['consent', 'engine', 'rule'].includes(k)) || body.engine !== LIVE_ENGINE_VERSION || body.rule !== LIVE_RULE) fail(409, 'RULES_CHANGED');
+      if (body.consent !== true) fail(422, 'DISPLAY_CONSENT_REQUIRED');
+      if (runs.size >= LIVE_LIMIT) fail(429, 'EVENT_FULL');
+      if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id || typeof actor.communityId !== 'string' || !actor.communityId) fail(403, 'VERIFIED_PROFILE_REQUIRED');
+      if ([...runs.values()].some(r => r.actorId === actor.id && r.communityId === actor.communityId && !r.finished)) fail(409, 'PROFILE_ALREADY_RUNNING');
+      const alias = aliasOf(actor.name), id = randomUUID(), token = randomBytes(32).toString('hex'), used = new Set([...runs.values()].map(r => r.slot));
+      let slot = 0; while (used.has(slot)) slot++;
+      const game = createCampaignGame(0, 0); game.mode = 'running';
+      const run = { id, alias, actorId: actor.id, communityId: actor.communityId, slot, token: createHash('sha256').update(token).digest(), game, seq: 0, ack: null, digest: '', ticks: 0, failures: 0, completed: 0, activeMs: 0, segment: now(), seen: now(), paused: false, finished: false };
+      runs.set(id, run); return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, player: player(run) };
+    },
+    command(id, token, body, actor) {
+      sweep(); const run = runs.get(id);
+      if (!run || typeof token !== 'string' || token.length !== 64 || !timingSafeEqual(run.token, createHash('sha256').update(token).digest())) fail(403, 'RUN_ACCESS_DENIED');
+      if (now() - (run.rateAt ?? 0) > 60000) { run.rateAt = now(); run.rateCount = 0; }
+      run.rateCount = (run.rateCount ?? 0) + 1; if (run.rateCount > 480) fail(429, 'COMMAND_RATE_LIMIT');
+      if (!actor || actor.id !== run.actorId || actor.communityId !== run.communityId) fail(403, 'PROFILE_RUN_MISMATCH');
+      if (!body || Object.keys(body).some(k => !['seq', 'command', 'inputs'].includes(k)) || !Number.isSafeInteger(body.seq) || body.seq < 1) fail(422, 'COMMAND_INVALID');
+      const digest = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+      if (body.seq === run.seq) { if (digest !== run.digest) fail(409, 'SEQUENCE_CONFLICT'); run.seen = now(); return run.ack; }
+      if (body.seq !== run.seq + 1) fail(409, 'SEQUENCE_CONFLICT');
+      if (run.finished) fail(409, 'RUN_FINISHED');
+      const g = structuredClone(run.game); let ticks = 0, failures = run.failures, completed = run.completed;
+      const command = body.command;
+      if (command === 'inputs') {
+        if (!Array.isArray(body.inputs) || body.inputs.length > 120) fail(422, 'INPUTS_INVALID');
+        for (const block of body.inputs) {
+          if (!Array.isArray(block) || block.length !== 2 || !Number.isInteger(block[0]) || Math.abs(block[0]) > 100 || !Number.isInteger(block[1]) || block[1] < 1 || block[1] > 120) fail(422, 'INPUTS_INVALID');
+          ticks += block[1];
+        }
+        if (ticks > 480 || (ticks && (run.paused || g.mode !== 'running'))) fail(409, 'INPUTS_NOT_RUNNING');
+        if ((run.ticks + ticks) * FIXED_STEP * 1000 > elapsed(run) + 250) fail(409, 'REPLAY_TOO_FAST');
+        for (const [direction, count] of body.inputs) for (let i = 0; i < count; i++) {
+          if (g.mode !== 'running') fail(422, 'EXCESS_INPUTS');
+          stepGame(g, direction / 100);
+          for (const e of drainEvents(g)) { if (e.type === 'failure') failures++; if (e.type === 'finish') completed++; }
+        }
+      } else if (command === 'pause') {
+        if (run.paused) fail(409, 'ALREADY_PAUSED');
+      } else if (command === 'resume') {
+        if (!run.paused) fail(409, 'NOT_PAUSED');
+      } else if (command === 'retry') {
+        if (g.mode !== 'over' || run.paused) fail(409, 'RETRY_NOT_READY');
+        const next = createCampaignGame(g.campaign.station, g.campaign.section); next.mode = 'running'; Object.assign(g, next);
+      } else if (command === 'advance') {
+        const next = nextSection(g.campaign.station, g.campaign.section);
+        if (g.mode !== 'complete' || !next || run.paused) fail(409, 'CHECKPOINT_NOT_READY');
+        Object.assign(g, createCampaignGame(next.station, next.section)); g.mode = 'running';
+      } else if (command === 'finish') {
+        if (g.mode !== 'complete' || g.campaign.station !== 10 || g.campaign.section !== 2 || completed !== 33 || run.paused) fail(409, 'FINISH_NOT_VERIFIED');
+        if (!directory) fail(503, 'RESULT_STORE_UNAVAILABLE');
+        if (results.size >= 500) fail(503, 'RESULT_STORE_CAPACITY');
+        const row = run.finishRow ?? { id, alias: run.alias, actorId: run.actorId, communityId: run.communityId, elapsedMs: Math.max(Math.round(elapsed(run)), Math.round(run.ticks * FIXED_STEP * 1000)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures, finishedAt: new Date(wall()).toISOString(), engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE };
+        run.finishRow = row; persist(row); results.set(id, row);
+      } else fail(422, 'COMMAND_INVALID');
+      // Commit only after complete validation and durable result publication.
+      if (completed === 33 && run.completed !== 33) run.finalMs = Math.max(Math.round(elapsed(run)), Math.round((run.ticks + ticks) * FIXED_STEP * 1000));
+      run.game = g; run.ticks += ticks; run.failures = failures; run.completed = completed;
+      if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
+      if (command === 'resume') { run.paused = false; run.segment = now(); }
+      run.seen = now(); run.seq = body.seq; run.digest = digest;
+      const ack = { seq: run.seq, player: player(run), ...(command === 'finish' ? { result: publicResult(results.get(id)) } : {}) }; run.ack = ack; return ack;
+    },
+    board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(player),
+      results: [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort((a, b) => a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt)).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort((a, b) => a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id)).slice(0, 100).map(publicResult) }; },
+  };
+}

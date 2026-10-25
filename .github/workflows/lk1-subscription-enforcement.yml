@@ -724,6 +724,8 @@ jobs:
           npm run test:community-list-performance
           node --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts
           node --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs
+          npm run test:jump-live
+          npm run build:jump-live
 
       - name: Required delivery result
         if: always()

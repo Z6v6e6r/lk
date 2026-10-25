@@ -39,7 +39,7 @@ const focusedGates = [
   ["Validate Codex main worktree guard", "check_worktree_guard", "npm run test:codex-main-worktree-guard", undefined, undefined],
   ["Validate leave generation regressions", "check_leave_generations", "npm run test:leave-generation-regressions", appCondition, "app"],
   ["Frontend loader and community regressions", "check_frontend",
-    "npm run test:community-list-performance\nnode --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts\nnode --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs",
+    "npm run test:community-list-performance\nnode --experimental-strip-types --test scripts/tests/tildaLoaderVivaBootstrap.test.ts scripts/tests/overlayBundleUrl.test.ts scripts/tests/deployTopology.test.ts\nnode --test scripts/tests/releaseProvenance.test.mjs scripts/tests/buildEnvPreflight.test.mjs\nnpm run test:jump-live\nnpm run build:jump-live",
     appCondition, "app"],
 ];
 

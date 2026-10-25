@@ -1,0 +1,54 @@
+import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
+import { createIdentityVerifier } from './identity.mjs';
+import { createRegistry, fail } from './registry.mjs';
+import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../../../src/components/padel-jump/live-contract.ts';
+
+export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, authenticate = createIdentityVerifier({ communityId }), registry = createRegistry({ directory, communityId }) } = {}) {
+  const viewers = new Set(), rates = new Map();
+  const response = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(body)); };
+  const server = createServer(async (req, res) => {
+    try {
+      const path = new URL(req.url, origin).pathname;
+      const at = Date.now(), key = req.socket.remoteAddress;
+      for (const [k, rate] of rates) if (at - rate.at > 60000) rates.delete(k);
+      if (rates.size >= 2048 && !rates.has(key)) fail(429, 'RATE_LIMIT');
+      const rate = rates.get(key) ?? { at, count: 0 }; rates.set(key, rate); if (++rate.count > requestLimit) fail(429, 'RATE_LIMIT');
+      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, communityConfigured: !!communityId, persistence: !!directory });
+      if (path === '/jump-live-api/me' && req.method === 'GET') return response(res, 200, await authenticate(req));
+      if (path === '/jump-live-api/board' && req.method === 'GET') return response(res, 200, registry.board());
+      if (path === '/jump-live-api/stream' && req.method === 'GET') {
+        if (req.headers.origin && req.headers.origin !== origin) fail(403, 'ORIGIN_DENIED');
+        if (viewers.size >= 24) fail(429, 'VIEWER_LIMIT');
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' });
+        res.write('data: ' + JSON.stringify(registry.board()) + '\n\n'); viewers.add(res); res.on('close', () => viewers.delete(res)); return;
+      }
+      if (req.method !== 'POST' || !/^\/jump-live-api\/(?:runs|runs\/[a-f0-9-]{36})$/.test(path)) fail(404, 'NOT_FOUND');
+      if (req.headers.origin !== origin || req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'ORIGIN_DENIED');
+      if (req.headers['content-type']?.split(';')[0] !== 'application/json') fail(415, 'JSON_REQUIRED');
+      let size = 0; const chunks = [];
+      for await (const chunk of req) { size += chunk.length; if (size > 8192) fail(413, 'BODY_LIMIT'); chunks.push(chunk); }
+      let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(400, 'JSON_INVALID'); }
+      const actor = await authenticate(req, { fresh: body.command === 'finish' });
+      if (path === '/jump-live-api/runs') return response(res, 201, registry.join(body, actor));
+      const token = req.headers['x-jump-run-token'];
+      return response(res, 200, registry.command(path.split('/').at(-1), token, body, actor));
+    } catch (error) { if (!res.headersSent && !res.destroyed) response(res, Number.isInteger(error.code) ? error.code : 503, { error: Number.isInteger(error.code) ? error.message : 'SERVICE_UNAVAILABLE' }); }
+  });
+  server.maxConnections = 80;
+  server.requestTimeout = 5000; server.headersTimeout = 5000; server.keepAliveTimeout = 5000;
+  const interval = setInterval(() => {
+    let data; try { data = 'data: ' + JSON.stringify(registry.board()) + '\n\n'; } catch { for (const res of viewers) res.destroy(); viewers.clear(); return; }
+    for (const res of viewers) { if (res.writableLength > 262144) { res.destroy(); viewers.delete(res); } else res.write(data); }
+  }, 500); interval.unref();
+  server.on('close', () => { clearInterval(interval); for (const res of viewers) res.destroy(); viewers.clear(); });
+  return server;
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const origin = process.env.JUMP_PUBLIC_ORIGIN;
+  if (!origin || !/^https?:\/\/[a-zA-Z0-9.:-]+$/.test(origin) || !process.env.JUMP_RESULTS_DIR) throw new Error('Explicit origin and isolated result directory required');
+  const server = createLiveServer({ origin, directory: process.env.JUMP_RESULTS_DIR, communityId: process.env.JUMP_COMMUNITY_ID });
+  server.listen(Number(process.env.JUMP_PORT ?? 5193), '127.0.0.1');
+  const stop = () => { server.close(); server.closeAllConnections(); };
+  process.once('SIGTERM', stop); process.once('SIGINT', stop);
+}
