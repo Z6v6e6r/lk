@@ -23,11 +23,12 @@
     {
       "station": 3,
       "id": "terekhovo",
-      "file": "terekhovo.webp",
+      "file": "terekhovo-dismantling.webp",
       "width": 724,
       "height": 2172,
-      "bytes": 513530,
-      "sha256": "ddc11bec4e77c8f93976d779660f7e14fa028b3d0a28531cc5dbf9571e63d2d6"
+      "bytes": 496260,
+      "sha256": "1c42926895d17bf028f48ef8aae02e274380706a1ffed17a2a4b548c1c7a487c",
+      "revision": "Built-in imagegen edit 2026-10-25: dismantled arena, Spanish man waving a four-red-stripe Catalan Senyera. No generated branding."
     },
     {
       "station": 4,

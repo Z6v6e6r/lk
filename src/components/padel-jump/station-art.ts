@@ -1,6 +1,6 @@
 import seligerskaya from '../../assets/station-backgrounds/seligerskaya.webp';
 import skolkovo from '../../assets/station-backgrounds/skolkovo.webp';
-import terekhovo from '../../assets/station-backgrounds/terekhovo.webp';
+import terekhovo from '../../assets/station-backgrounds/terekhovo-dismantling.webp';
 import nagatinskaya from '../../assets/station-backgrounds/nagatinskaya.webp';
 import premium from '../../assets/station-backgrounds/nagatinskaya-premium.webp';
 import piter from '../../assets/station-backgrounds/piter.webp';

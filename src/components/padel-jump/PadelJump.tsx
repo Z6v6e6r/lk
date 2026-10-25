@@ -13,6 +13,8 @@ import { loadYasenevoArt } from './yasenevo-assets';
 import type { YasenevoArt } from './yasenevo-assets';
 import { loadStationPainting } from './station-art';
 import type { StationPainting } from './station-art';
+import { loadStationActors } from './station-actors';
+import type { StationActors } from './station-actors';
 import { loadRacketArt } from './racket-art';
 import type { RacketArt } from './racket-art';
 import { createJumpStarter } from './start';
@@ -47,6 +49,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
   const reduced = useRef(false);
   const yasenevoArt = useRef<YasenevoArt | null>(null);
   const stationPainting = useRef<StationPainting | null>(null);
+  const stationActors = useRef<StationActors | null>(null);
   const racketArt = useRef<RacketArt | null>(null);
   const feedback = useRef(createFeedback()), redraw = useRef(() => {});
   const mapOpener = useRef<HTMLElement | null>(null);
@@ -73,6 +76,11 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
         ? loadYasenevoArt().then(art => { if (active) { yasenevoArt.current = art; redraw.current(); } return art; })
         : loadStationPainting(view.station).then(art => { if (active) { stationPainting.current = art; redraw.current(); } return art; }),
     ]).then(parts => { if (active) setArtStatus(parts.every(Boolean) ? 'ready' : 'fallback'); });
+    return () => { active = false; };
+  }, [view.station, artAttempt]);
+  useEffect(() => {
+    let active = true; stationActors.current = null;
+    void loadStationActors(view.station).then(art => { if (active) { stationActors.current = art; redraw.current(); } });
     return () => { active = false; };
   }, [view.station, artAttempt]);
   useEffect(() => { audio.setEnabled(saved.settings.sound); tilt.setSensitivity(saved.settings.tiltSensitivity); }, [audio, tilt, saved.settings.sound, saved.settings.tiltSensitivity]);
@@ -171,7 +179,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
     let dirty = true, drawnGame: Game | undefined, drawnMode: Game['mode'] | undefined;
     redraw.current = () => { dirty = true; };
     const draw = () => {
-      drawGame(ctx, game.current, width, height, dpr, reduced.current || !progress.current.settings.effects, yasenevoArt.current, stationPainting.current, racketArt.current, feedback.current);
+      drawGame(ctx, game.current, width, height, dpr, reduced.current || !progress.current.settings.effects, yasenevoArt.current, stationPainting.current, racketArt.current, feedback.current, stationActors.current);
       dirty = false; drawnGame = game.current; drawnMode = game.current.mode;
     };
     const resize = () => {

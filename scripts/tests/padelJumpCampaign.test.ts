@@ -92,15 +92,15 @@ test('all 33 sections have sampled executable routes across three starting motio
     assert.equal(g.mode, 'complete', `${s}:${n} phase ${phase}: ${g.failure}`);
   }
 });
-test('intro changes geometry one leading parameter at a time; moving lesson starts without admin', () => {
+test('intro remains hazard-free; Seligerskaya introduces paired motion and delayed administrators', () => {
   const a = sectionBalance(0, 0), b = sectionBalance(0, 1), c = sectionBalance(0, 2);
   assert.ok(a.sway < b.sway); assert.equal(b.sway, c.sway); assert.ok(b.gap < c.gap);
   const intro = createCampaignGame(0, 0).campaign!;
   assert.equal(intro.metals.length + intro.admins.length + intro.drops.length + intro.glass.length, 0);
-  assert.equal(createCampaignGame(1, 0).campaign!.admins.length, 0);
+  assert.ok(createCampaignGame(1, 0).campaign!.admins.every(a => a.phase === 'waiting' && a.triggerY > 500));
   assert.ok(createCampaignGame(1, 2).campaign!.admins.length > 0);
   const p = createCampaignGame(6, 1).platforms.find(p => p.moving)!;
-  const t = (6 - p.id * 0.4 % 6) % 6;
+  const t = (6 - (p.motionPhase ?? p.id * 0.4) % 6) % 6;
   assert.equal(movingX(p, t + 0.2), movingX(p, t + 0.8));
 });
 test('idle 120 seconds earns no star/completion; stars are optional for a genuinely controlled finish', () => {

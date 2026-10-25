@@ -5,6 +5,7 @@ import { BALL_RADIUS, HEIGHT, landingHint, WIDTH } from './engine';
 import type { Game, Platform } from './engine';
 import type { YasenevoArt } from './yasenevo-assets';
 import type { StationPainting } from './station-art';
+import type { StationActors } from './station-actors';
 import { drawRacket } from './racket-art';
 import type { RacketArt } from './racket-art';
 import { stationScenery } from './station-scenery';
@@ -156,7 +157,7 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
   ctx.restore();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null, stationPainting: StationPainting | null = null, racketArt: RacketArt | null = null, feedback?: Feedback) {
+export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: number, height: number, dpr: number, reducedMotion = false, yasenevoArt: YasenevoArt | null = null, stationPainting: StationPainting | null = null, racketArt: RacketArt | null = null, feedback?: Feedback, actors: StationActors | null = null) {
   // Preserve physics proportions, including narrow embeds and landscape phones.
   const scale = Math.min(width / WIDTH, height / HEIGHT);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale,
@@ -168,7 +169,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, game: Game, width: numbe
   if (art) yasenevoScenery(ctx, game, art, overscanY);
   else if (painting) stationScenery(ctx, game, painting, overscanY);
   else scenery(ctx, game);
-  if (!art) campaignObjects(ctx, game, reducedMotion);
+  if (!art) campaignObjects(ctx, game, reducedMotion, undefined, actors);
   ctx.save();
   if (art) { ctx.beginPath(); ctx.rect(0, 0, WIDTH, HEIGHT); ctx.clip(); }
   // The deeper racket artwork must sit behind the next lower landing surface.
@@ -207,7 +208,7 @@ function starShape(ctx: CanvasRenderingContext2D, x: number, y: number, size: nu
   for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? size * 0.46 : size; const xx = Math.cos(a) * r, yy = Math.sin(a) * r; if (!i) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy); }
   ctx.closePath(); ctx.fillStyle = ghost ? '#ffef9b55' : '#ffe14c'; ctx.strokeStyle = '#b48221'; ctx.lineWidth = 1.4; ctx.fill(); ctx.stroke(); ctx.restore();
 }
-function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boolean, art?: YasenevoArt) {
+function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boolean, art?: YasenevoArt, actors?: StationActors | null) {
   const c = game.campaign; if (!c) return;
   const sy = (y: number) => HEIGHT - y + game.camera;
   if (c.assist) {
@@ -224,17 +225,21 @@ function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boo
     ctx.strokeStyle = '#a8a9b8'; ctx.lineWidth = 1;
     for (let x = 5; x < wall.w; x += 8) { ctx.beginPath(); ctx.moveTo(wall.x + x, y + 2); ctx.lineTo(wall.x + x, y + wall.h - 2); ctx.stroke(); }
     ctx.fillStyle = '#f3b241'; ctx.fillRect(wall.x, y - 4, wall.w, 4);
+    ctx.fillRect(wall.x, y + wall.h - 3, wall.w, 3);
     ctx.fillStyle = '#ff6668'; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'center'; ctx.fillText('⊘', wall.x + wall.w / 2, y + 14); ctx.textAlign = 'start';
   }
   for (const panel of c.glass) {
-    const x = panel.side < 0 ? 0 : WIDTH - 14, y = sy(panel.y + panel.h);
+    const x = panel.x ?? (panel.side < 0 ? 0 : WIDTH - 14), w = panel.w ?? 14, y = sy(panel.y + panel.h);
     if (y < -panel.h || y > HEIGHT + panel.h) continue;
     ctx.save(); ctx.strokeStyle = '#d9f8ff'; ctx.lineWidth = 2;
     if (!panel.broken) {
-      rounded(ctx, x, y, 14, panel.h, 2, '#8ee5ff88', '#f4ffff');
-      for (let dy = 10; dy < panel.h; dy += 29) { ctx.beginPath(); ctx.moveTo(x, y + dy); ctx.lineTo(x + 14, y + dy - 13); ctx.stroke(); }
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 16px Arial'; ctx.fillText(panel.side < 0 ? '↗' : '↖', panel.side < 0 ? 17 : WIDTH - 35, y + panel.h * 0.5);
-    } else { ctx.setLineDash([3, 9]); ctx.strokeRect(x + 4, y, 6, panel.h); }
+      rounded(ctx, x, y, w, panel.h, 2, '#42cfff99', '#f4ffff');
+      for (let dy = 10; dy < panel.h; dy += 29) { ctx.beginPath(); ctx.moveTo(x, y + dy); ctx.lineTo(x + w, y + dy - 13); ctx.stroke(); }
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 16px Arial'; ctx.strokeStyle = '#17628c'; ctx.lineWidth = 3;
+      const arrow = panel.x === undefined ? (panel.side < 0 ? '↗' : '↖') : '↑';
+      const ax = panel.x === undefined ? (panel.side < 0 ? 17 : WIDTH - 35) : x + w + 4;
+      ctx.strokeText(arrow, ax, y + panel.h * 0.5); ctx.fillText(arrow, ax, y + panel.h * 0.5);
+    } else { ctx.setLineDash([3, 9]); ctx.strokeRect(x + 4, y, w - 8, panel.h); }
     ctx.restore();
   }
   for (const d of c.drops) {
@@ -252,12 +257,25 @@ function campaignObjects(ctx: CanvasRenderingContext2D, game: Game, reduced: boo
   for (const a of c.admins) {
     if (a.phase === 'waiting' || a.phase === 'gone') continue;
     const y = sy(a.y); if (y < -80 || y > HEIGHT + 80) continue;
-    ctx.save(); ctx.globalAlpha = a.phase === 'retreat' ? 1 - a.age / BALANCE.adminRetreat : 1;
-    ctx.fillStyle = a.phase === 'catch' ? '#f0ad75' : '#f0ad7580'; ctx.strokeStyle = '#87512d'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.ellipse(a.x, y, 26, 27, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    rounded(ctx, a.x - 29, y - 27, 58, 12, 5, '#63368d');
-    ctx.fillStyle = '#2f2945'; ctx.beginPath(); ctx.arc(a.x - 8, y - 2, 3, 0, Math.PI * 2); ctx.arc(a.x + 8, y - 2, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#3a3151'; ctx.font = 'bold 8px Arial'; ctx.textAlign = 'center'; ctx.fillText(a.phase === 'warning' ? 'ЛОВЛЮ ЗДЕСЬ!' : a.phase === 'catch' ? 'ЛОВЛЮ!' : 'ДО ВСТРЕЧИ', a.x, y - 38); ctx.textAlign = 'start'; ctx.restore();
+    ctx.save(); ctx.globalAlpha = a.phase === 'retreat' ? Math.max(0, 1 - a.age / BALANCE.adminRetreat) : 1;
+    if (actors?.station === c.station) {
+      const pose = a.phase === 'warning' ? 1 : a.phase === 'catch' ? 2 : 3;
+      const enter = a.phase === 'warning' && !reduced ? Math.min(1, a.age / 0.3) : 1;
+      const bodyX = (a.originX ?? a.x) + (a.x - (a.originX ?? a.x)) * enter;
+      ctx.drawImage(actors.admin, pose % 2 * 627, Math.floor(pose / 2) * 627, 627, 627, bodyX - 70, y - 50, 140, 140);
+    } else {
+      rounded(ctx, a.x - 17, y - 14, 34, 75, 8, '#737079', '#2f2945');
+      ctx.fillStyle = '#edbf9e'; ctx.beginPath(); ctx.ellipse(a.x, y - 29, 18, 22, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    // The marked circle is the only active catch area; the full body is decorative.
+    ctx.strokeStyle = a.phase === 'catch' ? '#ff525f' : '#ffd45a'; ctx.lineWidth = 3;
+    ctx.setLineDash(a.phase === 'warning' ? [5, 4] : []);
+    ctx.fillStyle = a.phase === 'catch' ? '#f640542b' : '#ffdb5520';
+    ctx.beginPath(); ctx.arc(a.x, y, 31, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    rounded(ctx, a.x - 58, y - 74, 116, 19, 5, '#fff8ea', '#4f315a');
+    ctx.fillStyle = '#3a3151'; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'center';
+    ctx.fillText(a.phase === 'warning' ? 'ЛОВЛЮ ЗДЕСЬ! ' + Math.max(0, BALANCE.adminWarning - a.age).toFixed(1) : a.phase === 'catch' ? 'ЛОВЛЮ!' : 'ДО ВСТРЕЧИ', a.x, y - 61);
+    ctx.textAlign = 'start'; ctx.restore();
   }
   for (const b of c.boosters) if (!b.collected && sy(b.y) > -30 && sy(b.y) < HEIGHT + 30) {
     ctx.save(); ctx.strokeStyle = '#bc5bff'; ctx.fillStyle = '#7541ae'; ctx.lineWidth = 3;

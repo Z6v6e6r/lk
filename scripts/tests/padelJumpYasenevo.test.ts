@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { BALL_RADIUS, createCampaignGame, JUMP_SPEED, stepGame, WIDTH } from '../../src/components/padel-jump/engine.ts';
-import { sectionBalance } from '../../src/components/padel-jump/campaign.ts';
 import { panoramaRect, surfaceRect } from '../../src/components/padel-jump/yasenevo-layout.ts';
 
 test('supplied SVG art retains exact provenance and contains no executable or external content', () => {
@@ -66,27 +65,17 @@ test('prepared painted environment matches the pinned image provenance', () => {
 });
 
 
-test('all stations use Yasenevo-sized racket heads at the same route centres; other platform widths stay unchanged', () => {
+test('all stations retain the reduced racket collider while other supports vary within the court', () => {
   const sprite = { w: 240, h: 88, surface: { x: 20, y: 11, width: 114 } };
-  for (let section = 0; section < 3; section++) {
-    const cfg = sectionBalance(0, section), game = createCampaignGame(0, section);
-    for (const p of game.platforms.filter(p => p.id > 0)) {
-      const centre = 210 + Math.sin(p.id * cfg.phase) * (section === 0 && p.id < 10 ? 20 : cfg.sway);
-      const oldX = Math.max(26, Math.min(WIDTH - cfg.width - 26, centre - cfg.width / 2));
-      assert.equal(p.x + p.width / 2, oldX + cfg.width / 2);
+  for (let station = 0; station < 11; station++) for (let section = 0; section < 3; section++) {
+    const route = createCampaignGame(station, section), supports = route.platforms;
+    assert.equal(supports[0].width, 200);
+    assert.ok(new Set(supports.filter(p => p.kind === 'court').map(p => p.width)).size >= 3);
+    for (const p of supports) {
+      assert.ok(p.baseX >= 26 && p.baseX + p.width <= WIDTH - 26);
       if (p.kind === 'racket') {
-        assert.equal(p.width, cfg.width / 4);
-        const before = surfaceRect(cfg.width, sprite), after = surfaceRect(p.width, sprite);
-        assert.equal(after.w, before.w / 4); assert.equal(after.h, before.h / 4);
-      } else assert.equal(p.width, cfg.width);
-    }
-    assert.equal(game.platforms[0].width, 200);
-    for (let station = 0; station < 11; station++) {
-      const route = createCampaignGame(station, section);
-      assert.ok(route.platforms.filter(p => p.kind === 'racket').every(p => p.width === 40));
-      for (const p of route.platforms.filter(p => p.kind === 'racket')) {
-        assert.equal(surfaceRect(p.width, sprite).w, surfaceRect(40, sprite).w);
-        assert.ok(p.baseX >= 26 && p.baseX + p.width <= WIDTH - 26);
+        assert.equal(p.width, 40);
+        assert.equal(surfaceRect(p.width, sprite).w, surfaceRect(160, sprite).w / 4);
       }
     }
   }

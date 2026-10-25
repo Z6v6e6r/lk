@@ -1,0 +1,22 @@
+{
+  "origin": "Built-in imagegen 2026-10-25. User character reference used for appearance and grey suit only; no private photo, packaging, name or social metadata included.",
+  "encoding": "cwebp -q 88 -alpha_q 100 -metadata none; no cropping.",
+  "file": "seligerskaya-admin.webp",
+  "width": 1254,
+  "height": 1254,
+  "alpha": true,
+  "grid": {
+    "columns": 2,
+    "rows": 2,
+    "cellWidth": 627,
+    "cellHeight": 627,
+    "poses": [
+      "idle",
+      "warning",
+      "catch",
+      "retreat"
+    ]
+  },
+  "bytes": 204880,
+  "sha256": "35d37f5c8bc6d3f92f4f897975c0d3c66b1947d83413108fb638de9990d9c9d2"
+}

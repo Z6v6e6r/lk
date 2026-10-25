@@ -1,3 +1,4 @@
+import { crossesRect, stationRoute, supportWidth } from './level-layout.ts';
 import { BALANCE, sectionBalance, sectionKey, STATIONS } from './campaign.ts';
 /** World coordinates grow upward. The simulation is independent of React and pixels. */
 export const WIDTH = 420;
@@ -25,6 +26,7 @@ export type Platform = {
   amplitude?: number;
   omega?: number;
   rhythm?: boolean;
+  motionPhase?: number;
 };
 export type Game = {
   mode: GameMode;
@@ -48,9 +50,9 @@ export type Game = {
 export type GameEvent = { type: 'landing' | 'star' | 'difficulty' | 'finish' | 'failure' | 'glass' | 'drop' | 'admin-warning'; id?: string; moving?: boolean; controlled?: boolean; reason?: string };
 export type Star = { id: string; x: number; y: number; collected: boolean; claimed: boolean; platform?: number; offset?: number };
 export type Metal = { x: number; y: number; w: number; h: number };
-export type Glass = { id: number; side: -1 | 1; y: number; h: number; broken: boolean };
+export type Glass = { id: number; side: -1 | 1; y: number; h: number; broken: boolean; x?: number; w?: number };
 export type Drop = { id: number; x: number; y: number; triggerY: number; phase: 'waiting' | 'warning' | 'falling' | 'spent'; age: number };
-export type Admin = { id: number; x: number; y: number; triggerY: number; phase: 'waiting' | 'warning' | 'catch' | 'retreat' | 'gone'; age: number };
+export type Admin = { id: number; x: number; y: number; triggerY: number; phase: 'waiting' | 'warning' | 'catch' | 'retreat' | 'gone'; age: number; track?: boolean; originX?: number };
 export type CampaignRun = {
   station: number; section: number; goalY: number; practice: boolean; assist: boolean; assistedEver: boolean;
   stars: Star[]; metals: Metal[]; glass: Glass[]; drops: Drop[]; admins: Admin[];
@@ -206,8 +208,8 @@ export function saveBest(score: number, storage?: Pick<Storage, 'getItem' | 'set
 
 export function movingX(p: Platform, time: number): number {
   const amplitude = p.amplitude ?? 20;
-  if (!p.rhythm) return p.baseX + Math.sin(time * (p.omega ?? 1.6) + p.id) * amplitude;
-  const phase = (time + p.id * 0.4) % 6;
+  if (!p.rhythm) return p.baseX + Math.sin(time * (p.omega ?? 1.6) + (p.motionPhase ?? p.id)) * amplitude;
+  const phase = (time + (p.motionPhase ?? p.id * 0.4)) % 6;
   const v = phase < 1.2 ? -1 : phase < 3 ? -Math.cos((phase - 1.2) / 1.8 * Math.PI) : phase < 4.2 ? 1 : Math.cos((phase - 4.2) / 1.8 * Math.PI);
   return p.baseX + v * amplitude;
 }
@@ -230,32 +232,33 @@ export function createCampaignGame(station = 0, section = 0, options: { assist?:
   if (!Number.isInteger(station) || station < 0 || station >= STATIONS.length || !Number.isInteger(section) || section < 0 || section > 2) throw new RangeError('Unknown campaign section');
   const game = createGame(1000 + station * 3 + section);
   const cfg = sectionBalance(station, section);
+  const route = stationRoute(station, section, cfg.count, cfg.gap);
+  let racketNumber = 0;
   game.platforms = [{ id: 0, x: 110, baseX: 110, y: 50, width: 200, kind: 'court', moving: false, flash: 0 }];
-  const c: CampaignRun = { station, section, goalY: 50 + cfg.count * cfg.gap, practice: !!options.practice, assist: !!options.assist, assistedEver: !!options.assist,
+  const c: CampaignRun = { station, section, goalY: route.at(-1)!.y, practice: !!options.practice, assist: !!options.assist, assistedEver: !!options.assist,
     stars: [], metals: [], glass: [], drops: [], admins: [], boosters: [], controlledLandings: 0, directionChanges: 0,
     lastDirection: 0, hasSteered: false, flightSteered: false, difficultySeen: false, movingLandings: 0, dropHit: false, hint: STATIONS[station].hint };
   game.campaign = c;
   const claimed = new Set(options.claimed);
   for (let i = 1; i <= cfg.count; i++) {
-    const introduction = station === 0 && section === 0 && i < 10;
-    const center = 210 + Math.sin(i * cfg.phase) * (introduction ? 20 : cfg.sway);
+    const slot = route[i - 1], center = slot.center;
     const small = station === 3 && section > 0 && i > cfg.count / 2 && i % 4 === 0;
     const lessonRecovery = (station === 4 && section === 0 && i >= 6 && i <= 9)
       || (station === 5 && section === 0 && (i === 18 || i === 19));
-    const slotWidth = lessonRecovery ? 230 : small ? 98 : cfg.width;
-    const slotX = Math.max(26, Math.min(WIDTH - slotWidth - 26, center - slotWidth / 2));
     const finish = i === cfg.count;
     const recovery = i <= 3 || i % 6 === 0 || finish || lessonRecovery;
     let kind: Platform['kind'] = recovery ? 'court' : 'racket';
     if (lessonRecovery) kind = 'court';
     if (cfg.crumbleEvery && i > 4 && i % cfg.crumbleEvery === 0 && !recovery) kind = 'crumble';
     if (cfg.springEvery && i > 5 && i % cfg.springEvery === 0 && !recovery) kind = 'net';
-    // Use the Yasenevo-sized racket on every station; retain each route centre.
-    const width = kind === 'racket' ? 40 : slotWidth;
-    const x = slotX + (slotWidth - width) / 2;
-    const moving = !!cfg.movingEvery && i >= 5 && i % cfg.movingEvery === 0 && !recovery;
-    const p: Platform = { id: i, x, baseX: x, y: 50 + i * cfg.gap, width, kind, moving, flash: 0, finish,
-      amplitude: cfg.amplitude, omega: cfg.omega, rhythm: cfg.rhythm };
+    const width = lessonRecovery ? 230 : finish ? 200 : supportWidth(kind, small ? 98 : cfg.width, i, station, section);
+    const x = Math.max(26, Math.min(WIDTH - width - 26, center - width / 2));
+    if (kind === 'racket') racketNumber++;
+    const pairMoves = cfg.movementPattern === 'pairs' && kind === 'racket' && Math.floor((racketNumber - 1) / 2) % 2 === 0;
+    const moving = !recovery && (cfg.movementPattern === 'pairs' ? pairMoves : !!cfg.movingEvery && i >= 5 && i % cfg.movingEvery === 0);
+    const p: Platform = { id: i, x, baseX: x, y: slot.y, width, kind, moving, flash: 0, finish,
+      amplitude: cfg.amplitude, omega: cfg.omega, rhythm: cfg.rhythm,
+      motionPhase: cfg.movementPattern === 'pairs' ? Math.floor((racketNumber - 1) / 4) * 0.6 : undefined };
     if (moving) p.x = movingX(p, 0);
     game.platforms.push(p);
     if (i === 1 || i % 4 === 0) {
@@ -264,10 +267,18 @@ export function createCampaignGame(station = 0, section = 0, options: { assist?:
       c.stars.push({ id, x: p.x + p.width / 2 + offset, y: p.y + 40, collected: false, claimed: claimed.has(id), platform: i, offset });
     }
     const outside = center > 210 ? 30 : WIDTH - 112;
-    if (cfg.metalEvery && i >= 6 && i % cfg.metalEvery === 0) c.metals.push({ x: outside, y: p.y + cfg.gap * 0.4, w: 82, h: 19 });
+    if (cfg.metalEvery && i >= 6 && i < cfg.count && i % cfg.metalEvery === 0) {
+      // Mesh blocks the other lane, leaving a visible, reachable bypass beside the golden route.
+      const next = route[i], margin = cfg.amplitude + 48;
+      const left = Math.min(center, next.center) - margin - 26;
+      const right = WIDTH - 26 - Math.max(center, next.center) - margin;
+      const w = Math.min(156, Math.max(left, right));
+      if (w >= 48) c.metals.push({ x: left >= right ? 26 : WIDTH - 26 - w, y: p.y + cfg.gap * 0.4, w, h: 20 });
+    }
     if (cfg.glassEvery && i >= 5 && (i - 5) % cfg.glassEvery === 0) c.glass.push({ id: i, side: i % 2 ? -1 : 1, y: p.y - 45, h: 160, broken: false });
-    if (cfg.dropsEvery && i >= 6 && i % cfg.dropsEvery === 0) c.drops.push({ id: i, x: outside + 40, y: p.y + 210, triggerY: p.y - 75, phase: 'waiting', age: 0 });
-    if (cfg.adminEvery && i >= 20 && i % cfg.adminEvery === 0) c.admins.push({ id: i, x: outside + 36, y: p.y + 25, triggerY: p.y - 160, phase: 'waiting', age: 0 });
+    if (station === 4 && i >= 10 && i % [7, 6, 5][section] === 0) c.glass.push({ id: 1000 + i, side: center < 210 ? -1 : 1, x: Math.max(132, Math.min(264, center + (i % 2 ? 42 : -42))), w: 18, y: p.y + 12, h: 96, broken: false });
+    if (cfg.dropsEvery && i >= 6 && i % cfg.dropsEvery === 0) c.drops.push({ id: i, x: Math.max(50, Math.min(370, center + [76, -84, 64, -40][Math.floor(i / cfg.dropsEvery) % 4])), y: p.y + 210, triggerY: p.y - 75, phase: 'waiting', age: 0 });
+    if (cfg.adminEvery && i >= 12 && i < cfg.count && i % cfg.adminEvery === 0) c.admins.push({ id: i, track: true, originX: i % 2 ? 38 : WIDTH - 38, x: center, y: p.y + 25, triggerY: p.y - 160, phase: 'waiting', age: 0 });
     if (station >= 3 && section === 2 && i === 18) c.boosters.push({ x: outside + 40, y: p.y + 45, collected: false });
   }
   return game;
@@ -301,9 +312,13 @@ function hazards(game: Game, previousX: number, previousY: number, dt: number) {
   const c = game.campaign!, b = game.ball;
   for (const wall of c.metals) { metalContact(game, wall, previousX, previousY); if (game.mode === 'over') return; }
   for (const panel of c.glass) {
-    const contact = panel.side < 0 ? previousX + b.vx * dt - BALL_RADIUS <= 0 : previousX + b.vx * dt + BALL_RADIUS >= WIDTH;
-    if (!panel.broken && contact && b.y + BALL_RADIUS > panel.y && b.y - BALL_RADIUS < panel.y + panel.h) {
-      panel.broken = true; b.vy = BALANCE.glassSpeed; game.impulseX = -panel.side * BALANCE.glassInward;
+    const contact = panel.x !== undefined
+      ? crossesRect(previousX, previousY, b.x, b.y, panel.x, panel.y, panel.w ?? 18, panel.h, BALL_RADIUS)
+      : panel.side < 0 ? previousX + b.vx * dt - BALL_RADIUS <= 0 : previousX + b.vx * dt + BALL_RADIUS >= WIDTH;
+    if (!panel.broken && contact && (panel.x !== undefined || b.y + BALL_RADIUS > panel.y && b.y - BALL_RADIUS < panel.y + panel.h)) {
+      panel.broken = true; b.vy = BALANCE.glassSpeed;
+      const away = panel.x !== undefined ? (previousX < panel.x + (panel.w ?? 18) / 2 ? -1 : 1) : -panel.side;
+      game.impulseX = away * BALANCE.glassInward;
       b.vx = game.impulseX; game.rebound = BALANCE.glassRecovery; game.boost = 0.9; event(game, { type: 'glass', id: String(panel.id) });
     }
   }
@@ -322,7 +337,9 @@ function hazards(game: Game, previousX: number, previousY: number, dt: number) {
     }
   }
   for (const admin of c.admins) {
-    if (admin.phase === 'waiting' && b.y >= admin.triggerY) { admin.phase = 'warning'; admin.age = 0; event(game, { type: 'admin-warning' }); }
+    if (admin.phase === 'waiting' && b.y >= admin.triggerY) {
+      if (admin.track) admin.x = Math.max(68, Math.min(WIDTH - 68, b.x + b.vx * 0.18));
+      admin.phase = 'warning'; admin.age = 0; event(game, { type: 'admin-warning' }); }
     else if (admin.phase !== 'waiting' && admin.phase !== 'gone') {
       admin.age += dt;
       if (admin.phase === 'warning' && admin.age >= BALANCE.adminWarning) { admin.phase = 'catch'; admin.age = 0; }

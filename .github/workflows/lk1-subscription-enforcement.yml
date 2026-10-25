@@ -194,6 +194,12 @@ jobs:
               src/assets/station-backgrounds/skolkovo.webp)
                 expected_hash="d0164b69e6b005f00043e338b92f1bdfbdbf95b15eab36babf1db018af3ea03f"
                 ;;
+              src/assets/station-actors/seligerskaya-admin.webp)
+                expected_hash="35d37f5c8bc6d3f92f4f897975c0d3c66b1947d83413108fb638de9990d9c9d2"
+                ;;
+              src/assets/station-backgrounds/terekhovo-dismantling.webp)
+                expected_hash="1c42926895d17bf028f48ef8aae02e274380706a1ffed17a2a4b548c1c7a487c"
+                ;;
               src/assets/station-backgrounds/terekhovo.webp)
                 expected_hash="ddc11bec4e77c8f93976d779660f7e14fa028b3d0a28531cc5dbf9571e63d2d6"
                 ;;
