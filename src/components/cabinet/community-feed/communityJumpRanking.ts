@@ -3,6 +3,7 @@ import { readAuthToken } from '../../../utils/authTokenStorage';
 // Owner-selected exhibition pilot. Other communities keep their existing provider.
 export const JUMP_RANKING_COMMUNITY_ID = 'community_1793001495612_падлхаб-команда';
 export const JUMP_GAME_URL = 'https://padlhub.su/lk/padel-jump-team-60816487/padel-jump-race.html';
+export const JUMP_RANKING_V2_ACCEPT = 'application/vnd.padlhub.jump-community-ranking.v2+json';
 const ENDPOINT = 'https://padlhub.su/jump-live-api/community-ranking';
 
 export const usesJumpRanking = (id: string | null | undefined) => id === JUMP_RANKING_COMMUNITY_ID;
@@ -11,7 +12,7 @@ export function formatJumpRankingTime(value: number) {
   return `${String(Math.floor(tenths / 600)).padStart(2, '0')}:${String(Math.floor(tenths / 10) % 60).padStart(2, '0')}.${tenths % 10}`;
 }
 export type CommunityJumpRankingRow = { id: string; rank: number; name: string; stars: number; elapsedMs: number; isCurrentUser: boolean };
-export type CommunityJumpRanking = { schema: 'jump-community-ranking-v1'; communityId: string; rule: string; lives: number; retentionHours: number; total: number; rows: CommunityJumpRankingRow[]; me: CommunityJumpRankingRow | null };
+export type CommunityJumpRanking = { schema: 'jump-community-ranking-v1' | 'jump-community-ranking-v2'; communityId: string; rule: string; lives: number; retentionHours: number | null; total: number; rows: CommunityJumpRankingRow[]; me: CommunityJumpRankingRow | null };
 
 export function parseCommunityJumpRanking(raw: string, communityId: string): CommunityJumpRanking {
   if (raw.length > 262144) throw new Error('Несовместимый ответ рейтинга Jump.');
@@ -21,9 +22,10 @@ export function parseCommunityJumpRanking(raw: string, communityId: string): Com
   const valid = (row: CommunityJumpRankingRow) => row && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(row.id) && Number.isInteger(row.rank) && row.rank > 0 && row.rank <= data.total
     && typeof row.name === 'string' && [...row.name].length > 0 && [...row.name].length <= 48 && !/[\p{C}<>]/u.test(row.name)
     && Number.isSafeInteger(row.stars) && row.stars >= 0 && Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0 && typeof row.isCurrentUser === 'boolean';
-  if (data.schema !== 'jump-community-ranking-v1' || data.communityId !== communityId || typeof data.rule !== 'string' || !data.rule
-    || !Number.isInteger(data.lives) || data.lives < 1 || !Number.isInteger(data.retentionHours) || data.retentionHours < 1
-    || !Number.isInteger(data.total) || data.total < 0 || data.total > 500 || !Array.isArray(data.rows) || data.rows.length !== Math.min(100, data.total)
+  const legacy = data.schema === 'jump-community-ranking-v1';
+  if ((!legacy && data.schema !== 'jump-community-ranking-v2') || data.communityId !== communityId || typeof data.rule !== 'string' || !data.rule
+    || !Number.isInteger(data.lives) || data.lives < 1 || (legacy ? data.retentionHours !== 48 : data.retentionHours !== null)
+    || !Number.isSafeInteger(data.total) || data.total < 0 || legacy && data.total > 500 || !Array.isArray(data.rows) || data.rows.length !== Math.min(100, data.total)
     || data.rows.some((row, index) => !valid(row) || row.rank !== index + 1)
     || new Set(data.rows.map(row => row.id)).size !== data.rows.length || data.rows.filter(row => row.isCurrentUser).length > 1
     || data.me !== null && (!valid(data.me) || !data.me.isCurrentUser)) throw new Error('Несовместимый ответ рейтинга Jump.');
@@ -48,7 +50,7 @@ export async function fetchCommunityJumpRanking(communityId: string, signal: Abo
   signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
   const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 10000);
   try {
-    const response = await (options.fetcher ?? fetch)(url.href, { method: 'GET', signal: controller.signal, credentials: 'omit', cache: 'no-store', headers: { Authorization: 'Bearer ' + token } });
+    const response = await (options.fetcher ?? fetch)(url.href, { method: 'GET', signal: controller.signal, credentials: 'omit', cache: 'no-store', headers: { Authorization: 'Bearer ' + token, Accept: JUMP_RANKING_V2_ACCEPT } });
     if (!response.ok) {
       const message = response.status === 401 ? 'Войди в профиль ПадлхАБ, чтобы увидеть рейтинг Jump.' : response.status === 403 ? 'Рейтинг Jump доступен участникам сообщества.' : 'Не удалось загрузить рейтинг Jump. Повтори обновление.';
       throw Object.assign(new Error(message), { status: response.status });
