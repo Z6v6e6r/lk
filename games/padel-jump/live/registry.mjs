@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, unlinkSync, linkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../../src/components/padel-jump/engine.ts';
 import { nextSection } from '../../../src/components/padel-jump/campaign.ts';
@@ -35,7 +35,17 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     for (const name of readdirSync(directory)) {
       if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
-      const row = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      let row;
+      try { row = JSON.parse(readFileSync(join(directory, name), 'utf8')); if (!row || typeof row !== 'object' || Array.isArray(row)) throw new SyntaxError('Receipt object required'); }
+      catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        // Preserve a torn legacy receipt privately; one bad file must not stop
+        // recovery of the other durable results. Never load temporary files.
+        const path = join(directory, name), quarantine = join(directory, '.corrupt-' + randomUUID());
+        linkSync(path, quarantine); unlinkSync(path);
+        const fd = openSync(directory, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
+        continue;
+      }
       if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isFinite(Date.parse(row.finishedAt))) results.set(row.id, row);
     }
     pruneResults();
@@ -48,19 +58,28 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, completedParts: run.completed, game: cleanGame(run.game) });
   function persist(row) {
     if (!directory) return;
-    const path = join(directory, row.id + '.json');
-    let fd; try { fd = openSync(path, 'wx', 0o600); writeFileSync(fd, JSON.stringify(row) + '\n'); fsyncSync(fd); closeSync(fd); fd = undefined;
-      const dir = openSync(directory, 'r'); try { fsyncSync(dir); } finally { closeSync(dir); }
-    } catch (error) {
-      if (fd !== undefined) { closeSync(fd); unlinkSync(path); }
-      if (error.code === 'EEXIST' && readFileSync(path, 'utf8') === JSON.stringify(row) + '\n') {
-        const file = openSync(path, 'r'); try { fsyncSync(file); } finally { closeSync(file); }
-        const dir = openSync(directory, 'r'); try { fsyncSync(dir); } finally { closeSync(dir); }
-        return;
+    const path = join(directory, row.id + '.json'), temporary = join(directory, '.pending-' + randomUUID());
+    const bytes = JSON.stringify(row) + '\n';
+    const syncDirectory = () => { const fd = openSync(directory, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } };
+    let fd, failure;
+    try {
+      fd = openSync(temporary, 'wx', 0o600); writeFileSync(fd, bytes); fsyncSync(fd); closeSync(fd); fd = undefined;
+      // Same-filesystem hard-link publication is atomic and cannot replace an
+      // existing receipt. A crash leaves either a complete final file or only
+      // an ignored private temporary file, never a half-written ranked result.
+      try { linkSync(temporary, path); }
+      catch (error) {
+        if (error.code !== 'EEXIST' || readFileSync(path, 'utf8') !== bytes) throw error;
+        const existing = openSync(path, 'r'); try { fsyncSync(existing); } finally { closeSync(existing); }
       }
-      throw error;
-    }
+      syncDirectory();
+    } catch (error) { failure = error; }
+    if (fd !== undefined) { try { closeSync(fd); } catch (error) { failure ??= error; } }
+    try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') failure ??= error; }
+    try { syncDirectory(); } catch (error) { failure ??= error; }
+    if (failure) throw failure;
   }
+
   return {
     join(body, actor) {
       sweep();

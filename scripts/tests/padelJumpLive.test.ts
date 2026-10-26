@@ -142,7 +142,7 @@ test('membership verifier uses the verified profile ID and denies missing config
   const verifier = createIdentityVerifier({ communityId: 'test-community', fetcher: async (url: string) => {
     calls.push(String(url)); return new Response(JSON.stringify(String(url).includes('vivacrm') ? { id: 'verified-profile', name: 'Тестовый профиль' } : { id: wrong ? 'other-community' : 'test-community', members: [{ id: 'verified-profile', status: pending ? 'PENDING' : 'ACTIVE' }], membersLoaded: true }), { status: 200 });
   } });
-  const verified = await verifier(req); assert.equal(verified.id, 'verified-profile'); assert.ok(calls[1].includes('clientId=verified-profile')); assert.ok(calls.every(u => u.startsWith('https://api.vivacrm.ru/') || u.startsWith('https://padlhub.su/seliger/')));
+  const verified = await verifier(req); assert.equal(verified.id, 'verified-profile'); assert.ok(calls[1].includes('clientId=verified-profile')); assert.ok(calls.every(u => u.startsWith('https://api.vivacrm.ru/') || u.startsWith('https://padlhub.su/lk/communities/')));
   pending = true; await assert.rejects(verifier(req, { fresh: true }), /COMMUNITY_MEMBER_REQUIRED/);
   pending = false; wrong = true; await assert.rejects(verifier(req, { fresh: true }), /MEMBERSHIP_NOT_VERIFIED/);
   await assert.rejects(createIdentityVerifier({ communityId: 'test-community', fetcher: async () => new Response('', { status: 503 }) })(req), /IDENTITY_UNAVAILABLE/);
@@ -205,4 +205,34 @@ test('high-refresh alternating tilt stops at the server RLE budget during slow i
   assert.equal(calls[1].inputs.length, 120);
   assert.equal(calls[1].inputs.reduce((n, b) => n + b[1], 0), 120);
   assert.equal(connection.canStep(), true); connection.dispose();
+});
+
+
+test('actual Cyrillic community IDs use the root LK detail route and remain URL-encoded', async () => {
+  const communityId = 'community_1793001495612_падлхаб-команда';
+  const urls: string[] = [];
+  const verify = createIdentityVerifier({ communityId, fetcher: async (url: string) => {
+    urls.push(String(url)); return new Response(JSON.stringify(String(url).includes('vivacrm') ? { id: 'fixture-profile', name: 'Тест' } : { id: communityId, membersLoaded: true, members: [{ id: 'fixture-profile', status: 'ACTIVE' }] }));
+  } });
+  assert.equal((await verify({ headers: { authorization: 'Bearer fixture' } })).communityId, communityId);
+  assert.equal(urls[1], 'https://padlhub.su/lk/communities/' + encodeURIComponent(communityId) + '?clientId=fixture-profile');
+  for (const bad of ['../other', 'community/other', 'community?x=1', 'community#fragment']) await assert.rejects(createIdentityVerifier({ communityId: bad })({ headers: { authorization: 'Bearer fixture' } }), /COMMUNITY_NOT_CONFIGURED/);
+});
+
+test('startup preserves valid receipts and quarantines torn legacy finals while ignoring unpublished temp files', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jump-live-recovery-'));
+  try {
+    const id = randomUUID(), broken = randomUUID();
+    const row = { id, alias: 'Тест', actorId: 'fixture', communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, elapsedMs: 1000, playMs: 900, failures: 0, finishedAt: new Date().toISOString() };
+    writeFileSync(join(directory, id + '.json'), JSON.stringify(row));
+    writeFileSync(join(directory, broken + '.json'), '{"id":');
+    writeFileSync(join(directory, '.pending-fixture-crash'), '{"id":');
+    writeFileSync(join(directory, 'operator-note.txt'), 'preserve');
+    const r = createRegistry({ communityId: 'test-community', directory });
+    assert.equal(r.board().results.length, 1); assert.equal(r.board().results[0].id, id);
+    const quarantine = readdirSync(directory).find(n => n.startsWith('.corrupt-')); assert.ok(quarantine);
+    assert.equal(readFileSync(join(directory, quarantine), 'utf8'), '{"id":');
+    assert.ok(readdirSync(directory).includes('.pending-fixture-crash')); assert.ok(readdirSync(directory).includes('operator-note.txt'));
+    assert.equal(createRegistry({ communityId: 'test-community', directory }).board().results.length, 1);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

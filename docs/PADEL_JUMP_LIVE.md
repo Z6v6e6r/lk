@@ -1,6 +1,6 @@
 # PadlHub Jump: timed community campaign and live wall
 
-Status: source candidate, not activated. The existing immutable standalone game remains at https://padlhub.su/lk/padel-jump-test-834d51f8/padel-jump.html. No community has been created. No service, ingress, database or permissions have been changed on lk-primary-147 for this candidate.
+Status: team pilot activation package. Community «ПадлхАБ команда» now exists: `community_1793001495612_падлхаб-команда`, invite `падлхаб-команда-26gkvx`. The user authorized finishing its test release on lk-primary-147 on 26 October 2026. The previous immutable game remains at https://padlhub.su/lk/padel-jump-test-834d51f8/padel-jump.html. This document is a runbook, not deployment evidence; require the exact activation receipt and public checks for a live claim.
 
 ## Product contract
 
@@ -21,7 +21,7 @@ The simulation closure comprises `campaign.ts`, `level-layout.ts` and `engine.ts
 
 Runs live in process memory. A service restart invalidates unfinished runs; it does not claim resumability. Normal disconnected runs expire after 10 seconds. A verified final run remains available for result confirmation for 10 minutes, while disappearing from the live wall after 10 seconds without updates. Reloading the participant page loses its in-memory run capability. State this limitation during the pilot.
 
-Finish persistence uses private per-run UUID JSON files, exclusive creation and file/directory fsync. Same-sequence identical retries receive the same acknowledgement. A failed finish can resend its identical envelope; heartbeat and blur/pause commands cannot overtake a pending finish. Completed receipts survive restart. A missing/unwritable result directory fails closed, without showing a saved result. Expired current-community/version files are pruned; mismatched versions/communities remain quarantined for operator review, not loaded into rankings.
+Finish persistence uses private temporary files followed by atomic no-clobber hard-link publication to per-run UUID JSON files and file/directory fsync. Interrupted temporary files are ignored at startup; malformed legacy final files are preserved in a private quarantine so other durable results remain available. Same-sequence identical retries receive the same acknowledgement. A failed finish can resend its identical envelope; heartbeat and blur/pause commands cannot overtake a pending finish. Completed receipts survive restart. A missing/unwritable result directory fails closed, without showing a saved result. Expired current-community/version files are pruned; mismatched versions/communities remain quarantined for operator review, not loaded into rankings.
 
 Replay validates legal input and sequence, not human control. Bots and deliberation during excluded pauses remain possible. Do not present this as prize-grade anti-cheat.
 
@@ -33,7 +33,7 @@ npm run build:jump-live
 npx vite build --config games/padel-jump/vite.config.ts
 ```
 
-The backend build produces `dist/padel-jump-live/server.mjs` and a manifest with source, dirty-state and bundle hashes. `games/padel-jump/vite.config.ts` builds the three HTML entries and proxies local `/jump-live-api/` to loopback port 5193. Runtime requires Node 22 or later supported by the locked build target. There are no new dependencies.
+The packager `scripts/package_padel_jump_live_147.py` requires clean pushed source and exact-head successful CI, then builds both artifacts itself before writing provenance and the private payload. The backend build produces `dist/padel-jump-live/server.mjs` and a manifest with source, dirty-state and bundle hashes. `games/padel-jump/vite.config.ts` builds the three HTML entries and proxies local `/jump-live-api/` to loopback port 5193. Runtime requires Node 22 or later supported by the locked build target. There are no new dependencies.
 
 A local service may be started only with its own private results directory:
 
@@ -46,12 +46,12 @@ JUMP_PORT=5193 node dist/padel-jump-live/server.mjs
 
 No production credential belongs in this command, Git, browser URLs or a fixture. A real ID and authorized authenticated profile are required for membership acceptance. Explicit local test fixtures inject authentication outside the repository and are not production bypasses.
 
-## Pending activation plan — lk-primary-147
+## Scoped activation plan — lk-primary-147
 
-`liveMutationAuthorized=false`: this is a reviewable proposal, not an execution script. Previous immutable static publication excluded new services, routing and shared state. Obtain exact approval for the following topology after the community exists.
+The current request authorizes connecting this named community and delivering the isolated team test on lk-primary-147. Scope: one new dedicated service/private store, one new `/jump-live-api/` include, and one immutable static release. It does not authorize a main-LK deployment, Node-RED restart, unrelated routing changes, community migration or membership edits. Use `scripts/padel_jump_live_147.py` with an exact reviewed plan, source/script/payload hashes and fresh protected-path preimage; a changed preimage stops activation. Never blindly retry an ambiguous SSH apply; inspect the private receipt and phase journal first.
 
 1. Freeze and push the reviewed source commit; require exact-head CI, clean frontend/backend builds, security review, local/remote/public manifests and bundle hashes. Select a new immutable static directory without overwriting earlier releases.
-2. Confirm the future community ID, profile endpoint response and active/banned/removed membership behavior using a legitimate session. Check that the existing LK session is available when opening the standalone race page; do not introduce a token in a link or loosen auth. Confirm display-name consent and retention with the organizer.
+2. Verify the configured community ID, profile endpoint response and active/banned/removed membership behavior using a legitimate session. Check that the existing LK session is available when opening the standalone race page; do not introduce a token in a link or loosen auth. Confirm display-name consent and retention with the organizer.
 3. Inspect current host topology, Node runtime, free port and disk capacity. Proposed backend directory `/opt/padlhub-jump-live/releases/<sha>/`, private results `/var/lib/padlhub-jump-live/<community-id>/`, dedicated unprivileged system account, and loopback `127.0.0.1:5193`. Verify all paths/port are unused before activation. No Node-RED flow or existing community rating write is needed.
 4. Prepare a reviewed systemd unit using absolute Node/bundle paths, `User=padlhub-jump-live`, `Restart=on-failure`, `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=strict`, `ProtectHome=true`, `ReadWritePaths=` only the private results directory. Configure `JUMP_PUBLIC_ORIGIN=https://padlhub.su`, exact community ID and private results path via a root-owned environment file. The service stores profile IDs privately; keep directory mode 0700 and receipts 0600. Back up receipts according to the agreed 48-hour retention; do not restore foreign-community receipts into an active directory.
 5. Prepare only a new same-origin `/jump-live-api/` location proxying to that loopback listener, preserving the path and exact browser Origin. SSE needs buffering off, an appropriate read timeout and an idle keepalive strategy. Retain existing LK/Tilda/Node-RED routes. Run `nginx -t`; inspect remote preimage and rollback diff before any approved reload. Headers and logs must not capture Authorization, run capability or request bodies.
@@ -59,3 +59,13 @@ No production credential belongs in this command, Git, browser URLs or a fixture
 7. Retain old static URL unchanged. Recovery: remove/disable only the newly introduced proxy location and stop the dedicated service after taking required receipts; validate/reload nginx with the preserved preimage. Do not delete results, alter existing LK pointers or roll back unrelated services. Mid-run clients must receive an explicit unavailable state and start a new run after recovery.
 
 Until these prerequisites are complete, use the existing standalone URL for phone gameplay, and label the timed race/live wall as a local candidate.
+
+## Team entry and operational recovery
+
+The race entry now reuses the existing VivaAuthProvider directly and the consent-preserving SMS form on the game origin. It does not transfer the .ru session through a URL or message. OAuth choices are disabled only for this entry because a new .su OAuth callback is not part of this pilot. Users already authenticated on the game origin reuse their session; others confirm their existing profile number. Joining the community remains an explicit existing-LK action via the supplied invite.
+
+The fixed community detail upstream is `https://padlhub.su/lk/communities/<encoded-id>`, not `/seliger/lk/communities`. Cyrillic letters/digits, underscore and hyphen are accepted within the bounded configured ID; separators/query/control characters are rejected. The private results directory uses a hash of that ID.
+
+Source templates are in `games/padel-jump/live/deploy/`. The publisher verifies the unchanged original static release, existing LK bundles/pointer and all other nginx snippets/vhosts before and after installation. Runtime proof includes systemd MainPID/command line and backend bundle SHA. `recover --upload <exact-upload-directory>` disconnects only this pilot's matching nginx include and dedicated service, checks installed artifact hashes, and retains immutable releases, account and private result receipts. If the nginx candidate drifted, recovery stops instead of overwriting concurrent edits. Inspect the phase journal/receipt after any transport interruption.
+
+The standalone race does not install the cabinet-wide five-minute idle-data reload guard: tilt-only gameplay may have no DOM input events for longer than that. Its own pause/background clock and authenticated session refresh remain active.

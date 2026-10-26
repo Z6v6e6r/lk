@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { fail } from './registry.mjs';
 
 const PROFILE = 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile';
-const COMMUNITY_BASE = 'https://padlhub.su/seliger';
+const COMMUNITY_BASE = 'https://padlhub.su';
 
 /** Uses existing read-only profile/community contracts. No guest fallback or client actor IDs. */
 export function createIdentityVerifier({ communityId, fetcher = fetch, now = () => Date.now() } = {}) {
@@ -18,7 +18,7 @@ export function createIdentityVerifier({ communityId, fetcher = fetch, now = () 
     try { return JSON.parse(Buffer.concat(chunks, size).toString('utf8')); } catch { fail(503, 'IDENTITY_RESPONSE_INVALID'); }
   }
   return async (req, { fresh = false } = {}) => {
-    if (typeof communityId !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(communityId)) fail(503, 'COMMUNITY_NOT_CONFIGURED');
+    if (typeof communityId !== 'string' || !/^[\p{L}\p{N}_-]{1,120}$/u.test(communityId)) fail(503, 'COMMUNITY_NOT_CONFIGURED');
     const header = req.headers.authorization;
     if (typeof header !== 'string' || !/^Bearer [^\s]{1,8192}$/.test(header)) fail(401, 'PROFILE_AUTH_REQUIRED');
     const token = header.slice(7), key = createHash('sha256').update(token).digest('hex');
