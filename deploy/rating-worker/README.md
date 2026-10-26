@@ -18,12 +18,19 @@ Cron contract:
 17 3 * * * /opt/padlhub-rating-worker/current/deploy/rating-worker/run-full.sh
 ```
 
-All entrypoints use the same `flock` lock. MongoDB URI is read at runtime from
+All entrypoints use the same `flock` lock. Incremental and full runs wait up to
+120 seconds (`RATING_WORKER_LOCK_WAIT_SECONDS`, positive integer) before failing
+with exit 75 and `rating_worker_lock_timeout`. This wait precedes the execution
+watchdog, so it does not consume the worker runtime budget. Minute game-result
+runs keep their nonblocking busy-skip behavior. Never split these modes across
+separate locks: they share the rating ledger and projections.
+
+MongoDB URI is read at runtime from
 the active Node-RED flow. Viva credentials, when enabled for attendance sync,
 are read from root-only `/etc/padlhub-rating-worker.env`.
 
-Every cron entrypoint delegates to `run-with-watchdog.sh`. A busy shared lock is
-an expected skip: it exits successfully and appends a structured
+Every cron entrypoint delegates to `run-with-watchdog.sh`. For the minute
+game-result job, a busy shared lock is an expected skip: it exits successfully and appends a structured
 `rating_worker_lock_skipped` event to the run log. A started process is bounded
 by GNU `timeout`; the defaults are 55 seconds for the minute game-result run and
 780 seconds for incremental/full runs. Timeout exits are non-zero and append a
