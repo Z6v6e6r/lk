@@ -185,7 +185,7 @@ class JumpUpdate(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): update.publish_directory(target, {'keep': b'new'})
             self.assertEqual((target / 'keep').read_bytes(), b'old')
 
-    def rehearsal(self, failure=False, after_publication=None):
+    def rehearsal(self, failure=False, after_publication=None, previous_policy="permanent-v1", before_reload=False):
         update = self.module()
         with tempfile.TemporaryDirectory() as root:
             base = Path(root).resolve(); web = base / 'web'; releases = base / 'releases'; upload = base / 'upload';
@@ -199,21 +199,25 @@ class JumpUpdate(unittest.TestCase):
                 return {'files': {str(p): {'sha256': update.sha(p), 'realpath': str(p)} for p in [unit, env]}, 'lkPointer': 'unchanged-pointer'}
             def runtime():
                 source = new if new in unit.read_text() else old
-                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'rule': ('wrong-rule' if failure == 'rule' else 'five-lives-stars-v2') if source == new else 'active-total-community-v1', 'lives': 5 if source == new else None, 'communityConfigured': True, 'persistence': True}}
+                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'rule': ('wrong-rule' if failure == 'rule' else 'five-lives-stars-v2') if source == new else 'active-total-community-v1', 'lives': 5 if source == new else None, 'resultStoragePolicy': ('wrong-policy' if failure == 'storage' else 'permanent-v1') if source == new else previous_policy, 'communityConfigured': True, 'persistence': True}}
             before = {'host': update.HOST, 'unit': original, 'protected': private_snapshot(), 'runtime': runtime(), 'data': dict(data)}
-            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5}
+            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'resultStoragePolicy': 'permanent-v1'}
             backend_release = {**release, 'files': {'server.mjs': {'sha256': update.digest(b'new-backend')}}}
             files = {name: b'public-fixture' for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html']}
             files.update({'frontend/release.json': json.dumps(release).encode(), 'backend/server.mjs': b'new-backend', 'backend/release.json': json.dumps(backend_release).encode()})
             with tarfile.open(upload / 'payload.tar', 'w') as archive:
                 for name, value in files.items():
                     member = tarfile.TarInfo(name); member.size = len(value); archive.addfile(member, io.BytesIO(value))
-            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
-            commands = []
+            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'resultStoragePolicy': 'permanent-v1', 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
+            commands = []; cached_source = old
             def run(*args):
+                nonlocal cached_source
                 commands.append(args)
                 if args == ('systemctl', 'restart', update.SERVICE) and new in unit.read_text(): data['enrollments/new-private-form.json'] = 'new-private-hash'
-                return ''
+                if args == ('systemctl', 'daemon-reload'): cached_source = new if new in unit.read_text() else old
+                if args == ('systemctl', 'show', '-p', 'ExecStart', '--value', update.SERVICE): return '/usr/local/bin/node ' + str(releases / cached_source / 'server.mjs')
+                if args == ('systemctl', 'show', '-p', 'WorkingDirectory', '--value', update.SERVICE): return str(releases / cached_source)
+                return 'inactive' if args == ('systemctl', 'show', '-p', 'ActiveState', '--value', update.SERVICE) else ''
             def verify(source, expected_hash, expected_engine):
                 if source == new: self.assertFalse((web / ('padel-jump-team-' + new[:8])).exists(), 'New frontend must wait for backend readiness')
                 if failure is True and source == new: raise RuntimeError('SYNTHETIC_VERIFY_FAILURE')
@@ -224,6 +228,7 @@ class JumpUpdate(unittest.TestCase):
                 if after_publication == 'rename-fsync' and target.parent == web: raise OSError('SYNTHETIC_POST_RENAME_FSYNC_FAILURE')
             durable = update.durable
             def durable_with_fault(path, value):
+                if before_reload and path.name == 'phase-unit.json': raise RuntimeError('SYNTHETIC_BEFORE_DAEMON_RELOAD')
                 if after_publication == 'receipt' and path.name == 'receipt.json': raise OSError('SYNTHETIC_RECEIPT_FAILURE')
                 durable(path, value)
             class Libc:
@@ -236,13 +241,21 @@ class JumpUpdate(unittest.TestCase):
                     self.assertEqual(unit.read_text(), plan['unitCandidate']); self.assertFalse((upload / 'recovery-receipt.json').exists())
                     self.assertTrue((web / ('padel-jump-team-' + new[:8]) / 'padel-jump-race.html').exists())
                     with self.assertRaisesRegex(RuntimeError, 'FRONTEND_VISIBLE_RECONCILIATION_REQUIRED'): update.recover(plan, upload)
-                elif failure:
-                    with self.assertRaisesRegex(RuntimeError, 'RUNTIME_SYNC_DRIFT' if failure == 'sync' else 'RUNTIME_RULE_DRIFT' if failure == 'rule' else 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
-                    self.assertEqual(unit.read_text(), original); self.assertTrue((upload / 'recovery-receipt.json').exists()); self.assertFalse((upload / 'receipt.json').exists())
+                elif failure or before_reload:
+                    with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC_BEFORE_DAEMON_RELOAD' if before_reload else 'RUNTIME_SYNC_DRIFT' if failure == 'sync' else 'RUNTIME_RULE_DRIFT' if failure == 'rule' else 'RUNTIME_STORAGE_POLICY_DRIFT' if failure == 'storage' else 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
+                    self.assertEqual(unit.read_text(), original if previous_policy == 'permanent-v1' else plan['unitCandidate'])
+                    recovery = json.loads((upload / 'recovery-receipt.json').read_text())
+                    self.assertEqual(recovery['status'], 'RECOVERED' if previous_policy == 'permanent-v1' else 'SAFE_STOPPED')
+                    self.assertFalse((upload / 'receipt.json').exists())
+                    if previous_policy != 'permanent-v1':
+                        self.assertEqual(commands.count(('systemctl', 'restart', update.SERVICE)), 0 if before_reload else 1, 'Never restart the legacy pruner')
+                        self.assertTrue(recovery['managerPermanentAndInactive']); self.assertEqual(cached_source, new)
+                        self.assertIn(('systemctl', 'stop', update.SERVICE), commands)
                     self.assertFalse((web / ('padel-jump-team-' + new[:8])).exists())
                 else:
                     update.apply(upload, plan); self.assertEqual(unit.read_text(), plan['unitCandidate']); self.assertEqual(json.loads((upload / 'receipt.json').read_text())['status'], 'PUBLISHED')
-                self.assertEqual(data['old-result.json'], 'old-data-hash'); self.assertEqual(data['enrollments/new-private-form.json'], 'new-private-hash')
+                self.assertEqual(data['old-result.json'], 'old-data-hash')
+                if not before_reload: self.assertEqual(data['enrollments/new-private-form.json'], 'new-private-hash')
                 self.assertEqual((releases / old / 'server.mjs').read_bytes(), b'old-backend'); self.assertEqual(env.read_bytes(), b'unchanged-env')
                 self.assertTrue(all(cmd[0] == 'systemctl' and cmd[-1] in ['daemon-reload', update.SERVICE] for cmd in commands))
 
@@ -250,7 +263,49 @@ class JumpUpdate(unittest.TestCase):
     def test_failed_verification_recovers_old_backend_without_deleting_new_forms(self): self.rehearsal(failure=True)
     def test_wrong_backend_sync_blocks_frontend_and_recovers_previous_backend(self): self.rehearsal(failure='sync')
     def test_wrong_backend_rule_blocks_frontend_and_recovers_previous_backend(self): self.rehearsal(failure='rule')
+    def test_wrong_storage_policy_never_publishes_frontend(self): self.rehearsal(failure='storage')
+    def test_legacy_pruner_is_never_restarted_after_permanent_activation(self): self.rehearsal(failure=True, previous_policy=None)
+    def test_failure_between_unit_cas_and_manager_reload_cannot_cache_legacy_start(self): self.rehearsal(previous_policy=None, before_reload=True)
     def test_post_rename_fsync_failure_keeps_compatible_backend_for_readback(self): self.rehearsal(after_publication='rename-fsync')
     def test_receipt_failure_keeps_compatible_backend_for_readback(self): self.rehearsal(after_publication='receipt')
+
+
+
+
+class PermanentRecoveryBeforeActivationTests(unittest.TestCase):
+    def test_failed_cas_keeps_verified_legacy_runtime_unchanged_without_restart(self):
+        update = JumpUpdate().module()
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root); unit = base / 'unit'; old = 'a' * 40; new = 'b' * 40
+            releases = base / 'releases'; (releases / old).mkdir(parents=True); (releases / old / 'server.mjs').write_bytes(b'old')
+            original = 'old-source'; unit.write_text(original)
+            runtime = {'sourceCommit': old, 'sha256': update.sha(releases / old / 'server.mjs'), 'health': {}}
+            plan = {'sourceCommit': new, 'unitCandidate': 'new-source', 'resultStoragePolicy': 'permanent-v1', 'preimage': {'unit': original, 'runtime': runtime}}
+            with patch.object(update, 'UNIT', unit), patch.object(update, 'RELEASES', releases), patch.object(update, 'WEB', base / 'web'), patch.object(update, 'check_protected'), patch.object(update, 'runtime', return_value=runtime), patch.object(update, 'run') as run:
+                update.recover(plan, base)
+                run.assert_not_called(); self.assertEqual(unit.read_text(), original)
+                self.assertEqual(json.loads((base / 'recovery-receipt.json').read_text())['status'], 'UNCHANGED_BEFORE_PERMANENT_ACTIVATION')
+
+
+    def test_reload_failure_keeps_companion_stopped_and_forbids_cached_legacy_start(self):
+        update = JumpUpdate().module()
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root); unit = base / 'unit'; old = 'a' * 40; new = 'b' * 40
+            releases = base / 'releases'; (releases / old).mkdir(parents=True); (releases / old / 'server.mjs').write_bytes(b'old')
+            unit.write_text('new-source')
+            previous = {'sourceCommit': old, 'sha256': update.sha(releases / old / 'server.mjs'), 'health': {}}
+            plan = {'sourceCommit': new, 'unitCandidate': 'new-source', 'resultStoragePolicy': 'permanent-v1', 'preimage': {'unit': 'old-source', 'runtime': previous}}
+            commands = []
+            def run(*args):
+                commands.append(args)
+                if args == ('systemctl', 'daemon-reload'): raise RuntimeError('SYNTHETIC_RELOAD_FAILURE')
+                if args == ('systemctl', 'show', '-p', 'ActiveState', '--value', update.SERVICE): return 'inactive'
+                return ''
+            with patch.object(update, 'UNIT', unit), patch.object(update, 'RELEASES', releases), patch.object(update, 'WEB', base / 'web'), patch.object(update, 'check_protected'), patch.object(update, 'run', side_effect=run):
+                with self.assertRaisesRegex(RuntimeError, 'PERMANENT_MANAGER_RECOVERY_REQUIRED'): update.recover(plan, base)
+                receipt = json.loads((base / 'recovery-receipt.json').read_text())
+                self.assertEqual(receipt['status'], 'SAFE_STOPPED_MANAGER_UNKNOWN'); self.assertTrue(receipt['startForbiddenUntilVerifiedReload'])
+                self.assertEqual(unit.read_text(), 'new-source'); self.assertIn(('systemctl', 'stop', update.SERVICE), commands)
+                self.assertNotIn(('systemctl', 'restart', update.SERVICE), commands)
 
 if __name__ == '__main__': unittest.main()

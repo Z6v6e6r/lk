@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -33,10 +33,10 @@ test('ranking chooses each profile best by stars first, then minimum time; equal
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-function replayHarness() {
+function replayHarness(directory?: string) {
   let time = 0, seq = 0;
   const actor = { id: 'fixture-player', name: 'Игрок', communityId: 'fixture-community' };
-  const registry = createRegistry({ communityId: actor.communityId, now: () => time });
+  const registry = createRegistry({ communityId: actor.communityId, now: () => time, directory });
   const ticket = registry.join(body(), actor);
   const send = (command: string, inputs?: number[][]) => registry.command(ticket.id, ticket.token, { seq: ++seq, command, ...(inputs ? { inputs } : {}) }, actor);
   const play = (game: Game, choose: (g: Game, landed: number) => number, stop = (g: Game) => g.mode !== 'running') => {
@@ -80,4 +80,74 @@ test('rejected replay containing a star then post-failure excess input cannot mu
   const prior = h.registry.board().players[0]; assert.equal(prior.stars, 0); assert.equal(prior.failures, 0); assert.equal(prior.game.time, 0);
   const accepted = h.registry.command(h.ticket.id, h.ticket.token, { seq: 1, command: 'inputs', inputs: [[0, 1]] }, h.actor);
   assert.equal(accepted.seq, 1); assert.equal(accepted.player.stars, 0);
+});
+
+
+test('a 601st attempt is saved permanently, acknowledges its own worse score, and keeps the old personal best', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jump-permanent-attempts-'));
+  const oldest = Date.now() - 100 * 24 * 3600000; let bestId = '';
+  try {
+    for (let n = 0; n < 600; n++) {
+      const id = randomUUID(); if (!n) bestId = id;
+      writeFileSync(join(directory, id + '.json'), JSON.stringify({ id, actorId: 'fixture-player', alias: 'Игрок', communityId: 'fixture-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, stars: n ? 1 : 1000, elapsedMs: n + 1000, playMs: 1000, failures: 5, finishedAt: new Date(oldest).toISOString() }));
+    }
+    const h = replayHarness(directory); let game = structuredClone(h.ticket.player.game);
+    assert.equal(h.registry.communityRanking(h.actor).total, 0); // Prime compatibility cache before the new durable result.
+    for (let life = 0; life < 5; life++) {
+      h.play(game, () => -1); assert.equal(game.mode, 'over');
+      if (life < 4) game = structuredClone(h.send('retry').player.game);
+    }
+    const finished = h.send('finish');
+    assert.equal(finished.result.id, h.ticket.id); assert.ok(finished.result.stars < 1000);
+    assert.equal(h.registry.board().results[0].id, bestId);
+    assert.equal(h.registry.communityRanking(h.actor).me.id, h.ticket.id);
+    assert.equal(h.registry.communityRanking(h.actor, { allTime: true }).me.id, bestId);
+    assert.equal(readdirSync(directory).length, 601);
+    const restored = createRegistry({ communityId: h.actor.communityId, directory, wall: () => Date.now() + 1000 * 24 * 3600000 });
+    assert.equal(restored.communityRanking(h.actor, { allTime: true }).me.id, bestId);
+    assert.equal(readdirSync(directory).length, 601);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('legacy window expires only its read cache and reveals a recent runner-up without deleting the permanent winner', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jump-legacy-window-')); let wall = 1800000000000;
+  const owner = { id: 'fixture-player', communityId: 'fixture-community' };
+  try {
+    const rows = [
+      { id: randomUUID(), stars: 9, finishedAt: new Date(wall - 48 * 3600000 + 1).toISOString() },
+      { id: randomUUID(), stars: 8, finishedAt: new Date(wall - 3600000).toISOString() },
+    ];
+    for (const row of rows) writeFileSync(join(directory, row.id + '.json'), JSON.stringify({ ...row, actorId: owner.id, alias: 'Игрок', communityId: owner.communityId, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, elapsedMs: 1000, playMs: 900, failures: 5 }));
+    const registry = createRegistry({ communityId: owner.communityId, directory, wall: () => wall });
+    assert.equal(registry.communityRanking(owner).me.id, rows[0].id);
+    wall += 2;
+    assert.equal(registry.communityRanking(owner).me.id, rows[1].id);
+    assert.equal(registry.communityRanking(owner, { allTime: true }).me.id, rows[0].id);
+    wall += 100 * 24 * 3600000;
+    assert.equal(registry.communityRanking(owner).total, 0); assert.equal(registry.board().results[0].id, rows[0].id);
+    assert.equal(readdirSync(directory).length, 2);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('failed durable publication cannot replace the permanent best; the exact finish envelope retries safely', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jump-permanent-durability-'));
+  const oldId = randomUUID();
+  try {
+    writeFileSync(join(directory, oldId + '.json'), JSON.stringify({ id: oldId, actorId: 'fixture-player', alias: 'Игрок', communityId: 'fixture-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, stars: 0, elapsedMs: 1000000, playMs: 900000, failures: 5, finishedAt: new Date().toISOString() }));
+    const h = replayHarness(directory); let game = structuredClone(h.ticket.player.game), last;
+    for (let life = 0; life < 5; life++) {
+      last = h.play(game, () => -1);
+      if (life < 4) game = structuredClone(h.send('retry').player.game);
+    }
+    const envelope = { seq: last.seq + 1, command: 'finish' };
+    const target = join(directory, h.ticket.id + '.json'); mkdirSync(target);
+    assert.throws(() => h.registry.command(h.ticket.id, h.ticket.token, envelope, h.actor));
+    assert.equal(h.registry.communityRanking(h.actor, { allTime: true }).me.id, oldId);
+    rmSync(target, { recursive: true }); h.wait(60000);
+    const accepted = h.registry.command(h.ticket.id, h.ticket.token, envelope, h.actor);
+    assert.equal(accepted.result.id, h.ticket.id); assert.ok(accepted.result.elapsedMs < 1000000);
+    assert.equal(h.registry.communityRanking(h.actor, { allTime: true }).me.id, h.ticket.id);
+    assert.deepEqual(h.registry.command(h.ticket.id, h.ticket.token, envelope, h.actor), accepted);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

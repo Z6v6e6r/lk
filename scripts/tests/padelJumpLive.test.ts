@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -126,16 +126,32 @@ test('denied and missing sensors keep manual race start and resume available', a
   }
 });
 
-test('48-hour retention releases result capacity and deletes only expired owned result files', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'jump-live-retention-')); let wall = 1800000000000;
+test('permanent archive keeps more than 500 profiles beyond 48 hours and server restart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'jump-live-permanent-')); let wall = 1800000000000;
   try {
-    for (let i = 0; i < 500; i++) {
-      const id = randomUUID(); writeFileSync(join(directory, id + '.json'), JSON.stringify({ id, alias: 'Тестовый профиль', actorId: 'test-profile-' + i, communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, finishedAt: new Date(wall).toISOString(), elapsedMs: 600000, playMs: 599000, failures: 0, stars: 0 }));
+    for (let i = 0; i < 601; i++) {
+      const id = randomUUID(); writeFileSync(join(directory, id + '.json'), JSON.stringify({ id, alias: 'Тестовый профиль', actorId: 'test-profile-' + i, communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, finishedAt: new Date(wall).toISOString(), elapsedMs: 600000 + i, playMs: 599000, failures: 0, stars: 601 - i }));
     }
     writeFileSync(join(directory, 'operator-note.txt'), 'preserve');
-    const registry = createRegistry({ communityId: 'test-community', directory, wall: () => wall }); assert.equal(registry.board().results.length, 100);
-    wall += 48 * 3600000 + 1; assert.equal(registry.board().results.length, 0);
-    assert.deepEqual(readdirSync(directory), ['operator-note.txt']); assert.equal(registry.join(body(), actor()).seq, 0);
+    const before = new Map(readdirSync(directory).map(name => [name, readFileSync(join(directory, name), 'utf8')]));
+    const registry = createRegistry({ communityId: 'test-community', directory, wall: () => wall });
+    const own = { id: 'test-profile-600', communityId: 'test-community' };
+    assert.equal(registry.board().results.length, 100);
+    assert.throws(() => registry.communityRanking(own), /RANKING_CLIENT_UPGRADE_REQUIRED/);
+    // Cached legacy refusal must not rescan the entire archive on every old-tab poll.
+    renameSync(directory, directory + '-offline');
+    try {
+      assert.throws(() => registry.communityRanking(own), /RANKING_CLIENT_UPGRADE_REQUIRED/);
+      assert.equal(registry.communityRanking(own, { allTime: true }).total, 601);
+      assert.equal(registry.board().results.length, 100);
+    } finally { renameSync(directory + '-offline', directory); }
+    wall += 400 * 24 * 3600000;
+    const all = registry.communityRanking(own, { allTime: true });
+    assert.equal(all.schema, 'jump-community-ranking-v2'); assert.equal(all.retentionHours, null); assert.equal(all.total, 601);
+    assert.equal(all.me.rank, 601); assert.equal(all.me.stars, 1); assert.equal(registry.communityRanking(own).total, 0);
+    assert.deepEqual(createRegistry({ communityId: 'test-community', directory, wall: () => wall }).communityRanking(own, { allTime: true }), all);
+    assert.deepEqual(new Map(readdirSync(directory).map(name => [name, readFileSync(join(directory, name), 'utf8')])), before);
+    assert.equal(registry.join(body(), actor()).seq, 0);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

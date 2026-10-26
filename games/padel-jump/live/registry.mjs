@@ -1,12 +1,14 @@
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, unlinkSync, linkSync } from 'node:fs';
+import { mkdirSync, opendirSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, unlinkSync, linkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../../src/components/padel-jump/engine.ts';
 import { nextSection } from '../../../src/components/padel-jump/campaign.ts';
 import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIMIT, LIVE_SYNC, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
 
 export const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
-const ttl = 10000, retention = 48 * 3600000;
+export const RESULT_STORAGE_POLICY = 'permanent-v1';
+export const RANKING_V2_ACCEPT = 'application/vnd.padlhub.jump-community-ranking.v2+json';
+const ttl = 10000, legacyWindow = 48 * 3600000;
 function aliasOf(value) {
   if (typeof value !== 'string' || [...value].length < 1 || [...value].length > 48 || /[\p{C}<>]/u.test(value)) fail(422, 'ALIAS_INVALID');
   const alias = value.trim().replace(/\s+/g, ' '); if (!alias) fail(422, 'ALIAS_INVALID'); return alias;
@@ -21,39 +23,39 @@ function cleanGame(game) {
 
 /** One isolated event; no LK accounts, community writes or client-supplied score/time. */
 export function createRegistry({ now = () => performance.now(), wall = () => Date.now(), directory, communityId = null } = {}) {
-  const runs = new Map(), results = new Map();
-  const pruneResults = () => {
-    for (const [id, row] of results) if (wall() - Date.parse(row.finishedAt) >= retention) {
-      if (directory) {
-        const file = join(directory, id + '.json');
-        try { unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      }
-      results.delete(id);
-    }
-  };
-  if (directory) {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (const name of readdirSync(directory)) {
+  const runs = new Map(), best = new Map();
+  const rank = (a, b) => b.stars - a.stars || a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id);
+  const remember = row => { const previous = best.get(row.actorId); if (!previous || rank(row, previous) < 0) best.set(row.actorId, row); };
+  let legacyCache = null;
+  function scanResults(visit, quarantine = false) {
+    if (!directory) return;
+    const entries = opendirSync(directory);
+    try { for (let entry; (entry = entries.readSync());) {
+      const name = entry.name;
       if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
+      if (!entry.isFile()) fail(503, 'RESULT_STORE_INVALID');
       let row;
       try { row = JSON.parse(readFileSync(join(directory, name), 'utf8')); if (!row || typeof row !== 'object' || Array.isArray(row)) throw new SyntaxError('Receipt object required'); }
       catch (error) {
         if (!(error instanceof SyntaxError)) throw error;
         // Preserve a torn legacy receipt privately; one bad file must not stop
         // recovery of the other durable results. Never load temporary files.
-        const path = join(directory, name), quarantine = join(directory, '.corrupt-' + randomUUID());
-        linkSync(path, quarantine); unlinkSync(path);
-        const fd = openSync(directory, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
+        if (quarantine) {
+          const path = join(directory, name), preserved = join(directory, '.corrupt-' + randomUUID());
+          linkSync(path, preserved); unlinkSync(path);
+          const fd = openSync(directory, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
+        }
         continue;
       }
-      if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isSafeInteger(row.stars) && row.stars >= 0 && Number.isFinite(Date.parse(row.finishedAt))) results.set(row.id, row);
-    }
-    pruneResults();
-    if (results.size > 500) fail(503, 'RESULT_STORE_CAPACITY');
+      if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isSafeInteger(row.stars) && row.stars >= 0 && Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0 && Number.isFinite(Date.parse(row.finishedAt))) visit(row);
+    } } finally { entries.closeSync(); }
+  }
+  if (directory) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    scanResults(remember, true);
   }
   const elapsed = run => run.finalMs ?? run.activeMs + (run.paused || run.finished ? 0 : Math.max(0, now() - run.segment));
-  const sweep = () => { pruneResults(); for (const [id, run] of runs) if (now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) runs.delete(id); };
-  const rank = (a, b) => b.stars - a.stars || a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id);
+  const sweep = () => { for (const [id, run] of runs) if (now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) runs.delete(id); };
   const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, stars: row.stars, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
   const player = (run, full = false) => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.failures >= LIVE_LIVES ? 'eliminated' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
     elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, livesRemaining: Math.max(0, LIVE_LIVES - run.failures), stars: run.claimed.size, completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
@@ -83,12 +85,30 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
 
   function publishResult(run) {
     if (!directory) fail(503, 'RESULT_STORE_UNAVAILABLE');
-    if (results.size >= 500 && !results.has(run.id)) fail(503, 'RESULT_STORE_CAPACITY');
     const row = run.finishRow ?? { id: run.id, alias: run.alias, actorId: run.actorId, communityId: run.communityId, elapsedMs: Math.max(Math.round(elapsed(run)), Math.round(run.ticks * FIXED_STEP * 1000)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, stars: run.claimed.size, finishedAt: new Date(wall()).toISOString(), engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE };
-    run.finishRow = row; persist(row); results.set(run.id, row);
+    run.finishRow = row; persist(row); remember(row); legacyCache = null;
   }
 
-  const bestResults = () => [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort(rank).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort(rank);
+  const bestResults = () => [...best.values()].sort(rank);
+  // Compatibility view for already-open v1 pages only. The archive is never
+  // pruned; scanning streams files and retains one recent best per profile.
+  function legacyResults() {
+    const at = wall();
+    if (legacyCache && at >= legacyCache.at && at < legacyCache.until) {
+      if (!legacyCache.rows) fail(503, 'RANKING_CLIENT_UPGRADE_REQUIRED');
+      return legacyCache.rows;
+    }
+    const recent = new Map();
+    scanResults(row => {
+      if (at - Date.parse(row.finishedAt) >= legacyWindow) return;
+      const previous = recent.get(row.actorId); if (!previous || rank(row, previous) < 0) recent.set(row.actorId, row);
+    });
+    let until = at + 30000;
+    for (const row of recent.values()) until = Math.min(until, Date.parse(row.finishedAt) + legacyWindow);
+    legacyCache = { at, until, rows: recent.size > 500 ? null : [...recent.values()].sort(rank) };
+    if (!legacyCache.rows) fail(503, 'RANKING_CLIENT_UPGRADE_REQUIRED');
+    return legacyCache.rows;
+  }
 
   return {
     join(body, actor) {
@@ -158,16 +178,16 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
       if (command === 'resume') { run.paused = false; run.segment = now(); }
       run.seen = now(); run.seq = body.seq; run.digest = digest;
-      const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(results.get(id)) } : {}) }; run.ack = ack; return ack;
+      const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(run.finishRow) } : {}) }; run.ack = ack; return ack;
     },
     board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
       results: bestResults().slice(0, 100).map(publicResult) }; },
-    communityRanking(actor) {
+    communityRanking(actor, { allTime = false } = {}) {
       if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id) fail(403, 'VERIFIED_PROFILE_REQUIRED');
-      sweep(); const ranked = bestResults();
+      sweep(); const ranked = allTime ? bestResults() : legacyResults();
       const row = (value, index) => ({ id: value.id, rank: index + 1, name: value.alias, stars: value.stars, elapsedMs: value.elapsedMs, isCurrentUser: value.actorId === actor.id });
       const mine = ranked.findIndex(value => value.actorId === actor.id);
-      return { schema: 'jump-community-ranking-v1', communityId, rule: LIVE_RULE, lives: LIVE_LIVES, retentionHours: retention / 3600000, total: ranked.length,
+      return { schema: allTime ? 'jump-community-ranking-v2' : 'jump-community-ranking-v1', communityId, rule: LIVE_RULE, lives: LIVE_LIVES, retentionHours: allTime ? null : legacyWindow / 3600000, total: ranked.length,
         rows: ranked.slice(0, 100).map(row), me: mine >= 0 ? row(ranked[mine], mine) : null };
     },
   };

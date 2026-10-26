@@ -25,7 +25,7 @@ test('member ranking uses verified actor, preserves best-star order and private 
     h.add('own-private-id', 5, 1000); const own = h.add('own-private-id', 6, 54194);
     const faster = h.add('other-private-id', 6, 50000), more = h.add('third-private-id', 7, 100000);
     h.add('foreign-private-id', 999, 1, { communityId: 'other-community' });
-    h.add('expired-private-id', 999, 1, { finishedAt: new Date(Date.now() - 49 * 3600000).toISOString() });
+    const historical = h.add('historical-private-id', 999, 1, { finishedAt: new Date(Date.now() - 49 * 3600000).toISOString() });
     h.add('old-rule-private-id', 999, 1, { rule: 'active-total-community-v1' });
     const registry = createRegistry({ communityId, directory: h.directory });
     const before = readdirSync(h.directory).map(name => [name, readFileSync(join(h.directory, name), 'utf8')]);
@@ -35,7 +35,10 @@ test('member ranking uses verified actor, preserves best-star order and private 
     assert.equal(result.me.id, own.id); assert.equal(result.me.rank, 3);
     assert.equal(result.me.stars, 6); assert.equal(result.me.elapsedMs, 54194);
     assert.equal(registry.communityRanking({ id: 'no-result', communityId }).me, null);
-    assert.deepEqual(registry.board().results.map(row => row.id), result.rows.map(row => row.id));
+    const permanent = registry.communityRanking({ id: 'own-private-id', communityId }, { allTime: true });
+    assert.equal(permanent.schema, 'jump-community-ranking-v2'); assert.equal(permanent.retentionHours, null);
+    assert.deepEqual(permanent.rows.map(row => row.id), [historical.id, more.id, faster.id, own.id]);
+    assert.deepEqual(registry.board().results.map(row => row.id), permanent.rows.map(row => row.id));
     assert.deepEqual(readdirSync(h.directory).map(name => [name, readFileSync(join(h.directory, name), 'utf8')]), before);
     for (const row of result.rows) assert.deepEqual(Object.keys(row).sort(), ['elapsedMs', 'id', 'isCurrentUser', 'name', 'rank', 'stars']);
     for (const privateValue of ['own-private-id', 'other-private-id', 'actorId', 'phone', 'email', 'token', 'invite']) assert.ok(!JSON.stringify(result).includes(privateValue));
@@ -74,8 +77,12 @@ test('only new authenticated ranking read permits exact cabinet origin; wrong sc
     assert.equal(preflight.headers.get('access-control-allow-methods'), 'GET'); assert.equal(preflight.headers.get('access-control-allow-credentials'), null);
     assert.equal(calls.length, 0);
     const result = await fetch(base + path, { headers }); assert.equal(result.status, 200);
-    assert.equal(result.headers.get('vary'), 'Origin'); assert.equal(result.headers.get('cache-control'), 'no-store');
-    assert.deepEqual((await result.json()).rows, []); assert.deepEqual(calls, [false]);
+    assert.equal(result.headers.get('vary'), 'Origin, Accept'); assert.equal(result.headers.get('cache-control'), 'no-store');
+    const permanent = await fetch(base + path, { headers: { ...headers, Accept: 'application/vnd.padlhub.jump-community-ranking.v2+json' } });
+    assert.equal(permanent.status, 200); const permanentBody = await permanent.json();
+    assert.equal(permanentBody.schema, 'jump-community-ranking-v2'); assert.equal(permanentBody.retentionHours, null);
+    assert.equal((await (await fetch(base + 'health')).json()).resultStoragePolicy, 'permanent-v1');
+    assert.deepEqual((await result.json()).rows, []); assert.deepEqual(calls, [false, false]);
     assert.equal((await fetch(base + path, { headers: { ...headers, Origin: 'https://padlhub.su' } })).status, 200);
     for (const origin of ['https://evil.example', 'https://padlhub.ru.evil.example', 'null']) {
       const response = await fetch(base + path, { headers: { ...headers, Origin: origin } });

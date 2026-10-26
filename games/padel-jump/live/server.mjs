@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createIdentityVerifier } from './identity.mjs';
 import { createEnrollment } from './enrollment.mjs';
-import { createRegistry, fail } from './registry.mjs';
+import { createRegistry, fail, RESULT_STORAGE_POLICY, RANKING_V2_ACCEPT } from './registry.mjs';
 import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
 
 export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, authenticate = createIdentityVerifier({ communityId }), registry = createRegistry({ directory, communityId }), enrollment = createEnrollment({ authenticate, communityId, directory }) } = {}) {
@@ -21,7 +21,8 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
         // Game writes, entry and stream retain their existing origin policy.
         const source = req.headers.origin;
         if (source && ![origin, 'https://padlhub.ru'].includes(source)) fail(403, 'ORIGIN_DENIED');
-        if (source) { res.setHeader('Access-Control-Allow-Origin', source); res.setHeader('Vary', 'Origin'); }
+        res.setHeader('Vary', 'Origin, Accept');
+        if (source) res.setHeader('Access-Control-Allow-Origin', source);
         if (url.searchParams.size !== 1 || url.searchParams.get('communityId') !== communityId) fail(404, 'JUMP_COMMUNITY_NOT_CONFIGURED');
         if (req.method === 'OPTIONS') {
           const headers = String(req.headers['access-control-request-headers'] ?? '').split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
@@ -30,9 +31,9 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
         }
         if (req.method !== 'GET') fail(405, 'METHOD_NOT_ALLOWED');
         const actor = await authenticate(req);
-        return response(res, 200, registry.communityRanking(actor));
+        return response(res, 200, registry.communityRanking(actor, { allTime: req.headers.accept === RANKING_V2_ACCEPT }));
       }
-      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, lives: LIVE_LIVES, communityConfigured: !!communityId, persistence: !!directory });
+      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, lives: LIVE_LIVES, resultStoragePolicy: RESULT_STORAGE_POLICY, communityConfigured: !!communityId, persistence: !!directory });
       if (path === '/jump-live-api/me' && req.method === 'GET') return response(res, 200, await authenticate(req));
       if (path === '/jump-live-api/entry' && req.method === 'GET') return response(res, 200, await enrollment.status(req));
       if (path === '/jump-live-api/board' && req.method === 'GET') return response(res, 200, registry.board());

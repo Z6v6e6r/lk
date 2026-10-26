@@ -140,16 +140,17 @@ def package(args):
     require(backend['sourceCommit'] == source and backend['sourceDirty'] is False and backend['engine'] == before['runtime']['health']['engine'], 'BACKEND_INCOMPATIBLE')
     require(backend.get('sync') == 'full-game-v1', 'BACKEND_SYNC_INCOMPATIBLE')
     require(backend.get('rule') == 'five-lives-stars-v2' and backend.get('lives') == 5, 'BACKEND_RULE_INCOMPATIBLE')
+    require(backend.get('resultStoragePolicy') == 'permanent-v1', 'BACKEND_STORAGE_POLICY_REQUIRED')
     for name in ['server.mjs', 'release.json']: files['backend/' + name] = Path('dist/padel-jump-live', name).read_bytes()
     require(digest(files['backend/server.mjs']) == backend['files']['server.mjs']['sha256'], 'BACKEND_HASH_DRIFT')
-    release = {'schema': 'PADLHUB_JUMP_ADMISSION_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': backend['engine'], 'sync': backend['sync'], 'rule': backend['rule'], 'lives': backend['lives'], 'ciRuns': [c['url'] for c in checks], 'files': {n.removeprefix('frontend/'): {'sha256': digest(d), 'size': len(d)} for n, d in files.items() if n.startswith('frontend/')}}
+    release = {'schema': 'PADLHUB_JUMP_ADMISSION_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': backend['engine'], 'sync': backend['sync'], 'rule': backend['rule'], 'lives': backend['lives'], 'resultStoragePolicy': backend['resultStoragePolicy'], 'ciRuns': [c['url'] for c in checks], 'files': {n.removeprefix('frontend/'): {'sha256': digest(d), 'size': len(d)} for n, d in files.items() if n.startswith('frontend/')}}
     files['frontend/release.json'] = (json.dumps(release, indent=2) + '\n').encode()
     args.output.mkdir(mode=0o700)
     with tarfile.open(args.output / 'payload.tar', 'w') as archive:
         for name, data in sorted(files.items()):
             entry = tarfile.TarInfo(name); entry.size = len(data); entry.mode = 0o644; archive.addfile(entry, io.BytesIO(data))
     code = Path(__file__).read_bytes(); (args.output / 'publisher.py').write_bytes(code)
-    plan = {'sourceCommit': source, 'preimage': before, 'unitCandidate': unit, 'engine': backend['engine'], 'sync': backend['sync'], 'rule': backend['rule'], 'lives': backend['lives'], 'publisherSha256': digest(code), 'archiveSha256': sha(args.output / 'payload.tar'), 'files': {n: digest(d) for n, d in files.items()}}
+    plan = {'sourceCommit': source, 'preimage': before, 'unitCandidate': unit, 'engine': backend['engine'], 'sync': backend['sync'], 'rule': backend['rule'], 'lives': backend['lives'], 'resultStoragePolicy': backend['resultStoragePolicy'], 'publisherSha256': digest(code), 'archiveSha256': sha(args.output / 'payload.tar'), 'files': {n: digest(d) for n, d in files.items()}}
     (args.output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n'); (args.output / 'release.json').write_bytes(files['frontend/release.json'])
     print(json.dumps({'sourceCommit': source, 'files': len(files), 'archiveSha256': plan['archiveSha256']}))
 
@@ -176,10 +177,36 @@ def recover(plan, upload):
     expected_unit = plan['unitCandidate'] if unit_hash == digest(plan['unitCandidate'].encode()) else plan['preimage']['unit']
     check_protected(plan, target, expected_unit)
     old = plan['preimage']['runtime']; require(sha(RELEASES / old['sourceCommit'] / 'server.mjs') == old['sha256'], 'RECOVERY_BACKEND_DRIFT')
+    if plan.get('resultStoragePolicy') == 'permanent-v1' and old['health'].get('resultStoragePolicy') != 'permanent-v1':
+        if unit_hash == digest(plan['preimage']['unit'].encode()):
+            # CAS never activated the permanent executable. Do not restart the
+            # unchanged legacy process or pretend permanence has been enabled.
+            require(not (upload / 'phase-unit.json').exists() and runtime() == old, 'LEGACY_RECOVERY_UNSAFE')
+            durable(upload / 'recovery-receipt.json', {'status': 'UNCHANGED_BEFORE_PERMANENT_ACTIVATION', 'dataPreserved': True})
+            return
+        # The previous executable deletes old receipts. Keep the new unit on
+        # disk and fail closed rather than run a destructive legacy rollback.
+        run('systemctl', 'stop', SERVICE)
+        require(run('systemctl', 'show', '-p', 'ActiveState', '--value', SERVICE) == 'inactive', 'PERMANENT_SAFE_STOP_FAILED')
+        check_protected(plan, target, plan['unitCandidate'])
+        try:
+            # CAS may have succeeded before the first daemon-reload. A stopped
+            # manager must not retain a cached legacy ExecStart for later start.
+            run('systemctl', 'daemon-reload')
+            cached = run('systemctl', 'show', '-p', 'ExecStart', '--value', SERVICE)
+            require(str(RELEASES / plan['sourceCommit'] / 'server.mjs') in cached and str(RELEASES / old['sourceCommit'] / 'server.mjs') not in cached, 'PERMANENT_MANAGER_EXEC_DRIFT')
+            require(run('systemctl', 'show', '-p', 'WorkingDirectory', '--value', SERVICE) == str(RELEASES / plan['sourceCommit']), 'PERMANENT_MANAGER_DIRECTORY_DRIFT')
+            require(run('systemctl', 'show', '-p', 'ActiveState', '--value', SERVICE) == 'inactive', 'PERMANENT_SAFE_STOP_FAILED')
+        except Exception as error:
+            durable(upload / 'recovery-receipt.json', {'status': 'SAFE_STOPPED_MANAGER_UNKNOWN', 'legacyRollbackBlocked': True, 'dataPreserved': True, 'startForbiddenUntilVerifiedReload': True})
+            raise RuntimeError('PERMANENT_MANAGER_RECOVERY_REQUIRED') from error
+        durable(upload / 'recovery-receipt.json', {'status': 'SAFE_STOPPED', 'legacyRollbackBlocked': True, 'resultStoragePolicy': 'permanent-v1', 'dataPreserved': True, 'managerPermanentAndInactive': True})
+        return
     if unit_hash != digest(plan['preimage']['unit'].encode()): write_atomic(UNIT, plan['preimage']['unit'].encode(), unit_hash)
     run('systemctl', 'daemon-reload'); run('systemctl', 'restart', SERVICE)
     restored = verify_backend(old['sourceCommit'], old['sha256'], plan['engine'])
     require(restored['health'].get('rule') == old['health'].get('rule') and restored['health'].get('lives') == old['health'].get('lives'), 'RECOVERY_RULE_DRIFT')
+    require(restored['health'].get('resultStoragePolicy') == old['health'].get('resultStoragePolicy'), 'RECOVERY_STORAGE_POLICY_DRIFT')
     check_protected(plan, target, plan['preimage']['unit'])
     durable(upload / 'recovery-receipt.json', {'status': 'RECOVERED', 'previousSource': old['sourceCommit'], 'dataPreserved': True})
 
@@ -193,7 +220,7 @@ def apply(upload, plan):
     require(all(digest(data) == plan['files'][name] for name, data in files.items()), 'PAYLOAD_HASH_DRIFT')
     require(all(name in files for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html', 'backend/server.mjs', 'backend/release.json']), 'ENTRY_MISSING')
     for name in ['frontend/release.json', 'backend/release.json']:
-        release = json.loads(files[name]); require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'] and release.get('sync') == plan.get('sync') == 'full-game-v1' and release.get('rule') == plan.get('rule') == 'five-lives-stars-v2' and release.get('lives') == plan.get('lives') == 5, 'RELEASE_DRIFT')
+        release = json.loads(files[name]); require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'] and release.get('sync') == plan.get('sync') == 'full-game-v1' and release.get('rule') == plan.get('rule') == 'five-lives-stars-v2' and release.get('lives') == plan.get('lives') == 5 and release.get('resultStoragePolicy') == plan.get('resultStoragePolicy') == 'permanent-v1', 'RELEASE_DRIFT')
     require(json.loads(files['backend/release.json'])['files']['server.mjs']['sha256'] == plan['files']['backend/server.mjs'], 'BACKEND_MANIFEST_DRIFT')
     target = WEB / ('padel-jump-team-' + plan['sourceCommit'][:8]); backend = RELEASES / plan['sourceCommit']
     require(not os.path.lexists(target) and not os.path.lexists(backend), 'TARGET_EXISTS')
@@ -207,6 +234,7 @@ def apply(upload, plan):
         current = verify_backend(plan['sourceCommit'], plan['files']['backend/server.mjs'], plan['engine'])
         require(current['health'].get('sync') == plan['sync'], 'RUNTIME_SYNC_DRIFT')
         require(current['health'].get('rule') == plan['rule'] and current['health'].get('lives') == plan['lives'], 'RUNTIME_RULE_DRIFT')
+        require(current['health'].get('resultStoragePolicy') == plan['resultStoragePolicy'], 'RUNTIME_STORAGE_POLICY_DRIFT')
         publish_directory(target, {n.removeprefix('frontend/'): d for n, d in files.items() if n.startswith('frontend/')})
         check_protected(plan, target, plan['unitCandidate'])
         for name, value in plan['files'].items(): require(sha((target if name.startswith('frontend/') else backend) / name.split('/', 1)[1]) == value, 'INSTALLED_HASH_DRIFT')
