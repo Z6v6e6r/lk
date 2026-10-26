@@ -34,7 +34,7 @@ test('client GET keeps token out of URL, omits cookies and forwards cancellation
   assert.equal(url.origin, 'https://padlhub.su'); assert.equal(url.pathname, '/jump-live-api/community-ranking');
   assert.deepEqual([...url.searchParams], [['communityId', communityId]]);
   assert.ok(!requested.url.includes('fixture-secret')); assert.equal(requested.init.credentials, 'omit');
-  assert.equal(requested.init.headers.Authorization, 'Bearer fixture-secret'); assert.equal(requested.init.cache, 'no-store');
+  assert.equal(requested.init.headers.Authorization, 'Bearer fixture-secret'); assert.equal(requested.init.headers.Accept, 'application/vnd.padlhub.jump-community-ranking.v2+json'); assert.equal(requested.init.cache, 'no-store');
   assert.equal(result.me.stars, 6);
   for (const status of [401, 403, 503]) await assert.rejects(load(communityId, controller.signal, { token: 'fixture', fetcher: async () => new Response('private-upstream-value', { status }) }), error => error.status === status && !error.message.includes('private-upstream-value'));
   await assert.rejects(load(communityId, controller.signal, { token: '', fetcher: () => { throw new Error('must not fetch'); } }), error => error.status === 401);
@@ -66,4 +66,23 @@ test('actual result renders stars and precise time, self marker is server-owned 
   assert.match(empty, /Заездов пока нет/); assert.ok(!empty.includes('★ 0'));
   const unplayed = renderToStaticMarkup(React.createElement(Results, { data: data({ rows: [other], me: null }) }));
   assert.match(unplayed, /ещё нет завершённого заезда/);
+});
+
+
+test('permanent v2 accepts profiles beyond old capacity and nullable retention; legacy v1 stays explicitly windowed', async () => {
+  const rows = Array.from({ length: 100 }, (_, index) => row({ rank: index + 1, stars: 1000 - index, isCurrentUser: false }));
+  const me = row({ rank: 601, stars: 1 });
+  const allTime = data({ schema: 'jump-community-ranking-v2', retentionHours: null, total: 601, rows, me });
+  const parsed = parse(JSON.stringify(allTime), communityId);
+  assert.equal(parsed.total, 601); assert.equal(parsed.me.rank, 601); assert.equal(parsed.retentionHours, null);
+  const loaded = await load(communityId, new AbortController().signal, { token: 'fixture', fetcher: async (_, init) => {
+    assert.equal(init.headers.Accept, 'application/vnd.padlhub.jump-community-ranking.v2+json');
+    return new Response(JSON.stringify(allTime));
+  } });
+  assert.equal(loaded.schema, 'jump-community-ranking-v2');
+  const html = renderToStaticMarkup(React.createElement(Results, { data: loaded }));
+  assert.match(html, /Моя позиция/); assert.match(html, /Место 601/);
+  for (const change of [{ schema: 'jump-community-ranking-v1' }, { retentionHours: 48 }, { retentionHours: 0 }, { total: Number.MAX_SAFE_INTEGER + 1 }]) assert.throws(() => parse(JSON.stringify({ ...allTime, ...change }), communityId));
+  assert.throws(() => parse(JSON.stringify(data({ retentionHours: null })), communityId));
+  assert.equal(parse(JSON.stringify(data()), communityId).retentionHours, 48);
 });
