@@ -53,6 +53,8 @@ test('ACK identity, sequence and full-state marker mismatch stop transport befor
     (ack: LiveAck) => { (ack as { sync: string }).sync = 'old'; },
     (ack: LiveAck) => { ack.seq++; },
     (ack: LiveAck) => { ack.player.id = 'another-run'; },
+    (ack: LiveAck) => { ack.player.livesRemaining = 6; },
+    (ack: LiveAck) => { ack.player.state = 'eliminated'; },
   ]) {
     const r = registry(), ticket = r.join(body(), actor), errors: string[] = []; let acknowledgements = 0;
     const connection = createRaceTransport(ticket, () => { acknowledgements++; }, message => errors.push(message), async () => {

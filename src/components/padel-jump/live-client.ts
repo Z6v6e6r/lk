@@ -1,5 +1,5 @@
 import { readAuthToken } from '../../utils/authTokenStorage';
-import { LIVE_API, LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC } from './live-contract';
+import { LIVE_API, LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC, LIVE_LIVES } from './live-contract';
 import { createRaceTransport } from './race-connection';
 import type { LiveAck, LiveTicket } from './race-connection';
 export type { LiveAck, LiveTicket } from './race-connection';
@@ -11,7 +11,7 @@ export const LIVE_ERRORS: Record<string, string> = {
   ENROLLMENT_JOIN_UNCONFIRMED: 'Анкета сохранена, но вступление пока не подтверждено. Нажми «Проверить ещё раз».', COMMUNITY_INVITE_UNAVAILABLE: 'Приглашение сообщества недоступно. Обратись к организатору.', ENROLLMENT_BUSY: 'Сейчас вступают другие участники. Повтори чуть позже.', ENROLLMENT_LIMIT: 'Лимит анкет достигнут. Обратись к организатору.',
   COMMUNITY_NOT_CONFIGURED: 'Заезды подключатся после создания сообщества.', PROFILE_AUTH_REQUIRED: 'Войди в личный кабинет и открой заезд из сообщества.', COMMUNITY_MEMBER_REQUIRED: 'Для участия вступи в сообщество мероприятия.', PROFILE_ALREADY_RUNNING: 'У этого профиля уже есть заезд. Вернись к нему или подожди отключения.',
   EVENT_FULL: 'На экране уже 12 участников. Попробуй чуть позже.', ALIAS_INVALID: 'Введи псевдоним до 24 символов без служебных знаков.',
-  RULES_CHANGED: 'Правила обновились. Перезагрузи страницу.', RUN_ACCESS_DENIED: 'Заезд отключён или связь отсутствовала дольше 10 секунд. Начни новый заезд.',
+  RULES_CHANGED: 'Правила обновились. Открой последнюю версию игры.', RUN_ELIMINATED: 'Все 5 жизней потрачены. Начни новый заезд с Ясенево.', RUN_ACCESS_DENIED: 'Заезд отключён или связь отсутствовала дольше 10 секунд. Начни новый заезд.',
   REPLAY_TOO_FAST: 'Сервер не подтвердил синхронизацию времени. Начни новый заезд.', SERVICE_UNAVAILABLE: 'Сервер заездов пока недоступен. Обычная игра продолжает работать.',
   INPUTS_NOT_RUNNING: 'Сервер уже остановил движение на этом участке. Начни новый заезд.', EXCESS_INPUTS: 'Движения после завершения участка не подтверждены. Начни новый заезд.', SEQUENCE_CONFLICT: 'Порядок обновлений заезда нарушился. Начни новый заезд.', CHECKPOINT_NOT_READY: 'Сервер ещё не подтвердил финиш участка.', RETRY_NOT_READY: 'Сервер ещё не подтвердил завершение попытки.', ALREADY_PAUSED: 'Заезд уже находится на паузе.', NOT_PAUSED: 'Пауза заезда не подтверждена.', RUN_FINISHED: 'Заезд уже завершён.',
 };
@@ -31,7 +31,7 @@ export function createRaceConnection(ticket: LiveTicket, ack: (v: LiveAck) => vo
 }
 export async function joinRace(signal: AbortSignal): Promise<LiveTicket> {
   const ticket = await liveRequest<LiveTicket>('runs', { consent: true, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE }, signal);
-  if (ticket.engine !== LIVE_ENGINE_VERSION || ticket.rule !== LIVE_RULE || ticket.sync !== LIVE_SYNC || !/^[a-f0-9-]{36}$/.test(ticket.id) || !/^[a-f0-9]{64}$/.test(ticket.token) || ticket.seq !== 0 || ticket.player?.game?.campaign?.station !== 0) throw new Error('Сервер вернул другую версию заезда. Обнови страницу.');
+  if (ticket.engine !== LIVE_ENGINE_VERSION || ticket.rule !== LIVE_RULE || ticket.sync !== LIVE_SYNC || !/^[a-f0-9-]{36}$/.test(ticket.id) || !/^[a-f0-9]{64}$/.test(ticket.token) || ticket.seq !== 0 || ticket.player?.game?.campaign?.station !== 0 || ticket.player.failures !== 0 || ticket.player.livesRemaining !== LIVE_LIVES) throw new Error('Сервер вернул другую версию заезда. Обнови страницу.');
   return ticket;
 }
 

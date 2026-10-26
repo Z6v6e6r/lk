@@ -3,6 +3,7 @@ import io
 import json
 import contextlib
 import os
+import shutil
 import importlib.util
 import sys
 sys.dont_write_bytecode = True
@@ -116,13 +117,13 @@ class JumpDeployment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             base = Path(root).resolve(); upload = base / 'upload'; upload.mkdir(); web = base / 'web'; web.mkdir()
             old = web / 'old-game.html'; old.write_bytes(b'original')
-            before = {'protected': {'old': frontend.sha(old)}, 'backend': {'sourceCommit': 'b' * 40, 'engine': 'e' * 64}}
-            release = {'sourceCommit': 'a' * 40, 'sourceDirty': False, 'engine': 'e' * 64, 'backendSourceCommit': 'b' * 40}
+            before = {'protected': {'old': frontend.sha(old)}, 'backend': {'sourceCommit': 'b' * 40, 'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5}}
+            release = {'sourceCommit': 'a' * 40, 'sourceDirty': False, 'engine': 'e' * 64, 'backendSourceCommit': 'b' * 40, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5}
             files = {name: b'fixture-public-html' for name in ['padel-jump.html', 'padel-jump-race.html', 'padel-jump-live.html']}; files['release.json'] = json.dumps(release).encode()
             with tarfile.open(upload / 'payload.tar', 'w') as tar:
                 for name, data in files.items():
                     m = tarfile.TarInfo(name); m.size = len(data); tar.addfile(m, io.BytesIO(data))
-            plan = {'sourceCommit': 'a' * 40, 'engine': 'e' * 64, 'publisherSha256': frontend.sha(frontend.__file__), 'archiveSha256': frontend.sha(upload / 'payload.tar'), 'preimage': before, 'files': {name: frontend.digest(data) for name, data in files.items()}}
+            plan = {'sourceCommit': 'a' * 40, 'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5, 'publisherSha256': frontend.sha(frontend.__file__), 'archiveSha256': frontend.sha(upload / 'payload.tar'), 'preimage': before, 'files': {name: frontend.digest(data) for name, data in files.items()}}
             (upload / 'plan.json').write_text(json.dumps(plan))
             class Libc:
                 def renameat2(self, source_fd, source, target_fd, target, flags):
@@ -130,6 +131,12 @@ class JumpDeployment(unittest.TestCase):
                     if os.path.lexists(target): return -1
                     os.rename(source, target); return 0
             with patch.object(frontend, 'WEB', web), patch.object(frontend, 'snapshot', return_value=before), patch.object(frontend.ctypes, 'CDLL', return_value=Libc()), patch.object(frontend, 'run') as run:
+                for field, wrong in [('rule', 'active-total-community-v1'), ('lives', 4), ('sync', 'old-sync'), ('sync', None)]:
+                    (upload / 'plan.json').write_text(json.dumps({**plan, field: wrong}))
+                    with self.assertRaisesRegex(RuntimeError, 'BACKEND_SYNC_INCOMPATIBLE' if field == 'sync' else 'BACKEND_RULE_INCOMPATIBLE'): frontend.apply(upload)
+                    run.assert_not_called(); self.assertFalse((web / 'padel-jump-team-aaaaaaaa').exists())
+                    shutil.rmtree(upload / 'unpacked')
+                (upload / 'plan.json').write_text(json.dumps(plan))
                 with contextlib.redirect_stdout(io.StringIO()): frontend.apply(upload)
                 run.assert_not_called()
                 self.assertEqual(old.read_bytes(), b'original')
@@ -192,16 +199,16 @@ class JumpUpdate(unittest.TestCase):
                 return {'files': {str(p): {'sha256': update.sha(p), 'realpath': str(p)} for p in [unit, env]}, 'lkPointer': 'unchanged-pointer'}
             def runtime():
                 source = new if new in unit.read_text() else old
-                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'communityConfigured': True, 'persistence': True}}
+                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'rule': ('wrong-rule' if failure == 'rule' else 'five-lives-community-v2') if source == new else 'active-total-community-v1', 'lives': 5 if source == new else None, 'communityConfigured': True, 'persistence': True}}
             before = {'host': update.HOST, 'unit': original, 'protected': private_snapshot(), 'runtime': runtime(), 'data': dict(data)}
-            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1'}
+            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5}
             backend_release = {**release, 'files': {'server.mjs': {'sha256': update.digest(b'new-backend')}}}
             files = {name: b'public-fixture' for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html']}
             files.update({'frontend/release.json': json.dumps(release).encode(), 'backend/server.mjs': b'new-backend', 'backend/release.json': json.dumps(backend_release).encode()})
             with tarfile.open(upload / 'payload.tar', 'w') as archive:
                 for name, value in files.items():
                     member = tarfile.TarInfo(name); member.size = len(value); archive.addfile(member, io.BytesIO(value))
-            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
+            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5, 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
             commands = []
             def run(*args):
                 commands.append(args)
@@ -230,7 +237,7 @@ class JumpUpdate(unittest.TestCase):
                     self.assertTrue((web / ('padel-jump-team-' + new[:8]) / 'padel-jump-race.html').exists())
                     with self.assertRaisesRegex(RuntimeError, 'FRONTEND_VISIBLE_RECONCILIATION_REQUIRED'): update.recover(plan, upload)
                 elif failure:
-                    with self.assertRaisesRegex(RuntimeError, 'RUNTIME_SYNC_DRIFT' if failure == 'sync' else 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
+                    with self.assertRaisesRegex(RuntimeError, 'RUNTIME_SYNC_DRIFT' if failure == 'sync' else 'RUNTIME_RULE_DRIFT' if failure == 'rule' else 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
                     self.assertEqual(unit.read_text(), original); self.assertTrue((upload / 'recovery-receipt.json').exists()); self.assertFalse((upload / 'receipt.json').exists())
                     self.assertFalse((web / ('padel-jump-team-' + new[:8])).exists())
                 else:
@@ -242,6 +249,7 @@ class JumpUpdate(unittest.TestCase):
     def test_update_rehearsal_preserves_existing_and_new_private_data(self): self.rehearsal()
     def test_failed_verification_recovers_old_backend_without_deleting_new_forms(self): self.rehearsal(failure=True)
     def test_wrong_backend_sync_blocks_frontend_and_recovers_previous_backend(self): self.rehearsal(failure='sync')
+    def test_wrong_backend_rule_blocks_frontend_and_recovers_previous_backend(self): self.rehearsal(failure='rule')
     def test_post_rename_fsync_failure_keeps_compatible_backend_for_readback(self): self.rehearsal(after_publication='rename-fsync')
     def test_receipt_failure_keeps_compatible_backend_for_readback(self): self.rehearsal(after_publication='receipt')
 

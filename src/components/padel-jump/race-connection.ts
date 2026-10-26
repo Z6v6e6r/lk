@@ -1,7 +1,7 @@
 import type { InputBlock, LiveCommand, LivePlayer, LiveResult } from './live-contract';
 import type { Game } from './engine';
 import { predictRaceAcknowledgement } from './race-prediction.ts';
-import { LIVE_SYNC } from './live-contract.ts';
+import { LIVE_SYNC, LIVE_LIVES } from './live-contract.ts';
 
 export type LiveAck = { seq: number; player: LivePlayer; result?: LiveResult; prediction?: Game; sync: typeof LIVE_SYNC };
 export type LiveTicket = LiveAck & { id: string; token: string; engine: string; rule: string };
@@ -28,7 +28,10 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
         finally { clearTimeout(timer); }
       }
       if (active && result) {
-        if (result.sync !== LIVE_SYNC || result.seq !== body.seq || result.player?.id !== ticket.id) throw new Error('Обнови страницу: сервер вернул несовместимое состояние заезда.');
+        if (result.sync !== LIVE_SYNC || result.seq !== body.seq || result.player?.id !== ticket.id
+          || !Number.isInteger(result.player.failures) || result.player.failures < 0 || result.player.failures > LIVE_LIVES
+          || result.player.livesRemaining !== LIVE_LIVES - result.player.failures
+          || (result.player.state === 'eliminated') !== (result.player.livesRemaining === 0)) throw new Error('Обнови страницу: сервер вернул несовместимое состояние заезда.');
         latest = result;
         const prediction = predictRaceAcknowledgement(result.player, blocks);
         blocks = prediction.inputs; count = blocks.reduce((n, block) => n + block[1], 0);
@@ -60,6 +63,7 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
         await queue;
         if (blocks.length) { const inputs = blocks; blocks = []; count = 0; await send('inputs', inputs, command === 'finish'); }
         const paused = latest.player.state === 'paused', mode = latest.player.game.mode;
+        if (latest.player.state === 'eliminated') { if (command === 'finish') finalizing = false; return false; }
         if ((command === 'advance' || command === 'finish') && (mode !== 'complete' || paused)
           || command === 'retry' && (mode !== 'over' || paused)
           || command === 'resume' && !paused || command === 'pause' && paused) { if (command === 'finish') finalizing = false; return false; }

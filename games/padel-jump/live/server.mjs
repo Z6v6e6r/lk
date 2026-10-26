@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createIdentityVerifier } from './identity.mjs';
 import { createEnrollment } from './enrollment.mjs';
 import { createRegistry, fail } from './registry.mjs';
-import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC } from '../../../src/components/padel-jump/live-contract.ts';
+import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
 
 export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, authenticate = createIdentityVerifier({ communityId }), registry = createRegistry({ directory, communityId }), enrollment = createEnrollment({ authenticate, communityId, directory }) } = {}) {
   const viewers = new Set(), rates = new Map();
@@ -16,7 +16,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
       for (const [k, rate] of rates) if (at - rate.at > 60000) rates.delete(k);
       if (rates.size >= 2048 && !rates.has(key)) fail(429, 'RATE_LIMIT');
       const rate = rates.get(key) ?? { at, count: 0 }; rates.set(key, rate); if (++rate.count > requestLimit) fail(429, 'RATE_LIMIT');
-      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, communityConfigured: !!communityId, persistence: !!directory });
+      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, lives: LIVE_LIVES, communityConfigured: !!communityId, persistence: !!directory });
       if (path === '/jump-live-api/me' && req.method === 'GET') return response(res, 200, await authenticate(req));
       if (path === '/jump-live-api/entry' && req.method === 'GET') return response(res, 200, await enrollment.status(req));
       if (path === '/jump-live-api/board' && req.method === 'GET') return response(res, 200, registry.board());

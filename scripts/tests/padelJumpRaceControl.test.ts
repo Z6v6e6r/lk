@@ -79,6 +79,18 @@ test('fall → retry resets the entire simulation and can finish each Yasenevo s
   assert.deepEqual(h.errors, []); h.connection.dispose();
 });
 
+test('fifth failure ACK cannot send another retry or resume predicted gameplay', async () => {
+  const h = harness();
+  for (let loss = 1; loss <= 5; loss++) {
+    await (await h.drive(true)).pending;
+    assert.equal(h.acknowledgements.at(-1)!.player.livesRemaining, 5 - loss);
+    if (loss < 5) await h.control.command('retry');
+  }
+  const count = h.sent.length;
+  await h.control.command('retry'); assert.equal(h.sent.length, count); assert.equal(h.game.mode, 'over'); assert.equal(h.connection.canStep(), false);
+  assert.equal(h.acknowledgements.at(-1)!.player.state, 'eliminated'); assert.deepEqual(h.errors, []); h.connection.dispose();
+});
+
 for (const fail of [false, true]) test(`server ${fail ? 'failure' : 'first 190m checkpoint'} ACK discards only unsent prediction tail and keeps waiting heartbeat valid`, async () => {
   const h = harness(); h.hold((body, ack) => body.command === 'inputs' && ack.player.game.mode === (fail ? 'over' : 'complete'));
   const terminal = await h.drive(fail);

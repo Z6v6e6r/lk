@@ -46,7 +46,7 @@ def snapshot(ignore=None):
     for path in ['/etc/systemd/system/padlhub-jump-live.service', '/etc/padlhub-jump-live.env']:
         protected[path] = {'sha256': sha(path), 'realpath': str(Path(path).resolve())}
     return {'host': HOST, 'protected': protected, 'lkPointer': str(Path('/var/www/html/lk-frontend-current').resolve()),
-            'backend': {'pid': int(pid), 'sourceCommit': match[1], 'sha256': sha(backend), 'engine': health['engine'], 'rule': health['rule']}}
+            'backend': {'pid': int(pid), 'sourceCommit': match[1], 'sha256': sha(backend), 'engine': health['engine'], 'rule': health['rule'], 'lives': health.get('lives'), 'sync': health.get('sync')}}
 
 def public_file(relative, data):
     if relative == 'manifest.json':
@@ -65,6 +65,11 @@ def package(args):
     contract = Path('src/components/padel-jump/live-contract.ts').read_text()
     engine = re.search(r"LIVE_ENGINE_VERSION = '([a-f0-9]{64})'", contract)[1]
     require(engine == before['backend']['engine'], 'BACKEND_ENGINE_INCOMPATIBLE')
+    sync = re.search(r"LIVE_SYNC = '([a-z0-9-]+)'", contract)[1]
+    require(sync == before['backend'].get('sync'), 'BACKEND_SYNC_INCOMPATIBLE')
+    rule = re.search(r"LIVE_RULE = '([a-z0-9-]+)'", contract)[1]
+    lives = int(re.search(r"LIVE_LIVES = ([0-9]+)", contract)[1])
+    require(rule == before['backend'].get('rule') and lives == before['backend'].get('lives'), 'BACKEND_RULE_INCOMPATIBLE')
     subprocess.run(['npx', 'vite', 'build', '--config', 'games/padel-jump/vite.config.ts'], check=True)
     require(not git('status', '--porcelain') and git('rev-parse', 'HEAD') == source, 'SOURCE_BUILD_DRIFT')
     args.output.mkdir(mode=0o700); files = {}
@@ -73,13 +78,13 @@ def package(args):
         if not path.is_file(): continue
         name = str(path.relative_to('dist/padel-jump')); data = path.read_bytes()
         if public_file(name, data): files[name] = data
-    release = {'schema': 'PADLHUB_JUMP_FRONTEND_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': engine, 'backendSourceCommit': before['backend']['sourceCommit'], 'ciRun': ci['url'], 'files': {name: {'sha256': digest(data), 'size': len(data)} for name, data in files.items()}}
+    release = {'schema': 'PADLHUB_JUMP_FRONTEND_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': engine, 'rule': rule, 'lives': lives, 'sync': sync, 'backendSourceCommit': before['backend']['sourceCommit'], 'ciRun': ci['url'], 'files': {name: {'sha256': digest(data), 'size': len(data)} for name, data in files.items()}}
     files['release.json'] = (json.dumps(release, indent=2) + '\n').encode()
     with tarfile.open(args.output / 'payload.tar', 'w') as tar:
         for name, data in sorted(files.items()):
             entry = tarfile.TarInfo(name); entry.size = len(data); entry.mode = 0o644; tar.addfile(entry, io.BytesIO(data))
     publisher = Path(__file__).read_bytes(); (args.output / 'publisher.py').write_bytes(publisher)
-    plan = {'sourceCommit': source, 'preimage': before, 'engine': engine, 'publisherSha256': digest(publisher), 'archiveSha256': sha(args.output / 'payload.tar'), 'files': {name: digest(data) for name, data in files.items()}}
+    plan = {'sourceCommit': source, 'preimage': before, 'engine': engine, 'rule': rule, 'lives': lives, 'sync': sync, 'publisherSha256': digest(publisher), 'archiveSha256': sha(args.output / 'payload.tar'), 'files': {name: digest(data) for name, data in files.items()}}
     (args.output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n'); (args.output / 'release.json').write_bytes(files['release.json'])
     print(json.dumps({'sourceCommit': source, 'files': len(files), 'archiveSha256': plan['archiveSha256']}))
 
@@ -106,6 +111,8 @@ def apply(upload):
     release = json.loads((temporary / 'release.json').read_text())
     require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'] == plan['preimage']['backend']['engine'], 'RELEASE_INCOMPATIBLE')
     require(release['backendSourceCommit'] == plan['preimage']['backend']['sourceCommit'], 'BACKEND_SOURCE_DRIFT')
+    require(release.get('sync') == plan.get('sync') == plan['preimage']['backend'].get('sync') and isinstance(plan.get('sync'), str), 'BACKEND_SYNC_INCOMPATIBLE')
+    require(release.get('rule') == plan.get('rule') == plan['preimage']['backend'].get('rule') and release.get('lives') == plan.get('lives') == plan['preimage']['backend'].get('lives') and isinstance(plan.get('rule'), str) and isinstance(plan.get('lives'), int), 'BACKEND_RULE_INCOMPATIBLE')
     require(all(name in plan['files'] for name in ['padel-jump.html', 'padel-jump-race.html', 'padel-jump-live.html']), 'ENTRY_MISSING')
     stage = Path(tempfile.mkdtemp(prefix='.jump-frontend-', dir=WEB))
     for name in plan['files']:
