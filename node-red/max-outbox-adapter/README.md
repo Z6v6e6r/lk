@@ -48,6 +48,18 @@ scripts/prepare_max_outbox_receipts.mjs builds a12-node narrow patch for both kn
 MAX/academy outbox dispatch/pull ID pairs. It checks unique IDs, allowlisted
 function preimages, exact single sender wire, shared flow and an existing bot reference
 whose node type is `maxbot-config`. Missing or wrong-type config references fail closed.
+Queue ownership is pinned per pair, including its existing flow and bot config reference:
+
+| Pull node | Queue | Flow | Bot config |
+| --- | --- | --- | --- |
+| `41be3d2c95b57295` | `MAX_ACADEMY_BOT` | `99db28109ee6a1f7` | `55b05444842e7b84` |
+| `2e547e998eee631f` | `MAX_BOT` | `913584cf84dbb460` | `a5d5eca27e9e56da` |
+
+The allowlisted pull function must belong to that exact queue. Exchanging two otherwise
+valid pull functions, moving a pair to another flow, or swapping the bot references is
+rejected. This preserves the authenticated editor's existing queue-to-bot mapping.
+Previously generated candidates that assigned the queues in reverse must not be applied;
+rebuild them from a freshly attested preimage after this correction.
 It reroutes only outbox traffic to new max-outbox-send nodes and separate receipt
 HTTP nodes. Interactive/service legacy senders and inbound flows remain untouched.
 It never executes or deploys a patch. Existing broad patch_nodered_max_flow.mjs is
