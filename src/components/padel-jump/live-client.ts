@@ -13,12 +13,16 @@ export const LIVE_ERRORS: Record<string, string> = {
   EVENT_FULL: 'На экране уже 12 участников. Попробуй чуть позже.', ALIAS_INVALID: 'Введи псевдоним до 24 символов без служебных знаков.',
   RULES_CHANGED: 'Правила обновились. Перезагрузи страницу.', RUN_ACCESS_DENIED: 'Заезд отключён или связь отсутствовала дольше 10 секунд. Начни новый заезд.',
   REPLAY_TOO_FAST: 'Сервер не подтвердил синхронизацию времени. Начни новый заезд.', SERVICE_UNAVAILABLE: 'Сервер заездов пока недоступен. Обычная игра продолжает работать.',
+  INPUTS_NOT_RUNNING: 'Сервер уже остановил движение на этом участке. Начни новый заезд.', EXCESS_INPUTS: 'Движения после завершения участка не подтверждены. Начни новый заезд.', SEQUENCE_CONFLICT: 'Порядок обновлений заезда нарушился. Начни новый заезд.', CHECKPOINT_NOT_READY: 'Сервер ещё не подтвердил финиш участка.', RETRY_NOT_READY: 'Сервер ещё не подтвердил завершение попытки.', ALREADY_PAUSED: 'Заезд уже находится на паузе.', NOT_PAUSED: 'Пауза заезда не подтверждена.', RUN_FINISHED: 'Заезд уже завершён.',
 };
 export async function liveRequest<T>(path: string, body: unknown, signal: AbortSignal, token?: string): Promise<T> {
   const response = await fetch(LIVE_API + path, { method: 'POST', credentials: 'omit', signal,
     headers: { 'Content-Type': 'application/json', ...(readAuthToken() ? { Authorization: 'Bearer ' + readAuthToken() } : {}), ...(token ? { 'X-Jump-Run-Token': token } : {}) }, body: JSON.stringify(body) });
   const data = await response.json().catch(() => ({ error: 'SERVICE_UNAVAILABLE' }));
-  if (!response.ok || typeof data?.error === 'string') throw Object.assign(new Error(LIVE_ERRORS[data.error] ?? 'Не удалось подтвердить заезд. Повтори отправку.'), { status: response.status });
+  if (!response.ok || typeof data?.error === 'string') {
+    const code = typeof data?.error === 'string' && /^[A-Z_]{1,64}$/.test(data.error) ? data.error : 'SERVICE_UNAVAILABLE';
+    throw Object.assign(new Error((LIVE_ERRORS[code] ?? 'Не удалось подтвердить заезд.') + ` Код: ${code}.`), { status: response.status, code });
+  }
   return data as T;
 }
 

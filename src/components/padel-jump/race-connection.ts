@@ -7,6 +7,7 @@ type RaceRequest = (path: string, body: unknown, signal: AbortSignal, token?: st
 /** One in-flight request, ordered bounded input batches; capability remains in memory. */
 export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => void, error: (message: string, retryFinish?: boolean) => void, request: RaceRequest) {
   let sequence = 0, active = true, busy = false, blocks: InputBlock[] = [], count = 0, finalizing = false, finishInFlight = false;
+  let playable = ticket.player.state === 'playing' && ticket.player.game.mode === 'running', controls = 0;
   let retryFinish: { seq: number; command: LiveCommand; inputs?: InputBlock[] } | undefined;
   let queue = Promise.resolve(), controller: AbortController | undefined;
   const send = (command: LiveCommand, inputs?: InputBlock[], beforeFinish = false) => {
@@ -22,7 +23,13 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
         catch (e) { if (!active || attempt || e instanceof Error && !['AbortError', 'TypeError'].includes(e.name)) throw e; }
         finally { clearTimeout(timer); }
       }
-      if (active && result) { if (command === 'finish') retryFinish = undefined; ack(result); }
+      if (active && result) {
+        playable = result.player.state === 'playing' && result.player.game.mode === 'running';
+        // These are only unsent predictions. The acknowledged envelope and its
+        // sequence remain immutable; the server alone decides the checkpoint.
+        if (!playable) { blocks = []; count = 0; }
+        if (command === 'finish') retryFinish = undefined; ack(result);
+      }
     }).catch((e: unknown) => { if (active) {
       const retry = command === 'finish' && envelope && (e instanceof TypeError || e instanceof Error && (e.name === 'AbortError' || 'status' in e && e.status === 503));
       if (retry) retryFinish = envelope; else active = false;
@@ -31,15 +38,16 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
     return queue;
   };
   return {
-    record(direction: number) { if (!active || finalizing) return; const value = Math.round(direction * 100), last = blocks.at(-1); if (last?.[0] === value && last[1] < 120) last[1]++; else blocks.push([value, 1]); count++; },
-    canStep: () => active && !finalizing && count < 240 && blocks.length < 120,
+    record(direction: number) { if (!active || finalizing || !playable || controls) return; const value = Math.round(direction * 100), last = blocks.at(-1); if (last?.[0] === value && last[1] < 120) last[1]++; else blocks.push([value, 1]); count++; },
+    canStep: () => active && !finalizing && playable && !controls && count < 240 && blocks.length < 120,
     flush() {
-      if (busy || !active || finalizing) return queue;
+      if (busy || !active || finalizing || controls) return queue;
       const inputs = blocks; blocks = []; count = 0; busy = true;
       return send('inputs', inputs, true).finally(() => { busy = false; });
     },
     async command(command: Exclude<LiveCommand, 'inputs'>) {
       if (!active || finalizing && command !== 'finish' || command === 'finish' && finishInFlight) return queue;
+      controls++;
       // Lock admission synchronously, before awaiting already queued work. Only the
       // final buffered inputs and the identical finish envelope may follow this point.
       if (command === 'finish') { finalizing = true; finishInFlight = true; }
@@ -47,7 +55,7 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
         await queue;
         if (blocks.length) { const inputs = blocks; blocks = []; count = 0; await send('inputs', inputs, command === 'finish'); }
         await send(command);
-      } finally { if (command === 'finish') finishInFlight = false; }
+      } finally { controls--; if (command === 'finish') finishInFlight = false; }
     },
     dispose() { active = false; controller?.abort(); blocks = []; },
   };

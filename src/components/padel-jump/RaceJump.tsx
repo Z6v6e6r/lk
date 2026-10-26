@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { createCampaignGame, drainEvents, FIXED_STEP, stepGame } from './engine';
-import type { Game } from './engine';
 import { STATIONS } from './campaign';
 import { drawGame } from './render';
 import { loadYasenevoArt } from './yasenevo-assets';
@@ -13,6 +12,7 @@ import { loadStationActors } from './station-actors';
 import type { StationActors } from './station-actors';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import { readyRaceTilt } from './race-tilt';
+import { createRaceControl } from './race-control';
 import { createRaceConnection, joinRace, raceProfile } from './live-client';
 import { formatRaceTime } from './live-contract';
 import type { LiveAck } from './live-client';
@@ -26,13 +26,19 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   const [result, setResult] = useState<LiveAck['result']>(), [displayMs, setDisplayMs] = useState(0);
   const game = useRef(createCampaignGame()), canvas = useRef<HTMLCanvasElement>(null), region = useRef<HTMLElement>(null);
   const connection = useRef<ReturnType<typeof createRaceConnection> | null>(null), directions = useRef(new Map<string, number>());
-  const pausedMode = useRef<Game['mode']>('running');
-  const locked = useRef(false), pausePending = useRef(false), alive = useRef(true), ackClock = useRef({ elapsed: 0, received: 0, final: false });
+  const locked = useRef(false), alive = useRef(true), ackClock = useRef({ elapsed: 0, received: 0, final: false });
   const painting = useRef<StationPainting | null>(null), yas = useRef<YasenevoArt | null>(null), racket = useRef<RacketArt | null>(null), actors = useRef<StationActors | null>(null);
   const [tilt] = useState(() => createTiltController(browserTiltEnvironment()));
   const finalRequested = useRef(false);
   const joinAbort = useRef<AbortController | null>(null);
   const refresh = () => { const g = game.current; setView({ mode: g.mode, station: g.campaign!.station, section: g.campaign!.section, score: g.score }); };
+  const [control] = useState(() => createRaceControl({
+    game: () => game.current, replace: value => { game.current = value; }, connection: () => connection.current,
+    foreground: () => !document.hidden && document.hasFocus(), prepareResume: async () => { if (navigator.maxTouchPoints > 0) await readyRaceTilt(tilt, false); },
+    stopped: () => locked.current || !alive.current,
+    canPause: () => !finalRequested.current && !(game.current.mode === 'complete' && game.current.campaign?.station === 10 && game.current.campaign.section === 2),
+    changed: refresh, pending: setPending,
+  }));
   useEffect(() => {
     let active = true; painting.current = null; actors.current = null;
     void loadRacketArt().then(v => { if (active) racket.current = v; });
@@ -43,8 +49,8 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   }, [view.station]);
   useEffect(() => {
     alive.current = true;
-    return () => { alive.current = false; connection.current?.dispose(); joinAbort.current?.abort(); tilt.dispose(); };
-  }, [tilt]);
+    return () => { alive.current = false; control.dispose(); connection.current?.dispose(); joinAbort.current?.abort(); tilt.dispose(); };
+  }, [tilt, control]);
   useEffect(() => {
     const controller = new AbortController(); let active = true;
     void raceProfile(controller.signal).then(v => { if (active) setProfile(v); }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Профиль не подтверждён.'); }).finally(() => { if (active) setChecking(false); });
@@ -52,16 +58,13 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   }, [profileAttempt]);
   const serverAck = (v: LiveAck) => {
     if (!alive.current) return;
+    control.acknowledge(v.player);
     ackClock.current = { elapsed: v.player.elapsedMs, received: performance.now(), final: v.player.completedParts === 33 };
     if (v.player.completedParts === 33 && !v.result && !finalRequested.current) { finalRequested.current = true; void connection.current?.command('finish'); }
     if (v.result) { setResult(v.result); setDisplayMs(v.result.elapsedMs); connection.current?.dispose(); }
   };
   const networkError = (message: string, retryFinish = false) => { if (!alive.current) return; if (retryFinish) { setError(message); refresh(); return; } locked.current = true; game.current.mode = 'paused'; directions.current.clear(); setError(message); refresh(); };
-  const pause = async () => {
-    if (!connection.current || pausePending.current || locked.current || finalRequested.current || game.current.mode === 'paused' || game.current.mode === 'complete' && game.current.campaign?.station === 10 && game.current.campaign.section === 2) return;
-    pausePending.current = true; pausedMode.current = game.current.mode; game.current.mode = 'paused'; directions.current.clear(); refresh();
-    try { await connection.current.command('pause'); } finally { pausePending.current = false; }
-  };
+  const pause = () => { directions.current.clear(); return control.pause(); };
   const begin = async () => {
     if (pending || !profile) return;
     setPending(true); setError(''); joinAbort.current = new AbortController();
@@ -71,26 +74,17 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
       if (document.hidden || !document.hasFocus()) throw new Error('Вернись на страницу и нажми старт ещё раз.');
       const ticket = await joinRace(joinAbort.current.signal); if (!alive.current) return;
       connection.current?.dispose(); connection.current = createRaceConnection(ticket, serverAck, networkError);
-      game.current = createCampaignGame(); game.current.mode = 'running'; locked.current = false; setResult(undefined);
-      serverAck(ticket); refresh(); region.current?.focus();
+      game.current = createCampaignGame(); game.current.mode = 'running'; locked.current = false; control.reset(); setResult(undefined);
+      serverAck(ticket); refresh();
+      if (document.hidden || !document.hasFocus()) await control.pause();
+      else region.current?.focus();
     } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : 'Сервер заездов недоступен.'); }
     finally { if (alive.current) setPending(false); }
   };
   const command = async (action: 'retry' | 'advance' | 'resume' | 'finish') => {
-    if (!connection.current || pending || locked.current || pausePending.current) return;
-    setPending(true);
-    try {
-      if (action === 'resume' && navigator.maxTouchPoints > 0) await readyRaceTilt(tilt, false);
-      if (!alive.current) return;
-      await connection.current.command(action);
-      if (locked.current || !alive.current) return;
-      if (action === 'retry' || action === 'advance') {
-        const c = game.current.campaign!, station = action === 'advance' && c.section === 2 ? c.station + 1 : c.station;
-        const section = action === 'advance' ? (c.section + 1) % 3 : c.section;
-        game.current = createCampaignGame(station, section); game.current.mode = 'running';
-      } else if (action === 'resume') { game.current.mode = pausedMode.current; }
-      refresh(); region.current?.focus();
-    } finally { if (alive.current) setPending(false); }
+    setError('');
+    try { await control.command(action); if (alive.current && !document.hidden) region.current?.focus(); }
+    catch (reason) { if (alive.current) setError(reason instanceof Error ? reason.message : 'Не удалось продолжить заезд.'); }
   };
   useEffect(() => {
     const element = canvas.current, ctx = element?.getContext('2d'); if (!element || !ctx) return;
@@ -98,7 +92,7 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     const tick = (now: number) => {
       const seconds = previous ? Math.min(0.05, Math.max(0, (now - previous) / 1000)) : 0; previous = now;
       const g = game.current;
-      if (g.mode === 'running' && connection.current && !document.hidden && !locked.current) {
+      if (g.mode === 'running' && connection.current && control.canStep()) {
         accumulator += seconds; let direction = 0; for (const value of directions.current.values()) direction += value;
         if (!directions.current.size) direction = tilt.direction();
         direction = Math.round(Math.max(-1, Math.min(1, direction)) * 100) / 100;
@@ -126,7 +120,7 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     return () => { cancelAnimationFrame(frame); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('blur', blur); };
     // Refs keep input and transport state current; restart only when the result becomes final.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, tilt]);
+  }, [result, tilt, control]);
   const active = !!connection.current, finished = view.mode === 'complete', last = view.station === 10 && view.section === 2;
   const move = (key: string, value: number) => { if (view.mode === 'running') directions.current.set(key, value); };
   return <main className="pj-race" ref={region} tabIndex={-1} onKeyDown={e => {
@@ -139,7 +133,7 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     {active && <div className="pj-race-hud"><strong>{STATIONS[view.station].name} <small>{view.section + 1}/3</small></strong><span>{view.score} м</span><time>{formatRaceTime(displayMs)}</time><button disabled={pending || locked.current || view.mode === 'paused' || !!result} onClick={() => void pause()}>Пауза</button></div>}
     <div className="pj-race-field" hidden={!active}><canvas ref={canvas} aria-label="Заезд Jump. Веди мяч наклоном телефона, стрелками или кнопками." />
       {active && view.mode !== 'running' && <div className="pj-race-overlay"><h2>{result ? 'Финиш подтверждён' : locked.current ? 'Заезд остановлен' : finished ? 'Участок пройден!' : view.mode === 'over' ? 'Ещё одна попытка' : 'Пауза'}</h2><time>{formatRaceTime(result?.elapsedMs ?? displayMs)}</time>
-        {result ? <p>Результат сохранён в рейтинге сообщества.</p> : !locked.current && <button disabled={pending || pausePending.current} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
+        {result ? <p>Результат сохранён в рейтинге сообщества.</p> : !locked.current && <button disabled={pending} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
         {(result || locked.current) && <a href="./padel-jump-race.html">Новый заезд</a>}</div>}
     </div>
     <footer>{[-1, 1].map(d => <button key={d} aria-label={d < 0 ? 'Двигаться влево' : 'Двигаться вправо'} disabled={!active || view.mode !== 'running'}
