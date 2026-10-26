@@ -149,3 +149,41 @@
 .pj-map-complete { background: #e5f3c2; color: #4f6d1e; padding: 10px; margin-bottom: 12px; border-radius: 8px; }
 @media (max-height: 680px) { .pj-campaign-hud { padding-bottom: 7px; } .pj-dialog-actions { margin-top: 10px; gap: 7px; } }
 @media (orientation: landscape) and (max-height: 520px) { .pj-campaign-hud { padding-top: 0; padding-bottom: 4px; } .pj-dialog p[role="status"] { display: block; margin-bottom: 5px; } }
+
+/* Readable gameplay cues and touch/focus targets; artwork and colliders remain separate. */
+.pj-icon-button { min-width: 44px; min-height: 44px; }
+.pj-station { min-height: 44px; }
+.pj-station small { font-size: 10px; }
+.pj-campaign-hud { gap: 8px; padding-bottom: 8px; }
+.pj-campaign-hud > strong { font-size: 14px; }
+.pj-height { font-size: 11px; color: #63536e; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pj-field-caption { left: 50%; transform: translateX(-50%); width: max-content; max-width: 92%; top: 10px; padding: 6px 10px; border-radius: 12px; background: #17213fc9; color: #fff8eb; font-size: 10px; letter-spacing: .3px; line-height: 1.4; }
+.pj-dialog-actions button { min-height: 44px; padding: 8px 6px; font-size: 12px; }
+.pj-practice-parts button { min-height: 44px; min-width: 44px; font-size: 11px; }
+.pj-map-settings label { min-height: 44px; display: block; font-size: 12px; }
+.pj-map-settings input[type=checkbox] { width: 18px; height: 18px; }
+.pj-map-settings > button { min-height: 44px; }
+.pj-map-total { margin: 6px 0 0; font-size: 12px; color: #6d587c; }
+.pj-sensitivity output { float: right; color: #7040aa; font-weight: 700; }
+.pj-sensitivity input[type=range] { display: block; width: 100%; height: 44px; margin: 0; }
+.pj-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin: -8px 0 15px; }
+.pj-legend span { font-size: 10px; padding: 5px 7px; border-radius: 7px; background: #eee9f4; color: #5d466f; }
+.pj-art-status { font-size: 11px; color: #66536f; margin: 0 0 12px; }
+.pj-art-status button { background: transparent; text-decoration: underline; min-height: 44px; color: #7340b8; }
+.pj-controls > button { min-width: 48px; min-height: 48px; }
+.pj-controls strong { font-size: 12px; }
+.pj-controls span { font-size: 10px; line-height: 1.4; }
+@media (max-width: 360px) {
+  .pj-campaign-hud { padding-left: 12px; padding-right: 12px; gap: 5px; }
+  .pj-station { gap: 5px; }
+  .pj-station > span { font-size: 11px; }
+  .pj-station small { font-size: 9px; }
+  .pj-height { font-size: 10px; }
+  .pj-controls { padding-left: 10px; padding-right: 10px; }
+  .pj-controls span { font-size: 9px; }
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .pj-legend, .pj-art-status, .pj-height { display: none; }
+  .pj-field-caption { font-size: 9px; top: 5px; padding: 3px 7px; }
+}
+.pj-settings-link { width: 100%; min-height: 44px; background: #ede5f8; color: #6736a7 !important; font-size: 12px !important; border-radius: 10px; margin-bottom: 12px !important; }

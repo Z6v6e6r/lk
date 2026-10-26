@@ -6,6 +6,7 @@ import type { VivaOAuthProvider } from "../context/authShared";
 import { getVivaOAuthStorageKey, resolveConfiguredAuthMode } from "./authMode.ts";
 
 const VIVA_REALM = "clients";
+export type VivaOAuthCallbackMode = "cabinet" | "current-page";
 
 export type PendingVivaOAuth = {
   provider: VivaOAuthProvider;
@@ -16,7 +17,7 @@ export type PendingVivaOAuth = {
 };
 
 function canUseSessionStorage() {
-  return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined";
+  try { return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined"; } catch { return false; }
 }
 
 function encodeBase64Url(buffer: Uint8Array) {
@@ -62,8 +63,20 @@ export function buildVivaOAuthReturnUrl() {
   return currentUrl.toString();
 }
 
-export function buildVivaOAuthCallbackUrl() {
+export function isVivaOAuthCallbackUrl(href: string, mode: VivaOAuthCallbackMode = "cabinet") {
+  const query = new URL(href).searchParams;
+  // Legacy community invitations also use ?code=. Only a game self-callback
+  // or actual OAuth response signals may claim that generic parameter.
+  return query.has("error") || query.has("code") && (mode === "current-page" || query.has("state") || query.has("session_state") || query.has("iss"));
+}
+
+export function buildVivaOAuthCallbackUrl(mode: VivaOAuthCallbackMode = "cabinet") {
   const currentUrl = new URL(window.location.href);
+  if (mode === "current-page") {
+    const callback = new URL(currentUrl.pathname, currentUrl.origin);
+    callback.searchParams.set("authMode", "viva");
+    return callback.toString();
+  }
   const cabinetPath = (() => {
     try {
       return new URL(AUTH_RUNTIME_CABINET_URL, currentUrl.origin).pathname || "/lk_new";
@@ -99,6 +112,8 @@ export function readPendingVivaOAuth(): PendingVivaOAuth | null {
     ) {
       return null;
     }
+    const callback = new URL(parsed.redirectUri), target = new URL(parsed.returnTo);
+    if (callback.origin !== window.location.origin || target.origin !== window.location.origin || callback.username || callback.password || target.username || target.password) return null;
     return parsed as PendingVivaOAuth;
   } catch {
     return null;
@@ -126,11 +141,12 @@ export async function startVivaOAuthRedirect(
   clientId: string,
   tenantKey: string,
   onPending?: (pending: PendingVivaOAuth) => Promise<boolean> | boolean,
+  callbackMode: VivaOAuthCallbackMode = "cabinet",
 ) {
   const codeVerifier = generateRandomBase64Url(32);
   const codeChallenge = await createCodeChallenge(codeVerifier);
   const state = generateRandomBase64Url(16);
-  const redirectUri = buildVivaOAuthCallbackUrl();
+  const redirectUri = buildVivaOAuthCallbackUrl(callbackMode);
   const returnTo = buildVivaOAuthReturnUrl();
 
   const pending: PendingVivaOAuth = {
@@ -141,9 +157,12 @@ export async function startVivaOAuthRedirect(
     returnTo,
   };
 
-  if (canUseSessionStorage()) {
-    window.sessionStorage.setItem(getVivaOAuthStorageKey(), JSON.stringify(pending));
-  }
+  try {
+    if (!canUseSessionStorage()) throw new Error("Storage unavailable");
+    const value = JSON.stringify(pending);
+    window.sessionStorage.setItem(getVivaOAuthStorageKey(), value);
+    if (window.sessionStorage.getItem(getVivaOAuthStorageKey()) !== value) throw new Error("Storage unavailable");
+  } catch { throw new Error("OAuth session could not be stored before redirect"); }
 
   if (onPending && !await onPending(pending)) {
     clearPendingVivaOAuth();

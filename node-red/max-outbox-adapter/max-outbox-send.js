@@ -1,7 +1,7 @@
 'use strict';
 const { createHash } = require('node:crypto');
 const allowedCodes = new Set(['bot.blocked', 'bot.not.started', 'bot.removed',
-  'chat.not.found', 'dialog.not.found', 'access.denied', 'forbidden']);
+  'chat.not.found', 'dialog.not.found', 'dialog.suspended', 'access.denied', 'forbidden']);
 
 // Shared by every sender instance in this Node-RED process. At most two starts
 // per second for one addressed dialog, with no overlapping provider attempts.
