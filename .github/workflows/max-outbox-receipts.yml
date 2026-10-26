@@ -1,7 +1,7 @@
 name: MAX outbox adapter
 on:
   pull_request:
-    paths: ['node-red/max-outbox-adapter/**', 'scripts/nodered_max_nodes/fn_max_outbox*', 'scripts/prepare_max_outbox_receipts.mjs', 'scripts/tests/maxOutboxReceipts.test.mjs', 'scripts/tests/maxOutboxEditorLoader.test.mjs', 'scripts/tests/fixtures/max-outbox/**', '.github/workflows/max-outbox-receipts.yml']
+    paths: ['node-red/max-outbox-adapter/**', 'scripts/nodered_max_nodes/fn_max_outbox*', 'scripts/prepare_max_outbox_receipts.mjs', 'scripts/tests/maxOutboxReceipts.test.mjs', 'scripts/tests/maxOutboxRateLimit.test.mjs', 'scripts/tests/maxOutboxEditorLoader.test.mjs', 'scripts/tests/fixtures/max-outbox/**', '.github/workflows/max-outbox-receipts.yml']
   push:
     branches: ['codex/max-retry-receipts']
 permissions:
@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --experimental-strip-types --test scripts/tests/maxOutboxReceipts.test.mjs scripts/tests/maxSupportBridge.nodered.test.ts
+      - run: node --experimental-strip-types --test scripts/tests/maxOutboxReceipts.test.mjs scripts/tests/maxOutboxRateLimit.test.mjs scripts/tests/maxSupportBridge.nodered.test.ts
       - name: Install isolated Node-RED editor test runtime
         run: npm install --prefix "$RUNNER_TEMP/max-editor-runtime" --ignore-scripts --no-audit --no-fund node-red@4.0.9
       - name: Load runtime and HTML through actual Node-RED editor registry

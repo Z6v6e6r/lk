@@ -33,7 +33,7 @@ League assignments use a separate community_league_results collection, keyed by 
 
 ## Typed access and roster consistency
 
-FRIENDS preserves the legacy guest/identity contract. Typed writes and closed typed reads require a Bearer token verified by a read-only Viva profile request (10-second timeout; failures deny access). The verified ID replaces caller-supplied actor/query identities; phone alone never grants access to typed communities. Typed HTTP responses redact contact fields and internal player keys across roster, ranking (including league tables), feed, comments and chat; phone-derived fallback IDs are omitted. FRIENDS responses retain their existing contract. Closed player-rating reads require an exact-ID verified community member. Public typed reads retain public visibility rules.
+FRIENDS preserves the legacy guest/identity contract. Typed writes and closed typed reads require a Bearer token verified by a read-only Viva profile request (10-second timeout; failures deny typed access). The raw request is preserved for FRIENDS, including provider outages. The verified ID binds only typed prepared caller contexts after their community is known; management/player-rating target identities remain unchanged; phone alone never grants access to typed communities. Typed HTTP responses redact contact fields and internal player keys across roster, ranking (including league tables), feed, comments and chat; phone-derived fallback IDs are omitted. FRIENDS responses retain their existing contract. Closed player-rating reads require an exact-ID verified community member. Public typed reads retain public visibility rules.
 
 Before converting a real community, verify that its owner/admin and members have canonical Viva profile IDs and can sign in through LK. Historical phone-only or incompatible-ID records remain stored but cannot establish typed authorization; any identity repair is a separately reviewed operation. No automatic phone matching/backfill widens access.
 
@@ -59,3 +59,7 @@ The two repositories carry a byte-identical dependency-free community-policy.ts.
 CUP: `npm run build`, `npm run test:community-types`, `npm run test:auth-rbac`, `npm run test:community-results-export`.
 
 LK: `npm run test:community-types`, `npm run test:community-rating`, `npm run test:tournament-community-context`, `node --test scripts/tests/ratingWorkerRelease.test.mjs`, `npm run lint`, `npm run build` with synthetic build-only environment values. The focused suite builds a sanitized complete graph fixture and verifies ingress/auth edges, three commit acknowledgements, function syntax, idempotence and actual response redaction. No live preimage has been used locally. Real-Mongo tests, installed Node-RED/Mongo4 acknowledgement behavior, provider payment and staging/browser acceptance must be verified separately before release.
+
+The patcher CLI excludes EVENT game routes unless `--event-games` is explicitly
+provided for a separately admitted EVENT rollout. Default preparation preserves
+the ordinary/typed community graph without opening those routes.
