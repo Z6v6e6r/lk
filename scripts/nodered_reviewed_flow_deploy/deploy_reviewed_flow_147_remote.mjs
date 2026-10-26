@@ -8,10 +8,12 @@ import {
   assertProtectedFile,
   assertProtectedFileModes,
   atomicWrite,
+  canonicalFlowSha256,
   recoverAtomicExclusivePublication,
   sha256,
   syncDirectory,
   validateReviewedFlowContract,
+  validateEditorPauseInjectsContract,
   writeFileExclusiveAtomicDurable,
   writeFileExclusiveDurable,
 } from "./runtime_contract.mjs";
@@ -24,6 +26,9 @@ const DEPLOYMENT_LEASE_PATH = "/root/.node-red/.padlhub-reviewed-flow-deploy.lea
 const DEPLOYMENT_LOCK_HELD_ENV = "PADLHUB_REVIEWED_FLOW_LOCK_HELD";
 const DEPLOYMENT_LOCK_CONFLICT_EXIT = 75;
 const DEPLOYMENT_LEASE_FORMAT_VERSION = 2;
+const EDITOR_DEPLOYMENT_LEASE_FORMAT_VERSION = 3;
+const EDITOR_DEPLOYMENT_LEASE_KIND = "editor-modified-nodes";
+const EDITOR_SOAK_MS = 15 * 60 * 1000;
 const DEFAULT_DEPLOYMENT_LEASE_MS = 15 * 60 * 1000;
 const DEFAULT_PM2_COMMAND_TIMEOUT_MS = 60 * 1000;
 const SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS = 60 * 1000;
@@ -31,6 +36,7 @@ const DEFAULT_SOURCE_ROLLBACK_BUDGET_MS = (
   3 * DEFAULT_PM2_COMMAND_TIMEOUT_MS + SOURCE_ROLLBACK_SCHEDULING_MARGIN_MS
 );
 const DEPLOYMENT_LEASE_PHASES = new Set(["applying", "soaking", "rollback-restart-required"]);
+const EDITOR_DEPLOYMENT_LEASE_PHASES = new Set(["editor-reserved", "editor-soaking", "editor-owner-decision"]);
 const LEGACY_DEPLOYMENT_LEASE_PHASE = "legacy-unknown";
 const STAGE_PATTERN = /^\.padlhub-reviewed-flow-stage-\d{8}T\d{6}[+-]\d{4}-\d+$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -214,13 +220,17 @@ export function createReviewedFlowRuntime({
       throw new Error("Reviewed-flow deployment lease is invalid");
     }
     if (
-      ![1, DEPLOYMENT_LEASE_FORMAT_VERSION].includes(lease?.formatVersion)
+      ![1, DEPLOYMENT_LEASE_FORMAT_VERSION, EDITOR_DEPLOYMENT_LEASE_FORMAT_VERSION].includes(lease?.formatVersion)
       || safeDeploymentId(lease?.deploymentId) !== lease.deploymentId
       || typeof lease?.token !== "string"
       || !lease.token.trim()
       || (
         lease.formatVersion === DEPLOYMENT_LEASE_FORMAT_VERSION
         && !DEPLOYMENT_LEASE_PHASES.has(lease?.phase)
+      )
+      || (
+        lease.formatVersion === EDITOR_DEPLOYMENT_LEASE_FORMAT_VERSION
+        && (lease?.kind !== EDITOR_DEPLOYMENT_LEASE_KIND || !EDITOR_DEPLOYMENT_LEASE_PHASES.has(lease?.phase))
       )
       || !Number.isInteger(lease?.acquiredAtMs)
       || !Number.isInteger(lease?.expiresAtMs)
@@ -244,6 +254,13 @@ export function createReviewedFlowRuntime({
       throw new Error(
         `Reviewed-flow deployment lease is active for ${lease.deploymentId} until ${new Date(lease.expiresAtMs).toISOString()}`,
       );
+    }
+  };
+
+  const assertNoEditorLease = () => {
+    const lease = readDeploymentLease({ includeExpired: true });
+    if (lease?.formatVersion === EDITOR_DEPLOYMENT_LEASE_FORMAT_VERSION) {
+      throw new Error("Editor-modified-nodes lease requires owner decision; ordinary reviewed-flow action is refused");
     }
   };
 
@@ -396,6 +413,9 @@ export function createReviewedFlowRuntime({
 
   const apply = (options) => {
     const stamp = safeTimestamp(options.stamp);
+    // A v3 editor lease is a custody boundary; reject it before inspecting any
+    // ordinary candidate or reaching a path that could later publish/restart.
+    assertDeploymentLeaseAvailable();
     const prepared = readPrepared(options.candidatePath, options.contractPath, options.deploymentId);
     assertActivationLead(
       prepared.contract,
@@ -403,7 +423,6 @@ export function createReviewedFlowRuntime({
       "Apply",
     );
     const beforeProcess = pm2.assertOnline();
-    assertDeploymentLeaseAvailable();
     ensureBackupDirectory();
     const flowBackup = path.join(backupDirectory, `flows-pre-${prepared.contract.deploymentId}-${stamp}.json`);
     const contractBackup = path.join(backupDirectory, `contract-${prepared.contract.deploymentId}-${stamp}.json`);
@@ -496,6 +515,7 @@ export function createReviewedFlowRuntime({
 
   const rollback = (options) => {
     assertRoot();
+    assertNoEditorLease();
     const { deploymentId, flowBackup, contractBackup } = resolveBackupArtifacts(options, "Rollback");
     const activeLease = readDeploymentLease({ includeExpired: true });
     if (activeLease && activeLease.deploymentId !== deploymentId) {
@@ -585,6 +605,7 @@ export function createReviewedFlowRuntime({
 
   const reconcileCurrent = (options) => {
     assertRoot();
+    assertNoEditorLease();
     const stamp = safeTimestamp(options.stamp);
     const { deploymentId, flowBackup, contractBackup, artifactStamp } = resolveBackupArtifacts(
       options,
@@ -857,6 +878,7 @@ export function createReviewedFlowRuntime({
 
   const finalizeLegacyCandidate = (options) => {
     assertRoot();
+    assertNoEditorLease();
     const stamp = safeTimestamp(options.stamp);
     const artifacts = resolveBackupArtifacts(options, "Legacy finalization");
     const expectedLeaseSha256 = safeSha256(options.expectedLeaseSha256, "Expected lease");
@@ -1022,7 +1044,293 @@ export function createReviewedFlowRuntime({
     };
   };
 
-  return { preflight, apply, rollback, reconcileCurrent, finalizeLegacyCandidate };
+  const readEditorPrepared = (options) => {
+    assertRoot();
+    const { candidatePath, contractPath } = assertStagePath(options.candidatePath, options.contractPath);
+    assertProtectedFileModes(liveFlowPath, { uid, gid, modes: [0o600, 0o644] });
+    const liveBytes = fs.readFileSync(liveFlowPath);
+    const candidateBytes = fs.readFileSync(candidatePath);
+    const contractBytes = fs.readFileSync(contractPath);
+    let contract;
+    try { contract = JSON.parse(contractBytes.toString("utf8")); } catch { throw new Error("Editor pause contract is invalid"); }
+    if (contract.deploymentId !== safeDeploymentId(options.deploymentId)) throw new Error("Editor pause deployment ID differs from contract");
+    validateEditorPauseInjectsContract({ liveBytes, candidateBytes, contract });
+    return { liveBytes, candidateBytes, contractBytes, contract, candidatePath, contractPath };
+  };
+
+  const editorReceiptPath = (name, deploymentId, stamp) => path.join(
+    backupDirectory,
+    `editor-${name}-${deploymentId}-${stamp}.json`,
+  );
+  const assertEditorLease = (options, phases) => {
+    const lease = readDeploymentLease({ includeExpired: true });
+    if (!lease || lease.formatVersion !== EDITOR_DEPLOYMENT_LEASE_FORMAT_VERSION
+      || lease.kind !== EDITOR_DEPLOYMENT_LEASE_KIND
+      || lease.deploymentId !== safeDeploymentId(options.deploymentId)
+      || lease.token !== String(options.leaseToken || "")
+      || !phases.has(lease.phase)) {
+      throw new Error("Editor-modified-nodes lease ownership or phase mismatch");
+    }
+    return lease;
+  };
+  const assertEditorRuntime = (lease) => {
+    const processInfo = pm2.assertOnline();
+    if (processInfo.pid !== lease.nodeRedPid || processInfo.restartCount !== lease.nodeRedRestartCount) {
+      throw new Error("Editor-modified-nodes Node-RED identity drift; lease retained for owner decision");
+    }
+    return processInfo;
+  };
+  const writeEditorLease = (lease) => {
+    atomicWrite(deploymentLeasePath, Buffer.from(`${JSON.stringify(lease, null, 2)}\n`, "utf8"), { uid, gid });
+    assertProtectedFile(deploymentLeasePath, protectedFileOptions);
+    return lease;
+  };
+  const leaseTokenSha256 = (lease) => sha256(Buffer.from(lease.token, "utf8"));
+  const readJsonArtifact = (filePath, label) => {
+    let descriptor;
+    try {
+      descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o777) !== 0o600) {
+        throw new Error(`${label} protection mismatch`);
+      }
+      const bytes = fs.readFileSync(descriptor);
+      return { value: JSON.parse(bytes.toString("utf8")), sha256: sha256(bytes) };
+    } catch (error) {
+      if (error?.message?.endsWith("protection mismatch")) throw error;
+      throw new Error(`${label} is invalid`);
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  };
+  const assertEditorStageArtifact = (filePathValue, candidatePath, expectedName, label) => {
+    const filePath = path.resolve(String(filePathValue || ""));
+    if (path.dirname(filePath) !== path.dirname(candidatePath) || path.basename(filePath) !== expectedName) {
+      throw new Error(`${label} path is outside the protected editor stage`);
+    }
+    assertProtectedFile(filePath, protectedFileOptions);
+    return filePath;
+  };
+  const assertEditorAck = ({ ackPath, lease, nowMs }) => {
+    const artifact = readJsonArtifact(ackPath, "Editor acknowledgement");
+    const ack = artifact.value;
+    const allowedKeys = new Set(["deploymentId", "contractSha256", "leaseTokenSha256", "sourceCanonicalSha256", "candidateCanonicalSha256", "deployMode", "pausedInjectIds", "requestedAt", "ackAt", "authenticated", "status", "conflict", "preRevisionSha256", "postRevisionSha256"]);
+    if (!ack || typeof ack !== "object" || Array.isArray(ack) || Object.keys(ack).some((key) => !allowedKeys.has(key)) || Object.keys(ack).length !== allowedKeys.size) {
+      throw new Error("Editor acknowledgement key set mismatch");
+    }
+    const expected = {
+      deploymentId: lease.deploymentId,
+      contractSha256: sha256(fs.readFileSync(lease.contractBackup)),
+      leaseTokenSha256: leaseTokenSha256(lease),
+      sourceCanonicalSha256: lease.sourceCanonicalSha256,
+      candidateCanonicalSha256: lease.candidateCanonicalSha256,
+      deployMode: "modified-nodes",
+      pausedInjectIds: ["e75785ffa19c2e20", "c1ecd06ce451751b"],
+      authenticated: true,
+      status: "SUCCESS",
+      conflict: false,
+    };
+    for (const [key, value] of Object.entries(expected)) {
+      if (JSON.stringify(ack?.[key]) !== JSON.stringify(value)) throw new Error(`Editor acknowledgement binding mismatch: ${key}`);
+    }
+    const requestedAtMs = Date.parse(ack.requestedAt);
+    const ackAtMs = Date.parse(ack.ackAt);
+    if (!Number.isFinite(requestedAtMs) || !Number.isFinite(ackAtMs)
+      || !/^[a-f0-9]{64}$/.test(String(ack.preRevisionSha256 || ""))
+      || !/^[a-f0-9]{64}$/.test(String(ack.postRevisionSha256 || ""))
+      || ack.preRevisionSha256 === ack.postRevisionSha256
+      || lease.acquiredAtMs > requestedAtMs || requestedAtMs > ackAtMs || ackAtMs > nowMs || nowMs > lease.expiresAtMs) {
+      throw new Error("Editor acknowledgement timing or revision binding mismatch");
+    }
+    return { ...artifact, ack, requestedAtMs, ackAtMs };
+  };
+
+  const reserveEditorModified = (options) => {
+    const stamp = safeTimestamp(options.stamp);
+    assertDeploymentLeaseAvailable();
+    const prepared = readEditorPrepared(options);
+    const processInfo = pm2.assertOnline();
+    ensureBackupDirectory();
+    const sourceBackup = path.join(backupDirectory, `editor-source-${prepared.contract.deploymentId}-${stamp}.json`);
+    const contractBackup = path.join(backupDirectory, `editor-contract-${prepared.contract.deploymentId}-${stamp}.json`);
+    const candidateBackup = path.join(backupDirectory, `editor-candidate-${prepared.contract.deploymentId}-${stamp}.json`);
+    const reserveReceipt = editorReceiptPath("reserve", prepared.contract.deploymentId, stamp);
+    // Every evidence artifact is durable before the exclusive lease publication.
+    writeFileExclusiveDurable(sourceBackup, prepared.liveBytes, protectedFileOptions);
+    writeFileExclusiveDurable(contractBackup, prepared.contractBytes, protectedFileOptions);
+    writeFileExclusiveDurable(candidateBackup, prepared.candidateBytes, protectedFileOptions);
+    const reserve = {
+      formatVersion: 1, action: "reserve-editor-modified", deploymentId: prepared.contract.deploymentId,
+      sourceSha256: prepared.contract.sourceSha256, candidateSha256: prepared.contract.candidateSha256,
+      sourceCanonicalSha256: prepared.contract.sourceCanonicalSha256,
+      candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256,
+      sourceBackup, contractBackup, candidateBackup, nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount, createdAt: new Date(now()).toISOString(),
+    };
+    writeFileExclusiveDurable(reserveReceipt, Buffer.from(`${JSON.stringify(reserve, null, 2)}\n`, "utf8"), protectedFileOptions);
+    if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256
+      || canonicalFlowSha256(JSON.parse(fs.readFileSync(liveFlowPath, "utf8"))) !== prepared.contract.sourceCanonicalSha256) {
+      throw new Error("Live graph drifted before editor lease publication");
+    }
+    const freshProcess = pm2.assertOnline();
+    if (freshProcess.pid !== processInfo.pid || freshProcess.restartCount !== processInfo.restartCount) throw new Error("Node-RED identity drifted before editor lease publication");
+    const acquiredAtMs = now();
+    const lease = {
+      formatVersion: EDITOR_DEPLOYMENT_LEASE_FORMAT_VERSION, kind: EDITOR_DEPLOYMENT_LEASE_KIND,
+      deploymentId: prepared.contract.deploymentId, token: randomUUID(), phase: "editor-reserved",
+      acquiredAtMs, expiresAtMs: acquiredAtMs + deploymentLeaseMs,
+      sourceSha256: prepared.contract.sourceSha256, candidateSha256: prepared.contract.candidateSha256,
+      sourceCanonicalSha256: prepared.contract.sourceCanonicalSha256, candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256,
+      nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount,
+      sourceBackup, contractBackup, candidateBackup, reserveReceipt, editorStageDirectory: path.dirname(prepared.candidatePath),
+    };
+    writeFileExclusiveAtomicDurable(deploymentLeasePath, Buffer.from(`${JSON.stringify(lease, null, 2)}\n`, "utf8"), protectedFileOptions);
+    const postPublication = pm2.assertOnline();
+    const postPublicationBytes = fs.readFileSync(liveFlowPath);
+    if (sha256(postPublicationBytes) !== lease.sourceSha256
+      || canonicalFlowSha256(JSON.parse(postPublicationBytes.toString("utf8"))) !== lease.sourceCanonicalSha256
+      || postPublication.pid !== lease.nodeRedPid
+      || postPublication.restartCount !== lease.nodeRedRestartCount) {
+      writeEditorLease({ ...lease, phase: "editor-owner-decision" });
+      throw new Error("Editor reservation drifted after lease publication; lease retained for OWNER_DECISION");
+    }
+    return { ok: true, action: "reserve-editor-modified", deploymentId: lease.deploymentId, leaseToken: lease.token,
+      reserveReceipt, sourceBackup, contractBackup, candidateBackup, nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount, liveFlowWritten: false, nodeRedRestarted: false };
+  };
+
+  const confirmEditorModified = (options) => {
+    const lease = assertEditorLease(options, new Set(["editor-reserved", "editor-soaking"]));
+    if (lease.phase === "editor-reserved" && now() > lease.expiresAtMs) {
+      writeEditorLease({ ...lease, phase: "editor-owner-decision" });
+      throw new Error("Editor confirmation deadline expired; lease retained for OWNER_DECISION");
+    }
+    const activeBytes = fs.readFileSync(liveFlowPath);
+    const candidateBytes = fs.readFileSync(lease.candidateBackup);
+    const sourceBytes = fs.readFileSync(lease.sourceBackup);
+    const activeRaw = sha256(activeBytes);
+    if (activeRaw === lease.sourceSha256) throw new Error("Editor acknowledgement is absent: source graph remains active; UI must not be replayed automatically");
+    if (canonicalFlowSha256(JSON.parse(activeBytes.toString("utf8"))) !== lease.candidateCanonicalSha256) {
+      throw new Error("Editor-modified graph is unknown or differs from the exact candidate; lease retained for owner decision");
+    }
+    validateEditorPauseInjectsContract({ liveBytes: sourceBytes, candidateBytes, contract: JSON.parse(fs.readFileSync(lease.contractBackup, "utf8")) });
+    const processInfo = assertEditorRuntime(lease);
+    const ackPath = assertEditorStageArtifact(options.editorAckPath, path.join(lease.editorStageDirectory, "candidate.flow.json"), "editor-ack.json", "Editor acknowledgement");
+    const acknowledgement = assertEditorAck({ ackPath, lease, nowMs: now() });
+    if (lease.phase === "editor-soaking") {
+      if (!lease.confirmReceipt) throw new Error("Editor soak lease has no confirmation receipt");
+      const receipt = readJsonArtifact(lease.confirmReceipt, "Editor confirmation receipt").value;
+      if (receipt.ackSha256 !== acknowledgement.sha256 || receipt.observedRawSha256 !== activeRaw
+        || receipt.candidateCanonicalSha256 !== lease.candidateCanonicalSha256
+        || receipt.postRevisionSha256 !== acknowledgement.ack.postRevisionSha256) {
+        throw new Error("Editor confirmation receipt does not bind the current acknowledgement");
+      }
+      return { ok: true, action: "confirm-editor-modified", resumed: true, deploymentId: lease.deploymentId, nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount, liveFlowWritten: false, nodeRedRestarted: false };
+    }
+    const receiptPath = editorReceiptPath("confirm", lease.deploymentId, safeTimestamp(options.stamp));
+    const receipt = { formatVersion: 1, action: "confirm-editor-modified", deploymentId: lease.deploymentId,
+      ackPath, ackSha256: acknowledgement.sha256, sourceSha256: lease.sourceSha256, candidateSha256: lease.candidateSha256,
+      observedRawSha256: activeRaw, candidateCanonicalSha256: lease.candidateCanonicalSha256,
+      postRevisionSha256: acknowledgement.ack.postRevisionSha256, nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount, confirmedAt: new Date(now()).toISOString() };
+    if (fs.existsSync(receiptPath)) {
+      assertProtectedFile(receiptPath, protectedFileOptions);
+      const existing = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+      for (const key of ["formatVersion", "action", "deploymentId", "ackPath", "ackSha256", "sourceSha256", "candidateSha256", "observedRawSha256", "candidateCanonicalSha256", "postRevisionSha256", "nodeRedPid", "nodeRedRestartCount"]) {
+        if (existing[key] !== receipt[key]) throw new Error("Editor confirmation receipt mismatch; lease retained for owner decision");
+      }
+    } else writeFileExclusiveDurable(receiptPath, Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8"), protectedFileOptions);
+    const refreshed = writeEditorLease({ ...lease, phase: "editor-soaking", acquiredAtMs: now(), expiresAtMs: now() + EDITOR_SOAK_MS, confirmReceipt: receiptPath, observedRawSha256: activeRaw, ackSha256: acknowledgement.sha256, postRevisionSha256: acknowledgement.ack.postRevisionSha256 });
+    return { ok: true, action: "confirm-editor-modified", deploymentId: refreshed.deploymentId, confirmReceipt: receiptPath, soakSeconds: EDITOR_SOAK_MS / 1000, nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount, liveFlowWritten: false, nodeRedRestarted: false };
+  };
+
+  const finishEditorModified = (options) => {
+    const stamp = safeTimestamp(options.stamp);
+    const successPath = editorReceiptPath("finish", safeDeploymentId(options.deploymentId), stamp);
+    if (!fs.existsSync(deploymentLeasePath) && fs.existsSync(successPath)) {
+      assertProtectedFile(successPath, protectedFileOptions);
+      const receipt = JSON.parse(fs.readFileSync(successPath, "utf8"));
+      if (receipt?.action !== "finish-editor-modified" || receipt?.deploymentId !== safeDeploymentId(options.deploymentId)
+        || readJsonArtifact(options.observationPath, "Operator observation").sha256 !== receipt.observationSha256
+        || sha256(fs.readFileSync(liveFlowPath)) !== receipt.observedRawSha256) {
+        throw new Error("Editor finish receipt no longer matches the live graph");
+      }
+      const processInfo = pm2.assertOnline();
+      if (processInfo.pid !== receipt.nodeRedPid || processInfo.restartCount !== receipt.nodeRedRestartCount) throw new Error("Editor finish receipt no longer matches Node-RED identity");
+      return { ok: true, action: "finish-editor-modified", deploymentId: receipt.deploymentId, receiptPath: successPath, resumed: true, liveFlowWritten: false, nodeRedRestarted: false };
+    }
+    const lease = assertEditorLease(options, new Set(["editor-soaking"]));
+    if (now() < lease.acquiredAtMs + EDITOR_SOAK_MS) throw new Error("Editor-modified soak window is incomplete");
+    const observationPath = assertEditorStageArtifact(options.observationPath, path.join(lease.editorStageDirectory, "candidate.flow.json"), "editor-observation.json", "Operator observation");
+    const observation = readJsonArtifact(observationPath, "Operator observation");
+    const observationAtMs = Date.parse(observation.value?.observedAt);
+    const confirmReceiptSha256 = sha256(fs.readFileSync(lease.confirmReceipt || ""));
+    if (!Number.isFinite(observationAtMs) || observationAtMs < lease.acquiredAtMs + EDITOR_SOAK_MS
+      || observation.value?.confirmReceiptSha256 !== confirmReceiptSha256
+      || observation.value?.postRevisionSha256 !== lease.postRevisionSha256
+      || observation.value?.candidateCanonicalSha256 !== lease.candidateCanonicalSha256
+      || observation.value?.nodeRedPid !== lease.nodeRedPid
+      || observation.value?.nodeRedRestartCount !== lease.nodeRedRestartCount) {
+      throw new Error("Operator observation binding mismatch");
+    }
+    const activeBytes = fs.readFileSync(liveFlowPath);
+    if (sha256(activeBytes) !== lease.observedRawSha256 || canonicalFlowSha256(JSON.parse(activeBytes.toString("utf8"))) !== lease.candidateCanonicalSha256) throw new Error("Editor-modified graph drift; lease retained for owner decision");
+    const processInfo = assertEditorRuntime(lease);
+    const receipt = { formatVersion: 1, action: "finish-editor-modified", deploymentId: lease.deploymentId,
+      observationPath, observationSha256: observation.sha256, candidateSha256: lease.candidateSha256, observedRawSha256: lease.observedRawSha256, nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount, verifiedAt: new Date(now()).toISOString() };
+    if (fs.existsSync(successPath)) {
+      assertProtectedFile(successPath, protectedFileOptions);
+      const existing = JSON.parse(fs.readFileSync(successPath, "utf8"));
+      for (const key of ["formatVersion", "action", "deploymentId", "observationPath", "observationSha256", "candidateSha256", "observedRawSha256", "nodeRedPid", "nodeRedRestartCount"]) {
+        if (existing[key] !== receipt[key]) throw new Error("Editor finish receipt mismatch; lease retained for owner decision");
+      }
+    } else writeFileExclusiveDurable(successPath, Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8"), protectedFileOptions);
+    releaseDeploymentLease(lease);
+    return { ok: true, action: "finish-editor-modified", deploymentId: lease.deploymentId, receiptPath: successPath, nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount, deploymentLeaseReleased: true, liveFlowWritten: false, nodeRedRestarted: false };
+  };
+
+  const abortEditorModified = (options) => {
+    const stamp = safeTimestamp(options.stamp);
+    const deploymentId = safeDeploymentId(options.deploymentId);
+    const receiptPath = editorReceiptPath("abort", deploymentId, stamp);
+    if (!fs.existsSync(deploymentLeasePath) && fs.existsSync(receiptPath)) {
+      const receipt = readJsonArtifact(receiptPath, "Editor abort receipt").value;
+      const activeBytes = fs.readFileSync(liveFlowPath);
+      const processInfo = pm2.assertOnline();
+      if (receipt?.action !== "abort-editor-modified" || receipt.deploymentId !== deploymentId
+        || receipt.leaseTokenSha256 !== sha256(Buffer.from(String(options.leaseToken || ""), "utf8"))
+        || sha256(activeBytes) !== receipt.sourceSha256
+        || canonicalFlowSha256(JSON.parse(activeBytes.toString("utf8"))) !== receipt.sourceCanonicalSha256
+        || processInfo.pid !== receipt.nodeRedPid || processInfo.restartCount !== receipt.nodeRedRestartCount) {
+        throw new Error("Editor abort receipt no longer matches source state");
+      }
+      return { ok: true, action: "abort-editor-modified", deploymentId, receiptPath, resumed: true, deploymentLeaseReleased: true, liveFlowWritten: false, nodeRedRestarted: false };
+    }
+    const lease = assertEditorLease(options, new Set(["editor-reserved", "editor-owner-decision"]));
+    const activeBytes = fs.readFileSync(liveFlowPath);
+    if (sha256(activeBytes) !== lease.sourceSha256 || canonicalFlowSha256(JSON.parse(activeBytes.toString("utf8"))) !== lease.sourceCanonicalSha256) {
+      writeEditorLease({ ...lease, phase: "editor-owner-decision" });
+      throw new Error("Editor UI effect or graph drift detected; lease retained for OWNER_DECISION");
+    }
+    const processInfo = assertEditorRuntime(lease);
+    const leaseSha256 = sha256(fs.readFileSync(deploymentLeasePath));
+    const receipt = { formatVersion: 1, action: "abort-editor-modified", deploymentId: lease.deploymentId,
+      sourceSha256: lease.sourceSha256, sourceCanonicalSha256: lease.sourceCanonicalSha256,
+      leaseTokenSha256: leaseTokenSha256(lease), leaseSha256, nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount };
+    if (fs.existsSync(receiptPath)) {
+      const existing = readJsonArtifact(receiptPath, "Editor abort receipt").value;
+      for (const [key, value] of Object.entries(receipt)) if (existing[key] !== value) throw new Error("Editor abort receipt mismatch; lease retained for owner decision");
+    } else writeFileExclusiveDurable(receiptPath, Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8"), protectedFileOptions);
+    const finalBytes = fs.readFileSync(liveFlowPath);
+    const finalProcess = assertEditorRuntime(lease);
+    if (sha256(finalBytes) !== lease.sourceSha256 || canonicalFlowSha256(JSON.parse(finalBytes.toString("utf8"))) !== lease.sourceCanonicalSha256
+      || finalProcess.pid !== processInfo.pid || finalProcess.restartCount !== processInfo.restartCount
+      || sha256(fs.readFileSync(deploymentLeasePath)) !== leaseSha256) throw new Error("Editor abort state changed before release; lease retained for OWNER_DECISION");
+    releaseDeploymentLease(lease);
+    return { ok: true, action: "abort-editor-modified", deploymentId: lease.deploymentId, receiptPath, deploymentLeaseReleased: true, liveFlowWritten: false, nodeRedRestarted: false };
+  };
+
+  return { preflight, apply, rollback, reconcileCurrent, finalizeLegacyCandidate, reserveEditorModified, confirmEditorModified, finishEditorModified, abortEditorModified };
 }
 
 const getArg = (name) => {
@@ -1067,10 +1375,26 @@ export function main() {
             expectedFlowBackupSha256: getArg("--expected-flow-backup-sha256"),
             expectedContractBackupSha256: getArg("--expected-contract-backup-sha256"),
           })
+        : action === "reserve-editor-modified"
+          ? runtime.reserveEditorModified({ ...common, stamp: getArg("--stamp") })
+          : action === "confirm-editor-modified"
+            ? runtime.confirmEditorModified({
+              deploymentId: common.deploymentId, leaseToken: getArg("--lease-token"),
+              stamp: getArg("--stamp"), editorAckPath: getArg("--editor-ack"),
+            })
+            : action === "finish-editor-modified"
+              ? runtime.finishEditorModified({
+                deploymentId: common.deploymentId, leaseToken: getArg("--lease-token"),
+                stamp: getArg("--stamp"), observationPath: getArg("--observation"),
+              })
+              : action === "abort-editor-modified"
+                ? runtime.abortEditorModified({
+                  deploymentId: common.deploymentId, leaseToken: getArg("--lease-token"), stamp: getArg("--stamp"),
+                })
         : null;
   if (!result) {
     throw new Error(
-      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|reconcile-current|finalize-legacy-v1-candidate> [options]",
+      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|reconcile-current|finalize-legacy-v1-candidate|reserve-editor-modified|confirm-editor-modified|finish-editor-modified|abort-editor-modified> [options]",
     );
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
