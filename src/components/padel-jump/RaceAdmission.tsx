@@ -41,7 +41,7 @@ export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: ()
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
   if (opened) return <RaceJump onChangeProfile={onChangeProfile} onCheckAdmission={() => { setOpened(false); setAttempt(n => n + 1); }} />;
-  return <main className="pj-race-auth pj-admission"><img className="auth-brand-logo" src={logo} alt="ПадлхАБ" /><h1>Jump · заезд команды</h1>
+  return <main className="pj-race-auth pj-admission"><img className="auth-brand-logo" src={logo} alt="ПадлхАБ" /><h1>ПадлхАБ Jump - займи свое место в рейтинге</h1>
     {!entry && busy && <p role="status">Проверяем профиль и участие в сообществе…</p>}
     {entry && <p className="pj-admission-community">{entry.communityName}</p>}
       {entry?.state === 'form' && <EnrollmentForm fields={entry.fields} busy={busy} onSubmit={data => void submit(data)} />}
