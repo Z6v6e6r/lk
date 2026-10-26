@@ -146,3 +146,24 @@ sender. Queue-full/expired/aborted work never starts provider transport; a fence
 without consuming a provider attempt. This requires the matching CUP backend
 before this adapter is enabled. Once transport starts, ambiguous outcomes keep
 the existing terminal/reconciliation behavior and never become local deferrals.
+
+
+## Transactional queue readiness (26 October follow-up)
+
+The paired CUP follow-up replaces background enqueue and partial non-transactional
+claims with explicit control provisioning and majority transactions. See CUP
+`docs/support/MAX_QUEUE_READINESS_2026-10-26.md` for exact control migration,
+per-record evidence reconciliation, legacy cleanup exclusion and safe stop.
+Do not activate against the earlier backend merely because this adapter loads.
+
+The release candidate must include both this exact flow/bot-pair fix and the
+message-delivery refusal-code fix from LK PR237. The corrected constructor guards
+queue-specific pull SHA, tab ID and bot config ID; the first fixed pair is Academy,
+the second is the main bot. Paired acceptance must use distinct synthetic tokens
+for the two configs, not a generic shared-bot fixture.
+
+A fresh147 Node22.23.2 probe found missing trust for the Russian Trusted issuer on
+platform-api2.max.ru. A verified public root allowed one strict ephemeral TLS probe;
+no Node-RED/system trust was changed. Scoped trust installation and actual-runtime
+readback remain a separately approved prerequisite. Never disable certificate or
+hostname validation. Queue hold and old-record individual review remain mandatory.
