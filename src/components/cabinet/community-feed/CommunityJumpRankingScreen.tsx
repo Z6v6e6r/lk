@@ -65,7 +65,7 @@ export function CommunityJumpRankingScreen({ community, profileKey, currentUserA
     <CommunitySecondaryNav activeItem="ranking" onSelect={onSelectSectionNav} />
     <section className="community-jump-box" aria-label="Рейтинг Jump" aria-busy={loading}>
       <div className="community-jump-title"><div><h3>Рейтинг Jump</h3><p>Больше звёзд — выше. При равенстве — меньшее время.</p></div><a href={JUMP_GAME_URL} target="_blank" rel="noopener noreferrer">Играть ↗</a></div>
-      <p className="community-jump-note">Лучший заезд каждого участника · {data?.lives ?? 5} жизней{data ? ` · последние ${data.retentionHours} ч.` : ''}</p>
+      <p className="community-jump-note">Лучший заезд каждого участника · {data?.lives ?? 5} жизней{data ? data.retentionHours === null ? ' · за всё время' : ` · последние ${data.retentionHours} ч.` : ''}</p>
       <label className="community-jump-search"><span className="community-visually-hidden">Поиск игрока</span><input type="search" placeholder="Поиск игрока" aria-label="Поиск игрока" value={search} onChange={event => setSearch(event.target.value)} /></label>
       {error && <p role="alert" className="community-jump-error">{error}{data ? ' Показаны последние полученные данные.' : ''}</p>}
       {loading && <p role="status" className="community-jump-note">{data ? 'Обновляем результат…' : 'Загружаем рейтинг Jump…'}</p>}
