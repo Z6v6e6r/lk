@@ -6,6 +6,16 @@ const require = createRequire(import.meta.url);
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 
+test('new community enrollment collects only the requested private fields with explicit consent', async () => {
+  const result = await build({ entryPoints: ['src/components/padel-jump/RaceAdmission.tsx'], bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', define: { 'import.meta.env': JSON.stringify({ MODE: 'production' }) }, external: ['react', 'react/jsx-runtime', 'react-dom'], loader: { '.css': 'empty', '.svg': 'text', '.png': 'dataurl', '.webp': 'dataurl' }, logLevel: 'silent' });
+  const module = { exports: {} }; new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
+  const html = renderToStaticMarkup(React.createElement(module.exports.EnrollmentForm, { busy: false, onSubmit() {} }));
+  for (const name of ['firstName', 'lastName', 'email', 'companyWebsite']) assert.ok(html.includes(`name="${name}"`));
+  assert.equal((html.match(/type="checkbox"/g) || []).length, 1);
+  assert.match(html, /type="submit" disabled=""/);
+  assert.ok(html.includes('Основной профиль ПадлхАБ не изменится') && !html.includes('name="actorId"'));
+});
+
 test('standalone SMS entry preserves consent gates while default LK OAuth remains available', async () => {
   const result = await build({ entryPoints: ['src/components/auth/VivaAuthForm.tsx'], bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', define: { 'import.meta.env': JSON.stringify({ MODE: 'production' }) }, external: ['react', 'react/jsx-runtime', 'react-dom'], loader: { '.css': 'empty', '.svg': 'text', '.png': 'dataurl' }, logLevel: 'silent' });
   const module = { exports: {} }; new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);

@@ -140,7 +140,7 @@ test('membership verifier uses the verified profile ID and denies missing config
   await assert.rejects(createIdentityVerifier()(req), /COMMUNITY_NOT_CONFIGURED/);
   const calls: string[] = []; let pending = false, wrong = false;
   const verifier = createIdentityVerifier({ communityId: 'test-community', fetcher: async (url: string) => {
-    calls.push(String(url)); return new Response(JSON.stringify(String(url).includes('vivacrm') ? { id: 'verified-profile', name: 'Тестовый профиль' } : { id: wrong ? 'other-community' : 'test-community', members: [{ id: 'verified-profile', status: pending ? 'PENDING' : 'ACTIVE' }], membersLoaded: true }), { status: 200 });
+    calls.push(String(url)); return new Response(JSON.stringify(String(url).includes('vivacrm') ? { id: 'verified-profile', name: 'Тестовый профиль' } : { id: wrong ? 'other-community' : 'test-community', bannedCount: 0, pendingCount: 0, members: [{ id: 'verified-profile', status: pending ? 'PENDING' : 'ACTIVE' }], membersLoaded: true }), { status: 200 });
   } });
   const verified = await verifier(req); assert.equal(verified.id, 'verified-profile'); assert.ok(calls[1].includes('clientId=verified-profile')); assert.ok(calls.every(u => u.startsWith('https://api.vivacrm.ru/') || u.startsWith('https://padlhub.su/lk/communities/')));
   pending = true; await assert.rejects(verifier(req, { fresh: true }), /COMMUNITY_MEMBER_REQUIRED/);
@@ -212,7 +212,7 @@ test('actual Cyrillic community IDs use the root LK detail route and remain URL-
   const communityId = 'community_1793001495612_падлхаб-команда';
   const urls: string[] = [];
   const verify = createIdentityVerifier({ communityId, fetcher: async (url: string) => {
-    urls.push(String(url)); return new Response(JSON.stringify(String(url).includes('vivacrm') ? { id: 'fixture-profile', name: 'Тест' } : { id: communityId, membersLoaded: true, members: [{ id: 'fixture-profile', status: 'ACTIVE' }] }));
+    urls.push(String(url)); return new Response(JSON.stringify(String(url).includes('vivacrm') ? { id: 'fixture-profile', name: 'Тест' } : { id: communityId, bannedCount: 0, pendingCount: 0, membersLoaded: true, members: [{ id: 'fixture-profile', status: 'ACTIVE' }] }));
   } });
   assert.equal((await verify({ headers: { authorization: 'Bearer fixture' } })).communityId, communityId);
   assert.equal(urls[1], 'https://padlhub.su/lk/communities/' + encodeURIComponent(communityId) + '?clientId=fixture-profile');

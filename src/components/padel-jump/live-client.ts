@@ -5,6 +5,10 @@ import type { LiveAck, LiveTicket } from './race-connection';
 export type { LiveAck, LiveTicket } from './race-connection';
 
 export const LIVE_ERRORS: Record<string, string> = {
+  IDENTITY_UNAVAILABLE: 'Сервис профиля или сообщества временно недоступен. Повтори проверку.', IDENTITY_RESPONSE_INVALID: 'Сервис вернул неполные данные профиля. Повтори проверку.', MEMBERSHIP_NOT_VERIFIED: 'Не удалось получить полный список участников. Повтори проверку; вступать заново не нужно.',
+  PROFILE_INVALID: 'Сервис не подтвердил идентификатор профиля. Выйди и войди заново.', PROFILE_NAME_MISSING: 'В профиле и сообществе не указано имя. Проверь данные в личном кабинете.', IDENTITY_BUSY: 'Проверок сейчас много. Повтори чуть позже.',
+  ENROLLMENT_INVALID: 'Проверь имя, фамилию, почту, сайт компании и согласие на сохранение анкеты.', ENROLLMENT_STORAGE_UNAVAILABLE: 'Не удалось сохранить анкету. Вступление не подтверждено; повтори проверку.', ENROLLMENT_UNAVAILABLE: 'Регистрация пока недоступна. Повтори чуть позже.',
+  ENROLLMENT_JOIN_UNCONFIRMED: 'Анкета сохранена, но вступление пока не подтверждено. Нажми «Проверить ещё раз».', COMMUNITY_INVITE_UNAVAILABLE: 'Приглашение сообщества недоступно. Обратись к организатору.', ENROLLMENT_BUSY: 'Сейчас вступают другие участники. Повтори чуть позже.', ENROLLMENT_LIMIT: 'Лимит анкет достигнут. Обратись к организатору.',
   COMMUNITY_NOT_CONFIGURED: 'Заезды подключатся после создания сообщества.', PROFILE_AUTH_REQUIRED: 'Войди в личный кабинет и открой заезд из сообщества.', COMMUNITY_MEMBER_REQUIRED: 'Для участия вступи в сообщество мероприятия.', PROFILE_ALREADY_RUNNING: 'У этого профиля уже есть заезд. Вернись к нему или подожди отключения.',
   EVENT_FULL: 'На экране уже 12 участников. Попробуй чуть позже.', ALIAS_INVALID: 'Введи псевдоним до 24 символов без служебных знаков.',
   RULES_CHANGED: 'Правила обновились. Перезагрузи страницу.', RUN_ACCESS_DENIED: 'Заезд отключён или связь отсутствовала дольше 10 секунд. Начни новый заезд.',
@@ -34,4 +38,13 @@ export async function raceProfile(signal: AbortSignal): Promise<{ id: string; na
   if (!response.ok || typeof data.error === 'string') throw new Error(LIVE_ERRORS[data.error] ?? 'Не удалось подтвердить профиль сообщества.');
   if (typeof data.id !== 'string' || typeof data.name !== 'string' || typeof data.communityId !== 'string') throw new Error('Профиль не подтверждён.');
   return data;
+}
+
+export type RaceEntryStatus = { state: 'ready' | 'form' | 'pending' | 'blocked' | 'confirming'; name: string; communityName: string; fields?: { firstName: string; lastName: string; email: string; companyWebsite: string } };
+export async function entryRequest<T>(path: 'entry' | 'enrollment', signal: AbortSignal, body?: unknown): Promise<T> {
+  const token = readAuthToken();
+  const response = await fetch(LIVE_API + path, { signal, credentials: 'omit', cache: 'no-store', method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const data = await response.json().catch(() => ({ error: 'SERVICE_UNAVAILABLE' }));
+  if (!response.ok || typeof data.error === 'string') throw Object.assign(new Error(LIVE_ERRORS[data.error] ?? 'Не удалось проверить доступ к игре. Повтори проверку.'), { status: response.status });
+  return data as T;
 }

@@ -1,11 +1,13 @@
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createIdentityVerifier } from './identity.mjs';
+import { createEnrollment } from './enrollment.mjs';
 import { createRegistry, fail } from './registry.mjs';
 import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../../../src/components/padel-jump/live-contract.ts';
 
-export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, authenticate = createIdentityVerifier({ communityId }), registry = createRegistry({ directory, communityId }) } = {}) {
+export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, authenticate = createIdentityVerifier({ communityId }), registry = createRegistry({ directory, communityId }), enrollment = createEnrollment({ authenticate, communityId, directory }) } = {}) {
   const viewers = new Set(), rates = new Map();
+  let diagnosticAt = 0;
   const response = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(body)); };
   const server = createServer(async (req, res) => {
     try {
@@ -16,6 +18,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
       const rate = rates.get(key) ?? { at, count: 0 }; rates.set(key, rate); if (++rate.count > requestLimit) fail(429, 'RATE_LIMIT');
       if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, communityConfigured: !!communityId, persistence: !!directory });
       if (path === '/jump-live-api/me' && req.method === 'GET') return response(res, 200, await authenticate(req));
+      if (path === '/jump-live-api/entry' && req.method === 'GET') return response(res, 200, await enrollment.status(req));
       if (path === '/jump-live-api/board' && req.method === 'GET') return response(res, 200, registry.board());
       if (path === '/jump-live-api/stream' && req.method === 'GET') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'ORIGIN_DENIED');
@@ -23,17 +26,27 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' });
         res.write('data: ' + JSON.stringify(registry.board()) + '\n\n'); viewers.add(res); res.on('close', () => viewers.delete(res)); return;
       }
-      if (req.method !== 'POST' || !/^\/jump-live-api\/(?:runs|runs\/[a-f0-9-]{36})$/.test(path)) fail(404, 'NOT_FOUND');
+      if (req.method !== 'POST' || !/^\/jump-live-api\/(?:enrollment|runs|runs\/[a-f0-9-]{36})$/.test(path)) fail(404, 'NOT_FOUND');
       if (req.headers.origin !== origin || req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'ORIGIN_DENIED');
       if (req.headers['content-type']?.split(';')[0] !== 'application/json') fail(415, 'JSON_REQUIRED');
       let size = 0; const chunks = [];
       for await (const chunk of req) { size += chunk.length; if (size > 8192) fail(413, 'BODY_LIMIT'); chunks.push(chunk); }
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(400, 'JSON_INVALID'); }
+      if (path === '/jump-live-api/enrollment') return response(res, 200, await enrollment.submit(req, body));
       const actor = await authenticate(req, { fresh: body.command === 'finish' });
       if (path === '/jump-live-api/runs') return response(res, 201, registry.join(body, actor));
       const token = req.headers['x-jump-run-token'];
       return response(res, 200, registry.command(path.split('/').at(-1), token, body, actor));
-    } catch (error) { if (!res.headersSent && !res.destroyed) response(res, Number.isInteger(error.code) ? error.code : 503, { error: Number.isInteger(error.code) ? error.message : 'SERVICE_UNAVAILABLE' }); }
+    } catch (error) {
+      const httpError = Number.isInteger(error.code) && error.code >= 400 && error.code <= 599;
+      const status = httpError ? error.code : 503;
+      const code = httpError && /^[A-Z_]{1,64}$/.test(error.message) ? error.message : 'SERVICE_UNAVAILABLE';
+      if (status === 503 && Date.now() - diagnosticAt > 60000) {
+        diagnosticAt = Date.now();
+        console.warn(JSON.stringify({ event: 'jump_service_unavailable', code, stage: ['profile', 'community'].includes(error.identityStage) ? error.identityStage : 'verification' }));
+      }
+      if (!res.headersSent && !res.destroyed) response(res, status, { error: code });
+    }
   });
   server.maxConnections = 80;
   server.requestTimeout = 5000; server.headersTimeout = 5000; server.keepAliveTimeout = 5000;

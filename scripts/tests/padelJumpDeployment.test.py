@@ -138,4 +138,93 @@ class JumpDeployment(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): frontend.apply(upload)
                 run.assert_not_called()
 
+class JumpUpdate(unittest.TestCase):
+    def module(self):
+        spec = importlib.util.spec_from_file_location('update', Path(__file__).resolve().parents[1] / 'update_padel_jump_live_147.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+
+    def test_candidate_changes_only_the_two_backend_paths(self):
+        update = self.module(); old = 'a' * 40; new = 'b' * 40
+        original = 'ExecStart=/usr/local/bin/node ' + str(update.RELEASES / old / 'server.mjs') + '\nWorkingDirectory=' + str(update.RELEASES / old) + '\nProtectSystem=strict\nReadWritePaths=/var/lib/padlhub-jump-live/0123456789abcdef\n'
+        candidate = update.candidate_unit(original, old, new)
+        self.assertEqual(candidate.replace(new, old), original)
+        with self.assertRaisesRegex(RuntimeError, 'UNIT_SOURCE_DRIFT'): update.candidate_unit(original + old, old, new)
+        with self.assertRaisesRegex(RuntimeError, 'SOURCE_INVALID'): update.candidate_unit(original, old, '../escape')
+
+    def test_update_rejects_preimage_and_active_players_before_any_publication(self):
+        update = self.module()
+        for current, players, reason in [({'changed': True}, [], 'HOST_PREIMAGE_DRIFT'), ({'old': True}, [{}], 'LIVE_PLAYERS_PRESENT')]:
+            with tempfile.TemporaryDirectory() as root, patch.object(update, 'inventory', return_value=current), patch.object(update, 'get', return_value={'players': players}), patch.object(update, 'run') as run, patch.object(update, 'publish_directory') as publish:
+                with self.assertRaisesRegex(RuntimeError, reason): update.apply(Path(root), {'preimage': {'old': True}})
+                run.assert_not_called(); publish.assert_not_called()
+
+    def test_update_archive_denies_links_traversal_and_private_files(self):
+        update = self.module()
+        for name, kind in [('frontend/../escape.js', tarfile.REGTYPE), ('frontend/link.js', tarfile.SYMTYPE), ('backend/private.json', tarfile.REGTYPE), ('frontend/private.json', tarfile.REGTYPE)]:
+            member = tarfile.TarInfo(name); member.type = kind
+            with self.assertRaises(RuntimeError): update.validate_archive([member], {'files': {name: 'fixture'}})
+
+    def test_unit_drift_prevents_atomic_replacement(self):
+        update = self.module()
+        with tempfile.TemporaryDirectory() as root:
+            unit = Path(root) / 'unit'; unit.write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError, 'FILE_PREIMAGE_DRIFT'): update.write_atomic(unit, b'new', update.digest(b'expected'))
+            self.assertEqual(unit.read_bytes(), b'changed')
+
+    def test_existing_immutable_target_is_preserved(self):
+        update = self.module()
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / 'published'; target.mkdir(); (target / 'keep').write_bytes(b'old')
+            with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): update.publish_directory(target, {'keep': b'new'})
+            self.assertEqual((target / 'keep').read_bytes(), b'old')
+
+    def rehearsal(self, failure=False):
+        update = self.module()
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root).resolve(); web = base / 'web'; releases = base / 'releases'; upload = base / 'upload';
+            for path in [web, releases, upload]: path.mkdir()
+            unit = base / 'unit'; env = base / 'env'; env.write_bytes(b'unchanged-env')
+            old = 'a' * 40; new = 'b' * 40; engine = 'e' * 64
+            (releases / old).mkdir(); (releases / old / 'server.mjs').write_bytes(b'old-backend')
+            original = 'ExecStart=/usr/local/bin/node ' + str(releases / old / 'server.mjs') + '\nWorkingDirectory=' + str(releases / old) + '\nProtectSystem=strict\n'
+            unit.write_text(original); data = {'old-result.json': 'old-data-hash'}
+            def private_snapshot(ignore=None):
+                return {'files': {str(p): {'sha256': update.sha(p), 'realpath': str(p)} for p in [unit, env]}, 'lkPointer': 'unchanged-pointer'}
+            def runtime():
+                source = new if new in unit.read_text() else old
+                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'communityConfigured': True, 'persistence': True}}
+            before = {'host': update.HOST, 'unit': original, 'protected': private_snapshot(), 'runtime': runtime(), 'data': dict(data)}
+            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine}
+            backend_release = {**release, 'files': {'server.mjs': {'sha256': update.digest(b'new-backend')}}}
+            files = {name: b'public-fixture' for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html']}
+            files.update({'frontend/release.json': json.dumps(release).encode(), 'backend/server.mjs': b'new-backend', 'backend/release.json': json.dumps(backend_release).encode()})
+            with tarfile.open(upload / 'payload.tar', 'w') as archive:
+                for name, value in files.items():
+                    member = tarfile.TarInfo(name); member.size = len(value); archive.addfile(member, io.BytesIO(value))
+            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
+            commands = []
+            def run(*args):
+                commands.append(args)
+                if args == ('systemctl', 'restart', update.SERVICE) and new in unit.read_text(): data['enrollments/new-private-form.json'] = 'new-private-hash'
+                return ''
+            def verify(source, expected_hash, expected_engine):
+                if failure and source == new: raise RuntimeError('SYNTHETIC_VERIFY_FAILURE')
+                current = runtime(); self.assertEqual(current['sourceCommit'], source); self.assertEqual(current['sha256'], expected_hash); return current
+            class Libc:
+                def renameat2(self, source_fd, source, target_fd, target, flags):
+                    if flags != 1 or os.path.lexists(target): return -1
+                    os.rename(source, target); return 0
+            with patch.object(update, 'WEB', web), patch.object(update, 'RELEASES', releases), patch.object(update, 'UNIT', unit), patch.object(update, 'inventory', return_value=before), patch.object(update, 'protected', side_effect=private_snapshot), patch.object(update, 'data_hashes', side_effect=lambda _: dict(data)), patch.object(update, 'runtime', side_effect=runtime), patch.object(update, 'get', return_value={'players': []}), patch.object(update, 'run', side_effect=run), patch.object(update, 'verify_backend', side_effect=verify), patch.object(update.ctypes, 'CDLL', return_value=Libc()):
+                if failure:
+                    with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
+                    self.assertEqual(unit.read_text(), original); self.assertTrue((upload / 'recovery-receipt.json').exists()); self.assertFalse((upload / 'receipt.json').exists())
+                else:
+                    update.apply(upload, plan); self.assertEqual(unit.read_text(), plan['unitCandidate']); self.assertEqual(json.loads((upload / 'receipt.json').read_text())['status'], 'PUBLISHED')
+                self.assertEqual(data['old-result.json'], 'old-data-hash'); self.assertEqual(data['enrollments/new-private-form.json'], 'new-private-hash')
+                self.assertEqual((releases / old / 'server.mjs').read_bytes(), b'old-backend'); self.assertEqual(env.read_bytes(), b'unchanged-env')
+                self.assertTrue(all(cmd[0] == 'systemctl' and cmd[-1] in ['daemon-reload', update.SERVICE] for cmd in commands))
+
+    def test_update_rehearsal_preserves_existing_and_new_private_data(self): self.rehearsal()
+    def test_failed_verification_recovers_old_backend_without_deleting_new_forms(self): self.rehearsal(failure=True)
+
 if __name__ == '__main__': unittest.main()
