@@ -181,18 +181,19 @@ test('registered runtime node emits receipt only and completes handler on failur
 
 test('node lifecycle deduplicates same lease and close aborts without success receipt', async () => {
   const original = globalThis.fetch;
-  let calls = 0, Type; const handlers = new Map(); const warnings = [];
+  let calls = 0, Type, providerStarted; const started = new Promise(resolve => { providerStarted = resolve; }); const handlers = new Map(); const warnings = [];
   const RED = { nodes: { registerType: (_t, fn) => { Type = fn; }, getNode: () => ({ token: 'synthetic-token' }),
     createNode: node => { node.on = (event, fn) => handlers.set(event, fn); node.warn = x => warnings.push(x); } } };
   try {
     globalThis.fetch = async (_url, options) => {
-      calls++;
+      calls++; providerStarted();
       return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('abort')), { once: true }));
     };
     register(RED); new Type({ bot: 'synthetic' });
     const msg = { supportOutbox: command() }, outputs = []; let completed = 0;
     const one = handlers.get('input')(msg, x => outputs.push(x), () => completed++);
     const duplicate = handlers.get('input')(msg, x => outputs.push(x), () => completed++);
+    await started; // Close an actual in-flight attempt, rather than a queued scheduler item.
     handlers.get('close')();
     await Promise.all([one, duplicate]);
     assert.equal(calls, 1); assert.equal(completed, 2);

@@ -105,7 +105,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   validatePrivatePreparationPaths(source,target);
   validatePrivatePreparationPaths(source,target + '.changes.json');
   const sourceBytes = fs.readFileSync(source);
-  const result = patchCommunityTypesFlow(JSON.parse(sourceBytes), { eventGames: true });
+  const result = patchCommunityTypesFlow(JSON.parse(sourceBytes), { eventGames: args.includes('--event-games') });
   fs.writeFileSync(target, JSON.stringify(result.flow, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   fs.writeFileSync(target + '.changes.json', JSON.stringify(result.changes, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   console.log(JSON.stringify({ sourceSha256: digest(sourceBytes), changedNodes: result.changes.length, candidateSha256: digest(fs.readFileSync(target)), deployed: false }));

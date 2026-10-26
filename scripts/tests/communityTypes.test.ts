@@ -164,12 +164,13 @@ test('typed private reads ignore a spoofed query identity; real profile verifica
   assert.doesNotMatch(JSON.stringify(denied), /private|Участник/);
   const verified: Record<string, unknown> = { req: { url: '/lk/communities/a/members/manage', query: { clientId: 'victim', phone: 'spoofed' } }, statusCode: 200, payload: { id: 'real-user', phone: 'verified-phone' }, _communityPolicyAuth: { payload: { actor: { id: 'victim' }, member: { id: 'target' } } } };
   const authenticated = run(COMMUNITY_AUTH_RESPONSE, verified)[0];
-  assert.equal(authenticated.req.query.clientId, 'real-user');
-  assert.equal(authenticated.payload.actor.id, 'real-user');
+  assert.equal(authenticated.req.query.clientId, 'victim', 'raw legacy identity stays intact');
+  assert.equal(authenticated.payload.actor.id, 'victim');
+  assert.equal(authenticated._verifiedCommunityActor.id, 'real-user');
   assert.equal(authenticated.payload.member.id, 'target', 'management target is not silently replaced');
   const aliases = run(COMMUNITY_AUTH_RESPONSE, { req: { url: '/lk/communities/a/chat' }, statusCode: 200, payload: { id: 'real' }, _communityPolicyAuth: { payload: { actor: { id: 'victim' }, member: { id: 'victim' }, user: { id: 'victim' } } } })[0].payload;
-  assert.equal(aliases.member.id, 'real'); assert.equal(aliases.actor.id, 'real'); assert.equal(aliases.user.id, 'real');
-  assert.equal(run(COMMUNITY_AUTH_PREPARE, { req: { headers: { authorization: 'invalid' } } })[2].statusCode, 401);
+  assert.equal(aliases.member.id, 'victim'); assert.equal(aliases.actor.id, 'victim'); assert.equal(aliases.user.id, 'victim');
+  assert.equal(run(COMMUNITY_AUTH_PREPARE, { req: { headers: { authorization: 'invalid' } } })[1]._communityPolicyAuthFailure, 'INVALID');
   const allowed = run(graph.find(node => node.id === 'read')!.func!, { req: { method: 'GET', headers: {} }, payload: [community], _verifiedCommunityActor: { id: 'victim' }, _communityGet: { clientId: 'victim' } });
   assert.equal(allowed[0].statusCode, 200);
   assert.equal(allowed[0].payload.members[0].phone, null);

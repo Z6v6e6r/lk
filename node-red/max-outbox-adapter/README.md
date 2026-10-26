@@ -122,3 +122,15 @@ close with a late 200. Twelve provider fetches were synthetic; no real provider 
 shared-state writes occurred. This does not close the backend's documented durable
 enqueue, per-dialog ordering, partial-batch reconciliation or installed-target
 acceptance gaps. Keep the rollout hold until those gates have explicit evidence.
+
+
+The sender enforces a process-wide addressed-dialog scheduler shared by both MAX
+node instances: one in-flight provider attempt per dialog and at least 500 ms
+between starts. Different dialogs remain independent. The scheduler holds at
+most 1,000 pending attempts/keys, remembers cooldown after completion, and
+rechecks the remaining lease after waiting before any POST. It is an in-process
+limit: admission still requires one Node-RED process and no parallel legacy
+sender. Queue-full/expired/aborted work never starts provider transport; a fenced `local_deferred` receipt preserves the unsent command as PENDING
+without consuming a provider attempt. This requires the matching CUP backend
+before this adapter is enabled. Once transport starts, ambiguous outcomes keep
+the existing terminal/reconciliation behavior and never become local deferrals.
