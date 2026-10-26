@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { createLiveServer } from '../../games/padel-jump/live/server.mjs';
 import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../../src/components/padel-jump/live-contract.ts';
 import { racePageUrl } from '../../src/components/padel-jump/race-navigation.ts';
@@ -15,6 +16,12 @@ test('cabinet navigation never carries identity and standalone paths remain comp
     assert.equal(racePageUrl('practice', host), './padel-jump.html');
     assert.equal(racePageUrl('live', host), './padel-jump-live.html');
   }
+});
+test('practice return link uses the origin-aware race destination', () => {
+  const source = readFileSync(new URL('../../src/components/padel-jump/PadelJump.tsx', import.meta.url), 'utf8');
+  assert.match(source, /import\s*\{\s*racePageUrl\s*\}\s*from\s*['"]\.\/race-navigation['"]/);
+  assert.match(source, /href=\{racePageUrl\('race'\)\}/);
+  assert.doesNotMatch(source, /href=["']\.\/padel-jump-race\.html["']/);
 });
 async function harness(t) {
   let verified = 0;
