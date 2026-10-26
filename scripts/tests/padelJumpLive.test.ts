@@ -64,6 +64,19 @@ test('time includes repeated attempts and transitions; pause freezes server elap
   assert.equal(h.registry.board().players[0].elapsedMs, 1300);
 });
 
+test('a repeated retry envelope is idempotent and clears the old failure without resetting run accounting', () => {
+  const h = harness(), game = createCampaignGame(); game.mode = 'running'; let ack;
+  for (let tick = 0; tick < 1200 && game.mode === 'running'; tick++) {
+    stepGame(game, -1); drainEvents(game); h.advance(FIXED_STEP * 1000); ack = h.command('inputs', [[-100, 1]]);
+  }
+  assert.equal(game.mode, 'over'); assert.equal(ack.player.failures, 1); const previous = ack.player;
+  const retry = h.command('retry'); assert.equal(retry.player.game.failure, undefined); assert.equal(retry.player.failures, 1);
+  assert.equal(retry.player.playMs, previous.playMs); assert.ok(retry.player.elapsedMs >= previous.elapsedMs);
+  assert.deepEqual(h.registry.command(h.ticket.id, h.ticket.token, { seq: retry.seq, command: 'retry' }, h.identity), retry);
+  h.advance(FIXED_STEP * 1000); const next = h.command('inputs', [[0, 1]]);
+  assert.equal(next.seq, retry.seq + 1); assert.equal(next.player.failures, 1); assert.ok(next.player.game.ball.y > retry.player.game.ball.y);
+});
+
 test('all 33 parts finish via real quantized input, persist once and survive server restart; fabricated finish is rejected', () => {
   const directory = mkdtempSync(join(tmpdir(), 'jump-live-'));
   try {

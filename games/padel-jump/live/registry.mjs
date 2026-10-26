@@ -105,7 +105,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (body.seq === run.seq) { if (digest !== run.digest) fail(409, 'SEQUENCE_CONFLICT'); run.seen = now(); return run.ack; }
       if (body.seq !== run.seq + 1) fail(409, 'SEQUENCE_CONFLICT');
       if (run.finished) fail(409, 'RUN_FINISHED');
-      const g = structuredClone(run.game); let ticks = 0, failures = run.failures, completed = run.completed;
+      let g = structuredClone(run.game); let ticks = 0, failures = run.failures, completed = run.completed;
       const command = body.command;
       if (command === 'inputs') {
         if (!Array.isArray(body.inputs) || body.inputs.length > 120) fail(422, 'INPUTS_INVALID');
@@ -126,11 +126,11 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
         if (!run.paused) fail(409, 'NOT_PAUSED');
       } else if (command === 'retry') {
         if (g.mode !== 'over' || run.paused) fail(409, 'RETRY_NOT_READY');
-        const next = createCampaignGame(g.campaign.station, g.campaign.section); next.mode = 'running'; Object.assign(g, next);
+        g = createCampaignGame(g.campaign.station, g.campaign.section); g.mode = 'running';
       } else if (command === 'advance') {
         const next = nextSection(g.campaign.station, g.campaign.section);
         if (g.mode !== 'complete' || !next || run.paused) fail(409, 'CHECKPOINT_NOT_READY');
-        Object.assign(g, createCampaignGame(next.station, next.section)); g.mode = 'running';
+        g = createCampaignGame(next.station, next.section); g.mode = 'running';
       } else if (command === 'finish') {
         if (g.mode !== 'complete' || g.campaign.station !== 10 || g.campaign.section !== 2 || completed !== 33 || run.paused) fail(409, 'FINISH_NOT_VERIFIED');
         if (!directory) fail(503, 'RESULT_STORE_UNAVAILABLE');

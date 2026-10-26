@@ -59,6 +59,26 @@ test('premature local finish cannot send advance: authoritative running snapshot
   await h.control.command('advance'); assert.equal(h.game.campaign!.section, 1); assert.equal(h.game.mode, 'running'); assert.deepEqual(h.errors, []); h.connection.dispose();
 });
 
+test('fall → retry resets the entire simulation and can finish each Yasenevo section without losing race totals', async () => {
+  const h = harness();
+  for (let section = 0; section < 3; section++) {
+    await (await h.drive(true)).pending;
+    assert.equal(h.game.failure, 'fall');
+    const before = h.acknowledgements.at(-1)!.player;
+    assert.equal(before.failures, section + 1);
+    await h.control.command('retry');
+    assert.equal(h.game.mode, 'running'); assert.equal(h.game.failure, undefined);
+    const fresh = createCampaignGame(0, section); fresh.mode = 'running'; assert.deepEqual(h.game, fresh);
+    const restarted = h.acknowledgements.at(-1)!.player;
+    assert.equal(restarted.failures, before.failures); assert.equal(restarted.playMs, before.playMs); assert.ok(restarted.elapsedMs >= before.elapsedMs);
+    await (await h.drive()).pending;
+    assert.equal(h.game.mode, 'complete'); assert.ok(h.game.score >= 190 && h.game.camera > 0); assert.equal(h.control.checkpointConfirmed(), true);
+    assert.ok(h.acknowledgements.at(-1)!.player.playMs > restarted.playMs);
+    if (section < 2) await h.control.command('advance');
+  }
+  assert.deepEqual(h.errors, []); h.connection.dispose();
+});
+
 for (const fail of [false, true]) test(`server ${fail ? 'failure' : 'first 190m checkpoint'} ACK discards only unsent prediction tail and keeps waiting heartbeat valid`, async () => {
   const h = harness(); h.hold((body, ack) => body.command === 'inputs' && ack.player.game.mode === (fail ? 'over' : 'complete'));
   const terminal = await h.drive(fail);
