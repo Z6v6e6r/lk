@@ -6,8 +6,36 @@ import { isDeepStrictEqual } from "node:util";
 export const CONTRACT_FORMAT_VERSION = 1;
 export const EXACT_GRAPH_CONTRACT_FORMAT_VERSION = 2;
 export const EXACT_GRAPH_CONTRACT_KIND = "exact-graph";
+export const EDITOR_MODIFIED_CONTRACT_FORMAT_VERSION = 1;
+export const EDITOR_MODIFIED_CONTRACT_KIND = "editor-pause-injects";
+export const EDITOR_PAUSE_INJECT_IDS = Object.freeze(["e75785ffa19c2e20", "c1ecd06ce451751b"]);
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+// Node-RED returns JSON whose object-key order is an implementation detail.  The
+// editor lease therefore pins a stable, UTF-8 JSON representation, while arrays
+// (including node order) remain meaningful and are deliberately not sorted.
+const canonicalize = (value) => {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]),
+  );
+  return value;
+};
+
+export const canonicalFlowJson = (flow) => {
+  if (!Array.isArray(flow)) throw new Error("Node-RED flow must be an array");
+  const ids = new Set();
+  for (const node of flow) {
+    if (!node || typeof node !== "object" || Array.isArray(node) || typeof node.id !== "string" || !node.id || ids.has(node.id)) {
+      throw new Error("Node-RED flow contains a missing or duplicate node ID");
+    }
+    ids.add(node.id);
+  }
+  return JSON.stringify([...flow].sort((left, right) => left.id.localeCompare(right.id)).map(canonicalize));
+};
+
+export const canonicalFlowSha256 = (flow) => sha256(Buffer.from(canonicalFlowJson(flow), "utf8"));
 
 const exactNodeMap = (flow, label) => {
   if (!Array.isArray(flow)) throw new Error(`${label} must be a Node-RED flow array`);
@@ -62,6 +90,60 @@ const assertDigest = (value, label) => {
   if (!/^[a-f0-9]{64}$/.test(String(value || ""))) throw new Error(`${label} is invalid`);
   return value;
 };
+
+export function buildEditorPauseInjectsContract({ liveBytes, candidateBytes, deploymentId }) {
+  const normalizedDeploymentId = assertDeploymentId(deploymentId);
+  const liveFlow = JSON.parse(Buffer.from(liveBytes).toString("utf8"));
+  const candidateFlow = JSON.parse(Buffer.from(candidateBytes).toString("utf8"));
+  const liveById = exactNodeMap(liveFlow, "Live flow");
+  const candidateById = exactNodeMap(candidateFlow, "Candidate flow");
+  if (liveFlow.length !== 4857 || candidateFlow.length !== 4857) {
+    throw new Error("Editor pause contract requires exactly 4857 nodes");
+  }
+  if (liveById.size !== candidateById.size) throw new Error("Editor pause contract changed node identity");
+  const changed = [];
+  for (const [id, before] of liveById) {
+    const after = candidateById.get(id);
+    if (!after) throw new Error("Editor pause contract removed a node");
+    const fields = changedFields(before, after);
+    if (fields.length) changed.push({ id, fields });
+  }
+  const expected = [...EDITOR_PAUSE_INJECT_IDS].sort();
+  if (!isDeepStrictEqual(changed.map(({ id }) => id).sort(), expected)) {
+    throw new Error("Editor pause contract changed-node set mismatch");
+  }
+  for (const id of EDITOR_PAUSE_INJECT_IDS) {
+    const before = liveById.get(id);
+    const after = candidateById.get(id);
+    if (!before || !after || before.type !== "inject" || after.type !== "inject") {
+      throw new Error(`Editor pause contract inject is missing or invalid: ${id}`);
+    }
+    if (!isDeepStrictEqual(changedFields(before, after), ["d"]) || (before.d !== undefined && before.d !== false) || after.d !== true) {
+      throw new Error(`Editor pause contract allows only d:true: ${id}`);
+    }
+  }
+  return {
+    formatVersion: EDITOR_MODIFIED_CONTRACT_FORMAT_VERSION,
+    contractKind: EDITOR_MODIFIED_CONTRACT_KIND,
+    deploymentId: normalizedDeploymentId,
+    sourceSha256: sha256(liveBytes),
+    candidateSha256: sha256(candidateBytes),
+    sourceCanonicalSha256: canonicalFlowSha256(liveFlow),
+    candidateCanonicalSha256: canonicalFlowSha256(candidateFlow),
+    nodeCount: 4857,
+    pausedInjectIds: [...EDITOR_PAUSE_INJECT_IDS],
+  };
+}
+
+export function validateEditorPauseInjectsContract({ liveBytes, candidateBytes, contract }) {
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) throw new Error("Editor pause contract must be an object");
+  if (contract.formatVersion !== EDITOR_MODIFIED_CONTRACT_FORMAT_VERSION || contract.contractKind !== EDITOR_MODIFIED_CONTRACT_KIND) {
+    throw new Error("Editor pause contract version mismatch");
+  }
+  const rebuilt = buildEditorPauseInjectsContract({ liveBytes, candidateBytes, deploymentId: contract.deploymentId });
+  if (!isDeepStrictEqual(rebuilt, contract)) throw new Error("Editor pause contract content mismatch");
+  return rebuilt;
+}
 
 const assertDeploymentId = (value) => {
   const normalized = String(value || "");

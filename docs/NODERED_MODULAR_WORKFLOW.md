@@ -157,6 +157,53 @@ while the exact changed-field list and before/after node hashes pin the reviewed
 rewire. Route additions and removals remain forbidden. Function-only contracts
 continue to require the complete HTTP input set to be unchanged.
 
+## Native editor: pausing the MAX inject schedulers
+
+`reserve-editor-modified`, `confirm-editor-modified`, `finish-editor-modified`,
+and `abort-editor-modified` use the same `flock` and lease path as reviewed-flow
+deployment, but format-version 3 (`kind: editor-modified-nodes`) is deliberately
+not an ordinary deployment.  While it exists, including after its nominal expiry,
+ordinary preflight/apply/rollback/reconcile actions fail closed.  They must never
+delete, reinterpret, roll back, write `flows.json`, or restart PM2 for this lease.
+
+The only supported editor contract is `editor-pause-injects`: a full 4,857-node
+graph whose only changes are `d: true` on inject IDs `e75785ffa19c2e20` and
+`c1ecd06ce451751b`.  It pins both raw and deterministic canonical JSON SHA-256
+digests; canonical JSON recursively sorts object keys and sorts nodes by `id`.
+It cannot authorize wires, functions, configuration, additions, removals, or
+tokens.  The exact operation evidence (raw source, canonical source/candidate,
+and patch SHA) is input to the operation, not a browser credential or proof that
+the editor accepted a deploy.
+
+Reserve durably backs up source, contract, candidate, and an operator receipt
+before publishing the v3 lease, and checks the online PM2 PID/restart identity.
+It performs zero flow writes and zero PM2 restarts.  The authenticated operator
+must use the normal Node-RED editor to modify the two existing nodes and choose
+**Deploy modified nodes**.  Do not import a two-node array or POST one to
+`/flows`; a native revision/HTTP 409 aborts the operation with no overwrite,
+merge, or retry.
+
+Confirm consumes a protected `0600`, single-link JSON `editor-ack.json` from the
+same protected stage.  It binds deployment, contract SHA, hashed lease token,
+source/candidate canonical hashes, the exact two IDs, `modified-nodes`, distinct
+pre/post editor revisions, a successful non-conflict authenticated result, and
+ordered request/ack times within the reservation deadline.  The artifact records
+operator provenance; the helper does not claim to attest the browser session by
+itself.  It writes its receipt (including the observed raw serialization and ACK
+SHA) before starting a full 15-minute soak.  Re-entry verifies those durable
+bindings and never replays editor actions.
+
+Finish consumes the likewise protected stage `editor-observation.json`, bound to
+the confirmation receipt SHA, post-revision, canonical candidate, unchanged PM2
+identity, and an observation at least 15 minutes later.  It writes its receipt
+before releasing only its lease and is idempotent after release.  Abort is
+receipt-first and idempotent after a crash, but is allowed only while exact source
+bytes/canonical graph and PM2 identity still prove no editor effect.  Any
+source/candidate/identity uncertainty retains the lease for `OWNER_DECISION`;
+this helper never re-enables the injects, rolls back, or restarts Node-RED.
+Pausing schedulers does not establish a drain guarantee: previous HTTP/SDK
+emission work remains `UNKNOWN`.
+
 ## Individual gates
 
 ```bash
