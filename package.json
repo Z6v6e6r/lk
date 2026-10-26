@@ -269,7 +269,9 @@
     "nodered:lk1-pro-training-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_exclusions_147.sh",
     "nodered:lk1-pro-training-energy-exclusions:deploy-147": "bash scripts/deploy_nodered_lk1_pro_training_energy_exclusions_147.sh",
     "nodered:lk1-pro-energy-suffix:deploy-147": "bash scripts/deploy_nodered_lk1_pro_energy_suffix_147.sh",
-    "test:lk1-pro-training-energy-exclusions-generation": "node --test scripts/tests/proTrainingEnergyExclusionHotfix.test.mjs"
+    "test:lk1-pro-training-energy-exclusions-generation": "node --test scripts/tests/proTrainingEnergyExclusionHotfix.test.mjs",
+    "build:jump-live": "node --experimental-strip-types scripts/build_padel_jump_live.mjs",
+    "test:jump-live": "node --experimental-strip-types --test scripts/tests/padelJump*.test.ts scripts/tests/padelJumpAuth.test.mjs scripts/tests/vivaOAuth.test.ts && python3 scripts/tests/padelJumpDeployment.test.py"
   },
   "dependencies": {
     "@capacitor/ios": "^8.4.0",

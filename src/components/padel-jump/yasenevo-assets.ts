@@ -12,21 +12,12 @@ import spring_rebound from '../../assets/yasenevo-v2/spring_rebound.svg';
 import flag_padlhub from '../../assets/yasenevo-v2/flag_padlhub.svg';
 import banner_padlhub from '../../assets/yasenevo-v2/banner_padlhub.svg';
 import poster_build_ourselves from '../../assets/yasenevo-v2/poster_build_ourselves.svg';
-import worker_navy_walk_00 from '../../assets/yasenevo-v2/worker_navy_walk_00.svg';
-import worker_navy_walk_01 from '../../assets/yasenevo-v2/worker_navy_walk_01.svg';
-import worker_navy_walk_02 from '../../assets/yasenevo-v2/worker_navy_walk_02.svg';
-import worker_navy_walk_03 from '../../assets/yasenevo-v2/worker_navy_walk_03.svg';
-import worker_green_panel from '../../assets/yasenevo-v2/worker_green_panel.svg';
-import worker_cream_inspector from '../../assets/yasenevo-v2/worker_cream_inspector.svg';
-import decor_stepladder from '../../assets/yasenevo-v2/decor_stepladder.svg';
-import decor_toolcase from '../../assets/yasenevo-v2/decor_toolcase.svg';
-import dome_loop from '../../assets/yasenevo-v2/dome_loop.svg';
-import station_start from '../../assets/yasenevo-v2/station_start.svg';
+import station_construction_panorama from '../../assets/yasenevo-v2/station_construction_panorama.webp';
 import cage_left from '../../assets/yasenevo-v2/cage_left.svg';
 import padel_sleeve from '../../assets/yasenevo-v2/padel_sleeve.svg';
 import cage_right from '../../assets/yasenevo-v2/cage_right.svg';
 
-/** Original supplied SVGs. Only image data is imported; the supplied demo/loader is not executed. */
+/** Original SVG sprites and a prepared painted environment. No supplied demo code is executed. */
 export const YASENEVO_SPRITES = {
   platform_blue: { url: platform_blue, w: 192, h: 64, surface: {"x": 14, "y": 12, "width": 164} },
   platform_blue_wide: { url: platform_blue_wide, w: 240, h: 64, surface: {"x": 14, "y": 12, "width": 212} },
@@ -42,16 +33,7 @@ export const YASENEVO_SPRITES = {
   flag_padlhub: { url: flag_padlhub, w: 96, h: 252 },
   banner_padlhub: { url: banner_padlhub, w: 320, h: 96 },
   poster_build_ourselves: { url: poster_build_ourselves, w: 180, h: 220 },
-  worker_navy_walk_00: { url: worker_navy_walk_00, w: 88, h: 160 },
-  worker_navy_walk_01: { url: worker_navy_walk_01, w: 88, h: 160 },
-  worker_navy_walk_02: { url: worker_navy_walk_02, w: 88, h: 160 },
-  worker_navy_walk_03: { url: worker_navy_walk_03, w: 88, h: 160 },
-  worker_green_panel: { url: worker_green_panel, w: 88, h: 160 },
-  worker_cream_inspector: { url: worker_cream_inspector, w: 88, h: 160 },
-  decor_stepladder: { url: decor_stepladder, w: 80, h: 160 },
-  decor_toolcase: { url: decor_toolcase, w: 80, h: 48 },
-  dome_loop: { url: dome_loop, w: 720, h: 1440 },
-  station_start: { url: station_start, w: 720, h: 1440 },
+  station_construction_panorama: { url: station_construction_panorama, w: 724, h: 2172 },
   cage_left: { url: cage_left, w: 112, h: 1440 },
   cage_right: { url: cage_right, w: 112, h: 1440 },
   padel_sleeve: { url: padel_sleeve, w: 2834.6, h: 283.5 },
@@ -68,5 +50,5 @@ export function loadYasenevoArt(): Promise<YasenevoArt | null> {
     };
     const timer = setTimeout(() => finish(false), 8000);
     image.onload = () => finish(true); image.onerror = () => finish(false); image.src = YASENEVO_SPRITES[id].url;
-  }))).then(images => ({ images: Object.fromEntries(images) as YasenevoArt['images'] })).catch(() => null);
+  }))).then(images => ({ images: Object.fromEntries(images) as YasenevoArt['images'] })).catch(() => { cached = undefined; return null; });
 }
