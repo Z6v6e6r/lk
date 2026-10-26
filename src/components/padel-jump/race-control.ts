@@ -1,4 +1,4 @@
-import { createCampaignGame } from './engine.ts';
+import { restoreRaceSnapshot } from './race-prediction.ts';
 import type { Game } from './engine';
 import type { LivePlayer } from './live-contract';
 
@@ -15,6 +15,7 @@ type Options = {
 export function createRaceControl(options: Options) {
   let busy = false, wanted = false, disposed = false, previous: Game['mode'] = 'running';
   let operation = Promise.resolve();
+  let confirmed: LivePlayer | undefined;
   const stopped = () => disposed || options.stopped();
   const notify = () => { if (!disposed) options.changed(); };
   const pauseNow = async () => {
@@ -30,6 +31,8 @@ export function createRaceControl(options: Options) {
   };
   return {
     canStep: () => !stopped() && !busy && !wanted && options.foreground(),
+    checkpointConfirmed: () => confirmed?.state === 'checkpoint' && confirmed.game.mode === 'complete'
+      && confirmed.game.campaign?.station === options.game().campaign?.station && confirmed.game.campaign?.section === options.game().campaign?.section,
     reset() { disposed = false; wanted = false; previous = 'running'; },
     pause() {
       if (stopped() || !options.connection() || !options.canPause()) return Promise.resolve();
@@ -47,25 +50,21 @@ export function createRaceControl(options: Options) {
           wanted = false; await options.prepareResume();
           if (stopped() || wanted || !options.foreground()) return;
         }
-        await connection.command(action);
+        const accepted = await connection.command(action);
         if (stopped()) return;
-        if (action === 'advance' || action === 'retry') {
-          const c = options.game().campaign!;
-          const next = createCampaignGame(action === 'advance' && c.section === 2 ? c.station + 1 : c.station, action === 'advance' ? (c.section + 1) % 3 : c.section);
-          next.mode = 'running'; options.replace(next);
-        } else if (action === 'resume') options.game().mode = previous;
+        if (accepted === false) return;
+        if (action === 'resume') options.game().mode = previous;
         if (action !== 'finish' && (wanted || !options.foreground())) await pauseNow();
       });
     },
-    acknowledge(player: LivePlayer) {
-      const game = options.game(), authoritative = player.game;
-      if (game.campaign?.station !== authoritative.campaign?.station || game.campaign?.section !== authoritative.campaign?.section) return;
-      if (player.state === 'paused') { previous = authoritative.mode; game.mode = 'paused'; }
-      else if (authoritative.mode === 'complete' || authoritative.mode === 'over') {
-        if (game.mode === 'paused') previous = authoritative.mode;
-        else game.mode = authoritative.mode;
-        Object.assign(game.ball, authoritative.ball); game.score = authoritative.score; game.peak = authoritative.peak; game.camera = authoritative.camera;
-      }
+    acknowledge(player: LivePlayer, prediction?: Game) {
+      const local = options.game(), authoritative = player.game;
+      const before = local.campaign!.station * 3 + local.campaign!.section, after = authoritative.campaign!.station * 3 + authoritative.campaign!.section;
+      if (after < before || after > before + 1) return;
+      const game = prediction ?? restoreRaceSnapshot(authoritative);
+      confirmed = player;
+      if (player.state === 'paused' || local.mode === 'paused') { previous = game.mode; game.mode = 'paused'; }
+      options.replace(game);
       notify();
     },
     dispose() { disposed = true; },

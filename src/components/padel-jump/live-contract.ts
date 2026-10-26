@@ -5,6 +5,7 @@ export const LIVE_ENGINE_VERSION = 'c23b203f001efe95ad4d8a6d30db7a5dd3cce0f11194
 export const LIVE_API = '/jump-live-api/';
 export const LIVE_LIMIT = 12;
 export const LIVE_RULE = 'active-total-community-v1';
+export const LIVE_SYNC = 'full-game-v1';
 export type LiveCommand = 'inputs' | 'pause' | 'resume' | 'retry' | 'advance' | 'finish';
 export type InputBlock = [number, number];
 export type LivePlayer = { id: string; alias: string; slot: number; state: 'playing' | 'paused' | 'retry' | 'checkpoint' | 'finished';

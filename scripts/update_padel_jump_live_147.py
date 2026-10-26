@@ -138,16 +138,17 @@ def package(args):
         require(path.suffix in ['.html', '.js', '.css', '.svg', '.webp', '.png', '.ico'], 'UNEXPECTED_PUBLIC_FILE'); files['frontend/' + name] = data
     backend = json.loads(Path('dist/padel-jump-live/release.json').read_text())
     require(backend['sourceCommit'] == source and backend['sourceDirty'] is False and backend['engine'] == before['runtime']['health']['engine'], 'BACKEND_INCOMPATIBLE')
+    require(backend.get('sync') == 'full-game-v1', 'BACKEND_SYNC_INCOMPATIBLE')
     for name in ['server.mjs', 'release.json']: files['backend/' + name] = Path('dist/padel-jump-live', name).read_bytes()
     require(digest(files['backend/server.mjs']) == backend['files']['server.mjs']['sha256'], 'BACKEND_HASH_DRIFT')
-    release = {'schema': 'PADLHUB_JUMP_ADMISSION_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': backend['engine'], 'ciRuns': [c['url'] for c in checks], 'files': {n.removeprefix('frontend/'): {'sha256': digest(d), 'size': len(d)} for n, d in files.items() if n.startswith('frontend/')}}
+    release = {'schema': 'PADLHUB_JUMP_ADMISSION_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': backend['engine'], 'sync': backend['sync'], 'ciRuns': [c['url'] for c in checks], 'files': {n.removeprefix('frontend/'): {'sha256': digest(d), 'size': len(d)} for n, d in files.items() if n.startswith('frontend/')}}
     files['frontend/release.json'] = (json.dumps(release, indent=2) + '\n').encode()
     args.output.mkdir(mode=0o700)
     with tarfile.open(args.output / 'payload.tar', 'w') as archive:
         for name, data in sorted(files.items()):
             entry = tarfile.TarInfo(name); entry.size = len(data); entry.mode = 0o644; archive.addfile(entry, io.BytesIO(data))
     code = Path(__file__).read_bytes(); (args.output / 'publisher.py').write_bytes(code)
-    plan = {'sourceCommit': source, 'preimage': before, 'unitCandidate': unit, 'engine': backend['engine'], 'publisherSha256': digest(code), 'archiveSha256': sha(args.output / 'payload.tar'), 'files': {n: digest(d) for n, d in files.items()}}
+    plan = {'sourceCommit': source, 'preimage': before, 'unitCandidate': unit, 'engine': backend['engine'], 'sync': backend['sync'], 'publisherSha256': digest(code), 'archiveSha256': sha(args.output / 'payload.tar'), 'files': {n: digest(d) for n, d in files.items()}}
     (args.output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n'); (args.output / 'release.json').write_bytes(files['frontend/release.json'])
     print(json.dumps({'sourceCommit': source, 'files': len(files), 'archiveSha256': plan['archiveSha256']}))
 
@@ -169,6 +170,7 @@ def verify_backend(source, expected_hash, engine):
 
 def recover(plan, upload):
     target = WEB / ('padel-jump-team-' + plan['sourceCommit'][:8]); unit_hash = sha(UNIT)
+    require(not os.path.lexists(target), 'FRONTEND_VISIBLE_RECONCILIATION_REQUIRED')
     require(unit_hash in [digest(plan['unitCandidate'].encode()), digest(plan['preimage']['unit'].encode())], 'RECOVERY_UNIT_DRIFT')
     expected_unit = plan['unitCandidate'] if unit_hash == digest(plan['unitCandidate'].encode()) else plan['preimage']['unit']
     check_protected(plan, target, expected_unit)
@@ -188,23 +190,28 @@ def apply(upload, plan):
     require(all(digest(data) == plan['files'][name] for name, data in files.items()), 'PAYLOAD_HASH_DRIFT')
     require(all(name in files for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html', 'backend/server.mjs', 'backend/release.json']), 'ENTRY_MISSING')
     for name in ['frontend/release.json', 'backend/release.json']:
-        release = json.loads(files[name]); require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'], 'RELEASE_DRIFT')
+        release = json.loads(files[name]); require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'] and release.get('sync') == plan.get('sync') == 'full-game-v1', 'RELEASE_DRIFT')
     require(json.loads(files['backend/release.json'])['files']['server.mjs']['sha256'] == plan['files']['backend/server.mjs'], 'BACKEND_MANIFEST_DRIFT')
     target = WEB / ('padel-jump-team-' + plan['sourceCommit'][:8]); backend = RELEASES / plan['sourceCommit']
     require(not os.path.lexists(target) and not os.path.lexists(backend), 'TARGET_EXISTS')
     publish_directory(backend, {n.removeprefix('backend/'): d for n, d in files.items() if n.startswith('backend/')})
-    publish_directory(target, {n.removeprefix('frontend/'): d for n, d in files.items() if n.startswith('frontend/')})
     check_protected(plan, target, plan['preimage']['unit'], exact_data=True); require(runtime() == plan['preimage']['runtime'] and not get('board')['players'], 'RUNTIME_OR_PLAYERS_DRIFT')
-    durable(upload / 'phase-prepared.json', {'phase': 'IMMUTABLE_FILES_PUBLISHED', 'sourceCommit': plan['sourceCommit']})
+    durable(upload / 'phase-prepared.json', {'phase': 'IMMUTABLE_BACKEND_STAGED', 'sourceCommit': plan['sourceCommit']})
     try:
         write_atomic(UNIT, plan['unitCandidate'].encode(), digest(plan['preimage']['unit'].encode()))
         durable(upload / 'phase-unit.json', {'phase': 'UNIT_UPDATED'})
         run('systemctl', 'daemon-reload'); run('systemctl', 'restart', SERVICE)
         current = verify_backend(plan['sourceCommit'], plan['files']['backend/server.mjs'], plan['engine'])
+        require(current['health'].get('sync') == plan['sync'], 'RUNTIME_SYNC_DRIFT')
+        publish_directory(target, {n.removeprefix('frontend/'): d for n, d in files.items() if n.startswith('frontend/')})
         check_protected(plan, target, plan['unitCandidate'])
         for name, value in plan['files'].items(): require(sha((target if name.startswith('frontend/') else backend) / name.split('/', 1)[1]) == value, 'INSTALLED_HASH_DRIFT')
         durable(upload / 'receipt.json', {'status': 'PUBLISHED', 'sourceCommit': plan['sourceCommit'], 'runtime': current, 'priorDataPreserved': True, 'nginxAndEnvironmentUnchanged': True, 'url': 'https://padlhub.su/lk/' + target.name + '/padel-jump-race.html'})
-    except Exception:
+    except Exception as error:
+        # Rename can succeed even when the following directory fsync fails.
+        # A visible new frontend requires the new sync contract: never roll its
+        # backend back automatically. Read back the installation before deciding.
+        if os.path.lexists(target): raise RuntimeError('FRONTEND_VISIBLE_RECONCILIATION_REQUIRED') from error
         recover(plan, upload); raise
 
 def main():

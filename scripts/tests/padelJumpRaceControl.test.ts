@@ -20,20 +20,23 @@ function harness(directory?: string) {
   const ticket = registry.join({ consent: true, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE }, actor);
   const sent: Envelope[] = [], errors: string[] = [], acknowledgements: LiveAck[] = [];
   let hold: (body: Envelope, ack: LiveAck) => boolean = () => false, release: (() => void) | undefined, prepare: () => Promise<void> = async () => {};
-  const connection = createRaceTransport(ticket, ack => { acknowledgements.push(ack); control.acknowledge(ack.player); }, message => { errors.push(message); stopped = true; }, async (_path, input) => {
+  const connection = createRaceTransport(ticket, ack => { acknowledgements.push(ack); control.acknowledge(ack.player, ack.prediction); }, message => { errors.push(message); stopped = true; }, async (_path, input) => {
     const body = input as Envelope; sent.push(structuredClone(body));
     const ack = registry.command(ticket.id, ticket.token, body, actor);
     if (hold(body, ack)) await new Promise<void>(resolve => { release = resolve; });
     return ack;
   });
   const control = createRaceControl({ game: () => game, replace: value => { game = value; }, connection: () => connection, foreground: () => foreground, prepareResume: () => prepare(), stopped: () => stopped, canPause: () => true, changed() {}, pending: value => { busy = value; } });
-  const drive = async (fail = false) => {
+  const drive = async (fail = false, omitFinalPredictionInput = false) => {
     let landed = 0, ticks = 0;
     for (; ticks < 12000 && game.mode === 'running'; ticks++) {
       const target = fail ? 12 : pilotTarget(game, landed, false);
       const direction = Math.round(Math.max(-1, Math.min(1, (target - game.ball.x) / (250 * FIXED_STEP))) * 100) / 100;
       assert.ok(connection.canStep() && control.canStep());
-      connection.record(direction); stepGame(game, direction); time += FIXED_STEP * 1000;
+      let record = true;
+      if (omitFinalPredictionInput) { const next = structuredClone(game); stepGame(next, direction); record = next.mode !== 'complete'; }
+      if (record) connection.record(direction);
+      stepGame(game, direction); time += FIXED_STEP * 1000;
       for (const event of drainEvents(game)) if (event.type === 'landing') landed = Number(event.id);
       if (game.mode === 'running' && ticks % 60 === 59) await connection.flush();
     }
@@ -45,6 +48,16 @@ function harness(directory?: string) {
     hold: (fn: typeof hold) => { hold = fn; }, release: () => { assert.ok(release); const fn = release; release = undefined; hold = () => false; fn(); }, prepare: (fn: typeof prepare) => { prepare = fn; },
   };
 }
+
+test('premature local finish cannot send advance: authoritative running snapshot restores play until the real checkpoint', async () => {
+  const h = harness(); h.hold(body => body.command === 'inputs' && h.game.mode === 'complete');
+  const terminal = await h.drive(false, true);
+  assert.equal(h.game.mode, 'complete'); assert.equal(h.game.score, 190); assert.equal(h.control.checkpointConfirmed(), false);
+  const advance = h.control.command('advance'); h.release(); await terminal.pending; await advance;
+  assert.equal(h.sent.some(body => body.command === 'advance'), false); assert.equal(h.game.mode, 'running'); assert.equal(h.game.campaign!.section, 0); assert.deepEqual(h.errors, []);
+  await (await h.drive()).pending; assert.equal(h.control.checkpointConfirmed(), true);
+  await h.control.command('advance'); assert.equal(h.game.campaign!.section, 1); assert.equal(h.game.mode, 'running'); assert.deepEqual(h.errors, []); h.connection.dispose();
+});
 
 for (const fail of [false, true]) test(`server ${fail ? 'failure' : 'first 190m checkpoint'} ACK discards only unsent prediction tail and keeps waiting heartbeat valid`, async () => {
   const h = harness(); h.hold((body, ack) => body.command === 'inputs' && ack.player.game.mode === (fail ? 'over' : 'complete'));

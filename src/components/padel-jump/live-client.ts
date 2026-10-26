@@ -1,5 +1,5 @@
 import { readAuthToken } from '../../utils/authTokenStorage';
-import { LIVE_API, LIVE_ENGINE_VERSION, LIVE_RULE } from './live-contract';
+import { LIVE_API, LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC } from './live-contract';
 import { createRaceTransport } from './race-connection';
 import type { LiveAck, LiveTicket } from './race-connection';
 export type { LiveAck, LiveTicket } from './race-connection';
@@ -31,7 +31,7 @@ export function createRaceConnection(ticket: LiveTicket, ack: (v: LiveAck) => vo
 }
 export async function joinRace(signal: AbortSignal): Promise<LiveTicket> {
   const ticket = await liveRequest<LiveTicket>('runs', { consent: true, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE }, signal);
-  if (ticket.engine !== LIVE_ENGINE_VERSION || ticket.rule !== LIVE_RULE || !/^[a-f0-9-]{36}$/.test(ticket.id) || !/^[a-f0-9]{64}$/.test(ticket.token) || ticket.seq !== 0 || ticket.player?.game?.campaign?.station !== 0) throw new Error('Сервер вернул другую версию заезда. Обнови страницу.');
+  if (ticket.engine !== LIVE_ENGINE_VERSION || ticket.rule !== LIVE_RULE || ticket.sync !== LIVE_SYNC || !/^[a-f0-9-]{36}$/.test(ticket.id) || !/^[a-f0-9]{64}$/.test(ticket.token) || ticket.seq !== 0 || ticket.player?.game?.campaign?.station !== 0) throw new Error('Сервер вернул другую версию заезда. Обнови страницу.');
   return ticket;
 }
 

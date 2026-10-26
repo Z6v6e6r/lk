@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createRegistry } from '../../games/padel-jump/live/registry.mjs';
 import { createIdentityVerifier } from '../../games/padel-jump/live/identity.mjs';
 import { createLiveServer } from '../../games/padel-jump/live/server.mjs';
-import { LIVE_ENGINE_VERSION, LIVE_RULE, formatRaceTime } from '../../src/components/padel-jump/live-contract.ts';
+import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC, formatRaceTime } from '../../src/components/padel-jump/live-contract.ts';
 import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../src/components/padel-jump/engine.ts';
 import { readyRaceTilt } from '../../src/components/padel-jump/race-tilt.ts';
 import { createTiltController } from '../../src/components/padel-jump/tilt.ts';
@@ -164,7 +164,8 @@ test('finish retry excludes heartbeat and blur commands while request is pending
   const connection = createRaceTransport(ticket, () => {}, (_message, retry) => errors.push(!!retry), async (_path, input) => {
     const body = input as { seq: number; command: string; inputs?: number[][] }; calls.push(body);
     if (body.command === 'finish' && !errors.length) return new Promise((_resolve, reject) => { rejectFinish = reject; });
-    return { seq: body.seq, player: ticket.player };
+    const complete = createCampaignGame(10, 2); complete.mode = 'complete';
+    return { seq: body.seq, sync: LIVE_SYNC, player: { ...ticket.player, state: 'checkpoint', completedParts: 33, game: complete } };
   });
   connection.record(0.5);
   // A previously accepted batch must complete before finish, but subsequent
@@ -194,7 +195,7 @@ test('high-refresh alternating tilt stops at the server RLE budget during slow i
   const connection = createRaceTransport(ticket, () => {}, () => assert.fail('valid input rejected'), async (_path, body) => {
     calls.push(body as { inputs: number[][] });
     if (calls.length === 1) await new Promise<void>(resolve => { release = resolve; });
-    return { seq: calls.length, player: ticket.player };
+    return { seq: calls.length, sync: LIVE_SYNC, player: ticket.player };
   });
   connection.record(0); const pending = connection.flush();
   await new Promise(resolve => setImmediate(resolve));

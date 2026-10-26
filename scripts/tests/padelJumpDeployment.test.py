@@ -178,7 +178,7 @@ class JumpUpdate(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): update.publish_directory(target, {'keep': b'new'})
             self.assertEqual((target / 'keep').read_bytes(), b'old')
 
-    def rehearsal(self, failure=False):
+    def rehearsal(self, failure=False, after_publication=None):
         update = self.module()
         with tempfile.TemporaryDirectory() as root:
             base = Path(root).resolve(); web = base / 'web'; releases = base / 'releases'; upload = base / 'upload';
@@ -192,32 +192,47 @@ class JumpUpdate(unittest.TestCase):
                 return {'files': {str(p): {'sha256': update.sha(p), 'realpath': str(p)} for p in [unit, env]}, 'lkPointer': 'unchanged-pointer'}
             def runtime():
                 source = new if new in unit.read_text() else old
-                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'communityConfigured': True, 'persistence': True}}
+                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'communityConfigured': True, 'persistence': True}}
             before = {'host': update.HOST, 'unit': original, 'protected': private_snapshot(), 'runtime': runtime(), 'data': dict(data)}
-            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine}
+            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1'}
             backend_release = {**release, 'files': {'server.mjs': {'sha256': update.digest(b'new-backend')}}}
             files = {name: b'public-fixture' for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html']}
             files.update({'frontend/release.json': json.dumps(release).encode(), 'backend/server.mjs': b'new-backend', 'backend/release.json': json.dumps(backend_release).encode()})
             with tarfile.open(upload / 'payload.tar', 'w') as archive:
                 for name, value in files.items():
                     member = tarfile.TarInfo(name); member.size = len(value); archive.addfile(member, io.BytesIO(value))
-            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
+            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
             commands = []
             def run(*args):
                 commands.append(args)
                 if args == ('systemctl', 'restart', update.SERVICE) and new in unit.read_text(): data['enrollments/new-private-form.json'] = 'new-private-hash'
                 return ''
             def verify(source, expected_hash, expected_engine):
-                if failure and source == new: raise RuntimeError('SYNTHETIC_VERIFY_FAILURE')
+                if source == new: self.assertFalse((web / ('padel-jump-team-' + new[:8])).exists(), 'New frontend must wait for backend readiness')
+                if failure is True and source == new: raise RuntimeError('SYNTHETIC_VERIFY_FAILURE')
                 current = runtime(); self.assertEqual(current['sourceCommit'], source); self.assertEqual(current['sha256'], expected_hash); return current
+            publish = update.publish_directory
+            def publish_with_fault(target, values):
+                publish(target, values)
+                if after_publication == 'rename-fsync' and target.parent == web: raise OSError('SYNTHETIC_POST_RENAME_FSYNC_FAILURE')
+            durable = update.durable
+            def durable_with_fault(path, value):
+                if after_publication == 'receipt' and path.name == 'receipt.json': raise OSError('SYNTHETIC_RECEIPT_FAILURE')
+                durable(path, value)
             class Libc:
                 def renameat2(self, source_fd, source, target_fd, target, flags):
                     if flags != 1 or os.path.lexists(target): return -1
                     os.rename(source, target); return 0
-            with patch.object(update, 'WEB', web), patch.object(update, 'RELEASES', releases), patch.object(update, 'UNIT', unit), patch.object(update, 'inventory', return_value=before), patch.object(update, 'protected', side_effect=private_snapshot), patch.object(update, 'data_hashes', side_effect=lambda _: dict(data)), patch.object(update, 'runtime', side_effect=runtime), patch.object(update, 'get', return_value={'players': []}), patch.object(update, 'run', side_effect=run), patch.object(update, 'verify_backend', side_effect=verify), patch.object(update.ctypes, 'CDLL', return_value=Libc()):
-                if failure:
-                    with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
+            with patch.object(update, 'WEB', web), patch.object(update, 'RELEASES', releases), patch.object(update, 'UNIT', unit), patch.object(update, 'inventory', return_value=before), patch.object(update, 'protected', side_effect=private_snapshot), patch.object(update, 'data_hashes', side_effect=lambda _: dict(data)), patch.object(update, 'runtime', side_effect=runtime), patch.object(update, 'get', return_value={'players': []}), patch.object(update, 'run', side_effect=run), patch.object(update, 'verify_backend', side_effect=verify), patch.object(update, 'publish_directory', side_effect=publish_with_fault), patch.object(update, 'durable', side_effect=durable_with_fault), patch.object(update.ctypes, 'CDLL', return_value=Libc()):
+                if after_publication:
+                    with self.assertRaisesRegex(RuntimeError, 'FRONTEND_VISIBLE_RECONCILIATION_REQUIRED'): update.apply(upload, plan)
+                    self.assertEqual(unit.read_text(), plan['unitCandidate']); self.assertFalse((upload / 'recovery-receipt.json').exists())
+                    self.assertTrue((web / ('padel-jump-team-' + new[:8]) / 'padel-jump-race.html').exists())
+                    with self.assertRaisesRegex(RuntimeError, 'FRONTEND_VISIBLE_RECONCILIATION_REQUIRED'): update.recover(plan, upload)
+                elif failure:
+                    with self.assertRaisesRegex(RuntimeError, 'RUNTIME_SYNC_DRIFT' if failure == 'sync' else 'SYNTHETIC_VERIFY_FAILURE'): update.apply(upload, plan)
                     self.assertEqual(unit.read_text(), original); self.assertTrue((upload / 'recovery-receipt.json').exists()); self.assertFalse((upload / 'receipt.json').exists())
+                    self.assertFalse((web / ('padel-jump-team-' + new[:8])).exists())
                 else:
                     update.apply(upload, plan); self.assertEqual(unit.read_text(), plan['unitCandidate']); self.assertEqual(json.loads((upload / 'receipt.json').read_text())['status'], 'PUBLISHED')
                 self.assertEqual(data['old-result.json'], 'old-data-hash'); self.assertEqual(data['enrollments/new-private-form.json'], 'new-private-hash')
@@ -226,5 +241,8 @@ class JumpUpdate(unittest.TestCase):
 
     def test_update_rehearsal_preserves_existing_and_new_private_data(self): self.rehearsal()
     def test_failed_verification_recovers_old_backend_without_deleting_new_forms(self): self.rehearsal(failure=True)
+    def test_wrong_backend_sync_blocks_frontend_and_recovers_previous_backend(self): self.rehearsal(failure='sync')
+    def test_post_rename_fsync_failure_keeps_compatible_backend_for_readback(self): self.rehearsal(after_publication='rename-fsync')
+    def test_receipt_failure_keeps_compatible_backend_for_readback(self): self.rehearsal(after_publication='receipt')
 
 if __name__ == '__main__': unittest.main()

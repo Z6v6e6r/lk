@@ -1,6 +1,9 @@
 import type { InputBlock, LiveCommand, LivePlayer, LiveResult } from './live-contract';
+import type { Game } from './engine';
+import { predictRaceAcknowledgement } from './race-prediction.ts';
+import { LIVE_SYNC } from './live-contract.ts';
 
-export type LiveAck = { seq: number; player: LivePlayer; result?: LiveResult };
+export type LiveAck = { seq: number; player: LivePlayer; result?: LiveResult; prediction?: Game; sync: typeof LIVE_SYNC };
 export type LiveTicket = LiveAck & { id: string; token: string; engine: string; rule: string };
 type RaceRequest = (path: string, body: unknown, signal: AbortSignal, token?: string) => Promise<LiveAck>;
 
@@ -8,6 +11,7 @@ type RaceRequest = (path: string, body: unknown, signal: AbortSignal, token?: st
 export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => void, error: (message: string, retryFinish?: boolean) => void, request: RaceRequest) {
   let sequence = 0, active = true, busy = false, blocks: InputBlock[] = [], count = 0, finalizing = false, finishInFlight = false;
   let playable = ticket.player.state === 'playing' && ticket.player.game.mode === 'running', controls = 0;
+  let latest: LiveAck = ticket;
   let retryFinish: { seq: number; command: LiveCommand; inputs?: InputBlock[] } | undefined;
   let queue = Promise.resolve(), controller: AbortController | undefined;
   const send = (command: LiveCommand, inputs?: InputBlock[], beforeFinish = false) => {
@@ -24,11 +28,12 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
         finally { clearTimeout(timer); }
       }
       if (active && result) {
-        playable = result.player.state === 'playing' && result.player.game.mode === 'running';
-        // These are only unsent predictions. The acknowledged envelope and its
-        // sequence remain immutable; the server alone decides the checkpoint.
-        if (!playable) { blocks = []; count = 0; }
-        if (command === 'finish') retryFinish = undefined; ack(result);
+        if (result.sync !== LIVE_SYNC || result.seq !== body.seq || result.player?.id !== ticket.id) throw new Error('Обнови страницу: сервер вернул несовместимое состояние заезда.');
+        latest = result;
+        const prediction = predictRaceAcknowledgement(result.player, blocks);
+        blocks = prediction.inputs; count = blocks.reduce((n, block) => n + block[1], 0);
+        playable = result.player.state === 'playing' && prediction.game.mode === 'running';
+        if (command === 'finish') retryFinish = undefined; ack({ ...result, prediction: prediction.game });
       }
     }).catch((e: unknown) => { if (active) {
       const retry = command === 'finish' && envelope && (e instanceof TypeError || e instanceof Error && (e.name === 'AbortError' || 'status' in e && e.status === 503));
@@ -54,7 +59,12 @@ export function createRaceTransport(ticket: LiveTicket, ack: (v: LiveAck) => voi
       try {
         await queue;
         if (blocks.length) { const inputs = blocks; blocks = []; count = 0; await send('inputs', inputs, command === 'finish'); }
+        const paused = latest.player.state === 'paused', mode = latest.player.game.mode;
+        if ((command === 'advance' || command === 'finish') && (mode !== 'complete' || paused)
+          || command === 'retry' && (mode !== 'over' || paused)
+          || command === 'resume' && !paused || command === 'pause' && paused) { if (command === 'finish') finalizing = false; return false; }
         await send(command);
+        return true;
       } finally { controls--; if (command === 'finish') finishInFlight = false; }
     },
     dispose() { active = false; controller?.abort(); blocks = []; },

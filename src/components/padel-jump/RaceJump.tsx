@@ -58,7 +58,7 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   }, [profileAttempt]);
   const serverAck = (v: LiveAck) => {
     if (!alive.current) return;
-    control.acknowledge(v.player);
+    control.acknowledge(v.player, v.prediction);
     ackClock.current = { elapsed: v.player.elapsedMs, received: performance.now(), final: v.player.completedParts === 33 };
     if (v.player.completedParts === 33 && !v.result && !finalRequested.current) { finalRequested.current = true; void connection.current?.command('finish'); }
     if (v.result) { setResult(v.result); setDisplayMs(v.result.elapsedMs); connection.current?.dispose(); }
@@ -122,6 +122,7 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result, tilt, control]);
   const active = !!connection.current, finished = view.mode === 'complete', last = view.station === 10 && view.section === 2;
+  const checkpointReady = control.checkpointConfirmed();
   const move = (key: string, value: number) => { if (view.mode === 'running') directions.current.set(key, value); };
   return <main className="pj-race" ref={region} tabIndex={-1} onKeyDown={e => {
     if (['ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); move(e.key, e.key === 'ArrowLeft' ? -1 : 1); }
@@ -132,8 +133,8 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     {error && <p role="alert" className="pj-live-error">{error}</p>}
     {active && <div className="pj-race-hud"><strong>{STATIONS[view.station].name} <small>{view.section + 1}/3</small></strong><span>{view.score} м</span><time>{formatRaceTime(displayMs)}</time><button disabled={pending || locked.current || view.mode === 'paused' || !!result} onClick={() => void pause()}>Пауза</button></div>}
     <div className="pj-race-field" hidden={!active}><canvas ref={canvas} aria-label="Заезд Jump. Веди мяч наклоном телефона, стрелками или кнопками." />
-      {active && view.mode !== 'running' && <div className="pj-race-overlay"><h2>{result ? 'Финиш подтверждён' : locked.current ? 'Заезд остановлен' : finished ? 'Участок пройден!' : view.mode === 'over' ? 'Ещё одна попытка' : 'Пауза'}</h2><time>{formatRaceTime(result?.elapsedMs ?? displayMs)}</time>
-        {result ? <p>Результат сохранён в рейтинге сообщества.</p> : !locked.current && <button disabled={pending} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
+      {active && view.mode !== 'running' && <div className="pj-race-overlay"><h2>{result ? 'Финиш подтверждён' : locked.current ? 'Заезд остановлен' : finished ? checkpointReady ? 'Участок пройден!' : 'Подтверждаем финиш…' : view.mode === 'over' ? 'Ещё одна попытка' : 'Пауза'}</h2><time>{formatRaceTime(result?.elapsedMs ?? displayMs)}</time>
+        {result ? <p>Результат сохранён в рейтинге сообщества.</p> : !locked.current && <button disabled={pending || finished && !checkpointReady} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending || finished && !checkpointReady ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
         {(result || locked.current) && <a href="./padel-jump-race.html">Новый заезд</a>}</div>}
     </div>
     <footer>{[-1, 1].map(d => <button key={d} aria-label={d < 0 ? 'Двигаться влево' : 'Двигаться вправо'} disabled={!active || view.mode !== 'running'}

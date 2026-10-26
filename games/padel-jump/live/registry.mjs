@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, openSync, writeFileSync, fsyncSyn
 import { join } from 'node:path';
 import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../../src/components/padel-jump/engine.ts';
 import { nextSection } from '../../../src/components/padel-jump/campaign.ts';
-import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIMIT } from '../../../src/components/padel-jump/live-contract.ts';
+import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIMIT, LIVE_SYNC } from '../../../src/components/padel-jump/live-contract.ts';
 
 export const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const ttl = 10000, retention = 48 * 3600000;
@@ -54,8 +54,8 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
   const elapsed = run => run.finalMs ?? run.activeMs + (run.paused || run.finished ? 0 : Math.max(0, now() - run.segment));
   const sweep = () => { pruneResults(); for (const [id, run] of runs) if (now() - run.seen > (run.completed === 33 && !run.finished ? 600000 : ttl)) runs.delete(id); };
   const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
-  const player = run => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
-    elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, completedParts: run.completed, game: cleanGame(run.game) });
+  const player = (run, full = false) => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
+    elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
   function persist(row) {
     if (!directory) return;
     const path = join(directory, row.id + '.json'), temporary = join(directory, '.pending-' + randomUUID());
@@ -92,7 +92,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       let slot = 0; while (used.has(slot)) slot++;
       const game = createCampaignGame(0, 0); game.mode = 'running';
       const run = { id, alias, actorId: actor.id, communityId: actor.communityId, slot, token: createHash('sha256').update(token).digest(), game, seq: 0, ack: null, digest: '', ticks: 0, failures: 0, completed: 0, activeMs: 0, segment: now(), seen: now(), paused: false, finished: false };
-      runs.set(id, run); return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, player: player(run) };
+      runs.set(id, run); return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, player: player(run, true) };
     },
     command(id, token, body, actor) {
       sweep(); const run = runs.get(id);
@@ -144,9 +144,9 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
       if (command === 'resume') { run.paused = false; run.segment = now(); }
       run.seen = now(); run.seq = body.seq; run.digest = digest;
-      const ack = { seq: run.seq, player: player(run), ...(command === 'finish' ? { result: publicResult(results.get(id)) } : {}) }; run.ack = ack; return ack;
+      const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(results.get(id)) } : {}) }; run.ack = ack; return ack;
     },
-    board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(player),
+    board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
       results: [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort((a, b) => a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt)).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort((a, b) => a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id)).slice(0, 100).map(publicResult) }; },
   };
 }
