@@ -113,12 +113,13 @@ function fixture(dispatchFixture = 'dispatch-before.function.txt') {
   const dispatch = fs.readFileSync('scripts/tests/fixtures/max-outbox/' + dispatchFixture, 'utf8');
   const pull = fs.readFileSync('scripts/tests/fixtures/max-outbox/pull-before.function.txt', 'utf8');
   return [
-    ['47c460de0db646e6','f64e5818bc8d7aa6','41be3d2c95b57295'],
-    ['0006d5707259bc5b','466e8a3ac76c2fab','2e547e998eee631f']
-  ].flatMap(([a,b,c]) => [{ id:a,type:'function',z:'tab',func:dispatch,wires:[[b],['diagnostic']] },
-    { id:b,type:'maxbot-send',z:'tab',bot:'synthetic-config',x:0,y:0,wires:[['legacy-ack']] },
-    { id:c,type:'function',z:'tab',func:pull,wires:[['unchanged']] }]).concat([
-    { id:'synthetic-config',type:'maxbot-config' }
+    ['47c460de0db646e6','f64e5818bc8d7aa6','41be3d2c95b57295','MAX_ACADEMY_BOT','99db28109ee6a1f7','55b05444842e7b84'],
+    ['0006d5707259bc5b','466e8a3ac76c2fab','2e547e998eee631f','MAX_BOT','913584cf84dbb460','a5d5eca27e9e56da']
+  ].flatMap(([a,b,c,connector,z,bot]) => [{ id:a,type:'function',z,func:dispatch,wires:[[b],['diagnostic']] },
+    { id:b,type:'maxbot-send',z,bot,x:0,y:0,wires:[['legacy-ack']] },
+    { id:c,type:'function',z,func:pull.replace('connector=MAX_BOT',`connector=${connector}`),wires:[['unchanged']] }]).concat([
+    { id:'55b05444842e7b84',type:'maxbot-config' },
+    { id:'a5d5eca27e9e56da',type:'maxbot-config' }
   ]);
 }
 test('scoped patch builds both connector chains, changes no legacy sender and fails closed on drift', () => {
@@ -128,7 +129,17 @@ test('scoped patch builds both connector chains, changes no legacy sender and fa
   assert.equal(patch.length, 12);
   assert.equal(patch.some(n => n.type === 'maxbot-send'), false);
   assert.equal(patch.filter(n => n.type === 'max-outbox-send').length, 2);
-  assert.match(patch.find(n => n.id === '2e547e998eee631f').func, /connector=MAX_ACADEMY_BOT/);
+  for (const [pullId,dispatchId,connector,botId] of [
+    ['41be3d2c95b57295','47c460de0db646e6','MAX_ACADEMY_BOT','55b05444842e7b84'],
+    ['2e547e998eee631f','0006d5707259bc5b','MAX_BOT','a5d5eca27e9e56da']
+  ]) {
+    const pulled=new Function('msg','env',patch.find(n=>n.id===pullId).func)({}, { get:()=>null });
+    assert.equal(new URL(pulled.url).searchParams.get('connector'),connector);
+    const dispatch=patch.find(n=>n.id===dispatchId),sender=patch.find(n=>n.id===dispatch.wires[0][0]);
+    assert.equal(sender.type,'max-outbox-send');
+    assert.equal(sender.bot,botId);
+    assert.equal(sender.z,original.find(n=>n.id===pullId).z);
+  }
   assert.ok(patch.filter(n => n.type === 'http request').every(n => n.wires[0][0].startsWith('max_outbox_fenced_result_')));
   const drift = fixture(); drift[0].func += '\n// unexpected drift';
   assert.throws(() => preparePatch(drift), /PREIMAGE/);
@@ -136,12 +147,26 @@ test('scoped patch builds both connector chains, changes no legacy sender and fa
   assert.throws(() => preparePatch(wired), /PREIMAGE/);
   const extra = fixture(); extra[0].wires[0].push('legacy-second-sender');
   assert.throws(() => preparePatch(extra), /PREIMAGE/);
-  const missingBot = fixture().filter(n => n.id !== 'synthetic-config');
+  const missingBot = fixture().filter(n => n.id !== '55b05444842e7b84');
   assert.throws(() => preparePatch(missingBot), /PREIMAGE/);
-  const wrongBot = fixture(); wrongBot.find(n => n.id === 'synthetic-config').type = 'unrelated-config';
+  const wrongBot = fixture(); wrongBot.find(n => n.id === '55b05444842e7b84').type = 'unrelated-config';
   assert.throws(() => preparePatch(wrongBot), /PREIMAGE/);
   assert.throws(() => preparePatch([...original, original[0]]), /IDS/);
   assert.throws(() => preparePatch([...original, ...patch.filter(n => !original.some(o => o.id === n.id))]), /ALREADY_PATCHED/);
+});
+
+test('queue ownership cannot be swapped across valid pull code, bot references or flow IDs', () => {
+  const swappedPulls=fixture();
+  const academy=swappedPulls.find(n=>n.id==='41be3d2c95b57295'),main=swappedPulls.find(n=>n.id==='2e547e998eee631f');
+  [academy.func,main.func]=[main.func,academy.func];
+  assert.throws(()=>preparePatch(swappedPulls),/PREIMAGE/);
+  const swappedBots=fixture();
+  const first=swappedBots.find(n=>n.id==='f64e5818bc8d7aa6'),second=swappedBots.find(n=>n.id==='466e8a3ac76c2fab');
+  [first.bot,second.bot]=[second.bot,first.bot];
+  assert.throws(()=>preparePatch(swappedBots),/PREIMAGE/);
+  const movedTogether=fixture();
+  for(const n of movedTogether)if(n.z==='99db28109ee6a1f7')n.z='unexpected-flow';
+  assert.throws(()=>preparePatch(movedTogether),/PREIMAGE/);
 });
 
 test('scoped patch accepts the exact diagnostic preimage and rejects changed observed code', () => {
