@@ -1,3 +1,4 @@
+import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
 import {
@@ -7270,7 +7271,7 @@ export async function apiSendPadelGameChatMessage(params: {
       method: "POST",
       baseUrl,
       auth: true,
-      retries: 1,
+      retries: 0,
       body: JSON.stringify({
         senderPhone,
         senderName: params.senderName?.trim() || null,
@@ -7284,7 +7285,7 @@ export async function apiSendPadelGameChatMessage(params: {
   if (response.error) {
     return {
       data: null as PadelGameChatMessage | null,
-      error: response.error,
+      error: messageSendError(response.error, response.status),
       status: response.status,
     };
   }
@@ -7299,7 +7300,7 @@ export async function apiSendPadelGameChatMessage(params: {
       data: null as PadelGameChatMessage | null,
       error: {
         status: response.status,
-        message: "Не удалось прочитать отправленное сообщение",
+        message: MESSAGE_DELIVERY_UNCONFIRMED,
       },
       status: response.status,
     };
@@ -7453,16 +7454,6 @@ function buildSupportEndpointCandidates(suffix: string): string[] {
   ]));
 }
 
-function shouldRetrySupportWriteRequest(result: ApiResult<unknown>) {
-  if (!result.error) return false;
-  if (result.status == null) return true;
-  return result.status === 404
-    || result.status === 405
-    || result.status === 502
-    || result.status === 503
-    || result.status === 504;
-}
-
 async function requestSupportWithFallback<T>(
   suffix: string,
   options: RequestOptions = {},
@@ -7475,7 +7466,12 @@ async function requestSupportWithFallback<T>(
   const seenErrors: ApiError[] = [];
 
   for (const url of candidates) {
-    const response = await request<T>(url, { ...options, baseUrl: undefined });
+    const response = await request<T>(url, {
+      ...options,
+      baseUrl: undefined,
+      // A lost response cannot prove that a non-idempotent write was rejected.
+      ...(!isReadLikeMethod ? { retries: 0 } : {}),
+    });
     if (!response.error) {
       return response;
     }
@@ -7487,10 +7483,10 @@ async function requestSupportWithFallback<T>(
       firstStatus = response.status;
     }
 
-    // For write operations we still allow safe routing fallbacks when the first endpoint
-    // is clearly unavailable for this request and therefore could not have accepted a write.
-    if (!isReadLikeMethod && !shouldRetrySupportWriteRequest(response)) {
-      return response;
+    // No write replay across hosts or route aliases, even after a 404/405:
+    // a gateway may replace a response after the application accepted the write.
+    if (!isReadLikeMethod) {
+      return { ...response, error: messageSendError(response.error, response.status) };
     }
   }
 
@@ -7841,7 +7837,7 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
       data: null as SupportDialogEventResponse | null,
       error: {
         status: response.status,
-        message: "Не удалось разобрать ответ поддержки",
+        message: MESSAGE_DELIVERY_UNCONFIRMED,
       },
       status: response.status,
     };
