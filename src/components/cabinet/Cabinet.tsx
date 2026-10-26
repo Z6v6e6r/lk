@@ -1,3 +1,4 @@
+import PadelJumpCard from "../padel-jump/PadelJumpCard";
 import { canCreateGameAfterLookup } from "./bookingGameCreationGuard";
 import { AvatarImage } from "../UI/AvatarImage";
 import { invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
@@ -3937,6 +3938,8 @@ export function Cabinet({
           </button>
         </div>
       )}
+
+      <PadelJumpCard />
 
       {/* Быстрые действия */}
       <div className="quick-actions">

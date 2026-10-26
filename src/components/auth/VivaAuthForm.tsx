@@ -136,9 +136,13 @@ function CodeInputStep({
 export function VivaAuthForm({
   onLogin,
   allowPhoneLogin = true,
+  allowOAuth = true,
+  oauthProviders = ["vkid", "yandex"],
 }: {
   onLogin: () => void;
   allowPhoneLogin?: boolean;
+  allowOAuth?: boolean;
+  oauthProviders?: readonly VivaOAuthProvider[];
 }) {
   const {
     phone,
@@ -325,20 +329,21 @@ export function VivaAuthForm({
           <img src={logoHabBlack} alt="ПадлхАБ" className="auth-brand-logo" />
           <p className="auth-title auth-title--brand">войти в личный кабинет</p>
         </div>
-        <OAuthButton
+        {allowOAuth && <>{oauthProviders.includes("vkid") && <OAuthButton
           provider="vkid"
           label="VK ID или Mail.ru"
           icon={<img src={vkAuthIcon} alt="" className="auth-provider-icon-image" />}
           disabled={isLoading || !hasRequiredConsents}
           onClick={handleStartOAuth}
-        />
-        <OAuthButton
+        />}
+        {oauthProviders.includes("yandex") && <OAuthButton
           provider="yandex"
           label="Yandex"
           icon={<img src={yandexAuthIcon} alt="" className="auth-provider-icon-image" />}
           disabled={isLoading || !hasRequiredConsents}
           onClick={handleStartOAuth}
-        />
+        />}
+        </>}
         <fieldset className="auth-consents">
           <legend className="auth-consents__legend">Обязательные согласия</legend>
           <div className="auth-consent">
@@ -389,14 +394,15 @@ export function VivaAuthForm({
               className="auth-btn auth-btn-secondary auth-more-options-btn"
               onClick={() => {
                 clearError();
+                if (!allowOAuth) { openPhoneLogin(); return; }
                 setIsMoreOptionsOpen((current) => !current);
               }}
               disabled={isLoading || !hasRequiredConsents}
               aria-expanded={isMoreOptionsOpen}
               aria-controls="auth-more-options-popover"
             >
-              <span>Еще варианты</span>
-              <ChevronDownIcon />
+              <span>{allowOAuth ? "Еще варианты" : "Войти по номеру"}</span>
+              {allowOAuth && <ChevronDownIcon />}
             </button>
             {isMoreOptionsOpen && (
               <div id="auth-more-options-popover" className="auth-more-options-popover">

@@ -1,0 +1,33 @@
+[Unit]
+Description=PadlHub Jump isolated community pilot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=padlhub-jump-live
+Group=padlhub-jump-live
+EnvironmentFile=/etc/padlhub-jump-live.env
+ExecStart=/usr/local/bin/node /opt/padlhub-jump-live/releases/@SOURCE@/server.mjs
+WorkingDirectory=/opt/padlhub-jump-live/releases/@SOURCE@
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/padlhub-jump-live/@COMMUNITY_HASH@
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=256
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
