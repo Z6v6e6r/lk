@@ -38,6 +38,7 @@ import {
   clearPendingVivaOAuth,
   readPendingVivaOAuth,
   startVivaOAuthRedirect,
+  isVivaOAuthCallbackUrl,
 } from "../utils/vivaOAuth";
 import { isLkIdleRequestPausedError } from "../utils/lkIdleDataGuard";
 
@@ -80,22 +81,27 @@ function resolvePhoneFromToken(token: string | null | undefined) {
   return extractJwtStringClaim(token, ["phone_number", "phoneNumber", "phone"]) || "";
 }
 
-export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
+export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { children: React.ReactNode; oauthCallbackMode?: "cabinet" | "current-page" }) {
   const initialToken = useMemo(() => readVivaAccessToken(), []);
+  const initialOAuthCallback = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return isVivaOAuthCallbackUrl(window.location.href, oauthCallbackMode);
+  }, [oauthCallbackMode]);
+  const oauthCallbackPending = useRef(initialOAuthCallback);
   const shouldRestoreInitialSession = useMemo(
     () => shouldRestoreVivaSession(initialToken),
     [initialToken],
   );
   const [isAuthenticated, setIsAuthenticated] = useState(
-    Boolean(initialToken) && hasPhoneClaim(initialToken),
+    Boolean(initialToken) && !initialOAuthCallback && hasPhoneClaim(initialToken),
   );
-  const [phone, setPhone] = useState(resolvePhoneFromToken(initialToken));
+  const [phone, setPhone] = useState(initialOAuthCallback ? "" : resolvePhoneFromToken(initialToken));
   const [error, setError] = useState<string | null>(null);
   const [needsPhoneVerification, setNeedsPhoneVerification] = useState(
-    Boolean(initialToken) && !hasPhoneClaim(initialToken),
+    Boolean(initialToken) && !initialOAuthCallback && !hasPhoneClaim(initialToken),
   );
-  const [isLoading, setIsLoading] = useState(shouldRestoreInitialSession);
-  const [isRestoringSession, setIsRestoringSession] = useState(shouldRestoreInitialSession);
+  const [isLoading, setIsLoading] = useState(shouldRestoreInitialSession || initialOAuthCallback);
+  const [isRestoringSession, setIsRestoringSession] = useState(shouldRestoreInitialSession || initialOAuthCallback);
   const refreshTimerRef = useRef<number | null>(null);
   const onMountResolvedRef = useRef(false);
 
@@ -109,6 +115,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const applyTokenState = useCallback((tokenResponse: TokenResponse, fallbackPhone = "") => {
+    oauthCallbackPending.current = false;
     persistVivaAuthTokens(
       tokenResponse.access_token,
       tokenResponse.expires_in,
@@ -127,6 +134,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshTokens = useCallback(async () => {
+    if (oauthCallbackPending.current) return false;
     const refreshToken = readVivaRefreshToken();
     if (!refreshToken) {
       clearVivaAuthTokens();
@@ -243,7 +251,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
 
     const pending = readPendingVivaOAuth();
     const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
+    const code = initialOAuthCallback ? params.get("code") : null;
     const returnedState = params.get("state");
     const oauthError = params.get("error");
 
@@ -267,6 +275,14 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    if (!pending && code) {
+      // A callback without its local PKCE state cannot fall back to an older
+      // signed-in identity. Keep refresh blocked until an explicit new login.
+      cleanupVivaOAuthCallbackUrl(); clearPendingVivaOAuth();
+      setIsLoading(false); setIsRestoringSession(false);
+      setError("Сессия входа устарела, попробуйте снова");
+      return;
+    }
     if (!pending || !code) {
       if (initialToken) {
         setIsLoading(false);
@@ -371,7 +387,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
         setIsRestoringSession(false);
       }
     })();
-  }, [applyTokenState, initialToken, refreshTokens, scheduleRefresh]);
+  }, [applyTokenState, initialToken, initialOAuthCallback, refreshTokens, scheduleRefresh]);
 
   const sendCode = useCallback(async (phoneNumber: string, channel = "cascade") => {
     clearError();
@@ -479,6 +495,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
         bindingType: "oauth-state",
         bindingValue: pending.state,
       }),
+      oauthCallbackMode,
     ).catch((oauthStartError) => {
       setIsLoading(false);
       trackClientError(
@@ -489,7 +506,7 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
       );
       setError("Не удалось открыть вход через внешний провайдер");
     });
-  }, [clearError]);
+  }, [clearError, oauthCallbackMode]);
 
   const sendPhoneVerificationCode = useCallback(async (phoneNumber: string, channel = "cascade") => {
     clearError();

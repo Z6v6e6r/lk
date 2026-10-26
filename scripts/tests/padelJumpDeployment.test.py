@@ -1,4 +1,8 @@
 import hashlib
+import io
+import json
+import contextlib
+import os
 import importlib.util
 import sys
 sys.dont_write_bytecode = True
@@ -86,5 +90,52 @@ class JumpDeployment(unittest.TestCase):
         self.assertTrue(packager.include_public_artifact('LPD.png', b'public-image-fixture'))
         with self.assertRaisesRegex(RuntimeError, 'manifest drift'): packager.include_public_artifact('manifest.json', b'changed')
         with self.assertRaisesRegex(RuntimeError, 'Unexpected public artifact'): packager.include_public_artifact('private.json', b'{}')
+
+    def frontend_module(self):
+        spec = importlib.util.spec_from_file_location('frontend', Path(__file__).resolve().parents[1] / 'publish_padel_jump_frontend_147.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+
+    def test_frontend_archive_rejects_traversal_links_and_private_json(self):
+        frontend = self.frontend_module()
+        for name, kind in [('../escape.js', tarfile.REGTYPE), ('assets/link.js', tarfile.SYMTYPE), ('private.json', tarfile.REGTYPE), ('/absolute.js', tarfile.REGTYPE)]:
+            member = tarfile.TarInfo(name); member.type = kind
+            with self.assertRaises(RuntimeError): frontend.validate_archive([member], {'files': {name: 'fixture'}})
+        member = tarfile.TarInfo('assets/game.js'); frontend.validate_archive([member], {'files': {'assets/game.js': 'fixture'}})
+
+    def test_frontend_preimage_drift_stops_before_unpacking_or_restart(self):
+        frontend = self.frontend_module()
+        with tempfile.TemporaryDirectory() as root:
+            upload = Path(root); plan = {'sourceCommit': 'a' * 40, 'publisherSha256': frontend.sha(frontend.__file__), 'preimage': {'old': True}}
+            (upload / 'plan.json').write_text(json.dumps(plan))
+            with patch.object(frontend, 'snapshot', return_value={'drift': True}), patch.object(frontend, 'run') as run:
+                with self.assertRaisesRegex(RuntimeError, 'HOST_PREIMAGE_DRIFT'): frontend.apply(upload)
+                run.assert_not_called(); self.assertEqual([p.name for p in upload.iterdir()], ['plan.json'])
+
+    def test_frontend_publication_preserves_old_files_and_never_restarts_a_service(self):
+        frontend = self.frontend_module()
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root).resolve(); upload = base / 'upload'; upload.mkdir(); web = base / 'web'; web.mkdir()
+            old = web / 'old-game.html'; old.write_bytes(b'original')
+            before = {'protected': {'old': frontend.sha(old)}, 'backend': {'sourceCommit': 'b' * 40, 'engine': 'e' * 64}}
+            release = {'sourceCommit': 'a' * 40, 'sourceDirty': False, 'engine': 'e' * 64, 'backendSourceCommit': 'b' * 40}
+            files = {name: b'fixture-public-html' for name in ['padel-jump.html', 'padel-jump-race.html', 'padel-jump-live.html']}; files['release.json'] = json.dumps(release).encode()
+            with tarfile.open(upload / 'payload.tar', 'w') as tar:
+                for name, data in files.items():
+                    m = tarfile.TarInfo(name); m.size = len(data); tar.addfile(m, io.BytesIO(data))
+            plan = {'sourceCommit': 'a' * 40, 'engine': 'e' * 64, 'publisherSha256': frontend.sha(frontend.__file__), 'archiveSha256': frontend.sha(upload / 'payload.tar'), 'preimage': before, 'files': {name: frontend.digest(data) for name, data in files.items()}}
+            (upload / 'plan.json').write_text(json.dumps(plan))
+            class Libc:
+                def renameat2(self, source_fd, source, target_fd, target, flags):
+                    if flags != 1 or source_fd != -100 or target_fd != -100: raise AssertionError('No-clobber flags required')
+                    if os.path.lexists(target): return -1
+                    os.rename(source, target); return 0
+            with patch.object(frontend, 'WEB', web), patch.object(frontend, 'snapshot', return_value=before), patch.object(frontend.ctypes, 'CDLL', return_value=Libc()), patch.object(frontend, 'run') as run:
+                with contextlib.redirect_stdout(io.StringIO()): frontend.apply(upload)
+                run.assert_not_called()
+                self.assertEqual(old.read_bytes(), b'original')
+                self.assertEqual((web / 'padel-jump-team-aaaaaaaa/padel-jump-race.html').read_bytes(), files['padel-jump-race.html'])
+                self.assertEqual(json.loads((upload / 'receipt.json').read_text())['status'], 'PUBLISHED')
+                with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): frontend.apply(upload)
+                run.assert_not_called()
 
 if __name__ == '__main__': unittest.main()
