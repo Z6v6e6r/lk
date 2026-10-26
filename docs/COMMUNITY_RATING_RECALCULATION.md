@@ -15,6 +15,16 @@ This worker fills the rating storage collections from authoritative community so
 
 The client must not calculate ratings. It should read the prepared snapshot through the community rating API.
 
+## Jump exhibition community
+
+For `community_1793001495612_падлхаб-команда` only, the owner selected Jump as the primary community ranking. Its ranking screen reads `GET https://padlhub.su/jump-live-api/community-ranking?communityId=…` with the existing profile bearer token and `credentials: omit`. It does not request sporting snapshots or change their formulas, collections or recalculation workers. Every other community keeps the existing provider and filters.
+
+The Jump service verifies current community membership (existing identity cache, at most 30 seconds) and returns `jump-community-ranking-v1`: `communityId`, `rule`, `lives`, `retentionHours`, `total`, up to 100 ranked `rows` and nullable `me`. Each row contains only run `id`, `rank`, display `name`, `stars`, `elapsedMs` and server-derived `isCurrentUser`; private profile identifiers are never returned. `me` retains the actual position beyond the first 100 rows. One best attempt per verified profile is selected by stars descending, then elapsed time ascending. The pilot service currently retains attempts for 48 hours and accepts at most 500 stored attempts; these limits also apply here and are shown in the UI.
+
+Missing authentication is 401, nonmembership is 403, wrong community/query is 404, verification/storage unavailability is 503. Errors must not render a sporting zero or an empty successful result. Only this GET/OPTIONS route accepts exact cabinet origin `https://padlhub.ru` in addition to the configured game origin; it allows the Authorization header, without credentials or wildcard CORS. Existing game-write, enrollment and stream policies remain unchanged.
+
+The frontend clears previous profile data on remount, aborts on unmount, refreshes visible screens every 30 seconds, coalesces in-flight reads and backs off errors to 60 seconds. A temporary failure can retain explicitly labelled last-known rows; 401/403 clears them. Deployment order: publish the compatible Jump read endpoint first, verify authenticated membership/CORS and retained receipts, then publish the focused main frontend through the approved complete-bundle release process. The isolated game publisher cannot update the cabinet bundle. Frontend rollback returns to the preceding complete bundle; the additive read endpoint may remain without changing gameplay.
+
 Every current `lk_communities.members` entry is materialized in every requested snapshot period, including members with no game, tournament, or visit facts. Such a base row keeps the canonical `currentLevel` from `player_rating_state`, has zero scores/counters and the `no_activity` badge. It does not create a synthetic row in `community_rating_facts`.
 
 ## Player Rating API
