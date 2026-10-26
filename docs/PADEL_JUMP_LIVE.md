@@ -13,6 +13,14 @@ Status: team pilot activation package. Community «ПадлхАБ команда
 - Explicit start consent covers displaying the verified profile name, game and result on the public wall. Public payloads omit profile IDs, community IDs, contacts and credentials. Treat the wall URL as public; do not project it without the agreed participant consent.
 - Ranking retains the best result per profile, ordered by unique stars descending then elapsed time ascending in this community/rule/engine version, for 48 hours, with up to 500 saved attempts and 100 visible best-profile entries. Non-best attempts still consume the 500-receipt capacity until retention pruning. This dedicated game leaderboard does not alter the community's existing sporting rating.
 
+### Primary Jump ranking in the team cabinet
+
+The owner selected Jump as the primary ranking for `community_1793001495612_падлхаб-команда`. The additive `GET /jump-live-api/community-ranking?communityId=…` read projects the same stored best attempts into `jump-community-ranking-v1`: `communityId`, `rule`, `lives`, `retentionHours`, `total`, up to 100 `rows`, and nullable `me` even outside that first page. Row fields are run UUID `id`, actual `rank`, display `name`, `stars`, `elapsedMs` and `isCurrentUser`. The last field is derived only by comparing the private receipt actor to the profile verified by the service. Names and client-supplied IDs never identify the current user. Profile IDs, contacts and credentials are not returned.
+
+This read uses the existing 30-second identity cache and active-membership requirement. Missing authentication is 401, nonmembership is 403, wrong or extra community query is 404, and verification/storage failure is 503. No canonical sporting collection or score is written. Only this GET/OPTIONS route permits the configured game origin and exact cabinet origin `https://padlhub.ru`; its preflight allows only GET and Authorization, without cookies, credential CORS or wildcards. Existing game writes, enrollment and stream remain under their previous origin policies.
+
+Publish this compatible endpoint before the separate focused cabinet frontend change. The game publisher cannot replace main LK bundles. Retain and hash-check existing private receipts during the normal no-active-player service update. Returning to the previous cabinet bundle does not require deleting results or removing this additive endpoint.
+
 ## Boundaries and recovery
 
 `games/padel-jump/live/identity.mjs` verifies the bearer token against the fixed Viva profile provider, then exact active membership against the fixed LK community endpoint. Neither a caller-provided name nor decoded JWT claims authorize a run. Ordinary identity cache: 30 seconds; new-race join and finish recheck the providers. Tokens remain in memory and are not written to results or URLs.

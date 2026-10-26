@@ -88,6 +88,8 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     run.finishRow = row; persist(row); results.set(run.id, row);
   }
 
+  const bestResults = () => [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort(rank).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort(rank);
+
   return {
     join(body, actor) {
       sweep();
@@ -159,6 +161,14 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(results.get(id)) } : {}) }; run.ack = ack; return ack;
     },
     board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
-      results: [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort(rank).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort(rank).slice(0, 100).map(publicResult) }; },
+      results: bestResults().slice(0, 100).map(publicResult) }; },
+    communityRanking(actor) {
+      if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id) fail(403, 'VERIFIED_PROFILE_REQUIRED');
+      sweep(); const ranked = bestResults();
+      const row = (value, index) => ({ id: value.id, rank: index + 1, name: value.alias, stars: value.stars, elapsedMs: value.elapsedMs, isCurrentUser: value.actorId === actor.id });
+      const mine = ranked.findIndex(value => value.actorId === actor.id);
+      return { schema: 'jump-community-ranking-v1', communityId, rule: LIVE_RULE, lives: LIVE_LIVES, retentionHours: retention / 3600000, total: ranked.length,
+        rows: ranked.slice(0, 100).map(row), me: mine >= 0 ? row(ranked[mine], mine) : null };
+    },
   };
 }
