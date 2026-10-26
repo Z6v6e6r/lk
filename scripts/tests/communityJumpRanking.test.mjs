@@ -67,3 +67,18 @@ test('actual result renders stars and precise time, self marker is server-owned 
   const unplayed = renderToStaticMarkup(React.createElement(Results, { data: data({ rows: [other], me: null }) }));
   assert.match(unplayed, /ещё нет завершённого заезда/);
 });
+
+test('ranking screen uses the requested title and rule without the redundant run note', () => {
+  const html = renderToStaticMarkup(React.createElement(module.exports.CommunityJumpRankingScreen, {
+    community: { id: communityId, name: 'Тестовое сообщество', memberCount: 0 },
+    profileKey: 'synthetic-profile', chatBadgeCount: 0,
+    onOpenMenu() {}, onClose() {}, onSelectSectionNav() {}, onSelectBottomNav() {},
+  }));
+  assert.match(html, /<h3>Рейтинг ПадлхАБ Jump<\/h3>/);
+  assert.match(html, /aria-label="Рейтинг ПадлхАБ Jump"/);
+  assert.ok(html.includes('Чем больше звезд, тем выше место. Если звезд одинаково, то выше тот у кого ниже время.'));
+  assert.ok(!html.includes('Лучший заезд каждого участника'));
+  assert.ok(!html.includes('Больше звёзд — выше.'));
+  const source = readFileSync('src/components/cabinet/community-feed/CommunityJumpRankingScreen.tsx', 'utf8');
+  assert.ok(!source.includes('Лучший заезд каждого участника'));
+});
