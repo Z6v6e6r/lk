@@ -87,6 +87,8 @@ import { CommunityScreen } from "./community-feed/CommunityScreen";
 import { CommunityChatScreen } from "./community-feed/CommunityChatScreen";
 import { CommunityFab } from "./community-feed/CommunityFab";
 import { CommunityRankingScreen } from "./community-feed/CommunityRankingScreen";
+import { CommunityJumpRankingScreen } from "./community-feed/CommunityJumpRankingScreen";
+import { usesJumpRanking } from "./community-feed/communityJumpRanking";
 import type { CommunityRankingRowModel, CommunityRankingTypeId } from "./community-feed/communityRankingModel";
 import type { CommunitySecondaryNavItemId } from "./community-feed/CommunitySecondaryNav";
 import { CommunityTableScreen } from "./community-feed/CommunityTableScreen";
@@ -2010,6 +2012,10 @@ export function CommunitiesSection({
     }
 
     if (activeCommunityTab !== "RANKING" || !selectedCommunity) {
+      return;
+    }
+
+    if (usesJumpRanking(selectedCommunity.id)) {
       return;
     }
 
@@ -5733,11 +5739,32 @@ export function CommunitiesSection({
               />
             )}
 
-            {activeCommunityTab === 'RANKING' && selectedCommunity.communityType === 'EVENT' && <>
+            {activeCommunityTab === 'RANKING' && usesJumpRanking(selectedCommunity.id) && (
+              <CommunityJumpRankingScreen
+                key={`${selectedCommunity.id}:${profileId ?? ''}`}
+                community={selectedCommunity}
+                profileKey={profileId ?? ''}
+                currentUserAvatar={profile.photo}
+                chatBadgeCount={currentChatUnreadBadgeCount}
+                onOpenMenu={handleOpenCommunityHeaderMenu}
+                onClose={() => setSelectedCommunityId(null)}
+                onSelectSectionNav={handleSelectCommunitySectionNav}
+                onSelectBottomNav={handleSelectCommunityBottomNav}
+                navActionSlot={canPostInSelectedCommunity && !isFeedComposerOpen ? (
+                  <CommunityFab
+                    variant="nav"
+                    onAddPost={() => handleFeedFabAction("news")}
+                    onScheduleGame={() => handleFeedFabAction("game")}
+                    onInvitePlayers={() => { void handleInvitePlayers(); }}
+                  />
+                ) : null}
+              />
+            )}
+            {activeCommunityTab === 'RANKING' && !usesJumpRanking(selectedCommunity.id) && selectedCommunity.communityType === 'EVENT' && <>
               <button type="button" className="btn-secondary" onClick={() => setActiveCommunityTab('FEED')}>К ленте мероприятия</button>
               <EventCommunityPanel key={selectedCommunity.id} community={selectedCommunity} onRegister={() => setEventJoin({community:selectedCommunity})} />
             </>}
-            {activeCommunityTab === "RANKING" && selectedCommunity.communityType !== 'EVENT' && (
+            {activeCommunityTab === "RANKING" && !usesJumpRanking(selectedCommunity.id) && selectedCommunity.communityType !== 'EVENT' && (
               <CommunityRankingScreen
                 community={selectedCommunity}
                 divisions={leagueTables.map(table => ({ id: table.id, name: table.name }))}
