@@ -1,3 +1,4 @@
+import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { eventGameCommandBody } from '../services/eventJumpContract';
 import { readAuthToken } from "./authTokenStorage";
 import { parseEventRegistrationPolicy, type EventRegistrationPolicy, communityType, type CommunityType, type CommunityTypeSettings } from "../services/community-policy";
@@ -1286,8 +1287,13 @@ const communityListReads = new ExpiringSingleFlight<ApiResult<CommunityListRespo
 async function requestCommunityMutation<T>(
   path: string,
   options: RequestOptions,
+  allowFallback = true,
 ): Promise<ApiResult<T>> {
-  options = { ...options, auth: Boolean(readAuthToken()) };
+  options = {
+    ...options,
+    auth: Boolean(readAuthToken()),
+    ...(!allowFallback ? { retries: 0 } : {}),
+  };
   const baseUrls = buildCommunityMutationBaseUrls();
   let finalResult: ApiResult<T>;
   if (baseUrls.length === 0) {
@@ -1301,7 +1307,7 @@ async function requestCommunityMutation<T>(
       });
       lastResult = result;
 
-      if (!shouldRetryCommunityMutation(result) || index === baseUrls.length - 1) {
+      if (!allowFallback || !shouldRetryCommunityMutation(result) || index === baseUrls.length - 1) {
         break;
       }
     }
@@ -2142,16 +2148,17 @@ export async function apiCreateCommunityChatMessage(
     `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/messages`,
     {
       method: "POST",
-      retries: 1,
+      retries: 0,
       body: JSON.stringify({
         member: buildMemberPayload(payload.member),
         text,
       }),
     },
+    false, // Sending a message has no durable idempotency key; never replay it.
   );
 
   if (response.error) {
-    return errorResult<CommunityChatMessage>(response.status, response.error.message, null);
+    return { data: null as CommunityChatMessage | null, error: messageSendError(response.error, response.status), status: response.status };
   }
 
   const payloadRecord = isRecord(response.data) ? response.data : {};
@@ -2163,7 +2170,7 @@ export async function apiCreateCommunityChatMessage(
     normalizeCommunityChatMessage(response.data);
 
   if (!message) {
-    return errorResult<CommunityChatMessage>(response.status, "Не удалось разобрать сообщение сообщества", null);
+    return errorResult<CommunityChatMessage>(response.status, MESSAGE_DELIVERY_UNCONFIRMED, null);
   }
 
   return {

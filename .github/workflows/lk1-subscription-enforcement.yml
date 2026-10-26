@@ -364,6 +364,7 @@ jobs:
         id: check_9
         run: >-
           node --experimental-strip-types --test
+          scripts/tests/messageDelivery.test.ts
           scripts/tests/subscriptionBookingGateway.nodered.test.ts
           scripts/tests/bookingConversionEvidence.test.ts
           scripts/tests/cabinetBookingConversionGuard.test.ts

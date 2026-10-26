@@ -221,3 +221,17 @@ test('receipt output failure completes handler without repeating provider send',
     assert.deepEqual(warnings, ['MAX_OUTBOX_RECEIPT_OUTPUT_FAILED']);
   } finally { globalThis.fetch = original; }
 });
+
+test('observed MAX permanent refusal codes survive as safe receipts with one transport call', async () => {
+  for (const [status, code] of [[403, 'dialog.suspended'], [404, 'chat.not.found']]) {
+    let calls = 0;
+    const result = await deliver(command(), 'synthetic-token', { fetchImpl: async () => {
+      calls++;
+      return provider(status, { code, message: 'private-provider-description', recipient: 'private-recipient' });
+    } });
+    assert.equal(calls, 1);
+    assert.equal(result.kind, 'fail');
+    assert.deepEqual(result.failure, { status, code });
+    assert.ok(!JSON.stringify(result).includes('private-'));
+  }
+});
