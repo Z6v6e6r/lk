@@ -22,3 +22,10 @@ test('HUD renders five balls, with only remaining lives yellow and spent lives g
   assert.match(css, /\.pj-race-hud small\{display:inline/);
   assert.match(css, /\.pj-race-life\.is-spent\{[^}]*background:#/);
 });
+
+test('race has no lower control row, retaining touch fallback on the play field', () => {
+  assert.ok(!source.includes('<footer>'));
+  assert.match(source, /<canvas[^>]*onPointerDown=/s);
+  for (const name of ['onPointerUp', 'onPointerCancel', 'onLostPointerCapture']) assert.ok(source.includes(name));
+  assert.ok(source.includes('ArrowLeft') && source.includes('ArrowRight') && source.includes('tilt.direction()'));
+});
