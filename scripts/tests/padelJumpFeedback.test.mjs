@@ -33,7 +33,7 @@ test('race has no lower control row, retaining touch fallback on the play field'
 test('entry uses requested copy and explains phone tilt before starting', () => {
   const previous = globalThis.window;
   try {
-    globalThis.window = { isSecureContext: true };
+    globalThis.window = { isSecureContext: true, location: { origin: 'https://padlhub.ru' } };
     const html = renderToStaticMarkup(React.createElement(module.exports.RaceJump));
     assert.ok(html.includes('На каждую попытку у тебя всего 5 жизней. Чем больше звезд ты наберешь, тем выше твой рейтинг в сообществе. Если количество звезд равное, выше тот, кто потратил меньше времени.'));
     assert.ok(html.includes('Игра на ретинг'));

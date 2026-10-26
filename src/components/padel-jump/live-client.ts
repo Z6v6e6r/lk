@@ -4,6 +4,9 @@ import { createRaceTransport } from './race-connection';
 import type { LiveAck, LiveTicket } from './race-connection';
 export type { LiveAck, LiveTicket } from './race-connection';
 
+const playerApi = () => typeof window !== 'undefined' && window.location.origin === 'https://padlhub.ru'
+  ? 'https://padlhub.su/jump-live-api/' : LIVE_API;
+
 export const LIVE_ERRORS: Record<string, string> = {
   IDENTITY_UNAVAILABLE: 'Сервис профиля или сообщества временно недоступен. Повтори проверку.', IDENTITY_RESPONSE_INVALID: 'Сервис вернул неполные данные профиля. Повтори проверку.', MEMBERSHIP_NOT_VERIFIED: 'Не удалось получить полный список участников. Повтори проверку; вступать заново не нужно.',
   PROFILE_INVALID: 'Сервис не подтвердил идентификатор профиля. Выйди и войди заново.', PROFILE_NAME_MISSING: 'В профиле и сообществе не указано имя. Проверь данные в личном кабинете.', IDENTITY_BUSY: 'Проверок сейчас много. Повтори чуть позже.',
@@ -16,7 +19,7 @@ export const LIVE_ERRORS: Record<string, string> = {
   INPUTS_NOT_RUNNING: 'Сервер уже остановил движение на этом участке. Начни новый заезд.', EXCESS_INPUTS: 'Движения после завершения участка не подтверждены. Начни новый заезд.', SEQUENCE_CONFLICT: 'Порядок обновлений заезда нарушился. Начни новый заезд.', CHECKPOINT_NOT_READY: 'Сервер ещё не подтвердил финиш участка.', RETRY_NOT_READY: 'Сервер ещё не подтвердил завершение попытки.', ALREADY_PAUSED: 'Заезд уже находится на паузе.', NOT_PAUSED: 'Пауза заезда не подтверждена.', RUN_FINISHED: 'Заезд уже завершён.',
 };
 export async function liveRequest<T>(path: string, body: unknown, signal: AbortSignal, token?: string): Promise<T> {
-  const response = await fetch(LIVE_API + path, { method: 'POST', credentials: 'omit', signal,
+  const response = await fetch(playerApi() + path, { method: 'POST', credentials: 'omit', signal,
     headers: { 'Content-Type': 'application/json', ...(readAuthToken() ? { Authorization: 'Bearer ' + readAuthToken() } : {}), ...(token ? { 'X-Jump-Run-Token': token } : {}) }, body: JSON.stringify(body) });
   const data = await response.json().catch(() => ({ error: 'SERVICE_UNAVAILABLE' }));
   if (!response.ok || typeof data?.error === 'string') {
@@ -37,7 +40,7 @@ export async function joinRace(signal: AbortSignal): Promise<LiveTicket> {
 
 export async function raceProfile(signal: AbortSignal): Promise<{ id: string; name: string; communityId: string }> {
   const token = readAuthToken();
-  const response = await fetch(LIVE_API + 'me', { signal, credentials: 'omit', headers: token ? { Authorization: 'Bearer ' + token } : {} });
+  const response = await fetch(playerApi() + 'me', { signal, credentials: 'omit', headers: token ? { Authorization: 'Bearer ' + token } : {} });
   const data = await response.json().catch(() => ({ error: 'SERVICE_UNAVAILABLE' }));
   if (!response.ok || typeof data.error === 'string') throw new Error(LIVE_ERRORS[data.error] ?? 'Не удалось подтвердить профиль сообщества.');
   if (typeof data.id !== 'string' || typeof data.name !== 'string' || typeof data.communityId !== 'string') throw new Error('Профиль не подтверждён.');
@@ -47,7 +50,7 @@ export async function raceProfile(signal: AbortSignal): Promise<{ id: string; na
 export type RaceEntryStatus = { state: 'ready' | 'form' | 'pending' | 'blocked' | 'confirming'; name: string; communityName: string; fields?: { firstName: string; lastName: string; email: string; companyWebsite: string } };
 export async function entryRequest<T>(path: 'entry' | 'enrollment', signal: AbortSignal, body?: unknown): Promise<T> {
   const token = readAuthToken();
-  const response = await fetch(LIVE_API + path, { signal, credentials: 'omit', cache: 'no-store', method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetch(playerApi() + path, { signal, credentials: 'omit', cache: 'no-store', method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json().catch(() => ({ error: 'SERVICE_UNAVAILABLE' }));
   if (!response.ok || typeof data.error === 'string') throw Object.assign(new Error(LIVE_ERRORS[data.error] ?? 'Не удалось проверить доступ к игре. Повтори проверку.'), { status: response.status });
   return data as T;
