@@ -147,8 +147,6 @@ function platform(ctx: CanvasRenderingContext2D, p: Platform, game: Game, reduce
       ctx.beginPath(); ctx.ellipse(x, yy, 1.6, 1, 0, 0, Math.PI * 2); ctx.fill();
     }
   }
-  if (p.kind === 'racket' && p.spent === undefined && (art || rackets)) { ctx.strokeStyle = '#e7f9ab'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(1, 0); ctx.lineTo(p.width - 1, 0); ctx.stroke(); }
-  if (p.kind === 'racket' && p.spent === undefined) { ctx.fillStyle = '#fff'; ctx.font = 'bold 8px Arial'; ctx.fillText('1×', p.width * 0.71, 1); }
   if (p.finish) {
     ctx.strokeStyle = '#6642b0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(p.width / 2, -3); ctx.lineTo(p.width / 2, -44); ctx.stroke();
     rounded(ctx, p.width / 2, -44, 64, 21, 3, '#fffbef', '#6642b0');
