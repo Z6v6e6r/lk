@@ -100,3 +100,11 @@ test('permanent v2 accepts profiles beyond old capacity and nullable retention; 
   assert.throws(() => parse(JSON.stringify(data({ retentionHours: null })), communityId));
   assert.equal(parse(JSON.stringify(data()), communityId).retentionHours, 48);
 });
+
+test('play link stays on the cabinet origin and contains no session material', () => {
+  const url = new URL(module.exports.JUMP_GAME_URL);
+  assert.equal(url.origin, 'https://padlhub.ru');
+  assert.equal(url.pathname, '/lk_new');
+  assert.deepEqual([...url.searchParams], [['authMode', 'viva'], ['padelJumpRace', '1']]);
+  assert.equal(url.hash, '');
+});
