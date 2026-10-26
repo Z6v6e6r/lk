@@ -39,14 +39,24 @@ export function communityPolicyEvent(kind, raw) {
 }
 export function matchesCommunityPolicy(community, event) {
   const type = communityType(community.communityType);
+  let config;
+  try { config = parseCommunityTypeSettings(type, community.typeSettings); } catch { return false; }
+  return matchesValidatedPolicy(community, event, config);
+}
+function matchesValidatedPolicy(community, event, config) {
+  const type = communityType(community.communityType);
   if (!event.eligible || community.archived === true || !['STATION', 'CORPORATE'].includes(type)) return false;
   if (!Number.isSafeInteger(community.typeSettingsRevision) || community.typeSettingsRevision < 1) return false;
   const effective = timestamp(community.typeSettingsEffectiveAt);
   if (effective === null || event.at === null || event.at < effective) return false;
-  let config;
-  try { config = parseCommunityTypeSettings(type, community.typeSettings); } catch { return false; }
   if (type === 'STATION') return ['GAME', 'TOURNAMENT'].includes(event.kind) && event.stationId === config.stationId;
   return config.directionIds.includes(event.directionId) || config.exerciseTypeIds.includes(event.exerciseTypeId) || config.categories.includes(event.category);
+}
+function requestsPublicSchedule(community, config) {
+  return community.communityType === 'CORPORATE' && community.archived !== true &&
+    Number.isSafeInteger(community.typeSettingsRevision) && community.typeSettingsRevision >= 1 &&
+    timestamp(community.typeSettingsEffectiveAt) !== null && Boolean(config) &&
+    (config.directionIds.length > 0 || config.exerciseTypeIds.length > 0);
 }
 export function buildStationMembershipMutation(community, event, member, nowIso) {
   if (communityType(community.communityType) !== 'STATION' || !matchesCommunityPolicy(community, event)) return null;
@@ -114,8 +124,14 @@ export async function publishCommunityPolicyIntent(db, community, operation) {
 export async function processCommunityPolicies(db, { sinceIso, nowIso, dryRun = true, maxEvents = 10000, loadSchedule = loadCommunitySchedule }) {
   const communities = await db.collection('lk_communities').find({ archived: { $ne: true }, $or: [{ communityType: { $in: ['STATION', 'CORPORATE'] } }, { 'communityPolicyOutbox.0': { $exists: true } }] }).limit(1001).toArray();
   if (communities.length > 1000) throw new Error('COMMUNITY_POLICY_COMMUNITY_LIMIT');
-  const counts = { communities: communities.length, events: 0, memberships: 0, posts: 0, invalidPolicies: 0, scheduleUnavailable: false, affectedCommunityIds: [] };
+  const counts = { communities: communities.length, events: 0, memberships: 0, posts: 0, invalidPolicies: 0,
+    scheduleRequested: false, scheduleAttempted: false, scheduleEvents: 0, scheduleUnavailable: false, affectedCommunityIds: [] };
   if (!communities.length) return counts;
+  const policies = new Map();
+  for (const community of communities) {
+    try { policies.set(community, parseCommunityTypeSettings(community.communityType, community.typeSettings)); }
+    catch { /* Invalid policies may still have previously authorized recovery intents. */ }
+  }
   const events = [];
   // Future scheduled records are revisited when a community is first configured.
   const changed = { $or: [...['createdAt', 'updatedAt', 'startsAt', 'startAt'].map(key => ({ [key]: { $gte: sinceIso } })), { 'booking.date': { $gte: sinceIso.slice(0, 10) } }, { 'params.date': { $gte: sinceIso.slice(0, 10) } }] };
@@ -124,10 +140,14 @@ export async function processCommunityPolicies(db, { sinceIso, nowIso, dryRun = 
     if (rows.length > maxEvents) throw new Error('COMMUNITY_POLICY_EVENT_LIMIT');
     events.push(...rows.map(row => communityPolicyEvent(kind, row)));
   }
-  if (communities.some(community => community.communityType === 'CORPORATE')) {
+  const localEvents = [...events];
+  counts.scheduleRequested = communities.some(community => requestsPublicSchedule(community, policies.get(community)));
+  if (counts.scheduleRequested) {
+    counts.scheduleAttempted = true;
     try {
       const schedule = await loadSchedule({ nowIso });
       events.push(...schedule.map(raw => communityPolicyEvent(raw.kind, raw)));
+      counts.scheduleEvents = schedule.length;
     } catch { counts.scheduleUnavailable = true; }
   }
   counts.events = events.length;
@@ -137,8 +157,12 @@ export async function processCommunityPolicies(db, { sinceIso, nowIso, dryRun = 
       const result = await finishPostIntent(db, community.id, pending);
       affected ||= result.modifiedCount > 0 || result.upsertedCount > 0;
     }
-    try { parseCommunityTypeSettings(community.communityType, community.typeSettings); } catch { counts.invalidPolicies++; continue; }
-    for (const event of events) {
+    const policy = policies.get(community);
+    if (!policy) { counts.invalidPolicies++; continue; }
+    // A different corporate policy must not make a local-only community consume
+    // provider events. Recovery intents above retain their original authority.
+    const selectedEvents = requestsPublicSchedule(community, policy) ? events : localEvents;
+    for (const event of selectedEvents) {
       if (!event.eligible && event.id && !dryRun) {
         const key = 'community-policy:' + [community.id, event.kind, event.id].map(encodeURIComponent).join(':');
         const result = await db.collection('lk_community_feed').updateOne({ _id: key, communityId: community.id, managedBy: 'community-policy-v1', archived: { $ne: true } }, { $set: { archived: true, updatedAt: nowIso, archiveReason: 'SOURCE_CANCELLED' } });
@@ -146,7 +170,7 @@ export async function processCommunityPolicies(db, { sinceIso, nowIso, dryRun = 
         affected ||= result.modifiedCount > 0;
         continue;
       }
-      if (!matchesCommunityPolicy(community, event)) continue;
+      if (!matchesValidatedPolicy(community, event, policy)) continue;
       if (community.communityType === 'STATION') for (const member of event.players) {
         const mutation = buildStationMembershipMutation(community, event, member, nowIso);
         if (!mutation) continue;

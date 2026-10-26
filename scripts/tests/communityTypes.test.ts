@@ -383,3 +383,67 @@ test('actual ranking/feed/thread/chat Node-RED response functions redact typed c
     assert.ok(JSON.stringify(output[0].payload).includes(name === 'fnChatGetResponse' ? 'Сообщение' : name === 'fnRankingSnapshotResponse' ? 'Игрок' : name === 'fnFeedResponse' ? 'post' : 'Комментарий'), name);
   }
 });
+
+function corporateProjectionFixture(communities: Record<string, unknown>[], local: Record<string, Record<string, unknown>[]> = {}) {
+  const reads: string[] = [];
+  return { reads, db: { collection(name: string) { return {
+    find() { reads.push(name); return { limit() { return this; }, async toArray() { return name === 'lk_communities' ? communities : local[name] ?? []; } }; },
+    async findOne() { return null; },
+    async updateOne() { assert.fail('Dry-run projection must never write'); }
+  }; } } };
+}
+const corporateForSource = (settings: Record<string, unknown>, id = 'corporate-source') => ({
+  ...station, id, communityType: 'CORPORATE', typeSettings: settings
+});
+
+test('category-only corporate consumes actual local sources and never calls Viva', async () => {
+  const corporate = corporateForSource({ categories: ['open_game', 'court_rental', 'tournament', 'group_training'], vivaSubscriptionId: 'benefit-only' });
+  const fixture = corporateProjectionFixture([corporate], {
+    lk_games: [{ ...game, directionId: 6180 }, { id: 'local-rental', createdAt: now, category: 'court_rental' }],
+    tournaments: [{ id: 'local-tournament', createdAt: now }],
+    lk_training_visits: [{ id: 'local-training', createdAt: now }]
+  });
+  let calls = 0;
+  const counts = await processCommunityPolicies(fixture.db, {sinceIso:effective,nowIso:now,dryRun:true,
+    loadSchedule:async()=>{calls++;assert.fail('Category-only policy cannot request Viva');}});
+  assert.equal(calls,0); assert.equal(counts.posts,4); assert.equal(counts.memberships,0);
+  assert.equal(counts.scheduleRequested,false); assert.equal(counts.scheduleAttempted,false);
+  assert.equal(counts.scheduleEvents,0); assert.equal(counts.scheduleUnavailable,false);
+  assert.deepEqual(fixture.reads,['lk_communities','lk_games','tournaments','lk_training_visits']);
+});
+
+test('explicit Viva ID selectors share one schedule load and do not leak provider events to local-only policies', async () => {
+  const fixture=corporateProjectionFixture([
+    corporateForSource({directionIds:['viva-direction']},'direction'),
+    corporateForSource({exerciseTypeIds:['viva-type']},'type'),
+    corporateForSource({categories:['group_training']},'local-only'),
+    {...station}
+  ]);
+  let calls=0;
+  const counts=await processCommunityPolicies(fixture.db,{sinceIso:effective,nowIso:now,dryRun:true,
+    loadSchedule:async()=>{calls++;return [{id:'provider-only',kind:'TRAINING',createdAt:now,startsAt:now,directionId:'viva-direction',typeId:'viva-type',stationId:'station-a'}];}});
+  assert.equal(calls,1);assert.equal(counts.posts,2,'Only two explicit Viva-ID policies consume the provider record');
+  assert.equal(counts.memberships,0);assert.equal(counts.scheduleRequested,true);assert.equal(counts.scheduleAttempted,true);assert.equal(counts.scheduleEvents,1);
+});
+
+test('invalid, inactive-revision and recovery-only policies do not request a public schedule', async () => {
+  const fixture=corporateProjectionFixture([
+    corporateForSource({directionIds:['viva-direction'],unexpected:true},'invalid-settings'),
+    {...corporateForSource({directionIds:['viva-direction']},'invalid-revision'),typeSettingsRevision:0},
+    {...corporateForSource({exerciseTypeIds:['viva-type']},'invalid-effective'),typeSettingsEffectiveAt:'invalid'},
+    {id:'recovery-only',communityType:'FRIENDS',typeSettings:{},communityPolicyOutbox:[{id:'previously-authorized'}]}
+  ]);
+  let calls=0;
+  const counts=await processCommunityPolicies(fixture.db,{sinceIso:effective,nowIso:now,dryRun:true,loadSchedule:async()=>{calls++;return [];}});
+  assert.equal(calls,0);assert.equal(counts.invalidPolicies,1);assert.equal(counts.scheduleAttempted,false);
+});
+
+test('unavailable requested schedule preserves local publications and reports the attempted source', async () => {
+  const fixture=corporateProjectionFixture([corporateForSource({directionIds:['viva-direction'],categories:['tournament']})],{
+    tournaments:[{id:'local-during-provider-failure',createdAt:now}]
+  });
+  const counts=await processCommunityPolicies(fixture.db,{sinceIso:effective,nowIso:now,dryRun:true,
+    loadSchedule:async()=>{throw new Error('synthetic provider outage');}});
+  assert.equal(counts.posts,1);assert.equal(counts.scheduleRequested,true);assert.equal(counts.scheduleAttempted,true);
+  assert.equal(counts.scheduleUnavailable,true);assert.equal(counts.scheduleEvents,0);
+});
