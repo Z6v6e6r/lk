@@ -58,7 +58,7 @@ test('own best result outside first 100 keeps actual rank and never impersonates
   } finally { h.clear(); }
 });
 
-test('only new authenticated ranking read permits exact cabinet origin; wrong scope, membership and upstream errors fail closed', async () => {
+test('ranking CORS stays read-only; wrong scope, membership, origin and upstream errors fail closed', async () => {
   const calls: boolean[] = [];
   const server = createLiveServer({ communityId, origin: 'https://padlhub.su', authenticate: async (req, options) => {
     calls.push(options?.fresh === true);
@@ -98,7 +98,7 @@ test('only new authenticated ranking read permits exact cabinet origin; wrong sc
     assert.equal((await fetch(base + path, { method: 'OPTIONS', headers: { Origin: headers.Origin, 'Access-Control-Request-Method': 'POST' } })).status, 403);
     assert.equal((await fetch(base + path, { method: 'OPTIONS', headers: { Origin: headers.Origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'x-jump-run-token' } })).status, 403);
     for (const oldPath of ['runs', 'enrollment']) {
-      const denied = await fetch(base + oldPath, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: '{}' });
+      const denied = await fetch(base + oldPath, { method: 'POST', headers: { ...headers, Origin: 'https://padlhub.ru.evil.example', 'Content-Type': 'application/json' }, body: '{}' });
       assert.equal(denied.status, 403); assert.equal(denied.headers.get('access-control-allow-origin'), null);
     }
     assert.equal((await fetch(base + 'stream', { headers })).status, 403);

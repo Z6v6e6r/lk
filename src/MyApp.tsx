@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
 import PadelJump from "./components/padel-jump/PadelJump";
+import RaceEntry from "./components/padel-jump/RaceEntry";
 import PadelJumpCard from "./components/padel-jump/PadelJumpCard";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
@@ -1012,6 +1013,10 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJumpRace") === "1") {
+    return <RaceEntry />;
+  }
+
   if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJump") === "1") {
     return <PadelJump onBack={() => {
       const url = new URL(window.location.href);

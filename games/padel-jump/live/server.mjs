@@ -16,9 +16,26 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
       for (const [k, rate] of rates) if (at - rate.at > 60000) rates.delete(k);
       if (rates.size >= 2048 && !rates.has(key)) fail(429, 'RATE_LIMIT');
       const rate = rates.get(key) ?? { at, count: 0 }; rates.set(key, rate); if (++rate.count > requestLimit) fail(429, 'RATE_LIMIT');
+      // The cabinet hosts its own game UI/session. Only authenticated player APIs
+      // accept this exact origin; no cookie credentials, board or stream CORS.
+      const playerRead = /^\/jump-live-api\/(?:me|entry)$/.test(path);
+      const playerWrite = /^\/jump-live-api\/(?:enrollment|runs|runs\/[a-f0-9-]{36})$/.test(path);
+      const cabinetRequest = req.headers.origin === 'https://padlhub.ru' && (playerRead || playerWrite);
+      if (cabinetRequest) {
+        const method = playerRead ? 'GET' : 'POST';
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Origin', 'https://padlhub.ru');
+        if (req.method === 'OPTIONS') {
+          const headers = String(req.headers['access-control-request-headers'] ?? '').split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+          const allowed = playerRead ? ['authorization'] : ['authorization', 'content-type', ...(path.startsWith('/jump-live-api/runs/') ? ['x-jump-run-token'] : [])];
+          if (req.headers['access-control-request-method'] !== method || headers.some(value => !allowed.includes(value))) fail(403, 'ORIGIN_DENIED');
+          res.writeHead(204, { 'Access-Control-Allow-Methods': method, 'Access-Control-Allow-Headers': allowed.join(', '), 'Cache-Control': 'no-store' }); res.end(); return;
+        }
+        if (req.method !== method) fail(405, 'METHOD_NOT_ALLOWED');
+      }
       if (path === '/jump-live-api/community-ranking') {
-        // Only this member-authenticated read is exposed to the cabinet origin.
-        // Game writes, entry and stream retain their existing origin policy.
+        // Ranking keeps its separate GET-only contract and header allowlist.
+        // Player APIs above do not expose the public board or stream via CORS.
         const source = req.headers.origin;
         if (source && ![origin, 'https://padlhub.ru'].includes(source)) fail(403, 'ORIGIN_DENIED');
         res.setHeader('Vary', 'Origin, Accept');
@@ -44,7 +61,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
         res.write('data: ' + JSON.stringify(registry.board()) + '\n\n'); viewers.add(res); res.on('close', () => viewers.delete(res)); return;
       }
       if (req.method !== 'POST' || !/^\/jump-live-api\/(?:enrollment|runs|runs\/[a-f0-9-]{36})$/.test(path)) fail(404, 'NOT_FOUND');
-      if (req.headers.origin !== origin || req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'ORIGIN_DENIED');
+      if (!cabinetRequest && (req.headers.origin !== origin || req.headers['sec-fetch-site'] === 'cross-site')) fail(403, 'ORIGIN_DENIED');
       if (req.headers['content-type']?.split(';')[0] !== 'application/json') fail(415, 'JSON_REQUIRED');
       let size = 0; const chunks = [];
       for await (const chunk of req) { size += chunk.length; if (size > 8192) fail(413, 'BODY_LIMIT'); chunks.push(chunk); }

@@ -12,6 +12,8 @@ import { loadStationActors } from './station-actors';
 import type { StationActors } from './station-actors';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import { readyRaceTilt } from './race-tilt';
+import { racePageUrl } from './race-navigation';
+import { recordLkUserActivity } from '../../utils/lkIdleDataGuard';
 import { createRaceControl } from './race-control';
 import { createRaceConnection, joinRace, raceProfile } from './live-client';
 import { formatRaceTime, LIVE_LIVES } from './live-contract';
@@ -106,7 +108,10 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
       const g = game.current;
       if (g.mode === 'running' && connection.current && control.canStep()) {
         accumulator += seconds; let direction = 0; for (const value of directions.current.values()) direction += value;
-        if (!directions.current.size) direction = tilt.direction();
+        if (!directions.current.size) {
+          direction = tilt.direction();
+          if (direction !== 0) recordLkUserActivity();
+        }
         direction = Math.round(Math.max(-1, Math.min(1, direction)) * 100) / 100;
         while (accumulator >= FIXED_STEP && g.mode === 'running' && connection.current.canStep()) {
           connection.current.record(direction); stepGame(g, direction); drainEvents(g); accumulator -= FIXED_STEP;
@@ -141,8 +146,8 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     if (['ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); move(e.key, e.key === 'ArrowLeft' ? -1 : 1); }
     if (e.key === 'Escape') void pause();
   }} onKeyUp={e => directions.current.delete(e.key)}>
-    <header><img src={logo} alt="ПадлхАБ" /><span>Jump · звёзды за 5 жизней</span><a href="./padel-jump-live.html">Общий экран ↗</a></header>
-    {!active && <section className="pj-race-entry"><h1>Больше звёзд. Выше в рейтинге.</h1><p>На каждую попытку у тебя всего 5 жизней. Чем больше звезд ты наберешь, тем выше твой рейтинг в сообществе. Если количество звезд равное, выше тот, кто потратил меньше времени.</p><p className="pj-race-control-hint">{RACE_CONTROL_HINT}</p><p className="pj-race-profile">{profile ? `Играешь как ${profile.name}` : checking ? 'Подтверждаем профиль сообщества…' : 'Профиль пока не подтверждён'}</p>{!profile && <><button disabled={checking} onClick={() => { setError(''); setChecking(true); setProfileAttempt(n => n + 1); }}>Проверить профиль</button>{onCheckAdmission && <button onClick={onCheckAdmission}>Вернуться к проверке участия</button>}</>}{onChangeProfile && <button onClick={onChangeProfile}>Выйти и сменить профиль</button>}<p className="pj-live-note">Нажимая «Игра на ретинг», ты показываешь имя профиля, игру и результат на общем экране. Личный прогресс обычной игры сохраняется отдельно. Рейтинг связан с твоим профилем сообщества.</p><button disabled={pending || !profile} onClick={() => void begin()}>{pending ? 'Подключаем…' : 'Игра на ретинг'}</button><a href="./padel-jump.html">Обычная игра</a></section>}
+    <header><img src={logo} alt="ПадлхАБ" /><span>Jump · звёзды за 5 жизней</span><a href={racePageUrl('live')}>Общий экран ↗</a></header>
+    {!active && <section className="pj-race-entry"><h1>Больше звёзд. Выше в рейтинге.</h1><p>На каждую попытку у тебя всего 5 жизней. Чем больше звезд ты наберешь, тем выше твой рейтинг в сообществе. Если количество звезд равное, выше тот, кто потратил меньше времени.</p><p className="pj-race-control-hint">{RACE_CONTROL_HINT}</p><p className="pj-race-profile">{profile ? `Играешь как ${profile.name}` : checking ? 'Подтверждаем профиль сообщества…' : 'Профиль пока не подтверждён'}</p>{!profile && <><button disabled={checking} onClick={() => { setError(''); setChecking(true); setProfileAttempt(n => n + 1); }}>Проверить профиль</button>{onCheckAdmission && <button onClick={onCheckAdmission}>Вернуться к проверке участия</button>}</>}{onChangeProfile && <button onClick={onChangeProfile}>Выйти и сменить профиль</button>}<p className="pj-live-note">Нажимая «Игра на ретинг», ты показываешь имя профиля, игру и результат на общем экране. Личный прогресс обычной игры сохраняется отдельно. Рейтинг связан с твоим профилем сообщества.</p><button disabled={pending || !profile} onClick={() => void begin()}>{pending ? 'Подключаем…' : 'Игра на ретинг'}</button><a href={racePageUrl('practice')}>Обычная игра</a></section>}
     {error && <p role="alert" className="pj-live-error">{error}</p>}
     {active && <div className="pj-race-hud"><strong>{STATIONS[view.station].name} <small>{view.section + 1}/3</small></strong><span>{view.score} м</span><span aria-label={`Собрано звёзд: ${view.stars}`}>★ {view.stars}</span><RaceLives remaining={view.lives} /><time>{formatRaceTime(displayMs)}</time><button disabled={pending || eliminated || locked.current || view.mode === 'paused' || !!result} onClick={() => void pause()}>Пауза</button></div>}
     <div className="pj-race-field" hidden={!active}><canvas ref={canvas} aria-label="Заезд Jump. Веди мяч наклоном телефона, стрелками или касанием левой и правой половины поля."
@@ -150,7 +155,7 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
       onPointerUp={e => directions.current.delete(String(e.pointerId))} onPointerCancel={e => directions.current.delete(String(e.pointerId))} onLostPointerCapture={e => directions.current.delete(String(e.pointerId))} />
       {active && view.mode !== 'running' && <div className="pj-race-overlay">{view.mode === 'paused' && !locked.current && !result && <p className="pj-race-control-hint">{RACE_CONTROL_HINT}</p>}<h2>{result ? 'Результат сохранён' : eliminated ? 'Жизни закончились' : locked.current ? 'Заезд остановлен' : finished ? checkpointReady ? 'Участок пройден!' : 'Подтверждаем финиш…' : view.mode === 'over' ? 'Ещё одна попытка' : 'Пауза'}</h2><time>{formatRaceTime(result?.elapsedMs ?? displayMs)}</time>
         {eliminated && <p>Все {LIVE_LIVES} жизней потрачены. Собрано звёзд: {view.stars}. Новый заезд — с Ясенево 1/3.</p>}{result ? <p>Этот заезд: ★ {result.stars} · {formatRaceTime(result.elapsedMs)}. В рейтинге учитывается твой лучший результат.</p> : eliminated ? !locked.current && <button disabled={pending} onClick={() => void command('finish')}>{pending ? 'Сохраняем…' : 'Подтвердить результат'}</button> : !eliminated && !locked.current && <button disabled={pending || finished && !checkpointReady} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending || finished && !checkpointReady ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
-        {(result || eliminated || locked.current) && <a href="./padel-jump-race.html">Новый заезд</a>}</div>}
+        {(result || eliminated || locked.current) && <a href={racePageUrl('race')}>Новый заезд</a>}</div>}
     </div>
 
   </main>;

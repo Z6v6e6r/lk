@@ -20,6 +20,7 @@ import type { RacketArt } from './racket-art';
 import { createJumpStarter } from './start';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import type { TiltStatus } from './tilt';
+import { racePageUrl } from './race-navigation';
 import logoHab from '../../assets/logo-hab-compact.svg';
 import './padel-jump.css';
 
@@ -324,7 +325,7 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
             {!renderError && <button ref={primaryButton} type="button" className="pj-play" disabled={starting} aria-busy={starting}
               onClick={journeyComplete ? openMap : finished ? continueRoute : start}>{starting ? 'Подключаем…' : journeyComplete ? 'К итоговой карте' : finished ? view.practice ? 'Ещё раз' : 'Дальше' : view.mode === 'paused' ? 'Продолжить' : view.mode === 'over' ? 'Повторить' : 'Полетели'}<span aria-hidden="true">↗</span></button>}
             <div className="pj-dialog-actions">
-              {view.mode === 'ready' && <a href="./padel-jump-race.html">Заезд на время · общий экран ↗</a>}
+              {view.mode === 'ready' && <a href={racePageUrl('race')}>Заезд на время · общий экран ↗</a>}
               {view.mode === 'over' && campaign && <button type="button" onClick={() => { prepare(view.station, view.section, true); start(); }}>Потренировать участок</button>}
               <button type="button" onClick={openMap}>К карте</button>
               {campaign && failures >= BALANCE.assistanceAfterFailures && !view.assist && view.mode === 'over' && <button type="button" onClick={() => { toggleAssist(true); start(); }}>Подсветить маршрут</button>}
