@@ -46,16 +46,17 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
         const fd = openSync(directory, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
         continue;
       }
-      if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isFinite(Date.parse(row.finishedAt))) results.set(row.id, row);
+      if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isSafeInteger(row.stars) && row.stars >= 0 && Number.isFinite(Date.parse(row.finishedAt))) results.set(row.id, row);
     }
     pruneResults();
     if (results.size > 500) fail(503, 'RESULT_STORE_CAPACITY');
   }
   const elapsed = run => run.finalMs ?? run.activeMs + (run.paused || run.finished ? 0 : Math.max(0, now() - run.segment));
-  const sweep = () => { pruneResults(); for (const [id, run] of runs) if (now() - run.seen > (run.completed === 33 && !run.finished ? 600000 : ttl)) runs.delete(id); };
-  const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
+  const sweep = () => { pruneResults(); for (const [id, run] of runs) if (now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) runs.delete(id); };
+  const rank = (a, b) => b.stars - a.stars || a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id);
+  const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, stars: row.stars, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
   const player = (run, full = false) => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.failures >= LIVE_LIVES ? 'eliminated' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
-    elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, livesRemaining: Math.max(0, LIVE_LIVES - run.failures), completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
+    elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, livesRemaining: Math.max(0, LIVE_LIVES - run.failures), stars: run.claimed.size, completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
   function persist(row) {
     if (!directory) return;
     const path = join(directory, row.id + '.json'), temporary = join(directory, '.pending-' + randomUUID());
@@ -80,6 +81,13 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     if (failure) throw failure;
   }
 
+  function publishResult(run) {
+    if (!directory) fail(503, 'RESULT_STORE_UNAVAILABLE');
+    if (results.size >= 500 && !results.has(run.id)) fail(503, 'RESULT_STORE_CAPACITY');
+    const row = run.finishRow ?? { id: run.id, alias: run.alias, actorId: run.actorId, communityId: run.communityId, elapsedMs: Math.max(Math.round(elapsed(run)), Math.round(run.ticks * FIXED_STEP * 1000)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, stars: run.claimed.size, finishedAt: new Date(wall()).toISOString(), engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE };
+    run.finishRow = row; persist(row); results.set(run.id, row);
+  }
+
   return {
     join(body, actor) {
       sweep();
@@ -87,14 +95,17 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (body.consent !== true) fail(422, 'DISPLAY_CONSENT_REQUIRED');
       if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id || typeof actor.communityId !== 'string' || !actor.communityId) fail(403, 'VERIFIED_PROFILE_REQUIRED');
       const alias = aliasOf(actor.name);
-      // A fresh race retires only this verified actor's exhausted capability.
-      for (const [id, run] of runs) if (run.actorId === actor.id && run.communityId === actor.communityId && run.failures >= LIVE_LIVES) runs.delete(id);
+      // Recover this verified actor's terminal score before replacing its capability.
+      for (const [id, run] of runs) if (run.actorId === actor.id && run.communityId === actor.communityId && (run.failures >= LIVE_LIVES || run.completed === 33)) {
+        if (!run.finished) publishResult(run);
+        runs.delete(id);
+      }
       if (runs.size >= LIVE_LIMIT) fail(429, 'EVENT_FULL');
       if ([...runs.values()].some(r => r.actorId === actor.id && r.communityId === actor.communityId && !r.finished)) fail(409, 'PROFILE_ALREADY_RUNNING');
       const id = randomUUID(), token = randomBytes(32).toString('hex'), used = new Set([...runs.values()].map(r => r.slot));
       let slot = 0; while (used.has(slot)) slot++;
       const game = createCampaignGame(0, 0); game.mode = 'running';
-      const run = { id, alias, actorId: actor.id, communityId: actor.communityId, slot, token: createHash('sha256').update(token).digest(), game, seq: 0, ack: null, digest: '', ticks: 0, failures: 0, completed: 0, activeMs: 0, segment: now(), seen: now(), paused: false, finished: false };
+      const run = { id, alias, actorId: actor.id, communityId: actor.communityId, slot, token: createHash('sha256').update(token).digest(), game, claimed: new Set(), seq: 0, ack: null, digest: '', ticks: 0, failures: 0, completed: 0, activeMs: 0, segment: now(), seen: now(), paused: false, finished: false };
       runs.set(id, run); return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, player: player(run, true) };
     },
     command(id, token, body, actor) {
@@ -108,8 +119,8 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (body.seq === run.seq) { if (digest !== run.digest) fail(409, 'SEQUENCE_CONFLICT'); run.seen = now(); return run.ack; }
       if (body.seq !== run.seq + 1) fail(409, 'SEQUENCE_CONFLICT');
       if (run.finished) fail(409, 'RUN_FINISHED');
-      if (run.failures >= LIVE_LIVES && (body.command !== 'inputs' || !Array.isArray(body.inputs) || body.inputs.length)) fail(409, 'RUN_ELIMINATED');
-      let g = structuredClone(run.game); let ticks = 0, failures = run.failures, completed = run.completed;
+      if (run.failures >= LIVE_LIVES && body.command !== 'finish' && (body.command !== 'inputs' || !Array.isArray(body.inputs) || body.inputs.length)) fail(409, 'RUN_ELIMINATED');
+      let g = structuredClone(run.game); const claimed = new Set(run.claimed); let ticks = 0, failures = run.failures, completed = run.completed;
       const command = body.command;
       if (command === 'inputs') {
         if (!Array.isArray(body.inputs) || body.inputs.length > 120) fail(422, 'INPUTS_INVALID');
@@ -122,7 +133,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
         for (const [direction, count] of body.inputs) for (let i = 0; i < count; i++) {
           if (g.mode !== 'running') fail(422, 'EXCESS_INPUTS');
           stepGame(g, direction / 100);
-          for (const e of drainEvents(g)) { if (e.type === 'failure') failures++; if (e.type === 'finish') completed++; }
+          for (const e of drainEvents(g)) { if (e.type === 'failure') failures++; if (e.type === 'finish') completed++; if (e.type === 'star') claimed.add(e.id); }
         }
       } else if (command === 'pause') {
         if (run.paused) fail(409, 'ALREADY_PAUSED');
@@ -130,27 +141,24 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
         if (!run.paused) fail(409, 'NOT_PAUSED');
       } else if (command === 'retry') {
         if (g.mode !== 'over' || run.paused) fail(409, 'RETRY_NOT_READY');
-        g = createCampaignGame(g.campaign.station, g.campaign.section); g.mode = 'running';
+        g = createCampaignGame(g.campaign.station, g.campaign.section, { claimed: [...claimed] }); g.mode = 'running';
       } else if (command === 'advance') {
         const next = nextSection(g.campaign.station, g.campaign.section);
         if (g.mode !== 'complete' || !next || run.paused) fail(409, 'CHECKPOINT_NOT_READY');
-        g = createCampaignGame(next.station, next.section); g.mode = 'running';
+        g = createCampaignGame(next.station, next.section, { claimed: [...claimed] }); g.mode = 'running';
       } else if (command === 'finish') {
-        if (g.mode !== 'complete' || g.campaign.station !== 10 || g.campaign.section !== 2 || completed !== 33 || run.paused) fail(409, 'FINISH_NOT_VERIFIED');
-        if (!directory) fail(503, 'RESULT_STORE_UNAVAILABLE');
-        if (results.size >= 500) fail(503, 'RESULT_STORE_CAPACITY');
-        const row = run.finishRow ?? { id, alias: run.alias, actorId: run.actorId, communityId: run.communityId, elapsedMs: Math.max(Math.round(elapsed(run)), Math.round(run.ticks * FIXED_STEP * 1000)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures, finishedAt: new Date(wall()).toISOString(), engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE };
-        run.finishRow = row; persist(row); results.set(id, row);
+        if (!(failures >= LIVE_LIVES || g.mode === 'complete' && g.campaign.station === 10 && g.campaign.section === 2 && completed === 33) || run.paused) fail(409, 'FINISH_NOT_VERIFIED');
+        publishResult(run);
       } else fail(422, 'COMMAND_INVALID');
       // Commit only after complete validation and durable result publication.
       if (completed === 33 && run.completed !== 33 || failures >= LIVE_LIVES && run.failures < LIVE_LIVES) run.finalMs = Math.max(Math.round(elapsed(run)), Math.round((run.ticks + ticks) * FIXED_STEP * 1000));
-      run.game = g; run.ticks += ticks; run.failures = failures; run.completed = completed;
+      run.game = g; run.claimed = claimed; run.ticks += ticks; run.failures = failures; run.completed = completed;
       if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
       if (command === 'resume') { run.paused = false; run.segment = now(); }
       run.seen = now(); run.seq = body.seq; run.digest = digest;
       const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(results.get(id)) } : {}) }; run.ack = ack; return ack;
     },
     board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
-      results: [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort((a, b) => a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt)).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort((a, b) => a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id)).slice(0, 100).map(publicResult) }; },
+      results: [...new Map([...results.values()].filter(r => wall() - Date.parse(r.finishedAt) < retention).sort(rank).map(r => [r.communityId + ':' + r.actorId, r]).reverse()).values()].sort(rank).slice(0, 100).map(publicResult) }; },
   };
 }

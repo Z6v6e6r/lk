@@ -22,7 +22,7 @@ import './live.css';
 export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChangeProfile?: () => void; onCheckAdmission?: () => void } = {}) {
   const [checking, setChecking] = useState(true), [profileAttempt, setProfileAttempt] = useState(0);
   const [profile, setProfile] = useState<{ name: string; communityId: string } | null>(null), [pending, setPending] = useState(false), [error, setError] = useState('');
-  const [view, setView] = useState({ mode: 'ready', station: 0, section: 0, score: 0, lives: LIVE_LIVES });
+  const [view, setView] = useState({ mode: 'ready', station: 0, section: 0, score: 0, lives: LIVE_LIVES, stars: 0 });
   const [result, setResult] = useState<LiveAck['result']>(), [displayMs, setDisplayMs] = useState(0);
   const game = useRef(createCampaignGame()), canvas = useRef<HTMLCanvasElement>(null), region = useRef<HTMLElement>(null);
   const connection = useRef<ReturnType<typeof createRaceConnection> | null>(null), directions = useRef(new Map<string, number>());
@@ -31,8 +31,9 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   const [tilt] = useState(() => createTiltController(browserTiltEnvironment()));
   const finalRequested = useRef(false);
   const lives = useRef(LIVE_LIVES);
+  const stars = useRef(0);
   const joinAbort = useRef<AbortController | null>(null);
-  const refresh = () => { const g = game.current; setView({ mode: g.mode, station: g.campaign!.station, section: g.campaign!.section, score: g.score, lives: lives.current }); };
+  const refresh = () => { const g = game.current; setView({ mode: g.mode, station: g.campaign!.station, section: g.campaign!.section, score: g.score, lives: lives.current, stars: stars.current }); };
   const [control] = useState(() => createRaceControl({
     game: () => game.current, replace: value => { game.current = value; }, connection: () => connection.current,
     foreground: () => !document.hidden && document.hasFocus(), prepareResume: async () => { if (navigator.maxTouchPoints > 0) await readyRaceTilt(tilt, false); },
@@ -60,10 +61,10 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   const serverAck = (v: LiveAck) => {
     if (!alive.current) return;
     lives.current = v.player.livesRemaining;
+    stars.current = v.player.stars;
     control.acknowledge(v.player, v.prediction);
     ackClock.current = { elapsed: v.player.elapsedMs, received: performance.now(), final: v.player.completedParts === 33 || v.player.state === 'eliminated' };
-    if (v.player.state === 'eliminated') connection.current?.dispose();
-    if (v.player.completedParts === 33 && !v.result && !finalRequested.current) { finalRequested.current = true; void connection.current?.command('finish'); }
+    if ((v.player.completedParts === 33 || v.player.state === 'eliminated') && !v.result && !finalRequested.current) { finalRequested.current = true; void connection.current?.command('finish'); }
     if (v.result) { setResult(v.result); setDisplayMs(v.result.elapsedMs); connection.current?.dispose(); }
   };
   const networkError = (message: string, retryFinish = false) => { if (!alive.current) return; if (retryFinish) { setError(message); refresh(); return; } locked.current = true; game.current.mode = 'paused'; directions.current.clear(); setError(message); refresh(); };
@@ -132,13 +133,13 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
     if (['ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); move(e.key, e.key === 'ArrowLeft' ? -1 : 1); }
     if (e.key === 'Escape') void pause();
   }} onKeyUp={e => directions.current.delete(e.key)}>
-    <header><img src={logo} alt="ПадлхАБ" /><span>Jump · заезд на время</span><a href="./padel-jump-live.html">Общий экран ↗</a></header>
-    {!active && <section className="pj-race-entry"><h1>Твой маршрут. Твоё время.</h1><p>33 участка и 5 жизней на весь маршрут. Каждое падение отнимает жизнь; после пятого — новый заезд с самого начала. Повторы и переходы входят во время, пауза исключается.</p><p className="pj-race-profile">{profile ? `Играешь как ${profile.name}` : checking ? 'Подтверждаем профиль сообщества…' : 'Профиль пока не подтверждён'}</p>{!profile && <><button disabled={checking} onClick={() => { setError(''); setChecking(true); setProfileAttempt(n => n + 1); }}>Проверить профиль</button>{onCheckAdmission && <button onClick={onCheckAdmission}>Вернуться к проверке участия</button>}</>}{onChangeProfile && <button onClick={onChangeProfile}>Выйти и сменить профиль</button>}<p className="pj-live-note">Нажимая «Начать заезд», ты показываешь имя профиля, игру и результат на общем экране. Личный прогресс обычной игры сохраняется отдельно. Рейтинг связан с твоим профилем сообщества.</p><button disabled={pending || !profile} onClick={() => void begin()}>{pending ? 'Подключаем…' : 'Начать заезд'}</button><a href="./padel-jump.html">Обычная игра</a></section>}
+    <header><img src={logo} alt="ПадлхАБ" /><span>Jump · звёзды за 5 жизней</span><a href="./padel-jump-live.html">Общий экран ↗</a></header>
+    {!active && <section className="pj-race-entry"><h1>Больше звёзд. Выше в рейтинге.</h1><p>5 жизней на заезд. Рейтинг — по собранным звёздам, при равенстве выше тот, кто потратил меньше времени. После пятого падения результат сохраняется; проходить все 33 участка необязательно. Пауза исключается из времени.</p><p className="pj-race-profile">{profile ? `Играешь как ${profile.name}` : checking ? 'Подтверждаем профиль сообщества…' : 'Профиль пока не подтверждён'}</p>{!profile && <><button disabled={checking} onClick={() => { setError(''); setChecking(true); setProfileAttempt(n => n + 1); }}>Проверить профиль</button>{onCheckAdmission && <button onClick={onCheckAdmission}>Вернуться к проверке участия</button>}</>}{onChangeProfile && <button onClick={onChangeProfile}>Выйти и сменить профиль</button>}<p className="pj-live-note">Нажимая «Начать заезд», ты показываешь имя профиля, игру и результат на общем экране. Личный прогресс обычной игры сохраняется отдельно. Рейтинг связан с твоим профилем сообщества.</p><button disabled={pending || !profile} onClick={() => void begin()}>{pending ? 'Подключаем…' : 'Начать заезд'}</button><a href="./padel-jump.html">Обычная игра</a></section>}
     {error && <p role="alert" className="pj-live-error">{error}</p>}
-    {active && <div className="pj-race-hud"><strong>{STATIONS[view.station].name} <small>{view.section + 1}/3</small></strong><span>{view.score} м</span><span className="pj-race-lives" role="status" aria-label={`Осталось жизней: ${view.lives} из ${LIVE_LIVES}`}>♥ {view.lives}/{LIVE_LIVES}</span><time>{formatRaceTime(displayMs)}</time><button disabled={pending || eliminated || locked.current || view.mode === 'paused' || !!result} onClick={() => void pause()}>Пауза</button></div>}
+    {active && <div className="pj-race-hud"><strong>{STATIONS[view.station].name} <small>{view.section + 1}/3</small></strong><span>{view.score} м</span><span aria-label={`Собрано звёзд: ${view.stars}`}>★ {view.stars}</span><span className="pj-race-lives" role="status" aria-label={`Осталось жизней: ${view.lives} из ${LIVE_LIVES}`}>♥ {view.lives}/{LIVE_LIVES}</span><time>{formatRaceTime(displayMs)}</time><button disabled={pending || eliminated || locked.current || view.mode === 'paused' || !!result} onClick={() => void pause()}>Пауза</button></div>}
     <div className="pj-race-field" hidden={!active}><canvas ref={canvas} aria-label="Заезд Jump. Веди мяч наклоном телефона, стрелками или кнопками." />
-      {active && view.mode !== 'running' && <div className="pj-race-overlay"><h2>{result ? 'Финиш подтверждён' : eliminated ? 'Жизни закончились' : locked.current ? 'Заезд остановлен' : finished ? checkpointReady ? 'Участок пройден!' : 'Подтверждаем финиш…' : view.mode === 'over' ? 'Ещё одна попытка' : 'Пауза'}</h2><time>{formatRaceTime(result?.elapsedMs ?? displayMs)}</time>
-        {eliminated && <p>Все {LIVE_LIVES} жизней потрачены. Новый заезд — с Ясенево 1/3 и новым таймером.</p>}{result ? <p>Результат сохранён в рейтинге сообщества.</p> : !eliminated && !locked.current && <button disabled={pending || finished && !checkpointReady} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending || finished && !checkpointReady ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
+      {active && view.mode !== 'running' && <div className="pj-race-overlay"><h2>{result ? 'Результат сохранён' : eliminated ? 'Жизни закончились' : locked.current ? 'Заезд остановлен' : finished ? checkpointReady ? 'Участок пройден!' : 'Подтверждаем финиш…' : view.mode === 'over' ? 'Ещё одна попытка' : 'Пауза'}</h2><time>{formatRaceTime(result?.elapsedMs ?? displayMs)}</time>
+        {eliminated && <p>Все {LIVE_LIVES} жизней потрачены. Собрано звёзд: {view.stars}. Новый заезд — с Ясенево 1/3.</p>}{result ? <p>Этот заезд: ★ {result.stars} · {formatRaceTime(result.elapsedMs)}. В рейтинге учитывается твой лучший результат.</p> : eliminated ? !locked.current && <button disabled={pending} onClick={() => void command('finish')}>{pending ? 'Сохраняем…' : 'Подтвердить результат'}</button> : !eliminated && !locked.current && <button disabled={pending || finished && !checkpointReady} onClick={() => void command(finished ? last ? 'finish' : 'advance' : view.mode === 'over' ? 'retry' : 'resume')}>{pending || finished && !checkpointReady ? 'Подтверждаем…' : finished ? last ? 'Подтвердить финиш' : 'Дальше' : view.mode === 'over' ? 'Повторить' : 'Продолжить'}</button>}
         {(result || eliminated || locked.current) && <a href="./padel-jump-race.html">Новый заезд</a>}</div>}
     </div>
     <footer>{[-1, 1].map(d => <button key={d} aria-label={d < 0 ? 'Двигаться влево' : 'Двигаться вправо'} disabled={!active || view.mode !== 'running'}

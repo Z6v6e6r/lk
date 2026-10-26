@@ -4,14 +4,14 @@ import type { Game } from './engine';
 export const LIVE_ENGINE_VERSION = 'c23b203f001efe95ad4d8a6d30db7a5dd3cce0f1119478874be2272c2555e7ce';
 export const LIVE_API = '/jump-live-api/';
 export const LIVE_LIMIT = 12;
-export const LIVE_RULE = 'five-lives-community-v2';
+export const LIVE_RULE = 'five-lives-stars-v2';
 export const LIVE_LIVES = 5;
 export const LIVE_SYNC = 'full-game-v1';
 export type LiveCommand = 'inputs' | 'pause' | 'resume' | 'retry' | 'advance' | 'finish';
 export type InputBlock = [number, number];
 export type LivePlayer = { id: string; alias: string; slot: number; state: 'playing' | 'paused' | 'retry' | 'checkpoint' | 'finished' | 'eliminated';
-  elapsedMs: number; playMs: number; failures: number; livesRemaining: number; completedParts: number; game: Game };
-export type LiveResult = { id: string; alias: string; elapsedMs: number; playMs: number; failures: number; finishedAt: string; engine: string; rule: string };
+  elapsedMs: number; playMs: number; failures: number; livesRemaining: number; stars: number; completedParts: number; game: Game };
+export type LiveResult = { id: string; alias: string; elapsedMs: number; playMs: number; failures: number; stars: number; finishedAt: string; engine: string; rule: string };
 export type LiveBoard = { engine: string; rule: string; players: LivePlayer[]; results: LiveResult[]; now: number };
 
 export function formatRaceTime(milliseconds: number): string {

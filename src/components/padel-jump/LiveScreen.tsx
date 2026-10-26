@@ -18,7 +18,7 @@ export function readLiveBoard(raw: string): LiveBoard {
   const ids = new Set<string>(), slots = new Set<number>();
   for (const p of board.players) {
     if (!p || typeof p.id !== 'string' || ids.has(p.id) || !Number.isInteger(p.slot) || p.slot < 0 || p.slot >= 12 || slots.has(p.slot) || typeof p.alias !== 'string' || p.alias.length > 48 || !Number.isFinite(p.elapsedMs)
-      || !Number.isInteger(p.failures) || p.failures < 0 || p.failures > LIVE_LIVES || p.livesRemaining !== LIVE_LIVES - p.failures || !p.game?.campaign || !STATIONS[p.game.campaign.station] || !Number.isInteger(p.game.campaign.section) || p.game.campaign.section < 0 || p.game.campaign.section > 2 || !Array.isArray(p.game.platforms) || p.game.platforms.length > 50) throw new Error('PLAYER_INVALID');
+      || !Number.isInteger(p.failures) || p.failures < 0 || p.failures > LIVE_LIVES || p.livesRemaining !== LIVE_LIVES - p.failures || !Number.isSafeInteger(p.stars) || p.stars < 0 || !p.game?.campaign || !STATIONS[p.game.campaign.station] || !Number.isInteger(p.game.campaign.section) || p.game.campaign.section < 0 || p.game.campaign.section > 2 || !Array.isArray(p.game.platforms) || p.game.platforms.length > 50) throw new Error('PLAYER_INVALID');
     ids.add(p.id); slots.add(p.slot);
   }
   return board;
@@ -46,7 +46,7 @@ function MiniGame({ player }: { player: LivePlayer }) {
   return <canvas ref={canvas} aria-label={`Игра: ${player.alias}`} />;
 }
 
-const STATES = { playing: 'В игре', paused: 'Пауза', retry: 'Повторная попытка', checkpoint: 'Участок пройден', finished: 'Финиш', eliminated: 'Жизни закончились' };
+const STATES = { playing: 'В игре', paused: 'Пауза', retry: 'Повторная попытка', checkpoint: 'Участок пройден', finished: 'Результат', eliminated: 'Жизни закончились' };
 export default function LiveScreen() {
   const [board, setBoard] = useState<LiveBoard | null>(null), [status, setStatus] = useState('Подключаем общий экран…'), [connected, setConnected] = useState(true);
   const [fields, setFields] = useState(true);
@@ -70,10 +70,10 @@ export default function LiveScreen() {
     <section className={`pj-live-grid ${fields ? '' : 'pj-live-cards'}`} style={{ '--columns': Math.min(3, Math.max(1, players.length)), '--rows': Math.max(1, Math.ceil(players.length / 3)) } as CSSProperties} aria-label="Участники онлайн" aria-busy={!connected}>
       {players.map(p => <article className="pj-live-player" key={p.id}><div className="pj-live-player-title"><strong>{p.alias}</strong><span>{STATES[p.state]}</span></div>
         {fields && <MiniGame player={p} />}<div className="pj-live-player-stats"><span>{STATIONS[p.game.campaign!.station].name}<small>Участок {p.game.campaign!.section + 1}/3</small></span><time>{formatRaceTime(p.elapsedMs)}</time></div>
-        <progress max={33} value={p.completedParts} aria-label={`${p.alias}: пройдено участков`} /><div className="pj-live-player-bottom"><span>{p.game.score} м</span><span>{p.completedParts}/33 участков</span><span aria-label={`Осталось жизней: ${p.livesRemaining} из ${LIVE_LIVES}`}>♥ {p.livesRemaining}/{LIVE_LIVES}</span></div></article>)}
+        <progress max={33} value={p.completedParts} aria-label={`${p.alias}: пройдено участков`} /><div className="pj-live-player-bottom"><span>★ {p.stars}</span><span>{p.completedParts}/33 участков</span><span aria-label={`Осталось жизней: ${p.livesRemaining} из ${LIVE_LIVES}`}>♥ {p.livesRemaining}/{LIVE_LIVES}</span></div></article>)}
     </section>
-    <section className="pj-live-ranking"><h2>Рейтинг сообщества</h2><p>Полный маршрут · 5 жизней · быстрее — выше · повторы учитываются, паузы исключены.</p>
-      {!board?.results.length ? <p>Первые результаты появятся после подтверждённого финиша.</p> : <ol>{board.results.slice(0, 12).map(r => <li key={r.id}><span>{r.alias}</span><time>{formatRaceTime(r.elapsedMs)}</time><small>{r.failures} падений</small></li>)}</ol>}
+    <section className="pj-live-ranking"><h2>Рейтинг сообщества</h2><p>5 жизней · больше звёзд — выше · при равенстве звёзд решает меньшее время. Лучший заезд каждого участника.</p>
+      {!board?.results.length ? <p>Результат появится после 5 падений или финиша всех участков.</p> : <ol>{board.results.slice(0, 12).map(r => <li key={r.id}><span>{r.alias} · ★ {r.stars}</span><time>{formatRaceTime(r.elapsedMs)}</time><small>{r.failures} падений</small></li>)}</ol>}
     </section>
   </main>;
 }

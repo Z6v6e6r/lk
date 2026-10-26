@@ -33,7 +33,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
       for await (const chunk of req) { size += chunk.length; if (size > 8192) fail(413, 'BODY_LIMIT'); chunks.push(chunk); }
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(400, 'JSON_INVALID'); }
       if (path === '/jump-live-api/enrollment') return response(res, 200, await enrollment.submit(req, body));
-      const actor = await authenticate(req, { fresh: body.command === 'finish' });
+      const actor = await authenticate(req, { fresh: body.command === 'finish' || path === '/jump-live-api/runs' });
       if (path === '/jump-live-api/runs') return response(res, 201, registry.join(body, actor));
       const token = req.headers['x-jump-run-token'];
       return response(res, 200, registry.command(path.split('/').at(-1), token, body, actor));

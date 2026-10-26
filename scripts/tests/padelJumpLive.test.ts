@@ -130,7 +130,7 @@ test('48-hour retention releases result capacity and deletes only expired owned 
   const directory = mkdtempSync(join(tmpdir(), 'jump-live-retention-')); let wall = 1800000000000;
   try {
     for (let i = 0; i < 500; i++) {
-      const id = randomUUID(); writeFileSync(join(directory, id + '.json'), JSON.stringify({ id, alias: 'Тестовый профиль', actorId: 'test-profile-' + i, communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, finishedAt: new Date(wall).toISOString(), elapsedMs: 600000, playMs: 599000, failures: 0 }));
+      const id = randomUUID(); writeFileSync(join(directory, id + '.json'), JSON.stringify({ id, alias: 'Тестовый профиль', actorId: 'test-profile-' + i, communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, finishedAt: new Date(wall).toISOString(), elapsedMs: 600000, playMs: 599000, failures: 0, stars: 0 }));
     }
     writeFileSync(join(directory, 'operator-note.txt'), 'preserve');
     const registry = createRegistry({ communityId: 'test-community', directory, wall: () => wall }); assert.equal(registry.board().results.length, 100);
@@ -169,7 +169,7 @@ test('profile scope cannot be spoofed or used for concurrent runs; public state 
   const publicData = JSON.stringify(h.registry.board()); assert.ok(!publicData.includes(h.identity.id)); assert.ok(!publicData.includes(h.identity.communityId));
 });
 
-test('finish retry excludes heartbeat and blur commands while request is pending and after 503', async () => {
+for (const endedByLives of [false, true]) test(`finish retry after ${endedByLives ? 'five losses' : 'full route'} excludes heartbeat and blur while pending and after 503`, async () => {
   const { createRaceTransport } = await import('../../src/components/padel-jump/race-connection.ts');
   const calls: Array<{ seq: number; command: string; inputs?: number[][] }> = [], errors: boolean[] = [];
   let rejectFinish: ((e: Error) => void) | undefined;
@@ -177,8 +177,8 @@ test('finish retry excludes heartbeat and blur commands while request is pending
   const connection = createRaceTransport(ticket, () => {}, (_message, retry) => errors.push(!!retry), async (_path, input) => {
     const body = input as { seq: number; command: string; inputs?: number[][] }; calls.push(body);
     if (body.command === 'finish' && !errors.length) return new Promise((_resolve, reject) => { rejectFinish = reject; });
-    const complete = createCampaignGame(10, 2); complete.mode = 'complete';
-    return { seq: body.seq, sync: LIVE_SYNC, player: { ...ticket.player, state: 'checkpoint', completedParts: 33, game: complete } };
+    const complete = createCampaignGame(endedByLives ? 0 : 10, endedByLives ? 0 : 2); complete.mode = endedByLives ? 'over' : 'complete';
+    return { seq: body.seq, sync: LIVE_SYNC, player: { ...ticket.player, state: endedByLives ? 'eliminated' : 'checkpoint', completedParts: endedByLives ? 0 : 33, failures: endedByLives ? 5 : 0, livesRemaining: endedByLives ? 0 : 5, game: complete } };
   });
   connection.record(0.5);
   // A previously accepted batch must complete before finish, but subsequent
@@ -237,7 +237,7 @@ test('startup preserves valid receipts and quarantines torn legacy finals while 
   const directory = mkdtempSync(join(tmpdir(), 'jump-live-recovery-'));
   try {
     const id = randomUUID(), broken = randomUUID();
-    const row = { id, alias: 'Тест', actorId: 'fixture', communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, elapsedMs: 1000, playMs: 900, failures: 0, finishedAt: new Date().toISOString() };
+    const row = { id, alias: 'Тест', actorId: 'fixture', communityId: 'test-community', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, elapsedMs: 1000, playMs: 900, failures: 0, stars: 0, finishedAt: new Date().toISOString() };
     writeFileSync(join(directory, id + '.json'), JSON.stringify(row));
     writeFileSync(join(directory, broken + '.json'), '{"id":');
     writeFileSync(join(directory, '.pending-fixture-crash'), '{"id":');

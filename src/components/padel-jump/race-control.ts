@@ -44,7 +44,7 @@ export function createRaceControl(options: Options) {
     command(action: Action) {
       const connection = options.connection(), game = options.game();
       if (!connection || stopped() || busy) return Promise.resolve();
-      if (action === 'resume' ? game.mode !== 'paused' : action === 'retry' ? game.mode !== 'over' : game.mode !== 'complete') return Promise.resolve();
+      if (action === 'resume' ? game.mode !== 'paused' : action === 'retry' ? game.mode !== 'over' : action === 'finish' ? game.mode !== 'complete' && confirmed?.state !== 'eliminated' : game.mode !== 'complete') return Promise.resolve();
       return perform(async () => {
         if (action === 'resume') {
           wanted = false; await options.prepareResume();

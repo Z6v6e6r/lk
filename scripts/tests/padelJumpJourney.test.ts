@@ -14,7 +14,7 @@ import { createRaceControl } from '../../src/components/padel-jump/race-control.
 import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../../src/components/padel-jump/live-contract.ts';
 import { pilotTarget } from './helpers/padelJumpPilot.ts';
 
-test('HTTP journey: verified login → nonmember form → private save/join → ready → all 33 parts → community result', async () => {
+for (const fullRoute of [false, true]) test(`HTTP journey: login → form/join → game → ${fullRoute ? '33 parts' : 'five lives with a star'} → ranked result`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'jump-journey-')), communityId = 'fixture-community', profileId = 'fixture-visitor';
   let member = false, time = 0, joins = 0;
   const methods: string[] = [], email = ['visitor', 'example.invalid'].join('@'), website = 'https://company.example.invalid/';
@@ -47,7 +47,21 @@ test('HTTP journey: verified login → nonmember form → private save/join → 
       assert.equal(response.status, 200, result.error); return result as LiveAck;
     });
     const control = createRaceControl({ game: () => game, replace: value => { game = value; }, connection: () => connection, foreground: () => true, prepareResume: async () => {}, stopped: () => !!errors.length, canPause: () => true, changed() {}, pending() {} });
-    for (let part = 0; part < 33; part++) {
+    if (!fullRoute) {
+      for (let loss = 0; loss < 5; loss++) {
+        for (let tick = 0; tick < 1200 && game.mode === 'running'; tick++) {
+          const direction = loss === 0 && !game.campaign!.stars[0].collected ? Math.round(Math.max(-1, Math.min(1, (game.campaign!.stars[0].x - game.ball.x) / (250 * FIXED_STEP))) * 100) / 100 : -1;
+          connection.record(direction); stepGame(game, direction); time += FIXED_STEP * 1000; drainEvents(game);
+          if (tick % 60 === 59 || game.mode !== 'running') await connection.flush();
+        }
+        assert.equal(game.mode, 'over');
+        if (loss < 4) await control.command('retry');
+      }
+      const stoppedAt = registry.board().players[0].elapsedMs; time += 5000; await connection.flush();
+      await control.command('finish'); assert.equal(registry.board().results[0].elapsedMs, stoppedAt);
+      assert.equal(registry.board().results[0].stars, 1); assert.equal(registry.board().players[0].completedParts, 0);
+    }
+    for (let part = 0; fullRoute && part < 33; part++) {
       let landed = 0;
       for (let tick = 0; tick < 12000 && game.mode === 'running'; tick++) {
         const target = pilotTarget(game, landed, false), direction = Math.round(Math.max(-1, Math.min(1, (target - game.ball.x) / (250 * FIXED_STEP))) * 100) / 100;
@@ -60,6 +74,7 @@ test('HTTP journey: verified login → nonmember form → private save/join → 
     }
     const board = await (await fetch(base + 'board')).text(); const result = JSON.parse(board);
     assert.equal(result.results.length, 1); assert.equal(result.results[0].alias, 'Проверенный Игрок');
+    assert.deepEqual(createRegistry({ communityId, directory }).board().results, result.results);
     assert.ok(!board.includes(email) && !board.includes(website) && !board.includes('Тестовый Гость')); assert.ok(methods.every(method => method === 'GET')); assert.deepEqual(errors, []); connection.dispose();
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(directory, { recursive: true, force: true }); }
 });

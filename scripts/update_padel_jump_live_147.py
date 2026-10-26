@@ -139,7 +139,7 @@ def package(args):
     backend = json.loads(Path('dist/padel-jump-live/release.json').read_text())
     require(backend['sourceCommit'] == source and backend['sourceDirty'] is False and backend['engine'] == before['runtime']['health']['engine'], 'BACKEND_INCOMPATIBLE')
     require(backend.get('sync') == 'full-game-v1', 'BACKEND_SYNC_INCOMPATIBLE')
-    require(backend.get('rule') == 'five-lives-community-v2' and backend.get('lives') == 5, 'BACKEND_RULE_INCOMPATIBLE')
+    require(backend.get('rule') == 'five-lives-stars-v2' and backend.get('lives') == 5, 'BACKEND_RULE_INCOMPATIBLE')
     for name in ['server.mjs', 'release.json']: files['backend/' + name] = Path('dist/padel-jump-live', name).read_bytes()
     require(digest(files['backend/server.mjs']) == backend['files']['server.mjs']['sha256'], 'BACKEND_HASH_DRIFT')
     release = {'schema': 'PADLHUB_JUMP_ADMISSION_V1', 'sourceCommit': source, 'sourceDirty': False, 'engine': backend['engine'], 'sync': backend['sync'], 'rule': backend['rule'], 'lives': backend['lives'], 'ciRuns': [c['url'] for c in checks], 'files': {n.removeprefix('frontend/'): {'sha256': digest(d), 'size': len(d)} for n, d in files.items() if n.startswith('frontend/')}}
@@ -193,7 +193,7 @@ def apply(upload, plan):
     require(all(digest(data) == plan['files'][name] for name, data in files.items()), 'PAYLOAD_HASH_DRIFT')
     require(all(name in files for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html', 'backend/server.mjs', 'backend/release.json']), 'ENTRY_MISSING')
     for name in ['frontend/release.json', 'backend/release.json']:
-        release = json.loads(files[name]); require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'] and release.get('sync') == plan.get('sync') == 'full-game-v1' and release.get('rule') == plan.get('rule') == 'five-lives-community-v2' and release.get('lives') == plan.get('lives') == 5, 'RELEASE_DRIFT')
+        release = json.loads(files[name]); require(release['sourceCommit'] == plan['sourceCommit'] and release['sourceDirty'] is False and release['engine'] == plan['engine'] and release.get('sync') == plan.get('sync') == 'full-game-v1' and release.get('rule') == plan.get('rule') == 'five-lives-stars-v2' and release.get('lives') == plan.get('lives') == 5, 'RELEASE_DRIFT')
     require(json.loads(files['backend/release.json'])['files']['server.mjs']['sha256'] == plan['files']['backend/server.mjs'], 'BACKEND_MANIFEST_DRIFT')
     target = WEB / ('padel-jump-team-' + plan['sourceCommit'][:8]); backend = RELEASES / plan['sourceCommit']
     require(not os.path.lexists(target) and not os.path.lexists(backend), 'TARGET_EXISTS')

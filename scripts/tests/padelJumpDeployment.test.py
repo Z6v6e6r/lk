@@ -117,13 +117,13 @@ class JumpDeployment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             base = Path(root).resolve(); upload = base / 'upload'; upload.mkdir(); web = base / 'web'; web.mkdir()
             old = web / 'old-game.html'; old.write_bytes(b'original')
-            before = {'protected': {'old': frontend.sha(old)}, 'backend': {'sourceCommit': 'b' * 40, 'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5}}
-            release = {'sourceCommit': 'a' * 40, 'sourceDirty': False, 'engine': 'e' * 64, 'backendSourceCommit': 'b' * 40, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5}
+            before = {'protected': {'old': frontend.sha(old)}, 'backend': {'sourceCommit': 'b' * 40, 'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5}}
+            release = {'sourceCommit': 'a' * 40, 'sourceDirty': False, 'engine': 'e' * 64, 'backendSourceCommit': 'b' * 40, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5}
             files = {name: b'fixture-public-html' for name in ['padel-jump.html', 'padel-jump-race.html', 'padel-jump-live.html']}; files['release.json'] = json.dumps(release).encode()
             with tarfile.open(upload / 'payload.tar', 'w') as tar:
                 for name, data in files.items():
                     m = tarfile.TarInfo(name); m.size = len(data); tar.addfile(m, io.BytesIO(data))
-            plan = {'sourceCommit': 'a' * 40, 'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5, 'publisherSha256': frontend.sha(frontend.__file__), 'archiveSha256': frontend.sha(upload / 'payload.tar'), 'preimage': before, 'files': {name: frontend.digest(data) for name, data in files.items()}}
+            plan = {'sourceCommit': 'a' * 40, 'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'publisherSha256': frontend.sha(frontend.__file__), 'archiveSha256': frontend.sha(upload / 'payload.tar'), 'preimage': before, 'files': {name: frontend.digest(data) for name, data in files.items()}}
             (upload / 'plan.json').write_text(json.dumps(plan))
             class Libc:
                 def renameat2(self, source_fd, source, target_fd, target, flags):
@@ -199,16 +199,16 @@ class JumpUpdate(unittest.TestCase):
                 return {'files': {str(p): {'sha256': update.sha(p), 'realpath': str(p)} for p in [unit, env]}, 'lkPointer': 'unchanged-pointer'}
             def runtime():
                 source = new if new in unit.read_text() else old
-                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'rule': ('wrong-rule' if failure == 'rule' else 'five-lives-community-v2') if source == new else 'active-total-community-v1', 'lives': 5 if source == new else None, 'communityConfigured': True, 'persistence': True}}
+                return {'pid': 2 if source == new else 1, 'sourceCommit': source, 'sha256': update.sha(releases / source / 'server.mjs'), 'health': {'engine': engine, 'sync': ('wrong-sync' if failure == 'sync' else 'full-game-v1') if source == new else None, 'rule': ('wrong-rule' if failure == 'rule' else 'five-lives-stars-v2') if source == new else 'active-total-community-v1', 'lives': 5 if source == new else None, 'communityConfigured': True, 'persistence': True}}
             before = {'host': update.HOST, 'unit': original, 'protected': private_snapshot(), 'runtime': runtime(), 'data': dict(data)}
-            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5}
+            release = {'sourceCommit': new, 'sourceDirty': False, 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5}
             backend_release = {**release, 'files': {'server.mjs': {'sha256': update.digest(b'new-backend')}}}
             files = {name: b'public-fixture' for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html']}
             files.update({'frontend/release.json': json.dumps(release).encode(), 'backend/server.mjs': b'new-backend', 'backend/release.json': json.dumps(backend_release).encode()})
             with tarfile.open(upload / 'payload.tar', 'w') as archive:
                 for name, value in files.items():
                     member = tarfile.TarInfo(name); member.size = len(value); archive.addfile(member, io.BytesIO(value))
-            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-community-v2', 'lives': 5, 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
+            plan = {'sourceCommit': new, 'preimage': before, 'unitCandidate': original.replace(old, new), 'engine': engine, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'archiveSha256': update.sha(upload / 'payload.tar'), 'files': {name: update.digest(value) for name, value in files.items()}}
             commands = []
             def run(*args):
                 commands.append(args)
