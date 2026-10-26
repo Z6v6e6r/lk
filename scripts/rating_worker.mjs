@@ -31,6 +31,10 @@ import {
   replayPlayerRatingEvents,
   toFiniteRating,
 } from "../src/services/player-rating/ledger.ts";
+import {
+  getTournamentRatingExclusion,
+  planTournamentRatingAnnulment,
+} from "../src/services/player-rating/tournamentExclusions.ts";
 import { resolveRatingWorkerMongoSocketTimeoutMs } from "./lib/ratingWorkerChildProcess.mjs";
 import {
   buildTimeForFriendsAutoEnrollmentMutation,
@@ -311,7 +315,7 @@ async function resolveCompatibilityProjectionTarget(db, identity) {
   return selectCompatibilityProjectionTarget(candidates, identity);
 }
 
-async function projectIdentityState(db, identity, nowIso, dryRun) {
+async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents = []) {
   const current = await loadStateForIdentity(db, identity);
   const mergedIdentity = {
     playerKey: identity.clientId ? `client:${identity.clientId}` : (current?.playerKey || identity.playerKey),
@@ -319,7 +323,11 @@ async function projectIdentityState(db, identity, nowIso, dryRun) {
     phoneNorm: identity.phoneNorm || current?.phoneNorm || null,
     name: identity.name || current?.name || "Игрок",
   };
-  const events = await loadEventsForIdentity(db, mergedIdentity);
+  const persistedEvents = await loadEventsForIdentity(db, mergedIdentity);
+  const events = [...new Map([
+    ...persistedEvents,
+    ...pendingEvents.filter((event) => eventMatchesIdentity(event, mergedIdentity)),
+  ].map((event) => [event.id, event])).values()];
   const replay = replayPlayerRatingEvents(events);
   if (!replay) return { changed: false, reason: "NO_BASELINE", identity: mergedIdentity };
 
@@ -496,6 +504,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
   let reopened = 0;
   let startOverrides = 0;
   let skippedBeforeCutover = 0;
+  let annulled = 0;
 
   for (const tournament of tournaments) {
     const tournamentId = resolveTournamentId(tournament);
@@ -546,6 +555,20 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
       const playerKey = buildPlayerRatingKey({ clientId, phoneNorm });
       if (!playerKey) continue;
       const identity = { playerKey, clientId, phoneNorm, name: toStr(standing?.name) || "Игрок" };
+      if (getTournamentRatingExclusion(tournament, clientId, "level")) {
+        const events = [
+          ...await loadEventsForIdentity(db, identity),
+          ...newEvents.filter((event) => eventMatchesIdentity(event, identity)),
+        ];
+        const compensations = planTournamentRatingAnnulment({ tournament, clientId, events });
+        newEvents.push(...compensations);
+        allTournamentEvents.push(...compensations);
+        // Also replay on retry after a crash between event insertion and state
+        // projection. Never let a finalized excluded standing be applied again.
+        identities.set(playerKey, identity);
+        annulled += compensations.length;
+        continue;
+      }
       const active = latestActiveTournamentEvent(allTournamentEvents, tournamentId, identity);
       if (!final) {
         if (active) {
@@ -632,7 +655,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
   }
   const projections = [];
   for (const identity of identities.values()) {
-    const projected = await projectIdentityState(db, identity, nowIso, dryRun);
+    const projected = await projectIdentityState(db, identity, nowIso, dryRun, dryRun ? newEvents : []);
     projections.push(projected);
     await enqueueProjection(db, projected, nowIso, dryRun);
   }
@@ -643,6 +666,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
     reopened,
     startOverrides,
     skippedBeforeCutover,
+    annulled,
     playersProjected: projections.length,
     statesChanged: projections.filter((item) => item.changed).length,
   };

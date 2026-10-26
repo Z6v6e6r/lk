@@ -523,6 +523,7 @@ jobs:
           scripts/tests/resultSubmitP0.regression.test.ts
           scripts/tests/matchResult.playerSelection.test.ts
           scripts/tests/matchResult.ratingSync.test.ts
+          scripts/tests/tournamentRatingAnnulment.test.mjs
           scripts/tests/matchResult.submitPairingsPayload.test.ts
           scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs

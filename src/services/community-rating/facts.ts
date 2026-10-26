@@ -4,6 +4,7 @@ import {
   getPlaceBonus,
 } from "./calculations.ts";
 import { COMMUNITY_RATING_CALCULATION_VERSION } from "./contract.ts";
+import { getTournamentRatingExclusion } from "../player-rating/tournamentExclusions.ts";
 
 export const COMMUNITY_RATING_COLLECTIONS = {
   facts: "community_rating_facts",
@@ -1348,6 +1349,7 @@ function extractTournamentFacts(input: {
 
   return rows
     .map((standing): CommunityRatingFact | null => {
+      if (getTournamentRatingExclusion(input.tournament, standing.id, "community")) return null;
       const member = resolveMember(input.memberByKey, standing);
       if (!member) return null;
       const placeScore = calculatePlaceScore(standing.place, participantsCount);
