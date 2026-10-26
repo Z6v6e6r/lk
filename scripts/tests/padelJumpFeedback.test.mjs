@@ -29,3 +29,20 @@ test('race has no lower control row, retaining touch fallback on the play field'
   for (const name of ['onPointerUp', 'onPointerCancel', 'onLostPointerCapture']) assert.ok(source.includes(name));
   assert.ok(source.includes('ArrowLeft') && source.includes('ArrowRight') && source.includes('tilt.direction()'));
 });
+
+test('entry uses requested copy and explains phone tilt before starting', () => {
+  const previous = globalThis.window;
+  try {
+    globalThis.window = { isSecureContext: true };
+    const html = renderToStaticMarkup(React.createElement(module.exports.RaceJump));
+    assert.ok(html.includes('На каждую попытку у тебя всего 5 жизней. Чем больше звезд ты наберешь, тем выше твой рейтинг в сообществе. Если количество звезд равное, выше тот, кто потратил меньше времени.'));
+    assert.ok(html.includes('Игра на ретинг'));
+    assert.ok(html.includes('Управляй мячом наклоном телефона влево и вправо.'));
+    assert.ok(html.indexOf('Управляй мячом') < html.indexOf('Игра на ретинг'));
+    const admission = renderToStaticMarkup(React.createElement(module.exports.RaceAdmission, { onChangeProfile() {} }));
+    assert.ok(admission.includes('ПадлхАБ Jump - займи свое место в рейтинге'));
+    assert.match(source, /view\.mode === 'paused'[^\n]*pj-race-control-hint/);
+  } finally {
+    if (previous === undefined) delete globalThis.window; else globalThis.window = previous;
+  }
+});
