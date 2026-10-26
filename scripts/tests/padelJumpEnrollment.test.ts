@@ -41,7 +41,8 @@ function temporary(run: (directory: string) => unknown) {
 
 test('enrollment validation normalizes a company URL and rejects spoofed identity, controls, bad email and unsafe schemes', () => {
   assert.equal(normalizeEnrollment(form).companyWebsite, 'https://company.example.invalid/');
-  for (const value of [{ ...form, actorId: 'other' }, { ...form, role: 'OWNER' }, { ...form, consent: false }, { ...form, email: 'bad' }, { ...form, firstName: 'bad\nname' }, { ...form, firstName: '<b>x</b>' }, { ...form, companyWebsite: 'javascript:alert(1)' }, { ...form, companyWebsite: 'https://user:password@example.invalid' }]) assert.throws(() => normalizeEnrollment(value), /ENROLLMENT_INVALID/);
+  const credentialedFixture = new URL('https://company.example.invalid'); credentialedFixture.username = 'fixture-user'; credentialedFixture.password = 'fixture-password';
+  for (const value of [{ ...form, actorId: 'other' }, { ...form, role: 'OWNER' }, { ...form, consent: false }, { ...form, email: 'bad' }, { ...form, firstName: 'bad\nname' }, { ...form, firstName: '<b>x</b>' }, { ...form, companyWebsite: 'javascript:alert(1)' }, { ...form, companyWebsite: credentialedFixture.href }]) assert.throws(() => normalizeEnrollment(value), /ENROLLMENT_INVALID/);
 });
 test('existing members skip the form; only verified nonmembers see own profile prefill', () => temporary(async directory => {
   const h = harness(directory); const state = await h.service.status(req());
