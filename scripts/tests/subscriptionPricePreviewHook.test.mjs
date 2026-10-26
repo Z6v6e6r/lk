@@ -8,6 +8,8 @@ const bundle = await build({
   write: false, format: 'cjs', platform: 'node', external: ['react'], logLevel: 'silent',
   plugins: [{ name: 'synthetic-preview-api', setup(builder) {
     builder.onResolve({ filter: /utils\/apiClient$/ }, () => ({ path: 'preview-api', namespace: 'fixture' }));
+    builder.onResolve({ filter: /utils\/analytics$/ }, () => ({ path: 'analytics', namespace: 'diagnostic-fixture' }));
+    builder.onLoad({ filter: /.*/, namespace: 'diagnostic-fixture' }, () => ({ contents: 'export const trackClientError = (...args) => globalThis.diagnosticEvents.push(args);' }));
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents:
       'export const apiFetchSubscriptionPricePreview = (...args) => globalThis.requestPreview(...args);' }));
   } }],
@@ -26,7 +28,9 @@ function harness() {
   let effects = [];
   const hooks = [], timers = new Map(), requests = [];
   const same = (a, b) => a && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  const diagnosticEvents = [];
   const React = {
+    useRef(initial) { const index = cursor++; if (!hooks[index]) hooks[index] = { current: initial }; return hooks[index]; },
     useState(initial) {
       const index = cursor++;
       if (!hooks[index]) hooks[index] = { value: initial };
@@ -51,7 +55,7 @@ function harness() {
     Date: class extends Date { static now() { return now + wallClockOffsetMs; } },
     performance: { now: () => now - startedAt + monotonicOffsetMs },
     setTimeout: (callback, delay) => { timers.set(++timerId, { at: now + delay, callback }); return timerId; },
-    clearTimeout: id => timers.delete(id),
+    clearTimeout: id => timers.delete(id), diagnosticEvents,
     requestPreview: (selection, ids, signal) => new Promise((resolve, reject) => {
       requests.push({ selection, ids, signal, resolve, reject });
       signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
@@ -60,7 +64,7 @@ function harness() {
   vm.runInContext(bundle.outputFiles[0].text, context);
   const hook = context.module.exports.useSubscriptionPricePreview;
   const h = { props: { target, subscriptionIds: ['subscription-a', 'subscription-b'], actorId: 'actor-a', enabled: true, availabilityLoading: false },
-    requests, result: null,
+    requests, diagnosticEvents, result: null,
     render() {
       do {
         cursor = 0; dirty = false; effects = [];
@@ -194,4 +198,11 @@ test('join quotes invalidate on game, date, account and options changes and igno
   await h.advance(1000);assert.equal(h.requests.length,2);
   h.props={...h.props,availabilityLoading:false,subscriptionIds:['subscription-new']};h.render();
   await h.advance(300);await h.resolve();assert.equal(h.result.state,'available');assert.deepEqual(Object.keys(h.result.bySubscriptionId),['subscription-new']);
+});
+
+ test('abort diagnostics distinguish deadline from scope disposal without claiming user cancellation', async () => {
+  const h = harness(); h.render(); await h.advance(301); h.props = { ...h.props, enabled: false }; h.render();
+  assert(h.diagnosticEvents.some(event => event[2].abortCause === 'scope_disposed'));
+  const timeout = harness(); timeout.render(); await timeout.advance(30001);
+  assert.equal(timeout.requests[0].signal.reason, 'deadline');
 });

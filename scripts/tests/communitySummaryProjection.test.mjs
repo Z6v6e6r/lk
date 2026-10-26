@@ -49,6 +49,7 @@ test('SUMMARY sends find(filter, options) to mongodb4 and FULL keeps its origina
   assert.deepEqual(Object.keys(options), ['projection']);
   assert.equal(options.projection.archived, 1);
   assert.equal(options.projection.logoLegacyDataUrl, 1);
+  for (const field of ['logoDataUrl', 'logoThumbLegacyDataUrl', 'logoThumbDataUrl']) assert.equal(options.projection[field], 1);
   assert.equal(options.projection.members, undefined);
   assert.equal(options.projection.pendingMembers, undefined);
   assert.deepEqual(options.projection._summaryBannedCount.$size.$cond[0], { $isArray: '$bannedMembers' });
@@ -200,4 +201,21 @@ test('live candidate rejects a flow preimage mismatch before changing nodes', ()
     () => synchronizeCommunitySummaryProjection([], 'wrong-sha', prepareTail, responseTail),
     /preimage changed/,
   );
+});
+
+
+test('SUMMARY and FULL retain valid backing fields but never return backing data URLs', () => {
+  const data = 'data:image/png;base64,aGVsbG8=';
+  const legacy = 'https://padlhub.su/lk/media/community-logo-legacy/fixture';
+  const projection = prepareMessage({ view: 'summary' }).payload[1].projection;
+  const original = row('fixture', { logoUrl: legacy, logoThumbUrl: legacy + '/thumb', logoDataUrl: data, logoThumbDataUrl: data });
+  const projected = Object.fromEntries(Object.entries(original).filter(([key]) => projection[key]));
+  const summaryRow = summary([projected]).payload.communities[0];
+  assert.equal(summaryRow.logoUrl, legacy);
+  assert.equal(summaryRow.logoThumbUrl, legacy + '/thumb');
+  for (const key of ['logoDataUrl', 'logoLegacyDataUrl', 'logoThumbDataUrl', 'logoThumbLegacyDataUrl']) assert.equal(summaryRow[key], undefined);
+  assert.ok(!JSON.stringify(summaryRow).includes(data));
+  const broken = summary([row('fixture', { logoUrl: legacy, logoThumbUrl: legacy + '/thumb' })]).payload.communities[0];
+  assert.equal(broken.logoUrl, null);
+  assert.equal(broken.logoThumbUrl, null);
 });

@@ -1708,7 +1708,7 @@ export function Cabinet({
             trackClientError(
               "cabinet.load_unauthorized",
               new Error("Profile request unauthorized"),
-              { status: 401 },
+              { stage: "profile_request", httpStatus: 401, dataPresent: false },
               { handled: true, severity: "warning" },
             );
             trackAnalyticsEvent("cabinet_load_failed", {
@@ -1725,7 +1725,7 @@ export function Cabinet({
           trackClientError(
             "cabinet.profile_not_loaded",
             new Error("Profile payload is empty"),
-            { status: profileRes?.status ?? null, message: profileRes?.error?.message ?? null },
+            { stage: "profile_request", httpStatus: profileRes?.status ?? null, dataPresent: Boolean(profileRes?.data) },
             { handled: true, severity: "error" },
           );
           setLoadError(CABINET_LOAD_ERROR_TEXT);

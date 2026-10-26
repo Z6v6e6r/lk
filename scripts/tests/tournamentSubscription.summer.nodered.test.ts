@@ -2352,7 +2352,9 @@ test("atomic transaction recovery fails closed for zero, multiple, incomplete or
       },
     ) as unknown[];
     assert.equal(out[0], null);
-    const details = asRecord(asRecord(asRecord(out[2]).payload).details);
+    assert.equal(out[1], null);
+    assert.equal(out[2], null); // Background recovery has no HTTP lifecycle.
+    const details = asRecord(asRecord(asRecord(out[3]).payload).details);
     assert.equal(details.code, candidate.code);
   }
 
@@ -2369,7 +2371,8 @@ test("atomic transaction recovery fails closed for zero, multiple, incomplete or
       },
     },
   ) as unknown[];
-  const mismatchDetails = asRecord(asRecord(asRecord(canonicalMismatch[2]).payload).details);
+  assert.deepEqual(canonicalMismatch.slice(0, 3), [null, null, null]);
+  const mismatchDetails = asRecord(asRecord(asRecord(canonicalMismatch[3]).payload).details);
   assert.equal(mismatchDetails.code, "REGIONAL_PROVIDER_TRANSACTION_RECOVERY_GET_MISMATCH");
 });
 

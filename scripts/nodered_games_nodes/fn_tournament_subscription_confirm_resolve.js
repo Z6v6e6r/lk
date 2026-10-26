@@ -734,13 +734,25 @@ const resolveReservationMinutes = () => {
   return Math.max(5, Math.min(360, raw));
 };
 
+const responsePorts = (response) => {
+  // Reconciliation jobs originate without an HTTP lifecycle. Keep the internal
+  // result, but do not manufacture a response for the shared HTTP response node.
+  const background = msg._summerSubscriptionCtx?.reconcile === true;
+  if (background && response.statusCode >= 400
+    && typeof node !== "undefined" && typeof node.warn === "function") {
+    node.warn(JSON.stringify({ event: "subscription_confirm_background_failed",
+      code: "SUBSCRIPTION_CONFIRM_BACKGROUND_FAILED", statusCode: response.statusCode }));
+  }
+  return [null, background ? null : response, response];
+};
+
 const failMsg = (status, error, details) => {
   const response = Object.assign({}, msg, {
     statusCode: status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
     payload: { error, details: details || null },
   });
-  return [null, response, response];
+  return responsePorts(response);
 };
 
 const resolveCounterFromRecord = (record, configMap) => {
@@ -792,6 +804,12 @@ const ctx = msg._summerSubscriptionCtx && typeof msg._summerSubscriptionCtx === 
 
 if (!ctx || ctx.action !== "confirm") {
   return failMsg(500, "Summer subscription confirm context is missing");
+}
+
+// A missing/malformed storage response is not a proven empty successful read.
+if (msg.error || !Array.isArray(msg.payload)
+  || msg.payload.some(row => !row || typeof row !== "object" || Array.isArray(row))) {
+  return failMsg(503, "Не удалось проверить платеж", { code: "SUBSCRIPTION_CONFIRM_READ_FAILED" });
 }
 
 const configMap = buildCounterConfigMap();
@@ -1029,7 +1047,7 @@ if (currentStatus === "PAID" && ctx.reconcile !== true
       updatedAt: toStr(record.updatedAt) || toStr(record.createdAt) || new Date().toISOString(),
     },
   });
-  return [null, response, response];
+  return responsePorts(response);
 }
 
 if (!ctx.transactionId) {
@@ -1076,7 +1094,7 @@ if (!ctx.transactionId) {
       updatedAt: new Date().toISOString(),
     }, record),
   });
-  return [null, response, response];
+  return responsePorts(response);
 }
 
 ctx.step = "token_confirm";

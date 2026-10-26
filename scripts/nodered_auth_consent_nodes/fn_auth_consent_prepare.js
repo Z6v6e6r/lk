@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "auth_prepare", { sourceHash: "f30c967cc5d1556d226dd510d1749e687050e35c8e8cceeecfde98dece301451", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -76,6 +85,17 @@ msg._authConsent = {
   acceptedAtClient: toStr(body.acceptedAtClient),
   authMethodReported: authMethod,
   documents: DOCUMENTS,
+  // Unverified hints only. No raw token/claims are emitted and these booleans
+  // must never participate in authorization or provider-refusal classification.
+  tokenDiagnosticFlags: {
+    unverifiedHints: true,
+    openidPresent: typeof tokenPayload.scope === "string" ? tokenPayload.scope.split(/\s+/).includes("openid") : null,
+    expiredByClaim: typeof tokenPayload.exp === "number" && Number.isFinite(tokenPayload.exp)
+      ? tokenPayload.exp * 1000 <= Date.now() : null,
+    clientMatchesClaim: typeof tokenPayload.azp === "string" ? tokenPayload.azp === "widget" : null,
+    issuerMatchesClaim: typeof tokenPayload.iss === "string"
+      ? tokenPayload.iss === "https://kc.vivacrm.ru/realms/clients" : null,
+  },
   verifiedTokenContext: {
     authorizedParty: toStr(tokenPayload.azp),
     audience: tokenPayload.aud || null,

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { trackClientError } from "../../utils/analytics";
 import { apiFetchSubscriptionPricePreview } from "../../utils/apiClient";
 import { subscriptionPricePreview, subscriptionPricePreviewsById, subscriptionPriceSelectionKey,
   type SubscriptionPriceQuote, type SubscriptionPriceTarget } from "./subscriptionPricePreview.ts";
@@ -18,12 +19,16 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
   const [state, setState] = useState<{scope: string; loading: boolean; quotes: SubscriptionPriceQuote[] | null; receivedAt: number}>({
     scope: "", loading: false, quotes: null, receivedAt: 0,
   });
+  const generation = useRef(0);
   useEffect(() => {
     if (!enabled || availabilityLoading || !target || !actorId || !ids.length || ids.length > 20) return;
+    const scopeGeneration = ++generation.current;
+    const started = performance.now();
     const controller = new AbortController();
     let current = true;
+    let settled = false;
     setState({scope, loading: true, quotes: null, receivedAt: 0});
-    const deadline = setTimeout(() => controller.abort(), 30_000);
+    const deadline = setTimeout(() => controller.abort("deadline"), 30_000);
     const debounce = setTimeout(() => {
       const requestStartedAt = performance.now();
       void apiFetchSubscriptionPricePreview(target, ids, controller.signal).then(result => {
@@ -45,9 +50,15 @@ export function useSubscriptionPricePreview({ target, subscriptionIds, actorId, 
         setState({scope, loading: false, quotes, receivedAt});
       }).catch(() => {
         if (current) setState({scope, loading: false, quotes: null, receivedAt: 0});
-      }).finally(() => clearTimeout(deadline));
+      }).finally(() => { settled = true; clearTimeout(deadline); });
     }, 300);
-    return () => { current = false; clearTimeout(debounce); clearTimeout(deadline); controller.abort(); };
+    return () => {
+      current = false; clearTimeout(debounce); clearTimeout(deadline);
+      if (settled) return;
+      if (!controller.signal.aborted) controller.abort("scope_disposed");
+      trackClientError("preview.scope", null, { stage: "preview_scope", code: "ABORT", scopeGeneration,
+        abortCause: controller.signal.reason, durationMs: performance.now() - started });
+    };
     // Canonical keys include every target, account and subscription identity field.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);

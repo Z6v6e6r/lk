@@ -1,3 +1,4 @@
+import { trackClientError } from "./analytics";
 import { appendBundleVersion } from "./bundleVersion";
 import { buildLkAssetUrlCandidates } from "./lkAssetBaseUrls";
 
@@ -60,6 +61,7 @@ function loadWidgetScript(src: string, globalName: WidgetGlobalName): Promise<Wi
     script.onload = () => {
       const mod = (window as unknown as AppWindow)[globalName];
       if (!mod) {
+        trackClientError("widget.registration", null, { stage: "module_registration", registrationPresent: false, scriptLoadObserved: true });
         script.remove();
         reject(new Error(`Module ${globalName} did not register on window after loading ${src}`));
         return;
@@ -67,6 +69,9 @@ function loadWidgetScript(src: string, globalName: WidgetGlobalName): Promise<Wi
       resolve(mod);
     };
     script.onerror = () => {
+      let originEqual: boolean | undefined;
+      try { originEqual = new URL(src, window.location.href).origin === window.location.origin; } catch { /* unknown */ }
+      trackClientError("widget.asset", null, { stage: "asset_load", registrationPresent: Boolean((window as unknown as AppWindow)[globalName]), originEqual });
       script.remove();
       reject(new Error(`Failed to load script: ${src}`));
     };

@@ -48,7 +48,7 @@ test("create prerequisite upgrade derives tenant from server configuration", () 
   assert.throws(() => patchLegacyGameCreatePrerequisiteCasAck(`${projectionBase}\n// drift`), /base preimage mismatch/);
 });
 
-test("PATCH writer registry separates the active live preimage from the combined tracked candidate", () => {
+test("PATCH writer registry retains the frozen business candidate separately from diagnostic source", () => {
   const patchWriter = registry.writers.find((writer) => writer.nodeId === "591234d213742276");
   const patchSource = patchWriter?.sourceNodes?.find((source) => source.nodeId === "e0d7883bc1a9fa8c");
   assert.ok(patchSource);
@@ -56,10 +56,12 @@ test("PATCH writer registry separates the active live preimage from the combined
   assert.equal(patchSource.activeSha256, "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931");
   assert.equal(patchSource.sourcePath, undefined);
   assert.equal(patchSource.candidateSourcePath, "scripts/nodered_games_nodes/fn_patch.js");
-  assert.equal(
-    patchSource.candidateSha256,
-    sha256(fs.readFileSync(patchSource.candidateSourcePath, "utf8")),
-  );
+  const diagnosticSource = fs.readFileSync(patchSource.candidateSourcePath, "utf8");
+  const diagnosticHash = sha256(diagnosticSource);
+  assert.equal(diagnosticHash, "04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b");
+  assert.equal(patchSource.candidateSha256, "9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130");
+  assert.equal(patchSource.candidateSha256, sha256(diagnosticSource.slice(diagnosticSource.indexOf("const isObj ="))));
+  assert.notEqual(patchSource.candidateSha256, diagnosticHash);
   assert.notEqual(patchSource.activeSha256, patchSource.candidateSha256);
 });
 

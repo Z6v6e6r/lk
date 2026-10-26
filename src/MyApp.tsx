@@ -619,7 +619,7 @@ function AppContent() {
         trackClientError(
           "overlay.module_open_failed.dev_import",
           err,
-          { module, globalName: globalName ?? null, src: src ?? null },
+          { stage: "module_open", registrationPresent: globalName ? Boolean((window as unknown as Record<string, unknown>)[globalName]) : undefined, mountPresent: globalName ? typeof ((window as unknown as Record<string, Partial<WidgetModule> | undefined>)[globalName])?.mount === "function" : undefined },
           { handled: true, severity: "error" },
         );
         activeOverlayModule = null;
@@ -653,7 +653,7 @@ function AppContent() {
       trackClientError(
         "overlay.module_open_failed.remote_bundle",
         err,
-        { module, globalName: globalName ?? null, src: src ?? null },
+        { stage: "module_open", registrationPresent: globalName ? Boolean((window as unknown as Record<string, unknown>)[globalName]) : undefined, mountPresent: globalName ? typeof ((window as unknown as Record<string, Partial<WidgetModule> | undefined>)[globalName])?.mount === "function" : undefined },
         { handled: true, severity: "error" },
       );
       activeOverlayModule = null;

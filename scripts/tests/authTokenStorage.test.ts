@@ -4,7 +4,10 @@ import {
   clearAuthTokens,
   persistAuthTokens,
   readAuthToken,
+  readRefreshToken,
+  clearAuthSessionTokens,
 } from "../../src/utils/authTokenStorage.ts";
+import { AUTH_RUNTIME_TENANT_KEY } from "../../src/consts/authRuntime.ts";
 
 function installAuthStorageMocks() {
   const cookieJar = new Map<string, string>();
@@ -140,4 +143,42 @@ test("auth token storage can be cleared from both cookie and localStorage", () =
   } finally {
     mocks.restore();
   }
+});
+
+test("arbitrary suffix and canonical-prefix cookies cannot replace the current session", () => {
+  const mocks = installAuthStorageMocks();
+  try {
+    mocks.cookieJar.set("anotherTenantAuthToken", "foreign-access");
+    mocks.cookieJar.set("padlhubAuthTokenOther", "lookalike-access");
+    mocks.cookieJar.set("anotherTenantRefreshToken", "foreign-refresh");
+    mocks.cookieJar.set("padlhubRefreshTokenOther", "lookalike-refresh");
+    assert.equal(readAuthToken(), null);
+    assert.equal(readRefreshToken(), null);
+    persistAuthTokens("current", 3600, "refresh", 3600);
+    mocks.cookieJar.delete("padlhubAuthToken");
+    mocks.cookieJar.delete("padlhubRefreshToken");
+    mocks.cookieJar.set(`${AUTH_RUNTIME_TENANT_KEY}AuthToken`, "older-tenant-access");
+    mocks.cookieJar.set(`${AUTH_RUNTIME_TENANT_KEY}RefreshToken`, "older-tenant-refresh");
+    assert.equal(readAuthToken(), "current");
+    assert.equal(readRefreshToken(), "refresh");
+  } finally { mocks.restore(); }
+});
+
+test("exact current-tenant cookies remain a legacy fallback and only owned credentials are cleared", () => {
+  const mocks = installAuthStorageMocks();
+  try {
+    mocks.cookieJar.set(`${AUTH_RUNTIME_TENANT_KEY}AuthToken`, "legacy");
+    mocks.cookieJar.set(`${AUTH_RUNTIME_TENANT_KEY}RefreshToken`, "legacy-refresh");
+    mocks.cookieJar.set("otherAuthToken", "foreign");
+    mocks.storage.set("pending-consent-fixture", "keep");
+    mocks.storage.set("padlhub:tournament-payment:fixture", "keep");
+    assert.equal(readAuthToken(), "legacy");
+    assert.equal(readRefreshToken(), "legacy-refresh");
+    clearAuthSessionTokens();
+    assert.equal(readAuthToken(), null);
+    assert.equal(readRefreshToken(), null);
+    assert.equal(mocks.cookieJar.get("otherAuthToken"), "foreign");
+    assert.equal(mocks.storage.get("pending-consent-fixture"), "keep");
+    assert.equal(mocks.storage.get("padlhub:tournament-payment:fixture"), "keep");
+  } finally { mocks.restore(); }
 });

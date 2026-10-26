@@ -28,6 +28,7 @@ import {
 } from "../utils/vivaAuthJwt";
 import {
   clearVivaAuthTokens,
+  clearVivaSessionTokens,
   persistVivaAuthTokens,
   readVivaAccessToken,
   readVivaRefreshToken,
@@ -41,6 +42,7 @@ import {
   isVivaOAuthCallbackUrl,
 } from "../utils/vivaOAuth";
 import { isLkIdleRequestPausedError } from "../utils/lkIdleDataGuard";
+import { assertVivaSessionCompatible, vivaSessionProblem, VivaSessionCompatibilityError, VIVA_REAUTH_MESSAGE } from "../utils/vivaSessionCompatibility";
 
 const VIVA_REALM = "clients";
 const REFRESH_LEEWAY_MS = 60_000;
@@ -88,17 +90,18 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
     return isVivaOAuthCallbackUrl(window.location.href, oauthCallbackMode);
   }, [oauthCallbackMode]);
   const oauthCallbackPending = useRef(initialOAuthCallback);
+  const initialSessionProblem = useMemo(() => initialToken ? vivaSessionProblem(initialToken) : null, [initialToken]);
   const shouldRestoreInitialSession = useMemo(
     () => shouldRestoreVivaSession(initialToken),
     [initialToken],
   );
   const [isAuthenticated, setIsAuthenticated] = useState(
-    Boolean(initialToken) && !initialOAuthCallback && hasPhoneClaim(initialToken),
+    Boolean(initialToken) && !initialOAuthCallback && !initialSessionProblem && hasPhoneClaim(initialToken),
   );
-  const [phone, setPhone] = useState(initialOAuthCallback ? "" : resolvePhoneFromToken(initialToken));
-  const [error, setError] = useState<string | null>(null);
+  const [phone, setPhone] = useState(initialOAuthCallback || initialSessionProblem ? "" : resolvePhoneFromToken(initialToken));
+  const [error, setError] = useState<string | null>(initialSessionProblem && !initialOAuthCallback ? VIVA_REAUTH_MESSAGE : null);
   const [needsPhoneVerification, setNeedsPhoneVerification] = useState(
-    Boolean(initialToken) && !initialOAuthCallback && !hasPhoneClaim(initialToken),
+    Boolean(initialToken) && !initialOAuthCallback && !initialSessionProblem && !hasPhoneClaim(initialToken),
   );
   const [isLoading, setIsLoading] = useState(shouldRestoreInitialSession || initialOAuthCallback);
   const [isRestoringSession, setIsRestoringSession] = useState(shouldRestoreInitialSession || initialOAuthCallback);
@@ -114,7 +117,8 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
     }
   }, []);
 
-  const applyTokenState = useCallback((tokenResponse: TokenResponse, fallbackPhone = "") => {
+  const applyTokenState = useCallback((tokenResponse: TokenResponse, fallbackPhone = "", previousToken?: string | null) => {
+    assertVivaSessionCompatible(tokenResponse.access_token, previousToken);
     oauthCallbackPending.current = false;
     persistVivaAuthTokens(
       tokenResponse.access_token,
@@ -128,6 +132,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
     setPhone(resolvedPhone);
     setNeedsPhoneVerification(requiresPhoneVerification);
     setIsAuthenticated(!requiresPhoneVerification);
+    setError(null);
     if (resolvedPhone) {
       identifyAnalyticsUser({ phone: resolvedPhone });
     }
@@ -135,6 +140,16 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
 
   const refreshTokens = useCallback(async () => {
     if (oauthCallbackPending.current) return false;
+    const previousToken = readVivaAccessToken();
+    if (previousToken && vivaSessionProblem(previousToken)) {
+      cancelRefreshTimer();
+      clearVivaSessionTokens();
+      setIsAuthenticated(false);
+      setNeedsPhoneVerification(false);
+      setPhone("");
+      setError(VIVA_REAUTH_MESSAGE);
+      return false;
+    }
     const refreshToken = readVivaRefreshToken();
     if (!refreshToken) {
       clearVivaAuthTokens();
@@ -156,32 +171,42 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
 
       const data = await res.json();
       if (!res.ok || !data?.access_token) {
+        if (data?.error === "invalid_scope") throw new VivaSessionCompatibilityError("missing_openid");
         throw new Error(data?.error_description ?? data?.error ?? `HTTP ${res.status}`);
       }
 
-      applyTokenState(data, phone);
+      if (readVivaAccessToken() !== previousToken || readVivaRefreshToken() !== refreshToken) return false;
+      applyTokenState(data, phone, previousToken);
       trackAnalyticsEvent("auth_token_refreshed", {
         authMode: "viva",
         expiresIn: data.expires_in ?? null,
       });
       return true;
     } catch (refreshError) {
+      if (readVivaAccessToken() !== previousToken || readVivaRefreshToken() !== refreshToken) return false;
       if (isLkIdleRequestPausedError(refreshError)) {
         return false;
       }
+      cancelRefreshTimer();
       trackClientError(
         "auth.refresh_failed",
         refreshError,
         { authMode: "viva" },
         { handled: true, severity: "warning" },
       );
-      clearVivaAuthTokens();
+      if (refreshError instanceof VivaSessionCompatibilityError) {
+        clearVivaSessionTokens();
+        setError(VIVA_REAUTH_MESSAGE);
+      } else {
+        clearVivaAuthTokens();
+        setError("Не удалось восстановить сессию. Войдите заново.");
+      }
       setIsAuthenticated(false);
       setNeedsPhoneVerification(false);
       setPhone("");
       return false;
     }
-  }, [applyTokenState, phone]);
+  }, [applyTokenState, cancelRefreshTimer, phone]);
 
   const scheduleRefresh = useCallback(async () => {
     cancelRefreshTimer();
@@ -284,7 +309,23 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
       return;
     }
     if (!pending || !code) {
-      if (initialToken) {
+      // Another widget may replace storage between render and this effect.
+      const currentToken = readVivaAccessToken();
+      if (currentToken && vivaSessionProblem(currentToken)) {
+        clearVivaSessionTokens();
+        setIsAuthenticated(false);
+        setNeedsPhoneVerification(false);
+        setPhone("");
+        setError(VIVA_REAUTH_MESSAGE);
+        setIsLoading(false);
+        setIsRestoringSession(false);
+        return;
+      }
+      if (currentToken) {
+        setPhone(resolvePhoneFromToken(currentToken));
+        setNeedsPhoneVerification(!hasPhoneClaim(currentToken));
+        setIsAuthenticated(hasPhoneClaim(currentToken));
+        setError(null);
         setIsLoading(false);
         setIsRestoringSession(false);
         void scheduleRefresh();
@@ -368,11 +409,13 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
           return;
         }
       } catch (oauthExchangeError) {
-        void clearPendingAuthConsents({
-          authMethod: pending.provider,
-          bindingType: "oauth-state",
-          bindingValue: pending.state,
-        });
+        if (!(oauthExchangeError instanceof VivaSessionCompatibilityError)) {
+          void clearPendingAuthConsents({
+            authMethod: pending.provider,
+            bindingType: "oauth-state",
+            bindingValue: pending.state,
+          });
+        }
         clearPendingVivaOAuth();
         cleanupVivaOAuthCallbackUrl();
         trackClientError(
@@ -387,7 +430,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         setIsRestoringSession(false);
       }
     })();
-  }, [applyTokenState, initialToken, initialOAuthCallback, refreshTokens, scheduleRefresh]);
+  }, [applyTokenState, initialOAuthCallback, refreshTokens, scheduleRefresh]);
 
   const sendCode = useCallback(async (phoneNumber: string, channel = "cascade") => {
     clearError();

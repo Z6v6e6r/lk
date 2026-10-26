@@ -413,6 +413,8 @@ jobs:
           scripts/tests/subscriptionPricePreview.apiClient.test.mjs
           scripts/tests/subscriptionPricePreviewBackend.test.mjs
           scripts/tests/productionErrorCauses.test.mjs
+          scripts/tests/lk1ErrorSourceFixes.test.mjs
+          scripts/tests/lk1R03ResponseLifecycle.test.mjs
           scripts/tests/errorCauseCandidateAndRoster.test.mjs
           scripts/tests/communityLegacyLogoAliases.test.mjs
           scripts/tests/authConsentAudit.test.ts
@@ -563,6 +565,7 @@ jobs:
           scripts/tests/matchResult.submitPairingsPayload.test.ts
           scripts/tests/matchResult.cardStateHydration.test.ts
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
+          scripts/tests/vivaSessionCompatibility.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
 
       - name: Run Partner membership R4 gates
@@ -625,6 +628,8 @@ jobs:
           scripts/tests/referralAttribution.test.ts
           scripts/tests/referralSubscription.nodered.test.ts
           scripts/tests/referralAttributionReleaseCandidate.test.mjs
+          scripts/tests/correlatedErrorDiagnostics.test.mjs
+          scripts/tests/clientErrorDiagnostics.test.mjs
 
       - name: Fetch pinned legacy build image
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'

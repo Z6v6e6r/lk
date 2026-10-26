@@ -1,0 +1,13 @@
+import { EventEmitter } from 'node:events';
+import { createDiagnostics } from './runtime.mjs';
+const events = [];
+const diagnostics = createDiagnostics({ sink: event => events.push(event), release: 'a'.repeat(40), key: Buffer.alloc(32, 17) });
+const req = { path: '/lk/games/synthetic-game', method: 'PATCH' };
+const res = new EventEmitter(); res.statusCode = 200;
+const headers = new Map(); res.setHeader = (key, value) => headers.set(key, value); res.getHeader = key => headers.get(key); res.end = () => {};
+diagnostics.middleware(req, res, () => {});
+const msg = { req, res };
+diagnostics.observe(msg, 'roster_authorize', { expectedRevisionPresent: true, actualRevisionPresent: true, expectedRevisionType: 'number', actualRevisionType: 'number', revisionEqual: true, code: 'STAGE_ENTER' });
+res.emit('close');
+diagnostics.observe(msg, 'roster_ack', { eventKind: 'operation_result', code: 'DB_ACK', acknowledged: true, matchedCount: 1, modifiedCount: 1, outcome: 'acknowledged' });
+for (const event of events) process.stdout.write(`${JSON.stringify(event)}\n`);
