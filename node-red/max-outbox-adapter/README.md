@@ -5,10 +5,23 @@ public bundle, SDK dependency, provider account or production state is changed.
 This local Node-RED package uses Node18+ builtin fetch and the existing maxbot-config
 credential at runtime; no new npm dependency or token in exported flow. It avoids
 the old SDK attachment.not.ready recursion and logs only fixed diagnostic codes.
-The POST/messages, Authorization header and message.body.mid acceptance shape were
-checked against the public package source of `@maxhub/max-bot-api` SDK0.2.2 used
-by `node-red-contrib-maxbot`0.6.1. The config node and SDK are distinct packages;
-installed-target versions must be read back before release. No MAX request was made.
+The fixed provider origin is `https://platform-api2.max.ru`, following the current
+[official API overview](https://dev.max.ru/docs-api) and
+[POST /messages contract](https://dev.max.ru/docs-api/methods/POST/messages), read on
+2026-10-26. They require the v2 domain, an Authorization header and distinct user_id
+or chat_id; the result contains a message object. The credential-store interface
+was verified against actual `node-red-contrib-maxbot`0.6.1 with SDK0.2.2. Those are
+distinct packages; the old installed SDK still uses the retired v1 domain and does
+not establish the current provider endpoint. No real MAX message was sent.
+
+The official overview also requires an appropriate trusted TLS certificate chain.
+This adapter keeps Node's normal certificate validation and never uses an insecure
+agent or disables TLS checks. Verify trust from the actual Node-RED runtime before
+enabling consumers; any trust-store change requires its own reviewed target action.
+Do not learn TLS readiness by sending or replaying a real outbox command.
+The official send contract limits a dialog/chat/channel to two messages per second.
+Verify queueing/delay and per-dialog serialization before activation; reactive 429
+backoff alone does not establish compliance with that limit.
 
 One input contains supportOutbox with id,leaseToken,leasedUntil,text and either
 externalChatId or externalUserId (targetExternal* fields). The sender uses chat_id
@@ -99,6 +112,10 @@ On 2026-10-26 the updated constructor/adapter passed an isolated paired rehearsa
 against ph-admin commit `171f89a06ff4ef4497afc16736f851896d4d98ef` (tree
 `0d7b15c012ffe7d10e94fd15d115ac2264dd4225`) with Node22.13.1, Node-RED4.0.9 and
 Mongo7.0.16. Both connector graphs used the exact diagnostic dispatch fixture.
+That rehearsal used the earlier v1 origin with fully mocked transport. The provider
+origin was subsequently updated to the documented v2 domain; request/receipt state
+logic did not change. Final unit/config/editor checks validate the new origin;
+the physical paired rehearsal must be repeated at installed-staging acceptance.
 Eleven scenarios covered protocol/auth denial, durable ACK and duplicate/stale
 receipts, 403 privacy, 429 backoff/cap, uncertain transport, lost receipt and node
 close with a late 200. Twelve provider fetches were synthetic; no real provider or

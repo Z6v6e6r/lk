@@ -38,7 +38,7 @@ async function deliver(command, token, { fetchImpl = globalThis.fetch, timeoutMs
   const timer = setTimeout(abort, timeoutMs);
   let observedStatus = null;
   try {
-    const url = new URL('https://platform-api.max.ru/messages');
+    const url = new URL('https://platform-api2.max.ru/messages');
     url.searchParams.set(chat ? 'chat_id' : 'user_id', chat || user);
     const body = { text: command.text };
     if (['markdown', 'html'].includes(command.format)) body.format = command.format;

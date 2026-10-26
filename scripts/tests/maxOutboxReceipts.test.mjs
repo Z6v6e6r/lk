@@ -27,7 +27,8 @@ test('adapter package maps a CommonJS .js runtime to its sibling editor template
 test('one provider accepted response produces only ACK receipt; no body/target/token export', async () => {
   const c = command(); let calls = 0;
   const result = await deliver(c, 'synthetic-private-token', { fetchImpl: async (url, options) => {
-    calls++; assert.equal(url.hostname, 'platform-api.max.ru'); assert.equal(url.searchParams.get('chat_id'), 'chat-fixture');
+    calls++; assert.equal(url.origin, 'https://platform-api2.max.ru');
+    assert.equal(url.pathname, '/messages'); assert.equal(url.searchParams.get('chat_id'), 'chat-fixture');
     assert.equal(options.redirect, 'error'); assert.equal(options.headers.Authorization, 'synthetic-private-token');
     return provider(200, { message: { body: { mid: 'private-provider-id', text: c.text } } });
   } });
