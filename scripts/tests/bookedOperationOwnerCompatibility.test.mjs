@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { composeOwnerCompatibility } from '../prepare_booked_operation_owner_compatibility.mjs';
 import { graftOwnerFunctions, statements } from '../lib/bookedOperationOwnerCompatibility.mjs';
 import { managedRuntimeResponse, entitlementDecision } from './helpers/subscriptionBookingManagedFixtures.mjs';
+import { buildOwnerCapabilityGetNode, OWNER_CAPABILITY_GET_ID } from '../lib/subscriptionBookingOwnerProbe.mjs';
 
 const fixture = process.env.LK1_BOOKED_OWNER_COMPATIBILITY_FIXTURE;
 const source = fixture ? fs.readFileSync(fixture) : null;
@@ -80,8 +81,8 @@ test('statement identities refuse syntax drift and duplicate declarations', () =
 scoped('exact composition is deterministic and preserves all other nodes and product topology', () => {
   const repeated = composeOwnerCompatibility(source, 'fixture-booked-owner-compatibility');
   assert.ok(repeated.candidateBytes.equals(packet.candidateBytes));
-  assert.equal(packet.candidate.length, input.length + 17);
-  assert.equal(packet.contract.allowedAdditions.length, 17);
+  assert.equal(packet.candidate.length, input.length + 18);
+  assert.equal(packet.contract.allowedAdditions.length, 18);
   assert.equal(packet.receiver.invariants.brokenWireCount, 0);
   assert.equal(packet.receiver.executionEnabledByDefault, false);
   const changed = packet.candidate.slice(0, input.length).filter((row, i) => !isDeepStrictEqual(row, input[i]));
@@ -95,6 +96,10 @@ scoped('exact composition is deterministic and preserves all other nodes and pro
   const router = packet.candidate.find(row => row.id === ids.router);
   assert.equal(router.outputs, 8);
   assert.deepEqual(router.wires[7], ['lk_subscription_product_router_20260907']);
+  assert.deepEqual(packet.candidate.find(row => row.id === OWNER_CAPABILITY_GET_ID),
+    buildOwnerCapabilityGetNode(router.z));
+  assert.equal(packet.candidate.filter(row => row.type === 'http in'
+    && row.url === '/lk/subscription-bookings' && row.method === 'get').length, 1);
   assert.ok(packet.reports[0].protectedStatements >= 150);
 });
 
@@ -109,7 +114,7 @@ scoped('all installed standalone trial, identity, plan and product wrappers rema
 scoped('owner probe is credential-free and does not inspect state; normal CORS remains 204', () => {
   const normal = execute('options', { req: { method: 'OPTIONS', headers: {} } });
   assert.equal(normal[0].statusCode, 204);
-  const msg = { req: { method: 'OPTIONS', headers: { 'x-booked-operation-owner-contract': '1' } } };
+  const msg = { req: { method: 'GET', headers: { 'x-booked-operation-owner-contract': '1' } } };
   const probe = execute('options', msg);
   const out = execute('router', probe[1], new Proxy({}, { get() { throw new Error('probe read state'); } }));
   assert.equal(out[4].statusCode, 200);

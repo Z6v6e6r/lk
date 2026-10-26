@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "auth_verify", { sourceHash: "29cfbd1854788b26632f348f20ea10e21f52481073b397dbeef49a66d03a9981", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+try { if (typeof global !== "undefined") global.get("lkDiagnostics")?.upstream(msg, "auth_verify"); } catch { /* no-throw */ }
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -20,11 +29,26 @@ const responseType = !contentType ? "missing"
   : /^application\/(?:[a-z0-9.+-]+\+)?json(?:;|$)/.test(contentType) ? "json"
     : /^text\/html(?:;|$)/.test(contentType) ? "html"
       : /^text\//.test(contentType) ? "text" : "other";
+// Parse only RFC6750 fixed error enums. Realm, descriptions, scope values and
+// all other header content stay private. Ambiguous/oversized challenges are unknown.
+const challengeValue = msg.headers?.["www-authenticate"] ?? msg.headers?.["WWW-Authenticate"];
+let providerError = "unknown";
+if (typeof challengeValue === "string" && challengeValue.length <= 2048 && /^Bearer(?:\s|$)/i.test(challengeValue)) {
+  const errors = [...challengeValue.matchAll(/(?:^|[,\s])error\s*=\s*("[^"\r\n]*"|[^,\s]*)/gi)];
+  if (errors.length === 1 && /^"(?:invalid_token|insufficient_scope|invalid_request)"$/i.test(errors[0][1])) {
+    providerError = errors[0][1].slice(1, -1).toLowerCase();
+  }
+}
+const rawFlags = isObj(msg._authConsent?.tokenDiagnosticFlags) ? msg._authConsent.tokenDiagnosticFlags : {};
+const tokenHints = Object.fromEntries(["openidPresent", "expiredByClaim", "clientMatchesClaim", "issuerMatchesClaim"]
+  .map(key => [key, typeof rawFlags[key] === "boolean" ? rawFlags[key] : null]));
 const fail = (statusCode, error, code, reason) => {
+  lkDiagnostic({ code, reason, httpStatus: statusCode, upstreamStatus: safeUpstreamStatus, responseKind: typeof msg.payload === "string" ? "text" : "object", subjectPresent: typeof msg.payload?.sub === "string" });
   // Fixed enums only: never log the bearer, claims, headers, body or subject.
   if (typeof node !== "undefined" && typeof node?.warn === "function") {
-    node.warn(JSON.stringify({ event: "auth_consent_verification_failed", code, reason,
-      upstreamStatus: safeUpstreamStatus, responseType, retryable: statusCode === 503 }));
+    try { node.warn(JSON.stringify({ event: "auth_consent_verification_failed", code, reason,
+      upstreamStatus: safeUpstreamStatus, responseType, retryable: statusCode === 503,
+      providerError, unverifiedTokenHints: tokenHints })); } catch { /* no-throw */ }
   }
   msg.statusCode = statusCode;
   msg.headers = {

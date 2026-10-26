@@ -8,6 +8,7 @@ import { assertHubOutputPath } from './patch_live_lk1_hub.mjs';
 import { readRepositoryProvenance } from './lib/release-provenance.mjs';
 import { buildExactGraphContract, validateReviewedFlowContract } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 import { buildReceiverCandidate } from './patch_nodered_booked_operation_receiver_flow.mjs';
+import { buildOwnerCapabilityGetNode, OWNER_CAPABILITY_GET_ID } from './lib/subscriptionBookingOwnerProbe.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OPTIONS = 'lk_subscription_booking_options_20260804';
@@ -15,6 +16,7 @@ const ROUTER = OWNER_UNITS[0][1];
 const CLOSURE = [
   'scripts/prepare_booked_operation_owner_compatibility.mjs',
   'scripts/lib/bookedOperationOwnerCompatibility.mjs',
+  'scripts/lib/subscriptionBookingOwnerProbe.mjs',
   'scripts/verify_nodered_source_origin.mjs', 'scripts/lib/release-provenance.mjs',
   'scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs',
   'scripts/patch_nodered_booked_operation_receiver_flow.mjs',
@@ -52,6 +54,14 @@ export function composeOwnerCompatibility(liveBytes, deploymentId) {
     'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_options.js'), 'utf8');
   options.outputs = 2;
   options.wires = [['lk_subscription_booking_options_response_20260804'], [ROUTER]];
+  if (options.z !== nextRouter.z || !candidate.some(node => node.type === 'http in'
+    && node.method === 'post' && node.url === '/lk/subscription-bookings'
+    && node.z === nextRouter.z)) throw new Error('Owner capability target topology drift');
+  if (candidate.some(node => node.id === OWNER_CAPABILITY_GET_ID || (node.type === 'http in'
+    && node.method === 'get' && node.url === '/lk/subscription-bookings'))) {
+    throw new Error('Owner capability GET route already exists');
+  }
+  candidate.push(buildOwnerCapabilityGetNode(nextRouter.z));
   new Function('msg', 'global', 'node', 'env', nextRouter.func);
   new Function('msg', options.func);
   const allowedChanges = OWNER_UNITS.map(row => ({ id: row[1], fields: ['func'] }));
@@ -88,7 +98,10 @@ export function prepareOwnerCompatibility(workspace, outputDirectory) {
     protectedStatements: packet.reports.reduce((total, row) => total + row.protectedStatements, 0),
     changed: packet.reports.map(row => ({ ...row,
       candidateSha256: hash(packet.candidate.find(node => node.id === row.id).func) })),
-    optionsProbeWired: true, sourceOnly: true, activationAuthorized: false,
+    ownerCapabilityMethod: 'GET', ownerCapabilityAdditions: 1,
+    receiverNodesAdded: packet.receiver.invariants.addedNodeCount, receiverTabsAdded: 1,
+    allAdditionsInReceiverTab: false,
+    sourceOnly: true, activationAuthorized: false,
     imported: false, providerWritesPerformed: false };
   fs.mkdirSync(output, { mode: 0o700 });
   for (const [name, value] of [['candidate.flow.json', packet.candidateBytes],

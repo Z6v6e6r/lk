@@ -277,6 +277,7 @@ test("atomic auto-enrollment keeps exact id guards and records auto source", () 
   });
   const mutation = buildTimeForFriendsAutoEnrollmentMutation(result.operations[0], "2026-08-11T12:00:00.000Z");
   assert.equal(mutation.filter.id, COMMUNITY_A);
+  assert.deepEqual(mutation.filter.communityType, { $ne: "EVENT" });
   assert.deepEqual(mutation.filter.archived, { $ne: true });
   const member = mutation.update[0].$set.members.$concatArrays[1].$literal[0];
   assert.equal(member.id, PLAYER_ID);
@@ -811,4 +812,12 @@ test("incremental rating resolution follows nested legacy tournament publication
     { "details.publicTournament.exerciseId": { $in: ["tournament-legacy"] } },
     { "details.publicTournament.tournamentId": { $in: ["tournament-legacy"] } },
   ]);
+});
+
+test("EVENT communities cannot auto-enroll even with legacy TIME_FOR_FRIENDS metadata", () => {
+  const result=planTimeForFriendsAutoEnrollment({tournament:tournament(),feedPosts:[post(COMMUNITY_A)],communities:[{...community(COMMUNITY_A),communityType:'EVENT'}]});
+  assert.equal(result.operations.length,0);assert.equal(result.quarantined[0].reason,'EVENT_REGISTRATION_REQUIRED');
+  const oldPlan=planTimeForFriendsAutoEnrollment({tournament:tournament(),feedPosts:[post(COMMUNITY_A)],communities:[community(COMMUNITY_A)]});
+  const mutation=buildTimeForFriendsAutoEnrollmentMutation(oldPlan.operations[0],'2026-08-11T12:00:00.000Z');
+  assert.deepEqual(mutation.filter.communityType,{$ne:'EVENT'},'a plan prepared before conversion cannot update the later EVENT document');
 });

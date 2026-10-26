@@ -99,6 +99,8 @@ test('dispatch and receipt preparation preserve fencing and drop private send co
     { id: c.id, leaseToken: c.leaseToken, kind: 'fail', failure: { status: 403, code: 'unclassified' } }]) {
     const result = run('scripts/nodered_max_nodes/fn_max_outbox_receipt_prepare.js', { maxOutboxReceipt: receipt, chatId: 'private-chat', payload: 'private-text' });
     assert.equal(result.payload.leaseToken, c.leaseToken);
+    assert.equal(result.requestTimeout, 7000);
+    assert.equal(result.followRedirects, false);
     assert.ok(result.url.endsWith('/' + receipt.kind)); assert.equal(result.chatId, undefined);
     assert.ok(!JSON.stringify(result).includes('private-'));
   }
@@ -106,15 +108,17 @@ test('dispatch and receipt preparation preserve fencing and drop private send co
   assert.equal(new URL(pull.url).searchParams.get('receiptProtocol'), 'max-lease-v1');
 });
 
-function fixture() {
-  const dispatch = fs.readFileSync('scripts/tests/fixtures/max-outbox/dispatch-before.function.txt', 'utf8');
+function fixture(dispatchFixture = 'dispatch-before.function.txt') {
+  const dispatch = fs.readFileSync('scripts/tests/fixtures/max-outbox/' + dispatchFixture, 'utf8');
   const pull = fs.readFileSync('scripts/tests/fixtures/max-outbox/pull-before.function.txt', 'utf8');
   return [
     ['47c460de0db646e6','f64e5818bc8d7aa6','41be3d2c95b57295'],
     ['0006d5707259bc5b','466e8a3ac76c2fab','2e547e998eee631f']
   ].flatMap(([a,b,c]) => [{ id:a,type:'function',z:'tab',func:dispatch,wires:[[b],['diagnostic']] },
     { id:b,type:'maxbot-send',z:'tab',bot:'synthetic-config',x:0,y:0,wires:[['legacy-ack']] },
-    { id:c,type:'function',z:'tab',func:pull,wires:[['unchanged']] }]);
+    { id:c,type:'function',z:'tab',func:pull,wires:[['unchanged']] }]).concat([
+    { id:'synthetic-config',type:'maxbot-config' }
+  ]);
 }
 test('scoped patch builds both connector chains, changes no legacy sender and fails closed on drift', () => {
   const original = fixture(), before = structuredClone(original);
@@ -131,8 +135,36 @@ test('scoped patch builds both connector chains, changes no legacy sender and fa
   assert.throws(() => preparePatch(wired), /PREIMAGE/);
   const extra = fixture(); extra[0].wires[0].push('legacy-second-sender');
   assert.throws(() => preparePatch(extra), /PREIMAGE/);
+  const missingBot = fixture().filter(n => n.id !== 'synthetic-config');
+  assert.throws(() => preparePatch(missingBot), /PREIMAGE/);
+  const wrongBot = fixture(); wrongBot.find(n => n.id === 'synthetic-config').type = 'unrelated-config';
+  assert.throws(() => preparePatch(wrongBot), /PREIMAGE/);
   assert.throws(() => preparePatch([...original, original[0]]), /IDS/);
   assert.throws(() => preparePatch([...original, ...patch.filter(n => !original.some(o => o.id === n.id))]), /ALREADY_PATCHED/);
+});
+
+test('scoped patch accepts the exact diagnostic preimage and rejects changed observed code', () => {
+  const original = fixture('dispatch-observed-before.function.txt');
+  const before = structuredClone(original);
+  const patch = preparePatch(original);
+  assert.equal(patch.length, 12);
+  assert.deepEqual(original, before);
+  original[0].func += '\n// unknown observer drift';
+  assert.throws(() => preparePatch(original), /PREIMAGE/);
+});
+
+test('fenced dispatch preserves safe diagnostics without exporting send fields or depending on the observer', () => {
+  const c = { ...command(), connector: 'MAX_BOT', attempts: 1 };
+  const fields = [];
+  const source = fs.readFileSync('scripts/nodered_max_nodes/fn_max_outbox_dispatch_prepare.js', 'utf8');
+  const execute = global => new Function('msg', 'env', 'global', source)({ payload: c }, {}, global);
+  assert.deepEqual(execute({ get: () => ({ bindMax() {}, observe(_msg, _stage, safe) { fields.push(safe); } }) }), [{ supportOutbox: c }, null]);
+  assert.equal(fields.length, 1);
+  assert.equal(fields[0].executionObserved, false);
+  assert.equal(fields[0].leasePresent, true);
+  assert.ok(!JSON.stringify(fields).includes(c.text));
+  assert.ok(!JSON.stringify(fields).includes(c.targetExternalChatId));
+  assert.deepEqual(execute({ get() { throw Error('synthetic observer failure'); } }), [{ supportOutbox: c }, null]);
 });
 
 test('registered runtime node emits receipt only and completes handler on failure', async () => {

@@ -1,0 +1,231 @@
+{
+  "kind": "LK1_R03_RESPONSE_LIFECYCLE_GENERATION_V1",
+  "predecessor": "lk1_error_source_generation.json",
+  "inspectedFlowSha256": "0d19e63464a71fa6b0b66edd938ca4ede94c9fcc84fd236134ec98699ebd0497",
+  "inspectedSourceCommit": "504d008502c9f40c96526b761b4e3de0a31f01dc",
+  "note": "Local source successor only. Historical R03 origins remain unresolved; no deployment authority.",
+  "historicalCausesClosed": false,
+  "deploymentAuthorized": false,
+  "response": {
+    "id": "10fe94a32b8adc35",
+    "type": "http response"
+  },
+  "responseParents": [
+    {
+      "id": "1da9af2cb4f7db52",
+      "fileName": "fn_tournament_subscription_confirm_prepare.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_confirm_prepare.js",
+      "preimageSha256": "417676e178cb86f06c85191101d4e5a63a4a401f44840eb725ea2c8bc465deee",
+      "outputs": 3,
+      "wires": [
+        [
+          "a1ca8b5eca626475"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "03cc3ac17f7e154a"
+        ]
+      ]
+    },
+    {
+      "id": "566ae4b886c37ae5",
+      "fileName": "fn_tournament_subscription_purchase_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      "preimageSha256": "ba280998bb37c3446271ae1f8bd9d25f8b244fbda82c358b7c201c7f71867ef8",
+      "outputs": 5,
+      "wires": [
+        [
+          "fdc3f25f39199546"
+        ],
+        [
+          "57ec7b72ef16e3a3"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "03cc3ac17f7e154a"
+        ],
+        [
+          "piter_atomic_router_20260903"
+        ]
+      ]
+    },
+    {
+      "id": "91dded2dc8cfebe4",
+      "fileName": "fn_tournament_subscription_purchase_prepare.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+      "preimageSha256": "ce0740ee6f72fbd4b1ad9cb8a27d97a7eab1aa45d5403ddfe5aabe279de9ca21",
+      "outputs": 3,
+      "wires": [
+        [
+          "be55f3f05435dd13"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "03cc3ac17f7e154a"
+        ]
+      ]
+    },
+    {
+      "id": "ca022fd14027a5b0",
+      "fileName": "fn_tournament_subscription_confirm_resolve.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+      "preimageSha256": "d76cdb6391bc8ffb4514dc61c60b9360aa03da5fa5d2f3f9e16df30bbb404674",
+      "outputs": 5,
+      "wires": [
+        [
+          "fdc3f25f39199546"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "03cc3ac17f7e154a"
+        ],
+        [
+          "piter_atomic_router_20260903"
+        ],
+        [
+          "subscription_poll_admit_20260914"
+        ]
+      ]
+    },
+    {
+      "id": "f8679e53edadc39b",
+      "fileName": "fn_tournament_subscription_purchase_limit.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+      "preimageSha256": "c8f9d764e4ab976ea17bed2047a735991a078f07d648df8c71b8ed2f72200850",
+      "outputs": 3,
+      "wires": [
+        [
+          "fdc3f25f39199546"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "03cc3ac17f7e154a"
+        ]
+      ]
+    },
+    {
+      "id": "piter_atomic_error_20260903",
+      "fileName": "fn_tournament_subscription_piter_atomic_error.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_piter_atomic_error.js",
+      "preimageSha256": "87338a2f7642a6d674c5393bfef4d0507819bdb0cdb17be9ccea5c8aac845057",
+      "outputs": 2,
+      "wires": [
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "03cc3ac17f7e154a"
+        ]
+      ]
+    },
+    {
+      "id": "piter_atomic_router_20260903",
+      "fileName": "fn_tournament_subscription_piter_atomic_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      "preimageSha256": "399e95cd6864c0d865a977be18773bef24b140d74c12b661682e01181769bb39",
+      "outputs": 5,
+      "wires": [
+        [
+          "piter_ledger_find_20260903"
+        ],
+        [
+          "piter_ledger_update_20260903"
+        ],
+        [
+          "piter_sale_update_20260903"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ],
+        [
+          "fdc3f25f39199546"
+        ]
+      ]
+    },
+    {
+      "id": "subscription_poll_ack_20260914",
+      "fileName": "fn_tournament_subscription_poll_ack.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_poll_ack.js",
+      "preimageSha256": "8c3ad663e8851db695b3539528fcf2c5e6c84dda4e8a588180679afa8fbbde9a",
+      "outputs": 2,
+      "wires": [
+        [
+          "ca022fd14027a5b0"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ]
+      ]
+    },
+    {
+      "id": "subscription_poll_admit_20260914",
+      "fileName": "fn_tournament_subscription_poll_admit.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_poll_admit.js",
+      "preimageSha256": "933252ba6e34bf7433a8c72a5efb1b9fa93a3f7ab0ed1953f77f95d3bf16e9e1",
+      "outputs": 3,
+      "wires": [
+        [
+          "subscription_poll_cas_20260914"
+        ],
+        [
+          "ca022fd14027a5b0"
+        ],
+        [
+          "10fe94a32b8adc35"
+        ]
+      ]
+    }
+  ],
+  "backgroundAnchors": [
+    {
+      "id": "ab1e202650000006",
+      "fileName": "fn_tournament_subscription_reconcile_record.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_reconcile_record.js",
+      "preimageSha256": "8126fe92ab4660acaffd3972e577993f346b058b5d2fafccf728423fb8e15195",
+      "outputs": 1,
+      "wires": [
+        [
+          "ca022fd14027a5b0"
+        ]
+      ]
+    },
+    {
+      "id": "subscription_poll_dispatch_20260914",
+      "fileName": "fn_tournament_subscription_reconcile_dispatch.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_reconcile_dispatch.js",
+      "preimageSha256": "41e4988171c7c26729824725f6a11a4930471e55bd09cfac4e73a1ecc3fdb7f3",
+      "outputs": 1,
+      "wires": [
+        [
+          "ab1e202650000006"
+        ]
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "id": "566ae4b886c37ae5",
+      "fileName": "fn_tournament_subscription_purchase_router.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      "preimageSha256": "ba280998bb37c3446271ae1f8bd9d25f8b244fbda82c358b7c201c7f71867ef8",
+      "candidateSha256": "7df323aac0c01096ae9c3dea50bd83be5007d2c66ab922828ea7f30eaff37471"
+    },
+    {
+      "id": "ca022fd14027a5b0",
+      "fileName": "fn_tournament_subscription_confirm_resolve.js",
+      "source": "nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+      "preimageSha256": "d76cdb6391bc8ffb4514dc61c60b9360aa03da5fa5d2f3f9e16df30bbb404674",
+      "candidateSha256": "56acebba4d0b9dd5fc98467172ab96155316b7466170f44830648d6215873626"
+    }
+  ]
+}

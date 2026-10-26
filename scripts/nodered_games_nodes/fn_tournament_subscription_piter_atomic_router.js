@@ -707,6 +707,15 @@ const dispatchGeneration = (value) => {
 };
 const generationFilter = (value) => dispatchGeneration(value) === 0 ? { $in: [null, 0] } : dispatchGeneration(value);
 const fail = (status, error, code, details = null) => {
+  if (msg._summerSubscriptionCtx?.reconcile === true) {
+    // Background reconciliation has no HTTP lifecycle; never route it to response.
+    if (typeof node !== "undefined" && typeof node.warn === "function") {
+      node.warn(JSON.stringify({ event: "subscription_atomic_background_failed",
+        code: /^[A-Z][A-Z0-9_]{1,100}$/.test(code || "") ? code : "ATOMIC_BACKGROUND_FAILED",
+        statusCode: Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500 }));
+    }
+    return [null, null, null, null, null];
+  }
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
   msg.payload = { error, details: Object.assign({ code }, details || {}) };

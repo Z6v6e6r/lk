@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "participants_cache", { sourceHash: "9a32c0dffe5cf82b2298ec1ac5de5d8e695a44d732fe330c30a08745ad793785", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const CACHE_KEY = "lkTournamentParticipantResponseCacheV2";
 const CIRCUIT_KEY = "lkTournamentParticipantVivaCircuitV2";
 const EPOCH_KEY = "lkTournamentParticipantEpochV1";
@@ -172,6 +181,7 @@ const serveCached = (cacheState) => {
   return [null, msg];
 };
 const reject = (statusCode, cacheState, reason, retryAfterMs, errorMessage = "Participants refresh is busy") => {
+  lkDiagnostic({ code: reason, httpStatus: statusCode, cacheUsable: Boolean(currentEntry), inflightPresent: Boolean(exerciseInflight), markerAgeMs: exerciseInflight ? Math.max(0, now - Number(exerciseInflight[1]?.startedAt || now)) : undefined });
   const boundedRetryAfterMs = setRetryAfter(retryAfterMs);
   msg.statusCode = isManualRefresh ? 200 : statusCode;
   msg.headers = {

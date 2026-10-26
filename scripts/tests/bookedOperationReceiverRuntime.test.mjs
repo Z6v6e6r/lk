@@ -8,6 +8,8 @@ import path from "node:path";
 import test from "node:test";
 
 import { receiverFunctionSource } from "../patch_nodered_booked_operation_receiver_flow.mjs";
+import { buildOwnerCapabilityGetNode } from "../lib/subscriptionBookingOwnerProbe.mjs";
+import { composeOwnerCompatibility } from "../prepare_booked_operation_owner_compatibility.mjs";
 
 // Opt-in compatibility evidence on the exact production Node-RED version.
 // The runtime tree is never part of the repository and nothing is installed:
@@ -23,6 +25,7 @@ const DELEGATION_TYPE = "phub-subscription-runtime-actor-delegation+jwt";
 const b64url = (value) => Buffer.from(value).toString("base64url");
 const sha256Hex = (value) => crypto.createHash("sha256").update(value, "utf8").digest("hex");
 const now = () => Math.floor(Date.now() / 1000);
+const ownerSource = (file) => fs.readFileSync(new URL(`../nodered_subscription_booking_nodes/${file}`, import.meta.url), "utf8");
 
 test(
   "Node-RED 4.0.9 loads the builtin crypto module and enforces the delegation matrix",
@@ -132,6 +135,7 @@ test(
       flowFile: "flows.json",
       httpAdminRoot: "/admin",
       httpNodeRoot: "/",
+      httpNodeCors: { origin: "*" },
       disableEditor: true,
       logging: { console: { level: "off" } },
     });
@@ -186,7 +190,38 @@ test(
         wires: [["http-out"]],
       },
       { id: "http-out", type: "http response", z: "tab", wires: [] },
+      buildOwnerCapabilityGetNode("tab"),
+      { id: "owner-post", type: "http in", z: "tab", url: "/lk/subscription-bookings", method: "post", wires: [["owner-unreachable"]] },
+      { id: "owner-old-options", type: "http in", z: "tab", url: "/lk/subscription-bookings", method: "options", wires: [["owner-unreachable"]] },
+      { id: "owner-unreachable", type: "function", z: "tab", outputs: 1,
+        func: "throw new Error('Capability request reached booking/unsupported OPTIONS');", wires: [[]] },
+      { id: "lk_subscription_booking_options_20260804", type: "function", z: "tab", outputs: 2,
+        func: ownerSource("fn_subscription_booking_options.js"), wires: [["owner-options-response"], ["owner-router"]] },
+      { id: "owner-router", type: "function", z: "tab", outputs: 7,
+        func: "return (function(global){" + ownerSource("fn_subscription_booking_owner_contract_probe.js")
+          + ownerSource("fn_subscription_booking_router.js")
+          + "})({get(){throw new Error('Probe read global state');},set(){throw new Error('Probe wrote global state');}});",
+        wires: [[], [], [], [], ["owner-finalize"], [], []] },
+      { id: "owner-finalize", type: "function", z: "tab", outputs: 2,
+        func: ownerSource("fn_subscription_booking_finalize.js"), wires: [[], ["owner-response"]] },
+      { id: "owner-response", type: "http response", z: "tab", wires: [] },
+      { id: "owner-options-response", type: "http response", z: "tab", wires: [] },
     ];
+    const ownerFixture = process.env.LK1_BOOKED_OWNER_COMPATIBILITY_FIXTURE;
+    if (ownerFixture) {
+      // Load only the inert owner functions from the private candidate, never its
+      // Mongo config, inject nodes, credentials or provider transports.
+      const packet = composeOwnerCompatibility(fs.readFileSync(ownerFixture), "fixture-runtime-owner");
+      const candidateSource = (id) => packet.candidate.find(node => node.id === id).func;
+      flow.find(node => node.id === "lk_subscription_booking_options_20260804").func =
+        candidateSource("lk_subscription_booking_options_20260804");
+      const runtimeRouter = flow.find(node => node.id === "owner-router");
+      runtimeRouter.outputs = 8;
+      runtimeRouter.wires.push([]);
+      runtimeRouter.func = "return (function(global){" + candidateSource("lk_subscription_booking_router_20260804")
+        + "})({get(){throw new Error('Probe read global state');},set(){throw new Error('Probe wrote global state');}});";
+      flow.find(node => node.id === "owner-finalize").func = candidateSource("lk_subscription_booking_finalize_20260804");
+    }
     try {
       const deploy = await fetch(`${base}/admin/flows`, {
         method: "POST",
@@ -198,6 +233,29 @@ test(
         body: JSON.stringify({ flows: flow }),
       });
       assert.equal(deploy.status, 200, await deploy.text());
+
+      // Reproduce the production failure: Node-RED 4.0.9 ignores HTTP In
+      // method=options, so Express answers 204 without running the owner.
+      const oldProbe = await fetch(`${base}/lk/subscription-bookings`, {
+        method: "OPTIONS", headers: { "X-Booked-Operation-Owner-Contract": "1" },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(oldProbe.status, 204);
+      const capability = await fetch(`${base}/lk/subscription-bookings`, {
+        headers: { "X-Booked-Operation-Owner-Contract": "1" }, signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(capability.status, 200);
+      assert.equal(capability.headers.get("cache-control"), "no-store");
+      assert.deepEqual(await capability.json(), { contractVersion: 1,
+        owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" });
+      for (const headers of [{}, { Authorization: "Bearer fixture-only" },
+        { "X-Booked-Operation-Owner-Contract": "01" }]) {
+        const rejected = await fetch(`${base}/lk/subscription-bookings`, {
+          headers, signal: AbortSignal.timeout(5000),
+        });
+        assert.equal(rejected.status, 404);
+        assert.deepEqual(await rejected.json(), { code: "BOOKED_OPERATION_OWNER_PROBE_NOT_FOUND" });
+      }
 
       const post = (token, requestBody = body) => fetch(`${base}${ADMIT_PATH}`, {
         method: "POST",

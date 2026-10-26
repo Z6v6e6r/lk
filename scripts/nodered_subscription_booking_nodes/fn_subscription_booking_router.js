@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "booking_router", { sourceHash: "86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 const VIVA_API_BASE = "https://api.vivacrm.ru";
 const SERV2_URL = "https://padlhub.su/seliger";
 const DAILY_LIMIT_CODE = "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED";
@@ -254,6 +263,7 @@ const responseHeaders = () => ({
 });
 
 const finishError = (ctx, statusCode, error, details) => {
+  lkDiagnostic({ code: details?.code, httpStatus: statusCode, outcome: "refused" });
   msg._subscriptionBooking = ctx;
   msg.statusCode = statusCode;
   msg.headers = responseHeaders();
@@ -263,6 +273,7 @@ const finishError = (ctx, statusCode, error, details) => {
 };
 
 const finishPending = (ctx, message, details) => {
+  lkDiagnostic({ code: "OUTCOME_UNKNOWN", outcome: "outcome_unknown" });
   msg._subscriptionBooking = ctx;
   msg.statusCode = 202;
   msg.headers = responseHeaders();

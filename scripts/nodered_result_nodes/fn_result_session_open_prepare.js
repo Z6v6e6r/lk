@@ -29,9 +29,8 @@ if (!gameId) {
 
 const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
 const trustedActor = normalizeActor(msg._resultActor);
-const phone = normPhone(
-  trustedActor?.phoneNorm
-  || body.phone
+const phone = trustedActor ? trustedActor.phoneNorm : normPhone(
+  body.phone
   || body.senderPhone
   || body.playerPhone
   || body.openedBy?.phone

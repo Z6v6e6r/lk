@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-import ts from 'typescript';
+import { createDiagnostics } from '../diagnostics/runtime.mjs';
 import { extractSubscriptionPricePreviewSource } from '../lib/subscriptionPricePreviewSources.mjs';
 import { scopeSubscriptionEvaluator, scopeSubscriptionUsage } from '../lib/subscriptionInstanceLimitSources.mjs';
 import { composeSubscriptionPricePreviewArtifacts, composeSubscriptionJoinPricePreviewArtifacts, composeSubscriptionPreviewServerTimeArtifacts, PATH } from '../patch_nodered_subscription_price_preview.mjs';
@@ -106,34 +106,30 @@ function tariffDiagnostic(payload, overrides = {}) {
   const outputs = new Function('msg', 'canonical', source('router'))(msg, canonical);
   assert.equal(outputs[4], msg);
   const warnings = [];
-  new Function('msg', 'node', source('final'))(msg, { warn: text => warnings.push(JSON.parse(text)) });
-  return { msg, ctx, warnings };
+  const diagnosticEvents = [];
+  new Function('msg', 'node', 'global', source('final'))(msg, { warn: text => warnings.push(JSON.parse(text)) }, { get: () => createDiagnostics({ sink: event => diagnosticEvents.push(event) }) });
+  return { msg, ctx, warnings, diagnosticEvents };
 }
 
-test('ambiguous tariff diagnostics survive final response, server log and analytics summary', () => {
-  const apiSource = fs.readFileSync(new URL('../../src/utils/apiClient.ts', import.meta.url), 'utf8');
-  const summarySource = apiSource.slice(apiSource.indexOf('function summarizeApiErrorPayload('), apiSource.indexOf('function pickNumeric('));
-  const summarize = new Function(ts.transpileModule(summarySource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
-    + '; return summarizeApiErrorPayload;')();
+test('ambiguous tariff diagnostics preserve response and emit allowlisted fields without entity IDs', () => {
   for (const [payload, count, reason] of [[[], 0, 'empty_tariff_list'], [[{}, {}], 2, 'multiple_tariffs'],
     [[null], 1, 'invalid_tariff_record'], [['fixture-sensitive'], 1, 'invalid_tariff_record'],
     [{ content: [null], totalElements: 1 }, 1, 'invalid_tariff_record']]) {
-    const { msg, ctx, warnings } = tariffDiagnostic(payload);
+    const { msg, ctx, warnings, diagnosticEvents } = tariffDiagnostic(payload);
     assert.equal(msg.statusCode, 503);
     assert.deepEqual(msg.payload, { error: { code: 'LK1_EVENT_TARIFF_AMBIGUOUS',
       details: { exerciseId, tariffCount: count, reason, stage: 'tariff_shape', observed: {} } } });
     assert.equal(ctx.basePriceMinor, undefined);
-    assert.deepEqual(warnings, [{ event: 'subscription_price_preview_failed', code: 'LK1_EVENT_TARIFF_AMBIGUOUS',
-      step: 'groupTariff', exerciseId, tariffCount: count, reason, correlationId: 'fixture-correlation' }]);
-    assert.deepEqual(JSON.parse(summarize(msg.payload)), msg.payload);
+    assert.deepEqual(warnings, []);
+    const event = diagnosticEvents.find(event => event.code === 'LK1_EVENT_TARIFF_AMBIGUOUS');
+    assert.equal(event.tariffCount, count); assert.equal(event.reason, reason);
+    assert(!JSON.stringify(diagnosticEvents).includes(exerciseId));
     assert.ok(!JSON.stringify([msg.payload, warnings]).includes('fixture-sensitive'));
   }
   const refused = tariffDiagnostic([{ id: 'fixture-product', type: 'INVALID', cost: 12345 }]);
-  const summary = summarize(refused.msg.payload);
-  assert.ok(summary.endsWith('...'), 'Exercise diagnostics must survive a truncated provider-shape summary');
-  assert.ok(summary.includes(`"exerciseId":"${exerciseId}"`));
-  assert.ok(summary.includes('"tariffCount":1'));
-  assert.ok(summary.includes('"reason":"product_type"'));
+  const event = refused.diagnosticEvents.find(event => event.code === 'LK1_EVENT_TARIFF_UNVERIFIED');
+  assert.equal(event.reason, 'product_type'); assert.equal(event.tariffCount, 1);
+  assert(!JSON.stringify(refused.diagnosticEvents).includes(exerciseId));
 });
 
 test('other tariff refusals retain their verdict and distinguish unknown count from zero', () => {
@@ -144,14 +140,16 @@ test('other tariff refusals retain their verdict and distinguish unknown count f
     [[{}], {}, 'LK1_EVENT_TARIFF_UNVERIFIED', 1, 'product_identity'],
     [[{ id: 'fixture-product', type: 'SERVICE', cost: -1 }], {}, 'LK1_EVENT_TARIFF_UNVERIFIED', 1, 'product_amount'],
   ]) {
-    const { msg, warnings } = tariffDiagnostic(payload, overrides);
+    const { msg, warnings, diagnosticEvents } = tariffDiagnostic(payload, overrides);
     assert.equal(msg.statusCode, 503);
     assert.equal(msg.payload.error.code, code);
     assert.equal(msg.payload.error.details.exerciseId, exerciseId);
     assert.equal(msg.payload.error.details.tariffCount, count);
     assert.equal(msg.payload.error.details.reason, reason);
-    assert.equal(warnings[0].tariffCount, count);
-    assert.equal(warnings[0].reason, reason);
+    assert.deepEqual(warnings, []);
+    const event = diagnosticEvents.find(event => event.code === code);
+    assert.equal(event.tariffCount ?? null, count);
+    assert.equal(event.reason, reason);
   }
   const accepted = tariffDiagnostic([{ id: 'fixture-product', type: 'SERVICE', cost: 12345 }]);
   assert.equal(accepted.msg.statusCode, 200);

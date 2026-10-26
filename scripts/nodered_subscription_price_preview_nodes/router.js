@@ -1,3 +1,12 @@
+// Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
+const lkDiagnostic = (fields = {}) => {
+  try {
+    if (typeof global === "undefined" || typeof global.get !== "function") return;
+    const observer = global.get("lkDiagnostics");
+    observer?.observe(msg, "preview_router", { sourceHash: "d421c9c431db409c6c4b39f5ce445f31f2e6eecdd6f6d919b9ba2f9c03e93536", ...fields });
+  } catch { /* Observability cannot alter business execution. */ }
+};
+lkDiagnostic({ code: "STAGE_ENTER" });
 // Dedicated advisory graph. `canonical` consists only of source-bound helpers.
 const ctx = msg._subscriptionPricePreview;
 if (!ctx) return null;
@@ -134,7 +143,11 @@ if (ctx.step === 'groupExercise') {
   if (String(exercise.id || exercise.exerciseId || '') !== ctx.exerciseId) return targetUnresolved('target_identity');
   if (canonical.resolveCategory(exercise) !== eventRoute?.category) return targetUnresolved('target_category');
   if (!Number.isFinite(start)) return targetUnresolved('target_start_invalid');
-  if (start <= Date.now()) return targetUnresolved('target_not_future');
+  if (start <= Date.now()) {
+    lkDiagnostic({ code: "TARGET_NOT_FUTURE", targetFuture: false, targetTimeValid: Number.isFinite(start), sourceTimeValid: true,
+      deltaBucket: start < Date.now() ? "past" : "now", branch: eventRoute ? "schedule" : ctx.existingGame ? "game" : "UNKNOWN", targetType: eventRoute ? "schedule" : ctx.existingGame ? "game" : "UNKNOWN" });
+    return targetUnresolved('target_not_future');
+  }
   if (!Number.isSafeInteger(duration) || duration < 1 || duration > 720) return targetUnresolved('target_duration');
   if (!canonical.exerciseRoomId(exercise)) return targetUnresolved('target_room');
   if (!(exercise.studio?.id || exercise.studioId)) return targetUnresolved('target_studio');

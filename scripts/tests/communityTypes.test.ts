@@ -244,7 +244,7 @@ test('typed manual joins commit with roster CAS before response or derived write
   const ack = graph.find(node => node.name === 'Confirm typed community roster commit')!;
   const failed = run(ack.func!, { ...result[0], payload: { acknowledged: true, matchedCount: 0 } });
   assert.equal(failed[3].statusCode, 409); assert.ok(failed.slice(0, 3).every((item: unknown) => item === null));
-  const confirmed = run(ack.func!, { ...result[0], payload: { acknowledged: true, matchedCount: 1 } });
+  const confirmed = run(ack.func!, { ...result[0], payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 } });
   assert.equal(confirmed[3].statusCode, 200); assert.ok(confirmed[0]); assert.ok(confirmed[1]);
   // A worker append, a competing join, ban or manager demotion changes this exact
   // roster, so none can be overwritten by the now-stale filter.

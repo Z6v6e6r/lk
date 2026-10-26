@@ -527,6 +527,13 @@ const fail = (status, error, details) => {
     headers: { "Content-Type": "application/json; charset=utf-8" },
     payload: { error, details: details || null },
   });
+  if (msg._summerSubscriptionCtx?.reconcile === true) {
+    if (typeof node !== "undefined" && typeof node.warn === "function") {
+      node.warn(JSON.stringify({ event: "subscription_router_background_failed",
+        code: "SUBSCRIPTION_ROUTER_BACKGROUND_FAILED", statusCode: status }));
+    }
+    return [null, null, null, response];
+  }
   return [null, null, response, response];
 };
 
@@ -714,8 +721,11 @@ const managedBindingPending = (ctx, code) => {
   delete atomicMsg.headers;
   delete atomicMsg.url;
   delete atomicMsg.method;
-  delete atomicMsg.req;
-  delete atomicMsg.res;
+  // Foreground projection owns the original HTTP response through ACK/readback.
+  if (ctx.reconcile === true) {
+    delete atomicMsg.req;
+    delete atomicMsg.res;
+  }
   delete atomicMsg.statusCode;
   return [null, null, null, null, atomicMsg];
 };
@@ -2195,8 +2205,11 @@ if (ctx.step === "managed_sale_binding_confirm") {
   delete atomicMsg.headers;
   delete atomicMsg.url;
   delete atomicMsg.method;
-  delete atomicMsg.req;
-  delete atomicMsg.res;
+  // Foreground projection owns the original HTTP response through ACK/readback.
+  if (ctx.reconcile === true) {
+    delete atomicMsg.req;
+    delete atomicMsg.res;
+  }
   delete atomicMsg.statusCode;
   return [null, null, null, null, atomicMsg];
 }

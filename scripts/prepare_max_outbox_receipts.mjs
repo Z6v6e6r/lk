@@ -6,7 +6,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = s => crypto.createHash('sha256').update(s).digest('hex');
 const source = n => fs.readFileSync(path.join(root, 'scripts/nodered_max_nodes', n), 'utf8');
 const fixture = n => fs.readFileSync(path.join(root, 'scripts/tests/fixtures/max-outbox', n), 'utf8');
-const dispatchHashes = new Set(['4dd5179f64eeb568e929248623ccbe742a1eb090e1762462cde8c02a97b687b0', hash(fixture('dispatch-before.function.txt'))]);
+const dispatchHashes = new Set(['4dd5179f64eeb568e929248623ccbe742a1eb090e1762462cde8c02a97b687b0',
+  hash(fixture('dispatch-before.function.txt')), hash(fixture('dispatch-observed-before.function.txt'))]);
 const pullHashes = new Set(['ddfc26e5012e7ca5ae1e00ffaa8059cd3f3954a5220ff98dd40b14bb4c575cf2',
   '5c4b8edd814195cbc144c575a5f28959eab0c68ffc13502fd7c0c1f733046c52', hash(fixture('pull-before.function.txt'))]);
 const pairs = [
@@ -21,7 +22,8 @@ export function preparePatch(flow) {
     const dispatch = by.get(dispatchId), sender = by.get(senderId), pull = by.get(pullId);
     if (dispatch?.type !== 'function' || sender?.type !== 'maxbot-send' || pull?.type !== 'function'
       || !dispatchHashes.has(hash(dispatch.func)) || !pullHashes.has(hash(pull.func))
-      || (dispatch.wires?.[0]?.length !== 1 || dispatch.wires[0][0] !== senderId) || !sender.bot
+      || (dispatch.wires?.[0]?.length !== 1 || dispatch.wires[0][0] !== senderId)
+      || by.get(sender.bot)?.type !== 'maxbot-config'
       || dispatch.z !== sender.z || pull.z !== sender.z) throw Error('MAX_OUTBOX_PREIMAGE_MISMATCH');
     const sendId = `max_outbox_fenced_send_${suffix}`, prepId = `max_outbox_fenced_receipt_${suffix}`;
     const httpId = `max_outbox_fenced_http_${suffix}`, resultId = `max_outbox_fenced_result_${suffix}`;

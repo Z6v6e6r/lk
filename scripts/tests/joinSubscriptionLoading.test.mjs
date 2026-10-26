@@ -43,6 +43,8 @@ export function useFixture(props) {
 const bundle = await build({stdin:{contents:fixtureSource,loader:'ts',resolveDir:process.cwd()},bundle:true,write:false,
  format:'cjs',platform:'node',external:['react'],logLevel:'silent',plugins:[{name:'fixture-api',setup(builder){
  builder.onResolve({filter:/utils\/apiClient$/},()=>({path:'api',namespace:'fixture'}));
+ builder.onResolve({filter:/utils\/analytics$/},()=>({path:'analytics',namespace:'diagnostic-fixture'}));
+ builder.onLoad({filter:/.*/,namespace:'diagnostic-fixture'},()=>({contents:'export const trackClientError = () => {};'}));
  builder.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:'export const apiFetchSubscriptionPricePreview=(...args)=>globalThis.loadPreview(...args);'}));
 }}]});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));

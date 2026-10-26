@@ -6,7 +6,9 @@ This local Node-RED package uses Node18+ builtin fetch and the existing maxbot-c
 credential at runtime; no new npm dependency or token in exported flow. It avoids
 the old SDK attachment.not.ready recursion and logs only fixed diagnostic codes.
 The POST/messages, Authorization header and message.body.mid acceptance shape were
-checked against installed SDK0.2.2's public package source; no MAX request was made.
+checked against the public package source of `@maxhub/max-bot-api` SDK0.2.2 used
+by `node-red-contrib-maxbot`0.6.1. The config node and SDK are distinct packages;
+installed-target versions must be read back before release. No MAX request was made.
 
 One input contains supportOutbox with id,leaseToken,leasedUntil,text and either
 externalChatId or externalUserId (targetExternal* fields). The sender uses chat_id
@@ -31,11 +33,17 @@ its own allowlist and policy. Failure/ACK receipts are fenced and durable there.
 
 scripts/prepare_max_outbox_receipts.mjs builds a12-node narrow patch for both known
 MAX/academy outbox dispatch/pull ID pairs. It checks unique IDs, allowlisted
-function preimages, exact single sender wire, shared flow and existing bot reference.
+function preimages, exact single sender wire, shared flow and an existing bot reference
+whose node type is `maxbot-config`. Missing or wrong-type config references fail closed.
 It reroutes only outbox traffic to new max-outbox-send nodes and separate receipt
 HTTP nodes. Interactive/service legacy senders and inbound flows remain untouched.
 It never executes or deploys a patch. Existing broad patch_nodered_max_flow.mjs is
 not a release route for this change and must not be run.
+
+The constructor accepts both pinned legacy dispatch code and the exact diagnostic
+dispatch from current main. It rejects any other observer or wiring drift. The
+replacement retains optional no-throw diagnostic correlation, records only safe
+classification fields and never treats a send attempt as observed execution.
 
 Future authorized operator invocation (not executed by this PR):
 node scripts/prepare_max_outbox_receipts.mjs /absolute/external/source.json /absolute/external/new-patch.json
@@ -51,7 +59,8 @@ pollers and reconcile ambiguous existing leases first. Backend rejects legacy pu
 without receiptProtocol=max-lease-v1 before claiming; old backend commands lack
 leaseToken and this sender must not send them. No permissive token fallback.
 
-Receipt HTTP has one attempt; failures warn MAX_OUTBOX_RECEIPT_UNCONFIRMED and can
+Receipt HTTP makes one attempt with a fixed seven-second request timeout and
+redirects disabled. Failures warn MAX_OUTBOX_RECEIPT_UNCONFIRMED and can
 leave a provider-accepted send in DELIVERY_UNKNOWN after lease expiry. Recovery may
 retry only the same receipt/token, never the provider message. This conservative
 availability tradeoff prevents implicit replay. An expired/near-expiry input makes
@@ -85,3 +94,14 @@ registration plus editor HTML/help presence and absence of runtime-source leakag
 It uses a temporary user directory, no listening server/installed flow/credentials,
 and blocks provider fetches. Local paired Node-RED/Nest/disposable Mongo acceptance
 is separate from external installed-staging and future authorized rollout checks.
+
+On 2026-10-26 the updated constructor/adapter passed an isolated paired rehearsal
+against ph-admin commit `171f89a06ff4ef4497afc16736f851896d4d98ef` (tree
+`0d7b15c012ffe7d10e94fd15d115ac2264dd4225`) with Node22.13.1, Node-RED4.0.9 and
+Mongo7.0.16. Both connector graphs used the exact diagnostic dispatch fixture.
+Eleven scenarios covered protocol/auth denial, durable ACK and duplicate/stale
+receipts, 403 privacy, 429 backoff/cap, uncertain transport, lost receipt and node
+close with a late 200. Twelve provider fetches were synthetic; no real provider or
+shared-state writes occurred. This does not close the backend's documented durable
+enqueue, per-dialog ordering, partial-batch reconciliation or installed-target
+acceptance gaps. Keep the rollout hold until those gates have explicit evidence.

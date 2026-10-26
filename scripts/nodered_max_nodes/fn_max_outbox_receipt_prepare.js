@@ -8,6 +8,7 @@ if (receipt.kind === 'fail') {
   payload.failure = receipt.failure;
   if (Number.isFinite(receipt.retryAfterSeconds)) payload.retryAfterSeconds = receipt.retryAfterSeconds;
 }
-return { method: 'POST', url: `${base}/support/outbox/${encodeURIComponent(receipt.id)}/${receipt.kind}`,
+return { method: 'POST', requestTimeout: 7000, followRedirects: false,
+  url: `${base}/support/outbox/${encodeURIComponent(receipt.id)}/${receipt.kind}`,
   headers: { 'Content-Type': 'application/json', Accept: 'application/json',
     ...(token ? { 'x-integration-token': token } : {}) }, payload };

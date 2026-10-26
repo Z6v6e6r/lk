@@ -1,6 +1,6 @@
-// A version probe is answered by the SAME canonical router that owns policy and
-// booking. Normal browser CORS retains its original 204 response on output 0.
-if (msg.req?.headers?.["x-booked-operation-owner-contract"] === "1") {
+// Node-RED 4.0.9 HTTP In does not register OPTIONS handlers. The inert GET
+// capability route reaches the SAME canonical router; ordinary CORS stays 204.
+if (msg.req?.method === "GET") {
   msg._subscriptionBooking = { step: "booked_operation_contract_probe" };
   return [null, msg];
 }

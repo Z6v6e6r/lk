@@ -1,0 +1,107 @@
+{
+  "observedAtUtc": "2026-10-23T09:06:28.251974+00:00",
+  "evidence": "production_disk_scoped_hashes_and_pure_string_overlay",
+  "loadedRuntimeParity": "UNKNOWN",
+  "readStable": true,
+  "routeHash": "f97bfb153da80d0ce18da6de04923461ab9cb95ebf51c92acfe5066fb4ab62a8",
+  "graphHash": "dd1f77a3138a157e34972de7b921199a510489e6ded1d4296d2497f71edf17b2",
+  "tabDisabled": false,
+  "graph": [
+    {
+      "id": "977e908c362e2b27",
+      "type": "http in",
+      "z": "ac5d37d8ebd616ca",
+      "outputs": null,
+      "wires": [
+        [
+          "8fe574816fd8bfd7"
+        ]
+      ],
+      "disabled": false
+    },
+    {
+      "id": "8fe574816fd8bfd7",
+      "type": "function",
+      "z": "ac5d37d8ebd616ca",
+      "outputs": 4,
+      "wires": [
+        [
+          "1358345fa93a89b0"
+        ],
+        [
+          "e0626c2a0b415f70"
+        ],
+        [
+          "91c892a6b8058a4d"
+        ],
+        [
+          "f6a7b8c9d0e64212"
+        ]
+      ],
+      "disabled": false
+    },
+    {
+      "id": "1358345fa93a89b0",
+      "type": "http request",
+      "z": "ac5d37d8ebd616ca",
+      "outputs": null,
+      "wires": [
+        [
+          "f96b90a57be61a5c"
+        ]
+      ],
+      "disabled": false
+    },
+    {
+      "id": "f96b90a57be61a5c",
+      "type": "function",
+      "z": "ac5d37d8ebd616ca",
+      "outputs": 4,
+      "wires": [
+        [
+          "1358345fa93a89b0"
+        ],
+        [
+          "afa28fd902259920"
+        ],
+        [
+          "e0626c2a0b415f70"
+        ],
+        [
+          "91c892a6b8058a4d"
+        ]
+      ],
+      "disabled": false
+    },
+    {
+      "id": "e0626c2a0b415f70",
+      "type": "http response",
+      "z": "ac5d37d8ebd616ca",
+      "outputs": null,
+      "wires": [],
+      "disabled": false
+    }
+  ],
+  "targets": [
+    {
+      "id": "8fe574816fd8bfd7",
+      "stage": "purchase_prepare",
+      "preimageHash": "9f4eab6192370b4f6bcdb3fa11e572a58581748d40ad52f1c78e5d748023ea45",
+      "candidateHash": "59325f22e574972d749fac979b554be2af80e7055fb5f8a0f47e4d660423beaa",
+      "recoveredPreimageMatches": true,
+      "observerInsertions": 2,
+      "observerEditsHash": "bb09164ca701e0530da7bb0c0da1840bcf9f434101492bec630cf0c3da1e2808"
+    },
+    {
+      "id": "f96b90a57be61a5c",
+      "stage": "owner_resolve",
+      "preimageHash": "4441d245345f7f01bd3693d87edaf300f1cbc162fb28ea78cf29f39bacc0da4c",
+      "candidateHash": "7c5d28daf6ae691d72b18a3eab4d74231b2a09a9187cacb2c9a3a29fe9f76733",
+      "recoveredPreimageMatches": true,
+      "observerInsertions": 2,
+      "observerEditsHash": "d185953b7f2dff9439f78beb0b5262513107f2f3fde62ce3fec841873e0b95a5"
+    }
+  ],
+  "target": "lk-primary-147",
+  "scope": "two function fingerprints and five-node topology projection; no source bodies or config values"
+}
