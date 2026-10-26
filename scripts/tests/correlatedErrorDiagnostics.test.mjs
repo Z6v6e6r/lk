@@ -338,22 +338,21 @@ test('collector source gate preserves HTTP response and existing write cardinali
   assert.equal(execute(msg, { get: () => undefined })[1], null);
   assert.deepEqual(route.wires, [['response', 'storage', 'debug']]);
 });
-test('MAX request context survives message clones through SDK/catch/ACK; lease retries share only the pseudonymous operation', () => {
+test('MAX controlled dispatch context survives clones; lease attempts share only the pseudonymous operation', () => {
   for (const connector of ['MAX_BOT', 'MAX_ACADEMY_BOT']) {
     const events = [], observer = createDiagnostics({ key: Buffer.alloc(32, 17), sink: e => events.push(e) });
     const operations = [], attempts = [];
     for (const attempt of [1, 2]) {
-      const command = { id: 'private-command', connector, attempts: attempt, leasedUntil: '2030-01-01T00:00:00.000Z', targetExternalChatId: 'private-target', text: 'private-text' };
+      const command = { id: 'private-command', connector, attempts: attempt, leaseToken: randomUUID(), leasedUntil: '2030-01-01T00:00:00.000Z', targetExternalChatId: 'private-target', text: 'private-text' };
+      const before = events.length;
       const result = run('scripts/nodered_max_nodes/fn_max_outbox_dispatch_prepare.js', { payload: command }, observer).result;
       const send = result[0];
-      assert.equal(send.payload, command.text); assert.equal(send.chatId, command.targetExternalChatId);
-      const before = events.length;
-      const sdk = structuredClone(send);
-      observer.observe(sdk, 'max_sdk_result', { connector, sdkOutputPresent: true, executionObserved: true });
-      observer.transport(structuredClone(send), 'max_sdk_result', { code: 'chat_not_found' }, false, { connector });
-      run('scripts/nodered_max_nodes/fn_max_outbox_ack_prepare.js', send, observer);
+      assert.deepEqual(send.supportOutbox, command);
+      assert.equal(send.payload, undefined); assert.equal(send.chatId, undefined);
+      observer.observe(structuredClone(send), 'max_send_attempt', { connector, leasePresent: true, executionObserved: false });
       const chain = events.slice(before);
-      assert(chain.length >= 3); assert(chain.every(e => e.connector === connector));
+      assert.equal(chain.length, 2); assert(chain.every(e => e.connector === connector));
+      assert(chain.every(e => e.executionObserved === false));
       assert.equal(new Set(chain.map(e => e.requestId)).size, 1);
       assert.equal(new Set(chain.map(e => e.attemptReference)).size, 1);
       operations.push(chain[0].outboxRef); attempts.push(chain[0].attemptReference);
