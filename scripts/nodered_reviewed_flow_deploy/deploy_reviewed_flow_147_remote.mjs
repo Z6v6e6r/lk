@@ -1147,15 +1147,39 @@ export function createReviewedFlowRuntime({
 
   const reserveEditorModified = (options) => {
     const stamp = safeTimestamp(options.stamp);
-    assertDeploymentLeaseAvailable();
+    // Editor reservation must never let the generic expiry path remove a lease.
+    // The CLI holds the global deployment flock for this whole transition.
+    const predecessor = readDeploymentLease({ includeExpired: true });
+    const expected = options.expectedPredecessor;
+    let predecessorBytes = null;
+    if (predecessor) {
+      predecessorBytes = fs.readFileSync(deploymentLeasePath);
+      if (!expected
+        || safeSha256(expected.sha256, "Predecessor lease") !== sha256(predecessorBytes)
+        || predecessor.formatVersion !== DEPLOYMENT_LEASE_FORMAT_VERSION
+        || predecessor.phase !== "soaking" || predecessor.expiresAtMs > now()
+        || predecessor.deploymentId !== safeDeploymentId(expected.deploymentId)
+        || predecessor.candidateSha256 !== safeSha256(expected.candidateSha256, "Predecessor candidate")) {
+        throw new Error("Editor predecessor lease mismatch; existing lease retained");
+      }
+    } else if (expected) {
+      throw new Error("Expected editor predecessor lease is absent");
+    }
     const prepared = readEditorPrepared(options);
+    if (predecessor && predecessor.candidateSha256 !== prepared.contract.sourceSha256) {
+      throw new Error("Editor predecessor candidate does not match current source");
+    }
     const processInfo = pm2.assertOnline();
     ensureBackupDirectory();
     const sourceBackup = path.join(backupDirectory, `editor-source-${prepared.contract.deploymentId}-${stamp}.json`);
     const contractBackup = path.join(backupDirectory, `editor-contract-${prepared.contract.deploymentId}-${stamp}.json`);
     const candidateBackup = path.join(backupDirectory, `editor-candidate-${prepared.contract.deploymentId}-${stamp}.json`);
     const reserveReceipt = editorReceiptPath("reserve", prepared.contract.deploymentId, stamp);
+    const predecessorBackup = predecessorBytes
+      ? path.join(backupDirectory, `editor-predecessor-${prepared.contract.deploymentId}-${stamp}.json`)
+      : null;
     // Every evidence artifact is durable before the exclusive lease publication.
+    if (predecessorBackup) writeFileExclusiveDurable(predecessorBackup, predecessorBytes, protectedFileOptions);
     writeFileExclusiveDurable(sourceBackup, prepared.liveBytes, protectedFileOptions);
     writeFileExclusiveDurable(contractBackup, prepared.contractBytes, protectedFileOptions);
     writeFileExclusiveDurable(candidateBackup, prepared.candidateBytes, protectedFileOptions);
@@ -1166,6 +1190,8 @@ export function createReviewedFlowRuntime({
       candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256,
       sourceBackup, contractBackup, candidateBackup, nodeRedPid: processInfo.pid,
       nodeRedRestartCount: processInfo.restartCount, createdAt: new Date(now()).toISOString(),
+      predecessorSha256: predecessorBytes ? sha256(predecessorBytes) : null,
+      predecessorDeploymentId: predecessor?.deploymentId ?? null, predecessorBackup,
     };
     writeFileExclusiveDurable(reserveReceipt, Buffer.from(`${JSON.stringify(reserve, null, 2)}\n`, "utf8"), protectedFileOptions);
     if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256
@@ -1183,8 +1209,17 @@ export function createReviewedFlowRuntime({
       sourceCanonicalSha256: prepared.contract.sourceCanonicalSha256, candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256,
       nodeRedPid: processInfo.pid, nodeRedRestartCount: processInfo.restartCount,
       sourceBackup, contractBackup, candidateBackup, reserveReceipt, editorStageDirectory: path.dirname(prepared.candidatePath),
+      predecessorSha256: reserve.predecessorSha256, predecessorBackup,
     };
-    writeFileExclusiveAtomicDurable(deploymentLeasePath, Buffer.from(`${JSON.stringify(lease, null, 2)}\n`, "utf8"), protectedFileOptions);
+    const leaseBytes = Buffer.from(`${JSON.stringify(lease, null, 2)}\n`, "utf8");
+    if (predecessorBytes) {
+      assertProtectedFile(deploymentLeasePath, protectedFileOptions);
+      if (sha256(fs.readFileSync(deploymentLeasePath)) !== reserve.predecessorSha256) {
+        throw new Error("Editor predecessor changed before atomic handoff; lease retained");
+      }
+      // No unlink gap: the old lease remains until the durable v3 rename.
+      atomicWrite(deploymentLeasePath, leaseBytes, { uid, gid });
+    } else writeFileExclusiveAtomicDurable(deploymentLeasePath, leaseBytes, protectedFileOptions);
     const postPublication = pm2.assertOnline();
     const postPublicationBytes = fs.readFileSync(liveFlowPath);
     if (sha256(postPublicationBytes) !== lease.sourceSha256
@@ -1376,7 +1411,13 @@ export function main() {
             expectedContractBackupSha256: getArg("--expected-contract-backup-sha256"),
           })
         : action === "reserve-editor-modified"
-          ? runtime.reserveEditorModified({ ...common, stamp: getArg("--stamp") })
+          ? runtime.reserveEditorModified({ ...common, stamp: getArg("--stamp"),
+            expectedPredecessor: getArg("--predecessor-lease-sha256") ? {
+              sha256: getArg("--predecessor-lease-sha256"),
+              deploymentId: getArg("--predecessor-deployment-id"),
+              candidateSha256: getArg("--predecessor-candidate-sha256"),
+            } : undefined,
+          })
           : action === "confirm-editor-modified"
             ? runtime.confirmEditorModified({
               deploymentId: common.deploymentId, leaseToken: getArg("--lease-token"),
