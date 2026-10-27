@@ -1,0 +1,152 @@
+{
+  "source": "PadlHub_Yasenevo_Assets_v2.zip",
+  "archiveSha256": "35f7c300d5f5032793bba7fd6c93aea6b21cae9c51e29e88cf89f41d8e3329e4",
+  "format": "Supplied SVG artwork and documented local adaptations. Supplied JavaScript/demo not imported.",
+  "files": {
+    "platform_blue.svg": {
+      "source": "assets/svg/platform_blue.svg",
+      "sha256": "804b0492c04d48950904516d123cf63fdf2e7ac4ec3b46a609132bd55731fa8b",
+      "bytes": 111926
+    },
+    "platform_blue_wide.svg": {
+      "source": "assets/svg/platform_blue_wide.svg",
+      "sha256": "902bb426bc843ef47247ef1ba1dbe98947cbadb577040dbc4fe8d94bae7456e5",
+      "bytes": 111926
+    },
+    "racket_black_platform.svg": {
+      "source": "assets/svg/racket_black_platform.svg",
+      "sha256": "30a3d04336f1d5882670d9fd48acd8747b2a75439c9f6d9c38c83235500fe775",
+      "bytes": 29644
+    },
+    "racket_red_platform.svg": {
+      "source": "assets/svg/racket_red_platform.svg",
+      "sha256": "4d51cddffeb752fa6b783fe71c2770d5a647cf215e731ba8f6f7b9997e350d71",
+      "bytes": 29644
+    },
+    "ball.svg": {
+      "source": "assets/svg/ball.svg",
+      "sha256": "feb9cb4a3a6294e2bfaa6bea5d7ff85af440707cccf2c2d93a9ee07a06963e6a",
+      "bytes": 30805
+    },
+    "ball_squash.svg": {
+      "source": "assets/svg/ball_squash.svg",
+      "sha256": "0cd4c330324682adf535b7170f8baa4f00fcaabd5e91aee1d545f379f6b12796",
+      "bytes": 30861
+    },
+    "ball_trail.svg": {
+      "source": "assets/svg/ball_trail.svg",
+      "sha256": "77e0e529091cf7e14e014a0b8dee33efe6acec6d8f682de8d49453b034bdfd30",
+      "bytes": 527
+    },
+    "star_gold.svg": {
+      "source": "assets/svg/star_gold.svg",
+      "sha256": "b5852b89c8f7792617cc65909b89ed2e425d13ae679570c7339a47d1c377765e",
+      "bytes": 1122
+    },
+    "spring_idle.svg": {
+      "source": "assets/svg/spring_idle.svg",
+      "sha256": "ddb37882cd207df4d78ef54668a0a121a9797f32bc8ea62e21553f5f6f090c5d",
+      "bytes": 3110
+    },
+    "spring_pressed.svg": {
+      "source": "assets/svg/spring_pressed.svg",
+      "sha256": "e2b60ff89a9e0d7034b1e4f3d9bccb101ae3709bf10f6fbb9e069d9541dc8195",
+      "bytes": 3110
+    },
+    "spring_rebound.svg": {
+      "source": "assets/svg/spring_rebound.svg",
+      "sha256": "335d9fcba21cdd1793e8dc217ad858799723eb33197363588567b9f05866c638",
+      "bytes": 3110
+    },
+    "flag_padlhub.svg": {
+      "source": "assets/svg/flag_padlhub.svg",
+      "sha256": "b50b11e39d0d83d4286e139f5576927e6dfb3dd990fff51c8c901a6d1722f202",
+      "bytes": 4506
+    },
+    "banner_padlhub.svg": {
+      "source": "assets/svg/banner_padlhub.svg",
+      "sha256": "496d36b38c24c21925f6ac64394148bcbb7c33b129c0cdecf4b33d4bc87e6182",
+      "bytes": 4494
+    },
+    "poster_build_ourselves.svg": {
+      "source": "assets/svg/poster_build_ourselves.svg",
+      "sha256": "738a80fbfa400992b63e3fc94eacdbb118d6a03e213f92deeefcadc4a19b7d3b",
+      "bytes": 8901,
+      "sourceSha256": "6b3c15fe6d7d91ededc42506fd3a8a723afa1f3d8f097b23bd7985ec064c4eef",
+      "modification": "Racket pictogram replaced with a stylized claw hammer; logo, text and poster background preserved."
+    },
+    "worker_navy_walk_00.svg": {
+      "source": "assets/svg/worker_navy_walk_00.svg",
+      "sha256": "1ec83a8f5511b454c71155b4da504769e10c2937ebe7390576f185b0582d94d5",
+      "bytes": 1293
+    },
+    "worker_navy_walk_01.svg": {
+      "source": "assets/svg/worker_navy_walk_01.svg",
+      "sha256": "e7923cde5be38730c8d6c46fffef60c2b9cc2342ede79bf284b0f3b23308fb02",
+      "bytes": 1293
+    },
+    "worker_navy_walk_02.svg": {
+      "source": "assets/svg/worker_navy_walk_02.svg",
+      "sha256": "1ec83a8f5511b454c71155b4da504769e10c2937ebe7390576f185b0582d94d5",
+      "bytes": 1293
+    },
+    "worker_navy_walk_03.svg": {
+      "source": "assets/svg/worker_navy_walk_03.svg",
+      "sha256": "fe6065a94810ff6c3c4d22d28b1681199e920e70a0a978ff47409f2ae5b57c99",
+      "bytes": 1293
+    },
+    "worker_green_panel.svg": {
+      "source": "assets/svg/worker_green_panel.svg",
+      "sha256": "0b4fd7a53f2225cbe0998f9d8d8be8a9fe5c1cc61e58a1a104abd4208d2b3f5d",
+      "bytes": 1159
+    },
+    "worker_cream_inspector.svg": {
+      "source": "assets/svg/worker_cream_inspector.svg",
+      "sha256": "8736c9fe8dbefbc6d3d83482d907a6106ee92a36ee3b679c141d332ea4d6162e",
+      "bytes": 1217
+    },
+    "decor_stepladder.svg": {
+      "source": "assets/svg/decor_stepladder.svg",
+      "sha256": "484479c3896210439ffb0a3101b462273d8850aacb3d1ec0636503510e9bf995",
+      "bytes": 620
+    },
+    "decor_toolcase.svg": {
+      "source": "assets/svg/decor_toolcase.svg",
+      "sha256": "6b2fd9eefff4fcad1e5b17eb69e5cde18cf59af2815be5c768214bf8fe16b728",
+      "bytes": 425
+    },
+    "dome_loop.svg": {
+      "source": "backgrounds/yasenevo_dome_loop.svg",
+      "sha256": "67672dd2256fa182cc72570a427b4645ab4f26c6be2f08191f7b2ee57cda1cbe",
+      "bytes": 2225
+    },
+    "station_start.svg": {
+      "source": "backgrounds/yasenevo_station_start.svg",
+      "sha256": "5bfbb3f705957083d0369f5462b627f2f22a6ec19b1ee3ae73123a0ddb74a258",
+      "bytes": 113131
+    },
+    "cage_left.svg": {
+      "source": "backgrounds/yasenevo_cage_left.svg",
+      "sha256": "9e54667851c216510af03b5bae4072454c769f649f3ea47a08238798eadae294",
+      "bytes": 15868
+    },
+    "cage_right.svg": {
+      "source": "backgrounds/yasenevo_cage_right.svg",
+      "sha256": "666a69a6d08be2f44e7700f1ae9dae4a5db232e57300a8e94366f0ec1129e52e",
+      "bytes": 15916
+    },
+    "padel_sleeve.svg": {
+      "source": "Рукав Падел.svg",
+      "sha256": "129c5907288396d6f3203543a539a7855e2db8d1d547c83e73a07c3515120ea0",
+      "bytes": 429225,
+      "normalization": "CRLF to LF and trailing whitespace removed; SVG element/attribute/content semantics verified unchanged."
+    }
+  },
+  "additionalSources": [
+    {
+      "source": "Рукав Падел.svg",
+      "sha256": "537dd08a1e2a00c2eb87a56ecffc61fc3b5a61b738ce07253988dd1a40b4c830",
+      "format": "Original user-supplied SVG; imported artwork has LF/trailing-whitespace normalization only."
+    }
+  ]
+}
