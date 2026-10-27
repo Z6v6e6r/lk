@@ -1814,6 +1814,16 @@ export function CommunitiesSection({
       setCommunities(sortCommunitiesByPreference(nextCommunities, communityOrderIdsRef.current));
       setConnections(nextConnections);
       setCommunitiesError(null);
+
+      const entryCommunityId = typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("openCommunity")
+        : null;
+      const entryCommunity = nextCommunities.find((community) => community.id === entryCommunityId);
+      if (entryCommunity && isCommunityAccessible(entryCommunity, profile.id || "current-user", normalizePhone(profile.phone))) {
+        setSelectedCommunityId(entryCommunity.id);
+        setFocusedCommunityId(entryCommunity.id);
+        setExpandedGraphCommunityId(entryCommunity.id);
+      }
     };
 
     void loadCommunities();
