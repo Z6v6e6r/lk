@@ -5,6 +5,7 @@ type GameModule = {
   mount: (target: HTMLElement, mode: 'race' | 'practice') => void;
   unmount: (target: HTMLElement) => void;
 };
+let readyModule: GameModule | undefined;
 
 /** Only the explicit game route loads code; identity stays in this document's origin. */
 export default function PadelJumpHost({ mode }: { mode: 'race' | 'practice' }) {
@@ -19,9 +20,11 @@ export default function PadelJumpHost({ mode }: { mode: 'race' | 'practice' }) {
     setStatus('loading');
     const src = __PADLHUB_JUMP_WIDGET_URL__;
     const url = attempt ? `${src}?retry=${attempt}` : src;
-    void import(/* @vite-ignore */ url).then((module: GameModule) => {
-      if (cancelled) return;
+    const load = readyModule ? Promise.resolve(readyModule) : import(/* @vite-ignore */ url);
+    void load.then((module: GameModule) => {
       if (typeof module.mount !== 'function' || typeof module.unmount !== 'function') throw new Error('Invalid game module');
+      readyModule = module;
+      if (cancelled) return;
       mounted = module;
       module.mount(container, mode);
       setStatus('ready');
