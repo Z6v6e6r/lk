@@ -901,7 +901,8 @@ test('effect does not accept or redirect an in-flight result after actor change'
   const cleanup = f.mount(); cleanup?.(); f.setActor('fixture-actor-b'); f.mount();
   finish({ data: { paymentRef: 'fixture-sale', status: 'PAID', paid: true }, error: null });
   await flushConfirmation();
-  assert.equal(f.calls.confirm.length, 1); assert.equal(f.calls.notices.length, 0);
+  assert.equal(f.calls.confirm.length, 1); assert.equal(f.calls.notices.length, 1);
+  assert.doesNotMatch(f.calls.notices[0], /подтверждена/);
   assert.equal(f.adapter.readPendingPaymentEntries().length, 1);
   assert.notEqual(f.window.location.href, 'https://cabinet.example/lk');
 });
@@ -911,5 +912,23 @@ test('missing/null/negative direct payment amount cannot claim a settled payment
     const f = confirmationFixture(); f.setDirectResponse({ data, error: null });
     await assert.rejects(f.adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: FIXTURE_PHONE }));
     assert.equal(f.calls.direct.length, 1); assert.equal(f.calls.confirm.length, 0);
+  }
+});
+
+
+test('retained component cannot reuse a completed paid task for another ref or actor', async () => {
+  for (const [nextRef, nextActor] of [['another-sale', 'fixture-actor-a'], ['fixture-sale', 'fixture-actor-b']]) {
+    const f = confirmationFixture({ href: 'https://padlhub.ru/sub_hab?summerPaymentRef=fixture-sale',
+      entries: [saleFixture(), saleFixture('another-sale')] });
+    const cleanup = f.mount(); await flushConfirmation(); cleanup?.();
+    assert.equal(f.calls.confirm.length, 1);
+    assert.equal(f.window.location.href, 'https://cabinet.example/lk');
+    f.setActor(nextActor);
+    f.window.location.href = `https://padlhub.ru/sub_hab?summerPaymentRef=${nextRef}`;
+    f.mount(); await flushConfirmation();
+    assert.equal(f.calls.confirm.length, 1);
+    assert.doesNotMatch(f.calls.notices.at(-1)!, /подтверждена/);
+    assert.equal(new URL(f.window.location.href).pathname, '/sub_hab');
+    assert.equal(f.adapter.readPendingPaymentEntries()[0].paymentRef, 'another-sale');
   }
 });

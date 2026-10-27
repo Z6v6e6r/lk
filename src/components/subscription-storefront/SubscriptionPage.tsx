@@ -56,7 +56,7 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     ? 'Покупка отправлена в Viva. Проверьте абонементы в личном кабинете; если результат неясен, обратитесь в поддержку.' : null);
   const [failure, setFailure] = useState<string | null>(null);
   const paymentInFlightRef = useRef(false);
-  const confirmationTaskRef = useRef<Promise<ConfirmedStorefrontPayment | null> | null>(null);
+  const confirmationTaskRef = useRef<{ key: string; task: Promise<ConfirmedStorefrontPayment | null> } | null>(null);
   const confirmationActiveRef = useRef(false);
 
   useEffect(() => {
@@ -108,13 +108,22 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     // Do not consume the return while the saved session is still restoring.
     if (returned.entry && (!isAuthenticated || isLoading || isRestoringSession || needsPhoneVerification)) return;
 
+    const returnKey = JSON.stringify([returned.entry ? 'lk-sale' : 'unknown',
+      returned.entry?.paymentRef ?? returned.outcome.paymentRef, confirmationActor]);
+    if (confirmationTaskRef.current && confirmationTaskRef.current.key !== returnKey) {
+      // A retained component must never reuse a prior actor/ref result or start a new write.
+      setNotice(returned.outcome.message);
+      clearStorefrontPaymentRef();
+      return;
+    }
     confirmationActiveRef.current = true;
     let cancelled = false;
     let redirectTimer: ReturnType<typeof setTimeout> | undefined;
     // Reuse one task through effect resubscriptions/StrictMode; never duplicate confirm.
-    const task = confirmationTaskRef.current ??= returned.entry
+    const pending = confirmationTaskRef.current ??= { key: returnKey, task: returned.entry
       ? runStorefrontPaymentConfirmation(returned.entry, () => !confirmationActiveRef.current || readAuthToken() !== confirmationActor)
-      : Promise.resolve(returned.outcome);
+      : Promise.resolve(returned.outcome) };
+    const task = pending.task;
     void task.then(result => {
       if (cancelled || !result || (returned.entry && readAuthToken() !== confirmationActor)) return;
       setNotice(result.message);

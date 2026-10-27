@@ -116,7 +116,8 @@ T123 читает собственный release-манифест и добав�
 - Только явные `PAYMENT_PENDING`/`UNPAID` допускают максимум три confirm с двумя
   паузами по 4 секунды. Только same-ref `PAID` + `paid=true` без `failed=true`
   очищает соответствующую pending-запись и разрешает переход в кабинет. Один task
-  переиспользуется при React effect replay; отмена/смена actor не принимает старый
+  переиспользуется при React effect replay и привязан к actor/ref; смена возврата
+  в том же mounted component даёт unknown без нового confirm. Отмена/смена actor не принимает старый
   результат и не очищает pending. Другие страницы `/ab_leto`, promo и Zero Block
   не переводятся на новый платёжный протокол.
 
