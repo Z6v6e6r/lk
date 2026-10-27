@@ -17,6 +17,7 @@ import {
   parseNumericLevel,
 } from "../../utils/customFields";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
+import { buildCommunityCabinetUrl } from "../../utils/communityJoinRoute";
 
 interface CommunityJoinPageProps {
   inviteCode?: string | null;
@@ -84,11 +85,19 @@ function resolveInviteCabinetUrl(value: string | null | undefined): string {
   }
 }
 
-function redirectToCabinet(urlValue: string | null | undefined) {
+function redirectToCabinet(urlValue: string | null | undefined, communityId?: string) {
   if (typeof window === "undefined") return false;
 
-  const target = resolveInviteCabinetUrl(urlValue);
+  let target = resolveInviteCabinetUrl(urlValue);
   if (!target) return false;
+
+  if (communityId) {
+    try {
+      target = buildCommunityCabinetUrl(target, communityId);
+    } catch {
+      return false;
+    }
+  }
 
   try {
     if (window.top && window.top !== window) {
@@ -275,11 +284,11 @@ export default function CommunityJoinPage({
     }
 
     if (alreadyMember) {
-      if (redirectToCabinet(cabinetUrl)) {
+      if (community && redirectToCabinet(cabinetUrl, community.id)) {
         return;
       }
 
-      setActionError("Не удалось открыть личный кабинет.");
+      setActionError("Не удалось открыть сообщество.");
       return;
     }
 
@@ -305,17 +314,18 @@ export default function CommunityJoinPage({
       return;
     }
 
-    if (response.data?.community) {
-      setCommunity(response.data.community);
+    const joinedCommunity = response.data?.community ?? community;
+    if (joinedCommunity) {
+      setCommunity(joinedCommunity);
     }
 
-    if (redirectToCabinet(cabinetUrl)) {
+    if (joinedCommunity && redirectToCabinet(cabinetUrl, joinedCommunity.id)) {
       return;
     }
 
     setSubmitting(null);
-    setActionError("Вступление сохранено, но не удалось открыть личный кабинет.");
-  }, [alreadyMember, cabinetUrl, normalizedInviteCode, normalizedInviteLink, profile]);
+    setActionError("Вступление сохранено, но не удалось открыть сообщество.");
+  }, [alreadyMember, cabinetUrl, community, normalizedInviteCode, normalizedInviteLink, profile]);
 
   if (loading) {
     return (
@@ -428,7 +438,7 @@ export default function CommunityJoinPage({
           {submitting === "join"
             ? "Сохраняем..."
             : alreadyMember
-              ? "Перейти в сообщество"
+              ? "Открыть сообщество"
               : "Вступить в сообщество"}
         </button>
 
