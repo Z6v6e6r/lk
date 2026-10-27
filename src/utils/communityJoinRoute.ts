@@ -11,6 +11,12 @@ export type CommunityJoinRouteData = {
   cabinetUrl: string;
 };
 
+export function buildCommunityCabinetUrl(cabinetUrl: string, communityId: string) {
+  const url = new URL(cabinetUrl);
+  url.searchParams.set("openCommunity", communityId);
+  return url.toString();
+}
+
 function normalizeInviteCabinetUrl(value: string | null | undefined, fallback: string) {
   const raw = String(value || "").trim();
   if (!raw) return fallback;

@@ -900,10 +900,6 @@ function AppContent() {
   }
 
   if (communityJoinRouteData.enabled) {
-    if (!isAuthenticated) {
-      return <AuthForm onLogin={() => setView("cabinet")} />;
-    }
-
     if (!communityJoinRouteData.inviteCode && !communityJoinRouteData.inviteLink) {
       return (
         <div className="load-error">
@@ -915,6 +911,8 @@ function AppContent() {
 
     return (
       <CommunityJoinPage
+        authenticated={isAuthenticated}
+        onLogin={() => setView("cabinet")}
         inviteCode={communityJoinRouteData.inviteCode}
         inviteLink={communityJoinRouteData.inviteLink}
         cabinetUrl={communityJoinRouteData.cabinetUrl}
