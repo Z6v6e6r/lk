@@ -17,3 +17,9 @@ test('game build publishes an explicit independently loadable cabinet module', (
   assert.match(config, /cabinet:\s*'src\/padel-jump-widget\.tsx'/);
   assert.match(config, /preserveEntrySignatures:\s*'strict'/);
 });
+
+test('unrelated cabinet commits cannot select an unpublished game module', () => {
+  const config = readFileSync('vite.config.ts', 'utf8');
+  assert.match(config, /const gameSource = '7edcac168132e94b0c41bac3eb5516631ae492dd'/);
+  assert.doesNotMatch(config, /execFileSync\('git'/);
+});
