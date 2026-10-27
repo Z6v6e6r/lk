@@ -12,7 +12,7 @@ test("community invitation does not show the redundant cabinet explanation", () 
 });
 
 test("existing member CTA names the community while preserving join and decline actions", () => {
-  assert.match(source, /alreadyMember\s*\? "Перейти в сообщество"\s*:\s*"Вступить в сообщество"/);
+  assert.match(source, /alreadyMember\s*\? "Открыть сообщество"\s*:\s*"Вступить в сообщество"/);
   assert.match(source, /void handleJoin\(\);/);
   assert.match(source, /onClick=\{handleDecline\}/);
   assert.match(source, /submitting === "decline" \? "Переходим\.\.\." : "Отказаться"/);
