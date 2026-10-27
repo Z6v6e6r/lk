@@ -20,6 +20,7 @@ import { formatRaceTime, LIVE_LIVES } from './live-contract';
 import type { LiveAck } from './live-client';
 import logo from '../../assets/logo-hab-compact.svg';
 import './live.css';
+import { RaceStart } from './RaceStart';
 
 const RACE_CONTROL_HINT = 'Управляй мячом наклоном телефона влево и вправо. Если наклон недоступен, удерживай левую или правую половину поля. На компьютере используй стрелки ← →.';
 
@@ -142,12 +143,15 @@ export default function RaceJump({ onChangeProfile, onCheckAdmission }: { onChan
   const eliminated = active && view.lives === 0;
   const checkpointReady = control.checkpointConfirmed();
   const move = (key: string, value: number) => { if (view.mode === 'running') directions.current.set(key, value); };
-  return <main className="pj-race" ref={region} tabIndex={-1} onKeyDown={e => {
+  return <main className={active ? 'pj-race' : 'pj-race ph-jump-start'} ref={region} tabIndex={-1} onKeyDown={e => {
     if (['ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); move(e.key, e.key === 'ArrowLeft' ? -1 : 1); }
     if (e.key === 'Escape') void pause();
   }} onKeyUp={e => directions.current.delete(e.key)}>
-    <header><img src={logo} alt="ПадлхАБ" /><span>Jump · звёзды за 5 жизней</span><a href={racePageUrl('live')}>Общий экран ↗</a></header>
-    {!active && <section className="pj-race-entry"><h1>Больше звёзд. Выше в рейтинге.</h1><p>На каждую попытку у тебя всего 5 жизней. Чем больше звезд ты наберешь, тем выше твой рейтинг в сообществе. Если количество звезд равное, выше тот, кто потратил меньше времени.</p><p className="pj-race-control-hint">{RACE_CONTROL_HINT}</p><p className="pj-race-profile">{profile ? `Играешь как ${profile.name}` : checking ? 'Подтверждаем профиль сообщества…' : 'Профиль пока не подтверждён'}</p>{!profile && <><button disabled={checking} onClick={() => { setError(''); setChecking(true); setProfileAttempt(n => n + 1); }}>Проверить профиль</button>{onCheckAdmission && <button onClick={onCheckAdmission}>Вернуться к проверке участия</button>}</>}{onChangeProfile && <button onClick={onChangeProfile}>Выйти и сменить профиль</button>}<p className="pj-live-note">Нажимая «Игра на ретинг», ты показываешь имя профиля, игру и результат на общем экране. Личный прогресс обычной игры сохраняется отдельно. Рейтинг связан с твоим профилем сообщества.</p><button disabled={pending || !profile} onClick={() => void begin()}>{pending ? 'Подключаем…' : 'Игра на ретинг'}</button><a href={racePageUrl('practice')}>Обычная игра</a></section>}
+    {active && <header><img src={logo} alt="ПадлхАБ" /><span>Jump · звёзды за 5 жизней</span><a href={racePageUrl('live')}>Общий экран ↗</a></header>}
+    {!active && <RaceStart profile={profile} checking={checking} pending={pending}
+      onBegin={() => void begin()}
+      onRetryProfile={() => { setError(''); setChecking(true); setProfileAttempt(n => n + 1); }}
+      onChangeProfile={onChangeProfile} onCheckAdmission={onCheckAdmission} />}
     {error && <p role="alert" className="pj-live-error">{error}</p>}
     {active && <div className="pj-race-hud"><strong>{STATIONS[view.station].name} <small>{view.section + 1}/3</small></strong><span>{view.score} м</span><span aria-label={`Собрано звёзд: ${view.stars}`}>★ {view.stars}</span><RaceLives remaining={view.lives} /><time>{formatRaceTime(displayMs)}</time><button disabled={pending || eliminated || locked.current || view.mode === 'paused' || !!result} onClick={() => void pause()}>Пауза</button></div>}
     <div className="pj-race-field" hidden={!active}><canvas ref={canvas} aria-label="Заезд Jump. Веди мяч наклоном телефона, стрелками или касанием левой и правой половины поля."

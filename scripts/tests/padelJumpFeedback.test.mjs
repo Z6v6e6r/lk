@@ -30,15 +30,21 @@ test('race has no lower control row, retaining touch fallback on the play field'
   assert.ok(source.includes('ArrowLeft') && source.includes('ArrowRight') && source.includes('tilt.direction()'));
 });
 
-test('entry uses requested copy and explains phone tilt before starting', () => {
+test('entry uses the archive layout, five decorative yellow balls and one short tilt hint', () => {
   const previous = globalThis.window;
   try {
     globalThis.window = { isSecureContext: true, location: { origin: 'https://padlhub.ru' } };
     const html = renderToStaticMarkup(React.createElement(module.exports.RaceJump));
-    assert.ok(html.includes('На каждую попытку у тебя всего 5 жизней. Чем больше звезд ты наберешь, тем выше твой рейтинг в сообществе. Если количество звезд равное, выше тот, кто потратил меньше времени.'));
-    assert.ok(html.includes('Игра на ретинг'));
-    assert.ok(html.includes('Управляй мячом наклоном телефона влево и вправо.'));
-    assert.ok(html.indexOf('Управляй мячом') < html.indexOf('Игра на ретинг'));
+    assert.ok(html.includes('Собери больше звёзд'));
+    assert.ok(html.includes('Играть на рейтинг'));
+    assert.equal((html.match(/class="jump-ball"/g) || []).length, 5);
+    assert.ok(html.includes('class="jump-balls" aria-hidden="true"'));
+    assert.ok(html.includes('5 жизней на попытку'));
+    assert.equal((html.match(/Управляй мячом наклоном телефона</g) || []).length, 1);
+    assert.ok(!html.includes('ты показываешь имя профиля'));
+    assert.ok(!html.includes('Alexey Sergeev'));
+    assert.ok(html.includes('Играть без рейтинга') && html.includes('Личный прогресс сохраняется отдельно.'));
+    assert.match(html, /<details class="jump-rules"/);
     const admission = renderToStaticMarkup(React.createElement(module.exports.RaceAdmission, { onChangeProfile() {} }));
     assert.ok(admission.includes('ПадлхАБ Jump - займи свое место в рейтинге'));
     assert.match(source, /view\.mode === 'paused'[^\n]*pj-race-control-hint/);
