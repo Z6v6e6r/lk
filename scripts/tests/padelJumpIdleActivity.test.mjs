@@ -54,3 +54,9 @@ test('race reports only real tilt steering inside the running/foreground simulat
   assert.match(race, /if \(g\.mode === 'running' && connection\.current && control\.canStep\(\)\)[\s\S]*direction = tilt\.direction\(\);[\s\S]*if \(direction !== 0\) recordLkUserActivity\(\);/);
   assert.equal((race.match(/recordLkUserActivity\(\)/g) || []).length, 1);
 });
+
+test('ordinary game reports actual tilt steering only inside the running simulation branch', () => {
+  const ordinary = readFileSync('src/components/padel-jump/PadelJump.tsx', 'utf8');
+  assert.match(ordinary, /if \(current\.mode === 'running'\)[\s\S]*if \(inputs\.current\.size === 0\)[\s\S]*direction = tilt\.direction\(\);[\s\S]*if \(Math\.abs\(direction\) > 0\.05\) \{[^}]*recordLkUserActivity\(\);/);
+  assert.equal((ordinary.match(/recordLkUserActivity\(\)/g) || []).length, 1);
+});
