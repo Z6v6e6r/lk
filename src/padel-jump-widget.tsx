@@ -4,6 +4,7 @@ import RaceEntry from './components/padel-jump/RaceEntry';
 import PadelJump from './components/padel-jump/PadelJump';
 import liveStyles from './components/padel-jump/live.css?inline';
 import practiceStyles from './components/padel-jump/padel-jump.css?inline';
+import startStyles from './components/padel-jump/jump-start.css?inline';
 
 const mounts = new WeakMap<HTMLElement, () => void>();
 
@@ -12,7 +13,7 @@ export function mount(target: HTMLElement, mode: 'race' | 'practice') {
   unmount(target);
   const owner = document.createElement('div');
   const style = document.createElement('style');
-  style.textContent = `${liveStyles}\n${practiceStyles}`;
+  style.textContent = `${liveStyles}\n${practiceStyles}\n${startStyles}`;
   const content = document.createElement('div');
   owner.append(style, content);
   target.append(owner);

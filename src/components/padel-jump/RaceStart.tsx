@@ -15,7 +15,7 @@ type Props = {
 };
 
 export function RaceStart({ profile, checking, pending, onBegin, onRetryProfile, onChangeProfile, onCheckAdmission }: Props) {
-  const titleId = useId(), noteId = useId();
+  const titleId = useId(), noteId = useId(), rankedNoteId = useId();
   const initials = profile?.name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join('').toUpperCase() || '…';
   return <>
     <header className="jump-header">
@@ -32,7 +32,8 @@ export function RaceStart({ profile, checking, pending, onBegin, onRetryProfile,
       </div>
       {!profile && <div role="status"><button className="jump-link" disabled={checking} onClick={onRetryProfile}>Проверить профиль</button>{onCheckAdmission && <button className="jump-link" onClick={onCheckAdmission}>Вернуться к проверке участия</button>}</div>}
       <p className="jump-input-hint"><span className="jump-phone" aria-hidden="true" /><span>Управляй мячом наклоном телефона</span></p>
-      <button className="jump-button jump-button--primary" type="button" disabled={pending || !profile} onClick={onBegin}>{pending ? 'Подключаем…' : <>Играть на рейтинг <span aria-hidden="true">→</span></>}</button>
+      <button className="jump-button jump-button--primary" type="button" disabled={pending || !profile} onClick={onBegin} aria-describedby={rankedNoteId}>{pending ? 'Подключаем…' : <>Играть на рейтинг <span aria-hidden="true">→</span></>}</button>
+      <p className="jump-note" id={rankedNoteId}>Твоё имя, игра и результат будут видны на общем экране.</p>
       <a className="jump-button jump-button--secondary" href={racePageUrl('practice')} aria-describedby={noteId}>Играть без рейтинга</a>
       <p className="jump-note" id={noteId}>Личный прогресс сохраняется отдельно.</p>
       <details className="jump-rules"><summary>Как играть и попасть в рейтинг</summary><p><strong>Цель.</strong> Управляй мячом и собирай звёзды. На каждую попытку даётся {LIVE_LIVES} жизней.</p><p><strong>Рейтинг.</strong> Чем больше звёзд, тем выше место. При равном числе звёзд выше игрок, который потратил меньше времени. Результат связан с твоим профилем сообщества.</p></details>
