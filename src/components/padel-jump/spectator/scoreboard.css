@@ -1,0 +1,64 @@
+/* Product adaptation of the supplied shell; never changes race/cabinet styles. */
+.ph-jump-spectator {
+  --ph-purple: #8744f5;
+  --ph-bg: #f6f6f8;
+  --ph-surface: #fff;
+  --ph-ink: #202026;
+  --ph-muted: #65636f;
+  --ph-line: #e6e5eb;
+  --ph-soft: #f2eefb;
+  font-family: system-ui, sans-serif;
+  min-height: 100svh;
+  background: var(--ph-bg);
+}
+.ph-jump-spectator .ph-screen { min-height: 100svh; border: 0; border-radius: 0; }
+.ph-jump-spectator .ph-courts { justify-items: start; }
+.ph-jump-spectator .ph-player { width: 100%; max-width: 420px; }
+.ph-jump-spectator .ph-court { aspect-ratio: 420 / 640; max-height: none; }
+.ph-jump-spectator .ph-content { grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+.ph-jump-spectator .ph-label,
+.ph-jump-spectator .ph-life-count,
+.ph-jump-spectator .ph-live-note,
+.ph-jump-spectator .ph-person p { font-size: 12px; }
+.ph-jump-spectator .ph-ranking-table th,
+.ph-jump-spectator .ph-ranking-table td { font-size: 14px; }
+.ph-jump-spectator .ph-ranking-table tbody th { font-size: 14px; }
+.ph-jump-spectator .ph-empty-state { min-height: 0; padding: 24px; }
+.ph-jump-spectator .ph-empty-state h2 { font-size: 20px; }
+.ph-jump-spectator .ph-empty-state p { margin-bottom: 0; }
+.ph-jump-spectator .ph-person h2 { min-height: 2.4em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ph-jump-spectator .ph-court-station { display: none; }
+.ph-jump-spectator button { min-height: 44px; cursor: pointer; }
+.ph-jump-spectator .ph-ranking-table { margin-top: 18px; }
+.ph-jump-spectator .ph-standings { max-height: 72svh; overflow: auto; }
+.ph-jump-spectator .ph-content[data-layout=empty] { grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); }
+.ph-jump-spectator .ph-content[data-layout=rating] { grid-template-columns: minmax(0, 1fr); }
+.ph-jump-spectator .ph-content[data-layout=rating] .ph-empty-state { display: none; }
+.ph-jump-spectator .ph-content[data-layout=rating] .ph-standings { grid-column: 1; grid-row: 1; }
+@media (max-width: 720px) {
+  .ph-jump-spectator .ph-content,
+  .ph-jump-spectator .ph-content[data-layout=empty] { grid-template-columns: minmax(0, 1fr); }
+  .ph-jump-spectator .ph-content[data-layout=empty] .ph-standings { grid-row: 1; }
+  .ph-jump-spectator .ph-content[data-layout=empty] .ph-empty-state { grid-row: 2; }
+  .ph-jump-spectator .ph-standings { max-height: none; }
+}
+@media (min-width: 1500px) {
+  .ph-jump-spectator .ph-content { grid-template-columns: minmax(0, 1fr) 460px; }
+  .ph-jump-spectator .ph-person h2 { font-size: 24px; }
+  .ph-jump-spectator .ph-score strong { font-size: 48px; }
+  .ph-jump-spectator .ph-time strong { font-size: 22px; }
+  .ph-jump-spectator .ph-ranking-table th,
+  .ph-jump-spectator .ph-ranking-table td,
+  .ph-jump-spectator .ph-ranking-table tbody th { font-size: 22px; }
+  .ph-jump-spectator .ph-ranking-table .ph-col-place { width: 30px; }
+  .ph-jump-spectator .ph-ranking-table .ph-col-balls { width: 64px; }
+  .ph-jump-spectator .ph-ranking-table .ph-col-time { width: 100px; }
+  .ph-jump-spectator .ph-ranking-table thead th { font-size: 16px; }
+  .ph-jump-spectator .ph-standings-title h2 { font-size: 24px; }
+}
+.ph-jump-spectator:fullscreen { padding: 16px; }
+.ph-jump-spectator:fullscreen .ph-screen { min-height: 100%; }
+.ph-jump-spectator:fullscreen .ph-player { max-width: min(420px, calc((100dvh - 700px) * 420 / 640)); }
+.ph-jump-spectator:fullscreen .ph-courts[data-visible-count="1"] .ph-player,
+.ph-jump-spectator:fullscreen .ph-courts[data-visible-count="2"] .ph-player { max-width: min(420px, calc((100dvh - 520px) * 420 / 640)); }
+.ph-jump-spectator:fullscreen .ph-standings { max-height: calc(100dvh - 260px); }

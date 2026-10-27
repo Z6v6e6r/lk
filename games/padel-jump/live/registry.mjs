@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../../src/components/padel-jump/engine.ts';
 import { nextSection } from '../../../src/components/padel-jump/campaign.ts';
 import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIMIT, LIVE_SYNC, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
+import { createSpectatorChannel } from './spectator.mjs';
 
 export const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 export const RESULT_STORAGE_POLICY = 'permanent-v1';
@@ -23,6 +24,7 @@ function cleanGame(game) {
 
 /** One isolated event; no LK accounts, community writes or client-supplied score/time. */
 export function createRegistry({ now = () => performance.now(), wall = () => Date.now(), directory, communityId = null } = {}) {
+  const spectator = createSpectatorChannel({ now });
   const runs = new Map(), best = new Map();
   const rank = (a, b) => b.stars - a.stars || a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id);
   const remember = row => { const previous = best.get(row.actorId); if (!previous || rank(row, previous) < 0) best.set(row.actorId, row); };
@@ -55,7 +57,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     scanResults(remember, true);
   }
   const elapsed = run => run.finalMs ?? run.activeMs + (run.paused || run.finished ? 0 : Math.max(0, now() - run.segment));
-  const sweep = () => { for (const [id, run] of runs) if (now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) runs.delete(id); };
+  const sweep = () => { for (const [id, run] of runs) if (now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) { runs.delete(id); spectator.remove(id); } };
   const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, stars: row.stars, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
   const player = (run, full = false) => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.failures >= LIVE_LIVES ? 'eliminated' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
     elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, livesRemaining: Math.max(0, LIVE_LIVES - run.failures), stars: run.claimed.size, completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
@@ -120,7 +122,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       // Recover this verified actor's terminal score before replacing its capability.
       for (const [id, run] of runs) if (run.actorId === actor.id && run.communityId === actor.communityId && (run.failures >= LIVE_LIVES || run.completed === 33)) {
         if (!run.finished) publishResult(run);
-        runs.delete(id);
+        runs.delete(id); spectator.remove(id);
       }
       if (runs.size >= LIVE_LIMIT) fail(429, 'EVENT_FULL');
       if ([...runs.values()].some(r => r.actorId === actor.id && r.communityId === actor.communityId && !r.finished)) fail(409, 'PROFILE_ALREADY_RUNNING');
@@ -128,7 +130,8 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       let slot = 0; while (used.has(slot)) slot++;
       const game = createCampaignGame(0, 0); game.mode = 'running';
       const run = { id, alias, actorId: actor.id, communityId: actor.communityId, slot, token: createHash('sha256').update(token).digest(), game, claimed: new Set(), seq: 0, ack: null, digest: '', ticks: 0, failures: 0, completed: 0, activeMs: 0, segment: now(), seen: now(), paused: false, finished: false };
-      runs.set(id, run); return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, player: player(run, true) };
+      runs.set(id, run); spectator.capture(player(run, true), 0);
+      return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, player: player(run, true) };
     },
     command(id, token, body, actor) {
       sweep(); const run = runs.get(id);
@@ -178,10 +181,13 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
       if (command === 'resume') { run.paused = false; run.segment = now(); }
       run.seen = now(); run.seq = body.seq; run.digest = digest;
+      spectator.capture(player(run, true), run.seq);
       const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(run.finishRow) } : {}) }; run.ack = ack; return ack;
     },
     board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
       results: bestResults().slice(0, 100).map(publicResult) }; },
+    spectator(options) { return spectator.read(options, this.board()); },
+    spectatorStats() { return spectator.stats(); },
     communityRanking(actor, { allTime = false } = {}) {
       if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id) fail(403, 'VERIFIED_PROFILE_REQUIRED');
       sweep(); const ranked = allTime ? bestResults() : legacyResults();
