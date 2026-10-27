@@ -21,6 +21,7 @@ import { createJumpStarter } from './start';
 import { browserTiltEnvironment, createTiltController } from './tilt';
 import type { TiltStatus } from './tilt';
 import { racePageUrl } from './race-navigation';
+import { recordLkUserActivity } from '../../utils/lkIdleDataGuard';
 import logoHab from '../../assets/logo-hab-compact.svg';
 import './padel-jump.css';
 
@@ -199,7 +200,10 @@ export default function PadelJump({ onBack }: { onBack?: () => void }) {
         accumulator += Math.min(seconds, 0.05);
         let direction = 0;
         for (const value of inputs.current.values()) direction += value;
-        if (inputs.current.size === 0) { direction = tilt.direction(); if (Math.abs(direction) > 0.05) inputType.current = 'tilt'; }
+        if (inputs.current.size === 0) {
+          direction = tilt.direction();
+          if (Math.abs(direction) > 0.05) { inputType.current = 'tilt'; recordLkUserActivity(); }
+        }
         while (accumulator >= FIXED_STEP && current.mode === 'running') { stepGame(current, direction); accumulator -= FIXED_STEP; }
         for (const event of drainEvents(current)) {
           if (current.campaign) { if (progress.current.settings.effects && !reduced.current) addFeedback(feedback.current, event, current); audio.cue(event); }
