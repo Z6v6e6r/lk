@@ -1630,7 +1630,7 @@ export async function apiAddCommunityMember(communityId: string, payload: JoinCo
   };
 }
 
-export async function apiJoinCommunityByInvite(payload: JoinCommunityByInvitePayload) {
+export async function apiJoinCommunityByInvite(payload: JoinCommunityByInvitePayload, options: { allowFallback?: boolean } = {}) {
   const inviteCode = extractCommunityInviteCode(payload.inviteCode || payload.inviteLink || "") || null;
   const inviteLink = buildCommunityInviteLink(inviteCode) || payload.inviteLink?.trim() || null;
   if (!inviteCode && !inviteLink) {
@@ -1645,7 +1645,7 @@ export async function apiJoinCommunityByInvite(payload: JoinCommunityByInvitePay
       inviteLink,
       member: buildMemberPayload(payload.member),
     }),
-  });
+  }, options.allowFallback);
 
   if (response.error) {
     return errorResult<CommunityActionResponse>(response.status, response.error.message, null);
