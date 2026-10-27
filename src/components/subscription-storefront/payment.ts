@@ -3,9 +3,8 @@ import { withSubscriptionPromoLock } from './promoCodeAttempt';
  * Storefront-owned payment adapter.
  *
  * The storefront used to only navigate to the LK1 `/ab_leto` page. The CTA now
- * creates the payment in LK1 directly and redirects the visitor to the bank URL
- * returned by the payment provider. Authentication, price and inventory stay
- * owned by LK1: this module only wires the existing contracts together.
+ * keeps LK-sale purchases and direct Viva products on separate return contracts.
+ * A bank redirect alone never proves a payment or a subscription was completed.
  */
 import {
   apiBuySubscroption,
@@ -21,6 +20,8 @@ import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, FRIENDSHIP_TWO_H
 
 /** Query parameter used by LK1 to resolve the payment after returning from the bank. */
 export const PAYMENT_REF_QUERY_KEY = 'summerPaymentRef';
+export const DIRECT_PAYMENT_RETURN_QUERY_KEY = 'subscriptionDirectReturn';
+export const STOREFRONT_PAYMENT_UNKNOWN_MESSAGE = 'Не удалось подтвердить результат оплаты. Проверьте абонементы в личном кабинете или обратитесь в поддержку перед повторной оплатой.';
 
 /** Reuses the LK1 pending-payment storage so both surfaces share confirmation state. */
 const PENDING_PAYMENT_STORAGE_KEY = 'padlhub_tournament_subscription_pending_refs';
@@ -39,13 +40,13 @@ export interface StorefrontBillingTarget {
 export interface PendingPaymentEntry {
   counterKey: 'friendship' | 'friendship_two_hours' | 'network_friendship' | 'ra' | 'academy' | 'energy5' | 'atlanty' | 'topocraty' | 'patriots' | null;
   paymentRef: string;
-  planId: StorefrontBillingOptionId | null;
+  planId: StorefrontBillingOptionId | 'friendship' | 'sport' | null;
   campaignKey: string | null;
   createdAt: string;
 }
 
 export type StorefrontPurchaseOutcome =
-  | { status: 'redirect'; paymentUrl: string; paymentRef: string }
+  | { status: 'redirect'; paymentUrl: string; paymentRef: string | null }
   | { status: 'settled'; message: string };
 
 export class StorefrontPaymentError extends Error {}
@@ -122,28 +123,32 @@ export function buildStorefrontPaymentRef(counterKey: string, now = Date.now(), 
 
 /**
  * Return URL for the bank. Keeps the visitor on the storefront page with the
- * payment reference so the widget can confirm the payment after the bank
- * redirects back; only then the visitor is sent to the cabinet.
+ * LK-sale reference. Direct Viva products use a separate unverified-return marker.
  */
-export function buildStorefrontReturnUrl(paymentRef: string): string | null {
+export function buildStorefrontReturnUrl(paymentRef: string | null): string | null {
   if (typeof window === 'undefined') return null;
   const url = new URL(window.location.href);
   url.searchParams.delete(PAYMENT_REF_QUERY_KEY);
-  url.searchParams.set(PAYMENT_REF_QUERY_KEY, paymentRef);
+  url.searchParams.delete(DIRECT_PAYMENT_RETURN_QUERY_KEY);
+  url.searchParams.set('autoPurchase', '0');
+  if (paymentRef) url.searchParams.set(PAYMENT_REF_QUERY_KEY, paymentRef);
+  else url.searchParams.set(DIRECT_PAYMENT_RETURN_QUERY_KEY, '1');
   return appendCurrentAuthModeToNavigableUrl(url).toString();
 }
 
 export function readStorefrontPaymentRef(search: string): string | null {
-  const value = new URLSearchParams(search).get(PAYMENT_REF_QUERY_KEY);
-  const normalized = String(value || '').trim();
+  const values = new URLSearchParams(search).getAll(PAYMENT_REF_QUERY_KEY);
+  if (values.length !== 1) return null;
+  const normalized = values[0].trim();
   return normalized || null;
 }
 
 export function clearStorefrontPaymentRef(): void {
   if (typeof window === 'undefined') return;
   const url = new URL(window.location.href);
-  if (!url.searchParams.has(PAYMENT_REF_QUERY_KEY)) return;
+  if (!url.searchParams.has(PAYMENT_REF_QUERY_KEY) && !url.searchParams.has(DIRECT_PAYMENT_RETURN_QUERY_KEY)) return;
   url.searchParams.delete(PAYMENT_REF_QUERY_KEY);
+  url.searchParams.delete(DIRECT_PAYMENT_RETURN_QUERY_KEY);
   window.history.replaceState(
     window.history.state,
     document.title,
@@ -159,25 +164,29 @@ function normalizePendingCounterKey(value: string): PendingPaymentEntry['counter
 }
 
 function normalizePendingPlanId(value: string): PendingPaymentEntry['planId'] {
-  return value === 'monthly' || value === 'annual' || value === 'monthly-two-hours' ? value : null;
+  return value === 'monthly' || value === 'annual' || value === 'monthly-two-hours' || value === 'friendship' || value === 'sport' ? value : null;
+}
+
+function readStoredPendingPaymentEntries(): unknown[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(PENDING_PAYMENT_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
 }
 
 export function readPendingPaymentEntries(now = Date.now()): PendingPaymentEntry[] {
-  if (typeof window === 'undefined') return [];
   try {
-    const raw = window.localStorage.getItem(PENDING_PAYMENT_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    const parsed = readStoredPendingPaymentEntries();
     const deduped = new Map<string, PendingPaymentEntry>();
     parsed.forEach((candidate) => {
       if (!candidate || typeof candidate !== 'object') return;
       const record = candidate as Partial<PendingPaymentEntry>;
       const paymentRef = String(record.paymentRef || '').trim();
       if (!paymentRef) return;
-      const createdAt = String(record.createdAt || '').trim() || new Date(now).toISOString();
+      const createdAt = String(record.createdAt || '').trim();
       const createdAtMs = Date.parse(createdAt);
-      if (Number.isFinite(createdAtMs) && createdAtMs < now - PENDING_PAYMENT_MAX_AGE_MS) return;
+      if (!Number.isFinite(createdAtMs) || createdAtMs < now - PENDING_PAYMENT_MAX_AGE_MS) return;
       deduped.set(paymentRef, {
         paymentRef,
         counterKey: normalizePendingCounterKey(String(record.counterKey || '')),
@@ -192,7 +201,7 @@ export function readPendingPaymentEntries(now = Date.now()): PendingPaymentEntry
   }
 }
 
-function writePendingPaymentEntries(entries: PendingPaymentEntry[]): void {
+function writePendingPaymentEntries(entries: unknown[]): void {
   if (typeof window === 'undefined') return;
   try {
     if (entries.length === 0) {
@@ -206,16 +215,21 @@ function writePendingPaymentEntries(entries: PendingPaymentEntry[]): void {
 }
 
 export function upsertPendingPaymentEntry(entry: PendingPaymentEntry): void {
-  const current = readPendingPaymentEntries().filter((item) => item.paymentRef !== entry.paymentRef);
-  current.unshift(entry);
-  writePendingPaymentEntries(current.slice(0, 12));
+  // This key is shared with /ab_leto: preserve unrelated records and extension fields.
+  const current = readStoredPendingPaymentEntries();
+  const previous = current.find(item => item && typeof item === 'object'
+    && (item as Partial<PendingPaymentEntry>).paymentRef === entry.paymentRef);
+  writePendingPaymentEntries([{ ...(previous && typeof previous === 'object' ? previous : {}), ...entry },
+    ...current.filter(item => !item || typeof item !== 'object'
+      || (item as Partial<PendingPaymentEntry>).paymentRef !== entry.paymentRef)]);
 }
 
 export function removePendingPaymentEntry(paymentRef: string | null | undefined): void {
   const normalized = String(paymentRef || '').trim();
   if (!normalized) return;
   writePendingPaymentEntries(
-    readPendingPaymentEntries().filter((item) => item.paymentRef !== normalized),
+    readStoredPendingPaymentEntries().filter(item => !item || typeof item !== 'object'
+      || (item as Partial<PendingPaymentEntry>).paymentRef !== normalized),
   );
 }
 
@@ -265,10 +279,9 @@ export async function createStorefrontSubscriptionPayment(params: {
     throw new StorefrontPaymentError('Этот вариант подписки пока недоступен для оплаты');
   }
 
-  const paymentRef = buildStorefrontPaymentRef(target.counterKey);
-  const returnUrl = buildStorefrontReturnUrl(paymentRef);
-
   if (target.directProductId) {
+    // Viva does not register an LK sale. Never send a fabricated ref to LK confirm.
+    const returnUrl = buildStorefrontReturnUrl(null);
     const directProductId = target.directProductId;
     return withSubscriptionPromoLock<StorefrontPurchaseOutcome>(directProductId, params.phone, async () => {
       await validateStorefrontDirectPurchase(target);
@@ -286,9 +299,9 @@ export async function createStorefrontSubscriptionPayment(params: {
         );
       }
       if (result.data.paymentUrl) {
-        return { status: 'redirect', paymentUrl: result.data.paymentUrl, paymentRef };
+        return { status: 'redirect', paymentUrl: result.data.paymentUrl, paymentRef: null };
       }
-      if (result.data.paid === true || result.data.toPay <= 0) {
+      if (result.data.paid === true || result.data.toPay === 0) {
         return { status: 'settled', message: 'Оплата подтверждена без перехода в банк.' };
       }
       throw new StorefrontPaymentError('Банк не вернул ссылку на оплату');
@@ -297,6 +310,8 @@ export async function createStorefrontSubscriptionPayment(params: {
     });
   }
 
+  const paymentRef = buildStorefrontPaymentRef(target.counterKey);
+  const returnUrl = buildStorefrontReturnUrl(paymentRef);
   const result = await apiCreateTournamentSubscriptionPurchase({
     clientPhone: params.phone,
     counterKey: target.counterKey,
@@ -330,43 +345,67 @@ export async function createStorefrontSubscriptionPayment(params: {
 }
 
 export interface ConfirmedStorefrontPayment {
-  status: 'paid' | 'failed' | 'pending';
+  status: 'paid' | 'failed' | 'pending' | 'unknown';
   message: string;
-  paymentRef: string;
+  paymentRef: string | null;
 }
 
-/** Confirms one payment reference through the LK1 confirm contract. */
-export async function confirmStorefrontPayment(entry: {
-  paymentRef: string;
-  counterKey?: PendingPaymentEntry['counterKey'];
-  planId?: PendingPaymentEntry['planId'];
-  campaignKey?: string | null;
-}): Promise<ConfirmedStorefrontPayment> {
-  const result = await apiConfirmTournamentSubscriptionPurchase(entry.paymentRef, {
-    counterKey: entry.counterKey ?? null,
-    planType: entry.planId === 'annual' ? null : 'friendship',
-    campaignKey: entry.campaignKey ?? null,
-  });
+function unknownPayment(paymentRef: string | null): ConfirmedStorefrontPayment {
+  return { status: 'unknown', paymentRef, message: STOREFRONT_PAYMENT_UNKNOWN_MESSAGE };
+}
 
-  if (result.error || !result.data) {
-    return {
-      status: 'pending',
-      paymentRef: entry.paymentRef,
-      message: 'Статус оплаты обновится автоматически через несколько минут.',
-    };
-  }
+/** Storage is local correlation with a purchase, never payment or ownership authority. */
+export function resolveStorefrontPaymentReturn(search: string): {
+  entry: PendingPaymentEntry | null; outcome: ConfirmedStorefrontPayment;
+} | null {
+  const query = new URLSearchParams(search);
+  if (!query.has(PAYMENT_REF_QUERY_KEY) && !query.has(DIRECT_PAYMENT_RETURN_QUERY_KEY)) return null;
+  const paymentRef = readStorefrontPaymentRef(search);
+  const entry = !query.has(DIRECT_PAYMENT_RETURN_QUERY_KEY) && paymentRef
+    ? readPendingPaymentEntries().find(item => item.paymentRef === paymentRef) ?? null : null;
+  return { entry, outcome: unknownPayment(paymentRef) };
+}
 
-  if (result.data.paid && String(result.data.status || '').toUpperCase() === 'PAID') {
-    removePendingPaymentEntry(entry.paymentRef);
-    return { status: 'paid', paymentRef: entry.paymentRef, message: 'Оплата подтверждена. Подписка оформлена.' };
+/** Confirms only a locally correlated LK-sale. Errors are not bank-pending evidence. */
+export async function confirmStorefrontPayment(
+  entry: PendingPaymentEntry, isCancelled: () => boolean = () => false,
+): Promise<ConfirmedStorefrontPayment> {
+  try {
+    const result = await apiConfirmTournamentSubscriptionPurchase(entry.paymentRef, {
+      counterKey: entry.counterKey ?? null,
+      planType: entry.planId === 'annual' ? null : entry.planId === 'sport' ? 'sport' : 'friendship',
+      campaignKey: entry.campaignKey ?? null,
+    });
+    if (isCancelled()) return unknownPayment(entry.paymentRef);
+    const data = result.data;
+    if (result.error || !data || data.paymentRef !== entry.paymentRef) return unknownPayment(entry.paymentRef);
+    const status = String(data.status || '').trim().toUpperCase();
+    if (data.paid === true && status === 'PAID' && data.failed !== true) {
+      removePendingPaymentEntry(entry.paymentRef);
+      return { status: 'paid', paymentRef: entry.paymentRef, message: 'Оплата подтверждена. Подписка оформлена.' };
+    }
+    // FAILED can mean the local confirmation budget expired, not a declined bank charge.
+    if (data.failed === true) return unknownPayment(entry.paymentRef);
+    if (data.paid !== true && ['PAYMENT_PENDING', 'UNPAID'].includes(status)) {
+      return { status: 'pending', paymentRef: entry.paymentRef,
+        message: 'Сервер ещё не подтвердил оплату. Проверьте статус в личном кабинете перед повторной оплатой.' };
+    }
+    return unknownPayment(entry.paymentRef);
+  } catch {
+    return unknownPayment(entry.paymentRef);
   }
-  if (result.data.failed) {
-    removePendingPaymentEntry(entry.paymentRef);
-    return { status: 'failed', paymentRef: entry.paymentRef, message: 'Оплата не прошла. Можно попробовать снова.' };
+}
+
+/** Poll only an explicit pending result; never replay a failed/ambiguous confirmation. */
+export async function runStorefrontPaymentConfirmation(
+  entry: PendingPaymentEntry, isCancelled: () => boolean,
+): Promise<ConfirmedStorefrontPayment | null> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (isCancelled()) return null;
+    const result = await confirmStorefrontPayment(entry, isCancelled);
+    if (isCancelled()) return null;
+    if (result.status !== 'pending' || attempt === 2) return result;
+    await new Promise(resolve => setTimeout(resolve, 4000));
   }
-  return {
-    status: 'pending',
-    paymentRef: entry.paymentRef,
-    message: 'Платеж ещё обрабатывается банком. Статус обновится автоматически.',
-  };
+  return null;
 }
