@@ -648,6 +648,9 @@ jobs:
         run: >-
           node --test --test-concurrency=1
           scripts/tests/reviewedFlowDeploy.test.mjs
+          scripts/tests/editorPauseOperation.test.mjs
+          scripts/tests/max-pause-body-preserver.test.mjs
+          scripts/tests/max-pause-browser-guard.test.mjs
           scripts/tests/legacyGameCommandProductionRelease.test.mjs
           scripts/tests/legacyGameCommandH2IdentityAudit.test.mjs
           scripts/tests/legacyGameCommandRootAclBootstrap.test.mjs

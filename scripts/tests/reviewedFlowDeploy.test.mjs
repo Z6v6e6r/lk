@@ -522,6 +522,79 @@ const writeEditorAck = (prepared, reserve) => {
   return ackPath;
 };
 
+const writeEditorPredecessor = (prepared, mutate = () => {}) => {
+  const lease = { formatVersion: 2, deploymentId: "completed-prior-release", token: "private-prior-token",
+    phase: "soaking", acquiredAtMs: prepared.now() - 120000, expiresAtMs: prepared.now() - 60000,
+    sourceSha256: "a".repeat(64), candidateSha256: prepared.contract.sourceSha256 };
+  mutate(lease);
+  const content = Buffer.from(`${JSON.stringify(lease)}\n`);
+  fs.writeFileSync(prepared.deploymentLeasePath, content, { mode: 0o600 });
+  return { content, expectedPredecessor: { sha256: sha256(content), deploymentId: lease.deploymentId, candidateSha256: lease.candidateSha256 } };
+};
+
+test("editor reserve atomically adopts only the exact expired v2 predecessor after evidence", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  const live = fs.readFileSync(p.liveFlowPath);
+  const result = p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor });
+  const current = JSON.parse(fs.readFileSync(p.deploymentLeasePath));
+  assert.equal(current.formatVersion, 3);
+  assert.equal(current.predecessorSha256, sha256(old.content));
+  assert.deepEqual(fs.readFileSync(current.predecessorBackup), old.content);
+  assert.equal(JSON.parse(fs.readFileSync(result.reserveReceipt)).predecessorSha256, sha256(old.content));
+  assert.deepEqual(fs.readFileSync(p.liveFlowPath), live);
+  assert.equal(p.restarts, 0);
+});
+
+for (const [label, mutate, alterExpected] of [
+  ["unapproved expired lease", () => {}, () => undefined],
+  ["different hash", () => {}, e => ({ ...e, sha256: "b".repeat(64) })],
+  ["different owner", () => {}, e => ({ ...e, deploymentId: "another-release" })],
+  ["unexpired lease", x => { x.expiresAtMs += 3600000; }, e => e],
+  ["non-soaking lease", x => { x.phase = "applying"; }, e => e],
+  ["foreign candidate", x => { x.candidateSha256 = "c".repeat(64); }, e => e],
+]) test(`editor reserve preserves ${label}`, (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p, mutate);
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: alterExpected(old.expectedPredecessor) }), /predecessor/i);
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), old.content);
+  assert.equal(p.restarts, 0);
+});
+
+test("editor reserve keeps expired predecessor when prepared candidate is invalid", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  fs.writeFileSync(p.candidatePath, "[]", { mode: 0o600 });
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor }));
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), old.content);
+});
+
+test("editor reserve refuses predecessor replaced during candidate preparation", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  let replacement;
+  p.onPm2Assert(count => { if (count === 2) replacement = writeEditorPredecessor(p, x => { x.token = "foreign-owner"; }).content; });
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor }), /predecessor changed/i);
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), replacement);
+});
+
+test("editor predecessor survives failed atomic rename and v3 publication cannot be replayed", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  const original = fs.renameSync;
+  fs.renameSync = (from, to) => { if (to === p.deploymentLeasePath) throw new Error("synthetic predecessor rename"); return original(from, to); };
+  try {
+    assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+      stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor }), /synthetic predecessor rename/);
+  } finally { fs.renameSync = original; }
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), old.content);
+  p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120001+0300", expectedPredecessor: old.expectedPredecessor });
+  const v3 = fs.readFileSync(p.deploymentLeasePath);
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120002+0300", expectedPredecessor: old.expectedPredecessor }), /predecessor/i);
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), v3);
+});
+
 test("editor lease reserves, confirms and finishes without helper flow writes or PM2 restarts", (t) => {
   const prepared = prepareEditorRuntime(t);
   const source = fs.readFileSync(prepared.liveFlowPath);
