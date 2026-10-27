@@ -2,7 +2,7 @@ import { readAuthToken } from '../../../utils/authTokenStorage';
 
 // Owner-selected exhibition pilot. Other communities keep their existing provider.
 export const JUMP_RANKING_COMMUNITY_ID = 'community_1793001495612_падлхаб-команда';
-export const JUMP_GAME_URL = 'https://padlhub.su/lk/padel-jump-team-60816487/padel-jump-race.html';
+export const JUMP_GAME_URL = 'https://padlhub.ru/lk_new?authMode=viva&padelJumpRace=1';
 export const JUMP_RANKING_V2_ACCEPT = 'application/vnd.padlhub.jump-community-ranking.v2+json';
 const ENDPOINT = 'https://padlhub.su/jump-live-api/community-ranking';
 

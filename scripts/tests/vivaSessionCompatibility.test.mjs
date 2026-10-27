@@ -29,13 +29,13 @@ function harness({ token = jwt(), refresh = 'fixture-refresh', response = { acce
       if (id.endsWith('/analytics') || id.endsWith('/pushNotifications')) return new Proxy({}, { get: () => () => {} });
       if (id.endsWith('/authConsents')) return { syncPendingAuthConsents: async () => { consentSyncs++; }, hasRetryablePendingAuthConsents: () => true, clearPendingAuthConsents: () => { consentClears++; }, stageAuthConsents: async () => true };
       if (id.endsWith('/vivaAuthStorage')) return storage;
-      if (id.endsWith('/vivaOAuth')) return { readPendingVivaOAuth: () => pending, clearPendingVivaOAuth: () => {}, cleanupVivaOAuthCallbackUrl: () => {}, startVivaOAuthRedirect: () => {} };
+      if (id.endsWith('/vivaOAuth')) return { isVivaOAuthCallbackUrl: load('src/utils/vivaOAuth.ts').isVivaOAuthCallbackUrl, readPendingVivaOAuth: () => pending, clearPendingVivaOAuth: () => {}, cleanupVivaOAuthCallbackUrl: () => {}, startVivaOAuthRedirect: () => {} };
       if (id.endsWith('/lkIdleDataGuard')) return { isLkIdleRequestPausedError: () => false };
       const base = path.resolve(path.dirname(filename), id);
       return load(fs.existsSync(base) ? base : base + '.ts');
     };
-    const context = { exports, require, Buffer, atob, Date, URLSearchParams,
-      window: { location: { search: location, href: 'https://cabinet.example.test', replace: () => {} }, setTimeout: cb => { const n = nextTimer++; timers.set(n, cb); return n; }, clearTimeout: n => timers.delete(n), addEventListener: (k, fn) => listeners.set('window:' + k, fn), removeEventListener: () => {} },
+    const context = { exports, require, Buffer, atob, Date, URL, URLSearchParams,
+      window: { location: { search: location, href: 'https://cabinet.example.test/' + location, origin: 'https://cabinet.example.test', pathname: '/', replace: () => {} }, setTimeout: cb => { const n = nextTimer++; timers.set(n, cb); return n; }, clearTimeout: n => timers.delete(n), addEventListener: (k, fn) => listeners.set('window:' + k, fn), removeEventListener: () => {} },
       document: { visibilityState: 'visible', addEventListener: (k, fn) => listeners.set('document:' + k, fn), removeEventListener: () => {} },
       fetch: async (url, options) => { requests.push({ url, options }); await beforeReply?.({ setTokens: (a, r) => { token = a; refresh = r; } }); return { ok, status: ok ? 200 : 400, json: async () => response }; } };
     vm.runInNewContext(compiled, context, { filename });

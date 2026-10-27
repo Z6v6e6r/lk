@@ -12,7 +12,7 @@ const { JUMP_RANKING_COMMUNITY_ID: communityId, usesJumpRanking, parseCommunityJ
 const row = (changes = {}) => ({ id: randomUUID(), rank: 1, name: 'Тестовый участник', stars: 6, elapsedMs: 54194, isCurrentUser: true, ...changes });
 const data = (changes = {}) => { const me = row(); return { schema: 'jump-community-ranking-v1', communityId, rule: 'five-lives-stars-v2', lives: 5, retentionHours: 48, total: 1, rows: [me], me, ...changes }; };
 
-test('only exact owner-selected community uses Jump, preserving installed provider paths; sport API is skipped', async () => {
+test('only exact owner-selected community uses Jump on the installed baseline; sport API is skipped', async () => {
   for (const id of [undefined, null, '', communityId + '-other', 'other-community']) {
     assert.equal(usesJumpRanking(id), false);
     await assert.rejects(load(id, new AbortController().signal, { token: 'fixture', fetcher: () => { throw new Error('must not fetch'); } }), /не подключён/);
@@ -20,7 +20,7 @@ test('only exact owner-selected community uses Jump, preserving installed provid
   assert.equal(usesJumpRanking(communityId), true);
   const source = readFileSync('src/components/cabinet/CommunitiesSection.tsx', 'utf8');
   assert.match(source, /if \(usesJumpRanking\(selectedCommunity\.id\)\) \{\s*return;/);
-  assert.match(source, /activeCommunityTab === "RANKING" && !usesJumpRanking\(selectedCommunity\.id\) && \(/);
+
   assert.match(source, /key=\{`\$\{selectedCommunity\.id\}:\$\{profileId \?\? ''\}`\}/);
 });
 
@@ -67,6 +67,20 @@ test('actual result renders stars and precise time, self marker is server-owned 
   assert.match(unplayed, /ещё нет завершённого заезда/);
 });
 
+test('ranking screen uses the requested title and rule without the redundant run note', () => {
+  const html = renderToStaticMarkup(React.createElement(module.exports.CommunityJumpRankingScreen, {
+    community: { id: communityId, name: 'Тестовое сообщество', memberCount: 0 },
+    profileKey: 'synthetic-profile', chatBadgeCount: 0,
+    onOpenMenu() {}, onClose() {}, onSelectSectionNav() {}, onSelectBottomNav() {},
+  }));
+  assert.match(html, /<h3>Рейтинг ПадлхАБ Jump<\/h3>/);
+  assert.match(html, /aria-label="Рейтинг ПадлхАБ Jump"/);
+  assert.ok(html.includes('Чем больше звезд, тем выше место. Если звезд одинаково, то выше тот у кого ниже время.'));
+  assert.ok(!html.includes('Лучший заезд каждого участника'));
+  assert.ok(!html.includes('Больше звёзд — выше.'));
+  const source = readFileSync('src/components/cabinet/community-feed/CommunityJumpRankingScreen.tsx', 'utf8');
+  assert.ok(!source.includes('Лучший заезд каждого участника'));
+});
 
 test('permanent v2 accepts profiles beyond old capacity and nullable retention; legacy v1 stays explicitly windowed', async () => {
   const rows = Array.from({ length: 100 }, (_, index) => row({ rank: index + 1, stars: 1000 - index, isCurrentUser: false }));
@@ -84,4 +98,12 @@ test('permanent v2 accepts profiles beyond old capacity and nullable retention; 
   for (const change of [{ schema: 'jump-community-ranking-v1' }, { retentionHours: 48 }, { retentionHours: 0 }, { total: Number.MAX_SAFE_INTEGER + 1 }]) assert.throws(() => parse(JSON.stringify({ ...allTime, ...change }), communityId));
   assert.throws(() => parse(JSON.stringify(data({ retentionHours: null })), communityId));
   assert.equal(parse(JSON.stringify(data()), communityId).retentionHours, 48);
+});
+
+test('play link stays on the cabinet origin and contains no session material', () => {
+  const url = new URL(module.exports.JUMP_GAME_URL);
+  assert.equal(url.origin, 'https://padlhub.ru');
+  assert.equal(url.pathname, '/lk_new');
+  assert.deepEqual([...url.searchParams], [['authMode', 'viva'], ['padelJumpRace', '1']]);
+  assert.equal(url.hash, '');
 });

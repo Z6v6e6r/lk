@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
+import PadelJumpHost from "./components/padel-jump/PadelJumpHost";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
@@ -1001,6 +1002,14 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJumpRace") === "1") {
+    return <PadelJumpHost mode="race" />;
+  }
+
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJump") === "1") {
+    return <PadelJumpHost mode="practice" />;
+  }
+
   if (
     IS_DEV_RELEASE_CHANNEL
     && typeof window !== "undefined"

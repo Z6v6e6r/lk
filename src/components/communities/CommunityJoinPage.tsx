@@ -408,9 +408,6 @@ export default function CommunityJoinPage({
 
       <div className="game-section">
         <div className="game-join-status">{statusLabel}</div>
-        <div className="community-invite-note">
-          После выбора откроется обычный личный кабинет.
-        </div>
       </div>
 
       {actionError && (
@@ -431,7 +428,7 @@ export default function CommunityJoinPage({
           {submitting === "join"
             ? "Сохраняем..."
             : alreadyMember
-              ? "Перейти в личный кабинет"
+              ? "Перейти в сообщество"
               : "Вступить в сообщество"}
         </button>
 

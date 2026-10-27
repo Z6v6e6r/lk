@@ -1,0 +1,63 @@
+import { BALL_RADIUS, HEIGHT, WIDTH } from './engine';
+import type { Game, Platform } from './engine';
+import { YASENEVO_SPRITES } from './yasenevo-assets';
+import type { YasenevoArt, YasenevoSprite } from './yasenevo-assets';
+import { panoramaRect, surfaceRect } from './yasenevo-layout';
+import { drawRacket } from './racket-art';
+
+export function yasenevoSprite(ctx: CanvasRenderingContext2D, art: YasenevoArt, id: YasenevoSprite, x: number, y: number, width: number) {
+  const sprite = YASENEVO_SPRITES[id], height = width * sprite.h / sprite.w;
+  ctx.drawImage(art.images[id], x - width / 2, y - height / 2, width, height);
+}
+export function yasenevoScenery(ctx: CanvasRenderingContext2D, game: Game, art: YasenevoArt, overscanY = 0) {
+  ctx.fillStyle = '#217ac1'; ctx.fillRect(-WIDTH * 5, -HEIGHT * 5, WIDTH * 11, HEIGHT * 11);
+  const scene = panoramaRect(game.camera, game.campaign?.goalY ?? HEIGHT, WIDTH, HEIGHT, overscanY);
+  ctx.drawImage(art.images.station_construction_panorama, scene.x, scene.y, scene.w, scene.h);
+  const floor = HEIGHT + game.camera * 0.14;
+  if (floor - 30 < HEIGHT) {
+    ctx.save(); ctx.globalAlpha = 0.95;
+    yasenevoSprite(ctx, art, 'banner_padlhub', 210, floor - 13, 118);
+    ctx.restore();
+  }
+  // Repeating wall artwork scrolls behind all playable objects, with gaps between bands.
+  ctx.save();
+  const sleeveSpacing = 900, sleeveShift = game.camera * 0.55 % sleeveSpacing;
+  for (let y = 210 + sleeveShift - sleeveSpacing; y < HEIGHT + 24; y += sleeveSpacing) {
+    if (y <= -24) continue;
+    ctx.globalAlpha = 0.38; ctx.fillStyle = '#4e356d'; ctx.fillRect(17, y - 25, WIDTH - 34, 50);
+    ctx.globalAlpha = 0.8; yasenevoSprite(ctx, art, 'padel_sleeve', WIDTH / 2, y, WIDTH - 36);
+  }
+  ctx.restore();
+  ctx.save(); ctx.globalAlpha = 0.85;
+  yasenevoSprite(ctx, art, 'flag_padlhub', 34, 163, 52);
+  yasenevoSprite(ctx, art, 'flag_padlhub', WIDTH - 34, 330, 52);
+  // Screen-space poster: its anchor intentionally does not depend on the camera.
+  yasenevoSprite(ctx, art, 'poster_build_ourselves', WIDTH - 62, HEIGHT - 150, 88);
+  ctx.restore();
+}
+export function yasenevoCage(ctx: CanvasRenderingContext2D, game: Game, art: YasenevoArt) {
+  const w = 17, h = w * 1440 / 112, shift = game.camera * 0.1 % h;
+  for (let y = shift - h; y < HEIGHT; y += h) {
+    ctx.drawImage(art.images.cage_left, 0, y, w, h);
+    ctx.drawImage(art.images.cage_right, WIDTH - w, y, w, h);
+  }
+}
+export function yasenevoPlatform(ctx: CanvasRenderingContext2D, p: Platform, art: YasenevoArt) {
+  if (p.kind === 'racket') { drawRacket(ctx, p.id, p.width, art); return; }
+  const id = p.kind === 'net' ? (p.flash > 0.16 ? 'spring_pressed' : p.flash > 0.06 ? 'spring_rebound' : 'spring_idle')
+      : p.width >= 180 ? 'platform_blue_wide' : 'platform_blue';
+  const rect = surfaceRect(p.width, YASENEVO_SPRITES[id]);
+  ctx.drawImage(art.images[id], rect.x, rect.y, rect.w, rect.h);
+}
+export function yasenevoBall(ctx: CanvasRenderingContext2D, game: Game, art: YasenevoArt, reduced: boolean) {
+  const { x, y, vy, vx } = game.ball, screenY = HEIGHT - y + game.camera;
+  if (!reduced && vy > 0 && game.mode === 'running') {
+    ctx.save(); ctx.translate(x - vx * 0.025, screenY + 22); ctx.rotate(vx * 0.001);
+    yasenevoSprite(ctx, art, 'ball_trail', 0, 0, 19); ctx.restore();
+  }
+  const landed = game.platforms.some(p => p.flash > 0.19 && Math.abs(p.y + BALL_RADIUS - y) < 30);
+  ctx.save(); ctx.translate(x, screenY); if (!reduced && !landed) ctx.rotate(game.time * 2.5);
+  ctx.shadowColor = 'rgba(9, 27, 60, 0.65)'; ctx.shadowBlur = 7;
+  yasenevoSprite(ctx, art, !reduced && landed ? 'ball_squash' : 'ball', 0, 0, BALL_RADIUS * 128 / 43);
+  ctx.restore();
+}

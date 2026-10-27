@@ -186,6 +186,13 @@ function markActivity(runtime: LkIdleDataGuardRuntime) {
   scheduleIdleDeadline(runtime);
 }
 
+/** Foreground user input outside DOM events (for example active tilt steering). */
+export function recordLkUserActivity(): void {
+  const runtime = getRuntime();
+  if (!runtime || typeof document === "undefined" || document.hidden || !document.hasFocus()) return;
+  markActivity(runtime);
+}
+
 function installFetchGuard(runtime: LkIdleDataGuardRuntime) {
   if (typeof window.fetch !== "function") return;
   const nativeFetch = window.fetch.bind(window);

@@ -70,6 +70,6 @@ test("analytics, API fallbacks and auth refresh treat idle pause as terminal", (
   );
   assert.match(
     vivaAuthSource,
-    /catch \(refreshError\) \{\s*if \(isLkIdleRequestPausedError\(refreshError\)\) \{\s*return false;\s*\}/,
+    /catch \(refreshError\) \{\s*(?:if \(readVivaAccessToken\(\) !== previousToken \|\| readVivaRefreshToken\(\) !== refreshToken\) return false;\s*)?if \(isLkIdleRequestPausedError\(refreshError\)\) \{\s*return false;\s*\}/,
   );
 });
