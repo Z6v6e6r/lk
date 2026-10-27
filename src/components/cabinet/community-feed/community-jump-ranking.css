@@ -173,8 +173,8 @@
 .community-jump-ranking-screen .community-jump-person > strong { font-size: 15px; line-height: 21px; font-weight: 600; overflow-wrap: anywhere; }
 .community-jump-ranking-screen .community-jump-self { display: block; margin-top: 3px; color: var(--phr-action); font-size: 12px; line-height: 17px; }
 .community-jump-ranking-screen .community-jump-score { max-width: 40vw; text-align: right; font-variant-numeric: tabular-nums; }
-.community-jump-ranking-screen .community-jump-score > strong { display: block; font-size: 25px; line-height: 29px; font-weight: 700; letter-spacing: -.4px; overflow-wrap: anywhere; }
-.community-jump-ranking-screen .community-jump-score > strong svg { display: inline-block; width: 14px; height: 14px; margin-right: 5px; color: var(--phr-muted); vertical-align: 2px; }
+.community-jump-ranking-screen .community-jump-score > strong { display: block; width: fit-content; max-width: 100%; box-sizing: border-box; margin-left: auto; padding: 5px 10px; border-radius: 20px; background: #8a5be9; color: var(--white, #fff); font-size: 14px; line-height: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.community-jump-ranking-screen .community-jump-score > strong svg { display: inline-block; width: 14px; height: 14px; margin-right: 5px; fill: currentColor; stroke: none; vertical-align: -2px; }
 .community-jump-ranking-screen .community-jump-score > time { display: block; margin-top: 3px; color: var(--phr-muted); font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
 .community-jump-ranking-screen .community-jump-play {
   display: flex;
