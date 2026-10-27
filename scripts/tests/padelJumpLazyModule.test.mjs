@@ -20,6 +20,6 @@ test('game build publishes an explicit independently loadable cabinet module', (
 
 test('unrelated cabinet commits cannot select an unpublished game module', () => {
   const config = readFileSync('vite.config.ts', 'utf8');
-  assert.match(config, /const gameSource = '7edcac168132e94b0c41bac3eb5516631ae492dd'/);
+  assert.match(config, /const gameSource = '109e43d49f35e7e705d9117fee308bf49c722572'/);
   assert.doesNotMatch(config, /execFileSync\('git'/);
 });
