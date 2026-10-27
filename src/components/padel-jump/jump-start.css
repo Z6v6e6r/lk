@@ -1,0 +1,71 @@
+/* Scope every selector to the start screen; the game canvas is unaffected. */
+.ph-jump-start.pj-race {
+  --jump-bg: #fffefa;
+  --jump-text: #24202d;
+  --jump-muted: #67616e;
+  --jump-line: #e9e5ec;
+  --jump-soft: #f3f0f5;
+  --jump-accent: #7542da;
+  --jump-on-accent: #ffffff;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 488px;
+  margin-inline: auto;
+  color: var(--jump-text);
+  background: var(--jump-bg);
+  border: 1px solid var(--jump-line);
+  border-radius: 16px;
+  min-height: 0;
+  font-family: Inter, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.ph-jump-start.pj-race *, .ph-jump-start.pj-race *::before, .ph-jump-start.pj-race *::after { box-sizing: border-box; }
+.ph-jump-start.pj-race .jump-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 24px; border-bottom: 1px solid var(--jump-line); }
+.ph-jump-start.pj-race .jump-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.ph-jump-start.pj-race .jump-brand-label { font-size: 18px; font-weight: 800; letter-spacing: -.6px; }
+.ph-jump-start.pj-race .jump-brand img, .ph-jump-start.pj-race .jump-brand svg { display: block; width: auto; max-width: 112px; max-height: 42px; }
+.ph-jump-start.pj-race .jump-game { color: var(--jump-muted); font-size: 13px; }
+.ph-jump-start.pj-race .jump-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 0; border: 0; border-radius: 4px; background: transparent; color: var(--jump-muted); font: inherit; font-size: 13px; text-decoration: none; text-align: left; cursor: pointer; }
+.ph-jump-start.pj-race .jump-link:hover { color: var(--jump-text); text-decoration: underline; }
+.ph-jump-start.pj-race .jump-body { padding: 24px; }
+.ph-jump-start.pj-race .jump-title { margin: 0; color: var(--jump-text); font-size: 29px; line-height: 1.16; font-weight: 700; letter-spacing: -.9px; }
+.ph-jump-start.pj-race .jump-lives { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 14px; color: var(--jump-muted); font-size: 14px; }
+.ph-jump-start.pj-race .jump-balls { display: inline-flex; gap: 5px; flex-shrink: 0; }
+.ph-jump-start.pj-race .jump-ball { position: relative; display: block; flex: 0 0 18px; width: 18px; height: 18px; overflow: hidden; border: 1px solid #c49d12; border-radius: 50%; background: #f8d52c; transform: rotate(-25deg); }
+.ph-jump-start.pj-race .jump-ball::before, .ph-jump-start.pj-race .jump-ball::after { content: ""; position: absolute; top: -2px; width: 13px; height: 20px; border: 2px solid #fffde7; border-radius: 50%; }
+.ph-jump-start.pj-race .jump-ball::before { left: -10px; }
+.ph-jump-start.pj-race .jump-ball::after { right: -10px; }
+.ph-jump-start.pj-race .jump-player { display: flex; align-items: center; gap: 10px; margin-top: 24px; padding: 14px 0; border-top: 1px solid var(--jump-line); border-bottom: 1px solid var(--jump-line); }
+.ph-jump-start.pj-race .jump-avatar { display: grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%; background: var(--jump-soft); font-size: 12px; font-weight: 700; }
+.ph-jump-start.pj-race .jump-identity { flex: 1; min-width: 0; }
+.ph-jump-start.pj-race .jump-caption { display: block; color: var(--jump-muted); font-size: 12px; line-height: 1.4; }
+.ph-jump-start.pj-race .jump-player-name { display: block; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.ph-jump-start.pj-race .jump-profile-action { flex-shrink: 0; }
+.ph-jump-start.pj-race .jump-input-hint { display: flex; align-items: center; gap: 10px; margin: 17px 0 19px; color: var(--jump-muted); font-size: 14px; line-height: 1.45; }
+.ph-jump-start.pj-race .jump-phone { position: relative; flex: 0 0 13px; width: 13px; height: 20px; border: 1.5px solid currentColor; border-radius: 3px; transform: rotate(-12deg); }
+.ph-jump-start.pj-race .jump-phone::after { content: ""; position: absolute; bottom: 2px; left: 3px; right: 3px; height: 1px; background: currentColor; }
+.ph-jump-start.pj-race .jump-button { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; padding: 12px 16px; border: 1px solid transparent; border-radius: 10px; font: inherit; font-size: 15px; line-height: 1.4; font-weight: 600; text-align: center; cursor: pointer; }
+.ph-jump-start.pj-race .jump-button--primary { color: var(--jump-on-accent); background: var(--jump-accent); }
+.ph-jump-start.pj-race .jump-button--secondary { margin-top: 16px; border-color: var(--jump-line); color: var(--jump-text); background: var(--jump-bg); }
+.ph-jump-start.pj-race .jump-button:disabled, .ph-jump-start.pj-race .jump-link:disabled { opacity: .55; cursor: default; }
+.ph-jump-start.pj-race .jump-note { margin: 8px 0 0; color: var(--jump-muted); font-size: 13px; line-height: 1.5; text-align: center; }
+.ph-jump-start.pj-race .jump-rules { margin-top: 22px; border-top: 1px solid var(--jump-line); }
+.ph-jump-start.pj-race .jump-rules summary { min-height: 46px; padding: 12px 0; color: var(--jump-text); font-size: 14px; font-weight: 500; cursor: pointer; }
+.ph-jump-start.pj-race .jump-rules p { margin: 0 0 12px; color: var(--jump-muted); font-size: 13px; line-height: 1.6; }
+.ph-jump-start.pj-race .jump-rules p:last-child { margin-bottom: 0; }
+.ph-jump-start.pj-race .jump-rules strong { color: var(--jump-text); font-weight: 600; }
+@media (max-width: 420px) {
+  .ph-jump-start.pj-race .jump-header { padding: 10px 18px; }
+  .ph-jump-start.pj-race .jump-body { padding: 22px 18px 14px; }
+  .ph-jump-start.pj-race .jump-title { font-size: 27px; }
+  .ph-jump-start.pj-race .jump-brand { gap: 8px; }
+  .ph-jump-start.pj-race .jump-player { gap: 8px; }
+}
+
+.ph-jump-start.pj-race .jump-button { text-decoration: none; gap: 10px; }
+.ph-jump-start.pj-race :is(button, a, summary):focus-visible { outline: 3px solid var(--jump-accent); outline-offset: 3px; }
+.ph-jump-start.pj-race .jump-rules summary { display: flex; align-items: center; justify-content: space-between; list-style: none; gap: 12px; }
+.ph-jump-start.pj-race .jump-rules summary::-webkit-details-marker { display: none; }
+.ph-jump-start.pj-race .jump-rules summary::after { content: ""; flex: 0 0 7px; height: 7px; border-right: 1.5px solid var(--jump-muted); border-bottom: 1.5px solid var(--jump-muted); transform: rotate(45deg); }
+.ph-jump-start.pj-race .jump-rules[open] summary::after { transform: rotate(225deg); }

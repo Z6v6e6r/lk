@@ -22,7 +22,7 @@ export function EnrollmentForm({ fields, busy, onSubmit }: { fields?: Enrollment
 
 export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: () => void }) {
   const [entry, setEntry] = useState<RaceEntryStatus | null>(null), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
-  const [busy, setBusy] = useState(false), [opened, setOpened] = useState(false);
+  const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
   const accept = (value: RaceEntryStatus) => {
     if (!['ready', 'form', 'pending', 'blocked', 'confirming'].includes(value?.state)) throw new Error('Не удалось подтвердить доступ к игре.');
@@ -40,17 +40,17 @@ export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: ()
     catch (reason) { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Не удалось сохранить анкету.'); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
-  if (opened) return <RaceJump onChangeProfile={onChangeProfile} onCheckAdmission={() => { setOpened(false); setAttempt(n => n + 1); }} />;
+  if (entry?.state === 'ready') return <RaceJump onChangeProfile={onChangeProfile} onCheckAdmission={() => { setEntry(null); setAttempt(n => n + 1); }} />;
   return <main className="pj-race-auth pj-admission"><img className="auth-brand-logo" src={logo} alt="ПадлхАБ" /><h1>ПадлхАБ Jump - займи свое место в рейтинге</h1>
     {!entry && busy && <p role="status">Проверяем профиль и участие в сообществе…</p>}
     {entry && <p className="pj-admission-community">{entry.communityName}</p>}
       {entry?.state === 'form' && <EnrollmentForm fields={entry.fields} busy={busy} onSubmit={data => void submit(data)} />}
-      {entry?.state === 'ready' && <section><h2>Всё готово к игре</h2><p>{entry.name ? `${entry.name}, ты участник сообщества.` : 'Участие в сообществе подтверждено.'}</p><button className="auth-btn" onClick={() => setOpened(true)}>Открыть игру</button></section>}
+
       {entry?.state === 'pending' && <p role="status">Заявка на вступление ожидает подтверждения организатором. Игра откроется после подтверждения.</p>}
       {entry?.state === 'blocked' && <p role="alert">Участие в сообществе ограничено. Обратись к организатору.</p>}
       {entry?.state === 'confirming' && <p role="status">Анкета сохранена. Вступление ещё не подтверждено; повторной отправки не будет. Проверь ещё раз или обратись к организатору.</p>}
     {error && <p role="alert" className="auth-error">{error}</p>}
-    {entry?.state !== 'ready' && entry?.state !== 'blocked' && <button className="auth-link-btn" disabled={busy} onClick={() => setAttempt(n => n + 1)}>Проверить ещё раз</button>}
+    {entry?.state !== 'blocked' && <button className="auth-link-btn" disabled={busy} onClick={() => setAttempt(n => n + 1)}>Проверить ещё раз</button>}
     <button className="auth-link-btn pj-change-profile" disabled={busy} onClick={onChangeProfile}>Выйти и сменить профиль</button>
   </main>;
 }
