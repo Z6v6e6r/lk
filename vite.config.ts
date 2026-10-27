@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite'
-import { execFileSync } from 'node:child_process'
+
 import react from '@vitejs/plugin-react'
 import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
 import { visualizer } from 'rollup-plugin-visualizer'
@@ -9,7 +9,8 @@ import { reactRuntimeSingletonGuard } from './scripts/react_runtime_singleton_gu
 const shouldAnalyze = process.env.ANALYZE === '1' || process.env.ANALYZE === 'true'
 
 export default defineConfig(({ command, mode }) => {
-  const gameSource = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  // Independent immutable game release; do not change on unrelated cabinet builds.
+  const gameSource = '7edcac168132e94b0c41bac3eb5516631ae492dd'
   if (!/^[a-f0-9]{40}$/.test(gameSource)) throw new Error('Invalid game source identity')
   const isDevBundle = mode === 'dev'
   const managedSubscriptionsDevEnabled =
