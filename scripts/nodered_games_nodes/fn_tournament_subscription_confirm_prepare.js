@@ -322,7 +322,11 @@ msg._summerSubscriptionCtx = {
   paymentRef,
 };
 
-const dbMsg = Object.assign({}, msg, { query: { paymentRef } });
+// MongoDB4 consumes find arguments from payload; keep query for legacy consumers.
+const dbMsg = Object.assign({}, msg, {
+  query: { paymentRef },
+  payload: [{ paymentRef }],
+});
 
 const debugMsg = Object.assign({}, msg, {
   payload: {

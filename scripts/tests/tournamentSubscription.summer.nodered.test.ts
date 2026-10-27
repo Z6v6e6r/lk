@@ -1697,6 +1697,94 @@ test("summer subscription confirm-prepare keeps Sirius friendship campaign for e
   assert.equal(ctx.campaignKey, "summer_padel_sirius_friendship_2026");
 });
 
+// MongoDB4 3.4 consumes find arguments from payload, not the legacy query field.
+function findConfirmSalesAsMongo4(dbMsg: NodeRedMsg, sales: NodeRedMsg[]) {
+  const args = Array.isArray(dbMsg.payload) ? dbMsg.payload : [dbMsg.payload];
+  assert.equal(args.length, 1);
+  const filter = asRecord(args[0]);
+  return sales.filter((sale) => Object.entries(filter).every(([key, value]) => (
+    value === null ? sale[key] == null : sale[key] === value
+  )));
+}
+
+test("summer subscription confirm Mongo4 lookup ignores non-null client plan aliases", () => {
+  for (const planKey of ["sport", "friendship"]) {
+    const paymentRef = `confirm-lookup-${planKey}`;
+    const sale = {
+      paymentRef,
+      counterKey: planKey,
+      planKey,
+      campaignKey: `summer_padel_${planKey}_2026`,
+      transactionId: "synthetic-confirm-transaction",
+      status: "PAYMENT_PENDING",
+    };
+    const body = {
+      paymentRef,
+      counterKey: planKey,
+      planType: planKey,
+      plan: planKey,
+      tariff: planKey,
+      campaignKey: sale.campaignKey,
+    };
+    const prepared = runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_prepare.js",
+      { payload: body, req: { query: {} } },
+    ) as unknown[];
+    const dbMsg = asRecord(prepared[0]);
+    const rows = findConfirmSalesAsMongo4(dbMsg, [sale]);
+
+    assert.deepEqual(rows, [sale]);
+    assert.deepEqual(dbMsg.payload, [{ paymentRef }]);
+    assert.deepEqual(dbMsg.query, { paymentRef });
+    assert.equal(body.plan, planKey);
+    assert.equal(asRecord(dbMsg._summerSubscriptionCtx).counterKey, planKey);
+
+    const resolved = runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+      { ...dbMsg, payload: rows },
+    ) as unknown[];
+    assert.equal(asRecord(resolved[0]).method, "POST");
+    assert.equal(asRecord(asRecord(resolved[0])._summerSubscriptionCtx).step, "token_confirm");
+  }
+});
+
+test("summer subscription confirm Mongo4 lookup preserves null-plan direct products", () => {
+  const paymentRef = "confirm-lookup-null-plan";
+  const sale = { paymentRef, counterKey: "ra", planKey: null, campaignKey: null };
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_prepare.js",
+    {
+      payload: { paymentRef, counterKey: "ra", planType: null, plan: null, tariff: null, campaignKey: null },
+      req: { query: {} },
+    },
+  ) as unknown[];
+  const dbMsg = asRecord(prepared[0]);
+
+  assert.deepEqual(findConfirmSalesAsMongo4(dbMsg, [sale]), [sale]);
+  assert.deepEqual(dbMsg.payload, [{ paymentRef }]);
+  assert.deepEqual(dbMsg.query, { paymentRef });
+  assert.equal(asRecord(dbMsg._summerSubscriptionCtx).counterKey, "ra");
+  assert.equal(asRecord(dbMsg._summerSubscriptionCtx).planKey, null);
+});
+
+test("summer subscription confirm Mongo4 lookup keeps unknown paymentRef as 404", () => {
+  const paymentRef = "confirm-lookup-unknown";
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_prepare.js",
+    { payload: { paymentRef, counterKey: "sport", planType: "sport", plan: "sport", tariff: "sport" }, req: { query: {} } },
+  ) as unknown[];
+  const dbMsg = asRecord(prepared[0]);
+  const rows = findConfirmSalesAsMongo4(dbMsg, [{ paymentRef: "another-confirm-sale" }]);
+  const resolved = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+    { ...dbMsg, payload: rows },
+  ) as unknown[];
+
+  assert.equal(resolved[0], null);
+  assert.equal(asRecord(resolved[1]).statusCode, 404);
+  assert.equal(asRecord(asRecord(resolved[1]).payload).error, "Платеж не найден");
+});
+
 test("summer subscription counter refresh builds materialized counter updates", () => {
   const prepareOut = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_counter_refresh_prepare.js",
