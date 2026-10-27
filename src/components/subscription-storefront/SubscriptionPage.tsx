@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetchTournamentSubscriptionStatus, apiGetSubscriptionProduct } from '../../utils/apiClient';
 import { CABINET_URL } from '../../consts/api_config';
 import { useAuth } from '../../context/AuthContext';
+import { readAuthToken } from '../../utils/authTokenStorage';
 import { SubscriptionStorefront } from './SubscriptionStorefront';
 import { AuthForm } from '../auth/AuthForm';
 import { summerPlanPresentation, friendshipVariantBenefits, atlantyPlanPresentation } from './presentation';
@@ -17,19 +18,15 @@ import { loadTournamentSubscriptionStatuses } from '../../utils/tournamentSubscr
 import {
   StorefrontPaymentError,
   clearStorefrontPaymentRef,
-  confirmStorefrontPayment,
+  resolveStorefrontPaymentReturn,
+  runStorefrontPaymentConfirmation,
   createStorefrontSubscriptionPayment,
-  readPendingPaymentEntries,
-  readStorefrontPaymentRef,
   resolvePaymentPhone,
   resolveStorefrontBillingTarget,
-  type PendingPaymentEntry,
+  type ConfirmedStorefrontPayment,
   type StorefrontBillingOptionId,
 } from './payment';
 import markUrl from './assets/brand/подписка.svg';
-
-const PAYMENT_CONFIRM_ATTEMPTS = 3;
-const PAYMENT_CONFIRM_RETRY_MS = 4000;
 
 export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   onBack?: () => void;
@@ -38,7 +35,8 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
   /** Variant requested by the hosting Tilda block; URL `variant` is the fallback. */
   variant?: string | null;
 }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading, isRestoringSession, needsPhoneVerification } = useAuth();
+  const confirmationActor = readAuthToken();
   const searchVariant = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('variant');
   // An empty host value (a Tilda block whose data prop is blank) must not shadow
   // the documented `?variant=` fallback.
@@ -58,7 +56,8 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     ? 'Покупка отправлена в Viva. Проверьте абонементы в личном кабинете; если результат неясен, обратитесь в поддержку.' : null);
   const [failure, setFailure] = useState<string | null>(null);
   const paymentInFlightRef = useRef(false);
-  const confirmationStartedRef = useRef(false);
+  const confirmationTaskRef = useRef<Promise<ConfirmedStorefrontPayment | null> | null>(null);
+  const confirmationActiveRef = useRef(false);
 
   useEffect(() => {
     // The club page sells direct products, so it has no counter to poll.
@@ -101,51 +100,36 @@ export function SubscriptionPage({ onBack, cabinetUrl, previewView, variant }: {
     return () => { cancelled = true; clearTimeout(timer); controller?.abort(); };
   }, [attempt, previewView, isAtlantyVariant]);
 
-  /**
-   * Confirms a payment created by this widget once the bank returns the visitor
-   * to this page: the bank redirect carries the payment reference in the URL.
-   * Only a confirmed payment sends the visitor to the cabinet.
-   */
+  /** A direct bank return stays unverified; only a correlated LK-sale can confirm. */
   useEffect(() => {
-    if (previewView || confirmationStartedRef.current) return;
-    const urlPaymentRef = readStorefrontPaymentRef(window.location.search);
-    if (!urlPaymentRef) return;
-    confirmationStartedRef.current = true;
+    if (previewView) return;
+    const returned = resolveStorefrontPaymentReturn(window.location.search);
+    if (!returned) return;
+    // Do not consume the return while the saved session is still restoring.
+    if (returned.entry && (!isAuthenticated || isLoading || isRestoringSession || needsPhoneVerification)) return;
 
-    const stored = readPendingPaymentEntries().find(entry => entry.paymentRef === urlPaymentRef);
-    const entry: PendingPaymentEntry = stored ?? {
-      paymentRef: urlPaymentRef,
-      counterKey: null,
-      planId: null,
-      campaignKey: null,
-      createdAt: new Date().toISOString(),
-    };
-
+    confirmationActiveRef.current = true;
     let cancelled = false;
-    void (async () => {
-      for (let attemptIndex = 0; attemptIndex < PAYMENT_CONFIRM_ATTEMPTS; attemptIndex += 1) {
-        const result = await confirmStorefrontPayment(entry);
-        if (cancelled) return;
-        setNotice(result.message);
-        if (result.status !== 'pending') {
-          clearStorefrontPaymentRef();
-          const target = (cabinetUrl || CABINET_URL || '').trim();
-          if (result.status === 'paid' && target && typeof window !== 'undefined') {
-            window.setTimeout(() => { window.location.href = target; }, 1200);
-          }
-          return;
-        }
-        await new Promise(resolve => setTimeout(resolve, PAYMENT_CONFIRM_RETRY_MS));
-        if (cancelled) return;
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+    // Reuse one task through effect resubscriptions/StrictMode; never duplicate confirm.
+    const task = confirmationTaskRef.current ??= returned.entry
+      ? runStorefrontPaymentConfirmation(returned.entry, () => !confirmationActiveRef.current || readAuthToken() !== confirmationActor)
+      : Promise.resolve(returned.outcome);
+    void task.then(result => {
+      if (cancelled || !result || (returned.entry && readAuthToken() !== confirmationActor)) return;
+      setNotice(result.message);
+      clearStorefrontPaymentRef();
+      const target = (cabinetUrl || CABINET_URL || '').trim();
+      if (result.status === 'paid' && target) {
+        redirectTimer = setTimeout(() => { window.location.href = target; }, 1200);
       }
-      if (!cancelled) {
-        setNotice('Платёж ещё обрабатывается банком. Статус обновится автоматически.');
-        clearStorefrontPaymentRef();
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [cabinetUrl, previewView]);
+    });
+    return () => {
+      cancelled = true;
+      confirmationActiveRef.current = false;
+      clearTimeout(redirectTimer);
+    };
+  }, [cabinetUrl, previewView, isAuthenticated, isLoading, isRestoringSession, needsPhoneVerification, confirmationActor]);
 
   const handleChoose = useCallback(async (selection: SubscriptionPlanSelection, resumeFlow = false) => {
     if (previewView || paymentInFlightRef.current) return;

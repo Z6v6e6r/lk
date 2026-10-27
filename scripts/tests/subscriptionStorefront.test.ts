@@ -711,3 +711,205 @@ test('ordinary CTA refuses a product with an unresolved promo purchase', async (
   });
   assert.equal(adapter.calls.bought.length, 0);
 });
+
+/** Offline harness for the actual payment adapter and return effect; no fetch is permitted. */
+function confirmationFixture(options: { href?: string; entries?: unknown[] } = {}) {
+  const key = 'padlhub_tournament_subscription_pending_refs';
+  const stored = new Map<string, string>();
+  if (options.entries) stored.set(key, JSON.stringify(options.entries));
+  const calls = { confirm: [] as string[], purchase: [] as Record<string, unknown>[],
+    direct: [] as Record<string, unknown>[], waits: [] as number[], notices: [] as string[] };
+  let actor = 'fixture-actor-a';
+  let response: unknown = { data: { paymentRef: 'fixture-sale', status: 'PAID', paid: true, failed: false }, error: null };
+  let directResponse: unknown = { data: { paymentUrl: 'https://bank.example/direct' }, error: null };
+  let responder: (() => Promise<unknown>) | null = null;
+  let onWait: (() => void) | null = null;
+  const location = { href: options.href ?? 'https://padlhub.ru/sub_hab?authMode=viva&utm_source=fixture#plans',
+    get search() { return new URL(this.href).search; } };
+  const window = { location, history: { state: null, replaceState: (_state: unknown, _title: string, url: string) => {
+    location.href = new URL(url, location.href).toString();
+  } }, localStorage: { getItem: (k: string) => stored.get(k) ?? null,
+    setItem: (k: string, value: string) => { stored.set(k, value); }, removeItem: (k: string) => { stored.delete(k); } } };
+  const timer = (callback: () => void, ms: number) => {
+    calls.waits.push(ms); onWait?.(); queueMicrotask(callback); return calls.waits.length;
+  };
+  const stubs = { withSubscriptionPromoLock: async (_id: string, _phone: string, create: () => Promise<unknown>) => create(),
+    apiBuySubscroption: async (_id: string, _phone: string, opts: Record<string, unknown>) => { calls.direct.push(opts); return directResponse; },
+    apiCreateTournamentSubscriptionPurchase: async (params: Record<string, unknown>) => {
+      calls.purchase.push(params); return { data: { paymentRef: params.paymentRef, paymentUrl: 'https://bank.example/lk' }, error: null };
+    },
+    apiConfirmTournamentSubscriptionPurchase: async (ref: string) => {
+      calls.confirm.push(ref); return responder ? responder() : response;
+    },
+    apiFetchProfile: async () => ({ data: { phone: FIXTURE_PHONE }, error: null }),
+    apiGetSubscriptionProduct: async () => ({ data: friendshipTwoHoursProduct(), error: null }),
+    apiFetchTournamentSubscriptionStatus: async () => ({ data: [{ ...available, counterKey: 'friendship_two_hours', priceMinor: 1980000 }], error: null }),
+    appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
+    resolveTournamentSubscriptionDirectProductId: (plan: string) => ['ra', 'academy', 'energy5'].includes(plan) ? 'fixture-direct-product' : null,
+    parseFriendshipTwoHoursProduct, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR: 1980000,
+    ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PRODUCT_ID, TOPOCRATY_PLAN_ID, PATRIOTS_PRODUCT_ID, PATRIOTS_PLAN_ID };
+  const adapterContext = { exports: {}, __stubs: stubs, URL, URLSearchParams, window, document: { title: 'Fixture' },
+    setTimeout: timer, clearTimeout: () => {}, fetch: () => { throw new Error('Network prohibited'); } };
+  const source = stripImports(readFileSync(new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url), 'utf8'));
+  vm.runInNewContext(ts.transpileModule(`const { ${Object.keys(stubs).join(', ')} } = __stubs;\n${source}`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, adapterContext);
+  const adapter = adapterContext.exports as typeof import('../../src/components/subscription-storefront/payment');
+  const page = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
+  const effect = page.slice(page.indexOf('  useEffect(() => {', page.indexOf('/** A direct bank return')), page.indexOf('\n  const handleChoose'));
+  let cleanup: (() => void) | undefined;
+  const hook = { exports: {} as { mount(): void }, ...adapter, window, URL, URLSearchParams,
+    confirmationTaskRef: { current: null }, confirmationActiveRef: { current: false },
+    isAuthenticated: true, isLoading: false, isRestoringSession: false, needsPhoneVerification: false,
+    confirmationActor: actor, __readRenderActor: () => actor, readAuthToken: () => actor, previewView: undefined, cabinetUrl: 'https://cabinet.example/lk', CABINET_URL: '',
+    setNotice: (notice: string) => { calls.notices.push(notice); }, setTimeout: timer, clearTimeout: () => {},
+    useEffect: (setup: () => (() => void) | undefined) => { cleanup = setup(); } };
+  vm.runInNewContext(ts.transpileModule(`export function mount() { const confirmationActor = __readRenderActor(); ${effect} }`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, hook);
+  return { adapter, hook, window, calls, stored, key,
+    mount: () => { hook.exports.mount(); return cleanup; },
+    setActor: (next: string) => { actor = next; hook.confirmationActor = next; },
+    setResponse: (next: unknown) => { response = next; }, setDirectResponse: (next: unknown) => { directResponse = next; },
+    setResponder: (next: () => Promise<unknown>) => { responder = next; },
+    onWait: (next: () => void) => { onWait = next; } };
+}
+const saleFixture = (paymentRef = 'fixture-sale', extra: Record<string, unknown> = {}) => ({
+  paymentRef, counterKey: 'friendship' as const, planId: 'monthly' as const, campaignKey: null,
+  createdAt: new Date().toISOString(), ...extra,
+});
+const flushConfirmation = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+test('direct Viva return never invents an LK-sale ref and remains unknown without confirm', async () => {
+  const f = confirmationFixture({ href: 'https://padlhub.ru/sub_hab?summerPaymentRef=stale&autoPurchase=1&authMode=viva&utm_source=fixture#plans', entries: [saleFixture('stale')] });
+  const created = await f.adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: FIXTURE_PHONE });
+  assert.equal(created.status, 'redirect');
+  if (created.status !== 'redirect') throw new Error('Expected redirect');
+  assert.equal(created.paymentRef, null);
+  assert.equal(f.calls.direct.length, 1); assert.equal(f.calls.purchase.length, 0);
+  const opts = f.calls.direct[0]; assert.equal(opts.retries, 0);
+  const returned = new URL(String(opts.successUrl));
+  assert.equal(returned.searchParams.has('summerPaymentRef'), false);
+  assert.equal(returned.searchParams.get('subscriptionDirectReturn'), '1');
+  assert.equal(returned.searchParams.get('autoPurchase'), '0');
+  assert.equal(returned.searchParams.get('authMode'), 'viva'); assert.equal(returned.hash, '#plans');
+  assert.equal(opts.failUrl, opts.successUrl);
+  f.window.location.href = returned.toString() + '&unused';
+  // A forged/stale LK ref alongside the direct marker must still not enter LK confirm.
+  returned.searchParams.set('summerPaymentRef', 'stale'); f.window.location.href = returned.toString();
+  const before = f.stored.get(f.key); f.mount(); await flushConfirmation();
+  assert.equal(f.calls.confirm.length, 0); assert.equal(f.calls.waits.length, 0);
+  assert.equal(f.calls.notices.length, 1); assert.doesNotMatch(f.calls.notices[0], /подтверждена|обрабатывается банком/);
+  assert.equal(f.stored.get(f.key), before);
+  assert.equal(new URL(f.window.location.href).searchParams.has('summerPaymentRef'), false);
+  assert.equal(new URL(f.window.location.href).searchParams.has('subscriptionDirectReturn'), false);
+});
+
+test('LK purchase keeps its own ref/storage contract and removes a stale direct marker', async () => {
+  const f = confirmationFixture({ href: 'https://padlhub.ru/sub_hab?subscriptionDirectReturn=1&authMode=viva' });
+  const created = await f.adapter.createStorefrontSubscriptionPayment({ planId: 'friendship', billingOptionId: 'annual', phone: FIXTURE_PHONE });
+  assert.equal(created.status, 'redirect'); assert.equal(f.calls.direct.length, 0); assert.equal(f.calls.purchase.length, 1);
+  if (created.status !== 'redirect') throw new Error('Expected redirect');
+  const url = new URL(String(f.calls.purchase[0].successUrl));
+  assert.equal(url.searchParams.get('summerPaymentRef'), created.paymentRef);
+  assert.equal(url.searchParams.has('subscriptionDirectReturn'), false);
+  assert.equal(f.adapter.readPendingPaymentEntries()[0].paymentRef, created.paymentRef);
+});
+
+test('URL-only, stale, invalid or duplicated references do not issue a confirmation', async () => {
+  for (const [search, entries] of [
+    ['?summerPaymentRef=foreign', [saleFixture()]], ['?summerPaymentRef=fixture-sale', []],
+    ['?summerPaymentRef=fixture-sale', [saleFixture('fixture-sale', { createdAt: 'invalid' })]],
+    ['?summerPaymentRef=fixture-sale', [saleFixture('fixture-sale', { createdAt: '2000-01-01T00:00:00Z' })]],
+    ['?summerPaymentRef=fixture-sale&summerPaymentRef=foreign', [saleFixture()]],
+  ] as const) {
+    const f = confirmationFixture({ href: `https://padlhub.ru/sub_hab${search}`, entries: [...entries] });
+    f.mount(); await flushConfirmation();
+    assert.equal(f.calls.confirm.length, 0); assert.equal(f.calls.waits.length, 0);
+    assert.equal(f.calls.notices.length, 1); assert.match(f.calls.notices[0], /перед повторной оплатой/);
+    assert.equal(new URL(f.window.location.href).searchParams.has('summerPaymentRef'), false);
+  }
+});
+
+test('404/401/transport/malformed/foreign or contradictory results stop after one call', async () => {
+  const cases = [{ error: { status: 404 }, data: null }, { error: { status: 401 }, data: null },
+    { error: { status: 503 }, data: null }, { data: null }, { data: {} },
+    { data: { paymentRef: 'foreign', status: 'PAID', paid: true } },
+    { data: { paymentRef: 'fixture-sale', status: 'PAID', paid: true, failed: true } },
+    { data: { paymentRef: 'fixture-sale', status: 'FAILED', failed: true } },
+    { data: { paymentRef: 'fixture-sale', status: 'PROVIDER_UNKNOWN', paid: false } }];
+  for (const response of cases) {
+    const f = confirmationFixture({ entries: [saleFixture()] }); f.setResponse(response);
+    const before = f.stored.get(f.key);
+    const result = await f.adapter.runStorefrontPaymentConfirmation(f.adapter.readPendingPaymentEntries()[0], () => false);
+    assert.equal(result?.status, 'unknown'); assert.equal(f.calls.confirm.length, 1);
+    assert.equal(f.calls.waits.length, 0); assert.equal(f.stored.get(f.key), before);
+    assert.doesNotMatch(result!.message, /не прошла|Можно попробовать снова|обрабатывается банком/);
+  }
+  const f = confirmationFixture({ entries: [saleFixture()] }); f.setResponder(async () => { throw new Error('ambiguous network failure'); });
+  assert.equal((await f.adapter.runStorefrontPaymentConfirmation(f.adapter.readPendingPaymentEntries()[0], () => false))?.status, 'unknown');
+  assert.equal(f.calls.confirm.length, 1); assert.equal(f.calls.waits.length, 0);
+});
+
+test('only explicit server pending polls three times with two4s waits; same-ref PAID can finish', async () => {
+  const f = confirmationFixture({ entries: [saleFixture()] });
+  f.setResponse({ data: { paymentRef: 'fixture-sale', status: 'PAYMENT_PENDING', paid: false, failed: false }, error: null });
+  const result = await f.adapter.runStorefrontPaymentConfirmation(f.adapter.readPendingPaymentEntries()[0], () => false);
+  assert.equal(result?.status, 'pending'); assert.equal(f.calls.confirm.length, 3);
+  assert.deepEqual(f.calls.waits, [4000, 4000]); assert.equal(f.adapter.readPendingPaymentEntries().length, 1);
+  assert.doesNotMatch(result!.message, /обрабатывается банком|обновится автоматически/);
+  const paid = confirmationFixture({ entries: [saleFixture()] }); let i = 0;
+  paid.setResponder(async () => ({ data: { paymentRef: 'fixture-sale', status: ++i < 3 ? 'UNPAID' : 'PAID', paid: i === 3, failed: false }, error: null }));
+  assert.equal((await paid.adapter.runStorefrontPaymentConfirmation(paid.adapter.readPendingPaymentEntries()[0], () => false))?.status, 'paid');
+  assert.equal(paid.calls.confirm.length, 3); assert.equal(paid.stored.has(paid.key), false);
+});
+
+test('cancellation stops before confirm and before any subsequent poll', async () => {
+  const f = confirmationFixture({ entries: [saleFixture()] });
+  assert.equal(await f.adapter.runStorefrontPaymentConfirmation(f.adapter.readPendingPaymentEntries()[0], () => true), null);
+  assert.equal(f.calls.confirm.length, 0);
+  let cancelled = false; f.onWait(() => { cancelled = true; });
+  f.setResponse({ data: { paymentRef: 'fixture-sale', status: 'PAYMENT_PENDING', paid: false }, error: null });
+  assert.equal(await f.adapter.runStorefrontPaymentConfirmation(f.adapter.readPendingPaymentEntries()[0], () => cancelled), null);
+  assert.equal(f.calls.confirm.length, 1);
+});
+
+test('shared storage retains legacy plans, unrelated records and extension fields', () => {
+  const legacy = saleFixture('fixture-legacy', { planId: 'sport', counterKey: 'sirius_friendship', extension: { version: 'fixture' } });
+  const entries = [legacy, ...Array.from({ length: 14 }, (_, i) => ({ paymentRef: `other-${i}`, untouched: true }))];
+  const f = confirmationFixture({ entries });
+  f.adapter.upsertPendingPaymentEntry(saleFixture());
+  f.adapter.removePendingPaymentEntry('fixture-sale');
+  assert.deepEqual(JSON.parse(f.stored.get(f.key)!), entries);
+  assert.equal(f.adapter.readPendingPaymentEntries()[0].planId, 'sport');
+});
+
+test('auth restore delays confirm; StrictMode effect replay reuses one task', async () => {
+  const f = confirmationFixture({ href: 'https://padlhub.ru/sub_hab?summerPaymentRef=fixture-sale', entries: [saleFixture()] });
+  f.hook.isRestoringSession = true; f.hook.isAuthenticated = false; f.mount();
+  assert.equal(f.calls.confirm.length, 0); assert.equal(f.hook.confirmationTaskRef.current, null);
+  f.hook.isRestoringSession = false; f.hook.isAuthenticated = true;
+  const cleanup = f.mount(); cleanup?.(); f.mount(); await flushConfirmation();
+  assert.equal(f.calls.confirm.length, 1); assert.equal(f.calls.notices.length, 1);
+  assert.equal(f.window.location.href, 'https://cabinet.example/lk');
+});
+
+test('effect does not accept or redirect an in-flight result after actor change', async () => {
+  const f = confirmationFixture({ href: 'https://padlhub.ru/sub_hab?summerPaymentRef=fixture-sale', entries: [saleFixture()] });
+  let finish!: (result: unknown) => void;
+  f.setResponder(() => new Promise(resolve => { finish = resolve; }));
+  const cleanup = f.mount(); cleanup?.(); f.setActor('fixture-actor-b'); f.mount();
+  finish({ data: { paymentRef: 'fixture-sale', status: 'PAID', paid: true }, error: null });
+  await flushConfirmation();
+  assert.equal(f.calls.confirm.length, 1); assert.equal(f.calls.notices.length, 0);
+  assert.equal(f.adapter.readPendingPaymentEntries().length, 1);
+  assert.notEqual(f.window.location.href, 'https://cabinet.example/lk');
+});
+
+test('missing/null/negative direct payment amount cannot claim a settled payment', async () => {
+  for (const data of [{}, { toPay: null }, { toPay: -1 }]) {
+    const f = confirmationFixture(); f.setDirectResponse({ data, error: null });
+    await assert.rejects(f.adapter.createStorefrontSubscriptionPayment({ planId: 'ra', billingOptionId: 'monthly', phone: FIXTURE_PHONE }));
+    assert.equal(f.calls.direct.length, 1); assert.equal(f.calls.confirm.length, 0);
+  }
+});
