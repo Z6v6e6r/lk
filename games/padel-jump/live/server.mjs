@@ -53,7 +53,17 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
       if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, lives: LIVE_LIVES, resultStoragePolicy: RESULT_STORAGE_POLICY, communityConfigured: !!communityId, persistence: !!directory });
       if (path === '/jump-live-api/me' && req.method === 'GET') return response(res, 200, await authenticate(req));
       if (path === '/jump-live-api/entry' && req.method === 'GET') return response(res, 200, await enrollment.status(req));
-      if (path === '/jump-live-api/board' && req.method === 'GET') return response(res, 200, registry.board());
+      if (path === '/jump-live-api/board' && req.method === 'GET') {
+        if (url.searchParams.get('spectator') !== '1') return response(res, 200, registry.board());
+        if (url.search.length > 4096) fail(422, 'SPECTATOR_QUERY_INVALID');
+        let scenes, acks;
+        try { scenes = JSON.parse(url.searchParams.get('scenes') ?? '{}'); acks = JSON.parse(url.searchParams.get('acks') ?? '{}'); }
+        catch { fail(422, 'SPECTATOR_QUERY_INVALID'); }
+        if (res.writableLength > 65536) { res.destroy(); return; }
+        return response(res, 200, registry.spectator({ runs: url.searchParams.get('runs')?.split(',').filter(Boolean) ?? [],
+          profile: url.searchParams.get('profile') ?? 'constrained', catalog: url.searchParams.get('catalog') ?? undefined,
+          scenes, acks, fresh: url.searchParams.get('fresh') === '1' }));
+      }
       if (path === '/jump-live-api/stream' && req.method === 'GET') {
         if (req.headers.origin && req.headers.origin !== origin) fail(403, 'ORIGIN_DENIED');
         if (viewers.size >= 24) fail(429, 'VIEWER_LIMIT');
@@ -85,6 +95,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
   server.maxConnections = 80;
   server.requestTimeout = 5000; server.headersTimeout = 5000; server.keepAliveTimeout = 5000;
   const interval = setInterval(() => {
+    if (!viewers.size) return;
     let data; try { data = 'data: ' + JSON.stringify(registry.board()) + '\n\n'; } catch { for (const res of viewers) res.destroy(); viewers.clear(); return; }
     for (const res of viewers) { if (res.writableLength > 262144) { res.destroy(); viewers.delete(res); } else res.write(data); }
   }, 500); interval.unref();
