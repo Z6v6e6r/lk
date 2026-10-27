@@ -10,7 +10,7 @@ const shouldAnalyze = process.env.ANALYZE === '1' || process.env.ANALYZE === 'tr
 
 export default defineConfig(({ command, mode }) => {
   // Independent immutable game release; do not change on unrelated cabinet builds.
-  const gameSource = '109e43d49f35e7e705d9117fee308bf49c722572'
+  const gameSource = '987addaa41aac8c2fd68d43a50a38a97f9f719e8'
   if (!/^[a-f0-9]{40}$/.test(gameSource)) throw new Error('Invalid game source identity')
   const isDevBundle = mode === 'dev'
   const managedSubscriptionsDevEnabled =
