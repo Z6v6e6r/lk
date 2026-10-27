@@ -6,7 +6,7 @@ import { LIVE_ENGINE_VERSION, LIVE_RULE } from '../live-contract.ts';
 /** Compact server state -> delayed read-only scene. No physics, input or result writes. */
 export function createSpectatorPlayback({ profile = 'constrained', onResync = () => {} } = {}) {
   const runs = new Map();
-  let offset = null;
+  let offset = null, epoch = null;
   const sourceTimeAt = now => now + (offset ?? 0);
   function ensure(runId) {
     if (!runs.has(runId)) runs.set(runId, {
@@ -24,6 +24,7 @@ export function createSpectatorPlayback({ profile = 'constrained', onResync = ()
     if (!game?.campaign || !Number.isFinite(game.camera) || !Number.isFinite(game.ball?.x) || !Number.isFinite(game.ball?.y)) throw new Error('SPECTATOR_SCENE_INVALID');
     const accepted = run.timeline.push(snapshot, receivedAt);
     if (accepted.accepted) {
+      if (snapshot.status === 'finished') run.terminalAt = receivedAt;
       run.samples.set(snapshot.seq, { snapshot, game });
       while (run.samples.size > 64) run.samples.delete(run.samples.keys().next().value);
       const advice = run.policy.observe(snapshot, receivedAt);
@@ -36,8 +37,11 @@ export function createSpectatorPlayback({ profile = 'constrained', onResync = ()
     sourceTimeAt,
     ingest(packet, { sentAt, receivedAt, reanchor = false } = {}) {
       if (packet.engine !== LIVE_ENGINE_VERSION || packet.rule !== LIVE_RULE) throw new Error('SPECTATOR_VERSION_INVALID');
+      if (typeof packet.epoch !== 'string' || !packet.epoch || packet.epoch.length > 64) throw new Error('SPECTATOR_EPOCH_INVALID');
       if (packet.schema !== 'jump-spectator-v1' || !Number.isFinite(packet.sourceNow) || !Number.isFinite(sentAt) || !Number.isFinite(receivedAt) || receivedAt < sentAt
         || !Array.isArray(packet.poses) || packet.poses.length > 4 || !Array.isArray(packet.events) || packet.events.length > 512) throw new Error('SPECTATOR_PACKET_INVALID');
+      if (epoch !== null && epoch !== packet.epoch) reanchor = true;
+      epoch = packet.epoch;
       if (offset === null || reanchor) {
         // Explicit HTTP handshake: midpoint estimate on a monotonic server clock.
         // It assumes symmetric transit, not a measurement of one-way latency.
@@ -99,6 +103,15 @@ export function createSpectatorPlayback({ profile = 'constrained', onResync = ()
       return result;
     },
     requireFresh(ids) { for (const id of ids) { const run = runs.get(id); if (run) run.waiting = true; } },
+    withFinished(current, previous, now) {
+      const ids = new Set(current.map(player => player.runId));
+      const retained = previous.filter(player => {
+        const at = runs.get(player.runId)?.terminalAt;
+        return !ids.has(player.runId) && Number.isFinite(at) && now - at < 10000;
+      }).slice(-4);
+      return [...current, ...retained].map(player => ({ ...player,
+        finished: player.state === 'finished' || Number.isFinite(runs.get(player.runId)?.terminalAt) }));
+    },
     forgetExcept(ids) { for (const id of runs.keys()) if (!ids.includes(id)) runs.delete(id); },
     requestState(ids) {
       return { scenes: Object.fromEntries(ids.flatMap(id => { const run = runs.get(id); return run?.scenes.size ? [[id, [...run.scenes.keys()].at(-1)]] : []; })),
@@ -110,8 +123,9 @@ export function createSpectatorPlayback({ profile = 'constrained', onResync = ()
 function interpolateScene(left, right, alpha) {
   const lerp = (a, b) => a + (b - a) * alpha;
   const game = { ...left, camera: lerp(left.camera, right.camera), time: lerp(left.time, right.time) };
-  game.platforms = left.platforms.map((p, index) => {
-    const next = right.platforms[index];
+  const rightPlatforms = new Map(right.platforms.map(platform => [platform.id, platform]));
+  game.platforms = left.platforms.map(p => {
+    const next = rightPlatforms.get(p.id);
     return next?.id === p.id ? { ...p, x: lerp(p.x, next.x) } : p;
   });
   const campaign = { ...left.campaign };

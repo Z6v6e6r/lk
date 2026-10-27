@@ -95,6 +95,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
   server.maxConnections = 80;
   server.requestTimeout = 5000; server.headersTimeout = 5000; server.keepAliveTimeout = 5000;
   const interval = setInterval(() => {
+    if (!viewers.size) return;
     let data; try { data = 'data: ' + JSON.stringify(registry.board()) + '\n\n'; } catch { for (const res of viewers) res.destroy(); viewers.clear(); return; }
     for (const res of viewers) { if (res.writableLength > 262144) { res.destroy(); viewers.delete(res); } else res.write(data); }
   }, 500); interval.unref();

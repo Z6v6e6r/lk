@@ -1,14 +1,31 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
 import { LatestPosePublisher, STREAM_PROFILES } from '../../../src/components/padel-jump/spectator/spectator-network.mjs';
 import { sceneDelta } from '../../../src/components/padel-jump/spectator/state.mjs';
 
 /** Read-only projection of accepted commands; never executes physics or persists results. */
 export function createSpectatorChannel({ now }) {
+  const epoch = randomUUID();
   const entries = new Map();
+  function prune() {
+    for (const [id, entry] of entries) if (entry.retiredAt !== undefined && now() - entry.retiredAt > 30000) entries.delete(id);
+    const retired = [...entries].filter(([, entry]) => entry.retiredAt !== undefined);
+    for (const [id] of retired.slice(0, Math.max(0, retired.length - 24))) entries.delete(id);
+  }
+  function remove(id) {
+    const entry = entries.get(id);
+    if (entry?.pose?.status === 'finished') entry.retiredAt ??= now();
+    else entries.delete(id);
+    prune();
+  }
   function capture(player, seq) {
+    prune();
     let entry = entries.get(player.id);
-    if (entry && seq <= entry.pose.seq) return;
+    if (entry?.fault) {
+      entry = { generation: entry.generation, eventSeq: entry.eventSeq, events: [], publishers: new Map(), cached: new Map() };
+      entries.set(player.id, entry);
+    }
+    if (entry?.pose && seq <= entry.pose.seq) return;
     const previous = entry?.player;
     const discontinuity = !previous || previous.failures !== player.failures || previous.state !== player.state
       || previous.game.campaign.station !== player.game.campaign.station || previous.game.campaign.section !== player.game.campaign.section;
@@ -51,15 +68,15 @@ export function createSpectatorChannel({ now }) {
       || new Set(runs).size !== runs.length || runs.some(id => typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id))
       || !scenes || typeof scenes !== 'object' || !acks || typeof acks !== 'object'
       || Object.values(acks).some(v => !Number.isSafeInteger(v) || v < 0)) throw Object.assign(new Error('SPECTATOR_QUERY_INVALID'), { code: 422 });
-    const active = new Set(board.players.map(p => p.id));
-    for (const id of entries.keys()) if (!active.has(id)) entries.delete(id);
-    const players = board.players.map(p => ({ runId: p.id, name: p.alias, slot: p.slot, initialLives: LIVE_LIVES }));
+    prune();
+    const players = board.players.map(p => ({ runId: p.id, name: p.alias, slot: p.slot, state: p.state, initialLives: LIVE_LIVES }));
     const nextCatalog = { players, results: board.results };
     const catalogVersion = createHash('sha256').update(JSON.stringify(nextCatalog)).digest('hex').slice(0, 16);
-    const reply = { schema: 'jump-spectator-v1', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sourceNow: now(),
+    const reply = { schema: 'jump-spectator-v1', epoch, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sourceNow: now(),
       catalogVersion, ...(catalogVersion !== catalog ? { catalog: nextCatalog } : {}), poses: [], scenes: {}, events: [], gaps: [], baselines: {} };
     for (const id of runs) {
       const entry = entries.get(id); if (!entry) continue;
+      if (entry.fault) { reply.gaps.push(id); continue; }
       if (entry.error) throw Object.assign(new Error('SPECTATOR_UNAVAILABLE'), { code: 503 });
       const publisher = entry.publishers.get(profile);
       publisher?.flush(now());
@@ -67,7 +84,7 @@ export function createSpectatorChannel({ now }) {
       reply.poses.push(pose);
       if (scenes[id] !== pose.segmentId) reply.scenes[id] = { segmentId: pose.segmentId, game: entry.scene };
       const ack = acks[id] ?? 0;
-      if (ack > entry.eventSeq || entry.events.length && ack < entry.events[0].eventSeq - 1) reply.gaps.push(id);
+      if (ack > entry.eventSeq || ack < entry.eventSeq && !entry.events.length || entry.events.length && ack < entry.events[0].eventSeq - 1) reply.gaps.push(id);
       // Explicit full-state reconciliation after background/reconnect. The client
       // acknowledges this exact baseline only after accepting the full snapshot.
       if (fresh) reply.baselines[id] = entry.eventSeq;
@@ -75,6 +92,10 @@ export function createSpectatorChannel({ now }) {
     }
     return reply;
   }
-  return { capture, read, remove: id => entries.delete(id),
-    stats: () => ({ runs: entries.size, events: [...entries.values()].reduce((n, entry) => n + entry.events.length, 0) }) };
+  return { capture, read, remove,
+    invalidate(id) {
+      const entry = entries.get(id);
+      entries.set(id, { fault: true, generation: entry?.generation ?? 0, eventSeq: (entry?.eventSeq ?? 0) + 1, events: [] });
+    },
+    stats: () => { prune(); return { runs: entries.size, events: [...entries.values()].reduce((n, entry) => n + entry.events.length, 0) }; } };
 }

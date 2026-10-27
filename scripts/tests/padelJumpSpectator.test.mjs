@@ -87,3 +87,82 @@ test('expired runs release spectator journals even when nobody requests spectato
     assert.equal(registry.spectatorStats().runs, 0);
   }
 });
+
+test('retired confirmed finals remain recoverable without consuming another viewer cursor', () => {
+  const { ticket } = fixture(); let now = 0;
+  const channel = createSpectatorChannel({ now: () => now });
+  channel.capture(ticket.player, 0);
+  const finished = { ...ticket.player, state: 'finished', elapsedMs: 61234, stars: 7 };
+  now = 500; channel.capture(finished, 1); channel.remove(ticket.id);
+  const board = { players: [], results: [] };
+  const first = channel.read({ runs: [ticket.id] }, board);
+  assert.equal(first.poses.length, 1, 'removing a run cannot erase its undelivered durable final');
+  assert.equal(first.poses[0].status, 'finished');
+  assert.equal(first.poses[0].elapsedMs, 61234);
+  assert.equal(first.events.length, 1);
+  assert.equal(channel.read({ runs: [ticket.id], acks: { [ticket.id]: 1 } }, board).events.length, 0);
+  assert.equal(channel.read({ runs: [ticket.id] }, board).events.length, 1);
+  now = 30501;
+  assert.equal(channel.read({ runs: [ticket.id] }, board).poses.length, 0);
+  assert.equal(channel.stats().runs, 0);
+});
+
+test('legacy SSE serializes no board without viewers and resumes its existing cadence for a reader', async () => {
+  let reads = 0;
+  const server = createLiveServer({ registry: { board: () => ({ testRead: ++reads }) } });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const controller = new AbortController();
+  try {
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(reads, 0, 'the new polling wall must not pay for unused legacy SSE serialization');
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/jump-live-api/stream`, { signal: controller.signal });
+    const reader = response.body.getReader();
+    assert.ok(new TextDecoder().decode((await reader.read()).value).includes('testRead'));
+    await reader.read(); assert.ok(reads >= 2);
+  } finally { controller.abort(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('removed platforms use absolute presence overlays without repeating immutable geometry', () => {
+  const { ticket } = fixture(); let now = 0;
+  const channel = createSpectatorChannel({ now: () => now });
+  channel.capture(ticket.player, 0);
+  const initial = channel.read({ runs: [ticket.id] }, { players: [ticket.player], results: [] });
+  const player = structuredClone(ticket.player); player.game.platforms.splice(1, 1);
+  now = 500; channel.capture(player, 1);
+  const next = channel.read({ runs: [ticket.id], scenes: { [ticket.id]: initial.poses[0].segmentId }, fresh: true }, { players: [player], results: [] });
+  assert.deepEqual(applySceneDelta(initial.scenes[ticket.id].game, next.poses[0].changes), player.game);
+  assert.ok(!JSON.stringify(next.poses).includes('"kind"'), 'a removed racket must not resend the remaining full map every pose');
+  assert.deepEqual(next.scenes, {});
+});
+
+test('a projection-only clone failure cannot corrupt a committed command ACK or its identical retry', () => {
+  const { registry, ticket, actor } = fixture();
+  const original = globalThis.structuredClone; let calls = 0, ack;
+  globalThis.structuredClone = (...args) => {
+    if (++calls === 3) throw new Error('INJECTED_SPECTATOR_FAILURE');
+    return original(...args);
+  };
+  const body = { seq: 1, command: 'pause' };
+  try { assert.doesNotThrow(() => { ack = registry.command(ticket.id, ticket.token, body, actor); }); }
+  finally { globalThis.structuredClone = original; }
+  assert.equal(ack.seq, 1); assert.equal(ack.player.state, 'paused');
+  assert.deepEqual(registry.command(ticket.id, ticket.token, body, actor), ack);
+  const failed = registry.spectator({ runs: [ticket.id] });
+  assert.deepEqual(failed.poses, []); assert.ok(failed.gaps.includes(ticket.id));
+  registry.command(ticket.id, ticket.token, { seq: 2, command: 'resume' }, actor);
+  const recovered = registry.spectator({ runs: [ticket.id], fresh: true });
+  assert.equal(recovered.poses[0].phase, 'playing');
+  assert.ok(recovered.baselines[ticket.id] > 0);
+});
+
+test('a failed optional join projection cannot lose the newly allocated capability', () => {
+  const original = globalThis.structuredClone; let calls = 0, state;
+  globalThis.structuredClone = (...args) => {
+    if (++calls === 2) throw new Error('INJECTED_JOIN_PROJECTION_FAILURE');
+    return original(...args);
+  };
+  try { assert.doesNotThrow(() => { state = fixture(); }); }
+  finally { globalThis.structuredClone = original; }
+  assert.equal(typeof state.ticket.token, 'string');
+  assert.equal(state.registry.command(state.ticket.id, state.ticket.token, { seq: 1, command: 'pause' }, state.actor).player.state, 'paused');
+});

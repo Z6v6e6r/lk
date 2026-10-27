@@ -50,7 +50,8 @@ GET /jump-live-api/board?spectator=1&profile=constrained&runs=<up-to-four-public
 `fresh` is sent for an explicit initial/full-state handshake, selection, resume or
 recovery, not on every normal packet. Response schema is `jump-spectator-v1`:
 
-- `engine`, `rule`, `sourceNow`: the existing compatibility identity and current
+- `engine`, `rule`, `epoch`, `sourceNow`: the existing compatibility identity, a
+  process-clock epoch and current
   **server monotonic** clock, not epoch `board.now` or a client timestamp;
 - `catalogVersion` and optional `catalog`: public names/slots/initial lives and the
   existing server-ordered results, omitted when unchanged;
@@ -74,6 +75,21 @@ renderer. The journal holds at most 128 transitions per retained run. Registry
 expiry/self-replacement releases its spectator data even with no spectator traffic.
 This is a bounded in-memory presentation journal, not a durable result/event archive.
 After service restart, unfinished runs retain the existing non-resumable limitation.
+Confirmed finals survive registry removal/self-rejoin for 30 seconds in at most 24
+spectator tombstones. A self-rejoin that durably recovers a pending result also emits
+its final presentation before retiring the old run. The wall retains up to four
+received final cards for at most ten seconds, so catalog replacement cannot remove
+the result before delayed presentation. Duplicate snapshots never extend that hold.
+Array overlays include absolute immutable-scene indices plus changed values, so
+removed platforms do not force retransmission of every remaining platform's geometry.
+They never depend on receipt of the preceding disposable pose.
+
+The player's ACK/ticket is constructed and cached before optional spectator capture.
+Projection clone/serialization failures cannot lose a join capability or corrupt an
+identical command retry. A failed projection is exposed as an explicit gap, then the
+next accepted command starts a new scene generation and requires full rebaseline.
+The legacy SSE timer avoids building a board when it has no viewers; an attached
+legacy viewer retains its original initial snapshot and 500ms cadence.
 
 `LatestPosePublisher` coalesces **only** intermediate states into one pending slot
 per source/profile and a single cached payload. It does not queue HTTP writes.
@@ -99,6 +115,8 @@ one-way latency. The same `sourceTimeAt` function feeds timeline and adaptive po
 Normal arrivals never reanchor clocks. Explicit recovery reanchors both and starts
 only a new policy measurement epoch, preserving the same timeline sequence and final
 lock. `skipToLatest()` snaps to a verified fresh snapshot without resetting a run.
+A changed server clock epoch is anchored before ingesting new attempts, preventing
+the previous service uptime from permanently putting new playback in the future.
 
 Adaptive delay includes source cadence, positive arrival jitter and state age. Delay
 is changed through `setDelayMs` with monotonic presentation; the default cap is

@@ -153,8 +153,9 @@ export function mountSpectatorView(root, {
     q('.ph-live-area').hidden = !order.length || view !== 'games';
     q('.ph-empty-state').hidden = order.length > 0 && view === 'games';
     q('.ph-content').dataset.layout = view === 'rating' ? 'rating' : order.length ? 'games' : 'empty';
-    q('h1').textContent = view === 'rating' ? 'Рейтинг сообщества' : order.length ? 'Сейчас играют' : 'Пока никто не играет';
-    q('.ph-player-count').textContent = String(order.length); q('.ph-player-count').hidden = !order.length || view === 'rating';
+    const activeCount = order.filter(id => !cards.get(id).player.finished).length;
+    q('h1').textContent = view === 'rating' ? 'Рейтинг сообщества' : activeCount ? 'Сейчас играют' : order.length ? 'Завершённые прохождения' : 'Пока никто не играет';
+    q('.ph-player-count').textContent = String(activeCount); q('.ph-player-count').hidden = !activeCount || view === 'rating';
     q('.ph-standings-title').hidden = view === 'rating';
     for (const id of visible) {
       const c = cards.get(id); ensureRenderer(c);

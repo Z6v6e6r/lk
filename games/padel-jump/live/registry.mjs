@@ -61,6 +61,17 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
   const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, stars: row.stars, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
   const player = (run, full = false) => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.failures >= LIVE_LIVES ? 'eliminated' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
     elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, livesRemaining: Math.max(0, LIVE_LIVES - run.failures), stars: run.claimed.size, completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
+  function captureSpectator(run, seq = run.seq, recoveredFinal = false) {
+    try {
+      const snapshot = player(run, true);
+      if (recoveredFinal) { snapshot.state = 'finished'; snapshot.elapsedMs = run.finishRow.elapsedMs; }
+      spectator.capture(snapshot, seq);
+    } catch {
+      // Optional presentation must never corrupt a committed player's ACK or
+      // lose its join capability. Expose an explicit gap until full rebaseline.
+      spectator.invalidate(run.id);
+    }
+  }
   function persist(row) {
     if (!directory) return;
     const path = join(directory, row.id + '.json'), temporary = join(directory, '.pending-' + randomUUID());
@@ -121,7 +132,10 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       const alias = aliasOf(actor.name);
       // Recover this verified actor's terminal score before replacing its capability.
       for (const [id, run] of runs) if (run.actorId === actor.id && run.communityId === actor.communityId && (run.failures >= LIVE_LIVES || run.completed === 33)) {
-        if (!run.finished) publishResult(run);
+        if (!run.finished) {
+          publishResult(run);
+          captureSpectator(run, run.seq + 1, true);
+        }
         runs.delete(id); spectator.remove(id);
       }
       if (runs.size >= LIVE_LIMIT) fail(429, 'EVENT_FULL');
@@ -130,8 +144,9 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       let slot = 0; while (used.has(slot)) slot++;
       const game = createCampaignGame(0, 0); game.mode = 'running';
       const run = { id, alias, actorId: actor.id, communityId: actor.communityId, slot, token: createHash('sha256').update(token).digest(), game, claimed: new Set(), seq: 0, ack: null, digest: '', ticks: 0, failures: 0, completed: 0, activeMs: 0, segment: now(), seen: now(), paused: false, finished: false };
-      runs.set(id, run); spectator.capture(player(run, true), 0);
-      return { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, player: player(run, true) };
+      runs.set(id, run);
+      const ticket = { id, token, seq: 0, engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, player: player(run, true) };
+      captureSpectator(run, 0); return ticket;
     },
     command(id, token, body, actor) {
       sweep(); const run = runs.get(id);
@@ -181,8 +196,8 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
       if (command === 'resume') { run.paused = false; run.segment = now(); }
       run.seen = now(); run.seq = body.seq; run.digest = digest;
-      spectator.capture(player(run, true), run.seq);
-      const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(run.finishRow) } : {}) }; run.ack = ack; return ack;
+      const ack = { seq: run.seq, sync: LIVE_SYNC, player: player(run, true), ...(command === 'finish' ? { result: publicResult(run.finishRow) } : {}) }; run.ack = ack;
+      captureSpectator(run); return ack;
     },
     board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
       results: bestResults().slice(0, 100).map(publicResult) }; },

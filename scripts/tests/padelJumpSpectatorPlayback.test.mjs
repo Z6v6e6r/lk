@@ -7,7 +7,7 @@ const module = await import('../../src/components/padel-jump/spectator/playback.
 const runId = '00000000-0000-4000-8000-000000000001';
 function packet(seq, t, x, score = 0, status = 'running') {
   const game = createCampaignGame(); game.mode = 'running'; game.ball.x = x; game.camera = x;
-  return { schema: 'jump-spectator-v1', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sourceNow: t, catalogVersion: 'test',
+  return { schema: 'jump-spectator-v1', epoch: 'test-process-epoch', engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sourceNow: t, catalogVersion: 'test',
     scenes: { [runId]: { segmentId: runId + ':1', game } }, events: [], gaps: [],
     poses: [{ runId, seq, t, x, y: 64, score, lives: 5, elapsedMs: t, segmentId: runId + ':1', status, phase: status === 'finished' ? 'finished' : 'playing', station: 0, section: 0, changes: { ball: { x }, camera: x } }] };
 }
@@ -81,4 +81,39 @@ test('incompatible engine or ranking rule is rejected before creating a timeline
     assert.throws(() => playback.ingest({ ...packet(0, 0, 0), ...patch }, { sentAt: 0, receivedAt: 0 }), /SPECTATOR_VERSION_INVALID/);
     assert.equal(playback.runs.size, 0);
   }
+});
+
+test('a catalog replacement retains the confirmed final card for a bounded display interval', () => {
+  const playback = module.createSpectatorPlayback();
+  assert.equal(typeof playback.withFinished, 'function', 'catalog changes must not erase an undelivered final frame');
+  playback.ingest(packet(0, 0, 10), { sentAt: 0, receivedAt: 0, reanchor: true });
+  playback.ingest(packet(1, 500, 20, 7, 'finished'), { sentAt: 500, receivedAt: 500 });
+  const previous = [{ runId, name: 'Тест' }], current = [{ runId: 'new-run', name: 'Новая попытка' }];
+  assert.deepEqual(playback.withFinished(current, previous, 600).map(p => p.runId), ['new-run', runId]);
+  playback.ingest(packet(1, 500, 20, 7, 'finished'), { sentAt: 5000, receivedAt: 5000, reanchor: true });
+  assert.deepEqual(playback.withFinished(current, previous, 10501).map(p => p.runId), ['new-run'], 'duplicate full snapshots cannot extend final retention forever');
+});
+
+test('a service clock epoch change anchors new attempts before their first rendered sample', () => {
+  const playback = module.createSpectatorPlayback();
+  playback.ingest(packet(0, 900000, 10), { sentAt: 900000, receivedAt: 900000 });
+  const restarted = packet(0, 0, 200, 9); restarted.epoch = 'new-process-epoch';
+  restarted.poses[0].runId = '00000000-0000-4000-8000-000000000002';
+  restarted.scenes[restarted.poses[0].runId] = restarted.scenes[runId]; delete restarted.scenes[runId];
+  playback.ingest(restarted, { sentAt: 901000, receivedAt: 901000 });
+  assert.equal(playback.sourceTimeAt(901000), 0, 'server monotonic restart requires a new explicit epoch anchor');
+  assert.equal(playback.frame(restarted.poses[0].runId, 901000).confirmed, null);
+});
+
+test('moving platform identity remains aligned when another platform disappears between samples', () => {
+  const playback = module.createSpectatorPlayback(), left = packet(0, 0, 0);
+  const platforms = left.scenes[runId].game.platforms;
+  left.scenes[runId].game.platforms = [{ ...platforms[0], x: 0 }, { ...platforms[1], x: 10 }];
+  playback.ingest(left, { sentAt: 0, receivedAt: 0 });
+  const right = packet(1, 500, 100); right.scenes = {};
+  right.poses[0].changes.platforms = { $indices: [1], $changes: { 0: { x: 110 } } };
+  playback.ingest(right, { sentAt: 500, receivedAt: 500 });
+  const frame = playback.frame(runId, 1450);
+  assert.equal(frame.game.platforms.find(p => p.id === platforms[1].id).x, 60);
+  assert.equal(frame.confirmed.score, 0);
 });

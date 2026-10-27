@@ -61,6 +61,10 @@ test('fresh own race saves an unconfirmed partial result before retiring its cap
   assert.throws(() => h.registry.join(body(), { ...h.actor, id: 'fixture-thirteenth' }), /EVENT_FULL/);
   const fresh = h.registry.join(body(), h.actor);
   assert.equal(h.registry.board().results.length, 1); assert.equal(h.registry.board().results[0].id, h.ticket.id);
+  const recoveredFinal = h.registry.spectator({ runs: [h.ticket.id], fresh: true }).poses[0];
+  assert.ok(recoveredFinal, 'rejoining must not erase the preceding durable spectator result');
+  assert.equal(recoveredFinal.status, 'finished');
+  assert.equal(recoveredFinal.elapsedMs, h.registry.board().results[0].elapsedMs);
   assert.notEqual(fresh.id, h.ticket.id); assert.notEqual(fresh.token, h.ticket.token); assert.equal(fresh.player.slot, h.ticket.player.slot);
   assert.equal(fresh.player.failures, 0); assert.equal(fresh.player.livesRemaining, LIVE_LIVES); assert.equal(fresh.player.elapsedMs, 0); assert.equal(fresh.player.playMs, 0);
   assert.equal(fresh.player.game.campaign!.station, 0); assert.equal(fresh.player.game.campaign!.section, 0);

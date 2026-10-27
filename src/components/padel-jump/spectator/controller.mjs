@@ -6,6 +6,7 @@ import { STREAM_PROFILES } from './spectator-network.mjs';
 export function mountLiveSpectator(root, { logoUrl, createRenderer, onJoin, profile = 'constrained', api = '/jump-live-api/', onError = () => {} }) {
   let alive = true, busy = false, timer = null, controller = null, visible = [], catalog = '', playersKey = '', resultsKey = '';
   let needsFresh = true, reanchor = true, requestGeneration = 0, lastResync = -Infinity, failures = 0;
+  let catalogPlayers = [], shownPlayers = [];
   const clock = () => performance.now();
   const playback = createSpectatorPlayback({ profile, onResync: () => {
     if (clock() - lastResync < 5000) return;
@@ -43,17 +44,20 @@ export function mountLiveSpectator(root, { logoUrl, createRenderer, onJoin, prof
       if (!alive || generation !== requestGeneration || root.ownerDocument.hidden) return;
       playback.ingest(packet, { sentAt, receivedAt: clock(), reanchor: anchor });
       if (packet.catalog) {
-        const nextPlayers = JSON.stringify(packet.catalog.players), nextResults = JSON.stringify(packet.catalog.results);
-        if (nextPlayers !== playersKey) {
-          const players = packet.catalog.players;
-          if (!Array.isArray(players) || players.length > 12 || players.some(p => typeof p.name !== 'string' || p.name.length > 48)) throw new Error('SPECTATOR_CATALOG_INVALID');
-          view.updatePlayers(players.map(p => ({ ...p, stationLabel: '', getFrame: now => playback.frame(p.runId, now) })));
-          playback.forgetExcept(players.map(p => p.runId)); playersKey = nextPlayers;
-        }
+        const nextResults = JSON.stringify(packet.catalog.results);
+        const players = packet.catalog.players;
+        if (!Array.isArray(players) || players.length > 12 || players.some(p => typeof p.name !== 'string' || p.name.length > 48)) throw new Error('SPECTATOR_CATALOG_INVALID');
+        catalogPlayers = players;
         if (nextResults !== resultsKey) {
           view.setLeaderboard(packet.catalog.results.map(r => ({ id: r.id, name: r.alias, score: r.stars, elapsedMs: r.elapsedMs })));
           resultsKey = nextResults;
         }
+      }
+      const players = playback.withFinished(catalogPlayers, shownPlayers, clock());
+      const nextPlayers = JSON.stringify(players);
+      if (nextPlayers !== playersKey) {
+        view.updatePlayers(players.map(p => ({ ...p, stationLabel: '', getFrame: now => playback.frame(p.runId, now) })));
+        playback.forgetExcept(players.map(p => p.runId)); playersKey = nextPlayers; shownPlayers = players;
       }
       catalog = packet.catalogVersion;
       failures = 0; view.setConnection('connected');
