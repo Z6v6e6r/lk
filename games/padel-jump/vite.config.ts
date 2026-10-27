@@ -9,6 +9,15 @@ export default defineConfig({
   build: {
     outDir: 'dist/padel-jump',
     emptyOutDir: true,
-    rollupOptions: { input: ['padel-jump.html', 'padel-jump-race.html', 'padel-jump-live.html'] },
+    rollupOptions: {
+      input: {
+        practice: 'padel-jump.html',
+        race: 'padel-jump-race.html',
+        live: 'padel-jump-live.html',
+        cabinet: 'src/padel-jump-widget.tsx',
+      },
+      preserveEntrySignatures: 'strict',
+      output: { entryFileNames: chunk => chunk.name === 'cabinet' ? 'assets/cabinet.js' : 'assets/[name]-[hash].js' },
+    },
   },
 });

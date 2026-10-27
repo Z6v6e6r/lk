@@ -33,10 +33,12 @@ test('cabinet race reads its existing origin session and calls only fixed game A
   }
 });
 
-test('cabinet race route mounts the existing authenticated entry before ordinary app lifecycle', () => {
+test('cabinet race route loads the authenticated entry module before ordinary app lifecycle', () => {
   const source = readFileSync('src/MyApp.tsx', 'utf8');
   assert.match(source, /get\("padelJumpRace"\) === "1"/);
-  assert.ok(source.indexOf('return <RaceEntry') < source.lastIndexOf('return (\n    <AuthProvider'));
+  const route = source.indexOf('return <PadelJumpHost mode="race"');
+  assert.ok(route >= 0 && route < source.lastIndexOf('return (\n    <AuthProvider'));
+  assert.match(readFileSync('src/padel-jump-widget.tsx', 'utf8'), /mode === 'race' \? <RaceEntry/);
 });
 
 test('cabinet game actions do not navigate to absent standalone HTML on the cabinet host', () => {
