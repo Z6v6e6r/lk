@@ -55,8 +55,9 @@ test('actual result renders stars and precise time, self marker is server-owned 
   const other = row({ rank: 1, stars: 7, isCurrentUser: false }), own = row({ rank: 2 });
   const fixture = data({ total: 2, rows: [other, own], me: own });
   const html = renderToStaticMarkup(React.createElement(Results, { data: fixture, currentUserAvatar: '/fixture-own-avatar.png' }));
-  assert.match(html, /★ 6/); assert.match(html, /00:54\.1/);
-  assert.equal((html.match(/Моя позиция/g) || []).length, 1); assert.equal((html.match(/is-current/g) || []).length, 1);
+  assert.match(html, /aria-label="Звёзды: 6"/); assert.match(html, /00:54\.1/);
+  assert.equal((html.match(/>Вы<\/span>/g) || []).length, 1); assert.equal((html.match(/is-current/g) || []).length, 1);
+  assert.ok(!html.includes('♛')); assert.ok(!html.includes('Моя позиция'));
   assert.equal((html.match(/<img /g) || []).length, 1);
   assert.equal(format(60000), '01:00.0'); assert.equal(format(54194), '00:54.1');
   const missing = renderToStaticMarkup(React.createElement(Results, { data: fixture, search: 'нет такого' }));
@@ -73,9 +74,14 @@ test('ranking screen uses the requested title and rule without the redundant run
     profileKey: 'synthetic-profile', chatBadgeCount: 0,
     onOpenMenu() {}, onClose() {}, onSelectSectionNav() {}, onSelectBottomNav() {},
   }));
-  assert.match(html, /<h3>Рейтинг ПадлхАБ Jump<\/h3>/);
+  assert.match(html, /<h3>ПадлхАБ Jump<\/h3>/);
   assert.match(html, /aria-label="Рейтинг ПадлхАБ Jump"/);
-  assert.ok(html.includes('Чем больше звезд, тем выше место. Если звезд одинаково, то выше тот у кого ниже время.'));
+  assert.ok(html.includes('Больше звёзд — выше место.'));
+  assert.match(html, /<details[^>]*><summary>Как считается рейтинг<\/summary>/);
+  assert.ok(html.includes('Сначала сравниваем количество звёзд. При равенстве выше игрок с меньшим временем.'));
+  assert.ok(html.includes('Обновить рейтинг'));
+  assert.equal((html.match(/class="community-header"/g) || []).length, 1);
+  assert.equal((html.match(/role="tablist"/g) || []).length, 1);
   assert.ok(!html.includes('Лучший заезд каждого участника'));
   assert.ok(!html.includes('Больше звёзд — выше.'));
   const source = readFileSync('src/components/cabinet/community-feed/CommunityJumpRankingScreen.tsx', 'utf8');
@@ -94,7 +100,7 @@ test('permanent v2 accepts profiles beyond old capacity and nullable retention; 
   } });
   assert.equal(loaded.schema, 'jump-community-ranking-v2');
   const html = renderToStaticMarkup(React.createElement(Results, { data: loaded }));
-  assert.match(html, /Моя позиция/); assert.match(html, /Место 601/);
+  assert.match(html, />Вы<\/span>/); assert.match(html, /Место 601/);
   for (const change of [{ schema: 'jump-community-ranking-v1' }, { retentionHours: 48 }, { retentionHours: 0 }, { total: Number.MAX_SAFE_INTEGER + 1 }]) assert.throws(() => parse(JSON.stringify({ ...allTime, ...change }), communityId));
   assert.throws(() => parse(JSON.stringify(data({ retentionHours: null })), communityId));
   assert.equal(parse(JSON.stringify(data()), communityId).retentionHours, 48);
@@ -106,4 +112,17 @@ test('play link stays on the cabinet origin and contains no session material', (
   assert.equal(url.pathname, '/lk_new');
   assert.deepEqual([...url.searchParams], [['authMode', 'viva'], ['padelJumpRace', '1']]);
   assert.equal(url.hash, '');
+});
+
+test('search keeps server places, order and tenths; missing own identity never highlights another player', () => {
+  const first = row({ rank: 1, name: 'Игрок Один', isCurrentUser: false });
+  const second = row({ rank: 23, name: 'Игрок Два', isCurrentUser: false, elapsedMs: 827799 });
+  const middle = Array.from({ length: 21 }, (_, i) => row({ rank: i + 2, name: `Участник ${i + 2}`, isCurrentUser: false }));
+  const fixture = data({ total: 23, rows: [first, ...middle, second], me: null });
+  const html = renderToStaticMarkup(React.createElement(Results, { data: fixture, search: 'Два' }));
+  assert.match(html, /Место 23/); assert.match(html, /value="23"/); assert.match(html, /13:47\.7/);
+  assert.ok(!html.includes('Игрок Один')); assert.ok(!html.includes('is-current'));
+  assert.ok(!html.includes('>Вы</span>'));
+  const full = renderToStaticMarkup(React.createElement(Results, { data: fixture }));
+  assert.ok(full.indexOf('Игрок Один') < full.indexOf('Игрок Два'));
 });
