@@ -66,12 +66,14 @@ function splitName(name: string) {
 }
 
 function getTournamentDirectionId(tournamentType: string) {
+  if (tournamentType === "fpr_6x25") return 5278;
   return String(tournamentType).toLowerCase().includes("mex")
     ? MEXICANO_DIRECTION_ID
     : AMERICANO_DIRECTION_ID;
 }
 
 function getTournamentTypeName(tournamentType: string) {
+  if (tournamentType === "fpr_6x25") return "ФПР 6×25 · Время на друзей";
   return String(tournamentType).toLowerCase().includes("mex")
     ? "Мексикано"
     : "Американо";

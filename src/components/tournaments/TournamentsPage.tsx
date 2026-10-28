@@ -1,5 +1,6 @@
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
 import { AvatarImage } from "../UI/AvatarImage";
+import { FprTournamentSetup, FprTournamentManager, FprProtocolLookup } from "./FprTournamentPanel";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
@@ -158,11 +159,12 @@ const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 const DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY = 365;
 const DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY = 365;
 
-type TournamentFamilyKey = "americano" | "mexicano";
+type TournamentFamilyKey = "americano" | "mexicano" | "fpr6x25";
 
 const TOURNAMENT_FAMILIES: Array<{ id: TournamentFamilyKey; label: string }> = [
   { id: "americano", label: "Американо" },
   { id: "mexicano", label: "Мексикано" },
+  { id: "fpr6x25", label: "ФПР 6×25" },
 ];
 
 const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
@@ -170,6 +172,7 @@ const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
   label: string;
   description?: string;
 }>> = {
+  fpr6x25: [{ id: "fpr_6x25", label: "Лига «Время на друзей»", description: "Регламент 1.1: шесть общих раундов, 25 очков на матч, индивидуальный зачёт и смена партнёров." }],
   americano: [
     {
       id: "americano_classic",
@@ -1154,6 +1157,7 @@ function normalizeTournamentTypeKey(value: string | null | undefined) {
 function getTournamentFamilyByType(value: string | null | undefined): TournamentFamilyKey | null {
   const typeKey = normalizeTournamentTypeKey(value);
   if (!typeKey) return null;
+  if (typeKey === "fpr_6x25") return "fpr6x25";
   if (
     typeKey === "americano"
     || typeKey === "americano_padelhub"
@@ -1169,6 +1173,7 @@ function getTournamentFamilyByType(value: string | null | undefined): Tournament
 
 function getTournamentTypeLabel(value: string | null | undefined) {
   const typeKey = normalizeTournamentTypeKey(value);
+  if (typeKey === "fpr_6x25") return "ФПР 6×25 · Время на друзей";
   if (typeKey === "americano" || typeKey === "americano_padelhub") return "Американо · ПадлхАБ";
   if (typeKey === "americano_classic") return "Американо · Классическое";
   if (typeKey === "americano_flex") return "Американо · Флекс";
@@ -1355,6 +1360,10 @@ function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
 
 function getTournamentProgressLabel(history: TournamentHistoryRecord | null | undefined): string | null {
   if (!history) return null;
+  if (history.tournamentType === "fpr_6x25") {
+    const fpr = history.params?.fpr6x25 as { status?: string } | undefined;
+    return fpr?.status === "completed" ? "ФПР проведён · тест" : fpr?.status === "incomplete" ? "ФПР не завершён" : "ФПР · тестовый протокол";
+  }
   const params = history.params && typeof history.params === "object"
     ? history.params as Record<string, unknown>
     : null;
@@ -1396,6 +1405,7 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
     && typeKey !== "paired_americano"
     && typeKey !== "paired_mexicano"
     && typeKey !== "mexicano"
+    && typeKey !== "fpr_6x25"
   ) return null;
 
   return {
@@ -3977,7 +3987,23 @@ function TournamentDetailsModal({
           </div>
         )}
 
-        {selectedType && (
+        {selectedType === "fpr_6x25" && (
+          <FprTournamentSetup
+            key={String(tournament?.id ?? draftTournamentId ?? "manual-fpr")}
+            players={sortedParticipants}
+            context={{
+              tenantKey: TENANT_KEY,
+              organizer: { id: profile?.id ?? null, phone: profile?.phone ?? null, tenantKey: TENANT_KEY, name: profile ? [profile.firstName, profile.lastName].filter(Boolean).join(" ") : null },
+              sourceExerciseId: tournament?.id,
+              stationName: tournament?.studio?.name || manualStationName,
+              stationId: tournament?.studio?.id,
+              endsAt: tournament?.timeTo,
+              dateKey: sourceDateKey || formatDate(new Date()),
+            }}
+            onSaved={payload => { onSaved(payload); onClose(); }}
+          />
+        )}
+        {selectedType && selectedType !== "fpr_6x25" && (
           <div className="tournament-section">
             {selectedType === "mexicano" && (
               <div className="tournament-settings-hint">
@@ -7890,6 +7916,11 @@ export default function TournamentsPage({
               Создать турнир
             </button>
           )}
+          {!loading && !profileLoading && profile?.id && <FprProtocolLookup profileId={profile.id} canHost={canHostTournaments} onFound={record => {
+            const payload = buildTournamentPayloadFromHistory(record);
+            if (!payload) return;
+            handleManagerDataReplace(payload, { totals: null, playerLogs: null });
+          }} />}
         </div>
       </div>
 
@@ -7906,7 +7937,14 @@ export default function TournamentsPage({
         onSaved={handleTournamentCreated}
       />
 
-      <TournamentManagerModal
+      {managerData?.tournamentType === "fpr_6x25" ? (
+        <FprTournamentManager
+          key={managerData.tournamentId}
+          data={managerData}
+          onClose={() => { setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null); }}
+          onDataChange={payload => handleManagerDataReplace(payload, { totals: null, playerLogs: null })}
+        />
+      ) : <TournamentManagerModal
         isOpen={Boolean(managerData)}
         onClose={() => {
           setManagerData(null);
@@ -7920,7 +7958,7 @@ export default function TournamentsPage({
         onDataChange={handleManagerDataChange}
         onReplaceData={handleManagerDataReplace}
         onEditSettings={handleManagerEditSettings}
-      />
+      />}
     </div>
   );
 }

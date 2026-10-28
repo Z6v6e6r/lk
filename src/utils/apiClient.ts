@@ -2914,6 +2914,7 @@ export interface TournamentHistoryRecord {
 }
 
 export type TournamentTypeKey =
+  | "fpr_6x25"
   | "americano"
   | "americano_padelhub"
   | "americano_classic"
@@ -5861,7 +5862,7 @@ function writeProdTournamentHistoryCache(
   });
 }
 
-async function fetchTournamentHistoryUncached(tournamentId: string): Promise<TournamentHistoryApiResult> {
+async function fetchTournamentHistoryUncached(tournamentId: string, forceRefresh = false): Promise<TournamentHistoryApiResult> {
   const base = getServ2Origin();
   const pageUrl = typeof window !== "undefined" ? window.location.href : null;
   if (shouldBlockLocalProductionTournamentHistoryRequest({
@@ -5879,11 +5880,11 @@ async function fetchTournamentHistoryUncached(tournamentId: string): Promise<Tou
     };
   }
   const result = await request<unknown>(
-    `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}`,
+    `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}${forceRefresh ? `&readback=${Date.now()}` : ""}`,
     {
       method: "GET",
       retries: 1,
-      ...(IS_DEV_RELEASE_CHANNEL
+      ...(IS_DEV_RELEASE_CHANNEL && !forceRefresh
         ? {
             cacheTtlMs: DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS,
             dedupe: true,
@@ -5910,8 +5911,9 @@ async function fetchTournamentHistoryUncached(tournamentId: string): Promise<Tou
   };
 }
 
-export async function apiFetchTournamentHistory(tournamentId: string): Promise<TournamentHistoryApiResult> {
+export async function apiFetchTournamentHistory(tournamentId: string, options?: { forceRefresh?: boolean }): Promise<TournamentHistoryApiResult> {
   const normalizedTournamentId = String(tournamentId || "").trim();
+  if (options?.forceRefresh) return fetchTournamentHistoryUncached(normalizedTournamentId, true);
   const cachedResult = !IS_DEV_RELEASE_CHANNEL
     ? readProdTournamentHistoryCache(normalizedTournamentId)
     : null;
@@ -5948,7 +5950,7 @@ export async function apiFetchTournamentHistory(tournamentId: string): Promise<T
 
 export async function apiCreateAmericanoTournament(payload: AmericanoTournamentPayload) {
   const base = getServ2Origin();
-  return request<{ ok?: boolean }>(`${base}/lk/tournaments/americano`, {
+  return request<{ ok?: boolean; tournamentId?: string; params?: Record<string, unknown> }>(`${base}/lk/tournaments/americano`, {
     method: "POST",
     retries: 1,
     body: JSON.stringify(payload),

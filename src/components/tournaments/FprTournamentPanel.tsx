@@ -1,0 +1,380 @@
+import { useEffect, useRef, useState } from "react";
+import { Modal } from "../UI/Modal";
+import {
+  apiCreateAmericanoTournament, apiFetchTournamentHistory, apiUpdateAmericanoResults,
+  type AmericanoTournamentPayload, type TournamentHistoryRecord,
+} from "../../utils/apiClient";
+import {
+  createFprState, fprCompletedRounds, fprCurrentAttempt, fprProjection, fprReserveThreshold,
+  fprServeAt, fprStandings, validateFprState, type FprCommand, type FprMatch, type FprState,
+} from "./fpr6x25";
+import "./fpr6x25.css";
+
+type Player = { id: string; name: string; rating?: string | null; phone?: string | null; photo?: string | null };
+const message = (e: unknown) => e instanceof Error ? e.message : "Не удалось выполнить действие";
+const number = (s: string) => s.trim() ? Number(s.replace(",", ".")) : Number.NaN;
+function localDateTime(iso: string) {
+  const date = new Date(iso);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+function download(value: unknown, file: string) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
+  const a = document.createElement("a"); a.href = url; a.download = file; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function FprTournamentSetup({ players, context, onSaved }: {
+  players: Player[];
+  context: {
+    tenantKey: string; organizer: AmericanoTournamentPayload["organizer"]; sourceExerciseId?: string;
+    stationName?: string; stationId?: string; endsAt?: string; dateKey: string;
+  };
+  onSaved: (payload: AmericanoTournamentPayload) => void;
+}) {
+  const [id] = useState(() => `fpr-${crypto.randomUUID()}`);
+  const [leagueSource, setLeagueSource] = useState("");
+  const [endsAt, setEndsAt] = useState(() => localDateTime(context.endsAt || new Date(Date.now() + 90 * 60_000).toISOString()));
+  const [reserve, setReserve] = useState(true);
+  const [values, setValues] = useState<Record<string, { level: string; points: string; place: string; newcomer: boolean }>>({});
+  const [courtValues, setCourtValues] = useState<Record<number, string>>({});
+  const [included, setIncluded] = useState<Record<string, boolean>>({});
+  const presentPlayers = players.filter(p => included[p.id] !== false);
+  const [paste, setPaste] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<AmericanoTournamentPayload | null>(null);
+  const get = (p: Player) => values[p.id] ?? { level: p.rating ?? "", points: "", place: "", newcomer: false };
+  const change = (p: Player, update: Partial<ReturnType<typeof get>>) => setValues(v => ({ ...v, [p.id]: { ...get(p), ...update } }));
+  const importSnapshot = () => {
+    try {
+      const next = { ...values };
+      const seen = new Set<string>();
+      for (const line of paste.trim().split(/\r?\n/)) {
+        const [playerId, place, points] = line.split(/[;\t]/).map(v => v.trim());
+        const player = players.find(p => p.id === playerId);
+        if (!player || seen.has(playerId) || !Number.isFinite(number(points)) || !Number.isInteger(number(place)) || number(place) < 1) {
+          throw new Error("Каждая строка: ID участника; место в Лиге; очки Лиги. Проверьте ID и числа.");
+        }
+        seen.add(playerId); next[playerId] = { ...get(player), points, place, newcomer: false };
+      }
+      setValues(next); setError(null);
+    } catch (e) { setError(message(e)); }
+  };
+  const save = async () => {
+    if (busy) return;
+    setError(null);
+    try {
+      let payload = pending;
+      if (!payload) {
+        const now = new Date().toISOString();
+        const state = createFprState({ tournamentId: id, players: presentPlayers.map(p => ({
+          id: p.id, name: p.name, level: number(get(p).level),
+          leaguePoints: get(p).newcomer ? 0 : number(get(p).points),
+          leaguePlace: get(p).newcomer ? null : number(get(p).place),
+        })), courts: Array.from({ length: Math.floor(presentPlayers.length / 4) }, (_, i) => courtValues[i] ?? `Корт №${i + 1}`),
+        leagueSource, endsAt: new Date(endsAt).toISOString(), reserveAllowed: reserve, testMode: true, now });
+        const projected = fprProjection(state, {
+          manualTournament: true, localStatus: "draft", syncStatus: "not_required", localDateKey: context.dateKey,
+          sourceExerciseId: context.sourceExerciseId ?? null, stationName: context.stationName ?? null,
+          stationId: context.stationId ?? null, organizerName: context.organizer.name ?? null,
+        });
+        payload = {
+          tournamentId: id, tournamentType: "fpr_6x25", tenantKey: context.tenantKey, createdAt: now,
+          organizer: context.organizer, targetScore: 25, courts: state.courts,
+          participants: presentPlayers.map(p => ({ id: p.id, name: p.name, rating: p.rating ?? null, phone: p.phone ?? null, photo: p.photo ?? null })),
+          params: projected.params, rounds: projected.rounds,
+        };
+        setPending(payload);
+      }
+      setBusy(true);
+      const response = await apiCreateAmericanoTournament(payload);
+      if (response.status == null || response.status < 200 || response.status >= 300) {
+        throw new Error(response.error?.message || "Создание не подтверждено. Повтор использует тот же ID и снимок; также можно проверить список турниров.");
+      }
+      const saved = response.data?.params?.fpr6x25;
+      validateFprState(saved);
+      if (saved.tournamentId !== payload.tournamentId || saved.revision !== 0) throw new Error("Сервер не подтвердил создание этого протокола ФПР");
+      onSaved(payload);
+    } catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  };
+  return <div className="fpr-panel">
+    <p>ФПР 6×25 · регламент 1.1. Шесть общих раундов, два запасных. В каждом матче ровно 25 очков на две пары.</p>
+    <p>Будет создан отдельный тестовый протокол. Результаты и начисления существующего турнира сохраняются отдельно.</p>
+    <fieldset disabled={busy || Boolean(pending)}>
+      <label>Таблица Лиги для посева и четвёртого критерия
+        <input value={leagueSource} onChange={e => setLeagueSource(e.target.value)} placeholder="Например, общий рейтинг Лиги на 28 октября" />
+      </label>
+      <label>Окончание события (местное время устройства)
+        <input type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)} />
+      </label>
+      <label className="fpr-check"><input type="checkbox" checked={reserve} onChange={e => setReserve(e.target.checked)} /> Разрешены 7-й и 8-й раунды при выполнении порога времени</label>
+      <p>В составе: {presentPlayers.length} из {players.length}. Кортов требуется одновременно: {Math.floor(presentPlayers.length / 4)}. Отдыхает в раунде: {presentPlayers.length % 4}. До фиксации состава снимите отметку с отсутствующих.</p>
+      {Array.from({ length: Math.floor(presentPlayers.length / 4) }, (_, i) => <label key={i}>Название корта {i + 1}<input value={courtValues[i] ?? `Корт №${i + 1}`} onChange={e => setCourtValues(v => ({ ...v, [i]: e.target.value }))} /></label>)}
+      <p>Снимок Лиги обязателен для каждого игрока. Отметку «без очков» ставьте только для участника без результата в выбранной таблице. Недоступные данные нужно восстановить.</p>
+      <div className="fpr-scroll"><table>
+        <thead><tr><th>В составе</th><th>Участник / ID</th><th>Уровень</th><th>Место в Лиге</th><th>Очки Лиги</th><th>Без очков Лиги</th></tr></thead>
+        <tbody>{players.map(p => <tr key={p.id}>
+          <td><input aria-label={`В составе: ${p.name}`} type="checkbox" checked={included[p.id] !== false} onChange={e => setIncluded(v => ({ ...v, [p.id]: e.target.checked }))} /></td>
+          <th scope="row">{p.name}<small>{p.id}</small></th>
+          <td><input aria-label={`Уровень: ${p.name}`} inputMode="decimal" value={get(p).level} onChange={e => change(p, { level: e.target.value })} /></td>
+          <td><input aria-label={`Место в Лиге: ${p.name}`} inputMode="numeric" disabled={get(p).newcomer} value={get(p).place} onChange={e => change(p, { place: e.target.value })} /></td>
+          <td><input aria-label={`Очки Лиги: ${p.name}`} inputMode="decimal" disabled={get(p).newcomer} value={get(p).points} onChange={e => change(p, { points: e.target.value })} /></td>
+          <td><input aria-label={`Нет очков Лиги: ${p.name}`} type="checkbox" checked={get(p).newcomer} onChange={e => change(p, { newcomer: e.target.checked })} /></td>
+        </tr>)}</tbody>
+      </table></div>
+      <details><summary>Вставить снимок Лиги списком</summary>
+        <label>Одна строка: ID участника; место; очки <textarea value={paste} onChange={e => setPaste(e.target.value)} /></label>
+        <button type="button" onClick={importSnapshot}>Применить снимок</button>
+      </details>
+    </fieldset>
+    <p>Посев и отдельный жребий отдыха фиксируются при создании. Перед первым стартом проверьте их в протоколе. Очки Лиги и изменение уровня в тестовом режиме не начисляются.</p>
+    {error && <p role="alert" className="fpr-error">{error}</p>}
+    <button className="section-cta" type="button" disabled={busy || presentPlayers.length < 4 || presentPlayers.length > 28 || !context.organizer.id} onClick={() => void save()}>
+      {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать тестовый протокол ФПР 6×25"}
+    </button>
+  </div>;
+}
+
+type ScoreAction = Extract<FprCommand, { action: "score" | "correct_score" }>;
+function HeadToHeadDetails({ state }: { state: FprState }) {
+  const groups = new Map<string, ReturnType<typeof fprStandings>>();
+  for (const row of fprStandings(state).filter(p => p.status !== "DNF" && p.headToHead !== null)) {
+    const key = `${row.wins}:${row.totalPoints}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  if (!groups.size) return null;
+  return <details><summary>Результаты очных серий равных групп</summary>
+    {[...groups.entries()].map(([key, group]) => <section key={key}>
+      <p>{group[0].wins} побед, {group[0].totalPoints} очков: {group.map(p => p.name).join(", ")}</p>
+      <ul>{group.flatMap((a, i) => group.slice(i + 1).map(b => {
+        let winsA = 0, winsB = 0;
+        for (const attempt of state.attempts.filter(r => r.status === "closed")) for (const match of attempt.matches) {
+          const direct = match.pair1.includes(a.id) && match.pair2.includes(b.id);
+          const reverse = match.pair2.includes(a.id) && match.pair1.includes(b.id);
+          if (!direct && !reverse) continue;
+          const aWon = direct ? match.score1! > match.score2! : match.score2! > match.score1!;
+          if (aWon) winsA += 1; else winsB += 1;
+        }
+        return <li key={`${a.id}:${b.id}`}>{a.name} — {b.name}: {winsA}:{winsB} по победам в очной серии ({winsA + winsB} матчей)</li>;
+      }))}</ul>
+    </section>)}
+    <p>Матчи, где игроки были партнёрами, и отменённые попытки в эти серии не входят. Мини-таблица равной группы считается один раз.</p>
+  </details>;
+}
+function MatchEditor({ match, state, closed, disabled, onSave, now }: {
+  match: FprMatch; state: FprState; closed: boolean; disabled: boolean; now: string;
+  onSave: (value: Omit<ScoreAction, "id" | "expectedRevision">) => void;
+}) {
+  const [score1, setScore1] = useState(match.score1?.toString() ?? "");
+  const [score2, setScore2] = useState(match.score2?.toString() ?? "");
+  const [confirmed1, setConfirmed1] = useState(match.confirmed1);
+  const [confirmed2, setConfirmed2] = useState(match.confirmed2);
+  const [reason, setReason] = useState("");
+  const [playedAt, setPlayedAt] = useState("");
+  const [lastRallyAt, setLastRallyAt] = useState("");
+  const names = (ids: string[]) => ids.map(id => state.players.find(p => p.id === id)?.name ?? id).join(" + ");
+  const played = (match.score1 ?? 0) + (match.score2 ?? 0);
+  const lateEntry = !closed && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && !match.completedAt;
+  const serve = played < 25 ? fprServeAt(match, played) : null;
+  const changeScore = (team: 1 | 2, value: string) => {
+    (team === 1 ? setScore1 : setScore2)(value); setConfirmed1(false); setConfirmed2(false);
+  };
+  return <section className="fpr-match" aria-label={`Матч: ${state.courts[match.courtIndex]}`}>
+    <h4>{state.courts[match.courtIndex]}</h4>
+    <div className="fpr-teams"><span>{names(match.pair1)}</span><b>—</b><span>{names(match.pair2)}</span></div>
+    {!closed && <p className="fpr-hint">A1: {names([match.firstServer])}. Подача по два очка: A1 → B1 → A2 → B2. После 12-го очка — смена сторон.
+      {serve && <> Следующая подача по записанному счёту: {names([serve.playerId])}, {serve.side === "right" ? "справа" : "слева"}.</>}</p>}
+    <fieldset disabled={disabled}>
+      <div className="fpr-score">
+        <label>Очки пары A<input aria-label={`Счёт A: ${match.id}`} type="number" min="0" max="25" step="1" value={score1} onChange={e => changeScore(1, e.target.value)} /></label>
+        <span>:</span>
+        <label>Очки пары B<input aria-label={`Счёт B: ${match.id}`} type="number" min="0" max="25" step="1" value={score2} onChange={e => changeScore(2, e.target.value)} /></label>
+      </div>
+      <p>Сумма: {Number.isFinite(number(score1) + number(score2)) ? number(score1) + number(score2) : "—"} / 25</p>
+      <label className="fpr-check"><input type="checkbox" checked={confirmed1} onChange={e => setConfirmed1(e.target.checked)} /> Участник пары A подтвердил счёт</label>
+      <label className="fpr-check"><input type="checkbox" checked={confirmed2} onChange={e => setConfirmed2(e.target.checked)} /> Участник пары B подтвердил счёт</label>
+      {closed && <label>Причина исправления<input value={reason} onChange={e => setReason(e.target.value)} /></label>}
+      {lateEntry && <>
+        <p>Игровой дедлайн наступил. Частичный счёт можно записать для протокола отменённой попытки. Для 25 очков нужны фактические времена и объяснение позднего ввода.</p>
+        <label>Фактическое окончание матча (местное время)<input type="datetime-local" step="1" value={playedAt} onChange={e => setPlayedAt(e.target.value)} /></label>
+        <label>Если доигрывали последнее очко: когда начался этот розыгрыш<input type="datetime-local" step="1" value={lastRallyAt} onChange={e => setLastRallyAt(e.target.value)} /></label>
+        <label>Причина позднего ввода<input value={reason} onChange={e => setReason(e.target.value)} /></label>
+      </>}
+      <button type="button" disabled={!score1.trim() || !score2.trim() || (closed && (!reason.trim() || !confirmed1 || !confirmed2))} onClick={() => onSave({
+        action: closed ? "correct_score" : "score", matchId: match.id, score1: number(score1), score2: number(score2), confirmed1, confirmed2,
+        ...(closed || lateEntry ? { reason } : {}), ...(playedAt ? { playedAt: new Date(playedAt).toISOString() } : {}), ...(lastRallyAt ? { lastRallyStartedAt: new Date(lastRallyAt).toISOString() } : {}),
+      })}>{closed ? "Сохранить исправление с историей" : "Сохранить счёт и подтверждения"}</button>
+    </fieldset>
+    <p aria-live="polite">{match.confirmed1 && match.confirmed2 ? "Обе пары подтвердили запись" : match.score1 !== null ? "Запись сохранена, ждём подтверждений" : "Счёт ещё не записан"}</p>
+  </section>;
+}
+
+export function FprTournamentManager({ data, onClose, onDataChange }: {
+  data: AmericanoTournamentPayload; onClose: () => void; onDataChange: (payload: AmericanoTournamentPayload) => void;
+}) {
+  const pendingKey = `padlhub:fpr-command:${data.tournamentId}`;
+  const [state, setState] = useState<FprState | null>(() => {
+    try { validateFprState(data.params?.fpr6x25); return data.params.fpr6x25; } catch { return null; }
+  });
+  const [pending, setPending] = useState<FprCommand | null>(() => {
+    try { return JSON.parse(localStorage.getItem(pendingKey) || "null") as FprCommand | null; } catch { return null; }
+  });
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"round" | "table" | "protocol">("round");
+  const [reason, setReason] = useState("");
+  const [withdrawId, setWithdrawId] = useState("");
+  const [finishConfirmation, setFinishConfirmation] = useState(false);
+  const [now, setNow] = useState(() => new Date().toISOString());
+  useEffect(() => { const timer = window.setInterval(() => setNow(new Date().toISOString()), 10_000); return () => window.clearInterval(timer); }, []);
+  const applyResponse = (next: FprState, payload = data) => {
+    validateFprState(next);
+    setState(next);
+    const projected = fprProjection(next, payload.params);
+    onDataChange({ ...payload, params: projected.params, rounds: projected.rounds });
+  };
+  const clearPending = () => { localStorage.removeItem(pendingKey); setPending(null); };
+  const send = async (command: FprCommand) => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError(null);
+    try {
+      localStorage.setItem(pendingKey, JSON.stringify(command)); setPending(command);
+      const response = await apiUpdateAmericanoResults({ tournamentId: data.tournamentId, results: [], params: { fprCommand: command } });
+      if (response.status == null || response.status < 200 || response.status >= 300) throw new Error(response.error?.message || "Сохранение не подтверждено. Повторите эту команду или проверьте сервер.");
+      const next = response.data?.params?.fpr6x25;
+      validateFprState(next);
+      if (next.tournamentId !== data.tournamentId || !next.audit.some(a => a.id === command.id)
+        || next.revision <= command.expectedRevision) throw new Error("Сервер вернул протокол без подтверждения этой команды. Проверьте актуальный протокол перед повтором.");
+      applyResponse(next); clearPending(); setReason(""); setFinishConfirmation(false);
+    } catch (e) { setError(message(e)); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  type Action = FprCommand extends infer T ? T extends FprCommand ? Omit<T, "id" | "expectedRevision"> : never : never;
+  const act = (action: Action) => {
+    if (!state || pending || busyRef.current) return;
+    void send({ ...action, id: crypto.randomUUID(), expectedRevision: state.revision } as FprCommand);
+  };
+  const reload = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError(null);
+    try {
+      const response = await apiFetchTournamentHistory(data.tournamentId, { forceRefresh: true });
+      if (response.error) throw new Error(response.error.message);
+      const record = response.data?.find(p => p.tournamentId === data.tournamentId);
+      const next = record?.params?.fpr6x25;
+      validateFprState(next);
+      applyResponse(next);
+      if (pending && (next.audit.some(a => a.id === pending.id) || next.revision !== pending.expectedRevision)) {
+        if (!next.audit.some(a => a.id === pending.id)) setError("Другой организатор изменил протокол. Ожидавшая команда не применена; проверьте таблицу и введите её заново.");
+        clearPending();
+      }
+    } catch (e) { setError(message(e)); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  const current = state ? fprCurrentAttempt(state) : null;
+  const completed = state ? fprCompletedRounds(state) : 0;
+  const finished = state?.status === "completed" || state?.status === "incomplete";
+  const threshold = state ? fprReserveThreshold(state, now) : null;
+  const name = (id: string) => state?.players.find(p => p.id === id)?.name ?? id;
+  const disabled = busy || Boolean(pending);
+  return <Modal isOpen onClose={onClose} title="ФПР 6×25 · тестовое проведение" variant="fullscreen" bodyClassName="tournament-settings-modal-body">
+    <div className="fpr-panel">
+      {!state ? <p role="alert">Протокол ФПР повреждён или имеет другую версию. Загрузите его с сервера.</p> : <>
+        <p><b>{finished ? state.status === "completed" ? "Турнир состоялся" : "Турнир не завершён" : "Турнир в работе"}</b> · полных раундов: {completed}/6{completed > 6 ? ` (+${completed - 6})` : ""} · версия записи: {state.revision}</p>
+        <p>Конец события: {new Date(state.endsAt).toLocaleString("ru-RU")}. Игровой дедлайн: {new Date(Date.parse(state.endsAt) - 180_000).toLocaleTimeString("ru-RU")}.</p>
+        {!finished && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && <p role="alert" className="fpr-error">Игровой дедлайн наступил. Доиграйте начатый розыгрыш и остановите игру. При неполном матче исключите весь общий раунд кнопкой завершения события.</p>}
+        <div className="fpr-tabs" role="group" aria-label="Раздел протокола">
+          {([["round", "Раунд"], ["table", "Таблица"], ["protocol", "Протокол"]] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
+        </div>
+        {tab === "round" && <>
+          {current ? <>
+            <h3>Раунд {current.round}{current.round >= 7 ? " · запасной" : ""} · попытка {current.attempt}</h3>
+            <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}. За отдых — ноль очков и побед.</p>
+            {current.status === "scheduled" && <>
+              {current.matches.map(m => <div className="fpr-match" key={m.id}><b>{state.courts[m.courtIndex]}</b><p>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}</p><p>A1: {name(m.firstServer)}. Начальные стороны определите отдельным жребием. Пара B до старта выбирает B1:</p>
+                <select aria-label={`Первый подающий пары B: ${m.id}`} disabled={disabled} value={m.pair2[0]} onChange={e => act({ action: "set_b1", matchId: m.id, playerId: e.target.value })}>{m.pair2.map(id => <option key={id} value={id}>{name(id)}</option>)}</select>
+              </div>)}
+              <button type="button" className="section-cta" disabled={disabled || Date.parse(now) >= Date.parse(state.endsAt) - 180_000 || (current.round >= 7 && !threshold?.allowed)} onClick={() => act({ action: "start_round" })}>Общий старт всех кортов</button>
+            </>}
+            {current.status === "running" && <>
+              <p>Начало: {new Date(current.startedAt!).toLocaleTimeString("ru-RU")}. Новая сетка появится после подтверждения всех матчей и закрытия раунда.</p>
+              {current.matches.map(m => <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed={false} disabled={disabled} onSave={act} now={now} />)}
+              <button type="button" className="section-cta" disabled={disabled || current.matches.some(m => !m.confirmed1 || !m.confirmed2)} onClick={() => act({ action: "close_round" })}>Закрыть общий раунд и обновить таблицу</button>
+            </>}
+          </> : !finished && completed < 8 ? <>
+            <p>{completed >= 6 ? `Запасной раунд: нужно не меньше ${Math.ceil((threshold?.requiredMs ?? 0) / 60_000)} мин до конца события; осталось ${Math.max(0, Math.floor((threshold?.remainingMs ?? 0) / 60_000))} мин.` : "Предыдущая попытка отменена. Можно подготовить повтор с тем же номером зачётного раунда."}</p>
+            <button type="button" disabled={disabled || (completed >= 6 && !threshold?.allowed)} onClick={() => act({ action: "prepare_round" })}>Подготовить {completed + 1}-й раунд</button>
+          </> : null}
+          {!finished && <details><summary>Остановка или снятие участника</summary>
+            <label>Причина<input value={reason} disabled={disabled} onChange={e => setReason(e.target.value)} /></label>
+            {current && <button type="button" disabled={disabled || !reason.trim()} onClick={() => act({ action: "cancel_round", reason })}>Отменить весь текущий раунд</button>}
+            <label>Снять участника (DNF)<select value={withdrawId} disabled={disabled} onChange={e => setWithdrawId(e.target.value)}><option value="">Выберите игрока</option>{state.players.filter(p => !state.withdrawals.some(w => w.id === p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            <p>При DNF текущий незакрытый раунд отменяется целиком. Предыдущие полные раунды сохраняются; итогового места у снявшегося нет.</p>
+            <button type="button" disabled={disabled || !reason.trim() || !withdrawId} onClick={() => act({ action: "withdraw", playerId: withdrawId, reason })}>Зафиксировать DNF</button>
+          </details>}
+          {!finished && <div className="fpr-finish">
+            {!finishConfirmation ? <button type="button" disabled={disabled} onClick={() => setFinishConfirmation(true)}>Завершить событие</button> : <>
+              <p>{completed < 6 ? "Сейчас меньше шести полных раундов: событие получит статус незавершённого." : "Будет зафиксирован итог по всем полным раундам."} Неполная текущая попытка будет исключена целиком; полностью подтверждённая — включена в итог.</p>
+              <button type="button" disabled={disabled} onClick={() => act({ action: "finish" })}>Подтвердить завершение события</button>
+              <button type="button" disabled={busy} onClick={() => setFinishConfirmation(false)}>Продолжить проведение</button>
+            </>}
+          </div>}
+        </>}
+        {tab === "table" && <>
+          <p>Победы → очки → очные серии всей равной группы → меньшие очки Лиги до старта. Полностью равные участники делят место; посев нужен только для назначений.</p>
+          <div className="fpr-scroll"><table><thead><tr><th>Место</th><th>Участник</th><th>Победы</th><th>Очки</th><th>Матчи</th><th>Отдых</th><th>Очные серии</th><th>Лига до старта</th><th>Статус</th></tr></thead>
+            <tbody>{fprStandings(state).map(p => <tr key={p.id}><td>{p.rank ?? "—"}</td><th scope="row">{p.name}</th><td>{p.wins}</td><td>{p.totalPoints}</td><td>{p.matchesPlayed}</td><td>{p.byeCount}</td><td>{p.headToHead ?? "не применялись"}</td><td>{p.leaguePoints}</td><td>{p.status === "DNF" ? "DNF" : p.status === "no_matches" ? "нет матчей" : "в зачёте"}</td></tr>)}</tbody>
+          </table></div>
+          <HeadToHeadDetails state={state} />
+          <p>Таблица учитывает только закрытые общие раунды. В тестовом режиме начисления Лиги и изменение уровня отключены.</p>
+        </>}
+        {tab === "protocol" && <>
+          <p>Алгоритм: {state.version}. Источник: {state.leagueSource}. Снимок: {new Date(state.leagueSnapshotAt).toLocaleString("ru-RU")}.</p>
+          <div className="fpr-scroll"><table><thead><tr><th>Посев</th><th>Участник</th><th>Уровень</th><th>Место Лиги</th><th>Очки Лиги</th><th>Жребий отдыха</th></tr></thead><tbody>{state.players.map(p => <tr key={p.id}><td>{p.seed}</td><th scope="row">{p.name}</th><td>{p.level}</td><td>{p.leaguePlace ?? "без очков"}</td><td>{p.leaguePoints}</td><td>{p.restLot}</td></tr>)}</tbody></table></div>
+          <h3>Попытки и исправления</h3>
+          {state.attempts.map(a => <details key={a.id}><summary>Раунд {a.round} · попытка {a.attempt} · {a.status === "closed" ? "зачтён" : a.status === "cancelled" ? "отменён" : a.status === "running" ? "идёт" : "подготовлен"}</summary>
+            <p>{a.startedAt ? new Date(a.startedAt).toLocaleString("ru-RU") : "Не стартовал"}{a.finishedAt ? ` → ${new Date(a.finishedAt).toLocaleTimeString("ru-RU")}` : ""}. {a.reason}</p>
+            <p>Отдых: {a.byes.map(name).join(", ") || "нет"}. Окно: {a.window ?? "первый посев / один корт"}.</p>
+            {a.matches.map(m => a.status === "closed" ? <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed disabled={disabled} onSave={act} now={now} /> : <p key={m.id}>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p>)}
+          </details>)}
+          <ol>{state.audit.map(a => <li key={a.id}>{new Date(a.at).toLocaleTimeString("ru-RU")} · {a.action}{a.detail ? ` · ${a.detail}` : ""}</li>)}</ol>
+        </>}
+        <label>ID протокола для другого устройства<input readOnly value={data.tournamentId} onFocus={e => e.currentTarget.select()} /></label>
+        <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>
+      </>}
+      {pending && <div role="status"><p>Есть команда без подтверждённого ответа сервера. Новые действия временно заблокированы.</p><button type="button" disabled={busy} onClick={() => void send(pending)}>Повторить ту же команду</button></div>}
+      {error && <p role="alert" className="fpr-error">{error}</p>}
+      <button type="button" disabled={busy} onClick={() => void reload()}>{busy ? "Проверяем…" : "Прочитать актуальный протокол с сервера"}</button>
+    </div>
+  </Modal>;
+}
+
+export function FprProtocolLookup({ onFound, profileId, canHost }: {
+  onFound: (record: TournamentHistoryRecord) => void; profileId: string; canHost: boolean;
+}) {
+  const [id, setId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const open = async () => {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await apiFetchTournamentHistory(id.trim(), { forceRefresh: true });
+      if (result.error) throw new Error(result.error.message);
+      const record = result.data?.find(t => t.tournamentId === id.trim() && t.tournamentType === "fpr_6x25");
+      if (!record) throw new Error("Протокол ФПР с таким ID не найден");
+      if (!canHost && String(record.organizer?.id ?? "") !== profileId) throw new Error("Открывать управление этим протоколом может его организатор или сотрудник с доступом к турнирам");
+      validateFprState(record.params?.fpr6x25);
+      onFound(record);
+    } catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  };
+  return <details className="fpr-panel"><summary>Открыть сохранённый протокол ФПР по ID</summary>
+    <p>Используйте ID из протокола, чтобы продолжить на другом устройстве.</p>
+    <label>ID протокола<input value={id} disabled={busy} placeholder="fpr-…" onChange={e => setId(e.target.value)} /></label>
+    <button type="button" disabled={busy || !/^fpr-[a-f0-9-]{36}$/.test(id.trim())} onClick={() => void open()}>{busy ? "Загрузка…" : "Открыть протокол"}</button>
+    {error && <p className="fpr-error" role="alert">{error}</p>}
+  </details>;
+}

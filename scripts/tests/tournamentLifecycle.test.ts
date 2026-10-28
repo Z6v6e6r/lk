@@ -237,3 +237,11 @@ test("end-of-day tournament scripts keep incomplete completion explicit", () => 
   assert.match(vivaRepairSource, /--complete-only/);
   assert.match(vivaRepairSource, /TOURNAMENT_NOT_COMPLETE/);
 });
+
+test("FPR card follows explicit nested completion rather than the all-closed legacy projection", () => {
+  const record = createHistoryRecord({ tournamentType: "fpr_6x25", params: { status: "awaiting_league_rules", fpr6x25: { status: "in_progress" } },
+    rounds: [{ id: "r1", index: 1, matches: [{ id: "m1", score1: 13, score2: 12 }] }] as unknown as TournamentHistoryRecord["rounds"] });
+  assert.equal(getTournamentProgressState(record), "in_progress");
+  record.params!.fpr6x25 = { status: "completed" };
+  assert.equal(getTournamentProgressState(record), "completed");
+});

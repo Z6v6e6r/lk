@@ -1,0 +1,279 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  createFprState, applyFprCommand, fprCurrentAttempt, fprCompletedRounds, fprStandings,
+  fprProjection, fprReserveThreshold, fprServeAt, validateFprState,
+  type FprState, type FprCommand,
+} from "../../src/components/tournaments/fpr6x25.ts";
+
+const start = Date.parse("2026-10-28T18:00:00Z");
+const at = (minutes: number) => new Date(start + minutes * 60_000).toISOString();
+const players = (n: number) => Array.from({ length: n }, (_, i) => ({
+  id: `p${i + 1}`, name: `Player ${i + 1}`, level: 4 - i / 20, leaguePlace: i + 1, leaguePoints: 1000 - i * 10,
+}));
+function event(n = 8, seed = "test"): FprState {
+  return createFprState({ tournamentId: `fpr-${seed}-${n}`, players: players(n),
+    courts: Array.from({ length: Math.floor(n / 4) }, (_, i) => `Court ${i + 1}`),
+    leagueSource: "League all time", endsAt: at(180), reserveAllowed: true, now: at(0) });
+}
+type Action = FprCommand extends infer T ? T extends FprCommand ? Omit<T, "id" | "expectedRevision"> : never : never;
+function command(s: FprState, action: Action, minute: number): FprState {
+  return applyFprCommand(s, { ...action, id: `cmd-${s.revision + 1}`, expectedRevision: s.revision } as FprCommand, at(minute));
+}
+function play(s: FprState, round: number, minute = round * 12): FprState {
+  if (!fprCurrentAttempt(s)) s = command(s, { action: "prepare_round" }, minute);
+  s = command(s, { action: "start_round" }, minute);
+  for (const [i, m] of fprCurrentAttempt(s)!.matches.entries()) {
+    const score1 = (round * 7 + i * 3) % 26;
+    s = command(s, { action: "score", matchId: m.id, score1, score2: 25 - score1, confirmed1: true, confirmed2: true }, minute + 8);
+  }
+  return command(s, { action: "close_round" }, minute + 9);
+}
+
+test("all 75 Appendix A combinations and protocol conservation, N=4..28, R=6..8", () => {
+  for (let n = 4; n <= 28; n += 1) {
+    let state = event(n);
+    for (let r = 1; r <= 8; r += 1) {
+      state = play(state, r);
+      const rows = fprStandings(state), c = Math.floor(n / 4);
+      assert.equal(fprCompletedRounds(state), r);
+      assert.equal(rows.reduce((sum, p) => sum + p.matchesPlayed, 0), 4 * c * r);
+      assert.equal(rows.reduce((sum, p) => sum + p.wins, 0), 2 * c * r);
+      assert.equal(rows.reduce((sum, p) => sum + p.totalPoints, 0), 50 * c * r);
+      assert.ok(Math.max(...rows.map(p => p.matchesPlayed)) - Math.min(...rows.map(p => p.matchesPlayed)) <= 1, `${n} players, ${r} rounds`);
+      for (const p of rows) assert.equal(p.pointsFor + p.pointsAgainst, 25 * p.matchesPlayed);
+      if (r >= 6) {
+        const q = Math.floor(4 * c * r / n), h = 4 * c * r % n;
+        assert.equal(rows.filter(p => p.matchesPlayed === q).length, h ? n - h : n);
+        if (h) assert.equal(rows.filter(p => p.matchesPlayed === q + 1).length, h);
+      }
+    }
+  }
+});
+
+test("ranked League members seed above an unrated high-level newcomer; lower League points break result ties", () => {
+  const input = players(4);
+  input[0] = { ...input[0], level: 7, leaguePlace: null as unknown as number, leaguePoints: 0 };
+  let state = createFprState({ tournamentId: "fpr-seeding", players: input, courts: ["Court"], leagueSource: "October",
+    endsAt: at(90), reserveAllowed: true, now: at(0) });
+  assert.equal(state.players.at(-1)!.id, "p1");
+  state = play(state, 1);
+  const round = state.attempts[0], winning = round.matches[0].score1! > 12 ? round.matches[0].pair1 : round.matches[0].pair2;
+  const tied = fprStandings(state).filter(p => winning.includes(p.id));
+  assert.ok(tied[0].leaguePoints < tied[1].leaguePoints);
+});
+
+test("unfinished courts and unconfirmed 25-point results never enter the table; no conditional bye points", () => {
+  let state = command(event(9), { action: "start_round" }, 1);
+  const [first, second] = fprCurrentAttempt(state)!.matches;
+  state = command(state, { action: "score", matchId: first.id, score1: 16, score2: 9, confirmed1: true, confirmed2: true }, 8);
+  assert.equal(fprStandings(state).reduce((n, p) => n + p.totalPoints, 0), 0);
+  assert.throws(() => command(state, { action: "close_round" }, 9), /Подтвердите/);
+  state = command(state, { action: "score", matchId: second.id, score1: 13, score2: 12, confirmed1: true, confirmed2: false }, 9);
+  assert.throws(() => command(state, { action: "close_round" }, 10), /Подтвердите/);
+  assert.throws(() => command(state, { action: "score", matchId: second.id, score1: 13, score2: 0, confirmed1: true, confirmed2: true }, 10), /25 очков/);
+  assert.throws(() => command(state, { action: "score", matchId: second.id, score1: 12.5, score2: 12.5, confirmed1: false, confirmed2: false }, 10), /целых/);
+  state = command(state, { action: "finish" }, 10);
+  assert.equal(state.status, "incomplete");
+  assert.ok(fprStandings(state).every(p => p.totalPoints === 0 && p.wins === 0 && p.matchesPlayed === 0 && p.rank === null));
+});
+
+test("a cancelled attempt retains played partnership history, rest history, and official round number", () => {
+  let state = play(event(9), 1);
+  state = command(state, { action: "start_round" }, 25);
+  const current = fprCurrentAttempt(state)!;
+  state = command(state, { action: "score", matchId: current.matches[0].id, score1: 4, score2: 3, confirmed1: false, confirmed2: false }, 26);
+  const before = fprStandings(state).map(p => [p.id, p.wins, p.totalPoints, p.matchesPlayed]);
+  state = command(state, { action: "cancel_round", reason: "Court unavailable" }, 27);
+  assert.equal(fprCompletedRounds(state), 1);
+  assert.deepEqual(fprStandings(state).map(p => [p.id, p.wins, p.totalPoints, p.matchesPlayed]), before);
+  state = command(state, { action: "prepare_round" }, 28);
+  assert.equal(fprCurrentAttempt(state)!.round, 2);
+  assert.equal(fprCurrentAttempt(state)!.attempt, 3);
+  assert.equal(state.attempts[1].matches[0].score1, 4);
+});
+
+test("DNF cancels the whole current round, preserves earlier results, and removes final placement", () => {
+  let state = play(event(8), 1);
+  const before = fprStandings(state).reduce((n, p) => n + p.totalPoints, 0);
+  state = command(state, { action: "start_round" }, 25);
+  const current = fprCurrentAttempt(state)!;
+  state = command(state, { action: "score", matchId: current.matches[0].id, score1: 25, score2: 0, confirmed1: true, confirmed2: true }, 27);
+  state = command(state, { action: "withdraw", playerId: "p1", reason: "Injury" }, 28);
+  assert.equal(state.attempts[1].status, "cancelled");
+  assert.equal(fprStandings(state).reduce((n, p) => n + p.totalPoints, 0), before);
+  assert.equal(fprStandings(state).find(p => p.id === "p1")!.rank, null);
+  assert.equal(fprStandings(state).find(p => p.id === "p1")!.status, "DNF");
+  state = command(state, { action: "prepare_round" }, 29);
+  assert.equal(fprCurrentAttempt(state)!.round, 2);
+  assert.equal(fprCurrentAttempt(state)!.matches.length, 1);
+  assert.equal(fprCurrentAttempt(state)!.byes.length, 3);
+});
+
+test("same command is idempotent; stale revision fails; a closed score correction preserves an already running draw", () => {
+  const initial = event();
+  const cmd: FprCommand = { action: "start_round", id: "a-stable-command", expectedRevision: 0 };
+  let state = applyFprCommand(initial, cmd, at(1));
+  assert.strictEqual(applyFprCommand(state, cmd, at(2)), state);
+  assert.throws(() => applyFprCommand(state, { ...cmd, action: "finish" }, at(2)), /FPR_COMMAND_ID_REUSED/);
+  assert.throws(() => applyFprCommand(state, { ...cmd, id: "a-different-command" }, at(2)), /FPR_REVISION_CONFLICT/);
+  state = event(); state = play(state, 1);
+  state = command(state, { action: "start_round" }, 25);
+  const draw = JSON.stringify(fprCurrentAttempt(state));
+  state = command(state, { action: "correct_score", matchId: state.attempts[0].matches[0].id,
+    score1: 25, score2: 0, confirmed1: true, confirmed2: true, reason: "Confirmed input error" }, 26);
+  assert.equal(JSON.stringify(fprCurrentAttempt(state)), draw);
+  assert.match(state.audit.at(-1)!.detail, /Confirmed input error/);
+});
+
+test("six required rounds; reserve start uses the slowest of the last two plus six minutes", () => {
+  let state = event();
+  for (let round = 1; round <= 6; round += 1) state = play(state, round);
+  assert.equal(fprReserveThreshold(state, at(166)).allowed, true);
+  assert.equal(fprReserveThreshold(state, at(166)).requiredMs, 14 * 60_000);
+  assert.equal(fprReserveThreshold(state, at(167)).allowed, false);
+  assert.throws(() => command(state, { action: "prepare_round" }, 167), /Недостаточно времени/);
+  state = command(state, { action: "finish" }, 167);
+  assert.equal(state.status, "completed");
+  assert.equal(fprProjection(state).summary.status, "awaiting_league_rules");
+  assert.equal(fprProjection(state).params.published, false);
+  assert.ok(fprProjection(state).standings.every(row => !("ratingAfter" in row) && !("ratingDelta" in row)));
+});
+
+test("planner is deterministic and a one-court draw does not depend on match outcomes", () => {
+  for (const n of [4, 5, 6, 7, 12, 28]) {
+    assert.deepEqual(event(n), event(n));
+    if (n < 8) {
+      const first = event(n), other = structuredClone(first);
+      const a = play(first, 1);
+      let b = command(other, { action: "start_round" }, 12);
+      const match = fprCurrentAttempt(b)!.matches[0];
+      b = command(b, { action: "score", matchId: match.id, score1: 25, score2: 0, confirmed1: true, confirmed2: true }, 20);
+      b = command(b, { action: "close_round" }, 21);
+      assert.deepEqual(a.singleCourtPlan, b.singleCourtPlan);
+      assert.deepEqual(fprCurrentAttempt(a), fprCurrentAttempt(b));
+    }
+  }
+});
+
+test("serve cycle has 7/6/6/6 points, alternates right/left, changes sides after point 12", () => {
+  const m = event(4).attempts[0].matches[0], counts = new Map<string, number>();
+  for (let i = 0; i < 25; i += 1) {
+    const serve = fprServeAt(m, i);
+    counts.set(serve.playerId, (counts.get(serve.playerId) ?? 0) + 1);
+    assert.equal(serve.side, i % 2 ? "left" : "right");
+    assert.equal(serve.changeEnds, i === 12);
+  }
+  assert.equal(counts.get(m.firstServer), 7);
+  assert.deepEqual([...counts.values()].sort(), [6, 6, 6, 7]);
+});
+
+test("one-court optimization counts a repeated partner after only one player rested", () => {
+  const state = createFprState({ tournamentId: "fpr-review-1", players: players(5).map((p, i) => ({ ...p, level: 3, leaguePoints: 100 - i })),
+    courts: ["Court"], leagueSource: "League", now: at(0), endsAt: at(90), reserveAllowed: true });
+  const previousPartner = new Map<string, string>();
+  let repeats = 0;
+  for (const round of state.singleCourtPlan.filter(r => r.round <= 6)) for (const match of round.pairings) {
+    for (const [a, b] of [match.pair1, match.pair2]) {
+      if (previousPartner.get(a) === b || previousPartner.get(b) === a) repeats += 1;
+      previousPartner.set(a, b); previousPartner.set(b, a);
+    }
+  }
+  assert.equal(repeats, 0);
+});
+
+test("malformed snapshots, duplicate participants, fake complete rounds and missing ratings fail closed", () => {
+  const state = event();
+  const bad = structuredClone(state); bad.attempts[0].status = "closed";
+  assert.throws(() => validateFprState(bad));
+  const duplicate = structuredClone(state); duplicate.players[1].id = duplicate.players[0].id;
+  assert.throws(() => validateFprState(duplicate), /Повторный/);
+  const missing = structuredClone(state); missing.players[0].leaguePoints = Number.NaN;
+  assert.throws(() => validateFprState(missing), /снимок/);
+});
+
+function standingsFixture(spec: string[][][]) {
+  let state = event(8);
+  for (let r = 0; r < spec.length; r += 1) {
+    const current = fprCurrentAttempt(state)!;
+    current.matches = current.matches.map((m, court) => {
+      const one = spec[r][court * 2] as [string, string], two = spec[r][court * 2 + 1] as [string, string];
+      return { ...m, pair1: one, pair2: two, firstServer: one[0] };
+    });
+    state = command(state, { action: "start_round" }, r * 12 + 1);
+    for (const m of fprCurrentAttempt(state)!.matches) state = command(state, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true }, r * 12 + 8);
+    state = command(state, { action: "close_round" }, r * 12 + 9);
+  }
+  return fprStandings(state);
+}
+
+test("a whole-group H2H mini-table handles A>B>C>A and unequal series lengths once", () => {
+  const rows = standingsFixture([
+    [["p1", "p4"], ["p2", "p5"], ["p3", "p6"], ["p7", "p8"]],
+    [["p2", "p4"], ["p3", "p5"], ["p6", "p7"], ["p1", "p8"]],
+    [["p3", "p4"], ["p1", "p5"], ["p2", "p6"], ["p7", "p8"]],
+    [["p1", "p4"], ["p5", "p6"], ["p7", "p8"], ["p2", "p3"]],
+  ]);
+  // B beats C in their series, but the complete mini-table ties them at 3.
+  // Do not recurse into that subgroup: C's lower League points put C above B.
+  assert.deepEqual(rows.filter(p => p.wins === 2).map(p => [p.id, p.headToHead]), [["p7", 4], ["p3", 3], ["p2", 3], ["p1", 2]]);
+});
+
+test("one missing opposing series skips H2H for the entire equal group", () => {
+  const rows = standingsFixture([
+    [["p1", "p4"], ["p2", "p5"], ["p3", "p6"], ["p7", "p8"]],
+    [["p2", "p4"], ["p3", "p5"], ["p1", "p7"], ["p6", "p8"]],
+    [["p3", "p4"], ["p1", "p5"], ["p2", "p6"], ["p7", "p8"]],
+    [["p5", "p6"], ["p1", "p4"], ["p7", "p8"], ["p2", "p3"]],
+  ]);
+  assert.deepEqual(rows.filter(p => p.wins === 2).map(p => [p.id, p.headToHead]), [["p7", null], ["p3", null], ["p2", null], ["p1", null]]);
+});
+
+test("post-deadline partial 7:5 cannot grow into a final 13:12; whole round is excluded", () => {
+  let state = event(); state.endsAt = at(90);
+  for (let r = 1; r <= 5; r += 1) state = play(state, r);
+  state = command(state, { action: "start_round" }, 72);
+  const match = fprCurrentAttempt(state)!.matches[0];
+  state = command(state, { action: "score", matchId: match.id, score1: 7, score2: 5, confirmed1: false, confirmed2: false }, 88);
+  assert.throws(() => command(state, { action: "score", matchId: match.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true }, 95), /один уже начатый/);
+  state = command(state, { action: "finish" }, 96);
+  assert.equal(state.status, "incomplete"); assert.equal(fprCompletedRounds(state), 5);
+});
+
+test("late data entry requires actual timely completion; a last rally started before deadline may finish later", () => {
+  let state = event(); state.endsAt = at(90);
+  for (let r = 1; r <= 5; r += 1) state = play(state, r);
+  state = command(state, { action: "start_round" }, 72);
+  for (const m of fprCurrentAttempt(state)!.matches) {
+    assert.throws(() => command(state, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true }, 88), /фактическое окончание/);
+    state = command(state, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true,
+      playedAt: at(86), reason: "Both pairs reported at 86, organizer entered late" }, 88);
+  }
+  state = command(state, { action: "close_round" }, 89);
+  assert.equal(state.attempts.find(a => a.round === 6)!.finishedAt, at(86));
+  state = command(state, { action: "finish" }, 90);
+  assert.equal(state.status, "completed");
+
+  let rally = event(4); rally.endsAt = at(90);
+  for (let r = 1; r <= 5; r += 1) rally = play(rally, r);
+  rally = command(rally, { action: "start_round" }, 72);
+  const m = fprCurrentAttempt(rally)!.matches[0];
+  rally = command(rally, { action: "score", matchId: m.id, score1: 12, score2: 12, confirmed1: false, confirmed2: false }, 88);
+  rally = command(rally, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true,
+    playedAt: at(89), lastRallyStartedAt: at(86.9), reason: "Only the last rally continued" }, 89);
+  rally = command(rally, { action: "close_round" }, 90);
+  assert.equal(fprCompletedRounds(rally), 6);
+});
+
+test("a second pair can confirm a saved last-rally result without re-entering its valid timing proof", () => {
+  let state = event(4); state.endsAt = at(90);
+  state = command(state, { action: "start_round" }, 72);
+  const m = fprCurrentAttempt(state)!.matches[0];
+  state = command(state, { action: "score", matchId: m.id, score1: 12, score2: 12, confirmed1: false, confirmed2: false }, 88);
+  state = command(state, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: false,
+    playedAt: at(89), lastRallyStartedAt: at(86.9), reason: "Last rally already started" }, 89);
+  state = command(state, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true }, 90);
+  assert.equal(fprCurrentAttempt(state)!.matches[0].lastRallyStartedAt, at(86.9));
+  state = command(state, { action: "close_round" }, 91);
+  assert.equal(fprCompletedRounds(state), 1);
+});
