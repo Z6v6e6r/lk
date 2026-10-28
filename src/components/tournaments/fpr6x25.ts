@@ -568,16 +568,12 @@ export function fprProjection(state: FprState, previousParams: Record<string, un
     finishedAt: null, completedAt: null, manualFinishedAt: null, published: false,
     totalRounds: 6, byePointsMode: "zero_points", leagueResultStatus: "pending_rules",
   };
-  const rounds = state.attempts.filter(a => a.status === "closed").map(a => ({
-    id: a.id, index: a.round, byes: a.byes,
-    matches: a.matches.map(m => ({ id: m.id, court: state.courts[m.courtIndex], courtIndex: m.courtIndex,
-      pair1: m.pair1, pair2: m.pair2, score1: m.score1, score2: m.score2 })),
-  }));
   return {
-    params, rounds, standings, totals: {}, playerLogs: {},
+    // A cached FPR client may still reach the generic handler after rollback.
+    // Scored legacy rounds would make that handler finalize and award ratings.
+    params, rounds: [], standings, totals: {}, playerLogs: {},
     summary: { status: "awaiting_league_rules", finished: false, totalRounds: 6,
-      completedRounds: fprCompletedRounds(state), totalMatches: rounds.reduce((n, r) => n + r.matches.length, 0),
-      completedMatches: rounds.reduce((n, r) => n + r.matches.length, 0), byePolicy: "zero_points" },
+      completedRounds: 0, totalMatches: 0, completedMatches: 0, byePolicy: "zero_points" },
   };
 }
 

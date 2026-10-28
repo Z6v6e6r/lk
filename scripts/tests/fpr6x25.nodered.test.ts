@@ -89,12 +89,33 @@ test("complete FPR event stays ineligible for both current rating workers and ge
   }
   doc = update(doc, { action: "finish" });
   assert.equal(doc.params.fpr6x25.status, "completed");
-  assert.equal(doc.summary.completedRounds, 6);
+  assert.equal(doc.params.fpr6x25.attempts.filter(a => a.status === "closed").length, 6);
+  assert.deepEqual(doc.rounds, []);
+  assert.equal(doc.summary.completedRounds, 0);
+  assert.equal(doc.summary.completedMatches, 0);
+  assert.equal(doc.summary.totalMatches, 0);
   assert.equal(isTournamentFinalized(doc), false);
   assert.ok(doc.standings.every((p: Record<string, unknown>) => !["ratingBefore", "ratingAfter", "ratingDelta", "deltaTotal"].some(key => key in p)));
   assert.deepEqual(doc.totals, {});
   const plan = planCommunityTournamentClose({ tournament: doc, now: new Date(Date.now() + 4 * 3600_000).toISOString() });
   assert.equal(plan.close, false);
+
+  // After a backend rollback, a cached client can submit another FPR command to
+  // the original generic reducer. It must neither acknowledge it nor finalize.
+  const command = { id: "cached-client-after-rollback", expectedRevision: doc.params.fpr6x25.revision, action: "finish" };
+  const legacy = new Function("msg", legacyRecalculate)({ payload: structuredClone(doc),
+    req: { body: { results: [], params: { fprCommand: command } } } });
+  const afterRollback = { ...doc, ...legacy.mongoUpdate.$set };
+  assert.equal(afterRollback.summary.status, "in_progress");
+  assert.equal(isTournamentFinalized(afterRollback), false);
+  assert.deepEqual(afterRollback.params.fpr6x25, doc.params.fpr6x25);
+  assert.equal(afterRollback.params.fpr6x25.audit.some(entry => entry.id === command.id), false);
+  assert.equal(planCommunityTournamentClose({ tournament: afterRollback, now: new Date(Date.now() + 4 * 3600_000).toISOString() }).close, false);
+  const unsafe = { ...structuredClone(doc), rounds: doc.params.fpr6x25.attempts.filter(a => a.status === "closed").map(a => ({
+    id: a.id, index: a.round, byes: a.byes, matches: a.matches.map(m => ({ ...m, court: doc.params.fpr6x25.courts[m.courtIndex] })),
+  })) };
+  const control = new Function("msg", legacyRecalculate)({ payload: unsafe, req: { body: { results: [], params: { fprCommand: command } } } });
+  assert.equal(isTournamentFinalized({ ...unsafe, ...control.mongoUpdate.$set }), true);
 });
 
 test("guarded patch changes only three function bodies and preserves exact live legacy suffixes", () => {

@@ -69,6 +69,27 @@ try {
     context.serializedRecord = JSON.stringify(record);
     return new vm.Script("check(JSON.parse(serializedRecord))").runInContext(context, { timeout: 1000 });
   };
+  phase = "rollback-cached-client-generic-handler";
+  const completed = packet.completedFixture;
+  assert.equal(completed.params.fpr6x25.status, "completed");
+  assert.equal(completed.params.fpr6x25.attempts.filter(a => a.status === "closed").length, 6);
+  assert.equal(completed.rounds.length, 0);
+  const cachedCommand = { id: "server-vm-after-rollback", expectedRevision: completed.params.fpr6x25.revision, action: "finish" };
+  const generic = run(recalculate.func, { payload: completed,
+    req: { headers: {}, body: { results: [], params: { fprCommand: cachedCommand } }, query: {} } });
+  const rolledBack = { ...completed, ...generic.mongoUpdate.$set };
+  assert.equal(rolledBack.summary.status, "in_progress");
+  assert.equal(check(rolledBack), false);
+  assert.equal(rolledBack.params.fpr6x25.attempts.filter(a => a.status === "closed").length, 6);
+  assert.equal(rolledBack.params.fpr6x25.audit.some(entry => entry.id === cachedCommand.id), false);
+  diagnostics.rollbackCachedCommandCannotFinalize = true;
+  const unsafe = structuredClone(completed);
+  unsafe.rounds = completed.params.fpr6x25.attempts.filter(a => a.status === "closed").map(a => ({
+    id: a.id, index: a.round, byes: a.byes, matches: a.matches.map(m => ({ ...m, court: completed.params.fpr6x25.courts[m.courtIndex] })),
+  }));
+  const unsafeResult = run(recalculate.func, { payload: unsafe, req: { headers: {}, body: { results: [], params: { fprCommand: cachedCommand } }, query: {} } });
+  assert.equal(check({ ...unsafe, ...unsafeResult.mongoUpdate.$set }), true);
+  diagnostics.rollbackUnsafeProjectionPositiveControl = true;
   const pending = structuredClone(body);
   pending.params.fpr6x25.status = "completed"; pending.params.fpr6x25.finishedAt = new Date().toISOString();
   phase = "worker-guard-pending-result";

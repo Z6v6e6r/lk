@@ -88,9 +88,11 @@
 | `GET /lk/tournaments/americano/history?tournamentId=fpr-…&readback=…` | Актуальный протокол; узкое снятие кэша с сохранением существующего rate limit |
 
 Полный протокол находится в `params.fpr6x25`: снимок, посев, жребий, попытки,
-подтверждения, фактические времена, снятия и история команд. Legacy `rounds` —
-проекция только зачтённых раундов. Функции generic Americano/Mexicano не рассчитывают
-ФПР. Ни `startRatingChanges`, ни поля `ratingBefore/After/Delta/deltaTotal` не выдаются.
+подтверждения, фактические времена, снятия и история команд. Legacy `rounds` и
+счётчики сыгранных матчей остаются пустыми: даже после отката backend старый
+generic Americano/Mexicano не должен автоматически завершить ФПР и начислить
+рейтинг. Таблица и прогресс читаются из протокола. Ни `startRatingChanges`, ни поля
+`ratingBefore/After/Delta/deltaTotal` FPR-адаптер не выдаёт.
 
 Для совместимости с установленными воркерами все legacy finish-флаги сброшены,
 времена завершения находятся только внутри протокола, legacy status равен
