@@ -165,7 +165,7 @@
     "test:nodered-modular-toolchain": "node --test scripts/tests/noderedModularToolchain.test.mjs",
     "test:referral-attribution-release": "node --test scripts/tests/referralAttributionReleaseCandidate.test.mjs",
     "test:viva-user-agent": "node --test scripts/tests/vivaUserAgent.test.mjs",
-    "test:rating-worker-release": "node --experimental-strip-types --test scripts/tests/ratingWorkerRelease.test.mjs scripts/tests/fprRatingWorkerOverlay.test.mjs scripts/tests/ratingWorkerWatchdog.test.mjs",
+    "test:rating-worker-release": "node --experimental-strip-types --test scripts/tests/ratingWorkerRelease.test.mjs scripts/tests/fprRatingWorkerOverlay.test.mjs scripts/tests/fprMonthlyReporterOverlay.test.mjs scripts/tests/ratingWorkerWatchdog.test.mjs",
     "test:nodered-chat-recovery": "node --test scripts/tests/noderedChatRecovery.test.mjs",
     "test:games-list-identity-recovery": "node --experimental-strip-types --test scripts/tests/gamesListIdentityRecovery.test.mjs scripts/tests/gameListNormalize.test.ts scripts/tests/gameResponsePhoneRedaction.test.ts scripts/tests/gameIdentityRelevance.test.ts",
     "test:games-direct-lookup-recovery": "node --test scripts/tests/gamesDirectLookupRecovery.test.mjs",

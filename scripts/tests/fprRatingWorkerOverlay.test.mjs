@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildFprRatingWorkerOverlay, fprWorkerFiles, fprWorkerReplacements, sha256 } from "../build_fpr_rating_worker_overlay.mjs";
 
 function fixture(t) {
@@ -28,7 +30,7 @@ function fixture(t) {
   return { baselineRoot, sourceRoot, outputRoot, contract, manifestPath };
 }
 
-test("FPR overlay changes exactly five files and preserves installed runtime bytes/modes", t => {
+test("FPR overlay includes all six runtime files and preserves installed bytes/modes", t => {
   const f = fixture(t), result = buildFprRatingWorkerOverlay(f);
   assert.deepEqual(result.changedFiles, [...fprWorkerFiles].sort());
   assert.equal(fs.readFileSync(path.join(f.outputRoot, "deploy/run.sh"), "utf8"), "old lock/annulment/entrypoint bytes\n");
@@ -42,6 +44,25 @@ test("baseline drift is rejected before output creation", t => {
   const f = fixture(t); fs.appendFileSync(path.join(f.baselineRoot, "deploy/run.sh"), "foreign change");
   assert.throws(() => buildFprRatingWorkerOverlay(f), /Hash mismatch/);
   assert.equal(fs.existsSync(f.outputRoot), false);
+});
+test("the actual FPR facts import tree resolves from an isolated overlay including its pure guard", t => {
+  const f = fixture(t), root = fileURLToPath(new URL("../../", import.meta.url));
+  const manifest = JSON.parse(fs.readFileSync(f.manifestPath));
+  for (const relative of ["src/services/community-rating/calculations.ts", "src/services/community-rating/contract.ts"]) {
+    const bytes = fs.readFileSync(path.join(root, relative));
+    fs.mkdirSync(path.dirname(path.join(f.baselineRoot, relative)), { recursive: true });
+    fs.writeFileSync(path.join(f.baselineRoot, relative), bytes);
+    manifest.files.push({ path: relative, sha256: sha256(bytes) });
+  }
+  fs.writeFileSync(f.manifestPath, JSON.stringify(manifest)); f.contract.baselineManifestSha256 = sha256(fs.readFileSync(f.manifestPath));
+  for (const relative of fprWorkerFiles.slice(2)) {
+    const bytes = fs.readFileSync(path.join(root, relative));
+    fs.writeFileSync(path.join(f.sourceRoot, relative), bytes); f.contract.sourceFiles[relative] = sha256(bytes);
+  }
+  buildFprRatingWorkerOverlay(f);
+  const imported = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "--eval",
+    `await import(${JSON.stringify(pathToFileURL(path.join(f.outputRoot, "src/services/community-rating/facts.ts")).href)});`], { encoding: "utf8" });
+  assert.equal(imported.status, 0, imported.stderr);
 });
 test("a restrictive deploy umask cannot remove runtime read/execute permissions", t => {
   const f = fixture(t), previous = process.umask(0o077);

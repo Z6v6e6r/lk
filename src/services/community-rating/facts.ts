@@ -4,7 +4,7 @@ import {
   getPlaceBonus,
 } from "./calculations.ts";
 import { COMMUNITY_RATING_CALCULATION_VERSION } from "./contract.ts";
-import { getTournamentRatingExclusion } from "../player-rating/tournamentExclusions.ts";
+import { getTournamentRatingExclusion } from "../player-rating/tournamentExclusionGuard.ts";
 import { fprStandings } from "../../components/tournaments/fpr6x25.ts";
 import { selectFprCommunityResults, type FprCommunitySelection } from "./fpr.ts";
 

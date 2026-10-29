@@ -6,7 +6,8 @@ import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 export const fprWorkerFiles = ["scripts/rating_worker.mjs", "src/services/community-rating/recalculation.ts",
-  "src/services/community-rating/facts.ts", "src/services/community-rating/fpr.ts", "src/components/tournaments/fpr6x25.ts"];
+  "src/services/community-rating/facts.ts", "src/services/community-rating/fpr.ts", "src/components/tournaments/fpr6x25.ts",
+  "src/services/player-rating/tournamentExclusionGuard.ts"];
 export const fprWorkerReplacements = [
   { file: fprWorkerFiles[0], before: 'db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1 } }).toArray(),',
     after: 'db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1,\n      tournamentType: 1, "params.fpr6x25.testMode": 1, "params.fpr6x25.communityRating": 1 } }).toArray(),' },
