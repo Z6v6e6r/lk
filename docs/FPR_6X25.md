@@ -26,7 +26,7 @@
    посев и отдельный жребий отдыха на вкладке «Протокол».
    Если до первого старта обнаружена ошибка состава, создать новый протокол с новым посевом.
 4. Начальные стороны корта определяются автоматически отдельным фиксированным
-   жребием и показаны в карточке. A1 назначается по регламенту; B1 уже указан,
+   жребием. Служебные подписи сторон и обозначения пар A/B в карточке не показываются. A1 назначается по регламенту; B1 уже указан,
    пара B может изменить его до общего старта в блоке «Порядок подачи». Выполнить общий старт всех кортов. Записать счёт каждого
    матча и подтверждение участника от каждой пары. Сумма окончательного счёта — 25.
 5. Закрыть весь общий раунд. Только после этого его матчи попадают в таблицу.
@@ -39,6 +39,64 @@
    Скачать JSON протокола и таблицы. Для другого устройства использовать
    «Открыть сохранённый протокол ФПР по ID»; управление доступно организатору
    этого протокола либо сотруднику с доступом к турнирам.
+
+## Трансляция на экраны
+
+В менеджер ФПР добавлена штатная кнопка «Трансляция результатов»: выбор экранов
+по станции, показ активных экранов и остановка. Используются существующие
+authenticated `/lk/tournaments/broadcast/status|start|stop`, логические targets
+и серверная карта устройств. `boxId`, upstream URL и integration Bearer не входят
+во frontend. Для ФПР start и stop требуют существующего серверного права Viva
+«проводит турниры»; владение протоколом и переданные клиентом station/source
+сами по себе этого права не дают. Status сохраняет прежнюю проверку доступа.
+
+Неподтверждённый POST не повторяется автоматически: сначала читается состояние,
+при недоступном readback остаётся только явная остановка для восстановления.
+Действующий operation lease блокирует новые команды; закрытая панель игнорирует
+поздние ответы. При создании ФПР клиентский `params.broadcast` удаляется.
+Сохранение счёта меняет только принадлежащие ФПР dotted params keys и сохраняет
+параллельные broadcast claim, activeTargets и остальные metadata.
+
+Граница ответственности ЛК — передать приставке точный ID отдельного FPR-протокола
+через существующий box-control. Приложение на приставке и периодический опрос
+реализует коллега владельца проекта. Проверка renderer не блокирует готовность
+этой части ЛК. При запуске устройство получает:
+
+```json
+{ "tournament_id": "fpr-11111111-2222-4333-8444-555555555555" }
+```
+
+Это ID нового протокола `fpr-UUID`. `sourceExerciseId` не заменяет его и не считается
+разрешением на управление экраном. По полученному ID плеер запрашивает:
+
+```text
+GET https://padlhub.su/lk/tournaments/americano/history?tournamentId=<URL-encoded tournament_id>&readback=1
+```
+
+Ответ — JSON-массив документов. Выбрать документ с точным `tournamentId` и
+`tournamentType="fpr_6x25"`; состояние находится в `params.fpr6x25`:
+
+- `version`, `revision`, `status` — версия формата, версия протокола и его состояние;
+- `players` — состав с именами; `courts` — названия кортов;
+- `attempts` — раунды и их попытки: `round`, `attempt`, `status`, `byes`, `matches`;
+- у матча `courtIndex` указывает на `courts[courtIndex]`, `pair1`/`pair2` содержат
+  ID игроков, `score1`/`score2` — счёт;
+- `standings` на верхнем уровне документа — рассчитанная таблица с `id`, `name`,
+  `rank`, `wins`, `matchesPlayed`, `totalPoints` и `status`.
+
+Показывать незакрытые назначения можно из попыток `scheduled`/`running`; в зачёт
+входят только попытки `closed`. `cancelled` не даёт зачётного результата. Для
+состояния и завершения ФПР использовать `params.fpr6x25.status`. Legacy `rounds`
+остаются пустыми ради защиты общего рейтинга, а legacy `summary` не описывает
+ход ФПР. Итоговую таблицу брать из `standings` того же ответа.
+
+Рекомендуемый интервал опроса — 10 секунд; `readback=1` запрашивает свежую версию.
+При неизменной `revision` перерисовка не нужна. При 429 соблюдать `Retry-After`,
+при сетевой ошибке сохранять последний успешный кадр и повторять с задержкой.
+Локальные start/stop и выбор targets проверяются через синтетический mock без
+команд реальным устройствам; это не подтверждает отрисовку на физическом ТВ.
+
+## Дедлайн
 
 Игровой дедлайн наступает за три минуты до окончания события. Приложение показывает
 предупреждение и запрещает новый старт. После дедлайна ввод окончательного счёта
@@ -149,7 +207,8 @@ generic Americano/Mexicano не должен автоматически заве
 | `fprCommunityLeague.ts`, `src/utils/communityApi.ts` | Автозагрузка сообщества и единого снимка рейтинга с ручными исправлениями |
 | `src/services/community-rating/fpr.ts`, `facts.ts`, `recalculation.ts`, `monthly.ts`, `league.ts`, `scripts/rating_worker.mjs` | Обычные очки сообщества из ФПР, выбор одного результата и обнаружение изменений |
 | `TournamentsPage.tsx`, `tournamentLifecycle.ts`, `src/utils/apiClient.ts`, `tournamentDraftExercise.ts` | Подключение нового типа, карточки, API и локальная видимость |
-| `scripts/nodered_fpr6x25.mjs`, `patch_live_fpr6x25.mjs` | Детерминированная компиляция и focused patch четырёх function nodes |
+| `src/components/tournaments/TournamentBroadcastControl.tsx`, `tournamentBroadcastController.ts` | Выбор экранов и управление существующим broadcast API с проверкой ответов, lease и recovery |
+| `scripts/nodered_fpr6x25.mjs`, `patch_live_fpr6x25.mjs` | Детерминированная компиляция и focused patch явно выбранных из пяти function nodes |
 | `scripts/build_fpr_rating_worker_overlay.mjs` | Отдельный неизменяемый FPR-only артефакт поверх проверенного установленного worker без включения неопубликованных policies/таймеров |
 | `scripts/audit_fpr6x25_live_readonly.mjs`, `verify_fpr6x25_server_vm.mjs` | Только hashes/структурные утверждения и серверный VM без DB writes |
 | `scripts/export_fpr6x25_history_readonly.mjs`, `simulate_fpr6x25_history.mjs` | Обезличенное чтение истории и локальное моделирование |
@@ -158,7 +217,8 @@ generic Americano/Mexicano не должен автоматически заве
 Live `147` остаётся источником актуального flow. На сервере меняются только `func`
 узлов `4f0f1ce8189a9e8c` (Prepare tournament doc), `2e70b2e547e77c00`
 (Recalculate ratings & totals), `tournament_history_request_guard_20260817`
-и `tournament_community_history_query_20260811` (только чтение контекста публикаций).
+и `tournament_community_history_query_20260811` (только чтение контекста публикаций),
+`lk_tournament_broadcast_route_20260719` (дополнительная проверка staff для ФПР start/stop).
 Прежние тела остаются побайтно неизменными suffix после `END FPR_6X25_DISPATCH_V1`.
 Wires, routes, config nodes, чужие функции и provider-контуры не меняются.
 
@@ -193,6 +253,7 @@ rollback и soak lease. Копирование старых standalone generic f
 node --experimental-strip-types --test scripts/tests/fpr6x25.test.ts scripts/tests/fpr6x25.nodered.test.ts scripts/tests/tournamentLifecycle.test.ts
 npm run test:community-rating
 npm run test:rating-worker-release
+npm run test:fpr-broadcast
 npm run lint
 npm run build
 node --experimental-strip-types scripts/simulate_fpr6x25_history.mjs /absolute/private/history-sanitized.json /absolute/private/new-report.json

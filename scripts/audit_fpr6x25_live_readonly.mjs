@@ -9,6 +9,7 @@ const allowed = [
   "a73c590f8f001001", "a73c590f8f001002", "745f991e11130b08",
   "tournament_history_request_guard_20260817", "tournament_history_cache_store_20260817",
   "tournament_community_history_query_20260811",
+  "lk_tournament_broadcast_authorize_20260719", "lk_tournament_broadcast_route_20260719",
 ];
 const nodes = allowed.map(id => {
   const node = flow.find(n => n.id === id);

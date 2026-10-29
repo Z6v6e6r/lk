@@ -13,6 +13,7 @@ import { apiFetchCommunities, apiFetchCommunityRanking, apiFetchTournamentCommun
 import { loadFprCommunityLeague, fprLeagueLabel, type FprLeagueValue, type FprLoadedLeague } from "./fprCommunityLeague";
 import "./fpr6x25.css";
 import { useLkTournamentSession } from "../../utils/useLkTournamentSession";
+import { TournamentBroadcastControl } from "./TournamentBroadcastControl";
 
 type Player = { id: string; name: string; rating?: string | null; phone?: string | null; photo?: string | null };
 const message = (e: unknown) => e instanceof Error ? e.message : "Не удалось выполнить действие";
@@ -295,6 +296,7 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
   const [reason, setReason] = useState("");
   const [withdrawId, setWithdrawId] = useState("");
   const [finishConfirmation, setFinishConfirmation] = useState(false);
+  const [broadcastSelectionOpen, setBroadcastSelectionOpen] = useState(false);
   const [now, setNow] = useState(() => new Date().toISOString());
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date().toISOString()), 10_000); return () => window.clearInterval(timer); }, []);
   const applyResponse = (next: FprState, payload = data) => {
@@ -347,7 +349,7 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
   const threshold = state ? fprReserveThreshold(state, now) : null;
   const name = (id: string) => state?.players.find(p => p.id === id)?.name ?? id;
   const disabled = busy || Boolean(pending);
-  return <Modal isOpen onClose={onClose} title={`ФПР 6×25${state?.testMode ? " · тестовое проведение" : ""}`} variant="fullscreen" bodyClassName="tournament-settings-modal-body">
+  return <Modal isOpen onClose={() => { if (!broadcastSelectionOpen) onClose(); }} title={`ФПР 6×25${state?.testMode ? " · тестовое проведение" : ""}`} variant="fullscreen" bodyClassName="tournament-settings-modal-body">
     <div className="tournament-manager fpr-panel">
       {!state ? <p role="alert">Протокол ФПР повреждён или имеет другую версию. Загрузите его с сервера.</p> : <>
         <div className="tournament-manager-meta"><span className="tournament-manager-chip strong">ФПР 6×25</span><span className="tournament-manager-chip">25 очков на матч</span><span className="tournament-manager-chip">{state.players.length} игроков</span><span className="tournament-manager-chip">Кортов: {state.courts.length}</span></div>
@@ -429,6 +431,7 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
       {pending && <div role="status"><p>Есть команда без подтверждённого ответа сервера. Новые действия временно заблокированы.</p><button type="button" disabled={busy} onClick={() => void send(pending)}>Повторить ту же команду</button></div>}
       {error && <p role="alert" className="fpr-error">{error}</p>}
       <button type="button" disabled={busy} onClick={() => void reload()}>{busy ? "Проверяем…" : "Прочитать актуальный протокол с сервера"}</button>
+      <TournamentBroadcastControl key={data.tournamentId} tournamentId={data.tournamentId} stationId={data.params?.stationId} initialState={data.params?.broadcast} onDialogChange={setBroadcastSelectionOpen} />
     </div>
   </Modal>;
 }
