@@ -51,4 +51,3 @@ export function buildFprMonthlyReporterOverlay({baselineRoot,sourceRoot,outputRo
  return {ok:true,files:files.length,changedFiles:changed,legacyExclusionsUnchanged:true,manifestSha256:sha256(fs.readFileSync(path.join(outputRoot,"release-manifest.json")))};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){const[baselineRoot,sourceRoot,outputRoot,contractPath]=process.argv.slice(2);if(!contractPath)throw Error("Usage: BASE SOURCE NEW_OUTPUT CONTRACT_JSON");console.log(JSON.stringify(buildFprMonthlyReporterOverlay({baselineRoot,sourceRoot,outputRoot,contract:JSON.parse(fs.readFileSync(contractPath))})));}
-

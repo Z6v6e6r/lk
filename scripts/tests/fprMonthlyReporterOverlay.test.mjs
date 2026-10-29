@@ -38,4 +38,3 @@ test("month builder refuses symlinks, extra source paths and existing output",t=
  const file=f.baselineRoot+"/deploy/reports.sh";fs.renameSync(file,file+".old");fs.symlinkSync(file+".old",file);assert.throws(()=>buildFprMonthlyReporterOverlay(f),/Non-regular/);
  fs.mkdirSync(f.outputRoot);assert.throws(()=>buildFprMonthlyReporterOverlay(f),/Output already exists/);
 });
-
