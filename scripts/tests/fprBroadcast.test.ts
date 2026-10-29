@@ -192,8 +192,12 @@ test("staff FPR stop, owner status and ordinary-format ownership use the unchang
   const legacy = new Function("msg", "env", legacyRouteSource);
   for (const input of [routeMessage("stop", true), routeMessage("status"), routeMessage("start", false, "americano_classic")]) {
     const wrapped = route(structuredClone(input), deviceEnvironment), original = legacy(structuredClone(input), deviceEnvironment);
-    // Operation IDs and timestamps are server-generated per independent evaluation.
-    const sanitize = (value: unknown) => JSON.parse(JSON.stringify(value, (key, entry) => /operationId|operationLeaseUntil|updatedAt/.test(key) ? "generated" : entry));
+    // Operation IDs, join IDs and timestamps are generated per independent evaluation.
+    const sanitize = (value: unknown) => JSON.parse(JSON.stringify(value, (key, entry) => {
+      if (/operationId|operationLeaseUntil|updatedAt/.test(key)) return "generated";
+      if (key === "id" && typeof entry === "string" && new RegExp(`^${tournamentId}:command:\\d+$`).test(entry)) return `${tournamentId}:command:generated`;
+      return entry;
+    }));
     assert.deepEqual(sanitize(wrapped), sanitize(original));
   }
 });
