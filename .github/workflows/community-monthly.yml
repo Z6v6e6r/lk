@@ -5,6 +5,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/services/community-rating/**"
+      - "src/services/player-rating/tournamentExclusionGuard.ts"
+      - "src/services/player-rating/tournamentExclusions.ts"
       - "src/components/tournaments/fpr*.ts"
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
@@ -27,6 +29,8 @@ on:
     branches: [main]
     paths:
       - "src/services/community-rating/**"
+      - "src/services/player-rating/tournamentExclusionGuard.ts"
+      - "src/services/player-rating/tournamentExclusions.ts"
       - "src/components/tournaments/fpr*.ts"
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
