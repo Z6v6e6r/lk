@@ -6,7 +6,7 @@ import {
 } from "../../utils/apiClient";
 import {
   createFprState, fprCompletedRounds, fprCurrentAttempt, fprProjection, fprReserveThreshold,
-  fprServeAt, fprStandings, fprStartingSides, validateFprState, type FprCommand, type FprMatch, type FprState,
+  fprServeAt, fprStandings, validateFprState, type FprCommand, type FprMatch, type FprState,
 } from "./fpr6x25";
 import { apiFetchCommunities, apiFetchCommunityRanking, apiFetchTournamentCommunityBinding,
   type TournamentCommunityBinding } from "../../utils/communityApi";
@@ -223,10 +223,8 @@ function HeadToHeadDetails({ state }: { state: FprState }) {
   </details>;
 }
 function MatchHeader({ match, state }: { match: FprMatch; state: FprState }) {
-  const sides = fprStartingSides(state, match);
   return <div className="tournament-match-header">
     <div className="tournament-match-court"><span className="tournament-match-label">Корт</span><span className="tournament-match-value">{state.courts[match.courtIndex]}</span></div>
-    <span className="fpr-hint">Жребий стартовых сторон: A — {sides.sideA}, B — {sides.sideB}</span>
   </div>;
 }
 function MatchEditor({ match, state, closed, disabled, onSave, now }: {
@@ -251,18 +249,18 @@ function MatchEditor({ match, state, closed, disabled, onSave, now }: {
     <MatchHeader match={match} state={state} />
     <fieldset disabled={disabled}>
       <div className="tournament-match-row">
-        <span className="tournament-match-label">Пара A</span><span className="tournament-match-value">{names(match.pair1)}</span>
-        <input className="tournament-score-input" aria-label={`Счёт A: ${match.id}`} type="number" min="0" max="25" step="1" value={score1} onChange={e => changeScore(1, e.target.value)} />
+        <span className="tournament-match-value">{names(match.pair1)}</span>
+        <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair1)}`} type="number" min="0" max="25" step="1" value={score1} onChange={e => changeScore(1, e.target.value)} />
       </div>
       <div className="tournament-match-row">
-        <span className="tournament-match-label">Пара B</span><span className="tournament-match-value">{names(match.pair2)}</span>
-        <input className="tournament-score-input" aria-label={`Счёт B: ${match.id}`} type="number" min="0" max="25" step="1" value={score2} onChange={e => changeScore(2, e.target.value)} />
+        <span className="tournament-match-value">{names(match.pair2)}</span>
+        <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair2)}`} type="number" min="0" max="25" step="1" value={score2} onChange={e => changeScore(2, e.target.value)} />
       </div>
       {!closed && <p className="fpr-hint">A1: {names([match.firstServer])}. Подача по два очка: A1 → B1 → A2 → B2. После 12-го очка — смена сторон.
         {serve && <> Следующая подача по записанному счёту: {names([serve.playerId])}, {serve.side === "right" ? "справа" : "слева"}.</>}</p>}
       <p>Сумма: {Number.isFinite(number(score1) + number(score2)) ? number(score1) + number(score2) : "—"} / 25</p>
-      <label className="fpr-check"><input type="checkbox" checked={confirmed1} onChange={e => setConfirmed1(e.target.checked)} /> Участник пары A подтвердил счёт</label>
-      <label className="fpr-check"><input type="checkbox" checked={confirmed2} onChange={e => setConfirmed2(e.target.checked)} /> Участник пары B подтвердил счёт</label>
+      <label className="fpr-check"><input type="checkbox" checked={confirmed1} onChange={e => setConfirmed1(e.target.checked)} /> Подтверждение счёта: {names(match.pair1)}</label>
+      <label className="fpr-check"><input type="checkbox" checked={confirmed2} onChange={e => setConfirmed2(e.target.checked)} /> Подтверждение счёта: {names(match.pair2)}</label>
       {closed && <label>Причина исправления<input value={reason} onChange={e => setReason(e.target.value)} /></label>}
       {lateEntry && <>
         <p>Игровой дедлайн наступил. Частичный счёт можно записать для протокола отменённой попытки. Для 25 очков нужны фактические времена и объяснение позднего ввода.</p>
@@ -363,14 +361,14 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
           {current ? <div className="tournament-rounds"><section className="tournament-round unsaved">
             <div className="tournament-round-header"><div className="tournament-round-heading"><span className="tournament-round-title">Раунд {current.round}{current.round >= 7 ? " · запасной" : ""}</span><span className="tournament-round-meta-text">Попытка {current.attempt}</span></div><span className="tournament-round-status">{current.status === "scheduled" ? "Готов к старту" : "В игре"}</span></div>
             <div className="tournament-round-body">
-            <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}. За отдых — ноль очков и побед.</p>
+            <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}.</p>
             {current.status === "scheduled" && <>
               {current.matches.map(m => <section className="tournament-match fpr-match" key={m.id} aria-label={`Матч: ${state.courts[m.courtIndex]}`}>
                 <MatchHeader match={m} state={state} />
-                <div className="tournament-match-row"><span className="tournament-match-label">Пара A</span><span className="tournament-match-value">{m.pair1.map(name).join(" + ")}</span><span className="fpr-score-placeholder">—</span></div>
-                <div className="tournament-match-row"><span className="tournament-match-label">Пара B</span><span className="tournament-match-value">{m.pair2.map(name).join(" + ")}</span><span className="fpr-score-placeholder">—</span></div>
+                <div className="tournament-match-row"><span className="tournament-match-value">{m.pair1.map(name).join(" + ")}</span><span className="fpr-score-placeholder">—</span></div>
+                <div className="tournament-match-row"><span className="tournament-match-value">{m.pair2.map(name).join(" + ")}</span><span className="fpr-score-placeholder">—</span></div>
                 <details className="fpr-serve-order"><summary>Порядок подачи</summary><p>A1: {name(m.firstServer)}. B1: {name(m.pair2[0])}. После 12-го очка пары меняются сторонами.</p>
-                  <label>Первый подающий пары B · можно изменить до старта<select aria-label={`Первый подающий пары B: ${m.id}`} disabled={disabled} value={m.pair2[0]} onChange={e => act({ action: "set_b1", matchId: m.id, playerId: e.target.value })}>{m.pair2.map(id => <option key={id} value={id}>{name(id)}</option>)}</select></label>
+                  <label>Первый подающий · {m.pair2.map(name).join(" + ")} · можно изменить до старта<select aria-label={`Первый подающий: ${m.pair2.map(name).join(" + ")}`} disabled={disabled} value={m.pair2[0]} onChange={e => act({ action: "set_b1", matchId: m.id, playerId: e.target.value })}>{m.pair2.map(id => <option key={id} value={id}>{name(id)}</option>)}</select></label>
                 </details>
               </section>)}
               <button type="button" className="section-cta" disabled={disabled || Date.parse(now) >= Date.parse(state.endsAt) - 180_000 || (current.round >= 7 && !threshold?.allowed)} onClick={() => act({ action: "start_round" })}>Общий старт всех кортов</button>
