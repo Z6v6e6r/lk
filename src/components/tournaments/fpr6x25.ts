@@ -9,6 +9,15 @@ export type FprPlayerInput = {
   leaguePlace: number | null;
 };
 export type FprPlayer = FprPlayerInput & { seed: number; restLot: number };
+export type FprCommunityRating = {
+  policy: "community-tournament-v1";
+  communityId: string;
+  communityName: string;
+  period: "month" | "all";
+  snapshotUpdatedAt: string | null;
+  sourceExerciseId: string | null;
+  publicationId: string | null;
+};
 export type FprMatch = {
   id: string;
   courtIndex: number;
@@ -48,6 +57,7 @@ export type FprState = {
   endsAt: string;
   reserveAllowed: boolean;
   testMode: boolean;
+  communityRating?: FprCommunityRating;
   players: FprPlayer[];
   courts: string[];
   attempts: FprAttempt[];
@@ -344,7 +354,7 @@ function prepareAttempt(state: FprState): FprAttempt {
 
 export function createFprState(input: {
   tournamentId: string; players: FprPlayerInput[]; courts: string[]; leagueSource: string;
-  endsAt: string; reserveAllowed: boolean; testMode?: boolean; now: string;
+  endsAt: string; reserveAllowed: boolean; testMode?: boolean; communityRating?: FprCommunityRating; now: string;
 }): FprState {
   requireFpr(input.players.length >= 4 && input.players.length <= 28, "ФПР рассчитан на 4–28 участников");
   requireFpr(new Set(input.players.map(p => p.id)).size === input.players.length, "В составе есть повторный участник");
@@ -367,6 +377,7 @@ export function createFprState(input: {
     version: FPR_VERSION, revision: 0, tournamentId: input.tournamentId,
     leagueSource: input.leagueSource.trim(), leagueSnapshotAt: input.now, endsAt: input.endsAt,
     reserveAllowed: input.reserveAllowed, testMode: input.testMode ?? true,
+    ...(input.communityRating ? { communityRating: clone(input.communityRating) } : {}),
     players: seeded.map((p, i) => ({ ...p, seed: i + 1, restLot: restLot.indexOf(p.id) + 1 })),
     courts: [...input.courts], attempts: [], withdrawals: [], singleCourtPlan: [],
     status: "ready", finishedAt: null, audit: [],
@@ -504,6 +515,16 @@ export function validateFprState(value: unknown): asserts value is FprState {
   requireFpr(typeof s.leagueSource === "string" && s.leagueSource.trim() && validTime(s.leagueSnapshotAt) && validTime(s.endsAt)
     && Date.parse(s.endsAt) > Date.parse(s.leagueSnapshotAt), "Некорректный источник рейтинга или время");
   requireFpr(typeof s.reserveAllowed === "boolean" && typeof s.testMode === "boolean", "Некорректные настройки ФПР");
+  if (s.communityRating !== undefined) {
+    const c = s.communityRating;
+    requireFpr(c && c.policy === "community-tournament-v1"
+      && typeof c.communityId === "string" && c.communityId.trim() === c.communityId && c.communityId.length > 0 && c.communityId.length <= 256
+      && typeof c.communityName === "string" && c.communityName.trim() && ["month", "all"].includes(c.period)
+      && (c.snapshotUpdatedAt === null || validTime(c.snapshotUpdatedAt))
+      && [c.sourceExerciseId, c.publicationId].every(v => v === null || typeof v === "string" && v.trim() === v && v.length > 0 && v.length <= 256),
+    "Некорректный источник рейтинга сообщества");
+    requireFpr(!c.sourceExerciseId?.startsWith("fpr-"), "Исходным событием не может быть другой протокол ФПР");
+  }
   requireFpr(["ready", "in_progress", "completed", "incomplete"].includes(s.status), "Некорректный статус ФПР");
   requireFpr(Array.isArray(s.audit) && s.audit.length <= 5000 && Number.isInteger(s.revision) && s.revision === s.audit.length,
     "Некорректная версия протокола");
@@ -556,7 +577,8 @@ export function validateFprState(value: unknown): asserts value is FprState {
     && (s.status === "completed" ? closed >= 6 : closed < 6), "Некорректное завершение турнира");
 }
 
-// Legacy workers must not finalize or award an unpublished FPR league formula.
+// The community worker reads the official protocol through its publication.
+// Legacy level workers must never finalize this separate projection.
 // Official results and timestamps stay inside fpr6x25; no level-rating fields.
 export function fprProjection(state: FprState, previousParams: Record<string, unknown> = {}) {
   validateFprState(state);
@@ -566,7 +588,9 @@ export function fprProjection(state: FprState, previousParams: Record<string, un
     status: "awaiting_league_rules", state: "awaiting_league_rules", tournamentStatus: "awaiting_league_rules",
     finished: false, isFinished: false, tournamentFinished: false, manualFinish: false,
     finishedAt: null, completedAt: null, manualFinishedAt: null, published: false,
-    totalRounds: 6, byePointsMode: "zero_points", leagueResultStatus: "pending_rules",
+    totalRounds: 6, byePointsMode: "zero_points",
+    leagueResultStatus: state.testMode || !state.communityRating ? "test_only"
+      : state.status === "completed" ? "pending_community_recalculation" : state.status === "incomplete" ? "not_eligible" : "in_progress",
   };
   return {
     // A cached FPR client may still reach the generic handler after rollback.

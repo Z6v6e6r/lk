@@ -11,6 +11,7 @@ import {
 } from "./apiClient";
 import {
   IS_DEV_RELEASE_CHANNEL,
+  ALLOW_LOCAL_PRODUCTION_HISTORY_API,
   PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_INVITE_ORIGIN,
   SERV2,
@@ -29,6 +30,7 @@ import {
 } from "../services/community-rating/contract.ts";
 import { resolveLkApiBaseUrlCandidates } from "./lkApiBaseUrls";
 import { ExpiringSingleFlight } from "./expiringSingleFlight";
+import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournamentHistoryRequestPolicy";
 
 export type { CommunityRatingPeriod, CommunityRatingTab, CommunityRatingTabInput };
 
@@ -231,6 +233,40 @@ export interface CommunityRankingResponse {
   confirmedGamesCount: number | null;
   items: CommunityRatingItem[];
   rows: CommunityRatingItem[];
+}
+
+export interface TournamentCommunityBinding {
+  ratingCommunityId: string | null;
+  publishedCommunities: Array<{
+    communityId: string; communityName: string | null; publicationId: string | null;
+    role: "RATING_PRIMARY" | "DISCOVERY_ONLY";
+  }>;
+}
+
+// Read the existing publication linkage even before a first tournament protocol
+// exists. The server returns context only, never a fabricated stored tournament.
+export async function apiFetchTournamentCommunityBinding(tournamentId: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(tournamentId)) {
+    return errorResult<TournamentCommunityBinding>(400, "Некорректный ID события", null);
+  }
+  const base = getServ2Origin();
+  if (shouldBlockLocalProductionTournamentHistoryRequest({ pageUrl: typeof window !== "undefined" ? window.location.href : null,
+    apiUrl: base, allowLocalProductionApi: IS_DEV_RELEASE_CHANNEL && ALLOW_LOCAL_PRODUCTION_HISTORY_API })) {
+    return errorResult<TournamentCommunityBinding>(null, "Локальный стенд не может читать production-историю турниров без явного разрешения", null);
+  }
+  const response = await request<unknown>(`${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}&fprCommunityContext=1`, {
+    method: "GET", retries: 1, cache: "no-store", auth: Boolean(readAuthToken()),
+  });
+  if (response.error) return errorResult<TournamentCommunityBinding>(response.status, response.error.message, null);
+  const list = Array.isArray(response.data) ? response.data : [response.data];
+  const context = list.find(row => isRecord(row) && row.communityContextOnly === true && row.tournamentId === tournamentId);
+  if (!isRecord(context)) return errorResult<TournamentCommunityBinding>(503, "Не удалось получить связь события с сообществом. Повторите загрузку.", null);
+  const publishedCommunities = extractArray(context.publishedCommunities).filter(isRecord).map(row => ({
+    communityId: pickString(row, ["communityId"]) || "",
+    communityName: pickString(row, ["communityName"]), publicationId: pickString(row, ["publicationId"]),
+    role: (row.role === "RATING_PRIMARY" ? "RATING_PRIMARY" : "DISCOVERY_ONLY") as "RATING_PRIMARY" | "DISCOVERY_ONLY",
+  })).filter(row => row.communityId);
+  return { data: { ratingCommunityId: pickString(context, ["ratingCommunityId"]), publishedCommunities }, error: null, status: response.status };
 }
 
 export interface ArchiveCommunityFeedPostResponse {

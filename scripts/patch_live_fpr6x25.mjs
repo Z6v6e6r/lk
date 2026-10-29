@@ -6,10 +6,21 @@ import { pathToFileURL } from "node:url";
 import { buildFprNodeFunction, FPR_PREFIX_END } from "./nodered_fpr6x25.mjs";
 
 export const fprSha256 = value => crypto.createHash("sha256").update(value).digest("hex");
+export function fprLegacySource(source, kind) {
+  if (!source.includes("FPR_6X25_DISPATCH_V1")) return source;
+  if (!source.startsWith(`// FPR_6X25_DISPATCH_V1 (${kind})\n`)) throw new Error("Unknown FPR dispatch preimage");
+  const end = source.indexOf(FPR_PREFIX_END);
+  if (end < 0 || source.indexOf(FPR_PREFIX_END, end + FPR_PREFIX_END.length) !== -1) throw new Error("Ambiguous FPR legacy boundary");
+  const legacy = source.slice(end + FPR_PREFIX_END.length);
+  if (legacy.includes("FPR_6X25_DISPATCH_V1")) throw new Error("Nested FPR dispatch is prohibited");
+  return legacy;
+}
 export function patchFprFlow(inputBytes, contract) {
   if (fprSha256(inputBytes) !== contract.flowSha256) throw new Error("Flow preimage mismatch");
-  if (!Array.isArray(contract.nodes) || contract.nodes.length !== 3
-    || new Set(contract.nodes.map(n => n.kind)).size !== 3) throw new Error("Exactly prepare/recalculate/history_guard nodes required");
+  const kinds = ["prepare", "recalculate", "history_guard", "community_context"];
+  if (!Array.isArray(contract.nodes) || contract.nodes.length !== 4
+    || new Set(contract.nodes.map(n => n.kind)).size !== 4
+    || contract.nodes.some(n => !kinds.includes(n.kind))) throw new Error("Exactly four scoped FPR nodes required");
   const flow = JSON.parse(inputBytes.toString("utf8")), before = structuredClone(flow);
   if (!Array.isArray(flow) || new Set(flow.map(n => n.id)).size !== flow.length) throw new Error("Invalid flow IDs");
   const changes = [];
@@ -17,14 +28,14 @@ export function patchFprFlow(inputBytes, contract) {
     const matches = flow.filter(n => n.id === expected.id);
     if (matches.length !== 1 || matches[0].type !== "function" || matches[0].name !== expected.name
       || fprSha256(matches[0].func) !== expected.sha256) throw new Error("Node preimage mismatch: " + expected.id);
-    const node = matches[0], legacy = node.func;
+    const node = matches[0], legacy = fprLegacySource(node.func, expected.kind);
     node.func = buildFprNodeFunction(legacy, expected.kind);
     new Function("msg", node.func);
     if (node.func.slice(node.func.indexOf(FPR_PREFIX_END) + FPR_PREFIX_END.length) !== legacy) throw new Error("Legacy suffix changed");
     changes.push({ id: node.id, name: node.name, kind: expected.kind, beforeSha256: expected.sha256, afterSha256: fprSha256(node.func) });
   }
   const changed = flow.filter((node, i) => !isDeepStrictEqual(node, before[i]));
-  if (changed.length !== 3 || changed.some(node => {
+  if (changed.length !== 4 || changed.some(node => {
     const original = before.find(n => n.id === node.id);
     return !isDeepStrictEqual({ ...node, func: original.func }, original);
   })) throw new Error("Unexpected flow/wiring/endpoint change");

@@ -45,6 +45,11 @@ test("rating-worker release packages the Viva User-Agent helper used by attendan
   assert.equal(helperEntries.length, 1);
   assert.equal(fs.existsSync(helperPath), true);
   assert.equal(helperEntries[0].sha256, sha256File(helperPath));
+  for (const relative of ["src/components/tournaments/fpr6x25.ts", "src/services/community-rating/fpr.ts"]) {
+    const entry = manifest.files.find(({ path: filePath }) => filePath === relative);
+    assert.ok(entry, `FPR runtime dependency missing: ${relative}`);
+    assert.equal(entry.sha256, sha256File(path.join(releaseDir, relative)));
+  }
 
   const runtimeRosterRelativePath = "scripts/lib/timeForFriendsRuntimeRoster.mjs";
   const runtimeRosterPath = path.join(releaseDir, runtimeRosterRelativePath);
@@ -79,6 +84,10 @@ test("rating-worker release packages the Viva User-Agent helper used by attendan
     0,
     [importResult.stderr, importResult.stdout].filter(Boolean).join("\n"),
   );
+  const workerImport = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "--eval",
+    `await import(${JSON.stringify(pathToFileURL(path.join(releaseDir, "scripts/rating_worker.mjs")).href)});`],
+  { cwd: releaseDir, encoding: "utf8" });
+  assert.equal(workerImport.status, 0, [workerImport.stderr, workerImport.stdout].filter(Boolean).join("\n"));
 });
 
 test("rating-worker release packages the community postcheck and watchdog helpers", (t) => {
@@ -119,6 +128,7 @@ test("rating-worker release packages the community postcheck and watchdog helper
   );
 
   [
+    "src/services/player-rating/tournamentExclusions.ts",
     "src/services/community-policy.ts",
     "src/services/community-rating/league.ts",
     "src/utils/exerciseCategory.ts",

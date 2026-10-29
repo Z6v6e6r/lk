@@ -8,6 +8,7 @@ const allowed = [
   "4f0f1ce8189a9e8c", "2e70b2e547e77c00", "f476ee4e8d98c43b", "7ea8ad4e0b4105b5", "91fc0ea29c45e1df",
   "a73c590f8f001001", "a73c590f8f001002", "745f991e11130b08",
   "tournament_history_request_guard_20260817", "tournament_history_cache_store_20260817",
+  "tournament_community_history_query_20260811",
 ];
 const nodes = allowed.map(id => {
   const node = flow.find(n => n.id === id);

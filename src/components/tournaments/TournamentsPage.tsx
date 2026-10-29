@@ -1361,8 +1361,9 @@ function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
 function getTournamentProgressLabel(history: TournamentHistoryRecord | null | undefined): string | null {
   if (!history) return null;
   if (history.tournamentType === "fpr_6x25") {
-    const fpr = history.params?.fpr6x25 as { status?: string } | undefined;
-    return fpr?.status === "completed" ? "ФПР проведён · тест" : fpr?.status === "incomplete" ? "ФПР не завершён" : "ФПР · тестовый протокол";
+    const fpr = history.params?.fpr6x25 as { status?: string; testMode?: boolean } | undefined;
+    return fpr?.status === "completed" ? `ФПР проведён${fpr.testMode ? " · тест" : ""}`
+      : fpr?.status === "incomplete" ? "ФПР не завершён" : fpr?.testMode ? "ФПР · тестовый протокол" : "ФПР";
   }
   const params = history.params && typeof history.params === "object"
     ? history.params as Record<string, unknown>
@@ -3946,7 +3947,7 @@ function TournamentDetailsModal({
 
         {selectedFamily && (
           <div className="tournament-section">
-            <div className="tournament-section-title">Тип {selectedFamily === "americano" ? "американо" : "мексикано"}</div>
+            <div className="tournament-section-title">Тип {selectedFamily === "fpr6x25" ? "ФПР" : selectedFamily === "americano" ? "американо" : "мексикано"}</div>
             <div className="tournament-type-list">
               {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => {
                 const isHintOpen = openTournamentTypeHintId === type.id;
@@ -3999,6 +4000,10 @@ function TournamentDetailsModal({
               stationId: tournament?.studio?.id,
               endsAt: tournament?.timeTo,
               dateKey: sourceDateKey || formatDate(new Date()),
+              communityBinding: historyRecord ? { ratingCommunityId: historyRecord.ratingCommunityId ?? null,
+                publishedCommunities: (historyRecord.publishedCommunities ?? []).map(p => ({ communityId: p.communityId,
+                  communityName: p.communityName ?? null, publicationId: p.publicationId ?? null,
+                  role: p.role === "RATING_PRIMARY" ? "RATING_PRIMARY" : "DISCOVERY_ONLY" })) } : null,
             }}
             onSaved={payload => { onSaved(payload); onClose(); }}
           />

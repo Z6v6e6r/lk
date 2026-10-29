@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../UI/Modal";
 import {
   apiCreateAmericanoTournament, apiFetchTournamentHistory, apiUpdateAmericanoResults,
@@ -8,15 +8,14 @@ import {
   createFprState, fprCompletedRounds, fprCurrentAttempt, fprProjection, fprReserveThreshold,
   fprServeAt, fprStandings, validateFprState, type FprCommand, type FprMatch, type FprState,
 } from "./fpr6x25";
+import { apiFetchCommunities, apiFetchCommunityRanking, apiFetchTournamentCommunityBinding,
+  type TournamentCommunityBinding } from "../../utils/communityApi";
+import { loadFprCommunityLeague, fprLeagueLabel, type FprLeagueValue, type FprLoadedLeague } from "./fprCommunityLeague";
 import "./fpr6x25.css";
 
 type Player = { id: string; name: string; rating?: string | null; phone?: string | null; photo?: string | null };
 const message = (e: unknown) => e instanceof Error ? e.message : "Не удалось выполнить действие";
 const number = (s: string) => s.trim() ? Number(s.replace(",", ".")) : Number.NaN;
-function localDateTime(iso: string) {
-  const date = new Date(iso);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-}
 function download(value: unknown, file: string) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
   const a = document.createElement("a"); a.href = url; a.download = file; a.click();
@@ -28,54 +27,108 @@ export function FprTournamentSetup({ players, context, onSaved }: {
   context: {
     tenantKey: string; organizer: AmericanoTournamentPayload["organizer"]; sourceExerciseId?: string;
     stationName?: string; stationId?: string; endsAt?: string; dateKey: string;
+    communityBinding?: TournamentCommunityBinding | null;
   };
   onSaved: (payload: AmericanoTournamentPayload) => void;
 }) {
   const [id] = useState(() => `fpr-${crypto.randomUUID()}`);
-  const [leagueSource, setLeagueSource] = useState("");
-  const [endsAt, setEndsAt] = useState(() => localDateTime(context.endsAt || new Date(Date.now() + 90 * 60_000).toISOString()));
   const [reserve, setReserve] = useState(true);
-  const [values, setValues] = useState<Record<string, { level: string; points: string; place: string; newcomer: boolean }>>({});
+  const [values, setValues] = useState<Record<string, Partial<FprLeagueValue>>>({});
   const [courtValues, setCourtValues] = useState<Record<number, string>>({});
   const [included, setIncluded] = useState<Record<string, boolean>>({});
-  const presentPlayers = players.filter(p => included[p.id] !== false);
-  const [paste, setPaste] = useState("");
+  const presentPlayers = useMemo(() => players.filter(p => included[p.id] !== false), [players, included]);
+  const [communities, setCommunities] = useState<Array<{ id: string; name: string }>>([]);
+  const [communityLoading, setCommunityLoading] = useState(true);
+  const [communityError, setCommunityError] = useState<string | null>(null);
+  const [binding, setBinding] = useState<TournamentCommunityBinding | null>(context.communityBinding ?? null);
+  const [bindingLoading, setBindingLoading] = useState(Boolean(context.sourceExerciseId));
+  const [bindingError, setBindingError] = useState<string | null>(null);
+  const [selectedCommunityId, setSelectedCommunityId] = useState("");
+  const [league, setLeague] = useState<FprLoadedLeague | null>(null);
+  const [leagueLoading, setLeagueLoading] = useState(false);
+  const [leagueError, setLeagueError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<AmericanoTournamentPayload | null>(null);
-  const get = (p: Player) => values[p.id] ?? { level: p.rating ?? "", points: "", place: "", newcomer: false };
-  const change = (p: Player, update: Partial<ReturnType<typeof get>>) => setValues(v => ({ ...v, [p.id]: { ...get(p), ...update } }));
-  const importSnapshot = () => {
-    try {
-      const next = { ...values };
-      const seen = new Set<string>();
-      for (const line of paste.trim().split(/\r?\n/)) {
-        const [playerId, place, points] = line.split(/[;\t]/).map(v => v.trim());
-        const player = players.find(p => p.id === playerId);
-        if (!player || seen.has(playerId) || !Number.isFinite(number(points)) || !Number.isInteger(number(place)) || number(place) < 1) {
-          throw new Error("Каждая строка: ID участника; место в Лиге; очки Лиги. Проверьте ID и числа.");
-        }
-        seen.add(playerId); next[playerId] = { ...get(player), points, place, newcomer: false };
-      }
-      setValues(next); setError(null);
-    } catch (e) { setError(message(e)); }
-  };
+  const organizerId = context.organizer.id, organizerPhone = context.organizer.phone;
+  const sourceExerciseId = context.sourceExerciseId;
+
+  useEffect(() => {
+    let active = true;
+    setCommunityLoading(true); setCommunityError(null);
+    void apiFetchCommunities({ clientId: organizerId, phone: organizerPhone }).then(result => {
+      if (!active) return;
+      if (result.error || !result.data) throw new Error(result.error?.message || "Не удалось загрузить сообщества");
+      setCommunities(result.data.communities.map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name, "ru")));
+    }).catch(e => { if (active) setCommunityError(message(e)); })
+      .finally(() => { if (active) setCommunityLoading(false); });
+    return () => { active = false; };
+  }, [organizerId, organizerPhone, reload]);
+  useEffect(() => {
+    let active = true;
+    setBindingError(null);
+    if (!sourceExerciseId) { setBinding({ ratingCommunityId: null, publishedCommunities: [] }); setBindingLoading(false); return; }
+    setBindingLoading(true);
+    void apiFetchTournamentCommunityBinding(sourceExerciseId).then(result => {
+      if (!active) return;
+      if (result.error || !result.data) throw new Error(result.error?.message || "Не удалось проверить сообщество события");
+      setBinding(result.data);
+    }).catch(e => { if (active) setBindingError(message(e)); })
+      .finally(() => { if (active) setBindingLoading(false); });
+    return () => { active = false; };
+  }, [sourceExerciseId, reload]);
+  const choices = useMemo(() => binding?.publishedCommunities.length
+    ? binding.publishedCommunities.map(p => ({ id: p.communityId,
+      name: p.communityName || communities.find(c => c.id === p.communityId)?.name || p.communityId }))
+    : communities, [binding, communities]);
+  const boundCommunityId = binding?.ratingCommunityId ?? null;
+  const communityId = boundCommunityId || (choices.some(c => c.id === selectedCommunityId) ? selectedCommunityId : "");
+  const communityName = choices.find(c => c.id === communityId)?.name || communities.find(c => c.id === communityId)?.name || communityId;
+  useEffect(() => { setValues({}); }, [communityId]);
+  useEffect(() => {
+    let active = true;
+    setLeague(null); setLeagueError(null);
+    if (!communityId || bindingLoading || bindingError || !presentPlayers.length) { setLeagueLoading(false); return; }
+    setLeagueLoading(true);
+    void loadFprCommunityLeague({ communityId, communityName, players: presentPlayers,
+      fetch: async period => {
+        const result = await apiFetchCommunityRanking(communityId, { clientId: organizerId, phone: organizerPhone, tab: "overall", period });
+        if (result.error || !result.data) throw new Error(result.error?.message || "Не удалось загрузить рейтинг сообщества");
+        if (result.data.period !== period) throw new Error("Получен рейтинг другого периода");
+        return { ...result.data, period };
+      },
+    }).then(result => { if (active) setLeague(result); })
+      .catch(e => { if (active) setLeagueError(message(e)); })
+      .finally(() => { if (active) setLeagueLoading(false); });
+    return () => { active = false; };
+  }, [communityId, communityName, presentPlayers, bindingLoading, bindingError, organizerId, organizerPhone, reload]);
+  const get = (p: Player): FprLeagueValue => ({
+    ...(league?.values[p.id] ?? { level: p.rating ?? "", points: "", place: "", newcomer: false }), ...values[p.id],
+  });
+  const change = (p: Player, update: Partial<FprLeagueValue>) => setValues(v => ({ ...v, [p.id]: { ...v[p.id], ...update } }));
   const save = async () => {
     if (busy) return;
     setError(null);
     try {
       let payload = pending;
       if (!payload) {
+        if (!league || league.communityId !== communityId || leagueLoading || bindingLoading || bindingError) throw new Error("Дождитесь загрузки рейтинга сообщества");
         const now = new Date().toISOString();
+        const publication = binding?.publishedCommunities.find(p => p.communityId === communityId);
         const state = createFprState({ tournamentId: id, players: presentPlayers.map(p => ({
           id: p.id, name: p.name, level: number(get(p).level),
           leaguePoints: get(p).newcomer ? 0 : number(get(p).points),
           leaguePlace: get(p).newcomer ? null : number(get(p).place),
         })), courts: Array.from({ length: Math.floor(presentPlayers.length / 4) }, (_, i) => courtValues[i] ?? `Корт №${i + 1}`),
-        leagueSource, endsAt: new Date(endsAt).toISOString(), reserveAllowed: reserve, testMode: true, now });
+        leagueSource: fprLeagueLabel(league), endsAt: context.endsAt || new Date(Date.now() + 90 * 60_000).toISOString(),
+        reserveAllowed: reserve, testMode: false, now,
+        communityRating: { policy: "community-tournament-v1", communityId, communityName, period: league.period,
+          snapshotUpdatedAt: league.snapshotUpdatedAt, sourceExerciseId: sourceExerciseId ?? null, publicationId: publication?.publicationId ?? null },
+        });
         const projected = fprProjection(state, {
           manualTournament: true, localStatus: "draft", syncStatus: "not_required", localDateKey: context.dateKey,
-          sourceExerciseId: context.sourceExerciseId ?? null, stationName: context.stationName ?? null,
+          sourceExerciseId: sourceExerciseId ?? null, stationName: context.stationName ?? null,
           stationId: context.stationId ?? null, organizerName: context.organizer.name ?? null,
         });
         payload = {
@@ -98,40 +151,45 @@ export function FprTournamentSetup({ players, context, onSaved }: {
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   };
+  const loading = bindingLoading || leagueLoading || (!boundCommunityId && communityLoading);
+  const loadError = bindingError || leagueError || (!boundCommunityId ? communityError : null);
   return <div className="fpr-panel">
-    <p>ФПР 6×25 · регламент 1.1. Шесть общих раундов, два запасных. В каждом матче ровно 25 очков на две пары.</p>
-    <p>Будет создан отдельный тестовый протокол. Результаты и начисления существующего турнира сохраняются отдельно.</p>
+    <p>ФПР 6×25 · шесть общих раундов, два запасных. В каждом матче ровно 25 очков на две пары.</p>
     <fieldset disabled={busy || Boolean(pending)}>
-      <label>Таблица Лиги для посева и четвёртого критерия
-        <input value={leagueSource} onChange={e => setLeagueSource(e.target.value)} placeholder="Например, общий рейтинг Лиги на 28 октября" />
-      </label>
-      <label>Окончание события (местное время устройства)
-        <input type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)} />
-      </label>
+      {boundCommunityId ? <p><strong>Сообщество турнира:</strong> {communityName}</p> : <label>Сообщество для рейтинга
+        <select value={selectedCommunityId} disabled={bindingLoading || communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
+          <option value="">Выберите сообщество</option>
+          {choices.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}
+        </select>
+      </label>}
+      {loading && <p role="status">Загружаем данные сообщества…</p>}
+      {loadError && <p role="alert" className="fpr-error">{loadError} <button type="button" onClick={() => setReload(v => v + 1)}>Повторить загрузку</button></p>}
+      {league && <p aria-live="polite">Рейтинг: {fprLeagueLabel(league)}.{league.missingFromMonth.length > 0
+        ? " В текущем месяце нет данных хотя бы об одном участнике, поэтому для всего состава выбран рейтинг за всё время." : " Данные текущего месяца есть у всех участников."}</p>}
+      {!loading && !loadError && !choices.length && !boundCommunityId && <p>Нет доступных сообществ для выбора.</p>}
       <label className="fpr-check"><input type="checkbox" checked={reserve} onChange={e => setReserve(e.target.checked)} /> Разрешены 7-й и 8-й раунды при выполнении порога времени</label>
-      <p>В составе: {presentPlayers.length} из {players.length}. Кортов требуется одновременно: {Math.floor(presentPlayers.length / 4)}. Отдыхает в раунде: {presentPlayers.length % 4}. До фиксации состава снимите отметку с отсутствующих.</p>
+      <p>В составе: {presentPlayers.length} из {players.length}. Кортов одновременно: {Math.floor(presentPlayers.length / 4)}. Отдыхает в раунде: {presentPlayers.length % 4}.</p>
       {Array.from({ length: Math.floor(presentPlayers.length / 4) }, (_, i) => <label key={i}>Название корта {i + 1}<input value={courtValues[i] ?? `Корт №${i + 1}`} onChange={e => setCourtValues(v => ({ ...v, [i]: e.target.value }))} /></label>)}
-      <p>Снимок Лиги обязателен для каждого игрока. Отметку «без очков» ставьте только для участника без результата в выбранной таблице. Недоступные данные нужно восстановить.</p>
-      <div className="fpr-scroll"><table>
-        <thead><tr><th>В составе</th><th>Участник / ID</th><th>Уровень</th><th>Место в Лиге</th><th>Очки Лиги</th><th>Без очков Лиги</th></tr></thead>
-        <tbody>{players.map(p => <tr key={p.id}>
-          <td><input aria-label={`В составе: ${p.name}`} type="checkbox" checked={included[p.id] !== false} onChange={e => setIncluded(v => ({ ...v, [p.id]: e.target.checked }))} /></td>
-          <th scope="row">{p.name}<small>{p.id}</small></th>
-          <td><input aria-label={`Уровень: ${p.name}`} inputMode="decimal" value={get(p).level} onChange={e => change(p, { level: e.target.value })} /></td>
-          <td><input aria-label={`Место в Лиге: ${p.name}`} inputMode="numeric" disabled={get(p).newcomer} value={get(p).place} onChange={e => change(p, { place: e.target.value })} /></td>
-          <td><input aria-label={`Очки Лиги: ${p.name}`} inputMode="decimal" disabled={get(p).newcomer} value={get(p).points} onChange={e => change(p, { points: e.target.value })} /></td>
-          <td><input aria-label={`Нет очков Лиги: ${p.name}`} type="checkbox" checked={get(p).newcomer} onChange={e => change(p, { newcomer: e.target.checked })} /></td>
-        </tr>)}</tbody>
-      </table></div>
-      <details><summary>Вставить снимок Лиги списком</summary>
-        <label>Одна строка: ID участника; место; очки <textarea value={paste} onChange={e => setPaste(e.target.value)} /></label>
-        <button type="button" onClick={importSnapshot}>Применить снимок</button>
+      <details>
+        <summary>Состав и снимок рейтинга · {presentPlayers.length} участников{league ? " · заполнено автоматически" : ""}</summary>
+        <p>Места и очки загружены из сообщества. При необходимости организатор может исправить их и отметить отсутствующих игроков. Если игрока нет и в таблице за всё время, отмечается отсутствие очков.</p>
+        <div className="fpr-scroll"><table>
+          <thead><tr><th>В составе</th><th>Участник / ID</th><th>Уровень</th><th>Место в Лиге</th><th>Очки Лиги</th><th>Без очков Лиги</th></tr></thead>
+          <tbody>{players.map(p => <tr key={p.id}>
+            <td><input aria-label={`В составе: ${p.name}`} type="checkbox" checked={included[p.id] !== false} onChange={e => setIncluded(v => ({ ...v, [p.id]: e.target.checked }))} /></td>
+            <th scope="row">{p.name}<small>{p.id}</small></th>
+            <td><input aria-label={`Уровень: ${p.name}`} inputMode="decimal" value={get(p).level} onChange={e => change(p, { level: e.target.value })} /></td>
+            <td><input aria-label={`Место в Лиге: ${p.name}`} inputMode="numeric" disabled={get(p).newcomer} value={get(p).place} onChange={e => change(p, { place: e.target.value })} /></td>
+            <td><input aria-label={`Очки Лиги: ${p.name}`} inputMode="decimal" disabled={get(p).newcomer} value={get(p).points} onChange={e => change(p, { points: e.target.value })} /></td>
+            <td><input aria-label={`Нет очков Лиги: ${p.name}`} type="checkbox" checked={get(p).newcomer} onChange={e => change(p, { newcomer: e.target.checked })} /></td>
+          </tr>)}</tbody>
+        </table></div>
       </details>
     </fieldset>
-    <p>Посев и отдельный жребий отдыха фиксируются при создании. Перед первым стартом проверьте их в протоколе. Очки Лиги и изменение уровня в тестовом режиме не начисляются.</p>
+    <p>Посев и жребий отдыха фиксируются при создании. Очки сообщества начисляются по обычным правилам после завершения и публикации турнира в этом сообществе. Уровень игрока эта механика не меняет.</p>
     {error && <p role="alert" className="fpr-error">{error}</p>}
-    <button className="section-cta" type="button" disabled={busy || presentPlayers.length < 4 || presentPlayers.length > 28 || !context.organizer.id} onClick={() => void save()}>
-      {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать тестовый протокол ФПР 6×25"}
+    <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
+      {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать протокол ФПР 6×25"}
     </button>
   </div>;
 }
@@ -279,7 +337,7 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
   const threshold = state ? fprReserveThreshold(state, now) : null;
   const name = (id: string) => state?.players.find(p => p.id === id)?.name ?? id;
   const disabled = busy || Boolean(pending);
-  return <Modal isOpen onClose={onClose} title="ФПР 6×25 · тестовое проведение" variant="fullscreen" bodyClassName="tournament-settings-modal-body">
+  return <Modal isOpen onClose={onClose} title={`ФПР 6×25${state?.testMode ? " · тестовое проведение" : ""}`} variant="fullscreen" bodyClassName="tournament-settings-modal-body">
     <div className="fpr-panel">
       {!state ? <p role="alert">Протокол ФПР повреждён или имеет другую версию. Загрузите его с сервера.</p> : <>
         <p><b>{finished ? state.status === "completed" ? "Турнир состоялся" : "Турнир не завершён" : "Турнир в работе"}</b> · полных раундов: {completed}/6{completed > 6 ? ` (+${completed - 6})` : ""} · версия записи: {state.revision}</p>
@@ -328,7 +386,7 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
             <tbody>{fprStandings(state).map(p => <tr key={p.id}><td>{p.rank ?? "—"}</td><th scope="row">{p.name}</th><td>{p.wins}</td><td>{p.totalPoints}</td><td>{p.matchesPlayed}</td><td>{p.byeCount}</td><td>{p.headToHead ?? "не применялись"}</td><td>{p.leaguePoints}</td><td>{p.status === "DNF" ? "DNF" : p.status === "no_matches" ? "нет матчей" : "в зачёте"}</td></tr>)}</tbody>
           </table></div>
           <HeadToHeadDetails state={state} />
-          <p>Таблица учитывает только закрытые общие раунды. В тестовом режиме начисления Лиги и изменение уровня отключены.</p>
+          <p>Таблица учитывает только закрытые общие раунды. {state.testMode ? "Это тестовый протокол без начислений." : "Очки сообщества рассчитываются по обычным правилам опубликованных турниров после полного завершения."} Уровень игрока эта механика не меняет.</p>
         </>}
         {tab === "protocol" && <>
           <p>Алгоритм: {state.version}. Источник: {state.leagueSource}. Снимок: {new Date(state.leagueSnapshotAt).toLocaleString("ru-RU")}.</p>

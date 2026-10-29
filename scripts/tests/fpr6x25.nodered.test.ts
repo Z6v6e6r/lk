@@ -11,6 +11,7 @@ import { planCommunityTournamentClose } from "../lib/communityMonthlyFinalizatio
 const legacyPrepare = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_prepare.js", "utf8");
 const legacyRecalculate = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_recalculate.js", "utf8");
 const legacyHistoryGuard = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_history_request_guard.js", "utf8");
+const legacyCommunityQuery = fs.readFileSync("scripts/nodered_tournament_community_nodes/fn_tournament_community_publications_query.js", "utf8");
 const prepare = new Function("msg", buildFprNodeFunction(legacyPrepare, "prepare"));
 const recalculate = new Function("msg", buildFprNodeFunction(legacyRecalculate, "recalculate"));
 function fixture() {
@@ -118,22 +119,41 @@ test("complete FPR event stays ineligible for both current rating workers and ge
   assert.equal(isTournamentFinalized({ ...unsafe, ...control.mongoUpdate.$set }), true);
 });
 
-test("guarded patch changes only three function bodies and preserves exact live legacy suffixes", () => {
+test("guarded patch upgrades only four function bodies and preserves exact live legacy suffixes", () => {
   const flow = [
     { id: "prepare", type: "function", name: "Prepare", func: legacyPrepare, wires: [["db"], ["error"]] },
     { id: "recalculate", type: "function", name: "Recalculate", func: legacyRecalculate, wires: [["persist"]] },
     { id: "history_guard", type: "function", name: "History guard", func: legacyHistoryGuard, wires: [["response"], ["history-db"]] },
+    { id: "community_context", type: "function", name: "Community query", func: legacyCommunityQuery, wires: [["publications-db"]] },
     { id: "route", type: "http in", url: "/lk/tournaments/americano", method: "post", wires: [["prepare"]] },
   ];
   const bytes = Buffer.from(JSON.stringify(flow));
-  const contract = { flowSha256: fprSha256(bytes), nodes: flow.slice(0, 3).map(n => ({ id: n.id, name: n.name, kind: n.id, sha256: fprSha256(n.func) })) };
+  const contract = { flowSha256: fprSha256(bytes), nodes: flow.slice(0, 4).map(n => ({ id: n.id, name: n.name, kind: n.id, sha256: fprSha256(n.func) })) };
   const patched = patchFprFlow(bytes, contract);
-  assert.equal(patched.report.changes.length, 3);
+  assert.equal(patched.report.changes.length, 4);
   const candidate = JSON.parse(patched.output);
-  for (let i = 0; i < 3; i += 1) assert.equal(candidate[i].func.split(FPR_PREFIX_END)[1], flow[i].func);
-  assert.deepEqual(candidate[3], flow[3]);
+  for (let i = 0; i < 4; i += 1) assert.equal(candidate[i].func.split(FPR_PREFIX_END)[1], flow[i].func);
+  assert.deepEqual(candidate[4], flow[4]);
+  const upgradedBytes = Buffer.from(patched.output);
+  const upgradeContract = { flowSha256: fprSha256(upgradedBytes), nodes: candidate.slice(0, 4).map(n => ({ id: n.id, name: n.name, kind: n.id, sha256: fprSha256(n.func) })) };
+  // An identical upgrade has no four-function diff and is refused rather than
+  // fabricating another deployment or nesting a second prefix.
+  assert.throws(() => patchFprFlow(upgradedBytes, upgradeContract), /Unexpected flow/);
   assert.throws(() => patchFprFlow(bytes, { ...contract, flowSha256: "0".repeat(64) }), /preimage/);
-  assert.throws(() => patchFprFlow(bytes, { ...contract, nodes: [{ ...contract.nodes[0], sha256: "0".repeat(64) }, contract.nodes[1], contract.nodes[2]] }), /preimage/);
+  assert.throws(() => patchFprFlow(bytes, { ...contract, nodes: contract.nodes.map((n, i) => i ? n : { ...n, sha256: "0".repeat(64) }) }), /preimage/);
+});
+
+test("community context reads work before a protocol exists and do not enter the normal history cache", () => {
+  const id = "9bbaeb68-c883-480d-a9a0-cd43267a679a";
+  const query = new Function("msg", buildFprNodeFunction(legacyCommunityQuery, "community_context"));
+  const attach = new Function("msg", fs.readFileSync("scripts/nodered_tournament_community_nodes/fn_tournament_community_publications_attach.js", "utf8"));
+  const msg = query({ payload: [], _tournamentHistoryCacheKey: `id:${id}`, req: { query: { tournamentId: id, fprCommunityContext: "1" } } });
+  assert.equal(msg._tournamentHistoryCacheKey, undefined);
+  assert.ok(msg.payload.$or.some((c: Record<string, unknown>) => c.relatedTournamentId === id));
+  msg.payload = [{ id: "post1", communityId: "club", communityName: "Club", kind: "TOURNAMENT", relatedTournamentId: id }];
+  const result = attach(msg);
+  assert.equal(result.payload[0].communityContextOnly, true); assert.equal(result.payload[0].ratingCommunityId, "club");
+  assert.equal(result.payload[0].tournamentId, id); assert.equal(result.payload[0].participants, undefined);
 });
 
 test("fresh FPR history bypasses only its cache entry while preserving legacy cache and rate limits", () => {
@@ -148,6 +168,10 @@ test("fresh FPR history bypasses only its cache entry while preserving legacy ca
   assert.equal(fresh[0], null); assert.equal(fresh[1]._tournamentHistoryCacheKey, `id:${fprId}`);
   const legacy = run({ req: { query: { tournamentId: "legacy", readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
   assert.deepEqual(legacy[0].payload, [{ marker: "legacy" }]);
+  const contextRead = run({ req: { query: { tournamentId: "legacy", fprCommunityContext: "1" }, headers: { "x-real-ip": "context-test" } } }, flow);
+  assert.equal(contextRead[0], null); assert.equal(contextRead[1]._tournamentHistoryCacheKey, "id:legacy");
+  const invalidContext = run({ req: { query: { tournamentId: "../invalid", fprCommunityContext: "1" }, headers: {} } }, flow);
+  assert.equal(invalidContext[0].statusCode, 422); assert.equal(invalidContext[1], null);
   let last;
   for (let i = 0; i < 24; i += 1) last = run({ req: { query: { tournamentId: fprId, readback: String(i + 2) }, headers: { "x-real-ip": "test" } } }, flow);
   assert.equal(last[0].statusCode, 429);

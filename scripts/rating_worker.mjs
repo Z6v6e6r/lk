@@ -985,7 +985,8 @@ export async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
     db.collection("lk_communities").find(changedFilter, { projection: { id: 1, communityId: 1 } }).toArray(),
     db.collection("lk_community_feed").find(changedFilter, { projection: { communityId: 1, relatedGameId: 1, relatedTournamentId: 1, tournamentId: 1, details: 1 } }).toArray(),
     db.collection("lk_games").find(changedFilter, { projection: { id: 1, gameId: 1 } }).toArray(),
-    db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1 } }).toArray(),
+    db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1,
+      tournamentType: 1, "params.fpr6x25.testMode": 1, "params.fpr6x25.communityRating": 1 } }).toArray(),
     db.collection("lk_training_visits").find(changedFilter, { projection: { communityId: 1, relatedCommunityId: 1, studioId: 1 } }).toArray(),
     db.collection(PLAYER_RATING_COLLECTIONS.state).find(changedFilter, { projection: { clientId: 1, phoneNorm: 1 } }).toArray(),
     db.collection(PLAYER_RATING_COLLECTIONS.events).find(changedFilter, { projection: { player: 1, source: 1 } }).toArray(),
@@ -993,6 +994,12 @@ export async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
   const ids = new Set();
   communities.forEach((row) => ids.add(toStr(row.id || row.communityId)));
   feed.forEach((row) => ids.add(toStr(row.communityId)));
+  tournaments.forEach(row => {
+    const state = row.params?.fpr6x25, binding = state?.communityRating;
+    if (row.tournamentType === "fpr_6x25" && state?.testMode === false && binding?.policy === "community-tournament-v1") {
+      ids.add(toStr(binding.communityId));
+    }
+  });
   const gameIds = unique(games.map((row) => toStr(row.id || row.gameId)));
   const tournamentIds = unique(tournaments.map((row) => toStr(row.tournamentId || row.exerciseId || row.id)));
   events.forEach((event) => {

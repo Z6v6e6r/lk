@@ -17,15 +17,23 @@ try {
     return new vm.Script(`(function(msg){${source}\n})(JSON.parse(serializedMsg))`).runInContext(context, { timeout: 3000 });
   };
   const prepare = node("4f0f1ce8189a9e8c"), recalculate = node("2e70b2e547e77c00");
+  const legacy = (source, kind) => {
+    if (!source.includes("FPR_6X25_DISPATCH_V1")) return source;
+    assert.ok(source.startsWith(`// FPR_6X25_DISPATCH_V1 (${kind})\n`));
+    const end = "// END FPR_6X25_DISPATCH_V1\n", index = source.indexOf(end);
+    assert.ok(index >= 0 && source.indexOf(end, index + end.length) < 0);
+    return source.slice(index + end.length);
+  };
+  const prepareSource = legacy(prepare.func, "prepare"), recalculateSource = legacy(recalculate.func, "recalculate");
   phase = "legacy-guard-parity";
   const body = packet.fixture;
-  const legacyCreate = run(prepare.func, { payload: body, req: { headers: {}, body, query: {} } });
+  const legacyCreate = run(prepareSource, { payload: body, req: { headers: {}, body, query: {} } });
   const legacyCreateMessage = Array.isArray(legacyCreate) ? legacyCreate.find(Boolean) : legacyCreate;
-  const legacyUpdate = run(recalculate.func, { payload: body, req: { headers: {}, body: { tournamentId: body.tournamentId, results: [] }, query: {} } });
+  const legacyUpdate = run(recalculateSource, { payload: body, req: { headers: {}, body: { tournamentId: body.tournamentId, results: [] }, query: {} } });
   const legacyPrepareStatus = Number(legacyCreateMessage.statusCode || 200), legacyUpdateStatus = Number(legacyUpdate.statusCode || 200);
   assert.ok(legacyPrepareStatus < 400 && legacyUpdateStatus < 400, "Existing common guard must not be bypassed");
   phase = "actual-create-chain";
-  const wrapped = run(packet.prefixes.prepare + prepare.func, { payload: body, req: { headers: {}, body, query: {} } });
+  const wrapped = run(packet.prefixes.prepare + prepareSource, { payload: body, req: { headers: {}, body, query: {} } });
   assert.ok(wrapped[0] && !wrapped[1]);
   const upsert = run(node("f476ee4e8d98c43b").func, wrapped[0]);
   assert.equal(upsert.payload[0]._id, "fpr6x25:" + body.tournamentId);
@@ -37,7 +45,7 @@ try {
   assert.equal(created.payload.params.fpr6x25.tournamentId, body.tournamentId);
   phase = "actual-update-cas-chain";
   const command = { id: "server-vm-start", expectedRevision: 0, action: "start_round" };
-  const update = run(packet.prefixes.recalculate + recalculate.func, { payload: { ...body, _id: "fpr6x25:" + body.tournamentId }, req: { body: { params: { fprCommand: command }, results: [] } } });
+  const update = run(packet.prefixes.recalculate + recalculateSource, { payload: { ...body, _id: "fpr6x25:" + body.tournamentId }, req: { body: { params: { fprCommand: command }, results: [] } } });
   assert.equal(update.statusCode, 200);
   const routed = run(node("a73c590f8f001001").func, update);
   assert.ok(routed[0] && !routed[1]);
@@ -55,6 +63,17 @@ try {
   assert.equal(ack.payload.params.fpr6x25.audit[0].id, command.id);
   const conflict = run(node("a73c590f8f001002").func, { ...args, payload: { acknowledged: true, matchedCount: 0 } });
   assert.equal(conflict.statusCode, 409);
+  phase = "actual-community-context-chain";
+  const sourceId = "9bbaeb68-c883-480d-a9a0-cd43267a679a";
+  const querySource = legacy(node("tournament_community_history_query_20260811").func, "community_context");
+  const contextQuery = run(packet.prefixes.community_context + querySource, { payload: [],
+    _tournamentHistoryCacheKey: `id:${sourceId}`, req: { query: { tournamentId: sourceId, fprCommunityContext: "1" } } });
+  assert.equal(contextQuery._tournamentHistoryCacheKey, undefined);
+  const contextResponse = run(node("tournament_community_history_attach_20260811").func, { ...contextQuery,
+    payload: [{ id: "vm-publication", communityId: "vm-community", kind: "TOURNAMENT", relatedTournamentId: sourceId }] });
+  assert.equal(contextResponse.payload[0].communityContextOnly, true);
+  assert.equal(contextResponse.payload[0].ratingCommunityId, "vm-community");
+  diagnostics.communityContextReadWorks = true;
   phase = "installed-rating-worker-guard";
   const worker = fs.readFileSync("/opt/padlhub-rating-worker/current/scripts/rating_worker.mjs", "utf8");
   const begin = worker.indexOf("export function isTournamentFinalized(");
@@ -75,7 +94,7 @@ try {
   assert.equal(completed.params.fpr6x25.attempts.filter(a => a.status === "closed").length, 6);
   assert.equal(completed.rounds.length, 0);
   const cachedCommand = { id: "server-vm-after-rollback", expectedRevision: completed.params.fpr6x25.revision, action: "finish" };
-  const generic = run(recalculate.func, { payload: completed,
+  const generic = run(recalculateSource, { payload: completed,
     req: { headers: {}, body: { results: [], params: { fprCommand: cachedCommand } }, query: {} } });
   const rolledBack = { ...completed, ...generic.mongoUpdate.$set };
   assert.equal(rolledBack.summary.status, "in_progress");
@@ -87,7 +106,7 @@ try {
   unsafe.rounds = completed.params.fpr6x25.attempts.filter(a => a.status === "closed").map(a => ({
     id: a.id, index: a.round, byes: a.byes, matches: a.matches.map(m => ({ ...m, court: completed.params.fpr6x25.courts[m.courtIndex] })),
   }));
-  const unsafeResult = run(recalculate.func, { payload: unsafe, req: { headers: {}, body: { results: [], params: { fprCommand: cachedCommand } }, query: {} } });
+  const unsafeResult = run(recalculateSource, { payload: unsafe, req: { headers: {}, body: { results: [], params: { fprCommand: cachedCommand } }, query: {} } });
   assert.equal(check({ ...unsafe, ...unsafeResult.mongoUpdate.$set }), true);
   diagnostics.rollbackUnsafeProjectionPositiveControl = true;
   const pending = structuredClone(body);

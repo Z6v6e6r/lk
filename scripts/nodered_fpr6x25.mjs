@@ -8,15 +8,28 @@ export const FPR_PREFIX_END = "// END FPR_6X25_DISPATCH_V1\n";
 // The live legacy suffix is preserved byte-for-byte. No unrelated tournament logic
 // is regenerated from the repository's possibly older Node-RED snapshot.
 export function buildFprNodeFunction(legacySource, kind) {
-  if (!["prepare", "recalculate", "history_guard"].includes(kind)) throw new Error("Unknown FPR node kind");
+  if (!["prepare", "recalculate", "history_guard", "community_context"].includes(kind)) throw new Error("Unknown FPR node kind");
   if (legacySource.includes("FPR_6X25_DISPATCH_V1")) throw new Error("FPR dispatch is already installed; use an exact reviewed upgrade");
+  if (kind === "community_context") return `// FPR_6X25_DISPATCH_V1 (community_context)
+if (String(msg.req?.query?.fprCommunityContext || "") === "1") {
+  const id = String(msg.req?.query?.tournamentId || "").trim();
+  // The existing publication query and attach nodes resolve authoritative links.
+  // This is a response-only placeholder, never a database document or cache row.
+  msg.payload = [{ tournamentId: id, communityContextOnly: true }];
+  delete msg._tournamentHistoryCacheKey;
+}
+${FPR_PREFIX_END}${legacySource}`;
   if (kind === "history_guard") return `// FPR_6X25_DISPATCH_V1 (history_guard)
 // A fresh FPR readback must observe the committed revision. The legacy rate
 // limiter and response handling below remain byte-identical.
 {
   const query = msg.req?.query || {};
   const id = String(query.tournamentId || "").trim();
-  if (/^fpr-[a-f0-9-]{36}$/.test(id) && String(query.readback || "").trim()) {
+  const contextOnly = String(query.fprCommunityContext || "") === "1";
+  if (contextOnly && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) {
+    msg.statusCode = 422; msg.payload = { error: "INVALID_TOURNAMENT_ID" }; return [msg, null];
+  }
+  if (contextOnly || /^fpr-[a-f0-9-]{36}$/.test(id) && String(query.readback || "").trim()) {
     const cache = flow.get("lkTournamentHistoryResponseCache") || {};
     delete cache["id:" + id];
     flow.set("lkTournamentHistoryResponseCache", cache);
@@ -40,7 +53,7 @@ if (fprBody.tournamentType === "fpr_6x25") {
       tournamentId: input.tournamentId,
       players: input.players.map(({id,name,level,leaguePoints,leaguePlace}) => ({id,name,level,leaguePoints,leaguePlace})),
       courts: input.courts, leagueSource: input.leagueSource, now: input.leagueSnapshotAt,
-      endsAt: input.endsAt, reserveAllowed: input.reserveAllowed, testMode: input.testMode,
+      endsAt: input.endsAt, reserveAllowed: input.reserveAllowed, testMode: input.testMode, communityRating: input.communityRating,
     });
     const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
       ? Object.fromEntries(Object.keys(value).sort().map(key => [key,stable(value[key])])) : value;
