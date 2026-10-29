@@ -167,11 +167,25 @@ test("FPR creator metadata, forged claim and source alias cannot grant physical 
 });
 
 test("server-authorized tournament host starts the exact FPR ID through the existing claimed dispatch", () => {
-  const result = route(routeMessage("start", true), deviceEnvironment);
+  const input = routeMessage("start", true);
+  Object.assign(input.payload[0].params, { sourceExerciseId: "different-source-event" });
+  const result = route(input, deviceEnvironment);
   const message = Array.isArray(result[0]) ? result[0][0] : result[0];
   assert.ok(message); assert.equal(result[2], null);
   assert.equal(message._tournamentBroadcast.tournamentId, tournamentId);
   assert.equal(message._tournamentBroadcast.action, "start");
+
+  const dispatch = new Function("msg", fs.readFileSync("scripts/nodered_tournament_broadcast_nodes/fn_tournament_broadcast_dispatch.js", "utf8"));
+  const prepared = dispatch(structuredClone(message));
+  assert.ok(prepared[0]); assert.equal(prepared[1], null); assert.equal(prepared[2], null);
+  const claimed = dispatch({ ...prepared[0], payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 } });
+  assert.equal(claimed[0], null); assert.equal(claimed[2], null);
+  assert.equal(claimed[1].length, 2);
+  for (const request of claimed[1]) {
+    assert.equal(request.method, "POST");
+    assert.match(request.url, /\/tournament\/start$/);
+    assert.deepEqual(request.payload, { tournament_id: tournamentId });
+  }
 });
 
 test("staff FPR stop, owner status and ordinary-format ownership use the unchanged legacy route", () => {
