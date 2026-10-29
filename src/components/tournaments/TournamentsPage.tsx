@@ -1,6 +1,7 @@
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
 import { AvatarImage } from "../UI/AvatarImage";
 import { FprTournamentSetup, FprTournamentManager, FprProtocolLookup } from "./FprTournamentPanel";
+import { useLkTournamentSession } from "../../utils/useLkTournamentSession";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
@@ -1638,6 +1639,7 @@ function TournamentDetailsModal({
   canRefreshParticipantsFromViva,
   onSaved,
 }: TournamentDetailsModalProps) {
+  useLkTournamentSession(isOpen);
   const [loading, setLoading] = useState(false);
   const [participants, setParticipants] = useState<ExerciseBooking[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -4343,6 +4345,7 @@ function TournamentManagerModal({
   onEditSettings?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"tournament" | "table" | "stats">("tournament");
+  useLkTournamentSession(isOpen && Boolean(data));
   const [expertMode, setExpertMode] = useState(false);
   const [rounds, setRounds] = useState<TournamentRound[]>([]);
   const statsRef = useRef<HTMLDivElement | null>(null);

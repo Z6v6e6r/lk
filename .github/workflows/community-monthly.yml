@@ -9,6 +9,10 @@ on:
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
       - "scripts/tests/fpr*"
+      - "src/utils/lkIdleDataGuard.ts"
+      - "src/utils/useLkTournamentSession.ts"
+      - "scripts/tests/tournamentIdleSession.test.mjs"
+      - "scripts/tests/lkIdleDataGuard.test.ts"
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
@@ -27,6 +31,10 @@ on:
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
       - "scripts/tests/fpr*"
+      - "src/utils/lkIdleDataGuard.ts"
+      - "src/utils/useLkTournamentSession.ts"
+      - "scripts/tests/tournamentIdleSession.test.mjs"
+      - "scripts/tests/lkIdleDataGuard.test.ts"
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
@@ -79,3 +87,5 @@ jobs:
         run: npm run test:rating-worker-release
       - name: Test community rating and FPR result compatibility
         run: npm run test:community-rating
+      - name: Test tournament idle-session lifetime and unchanged ordinary idle guard
+        run: npm run test:tournament-session

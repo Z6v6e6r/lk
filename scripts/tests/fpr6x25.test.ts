@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createFprState, applyFprCommand, fprCurrentAttempt, fprCompletedRounds, fprStandings,
-  fprProjection, fprReserveThreshold, fprServeAt, validateFprState,
+  fprProjection, fprReserveThreshold, fprServeAt, fprStartingSides, validateFprState,
   type FprState, type FprCommand,
 } from "../../src/components/tournaments/fpr6x25.ts";
 
@@ -16,6 +16,18 @@ function event(n = 8, seed = "test"): FprState {
     courts: Array.from({ length: Math.floor(n / 4) }, (_, i) => `Court ${i + 1}`),
     leagueSource: "League all time", endsAt: at(180), reserveAllowed: true, now: at(0) });
 }
+test("starting court sides use a separate fixed draw across reloads, scores and B1 choices", () => {
+  const state = event(), match = state.attempts[0].matches[0];
+  const before = JSON.stringify(state), sides = fprStartingSides(state, match);
+  assert.deepEqual([sides.sideA, sides.sideB].sort(), [1, 2]);
+  assert.deepEqual(fprStartingSides(JSON.parse(before), { ...match, score1: 13, score2: 12 }), sides);
+  const changed = command(state, { action: "set_b1", matchId: match.id, playerId: match.pair2[1] }, 1);
+  assert.deepEqual(fprStartingSides(changed, changed.attempts[0].matches[0]), sides);
+  assert.equal(JSON.stringify(state), before);
+  assert.deepEqual(new Set(Array.from({ length: 30 }, (_, i) => fprStartingSides({ tournamentId: `draw-${i}` }, match).sideA)), new Set([1, 2]));
+  const normalIds = Array.from({ length: 6 }, (_, i) => ({ id: `fpr-r${i + 1}-a${i + 1}-c1` }));
+  assert.deepEqual(new Set(normalIds.map(m => fprStartingSides(state, m).sideA)), new Set([1, 2]));
+});
 type Action = FprCommand extends infer T ? T extends FprCommand ? Omit<T, "id" | "expectedRevision"> : never : never;
 function command(s: FprState, action: Action, minute: number): FprState {
   return applyFprCommand(s, { ...action, id: `cmd-${s.revision + 1}`, expectedRevision: s.revision } as FprCommand, at(minute));

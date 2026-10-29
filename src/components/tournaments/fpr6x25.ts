@@ -105,6 +105,19 @@ function hash(value: string) {
   for (let i = 0; i < value.length; i += 1) result = Math.imul(result ^ value.charCodeAt(i), 16777619);
   return result >>> 0;
 }
+
+// A separate, fixed draw for the two ends of the court. Its input is persisted
+// in the protocol; scores, rendering and devices cannot redraw these sides.
+export function fprStartingSides(state: Pick<FprState, "tournamentId">, match: Pick<FprMatch, "id">): { sideA: 1 | 2; sideB: 1 | 2 } {
+  let draw = hash(`initial-court-side-v1:${state.tournamentId}:${match.id}`);
+  // Mix only this independent draw: sequential round/attempt IDs must not
+  // inherit FNV's low-bit parity. The planner's existing hash stays unchanged.
+  draw = Math.imul(draw ^ (draw >>> 16), 0x7feb352d);
+  draw = Math.imul(draw ^ (draw >>> 15), 0x846ca68b);
+  draw ^= draw >>> 16;
+  const sideA = (draw & 1) === 0 ? 1 : 2;
+  return { sideA, sideB: sideA === 1 ? 2 : 1 };
+}
 const idsInMatch = (match: Pairing) => [...match.pair1, ...match.pair2];
 const partnerKeys = (match: Pairing) => [pairKey(...match.pair1), pairKey(...match.pair2)];
 const opponentKeys = (match: Pairing) => match.pair1.flatMap(a => match.pair2.map(b => pairKey(a, b)));

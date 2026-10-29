@@ -26,6 +26,25 @@
 .fpr-panel summary { cursor: pointer; padding: 10px 0; min-height: 44px; font-weight: 600; }
 .fpr-panel textarea { min-height: 100px; }
 .fpr-panel .fpr-finish { margin: 24px 0; }
+.fpr-panel.tournament-manager p { margin: 0; }
+.fpr-panel .tournament-tabs .tournament-tab { margin: 0; }
+.fpr-panel .tournament-tabs .tournament-tab.active { background: var(--purple-light, #eaf5ee); color: var(--purple, #007951); border-color: var(--purple, #007951); }
+.fpr-panel .tournament-round-header { padding: 12px 14px; }
+.fpr-panel .tournament-match.fpr-match { margin: 0; border: 0; border-radius: 14px; padding: 12px; background: var(--bg, #f5f6f8); }
+.fpr-panel .tournament-match-header { flex-wrap: wrap; }
+.fpr-panel .tournament-match-value { min-width: 0; overflow-wrap: anywhere; }
+.fpr-panel .tournament-match-row > .tournament-match-label { flex: 0 0 68px; }
+.fpr-panel input.tournament-score-input { flex: 0 0 64px; width: 64px; min-width: 0; text-align: center; }
+.fpr-panel .fpr-score-placeholder { flex: 0 0 64px; text-align: center; color: var(--text-secondary, #66716b); }
+.fpr-panel .tournament-match fieldset { display: flex; flex-direction: column; gap: 10px; }
+.fpr-panel details.tournament-round { margin: 0; padding: 0; }
+.fpr-panel details.fpr-serve-order { margin: 0; border: 0; padding: 0; }
+.fpr-panel .fpr-serve-order summary { padding: 6px 0; font-size: 13px; font-weight: 500; }
+@media (max-width: 768px) {
+  .fpr-panel .tournament-match-row > .tournament-match-label,
+  .fpr-panel input.tournament-score-input,
+  .fpr-panel .fpr-score-placeholder { flex: 0 0 auto; }
+}
 @media (max-width: 600px) {
   .fpr-panel { padding: 12px; }
   .fpr-panel .fpr-match { padding: 12px; }
