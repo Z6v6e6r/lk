@@ -17,10 +17,11 @@ export function fprLegacySource(source, kind) {
 }
 export function patchFprFlow(inputBytes, contract) {
   if (fprSha256(inputBytes) !== contract.flowSha256) throw new Error("Flow preimage mismatch");
-  const kinds = ["prepare", "recalculate", "history_guard", "community_context"];
-  if (!Array.isArray(contract.nodes) || contract.nodes.length !== 4
-    || new Set(contract.nodes.map(n => n.kind)).size !== 4
-    || contract.nodes.some(n => !kinds.includes(n.kind))) throw new Error("Exactly four scoped FPR nodes required");
+  const kinds = ["prepare", "recalculate", "history_guard", "community_context", "broadcast_route"];
+  if (!Array.isArray(contract.nodes) || contract.nodes.length < 1 || contract.nodes.length > kinds.length
+    || new Set(contract.nodes.map(n => n.kind)).size !== contract.nodes.length
+    || new Set(contract.nodes.map(n => n.id)).size !== contract.nodes.length
+    || contract.nodes.some(n => !kinds.includes(n.kind))) throw new Error("Unique scoped FPR nodes required");
   const flow = JSON.parse(inputBytes.toString("utf8")), before = structuredClone(flow);
   if (!Array.isArray(flow) || new Set(flow.map(n => n.id)).size !== flow.length) throw new Error("Invalid flow IDs");
   const changes = [];
@@ -35,7 +36,7 @@ export function patchFprFlow(inputBytes, contract) {
     changes.push({ id: node.id, name: node.name, kind: expected.kind, beforeSha256: expected.sha256, afterSha256: fprSha256(node.func) });
   }
   const changed = flow.filter((node, i) => !isDeepStrictEqual(node, before[i]));
-  if (changed.length !== 4 || changed.some(node => {
+  if (changed.length !== contract.nodes.length || changed.some(node => {
     const original = before.find(n => n.id === node.id);
     return !isDeepStrictEqual({ ...node, func: original.func }, original);
   })) throw new Error("Unexpected flow/wiring/endpoint change");

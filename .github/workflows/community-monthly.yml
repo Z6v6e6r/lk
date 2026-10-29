@@ -8,6 +8,9 @@ on:
       - "src/services/player-rating/tournamentExclusionGuard.ts"
       - "src/services/player-rating/tournamentExclusions.ts"
       - "src/components/tournaments/fpr*.ts"
+      - "src/components/tournaments/FprTournamentPanel.tsx"
+      - "src/components/tournaments/TournamentBroadcastControl.tsx"
+      - "src/components/tournaments/tournamentBroadcast*.ts"
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
       - "scripts/tests/fpr*"
@@ -32,6 +35,9 @@ on:
       - "src/services/player-rating/tournamentExclusionGuard.ts"
       - "src/services/player-rating/tournamentExclusions.ts"
       - "src/components/tournaments/fpr*.ts"
+      - "src/components/tournaments/FprTournamentPanel.tsx"
+      - "src/components/tournaments/TournamentBroadcastControl.tsx"
+      - "src/components/tournaments/tournamentBroadcast*.ts"
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
       - "scripts/tests/fpr*"
@@ -93,3 +99,5 @@ jobs:
         run: npm run test:community-rating
       - name: Test tournament idle-session lifetime and unchanged ordinary idle guard
         run: npm run test:tournament-session
+      - name: Test FPR broadcast controls and existing device safety contract
+        run: npm run test:fpr-broadcast

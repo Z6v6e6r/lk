@@ -8,8 +8,26 @@ export const FPR_PREFIX_END = "// END FPR_6X25_DISPATCH_V1\n";
 // The live legacy suffix is preserved byte-for-byte. No unrelated tournament logic
 // is regenerated from the repository's possibly older Node-RED snapshot.
 export function buildFprNodeFunction(legacySource, kind) {
-  if (!["prepare", "recalculate", "history_guard", "community_context"].includes(kind)) throw new Error("Unknown FPR node kind");
+  if (!["prepare", "recalculate", "history_guard", "community_context", "broadcast_route"].includes(kind)) throw new Error("Unknown FPR node kind");
   if (legacySource.includes("FPR_6X25_DISPATCH_V1")) throw new Error("FPR dispatch is already installed; use an exact reviewed upgrade");
+  if (kind === "broadcast_route") return `// FPR_6X25_DISPATCH_V1 (broadcast_route)
+{
+  const context = msg._tournamentBroadcast;
+  const rows = Array.isArray(msg.payload) ? msg.payload : [];
+  const tournament = rows.find(row => row && typeof row === "object" && !Array.isArray(row)
+    && String(row.tournamentId ?? "").trim() === context?.tournamentId);
+  // A FPR creator controls their protocol metadata. Controlling a physical screen
+  // requires the existing server-verified global tournament-host permission.
+  // Status retains the legacy ownership check. A staff member can stop a session
+  // through the existing saved-station recovery path, including after a timeout.
+  if (["start", "stop"].includes(context?.action) && tournament?.tournamentType === "fpr_6x25" && context.hasHostingAccess !== true) {
+    msg.statusCode = 403;
+    msg.headers = { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
+    msg.payload = { ok: false, code: "FPR_BROADCAST_HOST_ACCESS_REQUIRED", message: "Управлять трансляцией ФПР может сотрудник с доступом к проведению турниров" };
+    return [null, null, msg];
+  }
+}
+${FPR_PREFIX_END}${legacySource}`;
   if (kind === "community_context") return `// FPR_6X25_DISPATCH_V1 (community_context)
 if (String(msg.req?.query?.fprCommunityContext || "") === "1") {
   const id = String(msg.req?.query?.tournamentId || "").trim();
@@ -63,6 +81,7 @@ if (fprBody.tournamentType === "fpr_6x25") {
     if (participants.length !== state.players.length || new Set(participants.map(p => p.id)).size !== state.players.length
       || participants.some(p => !state.players.some(player => player.id === p.id))) throw new Error("FPR_ROSTER_MISMATCH");
     const projected = fpr.fprProjection(state, fprBody.params);
+    delete projected.params.broadcast;
     const document = {
       tournamentId: state.tournamentId, tournamentType: "fpr_6x25", tenantKey: fprBody.tenantKey || null,
       organizer: fprBody.organizer || {}, participants, targetScore: 25, courts: state.courts,
@@ -98,9 +117,15 @@ if (fprTournament?.tournamentType === "fpr_6x25") {
     const state = fpr.applyFprCommand(previous, command, new Date().toISOString());
     const projected = fpr.fprProjection(state, fprTournament.params);
     delete projected.params.fprCommand;
+    const ownedParams = fpr.fprProjection(state, {}).params;
+    const { params: ignoredParams, ...ownedFields } = projected;
+    const update = { ...ownedFields, startRatingChanges: [], updatedAt: new Date().toISOString() };
+    for (const key of ["fpr6x25", "tournamentFamily", "tournamentSubtype", "status", "state", "tournamentStatus", "finished", "isFinished", "tournamentFinished", "manualFinish", "finishedAt", "completedAt", "manualFinishedAt", "published", "totalRounds", "byePointsMode", "leagueResultStatus"]) {
+      update["params." + key] = ownedParams[key];
+    }
     msg.mongoQuery = { tournamentId: fprTournament.tournamentId, "params.fpr6x25.revision": previous.revision };
     if (fprTournament._id) msg.mongoQuery._id = fprTournament._id;
-    msg.mongoUpdate = { $set: { ...projected, startRatingChanges: [], updatedAt: new Date().toISOString() } };
+    msg.mongoUpdate = { $set: update };
     msg.statusCode = 200;
     msg.payload = { tournamentId: state.tournamentId, ...projected };
     return msg;

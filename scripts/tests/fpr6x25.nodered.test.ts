@@ -22,6 +22,16 @@ function fixture() {
   return { _id: `fpr6x25:${state.tournamentId}`, tournamentId: state.tournamentId, tournamentType: "fpr_6x25", tenantKey: "test",
     organizer: { id: "organizer" }, participants: state.players.map(p => ({ id: p.id, name: p.name })), ...fprProjection(state) };
 }
+function applyMongoSet<T>(document: T, update: { $set: Record<string, unknown> }): T {
+  const next = structuredClone(document);
+  for (const [key, value] of Object.entries(update.$set)) {
+    const parts = key.split(".");
+    let cursor = next as Record<string, unknown>;
+    for (const part of parts.slice(0, -1)) cursor = cursor[part] as Record<string, unknown>;
+    cursor[parts.at(-1)!] = structuredClone(value);
+  }
+  return next;
+}
 function update(document: ReturnType<typeof fixture>, action: Record<string, unknown>) {
   const before = document.params.fpr6x25;
   const out = recalculate({ payload: structuredClone(document), req: { body: {
@@ -30,12 +40,12 @@ function update(document: ReturnType<typeof fixture>, action: Record<string, unk
   assert.equal(out.statusCode, 200, JSON.stringify(out.payload));
   assert.equal(out.mongoQuery["params.fpr6x25.revision"], before.revision);
   assert.equal(out.mongoQuery._id, document._id);
-  return { ...document, ...out.mongoUpdate.$set };
+  return applyMongoSet(document, out.mongoUpdate);
 }
 
 test("FPR create is canonical, insert-only, fixes the sum at 25, strips legacy completion and level events", () => {
   const input = fixture();
-  input.params = { ...input.params, finished: true, published: true, status: "completed" };
+  input.params = { ...input.params, finished: true, published: true, status: "completed", broadcast: { active: true, stationId: "forged", operationId: "forged-claim" } };
   const [out, error] = prepare({ payload: { ...input, targetScore: 99, startRatingChanges: [{ eventId: "unsafe" }] } });
   assert.equal(error, null);
   assert.equal(out.query._id, input._id);
@@ -45,6 +55,7 @@ test("FPR create is canonical, insert-only, fixes the sum at 25, strips legacy c
   assert.deepEqual(out.payload.$setOnInsert.startRatingChanges, []);
   assert.equal(out.payload.$setOnInsert.params.finished, false);
   assert.equal(out.payload.$setOnInsert.params.published, false);
+  assert.equal(out.payload.$setOnInsert.params.broadcast, undefined);
   assert.equal(isTournamentFinalized(out.payload.$setOnInsert), false);
 });
 
@@ -68,7 +79,7 @@ test("FPR commands use CAS and idempotency; legacy result/finish payload cannot 
   const run = (data: typeof doc, command: typeof cmd) => recalculate({ payload: data, req: { body: { params: { fprCommand: command } } } });
   const out = run(doc, cmd);
   assert.equal(out.statusCode, 200);
-  doc = { ...doc, ...out.mongoUpdate.$set };
+  doc = applyMongoSet(doc, out.mongoUpdate);
   const retry = run(doc, cmd);
   assert.equal(retry.statusCode, 200);
   assert.equal(retry.payload.params.fpr6x25.revision, 1);
@@ -77,6 +88,26 @@ test("FPR commands use CAS and idempotency; legacy result/finish payload cannot 
   assert.equal(conflict.statusCode, 409); assert.equal(conflict.mongoUpdate, undefined);
   const bypass = recalculate({ payload: structuredClone(before), req: { body: { results: [{ score1: 25, score2: 0 }], params: { finished: true } } } });
   assert.equal(bypass.statusCode, 422); assert.equal(bypass.mongoUpdate, undefined);
+});
+
+test("FPR result persistence preserves a broadcast claim and metadata written after its read", () => {
+  const snapshot = fixture();
+  const out = recalculate({ payload: structuredClone(snapshot), req: { body: { results: [], params: { fprCommand: { id: "race-start", expectedRevision: 0, action: "start_round" } } } } });
+  assert.equal(out.statusCode, 200);
+  const live = structuredClone(snapshot);
+  const broadcast = { active: true, status: "starting", operationId: "server-operation", activeTargets: ["right_arena"] };
+  live.params.broadcast = broadcast;
+  live.params.stationId = "canonical-station"; live.params.sourceExerciseId = "canonical-source";
+  live.params.foreignMetadata = { updated: "after-fpr-read" };
+  assert.equal(out.mongoQuery["params.fpr6x25.revision"], live.params.fpr6x25.revision);
+  assert.equal("params" in out.mongoUpdate.$set, false);
+  assert.equal("params.broadcast" in out.mongoUpdate.$set, false);
+  const persisted = applyMongoSet(live, out.mongoUpdate);
+  assert.deepEqual(persisted.params.broadcast, broadcast);
+  assert.deepEqual(persisted.params.foreignMetadata, live.params.foreignMetadata);
+  assert.equal(persisted.params.stationId, "canonical-station"); assert.equal(persisted.params.sourceExerciseId, "canonical-source");
+  assert.equal(persisted.params.fpr6x25.revision, 1); assert.deepEqual(persisted.rounds, []);
+  assert.equal(persisted.params.finished, false); assert.equal(persisted.params.published, false);
 });
 
 test("complete FPR event stays ineligible for both current rating workers and generic monthly closure", () => {
@@ -141,6 +172,11 @@ test("guarded patch upgrades only four function bodies and preserves exact live 
   assert.throws(() => patchFprFlow(upgradedBytes, upgradeContract), /Unexpected flow/);
   assert.throws(() => patchFprFlow(bytes, { ...contract, flowSha256: "0".repeat(64) }), /preimage/);
   assert.throws(() => patchFprFlow(bytes, { ...contract, nodes: contract.nodes.map((n, i) => i ? n : { ...n, sha256: "0".repeat(64) }) }), /preimage/);
+  const focused = patchFprFlow(bytes, { ...contract, nodes: [contract.nodes[1]] });
+  assert.equal(focused.report.changes.length, 1);
+  const focusedFlow = JSON.parse(focused.output);
+  for (const index of [0, 2, 3, 4]) assert.deepEqual(focusedFlow[index], flow[index]);
+  assert.throws(() => patchFprFlow(bytes, { ...contract, nodes: [contract.nodes[1], contract.nodes[1]] }), /Unique scoped/);
 });
 
 test("community context reads work before a protocol exists and do not enter the normal history cache", () => {
