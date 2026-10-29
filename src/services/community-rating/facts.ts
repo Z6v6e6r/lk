@@ -4,6 +4,9 @@ import {
   getPlaceBonus,
 } from "./calculations.ts";
 import { COMMUNITY_RATING_CALCULATION_VERSION } from "./contract.ts";
+import { getTournamentRatingExclusion } from "../player-rating/tournamentExclusionGuard.ts";
+import { fprStandings } from "../../components/tournaments/fpr6x25.ts";
+import { selectFprCommunityResults, type FprCommunitySelection } from "./fpr.ts";
 
 export const COMMUNITY_RATING_COLLECTIONS = {
   facts: "community_rating_facts",
@@ -154,6 +157,8 @@ export type CommunityRatingFact =
     eventType: "tournament";
     // Calendar-month awards use the scheduled event date, not the later closing date.
     eventStartedAtTs?: number;
+    sourceProtocolId?: string;
+    sourceLevelAtEvent?: number;
     metrics: CommunityRatingTournamentFactMetrics;
   })
   | (CommunityRatingFactBase & {
@@ -215,6 +220,7 @@ export interface ExtractCommunityRatingFactsParams {
     members?: unknown[] | null;
   };
   feedPosts?: unknown[] | null;
+  publicationContextPosts?: unknown[] | null;
   games?: unknown[] | null;
   tournaments?: unknown[] | null;
   visits?: unknown[] | null;
@@ -1330,17 +1336,21 @@ function extractTournamentFacts(input: {
   memberByKey: Map<string, RatingMember>;
   ratingLedger: RatingLedgerImpactIndex;
   collectedAt: string;
+  fpr?: Extract<FprCommunitySelection, { status: "selected" }>;
 }): CommunityRatingFact[] {
-  if (!isTournamentFinalized(input.tournament)) return [];
-  const eventId = pickString(input.tournament, ["tournamentId", "id"])
+  if (!input.fpr && !isTournamentFinalized(input.tournament)) return [];
+  const eventId = input.fpr?.eventId || pickString(input.tournament, ["tournamentId", "id"])
     || resolveCommunityRatingTournamentPostLinkId(input.post);
   if (!eventId) return [];
 
-  const rows = resolveTournamentRows(input.tournament);
-  const participantsCount = resolveTournamentParticipantsCount(input.tournament, rows);
+  const rows: TournamentStanding[] = input.fpr ? fprStandings(input.fpr.state)
+    .filter(row => row.status === "active" && row.matchesPlayed > 0 && row.rank !== null)
+    .map(row => ({ id: row.id, phone: null, name: row.name, place: row.rank!, wins: row.wins,
+      pointsFor: row.pointsFor, pointsAgainst: row.pointsAgainst, pointDiff: row.pointsFor - row.pointsAgainst })) : resolveTournamentRows(input.tournament);
+  const participantsCount = input.fpr?.state.players.length ?? resolveTournamentParticipantsCount(input.tournament, rows);
   if (rows.length === 0 || participantsCount <= 0) return [];
 
-  const occurredAtTs = resolveTournamentTimestamp(input.tournament, resolvePostTimestamp(input.post));
+  const occurredAtTs = input.fpr ? Date.parse(input.fpr.state.finishedAt!) : resolveTournamentTimestamp(input.tournament, resolvePostTimestamp(input.post));
   const eventStartedAtTs = resolveTournamentStartTimestamp(input.post, input.tournament) ?? occurredAtTs;
   if (occurredAtTs <= 0) return [];
 
@@ -1348,7 +1358,9 @@ function extractTournamentFacts(input: {
 
   return rows
     .map((standing): CommunityRatingFact | null => {
-      const member = resolveMember(input.memberByKey, standing);
+      if (getTournamentRatingExclusion(input.tournament, standing.id, "community")
+        || input.fpr?.legacySource && getTournamentRatingExclusion(input.fpr.legacySource, standing.id, "community")) return null;
+      const member = input.fpr ? input.memberByKey.get(`id:${standing.id}`) : resolveMember(input.memberByKey, standing);
       if (!member) return null;
       const placeScore = calculatePlaceScore(standing.place, participantsCount);
       const placeBonus = getPlaceBonus(standing.place);
@@ -1374,6 +1386,8 @@ function extractTournamentFacts(input: {
         }),
         eventType: "tournament",
         eventStartedAtTs,
+        ...(input.fpr ? { sourceProtocolId: input.fpr.state.tournamentId,
+          sourceLevelAtEvent: input.fpr.state.players.find(p => p.id === standing.id)!.level } : {}),
         metrics: {
           tournamentsPlayed: 1,
           participantsCount,
@@ -1489,6 +1503,10 @@ export function extractCommunityRatingFacts(params: ExtractCommunityRatingFactsP
     }));
   });
 
+  const fprResults = selectFprCommunityResults({ communityId,
+    posts: toArray(params.publicationContextPosts ?? params.feedPosts).filter(isRecord), tournaments: toArray(params.tournaments).filter(isRecord),
+    postLink: resolveCommunityRatingTournamentPostLinkId });
+  const processedFprEvents = new Set<string>();
   const feedFacts = toArray(params.feedPosts).flatMap((post) => {
     if (!isRecord(post) || post.archived === true) return [];
     const kind = pickString(post, ["kind", "type"]).toUpperCase();
@@ -1503,7 +1521,14 @@ export function extractCommunityRatingFacts(params: ExtractCommunityRatingFactsP
 
     if (kind === "TOURNAMENT") {
       const tournamentId = resolveCommunityRatingTournamentPostLinkId(post);
+      const selected = fprResults.get(tournamentId);
+      if (selected) {
+        if (selected.status === "ambiguous" || selected.post !== post || processedFprEvents.has(selected.eventId)) return [];
+        processedFprEvents.add(selected.eventId);
+        return extractTournamentFacts({ communityId, post, tournament: selected.tournament, fpr: selected, memberByKey, ratingLedger, collectedAt });
+      }
       const tournament = tournamentId ? tournamentById.get(tournamentId) : null;
+      if (tournament?.tournamentType === "fpr_6x25") return [];
       return tournament
         ? extractTournamentFacts({ communityId, post, tournament, memberByKey, ratingLedger, collectedAt })
         : [];

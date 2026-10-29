@@ -156,6 +156,9 @@ export function isClassicMexicanoTournament(input: {
 export function getTournamentProgressState(history: TournamentHistoryRecord | null | undefined): TournamentProgressState {
   if (!history) return "not_started";
   const params = asRecord(history.params);
+  if (history.tournamentType === "fpr_6x25") {
+    return asRecord(params?.fpr6x25)?.status === "completed" ? "completed" : "in_progress";
+  }
   if (
     isClassicMexicanoTournament(history) &&
     hasInProgressStatus(params) &&

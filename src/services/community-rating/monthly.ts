@@ -17,7 +17,7 @@ export function buildCommunityMonthlyReport(source: CommunityRatingSourceData, n
     // The scheduled event month remains authoritative after a late administrative close.
     return at != null && at >= window.fromTs && at < window.untilTs && at <= nowTs;
   });
-  const factById = new Map(extractCommunityRatingFacts({ ...source, feedPosts, collectedAt: updatedAt }).map(fact => [fact.id, fact]));
+  const factById = new Map(extractCommunityRatingFacts({ ...source, feedPosts, publicationContextPosts: source.feedPosts, collectedAt: updatedAt }).map(fact => [fact.id, fact]));
   const facts = [...factById.values()].filter(fact => fact.occurredAtTs <= nowTs && (fact.eventType !== "visit" || (fact.occurredAtTs >= window.fromTs && fact.occurredAtTs < window.untilTs)));
   const members = extractCommunityRatingMemberSeeds(source);
   const snapshot = buildCommunityRatingSnapshot({ communityId, facts, members, period: "all", tab: "overall", nowTs, updatedAt });

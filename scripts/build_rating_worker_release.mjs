@@ -18,6 +18,8 @@ const outDir = path.resolve(outArg);
 if (fs.existsSync(outDir)) throw new Error(`Release directory already exists: ${outDir}`);
 
 const files = [
+  ["src/components/tournaments/fpr6x25.ts", "src/components/tournaments/fpr6x25.ts"],
+  ["src/services/community-rating/fpr.ts", "src/services/community-rating/fpr.ts"],
   ['src/services/community-policy.ts', 'src/services/community-policy.ts'],
   ['src/services/community-rating/league.ts', 'src/services/community-rating/league.ts'],
   ['src/utils/exerciseCategory.ts', 'src/utils/exerciseCategory.ts'],
@@ -65,6 +67,8 @@ const files = [
   ["src/services/community-rating/persistence.ts", "src/services/community-rating/persistence.ts"],
   ["src/services/community-rating/recalculation.ts", "src/services/community-rating/recalculation.ts"],
   ["src/services/player-rating/ledger.ts", "src/services/player-rating/ledger.ts"],
+  ["src/services/player-rating/tournamentExclusions.ts", "src/services/player-rating/tournamentExclusions.ts"],
+  ["src/services/player-rating/tournamentExclusionGuard.ts", "src/services/player-rating/tournamentExclusionGuard.ts"],
 ];
 
 const readVersion = (relativePath, pattern, label) => {

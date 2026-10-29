@@ -16,6 +16,8 @@ type LkIdleDataGuardRuntime = {
   nativeXhrSend: typeof XMLHttpRequest.prototype.send | null;
   nativeSendBeacon: typeof navigator.sendBeacon | null;
   nativeWebSocket: typeof WebSocket | null;
+  tournamentSessions?: Set<symbol>;
+  tournamentActivityClock?: true;
 };
 
 type LkIdleDataGuardWindow = Window & {
@@ -61,6 +63,46 @@ function getRuntime(): LkIdleDataGuardRuntime | null {
 export function isLkIdleRequestPaused(): boolean {
   const runtime = getRuntime();
   return runtime !== null && runtime.status !== "active";
+}
+
+/** Keep an open tournament usable while players are on court. Does not resume
+ * an already stale page or alter authentication/session expiry. Nested windows
+ * share the hold across independently loaded widget bundles. */
+export function beginLkTournamentSession(): () => void {
+  const runtime = getRuntime();
+  if (!runtime || runtime.status !== "active") return () => {};
+  installTournamentActivityClock(runtime);
+  if (!runtime.tournamentSessions?.size && isLkIdleDeadlineReached(runtime.lastActivityAt, Date.now())) {
+    pauseForIdle(runtime);
+    return () => {};
+  }
+  const token = Symbol("tournament");
+  (runtime.tournamentSessions ??= new Set()).add(token);
+  runtime.lastActivityAt = Date.now();
+  scheduleIdleDeadline(runtime);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    runtime.tournamentSessions?.delete(token);
+    if (runtime.tournamentSessions?.size || runtime.status !== "active") return;
+    runtime.lastActivityAt = Date.now();
+    scheduleIdleDeadline(runtime);
+  };
+}
+
+function installTournamentActivityClock(runtime: LkIdleDataGuardRuntime) {
+  if (runtime.tournamentActivityClock) return;
+  let lastActivityAt = runtime.lastActivityAt;
+  // Previously cached bundles keep their original event/timer closures. They
+  // all read this shared clock before pausing, so a new tournament overlay can
+  // hold the existing runtime without replacing transports or old listeners.
+  Object.defineProperty(runtime, "lastActivityAt", {
+    configurable: true, enumerable: true,
+    get: () => runtime.status === "active" && runtime.tournamentSessions?.size ? Date.now() : lastActivityAt,
+    set: (value: number) => { lastActivityAt = value; },
+  });
+  runtime.tournamentActivityClock = true;
 }
 
 function closeActiveSockets(runtime: LkIdleDataGuardRuntime) {
@@ -132,7 +174,7 @@ function ensureModal(runtime: LkIdleDataGuardRuntime): HTMLDivElement | null {
 }
 
 function pauseForIdle(runtime: LkIdleDataGuardRuntime) {
-  if (runtime.status !== "active") return;
+  if (runtime.status !== "active" || runtime.tournamentSessions?.size) return;
   runtime.status = "stale";
   if (runtime.activityTimerId !== null) {
     window.clearTimeout(runtime.activityTimerId);
@@ -159,7 +201,9 @@ function scheduleIdleDeadline(runtime: LkIdleDataGuardRuntime) {
   if (runtime.status !== "active") return;
   if (runtime.activityTimerId !== null) {
     window.clearTimeout(runtime.activityTimerId);
+    runtime.activityTimerId = null;
   }
+  if (runtime.tournamentSessions?.size) return;
   const remainingMs = Math.max(
     0,
     LK_IDLE_DATA_TIMEOUT_MS - (Date.now() - runtime.lastActivityAt),
@@ -177,6 +221,7 @@ function scheduleIdleDeadline(runtime: LkIdleDataGuardRuntime) {
 function markActivity(runtime: LkIdleDataGuardRuntime) {
   if (runtime.status !== "active") return;
   const now = Date.now();
+  if (runtime.tournamentSessions?.size) { runtime.lastActivityAt = now; return; }
   if (isLkIdleDeadlineReached(runtime.lastActivityAt, now)) {
     pauseForIdle(runtime);
     return;
@@ -277,7 +322,10 @@ function installActivityListeners(runtime: LkIdleDataGuardRuntime) {
 export function installLkIdleDataGuard(): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
   const guardWindow = window as LkIdleDataGuardWindow;
-  if (guardWindow.__LK_IDLE_DATA_GUARD_V1__) return;
+  if (guardWindow.__LK_IDLE_DATA_GUARD_V1__) {
+    installTournamentActivityClock(guardWindow.__LK_IDLE_DATA_GUARD_V1__);
+    return;
+  }
 
   const runtime: LkIdleDataGuardRuntime = {
     version: 1,
@@ -291,8 +339,10 @@ export function installLkIdleDataGuard(): void {
     nativeXhrSend: null,
     nativeSendBeacon: null,
     nativeWebSocket: null,
+    tournamentSessions: new Set(),
   };
   guardWindow.__LK_IDLE_DATA_GUARD_V1__ = runtime;
+  installTournamentActivityClock(runtime);
 
   installFetchGuard(runtime);
   installXhrGuard(runtime);

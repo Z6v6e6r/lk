@@ -5,6 +5,16 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/services/community-rating/**"
+      - "src/services/player-rating/tournamentExclusionGuard.ts"
+      - "src/services/player-rating/tournamentExclusions.ts"
+      - "src/components/tournaments/fpr*.ts"
+      - "scripts/*fpr*"
+      - "scripts/rating_worker.mjs"
+      - "scripts/tests/fpr*"
+      - "src/utils/lkIdleDataGuard.ts"
+      - "src/utils/useLkTournamentSession.ts"
+      - "scripts/tests/tournamentIdleSession.test.mjs"
+      - "scripts/tests/lkIdleDataGuard.test.ts"
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
@@ -19,6 +29,16 @@ on:
     branches: [main]
     paths:
       - "src/services/community-rating/**"
+      - "src/services/player-rating/tournamentExclusionGuard.ts"
+      - "src/services/player-rating/tournamentExclusions.ts"
+      - "src/components/tournaments/fpr*.ts"
+      - "scripts/*fpr*"
+      - "scripts/rating_worker.mjs"
+      - "scripts/tests/fpr*"
+      - "src/utils/lkIdleDataGuard.ts"
+      - "src/utils/useLkTournamentSession.ts"
+      - "scripts/tests/tournamentIdleSession.test.mjs"
+      - "scripts/tests/lkIdleDataGuard.test.ts"
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
@@ -39,7 +59,9 @@ concurrency:
 
 jobs:
   monthly-mongodb:
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 refuses Linux >=6.19 (SERVER-121912); keep this DB test
+    # on the supported older runner kernel instead of the moving latest image.
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     services:
       mongo:
@@ -67,3 +89,7 @@ jobs:
         run: npm run test:community-monthly
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release
+      - name: Test community rating and FPR result compatibility
+        run: npm run test:community-rating
+      - name: Test tournament idle-session lifetime and unchanged ordinary idle guard
+        run: npm run test:tournament-session
