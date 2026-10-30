@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-const pollingTopologySources = ['subscription_payment_polling_generation.json', 'subscription_payment_archive_generation.json', 'lk1_error_source_generation.json', 'lk1_r03_response_generation.json']
+const pollingTopologySources = ['subscription_payment_polling_generation.json', 'subscription_payment_archive_generation.json', 'lk1_error_source_generation.json', 'lk1_r03_response_generation.json', 'subscription_friendship_promo_generation.json']
   .flatMap(name => JSON.parse(fs.readFileSync(new URL('../' + name, import.meta.url))).targets)
   .filter(t => ['fn_tournament_subscription_purchase_router.js', 'fn_tournament_subscription_confirm_resolve.js'].includes(t.fileName))
   .map(t => t.candidateSha256);

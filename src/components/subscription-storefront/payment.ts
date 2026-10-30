@@ -17,7 +17,7 @@ import {
 } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { resolveTournamentSubscriptionDirectProductId } from '../../utils/tournamentSubscriptionCatalog';
-import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, parseFriendshipTwoHoursProduct, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
+import { ATLANTY_ANNUAL_PRODUCT_ID, ATLANTY_MONTHLY_PRODUCT_ID, FRIENDSHIP_MONTHLY_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRODUCT_ID, FRIENDSHIP_TWO_HOURS_PRICE_MINOR, parseFriendshipTwoHoursProduct, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID } from './catalog';
 
 /** Query parameter used by LK1 to resolve the payment after returning from the bank. */
 export const PAYMENT_REF_QUERY_KEY = 'summerPaymentRef';
@@ -114,6 +114,14 @@ export function resolveStorefrontBillingTarget(
     };
   }
   return null;
+}
+
+/** Promo preview has a product binding without changing the ordinary counter checkout. */
+export function resolveStorefrontPromoTarget(planId: string, billingOptionId: StorefrontBillingOptionId): StorefrontBillingTarget | null {
+  const target = resolveStorefrontBillingTarget(planId, billingOptionId);
+  return target?.counterKey === 'friendship'
+    ? { ...target, directProductId: FRIENDSHIP_MONTHLY_PRODUCT_ID }
+    : target;
 }
 
 export function buildStorefrontPaymentRef(counterKey: string, now = Date.now(), random = Math.random()): string {
@@ -232,6 +240,15 @@ export async function resolvePaymentPhone(fallbackPhone = ''): Promise<string> {
 
 export async function validateStorefrontDirectPurchase(target: StorefrontBillingTarget): Promise<void> {
   if (!target.directProductId) throw new StorefrontPaymentError('Промокод недоступен для этого варианта подписки.');
+  if (target.counterKey === 'friendship') {
+    const readiness = await apiFetchTournamentSubscriptionStatus({ counterKey: 'friendship' });
+    const exact = readiness.data?.find(status => status.counterKey === 'friendship');
+    if (readiness.error || !exact || exact.promoCodeSupported !== true
+      || exact.productId !== target.directProductId || !exact.bindingReady || !exact.canPurchase
+      || (!exact.unlimited && exact.remainingCount <= 0)) {
+      throw new StorefrontPaymentError('Промокоды для этой подписки временно недоступны.');
+    }
+  }
   if (target.counterKey === 'friendship_two_hours') {
     // A static card price is not purchase authority. Re-read the provider product
     // — identity, price, period and the promised direction scope, including
@@ -297,36 +314,41 @@ export async function createStorefrontSubscriptionPayment(params: {
     });
   }
 
-  const result = await apiCreateTournamentSubscriptionPurchase({
-    clientPhone: params.phone,
-    counterKey: target.counterKey,
-    planType: target.planType,
-    paymentRef,
-    baseRedirectUrl: returnUrl,
-    successUrl: returnUrl,
-    failUrl: returnUrl,
-  });
-  if (result.error || !result.data) {
-    throw new StorefrontPaymentError(
-      describePaymentFailure(result.error, 'Не удалось создать оплату подписки'),
-    );
-  }
-
-  const resolvedPaymentRef = result.data.paymentRef || paymentRef;
-  if (result.data.paymentUrl) {
-    upsertPendingPaymentEntry({
+  const createCounterPayment = async () => {
+    const result = await apiCreateTournamentSubscriptionPurchase({
+      clientPhone: params.phone,
       counterKey: target.counterKey,
-      paymentRef: resolvedPaymentRef,
-      planId: params.billingOptionId,
-      campaignKey: result.data.campaignKey || null,
-      createdAt: new Date().toISOString(),
+      planType: target.planType,
+      paymentRef,
+      baseRedirectUrl: returnUrl,
+      successUrl: returnUrl,
+      failUrl: returnUrl,
     });
-    return { status: 'redirect', paymentUrl: result.data.paymentUrl, paymentRef: resolvedPaymentRef };
-  }
-  if ((result.data.toPayMinor ?? 0) > 0) {
-    throw new StorefrontPaymentError('Банк не вернул ссылку на оплату');
-  }
-  return { status: 'settled', message: 'Оплата подтверждена без перехода в банк.' };
+    if (result.error || !result.data) {
+      throw new StorefrontPaymentError(
+        describePaymentFailure(result.error, 'Не удалось создать оплату подписки'),
+      );
+    }
+
+    const resolvedPaymentRef = result.data.paymentRef || paymentRef;
+    if (result.data.paymentUrl) {
+      upsertPendingPaymentEntry({
+        counterKey: target.counterKey,
+        paymentRef: resolvedPaymentRef,
+        planId: params.billingOptionId,
+        campaignKey: result.data.campaignKey || null,
+        createdAt: new Date().toISOString(),
+      });
+      return { status: 'redirect' as const, paymentUrl: result.data.paymentUrl, paymentRef: resolvedPaymentRef };
+    }
+    if ((result.data.toPayMinor ?? 0) > 0) {
+      throw new StorefrontPaymentError('Банк не вернул ссылку на оплату');
+    }
+    return { status: 'settled' as const, message: 'Оплата подтверждена без перехода в банк.' };
+  };
+  return target.counterKey === 'friendship'
+    ? withSubscriptionPromoLock<StorefrontPurchaseOutcome>(FRIENDSHIP_MONTHLY_PRODUCT_ID, params.phone, createCounterPayment)
+    : createCounterPayment();
 }
 
 export interface ConfirmedStorefrontPayment {

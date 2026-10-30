@@ -278,7 +278,10 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
       assert.equal(actualSourceSha256, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, target.id);
       assert.notEqual(actualSourceSha256, amendment.sourceSha256, target.id);
     } else {
-      assert.equal(actualSourceSha256, amendment.sourceSha256, target.id);
+      const promo = JSON.parse(fs.readFileSync(new URL('../subscription_friendship_promo_generation.json', import.meta.url)));
+      const successor = promo.targets.find(item => item.id === target.id);
+      if (successor) assert.equal(successor.preimageSha256, amendment.sourceSha256, target.id);
+      assert.equal(actualSourceSha256, successor?.candidateSha256 ?? amendment.sourceSha256, target.id);
     }
     assert.notEqual(
       amendment.sourceSha256,

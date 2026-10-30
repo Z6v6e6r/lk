@@ -8,6 +8,9 @@ import { buildExactGraphContract, validateExactGraphContract } from '../nodered_
 
 const source = name => fs.readFileSync(new URL(`../nodered_games_nodes/fn_tournament_subscription_${name}.js`, import.meta.url), 'utf8');
 const baseline = '504d008502c9f40c96526b761b4e3de0a31f01dc';
+const r03CandidateRevision = 'bfa2073f44ec8f1dad7518a60550f46d0687933f';
+const r03SourceTexts = Object.fromEntries(r03Generation.targets.map(target => [target.source,
+  execFileSync('git', ['show', `${r03CandidateRevision}:scripts/${target.source}`], { encoding: 'utf8' })]));
 const now = Date.parse('2026-10-24T06:00:00.000Z');
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : [now])); }
@@ -214,7 +217,7 @@ function graphFixture() {
 
 test('successor binds nine response parents and dispatcher anchors, changing only two funcs', () => {
   const original = graphFixture(), before = structuredClone(original);
-  const candidate = patchR03ResponseSources(original);
+  const candidate = patchR03ResponseSources(original, { sourceTexts: r03SourceTexts });
   assert.deepEqual(original, before); assert.equal(candidate.length, original.length);
   const changed = [];
   for (let i = 0; i < candidate.length; i++) {
@@ -243,7 +246,7 @@ test('successor fails closed on source/graph/ownership drift without mutating in
     g => { g.find(n => n.id === 'ca022fd14027a5b0').d = true; },
   ]) {
     const graph = graphFixture(); mutate(graph); const before = structuredClone(graph);
-    assert.throws(() => patchR03ResponseSources(graph), /FLOW_SHAPE_INVALID|FUNCTION_PREIMAGE_CHANGED|FUNCTION_GRAPH_CHANGED|RESPONSE_/);
+    assert.throws(() => patchR03ResponseSources(graph, { sourceTexts: r03SourceTexts }), /FLOW_SHAPE_INVALID|FUNCTION_PREIMAGE_CHANGED|FUNCTION_GRAPH_CHANGED|RESPONSE_/);
     assert.deepEqual(graph, before);
   }
 });
@@ -255,7 +258,19 @@ test('successor source pins are exact while the deployed predecessor generation 
   assert.equal(r03Generation.targets.length, 2); assert.equal(r03Generation.historicalCausesClosed, false);
   for (const target of r03Generation.targets) {
     assert.equal(sha(committed(target.source)), target.preimageSha256);
-    assert.equal(sha(fs.readFileSync(new URL('../' + target.source, import.meta.url))), target.candidateSha256);
-    assert.equal(newestReviewedSourceSha256(target.fileName), target.candidateSha256);
+    assert.equal(sha(r03SourceTexts[target.source]), target.candidateSha256);
+    const promo = JSON.parse(fs.readFileSync(new URL('../subscription_friendship_promo_generation.json', import.meta.url)));
+    const successor = promo.targets.find(item => item.id === target.id);
+    if (successor) assert.equal(successor.preimageSha256, target.candidateSha256);
+    const currentHash = successor?.candidateSha256 ?? target.candidateSha256;
+    assert.equal(sha(fs.readFileSync(new URL('../' + target.source, import.meta.url))), currentHash);
+    assert.equal(newestReviewedSourceSha256(target.fileName), currentHash);
   }
+});
+
+
+test('historical R03 patch refuses an unbound newer promo source by default', () => {
+  const graph = graphFixture(), before = structuredClone(graph);
+  assert.throws(() => patchR03ResponseSources(graph), /FUNCTION_CANDIDATE_CHANGED/);
+  assert.deepEqual(graph, before);
 });

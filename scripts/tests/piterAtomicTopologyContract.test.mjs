@@ -116,7 +116,7 @@ test("legacy Piter paths remain disabled and function-only composition stays blo
 
 
 test('both original polling and archive successor hashes require complete topology', () => {
-  for (const name of ['subscription_payment_polling_generation.json', 'subscription_payment_archive_generation.json']) {
+  for (const name of ['subscription_payment_polling_generation.json', 'subscription_payment_archive_generation.json', 'subscription_friendship_promo_generation.json']) {
     const generation = JSON.parse(fs.readFileSync(new URL('../' + name, import.meta.url)));
     for (const target of generation.targets.filter(t => ['fn_tournament_subscription_purchase_router.js', 'fn_tournament_subscription_confirm_resolve.js'].includes(t.fileName))) {
       assert.equal(isTopologyDependentPiterSourceHash(target.candidateSha256), true);

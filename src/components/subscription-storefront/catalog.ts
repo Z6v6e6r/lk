@@ -37,6 +37,7 @@ export function canContinue(status: StorefrontStatus, stale = false): boolean {
 
 /** Billing option that requires an explicit terms confirmation before payment. */
 export const ANNUAL_TERMS_OPTION_ID = 'annual';
+export const FRIENDSHIP_MONTHLY_PRODUCT_ID = 'b2e6a9d4-53b5-4f79-87ec-3fb076381e9b';
 export const FRIENDSHIP_TWO_HOURS_PRODUCT_ID = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';
 export const FRIENDSHIP_TWO_HOURS_PRICE_MINOR = 1980000;
 export const FRIENDSHIP_TWO_HOURS_VALIDITY_DAYS = 30;

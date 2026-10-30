@@ -525,7 +525,11 @@ const fail = (status, error, details) => {
   const response = Object.assign({}, msg, {
     statusCode: status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: { error, details: details || null },
+    payload: { error, details: details || null,
+      ...(msg._summerSubscriptionCtx?.promoCode && msg._summerSubscriptionCtx.promoProviderAttempted !== true ? { promoAttempt: {
+        schemaVersion: 1, providerAttempted: false, paymentRef: msg._summerSubscriptionCtx.paymentRef,
+      } } : {}),
+    },
   });
   if (msg._summerSubscriptionCtx?.reconcile === true) {
     if (typeof node !== "undefined" && typeof node.warn === "function") {
@@ -1453,6 +1457,12 @@ if (ctx.step === "load_products") {
     ctx.providerVisits = lifecycleEvidence.visits;
   }
 
+  if (ctx.promoCode && (ctx.counterKey !== "friendship"
+    || global.get("summer_subscription_friendship_promo_enabled") !== true
+    || ctx.expectedPromoQuote?.productId !== targetProduct.id
+    || ctx.expectedPromoQuote?.sumMinor !== targetProduct.costMinor)) {
+    return fail(409, "Предложение изменилось. Примените промокод снова.");
+  }
   const transactionPayload = {
     clientPhone: ctx.clientPhone.startsWith("+") ? ctx.clientPhone : `+${ctx.clientPhone}`,
     paymentMethod: resolveTransactionPaymentMethod(ctx),
@@ -1462,9 +1472,10 @@ if (ctx.step === "load_products") {
         count: 1,
         customAmount: null,
         type: targetProduct.type,
-        discount: discountMinor,
+        ...(ctx.promoCode ? {} : { discount: discountMinor }),
       },
     ],
+    ...(ctx.promoCode ? { promoCode: ctx.promoCode } : {}),
     offlineTillId: null,
     deposit: 0,
     ...(ctx.studioId ? { studioId: ctx.studioId } : {}),
@@ -1474,6 +1485,10 @@ if (ctx.step === "load_products") {
 
   ctx.step = "create_transaction";
   ctx.transactionPayload = transactionPayload;
+  if (ctx.promoCode) {
+    ctx.step = "preview_promo";
+    return adminRequest(ctx, "POST", "/transactions/preview", transactionPayload);
+  }
   if (!subscriptionCounterEpoch.admission(ctx, global)) return fail(503, "Продажи этого периода закрыты", { code: "COUNTER_EPOCH_ADMISSION_CLOSED" });
   const request = adminRequest(ctx, "POST", "/transactions", transactionPayload);
   if (isAtomicSaleCounter(ctx.counterKey)) {
@@ -1487,7 +1502,43 @@ if (ctx.step === "load_products") {
   return request;
 }
 
+// Viva preview reports kopecks explicitly; reject contradictory aliases instead
+// of guessing which financial value the provider intended.
+const readPromoPreviewAmount = (preview, keys) => {
+  const values = keys.filter(key => preview?.[key] !== undefined).map(key => preview[key]);
+  if (!values.length || values.some(value => !Number.isSafeInteger(value) || value < 0)
+    || values.some(value => value !== values[0])) return null;
+  return values[0];
+};
+
+if (ctx.step === "preview_promo") {
+  const expected = ctx.expectedPromoQuote;
+  const preview = msg.payload;
+  if (!isOk(msg.statusCode) || !expected || !preview
+    || readPromoPreviewAmount(preview, ["sumKopecks", "sumMinor", "sum"]) !== expected.sumMinor
+    || readPromoPreviewAmount(preview, ["discountKopecks", "discountMinor", "discount"]) !== expected.discountMinor
+    || readPromoPreviewAmount(preview, ["toPayKopecks", "toPayMinor", "toPay"]) !== expected.toPayMinor
+    || global.get("summer_subscription_friendship_promo_enabled") !== true) {
+    return fail(409, "Стоимость изменилась или промокод не подтверждён. Примените его снова.");
+  }
+  ctx.priceMinor = expected.toPayMinor;
+  ctx.productCostMinor = expected.toPayMinor;
+  ctx.discountMinor = expected.discountMinor;
+  ctx.step = "create_transaction";
+  if (!subscriptionCounterEpoch.admission(ctx, global)
+    || global.get("summer_subscription_friendship_admission_closed") === true) {
+    return fail(503, "Продажа подписки временно закрыта");
+  }
+  ctx.promoProviderAttempted = true;
+  return adminRequest(ctx, "POST", "/transactions", ctx.transactionPayload);
+}
+
 if (ctx.step === "create_transaction") {
+  if (ctx.promoCode && (!isOk(msg.statusCode) || !pickId(msg.payload)
+    || msg.payload?.toPay !== ctx.expectedPromoQuote?.toPayMinor
+    || !extractPaymentUrl(msg.payload))) {
+    return fail(502, "Результат покупки не подтверждён. Проверьте личный кабинет перед повторной оплатой.");
+  }
   if (!isOk(msg.statusCode)) {
     if (isAtomicSaleCounter(ctx.counterKey)) {
       ctx.step = "piter_provider_result";
