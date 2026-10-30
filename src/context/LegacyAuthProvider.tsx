@@ -102,6 +102,7 @@ export function LegacyAuthProvider({ children }: { children: React.ReactNode }) 
     clearError();
     const formData = new URLSearchParams();
     formData.append("grant_type", "password");
+    formData.append("scope", "openid");
     formData.append("phone_number", phoneNumber);
     formData.append("code", code);
     formData.append("client_id", "widget");

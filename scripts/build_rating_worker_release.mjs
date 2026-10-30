@@ -65,6 +65,7 @@ const files = [
   ["src/services/community-rating/persistence.ts", "src/services/community-rating/persistence.ts"],
   ["src/services/community-rating/recalculation.ts", "src/services/community-rating/recalculation.ts"],
   ["src/services/player-rating/ledger.ts", "src/services/player-rating/ledger.ts"],
+  ["src/services/player-rating/tournamentExclusions.ts", "src/services/player-rating/tournamentExclusions.ts"],
 ];
 
 const readVersion = (relativePath, pattern, label) => {

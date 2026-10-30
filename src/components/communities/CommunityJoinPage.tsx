@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CABINET_URL } from "../../consts/api_config";
 import {
   apiFetchCommunities,
   apiJoinCommunityByInvite,
   buildCommunityInviteLink,
-  buildCommunityLogoCandidates,
   communityErrorMessage,
   extractCommunityInviteCode,
   type CommunityRecord,
@@ -17,11 +16,17 @@ import {
   parseNumericLevel,
 } from "../../utils/customFields";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
+import { buildCommunityCabinetUrl } from "../../utils/communityJoinRoute";
+import { AuthForm } from "../auth/AuthForm";
+import { useAuth } from "../../context/authShared";
+import { CommunityInviteView, type CommunityInviteState } from "./CommunityInviteView";
 
 interface CommunityJoinPageProps {
   inviteCode?: string | null;
   inviteLink?: string | null;
   cabinetUrl?: string | null;
+  authenticated?: boolean;
+  onLogin?: () => void;
 }
 
 const DEFAULT_CABINET_URL = CABINET_URL;
@@ -84,11 +89,15 @@ function resolveInviteCabinetUrl(value: string | null | undefined): string {
   }
 }
 
-function redirectToCabinet(urlValue: string | null | undefined) {
+function redirectToCabinet(urlValue: string | null | undefined, communityId?: string) {
   if (typeof window === "undefined") return false;
 
-  const target = resolveInviteCabinetUrl(urlValue);
+  let target = resolveInviteCabinetUrl(urlValue);
   if (!target) return false;
+  if (communityId) {
+    try { target = buildCommunityCabinetUrl(target, communityId); }
+    catch { return false; }
+  }
 
   try {
     if (window.top && window.top !== window) {
@@ -121,25 +130,15 @@ function redirectToCabinet(urlValue: string | null | undefined) {
   }
 }
 
-function getInitials(value: string | null | undefined): string {
-  const raw = (value || "").trim();
-  if (!raw) return "PH";
-  return raw
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0] ?? "")
-    .join("")
-    .toUpperCase();
-}
 
-function isCommunityMember(community: CommunityRecord, profile: UserProfileType | null) {
+function isCommunityMember(community: CommunityRecord, profile: UserProfileType | null, status: "ACTIVE" | "PENDING" = "ACTIVE") {
   if (!profile) return false;
 
   const profileId = profile.id?.trim() || "";
   const profilePhone = normalizePhone(profile.phone);
 
   return community.members.some((member) => {
+    if (member.status !== status) return false;
     const byId = Boolean(profileId && member.id && member.id === profileId);
     const byPhone = Boolean(profilePhone && member.phone && member.phone === profilePhone);
     return byId || byPhone;
@@ -163,7 +162,10 @@ export default function CommunityJoinPage({
   inviteCode,
   inviteLink,
   cabinetUrl = DEFAULT_CABINET_URL,
+  authenticated = true,
+  onLogin = () => {},
 }: CommunityJoinPageProps) {
+  const { logout } = useAuth();
   const normalizedInviteCode = useMemo(
     () => extractCommunityInviteCode(inviteCode || inviteLink || "") || null,
     [inviteCode, inviteLink],
@@ -176,87 +178,76 @@ export default function CommunityJoinPage({
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [community, setCommunity] = useState<CommunityRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<CommunityInviteState>("checking");
+  const [showLogin, setShowLogin] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState<"join" | "decline" | null>(null);
-  const [inviteLogoFallbackIndex, setInviteLogoFallbackIndex] = useState(0);
-  const communityLogoCandidates = useMemo(
-    () => buildCommunityLogoCandidates(community),
-    [community],
-  );
-
+  const [submitting, setSubmitting] = useState<"join" | "decline" | "reload" | null>(null);
+  const context = useMemo(() => ({ normalizedInviteCode, normalizedInviteLink, authenticated }), [normalizedInviteCode, normalizedInviteLink, authenticated]);
+  const currentContext = useRef(context);
+  currentContext.current = context;
+  const mounted = useRef(false);
+  const activeAction = useRef(false);
+  const [loadedContext, setLoadedContext] = useState<typeof context | null>(null);
   useEffect(() => {
-    setInviteLogoFallbackIndex(0);
-  }, [communityLogoCandidates]);
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const requireLogin = useCallback(() => {
+    setProfile(null); setCommunity(null); setState("guest");
+    setLoadError(null); setActionError(null); setShowLogin(false);
+    setLoadedContext(context);
+  }, [context]);
+
+  const reload = useCallback(async (fresh = false, isCurrent: () => boolean = () => true) => {
+    const valid = () => mounted.current && currentContext.current === context && isCurrent();
+    if (!authenticated) {
+      if (valid()) { setProfile(null); setCommunity(null); setState("guest"); setLoading(false); setLoadedContext(context); }
+      return;
+    }
+    setLoading(true); setLoadError(null); setActionError(null);
+    try {
+      if (!normalizedInviteCode && !normalizedInviteLink) throw new Error("INVITE_MISSING");
+      const profileResult = await apiFetchProfile();
+      if (!valid()) return;
+      if (profileResult.status === 401) { requireLogin(); return; }
+      if (profileResult.error || !profileResult.data) throw new Error("PROFILE_UNAVAILABLE");
+      const communitiesResult = await apiFetchCommunities({ phone: profileResult.data.phone, clientId: profileResult.data.id, forceFresh: fresh });
+      if (!valid()) return;
+      if (communitiesResult.status === 401) { requireLogin(); return; }
+      if (communitiesResult.error) throw new Error("COMMUNITIES_UNAVAILABLE");
+      const found = findInviteCommunity(communitiesResult.data?.communities ?? [], normalizedInviteCode, normalizedInviteLink);
+      // Absence from a scoped list cannot prove a previously ambiguous join failed.
+      if (fresh && !found) throw new Error("MEMBERSHIP_UNKNOWN");
+      setProfile(profileResult.data); setCommunity(found);
+      const member = found && isCommunityMember(found, profileResult.data);
+      const pending = found && isCommunityMember(found, profileResult.data, "PENDING");
+      // This summary proves membership, not eligibility to join. The command remains authoritative.
+      setState(previous => member ? "member" : pending || previous === "pending" ? "pending" : "unverified");
+      setLoadedContext(context);
+    } catch {
+      if (!valid()) return;
+      setState("error"); setLoadError("Не удалось проверить приглашение. Проверьте статус ещё раз."); setLoadedContext(context);
+    } finally { if (valid()) setLoading(false); }
+  }, [authenticated, context, normalizedInviteCode, normalizedInviteLink, requireLogin]);
 
   useEffect(() => {
     let cancelled = false;
-
-    const loadInvitation = async () => {
-      if (!normalizedInviteCode && !normalizedInviteLink) {
-        setLoadError("Проверьте ссылку приглашения и попробуйте снова.");
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      setLoadError(null);
-
-      const profileResult = await apiFetchProfile();
-      if (cancelled) return;
-
-      if (profileResult.error || !profileResult.data) {
-        setProfile(null);
-        setLoadError(profileResult.error?.message || "Не удалось загрузить профиль.");
-        setLoading(false);
-        return;
-      }
-
-      setProfile(profileResult.data);
-
-      const communitiesResult = await apiFetchCommunities({
-        phone: profileResult.data.phone,
-        clientId: profileResult.data.id,
-      });
-      if (cancelled) return;
-
-      const matchedCommunity = findInviteCommunity(
-        communitiesResult.data?.communities ?? [],
-        normalizedInviteCode,
-        normalizedInviteLink,
-      );
-
-      setCommunity(matchedCommunity);
-      setLoading(false);
-    };
-
-    void loadInvitation();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [normalizedInviteCode, normalizedInviteLink]);
+    setState("checking"); setCommunity(null); setProfile(null);
+    void reload(false, () => !cancelled);
+    return () => { cancelled = true; };
+  }, [reload]);
+  useEffect(() => setShowLogin(false), [normalizedInviteCode, normalizedInviteLink]);
 
   const alreadyMember = useMemo(
     () => (community ? isCommunityMember(community, profile) : false),
     [community, profile],
   );
 
-  const statusLabel = useMemo(() => {
-    if (alreadyMember) {
-      return community
-        ? `Вы уже состоите в сообществе «${community.name}».`
-        : "Вы уже состоите в этом сообществе.";
-    }
-
-    if (community) {
-      return `Подтвердите вступление в сообщество «${community.name}».`;
-    }
-
-    return "Подтвердите, что хотите перейти по приглашению в сообщество.";
-  }, [alreadyMember, community]);
-
   const handleDecline = useCallback(() => {
+    if (activeAction.current) return;
+    activeAction.current = true;
     setActionError(null);
     setSubmitting("decline");
 
@@ -266,184 +257,80 @@ export default function CommunityJoinPage({
 
     setSubmitting(null);
     setActionError("Не удалось открыть личный кабинет.");
+    activeAction.current = false;
   }, [cabinetUrl]);
 
   const handleJoin = useCallback(async () => {
+    if (activeAction.current || loading || loadedContext !== context) return;
     if (!profile) {
       setActionError("Не удалось загрузить профиль для вступления.");
       return;
     }
 
     if (alreadyMember) {
-      if (redirectToCabinet(cabinetUrl)) {
+      activeAction.current = true;
+      setSubmitting("join");
+      if (community && redirectToCabinet(cabinetUrl, community.id)) {
         return;
       }
 
-      setActionError("Не удалось открыть личный кабинет.");
+      activeAction.current = false; setSubmitting(null);
+      setActionError("Не удалось открыть сообщество.");
       return;
     }
 
-    if (!normalizedInviteCode && !normalizedInviteLink) {
+    if (state !== "unverified" || (!normalizedInviteCode && !normalizedInviteLink)) {
       setActionError("Ссылка приглашения повреждена.");
       return;
     }
 
     setActionError(null);
     setSubmitting("join");
-
-    const response = await apiJoinCommunityByInvite({
-      inviteCode: normalizedInviteCode,
-      inviteLink: normalizedInviteLink,
-      member: buildCommunityActor(profile),
-    });
-
-    if (response.error) {
-      setSubmitting(null);
-      setActionError(
-        communityErrorMessage(response.error, "Не удалось вступить в сообщество."),
-      );
-      return;
+    activeAction.current = true;
+    try {
+      const response = await apiJoinCommunityByInvite({ inviteCode: normalizedInviteCode, inviteLink: normalizedInviteLink, member: buildCommunityActor(profile) }, { allowFallback: false });
+      if (!mounted.current || currentContext.current !== context) return;
+      if (response.status === 401) { requireLogin(); return; }
+      if (response.error) {
+        if (response.status != null && response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+          setState("blocked"); setActionError(communityErrorMessage(response.error, "Не удалось вступить в сообщество."));
+          return;
+        }
+        throw new Error("JOIN_OUTCOME_UNKNOWN");
+      }
+      const confirmed = response.data?.community;
+      if (!confirmed || (community && confirmed.id !== community.id) || !findInviteCommunity([confirmed], normalizedInviteCode, normalizedInviteLink)) throw new Error("JOIN_SCOPE_UNKNOWN");
+      setCommunity(confirmed);
+      if (isCommunityMember(confirmed, profile)) { setState("member"); return; }
+      if (isCommunityMember(confirmed, profile, "PENDING") || response.data?.membershipStatus === "PENDING") { setState("pending"); return; }
+      throw new Error("MEMBERSHIP_UNCONFIRMED");
+    } catch {
+      if (mounted.current && currentContext.current === context) {
+        setState("error"); setActionError("Не удалось подтвердить вступление. Сначала проверьте статус.");
+      }
+    } finally {
+      activeAction.current = false;
+      if (mounted.current) setSubmitting(null);
     }
+  }, [alreadyMember, cabinetUrl, community, context, loadedContext, loading, normalizedInviteCode, normalizedInviteLink, profile, state, requireLogin]);
 
-    if (response.data?.community) {
-      setCommunity(response.data.community);
-    }
+  const handleReload = async () => {
+    if (activeAction.current) return;
+    activeAction.current = true; setSubmitting("reload");
+    try { await reload(true); }
+    finally { activeAction.current = false; if (mounted.current) setSubmitting(null); }
+  };
 
-    if (redirectToCabinet(cabinetUrl)) {
-      return;
-    }
-
-    setSubmitting(null);
-    setActionError("Вступление сохранено, но не удалось открыть личный кабинет.");
-  }, [alreadyMember, cabinetUrl, normalizedInviteCode, normalizedInviteLink, profile]);
-
-  if (loading) {
-    return (
-      <div className="app-container game-container">
-        <div className="game-empty">Загружаем приглашение в сообщество...</div>
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <div className="app-container game-container">
-        <div className="page-header">
-          <div className="page-title">Приглашение в сообщество</div>
-        </div>
-        <div className="game-section">
-          <div className="game-empty game-pay-error">{loadError}</div>
-        </div>
-        <div className="game-section">
-          <button className="section-cta" type="button" onClick={handleDecline}>
-            Перейти в личный кабинет
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="app-container game-container game-join-container">
-      <div className="page-header">
-        <div className="page-title">Приглашение в сообщество</div>
-      </div>
-
-      <div className="game-section">
-        <div className="details-card community-invite-card">
-          <div className="community-invite-head">
-            {communityLogoCandidates[inviteLogoFallbackIndex] ? (
-              <img
-                src={communityLogoCandidates[inviteLogoFallbackIndex]}
-                alt={community?.name ?? "Сообщество"}
-                className="community-invite-logo"
-                onError={() => {
-                  setInviteLogoFallbackIndex((current) => (
-                    current < communityLogoCandidates.length ? current + 1 : current
-                  ));
-                }}
-              />
-            ) : (
-              <div className="community-invite-logo community-invite-logo--fallback">
-                {getInitials(community?.name)}
-              </div>
-            )}
-
-            <div className="community-invite-copy">
-              <div className="details-date">{community?.name || "Сообщество Padel HUB"}</div>
-              <div className="details-time">
-                {community
-                  ? community.visibility === "OPEN"
-                    ? "Открытое сообщество"
-                    : "Закрытое сообщество"
-                  : "Приглашение по ссылке"}
-              </div>
-              {community?.city && (
-                <div className="details-time details-time-strong">{community.city}</div>
-              )}
-            </div>
-          </div>
-
-          {community?.description && (
-            <div className="community-invite-description">{community.description}</div>
-          )}
-
-          <div className="details-tags community-invite-tags">
-            {community?.minimumLevel && (
-              <span className="game-created-tag">Уровень от {community.minimumLevel}</span>
-            )}
-            {community?.memberCount ? (
-              <span className="game-created-tag game-created-tag-neutral">
-                {community.memberCount} участников
-              </span>
-            ) : null}
-            {normalizedInviteCode && (
-              <span className="game-created-tag game-created-tag-duration">
-                Код: {normalizedInviteCode}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="game-section">
-        <div className="game-join-status">{statusLabel}</div>
-        <div className="community-invite-note">
-          После выбора откроется обычный личный кабинет.
-        </div>
-      </div>
-
-      {actionError && (
-        <div className="game-section">
-          <div className="game-empty game-pay-error">{actionError}</div>
-        </div>
-      )}
-
-      <div className="game-section game-join-actions">
-        <button
-          className="section-cta"
-          type="button"
-          disabled={Boolean(submitting)}
-          onClick={() => {
-            void handleJoin();
-          }}
-        >
-          {submitting === "join"
-            ? "Сохраняем..."
-            : alreadyMember
-              ? "Перейти в личный кабинет"
-              : "Вступить в сообщество"}
-        </button>
-
-        <button
-          className="section-cta section-cta-secondary"
-          type="button"
-          disabled={Boolean(submitting)}
-          onClick={handleDecline}
-        >
-          {submitting === "decline" ? "Переходим..." : "Отказаться"}
-        </button>
-      </div>
-    </div>
-  );
+  const current = loadedContext === context;
+  const visibleState = !current || loading ? "checking" : state;
+  const primary = visibleState === "guest" ? () => { if (authenticated) logout(); setShowLogin(true); }
+    : visibleState === "error" || visibleState === "pending" ? () => { void handleReload(); }
+    : () => { void handleJoin(); };
+  return <CommunityInviteView state={visibleState} community={current ? community : null}
+    busy={Boolean(submitting) || loading}
+    busyLabel={submitting === "join" ? alreadyMember ? "Открываем…" : "Вступаем…" : submitting === "decline" ? "Переходим…" : "Проверяем…"}
+    error={current ? actionError || loadError : null} reason={actionError}
+    onPrimary={primary} onSecondary={handleDecline}>
+    {visibleState === "guest" && showLogin ? <AuthForm onLogin={onLogin} /> : null}
+  </CommunityInviteView>;
 }

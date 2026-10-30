@@ -14,7 +14,12 @@ const community = toRows(msg.payload)[0];
 if (!community) return [null, jsonError(404, 'COMMUNITY_NOT_FOUND')];
 
 // COMMUNITY_TYPED_PLAYER_RATING_ACCESS
-if (['STATION','CORPORATE','LEAGUE'].includes(community.communityType) && String(community.visibility || '').toUpperCase() === 'CLOSED') {
+if (['STATION','CORPORATE','LEAGUE','EVENT'].includes(community.communityType) && String(community.visibility || '').toUpperCase() === 'CLOSED') {
+  const failure = msg._communityPolicyAuthFailure;
+  if (failure === 'INVALID' || failure === 'UNAVAILABLE') {
+    delete msg._communityPolicyAuthFailure;
+    return [null, jsonError(failure === 'INVALID' ? 401 : 503, failure === 'INVALID' ? 'AUTH_TOKEN_INVALID' : 'AUTH_SERVICE_UNAVAILABLE')];
+  }
   const actorId = toTrimmed(msg._verifiedCommunityActor?.id);
   if (!actorId || !toRows(community.members).some(row => exactMemberIds(row).includes(actorId))) return [null, jsonError(403, 'COMMUNITY_ACCESS_DENIED')];
 }

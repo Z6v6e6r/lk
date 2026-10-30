@@ -7,12 +7,14 @@ import test from "node:test";
 import {
   buildExactGraphContract,
   buildFunctionOnlyContract,
+  buildEditorPauseInjectsContract,
   atomicWrite,
   recoverAtomicExclusivePublication,
   sha256,
   validateExactGraphContract,
   validateFunctionOnlyContract,
   validateReviewedFlowContract,
+  validateEditorPauseInjectsContract,
   writeFileExclusiveAtomicDurable,
   writeFileExclusiveDurable,
 } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
@@ -36,6 +38,33 @@ const candidateFixture = () => {
   flow.find((node) => node.id === "fn-b").func = "msg.b = true; return msg;";
   return flow;
 };
+
+const editorFixture = () => {
+  const flow = [
+    { id: "e75785ffa19c2e20", type: "inject", z: "tab", name: "academy", wires: [[]] },
+    { id: "c1ecd06ce451751b", type: "inject", z: "tab", name: "max", d: false, wires: [[]] },
+  ];
+  for (let index = 0; index < 4855; index += 1) flow.push({ id: `node-${String(index).padStart(4, "0")}`, type: "debug", z: "tab", wires: [] });
+  return flow;
+};
+
+const editorCandidateFixture = () => {
+  const flow = editorFixture();
+  for (const id of ["e75785ffa19c2e20", "c1ecd06ce451751b"]) flow.find((node) => node.id === id).d = true;
+  return flow;
+};
+
+test("editor pause contract pins only the two inject disabled flags and canonical graph", () => {
+  const liveBytes = bytes(editorFixture());
+  const candidateBytes = bytes(editorCandidateFixture());
+  const contract = buildEditorPauseInjectsContract({ liveBytes, candidateBytes, deploymentId: "max-pause-pollers" });
+  assert.equal(contract.nodeCount, 4857);
+  assert.deepEqual(contract.pausedInjectIds, ["e75785ffa19c2e20", "c1ecd06ce451751b"]);
+  assert.deepEqual(validateEditorPauseInjectsContract({ liveBytes, candidateBytes, contract }), contract);
+  const drift = editorCandidateFixture();
+  drift.find((node) => node.id === "node-0000").name = "no";
+  assert.throws(() => buildEditorPauseInjectsContract({ liveBytes, candidateBytes: bytes(drift), deploymentId: "max-pause-pollers" }), /changed-node set mismatch/);
+});
 
 const exactGraphCandidateFixture = (activationNotBefore = null) => {
   const flow = structuredClone(fixture());
@@ -465,6 +494,254 @@ const prepareRuntime = (
     },
   };
 };
+
+const prepareEditorRuntime = (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "editor-lease-runtime-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const uid = process.getuid(); const gid = process.getgid();
+  const stage = path.join(root, ".padlhub-reviewed-flow-stage-20260820T120000+0300-123");
+  const backupDirectory = path.join(root, ".padlhub-reviewed-flow-backups");
+  const liveFlowPath = path.join(root, "flows.json");
+  const candidatePath = path.join(stage, "candidate.flow.json");
+  const contractPath = path.join(stage, "contract.json");
+  const deploymentLeasePath = path.join(root, ".padlhub-reviewed-flow-deploy.lease.json");
+  fs.mkdirSync(stage, { mode: 0o700 });
+  const liveBytes = bytes(editorFixture()); const candidateBytes = bytes(editorCandidateFixture());
+  const contract = buildEditorPauseInjectsContract({ liveBytes, candidateBytes, deploymentId: "max-pause-pollers" });
+  for (const [file, content] of [[liveFlowPath, liveBytes], [candidatePath, candidateBytes], [contractPath, Buffer.from(`${JSON.stringify(contract)}\n`)]]) fs.writeFileSync(file, content, { mode: 0o600 });
+  let nowMs = Date.parse("2026-08-20T09:00:00.000Z"); let restarts = 0; let assertCalls = 0; let onAssert = null;
+  const pm2 = { assertOnline: () => { assertCalls += 1; onAssert?.(assertCalls); return { pid: 789, status: "online", restartCount: restarts }; }, inspect: () => ({ pid: 789, status: "online", restartCount: restarts }), restart: () => { restarts += 1; throw new Error("must not restart"); } };
+  const runtime = createReviewedFlowRuntime({ liveFlowPath, stageParent: root, backupDirectory, deploymentLeasePath, uid, gid, getUid: () => uid, now: () => nowMs, randomUUID: () => "editor-lease-token", pm2 });
+  return { runtime, stage, liveFlowPath, candidatePath, contractPath, contract, deploymentLeasePath, get restarts() { return restarts; }, now: () => nowMs, advance: (value) => { nowMs += value; }, onPm2Assert: (fn) => { onAssert = fn; } };
+};
+
+const writeEditorAck = (prepared, reserve) => {
+  const ackPath = path.join(prepared.stage, "editor-ack.json");
+  const at = new Date(prepared.now()).toISOString();
+  fs.writeFileSync(ackPath, JSON.stringify({ deploymentId: prepared.contract.deploymentId, contractSha256: sha256(fs.readFileSync(prepared.contractPath)), leaseTokenSha256: sha256(Buffer.from(reserve.leaseToken)), sourceCanonicalSha256: prepared.contract.sourceCanonicalSha256, candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256, deployMode: "modified-nodes", pausedInjectIds: ["e75785ffa19c2e20", "c1ecd06ce451751b"], requestedAt: at, ackAt: at, authenticated: true, status: "SUCCESS", conflict: false, preRevisionSha256: "c".repeat(64), postRevisionSha256: "d".repeat(64) }), { mode: 0o600 });
+  return ackPath;
+};
+
+const writeEditorPredecessor = (prepared, mutate = () => {}) => {
+  const lease = { formatVersion: 2, deploymentId: "completed-prior-release", token: "private-prior-token",
+    phase: "soaking", acquiredAtMs: prepared.now() - 120000, expiresAtMs: prepared.now() - 60000,
+    sourceSha256: "a".repeat(64), candidateSha256: prepared.contract.sourceSha256 };
+  mutate(lease);
+  const content = Buffer.from(`${JSON.stringify(lease)}\n`);
+  fs.writeFileSync(prepared.deploymentLeasePath, content, { mode: 0o600 });
+  return { content, expectedPredecessor: { sha256: sha256(content), deploymentId: lease.deploymentId, candidateSha256: lease.candidateSha256 } };
+};
+
+test("editor reserve atomically adopts only the exact expired v2 predecessor after evidence", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  const live = fs.readFileSync(p.liveFlowPath);
+  const result = p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor });
+  const current = JSON.parse(fs.readFileSync(p.deploymentLeasePath));
+  assert.equal(current.formatVersion, 3);
+  assert.equal(current.predecessorSha256, sha256(old.content));
+  assert.deepEqual(fs.readFileSync(current.predecessorBackup), old.content);
+  assert.equal(JSON.parse(fs.readFileSync(result.reserveReceipt)).predecessorSha256, sha256(old.content));
+  assert.deepEqual(fs.readFileSync(p.liveFlowPath), live);
+  assert.equal(p.restarts, 0);
+});
+
+for (const [label, mutate, alterExpected] of [
+  ["unapproved expired lease", () => {}, () => undefined],
+  ["different hash", () => {}, e => ({ ...e, sha256: "b".repeat(64) })],
+  ["different owner", () => {}, e => ({ ...e, deploymentId: "another-release" })],
+  ["unexpired lease", x => { x.expiresAtMs += 3600000; }, e => e],
+  ["non-soaking lease", x => { x.phase = "applying"; }, e => e],
+  ["foreign candidate", x => { x.candidateSha256 = "c".repeat(64); }, e => e],
+]) test(`editor reserve preserves ${label}`, (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p, mutate);
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: alterExpected(old.expectedPredecessor) }), /predecessor/i);
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), old.content);
+  assert.equal(p.restarts, 0);
+});
+
+test("editor reserve keeps expired predecessor when prepared candidate is invalid", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  fs.writeFileSync(p.candidatePath, "[]", { mode: 0o600 });
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor }));
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), old.content);
+});
+
+test("editor reserve refuses predecessor replaced during candidate preparation", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  let replacement;
+  p.onPm2Assert(count => { if (count === 2) replacement = writeEditorPredecessor(p, x => { x.token = "foreign-owner"; }).content; });
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor }), /predecessor changed/i);
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), replacement);
+});
+
+test("editor predecessor survives failed atomic rename and v3 publication cannot be replayed", (t) => {
+  const p = prepareEditorRuntime(t), old = writeEditorPredecessor(p);
+  const original = fs.renameSync;
+  fs.renameSync = (from, to) => { if (to === p.deploymentLeasePath) throw new Error("synthetic predecessor rename"); return original(from, to); };
+  try {
+    assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+      stamp: "20260820T120000+0300", expectedPredecessor: old.expectedPredecessor }), /synthetic predecessor rename/);
+  } finally { fs.renameSync = original; }
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), old.content);
+  p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120001+0300", expectedPredecessor: old.expectedPredecessor });
+  const v3 = fs.readFileSync(p.deploymentLeasePath);
+  assert.throws(() => p.runtime.reserveEditorModified({ ...p, deploymentId: p.contract.deploymentId,
+    stamp: "20260820T120002+0300", expectedPredecessor: old.expectedPredecessor }), /predecessor/i);
+  assert.deepEqual(fs.readFileSync(p.deploymentLeasePath), v3);
+});
+
+test("editor lease reserves, confirms and finishes without helper flow writes or PM2 restarts", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const source = fs.readFileSync(prepared.liveFlowPath);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), source);
+  assert.equal(prepared.restarts, 0);
+  // This stands in for the native editor's full-graph modified-nodes deploy; the helper never performs it.
+  // Native editor serialization need not match the staged raw JSON bytes.
+  fs.writeFileSync(prepared.liveFlowPath, JSON.stringify(JSON.parse(fs.readFileSync(prepared.candidatePath, "utf8"))), { mode: 0o600 });
+  const ackPath = writeEditorAck(prepared, reserve);
+  const confirm = prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: ackPath });
+  assert.equal(confirm.nodeRedRestartCount, 0);
+  prepared.advance(15 * 60 * 1000);
+  const observationPath = path.join(prepared.stage, "editor-observation.json");
+  fs.writeFileSync(observationPath, JSON.stringify({ observedAt: new Date(prepared.now()).toISOString(), confirmReceiptSha256: sha256(fs.readFileSync(confirm.confirmReceipt)), postRevisionSha256: "d".repeat(64), candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256, nodeRedPid: 789, nodeRedRestartCount: 0 }), { mode: 0o600 });
+  const finish = prepared.runtime.finishEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120002+0300", observationPath });
+  assert.equal(finish.deploymentLeaseReleased, true);
+  assert.equal(prepared.restarts, 0);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.equal(prepared.runtime.finishEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120002+0300", observationPath }).resumed, true);
+});
+
+test("editor lease never auto-expires and abort releases only unchanged source", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  prepared.advance(60 * 60 * 1000);
+  assert.throws(() => prepared.runtime.preflight({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId }), /lease is active|editor-modified/);
+  assert.throws(() => prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: path.join(prepared.stage, "editor-ack.json") }), /deadline expired/);
+  const aborted = prepared.runtime.abortEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120002+0300" });
+  assert.equal(aborted.deploymentLeaseReleased, true);
+  assert.equal(prepared.restarts, 0);
+});
+
+test("editor acknowledgement rejects status, conflict, timing, revision, path, and mode drift", (t) => {
+  const cases = [
+    ["status", (ack) => { ack.status = "FAILED"; }],
+    ["conflict", (ack) => { ack.conflict = true; }],
+    ["time", (ack) => { ack.ackAt = "2026-08-20T10:00:00.000Z"; }],
+    ["revision", (ack) => { ack.postRevisionSha256 = ack.preRevisionSha256; }],
+    ["extra-key", (ack) => { ack.extra = true; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const prepared = prepareEditorRuntime(t);
+    const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+    fs.writeFileSync(prepared.liveFlowPath, JSON.stringify(JSON.parse(fs.readFileSync(prepared.candidatePath, "utf8"))), { mode: 0o600 });
+    const ackPath = writeEditorAck(prepared, reserve);
+    const ack = JSON.parse(fs.readFileSync(ackPath, "utf8")); mutate(ack); fs.writeFileSync(ackPath, JSON.stringify(ack), { mode: 0o600 });
+    assert.throws(() => prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: ackPath }), /acknowledgement|timing|revision/i, label);
+    assert.equal(prepared.restarts, 0);
+  }
+});
+
+test("editor acknowledgement rejects an unprotected artifact path", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  fs.writeFileSync(prepared.liveFlowPath, fs.readFileSync(prepared.candidatePath), { mode: 0o600 });
+  const ackPath = writeEditorAck(prepared, reserve); fs.chmodSync(ackPath, 0o644);
+  assert.throws(() => prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: ackPath }), /protection|invalid|mode/);
+});
+
+test("v3 editor lease blocks every legacy reviewed-flow action", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  const common = { deploymentId: prepared.contract.deploymentId, candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, stamp: "20260820T120001+0300", flowBackup: "/bad", contractBackup: "/bad", candidateBackup: "/bad", expectedLeaseSha256: "a".repeat(64), expectedActiveSha256: "a".repeat(64), expectedFlowBackupSha256: "a".repeat(64), expectedContractBackupSha256: "a".repeat(64) };
+  for (const [name, call] of Object.entries({
+    preflight: () => prepared.runtime.preflight(common), apply: () => prepared.runtime.apply(common),
+    rollback: () => prepared.runtime.rollback(common), reconcile: () => prepared.runtime.reconcileCurrent(common), finalize: () => prepared.runtime.finalizeLegacyCandidate(common),
+  })) assert.throws(call, /lease|editor/i, name);
+  assert.equal(reserve.leaseToken, "editor-lease-token");
+});
+
+test("editor abort is receipt-first and resumes after lease unlink failure", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  const original = fs.unlinkSync; let fail = true;
+  fs.unlinkSync = (file, ...args) => { if (fail && file === prepared.deploymentLeasePath) { fail = false; throw new Error("synthetic unlink"); } return original(file, ...args); };
+  t.after(() => { fs.unlinkSync = original; });
+  assert.throws(() => prepared.runtime.abortEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300" }), /synthetic unlink/);
+  fs.unlinkSync = original;
+  const resumed = prepared.runtime.abortEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300" });
+  assert.equal(resumed.deploymentLeaseReleased, true); assert.equal(prepared.restarts, 0);
+});
+
+test("editor confirm receipt survives lease write failure and retries the same ACK", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  fs.writeFileSync(prepared.liveFlowPath, JSON.stringify(JSON.parse(fs.readFileSync(prepared.candidatePath, "utf8"))), { mode: 0o600 });
+  const ackPath = writeEditorAck(prepared, reserve); const original = fs.renameSync; let fail = true;
+  fs.renameSync = (from, to) => { if (fail && to === prepared.deploymentLeasePath) { fail = false; throw new Error("synthetic rename"); } return original(from, to); };
+  t.after(() => { fs.renameSync = original; });
+  assert.throws(() => prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: ackPath }), /synthetic rename/);
+  fs.renameSync = original;
+  assert.equal(prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: ackPath }).ok, true);
+});
+
+test("editor finish receipt survives lease release failure and observation mismatch is refused", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  fs.writeFileSync(prepared.liveFlowPath, JSON.stringify(JSON.parse(fs.readFileSync(prepared.candidatePath, "utf8"))), { mode: 0o600 });
+  const confirm = prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: writeEditorAck(prepared, reserve) });
+  prepared.advance(15 * 60 * 1000);
+  const observationPath = path.join(prepared.stage, "editor-observation.json");
+  const observation = { observedAt: new Date(prepared.now()).toISOString(), confirmReceiptSha256: sha256(fs.readFileSync(confirm.confirmReceipt)), postRevisionSha256: "d".repeat(64), candidateCanonicalSha256: prepared.contract.candidateCanonicalSha256, nodeRedPid: 789, nodeRedRestartCount: 0 };
+  fs.writeFileSync(observationPath, JSON.stringify({ ...observation, postRevisionSha256: "e".repeat(64) }), { mode: 0o600 });
+  assert.throws(() => prepared.runtime.finishEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120002+0300", observationPath }), /observation binding/);
+  fs.writeFileSync(observationPath, JSON.stringify(observation), { mode: 0o600 });
+  const original = fs.unlinkSync; let fail = true;
+  fs.unlinkSync = (file, ...args) => { if (fail && file === prepared.deploymentLeasePath) { fail = false; throw new Error("synthetic finish unlink"); } return original(file, ...args); };
+  t.after(() => { fs.unlinkSync = original; });
+  assert.throws(() => prepared.runtime.finishEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120002+0300", observationPath }), /synthetic finish unlink/);
+  fs.unlinkSync = original;
+  assert.equal(prepared.runtime.finishEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120002+0300", observationPath }).deploymentLeaseReleased, true);
+});
+
+test("editor reserve retains OWNER_DECISION after post-publication flow drift", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  prepared.onPm2Assert((call) => {
+    if (call === 3) fs.writeFileSync(prepared.liveFlowPath, fs.readFileSync(prepared.candidatePath), { mode: 0o600 });
+  });
+  assert.throws(() => prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" }), /drifted after lease publication/);
+  const lease = JSON.parse(fs.readFileSync(prepared.deploymentLeasePath, "utf8"));
+  assert.equal(lease.phase, "editor-owner-decision"); assert.equal(prepared.restarts, 0);
+});
+
+test("editor abort resumes safely after fsync ambiguity following lease unlink", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  const originalUnlink = fs.unlinkSync; const originalFsync = fs.fsyncSync; let unlinked = false; let fail = true;
+  fs.unlinkSync = (file, ...args) => { const result = originalUnlink(file, ...args); if (file === prepared.deploymentLeasePath) unlinked = true; return result; };
+  fs.fsyncSync = (fd, ...args) => { if (fail && unlinked && !fs.existsSync(prepared.deploymentLeasePath)) { fail = false; throw new Error("synthetic unlink fsync"); } return originalFsync(fd, ...args); };
+  t.after(() => { fs.unlinkSync = originalUnlink; fs.fsyncSync = originalFsync; });
+  assert.throws(() => prepared.runtime.abortEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300" }), /synthetic unlink fsync/);
+  fs.unlinkSync = originalUnlink; fs.fsyncSync = originalFsync;
+  assert.equal(prepared.runtime.abortEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300" }).resumed, true);
+  assert.equal(prepared.restarts, 0);
+});
+
+test("editor acknowledgement is read exactly once through its protected descriptor", (t) => {
+  const prepared = prepareEditorRuntime(t);
+  const reserve = prepared.runtime.reserveEditorModified({ candidatePath: prepared.candidatePath, contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId, stamp: "20260820T120000+0300" });
+  fs.writeFileSync(prepared.liveFlowPath, JSON.stringify(JSON.parse(fs.readFileSync(prepared.candidatePath, "utf8"))), { mode: 0o600 });
+  const ackPath = writeEditorAck(prepared, reserve); const original = fs.readFileSync; let descriptorReads = 0;
+  fs.readFileSync = (target, ...args) => { if (typeof target === "number") descriptorReads += 1; return original(target, ...args); };
+  t.after(() => { fs.readFileSync = original; });
+  prepared.runtime.confirmEditorModified({ deploymentId: prepared.contract.deploymentId, leaseToken: reserve.leaseToken, stamp: "20260820T120001+0300", editorAckPath: ackPath });
+  assert.equal(descriptorReads, 1);
+});
 
 test("apply rechecks full soak and source rollback lead after a slow successful restart", (t) => {
   const prepared = prepareRuntime(t, {

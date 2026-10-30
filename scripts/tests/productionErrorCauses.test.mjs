@@ -1,3 +1,4 @@
+import './authConsentDenialRetry.test.mjs';
 import './lk1ErrorSourceFixes.test.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -49,7 +50,8 @@ test('userinfo diagnostics contain fixed enums and bounded status only', () => {
     req: { headers: { authorization: sensitive } },
   });
   assert.deepEqual(warnings, [{ event: 'auth_consent_verification_failed', code: 'AUTH_SERVICE_UNAVAILABLE',
-    reason: 'json_invalid', upstreamStatus: 200, responseType: 'html', retryable: true }]);
+    reason: 'json_invalid', upstreamStatus: 200, responseType: 'html', retryable: true,
+    providerError: 'unknown', unverifiedTokenHints: { openidPresent: null, expiredByClaim: null, clientMatchesClaim: null, issuerMatchesClaim: null } }]);
   assert.ok(!JSON.stringify([warnings, ports[1].payload]).includes(sensitive));
 });
 

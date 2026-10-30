@@ -531,6 +531,13 @@ const fail = (status, error, details) => {
       } } : {}),
     },
   });
+  if (msg._summerSubscriptionCtx?.reconcile === true) {
+    if (typeof node !== "undefined" && typeof node.warn === "function") {
+      node.warn(JSON.stringify({ event: "subscription_router_background_failed",
+        code: "SUBSCRIPTION_ROUTER_BACKGROUND_FAILED", statusCode: status }));
+    }
+    return [null, null, null, response];
+  }
   return [null, null, response, response];
 };
 

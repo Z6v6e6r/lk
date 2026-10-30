@@ -1,0 +1,97 @@
+{
+  "origin": "Built-in imagegen, 2026-10-23. Approved Yasenevo painting is the visual reference. Branding and gameplay remain separate.",
+  "encoding": "cwebp -q 88 -metadata none; no cropping or other image changes.",
+  "files": [
+    {
+      "station": 1,
+      "id": "seligerskaya",
+      "file": "seligerskaya.webp",
+      "width": 724,
+      "height": 2171,
+      "bytes": 615350,
+      "sha256": "79627cd04c86e77000f486feedceb29a57027f8e7ebb484df8f491fde76c5ad8"
+    },
+    {
+      "station": 2,
+      "id": "skolkovo",
+      "file": "skolkovo.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 597788,
+      "sha256": "d0164b69e6b005f00043e338b92f1bdfbdbf95b15eab36babf1db018af3ea03f"
+    },
+    {
+      "station": 3,
+      "id": "terekhovo",
+      "file": "terekhovo-dismantling.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 496260,
+      "sha256": "1c42926895d17bf028f48ef8aae02e274380706a1ffed17a2a4b548c1c7a487c",
+      "revision": "Built-in imagegen edit 2026-10-25: dismantled arena, Spanish man waving a four-red-stripe Catalan Senyera. No generated branding."
+    },
+    {
+      "station": 4,
+      "id": "nagatinskaya",
+      "file": "nagatinskaya.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 586708,
+      "sha256": "6dd383412506bceba372cc06dd0cc6ae3e112d117fd4f08ec2cf8a9958bd9df1"
+    },
+    {
+      "station": 5,
+      "id": "nagatinskaya-premium",
+      "file": "nagatinskaya-premium.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 661496,
+      "sha256": "73a502b934521dc605b99166494d42e12fbb5f8e57c1eeb4910866166115b645"
+    },
+    {
+      "station": 6,
+      "id": "piter",
+      "file": "piter.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 585186,
+      "sha256": "dc4e107cd5f3424536c351bad08dbf7a52d0e99ff30c04026d3f5a59a73af58b"
+    },
+    {
+      "station": 7,
+      "id": "sochi",
+      "file": "sochi.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 545116,
+      "sha256": "5a8bdc339e54ca01194bed44c8274d57e639b058d6e2f653318d04e83c231fe2"
+    },
+    {
+      "station": 8,
+      "id": "kotelniki",
+      "file": "kotelniki.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 469632,
+      "sha256": "ce671e8edb6da0ac28afed6c968fe5f67ea2e13a3612ff47377e44463966f5a1"
+    },
+    {
+      "station": 9,
+      "id": "zavidovo",
+      "file": "zavidovo.webp",
+      "width": 724,
+      "height": 2171,
+      "bytes": 477148,
+      "sha256": "84c263052eb3c10410d53bd3e4b264eac525d9bcb25a2c3fe6c1ee6d136eec71"
+    },
+    {
+      "station": 10,
+      "id": "kolomenskoe",
+      "file": "kolomenskoe.webp",
+      "width": 724,
+      "height": 2172,
+      "bytes": 495350,
+      "sha256": "4234d832dd51883f6428c5a293ca711d648e740ac31375d82655d03b27cb1cca"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+
 import react from '@vitejs/plugin-react'
 import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
 import { visualizer } from 'rollup-plugin-visualizer'
@@ -8,6 +9,9 @@ import { reactRuntimeSingletonGuard } from './scripts/react_runtime_singleton_gu
 const shouldAnalyze = process.env.ANALYZE === '1' || process.env.ANALYZE === 'true'
 
 export default defineConfig(({ command, mode }) => {
+  // Independent immutable game release; do not change on unrelated cabinet builds.
+  const gameSource = '5c710a0edd0a0b2632310e57e0d2b71ee81b1de7'
+  if (!/^[a-f0-9]{40}$/.test(gameSource)) throw new Error('Invalid game source identity')
   const isDevBundle = mode === 'dev'
   const managedSubscriptionsDevEnabled =
     command === 'serve' && process.env.MANAGED_SUBSCRIPTIONS_DEV_RUNTIME === '1'
@@ -45,6 +49,9 @@ export default defineConfig(({ command, mode }) => {
         : []),
     ],
     define: {
+      __PADLHUB_JUMP_WIDGET_URL__: JSON.stringify(command === 'serve'
+        ? '/src/padel-jump-widget.tsx'
+        : `https://padlhub.su/lk/padel-jump-team-${gameSource.slice(0, 8)}/assets/cabinet.js`),
       'process.env': {},
       'process.env.NODE_ENV': JSON.stringify('production'),
     },

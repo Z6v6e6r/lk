@@ -36,6 +36,7 @@ type PendingAuthConsent = {
   authMethod: AuthConsentMethod;
   attemptFingerprint: string;
   subjectFingerprint: string | null;
+  deniedTokenFingerprint?: string;
   documents: Array<{
     id: string;
     version: string;
@@ -51,6 +52,8 @@ const RETRYABLE_HTTP_STATUSES = new Set([404, 405, 408, 425, 429, 500, 502, 503,
 let syncInFlight: Promise<boolean> | null = null;
 let retryTimer: number | null = null;
 let retryAttempt = 0;
+// Memory fallback for browsers without WebCrypto; never persist a weak token hash.
+let deniedAttemptToken: string | null = null;
 
 async function fingerprintSubject(subject: string): Promise<string> {
   if (globalThis.crypto?.subtle && typeof TextEncoder !== "undefined") {
@@ -260,10 +263,11 @@ async function postPendingConsent(
 
   if (!response.ok) {
     const error = new Error(`Auth consent audit failed: HTTP ${response.status}`);
-    return { ok: false, error, retryable: RETRYABLE_HTTP_STATUSES.has(response.status) };
+    return { ok: false, error, retryable: RETRYABLE_HTTP_STATUSES.has(response.status),
+      authDenied: response.status === 401 || response.status === 403 };
   }
 
-  return { ok: true, error: null, retryable: false };
+  return { ok: true, error: null, retryable: false, authDenied: false };
 }
 
 function schedulePendingAuthConsentRetry() {
@@ -308,6 +312,15 @@ export async function syncPendingAuthConsents(attempt?: AuthConsentAttempt): Pro
       if (!writePendingAuthConsent(pending)) return false;
     }
 
+    // A denied token cannot recover because the tab became visible or went online.
+    // This fingerprint is only a retry gate, never an authorization decision.
+    const tokenFingerprint = await fingerprintSubject(authToken);
+    const attemptToken = `${pending.attemptFingerprint}:${tokenFingerprint}`;
+    if (deniedAttemptToken === attemptToken || (
+      /^[a-f0-9]{64}$/.test(tokenFingerprint)
+      && pending.deniedTokenFingerprint === tokenFingerprint
+    )) return false;
+
     const endpoints = resolveEndpointCandidates();
     const deadline = Date.now() + 2_500;
     let lastError: unknown = null;
@@ -333,6 +346,15 @@ export async function syncPendingAuthConsents(attempt?: AuthConsentAttempt): Pro
           return true;
         }
         lastError = result.error;
+        if (result.authDenied) {
+          deniedAttemptToken = attemptToken;
+          if (/^[a-f0-9]{64}$/.test(tokenFingerprint)) {
+            pending.deniedTokenFingerprint = tokenFingerprint;
+            writePendingAuthConsent(pending);
+          }
+          if (retryTimer !== null) window.clearTimeout(retryTimer);
+          retryTimer = null;
+        }
         shouldRetry = result.retryable;
         if (!result.retryable) break;
       } catch (error) {

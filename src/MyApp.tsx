@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
+import PadelJumpHost from "./components/padel-jump/PadelJumpHost";
+import PadelJumpCard from "./components/padel-jump/PadelJumpCard";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
@@ -775,14 +777,20 @@ function AppContent() {
 
   if (isAndroidTournamentMode) {
     if (!isAuthenticated) {
-      return <AuthForm onLogin={() => setView("tournaments")} allowPhoneLogin={false} />;
+      return <>
+        <div className="pj-native-entry"><PadelJumpCard /></div>
+        <AuthForm onLogin={() => setView("tournaments")} allowPhoneLogin={false} />
+      </>;
     }
 
     return (
-      <TournamentsPage
-        onBack={() => logout()}
-        backLabel="← Выйти"
-      />
+      <>
+        <div className="pj-native-entry"><PadelJumpCard /></div>
+        <TournamentsPage
+          onBack={() => logout()}
+          backLabel="← Выйти"
+        />
+      </>
     );
   }
 
@@ -892,10 +900,6 @@ function AppContent() {
   }
 
   if (communityJoinRouteData.enabled) {
-    if (!isAuthenticated) {
-      return <AuthForm onLogin={() => setView("cabinet")} />;
-    }
-
     if (!communityJoinRouteData.inviteCode && !communityJoinRouteData.inviteLink) {
       return (
         <div className="load-error">
@@ -907,6 +911,8 @@ function AppContent() {
 
     return (
       <CommunityJoinPage
+        authenticated={isAuthenticated}
+        onLogin={() => setView("cabinet")}
         inviteCode={communityJoinRouteData.inviteCode}
         inviteLink={communityJoinRouteData.inviteLink}
         cabinetUrl={communityJoinRouteData.cabinetUrl}
@@ -997,10 +1003,21 @@ function AppContent() {
     );
   }
 
-  return <AuthForm onLogin={() => setView("cabinet")} />;
+  return <>
+    <div className="pj-native-entry"><PadelJumpCard /></div>
+    <AuthForm onLogin={() => setView("cabinet")} />
+  </>;
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJumpRace") === "1") {
+    return <PadelJumpHost mode="race" />;
+  }
+
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJump") === "1") {
+    return <PadelJumpHost mode="practice" />;
+  }
+
   if (
     IS_DEV_RELEASE_CHANNEL
     && typeof window !== "undefined"

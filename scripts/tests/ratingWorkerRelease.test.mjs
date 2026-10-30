@@ -119,6 +119,7 @@ test("rating-worker release packages the community postcheck and watchdog helper
   );
 
   [
+    "src/services/player-rating/tournamentExclusions.ts",
     "src/services/community-policy.ts",
     "src/services/community-rating/league.ts",
     "src/utils/exerciseCategory.ts",

@@ -1,6 +1,6 @@
 {
   "kind": "SUB_HAB_FRIENDSHIP_PROMO_GENERATION_V1",
-  "predecessor": "lk1_error_source_generation.json",
+  "predecessor": "lk1_r03_response_generation.json",
   "deploymentAuthorized": false,
   "providerContractVerified": false,
   "note": "Source-only candidate; promo flag stays disabled until provider preview compatibility and focused live preimage review.",
@@ -23,8 +23,8 @@
       "id": "566ae4b886c37ae5",
       "fileName": "fn_tournament_subscription_purchase_router.js",
       "source": "nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
-      "preimageSha256": "ba280998bb37c3446271ae1f8bd9d25f8b244fbda82c358b7c201c7f71867ef8",
-      "candidateSha256": "e2ded7fbda4de2c1018466951e89adb08a0fa37378d8fdec31c96511046cdaaa"
+      "preimageSha256": "7df323aac0c01096ae9c3dea50bd83be5007d2c66ab922828ea7f30eaff37471",
+      "candidateSha256": "917dd30375dab1602a311d61be3d6d024d4925d8ab21e642cce166f9a6983e91"
     },
     {
       "id": "c165e43eba668c25",

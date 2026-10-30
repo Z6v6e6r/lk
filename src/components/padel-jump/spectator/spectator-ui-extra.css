@@ -1,0 +1,67 @@
+/* Load after spectator.css. Product styles only; no preview controls. */
+.ph-jump-spectator .ph-brand-image {
+  display: block;
+  width: 112px;
+  height: 46px;
+  flex: 0 0 112px;
+  object-fit: contain;
+}
+.ph-jump-spectator .ph-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.ph-jump-spectator .ph-fullscreen-button,
+.ph-jump-spectator .ph-player-picker button {
+  font: inherit;
+  color: var(--ph-muted);
+  background: var(--ph-surface);
+  border: 1px solid var(--ph-line);
+  border-radius: 6px;
+  padding: 9px 12px;
+  min-height: 40px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ph-jump-spectator .ph-player-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ph-jump-spectator .ph-player-picker button[aria-pressed="true"] {
+  background: var(--ph-soft);
+  color: var(--ph-purple);
+  border-color: var(--ph-purple);
+}
+.ph-jump-spectator .ph-player .ph-life-count { display: block; }
+.ph-jump-spectator .ph-courts { align-items: start; }
+.ph-jump-spectator .ph-court { min-height: 0; }
+.ph-jump-spectator .ph-player .ph-lives { min-width: 0; flex-wrap: wrap; }
+.ph-jump-spectator .ph-player .ph-person p { overflow-wrap: anywhere; }
+.ph-jump-spectator :focus-visible { outline: 2px solid var(--ph-purple); outline-offset: 3px; }
+.ph-jump-spectator:fullscreen {
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  overflow: auto;
+  background: var(--ph-bg);
+}
+.ph-jump-spectator:fullscreen .ph-screen { min-height: 100%; border: 0; border-radius: 0; }
+.ph-jump-spectator:fullscreen .ph-courts { justify-items: center; }
+.ph-jump-spectator:fullscreen .ph-player {
+  width: 100%;
+  max-width: max(200px, calc((100dvh - 400px) * .75));
+}
+@media (max-width: 560px) {
+  .ph-jump-spectator .ph-header-actions { width: 100%; justify-content: stretch; }
+  .ph-jump-spectator .ph-header-actions > button { flex: 1 1 auto; }
+  .ph-jump-spectator .ph-header .ph-header-actions .ph-main-action { width: auto; }
+}
+@media (pointer: coarse) {
+  .ph-jump-spectator .ph-player-picker button,
+  .ph-jump-spectator .ph-fullscreen-button { min-height: 44px; }
+}

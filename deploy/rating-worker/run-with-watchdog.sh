@@ -39,6 +39,16 @@ if [[ ! "$HARD_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   exit 64
 fi
 
+LOCK_ARGS=(-n)
+if [[ "$RUN_KIND" == incremental || "$RUN_KIND" == full ]]; then
+  LOCK_WAIT_SECONDS=${RATING_WORKER_LOCK_WAIT_SECONDS:-120}
+  if [[ ! "$LOCK_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid lock wait for $RUN_KIND: $LOCK_WAIT_SECONDS" >&2
+    exit 64
+  fi
+  LOCK_ARGS=(-w "$LOCK_WAIT_SECONDS")
+fi
+
 mkdir -p "$LOG_DIR" "$(dirname "$LOCK_FILE")"
 
 {
@@ -56,7 +66,12 @@ mkdir -p "$LOG_DIR" "$(dirname "$LOCK_FILE")"
       printf '{"event":"community_monthly_lock_timeout"}\n'
       exit 75
     fi
-  elif ! flock -n 9; then
+  elif ! flock "${LOCK_ARGS[@]}" 9; then
+    if [[ "$RUN_KIND" == incremental || "$RUN_KIND" == full ]]; then
+      printf '{"event":"rating_worker_lock_timeout","runKind":"%s","waitSeconds":%s,"at":"%s"}\n' \
+        "$RUN_KIND" "$LOCK_WAIT_SECONDS" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      exit 75
+    fi
     printf '{"event":"rating_worker_lock_skipped","runKind":"%s","at":"%s"}\n' \
       "$RUN_KIND" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     exit 0

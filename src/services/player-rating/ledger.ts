@@ -8,7 +8,7 @@ export const PLAYER_RATING_COLLECTIONS = {
 } as const;
 
 export const PLAYER_RATING_LEDGER_SCHEMA_VERSION = 1;
-export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.13";
+export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.14";
 
 export interface PlayerRatingIdentity {
   playerKey: string;
@@ -521,7 +521,7 @@ export function buildTournamentCompensationEvent(input: {
   event: PlayerRatingEventDocument;
   occurredAt: string;
   createdAt?: string;
-  reason: "REOPENED" | "CORRECTED";
+  reason: "REOPENED" | "CORRECTED" | "ANNULLED";
 }): PlayerRatingEventDocument | null {
   const delta = toFiniteRating(input.event.change.delta);
   if (delta == null) return null;
@@ -537,7 +537,9 @@ export function buildTournamentCompensationEvent(input: {
     idempotencyKey: eventId,
     eventType: input.reason === "REOPENED"
       ? "TOURNAMENT_RATING_REOPENED_REVERTED"
-      : "TOURNAMENT_RATING_CORRECTION_REVERTED",
+      : input.reason === "ANNULLED"
+        ? "TOURNAMENT_RATING_ANNULLED"
+        : "TOURNAMENT_RATING_CORRECTION_REVERTED",
     occurredAt: input.occurredAt,
     createdAt: input.createdAt || new Date().toISOString(),
     actor: {
