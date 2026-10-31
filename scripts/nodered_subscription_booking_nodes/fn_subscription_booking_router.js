@@ -7,9 +7,10 @@ if (msg.headers && typeof msg.headers === "object") {
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "3504ea4fdbd93ea690a9eeef3ea132543d4a0010a67d06193e914ae4c1ecd7a1", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "c9806925ad2421371eb4cf60a65147e69b012f9ed9e15fef44b9d2f4165dd6c9", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -87,6 +88,11 @@ const OUTPUT_DEBUG = 5;
 const OUTPUT_MANAGED_POLICY = 6;
 
 const emit = (index, value = msg) => {
+  if (value._subscriptionBooking?.trainingRegistration && typeof trainingOutput === "function"
+    && index !== OUTPUT_FINAL) {
+    const restricted = trainingOutput(value._subscriptionBooking, index);
+    if (restricted) return restricted;
+  }
   const outputs = [null, null, null, null, null, null, null];
   outputs[index] = value;
   return outputs;
@@ -1979,6 +1985,12 @@ const serviceTokenAvailable = () => {
 };
 
 const prepareBookingCreate = (ctx) => {
+  if (ctx.trainingRegistration && (typeof trainingLease !== "function" || !trainingLease(ctx)
+    || ctx.trainingRegistration.recoveryOnly || ctx.trainingWriteAllowed !== true
+    || ctx.managedEnforcement?.enabled !== false || ctx.lk1 || ctx.managedEntitlementOperationId)) {
+    return finishPending(ctx, "Запись на тренировку требует сверки", { code: "TRAINING_REGISTRATION_RECONCILIATION_REQUIRED" });
+  }
+
   if (ctx.managedJoinV2RecoveryOnly || ctx.managedJoinV2RecoveryOperation) return managedJoinV2Pending(ctx);
   if (ctx.lk2LegacyJoin === true && ctx.managedEnforcement?.enabled === true) return managedJoinV2Pending(ctx);
   if (ctx.managedJoinV2 && (!managedJoinV2MatchesRuntime(ctx) || !managedJoinV2SignerReady()
@@ -2205,6 +2217,23 @@ if (!ctx) {
   return finishError({}, 500, "Контекст серверной записи по абонементу потерян", {
     code: "SUBSCRIPTION_BOOKING_CONTEXT_MISSING",
   });
+}
+
+if (msg.req?.body?.trainingRegistration !== undefined && ctx.trainingRegistration === undefined) {
+  // An older prepare node cannot silently erase a restrictive training request.
+  ctx.trainingRegistration = { invalidMixedVersion: true };
+  return finishPending(ctx, "Версии владельца записи не совпали", { code: "TRAINING_REGISTRATION_OWNER_UNAVAILABLE" });
+}
+if (ctx.trainingRegistration !== undefined) {
+  if (typeof trainingOwnerRoute !== "function") return finishPending(ctx, "Владелец записи на тренировку недоступен", { code: "TRAINING_REGISTRATION_OWNER_UNAVAILABLE" });
+  const trainingResult = trainingOwnerRoute(ctx);
+  if (trainingResult) return trainingResult;
+}
+// A persisted training operation cannot be reclaimed/reconfirmed by an ordinary
+// unbound HTTP or background caller. Existing rows without this marker are unchanged.
+if (ctx.step === "operation_find" && !ctx.trainingRegistration && Array.isArray(msg.payload)
+  && msg.payload.some(row => row?.trainingRegistrationBinding !== undefined)) {
+  return finishPending(ctx, "Требуется исходная привязка записи на тренировку", { code: "TRAINING_REGISTRATION_BINDING_REQUIRED" });
 }
 
 if (ctx.lk2LegacyJoin !== undefined && (ctx.lk2LegacyJoin !== true || ctx.managedJoinV2 !== undefined)) return managedJoinV2Pending(ctx);

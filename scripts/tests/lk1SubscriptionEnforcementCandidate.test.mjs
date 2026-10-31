@@ -17,7 +17,7 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 // Preserve frozen release contracts while separately pinning observer-only sources.
 const observerPins = {
   'scripts/nodered_games_nodes/fn_patch.js': ['04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b', 'const isObj ='],
-  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['45dff0dd9156e12c952590e49da263123574b03e497e5640ff0d9bd4192b2ed1', 'const VIVA_API_BASE'],
+  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['335bdc34a7e32e608222de8044e2cedbc164137799bf865c771ded9c04393624', 'const VIVA_API_BASE'],
   'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js': ['d5606ece01b42d4275e5d53b7a40fb5fb78be015b92d9675d41ae8f984226e16', 'const TOKEN_URL'],
 };
 function frozenBusinessHash(file) {
@@ -278,7 +278,7 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
       // Current owner-evidence source is distinct; never advance a historical release preimage.
       assert.equal(PATRIOTS_PREIMAGE.reviewedBookingRouterSource,
         "86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991");
-      assert.equal(actualSourceSha256, "3504ea4fdbd93ea690a9eeef3ea132543d4a0010a67d06193e914ae4c1ecd7a1", target.id);
+      assert.equal(actualSourceSha256, "c9806925ad2421371eb4cf60a65147e69b012f9ed9e15fef44b9d2f4165dd6c9", target.id);
       assert.notEqual(actualSourceSha256, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, target.id);
       assert.notEqual(actualSourceSha256, amendment.sourceSha256, target.id);
     } else {

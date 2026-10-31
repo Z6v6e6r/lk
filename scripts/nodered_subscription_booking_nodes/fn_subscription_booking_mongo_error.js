@@ -1,6 +1,7 @@
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     global.get("lkDiagnostics")?.observe(msg, "booking_error", { sourceHash: "1c786def280a91c684dae8a71d56ac903ad1912f059145aa85d1dab0944f3a56", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
