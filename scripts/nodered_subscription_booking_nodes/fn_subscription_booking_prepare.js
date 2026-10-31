@@ -1,9 +1,27 @@
+// Training capability traverses this actual prepare node, then router and finalizer.
+if (msg._trainingRegistrationCapability !== undefined) {
+  const accepted = msg._trainingRegistrationCapability.version === 1 && msg._trainingRegistrationCapability.stage === "prepare"
+    && msg.req?.method === "GET" && (msg.req.originalUrl || msg.req.url) === "/lk/subscription-bookings"
+    && msg.req.headers?.["x-training-registration-owner-contract"] === "1"
+    && msg.req.headers?.["x-booked-operation-owner-contract"] === undefined
+    && (!msg.req.query || Object.keys(msg.req.query).length === 0);
+  if (accepted) {
+    msg._trainingRegistrationCapability.stage = "router";
+    msg._subscriptionBooking = { step: "booked_operation_contract_probe" };
+    return [null, null, msg];
+  }
+  delete msg._trainingRegistrationCapability;
+  msg.statusCode = 404; msg.headers = { "Content-Type": "application/json", "Cache-Control": "no-store" };
+  msg.payload = { code: "TRAINING_REGISTRATION_OWNER_UNAVAILABLE" };
+  return [null, msg];
+}
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_prepare", { sourceHash: "96bcd0887b7d146367dfc4d7f394610faf9234b88e6529a70d8eb8d1958fc5d5", ...fields });
+    observer?.observe(msg, "booking_prepare", { sourceHash: "a64d3a44995e7cbe12b37f0e2d3c28ea34efbf5ce3079694911ef10800dc4e25", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -84,6 +102,18 @@ const releaseBookingId = toStr(body.bookingId);
 const exerciseId = toStr(body.exerciseId);
 const clientSubscriptionId = toStr(body.clientSubscriptionId);
 const spotNumber = Number(body.spot);
+const trainingRegistration = body.trainingRegistration;
+if (trainingRegistration !== undefined) {
+  const uuid = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value) && value.length === 36;
+  if (!managedJoinV2Keys(trainingRegistration, "schemaVersion,admissionId,requestSha256,preparationSha256,attemptId,recoveryOnly")
+    || trainingRegistration.schemaVersion !== 1 || !uuid(trainingRegistration.admissionId) || !uuid(trainingRegistration.attemptId)
+    || !managedJoinV2Digest(trainingRegistration.requestSha256) || !managedJoinV2Digest(trainingRegistration.preparationSha256)
+    || typeof trainingRegistration.recoveryOnly !== "boolean" || action !== "book" || body.operationId !== operationId
+    || trainingRegistration.admissionId !== operationId
+    || Object.keys(body).sort().join(",") !== "clientSubscriptionId,exerciseId,operationId,trainingRegistration") {
+    return finish(400, "Некорректная привязка тренировки", { code: "TRAINING_REGISTRATION_INVALID" });
+  }
+}
 const managedSelfLeave = body.managedSelfLeave;
 if (managedSelfLeave !== undefined) {
   const fields = "actorClientId,bookingId,bookingOperationId,bookingOperationKey,clientSubscriptionId,entitlementOperationId,exerciseId,gameId,leaveClaimToken,leaveOperationId,leaveOperationKey,membershipVersion,schemaVersion,serviceDate,subscriptionInstanceId,tenantKey";
@@ -137,6 +167,7 @@ if (action === "book" && (!exerciseId || !clientSubscriptionId)) {
 
 msg._subscriptionBooking = {
   caller: "http",
+  ...(trainingRegistration === undefined ? {} : { trainingRegistration: JSON.parse(JSON.stringify(trainingRegistration)) }),
   ...(managedJoinV2 ? { managedJoinV2, managedAction: "JOIN_GAME", ...(recoveryOnly ? { managedJoinV2RecoveryOnly: true } : {}) } : {}),
   ...(body.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
   action,

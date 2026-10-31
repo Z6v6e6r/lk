@@ -1,9 +1,22 @@
+if (msg._trainingRegistrationCapability !== undefined) {
+  const accepted = msg._trainingRegistrationCapability.version === 1 && msg._trainingRegistrationCapability.stage === "finalize"
+    && msg.req?.method === "GET" && (msg.req.originalUrl || msg.req.url) === "/lk/subscription-bookings"
+    && msg.req.headers?.["x-training-registration-owner-contract"] === "1"
+    && msg.payload?.code === "TRAINING_REGISTRATION_FINALIZER_REQUIRED";
+  delete msg._trainingRegistrationCapability; delete msg._subscriptionBooking; delete msg.error;
+  msg.statusCode = accepted ? 200 : 404;
+  msg.headers = { "Content-Type": "application/json", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
+  msg.payload = accepted ? { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "TRAINING_LEGACY_V1" }
+    : { code: "TRAINING_REGISTRATION_OWNER_UNAVAILABLE" };
+  return [null, msg];
+}
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_finalize", { sourceHash: "d9efac68af3287c9296d103581ba40e662e557768c784477ce2004cb979ca89c", ...fields });
+    observer?.observe(msg, "booking_finalize", { sourceHash: "5346d6374741c264a7cd553b425e0510d9988079e7149ff42525ea90c26969e0", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -11,6 +24,28 @@ const ctx = msg._subscriptionBooking && typeof msg._subscriptionBooking === "obj
   ? msg._subscriptionBooking
   : null;
 const payload = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
+// Training returns only the narrow canonical callback. Never forward provider headers,
+// actor/service credentials, diagnostics context or a composed monetary response.
+if (ctx?.trainingRegistration) {
+  const fields = ["schemaVersion", "authority", "operationId", "admissionId", "attemptId", "requestSha256", "preparationSha256", "state", "actorClientId", "exerciseId", "clientSubscriptionId", "bookingId", "confirmedAt"];
+  const binding = ctx.trainingRegistration;
+  const callback = payload.schemaVersion === 1 && payload.authority === "LK1_SUBSCRIPTION"
+    && Object.keys(payload).sort().join(",") === [...fields].sort().join(",")
+    && payload.state === "CONFIRMED" && payload.operationId === ctx.operationId
+    && payload.admissionId === binding.admissionId && payload.attemptId === binding.attemptId
+    && payload.requestSha256 === binding.requestSha256 && payload.preparationSha256 === binding.preparationSha256
+    && payload.actorClientId === ctx.actorClientId && payload.exerciseId === ctx.exerciseId && payload.clientSubscriptionId === ctx.clientSubscriptionId;
+  msg.payload = callback ? Object.fromEntries(fields.map(key => [key, payload[key]])) : { schemaVersion: 1, authority: "LK1_SUBSCRIPTION",
+    operationId: ctx.operationId, state: "UNKNOWN", code: "TRAINING_REGISTRATION_RECONCILIATION_REQUIRED" };
+  msg.statusCode = 200;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
+  for (const key of ["_subscriptionBooking", "_managedSubscriptionPolicyInput", "_splitCtx", "_splitCleanupAuth", "authHeader", "token", "error", "url", "method", "responseUrl", "requestTimeout"]) delete msg[key];
+  if (msg.req?.headers) {
+    for (const key of Object.keys(msg.req.headers)) if (/authorization|token|delegation|owner-evidence/i.test(key)) delete msg.req.headers[key];
+  }
+  return [null, msg];
+}
+
 
 msg.headers = {
   ...(msg.headers && typeof msg.headers === "object" ? msg.headers : {}),
