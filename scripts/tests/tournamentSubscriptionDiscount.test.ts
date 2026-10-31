@@ -106,6 +106,11 @@ test("group schedule cannot mix tournament and training discounts or widen to ot
     assert.equal(isGroupScheduleSubscriptionQuote({ ...quote, ...delta }, true, quote.exerciseId, quote.actorClientId, now), false);
   }
   assert.equal(matchGroupScheduleSubscriptionDiscount([], oneTime, true, 6306), null);
+  const noBenefit = { ...quote, discountPercent: 0, amountMinor: quote.basePriceMinor };
+  assert.equal(isGroupScheduleSubscriptionQuote(noBenefit, true, quote.exerciseId, quote.actorClientId, now), true,
+    "zero-percent responses remain valid protocol answers");
+  assert.equal(matchGroupScheduleSubscriptionDiscount([noBenefit], oneTime, true, 6306), null,
+    "a full-price answer must not become a discounted subscription booking");
   assert.equal(matchGroupScheduleSubscriptionDiscount([quote], { ...oneTime, cost: 700000 }, true, 6306), null);
 });
 

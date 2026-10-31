@@ -89,10 +89,11 @@ test("schedule one-time button keeps Ariadna full price and renders and dispatch
     compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
   }).outputText;
   const product = { id: "one-time", name: "Разовая🎾", cost: 550000, source: "one-time", visitsTotal: null };
-  for (const directionId of [6538, 1001, 6306]) {
+  for (const [directionId, discountPercent] of [[6538, 50], [1001, 50], [6306, 50], [6306, 0]]) {
     const calls: unknown[][] = [];
     const dependencies = { React, matchGroupScheduleSubscriptionDiscount, buildGroupScheduleSubscriptionDiscountProduct, isPartialSubscriptionEventDiscountQuote,
       currentDiscountQuotes: [{ ...quote, subscriptionName: "РА",
+        discountPercent, amountMinor: discountPercent === 0 ? quote.basePriceMinor : quote.amountMinor,
         kind: directionId === 6306 ? "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1" : quote.kind }],
       selectedTraining: { directionId }, patriotsTournamentSelected: directionId === 6306,
       getAppliedGroupSchedulePromoPreview: () => null, appliedPromo: null, checkout: {},
@@ -101,7 +102,7 @@ test("schedule one-time button keeps Ariadna full price and renders and dispatch
     const render = new Function(...Object.keys(dependencies), code)(...Object.values(dependencies));
     const button = render(product);
     const html = renderToStaticMarkup(button).replace(/\s|&nbsp;/g, "");
-    if (directionId === 6538) {
+    if (directionId === 6538 || discountPercent === 0) {
       assert.doesNotMatch(html, /Скидка|<s[ >]|2750/);
       assert.match(html, /5500/);
       button.props.onClick();

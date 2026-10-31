@@ -37,7 +37,9 @@ export function matchGroupScheduleSubscriptionDiscount(
   directionId: number | null,
 ): GroupScheduleSubscriptionQuote | null {
   return tournament
-    ? matchTournamentSubscriptionDiscount(quotes.filter(q => q.kind === "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1"), product)
+    ? matchTournamentSubscriptionDiscount(quotes.filter((q): q is TournamentSubscriptionDiscountQuote =>
+      q.kind === "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1" && q.discountPercent > 0
+      && q.amountMinor !== null && q.amountMinor < q.basePriceMinor), product)
     : matchGroupSubscriptionDiscount(quotes.filter(q => q.kind !== "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1"), product, directionId);
 }
 
