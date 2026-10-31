@@ -8,7 +8,7 @@ export const environment = {
   LK2_STATION_MEMBERSHIP_DELEGATION_AUDIENCE: 'station-owner-test', LK2_BOOKED_OPERATION_DELEGATION_KEY_ID: 'synthetic-key',
   LK2_BOOKED_OPERATION_DELEGATION_PUBLIC_KEY_PEM: keys.publicKey.export({ type: 'spki', format: 'pem' }),
 };
-export const community = () => ({ id: 'station-community', communityType: 'STATION', typeSettingsRevision: 1,
+export const community = () => ({ _id: 'synthetic-community-object', id: 'station-community', communityType: 'STATION', typeSettingsRevision: 1,
   typeSettings: { stationId: 'station-a' }, members: [], pendingMembers: [], bannedMembers: [], archived: false });
 export const admissionBody = (op = 1) => ({ contractVersion: 1, operationId: uid(op), requestSha256: 'sha256:' + 'a'.repeat(64), activity: { kind: 'GAME', id: uid(90) }, stationId: 'station-a' });
 export const confirmationBody = (admission, generation = 80) => ({ contractVersion: 1, operationId: admission.operationId, admissionId: admission.admission.admissionId,

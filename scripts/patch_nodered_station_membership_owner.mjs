@@ -3,8 +3,9 @@ import vm from 'node:vm';
 import { stationMembershipReceiverSource } from './lib/stationMembershipReceiverSource.mjs';
 import { addCommunityRosterWrites } from './lib/communityRosterWrites.mjs';
 import { addTypedCommunityResponseRedaction } from './lib/communityResponseRedaction.mjs';
+import { protectStationCreate } from './lib/stationMembershipCreateGuard.mjs';
 
-export const stationOwnerIds = Object.fromEntries(['tab','admissionIn','confirmationIn','admissionVerify','confirmationVerify','router','admissionFind','admissionWrite','communityFind','communityWrite','claimFind','claimWrite','response','catch']
+export const stationOwnerIds = Object.fromEntries(['tab','admissionIn','confirmationIn','admissionVerify','confirmationVerify','router','admissionFind','admissionWrite','communityFind','communityWrite','claimFind','claimWrite','response','catch','createWrite','createAck','createCatch']
   .map(key => [key, 'lk_station_membership_' + key + '_v1']));
 export function stationOwnerNodes(mongoClientId) {
   const id = stationOwnerIds, z = id.tab;
@@ -37,9 +38,11 @@ export function buildStationMembershipOwner(bytes, { expectedFlowSha256, mongoCl
     const nodes = original.filter(n => n.type === 'function' && n.name === name && n.d !== true);
     if (nodes.length !== 1 || !nodes[0].func.includes('COMMUNITY_TYPED_ACCESS_GUARD') || !nodes[0].func.includes('COMMUNITY_ROSTER_COMMIT_BARRIER')) throw Error('STATION_ROSTER_PREREQUISITE_MISSING');
   }
-  const nodes = stationOwnerNodes(mongoClientId), ids = new Set(nodes.map(n => n.id));
+  const nodes = stationOwnerNodes(mongoClientId), ids = new Set(Object.values(stationOwnerIds));
   if (original.some(n => ids.has(n.id) || (n.type === 'http in' && /station-memberships/.test(n.url || '')))) throw Error('STATION_OWNER_ALREADY_PRESENT_OR_ROUTE_COLLISION');
-  const flow = [...addTypedCommunityResponseRedaction(addCommunityRosterWrites(original)), ...nodes];
+  const referencesReserved = value => typeof value === 'string' ? ids.has(value) : value && typeof value === 'object' ? Object.values(value).some(referencesReserved) : false;
+  if (original.some(referencesReserved)) throw Error('STATION_PREEXISTING_RESERVED_REFERENCE');
+  const flow = [...protectStationCreate(addTypedCommunityResponseRedaction(addCommunityRosterWrites(original)), stationOwnerIds, mongoClientId), ...nodes];
   const all = new Set(flow.map(n => n.id));
   for (const node of flow) {
     for (const targets of node.wires || []) for (const target of targets) if (!all.has(target)) throw Error('STATION_BROKEN_WIRE');

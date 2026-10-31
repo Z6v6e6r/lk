@@ -73,9 +73,21 @@ selection or invalid policy, otherwise a nonnegative safe integer (including blo
 `v1:<tenantUuid>:<operationUuid>`, including negative zero/ambiguous-selector outcomes.
 `admissionId` = first 32 hex digits of SHA256(`station-membership-admission-id:v1` + NUL +
 canonicalJSON({tenantId,operationId})), UUID version nibble 8 and RFC variant nibble.
-Binding core is `{contractVersion:1,actor:{tenantId,canonicalUserId,playerId,providerMappingId},operationId,requestSha256,activity,stationId,admissionId,outcome,communityId,policyRevision,membershipEpoch,reason}`.
+Binding core is `{contractVersion:1,actor:{tenantId,canonicalUserId,playerId,providerMappingId},operationId,requestSha256,activity,stationId,admissionId,outcome,communityId,communityIdentity,policyRevision,membershipEpoch,reason}`.
+Private `communityIdentity` is `{type:'objectId'|'string',value}` from the selected Mongo
+`_id`, or null for negative selection. It distinguishes delete/recreate with the same
+public community id. The wire hash remains opaque and response keys are unchanged.
 `bindingSha256` hashes domain `station-membership-admission:v1` + NUL + canonical core.
 No timestamps participate in the decision or immutable binding.
+
+The per-operation candidate is persisted first, including original epoch and Mongo
+identity. Candidate presence alone is not positive admission. Before returning ADMITTED,
+the receiver initializes existing private lifetime `{version:1,revision:0,players:[]}`
+with exact `_id`/type/policy/roster/absence CAS and verifies it by readback. Failure is
+503; changed identity/policy/epoch is 409. Retry uses only the immutable captured
+candidate, never a newer epoch. Confirmation requires that exact Mongo identity and
+existing lifetime barrier. This also protects admission-before-first-confirmation when
+the feature is later disabled: CUP cannot delete an already admitted identity.
 
 `lk_station_membership_generation_claims`: permanent first-wins `_id` =
 `v1:<tenantUuid>:<encodeURIComponent(communityId)>:GAME_PARTICIPATION:<generationUuid>`.
@@ -110,3 +122,16 @@ and prove every live writer before activation. No soft player cap may block term
 removal/leave. Actual storage failure cannot be reported as a successful leave/enrollment.
 CI must exercise independent clients and ACK loss before/after community CAS, including
 leave between CAS and readback. Local synthetic tests are not physical Mongo proof.
+
+The existing create/upsert writer is also guarded: an atomic update pipeline preserves
+the actual stored row when any lifetime field exists (including malformed/null, any type)
+or when the enabled flag protects an existing STATION. All create responses and derived
+writes wait for acknowledged upsert/modification. No filtered-upsert duplicate is created.
+CUP hard delete rejects protected identities and fences absent lifetime/current type.
+Any archival needs a separately approved existing operational procedure; this source
+does not add an archive UI/route. Historical identity must not be recreated.
+
+Mongo operations inherit the existing client's write/read concern. The standalone Mongo8
+CI fixture proves atomic conflict/replay behavior only, not replication/failover durability.
+Before activation, the owner must attest the actual client/server durability policy and
+recovery semantics; this packet neither configures majority concern nor claims that proof.

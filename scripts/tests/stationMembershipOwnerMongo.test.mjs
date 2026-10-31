@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { protectStationCreate } from '../lib/stationMembershipCreateGuard.mjs';
+import { stationOwnerIds } from '../patch_nodered_station_membership_owner.mjs';
 import { smTransition, smFence, smAdmission, smClaim, smConfirmation } from '../lib/stationMembershipLifetime.mjs';
 import { buildStationMembershipMutation, communityPolicyEvent } from '../lib/communityPolicyProjection.mjs';
 import { community, admissionBody, confirmationBody, uid, run } from './helpers/stationMembershipOwnerHarness.mjs';
@@ -14,7 +17,7 @@ async function fixture(t) {
   const name = 'r1_station_lifetime_' + crypto.randomUUID().replaceAll('-', '');
   await Promise.all(clients.map(c => c.connect()));
   t.after(async () => { try { await clients[0].db(name).dropDatabase(); } finally { await Promise.all(clients.map(c => c.close())); } });
-  const dbs = clients.map(c => c.db(name)); await dbs[0].collection('lk_communities').insertOne(community()); return dbs;
+  const dbs = clients.map(c => c.db(name)); const {_id,...document}=community(); await dbs[0].collection('lk_communities').insertOne(document); return dbs;
 }
 async function transition(db, state) {
   const c = await db.collection('lk_communities').findOne({ id: 'station-community' });
@@ -36,6 +39,7 @@ test('physical admission first-wins / LEFT race / new registration / old-generat
 });
 test('physical stale community CAS cannot erase LEFT and admission snapshot cannot refresh after leave', options, async t => {
   const db = await fixture(t), actor = { tenantId: uid(22), canonicalUserId: uid(20), playerId: 'player-a', providerMappingId: uid(23) };
+  await run(db[0],'admission',admissionBody());
   const c = await db[0].collection('lk_communities').findOne({ id: 'station-community' });
   const a = smAdmission([c], actor, admissionBody()), claim = smClaim(a, { confirmation: { generationId: uid(80), activityId: uid(90) } });
   const mutation = smConfirmation([c], a, claim);
@@ -44,8 +48,9 @@ test('physical stale community CAS cannot erase LEFT and admission snapshot cann
   assert.equal(result.matchedCount, 0);
   const current = await db[3].collection('lk_communities').findOne({ id: c.id });
   assert.equal(current.stationMembershipLifetime.players[0].state, 'LEFT');
-  const raced = await run(db[0], 'admission', admissionBody(), { async after({ step }) { if (step === 'admission_select') await transition(db[1], 'LEFT'); } });
-  assert.equal((await run(db[2], 'confirmation', confirmationBody(raced.payload))).payload.reason, 'MEMBERSHIP_EPOCH_CHANGED');
+  const raced = await run(db[0], 'admission', admissionBody(2), { async after({ step }) { if (step === 'admission_select') await transition(db[1], 'LEFT'); } });
+  assert.equal(raced.statusCode,409);
+  assert.equal(raced.payload.code,'STATION_ADMISSION_EPOCH_CHANGED');
 });
 test('physical legacy scan built before adoption cannot return a player after LEFT with flag disabled', options, async t => {
   const db = await fixture(t), collection = db[0].collection('lk_communities');
@@ -81,4 +86,37 @@ test('physical claim and community ACK ambiguity, with leave between applied wri
   const left = await run(db[2], 'confirmation', confirmationBody(b, 81), { async after({ step, msg }) { if (step === 'community_write') { await transition(db[3], 'LEFT'); msg.error = {}; } } });
   assert.equal(left.payload.outcome, 'NOT_ENROLLED');
   assert.equal((await db[0].collection('lk_communities').findOne({ id: 'station-community' })).members.length, 0);
+});
+test('physical actual create pipeline preserves protected identity and keeps unadopted flag-off behavior', options, async t => {
+  const db=await fixture(t), collection=db[0].collection('lk_communities');
+  const source=fs.readFileSync('scripts/patch_nodered_communities_flow.mjs','utf8'),common=source.split('const commonHelpers = String.raw`')[1].split('\n`;')[0];
+  const graph=protectStationCreate([{id:'create',type:'function',name:'Build community create docs',outputs:6,wires:[['store'],[],[],[],[],[]],func:common+source.split('const fnCreate = `${commonHelpers}')[1].split('\n`;')[0]},
+    {id:'store',type:'mongodb4',collection:'lk_communities',operation:'updateOne',clientNode:'unused-fixture-client'}],stationOwnerIds,'unused-fixture-client');
+  for (const [enabled,lifetime,type,protectedRow] of [[true,undefined,'STATION',true],[false,{version:1,revision:1,players:[{playerId:'player-a',epoch:1,state:'LEFT'}]},'FRIENDS',true],[false,null,'STATION',true],[false,undefined,'STATION',false]]) {
+    const {_id,...replacement}=community();
+    await collection.replaceOne({id:'station-community'},{...replacement,communityType:type,...(lifetime===undefined?{}:{stationMembershipLifetime:lifetime})});
+    const before=await collection.findOne({id:'station-community'});
+    const [write]=new Function('msg','env',graph[0].func)({payload:{id:'station-community',name:'Synthetic',description:'Synthetic',city:'Synthetic',creator:{id:'player-a'}}},{get:()=>String(enabled)});
+    const result=await db[1].collection('lk_communities').updateOne(...write.payload);
+    const after=await db[2].collection('lk_communities').findOne({id:'station-community'});
+    assert.equal(String(after._id),String(before._id));
+    if(protectedRow){assert.equal(result.modifiedCount,0);assert.deepEqual(after,before);}
+    else {assert.equal(result.modifiedCount,1);assert.equal(after.members[0].id,'player-a');}
+  }
+});
+test('physical candidate before adoption failure retains epoch and Mongo identity through retry/recreation',options,async t=>{
+  const db=await fixture(t),body=admissionBody();
+  const failed=await run(db[0],'admission',body,{before({step}){if(step==='adoption_write')return {skip:true,error:{},payload:null};}});
+  assert.equal(failed.statusCode,503);
+  const candidate=await db[1].collection('lk_station_membership_admissions').findOne({operationId:body.operationId});
+  assert.equal(candidate.communityIdentity.type,'objectId');
+  assert.equal(candidate.membershipEpoch,0);
+  await transition(db[1],'LEFT');
+  assert.equal((await run(db[2],'admission',body)).payload.code,'STATION_ADMISSION_EPOCH_CHANGED');
+  assert.deepEqual(await db[3].collection('lk_station_membership_admissions').findOne({_id:candidate._id}),candidate);
+  const fresh=(await run(db[0],'admission',admissionBody(2))).payload;
+  await db[1].collection('lk_communities').deleteOne({id:'station-community'}); // fixture-only simulates forbidden foreign deletion
+  const {_id,...replacement}=community();
+  await db[1].collection('lk_communities').insertOne({...replacement,stationMembershipLifetime:{version:1,revision:0,players:[]}});
+  assert.equal((await run(db[2],'confirmation',confirmationBody(fresh,81))).payload.reason,'STATION_IDENTITY_CHANGED');
 });

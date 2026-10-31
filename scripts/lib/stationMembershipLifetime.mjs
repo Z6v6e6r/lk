@@ -18,6 +18,15 @@ export const smHash = (domain, value) => 'sha256:' + crypto.createHash('sha256')
 export const smEqual = (a, b) => smCanonical(a) === smCanonical(b);
 export const smIdentity = row => [row?.id, row?.clientId, row?.userId, row?.uuid].find(smId) || null;
 export const smRows = x => Array.isArray(x) ? x : [];
+export function smMongoIdentity(community) {
+  const id = community?._id;
+  if (smId(id)) return { type: 'string', value: id };
+  if (id?._bsontype === 'ObjectId' && typeof id.toHexString === 'function') {
+    const value = id.toHexString();
+    if (/^[a-f0-9]{24}$/.test(value)) return { type: 'objectId', value };
+  }
+  return null;
+}
 export function smLifetime(community) {
   const value = community.stationMembershipLifetime;
   if (value === undefined) return { version: 1, revision: 0, players: [] };
@@ -91,7 +100,7 @@ export function smAdmission(communities, actor, request) {
   const community = communities.length === 1 ? communities[0] : null;
   let epoch = null, policyRevision = null;
   if (community) {
-    if (!smId(community.id) || community.communityType !== 'STATION' || community.archived === true || community.typeSettings?.stationId !== request.stationId ||
+    if (!smId(community.id) || !smMongoIdentity(community) || community.communityType !== 'STATION' || community.archived === true || community.typeSettings?.stationId !== request.stationId ||
       !Number.isSafeInteger(community.typeSettingsRevision) || community.typeSettingsRevision < 1) reason = 'STATION_POLICY_INVALID';
     else {
       const player = smPlayer(community, actor.playerId);
@@ -103,7 +112,7 @@ export function smAdmission(communities, actor, request) {
     }
   }
   const core = { ...binding, admissionId: smAdmissionId(actor, request.operationId), outcome: reason === 'ELIGIBLE' ? 'ADMITTED' : 'NO_ENROLLMENT',
-    communityId: community && smId(community.id) ? community.id : null, policyRevision, membershipEpoch: epoch, reason };
+    communityId: community && smId(community.id) ? community.id : null, communityIdentity: smMongoIdentity(community), policyRevision, membershipEpoch: epoch, reason };
   return { _id: smAdmissionKey(actor, request.operationId), ...core, bindingSha256: smHash('station-membership-admission:v1', core) };
 }
 export function smValidAdmission(doc, actor, operationId) {
@@ -119,6 +128,8 @@ export function smClaim(admission, request) {
 export function smConfirmation(communities, admission, claim) {
   if (communities.length !== 1 || communities[0].id !== admission.communityId) return { reason: 'STATION_SELECTOR_CHANGED' };
   const c = communities[0], id = admission.actor.playerId, p = smPlayer(c, id), lifetime = smLifetime(c);
+  if (!smEqual(smMongoIdentity(c), admission.communityIdentity)) return { reason: 'STATION_IDENTITY_CHANGED' };
+  if (c.stationMembershipLifetime === undefined) return { reason: 'ADOPTION_BARRIER_MISSING' };
   if (c.archived === true || c.communityType !== 'STATION' || c.typeSettings?.stationId !== admission.stationId || c.typeSettingsRevision !== admission.policyRevision) return { reason: 'STATION_POLICY_CHANGED' };
   if (p.epoch !== admission.membershipEpoch) return { reason: 'MEMBERSHIP_EPOCH_CHANGED' };
   if (['REMOVED', 'BANNED'].includes(p.state) || smRows(c.bannedMembers).some(m => !smIdentity(m) || smIdentity(m) === id)) return { reason: 'MEMBERSHIP_BLOCKED' };
@@ -130,7 +141,7 @@ export function smConfirmation(communities, admission, claim) {
   if (p.lastApplied?.generationId === claim.generationId) return { reason: 'APPLIED_MEMBER_MISSING' };
   const row = { playerId: id, canonicalUserId: admission.actor.canonicalUserId, epoch: p.epoch, state: 'ACTIVE', lastApplied: proof };
   const nextMembers = [...members, { id, name: 'Игрок', role: 'MEMBER', status: 'ACTIVE', joinSource: { type: 'STATION_ADMISSION' } }];
-  const filter = { id: c.id, communityType: 'STATION', archived: { $ne: true }, 'typeSettings.stationId': admission.stationId, typeSettingsRevision: admission.policyRevision, ...smFence(c) };
+  const filter = { _id: c._id, id: c.id, communityType: 'STATION', archived: { $ne: true }, 'typeSettings.stationId': admission.stationId, typeSettingsRevision: admission.policyRevision, ...smFence(c) };
   for (const field of ['members', 'pendingMembers', 'bannedMembers']) filter[field] = Object.hasOwn(c, field) ? c[field] : { $exists: false };
   return { reason: 'APPLY', filter, update: { $set: { members: nextMembers, memberCount: nextMembers.length, membersCount: nextMembers.length,
     pendingMembers: smRows(c.pendingMembers).filter(m => smIdentity(m) !== id),

@@ -45,6 +45,7 @@ test('real LK roster barrier atomically writes voluntary/admin lifetime with exi
 });
 test('same old generation cannot repair a missing membership after an applied proof', () => {
   const c = community(), actor = { tenantId: uid(22), canonicalUserId: uid(20), playerId: 'player-a', providerMappingId: uid(23) };
+  c.stationMembershipLifetime = {version:1,revision:0,players:[]};
   const a = smAdmission([c], actor, admissionBody());
   const claim = smClaim(a, { confirmation: { generationId: uid(80), activityId: uid(90) } });
   const first = smConfirmation([c], a, claim);

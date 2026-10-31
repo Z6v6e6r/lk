@@ -85,3 +85,26 @@ test('bounded CAS retries do not overwrite a concurrent leave', async () => {
   const result = await run(db, 'confirmation', confirmationBody(a), { async before({ step, db }) { if (step === 'community_write' && !changed) { changed = true; await transition(db, 'LEFT'); } } });
   assert.equal(result.payload.reason, 'MEMBERSHIP_EPOCH_CHANGED');
 });
+test('immutable candidate survives failure before adoption; retry cannot recapture epoch after LEFT', async()=>{
+  const db=memoryDb(),body=admissionBody();
+  const failed=await run(db,'admission',body,{before({step}){if(step==='adoption_write')return {skip:true,error:{},payload:null};}});
+  assert.equal(failed.statusCode,503);
+  const candidate=structuredClone(db.tables.get('lk_station_membership_admissions')[0]);
+  assert.equal(candidate.membershipEpoch,0);
+  assert.equal((await run(db,'confirmation',confirmationBody({operationId:candidate.operationId,admission:candidate}))).payload.reason,'ADOPTION_BARRIER_MISSING');
+  await transition(db,'LEFT');
+  const retry=await run(db,'admission',body);
+  assert.equal(retry.statusCode,409);assert.equal(retry.payload.code,'STATION_ADMISSION_EPOCH_CHANGED');
+  assert.deepEqual(db.tables.get('lk_station_membership_admissions'),[candidate]);
+  const fresh=(await run(db,'admission',admissionBody(2))).payload;
+  assert.equal((await run(db,'confirmation',confirmationBody(fresh,81))).payload.outcome,'ENROLLED');
+});
+test('adoption ACK loss is read back; deletion/recreation never reuses old admission identity',async()=>{
+  const db=memoryDb();
+  const a=(await run(db,'admission',admissionBody(),{after({step,msg}){if(step==='adoption_write')msg.error={};}})).payload;
+  assert.equal(a.admission.outcome,'ADMITTED');
+  assert.equal(db.tables.get('lk_communities')[0].stationMembershipLifetime.revision,0);
+  db.tables.set('lk_communities',[{...community(),_id:'replacement-community-object',stationMembershipLifetime:{version:1,revision:0,players:[]}}]);
+  assert.equal((await run(db,'admission',admissionBody())).payload.code,'STATION_ADMISSION_IDENTITY_CHANGED');
+  assert.equal((await run(db,'confirmation',confirmationBody(a))).payload.reason,'STATION_IDENTITY_CHANGED');
+});
