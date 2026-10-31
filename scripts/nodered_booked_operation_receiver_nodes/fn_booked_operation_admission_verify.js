@@ -39,7 +39,8 @@ const parseAdmissionBody = (value) => {
     paymentIntent: "USE_SUBSCRIPTION",
   };
 };
-const body = parseAdmissionBody(msg.payload);
+const v2 = claims.contract_version === 2;
+const body = v2 ? managedJoinV2Request(msg.payload) : parseAdmissionBody(msg.payload);
 if (!body) return reject(400, "BOOKED_OPERATION_REQUEST_INVALID");
 
 if (
@@ -63,12 +64,12 @@ if (
 
 // Canonical admission body exactly as the LK2 issuer hashes it. Key order is
 // fixed here, so the owner does not trust the client's JSON serialization.
-const canonicalBody = JSON.stringify({
+const canonicalBody = v2 ? JSON.stringify(body) : JSON.stringify({
   action: "JOIN_GAME",
   target: { id: body.target.id, expectedRevision: body.target.expectedRevision },
   paymentIntent: "USE_SUBSCRIPTION",
 });
-const requestSha256 = bookedOperationSha256(BOOKED_OP_ADMISSION_PREFIX + canonicalBody);
+const requestSha256 = bookedOperationSha256((v2 ? "booked-operation-admission:v2\0" : BOOKED_OP_ADMISSION_PREFIX) + canonicalBody);
 if (requestSha256 !== claims.request_sha256) {
   return reject(403, "BOOKED_OPERATION_REQUEST_BINDING_MISMATCH");
 }
@@ -77,6 +78,15 @@ if (
   || claims.expected_revision !== body.target.expectedRevision
 ) {
   return reject(403, "BOOKED_OPERATION_REQUEST_BINDING_MISMATCH");
+}
+
+if (v2) {
+  const chars = nodeCrypto.createHash("sha256").update("booked-operation-admission:v1\0lk2-api\0"
+    + claims.tenant_id + "\0" + claims.sub + "\0" + claims.idempotency_key_sha256).digest("hex").slice(0, 32).split("");
+  chars[12] = "8"; chars[16] = ((parseInt(chars[16], 16) & 3) | 8).toString(16);
+  const hex = chars.join("");
+  const id = `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  if (claims.operation_id !== id) return reject(403, "BOOKED_OPERATION_REQUEST_BINDING_MISMATCH");
 }
 
 const nowIso = new Date().toISOString();
@@ -95,6 +105,7 @@ const executionBlockedReason = !executionFlagEnabled
     : (!providerClientSubscriptionId ? "SUBSCRIPTION_MAPPING_MISSING"
       : (!claims.reservation_id ? "RESERVATION_BINDING_MISSING" : null)));
 const execution = {
+  ...(claims.recovery_only === true ? { recoveryOnlyRequested: true } : {}),
   actorToken: executionBlockedReason === null ? verification.actorToken : null,
   actorTokenExpiresAt: verification.actorTokenExpiresAt,
   actorTokenSha256: verification.actorTokenSha256,
@@ -104,8 +115,9 @@ const execution = {
 const document = {
   _id: claims.operation_id,
   kind: "BOOKED_OPERATION_ADMISSION",
-  contractVersion: 1,
+  contractVersion: claims.contract_version,
   operationId: claims.operation_id,
+  ...(v2 ? { managedJoinV2: body } : {}),
   state: "PENDING",
   stateReason: "OWNER_PENDING",
   tenantId: claims.tenant_id,
@@ -145,7 +157,7 @@ const document = {
   },
   // Read-side association expected by the LK2 booked-operation read contract.
   padlHubOperation: {
-    contractVersion: 1,
+    contractVersion: claims.contract_version,
     operationId: claims.operation_id,
     tenantId: claims.tenant_id,
     userId: claims.sub,
@@ -168,6 +180,7 @@ const document = {
 
 msg._bookedOperation = {
   mode: "admit",
+  contractVersion: claims.contract_version,
   step: "find",
   operationId: claims.operation_id,
   bindingSha256: verification.bindingSha256,

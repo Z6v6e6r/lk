@@ -11,7 +11,9 @@
 // kind BOOKED_OPERATION_ADMISSION):
 //   PENDING -> ATTEMPTING  (CAS marker written BEFORE the canonical-owner POST)
 //           -> CONFIRMED | UNKNOWN | REJECTED
-//   CONFIRMED / REJECTED are terminal; UNKNOWN is never retried or released.
+//   CONFIRMED / REJECTED are terminal. v1 UNKNOWN never retries. A signed v2
+//   recovery-only replay may lease an existing ATTEMPTING/UNKNOWN row and ask the
+//   canonical owner for existing-operation reconciliation, never a new booking.
 // The attempt marker is the single dispatch gate: a repeat or racing admission
 // that lost the CAS is reconciled by a durable readback and never sends a second
 // canonical-owner POST. Every confirmation is derived from the canonical owner result, never assumed.
@@ -45,10 +47,11 @@ const execResponseHeaders = () => ({
   "Cache-Control": "no-store",
 });
 const execOutcome = (state, asOf) => {
+  if (stored.contractVersion === 2 && state === "CONFIRMED") state = "UNKNOWN";
   if (state === "CONFIRMED") {
     return {
       asOf: asOf || null,
-      contractVersion: 1,
+      contractVersion: stored.contractVersion,
       operationId,
       reason: "OWNER_BOOKING_CONFIRMED",
       status: "CONFIRMED",
@@ -57,7 +60,7 @@ const execOutcome = (state, asOf) => {
   if (state === "UNKNOWN") {
     return {
       asOf: asOf || null,
-      contractVersion: 1,
+      contractVersion: stored.contractVersion,
       operationId,
       reason: "RECONCILIATION_REQUIRED",
       status: "UNKNOWN",
@@ -65,7 +68,7 @@ const execOutcome = (state, asOf) => {
   }
   return {
     asOf: asOf || null,
-    contractVersion: 1,
+    contractVersion: stored.contractVersion,
     operationId,
     reason: "OWNER_PENDING",
     status: "PENDING",
@@ -74,7 +77,7 @@ const execOutcome = (state, asOf) => {
 const execRejectionPayload = (rejectionCode, asOf) => ({
   asOf: asOf || null,
   code: "BOOKED_OPERATION_REJECTED",
-  contractVersion: 1,
+  contractVersion: stored.contractVersion,
   error: "BOOKED_OPERATION_REJECTED",
   operationId,
   rejectionCode: bookedOperationVivaToText(rejectionCode) || "PROVIDER_BOOKING_REJECTED",
@@ -125,15 +128,23 @@ if (
 const operationId = bookedOperationVivaToText(execContext.operationId);
 const execution = execContext.execution;
 const stored = execContext.stored;
+if (stored.contractVersion === 2 && (!managedJoinV2Request(stored.managedJoinV2)
+  || typeof nodeCrypto === "undefined" || typeof nodeCrypto.createHash !== "function"
+  || stored.requestSha256 !== "sha256:" + nodeCrypto.createHash("sha256")
+    .update("booked-operation-admission:v2\0" + JSON.stringify(managedJoinV2Request(stored.managedJoinV2))).digest("hex"))) {
+  return execReject(503, "BOOKED_OPERATION_EXECUTION_CONTEXT_INVALID");
+}
 if (
   !operationId
   || !BOOKED_OP_VIVA_ID.test(operationId)
   || execution.enabled !== true
   || stored.kind !== "BOOKED_OPERATION_ADMISSION"
-  || stored.contractVersion !== 1
+  || ![1, 2].includes(stored.contractVersion)
   || stored.operationId !== operationId
-  || stored.state !== "PENDING"
-  || stored.targetAdmissible !== true
+  || (execution.recoveryOnly === true
+    ? stored.contractVersion !== 2 || execution.recoveryOnlyRequested !== true || !["ATTEMPTING", "UNKNOWN"].includes(stored.state)
+    : stored.state !== "PENDING")
+  || (execution.recoveryOnly !== true && stored.targetAdmissible !== true)
   || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.providerExerciseId) || "")
   || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.providerClientId) || "")
   || !BOOKED_OP_VIVA_ID.test(bookedOperationVivaToText(stored.providerClientSubscriptionId) || "")
@@ -201,7 +212,7 @@ const execProviderRequest = (method, url, payload, nextStep) => {
 // gets UNKNOWN rather than a fabricated CONFIRMED/REJECTED.
 const execFinalize = (state, details = {}) => {
   const at = new Date().toISOString();
-  const attempt = { at, attemptId, kind: "PROVIDER_UNKNOWN" };
+  const attempt = { at, attemptId: execution.recoveryOnly === true ? execution.recoveryAttemptId : attemptId, kind: "PROVIDER_UNKNOWN" };
   if (state === "CONFIRMED") attempt.kind = "CONFIRMED_READBACK";
   if (state === "REJECTED") attempt.kind = "PROVIDER_REJECTED";
   if (details.statusCode) attempt.statusCode = Number(details.statusCode);
@@ -219,7 +230,7 @@ const execFinalize = (state, details = {}) => {
   if (state === "CONFIRMED") {
     set.bookingId = details.bookingId;
     set.confirmedAt = at;
-    receipt = bookedOperationOwnerReceipt(stored, details.bookingId, at);
+    receipt = stored.contractVersion === 2 ? null : bookedOperationOwnerReceipt(stored, details.bookingId, at);
   }
   if (state === "REJECTED") {
     set.rejectedAt = at;
@@ -238,14 +249,17 @@ const execFinalize = (state, details = {}) => {
   execContext.step = "finalize";
   msg._bookedOperation = execContext;
   execScrubRequest();
-  const update = { $set: set, $push: { attempts: attempt } };
+  const update = { $set: set, $push: { attempts: attempt },
+    ...(execution.recoveryOnly === true ? { $unset: { "recovery.leaseUntil": "" } } : {}) };
   if (receipt) update.$push.receipts = receipt;
   msg.payload = [
     {
       _id: operationId,
       kind: "BOOKED_OPERATION_ADMISSION",
-      state: "ATTEMPTING",
-      "attempt.attemptId": attemptId,
+      ...(execution.recoveryOnly === true ? {
+        state: stored.state, "recovery.attemptId": execution.recoveryAttemptId,
+        delegationBindingSha256: stored.delegationBindingSha256,
+      } : { state: "ATTEMPTING", "attempt.attemptId": attemptId }),
     },
     update,
     {},
@@ -271,7 +285,7 @@ if (execContext.step === "execute") {
   execScrubRequest();
   msg.method = "GET";
   msg.url = loaded.config.ownerBase + "/lk/subscription-bookings";
-  msg.headers = { "X-Booked-Operation-Owner-Contract": "1", Accept: "application/json" };
+  msg.headers = { "X-Booked-Operation-Owner-Contract": stored.contractVersion === 2 ? "2" : "1", Accept: "application/json" };
   msg.payload = undefined;
   msg.requestTimeout = loaded.config.timeoutMs;
   msg.followRedirects = false;
@@ -285,8 +299,9 @@ if (execContext.step === "owner_contract") {
   if (!contentType || !/^application\/json(?:;\s*charset=utf-8)?$/i.test(contentType)
     || msg.error || Number(msg.statusCode) !== 200 || !bookedOperationVivaIsObject(body)
     || Object.keys(body).sort().join(",") !== "contractVersion,owner,policy"
-    || body.contractVersion !== 1 || body.owner !== "LK1_SUBSCRIPTION_BOOKING_OWNER"
-    || body.policy !== "ATOMIC_MANAGED_V1") {
+    || body.contractVersion !== stored.contractVersion || body.owner !== "LK1_SUBSCRIPTION_BOOKING_OWNER"
+    || body.policy !== (stored.contractVersion === 2 ? "MANAGED_JOIN_V2" : "ATOMIC_MANAGED_V1")
+    || (stored.contractVersion === 2 && msg.responseUrl !== execution.config.ownerBase + "/lk/subscription-bookings")) {
     return execReject(503, "BOOKED_OPERATION_OWNER_CONTRACT_UNAVAILABLE");
   }
   const profileUrl = bookedOperationVivaExpandPath(
@@ -341,6 +356,17 @@ if (execContext.step === "profile") {
   msg._bookedOperation = execContext;
   execScrubRequest();
   const markerAt = new Date().toISOString();
+  if (execution.recoveryOnly === true) {
+    execution.recoveryAttemptId = nodeCrypto.randomUUID();
+    msg.payload = [
+      { _id: operationId, kind: "BOOKED_OPERATION_ADMISSION", state: stored.state,
+        delegationBindingSha256: stored.delegationBindingSha256, managedJoinV2: stored.managedJoinV2,
+        $or: [{ "recovery.leaseUntil": { $exists: false } }, { "recovery.leaseUntil": { $lte: markerAt } }] },
+      { $set: { recovery: { attemptId: execution.recoveryAttemptId, startedAt: markerAt,
+        leaseUntil: new Date(Date.parse(markerAt) + 120000).toISOString() } } }, {},
+    ];
+    return execOutput(EXEC_OUTPUT_ATTEMPT);
+  }
   msg.payload = [
     { _id: operationId, kind: "BOOKED_OPERATION_ADMISSION", state: "PENDING" },
     {
@@ -396,6 +422,8 @@ if (execContext.step === "attempt_claim") {
     operationId,
     exerciseId: stored.providerExerciseId,
     clientSubscriptionId: stored.providerClientSubscriptionId,
+    ...(stored.contractVersion === 2 ? { managedJoinV2: stored.managedJoinV2,
+      ...(execution.recoveryOnly === true ? { managedJoinV2RecoveryOnly: true } : {}) } : { lk2LegacyJoin: true }),
   };
   msg.requestTimeout = execution.config.timeoutMs;
   msg.followRedirects = false;

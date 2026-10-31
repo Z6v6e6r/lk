@@ -9,11 +9,49 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "16c55e521a99d038a7701d9cf029a9a7a6f1e1af9c288dd39c0a2d7d03c015e3", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "b24258308dde2aada7585d94165de27e1b651bd37e849c79f29533a34266b047", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
 const VIVA_API_BASE = "https://api.vivacrm.ru";
+// Exact managed JOIN wire parser shared by the receiver's verifier, read and executor.
+// This parser never supplies missing authority or mints an entitlement/usage reference.
+const managedJoinV2Object = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const managedJoinV2Keys = (value, keys) => managedJoinV2Object(value)
+  && Object.keys(value).sort().join(",") === keys.split(",").sort().join(",");
+const managedJoinV2Id = value => typeof value === "string"
+  && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(value) && !/[\r\n]/.test(value);
+const managedJoinV2Positive = value => Number.isSafeInteger(value) && value > 0;
+const managedJoinV2Digest = value => typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value) && value.length === 71;
+const managedJoinV2Entitlement = value => {
+  if (!managedJoinV2Keys(value, "subscriptionInstanceId,expectations") || !managedJoinV2Id(value.subscriptionInstanceId)) return null;
+  const e = value.expectations;
+  if (!managedJoinV2Keys(e, "schemaVersion,policyVersion,policyDigest,targetSnapshot") || e.schemaVersion !== 1
+    || !managedJoinV2Positive(e.policyVersion) || !managedJoinV2Digest(e.policyDigest)
+    || !managedJoinV2Keys(e.targetSnapshot, "snapshotId,revision,evidenceRef")
+    || !managedJoinV2Id(e.targetSnapshot.snapshotId) || !managedJoinV2Positive(e.targetSnapshot.revision)
+    || !managedJoinV2Id(e.targetSnapshot.evidenceRef)) return null;
+  return { subscriptionInstanceId: value.subscriptionInstanceId, expectations: {
+    schemaVersion: 1, policyVersion: e.policyVersion, policyDigest: e.policyDigest,
+    targetSnapshot: { snapshotId: e.targetSnapshot.snapshotId, revision: e.targetSnapshot.revision,
+      evidenceRef: e.targetSnapshot.evidenceRef }
+  } };
+};
+const managedJoinV2Request = (value, preflight = false) => {
+  if (!managedJoinV2Keys(value, preflight ? "contractVersion,action,target,paymentIntent"
+    : "contractVersion,action,target,paymentIntent,entitlement") || value.contractVersion !== 2
+    || value.action !== "JOIN_GAME" || value.paymentIntent !== "USE_SUBSCRIPTION"
+    || !managedJoinV2Keys(value.target, "id,expectedRevision")
+    || typeof value.target.id !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.target.id)
+    || !managedJoinV2Positive(value.target.expectedRevision)) return null;
+  const entitlement = preflight ? null : managedJoinV2Entitlement(value.entitlement);
+  if (!preflight && !entitlement) return null;
+  return { contractVersion: 2, action: "JOIN_GAME",
+    target: { id: value.target.id, expectedRevision: value.target.expectedRevision },
+    paymentIntent: "USE_SUBSCRIPTION", ...(preflight ? {} : { entitlement }) };
+};
+
 const SERV2_URL = "https://padlhub.su/seliger";
 const DAILY_LIMIT_CODE = "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED";
 const SHARED_LIMIT_FROM = "2026-08-01";
@@ -531,7 +569,29 @@ const ownerEvidenceEnabled = () => {
   } catch { return false; }
 };
 
+const managedJoinV2SignerReady = () => {
+  try {
+    const secret = global.get("subscriptions_owner_evidence_secret");
+    return ownerEvidenceEnabled() && typeof secret === "string" && Buffer.byteLength(secret.trim(), "utf8") >= 32
+      && typeof global.get("crypto")?.createHmac === "function";
+  } catch { return false; }
+};
+const managedJoinV2MatchesRuntime = ctx => !ctx.managedJoinV2 || (
+  ctx.managedEnforcement?.enabled === true && ctx.managedAction === "JOIN_GAME"
+  && ctx.managedRuntime?.subscriptionInstanceId === ctx.managedJoinV2.entitlement.subscriptionInstanceId
+  && ctx.managedRuntime?.policyDigest === ctx.managedJoinV2.entitlement.expectations.policyDigest
+  && ctx.managedRuntime?.policy?.policyVersion === ctx.managedJoinV2.entitlement.expectations.policyVersion
+);
+const managedJoinV2Pending = ctx => finishPending(ctx, "Управляемая запись требует сверки владельца", {
+  code: "MANAGED_JOIN_V2_RECONCILIATION_REQUIRED",
+});
+
 const prepareManagedEntitlementReserve = (ctx) => {
+  if (ctx.lk2LegacyJoin === true || ctx.managedJoinV2RecoveryOnly || ctx.managedJoinV2RecoveryOperation) return managedJoinV2Pending(ctx);
+  if (ctx.managedJoinV2 && (!managedJoinV2MatchesRuntime(ctx) || !managedJoinV2SignerReady()
+    || ctx.managedJoinV2FreePolicyDigest !== ctx.managedRuntime?.policyDigest)) {
+    return managedJoinV2Pending(ctx);
+  }
   const config = managedEntitlementConfig();
   if (!validManagedEntitlementConfig(config, ctx)) {
     return prepareFailedUpdate(
@@ -550,6 +610,7 @@ const prepareManagedEntitlementReserve = (ctx) => {
       subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       action: ctx.managedAction,
       target: { targetId: ctx.exerciseId },
+      ...(ctx.managedJoinV2 ? { expectations: ctx.managedJoinV2.entitlement.expectations } : {}),
     },
     {
       ...managedEntitlementHeaders(ctx, config),
@@ -639,6 +700,8 @@ const prepareManagedEntitlementBind = (ctx) => {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
     state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
+    ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2 } : {}),
+    ...(ctx.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
     $or: [
       { managedEntitlementOperationId: { $exists: false } },
       { managedEntitlementOperationId: null },
@@ -654,6 +717,12 @@ const prepareManagedEntitlementBind = (ctx) => {
       managedSubscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       managedEntitlementState: "RESERVED",
       managedDecision: ctx.managedDecision,
+      ...(ctx.managedJoinV2 ? { managedJoinV2Recovery: {
+        schemaVersion: 1, runtime: ctx.managedRuntime, target: ctx.managedTarget,
+        enforcement: ctx.managedEnforcement, activationRequired: ctx.managedActivationRequired === true,
+        activationExpectedRevision: ctx.managedActivationExpectedRevision,
+        freePolicyDigest: ctx.managedJoinV2FreePolicyDigest,
+      } } : {}),
       updatedAt: nowIso,
     },
   });
@@ -665,6 +734,8 @@ const prepareManagedEntitlementConfirmedUpdate = (ctx) => {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
     state: "CONFIRMED",
+    ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2 } : {}),
+    ...(ctx.managedJoinV2RecoveryOperation ? { managedJoinV2Recovery: ctx.managedJoinV2RecoveryOperation.managedJoinV2Recovery } : {}),
     managedEntitlementOperationId: ctx.managedEntitlementOperationId,
   }, {
     $set: {
@@ -1451,6 +1522,8 @@ const preparePreaccept = (ctx) => {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
     state: "PREPARED",
+    ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2 } : {}),
+    ...(ctx.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
   }, {
     $set: {
       state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
@@ -1746,6 +1819,8 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     limitMode: ctx.limitMode,
     managedEnvironment: ctx.managedEnforcement?.environment || null,
     managedDecision: ctx.managedDecision || null,
+    ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2 } : {}),
+    ...(ctx.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
     activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
     state: "PREPARED",
     attempts: 0,
@@ -1753,6 +1828,8 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     updatedAt: now.toISOString(),
   },
   $unset: {
+    ...(!ctx.managedJoinV2 ? { managedJoinV2: "" } : {}),
+    ...(ctx.lk2LegacyJoin !== true ? { lk2LegacyJoin: "" } : {}),
     bookingId: "",
     confirmedAt: "",
     pendingUntil: "",
@@ -1825,6 +1902,13 @@ const prepareConfirmedUpdate = (ctx, booking, operation = null) => {
   return prepareMongoUpdate(ctx, "operation_confirm", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
+    ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2,
+      managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+      ...(ctx.managedJoinV2RecoveryOperation ? {
+        state: ctx.managedJoinV2RecoveryOperation.state,
+        managedJoinV2Recovery: ctx.managedJoinV2RecoveryOperation.managedJoinV2Recovery,
+        ...(ctx.managedJoinV2RecoveryOperation.bookingId ? { bookingId: ctx.managedJoinV2RecoveryOperation.bookingId } : {}),
+      } : { state: "PENDING_CONFIRMATION" }) } : {}),
   }, {
     $set: {
       state: "CONFIRMED",
@@ -1844,6 +1928,8 @@ const prepareActivationConfirmedUpdate = (ctx, activation) => {
     operationId: ctx.activationOperationId || ctx.operationId,
     state: "CONFIRMED",
     activationState: "PENDING",
+    ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2, managedEntitlementOperationId: ctx.managedEntitlementOperationId } : {}),
+    ...(ctx.managedJoinV2RecoveryOperation ? { managedJoinV2Recovery: ctx.managedJoinV2RecoveryOperation.managedJoinV2Recovery } : {}),
   }, {
     $set: {
       activationState: "CONFIRMED",
@@ -1891,6 +1977,13 @@ const serviceTokenAvailable = () => {
 };
 
 const prepareBookingCreate = (ctx) => {
+  if (ctx.managedJoinV2RecoveryOnly || ctx.managedJoinV2RecoveryOperation) return managedJoinV2Pending(ctx);
+  if (ctx.lk2LegacyJoin === true && ctx.managedEnforcement?.enabled === true) return managedJoinV2Pending(ctx);
+  if (ctx.managedJoinV2 && (!managedJoinV2MatchesRuntime(ctx) || !managedJoinV2SignerReady()
+    || !toStr(ctx.managedEntitlementOperationId) || !validEntitlementDecision(ctx, ctx.managedDecision)
+    || ctx.managedDecision.money.finalPriceMinor !== 0 || !managedJoinV2Positive(ctx.managedDecision.usageUnits))) {
+    return managedJoinV2Pending(ctx);
+  }
   if (ctx.managedEnforcement?.enabled === true) {
     const runtimeConfig = readManagedRuntimeApiConfig();
     const environmentGate = managedEnvironmentAllowsSubscription(ctx.clientSubscriptionId);
@@ -2005,6 +2098,10 @@ if (!ctx) {
   });
 }
 
+if (ctx.lk2LegacyJoin !== undefined && (ctx.lk2LegacyJoin !== true || ctx.managedJoinV2 !== undefined)) return managedJoinV2Pending(ctx);
+if (ctx.managedJoinV2 !== undefined && (!managedJoinV2Request(ctx.managedJoinV2)
+  || ctx.action !== "book" || !managedJoinV2SignerReady())) return managedJoinV2Pending(ctx);
+
 if (ctx.step === "managed_precreate_abort" && ctx.caller === "split_create_abort") {
   if (!toStr(ctx.managedEntitlementOperationId)) {
     return finishError(ctx, 409, "Предварительный резерв потерян до освобождения", {
@@ -2070,6 +2167,13 @@ if (ctx.step === "profile") {
       code: "SUBSCRIPTION_BOOKING_PROFILE_INCOMPLETE",
     });
   }
+  if (ctx.managedJoinV2 || ctx.lk2LegacyJoin === true) {
+    ctx.step = "managed_join_owner_recovery_find";
+    msg._subscriptionBooking = ctx;
+    msg.payload = { tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, operationId: ctx.operationId };
+    delete msg.error;
+    return emit(OUTPUT_MONGO_FIND);
+  }
   if (ctx.action === "release") {
     return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
   }
@@ -2085,6 +2189,59 @@ if (ctx.step === "profile") {
     "exercise",
     `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`,
   );
+}
+
+if (ctx.step === "managed_join_owner_recovery_find") {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length > 1) return managedJoinV2Pending(ctx);
+  const operation = msg.payload[0];
+  if (!operation && ctx.managedJoinV2RecoveryOnly === true) return managedJoinV2Pending(ctx);
+  if (!operation) return prepareUserGet(ctx, "exercise", `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`);
+  const conflict = () => finishError(ctx, 409, "Привязка операции изменилась", { code: "MANAGED_JOIN_V2_BINDING_CONFLICT" });
+  if (!isObj(operation) || operation.kind === "BOOKED_OPERATION_ADMISSION"
+    || operation.tenantKey !== ctx.tenantKey || operation.actorClientId !== ctx.actorClientId
+    || operation.operationId !== ctx.operationId || operation.exerciseId !== ctx.exerciseId
+    || operation.clientSubscriptionId !== ctx.clientSubscriptionId) return conflict();
+  if (!ctx.managedJoinV2) {
+    if (operation.managedJoinV2 !== undefined || (operation.lk2LegacyJoin !== undefined && operation.lk2LegacyJoin !== true)) return conflict();
+    // Original legacy attempts retain existing read/reconciliation behavior; this path never upgrades them.
+    return prepareUserGet(ctx, "exercise", `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`);
+  }
+  if (!managedJoinV2Request(operation.managedJoinV2)
+    || JSON.stringify(managedJoinV2Request(operation.managedJoinV2)) !== JSON.stringify(ctx.managedJoinV2)) return conflict();
+  const recovery = operation.managedJoinV2Recovery;
+  const expected = ctx.managedJoinV2.entitlement;
+  if (!managedJoinV2Keys(recovery, "schemaVersion,runtime,target,enforcement,activationRequired,activationExpectedRevision,freePolicyDigest")
+    || recovery.schemaVersion !== 1 || typeof recovery.activationRequired !== "boolean"
+    || !managedJoinV2Positive(recovery.activationExpectedRevision)
+    || recovery.freePolicyDigest !== expected.expectations.policyDigest
+    || recovery.runtime?.subscriptionInstanceId !== expected.subscriptionInstanceId
+    || recovery.runtime?.policyDigest !== expected.expectations.policyDigest
+    || recovery.runtime?.policy?.policyVersion !== expected.expectations.policyVersion
+    || recovery.runtime?.instance?.subscriptionInstanceId !== expected.subscriptionInstanceId
+    || recovery.runtime?.instance?.policyVersion !== expected.expectations.policyVersion
+    || recovery.runtime?.evidence?.instanceRevision !== recovery.activationExpectedRevision
+    || recovery.enforcement?.enabled !== true || recovery.enforcement?.environment !== "PROD"
+    || recovery.enforcement?.exactProductId !== PITER_MANAGED_PRODUCT_ID
+    || recovery.target?.eventId !== ctx.exerciseId || recovery.target?.category !== "GAME"
+    || !isValidDateKey(operation.serviceDate) || !toStr(operation._id)
+    || operation.managedSubscriptionInstanceId !== expected.subscriptionInstanceId
+    || !managedJoinV2Id(operation.managedEntitlementOperationId)
+    || !["PENDING_CONFIRMATION", "CONFIRMED"].includes(operation.state)
+    || !["RESERVED", "CONFIRMED"].includes(operation.managedEntitlementState)
+    || !["PENDING", "NOT_REQUIRED", "CONFIRMED"].includes(operation.activationState)) return managedJoinV2Pending(ctx);
+  ctx.managedRuntime = recovery.runtime; ctx.managedTarget = recovery.target; ctx.managedEnforcement = recovery.enforcement;
+  ctx.managedAction = "JOIN_GAME"; ctx.managedActivationRequired = recovery.activationRequired && operation.activationState !== "CONFIRMED";
+  ctx.managedActivationExpectedRevision = recovery.activationExpectedRevision;
+  ctx.managedJoinV2FreePolicyDigest = recovery.freePolicyDigest;
+  ctx.managedDecision = operation.managedDecision;
+  if (!validEntitlementDecision(ctx, ctx.managedDecision) || ctx.managedDecision.money.finalPriceMinor !== 0) return managedJoinV2Pending(ctx);
+  ctx.serviceDate = operation.serviceDate; ctx.operationKey = operation._id; ctx.planKey = operation.planKey;
+  ctx.managedEntitlementOperationId = operation.managedEntitlementOperationId;
+  ctx.managedSubscriptionInstanceId = operation.managedSubscriptionInstanceId;
+  ctx.managedEntitlementConfirmed = operation.managedEntitlementState === "CONFIRMED";
+  ctx.managedJoinV2RecoveryOperation = operation;
+  ctx.immediateBookingId = toStr(operation.bookingId || operation.upstreamBookingId);
+  return prepareUserGet(ctx, "confirmation_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
 
 if (ctx.step === "prospective_subscriptions") {
@@ -2190,6 +2347,7 @@ if (ctx.step === "exercise") {
   if (ctx.caller === "split_create_preflight" && managedEnforcement.enabled !== true) {
     return finishManagedCreatePreflight(ctx, "NOT_MANAGED");
   }
+  if (ctx.managedJoinV2 && (managedEnforcement.enabled !== true || ctx.category !== "open_game")) return managedJoinV2Pending(ctx);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
@@ -2422,7 +2580,7 @@ if (ctx.step === "exercise_recheck") {
 if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
   const isRecheck = ctx.step === "managed_runtime_recheck";
   const rejectRuntime = (statusCode, error, details) => (
-    isRecheck
+    ctx.managedJoinV2 ? managedJoinV2Pending(ctx) : isRecheck
       ? prepareFailedUpdate(ctx, statusCode, error, details?.code)
       : finishError(ctx, statusCode, error, details)
   );
@@ -2511,6 +2669,9 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
       code: "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED",
     });
   }
+  if (ctx.managedJoinV2 && (ctx.managedJoinV2.entitlement.subscriptionInstanceId !== runtime.subscriptionInstanceId
+    || ctx.managedJoinV2.entitlement.expectations.policyVersion !== policy.policyVersion
+    || ctx.managedJoinV2.entitlement.expectations.policyDigest !== runtime.policyDigest)) return managedJoinV2Pending(ctx);
   const nextManagedRuntime = {
     subscriptionInstanceId: runtime.subscriptionInstanceId,
     policyDigest: runtime.policyDigest,
@@ -2540,7 +2701,8 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
     if (ctx.precreatedEntitlementReserved === true) {
       return preparePrecreatedReservationPromotion(ctx);
     }
-    return prepareManagedEntitlementReserve(ctx);
+    return ctx.managedJoinV2 ? prepareManagedPolicyEvaluation(ctx, "managed_join_v2_policy_decision")
+      : prepareManagedEntitlementReserve(ctx);
   }
   ctx.managedRuntime = nextManagedRuntime;
   ctx.managedActivationRequired = pendingFirstUse;
@@ -2708,6 +2870,16 @@ if (ctx.step === "history_bookings") {
   return prepareOperationFind(ctx);
 }
 
+if (ctx.step === "managed_join_v2_policy_decision") {
+  const decision = msg._managedSubscriptionPolicyDecision;
+  if (!ctx.managedJoinV2 || !managedJoinV2MatchesRuntime(ctx) || !isObj(decision)
+    || decision.eligible !== true || decision.policyVersion !== ctx.managedRuntime.policy.policyVersion
+    || decision.benefit?.kind !== "FREE_ENTITLEMENT" || !managedJoinV2Positive(decision.usageUnits)) return managedJoinV2Pending(ctx);
+  ctx.managedJoinV2FreePolicyDigest = ctx.managedRuntime.policyDigest;
+  delete msg._managedSubscriptionPolicyDecision; delete msg._managedSubscriptionPolicyInput;
+  return prepareManagedEntitlementReserve(ctx);
+}
+
 if (["managed_policy_decision", "managed_policy_recheck_decision"].includes(ctx.step)) {
   const isRecheck = ctx.step === "managed_policy_recheck_decision";
   const decision = msg._managedSubscriptionPolicyDecision;
@@ -2754,6 +2926,18 @@ if (["managed_policy_decision", "managed_policy_recheck_decision"].includes(ctx.
 
 if (ctx.step === "managed_entitlement_reserve") {
   const result = unwrapRecord(msg.payload);
+  if (ctx.managedJoinV2 && (msg.error || Number(msg.statusCode) !== 200
+    || msg.responseUrl !== `${managedEntitlementConfig().apiBase}/internal/subscriptions/entitlements/reserve`
+    || !isObj(result) || result.schemaVersion !== 1 || result.outcome !== "RESERVED"
+    || result.subscriptionInstanceId !== ctx.managedRuntime?.subscriptionInstanceId
+    || !managedJoinV2Positive(result.aggregateRevision) || !managedJoinV2Id(result.operationId)
+    || !["RESERVED", "CONFIRMED"].includes(result.operationState) || typeof result.replayed !== "boolean"
+    || (result.operationState === "CONFIRMED" && result.replayed !== true)
+    || !Array.isArray(result.blockers) || result.blockers.length !== 0
+    || !validEntitlementDecision(ctx, result.decision)
+    || result.decision.money.finalPriceMinor !== 0 || !managedJoinV2Positive(result.decision.usageUnits))) {
+    return managedJoinV2Pending(ctx);
+  }
   if (!isHttpOk(msg.statusCode) || !result || result.schemaVersion !== 1
     || result.subscriptionInstanceId !== (
       ctx.managedRuntime?.subscriptionInstanceId || ctx.managedSubscriptionInstanceId
@@ -2888,6 +3072,22 @@ if (ctx.step === "operation_find") {
     return prepareOperationRelease(ctx, releaseOperation);
   }
   const operation = isObj(rows[0]) ? rows[0] : null;
+  if (operation && operation.operationId === ctx.operationId && operation.lk2LegacyJoin !== undefined
+    && (operation.lk2LegacyJoin !== true || ctx.lk2LegacyJoin !== true)) {
+    return finishError(ctx, 409, "Привязка legacy операции изменилась", { code: "MANAGED_JOIN_V2_BINDING_CONFLICT" });
+  }
+  if (operation && operation.operationId === ctx.operationId
+    && (ctx.managedJoinV2 !== undefined || operation.managedJoinV2 !== undefined)) {
+    if (!managedJoinV2Request(operation.managedJoinV2) || !ctx.managedJoinV2
+      || JSON.stringify(operation.managedJoinV2) !== JSON.stringify(ctx.managedJoinV2)
+      || operation.tenantKey !== ctx.tenantKey || operation.actorClientId !== ctx.actorClientId
+      || operation.exerciseId !== ctx.exerciseId || operation.clientSubscriptionId !== ctx.clientSubscriptionId) {
+      return finishError(ctx, 409, "Привязка операции изменилась", { code: "MANAGED_JOIN_V2_BINDING_CONFLICT" });
+    }
+    if (["FAILED", "RELEASED"].includes(operation.state)
+      || operationHasConfirmedCancellation(operation, ctx.cancelledSubscriptionBookings)) return managedJoinV2Pending(ctx);
+  }
+
   const operationEnvironment = toStr(operation?.managedEnvironment);
   const expectedOperationEnvironment = ctx.managedEnforcement?.environment;
   const operationEnvironmentMatches = expectedOperationEnvironment === "DEV"
@@ -3011,6 +3211,8 @@ if (ctx.step === "operation_find") {
       limitMode: ctx.limitMode,
       managedEnvironment: ctx.managedEnforcement?.environment || null,
       managedDecision: ctx.managedDecision || null,
+      ...(ctx.managedJoinV2 ? { managedJoinV2: ctx.managedJoinV2 } : {}),
+    ...(ctx.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
       activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
       state: "PREPARED",
       attempts: 0,
@@ -3292,6 +3494,19 @@ if (ctx.step === "confirmation_bookings") {
   if (!hasBookingListShape(msg.payload)) {
     return finishPending(ctx, "Viva приняла запрос; формат списка записей требует повторной проверки");
   }
+  if (ctx.managedJoinV2) {
+    if (msg.error || Number(msg.statusCode) !== 200
+      || msg.responseUrl !== `${VIVA_API_BASE}/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`) return managedJoinV2Pending(ctx);
+    const matches = extractItems(msg.payload).filter(booking => isObj(booking) && !isInactiveBooking(booking)
+      && normalizeId(bookingExerciseId(booking)) === normalizeId(ctx.exerciseId)
+      && normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)
+      && normalizeId(bookingClientId(booking)) === normalizeId(ctx.actorClientId)
+      && eventDate(booking) === ctx.serviceDate);
+    if (!hasCompleteBookingList(msg.payload) || matches.length !== 1
+      || !toStr(bookingId(matches[0]))
+      || (ctx.immediateBookingId && bookingId(matches[0]) !== ctx.immediateBookingId)) return managedJoinV2Pending(ctx);
+    return prepareConfirmedUpdate(ctx, matches[0]);
+  }
   const confirmed = extractItems(msg.payload).find((booking) => (
     isObj(booking)
     && !isInactiveBooking(booking)
@@ -3321,6 +3536,8 @@ if (ctx.step === "operation_confirm") {
 }
 
 if (ctx.step === "managed_entitlement_confirm") {
+  if (ctx.managedJoinV2 && (msg.error || Number(msg.statusCode) !== 200
+    || msg.responseUrl !== `${managedEntitlementConfig().apiBase}/internal/subscriptions/entitlements/confirm`)) return managedJoinV2Pending(ctx);
   const result = unwrapRecord(msg.payload);
   if (!isHttpOk(msg.statusCode) || !result || result.schemaVersion !== 1
     || result.outcome !== "CONFIRMED"

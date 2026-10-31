@@ -4420,3 +4420,216 @@ test("readback transport errors, unavailable receiver and changed context leave 
   }));
   assertOwnerPending(resumeCreateRejection(fixture.ctx, fixture.operation, true, MANAGED_GLOBALS));
 });
+
+const managedJoinFixture = JSON.parse(fs.readFileSync("scripts/tests/fixtures/managed-join-v2-contract.json", "utf8"));
+const managedJoinTuple = () => structuredClone(managedJoinFixture.admission.request);
+function managedJoinRuntime() {
+  const binding = managedJoinTuple().entitlement;
+  return managedRuntimeResponse({ subscriptionInstanceId: binding.subscriptionInstanceId,
+    policyDigest: binding.expectations.policyDigest, policy: { policyVersion: binding.expectations.policyVersion },
+    instance: { subscriptionInstanceId: binding.subscriptionInstanceId, policyVersion: binding.expectations.policyVersion } });
+}
+function managedJoinContext(step: string, overrides: Record<string, unknown> = {}) {
+  const runtime = managedJoinRuntime();
+  return entitlementContext(step, { action: "book", managedAction: "JOIN_GAME", managedActivationRequired: false, managedActivationExpectedRevision: 1, managedJoinV2: managedJoinTuple(),
+    serviceDate: futureManagedTarget().serviceDate,
+    managedTarget: { ...entitlementContext("x").managedTarget, startsAt: futureManagedTarget().startsAt,
+      eventId: "exercise-target", category: "GAME", basePriceMinor: null, currency: "RUB", resolutionSource: "SERVER" },
+    managedRuntime: { subscriptionInstanceId: runtime.subscriptionInstanceId, policyDigest: runtime.policyDigest,
+      policy: runtime.policy, instance: runtime.instance, evidence: runtime.evidence }, ...overrides });
+}
+function managedJoinDecision() {
+  return { ...entitlementDecision({ action: "JOIN_GAME" }), target: { ...entitlementDecision({ action: "JOIN_GAME" }).target, startsAt: futureManagedTarget().startsAt }, policyVersion: 3,
+    policyDigest: managedJoinTuple().entitlement.expectations.policyDigest };
+}
+function managedJoinReserve() {
+  return { schemaVersion: 1, outcome: "RESERVED", replayed: false, operationId: "booking:managed-join-v2",
+    subscriptionInstanceId: managedJoinTuple().entitlement.subscriptionInstanceId,
+    aggregateRevision: 4, operationState: "RESERVED", decision: managedJoinDecision(), blockers: [] };
+}
+function assertJoinPending(outputs: any[]) {
+  assert.ok(outputs[4], JSON.stringify(outputs));
+  assert.equal(outputs[4].payload.state, "PENDING_CONFIRMATION");
+  assert.ok(outputs.slice(0, 4).every(value => value === null), "pending cannot emit provider or Mongo mutation");
+}
+
+test("managed JOIN v2 prepare validates tuple through ingress and preserves legacy absence", () => {
+  const payload = { exerciseId: "exercise-target", clientSubscriptionId: "client-subscription-1",
+    operationId: "idem-operation-1", managedJoinV2: managedJoinTuple() };
+  const req = { headers: { authorization: "Bearer user-token", "idempotency-key": payload.operationId } };
+  const accepted = runFunction(PREPARE_FILE, { payload, req });
+  assert.deepEqual(accepted[0]._subscriptionBooking.managedJoinV2, payload.managedJoinV2);
+  assert.equal(accepted[0]._subscriptionBooking.managedAction, "JOIN_GAME");
+  for (const changed of [null, {}, { ...managedJoinTuple(), contractVersion: 1 },
+    { ...managedJoinTuple(), action: "CREATE_GAME" },
+    { ...managedJoinTuple(), entitlement: { ...managedJoinTuple().entitlement, usageRef: "forged" } }]) {
+    const rejected = runFunction(PREPARE_FILE, { payload: { ...payload, managedJoinV2: changed }, req });
+    assert.equal(rejected[0], null);
+    assert.equal(rejected[1].statusCode, 400);
+  }
+  assert.equal(runFunction(PREPARE_FILE, { payload: { ...payload, actorClientId: "forged" }, req })[0], null);
+});
+
+test("managed JOIN v2 persists original expectations before reserve and claims the exact tuple", () => {
+  const inserted = runFunction(ROUTER_FILE, { payload: [], _subscriptionBooking: managedJoinContext("operation_find") }, OWNER_GLOBALS);
+  assert.deepEqual(inserted[2].payload.managedJoinV2, managedJoinTuple());
+  assert.equal(inserted[0], null);
+  const claimed = runFunction(ROUTER_FILE, { payload: { acknowledged: true, insertedId: inserted[2].payload._id },
+    _subscriptionBooking: inserted[2]._subscriptionBooking }, OWNER_GLOBALS);
+  assert.deepEqual(claimed[3].payload[0].managedJoinV2, managedJoinTuple());
+  const rechecked = runFunction(ROUTER_FILE, { payload: managedJoinRuntime(), statusCode: 200,
+    _subscriptionBooking: managedJoinContext("managed_runtime_recheck") }, OWNER_GLOBALS);
+  assert.equal(rechecked[0], null);
+  const evaluated = runFunction("scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js", rechecked[6]);
+  assert.ok(evaluated[0], JSON.stringify(evaluated[1]?._managedSubscriptionPolicyDecision));
+  const reserveRequest = runFunction(ROUTER_FILE, evaluated[0], OWNER_GLOBALS);
+  assert.deepEqual(reserveRequest[0].payload, { subscriptionInstanceId: managedJoinTuple().entitlement.subscriptionInstanceId,
+    action: "JOIN_GAME", target: { targetId: "exercise-target" }, expectations: managedJoinTuple().entitlement.expectations });
+  const reserved = runFunction(ROUTER_FILE, { payload: managedJoinReserve(), statusCode: 200,
+    responseUrl: reserveRequest[0].url, _subscriptionBooking: reserveRequest[0]._subscriptionBooking }, OWNER_GLOBALS);
+  assert.equal(reserved[3]._subscriptionBooking.step, "operation_entitlement_bind");
+  assert.deepEqual(reserved[3].payload[0].managedJoinV2, managedJoinTuple());
+  assert.equal(reserved[0], null, "reserve acknowledgement alone cannot book before durable linkage");
+});
+
+test("managed JOIN v2 refuses changed policy, missing signer, ambiguous reserve and paid fallback without writes", () => {
+  for (const changed of [ { subscriptions_owner_evidence_enabled: false },
+    { subscriptions_owner_evidence_secret: undefined }, { crypto: undefined } ]) {
+    assertJoinPending(runFunction(ROUTER_FILE, { _subscriptionBooking: managedJoinContext("operation_find"), payload: [] },
+      { ...OWNER_GLOBALS, ...changed }));
+  }
+  for (const changed of [{ policyDigest: `sha256:${"b".repeat(64)}` }, { subscriptionInstanceId: "foreign-instance" }]) {
+    assertJoinPending(runFunction(ROUTER_FILE, { _subscriptionBooking: managedJoinContext("managed_runtime_recheck"),
+      statusCode: 200, payload: { ...managedJoinRuntime(), ...changed } }, OWNER_GLOBALS));
+  }
+  const response = { payload: managedJoinReserve(), statusCode: 200,
+    responseUrl: "https://padlhub.su/api/internal/subscriptions/entitlements/reserve" };
+  const invalid = [ { error: { code: "ETIMEDOUT" } }, { statusCode: 503 }, { responseUrl: "https://foreign.invalid" },
+    { payload: { ...managedJoinReserve(), outcome: "FULL_PRICE_WITHOUT_SUBSCRIPTION", decision: null } },
+    { payload: { ...managedJoinReserve(), subscriptionInstanceId: "foreign-instance" } },
+    { payload: { ...managedJoinReserve(), operationState: "COMPENSATED" } },
+    { payload: { ...managedJoinReserve(), decision: { ...managedJoinDecision(), usageUnits: 0 } } },
+    { payload: { ...managedJoinReserve(), decision: { ...managedJoinDecision(), money: { ...managedJoinDecision().money, finalPriceMinor: 1 } } } } ];
+  for (const changed of invalid) assertJoinPending(runFunction(ROUTER_FILE,
+    { ...response, ...changed, _subscriptionBooking: managedJoinContext("managed_entitlement_reserve") }, OWNER_GLOBALS));
+});
+
+test("managed JOIN v2 same-operation tuple/version drift conflicts and terminal cancellation never reclaims", () => {
+  const operation = { ...ownerOperation(), operationId: "idem-operation-1", managedJoinV2: managedJoinTuple(), state: "PREPARED" };
+  for (const changed of [ { managedJoinV2: undefined }, { actorClientId: "foreign" },
+    { managedJoinV2: { ...managedJoinTuple(), entitlement: { ...managedJoinTuple().entitlement, subscriptionInstanceId: "foreign-instance" } } } ]) {
+    const conflict = runFunction(ROUTER_FILE, { payload: [{ ...operation, ...changed }],
+      _subscriptionBooking: managedJoinContext("operation_find") }, OWNER_GLOBALS);
+    assert.equal(conflict[4].statusCode, 409);
+    assert.ok(conflict.slice(0, 4).every(value => value === null));
+  }
+  const downgrade = runFunction(ROUTER_FILE, { payload: [operation],
+    _subscriptionBooking: entitlementContext("operation_find") }, OWNER_GLOBALS);
+  assert.equal(downgrade[4].statusCode, 409);
+  for (const state of ["FAILED", "RELEASED"]) assertJoinPending(runFunction(ROUTER_FILE,
+    { payload: [{ ...operation, state }], _subscriptionBooking: managedJoinContext("operation_find") }, OWNER_GLOBALS));
+});
+
+test("signed LK2 legacy guard is restrictive, durable and holds selector flips without changing direct LK1", () => {
+  const payload = { exerciseId: "exercise-target", clientSubscriptionId: "client-subscription-1",
+    operationId: "idem-operation-1", lk2LegacyJoin: true };
+  const req = { headers: { authorization: "Bearer user-token", "idempotency-key": payload.operationId } };
+  assert.equal(runFunction(PREPARE_FILE, { payload, req })[0]._subscriptionBooking.lk2LegacyJoin, true);
+  for (const marker of [false, "true", 1, null, {}]) {
+    assert.equal(runFunction(PREPARE_FILE, { payload: { ...payload, lk2LegacyJoin: marker }, req })[0], null);
+  }
+  const insert = runFunction(ROUTER_FILE, { payload: [], _subscriptionBooking: baseContext("operation_find", { lk2LegacyJoin: true }) }, OWNER_GLOBALS);
+  assert.equal(insert[2].payload.lk2LegacyJoin, true);
+  const context = entitlementContext("managed_runtime_recheck", { managedActivationRequired: false, lk2LegacyJoin: true });
+  assertJoinPending(runFunction(ROUTER_FILE, { statusCode: 200, payload: managedRuntimeResponse(), _subscriptionBooking: context }, OWNER_GLOBALS));
+  const direct = runFunction(ROUTER_FILE, { statusCode: 200, payload: managedRuntimeResponse(),
+    _subscriptionBooking: entitlementContext("managed_runtime_recheck", { managedActivationRequired: false }) }, OWNER_GLOBALS);
+  assert.equal(direct[0]._subscriptionBooking.step, "managed_entitlement_reserve");
+  // Already attempted canonical work is read/reconciled, never reset as a new legacy request.
+  const pending = runFunction(ROUTER_FILE, { payload: [{ ...ownerOperation(), operationId: "idem-operation-1",
+    state: "PENDING_CONFIRMATION", pendingUntil: new Date(Date.now()+60000).toISOString() }],
+    _subscriptionBooking: baseContext("operation_find", { lk2LegacyJoin: true }) }, OWNER_GLOBALS);
+  assertJoinPending(pending);
+});
+
+function persistedManagedJoinAttempt() {
+  const context = managedJoinContext("managed_entitlement_reserve", {
+    managedJoinV2FreePolicyDigest: managedJoinTuple().entitlement.expectations.policyDigest,
+  });
+  const binding = runFunction(ROUTER_FILE, { statusCode: 200, responseUrl: "https://padlhub.su/api/internal/subscriptions/entitlements/reserve",
+    payload: managedJoinReserve(), _subscriptionBooking: context }, OWNER_GLOBALS);
+  assert.ok(binding[3]);
+  return { _id: context.operationKey, operationId: context.operationId, tenantKey: context.tenantKey,
+    actorClientId: context.actorClientId, exerciseId: context.exerciseId, clientSubscriptionId: context.clientSubscriptionId,
+    serviceDate: context.serviceDate, planKey: context.planKey, state: "PENDING_CONFIRMATION", activationState: "NOT_REQUIRED",
+    managedJoinV2: managedJoinTuple(), ...binding[3].payload[1].$set };
+}
+function recoverManagedJoin(row: any, globals: Record<string, unknown> = OWNER_GLOBALS) {
+  const prepared = runFunction(PREPARE_FILE, { payload: { exerciseId: "exercise-target", clientSubscriptionId: "client-subscription-1",
+    operationId: "idem-operation-1", managedJoinV2: managedJoinTuple() },
+    req: { headers: { authorization: "Bearer user-token", "idempotency-key": "idem-operation-1" } } });
+  const profile = runFunction(ROUTER_FILE, { ...prepared[0], statusCode: 200,
+    payload: { id: "client-1", phone: "79990000001" } }, globals);
+  assert.equal(profile[1]._subscriptionBooking.step, "managed_join_owner_recovery_find");
+  assert.deepEqual(profile[1].payload, { tenantKey: "iSkq6G", actorClientId: "client-1", operationId: "idem-operation-1" });
+  return runFunction(ROUTER_FILE, { ...profile[1], payload: [row] }, globals);
+}
+test("managed JOIN lost-provider-response recovery uses original persisted context despite current selector/policy drift", () => {
+  const row = persistedManagedJoinAttempt();
+  assert.equal(JSON.stringify(row.managedJoinV2Recovery).includes("Bearer"), false);
+  const changedGlobals = { ...OWNER_GLOBALS, subscriptions_managed_enforcement_product_ids: [] };
+  const read = recoverManagedJoin(row, changedGlobals);
+  assert.equal(read[0].method, "GET");
+  assert.equal(read[0].url, "https://api.vivacrm.ru/end-user/api/v2/iSkq6G/bookings?size=1000");
+  assert.deepEqual(read[0]._subscriptionBooking.managedRuntime, row.managedJoinV2Recovery.runtime);
+  const booking = flatBooking({ id: "booking-recovered", clientId: "client-1", exerciseId: "exercise-target",
+    exerciseDate: row.serviceDate, status: "CONFIRMED" });
+  const confirmRow = runFunction(ROUTER_FILE, { ...read[0], statusCode: 200, responseUrl: read[0].url,
+    payload: { content: [booking], totalElements: 1 } }, changedGlobals);
+  assert.ok(confirmRow[3], JSON.stringify(confirmRow[4]?.payload));
+  assert.equal(confirmRow[3].payload[0].state, "PENDING_CONFIRMATION");
+  assert.deepEqual(confirmRow[3].payload[0].managedJoinV2Recovery, row.managedJoinV2Recovery);
+  assert.deepEqual(confirmRow[3].payload[0].managedJoinV2, row.managedJoinV2);
+  assertJoinPending(runFunction(ROUTER_FILE, { ...structuredClone(confirmRow[3]), payload: mongoUpdateResult(0) }, changedGlobals));
+  const cup = runFunction(ROUTER_FILE, { ...confirmRow[3], payload: mongoUpdateResult() }, changedGlobals);
+  assert.equal(cup[0].url, "https://padlhub.su/api/internal/subscriptions/entitlements/confirm");
+  assert.equal(cup[0].payload.operationId, row.managedEntitlementOperationId);
+  assert.ok(cup[0].headers["X-Subscription-Owner-Evidence"]);
+  const linked = runFunction(ROUTER_FILE, { ...cup[0], statusCode: 200, responseUrl: cup[0].url,
+    payload: { schemaVersion: 1, outcome: "CONFIRMED", operationState: "CONFIRMED", aggregateRevision: 5,
+      operationId: row.managedEntitlementOperationId, subscriptionInstanceId: row.managedSubscriptionInstanceId } }, changedGlobals);
+  assert.deepEqual(linked[3].payload[0].managedJoinV2Recovery, row.managedJoinV2Recovery);
+  const done = runFunction(ROUTER_FILE, { ...linked[3], payload: mongoUpdateResult() }, changedGlobals);
+  assert.equal(done[4].payload.state, "CONFIRMED");
+});
+test("managed JOIN recovery rejects foreign/corrupt/terminal tuples and ambiguous provider reads without writes", () => {
+  for (const changed of [{ actorClientId: "foreign" }, { exerciseId: "foreign" }, { operationId: "foreign" },
+    { managedJoinV2: { ...managedJoinTuple(), target: { ...managedJoinTuple().target, expectedRevision: 8 } } }]) {
+    const outputs = recoverManagedJoin({ ...persistedManagedJoinAttempt(), ...changed });
+    assert.equal(outputs[4].statusCode, 409);assert.ok(outputs.slice(0,4).every(value => value === null));
+  }
+  for (const changed of [{ managedJoinV2Recovery: undefined }, { state: "RELEASED" },
+    { managedEntitlementState: "COMPENSATED" }, { managedSubscriptionInstanceId: "foreign" }]) {
+    assertJoinPending(recoverManagedJoin({ ...persistedManagedJoinAttempt(), ...changed }));
+  }
+  for (const scenario of ["timeout", "origin", "missing", "duplicate", "foreignActor", "rebooked", "cancelled"]) {
+    const row = persistedManagedJoinAttempt();
+    if (scenario === "rebooked") row.bookingId = "original-booking";
+    const read = recoverManagedJoin(row)[0];
+    const booking = flatBooking({ id: "new-booking", clientId: "client-1", exerciseId: "exercise-target", exerciseDate: row.serviceDate, status: "CONFIRMED" });
+    if (scenario === "foreignActor") booking.clientId = "foreign";
+    if (scenario === "cancelled") booking.status = "CANCELLED";
+    const payload = { content: scenario === "missing" ? [] : scenario === "duplicate" ? [booking, booking] : [booking] };
+    assertJoinPending(runFunction(ROUTER_FILE, { ...read, statusCode: 200,
+      responseUrl: scenario === "origin" ? "https://foreign.invalid" : read.url,
+      ...(scenario === "timeout" ? { error: { code: "ETIMEDOUT" } } : {}), payload }, OWNER_GLOBALS));
+  }
+});
+test("managed JOIN named FREE_ENTITLEMENT gate rejects zero-priced discount rules before reserve", () => {
+  const context = managedJoinContext("managed_join_v2_policy_decision");
+  for (const kind of ["PERCENT_DISCOUNT", "FIXED_DISCOUNT", null]) {
+    assertJoinPending(runFunction(ROUTER_FILE, { _subscriptionBooking: structuredClone(context),
+      _managedSubscriptionPolicyDecision: { eligible: true, policyVersion: 3, usageUnits: 1,
+        benefit: { kind, finalPriceMinor: 0 } } }, OWNER_GLOBALS));
+  }
+});
