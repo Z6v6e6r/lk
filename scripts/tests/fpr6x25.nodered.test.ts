@@ -270,3 +270,34 @@ test("generated first-save partials start once; deadline and reused flags produc
   assert.equal(rejected.statusCode, 422); assert.equal(rejected.mongoUpdate, undefined);
   assert.equal(rejected.payload.error, 'FPR_COMMAND_INVALID');
 });
+
+test("generated backend persists final score, closed round, standings and next draw in one CAS, once", () => {
+  let doc = fixture();
+  doc.params.broadcast = { active: true, operationId: "parallel-broadcast" };
+  const [first, second] = doc.params.fpr6x25.attempts[0].matches;
+  doc = update(doc, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true });
+  assert.equal(doc.params.fpr6x25.attempts[0].status, "running");
+  const before = structuredClone(doc);
+  const command = { id: "stable-auto-close", expectedRevision: 1, action: "score", matchId: second.id,
+    score1: 14, score2: 11, confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true };
+  const run = (document: typeof doc, cmd = command) => recalculate({ payload: structuredClone(document),
+    req: { body: { results: [], params: { fprCommand: cmd } } } });
+  const result = run(doc);
+  assert.equal(result.statusCode, 200); assert.equal(result.mongoQuery["params.fpr6x25.revision"], 1);
+  assert.equal(result.mongoQuery._id, doc._id);
+  doc = applyMongoSet(doc, result.mongoUpdate);
+  assert.equal(doc.params.fpr6x25.revision, 2); assert.equal(doc.params.fpr6x25.audit.length, 2);
+  assert.equal(doc.params.fpr6x25.attempts[0].status, "closed");
+  assert.equal(doc.params.fpr6x25.attempts[1].round, 2); assert.equal(doc.params.fpr6x25.attempts[1].status, "scheduled");
+  assert.equal(doc.standings.length, 8);
+  assert.equal(doc.standings.reduce((n: number, p: { matchesPlayed: number }) => n + p.matchesPlayed, 0), 8);
+  assert.deepEqual(doc.params.broadcast, before.params.broadcast);
+  const replay = run(doc);
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.payload.params.fpr6x25, doc.params.fpr6x25);
+  assert.equal(run(doc, { ...command, id: "stale-auto-close" }).statusCode, 409);
+  assert.equal(run(doc, { ...command, autoCloseRound: false }).statusCode, 409);
+  const invalid = run(before, { ...command, score2: 12 });
+  assert.equal(invalid.statusCode, 422); assert.equal(invalid.mongoUpdate, undefined);
+});
