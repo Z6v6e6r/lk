@@ -87,7 +87,7 @@ function driveOwner(f, request, options = {}) {
     f.calls.push({ kind: 'http', method: msg.method, url: msg.url, body: clone(msg.payload) });
     assert.ok(msg.method === 'GET' || msg.url.startsWith('https://padlhub.su/api/internal/subscriptions/entitlements/'));
     msg.responseUrl = msg.url; msg.statusCode = 200; delete msg.error;
-    if (msg._subscriptionBooking.step === 'profile') msg.payload = { id: f.ctx.actorClientId, phone: '+79990000001' };
+    if (msg._subscriptionBooking.step === 'profile') msg.payload = { id: f.ctx.actorClientId, phone: '+12025550101' /* reserved fictional NANP 555-0101 */ };
     else if (msg._subscriptionBooking.step === 'active_bookings') msg.payload = { content: [] };
     else if (msg._subscriptionBooking.step === 'history_bookings') msg.payload = { content: [{
       id: f.operation.bookingId, clientId: f.operation.actorClientId, exerciseId: f.operation.exerciseId,
