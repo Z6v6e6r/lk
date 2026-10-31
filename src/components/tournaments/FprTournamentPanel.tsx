@@ -11,6 +11,7 @@ import {
 import { apiFetchCommunities, apiFetchCommunityRanking, apiFetchTournamentCommunityBinding,
   type TournamentCommunityBinding } from "../../utils/communityApi";
 import { loadFprCommunityLeague, fprLeagueLabel, type FprLeagueValue, type FprLoadedLeague } from "./fprCommunityLeague";
+import { resolveFprCommunitySelection } from "./fprCommunitySelection";
 import "./fpr6x25.css";
 import { useLkTournamentSession } from "../../utils/useLkTournamentSession";
 import { TournamentBroadcastControl } from "./TournamentBroadcastControl";
@@ -63,7 +64,7 @@ export function FprTournamentSetup({ players, context, onSaved }: {
     void apiFetchCommunities({ clientId: organizerId, phone: organizerPhone }).then(result => {
       if (!active) return;
       if (result.error || !result.data) throw new Error(result.error?.message || "Не удалось загрузить сообщества");
-      setCommunities(result.data.communities.map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name, "ru")));
+      setCommunities(result.data.communities.map(c => ({ id: c.id, name: c.name })));
     }).catch(e => { if (active) setCommunityError(message(e)); })
       .finally(() => { if (active) setCommunityLoading(false); });
     return () => { active = false; };
@@ -71,7 +72,7 @@ export function FprTournamentSetup({ players, context, onSaved }: {
   useEffect(() => {
     let active = true;
     setBindingError(null);
-    if (!sourceExerciseId) { setBinding({ ratingCommunityId: null, publishedCommunities: [] }); setBindingLoading(false); return; }
+    if (!sourceExerciseId) { setBinding(context.communityBinding ?? null); setBindingLoading(false); return; }
     setBindingLoading(true);
     void apiFetchTournamentCommunityBinding(sourceExerciseId).then(result => {
       if (!active) return;
@@ -80,19 +81,16 @@ export function FprTournamentSetup({ players, context, onSaved }: {
     }).catch(e => { if (active) setBindingError(message(e)); })
       .finally(() => { if (active) setBindingLoading(false); });
     return () => { active = false; };
-  }, [sourceExerciseId, reload]);
-  const choices = useMemo(() => binding?.publishedCommunities.length
-    ? binding.publishedCommunities.map(p => ({ id: p.communityId,
-      name: p.communityName || communities.find(c => c.id === p.communityId)?.name || p.communityId }))
-    : communities, [binding, communities]);
-  const boundCommunityId = binding?.ratingCommunityId ?? null;
-  const communityId = boundCommunityId || (choices.some(c => c.id === selectedCommunityId) ? selectedCommunityId : "");
-  const communityName = choices.find(c => c.id === communityId)?.name || communities.find(c => c.id === communityId)?.name || communityId;
+  }, [sourceExerciseId, context.communityBinding, reload]);
+  const { fixed: fixedCommunity, choices, communityId, communityName, publishedNames, error: selectionError } = useMemo(
+    () => resolveFprCommunitySelection(binding, communities, selectedCommunityId),
+    [binding, communities, selectedCommunityId],
+  );
   useEffect(() => { setValues({}); }, [communityId]);
   useEffect(() => {
     let active = true;
     setLeague(null); setLeagueError(null);
-    if (!communityId || bindingLoading || bindingError || !presentPlayers.length) { setLeagueLoading(false); return; }
+    if (!communityId || bindingLoading || bindingError || selectionError || !presentPlayers.length) { setLeagueLoading(false); return; }
     setLeagueLoading(true);
     void loadFprCommunityLeague({ communityId, communityName, players: presentPlayers,
       fetch: async period => {
@@ -105,7 +103,7 @@ export function FprTournamentSetup({ players, context, onSaved }: {
       .catch(e => { if (active) setLeagueError(message(e)); })
       .finally(() => { if (active) setLeagueLoading(false); });
     return () => { active = false; };
-  }, [communityId, communityName, presentPlayers, bindingLoading, bindingError, organizerId, organizerPhone, reload]);
+  }, [communityId, communityName, presentPlayers, bindingLoading, bindingError, selectionError, organizerId, organizerPhone, reload]);
   const get = (p: Player): FprLeagueValue => ({
     ...(league?.values[p.id] ?? { level: p.rating ?? "", points: "", place: "", newcomer: false }), ...values[p.id],
   });
@@ -116,7 +114,7 @@ export function FprTournamentSetup({ players, context, onSaved }: {
     try {
       let payload = pending;
       if (!payload) {
-        if (!league || league.communityId !== communityId || leagueLoading || bindingLoading || bindingError) throw new Error("Дождитесь загрузки рейтинга сообщества");
+        if (!league || league.communityId !== communityId || leagueLoading || bindingLoading || bindingError || selectionError) throw new Error("Дождитесь загрузки рейтинга сообщества");
         const now = new Date().toISOString();
         const publication = binding?.publishedCommunities.find(p => p.communityId === communityId);
         const state = createFprState({ tournamentId: id, players: presentPlayers.map(p => ({
@@ -154,22 +152,22 @@ export function FprTournamentSetup({ players, context, onSaved }: {
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   };
-  const loading = bindingLoading || leagueLoading || (!boundCommunityId && communityLoading);
-  const loadError = bindingError || leagueError || (!boundCommunityId ? communityError : null);
+  const loading = bindingLoading || leagueLoading || (!fixedCommunity && communityLoading);
+  const loadError = bindingError || selectionError || leagueError || (!fixedCommunity ? communityError : null);
   return <div className="fpr-panel">
-    <p>ФПР 6×25 · шесть общих раундов, два запасных. В каждом матче ровно 25 очков на две пары.</p>
     <fieldset disabled={busy || Boolean(pending)}>
-      {boundCommunityId ? <p><strong>Сообщество турнира:</strong> {communityName}</p> : <label>Сообщество для рейтинга
-        <select value={selectedCommunityId} disabled={bindingLoading || communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
+      {fixedCommunity ? <>
+        <p><strong>Опубликован в сообществе:</strong> {publishedNames.length ? publishedNames.join(", ") : communityName}</p>
+        {publishedNames.length > 1 && communityId && <p><strong>Сообщество для рейтинга:</strong> {communityName}</p>}
+      </> : !bindingLoading && !bindingError && <label>Сообщество «Время на друзей» для рейтинга
+        <select value={communityId} disabled={communityLoading} onChange={e => setSelectedCommunityId(e.target.value)}>
           <option value="">Выберите сообщество</option>
           {choices.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}
         </select>
       </label>}
       {loading && <p role="status">Загружаем данные сообщества…</p>}
       {loadError && <p role="alert" className="fpr-error">{loadError} <button type="button" onClick={() => setReload(v => v + 1)}>Повторить загрузку</button></p>}
-      {league && <p aria-live="polite">Рейтинг: {fprLeagueLabel(league)}.{league.missingFromMonth.length > 0
-        ? " В текущем месяце нет данных хотя бы об одном участнике, поэтому для всего состава выбран рейтинг за всё время." : " Данные текущего месяца есть у всех участников."}</p>}
-      {!loading && !loadError && !choices.length && !boundCommunityId && <p>Нет доступных сообществ для выбора.</p>}
+      {!loading && !loadError && !choices.length && !fixedCommunity && <p>Нет доступных сообществ «Время на друзей» для выбора.</p>}
       <label className="fpr-check"><input type="checkbox" checked={reserve} onChange={e => setReserve(e.target.checked)} /> Разрешены 7-й и 8-й раунды при выполнении порога времени</label>
       <p>В составе: {presentPlayers.length} из {players.length}. Кортов одновременно: {Math.floor(presentPlayers.length / 4)}. Отдыхает в раунде: {presentPlayers.length % 4}.</p>
       {Array.from({ length: Math.floor(presentPlayers.length / 4) }, (_, i) => <label key={i}>Название корта {i + 1}<input value={courtValues[i] ?? `Корт №${i + 1}`} onChange={e => setCourtValues(v => ({ ...v, [i]: e.target.value }))} /></label>)}
@@ -189,7 +187,6 @@ export function FprTournamentSetup({ players, context, onSaved }: {
         </table></div>
       </details>
     </fieldset>
-    <p>Посев и жребий отдыха фиксируются при создании. Очки сообщества начисляются по обычным правилам после завершения и публикации турнира в этом сообществе. Уровень игрока эта механика не меняет.</p>
     {error && <p role="alert" className="fpr-error">{error}</p>}
     <button className="section-cta" type="button" disabled={busy || (!pending && (loading || Boolean(loadError) || !league)) || presentPlayers.length < 4 || presentPlayers.length > 28 || !organizerId} onClick={() => void save()}>
       {busy ? "Сохраняем протокол…" : pending ? "Повторить создание с тем же ID" : "Создать протокол ФПР 6×25"}
@@ -353,8 +350,6 @@ export function FprTournamentManager({ data, onClose, onDataChange }: {
     <div className="tournament-manager fpr-panel">
       {!state ? <p role="alert">Протокол ФПР повреждён или имеет другую версию. Загрузите его с сервера.</p> : <>
         <div className="tournament-manager-meta"><span className="tournament-manager-chip strong">ФПР 6×25</span><span className="tournament-manager-chip">25 очков на матч</span><span className="tournament-manager-chip">{state.players.length} игроков</span><span className="tournament-manager-chip">Кортов: {state.courts.length}</span></div>
-        <p><b>{finished ? state.status === "completed" ? "Турнир состоялся" : "Турнир не завершён" : "Турнир в работе"}</b> · полных раундов: {completed}/6{completed > 6 ? ` (+${completed - 6})` : ""} · версия записи: {state.revision}</p>
-        <p>Конец события: {new Date(state.endsAt).toLocaleString("ru-RU")}. Игровой дедлайн: {new Date(Date.parse(state.endsAt) - 180_000).toLocaleTimeString("ru-RU")}.</p>
         {!finished && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && <p role="alert" className="fpr-error">Игровой дедлайн наступил. Доиграйте начатый розыгрыш и остановите игру. При неполном матче исключите весь общий раунд кнопкой завершения события.</p>}
         <div className="tournament-tabs" role="group" aria-label="Раздел протокола">
           {([["round", "Турнир"], ["table", "Таблица"], ["protocol", "Протокол"]] as const).map(([key, label]) => <button className={`tournament-tab${tab === key ? " active" : ""}`} type="button" key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
