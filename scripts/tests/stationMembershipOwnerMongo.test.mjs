@@ -17,7 +17,7 @@ async function fixture(t) {
   const name = 'r1_station_lifetime_' + crypto.randomUUID().replaceAll('-', '');
   await Promise.all(clients.map(c => c.connect()));
   t.after(async () => { try { await clients[0].db(name).dropDatabase(); } finally { await Promise.all(clients.map(c => c.close())); } });
-  const dbs = clients.map(c => c.db(name)); const {_id,...document}=community(); await dbs[0].collection('lk_communities').insertOne(document); return dbs;
+  const dbs = clients.map(c => c.db(name)); const document=community(); delete document._id; await dbs[0].collection('lk_communities').insertOne(document); return dbs;
 }
 async function transition(db, state) {
   const c = await db.collection('lk_communities').findOne({ id: 'station-community' });
@@ -93,7 +93,7 @@ test('physical actual create pipeline preserves protected identity and keeps una
   const graph=protectStationCreate([{id:'create',type:'function',name:'Build community create docs',outputs:6,wires:[['store'],[],[],[],[],[]],func:common+source.split('const fnCreate = `${commonHelpers}')[1].split('\n`;')[0]},
     {id:'store',type:'mongodb4',collection:'lk_communities',operation:'updateOne',clientNode:'unused-fixture-client'}],stationOwnerIds,'unused-fixture-client');
   for (const [enabled,lifetime,type,protectedRow] of [[true,undefined,'STATION',true],[false,{version:1,revision:1,players:[{playerId:'player-a',epoch:1,state:'LEFT'}]},'FRIENDS',true],[false,null,'STATION',true],[false,undefined,'STATION',false]]) {
-    const {_id,...replacement}=community();
+    const replacement=community(); delete replacement._id;
     await collection.replaceOne({id:'station-community'},{...replacement,communityType:type,...(lifetime===undefined?{}:{stationMembershipLifetime:lifetime})});
     const before=await collection.findOne({id:'station-community'});
     const [write]=new Function('msg','env',graph[0].func)({payload:{id:'station-community',name:'Synthetic',description:'Synthetic',city:'Synthetic',creator:{id:'player-a'}}},{get:()=>String(enabled)});
@@ -116,7 +116,7 @@ test('physical candidate before adoption failure retains epoch and Mongo identit
   assert.deepEqual(await db[3].collection('lk_station_membership_admissions').findOne({_id:candidate._id}),candidate);
   const fresh=(await run(db[0],'admission',admissionBody(2))).payload;
   await db[1].collection('lk_communities').deleteOne({id:'station-community'}); // fixture-only simulates forbidden foreign deletion
-  const {_id,...replacement}=community();
+  const replacement=community(); delete replacement._id;
   await db[1].collection('lk_communities').insertOne({...replacement,stationMembershipLifetime:{version:1,revision:0,players:[]}});
   assert.equal((await run(db[2],'confirmation',confirmationBody(fresh,81))).payload.reason,'STATION_IDENTITY_CHANGED');
 });

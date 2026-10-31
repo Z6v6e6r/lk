@@ -117,7 +117,8 @@ export function smAdmission(communities, actor, request) {
 }
 export function smValidAdmission(doc, actor, operationId) {
   if (!smObject(doc) || doc._id !== smAdmissionKey(actor, operationId) || !smEqual(doc.actor, actor) || doc.operationId !== operationId) return false;
-  const { _id, bindingSha256, ...core } = doc;
+  const { bindingSha256, ...core } = doc;
+  delete core._id;
   return bindingSha256 === smHash('station-membership-admission:v1', core);
 }
 export function smClaim(admission, request) {
