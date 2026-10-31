@@ -725,8 +725,27 @@ actual exercise-rejection receipt only after the PRECREATE_ATTEMPTING acknowledg
 handoff. It requires the original request operation, placeholder, actor, subscription/instance,
 policy, station, room, date, start, duration and exercise type to match the stored recovery target.
 A created, owned, adopted or recovered exercise cannot use this abort proof. Inherited receipts
-are discarded. The first response observation time is retained through CUP retry; expiry or loss
-of that server context requires reconciliation, never a new timestamp or inferred rejection.
+are discarded. In signed mode, the exact rejection facts and original observation time are first
+CAS-persisted on the existing booking operation, from `PRECREATE_ATTEMPTING` to
+`PRECREATE_RECONCILIATION_REQUIRED`. The CAS binds the tenant, actor, LK/CUP operations,
+subscription instance, original placeholder and full recovery target, with no created/recovered
+booking binding. It never stores a token, signature, secret or raw provider response.
+
+Only an exact readback of that immutable marker permits CUP release. A duplicate or lost Mongo
+acknowledgement reads the first marker without overwriting its observation time. A fresh request
+after context loss can resume release only within the original 60-second producer evidence window
+(the receiver may require a shorter window), without a new CREATE POST. After CUP acknowledgement,
+an exact marker CAS changes the existing operation to `RELEASED`; a lost local acknowledgement
+reads back that result. A concurrent created/recovered binding or a mismatched marker stays pending.
+Older source versions see reconciliation state and cannot resume CREATE from it.
+
+An exact canonical `RELEASED` marker and matching release reason can replay the stored failure
+after that window, without signing a new proof or calling CUP. Malformed, future-dated or mismatched
+terminal markers stay pending. Unfinished release with expired evidence stays pending and is never
+re-dated. Persisting rejection does not provide
+arbitrary-duration recovery: ph-admin validates proof freshness even for a terminal release replay.
+Post-expiry recovery still needs a separately reviewed canonical release readback/attestation
+contract. No new public endpoint, usage ledger, state enum or provider call is introduced here.
 408/409/429/5xx, transport failures, empty history after an expired attempt, local pre-write
 failures and generic operation failure are not signed. They remain pending in enabled mode. Existing
 precreated-exercise reconciliation protection is unchanged, even after a definite booking refusal.
@@ -736,5 +755,5 @@ Stop signal: `SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED` or
 and reconcile; do not disable evidence validation to force a release. Rollback is a reviewed
 source rollback with compatible receiver mode, never automatic compensation. No deployment,
 secret creation, provider write or flag activation is part of this source change. Full strict-mode
-rollout still requires local-abort/context-loss recovery contracts, physical Mongo verification and
+rollout still requires local-abort/post-expiry recovery contracts, physical Mongo verification and
 provider acceptance. Unit fixtures and green CI do not establish those outcomes.

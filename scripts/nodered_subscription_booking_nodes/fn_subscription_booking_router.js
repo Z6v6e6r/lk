@@ -9,7 +9,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "61a7e8f107581fadd9dd828bdb94a91ba8e6c46766dcd7d13d1db0f48a8ac6b6", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "58f38846a5915449f2009cfdea321d7be2df536d4e8a7d84dab30d3d9d438016", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -523,6 +523,12 @@ const recordOwnerReadback = (ctx, kind, bookingId, observedAt = new Date().toISO
     exerciseId: ctx.exerciseId, subscriptionId: ctx.clientSubscriptionId,
     observedAt,
   };
+};
+
+const ownerEvidenceEnabled = () => {
+  try {
+    return [true, "true"].includes(global.get("subscriptions_owner_evidence_enabled"));
+  } catch { return false; }
 };
 
 const prepareManagedEntitlementReserve = (ctx) => {
@@ -1552,13 +1558,147 @@ const preparePrecreatedRecoveryBind = (ctx, operation, recoveredExerciseId) => {
   });
 };
 
-const preparePrecreateAbortUpdate = (ctx) => {
-  const nowIso = new Date().toISOString();
-  return prepareMongoUpdate(ctx, "operation_precreate_abort", {
+const precreateRejectionPending = (ctx) => finishPending(ctx,
+  "Подтверждённый отказ создания игры ожидает точной сверки резерва", {
+    code: "SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED",
+  });
+
+// This is evidence on the existing booking operation, never a second usage ledger.
+// Reconciliation state also makes an older worker fail closed after rollback.
+const precreateRejectionBinding = (ctx) => {
+  const target = precreateRecoveryTarget({ ...ctx, caller: "split_create_preflight" });
+  if (!target || !toStr(ctx.operationKey) || !toStr(ctx.operationId)
+    || ctx.tenantKey !== "iSkq6G" || ctx.exerciseId !== `split-create:${ctx.operationId}`
+    || ctx.precreatedEntitlementReserved || !toStr(ctx.planKey)) return null;
+  return {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
+    tenantKey: ctx.tenantKey,
+    actorClientId: ctx.actorClientId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    exerciseId: ctx.exerciseId,
+    serviceDate: ctx.serviceDate,
+    planKey: ctx.planKey,
+    managedSubscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+    managedEnvironment: ctx.managedEnforcement?.environment || ctx.managedEnvironment || "PROD",
+    "managedDecision.policyDigest": target.policyDigest,
+    precreateRecoveryTarget: target,
+    precreatedEntitlementReserved: { $in: [null, false] },
+    precreateRecoveredAt: { $exists: false },
+    bookingId: { $in: [null, ""] },
+    upstreamBookingId: { $in: [null, ""] },
+  };
+};
+
+const preparePrecreateRejectionRead = (ctx) => {
+  ctx.step = "operation_precreate_rejection_read";
+  msg._subscriptionBooking = ctx;
+  msg.payload = { _id: ctx.operationKey, operationId: ctx.operationId,
+    tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId };
+  delete msg.error;
+  return emit(OUTPUT_MONGO_FIND);
+};
+
+const preparePrecreateRejectionPersist = (ctx) => {
+  const binding = precreateRejectionBinding(ctx);
+  const proof = managedOwnerEvidence(ctx, "PROVIDER_REJECTED", null);
+  const statusCode = Number(ctx.finalFailure?.statusCode);
+  if (!binding || !proof.ok || ![400, 401, 403, 404, 405, 410, 415, 422].includes(statusCode)) {
+    return precreateRejectionPending(ctx);
+  }
+  // Store only normalized facts. Neither a signed header nor an actor token is durable evidence.
+  const rejection = {
+    schemaVersion: 1,
+    reason: "PROVIDER_REJECTED",
+    operationId: ctx.operationId,
+    entitlementOperationId: ctx.managedEntitlementOperationId,
+    providerStatusCode: statusCode,
+    observedAt: ctx.ownerBookingReadback.observedAt,
+    tenantKey: ctx.tenantKey,
+    actorClientId: ctx.actorClientId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    subscriptionInstanceId: binding.managedSubscriptionInstanceId,
+    placeholderExerciseId: ctx.exerciseId,
+    recoveryTarget: binding.precreateRecoveryTarget,
+  };
+  return prepareMongoUpdate(ctx, "operation_precreate_rejection_persist", {
+    ...binding,
     state: "PRECREATE_ATTEMPTING",
     managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    precreateRejection: { $exists: false },
+  }, {
+    $set: {
+      state: "PRECREATE_RECONCILIATION_REQUIRED",
+      precreateReconciliationCode: "VIVA_EXERCISE_CREATE_REJECTED",
+      precreateRejection: rejection,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+};
+
+const resumePrecreateRejection = (ctx, operation) => {
+  const binding = precreateRejectionBinding(ctx);
+  const rejection = operation?.precreateRejection;
+  const keys = "actorClientId,clientSubscriptionId,entitlementOperationId,observedAt,operationId,placeholderExerciseId,providerStatusCode,reason,recoveryTarget,schemaVersion,subscriptionInstanceId,tenantKey";
+  const expectedFields = binding && ["_id", "operationId", "tenantKey", "actorClientId",
+    "clientSubscriptionId", "exerciseId", "serviceDate", "planKey", "managedSubscriptionInstanceId", "managedEnvironment"];
+  if (!ownerEvidenceEnabled() || !binding || !isObj(operation) || !isObj(rejection)
+    || Object.keys(rejection).sort().join(",") !== keys
+    || !expectedFields.every((key) => operation[key] === binding[key])
+    || !["PRECREATE_RECONCILIATION_REQUIRED", "RELEASED"].includes(operation.state)
+    || operation.precreateReconciliationCode !== "VIVA_EXERCISE_CREATE_REJECTED"
+    || (operation.state === "RELEASED" && operation.releaseReason !== "VIVA_EXERCISE_CREATE_REJECTED")
+    || operation.precreatedEntitlementReserved || operation.precreateRecoveredAt
+    || operation.bookingId || operation.upstreamBookingId
+    || operation.managedDecision?.policyDigest !== binding["managedDecision.policyDigest"]
+    || !exactPrecreateRecoveryTarget(operation.precreateRecoveryTarget, binding.precreateRecoveryTarget)
+    || !exactPrecreateRecoveryTarget(rejection.recoveryTarget, binding.precreateRecoveryTarget)
+    || rejection.schemaVersion !== 1 || rejection.reason !== "PROVIDER_REJECTED"
+    || rejection.operationId !== ctx.operationId || rejection.tenantKey !== ctx.tenantKey
+    || rejection.actorClientId !== ctx.actorClientId || rejection.clientSubscriptionId !== ctx.clientSubscriptionId
+    || rejection.subscriptionInstanceId !== binding.managedSubscriptionInstanceId
+    || rejection.placeholderExerciseId !== ctx.exerciseId
+    || typeof rejection.entitlementOperationId !== "string"
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(rejection.entitlementOperationId)
+    || rejection.entitlementOperationId !== operation.managedEntitlementOperationId
+    || (ctx.managedEntitlementOperationId && ctx.managedEntitlementOperationId !== rejection.entitlementOperationId)
+    || ![400, 401, 403, 404, 405, 410, 415, 422].includes(rejection.providerStatusCode)
+    || !finiteDate(rejection.observedAt)
+    || Date.parse(rejection.observedAt) > Date.now()
+    || finiteDate(rejection.observedAt).toISOString() !== rejection.observedAt) {
+    return precreateRejectionPending(ctx);
+  }
+  ctx.managedEntitlementOperationId = rejection.entitlementOperationId;
+  ctx.managedSubscriptionInstanceId = rejection.subscriptionInstanceId;
+  ctx.caller = "split_create_abort";
+  ctx.durablePrecreateRejection = rejection;
+  ctx.finalFailure = { statusCode: rejection.providerStatusCode,
+    message: "Viva отклонила создание игры", rawCode: "VIVA_EXERCISE_CREATE_REJECTED" };
+  if (operation.state === "RELEASED") {
+    // Exact local terminal acknowledgement is a read-only result, not authority for a new proof.
+    return finishError(ctx, rejection.providerStatusCode, ctx.finalFailure.message,
+      { code: ctx.finalFailure.rawCode });
+  }
+  recordOwnerReadback(ctx, "PROVIDER_REJECTED", null, rejection.observedAt);
+  if (!managedOwnerEvidence(ctx, "PROVIDER_REJECTED", null).ok) return precreateRejectionPending(ctx);
+  ctx.entitlementReleaseNext = "precreate_abort";
+  return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+};
+
+const preparePrecreateAbortUpdate = (ctx) => {
+  const nowIso = new Date().toISOString();
+  const binding = ctx.durablePrecreateRejection ? precreateRejectionBinding(ctx) : null;
+  if (ctx.durablePrecreateRejection && !binding) return precreateRejectionPending(ctx);
+  return prepareMongoUpdate(ctx, "operation_precreate_abort", {
+    ...(binding || {}),
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: ctx.durablePrecreateRejection ? "PRECREATE_RECONCILIATION_REQUIRED" : "PRECREATE_ATTEMPTING",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    ...(ctx.durablePrecreateRejection ? {
+      precreateReconciliationCode: "VIVA_EXERCISE_CREATE_REJECTED",
+      precreateRejection: ctx.durablePrecreateRejection,
+    } : {}),
   }, {
     $set: {
       state: "RELEASED",
@@ -1605,6 +1745,8 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     managedSubscriptionInstanceId: "",
     managedEntitlementState: "",
     managedEntitlementConfirmedAt: "",
+    precreateRejection: "",
+    precreateReconciliationCode: "",
   },
 });
 
@@ -1847,8 +1989,24 @@ if (ctx.step === "managed_precreate_abort" && ctx.caller === "split_create_abort
       code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISSING",
     });
   }
+  if (ownerEvidenceEnabled() && ctx.precreatedEntitlementReserved !== true) {
+    return preparePrecreateRejectionPersist(ctx);
+  }
   ctx.entitlementReleaseNext = "precreate_abort";
   return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+}
+
+if (ctx.step === "operation_precreate_rejection_persist") {
+  // A lost acknowledgement may hide a committed CAS. Read its exact immutable result, never
+  // retry the persistence with a new observation time or dispatch on an ambiguous acknowledgement.
+  return preparePrecreateRejectionRead(ctx);
+}
+
+if (ctx.step === "operation_precreate_rejection_read") {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1) {
+    return precreateRejectionPending(ctx);
+  }
+  return resumePrecreateRejection(ctx, msg.payload[0]);
 }
 
 if (ctx.step === "profile") {
@@ -2696,6 +2854,10 @@ if (ctx.step === "operation_find") {
     });
   }
   if (ctx.caller === "split_create_preflight" && operation
+    && toStr(operation.operationId) === ctx.operationId && operation.precreateRejection) {
+    return resumePrecreateRejection(ctx, operation);
+  }
+  if (ctx.caller === "split_create_preflight" && operation
     && toStr(operation.operationId) === ctx.operationId
     && operation.state === "PRECREATE_RESERVED") {
     const exactReservation = normalizeId(operation.exerciseId) === normalizeId(ctx.exerciseId)
@@ -3012,6 +3174,7 @@ if (ctx.step === "operation_precreated_attempt") {
 
 if (ctx.step === "operation_precreate_abort") {
   if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    if (ctx.durablePrecreateRejection) return preparePrecreateRejectionRead(ctx);
     return finishPending(ctx, "Льгота освобождена, но локальный резерв требует сверки", {
       code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ABORT_BIND_PENDING",
     });

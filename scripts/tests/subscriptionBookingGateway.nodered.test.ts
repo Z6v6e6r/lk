@@ -4024,13 +4024,56 @@ function rejectedCreate(attempt = boundCreateAttempt(), statusCode = 422, error?
     payload: { code: "SYNTHETIC_REJECTED" }, ...(error ? { error } : {}) }, OWNER_GLOBALS);
 }
 
+function persistedCreateRejection(abort = rejectedCreate()[3]) {
+  const ctx = structuredClone(abort._subscriptionBooking);
+  const persist = runFunction(ROUTER_FILE, abort, OWNER_GLOBALS);
+  assert.equal(persist[0], null, "CUP cannot be called before durable rejection");
+  assert.equal(persist[3]._subscriptionBooking.step, "operation_precreate_rejection_persist");
+  const operation = {
+    _id: ctx.operationKey, operationId: ctx.operationId, tenantKey: ctx.tenantKey,
+    actorClientId: ctx.actorClientId, clientSubscriptionId: ctx.clientSubscriptionId,
+    exerciseId: ctx.exerciseId, serviceDate: ctx.serviceDate, planKey: ctx.planKey,
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedSubscriptionInstanceId,
+    managedEnvironment: "PROD", managedDecision: { policyDigest: ctx.managedRuntime.policyDigest },
+    precreateRecoveryTarget: structuredClone(ctx.precreateRecoveryTarget),
+    ...structuredClone(persist[3].payload[1].$set),
+  };
+  assert.equal(operation.state, "PRECREATE_RECONCILIATION_REQUIRED");
+  assert.equal(operation.precreateRejection.observedAt, ctx.ownerBookingReadback.observedAt);
+  const serialized = JSON.stringify(persist[3].payload);
+  assert.ok(!serialized.includes(OWNER_SECRET));
+  assert.ok(!serialized.includes("Bearer"));
+  assert.ok(!serialized.includes("release-v1."));
+  const read = runFunction(ROUTER_FILE, { payload: mongoUpdateResult(),
+    _subscriptionBooking: structuredClone(persist[3]._subscriptionBooking) }, OWNER_GLOBALS);
+  assert.equal(read[0], null);
+  assert.equal(read[1]._subscriptionBooking.step, "operation_precreate_rejection_read");
+  return { ctx, persist, read, operation };
+}
+
+function resumeCreateRejection(ctx: any, operation: any, freshRequest = false) {
+  const restored = structuredClone(ctx);
+  delete restored.ownerBookingReadback;
+  delete restored.durablePrecreateRejection;
+  if (freshRequest) {
+    restored.caller = "split_create_preflight";
+    restored.step = "operation_find";
+    delete restored.managedEntitlementOperationId;
+    delete restored.managedSubscriptionInstanceId;
+  } else restored.step = "operation_precreate_rejection_read";
+  return runFunction(ROUTER_FILE, { payload: [structuredClone(operation)],
+    _subscriptionBooking: restored }, OWNER_GLOBALS);
+}
+
 test("bound split CREATE definitive rejection carries exact owner proof through release and local CAS", () => {
   for (const status of [400, 401, 403, 404, 405, 410, 415, 422]) {
     const rejected = rejectedCreate(undefined, status);
     const abort = rejected[3];
     assert.equal(abort._subscriptionBooking.step, "managed_precreate_abort");
     const observedAt = abort._subscriptionBooking.ownerBookingReadback.observedAt;
-    const release = runFunction(ROUTER_FILE, abort, OWNER_GLOBALS);
+    const persisted = persistedCreateRejection(abort);
+    const release = resumeCreateRejection(persisted.ctx, persisted.operation);
     verifyOwnerWire(release[0], "PROVIDER_REJECTED");
     assert.equal(release[0]._subscriptionBooking.ownerBookingReadback.observedAt, observedAt);
     const released = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
@@ -4038,7 +4081,8 @@ test("bound split CREATE definitive rejection carries exact owner proof through 
       subscriptionInstanceId: "subscription-instance-1", operationState: "FAILED", aggregateRevision: 3,
     }, _subscriptionBooking: release[0]._subscriptionBooking }, OWNER_GLOBALS);
     assert.equal(released[3]._subscriptionBooking.step, "operation_precreate_abort");
-    assert.equal(released[3].payload[0].state, "PRECREATE_ATTEMPTING");
+    assert.equal(released[3].payload[0].state, "PRECREATE_RECONCILIATION_REQUIRED");
+    assert.deepEqual(released[3].payload[0].precreateRejection, persisted.operation.precreateRejection);
     assert.equal(released[3].payload[1].$set.state, "RELEASED");
   }
 });
@@ -4092,17 +4136,148 @@ test("split abort never signs ambiguous outcomes, changed lineage or a previousl
 });
 
 test("split rejection retry retains original timestamp and cannot release after evidence expiry", () => {
-  const rejected = rejectedCreate()[3];
-  const abortContext = structuredClone(rejected._subscriptionBooking);
-  const release = runFunction(ROUTER_FILE, rejected, OWNER_GLOBALS);
+  const persisted = persistedCreateRejection();
+  const release = resumeCreateRejection(persisted.ctx, persisted.operation);
   const token = verifyOwnerWire(release[0], "PROVIDER_REJECTED");
   const lost = runFunction(ROUTER_FILE, { statusCode: 504, payload: {},
     _subscriptionBooking: release[0]._subscriptionBooking }, OWNER_GLOBALS);
   assert.equal(lost[3], null);
   assert.equal(lost[4].statusCode, 202);
-  const retry = runFunction(ROUTER_FILE, { _subscriptionBooking: abortContext }, OWNER_GLOBALS);
+  const retry = resumeCreateRejection(persisted.ctx, persisted.operation, true);
   assert.equal(verifyOwnerWire(retry[0], "PROVIDER_REJECTED"), token);
-  abortContext.step = "managed_precreate_abort";
-  abortContext.ownerBookingReadback.observedAt = new Date(Date.now() - 61_000).toISOString();
-  assertOwnerPending(runFunction(ROUTER_FILE, { _subscriptionBooking: abortContext }, OWNER_GLOBALS));
+  persisted.operation.precreateRejection.observedAt = new Date(Date.now() - 61_000).toISOString();
+  assertOwnerPending(resumeCreateRejection(persisted.ctx, persisted.operation, true));
+});
+
+test("durable rejection CAS binds the canonical attempt and loses safely to creation or recovery", () => {
+  const persisted = persistedCreateRejection();
+  const query = persisted.persist[3].payload[0];
+  for (const key of ["_id", "operationId", "tenantKey", "actorClientId", "clientSubscriptionId",
+    "exerciseId", "serviceDate", "planKey", "managedEntitlementOperationId", "managedSubscriptionInstanceId",
+    "managedEnvironment", "precreateRecoveryTarget"]) {
+    assert.deepEqual(query[key], persisted.operation[key], key);
+  }
+  assert.equal(query.state, "PRECREATE_ATTEMPTING");
+  assert.deepEqual(query.precreateRejection, { $exists: false });
+  assert.deepEqual(query.precreatedEntitlementReserved, { $in: [null, false] });
+  assert.deepEqual(query.precreateRecoveredAt, { $exists: false });
+  assert.deepEqual(query.bookingId, { $in: [null, ""] });
+  assert.deepEqual(query.upstreamBookingId, { $in: [null, ""] });
+  assert.equal(query["managedDecision.policyDigest"], persisted.ctx.managedRuntime.policyDigest);
+  for (const acknowledgement of [{ payload: mongoUpdateResult(0) }, { error: { message: "Mongo result lost" } }]) {
+    const read = runFunction(ROUTER_FILE, { ...acknowledgement,
+      _subscriptionBooking: structuredClone(persisted.persist[3]._subscriptionBooking) }, OWNER_GLOBALS);
+    assert.equal(read[0], null);
+    assert.equal(read[1]._subscriptionBooking.step, "operation_precreate_rejection_read");
+    const advanced = { ...persisted.operation, state: "PENDING_CONFIRMATION",
+      exerciseId: "created-exercise", precreatedEntitlementReserved: true };
+    assertOwnerPending(runFunction(ROUTER_FILE, { payload: [advanced],
+      _subscriptionBooking: read[1]._subscriptionBooking }, OWNER_GLOBALS));
+  }
+});
+
+test("lost persistence acknowledgement and duplicate rejection recover the first immutable observation", () => {
+  const persisted = persistedCreateRejection();
+  const oldTime = new Date(Date.now() - 5_000).toISOString();
+  persisted.operation.precreateRejection.observedAt = oldTime;
+  const duplicate = structuredClone(persisted.ctx);
+  duplicate.step = "managed_precreate_abort";
+  duplicate.ownerBookingReadback.observedAt = new Date().toISOString();
+  const attempt = runFunction(ROUTER_FILE, { _subscriptionBooking: duplicate }, OWNER_GLOBALS);
+  assert.deepEqual(attempt[3].payload[0].precreateRejection, { $exists: false });
+  const read = runFunction(ROUTER_FILE, { payload: mongoUpdateResult(0),
+    _subscriptionBooking: attempt[3]._subscriptionBooking }, OWNER_GLOBALS);
+  const resumed = runFunction(ROUTER_FILE, { payload: [persisted.operation],
+    _subscriptionBooking: read[1]._subscriptionBooking }, OWNER_GLOBALS);
+  verifyOwnerWire(resumed[0], "PROVIDER_REJECTED");
+  assert.equal(resumed[0]._subscriptionBooking.ownerBookingReadback.observedAt, oldTime);
+  const afterCrash = resumeCreateRejection(persisted.ctx, persisted.operation, true);
+  assert.equal(afterCrash[0].url, "https://padlhub.su/api/internal/subscriptions/entitlements/release");
+  assert.equal(afterCrash[2], null);
+  assert.equal(afterCrash[3], null);
+});
+
+test("CUP completion and lost local acknowledgement read back exact RELEASED state without another POST", () => {
+  const persisted = persistedCreateRejection();
+  const release = resumeCreateRejection(persisted.ctx, persisted.operation);
+  const local = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
+    schemaVersion: 1, outcome: "RELEASED", replayed: true, operationId: "booking:owner-create-abort",
+    subscriptionInstanceId: "subscription-instance-1", operationState: "FAILED", aggregateRevision: 3,
+  }, _subscriptionBooking: release[0]._subscriptionBooking }, OWNER_GLOBALS);
+  const read = runFunction(ROUTER_FILE, { error: { message: "Mongo acknowledgement lost" },
+    _subscriptionBooking: local[3]._subscriptionBooking }, OWNER_GLOBALS);
+  assert.equal(read[0], null);
+  const completed = { ...persisted.operation, ...local[3].payload[1].$set };
+  const done = runFunction(ROUTER_FILE, { payload: [completed],
+    _subscriptionBooking: read[1]._subscriptionBooking }, OWNER_GLOBALS);
+  assert.equal(done[0], null);
+  assert.equal(done[3], null);
+  assert.equal(done[4].statusCode, 422);
+  assert.equal(done[4].payload.details.code, "VIVA_EXERCISE_CREATE_REJECTED");
+  assert.equal(resumeCreateRejection(persisted.ctx, completed, true)[0], null);
+});
+
+test("exact terminal rejection replays after TTL without signing while tampered terminal markers remain pending", () => {
+  const persisted = persistedCreateRejection();
+  const terminal = { ...persisted.operation, state: "RELEASED", releaseReason: "VIVA_EXERCISE_CREATE_REJECTED" };
+  terminal.precreateRejection.observedAt = new Date(Date.now() - 120_000).toISOString();
+  const restored = { ...structuredClone(persisted.ctx), caller: "split_create_preflight", step: "operation_find" };
+  delete restored.ownerBookingReadback;
+  const result = runFunction(ROUTER_FILE, { payload: [terminal], _subscriptionBooking: restored }, {
+    ...OWNER_GLOBALS,
+    crypto: { createHmac() { throw new Error("terminal readback must not sign"); } },
+    subscriptions_owner_evidence_secret: undefined,
+  });
+  assert.equal(result[0], null);
+  assert.equal(result[1], null);
+  assert.equal(result[2], null);
+  assert.equal(result[3], null);
+  assert.equal(result[4].statusCode, 422);
+  assert.equal(result[4].payload.details.code, "VIVA_EXERCISE_CREATE_REJECTED");
+  const mutations: Array<(operation: any) => void> = [
+    o => { o.releaseReason = "OTHER_REASON"; },
+    o => { o.precreateRejection.entitlementOperationId = "booking:other"; },
+    o => { o.precreateRejection.entitlementOperationId = o.managedEntitlementOperationId = ""; },
+    o => { o.precreateRejection.entitlementOperationId = o.managedEntitlementOperationId = "invalid id"; },
+    o => { o.precreateRejection.entitlementOperationId = o.managedEntitlementOperationId = 123; },
+    o => { o.precreateRejection.recoveryTarget.roomId = "other-room"; },
+    o => { o.precreateRejection.observedAt = "not-a-date"; },
+    o => { o.precreateRejection.observedAt = new Date(Date.now() + 60_000).toISOString(); },
+    o => { o.state = "PRECREATE_RECONCILIATION_REQUIRED"; },
+  ];
+  for (const mutate of mutations) {
+    const changed = structuredClone(terminal);
+    mutate(changed);
+    assertOwnerPending(resumeCreateRejection(persisted.ctx, changed, true));
+  }
+});
+
+test("durable recovery refuses forged tuples, stale facts and disabled signing without provider or Mongo writes", () => {
+  const persisted = persistedCreateRejection();
+  const mutations: Array<(operation: any) => void> = [
+    o => { o._id = "another-operation-key"; },
+    o => { o.actorClientId = "another-actor"; },
+    o => { o.tenantKey = "another-tenant"; },
+    o => { o.managedEntitlementOperationId = "booking:another"; },
+    o => { o.managedSubscriptionInstanceId = "another-instance"; },
+    o => { o.precreateRecoveryTarget.roomId = "another-room"; },
+    o => { o.precreateRejection.actorClientId = "another-actor"; },
+    o => { o.precreateRejection.entitlementOperationId = "booking:another"; },
+    o => { o.precreateRejection.recoveryTarget.roomId = "another-room"; },
+    o => { o.precreateRejection.providerStatusCode = 409; },
+    o => { o.precreateRejection.observedAt = new Date(Date.now() + 60_000).toISOString(); },
+    o => { o.precreateRejection.observedAt = new Date(Date.now() - 61_000).toISOString(); },
+    o => { o.precreateRejection.signature = "must-not-be-stored"; },
+    o => { o.precreatedEntitlementReserved = true; },
+    o => { o.precreateRecoveredAt = new Date().toISOString(); },
+    o => { o.bookingId = "created-booking"; },
+  ];
+  for (const mutate of mutations) {
+    const operation = structuredClone(persisted.operation);
+    mutate(operation);
+    assertOwnerPending(resumeCreateRejection(persisted.ctx, operation, true));
+  }
+  const restored = { ...structuredClone(persisted.ctx), caller: "split_create_preflight", step: "operation_find" };
+  assertOwnerPending(runFunction(ROUTER_FILE, { payload: [persisted.operation],
+    _subscriptionBooking: restored }, MANAGED_GLOBALS));
 });
