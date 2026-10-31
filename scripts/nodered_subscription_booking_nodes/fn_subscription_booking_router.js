@@ -9,7 +9,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "58f38846a5915449f2009cfdea321d7be2df536d4e8a7d84dab30d3d9d438016", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "16c55e521a99d038a7701d9cf029a9a7a6f1e1af9c288dd39c0a2d7d03c015e3", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -1599,6 +1599,20 @@ const preparePrecreateRejectionRead = (ctx) => {
   return emit(OUTPUT_MONGO_FIND);
 };
 
+const preparePrecreateEntitlementReadback = (ctx) => {
+  const config = managedEntitlementConfig();
+  if (!validManagedEntitlementConfig(config, ctx)) return precreateRejectionPending(ctx);
+  // An expired observation cannot authorize another release or become a new owner proof.
+  delete ctx.ownerBookingReadback;
+  delete ctx.entitlementReleaseNext;
+  delete ctx.entitlementReleaseReason;
+  return prepareManagedHttp(ctx, "managed_precreate_entitlement_readback", "POST",
+    `${config.apiBase}/internal/subscriptions/entitlements/readback`, {
+      operationId: ctx.managedEntitlementOperationId,
+      subscriptionInstanceId: ctx.managedSubscriptionInstanceId,
+    }, managedEntitlementHeaders(ctx, config));
+};
+
 const preparePrecreateRejectionPersist = (ctx) => {
   const binding = precreateRejectionBinding(ctx);
   const proof = managedOwnerEvidence(ctx, "PROVIDER_REJECTED", null);
@@ -1636,14 +1650,32 @@ const preparePrecreateRejectionPersist = (ctx) => {
   });
 };
 
+const exactPrecreateRejection = (ctx, binding, rejection) => {
+  const keys = "actorClientId,clientSubscriptionId,entitlementOperationId,observedAt,operationId,placeholderExerciseId,providerStatusCode,reason,recoveryTarget,schemaVersion,subscriptionInstanceId,tenantKey";
+  return Boolean(binding && isObj(rejection)
+    && Object.keys(rejection).sort().join(",") === keys
+    && exactPrecreateRecoveryTarget(rejection.recoveryTarget, binding.precreateRecoveryTarget)
+    && rejection.schemaVersion === 1 && rejection.reason === "PROVIDER_REJECTED"
+    && rejection.operationId === ctx.operationId && rejection.tenantKey === ctx.tenantKey
+    && rejection.actorClientId === ctx.actorClientId && rejection.clientSubscriptionId === ctx.clientSubscriptionId
+    && rejection.subscriptionInstanceId === binding.managedSubscriptionInstanceId
+    && rejection.placeholderExerciseId === ctx.exerciseId
+    && typeof rejection.entitlementOperationId === "string"
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(rejection.entitlementOperationId)
+    && (!ctx.managedEntitlementOperationId || ctx.managedEntitlementOperationId === rejection.entitlementOperationId)
+    && [400, 401, 403, 404, 405, 410, 415, 422].includes(rejection.providerStatusCode)
+    && finiteDate(rejection.observedAt)
+    && Date.parse(rejection.observedAt) <= Date.now()
+    && finiteDate(rejection.observedAt).toISOString() === rejection.observedAt);
+};
+
 const resumePrecreateRejection = (ctx, operation) => {
   const binding = precreateRejectionBinding(ctx);
   const rejection = operation?.precreateRejection;
-  const keys = "actorClientId,clientSubscriptionId,entitlementOperationId,observedAt,operationId,placeholderExerciseId,providerStatusCode,reason,recoveryTarget,schemaVersion,subscriptionInstanceId,tenantKey";
   const expectedFields = binding && ["_id", "operationId", "tenantKey", "actorClientId",
     "clientSubscriptionId", "exerciseId", "serviceDate", "planKey", "managedSubscriptionInstanceId", "managedEnvironment"];
-  if (!ownerEvidenceEnabled() || !binding || !isObj(operation) || !isObj(rejection)
-    || Object.keys(rejection).sort().join(",") !== keys
+  if (!ownerEvidenceEnabled() || !binding || !isObj(operation)
+    || !exactPrecreateRejection(ctx, binding, rejection)
     || !expectedFields.every((key) => operation[key] === binding[key])
     || !["PRECREATE_RECONCILIATION_REQUIRED", "RELEASED"].includes(operation.state)
     || operation.precreateReconciliationCode !== "VIVA_EXERCISE_CREATE_REJECTED"
@@ -1652,20 +1684,7 @@ const resumePrecreateRejection = (ctx, operation) => {
     || operation.bookingId || operation.upstreamBookingId
     || operation.managedDecision?.policyDigest !== binding["managedDecision.policyDigest"]
     || !exactPrecreateRecoveryTarget(operation.precreateRecoveryTarget, binding.precreateRecoveryTarget)
-    || !exactPrecreateRecoveryTarget(rejection.recoveryTarget, binding.precreateRecoveryTarget)
-    || rejection.schemaVersion !== 1 || rejection.reason !== "PROVIDER_REJECTED"
-    || rejection.operationId !== ctx.operationId || rejection.tenantKey !== ctx.tenantKey
-    || rejection.actorClientId !== ctx.actorClientId || rejection.clientSubscriptionId !== ctx.clientSubscriptionId
-    || rejection.subscriptionInstanceId !== binding.managedSubscriptionInstanceId
-    || rejection.placeholderExerciseId !== ctx.exerciseId
-    || typeof rejection.entitlementOperationId !== "string"
-    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(rejection.entitlementOperationId)
-    || rejection.entitlementOperationId !== operation.managedEntitlementOperationId
-    || (ctx.managedEntitlementOperationId && ctx.managedEntitlementOperationId !== rejection.entitlementOperationId)
-    || ![400, 401, 403, 404, 405, 410, 415, 422].includes(rejection.providerStatusCode)
-    || !finiteDate(rejection.observedAt)
-    || Date.parse(rejection.observedAt) > Date.now()
-    || finiteDate(rejection.observedAt).toISOString() !== rejection.observedAt) {
+    || rejection.entitlementOperationId !== operation.managedEntitlementOperationId) {
     return precreateRejectionPending(ctx);
   }
   ctx.managedEntitlementOperationId = rejection.entitlementOperationId;
@@ -1678,6 +1697,9 @@ const resumePrecreateRejection = (ctx, operation) => {
     // Exact local terminal acknowledgement is a read-only result, not authority for a new proof.
     return finishError(ctx, rejection.providerStatusCode, ctx.finalFailure.message,
       { code: ctx.finalFailure.rawCode });
+  }
+  if (Date.now() - Date.parse(rejection.observedAt) > 60_000) {
+    return preparePrecreateEntitlementReadback(ctx);
   }
   recordOwnerReadback(ctx, "PROVIDER_REJECTED", null, rejection.observedAt);
   if (!managedOwnerEvidence(ctx, "PROVIDER_REJECTED", null).ok) return precreateRejectionPending(ctx);
@@ -2007,6 +2029,29 @@ if (ctx.step === "operation_precreate_rejection_read") {
     return precreateRejectionPending(ctx);
   }
   return resumePrecreateRejection(ctx, msg.payload[0]);
+}
+
+if (ctx.step === "managed_precreate_entitlement_readback") {
+  // This seven-field canonical read is neither a release command response nor signed evidence.
+  // Finalization still CAS-matches the original durable marker and every local ownership field.
+  const result = msg.payload;
+  const marker = ctx.durablePrecreateRejection;
+  const config = managedEntitlementConfig();
+  const keys = "compensationState,operationId,operationState,providerBookingId,releaseReason,schemaVersion,subscriptionInstanceId";
+  if (msg.error || Number(msg.statusCode) !== 200 || !isObj(result)
+    || Object.keys(result).sort().join(",") !== keys
+    || !ownerEvidenceEnabled() || !validManagedEntitlementConfig(config, ctx)
+    || msg.responseUrl !== `${config.apiBase}/internal/subscriptions/entitlements/readback`
+    || !exactPrecreateRejection(ctx, precreateRejectionBinding(ctx), marker)
+    || result.schemaVersion !== 1 || result.operationId !== ctx.managedEntitlementOperationId
+    || result.operationId !== marker.entitlementOperationId
+    || result.subscriptionInstanceId !== ctx.managedSubscriptionInstanceId
+    || result.subscriptionInstanceId !== marker.subscriptionInstanceId
+    || result.operationState !== "FAILED" || result.compensationState !== "APPLIED"
+    || result.releaseReason !== "PROVIDER_REJECTED" || result.providerBookingId !== null) {
+    return precreateRejectionPending(ctx);
+  }
+  return preparePrecreateAbortUpdate(ctx);
 }
 
 if (ctx.step === "profile") {

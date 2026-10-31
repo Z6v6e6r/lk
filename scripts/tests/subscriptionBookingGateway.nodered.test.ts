@@ -4052,7 +4052,7 @@ function persistedCreateRejection(abort = rejectedCreate()[3]) {
   return { ctx, persist, read, operation };
 }
 
-function resumeCreateRejection(ctx: any, operation: any, freshRequest = false) {
+function resumeCreateRejection(ctx: any, operation: any, freshRequest = false, globals: Record<string, unknown> = OWNER_GLOBALS) {
   const restored = structuredClone(ctx);
   delete restored.ownerBookingReadback;
   delete restored.durablePrecreateRejection;
@@ -4063,7 +4063,42 @@ function resumeCreateRejection(ctx: any, operation: any, freshRequest = false) {
     delete restored.managedSubscriptionInstanceId;
   } else restored.step = "operation_precreate_rejection_read";
   return runFunction(ROUTER_FILE, { payload: [structuredClone(operation)],
-    _subscriptionBooking: restored }, OWNER_GLOBALS);
+    _subscriptionBooking: restored }, globals);
+}
+
+const ENTITLEMENT_READBACK_URL = "https://padlhub.su/api/internal/subscriptions/entitlements/readback";
+const READBACK_GLOBALS = { ...OWNER_GLOBALS, subscriptions_owner_evidence_secret: undefined,
+  crypto: { createHmac() { throw new Error("canonical readback must never sign"); } } };
+const completedRejectionReadback = () => ({ schemaVersion: 1, operationId: "booking:owner-create-abort",
+  subscriptionInstanceId: "subscription-instance-1", operationState: "FAILED", compensationState: "APPLIED",
+  releaseReason: "PROVIDER_REJECTED", providerBookingId: null });
+
+function assertReadbackOnly(result: any[]) {
+  assert.equal(result[0].method, "POST");
+  assert.equal(result[0].url, ENTITLEMENT_READBACK_URL);
+  assert.equal(result[0].requestTimeout, 10000);
+  assert.equal(result[0].followRedirects, false);
+  assert.equal(result[0].maxRedirects, 0);
+  assert.equal(result[0].headers.Authorization, "Bearer user-token");
+  assert.equal(result[0].headers["X-Subscriptions-Integration-Token"], MANAGED_GLOBALS.subscriptions_entitlement_integration_token);
+  assert.ok(!Object.keys(result[0].headers).some(key => key.toLowerCase() === "x-subscription-owner-evidence"));
+  assert.deepEqual(result[0].payload, { operationId: "booking:owner-create-abort", subscriptionInstanceId: "subscription-instance-1" });
+  assert.equal(result[0]._subscriptionBooking.ownerBookingReadback, undefined);
+  assert.equal(result[0]._subscriptionBooking.entitlementReleaseNext, undefined);
+  assert.ok(result.slice(1).every(item => item === null));
+}
+
+function expiredRejectionReadback() {
+  const persisted = persistedCreateRejection();
+  persisted.operation.precreateRejection.observedAt = new Date(Date.now() - 120_000).toISOString();
+  const request = resumeCreateRejection(persisted.ctx, persisted.operation, true, READBACK_GLOBALS);
+  assertReadbackOnly(request);
+  return { ...persisted, request };
+}
+
+function receiveRejectionReadback(request: any[], payload: any = completedRejectionReadback(), overrides = {}) {
+  return runFunction(ROUTER_FILE, { ...structuredClone(request[0]), payload, statusCode: 200,
+    responseUrl: ENTITLEMENT_READBACK_URL, ...overrides }, READBACK_GLOBALS);
 }
 
 test("bound split CREATE definitive rejection carries exact owner proof through release and local CAS", () => {
@@ -4146,7 +4181,7 @@ test("split rejection retry retains original timestamp and cannot release after 
   const retry = resumeCreateRejection(persisted.ctx, persisted.operation, true);
   assert.equal(verifyOwnerWire(retry[0], "PROVIDER_REJECTED"), token);
   persisted.operation.precreateRejection.observedAt = new Date(Date.now() - 61_000).toISOString();
-  assertOwnerPending(resumeCreateRejection(persisted.ctx, persisted.operation, true));
+  assertReadbackOnly(resumeCreateRejection(persisted.ctx, persisted.operation, true, READBACK_GLOBALS));
 });
 
 test("durable rejection CAS binds the canonical attempt and loses safely to creation or recovery", () => {
@@ -4243,7 +4278,6 @@ test("exact terminal rejection replays after TTL without signing while tampered 
     o => { o.precreateRejection.recoveryTarget.roomId = "other-room"; },
     o => { o.precreateRejection.observedAt = "not-a-date"; },
     o => { o.precreateRejection.observedAt = new Date(Date.now() + 60_000).toISOString(); },
-    o => { o.state = "PRECREATE_RECONCILIATION_REQUIRED"; },
   ];
   for (const mutate of mutations) {
     const changed = structuredClone(terminal);
@@ -4266,7 +4300,6 @@ test("durable recovery refuses forged tuples, stale facts and disabled signing w
     o => { o.precreateRejection.recoveryTarget.roomId = "another-room"; },
     o => { o.precreateRejection.providerStatusCode = 409; },
     o => { o.precreateRejection.observedAt = new Date(Date.now() + 60_000).toISOString(); },
-    o => { o.precreateRejection.observedAt = new Date(Date.now() - 61_000).toISOString(); },
     o => { o.precreateRejection.signature = "must-not-be-stored"; },
     o => { o.precreatedEntitlementReserved = true; },
     o => { o.precreateRecoveredAt = new Date().toISOString(); },
@@ -4280,4 +4313,110 @@ test("durable recovery refuses forged tuples, stale facts and disabled signing w
   const restored = { ...structuredClone(persisted.ctx), caller: "split_create_preflight", step: "operation_find" };
   assertOwnerPending(runFunction(ROUTER_FILE, { payload: [persisted.operation],
     _subscriptionBooking: restored }, MANAGED_GLOBALS));
+});
+
+test("expired rejection recovers lost CUP response through canonical readback and the original exact local CAS", () => {
+  const fixture = expiredRejectionReadback();
+  const original = structuredClone(fixture.operation.precreateRejection);
+  const local = receiveRejectionReadback(fixture.request);
+  assert.equal(local[0], null);
+  assert.equal(local[3]._subscriptionBooking.step, "operation_precreate_abort");
+  assert.equal(local[3].payload[0].state, "PRECREATE_RECONCILIATION_REQUIRED");
+  assert.deepEqual(local[3].payload[0].precreateRejection, original);
+  assert.equal(local[3].payload[1].$set.state, "RELEASED");
+  for (const key of ["_id", "operationId", "tenantKey", "actorClientId", "clientSubscriptionId",
+    "exerciseId", "serviceDate", "planKey", "managedEntitlementOperationId", "managedSubscriptionInstanceId",
+    "managedEnvironment", "precreateRecoveryTarget"]) {
+    assert.deepEqual(local[3].payload[0][key], fixture.operation[key], key);
+  }
+  assert.ok(!JSON.stringify(local[3].payload).includes("Bearer"));
+  assert.ok(!JSON.stringify(local[3].payload).includes("integration-token"));
+  assert.ok(!JSON.stringify(local[3].payload).includes("release-v1."));
+  const done = runFunction(ROUTER_FILE, { payload: mongoUpdateResult(),
+    _subscriptionBooking: local[3]._subscriptionBooking }, READBACK_GLOBALS);
+  assert.equal(done[0], null);
+  assert.equal(done[4].statusCode, 422);
+  assert.equal(done[4].payload.details.code, "VIVA_EXERCISE_CREATE_REJECTED");
+  assert.deepEqual(fixture.operation.precreateRejection, original);
+});
+
+test("expired readback local acknowledgement loss retries reads only and never overwrites another binding", () => {
+  const fixture = expiredRejectionReadback();
+  const local = receiveRejectionReadback(fixture.request);
+  const read = runFunction(ROUTER_FILE, { error: { message: "local acknowledgement lost" },
+    _subscriptionBooking: structuredClone(local[3]._subscriptionBooking) }, READBACK_GLOBALS);
+  assert.equal(read[0], null);
+  assert.equal(read[1]._subscriptionBooking.step, "operation_precreate_rejection_read");
+  const completed = { ...fixture.operation, ...local[3].payload[1].$set };
+  const done = resumeCreateRejection(read[1]._subscriptionBooking, completed, false, READBACK_GLOBALS);
+  assert.equal(done[0], null);
+  assert.equal(done[3], null);
+  assert.equal(done[4].statusCode, 422);
+  // The CAS may not have committed: retry the canonical read, never the release command.
+  assertReadbackOnly(resumeCreateRejection(read[1]._subscriptionBooking, fixture.operation, false, READBACK_GLOBALS));
+  const advanced = { ...fixture.operation, exerciseId: "created-exercise", precreatedEntitlementReserved: true };
+  assertOwnerPending(resumeCreateRejection(read[1]._subscriptionBooking, advanced, false, READBACK_GLOBALS));
+});
+
+test("canonical rejection readback rejects every nonmatching or malformed receipt without writes", () => {
+  const fixture = expiredRejectionReadback();
+  const valid = completedRejectionReadback();
+  const mutations: Array<(receipt: any) => void> = [
+    r => { r.schemaVersion = 2; },
+    r => { r.operationId = "booking:other"; },
+    r => { r.subscriptionInstanceId = "instance:other"; },
+    r => { r.operationState = "COMPENSATED"; },
+    r => { r.operationState = "RESERVED"; },
+    r => { r.operationState = "CONFIRMED"; },
+    r => { r.compensationState = "NONE"; },
+    r => { r.compensationState = "PENDING"; },
+    r => { r.compensationState = "MANUAL_REVIEW"; },
+    r => { r.releaseReason = "BOOKING_CANCELLED"; },
+    r => { r.releaseReason = null; },
+    r => { r.providerBookingId = "booking:unexpected"; },
+    r => { r.providerBookingId = ""; },
+    r => { r.extra = "unexpected"; },
+  ];
+  for (const mutate of mutations) {
+    const receipt = structuredClone(valid);
+    mutate(receipt);
+    assertOwnerPending(receiveRejectionReadback(fixture.request, receipt));
+  }
+  for (const key of Object.keys(valid)) {
+    const receipt: any = structuredClone(valid);
+    delete receipt[key];
+    assertOwnerPending(receiveRejectionReadback(fixture.request, receipt));
+  }
+  for (const payload of [null, [], "malformed", JSON.stringify(valid), { result: valid }]) {
+    assertOwnerPending(receiveRejectionReadback(fixture.request, payload));
+  }
+});
+
+test("readback transport errors, unavailable receiver and changed context leave the durable marker pending", () => {
+  const fixture = expiredRejectionReadback();
+  for (const statusCode of [201, 204, 301, 400, 401, 403, 404, 408, 409, 429, 500, 502, 503, 504]) {
+    assertOwnerPending(receiveRejectionReadback(fixture.request, completedRejectionReadback(), { statusCode }));
+  }
+  for (const overrides of [
+    { error: { message: "timeout after possible response" } },
+    { responseUrl: undefined },
+    { responseUrl: "https://padlhub.su/api/internal/subscriptions/entitlements/release" },
+    { responseUrl: "https://other.invalid/api/internal/subscriptions/entitlements/readback" },
+  ]) assertOwnerPending(receiveRejectionReadback(fixture.request, completedRejectionReadback(), overrides));
+  for (const mutate of [
+    (ctx: any) => { ctx.durablePrecreateRejection.reason = "BOOKING_CANCELLED"; },
+    (ctx: any) => { ctx.durablePrecreateRejection.observedAt = new Date(Date.now() + 60_000).toISOString(); },
+    (ctx: any) => { ctx.durablePrecreateRejection.recoveryTarget.roomId = "another-room"; },
+    (ctx: any) => { ctx.actorClientId = "another-actor"; },
+    (ctx: any) => { ctx.managedEntitlementOperationId = "booking:other"; },
+    (ctx: any) => { ctx.precreatedEntitlementReserved = true; },
+  ]) {
+    const request = structuredClone(fixture.request);
+    mutate(request[0]._subscriptionBooking);
+    assertOwnerPending(receiveRejectionReadback(request));
+  }
+  assertOwnerPending(resumeCreateRejection(fixture.ctx, fixture.operation, true, {
+    ...READBACK_GLOBALS, subscriptions_entitlement_integration_token: undefined,
+  }));
+  assertOwnerPending(resumeCreateRejection(fixture.ctx, fixture.operation, true, MANAGED_GLOBALS));
 });

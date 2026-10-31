@@ -741,11 +741,26 @@ Older source versions see reconciliation state and cannot resume CREATE from it.
 
 An exact canonical `RELEASED` marker and matching release reason can replay the stored failure
 after that window, without signing a new proof or calling CUP. Malformed, future-dated or mismatched
-terminal markers stay pending. Unfinished release with expired evidence stays pending and is never
-re-dated. Persisting rejection does not provide
-arbitrary-duration recovery: ph-admin validates proof freshness even for a terminal release replay.
-Post-expiry recovery still needs a separately reviewed canonical release readback/attestation
-contract. No new public endpoint, usage ledger, state enum or provider call is introduced here.
+terminal markers stay pending. Evidence is never re-dated. Unfinished release with expired evidence
+stays pending unless a read of the canonical CUP operation proves release already completed. After the
+original 60-second window, a validated unfinished durable rejection uses only
+`POST /api/internal/subscriptions/entitlements/readback` with
+`{ operationId, subscriptionInstanceId }`, the existing actor Bearer and entitlement integration
+token. This is a read-only request: no owner proof is generated, no release is dispatched and no
+provider booking/payment write is attempted. Its response must have exactly `schemaVersion: 1`,
+`operationId`, `subscriptionInstanceId`, `operationState`, `compensationState`, `releaseReason`,
+and `providerBookingId`. Only the exact pinned operation/instance and
+`FAILED / APPLIED / PROVIDER_REJECTED / null` permit the existing full-marker local CAS to
+`RELEASED`. The original `observedAt` is unchanged. An already committed local result is replayed
+without another CUP request; an ambiguous local acknowledgement reads the local marker again.
+
+This path depends on ph-admin #59 (`70d3820`), the companion CUP actor/tenant/instance-scoped,
+primary-majority readback implementation (itself dependent on #57/#58). Missing endpoint, disabled receiver, timeout, transport error, wrong response
+origin, extra/missing fields, another operation/instance or any incomplete/different release remains
+pending. In particular, it cannot release a reservation that CUP still holds. ph-admin continues
+to require fresh owner evidence for release commands, including command replays; this read does
+not extend that TTL or mint a new attestation. No new LK public endpoint, usage ledger, state enum,
+secret, configuration flag or provider write is introduced here.
 408/409/429/5xx, transport failures, empty history after an expired attempt, local pre-write
 failures and generic operation failure are not signed. They remain pending in enabled mode. Existing
 precreated-exercise reconciliation protection is unchanged, even after a definite booking refusal.
@@ -755,5 +770,5 @@ Stop signal: `SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED` or
 and reconcile; do not disable evidence validation to force a release. Rollback is a reviewed
 source rollback with compatible receiver mode, never automatic compensation. No deployment,
 secret creation, provider write or flag activation is part of this source change. Full strict-mode
-rollout still requires local-abort/post-expiry recovery contracts, physical Mongo verification and
-provider acceptance. Unit fixtures and green CI do not establish those outcomes.
+rollout still requires local-abort recovery, physical Mongo verification, the companion CUP
+readback deployment and provider acceptance. Unit fixtures and green CI do not establish those outcomes.
