@@ -62,6 +62,9 @@ test('LEFT blocks old facts; new operation and generation returns, admin removal
 });
 test('claim ACK loss recovers; a claim alone is never membership success', async () => {
   const db = memoryDb(), a = (await run(db, 'admission', admissionBody())).payload;
+  const claimNotWritten = await run(db, 'confirmation', confirmationBody(a), { before({ step }) { if (step === 'claim_write') return { skip: true, error: {}, payload: null }; } });
+  assert.equal(claimNotWritten.statusCode, 503);
+  assert.equal(db.tables.get('lk_communities')[0].members.length, 0);
   const result = await run(db, 'confirmation', confirmationBody(a), { after({ step, msg }) { if (step === 'claim_write') msg.error = { message: 'lost ack' }; } });
   assert.equal(result.payload.outcome, 'ENROLLED');
   const db2 = memoryDb(), a2 = (await run(db2, 'admission', admissionBody())).payload;

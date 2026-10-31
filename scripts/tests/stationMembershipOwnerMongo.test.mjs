@@ -48,6 +48,9 @@ test('physical stale community CAS cannot erase LEFT and admission snapshot cann
 });
 test('physical claim and community ACK ambiguity, with leave between applied write and readback', options, async t => {
   const db = await fixture(t), a = (await run(db[0], 'admission', admissionBody())).payload;
+  const noClaim = await run(db[1], 'confirmation', confirmationBody(a), { before({ step }) { if (step === 'claim_write') return { skip: true, payload: null, error: {} }; } });
+  assert.equal(noClaim.statusCode, 503);
+  assert.equal(await db[2].collection('lk_station_membership_generation_claims').countDocuments(), 0);
   const noWrite = await run(db[1], 'confirmation', confirmationBody(a), { before({ step }) { if (step === 'community_write') return { skip: true, payload: null, error: {} }; } });
   assert.equal(noWrite.statusCode, 503);
   assert.equal((await db[2].collection('lk_communities').findOne({ id: 'station-community' })).members.length, 0);
