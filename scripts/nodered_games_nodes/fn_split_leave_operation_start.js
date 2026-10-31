@@ -1,3 +1,13 @@
+// Private capability traversal performs no journal or provider operation.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "start") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "route";
+  return [null, null, msg];
+}
 const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object" ? msg._splitLeaveCtx : null;
 if (!ctx) {
   msg.statusCode = 409;
@@ -44,6 +54,7 @@ msg.payload = [
       staffActorId: ctx.staffActorId || null,
       idempotencyDigest: ctx.idempotencyDigest || null,
       membershipVersion: ctx.membershipVersion || null,
+      ...(ctx.managedSelfLeaveOwner ? { managedSelfLeaveOwner: ctx.managedSelfLeaveOwner } : {}),
       ...(ctx.bookingDiscovery ? { bookingDiscovery: ctx.bookingDiscovery } : {}),
       ...(ctx.localReconciliation ? { localReconciliation: ctx.localReconciliation } : {}),
       bookingIds,

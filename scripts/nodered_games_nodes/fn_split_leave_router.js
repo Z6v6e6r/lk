@@ -1,3 +1,13 @@
+// Internal graph-only capability; public request bodies cannot set message context.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "router") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "complete";
+  return [null, null, null, null, null, null, msg];
+}
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const END_USER_V1 = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const END_USER_V2 = "https://api.vivacrm.ru/end-user/api/v2/iSkq6G";
@@ -88,6 +98,7 @@ const assignMembershipVersion = (ctx, parts) => {
   return true;
 };
 const upstream = (ctx, method, url, payload, authHeader = ctx.upstreamAuthHeader) => {
+  if (ctx.managedSelfLeaveOwner) { ctx.managedOwnerExpectedUrl = url; ctx.managedOwnerExpectedStep = ctx.step; }
   msg._splitLeaveCtx = ctx;
   msg.method = method;
   msg.url = url;
@@ -148,7 +159,7 @@ const fail = (ctx, statusCode, state, message) => {
   };
   if (retryScheduled) msg.statusCode = 202;
   delete msg._splitLeaveCtx;
-  return [null, msg, msg, null, null];
+  return [null, msg, msg._managedSelfLeave ? null : msg, null, null];
 };
 const toLocalApply = (ctx) => {
   ctx.step = "local_apply";
@@ -225,6 +236,13 @@ const issueCurrentCancellation = (ctx) => {
   const bookingId = toStr(ctx.currentBookingId);
   const clientId = toStr(ctx.currentClientId);
   const refundMethod = toStr(ctx.currentRefundMethod);
+  if (ctx.managedSelfLeaveOwner && (ctx.mode !== "SELF" || ctx.backgroundStartedRecovery === true
+    || bookingId !== ctx.managedSelfLeaveOwner.providerBookingId || clientId !== ctx.managedSelfLeaveOwner.providerClientId
+    || refundMethod !== "SERVICE" || !Number.isFinite(Date.parse(ctx.managedOwnerActorExpiresAt))
+    || Date.parse(ctx.managedOwnerActorExpiresAt) <= Date.now()
+    || !Number.isSafeInteger(ctx.managedOwnerDelegationExpiresAt) || ctx.managedOwnerDelegationExpiresAt <= Date.now())) {
+    return fail(ctx, 202, "RETRY_REQUIRED", "Исходное посещение не подтверждено");
+  }
   ctx.step = "cancel_booking";
   const payload = usesEndUser(ctx)
     ? ((refundMethod === "SERVICE" || refundMethod === "NONE") ? {} : { refundMethod })
@@ -285,7 +303,19 @@ const ctx = isObj(msg._splitLeaveCtx) ? msg._splitLeaveCtx : null;
 if (!ctx) {
   msg.statusCode = 500;
   msg.payload = { ok: false, state: "CONFLICT", message: "split leave context missing" };
-  return [null, msg, msg, null, null];
+  return [null, msg, msg._managedSelfLeave ? null : msg, null, null];
+}
+if (ctx.managedSelfLeaveOwner && (ctx.requestedRefundMethod !== "SERVICE"
+  || ctx.mode !== "SELF" || ctx.actorClientId !== ctx.managedSelfLeaveOwner.providerClientId
+  || ctx.targetClientId !== ctx.managedSelfLeaveOwner.providerClientId
+  || ctx.exerciseId !== ctx.managedSelfLeaveOwner.providerExerciseId
+  || ctx.membershipVersion !== ctx.managedSelfLeaveOwner.membershipVersion
+  || (ctx.managedOwnerExpectedStep === ctx.step && ctx.managedOwnerExpectedUrl
+    && (msg.error || msg.responseUrl !== ctx.managedOwnerExpectedUrl)))) {
+  return fail(ctx, 202, "RETRY_REQUIRED", "Исходная управляемая запись требует сверки");
+}
+if (ctx.managedSelfLeaveOwner && ctx.managedOwnerExpectedStep === ctx.step) {
+  delete ctx.managedOwnerExpectedUrl; delete ctx.managedOwnerExpectedStep;
 }
 if (ctx.localReconciliation && !["start_verify_active", "verify_active", "verify_history", "local_apply"].includes(ctx.step)) {
   return fail(ctx, 202, "RETRY_REQUIRED", "Требуется повторная проверка состава игры.");

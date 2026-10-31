@@ -22,7 +22,7 @@ const respond = (statusCode, state, message) => {
   };
   delete msg._splitLeaveCtx;
   if (ctx?.backgroundRetry === true) return [null, msg];
-  return [msg, msg];
+  return [msg, msg._managedSelfLeave ? null : msg];
 };
 if (!ctx || msg.error || matched < 1) {
   return respond(202, "RETRY_REQUIRED", "Локальная синхронизация ожидает повторения");

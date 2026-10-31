@@ -1,3 +1,13 @@
+// Internal graph-only capability; public request bodies cannot set message context.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "prepare") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "authorize";
+  return [null, null, null, msg];
+}
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -27,6 +37,16 @@ if (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !normalize
   return respond(401, "UNAUTHORIZED", "Не удалось подтвердить авторизованного клиента");
 }
 
+const ownerIngress = msg._managedSelfLeave?.canonicalIngress;
+if (msg._managedSelfLeave && (!isObj(ownerIngress) || msg._managedSelfLeave.step !== "canonical"
+  || msg._managedSelfLeave.mode !== "admit" || ownerIngress.binding?.schemaVersion !== 1
+  || ownerIngress.binding.providerClientId !== auth.actorClientId
+  || ownerIngress.binding.legacyGameId !== msg.req?.params?.gameId
+  || !Number.isFinite(Date.parse(ownerIngress.actorTokenExpiresAt))
+  || Date.parse(ownerIngress.actorTokenExpiresAt) <= Date.now()
+  || !Number.isSafeInteger(ownerIngress.delegationExpiresAt) || ownerIngress.delegationExpiresAt <= Date.now())) {
+  return respond(403, "CONFLICT", "Исходная управляемая запись не подтверждена");
+}
 const body = isObj(msg.payload) ? msg.payload : {};
 const forbiddenFields = ["exerciseId", "gameId"];
 if (forbiddenFields.some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
@@ -49,6 +69,9 @@ const legacyBookingIds = [
 ].map(toStr).filter(Boolean);
 const mode = legacyBookingIds.length > 0 ? "ORGANIZER_TARGET" : "SELF";
 const requestedRefundMethodRaw = toStr(body.refundMethod)?.toUpperCase() || null;
+if (ownerIngress && (mode !== "SELF" || requestedRefundMethodRaw !== "SERVICE")) {
+  return respond(403, "CONFLICT", "Доступен только возврат исходного посещения");
+}
 const allowedRefundMethods = new Set(["CURRENCY", "DEPOSIT", "SERVICE", "NONE"]);
 if (requestedRefundMethodRaw && !allowedRefundMethods.has(requestedRefundMethodRaw)) {
   return respond(400, "CONFLICT", "refundMethod имеет неверное значение");
@@ -66,6 +89,10 @@ const claimToken = `${Date.now().toString(36)}-${Math.random().toString(36).slic
 msg._splitLeaveCtx = {
   gameId,
   operationId,
+  ...(ownerIngress ? { managedSelfLeaveOwner: ownerIngress.binding,
+    managedOwnerRecoveryOnly: ownerIngress.recoveryOnly === true,
+    managedOwnerActorExpiresAt: ownerIngress.actorTokenExpiresAt,
+    managedOwnerDelegationExpiresAt: ownerIngress.delegationExpiresAt } : {}),
   claimToken,
   // Only the HTTP entry sets this. Background retries hydrate their context from the
   // durable operation instead, so reconciliation never demotes itself outside a player action.

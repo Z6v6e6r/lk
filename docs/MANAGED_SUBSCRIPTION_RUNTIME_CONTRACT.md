@@ -925,3 +925,86 @@ foreground-reclaim wiring as one exact graph packet. Its approved parent source 
 Historical release pins are not advanced. A production installation still needs fresh
 actual graph evidence, existing CUP release/readback availability and separate owner
 approval. Local synthetic tests are not Mongo, provider or production acceptance.
+
+### LK2 managed FREE SELF LEAVE owner admission (source-only, not activated)
+
+The concrete backend-only contract is frozen in
+`scripts/tests/fixtures/managed-self-leave-v1-contract.json`. It adds signed
+`POST /lk/integrations/v1/managed-self-leave-admissions` and
+`GET /lk/integrations/v1/managed-self-leaves/:operationId`. It reuses the existing
+booked-operation issuer, audience, key, receiver and execution switches. No new
+runtime flag, provider activation, monetary refund, organizer cancellation or
+late/NONE-return mode is introduced. LK2 still needs a separate consumer change.
+
+Admission accepts only `LEAVE_GAME`, `SERVICE`, the public game/revision,
+participation, original reservation, original managed JOIN operation and the exact
+JOIN receipt digest. The signed delegation also pins the tenant/actor/provider
+mapping and server-owned legacy-game mapping/version. Request, operation and
+stable-delegation hash domains are separately versioned in that fixture. A fresh
+actor credential is required, bound by digest and expiry; neither the credential
+nor JWT is persisted. `recovery_only: true` is the only accepted explicit recovery
+claim; false, unknown claims and mismatched routes fail closed.
+
+Before admission persistence, the receiver verifies the original canonical
+confirmed managed FREE JOIN and its exact receipt, the same provider mapping,
+token-owned provider profile, legacy game-to-exercise association and SERVICE
+availability for the original booking. A missing/foreign/ambiguous association,
+replacement membership, paid decision or unavailable SERVICE cannot fall back to
+another refund mode. The canonical SELF ingress receives a private restrictive
+binding. It permits an LK2-only actor absent from the LK1 roster only through this
+verified original JOIN; ordinary `actorKnown` authorization remains unchanged.
+The public SELF body cannot supply this private context. Provider cancellation
+still uses the existing SELF path and rechecks SERVICE, original booking/actor,
+fresh delegation and provider subscription evidence before its write.
+
+The existing `lk_subscription_daily_booking_ops` collection stores the outer
+`MANAGED_SELF_LEAVE_ADMISSION` kind, keyed by the versioned tenant/user/idempotency
+operation ID. It deliberately has no canonical `actorClientId`, `exerciseId`,
+`serviceDate` or `lk1.visitJob` fields, so canonical daily selectors and visit workers
+do not count or reclaim it. Its immutable binding includes the full original JOIN
+receipt and local reservation. Changed same-key authority conflicts. The existing
+`lk_game_leave_operations` SELF row remains the canonical cancellation owner;
+its generation key converges distinct outer keys for the same original booking.
+An active canonical lease cannot be stolen through the legacy same-actor shortcut.
+The legacy background query excludes any row carrying this owner binding, and its
+selector independently refuses such rows before credential lookup/claim. Ordinary
+foreground operation replay also refuses a bound row without the exact private
+owner context. Thus a worker cannot drop the binding and fall back to service-token
+cancellation; recovery requires a fresh delegated foreground request. If ordinary
+recovery returns mixed managed/legacy history, it stays pending instead of selecting
+an older unbound proof. Use the exact delegated owner route; no data is changed and
+no fallback is authorized by mixed history.
+Outer and canonical lease updates use exact prior-state/binding CAS predicates.
+Lost or ambiguous claim acknowledgement never dispatches a cancellation.
+
+Recovery never selects the latest booking. Missing outer/canonical records under
+`recovery_only` return UNKNOWN. Unfinished operations require the original SELF
+row, generation, canonical booking cancellation marker and exact CUP
+`COMPENSATED` / `APPLIED` / `BOOKING_CANCELLED` receipt before outer completion.
+No proof time is refreshed, and the existing compensation proof TTL is unchanged.
+The outer terminal receipt additionally pins request/idempotency digests and
+provider/legacy mapping provenance. Only after this receipt and its digest are
+durably stored as CONFIRMED may a fresh authorized read replay it without reading
+the current booking row. This is necessary after a legal rejoin reclaims that row:
+the immutable receipt still describes only the original reservation/generation.
+A malformed, altered, unbound or unhashed terminal receipt remains UNKNOWN.
+
+`composeManagedSelfLeaveOwner` accepts exact parent source
+`8d46b9b53a1baa0b06bca6e127950b6845d08d65`, preserves existing output indices and
+assembles the routes, journal reads/CAS, private SELF capability traversal and
+response gate together. The router capability uses output seven; outputs one
+through six retain their prior meaning, including an existing discovery output.
+For an older five-output graph, slot six remains empty. Canonical finalizer custody
+is checked too. Private owner failure/finalizer responses are not duplicated to
+ordinary debug outputs, and transient credentials are erased after canonical auth
+handoff. A mixed/unknown source graph is not an installation candidate. Historical
+deploy pins and production allowlists are not advanced.
+
+The focused tests execute actual function bodies with synthetic provider/CUP
+responses. `managedSelfLeaveOwner.mongo.test.mjs` additionally requires the existing
+GitHub Actions monthly workflow's exact disposable loopback Mongo fixture; it refuses
+local/shared targets and owns one uniquely named database. Independent clients test
+immutable admission, competing leases, stale generation CAS and lost-ACK receipt
+replay. Local skips are not physical Mongo acceptance. Deployment, authoritative
+runtime mapping, real provider cancellation/returned-visit verification and LK2
+consumer/local participation finalization remain separate acceptance requirements.

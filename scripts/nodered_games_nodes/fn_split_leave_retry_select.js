@@ -1,6 +1,12 @@
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const operation = rows[0] && typeof rows[0] === "object" ? rows[0] : null;
 if (!operation) return [null, msg];
+// Bound LK2 SELF operations require fresh delegated foreground recovery. Never
+// erase their authority binding by hydrating the legacy service-token worker.
+if (Object.prototype.hasOwnProperty.call(operation, "managedSelfLeaveOwner")) {
+  msg.payload = { operationId: operation.operationId || null, reason: "managed_owner_foreground_required" };
+  return [null, msg];
+}
 const nowIso = new Date().toISOString();
 const claimToken = `retry-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 if (operation?.vivaTargetMode === "DISCOVERY") {
