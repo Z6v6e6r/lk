@@ -12,6 +12,13 @@ on:
       - "scripts/nodered_community_monthly_nodes/**"
       - "scripts/patch_nodered_community_monthly_flow.mjs"
       - "scripts/tests/communityMonthly*"
+      - "scripts/nodered_managed_self_leave_nodes/**"
+      - "scripts/nodered_games_nodes/fn_split_leave_*.js"
+      - "scripts/lib/managedSelfLeaveOwnerSource.mjs"
+      - "scripts/patch_nodered_managed_self_leave_owner.mjs"
+      - "scripts/tests/managedSelfLeaveOwner*"
+      - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
+      - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
       - "deploy/rating-worker/**"
       - "package*.json"
       - ".github/workflows/community-monthly.yml"
@@ -25,6 +32,13 @@ on:
       - "scripts/nodered_community_monthly_nodes/**"
       - "scripts/patch_nodered_community_monthly_flow.mjs"
       - "scripts/tests/communityMonthly*"
+      - "scripts/nodered_managed_self_leave_nodes/**"
+      - "scripts/nodered_games_nodes/fn_split_leave_*.js"
+      - "scripts/lib/managedSelfLeaveOwnerSource.mjs"
+      - "scripts/patch_nodered_managed_self_leave_owner.mjs"
+      - "scripts/tests/managedSelfLeaveOwner*"
+      - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
+      - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
       - "scripts/lib/communityMonthlyFinalization.mjs"
       - "deploy/rating-worker/**"
       - "package*.json"
@@ -68,5 +82,7 @@ jobs:
         run: npm ci --include=optional --no-audit --no-fund
       - name: Test calendar rating, public routes and real Mongo write conflicts
         run: npm run test:community-monthly
+      - name: Test managed SELF owner admission with real Mongo write conflicts
+        run: node --test scripts/tests/managedSelfLeaveOwner.test.mjs scripts/tests/managedSelfLeaveOwnerPatch.test.mjs scripts/tests/managedSelfLeaveOwner.mongo.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release

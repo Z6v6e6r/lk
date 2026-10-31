@@ -1,3 +1,13 @@
+// Private capability traversal performs no journal or provider operation.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "route") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "claim";
+  return [null, null, null, null, null, msg];
+}
 const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object" ? msg._splitLeaveCtx : null;
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 let operation = rows[0] && typeof rows[0] === "object" ? rows[0] : null;
@@ -15,8 +25,31 @@ const respond = (statusCode, state, message) => {
   delete msg._splitLeaveCtx;
   return [null, null, msg];
 };
+if (rows.some((row) => row && Object.prototype.hasOwnProperty.call(row, "managedSelfLeaveOwner")) && !ctx?.managedSelfLeaveOwner) {
+  return respond(202, "RETRY_REQUIRED", "Требуется делегированный повтор исходного выхода");
+}
+if (ctx?.managedSelfLeaveOwner) {
+  const pin = ctx.managedSelfLeaveOwner;
+  const stored = operation?.managedSelfLeaveOwner;
+  if (msg.error || rows.length !== 1 || !stored || typeof stored !== "object"
+    || Object.keys(stored).sort().join(",") !== Object.keys(pin).sort().join(",")
+    || Object.keys(pin).some(key => stored[key] !== pin[key])
+    || operation._id !== pin.ownerLeaveOperationKey || operation.operationId !== pin.ownerLeaveOperationId
+    || operation.tenantKey !== pin.tenantKey || operation.mode !== "SELF"
+    || operation.actorClientId !== pin.providerClientId || operation.targetClientId !== pin.providerClientId
+    || operation.exerciseId !== pin.providerExerciseId || operation.gameId !== pin.legacyGameId
+    || operation.membershipVersion !== pin.membershipVersion
+    || !Array.isArray(operation.bookingIds) || operation.bookingIds.length !== 1 || operation.bookingIds[0] !== pin.providerBookingId) {
+    return respond(202, "RETRY_REQUIRED", "Исходное поколение выхода не подтверждено");
+  }
+  if (operation.state === "STARTED" && operation.claimToken !== ctx.claimToken
+    && (!Number.isFinite(Date.parse(operation.claimLeaseUntil)) || Date.parse(operation.claimLeaseUntil) > Date.now())) {
+    return respond(202, "IN_PROGRESS", "Выход уже выполняется");
+  }
+}
 if (ctx?.step === "find_absent_self_leave") {
   const receipts = rows.filter((row) => row?.mode === "SELF"
+    && !Object.prototype.hasOwnProperty.call(row, "managedSelfLeaveOwner")
     && row.gameId === ctx.gameId && row.exerciseId === ctx.exerciseId
     && row.actorClientId === ctx.actorClientId && row.targetClientId === ctx.targetClientId
     && (["DONE", "RETURN_PENDING"].includes(row.state)
@@ -35,6 +68,7 @@ if (ctx?.step === "find_absent_self_leave") {
 if (ctx?.step === "find_local_reconciliation_proof") {
   const sameId = (a, b) => Boolean(a && b && String(a).toLowerCase() === String(b).toLowerCase());
   const eligible = rows.filter((row) => row && row.mode === "SELF"
+    && !Object.prototype.hasOwnProperty.call(row, "managedSelfLeaveOwner")
     && row.gameId === ctx.gameId && sameId(row.exerciseId, ctx.exerciseId)
     && sameId(row.actorClientId, ctx.actorClientId) && sameId(row.targetClientId, ctx.targetClientId)
     && ["DONE", "RETURN_PENDING", "VIVA_CONFIRMED"].includes(row.state) && row.outcome === "REMOVED"
@@ -137,7 +171,7 @@ if (ctx.operationState === "STARTED") {
       && String(operation.mode || "").toUpperCase() === "SELF"
       && sameActorIdentity;
     if (sameSelfActor) {
-      ctx.foregroundReclaim = true;
+      ctx.foregroundReclaim = !ctx.managedSelfLeaveOwner;
       ctx.previousClaimToken = String(operation.claimToken || "");
       ctx.previousClaimLeaseUntil = operation.claimLeaseUntil || null;
       return [null, null, null, msg];
