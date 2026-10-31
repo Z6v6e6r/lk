@@ -635,7 +635,8 @@ export default function GroupSchedulePage({
         if (available.some(q => !isGroupScheduleSubscriptionQuote(q, patriotsTournamentSelected, selectedId, actorId)
           || (patriotsTournamentSelected && (
             Date.parse(q.startsAt) !== Date.parse(String(checkout.exercise.timeFrom || checkout.exercise.startsAt || ""))
-            || !checkout.oneTimes.some(product => matchGroupScheduleSubscriptionDiscount([q], product, true, 6306))
+            || !checkout.oneTimes.some(product => product.source === "one-time"
+              && product.id === q.productId && product.cost === q.basePriceMinor)
           )))) {
           setDiscountError("Не удалось подтвердить стоимость по подписке.");
         } else {
