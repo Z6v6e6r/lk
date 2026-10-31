@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1793,9 +1793,11 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
   const candidateOnePath = path.join(root, "candidate-one.json");
   const candidateTwoPath = path.join(root, "candidate-two.json");
   const contractPath = path.join(root, "contract.json");
-  const diagnosticRouterSource = fs.readFileSync(
-    "scripts/nodered_games_nodes/fn_split_router.js", "utf8",
-  );
+  // Deployment custody stays bound to its immutable reviewed preimage, not
+  // today's task-branch source. A source change is not deployment authority.
+  const diagnosticRouterSource = execFileSync("git", ["show",
+    "788fdb96b3efd60fb09e4187b4ca4b5b00e2daaa:scripts/nodered_games_nodes/fn_split_router.js",
+  ], { encoding: "utf8" });
   assert.equal(sha256(diagnosticRouterSource), "5c436951dfa273e5fb9753c144d242ec06c6b95aad957aebb9773d7f69262bfb");
   const businessRouterSource = diagnosticRouterSource.slice(diagnosticRouterSource.indexOf("const ADMIN_API"))
     .replace('  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });\n', '');

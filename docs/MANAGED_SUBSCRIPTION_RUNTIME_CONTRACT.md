@@ -680,3 +680,95 @@ those runtime cases as skipped, not provider proof.
 Public CREATE keeps category/lifecycle-compatible candidates with at least one visit for preview and later selection: HAB can cover its free hour on 90/120-minute games with one visit. This is not a local entitlement decision. A legacy one-visit subscription can remain visible as a candidate, but the authoritative preview does not quote it as available and CREATE still rejects insufficient balance. Filtering that later candidate list by fresh server quotes is a follow-up UX improvement.
 
 Install the matching `previewGuard('primary' | 'reserve')` in nginx's HTTP context before enabling this location. The primary guard reuses the existing `lk_subscription_product_limit_key` map, preserving the trusted reserve proxy exemption; reserve uses `$binary_remote_addr`. Catalog lookups retain their original limiter and cannot consume the preview quota. Guard and location must be installed together with exact preimages, backup, `nginx -t` and reload.
+
+
+## R1 owner evidence producer (source-only opt-in)
+
+Owner: LK subscription booking gateway; audience: internal CUP entitlement confirm/release.
+The source adds optional proofs compatible with ph-admin #57 (`d5000a4d`): confirmation
+uses existing `v1` bytes; release uses `release-v1`, the separate HMAC domain
+`owner-evidence:release:v1` + one NUL byte and compact fields in this exact order:
+`operationId`, `reason`, `providerBookingId`, `issuedAt`. The proof travels only in
+`X-Subscription-Owner-Evidence`, never in the operation document or response payload.
+
+Backend prerequisites (not installed or enabled by this change):
+
+- `subscriptions_owner_evidence_enabled`: absent/false preserves unsigned legacy behavior;
+  true enables the producer. Unknown values fail closed. This rollout option belongs to the
+  subscription owner; activate only after receiver integration and provider sandbox acceptance.
+  Review/remove the legacy option once all affected consumers accept owner evidence.
+- `subscriptions_owner_evidence_secret`: backend-only string matching the receiver's existing
+  `SUBSCRIPTIONS_OWNER_EVIDENCE_SECRET`, at least 32 UTF-8 bytes after trimming. Keep environments
+  isolated; never obtain it from an HTTP request, flow export, browser, or committed settings.
+- Trusted Node-RED `global.crypto` supplies the built-in Node `crypto` API. Its runtime availability
+  has not been verified. Missing key/crypto or invalid configuration gives 202 reconciliation,
+  never an unsigned fallback in enabled mode.
+
+Confirmation requires an observed active booking with its own ID, matching actor, subscription
+and exercise, and the persisted entitlement operation. A POST-only booking-ID fallback cannot
+produce a proof. The normal readback and activation-recovery paths both support confirmation.
+
+Cancellation requires complete authenticated active/history lists, the exact requested booking,
+explicit booking cancellation (boolean cancellation flag or exact CANCELLED/CANCELED status),
+consistent actor/target/subscription/date across matching rows and the canonical local operation.
+Payment errors, refunds, archives and a cancelled exercise alone are insufficient. Only then can
+CUP release its ledger; local release follows the exact CUP acknowledgement. Lost response leaves
+local state pending; retry reads Viva again and uses the same entitlement operation. The proof
+uses the observation timestamp, expires after at most 60 seconds locally, and never refreshes old
+readback merely by resigning it. Receiver configuration may enforce a shorter age.
+
+For booking POST rejection, only a response without a transport error and status
+400/401/403/404/405/410/415/422 produces PROVIDER_REJECTED with explicit null booking ID.
+This is the conservative definitive-rejection status set already used by the split CREATE flow;
+provider sandbox acceptance of this endpoint remains required. Split CREATE now carries the
+actual exercise-rejection receipt only after the PRECREATE_ATTEMPTING acknowledgement and finalize
+handoff. It requires the original request operation, placeholder, actor, subscription/instance,
+policy, station, room, date, start, duration and exercise type to match the stored recovery target.
+A created, owned, adopted or recovered exercise cannot use this abort proof. Inherited receipts
+are discarded. In signed mode, the exact rejection facts and original observation time are first
+CAS-persisted on the existing booking operation, from `PRECREATE_ATTEMPTING` to
+`PRECREATE_RECONCILIATION_REQUIRED`. The CAS binds the tenant, actor, LK/CUP operations,
+subscription instance, original placeholder and full recovery target, with no created/recovered
+booking binding. It never stores a token, signature, secret or raw provider response.
+
+Only an exact readback of that immutable marker permits CUP release. A duplicate or lost Mongo
+acknowledgement reads the first marker without overwriting its observation time. A fresh request
+after context loss can resume release only within the original 60-second producer evidence window
+(the receiver may require a shorter window), without a new CREATE POST. After CUP acknowledgement,
+an exact marker CAS changes the existing operation to `RELEASED`; a lost local acknowledgement
+reads back that result. A concurrent created/recovered binding or a mismatched marker stays pending.
+Older source versions see reconciliation state and cannot resume CREATE from it.
+
+An exact canonical `RELEASED` marker and matching release reason can replay the stored failure
+after that window, without signing a new proof or calling CUP. Malformed, future-dated or mismatched
+terminal markers stay pending. Evidence is never re-dated. Unfinished release with expired evidence
+stays pending unless a read of the canonical CUP operation proves release already completed. After the
+original 60-second window, a validated unfinished durable rejection uses only
+`POST /api/internal/subscriptions/entitlements/readback` with
+`{ operationId, subscriptionInstanceId }`, the existing actor Bearer and entitlement integration
+token. This is a read-only request: no owner proof is generated, no release is dispatched and no
+provider booking/payment write is attempted. Its response must have exactly `schemaVersion: 1`,
+`operationId`, `subscriptionInstanceId`, `operationState`, `compensationState`, `releaseReason`,
+and `providerBookingId`. Only the exact pinned operation/instance and
+`FAILED / APPLIED / PROVIDER_REJECTED / null` permit the existing full-marker local CAS to
+`RELEASED`. The original `observedAt` is unchanged. An already committed local result is replayed
+without another CUP request; an ambiguous local acknowledgement reads the local marker again.
+
+This path depends on ph-admin #59 (`70d3820`), the companion CUP actor/tenant/instance-scoped,
+primary-majority readback implementation (itself dependent on #57/#58). Missing endpoint, disabled receiver, timeout, transport error, wrong response
+origin, extra/missing fields, another operation/instance or any incomplete/different release remains
+pending. In particular, it cannot release a reservation that CUP still holds. ph-admin continues
+to require fresh owner evidence for release commands, including command replays; this read does
+not extend that TTL or mint a new attestation. No new LK public endpoint, usage ledger, state enum,
+secret, configuration flag or provider write is introduced here.
+408/409/429/5xx, transport failures, empty history after an expired attempt, local pre-write
+failures and generic operation failure are not signed. They remain pending in enabled mode. Existing
+precreated-exercise reconciliation protection is unchanged, even after a definite booking refusal.
+
+Stop signal: `SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED` or
+`SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED`, or unexpected CUP refusal. Preserve reservations
+and reconcile; do not disable evidence validation to force a release. Rollback is a reviewed
+source rollback with compatible receiver mode, never automatic compensation. No deployment,
+secret creation, provider write or flag activation is part of this source change. Full strict-mode
+rollout still requires local-abort recovery, physical Mongo verification, the companion CUP
+readback deployment and provider acceptance. Unit fixtures and green CI do not establish those outcomes.
