@@ -39,7 +39,10 @@ concurrency:
 
 jobs:
   monthly-mongodb:
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 refuses Linux >=6.19 (SERVER-121912); keep this test on the
+    # Ubuntu 22.04 runner's 6.8 kernel. Revisit when MongoDB supports newer kernels
+    # and before runner retirement: actions/runner-images#14254.
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     services:
       mongo:
