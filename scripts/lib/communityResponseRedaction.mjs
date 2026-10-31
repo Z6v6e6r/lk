@@ -8,6 +8,7 @@ export function sanitizeTypedCommunityPayload(value, typed = false) {
   const phoneIdentity = typeof value.playerKey === 'string' && value.playerKey.startsWith('phone:');
   const result = {};
   for (const [key, item] of Object.entries(value)) {
+    if (['stationMembershipLifetime', 'stationMembershipAdmission', 'admissionBindingSha256'].includes(key)) continue;
     if (key === 'eventEntries' || key === 'eventRegistration' || key === '_eventEntry') continue;
     if (scoped && (/phone|mobile|msisdn|^email$/i.test(key) || key === 'playerKey')) continue;
     if (scoped && (key === 'playerId' && phoneIdentity)) continue;
@@ -40,7 +41,7 @@ export function addTypedCommunityResponseRedaction(input) {
       const end = node.func.indexOf(separator,prefix.length), suffix = redactionSuffix(responsePorts);
       if (!node.func.startsWith(prefix) || end < 0 || !node.func.endsWith(suffix)) throw new Error('EVENT_REDACTION_WRAPPER_DRIFT');
       const sanitizer = node.func.slice(prefix.length,end);
-      if (sanitizer !== sanitizeTypedCommunityPayload.toString() && !["9ca1ae941b8cd7f01c1be2e1bc23c472676c1629e5baf48ea646e68e65aae152", "aec9d94d0b792b78076a0bcb2960e63b330c5cb3384e47ed5c3570ae8e243a5d"].includes(createHash('sha256').update(sanitizer).digest('hex'))) throw new Error('EVENT_REDACTION_SANITIZER_DRIFT');
+      if (sanitizer !== sanitizeTypedCommunityPayload.toString() && !["2a36eca2dbdffed8d7044761f4438d4e88ab7893efdb3b7c944b323689cd56d2", "9ca1ae941b8cd7f01c1be2e1bc23c472676c1629e5baf48ea646e68e65aae152", "aec9d94d0b792b78076a0bcb2960e63b330c5cb3384e47ed5c3570ae8e243a5d"].includes(createHash('sha256').update(sanitizer).digest('hex'))) throw new Error('EVENT_REDACTION_SANITIZER_DRIFT');
       node.func = wrapRedacted(node.func.slice(end+separator.length,-suffix.length),responsePorts);
       continue;
     }

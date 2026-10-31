@@ -1,10 +1,17 @@
 import { createHash } from 'node:crypto';
+import { stationLifetimeRuntimeSource } from './stationMembershipReceiverSource.mjs';
 // Typed membership mutations must commit before their response/derived writes.
 const names = new Set(['Apply community join', 'Apply invite join', 'Apply member management']);
 export function addCommunityRosterWrites(input) {
   const flow = structuredClone(input), byId = new Map(flow.map(node => [node.id, node]));
   for (const node of [...flow]) {
     if (node.type !== 'function' || !names.has(node.name)) continue;
+    // Existing exact V2 barriers are upgraded through one pinned insertion, not graph regeneration.
+    if (node.func.includes('EVENT_REGISTRATION_COMMIT_V2') && !node.func.includes('STATION_LIFETIME_ROSTER_V1')) {
+      const anchor = "write._communityRosterDeferred = outcome.slice(1);";
+      if (node.func.split(anchor).length !== 2) throw new Error('STATION_ROSTER_BARRIER_DRIFT');
+      node.func = node.func.replace(anchor, STATION_BARRIER + '\n' + anchor);
+    }
     if (node.func.includes('COMMUNITY_ROSTER_COMMIT_BARRIER')) {
       if (!node.func.includes('EVENT_REGISTRATION_COMMIT_V2')) {
         if (node.func.includes(LEGACY_BARRIER)) node.func = node.func.replace(LEGACY_BARRIER, EVENT_BARRIER);
@@ -40,6 +47,18 @@ export function addCommunityRosterWrites(input) {
   return flow;
 }
 
+const STATION_BARRIER = `
+// STATION_LIFETIME_ROSTER_V1
+if (preimage.communityType === 'STATION' && (preimage.stationMembershipLifetime !== undefined || (typeof env !== 'undefined' && env.get('LK_STATION_MEMBERSHIP_LIFETIME_ENABLED') === 'true'))) {
+  const owner = (() => { ${stationLifetimeRuntimeSource()}\nreturn {smFence,smRosterTransition,smIdentity}; })();
+  const ctx = msg._communityMemberManage;
+  const target = ctx && (Array.isArray(preimage.members) ? preimage.members : []).find(row => owner.smIdentity(row) === owner.smIdentity(ctx.member));
+  const next = owner.smRosterTransition(preimage, write.payload.$set.members, ctx?.action,
+    target ? owner.smIdentity(target) : owner.smIdentity(ctx?.member), msg._verifiedCommunityActor?.id);
+  Object.assign(write.query, owner.smFence(preimage));
+  if (next !== undefined) write.payload.$set.stationMembershipLifetime = next;
+}
+`;
 const EVENT_BARRIER = String.raw`
 const preimage = msg._communityPolicyPreimage;
 if (!Array.isArray(outcome) || (!outcome[0] && !(preimage?.communityType === 'EVENT' && msg._eventEntry && outcome[4]?.statusCode === 200)) || !['STATION','CORPORATE','LEAGUE','EVENT'].includes(preimage?.communityType)) return outcome;
@@ -70,6 +89,7 @@ write.query.typeSettingsRevision = preimage.typeSettingsRevision;
 const allowed = ['members','pendingMembers','bannedMembers','memberCount','membersCount','pendingCount','updatedAt'];
 if (preimage.communityType === 'EVENT') allowed.push('eventEntries', 'eventEntriesRevision', 'eventRosterRevision');
 if (Object.keys(write.payload.$set).some(key => !allowed.includes(key))) throw new Error('COMMUNITY_ROSTER_WRITE_SCOPE_DRIFT');
+` + STATION_BARRIER + String.raw`
 write._communityRosterDeferred = outcome.slice(1);
 return [write, null, null, null, null, null];
 `;

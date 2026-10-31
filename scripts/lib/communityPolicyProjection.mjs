@@ -60,6 +60,8 @@ function requestsPublicSchedule(community, config) {
 }
 export function buildStationMembershipMutation(community, event, member, nowIso) {
   if (communityType(community.communityType) !== 'STATION' || !matchesCommunityPolicy(community, event)) return null;
+  // Once adopted, a rollback of the feature flag cannot resurrect old scanned registrations.
+  if (process.env.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED === 'true' || community.stationMembershipLifetime !== undefined) return null;
   const identity = { $or: [{ id: member.id }, { clientId: member.id }, ...(member.phone ? [{ phone: phoneMatch(member.phone) }, { phoneNorm: phoneMatch(member.phone) }, { phoneNumber: phoneMatch(member.phone) }, { mobile: phoneMatch(member.phone) }] : [])] };
   if (!member.phone && list(community.bannedMembers).some(row => !first(row.id, row.clientId, row.userId, row.uuid) && phone(row.phone || row.phoneNorm || row.mobile))) return null;
   const publicMember = { ...member }; delete publicMember.phone;
