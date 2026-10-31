@@ -289,3 +289,58 @@ test("a second pair can confirm a saved last-rally result without re-entering it
   state = command(state, { action: "close_round" }, 91);
   assert.equal(fprCompletedRounds(state), 1);
 });
+
+test("first saved score starts the prepared round atomically and replay never resets its clock", () => {
+  for (const score1 of [7, 13]) {
+    const original = event(), before = JSON.stringify(original), match = original.attempts[0].matches[0];
+    const cmd: FprCommand = { id: 'first-score', expectedRevision: 0, action: 'score', matchId: match.id,
+      score1, score2: score1 === 7 ? 5 : 12, confirmed1: score1 === 13, confirmed2: score1 === 13, startIfScheduled: true };
+    const state = applyFprCommand(original, cmd, at(1));
+    assert.equal(state.revision, 1); assert.equal(state.audit.length, 1);
+    assert.equal(state.attempts[0].status, 'running'); assert.equal(state.attempts[0].startedAt, at(1));
+    assert.equal(state.attempts[0].matches[0].score1, score1);
+    assert.equal(JSON.stringify(original), before);
+    assert.deepEqual(applyFprCommand(state, cmd, at(5)), state);
+    assert.throws(() => applyFprCommand(state, { ...cmd, startIfScheduled: false }, at(5)), /FPR_COMMAND_ID_REUSED/);
+    assert.throws(() => applyFprCommand(state, { ...cmd, id: 'stale-score' }, at(5)), /FPR_REVISION_CONFLICT/);
+    const second = state.attempts[0].matches[1];
+    const next = command(state, { action: 'score', matchId: second.id, score1: 13, score2: 12,
+      confirmed1: true, confirmed2: true, startIfScheduled: true }, 6);
+    assert.equal(next.attempts[0].startedAt, at(1));
+  }
+});
+
+test("invalid, legacy and late first scores never partially start a scheduled round", () => {
+  const state = event(), before = JSON.stringify(state);
+  const cmd: FprCommand = { id: 'rejected-first-score', expectedRevision: 0, action: 'score',
+    matchId: state.attempts[0].matches[0].id, score1: 13, score2: 12, confirmed1: true, confirmed2: true, startIfScheduled: true };
+  for (const change of [{ score1: -1 }, { score2: 13 }, { score1: 1.5 }, { matchId: 'missing' },
+    { startIfScheduled: false }, { score1: 2, score2: 3 }]) {
+    assert.throws(() => applyFprCommand(state, { ...cmd, ...change }, at(1)));
+    assert.equal(JSON.stringify(state), before);
+  }
+  assert.throws(() => applyFprCommand(state, { ...cmd, playedAt: at(170), reason: 'late entry' }, at(177)), /дедлайн/);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test("first save rechecks reserve time after a reserve draw was prepared", () => {
+  let state = event();
+  for (let round = 1; round <= 6; round++) state = play(state, round);
+  state.endsAt = at(100);
+  state = command(state, { action: 'prepare_round' }, 82);
+  const before = JSON.stringify(state);
+  assert.throws(() => command(state, { action: 'score', matchId: fprCurrentAttempt(state)!.matches[0].id,
+    score1: 13, score2: 12, confirmed1: true, confirmed2: true, startIfScheduled: true }, 88), /запасного раунда/);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test("only the exact reducer rejection can release a pending command", async () => {
+  const { isRejectedFprCommand } = await import('../../src/components/tournaments/fprCommandRecovery.ts');
+  assert.equal(isRejectedFprCommand({ status: 422, error: { raw: { error: 'FPR_COMMAND_INVALID' } } }), true);
+  for (const status of [null, 200, 409, 500, 502]) {
+    assert.equal(isRejectedFprCommand({ status, error: { raw: { error: 'FPR_COMMAND_INVALID' } } }), false);
+  }
+  for (const raw of [null, undefined, 'FPR_COMMAND_INVALID', {}, { error: 'OTHER_ERROR' }]) {
+    assert.equal(isRejectedFprCommand({ status: 422, error: { raw } }), false);
+  }
+});

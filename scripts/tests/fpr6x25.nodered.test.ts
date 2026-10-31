@@ -220,3 +220,53 @@ test("legacy tournament preparation is unchanged by the conditional dispatch", (
   delete legacy[0].payload.$set.updatedAt; delete wrapped[0].payload.$set.updatedAt;
   assert.deepEqual(wrapped, legacy);
 });
+
+test("generated backend commits first-save start and score with one CAS and preserves broadcast", () => {
+  const original = fixture();
+  original.params.broadcast = { active: true, operationId: 'existing-operation' };
+  const before = structuredClone(original);
+  const cmd = { id: 'atomic-first-score', expectedRevision: 0, action: 'score',
+    matchId: original.params.fpr6x25.attempts[0].matches[0].id,
+    score1: 13, score2: 12, confirmed1: true, confirmed2: true, startIfScheduled: true };
+  const run = (doc: typeof original, command = cmd) => recalculate({ payload: structuredClone(doc),
+    req: { body: { results: [], params: { fprCommand: command } } } });
+  const response = run(original);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.mongoQuery['params.fpr6x25.revision'], 0);
+  const next = applyMongoSet(original, response.mongoUpdate);
+  assert.equal(next.params.fpr6x25.revision, 1);
+  assert.equal(next.params.fpr6x25.audit.length, 1);
+  assert.equal(next.params.fpr6x25.attempts[0].status, 'running');
+  assert.equal(next.params.fpr6x25.attempts[0].matches[0].score1, 13);
+  assert.deepEqual(next.params.broadcast, before.params.broadcast);
+  assert.deepEqual(original, before);
+  const replay = run(next);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.payload.params.fpr6x25.revision, 1);
+  assert.equal(replay.payload.params.fpr6x25.attempts[0].startedAt, next.params.fpr6x25.attempts[0].startedAt);
+  const stale = run(next, { ...cmd, id: 'stale-first-save' });
+  assert.equal(stale.statusCode, 409); assert.equal(stale.mongoUpdate, undefined);
+  const invalid = run(original, { ...cmd, score2: 13 });
+  assert.equal(invalid.statusCode, 422); assert.equal(invalid.mongoUpdate, undefined);
+});
+
+test("generated first-save partials start once; deadline and reused flags produce no writes", () => {
+  const original = fixture();
+  const cmd = { id: 'partial-first-save', expectedRevision: 0, action: 'score',
+    matchId: original.params.fpr6x25.attempts[0].matches[0].id,
+    score1: 7, score2: 5, confirmed1: false, confirmed2: false, startIfScheduled: true };
+  const run = (doc: typeof original, command = cmd) => recalculate({ payload: structuredClone(doc),
+    req: { body: { params: { fprCommand: command } } } });
+  const response = run(original);
+  assert.equal(response.statusCode, 200);
+  const next = applyMongoSet(original, response.mongoUpdate);
+  assert.equal(next.params.fpr6x25.attempts[0].status, 'running');
+  assert.equal(next.params.fpr6x25.attempts[0].matches[0].confirmed1, false);
+  const reused = run(next, { ...cmd, startIfScheduled: false });
+  assert.equal(reused.statusCode, 409); assert.equal(reused.mongoUpdate, undefined);
+  const late = structuredClone(original);
+  late.params.fpr6x25.endsAt = new Date(Date.now() + 60_000).toISOString();
+  const rejected = run(late);
+  assert.equal(rejected.statusCode, 422); assert.equal(rejected.mongoUpdate, undefined);
+  assert.equal(rejected.payload.error, 'FPR_COMMAND_INVALID');
+});
