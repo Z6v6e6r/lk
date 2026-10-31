@@ -9,7 +9,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "b24258308dde2aada7585d94165de27e1b651bd37e849c79f29533a34266b047", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "3504ea4fdbd93ea690a9eeef3ea132543d4a0010a67d06193e914ae4c1ecd7a1", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -1844,6 +1844,8 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     managedSubscriptionInstanceId: "",
     managedEntitlementState: "",
     managedEntitlementConfirmedAt: "",
+    managedSelfLeaveCancellation: "",
+    managedSelfLeaveReceipt: "",
     precreateRejection: "",
     precreateReconciliationCode: "",
   },
@@ -2091,6 +2093,113 @@ const prepareManagedPolicyEvaluation = (ctx, step) => {
   return emit(OUTPUT_MANAGED_POLICY);
 };
 
+// Restrictive SELF-return bridge: no client assertion can replace the durable
+// leave proof or canonical usage identity. Only this lane reads the leave ledger.
+const managedLeavePending = (ctx, code = "MANAGED_SELF_LEAVE_PENDING") => finishPending(ctx,
+  "Возврат посещения требует подтверждения CUP", { code });
+const managedLeaveBinding = (ctx) => {
+  const { leaveClaimToken, ...binding } = ctx.managedSelfLeave;
+  return binding;
+};
+const managedLeaveEqual = (a, b) => isObj(a) && isObj(b)
+  && Object.keys(a).sort().join(",") === Object.keys(b).sort().join(",")
+  && Object.keys(a).every(key => a[key] === b[key]);
+const managedLeaveRowMatches = (ctx, row) => {
+  const b = ctx.managedSelfLeave;
+  return isObj(row) && row._id === b.bookingOperationKey && row.operationId === b.bookingOperationId
+    && row.tenantKey === b.tenantKey && row.actorClientId === b.actorClientId
+    && row.exerciseId === b.exerciseId && row.clientSubscriptionId === b.clientSubscriptionId
+    && row.serviceDate === b.serviceDate && row.bookingId === b.bookingId
+    && (!row.upstreamBookingId || row.upstreamBookingId === b.bookingId)
+    && row.managedEntitlementOperationId === b.entitlementOperationId
+    && row.managedSubscriptionInstanceId === b.subscriptionInstanceId
+    && row.lk1?.visitJob === undefined && ["CONFIRMED", "RELEASED"].includes(row.state);
+};
+const managedLeaveReceiptMatches = (ctx, value) => isObj(value)
+  && Object.keys(value).sort().join(",") === "compensationState,operationId,operationState,providerBookingId,releaseReason,schemaVersion,subscriptionInstanceId"
+  && value.schemaVersion === 1 && value.operationId === ctx.managedSelfLeave.entitlementOperationId
+  && value.subscriptionInstanceId === ctx.managedSelfLeave.subscriptionInstanceId
+  && value.providerBookingId === ctx.managedSelfLeave.bookingId
+  && value.operationState === "COMPENSATED" && value.compensationState === "APPLIED"
+  && value.releaseReason === "BOOKING_CANCELLED";
+const managedLeaveMarkerMatches = (ctx, marker) => isObj(marker)
+  && Object.keys(marker).sort().join(",") === "binding,observedAt,schemaVersion"
+  && marker.schemaVersion === 1 && managedLeaveEqual(marker.binding, managedLeaveBinding(ctx))
+  && typeof marker.observedAt === "string" && Number.isFinite(Date.parse(marker.observedAt))
+  && Date.parse(marker.observedAt) <= Date.now();
+const managedLeaveQuery = (ctx, operation) => ({
+  _id: operation._id, operationId: operation.operationId, tenantKey: ctx.tenantKey,
+  actorClientId: ctx.actorClientId, exerciseId: operation.exerciseId,
+  clientSubscriptionId: operation.clientSubscriptionId, serviceDate: operation.serviceDate,
+  bookingId: operation.bookingId, state: operation.state,
+  upstreamBookingId: operation.upstreamBookingId === undefined ? { $exists: false } : operation.upstreamBookingId,
+  managedEntitlementOperationId: operation.managedEntitlementOperationId,
+  managedSubscriptionInstanceId: operation.managedSubscriptionInstanceId,
+});
+const managedLeaveFind = (ctx, step) => {
+  ctx.step = step;
+  msg._subscriptionBooking = ctx;
+  msg.payload = { _id: ctx.managedSelfLeave.leaveOperationKey, tenantKey: ctx.tenantKey,
+    operationId: ctx.managedSelfLeave.leaveOperationId, mode: "SELF",
+    actorClientId: ctx.actorClientId, targetClientId: ctx.actorClientId };
+  delete msg.error;
+  return emit(7);
+};
+const managedLeaveAuthorityMatches = (ctx, row) => {
+  const b = ctx.managedSelfLeave;
+  return isObj(row) && row._id === b.leaveOperationKey && row.operationId === b.leaveOperationId
+    && row.tenantKey === ctx.tenantKey && row.tenantKey === b.tenantKey
+    && row.mode === "SELF" && row.actorClientId === ctx.actorClientId && row.actorClientId === b.actorClientId
+    && row.targetClientId === ctx.actorClientId && row.gameId === b.gameId
+    && row.exerciseId === b.exerciseId && row.clientSubscriptionId === b.clientSubscriptionId
+    && row.membershipVersion === b.membershipVersion
+    && Array.isArray(row.bookingIds) && row.bookingIds.length === 1 && row.bookingIds[0] === b.bookingId
+    && ["VIVA_CONFIRMED", "LK_APPLIED"].includes(row.state)
+    && row.localApplyClaimToken === b.leaveClaimToken && Date.parse(row.localApplyLeaseUntil) > Date.now()
+    && row.subscriptionReturnState === "RETURN_VERIFIED"
+    && row.vivaVerification === "active_absent_history_cancelled"
+    && [row.vivaConfirmedAt, row.subscriptionReturnVerifiedAt].every(value => typeof value === "string"
+      && Number.isFinite(Date.parse(value)) && Date.parse(value) <= Date.now())
+    && row.requestedRefundMethod !== "NONE"
+    && Array.isArray(row.subscriptionReturnChecks) && row.subscriptionReturnChecks.length === 1
+    && row.subscriptionReturnChecks[0].bookingId === b.bookingId
+    && row.subscriptionReturnChecks[0].clientSubscriptionId === b.clientSubscriptionId
+    && Number.isSafeInteger(row.subscriptionReturnChecks[0].visitsLeftBefore)
+    && row.subscriptionReturnChecks[0].visitsLeftBefore >= 0
+    && Number.isSafeInteger(row.subscriptionReturnChecks[0].expectedReturnCount)
+    && row.subscriptionReturnChecks[0].expectedReturnCount > 0;
+};
+const managedLeaveReadback = (ctx) => {
+  const config = managedEntitlementConfig();
+  if (!validManagedEntitlementConfig(config, ctx)) return managedLeavePending(ctx);
+  const url = `${config.apiBase}/internal/subscriptions/entitlements/readback`;
+  ctx.managedLeaveReadbackUrl = url;
+  return prepareManagedHttp(ctx, "managed_leave_readback", "POST", url, {
+    operationId: ctx.managedSelfLeave.entitlementOperationId,
+    subscriptionInstanceId: ctx.managedSelfLeave.subscriptionInstanceId,
+  }, managedEntitlementHeaders(ctx, config));
+};
+const managedLeaveFinish = (ctx, operation) => finishReleased(ctx, {
+  operationFound: true, managedSelfLeave: managedLeaveBinding(ctx), compensation: operation.managedSelfLeaveReceipt,
+});
+const managedLeavePersistReceipt = (ctx) => {
+  const operation = ctx.releaseOperation;
+  if (!managedLeaveRowMatches(ctx, operation) || operation.state !== "CONFIRMED"
+    || !managedLeaveMarkerMatches(ctx, operation.managedSelfLeaveCancellation)
+    || !managedLeaveReceiptMatches(ctx, ctx.managedLeaveReceipt)) return managedLeavePending(ctx);
+  ctx.step = "managed_leave_release_ack";
+  msg._subscriptionBooking = ctx;
+  msg.payload = [{ ...managedLeaveQuery(ctx, operation), managedSelfLeaveCancellation: operation.managedSelfLeaveCancellation }, {
+    $set: { state: "RELEASED", releasedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      releaseBookingId: ctx.releaseBookingId, releaseOperationId: ctx.operationId, releaseSource: "GAME_LEAVE",
+      managedSelfLeaveReceipt: ctx.managedLeaveReceipt },
+    $addToSet: { releasedBookingIds: ctx.releaseBookingId },
+    $unset: { leaseUntil: "", pendingUntil: "", failure: "", failedAt: "" },
+  }, {}];
+  delete msg.error;
+  return emit(OUTPUT_MONGO_UPDATE);
+};
+
 const ctx = isObj(msg._subscriptionBooking) ? msg._subscriptionBooking : null;
 if (!ctx) {
   return finishError({}, 500, "Контекст серверной записи по абонементу потерян", {
@@ -2151,6 +2260,84 @@ if (ctx.step === "managed_precreate_entitlement_readback") {
   return preparePrecreateAbortUpdate(ctx);
 }
 
+if (ctx.managedSelfLeave && ["profile", "active_bookings", "history_bookings"].includes(ctx.step)) {
+  const paths = { profile: `/end-user/api/v1/${ctx.tenantKey}/profile`,
+    active_bookings: `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`,
+    history_bookings: `/end-user/api/v2/${ctx.tenantKey}/bookings/history?includeCanceled=true&size=1000` };
+  if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== `${VIVA_API_BASE}${paths[ctx.step]}`) {
+    return managedLeavePending(ctx, "MANAGED_SELF_LEAVE_PROVIDER_READ_INVALID");
+  }
+}
+if (["managed_leave_authority", "managed_leave_final_authority"].includes(ctx.step)) {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
+    || !managedLeaveAuthorityMatches(ctx, msg.payload[0])) return managedLeavePending(ctx, "MANAGED_SELF_LEAVE_AUTHORITY_MISMATCH");
+  if (ctx.step === "managed_leave_final_authority") return managedLeavePersistReceipt(ctx);
+  ctx.exerciseId = ctx.managedSelfLeave.exerciseId;
+  ctx.clientSubscriptionId = ctx.managedSelfLeave.clientSubscriptionId;
+  ctx.serviceDate = ctx.managedSelfLeave.serviceDate;
+  ctx.step = "managed_leave_operation";
+  msg.payload = { _id: ctx.managedSelfLeave.bookingOperationKey, tenantKey: ctx.tenantKey,
+    actorClientId: ctx.actorClientId, operationId: ctx.managedSelfLeave.bookingOperationId };
+  delete msg.error;
+  return emit(OUTPUT_MONGO_FIND);
+}
+if (["managed_leave_operation", "managed_leave_release_reread"].includes(ctx.step)) {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
+    || !managedLeaveRowMatches(ctx, msg.payload[0])) return managedLeavePending(ctx, "MANAGED_SELF_LEAVE_OPERATION_MISMATCH");
+  const operation = msg.payload[0];
+  ctx.releaseOperation = operation;
+  ctx.managedEnvironment = operation.managedEnvironment;
+  ctx.managedEntitlementOperationId = operation.managedEntitlementOperationId;
+  ctx.managedSubscriptionInstanceId = operation.managedSubscriptionInstanceId;
+  if (operation.state === "RELEASED") {
+    return managedLeaveMarkerMatches(ctx, operation.managedSelfLeaveCancellation)
+      && managedLeaveReceiptMatches(ctx, operation.managedSelfLeaveReceipt)
+      ? managedLeaveFinish(ctx, operation) : managedLeavePending(ctx);
+  }
+  if (ctx.step === "managed_leave_release_reread") return managedLeavePending(ctx);
+  if (operation.managedSelfLeaveCancellation !== undefined) {
+    if (!managedLeaveMarkerMatches(ctx, operation.managedSelfLeaveCancellation)) return managedLeavePending(ctx);
+    return managedLeaveReadback(ctx);
+  }
+  if (operation.managedEntitlementState !== "CONFIRMED") return managedLeavePending(ctx);
+  return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
+}
+if (ctx.step === "managed_leave_marker_ack") {
+  // A lost CAS acknowledgement never supplies authority to issue a release.
+  if (msg.error || msg.payload?.acknowledged !== true || msg.payload?.matchedCount !== 1
+    || msg.payload?.modifiedCount !== 1) return managedLeavePending(ctx);
+  ctx.releaseOperation.managedSelfLeaveCancellation = ctx.managedLeaveMarker;
+  return managedLeaveReadback(ctx);
+}
+if (ctx.step === "managed_leave_readback") {
+  const receipt = msg.payload;
+  if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== ctx.managedLeaveReadbackUrl
+    || !isObj(receipt) || Object.keys(receipt).sort().join(",") !== "compensationState,operationId,operationState,providerBookingId,releaseReason,schemaVersion,subscriptionInstanceId"
+    || receipt.schemaVersion !== 1 || receipt.operationId !== ctx.managedSelfLeave.entitlementOperationId
+    || receipt.subscriptionInstanceId !== ctx.managedSelfLeave.subscriptionInstanceId
+    || receipt.providerBookingId !== ctx.managedSelfLeave.bookingId) return managedLeavePending(ctx);
+  if (managedLeaveReceiptMatches(ctx, receipt)) {
+    ctx.managedLeaveReceipt = receipt;
+    return managedLeaveFind(ctx, "managed_leave_final_authority");
+  }
+  const marker = ctx.releaseOperation?.managedSelfLeaveCancellation;
+  if (ctx.managedLeaveReleaseAttempted === true || !managedLeaveMarkerMatches(ctx, marker)
+    || receipt.operationState !== "CONFIRMED" || receipt.compensationState !== "NONE" || receipt.releaseReason !== null
+    || Date.now() - Date.parse(marker.observedAt) > 60_000 || !managedJoinV2SignerReady()) return managedLeavePending(ctx);
+  recordOwnerReadback(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId, marker.observedAt);
+  ctx.ownerBookingReadback.operationId = ctx.managedEntitlementOperationId;
+  ctx.managedLeaveReleaseAttempted = true;
+  return prepareManagedEntitlementRelease(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId);
+}
+if (ctx.step === "managed_leave_release_ack") {
+  // Read the exact canonical row even on ambiguous Mongo ACK. Never repeat CUP
+  // release to repair a local acknowledgement loss.
+  ctx.step = "managed_leave_release_reread";
+  msg.payload = { ...managedLeaveQuery(ctx, ctx.releaseOperation), state: { $in: ["CONFIRMED", "RELEASED"] } };
+  delete msg.error;
+  return emit(OUTPUT_MONGO_FIND);
+}
+
 if (ctx.step === "profile") {
   if (!isHttpOk(msg.statusCode)) {
     const profileStatus = Number(msg.statusCode);
@@ -2166,6 +2353,11 @@ if (ctx.step === "profile") {
     return finishError(ctx, 502, "Профиль Viva не содержит устойчивую идентичность", {
       code: "SUBSCRIPTION_BOOKING_PROFILE_INCOMPLETE",
     });
+  }
+  if (ctx.managedSelfLeave) {
+    if (ctx.action !== "release" || ctx.managedSelfLeave.actorClientId !== ctx.actorClientId
+      || ctx.managedSelfLeave.tenantKey !== ctx.tenantKey) return managedLeavePending(ctx);
+    return managedLeaveFind(ctx, "managed_leave_authority");
   }
   if (ctx.managedJoinV2 || ctx.lk2LegacyJoin === true) {
     ctx.step = "managed_join_owner_recovery_find";
@@ -3021,6 +3213,7 @@ if (ctx.step === "operation_find") {
   }
   const rows = asArray(msg.payload);
   if (ctx.action === "release") {
+    if (ctx.managedSelfLeave && rows.length !== 1) return managedLeavePending(ctx);
     if (rows.length === 0) {
       return finishReleased(ctx, { operationFound: false });
     }
@@ -3039,6 +3232,26 @@ if (ctx.step === "operation_find") {
       return finishError(ctx, 409, "Абонемент отменённой записи не совпал с дневной операцией", {
         code: "SUBSCRIPTION_BOOKING_RELEASE_SUBSCRIPTION_MISMATCH",
       });
+    }
+    if (ctx.managedSelfLeave) {
+      if (!managedLeaveRowMatches(ctx, releaseOperation) || releaseOperation.state !== "CONFIRMED"
+        || ctx.exerciseId !== ctx.managedSelfLeave.exerciseId
+        || ctx.clientSubscriptionId !== ctx.managedSelfLeave.clientSubscriptionId
+        || ctx.serviceDate !== ctx.managedSelfLeave.serviceDate
+        || !ctx.ownerBookingReadback || ctx.ownerBookingReadback.kind !== "BOOKING_CANCELLED") return managedLeavePending(ctx);
+      ctx.releaseOperation = releaseOperation;
+      if (releaseOperation.managedSelfLeaveCancellation !== undefined) {
+        if (!managedLeaveMarkerMatches(ctx, releaseOperation.managedSelfLeaveCancellation)) return managedLeavePending(ctx);
+        return managedLeaveReadback(ctx);
+      }
+      ctx.managedLeaveMarker = { schemaVersion: 1, binding: managedLeaveBinding(ctx),
+        observedAt: ctx.ownerBookingReadback.observedAt };
+      if (!managedLeaveMarkerMatches(ctx, ctx.managedLeaveMarker)) return managedLeavePending(ctx);
+      ctx.step = "managed_leave_marker_ack";
+      msg.payload = [{ ...managedLeaveQuery(ctx, releaseOperation), managedSelfLeaveCancellation: { $exists: false } },
+        { $set: { managedSelfLeaveCancellation: ctx.managedLeaveMarker } }, {}];
+      delete msg.error;
+      return emit(OUTPUT_MONGO_UPDATE);
     }
     ctx.managedEnvironment = toStr(releaseOperation.managedEnvironment) || "PROD";
     if (asArray(releaseOperation.releasedBookingIds).some((id) => normalizeId(id) === normalizeId(ctx.releaseBookingId))) {
@@ -3611,6 +3824,11 @@ if (ctx.step === "operation_fail") {
 }
 
 if (ctx.step === "managed_entitlement_release") {
+  if (ctx.managedSelfLeave) {
+    // Neither HTTP 200 nor the release envelope proves applied compensation.
+    // Read the canonical operation on both successful and ambiguous responses.
+    return managedLeaveReadback(ctx);
+  }
   const result = unwrapRecord(msg.payload);
   if (!isHttpOk(msg.statusCode) || !result || result.schemaVersion !== 1
     || result.outcome !== "RELEASED"

@@ -1,4 +1,15 @@
 const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object" ? msg._splitLeaveCtx : null;
+if (ctx?.managedSelfLeaveReclaim) {
+  if (msg.error || msg.payload?.acknowledged !== true || msg.payload?.matchedCount !== 1
+    || msg.payload?.modifiedCount !== 1) {
+    msg.statusCode = 202; msg.payload = { ok: true, state: "IN_PROGRESS", operationId: ctx.operationId };
+    return [null, msg];
+  }
+  // The new claim owns only readback/compensation. Never enter cancellation again.
+  ctx.step = "local_apply";
+  msg.payload = undefined;
+  return [null, null, msg];
+}
 const matched = Number(msg.payload?.matchedCount ?? msg.payload?.modifiedCount ?? 0);
 if (!ctx || msg.error || matched < 1) {
   msg.statusCode = 202;

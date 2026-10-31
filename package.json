@@ -205,7 +205,7 @@
     "governance:main-owner:status": "node scripts/codex_main_worktree_guard.mjs status",
     "governance:main-owner:release": "node scripts/codex_main_worktree_guard.mjs release",
     "test:codex-main-worktree-guard": "node --test scripts/tests/codexMainWorktreeGuard.test.mjs",
-    "test:leave-generation-regressions": "node --experimental-strip-types --test scripts/tests/cupBookinglessStaffLeaveCandidate.test.mjs scripts/tests/splitLeaveActiveVivaDemotionCandidate.test.mjs scripts/tests/splitLeaveProjectionPatch.test.mjs scripts/tests/gameJoinRosterSync.test.ts scripts/tests/splitPaymentRecovery.test.mjs",
+    "test:leave-generation-regressions": "node --experimental-strip-types --test scripts/tests/managedSelfLeaveCompensation.test.mjs scripts/tests/managedSelfLeaveCompensationPatch.test.mjs scripts/tests/cupBookinglessStaffLeaveCandidate.test.mjs scripts/tests/splitLeaveActiveVivaDemotionCandidate.test.mjs scripts/tests/splitLeaveProjectionPatch.test.mjs scripts/tests/gameJoinRosterSync.test.ts scripts/tests/splitPaymentRecovery.test.mjs",
     "nodered:community-player-rating:patch": "node scripts/patch_nodered_community_player_rating_flow.mjs",
     "nodered:tournament-community-context:patch": "node scripts/patch_live_tournament_community_context.mjs",
     "test:deploy-topology": "node --experimental-strip-types --test scripts/tests/deployTopology.test.ts",

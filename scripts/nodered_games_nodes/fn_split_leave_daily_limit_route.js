@@ -128,6 +128,56 @@ if (ctx.subscriptionReturnState === "RETURN_PENDING") {
   ctx.dailyLimitOperationKey = toStr(operation._id);
   return continueApply(ctx);
 }
+// Managed SELF returns are complete only when the canonical CUP compensation
+// receipt is persisted on the same original booking operation.
+if (ctx.mode === "SELF" && ctx.requestedRefundMethod !== "NONE" && ctx.subscriptionReturnState === "RETURN_VERIFIED"
+  && (operation.managedEntitlementOperationId !== undefined || operation.managedSubscriptionInstanceId !== undefined
+    || operation.managedDecision != null || operation.managedEntitlementState != null
+    || operation.managedSelfLeaveCancellation !== undefined)) {
+  if (ctx.localReconciliation || ctx.supersededByRejoin
+    || operation.tenantKey !== "iSkq6G" || ctx.actorClientId !== ctx.targetClientId
+    || operation.actorClientId !== ctx.actorClientId || operation.exerciseId !== ctx.exerciseId
+    || operation.clientSubscriptionId !== ctx.clientSubscriptionId
+    || targetBookingIds.length !== 1 || operation.bookingId !== targetBookingIds[0]
+    || (operation.upstreamBookingId && operation.upstreamBookingId !== targetBookingIds[0])
+    || ctx.vivaVerification !== "active_absent_history_cancelled"
+    || !["CONFIRMED", "RELEASED"].includes(state)) return retry(ctx, "managed_self_leave_binding_unverified");
+  const binding = { schemaVersion: 1, tenantKey: operation.tenantKey, actorClientId: operation.actorClientId,
+    exerciseId: operation.exerciseId, clientSubscriptionId: operation.clientSubscriptionId,
+    bookingId: operation.bookingId, serviceDate: operation.serviceDate,
+    bookingOperationKey: operation._id, bookingOperationId: operation.operationId,
+    entitlementOperationId: operation.managedEntitlementOperationId,
+    subscriptionInstanceId: operation.managedSubscriptionInstanceId,
+    leaveOperationKey: ctx.operationKey, leaveOperationId: ctx.operationId,
+    gameId: ctx.gameId, membershipVersion: ctx.membershipVersion };
+  if (Object.entries(binding).some(([key, value]) => key !== "schemaVersion"
+    && (typeof value !== "string" || value.length < 1 || value.length > 500 || /[\s\x00-\x1f\x7f]/.test(value)))
+    || binding.leaveOperationKey !== `${binding.gameId}:${binding.leaveOperationId}`) return retry(ctx, "managed_self_leave_binding_unverified");
+  ctx.dailyLimitOperationKey = operation._id;
+  if (state === "RELEASED") {
+    const marker = operation.managedSelfLeaveCancellation;
+    const receipt = operation.managedSelfLeaveReceipt;
+    if (!isObj(marker) || marker.schemaVersion !== 1 || !isObj(marker.binding)
+      || Object.keys(marker.binding).sort().join(",") !== Object.keys(binding).sort().join(",")
+      || Object.keys(binding).some(key => marker.binding[key] !== binding[key])
+      || !isObj(receipt) || Object.keys(receipt).sort().join(",") !== "compensationState,operationId,operationState,providerBookingId,releaseReason,schemaVersion,subscriptionInstanceId"
+      || receipt.schemaVersion !== 1 || receipt.operationId !== binding.entitlementOperationId
+      || receipt.subscriptionInstanceId !== binding.subscriptionInstanceId || receipt.providerBookingId !== binding.bookingId
+      || receipt.operationState !== "COMPENSATED" || receipt.compensationState !== "APPLIED"
+      || receipt.releaseReason !== "BOOKING_CANCELLED") return retry(ctx, "managed_self_leave_receipt_unverified");
+    ctx.dailyLimitReleaseOutcome = "RELEASED";
+    ctx.dailyLimitReleasedAt = operation.releasedAt;
+    return continueApply(ctx);
+  }
+  if (typeof ctx.actorAuthHeader !== "string" || !/^Bearer \S+$/.test(ctx.actorAuthHeader)
+    || typeof ctx.claimToken !== "string" || !ctx.claimToken) return retry(ctx, "managed_self_leave_actor_required");
+  ctx.managedSelfLeave = { ...binding, leaveClaimToken: ctx.claimToken };
+  ctx.managedSelfLeaveStep = "start";
+  msg._splitLeaveCtx = ctx;
+  msg.payload = undefined;
+  delete msg.error;
+  return [null, null, null, null, msg];
+}
 if (["FAILED", "RELEASED"].includes(state)
   || (targetBookingIdSet.size > 0
     && Array.from(targetBookingIdSet).every((bookingId) => releasedBookingIds.includes(bookingId)))) {

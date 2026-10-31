@@ -19,7 +19,9 @@ if (ctx?.step === "find_absent_self_leave") {
   const receipts = rows.filter((row) => row?.mode === "SELF"
     && row.gameId === ctx.gameId && row.exerciseId === ctx.exerciseId
     && row.actorClientId === ctx.actorClientId && row.targetClientId === ctx.targetClientId
-    && ["DONE", "RETURN_PENDING"].includes(row.state) && row.outcome === "REMOVED"
+    && (["DONE", "RETURN_PENDING"].includes(row.state)
+      || (row.state === "VIVA_CONFIRMED" && row.tenantKey === "iSkq6G" && row.subscriptionReturnState === "RETURN_VERIFIED"))
+    && row.outcome === "REMOVED"
     && Number.isFinite(Date.parse(row.lkAppliedAt)) && Number.isFinite(Date.parse(row.createdAt))
     && ["active_absent_history_cancelled", "no_active_booking_for_exercise"].includes(row.vivaVerification)
     && row.operationId && row._id === `${ctx.gameId}:${row.operationId}`);
@@ -80,6 +82,8 @@ if (ctx.mode === "STAFF_TARGET" && (
 )) {
   return respond(409, "CONFLICT", "Existing operation has different removal parameters");
 }
+const requestedMembershipVersion = ctx.membershipVersion;
+const requestedBookingIds = ctx.initialBookingIds;
 ctx.bookingDiscovery = operation.bookingDiscovery || null;
 ctx.localReconciliation = operation.localReconciliation || ctx.localReconciliation || null;
 ctx.operationState = String(operation.state || "STARTED").toUpperCase();
@@ -164,6 +168,24 @@ if (["VIVA_CONFIRMED", "LK_APPLIED"].includes(ctx.operationState)) {
   const sameClaim = String(operation.localApplyClaimToken || "") === String(ctx.claimToken || "");
   if (!sameClaim && Number.isFinite(leaseUntilMs) && leaseUntilMs > Date.now()) {
     return respond(202, "IN_PROGRESS", "Локальная синхронизация уже выполняется");
+  }
+  if (!sameClaim && ctx.mode === "SELF" && operation.subscriptionReturnState === "RETURN_VERIFIED"
+    && operation.tenantKey === "iSkq6G" && typeof ctx.actorAuthHeader === "string"
+    && /^Bearer \S+$/.test(ctx.actorAuthHeader) && Number.isFinite(leaseUntilMs) && leaseUntilMs <= Date.now()) {
+    if (operation.tenantKey !== "iSkq6G" || operation.mode !== "SELF"
+      || operation.actorClientId !== ctx.actorClientId || operation.targetClientId !== ctx.targetClientId
+      || ctx.actorClientId !== ctx.targetClientId || operation.gameId !== ctx.gameId
+      || operation.exerciseId !== ctx.exerciseId
+      || (requestedMembershipVersion && requestedMembershipVersion !== operation.membershipVersion)
+      || !Array.isArray(operation.bookingIds) || operation.bookingIds.length !== 1
+      || (Array.isArray(requestedBookingIds) && requestedBookingIds.length > 0
+        && (requestedBookingIds.length !== 1 || requestedBookingIds[0] !== operation.bookingIds[0]))) {
+      return respond(409, "CONFLICT", "Привязка возврата посещения изменилась");
+    }
+    ctx.managedSelfLeaveReclaim = { state: operation.state, previousClaimToken: operation.localApplyClaimToken,
+      previousLeaseUntil: operation.localApplyLeaseUntil, membershipVersion: operation.membershipVersion,
+      bookingId: operation.bookingIds[0], clientSubscriptionId: operation.clientSubscriptionId };
+    return [null, null, null, msg];
   }
   if (!sameClaim) return respond(202, "RETRY_REQUIRED", "Локальная синхронизация ожидает фонового повтора");
   ctx.step = "local_apply";

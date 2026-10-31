@@ -869,3 +869,59 @@ unavailable owner stops before profile/claim/loopback mutation. Header `1` and i
 response bytes remain unchanged. The existing canonical flow patcher prepends the probe
 and canonical router into the same function body; its prepare/router/evaluator graph must
 be deployed as one reviewed compatible packet. A probe fragment alone is not an install.
+
+### Managed SELF LEAVE compensation (source contract, inactive until reviewed installation)
+
+A managed `SUBSCRIPTION` SELF LEAVE with a verified returned visit now routes through
+its original canonical subscription-booking owner. `RETURN_VERIFIED` alone is not
+CUP compensation. The bridge requires the same durable SELF leave operation,
+`tenantKey: iSkq6G`, actor, exercise, subscription, original booking and membership
+generation. The canonical booking operation must supply the exact entitlement
+operation and canonical subscription instance; caller-supplied references only
+restrict this lookup. New leave operations include the fixed producer tenant in
+`$setOnInsert`. Old rows without tenant provenance remain pending; this change
+performs no backfill or inference.
+
+The existing `action=release` ingress accepts an optional strict `managedSelfLeave`
+precondition, whose schema version is 1. It contains the original booking-operation
+key/ID, entitlement-operation ID, subscription-instance ID, tenant/actor/exercise/
+subscription/booking/service date and leave-operation key/ID/game/membership generation,
+plus the current leave claim token. This token is a concurrency fence, not a credential.
+The actor is authenticated through the existing profile read before durable lookups.
+The owner reads `lk_game_leave_operations`; it never accepts `RETURN_VERIFIED` from
+request data. Provider cancellation must be exact, complete and explicitly cancelled.
+
+Before the first CUP release, a CAS stores the immutable cancellation binding and
+original provider receipt time on the existing booking operation. The transient actor
+token and owner signature are never persisted. Release uses the existing `release-v1`
+proof with `BOOKING_CANCELLED`. It requires the existing owner signer to be enabled
+and valid; missing configuration cannot downgrade to an unsigned request. A retry
+with a stored marker reads the original CUP operation and does not refresh provider
+evidence. Only an exact seven-field readback with `COMPENSATED`, `APPLIED`,
+`BOOKING_CANCELLED` and the original booking/op/instance permits local `RELEASED`.
+HTTP success or the release response alone does not supply this evidence. Expired
+nonterminal evidence stays pending; an already completed compensation may be recovered
+after proof expiry through readback. Local ACK loss re-reads the exact booking row.
+
+The final update is fenced by the original booking identity, state and cancellation
+marker after another exact leave-claim read. Replacement/rejoin cannot release a new
+booking generation. A fresh authenticated SELF retry may CAS-claim an expired
+local-apply lease for that same returned-visit generation and enter compensation
+readback directly. An active lease, losing claim or stale claim acknowledgement does
+not replay provider cancellation. Background retries do not retain actor credentials;
+without a fresh actor Bearer they remain pending. Automatic background compensation
+is therefore not claimed. Existing late/NONE/staff-retain and paid visit-worker paths
+are unchanged; this contract neither executes monetary refunds nor handles organizer
+CANCEL.
+
+Mixed-version activation is fail-closed. The bridge uses the existing loopback owner
+base/tenant configuration and requires exact GET capability header
+`X-Booked-Operation-Owner-Contract: 3`, response policy `MANAGED_SELF_LEAVE_V1` and
+contract version 3. Existing v1/v2 probe responses and the original seven output
+indices are unchanged. The source-only `composeManagedSelfLeaveCompensation` composer
+assembles the bridge, canonical prepare/router/probe, durable authority reader and
+foreground-reclaim wiring as one exact graph packet. Its approved parent source is
+`71db810308ae56c228b62f3adbad9e8c7b3415da`; unknown source/topology is rejected.
+Historical release pins are not advanced. A production installation still needs fresh
+actual graph evidence, existing CUP release/readback availability and separate owner
+approval. Local synthetic tests are not Mongo, provider or production acceptance.
