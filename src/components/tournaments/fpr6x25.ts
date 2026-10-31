@@ -85,7 +85,7 @@ export type FprStanding = {
 type FprAction =
   | { action: "prepare_round" | "start_round" | "close_round" | "finish" }
   | { action: "set_b1"; matchId: string; playerId: string }
-  | { action: "score" | "correct_score"; matchId: string; score1: number; score2: number; confirmed1: boolean; confirmed2: boolean; reason?: string; playedAt?: string; lastRallyStartedAt?: string }
+  | { action: "score" | "correct_score"; matchId: string; score1: number; score2: number; confirmed1: boolean; confirmed2: boolean; startIfScheduled?: boolean; reason?: string; playedAt?: string; lastRallyStartedAt?: string }
   | { action: "cancel_round"; reason: string }
   | { action: "withdraw"; playerId: string; reason: string };
 export type FprCommand = FprAction & { id: string; expectedRevision: number };
@@ -407,6 +407,12 @@ export function fprReserveThreshold(state: FprState, now: string) {
   const remainingMs = Date.parse(state.endsAt) - Date.parse(now);
   return { allowed: state.reserveAllowed && completed.length >= 6 && completed.length < 8 && remainingMs >= requiredMs, requiredMs, remainingMs };
 }
+function startFprRound(state: FprState, current: FprAttempt | null, now: string) {
+  requireFpr(current?.status === "scheduled", "Нет подготовленного раунда");
+  requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
+  if (current.round >= 7) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
+  current.status = "running"; current.startedAt = now; state.status = "in_progress";
+}
 export function applyFprCommand(original: FprState, command: FprCommand, now: string): FprState {
   validateFprState(original);
   requireFpr(typeof command.id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(command.id), "Некорректный идентификатор команды");
@@ -427,20 +433,20 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
     if (fprCompletedRounds(state) >= 6) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
     state.attempts.push(prepareAttempt(state));
   } else if (command.action === "set_b1") {
-    requireFpr(current?.status === "scheduled", "Порядок подачи фиксируется до общего старта");
+    requireFpr(current?.status === "scheduled", "Порядок подачи фиксируется до первого сохранения счёта");
     const match = current.matches.find(m => m.id === command.matchId);
     requireFpr(match && match.pair2.includes(command.playerId), "B1 должен быть участником пары B");
     match.pair2 = [command.playerId, match.pair2.find(id => id !== command.playerId)!];
     detail = `${match.id}: B1=${command.playerId}`;
   } else if (command.action === "start_round") {
-    requireFpr(current?.status === "scheduled", "Нет подготовленного раунда");
-    requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
-    if (current.round >= 7) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
-    current.status = "running"; current.startedAt = now; state.status = "in_progress";
+    startFprRound(state, current, now);
   } else if (command.action === "score" || command.action === "correct_score") {
     const attempt = state.attempts.find(a => a.matches.some(m => m.id === command.matchId));
     const match = attempt?.matches.find(m => m.id === command.matchId);
     requireFpr(attempt && match, "Матч не найден");
+    if (command.action === "score" && command.startIfScheduled === true && attempt === current && attempt.status === "scheduled") {
+      startFprRound(state, current, now);
+    }
     requireFpr(command.action === "score" ? attempt.status === "running" : attempt.status === "closed", "Нельзя изменить счёт этой попытки");
     requireFpr(Number.isInteger(command.score1) && Number.isInteger(command.score2) && command.score1 >= 0 && command.score2 >= 0
       && command.score1 + command.score2 <= 25, "Счёт должен состоять из целых неотрицательных очков с суммой не больше 25");

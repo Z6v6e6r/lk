@@ -1,6 +1,7 @@
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
 import { AvatarImage } from "../UI/AvatarImage";
 import { FprTournamentSetup, FprTournamentManager, FprProtocolLookup } from "./FprTournamentPanel";
+import type { FprState } from "./fpr6x25";
 import { useLkTournamentSession } from "../../utils/useLkTournamentSession";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
@@ -1542,6 +1543,7 @@ interface TournamentDetailsModalProps {
   sourceDateKey?: string | null;
   canRefreshParticipantsFromViva: boolean;
   onSaved: (data: AmericanoTournamentPayload) => void;
+  initialFprPayload?: AmericanoTournamentPayload | null;
 }
 
 type TournamentParticipantEntry = ParticipantEntry & {
@@ -1638,7 +1640,9 @@ function TournamentDetailsModal({
   sourceDateKey = null,
   canRefreshParticipantsFromViva,
   onSaved,
+  initialFprPayload,
 }: TournamentDetailsModalProps) {
+  const initialFprState = initialFprPayload?.params?.fpr6x25 as FprState | undefined;
   useLkTournamentSession(isOpen);
   const [loading, setLoading] = useState(false);
   const [participants, setParticipants] = useState<ExerciseBooking[]>([]);
@@ -1868,7 +1872,15 @@ function TournamentDetailsModal({
         ))
       : [];
     setPairedMexicanoPairs(restoredPairs);
-  }, [historyRecord, isOpen, tournament, tournament?.id]);
+    if (initialFprPayload) {
+      setSelectedFamily("fpr6x25");
+      setSelectedType("fpr_6x25");
+      setRosterMode("manual");
+      setManualParticipants(initialFprPayload.participants.map((p, i) => createTournamentManualParticipantDraft(i, p)));
+      setManualStationName(String(initialFprPayload.params?.stationName ?? ""));
+      setManualOrganizerName(initialFprPayload.organizer.name ?? "");
+    }
+  }, [historyRecord, isOpen, tournament, tournament?.id, initialFprPayload]);
 
   const applyCourtsCount = (count: number) => {
     setCourtNames((prev) =>
@@ -3994,14 +4006,15 @@ function TournamentDetailsModal({
           <FprTournamentSetup
             key={String(tournament?.id ?? draftTournamentId ?? "manual-fpr")}
             players={sortedParticipants}
+            initialState={initialFprState}
             context={{
               tenantKey: TENANT_KEY,
               organizer: { id: profile?.id ?? null, phone: profile?.phone ?? null, tenantKey: TENANT_KEY, name: profile ? [profile.firstName, profile.lastName].filter(Boolean).join(" ") : null },
-              sourceExerciseId: tournament?.id,
-              stationName: tournament?.studio?.name || manualStationName,
-              stationId: tournament?.studio?.id,
-              endsAt: tournament?.timeTo,
-              dateKey: sourceDateKey || formatDate(new Date()),
+              sourceExerciseId: initialFprPayload ? initialFprState?.communityRating?.sourceExerciseId ?? undefined : tournament?.id,
+              stationName: initialFprPayload ? String(initialFprPayload.params?.stationName ?? manualStationName) : tournament?.studio?.name || manualStationName,
+              stationId: initialFprPayload ? typeof initialFprPayload.params?.stationId === "string" ? initialFprPayload.params.stationId : undefined : tournament?.studio?.id,
+              endsAt: initialFprState?.endsAt ?? tournament?.timeTo,
+              dateKey: initialFprPayload ? String(initialFprPayload.params?.localDateKey || sourceDateKey || formatDate(new Date())) : sourceDateKey || formatDate(new Date()),
               communityBinding: historyRecord ? { ratingCommunityId: historyRecord.ratingCommunityId ?? null,
                 publishedCommunities: (historyRecord.publishedCommunities ?? []).map(p => ({ communityId: p.communityId,
                   communityName: p.communityName ?? null, publicationId: p.publicationId ?? null,
@@ -6879,6 +6892,7 @@ export default function TournamentsPage({
   const [profileLoading, setProfileLoading] = useState(true);
   const [selectedTournament, setSelectedTournament] = useState<Exercise | null>(null);
   const [managerData, setManagerData] = useState<AmericanoTournamentPayload | null>(null);
+  const [fprSettingsData, setFprSettingsData] = useState<AmericanoTournamentPayload | null>(null);
   const [managerTotals, setManagerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [managerPlayerLogs, setManagerPlayerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
   const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
@@ -7615,6 +7629,16 @@ export default function TournamentsPage({
 
   const handleManagerEditSettings = () => {
     if (!managerData?.tournamentId) return;
+    if (managerData.tournamentType === "fpr_6x25") {
+      const sourceId = (managerData.params?.fpr6x25 as FprState | undefined)?.communityRating?.sourceExerciseId;
+      const sourceTournament = [...visibleTournaments, ...serverTournaments].find(item => String(item.id) === sourceId)
+        ?? buildTournamentDraftExercise({ payload: managerData, totals: null, playerLogs: null, updatedAt: new Date().toISOString() });
+      setFprSettingsData(managerData);
+      setSelectedTournament(sourceTournament);
+      setManualTournamentCreationOpen(!sourceTournament);
+      setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null);
+      return;
+    }
     const currentTournament =
       visibleTournaments.find((item) => String(item.id) === managerData.tournamentId)
       ?? serverTournaments.find((item) => String(item.id) === managerData.tournamentId)
@@ -7937,9 +7961,11 @@ export default function TournamentsPage({
         onClose={() => {
           setSelectedTournament(null);
           setManualTournamentCreationOpen(false);
+          setFprSettingsData(null);
         }}
         tournament={selectedTournament}
-        historyRecord={selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        historyRecord={fprSettingsData ? combinedHistoryById[fprSettingsData.tournamentId] ?? null : selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        initialFprPayload={fprSettingsData}
         sourceDateKey={selectedDateStr}
         canRefreshParticipantsFromViva={canHostTournaments}
         onSaved={handleTournamentCreated}
@@ -7951,6 +7977,7 @@ export default function TournamentsPage({
           data={managerData}
           onClose={() => { setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null); }}
           onDataChange={payload => handleManagerDataReplace(payload, { totals: null, playerLogs: null })}
+          onEditSettings={handleManagerEditSettings}
         />
       ) : <TournamentManagerModal
         isOpen={Boolean(managerData)}
