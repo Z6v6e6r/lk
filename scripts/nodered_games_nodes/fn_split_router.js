@@ -2,7 +2,7 @@
 const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "f11f8f844b39e196fec35f7d4964dd018529a00cb2ff5ab79b470d58feef828e", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -835,9 +835,57 @@ const abortManagedCreateReservation = (ctx, statusCode, error, details = null) =
   if (!reservation || !toStr(reservation.managedEntitlementOperationId)) {
     return fail(statusCode, error, details);
   }
+  // A prior readback cannot authorize this abort. Only the response to the
+  // durably bound, still-uncreated exercise attempt proves provider rejection.
+  const abortReservation = { ...reservation };
+  delete abortReservation.ownerBookingReadback;
+  const operationId = toStr(msg.req?.headers?.["idempotency-key"]
+    || msg.req?.headers?.["Idempotency-Key"] || msg.req?.query?.operationId);
+  const target = reservation.precreateRecoveryTarget;
+  const normalizedFromTime = /^\d{2}:\d{2}:\d{2}$/.test(toStr(ctx.fromTime) || "")
+    ? toStr(ctx.fromTime)
+    : /^\d{2}:\d{2}$/.test(toStr(ctx.fromTime) || "") ? `${ctx.fromTime}:00` : null;
+  const startsAt = normalizedFromTime ? Date.parse(`${ctx.date}T${normalizedFromTime}+03:00`) : NaN;
+  const expectedTarget = {
+    placeholderExerciseId: operationId ? `split-create:${operationId}` : null,
+    actorClientId: toStr(reservation.actorClientId),
+    clientSubscriptionId: toStr(ctx.clientSubscriptionId),
+    subscriptionInstanceId: toStr(reservation.managedSubscriptionInstanceId),
+    policyDigest: toStr(reservation.managedRuntime?.policyDigest),
+    stationId: toStr(ctx.verifiedStudioId),
+    roomId: toStr(ctx.verifiedRoomId),
+    category: "open_game",
+    externalEventTypeId: `viva:direction:${toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID}:type:${toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID}`,
+    startsAt: Number.isFinite(startsAt) ? new Date(startsAt).toISOString() : null,
+    durationMinutes: splitCreateDurationMinutes(ctx),
+    serviceDate: toStr(ctx.date),
+  };
+  if (!msg.error && ctx.step === "create_exercise" && ctx.action === "create"
+    && [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(msg.statusCode))
+    && ctx.managedCreateAttemptBound === true
+    && reservation.caller === "split_create_preflight" && reservation.managedAction === "CREATE_GAME"
+    && operationId && reservation.operationId === operationId && reservation.tenantKey === "iSkq6G"
+    && !reservation.precreatedEntitlementReserved && !ctx.exerciseId && !ctx.exercise
+    && !ctx.ownsExercise && !ctx.reusedConflictingExercise && !ctx.recoveredCreateOutcome
+    && !ctx.managedCreateRecoveredExerciseId
+    && reservation.exerciseId === expectedTarget.placeholderExerciseId
+    && reservation.clientSubscriptionId === expectedTarget.clientSubscriptionId
+    && reservation.managedRuntime?.subscriptionInstanceId === expectedTarget.subscriptionInstanceId
+    && (!ctx.clientId || toStr(ctx.clientId) === expectedTarget.actorClientId)
+    && toStr(ctx.studioId) === expectedTarget.stationId && toStr(ctx.roomId) === expectedTarget.roomId
+    && target && Object.keys(target).length === Object.keys(expectedTarget).length
+    && Object.entries(expectedTarget).every(([key, value]) => value !== null && value !== "" && target[key] === value)) {
+    abortReservation.ownerBookingReadback = {
+      kind: "PROVIDER_REJECTED", bookingId: null,
+      operationId: reservation.managedEntitlementOperationId,
+      tenantKey: reservation.tenantKey, actorClientId: reservation.actorClientId,
+      exerciseId: reservation.exerciseId, subscriptionId: reservation.clientSubscriptionId,
+      observedAt: new Date().toISOString(),
+    };
+  }
   msg._splitCtx = ctx;
   msg._subscriptionBooking = {
-    ...reservation,
+    ...abortReservation,
     caller: "split_create_abort",
     step: "managed_precreate_abort",
     finalFailure: {

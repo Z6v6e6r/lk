@@ -3693,9 +3693,9 @@ test("guarded patcher retains the business preimage and rejects an unregistered 
     ],
   };
 
-  assert.equal(businessSha256, "f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5");
-  assert.equal(funcSha256, "5c436951dfa273e5fb9753c144d242ec06c6b95aad957aebb9773d7f69262bfb");
-  assert.equal(resolveManagedSubscriptionRouterContract(router, businessSha256)?.managedActionCandidateSha256, null);
+  assert.equal(businessSha256, "f11f8f844b39e196fec35f7d4964dd018529a00cb2ff5ab79b470d58feef828e");
+  assert.equal(funcSha256, "70833cc326bc19246f8e0e4ecad28917ab274838c89911994211f5b8d7db58e8");
+  assert.equal(resolveManagedSubscriptionRouterContract(router, businessSha256), null);
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256), null);
 });
 
@@ -3987,4 +3987,122 @@ test("same-operation recovery cannot rewrite booking A to B before refusing its 
     assertOwnerPending(output);
     assert.deepEqual(operation, before);
   }
+});
+
+function boundCreateAttempt() {
+  const operationId = "idem-owner-create-abort";
+  const reservation = entitlementContext("operation_entitlement_bind", {
+    caller: "split_create_preflight", operationId, operationKey: "managed:owner-create-abort",
+    exerciseId: `split-create:${operationId}`, serviceDate: "2026-09-03",
+    managedEntitlementOperationId: "booking:owner-create-abort",
+    managedSubscriptionInstanceId: "subscription-instance-1", managedActivationRequired: false,
+    managedTarget: { stationId: PITER_STATION_ID, roomId: "room-1", category: "open_game",
+      externalEventTypeId: "viva:direction:4588:type:1613", durationMinutes: 60,
+      startsAt: "2026-09-03T12:00:00.000Z" },
+  });
+  const attempting = runFunction(ROUTER_FILE, { payload: mongoUpdateResult(),
+    _subscriptionBooking: reservation }, OWNER_GLOBALS);
+  assert.equal(attempting[3]._subscriptionBooking.step, "operation_precreated_attempt");
+  const bound = runFunction(ROUTER_FILE, { payload: mongoUpdateResult(),
+    _subscriptionBooking: attempting[3]._subscriptionBooking }, OWNER_GLOBALS);
+  assert.equal(bound[4].payload.state, "PREFLIGHT_ATTEMPT_BOUND");
+  const finalized = runFunction(FINALIZE_FILE, { ...bound[4],
+    req: { headers: { authorization: "Bearer user-token", "idempotency-key": operationId } },
+    _splitCtx: { action: "create", token: "service-token", paymentMode: "subscription",
+      selectedPaymentMode: "subscription", clientSubscriptionId: "client-subscription-1",
+      date: "2026-09-03", fromTime: "15:00", toTime: "16:00", roomId: "room-1",
+      studioId: PITER_STATION_ID, verifiedRoomId: "room-1", verifiedStudioId: PITER_STATION_ID,
+      vivaDirectionId: 4588, vivaExerciseTypeId: 1613, maxClientsCount: 4 },
+  });
+  const create = runFunction(SPLIT_ROUTER_FILE, finalized[0], OWNER_GLOBALS);
+  assert.equal(create[0].method, "POST");
+  assert.match(create[0].url, /\/exercises$/);
+  return { req: create[0].req, _splitCtx: create[0]._splitCtx };
+}
+function rejectedCreate(attempt = boundCreateAttempt(), statusCode = 422, error?: unknown) {
+  return runFunction(SPLIT_ROUTER_FILE, { ...attempt, statusCode,
+    payload: { code: "SYNTHETIC_REJECTED" }, ...(error ? { error } : {}) }, OWNER_GLOBALS);
+}
+
+test("bound split CREATE definitive rejection carries exact owner proof through release and local CAS", () => {
+  for (const status of [400, 401, 403, 404, 405, 410, 415, 422]) {
+    const rejected = rejectedCreate(undefined, status);
+    const abort = rejected[3];
+    assert.equal(abort._subscriptionBooking.step, "managed_precreate_abort");
+    const observedAt = abort._subscriptionBooking.ownerBookingReadback.observedAt;
+    const release = runFunction(ROUTER_FILE, abort, OWNER_GLOBALS);
+    verifyOwnerWire(release[0], "PROVIDER_REJECTED");
+    assert.equal(release[0]._subscriptionBooking.ownerBookingReadback.observedAt, observedAt);
+    const released = runFunction(ROUTER_FILE, { statusCode: 200, payload: {
+      schemaVersion: 1, outcome: "RELEASED", operationId: "booking:owner-create-abort",
+      subscriptionInstanceId: "subscription-instance-1", operationState: "FAILED", aggregateRevision: 3,
+    }, _subscriptionBooking: release[0]._subscriptionBooking }, OWNER_GLOBALS);
+    assert.equal(released[3]._subscriptionBooking.step, "operation_precreate_abort");
+    assert.equal(released[3].payload[0].state, "PRECREATE_ATTEMPTING");
+    assert.equal(released[3].payload[1].$set.state, "RELEASED");
+  }
+});
+
+test("split abort never signs ambiguous outcomes, changed lineage or a previously created exercise", () => {
+  for (const status of [408, 409, 429, 500, 502, 504]) {
+    const result = rejectedCreate(undefined, status);
+    assert.equal(result[3], undefined, `status ${status} cannot dispatch an abort`);
+  }
+  const mutations: Array<(attempt: any) => void> = [
+    a => { a._splitCtx.managedCreateAttemptBound = false; },
+    a => { a.req.headers["idempotency-key"] = "different-operation"; },
+    a => { a._splitCtx.clientSubscriptionId = "other-subscription"; },
+    a => { a._splitCtx.clientId = "other-actor"; },
+    a => { a._splitCtx.managedCreateReservation.actorClientId = "other-actor"; },
+    a => { a._splitCtx.managedCreateReservation.tenantKey = "other-tenant"; },
+    a => { a._splitCtx.managedCreateReservation.exerciseId = "other-placeholder"; },
+    a => { a._splitCtx.managedCreateReservation.managedAction = "JOIN_GAME"; },
+    a => { a._splitCtx.managedCreateReservation.managedSubscriptionInstanceId = "other-instance"; },
+    a => { a._splitCtx.managedCreateReservation.managedRuntime.policyDigest = "other-policy"; },
+    a => { a._splitCtx.managedCreateReservation.precreatedEntitlementReserved = true; },
+    a => { a._splitCtx.verifiedRoomId = "other-room"; },
+    a => { a._splitCtx.fromTime = "15:30"; },
+    a => { a._splitCtx.date = "2026-09-04"; },
+    a => { a._splitCtx.vivaDirectionId = 999; },
+    a => { a._splitCtx.exerciseId = "created-exercise"; },
+    a => { a._splitCtx.ownsExercise = true; },
+    a => { a._splitCtx.reusedConflictingExercise = true; },
+    a => { a._splitCtx.recoveredCreateOutcome = true; },
+    a => { a._splitCtx.managedCreateRecoveredExerciseId = "recovered-exercise"; },
+  ];
+  for (const mutate of mutations) {
+    const attempt = boundCreateAttempt();
+    // An inherited valid-looking receipt must be discarded, never reused.
+    attempt._splitCtx.managedCreateReservation.ownerBookingReadback = {
+      ...rejectedCreate()[3]._subscriptionBooking.ownerBookingReadback,
+    };
+    mutate(attempt);
+    const rejected = rejectedCreate(attempt);
+    assert.equal(rejected[3]._subscriptionBooking.ownerBookingReadback, undefined);
+    const result = runFunction(ROUTER_FILE, rejected[3], OWNER_GLOBALS);
+    if (attempt._splitCtx.managedCreateReservation.precreatedEntitlementReserved) {
+      assert.equal(result[0], null);
+      assert.equal(result[3]._subscriptionBooking.step, "operation_precreated_reconciliation");
+      assert.equal(result[3].payload[1].$set.state, "PRECREATE_RECONCILIATION_REQUIRED");
+    } else assertOwnerPending(result);
+  }
+  const transport = rejectedCreate(undefined, 400, { message: "response lost" });
+  assert.equal(transport[3]._subscriptionBooking.ownerBookingReadback, undefined);
+  assertOwnerPending(runFunction(ROUTER_FILE, transport[3], OWNER_GLOBALS));
+});
+
+test("split rejection retry retains original timestamp and cannot release after evidence expiry", () => {
+  const rejected = rejectedCreate()[3];
+  const abortContext = structuredClone(rejected._subscriptionBooking);
+  const release = runFunction(ROUTER_FILE, rejected, OWNER_GLOBALS);
+  const token = verifyOwnerWire(release[0], "PROVIDER_REJECTED");
+  const lost = runFunction(ROUTER_FILE, { statusCode: 504, payload: {},
+    _subscriptionBooking: release[0]._subscriptionBooking }, OWNER_GLOBALS);
+  assert.equal(lost[3], null);
+  assert.equal(lost[4].statusCode, 202);
+  const retry = runFunction(ROUTER_FILE, { _subscriptionBooking: abortContext }, OWNER_GLOBALS);
+  assert.equal(verifyOwnerWire(retry[0], "PROVIDER_REJECTED"), token);
+  abortContext.step = "managed_precreate_abort";
+  abortContext.ownerBookingReadback.observedAt = new Date(Date.now() - 61_000).toISOString();
+  assertOwnerPending(runFunction(ROUTER_FILE, { _subscriptionBooking: abortContext }, OWNER_GLOBALS));
 });

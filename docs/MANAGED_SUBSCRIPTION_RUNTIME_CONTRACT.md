@@ -720,9 +720,15 @@ readback merely by resigning it. Receiver configuration may enforce a shorter ag
 For booking POST rejection, only a response without a transport error and status
 400/401/403/404/405/410/415/422 produces PROVIDER_REJECTED with explicit null booking ID.
 This is the conservative definitive-rejection status set already used by the split CREATE flow;
-provider sandbox acceptance of this endpoint remains required. 408/409/429/5xx, empty history after
-an expired attempt, local pre-write failures, generic operation failure and split abort without
-its own rejection provenance are not signed. They remain pending in enabled mode. Existing
+provider sandbox acceptance of this endpoint remains required. Split CREATE now carries the
+actual exercise-rejection receipt only after the PRECREATE_ATTEMPTING acknowledgement and finalize
+handoff. It requires the original request operation, placeholder, actor, subscription/instance,
+policy, station, room, date, start, duration and exercise type to match the stored recovery target.
+A created, owned, adopted or recovered exercise cannot use this abort proof. Inherited receipts
+are discarded. The first response observation time is retained through CUP retry; expiry or loss
+of that server context requires reconciliation, never a new timestamp or inferred rejection.
+408/409/429/5xx, transport failures, empty history after an expired attempt, local pre-write
+failures and generic operation failure are not signed. They remain pending in enabled mode. Existing
 precreated-exercise reconciliation protection is unchanged, even after a definite booking refusal.
 
 Stop signal: `SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED` or
@@ -730,5 +736,5 @@ Stop signal: `SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED` or
 and reconcile; do not disable evidence validation to force a release. Rollback is a reviewed
 source rollback with compatible receiver mode, never automatic compensation. No deployment,
 secret creation, provider write or flag activation is part of this source change. Full strict-mode
-rollout still requires split-abort/local-abort contracts, physical Mongo/recovery verification and
+rollout still requires local-abort/context-loss recovery contracts, physical Mongo verification and
 provider acceptance. Unit fixtures and green CI do not establish those outcomes.
