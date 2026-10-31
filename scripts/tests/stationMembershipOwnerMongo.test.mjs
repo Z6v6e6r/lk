@@ -120,3 +120,18 @@ test('physical candidate before adoption failure retains epoch and Mongo identit
   await db[1].collection('lk_communities').insertOne({...replacement,stationMembershipLifetime:{version:1,revision:0,players:[]}});
   assert.equal((await run(db[2],'confirmation',confirmationBody(fresh,81))).payload.reason,'STATION_IDENTITY_CHANGED');
 });
+test('physical TRAINING exact kind binding, replay, LEFT and separate GAME generation claim',options,async t=>{
+  const db=await fixture(t),game=(await run(db[0],'admission',admissionBody(1))).payload;
+  assert.equal((await run(db[1],'confirmation',confirmationBody(game))).payload.outcome,'ENROLLED');
+  await transition(db[2],'LEFT');
+  const body=admissionBody(2);body.activity.kind='TRAINING';
+  const training=(await run(db[3],'admission',body)).payload,confirmation=confirmationBody(training);
+  assert.equal((await run(db[0],'confirmation',confirmation)).statusCode,409);
+  assert.equal(await db[1].collection('lk_station_membership_generation_claims').countDocuments(),1);
+  confirmation.confirmation.kind='TRAINING_REGISTRATION';
+  assert.equal((await run(db[0],'confirmation',confirmation)).payload.outcome,'ENROLLED');
+  assert.equal((await run(db[1],'confirmation',confirmation)).payload.outcome,'ALREADY_APPLIED');
+  assert.equal(await db[2].collection('lk_station_membership_generation_claims').countDocuments(),2);
+  await transition(db[2],'LEFT');
+  assert.equal((await run(db[3],'confirmation',confirmation)).payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+});

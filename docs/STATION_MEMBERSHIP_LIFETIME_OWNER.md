@@ -1,8 +1,8 @@
 # STATION membership owner v1 — source contract, inactive by default
 
-Owner: LK community owner; first consumer: authenticated LK2 managed GAME JOIN.
+Owner: LK community owner; consumers: authenticated LK2 managed GAME JOIN and TRAINING registration.
 This packet does not install endpoints, provision a signer, change live configuration,
-or authorize deployment. GAME only; TRAINING requires its own verified binding.
+or authorize deployment. The producer supplies each verified activity/registration binding.
 
 ## Wire bytes (frozen v1)
 
@@ -22,6 +22,14 @@ Confirmation body (exact keys):
 ```json
 {"contractVersion":1,"operationId":"original-operation-uuid","admissionId":"uuid","admissionBindingSha256":"sha256:64-lower-hex","confirmation":{"kind":"GAME_PARTICIPATION","generationId":"participation-uuid","activityId":"canonical-game-uuid"}}
 ```
+
+TRAINING uses the same v1 keys/routes/signature: admission `activity.kind=TRAINING`,
+`activity.id=<canonical training UUID>`; confirmation `kind=TRAINING_REGISTRATION`,
+`generationId=<canonical registration UUID>`, `activityId=<same canonical training UUID>`.
+The owner checks the exact GAME/GAME_PARTICIPATION or TRAINING/TRAINING_REGISTRATION
+pair and activity UUID against immutable admission before claiming a generation.
+Unknown kinds and cross-kind reinterpretation are rejected. No cancellation fact removes
+membership. Transport requires a persisted confirmed registration, not a user/provider token.
 
 Canonical JSON recursively sorts object keys lexicographically (JavaScript `.sort()`),
 retains array order, and uses JSON.stringify for strings/scalars. No whitespace.
@@ -90,13 +98,16 @@ existing lifetime barrier. This also protects admission-before-first-confirmatio
 the feature is later disabled: CUP cannot delete an already admitted identity.
 
 `lk_station_membership_generation_claims`: permanent first-wins `_id` =
-`v1:<tenantUuid>:<encodeURIComponent(communityId)>:GAME_PARTICIPATION:<generationUuid>`.
+`v1:<tenantUuid>:<encodeURIComponent(communityId)>:<confirmationKind>:<generationUuid>`.
+Kinds are GAME_PARTICIPATION or TRAINING_REGISTRATION. Existing GAME keys and claim
+document bytes remain compatible; the same UUID in different kinds has separate claims.
 Claim binds actor, original operation/admission/hash/activity/epoch. Never release or
 reassign it. Claim ACK alone proves neither membership nor success.
 
 `lk_communities.stationMembershipLifetime` is private:
 `{version:1,revision,players:[{playerId,canonicalUserId?,epoch,state,lastApplied?}]}`.
-`lastApplied` contains operationId/admissionId/generationId. LEFT, REMOVE, BAN and
+`lastApplied` contains operationId/admissionId/generationId; TRAINING adds
+`kind:TRAINING_REGISTRATION`. Missing kind retains the existing GAME meaning. LEFT, REMOVE, BAN and
 explicit administrative restore advance per-player epoch atomically with roster.
 Confirmation consumes its permanent claim and checks exact current epoch/status, policy,
 identity and roster CAS before appending membership; readback must prove actual ACTIVE

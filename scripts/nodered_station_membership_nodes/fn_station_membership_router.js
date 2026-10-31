@@ -44,7 +44,7 @@ try {
       if (!smEqual(smAdmissionBinding(ctx.actor, ctx.request), { contractVersion: d.contractVersion, actor: d.actor, operationId: d.operationId, requestSha256: d.requestSha256, activity: d.activity, stationId: d.stationId })) return fail(409, 'STATION_ADMISSION_BINDING_CONFLICT');
       return d.outcome === 'ADMITTED' ? readCommunity('adoption_select') : replyAdmission();
     }
-    if (d.admissionId !== ctx.request.admissionId || d.bindingSha256 !== ctx.request.admissionBindingSha256 || d.activity.id !== ctx.request.confirmation.activityId) return fail(409, 'STATION_CONFIRMATION_BINDING_CONFLICT');
+    if (d.admissionId !== ctx.request.admissionId || d.bindingSha256 !== ctx.request.admissionBindingSha256 || d.activity.id !== ctx.request.confirmation.activityId || smConfirmationKind(d.activity.kind) !== ctx.request.confirmation.kind) return fail(409, 'STATION_CONFIRMATION_BINDING_CONFLICT');
     if (d.outcome !== 'ADMITTED') return done('NOT_ENROLLED', d.reason);
     ctx.claim = smClaim(d, ctx.request);
     return output(5, [{ _id: ctx.claim._id }, { $setOnInsert: ctx.claim }, { upsert: true }], 'claim_write');
