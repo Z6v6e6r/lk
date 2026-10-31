@@ -17,7 +17,7 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 // Preserve frozen release contracts while separately pinning observer-only sources.
 const observerPins = {
   'scripts/nodered_games_nodes/fn_patch.js': ['04d4565f740ac2179b0bb76756eccad4f7a7e88e2a3569f3a0670f32d3ed672b', 'const isObj ='],
-  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['e5d43710933ddb90768b7b495fd3a2a19bda1dd53cabba894b430631b1ed4e2f', 'const VIVA_API_BASE'],
+  'scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js': ['ad81499dffc9b94e7d41f5907ecb53054f2bc4d0c72536d7a330ab73f30aadfd', 'const VIVA_API_BASE'],
   'scripts/nodered_games_nodes/fn_game_payment_confirm_router.js': ['d5606ece01b42d4275e5d53b7a40fb5fb78be015b92d9675d41ae8f984226e16', 'const TOKEN_URL'],
 };
 function frozenBusinessHash(file) {
@@ -25,7 +25,9 @@ function frozenBusinessHash(file) {
   const pin = observerPins[file];
   if (!pin) return sha256(text);
   assert.equal(sha256(text), pin[0], file);
-  const business = text.slice(text.indexOf(pin[1]))
+  const prefix = file.endsWith('fn_subscription_booking_router.js')
+    ? text.slice(0, text.indexOf('// Diagnostic observer:')) : '';
+  const business = (prefix + text.slice(text.indexOf(pin[1])))
     .replace('  lkDiagnostic({ code: details?.code, httpStatus: statusCode, outcome: "refused" });\n', '')
     .replace('  lkDiagnostic({ code: "OUTCOME_UNKNOWN", outcome: "outcome_unknown" });\n', '')
     .replace('  lkDiagnostic({ code, httpStatus: statusCode, outcome: "refused" });\n', '');
@@ -273,9 +275,11 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
     }
     assert.match(amendment.sourceSha256, /^[a-f0-9]{64}$/);
     if (target.id === "lk_subscription_booking_router_20260804") {
-      // The older unified candidate remains unbound after the Patriots classifier
-      // change; its router hash must not silently advance with the new release.
-      assert.equal(actualSourceSha256, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, target.id);
+      // Current owner-evidence source is distinct; never advance a historical release preimage.
+      assert.equal(PATRIOTS_PREIMAGE.reviewedBookingRouterSource,
+        "86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991");
+      assert.equal(actualSourceSha256, "61a7e8f107581fadd9dd828bdb94a91ba8e6c46766dcd7d13d1db0f48a8ac6b6", target.id);
+      assert.notEqual(actualSourceSha256, PATRIOTS_PREIMAGE.reviewedBookingRouterSource, target.id);
       assert.notEqual(actualSourceSha256, amendment.sourceSha256, target.id);
     } else {
       const promo = JSON.parse(fs.readFileSync(new URL('../subscription_friendship_promo_generation.json', import.meta.url)));

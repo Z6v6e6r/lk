@@ -1,9 +1,15 @@
+// Owner proofs are outbound-only; do not retain a previous request proof on replies or diagnostics.
+if (msg.headers && typeof msg.headers === "object") {
+  for (const name of Object.keys(msg.headers)) {
+    if (name.toLowerCase() === "x-subscription-owner-evidence") delete msg.headers[name];
+  }
+}
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "86b63d2f5e61c9046f31189c8f384ee6e6abfe5cf94c309cc51f7458d9aa1991", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "61a7e8f107581fadd9dd828bdb94a91ba8e6c46766dcd7d13d1db0f48a8ac6b6", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -463,6 +469,62 @@ const managedEntitlementHeaders = (ctx, config) => ({
   Accept: "application/json",
 });
 
+// Opt-in backend evidence producer. Never copy the key or proof into operation/context storage.
+const managedOwnerEvidence = (ctx, kind, providerBookingId) => {
+  const unavailable = { ok: false, code: "SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED" };
+  try {
+    const mode = global.get("subscriptions_owner_evidence_enabled");
+    if (mode === undefined || mode === null || mode === false || mode === "false") {
+      return { ok: true, headers: {} };
+    }
+    if (mode !== true && mode !== "true") return unavailable;
+    const secret = global.get("subscriptions_owner_evidence_secret");
+    const crypto = global.get("crypto");
+    if (typeof secret !== "string" || Buffer.byteLength(secret.trim(), "utf8") < 32
+      || typeof crypto?.createHmac !== "function") return unavailable;
+    const evidence = ctx.ownerBookingReadback;
+    const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/;
+    const age = Date.now() - Date.parse(evidence?.observedAt);
+    const operation = ctx.releaseOperation;
+    if (kind === "BOOKING_CANCELLED" && (!operation
+      || operation.tenantKey !== ctx.tenantKey || operation.actorClientId !== ctx.actorClientId
+      || normalizeId(operation.exerciseId) !== normalizeId(ctx.exerciseId)
+      || normalizeId(operation.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)
+      || operation.serviceDate !== ctx.serviceDate)) {
+      return { ok: false, code: "SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED" };
+    }
+    if (!evidence || evidence.kind !== kind
+      || evidence.operationId !== ctx.managedEntitlementOperationId
+      || evidence.bookingId !== providerBookingId
+      || evidence.tenantKey !== ctx.tenantKey || evidence.actorClientId !== ctx.actorClientId
+      || evidence.exerciseId !== ctx.exerciseId || evidence.subscriptionId !== ctx.clientSubscriptionId
+      || !idPattern.test(ctx.managedEntitlementOperationId || "")
+      || (kind === "PROVIDER_REJECTED" ? providerBookingId !== null : !idPattern.test(providerBookingId || ""))
+      || !Number.isFinite(age) || age < 0 || age > 60_000) {
+      return { ok: false, code: "SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED" };
+    }
+    const claims = kind === "CONFIRMED"
+      ? { operationId: ctx.managedEntitlementOperationId, providerBookingId, issuedAt: evidence.observedAt }
+      : { operationId: ctx.managedEntitlementOperationId, reason: kind, providerBookingId, issuedAt: evidence.observedAt };
+    const encoded = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+    const prefix = kind === "CONFIRMED" ? "v1" : "release-v1";
+    const domain = kind === "CONFIRMED" ? "owner-evidence:v1" : "owner-evidence:release:v1";
+    const mac = crypto.createHmac("sha256", secret.trim()).update(`${domain}\0${encoded}`).digest("hex");
+    return { ok: true, headers: { "X-Subscription-Owner-Evidence": `${prefix}.${encoded}.${mac}` } };
+  } catch {
+    return unavailable;
+  }
+};
+
+const recordOwnerReadback = (ctx, kind, bookingId, observedAt = new Date().toISOString()) => {
+  ctx.ownerBookingReadback = {
+    kind, bookingId, operationId: ctx.managedEntitlementOperationId,
+    tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
+    exerciseId: ctx.exerciseId, subscriptionId: ctx.clientSubscriptionId,
+    observedAt,
+  };
+};
+
 const prepareManagedEntitlementReserve = (ctx) => {
   const config = managedEntitlementConfig();
   if (!validManagedEntitlementConfig(config, ctx)) {
@@ -497,6 +559,8 @@ const prepareManagedEntitlementConfirm = (ctx) => {
       code: "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED",
     });
   }
+  const proof = managedOwnerEvidence(ctx, "CONFIRMED", ctx.confirmedBookingId);
+  if (!proof.ok) return finishPending(ctx, "Подтверждение льготы требует доказательства владельца", { code: proof.code });
   return prepareManagedHttp(
     ctx,
     "managed_entitlement_confirm",
@@ -506,7 +570,7 @@ const prepareManagedEntitlementConfirm = (ctx) => {
       operationId: ctx.managedEntitlementOperationId,
       providerBookingId: ctx.confirmedBookingId,
     },
-    managedEntitlementHeaders(ctx, config),
+    { ...managedEntitlementHeaders(ctx, config), ...proof.headers },
   );
 };
 
@@ -522,6 +586,8 @@ const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null)
       code: "SUBSCRIPTION_ENTITLEMENT_RELEASE_NOT_CONFIGURED",
     });
   }
+  const proof = managedOwnerEvidence(ctx, reason, providerBookingId);
+  if (!proof.ok) return finishPending(ctx, "Освобождение льготы требует доказательства владельца", { code: proof.code });
   const payload = {
     operationId: ctx.managedEntitlementOperationId,
     reason,
@@ -534,7 +600,7 @@ const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null)
     "POST",
     `${config.apiBase}/internal/subscriptions/entitlements/release`,
     payload,
-    managedEntitlementHeaders(ctx, config),
+    { ...managedEntitlementHeaders(ctx, config), ...proof.headers },
   );
 };
 
@@ -1227,6 +1293,34 @@ const isInactiveBooking = (value) => {
   return statuses.some((status) => /CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|ARCHIVE|REMOV/i.test(String(status || "")));
 };
 
+// Payment failure, refund, archive and a cancelled exercise do not attest booking cancellation.
+const isExplicitlyCancelledBooking = (booking) => {
+  const statuses = [booking?.status, booking?.state, booking?.bookingStatus]
+    .map((status) => String(status || "").trim().toUpperCase());
+  if (statuses.some((status) => ["ACTIVE", "CONFIRMED", "BOOKED", "PENDING", "RESERVED"].includes(status))) return false;
+  return booking?.isCancelled === true || booking?.cancelled === true || booking?.canceled === true
+    || statuses.some((status) => ["CANCELLED", "CANCELED"].includes(status));
+};
+
+const ownerConfirmationOperationMatches = (ctx, operation, booking) => (
+  operation?.tenantKey === ctx.tenantKey && operation?.actorClientId === ctx.actorClientId
+  && normalizeId(operation?.exerciseId) === normalizeId(ctx.exerciseId)
+  && normalizeId(operation?.clientSubscriptionId) === normalizeId(ctx.clientSubscriptionId)
+  && operation?.serviceDate === ctx.serviceDate
+  && normalizeId(operation?.bookingId || operation?.upstreamBookingId) === normalizeId(bookingId(booking))
+);
+
+const recordOwnerConfirmation = (ctx, booking, observedAt) => {
+  delete ctx.ownerBookingReadback;
+  if (bookingId(booking) && !isInactiveBooking(booking)
+    && (!ctx.immediateBookingId || normalizeId(ctx.immediateBookingId) === normalizeId(bookingId(booking)))
+    && normalizeId(bookingClientId(booking)) === normalizeId(ctx.actorClientId)
+    && normalizeId(bookingExerciseId(booking)) === normalizeId(ctx.exerciseId)
+    && normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)) {
+    recordOwnerReadback(ctx, "CONFIRMED", bookingId(booking), observedAt || null);
+  }
+};
+
 const mergeBookings = (activePayload, historyPayload) => {
   const byId = new Map();
   const withoutId = [];
@@ -1550,7 +1644,17 @@ const prepareExpiredPendingReconciliation = (ctx, operation) => {
   );
 };
 
-const prepareConfirmedUpdate = (ctx, booking) => {
+const prepareConfirmedUpdate = (ctx, booking, operation = null) => {
+  delete ctx.ownerBookingReadback;
+  if (ctx.step === "confirmation_bookings" || ownerConfirmationOperationMatches(ctx, operation, booking)) {
+    recordOwnerConfirmation(ctx, booking, ctx.step === "confirmation_bookings"
+      ? new Date().toISOString() : ctx.bookingsObservedAt);
+  }
+  // Refuse before rewriting the stored booking: otherwise the next retry could attest the rewrite.
+  if (ctx.managedEntitlementOperationId) {
+    const proof = managedOwnerEvidence(ctx, "CONFIRMED", bookingId(booking) || ctx.immediateBookingId || null);
+    if (!proof.ok) return finishPending(ctx, "Подтверждение льготы требует доказательства владельца", { code: proof.code });
+  }
   const nowIso = new Date().toISOString();
   ctx.confirmedBookingId = bookingId(booking) || ctx.immediateBookingId || null;
   ctx.confirmedSpot = Number(booking?.spot) || ctx.spot || null;
@@ -2258,6 +2362,7 @@ if (ctx.step === "active_bookings") {
     });
   }
   ctx.activeBookingsPayload = msg.payload;
+  ctx.activeBookingsObservedAt = new Date().toISOString();
   return prepareUserGet(
     ctx,
     "history_bookings",
@@ -2282,6 +2387,11 @@ if (ctx.step === "history_bookings") {
     });
   }
   const activeBookingsPayload = ctx.activeBookingsPayload;
+  // Use the oldest provider receipt; history completion must not renew older active rows.
+  const activeObservedMs = Date.parse(ctx.activeBookingsObservedAt);
+  ctx.bookingsObservedAt = Number.isFinite(activeObservedMs) && activeObservedMs <= Date.now()
+    ? new Date(activeObservedMs).toISOString() : null;
+  delete ctx.activeBookingsObservedAt;
   const bookings = mergeBookings(activeBookingsPayload, msg.payload);
   delete ctx.activeBookingsPayload;
   if (ctx.action === "release") {
@@ -2314,6 +2424,14 @@ if (ctx.step === "history_bookings") {
     ctx.exerciseId = bookingExerciseId(cancelledBooking);
     ctx.clientSubscriptionId = bookingSubscriptionId(cancelledBooking);
     ctx.serviceDate = eventDate(cancelledBooking);
+    delete ctx.ownerBookingReadback;
+    if (exactBookings.every((booking) => isExplicitlyCancelledBooking(booking)
+      && normalizeId(bookingClientId(booking)) === normalizeId(ctx.actorClientId)
+      && normalizeId(bookingExerciseId(booking)) === normalizeId(ctx.exerciseId)
+      && normalizeId(bookingSubscriptionId(booking)) === normalizeId(ctx.clientSubscriptionId)
+      && eventDate(booking) === ctx.serviceDate)) {
+      recordOwnerReadback(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId, ctx.bookingsObservedAt);
+    }
     return prepareOperationFind(ctx, {
       tenantKey: ctx.tenantKey,
       actorClientId: ctx.actorClientId,
@@ -2558,6 +2676,9 @@ if (ctx.step === "operation_find") {
     ctx.managedSubscriptionInstanceId = toStr(releaseOperation.managedSubscriptionInstanceId);
     if (ctx.managedEntitlementOperationId) {
       ctx.releaseOperation = releaseOperation;
+      if (ctx.ownerBookingReadback?.kind === "BOOKING_CANCELLED") {
+        ctx.ownerBookingReadback.operationId = ctx.managedEntitlementOperationId;
+      }
       ctx.entitlementReleaseNext = "local_operation_release";
       return prepareManagedEntitlementRelease(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId);
     }
@@ -2637,6 +2758,10 @@ if (ctx.step === "operation_find") {
       ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
       if (ctx.managedEntitlementOperationId
         && operation.managedEntitlementState !== "CONFIRMED") {
+        delete ctx.ownerBookingReadback;
+        if (ownerConfirmationOperationMatches(ctx, operation, ctx.sameExerciseBooking)) {
+          recordOwnerConfirmation(ctx, ctx.sameExerciseBooking, ctx.bookingsObservedAt);
+        }
         return prepareManagedEntitlementConfirm(ctx);
       }
       return prepareManagedFirstUseActivation(ctx, stableBookingId);
@@ -2650,7 +2775,7 @@ if (ctx.step === "operation_find") {
       ctx.immediateBookingId = stableBookingId;
       ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
       ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
-      return prepareConfirmedUpdate(ctx, ctx.sameExerciseBooking);
+      return prepareConfirmedUpdate(ctx, ctx.sameExerciseBooking, operation);
     }
     return finishError(ctx, 409, "По этому абонементу уже есть запись на выбранное событие", {
       code: DAILY_LIMIT_CODE,
@@ -2912,6 +3037,11 @@ if (ctx.step === "booking_create") {
           rawCode: toStr(msg.payload?.code),
         };
         ctx.entitlementReleaseNext = "persist_failure";
+        delete ctx.ownerBookingReadback;
+        // Preserve ambiguity for timeout, conflict, throttling, transport errors and unknown responses.
+        if (!msg.error && [400, 401, 403, 404, 405, 410, 415, 422].includes(statusCode)) {
+          recordOwnerReadback(ctx, "PROVIDER_REJECTED", null);
+        }
         return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
       }
       return prepareFailedUpdate(
