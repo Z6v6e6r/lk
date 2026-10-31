@@ -106,6 +106,11 @@ test("group schedule cannot mix tournament and training discounts or widen to ot
     assert.equal(isGroupScheduleSubscriptionQuote({ ...quote, ...delta }, true, quote.exerciseId, quote.actorClientId, now), false);
   }
   assert.equal(matchGroupScheduleSubscriptionDiscount([], oneTime, true, 6306), null);
+  const noBenefit = { ...quote, discountPercent: 0, amountMinor: quote.basePriceMinor };
+  assert.equal(isGroupScheduleSubscriptionQuote(noBenefit, true, quote.exerciseId, quote.actorClientId, now), true,
+    "zero-percent responses remain valid protocol answers");
+  assert.equal(matchGroupScheduleSubscriptionDiscount([noBenefit], oneTime, true, 6306), null,
+    "a full-price answer must not become a discounted subscription booking");
   assert.equal(matchGroupScheduleSubscriptionDiscount([quote], { ...oneTime, cost: 700000 }, true, 6306), null);
 });
 
@@ -117,6 +122,49 @@ test("group schedule fetches the matching route, keys async quotes by category, 
   assert.match(page, /!promoPreview \? matchGroupScheduleSubscriptionDiscount/);
   assert.match(page, /buildGroupScheduleSubscriptionDiscountProduct\(discount\)/);
   assert.match(page, /action: isPatriotsTournament\(training\) \? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING"/);
+});
+
+test("group schedule accepts a valid zero-benefit preview without a validation error", async () => {
+  const source = ts.createSourceFile("page.tsx", fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8"),
+    ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let callback: ts.Node | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect"
+      && node.arguments[0]?.getText(source).includes("const fetchDiscounts =")) callback = node.arguments[0];
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.ok(callback, "exercise the actual asynchronous quote handler");
+  const code = ts.transpileModule(`return (${callback.getText(source)});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const zero = { ...quote, discountPercent: 0, amountMinor: quote.basePriceMinor };
+  for (const product of [oneTime, { ...oneTime, id: "other" }, { ...oneTime, cost: 1 }]) {
+    const errors: Array<string | null> = [];
+    let accepted: unknown = null;
+    const dependencies = {
+      isAuthenticated: true, isRestoringSession: false, subscriptionUsageShadowEnabled: false,
+      selectedId: quote.exerciseId, checkout: { profile: { id: quote.actorClientId },
+        exercise: { timeFrom: quote.startsAt }, oneTimes: [product] },
+      registrationLoading: false, topokratyExcluded: false, patriotsTournamentSelected: true,
+      AbortController, isGroupScheduleSubscriptionQuote,
+      apiFetchTournamentSubscriptionDiscounts: async () => ({ data: { quotes: [zero] }, error: null }),
+      apiFetchGroupSubscriptionDiscounts: async () => { throw new Error("wrong preview route"); },
+      setDiscountQuotes: (value: unknown) => { accepted = value; },
+      setDiscountError: (value: string | null) => { errors.push(value); },
+      setDiscountResolvedFor: () => {}, setDiscountLoading: () => {},
+    };
+    const effect = new Function(...Object.keys(dependencies), code)(...Object.values(dependencies));
+    const cleanup = effect();
+    await Promise.resolve();
+    await Promise.resolve();
+    if (product === oneTime) {
+      assert.equal(errors.filter(Boolean).length, 0);
+      assert.deepEqual(accepted, [zero]);
+      assert.equal(matchGroupScheduleSubscriptionDiscount([zero], product, true, 6306), null);
+    } else assert.ok(errors.some(Boolean), "changed product or price remains rejected");
+    cleanup();
+  }
 });
 
 test("server preview reproduces the old training-target refusal and accepts the Patriots tournament route", () => {
