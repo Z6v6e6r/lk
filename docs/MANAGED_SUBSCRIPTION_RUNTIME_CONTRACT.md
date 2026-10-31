@@ -772,3 +772,100 @@ source rollback with compatible receiver mode, never automatic compensation. No 
 secret creation, provider write or flag activation is part of this source change. Full strict-mode
 rollout still requires local-abort recovery, physical Mongo verification, the companion CUP
 readback deployment and provider acceptance. Unit fixtures and green CI do not establish those outcomes.
+
+## Managed JOIN owner v2 (source only)
+
+The v1 external routes, JWT claims, request hashes and operation-ID derivation are
+unchanged. v2 uses the same operation ID for a tenant/user/idempotency key: changing
+version or an admitted binding conflicts instead of opening another operation.
+There is no new activation flag. Existing receiver/execution gates, the canonical
+managed product/purchase-date selector and the existing owner-evidence signer remain
+mandatory. These sources do not install a flow, change configuration or activate a provider.
+
+The separate internal routes are POST `/lk/integrations/v2/booked-operation-preflights`,
+POST `/lk/integrations/v2/booked-operation-admissions`, and GET
+`/lk/integrations/v2/booked-operations/:operationId`. v2 delegation requires
+`contract_version:2`; preflight scope is `subscription-runtime.booked-operation.preflight`,
+admission/read retain their respective existing scopes. Signed method, actual route,
+actor token digest/expiry, tenant, actor/provider mapping, target mapping/version and
+request hash must agree. Preflight forbids reservation_id; admission requires it;
+read requires receipt_version 2. The operation ID still uses the v1 derivation domain.
+
+The synthetic managed wire fixture is `scripts/tests/fixtures/managed-join-v2-contract.json`.
+Preflight hashes ordered compact JSON under `booked-operation-preflight:v2` plus NUL;
+admission uses `booked-operation-admission:v2` plus NUL. Preflight is nonbinding and
+accepts only JOIN_GAME/USE_SUBSCRIPTION with the public target/revision. It verifies the
+user-scoped provider profile, exact exercise and uniquely owned subscription by GET,
+then evaluates the canonical gateway's exact selector closure extracted by the existing
+source helper. It never creates a booking, reservation, usage ledger or Mongo row.
+A positive unmanaged selection returns the same base fields with `management:"LEGACY"`
+and no entitlement. Missing product/configuration, ambiguity, failed reads or missing CUP
+mapping never imply legacy. A valid explicitly empty product allowlist may return legacy.
+The managed branch reads CUP runtime-context and JOIN-only entitlement preflight with
+existing credentials and exact trusted origins, and returns the canonical instance plus
+policy version/digest and target snapshot ID/revision/evidence reference. Private provider
+identifiers remain backend-only. The preflight decision does not authorize a paid fallback.
+
+Admission stores the complete immutable v2 request before any CUP reserve. The canonical
+booking prepare node accepts the tuple only as a restrictive precondition; it supplies no
+authority to a direct caller. The gateway rechecks its managed selector, runtime instance
+and effective policy and sends the original expectations to CUP. Before a new reserve the existing policy evaluator must select FREE_ENTITLEMENT from
+the pinned effective policy; a zero-priced discount is insufficient. The CUP reserve
+must also prove an ENTITLEMENT decision with zero final RUB price and positive integer units. Ambiguous,
+malformed, mismatched or paid responses hold pending without booking or rewriting the
+original expectations. No retry refreshes a possible-write binding. A cancelled or released
+same operation cannot be reclaimed as a new v2 booking.
+
+The verified v1 executor supplies a restrictive internal `lk2LegacyJoin:true` marker. It
+is validated at canonical ingress and persisted on first operation creation. If selection
+changes to managed, a new reserve/provider dispatch holds pending; canonical attempted
+operations still use existing read/reconciliation paths. Direct LK1 callers without this
+marker preserve their existing behavior. The marker cannot grant authority or bypass
+actor ownership, and a malformed marker is rejected.
+
+Only a read of the exact persisted admission and canonical owned booking may emit receipt
+v2. The canonical row must be CONFIRMED, activation complete/not required, and the CUP
+entitlement CONFIRMED. Policy and instance match the original admission; usageRef and
+reservationUnits come from the persisted entitlement operation/decision. An outer receiver
+CONFIRMED state alone is UNKNOWN. Pending confirmation, cancellation, missing/corrupt
+bindings and ambiguous local acknowledgement never synthesize success. The API returns
+no-store/no-referrer responses and never exposes integration tokens or owner proofs.
+
+Current observer hashes describe changed source only. Historical PATRIOTS, deployment
+allowlists and activation preimages remain frozen. Local tests and CI do not establish
+provider/runtime acceptance; installing/activating these sources requires a separately
+approved release with fresh custody and recovery evidence.
+
+For new v2 operations, the entitlement-bind CAS also stores an explicit recovery context
+before the provider POST: original runtime policy/instance/evidence, target, enforcement
+identity, activation requirement/revision and verified FREE policy digest. It contains no
+actor token, integration token or proof. A fresh authenticated actor profile precedes an
+exact original-operation lookup before current selector/policy gates. The recovery lane
+validates the immutable tuple and stored decision, then uses only a complete, exact-origin
+provider GET with unique actor/exercise/subscription/date/booking matching. It confirms the
+same CUP operation and applies conditional local confirmation/activation updates bound to
+the original state, tuple and recovery context. Cancellation/reclaim races cannot resurrect
+a row. This lane never calls reserve, repeats provider POST or reads a replacement policy.
+Old or corrupt rows lacking recovery context stay UNKNOWN. Explicit valid selector
+configuration and existing signing/CUP credentials are activation prerequisites, not locally
+verified runtime facts; direct LK1 behavior with an absent selector configuration is unchanged.
+
+A same-key v2 admission retry may carry the optional signed `recovery_only:true` claim.
+Only true is accepted, only on v2 admission; it changes neither the original admission
+body/hash nor its immutable delegation binding. The outer receiver requires the original
+ATTEMPTING/UNKNOWN admission and fresh actor delegation, then claims a two-minute recovery
+lease with a unique attempt ID. Competing/lost claim acknowledgements only read existing
+state. The loopback owner request adds restrictive `managedJoinV2RecoveryOnly:true`; missing
+canonical state cannot become a new admission, reserve or booking. Recovery finalization
+CAS-matches its unique attempt so a stale response cannot overwrite a later recovery.
+The ordinary v1 execution path and initial v2 admission semantics are unchanged. A refreshed
+preflight, new seat or new usage reservation is never part of this retry.
+
+Before either initial v2 execution or recovery, the receiver requires the inert local
+owner GET probe with exact header value `2` and response
+`{contractVersion:2,owner:"LK1_SUBSCRIPTION_BOOKING_OWNER",policy:"MANAGED_JOIN_V2"}`
+from the exact loopback URL. Old ATOMIC_MANAGED_V1, missing capability, redirect or
+unavailable owner stops before profile/claim/loopback mutation. Header `1` and its v1
+response bytes remain unchanged. The existing canonical flow patcher prepends the probe
+and canonical router into the same function body; its prepare/router/evaluator graph must
+be deployed as one reviewed compatible packet. A probe fragment alone is not an install.

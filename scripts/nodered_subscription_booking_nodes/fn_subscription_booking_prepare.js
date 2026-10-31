@@ -3,11 +3,49 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_prepare", { sourceHash: "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11", ...fields });
+    observer?.observe(msg, "booking_prepare", { sourceHash: "b4c3919ae689dfa3c5201d70fdb39d0a0c8727921f915d3f1f6b3a7050b4e6d5", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
 const VIVA_API_BASE = "https://api.vivacrm.ru";
+// Exact managed JOIN wire parser shared by the receiver's verifier, read and executor.
+// This parser never supplies missing authority or mints an entitlement/usage reference.
+const managedJoinV2Object = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const managedJoinV2Keys = (value, keys) => managedJoinV2Object(value)
+  && Object.keys(value).sort().join(",") === keys.split(",").sort().join(",");
+const managedJoinV2Id = value => typeof value === "string"
+  && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(value) && !/[\r\n]/.test(value);
+const managedJoinV2Positive = value => Number.isSafeInteger(value) && value > 0;
+const managedJoinV2Digest = value => typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value) && value.length === 71;
+const managedJoinV2Entitlement = value => {
+  if (!managedJoinV2Keys(value, "subscriptionInstanceId,expectations") || !managedJoinV2Id(value.subscriptionInstanceId)) return null;
+  const e = value.expectations;
+  if (!managedJoinV2Keys(e, "schemaVersion,policyVersion,policyDigest,targetSnapshot") || e.schemaVersion !== 1
+    || !managedJoinV2Positive(e.policyVersion) || !managedJoinV2Digest(e.policyDigest)
+    || !managedJoinV2Keys(e.targetSnapshot, "snapshotId,revision,evidenceRef")
+    || !managedJoinV2Id(e.targetSnapshot.snapshotId) || !managedJoinV2Positive(e.targetSnapshot.revision)
+    || !managedJoinV2Id(e.targetSnapshot.evidenceRef)) return null;
+  return { subscriptionInstanceId: value.subscriptionInstanceId, expectations: {
+    schemaVersion: 1, policyVersion: e.policyVersion, policyDigest: e.policyDigest,
+    targetSnapshot: { snapshotId: e.targetSnapshot.snapshotId, revision: e.targetSnapshot.revision,
+      evidenceRef: e.targetSnapshot.evidenceRef }
+  } };
+};
+const managedJoinV2Request = (value, preflight = false) => {
+  if (!managedJoinV2Keys(value, preflight ? "contractVersion,action,target,paymentIntent"
+    : "contractVersion,action,target,paymentIntent,entitlement") || value.contractVersion !== 2
+    || value.action !== "JOIN_GAME" || value.paymentIntent !== "USE_SUBSCRIPTION"
+    || !managedJoinV2Keys(value.target, "id,expectedRevision")
+    || typeof value.target.id !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.target.id)
+    || !managedJoinV2Positive(value.target.expectedRevision)) return null;
+  const entitlement = preflight ? null : managedJoinV2Entitlement(value.entitlement);
+  if (!preflight && !entitlement) return null;
+  return { contractVersion: 2, action: "JOIN_GAME",
+    target: { id: value.target.id, expectedRevision: value.target.expectedRevision },
+    paymentIntent: "USE_SUBSCRIPTION", ...(preflight ? {} : { entitlement }) };
+};
+
 const TENANT_KEY = "iSkq6G";
 
 const toStr = (value) => {
@@ -46,6 +84,19 @@ const releaseBookingId = toStr(body.bookingId);
 const exerciseId = toStr(body.exerciseId);
 const clientSubscriptionId = toStr(body.clientSubscriptionId);
 const spotNumber = Number(body.spot);
+const recoveryOnly = body.managedJoinV2RecoveryOnly === true;
+if (body.managedJoinV2RecoveryOnly !== undefined && (!recoveryOnly || body.managedJoinV2 === undefined))
+  return finish(400, "Некорректное восстановление JOIN", { code: "MANAGED_JOIN_V2_INVALID" });
+const managedJoinV2 = body.managedJoinV2 === undefined ? undefined : managedJoinV2Request(body.managedJoinV2);
+if (body.lk2LegacyJoin !== undefined && (body.lk2LegacyJoin !== true || body.managedJoinV2 !== undefined
+  || action !== "book" || Object.keys(body).sort().join(",") !== "clientSubscriptionId,exerciseId,lk2LegacyJoin,operationId"
+  || body.operationId !== operationId)) return finish(400, "Некорректная привязка legacy JOIN", { code: "LK2_LEGACY_JOIN_INVALID" });
+if (body.managedJoinV2 !== undefined && (!managedJoinV2 || action !== "book"
+  || Object.keys(body).sort().join(",") !== (recoveryOnly ? "clientSubscriptionId,exerciseId,managedJoinV2,managedJoinV2RecoveryOnly,operationId" : "clientSubscriptionId,exerciseId,managedJoinV2,operationId")
+  || body.operationId !== operationId)) {
+  return finish(400, "Некорректная привязка управляемой записи", { code: "MANAGED_JOIN_V2_INVALID" });
+}
+
 
 if (!authHeader || !/^Bearer\s+\S+/i.test(authHeader)) {
   return finish(401, "Требуется авторизация Viva", { code: "SUBSCRIPTION_BOOKING_AUTH_REQUIRED" });
@@ -71,6 +122,8 @@ if (action === "book" && (!exerciseId || !clientSubscriptionId)) {
 
 msg._subscriptionBooking = {
   caller: "http",
+  ...(managedJoinV2 ? { managedJoinV2, managedAction: "JOIN_GAME", ...(recoveryOnly ? { managedJoinV2RecoveryOnly: true } : {}) } : {}),
+  ...(body.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
   action,
   step: "profile",
   tenantKey: TENANT_KEY,

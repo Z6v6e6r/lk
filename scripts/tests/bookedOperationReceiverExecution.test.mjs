@@ -157,6 +157,7 @@ const readClaims = () => ({
 });
 const admissionMessage = (token, body, headers = {}) => ({
   req: {
+    url: "/lk/integrations/v1/booked-operation-admissions",
     method: "POST",
     headers: {
       "content-type": "application/json; charset=utf-8",
@@ -171,6 +172,7 @@ const admissionMessage = (token, body, headers = {}) => ({
 const boundHeaders = { "x-subscription-actor-token": ACTOR_TOKEN };
 const readMessage = (token) => ({
   req: {
+    url: `/lk/integrations/v1/booked-operations/${operationId}`,
     method: "GET",
     params: { operationId },
     headers: {
@@ -373,7 +375,7 @@ test("one canonical owner POST follows the durable marker; complete binding rece
   assert.equal(post.headers["Idempotency-Key"], operationId);
   assert.equal(post.headers.Authorization, `Bearer ${ACTOR_TOKEN}`);
   assert.deepEqual(post.payload, { operationId, exerciseId: PROVIDER_EXERCISE_ID,
-    clientSubscriptionId: CLIENT_SUBSCRIPTION_ID });
+    clientSubscriptionId: CLIENT_SUBSCRIPTION_ID, lk2LegacyJoin: true });
   driven.execMsg.statusCode = 200;
   driven.execMsg.payload = gatewayConfirmed();
   const finalize = driven.step();
@@ -603,6 +605,9 @@ test("special GET probe reaches canonical router; ordinary CORS stays 204 and th
   assert.equal(response[4].statusCode, 200);
   assert.deepEqual(response[4].payload, { contractVersion: 1, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "ATOMIC_MANAGED_V1" });
   assert.equal(response.filter(Boolean).length, 1);
+  const v2 = new Function("msg", optionsSource)({ req: { method: "GET", headers: { "x-booked-operation-owner-contract": "2" } } });
+  const v2Response = new Function("msg", "global", routerSource)(v2[1], { get() { throw new Error("probe must remain inert"); } });
+  assert.deepEqual(v2Response[4].payload, { contractVersion: 2, owner: "LK1_SUBSCRIPTION_BOOKING_OWNER", policy: "MANAGED_JOIN_V2" });
 });
 
 test("non-exact owner GET markers refuse before any runtime state or provider access", () => {
