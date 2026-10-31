@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../UI/Modal";
 import {
   apiCreateAmericanoTournament, apiFetchTournamentHistory, apiUpdateAmericanoResults,
@@ -227,9 +227,11 @@ function MatchHeader({ match, state }: { match: FprMatch; state: FprState }) {
     <div className="tournament-match-court"><span className="tournament-match-label">Корт</span><span className="tournament-match-value">{state.courts[match.courtIndex]}</span></div>
   </div>;
 }
-function MatchEditor({ match, state, closed, disabled, onSave, now, onB1 }: {
+function MatchEditor({ match, state, closed, disabled, onSave, now, onB1, autoCloseRound = true, onDirtyChange }: {
   match: FprMatch; state: FprState; closed: boolean; disabled: boolean; now: string;
   onB1?: (playerId: string) => void;
+  autoCloseRound?: boolean;
+  onDirtyChange?: (matchId: string, dirty: boolean) => void;
   onSave: (value: Omit<ScoreAction, "id" | "expectedRevision">) => void;
 }) {
   const [score1, setScore1] = useState(match.score1?.toString() ?? "");
@@ -237,6 +239,7 @@ function MatchEditor({ match, state, closed, disabled, onSave, now, onB1 }: {
   const [reason, setReason] = useState("");
   const [playedAt, setPlayedAt] = useState("");
   const [lastRallyAt, setLastRallyAt] = useState("");
+  useEffect(() => () => onDirtyChange?.(match.id, false), [match.id, onDirtyChange]);
   const names = (ids: string[]) => ids.map(id => state.players.find(p => p.id === id)?.name ?? id).join(" + ");
   const played = (match.score1 ?? 0) + (match.score2 ?? 0);
   const lateEntry = !closed && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && !match.completedAt;
@@ -250,10 +253,16 @@ function MatchEditor({ match, state, closed, disabled, onSave, now, onB1 }: {
   const startAllowed = !waitingForFirstSave || (Date.parse(now) < Date.parse(state.endsAt) - 180_000
     && (attempt.round < 7 || fprReserveThreshold(state, now).allowed));
   const changeScore = (team: 1 | 2, value: string) => {
-    if (!value.trim()) { setScore1(""); setScore2(""); return; }
+    if (!value.trim()) {
+      setScore1(""); setScore2("");
+      onDirtyChange?.(match.id, match.score1 !== null || match.score2 !== null);
+      return;
+    }
     const parsed = Math.max(0, Math.min(25, Number.parseInt(value, 10) || 0));
     (team === 1 ? setScore1 : setScore2)(String(parsed));
     (team === 1 ? setScore2 : setScore1)(String(25 - parsed));
+    const next1 = team === 1 ? parsed : 25 - parsed, next2 = 25 - next1;
+    onDirtyChange?.(match.id, next1 !== match.score1 || next2 !== match.score2);
   };
   return <section className="tournament-match fpr-match" aria-label={`Матч: ${state.courts[match.courtIndex]}`}>
     <MatchHeader match={match} state={state} />
@@ -284,7 +293,7 @@ function MatchEditor({ match, state, closed, disabled, onSave, now, onB1 }: {
       <div className="tournament-match-status" aria-live="polite">{saved && <span className="tournament-round-status saved">Сохранено</span>}</div>
       <button className="tournament-round-save" type="button" disabled={!validScore || !startAllowed || (closed && !reason.trim())} onClick={() => onSave({
         action: closed ? "correct_score" : "score", matchId: match.id, score1: number(score1), score2: number(score2), confirmed1: total === 25, confirmed2: total === 25,
-        ...(!closed ? { startIfScheduled: true } : {}),
+        ...(!closed ? { startIfScheduled: true, autoCloseRound } : {}),
         ...(closed || lateEntry ? { reason } : {}), ...(playedAt ? { playedAt: new Date(playedAt).toISOString() } : {}), ...(lastRallyAt ? { lastRallyStartedAt: new Date(lastRallyAt).toISOString() } : {}),
       })}>Сохранить</button>
       </div>
@@ -307,6 +316,15 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [dirtyMatches, setDirtyMatches] = useState<Record<string, boolean>>({});
+  const handleDirtyChange = useCallback((matchId: string, dirty: boolean) => {
+    setDirtyMatches(previous => {
+      if (Boolean(previous[matchId]) === dirty) return previous;
+      const next = { ...previous };
+      if (dirty) next[matchId] = true; else delete next[matchId];
+      return next;
+    });
+  }, []);
   const [tab, setTab] = useState<"round" | "table" | "protocol">("round");
   const [reason, setReason] = useState("");
   const [withdrawId, setWithdrawId] = useState("");
@@ -334,6 +352,12 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
       if (next.tournamentId !== data.tournamentId || !next.audit.some(a => a.id === command.id)
         || next.revision <= command.expectedRevision) throw new Error("Сервер вернул протокол без подтверждения этой команды. Проверьте актуальный протокол перед повтором.");
       applyResponse(next); clearPending(); setReason(""); setFinishConfirmation(false);
+      if (command.action === "score" && command.autoCloseRound === true) {
+        const scoredAttempt = next.attempts.find(a => a.matches.some(m => m.id === command.matchId));
+        if (scoredAttempt?.status === "running" && scoredAttempt.matches.every(m => m.confirmed1 && m.confirmed2)) {
+          setError("Счёт сохранён, но автоматически закрыть раунд не удалось. Обновите протокол с сервера.");
+        }
+      }
     } catch (e) { setError(message(e)); }
     finally { busyRef.current = false; setBusy(false); }
   };
@@ -380,12 +404,10 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
             <div className="tournament-round-body">
             <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}.</p>
             {current.matches.map(m => <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed={false} disabled={disabled} onSave={act} now={now}
+              autoCloseRound={!current.matches.some(other => other.id !== m.id && dirtyMatches[other.id])} onDirtyChange={handleDirtyChange}
               onB1={current.status === "scheduled" ? playerId => act({ action: "set_b1", matchId: m.id, playerId }) : undefined} />)}
-            {current.status === "running" && <>
-              <button type="button" className="section-cta" disabled={disabled || current.matches.some(m => !m.confirmed1 || !m.confirmed2)} onClick={() => act({ action: "close_round" })}>Закрыть общий раунд и обновить таблицу</button>
-            </>}
             </div>
-          </section></div> : !finished && completed < 8 ? <>
+          </section></div> : !finished && state.attempts.length < 100 && completed < 8 && Date.parse(now) < Date.parse(state.endsAt) - 180_000 ? <>
             <p>{completed >= 6 ? `Запасной раунд: нужно не меньше ${Math.ceil((threshold?.requiredMs ?? 0) / 60_000)} мин до конца события; осталось ${Math.max(0, Math.floor((threshold?.remainingMs ?? 0) / 60_000))} мин.` : "Предыдущая попытка отменена. Можно подготовить повтор с тем же номером зачётного раунда."}</p>
             <button type="button" disabled={disabled || (completed >= 6 && !threshold?.allowed)} onClick={() => act({ action: "prepare_round" })}>Подготовить {completed + 1}-й раунд</button>
           </> : null}
