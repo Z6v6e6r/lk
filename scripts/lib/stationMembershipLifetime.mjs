@@ -76,12 +76,13 @@ export function smRosterTransition(community, nextMembers, action, targetId, act
 export function smAdmissionRequest(body) {
   return smKeys(body, ['contractVersion', 'operationId', 'requestSha256', 'activity', 'stationId']) && body.contractVersion === 1 &&
     smUuid(body.operationId) && smDigest(body.requestSha256) && smId(body.stationId) &&
-    smKeys(body.activity, ['kind', 'id']) && body.activity.kind === 'GAME' && smUuid(body.activity.id);
+    smKeys(body.activity, ['kind', 'id']) && ['GAME', 'TRAINING'].includes(body.activity.kind) && smUuid(body.activity.id);
 }
+export const smConfirmationKind = kind => kind === 'GAME' ? 'GAME_PARTICIPATION' : kind === 'TRAINING' ? 'TRAINING_REGISTRATION' : null;
 export function smConfirmationRequest(body) {
   return smKeys(body, ['contractVersion', 'operationId', 'admissionId', 'admissionBindingSha256', 'confirmation']) && body.contractVersion === 1 &&
     smUuid(body.operationId) && smUuid(body.admissionId) && smDigest(body.admissionBindingSha256) &&
-    smKeys(body.confirmation, ['kind', 'generationId', 'activityId']) && body.confirmation.kind === 'GAME_PARTICIPATION' &&
+    smKeys(body.confirmation, ['kind', 'generationId', 'activityId']) && ['GAME_PARTICIPATION', 'TRAINING_REGISTRATION'].includes(body.confirmation.kind) &&
     smUuid(body.confirmation.generationId) && smUuid(body.confirmation.activityId);
 }
 export const smActor = claims => ({ tenantId: claims.tenant_id, canonicalUserId: claims.sub, playerId: claims.provider_client_id, providerMappingId: claims.provider_mapping_id });
@@ -122,7 +123,9 @@ export function smValidAdmission(doc, actor, operationId) {
   return bindingSha256 === smHash('station-membership-admission:v1', core);
 }
 export function smClaim(admission, request) {
-  return { _id: 'v1:' + admission.actor.tenantId + ':' + encodeURIComponent(admission.communityId) + ':GAME_PARTICIPATION:' + request.confirmation.generationId,
+  const kind = smConfirmationKind(admission.activity.kind);
+  if (!kind) throw Error('STATION_ACTIVITY_KIND_INVALID');
+  return { _id: 'v1:' + admission.actor.tenantId + ':' + encodeURIComponent(admission.communityId) + ':' + kind + ':' + request.confirmation.generationId,
     contractVersion: 1, actor: admission.actor, communityId: admission.communityId, operationId: admission.operationId, admissionId: admission.admissionId,
     admissionBindingSha256: admission.bindingSha256, generationId: request.confirmation.generationId, activityId: request.confirmation.activityId, membershipEpoch: admission.membershipEpoch };
 }
@@ -135,11 +138,13 @@ export function smConfirmation(communities, admission, claim) {
   if (p.epoch !== admission.membershipEpoch) return { reason: 'MEMBERSHIP_EPOCH_CHANGED' };
   if (['REMOVED', 'BANNED'].includes(p.state) || smRows(c.bannedMembers).some(m => !smIdentity(m) || smIdentity(m) === id)) return { reason: 'MEMBERSHIP_BLOCKED' };
   if (p.canonicalUserId && p.canonicalUserId !== admission.actor.canonicalUserId) return { reason: 'ACTOR_MAPPING_CONFLICT' };
-  const proof = { operationId: admission.operationId, admissionId: admission.admissionId, generationId: claim.generationId };
+  const kind = smConfirmationKind(admission.activity.kind);
+  const proof = { operationId: admission.operationId, admissionId: admission.admissionId, generationId: claim.generationId,
+    ...(kind === 'TRAINING_REGISTRATION' ? { kind } : {}) };
   const members = smRows(c.members), active = members.find(m => smIdentity(m) === id);
   if (active) return { reason: p.state === 'ACTIVE' && smEqual(p.lastApplied || null, proof) ? 'ALREADY_APPLIED' : 'MEMBER_ALREADY_ACTIVE' };
   // A previously applied generation is not a new registration even if a foreign writer dropped the member.
-  if (p.lastApplied?.generationId === claim.generationId) return { reason: 'APPLIED_MEMBER_MISSING' };
+  if (p.lastApplied?.generationId === claim.generationId && (p.lastApplied.kind || 'GAME_PARTICIPATION') === kind) return { reason: 'APPLIED_MEMBER_MISSING' };
   const row = { playerId: id, canonicalUserId: admission.actor.canonicalUserId, epoch: p.epoch, state: 'ACTIVE', lastApplied: proof };
   const nextMembers = [...members, { id, name: 'Игрок', role: 'MEMBER', status: 'ACTIVE', joinSource: { type: 'STATION_ADMISSION' } }];
   const filter = { _id: c._id, id: c.id, communityType: 'STATION', archived: { $ne: true }, 'typeSettings.stationId': admission.stationId, typeSettingsRevision: admission.policyRevision, ...smFence(c) };

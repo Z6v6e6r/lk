@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { smTransition, smFence } from '../lib/stationMembershipLifetime.mjs';
-import { admissionBody, confirmationBody, community, memoryDb, run, message, environment } from './helpers/stationMembershipOwnerHarness.mjs';
+import { admissionBody, confirmationBody, community, memoryDb, run, message, environment, uid } from './helpers/stationMembershipOwnerHarness.mjs';
+const trainingBody = op => { const body=admissionBody(op); return {...body,activity:{...body.activity,kind:'TRAINING'}}; };
+const trainingConfirmation = (admission,generation) => { const body=confirmationBody(admission,generation); return {...body,confirmation:{...body.confirmation,kind:'TRAINING_REGISTRATION'}}; };
 async function transition(db, state) {
   const c = await db.collection('lk_communities').findOne({ id: 'station-community' });
   return db.collection('lk_communities').updateOne({ id: c.id, ...smFence(c) }, { $set: { members: [], stationMembershipLifetime: smTransition(c, 'player-a', state) } });
@@ -107,4 +109,55 @@ test('adoption ACK loss is read back; deletion/recreation never reuses old admis
   db.tables.set('lk_communities',[{...community(),_id:'replacement-community-object',stationMembershipLifetime:{version:1,revision:0,players:[]}}]);
   assert.equal((await run(db,'admission',admissionBody())).payload.code,'STATION_ADMISSION_IDENTITY_CHANGED');
   assert.equal((await run(db,'confirmation',confirmationBody(a))).payload.reason,'STATION_IDENTITY_CHANGED');
+});
+test('TRAINING confirmation binds immutable activity kind and id before any generation claim',async()=>{
+  const db=memoryDb(),body=trainingBody(1),a=(await run(db,'admission',body)).payload;
+  assert.equal(a.admission.outcome,'ADMITTED');
+  const correct=trainingConfirmation(a);
+  for(const confirmation of [{...correct.confirmation,kind:'GAME_PARTICIPATION'},{...correct.confirmation,activityId:uid(91)}]){
+    const denied=await run(db,'confirmation',{...correct,confirmation});
+    assert.equal(denied.statusCode,409);assert.equal(denied.payload.code,'STATION_CONFIRMATION_BINDING_CONFLICT');
+    assert.equal(db.tables.has('lk_station_membership_generation_claims'),false);
+  }
+  assert.equal((await run(db,'admission',admissionBody(1))).statusCode,409);
+  assert.equal((await run(db,'confirmation',correct)).payload.outcome,'ENROLLED');
+  assert.equal((await run(db,'confirmation',correct)).payload.outcome,'ALREADY_APPLIED');
+  const cancel=await run(db,'confirmation',{...correct,confirmation:{...correct.confirmation,kind:'TRAINING_CANCELLED'}});
+  assert.equal(cancel.statusCode,400);assert.equal(db.tables.get('lk_communities')[0].members.length,1);
+});
+test('TRAINING retains LEFT/replay/new-registration and admin-block lifetime rules',async()=>{
+  const db=memoryDb(),a=(await run(db,'admission',trainingBody(1))).payload;
+  assert.equal((await run(db,'confirmation',trainingConfirmation(a))).payload.outcome,'ENROLLED');
+  await transition(db,'LEFT');
+  assert.equal((await run(db,'confirmation',trainingConfirmation(a))).payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+  const b=(await run(db,'admission',trainingBody(2))).payload;
+  assert.equal((await run(db,'confirmation',trainingConfirmation(b))).payload.reason,'GENERATION_ALREADY_CLAIMED');
+  assert.equal((await run(db,'confirmation',trainingConfirmation(b,81))).payload.outcome,'ENROLLED');
+  await transition(db,'BANNED');
+  assert.equal((await run(db,'admission',trainingBody(3))).payload.admission.reason,'MEMBERSHIP_BLOCKED');
+});
+test('GAME keys/proofs remain compatible and TRAINING has a separate generation namespace',async()=>{
+  const db=memoryDb(),game=(await run(db,'admission',admissionBody(1))).payload;
+  const gameBody=confirmationBody(game);
+  assert.equal((await run(db,'confirmation',gameBody)).payload.outcome,'ENROLLED');
+  const oldClaim=structuredClone(db.tables.get('lk_station_membership_generation_claims')[0]);
+  assert.equal(oldClaim._id,'v1:'+uid(22)+':station-community:GAME_PARTICIPATION:'+uid(80));
+  assert.equal('kind' in db.tables.get('lk_communities')[0].stationMembershipLifetime.players[0].lastApplied,false);
+  await transition(db,'LEFT');
+  const training=(await run(db,'admission',trainingBody(2))).payload;
+  assert.equal((await run(db,'confirmation',trainingConfirmation(training))).payload.outcome,'ENROLLED');
+  const claims=db.tables.get('lk_station_membership_generation_claims');
+  assert.equal(claims.length,2);assert.deepEqual(claims[0],oldClaim);
+  assert.equal(claims[1]._id,'v1:'+uid(22)+':station-community:TRAINING_REGISTRATION:'+uid(80));
+  assert.equal(db.tables.get('lk_communities')[0].stationMembershipLifetime.players[0].lastApplied.kind,'TRAINING_REGISTRATION');
+  assert.equal((await run(db,'confirmation',{...gameBody,confirmation:{...gameBody.confirmation,kind:'TRAINING_REGISTRATION'}})).statusCode,409);
+});
+test('missing-member replay proof compares generation kind without upgrading legacy GAME proof',async()=>{
+  const db=memoryDb(),training=(await run(db,'admission',trainingBody(1))).payload;
+  await run(db,'confirmation',trainingConfirmation(training));
+  db.tables.get('lk_communities')[0].members=[]; // foreign roster loss is not a new confirmation
+  assert.equal((await run(db,'confirmation',trainingConfirmation(training))).payload.reason,'APPLIED_MEMBER_MISSING');
+  const game=(await run(db,'admission',admissionBody(2))).payload;
+  assert.equal((await run(db,'confirmation',confirmationBody(game))).payload.outcome,'ENROLLED');
+  assert.equal((await run(db,'confirmation',confirmationBody(game))).payload.outcome,'ALREADY_APPLIED');
 });
