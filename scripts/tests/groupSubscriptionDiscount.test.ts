@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { isTrialGroupTraining } from "../../src/utils/trialGroupTraining.ts";
 import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, subscriptionEventQuoteAmountMinor, isSubscriptionEventDiscountQuote, courtHourlyCoPayAmountMinor, type GroupSubscriptionDiscountQuote, type GroupTrainingCourtCoPayQuote } from "../../src/utils/groupSubscriptionDiscount.ts";
 import { getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
+import { buildGroupScheduleSubscriptionDiscountProduct, matchGroupScheduleSubscriptionDiscount } from "../../src/utils/groupScheduleSubscriptionDiscount.ts";
 import type { TournamentVivaProduct } from "../../src/utils/tournamentSignupApi.ts";
 
 test("owned Energy buttons retain eligible visit-pack instances only", () => {
@@ -73,7 +74,7 @@ test("Ariadna direction 6538 keeps the full one-time price despite a subscriptio
   }
   assert.equal(product.cost, 550000);
 });
-test("Ariadna one-time button renders full price and dispatches the original tariff", () => {
+test("schedule one-time button keeps Ariadna full price and renders and dispatches the Patriots tournament discount", () => {
   const source = ts.createSourceFile("page.tsx", fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let callback: ts.Node | undefined;
   function visit(node: ts.Node) {
@@ -88,10 +89,12 @@ test("Ariadna one-time button renders full price and dispatches the original tar
     compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
   }).outputText;
   const product = { id: "one-time", name: "Разовая🎾", cost: 550000, source: "one-time", visitsTotal: null };
-  for (const directionId of [6538, 1001]) {
+  for (const directionId of [6538, 1001, 6306]) {
     const calls: unknown[][] = [];
-    const dependencies = { React, matchGroupSubscriptionDiscount, isPartialSubscriptionEventDiscountQuote,
-      currentDiscountQuotes: [{ ...quote, subscriptionName: "Дружба.Топократ" }], selectedTraining: { directionId },
+    const dependencies = { React, matchGroupScheduleSubscriptionDiscount, buildGroupScheduleSubscriptionDiscountProduct, isPartialSubscriptionEventDiscountQuote,
+      currentDiscountQuotes: [{ ...quote, subscriptionName: "РА",
+        kind: directionId === 6306 ? "TOURNAMENT_SUBSCRIPTION_DISCOUNT_V1" : quote.kind }],
+      selectedTraining: { directionId }, patriotsTournamentSelected: directionId === 6306,
       getAppliedGroupSchedulePromoPreview: () => null, appliedPromo: null, checkout: {},
       completeRegistration: (...args: unknown[]) => { calls.push(args); },
       actionLoading: false, promoLoading: false, discountPending: false };
@@ -107,7 +110,9 @@ test("Ariadna one-time button renders full price and dispatches the original tar
       assert.match(html, /Скидка50%/);
       assert.match(html, /2750/);
       button.props.onClick();
-      assert.equal((calls[0][2] as TournamentVivaProduct).groupDiscountQuote?.amountMinor, 275000);
+      const booked = calls[0][2] as TournamentVivaProduct;
+      assert.equal((directionId === 6306 ? booked.tournamentDiscountQuote : booked.groupDiscountQuote)?.amountMinor, 275000);
+      assert.equal(directionId === 6306 ? booked.groupDiscountQuote : booked.tournamentDiscountQuote, undefined);
     }
   }
 });
