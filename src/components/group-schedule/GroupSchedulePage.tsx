@@ -34,6 +34,7 @@ import {
 } from "../../utils/apiClient";
 import {
   apiFetchGroupSubscriptionDiscounts,
+  apiFetchTournamentSubscriptionDiscounts,
   apiCancelTournamentVivaRegistration,
   apiCreateTournamentVivaTransaction,
   apiFetchTournamentVivaCheckout,
@@ -58,7 +59,14 @@ import {
 import type {
   BookingCancellationAction,
 } from "../../utils/bookingCancellation";
-import { isGroupSubscriptionDiscountQuote, isPartialSubscriptionEventDiscountQuote, matchGroupSubscriptionDiscount, type GroupSubscriptionQuote } from "../../utils/groupSubscriptionDiscount";
+import { isPartialSubscriptionEventDiscountQuote } from "../../utils/groupSubscriptionDiscount";
+import {
+  buildGroupScheduleSubscriptionDiscountProduct,
+  isGroupScheduleSubscriptionQuote,
+  isPatriotsTournament,
+  matchGroupScheduleSubscriptionDiscount,
+  type GroupScheduleSubscriptionQuote,
+} from "../../utils/groupScheduleSubscriptionDiscount";
 import "./GroupSchedulePage.css";
 
 interface GroupSchedulePageProps {
@@ -373,7 +381,7 @@ export default function GroupSchedulePage({
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
-  const [discountQuotes, setDiscountQuotes] = useState<GroupSubscriptionQuote[]>([]);
+  const [discountQuotes, setDiscountQuotes] = useState<GroupScheduleSubscriptionQuote[]>([]);
   const [discountResolvedFor, setDiscountResolvedFor] = useState<string | null>(null);
   const [discountLoading, setDiscountLoading] = useState(false);
   const [discountError, setDiscountError] = useState<string | null>(null);
@@ -411,6 +419,7 @@ export default function GroupSchedulePage({
   const topokratyClubOwned = Boolean(checkout
     && (checkout.clientSubscriptions ?? []).some((row) => isTopokratyClubPack(row)));
   const topokratyExcluded = topokratyTrainingSelected && !topokratyClubOwned;
+  const patriotsTournamentSelected = isPatriotsTournament(selectedDetail);
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -606,7 +615,7 @@ export default function GroupSchedulePage({
       || !selectedId || !checkout?.profile?.id || registrationLoading) return;
     const controller = new AbortController();
     const actorId = checkout.profile.id;
-    const resolvedFor = `${selectedId}:${actorId}`;
+    const resolvedFor = `${selectedId}:${actorId}:${patriotsTournamentSelected}`;
     // Topokraty events keep their separate club-product rule. PRO training quotes
     // are requested normally and only the server's confirmed 50% price is shown.
     if (topokratyExcluded) {
@@ -614,14 +623,20 @@ export default function GroupSchedulePage({
       return;
     }
     setDiscountLoading(true);
-    void apiFetchGroupSubscriptionDiscounts(selectedId, controller.signal).then(result => {
+    const fetchDiscounts = patriotsTournamentSelected
+      ? apiFetchTournamentSubscriptionDiscounts : apiFetchGroupSubscriptionDiscounts;
+    void fetchDiscounts(selectedId, controller.signal).then(result => {
       if (controller.signal.aborted) return;
       const quotes = result.data?.quotes;
       if (result.error || !Array.isArray(quotes) || new Set(quotes.map(q => q?.subscriptionId)).size !== quotes.length) {
         setDiscountError("Не удалось проверить скидку по подписке.");
       } else {
         const available = quotes.filter(q => q?.status === "AVAILABLE");
-        if (available.some(q => !isGroupSubscriptionDiscountQuote(q, selectedId, actorId))) {
+        if (available.some(q => !isGroupScheduleSubscriptionQuote(q, patriotsTournamentSelected, selectedId, actorId)
+          || (patriotsTournamentSelected && (
+            Date.parse(q.startsAt) !== Date.parse(String(checkout.exercise.timeFrom || checkout.exercise.startsAt || ""))
+            || !checkout.oneTimes.some(product => matchGroupScheduleSubscriptionDiscount([q], product, true, 6306))
+          )))) {
           setDiscountError("Не удалось подтвердить стоимость по подписке.");
         } else {
           setDiscountQuotes(available);
@@ -637,7 +652,7 @@ export default function GroupSchedulePage({
       setDiscountLoading(false);
     });
     return () => controller.abort();
-  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, topokratyExcluded]);
+  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, topokratyExcluded, patriotsTournamentSelected]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -729,7 +744,7 @@ export default function GroupSchedulePage({
   );
 
   const selectedTraining = selectedDetail;
-  const discountContextKey = `${selectedId}:${checkout?.profile?.id}`;
+  const discountContextKey = `${selectedId}:${checkout?.profile?.id}:${patriotsTournamentSelected}`;
   const discountPending = Boolean(checkout && !topokratyExcluded
     && (discountLoading || discountResolvedFor !== discountContextKey));
   const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
@@ -783,7 +798,7 @@ export default function GroupSchedulePage({
 
   const previewSubscriptionDiscount = useCallback(async (training: GroupTrainingSummary) => {
     await subscriptionUsageShadowPreview({
-      action: "BOOK_GROUP_TRAINING",
+      action: isPatriotsTournament(training) ? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING",
       target: { targetKind: "EVENT_AGGREGATE", eventId: training.id },
     });
   }, [subscriptionUsageShadowPreview]);
@@ -1385,12 +1400,10 @@ export default function GroupSchedulePage({
                             <div className="tournament-signup-payment-purchase-list">
                               {purchasableProducts.map((product) => {
                                 const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
-                                const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product, selectedTraining.directionId) : null;
-                                const bookingProduct: TournamentVivaProduct = discount ? {
-                                  id: discount.subscriptionId, name: discount.subscriptionName, source: "client-subscription", type: "SUBSCRIPTION",
-                                  cost: discount.amountMinor, visitsTotal: null, raw: { clientSubscriptionId: discount.subscriptionId },
-                                  lk1MoneyDiscountCandidate: true, groupDiscountQuote: discount,
-                                } : product;
+                                const discount = !promoPreview ? matchGroupScheduleSubscriptionDiscount(
+                                  currentDiscountQuotes, product, patriotsTournamentSelected, selectedTraining.directionId,
+                                ) : null;
+                                const bookingProduct = discount ? buildGroupScheduleSubscriptionDiscountProduct(discount) : product;
                                 return (
                                   <button
                                     key={`${product.source}-${product.id}`}

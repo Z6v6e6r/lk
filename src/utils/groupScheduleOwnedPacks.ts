@@ -1,5 +1,5 @@
 import type { TournamentVivaProduct } from "./tournamentSignupApi";
-import type { GroupSubscriptionQuote } from "./groupSubscriptionDiscount.ts";
+import type { SubscriptionEventDiscountQuote } from "./groupSubscriptionDiscount.ts";
 import { pickSubscriptionVisitsLeft } from "./subscriptionValidity.ts";
 
 const ENERGY_VISIT_PRODUCT_IDS = new Set([
@@ -63,7 +63,7 @@ export function getGroupScheduleOwnedPacks(products: TournamentVivaProduct[]): T
  * owned button would be a second, unpriced way to book the same instance.
  */
 function hasManagedGroupDiscount(
-  quotes: GroupSubscriptionQuote[],
+  quotes: SubscriptionEventDiscountQuote[],
   product: TournamentVivaProduct,
 ): boolean {
   return quotes.some(quote => quote.subscriptionId === product.id
@@ -83,7 +83,7 @@ function hasManagedGroupDiscount(
  */
 export function getGroupScheduleOwnedSubscriptions(
   products: TournamentVivaProduct[],
-  quotes: GroupSubscriptionQuote[] | null,
+  quotes: SubscriptionEventDiscountQuote[] | null,
 ): TournamentVivaProduct[] {
   const visitPacks = getGroupScheduleOwnedPacks(products);
   if (quotes === null) return visitPacks;
