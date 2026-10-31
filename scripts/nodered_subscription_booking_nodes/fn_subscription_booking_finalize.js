@@ -1,3 +1,12 @@
+if (msg._quarterCreateCapability !== undefined) {
+  const c = msg._quarterCreateCapability, o = msg._gameCreateOwner;
+  if (c.version === 1 && c.stage === "gateway_finalize" && o?.step === "capability_return" && c.nonce === o.capabilityNonce
+    && msg.payload?.code === "QUARTER_CREATE_FINALIZER_REQUIRED") c.stage = "complete";
+  delete msg._subscriptionBooking;
+  return [null, msg];
+}
+// The private owner inspects exact durable canonical state; raw provider callbacks never escape.
+if (msg._gameCreateOwner && msg.payload?.state !== "PREFLIGHT_ATTEMPT_BOUND") return [null, msg];
 if (msg._trainingRegistrationCapability !== undefined) {
   const accepted = msg._trainingRegistrationCapability.version === 1 && msg._trainingRegistrationCapability.stage === "finalize"
     && msg.req?.method === "GET" && (msg.req.originalUrl || msg.req.url) === "/lk/subscription-bookings"
@@ -13,6 +22,7 @@ if (msg._trainingRegistrationCapability !== undefined) {
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg._gameCreateOwner) return;
     if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");

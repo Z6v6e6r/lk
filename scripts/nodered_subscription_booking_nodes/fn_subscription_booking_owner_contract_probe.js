@@ -1,3 +1,11 @@
+if (msg._quarterCreateCapability !== undefined) {
+  const c = msg._quarterCreateCapability, o = msg._gameCreateOwner;
+  if (c.version === 1 && c.stage === "gateway_router" && o?.step === "capability_return" && c.nonce === o.capabilityNonce
+    && typeof quarterCreateGateway === "function") {
+    c.stage = "gateway_finalize"; msg.payload = { code: "QUARTER_CREATE_FINALIZER_REQUIRED" };
+  } else { msg.statusCode = 503; msg.payload = { code: "GAME_CREATE_OWNER_GRAPH_UNAVAILABLE" }; }
+  return [null, null, null, null, msg, null, null];
+}
 // Read-only compatibility probe. Older options/router versions cannot satisfy
 // this handshake; the LK2 receiver must stop before a booking with mixed versions.
 if (msg._subscriptionBooking?.step === "booked_operation_contract_probe") {

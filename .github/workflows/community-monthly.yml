@@ -8,6 +8,16 @@ on:
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
+      - "scripts/lib/gameCreateOwnerSource.mjs"
+      - "scripts/nodered_game_create_owner_nodes/**"
+      - "scripts/patch_nodered_game_create_owner.mjs"
+      - "scripts/nodered_game_create_preparation_nodes/**"
+      - "scripts/nodered_games_nodes/fn_split_create_prepare.js"
+      - "scripts/nodered_games_nodes/fn_split_router.js"
+      - "scripts/nodered_subscription_booking_nodes/**"
+      - "scripts/tests/gameCreateOwner*"
+      - "scripts/tests/helpers/gameCreateOwnerHarness.mjs"
+      - "scripts/tests/fixtures/quarter-create-owner-v1.json"
       - "scripts/lib/stationMembership*.mjs"
       - "scripts/lib/communityRosterWrites.mjs"
       - "scripts/lib/communityPolicyProjection.mjs"
@@ -48,6 +58,16 @@ on:
       - "scripts/tests/managedSelfLeaveOwner*"
       - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
       - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
+      - "scripts/lib/gameCreateOwnerSource.mjs"
+      - "scripts/nodered_game_create_owner_nodes/**"
+      - "scripts/patch_nodered_game_create_owner.mjs"
+      - "scripts/nodered_game_create_preparation_nodes/**"
+      - "scripts/nodered_games_nodes/fn_split_create_prepare.js"
+      - "scripts/nodered_games_nodes/fn_split_router.js"
+      - "scripts/nodered_subscription_booking_nodes/**"
+      - "scripts/tests/gameCreateOwner*"
+      - "scripts/tests/helpers/gameCreateOwnerHarness.mjs"
+      - "scripts/tests/fixtures/quarter-create-owner-v1.json"
       - "scripts/lib/stationMembership*.mjs"
       - "scripts/lib/communityRosterWrites.mjs"
       - "scripts/lib/communityPolicyProjection.mjs"
@@ -108,5 +128,7 @@ jobs:
         run: |
           node --test scripts/tests/stationMembershipLifetime.test.mjs scripts/tests/stationMembershipOwner.test.mjs scripts/tests/stationMembershipOwnerPatch.test.mjs scripts/tests/stationMembershipOwnerMongo.test.mjs
           node --experimental-strip-types --test scripts/tests/communityTypes.test.ts
+      - name: Test original quarter CREATE custody and physical Mongo races
+        run: node --test scripts/tests/gameCreateOwner.test.mjs scripts/tests/gameCreateOwnerGraph.test.mjs scripts/tests/gameCreateOwner.mongo.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release

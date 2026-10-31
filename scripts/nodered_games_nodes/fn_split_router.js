@@ -1,8 +1,9 @@
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg._gameCreateOwner || msg._quarterCreateCapability) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
-    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "f11f8f844b39e196fec35f7d4964dd018529a00cb2ff5ab79b470d58feef828e", ...fields });
+    global.get("lkDiagnostics")?.observe(msg, "split_router", { sourceHash: "5a19cefec651409341e5fa70a299ba411668338e02fff600c579e57683873a0a", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -315,6 +316,7 @@ const extractConflictExerciseId = (value, ctx) => {
 };
 
 const fail = (status, error, details) => {
+  if (msg._gameCreateOwner) { msg.statusCode = 202; msg.payload = { code: "GAME_CREATE_OWNER_RECONCILIATION_REQUIRED" }; return [null, msg, null, null]; }
   lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });
   msg.statusCode = status;
   msg.headers = {
@@ -1173,7 +1175,8 @@ const continueSplitAfterVerifiedPrice = (ctx) => {
         code: "SPLIT_CREATE_LOCATION_NOT_VERIFIED",
       });
     }
-    const preflight = managedCreatePreflight(ctx);
+    const preflight = ctx.managedCreateBinding
+      ? { ok: true, requiresAuthoritativePreflight: true } : managedCreatePreflight(ctx);
     if (!preflight.ok) {
       return fail(503, "DEV-контур управляемой подписки не подтверждён", {
         code: preflight.code,
@@ -1617,6 +1620,11 @@ const finishManagedSubscriptionFailure = (ctx, compensation) => {
 const ctx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : null;
 if (!ctx) {
   return fail(500, "Split payment context is missing");
+}
+
+if (msg._gameCreateOwner || msg._quarterCreateCapability || ctx.managedCreateBinding) {
+  if (typeof quarterCreateSplit !== "function") return fail(503, "CREATE owner graph unavailable");
+  return quarterCreateSplit(ctx);
 }
 
 if (ctx.step === "token") {

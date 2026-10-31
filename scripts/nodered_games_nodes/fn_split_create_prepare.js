@@ -1,3 +1,9 @@
+// Private CREATE owner cannot fall through an older/uncomposed split preparation.
+if (msg._gameCreateOwner || msg._quarterCreateCapability) {
+  if (typeof quarterCreateSplitPrepare === "function") return quarterCreateSplitPrepare();
+  msg.statusCode = 503; msg.payload = { code: "GAME_CREATE_OWNER_GRAPH_UNAVAILABLE" };
+  return [null, msg, null, null];
+}
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";

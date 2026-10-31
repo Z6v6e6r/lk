@@ -1,3 +1,11 @@
+if (msg._quarterCreateCapability !== undefined) {
+  const c = msg._quarterCreateCapability, o = msg._gameCreateOwner;
+  if (c.version === 1 && c.stage === "gateway_prepare" && o?.step === "capability_return" && c.nonce === o.capabilityNonce) {
+    c.stage = "gateway_router"; msg._subscriptionBooking = { step: "quarter_create_contract_probe" };
+    return [null, null, msg];
+  }
+  msg.statusCode = 503; msg.payload = { code: "GAME_CREATE_OWNER_GRAPH_UNAVAILABLE" }; return [null, msg, null];
+}
 // Training capability traverses this actual prepare node, then router and finalizer.
 if (msg._trainingRegistrationCapability !== undefined) {
   const accepted = msg._trainingRegistrationCapability.version === 1 && msg._trainingRegistrationCapability.stage === "prepare"
