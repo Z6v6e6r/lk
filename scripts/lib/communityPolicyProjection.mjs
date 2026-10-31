@@ -68,6 +68,7 @@ export function buildStationMembershipMutation(community, event, member, nowIso)
   const stored = { ...publicMember, joinedAt: nowIso, joinSource: { type: 'STATION_EVENT', eventKind: event.kind, eventId: event.id, stationId: event.stationId } };
   return {
     filter: { id: community.id, archived: { $ne: true }, communityType: 'STATION', typeSettingsRevision: community.typeSettingsRevision,
+      stationMembershipLifetime: { $exists: false },
       members: { $not: { $elemMatch: identity } }, bannedMembers: { $not: { $elemMatch: identity } } },
     update: [{ $set: {
       members: { $concatArrays: [{ $ifNull: ['$members', []] }, { $literal: [stored] }] },

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { smTransition, smFence, smAdmission, smClaim, smConfirmation } from '../lib/stationMembershipLifetime.mjs';
+import { buildStationMembershipMutation, communityPolicyEvent } from '../lib/communityPolicyProjection.mjs';
 import { community, admissionBody, confirmationBody, uid, run } from './helpers/stationMembershipOwnerHarness.mjs';
 const ci = process.env.GITHUB_ACTIONS === 'true', uri = process.env.COMMUNITY_MONTHLY_TEST_MONGO_URI;
 if (ci && uri !== 'mongodb://127.0.0.1:27017') throw Error('STATION_MONGO_REQUIRES_EXISTING_CI_FIXTURE');
@@ -45,6 +46,25 @@ test('physical stale community CAS cannot erase LEFT and admission snapshot cann
   assert.equal(current.stationMembershipLifetime.players[0].state, 'LEFT');
   const raced = await run(db[0], 'admission', admissionBody(), { async after({ step }) { if (step === 'admission_select') await transition(db[1], 'LEFT'); } });
   assert.equal((await run(db[2], 'confirmation', confirmationBody(raced.payload))).payload.reason, 'MEMBERSHIP_EPOCH_CHANGED');
+});
+test('physical legacy scan built before adoption cannot return a player after LEFT with flag disabled', options, async t => {
+  const db = await fixture(t), collection = db[0].collection('lk_communities');
+  const previous = process.env.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED;
+  process.env.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED = 'false';
+  try {
+    await collection.updateOne({ id: 'station-community' }, { $set: { typeSettingsEffectiveAt: '2026-10-21T08:00:00.000Z' } });
+    const before = await collection.findOne({ id: 'station-community' });
+    const now = '2026-10-21T09:00:00.000Z';
+    const event = communityPolicyEvent('GAME', { id: 'old-game', createdAt: now, booking: { studioId: 'station-a' }, participants: [{ id: 'player-a' }] });
+    const mutation = buildStationMembershipMutation(before, event, event.players[0], now);
+    assert.ok(mutation);
+    await transition(db[1], 'LEFT');
+    const result = await db[2].collection('lk_communities').updateOne(mutation.filter, mutation.update);
+    assert.equal(result.matchedCount, 0);
+    const current = await db[3].collection('lk_communities').findOne({ id: 'station-community' });
+    assert.equal(current.members.length, 0);
+    assert.equal(current.stationMembershipLifetime.players[0].state, 'LEFT');
+  } finally { if (previous === undefined) delete process.env.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED; else process.env.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED = previous; }
 });
 test('physical claim and community ACK ambiguity, with leave between applied write and readback', options, async t => {
   const db = await fixture(t), a = (await run(db[0], 'admission', admissionBody())).payload;

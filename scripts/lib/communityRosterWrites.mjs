@@ -52,9 +52,17 @@ const STATION_BARRIER = `
 if (preimage.communityType === 'STATION' && (preimage.stationMembershipLifetime !== undefined || (typeof env !== 'undefined' && env.get('LK_STATION_MEMBERSHIP_LIFETIME_ENABLED') === 'true'))) {
   const owner = (() => { ${stationLifetimeRuntimeSource()}\nreturn {smFence,smRosterTransition,smIdentity}; })();
   const ctx = msg._communityMemberManage;
-  const target = ctx && (Array.isArray(preimage.members) ? preimage.members : []).find(row => owner.smIdentity(row) === owner.smIdentity(ctx.member));
+  // Legacy target resolution also accepts normalized phone. Bind the epoch to the
+  // actual removed roster row, never to the possibly conflicting request identity.
+  let targetId = null;
+  if (ctx && ['REMOVE', 'BAN'].includes(ctx.action)) {
+    const nextIds = new Set((Array.isArray(write.payload.$set.members) ? write.payload.$set.members : []).map(owner.smIdentity));
+    const removed = (Array.isArray(preimage.members) ? preimage.members : []).filter(row => !nextIds.has(owner.smIdentity(row)));
+    if (removed.length !== 1 || !owner.smIdentity(removed[0])) throw new Error('STATION_REMOVED_TARGET_AMBIGUOUS');
+    targetId = owner.smIdentity(removed[0]);
+  }
   const next = owner.smRosterTransition(preimage, write.payload.$set.members, ctx?.action,
-    target ? owner.smIdentity(target) : owner.smIdentity(ctx?.member), msg._verifiedCommunityActor?.id);
+    targetId, msg._verifiedCommunityActor?.id);
   Object.assign(write.query, owner.smFence(preimage));
   if (next !== undefined) write.payload.$set.stationMembershipLifetime = next;
 }
