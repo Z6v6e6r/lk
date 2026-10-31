@@ -11,6 +11,15 @@ import {
   type TournamentSubscriptionDiscountQuote,
 } from "../../src/utils/tournamentSubscriptionDiscount.ts";
 import { pollSubscriptionBookingConfirmation } from "../../src/utils/subscriptionBookingConfirmation.ts";
+import {
+  buildGroupScheduleSubscriptionDiscountProduct,
+  isGroupScheduleSubscriptionQuote,
+  isPatriotsTournament,
+  matchGroupScheduleSubscriptionDiscount,
+} from "../../src/utils/groupScheduleSubscriptionDiscount.ts";
+import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
+import { hasGroupTrainingSubscriptionEvidence } from "../../src/utils/groupScheduleSubscriptionOffer.ts";
+import { resolveSubscriptionCategoryDailyLimitCategoryFromEvent } from "../../src/utils/subscriptionCategoryDailyLimit.ts";
 
 const now = Date.now();
 const quote: TournamentSubscriptionDiscountQuote = {
@@ -45,6 +54,100 @@ const identityDependencies = {
   pickSubscriptionLookupId: (value: { clientSubscriptionId: string }) => value.clientSubscriptionId,
   resolveSubscriptionCategoryDailyLimitCategoryFromEvent: (value: { category: string }) => value?.category,
 };
+
+test("corporate Patriots tournament opened in group schedule uses tournament quotes and exact SERVICE money", async () => {
+  const target = { directionId: 6306, typeId: 2349 };
+  const exercise = { direction: { id: 6306 }, type: { id: 2349 }, timeFrom: quote.startsAt };
+  assert.equal(isPatriotsTournament(target), true);
+  assert.equal(resolveSubscriptionCategoryDailyLimitCategoryFromEvent(exercise), "tournament", "a rename cannot break payment dispatch");
+  for (const subscriptionName of ["РА", "Дружба.Патриоты"]) {
+    const discounted = { ...quote, subscriptionName, discountPercent: 50, basePriceMinor: 550000, amountMinor: 275000 };
+    assert.equal(isGroupScheduleSubscriptionQuote(discounted, true, quote.exerciseId, quote.actorClientId, now), true);
+    const selected = matchGroupScheduleSubscriptionDiscount([discounted], { ...oneTime, cost: 550000 }, true, 6306);
+    assert.equal(selected, discounted);
+    const product = buildGroupScheduleSubscriptionDiscountProduct(selected!);
+    assert.equal(product.cost, 275000);
+    assert.equal(product.tournamentDiscountQuote, discounted);
+    assert.equal(product.groupDiscountQuote, undefined);
+    const owned = { ...product, lk1MoneyDiscountCandidate: undefined, tournamentDiscountQuote: undefined,
+      cost: null, raw: { visitsLeft: 30 } };
+    assert.deepEqual(getGroupScheduleOwnedSubscriptions([owned], []), [owned]);
+    assert.deepEqual(getGroupScheduleOwnedSubscriptions([owned], null), []);
+    assert.deepEqual(getGroupScheduleOwnedSubscriptions([owned], [discounted]), [], "no duplicate unpriced owned button");
+    assert.equal(hasGroupTrainingSubscriptionEvidence([], [discounted]), subscriptionName === "РА");
+    let calls = 0;
+    const create = loadFunction("apiCreateTournamentVivaTransaction", {
+      ...identityDependencies, resolveSubscriptionCategoryDailyLimitCategoryFromEvent,
+      apiCreateTournamentVivaBookingFromSubscription: async (actual: typeof params) => {
+        calls++;
+        assert.equal(actual.product.tournamentDiscountQuote, discounted);
+        return { data: {}, error: null, status: 201 };
+      },
+    });
+    assert.equal((await create({ ...params, exercise, product })).status, 201);
+    assert.equal(calls, 1);
+  }
+});
+
+test("group schedule cannot mix tournament and training discounts or widen to other corporate pairs", () => {
+  for (const target of [null, { directionId: 6306, typeId: 605 }, { directionId: 6307, typeId: 2349 },
+    { directionId: 6181, typeId: 2349 }, { directionId: 6152, typeId: 2349 }]) {
+    assert.equal(isPatriotsTournament(target), false, JSON.stringify(target));
+  }
+  assert.equal(isGroupScheduleSubscriptionQuote(groupQuote, true, quote.exerciseId, quote.actorClientId, now), false);
+  assert.equal(isGroupScheduleSubscriptionQuote(quote, false, quote.exerciseId, quote.actorClientId, now), false);
+  assert.equal(matchGroupScheduleSubscriptionDiscount([groupQuote], oneTime, true, 6306), null);
+  assert.equal(matchGroupScheduleSubscriptionDiscount([quote], oneTime, false, 6307), null);
+  assert.equal(matchGroupScheduleSubscriptionDiscount([groupQuote], oneTime, false, 6307), groupQuote);
+  assert.equal(buildGroupScheduleSubscriptionDiscountProduct(groupQuote).groupDiscountQuote, groupQuote);
+  assert.equal(buildGroupScheduleSubscriptionDiscountProduct(groupQuote).tournamentDiscountQuote, undefined);
+  for (const delta of [{ actorClientId: "other" }, { exerciseId: "other" }, { expiresAt: now - 1 },
+    { amountMinor: 1 }, { status: "UNAVAILABLE" }]) {
+    assert.equal(isGroupScheduleSubscriptionQuote({ ...quote, ...delta }, true, quote.exerciseId, quote.actorClientId, now), false);
+  }
+  assert.equal(matchGroupScheduleSubscriptionDiscount([], oneTime, true, 6306), null);
+  assert.equal(matchGroupScheduleSubscriptionDiscount([quote], { ...oneTime, cost: 700000 }, true, 6306), null);
+});
+
+test("group schedule fetches the matching route, keys async quotes by category, and keeps promo precedence", () => {
+  const page = fs.readFileSync("src/components/group-schedule/GroupSchedulePage.tsx", "utf8");
+  assert.match(page, /const fetchDiscounts = patriotsTournamentSelected\s*\? apiFetchTournamentSubscriptionDiscounts : apiFetchGroupSubscriptionDiscounts/);
+  assert.match(page, /const resolvedFor = `\$\{selectedId\}:\$\{actorId\}:\$\{patriotsTournamentSelected\}`/);
+  assert.match(page, /const discountContextKey = `\$\{selectedId\}:\$\{checkout\?\.profile\?\.id\}:\$\{patriotsTournamentSelected\}`/);
+  assert.match(page, /!promoPreview \? matchGroupScheduleSubscriptionDiscount/);
+  assert.match(page, /buildGroupScheduleSubscriptionDiscountProduct\(discount\)/);
+  assert.match(page, /action: isPatriotsTournament\(training\) \? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING"/);
+});
+
+test("server preview reproduces the old training-target refusal and accepts the Patriots tournament route", () => {
+  const booking = fs.readFileSync("scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js", "utf8");
+  const categorySource = booking.slice(booking.indexOf("const resolveCategory ="), booking.indexOf("function normalizeServiceDateMoscow"));
+  const isObj = (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  const resolveCategory = new Function("isObj", "numericId", "markerName", "normalizeMarker", `${categorySource}; return resolveCategory;`)(
+    isObj, (value: { id?: number } | number) => Number(typeof value === "object" ? value.id : value),
+    () => "", () => "",
+  );
+  const router = fs.readFileSync("scripts/nodered_subscription_price_preview_nodes/router.js", "utf8");
+  for (const eventCategory of ["GROUP_TRAINING", "TOURNAMENT"]) {
+    const exercise = { id: quote.exerciseId, direction: { id: 6306 }, type: { id: 2349 },
+      timeFrom: quote.startsAt, room: { id: "fixture:room" }, studio: { id: "fixture:station" } };
+    const ctx = { step: "groupExercise", startedAt: now, exerciseId: exercise.id,
+      eventCategory, target: {}, tenantKey: "fixture", auth: "fixture", error: undefined as string | undefined };
+    const msg = { _subscriptionPricePreview: ctx, payload: exercise, statusCode: 200, method: "" };
+    new Function("msg", "global", "canonical", router)(msg, { get: () => undefined }, {
+      isObj, identityMoneyOwned: () => [], unwrapRecord: (value: unknown) => value,
+      eventStartsAt: () => quote.startsAt, eventDurationMinutes: () => 120,
+      resolveCategory, exerciseRoomId: () => exercise.room.id,
+      managedExternalEventTypeId: () => "viva:direction:6306:type:2349", isProTrainingExercise: () => false,
+    });
+    if (eventCategory === "GROUP_TRAINING") assert.equal(ctx.error, "GROUP_DISCOUNT_TARGET_UNRESOLVED");
+    else {
+      assert.equal(ctx.error, undefined);
+      assert.equal(ctx.step, "subscriptions");
+      assert.equal(msg.method, "GET", "the accepted preview remains read-only");
+    }
+  }
+});
 
 test("tournament quote uses its configured percentage and exact kopecks; group kinds are isolated", () => {
   assert.ok(isTournamentSubscriptionDiscountQuote(quote, quote.exerciseId, quote.actorClientId, now));
