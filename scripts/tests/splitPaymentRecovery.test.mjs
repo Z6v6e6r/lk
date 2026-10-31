@@ -15,6 +15,14 @@ const DIAGNOSTIC_CANDIDATES = {
   join: '4a44d0866125fdf800c9bbf7a8a93166beb799d4e4f1e1f97ad062ada35650d3',
   router: '70833cc326bc19246f8e0e4ecad28917ab274838c89911994211f5b8d7db58e8',
 };
+// Current private quarter-owner composition; historical preimages above stay immutable.
+const QUARTER_OWNER_CANDIDATES = {
+  create: { source: '79b545078ee364b252f984f5078f5c6666b56b517642ff3c5fc2a028a0542d8d' },
+  router: {
+    source: 'b9d866021c791f1d9f23900cea34ecd41023bfd5b8604610f964c28ca7eab8be',
+    business: '5a19cefec651409341e5fa70a299ba411668338e02fff600c579e57683873a0a',
+  },
+};
 
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T12:20:00.000Z'])); }
@@ -47,14 +55,15 @@ test('split-payment business preimages and observer candidates remain separately
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
     assert.notEqual(candidate, livePreimage, key);
     const current = source(key);
-    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), DIAGNOSTIC_CANDIDATES[key] || candidate, key);
+    const currentBusiness = QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
+    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
     if (DIAGNOSTIC_CANDIDATES[key]) {
-      assert.ok(current.includes(`sourceHash: "${candidate}"`), key);
+      assert.ok(current.includes(`sourceHash: "${currentBusiness}"`), key);
       const marker = key === 'join' ? 'const TOKEN_URL_DEFAULT' : 'const ADMIN_API';
       const business = current.slice(current.indexOf(marker)).replace(
         '  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });\n', '',
       );
-      assert.equal(crypto.createHash('sha256').update(business).digest('hex'), candidate, key);
+      assert.equal(crypto.createHash('sha256').update(business).digest('hex'), currentBusiness, key);
     }
   }
 });
