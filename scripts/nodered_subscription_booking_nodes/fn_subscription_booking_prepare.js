@@ -3,7 +3,7 @@ const lkDiagnostic = (fields = {}) => {
   try {
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_prepare", { sourceHash: "b4c3919ae689dfa3c5201d70fdb39d0a0c8727921f915d3f1f6b3a7050b4e6d5", ...fields });
+    observer?.observe(msg, "booking_prepare", { sourceHash: "96bcd0887b7d146367dfc4d7f394610faf9234b88e6529a70d8eb8d1958fc5d5", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -84,6 +84,21 @@ const releaseBookingId = toStr(body.bookingId);
 const exerciseId = toStr(body.exerciseId);
 const clientSubscriptionId = toStr(body.clientSubscriptionId);
 const spotNumber = Number(body.spot);
+const managedSelfLeave = body.managedSelfLeave;
+if (managedSelfLeave !== undefined) {
+  const fields = "actorClientId,bookingId,bookingOperationId,bookingOperationKey,clientSubscriptionId,entitlementOperationId,exerciseId,gameId,leaveClaimToken,leaveOperationId,leaveOperationKey,membershipVersion,schemaVersion,serviceDate,subscriptionInstanceId,tenantKey";
+  if (!managedJoinV2Keys(managedSelfLeave, fields) || managedSelfLeave.schemaVersion !== 1
+    || Object.entries(managedSelfLeave).some(([key, value]) => key !== "schemaVersion"
+      && (typeof value !== "string" || value.length < 1 || value.length > 500 || /[\s\x00-\x1f\x7f]/.test(value)))
+    || managedSelfLeave.tenantKey !== TENANT_KEY
+    || !/^\d{4}-\d{2}-\d{2}$/.test(managedSelfLeave.serviceDate)
+    || managedSelfLeave.leaveOperationKey !== `${managedSelfLeave.gameId}:${managedSelfLeave.leaveOperationId}`
+    || action !== "release" || body.bookingId !== managedSelfLeave.bookingId
+    || operationId !== managedSelfLeave.leaveOperationId
+    || Object.keys(body).sort().join(",") !== "action,bookingId,managedSelfLeave,operationId") {
+    return finish(400, "Некорректная привязка возврата посещения", { code: "MANAGED_SELF_LEAVE_INVALID" });
+  }
+}
 const recoveryOnly = body.managedJoinV2RecoveryOnly === true;
 if (body.managedJoinV2RecoveryOnly !== undefined && (!recoveryOnly || body.managedJoinV2 === undefined))
   return finish(400, "Некорректное восстановление JOIN", { code: "MANAGED_JOIN_V2_INVALID" });
@@ -125,6 +140,7 @@ msg._subscriptionBooking = {
   ...(managedJoinV2 ? { managedJoinV2, managedAction: "JOIN_GAME", ...(recoveryOnly ? { managedJoinV2RecoveryOnly: true } : {}) } : {}),
   ...(body.lk2LegacyJoin === true ? { lk2LegacyJoin: true } : {}),
   action,
+  ...(managedSelfLeave === undefined ? {} : { managedSelfLeave: JSON.parse(JSON.stringify(managedSelfLeave)) }),
   step: "profile",
   tenantKey: TENANT_KEY,
   operationId,

@@ -35,6 +35,7 @@ const IDS = {
   managedPolicy: "lk_subscription_managed_policy_20260820",
   managedPolicyBlocked: "lk_subscription_managed_policy_blocked_20260820",
   mongoFind: "lk_subscription_booking_find_20260804",
+  mongoLeaveFind: "lk_subscription_booking_leave_find_20261031",
   mongoInsert: "lk_subscription_booking_insert_20260804",
   mongoUpdate: "lk_subscription_booking_update_20260804",
   finalize: "lk_subscription_booking_finalize_20260804",
@@ -174,8 +175,8 @@ function buildManagedNodes(tabId, mongoClientId) {
     },
     functionNode(
       tabId, IDS.router, "Route atomic subscription booking", readOwnerRouter(),
-      7, 1060, 5120,
-      [[IDS.http], [IDS.mongoFind], [IDS.mongoInsert], [IDS.mongoUpdate], [IDS.finalize], [IDS.debug], [IDS.managedPolicy]],
+      8, 1060, 5120,
+      [[IDS.http], [IDS.mongoFind], [IDS.mongoInsert], [IDS.mongoUpdate], [IDS.finalize], [IDS.debug], [IDS.managedPolicy], [IDS.mongoLeaveFind]],
     ),
     functionNode(
       tabId, IDS.managedPolicy, "Evaluate managed subscription policy",
@@ -188,6 +189,7 @@ function buildManagedNodes(tabId, mongoClientId) {
       1, 1690, 5010, [[IDS.finalize]],
     ),
     mongoNode(tabId, IDS.mongoFind, "Find daily subscription operation", "find", mongoClientId, 1380, 5060, IDS.router),
+    { ...mongoNode(tabId, IDS.mongoLeaveFind, "Read exact SELF return authority", "find", mongoClientId, 1380, 5000, IDS.router), collection: "lk_game_leave_operations" },
     mongoNode(tabId, IDS.mongoInsert, "Insert daily subscription operation", "insertOne", mongoClientId, 1390, 5110, IDS.router),
     mongoNode(tabId, IDS.mongoUpdate, "Update daily subscription operation", "updateOne", mongoClientId, 1390, 5160, IDS.router),
     functionNode(
@@ -200,7 +202,7 @@ function buildManagedNodes(tabId, mongoClientId) {
     },
     {
       id: IDS.catch, type: "catch", z: tabId, name: "Catch subscription booking persistence errors",
-      scope: [IDS.mongoFind, IDS.mongoInsert, IDS.mongoUpdate], uncaught: false,
+      scope: [IDS.mongoFind, IDS.mongoInsert, IDS.mongoUpdate, IDS.mongoLeaveFind], uncaught: false,
       x: 1370, y: 5230, wires: [[IDS.mongoError]],
     },
     functionNode(
@@ -243,7 +245,7 @@ function validateCandidate(flow, tabId, mongoClientId) {
     if (count !== 1) throw new Error(`Expected one ${method.toUpperCase()} ${url}, found ${count}`);
   }
   const managedMongoNodes = flow.filter((node) => (
-    [IDS.mongoFind, IDS.mongoInsert, IDS.mongoUpdate].includes(node.id)
+    [IDS.mongoFind, IDS.mongoInsert, IDS.mongoUpdate, IDS.mongoLeaveFind].includes(node.id)
   ));
   if (managedMongoNodes.some((node) => node.clientNode !== mongoClientId)) {
     throw new Error("Subscription booking nodes use an inconsistent Mongo client");

@@ -29,6 +29,7 @@ msg.payload = [
   {
     $setOnInsert: {
       _id: operationKey,
+      tenantKey: "iSkq6G",
       operationId: ctx.operationId,
       gameId: ctx.gameId,
       exerciseId: ctx.exerciseId || null,

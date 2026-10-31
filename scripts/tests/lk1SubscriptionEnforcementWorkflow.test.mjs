@@ -591,7 +591,7 @@ test("focused CI gates reject removal, duplicate identity, conditional execution
   const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
   assert.equal(scripts["test:codex-main-worktree-guard"], "node --test scripts/tests/codexMainWorktreeGuard.test.mjs");
   assert.equal(scripts["test:leave-generation-regressions"],
-    "node --experimental-strip-types --test scripts/tests/cupBookinglessStaffLeaveCandidate.test.mjs scripts/tests/splitLeaveActiveVivaDemotionCandidate.test.mjs scripts/tests/splitLeaveProjectionPatch.test.mjs scripts/tests/gameJoinRosterSync.test.ts scripts/tests/splitPaymentRecovery.test.mjs");
+    "node --experimental-strip-types --test scripts/tests/managedSelfLeaveCompensation.test.mjs scripts/tests/managedSelfLeaveCompensationPatch.test.mjs scripts/tests/cupBookinglessStaffLeaveCandidate.test.mjs scripts/tests/splitLeaveActiveVivaDemotionCandidate.test.mjs scripts/tests/splitLeaveProjectionPatch.test.mjs scripts/tests/gameJoinRosterSync.test.ts scripts/tests/splitPaymentRecovery.test.mjs");
   assert.equal(scripts["test:community-list-performance"],
     "node --experimental-strip-types --test scripts/tests/communitySummaryLazyLoad.test.ts scripts/tests/expiringSingleFlight.test.ts scripts/tests/communityListPerformance.test.mjs");
 });
