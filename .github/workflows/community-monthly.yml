@@ -8,6 +8,15 @@ on:
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
+      - "scripts/lib/stationMembership*.mjs"
+      - "scripts/lib/communityRosterWrites.mjs"
+      - "scripts/lib/communityPolicyProjection.mjs"
+      - "scripts/lib/communityResponseRedaction.mjs"
+      - "scripts/nodered_station_membership_nodes/**"
+      - "scripts/patch_nodered_station_membership_owner.mjs"
+      - "scripts/patch_nodered_communities_flow.mjs"
+      - "scripts/tests/stationMembership*"
+      - "scripts/tests/helpers/stationMembershipOwnerHarness.mjs"
       - "scripts/lib/communityMonthlyFinalization.mjs"
       - "scripts/nodered_community_monthly_nodes/**"
       - "scripts/patch_nodered_community_monthly_flow.mjs"
@@ -39,6 +48,15 @@ on:
       - "scripts/tests/managedSelfLeaveOwner*"
       - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
       - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
+      - "scripts/lib/stationMembership*.mjs"
+      - "scripts/lib/communityRosterWrites.mjs"
+      - "scripts/lib/communityPolicyProjection.mjs"
+      - "scripts/lib/communityResponseRedaction.mjs"
+      - "scripts/nodered_station_membership_nodes/**"
+      - "scripts/patch_nodered_station_membership_owner.mjs"
+      - "scripts/patch_nodered_communities_flow.mjs"
+      - "scripts/tests/stationMembership*"
+      - "scripts/tests/helpers/stationMembershipOwnerHarness.mjs"
       - "scripts/lib/communityMonthlyFinalization.mjs"
       - "deploy/rating-worker/**"
       - "package*.json"
@@ -86,5 +104,9 @@ jobs:
         run: npm run test:community-monthly
       - name: Test managed SELF owner admission with real Mongo write conflicts
         run: node --test scripts/tests/managedSelfLeaveOwner.test.mjs scripts/tests/managedSelfLeaveOwnerPatch.test.mjs scripts/tests/managedSelfLeaveOwner.mongo.test.mjs
+      - name: Test station membership lifecycle, receiver and physical Mongo races
+        run: |
+          node --test scripts/tests/stationMembershipLifetime.test.mjs scripts/tests/stationMembershipOwner.test.mjs scripts/tests/stationMembershipOwnerPatch.test.mjs scripts/tests/stationMembershipOwnerMongo.test.mjs
+          node --experimental-strip-types --test scripts/tests/communityTypes.test.ts
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release
