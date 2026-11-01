@@ -116,6 +116,91 @@ if (ctx.mode === "STAFF_TARGET" && (
 )) {
   return respond(409, "CONFLICT", "Existing operation has different removal parameters");
 }
+// This capability is created only with the original row. Never upgrade a legacy row.
+if (Object.prototype.hasOwnProperty.call(operation, "monetarySelfLeave")) {
+  const f = operation.monetarySelfLeave;
+  const keys = (x, expected) => x && typeof x === "object" && !Array.isArray(x)
+    && Object.keys(x).sort().join(",") === expected.split(",").sort().join(",");
+  const iso = (x) => typeof x === "string" && Number.isFinite(Date.parse(x))
+    && new Date(x).toISOString() === x && Date.parse(x) <= Date.now();
+  const o = f?.original;
+  if (msg.error || rows.length !== 1 || ctx.mode !== "SELF" || ctx.managedSelfLeaveOwner
+    || ctx.backgroundRetry || ctx.backgroundStartedRecovery || !ctx.actorClientId
+    || ctx.actorClientId !== ctx.targetClientId || !/^Bearer \S+$/.test(ctx.actorAuthHeader || "")
+    || !keys(f, "version,revision,original,markers,readbacks") || f.version !== 1
+    || !Number.isSafeInteger(f.revision) || f.revision < 0
+    || typeof operation.claimToken !== "string" || !operation.claimToken
+    || typeof operation.claimLeaseUntil !== "string" || !Number.isFinite(Date.parse(operation.claimLeaseUntil))
+    || !keys(o, "tenantKey,operationId,gameId,exerciseId,actorClientId,membershipVersion,bookingIds,requestedRefundMethod")
+    || o.tenantKey !== "iSkq6G" || operation.tenantKey !== o.tenantKey
+    || operation.mode !== "SELF" || operation.actorClientId !== o.actorClientId
+    || operation.targetClientId !== o.actorClientId || ctx.actorClientId !== o.actorClientId
+    || operation.operationId !== o.operationId || ctx.operationId !== o.operationId
+    || operation._id !== `${o.gameId}:${o.operationId}` || operation.gameId !== o.gameId || ctx.gameId !== o.gameId
+    || operation.exerciseId !== o.exerciseId || ctx.exerciseId !== o.exerciseId
+    || operation.membershipVersion !== o.membershipVersion || ctx.membershipVersion !== o.membershipVersion
+    || operation.requestedRefundMethod !== o.requestedRefundMethod
+    || (ctx.requestedRefundMethod || null) !== o.requestedRefundMethod
+    || !Array.isArray(o.bookingIds) || !o.bookingIds.length || o.bookingIds.some(id => typeof id !== "string" || !id.trim())
+    || new Set(o.bookingIds).size !== o.bookingIds.length
+    || JSON.stringify(operation.bookingIds) !== JSON.stringify(o.bookingIds)
+    || (ctx.initialBookingIds?.length && JSON.stringify([...ctx.initialBookingIds].sort()) !== JSON.stringify([...o.bookingIds].sort()))
+    || !Array.isArray(f.markers) || !Array.isArray(f.readbacks)
+    || f.markers.length > o.bookingIds.length || f.readbacks.length > o.bookingIds.length
+    || new Set(f.markers.map(m => m?.bookingId)).size !== f.markers.length
+    || new Set(f.readbacks.map(m => m?.bookingId)).size !== f.readbacks.length
+    || f.markers.some(m => !keys(m, m.refundMethod === "SERVICE"
+      ? "bookingId,dispatchId,refundMethod,claimToken,startedAt,subscriptionBaseline"
+      : "bookingId,dispatchId,refundMethod,claimToken,startedAt")
+      || !o.bookingIds.includes(m.bookingId) || !["CURRENCY", "DEPOSIT", "SERVICE"].includes(m.refundMethod)
+      || (o.requestedRefundMethod && o.requestedRefundMethod !== m.refundMethod)
+      || m.dispatchId !== `${o.operationId}:${m.bookingId}` || typeof m.claimToken !== "string" || !m.claimToken
+      || !iso(m.startedAt))
+    || f.readbacks.some(m => !keys(m, "bookingId,verifiedAt,source") || !o.bookingIds.includes(m.bookingId)
+      || m.source !== "VIVA_BOOKING_READBACK" || !iso(m.verifiedAt)
+      || f.markers.some(d => d.bookingId === m.bookingId && d.startedAt > m.verifiedAt))
+    || (operation.state === "STARTED" && f.markers.length > 0)) {
+    return respond(202, "RETRY_REQUIRED", "Исходная денежная отмена требует сверки");
+  }
+  const serviceMarkers = f.markers.filter(m => m.refundMethod === "SERVICE");
+  const checks = operation.subscriptionReturnChecks;
+  if (!Array.isArray(checks) || checks.length !== serviceMarkers.length
+    || serviceMarkers.some(m => {
+      const b = m.subscriptionBaseline;
+      const exact = checks.filter(c => c?.bookingId === m.bookingId);
+      return !keys(b, "bookingId,clientSubscriptionId,expectedReturnCount,visitsLeftBefore")
+        || b.bookingId !== m.bookingId || typeof b.clientSubscriptionId !== "string" || !b.clientSubscriptionId.trim()
+        || !Number.isSafeInteger(b.visitsLeftBefore) || b.visitsLeftBefore < 0
+        || !Number.isSafeInteger(b.expectedReturnCount) || b.expectedReturnCount < 1
+        || exact.length !== 1 || !keys(exact[0], "bookingId,clientSubscriptionId,expectedReturnCount,visitsLeftBefore")
+        || Object.keys(b).some(k => b[k] !== exact[0][k]);
+    }) || (serviceMarkers.length && (
+      !["RETURN_PENDING", "RETURN_VERIFIED"].includes(operation.subscriptionReturnState)
+      || operation.clientSubscriptionId !== serviceMarkers.at(-1).subscriptionBaseline.clientSubscriptionId
+      || operation.subscriptionVisitCount !== serviceMarkers.at(-1).subscriptionBaseline.expectedReturnCount))) {
+    return respond(202, "RETRY_REQUIRED", "Исходный возврат посещения требует сверки");
+  }
+  ctx.monetaryStoredService = { checks: JSON.parse(JSON.stringify(checks)),
+    clientSubscriptionId: operation.clientSubscriptionId,
+    subscriptionVisitCount: operation.subscriptionVisitCount, subscriptionReturnState: operation.subscriptionReturnState };
+  ctx.clientSubscriptionId = operation.clientSubscriptionId;
+  ctx.subscriptionVisitCount = operation.subscriptionVisitCount;
+  ctx.subscriptionReturnChecks = JSON.parse(JSON.stringify(checks));
+  ctx.subscriptionReturnState = operation.subscriptionReturnState;
+  ctx.subscriptionReturnReason = operation.subscriptionReturnReason || null;
+  ctx.monetarySelfLeave = JSON.parse(JSON.stringify(f));
+  ctx.monetaryLeaseUntil = operation.claimLeaseUntil;
+  ctx.monetaryOperationState = operation.state;
+  if (operation.state === "MONETARY_DISPATCH_STARTED") {
+    if (!f.markers.length) return respond(202, "RETRY_REQUIRED", "Не подтверждён исходный запрос отмены");
+    ctx.operationState = operation.state; ctx.operationKey = operation._id;
+    ctx.initialBookingIds = [...o.bookingIds]; ctx.bookingQueue = [];
+    ctx.subscriptionReturnChecks = operation.subscriptionReturnChecks || [];
+    ctx.monetaryAction = { kind: "recover", previousClaimToken: operation.claimToken,
+      previousLeaseUntil: operation.claimLeaseUntil };
+    return [null, null, null, msg];
+  }
+}
 const requestedMembershipVersion = ctx.membershipVersion;
 const requestedBookingIds = ctx.initialBookingIds;
 ctx.bookingDiscovery = operation.bookingDiscovery || null;
@@ -171,7 +256,7 @@ if (ctx.operationState === "STARTED") {
       && String(operation.mode || "").toUpperCase() === "SELF"
       && sameActorIdentity;
     if (sameSelfActor) {
-      ctx.foregroundReclaim = !ctx.managedSelfLeaveOwner;
+      ctx.foregroundReclaim = !ctx.managedSelfLeaveOwner && !ctx.monetarySelfLeave;
       ctx.previousClaimToken = String(operation.claimToken || "");
       ctx.previousClaimLeaseUntil = operation.claimLeaseUntil || null;
       return [null, null, null, msg];
