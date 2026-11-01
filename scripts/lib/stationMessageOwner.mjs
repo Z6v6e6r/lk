@@ -2,12 +2,24 @@ import crypto from 'node:crypto';
 import { smHash, smEqual, smId, smUuid, smMongoIdentity, smLifetime, smPlayer, smFence, smIdentity } from './stationMembershipLifetime.mjs';
 
 export const MESSAGE_OUTBOX_LIMIT = 32;
+export const MESSAGE_CONTRACT = 'station-message.v1';
 const messages = 'lk_community_chat_messages', communities = 'lk_communities', events = 'lk_community_events';
 const uuid = value => { const h=crypto.createHash('sha256').update(value).digest('hex').slice(0,32).split(''); h[12]='8';h[16]=((parseInt(h[16],16)&3)|8).toString(16);const s=h.join('');return `${s.slice(0,8)}-${s.slice(8,12)}-${s.slice(12,16)}-${s.slice(16,20)}-${s.slice(20)}`; };
 const op = (ctx, step, store, method, ...args) => {ctx.step=step;return {ctx,store,method,args};};
 const readCandidate = (ctx,step='candidate') => op(ctx,step,messages,'find',{_id:ctx.key},{limit:2,maxTimeMS:3000});
 const readCommunity = (ctx,step='community') => op(ctx,step,communities,'find',{id:ctx.communityId},{limit:2,maxTimeMS:3000});
-const errorResult = (ctx,status,code) => ({ctx,response:{status,body:{error:code,requestId:ctx.requestId,messageId:ctx.candidate?.publicId || null}}});
+export const stationMessageUnknown = (requestId,status,code) => ({status,body:{contractVersion:1,contract:'station-message',requestId:smUuid(requestId)?requestId:null,outcome:'UNKNOWN',code}});
+const errorResult = (ctx,status,code) => ({ctx,response:ctx.requiredContract?stationMessageUnknown(ctx.requestId,status,code):{status,body:{error:code,requestId:ctx.requestId,messageId:ctx.candidate?.publicId || null}}});
+const requestKey = (actorId,requestId) => 'station-message:v1:'+smHash('station-message-key:v1',{tenant:'iSkq6G',actorId,requestId}).slice(7);
+const confirmedResult = ctx => ({ctx,response:{status:200,body:{contractVersion:1,contract:'station-message',requestId:ctx.requestId,outcome:'CONFIRMED',message:{id:ctx.committed.id,body:ctx.committed.text,sentAt:ctx.committed.createdAt,author:{displayName:ctx.committed.authorName},isViewer:true}}}});
+// Validate the existing immutable receipt, never repair it or infer it from a candidate/outbox.
+const committedProof = (ctx,d) => {
+  if(!d||d._id!==ctx.key||d.stationMessageOwner!==1||d.state!=='COMMITTED'||d.archived!==false||d.requestId!==ctx.requestId||d.actorId!==ctx.actorId||d.authorId!==ctx.actorId||d.communityId!==ctx.communityId||d.publicId!==uuid(ctx.key)||d.id!==d.publicId)return false;
+  if(typeof d.text!=='string'||!d.text||d.text!==d.text.trim()||d.text.length>8000||typeof d.authorName!=='string'||!d.authorName||d.authorName.length>120||typeof d.createdAt!=='string'||!Number.isFinite(Date.parse(d.createdAt))||d.createdTs!==Date.parse(d.createdAt))return false;
+  if(d.requestHash!==smHash('station-message-request:v1',{communityId:ctx.communityId,actorId:ctx.actorId,text:d.text})||(ctx.requestHash&&ctx.requestHash!==d.requestHash))return false;
+  const event={_id:'station-message-event:'+d.id,id:uuid('event:'+d.id),communityId:d.communityId,type:'CHAT_MESSAGE_CREATED',createdAt:d.createdAt,createdTs:d.createdTs,actor:{id:d.actorId,name:d.authorName},payload:{messageId:d.id,textPreview:d.text.slice(0,120)}};
+  return smEqual(d.stationMessageEvent,event);
+};
 const sameCandidate = (ctx,d) => d && d.stationMessageOwner===1 && d._id===ctx.key && d.actorId===ctx.actorId && d.communityId===ctx.communityId && d.requestHash===ctx.requestHash;
 const outbox = c => {if(c.communityMessageOutbox===undefined)return [];if(!Array.isArray(c.communityMessageOutbox)||c.communityMessageOutbox.length>MESSAGE_OUTBOX_LIMIT)throw Error('MESSAGE_OUTBOX_INVALID');return c.communityMessageOutbox;};
 const active = (c,actor) => {
@@ -18,19 +30,47 @@ const active = (c,actor) => {
 const identityMatches = (c,d) => c && c.id===d.communityId && smEqual(smMongoIdentity(c),d.communityIdentity);
 const result = ctx => {
   if(ctx.recovery)return {ctx,complete:true};
+  if(ctx.requiredContract)return readCommunity(ctx,'canonical_reply_access');
   if(!ctx.canReply)return errorResult(ctx,409,'MESSAGE_ACCEPTED_ACCESS_CHANGED');
   const d=ctx.committed;
   if(d.archived===true)return errorResult(ctx,409,'MESSAGE_ACCEPTED_UNAVAILABLE');
   return {ctx,response:{status:200,body:{ok:true,requestId:ctx.requestId,message:{id:d.id,communityId:d.communityId,text:d.text,createdAt:d.createdAt,createdTs:d.createdTs,authorId:d.authorId,authorName:d.authorName,authorAvatar:d.authorAvatar}}}};
 };
-export function beginStationMessage({communityId,actor,requestId,text,nowIso=new Date().toISOString()}) {
+export function beginStationMessage({communityId,actor,requestId,text,requiredContract=false,nowIso=new Date().toISOString()}) {
   if(!smId(communityId)||!smId(actor?.id))throw Error('MESSAGE_ACTOR_REQUIRED');
   if(typeof text!=='string'||!text.trim()||text.trim().length>8000)throw Error('MESSAGE_TEXT_INVALID');
+  if(requiredContract&&text.length>8000)throw Error('MESSAGE_TEXT_INVALID');
+  if(requiredContract&&!smUuid(requestId))throw Error('MESSAGE_REQUEST_ID_REQUIRED');
   if(requestId!==undefined && requestId!==null && !smUuid(requestId))throw Error('MESSAGE_REQUEST_ID_INVALID');
   const id=requestId??crypto.randomUUID(),actorId=actor.id,body=text.trim();
-  const key='station-message:v1:'+smHash('station-message-key:v1',{tenant:'iSkq6G',actorId,requestId:id}).slice(7);
-  const ctx={key,requestId:id,communityId,actorId,text:body,nowIso,retries:0,requestHash:smHash('station-message-request:v1',{communityId,actorId,text:body})};
+  const key=requestKey(actorId,id);
+  const ctx={key,requiredContract:requiredContract===true,requestId:id,communityId,actorId,text:body,nowIso,retries:0,requestHash:smHash('station-message-request:v1',{communityId,actorId,text:body})};
   return readCandidate(ctx);
+}
+export function beginStationMessageStatus({communityId,actor,requestId}) {
+  if(!smId(communityId)||!smId(actor?.id)||!smUuid(requestId))throw Error('MESSAGE_STATUS_REQUEST_INVALID');
+  const ctx={key:requestKey(actor.id,requestId),requiredContract:true,statusOnly:true,requestId,communityId,actorId:actor.id};
+  return readCandidate(ctx,'status_candidate');
+}
+function advanceStationMessageStatus(ctx,payload,error) {
+  if(error||!Array.isArray(payload))return errorResult(ctx,503,'MESSAGE_STORE_UNAVAILABLE');
+  const d=payload[0];
+  if(ctx.step==='status_candidate'){
+    if(payload.length===1&&committedProof(ctx,d)){
+      ctx.committed=d;ctx.candidate=d;
+      return op(ctx,'status_event',events,'find',{_id:d.stationMessageEvent._id},{limit:2,maxTimeMS:3000});
+    }
+    return readCommunity(ctx,'status_acl');
+  }
+  if(ctx.step==='status_event'){
+    ctx.receiptProven=payload.length===1&&smEqual(d,ctx.committed.stationMessageEvent);
+    return readCommunity(ctx,'status_acl');
+  }
+  if(ctx.step==='status_acl'){
+    if(payload.length!==1||!active(d,ctx.actorId)||(ctx.candidate&&!identityMatches(d,ctx.candidate)))return errorResult(ctx,403,'COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE');
+    return ctx.receiptProven?confirmedResult(ctx):errorResult(ctx,200,'MESSAGE_RECEIPT_UNPROVEN');
+  }
+  return errorResult(ctx,503,'MESSAGE_STATUS_STATE_INVALID');
 }
 function project(ctx) {
   const d=ctx.candidate,i=ctx.intent;
@@ -40,6 +80,7 @@ function project(ctx) {
 }
 export function advanceStationMessage(ctx,payload,error=false) {
   try {
+    if(ctx.statusOnly)return advanceStationMessageStatus(ctx,payload,error);
     if(ctx.step==='candidate_write')return readCandidate(ctx,'candidate_readback');
     if(ctx.step==='accept_write'){ctx.acceptAmbiguous=Boolean(error)||payload?.acknowledged!==true;return readCommunity(ctx,'accept_readback');}
     if(ctx.step==='message_write')return readCandidate(ctx,'message_readback');
@@ -47,6 +88,11 @@ export function advanceStationMessage(ctx,payload,error=false) {
     if(ctx.step==='cleanup')return result(ctx); // cleanup may be retried; canonical message+event already proven
     if(error||!Array.isArray(payload))return errorResult(ctx,503,'MESSAGE_STORE_UNAVAILABLE');
     const rows=payload,d=rows[0];
+    if(ctx.step==='canonical_reply_access'){
+      if(rows.length!==1||!active(d,ctx.actorId)||!identityMatches(d,ctx.candidate))return errorResult(ctx,403,'COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE');
+      if(!committedProof(ctx,ctx.committed))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
+      return confirmedResult(ctx);
+    }
     if(['candidate','candidate_readback','message_readback','accept_candidate_readback','recovery_candidate'].includes(ctx.step)) {
       if(!rows.length){
         if(ctx.step==='candidate')return readCommunity(ctx,'reserve_select');
@@ -55,6 +101,7 @@ export function advanceStationMessage(ctx,payload,error=false) {
       if(rows.length!==1||!sameCandidate(ctx,d))return errorResult(ctx,409,'MESSAGE_REQUEST_CONFLICT');
       ctx.candidate=d;
       if(d.state==='COMMITTED'){
+        if(ctx.requiredContract&&!committedProof(ctx,d))return errorResult(ctx,503,'MESSAGE_RECEIPT_UNPROVEN');
         if(d.id!==d.publicId||typeof d.text!=='string'||!d.stationMessageEvent)return errorResult(ctx,503,'MESSAGE_COMMIT_INVALID');
         ctx.committed=d;
         if(ctx.step==='candidate'||ctx.step==='candidate_readback')return readCommunity(ctx,'reply_access');
@@ -110,6 +157,7 @@ export async function runStationMessage(db,operation,{before,after}={}) {
   let next=operation;
   for(let step=0;step<40;step++){
     if(next.response||next.complete)return next;
+    if(next.ctx.statusOnly&&next.method!=='find')return errorResult(next.ctx,503,'MESSAGE_STATUS_WRITE_FORBIDDEN');
     const fault=await before?.(next);let value,error=false;
     try{value=fault?.skip?fault.value:next.method==='find'?await db.collection(next.store).find(...next.args).toArray():await db.collection(next.store).updateOne(...next.args);error=Boolean(fault?.error);}catch{error=true;}
     const changed=await after?.(next,value);if(changed?.error)error=true;

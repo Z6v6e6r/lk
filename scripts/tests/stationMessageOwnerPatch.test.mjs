@@ -65,3 +65,29 @@ test('actual composed legacy authorization is bound to entire BSON preimage befo
   const failed=evaluate(graph,messageOwnerIds.legacyAck,{...held[5],payload});assert.equal(failed[2].statusCode,503);assert.equal(failed[3],null);
  }
 });
+test('new versioned routes are absent from old graph and reuse exact verified auth without legacy ingress',async()=>{
+ const old=base();assert.equal(old.some(n=>n.type==='http in'&&n.url.includes('message-requests')),false);
+ const graph=patch(old),db=messageDb(),headers={'x-padlhub-community-message-contract':'station-message.v1'};
+ for(const mode of ['canonical','status']){
+  const route=graph.find(n=>n.id===messageOwnerIds[mode+'In']);assert.equal(route.method,mode==='status'?'get':'post');assert.deepEqual(route.wires,[[messageOwnerIds[mode+'Auth']]]);
+  assert.equal(graph.find(n=>n.id===messageOwnerIds[mode+'Auth']).type,'subflow:community-policy-verified-actor-v1');
+ }
+ const sendMessage={req:{headers,params:{communityId:'station-community'},query:{}},payload:{requestId:uid(66),text:'Canonical'},_verifiedCommunityActor:{id:'player-a'}};
+ const send=evaluate(graph,messageOwnerIds.canonicalBegin,structuredClone(sendMessage));assert.ok(send[0]);assert.equal(send[0]._stationMessageOperation.ctx.requiredContract,true);const receipt=await runStationMessage(db,send[0]._stationMessageOperation);assert.equal(receipt.response.body.outcome,'CONFIRMED');
+ const read=evaluate(graph,messageOwnerIds.statusBegin,{req:{headers,params:{communityId:'station-community',requestId:uid(66)},query:{}},_verifiedCommunityActor:{id:'player-a'}});assert.equal(read[0]._stationMessageOperation.ctx.statusOnly,true);
+ const status=await runStationMessage(db,read[0]._stationMessageOperation,{before(op){assert.equal(op.method,'find');}});assert.deepEqual(status.response.body,receipt.response.body);
+ const changed=structuredClone(sendMessage);changed.payload.requestId=uid(67);db.tables.get('lk_communities')[0].communityType='FRIENDS';const forced=evaluate(graph,messageOwnerIds.canonicalBegin,changed);assert.ok(forced[0]);assert.equal((await runStationMessage(db,forced[0]._stationMessageOperation)).response.status,403);
+});
+test('new route protocol rejects missing/wrong version, actor spoofing, malformed body/key and route shadows',()=>{
+ const graph=patch(base());
+ const message=()=>({req:{headers:{'x-padlhub-community-message-contract':'station-message.v1'},params:{communityId:'station-community'},query:{}},payload:{requestId:uid(70),text:'Canonical'},_verifiedCommunityActor:{id:'player-a'}});
+ for(const change of [m=>{delete m.req.headers['x-padlhub-community-message-contract'];},m=>{m.req.headers['x-padlhub-community-message-contract']='station-message.v2';},m=>{m.payload.member={id:'other'};},m=>{delete m.payload.requestId;},m=>{m.payload.requestId='bad';},m=>{m.payload.text=' '.repeat(8000)+'x';},m=>{m.req.query.actor='other';}]){
+  const msg=message();change(msg);const result=evaluate(graph,messageOwnerIds.canonicalBegin,msg);assert.equal(result[0],null);assert.equal(result[1].statusCode,400);assert.equal(result[1].payload.outcome,'UNKNOWN');assert.equal(result[1]._stationMessageOperation,undefined);
+ }
+ const spoof=message();delete spoof.req.headers.authorization;const auth=evaluate(graph,'community-policy-verified-actor-v1-prepare',spoof);assert.equal(auth[1]._verifiedCommunityActor,undefined);assert.equal(evaluate(graph,messageOwnerIds.canonicalBegin,auth[1])[1].statusCode,403);
+ const denied=message();delete denied._verifiedCommunityActor;const result=evaluate(graph,messageOwnerIds.canonicalBegin,denied);assert.equal(result[1].statusCode,403);assert.equal(result[1].payload.message,undefined);
+ for(const url of ['/lk/communities/:communityId/message-requests','/lk/communities/:communityId/:resource','/lk/*','/*']){const flow=base();flow.push({id:'shadow',type:'http in',method:'post',url,wires:[['prepare']]});assert.throws(()=>patch(flow),/ROUTE_(COLLISION|SHADOWED)/);}
+ const bypass=base();bypass.push({id:'old-link',type:'link out',links:[messageOwnerIds.statusBegin]});assert.throws(()=>patch(bypass),/RESERVED_REFERENCE/);
+ const authDrift=base();authDrift.find(n=>n.id==='community-policy-verified-actor-v1-response').func='msg._verifiedCommunityActor=msg.payload;return msg;';assert.throws(()=>patch(authDrift),/AUTH_SUBFLOW_DRIFT/);
+ const get={req:{headers:{'x-padlhub-community-message-contract':'station-message.v1'},params:{communityId:'station-community',requestId:uid(70)},query:{}},payload:{text:'no body'},_verifiedCommunityActor:{id:'player-a'}};assert.equal(evaluate(graph,messageOwnerIds.statusBegin,get)[1].statusCode,400);
+});

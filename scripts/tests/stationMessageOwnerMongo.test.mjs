@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import {beginStationMessage,runStationMessage,recoverStationMessageOutbox} from '../lib/stationMessageOwner.mjs';
+import {beginStationMessage,runStationMessage,recoverStationMessageOutbox,beginStationMessageStatus} from '../lib/stationMessageOwner.mjs';
 import {smTransition,smFence} from '../lib/stationMembershipLifetime.mjs';
 const ci=process.env.GITHUB_ACTIONS==='true',uri=process.env.COMMUNITY_MONTHLY_TEST_MONGO_URI;
 if(ci&&uri!=='mongodb://127.0.0.1:27017')throw Error('STATION_MESSAGE_REQUIRES_EXISTING_CI_FIXTURE');
@@ -42,4 +42,20 @@ test('physical accepted intent survives ACK loss/leave/archive; retained deletio
  assert.equal((await recoverStationMessageOutbox(db[2],{dryRun:false})).recovered,1);
  assert.equal(await db[0].collection('lk_community_chat_messages').countDocuments({state:'COMMITTED'}),1);assert.equal(await db[0].collection('lk_community_events').countDocuments(),1);
  assert.deepEqual((await db[0].collection('lk_communities').findOne({_id:before._id})).communityMessageOutbox,[]);
+});
+
+test('physical original-request GET proves only committed receipt and never repairs or creates custody',options,async t=>{
+ const db=await fixture(t),i=input();
+ const readonly=async(args=i,after)=>{
+  let writes=0;
+  const proxy={collection(name){const collection=db[1].collection(name);return {find:(...args)=>collection.find(...args),updateOne(){writes++;throw Error('STATUS_WRITE_FORBIDDEN');}};}};
+  const result=await runStationMessage(proxy,beginStationMessageStatus(args),{before(op){assert.equal(op.method,'find');},after});assert.equal(writes,0);return result;
+ };
+ assert.equal((await readonly()).response.body.outcome,'UNKNOWN');assert.equal(await db[0].collection('lk_community_chat_messages').countDocuments(),0);
+ await send(db[0],{...i,requiredContract:true},{before(op){if(op.ctx.step==='event_write')return {skip:true,error:true};}});
+ assert.equal((await readonly()).response.body.outcome,'UNKNOWN');assert.equal(await db[0].collection('lk_community_events').countDocuments(),0);
+ assert.equal((await recoverStationMessageOutbox(db[2],{dryRun:false})).recovered,1);
+ assert.equal((await readonly()).response.body.outcome,'CONFIRMED');
+ const denied=await readonly(i,async op=>{if(op.ctx.step==='status_event')await leave(db[2],'BANNED');});assert.equal(denied.response.status,403);assert.equal(denied.response.body.message,undefined);
+ const current=await db[0].collection('lk_communities').findOne({id:'community'});assert.equal(current.stationMembershipLifetime.players[0].state,'BANNED');
 });

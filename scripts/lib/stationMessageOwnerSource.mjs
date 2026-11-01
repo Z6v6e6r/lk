@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import vm from 'node:vm';
+import { addCommunityPolicyAuth, COMMUNITY_AUTH_SUBFLOW } from './communityPolicyAuth.mjs';
 import { addTypedCommunityResponseRedaction } from './communityResponseRedaction.mjs';
 import { stationLifetimeRuntimeSource } from './stationMembershipReceiverSource.mjs';
-export const messageOwnerIds=Object.fromEntries(['router','messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response','catch','legacyWrite','legacyAck','legacyCatch'].map(k=>[k,'station_message_owner_'+k+'_v1']));
+export const messageOwnerIds=Object.fromEntries(['router','messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response','catch','legacyWrite','legacyAck','legacyCatch','canonicalIn','canonicalAuth','canonicalBegin','statusIn','statusAuth','statusBegin'].map(k=>[k,'station_message_owner_'+k+'_v1']));
 export const messageOwnerRuntimeSource=()=>stationLifetimeRuntimeSource()+'\n'+fs.readFileSync(new URL('./stationMessageOwner.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId}){
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==expectedFlowSha256)throw Error('MESSAGE_GRAPH_PREIMAGE');
@@ -26,6 +27,21 @@ export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId
     const store=byId.get(wires[port][0]);
     if(store?.type!=='mongodb4'||store.clientNode!==mongoClientId||store.operation!=='insertOne'||store.collection!==(port===0?'lk_community_chat_messages':'lk_community_events')||store.wires?.some(g=>g.length))throw Error('MESSAGE_SEND_STORE_DRIFT');
     if(flow.some(n=>n.id!==writer.id&&((n.wires||[]).flat().includes(store.id)||(n.links||[]).includes(store.id))))throw Error('MESSAGE_LEGACY_STORE_BYPASS');
+  }
+  if(!byId.has(COMMUNITY_AUTH_SUBFLOW)||byId.get(ingress[0].wires[0][0])?.type!=='subflow:'+COMMUNITY_AUTH_SUBFLOW)throw Error('MESSAGE_VERIFIED_SUBFLOW_REQUIRED');
+  addCommunityPolicyAuth(flow); // Exact existing subflow definitions and ingress bindings must validate.
+  const newRoutes=[['post','/lk/communities/:communityId/message-requests'],['get','/lk/communities/:communityId/message-requests/:requestId']];
+  for(const n of flow)if(n.type==='http in'&&['get','post','all'].includes(String(n.method||'get').toLowerCase())){
+    const path=String(n.url||'').replace(/\/$/,'');
+    for(const [method,route]of newRoutes){
+      const currentMethod=String(n.method||'get').toLowerCase();
+      if(currentMethod!=='all'&&currentMethod!==method)continue;
+      const parts=path.split('/'),expected=route.split('/');
+      // Reject ambiguous catch-all/regexp handlers that could swallow a future route.
+      const wildcard=parts.findIndex(part=>/[*()?]/.test(part));
+      if(wildcard>=0&&parts.slice(0,wildcard).every((part,i)=>expected[i]!==undefined&&(part.startsWith(':')||expected[i].startsWith(':')||part===expected[i])))throw Error('MESSAGE_CONTRACT_ROUTE_SHADOWED');
+      if(parts.length===expected.length&&parts.every((part,i)=>part.startsWith(':')||expected[i].startsWith(':')||part===expected[i]))throw Error('MESSAGE_CONTRACT_ROUTE_COLLISION');
+    }
   }
   const create=flow.filter(n=>n.type==='function'&&n.name==='Build community create docs');
   const oldGuard="const protectedRow={$or:[{$ne:[{$type:'$stationMembershipLifetime'},'missing']},env.get('LK_STATION_MEMBERSHIP_LIFETIME_ENABLED')==='true'?{$eq:['$communityType','STATION']}:false]};";
@@ -68,10 +84,32 @@ return [null,null,null,null,null,msg];
   writer.outputs=6;writer.wires=[...wires,[messageOwnerIds.router],[messageOwnerIds.legacyWrite]];
   writer.libs=[...(writer.libs||[]).filter(x=>x.var!=='nodeCrypto'),{var:'nodeCrypto',module:'crypto'}];
   const z=writer.z;
+  for(const mode of ['canonical','status']){
+    const statusOnly=mode==='status',route=statusOnly?newRoutes[1][1]:newRoutes[0][1];
+    const begin=messageOwnerRuntimeSource()+'\nconst statusOnly='+JSON.stringify(statusOnly)+';\n'+String.raw`
+const body=msg.payload,requestId=statusOnly?msg.req?.params?.requestId:body?.requestId;
+const denied=(status,code)=>{const response=stationMessageUnknown(requestId,status,code);msg.statusCode=response.status;msg.payload=response.body;msg.headers={'Content-Type':'application/json','Cache-Control':'no-store'};delete msg.error;return [null,msg];};
+if(msg.req?.headers?.['x-padlhub-community-message-contract']!==MESSAGE_CONTRACT)return denied(400,'MESSAGE_CONTRACT_REQUIRED');
+if(!msg._verifiedCommunityActor?.id||msg._communityPolicyAuthFailure)return denied(msg._communityPolicyAuthFailure==='INVALID'?401:msg._communityPolicyAuthFailure==='UNAVAILABLE'?503:403,'COMMUNITY_AUTH_REQUIRED');
+if(Object.keys(msg.req?.query||{}).length)return denied(400,'MESSAGE_REQUEST_INVALID');
+if(statusOnly){
+  if((body!==undefined&&body!==null&&body!==''&&(typeof body!=='object'||Array.isArray(body)||Object.keys(body).length))||Number(msg.req?.headers?.['content-length']||0)>0||msg.req?.headers?.['transfer-encoding'])return denied(400,'MESSAGE_REQUEST_INVALID');
+}else if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length!==2||!Object.hasOwn(body,'text')||!Object.hasOwn(body,'requestId'))return denied(400,'MESSAGE_REQUEST_INVALID');
+try{
+  const input={communityId:msg.req?.params?.communityId,actor:msg._verifiedCommunityActor,requestId};
+  msg._stationMessageOperation=statusOnly?beginStationMessageStatus(input):beginStationMessage({...input,text:body.text,requiredContract:true});
+  return [msg,null];
+}catch{return denied(400,'MESSAGE_REQUEST_INVALID');}
+`;
+    flow.push({id:messageOwnerIds[mode+'In'],type:'http in',z,method:statusOnly?'get':'post',url:route,upload:false,wires:[[messageOwnerIds[mode+'Auth']]]},
+      {id:messageOwnerIds[mode+'Auth'],type:'subflow:'+COMMUNITY_AUTH_SUBFLOW,z,wires:[[messageOwnerIds[mode+'Begin']]]},
+      {id:messageOwnerIds[mode+'Begin'],type:'function',z,name:statusOnly?'Read original station message request':'Begin canonical station message request',func:begin,libs:[{var:'nodeCrypto',module:'crypto'}],outputs:2,wires:[[messageOwnerIds.router],[messageOwnerIds.response]]});
+  }
   const router=messageOwnerRuntimeSource()+String.raw`
 const next=msg._stationMessageOperation||advanceStationMessage(msg._stationMessage,msg.payload,Boolean(msg.error));
 delete msg._stationMessageOperation;delete msg.error;
 if(next.response){delete msg._stationMessage;msg.statusCode=next.response.status;msg.payload=next.response.body;msg.headers={'Content-Type':'application/json','Cache-Control':'no-store'};return [null,null,null,null,null,null,msg];}
+if(next.ctx.statusOnly&&next.method!=='find'){msg.statusCode=503;msg.payload=stationMessageUnknown(next.ctx.requestId,503,'MESSAGE_STATUS_WRITE_FORBIDDEN').body;delete msg._stationMessage;return [null,null,null,null,null,null,msg];}
 msg._stationMessage=next.ctx;msg.payload=next.args;
 const stores=['lk_community_chat_messages','lk_communities','lk_community_events'];
 const port=stores.indexOf(next.store)*2+(next.method==='find'?0:1),outputs=Array(7).fill(null);
