@@ -11,7 +11,7 @@ export function protectStationCreate(flow, ids, mongoClientId) {
 if (!Array.isArray(outcome) || !outcome[0]) return outcome;
 const write=outcome[0], set=write.payload?.$set;
 if (!write.query?.id || set?.id !== write.query.id || Object.keys(write.query).length !== 1 || !set || '_id' in set || Object.keys(write.payload).some(k=>!['$set','$setOnInsert'].includes(k)) || Object.keys(write.payload.$setOnInsert||{}).some(k=>k!=='createdAt') || write.payload.$setOnInsert?.createdAt!==set.createdAt) throw Error('STATION_CREATE_UPDATE_DRIFT');
-const protectedRow={$or:[{$ne:[{$type:'$stationMembershipLifetime'},'missing']},env.get('LK_STATION_MEMBERSHIP_LIFETIME_ENABLED')==='true'?{$eq:['$communityType','STATION']}:false]};
+const protectedRow={$or:[{$ne:[{$type:'$communityMessageOutbox'},'missing']},{$ne:[{$type:'$stationMembershipLifetime'},'missing']},env.get('LK_STATION_MEMBERSHIP_LIFETIME_ENABLED')==='true'?{$eq:['$communityType','STATION']}:false]};
 write.payload=[write.query,[{$replaceWith:{$cond:[protectedRow,'$$ROOT',{$mergeObjects:['$$ROOT',{$literal:set}]}]}}],{upsert:true}];
 write._stationCreateDeferred=outcome.slice(1);
 return [write,null,null,null,null,null];

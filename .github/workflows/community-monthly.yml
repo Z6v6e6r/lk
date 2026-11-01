@@ -8,6 +8,12 @@ on:
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
+      - "scripts/lib/stationMessage*.mjs"
+      - "scripts/tests/stationMessage*"
+      - "scripts/tests/helpers/stationMessageHarness.mjs"
+      - "scripts/rating_worker.mjs"
+      - "src/utils/communityApi.ts"
+      - "src/components/cabinet/CommunitiesSection.tsx"
       - "scripts/lib/stationMembership*.mjs"
       - "scripts/lib/communityRosterWrites.mjs"
       - "scripts/lib/communityPolicyProjection.mjs"
@@ -48,6 +54,12 @@ on:
       - "scripts/tests/managedSelfLeaveOwner*"
       - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
       - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
+      - "scripts/lib/stationMessage*.mjs"
+      - "scripts/tests/stationMessage*"
+      - "scripts/tests/helpers/stationMessageHarness.mjs"
+      - "scripts/rating_worker.mjs"
+      - "src/utils/communityApi.ts"
+      - "src/components/cabinet/CommunitiesSection.tsx"
       - "scripts/lib/stationMembership*.mjs"
       - "scripts/lib/communityRosterWrites.mjs"
       - "scripts/lib/communityPolicyProjection.mjs"
@@ -108,5 +120,7 @@ jobs:
         run: |
           node --test scripts/tests/stationMembershipLifetime.test.mjs scripts/tests/stationMembershipOwner.test.mjs scripts/tests/stationMembershipOwnerPatch.test.mjs scripts/tests/stationMembershipOwnerMongo.test.mjs
           node --experimental-strip-types --test scripts/tests/communityTypes.test.ts
+      - name: Test station message commit barrier, retry and physical Mongo races
+        run: node --test scripts/tests/stationMessageOwner.test.mjs scripts/tests/stationMessageOwnerPatch.test.mjs scripts/tests/stationMessageOwnerMongo.test.mjs scripts/tests/stationMessageWorker.test.mjs scripts/tests/stationMessageRetry.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release

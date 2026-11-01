@@ -124,6 +124,8 @@ test("rating-worker release packages the community postcheck and watchdog helper
     "src/services/community-rating/league.ts",
     "src/utils/exerciseCategory.ts",
     "scripts/lib/communityPolicyProjection.mjs",
+    "scripts/lib/stationMessageOwner.mjs",
+    "scripts/lib/stationMembershipLifetime.mjs",
     "scripts/lib/communitySchedule.mjs",
     "scripts/community_monthly_reports.mjs",
     "deploy/rating-worker/run-monthly-reports.sh",

@@ -361,6 +361,7 @@ export interface SetCommunityPostReactionPayload {
 }
 
 export interface CreateCommunityChatMessagePayload {
+  requestId?: string;
   member: CommunityActorPayload;
   text: string;
 }
@@ -2152,9 +2153,10 @@ export async function apiCreateCommunityChatMessage(
       body: JSON.stringify({
         member: buildMemberPayload(payload.member),
         text,
+        requestId: payload.requestId,
       }),
     },
-    false, // Sending a message has no durable idempotency key; never replay it.
+    false, // Manual retry retains its key; never replay automatically.
   );
 
   if (response.error) {
