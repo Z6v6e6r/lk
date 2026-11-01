@@ -106,6 +106,53 @@ test('real Mongo: original CREATE-ID CAS and one organizer fence survive ACK los
   assert.equal((await db[0].updateOne(...structuredClone(promotion.payload))).modifiedCount, 0);
 });
 
+// A delayed ACK does not renew its actor delegation. Recovery must traverse the
+// actual verifier with a fresh token, while preserving the original operation/body.
+function freshUnusedAbortRead(h) {
+  let message; const stop = Symbol('capture fresh original recovery');
+  h.onNode = (node, msg) => {
+    if (node === 'gateway' && msg._subscriptionBooking?.step === 'quarter_operation') {
+      message = structuredClone(msg); throw stop;
+    }
+  };
+  try { assert.throws(() => h.execute({ recoveryOnly: true }), e => e === stop); }
+  finally { delete h.onNode; }
+  assert.ok(message);
+  assert.equal(message._gameCreateOwner.claims.recovery_only, true);
+  assert.ok(message._gameCreateOwner.claims.exp * 1000 > h.now);
+  const outputs = h.invokeOwner('gateway', message);
+  assert.equal(outputs[0], null, 'no release before the exact abort-marker read');
+  const read = outputs[1]; assert.ok(read, 'fresh original recovery must request its marker');
+  assert.equal(read._subscriptionBooking.step, 'quarter_unused_abort_read');
+  return read;
+}
+function assertStaleAbortAckRefused(h, message) {
+  message.error = { code: 'LOST_ABORT_ACK' }; message.payload = undefined;
+  const outputs = h.invokeOwner('gateway', message);
+  assert.equal(outputs[0], null); assert.equal(outputs[1], null);
+  assert.equal(outputs[4]?.payload?.details?.code, 'GAME_CREATE_OWNER_BINDING_REQUIRED');
+  assert.equal(h.releaseCalls, 0); assert.equal(h.providerCreates, 0); assert.equal(h.bookingCreates, 0);
+}
+test('lost abort ACK after actor expiry requires fresh verified recovery before signed release', () => {
+  const h = new OwnerHarness(); capture('operation_precreated_attempt', h);
+  h.now += 61000;
+  const abort = capture('quarter_unused_abort_ack', h, { recoveryOnly: true });
+  h.update(structuredClone(abort.message));
+  const stored = structuredClone([...h.rows.values()].find(row => row.managedCreateBinding));
+  h.now += 120000;
+  assertStaleAbortAckRefused(h, abort.message);
+  const read = freshUnusedAbortRead(h);
+  assert.equal(read.payload._id, stored._id);
+  assert.deepEqual(read.payload.managedCreateBinding, stored.managedCreateBinding);
+  read.payload = [stored];
+  const release = h.invokeOwner('gateway', read)[0]; assert.ok(release);
+  assert.equal(release.payload.operationId, stored.quarterPrecreateAbort.usageOperationId);
+  assert.equal(release.payload.reason, 'PRECREATE_EXPIRED_NOT_DISPATCHED');
+  assert.match(release.headers['X-Subscription-Owner-Evidence'], /^release-v1\./);
+  assert.deepEqual(h.rows.get(stored._id).quarterPrecreateAbort, stored.quarterPrecreateAbort);
+  assert.equal(h.providerCreates, 0); assert.equal(h.bookingCreates, 0);
+});
+
 for (const winner of ['abort', 'attempt']) test('real Mongo: unused expiry versus dispatch CAS, '+winner+' wins irreversibly', options, async t => {
   const db = await fixture(t), original = new OwnerHarness({ now: Date.now() - 120000 });
   const attempt = capture('operation_precreated_attempt', original);
@@ -124,9 +171,13 @@ for (const winner of ['abort', 'attempt']) test('real Mongo: unused expiry versu
   assert.equal(saved.state, 'PRECREATE_ABORTING'); assert.equal(typeof saved.quarterPrecreateAbort.abortedAt, 'string');
   assert.ok(Date.parse(saved.quarterPrecreateAbort.abortedAt) >= Date.parse(original.preparation.expiresAt));
   original.now = Date.now() + 120000; // marker survives original proof TTL; a fresh read is required.
-  abort.message.error = { code: 'LOST_ABORT_ACK' }; abort.message.payload = undefined;
-  const read = original.invokeOwner('gateway', abort.message)[1]; read.payload = await db[2].find(read.payload).toArray(); delete read.error;
-  const release = original.invokeOwner('gateway', read)[0];
+  assertStaleAbortAckRefused(original, abort.message);
+  original.rows.set(saved._id, saved);
+  const read = freshUnusedAbortRead(original);
+  read.payload = await db[2].find(read.payload).toArray();
+  assert.equal(read.payload.length, 1);
+  assert.deepEqual(read.payload[0].quarterPrecreateAbort, saved.quarterPrecreateAbort);
+  const release = original.invokeOwner('gateway', read)[0]; assert.ok(release);
   assert.equal(release.payload.reason, 'PRECREATE_EXPIRED_NOT_DISPATCHED');
   assert.match(release.headers['X-Subscription-Owner-Evidence'], /^release-v1\./);
   original.rows.set(saved._id, saved);
