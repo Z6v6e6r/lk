@@ -76,13 +76,13 @@ export function smRosterTransition(community, nextMembers, action, targetId, act
 export function smAdmissionRequest(body) {
   return smKeys(body, ['contractVersion', 'operationId', 'requestSha256', 'activity', 'stationId']) && body.contractVersion === 1 &&
     smUuid(body.operationId) && smDigest(body.requestSha256) && smId(body.stationId) &&
-    smKeys(body.activity, ['kind', 'id']) && ['GAME', 'TRAINING'].includes(body.activity.kind) && smUuid(body.activity.id);
+    smKeys(body.activity, ['kind', 'id']) && ['GAME', 'TRAINING', 'GAME_CREATE'].includes(body.activity.kind) && smUuid(body.activity.id);
 }
-export const smConfirmationKind = kind => kind === 'GAME' ? 'GAME_PARTICIPATION' : kind === 'TRAINING' ? 'TRAINING_REGISTRATION' : null;
+export const smConfirmationKind = kind => kind === 'GAME' ? 'GAME_PARTICIPATION' : kind === 'TRAINING' ? 'TRAINING_REGISTRATION' : kind === 'GAME_CREATE' ? 'GAME_CREATE_ORGANIZER' : null;
 export function smConfirmationRequest(body) {
   return smKeys(body, ['contractVersion', 'operationId', 'admissionId', 'admissionBindingSha256', 'confirmation']) && body.contractVersion === 1 &&
     smUuid(body.operationId) && smUuid(body.admissionId) && smDigest(body.admissionBindingSha256) &&
-    smKeys(body.confirmation, ['kind', 'generationId', 'activityId']) && ['GAME_PARTICIPATION', 'TRAINING_REGISTRATION'].includes(body.confirmation.kind) &&
+    smKeys(body.confirmation, ['kind', 'generationId', 'activityId']) && ['GAME_PARTICIPATION', 'TRAINING_REGISTRATION', 'GAME_CREATE_ORGANIZER'].includes(body.confirmation.kind) &&
     smUuid(body.confirmation.generationId) && smUuid(body.confirmation.activityId);
 }
 export const smActor = claims => ({ tenantId: claims.tenant_id, canonicalUserId: claims.sub, playerId: claims.provider_client_id, providerMappingId: claims.provider_mapping_id });
@@ -140,7 +140,7 @@ export function smConfirmation(communities, admission, claim) {
   if (p.canonicalUserId && p.canonicalUserId !== admission.actor.canonicalUserId) return { reason: 'ACTOR_MAPPING_CONFLICT' };
   const kind = smConfirmationKind(admission.activity.kind);
   const proof = { operationId: admission.operationId, admissionId: admission.admissionId, generationId: claim.generationId,
-    ...(kind === 'TRAINING_REGISTRATION' ? { kind } : {}) };
+    ...(kind !== 'GAME_PARTICIPATION' ? { kind } : {}) };
   const members = smRows(c.members), active = members.find(m => smIdentity(m) === id);
   if (active) return { reason: p.state === 'ACTIVE' && smEqual(p.lastApplied || null, proof) ? 'ALREADY_APPLIED' : 'MEMBER_ALREADY_ACTIVE' };
   // A previously applied generation is not a new registration even if a foreign writer dropped the member.

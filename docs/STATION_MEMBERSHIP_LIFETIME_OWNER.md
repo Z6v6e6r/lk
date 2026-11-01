@@ -1,6 +1,7 @@
 # STATION membership owner v1 — source contract, inactive by default
 
-Owner: LK community owner; consumers: authenticated LK2 managed GAME JOIN and TRAINING registration.
+Owner: LK community owner; consumers: authenticated LK2 managed GAME JOIN, TRAINING registration,
+and explicit GAME_CREATE organizer confirmation (producer remains a separate dependency).
 This packet does not install endpoints, provision a signer, change live configuration,
 or authorize deployment. The producer supplies each verified activity/registration binding.
 
@@ -26,8 +27,19 @@ Confirmation body (exact keys):
 TRAINING uses the same v1 keys/routes/signature: admission `activity.kind=TRAINING`,
 `activity.id=<canonical training UUID>`; confirmation `kind=TRAINING_REGISTRATION`,
 `generationId=<canonical registration UUID>`, `activityId=<same canonical training UUID>`.
-The owner checks the exact GAME/GAME_PARTICIPATION or TRAINING/TRAINING_REGISTRATION
-pair and activity UUID against immutable admission before claiming a generation.
+The owner checks the exact activity/confirmation pair and activity UUID against
+immutable admission before claiming a generation. GAME/GAME_PARTICIPATION and
+TRAINING/TRAINING_REGISTRATION retain their existing meanings.
+GAME_CREATE uses the same exact v1 envelope with `activity.kind=GAME_CREATE` and
+`activity.id=<original public draft UUID>`. Its confirmation kind is
+`GAME_CREATE_ORGANIZER`; `activityId` remains that original draft UUID. This is neither
+GAME/GAME_PARTICIPATION nor a newly invented canonical roster row. The future producer
+must derive and retain one stable generation from the exact original tenant/provider
+actor/exercise/organizer booking receipt; changing operation/key must never change the
+generation for the same booking. Owner operation, request hash and actor remain separately
+bound in the original admission and claim. The receiver accepts only the signed persisted
+fact, not client-selected booking identity or a live roster lookup.
+
 Unknown kinds and cross-kind reinterpretation are rejected. No cancellation fact removes
 membership. Transport requires a persisted confirmed registration, not a user/provider token.
 
@@ -99,7 +111,7 @@ the feature is later disabled: CUP cannot delete an already admitted identity.
 
 `lk_station_membership_generation_claims`: permanent first-wins `_id` =
 `v1:<tenantUuid>:<encodeURIComponent(communityId)>:<confirmationKind>:<generationUuid>`.
-Kinds are GAME_PARTICIPATION or TRAINING_REGISTRATION. Existing GAME keys and claim
+Kinds are GAME_PARTICIPATION, TRAINING_REGISTRATION or GAME_CREATE_ORGANIZER. Existing GAME keys and claim
 document bytes remain compatible; the same UUID in different kinds has separate claims.
 Claim binds actor, original operation/admission/hash/activity/epoch. Never release or
 reassign it. Claim ACK alone proves neither membership nor success.
@@ -107,12 +119,34 @@ reassign it. Claim ACK alone proves neither membership nor success.
 `lk_communities.stationMembershipLifetime` is private:
 `{version:1,revision,players:[{playerId,canonicalUserId?,epoch,state,lastApplied?}]}`.
 `lastApplied` contains operationId/admissionId/generationId; TRAINING adds
-`kind:TRAINING_REGISTRATION`. Missing kind retains the existing GAME meaning. LEFT, REMOVE, BAN and
+`kind:TRAINING_REGISTRATION`, and CREATE adds `kind:GAME_CREATE_ORGANIZER`. Missing kind retains the existing GAME meaning. LEFT, REMOVE, BAN and
 explicit administrative restore advance per-player epoch atomically with roster.
 Confirmation consumes its permanent claim and checks exact current epoch/status, policy,
 identity and roster CAS before appending membership; readback must prove actual ACTIVE
 membership and exact lastApplied. Cancellation retains membership. All scoped writers
 preserve private fields; no global fixed admission budget or evictable generation list.
+
+## CREATE prerequisite and compatibility
+
+This packet adds only the LK receiver kind. It does not implement the LK2 producer,
+change the canonical CREATE/provider writer, mint a receipt, or activate enrollment.
+Install and verify this coherent receiver before enabling a CREATE producer; older
+receivers reject GAME_CREATE/GAME_CREATE_ORGANIZER. Existing GAME/TRAINING payloads,
+claim keys, signature domains and lifetime semantics remain unchanged.
+
+A producer must capture admission before its first CREATE attempt, persist the original
+capsule/admission/epoch, and emit confirmation only after the original organizer booking
+and entitlement are durably confirmed. The LK2 importer remains the sole canonical
+local game/roster writer. A receipt-derived CREATE generation does not become a JOIN
+participation, and cancellation never removes station membership. Old/pre-adoption
+CREATE receipts cannot acquire a new epoch later. Replaying an already claimed generation
+under a new operation after LEFT is rejected; a genuinely new confirmed registration
+can return only through its new admission/epoch. REMOVED/BANNED remain blocked.
+
+Rollback to an older receiver requires separately disabling/draining the new producer;
+retain all admissions, claims and lifetime rows. Do not remove stored kind/history or
+reinterpret CREATE as GAME. The receiver uses the existing flag and credentials; no
+new flag, index, collection, provider adapter or deployment action is part of this change.
 
 ## Activation, capacity, and evidence
 

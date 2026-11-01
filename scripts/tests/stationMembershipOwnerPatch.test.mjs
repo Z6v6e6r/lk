@@ -59,3 +59,21 @@ test('actual create writer holds all effects until protected collision or acknow
   const changed=JSON.stringify(drift), guarded=buildStationMembershipOwner(changed,{expectedFlowSha256:digest(changed),mongoClientId:'mongo'}).flow.find(n=>n.id==='create');
   assert.throws(()=>new Function('msg','env',guarded.func)({payload:{id:'station-community',name:'Synthetic',description:'Synthetic',city:'Synthetic',creator:{id:'player-a'}}},{get:()=> 'true'}),/STATION_CREATE_UPDATE_DRIFT/);
 });
+
+test('composed authenticated graph accepts explicit CREATE kind through existing routes, without provider nodes or alternate authority', async () => {
+  const { message, environment, admissionBody } = await import('./helpers/stationMembershipOwnerHarness.mjs');
+  const bytes=JSON.stringify(base()),{flow}=buildStationMembershipOwner(bytes,{expectedFlowSha256:digest(bytes),mongoClientId:'mongo'});
+  const body={...admissionBody(),activity:{kind:'GAME_CREATE',id:'00000000-0000-4000-8000-000000000090'}};
+  const ingress=flow.find(n=>n.id===stationOwnerIds.admissionIn),verify=flow.find(n=>n.id===ingress.wires[0][0]);
+  assert.equal(ingress.method,'post');assert.equal(ingress.url,'/lk/integrations/v1/station-memberships/operations/:operationId/admission');
+  const evaluate=msg=>new Function('msg','env','nodeCrypto',verify.func)(msg,{get:key=>environment[key]},crypto);
+  const accepted=evaluate(message('admission',body));
+  assert.ok(accepted[0]);assert.equal(accepted[1],null);
+  assert.equal(accepted[0]._stationMembership.request.activity.kind,'GAME_CREATE');
+  assert.deepEqual(verify.wires,[[stationOwnerIds.admissionFind],[stationOwnerIds.response]]);
+  const router=flow.find(n=>n.id===stationOwnerIds.router);
+  assert.ok(router.func.includes("kind === 'GAME_CREATE' ? 'GAME_CREATE_ORGANIZER'"));
+  assert.equal(flow.filter(n=>n.type==='http request').length,0);
+  const unsigned=message('admission',body);delete unsigned.req.headers['x-station-membership-delegation'];
+  const rejected=evaluate(unsigned);assert.equal(rejected[0],null);assert.equal(rejected[1].statusCode,401);
+});
