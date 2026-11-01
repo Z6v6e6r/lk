@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { uuid, requestKey, committedProof } from './stationMessageProof.mjs';
 import { smHash, smEqual, smId, smUuid, smMongoIdentity, smLifetime, smPlayer, smFence, smIdentity, smStream, smSequence } from './stationMembershipLifetime.mjs';
 
 import { recoverStationReadIntent, runStationRead } from './stationMessageRead.mjs';
@@ -7,23 +8,12 @@ import { stationStreamEnvelope, stationStreamAppend, stationStreamPublished } fr
 export const MESSAGE_OUTBOX_LIMIT = 32;
 export const MESSAGE_CONTRACT = 'station-message.v1';
 const messages = 'lk_community_chat_messages', communities = 'lk_communities', events = 'lk_community_events';
-const uuid = value => { const h=crypto.createHash('sha256').update(value).digest('hex').slice(0,32).split(''); h[12]='8';h[16]=((parseInt(h[16],16)&3)|8).toString(16);const s=h.join('');return `${s.slice(0,8)}-${s.slice(8,12)}-${s.slice(12,16)}-${s.slice(16,20)}-${s.slice(20)}`; };
 const op = (ctx, step, store, method, ...args) => {ctx.step=step;return {ctx,store,method,args};};
 const readCandidate = (ctx,step='candidate') => op(ctx,step,messages,'find',{_id:ctx.key},{limit:2,maxTimeMS:3000});
 const readCommunity = (ctx,step='community') => op(ctx,step,communities,'find',{id:ctx.communityId},{limit:2,maxTimeMS:3000});
 export const stationMessageUnknown = (requestId,status,code) => ({status,body:{contractVersion:1,contract:'station-message',requestId:smUuid(requestId)?requestId:null,outcome:'UNKNOWN',code}});
 const errorResult = (ctx,status,code) => ({ctx,response:ctx.requiredContract?stationMessageUnknown(ctx.requestId,status,code):{status,body:{error:code,requestId:ctx.requestId,messageId:ctx.candidate?.publicId || null}}});
-const requestKey = (actorId,requestId) => 'station-message:v1:'+smHash('station-message-key:v1',{tenant:'iSkq6G',actorId,requestId}).slice(7);
 const confirmedResult = ctx => ({ctx,response:{status:200,body:{contractVersion:1,contract:'station-message',requestId:ctx.requestId,outcome:'CONFIRMED',message:{id:ctx.committed.id,body:ctx.committed.text,sentAt:ctx.committed.createdAt,author:{displayName:ctx.committed.authorName},isViewer:true}}}});
-// Validate the existing immutable receipt, never repair it or infer it from a candidate/outbox.
-const committedProof = (ctx,d) => {
-  if(!d||(d.recordType!==undefined&&d.recordType!=='MESSAGE')||d._id!==ctx.key||d.stationMessageOwner!==1||d.state!=='COMMITTED'||d.archived!==false||d.requestId!==ctx.requestId||d.actorId!==ctx.actorId||d.authorId!==ctx.actorId||d.communityId!==ctx.communityId||d.publicId!==uuid(ctx.key)||d.id!==d.publicId)return false;
-  if(typeof d.text!=='string'||!d.text||d.text!==d.text.trim()||d.text.length>8000||typeof d.authorName!=='string'||!d.authorName||d.authorName.length>120||typeof d.createdAt!=='string'||!Number.isFinite(Date.parse(d.createdAt))||d.createdTs!==Date.parse(d.createdAt))return false;
-  if(d.requestHash!==smHash('station-message-request:v1',{communityId:ctx.communityId,actorId:ctx.actorId,text:d.text})||(ctx.requestHash&&ctx.requestHash!==d.requestHash))return false;
-  if(d.streamId!==undefined && (!smUuid(d.streamId)||!smSequence(d.sequence)||d.sequence<1||d.recordType!=='MESSAGE'))return false;
-  const event={...(d.streamId?{streamId:d.streamId,sequence:d.sequence}:{}),_id:'station-message-event:'+d.id,id:uuid('event:'+d.id),communityId:d.communityId,type:'CHAT_MESSAGE_CREATED',createdAt:d.createdAt,createdTs:d.createdTs,actor:{id:d.actorId,name:d.authorName},payload:{messageId:d.id,textPreview:d.text.slice(0,120)}};
-  return smEqual(d.stationMessageEvent,event);
-};
 const sameCandidate = (ctx,d) => d && (d.recordType===undefined||d.recordType==='MESSAGE') && d.stationMessageOwner===1 && d._id===ctx.key && d.actorId===ctx.actorId && d.communityId===ctx.communityId && d.requestHash===ctx.requestHash;
 const outbox = c => {if(smStream(c))return stationStreamEnvelope(c).intents;if(c.communityMessageOutbox===undefined)return [];if(!Array.isArray(c.communityMessageOutbox)||c.communityMessageOutbox.length>MESSAGE_OUTBOX_LIMIT)throw Error('MESSAGE_OUTBOX_INVALID');return c.communityMessageOutbox;};
 const active = (c,actor) => {

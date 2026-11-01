@@ -9,6 +9,10 @@ on:
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
       - "scripts/lib/stationMessage*.mjs"
+      - "scripts/lib/stationNotificationFeed*.mjs"
+      - "scripts/tests/stationNotificationFeed*"
+      - "scripts/tests/helpers/stationNotificationHarness.mjs"
+      - "docs/STATION_NOTIFICATION_FEED_V1.md"
       - "scripts/lib/stationStream*.mjs"
       - "scripts/tests/stationStream*"
       - "scripts/tests/fixtures/station-stream/**"
@@ -61,6 +65,10 @@ on:
       - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
       - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
       - "scripts/lib/stationMessage*.mjs"
+      - "scripts/lib/stationNotificationFeed*.mjs"
+      - "scripts/tests/stationNotificationFeed*"
+      - "scripts/tests/helpers/stationNotificationHarness.mjs"
+      - "docs/STATION_NOTIFICATION_FEED_V1.md"
       - "scripts/lib/stationStream*.mjs"
       - "scripts/tests/stationStream*"
       - "scripts/tests/fixtures/station-stream/**"
@@ -138,5 +146,7 @@ jobs:
         run: node --test scripts/tests/stationMessageHistory.test.mjs scripts/tests/stationMessageHistoryPatch.test.mjs scripts/tests/stationMessageHistoryMongo.test.mjs
       - name: Test station stream order, read-through and physical Mongo recovery
         run: node --test scripts/tests/stationStreamOrder.test.mjs scripts/tests/stationStreamHistoryPatch.test.mjs scripts/tests/stationStreamMongo.test.mjs
+      - name: Test station notification read-only feed and physical Mongo eligibility
+        run: node --test scripts/tests/stationNotificationFeed.test.mjs scripts/tests/stationNotificationFeedAuth.test.mjs scripts/tests/stationNotificationFeedPatch.test.mjs scripts/tests/stationNotificationFeedMongo.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release

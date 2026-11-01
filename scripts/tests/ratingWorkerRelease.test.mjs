@@ -125,6 +125,10 @@ test("rating-worker release packages the community postcheck and watchdog helper
     "src/utils/exerciseCategory.ts",
     "scripts/lib/communityPolicyProjection.mjs",
     "scripts/lib/stationMessageOwner.mjs",
+    "scripts/lib/stationMessageProof.mjs",
+    "scripts/lib/stationMessageRead.mjs",
+    "scripts/lib/stationMessageStream.mjs",
+    "scripts/lib/stationMessageHistory.mjs",
     "scripts/lib/stationMembershipLifetime.mjs",
     "scripts/lib/communitySchedule.mjs",
     "scripts/community_monthly_reports.mjs",
@@ -146,6 +150,15 @@ test("rating-worker release packages the community postcheck and watchdog helper
     assert.equal(fs.existsSync(path.join(releaseDir, relativePath)), true);
     assert.equal(entries[0].sha256, sha256File(path.join(releaseDir, relativePath)));
   });
+  // Loading the packaged pure owner catches missing transitive helpers that a manifest-only check misses.
+  const stationOwnerImport = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval",
+      `const owner = await import(${JSON.stringify(pathToFileURL(path.join(releaseDir, "scripts/lib/stationMessageOwner.mjs")).href)}); if (typeof owner.advanceStationMessage !== "function") throw new Error("STATION_OWNER_EXPORT_MISSING");`],
+    { cwd: releaseDir, encoding: "utf8" },
+  );
+  assert.equal(stationOwnerImport.status, 0,
+    [stationOwnerImport.stderr, stationOwnerImport.stdout].filter(Boolean).join("\n"));
   assert.notEqual(fs.statSync(path.join(releaseDir, "deploy/rating-worker/run-monthly.sh")).mode & 0o111, 0, "systemd entrypoint must be executable");
   assert.notEqual(
     fs.statSync(path.join(releaseDir, "deploy/rating-worker/run-with-watchdog.sh")).mode & 0o111,
