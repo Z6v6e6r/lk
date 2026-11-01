@@ -7594,6 +7594,11 @@ export default function TournamentsPage({
     }));
   };
 
+  const handleFprManagerDataChange = (payload: AmericanoTournamentPayload) => {
+    handleManagerDataChange(payload, { totals: null, playerLogs: null });
+    setManagerData(payload);
+  };
+
   const handleManagerDataReplace = (
     payload: AmericanoTournamentPayload,
     extras: {
@@ -7957,7 +7962,7 @@ export default function TournamentsPage({
       </div>
 
       <TournamentDetailsModal
-        isOpen={Boolean(selectedTournament) || manualTournamentCreationOpen}
+        isOpen={!managerData && (Boolean(selectedTournament) || manualTournamentCreationOpen)}
         onClose={() => {
           setSelectedTournament(null);
           setManualTournamentCreationOpen(false);
@@ -7976,7 +7981,7 @@ export default function TournamentsPage({
           key={managerData.tournamentId}
           data={managerData}
           onClose={() => { setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null); }}
-          onDataChange={payload => handleManagerDataReplace(payload, { totals: null, playerLogs: null })}
+          onDataChange={handleFprManagerDataChange}
           onEditSettings={handleManagerEditSettings}
         />
       ) : <TournamentManagerModal

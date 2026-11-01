@@ -399,7 +399,13 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
           {([["round", "Турнир"], ["table", "Таблица"], ["protocol", "Протокол"]] as const).map(([key, label]) => <button className={`tournament-tab${tab === key ? " active" : ""}`} type="button" key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
         </div>
         {tab === "round" && <>
-          {current ? <div className="tournament-rounds"><section className="tournament-round unsaved">
+          {state.attempts.filter(a => a.id !== current?.id).map(a => <section aria-label={`Раунд ${a.round} · попытка ${a.attempt}`} className={`tournament-round ${a.status === "closed" ? "saved" : "unsaved"}`} key={a.id}>
+            <div className="tournament-round-header"><span className="tournament-round-title">Раунд {a.round} · попытка {a.attempt}</span><span className="tournament-round-status">{a.status === "closed" ? "Сохранено" : "Отменён"}</span></div>
+            <div className="tournament-round-body"><p>Отдых: {a.byes.map(name).join(", ") || "нет"}. {a.reason}</p>{a.matches.map(m => a.status === "closed"
+              ? <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed disabled={disabled} onSave={act} now={now} />
+              : <section className="tournament-match fpr-match" key={m.id}><MatchHeader match={m} state={state} /><p>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p></section>)}</div>
+          </section>)}
+          {current ? <div className="tournament-rounds"><section aria-label={`Раунд ${current.round} · попытка ${current.attempt}`} className="tournament-round unsaved">
             <div className="tournament-round-header"><div className="tournament-round-heading"><span className="tournament-round-title">Раунд {current.round}{current.round >= 7 ? " · запасной" : ""}</span><span className="tournament-round-meta-text">Попытка {current.attempt}</span></div><span className="tournament-round-status">{current.status === "scheduled" ? "Готов к старту" : "В игре"}</span></div>
             <div className="tournament-round-body">
             <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}.</p>
@@ -411,12 +417,6 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
             <p>{completed >= 6 ? `Запасной раунд: нужно не меньше ${Math.ceil((threshold?.requiredMs ?? 0) / 60_000)} мин до конца события; осталось ${Math.max(0, Math.floor((threshold?.remainingMs ?? 0) / 60_000))} мин.` : "Предыдущая попытка отменена. Можно подготовить повтор с тем же номером зачётного раунда."}</p>
             <button type="button" disabled={disabled || (completed >= 6 && !threshold?.allowed)} onClick={() => act({ action: "prepare_round" })}>Подготовить {completed + 1}-й раунд</button>
           </> : null}
-          {state.attempts.filter(a => a.id !== current?.id).slice().reverse().map(a => <details className={`tournament-round ${a.status === "closed" ? "saved" : "unsaved"}`} key={a.id}>
-            <summary className="tournament-round-header"><span className="tournament-round-title">Раунд {a.round} · попытка {a.attempt}</span><span className="tournament-round-status">{a.status === "closed" ? "Сохранено" : "Отменён"}</span></summary>
-            <div className="tournament-round-body"><p>Отдых: {a.byes.map(name).join(", ") || "нет"}. {a.reason}</p>{a.matches.map(m => a.status === "closed"
-              ? <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed disabled={disabled} onSave={act} now={now} />
-              : <section className="tournament-match fpr-match" key={m.id}><MatchHeader match={m} state={state} /><p>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p></section>)}</div>
-          </details>)}
           {!finished && <details><summary>Остановка или снятие участника</summary>
             <label>Причина<input value={reason} disabled={disabled} onChange={e => setReason(e.target.value)} /></label>
             {current && <button type="button" disabled={disabled || !reason.trim()} onClick={() => act({ action: "cancel_round", reason })}>Отменить весь текущий раунд</button>}
