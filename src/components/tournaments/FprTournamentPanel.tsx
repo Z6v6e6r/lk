@@ -224,12 +224,11 @@ function HeadToHeadDetails({ state }: { state: FprState }) {
 }
 function MatchHeader({ match, state }: { match: FprMatch; state: FprState }) {
   return <div className="tournament-match-header">
-    <div className="tournament-match-court"><span className="tournament-match-label">Корт</span><span className="tournament-match-value">{state.courts[match.courtIndex]}</span></div>
+    <div className="tournament-match-court"><span className="tournament-match-value">{state.courts[match.courtIndex]}</span></div>
   </div>;
 }
-function MatchEditor({ match, state, closed, disabled, onSave, now, onB1, autoCloseRound = true, onDirtyChange }: {
+function MatchEditor({ match, state, closed, disabled, onSave, now, autoCloseRound = true, onDirtyChange }: {
   match: FprMatch; state: FprState; closed: boolean; disabled: boolean; now: string;
-  onB1?: (playerId: string) => void;
   autoCloseRound?: boolean;
   onDirtyChange?: (matchId: string, dirty: boolean) => void;
   onSave: (value: Omit<ScoreAction, "id" | "expectedRevision">) => void;
@@ -243,7 +242,7 @@ function MatchEditor({ match, state, closed, disabled, onSave, now, onB1, autoCl
   const names = (ids: string[]) => ids.map(id => state.players.find(p => p.id === id)?.name ?? id).join(" + ");
   const played = (match.score1 ?? 0) + (match.score2 ?? 0);
   const lateEntry = !closed && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && !match.completedAt;
-  const serve = played < 25 ? fprServeAt(match, played) : null;
+  const serve = !closed && played < 25 ? fprServeAt(match, played) : null;
   const total = number(score1) + number(score2);
   const validScore = score1.trim() && score2.trim() && Number.isInteger(number(score1)) && Number.isInteger(number(score2))
     && number(score1) >= 0 && number(score2) >= 0 && total <= 25 && (!closed || total === 25);
@@ -269,19 +268,14 @@ function MatchEditor({ match, state, closed, disabled, onSave, now, onB1, autoCl
     <fieldset disabled={disabled}>
       <div className="tournament-match-row">
         <span className="tournament-match-label">Пара 1</span>
-        <span className="tournament-match-value">{names(match.pair1)}</span>
+        <span className="tournament-match-value">{names(match.pair1)}{serve && match.pair1.includes(serve.playerId) && <span className="fpr-serving-pair" role="img" aria-label="Подаёт пара 1" title={`Следующая подача по сохранённому счёту: ${names([serve.playerId])}`}>🎾</span>}</span>
         <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair1)}`} type="number" min="0" max="25" step="1" value={score1} onChange={e => changeScore(1, e.target.value)} />
       </div>
       <div className="tournament-match-row">
         <span className="tournament-match-label">Пара 2</span>
-        <span className="tournament-match-value">{names(match.pair2)}</span>
+        <span className="tournament-match-value">{names(match.pair2)}{serve && match.pair2.includes(serve.playerId) && <span className="fpr-serving-pair" role="img" aria-label="Подаёт пара 2" title={`Следующая подача по сохранённому счёту: ${names([serve.playerId])}`}>🎾</span>}</span>
         <input className="tournament-score-input" aria-label={`Счёт: ${names(match.pair2)}`} type="number" min="0" max="25" step="1" value={score2} onChange={e => changeScore(2, e.target.value)} />
       </div>
-      {!closed && <details className="fpr-serve-order"><summary>Порядок подачи</summary>
-        <p className="fpr-hint">A1: {names([match.firstServer])}. Подача по два очка: A1 → B1 → A2 → B2. После 12-го очка — смена сторон.
-          {serve && <> Следующая подача по записанному счёту: {names([serve.playerId])}, {serve.side === "right" ? "справа" : "слева"}.</>}</p>
-        {onB1 && <label>Первый подающий · {names(match.pair2)}<select disabled={disabled} value={match.pair2[0]} onChange={e => onB1(e.target.value)}>{match.pair2.map(id => <option key={id} value={id}>{names([id])}</option>)}</select></label>}
-      </details>}
       {closed && <label>Причина исправления<input value={reason} onChange={e => setReason(e.target.value)} /></label>}
       {lateEntry && <>
         <p>Игровой дедлайн наступил. Частичный счёт можно записать для протокола отменённой попытки. Для 25 очков нужны фактические времена и объяснение позднего ввода.</p>
@@ -399,19 +393,18 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
           {([["round", "Турнир"], ["table", "Таблица"], ["protocol", "Протокол"]] as const).map(([key, label]) => <button className={`tournament-tab${tab === key ? " active" : ""}`} type="button" key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
         </div>
         {tab === "round" && <>
-          {state.attempts.filter(a => a.id !== current?.id).map(a => <section aria-label={`Раунд ${a.round} · попытка ${a.attempt}`} className={`tournament-round ${a.status === "closed" ? "saved" : "unsaved"}`} key={a.id}>
-            <div className="tournament-round-header"><span className="tournament-round-title">Раунд {a.round} · попытка {a.attempt}</span><span className="tournament-round-status">{a.status === "closed" ? "Сохранено" : "Отменён"}</span></div>
+          {state.attempts.filter(a => a.id !== current?.id).map(a => <details aria-label={`Раунд ${a.round} · попытка ${a.attempt}`} className={`tournament-round ${a.status === "closed" ? "saved" : "unsaved"}`} key={a.id}>
+            <summary className="tournament-round-header"><span className="tournament-round-title">Раунд {a.round} · попытка {a.attempt}</span><span className="tournament-round-status">{a.status === "closed" ? "Сохранено" : "Отменён"}</span></summary>
             <div className="tournament-round-body"><p>Отдых: {a.byes.map(name).join(", ") || "нет"}. {a.reason}</p>{a.matches.map(m => a.status === "closed"
               ? <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed disabled={disabled} onSave={act} now={now} />
               : <section className="tournament-match fpr-match" key={m.id}><MatchHeader match={m} state={state} /><p>{m.pair1.map(name).join(" + ")} — {m.pair2.map(name).join(" + ")}: {m.score1 ?? "—"}:{m.score2 ?? "—"}</p></section>)}</div>
-          </section>)}
+          </details>)}
           {current ? <div className="tournament-rounds"><section aria-label={`Раунд ${current.round} · попытка ${current.attempt}`} className="tournament-round unsaved">
             <div className="tournament-round-header"><div className="tournament-round-heading"><span className="tournament-round-title">Раунд {current.round}{current.round >= 7 ? " · запасной" : ""}</span><span className="tournament-round-meta-text">Попытка {current.attempt}</span></div><span className="tournament-round-status">{current.status === "scheduled" ? "Готов к старту" : "В игре"}</span></div>
             <div className="tournament-round-body">
             <p>Отдых: {current.byes.length ? current.byes.map(name).join(", ") : "нет"}.</p>
             {current.matches.map(m => <MatchEditor key={`${m.id}:${m.score1}:${m.score2}:${m.confirmed1}:${m.confirmed2}`} match={m} state={state} closed={false} disabled={disabled} onSave={act} now={now}
-              autoCloseRound={!current.matches.some(other => other.id !== m.id && dirtyMatches[other.id])} onDirtyChange={handleDirtyChange}
-              onB1={current.status === "scheduled" ? playerId => act({ action: "set_b1", matchId: m.id, playerId }) : undefined} />)}
+              autoCloseRound={!current.matches.some(other => other.id !== m.id && dirtyMatches[other.id])} onDirtyChange={handleDirtyChange} />)}
             </div>
           </section></div> : !finished && state.attempts.length < 100 && completed < 8 && Date.parse(now) < Date.parse(state.endsAt) - 180_000 ? <>
             <p>{completed >= 6 ? `Запасной раунд: нужно не меньше ${Math.ceil((threshold?.requiredMs ?? 0) / 60_000)} мин до конца события; осталось ${Math.max(0, Math.floor((threshold?.remainingMs ?? 0) / 60_000))} мин.` : "Предыдущая попытка отменена. Можно подготовить повтор с тем же номером зачётного раунда."}</p>

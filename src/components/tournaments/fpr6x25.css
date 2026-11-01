@@ -39,8 +39,7 @@
 .fpr-panel .fpr-score-placeholder { flex: 0 0 64px; text-align: center; color: var(--text-secondary, #66716b); }
 .fpr-panel .tournament-match fieldset { display: flex; flex-direction: column; gap: 10px; }
 .fpr-panel details.tournament-round { margin: 0; padding: 0; }
-.fpr-panel details.fpr-serve-order { margin: 0; border: 0; padding: 0; }
-.fpr-panel .fpr-serve-order summary { padding: 6px 0; font-size: 13px; font-weight: 500; }
+.fpr-panel .fpr-serving-pair { display: inline-block; margin-inline-start: 6px; }
 @media (max-width: 768px) {
   .fpr-panel .tournament-match-row > .tournament-match-label,
   .fpr-panel input.tournament-score-input,

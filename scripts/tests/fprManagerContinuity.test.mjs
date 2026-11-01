@@ -59,7 +59,7 @@ const components = { exports: {} };
 new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(require, components, components.exports);
 const { createFprState, applyFprCommand, fprProjection, FprTournamentManager } = components.exports;
 
-test('completed rounds render expanded with scores in chronological order through finish and reload', () => {
+test('completed rounds remain expandable with scores in chronological order through finish and reload', () => {
   const now = new Date().toISOString();
   let state = createFprState({ tournamentId: 'fpr-continuity', players: Array.from({ length: 8 }, (_, i) => ({ id: `p${i}`, name: `Player ${i}`, level: 3, leaguePlace: i + 1, leaguePoints: i })), courts: ['Court 1', 'Court 2'], leagueSource: 'Synthetic', now, endsAt: new Date(Date.now() + 3600000).toISOString(), reserveAllowed: false });
   const act = action => { state = applyFprCommand(state, { ...action, id: `command-${state.revision}`, expectedRevision: state.revision }, now); };
@@ -68,8 +68,8 @@ test('completed rounds render expanded with scores in chronological order throug
     for (const match of state.attempts.at(-1).matches) act({ action: 'score', matchId: match.id, score1: 18, score2: 7, confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true });
     const html = render();
     for (let previous = 1; previous <= round; previous++) {
-      assert.ok(html.includes(`<section aria-label="Раунд ${previous} · попытка ${previous}" class="tournament-round saved">`));
-      assert.ok(!html.includes('<details class="tournament-round'));
+      assert.ok(html.includes(`<details aria-label="Раунд ${previous} · попытка ${previous}" class="tournament-round saved">`));
+      assert.ok(!/<details[^>]*aria-label="Раунд[^>]*\sopen(?:=|>)/.test(html), 'completed rounds start collapsed');
       if (previous < round) assert.ok(html.indexOf(`Раунд ${previous} · попытка ${previous}`) < html.indexOf(`Раунд ${previous + 1} · попытка ${previous + 1}`));
     }
     assert.equal((html.match(/value="18"/g) ?? []).length, round * 2);
@@ -80,4 +80,19 @@ test('completed rounds render expanded with scores in chronological order throug
   const finished = render();
   assert.equal((finished.match(/class="tournament-round saved"/g) ?? []).length, 6);
   assert.equal((finished.match(/value="18"/g) ?? []).length, 12);
+});
+
+test('court name has no duplicate label; ball identifies the serving pair and disappears at 25 points', () => {
+  const now = new Date().toISOString();
+  let state = createFprState({ tournamentId: 'fpr-serve-ui', players: Array.from({ length: 4 }, (_, i) => ({ id: `p${i}`, name: `Player ${i}`, level: 3, leaguePlace: i + 1, leaguePoints: i })), courts: ['Корт №1'], leagueSource: 'Synthetic', now, endsAt: new Date(Date.now() + 3600000).toISOString(), reserveAllowed: false });
+  const render = () => renderToStaticMarkup(React.createElement(FprTournamentManager, { data: { tournamentId: state.tournamentId, tournamentType: 'fpr_6x25', participants: state.players, courts: state.courts, organizer: { id: 'synthetic-organizer' }, ...fprProjection(state) }, onClose() {}, onDataChange() {} }));
+  for (let points = 0; points <= 25; points++) {
+    if (points) state = applyFprCommand(state, { action: 'score', id: `score-${points}`, expectedRevision: state.revision, matchId: state.attempts[0].matches[0].id, score1: points, score2: 0, confirmed1: false, confirmed2: false, startIfScheduled: true }, now);
+    const html = render();
+    assert.ok(html.includes('<div class="tournament-match-court"><span class="tournament-match-value">Корт №1</span></div>'));
+    assert.ok(!html.includes('Порядок подачи'));
+    assert.ok(!html.includes('Первый подающий'));
+    assert.equal((html.match(/class="fpr-serving-pair"/g) ?? []).length, points < 25 ? 1 : 0);
+    if (points < 25) assert.ok(html.includes(`aria-label="Подаёт пара ${Math.floor(points / 2) % 2 === 0 ? 1 : 2}"`));
+  }
 });
