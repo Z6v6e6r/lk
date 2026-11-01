@@ -11,7 +11,7 @@ const lkDiagnostic = (fields = {}) => {
     if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "7aa4ace6deeef6690efc9c2d7270e35d7d7e2c528594910c78aa74859515a77f", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "5217f23ed5bb250515ff8fb8b419914bfc12e5c611afe692fac5434e214ec028", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -521,7 +521,7 @@ const managedOwnerEvidence = (ctx, kind, providerBookingId) => {
   try {
     const mode = global.get("subscriptions_owner_evidence_enabled");
     if (mode === undefined || mode === null || mode === false || mode === "false") {
-      return { ok: true, headers: {} };
+      return kind === "PRECREATE_EXPIRED_NOT_DISPATCHED" ? unavailable : { ok: true, headers: {} };
     }
     if (mode !== true && mode !== "true") return unavailable;
     const secret = global.get("subscriptions_owner_evidence_secret");
@@ -545,7 +545,7 @@ const managedOwnerEvidence = (ctx, kind, providerBookingId) => {
       || evidence.tenantKey !== ctx.tenantKey || evidence.actorClientId !== ctx.actorClientId
       || evidence.exerciseId !== ctx.exerciseId || evidence.subscriptionId !== ctx.clientSubscriptionId
       || !idPattern.test(ctx.managedEntitlementOperationId || "")
-      || (kind === "PROVIDER_REJECTED" ? providerBookingId !== null : !idPattern.test(providerBookingId || ""))
+      || (["PROVIDER_REJECTED", "PRECREATE_EXPIRED_NOT_DISPATCHED"].includes(kind) ? providerBookingId !== null : !idPattern.test(providerBookingId || ""))
       || !Number.isFinite(age) || age < 0 || age > 60_000) {
       return { ok: false, code: "SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED" };
     }
@@ -1524,7 +1524,7 @@ const prepareMongoUpdate = (ctx, step, query, update) => {
       // Match the complete old canonical preimage, never just its terminal state.
       query = { ...ctx.quarterReclaim };
       update.$set.managedCreateBinding = ctx.managedCreateBinding;
-      Object.assign(update.$unset, { managedCreateReleaseProof: "", providerCreateReceipt: "", providerCreateAttemptId: "",
+      Object.assign(update.$unset, { quarterPrecreateAbort: "", managedCreateReleaseProof: "", providerCreateReceipt: "", providerCreateAttemptId: "",
         precreateRecoveryTarget: "", precreatedEntitlementReserved: "", precreateRecoveredAt: "", createAttemptedAt: "", releaseReason: "" });
     } else query = { ...query, managedCreateBinding: ctx.managedCreateBinding };
     if (step === "operation_confirm") query.state = { $in: ["PENDING_CONFIRMATION", "CONFIRMED"] };

@@ -199,7 +199,83 @@ const gcoAliases = (...values) => {
   const present = values.filter(v => v !== undefined);
   return present.length && present.every(gcId) && new Set(present).size === 1 ? present[0] : null;
 };
-const gcoRejectionReceiptMatches = (r, row) => gcKeys(r, 'schemaVersion,outcome,operationId,admissionRequestSha256,actor,target,reason,providerStatusCode,providerRejectedAt,rejectedAt,entitlement')
+const gcoUnusedReason = 'PRECREATE_EXPIRED_NOT_DISPATCHED';
+const gcoUnusedAbsent = ['providerCreateAttemptId', 'precreateAttemptBoundAt', 'providerCreateReceipt',
+  'bookingId', 'upstreamBookingId', 'upstreamAttemptedAt', 'createAttemptedAt', 'precreateRecoveryTarget',
+  'precreateRecoveredAt', 'precreatedEntitlementReserved', 'confirmedAt', 'managedEntitlementConfirmedAt', 'precreateRejection',
+  'precreateReconciliationRequiredAt', 'precreateReconciliationCode', 'pendingUntil', 'acceptedAt',
+  'releaseBookingId', 'managedSelfLeaveCancellation', 'managedSelfLeaveReceipt'];
+const gcoUnusedOriginal = (operation, row) => {
+  const d = operation?.managedDecision, b = row?.binding, p = row?.body?.preparation;
+  return gcoCanonicalMatches(operation, row) && gcoBindingMatches(row) && gcoFactsMatches(row)
+    && operation.serviceDate === gcMoscow(p.target.startsAt).slice(0, 10)
+    && operation.exerciseId === 'split-create:' + row.identity.operationId
+    && operation.managedSubscriptionInstanceId === b.runtime.subscriptionInstanceId
+    && gcId(operation.managedEntitlementOperationId) && operation.managedEntitlementState === 'RESERVED'
+    && gcoUnusedAbsent.every(k => !Object.hasOwn(operation, k))
+    && d?.decisionKind === 'ENTITLEMENT' && d.action === 'CREATE_GAME' && d.usageUnits === 1
+    && d.policyVersion === b.expectations.policyVersion && d.policyDigest === b.expectations.policyDigest
+    && gcKeys(d.target, 'targetId,stationId,eventTypeId,productTypeId,durationMinutes,startsAt')
+    && Object.entries({ targetId: b.targetInput.targetId, stationId: b.targetInput.stationId,
+      eventTypeId: 'viva:direction:4588:type:1613', productTypeId: null, durationMinutes: 60, startsAt: p.target.startsAt }).every(([k, v]) => d.target[k] === v)
+    && gcKeys(d.money, 'currency,basePriceMinor,discountMinor,surchargeMinor,finalPriceMinor')
+    && d.money.currency === 'RUB' && d.money.basePriceMinor === p.pricing.quarterPriceMinor
+    && d.money.discountMinor === p.pricing.quarterPriceMinor && d.money.surchargeMinor === 0 && d.money.finalPriceMinor === 0;
+};
+const gcoUnusedMarkerMatches = (operation, row) => {
+  const m = operation?.quarterPrecreateAbort, p = row?.body?.preparation;
+  return gcoUnusedOriginal(operation, row)
+    && gcKeys(m, 'schemaVersion,reason,abortId,operationId,admissionRequestSha256,capsuleSha256,capsuleExpiresAt,abortedAt,subscriptionInstanceId,usageOperationId,decisionSha256')
+    && m.schemaVersion === 1 && m.reason === gcoUnusedReason && gcUuid(m.abortId)
+    && m.operationId === row.identity.operationId && m.admissionRequestSha256 === row.admissionRequestSha256
+    && m.capsuleSha256 === p.sha256 && m.capsuleExpiresAt === p.expiresAt
+    && m.subscriptionInstanceId === operation.managedSubscriptionInstanceId && m.usageOperationId === operation.managedEntitlementOperationId
+    && m.decisionSha256 === gcHash(JSON.stringify(operation.managedDecision))
+    && gcIso(m.abortedAt) && Date.parse(m.capsuleExpiresAt) <= Date.parse(m.abortedAt)
+    && Date.parse(m.abortedAt) <= Date.now();
+};
+const gcoUnusedReceiptMatches = (r, row) => gcKeys(r, 'schemaVersion,outcome,operationId,admissionRequestSha256,actor,target,reason,abortId,capsuleExpiresAt,abortedAt,rejectedAt,entitlement')
+  && r.schemaVersion === 2 && r.outcome === 'REJECTED' && r.reason === gcoUnusedReason && gcUuid(r.abortId)
+  && r.operationId === row.identity.operationId && r.admissionRequestSha256 === row.admissionRequestSha256
+  && gcKeys(r.actor, 'tenantId,userId') && r.actor.tenantId === row.identity.tenantId && r.actor.userId === row.identity.userId
+  && gcKeys(r.target, 'draftId,expectedRevision,stationId,courtId,startsAt,durationMinutes')
+  && Object.keys(row.body.target).every(k => r.target[k] === row.body.target[k])
+  && r.capsuleExpiresAt === row.body.preparation.expiresAt && gcIso(r.capsuleExpiresAt) && gcIso(r.abortedAt) && gcIso(r.rejectedAt)
+  && Date.parse(r.capsuleExpiresAt) <= Date.parse(r.abortedAt) && Date.parse(r.abortedAt) <= Date.parse(r.rejectedAt) && Date.parse(r.rejectedAt) <= Date.now()
+  && gcKeys(r.entitlement, 'subscriptionInstanceId,usageOperationId,operationState,compensationState,releaseReason,providerBookingId')
+  && r.entitlement.subscriptionInstanceId === row.binding?.runtime.subscriptionInstanceId && gcId(r.entitlement.usageOperationId)
+  && r.entitlement.operationState === 'FAILED' && r.entitlement.compensationState === 'APPLIED'
+  && r.entitlement.releaseReason === gcoUnusedReason && r.entitlement.providerBookingId === null;
+// Explicit schema2 serialization survives Mongo/object key ordering. This checksum detects
+// partial corruption, not an attacker able to rewrite both trusted row and checksum.
+const gcoUnusedReceiptDigest = (r) => gcHash('game-create-unused-rejection:v2\0' + JSON.stringify({
+  schemaVersion: r.schemaVersion, outcome: r.outcome, operationId: r.operationId,
+  admissionRequestSha256: r.admissionRequestSha256,
+  actor: { tenantId: r.actor.tenantId, userId: r.actor.userId },
+  target: { draftId: r.target.draftId, expectedRevision: r.target.expectedRevision,
+    stationId: r.target.stationId, courtId: r.target.courtId, startsAt: r.target.startsAt, durationMinutes: r.target.durationMinutes },
+  reason: r.reason, abortId: r.abortId, capsuleExpiresAt: r.capsuleExpiresAt,
+  abortedAt: r.abortedAt, rejectedAt: r.rejectedAt,
+  entitlement: { subscriptionInstanceId: r.entitlement.subscriptionInstanceId,
+    usageOperationId: r.entitlement.usageOperationId, operationState: r.entitlement.operationState,
+    compensationState: r.entitlement.compensationState, releaseReason: r.entitlement.releaseReason,
+    providerBookingId: r.entitlement.providerBookingId }
+}));
+const gcoUnusedCanonicalRejection = (operation, row) => {
+  if (!gcoUnusedMarkerMatches(operation, row) || operation.state !== 'RELEASED' || operation.releaseReason !== gcoUnusedReason) return null;
+  const m = operation.quarterPrecreateAbort, proof = operation.managedCreateReleaseProof, r = proof?.readback;
+  if (!gcKeys(proof, 'schemaVersion,observedAt,readback') || proof.schemaVersion !== 1 || !gcIso(proof.observedAt)
+    || !gcKeys(r, 'schemaVersion,operationId,subscriptionInstanceId,operationState,compensationState,releaseReason,providerBookingId')
+    || r.schemaVersion !== 1 || r.operationId !== m.usageOperationId || r.subscriptionInstanceId !== m.subscriptionInstanceId) return null;
+  const receipt = { schemaVersion: 2, outcome: 'REJECTED', operationId: m.operationId, admissionRequestSha256: m.admissionRequestSha256,
+    actor: { tenantId: row.identity.tenantId, userId: row.identity.userId }, target: row.body.target, reason: gcoUnusedReason,
+    abortId: m.abortId, capsuleExpiresAt: m.capsuleExpiresAt, abortedAt: m.abortedAt, rejectedAt: proof.observedAt,
+    entitlement: { subscriptionInstanceId: r.subscriptionInstanceId, usageOperationId: r.operationId,
+      operationState: r.operationState, compensationState: r.compensationState, releaseReason: r.releaseReason, providerBookingId: r.providerBookingId } };
+  return gcoUnusedReceiptMatches(receipt, row) ? receipt : null;
+};
+const gcoRejectionReceiptMatches = (r, row) => r?.schemaVersion === 2 ? gcoUnusedReceiptMatches(r, row)
+  && gcDigest(row.rejectionReceiptSha256) && row.rejectionReceiptSha256 === gcoUnusedReceiptDigest(r) : gcKeys(r, 'schemaVersion,outcome,operationId,admissionRequestSha256,actor,target,reason,providerStatusCode,providerRejectedAt,rejectedAt,entitlement')
   && r.schemaVersion === 1 && r.outcome === 'REJECTED' && r.operationId === row.identity.operationId
   && r.admissionRequestSha256 === row.admissionRequestSha256 && r.reason === 'PROVIDER_REJECTED'
   && gcoEqual(r.actor, { tenantId: row.identity.tenantId, userId: row.identity.userId }) && gcoEqual(r.target, row.body.target)
@@ -211,6 +287,7 @@ const gcoRejectionReceiptMatches = (r, row) => gcKeys(r, 'schemaVersion,outcome,
   && r.entitlement.operationState === 'FAILED' && r.entitlement.compensationState === 'APPLIED'
   && r.entitlement.releaseReason === 'PROVIDER_REJECTED' && r.entitlement.providerBookingId === null;
 const gcoCanonicalRejection = (operation, row) => {
+  if (operation?.quarterPrecreateAbort !== undefined) return gcoUnusedCanonicalRejection(operation, row);
   if (!gcObject(row) || !gcObject(row.identity) || !gcoRequest(row.body) || !gcoBindingMatches(row) || !gcoFactsMatches(row)) return null;
   const marker = operation?.precreateRejection, proof = operation?.managedCreateReleaseProof, readback = proof?.readback;
   const i = row.identity, p = row.body.preparation;

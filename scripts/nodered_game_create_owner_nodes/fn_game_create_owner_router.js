@@ -206,7 +206,8 @@ if (o.step === 'canonical_read') {
   const rejected = gcoCanonicalRejection(o.canonical, o.row);
   if (o.mode === 'admit' && rejected && o.row.phase === 'CREATE_ATTEMPTING') {
     return cas('completed_ack', { ...rowQuery(o.row), binding: o.row.binding },
-      { $set: { phase: 'CREATE_REJECTED', rejectionReceipt: rejected, updatedAt: now() } });
+      { $set: { phase: 'CREATE_REJECTED', rejectionReceipt: rejected,
+        ...(rejected.schemaVersion === 2 ? { rejectionReceiptSha256: gcoUnusedReceiptDigest(rejected) } : {}), updatedAt: now() } });
   }
   if (['PREPARED', 'PRECREATE_RESERVING', 'PRECREATE_RESERVED'].includes(o.canonical.state) && !freshCapsule(o.row.body))
     o.pendingReason = 'GAME_CREATE_OWNER_CAPSULE_EXPIRED_BEFORE_DISPATCH';

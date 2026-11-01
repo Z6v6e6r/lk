@@ -63,3 +63,46 @@ calls occur. Task uses a sparse checkout due host disk constraints. Focused LOCA
 checks do not establish full LOCAL, CI, PROVIDER or PRODUCTION acceptance. Full automatic
 CI on the final task head remains required. No actual selector/runtime/provider
 population was read or activated in this task.
+
+## Unused reserved quarter expiry (private receipt v2)
+
+An expired capsule alone never authorizes compensation. The original canonical
+`PRECREATE_RESERVED` row must win a full-preimage Mongo-clock CAS to
+`PRECREATE_ABORTING` against the existing `PRECREATE_ATTEMPTING` dispatch CAS.
+The original tenant, actor, subscription, service date, admission/binding, placeholder,
+CUP instance/usage and reserved quarter decision remain pinned. Any field-present
+attempt, provider, booking, recovery or promotion evidence (including null) denies
+this branch. Mongo stores immutable ISO-string `abortedAt` and original expiry in
+`quarterPrecreateAbort`; no expiry extension or provider write occurs.
+
+A fresh exact marker read permits a short-lived `release-v1` proof for
+`PRECREATE_EXPIRED_NOT_DISPATCHED` with null booking. This is proof of irreversible
+no-dispatch custody, not an invented provider rejection. Lost abort/release ACKs use
+exact reads. Original proof TTL is unchanged: after expiry, a fresh marker read may
+issue a fresh signature, without changing `abortedAt` or capsule expiry. Only exact
+CUP seven-field `FAILED/APPLIED/PRECREATE_EXPIRED_NOT_DISPATCHED/null` readback
+can atomically settle canonical `RELEASED`. Its first durable readback timestamp
+becomes immutable `rejectedAt`; the outer journal then stores receipt schema 2.
+Only both terminal proofs allow existing full-preimage reclamation. An old key
+replays its own outer receipt even after a newer canonical generation exists.
+`PRECREATE_ATTEMPTING` without a receipt remains UNKNOWN indefinitely.
+
+Receipt v2 is frozen in `scripts/tests/fixtures/quarter-create-expired-v2.json` and
+paired byte-for-byte with CUP/LK2. It binds original operation/admission/actor/target,
+abort UUID, original capsule expiry, abort/rejection timestamps and exact CUP usage.
+It has no provider status/rejection timestamp. Public/current attendance stays
+UNKNOWN. Existing successful and provider-rejected schema-1 receipts are unchanged.
+
+SOURCE rollback: retain all abort and receipt records. Old binaries reject the new
+reason/receipt, so mixed-version adoption needs the compatible CUP→LK→LK2 packet;
+no flag activation or deployment is included. Never erase an abort marker, downgrade
+it to RESERVED or replay CREATE. LOCAL unit/graph tests use synthetic HTTP/Mongo;
+CI-only Mongo cases use the existing isolated fixture for dispatch/abort races and
+ACK/reclaim recovery, with provider responses still synthetic. No provider/device/
+production acceptance is implied.
+
+Schema-2 terminal outer writes atomically include a checksum of its explicit canonical
+receipt fields. Replay and reclamation require it; reordered object keys remain valid.
+Missing/mismatching checksums stay UNKNOWN and are never regenerated to heal a stored
+receipt. This detects partial/accidental corruption, not an actor able to modify both
+trusted row and checksum; original LK custody and signed CUP release remain authority.

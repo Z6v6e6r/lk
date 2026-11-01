@@ -15,12 +15,12 @@ async function fixture(t) {
   await Promise.all(clients.map(c => c.connect()));
   return clients.map(c => c.db(name).collection('lk_subscription_daily_booking_ops'));
 }
-function capture(step, h = new OwnerHarness()) {
+function capture(step, h = new OwnerHarness(), options = {}) {
   let message; const stop = Symbol('capture');
   h.onBeforeMongo = msg => { if (msg._subscriptionBooking?.step === step || msg._gameCreateOwner?.step === step) {
     message = structuredClone(msg); throw stop;
   } };
-  assert.throws(() => h.execute(), e => e === stop);
+  assert.throws(() => h.execute(options), e => e === stop);
   delete h.onBeforeMongo;
   return { h, message, rows: structuredClone([...h.rows.values()]) };
 }
@@ -104,4 +104,66 @@ test('real Mongo: original CREATE-ID CAS and one organizer fence survive ACK los
   assert.equal(current.state, 'PENDING_CONFIRMATION'); assert.equal(current.exerciseId, 'exercise:original');
   assert.equal(current.providerCreateReceipt.exerciseId, 'exercise:original');
   assert.equal((await db[0].updateOne(...structuredClone(promotion.payload))).modifiedCount, 0);
+});
+
+for (const winner of ['abort', 'attempt']) test('real Mongo: unused expiry versus dispatch CAS, '+winner+' wins irreversibly', options, async t => {
+  const db = await fixture(t), original = new OwnerHarness({ now: Date.now() - 120000 });
+  const attempt = capture('operation_precreated_attempt', original);
+  original.now = Date.now();
+  const abort = capture('quarter_unused_abort_ack', original, { recoveryOnly: true });
+  await db[0].insertMany(structuredClone(attempt.rows));
+  const first = winner === 'abort' ? abort : attempt, second = winner === 'abort' ? attempt : abort;
+  assert.equal((await db[1].updateOne(...first.message.payload)).modifiedCount, 1);
+  assert.equal((await db[2].updateOne(...second.message.payload)).modifiedCount, 0);
+  let saved = await db[3].findOne({ _id: attempt.message.payload[0]._id });
+  if (winner === 'attempt') {
+    assert.equal(saved.state, 'PRECREATE_ATTEMPTING'); assert.equal(saved.quarterPrecreateAbort, undefined);
+    original.rows.set(saved._id, saved); original.execute({ recoveryOnly: true });
+    assert.equal(original.releaseCalls, 0); assert.equal(original.providerCreates, 0); assert.equal(original.bookingCreates, 0); return;
+  }
+  assert.equal(saved.state, 'PRECREATE_ABORTING'); assert.equal(typeof saved.quarterPrecreateAbort.abortedAt, 'string');
+  assert.ok(Date.parse(saved.quarterPrecreateAbort.abortedAt) >= Date.parse(original.preparation.expiresAt));
+  original.now = Date.now() + 120000; // marker survives original proof TTL; a fresh read is required.
+  abort.message.error = { code: 'LOST_ABORT_ACK' }; abort.message.payload = undefined;
+  const read = original.invokeOwner('gateway', abort.message)[1]; read.payload = await db[2].find(read.payload).toArray(); delete read.error;
+  const release = original.invokeOwner('gateway', read)[0];
+  assert.equal(release.payload.reason, 'PRECREATE_EXPIRED_NOT_DISPATCHED');
+  assert.match(release.headers['X-Subscription-Owner-Evidence'], /^release-v1\./);
+  original.rows.set(saved._id, saved);
+  const finish = capture('quarter_unused_release_ack', original, { recoveryOnly: true });
+  assert.equal((await db[1].updateOne(...finish.message.payload)).modifiedCount, 1);
+  saved = await db[3].findOne({ _id: saved._id }); original.rows.set(saved._id, saved);
+  const outer = capture('completed_ack', original, { recoveryOnly: true });
+  assert.equal((await db[2].updateOne(...outer.message.payload)).modifiedCount, 1);
+  const durableOuter = await db[3].findOne({ _id: outer.message.payload[0]._id });
+  assert.match(durableOuter.rejectionReceiptSha256, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(durableOuter.rejectionReceiptSha256, outer.message.payload[1].$set.rejectionReceiptSha256);
+  original.rows.set(durableOuter._id, durableOuter);
+  const receipt = original.execute({ mode: 'read' }).payload.operation.receipt;
+  assert.equal(receipt.schemaVersion, 2); assert.equal(receipt.abortId, saved.quarterPrecreateAbort.abortId);
+  assert.equal(original.providerCreates, 0); assert.equal(original.bookingCreates, 0);
+  assert.deepEqual(original.execute({ recoveryOnly: true }).payload.operation.receipt, receipt);
+  const later = new OwnerHarness({ key: 'synthetic-new-after-unused-abort', revision: 2, now: original.now });
+  for (const row of await db[0].find({}).toArray()) later.rows.set(row._id, row);
+  const reclaim = capture('operation_reclaim', later);
+  assert.equal((await db[1].updateOne(...reclaim.message.payload)).modifiedCount, 1);
+  const reclaimed = await db[2].findOne({ _id: saved._id });
+  assert.equal(reclaimed.quarterPrecreateAbort, undefined);
+  original.rows.set(reclaimed._id,reclaimed);
+  assert.deepEqual(original.execute({ recoveryOnly: true }).payload.operation.receipt, receipt);
+  assert.equal(original.providerCreates,0);assert.equal(original.bookingCreates,0);
+});
+test('real Mongo: expiry uses database clock and abort CAS rejects foreign decision or provider evidence', options, async t => {
+  const db = await fixture(t), h = new OwnerHarness({ now: Date.now() - 120000 });
+  const held = capture('operation_precreated_attempt', h); h.now = Date.now();
+  const abort = capture('quarter_unused_abort_ack', h, { recoveryOnly: true });
+  const row = held.rows.find(x => x.managedCreateBinding);
+  await db[0].insertOne(structuredClone(row));
+  const future = structuredClone(abort.message.payload);
+  future[0].$expr.$lte[0].$dateFromString.dateString.$literal = new Date(Date.now()+60000).toISOString();
+  assert.equal((await db[1].updateOne(...future)).modifiedCount, 0);
+  await db[0].updateOne({ _id: row._id }, { $set: { providerCreateAttemptId: null } });
+  assert.equal((await db[2].updateOne(...abort.message.payload)).modifiedCount, 0);
+  await db[0].updateOne({ _id: row._id }, { $unset: { providerCreateAttemptId: '' }, $set: { 'managedDecision.usageUnits': 2 } });
+  assert.equal((await db[3].updateOne(...abort.message.payload)).modifiedCount, 0);
 });

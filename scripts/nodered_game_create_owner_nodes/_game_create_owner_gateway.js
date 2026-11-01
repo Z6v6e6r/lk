@@ -20,6 +20,45 @@ function quarterCreateGateway(ctx) {
   const canonicalFind = () => find('quarter_operation', { _id: ctx.operationKey });
   const freshCapsule = () => Date.parse(p.observedAt) <= Date.now() && Date.parse(p.expiresAt) > Date.now()
     && Date.parse(p.target.startsAt) > Date.now();
+  const abortFind = () => find('quarter_unused_abort_read', { _id: ctx.operationKey, operationId: ctx.operationId,
+    tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId, managedCreateBinding: binding });
+  const abortReadback = () => {
+    const config = managedEntitlementConfig();
+    if (!validManagedEntitlementConfig(config, ctx)) return pending();
+    return prepareManagedHttp(ctx, 'quarter_unused_readback', 'POST', `${config.apiBase}/internal/subscriptions/entitlements/readback`,
+      { operationId: ctx.managedEntitlementOperationId, subscriptionInstanceId: ctx.managedSubscriptionInstanceId }, managedEntitlementHeaders(ctx, config));
+  };
+  if (ctx.step === 'quarter_unused_abort_ack' || ctx.step === 'quarter_unused_release_ack') return abortFind();
+  if (ctx.step === 'quarter_unused_abort_read') {
+    if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1) return pending();
+    const row = msg.payload[0];
+    if (!gcoUnusedMarkerMatches(row, owner.row)) return pending();
+    ctx.quarterOriginal = row; ctx.quarterUnusedAbort = row.quarterPrecreateAbort;
+    ctx.managedEntitlementOperationId = row.managedEntitlementOperationId;
+    ctx.managedSubscriptionInstanceId = row.managedSubscriptionInstanceId;
+    if (row.state === 'RELEASED') {
+      if (!gcoUnusedCanonicalRejection(row, owner.row)) return pending();
+      return finishError(ctx, 422, 'Срок подготовки истёк; резерв освобождён', { code: gcoUnusedReason });
+    }
+    if (row.state !== 'PRECREATE_ABORTING' || Object.hasOwn(row, 'managedCreateReleaseProof')) return pending();
+    // Fresh reading of an irreversible no-dispatch marker may authorize a new short-lived
+    // release-v1 proof. Its abortedAt/capsule expiry are immutable, never refreshed.
+    recordOwnerReadback(ctx, gcoUnusedReason, null);
+    return prepareManagedEntitlementRelease(ctx, gcoUnusedReason);
+  }
+  if (ctx.step === 'managed_entitlement_release' && ctx.quarterUnusedAbort) return abortReadback();
+  if (ctx.step === 'quarter_unused_readback') {
+    const r = msg.payload, marker = ctx.quarterUnusedAbort, config = managedEntitlementConfig();
+    if (msg.error || msg.statusCode !== 200 || msg.responseUrl !== `${config.apiBase}/internal/subscriptions/entitlements/readback`
+      || !gcoUnusedMarkerMatches(ctx.quarterOriginal, owner.row)
+      || !gcKeys(r, 'schemaVersion,operationId,subscriptionInstanceId,operationState,compensationState,releaseReason,providerBookingId')
+      || r.schemaVersion !== 1 || r.operationId !== marker.usageOperationId || r.subscriptionInstanceId !== marker.subscriptionInstanceId
+      || r.operationState !== 'FAILED' || r.compensationState !== 'APPLIED' || r.releaseReason !== gcoUnusedReason || r.providerBookingId !== null) return pending();
+    return prepareMongoUpdate(ctx, 'quarter_unused_release_ack', { ...ctx.quarterOriginal, state: 'PRECREATE_ABORTING',
+      managedCreateReleaseProof: { $exists: false } }, { $set: { state: 'RELEASED', releaseReason: gcoUnusedReason,
+        managedCreateReleaseProof: { schemaVersion: 1, observedAt: new Date().toISOString(), readback: r },
+        releasedAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+  }
   if (ctx.step === 'quarter_owner_start') {
     return find('quarter_authority', { _id: binding.admissionId, tenant_id: identity.tenantId,
       kind: 'GAME_CREATE_ADMISSION', phase: 'CREATE_ATTEMPTING', admissionRequestSha256: binding.admissionRequestSha256 });
@@ -38,7 +77,9 @@ function quarterCreateGateway(ctx) {
     const prior = msg.payload[0], receipt = gcoCanonicalRejection(old, prior);
     if (prior.phase !== 'CREATE_REJECTED' || !gcoBindingMatches(prior)
       || !gcoEqual(prior.binding, old.managedCreateBinding) || !receipt
-      || !gcoEqual(prior.rejectionReceipt, receipt)) return pending('GAME_CREATE_OWNER_RECLAIM_REQUIRED');
+      || !(receipt.schemaVersion === 2 ? gcoRejectionReceiptMatches(prior.rejectionReceipt, prior)
+        && prior.rejectionReceiptSha256 === gcoUnusedReceiptDigest(receipt)
+        : gcoEqual(prior.rejectionReceipt, receipt))) return pending('GAME_CREATE_OWNER_RECLAIM_REQUIRED');
     return prepareOperationReclaim(ctx, old);
   }
   if (ctx.step === 'quarter_operation') {
@@ -83,8 +124,22 @@ function quarterCreateGateway(ctx) {
       // Exact original reserve is idempotent, including after response loss; never re-preflight.
       return prepareManagedEntitlementReserve(ctx);
     }
+    if (row.state === 'PRECREATE_ABORTING' || (row.state === 'RELEASED' && row.quarterPrecreateAbort)) return abortFind();
     if (row.state === 'PRECREATE_RESERVED') {
-      if (!freshCapsule()) return pending('GAME_CREATE_OWNER_CAPSULE_EXPIRED_BEFORE_DISPATCH');
+      if (!freshCapsule()) {
+        if (!gcoUnusedOriginal(row, owner.row) || Date.parse(p.expiresAt) > Date.now()
+          || Object.hasOwn(row, 'quarterPrecreateAbort') || Object.hasOwn(row, 'managedCreateReleaseProof')) return pending();
+        const marker = { schemaVersion: 1, reason: gcoUnusedReason, abortId: nodeCrypto.randomUUID(), operationId: ctx.operationId,
+          admissionRequestSha256: binding.admissionRequestSha256, capsuleSha256: p.sha256, capsuleExpiresAt: p.expiresAt,
+          subscriptionInstanceId: row.managedSubscriptionInstanceId, usageOperationId: row.managedEntitlementOperationId,
+          decisionSha256: gcHash(JSON.stringify(row.managedDecision)) };
+        const clock = { $dateToString: { date: '$$NOW', format: '%Y-%m-%dT%H:%M:%S.%LZ', timezone: 'UTC' } };
+        // Single Mongo-clock CAS competes with RESERVED→ATTEMPTING. No release before an exact readback.
+        return prepareMongoUpdate(ctx, 'quarter_unused_abort_ack', { ...row, state: 'PRECREATE_RESERVED',
+          ...Object.fromEntries([...gcoUnusedAbsent, 'quarterPrecreateAbort', 'managedCreateReleaseProof'].map(k => [k, { $exists: false }])),
+          $expr: { $lte: [{ $dateFromString: { dateString: { $literal: p.expiresAt } } }, '$$NOW'] } },
+          [{ $set: { state: 'PRECREATE_ABORTING', quarterPrecreateAbort: { $mergeObjects: [{ $literal: marker }, { abortedAt: clock }] }, updatedAt: clock } }]);
+      }
       ctx.quarterAttemptId = nodeCrypto.randomUUID();
       return preparePrecreatedAttempt(ctx);
     }

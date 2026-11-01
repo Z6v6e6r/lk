@@ -5,8 +5,9 @@ import { Harness, actor, hash } from './gameCreatePreparationHarness.mjs';
 import { gameCreateOwnerSource, quarterCreateGatewaySource, quarterCreateSplitSource } from '../../lib/gameCreateOwnerSource.mjs';
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const get = (o, key) => key.split('.').reduce((v, p) => v?.[p], o);
-export const matches = (row, q) => Object.entries(q).every(([k, v]) => {
-  if (k === '$or') return v.some(x => matches(row, x));
+export const matches = (row, q, now = Date.now()) => Object.entries(q).every(([k, v]) => {
+  if (k === '$or') return v.some(x => matches(row, x, now));
+  if (k === '$expr') return Date.parse(v.$lte[0].$dateFromString.dateString.$literal) <= now && v.$lte[1] === '$$NOW';
   const actual = get(row, k);
   if (v && typeof v === 'object' && !Array.isArray(v)) {
     if ('$exists' in v) return (actual !== undefined) === v.$exists;
@@ -16,8 +17,12 @@ export const matches = (row, q) => Object.entries(q).every(([k, v]) => {
   return equal(actual, v);
 });
 export class OwnerHarness extends Harness {
-  constructor({ key, revision = 1 } = {}) {
+  constructor({ key, revision = 1, now } = {}) {
     super();
+    if (now !== undefined) {
+      this.now = now; Object.assign(this.claims, { iat: Math.floor(now / 1000), nbf: Math.floor(now / 1000), exp: Math.floor(now / 1000) + 120,
+        actor_token_expires_at: new this.Date(now + 120000).toISOString() });
+    }
     if (key) {
       this.claims.idempotency_key_sha256 = hash(key);
       const chars = hash('booked-operation-admission:v1\0lk2-api\0' + this.claims.tenant_id + '\0' + this.claims.sub
@@ -69,7 +74,7 @@ export class OwnerHarness extends Harness {
     return this.ownerFns[name](msg, { get: k => this.env[k] }, { get: k => this.globals[k], set: (k, v) => { this.globals[k] = v; } }, crypto, this.Date);
   }
   message({ mode = 'admit', recoveryOnly = false, body, claims = {} } = {}) {
-    const c = { ...this.claims, iat: this.now / 1000, nbf: this.now / 1000, exp: this.now / 1000 + 120,
+    const c = { ...this.claims, iat: Math.floor(this.now / 1000), nbf: Math.floor(this.now / 1000), exp: Math.floor(this.now / 1000) + 120,
       actor_token_expires_at: new this.Date(this.now + 120000).toISOString(), ...claims };
     c.scope = mode === 'read' ? 'subscription-runtime.game-create.read' : 'subscription-runtime.game-create.admit';
     c.path = mode === 'read' ? '/lk/integrations/v1/game-create-operations/' + c.operation_id + '/read'
@@ -85,14 +90,20 @@ export class OwnerHarness extends Harness {
   update(msg) {
     this.onBeforeMongo?.(msg);
     const [query, update, options] = msg.payload;
-    let row = [...this.rows.values()].find(r => matches(r, query));
+    let row = [...this.rows.values()].find(r => matches(r, query, this.now));
     let inserted = false;
     if (!row && options?.upsert) {
       if (this.rows.has(query._id)) { msg.error = { code: 11000 }; return; }
       row = structuredClone(update.$setOnInsert || {}); this.rows.set(row._id, row); inserted = true;
     }
     if (row) {
-      Object.assign(row, structuredClone(update.$set || {}));
+      if (Array.isArray(update)) {
+        assert.equal(update.length, 1); const set = update[0].$set;
+        assert.equal(set.state, 'PRECREATE_ABORTING');
+        assert.equal(set.updatedAt.$dateToString.date, '$$NOW');
+        Object.assign(row, { state: set.state, quarterPrecreateAbort: { ...structuredClone(set.quarterPrecreateAbort.$mergeObjects[0].$literal),
+          abortedAt: new this.Date().toISOString() }, updatedAt: new this.Date().toISOString() });
+      } else Object.assign(row, structuredClone(update.$set || {}));
       for (const k of Object.keys(update.$unset || {})) delete row[k];
       for (const [k, v] of Object.entries(update.$inc || {})) row[k] = (row[k] || 0) + v;
     }
@@ -115,10 +126,10 @@ export class OwnerHarness extends Harness {
       operationState: 'RESERVED', replayed: this.reserveCalls > 1, blockers: [], decision: this.decision }; }
     else if (url.endsWith('/entitlements/confirm')) { this.confirmCalls++; payload = { schemaVersion: 1, outcome: 'CONFIRMED',
       subscriptionInstanceId: this.runtime.subscriptionInstanceId, operationId: 'usage:synthetic-create', operationState: 'CONFIRMED', aggregateRevision: 3 }; }
-    else if (url.endsWith('/entitlements/release')) { this.releaseCalls++; payload = { schemaVersion: 1, outcome: 'RELEASED',
+    else if (url.endsWith('/entitlements/release')) { this.releaseCalls++; this.lastReleaseReason = msg.payload.reason; payload = { schemaVersion: 1, outcome: 'RELEASED',
       subscriptionInstanceId: this.runtime.subscriptionInstanceId, operationId: 'usage:synthetic-create', operationState: 'FAILED', aggregateRevision: 3 }; }
     else if (url.endsWith('/entitlements/readback')) payload = { schemaVersion: 1, subscriptionInstanceId: this.runtime.subscriptionInstanceId,
-      operationId: 'usage:synthetic-create', operationState: 'FAILED', compensationState: 'APPLIED', releaseReason: 'PROVIDER_REJECTED', providerBookingId: null };
+      operationId: 'usage:synthetic-create', operationState: 'FAILED', compensationState: 'APPLIED', releaseReason: this.lastReleaseReason || 'PROVIDER_REJECTED', providerBookingId: null };
     else if (url.endsWith('/api/v1/exercises') && method === 'POST') { this.providerCreates++; payload = { id: 'exercise:original', roomId: this.claims.provider_room_id }; }
     else if (url.endsWith('/exercises/exercise%3Aoriginal/bookings') && method === 'POST') {
       this.bookingCreates++; this.bookingExists = true; payload = { id: 'booking:original', status: 'CONFIRMED' };
@@ -146,7 +157,7 @@ export class OwnerHarness extends Harness {
       msg = outputs[index];
       if (node === 'verify') { node = index === 0 ? 'router' : 'response'; continue; }
       if (node === 'router') {
-        if (index === 0) { msg.payload = structuredClone([...this.rows.values()].filter(r => matches(r, msg.payload))); node = 'router'; }
+        if (index === 0) { msg.payload = structuredClone([...this.rows.values()].filter(r => matches(r, msg.payload, this.now))); node = 'router'; }
         if (index === 1) { this.update(msg); this.onMongo?.(msg, 'outer'); node = 'router'; }
         if (index === 2) { this.provider(msg, 'outer'); node = 'router'; }
         if (index === 3) node = 'observe';
@@ -167,7 +178,7 @@ export class OwnerHarness extends Harness {
       } else if (node === 'gatewayPrepare') node = index === 2 ? 'gateway' : 'finalize';
       else if (node === 'gateway') {
         if (index === 0) { this.provider(msg, 'gateway'); node = 'gateway'; }
-        if (index === 1) { msg.payload = structuredClone([...this.rows.values()].filter(r => matches(r, msg.payload))); node = 'gateway'; }
+        if (index === 1) { msg.payload = structuredClone([...this.rows.values()].filter(r => matches(r, msg.payload, this.now))); node = 'gateway'; }
         if (index === 2) {
           const row = msg.payload;
           if (this.rows.has(row._id)) msg.error = { code: 11000 };

@@ -60,16 +60,18 @@ test('reserve ACK loss replays immutable expectations without reprice, target in
   assert.equal(h.trace.filter(x => x.url.endsWith('/canonical-targets')).length, targetReads);
   assert.equal(h.reserveCalls, 2); assert.equal(h.providerCreates, 1);
 });
-test('expired original capsule after reserve ACK loss stays pending without CREATE or invented release', () => {
+test('expired original capsule after reserve ACK loss atomically aborts UNUSED reserve before signed compensation', () => {
   const h = new OwnerHarness();
   h.onHttp = msg => { if (msg.url.endsWith('/entitlements/reserve')) msg.error = { code: 'ETIMEDOUT' }; };
   h.execute(); delete h.onHttp; h.now += 61000;
   const result = h.execute({ recoveryOnly: true });
   assert.notEqual(result.payload.operation?.status, 'CONFIRMED');
   assert.equal(h.providerCreates, 0); assert.equal(h.bookingCreates, 0);
-  assert.equal(canonical(h).state, 'PRECREATE_RESERVED');
-  assert.equal(result.payload.operation.reason, 'GAME_CREATE_OWNER_CAPSULE_EXPIRED_BEFORE_DISPATCH');
-  assert.equal(h.trace.some(x => /\/release$/.test(x.url)), false);
+  assert.equal(canonical(h).state, 'RELEASED');
+  assert.equal(result.payload.operation.status, 'REJECTED');
+  assert.equal(result.payload.operation.receipt.schemaVersion, 2);
+  assert.equal(result.payload.operation.receipt.reason, 'PRECREATE_EXPIRED_NOT_DISPATCHED');
+  assert.equal(h.releaseCalls, 1);
 });
 test('durable attempt with process loss before original response ID can never repeat CREATE', () => {
   const h = new OwnerHarness(); crashAt(h, 'operation_precreated_attempt');
@@ -339,4 +341,103 @@ test('outer journal has no legacy daily/leave/visit/reconcile selector fields or
   assert.equal(planHungClaimRelease({ operation: row, bookings: [], now: new Date(h.now + 86400000).toISOString() }).releasable, false);
   const inspect = value => { assert.equal(value instanceof Date, false); if (value && typeof value === 'object') Object.values(value).forEach(inspect); };
   inspect(row);
+});
+
+function expiredUnused() {
+  const h = new OwnerHarness(); crashAt(h, 'operation_entitlement_bind'); h.now += 61000; return h;
+}
+test('unused expiry CAS and release/outer ACK loss retain one immutable receipt across late retry and new reclaim', () => {
+  const h = expiredUnused();
+  h.onMongo = msg => { if (['quarter_unused_abort_ack', 'quarter_unused_release_ack'].includes(msg._subscriptionBooking?.step)
+    || msg._gameCreateOwner?.step === 'completed_ack') { msg.error = { code: 'LOST_ACK' }; msg.payload = undefined; } };
+  h.onHttp = msg => { if (msg.url.endsWith('/entitlements/release')) msg.error = { code: 'LOST_RELEASE_ACK' }; };
+  const r = h.execute({ recoveryOnly: true }).payload;
+  assert.equal(r.operation.status, 'REJECTED'); assert.equal(r.operation.receipt.schemaVersion, 2);
+  const receipt = structuredClone(r.operation.receipt); assert.equal(h.providerCreates, 0); assert.equal(h.bookingCreates, 0);
+  assert.equal(receipt.capsuleExpiresAt, h.preparation.expiresAt);
+  assert.equal(receipt.abortedAt, canonical(h).quarterPrecreateAbort.abortedAt);
+  h.now += 120000; delete h.onMongo; delete h.onHttp;
+  assert.deepEqual(h.execute({ recoveryOnly: true }).payload.operation.receipt, receipt);
+  assert.deepEqual(h.execute({ mode: 'read' }).payload.operation.receipt, receipt);
+  assert.equal(h.releaseCalls, 1);
+  const next = new OwnerHarness({ key: 'new-after-unused-expiry', revision: 2, now: h.now }); next.rows = h.rows;
+  assert.equal(next.execute().payload.operation.status, 'CONFIRMED');
+  assert.equal(canonical(next).quarterPrecreateAbort, undefined);
+  assert.deepEqual(h.execute({ recoveryOnly: true }).payload.operation.receipt, receipt);
+});
+test('crash after abort CAS before release recovers only exact durable marker with a fresh proof after TTL', () => {
+  const h = expiredUnused(); h.onMongo = msg => { if (msg._subscriptionBooking?.step === 'quarter_unused_abort_ack') throw stop; };
+  assert.throws(() => h.execute({ recoveryOnly: true }), e => e === stop);
+  const marker = structuredClone(canonical(h).quarterPrecreateAbort); assert.equal(h.releaseCalls, 0);
+  delete h.onMongo; h.now += 120000;
+  const r = h.execute({ recoveryOnly: true }); assert.equal(r.payload.operation.status, 'REJECTED');
+  assert.deepEqual(canonical(h).quarterPrecreateAbort, marker); assert.equal(h.providerCreates, 0);
+});
+test('attempt winner always remains UNKNOWN and cannot be inferred unused after expiry', () => {
+  const h = new OwnerHarness(); crashAt(h, 'operation_precreated_attempt'); h.now += 120000;
+  h.execute({ recoveryOnly: true }); assert.equal(h.releaseCalls, 0); assert.equal(h.providerCreates, 0);
+  assert.equal(canonical(h).state, 'PRECREATE_ATTEMPTING');
+});
+for (const key of ['providerCreateAttemptId','providerCreateReceipt','bookingId','upstreamBookingId','upstreamAttemptedAt',
+  'precreateRecoveryTarget','precreateRecoveredAt','precreatedEntitlementReserved','confirmedAt',
+  'precreateReconciliationRequiredAt','precreateReconciliationCode','pendingUntil','acceptedAt','releaseBookingId','managedSelfLeaveCancellation','managedSelfLeaveReceipt'])
+  test('unused expiry refuses any present evidence: '+key, () => {
+    const h = expiredUnused(); canonical(h)[key] = null;
+    h.execute({ recoveryOnly: true }); assert.equal(h.releaseCalls, 0); assert.equal(canonical(h).state, 'PRECREATE_RESERVED');
+  });
+test('unsigned mode, foreign immutable marker, and pending CUP compensation never authorize terminal rejection', () => {
+  for (const kind of ['unsigned', 'marker', 'cup']) {
+    const h = expiredUnused();
+    h.onMongo = msg => { if (msg._subscriptionBooking?.step === 'quarter_unused_abort_ack') {
+      if (kind === 'marker') canonical(h).quarterPrecreateAbort.usageOperationId = 'usage:foreign';
+      if (kind === 'unsigned') h.globals.subscriptions_owner_evidence_enabled = false;
+    } };
+    if (kind === 'cup') h.onHttp = msg => { if (msg.url.endsWith('/entitlements/readback')) msg.payload.compensationState = 'PENDING'; };
+    const r = h.execute({ recoveryOnly: true }); assert.notEqual(r.payload.operation?.status, 'REJECTED');
+    assert.equal(canonical(h).state, 'PRECREATE_ABORTING'); assert.equal(h.providerCreates, 0);
+  }
+});
+
+test('actual unused expiry producer emits exact frozen schema2 parity fixture',()=>{
+ const fixture=JSON.parse(fs.readFileSync(new URL('./fixtures/quarter-create-expired-v2.json',import.meta.url),'utf8'));
+ const h=new OwnerHarness();crashAt(h,'operation_entitlement_bind');h.now+=61000;
+ h.onBeforeMongo=msg=>{if(msg._subscriptionBooking?.step==='quarter_unused_abort_ack')
+   msg.payload[1][0].$set.quarterPrecreateAbort.$mergeObjects[0].$literal.abortId=fixture.receipt.abortId;};
+ const result=h.execute({recoveryOnly:true});
+ assert.deepEqual(result.payload.operation.receipt,fixture.receipt);
+ assert.equal(h.providerCreates,0);assert.equal(h.bookingCreates,0);
+});
+
+for (const corrupt of ['missing-digest','usage','abort','abortedAt','rejectedAt'])
+test('schema2 terminal checksum denies partial corruption without canonical repair: '+corrupt,()=>{
+ const h=new OwnerHarness();crashAt(h,'operation_entitlement_bind');h.now+=61000;
+ const original=h.execute({recoveryOnly:true}).payload.operation.receipt;
+ const row=outer(h);assert.match(row.rejectionReceiptSha256,/^sha256:[a-f0-9]{64}$/);
+ if(corrupt==='missing-digest') delete row.rejectionReceiptSha256;
+ if(corrupt==='usage') row.rejectionReceipt.entitlement.usageOperationId='usage:foreign';
+ if(corrupt==='abort') row.rejectionReceipt.abortId='11111111-1111-4111-8111-000000000081';
+ if(corrupt==='abortedAt') row.rejectionReceipt.abortedAt=original.capsuleExpiresAt;
+ if(corrupt==='rejectedAt') {h.now+=1000;row.rejectionReceipt.rejectedAt=new Date(h.now).toISOString();}
+ const releaseCount=h.releaseCalls;
+ assert.equal(h.execute({mode:'read'}).payload.operation.status,'UNKNOWN');
+ assert.equal(h.execute({recoveryOnly:true}).payload.operation.status,'UNKNOWN');
+ const next=new OwnerHarness({key:'synthetic-denied-reclaim',revision:2,now:h.now});
+ for(const row of h.rows.values())next.rows.set(row._id,structuredClone(row));
+ next.execute();assert.equal(next.reserveCalls,0);assert.equal(next.providerCreates,0);
+ assert.equal(h.releaseCalls,releaseCount);assert.equal(h.providerCreates,0);
+});
+test('schema2 terminal reordered keys and lost outer ACK preserve checksum and allow exact later reclaim',()=>{
+ const h=new OwnerHarness();crashAt(h,'operation_entitlement_bind');h.now+=61000;
+ h.onMongo=(msg,lane)=>{if(lane==='router'&&msg._gameCreateOwner?.step==='completed_ack') {msg.error={code:'lost'};msg.payload=undefined;}};
+ const result=h.execute({recoveryOnly:true});delete h.onMongo;
+ assert.equal(result.payload.operation.status,'REJECTED');
+ const row=outer(h), digest=row.rejectionReceiptSha256;
+ const reverse=x=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.entries(x).reverse().map(([k,v])=>[k,reverse(v)])):x;
+ row.rejectionReceipt=reverse(row.rejectionReceipt);
+ assert.deepEqual(h.execute({mode:'read'}).payload.operation.receipt,result.payload.operation.receipt);
+ assert.equal(row.rejectionReceiptSha256,digest);
+ const next=new OwnerHarness({key:'synthetic-reordered-reclaim',revision:2,now:h.now});
+ for(const row of h.rows.values())next.rows.set(row._id,structuredClone(row));
+ assert.equal(next.execute().payload.operation.status,'CONFIRMED');
+ assert.equal(h.execute({recoveryOnly:true}).payload.operation.status,'REJECTED');
 });
