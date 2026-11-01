@@ -11,6 +11,9 @@ on:
       - "scripts/lib/stationMessage*.mjs"
       - "scripts/tests/stationMessage*"
       - "scripts/tests/helpers/stationMessageHarness.mjs"
+      - "scripts/tests/helpers/stationHistoryHarness.mjs"
+      - "scripts/tests/fixtures/stationMessageHistoryWire.json"
+      - "docs/STATION_MESSAGE_HISTORY_V2.md"
       - "scripts/rating_worker.mjs"
       - "src/utils/communityApi.ts"
       - "src/components/cabinet/CommunitiesSection.tsx"
@@ -57,6 +60,9 @@ on:
       - "scripts/lib/stationMessage*.mjs"
       - "scripts/tests/stationMessage*"
       - "scripts/tests/helpers/stationMessageHarness.mjs"
+      - "scripts/tests/helpers/stationHistoryHarness.mjs"
+      - "scripts/tests/fixtures/stationMessageHistoryWire.json"
+      - "docs/STATION_MESSAGE_HISTORY_V2.md"
       - "scripts/rating_worker.mjs"
       - "src/utils/communityApi.ts"
       - "src/components/cabinet/CommunitiesSection.tsx"
@@ -122,5 +128,7 @@ jobs:
           node --experimental-strip-types --test scripts/tests/communityTypes.test.ts
       - name: Test station message commit barrier, retry and physical Mongo races
         run: node --test scripts/tests/stationMessageOwner.test.mjs scripts/tests/stationMessageOwnerPatch.test.mjs scripts/tests/stationMessageOwnerMongo.test.mjs scripts/tests/stationMessageWorker.test.mjs scripts/tests/stationMessageRetry.test.mjs
+      - name: Test station history v2 pagination and physical Mongo reads
+        run: node --test scripts/tests/stationMessageHistory.test.mjs scripts/tests/stationMessageHistoryPatch.test.mjs scripts/tests/stationMessageHistoryMongo.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release
