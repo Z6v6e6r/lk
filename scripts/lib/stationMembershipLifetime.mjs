@@ -27,10 +27,31 @@ export function smMongoIdentity(community) {
   }
   return null;
 }
+export const smSequence = x => Number.isSafeInteger(x) && x >= 0 && x < Number.MAX_SAFE_INTEGER;
+export function smStream(community) {
+  const stream = community.communityMessageOutbox;
+  if (stream === undefined || Array.isArray(stream)) return null;
+  if (!smKeys(stream, ['version','streamId','revision','acceptedSequence','publishedSequence','intents']) || stream.version !== 2 ||
+    (!smUuid(stream.streamId) || stream.streamId.length !== 36) || !smSequence(stream.revision) || !smSequence(stream.acceptedSequence) || !smSequence(stream.publishedSequence) ||
+    stream.publishedSequence > stream.acceptedSequence || !Array.isArray(stream.intents) || stream.intents.length > 32) throw Error('STATION_STREAM_INVALID');
+  return stream;
+}
+export function smReadPosition(community, player) {
+  const stream = smStream(community);
+  if (!stream || !smKeys(player?.readPosition, ['streamId','baselineSequence','readThroughSequence']) || player.readPosition.streamId !== stream.streamId ||
+    !smSequence(player.readPosition.baselineSequence) || !smSequence(player.readPosition.readThroughSequence) ||
+    player.readPosition.baselineSequence > player.readPosition.readThroughSequence || player.readPosition.readThroughSequence > stream.publishedSequence) throw Error('STATION_READ_POSITION_INVALID');
+  return player.readPosition;
+}
+export function smNewReadPosition(community) {
+  const stream = smStream(community);
+  return stream ? { streamId: stream.streamId, baselineSequence: stream.publishedSequence, readThroughSequence: stream.publishedSequence } : undefined;
+}
 export function smLifetime(community) {
   const value = community.stationMembershipLifetime;
-  if (value === undefined) return { version: 1, revision: 0, players: [] };
-  if (!smKeys(value, ['version', 'revision', 'players']) || value.version !== 1 ||
+  const stream = smStream(community);
+  if (value === undefined && !stream) return { version: 1, revision: 0, players: [] };
+  if (!smKeys(value, stream ? ['version', 'revision', 'players', 'streamId'] : ['version', 'revision', 'players']) || value.version !== (stream ? 2 : 1) || (stream && value.streamId !== stream.streamId) ||
     !Number.isSafeInteger(value.revision) || value.revision < 0 || value.revision >= Number.MAX_SAFE_INTEGER ||
     !Array.isArray(value.players)) throw Error('STATION_LIFETIME_INVALID');
   const seen = new Set();
@@ -39,8 +60,10 @@ export function smLifetime(community) {
       !Number.isSafeInteger(row.epoch) || row.epoch < 0 || row.epoch >= Number.MAX_SAFE_INTEGER ||
       !['ACTIVE', 'LEFT', 'REMOVED', 'BANNED'].includes(row.state) ||
       (row.canonicalUserId !== undefined && !smUuid(row.canonicalUserId))) throw Error('STATION_LIFETIME_INVALID');
+    if (stream && row.state === 'ACTIVE') smReadPosition(community, row);
     seen.add(row.playerId);
   }
+  if (stream && smRows(community.members).some(m => !smIdentity(m) || !value.players.some(p => p.playerId === smIdentity(m) && p.state === 'ACTIVE'))) throw Error('STATION_STREAM_MEMBER_INVALID');
   return value;
 }
 export function smPlayer(community, playerId) {
@@ -50,13 +73,14 @@ export function smFence(community) {
   const lifetime = smLifetime(community);
   return community.stationMembershipLifetime === undefined
     ? { stationMembershipLifetime: { $exists: false } }
-    : { 'stationMembershipLifetime.version': 1, 'stationMembershipLifetime.revision': lifetime.revision };
+    : { 'stationMembershipLifetime.version': lifetime.version, 'stationMembershipLifetime.revision': lifetime.revision, ...(lifetime.version === 2 ? { communityMessageOutbox: community.communityMessageOutbox } : {}) };
 }
 export function smTransition(community, playerId, state) {
   if (!smId(playerId) || !['ACTIVE', 'LEFT', 'REMOVED', 'BANNED'].includes(state)) throw Error('STATION_TRANSITION_INVALID');
   const lifetime = smLifetime(community), old = smPlayer(community, playerId);
-  const row = { playerId, ...(old.canonicalUserId ? { canonicalUserId: old.canonicalUserId } : {}), epoch: old.epoch + 1, state };
-  return { version: 1, revision: lifetime.revision + 1, players: [...lifetime.players.filter(p => p.playerId !== playerId), row] };
+  if (!smSequence(old.epoch + 1) || !smSequence(lifetime.revision + 1)) throw Error('STATION_LIFETIME_OVERFLOW');
+  const row = { playerId, ...(old.canonicalUserId ? { canonicalUserId: old.canonicalUserId } : {}), epoch: old.epoch + 1, state, ...(smStream(community) && state === 'ACTIVE' ? { readPosition: smNewReadPosition(community) } : {}) };
+  return { ...lifetime, revision: lifetime.revision + 1, players: [...lifetime.players.filter(p => p.playerId !== playerId), row] };
 }
 export function smRosterTransition(community, nextMembers, action, targetId, actorId) {
   if (['REMOVE', 'BAN'].includes(action)) {
@@ -145,12 +169,13 @@ export function smConfirmation(communities, admission, claim) {
   if (active) return { reason: p.state === 'ACTIVE' && smEqual(p.lastApplied || null, proof) ? 'ALREADY_APPLIED' : 'MEMBER_ALREADY_ACTIVE' };
   // A previously applied generation is not a new registration even if a foreign writer dropped the member.
   if (p.lastApplied?.generationId === claim.generationId && (p.lastApplied.kind || 'GAME_PARTICIPATION') === kind) return { reason: 'APPLIED_MEMBER_MISSING' };
-  const row = { playerId: id, canonicalUserId: admission.actor.canonicalUserId, epoch: p.epoch, state: 'ACTIVE', lastApplied: proof };
+  if (!smSequence(lifetime.revision + 1)) throw Error('STATION_LIFETIME_OVERFLOW');
+  const row = { playerId: id, canonicalUserId: admission.actor.canonicalUserId, epoch: p.epoch, state: 'ACTIVE', lastApplied: proof, ...(smStream(c) ? { readPosition: smNewReadPosition(c) } : {}) };
   const nextMembers = [...members, { id, name: 'Игрок', role: 'MEMBER', status: 'ACTIVE', joinSource: { type: 'STATION_ADMISSION' } }];
   const filter = { _id: c._id, id: c.id, communityType: 'STATION', archived: { $ne: true }, 'typeSettings.stationId': admission.stationId, typeSettingsRevision: admission.policyRevision, ...smFence(c) };
   for (const field of ['members', 'pendingMembers', 'bannedMembers']) filter[field] = Object.hasOwn(c, field) ? c[field] : { $exists: false };
   return { reason: 'APPLY', filter, update: { $set: { members: nextMembers, memberCount: nextMembers.length, membersCount: nextMembers.length,
     pendingMembers: smRows(c.pendingMembers).filter(m => smIdentity(m) !== id),
     pendingCount: smRows(c.pendingMembers).filter(m => smIdentity(m) !== id).length,
-    stationMembershipLifetime: { version: 1, revision: lifetime.revision + 1, players: [...lifetime.players.filter(r => r.playerId !== id), row] } } } };
+    stationMembershipLifetime: { ...lifetime, revision: lifetime.revision + 1, players: [...lifetime.players.filter(r => r.playerId !== id), row] } } } };
 }

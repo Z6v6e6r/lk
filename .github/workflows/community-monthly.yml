@@ -9,6 +9,9 @@ on:
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
       - "scripts/lib/stationMessage*.mjs"
+      - "scripts/lib/stationStream*.mjs"
+      - "scripts/tests/stationStream*"
+      - "scripts/tests/fixtures/station-stream/**"
       - "scripts/tests/stationMessage*"
       - "scripts/tests/helpers/stationMessageHarness.mjs"
       - "scripts/tests/helpers/stationHistoryHarness.mjs"
@@ -58,6 +61,9 @@ on:
       - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
       - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
       - "scripts/lib/stationMessage*.mjs"
+      - "scripts/lib/stationStream*.mjs"
+      - "scripts/tests/stationStream*"
+      - "scripts/tests/fixtures/station-stream/**"
       - "scripts/tests/stationMessage*"
       - "scripts/tests/helpers/stationMessageHarness.mjs"
       - "scripts/tests/helpers/stationHistoryHarness.mjs"
@@ -130,5 +136,7 @@ jobs:
         run: node --test scripts/tests/stationMessageOwner.test.mjs scripts/tests/stationMessageOwnerPatch.test.mjs scripts/tests/stationMessageOwnerMongo.test.mjs scripts/tests/stationMessageWorker.test.mjs scripts/tests/stationMessageRetry.test.mjs
       - name: Test station history v2 pagination and physical Mongo reads
         run: node --test scripts/tests/stationMessageHistory.test.mjs scripts/tests/stationMessageHistoryPatch.test.mjs scripts/tests/stationMessageHistoryMongo.test.mjs
+      - name: Test station stream order, read-through and physical Mongo recovery
+        run: node --test scripts/tests/stationStreamOrder.test.mjs scripts/tests/stationStreamHistoryPatch.test.mjs scripts/tests/stationStreamMongo.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release

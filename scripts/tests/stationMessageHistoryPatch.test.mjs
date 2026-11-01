@@ -49,12 +49,14 @@ test('default v1 prepare/query/render remain characterized, including old equal-
   const old=structuredClone(start),current=structuredClone(start);
   assert.deepEqual(historyEvaluate(patched,'prepare',current),historyEvaluate(base,'prepare',old));
   old.payload=[historyCommunity()];current.payload=[historyCommunity()];
-  assert.deepEqual(historyEvaluate(patched,'query',current),historyEvaluate(base,'query',old));
+  const oldQuery=historyEvaluate(base,'query',old),currentQuery=historyEvaluate(patched,'query',current);
+  assert.deepEqual(current.payload.recordType,{$ne:'READ_COMMAND'});old.payload.recordType={$ne:'READ_COMMAND'};
+  assert.deepEqual(currentQuery,oldQuery);
   old.payload=[historyMessage(1),historyMessage(2)];current.payload=[historyMessage(1),historyMessage(2)];
   assert.deepEqual(historyEvaluate(patched,'render',current),historyEvaluate(base,'render',old));
   assert.equal(current.payload.nextBeforeTs,1000);assert.equal(current.payload.messages.length,1);
-  assert.equal(patched.find(node=>node.id==='render').func,base.find(node=>node.id==='render').func);
-  assert.equal(JSON.stringify(patched.filter(node=>!['prepare','query',...Object.values(historyNodeIds)].includes(node.id))),JSON.stringify(base.filter(node=>!['prepare','query'].includes(node.id))));
+  assert.equal(patched.find(node=>node.id==='render').func,base.find(node=>node.id==='render').func.replace(".filter((item) => item && item.archived !== true && (item.stationMessageOwner !== 1 || item.state === 'COMMITTED'))",".filter((item) => item && item.recordType !== 'READ_COMMAND' && item.archived !== true && (item.stationMessageOwner !== 1 || item.state === 'COMMITTED'))"));
+  assert.equal(JSON.stringify(patched.filter(node=>!['prepare','query','render',...Object.values(historyNodeIds)].includes(node.id))),JSON.stringify(base.filter(node=>!['prepare','query','render'].includes(node.id))));
 });
 test('v2 malformed query rejects before a Mongo request; old unknown parameters remain old behavior',()=>{
   const flow=historyGraph();

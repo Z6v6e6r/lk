@@ -4,8 +4,8 @@ import vm from 'node:vm';
 import { addCommunityPolicyAuth, COMMUNITY_AUTH_SUBFLOW } from './communityPolicyAuth.mjs';
 import { addTypedCommunityResponseRedaction } from './communityResponseRedaction.mjs';
 import { stationLifetimeRuntimeSource } from './stationMembershipReceiverSource.mjs';
-export const messageOwnerIds=Object.fromEntries(['router','messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response','catch','legacyWrite','legacyAck','legacyCatch','canonicalIn','canonicalAuth','canonicalBegin','statusIn','statusAuth','statusBegin'].map(k=>[k,'station_message_owner_'+k+'_v1']));
-export const messageOwnerRuntimeSource=()=>stationLifetimeRuntimeSource()+'\n'+fs.readFileSync(new URL('./stationMessageOwner.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
+export const messageOwnerIds=Object.fromEntries(['router','messageFind','messageWrite','communityFind','communityWrite','eventFind','eventWrite','response','catch','legacyWrite','legacyAck','legacyCatch','canonicalIn','canonicalAuth','canonicalBegin','statusIn','statusAuth','statusBegin','readIn','readAuth','readBegin','readStatusIn','readStatusAuth','readStatusBegin'].map(k=>[k,'station_message_owner_'+k+'_v1']));
+export const messageOwnerRuntimeSource=()=>stationLifetimeRuntimeSource()+'\n'+fs.readFileSync(new URL('./stationMessageStream.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageHistory.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageRead.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+'\n'+fs.readFileSync(new URL('./stationMessageOwner.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId}){
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==expectedFlowSha256)throw Error('MESSAGE_GRAPH_PREIMAGE');
   const flow=addTypedCommunityResponseRedaction(JSON.parse(bytes)),ids=new Set(Object.values(messageOwnerIds)),byId=new Map(flow.map(n=>[n.id,n]));
@@ -30,7 +30,7 @@ export function patchStationMessageOwner(bytes,{expectedFlowSha256,mongoClientId
   }
   if(!byId.has(COMMUNITY_AUTH_SUBFLOW)||byId.get(ingress[0].wires[0][0])?.type!=='subflow:'+COMMUNITY_AUTH_SUBFLOW)throw Error('MESSAGE_VERIFIED_SUBFLOW_REQUIRED');
   addCommunityPolicyAuth(flow); // Exact existing subflow definitions and ingress bindings must validate.
-  const newRoutes=[['post','/lk/communities/:communityId/message-requests'],['get','/lk/communities/:communityId/message-requests/:requestId']];
+  const newRoutes=[['post','/lk/communities/:communityId/message-requests'],['get','/lk/communities/:communityId/message-requests/:requestId'],['post','/lk/communities/:communityId/message-read-requests'],['get','/lk/communities/:communityId/message-read-requests/:requestId']];
   for(const n of flow)if(n.type==='http in'&&['get','post','all'].includes(String(n.method||'get').toLowerCase())){
     const path=String(n.url||'').replace(/\/$/,'');
     for(const [method,route]of newRoutes){
@@ -105,8 +105,23 @@ try{
       {id:messageOwnerIds[mode+'Auth'],type:'subflow:'+COMMUNITY_AUTH_SUBFLOW,z,wires:[[messageOwnerIds[mode+'Begin']]]},
       {id:messageOwnerIds[mode+'Begin'],type:'function',z,name:statusOnly?'Read original station message request':'Begin canonical station message request',func:begin,libs:[{var:'nodeCrypto',module:'crypto'}],outputs:2,wires:[[messageOwnerIds.router],[messageOwnerIds.response]]});
   }
+  for(const mode of ['read','readStatus']){
+    const statusOnly=mode==='readStatus';
+    const begin=messageOwnerRuntimeSource()+'\nconst statusOnly='+JSON.stringify(statusOnly)+';\n'+String.raw`
+const body=msg.payload,requestId=statusOnly?msg.req?.params?.requestId:body?.requestId;
+const denied=(status,code)=>{msg.statusCode=status;msg.payload=srUnknown({requestId},status,code).response.body;msg.headers={'Content-Type':'application/json','Cache-Control':'no-store'};delete msg.error;return [null,msg];};
+if(msg.req?.headers?.['x-padlhub-community-read-contract']!=='station-read.v1')return denied(400,'READ_REQUEST_INVALID');
+if(!msg._verifiedCommunityActor?.id||msg._communityPolicyAuthFailure)return denied(msg._communityPolicyAuthFailure==='INVALID'?401:msg._communityPolicyAuthFailure==='UNAVAILABLE'?503:403,'READ_ACCESS_DENIED');
+if(Object.keys(msg.req?.query||{}).length)return denied(400,'READ_REQUEST_INVALID');
+if(statusOnly&&((body!==undefined&&body!==null&&body!==''&&(typeof body!=='object'||Array.isArray(body)||Object.keys(body).length))||Number(msg.req?.headers?.['content-length']||0)>0||msg.req?.headers?.['transfer-encoding']))return denied(400,'READ_REQUEST_INVALID');
+try{msg._stationMessageOperation=beginStationRead({communityId:msg.req?.params?.communityId,actor:msg._verifiedCommunityActor,body,requestId,statusOnly});return [msg,null];}catch{return denied(400,'READ_REQUEST_INVALID');}
+`;
+    flow.push({id:messageOwnerIds[mode+'In'],type:'http in',z,method:statusOnly?'get':'post',url:newRoutes[statusOnly?3:2][1],upload:false,wires:[[messageOwnerIds[mode+'Auth']]]},
+      {id:messageOwnerIds[mode+'Auth'],type:'subflow:'+COMMUNITY_AUTH_SUBFLOW,z,wires:[[messageOwnerIds[mode+'Begin']]]},
+      {id:messageOwnerIds[mode+'Begin'],type:'function',z,name:statusOnly?'Read original station read request':'Begin station read-through request',func:begin,libs:[{var:'nodeCrypto',module:'crypto'}],outputs:2,wires:[[messageOwnerIds.router],[messageOwnerIds.response]]});
+  }
   const router=messageOwnerRuntimeSource()+String.raw`
-const next=msg._stationMessageOperation||advanceStationMessage(msg._stationMessage,msg.payload,Boolean(msg.error));
+const next=msg._stationMessageOperation||(msg._stationMessage?.readCommand?advanceStationRead(msg._stationMessage,msg.payload,Boolean(msg.error)):advanceStationMessage(msg._stationMessage,msg.payload,Boolean(msg.error)));
 delete msg._stationMessageOperation;delete msg.error;
 if(next.response){delete msg._stationMessage;msg.statusCode=next.response.status;msg.payload=next.response.body;msg.headers={'Content-Type':'application/json','Cache-Control':'no-store'};return [null,null,null,null,null,null,msg];}
 if(next.ctx.statusOnly&&next.method!=='find'){msg.statusCode=503;msg.payload=stationMessageUnknown(next.ctx.requestId,503,'MESSAGE_STATUS_WRITE_FORBIDDEN').body;delete msg._stationMessage;return [null,null,null,null,null,null,msg];}

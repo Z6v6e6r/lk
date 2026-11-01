@@ -71,6 +71,7 @@ export function historyFindArguments(request, legacy = false) {
   const filter = legacy
     ? { communityId: request.communityId, stationMessageOwner: { $ne: 1 }, archived: { $ne: true } }
     : { communityId: request.communityId, stationMessageOwner: 1, state: 'COMMITTED', archived: false };
+  filter.recordType = { $ne: 'READ_COMMAND' };
   if (!legacy && request.before) {
     filter.$or = [{ createdTs: { $lt: request.before.createdTs } }];
     if (request.before.publicId) filter.$or.push({ createdTs: request.before.createdTs, id: { $lt: request.before.publicId } });
@@ -85,6 +86,7 @@ export function historyFindArguments(request, legacy = false) {
         stationMessageOwner: { $cond: [{ $eq: [{ $type: '$stationMessageOwner' }, 'missing'] }, '$$REMOVE', false] },
         archived: { $eq: ['$archived', true] },
       } : { stationMessageOwner: 1, state: 1, archived: 1 }),
+      recordType: 1,
       communityId: shBoundedValue(['$communityId'],200), id: shBoundedValue(['$id'],36), publicId: shBoundedValue(['$publicId'],36),
       createdTs: shBoundedValue(['$createdTs'],64,['null','int','long','double']),
       timestamp: shBoundedValue(['$timestamp'],64,['null','int','long','double']),
@@ -114,7 +116,7 @@ function shLegacyTime(row) {
   shFail('HISTORY_TIMESTAMP_INVALID');
 }
 function shMessage(request, row, legacy) {
-  if (!shObject(row) || row.communityId !== request.communityId || row.archived === true) shFail('HISTORY_ROW_INVALID');
+  if (!shObject(row) || row.communityId !== request.communityId || row.archived === true || row.recordType === 'READ_COMMAND') shFail('HISTORY_ROW_INVALID');
   historyMongoIdentity(row);
   let id, createdTs;
   if (legacy) {

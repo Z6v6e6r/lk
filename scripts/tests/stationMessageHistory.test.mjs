@@ -45,7 +45,7 @@ test('exact bounded Mongo descriptors include canonical keyset, simple collation
   assert.deepEqual(options.sort,{createdTs:-1,id:-1});assert.equal(options.limit,3);
   assert.deepEqual(options.collation,{locale:'simple'});assert.equal(options.maxTimeMS,3000);
   const [legacy,legacyOptions]=historyFindArguments(r,true);
-  assert.deepEqual(legacy,{communityId:'community',stationMessageOwner:{$ne:1},archived:{$ne:true}});
+  assert.deepEqual(legacy,{communityId:'community',stationMessageOwner:{$ne:1},archived:{$ne:true},recordType:{$ne:'READ_COMMAND'}});
   assert.equal(legacyOptions.limit,2001);assert.equal(legacyOptions.maxTimeMS,3000);
 });
 test('strict request rejects malformed/unsupported versions, duplicate-shaped values and malformed boundary',()=>{

@@ -91,3 +91,14 @@ test('new route protocol rejects missing/wrong version, actor spoofing, malforme
  const authDrift=base();authDrift.find(n=>n.id==='community-policy-verified-actor-v1-response').func='msg._verifiedCommunityActor=msg.payload;return msg;';assert.throws(()=>patch(authDrift),/AUTH_SUBFLOW_DRIFT/);
  const get={req:{headers:{'x-padlhub-community-message-contract':'station-message.v1'},params:{communityId:'station-community',requestId:uid(70)},query:{}},payload:{text:'no body'},_verifiedCommunityActor:{id:'player-a'}};assert.equal(evaluate(graph,messageOwnerIds.statusBegin,get)[1].statusCode,400);
 });
+
+test('actual READ route uses verified actor and exact body; GET is find-only with immutable original receipt',async()=>{
+ const {stationStreamAdoptionPlan}=await import('../lib/stationMessageStream.mjs');const {runStationRead}=await import('../lib/stationMessageRead.mjs');
+ const graph=patch(base()),db=messageDb(),c=db.tables.get('lk_communities')[0];Object.assign(c,stationStreamAdoptionPlan(c,uid(90)).update.$set);
+ const body={requestId:uid(80),streamId:uid(90),membershipEpoch:0,throughSequence:0};
+ const make=()=>({req:{params:{communityId:c.id},query:{},headers:{'x-padlhub-community-read-contract':'station-read.v1'}},payload:body,_verifiedCommunityActor:{id:'player-a'}});
+ const started=evaluate(graph,messageOwnerIds.readBegin,make());assert.ok(started[0]);const result=await runStationRead(db,started[0]._stationMessageOperation);assert.equal(result.response.body.outcome,'CONFIRMED');
+ const msg=make();msg.payload=undefined;msg.req.params.requestId=body.requestId;const status=evaluate(graph,messageOwnerIds.readStatusBegin,msg);assert.ok(status[0]);assert.deepEqual((await runStationRead(db,status[0]._stationMessageOperation,{before(op){assert.equal(op.method,'find');}})).response.body,result.response.body);
+ for(const mutate of [m=>delete m._verifiedCommunityActor,m=>m.payload={...body,actorId:'player-a'},m=>m.payload={...body,membershipEpoch:'0'},m=>m.payload={...body,requestId:body.requestId+'\n'},m=>m.req.query={phone:'forged'},m=>m.req.headers={}]){const bad=make();mutate(bad);const denied=evaluate(graph,messageOwnerIds.readBegin,bad);assert.equal(denied[0],null);assert.equal(denied[1].payload.outcome,'UNKNOWN');}
+ assert.equal(db.tables.get('lk_community_events')?.length||0,0);
+});

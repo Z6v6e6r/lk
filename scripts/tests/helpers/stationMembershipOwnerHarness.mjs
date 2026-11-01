@@ -50,6 +50,8 @@ export async function run(db, mode, body, options = {}) {
 const get = (row, path) => path.split('.').reduce((o, key) => o?.[key], row);
 export function matches(row, query) {
   return Object.entries(query).every(([key, value]) => {
+    if (key === '$or') return value.some(q => matches(row,q));
+    if (key === '$and') return value.every(q => matches(row,q));
     const actual = get(row, key);
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       if ('$exists' in value) return (actual !== undefined) === value.$exists;
