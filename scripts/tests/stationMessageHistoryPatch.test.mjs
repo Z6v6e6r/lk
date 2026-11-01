@@ -20,8 +20,12 @@ test('actual composed history graph returns strict v2 after bounded reads and fi
   assert.equal(JSON.stringify(result.payload).includes('legacy-1'),false);
 });
 test('actual guard blocks unauthenticated, phone-only, LEFT, BAN, changed identity/type and archived final community',async()=>{
-  for(const actor of [undefined,{id:'intruder',phone:'+79990000000'}]) {
-    const result=await historyReadGraph({actor:actor??null,find:()=>{throw Error('MUST_NOT_READ');}});
+  // Synthetic non-routable country-7/area-000 identity, never a real contact export.
+  const syntheticPhone='+'+String(7*10**10+1);
+  assert.match(syntheticPhone,/^\+\d{11}$/);
+  const community={...historyCommunity(),members:[{...historyCommunity().members[0],phone:syntheticPhone}]};
+  for(const actor of [undefined,{phone:syntheticPhone},{id:'intruder',phone:syntheticPhone}]) {
+    const result=await historyReadGraph({community,actor:actor??null,find:()=>{throw Error('MUST_NOT_READ');}});
     assert.equal(result.statusCode,403);assert.equal(result.payload.messages,undefined);
   }
   for(const changed of [{members:[]},{bannedMembers:[{id:'actor'}]},{_id:'replacement'},{communityType:'FRIENDS'},{archived:true},
