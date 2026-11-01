@@ -344,3 +344,138 @@ test("only the exact reducer rejection can release a pending command", async () 
     assert.equal(isRejectedFprCommand({ status: 422, error: { raw } }), false);
   }
 });
+
+function autoRound(state: FprState, minute: number): FprState {
+  const attempt = fprCurrentAttempt(state)!;
+  for (const [i, match] of attempt.matches.entries()) {
+    state = command(state, { action: "score", matchId: match.id, score1: 13, score2: 12,
+      confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true }, minute + i);
+  }
+  return state;
+}
+
+test("only the final saved court atomically closes a round, updates standings and prepares one next draw", () => {
+  let state = event();
+  const matches = state.attempts[0].matches;
+  state = command(state, { action: "score", matchId: matches[0].id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true }, 1);
+  assert.equal(fprCompletedRounds(state), 0);
+  assert.equal(fprStandings(state).reduce((n, row) => n + row.matchesPlayed, 0), 0);
+  const beforeLast = JSON.stringify(state);
+  const last: FprCommand = { id: "last-court", expectedRevision: 1, action: "score", matchId: matches[1].id,
+    score1: 15, score2: 10, confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true };
+  assert.throws(() => applyFprCommand(state, { ...last, score2: 11 }, at(2)), /Счёт/);
+  assert.equal(JSON.stringify(state), beforeLast);
+  state = applyFprCommand(state, last, at(2));
+  assert.equal(state.revision, 2); assert.equal(state.audit.length, 2);
+  assert.equal(fprCompletedRounds(state), 1); assert.equal(state.attempts[0].finishedAt, at(2));
+  assert.equal(fprCurrentAttempt(state)?.round, 2); assert.equal(fprCurrentAttempt(state)?.status, "scheduled");
+  assert.equal(state.attempts.length, 2);
+  assert.equal(fprStandings(state).reduce((n, row) => n + row.matchesPlayed, 0), 8);
+  assert.equal(fprStandings(state).reduce((n, row) => n + row.wins, 0), 4);
+  assert.equal(applyFprCommand(state, last, at(3)), state, "replay must not append another draw");
+  assert.throws(() => applyFprCommand(state, { ...last, autoCloseRound: false }, at(3)), /FPR_COMMAND_ID_REUSED/);
+  assert.throws(() => applyFprCommand(state, { ...last, id: "stale-last" }, at(3)), /FPR_REVISION_CONFLICT/);
+  assert.throws(() => applyFprCommand(state, { id: "old-close", expectedRevision: 1, action: "close_round" }, at(3)), /FPR_REVISION_CONFLICT/);
+});
+
+test("auto-close conserves all N=4..28 protocols through eight rounds, including single-court start+score+close", () => {
+  for (let n = 4; n <= 28; n++) {
+    let state = event(n, "auto-close");
+    const courts = Math.floor(n / 4);
+    for (let round = 1; round <= 8; round++) {
+      assert.equal(fprCurrentAttempt(state)?.round, round);
+      state = autoRound(state, round * 12);
+      assert.equal(state.revision, round * courts, `${n} players: one revision per score`);
+      assert.equal(fprCompletedRounds(state), round);
+      const standings = fprStandings(state);
+      assert.equal(standings.reduce((sum, p) => sum + p.matchesPlayed, 0), 4 * courts * round);
+      assert.equal(standings.reduce((sum, p) => sum + p.wins, 0), 2 * courts * round);
+      assert.equal(standings.reduce((sum, p) => sum + p.totalPoints, 0), 50 * courts * round);
+      assert.equal(state.attempts.length, Math.min(round + 1, 8));
+      if (round < 8) assert.equal(fprCurrentAttempt(state)?.status, "scheduled");
+    }
+    assert.equal(fprCurrentAttempt(state), null);
+    assert.equal(state.status, "in_progress", "completion of the event still requires explicit finish");
+  }
+});
+
+test("auto-close waits for both pairs and preserves legacy fully-saved rounds until an explicit new Save", () => {
+  let state = event();
+  const [first, second] = state.attempts[0].matches;
+  state = command(state, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: false, startIfScheduled: true, autoCloseRound: true }, 1);
+  state = command(state, { action: "score", matchId: second.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, autoCloseRound: true }, 2);
+  assert.equal(fprCompletedRounds(state), 0);
+  state = command(state, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true }, 3);
+  assert.equal(fprCompletedRounds(state), 0, "old command has no auto-close flag");
+  assert.equal(fprCurrentAttempt(state)?.status, "running");
+  state = command(state, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, autoCloseRound: true }, 4);
+  assert.equal(fprCompletedRounds(state), 1);
+  assert.equal(state.attempts[0].finishedAt, at(2), "confirmation time must not replace actual completedAt");
+});
+
+test("reserve draws are automatic only when enabled and the newly closed duration still fits", () => {
+  let disabled = event(); disabled.reserveAllowed = false;
+  for (let round = 1; round <= 6; round++) disabled = autoRound(disabled, round * 12);
+  assert.equal(fprCompletedRounds(disabled), 6); assert.equal(fprCurrentAttempt(disabled), null);
+  let slow = event(); slow.endsAt = at(110);
+  for (let round = 1; round <= 5; round++) slow = autoRound(slow, round * 12);
+  const [first, second] = fprCurrentAttempt(slow)!.matches;
+  slow = command(slow, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true }, 72);
+  slow = command(slow, { action: "score", matchId: second.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, autoCloseRound: true }, 95);
+  assert.equal(fprCompletedRounds(slow), 6); assert.equal(fprCurrentAttempt(slow), null);
+  assert.equal(fprReserveThreshold(slow, at(95)).requiredMs, 29 * 60_000);
+});
+
+test("valid late last scores close and count the round without preparing an unplayable next draw", () => {
+  let state = event();
+  const [first, second] = state.attempts[0].matches;
+  state = command(state, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true }, 1);
+  state = command(state, { action: "score", matchId: second.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, autoCloseRound: true, playedAt: at(170), reason: "Timely finish, late entry" }, 178);
+  assert.equal(fprCompletedRounds(state), 1); assert.equal(state.attempts[0].finishedAt, at(170));
+  assert.equal(fprCurrentAttempt(state), null); assert.equal(state.attempts.length, 1);
+  assert.equal(fprStandings(state).reduce((sum, p) => sum + p.matchesPlayed, 0), 8);
+});
+
+test("auto-close saves the final court at the attempt limit without creating an invalid next draw", () => {
+  let state = event();
+  for (let i = 0; i < 99; i++) {
+    state = command(state, { action: "cancel_round", reason: "Court unavailable" }, 1);
+    state = command(state, { action: "prepare_round" }, 1);
+  }
+  assert.equal(state.attempts.length, 100);
+  state = autoRound(state, 12);
+  validateFprState(state);
+  assert.equal(state.attempts.length, 100);
+  assert.equal(fprCompletedRounds(state), 1);
+  assert.equal(fprCurrentAttempt(state), null);
+  assert.equal(state.attempts[99].matches.every(m => m.score1 === 13 && m.score2 === 12), true);
+  assert.equal(fprStandings(state).reduce((sum, p) => sum + p.matchesPlayed, 0), 8);
+  state = command(state, { action: "finish" }, 15);
+  assert.equal(state.status, "incomplete");
+});
+
+test("correction of a closed score never auto-closes or duplicates the next scheduled or running round", () => {
+  let state = autoRound(event(), 12);
+  const oldMatch = state.attempts[0].matches[0];
+  state = command(state, { action: "correct_score", matchId: oldMatch.id, score1: 10, score2: 15,
+    confirmed1: true, confirmed2: true, reason: "Corrected score", autoCloseRound: true }, 14);
+  assert.equal(state.attempts.length, 2); assert.equal(fprCompletedRounds(state), 1);
+  assert.equal(fprCurrentAttempt(state)?.status, "scheduled");
+  const currentMatch = fprCurrentAttempt(state)!.matches[0];
+  state = command(state, { action: "score", matchId: currentMatch.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true }, 15);
+  const draw = JSON.stringify(fprCurrentAttempt(state));
+  state = command(state, { action: "correct_score", matchId: oldMatch.id, score1: 12, score2: 13,
+    confirmed1: true, confirmed2: true, reason: "Second correction", autoCloseRound: true }, 16);
+  assert.equal(JSON.stringify(fprCurrentAttempt(state)), draw);
+  assert.equal(state.attempts.length, 2); assert.equal(fprCompletedRounds(state), 1);
+});
