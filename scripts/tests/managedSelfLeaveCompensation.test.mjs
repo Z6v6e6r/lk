@@ -44,6 +44,27 @@ function fixture() {
     operationState: 'CONFIRMED', compensationState: 'NONE', releaseReason: null };
   return { operation, leave, ctx, receipt, calls: [], writes: [] };
 }
+function binding(f) {
+  const o = f.operation, c = f.ctx;
+  return { schemaVersion: 1, tenantKey: o.tenantKey, actorClientId: o.actorClientId,
+    exerciseId: o.exerciseId, clientSubscriptionId: o.clientSubscriptionId, bookingId: o.bookingId,
+    serviceDate: o.serviceDate, bookingOperationKey: o._id, bookingOperationId: o.operationId,
+    entitlementOperationId: o.managedEntitlementOperationId, subscriptionInstanceId: o.managedSubscriptionInstanceId,
+    leaveOperationKey: c.operationKey, leaveOperationId: c.operationId, gameId: c.gameId,
+    membershipVersion: c.membershipVersion };
+}
+function historical(f = fixture(), applied = true) {
+  // Explicit pre-existing durable evidence; this harness never creates it via a new release.
+  f.operation.managedSelfLeaveCancellation = { schemaVersion: 1, binding: binding(f), observedAt: now() };
+  if (applied) f.receipt = { ...f.receipt, operationState: 'COMPENSATED', compensationState: 'APPLIED', releaseReason: 'BOOKING_CANCELLED' };
+  return f;
+}
+function direct(f) {
+  return driveOwner(f, { headers: { Authorization: f.ctx.actorAuthHeader }, payload: {
+    action: 'release', operationId: f.ctx.operationId, bookingId: f.operation.bookingId,
+    managedSelfLeave: { ...binding(f), leaveClaimToken: f.ctx.claimToken },
+  } });
+}
 const equals = (actual, expected) => {
   if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
     if ('$exists' in expected) return expected.$exists === (actual !== undefined);
@@ -132,19 +153,30 @@ function bridge(f, options = {}) {
     statusCode: result.statusCode, payload: result.payload, responseUrl: delegated[0].url });
 }
 const releases = f => f.calls.filter(call => call.url?.endsWith('/entitlements/release'));
-test('SELF RETURN_VERIFIED reaches strict signed release, canonical compensation and local receipt despite lost CUP ACK', () => {
-  const f = fixture(); const result = bridge(f);
+test('aggregate visit increase from another cancellation cannot create managed compensation authority', () => {
+  const f = fixture();
+  // The ordinary evaluator sees baseline 3 -> 4 and original booking cancelled.
+  // That increase may belong to a different booking, not this original return.
+  const before = clone(f.operation);
+  const result = bridge(f);
+  assert.equal(releases(f).length, 0);
+  assert.equal(f.writes.length, 0);
+  assert.deepEqual(f.operation, before);
+  assert.equal(result[3].payload.reason, 'RETURN_ATTRIBUTION_UNVERIFIED');
+});
+test('existing APPLIED compensation readback persists exact receipt and historical RELEASED replays without release', () => {
+  const f = historical(); const result = bridge(f);
   assert.ok(result[1], JSON.stringify({ result: result.map(m => m?.payload), calls: f.calls })); assert.equal(f.operation.state, 'RELEASED');
-  assert.deepEqual(f.operation.managedSelfLeaveReceipt, f.receipt); assert.equal(releases(f).length, 1);
+  assert.deepEqual(f.operation.managedSelfLeaveReceipt, f.receipt); assert.equal(releases(f).length, 0);
   assert.equal(result[1]._splitLeaveCtx.dailyLimitReleaseOutcome, 'RELEASED');
   assert.ok(!JSON.stringify(f.writes).includes('Bearer'));
   assert.ok(!JSON.stringify(f.writes).includes('release-v1.'));
   assert.ok(!JSON.stringify(f.writes).includes(globals.subscriptions_owner_evidence_secret));
   const prior = clone(f.calls); assert.ok(bridge(f)[1]); assert.deepEqual(f.calls, prior, 'terminal replay reads local receipt only');
 });
-test('lost release/readback responses keep local CONFIRMED; fresh authenticated expired-lease retry completes after original proof TTL', () => {
-  const f = fixture(); assert.ok(bridge(f, { readbackLost: true })[3]);
-  assert.equal(f.operation.state, 'CONFIRMED'); assert.equal(releases(f).length, 1);
+test('lost existing APPLIED readback keeps local CONFIRMED; fresh actor recovers after original marker TTL', () => {
+  const f = historical(); assert.ok(bridge(f, { readbackLost: true })[3]);
+  assert.equal(f.operation.state, 'CONFIRMED'); assert.equal(releases(f).length, 0);
   f.operation.managedSelfLeaveCancellation.observedAt = new Date(Date.now() - 120_000).toISOString();
   f.leave.localApplyLeaseUntil = new Date(Date.now() - 1).toISOString();
   const fresh = { ...clone(f.ctx), claimToken: 'fresh:claim', managedSelfLeaveReclaim: undefined };
@@ -160,7 +192,7 @@ test('lost release/readback responses keep local CONFIRMED; fresh authenticated 
   f.ctx = ack[2]._splitLeaveCtx;
   const httpBefore = f.calls.filter(call => call.kind === 'http').length;
   const result = bridge(f, { localAckLost: true }); assert.ok(result[1]);
-  assert.equal(f.operation.state, 'RELEASED'); assert.equal(releases(f).length, 1);
+  assert.equal(f.operation.state, 'RELEASED'); assert.equal(releases(f).length, 0);
   const newCalls = f.calls.filter(call => call.kind === 'http').slice(httpBefore);
   assert.ok(newCalls.every(call => call.url.endsWith('/profile') || call.url.endsWith('/entitlements/readback')));
 });
@@ -173,12 +205,12 @@ test('wrong tenant, actor, instance, booking, generation and incomplete old leav
     f => { f.operation.managedSubscriptionInstanceId = ''; }, f => { f.operation.actorClientId = 'foreign'; },
     f => { f.operation.bookingId = 'rejoined-booking'; }];
   for (const mutate of mutations) {
-    const f = fixture(); mutate(f); const result = bridge(f);
+    const f = historical(); mutate(f); const result = bridge(f);
     assert.ok(result[3]); assert.equal(releases(f).length, 0); assert.equal(f.operation.state, 'CONFIRMED');
   }
 });
 test('old owner, redirect or no actor credential never dispatches compensation; pending visit and staff modes retain existing paths', () => {
-  const f = fixture();
+  const f = historical();
   assert.ok(bridge(f, { probe: { contractVersion: 1, owner: 'LK1_SUBSCRIPTION_BOOKING_OWNER', policy: 'ATOMIC_MANAGED_V1' } })[3]);
   assert.equal(f.calls.length, 0);
   delete f.ctx.actorAuthHeader; assert.ok(bridge(f)[3]); assert.equal(f.calls.length, 0);
@@ -189,12 +221,12 @@ test('old owner, redirect or no actor credential never dispatches compensation; 
 test('canonical receipt must have exact cancellation semantics and binding', () => {
   for (const bad of [{ operationState: 'FAILED' }, { compensationState: 'NONE' }, { releaseReason: 'PROVIDER_REJECTED' },
     { providerBookingId: 'new-booking' }, { subscriptionInstanceId: 'new-instance' }, { operationId: 'new-operation' }, { extra: true }]) {
-    const f = fixture(); assert.ok(bridge(f, { badReceipt: { ...f.receipt, operationState: 'COMPENSATED', compensationState: 'APPLIED', releaseReason: 'BOOKING_CANCELLED', ...bad } })[3]);
+    const f = historical(); assert.ok(bridge(f, { badReceipt: { ...f.receipt, operationState: 'COMPENSATED', compensationState: 'APPLIED', releaseReason: 'BOOKING_CANCELLED', ...bad } })[3]);
     assert.equal(f.operation.state, 'CONFIRMED'); assert.equal(releases(f).length, 0);
   }
 });
 test('expired pending marker never renews evidence or retries release; absent signer cannot downgrade to unsigned', () => {
-  const f = fixture(); bridge(f, { readbackLost: true });
+  const f = historical(); bridge(f, { readbackLost: true });
   f.operation.managedSelfLeaveCancellation.observedAt = new Date(Date.now() - 120_000).toISOString();
   f.receipt = { ...f.receipt, operationState: 'CONFIRMED', compensationState: 'NONE', releaseReason: null };
   const marker = clone(f.operation.managedSelfLeaveCancellation); const before = releases(f).length;
@@ -206,7 +238,7 @@ test('expired pending marker never renews evidence or retries release; absent si
   assert.equal(releases(fresh).length, 0); assert.equal(fresh.operation.state, 'CONFIRMED');
 });
 test('strict prepare rejects malformed or downgraded bridge binding without profile I/O', () => {
-  const f = fixture(); const message = run(games + 'fn_split_leave_daily_limit_route.js', { _splitLeaveCtx: f.ctx, payload: [f.operation] })[4];
+  const f = historical(); const message = run(games + 'fn_split_leave_daily_limit_route.js', { _splitLeaveCtx: f.ctx, payload: [f.operation] })[4];
   const binding = message._splitLeaveCtx.managedSelfLeave;
   for (const bad of [null, [], { ...binding, extra: true }, { ...binding, schemaVersion: 2 },
     { ...binding, tenantKey: 'foreign' }, { ...binding, actorClientId: 'bad\n' }]) {
@@ -231,8 +263,8 @@ test('rejoin or newer leave claim after CUP compensation cannot make stale owner
     f => { f.operation.managedSubscriptionInstanceId = 'replacement-instance'; },
     f => { f.leave.localApplyClaimToken = 'newer-claim'; },
     f => { f.leave.membershipVersion = 'newer-generation'; }]) {
-    const f = fixture(); assert.ok(bridge(f, { beforeFinalAuthority: mutate })[3]);
-    assert.equal(f.operation.state, 'CONFIRMED'); assert.equal(releases(f).length, 1);
+    const f = historical(); assert.ok(bridge(f, { beforeFinalAuthority: mutate })[3]);
+    assert.equal(f.operation.state, 'CONFIRMED'); assert.equal(releases(f).length, 0);
     assert.ok(!f.operation.managedSelfLeaveReceipt);
   }
 });
@@ -250,4 +282,41 @@ test('tenantless pre-deploy ordinary LK1 same-claim return retains local apply; 
   f.leave.localApplyLeaseUntil = new Date(Date.now() - 1).toISOString();
   const retry = run(games + 'fn_split_leave_operation_route.js', { _splitLeaveCtx: { ...clone(f.ctx), claimToken: 'fresh-unknown-claim' }, payload: [clone(f.leave)] });
   assert.equal(retry[2].statusCode, 202); assert.equal(retry[3], undefined, 'no new authority inferred for tenantless historical row');
+});
+
+test('direct canonical markerless release and an in-flight old marker-creation callback fail closed', () => {
+  const f = fixture(), before = clone(f.operation);
+  assert.equal(direct(f).payload.details.code, 'RETURN_ATTRIBUTION_UNVERIFIED');
+  assert.equal(releases(f).length, 0); assert.equal(f.writes.length, 0);
+  assert.deepEqual(f.operation, before);
+  const ctx = { caller: 'http', action: 'release', step: 'operation_find',
+    tenantKey: f.operation.tenantKey, actorClientId: f.operation.actorClientId,
+    exerciseId: f.operation.exerciseId, clientSubscriptionId: f.operation.clientSubscriptionId,
+    serviceDate: f.operation.serviceDate, releaseBookingId: f.operation.bookingId,
+    managedSelfLeave: { ...binding(f), leaveClaimToken: f.ctx.claimToken },
+    ownerBookingReadback: { kind: 'BOOKING_CANCELLED', observedAt: now() } };
+  const output = router({ _subscriptionBooking: ctx, payload: [clone(f.operation)] });
+  assert.equal(output[3], null); assert.equal(output[0], null);
+  assert.equal(output[4].payload.details.code, 'RETURN_ATTRIBUTION_UNVERIFIED');
+  assert.deepEqual(f.operation, before);
+});
+test('existing marker of any age plus CUP CONFIRMED/NONE never releases or refreshes authority', () => {
+  for (const age of [0, 30_000, 120_000]) {
+    const f = historical(fixture(), false);
+    f.operation.managedSelfLeaveCancellation.observedAt = new Date(Date.now() - age).toISOString();
+    const before = clone(f.operation);
+    assert.ok(bridge(f)[3]); assert.equal(releases(f).length, 0);
+    assert.equal(f.writes.length, 0); assert.deepEqual(f.operation, before);
+    assert.ok(f.calls.some(call => call.url?.endsWith('/entitlements/readback')));
+  }
+});
+test('ordinary unmanaged SELF keeps existing local release and historical malformed receipts stay pending', () => {
+  const ordinary = fixture();
+  for (const k of Object.keys(ordinary.operation)) if (k.startsWith('managed')) delete ordinary.operation[k];
+  assert.ok(bridge(ordinary)[0]); assert.equal(ordinary.calls.length, 0);
+  for (const mutate of [f => { f.operation.managedSelfLeaveCancellation.binding.membershipVersion = 'foreign'; },
+    f => { f.operation.managedSelfLeaveReceipt.providerBookingId = 'foreign'; }]) {
+    const f = historical(); f.operation.state = 'RELEASED'; f.operation.managedSelfLeaveReceipt = clone(f.receipt);
+    mutate(f); assert.ok(bridge(f)[3]); assert.equal(f.calls.length, 0);
+  }
 });

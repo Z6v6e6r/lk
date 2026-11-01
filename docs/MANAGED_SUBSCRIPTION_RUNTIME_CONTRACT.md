@@ -891,17 +891,23 @@ The actor is authenticated through the existing profile read before durable look
 The owner reads `lk_game_leave_operations`; it never accepts `RETURN_VERIFIED` from
 request data. Provider cancellation must be exact, complete and explicitly cancelled.
 
-Before the first CUP release, a CAS stores the immutable cancellation binding and
-original provider receipt time on the existing booking operation. The transient actor
-token and owner signature are never persisted. Release uses the existing `release-v1`
-proof with `BOOKING_CANCELLED`. It requires the existing owner signer to be enabled
-and valid; missing configuration cannot downgrade to an unsigned request. A retry
-with a stored marker reads the original CUP operation and does not refresh provider
+New managed SELF compensation is held with the existing pending response and
+`RETURN_ATTRIBUTION_UNVERIFIED`. The legacy `RETURN_VERIFIED` predicate observes an
+aggregate subscription balance increase and cancelled booking; a concurrent return
+of another booking can satisfy it without attributing a credit to this booking.
+It is not authority to create a cancellation marker, issue a new CUP release or
+release the canonical booking allowance. The daily route and direct canonical owner
+both enforce this hold, including an in-flight old marker-creation callback.
+
+An already persisted exact cancellation marker permits only readback of the original
+CUP operation. Neither a fresh nor expired marker permits a new release or renewed
 evidence. Only an exact seven-field readback with `COMPENSATED`, `APPLIED`,
 `BOOKING_CANCELLED` and the original booking/op/instance permits local `RELEASED`.
-HTTP success or the release response alone does not supply this evidence. Expired
-nonterminal evidence stays pending; an already completed compensation may be recovered
-after proof expiry through readback. Local ACK loss re-reads the exact booking row.
+HTTP success or the old release response alone does not supply this evidence.
+`CONFIRMED`/`NONE`, malformed, foreign or unavailable readback remains pending without
+new marker or release writes. Exact historical local `RELEASED` marker/receipt replay
+is retained. Local ACK loss re-reads the exact booking row. No tokens/signatures are
+persisted; no provider return fields or new compensation contract are invented.
 
 The final update is fenced by the original booking identity, state and cancellation
 marker after another exact leave-claim read. Replacement/rejoin cannot release a new
@@ -923,8 +929,17 @@ assembles the bridge, canonical prepare/router/probe, durable authority reader a
 foreground-reclaim wiring as one exact graph packet. Its approved parent source is
 `71db810308ae56c228b62f3adbad9e8c7b3415da`; unknown source/topology is rejected.
 Historical release pins are not advanced. A production installation still needs fresh
-actual graph evidence, existing CUP release/readback availability and separate owner
+actual graph evidence, existing CUP readback availability and separate owner
 approval. Local synthetic tests are not Mongo, provider or production acceptance.
+
+Owner: the managed SELF canonical booking/leave integration. Audience: existing
+managed SELF callers only. Stop signal: missing attributable return proof; stop method:
+retain pending original custody, never ordinary-release fallback. This source guard
+does not undo historical compensation. Coherent installation must update both routes
+and drain earlier release-capable executions; source alone cannot recall an emitted
+CUP request. Rolling back to older code reopens the unsafe new-release path and must
+not be described as a safe recovery. New compensation needs a separately reviewed
+per-booking return proof contract; no flag or provider configuration is added here.
 
 ### LK2 managed FREE SELF LEAVE owner admission (source-only, not activated)
 
