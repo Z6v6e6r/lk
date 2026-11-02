@@ -59,7 +59,7 @@ POST a new payment. A receipt received after delegation expiry is durably retain
 withholding its response; a fresh authenticated read recovers it. Expiry blocks any next
 provider call. Unknown outcomes remain held and never release automatically by time.
 
-Success/failure URLs are fixed to `https://padlhub.su/lk2/subscription-payment-return` with
+Success/failure URLs are fixed to `https://lk2.padlhub.su/user/api/v1/subscription-payment-return` with
 the original reference appended by existing preparation. A return is never payment proof.
 The return landing/native handoff must be implemented and accepted before activation.
 PAID is the historical purchase receipt; it never grants current entitlement after refund,

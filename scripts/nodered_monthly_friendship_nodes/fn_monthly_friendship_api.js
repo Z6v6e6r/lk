@@ -110,7 +110,7 @@ try {
     if (!fresh()) return fail(401, 'MONTHLY_API_ACTOR_EXPIRED');
     msg.payload = { counterKey: 'friendship', clientPhone: state.phone, clientId: c.provider_client_id,
       paymentRef: c.operation_id, transactionPaymentMethod: 'CARD',
-      successUrl: 'https://padlhub.su/lk2/subscription-payment-return', failUrl: 'https://padlhub.su/lk2/subscription-payment-return' };
+      successUrl: 'https://lk2.padlhub.su/user/api/v1/subscription-payment-return', failUrl: 'https://lk2.padlhub.su/user/api/v1/subscription-payment-return' };
     const output = monthlyPrivatePrepare(msg, global);
     if (!output?.[0]) return fail(output?.[1]?.statusCode || 503, 'MONTHLY_API_OFFER_UNAVAILABLE');
     msg = output[0]; msg._monthlyFriendshipApi = state;

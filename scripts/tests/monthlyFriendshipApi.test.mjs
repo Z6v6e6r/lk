@@ -96,3 +96,26 @@ test('quote rejects incomplete catalogue and consent binds epoch/lifecycle price
   const changed=other.advance(message('purchase',bodyFor('purchase',q)),{respond:m=>m.url.includes('/products/subscriptions?')?{...other.provider(m),content:[{...product,validityDays:31}]}:other.provider(m)});
   assert.equal(changed.msg.payload.code,'MONTHLY_API_PRICE_CHANGED');assert.equal(other.writes.length,0);
 });
+
+test('closed identifiers and actor headers reject terminal newline aliases',()=>{
+ assert.equal(api.uuid(uid(1)+'\n'),false);assert.equal(api.id('fixture-client\n'),false);assert.equal(api.digest(api.hash('x')+'\n'),false);
+ assert.equal(api.verify(message('quote',bodyFor('quote'),{token:'fixture-actor-token\n'}),get,at).ok,false);
+});
+
+test('Unicode terminal line separators cannot alias IDs or credentials',()=>{
+ for(const end of ['\u2028','\u2029']){
+  assert.equal(api.id('fixture-client'+end),false);
+  assert.equal(api.verify(message('quote',bodyFor('quote'),{token:'fixture-actor-token'+end}),get,at).ok,false);
+  const h=harness({globals:{vivacrm_access_token:'fixture-service-token'+end}});
+  assert.equal(h.advance(message('quote')).msg.statusCode,503);assert.equal(h.writes.length,0);
+ }
+});
+
+test('bank return uses the actual LK2 API ingress, with only the original reference appended',()=>{
+ const h=harness(),q=h.advance(message('quote')).msg.payload;
+ const e=h.advance(message('purchase',bodyFor('purchase',q)),{stop:e=>e.port===4 && e.msg.method==='POST'});
+ for(const k of ['successUrl','failUrl']){
+  const u=new URL(e.msg.payload[k]);assert.equal(u.origin,'https://lk2.padlhub.su');assert.equal(u.pathname,'/user/api/v1/subscription-payment-return');
+  assert.deepEqual([...u.searchParams.keys()],['summerPaymentRef']);assert.equal(u.searchParams.get('summerPaymentRef'),q.operationId);
+ }
+});
