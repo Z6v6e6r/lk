@@ -58,7 +58,7 @@ const outcome = (document, operationId) => {
       statusCode: 200,
       payload: {
         asOf,
-        contractVersion: 1,
+        contractVersion: document.contractVersion,
         operationId,
         reason: "OWNER_BOOKING_CONFIRMED",
         status: "CONFIRMED",
@@ -71,7 +71,7 @@ const outcome = (document, operationId) => {
       statusCode: 202,
       payload: {
         asOf,
-        contractVersion: 1,
+        contractVersion: document.contractVersion,
         operationId,
         reason: "OWNER_PENDING",
         status: "PENDING",
@@ -85,7 +85,7 @@ const outcome = (document, operationId) => {
       payload: {
         asOf,
         code: "BOOKED_OPERATION_REJECTED",
-        contractVersion: 1,
+        contractVersion: document.contractVersion,
         error: "BOOKED_OPERATION_REJECTED",
         operationId,
         rejectionCode: toText(document && document.rejectionCode)
@@ -98,7 +98,7 @@ const outcome = (document, operationId) => {
     statusCode: 202,
     payload: {
       asOf,
-      contractVersion: 1,
+      contractVersion: document.contractVersion,
       operationId,
       reason: "RECONCILIATION_REQUIRED",
       status: "UNKNOWN",
@@ -107,6 +107,11 @@ const outcome = (document, operationId) => {
 };
 const respondOutcome = (msg, context, document) => {
   const mapped = outcome(document, context.operationId);
+  if (document.contractVersion === 2 && mapped.status === "CONFIRMED") {
+    mapped.status = "UNKNOWN"; mapped.statusCode = 202;
+    mapped.payload = { contractVersion: 2, operationId: context.operationId, asOf: null,
+      reason: "RECONCILIATION_REQUIRED", status: "UNKNOWN" };
+  }
   if (context.mode === "read" && context.includeReceipt && document.reservationId
     && ["ATTEMPTING", "UNKNOWN", "CONFIRMED"].includes(document.state)
     && context.step !== "owner_receipt") {
@@ -134,7 +139,7 @@ const bindingMatches = (document, context) => {
   if (
     !isObject(document)
     || document.kind !== "BOOKED_OPERATION_ADMISSION"
-    || document.contractVersion !== 1
+    || document.contractVersion !== (context.contractVersion || 1)
     || document.operationId !== context.operationId
     || document.tenantId !== context.identity.tenantId
     || document.userId !== context.identity.userId
@@ -145,6 +150,12 @@ const bindingMatches = (document, context) => {
   }
   // Session rotation and a fresh per-request correlation are expected on replay;
   // the actor, provider mapping and exact request binding are not.
+  if (document.contractVersion === 2 && (!managedJoinV2Request(document.managedJoinV2)
+    || typeof nodeCrypto === "undefined" || typeof nodeCrypto.createHash !== "function"
+    || document.requestSha256 !== "sha256:" + nodeCrypto.createHash("sha256")
+      .update("booked-operation-admission:v2\0" + JSON.stringify(managedJoinV2Request(document.managedJoinV2))).digest("hex")
+    || document.managedJoinV2.target.id !== document.targetId
+    || document.managedJoinV2.target.expectedRevision !== document.expectedRevision)) return false;
   return context.mode === "read"
     ? true
     : document.delegationBindingSha256 === context.bindingSha256;
@@ -156,10 +167,16 @@ const executionStart = (document, context) => {
   if (context.mode !== "admit" || context.executionSuppressed === true) return null;
   const execution = isObject(context.execution) ? context.execution : null;
   if (!execution || execution.enabled !== true || !toText(execution.actorToken)) return null;
-  if (!isObject(document) || document.state !== "PENDING") return null;
-  if (document.targetAdmissible !== true) return null;
+  if (!isObject(document)) return null;
+  const recoveryOnly = document.contractVersion === 2 && execution.recoveryOnlyRequested === true
+    && ["ATTEMPTING", "UNKNOWN"].includes(document.state);
+  if (execution.recoveryOnlyRequested === true && !recoveryOnly) return null;
+  if (!recoveryOnly && document.state !== "PENDING") return null;
+  if (!recoveryOnly && document.targetAdmissible !== true) return null;
+  if (recoveryOnly && document.recovery?.leaseUntil && (!isCanonicalIso(document.recovery.leaseUntil)
+    || Date.parse(document.recovery.leaseUntil) > Date.now())) return null;
   const startsAt = Date.parse(document.targetStartsAt);
-  if (!Number.isFinite(startsAt) || startsAt <= Date.now()) return null;
+  if (!recoveryOnly && (!Number.isFinite(startsAt) || startsAt <= Date.now())) return null;
   if (
     !toText(document.providerExerciseId)
     || !toText(document.providerClientId)
@@ -168,7 +185,7 @@ const executionStart = (document, context) => {
   ) {
     return null;
   }
-  msg._bookedOperation = { ...context, step: "execute", stored: document };
+  msg._bookedOperation = { ...context, step: "execute", stored: document, execution: { ...execution, recoveryOnly } };
   return [null, null, null, msg];
 };
 
@@ -189,7 +206,25 @@ if (context.step === "owner_receipt") {
   // Never treat the admission document or an incomplete managed entitlement as
   // proof. Bind the canonical owner's durable result to the exact original actor,
   // tenant, operation, exercise and subscription. No user token is needed here.
-  if (row && row.kind !== "BOOKED_OPERATION_ADMISSION"
+  let entitlement = null;
+  if (stored.contractVersion === 2 && row) {
+    const admission = managedJoinV2Request(stored.managedJoinV2);
+    const decision = row.managedDecision;
+    if (admission && JSON.stringify(row.managedJoinV2) === JSON.stringify(admission)
+      && row.managedSubscriptionInstanceId === admission.entitlement.subscriptionInstanceId
+      && managedJoinV2Id(row.managedEntitlementOperationId) && row.managedEntitlementState === "CONFIRMED"
+      && decision?.decisionKind === "ENTITLEMENT" && decision.action === "JOIN_GAME"
+      && decision.target?.targetId === stored.providerExerciseId
+      && decision.policyVersion === admission.entitlement.expectations.policyVersion
+      && decision.policyDigest === admission.entitlement.expectations.policyDigest
+      && decision.money?.currency === "RUB" && decision.money.finalPriceMinor === 0
+      && managedJoinV2Positive(decision.usageUnits)) {
+      entitlement = { subscriptionInstanceId: row.managedSubscriptionInstanceId,
+        policyRef: { policyVersion: decision.policyVersion, policyDigest: decision.policyDigest },
+        usageRef: { usageRef: row.managedEntitlementOperationId, reservationUnits: decision.usageUnits } };
+    }
+  }
+  if ((stored.contractVersion !== 2 || entitlement) && row && row.kind !== "BOOKED_OPERATION_ADMISSION"
     && row.operationId === stored.operationId && row.tenantKey === stored.tenantKey
     && row.actorClientId === stored.providerClientId
     && row.exerciseId === stored.providerExerciseId
@@ -199,7 +234,7 @@ if (context.step === "owner_receipt") {
     && ["NOT_REQUIRED", "CONFIRMED"].includes(row.activationState)
     && (!row.managedEntitlementOperationId || row.managedEntitlementState === "CONFIRMED")) {
     const receipt = {
-      contractVersion: 1, source: "LK1_SUBSCRIPTION_BOOKING_OWNER",
+      contractVersion: stored.contractVersion, source: "LK1_SUBSCRIPTION_BOOKING_OWNER",
       operationId: stored.operationId, tenantId: stored.tenantId, userId: stored.userId,
       gameId: stored.targetId, reservationId: stored.reservationId,
       providerClientId: stored.providerClientId,
@@ -208,13 +243,14 @@ if (context.step === "owner_receipt") {
       targetMappingId: stored.targetMappingId, targetVersion: stored.targetVersion,
       requestSha256: stored.requestSha256, idempotencyKeySha256: stored.idempotencyKeySha256,
       bookingId: row.bookingId, verifiedAt: row.confirmedAt,
+      ...(entitlement ? { entitlement } : {}),
     };
-    return respond(msg, 200, { asOf: row.confirmedAt, contractVersion: 1,
+    return respond(msg, 200, { asOf: row.confirmedAt, contractVersion: stored.contractVersion,
       operationId: context.operationId, reason: "OWNER_BOOKING_CONFIRMED", status: "CONFIRMED", receipt });
   }
   // Missing/ambiguous or subsequently cancelled owner result is never settlement
   // evidence, including when an older outer CONFIRMED document exists.
-  return respond(msg, 200, { asOf: null, contractVersion: 1,
+  return respond(msg, 200, { asOf: null, contractVersion: stored.contractVersion,
     operationId: context.operationId, reason: "RECONCILIATION_REQUIRED", status: "UNKNOWN" });
 }
 
@@ -232,6 +268,7 @@ if (context.step === "find" || context.step === "readback") {
       : unavailable(msg, "BOOKED_OPERATION_STORE_UNAVAILABLE");
   }
   if (rows.length === 0) {
+    if (context.execution?.recoveryOnlyRequested === true) return reject(msg, 404, "BOOKED_OPERATION_NOT_FOUND");
     if (context.mode === "read" || context.step === "readback") {
       return context.mode === "read"
         ? reject(msg, 404, "BOOKED_OPERATION_NOT_FOUND")

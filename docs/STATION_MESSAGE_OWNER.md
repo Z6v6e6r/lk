@@ -1,0 +1,61 @@
+# STATION message custody (source contract)
+
+Owner: LK communities; paired CUP persistence guard is required. This source does not install a graph, enable a scheduler, provision Mongo, or establish delivery latency/replica durability. Installing the reviewed composed graph is the activation boundary. There is no message enable flag or STATION legacy fallback. Drain already executing old graph requests before installation; source cannot fence those old independent insert operations. Non-STATION communities without the permanent marker retain their existing authorization/message format, with an atomic acceptance barrier before their legacy effects.
+
+## Existing API and authenticated actor
+
+`POST /lk/communities/:communityId/messages` retains `{member,text}` compatibility. New callers add UUID `requestId` (or matching `Idempotency-Key` header). The existing verified actor supplies identity; the submitted member cannot choose the author. The owner generates a UUID for an old missing-key request, retains it through this request, and returns `{ok:true,requestId,message}`. A separate later old HTTP request without that key is a separate message: this is not retry deduplication. No new JWT scope/credential or LK2 send endpoint is added.
+
+The keyed identity binds tenant/source owner, verified actor, and request UUID. Immutable request hash binds community, actor and trimmed text (1–8000 characters). Reusing a key with changed text/community fails. The existing LK1 component retains up to eight unresolved actor/community/body keys for manual retry (editing or switching identity does not discard the old key; a full map blocks new intents but permits originals), preserves a failed or concurrently edited draft, and does not automatically replay. This custody is memory-only: page reload/unmount loses the local draft/key. It is not a durable LK2 composer. Historical timestamp-only pagination remains unchanged; same-timestamp boundary completeness and realtime delivery are not claimed. Public committed messages have stable UUIDs across retries/readback.
+
+## Storage and linearization
+
+Only existing `lk_community_chat_messages`, `lk_communities`, and `lk_community_events` collections are used, with their existing unique `_id`. No new indexes, TTL, collections, or transactions.
+
+1. First-wins candidate `_id=station-message:v1:<hash>` captures original community Mongo identity, actor membership epoch, policy revision, public UUID, request hash and timestamp. `state:RESERVED,archived:true` has no public `id` or message text. Old readers cannot display it. A rejected candidate retains only bounded metadata/digest, never a failed body.
+2. Community CAS checks exact Mongo identity, STATION type, policy revision, current roster/bans/lifetime epoch and previous outbox. It atomically appends the accepted message/event intent and adopts lifetime if absent. **This CAS is acceptance.** LEFT/BAN committed before it prevents acceptance; a later LEFT/BAN does not revoke the already accepted message. A retry cannot refresh the captured epoch or select a recreated community.
+3. Accepted intent projects into the candidate (`COMMITTED`, public fields) and deterministic event `_id`; both require readback. Only then is the intent pulled. Ambiguous ACK is not success or proof of failure. Missing candidate after possible acceptance fails closed, never silently recaptures. The response returns success only with committed message and event evidence; changed access returns an accepted/access-changed error without text.
+4. `communityMessageOutbox` remains an empty array after drain. Its property presence permanently routes the adopted community to this owner even after a type change. Malformed state fails closed. A maximum of 32 pending intents rejects additional enrollment only; no eviction, and LEFT/BAN remains available. Text/identity/name/avatar bounds limit each intent; pre-existing community size approaching Mongo's document limit remains an activation capacity prerequisite.
+
+The guarded source composer checks exact flow SHA, verified ingress, same Mongo client, known original message writer, no additional raw message writers or ingress, reserved node references and create guard. It upgrades public redaction, old request preparation and create protection. Creates cannot replace any STATION or adopted community at write time; original side effects remain withheld until ACK. CUP updates/moderation write only their owned fields; deletion has an exact absent-or-empty outbox CAS and rejects malformed/pending state. Existing lifetime-adopted community deletion remains prohibited even when empty. Private candidate/event/outbox fields never enter public community JSON.
+
+## Recovery, retention and activation evidence
+
+Existing rating worker calls `recoverStationMessageOutbox` beside policy processing with the same DB, dry-run mode, at most 50 communities/100 intents and a 10-second iteration deadline (each DB operation has a 3-second bound; an in-progress message may finish after the iteration deadline). No unbounded loop. Recovery needs no actor token and only projects already accepted intents, including archived/typechanged communities. Fixed redacted failure codes propagate to the failed worker tick; counts contain no text/identity. A reached batch/deadline returns `bounded:true` and retains the rest. No scheduler installation or latency is implied.
+
+Release source custody must include `scripts/lib/stationMessageOwner.mjs` and its runtime dependency `scripts/lib/stationMembershipLifetime.mjs`; root owns release/workflow wiring. Composer-only helpers do not belong to worker runtime.
+
+Existing source exposes no chat edit/delete/TTL path; this change does not create one or alter existing public message retention. Deployed cleanup/retention is UNKNOWN: activation requires proving it preserves immutable keys/candidate receipts and every accepted pending intent. Timeouts, age, missing candidate and empty lookup are never authority to discard dedupe or replay an old key. No canonical row eviction rule is introduced. Driver/client read/write concerns and replication/failover durability require deployment evidence; standalone CI proves neither.
+
+LOCAL: synthetic state/actual handler/graph/CUP tests and scoped lint. Physical Mongo tests are source-only until the existing guarded CI fixture runs; they cover concurrent same-key commits, stale ACL CAS, ACK loss, accepted recovery and deletion fence. Full CI, coherent paired graph/CUP installation, old request drain, capacity, deployed cleanup and runtime write/read concerns are separate activation gates. No live operation is part of this change.
+
+## Legacy fallback versus concurrent type change
+
+The composed legacy handler first applies its existing authorization and constructs original outputs, but releases none yet. A same-client Mongo no-op `updateOne` matches the exact original `_id` and full BSON `$$ROOT` against `$literal` snapshot; `$set:{id:original.id}` changes no data. This covers every composed authorization input, including owner/admin fields, type settings, visibility/status, roster/bans, adoption marker and absent-versus-null. Only `acknowledged:true, matchedCount:1` releases the held message/event/response/debug outputs. Modified count is intentionally not acceptance evidence. Zero match returns409; malformed/ambiguous ACK returns503 and drops every effect/debug output. There is no readback guess or automatic replay.
+
+CUP type/policy mutation and LK/CUP roster mutation are atomic on the same document: if their write wins first, full-preimage match fails. If acceptance wins first, a subsequent type/BAN transition may proceed and the already accepted legacy message may then emit. No revision-only surrogate, new counter, schema field or type restriction is introduced. This barrier closes stale authorization within the new graph; it does not convert non-STATION legacy writes into the STATION durable message/outbox protocol. A crash after this legacy acceptance can still lose legacy effects, and separate legacy retry is not exactly-once.
+
+## Canonical consumer prerequisite v1 (source only)
+
+The existing `/lk/communities/:communityId/messages` route and its old-client payloads are unchanged. A header alone on that old route is insufficient: an older graph could ignore it and write through legacy behavior. The new, distinct routes are:
+
+- `POST /lk/communities/:communityId/message-requests`
+- `GET /lk/communities/:communityId/message-requests/:requestId`
+
+Both require `X-PadlHub-Community-Message-Contract: station-message.v1` and existing authenticated user Bearer/profile proof. They use new instances of the same exact verified-actor subflow; no credential/scope is added. POST accepts exactly `{requestId:<UUID>,text:<1..8000 trimmed characters>}`. Query parameters and caller member/actor/phone fields are rejected. GET has no request body/query. Unsupported or absent contract headers fail closed. The source composer rejects new-route collisions, overlapping parameter/catch-all handlers, reserved-node references and auth-definition drift. New paths are absent from the previous known graph; old-graph404 still means UNKNOWN to a consumer, never proof of no dispatch. External/runtime middleware is not certified by graph source tests.
+
+POST always calls the canonical owner, even when a stale caller believed an unadopted community was STATION and its type has changed. It cannot invoke legacy inserts. The existing immutable key and body binding, membership epoch acceptance, outbox, event proof and recovery remain authoritative. A canonical response checks the exact committed receipt and current community identity/ACL again after event proof. No body is returned to a different actor, LEFT/BANNED member or mismatched/recreated community.
+
+Confirmed response (HTTP200):
+
+```json
+{"contractVersion":1,"contract":"station-message","requestId":"<original UUID>","outcome":"CONFIRMED","message":{"id":"<public UUID>","body":"<original trimmed text>","sentAt":"<ISO timestamp>","author":{"displayName":"<public name>"},"isViewer":true}}
+```
+
+Other responses contain exactly `contractVersion`, `contract`, `requestId`, `outcome:"UNKNOWN"`, and fixed `code`; no message, messageId, provider community/author ID, phone or private state. `requestId` is null only when the supplied protocol request did not contain a valid UUID. Current access denial uses403; invalid protocol400; send conflict409; store/receipt failure503. GET unknown/missing/RESERVED/event-incomplete receipt uses200UNKNOWN. Consumers must retain original custody for **every UNKNOWN and transport/HTTP failure**, including403/404. These are not negative-dispatch proofs or permission to mint a replacement key.
+
+GET computes the exact actor/request key, reads the existing candidate, validates the deterministic public ID and original body/event binding, reads the exact persisted event, then checks current community identity/ACL last. It emits only find descriptors (three maximum) and never creates candidates, appends/removes outbox intents, inserts/repairs events, retries a command, or invokes recovery. Missing or incomplete state remains UNKNOWN even if an accepted intent could later recover. The final ACL read is the disclosure linearization point; a later membership mutation does not retroactively revoke already authorized bytes.
+
+CONFIRMED means a durable message and matching event were observed. It does not mean delivered, read, notified, realtime-synchronized, or fully paginated. No cursor, unread, realtime or LK2 UI work is included. The first consumer can restore an original known request by GET without resending; its own original-key retention and public community mapping remain separate work. LOCAL synthetic tests cover response loss, read-only restoration, actor/type/ACL races and protocol/graph negatives. The additional physical Mongo case is guarded CI source only until the existing fixture executes it; no local or live DB was used.
+
+Stream v3 ordering/unread is specified in [STATION_MESSAGE_STREAM.md](STATION_MESSAGE_STREAM.md); v1/v2 shapes remain unchanged. Adoption is separate and requires paired lifetime v2 writers.

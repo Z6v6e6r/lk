@@ -1,6 +1,11 @@
 // Node-RED 4.0.9 HTTP In does not register OPTIONS handlers. The inert GET
 // capability route reaches the SAME canonical router; ordinary CORS stays 204.
 if (msg.req?.method === "GET") {
+  if (msg.req.headers?.["x-training-registration-owner-contract"] !== undefined) {
+    msg._trainingRegistrationCapability = { version: 1, stage: "prepare" };
+    return [null, null, msg];
+  }
+
   msg._subscriptionBooking = { step: "booked_operation_contract_probe" };
   return [null, msg];
 }

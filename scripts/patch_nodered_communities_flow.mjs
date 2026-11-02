@@ -3499,7 +3499,7 @@ const ctx = isObj(msg._communityChat) ? msg._communityChat : {};
 const limit = Number.isFinite(Number(ctx.limit)) ? Number(ctx.limit) : toArray(msg.payload).length;
 const beforeTs = Number.isFinite(Number(ctx.beforeTs)) ? Number(ctx.beforeTs) : Date.now() + 1;
 const rows = toArray(msg.payload)
-  .filter((item) => item && item.archived !== true)
+  .filter((item) => item && item.archived !== true && (item.stationMessageOwner !== 1 || item.state === 'COMMITTED'))
   .map((item) => {
     const createdTs = resolveCreatedTs(item);
     const createdAt = toStr(item.createdAt) || toStr(item.publishedAt) || nowIso;
@@ -3569,6 +3569,7 @@ if (!text) {
 }
 
 msg._communityChatPost = {
+  requestId: body.requestId,
   communityId,
   member,
   text,

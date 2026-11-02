@@ -1,69 +1,215 @@
+# R1 source integration: preserve the complete test and trigger union.
 name: Community monthly MongoDB integration
-
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
     paths:
-      - "src/services/community-rating/**"
-      - "scripts/community_monthly_worker.mjs"
-      - "scripts/community_monthly_reports.mjs"
-      - "scripts/build_rating_worker_release.mjs"
-      - "scripts/lib/communityMonthlyFinalization.mjs"
-      - "scripts/nodered_community_monthly_nodes/**"
-      - "scripts/patch_nodered_community_monthly_flow.mjs"
-      - "scripts/tests/communityMonthly*"
-      - "deploy/rating-worker/**"
-      - "package*.json"
-      - ".github/workflows/community-monthly.yml"
+      - src/services/community-rating/**
+      - scripts/community_monthly_worker.mjs
+      - scripts/community_monthly_reports.mjs
+      - scripts/build_rating_worker_release.mjs
+      - scripts/lib/stationMessage*.mjs
+      - scripts/lib/stationNotificationFeed*.mjs
+      - scripts/tests/stationNotificationFeed*
+      - scripts/tests/helpers/stationNotificationHarness.mjs
+      - docs/STATION_NOTIFICATION_FEED_V1.md
+      - scripts/lib/stationStream*.mjs
+      - scripts/tests/stationStream*
+      - scripts/tests/fixtures/station-stream/**
+      - scripts/tests/stationMessage*
+      - scripts/tests/helpers/stationMessageHarness.mjs
+      - scripts/tests/helpers/stationHistoryHarness.mjs
+      - scripts/tests/fixtures/stationMessageHistoryWire.json
+      - docs/STATION_MESSAGE_HISTORY_V2.md
+      - scripts/rating_worker.mjs
+      - src/utils/communityApi.ts
+      - src/components/cabinet/CommunitiesSection.tsx
+      - scripts/lib/stationMembership*.mjs
+      - scripts/lib/communityRosterWrites.mjs
+      - scripts/lib/communityPolicyProjection.mjs
+      - scripts/lib/communityResponseRedaction.mjs
+      - scripts/nodered_station_membership_nodes/**
+      - scripts/patch_nodered_station_membership_owner.mjs
+      - scripts/patch_nodered_communities_flow.mjs
+      - scripts/tests/stationMembership*
+      - scripts/tests/helpers/stationMembershipOwnerHarness.mjs
+      - scripts/lib/communityMonthlyFinalization.mjs
+      - scripts/nodered_community_monthly_nodes/**
+      - scripts/patch_nodered_community_monthly_flow.mjs
+      - scripts/tests/communityMonthly*
+      - scripts/nodered_managed_self_leave_nodes/**
+      - scripts/nodered_games_nodes/fn_split_leave_*.js
+      - scripts/lib/managedSelfLeaveOwnerSource.mjs
+      - scripts/patch_nodered_managed_self_leave_owner.mjs
+      - scripts/tests/managedSelfLeaveOwner*
+      - scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs
+      - scripts/tests/fixtures/managed-self-leave-v1-contract.json
+      - deploy/rating-worker/**
+      - package*.json
+      - .github/workflows/community-monthly.yml
+      - scripts/lib/monthlyFriendship*.mjs
+      - scripts/nodered_monthly_friendship_nodes/**
+      - scripts/compose_monthly_friendship_*.mjs
+      - scripts/tests/helpers/monthlyFriendshipApiHarness.mjs
+      - scripts/tests/monthlyFriendship*.test.mjs
+      - scripts/lib/gameCreateOwnerSource.mjs
+      - scripts/nodered_game_create_owner_nodes/**
+      - scripts/patch_nodered_game_create_owner.mjs
+      - scripts/nodered_game_create_preparation_nodes/**
+      - scripts/nodered_games_nodes/fn_split_create_prepare.js
+      - scripts/nodered_games_nodes/fn_split_router.js
+      - scripts/nodered_subscription_booking_nodes/**
+      - scripts/tests/gameCreateOwner*
+      - scripts/tests/helpers/gameCreateOwnerHarness.mjs
+      - scripts/tests/fixtures/quarter-create-owner-v1.json
+      - scripts/tests/monetarySelfLeaveFence*
+      - scripts/tests/helpers/monetarySelfLeaveFenceHarness.mjs
+      - scripts/patch_nodered_monetary_self_leave_fence.mjs
+      - docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - "src/services/community-rating/**"
-      - "scripts/community_monthly_worker.mjs"
-      - "scripts/community_monthly_reports.mjs"
-      - "scripts/build_rating_worker_release.mjs"
-      - "scripts/nodered_community_monthly_nodes/**"
-      - "scripts/patch_nodered_community_monthly_flow.mjs"
-      - "scripts/tests/communityMonthly*"
-      - "scripts/lib/communityMonthlyFinalization.mjs"
-      - "deploy/rating-worker/**"
-      - "package*.json"
-      - ".github/workflows/community-monthly.yml"
-
+      - src/services/community-rating/**
+      - scripts/community_monthly_worker.mjs
+      - scripts/community_monthly_reports.mjs
+      - scripts/build_rating_worker_release.mjs
+      - scripts/nodered_community_monthly_nodes/**
+      - scripts/patch_nodered_community_monthly_flow.mjs
+      - scripts/tests/communityMonthly*
+      - scripts/nodered_managed_self_leave_nodes/**
+      - scripts/nodered_games_nodes/fn_split_leave_*.js
+      - scripts/lib/managedSelfLeaveOwnerSource.mjs
+      - scripts/patch_nodered_managed_self_leave_owner.mjs
+      - scripts/tests/managedSelfLeaveOwner*
+      - scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs
+      - scripts/tests/fixtures/managed-self-leave-v1-contract.json
+      - scripts/lib/stationMessage*.mjs
+      - scripts/lib/stationNotificationFeed*.mjs
+      - scripts/tests/stationNotificationFeed*
+      - scripts/tests/helpers/stationNotificationHarness.mjs
+      - docs/STATION_NOTIFICATION_FEED_V1.md
+      - scripts/lib/stationStream*.mjs
+      - scripts/tests/stationStream*
+      - scripts/tests/fixtures/station-stream/**
+      - scripts/tests/stationMessage*
+      - scripts/tests/helpers/stationMessageHarness.mjs
+      - scripts/tests/helpers/stationHistoryHarness.mjs
+      - scripts/tests/fixtures/stationMessageHistoryWire.json
+      - docs/STATION_MESSAGE_HISTORY_V2.md
+      - scripts/rating_worker.mjs
+      - src/utils/communityApi.ts
+      - src/components/cabinet/CommunitiesSection.tsx
+      - scripts/lib/stationMembership*.mjs
+      - scripts/lib/communityRosterWrites.mjs
+      - scripts/lib/communityPolicyProjection.mjs
+      - scripts/lib/communityResponseRedaction.mjs
+      - scripts/nodered_station_membership_nodes/**
+      - scripts/patch_nodered_station_membership_owner.mjs
+      - scripts/patch_nodered_communities_flow.mjs
+      - scripts/tests/stationMembership*
+      - scripts/tests/helpers/stationMembershipOwnerHarness.mjs
+      - scripts/lib/communityMonthlyFinalization.mjs
+      - deploy/rating-worker/**
+      - package*.json
+      - .github/workflows/community-monthly.yml
+      - scripts/lib/monthlyFriendship*.mjs
+      - scripts/nodered_monthly_friendship_nodes/**
+      - scripts/compose_monthly_friendship_*.mjs
+      - scripts/tests/helpers/monthlyFriendshipApiHarness.mjs
+      - scripts/tests/monthlyFriendship*.test.mjs
+      - scripts/lib/gameCreateOwnerSource.mjs
+      - scripts/nodered_game_create_owner_nodes/**
+      - scripts/patch_nodered_game_create_owner.mjs
+      - scripts/nodered_game_create_preparation_nodes/**
+      - scripts/nodered_games_nodes/fn_split_create_prepare.js
+      - scripts/nodered_games_nodes/fn_split_router.js
+      - scripts/nodered_subscription_booking_nodes/**
+      - scripts/tests/gameCreateOwner*
+      - scripts/tests/helpers/gameCreateOwnerHarness.mjs
+      - scripts/tests/fixtures/quarter-create-owner-v1.json
+      - scripts/tests/monetarySelfLeaveFence*
+      - scripts/tests/helpers/monetarySelfLeaveFenceHarness.mjs
+      - scripts/patch_nodered_monetary_self_leave_fence.mjs
+      - docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md
 permissions:
   contents: read
-
 concurrency:
   group: community-monthly-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   monthly-mongodb:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     services:
       mongo:
         image: mongo:8.0
-        ports: ["27017:27017"]
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+        ports:
+          - 27017:27017
+        options: --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
           --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       COMMUNITY_MONTHLY_TEST_MONGO_URI: mongodb://127.0.0.1:27017
       TZ: Europe/Moscow
     steps:
       - name: Checkout exact source head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          fetch-depth: 0
       - name: Set up Node.js 22
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
       - name: Install locked dependencies
         run: npm ci --include=optional --no-audit --no-fund
       - name: Test calendar rating, public routes and real Mongo write conflicts
         run: npm run test:community-monthly
+      - name: Test managed SELF owner admission with real Mongo write conflicts
+        run: node --test scripts/tests/managedSelfLeaveOwner.test.mjs
+          scripts/tests/managedSelfLeaveOwnerPatch.test.mjs
+          scripts/tests/managedSelfLeaveOwner.mongo.test.mjs
+      - name: Test station membership lifecycle, receiver and physical Mongo races
+        run: >
+          node --test scripts/tests/stationMembershipLifetime.test.mjs
+          scripts/tests/stationMembershipOwner.test.mjs
+          scripts/tests/stationMembershipOwnerPatch.test.mjs
+          scripts/tests/stationMembershipOwnerMongo.test.mjs
+
+          node --experimental-strip-types --test
+          scripts/tests/communityTypes.test.ts
+      - name: Test station message commit barrier, retry and physical Mongo races
+        run: node --test scripts/tests/stationMessageOwner.test.mjs
+          scripts/tests/stationMessageOwnerPatch.test.mjs
+          scripts/tests/stationMessageOwnerMongo.test.mjs
+          scripts/tests/stationMessageWorker.test.mjs
+          scripts/tests/stationMessageRetry.test.mjs
+      - name: Test station history v2 pagination and physical Mongo reads
+        run: node --test scripts/tests/stationMessageHistory.test.mjs
+          scripts/tests/stationMessageHistoryPatch.test.mjs
+          scripts/tests/stationMessageHistoryMongo.test.mjs
+      - name: Test station stream order, read-through and physical Mongo recovery
+        run: node --test scripts/tests/stationStreamOrder.test.mjs
+          scripts/tests/stationStreamHistoryPatch.test.mjs
+          scripts/tests/stationStreamMongo.test.mjs
+      - name: Test station notification read-only feed and physical Mongo eligibility
+        run: node --test scripts/tests/stationNotificationFeed.test.mjs
+          scripts/tests/stationNotificationFeedAuth.test.mjs
+          scripts/tests/stationNotificationFeedPatch.test.mjs
+          scripts/tests/stationNotificationFeedMongo.test.mjs
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release
+      - name: Test original quarter CREATE custody and physical Mongo races
+        run: node --test scripts/tests/gameCreateOwner.test.mjs
+          scripts/tests/gameCreateOwnerGraph.test.mjs
+          scripts/tests/gameCreateOwner.mongo.test.mjs
+      - name: Test monetary SELF dispatch fencing with real Mongo write conflicts
+        run: node --test scripts/tests/monetarySelfLeaveFence.test.mjs
+          scripts/tests/monetarySelfLeaveFence.mongo.test.mjs
+      - name: Test monthly Friendship custody with required real Mongo conflicts
+        run: node --test scripts/tests/monthlyFriendshipCustody.test.mjs scripts/tests/monthlyFriendshipRuntime.test.mjs scripts/tests/monthlyFriendshipComposition.test.mjs scripts/tests/monthlyFriendshipCustody.mongo.test.mjs scripts/tests/monthlyFriendshipApi.test.mjs scripts/tests/monthlyFriendshipApiComposition.test.mjs scripts/tests/monthlyFriendshipApi.mongo.test.mjs

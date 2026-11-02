@@ -27,6 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { extractSubscriptionPricePreviewSource } from "./lib/subscriptionPricePreviewSources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCTIONS_DIR = path.join(ROOT, "scripts/nodered_booked_operation_receiver_nodes");
@@ -36,10 +37,19 @@ export const TAB_ID = "lk_booked_operation_receiver_tab_20261021";
 export const TAB_LABEL = "LK Booked Operation Receiver";
 export const ROUTES = Object.freeze({
   admission: "/lk/integrations/v1/booked-operation-admissions",
+  preflightV2: "/lk/integrations/v2/booked-operation-preflights",
+  admissionV2: "/lk/integrations/v2/booked-operation-admissions",
+  readPrefixV2: "/lk/integrations/v2/booked-operations/",
   readPrefix: "/lk/integrations/v1/booked-operations/",
 });
 export const NODE_IDS = Object.freeze({
   comment: "lk_booked_operation_comment_20261021",
+  preflightIn: "lk_booked_operation_preflight_in_v2_20261031",
+  preflightVerify: "lk_booked_operation_preflight_verify_v2_20261031",
+  preflightRouter: "lk_booked_operation_preflight_router_v2_20261031",
+  preflightRequest: "lk_booked_operation_preflight_request_v2_20261031",
+  admissionV2In: "lk_booked_operation_admission_in_v2_20261031",
+  readV2In: "lk_booked_operation_read_in_v2_20261031",
   admissionIn: "lk_booked_operation_admission_in_20261021",
   admissionVerify: "lk_booked_operation_admission_verify_20261021",
   readIn: "lk_booked_operation_read_in_20261021",
@@ -58,20 +68,24 @@ export const NODE_IDS = Object.freeze({
 });
 
 const FUNCTION_FILES = Object.freeze({
+  preflight_verify: { file: "fn_booked_operation_preflight_verify.js",
+    preludes: ["_booked_operation_managed_join_v2.js", "_booked_operation_delegation_prelude.js"], outputs: 2 },
+  preflight_router: { file: "fn_booked_operation_preflight_router.js",
+    preludes: ["_booked_operation_managed_join_v2.js"], outputs: 2 },
   admission_verify: {
     file: "fn_booked_operation_admission_verify.js",
-    preludes: ["_booked_operation_delegation_prelude.js"],
+    preludes: ["_booked_operation_managed_join_v2.js", "_booked_operation_delegation_prelude.js"],
     outputs: 2,
   },
   read_verify: {
     file: "fn_booked_operation_read_verify.js",
-    preludes: ["_booked_operation_delegation_prelude.js"],
+    preludes: ["_booked_operation_managed_join_v2.js", "_booked_operation_delegation_prelude.js"],
     outputs: 2,
   },
-  router: { file: "fn_booked_operation_router.js", preludes: [], outputs: 4 },
+  router: { file: "fn_booked_operation_router.js", preludes: ["_booked_operation_managed_join_v2.js"], outputs: 4 },
   executor: {
     file: "fn_booked_operation_executor.js",
-    preludes: ["_booked_operation_viva_contract.js"],
+    preludes: ["_booked_operation_managed_join_v2.js", "_booked_operation_viva_contract.js"],
     outputs: 5,
   },
   response: { file: "fn_booked_operation_response.js", preludes: [], outputs: 1 },
@@ -94,7 +108,16 @@ const VIVA_CONTRACT_SHA256 = crypto
 export const receiverFunctionSource = (name) => {
   const spec = FUNCTION_FILES[name];
   if (!spec) throw new Error(`Unknown receiver function ${name}`);
-  const body = readSource(spec.file);
+  let body = readSource(spec.file);
+  if (name === "preflight_router") {
+    const selector = extractSubscriptionPricePreviewSource({
+      source: fs.readFileSync(path.join(ROOT, "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js"), "utf8"),
+      label: "managed JOIN owner selector",
+      roots: ["resolveManagedEnforcementDecision", "findOwnedSubscriptions", "unwrapRecord", "resolveCategory", "eventStartsAt", "eventDurationMinutes"],
+    });
+    if (selector.names.some(value => /prepare|emit|finish|ctx|msg/.test(value))) throw new Error("Readonly selector closure contains a transport/state emitter");
+    body = `const ownerSelection = (() => {\n${selector.source}\nreturn { resolveManagedEnforcementDecision, findOwnedSubscriptions, unwrapRecord, resolveCategory, eventStartsAt, eventDurationMinutes };\n})();\n${body}`;
+  }
   if (!spec.preludes || spec.preludes.length === 0) return body;
   const prelude = spec.preludes.map((file) => readSource(file)).join("\n");
   return `${prelude}\n${body}`;
@@ -156,6 +179,22 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       y: 900,
       wires: [],
     },
+    ...[
+      [ids.admissionV2In, ROUTES.admissionV2, "post", ids.admissionVerify],
+      [ids.readV2In, `${ROUTES.readPrefixV2}:operationId`, "get", ids.readVerify],
+      [ids.preflightIn, ROUTES.preflightV2, "post", ids.preflightVerify],
+    ].map(([id, url, method, next]) => ({ id, type: "http in", z: tabId, name: url,
+      url, method, upload: false, swaggerDoc: "", x: 200, y: 800, wires: [[next]] })),
+    functionNode(ids.preflightVerify, "Verify managed JOIN preflight", 2,
+      receiverFunctionSource("preflight_verify"), CRYPTO_LIBS, 500, 800,
+      [[ids.preflightRouter], [ids.respond]]),
+    functionNode(ids.preflightRouter, "Read CUP managed JOIN preflight", 2,
+      receiverFunctionSource("preflight_router"), [], 820, 800,
+      [[ids.preflightRequest], [ids.respond]]),
+    { id: ids.preflightRequest, type: "http request", z: tabId, name: "Read-only owner selection and CUP preflight",
+      method: "use", ret: "obj", paytoqs: "ignore", url: "", requestTimeout: "10000",
+      senderr: true, persist: false, authType: "", insecureHTTPParser: false,
+      x: 1120, y: 800, wires: [[ids.preflightRouter]] },
     {
       id: ids.admissionIn,
       type: "http in",
@@ -243,7 +282,7 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       "Route booked-operation receipt",
       4,
       receiverFunctionSource("router"),
-      [],
+      CRYPTO_LIBS,
       1120,
       1000,
       [[ids.mongoUpsert], [ids.respond], [ids.mongoFind], [ids.executor]],
@@ -313,6 +352,8 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
       z: tabId,
       name: "Catch booked-operation faults",
       scope: [
+        ids.preflightVerify,
+        ids.preflightRouter,
         ids.admissionVerify,
         ids.readVerify,
         ids.router,
@@ -342,6 +383,7 @@ export function buildReceiverNodes({ tabId = TAB_ID, mongoClientNodeId } = {}) {
 
 const assertHttpRouteDoesNotOverlap = (flow) => {
   const reservedLiteral = [
+    ROUTES.preflightV2.toLowerCase(), ROUTES.admissionV2.toLowerCase(), ROUTES.readPrefixV2.toLowerCase(),
     ROUTES.admission.toLowerCase(),
     ROUTES.readPrefix.toLowerCase(),
   ];
@@ -421,8 +463,8 @@ export function buildReceiverCandidate(sourceFlow) {
   }
   const addedTyped = additions.filter((node) => node.type !== "comment");
   const addedHttpRoutes = additions.filter((node) => node.type === "http in");
-  if (addedHttpRoutes.length !== 2) {
-    throw new Error(`Expected two added HTTP routes, found ${addedHttpRoutes.length}`);
+  if (addedHttpRoutes.length !== 5) {
+    throw new Error(`Expected five added HTTP routes, found ${addedHttpRoutes.length}`);
   }
   const forbidden = additions.filter((node) => (
     ["exec", "mongodb4-client"].includes(node.type)
@@ -432,7 +474,7 @@ export function buildReceiverCandidate(sourceFlow) {
   }
   // Exactly one provider request node is allowed, and only the executor may emit
   // into it: the adapter's activation/binding gates are the single provider path.
-  const providerRequests = additions.filter((node) => node.type === "http request");
+  const providerRequests = additions.filter((node) => node.type === "http request" && node.id !== NODE_IDS.preflightRequest);
   if (providerRequests.length !== 1) {
     throw new Error(`Expected one provider request node, found ${providerRequests.length}`);
   }
@@ -448,6 +490,13 @@ export function buildReceiverCandidate(sourceFlow) {
   if (providerWiredFrom.length !== 1 || providerWiredFrom[0].id !== NODE_IDS.executor) {
     throw new Error("Provider request node must only be driven by the executor");
   }
+  const readRequest = additions.find(node => node.id === NODE_IDS.preflightRequest);
+  const readWriters = additions.filter(node => node.wires?.some(row => row.includes(NODE_IDS.preflightRequest)));
+  if (!readRequest || readRequest.method !== "use" || readRequest.senderr !== true
+    || !isDeepStrictEqual(readRequest.wires, [[NODE_IDS.preflightRouter]])
+    || readWriters.length !== 1 || readWriters[0].id !== NODE_IDS.preflightRouter) {
+    throw new Error("Readonly preflight HTTP node must be isolated from write paths");
+  }
   const executorSource = receiverFunctionSource("executor");
   if (
     !/BOOKED_OPERATION_EXECUTION_ENABLED/.test(executorSource)
@@ -460,7 +509,7 @@ export function buildReceiverCandidate(sourceFlow) {
   // executor may construct an Authorization header. The response guard is allowed
   // to scrub such headers defensively.
   const providerReferences = additions.filter((node) => (
-    node.id !== NODE_IDS.executor
+    node.id !== NODE_IDS.executor && node.id !== NODE_IDS.preflightRouter
     && /vivacrm|api\.viva|Authorization:\s*`Bearer/.test(String(node.func || ""))
   ));
   if (providerReferences.length > 0) {

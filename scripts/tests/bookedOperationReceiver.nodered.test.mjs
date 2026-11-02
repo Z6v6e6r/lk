@@ -146,6 +146,7 @@ const readClaims = (overrides = {}) => ({
 });
 const admissionMessage = (token, body = admissionBody(), headers = {}) => ({
   req: {
+    url: "/lk/integrations/v1/booked-operation-admissions",
     method: "POST",
     headers: {
       "content-type": "application/json; charset=utf-8",
@@ -159,6 +160,7 @@ const admissionMessage = (token, body = admissionBody(), headers = {}) => ({
 });
 const readMessage = (token, pathOperationId = operationId, headers = {}) => ({
   req: {
+    url: `/lk/integrations/v1/booked-operations/${operationId}`,
     method: "GET",
     params: { operationId: pathOperationId },
     headers: {
@@ -615,7 +617,7 @@ test("candidate adds one isolated receiver tab and a gated execution adapter", (
   assert.equal(report.invariants.addedProviderWriteNodeCount, 1);
   assert.equal(report.invariants.addedExecutorNodeCount, 1);
   assert.equal(report.invariants.brokenWireCount, 0);
-  assert.equal(report.invariants.addedHttpInRouteCount, 2);
+  assert.equal(report.invariants.addedHttpInRouteCount, 5);
   assert.equal(
     report.addedNodeIds.includes(NODE_IDS.admissionVerify),
     true,
@@ -629,12 +631,13 @@ test("candidate adds one isolated receiver tab and a gated execution adapter", (
     assert.match(node.func, /nodeCrypto\.verify/);
     assert.match(node.func, /bookedOperationVerifyDelegation/);
   }
-  const providerRequests = added.filter((node) => node.type === "http request");
+  const providerRequests = added.filter((node) => node.type === "http request" && node.id !== NODE_IDS.preflightRequest);
   assert.equal(providerRequests.length, 1);
   assert.equal(providerRequests[0].method, "use");
   assert.equal(providerRequests[0].senderr, true);
   assert.deepEqual(providerRequests[0].wires, [[NODE_IDS.executor]]);
   for (const node of added.filter((item) => item.type === "function")) {
+    if (node.id === NODE_IDS.preflightRouter) continue;
     if (node.id === NODE_IDS.executor) {
       assert.match(node.func, /BOOKED_OPERATION_EXECUTION_ENABLED/);
       assert.match(node.func, /\/lk\/subscription-bookings/);
@@ -646,4 +649,17 @@ test("candidate adds one isolated receiver tab and a gated execution adapter", (
   const routerNode = added.find((node) => node.id === NODE_IDS.router);
   assert.equal(routerNode.outputs, 4);
   assert.deepEqual(routerNode.wires[3], [NODE_IDS.executor]);
+});
+
+test("v1 signed requests cannot cross into v2 admission or read routes", () => {
+  const admission = admissionMessage(sign(admissionClaims(admissionBody())));
+  admission.req.url = "/lk/integrations/v2/booked-operation-admissions";
+  const rejectedAdmission = runFunction("admission_verify", admission);
+  assert.equal(rejectedAdmission[0], null);
+  assert.equal(rejectedAdmission[1].payload.code, "BOOKED_OPERATION_DELEGATION_SCOPE_INVALID");
+  const read = readMessage(sign(readClaims()));
+  read.req.url = `/lk/integrations/v2/booked-operations/${operationId}`;
+  const rejectedRead = runFunction("read_verify", read);
+  assert.equal(rejectedRead[0], null);
+  assert.equal(rejectedRead[1].payload.code, "BOOKED_OPERATION_DELEGATION_SCOPE_INVALID");
 });

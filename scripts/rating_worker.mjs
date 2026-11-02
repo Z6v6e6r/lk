@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { recoverStationMessageOutbox } from './lib/stationMessageOwner.mjs';
 import { processCommunityPolicies } from './lib/communityPolicyProjection.mjs';
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1241,6 +1242,7 @@ async function runWorker() {
       dryRun,
     });
     const communityPolicies = await processCommunityPolicies(db, { sinceIso: mode === 'full' ? notBeforeIso : overlapStart, nowIso: startedAt, dryRun });
+    const stationMessages = await recoverStationMessageOutbox(db, { dryRun, maxCommunities: 50, maxMessages: 100, deadlineMs: 10000 });
     const timeForFriendsEnrollment = await processTimeForFriendsAutoEnrollments(db, {
       sinceIso: mode === "full" ? notBeforeIso : overlapStart,
       nowIso: startedAt,
@@ -1278,6 +1280,7 @@ async function runWorker() {
       ledger,
       timeForFriendsEnrollment,
       communityPolicies,
+      stationMessages,
       eventProjection,
       compatibilityReconciliation,
       community,
@@ -1286,7 +1289,7 @@ async function runWorker() {
     if (!dryRun) {
       await db.collection(PLAYER_RATING_COLLECTIONS.jobRuns).updateOne(
         { runId },
-        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, communityPolicies, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
+        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, communityPolicies, stationMessages, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
       );
       await releaseLease(db, jobKey, owner, {
         jobKey,

@@ -113,6 +113,16 @@ const respond = (statusCode, state, message, ctx) => {
   return [null, msg, null];
 };
 
+// Internal graph-only capability; public request bodies cannot set message context.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "authorize") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "start";
+  return [null, null, null, null, null, msg];
+}
 const ctx = isObj(msg._splitLeaveCtx) ? msg._splitLeaveCtx : null;
 if (!ctx || ctx.step !== "authorize_leave") {
   return respond(500, "CONFLICT", "Контекст удаления участника отсутствует", ctx);
@@ -142,13 +152,21 @@ const actorIsOrganizer = matchesActor(game.organizer, actorId, actorPhone)
   || matchesActor({ id: metadata.organizerId, phone: metadata.organizerPhoneNorm || metadata.organizerPhone }, actorId, actorPhone);
 const actorParticipants = asArray(game.participants).filter((item) => matchesActor(item, actorId, actorPhone));
 const actorWaitlist = asArray(game.waitlist).filter((item) => matchesActor(item, actorId, actorPhone));
+const boundOwner = ctx.managedSelfLeaveOwner;
+const exactManagedOwner = isObj(boundOwner) && msg._managedSelfLeave?.step === "canonical"
+  && isObj(msg._managedSelfLeave?.canonicalIngress?.binding)
+  && Object.keys(boundOwner).sort().join(",") === Object.keys(msg._managedSelfLeave.canonicalIngress.binding).sort().join(",")
+  && Object.keys(boundOwner).every(key => boundOwner[key] === msg._managedSelfLeave.canonicalIngress.binding[key])
+  && boundOwner.providerClientId === ctx.actorClientId && boundOwner.legacyGameId === game.id
+  && ctx.mode === "SELF" && ctx.requestedRefundMethod === "SERVICE";
+if (boundOwner && !exactManagedOwner) return respond(403, "CONFLICT", "Исходная запись не подтверждена", ctx);
 const actorKnown = actorIsOrganizer || actorParticipants.length > 0 || actorWaitlist.length > 0 || actorPayments.length > 0;
 const actorHasLeaveMarker = asArray(metadata.leaveEvents).some((event) => (
   event?.actor === "self" && normalizeId(event.playerId) === actorId
   && toStr(event.operationId)?.startsWith(`self-leave:${ctx.gameId}:${ctx.actorClientId}:`)
 ));
 // A marker permits only a durable receipt lookup, never a local/provider write.
-if (!actorKnown && !actorHasLeaveMarker) return respond(403, "CONFLICT", "Профиль не связан с этой игрой", ctx);
+if (!actorKnown && !actorHasLeaveMarker && !exactManagedOwner) return respond(403, "CONFLICT", "Профиль не связан с этой игрой", ctx);
 
 if (mode === "ORGANIZER_TARGET" && !actorIsOrganizer) {
   return respond(403, "CONFLICT", "Удалить другого игрока может только организатор", ctx);
@@ -276,6 +294,19 @@ if (mode === "ORGANIZER_TARGET") {
   }
 }
 
+if (exactManagedOwner) {
+  const original = msg._managedSelfLeave.leave;
+  const recoveringReturn = ctx.managedOwnerRecoveryOnly === true
+    && original && ["VIVA_CONFIRMED", "LK_APPLIED", "DONE", "RETURN_PENDING"].includes(original.state);
+  if ((!recoveringReturn && canonicalMembershipVersion && canonicalMembershipVersion !== boundOwner.membershipVersion)
+    || verifiedQueue.some(item => item.bookingId !== boundOwner.providerBookingId)) {
+    return respond(409, "CONFLICT", "Поколение исходной записи изменилось", ctx);
+  }
+  ctx.membershipVersion = boundOwner.membershipVersion;
+  ctx.operationId = boundOwner.ownerLeaveOperationId;
+  ctx.operationKey = boundOwner.ownerLeaveOperationKey;
+  verifiedQueue = [{ bookingId: boundOwner.providerBookingId, clientId: ctx.actorClientId }];
+}
 const leaveOperations = asArray(metadata.leaveOperations).filter(isObj);
 const auditRows = asArray(metadata.selfRemovalAuditLog).filter(isObj);
 const operationApplied = leaveOperations.some((item) => toStr(item.operationId) === toStr(ctx.operationId) && item.state === "DONE")
@@ -297,6 +328,9 @@ const exerciseId = toStr(
   || metadata.vivaExerciseId
   || metadata.exerciseId,
 );
+if (exactManagedOwner && exerciseId !== boundOwner.providerExerciseId) {
+  return respond(409, "CONFLICT", "Игра не соответствует исходной записи", ctx);
+}
 if (!previouslyApplied && (
   !exerciseId
   || !targetId
@@ -346,6 +380,20 @@ msg._splitLeaveCtx = ctx;
 delete msg.statusCode;
 delete msg._splitCleanupAuth;
 msg.payload = undefined;
+if (exactManagedOwner) {
+  ctx.initialBookingIds = [boundOwner.providerBookingId];
+  ctx.bookingQueue = [{ bookingId: boundOwner.providerBookingId, clientId: ctx.actorClientId }];
+  ctx.clientSubscriptionId = boundOwner.providerClientSubscriptionId;
+  ctx.needsBookingDiscovery = false; ctx.preOperationDiscovery = false;
+  ctx.localAlreadyApplied = false;
+  if (ctx.managedOwnerRecoveryOnly === true) {
+    // Recovery never creates a replacement generation, including absent-row retries.
+    msg.payload = { _id: boundOwner.ownerLeaveOperationKey };
+    return [null, null, null, null, msg];
+  }
+  ctx.step = "start_verify_active";
+  return [msg, null, null, null, null];
+}
 if (!targetActive && actorHasLeaveMarker && !canonicalMembershipVersion && !targetJoinResponse) {
   ctx.step = "find_absent_self_leave";
   msg.payload = {

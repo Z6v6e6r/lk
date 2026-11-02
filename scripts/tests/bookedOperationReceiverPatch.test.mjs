@@ -81,7 +81,7 @@ test("adds one isolated booked-operation receiver tab without touching the preim
   assert.equal(report.providerRequestNodeCount, 1);
   assert.equal(report.invariants.sourceNodeCount, source.length);
   assert.equal(report.invariants.brokenWireCount, 0);
-  assert.equal(report.invariants.addedHttpInRouteCount, 2);
+  assert.equal(report.invariants.addedHttpInRouteCount, 5);
   assert.equal(report.invariants.addedProviderWriteNodeCount, 1);
   for (let index = 0; index < source.length; index += 1) {
     assert.deepEqual(candidate[index], source[index], `source node ${source[index].id} changed`);
@@ -93,7 +93,7 @@ test("adds one isolated booked-operation receiver tab without touching the preim
   const routes = added.filter((node) => node.type === "http in");
   assert.deepEqual(
     routes.map((node) => `${node.method}:${node.url}`).sort(),
-    ["get:/lk/integrations/v1/booked-operations/:operationId", "post:/lk/integrations/v1/booked-operation-admissions"].sort(),
+    ["get:/lk/integrations/v1/booked-operations/:operationId", "post:/lk/integrations/v1/booked-operation-admissions", "post:/lk/integrations/v2/booked-operation-preflights", "post:/lk/integrations/v2/booked-operation-admissions", "get:/lk/integrations/v2/booked-operations/:operationId"].sort(),
   );
   const mongoNodes = added.filter((node) => node.type === "mongodb4");
   assert.equal(mongoNodes.length, 4);
@@ -101,7 +101,7 @@ test("adds one isolated booked-operation receiver tab without touching the preim
     assert.equal(node.collection, COLLECTION);
     assert.equal(node.clientNode, "mongo-client");
   }
-  const providerRequests = added.filter((node) => node.type === "http request");
+  const providerRequests = added.filter((node) => node.type === "http request" && node.id !== NODE_IDS.preflightRequest);
   assert.equal(providerRequests.length, 1);
   assert.equal(providerRequests[0].method, "use");
   assert.equal(providerRequests[0].senderr, true);

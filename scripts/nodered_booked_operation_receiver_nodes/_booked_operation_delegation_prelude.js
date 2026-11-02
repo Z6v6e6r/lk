@@ -177,7 +177,7 @@ const bookedOperationReadConfig = (env) => {
   };
 };
 const bookedOperationBindingSha256 = (claims) => bookedOperationSha256(
-  BOOKED_OP_BINDING_PREFIX + JSON.stringify([
+  (claims.contract_version === 2 ? "booked-operation-delegation:v2\0" : BOOKED_OP_BINDING_PREFIX) + JSON.stringify([
     claims.iss,
     claims.aud,
     claims.sub,
@@ -268,10 +268,10 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   if (!claims) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
-  const requiredClaims = (mode === "admit" ? BOOKED_OP_ADMIT_CLAIMS : BOOKED_OP_READ_CLAIMS)
+  const requiredClaims = (mode !== "read" ? BOOKED_OP_ADMIT_CLAIMS : BOOKED_OP_READ_CLAIMS)
     .slice()
     .sort();
-  const optionalClaims = mode === "admit" ? BOOKED_OP_ADMIT_OPTIONAL_CLAIMS : ["receipt_version"];
+  const optionalClaims = mode !== "read" ? [...BOOKED_OP_ADMIT_OPTIONAL_CLAIMS, ...(mode === "admit" && claims.contract_version === 2 ? ["recovery_only"] : [])] : ["receipt_version"];
   const actualClaims = Object.keys(claims).sort();
   if (
     requiredClaims.some((key) => !Object.hasOwn(claims, key))
@@ -280,7 +280,7 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
   if (
-    mode === "admit"
+    mode !== "read"
     && (
       (claims.actor_token_sha256 !== undefined
         && !BOOKED_OP_SHA256.test(bookedOperationToText(claims.actor_token_sha256) || ""))
@@ -295,8 +295,9 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   ) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
-  if ((claims.reservation_id !== undefined && !bookedOperationIsLowerUuid(claims.reservation_id))
-    || (claims.receipt_version !== undefined && (mode !== "read" || claims.receipt_version !== 1))) {
+  if ((claims.recovery_only !== undefined && claims.recovery_only !== true)
+    || (claims.reservation_id !== undefined && !bookedOperationIsLowerUuid(claims.reservation_id))
+    || (claims.receipt_version !== undefined && (mode !== "read" || claims.receipt_version !== claims.contract_version))) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
   const now = Math.floor(Date.now() / 1000);
@@ -318,7 +319,7 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
   if (
-    claims.contract_version !== 1
+    ![1, 2].includes(claims.contract_version)
     || claims.provider !== "VIVA"
     || !bookedOperationToText(claims.tenant_key)
     || !BOOKED_OP_ID.test(bookedOperationToText(claims.tenant_key) || "")
@@ -331,16 +332,25 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   ) {
     return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
   }
-  const expectedScope = mode === "admit" ? BOOKED_OP_ADMIT_SCOPE : BOOKED_OP_READ_SCOPE;
-  const expectedMethod = mode === "admit" ? "POST" : "GET";
-  const expectedPath = mode === "admit"
-    ? BOOKED_OP_ADMIT_PATH
-    : BOOKED_OP_READ_PREFIX + claims.operation_id;
+  const v2 = claims.contract_version === 2;
+  if ((mode === "preflight" && !v2) || (v2 && (mode === "read"
+    ? claims.receipt_version !== 2
+    : (!claims.actor_token_sha256 || !claims.actor_token_expires_at || !claims.provider_client_subscription_id
+      || (mode === "admit" ? !claims.reservation_id : claims.reservation_id !== undefined))))) {
+    return bookedOperationInvalid(401, "BOOKED_OPERATION_DELEGATION_INVALID");
+  }
+  const expectedScope = mode === "preflight" ? "subscription-runtime.booked-operation.preflight"
+    : mode === "admit" ? BOOKED_OP_ADMIT_SCOPE : BOOKED_OP_READ_SCOPE;
+  const expectedMethod = mode === "read" ? "GET" : "POST";
+  const expectedPath = mode === "preflight" ? "/lk/integrations/v2/booked-operation-preflights"
+    : mode === "admit" ? (v2 ? "/lk/integrations/v2/booked-operation-admissions" : BOOKED_OP_ADMIT_PATH)
+      : (v2 ? "/lk/integrations/v2/booked-operations/" : BOOKED_OP_READ_PREFIX) + claims.operation_id;
   if (
     claims.caller !== "lk2-api"
     || claims.scope !== expectedScope
     || claims.method !== expectedMethod
     || claims.path !== expectedPath
+    || (String(msg.req.originalUrl || msg.req.url || "").split("?")[0] !== expectedPath)
     || String(msg.req.method || "").toUpperCase() !== expectedMethod
   ) {
     return bookedOperationInvalid(403, "BOOKED_OPERATION_DELEGATION_SCOPE_INVALID");
@@ -354,7 +364,7 @@ const bookedOperationVerifyDelegation = (msg, env, mode) => {
   // without that claim is never used, and a header token must never be swapped
   // across delegations.
   let actorToken = null;
-  if (mode === "admit" && claims.actor_token_sha256 !== undefined) {
+  if (mode !== "read" && claims.actor_token_sha256 !== undefined) {
     const headerToken = bookedOperationHeader(msg, BOOKED_OP_ACTOR_TOKEN_HEADER);
     if (!headerToken) {
       return bookedOperationInvalid(403, "BOOKED_OPERATION_ACTOR_TOKEN_REQUIRED");

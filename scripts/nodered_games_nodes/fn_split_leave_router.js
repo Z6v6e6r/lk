@@ -1,3 +1,13 @@
+// Internal graph-only capability; public request bodies cannot set message context.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "router") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "complete";
+  return [null, null, null, null, null, null, msg];
+}
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const END_USER_V1 = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const END_USER_V2 = "https://api.vivacrm.ru/end-user/api/v2/iSkq6G";
@@ -88,6 +98,11 @@ const assignMembershipVersion = (ctx, parts) => {
   return true;
 };
 const upstream = (ctx, method, url, payload, authHeader = ctx.upstreamAuthHeader) => {
+  if (ctx.managedSelfLeaveOwner) { ctx.managedOwnerExpectedUrl = url; ctx.managedOwnerExpectedStep = ctx.step; }
+  if (ctx.monetarySelfLeave) {
+    ctx.monetaryExpectedUrl = url; ctx.monetaryExpectedStep = ctx.step;
+    msg.followRedirects = false; msg.requestTimeout = 10000;
+  }
   msg._splitLeaveCtx = ctx;
   msg.method = method;
   msg.url = url;
@@ -148,7 +163,7 @@ const fail = (ctx, statusCode, state, message) => {
   };
   if (retryScheduled) msg.statusCode = 202;
   delete msg._splitLeaveCtx;
-  return [null, msg, msg, null, null];
+  return [null, msg, (msg._managedSelfLeave || ctx?.monetarySelfLeave) ? null : msg, null, null];
 };
 const toLocalApply = (ctx) => {
   ctx.step = "local_apply";
@@ -221,16 +236,96 @@ const cancelUrl = (ctx, bookingId, clientId) => (
     ? `${END_USER_V1}/bookings/${encodeURIComponent(bookingId)}`
     : `${ADMIN_API}/clients/${encodeURIComponent(clientId)}/bookings/${encodeURIComponent(bookingId)}/cancel`
 );
+// Monetary history is deliberately stricter than the legacy SERVICE projection.
+const moneyPending = ctx => fail(ctx, 202, "RETRY_REQUIRED", "Проверяем исходную отмену; возврат средств не подтверждён");
+const moneyCas = (ctx, action) => {
+  ctx.monetaryAction = action;
+  msg._splitLeaveCtx = ctx;
+  delete msg.method; delete msg.url; delete msg.headers; delete msg.statusCode; delete msg.error;
+  msg.payload = undefined;
+  return [null, null, null, null, null, null, null, msg];
+};
+const moneySameIds = (values, expected) => {
+  const supplied = values.filter(v => v !== undefined && v !== null);
+  return supplied.length > 0 && supplied.every(v => typeof v === "string" && v === expected);
+};
+const moneyExactRow = (row, id, o) => isObj(row)
+  && moneySameIds([row.id, row.bookingId, row.uuid], id)
+  && moneySameIds([row.client?.id, row.clientId, row.playerId, row.userId], o.actorClientId)
+  && moneySameIds([row.exercise?.id, row.exercise?.uuid, row.exerciseId, row.vivaExerciseId, row.timetable?.exerciseId], o.exerciseId);
+const moneyCompletePage = payload => {
+  if (!completeBookingPage(payload, 1000)) return false;
+  const page = isObj(payload?.data) ? payload.data : payload;
+  if (isObj(payload?.data) && (Array.isArray(payload.content) || Array.isArray(payload.items))) return false;
+  if (!Array.isArray(page) && [page.content, page.items, page.data].filter(Array.isArray).length !== 1) return false;
+  const count = responseRows(payload).length;
+  return [payload, page].every(value => Array.isArray(value) || (
+    [value.number, value.page].every(x => x === undefined || x === 0)
+    && [value.totalElements, value.total].every(x => x === undefined || (Number.isSafeInteger(x) && x === count))
+    && (value.totalPages === undefined || value.totalPages === 1 || (value.totalPages === 0 && count === 0))
+    && (value.last === undefined || value.last === true)
+    && (value.hasNext === undefined || value.hasNext === false)
+    && [value.next, value.nextPage].every(x => x === undefined || x === null)
+  ));
+};
+const moneyPageRows = (rows, actor) => {
+  const aliases = values => { const v = values.filter(x => x !== undefined && x !== null);
+    return v.length > 0 && v.every(x => typeof x === "string" && x.trim() && x === v[0]); };
+  return new Set(rows.map(rowBookingId)).size === rows.length && rows.every(row =>
+    aliases([row.id, row.bookingId, row.uuid])
+    && moneySameIds([row.client?.id, row.clientId, row.playerId, row.userId], actor)
+    && aliases([row.exercise?.id, row.exercise?.uuid, row.exerciseId, row.vivaExerciseId, row.timetable?.exerciseId]));
+};
+const moneyCancelled = row => {
+  const flags = [row.isCancelled, row.cancelled, row.canceled].filter(v => v !== undefined && v !== null);
+  const states = [row.bookingStatus, row.status, row.state].filter(v => v !== undefined && v !== null);
+  const times = [row.cancellationDate, row.cancelledAt, row.canceledAt].filter(v => v !== undefined && v !== null);
+  // Existing explicit boolean fields only; a substring or date alone never proves cancellation.
+  return flags.length > 0 && flags.every(v => v === true)
+    && states.every(v => v === "CANCELLED" || v === "CANCELED")
+    && times.every(v => typeof v === "string" && Number.isFinite(Date.parse(v)) && Date.parse(v) <= Date.now());
+};
+const startMoneyVerification = ctx => {
+  ctx.step = "monetary_verify_active";
+  return upstream(ctx, "GET", `${END_USER_V2}/bookings?size=1000`, undefined, ctx.actorAuthHeader);
+};
 const issueCurrentCancellation = (ctx) => {
   const bookingId = toStr(ctx.currentBookingId);
   const clientId = toStr(ctx.currentClientId);
   const refundMethod = toStr(ctx.currentRefundMethod);
+  if (ctx.managedSelfLeaveOwner && (ctx.mode !== "SELF" || ctx.backgroundStartedRecovery === true
+    || bookingId !== ctx.managedSelfLeaveOwner.providerBookingId || clientId !== ctx.managedSelfLeaveOwner.providerClientId
+    || refundMethod !== "SERVICE" || !Number.isFinite(Date.parse(ctx.managedOwnerActorExpiresAt))
+    || Date.parse(ctx.managedOwnerActorExpiresAt) <= Date.now()
+    || !Number.isSafeInteger(ctx.managedOwnerDelegationExpiresAt) || ctx.managedOwnerDelegationExpiresAt <= Date.now())) {
+    return fail(ctx, 202, "RETRY_REQUIRED", "Исходное посещение не подтверждено");
+  }
+  if (ctx.mode === "SELF" && (["CURRENCY", "DEPOSIT"].includes(refundMethod)
+    || (ctx.monetarySelfLeave && refundMethod === "SERVICE"))) {
+    if (!ctx.monetarySelfLeave || ctx.managedSelfLeaveOwner || ctx.backgroundRetry || ctx.backgroundStartedRecovery
+      || ctx.actorClientId !== ctx.targetClientId || !/^Bearer \S+$/.test(ctx.actorAuthHeader || "")) return moneyPending(ctx);
+    const permit = ctx.monetaryDispatchPermit;
+    delete ctx.monetaryDispatchPermit;
+    if (!permit) {
+      if (ctx.operationState === "STARTED" && !ctx.monetaryInitialVerified) {
+        ctx.step = "monetary_initial_active";
+        return upstream(ctx, "GET", `${END_USER_V2}/bookings?size=1000`, undefined, ctx.actorAuthHeader);
+      }
+      return moneyCas(ctx, { kind: "dispatch", bookingId, refundMethod });
+    }
+    if (permit.bookingId !== bookingId || permit.refundMethod !== refundMethod
+      || ctx.operationState !== "MONETARY_DISPATCH_STARTED"
+      || !Number.isFinite(Date.parse(ctx.monetaryLeaseUntil)) || Date.parse(ctx.monetaryLeaseUntil) <= Date.now()
+      || !ctx.monetarySelfLeave.markers.some(m => m.bookingId === bookingId && m.claimToken === ctx.claimToken
+        && m.refundMethod === refundMethod)) return moneyPending(ctx);
+  }
   ctx.step = "cancel_booking";
   const payload = usesEndUser(ctx)
     ? ((refundMethod === "SERVICE" || refundMethod === "NONE") ? {} : { refundMethod })
     : { refundMethod, cancelExercise: false };
   appendTrace(ctx, { step: "cancel_request", bookingId, refundMethod });
-  return upstream(ctx, usesEndUser(ctx) ? "DELETE" : "PUT", cancelUrl(ctx, bookingId, clientId), payload);
+  return upstream(ctx, usesEndUser(ctx) ? "DELETE" : "PUT", cancelUrl(ctx, bookingId, clientId), payload,
+    ctx.monetarySelfLeave && ["CURRENCY", "DEPOSIT", "SERVICE"].includes(refundMethod) ? ctx.actorAuthHeader : ctx.upstreamAuthHeader);
 };
 const captureSubscriptionBefore = (ctx, row, expectedReturnCount) => {
   const clientSubscriptionId = row ? subscriptionInstanceId(row) : null;
@@ -285,7 +380,77 @@ const ctx = isObj(msg._splitLeaveCtx) ? msg._splitLeaveCtx : null;
 if (!ctx) {
   msg.statusCode = 500;
   msg.payload = { ok: false, state: "CONFLICT", message: "split leave context missing" };
-  return [null, msg, msg, null, null];
+  return [null, msg, (msg._managedSelfLeave || ctx?.monetarySelfLeave) ? null : msg, null, null];
+}
+if (ctx.monetarySelfLeave && ctx.monetaryExpectedStep === ctx.step) {
+  if (msg.error || msg.responseUrl !== ctx.monetaryExpectedUrl) return moneyPending(ctx);
+  delete ctx.monetaryExpectedUrl; delete ctx.monetaryExpectedStep;
+}
+if (ctx.step === "monetary_initial_active") {
+  const o = ctx.monetarySelfLeave?.original, rows = responseRows(msg.payload);
+  if (!o || !isOk(msg.statusCode) || !moneyCompletePage(msg.payload)
+    || !moneyPageRows(rows, o.actorClientId)
+    || rows.some(row => rowExerciseId(row) === normalizeId(o.exerciseId)
+      && !o.bookingIds.some(id => rowBookingId(row) === normalizeId(id)) && !moneyCancelled(row))
+    || rows.filter(row => o.bookingIds.some(id => rowBookingId(row) === normalizeId(id))).some(row =>
+      !moneyExactRow(row, o.bookingIds.find(id => rowBookingId(row) === normalizeId(id)), o))
+    || !rows.some(row => moneyExactRow(row, ctx.currentBookingId, o) && !moneyCancelled(row))) return moneyPending(ctx);
+  ctx.monetaryInitialVerified = true;
+  return issueCurrentCancellation(ctx);
+}
+if (ctx.step === "monetary_dispatch_ack") return issueCurrentCancellation(ctx);
+if (ctx.step === "start_monetary_verify") return startMoneyVerification(ctx);
+if (ctx.step === "monetary_verify_active" || ctx.step === "monetary_verify_history") {
+  const o = ctx.monetarySelfLeave?.original;
+  if (!o || !isOk(msg.statusCode) || !moneyCompletePage(msg.payload)) return moneyPending(ctx);
+  const rows = responseRows(msg.payload);
+  // Ambiguous aliases/duplicates and new bookings of the same exercise cannot be adopted.
+  const ids = rows.map(rowBookingId);
+  if (ids.some(id => !id) || !moneyPageRows(rows, o.actorClientId)) return moneyPending(ctx);
+  const originalRows = rows.filter(row => o.bookingIds.some(id => rowBookingId(row) === normalizeId(id)));
+  if (originalRows.some(row => !moneyExactRow(row, o.bookingIds.find(id => rowBookingId(row) === normalizeId(id)), o))) return moneyPending(ctx);
+  if (ctx.step === "monetary_verify_active") {
+    if (rows.some(row => rowExerciseId(row) === normalizeId(o.exerciseId)
+      && !o.bookingIds.some(id => rowBookingId(row) === normalizeId(id)) && !moneyCancelled(row))) return moneyPending(ctx);
+    ctx.monetaryActiveIds = originalRows.filter(row => !moneyCancelled(row)).map(row => o.bookingIds.find(id => rowBookingId(row) === normalizeId(id)));
+    ctx.step = "monetary_verify_history";
+    return upstream(ctx, "GET", `${END_USER_V2}/bookings/history?includeCanceled=true&size=1000`, undefined, ctx.actorAuthHeader);
+  }
+  const active = ctx.monetaryActiveIds;
+  if (!Array.isArray(active)) return moneyPending(ctx);
+  const cancelled = o.bookingIds.filter(id => !active.includes(id));
+  if (cancelled.some(id => !originalRows.some(row => moneyExactRow(row, id, o) && moneyCancelled(row)))
+    || ctx.monetarySelfLeave.markers.some(m => !cancelled.includes(m.bookingId))) return moneyPending(ctx);
+  ctx.monetaryRemaining = active.filter(id => !ctx.monetarySelfLeave.markers.some(m => m.bookingId === id));
+  ctx.monetaryVerifiedAt = new Date().toISOString();
+  ctx.monetaryHistory = { content: cancelled.map(id => ({ id, clientId: o.actorClientId,
+    exerciseId: o.exerciseId, cancelled: true })) };
+  return moneyCas(ctx, { kind: "readback", cancelledBookingIds: cancelled });
+}
+if (ctx.step === "monetary_readback_ack") {
+  if (!Array.isArray(ctx.monetaryRemaining)) return moneyPending(ctx);
+  if (ctx.monetaryRemaining.length) {
+    delete ctx.monetaryHistory;
+    ctx.bookingQueue = ctx.monetaryRemaining.map(bookingId => ({ bookingId, clientId: ctx.actorClientId }));
+    return startNextBooking(ctx);
+  }
+  // Existing SERVICE verification and local apply remain after the stronger money proof.
+  ctx.step = "verify_history"; ctx.preCancelVerification = false;
+  ctx.vivaVerifiedAt = ctx.monetaryVerifiedAt;
+  msg.payload = ctx.monetaryHistory; msg.statusCode = 200;
+  delete ctx.monetaryHistory;
+}
+if (ctx.managedSelfLeaveOwner && (ctx.requestedRefundMethod !== "SERVICE"
+  || ctx.mode !== "SELF" || ctx.actorClientId !== ctx.managedSelfLeaveOwner.providerClientId
+  || ctx.targetClientId !== ctx.managedSelfLeaveOwner.providerClientId
+  || ctx.exerciseId !== ctx.managedSelfLeaveOwner.providerExerciseId
+  || ctx.membershipVersion !== ctx.managedSelfLeaveOwner.membershipVersion
+  || (ctx.managedOwnerExpectedStep === ctx.step && ctx.managedOwnerExpectedUrl
+    && (msg.error || msg.responseUrl !== ctx.managedOwnerExpectedUrl)))) {
+  return fail(ctx, 202, "RETRY_REQUIRED", "Исходная управляемая запись требует сверки");
+}
+if (ctx.managedSelfLeaveOwner && ctx.managedOwnerExpectedStep === ctx.step) {
+  delete ctx.managedOwnerExpectedUrl; delete ctx.managedOwnerExpectedStep;
 }
 if (ctx.localReconciliation && !["start_verify_active", "verify_active", "verify_history", "local_apply"].includes(ctx.step)) {
   return fail(ctx, 202, "RETRY_REQUIRED", "Требуется повторная проверка состава игры.");
@@ -365,6 +530,14 @@ if (ctx.step === "snapshot_subscription_before") {
 }
 
 if (ctx.step === "cancel_booking") {
+  if (ctx.operationState === "MONETARY_DISPATCH_STARTED") {
+    // Even a successful HTTP response is not cancellation/credit proof. Never repeat the marked write.
+    if (msg.error) return moneyPending(ctx);
+    if (isOk(msg.statusCode)) ctx.bookingResults.push({ bookingId: ctx.currentBookingId,
+      clientId: ctx.currentClientId, provisional: "cancel_requested", refundMethod: ctx.currentRefundMethod });
+    ctx.currentBookingId = null; ctx.currentClientId = null; ctx.currentRefundMethod = null;
+    return startMoneyVerification(ctx);
+  }
   const statusCode = Number(msg.statusCode) || 0;
   const bookingId = toStr(ctx.currentBookingId);
   const clientId = toStr(ctx.currentClientId);

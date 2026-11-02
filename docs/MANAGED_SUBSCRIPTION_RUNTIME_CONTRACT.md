@@ -680,3 +680,457 @@ those runtime cases as skipped, not provider proof.
 Public CREATE keeps category/lifecycle-compatible candidates with at least one visit for preview and later selection: HAB can cover its free hour on 90/120-minute games with one visit. This is not a local entitlement decision. A legacy one-visit subscription can remain visible as a candidate, but the authoritative preview does not quote it as available and CREATE still rejects insufficient balance. Filtering that later candidate list by fresh server quotes is a follow-up UX improvement.
 
 Install the matching `previewGuard('primary' | 'reserve')` in nginx's HTTP context before enabling this location. The primary guard reuses the existing `lk_subscription_product_limit_key` map, preserving the trusted reserve proxy exemption; reserve uses `$binary_remote_addr`. Catalog lookups retain their original limiter and cannot consume the preview quota. Guard and location must be installed together with exact preimages, backup, `nginx -t` and reload.
+
+
+## R1 owner evidence producer (source-only opt-in)
+
+Owner: LK subscription booking gateway; audience: internal CUP entitlement confirm/release.
+The source adds optional proofs compatible with ph-admin #57 (`d5000a4d`): confirmation
+uses existing `v1` bytes; release uses `release-v1`, the separate HMAC domain
+`owner-evidence:release:v1` + one NUL byte and compact fields in this exact order:
+`operationId`, `reason`, `providerBookingId`, `issuedAt`. The proof travels only in
+`X-Subscription-Owner-Evidence`, never in the operation document or response payload.
+
+Backend prerequisites (not installed or enabled by this change):
+
+- `subscriptions_owner_evidence_enabled`: absent/false preserves unsigned legacy behavior;
+  true enables the producer. Unknown values fail closed. This rollout option belongs to the
+  subscription owner; activate only after receiver integration and provider sandbox acceptance.
+  Review/remove the legacy option once all affected consumers accept owner evidence.
+- `subscriptions_owner_evidence_secret`: backend-only string matching the receiver's existing
+  `SUBSCRIPTIONS_OWNER_EVIDENCE_SECRET`, at least 32 UTF-8 bytes after trimming. Keep environments
+  isolated; never obtain it from an HTTP request, flow export, browser, or committed settings.
+- Trusted Node-RED `global.crypto` supplies the built-in Node `crypto` API. Its runtime availability
+  has not been verified. Missing key/crypto or invalid configuration gives 202 reconciliation,
+  never an unsigned fallback in enabled mode.
+
+Confirmation requires an observed active booking with its own ID, matching actor, subscription
+and exercise, and the persisted entitlement operation. A POST-only booking-ID fallback cannot
+produce a proof. The normal readback and activation-recovery paths both support confirmation.
+
+Cancellation requires complete authenticated active/history lists, the exact requested booking,
+explicit booking cancellation (boolean cancellation flag or exact CANCELLED/CANCELED status),
+consistent actor/target/subscription/date across matching rows and the canonical local operation.
+Payment errors, refunds, archives and a cancelled exercise alone are insufficient. Only then can
+CUP release its ledger; local release follows the exact CUP acknowledgement. Lost response leaves
+local state pending; retry reads Viva again and uses the same entitlement operation. The proof
+uses the observation timestamp, expires after at most 60 seconds locally, and never refreshes old
+readback merely by resigning it. Receiver configuration may enforce a shorter age.
+
+For booking POST rejection, only a response without a transport error and status
+400/401/403/404/405/410/415/422 produces PROVIDER_REJECTED with explicit null booking ID.
+This is the conservative definitive-rejection status set already used by the split CREATE flow;
+provider sandbox acceptance of this endpoint remains required. Split CREATE now carries the
+actual exercise-rejection receipt only after the PRECREATE_ATTEMPTING acknowledgement and finalize
+handoff. It requires the original request operation, placeholder, actor, subscription/instance,
+policy, station, room, date, start, duration and exercise type to match the stored recovery target.
+A created, owned, adopted or recovered exercise cannot use this abort proof. Inherited receipts
+are discarded. In signed mode, the exact rejection facts and original observation time are first
+CAS-persisted on the existing booking operation, from `PRECREATE_ATTEMPTING` to
+`PRECREATE_RECONCILIATION_REQUIRED`. The CAS binds the tenant, actor, LK/CUP operations,
+subscription instance, original placeholder and full recovery target, with no created/recovered
+booking binding. It never stores a token, signature, secret or raw provider response.
+
+Only an exact readback of that immutable marker permits CUP release. A duplicate or lost Mongo
+acknowledgement reads the first marker without overwriting its observation time. A fresh request
+after context loss can resume release only within the original 60-second producer evidence window
+(the receiver may require a shorter window), without a new CREATE POST. After CUP acknowledgement,
+an exact marker CAS changes the existing operation to `RELEASED`; a lost local acknowledgement
+reads back that result. A concurrent created/recovered binding or a mismatched marker stays pending.
+Older source versions see reconciliation state and cannot resume CREATE from it.
+
+An exact canonical `RELEASED` marker and matching release reason can replay the stored failure
+after that window, without signing a new proof or calling CUP. Malformed, future-dated or mismatched
+terminal markers stay pending. Evidence is never re-dated. Unfinished release with expired evidence
+stays pending unless a read of the canonical CUP operation proves release already completed. After the
+original 60-second window, a validated unfinished durable rejection uses only
+`POST /api/internal/subscriptions/entitlements/readback` with
+`{ operationId, subscriptionInstanceId }`, the existing actor Bearer and entitlement integration
+token. This is a read-only request: no owner proof is generated, no release is dispatched and no
+provider booking/payment write is attempted. Its response must have exactly `schemaVersion: 1`,
+`operationId`, `subscriptionInstanceId`, `operationState`, `compensationState`, `releaseReason`,
+and `providerBookingId`. Only the exact pinned operation/instance and
+`FAILED / APPLIED / PROVIDER_REJECTED / null` permit the existing full-marker local CAS to
+`RELEASED`. The original `observedAt` is unchanged. An already committed local result is replayed
+without another CUP request; an ambiguous local acknowledgement reads the local marker again.
+
+This path depends on ph-admin #59 (`70d3820`), the companion CUP actor/tenant/instance-scoped,
+primary-majority readback implementation (itself dependent on #57/#58). Missing endpoint, disabled receiver, timeout, transport error, wrong response
+origin, extra/missing fields, another operation/instance or any incomplete/different release remains
+pending. In particular, it cannot release a reservation that CUP still holds. ph-admin continues
+to require fresh owner evidence for release commands, including command replays; this read does
+not extend that TTL or mint a new attestation. No new LK public endpoint, usage ledger, state enum,
+secret, configuration flag or provider write is introduced here.
+408/409/429/5xx, transport failures, empty history after an expired attempt, local pre-write
+failures and generic operation failure are not signed. They remain pending in enabled mode. Existing
+precreated-exercise reconciliation protection is unchanged, even after a definite booking refusal.
+
+Stop signal: `SUBSCRIPTION_OWNER_EVIDENCE_NOT_CONFIGURED` or
+`SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED`, or unexpected CUP refusal. Preserve reservations
+and reconcile; do not disable evidence validation to force a release. Rollback is a reviewed
+source rollback with compatible receiver mode, never automatic compensation. No deployment,
+secret creation, provider write or flag activation is part of this source change. Full strict-mode
+rollout still requires local-abort recovery, physical Mongo verification, the companion CUP
+readback deployment and provider acceptance. Unit fixtures and green CI do not establish those outcomes.
+
+## Managed JOIN owner v2 (source only)
+
+The v1 external routes, JWT claims, request hashes and operation-ID derivation are
+unchanged. v2 uses the same operation ID for a tenant/user/idempotency key: changing
+version or an admitted binding conflicts instead of opening another operation.
+There is no new activation flag. Existing receiver/execution gates, the canonical
+managed product/purchase-date selector and the existing owner-evidence signer remain
+mandatory. These sources do not install a flow, change configuration or activate a provider.
+
+The separate internal routes are POST `/lk/integrations/v2/booked-operation-preflights`,
+POST `/lk/integrations/v2/booked-operation-admissions`, and GET
+`/lk/integrations/v2/booked-operations/:operationId`. v2 delegation requires
+`contract_version:2`; preflight scope is `subscription-runtime.booked-operation.preflight`,
+admission/read retain their respective existing scopes. Signed method, actual route,
+actor token digest/expiry, tenant, actor/provider mapping, target mapping/version and
+request hash must agree. Preflight forbids reservation_id; admission requires it;
+read requires receipt_version 2. The operation ID still uses the v1 derivation domain.
+
+The synthetic managed wire fixture is `scripts/tests/fixtures/managed-join-v2-contract.json`.
+Preflight hashes ordered compact JSON under `booked-operation-preflight:v2` plus NUL;
+admission uses `booked-operation-admission:v2` plus NUL. Preflight is nonbinding and
+accepts only JOIN_GAME/USE_SUBSCRIPTION with the public target/revision. It verifies the
+user-scoped provider profile, exact exercise and uniquely owned subscription by GET,
+then evaluates the canonical gateway's exact selector closure extracted by the existing
+source helper. It never creates a booking, reservation, usage ledger or Mongo row.
+A positive unmanaged selection returns the same base fields with `management:"LEGACY"`
+and no entitlement. Missing product/configuration, ambiguity, failed reads or missing CUP
+mapping never imply legacy. A valid explicitly empty product allowlist may return legacy.
+The managed branch reads CUP runtime-context and JOIN-only entitlement preflight with
+existing credentials and exact trusted origins, and returns the canonical instance plus
+policy version/digest and target snapshot ID/revision/evidence reference. Private provider
+identifiers remain backend-only. The preflight decision does not authorize a paid fallback.
+
+Admission stores the complete immutable v2 request before any CUP reserve. The canonical
+booking prepare node accepts the tuple only as a restrictive precondition; it supplies no
+authority to a direct caller. The gateway rechecks its managed selector, runtime instance
+and effective policy and sends the original expectations to CUP. Before a new reserve the existing policy evaluator must select FREE_ENTITLEMENT from
+the pinned effective policy; a zero-priced discount is insufficient. The CUP reserve
+must also prove an ENTITLEMENT decision with zero final RUB price and positive integer units. Ambiguous,
+malformed, mismatched or paid responses hold pending without booking or rewriting the
+original expectations. No retry refreshes a possible-write binding. A cancelled or released
+same operation cannot be reclaimed as a new v2 booking.
+
+The verified v1 executor supplies a restrictive internal `lk2LegacyJoin:true` marker. It
+is validated at canonical ingress and persisted on first operation creation. If selection
+changes to managed, a new reserve/provider dispatch holds pending; canonical attempted
+operations still use existing read/reconciliation paths. Direct LK1 callers without this
+marker preserve their existing behavior. The marker cannot grant authority or bypass
+actor ownership, and a malformed marker is rejected.
+
+Only a read of the exact persisted admission and canonical owned booking may emit receipt
+v2. The canonical row must be CONFIRMED, activation complete/not required, and the CUP
+entitlement CONFIRMED. Policy and instance match the original admission; usageRef and
+reservationUnits come from the persisted entitlement operation/decision. An outer receiver
+CONFIRMED state alone is UNKNOWN. Pending confirmation, cancellation, missing/corrupt
+bindings and ambiguous local acknowledgement never synthesize success. The API returns
+no-store/no-referrer responses and never exposes integration tokens or owner proofs.
+
+Current observer hashes describe changed source only. Historical PATRIOTS, deployment
+allowlists and activation preimages remain frozen. Local tests and CI do not establish
+provider/runtime acceptance; installing/activating these sources requires a separately
+approved release with fresh custody and recovery evidence.
+
+For new v2 operations, the entitlement-bind CAS also stores an explicit recovery context
+before the provider POST: original runtime policy/instance/evidence, target, enforcement
+identity, activation requirement/revision and verified FREE policy digest. It contains no
+actor token, integration token or proof. A fresh authenticated actor profile precedes an
+exact original-operation lookup before current selector/policy gates. The recovery lane
+validates the immutable tuple and stored decision, then uses only a complete, exact-origin
+provider GET with unique actor/exercise/subscription/date/booking matching. It confirms the
+same CUP operation and applies conditional local confirmation/activation updates bound to
+the original state, tuple and recovery context. Cancellation/reclaim races cannot resurrect
+a row. This lane never calls reserve, repeats provider POST or reads a replacement policy.
+Old or corrupt rows lacking recovery context stay UNKNOWN. Explicit valid selector
+configuration and existing signing/CUP credentials are activation prerequisites, not locally
+verified runtime facts; direct LK1 behavior with an absent selector configuration is unchanged.
+
+A same-key v2 admission retry may carry the optional signed `recovery_only:true` claim.
+Only true is accepted, only on v2 admission; it changes neither the original admission
+body/hash nor its immutable delegation binding. The outer receiver requires the original
+ATTEMPTING/UNKNOWN admission and fresh actor delegation, then claims a two-minute recovery
+lease with a unique attempt ID. Competing/lost claim acknowledgements only read existing
+state. The loopback owner request adds restrictive `managedJoinV2RecoveryOnly:true`; missing
+canonical state cannot become a new admission, reserve or booking. Recovery finalization
+CAS-matches its unique attempt so a stale response cannot overwrite a later recovery.
+The ordinary v1 execution path and initial v2 admission semantics are unchanged. A refreshed
+preflight, new seat or new usage reservation is never part of this retry.
+
+Before either initial v2 execution or recovery, the receiver requires the inert local
+owner GET probe with exact header value `2` and response
+`{contractVersion:2,owner:"LK1_SUBSCRIPTION_BOOKING_OWNER",policy:"MANAGED_JOIN_V2"}`
+from the exact loopback URL. Old ATOMIC_MANAGED_V1, missing capability, redirect or
+unavailable owner stops before profile/claim/loopback mutation. Header `1` and its v1
+response bytes remain unchanged. The existing canonical flow patcher prepends the probe
+and canonical router into the same function body; its prepare/router/evaluator graph must
+be deployed as one reviewed compatible packet. A probe fragment alone is not an install.
+
+### Managed SELF LEAVE compensation (source contract, inactive until reviewed installation)
+
+A managed `SUBSCRIPTION` SELF LEAVE with a verified returned visit now routes through
+its original canonical subscription-booking owner. `RETURN_VERIFIED` alone is not
+CUP compensation. The bridge requires the same durable SELF leave operation,
+`tenantKey: iSkq6G`, actor, exercise, subscription, original booking and membership
+generation. The canonical booking operation must supply the exact entitlement
+operation and canonical subscription instance; caller-supplied references only
+restrict this lookup. New leave operations include the fixed producer tenant in
+`$setOnInsert`. Old rows without tenant provenance remain pending; this change
+performs no backfill or inference.
+
+The existing `action=release` ingress accepts an optional strict `managedSelfLeave`
+precondition, whose schema version is 1. It contains the original booking-operation
+key/ID, entitlement-operation ID, subscription-instance ID, tenant/actor/exercise/
+subscription/booking/service date and leave-operation key/ID/game/membership generation,
+plus the current leave claim token. This token is a concurrency fence, not a credential.
+The actor is authenticated through the existing profile read before durable lookups.
+The owner reads `lk_game_leave_operations`; it never accepts `RETURN_VERIFIED` from
+request data. Provider cancellation must be exact, complete and explicitly cancelled.
+
+New managed SELF compensation is held with the existing pending response and
+`RETURN_ATTRIBUTION_UNVERIFIED`. The legacy `RETURN_VERIFIED` predicate observes an
+aggregate subscription balance increase and cancelled booking; a concurrent return
+of another booking can satisfy it without attributing a credit to this booking.
+It is not authority to create a cancellation marker, issue a new CUP release or
+release the canonical booking allowance. The daily route and direct canonical owner
+both enforce this hold, including an in-flight old marker-creation callback.
+
+An already persisted exact cancellation marker permits only readback of the original
+CUP operation. Neither a fresh nor expired marker permits a new release or renewed
+evidence. Only an exact seven-field readback with `COMPENSATED`, `APPLIED`,
+`BOOKING_CANCELLED` and the original booking/op/instance permits local `RELEASED`.
+HTTP success or the old release response alone does not supply this evidence.
+`CONFIRMED`/`NONE`, malformed, foreign or unavailable readback remains pending without
+new marker or release writes. Exact historical local `RELEASED` marker/receipt replay
+is retained. Local ACK loss re-reads the exact booking row. No tokens/signatures are
+persisted; no provider return fields or new compensation contract are invented.
+
+The final update is fenced by the original booking identity, state and cancellation
+marker after another exact leave-claim read. Replacement/rejoin cannot release a new
+booking generation. A fresh authenticated SELF retry may CAS-claim an expired
+local-apply lease for that same returned-visit generation and enter compensation
+readback directly. An active lease, losing claim or stale claim acknowledgement does
+not replay provider cancellation. Background retries do not retain actor credentials;
+without a fresh actor Bearer they remain pending. Automatic background compensation
+is therefore not claimed. Existing late/NONE/staff-retain and paid visit-worker paths
+are unchanged; this contract neither executes monetary refunds nor handles organizer
+CANCEL.
+
+Mixed-version activation is fail-closed. The bridge uses the existing loopback owner
+base/tenant configuration and requires exact GET capability header
+`X-Booked-Operation-Owner-Contract: 3`, response policy `MANAGED_SELF_LEAVE_V1` and
+contract version 3. Existing v1/v2 probe responses and the original seven output
+indices are unchanged. The source-only `composeManagedSelfLeaveCompensation` composer
+assembles the bridge, canonical prepare/router/probe, durable authority reader and
+foreground-reclaim wiring as one exact graph packet. Its approved parent source is
+`71db810308ae56c228b62f3adbad9e8c7b3415da`; unknown source/topology is rejected.
+Historical release pins are not advanced. A production installation still needs fresh
+actual graph evidence, existing CUP readback availability and separate owner
+approval. Local synthetic tests are not Mongo, provider or production acceptance.
+
+Owner: the managed SELF canonical booking/leave integration. Audience: existing
+managed SELF callers only. Stop signal: missing attributable return proof; stop method:
+retain pending original custody, never ordinary-release fallback. This source guard
+does not undo historical compensation. Coherent installation must update both routes
+and drain earlier release-capable executions; source alone cannot recall an emitted
+CUP request. Rolling back to older code reopens the unsafe new-release path and must
+not be described as a safe recovery. New compensation needs a separately reviewed
+per-booking return proof contract; no flag or provider configuration is added here.
+
+### LK2 managed FREE SELF LEAVE owner admission (source-only, not activated)
+
+The concrete backend-only contract is frozen in
+`scripts/tests/fixtures/managed-self-leave-v1-contract.json`. It adds signed
+`POST /lk/integrations/v1/managed-self-leave-admissions` and
+`GET /lk/integrations/v1/managed-self-leaves/:operationId`. It reuses the existing
+booked-operation issuer, audience, key, receiver and execution switches. No new
+runtime flag, provider activation, monetary refund, organizer cancellation or
+late/NONE-return mode is introduced. LK2 still needs a separate consumer change.
+
+Admission accepts only `LEAVE_GAME`, `SERVICE`, the public game/revision,
+participation, original reservation, original managed JOIN operation and the exact
+JOIN receipt digest. The signed delegation also pins the tenant/actor/provider
+mapping and server-owned legacy-game mapping/version. Request, operation and
+stable-delegation hash domains are separately versioned in that fixture. A fresh
+actor credential is required, bound by digest and expiry; neither the credential
+nor JWT is persisted. `recovery_only: true` is the only accepted explicit recovery
+claim; false, unknown claims and mismatched routes fail closed.
+
+Before admission persistence, the receiver verifies the original canonical
+confirmed managed FREE JOIN and its exact receipt, the same provider mapping,
+token-owned provider profile, legacy game-to-exercise association and SERVICE
+availability for the original booking. A missing/foreign/ambiguous association,
+replacement membership, paid decision or unavailable SERVICE cannot fall back to
+another refund mode. The canonical SELF ingress receives a private restrictive
+binding. It permits an LK2-only actor absent from the LK1 roster only through this
+verified original JOIN; ordinary `actorKnown` authorization remains unchanged.
+The public SELF body cannot supply this private context. Provider cancellation
+still uses the existing SELF path and rechecks SERVICE, original booking/actor,
+fresh delegation and provider subscription evidence before its write.
+
+The existing `lk_subscription_daily_booking_ops` collection stores the outer
+`MANAGED_SELF_LEAVE_ADMISSION` kind, keyed by the versioned tenant/user/idempotency
+operation ID. It deliberately has no canonical `actorClientId`, `exerciseId`,
+`serviceDate` or `lk1.visitJob` fields, so canonical daily selectors and visit workers
+do not count or reclaim it. Its immutable binding includes the full original JOIN
+receipt and local reservation. Changed same-key authority conflicts. The existing
+`lk_game_leave_operations` SELF row remains the canonical cancellation owner;
+its generation key converges distinct outer keys for the same original booking.
+An active canonical lease cannot be stolen through the legacy same-actor shortcut.
+The legacy background query excludes any row carrying this owner binding, and its
+selector independently refuses such rows before credential lookup/claim. Ordinary
+foreground operation replay also refuses a bound row without the exact private
+owner context. Thus a worker cannot drop the binding and fall back to service-token
+cancellation; recovery requires a fresh delegated foreground request. If ordinary
+recovery returns mixed managed/legacy history, it stays pending instead of selecting
+an older unbound proof. Use the exact delegated owner route; no data is changed and
+no fallback is authorized by mixed history.
+Outer and canonical lease updates use exact prior-state/binding CAS predicates.
+Lost or ambiguous claim acknowledgement never dispatches a cancellation.
+
+Recovery never selects the latest booking. Missing outer/canonical records under
+`recovery_only` return UNKNOWN. Unfinished operations require the original SELF
+row, generation, canonical booking cancellation marker and exact CUP
+`COMPENSATED` / `APPLIED` / `BOOKING_CANCELLED` receipt before outer completion.
+No proof time is refreshed, and the existing compensation proof TTL is unchanged.
+The outer terminal receipt additionally pins request/idempotency digests and
+provider/legacy mapping provenance. Only after this receipt and its digest are
+durably stored as CONFIRMED may a fresh authorized read replay it without reading
+the current booking row. This is necessary after a legal rejoin reclaims that row:
+the immutable receipt still describes only the original reservation/generation.
+A malformed, altered, unbound or unhashed terminal receipt remains UNKNOWN.
+
+`composeManagedSelfLeaveOwner` accepts exact parent source
+`8d46b9b53a1baa0b06bca6e127950b6845d08d65`, preserves existing output indices and
+assembles the routes, journal reads/CAS, private SELF capability traversal and
+response gate together. The router capability uses output seven; outputs one
+through six retain their prior meaning, including an existing discovery output.
+For an older five-output graph, slot six remains empty. Canonical finalizer custody
+is checked too. Private owner failure/finalizer responses are not duplicated to
+ordinary debug outputs, and transient credentials are erased after canonical auth
+handoff. A mixed/unknown source graph is not an installation candidate. Historical
+deploy pins and production allowlists are not advanced.
+
+The focused tests execute actual function bodies with synthetic provider/CUP
+responses. `managedSelfLeaveOwner.mongo.test.mjs` additionally requires the existing
+GitHub Actions monthly workflow's exact disposable loopback Mongo fixture; it refuses
+local/shared targets and owns one uniquely named database. Independent clients test
+immutable admission, competing leases, stale generation CAS and lost-ACK receipt
+replay. Local skips are not physical Mongo acceptance. Deployment, authoritative
+runtime mapping, real provider cancellation/returned-visit verification and LK2
+consumer/local participation finalization remain separate acceptance requirements.
+
+### Ordinary SELF monetary cancellation dispatch fence (source-only)
+
+Owner: LK canonical SELF leave graph, based on #270. Audience: existing LK1 SELF
+CURRENCY/DEPOSIT callers, including multiple original bookings. This packet does
+not extend the private managed FREE/SERVICE owner to money, change provider APIs,
+or certify refunds. No new collection, index, runtime flag or public route is added.
+
+A newly inserted eligible ordinary SELF journal stores `monetarySelfLeave.version=1`,
+a revision, the exact tenant/client/game/exercise/operation/membership generation,
+the original booking array and requested method. Explicit SERVICE/NONE rows retain
+the old lane. Discovery creates this capability only when original booking IDs are
+known; `$setOnInsert` never upgrades a previous empty or ambiguous journal. A phone
+alone cannot authorize the new lane. Existing legacy journals without capability
+cannot acquire monetary dispatch authority on retry.
+
+Before each original booking's CURRENCY/DEPOSIT request, a full-preimage CAS checks
+the original tuple, capability/revision, current claim, and live lease using Mongo
+`$$NOW`. It appends an immutable dispatch marker and changes the journal to
+`MONETARY_DISPATCH_STARTED`. It never returns to STARTED. Only the freshly successful
+Mongo ACK (`acknowledged=true`, numeric `matchedCount=modifiedCount=1`) within its
+lease permits that invocation's single HTTP request. A stored marker, a lost ACK,
+or a successful subsequent read cannot recreate this permission. Marker method,
+booking, claim, dispatch ID and timestamp never change. Readback proofs append
+separately; revision prevents two writers from reusing the same preimage.
+
+The existing HTTP request node receives `followRedirects=false` and a bounded
+`requestTimeout=10000` for this lane. LOCAL reference: installed `@node-red/nodes`
+4.0.8 `21-httprequest.js` supports this override and sets retry limit zero. The
+patcher requires dynamic method/URL, no configured HTTP auth/proxy/TLS override or
+extra headers, and the exact single HTTP/router edges. This is not evidence of the
+deployed engine; compatible no-redirect/no-retry semantics must be verified before
+activation. A response origin/error guard is additional evidence, not prevention
+of a redirect after the fact.
+
+After any marked request, even HTTP 2xx, progression requires complete recognized
+active/history pages, unique original booking identity, exact client/exercise and
+an explicit affirmative cancellation boolean with no contradictory supplied
+state/timestamp. Substring statuses such as NOT_CANCELLED, dates alone, malformed
+pagination, aliases, duplicate IDs, foreign identity, missing history, or active
+original marked booking remain pending. A subsequent original unmarked booking
+can proceed only after earlier markers have exact cancellation readbacks. An
+already-cancelled unmarked booking can be observed without any request or refund
+claim. Replacement/rejoin bookings cannot be added to the original array.
+
+Before a dispatch marker exists, an expired claim can be acquired and its original
+unmarked booking retried. After a marker exists, lease recovery permits reads and
+later unmarked original bookings only, never another request for the marked one.
+A crash after marker persistence but before actual HTTP is indistinguishable from
+a lost provider response: it remains pending if cancellation cannot be proven.
+No provider idempotency or no-dispatch proof is invented. Background hydration that
+lacks the original capability cannot send a monetary request. New in-flight state
+is excluded by the existing legacy background query; foreground recovery needs the
+same verified actor and original generation.
+
+Final local completion uses the existing Viva-confirmed/local roster pipeline only
+after all original cancellations are proven. `moneyRefundState=UNVERIFIED` remains
+independent: neither booking history, local DONE nor a successful HTTP response
+proves a monetary refund or deposit credit. Original SERVICE verification and
+compensation requirements remain unchanged; provider acceptance is still missing.
+
+The existing organizer membership gate is preserved, including ACK -> gate -> router.
+**An uncertain monetary cancellation may retain the game-wide membership lock and
+block other actors in that game.** This packet never releases that lock on ambiguity;
+only the existing completed-operation release is used. Operational resolution and
+availability acceptance are activation prerequisites. This is not per-actor lock
+isolation or a new refund-settlement recovery service.
+
+Install/rollback: `patch_nodered_monetary_self_leave_fence.mjs` composes one exact
+#270 source/graph packet, preserving outputs 1–7 and adding output 8 to the existing
+claim/Mongo/ACK pipeline. It checks membership gate source and edge custody and
+emits an exact reviewed-flow contract. Drain all old in-flight writers before an
+authorized atomic install. Old #270 code refuses the new in-flight state and its
+background query does not select it. Retain all journal markers on rollback; never
+reset a marked row to STARTED or erase it to restore availability. No live install,
+rollback, provider call, migration or permission change is authorized by this source.
+
+LOCAL actual-node tests cover money selection, multi-booking progression, strict
+readbacks, ACK loss, stale executors, pre-dispatch recovery, immutable identity,
+mixed NONE queues, legacy/no-capability refusal, rollback and graph custody. The
+CI-only `monetarySelfLeaveFence.mongo.test.mjs` uses separate Mongo clients against
+only the existing disposable monthly fixture, with a unique owned database and
+cleanup. It never provisions or accepts a local/shared database. Physical CI results
+and provider/runtime acceptance must be reported separately from synthetic results.
+
+Mixed-queue correction: in the existing ordinary default-choice monetary-capable
+lane, a SERVICE item also uses the same pre-HTTP dispatch CAS and irreversible
+marker. That marker binds its exact four-field subscription baseline; the same
+transaction writes the existing `subscriptionReturnChecks`, subscription ID/count
+and RETURN_PENDING. Recovery validates those fields against the immutable marker
+and rehydrates them before any early return. SERVICE-before-money and
+money-before-SERVICE therefore survive lost ACKs without dropping visit evidence;
+missing/corrupt baseline cannot become local success. A cancelled booking still
+requires the existing visit readback or RETURN_PENDING. Explicit SERVICE and the
+private managed SERVICE owner are unchanged. No new refund/provider contract is
+introduced.
+
+Graph custody also checks exact authorized producer/port pairs for every incoming
+edge of the dispatch/HTTP/ACK/membership-gate chain. Existing authorize and retry
+hydration source are pinned. Relevant or ambiguous catch/complete scopes and dynamic
+or reinjecting link paths are refused; explicitly scoped unrelated observers and
+fixed disconnected links are preserved. An arbitrary fresh whole-flow hash is not
+permission to replay a captured positive ACK. These are narrowly scoped checks on
+the concrete dispatch path, not a generic Node-RED security framework.
+
+Durability boundary: synthetic and disposable-Mongo CAS/ACK results do not prove
+production failover durability or exactly-once delivery. Before activation, verify
+the actual Mongo topology, write concern/journaling, journal retention, and that all
+executors use the same authoritative store. Patcher `clientNode` equality alone does
+not establish those deployed connection properties. No connection configuration,
+secrets or deployment state were inspected or changed for this source packet.

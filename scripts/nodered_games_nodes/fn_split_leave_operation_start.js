@@ -1,3 +1,13 @@
+// Private capability traversal performs no journal or provider operation.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "start") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "route";
+  return [null, null, msg];
+}
 const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object" ? msg._splitLeaveCtx : null;
 if (!ctx) {
   msg.statusCode = 409;
@@ -29,6 +39,7 @@ msg.payload = [
   {
     $setOnInsert: {
       _id: operationKey,
+      tenantKey: "iSkq6G",
       operationId: ctx.operationId,
       gameId: ctx.gameId,
       exerciseId: ctx.exerciseId || null,
@@ -43,8 +54,20 @@ msg.payload = [
       staffActorId: ctx.staffActorId || null,
       idempotencyDigest: ctx.idempotencyDigest || null,
       membershipVersion: ctx.membershipVersion || null,
+      ...(ctx.managedSelfLeaveOwner ? { managedSelfLeaveOwner: ctx.managedSelfLeaveOwner } : {}),
       ...(ctx.bookingDiscovery ? { bookingDiscovery: ctx.bookingDiscovery } : {}),
       ...(ctx.localReconciliation ? { localReconciliation: ctx.localReconciliation } : {}),
+      ...(ctx.mode === "SELF" && !ctx.managedSelfLeaveOwner
+        && !["SERVICE", "NONE"].includes(ctx.requestedRefundMethod) && ctx.actorClientId
+        && ctx.actorClientId === ctx.targetClientId && ctx.exerciseId && ctx.membershipVersion
+        && bookingIds.length > 0 && new Set(bookingIds).size === bookingIds.length ? {
+        monetarySelfLeave: { version: 1, revision: 0, original: {
+          tenantKey: "iSkq6G", operationId: ctx.operationId, gameId: ctx.gameId,
+          exerciseId: ctx.exerciseId, actorClientId: ctx.actorClientId,
+          membershipVersion: ctx.membershipVersion, bookingIds: [...bookingIds],
+          requestedRefundMethod: ctx.requestedRefundMethod || null,
+        }, markers: [], readbacks: [] },
+      } : {}),
       bookingIds,
       clientSubscriptionId: ctx.clientSubscriptionId || null,
       subscriptionVisitCount: Number.isSafeInteger(ctx.subscriptionVisitCount)

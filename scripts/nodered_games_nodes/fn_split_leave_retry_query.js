@@ -38,6 +38,7 @@ if (serviceToken) candidates.push({
   $or: startedLease,
 });
 msg.payload = {
+  managedSelfLeaveOwner: { $exists: false },
   $or: candidates,
 };
 return msg;

@@ -9,6 +9,7 @@ const isObject = (value) => Boolean(value)
   && !Array.isArray(value);
 
 delete msg._bookedOperation;
+delete msg._bookedOperationPreflight;
 if (isObject(msg.req) && isObject(msg.req.headers)) {
   delete msg.req.headers["x-subscription-actor-delegation"];
   delete msg.req.headers["X-Subscription-Actor-Delegation"];

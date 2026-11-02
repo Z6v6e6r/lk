@@ -1,3 +1,13 @@
+// Private capability traversal performs no journal or provider operation.
+if (msg._managedLeaveCapability) {
+  const cap = msg._managedLeaveCapability;
+  if (cap.version !== 1 || cap.stage !== "route") {
+    msg.statusCode = 503; msg.payload = { code: "MANAGED_SELF_LEAVE_INCOMPATIBLE" };
+    return [null, msg];
+  }
+  cap.stage = "claim";
+  return [null, null, null, null, null, msg];
+}
 const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object" ? msg._splitLeaveCtx : null;
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 let operation = rows[0] && typeof rows[0] === "object" ? rows[0] : null;
@@ -15,11 +25,36 @@ const respond = (statusCode, state, message) => {
   delete msg._splitLeaveCtx;
   return [null, null, msg];
 };
+if (rows.some((row) => row && Object.prototype.hasOwnProperty.call(row, "managedSelfLeaveOwner")) && !ctx?.managedSelfLeaveOwner) {
+  return respond(202, "RETRY_REQUIRED", "Требуется делегированный повтор исходного выхода");
+}
+if (ctx?.managedSelfLeaveOwner) {
+  const pin = ctx.managedSelfLeaveOwner;
+  const stored = operation?.managedSelfLeaveOwner;
+  if (msg.error || rows.length !== 1 || !stored || typeof stored !== "object"
+    || Object.keys(stored).sort().join(",") !== Object.keys(pin).sort().join(",")
+    || Object.keys(pin).some(key => stored[key] !== pin[key])
+    || operation._id !== pin.ownerLeaveOperationKey || operation.operationId !== pin.ownerLeaveOperationId
+    || operation.tenantKey !== pin.tenantKey || operation.mode !== "SELF"
+    || operation.actorClientId !== pin.providerClientId || operation.targetClientId !== pin.providerClientId
+    || operation.exerciseId !== pin.providerExerciseId || operation.gameId !== pin.legacyGameId
+    || operation.membershipVersion !== pin.membershipVersion
+    || !Array.isArray(operation.bookingIds) || operation.bookingIds.length !== 1 || operation.bookingIds[0] !== pin.providerBookingId) {
+    return respond(202, "RETRY_REQUIRED", "Исходное поколение выхода не подтверждено");
+  }
+  if (operation.state === "STARTED" && operation.claimToken !== ctx.claimToken
+    && (!Number.isFinite(Date.parse(operation.claimLeaseUntil)) || Date.parse(operation.claimLeaseUntil) > Date.now())) {
+    return respond(202, "IN_PROGRESS", "Выход уже выполняется");
+  }
+}
 if (ctx?.step === "find_absent_self_leave") {
   const receipts = rows.filter((row) => row?.mode === "SELF"
+    && !Object.prototype.hasOwnProperty.call(row, "managedSelfLeaveOwner")
     && row.gameId === ctx.gameId && row.exerciseId === ctx.exerciseId
     && row.actorClientId === ctx.actorClientId && row.targetClientId === ctx.targetClientId
-    && ["DONE", "RETURN_PENDING"].includes(row.state) && row.outcome === "REMOVED"
+    && (["DONE", "RETURN_PENDING"].includes(row.state)
+      || (row.state === "VIVA_CONFIRMED" && row.tenantKey === "iSkq6G" && row.subscriptionReturnState === "RETURN_VERIFIED"))
+    && row.outcome === "REMOVED"
     && Number.isFinite(Date.parse(row.lkAppliedAt)) && Number.isFinite(Date.parse(row.createdAt))
     && ["active_absent_history_cancelled", "no_active_booking_for_exercise"].includes(row.vivaVerification)
     && row.operationId && row._id === `${ctx.gameId}:${row.operationId}`);
@@ -33,6 +68,7 @@ if (ctx?.step === "find_absent_self_leave") {
 if (ctx?.step === "find_local_reconciliation_proof") {
   const sameId = (a, b) => Boolean(a && b && String(a).toLowerCase() === String(b).toLowerCase());
   const eligible = rows.filter((row) => row && row.mode === "SELF"
+    && !Object.prototype.hasOwnProperty.call(row, "managedSelfLeaveOwner")
     && row.gameId === ctx.gameId && sameId(row.exerciseId, ctx.exerciseId)
     && sameId(row.actorClientId, ctx.actorClientId) && sameId(row.targetClientId, ctx.targetClientId)
     && ["DONE", "RETURN_PENDING", "VIVA_CONFIRMED"].includes(row.state) && row.outcome === "REMOVED"
@@ -80,6 +116,93 @@ if (ctx.mode === "STAFF_TARGET" && (
 )) {
   return respond(409, "CONFLICT", "Existing operation has different removal parameters");
 }
+// This capability is created only with the original row. Never upgrade a legacy row.
+if (Object.prototype.hasOwnProperty.call(operation, "monetarySelfLeave")) {
+  const f = operation.monetarySelfLeave;
+  const keys = (x, expected) => x && typeof x === "object" && !Array.isArray(x)
+    && Object.keys(x).sort().join(",") === expected.split(",").sort().join(",");
+  const iso = (x) => typeof x === "string" && Number.isFinite(Date.parse(x))
+    && new Date(x).toISOString() === x && Date.parse(x) <= Date.now();
+  const o = f?.original;
+  if (msg.error || rows.length !== 1 || ctx.mode !== "SELF" || ctx.managedSelfLeaveOwner
+    || ctx.backgroundRetry || ctx.backgroundStartedRecovery || !ctx.actorClientId
+    || ctx.actorClientId !== ctx.targetClientId || !/^Bearer \S+$/.test(ctx.actorAuthHeader || "")
+    || !keys(f, "version,revision,original,markers,readbacks") || f.version !== 1
+    || !Number.isSafeInteger(f.revision) || f.revision < 0
+    || typeof operation.claimToken !== "string" || !operation.claimToken
+    || typeof operation.claimLeaseUntil !== "string" || !Number.isFinite(Date.parse(operation.claimLeaseUntil))
+    || !keys(o, "tenantKey,operationId,gameId,exerciseId,actorClientId,membershipVersion,bookingIds,requestedRefundMethod")
+    || o.tenantKey !== "iSkq6G" || operation.tenantKey !== o.tenantKey
+    || operation.mode !== "SELF" || operation.actorClientId !== o.actorClientId
+    || operation.targetClientId !== o.actorClientId || ctx.actorClientId !== o.actorClientId
+    || operation.operationId !== o.operationId || ctx.operationId !== o.operationId
+    || operation._id !== `${o.gameId}:${o.operationId}` || operation.gameId !== o.gameId || ctx.gameId !== o.gameId
+    || operation.exerciseId !== o.exerciseId || ctx.exerciseId !== o.exerciseId
+    || operation.membershipVersion !== o.membershipVersion || ctx.membershipVersion !== o.membershipVersion
+    || operation.requestedRefundMethod !== o.requestedRefundMethod
+    || (ctx.requestedRefundMethod || null) !== o.requestedRefundMethod
+    || !Array.isArray(o.bookingIds) || !o.bookingIds.length || o.bookingIds.some(id => typeof id !== "string" || !id.trim())
+    || new Set(o.bookingIds).size !== o.bookingIds.length
+    || JSON.stringify(operation.bookingIds) !== JSON.stringify(o.bookingIds)
+    || (ctx.initialBookingIds?.length && JSON.stringify([...ctx.initialBookingIds].sort()) !== JSON.stringify([...o.bookingIds].sort()))
+    || !Array.isArray(f.markers) || !Array.isArray(f.readbacks)
+    || f.markers.length > o.bookingIds.length || f.readbacks.length > o.bookingIds.length
+    || new Set(f.markers.map(m => m?.bookingId)).size !== f.markers.length
+    || new Set(f.readbacks.map(m => m?.bookingId)).size !== f.readbacks.length
+    || f.markers.some(m => !keys(m, m.refundMethod === "SERVICE"
+      ? "bookingId,dispatchId,refundMethod,claimToken,startedAt,subscriptionBaseline"
+      : "bookingId,dispatchId,refundMethod,claimToken,startedAt")
+      || !o.bookingIds.includes(m.bookingId) || !["CURRENCY", "DEPOSIT", "SERVICE"].includes(m.refundMethod)
+      || (o.requestedRefundMethod && o.requestedRefundMethod !== m.refundMethod)
+      || m.dispatchId !== `${o.operationId}:${m.bookingId}` || typeof m.claimToken !== "string" || !m.claimToken
+      || !iso(m.startedAt))
+    || f.readbacks.some(m => !keys(m, "bookingId,verifiedAt,source") || !o.bookingIds.includes(m.bookingId)
+      || m.source !== "VIVA_BOOKING_READBACK" || !iso(m.verifiedAt)
+      || f.markers.some(d => d.bookingId === m.bookingId && d.startedAt > m.verifiedAt))
+    || (operation.state === "STARTED" && f.markers.length > 0)) {
+    return respond(202, "RETRY_REQUIRED", "Исходная денежная отмена требует сверки");
+  }
+  const serviceMarkers = f.markers.filter(m => m.refundMethod === "SERVICE");
+  const checks = operation.subscriptionReturnChecks;
+  if (!Array.isArray(checks) || checks.length !== serviceMarkers.length
+    || serviceMarkers.some(m => {
+      const b = m.subscriptionBaseline;
+      const exact = checks.filter(c => c?.bookingId === m.bookingId);
+      return !keys(b, "bookingId,clientSubscriptionId,expectedReturnCount,visitsLeftBefore")
+        || b.bookingId !== m.bookingId || typeof b.clientSubscriptionId !== "string" || !b.clientSubscriptionId.trim()
+        || !Number.isSafeInteger(b.visitsLeftBefore) || b.visitsLeftBefore < 0
+        || !Number.isSafeInteger(b.expectedReturnCount) || b.expectedReturnCount < 1
+        || exact.length !== 1 || !keys(exact[0], "bookingId,clientSubscriptionId,expectedReturnCount,visitsLeftBefore")
+        || Object.keys(b).some(k => b[k] !== exact[0][k]);
+    }) || (serviceMarkers.length && (
+      !["RETURN_PENDING", "RETURN_VERIFIED"].includes(operation.subscriptionReturnState)
+      || operation.clientSubscriptionId !== serviceMarkers.at(-1).subscriptionBaseline.clientSubscriptionId
+      || operation.subscriptionVisitCount !== serviceMarkers.at(-1).subscriptionBaseline.expectedReturnCount))) {
+    return respond(202, "RETRY_REQUIRED", "Исходный возврат посещения требует сверки");
+  }
+  ctx.monetaryStoredService = { checks: JSON.parse(JSON.stringify(checks)),
+    clientSubscriptionId: operation.clientSubscriptionId,
+    subscriptionVisitCount: operation.subscriptionVisitCount, subscriptionReturnState: operation.subscriptionReturnState };
+  ctx.clientSubscriptionId = operation.clientSubscriptionId;
+  ctx.subscriptionVisitCount = operation.subscriptionVisitCount;
+  ctx.subscriptionReturnChecks = JSON.parse(JSON.stringify(checks));
+  ctx.subscriptionReturnState = operation.subscriptionReturnState;
+  ctx.subscriptionReturnReason = operation.subscriptionReturnReason || null;
+  ctx.monetarySelfLeave = JSON.parse(JSON.stringify(f));
+  ctx.monetaryLeaseUntil = operation.claimLeaseUntil;
+  ctx.monetaryOperationState = operation.state;
+  if (operation.state === "MONETARY_DISPATCH_STARTED") {
+    if (!f.markers.length) return respond(202, "RETRY_REQUIRED", "Не подтверждён исходный запрос отмены");
+    ctx.operationState = operation.state; ctx.operationKey = operation._id;
+    ctx.initialBookingIds = [...o.bookingIds]; ctx.bookingQueue = [];
+    ctx.subscriptionReturnChecks = operation.subscriptionReturnChecks || [];
+    ctx.monetaryAction = { kind: "recover", previousClaimToken: operation.claimToken,
+      previousLeaseUntil: operation.claimLeaseUntil };
+    return [null, null, null, msg];
+  }
+}
+const requestedMembershipVersion = ctx.membershipVersion;
+const requestedBookingIds = ctx.initialBookingIds;
 ctx.bookingDiscovery = operation.bookingDiscovery || null;
 ctx.localReconciliation = operation.localReconciliation || ctx.localReconciliation || null;
 ctx.operationState = String(operation.state || "STARTED").toUpperCase();
@@ -133,7 +256,7 @@ if (ctx.operationState === "STARTED") {
       && String(operation.mode || "").toUpperCase() === "SELF"
       && sameActorIdentity;
     if (sameSelfActor) {
-      ctx.foregroundReclaim = true;
+      ctx.foregroundReclaim = !ctx.managedSelfLeaveOwner && !ctx.monetarySelfLeave;
       ctx.previousClaimToken = String(operation.claimToken || "");
       ctx.previousClaimLeaseUntil = operation.claimLeaseUntil || null;
       return [null, null, null, msg];
@@ -164,6 +287,24 @@ if (["VIVA_CONFIRMED", "LK_APPLIED"].includes(ctx.operationState)) {
   const sameClaim = String(operation.localApplyClaimToken || "") === String(ctx.claimToken || "");
   if (!sameClaim && Number.isFinite(leaseUntilMs) && leaseUntilMs > Date.now()) {
     return respond(202, "IN_PROGRESS", "Локальная синхронизация уже выполняется");
+  }
+  if (!sameClaim && ctx.mode === "SELF" && operation.subscriptionReturnState === "RETURN_VERIFIED"
+    && operation.tenantKey === "iSkq6G" && typeof ctx.actorAuthHeader === "string"
+    && /^Bearer \S+$/.test(ctx.actorAuthHeader) && Number.isFinite(leaseUntilMs) && leaseUntilMs <= Date.now()) {
+    if (operation.tenantKey !== "iSkq6G" || operation.mode !== "SELF"
+      || operation.actorClientId !== ctx.actorClientId || operation.targetClientId !== ctx.targetClientId
+      || ctx.actorClientId !== ctx.targetClientId || operation.gameId !== ctx.gameId
+      || operation.exerciseId !== ctx.exerciseId
+      || (requestedMembershipVersion && requestedMembershipVersion !== operation.membershipVersion)
+      || !Array.isArray(operation.bookingIds) || operation.bookingIds.length !== 1
+      || (Array.isArray(requestedBookingIds) && requestedBookingIds.length > 0
+        && (requestedBookingIds.length !== 1 || requestedBookingIds[0] !== operation.bookingIds[0]))) {
+      return respond(409, "CONFLICT", "Привязка возврата посещения изменилась");
+    }
+    ctx.managedSelfLeaveReclaim = { state: operation.state, previousClaimToken: operation.localApplyClaimToken,
+      previousLeaseUntil: operation.localApplyLeaseUntil, membershipVersion: operation.membershipVersion,
+      bookingId: operation.bookingIds[0], clientSubscriptionId: operation.clientSubscriptionId };
+    return [null, null, null, msg];
   }
   if (!sameClaim) return respond(202, "RETRY_REQUIRED", "Локальная синхронизация ожидает фонового повтора");
   ctx.step = "local_apply";

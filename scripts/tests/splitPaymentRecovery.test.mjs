@@ -9,11 +9,19 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SOURCES = {
   create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '258c865544f4150ece7e0fc47af455cb97ff2288d81a382841985777604178ef'],
   join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', '515dca2fdb427ff5e56dda7b47372a45056ece3fcdbdba00a70074c7a3b36010'],
-  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', 'f208872fb69829d7c78b1bb9c5f6c6dc37da4a5f81d7d023e8b567cccc79b4e5'],
+  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', 'f11f8f844b39e196fec35f7d4964dd018529a00cb2ff5ab79b470d58feef828e'],
 };
 const DIAGNOSTIC_CANDIDATES = {
   join: '4a44d0866125fdf800c9bbf7a8a93166beb799d4e4f1e1f97ad062ada35650d3',
-  router: '5c436951dfa273e5fb9753c144d242ec06c6b95aad957aebb9773d7f69262bfb',
+  router: '70833cc326bc19246f8e0e4ecad28917ab274838c89911994211f5b8d7db58e8',
+};
+// Current private quarter-owner composition; historical preimages above stay immutable.
+const QUARTER_OWNER_CANDIDATES = {
+  create: { source: '79b545078ee364b252f984f5078f5c6666b56b517642ff3c5fc2a028a0542d8d' },
+  router: {
+    source: 'b9d866021c791f1d9f23900cea34ecd41023bfd5b8604610f964c28ca7eab8be',
+    business: '5a19cefec651409341e5fa70a299ba411668338e02fff600c579e57683873a0a',
+  },
 };
 
 class FixedDate extends Date {
@@ -47,14 +55,15 @@ test('split-payment business preimages and observer candidates remain separately
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
     assert.notEqual(candidate, livePreimage, key);
     const current = source(key);
-    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), DIAGNOSTIC_CANDIDATES[key] || candidate, key);
+    const currentBusiness = QUARTER_OWNER_CANDIDATES[key]?.business || candidate;
+    assert.equal(crypto.createHash('sha256').update(current).digest('hex'), QUARTER_OWNER_CANDIDATES[key]?.source || DIAGNOSTIC_CANDIDATES[key] || candidate, key);
     if (DIAGNOSTIC_CANDIDATES[key]) {
-      assert.ok(current.includes(`sourceHash: "${candidate}"`), key);
+      assert.ok(current.includes(`sourceHash: "${currentBusiness}"`), key);
       const marker = key === 'join' ? 'const TOKEN_URL_DEFAULT' : 'const ADMIN_API';
       const business = current.slice(current.indexOf(marker)).replace(
         '  lkDiagnostic({ code: details?.code, httpStatus: status, outcome: "refused" });\n', '',
       );
-      assert.equal(crypto.createHash('sha256').update(business).digest('hex'), candidate, key);
+      assert.equal(crypto.createHash('sha256').update(business).digest('hex'), currentBusiness, key);
     }
   }
 });

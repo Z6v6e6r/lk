@@ -39,6 +39,7 @@ test('station projects creators and confirmed participants using the exact stati
   assert.ok(mutation.filter.bannedMembers);
   assert.ok(mutation.filter.members);
   assert.equal(mutation.filter.typeSettingsRevision, 1);
+  assert.deepEqual(mutation.filter.stationMembershipLifetime, { $exists: false }, 'legacy scan must atomically fence concurrent lifetime adoption');
   assert.ok(Array.isArray(mutation.update), 'server-side pipeline appends without replacing an old roster');
   assert.match(JSON.stringify(mutation.update), /STATION_EVENT/);
 });

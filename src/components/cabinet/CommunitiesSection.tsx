@@ -1660,6 +1660,8 @@ export function CommunitiesSection({
   const [graphZoomOverride, setGraphZoomOverride] = useState<number | null>(null);
   const [graphViewport, setGraphViewport] = useState({ width: 0, height: 0 });
   const [chatDraft, setChatDraft] = useState("");
+  const chatRequestRef = useRef(new Map<string, { requestId: string }>());
+  const chatDraftRevisionRef = useRef(0);
   const [chatError, setChatError] = useState<string | null>(null);
   const [rankingByCommunityId, setRankingByCommunityId] = useState<
     Record<string, Partial<Record<CommunityRankingCacheKey, CommunityRankingResponse>>>
@@ -1892,6 +1894,7 @@ export function CommunitiesSection({
     setFeedTournamentOptionsError(null);
     setFeedFormError(null);
     setEditingFeedPostId(null);
+    chatDraftRevisionRef.current += 1;
     setChatDraft("");
     setChatError(null);
     setRankingRefreshError(null);
@@ -4658,7 +4661,20 @@ export function CommunitiesSection({
     setChatSendingId(selectedCommunity.id);
     setChatError(null);
 
+    const draftRevision = chatDraftRevisionRef.current;
+    const binding = JSON.stringify([selectedCommunity.id, currentMember.id, text]);
+    let request = chatRequestRef.current.get(binding);
+    if (!request) {
+      if (chatRequestRef.current.size >= 8) {
+        setChatSendingId(null);
+        setChatError("Сначала повтори отправку одного из сообщений с неподтверждённым результатом.");
+        return;
+      }
+      request = { requestId: crypto.randomUUID() };
+      chatRequestRef.current.set(binding, request);
+    }
     const response = await apiCreateCommunityChatMessage(selectedCommunity.id, {
+      requestId: request.requestId,
       member: currentMember,
       text,
     });
@@ -4672,6 +4688,7 @@ export function CommunitiesSection({
       return;
     }
 
+    if (chatRequestRef.current.get(binding) === request) chatRequestRef.current.delete(binding);
     const sentMessage = response.data;
     setChatByCommunityId((current) => ({
       ...current,
@@ -4686,7 +4703,9 @@ export function CommunitiesSection({
       communityId: selectedCommunity.id,
       behavior: "smooth",
     };
-    setChatDraft("");
+    if (chatDraftRevisionRef.current === draftRevision) {
+      setChatDraft((current) => current.trim() === text ? "" : current);
+    }
     setChatError(null);
   };
 
@@ -5711,6 +5730,7 @@ export function CommunitiesSection({
                 scrollRef={chatScrollRef}
                 onScroll={handleCommunityChatScroll}
                 onDraftChange={(value) => {
+                  chatDraftRevisionRef.current += 1;
                   setChatDraft(value);
                   if (chatError) setChatError(null);
                 }}
