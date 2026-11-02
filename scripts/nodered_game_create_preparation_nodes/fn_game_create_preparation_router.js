@@ -178,6 +178,8 @@ if (ctx.step === 'subservices') {
       !selected.roomIds.includes(c.provider_room_id))
   )
     return reject(409, 'GAME_CREATE_SERVICE_MISMATCH');
+  // Internal observation only; the public preparation capsule remains byte-compatible.
+  ctx.catalogueRoomIds = selected.roomIds === undefined ? null : [...selected.roomIds].sort();
   ctx.catalogEvidenceSha256 = gcHash(
     'game-create-catalog:v1\0' +
       JSON.stringify({

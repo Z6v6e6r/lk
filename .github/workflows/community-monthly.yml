@@ -8,6 +8,7 @@ on:
       - "scripts/community_monthly_worker.mjs"
       - "scripts/community_monthly_reports.mjs"
       - "scripts/build_rating_worker_release.mjs"
+<<<<<<< HEAD
       - "scripts/lib/stationMessage*.mjs"
       - "scripts/lib/stationNotificationFeed*.mjs"
       - "scripts/tests/stationNotificationFeed*"
@@ -24,6 +25,18 @@ on:
       - "scripts/rating_worker.mjs"
       - "src/utils/communityApi.ts"
       - "src/components/cabinet/CommunitiesSection.tsx"
+=======
+      - "scripts/lib/gameCreateOwnerSource.mjs"
+      - "scripts/nodered_game_create_owner_nodes/**"
+      - "scripts/patch_nodered_game_create_owner.mjs"
+      - "scripts/nodered_game_create_preparation_nodes/**"
+      - "scripts/nodered_games_nodes/fn_split_create_prepare.js"
+      - "scripts/nodered_games_nodes/fn_split_router.js"
+      - "scripts/nodered_subscription_booking_nodes/**"
+      - "scripts/tests/gameCreateOwner*"
+      - "scripts/tests/helpers/gameCreateOwnerHarness.mjs"
+      - "scripts/tests/fixtures/quarter-create-owner-v1.json"
+>>>>>>> 7f375a31c427b7c7e820a771ec9b941875b7fad2
       - "scripts/lib/stationMembership*.mjs"
       - "scripts/lib/communityRosterWrites.mjs"
       - "scripts/lib/communityPolicyProjection.mjs"
@@ -64,6 +77,7 @@ on:
       - "scripts/tests/managedSelfLeaveOwner*"
       - "scripts/tests/helpers/managedSelfLeaveOwnerHarness.mjs"
       - "scripts/tests/fixtures/managed-self-leave-v1-contract.json"
+<<<<<<< HEAD
       - "scripts/lib/stationMessage*.mjs"
       - "scripts/lib/stationNotificationFeed*.mjs"
       - "scripts/tests/stationNotificationFeed*"
@@ -80,6 +94,18 @@ on:
       - "scripts/rating_worker.mjs"
       - "src/utils/communityApi.ts"
       - "src/components/cabinet/CommunitiesSection.tsx"
+=======
+      - "scripts/lib/gameCreateOwnerSource.mjs"
+      - "scripts/nodered_game_create_owner_nodes/**"
+      - "scripts/patch_nodered_game_create_owner.mjs"
+      - "scripts/nodered_game_create_preparation_nodes/**"
+      - "scripts/nodered_games_nodes/fn_split_create_prepare.js"
+      - "scripts/nodered_games_nodes/fn_split_router.js"
+      - "scripts/nodered_subscription_booking_nodes/**"
+      - "scripts/tests/gameCreateOwner*"
+      - "scripts/tests/helpers/gameCreateOwnerHarness.mjs"
+      - "scripts/tests/fixtures/quarter-create-owner-v1.json"
+>>>>>>> 7f375a31c427b7c7e820a771ec9b941875b7fad2
       - "scripts/lib/stationMembership*.mjs"
       - "scripts/lib/communityRosterWrites.mjs"
       - "scripts/lib/communityPolicyProjection.mjs"
@@ -140,6 +166,7 @@ jobs:
         run: |
           node --test scripts/tests/stationMembershipLifetime.test.mjs scripts/tests/stationMembershipOwner.test.mjs scripts/tests/stationMembershipOwnerPatch.test.mjs scripts/tests/stationMembershipOwnerMongo.test.mjs
           node --experimental-strip-types --test scripts/tests/communityTypes.test.ts
+<<<<<<< HEAD
       - name: Test station message commit barrier, retry and physical Mongo races
         run: node --test scripts/tests/stationMessageOwner.test.mjs scripts/tests/stationMessageOwnerPatch.test.mjs scripts/tests/stationMessageOwnerMongo.test.mjs scripts/tests/stationMessageWorker.test.mjs scripts/tests/stationMessageRetry.test.mjs
       - name: Test station history v2 pagination and physical Mongo reads
@@ -148,5 +175,9 @@ jobs:
         run: node --test scripts/tests/stationStreamOrder.test.mjs scripts/tests/stationStreamHistoryPatch.test.mjs scripts/tests/stationStreamMongo.test.mjs
       - name: Test station notification read-only feed and physical Mongo eligibility
         run: node --test scripts/tests/stationNotificationFeed.test.mjs scripts/tests/stationNotificationFeedAuth.test.mjs scripts/tests/stationNotificationFeedPatch.test.mjs scripts/tests/stationNotificationFeedMongo.test.mjs
+=======
+      - name: Test original quarter CREATE custody and physical Mongo races
+        run: node --test scripts/tests/gameCreateOwner.test.mjs scripts/tests/gameCreateOwnerGraph.test.mjs scripts/tests/gameCreateOwner.mongo.test.mjs
+>>>>>>> 7f375a31c427b7c7e820a771ec9b941875b7fad2
       - name: Test worker release and schedule wrappers
         run: npm run test:rating-worker-release

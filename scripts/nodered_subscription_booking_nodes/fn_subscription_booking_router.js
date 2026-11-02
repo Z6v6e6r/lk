@@ -7,10 +7,11 @@ if (msg.headers && typeof msg.headers === "object") {
 // Diagnostic observer: optional, no-throw; sourceHash is the uninstrumented business preimage.
 const lkDiagnostic = (fields = {}) => {
   try {
+    if (msg._gameCreateOwner || msg._quarterCreateCapability || msg._subscriptionBooking?.managedCreateBinding) return;
     if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "c9806925ad2421371eb4cf60a65147e69b012f9ed9e15fef44b9d2f4165dd6c9", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "5217f23ed5bb250515ff8fb8b419914bfc12e5c611afe692fac5434e214ec028", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -88,6 +89,7 @@ const OUTPUT_DEBUG = 5;
 const OUTPUT_MANAGED_POLICY = 6;
 
 const emit = (index, value = msg) => {
+  if (value._subscriptionBooking?.managedCreateBinding && index === OUTPUT_DEBUG) return null;
   if (value._subscriptionBooking?.trainingRegistration && typeof trainingOutput === "function"
     && index !== OUTPUT_FINAL) {
     const restricted = trainingOutput(value._subscriptionBooking, index);
@@ -519,7 +521,7 @@ const managedOwnerEvidence = (ctx, kind, providerBookingId) => {
   try {
     const mode = global.get("subscriptions_owner_evidence_enabled");
     if (mode === undefined || mode === null || mode === false || mode === "false") {
-      return { ok: true, headers: {} };
+      return kind === "PRECREATE_EXPIRED_NOT_DISPATCHED" ? unavailable : { ok: true, headers: {} };
     }
     if (mode !== true && mode !== "true") return unavailable;
     const secret = global.get("subscriptions_owner_evidence_secret");
@@ -543,7 +545,7 @@ const managedOwnerEvidence = (ctx, kind, providerBookingId) => {
       || evidence.tenantKey !== ctx.tenantKey || evidence.actorClientId !== ctx.actorClientId
       || evidence.exerciseId !== ctx.exerciseId || evidence.subscriptionId !== ctx.clientSubscriptionId
       || !idPattern.test(ctx.managedEntitlementOperationId || "")
-      || (kind === "PROVIDER_REJECTED" ? providerBookingId !== null : !idPattern.test(providerBookingId || ""))
+      || (["PROVIDER_REJECTED", "PRECREATE_EXPIRED_NOT_DISPATCHED"].includes(kind) ? providerBookingId !== null : !idPattern.test(providerBookingId || ""))
       || !Number.isFinite(age) || age < 0 || age > 60_000) {
       return { ok: false, code: "SUBSCRIPTION_OWNER_EVIDENCE_READBACK_REQUIRED" };
     }
@@ -615,7 +617,8 @@ const prepareManagedEntitlementReserve = (ctx) => {
     {
       subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       action: ctx.managedAction,
-      target: { targetId: ctx.exerciseId },
+      target: { targetId: ctx.managedCreateBinding?.targetInput.targetId || ctx.exerciseId },
+      ...(ctx.managedCreateBinding ? { expectations: ctx.managedCreateBinding.expectations } : {}),
       ...(ctx.managedJoinV2 ? { expectations: ctx.managedJoinV2.entitlement.expectations } : {}),
     },
     {
@@ -682,8 +685,8 @@ const validEntitlementDecision = (ctx, decision) => {
     || decision.policyVersion !== ctx.managedRuntime?.policy?.policyVersion
     || decision.policyDigest !== ctx.managedRuntime?.policyDigest
     || decision.action !== ctx.managedAction
-    || normalizeId(decision.target?.targetId) !== normalizeId(ctx.exerciseId)
-    || normalizeId(decision.target?.stationId) !== normalizeId(ctx.managedTarget?.stationId)
+    || normalizeId(decision.target?.targetId) !== normalizeId(ctx.managedCreateBinding?.targetInput.targetId || ctx.exerciseId)
+    || normalizeId(decision.target?.stationId) !== normalizeId(ctx.managedCreateBinding?.targetInput.stationId || ctx.managedTarget?.stationId)
     || toStr(decision.target?.eventTypeId) !== toStr(ctx.managedTarget?.externalEventTypeId)
     || toStr(decision.target?.productTypeId) !== toStr(ctx.managedTarget?.productTypeId)
     || Number(decision.target?.durationMinutes) !== Number(ctx.managedTarget?.durationMinutes)
@@ -1514,6 +1517,22 @@ const prepareOperationRelease = (ctx, operation) => {
 };
 
 const prepareMongoUpdate = (ctx, step, query, update) => {
+  if (ctx.managedCreateBinding) {
+    if (step === "operation_reclaim") {
+      if (!ctx.quarterReclaim) return finishPending(ctx, "Исходная операция требует сверки", { code: "GAME_CREATE_OWNER_RECLAIM_REQUIRED" });
+      // The private gateway proved the immutable rejected outer receipt first.
+      // Match the complete old canonical preimage, never just its terminal state.
+      query = { ...ctx.quarterReclaim };
+      update.$set.managedCreateBinding = ctx.managedCreateBinding;
+      Object.assign(update.$unset, { quarterPrecreateAbort: "", managedCreateReleaseProof: "", providerCreateReceipt: "", providerCreateAttemptId: "",
+        precreateRecoveryTarget: "", precreatedEntitlementReserved: "", precreateRecoveredAt: "", createAttemptedAt: "", releaseReason: "" });
+    } else query = { ...query, managedCreateBinding: ctx.managedCreateBinding };
+    if (step === "operation_confirm") query.state = { $in: ["PENDING_CONFIRMATION", "CONFIRMED"] };
+    if (["operation_precreated_promote", "operation_confirm"].includes(step)) {
+      query.providerCreateReceipt = ctx.providerCreateReceipt;
+      query.exerciseId = ctx.exerciseId;
+    }
+  }
   ctx.step = step;
   msg._subscriptionBooking = ctx;
   msg.payload = [query, update, {}];
@@ -1607,6 +1626,7 @@ const preparePrecreatedAttempt = (ctx) => {
     $set: {
       state: "PRECREATE_ATTEMPTING",
       precreateAttemptBoundAt: nowIso,
+      ...(ctx.managedCreateBinding ? { providerCreateAttemptId: ctx.quarterAttemptId } : {}),
       precreateRecoveryTarget: recoveryTarget,
       updatedAt: nowIso,
     },
@@ -1790,6 +1810,7 @@ const preparePrecreateAbortUpdate = (ctx) => {
   const nowIso = new Date().toISOString();
   const binding = ctx.durablePrecreateRejection ? precreateRejectionBinding(ctx) : null;
   if (ctx.durablePrecreateRejection && !binding) return precreateRejectionPending(ctx);
+  if (ctx.managedCreateBinding && !ctx.quarterReleaseProof) return precreateRejectionPending(ctx);
   return prepareMongoUpdate(ctx, "operation_precreate_abort", {
     ...(binding || {}),
     _id: ctx.operationKey,
@@ -1804,6 +1825,7 @@ const preparePrecreateAbortUpdate = (ctx) => {
     $set: {
       state: "RELEASED",
       releaseReason: "VIVA_EXERCISE_CREATE_REJECTED",
+      ...(ctx.managedCreateBinding ? { managedCreateReleaseProof: ctx.quarterReleaseProof } : {}),
       releasedAt: nowIso,
       updatedAt: nowIso,
     },
@@ -1985,6 +2007,12 @@ const serviceTokenAvailable = () => {
 };
 
 const prepareBookingCreate = (ctx) => {
+  if (ctx.managedCreateBinding && (ctx.quarterRecoveryOnly || !ctx.providerCreateReceipt
+    || !managedJoinV2SignerReady() || !validEntitlementDecision(ctx, ctx.managedDecision)
+    || ctx.managedDecision?.money?.finalPriceMinor !== 0 || ctx.managedDecision?.usageUnits !== 1
+    || !serviceTokenAvailable())) {
+    return finishPending(ctx, "Создание требует сверки исходной операции", { code: "GAME_CREATE_OWNER_BOOKING_NOT_DISPATCHED" });
+  }
   if (ctx.trainingRegistration && (typeof trainingLease !== "function" || !trainingLease(ctx)
     || ctx.trainingRegistration.recoveryOnly || ctx.trainingWriteAllowed !== true
     || ctx.managedEnforcement?.enabled !== false || ctx.lk1 || ctx.managedEntitlementOperationId)) {
@@ -2219,6 +2247,16 @@ if (!ctx) {
   });
 }
 
+if (ctx.managedCreateBinding !== undefined) {
+  if (typeof quarterCreateGateway !== "function") return finishPending(ctx, "Владелец CREATE недоступен", { code: "GAME_CREATE_OWNER_GRAPH_UNAVAILABLE" });
+  const quarterResult = quarterCreateGateway(ctx);
+  if (quarterResult) return quarterResult;
+}
+if (ctx.step === "operation_find" && !ctx.managedCreateBinding && Array.isArray(msg.payload)
+  && msg.payload.some(row => row?.managedCreateBinding !== undefined)) {
+  return finishPending(ctx, "Требуется исходная привязка CREATE", { code: "GAME_CREATE_OWNER_BINDING_REQUIRED" });
+}
+
 if (msg.req?.body?.trainingRegistration !== undefined && ctx.trainingRegistration === undefined) {
   // An older prepare node cannot silently erase a restrictive training request.
   ctx.trainingRegistration = { invalidMixedVersion: true };
@@ -2286,6 +2324,7 @@ if (ctx.step === "managed_precreate_entitlement_readback") {
     || result.releaseReason !== "PROVIDER_REJECTED" || result.providerBookingId !== null) {
     return precreateRejectionPending(ctx);
   }
+  if (ctx.managedCreateBinding) ctx.quarterReleaseProof = { schemaVersion: 1, observedAt: new Date().toISOString(), readback: result };
   return preparePrecreateAbortUpdate(ctx);
 }
 
