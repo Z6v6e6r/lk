@@ -61,10 +61,12 @@ test('only acknowledged one-row dispatch CAS authorizes POST; lost ACK and retry
   assert.deepEqual(c.dispatch(JSON.parse(JSON.stringify(mutation.next)), request(), later), retried);
 });
 test('provider failure, malformed/changed amount or unsafe URL remain UNKNOWN and cannot redispatch', () => {
+  const credentialUrl = new URL('https://bank.example.test');
+  credentialUrl.username = 'fixture-user'; credentialUrl.password = 'fixture-password';
   const response = { statusCode: 201, transactionId: 'fixture-tx', amountMinor: 980000,
     paymentUrl: 'https://bank.example.test/pay', expiresAt: '2026-11-02T05:30:00.000Z' };
   for (const patch of [{ statusCode: 500 }, { transactionId: null }, { amountMinor: 980001 }, { amountMinor: '980000' },
-    { paymentUrl: 'http://bank.example.test' }, { paymentUrl: 'https://user:password@bank.example.test' },
+    { paymentUrl: 'http://bank.example.test' }, { paymentUrl: credentialUrl.href },
     { paymentUrl: 'https://127.0.0.1/pay' }, { paymentUrl: 'https://[::1]/pay' },
     { paymentUrl: 'https://localhost/pay' }, { paymentUrl: 'https://bank.example.test/\r\n' },
     { expiresAt: '2026-11-02T04:00:00.000Z' }]) {
