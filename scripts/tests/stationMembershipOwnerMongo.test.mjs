@@ -135,3 +135,44 @@ test('physical TRAINING exact kind binding, replay, LEFT and separate GAME gener
   await transition(db[2],'LEFT');
   assert.equal((await run(db[3],'confirmation',confirmation)).payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
 });
+
+const createBody = op => ({...admissionBody(op),activity:{kind:'GAME_CREATE',id:uid(90)}});
+const createConfirmation = (admission,generation) => {
+  const body=confirmationBody(admission,generation);
+  return {...body,confirmation:{...body.confirmation,kind:'GAME_CREATE_ORGANIZER'}};
+};
+test('physical CREATE original generation first-wins across clients, duplicate delivery, LEFT, and new-operation replay fence',options,async t=>{
+  const db=await fixture(t),body=createBody(1);
+  const admissions=await Promise.all(db.map(d=>run(d,'admission',body)));
+  assert.ok(admissions.every(r=>r.statusCode===200));
+  assert.equal(await db[0].collection('lk_station_membership_admissions').countDocuments(),1);
+  const a=admissions[0].payload,c=createConfirmation(a);
+  assert.equal((await run(db[1],'confirmation',{...c,confirmation:{...c.confirmation,kind:'GAME_PARTICIPATION'}})).statusCode,409);
+  assert.equal(await db[2].collection('lk_station_membership_generation_claims').countDocuments(),0);
+  const confirmations=await Promise.all(db.map(d=>run(d,'confirmation',c)));
+  assert.ok(confirmations.every(r=>['ENROLLED','ALREADY_APPLIED'].includes(r.payload.outcome)));
+  const original=await db[0].collection('lk_station_membership_generation_claims').findOne({generationId:uid(80)});
+  assert.equal(original._id,'v1:'+uid(22)+':station-community:GAME_CREATE_ORGANIZER:'+uid(80));
+  const enrolled=await db[1].collection('lk_communities').findOne({id:'station-community'});
+  assert.equal(enrolled.members.length,1);assert.equal(enrolled.stationMembershipLifetime.players[0].lastApplied.kind,'GAME_CREATE_ORGANIZER');
+  await transition(db[2],'LEFT');
+  const b=(await run(db[3],'admission',createBody(2))).payload;
+  assert.equal((await run(db[0],'confirmation',createConfirmation(b))).payload.reason,'GENERATION_ALREADY_CLAIMED');
+  assert.deepEqual(await db[1].collection('lk_station_membership_generation_claims').findOne({_id:original._id}),original);
+  assert.equal((await run(db[2],'confirmation',createConfirmation(b,81))).payload.outcome,'ENROLLED');
+  assert.equal((await run(db[3],'confirmation',c)).payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+});
+test('physical CREATE ambiguous ACK readback never erases concurrent leave and administrator blocks remain permanent',options,async t=>{
+  const db=await fixture(t),a=(await run(db[0],'admission',createBody(1))).payload,c=createConfirmation(a);
+  assert.equal((await run(db[1],'confirmation',c,{after({step,msg}){if(['claim_write','community_write'].includes(step))msg.error={};}})).payload.outcome,'ENROLLED');
+  assert.equal((await run(db[2],'confirmation',c)).payload.outcome,'ALREADY_APPLIED');
+  await transition(db[2],'LEFT');
+  const b=(await run(db[3],'admission',createBody(2))).payload;
+  const raced=await run(db[0],'confirmation',createConfirmation(b,81),{async after({step,msg}){if(step==='community_write'){await transition(db[1],'LEFT');msg.error={};}}});
+  assert.equal(raced.payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+  assert.equal((await db[2].collection('lk_communities').findOne({id:'station-community'})).members.length,0);
+  for(const [i,state] of ['REMOVED','BANNED'].entries()){
+    await transition(db[2],state);
+    assert.equal((await run(db[3],'admission',createBody(3+i))).payload.admission.reason,'MEMBERSHIP_BLOCKED');
+  }
+});

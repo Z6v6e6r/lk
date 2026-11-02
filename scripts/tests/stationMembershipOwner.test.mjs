@@ -161,3 +161,66 @@ test('missing-member replay proof compares generation kind without upgrading leg
   assert.equal((await run(db,'confirmation',confirmationBody(game))).payload.outcome,'ENROLLED');
   assert.equal((await run(db,'confirmation',confirmationBody(game))).payload.outcome,'ALREADY_APPLIED');
 });
+
+const createBody = op => ({ ...admissionBody(op), activity: { kind: 'GAME_CREATE', id: uid(90) } });
+const createConfirmation = (admission, generation) => {
+  const body = confirmationBody(admission, generation);
+  return { ...body, confirmation: { ...body.confirmation, kind: 'GAME_CREATE_ORGANIZER' } };
+};
+test('GAME_CREATE authenticated admission binds original draft and rejects JOIN/TRAINING downgrade before claims', async () => {
+  const db = memoryDb(), body = createBody(1);
+  for (const override of [{ fresh_operation: false }, { caller: 'lk2-worker' }, { scope: 'subscription-runtime.game-create.admit' }]) {
+    assert.ok([401,403].includes((await run(db,'admission',body,{message:message('admission',body,override)})).statusCode));
+  }
+  assert.equal(db.tables.has('lk_station_membership_admissions'),false);
+  const response = await run(db,'admission',body), a = response.payload;
+  assert.equal(response.statusCode,200); assert.equal(a.admission.outcome,'ADMITTED');
+  assert.equal((await run(db,'admission',admissionBody(1))).statusCode,409);
+  assert.equal((await run(db,'admission',trainingBody(1))).statusCode,409);
+  const correct=createConfirmation(a);
+  for (const confirmation of [{...correct.confirmation,kind:'GAME_PARTICIPATION'},{...correct.confirmation,kind:'TRAINING_REGISTRATION'},{...correct.confirmation,activityId:uid(91)}]) {
+    assert.equal((await run(db,'confirmation',{...correct,confirmation})).statusCode,409);
+    assert.equal(db.tables.has('lk_station_membership_generation_claims'),false);
+  }
+  assert.equal((await run(db,'confirmation',correct,{message:message('confirmation',correct,{persisted_fact:false})})).statusCode,401);
+  assert.equal((await run(db,'confirmation',correct,{message:message('confirmation',correct,{sub:uid(24)})})).statusCode,409);
+  assert.equal((await run(db,'confirmation',correct)).payload.outcome,'ENROLLED');
+  const proof=db.tables.get('lk_communities')[0].stationMembershipLifetime.players[0].lastApplied;
+  assert.deepEqual(proof,{operationId:body.operationId,admissionId:a.admission.admissionId,generationId:uid(80),kind:'GAME_CREATE_ORGANIZER'});
+  const before=structuredClone(db.tables.get('lk_communities'));
+  assert.equal((await run(db,'confirmation',correct)).payload.outcome,'ALREADY_APPLIED');
+  assert.equal((await run(db,'confirmation',{...correct,confirmation:{...correct.confirmation,kind:'GAME_CREATE_CANCELLED'}})).statusCode,400);
+  assert.deepEqual(db.tables.get('lk_communities'),before);
+});
+test('GAME_CREATE original generation survives LEFT and cannot be relabelled by a new operation; new registration returns, admin states block',async()=>{
+  const db=memoryDb(),a=(await run(db,'admission',createBody(1))).payload;
+  assert.equal((await run(db,'confirmation',createConfirmation(a))).payload.outcome,'ENROLLED');
+  const originalClaim=structuredClone(db.tables.get('lk_station_membership_generation_claims')[0]);
+  assert.equal(originalClaim._id,'v1:'+uid(22)+':station-community:GAME_CREATE_ORGANIZER:'+uid(80));
+  await transition(db,'LEFT');
+  assert.equal((await run(db,'confirmation',createConfirmation(a))).payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+  const b=(await run(db,'admission',createBody(2))).payload;
+  assert.equal((await run(db,'confirmation',createConfirmation(b))).payload.reason,'GENERATION_ALREADY_CLAIMED');
+  assert.deepEqual(db.tables.get('lk_station_membership_generation_claims')[0],originalClaim);
+  assert.equal((await run(db,'confirmation',createConfirmation(b,81))).payload.outcome,'ENROLLED');
+  for(const state of ['REMOVED','BANNED']){
+    await transition(db,state);
+    assert.equal((await run(db,'admission',createBody(state==='REMOVED'?3:4))).payload.admission.reason,'MEMBERSHIP_BLOCKED');
+    assert.equal((await run(db,'confirmation',createConfirmation(b,81))).payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+    assert.equal(db.tables.get('lk_communities')[0].members.length,0);
+  }
+});
+test('GAME_CREATE claim/community ACK loss replays original fact and stale CAS never overwrites LEFT',async()=>{
+  const db=memoryDb(),a=(await run(db,'admission',createBody(1))).payload,c=createConfirmation(a);
+  const applied=await run(db,'confirmation',c,{after({step,msg}){if(['claim_write','community_write'].includes(step))msg.error={};}});
+  assert.equal(applied.payload.outcome,'ENROLLED');
+  assert.equal((await run(db,'confirmation',c)).payload.outcome,'ALREADY_APPLIED');
+  assert.equal(db.tables.get('lk_station_membership_generation_claims').length,1);
+  db.tables.get('lk_communities')[0].members=[];
+  assert.equal((await run(db,'confirmation',c)).payload.reason,'APPLIED_MEMBER_MISSING');
+  await transition(db,'LEFT');const b=(await run(db,'admission',createBody(2))).payload;
+  let raced=false;
+  const result=await run(db,'confirmation',createConfirmation(b,81),{async before({step}){if(step==='community_write'&&!raced){raced=true;await transition(db,'LEFT');}}});
+  assert.equal(result.payload.reason,'MEMBERSHIP_EPOCH_CHANGED');
+  assert.equal(db.tables.get('lk_communities')[0].members.length,0);
+});
