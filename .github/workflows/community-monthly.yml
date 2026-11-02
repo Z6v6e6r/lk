@@ -51,6 +51,10 @@ on:
       - deploy/rating-worker/**
       - package*.json
       - .github/workflows/community-monthly.yml
+      - scripts/lib/monthlyFriendship*.mjs
+      - scripts/nodered_monthly_friendship_nodes/**
+      - scripts/compose_monthly_friendship_custody.mjs
+      - scripts/tests/monthlyFriendship*.test.mjs
       - scripts/lib/gameCreateOwnerSource.mjs
       - scripts/nodered_game_create_owner_nodes/**
       - scripts/patch_nodered_game_create_owner.mjs
@@ -112,6 +116,10 @@ on:
       - deploy/rating-worker/**
       - package*.json
       - .github/workflows/community-monthly.yml
+      - scripts/lib/monthlyFriendship*.mjs
+      - scripts/nodered_monthly_friendship_nodes/**
+      - scripts/compose_monthly_friendship_custody.mjs
+      - scripts/tests/monthlyFriendship*.test.mjs
       - scripts/lib/gameCreateOwnerSource.mjs
       - scripts/nodered_game_create_owner_nodes/**
       - scripts/patch_nodered_game_create_owner.mjs
@@ -201,3 +209,5 @@ jobs:
       - name: Test monetary SELF dispatch fencing with real Mongo write conflicts
         run: node --test scripts/tests/monetarySelfLeaveFence.test.mjs
           scripts/tests/monetarySelfLeaveFence.mongo.test.mjs
+      - name: Test monthly Friendship custody with required real Mongo conflicts
+        run: node --test scripts/tests/monthlyFriendshipCustody.test.mjs scripts/tests/monthlyFriendshipRuntime.test.mjs scripts/tests/monthlyFriendshipComposition.test.mjs scripts/tests/monthlyFriendshipCustody.mongo.test.mjs

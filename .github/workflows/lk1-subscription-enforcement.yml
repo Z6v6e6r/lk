@@ -551,6 +551,10 @@ jobs:
           scripts/tests/lk1SubscriptionDevHostPreflight.test.mjs
           scripts/dev-uat/subscriptions-sale-period/test.mjs
 
+      - name: Test monthly Friendship durable purchase and compatibility
+        if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
+        run: node --test scripts/tests/monthlyFriendshipCustody.test.mjs scripts/tests/monthlyFriendshipRuntime.test.mjs scripts/tests/monthlyFriendshipComposition.test.mjs
+
       - name: Run tracked credential and authenticated-route security tests
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:
