@@ -891,17 +891,23 @@ The actor is authenticated through the existing profile read before durable look
 The owner reads `lk_game_leave_operations`; it never accepts `RETURN_VERIFIED` from
 request data. Provider cancellation must be exact, complete and explicitly cancelled.
 
-Before the first CUP release, a CAS stores the immutable cancellation binding and
-original provider receipt time on the existing booking operation. The transient actor
-token and owner signature are never persisted. Release uses the existing `release-v1`
-proof with `BOOKING_CANCELLED`. It requires the existing owner signer to be enabled
-and valid; missing configuration cannot downgrade to an unsigned request. A retry
-with a stored marker reads the original CUP operation and does not refresh provider
+New managed SELF compensation is held with the existing pending response and
+`RETURN_ATTRIBUTION_UNVERIFIED`. The legacy `RETURN_VERIFIED` predicate observes an
+aggregate subscription balance increase and cancelled booking; a concurrent return
+of another booking can satisfy it without attributing a credit to this booking.
+It is not authority to create a cancellation marker, issue a new CUP release or
+release the canonical booking allowance. The daily route and direct canonical owner
+both enforce this hold, including an in-flight old marker-creation callback.
+
+An already persisted exact cancellation marker permits only readback of the original
+CUP operation. Neither a fresh nor expired marker permits a new release or renewed
 evidence. Only an exact seven-field readback with `COMPENSATED`, `APPLIED`,
 `BOOKING_CANCELLED` and the original booking/op/instance permits local `RELEASED`.
-HTTP success or the release response alone does not supply this evidence. Expired
-nonterminal evidence stays pending; an already completed compensation may be recovered
-after proof expiry through readback. Local ACK loss re-reads the exact booking row.
+HTTP success or the old release response alone does not supply this evidence.
+`CONFIRMED`/`NONE`, malformed, foreign or unavailable readback remains pending without
+new marker or release writes. Exact historical local `RELEASED` marker/receipt replay
+is retained. Local ACK loss re-reads the exact booking row. No tokens/signatures are
+persisted; no provider return fields or new compensation contract are invented.
 
 The final update is fenced by the original booking identity, state and cancellation
 marker after another exact leave-claim read. Replacement/rejoin cannot release a new
@@ -923,8 +929,17 @@ assembles the bridge, canonical prepare/router/probe, durable authority reader a
 foreground-reclaim wiring as one exact graph packet. Its approved parent source is
 `71db810308ae56c228b62f3adbad9e8c7b3415da`; unknown source/topology is rejected.
 Historical release pins are not advanced. A production installation still needs fresh
-actual graph evidence, existing CUP release/readback availability and separate owner
+actual graph evidence, existing CUP readback availability and separate owner
 approval. Local synthetic tests are not Mongo, provider or production acceptance.
+
+Owner: the managed SELF canonical booking/leave integration. Audience: existing
+managed SELF callers only. Stop signal: missing attributable return proof; stop method:
+retain pending original custody, never ordinary-release fallback. This source guard
+does not undo historical compensation. Coherent installation must update both routes
+and drain earlier release-capable executions; source alone cannot recall an emitted
+CUP request. Rolling back to older code reopens the unsafe new-release path and must
+not be described as a safe recovery. New compensation needs a separately reviewed
+per-booking return proof contract; no flag or provider configuration is added here.
 
 ### LK2 managed FREE SELF LEAVE owner admission (source-only, not activated)
 
@@ -1008,3 +1023,114 @@ immutable admission, competing leases, stale generation CAS and lost-ACK receipt
 replay. Local skips are not physical Mongo acceptance. Deployment, authoritative
 runtime mapping, real provider cancellation/returned-visit verification and LK2
 consumer/local participation finalization remain separate acceptance requirements.
+
+### Ordinary SELF monetary cancellation dispatch fence (source-only)
+
+Owner: LK canonical SELF leave graph, based on #270. Audience: existing LK1 SELF
+CURRENCY/DEPOSIT callers, including multiple original bookings. This packet does
+not extend the private managed FREE/SERVICE owner to money, change provider APIs,
+or certify refunds. No new collection, index, runtime flag or public route is added.
+
+A newly inserted eligible ordinary SELF journal stores `monetarySelfLeave.version=1`,
+a revision, the exact tenant/client/game/exercise/operation/membership generation,
+the original booking array and requested method. Explicit SERVICE/NONE rows retain
+the old lane. Discovery creates this capability only when original booking IDs are
+known; `$setOnInsert` never upgrades a previous empty or ambiguous journal. A phone
+alone cannot authorize the new lane. Existing legacy journals without capability
+cannot acquire monetary dispatch authority on retry.
+
+Before each original booking's CURRENCY/DEPOSIT request, a full-preimage CAS checks
+the original tuple, capability/revision, current claim, and live lease using Mongo
+`$$NOW`. It appends an immutable dispatch marker and changes the journal to
+`MONETARY_DISPATCH_STARTED`. It never returns to STARTED. Only the freshly successful
+Mongo ACK (`acknowledged=true`, numeric `matchedCount=modifiedCount=1`) within its
+lease permits that invocation's single HTTP request. A stored marker, a lost ACK,
+or a successful subsequent read cannot recreate this permission. Marker method,
+booking, claim, dispatch ID and timestamp never change. Readback proofs append
+separately; revision prevents two writers from reusing the same preimage.
+
+The existing HTTP request node receives `followRedirects=false` and a bounded
+`requestTimeout=10000` for this lane. LOCAL reference: installed `@node-red/nodes`
+4.0.8 `21-httprequest.js` supports this override and sets retry limit zero. The
+patcher requires dynamic method/URL, no configured HTTP auth/proxy/TLS override or
+extra headers, and the exact single HTTP/router edges. This is not evidence of the
+deployed engine; compatible no-redirect/no-retry semantics must be verified before
+activation. A response origin/error guard is additional evidence, not prevention
+of a redirect after the fact.
+
+After any marked request, even HTTP 2xx, progression requires complete recognized
+active/history pages, unique original booking identity, exact client/exercise and
+an explicit affirmative cancellation boolean with no contradictory supplied
+state/timestamp. Substring statuses such as NOT_CANCELLED, dates alone, malformed
+pagination, aliases, duplicate IDs, foreign identity, missing history, or active
+original marked booking remain pending. A subsequent original unmarked booking
+can proceed only after earlier markers have exact cancellation readbacks. An
+already-cancelled unmarked booking can be observed without any request or refund
+claim. Replacement/rejoin bookings cannot be added to the original array.
+
+Before a dispatch marker exists, an expired claim can be acquired and its original
+unmarked booking retried. After a marker exists, lease recovery permits reads and
+later unmarked original bookings only, never another request for the marked one.
+A crash after marker persistence but before actual HTTP is indistinguishable from
+a lost provider response: it remains pending if cancellation cannot be proven.
+No provider idempotency or no-dispatch proof is invented. Background hydration that
+lacks the original capability cannot send a monetary request. New in-flight state
+is excluded by the existing legacy background query; foreground recovery needs the
+same verified actor and original generation.
+
+Final local completion uses the existing Viva-confirmed/local roster pipeline only
+after all original cancellations are proven. `moneyRefundState=UNVERIFIED` remains
+independent: neither booking history, local DONE nor a successful HTTP response
+proves a monetary refund or deposit credit. Original SERVICE verification and
+compensation requirements remain unchanged; provider acceptance is still missing.
+
+The existing organizer membership gate is preserved, including ACK -> gate -> router.
+**An uncertain monetary cancellation may retain the game-wide membership lock and
+block other actors in that game.** This packet never releases that lock on ambiguity;
+only the existing completed-operation release is used. Operational resolution and
+availability acceptance are activation prerequisites. This is not per-actor lock
+isolation or a new refund-settlement recovery service.
+
+Install/rollback: `patch_nodered_monetary_self_leave_fence.mjs` composes one exact
+#270 source/graph packet, preserving outputs 1–7 and adding output 8 to the existing
+claim/Mongo/ACK pipeline. It checks membership gate source and edge custody and
+emits an exact reviewed-flow contract. Drain all old in-flight writers before an
+authorized atomic install. Old #270 code refuses the new in-flight state and its
+background query does not select it. Retain all journal markers on rollback; never
+reset a marked row to STARTED or erase it to restore availability. No live install,
+rollback, provider call, migration or permission change is authorized by this source.
+
+LOCAL actual-node tests cover money selection, multi-booking progression, strict
+readbacks, ACK loss, stale executors, pre-dispatch recovery, immutable identity,
+mixed NONE queues, legacy/no-capability refusal, rollback and graph custody. The
+CI-only `monetarySelfLeaveFence.mongo.test.mjs` uses separate Mongo clients against
+only the existing disposable monthly fixture, with a unique owned database and
+cleanup. It never provisions or accepts a local/shared database. Physical CI results
+and provider/runtime acceptance must be reported separately from synthetic results.
+
+Mixed-queue correction: in the existing ordinary default-choice monetary-capable
+lane, a SERVICE item also uses the same pre-HTTP dispatch CAS and irreversible
+marker. That marker binds its exact four-field subscription baseline; the same
+transaction writes the existing `subscriptionReturnChecks`, subscription ID/count
+and RETURN_PENDING. Recovery validates those fields against the immutable marker
+and rehydrates them before any early return. SERVICE-before-money and
+money-before-SERVICE therefore survive lost ACKs without dropping visit evidence;
+missing/corrupt baseline cannot become local success. A cancelled booking still
+requires the existing visit readback or RETURN_PENDING. Explicit SERVICE and the
+private managed SERVICE owner are unchanged. No new refund/provider contract is
+introduced.
+
+Graph custody also checks exact authorized producer/port pairs for every incoming
+edge of the dispatch/HTTP/ACK/membership-gate chain. Existing authorize and retry
+hydration source are pinned. Relevant or ambiguous catch/complete scopes and dynamic
+or reinjecting link paths are refused; explicitly scoped unrelated observers and
+fixed disconnected links are preserved. An arbitrary fresh whole-flow hash is not
+permission to replay a captured positive ACK. These are narrowly scoped checks on
+the concrete dispatch path, not a generic Node-RED security framework.
+
+Durability boundary: synthetic and disposable-Mongo CAS/ACK results do not prove
+production failover durability or exactly-once delivery. Before activation, verify
+the actual Mongo topology, write concern/journaling, journal retention, and that all
+executors use the same authoritative store. Patcher `clientNode` equality alone does
+not establish those deployed connection properties. No connection configuration,
+secrets or deployment state were inspected or changed for this source packet.

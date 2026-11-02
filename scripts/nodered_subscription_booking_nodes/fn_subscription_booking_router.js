@@ -11,7 +11,7 @@ const lkDiagnostic = (fields = {}) => {
     if (msg.req?.body?.trainingRegistration || msg._subscriptionBooking?.trainingRegistration || msg.payload?.trainingRegistration) return;
     if (typeof global === "undefined" || typeof global.get !== "function") return;
     const observer = global.get("lkDiagnostics");
-    observer?.observe(msg, "booking_router", { sourceHash: "5217f23ed5bb250515ff8fb8b419914bfc12e5c611afe692fac5434e214ec028", ...fields });
+    observer?.observe(msg, "booking_router", { sourceHash: "f6527f4fc896eff87b7e2c715fa57b852edac3c8ebd1a6ffdd5d6658a618607a", ...fields });
   } catch { /* Observability cannot alter business execution. */ }
 };
 lkDiagnostic({ code: "STAGE_ENTER" });
@@ -2367,8 +2367,8 @@ if (["managed_leave_operation", "managed_leave_release_reread"].includes(ctx.ste
     if (!managedLeaveMarkerMatches(ctx, operation.managedSelfLeaveCancellation)) return managedLeavePending(ctx);
     return managedLeaveReadback(ctx);
   }
-  if (operation.managedEntitlementState !== "CONFIRMED") return managedLeavePending(ctx);
-  return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
+  // Aggregate visit balance cannot authorize a new per-booking compensation.
+  return managedLeavePending(ctx, "RETURN_ATTRIBUTION_UNVERIFIED");
 }
 if (ctx.step === "managed_leave_marker_ack") {
   // A lost CAS acknowledgement never supplies authority to issue a release.
@@ -2388,14 +2388,8 @@ if (ctx.step === "managed_leave_readback") {
     ctx.managedLeaveReceipt = receipt;
     return managedLeaveFind(ctx, "managed_leave_final_authority");
   }
-  const marker = ctx.releaseOperation?.managedSelfLeaveCancellation;
-  if (ctx.managedLeaveReleaseAttempted === true || !managedLeaveMarkerMatches(ctx, marker)
-    || receipt.operationState !== "CONFIRMED" || receipt.compensationState !== "NONE" || receipt.releaseReason !== null
-    || Date.now() - Date.parse(marker.observedAt) > 60_000 || !managedJoinV2SignerReady()) return managedLeavePending(ctx);
-  recordOwnerReadback(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId, marker.observedAt);
-  ctx.ownerBookingReadback.operationId = ctx.managedEntitlementOperationId;
-  ctx.managedLeaveReleaseAttempted = true;
-  return prepareManagedEntitlementRelease(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId);
+  // Existing markers support APPLIED readback only, never a new release attempt.
+  return managedLeavePending(ctx, "RETURN_ATTRIBUTION_UNVERIFIED");
 }
 if (ctx.step === "managed_leave_release_ack") {
   // Read the exact canonical row even on ambiguous Mongo ACK. Never repeat CUP
@@ -3312,14 +3306,8 @@ if (ctx.step === "operation_find") {
         if (!managedLeaveMarkerMatches(ctx, releaseOperation.managedSelfLeaveCancellation)) return managedLeavePending(ctx);
         return managedLeaveReadback(ctx);
       }
-      ctx.managedLeaveMarker = { schemaVersion: 1, binding: managedLeaveBinding(ctx),
-        observedAt: ctx.ownerBookingReadback.observedAt };
-      if (!managedLeaveMarkerMatches(ctx, ctx.managedLeaveMarker)) return managedLeavePending(ctx);
-      ctx.step = "managed_leave_marker_ack";
-      msg.payload = [{ ...managedLeaveQuery(ctx, releaseOperation), managedSelfLeaveCancellation: { $exists: false } },
-        { $set: { managedSelfLeaveCancellation: ctx.managedLeaveMarker } }, {}];
-      delete msg.error;
-      return emit(OUTPUT_MONGO_UPDATE);
+      // Also stop an in-flight old graph before it creates fresh marker authority.
+      return managedLeavePending(ctx, "RETURN_ATTRIBUTION_UNVERIFIED");
     }
     ctx.managedEnvironment = toStr(releaseOperation.managedEnvironment) || "PROD";
     if (asArray(releaseOperation.releasedBookingIds).some((id) => normalizeId(id) === normalizeId(ctx.releaseBookingId))) {

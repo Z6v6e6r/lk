@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import {
   ownerDoc,
   terminal,
@@ -228,3 +229,66 @@ test(
     assert.equal((await db[3].collection(daily).findOne({ _id: doc._id })).state, 'PENDING');
   },
 );
+
+test('real Mongo attribution guard: aggregate return cannot create marker; existing APPLIED readback CAS alone releases original row', options, async (t) => {
+  const db = await fixture(t), doc = ownerDoc(), rows = terminal(doc);
+  const daily = 'lk_subscription_daily_booking_ops', leaves = 'lk_game_leave_operations';
+  const marker = structuredClone(rows.booking.managedSelfLeaveCancellation), b = marker.binding;
+  const booking = { ...rows.booking, state: 'CONFIRMED', tenantKey: b.tenantKey,
+    actorClientId: b.actorClientId, exerciseId: b.exerciseId, clientSubscriptionId: b.clientSubscriptionId,
+    serviceDate: b.serviceDate, managedEntitlementState: 'CONFIRMED', managedEnvironment: 'PROD' };
+  const receipt = structuredClone(booking.managedSelfLeaveReceipt);
+  delete booking.managedSelfLeaveCancellation; delete booking.managedSelfLeaveReceipt;
+  await db[0].collection(daily).insertOne(structuredClone(booking));
+  const ctx = { mode: 'SELF', requestedRefundMethod: 'SERVICE', subscriptionReturnState: 'RETURN_VERIFIED',
+    actorClientId: b.actorClientId, targetClientId: b.actorClientId, exerciseId: b.exerciseId,
+    clientSubscriptionId: b.clientSubscriptionId, initialBookingIds: [b.bookingId],
+    vivaVerification: 'active_absent_history_cancelled', operationKey: b.leaveOperationKey,
+    operationId: b.leaveOperationId, gameId: b.gameId, membershipVersion: b.membershipVersion,
+    claimToken: 'fixture-original-claim', actorAuthHeader: 'Bearer synthetic-actor' };
+  const canonical = msg => new Function('msg', 'global', 'env', fs.readFileSync(
+    new URL('../nodered_subscription_booking_nodes/fn_subscription_booking_router.js', import.meta.url), 'utf8'))(
+    msg, { get: () => undefined }, { get: () => undefined });
+  const before = await db[1].collection(daily).findOne({ _id: booking._id });
+  const held = legacy('daily_limit_route', { _splitLeaveCtx: ctx, payload: [before] });
+  assert.equal(held[3].payload.reason, 'RETURN_ATTRIBUTION_UNVERIFIED');
+  assert.equal(held.filter(Boolean).length, 1);
+  const c = { caller: 'http', action: 'release', operationId: b.leaveOperationId, tenantKey: b.tenantKey, actorClientId: b.actorClientId,
+    managedSelfLeave: { ...b, leaveClaimToken: ctx.claimToken }, releaseBookingId: b.bookingId,
+    releaseOperation: before, step: 'managed_leave_operation' };
+  const bypass = canonical({ _subscriptionBooking: c, payload: [before] });
+  assert.equal(bypass[4].payload.details.code, 'RETURN_ATTRIBUTION_UNVERIFIED');
+  assert.equal(bypass.filter(Boolean).length, 1);
+  assert.deepEqual(await db[2].collection(daily).findOne({ _id: booking._id }), before);
+  // Historical marker is fixture preimage, never minted by the guarded runtime.
+  await db[0].collection(daily).updateOne({ _id: booking._id }, { $set: { managedSelfLeaveCancellation: marker } });
+  c.releaseOperation = await db[1].collection(daily).findOne({ _id: booking._id });
+  c.managedLeaveReadbackUrl = 'https://owner.example.test/internal/subscriptions/entitlements/readback';
+  c.step = 'managed_leave_readback';
+  const none = canonical({ _subscriptionBooking: c, statusCode: 200, responseUrl: c.managedLeaveReadbackUrl,
+    payload: { ...receipt, operationState: 'CONFIRMED', compensationState: 'NONE', releaseReason: null } });
+  assert.equal(none[4].payload.details.code, 'RETURN_ATTRIBUTION_UNVERIFIED');
+  assert.equal(none.filter(Boolean).length, 1);
+  assert.deepEqual(await db[2].collection(daily).findOne({ _id: booking._id }), c.releaseOperation);
+  const leave = { ...rows.leave, state: 'VIVA_CONFIRMED', localApplyClaimToken: ctx.claimToken,
+    localApplyLeaseUntil: new Date(Date.now() + 120000).toISOString(), subscriptionReturnState: 'RETURN_VERIFIED',
+    vivaVerification: 'active_absent_history_cancelled', vivaConfirmedAt: new Date().toISOString(),
+    subscriptionReturnVerifiedAt: new Date().toISOString(), requestedRefundMethod: 'SERVICE',
+    subscriptionReturnChecks: [{ bookingId: b.bookingId, clientSubscriptionId: b.clientSubscriptionId,
+      visitsLeftBefore: 3, expectedReturnCount: 1 }] };
+  await db[0].collection(leaves).insertOne(leave);
+  c.step = 'managed_leave_readback';
+  const m = { _subscriptionBooking: c, statusCode: 200, responseUrl: c.managedLeaveReadbackUrl, payload: receipt };
+  assert.equal(canonical(m)[7], m);
+  m.payload = await db[1].collection(leaves).find(m.payload).toArray();
+  assert.equal(canonical(m)[3], m);
+  const result = await update(db[2].collection(daily), m.payload);
+  assert.equal(result.modifiedCount, 1);
+  m.error = { message: 'synthetic committed ACK lost' }; m.payload = undefined;
+  assert.equal(canonical(m)[1], m);
+  m.payload = await db[3].collection(daily).find(m.payload).toArray(); delete m.error;
+  assert.equal(canonical(m)[4].payload.state, 'RELEASED');
+  const after = await db[0].collection(daily).findOne({ _id: booking._id });
+  assert.deepEqual(after.managedSelfLeaveCancellation, marker);
+  assert.deepEqual(after.managedSelfLeaveReceipt, receipt);
+});

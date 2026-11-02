@@ -169,6 +169,16 @@ if (ctx.mode === "SELF" && ctx.requestedRefundMethod !== "NONE" && ctx.subscript
     ctx.dailyLimitReleasedAt = operation.releasedAt;
     return continueApply(ctx);
   }
+  // RETURN_VERIFIED is an aggregate balance observation, not attributable credit.
+  // Only an existing exact marker may reach canonical readback of an APPLIED receipt.
+  const marker = operation.managedSelfLeaveCancellation;
+  if (marker === undefined) return retry(ctx, "RETURN_ATTRIBUTION_UNVERIFIED");
+  if (!isObj(marker) || marker.schemaVersion !== 1 || !isObj(marker.binding)
+    || Object.keys(marker).sort().join(",") !== "binding,observedAt,schemaVersion"
+    || Object.keys(marker.binding).sort().join(",") !== Object.keys(binding).sort().join(",")
+    || Object.keys(binding).some(key => marker.binding[key] !== binding[key])
+    || typeof marker.observedAt !== "string" || !Number.isFinite(Date.parse(marker.observedAt))
+    || Date.parse(marker.observedAt) > Date.now()) return retry(ctx, "managed_self_leave_binding_unverified");
   if (typeof ctx.actorAuthHeader !== "string" || !/^Bearer \S+$/.test(ctx.actorAuthHeader)
     || typeof ctx.claimToken !== "string" || !ctx.claimToken) return retry(ctx, "managed_self_leave_actor_required");
   ctx.managedSelfLeave = { ...binding, leaveClaimToken: ctx.claimToken };

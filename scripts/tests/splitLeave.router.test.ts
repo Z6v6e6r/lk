@@ -518,9 +518,10 @@ test("requested refund method is selected only when the exact Viva option is ava
         subscription: { available: true },
       },
     };
-    let cancel = run("fn_split_leave_router.js", msg, {
+    const cancellation = run("fn_split_leave_router.js", msg, {
       global: { vivacrm_access_token: "server-token" },
-    }).result[0];
+    }).result;
+    let cancel = cancellation[0];
     if (requestedRefundMethod === "SERVICE") {
       assert.equal(cancel.method, "GET");
       assert.match(cancel.url, /subscriptions\?size=200$/);
@@ -531,8 +532,11 @@ test("requested refund method is selected only when the exact Viva option is ava
       assert.deepEqual(cancel.payload, {});
       assert.equal(cancel._splitLeaveCtx.refundMessage, undefined);
     } else {
-      assert.deepEqual(cancel.payload, { refundMethod: requestedRefundMethod });
-      assert.equal(cancel._splitLeaveCtx.refundMessage, undefined);
+      // This leaf fixture deliberately bypasses the durable journal. Monetary
+      // dispatch requires a fresh exact CAS ACK, covered by the actual-node suite.
+      assert.equal(cancel, null);
+      assert.equal(cancellation[1].statusCode, 202);
+      assert.equal(cancellation[1].payload.state, "RETRY_REQUIRED");
     }
   }
 
