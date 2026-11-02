@@ -71,7 +71,8 @@ test("the group schedule requests monetary quotes for PRO while preserving Energ
   assert.match(groupSchedulePageSource, /const proTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isProTraining\(selectedDetail\)\),/);
   assert.match(groupSchedulePageSource, /if \(topokratyExcluded\) \{/);
   assert.doesNotMatch(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\)/);
-  assert.match(groupSchedulePageSource, /apiFetchGroupSubscriptionDiscounts\(selectedId/);
+  assert.match(groupSchedulePageSource, /const fetchDiscounts = patriotsTournamentSelected\s*\? apiFetchTournamentSubscriptionDiscounts : apiFetchGroupSubscriptionDiscounts/);
+  assert.match(groupSchedulePageSource, /fetchDiscounts\(selectedId, controller\.signal\)/);
   assert.match(groupSchedulePageSource, /: proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
   assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout\s*\?\s*proTrainingSelected\s*\?/);
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);

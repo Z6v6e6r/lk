@@ -158,6 +158,9 @@ export function resolveExerciseCategoryFromValue(value: unknown): ExerciseCatego
     pickNumber(direction, ["id", "directionId"])
     ?? pickNumber(exercise, ["directionId", "vivaDirectionId"]);
 
+  // Keep the corporate Patriots tournament aligned with the server, including after a rename.
+  if (typeId === 2349 && directionId === 6306) return EXERCISE_CATEGORY_TOURNAMENT;
+
   if (
     includesNumber(EXERCISE_CATEGORY_OPEN_GAME_TYPE_IDS, typeId)
     || includesNumber(EXERCISE_CATEGORY_OPEN_GAME_DIRECTION_IDS, directionId)
