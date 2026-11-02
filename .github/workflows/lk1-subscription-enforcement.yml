@@ -553,7 +553,7 @@ jobs:
 
       - name: Test monthly Friendship durable purchase and compatibility
         if: steps.route.outputs.profile == 'release' || steps.route.outputs.profile == 'business'
-        run: node --test scripts/tests/monthlyFriendshipCustody.test.mjs scripts/tests/monthlyFriendshipRuntime.test.mjs scripts/tests/monthlyFriendshipComposition.test.mjs
+        run: node --test scripts/tests/monthlyFriendshipCustody.test.mjs scripts/tests/monthlyFriendshipRuntime.test.mjs scripts/tests/monthlyFriendshipComposition.test.mjs scripts/tests/monthlyFriendshipApi.test.mjs scripts/tests/monthlyFriendshipApiComposition.test.mjs
 
       - name: Run tracked credential and authenticated-route security tests
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
