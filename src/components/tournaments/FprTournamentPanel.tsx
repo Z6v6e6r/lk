@@ -382,6 +382,11 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   const threshold = state ? fprReserveThreshold(state, now) : null;
   const name = (id: string) => state?.players.find(p => p.id === id)?.name ?? id;
   const disabled = busy || Boolean(pending);
+  const supplementaryControls = <>
+    {state && <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>}
+    <button type="button" disabled={busy} onClick={() => void reload()}>{busy ? "Проверяем…" : "Прочитать актуальный протокол с сервера"}</button>
+    <TournamentBroadcastControl key={data.tournamentId} tournamentId={data.tournamentId} stationId={data.params?.stationId} initialState={data.params?.broadcast} onDialogChange={setBroadcastSelectionOpen} />
+  </>;
   return <Modal isOpen onClose={() => { if (!broadcastSelectionOpen) onClose(); }} title={`ФПР 6×25${state?.testMode ? " · тестовое проведение" : ""}`} variant="fullscreen" bodyClassName="tournament-settings-modal-body"
     headerAction={state && onEditSettings ? <button type="button" className="modal-close fpr-settings-button" disabled={disabled} onClick={onEditSettings} aria-label="Настройки турнира" title="Настройки турнира">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
@@ -433,8 +438,6 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
           <div className="fpr-scroll"><table><thead><tr><th>Место</th><th>Участник</th><th>Победы</th><th>Очки</th><th>Матчи</th><th>Отдых</th><th>Очные серии</th><th>Лига до старта</th><th>Статус</th></tr></thead>
             <tbody>{fprStandings(state).map(p => <tr key={p.id}><td>{p.rank ?? "—"}</td><th scope="row">{p.name}</th><td>{p.wins}</td><td>{p.totalPoints}</td><td>{p.matchesPlayed}</td><td>{p.byeCount}</td><td>{p.headToHead ?? "не применялись"}</td><td>{p.leaguePoints}</td><td>{p.status === "DNF" ? "DNF" : p.status === "no_matches" ? "нет матчей" : "в зачёте"}</td></tr>)}</tbody>
           </table></div>
-          <HeadToHeadDetails state={state} />
-          <p>Таблица учитывает только закрытые общие раунды. {state.testMode ? "Это тестовый протокол без начислений." : "Очки сообщества рассчитываются по обычным правилам опубликованных турниров после полного завершения."} Уровень игрока эта механика не меняет.</p>
         </>}
         {tab === "protocol" && <>
           <p>Алгоритм: {state.version}. Источник: {state.leagueSource}. Снимок: {new Date(state.leagueSnapshotAt).toLocaleString("ru-RU")}.</p>
@@ -447,12 +450,17 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
           </details>)}
           <ol>{state.audit.map(a => <li key={a.id}>{new Date(a.at).toLocaleTimeString("ru-RU")} · {a.action}{a.detail ? ` · ${a.detail}` : ""}</li>)}</ol>
         </>}
-        <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>
       </>}
       {pending && <div role="status"><p>Есть команда без подтверждённого ответа сервера. Новые действия временно заблокированы.</p><button type="button" disabled={busy} onClick={() => void send(pending)}>Повторить ту же команду</button></div>}
       {error && <p role="alert" className="fpr-error">{error}</p>}
-      <button type="button" disabled={busy} onClick={() => void reload()}>{busy ? "Проверяем…" : "Прочитать актуальный протокол с сервера"}</button>
-      <TournamentBroadcastControl key={data.tournamentId} tournamentId={data.tournamentId} stationId={data.params?.stationId} initialState={data.params?.broadcast} onDialogChange={setBroadcastSelectionOpen} />
+      {tab === "table" && state ? <details className="fpr-more">
+        <summary>Подробнее</summary>
+        <div className="fpr-more-content">
+          <HeadToHeadDetails state={state} />
+          <p>Таблица учитывает только закрытые общие раунды. {state.testMode ? "Это тестовый протокол без начислений." : "Очки сообщества рассчитываются по обычным правилам опубликованных турниров после полного завершения."} Уровень игрока эта механика не меняет.</p>
+          {supplementaryControls}
+        </div>
+      </details> : supplementaryControls}
     </div>
   </Modal>;
 }
