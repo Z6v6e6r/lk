@@ -40,6 +40,9 @@
 .fpr-panel .tournament-match fieldset { display: flex; flex-direction: column; gap: 10px; }
 .fpr-panel details.tournament-round { margin: 0; padding: 0; }
 .fpr-panel .fpr-serving-pair { display: inline-block; margin-inline-start: 6px; }
+.modal-close.fpr-settings-button { margin-left: auto; margin-right: 8px; min-width: 44px; min-height: 44px; flex-shrink: 0; color: inherit; }
+.fpr-settings-button:focus-visible { outline: 3px solid var(--purple, #007951); outline-offset: 2px; }
+.fpr-settings-button:disabled { cursor: default; opacity: .5; }
 @media (max-width: 768px) {
   .fpr-panel .tournament-match-row > .tournament-match-label,
   .fpr-panel input.tournament-score-input,
