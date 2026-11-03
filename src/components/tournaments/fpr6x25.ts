@@ -32,6 +32,7 @@ export type FprMatch = {
   deadlineScoreTotal: number | null;
   lastRallyStartedAt?: string;
   lateEntryReason?: string;
+  recordedAt?: string;
 };
 export type FprAttempt = {
   id: string;
@@ -85,7 +86,7 @@ export type FprStanding = {
 type FprAction =
   | { action: "prepare_round" | "start_round" | "close_round" | "finish" }
   | { action: "set_b1"; matchId: string; playerId: string }
-  | { action: "score" | "correct_score"; matchId: string; score1: number; score2: number; confirmed1: boolean; confirmed2: boolean; startIfScheduled?: boolean; autoCloseRound?: boolean; reason?: string; playedAt?: string; lastRallyStartedAt?: string }
+  | { action: "score" | "correct_score"; matchId: string; score1: number; score2: number; confirmed1: boolean; confirmed2: boolean; startIfScheduled?: boolean; autoCloseRound?: boolean; recordResult?: boolean; reason?: string; playedAt?: string; lastRallyStartedAt?: string }
   | { action: "cancel_round"; reason: string }
   | { action: "withdraw"; playerId: string; reason: string };
 export type FprCommand = FprAction & { id: string; expectedRevision: number };
@@ -407,10 +408,10 @@ export function fprReserveThreshold(state: FprState, now: string) {
   const remainingMs = Date.parse(state.endsAt) - Date.parse(now);
   return { allowed: state.reserveAllowed && completed.length >= 6 && completed.length < 8 && remainingMs >= requiredMs, requiredMs, remainingMs };
 }
-function startFprRound(state: FprState, current: FprAttempt | null, now: string) {
+function startFprRound(state: FprState, current: FprAttempt | null, now: string, recording = false) {
   requireFpr(current?.status === "scheduled", "Нет подготовленного раунда");
-  requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
-  if (current.round >= 7) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
+  if (!recording) requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
+  if (current.round >= 7 && !recording) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
   current.status = "running"; current.startedAt = now; state.status = "in_progress";
 }
 function closeFprRound(state: FprState, current: FprAttempt | null, now: string, automatic = false) {
@@ -443,6 +444,7 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
   let detail = "";
   if (command.action === "prepare_round") {
     requireFpr(!current, "Предыдущая попытка ещё не закрыта");
+    requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Время для нового раунда закончилось");
     if (fprCompletedRounds(state) >= 6) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
     state.attempts.push(prepareAttempt(state));
   } else if (command.action === "set_b1") {
@@ -458,7 +460,7 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
     const match = attempt?.matches.find(m => m.id === command.matchId);
     requireFpr(attempt && match, "Матч не найден");
     if (command.action === "score" && command.startIfScheduled === true && attempt === current && attempt.status === "scheduled") {
-      startFprRound(state, current, now);
+      startFprRound(state, current, now, command.recordResult === true);
     }
     requireFpr(command.action === "score" ? attempt.status === "running" : attempt.status === "closed", "Нельзя изменить счёт этой попытки");
     requireFpr(Number.isInteger(command.score1) && Number.isInteger(command.score2) && command.score1 >= 0 && command.score2 >= 0
@@ -470,6 +472,13 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
     const afterDeadline = Date.parse(now) >= deadline;
     let completedAt = match.completedAt;
     if (command.action === "score") {
+      if (command.recordResult === true) {
+        // This is score-entry time, not an assertion of when play started/ended.
+        // A scheduled round was admitted by prepareAttempt/prepare_round. Delayed
+        // typing must not retroactively revoke it or require invented timestamps.
+        completedAt = total === 25 ? (completedAt ?? now) : null;
+        if (total === 25) match.recordedAt = now;
+      } else {
       if (afterDeadline && match.deadlineScoreTotal !== null && total > match.deadlineScoreTotal) {
         requireFpr(match.deadlineScoreTotal === 24 && total === 25 && (command.lastRallyStartedAt || match.lastRallyStartedAt),
           "После игрового дедлайна разрешено доиграть только один уже начатый розыгрыш");
@@ -488,8 +497,9 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
         completedAt = actual;
         if (command.reason) match.lateEntryReason = command.reason.trim();
       }
+      }
       if (afterDeadline && match.deadlineScoreTotal === null) match.deadlineScoreTotal = total;
-      if (total < 25) { completedAt = null; delete match.lastRallyStartedAt; }
+      if (total < 25) { completedAt = null; delete match.lastRallyStartedAt; delete match.recordedAt; }
     }
     detail = `${match.id}: ${match.score1 ?? "–"}:${match.score2 ?? "–"} → ${command.score1}:${command.score2}${command.reason ? `; ${command.reason.trim()}` : ""}`;
     match.score1 = command.score1; match.score2 = command.score2;
@@ -590,7 +600,8 @@ export function validateFprState(value: unknown): asserts value is FprState {
       requireFpr(m.deadlineScoreTotal === null || Number.isInteger(m.deadlineScoreTotal) && m.deadlineScoreTotal >= 0 && m.deadlineScoreTotal <= 25, "Некорректный снимок счёта на дедлайне");
       if (m.completedAt) {
         requireFpr(validTime(m.completedAt) && validTime(a.startedAt!) && Date.parse(m.completedAt) >= Date.parse(a.startedAt!), "Некорректное время окончания матча");
-        if (Date.parse(m.completedAt) > Date.parse(s.endsAt) - 180_000) requireFpr(m.lastRallyStartedAt && validTime(m.lastRallyStartedAt)
+        if (m.recordedAt !== undefined) requireFpr(validTime(m.recordedAt) && Date.parse(m.recordedAt) >= Date.parse(m.completedAt), "Некорректное время записи счёта");
+        if (!m.recordedAt && Date.parse(m.completedAt) > Date.parse(s.endsAt) - 180_000) requireFpr(m.lastRallyStartedAt && validTime(m.lastRallyStartedAt)
           && Date.parse(m.lastRallyStartedAt) >= Date.parse(a.startedAt!) && Date.parse(m.lastRallyStartedAt) <= Date.parse(s.endsAt) - 180_000
           && typeof m.lateEntryReason === "string" && m.lateEntryReason.trim(), "Нет записи о последнем розыгрыше на дедлайне");
       }

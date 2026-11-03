@@ -1,3 +1,4 @@
+import { tournamentEventId } from "./tournamentEventIdentity";
 import type { Exercise, Trainer } from "./apiClient";
 import type { TournamentDraftSnapshot } from "./tournamentDraftStorage";
 
@@ -81,6 +82,8 @@ function getTournamentTypeName(tournamentType: string) {
 
 function getTournamentStatus(params: Record<string, unknown> | null | undefined) {
   if (!params) return null;
+  const fpr = params.fpr6x25 as { status?: string } | undefined;
+  if (fpr?.status === "completed" || fpr?.status === "incomplete") return "COMPLETED";
   const syncStatus = toStringSafe(params.syncStatus).toLowerCase();
   const localStatus = toStringSafe(params.localStatus).toLowerCase();
   if (syncStatus === "synced_viva") return "COMPLETED";
@@ -123,7 +126,7 @@ export function buildTournamentDraftExercise(
   };
 
   return {
-    id: payload.tournamentId,
+    id: tournamentEventId(payload),
     direction: {
       id: getTournamentDirectionId(payload.tournamentType),
       name: getTournamentTypeName(payload.tournamentType),
