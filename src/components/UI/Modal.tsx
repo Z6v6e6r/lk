@@ -6,6 +6,7 @@ interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
+  headerAction?: React.ReactNode;
   children: React.ReactNode;
   hideHeader?: boolean;
   bodyClassName?: string;
@@ -102,6 +103,7 @@ export function Modal({
   isOpen,
   onClose,
   title,
+  headerAction,
   children,
   hideHeader = false,
   bodyClassName,
@@ -187,6 +189,7 @@ export function Modal({
         {!hideHeader && (
           <div className="modal-header">
             <span className="modal-title">{title}</span>
+            {headerAction}
             <button type="button" className="modal-close" onClick={onClose} aria-label="Закрыть окно">
               ✕
             </button>
