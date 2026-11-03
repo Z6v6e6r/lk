@@ -11,7 +11,8 @@ const page = readFileSync('src/components/tournaments/TournamentsPage.tsx', 'utf
 const handlers = page.slice(page.indexOf('  const handleManagerDataChange = ('), page.indexOf('  const handleManagerEditSettings = ()'));
 const binding = page.match(/<FprTournamentManager\b[\s\S]*?onDataChange=\{([^\n]+)\}/)?.[1];
 assert.ok(binding, 'actual FPR manager callback must be wired');
-const callback = await transform(`export function fixture(payload, initialSelected) {
+const callback = await transform(`${readFileSync("src/utils/tournamentEventIdentity.ts", "utf8").replaceAll("export function", "function")}
+export function fixture(payload, initialSelected) {
   let manager = payload, selected = initialSelected;
   const extras = { totals: null, playerLogs: null };
   const visibleTournaments = [{ id: payload.tournamentId }], items = [], combinedHistoryById = {};

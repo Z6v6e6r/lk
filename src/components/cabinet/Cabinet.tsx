@@ -1,3 +1,4 @@
+import { tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
 import { canCreateGameAfterLookup } from "./bookingGameCreationGuard";
 import { AvatarImage } from "../UI/AvatarImage";
 import { invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
@@ -1654,6 +1655,9 @@ export function Cabinet({
   const [hasLoadedAllActiveRecords, setHasLoadedAllActiveRecords] = useState(false);
   const [loadingMoreActiveRecords, setLoadingMoreActiveRecords] = useState(false);
   const [customTournaments, setCustomTournaments] = useState<TournamentHistoryRecord[]>([]);
+  const [tournamentHistoryLoading, setTournamentHistoryLoading] = useState(false);
+  const [tournamentHistoryError, setTournamentHistoryError] = useState<string | null>(null);
+  const [tournamentHistoryRetry, setTournamentHistoryRetry] = useState(0);
   const [selectedTournamentBooking, setSelectedTournamentBooking] = useState<Booking | null>(null);
   const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
   const [, setChatReadMap] = useState<Record<string, number>>({});
@@ -2682,8 +2686,8 @@ export function Cabinet({
     const next = new Map<string, TournamentHistoryRecord>();
     customTournaments.forEach((record) => {
       const tournamentId = normalizeBookingLikeId(record.tournamentId);
-      if (!tournamentId || next.has(tournamentId)) return;
-      next.set(tournamentId, record);
+      if (!tournamentId) return;
+      tournamentIdentityKeys(record).forEach(id => next.set(id, record));
     });
     return next;
   }, [customTournaments]);
@@ -2693,43 +2697,28 @@ export function Cabinet({
     }
 
     const missingExerciseIds = collectBookingExerciseIds(selectedTournamentBooking)
-      .filter((exerciseId, index, array) => array.indexOf(exerciseId) === index)
-      .filter((exerciseId) => !tournamentByExerciseId.has(exerciseId));
-
-    if (missingExerciseIds.length === 0) {
-      return;
-    }
-
+      .filter((exerciseId, index, array) => array.indexOf(exerciseId) === index);
     let alive = true;
-    void Promise.all(
-      missingExerciseIds.map(async (exerciseId) => {
-        const result = await apiFetchTournamentHistory(exerciseId);
-        return Array.isArray(result.data) ? result.data : [];
-      }),
-    ).then((results) => {
+    setTournamentHistoryLoading(true);
+    setTournamentHistoryError(null);
+    void Promise.all(missingExerciseIds.map(async (exerciseId) => {
+      const result = await apiFetchTournamentHistory(exerciseId, { forceRefresh: true });
+      if (result.error) throw new Error(result.error.message);
+      return Array.isArray(result.data) ? result.data : [];
+    })).then(results => {
       if (!alive) return;
-      setCustomTournaments((current) => {
-        const next = new Map<string, TournamentHistoryRecord>();
-        current.forEach((record) => {
-          const normalizedTournamentId = normalizeBookingLikeId(record.tournamentId);
-          if (!normalizedTournamentId || next.has(normalizedTournamentId)) return;
-          next.set(normalizedTournamentId, record);
-        });
-        results.flat().forEach((record) => {
-          const normalizedTournamentId = normalizeBookingLikeId(record.tournamentId);
-          if (!normalizedTournamentId || next.has(normalizedTournamentId)) return;
-          next.set(normalizedTournamentId, record);
-        });
+      setCustomTournaments(current => {
+        const requested = new Set(missingExerciseIds);
+        const next = new Map(current.filter(record => !tournamentIdentityKeys(record).some(id => requested.has(id)))
+          .map(record => [record.tournamentId, record]));
+        results.flat().forEach(record => next.set(record.tournamentId, record));
         return Array.from(next.values());
       });
-    }).catch(() => {
-      // Tournament details can stay on booking fallback data when history is temporarily unavailable.
-    });
-
-    return () => {
-      alive = false;
-    };
-  }, [selectedTournamentBooking, tournamentByExerciseId]);
+    }).catch(error => {
+      if (alive) setTournamentHistoryError(error instanceof Error ? error.message : "Не удалось загрузить результаты");
+    }).finally(() => { if (alive) setTournamentHistoryLoading(false); });
+    return () => { alive = false; };
+  }, [selectedTournamentBooking, tournamentHistoryRetry]);
   const resolveTournamentForBooking = useCallback((booking: Booking): TournamentHistoryRecord | null => {
     const exerciseIds = collectBookingExerciseIds(booking);
     for (const exerciseId of exerciseIds) {
@@ -4110,6 +4099,9 @@ export function Cabinet({
       <TournamentDetailsModal
         isOpen={selectedTournamentBooking !== null}
         booking={selectedTournamentBooking}
+        historyLoading={tournamentHistoryLoading}
+        historyError={tournamentHistoryError}
+        onRetryHistory={() => setTournamentHistoryRetry(value => value + 1)}
         customTournament={selectedTournamentBooking ? resolveTournamentForBooking(selectedTournamentBooking) : null}
         onClose={closeTournamentDetails}
       />

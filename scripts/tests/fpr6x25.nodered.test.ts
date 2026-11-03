@@ -203,7 +203,7 @@ test("fresh FPR history bypasses only its cache entry while preserving legacy ca
   const fresh = run({ req: { query: { tournamentId: fprId, readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
   assert.equal(fresh[0], null); assert.equal(fresh[1]._tournamentHistoryCacheKey, `id:${fprId}`);
   const legacy = run({ req: { query: { tournamentId: "legacy", readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
-  assert.deepEqual(legacy[0].payload, [{ marker: "legacy" }]);
+  assert.equal(legacy[0], null); assert.equal(legacy[1]._tournamentHistoryCacheKey, "id:legacy");
   const contextRead = run({ req: { query: { tournamentId: "legacy", fprCommunityContext: "1" }, headers: { "x-real-ip": "context-test" } } }, flow);
   assert.equal(contextRead[0], null); assert.equal(contextRead[1]._tournamentHistoryCacheKey, "id:legacy");
   const invalidContext = run({ req: { query: { tournamentId: "../invalid", fprCommunityContext: "1" }, headers: {} } }, flow);
@@ -213,12 +213,16 @@ test("fresh FPR history bypasses only its cache entry while preserving legacy ca
   assert.equal(last[0].statusCode, 429);
 });
 
-test("legacy tournament preparation is unchanged by the conditional dispatch", () => {
+test("generic tournament preparation retains its values inside a FPR-protected event pipeline", () => {
   const input = { payload: { tournamentId: "old-type-example", tournamentType: "americano_classic", createdAt: "2026-10-28T00:00:00Z", participants: [], rounds: [] } };
   const legacy = new Function("msg", legacyPrepare)(structuredClone(input));
   const wrapped = prepare(structuredClone(input));
-  delete legacy[0].payload.$set.updatedAt; delete wrapped[0].payload.$set.updatedAt;
-  assert.deepEqual(wrapped, legacy);
+  const merge = wrapped[0].payload[1][0].$replaceRoot.newRoot.$cond[2].$mergeObjects;
+  delete legacy[0].payload.$set.updatedAt; delete merge[1].$literal.updatedAt;
+  assert.deepEqual(merge[1].$literal, legacy[0].payload.$set);
+  assert.equal(wrapped[0].payload[1][0].$replaceRoot.newRoot.$cond[1], "$$ROOT");
+  assert.deepEqual(wrapped[0].payload[1][1], { $set: { _id: { $ifNull: ["$_id", { $literal: "tournament:old-type-example" }] } } });
+  assert.ok(wrapped[0].query.$or.some((q: Record<string, unknown>) => q["params.fpr6x25.communityRating.sourceExerciseId"] === "old-type-example"));
 });
 
 test("generated backend commits first-save start and score with one CAS and preserves broadcast", () => {

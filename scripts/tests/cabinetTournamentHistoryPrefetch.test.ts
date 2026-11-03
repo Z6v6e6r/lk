@@ -15,12 +15,12 @@ test("cabinet loads tournament history only for an explicitly selected tournamen
   );
   assert.match(
     cabinetSource,
-    /missingExerciseIds\.map\(async \(exerciseId\) => {\s*const result = await apiFetchTournamentHistory\(exerciseId\);/,
+    /missingExerciseIds\.map\(async \(exerciseId\) => {\s*const result = await apiFetchTournamentHistory\(exerciseId, \{ forceRefresh: true \}\);/,
   );
 });
 
 test("cabinet no longer prefetches tournament history for every booking on the main screen", () => {
   assert.doesNotMatch(cabinetSource, /const tournamentHistorySourceBookings = useMemo\(/);
   assert.doesNotMatch(cabinetSource, /const tournamentExerciseIds = useMemo\(/);
-  assert.doesNotMatch(cabinetSource, /tournamentExerciseIds\.map\(async \(exerciseId\) => {\s*const result = await apiFetchTournamentHistory\(exerciseId\);/);
+  assert.doesNotMatch(cabinetSource, /tournamentExerciseIds\.map\(async \(exerciseId\) => {\s*const result = await apiFetchTournamentHistory\(exerciseId, \{ forceRefresh: true \}\);/);
 });

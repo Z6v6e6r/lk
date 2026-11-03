@@ -17,7 +17,7 @@ export function fprLegacySource(source, kind) {
 }
 export function patchFprFlow(inputBytes, contract) {
   if (fprSha256(inputBytes) !== contract.flowSha256) throw new Error("Flow preimage mismatch");
-  const kinds = ["prepare", "recalculate", "history_guard", "community_context", "broadcast_route"];
+  const kinds = ["prepare", "recalculate", "history_guard", "community_context", "broadcast_route", "create_ack", "history_response", "history_query"];
   if (!Array.isArray(contract.nodes) || contract.nodes.length < 1 || contract.nodes.length > kinds.length
     || new Set(contract.nodes.map(n => n.kind)).size !== contract.nodes.length
     || new Set(contract.nodes.map(n => n.id)).size !== contract.nodes.length
@@ -27,18 +27,29 @@ export function patchFprFlow(inputBytes, contract) {
   const changes = [];
   for (const expected of contract.nodes) {
     const matches = flow.filter(n => n.id === expected.id);
-    if (matches.length !== 1 || matches[0].type !== "function" || matches[0].name !== expected.name
-      || fprSha256(matches[0].func) !== expected.sha256) throw new Error("Node preimage mismatch: " + expected.id);
-    const node = matches[0], legacy = fprLegacySource(node.func, expected.kind);
-    node.func = buildFprNodeFunction(legacy, expected.kind);
-    new Function("msg", node.func);
-    if (node.func.slice(node.func.indexOf(FPR_PREFIX_END) + FPR_PREFIX_END.length) !== legacy) throw new Error("Legacy suffix changed");
-    changes.push({ id: node.id, name: node.name, kind: expected.kind, beforeSha256: expected.sha256, afterSha256: fprSha256(node.func) });
+    const queryNode = expected.kind === "history_query";
+    const field = queryNode ? "rules" : "func";
+    const value = queryNode ? JSON.stringify(matches[0]?.rules) : matches[0]?.func;
+    if (matches.length !== 1 || matches[0].type !== (queryNode ? "change" : "function") || matches[0].name !== expected.name
+      || fprSha256(value) !== expected.sha256) throw new Error("Node preimage mismatch: " + expected.id);
+    const node = matches[0];
+    if (queryNode) {
+      if (JSON.stringify(node.rules) !== JSON.stringify([{ t: "set", p: "payload", pt: "msg", to: '{ "tournamentId": $$.req.query.tournamentId }', tot: "jsonata" }])) throw new Error("Unknown history query");
+      node.rules[0].to = '{ "$or": [{ "tournamentId": $$.req.query.tournamentId }, { "tournamentType": "fpr_6x25", "params.sourceExerciseId": $$.req.query.tournamentId }, { "tournamentType": "fpr_6x25", "params.fpr6x25.communityRating.sourceExerciseId": $$.req.query.tournamentId }] }';
+    } else {
+      const legacy = fprLegacySource(node.func, expected.kind);
+      node.func = buildFprNodeFunction(legacy, expected.kind);
+      new Function("msg", node.func);
+      if (node.func.slice(node.func.indexOf(FPR_PREFIX_END) + FPR_PREFIX_END.length) !== legacy) throw new Error("Legacy suffix changed");
+    }
+    changes.push({ id: node.id, name: node.name, kind: expected.kind, field, beforeSha256: expected.sha256,
+      afterSha256: fprSha256(queryNode ? JSON.stringify(node.rules) : node.func) });
   }
   const changed = flow.filter((node, i) => !isDeepStrictEqual(node, before[i]));
   if (changed.length !== contract.nodes.length || changed.some(node => {
     const original = before.find(n => n.id === node.id);
-    return !isDeepStrictEqual({ ...node, func: original.func }, original);
+    const expected = changes.find(change => change.id === node.id);
+    return !expected || !isDeepStrictEqual({ ...node, [expected.field]: original[expected.field] }, original);
   })) throw new Error("Unexpected flow/wiring/endpoint change");
   const output = JSON.stringify(flow, null, 2) + "\n";
   return { output, report: { ok: true, beforeFlowSha256: contract.flowSha256, afterFlowSha256: fprSha256(output), changes,

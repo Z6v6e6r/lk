@@ -1,3 +1,4 @@
+import { fprStandings, validateFprState } from "../tournaments/fpr6x25";
 import { AvatarImage } from "../UI/AvatarImage";
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
@@ -36,7 +37,7 @@ type TournamentDisplayMeta = {
 
 type TournamentResultRow = {
   key: string;
-  rank: number;
+  rank: number | null;
   name: string;
   photo: string | null;
   rating: string | null;
@@ -63,6 +64,9 @@ interface TournamentDetailsModalProps {
   isOpen: boolean;
   booking: Booking | null;
   customTournament?: TournamentHistoryRecord | null;
+  historyLoading?: boolean;
+  historyError?: string | null;
+  onRetryHistory?: () => void;
   onClose: () => void;
 }
 
@@ -676,6 +680,21 @@ function buildResultRows(
     if (participant.clientId) participantMap.set(participant.clientId, participant);
   });
 
+  if (customTournament?.tournamentType === "fpr_6x25") {
+    const state = customTournament.params?.fpr6x25;
+    try {
+      validateFprState(state);
+      return fprStandings(state).filter(row => row.matchesPlayed > 0 || row.status === "DNF").map(row => {
+        const participant = participantMap.get(row.id) || participantMap.get(`name:${row.name.trim().toLowerCase()}`);
+        return {
+          key: row.id, rank: row.rank, name: row.name, photo: participant?.photo ?? null,
+          rating: participant?.rating ?? null, wins: row.wins, losses: row.matchesPlayed - row.wins,
+          draws: 0, pointsFor: row.pointsFor, pointsAgainst: row.pointsAgainst, delta: null,
+        };
+      });
+    } catch { return []; }
+  }
+
   const compareResultRows = (
     left: TournamentResultSortableRow,
     right: TournamentResultSortableRow,
@@ -703,7 +722,7 @@ function buildResultRows(
   };
 
   const totals = customTournament?.totals;
-  if (totals && typeof totals === "object") {
+  if (totals && typeof totals === "object" && Object.keys(totals).length > 0) {
     const rows = Object.entries(totals)
       .map(([key, value]) => {
         if (!isRecord(value)) return null;
@@ -801,6 +820,7 @@ export function TournamentDetailsModal({
   isOpen,
   booking,
   customTournament = null,
+  historyLoading, historyError, onRetryHistory,
   onClose,
 }: TournamentDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<TournamentDetailsTab>("roster");
@@ -1021,7 +1041,7 @@ export function TournamentDetailsModal({
 
         {activeTab === "results" && (
           <div className="tournament-details-section">
-            {resultRows.length === 0 ? (
+            {historyLoading ? <div role="status">Загружаем результаты…</div> : historyError ? <div role="alert">{historyError} <button type="button" onClick={onRetryHistory}>Повторить</button></div> : resultRows.length === 0 ? (
               <div className="tournament-details-empty">Результаты пока не опубликованы</div>
             ) : (
               <div className="tournament-details-results">
@@ -1029,7 +1049,7 @@ export function TournamentDetailsModal({
                   const pointsDiff = getPointDifference(row.pointsFor, row.pointsAgainst);
                   return (
                     <div key={row.key} className="tournament-details-result-row">
-                      <div className="tournament-details-result-rank">{row.rank}</div>
+                      <div className="tournament-details-result-rank">{row.rank ?? "—"}</div>
                       <div className="tournament-details-result-avatar-wrap">
                         <div className={`tournament-details-avatar-ring${row.rating ? " has-level" : ""}`}>
                           <div className="tournament-details-avatar tournament-details-avatar--result">
