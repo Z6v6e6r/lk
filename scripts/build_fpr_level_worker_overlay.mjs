@@ -12,6 +12,7 @@ export const fprWorkerFiles = [
   "scripts/lib/fprLevelIdentity.mjs",
   "src/services/player-rating/fprTournamentRating.ts",
   "src/services/player-rating/fprRatingReplay.ts",
+  "src/services/player-rating/fprLevelResults.ts",
   "src/services/player-rating/tournamentExclusionGuard.ts"
 ];
 export const fprWorkerReplacements = [

@@ -18,6 +18,7 @@ const outDir = path.resolve(outArg);
 if (fs.existsSync(outDir)) throw new Error(`Release directory already exists: ${outDir}`);
 
 const files = [
+  ["src/services/player-rating/fprLevelResults.ts", "src/services/player-rating/fprLevelResults.ts"],
   ["src/services/player-rating/fprTournamentRating.ts", "src/services/player-rating/fprTournamentRating.ts"],
   ["src/services/player-rating/fprRatingReplay.ts", "src/services/player-rating/fprRatingReplay.ts"],
   ["scripts/lib/fprLevelLedger.mjs", "scripts/lib/fprLevelLedger.mjs"],

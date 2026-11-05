@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { MongoClient } from 'mongodb';
 import { ratingFixture } from './helpers/fprRatingFixture.ts';
 import { fprProjection, applyFprCommand } from '../../src/components/tournaments/fpr6x25.ts';
-import { loadFprLevelContext, buildFprPlayerPlan, applyFprPlayerPlan, processFprProjectionOutbox, processFprLevelLedger, fprLevelHash } from '../lib/fprLevelLedger.mjs';
+import { loadFprLevelContext, buildFprPlayerPlan, applyFprPlayerPlan, processFprProjectionOutbox, processFprLevelLedger, projectFprLevelResults, fprLevelHash } from '../lib/fprLevelLedger.mjs';
 import { readFprLevelIdentityHistory } from '../lib/fprLevelIdentity.mjs';
 import { loadIdentityEvents } from '../game_result_rating_worker.mjs';
 import { replayPlayerRatingEvents } from '../../src/services/player-rating/ledger.ts';
@@ -187,4 +187,64 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       await db.dropDatabase();
       await client.close();
     }
+  });
+
+
+test('historical level snapshots need no new award and retain sports, state and provider queues',
+  { skip: uri ? false : 'Run scripts/run_fpr_level_mongo_tests.mjs', timeout: 60000 }, async () => {
+    const client = new MongoClient(uri);
+    const dbName = `test_fpr_level_${crypto.randomBytes(8).toString('hex')}`;
+    const db = client.db(dbName);
+    try {
+      await client.connect();
+      const state = ratingFixture(4, 6);
+      const document = { _id: 'historical-snapshot', tournamentId: state.tournamentId, tournamentType: 'fpr_6x25',
+        participants: state.players, ...fprProjection(state, { sourceExerciseId: 'synthetic-source' }) };
+      await db.collection('tournaments').insertOne(document);
+      let context = await loadFprLevelContext(db, config);
+      await applyFprPlayerPlan(db, client, 'p0', context, now);
+      await projectFprLevelResults(db, context, now, false);
+      await applyFprPlayerPlan(db, client, 'p1', context, now);
+      await processFprLevelLedger(db, client, { context, config, nowIso: now, dryRun: false });
+      let stored = await db.collection('tournaments').findOne({ _id: document._id });
+      assert.ok(stored.fprLevelResults.rows.every(r => r.status === 'applied'));
+      const expectedRows = stored.fprLevelResults.rows;
+      const sportsBefore = fprLevelHash({ ...stored, fprLevelLedgerFence: null, fprLevelResults: null });
+      const eventsBefore = await db.collection('rating_events').countDocuments();
+      const outboxesBefore = await db.collection('rating_projection_outbox').find({}).toArray();
+      const statesBefore = await db.collection('player_rating_state').find({}).toArray();
+      await db.collection('tournaments').updateOne({ _id: document._id }, { $unset: { fprLevelResults: '' } });
+      context = await loadFprLevelContext(db, config);
+      const backfill = await processFprLevelLedger(db, client, { context, config, nowIso: now, dryRun: false });
+      assert.equal(backfill.events, 0); assert.equal(backfill.changed, 0); assert.equal(backfill.projections, 0);
+      assert.equal(backfill.resultsProjection.updated, 1);
+      stored = await db.collection('tournaments').findOne({ _id: document._id });
+      assert.deepEqual(stored.fprLevelResults.rows, expectedRows);
+      assert.equal(fprLevelHash({ ...stored, fprLevelLedgerFence: null, fprLevelResults: null }), sportsBefore);
+      assert.equal(await db.collection('rating_events').countDocuments(), eventsBefore);
+      assert.deepEqual(await db.collection('rating_projection_outbox').find({}).toArray(), outboxesBefore);
+      assert.deepEqual(await db.collection('player_rating_state').find({}).toArray(), statesBefore);
+      const unchanged = await projectFprLevelResults(db, context, '2026-11-05T11:00:00Z', false);
+      assert.equal(unchanged.updated, 0, 'even a frozen older context must not rewrite identical rows');
+
+      const award = await db.collection('rating_events').findOne({ 'source.domain': 'TOURNAMENT', 'player.clientId': 'p0' });
+      await db.collection('rating_events').updateOne({ _id: award._id }, { $set: { 'source.applyToState': false } });
+      context = await loadFprLevelContext(db, config);
+      await projectFprLevelResults(db, context, now, false);
+      assert.equal((await db.collection('tournaments').findOne({ _id: document._id })).fprLevelResults.rows.find(r => r.id === 'p0').status, 'pending');
+      await db.collection('rating_events').updateOne({ _id: award._id }, { $unset: { 'source.applyToState': '' } });
+      const duplicate = { ...award, _id: 'duplicate-award', id: 'duplicate-award', idempotencyKey: 'duplicate-award' };
+      await db.collection('rating_events').insertOne(duplicate);
+      await projectFprLevelResults(db, context, now, false);
+      assert.equal((await db.collection('tournaments').findOne({ _id: document._id })).fprLevelResults.rows.find(r => r.id === 'p0').status, 'pending');
+      await db.collection('rating_events').deleteOne({ _id: duplicate._id });
+      await db.collection('rating_events').updateOne({ _id: award._id }, { $set: { 'source.sourceRevision': 'wrong-revision' } });
+      await projectFprLevelResults(db, context, now, false);
+      assert.equal((await db.collection('tournaments').findOne({ _id: document._id })).fprLevelResults.rows.find(r => r.id === 'p0').status, 'pending');
+      await db.collection('tournaments').insertOne({ _id: 'legacy-source', tournamentId: 'synthetic-source', tournamentType: 'mexicano', params: { finished: false } });
+      context = await loadFprLevelContext(db, config);
+      await db.collection('tournaments').updateOne({ _id: 'legacy-source' }, { $set: { ratingExclusions: [{ playerId: 'p0', scopes: ['level'], auditId: 'synthetic', reason: 'private', recordedAt: now }] } });
+      const skipped = await projectFprLevelResults(db, context, '2026-11-05T12:00:00Z', false);
+      assert.equal(skipped.sourceChanged, 1);
+    } finally { await db.dropDatabase(); await client.close(); }
   });

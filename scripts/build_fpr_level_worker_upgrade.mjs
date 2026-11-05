@@ -1,11 +1,11 @@
-// Prepare a one-file, hash-bound upgrade for an already installed FPR worker or
-// monthly reporter. No current-link, timer, Node-RED or database operations.
+// Prepare a hash-bound level module upgrade with its optional, fixed results dependency. No current-link, timer, Node-RED or database operations.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
 export const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 export const fprLevelModulePath = 'scripts/lib/fprLevelLedger.mjs';
+export const fprLevelResultsPath = 'src/services/player-rating/fprLevelResults.ts';
 const checked = (root, relative, expected) => {
   if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).some(p => !p || p === '.' || p === '..')) throw Error('Unsafe path');
   const target = path.join(root, relative);
@@ -28,22 +28,34 @@ export function buildFprLevelModuleUpgrade({ baselineRoot, sourceRoot, outputRoo
   }
   if (!files.has(fprLevelModulePath) || sha256(files.get(fprLevelModulePath)) !== contract.baselineModuleSha256) throw Error('Existing module preimage required');
   files.set(fprLevelModulePath, checked(sourceRoot, fprLevelModulePath, contract.sourceModuleSha256));
+  const changedFiles = [fprLevelModulePath];
+  if (contract.sourceResultsSha256) {
+    if (files.has(fprLevelResultsPath)) checked(baselineRoot, fprLevelResultsPath, contract.baselineResultsSha256);
+    else if (contract.baselineResultsSha256) throw Error('Unexpected results preimage');
+    const beforeResults = files.get(fprLevelResultsPath);
+    files.set(fprLevelResultsPath, checked(sourceRoot, fprLevelResultsPath, contract.sourceResultsSha256));
+    if (!beforeResults || sha256(beforeResults) !== contract.sourceResultsSha256) changedFiles.push(fprLevelResultsPath);
+  }
   if (contract.baselineModuleSha256 === contract.sourceModuleSha256) throw Error('Module unchanged');
+  for (const file of changedFiles) for (const match of files.get(file).toString('utf8').matchAll(/\bfrom\s*["'](\.[^"']+)["']/g)) {
+    const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
+    if (dependency.startsWith('../') || !files.has(dependency)) throw Error('Missing runtime dependency: ' + file);
+  }
   fs.mkdirSync(outputRoot, { mode: 0o755 }); fs.chmodSync(outputRoot, 0o755);
   for (const [relative, bytes] of files) {
     const target = path.join(outputRoot, relative);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     let directory = outputRoot;
     for (const segment of relative.split('/').slice(0, -1)) { directory = path.join(directory, segment); fs.chmodSync(directory, 0o755); }
-    const mode = fs.statSync(path.join(baselineRoot, relative)).mode & 0o777;
+    const mode = fs.existsSync(path.join(baselineRoot, relative)) ? fs.statSync(path.join(baselineRoot, relative)).mode & 0o777 : 0o644;
     fs.writeFileSync(target, bytes, { mode }); fs.chmodSync(target, mode);
   }
   const next = { ...manifest, gitSha: contract.sourceCommit, releaseId: path.basename(outputRoot), generatedAt: new Date().toISOString(), dirtyWorktree: false,
-    composition: { kind: 'fpr-personal-level-upgrade-v1', baselineManifestSha256: contract.baselineManifestSha256, baselineModuleSha256: contract.baselineModuleSha256, sourceModuleSha256: contract.sourceModuleSha256, changedFiles: [fprLevelModulePath] },
+    composition: { kind: 'fpr-personal-level-upgrade-v1', baselineManifestSha256: contract.baselineManifestSha256, baselineModuleSha256: contract.baselineModuleSha256, sourceModuleSha256: contract.sourceModuleSha256, sourceResultsSha256: contract.sourceResultsSha256, changedFiles },
     files: [...files].map(([file, bytes]) => ({ path: file, sha256: sha256(bytes) })) };
   fs.writeFileSync(path.join(outputRoot, 'release-manifest.json'), JSON.stringify(next, null, 2) + '\n', { mode: 0o644 });
   fs.chmodSync(path.join(outputRoot, 'release-manifest.json'), 0o644);
-  return { ok: true, changedFiles: [fprLevelModulePath], manifestSha256: sha256(fs.readFileSync(path.join(outputRoot, 'release-manifest.json'))) };
+  return { ok: true, changedFiles, manifestSha256: sha256(fs.readFileSync(path.join(outputRoot, 'release-manifest.json'))) };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [baselineRoot, sourceRoot, outputRoot, contractPath] = process.argv.slice(2);

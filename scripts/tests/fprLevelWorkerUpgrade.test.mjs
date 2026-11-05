@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildFprLevelModuleUpgrade, fprLevelModulePath } from '../build_fpr_level_worker_upgrade.mjs';
+import { buildFprLevelModuleUpgrade, fprLevelModulePath, fprLevelResultsPath } from '../build_fpr_level_worker_upgrade.mjs';
 import { sha256 } from '../build_fpr_level_worker_upgrade.mjs';
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-module-upgrade-'));
@@ -36,4 +36,19 @@ test('baseline drift, wrong module, source drift and symlinks fail before produc
     assert.throws(() => buildFprLevelModuleUpgrade(f));
     assert.equal(fs.existsSync(f.outputRoot), false);
   }
+});
+
+
+test('fixed results dependency is hash-bound and missing imports fail before publication', t => {
+  const f = fixture(t);
+  const module = "import { readFprLevelResults } from '../../src/services/player-rating/fprLevelResults.ts';";
+  fs.writeFileSync(path.join(f.sourceRoot, fprLevelModulePath), module); f.contract.sourceModuleSha256 = sha256(module);
+  assert.throws(() => buildFprLevelModuleUpgrade(f), /Missing runtime dependency/);
+  assert.equal(fs.existsSync(f.outputRoot), false);
+  fs.mkdirSync(path.dirname(path.join(f.sourceRoot, fprLevelResultsPath)), { recursive: true });
+  const dependency = 'export const readFprLevelResults = () => null;';
+  fs.writeFileSync(path.join(f.sourceRoot, fprLevelResultsPath), dependency); f.contract.sourceResultsSha256 = sha256(dependency);
+  assert.deepEqual(buildFprLevelModuleUpgrade(f).changedFiles, [fprLevelModulePath, fprLevelResultsPath]);
+  assert.equal(sha256(fs.readFileSync(path.join(f.outputRoot, fprLevelResultsPath))), f.contract.sourceResultsSha256);
+  assert.equal(fs.statSync(path.join(f.outputRoot, fprLevelResultsPath)).mode & 0o777, 0o644);
 });

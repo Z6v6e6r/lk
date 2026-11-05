@@ -24,7 +24,7 @@ the latest canonical frontier and requires an explicit matching numeric SYNCED A
 
 ## Activation and historical operation
 
-An immutable overlay patches only the two installed workers and adds five runtime
+An immutable overlay patches only the two installed workers and adds six runtime
 modules. Every other installed manifest byte is preserved and hash-checked. Build
 with `scripts/build_fpr_level_worker_overlay.mjs`; never replace the installed older
 worker with a whole newer local checkout.
@@ -58,3 +58,29 @@ release. Pause both switches while diagnosing; retain all history and backups.
 
 Checks: `npm run test:community-rating`, `npm run test:fpr-level-mongo`,
 `npm run test:rating-worker-release`, TypeScript, lint and normal bundle build.
+
+## Client results
+
+The worker writes a display-only `fprLevelResults` snapshot on the original protocol
+document. Each row contains either the actual persisted active TOURNAMENT award's
+before/after/delta, `pending`, or `not_awarded`. It is not a recalculation from today's
+player level. Historical protocols receive the same snapshot without creating new
+awards or changing sporting results, canonical levels, or provider queues.
+
+The snapshot is bound to the completed official protocol ID/revision, physical event,
+roster and level exclusions. A missing, ambiguous, compensated, or stale award is not
+shown as a zero change. Source and legacy preimages are checked before the metadata
+write; the exact primary document is updated with compare-and-swap. Repeating the
+worker with identical content leaves the snapshot unchanged.
+
+The history mapper exposes only the validated snapshot and exclusion IDs, without
+administrative reasons. The client cabinet shows `Уровень до → после` and signed Δ
+with up to five decimal places, preserving a real zero and small changes. Pending
+awards retain sporting standings and offer the existing history refresh action.
+Ordinary tournament result mapping and ranking are unchanged.
+
+Roll out the worker first, preserving the immutable installed manifest and using the
+fixed dependency allowlist in `build_fpr_level_worker_upgrade.mjs`. Verify a dry run,
+metadata-only historical projections and a zero-change retry before publishing the
+frontend. Shared API imports affect multiple bundles: verify all public release
+manifest hashes and the client history table after an authorized frontend release.

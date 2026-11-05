@@ -1,3 +1,4 @@
+import { readFprLevelResults, fprLevelExcludedPlayerIds } from '../../src/services/player-rating/fprLevelResults.ts';
 import { readFprLevelIdentityHistory } from './fprLevelIdentity.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -227,7 +228,7 @@ export async function applyFprPlayerPlan(db, client, clientId, context, nowIso, 
       if (!plan.events.length) { result = { events: 0, changed: false }; return; }
       for (const source of plan.sourceDocuments) {
         const latest = await db.collection('tournaments').findOne({ _id: source._id }, { session, maxTimeMS: 15000 });
-        const version = row => { if (!row) return null; const copy = { ...row }; delete copy.fprLevelLedgerFence; return fprLevelHash(copy); };
+        const version = row => { if (!row) return null; const copy = { ...row }; delete copy.fprLevelLedgerFence; delete copy.fprLevelResults; return fprLevelHash(copy); };
         if (version(latest) !== version(source)) throw new Error('FPR_LEVEL_SOURCE_CHANGED');
         // A real transactional write acquires a source-document fence. Snapshot reads alone do not.
         const fenced = await db.collection('tournaments').updateOne(exact(latest), { $set: { fprLevelLedgerFence: {
@@ -275,6 +276,49 @@ export function assertFprPlanIdentityDisjoint(plans) {
   }
 }
 
+/** Publish display-only tournament levels from settled ledger events. Sports fields are never written. */
+export async function projectFprLevelResults(db, context, nowIso, dryRun) {
+  const result = { scanned: context.selected.size, updated: 0, sourceChanged: 0 };
+  for (const [sourceId, source] of context.selected) {
+    const document = source.document, state = document.params.fpr6x25;
+    const events = await db.collection('rating_events').find({ 'source.domain': 'TOURNAMENT',
+      'source.sourceId': sourceId, 'source.fprProtocolId': document.tournamentId, 'source.applyToState': { $ne: false } }, { maxTimeMS: 30000 }).limit(20001).toArray();
+    if (events.length > 20000) throw new Error('FPR_LEVEL_RESULTS_EVENT_CAP');
+    const rows = state.players.map(player => {
+      const calculated = context.ratings.get(sourceId)?.standings.find(row => row.id === player.id);
+      const excluded = getTournamentRatingExclusion(document, player.id, 'level')
+        || source.legacy && getTournamentRatingExclusion(source.legacy, player.id, 'level');
+      const row = { id: player.id, status: excluded || calculated?.ratedMatches === 0 ? 'not_awarded' : 'pending' };
+      if (row.status === 'not_awarded' || !calculated) return row;
+      const own = events.filter(e => e.player?.clientId === player.id);
+      const uncompensated = own.filter(e => !e.source.compensatesEventId && !own.some(c => c.source.compensatesEventId === eventId(e)));
+      if (uncompensated.length !== 1) return row;
+      const award = uncompensated[0];
+      const revision = buildTournamentRatingRevision({ tournamentId: sourceId, finishedAt: state.finishedAt, standing: calculated });
+      if (award.source.sourceRevision !== revision || award.change.after !== calculated.ratingAfter) return row;
+      return { id: player.id, status: 'applied', before: award.change.before, after: award.change.after, delta: award.change.delta };
+    });
+    const rootExcludedIds = fprLevelExcludedPlayerIds(state, document.ratingExclusions);
+    const projection = readFprLevelResults(state, { version: 1, protocolId: state.tournamentId,
+      protocolRevision: state.revision, sourceEventId: sourceId, calculatedAt: nowIso, rootExcludedPlayerIds: rootExcludedIds, rows }, rootExcludedIds, document.params?.sourceExerciseId);
+    if (!projection) throw new Error('FPR_LEVEL_RESULTS_INVALID');
+    // The timestamp must not make an unchanged snapshot a write on every worker run.
+    const comparable = value => value && typeof value === "object" && !Array.isArray(value) ? { ...value, calculatedAt: null } : null;
+    const latest = await db.collection('tournaments').findOne({ _id: document._id });
+    const semantic = value => { const copy = { ...value }; delete copy.fprLevelLedgerFence; delete copy.fprLevelResults; return fprLevelHash(copy); };
+    if (!latest || semantic(latest) !== semantic(document)) { result.sourceChanged++; continue; }
+    if (source.legacy) {
+      const legacy = source.legacy._id && await db.collection('tournaments').findOne({ _id: source.legacy._id });
+      if (!legacy || semantic(legacy) !== semantic(source.legacy)) { result.sourceChanged++; continue; }
+    }
+    if (fprLevelHash(comparable(latest.fprLevelResults)) === fprLevelHash(comparable(projection))) continue;
+    if (dryRun) { result.updated++; continue; }
+    const write = await db.collection('tournaments').updateOne(exact(latest), { $set: { fprLevelResults: projection } });
+    if (write.matchedCount === 1) result.updated++; else result.sourceChanged++;
+  }
+  return result;
+}
+
 export async function processFprLevelLedger(db, client, { context, config, nowIso, dryRun }) {
   if (!config.enabled) return { enabled: false, events: 0, players: 0, ambiguous: context.ambiguous.length };
   const existing = await db.collection('rating_events').find({ 'source.fprProtocolId': { $exists: true } }, { projection: { 'player.clientId': 1 } }).limit(20001).toArray();
@@ -289,6 +333,7 @@ export async function processFprLevelLedger(db, client, { context, config, nowIs
     if (dryRun) { totals.events += plan.events.length; totals.changed += Number(!!plan.next && (!plan.current || plan.next.ratingNumeric !== plan.current.ratingNumeric)); totals.projections += Number(!!plan.outbox); }
     else { const result = await applyFprPlayerPlan(db, client, plan.clientId, context, nowIso, plan.fingerprint); totals.events += result.events; totals.changed += Number(result.changed); totals.projections += Number(!!result.projection); }
   }
+  totals.resultsProjection = await projectFprLevelResults(db, context, nowIso, dryRun);
   return totals;
 }
 
