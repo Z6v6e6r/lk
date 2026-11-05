@@ -286,7 +286,7 @@ export async function processFprLevelLedger(db, client, { context, config, nowIs
   for (const id of playerIds) plans.push(await buildFprPlayerPlan(db, id, context, nowIso));
   assertFprPlanIdentityDisjoint(plans);
   for (const plan of plans) {
-    if (dryRun) { totals.events += plan.events.length; totals.changed += Number(plan.next && (!plan.current || plan.next.ratingNumeric !== plan.current.ratingNumeric)); totals.projections += Number(!!plan.outbox); }
+    if (dryRun) { totals.events += plan.events.length; totals.changed += Number(!!plan.next && (!plan.current || plan.next.ratingNumeric !== plan.current.ratingNumeric)); totals.projections += Number(!!plan.outbox); }
     else { const result = await applyFprPlayerPlan(db, client, plan.clientId, context, nowIso, plan.fingerprint); totals.events += result.events; totals.changed += Number(result.changed); totals.projections += Number(!!result.projection); }
   }
   return totals;

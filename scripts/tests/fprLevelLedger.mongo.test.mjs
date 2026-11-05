@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { MongoClient } from 'mongodb';
 import { ratingFixture } from './helpers/fprRatingFixture.ts';
 import { fprProjection, applyFprCommand } from '../../src/components/tournaments/fpr6x25.ts';
-import { loadFprLevelContext, buildFprPlayerPlan, applyFprPlayerPlan, processFprProjectionOutbox, fprLevelHash } from '../lib/fprLevelLedger.mjs';
+import { loadFprLevelContext, buildFprPlayerPlan, applyFprPlayerPlan, processFprProjectionOutbox, processFprLevelLedger, fprLevelHash } from '../lib/fprLevelLedger.mjs';
 import { readFprLevelIdentityHistory } from '../lib/fprLevelIdentity.mjs';
 import { loadIdentityEvents } from '../game_result_rating_worker.mjs';
 import { replayPlayerRatingEvents } from '../../src/services/player-rating/ledger.ts';
@@ -56,6 +56,14 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       assert.equal(await db.collection('rating_projection_outbox').countDocuments({ fprProjection: true }), 1);
       assert.equal((await applyFprPlayerPlan(db, client, 'p0', context, now)).events, 0);
       assert.equal(await db.collection('rating_projection_outbox').countDocuments({ fprProjection: true }), 1);
+
+      const settledContext = { ...context, ratings: new Map([...context.ratings].map(([id, result]) =>
+        [id, { ...result, standings: result.standings.filter(row => row.id === 'p0') }])) };
+      const settledDryRun = await processFprLevelLedger(db, client, { context: settledContext, config, nowIso: now, dryRun: true });
+      assert.equal(settledDryRun.players, 1);
+      assert.equal(settledDryRun.events, 0);
+      assert.equal(settledDryRun.changed, 0, 'an idempotent outer dry-run reports a finite zero');
+      assert.equal(settledDryRun.projections, 0);
 
       // Old phone-only events remain visible to both subsequent ordinary projectors.
       const aliasBaseline = { ...initial, _id: 'alias-base', id: 'alias-base', idempotencyKey: 'alias-base',
