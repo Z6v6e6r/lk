@@ -264,10 +264,12 @@ export function buildResidentPassQrValue(
   if (!token || !RESIDENT_PASS_TOKEN_PATTERN.test(token)) return null;
   const base = (toText(checkUrl) || "").replace(/[?#].*$/, "").replace(/\/+$/, "");
   if (!/^https?:\/\/[^\s]+$/i.test(base)) return null;
-  const params = [`pass=${encodeURIComponent(token)}`];
+  // The staff screen reads stationId from the query (its server-side page config and login
+  // redirect keep it) and the short-lived pass token from the fragment, so the token never
+  // reaches access logs, history or Referer.
   const station = toText(stationId);
-  if (station) params.push(`stationId=${encodeURIComponent(station)}`);
-  const value = `${base}#${params.join("&")}`;
+  const query = station ? `?stationId=${encodeURIComponent(station)}` : "";
+  const value = `${base}${query}#pass=${encodeURIComponent(token)}`;
   return value.length <= 2048 ? value : null;
 }
 

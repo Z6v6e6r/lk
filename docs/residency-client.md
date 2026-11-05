@@ -176,7 +176,7 @@ Authorization: Bearer <LK user token>
 QR кодирует URL станционного экрана сотрудника (контракт C/E):
 
 ```text
-https://padlhub.su/admin/residency/check#pass=<passToken>[&stationId=<stationId>]
+https://padlhub.su/admin/residency/check?stationId=<stationId>#pass=<passToken>
 ```
 
 Токен передаётся **во фрагменте** URL: фрагмент не уходит на сервер, не попадает в

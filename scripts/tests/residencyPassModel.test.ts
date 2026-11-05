@@ -140,8 +140,11 @@ test("auto regeneration is bounded and never runs hidden, offline or stopped", (
 
 test("QR value carries the pass in the fragment, never in the query", () => {
   const value = buildResidentPassQrValue("https://padlhub.su/admin/residency/check", TOKEN, "station-1");
-  assert.equal(value, "https://padlhub.su/admin/residency/check#pass=" + TOKEN + "&stationId=station-1");
-  assert.ok(!value?.includes("?"), "fragment QR must not put the token in a query");
+  assert.equal(value, "https://padlhub.su/admin/residency/check?stationId=station-1#pass=" + TOKEN);
+  const [queryPart, fragmentPart] = (value || "").split("#");
+  assert.ok(queryPart === "https://padlhub.su/admin/residency/check?stationId=station-1", "station stays in the query");
+  assert.ok(!queryPart.includes(TOKEN), "fragment QR must not put the token in a query");
+  assert.equal(fragmentPart, "pass=" + TOKEN, "the pass token lives only in the fragment");
   assert.equal(
     buildResidentPassQrValue("https://padlhub.su/admin/residency/check/", TOKEN, null),
     "https://padlhub.su/admin/residency/check#pass=" + TOKEN,
