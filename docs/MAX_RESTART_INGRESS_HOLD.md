@@ -16,7 +16,8 @@ lowercase hex `windowId`, and an `acceptUntil` no more than four hours ahead.
 Admission schema: `PHUB_MAX_RESTART_HOLD_ADMISSION_V1`. `branches` contains one entry for each
 connector with `tabId`, `botConfigId`, `normalizerId`, `lookupPrepareId`, `lookupHttpId`, `routerId`,
 `eventHttpId`, `responseId`, `ingressIds` and `nodeSha256`. The map must contain exactly those IDs.
-The graph must have isolated, authenticated HTTP POST ingress; unexpected edges, duplicate IDs,
+The graph must have isolated HTTP POST ingress; authentication requires the independent review below,
+not merely matching admission hashes. Unexpected edges, duplicate IDs,
 shared lookup/event paths, wrong bot sender, unrecognized source contracts and enabled polling
 for either bot are refused. **Polling cursor advancement is not a durable ACK contract.** If an
 actual bot uses polling, this candidate cannot make the CUP restart safe; do not silently disable
@@ -33,12 +34,28 @@ runtime verification, at most 15 minutes old, and bound by `mongoEvidenceSha256`
   the argument arrays and preserves message metadata, returns flat acknowledged update counts,
   and returns the post-update document for `findOneAndUpdate` with `includeResultMetadata: false`;
 - `cryptoModuleVerified: true`, `urlModuleVerified: true`: the Function node can load those built-in
-  modules, and the runtime has the webhook's existing secret configured (never export its value).
+  modules;
+- `httpRedirectSuppressionVerified: true`: independent installed-Node-RED evidence confirms both HTTP
+  nodes honor `msg.followRedirects = false` and `msg.maxRedirects = 0` without following 3xx, including
+  when integration headers are present. Never test against an unowned external redirect target.
 
 The constructor checks these pinned facts; it does **not** obtain or independently create runtime
 proof. The synthetic test fixture is not acceptable runtime evidence. Any write probe needed to
 establish durability is a separately authorized live operation. Missing/unknown evidence is NO-GO.
 Confirm the facts and candidate identity again immediately before the separately guarded import.
+
+**Independent authentication review is a mandatory activation gate for BOTH branches.** Admission
+hashes are operator inputs; they do not establish that the pinned source authenticates requests.
+The constructor's source substrings check only wrapping compatibility, not authentication semantics.
+The candidate report always sets `authenticationVerified: false` and
+`independentExactAuthReviewRequired: true`, and records exact original normalizer Function hashes
+plus ingress node hashes in `authReviewInputs`. Before any import, a separate security reviewer must
+review those exact bytes for MAX_BOT and MAX_ACADEMY_BOT: request provenance, required existing
+webhook secret configuration, validation before normalization, failure behavior, bypass/alternate
+inputs and the effect of wrapping. Bind the review result to the exact source/candidate hashes and
+both authReviewInputs entries. A self-attested admission file, substring match, successful constructor
+or synthetic fixture cannot close this gate. Missing/drifted review means NO-GO; preserve the existing
+flow. The runtime must have each webhook's existing secret configured; never export its value.
 
 Local candidate preparation only:
 
@@ -70,7 +87,12 @@ After CUP readiness is independently confirmed, the release operator can invoke 
 `drain-one` inject per desired record. There is no startup action, interval or retry scheduler.
 Within each connector, the atomic claim sorts by `receivedAt`, then `_id`, selecting only HELD with
 attempts 0 and setting DELIVERING, attempts 1 and a unique claim token. It rejoins the existing client
-lookup, router and CUP HTTP POST with a bounded request timeout. A failed lookup does not reach the
+lookup, router and CUP HTTP POST with a bounded request timeout. Both credential-bearing HTTP hops
+have a final dedicated Function guard immediately before the HTTP node that sets
+`followRedirects=false` and `maxRedirects=0`. Reinjection and successful lookup also set them; an
+intermediate lookup/router message cannot override the last guard. The constructor refuses explicit
+or ambiguous redirect-enabling HTTP configuration and pins disabled settings. A lookup3xx reaches
+UNKNOWN without the router; an event3xx also reaches UNKNOWN. No redirect is an accepted delivery. A failed lookup does not reach the
 router. HTTP results are classified as follows:
 
 | Result | Durable hold state |

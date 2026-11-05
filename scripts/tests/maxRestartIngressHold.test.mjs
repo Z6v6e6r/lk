@@ -91,7 +91,7 @@ function fixture() {
     const evidence = { schema: 'PHUB_MAX_HOLD_MONGO_ADMISSION_V1', status: 'VERIFIED', observedAt: new Date(now).toISOString(),
       sourceSha256: sha(liveBytes), windowId, clientNodeId: 'mongo', clientNodeSha256: sha(JSON.stringify(flow[0])),
       database: 'games', collection: HOLD_COLLECTION, connected: true, majorityJournaledWriteAcknowledged: true,
-      driverContract: 'MONGODB4_FLAT_UPDATE_DOCUMENT_AFTER_V1', cryptoModuleVerified: true, urlModuleVerified: true, writeConcern: { w: 'majority', j: true } };
+      driverContract: 'MONGODB4_FLAT_UPDATE_DOCUMENT_AFTER_V1', cryptoModuleVerified: true, urlModuleVerified: true, httpRedirectSuppressionVerified: true, writeConcern: { w: 'majority', j: true } };
     const mongoEvidenceBytes = Buffer.from(JSON.stringify(evidence));
     return { liveBytes, mongoEvidenceBytes, evidence, admission: { schema: 'PHUB_MAX_RESTART_HOLD_ADMISSION_V1', windowId,
       sourceSha256: sha(liveBytes), capturedAt: new Date(now).toISOString(), acceptUntil: cfg.acceptUntil,
@@ -205,16 +205,17 @@ test('final write failure emits only sanitized UNCONFIRMED status and never queu
     _maxRestartHoldFinal: { receiptId: 'a'.repeat(64), state: 'DELIVERED' }, maxUpdate: update() }));
   assert.deepEqual(result, { payload: { code: 'MAX_HOLD_TERMINAL_UNCONFIRMED', state: 'UNKNOWN', durableCupCompletion: false } });
 });
-test('exact candidate patches only three nodes per branch; senders/outbox/LK1 unchanged; rollback exact', () => {
+test('exact candidate patches only five nodes per branch; senders/outbox/LK1 unchanged; rollback exact', () => {
   const f = fixture(), input = f.refresh(), output = buildMaxRestartIngressHold(input);
   const after = JSON.parse(output.candidateBytes), changed = new Set(output.report.changedNodeIds);
-  assert.equal(changed.size, 6);
+  assert.equal(changed.size, 10);
   for (const before of f.flow) if (!changed.has(before.id)) assert.deepEqual(after.find(n => n.id === before.id), before);
   for (const n of after.filter(n => n.type === 'inject')) { assert.equal(n.once, false); assert.equal(n.repeat, ''); assert.equal(n.crontab, ''); }
   for (const n of after.filter(n => n.type === 'mongodb4')) assert.equal(n.collection, HOLD_COLLECTION);
   assert.deepEqual(restoreMaxRestartHoldPreimage({ candidateBytes: output.candidateBytes, originalBytes: input.liveBytes, contract: output.contract }), input.liveBytes);
   assert.throws(() => restoreMaxRestartHoldPreimage({ candidateBytes: Buffer.concat([output.candidateBytes, Buffer.from(' ')]), originalBytes: input.liveBytes, contract: output.contract }));
   assert.equal(output.report.databaseWritesPerformed, false); assert.equal(output.report.durableCupCompletion, false);
+  assert.equal(output.report.authenticationVerified, false); assert.equal(output.report.independentExactAuthReviewRequired, true);
 });
 for (const [name, mutate] of [
   ['missing academy', x => x.admission.branches.pop()], ['wrong flow', x => { x.admission.branches[1].tabId = x.admission.branches[0].tabId; }],
@@ -224,6 +225,7 @@ for (const [name, mutate] of [
   ['no evidence', x => { x.mongoEvidenceBytes = null; }],
 ]) test(`candidate refuses ${name}`, () => { const x = fixture().refresh(); mutate(x); assert.throws(() => buildMaxRestartIngressHold(x)); });
 for (const [name, mutate] of [
+  ['HTTP redirect contract unknown', e => { e.httpRedirectSuppressionVerified = false; }],
   ['URL module unknown', e => { e.urlModuleVerified = false; }],
   ['unknown durability', e => { e.majorityJournaledWriteAcknowledged = false; }],
   ['unacknowledged write concern', e => { e.writeConcern.w = 0; }], ['stale Mongo', e => { e.observedAt = '2026-11-04T00:00:00Z'; }],
@@ -266,4 +268,48 @@ test('manual drain preserves claim through existing lookup/router and finalizes 
   assert.equal(store.update(final.payload).matchedCount, 1);
   assert.equal(store.rows.get(held._maxRestartHold.receiptId).state, 'DELIVERED');
   assert.equal(store.claim(claimMessage().payload), null);
+});
+
+for (const [name, value] of [['followRedirects', true], ['followRedirects', 'false'], ['maxRedirects', 1]])
+  test(`constructor refuses ambiguous/enabled ${name}=${value} on either HTTP hop`, () => {
+    for (const hop of ['lookup-http', 'event-http']) {
+      const f = fixture(); f.flow.find(n => n.id === `synthetic-0-${hop}`)[name] = value;
+      assert.throws(() => buildMaxRestartIngressHold(f.refresh()), /HTTP_REDIRECT_CONFIGURATION/);
+    }
+  });
+test('both authenticated HTTP nodes have a last-hop redirect fence and explicit disabled settings', () => {
+  const f = fixture(), input = f.refresh(), output = buildMaxRestartIngressHold(input), graph = JSON.parse(output.candidateBytes);
+  for (const b of f.branches) for (const httpId of [b.lookupHttpId, b.eventHttpId]) {
+    const http = graph.find(n => n.id === httpId);
+    assert.equal(http.followRedirects, false); assert.equal(http.maxRedirects, 0);
+    const predecessors = graph.filter(n => (n.wires || []).some(w => w.includes(httpId)));
+    assert.equal(predecessors.length, 1);
+    assert.ok(predecessors[0].func.includes('msg.followRedirects = false;'));
+    assert.ok(predecessors[0].func.includes('msg.maxRedirects = 0;'));
+  }
+  assert.deepEqual(output.report.authReviewInputs.map(r => r.normalizerFuncSha256),
+    f.branches.map(b => sha(f.flow.find(n => n.id === b.normalizerId).func)));
+  assert.equal(output.report.authenticationVerified, false);
+});
+test('redirect settings cannot survive reinjection or successful lookup output', () => {
+  const store = new Store(); store.update(prepared()[0].payload); const claim = claimMessage();
+  const reinjected = run('restart_hold_reinject', { ...claim, payload: store.claim(claim.payload), followRedirects: true, maxRedirects: 5 });
+  assert.equal(reinjected.followRedirects, false); assert.equal(reinjected.maxRedirects, 0);
+  const result = run('restart_hold_lookup_result', { ...reinjected, statusCode: 200, payload: {}, followRedirects: true, maxRedirects: 5 });
+  assert.equal(result[0].followRedirects, false); assert.equal(result[0].maxRedirects, 0);
+  assert.equal(run('restart_hold_no_redirects', { followRedirects: true }), null);
+});
+for (const hop of ['lookup', 'event']) test(`${hop} 3xx is UNKNOWN with no redirected request`, () => {
+  const claim = { windowId, connector: cfg.connector, receiptId: 'a'.repeat(64), claimToken: crypto.randomUUID() };
+  // Synthetic transport records exactly what the final fence sends; this is not installed Node-RED proof.
+  const outgoing = run('restart_hold_no_redirects', { _maxRestartHold: claim, method: hop === 'lookup' ? 'GET' : 'POST',
+    headers: { 'x-integration-token': 'SYNTHETIC_PRIVATE' }, followRedirects: true, maxRedirects: 5 });
+  let requests = 1;
+  if (outgoing.followRedirects !== false && outgoing.maxRedirects !== 0) requests++;
+  const response = { ...outgoing, statusCode: 302, payload: {}, headers: { location: 'https://foreign.invalid/' } };
+  const finalInput = hop === 'lookup' ? run('restart_hold_lookup_result', response) : [null, response];
+  assert.equal(finalInput[0], null);
+  const final = run('restart_hold_finalize', finalInput[1]);
+  assert.equal(final.payload[1].$set.state, 'UNKNOWN'); assert.equal(requests, 1);
+  assert.ok(!JSON.stringify(final).includes('SYNTHETIC_PRIVATE'));
 });

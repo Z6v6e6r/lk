@@ -9,5 +9,5 @@ if (msg.error || !record || !claim || record.windowId !== hold.windowId || recor
   || record.maxUpdate?.provider !== 'max') return null;
 const content = { ...record.maxUpdate, timestamp: null, messageTimestamp: null };
 if (nodeCrypto.createHash('sha256').update(JSON.stringify(content)).digest('hex') !== record.payloadSha256) return null;
-return { maxUpdate: record.maxUpdate, payload: record.maxUpdate, requestTimeout: 10000,
+return { maxUpdate: record.maxUpdate, payload: record.maxUpdate, requestTimeout: 10000, followRedirects: false, maxRedirects: 0,
   _maxRestartHold: { windowId: hold.windowId, connector: hold.connector, receiptId: record._id, claimToken: claim.claimToken } };

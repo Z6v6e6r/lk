@@ -5,4 +5,7 @@ if (msg.error || !Number.isInteger(msg.statusCode) || msg.statusCode < 200 || ms
   || !msg.payload || typeof msg.payload !== 'object' || Array.isArray(msg.payload)) {
   return [null, { _maxRestartHold: claim, _maxRestartHoldOutcome: 'UNKNOWN', _maxRestartHoldReason: 'LOOKUP_UNCONFIRMED' }];
 }
+// HTTP output may contain transport defaults; reassert before the existing router.
+msg.followRedirects = false;
+msg.maxRedirects = 0;
 return [msg, null];

@@ -12,7 +12,7 @@ export const HOLD_COLLECTION = 'support_cup_restart_ingress_hold';
 const CONNECTORS = ['MAX_ACADEMY_BOT', 'MAX_BOT'];
 const FILES = ['webhook_prepare_restart_hold', 'restart_hold_prepare', 'restart_hold_write_result',
   'restart_hold_claim', 'restart_hold_reinject', 'restart_hold_lookup_result', 'restart_hold_finalize',
-  'restart_hold_mark_unknown', 'restart_hold_finalize_result'];
+  'restart_hold_mark_unknown', 'restart_hold_finalize_result', 'restart_hold_no_redirects'];
 const fail = code => { throw Error(`MAX restart hold refused: ${code}`); };
 const need = (value, code) => { if (!value) fail(code); };
 export const readMaxRestartHoldSources = () => Object.fromEntries(FILES.map(key => [key,
@@ -37,7 +37,8 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
   need(evidence.database === 'games' && evidence.collection === HOLD_COLLECTION
     && evidence.connected === true && evidence.majorityJournaledWriteAcknowledged === true
     && evidence.driverContract === 'MONGODB4_FLAT_UPDATE_DOCUMENT_AFTER_V1'
-    && evidence.cryptoModuleVerified === true && evidence.urlModuleVerified === true && isDeepStrictEqual(evidence.writeConcern, { w: 'majority', j: true }), 'MONGO_DURABILITY_UNKNOWN');
+    && evidence.cryptoModuleVerified === true && evidence.urlModuleVerified === true
+    && evidence.httpRedirectSuppressionVerified === true && isDeepStrictEqual(evidence.writeConcern, { w: 'majority', j: true }), 'MONGO_DURABILITY_UNKNOWN');
   const source = JSON.parse(liveBytes), candidate = structuredClone(source);
   need(Array.isArray(source) && source.length > 0 && source.every(n => typeof n.id === 'string' && n.id)
     && new Set(source.map(n => n.id)).size === source.length, 'GRAPH_IDS');
@@ -51,7 +52,7 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
   need(Array.isArray(admission.branches) && isDeepStrictEqual(admission.branches.map(b => b.connector).sort(), CONNECTORS), 'BOTH_CONNECTORS_REQUIRED');
   need(new Set(admission.branches.map(b => b.botConfigId)).size === 2, 'BOT_ISOLATION');
   need(new Set(admission.branches.map(b => b.normalizerId)).size === 2, 'NORMALIZER_ISOLATION');
-  const changes = [], additions = [];
+  const changes = [], additions = [], authReviewInputs = [];
   const sources = sourceTexts;
   for (const key of FILES) need(typeof sources[key] === 'string' && sources[key], 'SOURCE_MISSING');
   const incoming = id => source.filter(n => (n.wires || []).some(w => w.includes(id))).map(n => n.id).sort();
@@ -79,7 +80,7 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
     need(normalizer.outputs === 3 && normalizer.initialize === '' && normalizer.finalize === ''
       && Array.isArray(normalizer.libs) && normalizer.libs.length === 0, 'NORMALIZER_CONTRACT');
     need(normalizer.func.includes('return [downstreamMsg, httpResponse, debugMsg];')
-      && normalizer.func.includes('maxUpdate: normalized') && normalizer.func.includes('const expectedSecret =') && !/node\s*\.\s*(?:send|error)\s*\(/.test(normalizer.func), 'NORMALIZER_RETURN_ONLY_REQUIRED');
+      && normalizer.func.includes('maxUpdate: normalized') && normalizer.func.includes('const expectedSecret =') && !/node\s*\.\s*(?:send|error)\s*\(/.test(normalizer.func), 'NORMALIZER_WRAPPING_CONTRACT'); // Mechanical wrapping check only, NOT authentication verification.
     need(normalizer.wires.length === 3 && normalizer.wires[2].every(id => node(id).type === 'debug'), 'NORMALIZER_DEBUG_CONTRACT');
     wires(normalizer, [[lookup.id], [response.id], normalizer.wires[2]]);
     wires(lookup, [[lookupHttp.id]]); wires(lookupHttp, [[router.id]]);
@@ -92,7 +93,14 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
     for (const [n, predecessor] of [[lookup, normalizer], [lookupHttp, lookup], [router, lookupHttp], [eventHttp, router]]) {
       need(isDeepStrictEqual(incoming(n.id), [predecessor.id]), 'SHARED_PATH_REFUSED');
     }
-    for (const http of [lookupHttp, eventHttp]) need(http.method === 'use' && http.ret === 'obj' && http.senderr === false, 'HTTP_CONTRACT');
+    for (const http of [lookupHttp, eventHttp]) {
+      need(http.method === 'use' && http.ret === 'obj' && http.senderr === false, 'HTTP_CONTRACT');
+      need((http.followRedirects === undefined || http.followRedirects === false)
+        && (http.maxRedirects === undefined || http.maxRedirects === 0), 'HTTP_REDIRECT_CONFIGURATION');
+    }
+    authReviewInputs.push({ connector: branch.connector, normalizerId: normalizer.id,
+      normalizerFuncSha256: hash(normalizer.func),
+      ingress: branch.ingressIds.map(ingressId => ({ id: ingressId, nodeSha256: branch.nodeSha256[ingressId] })) });
     const hold = { windowId: admission.windowId, connector: branch.connector, acceptUntil: admission.acceptUntil };
     const id = role => `max_hold_${hash(JSON.stringify([admission.windowId, branch.connector, role])).slice(0,20)}`;
     const add = n => { need(!byId.has(n.id), 'ADDITION_COLLISION'); candidate.push(n); byId.set(n.id, n); additions.push(n.id); };
@@ -118,9 +126,15 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
     new vm.Script(`(function(msg,node,context,flow,global,env){${normalizer.func}\n})`);
     normalizer.outputs = 2; normalizer.wires = [[id('prepare')], [response.id]];
     changes.push({ id: normalizer.id, fields: ['func', 'outputs', 'wires'] });
-    lookupHttp.wires = [[id('lookup-result')]]; changes.push({ id: lookupHttp.id, fields: ['wires'] });
+    lookup.wires = [[id('lookup-no-redirect')]]; changes.push({ id: lookup.id, fields: ['wires'] });
+    router.wires = router.wires.map(w => [...w]); router.wires[0] = [id('event-no-redirect')];
+    changes.push({ id: router.id, fields: ['wires'] });
+    lookupHttp.wires = [[id('lookup-result')]];
+    lookupHttp.followRedirects = false; lookupHttp.maxRedirects = 0;
+    changes.push({ id: lookupHttp.id, fields: ['wires', 'followRedirects', 'maxRedirects'] });
     eventHttp.wires = eventHttp.wires.map(w => [...w]); need(eventHttp.wires.length === 1, 'EVENT_HTTP_OUTPUT');
-    eventHttp.wires[0].push(id('finalize')); changes.push({ id: eventHttp.id, fields: ['wires'] });
+    eventHttp.wires[0].push(id('finalize')); eventHttp.followRedirects = false; eventHttp.maxRedirects = 0;
+    changes.push({ id: eventHttp.id, fields: ['wires', 'followRedirects', 'maxRedirects'] });
     fn('prepare', 'restart_hold_prepare', 2, [[id('write')], [response.id]]);
     mongo('write', 'updateOne', 'write-result'); fn('write-result', 'restart_hold_write_result', 1, [[response.id]]);
     catcher('write-error', [id('write')], 'write-result');
@@ -128,6 +142,8 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
     fn('claim', 'restart_hold_claim', 1, [[id('claim-write')]]); mongo('claim-write', 'findOneAndUpdate', 'reinject');
     fn('reinject', 'restart_hold_reinject', 1, [[lookup.id]]); catcher('claim-error', [id('claim-write')], 'reinject');
     fn('lookup-result', 'restart_hold_lookup_result', 2, [[router.id], [id('finalize')]]);
+    fn('lookup-no-redirect', 'restart_hold_no_redirects', 1, [[lookupHttp.id]]);
+    fn('event-no-redirect', 'restart_hold_no_redirects', 1, [[eventHttp.id]]);
     catcher('lookup-error', [lookupHttp.id], 'lookup-result'); catcher('event-error', [eventHttp.id], 'finalize');
     fn('finalize', 'restart_hold_finalize', 1, [[id('final-write')]]);
     mongo('final-write', 'updateOne', 'final-result'); fn('final-result', 'restart_hold_finalize_result', 1, [[id('status')]]);
@@ -145,7 +161,8 @@ export function buildMaxRestartIngressHold({ liveBytes, admission, mongoEvidence
     sourceSha256: hash(liveBytes), candidateSha256: hash(candidateBytes), windowId: admission.windowId,
     mongoEvidenceSha256: hash(mongoEvidenceBytes), changedNodeIds: changes.map(n => n.id), addedNodeIds: additions,
     collection: HOLD_COLLECTION, deploymentPerformed: false, databaseWritesPerformed: false,
-    durableCupCompletion: false, rollbackRetainsHoldRecords: true } };
+    durableCupCompletion: false, rollbackRetainsHoldRecords: true,
+    authenticationVerified: false, independentExactAuthReviewRequired: true, authReviewInputs } };
 }
 
 export function restoreMaxRestartHoldPreimage({ candidateBytes, originalBytes, contract }) {
