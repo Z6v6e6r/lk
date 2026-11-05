@@ -1,0 +1,380 @@
+[
+  {
+    "id": "lk_resident_pass_tab_20261105",
+    "type": "tab",
+    "label": "LK Resident Pass",
+    "disabled": false,
+    "info": "LK resident pass gateway (B in the residency program).\n\nPOST   /lk/residency/passes  -> CUP internal POST /internal/subscriptions/resident-passes\nGET    /lk/residency/passes/:passId  -> CUP internal GET  <RESIDENT_CLIENT_CUP_PASS_STATUS_PATH><passId>\nOPTIONS /lk/residency/passes -> CORS preflight\nOPTIONS /lk/residency/passes/:passId -> CORS preflight\n\nBrowser contract: docs/residency-client.md (LK repository).\nThe browser never receives the CUP base URL or the integration token.\n\nRequired environment: RESIDENT_CLIENT_ENABLED, RESIDENT_CLIENT_CUP_API_BASE_URL,\nRESIDENT_CLIENT_CUP_INTEGRATION_TOKEN.\nOptional: RESIDENT_CLIENT_CUP_PASS_STATUS_PATH (status route disabled when empty),\nRESIDENT_CLIENT_KEYCLOAK_USERINFO_URL, RESIDENT_CLIENT_VIVA_API_BASE_URL,\nRESIDENT_CLIENT_EXPECTED_CLIENT_ID, RESIDENT_CLIENT_TENANT_KEY,\nRESIDENT_CLIENT_RATE_LIMIT_PER_MINUTE.\n\nFlow guards: bearer verified through Keycloak userinfo before any upstream call;\nsubscription ownership verified against Viva before the CUP call; tokens and PII are\nnever logged; responses are no-store/no-referrer.",
+    "env": []
+  },
+  {
+    "id": "lk_resident_pass_comment_20261105",
+    "type": "comment",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "LK resident pass gateway (B)",
+    "info": "LK resident pass gateway (B in the residency program).\n\nPOST   /lk/residency/passes  -> CUP internal POST /internal/subscriptions/resident-passes\nGET    /lk/residency/passes/:passId  -> CUP internal GET  <RESIDENT_CLIENT_CUP_PASS_STATUS_PATH><passId>\nOPTIONS /lk/residency/passes -> CORS preflight\nOPTIONS /lk/residency/passes/:passId -> CORS preflight\n\nBrowser contract: docs/residency-client.md (LK repository).\nThe browser never receives the CUP base URL or the integration token.\n\nRequired environment: RESIDENT_CLIENT_ENABLED, RESIDENT_CLIENT_CUP_API_BASE_URL,\nRESIDENT_CLIENT_CUP_INTEGRATION_TOKEN.\nOptional: RESIDENT_CLIENT_CUP_PASS_STATUS_PATH (status route disabled when empty),\nRESIDENT_CLIENT_KEYCLOAK_USERINFO_URL, RESIDENT_CLIENT_VIVA_API_BASE_URL,\nRESIDENT_CLIENT_EXPECTED_CLIENT_ID, RESIDENT_CLIENT_TENANT_KEY,\nRESIDENT_CLIENT_RATE_LIMIT_PER_MINUTE.\n\nFlow guards: bearer verified through Keycloak userinfo before any upstream call;\nsubscription ownership verified against Viva before the CUP call; tokens and PII are\nnever logged; responses are no-store/no-referrer.",
+    "x": 240,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "lk_resident_pass_create_in_20261105",
+    "type": "http in",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Create resident pass",
+    "url": "/lk/residency/passes",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 160,
+    "wires": [
+      [
+        "lk_resident_pass_create_prepare_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_create_prepare_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Validate create request",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized || null;\n};\nconst readEnv = (name) => {\n  try {\n    if (typeof env !== \"undefined\" && env && typeof env.get === \"function\") {\n      return toStr(env.get(name));\n    }\n  } catch (_error) {\n    return null;\n  }\n  return null;\n};\nconst scrubRequestAuthorization = () => {\n  if (!isObj(msg.req)) return;\n  if (isObj(msg.req.headers)) {\n    delete msg.req.headers.authorization;\n    delete msg.req.headers.Authorization;\n  }\n};\nconst scrubContext = () => {\n  delete msg._residentPass;\n};\n// Fixed-enum observability only: never the bearer, token, subscription id or subject.\nconst warn = (event, code, extra) => {\n  if (typeof node === \"undefined\" || typeof node?.warn !== \"function\") return;\n  try {\n    node.warn(JSON.stringify(Object.assign({ event, code }, extra || {})));\n  } catch (_error) {\n    // Observability must never alter the response.\n  }\n};\n\nconst AUTH_REQUIRED = \"RESIDENT_CLIENT_AUTH_REQUIRED\";\nconst finish = (statusCode, code, message) => {\n  const startedAt = isObj(msg._residentPass) ? msg._residentPass.startedAt : Date.now();\n  warn(\"residency_pass_rejected\", code, {\n    endpoint: \"create\",\n    httpStatus: statusCode,\n    durationMs: Math.max(0, Date.now() - startedAt),\n  });\n  scrubRequestAuthorization();\n  scrubContext();\n  msg.statusCode = statusCode;\n  msg.headers = {\n    \"Content-Type\": \"application/json; charset=utf-8\",\n    \"Cache-Control\": \"no-store\",\n    \"Referrer-Policy\": \"no-referrer\",\n    \"X-Robots-Tag\": \"noindex, nofollow\",\n    \"Access-Control-Allow-Origin\": \"*\",\n  };\n  msg.payload = { code, message };\n  return [null, msg];\n};\n\nconst enabled = (readEnv(\"RESIDENT_CLIENT_ENABLED\") || \"\").toLowerCase() === \"true\";\nif (!enabled) {\n  return finish(503, \"RESIDENT_CLIENT_DISABLED\", \"Сервис пропусков временно выключен\");\n}\n\nconst reqHeaders = isObj(msg.req?.headers) ? msg.req.headers : {};\nconst authHeader = toStr(reqHeaders.authorization || reqHeaders.Authorization);\nif (!authHeader || !/^Bearer\\s+\\S+$/i.test(authHeader)) {\n  return finish(401, AUTH_REQUIRED, \"Необходимо войти в личный кабинет\");\n}\n\nconst body = isObj(msg.payload) ? msg.payload : null;\nif (!body) {\n  return finish(400, \"RESIDENT_CLIENT_REQUEST_INVALID\", \"Ожидается JSON-тело запроса\");\n}\nconst unexpectedKeys = Object.keys(body).filter((key) => key !== \"clientSubscriptionId\");\nconst clientSubscriptionId = toStr(body.clientSubscriptionId);\nif (unexpectedKeys.length > 0 || !clientSubscriptionId) {\n  return finish(400, \"RESIDENT_CLIENT_REQUEST_INVALID\", \"Не передан абонемент для пропуска\");\n}\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientSubscriptionId)) {\n  return finish(400, \"RESIDENT_CLIENT_REQUEST_INVALID\", \"Не передан абонемент для пропуска\");\n}\n\nconst correlationHeader = toStr(reqHeaders[\"x-correlation-id\"]);\nconst correlationId = correlationHeader && correlationHeader.length >= 8 && correlationHeader.length <= 128\n  ? correlationHeader\n  : \"residency-pass:\" + Date.now().toString(36) + \"-\" + Math.floor(Math.random() * 0xffffff).toString(16);\n\nconst userinfoUrl = readEnv(\"RESIDENT_CLIENT_KEYCLOAK_USERINFO_URL\")\n  || \"https://kc.vivacrm.ru/realms/clients/protocol/openid-connect/userinfo\";\n\nmsg._residentPass = {\n  endpoint: \"create\",\n  correlationId,\n  clientSubscriptionId,\n  authorization: authHeader,\n  startedAt: Date.now(),\n};\nscrubRequestAuthorization();\nmsg.method = \"GET\";\nmsg.url = userinfoUrl;\nmsg.headers = { Authorization: authHeader, Accept: \"application/json\" };\nmsg.payload = null;\nmsg.requestTimeout = 10000;\nmsg.followRedirects = false;\nmsg.maxRedirects = 0;\ndelete msg.statusCode;\ndelete msg.error;\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 470,
+    "y": 160,
+    "wires": [
+      [
+        "lk_resident_pass_userinfo_20261105"
+      ],
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_status_in_20261105",
+    "type": "http in",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Resident pass status",
+    "url": "/lk/residency/passes/:passId",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 300,
+    "wires": [
+      [
+        "lk_resident_pass_status_prepare_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_status_prepare_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Validate status request",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized || null;\n};\nconst readEnv = (name) => {\n  try {\n    if (typeof env !== \"undefined\" && env && typeof env.get === \"function\") {\n      return toStr(env.get(name));\n    }\n  } catch (_error) {\n    return null;\n  }\n  return null;\n};\nconst scrubRequestAuthorization = () => {\n  if (!isObj(msg.req)) return;\n  if (isObj(msg.req.headers)) {\n    delete msg.req.headers.authorization;\n    delete msg.req.headers.Authorization;\n  }\n};\nconst scrubContext = () => {\n  delete msg._residentPass;\n};\n// Fixed-enum observability only: never the bearer, token, subscription id or subject.\nconst warn = (event, code, extra) => {\n  if (typeof node === \"undefined\" || typeof node?.warn !== \"function\") return;\n  try {\n    node.warn(JSON.stringify(Object.assign({ event, code }, extra || {})));\n  } catch (_error) {\n    // Observability must never alter the response.\n  }\n};\n\nconst finish = (statusCode, code, message) => {\n  scrubRequestAuthorization();\n  scrubContext();\n  msg.statusCode = statusCode;\n  msg.headers = {\n    \"Content-Type\": \"application/json; charset=utf-8\",\n    \"Cache-Control\": \"no-store\",\n    \"Referrer-Policy\": \"no-referrer\",\n    \"X-Robots-Tag\": \"noindex, nofollow\",\n    \"Access-Control-Allow-Origin\": \"*\",\n  };\n  msg.payload = { code, message };\n  return [null, msg];\n};\nconst unavailable = (message) => {\n  warn(\"residency_pass_status_disabled\", \"RESIDENCY_CLIENT_STATUS_UNAVAILABLE\", { endpoint: \"status\" });\n  scrubRequestAuthorization();\n  scrubContext();\n  msg.statusCode = 200;\n  msg.headers = {\n    \"Content-Type\": \"application/json; charset=utf-8\",\n    \"Cache-Control\": \"no-store\",\n    \"Referrer-Policy\": \"no-referrer\",\n    \"X-Robots-Tag\": \"noindex, nofollow\",\n    \"Access-Control-Allow-Origin\": \"*\",\n  };\n  msg.payload = {\n    schemaVersion: 1,\n    statusAvailable: false,\n    state: \"UNKNOWN\",\n    issuedAt: null,\n    expiresAt: null,\n    consumedAt: null,\n    message,\n  };\n  return [null, msg];\n};\n\nconst enabled = (readEnv(\"RESIDENT_CLIENT_ENABLED\") || \"\").toLowerCase() === \"true\";\nif (!enabled) {\n  return finish(503, \"RESIDENT_CLIENT_DISABLED\", \"Сервис пропусков временно выключен\");\n}\n\nconst reqHeaders = isObj(msg.req?.headers) ? msg.req.headers : {};\nconst authHeader = toStr(reqHeaders.authorization || reqHeaders.Authorization);\nif (!authHeader || !/^Bearer\\s+\\S+$/i.test(authHeader)) {\n  return finish(401, \"RESIDENT_CLIENT_AUTH_REQUIRED\", \"Необходимо войти в личный кабинет\");\n}\n\nconst passIdRaw = toStr(msg.req?.params?.passId) || toStr(msg.req?.params?.[0]);\nif (!passIdRaw\n  || !/^resident_pass:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(passIdRaw)) {\n  return finish(400, \"RESIDENT_CLIENT_REQUEST_INVALID\", \"Некорректный идентификатор пропуска\");\n}\n\nconst configuredStatusPath = readEnv(\"RESIDENT_CLIENT_CUP_PASS_STATUS_PATH\");\nif (!configuredStatusPath) {\n  return unavailable(\"Проверка состояния пропуска недоступна\");\n}\n// The path is server config, never client input: same-origin path only, no authority.\nconst normalizedStatusPath = configuredStatusPath.replace(/\\/+$/, \"\");\nif (!/^\\/(?!\\/)[A-Za-z0-9._\\-\\/]*$/.test(normalizedStatusPath)) {\n  return finish(503, \"RESIDENT_CLIENT_NOT_CONFIGURED\", \"Сервис пропусков не настроен\");\n}\nconst statusPath = normalizedStatusPath + \"/\";\n\nconst correlationHeader = toStr(reqHeaders[\"x-correlation-id\"]);\nconst correlationId = correlationHeader && correlationHeader.length >= 8 && correlationHeader.length <= 128\n  ? correlationHeader\n  : \"residency-pass-status:\" + Date.now().toString(36) + \"-\" + Math.floor(Math.random() * 0xffffff).toString(16);\n\nconst userinfoUrl = readEnv(\"RESIDENT_CLIENT_KEYCLOAK_USERINFO_URL\")\n  || \"https://kc.vivacrm.ru/realms/clients/protocol/openid-connect/userinfo\";\n\nmsg._residentPass = {\n  endpoint: \"status\",\n  correlationId,\n  passId: passIdRaw,\n  statusPath,\n  authorization: authHeader,\n  startedAt: Date.now(),\n};\nscrubRequestAuthorization();\nmsg.method = \"GET\";\nmsg.url = userinfoUrl;\nmsg.headers = { Authorization: authHeader, Accept: \"application/json\" };\nmsg.payload = null;\nmsg.requestTimeout = 10000;\nmsg.followRedirects = false;\nmsg.maxRedirects = 0;\ndelete msg.statusCode;\ndelete msg.error;\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 470,
+    "y": 300,
+    "wires": [
+      [
+        "lk_resident_pass_userinfo_20261105"
+      ],
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_options_in_20261105",
+    "type": "http in",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Resident pass CORS preflight",
+    "url": "/lk/residency/passes",
+    "method": "options",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 440,
+    "wires": [
+      [
+        "lk_resident_pass_options_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_status_options_in_20261105",
+    "type": "http in",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Resident pass status CORS preflight",
+    "url": "/lk/residency/passes/:passId",
+    "method": "options",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 520,
+    "wires": [
+      [
+        "lk_resident_pass_options_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_options_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Resident pass CORS preflight",
+    "func": "msg.statusCode = 204;\nmsg.headers = {\n  \"Access-Control-Allow-Origin\": \"*\",\n  \"Access-Control-Allow-Methods\": \"GET, POST, OPTIONS\",\n  \"Access-Control-Allow-Headers\": \"Authorization, Content-Type, X-Correlation-Id\",\n  \"Access-Control-Max-Age\": \"86400\",\n  \"Cache-Control\": \"no-store\",\n};\nmsg.payload = \"\";\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 470,
+    "y": 440,
+    "wires": [
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_userinfo_20261105",
+    "type": "http request",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Verify LK bearer via Keycloak userinfo",
+    "method": "use",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [],
+    "x": 760,
+    "y": 220,
+    "wires": [
+      [
+        "lk_resident_pass_authorize_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_authorize_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Authorize and choose upstream",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized || null;\n};\nconst readEnv = (name) => {\n  try {\n    if (typeof env !== \"undefined\" && env && typeof env.get === \"function\") {\n      return toStr(env.get(name));\n    }\n  } catch (_error) {\n    return null;\n  }\n  return null;\n};\nconst scrubRequestAuthorization = () => {\n  if (!isObj(msg.req)) return;\n  if (isObj(msg.req.headers)) {\n    delete msg.req.headers.authorization;\n    delete msg.req.headers.Authorization;\n  }\n};\nconst scrubContext = () => {\n  delete msg._residentPass;\n};\n// Fixed-enum observability only: never the bearer, token, subscription id or subject.\nconst warn = (event, code, extra) => {\n  if (typeof node === \"undefined\" || typeof node?.warn !== \"function\") return;\n  try {\n    node.warn(JSON.stringify(Object.assign({ event, code }, extra || {})));\n  } catch (_error) {\n    // Observability must never alter the response.\n  }\n};\n\nconst AUTH_SERVICE_UNAVAILABLE = \"RESIDENT_CLIENT_AUTH_UNAVAILABLE\";\nconst finish = (statusCode, code, message) => {\n  const ctx = isObj(msg._residentPass) ? msg._residentPass : {};\n  warn(\"residency_pass_authorization_failed\", code, {\n    endpoint: ctx.endpoint || \"unknown\",\n    httpStatus: statusCode,\n    upstreamStatus: Number.isInteger(Number(msg.statusCode)) ? Number(msg.statusCode) : null,\n    durationMs: Math.max(0, Date.now() - Number(ctx.startedAt || Date.now())),\n  });\n  scrubRequestAuthorization();\n  scrubContext();\n  msg.statusCode = statusCode;\n  msg.headers = {\n    \"Content-Type\": \"application/json; charset=utf-8\",\n    \"Cache-Control\": \"no-store\",\n    \"Referrer-Policy\": \"no-referrer\",\n    \"X-Robots-Tag\": \"noindex, nofollow\",\n    \"Access-Control-Allow-Origin\": \"*\",\n  };\n  msg.payload = { code, message };\n  return [null, msg];\n};\n\nconst ctx = isObj(msg._residentPass) ? msg._residentPass : null;\nif (!ctx) {\n  return finish(500, \"RESIDENT_CLIENT_INTERNAL\", \"Не удалось проверить пользователя\");\n}\n\nconst upstreamStatus = Number(msg.statusCode) || 0;\nif (msg.error || upstreamStatus === 0) {\n  return finish(503, AUTH_SERVICE_UNAVAILABLE, \"Не удалось проверить вход. Повторите позже\");\n}\nif (upstreamStatus === 401 || upstreamStatus === 403) {\n  return finish(401, \"RESIDENT_CLIENT_AUTH_REQUIRED\", \"Сессия истекла. Войдите снова\");\n}\nif (upstreamStatus < 200 || upstreamStatus >= 300) {\n  return finish(503, AUTH_SERVICE_UNAVAILABLE, \"Не удалось проверить вход. Повторите позже\");\n}\n\nlet claims = msg.payload;\nif (typeof claims === \"string\") {\n  if (!claims.trim() || claims.length > 65536) {\n    return finish(503, AUTH_SERVICE_UNAVAILABLE, \"Не удалось проверить вход. Повторите позже\");\n  }\n  try {\n    claims = JSON.parse(claims);\n  } catch (_error) {\n    return finish(503, AUTH_SERVICE_UNAVAILABLE, \"Не удалось проверить вход. Повторите позже\");\n  }\n}\nif (!isObj(claims)) {\n  return finish(503, AUTH_SERVICE_UNAVAILABLE, \"Не удалось проверить вход. Повторите позже\");\n}\nconst subject = toStr(claims.sub);\nif (!subject) {\n  return finish(503, AUTH_SERVICE_UNAVAILABLE, \"Не удалось проверить вход. Повторите позже\");\n}\n\nconst expectedClientId = readEnv(\"RESIDENT_CLIENT_EXPECTED_CLIENT_ID\") || \"widget\";\nconst expectedTenantKey = readEnv(\"RESIDENT_CLIENT_TENANT_KEY\") || \"iSkq6G\";\nconst authorizedParty = toStr(claims.azp) || toStr(claims.client_id) || toStr(claims.clientId);\nif (authorizedParty !== expectedClientId) {\n  return finish(403, \"RESIDENT_CLIENT_FORBIDDEN\", \"Вход выполнен в другом приложении\");\n}\nconst tenantKey = toStr(claims.tenantKey) || toStr(claims.tenant_key) || toStr(claims.tenant);\nif (tenantKey !== expectedTenantKey) {\n  return finish(403, \"RESIDENT_CLIENT_FORBIDDEN\", \"Вход выполнен в другом клубе\");\n}\n\n// Only pass creation spends a CUP integration call; status polling is a cheap read.\nif (ctx.endpoint === \"create\") {\n  const configuredLimit = Number(readEnv(\"RESIDENT_CLIENT_RATE_LIMIT_PER_MINUTE\") || 20);\n  const limit = Number.isFinite(configuredLimit) ? Math.max(1, Math.min(120, Math.floor(configuredLimit))) : 20;\n  const minuteBucket = Math.floor(Date.now() / 60000);\n  const rateKey = \"resident-pass-rate:\" + subject + \":\" + minuteBucket;\n  let attempts = 0;\n  try {\n    if (typeof flow !== \"undefined\" && flow && typeof flow.get === \"function\") {\n      const stored = Number(flow.get(rateKey));\n      attempts = Number.isFinite(stored) && stored > 0 ? stored : 0;\n      if (typeof flow.set === \"function\") flow.set(rateKey, attempts + 1);\n    }\n  } catch (_error) {\n    attempts = 0;\n  }\n  if (attempts >= limit) {\n    return finish(429, \"RESIDENT_CLIENT_RATE_LIMITED\", \"Слишком много запросов. Подождите минуту\");\n  }\n}\n\nconst authorizationHeader = toStr(ctx.authorization);\nif (!authorizationHeader) {\n  return finish(401, \"RESIDENT_CLIENT_AUTH_REQUIRED\", \"Сессия истекла. Войдите снова\");\n}\n\nconst correlationId = ctx.correlationId;\nlet nextUrl = null;\nif (ctx.endpoint === \"create\") {\n  const vivaBase = (readEnv(\"RESIDENT_CLIENT_VIVA_API_BASE_URL\") || \"https://api.vivacrm.ru\").replace(/\\/+$/, \"\");\n  nextUrl = vivaBase\n    + \"/end-user/api/v1/\" + expectedTenantKey\n    + \"/subscriptions?includeFinished=false&size=100\";\n} else if (ctx.endpoint === \"status\") {\n  const cupBase = readEnv(\"RESIDENT_CLIENT_CUP_API_BASE_URL\");\n  const integrationToken = readEnv(\"RESIDENT_CLIENT_CUP_INTEGRATION_TOKEN\");\n  if (!cupBase || !integrationToken) {\n    return finish(503, \"RESIDENT_CLIENT_NOT_CONFIGURED\", \"Сервис пропусков не настроен\");\n  }\n  const statusPath = toStr(ctx.statusPath);\n  if (!statusPath || !/^\\/(?!\\/)[A-Za-z0-9._\\-\\/]*\\/$/.test(statusPath)) {\n    return finish(503, \"RESIDENT_CLIENT_NOT_CONFIGURED\", \"Сервис пропусков не настроен\");\n  }\n  nextUrl = cupBase.replace(/\\/+$/, \"\")\n    + statusPath\n    + encodeURIComponent(ctx.passId);\n} else {\n  return finish(500, \"RESIDENT_CLIENT_INTERNAL\", \"Не удалось продолжить обработку\");\n}\nif (typeof nextUrl === \"string\" && /[\\r\\n]/.test(nextUrl)) {\n  return finish(500, \"RESIDENT_CLIENT_INTERNAL\", \"Не удалось продолжить обработку\");\n}\n\nconst nextHeaders = ctx.endpoint === \"create\"\n  ? { Authorization: authorizationHeader, Accept: \"application/json\" }\n  : {\n      Authorization: authorizationHeader,\n      \"X-Resident-Services-Integration-Token\": readEnv(\"RESIDENT_CLIENT_CUP_INTEGRATION_TOKEN\"),\n      \"X-Correlation-Id\": correlationId,\n      Accept: \"application/json\",\n    };\n\nmsg._residentPass = Object.assign({}, ctx, { subject, tenantKey, verifiedAt: new Date().toISOString() });\ndelete msg._residentPass.authorization;\nmsg.method = \"GET\";\nmsg.url = nextUrl;\nmsg.headers = nextHeaders;\nmsg.payload = null;\nmsg.requestTimeout = 8000;\nmsg.followRedirects = false;\nmsg.maxRedirects = 0;\ndelete msg.statusCode;\ndelete msg.error;\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1030,
+    "y": 220,
+    "wires": [
+      [
+        "lk_resident_pass_endpoint_switch_20261105"
+      ],
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_endpoint_switch_20261105",
+    "type": "switch",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Endpoint",
+    "property": "_residentPass.endpoint",
+    "propertyType": "msg",
+    "rules": [
+      {
+        "t": "eq",
+        "v": "create",
+        "vt": "str"
+      },
+      {
+        "t": "eq",
+        "v": "status",
+        "vt": "str"
+      }
+    ],
+    "checkall": "true",
+    "repair": false,
+    "outputs": 2,
+    "x": 1300,
+    "y": 220,
+    "wires": [
+      [
+        "lk_resident_pass_viva_subscriptions_20261105"
+      ],
+      [
+        "lk_resident_pass_cup_status_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_viva_subscriptions_20261105",
+    "type": "http request",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Read LK active subscriptions",
+    "method": "use",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [],
+    "x": 1560,
+    "y": 200,
+    "wires": [
+      [
+        "lk_resident_pass_resolve_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_resolve_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Resolve owned subscription and build CUP pass request",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized || null;\n};\nconst readEnv = (name) => {\n  try {\n    if (typeof env !== \"undefined\" && env && typeof env.get === \"function\") {\n      return toStr(env.get(name));\n    }\n  } catch (_error) {\n    return null;\n  }\n  return null;\n};\nconst scrubContext = () => {\n  delete msg._residentPass;\n};\n// Fixed-enum observability only: never the bearer, token, subscription id or subject.\nconst warn = (event, code, extra) => {\n  if (typeof node === \"undefined\" || typeof node?.warn !== \"function\") return;\n  try {\n    node.warn(JSON.stringify(Object.assign({ event, code }, extra || {})));\n  } catch (_error) {\n    // Observability must never alter the response.\n  }\n};\nconst jsonHeaders = () => ({\n  \"Content-Type\": \"application/json; charset=utf-8\",\n  \"Cache-Control\": \"no-store\",\n  \"Referrer-Policy\": \"no-referrer\",\n  \"X-Robots-Tag\": \"noindex, nofollow\",\n  \"Access-Control-Allow-Origin\": \"*\",\n});\nconst durationMs = (ctx) => {\n  const startedAt = Number(ctx?.startedAt);\n  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : null;\n};\n\nconst finish = (statusCode, code, message) => {\n  const ctx = isObj(msg._residentPass) ? msg._residentPass : null;\n  warn(\"residency_pass_subscription_rejected\", code, {\n    endpoint: \"create\",\n    httpStatus: statusCode,\n    upstreamStatus: Number.isInteger(Number(msg.statusCode)) ? Number(msg.statusCode) : null,\n    durationMs: durationMs(ctx),\n  });\n  scrubContext();\n  msg.statusCode = statusCode;\n  msg.headers = jsonHeaders();\n  msg.payload = { code, message };\n  return [null, msg];\n};\nconst parsePayload = () => {\n  let payload = msg.payload;\n  if (typeof payload === \"string\") {\n    if (!payload.trim() || payload.length > 262144) return null;\n    try {\n      payload = JSON.parse(payload);\n    } catch (_error) {\n      return null;\n    }\n  }\n  return isObj(payload) || Array.isArray(payload) ? payload : null;\n};\n\nconst ctx = isObj(msg._residentPass) ? msg._residentPass : null;\nif (!ctx || ctx.endpoint !== \"create\") {\n  return finish(500, \"RESIDENT_CLIENT_INTERNAL\", \"Не удалось прочитать абонементы\");\n}\n\nconst upstreamStatus = Number(msg.statusCode) || 0;\nif (msg.error || upstreamStatus === 0) {\n  return finish(503, \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\", \"Данные абонементов временно недоступны\");\n}\nif (upstreamStatus === 401 || upstreamStatus === 403) {\n  return finish(401, \"RESIDENT_CLIENT_AUTH_REQUIRED\", \"Сессия истекла. Войдите снова\");\n}\nif (upstreamStatus < 200 || upstreamStatus >= 300) {\n  return finish(503, \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\", \"Данные абонементов временно недоступны\");\n}\nconst payload = parsePayload();\nif (!payload) {\n  return finish(503, \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\", \"Данные абонементов временно недоступны\");\n}\nconst list = Array.isArray(payload)\n  ? payload\n  : (Array.isArray(payload.content)\n    ? payload.content\n    : (isObj(payload.data) && Array.isArray(payload.data.content) ? payload.data.content : null));\nif (!Array.isArray(list)) {\n  return finish(503, \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\", \"Данные абонементов временно недоступны\");\n}\n\nconst requested = toStr(ctx.clientSubscriptionId).toLowerCase();\nconst now = Date.now();\nconst readDate = (value) => {\n  const text = toStr(value);\n  if (!text) return null;\n  const parsed = Date.parse(text);\n  return Number.isFinite(parsed) ? parsed : null;\n};\nconst matches = list.filter((entry) => (\n  isObj(entry)\n  && (toStr(entry.subscriptionId) || toStr(entry.id) || \"\").toLowerCase() === requested\n));\nif (matches.length !== 1) {\n  return finish(409, \"RESIDENT_CLIENT_SUBSCRIPTION_INVALID\", \"Абонемент не найден среди активных\");\n}\nconst subscription = matches[0];\nconst status = (toStr(subscription.status) || \"\").toUpperCase();\nconst activationTs = readDate(subscription.activationDate);\nconst expirationTs = readDate(subscription.expirationDate);\nconst holdTs = readDate(subscription.holdUntil);\nconst cancelledMarkers = [\"CANCEL\", \"CLOSE\", \"FINISH\", \"EXPIRED\", \"ARCHIVE\", \"VOID\", \"DELETED\"];\nif (status && cancelledMarkers.some((marker) => status.includes(marker))) {\n  return finish(409, \"RESIDENT_CLIENT_SUBSCRIPTION_INVALID\", \"Абонемент не активен\");\n}\nif (activationTs !== null && activationTs > now) {\n  return finish(409, \"RESIDENT_CLIENT_SUBSCRIPTION_INVALID\", \"Абонемент ещё не активирован\");\n}\nif (expirationTs !== null && expirationTs <= now) {\n  return finish(409, \"RESIDENT_CLIENT_SUBSCRIPTION_INVALID\", \"Абонемент истёк\");\n}\nif (holdTs !== null && holdTs > now) {\n  return finish(409, \"RESIDENT_CLIENT_SUBSCRIPTION_FROZEN\", \"Абонемент заморожен\");\n}\n\nconst cupBase = readEnv(\"RESIDENT_CLIENT_CUP_API_BASE_URL\");\nconst integrationToken = readEnv(\"RESIDENT_CLIENT_CUP_INTEGRATION_TOKEN\");\nconst authorizationHeader = toStr(ctx.authorization);\nif (!cupBase || !integrationToken) {\n  return finish(503, \"RESIDENT_CLIENT_NOT_CONFIGURED\", \"Сервис пропусков не настроен\");\n}\nif (!authorizationHeader) {\n  return finish(401, \"RESIDENT_CLIENT_AUTH_REQUIRED\", \"Сессия истекла. Войдите снова\");\n}\nconst createUrl = cupBase.replace(/\\/+$/, \"\") + \"/internal/subscriptions/resident-passes\";\nif (!/^https?:\\/\\/[^\\s]+$/i.test(createUrl) || /[\\r\\n]/.test(createUrl)) {\n  return finish(503, \"RESIDENT_CLIENT_NOT_CONFIGURED\", \"Сервис пропусков не настроен\");\n}\n\nmsg._residentPass = Object.assign({}, ctx, {\n  subscriptionMatched: true,\n});\ndelete msg._residentPass.authorization;\nmsg.method = \"POST\";\nmsg.url = createUrl;\nmsg.headers = {\n  Authorization: authorizationHeader,\n  \"X-Resident-Services-Integration-Token\": integrationToken,\n  \"X-Correlation-Id\": ctx.correlationId,\n  \"Content-Type\": \"application/json\",\n  Accept: \"application/json\",\n};\nmsg.payload = { clientSubscriptionId: requested };\nmsg.requestTimeout = 8000;\nmsg.followRedirects = false;\nmsg.maxRedirects = 0;\ndelete msg.statusCode;\ndelete msg.error;\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1840,
+    "y": 200,
+    "wires": [
+      [
+        "lk_resident_pass_cup_create_20261105"
+      ],
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_cup_create_20261105",
+    "type": "http request",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Create CUP resident pass",
+    "method": "use",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [],
+    "x": 2110,
+    "y": 200,
+    "wires": [
+      [
+        "lk_resident_pass_create_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_create_response_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Map CUP pass response",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized || null;\n};\nconst readEnv = (name) => {\n  try {\n    if (typeof env !== \"undefined\" && env && typeof env.get === \"function\") {\n      return toStr(env.get(name));\n    }\n  } catch (_error) {\n    return null;\n  }\n  return null;\n};\nconst scrubContext = () => {\n  delete msg._residentPass;\n};\n// Fixed-enum observability only: never the bearer, token, subscription id or subject.\nconst warn = (event, code, extra) => {\n  if (typeof node === \"undefined\" || typeof node?.warn !== \"function\") return;\n  try {\n    node.warn(JSON.stringify(Object.assign({ event, code }, extra || {})));\n  } catch (_error) {\n    // Observability must never alter the response.\n  }\n};\nconst jsonHeaders = () => ({\n  \"Content-Type\": \"application/json; charset=utf-8\",\n  \"Cache-Control\": \"no-store\",\n  \"Referrer-Policy\": \"no-referrer\",\n  \"X-Robots-Tag\": \"noindex, nofollow\",\n  \"Access-Control-Allow-Origin\": \"*\",\n});\nconst durationMs = (ctx) => {\n  const startedAt = Number(ctx?.startedAt);\n  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : null;\n};\n\nconst PASSTHROUGH_CODES = new Set([\n  \"RESIDENT_PASS_NOT_FOUND\",\n  \"RESIDENT_PASS_INVALID\",\n  \"RESIDENT_PASS_EXPIRED\",\n  \"RESIDENT_PASS_ALREADY_USED\",\n  \"RESIDENT_NOT_ACTIVE\",\n  \"RESIDENT_TERM_EXPIRED\",\n  \"RESIDENT_EVIDENCE_STALE\",\n  \"RESIDENT_EVIDENCE_INVALID\",\n  \"RESIDENT_MAPPING_NOT_CURRENT\",\n  \"RESIDENT_MAPPING_STALE\",\n  \"RESIDENT_POLICY_NOT_CURRENT\",\n  \"RESIDENT_TYPE_NOT_FOUND\",\n  \"RESIDENT_INSTANCE_NOT_FOUND\",\n  \"RESIDENT_SERVICES_DISABLED\",\n  \"RESIDENT_SERVICES_NOT_CONFIGURED\",\n  \"RESIDENT_SERVICES_INTEGRATION_FORBIDDEN\",\n  \"RESIDENT_SERVICES_PERSISTENCE_UNAVAILABLE\",\n  \"RESIDENT_SERVICES_CONFIG_INVALID\",\n  \"RESIDENT_SERVICES_REQUEST_INVALID\",\n  \"AUTH_REQUIRED\",\n  \"FORBIDDEN\",\n  \"NOT_FOUND\",\n  \"VALIDATION_ERROR\"\n]);\nconst SAFE_STATUSES = new Set([400, 401, 403, 404, 409, 429, 503, 504]);\nconst respond = (statusCode, payload) => {\n  scrubContext();\n  msg.statusCode = statusCode;\n  msg.headers = jsonHeaders();\n  msg.payload = payload;\n  return msg;\n};\nconst fail = (statusCode, code, message) => respond(statusCode, { code, message });\nconst parsePayload = () => {\n  let payload = msg.payload;\n  if (typeof payload === \"string\") {\n    if (!payload.trim() || payload.length > 262144) return null;\n    try {\n      payload = JSON.parse(payload);\n    } catch (_error) {\n      return null;\n    }\n  }\n  return isObj(payload) ? payload : null;\n};\nconst isIsoDate = (value) => {\n  const text = toStr(value);\n  if (!text || text.length > 64) return false;\n  return Number.isFinite(Date.parse(text));\n};\n\nconst ctx = isObj(msg._residentPass) ? msg._residentPass : null;\nconst upstreamStatus = Number(msg.statusCode) || 0;\nif (msg.error || upstreamStatus === 0) {\n  warn(\"residency_pass_failed\", \"RESIDENT_CLIENT_UPSTREAM_TIMEOUT\", {\n    endpoint: \"create\",\n    httpStatus: 504,\n    durationMs: durationMs(ctx),\n  });\n  return fail(504, \"RESIDENT_CLIENT_UPSTREAM_TIMEOUT\", \"Выдача пропуска не ответила вовремя\");\n}\nconst payload = parsePayload();\nif (upstreamStatus < 200 || upstreamStatus >= 300) {\n  const upstreamCode = toStr(payload?.error?.code) || toStr(payload?.code);\n  const code = upstreamCode && PASSTHROUGH_CODES.has(upstreamCode)\n    ? upstreamCode\n    : \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\";\n  const statusCode = SAFE_STATUSES.has(upstreamStatus) ? upstreamStatus : 503;\n  warn(\"residency_pass_failed\", code, {\n    endpoint: \"create\",\n    httpStatus: statusCode,\n    upstreamStatus,\n    durationMs: durationMs(ctx),\n  });\n  return fail(statusCode, code, \"Не удалось выдать пропуск\");\n}\nif (!payload) {\n  warn(\"residency_pass_failed\", \"RESIDENT_CLIENT_UPSTREAM_INVALID\", {\n    endpoint: \"create\",\n    httpStatus: 503,\n    upstreamStatus,\n    durationMs: durationMs(ctx),\n  });\n  return fail(503, \"RESIDENT_CLIENT_UPSTREAM_INVALID\", \"Некорректный ответ сервиса пропусков\");\n}\n\nconst passId = toStr(payload.passId);\nconst passToken = toStr(payload.token);\nconst tripInstanceId = toStr(payload.subscriptionInstanceId);\nconst residency = isObj(payload.residency) ? payload.residency : null;\nconst valid = passId\n  && /^resident_pass:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(passId)\n  && passToken\n  && /^rsp1_[A-Za-z0-9_-]{16,}$/.test(passToken)\n  && tripInstanceId\n  && /^subscription_instance:[A-Za-z0-9._:-]{1,200}$/.test(tripInstanceId)\n  && isIsoDate(payload.issuedAt)\n  && isIsoDate(payload.expiresAt)\n  && Date.parse(payload.expiresAt) > Date.parse(payload.issuedAt)\n  && residency\n  && toStr(residency.subscriptionTypeId)\n  && toStr(residency.activeFrom)\n  && toStr(residency.activeTo)\n  && isIsoDate(residency.activeFrom)\n  && isIsoDate(residency.activeTo);\nif (!valid) {\n  warn(\"residency_pass_failed\", \"RESIDENT_CLIENT_UPSTREAM_INVALID\", {\n    endpoint: \"create\",\n    httpStatus: 503,\n    upstreamStatus,\n    durationMs: durationMs(ctx),\n  });\n  return fail(503, \"RESIDENT_CLIENT_UPSTREAM_INVALID\", \"Некорректный ответ сервиса пропусков\");\n}\n\nwarn(\"residency_pass_created\", \"RESIDENT_PASS_CREATED\", {\n  endpoint: \"create\",\n  httpStatus: 200,\n  durationMs: durationMs(ctx),\n  ttlSeconds: Math.round((Date.parse(payload.expiresAt) - Date.parse(payload.issuedAt)) / 1000),\n});\nreturn respond(200, {\n  schemaVersion: 1,\n  passId,\n  passToken,\n  issuedAt: new Date(Date.parse(payload.issuedAt)).toISOString(),\n  expiresAt: new Date(Date.parse(payload.expiresAt)).toISOString(),\n  subscriptionInstanceId: tripInstanceId,\n  residency: {\n    subscriptionTypeId: toStr(residency.subscriptionTypeId),\n    subscriptionTypeTitle: toStr(residency.subscriptionTypeTitle),\n    activeFrom: new Date(Date.parse(residency.activeFrom)).toISOString(),\n    activeTo: new Date(Date.parse(residency.activeTo)).toISOString(),\n  },\n});\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 2380,
+    "y": 200,
+    "wires": [
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_cup_status_20261105",
+    "type": "http request",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Read CUP resident pass status",
+    "method": "use",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [],
+    "x": 1560,
+    "y": 320,
+    "wires": [
+      [
+        "lk_resident_pass_status_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_status_response_20261105",
+    "type": "function",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "Map CUP pass status response",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized || null;\n};\nconst readEnv = (name) => {\n  try {\n    if (typeof env !== \"undefined\" && env && typeof env.get === \"function\") {\n      return toStr(env.get(name));\n    }\n  } catch (_error) {\n    return null;\n  }\n  return null;\n};\nconst scrubContext = () => {\n  delete msg._residentPass;\n};\n// Fixed-enum observability only: never the bearer, token, subscription id or subject.\nconst warn = (event, code, extra) => {\n  if (typeof node === \"undefined\" || typeof node?.warn !== \"function\") return;\n  try {\n    node.warn(JSON.stringify(Object.assign({ event, code }, extra || {})));\n  } catch (_error) {\n    // Observability must never alter the response.\n  }\n};\nconst jsonHeaders = () => ({\n  \"Content-Type\": \"application/json; charset=utf-8\",\n  \"Cache-Control\": \"no-store\",\n  \"Referrer-Policy\": \"no-referrer\",\n  \"X-Robots-Tag\": \"noindex, nofollow\",\n  \"Access-Control-Allow-Origin\": \"*\",\n});\nconst durationMs = (ctx) => {\n  const startedAt = Number(ctx?.startedAt);\n  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : null;\n};\n\nconst respond = (statusCode, payload) => {\n  scrubContext();\n  msg.statusCode = statusCode;\n  msg.headers = jsonHeaders();\n  msg.payload = payload;\n  return msg;\n};\nconst fail = (statusCode, code, message) => respond(statusCode, { code, message });\nconst parsePayload = () => {\n  let payload = msg.payload;\n  if (typeof payload === \"string\") {\n    if (!payload.trim() || payload.length > 262144) return null;\n    try {\n      payload = JSON.parse(payload);\n    } catch (_error) {\n      return null;\n    }\n  }\n  return isObj(payload) ? payload : null;\n};\nconst nullableIso = (value) => {\n  const text = toStr(value);\n  if (!text) return null;\n  const parsed = Date.parse(text);\n  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;\n};\n\nconst ctx = isObj(msg._residentPass) ? msg._residentPass : null;\nconst upstreamStatus = Number(msg.statusCode) || 0;\nif (msg.error || upstreamStatus === 0) {\n  warn(\"residency_pass_status_failed\", \"RESIDENT_CLIENT_UPSTREAM_TIMEOUT\", {\n    endpoint: \"status\",\n    httpStatus: 504,\n    durationMs: durationMs(ctx),\n  });\n  return fail(504, \"RESIDENT_CLIENT_UPSTREAM_TIMEOUT\", \"Проверка пропуска не ответила вовремя\");\n}\nconst payload = parsePayload();\nif (upstreamStatus === 401 || upstreamStatus === 403) {\n  return fail(401, \"RESIDENT_CLIENT_AUTH_REQUIRED\", \"Сессия истекла. Войдите снова\");\n}\nif (upstreamStatus === 404) {\n  const upstreamCode = toStr(payload?.error?.code) || toStr(payload?.code);\n  return fail(404, upstreamCode === \"RESIDENT_PASS_NOT_FOUND\" ? upstreamCode : \"RESIDENT_PASS_NOT_FOUND\", \"Пропуск не найден\");\n}\nif (upstreamStatus < 200 || upstreamStatus >= 300 || !payload) {\n  warn(\"residency_pass_status_failed\", \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\", {\n    endpoint: \"status\",\n    httpStatus: 503,\n    upstreamStatus,\n    durationMs: durationMs(ctx),\n  });\n  return fail(503, \"RESIDENT_CLIENT_UPSTREAM_UNAVAILABLE\", \"Состояние пропуска временно недоступно\");\n}\n\nconst state = (toStr(payload.state) || \"\").toUpperCase();\nif (![\"ACTIVE\", \"CONSUMED\", \"EXPIRED\"].includes(state)) {\n  return fail(503, \"RESIDENT_CLIENT_UPSTREAM_INVALID\", \"Некорректное состояние пропуска\");\n}\nconst stationId = toStr(payload.stationId);\nif (stationId && (stationId.length > 200 || /[\\s\\x00-\\x1f\\x7f]/.test(stationId))) {\n  return fail(503, \"RESIDENT_CLIENT_UPSTREAM_INVALID\", \"Некорректное состояние пропуска\");\n}\nreturn respond(200, {\n  schemaVersion: 1,\n  statusAvailable: true,\n  state,\n  issuedAt: nullableIso(payload.issuedAt),\n  expiresAt: nullableIso(payload.expiresAt),\n  consumedAt: nullableIso(payload.consumedAt),\n  stationId: stationId || null,\n});\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1840,
+    "y": 320,
+    "wires": [
+      [
+        "lk_resident_pass_http_response_20261105"
+      ]
+    ]
+  },
+  {
+    "id": "lk_resident_pass_http_response_20261105",
+    "type": "http response",
+    "z": "lk_resident_pass_tab_20261105",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 2660,
+    "y": 260,
+    "wires": []
+  }
+]

@@ -10,3 +10,4 @@ secrets/
 node-red/modular/
 .nodered-live-workspace*/
 tmp/
+node_modules
