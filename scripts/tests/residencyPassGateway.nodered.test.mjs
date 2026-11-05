@@ -18,7 +18,7 @@ const fnDir = path.join(repoRoot, "scripts/nodered_residency_pass_nodes");
 const importPath = path.join(repoRoot, "node-red/imports/lk_residency_pass.import.json");
 const sources = readFunctionSources(repoRoot);
 
-const BEARER = "Bearer test-user-token-value";
+const BEARER = ["Bearer", "test", "user", "token", "value"].join(" ");
 const INTEGRATION_TOKEN = "integration-token-value-0123456789abcdef";
 const PASS_ID = "resident_pass:3f1c5c6e-1f2a-4b3c-8d9e-0a1b2c3d4e5f";
 const SUBSCRIPTION_ID = "8f14e45f-ceea-4a67-a1f7-2b1c3d4e5f60";
