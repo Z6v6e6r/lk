@@ -1,3 +1,4 @@
+import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
@@ -2884,6 +2885,8 @@ export interface TournamentPublishedCommunity {
 }
 
 export interface TournamentHistoryRecord {
+  fprLevelResults?: FprLevelResults | null;
+  fprLevelExcludedPlayerIds?: string[] | null;
   id: string;
   tournamentId: string;
   title: string | null;
@@ -5796,6 +5799,8 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
     mixed,
     organizer: organizerPayload ? normalizeTournamentHistoryParticipant(organizerPayload, 0) : null,
     params: paramsPayload,
+    fprLevelResults: value.tournamentType === "fpr_6x25" ? readFprLevelResults(paramsPayload?.fpr6x25, value.fprLevelResults, fprLevelExcludedPlayerIds(paramsPayload?.fpr6x25, value.ratingExclusions), paramsPayload?.sourceExerciseId) : null,
+    fprLevelExcludedPlayerIds: value.tournamentType === "fpr_6x25" ? fprLevelExcludedPlayerIds(paramsPayload?.fpr6x25, value.ratingExclusions) : [],
     rounds: Array.isArray(value.rounds) ? value.rounds : [],
     standings: Array.isArray(value.standings) ? value.standings : [],
     summary: summaryPayload,

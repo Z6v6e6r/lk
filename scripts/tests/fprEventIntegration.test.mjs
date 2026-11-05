@@ -1,3 +1,4 @@
+import { ratingFixture } from "./helpers/fprRatingFixture.ts";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,13 +8,13 @@ import { buildFprNodeFunction } from '../nodered_fpr6x25.mjs';
 import { patchFprFlow, fprSha256 } from '../patch_live_fpr6x25.mjs';
 
 const require = createRequire(import.meta.url);
-const output = await build({ stdin: { contents: `export * from './src/components/tournaments/fpr6x25'; export * from './src/utils/tournamentEventIdentity'; export * from './src/utils/tournamentDraftExercise'; export { buildResultRows } from './src/components/cabinet/TournamentDetailsModal';`, resolveDir: process.cwd() },
+const output = await build({ stdin: { contents: `export * from './src/components/tournaments/fpr6x25'; export * from './src/utils/tournamentEventIdentity'; export * from './src/utils/tournamentDraftExercise'; export { buildResultRows } from './src/components/cabinet/TournamentDetailsModal'; export {normalizeTournamentHistoryRecord} from './src/utils/apiClient';`, resolveDir: process.cwd() },
   bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', define: { 'import.meta.env': '{}' }, external: ['react', 'react/jsx-runtime', 'react-dom'], loader: { '.css': 'empty' }, logLevel: 'silent',
-  plugins: [{ name: 'expose-real-result-mapper', setup(b) { b.onLoad({ filter: /cabinet\/TournamentDetailsModal\.tsx$/ }, args => ({ contents: fs.readFileSync(args.path, 'utf8') + '\nexport { buildResultRows };', loader: 'tsx' })); } }],
+  plugins: [{ name: 'expose-real-result-mapper', setup(b) { b.onLoad({ filter: /utils\/apiClient\.ts$/ }, args => ({ contents: fs.readFileSync(args.path, 'utf8') + '\nexport { normalizeTournamentHistoryRecord };', loader: 'ts' })); b.onLoad({ filter: /cabinet\/TournamentDetailsModal\.tsx$/ }, args => ({ contents: fs.readFileSync(args.path, 'utf8') + '\nexport { buildResultRows };', loader: 'tsx' })); } }],
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', output.outputFiles[0].text)(require, mod, mod.exports);
-const { createFprState, fprProjection, fprStandings, applyFprCommand, buildResultRows, tournamentEventId, tournamentIdentityKeys, buildTournamentDraftExercise } = mod.exports;
+const { createFprState, fprProjection, fprStandings, applyFprCommand, buildResultRows, normalizeTournamentHistoryRecord, tournamentEventId, tournamentIdentityKeys, buildTournamentDraftExercise } = mod.exports;
 const start = '2026-11-03T09:00:00Z';
 const end = '2026-11-03T11:00:00Z';
 const sourceId = '11111111-2222-4333-8444-555555555555';
@@ -124,4 +125,34 @@ test('conflicting root/nested source identity cannot open results through either
     const prepared = queryCommunity({ payload: [doc], req: { query: { tournamentId: id } } });
     assert.equal(finalResponse(prepared).statusCode, 409);
   }
+});
+
+
+test('client history keeps exact server FPR level results and never substitutes current participant levels', () => {
+  const state = ratingFixture(4, 6);
+  const levels = { version: 1, protocolId: state.tournamentId, protocolRevision: state.revision,
+    sourceEventId: state.communityRating.sourceExerciseId, calculatedAt: '2026-11-05T12:00:00Z', rootExcludedPlayerIds: [],
+    rows: state.players.map((p, i) => ({ id: p.id, status: 'applied', before: 2, after: i === 0 ? 2 : i === 1 ? 2.00001 : 1.99999,
+      delta: i === 0 ? 0 : i === 1 ? 0.00001 : -0.00001 })) };
+  const doc = { tournamentId: state.tournamentId, tournamentType: 'fpr_6x25', ...fprProjection(state), fprLevelResults: levels };
+  const normalized = normalizeTournamentHistoryRecord(doc);
+  assert.deepEqual(normalized.fprLevelResults, levels);
+  const rootOnly = { ...doc, params: { ...doc.params, sourceExerciseId: 'root-only-physical', fpr6x25: { ...state, communityRating: { ...state.communityRating, sourceExerciseId: null } } }, fprLevelResults: { ...levels, sourceEventId: 'root-only-physical' } };
+  assert.ok(normalizeTournamentHistoryRecord(rootOnly).fprLevelResults);
+  assert.equal(buildResultRows(normalizeTournamentHistoryRecord(rootOnly), []).find(r => r.key === 'p1').delta, 0.00001);
+  const current = state.players.map(p => ({ key: p.id, clientId: p.id, name: p.name, rating: '6.9', ratingNumeric: 6.9, photo: null }));
+  const rows = buildResultRows(normalized, current);
+  assert.equal(rows.find(r => r.key === 'p0').delta, 0);
+  assert.equal(rows.find(r => r.key === 'p1').delta, 0.00001);
+  assert.equal(rows.find(r => r.key === 'p2').delta, -0.00001);
+  assert.equal(rows.find(r => r.key === 'p1').levelResult.after, 2.00001);
+  assert.deepEqual(rows.map(r => [r.key, r.rank]), fprStandings(state).map(r => [r.id, r.rank]));
+  const stale = normalizeTournamentHistoryRecord({ ...doc, fprLevelResults: { ...levels, protocolRevision: state.revision - 1 } });
+  assert.equal(stale.fprLevelResults, null);
+  assert.ok(buildResultRows(stale, current).every(r => r.delta === null));
+  const excluded = normalizeTournamentHistoryRecord({ ...doc, ratingExclusions: [{ playerId: 'p0', scopes: ['level'], auditId: 'synthetic', reason: 'private', recordedAt: '2026-11-05T12:00:00Z' }] });
+  assert.deepEqual(excluded.fprLevelExcludedPlayerIds, ['p0']);
+  assert.equal(excluded.fprLevelResults, null);
+  const attach = new Function('msg', fs.readFileSync('scripts/nodered_tournament_community_nodes/fn_tournament_community_publications_attach.js', 'utf8'));
+  assert.deepEqual(attach({ payload: [], _tournamentCommunityContext: { tournamentId: state.communityRating.sourceExerciseId, sourceRows: [doc] } }).payload[0].fprLevelResults, levels);
 });
