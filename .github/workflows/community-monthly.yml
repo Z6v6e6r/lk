@@ -13,6 +13,9 @@ on:
       - "src/components/tournaments/tournamentBroadcast*.ts"
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
+      - "scripts/game_result_rating_worker.mjs"
+      - "scripts/lib/fprLevel*.mjs"
+      - "src/services/player-rating/fpr*.ts"
       - "scripts/tests/fpr*"
       - "src/utils/lkIdleDataGuard.ts"
       - "src/utils/useLkTournamentSession.ts"
@@ -40,6 +43,9 @@ on:
       - "src/components/tournaments/tournamentBroadcast*.ts"
       - "scripts/*fpr*"
       - "scripts/rating_worker.mjs"
+      - "scripts/game_result_rating_worker.mjs"
+      - "scripts/lib/fprLevel*.mjs"
+      - "src/services/player-rating/fpr*.ts"
       - "scripts/tests/fpr*"
       - "src/utils/lkIdleDataGuard.ts"
       - "src/utils/useLkTournamentSession.ts"
@@ -97,6 +103,8 @@ jobs:
         run: npm run test:rating-worker-release
       - name: Test community rating and FPR result compatibility
         run: npm run test:community-rating
+      - name: Test FPR level transactions on an isolated replica set
+        run: npm run test:fpr-level-mongo
       - name: Test tournament idle-session lifetime and unchanged ordinary idle guard
         run: npm run test:tournament-session
       - name: Test FPR broadcast controls and existing device safety contract
