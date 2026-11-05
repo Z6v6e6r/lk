@@ -1,0 +1,146 @@
+/* Resident pass screen (D in the residency program). Scoped to .lk-residency. */
+.lk-residency-modal-body {
+  padding: 0;
+}
+
+.lk-residency {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 16px 20px;
+  text-align: center;
+}
+
+.lk-residency-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.lk-residency-fact {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #b8b8c2);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 10px;
+}
+
+.lk-residency-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.lk-residency-state--success .lk-residency-state-title {
+  color: #4ade80;
+}
+
+.lk-residency-state-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.lk-residency-state-text {
+  margin: 0;
+  color: var(--text-secondary, #b8b8c2);
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 320px;
+}
+
+.lk-residency-active {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.lk-residency-qr-card {
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+.lk-residency-qr-card--offline {
+  opacity: 0.9;
+}
+
+.lk-residency-qr {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.lk-residency-qr-placeholder {
+  background: linear-gradient(110deg, #f2f2f5 8%, #fafafc 18%, #f2f2f5 33%);
+  border-radius: 8px;
+}
+
+.lk-residency-qr-fallback {
+  color: #333;
+  font-size: 13px;
+  max-width: 248px;
+  padding: 12px;
+}
+
+.lk-residency-qr-expired {
+  color: #333;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  padding: 12px;
+}
+
+.lk-residency-countdown {
+  font-variant-numeric: tabular-nums;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.lk-residency-button {
+  align-items: center;
+  background: #7c5cff;
+  border: 0;
+  border-radius: 12px;
+  color: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 15px;
+  font-weight: 600;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 200px;
+  padding: 10px 20px;
+}
+
+.lk-residency-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.lk-residency-button--ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: var(--text-primary, #ffffff);
+}
+
+@media (max-width: 380px) {
+  .lk-residency-button {
+    min-width: 100%;
+  }
+
+  .lk-residency-qr {
+    width: 100%;
+    max-width: 248px;
+  }
+}

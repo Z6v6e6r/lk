@@ -43,6 +43,7 @@ import { ProfileEditForm } from "./ProfileEditForm";
 import { BookingsContainer } from "./BookingsContainer";
 import { BookingHistory } from "./BookingHistory";
 import { SubscriptionsContainer } from "./SubscriptionsContainer";
+import { ResidencySection } from "../../residency/ResidencySection";
 import { SubscriptionInformation } from "./SubscriptionInformation";
 import { Advertisement } from "./Advertisement";
 import { CommunitiesSectionLoader } from "./CommunitiesSectionLoader";
@@ -4057,6 +4058,9 @@ export function Cabinet({
         phone={profile.phone}
         openSubInfo={openSubInfo}
       />
+
+      {/* Резидентство: пропуск резидента (одноразовый QR) */}
+      <ResidencySection subscriptions={userSubscriptions} />
 
       {/* Турниры */}
       {canOpenTournamentsBlock && (
