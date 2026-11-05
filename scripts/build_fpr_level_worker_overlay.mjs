@@ -11,7 +11,8 @@ export const fprWorkerFiles = [
   "scripts/lib/fprLevelLedger.mjs",
   "scripts/lib/fprLevelIdentity.mjs",
   "src/services/player-rating/fprTournamentRating.ts",
-  "src/services/player-rating/fprRatingReplay.ts"
+  "src/services/player-rating/fprRatingReplay.ts",
+  "src/services/player-rating/tournamentExclusionGuard.ts"
 ];
 export const fprWorkerReplacements = [
   {
@@ -111,6 +112,12 @@ export function buildFprRatingWorkerOverlay({ baselineRoot, sourceRoot, outputRo
     output.set(file, Buffer.from(previous.replace(before, after)));
   }
   for (const file of fprWorkerFiles.slice(2)) output.set(file, source.get(file));
+  for (const file of fprWorkerFiles.slice(2)) {
+    for (const match of output.get(file).toString('utf8').matchAll(/\bfrom\s*["'](\.[^"']+)["']/g)) {
+      const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
+      if (dependency.startsWith('../') || !output.has(dependency)) throw new Error(`Missing runtime dependency: ${file}`);
+    }
+  }
   const files = [...output].map(([file, bytes]) => ({ path: file, sha256: sha256(bytes) }));
   const changed = files.filter(entry => manifest.files.find(old => old.path === entry.path)?.sha256 !== entry.sha256).map(entry => entry.path).sort();
   if (changed.join("\n") !== [...fprWorkerFiles].sort().join("\n")) throw new Error("Unexpected overlay delta");

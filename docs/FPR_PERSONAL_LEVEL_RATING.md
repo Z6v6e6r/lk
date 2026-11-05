@@ -24,7 +24,7 @@ the latest canonical frontier and requires an explicit matching numeric SYNCED A
 
 ## Activation and historical operation
 
-An immutable overlay patches only the two installed workers and adds four runtime
+An immutable overlay patches only the two installed workers and adds five runtime
 modules. Every other installed manifest byte is preserved and hash-checked. Build
 with `scripts/build_fpr_level_worker_overlay.mjs`; never replace the installed older
 worker with a whole newer local checkout.

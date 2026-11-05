@@ -13,6 +13,11 @@ function fixture() {
     fs.mkdirSync(path.dirname(path.join(base, file)), { recursive: true }); fs.writeFileSync(path.join(base, file), bytes);
     return { path: file, sha256: sha256(bytes) };
   });
+  for (const file of ['src/services/player-rating/ledger.ts', 'src/components/tournaments/fpr6x25.ts', 'scripts/lib/tournamentFinalization.mjs']) {
+    const bytes = fs.readFileSync(path.join(sourceRoot, file));
+    fs.mkdirSync(path.dirname(path.join(base, file)), { recursive: true }); fs.writeFileSync(path.join(base, file), bytes);
+    files.push({ path: file, sha256: sha256(bytes) });
+  }
   fs.writeFileSync(path.join(base, 'unchanged'), 'preserved'); files.push({ path: 'unchanged', sha256: sha256('preserved') });
   const manifest = JSON.stringify({ dirtyWorktree: false, gitSha: 'a'.repeat(40), files });
   fs.writeFileSync(path.join(base, 'release-manifest.json'), manifest);
@@ -44,4 +49,16 @@ test('source tampering, installed drift and extra allowlist paths fail before ca
       assert.equal(fs.existsSync(out), false);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
+});
+
+test('missing installed dependency is rejected before writing the candidate', () => {
+  const { root, base, contract } = fixture(); const out = path.join(root, 'candidate');
+  try {
+    const file = path.join(base, 'release-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(file));
+    manifest.files = manifest.files.filter(f => f.path !== 'scripts/lib/tournamentFinalization.mjs');
+    fs.writeFileSync(file, JSON.stringify(manifest)); contract.baselineManifestSha256 = sha256(fs.readFileSync(file));
+    assert.throws(() => buildFprRatingWorkerOverlay({ baselineRoot: base, sourceRoot, outputRoot: out, contract }), /Missing runtime dependency/);
+    assert.equal(fs.existsSync(out), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
