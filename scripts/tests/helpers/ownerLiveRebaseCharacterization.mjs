@@ -204,6 +204,7 @@ export function fakeViva(world) {
   return ({ method, url, payload }) => {
     const u = String(url || ''), m = String(method || 'GET').toUpperCase();
     const hit = (re) => re.test(u);
+    if (world.internal && hit(/\/internal\/subscriptions\//)) return world.internal(m, u, payload);
     if (hit(/\/profile(\?|$)/)) return [200, world.profile];
     if (hit(/\/subscriptions\/[^/?]+(\?|$)/) && hit(/\/clients\//)) return [200, world.subscriptions[0] ?? null];
     if (hit(/\/subscriptions\?/)) return [200, { content: world.subscriptions, totalElements: world.subscriptions.length, number: 0, totalPages: 1, last: true }];
@@ -291,4 +292,36 @@ export function storeSeed({ productId = SPORT, name = productId === HUB ? 'HUB' 
     { _id: key('instance', 'iSkq6G', CLIENT, SUBSCRIPTION), kind: 'instance', tenantKey: 'iSkq6G', actorClientId: CLIENT, subscriptionId: SUBSCRIPTION, productId },
     { _id: key('product', 'iSkq6G', productId), kind: 'product', tenantKey: 'iSkq6G', productId, name },
   ] };
+}
+
+// Legacy cohort: a product outside the LK1 plan rules books through the installed
+// ordinary write path (Viva POST, durable insert, confirmation read, confirm update).
+export const LEGACY_PRODUCT = '55555555-5555-4555-8555-555555555555';
+
+// Managed (CUP entitlement) tournament booking with server globals configured.
+// discountMinor = 150000 → free entitlement (reserve, bind, Viva POST, confirm);
+// a partial discount takes the provider-rejected release path.
+export async function managedScenario({ discountMinor = 150000 } = {}) {
+  const { managedRuntimeResponse } = await import('./subscriptionBookingManagedFixtures.mjs');
+  const PITER = '8bf334ba-3050-4017-b40a-7eef2db1eb16', STATION = '1ea77cbf-bc36-49a1-96d6-f35c216a409b', NAME = 'Падел.Дружба.Питер — 12 месяцев';
+  const globals = { ...SAFE_GLOBALS, subscriptions_runtime_context_integration_token: 'runtime-context-integration-token-123456',
+    subscriptions_entitlement_integration_token: 'entitlement-integration-token-1234567890', subscriptions_managed_enforcement_product_ids: [PITER] };
+  const make = () => {
+    const w = world({ productId: PITER, exerciseDirection: 2617, exerciseType: 839 });
+    w.exercise.studio = { id: STATION }; w.subscriptions[0].name = NAME;
+    Object.assign(w.exercise.availableClientSubscriptions[0], { name: NAME, purchaseDate: '2026-10-01T10:00:00+03:00' });
+    const decision = { decisionKind: 'ENTITLEMENT', policyVersion: 1, policyDigest: 'a'.repeat(64), action: 'BOOK_TOURNAMENT',
+      target: { targetId: EXERCISE, stationId: STATION, eventTypeId: 'viva:direction:2617:type:839', productTypeId: null, durationMinutes: 60, startsAt: '2026-11-10T07:00:00.000Z' },
+      usageUnits: 1, money: { basePriceMinor: 150000, discountMinor, surchargeMinor: 0, finalPriceMinor: 150000 - discountMinor, currency: 'RUB' } };
+    const receipt = { schemaVersion: 1, subscriptionInstanceId: 'subscription-instance-1', operationId: 'ent-op-1', replayed: false };
+    w.internal = (method, url) => {
+      if (/runtime-context/.test(url)) return [200, managedRuntimeResponse({ clientSubscriptionId: SUBSCRIPTION,
+        instance: { activeFrom: '2026-10-01T00:00:00.000Z', activeTo: '2027-10-01T00:00:00.000Z' } })];
+      if (/reserve/.test(url)) return [200, { ...receipt, aggregateRevision: 1, blockers: [], outcome: 'RESERVED', operationState: 'RESERVED', decision }];
+      if (/confirm/.test(url)) return [200, { ...receipt, aggregateRevision: 2, outcome: 'CONFIRMED', operationState: 'CONFIRMED' }];
+      return [404, { error: 'fake cup: no route' }];
+    };
+    return w;
+  };
+  return { make, globals, seed: () => storeSeed({ productId: PITER, name: NAME }) };
 }

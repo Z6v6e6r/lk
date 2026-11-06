@@ -22,7 +22,7 @@ const CLOSURE = [
   ...LIVE_REBASE_UNITS.flatMap(unit => unit[2].map(([file]) => 'scripts/nodered_subscription_booking_nodes/' + file)),
 ];
 
-// Installed topology on lk-primary-147 (flows.json 9ed37134…). Wiring never changes in this step.
+// Installed topology on lk-primary-147 (flows.json f6fd9f05…). Wiring never changes in this step.
 export const LIVE_REBASE_TOPOLOGY = Object.freeze({
   [id('router')]: { type: 'function', outputs: 8, wires: [[id('http')], [id('find')], [id('insert')], [id('update')],
     [id('finalize')], [id('debug')], ['lk_subscription_managed_policy_20260820'], ['lk_subscription_product_router_20260907']] },

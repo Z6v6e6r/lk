@@ -11,6 +11,10 @@
 `9ed37134a09bb2283160325ee5f18104983720c26f7135f869d6266ee1912425`. Последняя запись —
 `fpr284-event-20261103`, она трогала только турнирные узлы. Копия лежала вне репозитория и удалена.
 
+Обновление 2026-11-06 15:47 MSK: `fpr-cup-start-20261106` добавил 12 турнирных узлов в другой вкладке
+и поменял провода одного турнирного узла. Новый живой sha — `f6fd9f05d29e864000f8b7ca1b41aef4281dbe41821d8114a1011584e3d4e18f`.
+Четыре узла бронирования, options и топология побайтно те же. Пин обновлён, слияние пересобрано.
+
 Живой граф подписочного бронирования — это установленная сборка совместимости владельца
 (`57648b82`), поверх которой есть LK1-функции, которых нет в `main`: trial-group,
 pro-training, topokraty, оплата событий LK1, правила тарифов, исключения по станциям,
@@ -55,7 +59,7 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
     которого на живом нет.
 - Пакет: 4 узла, меняется только `func` (router, prepare, finalize, mongo_error). 0 добавлений,
   провода, id и `initialize` не меняются, контракт exact-graph. Кандидат на живом образе
-  `9ed37134…`: `8fb31c923f3ce8dd6ff7b9bf1d9f5fccae795e77b675d9a458f567d60042b420`.
+  `f6fd9f05…`: `76ed585f54971ab2b9fa7f4c6ffc3b98e7064f42c73fc5969be2bca5879f988a`.
 
 ## Проверки (LOCAL)
 
@@ -63,7 +67,7 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
 
 - Без живой копии (CI): механика слияния, отказы на неизвестное перекрытие, потерю или
   удаление оператора, двойное добавление, привязка канонических sha и base-блобов.
-- С живой копией (`LK1_OWNER_LIVE_FLOW_FIXTURE=/private/flows.json`), 29/29:
+- С живой копией (`LK1_OWNER_LIVE_FLOW_FIXTURE=/private/flows.json`), 32/32:
   - меняются только 4 `func`, остальные узлы побайтно те же;
   - матрица router: 57 живых шагов × 7 контекстов × 21 ответ провайдера — ответы совпадают;
   - prepare, finalize, mongo_error на обычных входах совпадают;
@@ -71,12 +75,34 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
     открытая игра (HUB, спорт), турнир, групповая тренировка, скидки, выбор места, release
     (после отмены, с операцией в базе, ещё активная), без авторизации, без ключа
     идемпотентности. Трасса запросов, операций и ответа совпадает;
+  - путь записи: продукт вне правил LK1 (legacy-когорта) проходит Viva POST, вставку, чтение
+    подтверждения, confirm и 201 CONFIRMED. Управляемый турнир ЦУП проходит runtime-context,
+    reserve, bind, Viva POST, entitlement confirm и 201. При частичной цене идёт release. Трасса и
+    записи в Mongo совпадают;
   - ожидаемые отличия: тело с `trainingRegistration` → 400 `TRAINING_REGISTRATION_INVALID`
     (раньше бронировалось как обычное); `lk2LegacyJoin` → JOIN recovery только после
     LK1 ingress и product identity; SELF leave закрыт; probe v1/v2/v3 отвечает как раньше.
-- Граница покрытия: фейковая Viva доходит до проверки денег LK1 (`LK1_MONEY_*`), но не до
-  создания брони. Путь split-оплаты проверен матрицей шагов (caller `split`,
-  `split_create_readonly_preflight`), а не графом от `/lk/games`. Узлы split в A1 не меняются.
+- Граница покрытия: путь денег LK1 для HUB и спорта (`LK1_MONEY_*`) не доведён до записи.
+  Путь split-оплаты проверен матрицей шагов (caller `split`, `split_create_readonly_preflight`),
+  а не графом от `/lk/games`. Узлы split в A1 не меняются.
+
+## Независимая проверка (2026-11-06)
+
+Два независимых ревьюера (только чтение): целостность бронирования/слияния и безопасность.
+
+- Безопасность: блокирующих замечаний нет. Поля из тела (`lk2LegacyJoin`, `managedJoinV2`,
+  `managedSelfLeave`, `trainingRegistration`) не обходят LK1-гейты и не открывают записи раньше
+  identity. Единственный `emit(7)` — живой product identity. Probe не рекламирует 2/3.
+- Слияние: потерь нет. Порядок живых операторов сохранён, 160 защищённых операторов не
+  изменены, все `emit` в пределах 0–6 плюс живой 7. Блокирующее замечание было одно —
+  тесты не доходили до записи. Закрыто тестами пути записи выше.
+- Проверено на живом (только чтение): global context в памяти, `functionGlobalContext` задаёт
+  только флаг A/B, `os`, `fs`. Ни один узел не ставит `subscriptions_owner_evidence_*` или
+  `lkDiagnostics`. Owner evidence и подписант JOIN v2 после установки выключены.
+- Известные изменения поведения: тело с `trainingRegistration` → 400 (через split — 202 pending
+  до записи). Повтор операции, начатой с `lk2LegacyJoin`, уже без него → 409
+  `MANAGED_JOIN_V2_BINDING_CONFLICT`. Probe с заголовком training → 404 с кодом
+  `TRAINING_REGISTRATION_OWNER_UNAVAILABLE` вместо `BOOKED_OPERATION_OWNER_PROBE_NOT_FOUND`.
 
 ## План выкладки A1 (ничего не выполнено; ⚠ — отдельное согласие владельца)
 
@@ -86,7 +112,8 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
 `/root/.node-red/.padlhub-reviewed-flow-backups/`.
 
 1. Локально, после merge в `main`: `npm run nodered:modular:pull-147 -- /abs/new/workspace`
-   (только чтение). Если живой sha ≠ `9ed37134…`, стоп: слияние нужно перебазировать заново.
+   (только чтение). Если живой sha ≠ `f6fd9f05…`: если узлы бронирования не менялись, обновить пин
+   и пересобрать; иначе — перебазировать слияние заново.
 2. Локально: `node scripts/prepare_booked_operation_owner_live_rebase.mjs /abs/workspace /abs/new/out`
    → `candidate.flow.json`, `contract.json`, `report.json`. Затем прогнать тест с этой копией.
 3. ⚠ Создать stage на сервере и скопировать кандидат, контракт и runner (`install -d -m 700`, `scp`).
@@ -111,4 +138,8 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
   receiver JOIN v2 ожидают преимиджи, которых на живом нет. Их нужно так же перебазировать
   на результат A1, и только тогда включать probe `2`/`3` и GET-ветку training.
 - A2: поток подготовки CREATE (LK #273).
-- A3: перебазирование `patch_nodered_game_create_owner.mjs` на результат A1/A2.
+- A3: перебазирование `patch_nodered_game_create_owner.mjs` на результат A1/A2. Guard
+  `ctx.managedCreateBinding !== undefined` нужно поставить раньше живых LK1-обработчиков шагов.
+  Ветка quarter-capability в prepare возвращает выход 3: подключить его до включения обёртки.
+- Перед apply: подтвердить, что LK2 считает любой 404 probe «недоступно». Split-оплата должна
+  трактовать 202 PENDING_CONFIRMATION шага бронирования как неоднозначный результат без списания.

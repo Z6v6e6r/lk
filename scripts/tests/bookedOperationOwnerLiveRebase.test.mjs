@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { LIVE_REBASE_UNITS, LIVE_REBASE_RESOLUTIONS, hash, rebaseUnitSource } from '../lib/bookedOperationOwnerLiveRebase.mjs';
 import { composeOwnerLiveRebase, LIVE_REBASE_TOPOLOGY } from '../prepare_booked_operation_owner_live_rebase.mjs';
@@ -10,7 +12,9 @@ import * as H from './helpers/ownerLiveRebaseCharacterization.mjs';
 // only against a fresh external copy: LK1_OWNER_LIVE_FLOW_FIXTURE=/private/path/flows.json
 const LIVE_FIXTURE = process.env.LK1_OWNER_LIVE_FLOW_FIXTURE;
 const live = { skip: !LIVE_FIXTURE && 'LK1_OWNER_LIVE_FLOW_FIXTURE is not set (private live preimage)' };
-const tmp = () => fs.mkdtempSync('/tmp/owner-live-rebase-test-');
+const temporaries = [];
+const tmp = () => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-live-rebase-test-')); temporaries.push(dir); return dir; };
+test.after(() => temporaries.forEach(dir => fs.rmSync(dir, { recursive: true, force: true })));
 
 // ---- merge mechanics (no live input) ----------------------------------------------
 const BASE = 'const a = 1;\nconst helper = () => {\n  return a;\n};\nif (ctx.step === "x") {\n  return helper();\n}\n';
@@ -151,6 +155,35 @@ for (const [name, w, body, opts, seed] of [
   assert.deepEqual(after.trace, before.trace);
   assert.deepEqual(after.store, before.store);
 });
+
+const writes = trace => ({ post: trace.filter(row => row.http?.method === 'POST').map(row => row.http.url),
+  stores: trace.filter(row => row.mongo && row.mongo.operation !== 'find').map(row => row.mongo.operation) });
+test('LIVE: ordinary write path (legacy cohort) books, persists and confirms identically', live, () => {
+  const { liveFlow, candidate } = load();
+  const w = { productId: H.LEGACY_PRODUCT };
+  const before = graph(liveFlow, w, 'book'), after = graph(candidate, w, 'book');
+  assert.deepEqual(after.trace, before.trace); assert.deepEqual(after.store, before.store);
+  assert.equal(responseOf(after.trace).statusCode, 201); assert.equal(responseOf(after.trace).payload.state, 'CONFIRMED');
+  const { post, stores } = writes(after.trace);
+  assert.ok(post.some(url => /\/exercises\/[^/]+\/bookings$/.test(url)), 'Viva booking POST must be exercised');
+  assert.ok(stores.includes('insertOne') && stores.filter(op => op === 'updateOne').length >= 2);
+});
+for (const [name, discountMinor, expected] of [['free entitlement: reserve, bind, Viva POST, confirm', 150000, 201],
+  ['partial price: provider rejection releases the entitlement', 75000, 202]]) {
+  test('LIVE: managed CUP tournament is identical — ' + name, live, async () => {
+    const { liveFlow, candidate } = load();
+    const scenario = await H.managedScenario({ discountMinor });
+    const run = flow => { const store = new H.FakeStore(scenario.seed());
+      return { trace: H.simulate(flow, POST, H.prepareMessage('book'), { viva: H.fakeViva(scenario.make()), store, globals: scenario.globals }), store: store.collections }; };
+    const before = run(liveFlow), after = run(candidate);
+    assert.deepEqual(after.trace, before.trace); assert.deepEqual(after.store, before.store);
+    assert.equal(responseOf(after.trace).statusCode, expected);
+    const { post } = writes(after.trace);
+    assert.ok(post.some(url => url.endsWith('/entitlements/reserve')), 'entitlement reserve must be exercised');
+    assert.ok(post.some(url => url.endsWith(expected === 201 ? '/entitlements/confirm' : '/entitlements/release')));
+    if (expected === 201) assert.ok(post.some(url => /\/exercises\/[^/]+\/bookings$/.test(url)));
+  });
+}
 
 test('LIVE: release reconciliation reaches RELEASED on both graphs', live, () => {
   const { candidate } = load();

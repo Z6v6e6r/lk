@@ -19,7 +19,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const NODES = 'scripts/nodered_subscription_booking_nodes/';
 export const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 export const LIVE_REBASE_BASE_COMMIT = '57648b82727f7f74ef86637ea8ce9b70416d9e0a';
-export const LIVE_REBASE_SOURCE_SHA256 = '9ed37134a09bb2283160325ee5f18104983720c26f7135f869d6266ee1912425';
+// Refreshed 2026-11-06 after fpr-cup-start-20261106 (tournament tab only; booking units unchanged).
+export const LIVE_REBASE_SOURCE_SHA256 = 'f6fd9f05d29e864000f8b7ca1b41aef4281dbe41821d8114a1011584e3d4e18f';
 
 // [name, node id, [file, base blob, canonical sha256][], live func sha256]
 export const LIVE_REBASE_UNITS = Object.freeze([
