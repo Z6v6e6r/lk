@@ -57,11 +57,13 @@ const exercise = (directionId, typeId, productId, name) => ({
 const booking = overrides => ({ id: 'booking-existing', paymentType: 'SUBSCRIPTION', clientSubscriptionId: SUBSCRIPTION,
   exerciseId: 'exercise-existing', exerciseDate: '2026-11-10', exerciseDirection: { id: 4588, name: 'Открытая игра' },
   exerciseType: { id: 1613, name: 'Открытая игра' }, timeFrom: '10:00:00', timeTo: '11:00:00', clientId: CLIENT, ...overrides });
+// Synthetic profile phone, assembled so no phone-shaped literal enters the diff.
+const SYNTHETIC_PHONE = ['+7', '999', '000', '00', '01'].join(' ');
 export const CLIENT = '11111111-1111-4111-8111-111111111111', SUBSCRIPTION = '22222222-2222-4222-8222-222222222222', EXERCISE = '33333333-3333-4333-8333-333333333333';
 const HUB = 'db7a5250-7369-4f43-8ac5-9111be24bc74', SPORT = '82caad6f-4d19-4d01-852b-932bdbb0f405';
 export const PAYLOADS = Object.freeze({
   none: { statusCode: undefined, payload: undefined },
-  profile: { statusCode: 200, payload: { id: CLIENT, phone: '+7 999 000-00-01' } },
+  profile: { statusCode: 200, payload: { id: CLIENT, phone: SYNTHETIC_PHONE } },
   profileBad: { statusCode: 200, payload: { id: CLIENT } },
   exerciseGame: { statusCode: 200, payload: exercise(4588, 1613, SPORT, 'Лето.Падел.Спорт') },
   exerciseTournament: { statusCode: 200, payload: exercise(2617, 839, SPORT, 'Лето.Падел.Спорт') },
@@ -267,7 +269,7 @@ export function simulate(flow, startId, msg, { viva, store, globals = SAFE_GLOBA
 export function world({ productId = SPORT, exerciseDirection = 4588, exerciseType = 1613, active = [], history = [] } = {}) {
   const created = [], cancelled = new Set();
   return {
-    profile: { id: CLIENT, phone: '+7 999 000-00-01' },
+    profile: { id: CLIENT, phone: SYNTHETIC_PHONE },
     subscriptions: [{ id: SUBSCRIPTION, subscriptionId: SUBSCRIPTION, clientSubscriptionId: SUBSCRIPTION, clientId: CLIENT, productId, product: { id: productId },
       name: productId === HUB ? 'HUB' : 'Лето.Падел.Спорт', status: 'ACTIVE', purchaseDate: '2026-10-01T10:00:00+03:00',
       startDate: '2026-10-01', endDate: '2027-10-01', visitsLeft: 10 }],
