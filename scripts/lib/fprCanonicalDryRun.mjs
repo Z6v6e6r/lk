@@ -4,12 +4,15 @@ import { replayPlayerRatingEvents } from '../../src/services/player-rating/ledge
 import { replayFprRatingTargets } from '../../src/services/player-rating/fprRatingReplay.ts';
 import { readFprLevelIdentityHistory } from './fprLevelIdentity.mjs';
 import { getTournamentRatingExclusion } from '../../src/services/player-rating/tournamentExclusionGuard.ts';
+import { reconstructedFprBaseline, evidencedFprTargetOrder } from './fprHistoricalEvidence.mjs';
 
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const round = n => Number(n.toFixed(5));
 const source = d => d.params?.fpr6x25?.communityRating?.sourceExerciseId || d.params?.sourceExerciseId || d.tournamentId;
 const start = d => Date.parse(d.params?.fpr6x25?.leagueSnapshotAt);
 const eventAt = e => Date.parse(e.occurredAt || e.createdAt);
+const targetAt=e=>e.source?.fprProtocolId?Date.parse(e.source.fprFinishedAt):eventAt(e);
+const isBaseline=e=>['RATING_INITIAL_IMPORTED','RATING_BOOTSTRAPPED_FROM_VIVA','RATING_BOOTSTRAPPED_FROM_TOURNAMENT','RATING_BOOTSTRAPPED_FROM_GAME_RESULT','RATING_TOURNAMENT_CANONICAL_RECONCILED'].includes(e.eventType);
 export const dryRunError = e => /^FPR_(?:DRY_RUN|LEVEL)_[A-Z_]+$/.test(String(e?.message)) ? e.message : 'FPR_DRY_RUN_READ_FAILED';
 const activeAwards = events => {
   const compensated = new Set(events.map(e => e.source?.compensatesEventId).filter(Boolean));
@@ -19,7 +22,7 @@ const activeAwards = events => {
 };
 
 /** Read-only counterfactual. Never mutate immutable events, scores, seeds, or a DB. */
-export function planFprCanonicalDryRun({ documents, legacy = [], histories, rootId, capturedAt }) {
+export function planFprCanonicalDryRun({ documents, legacy = [], histories, rootId, capturedAt, historicalEvidence = null }) {
   const official = documents.filter(d => d.archived !== true && d.tournamentType === 'fpr_6x25'
     && d.params?.fpr6x25?.testMode === false && d.params.fpr6x25.status === 'completed');
   const root = official.find(d => d.tournamentId === rootId);
@@ -46,6 +49,7 @@ export function planFprCanonicalDryRun({ documents, legacy = [], histories, root
     aliases.set(p.id,identityAliases.get(identity(p.id)));if(!playerIds.has(identity(p.id)))playerIds.set(identity(p.id),p.id);
   }
   const replacements = new Map(), blockedSources = new Set(), tournamentReports = [], blockers = [];
+  const anchors=new Map(),tieResolutions=new Map();
   const historiesFor = id => {
     const h = histories.get(id);
     if (!h || h.error) throw Error(h?.error || 'FPR_DRY_RUN_IDENTITY_MISSING');
@@ -53,15 +57,31 @@ export function planFprCanonicalDryRun({ documents, legacy = [], histories, root
   };
   const replay = (id, cutoff, useReplacement) => {
     const h = historiesFor(id);
-    const input = h.events.filter(e=>eventAt(e)<cutoff && e.source?.applyToState !== false);
-    if (input.some(e=>e.source?.fprProtocolId && blockedSources.has(e.source.sourceId))) throw Error('FPR_DRY_RUN_BLOCKED_PREDECESSOR');
-    const active = activeAwards(input), times = new Map();
-    for (const e of active) {
-      const same = times.get(eventAt(e));
-      if (same && same !== e.source.sourceId) throw Error('FPR_DRY_RUN_TIME_AMBIGUOUS');
-      times.set(eventAt(e),e.source.sourceId);
+    if(historicalEvidence&&!h.events.some(e=>isBaseline(e)&&e.source?.applyToState!==false&&eventAt(e)<cutoff)&&!anchors.has(identity(id))){
+      anchors.set(identity(id),reconstructedFprBaseline(h,documents,historicalEvidence));
     }
-    const events = input.map(e=> useReplacement && replacements.has(e.id)
+    const anchor=anchors.get(identity(id));
+    const virtual=anchor?h.events.map(e=>e.id===anchor.eventId?{...e,occurredAt:anchor.virtualAt}:e):h.events;
+    const input = virtual.filter(e=>eventAt(e)<cutoff && e.source?.applyToState !== false);
+    if (input.some(e=>e.source?.fprProtocolId && blockedSources.has(e.source.sourceId))) throw Error('FPR_DRY_RUN_BLOCKED_PREDECESSOR');
+    const active = activeAwards(input), times = new Map(),omit=new Set();
+    for (const e of active) {
+      const time=targetAt(e);if(!Number.isFinite(time)||time!==eventAt(e))throw Error('FPR_DRY_RUN_AWARD_TIME_MISMATCH');
+      const group=times.get(time)||[];group.push(e);times.set(time,group);
+    }
+    for(const [time,group]of times)if(group.length>1){
+      if(new Set(group.map(e=>e.source.sourceId)).size!==group.length)throw Error('FPR_DRY_RUN_ACTIVE_AWARD_NOT_UNIQUE');
+      if(!historicalEvidence)throw Error('FPR_DRY_RUN_TIME_AMBIGUOUS');
+      const ids=new Set(group.map(e=>e.id));
+      if(input.some(e=>targetAt(e)===time&&!ids.has(e.id)))throw Error('FPR_DRY_RUN_TIME_MIXED_EVENTS');
+      const resolution=evidencedFprTargetOrder(h,group,historicalEvidence);
+      tieResolutions.set(identity(id)+':'+time,{player:aliases.get(id),...resolution.proof});
+      // For a pure group of absolute targets, every earlier ACTIVE target is
+      // overwritten by the last. Keep all compensated originals/compensations
+      // elsewhere intact for the installed source-aware replay semantics.
+      group.forEach(e=>{if(e.id!==resolution.lastEventId)omit.add(e.id);});
+    }
+    const events = input.filter(e=>!omit.has(e.id)).map(e=> useReplacement && replacements.has(e.id)
       ? { ...e, change: { ...e.change, after: replacements.get(e.id) } } : e);
     const state = replayFprRatingTargets(events) || replayPlayerRatingEvents(events);
     if (!state || !Number.isFinite(state.ratingNumeric)) throw Error('FPR_DRY_RUN_BASELINE_MISSING');
@@ -124,18 +144,22 @@ export function planFprCanonicalDryRun({ documents, legacy = [], histories, root
     for(const e of activeAwards(h.events)){
       const key=eventAt(e),group=byTime.get(key)||new Set();group.add(e.source.fprProtocolId);byTime.set(key,group);
     }
-    for(const [time,protocols]of byTime)if(protocols.size>1)temporalWarnings.push({player:aliases.get(id),code:'FPR_DRY_RUN_TIME_AMBIGUOUS',recordedAt:new Date(time).toISOString(),protocols:[...protocols].sort()});
+    for(const [time,protocols]of byTime)if(protocols.size>1&&!tieResolutions.has(identity(id)+':'+time))temporalWarnings.push({player:aliases.get(id),code:'FPR_DRY_RUN_TIME_AMBIGUOUS',recordedAt:new Date(time).toISOString(),protocols:[...protocols].sort()});
   }
-  return { version:1, mode:'READ_ONLY_DRY_RUN', applyAvailable:false, applyReady:false, capturedAt, rootProtocolId:rootId,
-    timePolicy:'CUP ledger strictly before frozen leagueSnapshotAt; recorded event times retained; same-time FPR targets block replay',
+  return { version:2, mode:'READ_ONLY_DRY_RUN', applyAvailable:false, applyReady:false, capturedAt, rootProtocolId:rootId,
+    timePolicy:'CUP ledger before freeze; verified initial bootstrap anchors reconstructed in memory; original award timestamps retained; verified ordered-apply receipts resolve pure equal-time target groups',
     laterEventPolicy:'Recalculate affected FPR targets; preserve later ordinary/manual absolute targets and additive game deltas',
     summary:{tournaments:cohort.length,players:affected.size,calculatedTournaments:tournamentReports.filter(r=>r.status==='calculated').length,
-      blockedTournaments:tournamentReports.filter(r=>r.status==='blocked').length,changedCurrentPlayers:players.filter(r=>r.status==='calculated'&&r.difference!==0).length},
-    tournaments:tournamentReports,players,blockers,temporalWarnings };
+      blockedTournaments:tournamentReports.filter(r=>r.status==='blocked').length,changedCurrentPlayers:players.filter(r=>r.status==='calculated'&&r.difference!==0).length,
+      reconstructedInitialAnchors:anchors.size,resolvedTieGroups:tieResolutions.size},
+    tournaments:tournamentReports,players,blockers,temporalWarnings,
+    historicalEvidence:historicalEvidence?.summary||null,
+    reconstructedBaselines:[...anchors].map(([key,a])=>({player:identityAliases.get(key),...a.proof})),
+    temporalResolutions:[...tieResolutions.values()] };
 }
 
 /** Only find/toArray reads, with a second exact-preimage pass. No service init/indexes. */
-export async function readFprCanonicalDryRun(db, rootId, capturedAt=new Date().toISOString()) {
+export async function readFprCanonicalDryRun(db, rootId, capturedAt=new Date().toISOString(),options={}) {
   const collect=async()=>{
     const documents=await db.collection('tournaments').find({tournamentType:'fpr_6x25'},{maxTimeMS:10000}).limit(1001).toArray();
     if(documents.length>1000) throw Error('FPR_DRY_RUN_PROTOCOL_CAP');
@@ -156,9 +180,10 @@ export async function readFprCanonicalDryRun(db, rootId, capturedAt=new Date().t
     const legacy=await db.collection('tournaments').find({tournamentId:{$in:physicalIds},tournamentType:{$ne:'fpr_6x25'}},{maxTimeMS:10000}).limit(2001).toArray();
     if(legacy.length>2000)throw Error('FPR_DRY_RUN_LEGACY_CAP');
     const semanticDoc=d=>{const copy={...d};delete copy.fprLevelResults;delete copy.fprLevelLedgerFence;return copy;};
+    const historicalEvidence=options.readHistoricalEvidence?options.readHistoricalEvidence():null;
     const fingerprint=hash([documents.map(semanticDoc),legacy.map(semanticDoc),
-      [...histories].map(([id,h])=>[id,h.error,h.current,h.aliases,h.events])]);
-    return {documents,legacy,histories,fingerprint};
+      [...histories].map(([id,h])=>[id,h.error,h.current,h.aliases,h.events]),historicalEvidence?.fingerprint]);
+    return {documents,legacy,histories,historicalEvidence,fingerprint};
   };
   const before=await collect();const report=planFprCanonicalDryRun({...before,rootId,capturedAt});const after=await collect();
   if(before.fingerprint!==after.fingerprint)throw Error('FPR_DRY_RUN_PREIMAGE_CHANGED');

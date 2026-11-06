@@ -3,11 +3,15 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { readFprCanonicalDryRun, dryRunError } from './lib/fprCanonicalDryRun.mjs';
+import { loadFprHistoricalEvidence } from './lib/fprHistoricalEvidence.mjs';
 
 export async function main(args=process.argv.slice(2)) {
-  const allowed=new Set(['--root','--flow','--mongo-module','--out']);const values={};
+  const evidenceFlags=['--backfill-operation','--backfill-runtime','--backfill-runner','--backfill-sha'];
+  const allowed=new Set(['--root','--flow','--mongo-module','--out',...evidenceFlags]);const values={};
   for(let i=0;i<args.length;i+=2){if(!allowed.has(args[i])||!args[i+1]||values[args[i]])throw Error('FPR_DRY_RUN_ARGUMENTS');values[args[i]]=args[i+1];}
   if(!values['--root'])throw Error('FPR_DRY_RUN_ROOT_REQUIRED');
+  const withEvidence=evidenceFlags.some(k=>values[k]);
+  if(withEvidence&&!evidenceFlags.every(k=>values[k]))throw Error('FPR_DRY_RUN_EVIDENCE_ARGUMENTS');
   const flow=JSON.parse(fs.readFileSync(values['--flow']||'/root/.node-red/flows.json','utf8'));
   const cfg=flow.find(n=>n.type==='mongodb4-client'&&n.dbName==='games'&&typeof n.uri==='string');
   if(!cfg)throw Error('FPR_DRY_RUN_DB_CONFIG');
@@ -15,7 +19,9 @@ export async function main(args=process.argv.slice(2)) {
   const client=new MongoClient(cfg.uri,{serverSelectionTimeoutMS:10000,connectTimeoutMS:10000});
   try{
     await client.connect();
-    const report=await readFprCanonicalDryRun(client.db('games'),values['--root']);
+    const report=await readFprCanonicalDryRun(client.db('games'),values['--root'],new Date().toISOString(),{
+      readHistoricalEvidence:withEvidence?()=>loadFprHistoricalEvidence({operation:values['--backfill-operation'],runtime:values['--backfill-runtime'],runner:values['--backfill-runner'],expectedSha:values['--backfill-sha']}):undefined,
+    });
     const bytes=JSON.stringify(report,null,2)+'\n';
     if(values['--out'])fs.writeFileSync(values['--out'],bytes,{flag:'wx',mode:0o600});
     else process.stdout.write(bytes);

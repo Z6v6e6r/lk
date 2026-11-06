@@ -62,11 +62,32 @@ worker entrypoints, service initialization, provider delivery, or writer modules
 For an already installed Node-RED Mongo driver, `--mongo-module` can point to that
 module. A bundled copy can run through SSH stdin without installing code remotely.
 
+Without historical evidence, missing baselines and equal-time targets remain
+blocked. An optional evidence mode reads the original private backfill packet,
+archived runtime, original runner, and durable apply receipts on the server:
+
+```sh
+node --experimental-strip-types scripts/dry_run_fpr_canonical_starts.mjs \
+  --root PROTOCOL_ID --flow PRIVATE_FLOW_PATH --out NEW_PRIVATE_REPORT \
+  --backfill-operation PRIVATE_BACKFILL_OPERATION \
+  --backfill-runtime ARCHIVED_IMMUTABLE_RUNTIME \
+  --backfill-runner ORIGINAL_BACKFILL_RUNNER \
+  --backfill-sha REVIEWED_PACKET_SHA256
+```
+
+All four evidence arguments are required together. The operation must be a
+root-owned private `/root/.padlhub-fpr-level-backfill-*` directory; packet and
+receipt files must be private regular files. The loader verifies the pinned
+packet hash against both prepared and apply-intent records, all archived runtime
+module hashes, the original runner hash, final applied counts, and every numbered
+receipt's plan identity, event count and application time window. The packet and
+its identities remain on the server. Both read passes recheck the evidence.
+
 The preview:
 
 - finds the transitive downstream FPR cohort through validated canonical aliases;
-- reconstructs each start strictly before the frozen `leagueSnapshotAt`, without
-  substituting today's level or an unrecorded historical baseline;
+- reconstructs each start before the frozen `leagueSnapshotAt`, without
+  substituting today's level or a stale Viva field;
 - recalculates every participant over original closed matches with the installed
   ordinary formula, preserving seeds, pairings, scores and sporting standings;
 - retains later ordinary/manual absolute targets and additive game deltas;
@@ -77,14 +98,47 @@ The preview:
 - exports player aliases only, with allowlisted error codes and no contacts,
   administrative reasons, or raw driver errors.
 
+## Evidence-backed initial anchors and event order
+
+The initial FPR backfill wrote a canonical
+`RATING_BOOTSTRAPPED_FROM_TOURNAMENT` event at first-result time minus one
+millisecond. This accepted initial baseline was therefore invisible to a strict
+start-time cutoff. Evidence mode can reconstruct its initial anchor when the
+original plan had null canonical state and empty history, the immutable bootstrap
+and first award match the packet exactly, the first source/frozen input matches,
+and there are no earlier applicable events or official appearances. A frozen zero
+also requires the originally accepted unrated-start policy and its canonical1.0.
+Duplicate, conflicting, orphan or later altered evidence remains blocked.
+
+Only the simulation moves that initial anchor to just before the first frozen
+snapshot. The report labels it `RECONSTRUCTED_CANONICAL_INITIAL_ANCHOR`, includes
+the original recorded/created times and evidence hashes, and explicitly sets
+`observedAtStart:false`. This is not a claim that the CUP state was observed at
+that earlier moment. The stored immutable event remains byte-for-byte unchanged.
+
+Restoring old match results can give distinct events the same technical completion
+timestamp. Evidence mode resolves a pure group of active FPR absolute targets
+using their exact sequence in the verified original `plan.events`, applied by
+ordered bulk write and confirmed by the matching receipt. All group events must
+match the current immutable ledger. Uncovered corrections, duplicate active
+revisions, or another applicable event at the same time block the preview.
+Compensated originals and compensation events remain in the installed replay.
+
+The report records `RECORDED_ORDERED_BACKFILL_APPLICATION`; original award IDs,
+`occurredAt` and `fprFinishedAt` are preserved. It sets
+`actualPlayedAtKnown:false`: the accepted application order is known, while actual
+seventh-round play times are not inferred from schedules or recovery-entry time.
+
 `candidateAfter` is a counterfactual, never an applied correction. `applyReady` is
-always false: this preview is not a write packet. Missing historical CUP baselines
-need evidence or an explicit historical-baseline policy before a repair can be
-prepared. Such a policy is not inferred from a stale Viva value, even for an old
-unrated appearance. Blocked predecessors also block dependent downstream results.
+always false: this preview is not a write packet, even when all candidates are
+calculated. Missing historical CUP baselines need the verified original evidence
+above; the runner never infers them from a stale Viva value. Blocked predecessors
+also block dependent downstream results.
 
 Check `summary`, per-protocol statuses, `blockedPlayer`, `blockedFrozenStart`,
 and player-level statuses together. A blocked row is unknown, not unchanged.
+`reconstructedBaselines` and `temporalResolutions` distinguish verified
+reconstruction from observed history; `temporalWarnings` contains unresolved cases.
 
 ## Verification and stop signal
 
