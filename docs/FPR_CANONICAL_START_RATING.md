@@ -13,9 +13,10 @@ This is the same staff authority used by participant refresh; community membersh
 is not required for newcomers or manual rosters.
 
 Levels come exclusively from `player_rating_state` with `CUP_CANONICAL` ownership.
-There is no Viva rating fallback, community snapshot fallback, bootstrap, index
-creation, or canonical write. Missing/ambiguous identities and invalid levels fail
-the complete batch. Recorded aliases are used only as canonical identity evidence;
+There is no Viva or community snapshot rating fallback. The authorized roster
+read initializes missing canonical states through the private transactional helper
+described below. Conflicting identities and invalid existing levels fail the complete
+batch; no indexes are created by the request. Recorded aliases are used only as canonical identity evidence;
 names and phones are never lookup input. The response contains requested IDs,
 full-precision numeric levels, and opaque source versions. Ledger event IDs may
 contain historical identity aliases and are therefore not returned verbatim.
@@ -180,3 +181,35 @@ A lost commit acknowledgement is recovered by postcheck, never by blindly repeat
 apply. Packet and receipts stay on the server. After commit, recovery must retain a
 correction-aware runtime; an old module rollback would reintroduce the defect.
 Data reversal requires reviewed compensating events, never deletion of the ledger.
+
+
+## Missing canonical starts (approved default 1)
+
+The staff-authenticated start read and create guard use the same private helper.
+Existing valid canonical rows are returned unchanged. A missing projection with
+complete immutable history is reconstructed from that history; it never gets a
+new baseline. With no history, an exact-ID CUP compatibility numeric level is
+imported as an immutable bootstrap. A genuinely absent level (including an
+unrated zero in compatibility storage) receives the explicitly approved 1. An
+invalid nonempty level, orphan history, ambiguous identity or in-flight projection
+returns an error with `playerId`; the client maps it to the roster player's name.
+Names and phone numbers are never request identity lookup inputs.
+
+The versioned, root-owned helper is bundled from clean source under
+`/opt/padlhub-fpr-start/releases/…/bootstrap.mjs`. The Node-RED function invokes
+only this fixed entrypoint using the already enabled external-module mechanism
+and builtin `child_process`; it uses no shell, new dependency, daemon or settings
+change. Credentials stay on the server. The helper verifies its manifest/hash,
+existing unique indexes and inherited file-description flock before one majority
+transaction over the complete roster. It atomically writes bootstrap events,
+canonical/compatibility state and current-aware FPR provider outbox. Existing
+canonical rows are not overwritten. Retry is idempotent; a busy scheduled worker
+returns a retry message. No initialization commits if any roster row is invalid.
+
+Deployment keeps the existing correction-aware rating worker. Install and verify
+the helper before activating the exact Node-RED graph patch; publish frontend
+named errors last. Recovery retains all committed immutable bootstrap events and
+uses a compatible helper/flow. Returning to the prior strict read is safe for
+already initialized players but can re-block newcomers; never delete baselines
+or re-seed players to undo a release. Preserve private bootstrap receipts and
+postcheck the previously corrected 74 players.

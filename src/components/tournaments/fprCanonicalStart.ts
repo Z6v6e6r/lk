@@ -20,3 +20,20 @@ export function readFprCanonicalStart(ids: string[], value: unknown): FprCanonic
   });
   return { source: "CUP_CANONICAL", rows };
 }
+
+
+export function formatFprStartError(error: { message?: string; raw?: unknown } | null | undefined, players: Array<{id:string;name:string}>) {
+  let raw = error?.raw;
+  if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { raw = null; } }
+  const data = raw && typeof raw === "object" ? raw as {playerId?:unknown;error?:unknown} : null;
+  const player = players.find(p => p.id === data?.playerId);
+  if (!player) return error?.message || "Не удалось загрузить стартовые уровни ЦУП";
+  const reasons: Record<string,string> = {
+    FPR_START_IDENTITY_CONFLICT: "В ЦУП неоднозначная привязка игрока.",
+    FPR_START_HISTORY_INVALID: "История рейтинга требует проверки; стартовый уровень не заменён.",
+    FPR_START_INVALID_LEVEL: "В ЦУП некорректный числовой уровень.",
+    FPR_START_INVALID_CANONICAL: "Каноническая запись рейтинга требует проверки.",
+    FPR_START_PROJECTION_BUSY: "Рейтинг сейчас синхронизируется. Повторите загрузку.",
+  };
+  return `Не удалось загрузить рейтинг «${player.name.trim() || `Участник ${players.indexOf(player) + 1}`}»: ${reasons[String(data?.error)] || error?.message || "Повторите загрузку состава."}`;
+}

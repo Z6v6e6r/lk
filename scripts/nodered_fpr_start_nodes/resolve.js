@@ -1,7 +1,7 @@
-const fail = (statusCode, error) => {
+const fail = (statusCode, error, playerId) => {
   msg.statusCode = statusCode;
   msg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' };
-  msg.payload = { error, message: 'Стартовый уровень ЦУП недоступен или изменился. Обновите данные состава.' };
+  msg.payload = { error, ...(playerId ? { playerId } : {}), message: 'Стартовый уровень ЦУП недоступен или изменился. Обновите данные состава.' };
   delete msg._fprStart;
   return [null, msg];
 };
@@ -18,11 +18,11 @@ const rows = [];
 const used = new Set();
 for (const id of ctx.ids) {
   const matches = states.filter(s => s.clientId === id || (Array.isArray(s.identityAliases?.clientIds) && s.identityAliases.clientIds.includes(id)));
-  if (matches.length !== 1) return fail(503, 'FPR_CANONICAL_IDENTITY_CONFLICT');
+  if (matches.length !== 1) return fail(503, 'FPR_CANONICAL_IDENTITY_CONFLICT', id);
   const s = matches[0];
   if (used.has(s.playerKey) || s.ownership !== 'CUP_CANONICAL' || typeof s.playerKey !== 'string' || typeof s.clientId !== 'string' || !s.clientId
-    || s.playerKey !== `client:${s.clientId}` || typeof s.ratingNumeric !== 'number' || !Number.isFinite(s.ratingNumeric)
-    || s.ratingNumeric < 1 || s.ratingNumeric > 7 || typeof s.lastEventId !== 'string' || !s.lastEventId) return fail(503, 'FPR_CANONICAL_START_NOT_READY');
+    || typeof s.ratingNumeric !== 'number' || !Number.isFinite(s.ratingNumeric)
+    || s.ratingNumeric < 1 || s.ratingNumeric > 7 || typeof s.lastEventId !== 'string' || !s.lastEventId) return fail(503, 'FPR_CANONICAL_START_NOT_READY', id);
   used.add(s.playerKey);
   rows.push({ clientId: id, ratingNumeric: s.ratingNumeric, version: sourceVersion(JSON.stringify([s.playerKey, s.lastEventId, s.ratingNumeric])) });
 }
