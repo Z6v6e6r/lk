@@ -14,6 +14,7 @@ const selected = field?.value?.[0];
 const host = selected === 'проводит турниры' || (Array.isArray(field?.attributes?.options) ? field.attributes.options : [])
   .some(o => o.id === selected && String(o.name || '').trim().toLowerCase() === 'проводит турниры');
 if (!(profile.id || profile.clientId || profile.uuid) || !host) return fail(403, 'FPR_HOST_ACCESS_REQUIRED');
+msg._fprStart.actorId = String(profile.id || profile.clientId || profile.uuid);
 // Exact IDs and explicitly recorded client aliases only. No phone/name matching.
 msg.payload = [{ $or: [{ clientId: { $in: msg._fprStart.ids } }, { 'identityAliases.clientIds': { $in: msg._fprStart.ids } }] },
   { limit: 85, maxTimeMS: 5000, projection: { clientId: 1, playerKey: 1, identityAliases: 1, ownership: 1, ratingNumeric: 1, lastEventId: 1 } }];

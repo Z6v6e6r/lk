@@ -1,3 +1,4 @@
+import { formatFprStartError } from "./fprCanonicalStart";
 import { tournamentEventId } from "../../utils/tournamentEventIdentity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../UI/Modal";
@@ -99,7 +100,7 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
     void loadFprCommunityLeague({ communityId, communityName, players: presentPlayers,
       fetchLevels: async () => {
         const result = await apiFetchFprStartRatings(presentPlayers.map(p => p.id));
-        if (result.error || !result.data) throw new Error(result.error?.message || "Не удалось загрузить стартовые уровни ЦУП");
+        if (result.error || !result.data) throw new Error(formatFprStartError(result.error, presentPlayers));
         return result.data;
       },
       fetch: async period => {
@@ -159,13 +160,13 @@ export function FprTournamentSetup({ players, context, onSaved, initialState, on
       const readback = await apiFetchTournamentHistory(payload.tournamentId, { forceRefresh: true });
       if (readback.error) {
         if (response.status === 409) { setPending(null); setReload(v => v + 1); }
-        throw new Error(readback.error.message);
+        throw new Error(response.error ? formatFprStartError(response.error, presentPlayers) : readback.error.message);
       }
       const record = readback.data?.find(item => tournamentEventId(item) === tournamentEventId(payload!) && item.tournamentType === "fpr_6x25");
       const saved = record?.params?.fpr6x25;
       if (!record || !saved) {
         if (response.status === 409) { setPending(null); setReload(v => v + 1); }
-        throw new Error(response.error?.message || "Создание не подтверждено. Повторите загрузку турнира.");
+        throw new Error((response.error ? formatFprStartError(response.error, presentPlayers) : "Создание не подтверждено. Повторите загрузку турнира."));
       }
       validateFprState(saved);
       // A retry may discover a protocol that was already saved/started elsewhere.
