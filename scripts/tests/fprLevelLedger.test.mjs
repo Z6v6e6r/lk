@@ -110,3 +110,35 @@ test('all cohort targets are disjoint before the first transaction', () => {
   ]), /COHORT_IDENTITY_OVERLAP/);
   assert.doesNotThrow(() => assertFprPlanIdentityDisjoint([{ clientId: 'a' }, { clientId: 'b' }]));
 });
+
+test('canonical correction preserves sports input, changes truthful before/after and is retry stable', async () => {
+  const { effectiveFprLevelState, fprCorrectionSourceHash } = await import('../lib/fprLevelLedger.mjs');
+  const { context: c, document } = context();
+  const first = buildFprPlayerEvents({clientId:'p0',events:[],context:c,nowIso:now});
+  const sports=structuredClone(document.params.fpr6x25);
+  document.fprCanonicalStartCorrection={version:1,policy:'cup-canonical-start-correction-v1',operationId:'synthetic',
+    previewSha256:'a'.repeat(64),sourceSha256:fprCorrectionSourceHash(document),legacySha256:null,
+    rows:sports.players.map(p=>({id:p.id,start:p.level+0.5,orderedAfterSourceIds:[]}))};
+  const effective=effectiveFprLevelState(document);
+  c.ratings.set('synthetic-source',calculateFprTournamentRatings(effective,{participants:document.participants,unratedStartLevel:1}));
+  const next=buildFprPlayerEvents({clientId:'p0',events:first.events,context:c,nowIso:'2026-11-06T10:00:00Z'});
+  const correction=next.events.find(e=>e.eventType==='TOURNAMENT_RATING_CORRECTION_APPLIED');
+  assert.equal(correction.change.before,sports.players[0].level+0.5);
+  assert.equal(correction.change.delta,Number((correction.change.after-correction.change.before).toFixed(5)));
+  assert.equal(correction.source.fprCanonicalCorrectionOperation,'synthetic');
+  assert.deepEqual(document.params.fpr6x25,sports);
+  assert.equal(buildFprPlayerEvents({clientId:'p0',events:[...first.events,...next.events],context:c,nowIso:'2026-11-06T11:00:00Z'}).events.length,0);
+  document.participants=[...document.participants,{id:'unexpected'}];
+  assert.throws(()=>effectiveFprLevelState(document),/SOURCE_DRIFT/);
+});
+
+test('correction rejects forged, duplicate, incomplete and invalid starts, including legacy drift', async () => {
+  const { effectiveFprLevelState, fprCorrectionSourceHash }=await import('../lib/fprLevelLedger.mjs');
+  for(const mutate of [m=>m.rows.pop(),m=>m.rows[0].start=0,m=>m.rows[0].start='2',m=>m.rows[0].id=m.rows[1].id,
+    m=>m.sourceSha256='0'.repeat(64),m=>m.legacySha256='a'.repeat(64)]){
+    const {document}=context();document.fprCanonicalStartCorrection={version:1,policy:'cup-canonical-start-correction-v1',operationId:'synthetic',
+      previewSha256:'a'.repeat(64),sourceSha256:fprCorrectionSourceHash(document),legacySha256:null,
+      rows:document.params.fpr6x25.players.map(p=>({id:p.id,start:2,orderedAfterSourceIds:[]}))};
+    mutate(document.fprCanonicalStartCorrection);assert.throws(()=>effectiveFprLevelState(document),/CORRECTION/);
+  }
+});

@@ -65,6 +65,36 @@ export function selectFprLevelSources(protocols, legacy = []) {
   return { protocols, legacy, selected, protectedIds, ambiguous };
 }
 
+/** Admin-owned correction input; the original protocol and sports snapshot stay immutable. */
+export function fprCorrectionSourceHash(document) {
+  const params = document?.params || {};
+  return fprLevelHash({ tournamentId: document?.tournamentId, tournamentType: document?.tournamentType,
+    archived: document?.archived === true, state: params.fpr6x25, sourceExerciseId: params.sourceExerciseId,
+    formula: Object.fromEntries(['K','D','B','Influence','weights','minRating','maxRating','round'].map(k => [k, params[k]])),
+    participants: document?.participants, ratingExclusions: document?.ratingExclusions,
+    legacyStandings: document?.tournamentType !== 'fpr_6x25' ? document?.standings : undefined });
+}
+export function effectiveFprLevelState(document, legacy = null) {
+  const correction = document.fprCanonicalStartCorrection;
+  if (!correction) return document.params.fpr6x25;
+  if (correction.version !== 1 || correction.policy !== 'cup-canonical-start-correction-v1'
+    || typeof correction.operationId !== 'string' || !/^[a-f0-9]{64}$/.test(correction.previewSha256 || '')
+    || correction.sourceSha256 !== fprCorrectionSourceHash(document)
+    || correction.legacySha256 !== (legacy ? fprCorrectionSourceHash(legacy) : null)
+    || !Array.isArray(correction.rows)) throw Error('FPR_LEVEL_CORRECTION_SOURCE_DRIFT');
+  const state = structuredClone(document.params.fpr6x25);
+  if (correction.rows.length !== state.players.length || new Set(correction.rows.map(r => r.id)).size !== state.players.length)
+    throw Error('FPR_LEVEL_CORRECTION_ROSTER');
+  for (const player of state.players) {
+    const row = correction.rows.find(r => r.id === player.id);
+    if (!row || typeof row.start !== 'number' || !Number.isFinite(row.start) || row.start < 1 || row.start > 7
+      || !Array.isArray(row.orderedAfterSourceIds) || row.orderedAfterSourceIds.some(id => typeof id !== 'string' || !id))
+      throw Error('FPR_LEVEL_CORRECTION_START');
+    player.level = row.start;
+  }
+  return state;
+}
+
 export async function loadFprLevelContext(db, config = { enabled: false }, session) {
   const options = { session, maxTimeMS: 30000 };
   const awarded = await db.collection('rating_events').find({ 'source.fprProtocolId': { $exists: true } },
@@ -83,7 +113,8 @@ export async function loadFprLevelContext(db, config = { enabled: false }, sessi
   context.ratings = new Map();
   if (config.enabled) for (const [id, source] of context.selected) {
     try {
-      context.ratings.set(id, calculateFprTournamentRatings(source.document.params.fpr6x25,
+      const effective = effectiveFprLevelState(source.document, source.legacy);
+      context.ratings.set(id, calculateFprTournamentRatings(effective,
         { params: source.document.params, participants: source.document.participants, unratedStartLevel: config.unratedStartLevel }));
     } catch {
       context.ambiguous.push(id); context.selected.delete(id);
@@ -112,10 +143,13 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
       continue;
     }
     const revision = buildTournamentRatingRevision({ tournamentId: sourceId, finishedAt, standing: row });
-    if (previous?.source.sourceRevision === revision) continue;
+    const correction = source.document.fprCanonicalStartCorrection;
+    const orderedAfterSourceIds = correction?.rows.find(r => r.id === clientId)?.orderedAfterSourceIds || [];
+    if (previous?.source.sourceRevision === revision
+      && fprLevelHash(previous.source.fprOrderedAfterSourceIds || []) === fprLevelHash(orderedAfterSourceIds)) continue;
     // The absolute ordinary target is based on the frozen tournament input, not today's level.
     const beforeEvents = history.filter(e => Date.parse(e.occurredAt || e.createdAt) < Date.parse(finishedAt));
-    const before = previous?.change.before ?? replayFprRatingTargets(beforeEvents)?.ratingNumeric
+    const before = correction ? row.ratingBefore : previous?.change.before ?? replayFprRatingTargets(beforeEvents)?.ratingNumeric
       ?? replayPlayerRatingEvents(beforeEvents)?.ratingNumeric ?? row.ratingBefore;
     const predecessor = previous || history.filter(e => e.source?.sourceId === sourceId
       && e.source.fprProtocolId === source.document.tournamentId && !e.source.compensatesEventId)
@@ -125,7 +159,8 @@ export function buildFprPlayerEvents({ clientId, events, context, nowIso }) {
     if (!event) throw new Error('FPR_LEVEL_EVENT_INVALID');
     Object.assign(event.source, { fprProtocolId: source.document.tournamentId, fprFinishedAt: finishedAt,
       fprLevelPolicy: FPR_LEVEL_POLICY, fprFormulaVersion: FPR_LEVEL_FORMULA_VERSION,
-      fprUnratedStartApplied: row.unratedStartApplied });
+      fprUnratedStartApplied: row.unratedStartApplied,
+      ...(correction ? { fprCanonicalCorrectionOperation: correction.operationId, fprOrderedAfterSourceIds: orderedAfterSourceIds } : {}) });
     if (previous) pending.push(buildTournamentCompensationEvent({ event: previous, occurredAt: finishedAt, createdAt: nowIso, reason: 'CORRECTED' }));
     if (!replayPlayerRatingEvents(history)) {
       if (history.length) throw new Error('FPR_LEVEL_EXISTING_HISTORY_NO_BASELINE');
@@ -218,11 +253,11 @@ export async function buildFprPlayerPlan(db, clientId, context, nowIso, session)
 }
 
 /** Caller holds the common worker flock; transactions also protect concurrent canonical writers. */
-export async function applyFprPlayerPlan(db, client, clientId, context, nowIso, expectedFingerprint) {
-  const session = client.startSession();
+export async function applyFprPlayerPlan(db, client, clientId, context, nowIso, expectedFingerprint, sharedSession = null) {
+  const session = sharedSession || client.startSession();
   let result;
   try {
-    await session.withTransaction(async () => {
+    const apply = async () => {
       const plan = await buildFprPlayerPlan(db, clientId, context, nowIso, session);
       if (expectedFingerprint && plan.fingerprint !== expectedFingerprint) throw new Error('FPR_LEVEL_PREIMAGE_CHANGED');
       if (!plan.events.length) { result = { events: 0, changed: false }; return; }
@@ -253,9 +288,11 @@ export async function applyFprPlayerPlan(db, client, clientId, context, nowIso, 
         await db.collection('rating_projection_outbox').updateOne({ _id: plan.outbox.id }, { $setOnInsert: plan.outbox }, { session, upsert: true });
       }
       result = { events: plan.events.length, changed: !plan.current || plan.current.ratingNumeric !== plan.next.ratingNumeric, projection: !!plan.outbox };
-    }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary' });
+    };
+    if (sharedSession) await apply();
+    else await session.withTransaction(apply, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' }, readPreference: 'primary' });
     return result;
-  } finally { await session.endSession(); }
+  } finally { if (!sharedSession) await session.endSession(); }
 }
 
 /** Fail before any write if two frozen participant IDs resolve to the same canonical identity. */

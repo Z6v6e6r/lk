@@ -108,3 +108,17 @@ test("reopening preserves raw debt accumulated before the first FPR", () => {
   assert.equal(replayFprRatingTargets([baseline(), debt, fpr, revert, future])!.ratingNumeric, 1);
   assert.equal(planFprRatingReconciliation([baseline(), debt, fpr, revert, future]), null);
 });
+
+test('verified equal-time order wins over IDs and survives compensation/correction lineage', () => {
+  const first=event('z-earlier',1,'TOURNAMENT_RATING_FINALIZED','TOURNAMENT',2,2.5,
+    {sourceId:'earlier',fprProtocolId:'earlier-protocol',fprFinishedAt:at(1)});
+  const last=event('a-later',1,'TOURNAMENT_RATING_CORRECTION_APPLIED','TOURNAMENT',2.5,2.3,
+    {sourceId:'later',fprProtocolId:'later-protocol',fprFinishedAt:at(1),fprOrderedAfterSourceIds:['earlier']});
+  assert.equal(replayFprRatingTargets([baseline(),first,last])!.ratingNumeric,2.3);
+  const game=event('game',2,'GAME_RESULT_SUBMITTED_APPLIED','GAME_RESULT',2.3,2.32);
+  assert.equal(replayFprRatingTargets([baseline(),last,game,first])!.ratingNumeric,2.32);
+  const cycle={...first,source:{...first.source,fprOrderedAfterSourceIds:['later']}};
+  assert.throws(()=>replayFprRatingTargets([baseline(),last,cycle]),/ORDER_CYCLE/);
+  const mixed=event('mixed',1,'GAME_RESULT_SUBMITTED_APPLIED','GAME_RESULT',2,2.1);
+  assert.throws(()=>replayFprRatingTargets([baseline(),first,last,mixed]),/ORDER_MIXED/);
+});

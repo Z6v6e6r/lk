@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadFprCommunityLeague, type FprLeagueRanking } from "../../src/components/tournaments/fprCommunityLeague.ts";
+import { loadFprCommunityLeague as loadOriginal, type FprLeagueRanking } from "../../src/components/tournaments/fprCommunityLeague.ts";
 import { resolveFprCommunitySelection } from "../../src/components/tournaments/fprCommunitySelection.ts";
+const loadFprCommunityLeague = (input: Omit<Parameters<typeof loadOriginal>[0], "fetchLevels">) => loadOriginal({ ...input,
+  fetchLevels: async () => ({ source: "CUP_CANONICAL", rows: input.players.map(p => ({ clientId: p.id, ratingNumeric: Number(p.rating), version: "canonical-event" })) }),
+});
 const players = [{ id: "p1", rating: "3.1" }, { id: "p2", rating: "2.5" }];
 const data = (period: "month" | "all", ids = ["p1", "p2"]): FprLeagueRanking => ({
   communityId: "club", period, updatedAt: "2026-10-29T05:00:00Z",

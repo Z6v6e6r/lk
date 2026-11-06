@@ -5957,6 +5957,7 @@ export async function apiCreateAmericanoTournament(payload: AmericanoTournamentP
   const base = getServ2Origin();
   return request<{ ok?: boolean; tournamentId?: string; params?: Record<string, unknown> }>(`${base}/lk/tournaments/americano`, {
     method: "POST",
+    auth: payload.tournamentType === "fpr_6x25",
     retries: 1,
     body: JSON.stringify(payload),
   });
@@ -9461,6 +9462,14 @@ function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null
     ratingNumeric: normalizedRating.ratingNumeric,
     source: source ?? null,
   };
+}
+
+/** Staff-host-only canonical read. No Viva level fallback or bootstrap. */
+export async function apiFetchFprStartRatings(clientIds: string[]) {
+  return request<unknown>(`${getServ2Origin()}/lk/tournaments/fpr/start-ratings`, {
+    method: "POST", auth: true, retries: 0,
+    body: JSON.stringify({ clientIds }),
+  });
 }
 
 export async function apiFetchPadelLiveRatings(players: PadelLiveRatingRequestPlayer[]) {
