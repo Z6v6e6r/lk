@@ -1,3 +1,4 @@
+import { readFprCanonicalStart, type FprCanonicalStart } from "./fprCanonicalStart.ts";
 export type FprLeagueValue = { level: string; points: string; place: string; newcomer: boolean };
 export type FprLeaguePlayer = { id: string; rating?: string | null };
 export type FprLeagueRanking = {
@@ -7,6 +8,7 @@ export type FprLeagueRanking = {
 export type FprLoadedLeague = {
   communityId: string; communityName: string; period: "month" | "all"; snapshotUpdatedAt: string | null;
   values: Record<string, FprLeagueValue>; missingFromMonth: string[];
+  canonicalStart: FprCanonicalStart;
 };
 
 function rowsById(data: FprLeagueRanking) {
@@ -28,8 +30,10 @@ function rowsById(data: FprLeagueRanking) {
 export async function loadFprCommunityLeague(input: {
   communityId: string; communityName: string; players: FprLeaguePlayer[];
   fetch: (period: "month" | "all") => Promise<FprLeagueRanking>;
+  fetchLevels: () => Promise<unknown>;
 }): Promise<FprLoadedLeague> {
   const month = await input.fetch("month");
+  const canonicalStart = readFprCanonicalStart(input.players.map(p => p.id), await input.fetchLevels());
   if (month.communityId !== input.communityId || month.period !== "month") throw new Error("Получен рейтинг другого сообщества или периода");
   const monthlyRows = rowsById(month);
   const missingFromMonth = input.players.filter(p => !monthlyRows.has(p.id)).map(p => p.id);
@@ -41,14 +45,14 @@ export async function loadFprCommunityLeague(input: {
   const values = Object.fromEntries(input.players.map(player => {
     const row = rows.get(player.id);
     return [player.id, {
-      level: player.rating?.trim() || (row && row.currentLevel > 0 ? String(row.currentLevel) : ""),
+      level: String(canonicalStart.rows.find(level => level.clientId === player.id)!.ratingNumeric),
       points: row ? String(row.overallScore) : "0",
       place: row ? String(row.rank) : "",
       newcomer: !row,
     }];
   }));
   return { communityId: input.communityId, communityName: input.communityName, period: source.period,
-    snapshotUpdatedAt: source.updatedAt, values, missingFromMonth };
+    snapshotUpdatedAt: source.updatedAt, values, missingFromMonth, canonicalStart };
 }
 
 export function fprLeagueLabel(league: Pick<FprLoadedLeague, "communityName" | "period">, now = new Date()) {
