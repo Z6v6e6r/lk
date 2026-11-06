@@ -203,7 +203,7 @@ test("fresh FPR history bypasses only its cache entry while preserving legacy ca
   const fresh = run({ req: { query: { tournamentId: fprId, readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
   assert.equal(fresh[0], null); assert.equal(fresh[1]._tournamentHistoryCacheKey, `id:${fprId}`);
   const legacy = run({ req: { query: { tournamentId: "legacy", readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
-  assert.deepEqual(legacy[0].payload, [{ marker: "legacy" }]);
+  assert.equal(legacy[0], null); assert.equal(legacy[1]._tournamentHistoryCacheKey, "id:legacy");
   const contextRead = run({ req: { query: { tournamentId: "legacy", fprCommunityContext: "1" }, headers: { "x-real-ip": "context-test" } } }, flow);
   assert.equal(contextRead[0], null); assert.equal(contextRead[1]._tournamentHistoryCacheKey, "id:legacy");
   const invalidContext = run({ req: { query: { tournamentId: "../invalid", fprCommunityContext: "1" }, headers: {} } }, flow);
@@ -213,10 +213,95 @@ test("fresh FPR history bypasses only its cache entry while preserving legacy ca
   assert.equal(last[0].statusCode, 429);
 });
 
-test("legacy tournament preparation is unchanged by the conditional dispatch", () => {
+test("generic tournament preparation retains its values inside a FPR-protected event pipeline", () => {
   const input = { payload: { tournamentId: "old-type-example", tournamentType: "americano_classic", createdAt: "2026-10-28T00:00:00Z", participants: [], rounds: [] } };
   const legacy = new Function("msg", legacyPrepare)(structuredClone(input));
   const wrapped = prepare(structuredClone(input));
-  delete legacy[0].payload.$set.updatedAt; delete wrapped[0].payload.$set.updatedAt;
-  assert.deepEqual(wrapped, legacy);
+  const merge = wrapped[0].payload[1][0].$replaceRoot.newRoot.$cond[2].$mergeObjects;
+  delete legacy[0].payload.$set.updatedAt; delete merge[1].$literal.updatedAt;
+  assert.deepEqual(merge[1].$literal, legacy[0].payload.$set);
+  assert.equal(wrapped[0].payload[1][0].$replaceRoot.newRoot.$cond[1], "$$ROOT");
+  assert.deepEqual(wrapped[0].payload[1][1], { $set: { _id: { $ifNull: ["$_id", { $literal: "tournament:old-type-example" }] } } });
+  assert.ok(wrapped[0].query.$or.some((q: Record<string, unknown>) => q["params.fpr6x25.communityRating.sourceExerciseId"] === "old-type-example"));
+});
+
+test("generated backend commits first-save start and score with one CAS and preserves broadcast", () => {
+  const original = fixture();
+  original.params.broadcast = { active: true, operationId: 'existing-operation' };
+  const before = structuredClone(original);
+  const cmd = { id: 'atomic-first-score', expectedRevision: 0, action: 'score',
+    matchId: original.params.fpr6x25.attempts[0].matches[0].id,
+    score1: 13, score2: 12, confirmed1: true, confirmed2: true, startIfScheduled: true };
+  const run = (doc: typeof original, command = cmd) => recalculate({ payload: structuredClone(doc),
+    req: { body: { results: [], params: { fprCommand: command } } } });
+  const response = run(original);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.mongoQuery['params.fpr6x25.revision'], 0);
+  const next = applyMongoSet(original, response.mongoUpdate);
+  assert.equal(next.params.fpr6x25.revision, 1);
+  assert.equal(next.params.fpr6x25.audit.length, 1);
+  assert.equal(next.params.fpr6x25.attempts[0].status, 'running');
+  assert.equal(next.params.fpr6x25.attempts[0].matches[0].score1, 13);
+  assert.deepEqual(next.params.broadcast, before.params.broadcast);
+  assert.deepEqual(original, before);
+  const replay = run(next);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.payload.params.fpr6x25.revision, 1);
+  assert.equal(replay.payload.params.fpr6x25.attempts[0].startedAt, next.params.fpr6x25.attempts[0].startedAt);
+  const stale = run(next, { ...cmd, id: 'stale-first-save' });
+  assert.equal(stale.statusCode, 409); assert.equal(stale.mongoUpdate, undefined);
+  const invalid = run(original, { ...cmd, score2: 13 });
+  assert.equal(invalid.statusCode, 422); assert.equal(invalid.mongoUpdate, undefined);
+});
+
+test("generated first-save partials start once; deadline and reused flags produce no writes", () => {
+  const original = fixture();
+  const cmd = { id: 'partial-first-save', expectedRevision: 0, action: 'score',
+    matchId: original.params.fpr6x25.attempts[0].matches[0].id,
+    score1: 7, score2: 5, confirmed1: false, confirmed2: false, startIfScheduled: true };
+  const run = (doc: typeof original, command = cmd) => recalculate({ payload: structuredClone(doc),
+    req: { body: { params: { fprCommand: command } } } });
+  const response = run(original);
+  assert.equal(response.statusCode, 200);
+  const next = applyMongoSet(original, response.mongoUpdate);
+  assert.equal(next.params.fpr6x25.attempts[0].status, 'running');
+  assert.equal(next.params.fpr6x25.attempts[0].matches[0].confirmed1, false);
+  const reused = run(next, { ...cmd, startIfScheduled: false });
+  assert.equal(reused.statusCode, 409); assert.equal(reused.mongoUpdate, undefined);
+  const late = structuredClone(original);
+  late.params.fpr6x25.endsAt = new Date(Date.now() + 60_000).toISOString();
+  const rejected = run(late);
+  assert.equal(rejected.statusCode, 422); assert.equal(rejected.mongoUpdate, undefined);
+  assert.equal(rejected.payload.error, 'FPR_COMMAND_INVALID');
+});
+
+test("generated backend persists final score, closed round, standings and next draw in one CAS, once", () => {
+  let doc = fixture();
+  doc.params.broadcast = { active: true, operationId: "parallel-broadcast" };
+  const [first, second] = doc.params.fpr6x25.attempts[0].matches;
+  doc = update(doc, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true });
+  assert.equal(doc.params.fpr6x25.attempts[0].status, "running");
+  const before = structuredClone(doc);
+  const command = { id: "stable-auto-close", expectedRevision: 1, action: "score", matchId: second.id,
+    score1: 14, score2: 11, confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true };
+  const run = (document: typeof doc, cmd = command) => recalculate({ payload: structuredClone(document),
+    req: { body: { results: [], params: { fprCommand: cmd } } } });
+  const result = run(doc);
+  assert.equal(result.statusCode, 200); assert.equal(result.mongoQuery["params.fpr6x25.revision"], 1);
+  assert.equal(result.mongoQuery._id, doc._id);
+  doc = applyMongoSet(doc, result.mongoUpdate);
+  assert.equal(doc.params.fpr6x25.revision, 2); assert.equal(doc.params.fpr6x25.audit.length, 2);
+  assert.equal(doc.params.fpr6x25.attempts[0].status, "closed");
+  assert.equal(doc.params.fpr6x25.attempts[1].round, 2); assert.equal(doc.params.fpr6x25.attempts[1].status, "scheduled");
+  assert.equal(doc.standings.length, 8);
+  assert.equal(doc.standings.reduce((n: number, p: { matchesPlayed: number }) => n + p.matchesPlayed, 0), 8);
+  assert.deepEqual(doc.params.broadcast, before.params.broadcast);
+  const replay = run(doc);
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.payload.params.fpr6x25, doc.params.fpr6x25);
+  assert.equal(run(doc, { ...command, id: "stale-auto-close" }).statusCode, 409);
+  assert.equal(run(doc, { ...command, autoCloseRound: false }).statusCode, 409);
+  const invalid = run(before, { ...command, score2: 12 });
+  assert.equal(invalid.statusCode, 422); assert.equal(invalid.mongoUpdate, undefined);
 });

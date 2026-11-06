@@ -1,6 +1,9 @@
+import { tournamentEventId, tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
+import { fprProjection, validateFprState } from "./fpr6x25";
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
 import { AvatarImage } from "../UI/AvatarImage";
-import { FprTournamentSetup, FprTournamentManager, FprProtocolLookup } from "./FprTournamentPanel";
+import { FprTournamentSetup, FprTournamentManager } from "./FprTournamentPanel";
+import type { FprState } from "./fpr6x25";
 import { useLkTournamentSession } from "../../utils/useLkTournamentSession";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
@@ -1477,6 +1480,11 @@ function buildTournamentHistoryRecordFromPayload(
     ? payload.params as Record<string, unknown>
     : null;
   const organizerName = String(payloadParams?.organizerName ?? "").trim();
+  let fprResult: ReturnType<typeof fprProjection> | null = null;
+  if (payload.tournamentType === "fpr_6x25") {
+    validateFprState(payloadParams?.fpr6x25);
+    fprResult = fprProjection(payloadParams.fpr6x25, payloadParams);
+  }
 
   return {
     id: payload.tournamentId,
@@ -1521,8 +1529,8 @@ function buildTournamentHistoryRecordFromPayload(
         : null),
     params: payload.params ?? previousHistory?.params ?? null,
     rounds: payload.rounds ?? [],
-    standings: previousHistory?.standings ?? [],
-    summary: previousHistory?.summary ?? null,
+    standings: fprResult?.standings ?? previousHistory?.standings ?? [],
+    summary: fprResult?.summary ?? previousHistory?.summary ?? null,
     totals: totals ?? previousHistory?.totals ?? null,
     playerLogs: playerLogs ?? previousHistory?.playerLogs ?? null,
     startRatingChanges: payload.startRatingChanges ?? previousHistory?.startRatingChanges ?? [],
@@ -1542,6 +1550,7 @@ interface TournamentDetailsModalProps {
   sourceDateKey?: string | null;
   canRefreshParticipantsFromViva: boolean;
   onSaved: (data: AmericanoTournamentPayload) => void;
+  initialFprPayload?: AmericanoTournamentPayload | null;
 }
 
 type TournamentParticipantEntry = ParticipantEntry & {
@@ -1638,7 +1647,9 @@ function TournamentDetailsModal({
   sourceDateKey = null,
   canRefreshParticipantsFromViva,
   onSaved,
+  initialFprPayload,
 }: TournamentDetailsModalProps) {
+  const initialFprState = initialFprPayload?.params?.fpr6x25 as FprState | undefined;
   useLkTournamentSession(isOpen);
   const [loading, setLoading] = useState(false);
   const [participants, setParticipants] = useState<ExerciseBooking[]>([]);
@@ -1868,7 +1879,15 @@ function TournamentDetailsModal({
         ))
       : [];
     setPairedMexicanoPairs(restoredPairs);
-  }, [historyRecord, isOpen, tournament, tournament?.id]);
+    if (initialFprPayload) {
+      setSelectedFamily("fpr6x25");
+      setSelectedType("fpr_6x25");
+      setRosterMode("manual");
+      setManualParticipants(initialFprPayload.participants.map((p, i) => createTournamentManualParticipantDraft(i, p)));
+      setManualStationName(String(initialFprPayload.params?.stationName ?? ""));
+      setManualOrganizerName(initialFprPayload.organizer.name ?? "");
+    }
+  }, [historyRecord, isOpen, tournament, tournament?.id, initialFprPayload]);
 
   const applyCourtsCount = (count: number) => {
     setCourtNames((prev) =>
@@ -3994,14 +4013,16 @@ function TournamentDetailsModal({
           <FprTournamentSetup
             key={String(tournament?.id ?? draftTournamentId ?? "manual-fpr")}
             players={sortedParticipants}
+            initialState={initialFprState}
+            onResume={initialFprPayload ? () => onSaved(initialFprPayload) : undefined}
             context={{
               tenantKey: TENANT_KEY,
               organizer: { id: profile?.id ?? null, phone: profile?.phone ?? null, tenantKey: TENANT_KEY, name: profile ? [profile.firstName, profile.lastName].filter(Boolean).join(" ") : null },
-              sourceExerciseId: tournament?.id,
-              stationName: tournament?.studio?.name || manualStationName,
-              stationId: tournament?.studio?.id,
-              endsAt: tournament?.timeTo,
-              dateKey: sourceDateKey || formatDate(new Date()),
+              sourceExerciseId: initialFprPayload ? initialFprState?.communityRating?.sourceExerciseId ?? undefined : tournament?.id,
+              stationName: initialFprPayload ? String(initialFprPayload.params?.stationName ?? manualStationName) : tournament?.studio?.name || manualStationName,
+              stationId: initialFprPayload ? typeof initialFprPayload.params?.stationId === "string" ? initialFprPayload.params.stationId : undefined : tournament?.studio?.id,
+              endsAt: initialFprState?.endsAt ?? tournament?.timeTo,
+              dateKey: initialFprPayload ? String(initialFprPayload.params?.localDateKey || sourceDateKey || formatDate(new Date())) : sourceDateKey || formatDate(new Date()),
               communityBinding: historyRecord ? { ratingCommunityId: historyRecord.ratingCommunityId ?? null,
                 publishedCommunities: (historyRecord.publishedCommunities ?? []).map(p => ({ communityId: p.communityId,
                   communityName: p.communityName ?? null, publicationId: p.publicationId ?? null,
@@ -6879,6 +6900,7 @@ export default function TournamentsPage({
   const [profileLoading, setProfileLoading] = useState(true);
   const [selectedTournament, setSelectedTournament] = useState<Exercise | null>(null);
   const [managerData, setManagerData] = useState<AmericanoTournamentPayload | null>(null);
+  const [fprSettingsData, setFprSettingsData] = useState<AmericanoTournamentPayload | null>(null);
   const [managerTotals, setManagerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [managerPlayerLogs, setManagerPlayerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
   const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
@@ -7137,12 +7159,21 @@ export default function TournamentsPage({
         snapshot.totals,
         snapshot.playerLogs,
       );
-      next[snapshot.payload.tournamentId] = draftHistory;
+      tournamentIdentityKeys(draftHistory).forEach(id => { next[id] = draftHistory; });
     });
     return next;
   }, [currentProfileId, localDraftSnapshots]);
   const combinedHistoryById = useMemo(
-    () => ({ ...historyById, ...localDraftHistoryById }),
+    () => {
+      const next = { ...historyById, ...localDraftHistoryById };
+      for (const [id, history] of Object.entries(historyById)) {
+        if (history?.tournamentType !== "fpr_6x25") continue;
+        const serverRevision = (history.params?.fpr6x25 as FprState | undefined)?.revision ?? -1;
+        const localRevision = (next[id]?.params?.fpr6x25 as FprState | undefined)?.revision ?? -1;
+        if (serverRevision >= localRevision) next[id] = history;
+      }
+      return next;
+    },
     [historyById, localDraftHistoryById],
   );
   const serverTournaments = useMemo(
@@ -7300,7 +7331,11 @@ export default function TournamentsPage({
         }));
       } else {
         try {
-          const result = await apiFetchTournamentHistory(tournamentId);
+          const result = await apiFetchTournamentHistory(tournamentId, { forceRefresh: true });
+          if (result.error) {
+            if (result.status === 409 || result.status === 422) { setAutoOpenNotice(result.error.message); return; }
+            throw new Error(result.error.message);
+          }
           const freshHistory = pickLatestTournamentHistory(result.data);
           const freshHistoryIsNotStructurallyWorse = shouldPreferClassicMexicanoSnapshot(
             buildTournamentComparablePayloadFromHistory(freshHistory),
@@ -7319,7 +7354,11 @@ export default function TournamentsPage({
             ...prev,
             [tournamentId]: historyRecord,
           }));
-        } catch {
+        } catch (historyError) {
+          if (!historyRecord && !cachedHistory) {
+            setAutoOpenNotice(historyError instanceof Error ? historyError.message : "Не удалось загрузить турнир. Повторите открытие.");
+            return;
+          }
           if (!historyRecord && cachedHistory) {
             historyRecord = cachedHistory;
           }
@@ -7540,7 +7579,7 @@ export default function TournamentsPage({
     });
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: nextHistory,
+      ...Object.fromEntries(tournamentIdentityKeys(nextHistory).map(id => [id, nextHistory])),
     }));
     setManagerTotals(null);
     setManagerPlayerLogs(null);
@@ -7564,7 +7603,7 @@ export default function TournamentsPage({
     },
   ) => {
     const currentTournament =
-      visibleTournaments.find((item) => String(item.id) === payload.tournamentId) ?? selectedTournament ?? null;
+      visibleTournaments.find((item) => String(item.id) === tournamentEventId(payload)) ?? selectedTournament ?? null;
     const nextHistory = buildTournamentHistoryRecordFromPayload(
       payload,
       currentTournament,
@@ -7576,8 +7615,13 @@ export default function TournamentsPage({
     upsertLocalDraftSnapshot(payload, extras);
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: nextHistory,
+      ...Object.fromEntries(tournamentIdentityKeys(nextHistory).map(id => [id, nextHistory])),
     }));
+  };
+
+  const handleFprManagerDataChange = (payload: AmericanoTournamentPayload) => {
+    handleManagerDataChange(payload, { totals: null, playerLogs: null });
+    setManagerData(payload);
   };
 
   const handleManagerDataReplace = (
@@ -7588,8 +7632,8 @@ export default function TournamentsPage({
     },
   ) => {
     const replacementTournament =
-      visibleTournaments.find((item) => String(item.id) === payload.tournamentId)
-      ?? items.find((item) => String(item.id) === payload.tournamentId)
+      visibleTournaments.find((item) => String(item.id) === tournamentEventId(payload))
+      ?? items.find((item) => String(item.id) === tournamentEventId(payload))
       ?? (selectedTournament && String(selectedTournament.id) === payload.tournamentId
         ? selectedTournament
         : null)
@@ -7605,7 +7649,7 @@ export default function TournamentsPage({
     upsertLocalDraftSnapshot(payload, extras);
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: nextHistory,
+      ...Object.fromEntries(tournamentIdentityKeys(nextHistory).map(id => [id, nextHistory])),
     }));
     setSelectedTournament(replacementTournament);
     setManagerTotals(extras.totals);
@@ -7615,6 +7659,16 @@ export default function TournamentsPage({
 
   const handleManagerEditSettings = () => {
     if (!managerData?.tournamentId) return;
+    if (managerData.tournamentType === "fpr_6x25") {
+      const sourceId = (managerData.params?.fpr6x25 as FprState | undefined)?.communityRating?.sourceExerciseId;
+      const sourceTournament = [...visibleTournaments, ...serverTournaments].find(item => String(item.id) === sourceId)
+        ?? buildTournamentDraftExercise({ payload: managerData, totals: null, playerLogs: null, updatedAt: new Date().toISOString() });
+      setFprSettingsData(managerData);
+      setSelectedTournament(sourceTournament);
+      setManualTournamentCreationOpen(!sourceTournament);
+      setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null);
+      return;
+    }
     const currentTournament =
       visibleTournaments.find((item) => String(item.id) === managerData.tournamentId)
       ?? serverTournaments.find((item) => String(item.id) === managerData.tournamentId)
@@ -7924,22 +7978,19 @@ export default function TournamentsPage({
               Создать турнир
             </button>
           )}
-          {!loading && !profileLoading && profile?.id && <FprProtocolLookup profileId={profile.id} canHost={canHostTournaments} onFound={record => {
-            const payload = buildTournamentPayloadFromHistory(record);
-            if (!payload) return;
-            handleManagerDataReplace(payload, { totals: null, playerLogs: null });
-          }} />}
         </div>
       </div>
 
       <TournamentDetailsModal
-        isOpen={Boolean(selectedTournament) || manualTournamentCreationOpen}
+        isOpen={!managerData && (Boolean(selectedTournament) || manualTournamentCreationOpen)}
         onClose={() => {
           setSelectedTournament(null);
           setManualTournamentCreationOpen(false);
+          setFprSettingsData(null);
         }}
         tournament={selectedTournament}
-        historyRecord={selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        historyRecord={fprSettingsData ? combinedHistoryById[fprSettingsData.tournamentId] ?? null : selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        initialFprPayload={fprSettingsData}
         sourceDateKey={selectedDateStr}
         canRefreshParticipantsFromViva={canHostTournaments}
         onSaved={handleTournamentCreated}
@@ -7949,8 +8000,9 @@ export default function TournamentsPage({
         <FprTournamentManager
           key={managerData.tournamentId}
           data={managerData}
-          onClose={() => { setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null); }}
-          onDataChange={payload => handleManagerDataReplace(payload, { totals: null, playerLogs: null })}
+          onClose={() => { setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null); setSelectedTournament(null); setManualTournamentCreationOpen(false); setFprSettingsData(null); }}
+          onDataChange={handleFprManagerDataChange}
+          onEditSettings={handleManagerEditSettings}
         />
       ) : <TournamentManagerModal
         isOpen={Boolean(managerData)}

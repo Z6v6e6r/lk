@@ -32,6 +32,7 @@ export type FprMatch = {
   deadlineScoreTotal: number | null;
   lastRallyStartedAt?: string;
   lateEntryReason?: string;
+  recordedAt?: string;
 };
 export type FprAttempt = {
   id: string;
@@ -85,7 +86,7 @@ export type FprStanding = {
 type FprAction =
   | { action: "prepare_round" | "start_round" | "close_round" | "finish" }
   | { action: "set_b1"; matchId: string; playerId: string }
-  | { action: "score" | "correct_score"; matchId: string; score1: number; score2: number; confirmed1: boolean; confirmed2: boolean; reason?: string; playedAt?: string; lastRallyStartedAt?: string }
+  | { action: "score" | "correct_score"; matchId: string; score1: number; score2: number; confirmed1: boolean; confirmed2: boolean; startIfScheduled?: boolean; autoCloseRound?: boolean; recordResult?: boolean; reason?: string; playedAt?: string; lastRallyStartedAt?: string }
   | { action: "cancel_round"; reason: string }
   | { action: "withdraw"; playerId: string; reason: string };
 export type FprCommand = FprAction & { id: string; expectedRevision: number };
@@ -407,6 +408,25 @@ export function fprReserveThreshold(state: FprState, now: string) {
   const remainingMs = Date.parse(state.endsAt) - Date.parse(now);
   return { allowed: state.reserveAllowed && completed.length >= 6 && completed.length < 8 && remainingMs >= requiredMs, requiredMs, remainingMs };
 }
+function startFprRound(state: FprState, current: FprAttempt | null, now: string, recording = false) {
+  requireFpr(current?.status === "scheduled", "Нет подготовленного раунда");
+  if (!recording) requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
+  if (current.round >= 7 && !recording) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
+  current.status = "running"; current.startedAt = now; state.status = "in_progress";
+}
+function closeFprRound(state: FprState, current: FprAttempt | null, now: string, automatic = false) {
+  requireFpr(current?.status === "running" && current.matches.every(confirmed), "Подтвердите все матчи обеими парами; каждый матч — 25 очков");
+  current.status = "closed";
+  current.finishedAt = new Date(Math.max(...current.matches.map(m => Date.parse(m.completedAt!)))).toISOString();
+  if (!automatic) {
+    if (current.round < 6) state.attempts.push(prepareAttempt(state));
+    return;
+  }
+  // Accept a valid late score even when no new round can be played. Reserve
+  // eligibility includes the round just closed and uses server time, not playedAt.
+  if (state.attempts.length >= 100 || current.round >= 8 || Date.parse(now) >= Date.parse(state.endsAt) - 180_000) return;
+  if (current.round < 6 || fprReserveThreshold(state, now).allowed) state.attempts.push(prepareAttempt(state));
+}
 export function applyFprCommand(original: FprState, command: FprCommand, now: string): FprState {
   validateFprState(original);
   requireFpr(typeof command.id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(command.id), "Некорректный идентификатор команды");
@@ -424,23 +444,24 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
   let detail = "";
   if (command.action === "prepare_round") {
     requireFpr(!current, "Предыдущая попытка ещё не закрыта");
+    requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Время для нового раунда закончилось");
     if (fprCompletedRounds(state) >= 6) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
     state.attempts.push(prepareAttempt(state));
   } else if (command.action === "set_b1") {
-    requireFpr(current?.status === "scheduled", "Порядок подачи фиксируется до общего старта");
+    requireFpr(current?.status === "scheduled", "Порядок подачи фиксируется до первого сохранения счёта");
     const match = current.matches.find(m => m.id === command.matchId);
     requireFpr(match && match.pair2.includes(command.playerId), "B1 должен быть участником пары B");
     match.pair2 = [command.playerId, match.pair2.find(id => id !== command.playerId)!];
     detail = `${match.id}: B1=${command.playerId}`;
   } else if (command.action === "start_round") {
-    requireFpr(current?.status === "scheduled", "Нет подготовленного раунда");
-    requireFpr(Date.parse(now) < Date.parse(state.endsAt) - 180_000, "Игровой дедлайн уже наступил");
-    if (current.round >= 7) requireFpr(fprReserveThreshold(state, now).allowed, "Недостаточно времени для запасного раунда (§12.3)");
-    current.status = "running"; current.startedAt = now; state.status = "in_progress";
+    startFprRound(state, current, now);
   } else if (command.action === "score" || command.action === "correct_score") {
     const attempt = state.attempts.find(a => a.matches.some(m => m.id === command.matchId));
     const match = attempt?.matches.find(m => m.id === command.matchId);
     requireFpr(attempt && match, "Матч не найден");
+    if (command.action === "score" && command.startIfScheduled === true && attempt === current && attempt.status === "scheduled") {
+      startFprRound(state, current, now, command.recordResult === true);
+    }
     requireFpr(command.action === "score" ? attempt.status === "running" : attempt.status === "closed", "Нельзя изменить счёт этой попытки");
     requireFpr(Number.isInteger(command.score1) && Number.isInteger(command.score2) && command.score1 >= 0 && command.score2 >= 0
       && command.score1 + command.score2 <= 25, "Счёт должен состоять из целых неотрицательных очков с суммой не больше 25");
@@ -451,6 +472,13 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
     const afterDeadline = Date.parse(now) >= deadline;
     let completedAt = match.completedAt;
     if (command.action === "score") {
+      if (command.recordResult === true) {
+        // This is score-entry time, not an assertion of when play started/ended.
+        // A scheduled round was admitted by prepareAttempt/prepare_round. Delayed
+        // typing must not retroactively revoke it or require invented timestamps.
+        completedAt = total === 25 ? (completedAt ?? now) : null;
+        if (total === 25) match.recordedAt = now;
+      } else {
       if (afterDeadline && match.deadlineScoreTotal !== null && total > match.deadlineScoreTotal) {
         requireFpr(match.deadlineScoreTotal === 24 && total === 25 && (command.lastRallyStartedAt || match.lastRallyStartedAt),
           "После игрового дедлайна разрешено доиграть только один уже начатый розыгрыш");
@@ -469,8 +497,9 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
         completedAt = actual;
         if (command.reason) match.lateEntryReason = command.reason.trim();
       }
+      }
       if (afterDeadline && match.deadlineScoreTotal === null) match.deadlineScoreTotal = total;
-      if (total < 25) { completedAt = null; delete match.lastRallyStartedAt; }
+      if (total < 25) { completedAt = null; delete match.lastRallyStartedAt; delete match.recordedAt; }
     }
     detail = `${match.id}: ${match.score1 ?? "–"}:${match.score2 ?? "–"} → ${command.score1}:${command.score2}${command.reason ? `; ${command.reason.trim()}` : ""}`;
     match.score1 = command.score1; match.score2 = command.score2;
@@ -479,11 +508,12 @@ export function applyFprCommand(original: FprState, command: FprCommand, now: st
     if (command.action === "correct_score" && current?.status === "scheduled" && activePlayers(state).length >= 8) {
       state.attempts.pop(); state.attempts.push(prepareAttempt(state));
     }
+    if (command.action === "score" && command.autoCloseRound === true && attempt === current && attempt.matches.every(confirmed)) {
+      closeFprRound(state, attempt, now, true);
+      detail += `; раунд ${attempt.round} закрыт автоматически`;
+    }
   } else if (command.action === "close_round") {
-    requireFpr(current?.status === "running" && current.matches.every(confirmed), "Подтвердите все матчи обеими парами; каждый матч — 25 очков");
-    current.status = "closed";
-    current.finishedAt = new Date(Math.max(...current.matches.map(m => Date.parse(m.completedAt!)))).toISOString();
-    if (current.round < 6) state.attempts.push(prepareAttempt(state));
+    closeFprRound(state, current, now);
   } else if (command.action === "cancel_round") {
     requireFpr(current && command.reason.trim(), "Укажите причину отмены раунда");
     current.status = "cancelled"; current.finishedAt = now; current.reason = command.reason.trim();
@@ -570,7 +600,8 @@ export function validateFprState(value: unknown): asserts value is FprState {
       requireFpr(m.deadlineScoreTotal === null || Number.isInteger(m.deadlineScoreTotal) && m.deadlineScoreTotal >= 0 && m.deadlineScoreTotal <= 25, "Некорректный снимок счёта на дедлайне");
       if (m.completedAt) {
         requireFpr(validTime(m.completedAt) && validTime(a.startedAt!) && Date.parse(m.completedAt) >= Date.parse(a.startedAt!), "Некорректное время окончания матча");
-        if (Date.parse(m.completedAt) > Date.parse(s.endsAt) - 180_000) requireFpr(m.lastRallyStartedAt && validTime(m.lastRallyStartedAt)
+        if (m.recordedAt !== undefined) requireFpr(validTime(m.recordedAt) && Date.parse(m.recordedAt) >= Date.parse(m.completedAt), "Некорректное время записи счёта");
+        if (!m.recordedAt && Date.parse(m.completedAt) > Date.parse(s.endsAt) - 180_000) requireFpr(m.lastRallyStartedAt && validTime(m.lastRallyStartedAt)
           && Date.parse(m.lastRallyStartedAt) >= Date.parse(a.startedAt!) && Date.parse(m.lastRallyStartedAt) <= Date.parse(s.endsAt) - 180_000
           && typeof m.lateEntryReason === "string" && m.lateEntryReason.trim(), "Нет записи о последнем розыгрыше на дедлайне");
       }

@@ -9,7 +9,7 @@ import { assignLeagueResults } from "../../src/services/community-rating/league.
 import { DEFAULT_LEAGUE_DIVISIONS } from "../../src/services/community-policy.ts";
 const began = Date.parse("2026-10-12T10:00:00Z");
 const at = (s: number) => new Date(began + s * 1000).toISOString();
-function fixture(id = "fpr-community-test", n = 4, withdraw = false, rounds = 6) {
+function fixture(id = "fpr-community-test", n = 4, withdraw = false, rounds = 6, late = false) {
   let state = createFprState({ tournamentId: id, players: Array.from({ length: n }, (_, i) => ({
     id: `p${i + 1}`, name: `Synthetic ${i + 1}`, level: 2 + i / 10, leaguePlace: i + 1, leaguePoints: i < 2 ? 0 : 1,
   })), courts: Array.from({ length: Math.floor(n / 4) }, (_, i) => `Court ${i + 1}`), leagueSource: "Club · October",
@@ -22,10 +22,11 @@ function fixture(id = "fpr-community-test", n = 4, withdraw = false, rounds = 6)
   const seen = new Map<string, number>();
   for (let r = 0; r < rounds; r++) {
     command({ action: "start_round" });
+    if (late && r === rounds - 1) seconds = 10800;
     for (const m of state.attempts.at(-1)!.matches) {
       const key = [...m.pair1].sort().join(":"); const occurrence = seen.get(key) ?? 0; seen.set(key, occurrence + 1);
       const score1 = occurrence % 2 ? 12 : 13;
-      command({ action: "score", matchId: m.id, score1, score2: 25 - score1, confirmed1: true, confirmed2: true });
+      command({ action: "score", matchId: m.id, score1, score2: 25 - score1, confirmed1: true, confirmed2: true, ...(late ? { recordResult: true } : {}) });
     }
     command({ action: "close_round" });
   }
@@ -142,4 +143,16 @@ test("an updated bound FPR schedules its community incrementally without a direc
     assert.deepEqual(await resolveIncrementalCommunityIds(db, at(0), false), testMode ? [] : ["club"]);
     assert.ok(JSON.stringify(calls.find(c => c.name === "tournaments")?.options).includes("params.fpr6x25.communityRating"));
   }
+});
+
+test("source-ID FPR with late-entered result remains eligible once in worker and monthly report", () => {
+  const f = fixture("source-event", 4, false, 6, true);
+  assert.equal(f.state.status, "completed");
+  const result = facts(f);
+  assert.equal(result.length, 4);
+  assert.equal(new Set(result.map(row => row.id)).size, 4);
+  assert.ok(f.state.attempts.at(-1)!.matches.every(m => m.recordedAt));
+  assert.equal(isTournamentFinalized(f.tournament), false);
+  const report = buildCommunityMonthlyReport({ community: f.community, feedPosts: [f.post], tournaments: [f.tournament], games: [], visits: [], ratingEvents: [], ratingStates: [] }, Date.parse("2026-10-29T10:00:00Z"));
+  assert.equal(report.tournamentsCount, 1);
 });

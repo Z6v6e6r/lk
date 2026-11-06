@@ -1,0 +1,70 @@
+import test from 'node:test';import assert from 'node:assert/strict';import crypto from 'node:crypto';import {MongoClient} from 'mongodb';
+import {buildFprProjectionOutbox,fprLevelHash} from '../lib/fprLevelLedger.mjs';
+import {initializeFprStarts} from '../lib/fprStartBootstrap.mjs';
+const uri=process.env.FPR_LEVEL_TEST_MONGO_URI;
+const now='2026-11-06T14:00:00.000Z';
+const baseline=(id,after)=>({_id:'base:'+id,id:'base:'+id,idempotencyKey:'base:'+id,schemaVersion:1,eventType:'RATING_INITIAL_IMPORTED',
+ occurredAt:now,createdAt:now,player:{key:'client:'+id,clientId:id,name:'Synthetic'},actor:{},source:{domain:'INITIAL_IMPORT'},
+ change:{before:null,after,delta:null},formula:null,projectionIntent:{viva:'NONE'}});
+test('atomic initial default1, existing full precision, compatibility import, history recovery, retry and named failures',
+ {skip:uri?false:'Requires isolated replica set'},async()=>{
+ const client=new MongoClient(uri),db=client.db('test_fpr_start_'+crypto.randomBytes(8).toString('hex'));
+ try{await client.connect();for(const collection of ['player_rating_state','player_ratings'])await db.collection(collection).createIndex({clientId:1},{unique:true});
+ await db.collection('rating_events').createIndex({idempotencyKey:1},{unique:true});
+ const existing={_id:'existing',clientId:'existing',playerKey:'client:existing',ownership:'CUP_CANONICAL',ratingNumeric:4.03664,lastEventId:'unchanged'};
+ await db.collection('player_rating_state').insertOne(existing);
+ await db.collection('player_ratings').insertOne({_id:'compat',clientId:'import',ratingNumeric:3.12345,name:'Synthetic'});
+ await db.collection('rating_events').insertOne(baseline('recover',2.34567));
+ const first=await initializeFprStarts(db,client,['existing','unrated','import','recover'],'host',now);
+ assert.equal(first.initialized.length,3);assert.deepEqual(first.states.map(s=>s.ratingNumeric),[4.03664,1,3.12345,2.34567]);
+ assert.deepEqual(await db.collection('player_rating_state').findOne({_id:'existing'}),existing);
+ assert.equal(await db.collection('rating_events').countDocuments(),3);
+ assert.equal(await db.collection('rating_projection_outbox').countDocuments({fprProjection:true}),3);
+ assert.equal((await initializeFprStarts(db,client,['unrated','import','recover'],'host',now)).initialized.length,0);
+ assert.equal(await db.collection('rating_events').countDocuments(),3);
+ // A later invalid participant must abort an earlier candidate default.
+ await db.collection('player_ratings').insertOne({_id:'invalid',clientId:'invalid',ratingNumeric:'broken'});
+ await assert.rejects(initializeFprStarts(db,client,['would-be-default','invalid'],'host',now),e=>e.message==='FPR_START_INVALID_LEVEL'&&e.playerId==='invalid');
+ assert.equal(await db.collection('player_rating_state').countDocuments({clientId:'would-be-default'}),0);
+ // Orphan delta history must not be hidden by a new baseline.
+ await db.collection('rating_events').insertOne({...baseline('orphan',2),_id:'orphan',id:'orphan',idempotencyKey:'orphan',eventType:'GAME_RESULT_SUBMITTED_APPLIED',change:{before:2,after:2.1,delta:.1}});
+ await assert.rejects(initializeFprStarts(db,client,['orphan'],'host',now),e=>e.message==='FPR_START_HISTORY_INVALID'&&e.playerId==='orphan');
+ assert.equal(await db.collection('player_rating_state').countDocuments({clientId:'orphan'}),0);
+ // A grade must not be silently replaced by default1 when numeric is blank/zero.
+ await db.collection('player_ratings').insertOne({_id:'letter',clientId:'letter',ratingNumeric:0,rating:'C'});
+ await assert.rejects(initializeFprStarts(db,client,['letter'],'host',now),e=>e.message==='FPR_START_INVALID_LEVEL'&&e.playerId==='letter');
+ // Explicit recorded old keys recover immutable history rather than seed compatibility.
+ await db.collection('player_ratings').insertOne({_id:'old-key',clientId:'old-key',ratingNumeric:4,identityAliases:{playerKeys:['legacy:old-key']}});
+ const oldKeyEvent=baseline('old-key',3.22222);oldKeyEvent.player={key:'legacy:old-key',clientId:null,name:'Synthetic'};
+ await db.collection('rating_events').insertOne(oldKeyEvent);
+ assert.equal((await initializeFprStarts(db,client,['old-key'],'host',now)).states[0].ratingNumeric,3.22222);
+ // Foreign immutable client identity must not be merged through a stored phone.
+ await db.collection('player_ratings').insertOne({_id:'phone-owner',clientId:'phone-owner',phoneNorm:'test-phone'});
+ const foreign=baseline('foreign',3);foreign.player.phoneNorm='test-phone';await db.collection('rating_events').insertOne(foreign);
+ await assert.rejects(initializeFprStarts(db,client,['phone-owner'],'host',now),e=>e.message==='FPR_START_IDENTITY_CONFLICT');
+ // Fault after earlier writes rolls back the whole roster.
+ const target='will-fail-last',eventId='rating_evt:fpr_roster_bootstrap:'+fprLevelHash('client:'+target);
+ const collision=buildFprProjectionOutbox({clientId:target,playerKey:'client:'+target,ratingNumeric:1,lastEventId:eventId},now);
+ await db.collection('rating_projection_outbox').insertOne({_id:collision._id,marker:'synthetic collision'});
+ await assert.rejects(initializeFprStarts(db,client,['partial-first',target],'host',now));
+ assert.equal(await db.collection('player_rating_state').countDocuments({clientId:{$in:['partial-first',target]}}),0);
+ assert.equal(await db.collection('rating_events').countDocuments({'player.clientId':{$in:['partial-first',target]}}),0);
+ // Exact-ID baseline with an unverified phone binding cannot hide phone-only deltas.
+ const phoneBase=baseline('ledger-phone',2);phoneBase.player.phoneNorm='uncovered-phone';
+ const phoneDelta={...baseline('phone-delta',2.1),eventType:'GAME_RESULT_SUBMITTED_APPLIED',
+   player:{key:'phone:uncovered-phone',clientId:null,phoneNorm:'uncovered-phone'},change:{before:2,after:2.1,delta:.1}};
+ await db.collection('rating_events').insertMany([phoneBase,phoneDelta]);
+ await assert.rejects(initializeFprStarts(db,client,['ledger-phone'],'host',now),e=>e.message==='FPR_START_HISTORY_INVALID');
+ await db.collection('player_ratings').insertOne({_id:'secondary',clientId:'secondary',ratingNumeric:'',rating:'3.5'});
+ assert.equal((await initializeFprStarts(db,client,['secondary'],'host',now)).states[0].ratingNumeric,3.5);
+ // Concurrent requests resolve to one baseline/state; transaction retries are idempotent.
+ const other=new MongoClient(uri);await other.connect();try{
+  const both=await Promise.all([initializeFprStarts(db,client,['concurrent'],'host',now),initializeFprStarts(other.db(db.databaseName),other,['concurrent'],'host',now)]);
+  assert.equal(both.reduce((n,r)=>n+r.initialized.length,0),1);
+  assert.equal(await db.collection('rating_events').countDocuments({'player.clientId':'concurrent'}),1);
+ }finally{await other.close();}
+ // Recorded alias collision must fail the complete roster.
+ await db.collection('player_rating_state').insertOne({_id:'alias-owner',clientId:'owner',playerKey:'client:owner',ownership:'CUP_CANONICAL',ratingNumeric:2,lastEventId:'base',identityAliases:{clientIds:['one','two']}});
+ await assert.rejects(initializeFprStarts(db,client,['one','two'],'host',now),e=>e.message==='FPR_START_IDENTITY_CONFLICT'&&e.playerId==='two');
+ }finally{await db.dropDatabase();await client.close();}
+});

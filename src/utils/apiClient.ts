@@ -1,3 +1,4 @@
+import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
@@ -2884,6 +2885,8 @@ export interface TournamentPublishedCommunity {
 }
 
 export interface TournamentHistoryRecord {
+  fprLevelResults?: FprLevelResults | null;
+  fprLevelExcludedPlayerIds?: string[] | null;
   id: string;
   tournamentId: string;
   title: string | null;
@@ -5796,6 +5799,8 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
     mixed,
     organizer: organizerPayload ? normalizeTournamentHistoryParticipant(organizerPayload, 0) : null,
     params: paramsPayload,
+    fprLevelResults: value.tournamentType === "fpr_6x25" ? readFprLevelResults(paramsPayload?.fpr6x25, value.fprLevelResults, fprLevelExcludedPlayerIds(paramsPayload?.fpr6x25, value.ratingExclusions), paramsPayload?.sourceExerciseId) : null,
+    fprLevelExcludedPlayerIds: value.tournamentType === "fpr_6x25" ? fprLevelExcludedPlayerIds(paramsPayload?.fpr6x25, value.ratingExclusions) : [],
     rounds: Array.isArray(value.rounds) ? value.rounds : [],
     standings: Array.isArray(value.standings) ? value.standings : [],
     summary: summaryPayload,
@@ -5952,6 +5957,7 @@ export async function apiCreateAmericanoTournament(payload: AmericanoTournamentP
   const base = getServ2Origin();
   return request<{ ok?: boolean; tournamentId?: string; params?: Record<string, unknown> }>(`${base}/lk/tournaments/americano`, {
     method: "POST",
+    auth: payload.tournamentType === "fpr_6x25",
     retries: 1,
     body: JSON.stringify(payload),
   });
@@ -9456,6 +9462,14 @@ function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null
     ratingNumeric: normalizedRating.ratingNumeric,
     source: source ?? null,
   };
+}
+
+/** Staff-host-only canonical read. No Viva level fallback or bootstrap. */
+export async function apiFetchFprStartRatings(clientIds: string[]) {
+  return request<unknown>(`${getServ2Origin()}/lk/tournaments/fpr/start-ratings`, {
+    method: "POST", auth: true, retries: 0,
+    body: JSON.stringify({ clientIds }),
+  });
 }
 
 export async function apiFetchPadelLiveRatings(players: PadelLiveRatingRequestPlayer[]) {
