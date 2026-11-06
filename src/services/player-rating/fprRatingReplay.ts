@@ -28,6 +28,35 @@ function rawLedgerRating(input: PlayerRatingEventDocument[]) {
   return raw;
 }
 
+/** Receipt-backed ordering applies only inside a pure equal-time FPR target group. */
+function orderTargets(events: PlayerRatingEventDocument[]) {
+  const ordered = events.sort((a, b) => at(a) - at(b) || a.id.localeCompare(b.id));
+  const result: PlayerRatingEventDocument[] = [];
+  for (let i = 0; i < ordered.length;) {
+    let end = i + 1;
+    while (end < ordered.length && at(ordered[end]) === at(ordered[i])) end++;
+    const group = ordered.slice(i, end);
+    const hasOrder = group.some(e => Array.isArray(e.source.fprOrderedAfterSourceIds) && e.source.fprOrderedAfterSourceIds.length);
+    if (hasOrder) {
+      if (group.some(e => !fpr(e)) || new Set(group.map(e => e.source.sourceId)).size !== group.length)
+        throw new Error("FPR_REPLAY_ORDER_MIXED");
+      const remaining = [...group];
+      while (remaining.length) {
+        const index = remaining.findIndex(e => {
+          const after = e.source.fprOrderedAfterSourceIds;
+          if (after != null && (!Array.isArray(after) || after.some(id => typeof id !== "string")))
+            throw new Error("FPR_REPLAY_ORDER_INVALID");
+          return !remaining.some(other => Array.isArray(after) && after.includes(other.source.sourceId));
+        });
+        if (index < 0) throw new Error("FPR_REPLAY_ORDER_CYCLE");
+        result.push(remaining.splice(index, 1)[0]);
+      }
+    } else result.push(...group);
+    i = end;
+  }
+  return result;
+}
+
 /** Scoped replay for identities receiving FPR awards; ordinary global replay stays unchanged. */
 export function replayFprRatingTargets(input: PlayerRatingEventDocument[]) {
   const events = input.filter(e => !generated(e) && e.source.applyToState !== false);
@@ -39,8 +68,7 @@ export function replayFprRatingTargets(input: PlayerRatingEventDocument[]) {
   if (!before) throw new Error("FPR_REPLAY_BASELINE_MISSING");
   let rating = rawLedgerRating(events.filter(e => !fpr(e) && at(e) < firstAt));
   const compensated = new Set(fprEvents.map(e => e.source.compensatesEventId).filter(Boolean));
-  const ordered = events.filter(e => at(e) >= firstAt && (!fpr(e) || (!e.source.compensatesEventId && !compensated.has(e.id))))
-    .sort((a, b) => at(a) - at(b) || a.id.localeCompare(b.id));
+  const ordered = orderTargets(events.filter(e => at(e) >= firstAt && (!fpr(e) || (!e.source.compensatesEventId && !compensated.has(e.id)))));
   let lastAt = firstAt;
   for (const event of ordered) {
     if (!fpr(event) && event.source.compensatesEventId && finite(event.change.delta)) {

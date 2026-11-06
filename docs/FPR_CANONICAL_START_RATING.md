@@ -147,3 +147,36 @@ lint and both build modes. The regression DB double throws on non-read methods.
 Any canonical read/auth failure, source drift, or unresolved historical ambiguity
 stops that operation. Stopping this dry-run requires no rollback: it never writes
 ratings, events, fences, snapshots, indexes, or provider queues.
+
+## Authorized correction application
+
+The separate `apply_fpr_canonical_correction.mjs` runner supports prepare, rehearse,
+apply and postcheck. Build it with `build_fpr_correction_runner.mjs`; the bundle pins
+the exact nine installed worker formula/replay dependencies. A root-owned private
+packet binds the runner, runtime manifest, flow, complete preimages, historical
+proof and all 9/74 plans. Prepare does not change database records. It requires the
+complete preview and checks every per-source start, match delta and target against
+worker output. Multiple roster aliases for one canonical identity stop preparation.
+
+The operation inherits FD9 for the real common worker lock. Both FPR automation
+switches must be paused for rehearsal/apply. The installed compatible worker must
+be active. Rehearsal executes the same full transaction and aborts; apply requires
+its matching durable receipt. One bounded transaction writes all nine top-level
+`fprCanonicalStartCorrection` records, immutable compensation/correction events,
+reconciliation, 74 canonical/compatibility projections and provider outbox entries.
+An error before commit aborts the whole cohort. No provider delivery runs here.
+
+Correction metadata binds the original rating inputs and legacy exclusions. The
+worker clones the original frozen protocol and substitutes starts only in memory.
+Corrections use that approved start as their displayed before value. Receipt-backed
+relative order resolves the pure equal-time target group without changing timestamps.
+A stale correction becomes a protected ambiguous source; it never falls back to the
+old frozen input. Host timestamps and broadcast metadata do not invalidate it.
+
+Postcheck verifies original and appended immutable events, all current/compatibility
+states, exact correction metadata, unchanged sports inputs and zero retry events,
+then refreshes the nine display projections. Keep dispatch paused until it passes.
+A lost commit acknowledgement is recovered by postcheck, never by blindly repeating
+apply. Packet and receipts stay on the server. After commit, recovery must retain a
+correction-aware runtime; an old module rollback would reintroduce the defect.
+Data reversal requires reviewed compensating events, never deletion of the ledger.

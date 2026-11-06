@@ -52,3 +52,16 @@ test('fixed results dependency is hash-bound and missing imports fail before pub
   assert.equal(sha256(fs.readFileSync(path.join(f.outputRoot, fprLevelResultsPath))), f.contract.sourceResultsSha256);
   assert.equal(fs.statSync(path.join(f.outputRoot, fprLevelResultsPath)).mode & 0o777, 0o644);
 });
+
+test('fixed replay upgrade requires both preimage and source hashes', t => {
+  const f=fixture(t),relative='src/services/player-rating/fprRatingReplay.ts';
+  for(const root of [f.baselineRoot,f.sourceRoot])fs.mkdirSync(path.dirname(path.join(root,relative)),{recursive:true});
+  fs.writeFileSync(path.join(f.baselineRoot,relative),'old replay');fs.writeFileSync(path.join(f.sourceRoot,relative),'new replay');
+  const manifestPath=path.join(f.baselineRoot,'release-manifest.json'),manifest=JSON.parse(fs.readFileSync(manifestPath));
+  manifest.files.push({path:relative,sha256:sha256('old replay')});const bytes=JSON.stringify(manifest);fs.writeFileSync(manifestPath,bytes);
+  f.contract.baselineManifestSha256=sha256(bytes);f.contract.sourceReplaySha256=sha256('new replay');
+  assert.throws(()=>buildFprLevelModuleUpgrade(f),/Hash mismatch/);
+  assert.equal(fs.existsSync(f.outputRoot),false);
+  f.contract.baselineReplaySha256=sha256('old replay');
+  assert.deepEqual(buildFprLevelModuleUpgrade(f).changedFiles,[fprLevelModulePath,relative]);
+});

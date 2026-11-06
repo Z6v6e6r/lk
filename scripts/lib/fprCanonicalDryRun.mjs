@@ -187,5 +187,6 @@ export async function readFprCanonicalDryRun(db, rootId, capturedAt=new Date().t
   };
   const before=await collect();const report=planFprCanonicalDryRun({...before,rootId,capturedAt});const after=await collect();
   if(before.fingerprint!==after.fingerprint)throw Error('FPR_DRY_RUN_PREIMAGE_CHANGED');
+  if (options.captureInputs) options.captureInputs(before);
   return {...report,preimageSha256:before.fingerprint};
 }

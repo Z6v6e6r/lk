@@ -248,3 +248,47 @@ test('historical level snapshots need no new award and retain sports, state and 
       assert.equal(skipped.sourceChanged, 1);
     } finally { await db.dropDatabase(); await client.close(); }
   });
+
+test('canonical correction cohort shares one transaction: mid-cohort abort, commit, display and zero retry',
+  {skip:uri?false:'Run scripts/run_fpr_level_mongo_tests.mjs',timeout:60000},async()=>{
+    const {fprCorrectionSourceHash}=await import('../lib/fprLevelLedger.mjs');
+    const client=new MongoClient(uri),db=client.db(`test_fpr_correction_${crypto.randomBytes(8).toString('hex')}`);
+    try{
+      await client.connect();const state=ratingFixture(8,7);
+      const document={_id:'synthetic',tournamentId:state.tournamentId,tournamentType:'fpr_6x25',participants:state.players,
+        ...fprProjection(state,{sourceExerciseId:'synthetic-source'})};
+      await db.collection('tournaments').insertOne(document);
+      let context=await loadFprLevelContext(db,config);
+      for(const p of state.players)await applyFprPlayerPlan(db,client,p.id,context,now);
+      const backup={};for(const name of ['tournaments','rating_events','player_rating_state','player_ratings','rating_projection_outbox'])
+        backup[name]=await db.collection(name).find({}).toArray();
+      const correction={version:1,policy:'cup-canonical-start-correction-v1',operationId:'synthetic',previewSha256:'a'.repeat(64),
+        sourceSha256:fprCorrectionSourceHash(document),legacySha256:null,rows:state.players.map(p=>({id:p.id,start:p.level+0.5,orderedAfterSourceIds:[]}))};
+      for(const abort of [true,false]){
+        const session=client.startSession();session.startTransaction();
+        try{
+          await db.collection('tournaments').updateOne({_id:document._id},{$set:{fprCanonicalStartCorrection:correction}},{session});
+          context=await loadFprLevelContext(db,config,session);
+          for(const p of state.players){
+            await applyFprPlayerPlan(db,client,p.id,context,'2026-11-06T10:00:00Z',null,session);
+            if(abort&&p.id===state.players[1].id)throw Error('synthetic failure midway');
+          }
+          await session.commitTransaction();
+        }catch(e){await session.abortTransaction();if(!abort)throw e;}finally{await session.endSession();}
+        if(abort)for(const [name,rows]of Object.entries(backup))assert.deepEqual(await db.collection(name).find({}).toArray(),rows);
+      }
+      context=await loadFprLevelContext(db,config);
+      for(const p of state.players)assert.equal((await buildFprPlayerPlan(db,p.id,context,'2026-11-06T11:00:00Z')).events.length,0);
+      await projectFprLevelResults(db,context,'2026-11-06T11:00:00Z',false);
+      const stored=await db.collection('tournaments').findOne({_id:document._id});
+      assert.deepEqual(stored.params.fpr6x25,state);
+      assert.ok(stored.fprLevelResults.rows.every(r=>r.status==='applied'&&r.before===state.players.find(p=>p.id===r.id).level+0.5));
+      // Non-rating host metadata must not invalidate a durable correction input.
+      await db.collection('tournaments').updateOne({_id:document._id},{$set:{updatedAt:'later', 'params.broadcast':{enabled:true}}});
+      assert.equal((await loadFprLevelContext(db,config)).ambiguous.length,0);
+      // A rating source edit blocks only this source and never re-awards the frozen values.
+      await db.collection('tournaments').updateOne({_id:document._id},{$set:{'params.K':0.9}});
+      const stale=await loadFprLevelContext(db,config);assert.deepEqual(stale.ambiguous,['synthetic-source']);
+      assert.equal((await buildFprPlayerPlan(db,'p0',stale,now)).events.length,0);
+    }finally{await db.dropDatabase();await client.close();}
+  });

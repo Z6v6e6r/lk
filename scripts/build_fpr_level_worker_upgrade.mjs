@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
 export const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 export const fprLevelModulePath = 'scripts/lib/fprLevelLedger.mjs';
+export const fprLevelReplayPath = 'src/services/player-rating/fprRatingReplay.ts';
 export const fprLevelResultsPath = 'src/services/player-rating/fprLevelResults.ts';
 const checked = (root, relative, expected) => {
   if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).some(p => !p || p === '.' || p === '..')) throw Error('Unsafe path');
@@ -36,6 +37,11 @@ export function buildFprLevelModuleUpgrade({ baselineRoot, sourceRoot, outputRoo
     files.set(fprLevelResultsPath, checked(sourceRoot, fprLevelResultsPath, contract.sourceResultsSha256));
     if (!beforeResults || sha256(beforeResults) !== contract.sourceResultsSha256) changedFiles.push(fprLevelResultsPath);
   }
+  if (contract.sourceReplaySha256) {
+    checked(baselineRoot, fprLevelReplayPath, contract.baselineReplaySha256);
+    files.set(fprLevelReplayPath, checked(sourceRoot, fprLevelReplayPath, contract.sourceReplaySha256));
+    if (contract.baselineReplaySha256 !== contract.sourceReplaySha256) changedFiles.push(fprLevelReplayPath);
+  }
   if (contract.baselineModuleSha256 === contract.sourceModuleSha256) throw Error('Module unchanged');
   for (const file of changedFiles) for (const match of files.get(file).toString('utf8').matchAll(/\bfrom\s*["'](\.[^"']+)["']/g)) {
     const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
@@ -51,7 +57,7 @@ export function buildFprLevelModuleUpgrade({ baselineRoot, sourceRoot, outputRoo
     fs.writeFileSync(target, bytes, { mode }); fs.chmodSync(target, mode);
   }
   const next = { ...manifest, gitSha: contract.sourceCommit, releaseId: path.basename(outputRoot), generatedAt: new Date().toISOString(), dirtyWorktree: false,
-    composition: { kind: 'fpr-personal-level-upgrade-v1', baselineManifestSha256: contract.baselineManifestSha256, baselineModuleSha256: contract.baselineModuleSha256, sourceModuleSha256: contract.sourceModuleSha256, sourceResultsSha256: contract.sourceResultsSha256, changedFiles },
+    composition: { kind: 'fpr-personal-level-upgrade-v1', baselineManifestSha256: contract.baselineManifestSha256, baselineModuleSha256: contract.baselineModuleSha256, sourceModuleSha256: contract.sourceModuleSha256, sourceResultsSha256: contract.sourceResultsSha256, sourceReplaySha256: contract.sourceReplaySha256, changedFiles },
     files: [...files].map(([file, bytes]) => ({ path: file, sha256: sha256(bytes) })) };
   fs.writeFileSync(path.join(outputRoot, 'release-manifest.json'), JSON.stringify(next, null, 2) + '\n', { mode: 0o644 });
   fs.chmodSync(path.join(outputRoot, 'release-manifest.json'), 0o644);
