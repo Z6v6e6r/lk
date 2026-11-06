@@ -134,7 +134,7 @@ try {
     durable('packet.ejson',packet);const packetSha256=sha(fs.readFileSync(path.join(operation,'packet.ejson')));
     durable('prepared.ejson',{packetSha256,runnerSha,at:now});
     console.log(JSON.stringify({ok:true,mode,operation,packetSha256,packetBytes:Buffer.byteLength(bytes),summary:report.summary,
-      events:plans.reduce((n,p)=>n+p.events.length,0),changed:plans.filter(p=>p.next?.ratingNumeric!==p.current.ratingNumeric).length,privateDataExported:false}));
+      events:plans.reduce((n,p)=>n+p.events.length,0),changed:plans.filter(p=>p.next&&p.next.ratingNumeric!==p.current.ratingNumeric).length,privateDataExported:false}));
   } else {
     custody();const packet=read('packet.ejson'),prepared=read('prepared.ejson');
     if(sha(fs.readFileSync(path.join(operation,'packet.ejson')))!==prepared.packetSha256||packet.runnerSha!==runnerSha
@@ -147,7 +147,7 @@ try {
         if(!rehearsal.ok||rehearsal.mode!=='rehearse'||rehearsal.committed!==false||rehearsal.packetSha256!==prepared.packetSha256)
           throw Error('FPR_CORRECTION_REHEARSAL_REQUIRED');
       }
-      const session=client.startSession();let results=[];
+      const session=client.startSession();let results=[],rehearsalContext;
       durable(`${mode}-intent.ejson`,{packetSha256:prepared.packetSha256,at:now});
       try {
         session.startTransaction({readConcern:{level:'snapshot'},writeConcern:{w:'majority'},readPreference:'primary'});
@@ -158,16 +158,21 @@ try {
         for(let i=0;i<packet.backups.length;i++) {
           const before=packet.backups[i],current=await db.collection('tournaments').findOne({_id:before._id},{session});
           // Preserve a display/fence refresh while requiring every semantic field unchanged.
-          const r=await db.collection('tournaments').updateOne(exact(current),{$set:{fprCanonicalStartCorrection:packet.corrected[i].fprCanonicalStartCorrection}},{session});
+          const r=await db.collection('tournaments').updateOne(exact(current),{$set:{fprCanonicalStartCorrection:packet.corrected[i].fprCanonicalStartCorrection},$unset:{fprLevelResults:''}},{session});
           if(r.modifiedCount!==1)throw Error('FPR_CORRECTION_SOURCE_CAS');
         }
-        const context=await loadFprLevelContext(db,{enabled:true,unratedStartLevel:1},session);
+        const context=await loadFprLevelContext(db,{enabled:true,unratedStartLevel:1},session);rehearsalContext=context;
         for(const expected of packet.plans) {
           const fresh=await buildFprPlayerPlan(db,expected.clientId,context,packet.preparedAt,session);checkPlan(fresh,expected);
           results.push(await applyFprPlayerPlan(db,client,expected.clientId,context,packet.preparedAt,expected.fingerprint,session));
         }
         if(mode==='rehearse')await session.abortTransaction();else await session.commitTransaction();
       }catch(e){if(session.inTransaction())await session.abortTransaction();throw e;}finally{await session.endSession();}
+      if(mode==='rehearse'){
+        for(const before of packet.backups){const actual=await db.collection('tournaments').findOne({_id:before._id});
+          if(sourcePreimageHash(actual)!==sourcePreimageHash(before))throw Error('FPR_CORRECTION_REHEARSAL_SOURCE_DRIFT');}
+        for(const expected of packet.plans)checkPlan(await buildFprPlayerPlan(db,expected.clientId,rehearsalContext,packet.preparedAt),expected);
+      }
       const result={ok:true,mode,packetSha256:prepared.packetSha256,players:results.length,events:results.reduce((n,r)=>n+r.events,0),
         changed:results.filter(r=>r.changed).length,committed:mode==='apply',at:new Date().toISOString(),privateDataExported:false};
       durable(mode==='rehearse'?'rehearsed.ejson':'applied.ejson',result);console.log(JSON.stringify(result));
@@ -193,6 +198,13 @@ try {
       if(mismatches||retryEvents)throw Error('FPR_CORRECTION_POSTCHECK_MISMATCH');
       const results=await projectFprLevelResults(db,{...context,selected:new Map([...context.selected].filter(([,s])=>packet.backups.some(d=>String(d._id)===String(s.document._id))))},now,false);
       if(results.sourceChanged)throw Error('FPR_CORRECTION_DISPLAY_SOURCE_CHANGED');
+      for(const tournament of packet.report.tournaments){
+        const actual=await db.collection('tournaments').findOne({tournamentId:tournament.protocolId});
+        for(const r of tournament.rows){const player=actual.params.fpr6x25.players.find(p=>p.seed===r.seed);
+          const row=actual.fprLevelResults?.rows.find(row=>row.id===player.id);
+          if(row?.status!=='applied'||row.before!==r.cupStart||row.after!==r.candidateAfter
+            ||row.delta!==Number((r.candidateAfter-r.cupStart).toFixed(5)))throw Error('FPR_CORRECTION_DISPLAY_MISMATCH');}
+      }
       const result={ok:true,mode,packetSha256:prepared.packetSha256,commitRecovered:!fs.existsSync(path.join(operation,'applied.ejson')),mismatches,retryEvents,verifiedEvents,results,players:packet.plans.length,at:now,privateDataExported:false};
       durable(`postcheck-${Date.now()}.ejson`,result);console.log(JSON.stringify(result));
     }
