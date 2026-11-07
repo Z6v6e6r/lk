@@ -44,8 +44,9 @@ const CLOSURE = [
   'package.json', 'package-lock.json',
 ];
 
-// Node-RED uses non-strict Express routing: a trailing slash and letter case do not separate routes.
-const routePattern = (url) => new RegExp('^' + (url.replace(/\/+$/, '') || '/')
+// Node-RED prefixes a missing leading slash and uses non-strict Express routing: a trailing slash
+// and letter case do not separate routes.
+const routePattern = (url) => new RegExp('^' + (('/' + url.replace(/^\/+/, '')).replace(/\/+$/, '') || '/')
   .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
   .replace(/\/:[^/]+\\\?/g, '(?:/[^/]+)?')
   .replace(/\/:[^/]+/g, '/[^/]+')
@@ -119,10 +120,19 @@ export function composeGameCreatePreparationLive(liveBytes, deploymentId,
   return packet;
 }
 
+// The live onboarding table is read through the TypeScript extractor: pin the installed parser.
+function typescriptVersion() {
+  const read = (file) => JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'));
+  const locked = read('package-lock.json').packages?.['node_modules/typescript']?.version;
+  const installed = read('node_modules/typescript/package.json').version;
+  if (!locked || installed !== locked) throw new Error('Installed typescript differs from package-lock.json');
+  return installed;
+}
+
 function provenance() {
   const identity = readRepositoryProvenance(ROOT);
   if (identity.sourceDirty) throw new Error('Commit the exact CREATE preparation source before packet generation');
-  return { ...identity, sourceFiles: Object.fromEntries(CLOSURE.map((file) =>
+  return { ...identity, typescriptVersion: typescriptVersion(), sourceFiles: Object.fromEntries(CLOSURE.map((file) =>
     [file, hash(fs.readFileSync(path.join(ROOT, file)))])) };
 }
 

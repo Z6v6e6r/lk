@@ -187,17 +187,20 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
 - без записи в Mongo и провайдера, без резерва и брони.
 
 Остановить маршрут без отката flow можно только общими флагами, а это остановит и приёмник.
-Поэтому быстрый стоп — откат шага 6.
+Поэтому быстрый стоп — откат шага 7.
 
 ### План установки A2 (⚠ — отдельное согласие владельца)
 
 1. После merge в `main`: свежий pull живого flows только на чтение. Если sha ≠ `6b822364…` —
-   обновить пин после проверки, что факты выше не изменились, и пересобрать.
+   обновить пин `GAME_CREATE_LIVE_SOURCE_SHA256` после проверки, что факты выше не изменились.
+   Это изменение исходников: новый коммит, CI и ревью, затем пересобрать.
 2. `node scripts/prepare_game_create_preparation_live.mjs /abs/workspace /abs/new/out`.
    Затем LIVE-тесты с этой копией.
 3. ⚠ Stage на сервере: кандидат, контракт и runner.
-4. ⚠ `preflight --deployment-id game-create-preparation-<sha12>`: `ok`, 0 изменений, 8 добавлений.
-5. ⚠ `apply --stamp <stamp>`: бэкап, атомарная запись, рестарт `node-red`, lease 15 мин.
+4. ⚠ `node <stage>/deploy_reviewed_flow_147_remote.mjs preflight --candidate <stage>/candidate.flow.json --contract <stage>/contract.json --deployment-id game-create-preparation-<sha12>`:
+   `ok`, 0 изменений, 8 добавлений.
+5. ⚠ `node <stage>/deploy_reviewed_flow_147_remote.mjs apply --candidate <stage>/candidate.flow.json --contract <stage>/contract.json --deployment-id game-create-preparation-<sha12> --stamp YYYYMMDDTHHMMSS+0000`:
+   бэкап `flows-pre-<id>-<stamp>.json` и `contract-<id>-<stamp>.json`, атомарная запись, рестарт `node-red`, lease 15 мин.
 6. Проверка:
    - readback = кандидат;
    - `POST /lk/integrations/v1/game-create-preparations` без подписи → 401

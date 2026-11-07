@@ -73,7 +73,8 @@ test('admin credential source must be an active node', () => {
 test('receiver boundary must exist and no earlier route may shadow the new path', () => {
   const noReceiver = syntheticLive().filter((n) => n.id !== 'lk_booked_operation_admission_in_20261021');
   assert.throws(() => assertLiveGameCreateFacts(noReceiver), /CREATE_LIVE_RECEIVER_MISSING/);
-  for (const url of ['/lk/integrations/v1/:resource', '/lk/integrations/*', GAME_CREATE_ROUTE + '/']) {
+  for (const url of ['/lk/integrations/v1/:resource', '/lk/integrations/*', GAME_CREATE_ROUTE + '/',
+    'lk/integrations/v1/:resource', GAME_CREATE_ROUTE.toUpperCase()]) {
     const shadow = [...syntheticLive(), { id: 'shadow', type: 'http in', z: 'tab_lk1', url, method: 'post', wires: [[]] }];
     assert.throws(() => assertLiveGameCreateFacts(shadow), /CREATE_LIVE_ROUTE_SHADOWED/, url);
   }
@@ -137,4 +138,15 @@ liveTest('LIVE: candidate functions stay closed without flags, delegation or adm
   const bad = unsigned.run({ request: (msg) => { msg.req.headers['x-subscription-actor-delegation'] = 'a.b.c'; } });
   assert.equal(bad.statusCode, 401);
   assert.equal(unsigned.calls.length, 0);
+});
+
+test('signed dot-segment provider ids are refused before any provider read', () => {
+  for (const id of ['.', '..', '.hidden']) {
+    for (const claim of ['provider_room_id', 'provider_station_id', 'provider_client_id']) {
+      const h = new Harness();
+      const r = h.run({ claims: { [claim]: id } });
+      assert.ok(r.statusCode >= 400 && r.statusCode < 500, claim + '=' + id);
+      assert.equal(h.calls.length, 0, claim + '=' + id);
+    }
+  }
 });
