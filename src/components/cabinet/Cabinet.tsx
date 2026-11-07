@@ -3948,6 +3948,7 @@ export function Cabinet({
           const openInOverlay = action.label === "Играть";
           const openGroupTrainings = action.label === "Групповые тренировки";
           const openTournamentSignup = action.label === "Турниры";
+          const openTournamentsOrganizer = action.label === "Турниры" && canHostTournaments;
           const resolvedHref = openGroupTrainings
             ? resolveGroupTrainingsHref(action.href)
             : openTournamentSignup
@@ -3960,6 +3961,19 @@ export function Cabinet({
                 type="button"
                 className="quick-action-card quick-action-card-button"
                 onClick={() => handleQuickActionPlay(action)}
+              >
+                {renderActionIcon(action.label, action.icon)}
+                <span className="quick-action-label">{action.label}</span>
+              </button>
+            );
+          }
+          if (openTournamentsOrganizer) {
+            return (
+              <button
+                key={action.label}
+                type="button"
+                className="quick-action-card quick-action-card-button"
+                onClick={() => handleOpenTournaments()}
               >
                 {renderActionIcon(action.label, action.icon)}
                 <span className="quick-action-label">{action.label}</span>
