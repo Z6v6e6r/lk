@@ -1,3 +1,4 @@
+import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
 import type { SubscriptionPriceQuote, SubscriptionPriceTarget } from "../components/games/subscriptionPricePreview.ts";
@@ -2873,6 +2874,8 @@ export interface TournamentPublishedCommunity {
 }
 
 export interface TournamentHistoryRecord {
+  fprLevelResults?: FprLevelResults | null;
+  fprLevelExcludedPlayerIds?: string[] | null;
   id: string;
   tournamentId: string;
   title: string | null;
@@ -2903,6 +2906,7 @@ export interface TournamentHistoryRecord {
 }
 
 export type TournamentTypeKey =
+  | "fpr_6x25"
   | "americano"
   | "americano_padelhub"
   | "americano_classic"
@@ -5799,6 +5803,8 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
     mixed,
     organizer: organizerPayload ? normalizeTournamentHistoryParticipant(organizerPayload, 0) : null,
     params: paramsPayload,
+    fprLevelResults: value.tournamentType === "fpr_6x25" ? readFprLevelResults(paramsPayload?.fpr6x25, value.fprLevelResults, fprLevelExcludedPlayerIds(paramsPayload?.fpr6x25, value.ratingExclusions), paramsPayload?.sourceExerciseId) : null,
+    fprLevelExcludedPlayerIds: value.tournamentType === "fpr_6x25" ? fprLevelExcludedPlayerIds(paramsPayload?.fpr6x25, value.ratingExclusions) : [],
     rounds: Array.isArray(value.rounds) ? value.rounds : [],
     standings: Array.isArray(value.standings) ? value.standings : [],
     summary: summaryPayload,
@@ -5865,7 +5871,7 @@ function writeProdTournamentHistoryCache(
   });
 }
 
-async function fetchTournamentHistoryUncached(tournamentId: string): Promise<TournamentHistoryApiResult> {
+async function fetchTournamentHistoryUncached(tournamentId: string, forceRefresh = false): Promise<TournamentHistoryApiResult> {
   const base = getServ2Origin();
   const pageUrl = typeof window !== "undefined" ? window.location.href : null;
   if (shouldBlockLocalProductionTournamentHistoryRequest({
@@ -5883,11 +5889,11 @@ async function fetchTournamentHistoryUncached(tournamentId: string): Promise<Tou
     };
   }
   const result = await request<unknown>(
-    `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}`,
+    `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}${forceRefresh ? `&readback=${Date.now()}` : ""}`,
     {
       method: "GET",
       retries: 1,
-      ...(IS_DEV_RELEASE_CHANNEL
+      ...(IS_DEV_RELEASE_CHANNEL && !forceRefresh
         ? {
             cacheTtlMs: DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS,
             dedupe: true,
@@ -5914,8 +5920,9 @@ async function fetchTournamentHistoryUncached(tournamentId: string): Promise<Tou
   };
 }
 
-export async function apiFetchTournamentHistory(tournamentId: string): Promise<TournamentHistoryApiResult> {
+export async function apiFetchTournamentHistory(tournamentId: string, options?: { forceRefresh?: boolean }): Promise<TournamentHistoryApiResult> {
   const normalizedTournamentId = String(tournamentId || "").trim();
+  if (options?.forceRefresh) return fetchTournamentHistoryUncached(normalizedTournamentId, true);
   const cachedResult = !IS_DEV_RELEASE_CHANNEL
     ? readProdTournamentHistoryCache(normalizedTournamentId)
     : null;
@@ -5952,8 +5959,9 @@ export async function apiFetchTournamentHistory(tournamentId: string): Promise<T
 
 export async function apiCreateAmericanoTournament(payload: AmericanoTournamentPayload) {
   const base = getServ2Origin();
-  return request<{ ok?: boolean }>(`${base}/lk/tournaments/americano`, {
+  return request<{ ok?: boolean; tournamentId?: string; params?: Record<string, unknown> }>(`${base}/lk/tournaments/americano`, {
     method: "POST",
+    auth: payload.tournamentType === "fpr_6x25",
     retries: 1,
     body: JSON.stringify(payload),
   });
@@ -9458,6 +9466,14 @@ function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null
     ratingNumeric: normalizedRating.ratingNumeric,
     source: source ?? null,
   };
+}
+
+/** Staff-host-only canonical read. No Viva level fallback or bootstrap. */
+export async function apiFetchFprStartRatings(clientIds: string[]) {
+  return request<unknown>(`${getServ2Origin()}/lk/tournaments/fpr/start-ratings`, {
+    method: "POST", auth: true, retries: 0,
+    body: JSON.stringify({ clientIds }),
+  });
 }
 
 export async function apiFetchPadelLiveRatings(players: PadelLiveRatingRequestPlayer[]) {

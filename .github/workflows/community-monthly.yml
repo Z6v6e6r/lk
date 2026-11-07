@@ -70,6 +70,9 @@ on:
       - scripts/tests/helpers/monetarySelfLeaveFenceHarness.mjs
       - scripts/patch_nodered_monetary_self_leave_fence.mjs
       - docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md
+      - src/components/tournaments/fpr*.ts
+      - scripts/*fpr*
+      - scripts/tests/fpr*
   push:
     branches:
       - main
@@ -136,6 +139,9 @@ on:
       - scripts/tests/helpers/monetarySelfLeaveFenceHarness.mjs
       - scripts/patch_nodered_monetary_self_leave_fence.mjs
       - docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md
+      - src/components/tournaments/fpr*.ts
+      - scripts/*fpr*
+      - scripts/tests/fpr*
 permissions:
   contents: read
 concurrency:
@@ -143,6 +149,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   monthly-mongodb:
+    # MongoDB 8.0 refuses Linux >=6.19 (SERVER-121912); keep this DB test
+    # on the supported older runner kernel instead of the moving latest image.
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     services:
@@ -213,3 +221,11 @@ jobs:
           scripts/tests/monetarySelfLeaveFence.mongo.test.mjs
       - name: Test monthly Friendship custody with required real Mongo conflicts
         run: node --test scripts/tests/monthlyFriendshipCustody.test.mjs scripts/tests/monthlyFriendshipRuntime.test.mjs scripts/tests/monthlyFriendshipComposition.test.mjs scripts/tests/monthlyFriendshipCustody.mongo.test.mjs scripts/tests/monthlyFriendshipApi.test.mjs scripts/tests/monthlyFriendshipApiComposition.test.mjs scripts/tests/monthlyFriendshipApi.mongo.test.mjs
+      - name: Test community rating and FPR result compatibility
+        run: npm run test:community-rating
+      - name: Test FPR level transactions on an isolated replica set
+        run: npm run test:fpr-level-mongo
+      - name: Test tournament idle-session lifetime and unchanged ordinary idle guard
+        run: npm run test:tournament-session
+      - name: Test FPR broadcast controls and existing device safety contract
+        run: npm run test:fpr-broadcast

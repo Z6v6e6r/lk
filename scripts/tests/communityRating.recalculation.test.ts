@@ -166,14 +166,20 @@ test("collects community rating source data from published game and tournament p
     ],
     archived: { $ne: true },
   });
-  assert.deepEqual(source.tournaments.filters[0], {
+  assert.equal(source.tournaments.filters[0].archived?.$ne, true);
+  assert.deepEqual(source.tournaments.filters[0].$or?.[1], {
+    tournamentType: "fpr_6x25", "params.fpr6x25.testMode": false,
+    "params.fpr6x25.communityRating.policy": "community-tournament-v1",
+    "params.fpr6x25.communityRating.communityId": "community-1",
+    $or: [{ "params.fpr6x25.communityRating.sourceExerciseId": { $in: ["tournament-1"] } }, { tournamentId: { $in: ["tournament-1"] } }],
+  });
+  assert.deepEqual(source.tournaments.filters[0].$or?.[0], {
     $or: [
       { tournamentId: { $in: ["tournament-1"] } },
       { id: { $in: ["tournament-1"] } },
       { exerciseId: { $in: ["tournament-1"] } },
       { sourceTournamentId: { $in: ["tournament-1"] } },
     ],
-    archived: { $ne: true },
   });
   assert.equal(source.lk_training_visits.filters[0]?.archived?.$ne, true);
   assert.ok(Array.isArray(source.lk_training_visits.filters[0]?.$or));
@@ -223,14 +229,14 @@ test("collects tournament source data from stable nested tournament details and 
   assert.equal(result?.feedPosts.length, 2);
   assert.equal(result?.tournaments.length, 1);
   assert.equal(result?.visits.length, 0);
-  assert.deepEqual(source.tournaments.filters[0], {
+  assert.equal(source.tournaments.filters[0].archived?.$ne, true);
+  assert.deepEqual(source.tournaments.filters[0].$or?.[0], {
     $or: [
       { tournamentId: { $in: ["tournament-stable"] } },
       { id: { $in: ["tournament-stable"] } },
       { exerciseId: { $in: ["tournament-stable"] } },
       { sourceTournamentId: { $in: ["tournament-stable"] } },
     ],
-    archived: { $ne: true },
   });
 });
 

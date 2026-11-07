@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFprLevelIdentityHistory } from "./lib/fprLevelIdentity.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -184,7 +185,9 @@ async function loadPredecessorResult(db, result) {
   return db.collection(GAME_RESULT_COLLECTIONS.results).findOne({ id: predecessorId });
 }
 
-async function loadIdentityEvents(db, identity) {
+export async function loadIdentityEvents(db, identity) {
+  const current = await db.collection(PLAYER_RATING_COLLECTIONS.state).findOne(identityQuery(identity));
+  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId)).events;
   return db.collection(PLAYER_RATING_COLLECTIONS.events)
     .find(eventIdentityQuery(identity))
     .toArray();
