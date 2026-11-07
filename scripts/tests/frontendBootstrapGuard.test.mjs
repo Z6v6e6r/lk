@@ -32,6 +32,9 @@ test("static guard executes a clean exact runtime and exchanges nginx bytes atom
   fs.chmodSync(path.join(root, "guard"), 0o500);
   fs.writeFileSync(path.join(root, "launcher"), launcherArtifact.bytes, { mode: 0o500 });
   fs.chmodSync(path.join(root, "launcher"), 0o500);
+  fs.writeFileSync(path.join(root, "production-runtime.mjs"),
+    fs.readFileSync(new URL("../frontend_bootstrap_runtime.mjs", import.meta.url)), { mode: 0o400 });
+  fs.chmodSync(path.join(root, "production-runtime.mjs"), 0o400);
   fs.writeFileSync(path.join(root, "harness.mjs"), `
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -68,10 +71,9 @@ for (const name of ["guard", "launcher"]) {
 }
 const runtimeSource = \`import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { validateBootstrapRuntimeEnvironment } from "/input/production-runtime.mjs";
 const action = process.argv[2];
-const allowed = new Set(["PATH", "LANG", "LK_FRONTEND_BOOTSTRAP_GUARD_SHA256",
-  "LK_FRONTEND_BOOTSTRAP_GUARD_FD", "LK_FRONTEND_BOOTSTRAP_APPLY"]);
-if (Object.keys(process.env).some(key => !allowed.has(key))) process.exit(20);
+validateBootstrapRuntimeEnvironment(process.env);
 if (process.env.LK_FRONTEND_BOOTSTRAP_GUARD_SHA256 !== "\${guardSha}") process.exit(21);
 if (process.env.LK_FRONTEND_BOOTSTRAP_GUARD_FD !== "6") process.exit(26);
 try {

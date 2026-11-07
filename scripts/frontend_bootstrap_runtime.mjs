@@ -1188,6 +1188,14 @@ const parseArgs = (argv) => {
   return values;
 };
 
+export function validateBootstrapRuntimeEnvironment(environment) {
+  const allowed = new Set(["PATH", "LANG", "LK_FRONTEND_BOOTSTRAP_GUARD_SHA256",
+    "LK_FRONTEND_BOOTSTRAP_GUARD_FD", ...Object.values(CONFIRMATIONS).map(([key]) => key)]);
+  if (Object.keys(environment).some((key) => !allowed.has(key))) {
+    fail("Bootstrap runtime environment contains an unexpected variable");
+  }
+}
+
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     if (process.getuid?.() !== 0) fail("Bootstrap runtime must run as root");
@@ -1213,12 +1221,7 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
     if (process.env.LK_FRONTEND_BOOTSTRAP_GUARD_SHA256 !== verified.manifest.guard.sha256) {
       fail("Bootstrap guard authority mismatch");
     }
-    const allowedEnvironment = new Set(["PATH", "LANG", "LK_FRONTEND_BOOTSTRAP_GUARD_SHA256",
-      "LK_FRONTEND_BOOTSTRAP_GUARD_FD",
-      ...Object.keys(CONFIRMATIONS)]);
-    if (Object.keys(process.env).some((key) => !allowedEnvironment.has(key))) {
-      fail("Bootstrap runtime environment contains an unexpected variable");
-    }
+    validateBootstrapRuntimeEnvironment(process.env);
     const runtime = createFrontendBootstrapRuntime({ verified,
       guardFd: Number.parseInt(process.env.LK_FRONTEND_BOOTSTRAP_GUARD_FD || "", 10) });
     const common = {

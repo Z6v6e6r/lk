@@ -11,6 +11,7 @@ import { files } from "../frontend-release.mjs";
 import { auditFrontendBootstrapHost } from "../audit_frontend_bootstrap_host.mjs";
 import {
   createFrontendBootstrapRuntime,
+  validateBootstrapRuntimeEnvironment,
   verifyFrontendBootstrapBundle,
 } from "../frontend_bootstrap_runtime.mjs";
 import {
@@ -749,6 +750,17 @@ test("static guard pins executable hashes, lock descriptors, clean env and atomi
   assert.match(source, /CONFIRM_EXACT_BOOTSTRAP/);
   assert.match(source, /PR_SET_CHILD_SUBREAPER/);
   assert.match(source, /kill\(-child, SIGKILL\)/);
+});
+test("runtime environment allows only actual authority environment keys", () => {
+  const base = { PATH: "/usr/bin", LANG: "C", LK_FRONTEND_BOOTSTRAP_GUARD_SHA256: "a".repeat(64),
+    LK_FRONTEND_BOOTSTRAP_GUARD_FD: "6" };
+  for (const key of ["LK_FRONTEND_BOOTSTRAP_APPLY", "LK_FRONTEND_BOOTSTRAP_RECOVER",
+    "LK_FRONTEND_BOOTSTRAP_ROLLBACK", "LK_FRONTEND_BOOTSTRAP_FINALIZE"]) {
+    assert.doesNotThrow(() => validateBootstrapRuntimeEnvironment({ ...base, [key]: "confirmation" }));
+  }
+  for (const key of ["apply", "recover", "rollback", "finalize", "NODE_OPTIONS", "UNEXPECTED"]) {
+    assert.throws(() => validateBootstrapRuntimeEnvironment({ ...base, [key]: "x" }), /unexpected variable/);
+  }
 });
 test("production custody helper is available before the direct CLI entry executes", () => {
   const source = fs.readFileSync(new URL("../prepare_frontend_bootstrap_execution.mjs", import.meta.url), "utf8");
