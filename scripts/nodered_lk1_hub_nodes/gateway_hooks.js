@@ -301,6 +301,12 @@ function lk1CourtWindowStoreProof(ctx, exercise, total) {
 }
 
 // HUB_EXERCISE
+// Refuse every subscription before legacy, visit-pack and managed-price paths.
+if (isSpanishTrainingExercise(exercise)) {
+  return finishError(ctx, 409, "На индивидуальные/сплит тренировки с испанским тренером подписки не действуют. Выберите разовую оплату.", {
+    code: "SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE",
+  });
+}
 // Resolve the instance first. PRO monetary eligibility is checked only after fresh
 // actor-bound ownership below, since Viva may omit it from visit eligibility.
 const selectedOwned = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);

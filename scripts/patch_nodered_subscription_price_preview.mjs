@@ -31,9 +31,9 @@ export const PREVIEW_CANONICAL_SOURCE_SHA256 = Object.freeze({
 // closure has to publish them.
 const PREVIEW_INJECTED_EXPORTS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
   'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1PolicyKey', 'lk1DesiredPolicy', 'lk1NormalizePolicy',
-  'isProTrainingExercise', 'isProTrainingDiscountRule']);
+  'isProTrainingExercise', 'isProTrainingDiscountRule', 'isSpanishTrainingExercise']);
 const PREVIEW_INJECTED_FUNCTIONS = Object.freeze(['resolveLk1Rule', 'normalizePlanRules', 'lk1PlanRulesGlobal',
-  'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1NormalizePolicy', 'isProTrainingExercise', 'isProTrainingDiscountRule']);
+  'lk1ReadStationExclusions', 'lk1ReadBoundPolicy', 'lk1NormalizePolicy', 'isProTrainingExercise', 'isProTrainingDiscountRule', 'isSpanishTrainingExercise']);
 // Helpers the event route (group training / tournament quotes) reaches through
 // `canonical.*`. They live in the composed booking graph, not in the preview
 // node's own sources, so the closure has to declare *and* publish them: the
@@ -222,6 +222,22 @@ const proTrainingEmbedding = (declared, booking) => {
   }
   return { injected, carriesGuard };
 };
+const spanishTrainingEmbedding = (declared, booking) => {
+  const carriesGuard = String(booking).includes('SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE');
+  const source = carriesGuard ? eventPaymentSources.spanishTrainingExclusionSource()
+    : 'const isSpanishTrainingExercise = () => false;';
+  const declarations = topLevelDeclarations(source, 'spanishTrainingExclusion');
+  const injected = declarations.filter(item => !declared.has(item.name)).map(item => item.text).join('\n');
+  for (const item of declarations) {
+    const text = normalizeDeclarationText(item.text);
+    const present = declared.get(item.name);
+    if (present !== undefined && !present.includes(text)) {
+      throw new Error(`Price preview Spanish-training declaration ${item.name} differs from the installed body`);
+    }
+    declared.set(item.name, text);
+  }
+  return { injected };
+};
 const replaceEventTariffBlock = source => {
   const start = 'if (ctx.step === "lk1_event_tariff") {';
   const end = 'if (ctx.step === "lk1_operation_find") {';
@@ -321,6 +337,7 @@ export function previewSources(flow, options = {}) {
   const declared = declarationMap(helper.source);
   const rules = planRulesEmbedding(declared);
   const proTraining = proTrainingEmbedding(declared, booking);
+  const spanishTraining = spanishTrainingEmbedding(declared, booking);
   const missingReader = HUB_POLICY_READER_NAMES.filter(name => !declared.has(name));
   let reader = '';
   if (missingReader.length === HUB_POLICY_READER_NAMES.length) {
@@ -343,8 +360,8 @@ export function previewSources(flow, options = {}) {
     && lk1EvaluatorDeclarations(evaluator).has('PATRIOTS_DISCOUNT_EVENTS');
   const capabilities = `const supportsPatriotsGameScope = ${supportsPatriotsGameScope};`;
   const exported = [...new Set([...roots, ...PREVIEW_INJECTED_EXPORTS.filter(name => declared.has(name)), 'supportsPatriotsGameScope'])];
-  assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}`, declared, rules, reader, accessor);
-  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
+  assertNoUndeclaredContractNames(`${helper.source}\n${proTraining.injected}\n${spanishTraining.injected}`, declared, rules, reader, accessor);
+  const canonical = `const canonical = (() => {\n${helper.source}\n${rules.injected}\n${proTraining.injected}\n${spanishTraining.injected}\n${reader}\n${accessor}\n${capabilities}\nreturn {${exported.join(',')}}; })();`;
   const pricing = `const pricing = (() => {\n${prices.source}\nreturn { extractExactCourtPrice, extractList }; })();`;
   const usageFunction = `const canonicalUsage = msg => { const ctx = msg._subscriptionBooking;
     const { ${usageRoots.join(', ')} } = canonical;

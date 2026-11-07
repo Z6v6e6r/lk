@@ -20,6 +20,7 @@ import {
   isGamePlusTrainerSummary,
   type GroupTrainingSummary,
 } from "../../utils/groupScheduleApi";
+import { isSpanishTrainingExercise } from "../../utils/spanishTrainingExclusion";
 import { isProTraining } from "../../utils/proTrainingExclusion";
 import {
   CUSTOM_FIELD_IDS,
@@ -294,7 +295,7 @@ function getGamePlusTrainerPriceLabel(training: GroupTrainingSummary): string {
   const priceValueLabel = explicitLabel || (price && price > 0 ? String(Math.round(price)) : "");
   // A PRO training is paid at its full one-time price: the plans in the usual
   // footer label are not a way to pay for it, so they are not promised here.
-  if (isProTraining(training)) return priceValueLabel || GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL;
+  if (isProTraining(training) || isSpanishTrainingExercise(training)) return priceValueLabel || GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL;
   return [priceValueLabel || GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL, ...GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS].join("/");
 }
 

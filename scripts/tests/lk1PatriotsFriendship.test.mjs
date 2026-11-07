@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -160,6 +161,7 @@ test('the exercise hook sends Patriots money events to fresh ownership readback 
       ctx, exercise, msg: {},
       findOwnedSubscriptions: () => selectedOwned,
       isProTrainingExercise: () => false,
+      isSpanishTrainingExercise,
       isProTrainingEnergyPack: () => false,
       isTopokratyExercise: () => false,
       isTopokratyClubPack: () => false,

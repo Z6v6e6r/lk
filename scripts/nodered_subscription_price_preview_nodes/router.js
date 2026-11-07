@@ -156,6 +156,11 @@ if (ctx.step === 'groupExercise') {
   if (['CANCELLED', 'CANCELED', 'DELETED', 'FINISHED', 'COMPLETED'].includes(String(exercise.status || '').toUpperCase())) {
     return targetUnresolved('target_lifecycle');
   }
+  if (canonical.isSpanishTrainingExercise(exercise)) {
+    ctx.quotes = [];
+    ctx.done = true;
+    return out(4);
+  }
   ctx.exercise = exercise;
   const proTraining = eventRoute.category === 'group_training' && canonical.isProTrainingExercise(exercise);
   // The direction decides whether this event is the club direction whose co-pay is charged

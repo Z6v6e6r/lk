@@ -37,6 +37,10 @@ export function topokratyExclusionSource() {
   }
   return source.replace(/^export /gm, '');
 }
+export function spanishTrainingExclusionSource() {
+  return fs.readFileSync(new URL('./spanishTrainingExclusion.mjs', import.meta.url), 'utf8')
+    .replace(/^export /gm, '');
+}
 export function hubGatewaySource() {
   const source = fs.readFileSync(new URL('../nodered_lk1_hub_nodes/gateway.js', import.meta.url), 'utf8');
   const marker = '// EVENT_PAYMENT_ROUTES';
@@ -53,7 +57,7 @@ export function hubGatewaySource() {
     .test(source)) {
     throw new Error('Gateway must not redeclare the embedded Topokraty exclusion symbols');
   }
-  return planRulesSource() + proTrainingExclusionSource() + topokratyExclusionSource()
+  return planRulesSource() + proTrainingExclusionSource() + topokratyExclusionSource() + spanishTrainingExclusionSource()
     + source.replace(marker, () => eventPaymentRoutesSource());
 }
 

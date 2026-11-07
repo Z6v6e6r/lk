@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -127,7 +128,7 @@ test("Ariadna does not advertise a subscription purchase for a discarded benefit
   visit(source);
   assert.ok(expression, "exercise the actual subscription-purchase visibility condition");
   for (const directionId of [6538, 1001]) {
-    const dependencies = { checkout: { clientSubscriptions: [] }, proTrainingSelected: false, topokratyExcluded: false,
+    const dependencies = { checkout: { clientSubscriptions: [] }, proTrainingSelected: false, topokratyExcluded: false, spanishTrainingSelected: false,
       selectedTraining: { directionId }, subscriptionOffer: { owner: "synthetic-actor", show: true }, phone: "synthetic-actor",
       discountPending: false, currentDiscountQuotes: [], hasGroupTrainingSubscriptionEvidence: () => false };
     const visible = new Function(...Object.keys(dependencies), `return ${expression.getText(source)};`)(...Object.values(dependencies));
@@ -150,7 +151,7 @@ function checkout(dependencies: Record<string, unknown>) {
   const source = ts.createSourceFile("api.ts", fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const node = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === "apiCreateTournamentVivaTransaction")!;
   const code = ts.transpileModule(node.getText(source).replace(/^export /, ""), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(dependencies), `const LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED = false; ${code}; return apiCreateTournamentVivaTransaction;`)(...Object.values(dependencies));
+  return new Function("isSpanishTrainingExercise", ...Object.keys(dependencies), `const LK1_MONEY_DISCOUNT_CHECKOUT_ENABLED = false; ${code}; return apiCreateTournamentVivaTransaction;`)(isSpanishTrainingExercise, ...Object.values(dependencies));
 }
 test("owned Energy signup sends the original product through subscription booking without a transaction", async () => {
   const calls: unknown[] = [];

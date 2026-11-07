@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -16,7 +17,7 @@ const compiled = ts.transpileModule(entry.getText(source).replace(/^export /, ''
 }).outputText;
 async function invoke(params, response = { error: { status: 503, message: 'Fixture unavailable' }, status: 503 }, enabled = true) {
   const calls = []; let closed = false;
-  const dependencies = { ...helpers,
+  const dependencies = { ...helpers, isSpanishTrainingExercise,
     TRIAL_GROUP_CHECKOUT_ENABLED: enabled,
     API_BASE: 'https://viva.example.test', TENANT_KEY: 'fixture',
     getServ2Origin: () => 'https://lk.example.test',
@@ -130,4 +131,15 @@ test('eligibility precheck sends only the target to the authenticated read-only 
   assert.equal(calls[0][0], '/lk/trial-group-bookings');
   assert.deepEqual(calls[0][1], { baseUrl: 'https://lk.example.test', method: 'POST', auth: true,
     retries: 0, cache: 'no-store', body: JSON.stringify({ action: 'check', exerciseId: 'fixture-event' }) });
+});
+
+test('Spanish individual/split training preserves one-time checkout and its separate promo code', async () => {
+  const target = params(false);
+  target.exercise.direction = { name: 'Индивидуальная/сплит тренировка Испанский тренер 🇪🇸' };
+  target.promoCode = 'FIXTURE-PROMO';
+  const { calls, result } = await invoke(target, { error: { status: 400, message: 'Fixture validation' }, status: 400 }, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://viva.example.test/end-user/api/v2/fixture/transactions');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(result.status, 400, 'the request reaches the existing provider path instead of the subscription refusal');
 });

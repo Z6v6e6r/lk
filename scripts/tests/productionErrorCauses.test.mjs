@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 import './authConsentDenialRetry.test.mjs';
 import './lk1ErrorSourceFixes.test.mjs';
 import assert from 'node:assert/strict';
@@ -82,7 +83,7 @@ function exercisePreview(change = {}, category = 'TOURNAMENT', status = 200) {
     startsAt: '2099-01-01T10:00:00+03:00', duration: 90, roomId: 'fixture-room', studioId: 'fixture-studio', type: 1, ...change };
   const canonical = { isObj: x => x && typeof x === 'object', identityMoneyOwned() {}, unwrapRecord: x => x, eventStartsAt: x => x?.startsAt,
     eventDurationMinutes: x => x?.duration, resolveCategory: x => x.category,
-    exerciseRoomId: x => x.roomId, managedExternalEventTypeId: x => x.type, isProTrainingExercise: () => false };
+    exerciseRoomId: x => x.roomId, managedExternalEventTypeId: x => x.type, isProTrainingExercise: () => false, isSpanishTrainingExercise };
   const ctx = { step: 'groupExercise', exerciseId: 'fixture-event', eventCategory: category, tenantKey: 'fixture', startedAt: Date.now(), target: {} };
   const msg = { statusCode: status, payload: change === null ? null : exercise, _subscriptionPricePreview: ctx };
   const ports = new Function('msg', 'canonical', router)(msg, canonical);
