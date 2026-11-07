@@ -79,6 +79,12 @@ Read specialized documents only when their domain trigger applies:
 - Do not change business logic while doing UI-only work.
 - Validate overlay module lifecycle: mount, unmount, close, and script loading.
 
+## Загрузка и проверка страниц ЛК
+
+- Для страниц ЛК использовать существующий проверенный локальный туннель либо Яндекс Браузер с прямым подключением в обход VPN.
+- Перед smoke-проверкой подтвердить фактический маршрут в выбранном браузере и успешную загрузку ЛК. Доступность через CLI или наличие proxy-настройки сами по себе не подтверждают маршрут браузера.
+- Не использовать обычный VPN-маршрут встроенного браузера как основание считать ЛК недоступным. Не менять системные маршруты, DNS и VPN других приложений ради этой проверки.
+
 ## Node-RED Rules
 
 - Prefer editing source functions in `scripts/nodered_*_nodes/` and patch/build scripts.

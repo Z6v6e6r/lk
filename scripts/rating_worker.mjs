@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { recoverStationMessageOutbox } from './lib/stationMessageOwner.mjs';
 import { processCommunityPolicies } from './lib/communityPolicyProjection.mjs';
+import { readFprLevelActivation, loadFprLevelContext, processFprLevelLedger, processFprProjectionOutbox } from './lib/fprLevelLedger.mjs';
+import { readFprLevelIdentityHistory } from "./lib/fprLevelIdentity.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -227,7 +229,9 @@ async function loadStateForIdentity(db, identity) {
   return db.collection(PLAYER_RATING_COLLECTIONS.state).findOne({ $or: clauses });
 }
 
-async function loadEventsForIdentity(db, identity) {
+export async function loadEventsForIdentity(db, identity) {
+  const current = await loadStateForIdentity(db, identity);
+  if (current?.fprLevelFrontier) return (await readFprLevelIdentityHistory(db, current.clientId)).events;
   const clauses = [
     { "player.key": identity.playerKey },
     ...(identity.clientId ? [{ "player.clientId": identity.clientId }] : []),
@@ -316,7 +320,7 @@ async function resolveCompatibilityProjectionTarget(db, identity) {
   return selectCompatibilityProjectionTarget(candidates, identity);
 }
 
-async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents = []) {
+export async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents = []) {
   const current = await loadStateForIdentity(db, identity);
   const mergedIdentity = {
     playerKey: identity.clientId ? `client:${identity.clientId}` : (current?.playerKey || identity.playerKey),
@@ -329,6 +333,7 @@ async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents 
     ...persistedEvents,
     ...pendingEvents.filter((event) => eventMatchesIdentity(event, mergedIdentity)),
   ].map((event) => [event.id, event])).values()];
+  if (current?.fprLevelFrontier) Object.assign(mergedIdentity, { playerKey: current.playerKey, clientId: current.clientId, phoneNorm: current.phoneNorm });
   const replay = replayPlayerRatingEvents(events);
   if (!replay) return { changed: false, reason: "NO_BASELINE", identity: mergedIdentity };
 
@@ -347,6 +352,7 @@ async function projectIdentityState(db, identity, nowIso, dryRun, pendingEvents 
       ratingNumeric: events.find((event) => event.id === replay.baselineEventId)?.change?.after ?? null,
     },
     identityAliases: {
+      ...(current?.fprLevelFrontier ? current.identityAliases : {}),
       clientIds: unique([
         mergedIdentity.clientId,
         ...asArray(current?.identityAliases?.clientIds),
@@ -480,7 +486,7 @@ async function enqueueProjection(db, projection, nowIso, dryRun) {
   return true;
 }
 
-export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowIso, dryRun }) {
+export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowIso, dryRun, excludedTournamentIds = new Set() }) {
   const since = new Date(Math.max(Date.parse(sinceIso || notBeforeIso), Date.parse(notBeforeIso))).toISOString();
   const tournaments = await db.collection("tournaments").find({
     $or: [
@@ -509,6 +515,7 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
 
   for (const tournament of tournaments) {
     const tournamentId = resolveTournamentId(tournament);
+    if (tournament.tournamentType === 'fpr_6x25' || excludedTournamentIds.has(tournamentId)) continue;
     const finishedAt = resolveTournamentFinishedAt(tournament);
     const changedAt = toIso(tournament.updatedAt, nowIso);
     if (!tournamentId) continue;
@@ -1010,7 +1017,8 @@ export async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
     db.collection("lk_communities").find(changedFilter, { projection: { id: 1, communityId: 1 } }).toArray(),
     db.collection("lk_community_feed").find(changedFilter, { projection: { communityId: 1, relatedGameId: 1, relatedTournamentId: 1, tournamentId: 1, details: 1 } }).toArray(),
     db.collection("lk_games").find(changedFilter, { projection: { id: 1, gameId: 1 } }).toArray(),
-    db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1 } }).toArray(),
+    db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1,
+      tournamentType: 1, "params.fpr6x25.testMode": 1, "params.fpr6x25.communityRating": 1 } }).toArray(),
     db.collection("lk_training_visits").find(changedFilter, { projection: { communityId: 1, relatedCommunityId: 1, studioId: 1 } }).toArray(),
     db.collection(PLAYER_RATING_COLLECTIONS.state).find(changedFilter, { projection: { clientId: 1, phoneNorm: 1 } }).toArray(),
     db.collection(PLAYER_RATING_COLLECTIONS.events).find(changedFilter, { projection: { player: 1, source: 1 } }).toArray(),
@@ -1018,6 +1026,12 @@ export async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
   const ids = new Set();
   communities.forEach((row) => ids.add(toStr(row.id || row.communityId)));
   feed.forEach((row) => ids.add(toStr(row.communityId)));
+  tournaments.forEach(row => {
+    const state = row.params?.fpr6x25, binding = state?.communityRating;
+    if (row.tournamentType === "fpr_6x25" && state?.testMode === false && binding?.policy === "community-tournament-v1") {
+      ids.add(toStr(binding.communityId));
+    }
+  });
   const gameIds = unique(games.map((row) => toStr(row.id || row.gameId)));
   const tournamentIds = unique(tournaments.map((row) => toStr(row.tournamentId || row.exerciseId || row.id)));
   events.forEach((event) => {
@@ -1115,6 +1129,7 @@ async function recalculateCommunities(db, communityIds, nowIso, dryRun) {
 
 async function processProjectionOutbox(db, projectionUrl, nowIso, dryRun) {
   const rows = await db.collection(PLAYER_RATING_COLLECTIONS.projectionOutbox).find({
+    fprProjection: { $ne: true },
     status: { $in: ["PENDING", "FAILED_RETRYABLE"] },
     nextAttemptAt: { $lte: nowIso },
     attempts: { $lt: 30 },
@@ -1235,12 +1250,16 @@ async function runWorker() {
         startedAtTs: Date.parse(startedAt),
       });
     }
+    const fprConfig = readFprLevelActivation();
+    const fprContext = await loadFprLevelContext(db, fprConfig);
     const ledger = await processTournamentLedger(db, {
       sinceIso: mode === "full" ? notBeforeIso : overlapStart,
       notBeforeIso,
       nowIso: startedAt,
       dryRun,
+      excludedTournamentIds: fprContext.protectedIds,
     });
+    const fprLedger = await processFprLevelLedger(db, client, { context: fprContext, config: fprConfig, nowIso: startedAt, dryRun });
     const communityPolicies = await processCommunityPolicies(db, { sinceIso: mode === 'full' ? notBeforeIso : overlapStart, nowIso: startedAt, dryRun });
     const stationMessages = await recoverStationMessageOutbox(db, { dryRun, maxCommunities: 50, maxMessages: 100, deadlineMs: 10000 });
     const timeForFriendsEnrollment = await processTimeForFriendsAutoEnrollments(db, {
@@ -1264,6 +1283,8 @@ async function runWorker() {
     timeForFriendsEnrollment.affectedCommunityIds.forEach((communityId) => communityIds.push(communityId));
     const uniqueCommunityIds = unique(communityIds);
     const community = await recalculateCommunities(db, uniqueCommunityIds, startedAt, dryRun);
+    const fprVivaProjection = fprConfig.dispatchEnabled
+      ? await processFprProjectionOutbox(db, projectionUrl, startedAt, dryRun) : { enabled: false };
     const vivaProjection = await processProjectionOutbox(db, projectionUrl, startedAt, dryRun);
     const finishedAt = new Date().toISOString();
     const summary = {
@@ -1278,6 +1299,8 @@ async function runWorker() {
       watermarkBefore,
       watermarkAfter: startedAt,
       ledger,
+      fprLedger,
+      fprVivaProjection,
       timeForFriendsEnrollment,
       communityPolicies,
       stationMessages,

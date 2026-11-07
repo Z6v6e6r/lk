@@ -15,6 +15,7 @@ export const leagueAssignmentKey = (fact: Pick<CommunityRatingFact, 'communityId
 const numeric = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 function eventLevel(fact: CommunityRatingFact, events: Record<string, unknown>[], records: Record<string, unknown>[]): number | null {
+  if (fact.eventType === "tournament" && fact.sourceProtocolId && Number.isFinite(fact.sourceLevelAtEvent)) return fact.sourceLevelAtEvent!;
   const ledger = events.filter(event => fact.ratingEventIds.includes(String(event.id ?? event._id)))
     .sort((a, b) => String(a.occurredAt).localeCompare(String(b.occurredAt)) || String(a.id).localeCompare(String(b.id)));
   for (const event of ledger) { const before = numeric(object(object(event.source).tournamentRatingSnapshot).before) ?? numeric(object(event.change).before); if (before !== null) return before; }

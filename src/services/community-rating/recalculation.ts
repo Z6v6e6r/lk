@@ -376,8 +376,14 @@ export async function collectCommunityRatingSourceData(
     archived: { $ne: true },
   });
   const tournaments = await findAll(collections.tournaments, {
-    ...idOrFilter(tournamentIds, ["tournamentId", "id", "exerciseId", "sourceTournamentId"]),
     archived: { $ne: true },
+    $or: [
+      idOrFilter(tournamentIds, ["tournamentId", "id", "exerciseId", "sourceTournamentId"]),
+      { tournamentType: "fpr_6x25", "params.fpr6x25.testMode": false,
+        "params.fpr6x25.communityRating.policy": "community-tournament-v1",
+        "params.fpr6x25.communityRating.communityId": normalizedCommunityId,
+        $or: [{ "params.fpr6x25.communityRating.sourceExerciseId": { $in: tournamentIds } }, { tournamentId: { $in: tournamentIds } }] },
+    ],
   });
   const visits = await findAll(collections.lk_training_visits, buildVisitFilter({
     communityId: normalizedCommunityId,

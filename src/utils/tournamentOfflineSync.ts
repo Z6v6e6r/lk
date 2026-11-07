@@ -1,3 +1,4 @@
+import { tournamentIdentityKeys } from "./tournamentEventIdentity";
 import { apiUpdateAmericanoResults, type AmericanoResultsPayload, type AmericanoResultsResponse, type Exercise, type TournamentHistoryRecord, type UserProfileType, type ApiResult } from "./apiClient";
 import {
   computeTournamentOfflineRetryDelayMs,
@@ -265,7 +266,9 @@ export async function saveCachedTournamentHistory(history: TournamentHistoryReco
     history: safeJsonClone(history),
     updatedAt: buildTimestamp(),
   };
-  await writeOne(HISTORY_STORE, record);
+  for (const key of tournamentIdentityKeys(history)) {
+    await writeOne(HISTORY_STORE, { ...record, tournamentId: key });
+  }
 }
 
 export async function loadCachedTournamentHistory(tournamentId: string): Promise<TournamentHistoryRecord | null> {
