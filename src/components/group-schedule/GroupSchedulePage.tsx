@@ -23,6 +23,7 @@ import { isGamePlusTrainerSummary } from "../../utils/groupScheduleModel";
 import { isTrialGroupTraining } from "../../utils/trialGroupTraining";
 import { resolveTrialGroupEligibilityCheck, type TrialGroupEligibilityDecision } from "../../utils/trialGroupEligibilityCheck";
 import { TRIAL_GROUP_CHECKOUT_ENABLED } from "../../consts/api_config";
+import { isSpanishTrainingExercise } from "../../utils/spanishTrainingExclusion";
 import { isProTraining } from "../../utils/proTrainingExclusion";
 import { isTopokratyClubPack, isTopokratyExercise } from "../../utils/topokratyExclusion";
 import { getProEnergyPackName, getGroupScheduleOwnedPacks, getGroupScheduleOwnedSubscriptions } from "../../utils/groupScheduleOwnedPacks";
@@ -394,8 +395,8 @@ export default function GroupSchedulePage({
   const typeFilterRef = useRef<HTMLDivElement | null>(null);
   const typeFilterListboxId = useId();
   const groupSchedulePromoSectionId = useId();
-  // A PRO training is outside every subscription benefit: the screen requests no quote,
-  // offers no owned pack and no package purchase, and the server refuses the booking.
+  const spanishTrainingSelected = isSpanishTrainingExercise(selectedDetail);
+  // PRO retains server-confirmed monetary discounts and owned Energy packs.
   const proTrainingSelected = useMemo(
     () => Boolean(selectedDetail && isProTraining(selectedDetail)),
     [selectedDetail],
@@ -609,7 +610,7 @@ export default function GroupSchedulePage({
     const resolvedFor = `${selectedId}:${actorId}`;
     // Topokraty events keep their separate club-product rule. PRO training quotes
     // are requested normally and only the server's confirmed 50% price is shown.
-    if (topokratyExcluded) {
+    if (spanishTrainingSelected || topokratyExcluded) {
       setDiscountResolvedFor(resolvedFor);
       return;
     }
@@ -637,7 +638,7 @@ export default function GroupSchedulePage({
       setDiscountLoading(false);
     });
     return () => controller.abort();
-  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, topokratyExcluded]);
+  }, [checkout, selectedId, isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled, registrationLoading, phone, proTrainingSelected, spanishTrainingSelected, topokratyExcluded]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -730,9 +731,9 @@ export default function GroupSchedulePage({
 
   const selectedTraining = selectedDetail;
   const discountContextKey = `${selectedId}:${checkout?.profile?.id}`;
-  const discountPending = Boolean(checkout && !topokratyExcluded
+  const discountPending = Boolean(checkout && !spanishTrainingSelected && !topokratyExcluded
     && (discountLoading || discountResolvedFor !== discountContextKey));
-  const currentDiscountQuotes = discountResolvedFor === discountContextKey ? discountQuotes : [];
+  const currentDiscountQuotes = !spanishTrainingSelected && discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const requiresTrialEligibility = TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(selectedTraining);
@@ -758,10 +759,10 @@ export default function GroupSchedulePage({
   // PRO offers one-time monetary quotes and existing owned Energy visit packs.
   const purchasableProducts = !checkout
     ? []
-    : proTrainingSelected || topokratyExcluded ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
+    : spanishTrainingSelected || proTrainingSelected || topokratyExcluded ? checkout.oneTimes : [...checkout.oneTimes, ...checkout.subscriptions];
   // Owned subscriptions stay bookable on their own terms when the price check proves no
   // managed discount for them (a plan sold before the LK1 rule is quoted at zero percent).
-  const ownedSubscriptions = checkout
+  const ownedSubscriptions = checkout && !spanishTrainingSelected
     ? proTrainingSelected
       ? getGroupScheduleOwnedPacks(checkout.clientSubscriptions)
       : topokratyExcluded ? []
@@ -773,7 +774,7 @@ export default function GroupSchedulePage({
       ? buildGamePlusTrainerDescription(selectedTraining)
       : buildGroupTrainingDescription(selectedTraining)
     : null;
-  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !proTrainingSelected && !topokratyExcluded
+  const shouldShowSubscriptionPurchaseLink = Boolean(checkout && !spanishTrainingSelected && !proTrainingSelected && !topokratyExcluded
     && selectedTraining?.directionId !== 6538
     && subscriptionOffer?.owner === phone
     && subscriptionOffer?.show && !discountPending
@@ -1281,7 +1282,7 @@ export default function GroupSchedulePage({
                         </span>
                       </strong>
                     </div>
-                    {subscriptionUsageShadowEnabled && !proTrainingSelected && (
+                    {subscriptionUsageShadowEnabled && !spanishTrainingSelected && !proTrainingSelected && (
                       <div className="tournament-signup-payment-options">
                         <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
                         <button

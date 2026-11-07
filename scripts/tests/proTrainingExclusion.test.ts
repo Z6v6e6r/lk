@@ -69,14 +69,14 @@ test("a record without a resolvable direction is not PRO", () => {
 test("the group schedule requests monetary quotes for PRO while preserving Energy visits", () => {
   assert.match(groupSchedulePageSource, /import \{ isProTraining \} from "\.\.\/\.\.\/utils\/proTrainingExclusion";/);
   assert.match(groupSchedulePageSource, /const proTrainingSelected = useMemo\(\s*\(\) => Boolean\(selectedDetail && isProTraining\(selectedDetail\)\),/);
-  assert.match(groupSchedulePageSource, /if \(topokratyExcluded\) \{/);
+  assert.match(groupSchedulePageSource, /if \(spanishTrainingSelected \|\| topokratyExcluded\) \{/);
   assert.doesNotMatch(groupSchedulePageSource, /if \(proTrainingSelected \|\| topokratyExcluded\)/);
   assert.match(groupSchedulePageSource, /apiFetchGroupSubscriptionDiscounts\(selectedId/);
-  assert.match(groupSchedulePageSource, /: proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
-  assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout\s*\?\s*proTrainingSelected\s*\?/);
+  assert.match(groupSchedulePageSource, /: spanishTrainingSelected \|\| proTrainingSelected \|\| topokratyExcluded \? checkout\.oneTimes : \[\.\.\.checkout\.oneTimes, \.\.\.checkout\.subscriptions\];/);
+  assert.match(groupSchedulePageSource, /const ownedSubscriptions = checkout && !spanishTrainingSelected\s*\?\s*proTrainingSelected\s*\?/);
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedPacks\(checkout\.clientSubscriptions\)/);
-  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !proTrainingSelected && !topokratyExcluded/);
-  assert.match(groupSchedulePageSource, /subscriptionUsageShadowEnabled && !proTrainingSelected/);
+  assert.match(groupSchedulePageSource, /const shouldShowSubscriptionPurchaseLink = Boolean\(checkout && !spanishTrainingSelected && !proTrainingSelected && !topokratyExcluded/);
+  assert.match(groupSchedulePageSource, /subscriptionUsageShadowEnabled && !spanishTrainingSelected && !proTrainingSelected/);
   assert.doesNotMatch(groupSchedulePageSource, /ПРО-тренировка оплачивается по полной цене/);
   // Promo codes stay available: the promo section is not part of the PRO exclusion.
   assert.match(groupSchedulePageSource, /const shouldShowGroupSchedulePromoSection = Boolean\(checkout && checkout\.oneTimes\.some\(isGroupSchedulePromoProduct\)\);/);
@@ -84,7 +84,7 @@ test("the group schedule requests monetary quotes for PRO while preserving Energ
 
 test("the find-game trainer card does not promise plans for a PRO training", () => {
   assert.match(findGamePageSource, /import \{ isProTraining \} from "\.\.\/\.\.\/utils\/proTrainingExclusion";/);
-  assert.match(findGamePageSource, /if \(isProTraining\(training\)\) return priceValueLabel \|\| GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL;/);
+  assert.match(findGamePageSource, /if \(isProTraining\(training\) \|\| isSpanishTrainingExercise\(training\)\) return priceValueLabel \|\| GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL;/);
 });
 
 test("the server mirror of the rule keeps the same ids and the same token", () => {

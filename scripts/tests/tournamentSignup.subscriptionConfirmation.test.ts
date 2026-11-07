@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
@@ -15,7 +16,7 @@ type GatewayResult = {
 };
 
 function loadCheckoutFunction(name: string, dependencies: Record<string, unknown>) {
-  dependencies = { isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
+  dependencies = { isSpanishTrainingExercise, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
   const source = ts.createSourceFile("tournamentSignupApi.ts",
     fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);

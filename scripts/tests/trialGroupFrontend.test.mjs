@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -16,7 +17,7 @@ const compiled = ts.transpileModule(entry.getText(source).replace(/^export /, ''
 }).outputText;
 async function invoke(params, response = { error: { status: 503, message: 'Fixture unavailable' }, status: 503 }, enabled = true) {
   const calls = []; let closed = false;
-  const dependencies = { ...helpers,
+  const dependencies = { ...helpers, isSpanishTrainingExercise,
     TRIAL_GROUP_CHECKOUT_ENABLED: enabled,
     API_BASE: 'https://viva.example.test', TENANT_KEY: 'fixture',
     getServ2Origin: () => 'https://lk.example.test',
