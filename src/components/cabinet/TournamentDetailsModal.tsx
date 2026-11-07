@@ -1,3 +1,5 @@
+import { readFprLevelResults, formatFprLevel, type FprLevelResultRow } from "../../services/player-rating/fprLevelResults";
+import { fprStandings, validateFprState } from "../tournaments/fpr6x25";
 import { AvatarImage } from "../UI/AvatarImage";
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
@@ -36,7 +38,7 @@ type TournamentDisplayMeta = {
 
 type TournamentResultRow = {
   key: string;
-  rank: number;
+  rank: number | null;
   name: string;
   photo: string | null;
   rating: string | null;
@@ -46,6 +48,7 @@ type TournamentResultRow = {
   pointsFor: number | null;
   pointsAgainst: number | null;
   delta: number | null;
+  levelResult?: FprLevelResultRow;
 };
 
 type TournamentResultSortableRow = Omit<TournamentResultRow, "rank"> & {
@@ -63,6 +66,9 @@ interface TournamentDetailsModalProps {
   isOpen: boolean;
   booking: Booking | null;
   customTournament?: TournamentHistoryRecord | null;
+  historyLoading?: boolean;
+  historyError?: string | null;
+  onRetryHistory?: () => void;
   onClose: () => void;
 }
 
@@ -676,6 +682,23 @@ function buildResultRows(
     if (participant.clientId) participantMap.set(participant.clientId, participant);
   });
 
+  if (customTournament?.tournamentType === "fpr_6x25") {
+    const state = customTournament.params?.fpr6x25;
+    try {
+      validateFprState(state);
+      const levels = readFprLevelResults(state, customTournament.fprLevelResults, customTournament.fprLevelExcludedPlayerIds, customTournament.params?.sourceExerciseId);
+      return fprStandings(state).filter(row => row.matchesPlayed > 0 || row.status === "DNF").map(row => {
+        const participant = participantMap.get(row.id) || participantMap.get(`name:${row.name.trim().toLowerCase()}`);
+        const levelResult = levels?.rows.find(result => result.id === row.id);
+        return {
+          key: row.id, rank: row.rank, name: row.name, photo: participant?.photo ?? null,
+          rating: participant?.rating ?? null, wins: row.wins, losses: row.matchesPlayed - row.wins,
+          draws: 0, pointsFor: row.pointsFor, pointsAgainst: row.pointsAgainst, delta: levelResult?.status === "applied" ? levelResult.delta : null, levelResult,
+        };
+      });
+    } catch { return []; }
+  }
+
   const compareResultRows = (
     left: TournamentResultSortableRow,
     right: TournamentResultSortableRow,
@@ -703,7 +726,7 @@ function buildResultRows(
   };
 
   const totals = customTournament?.totals;
-  if (totals && typeof totals === "object") {
+  if (totals && typeof totals === "object" && Object.keys(totals).length > 0) {
     const rows = Object.entries(totals)
       .map(([key, value]) => {
         if (!isRecord(value)) return null;
@@ -801,6 +824,7 @@ export function TournamentDetailsModal({
   isOpen,
   booking,
   customTournament = null,
+  historyLoading, historyError, onRetryHistory,
   onClose,
 }: TournamentDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<TournamentDetailsTab>("roster");
@@ -895,6 +919,10 @@ export function TournamentDetailsModal({
   if (!booking) return null;
 
   const title = getTournamentTitle(booking, customTournament);
+  const fprState = customTournament?.tournamentType === "fpr_6x25" ? customTournament.params?.fpr6x25 : null;
+  const levelsPending = isRecord(fprState) && fprState.status === "completed" && fprState.testMode === false
+    && (!readFprLevelResults(fprState, customTournament?.fprLevelResults, customTournament?.fprLevelExcludedPlayerIds, customTournament?.params?.sourceExerciseId)
+      || resultRows.some(row => row.levelResult?.status === "pending"));
   const subtitle = [booking.exercise?.studio?.city, booking.exercise?.studio?.address].filter(Boolean).join(", ");
   const displayMeta = getTournamentDisplayMeta(booking, customTournament);
   const rulesRows = buildRulesRows(displayMeta);
@@ -1021,15 +1049,16 @@ export function TournamentDetailsModal({
 
         {activeTab === "results" && (
           <div className="tournament-details-section">
-            {resultRows.length === 0 ? (
+            {historyLoading ? <div role="status">Загружаем результаты…</div> : historyError ? <div role="alert">{historyError} <button type="button" onClick={onRetryHistory}>Повторить</button></div> : resultRows.length === 0 ? (
               <div className="tournament-details-empty">Результаты пока не опубликованы</div>
             ) : (
               <div className="tournament-details-results">
+                {levelsPending && <div className="tournament-details-level-pending" role="status">Начисление уровня за турнир ожидается. {onRetryHistory && <button type="button" onClick={onRetryHistory}>Обновить</button>}</div>}
                 {resultRows.map((row) => {
                   const pointsDiff = getPointDifference(row.pointsFor, row.pointsAgainst);
                   return (
-                    <div key={row.key} className="tournament-details-result-row">
-                      <div className="tournament-details-result-rank">{row.rank}</div>
+                    <div key={row.key} className={`tournament-details-result-row${fprState ? " tournament-details-result-row--fpr" : ""}`}>
+                      <div className="tournament-details-result-rank">{row.rank ?? "—"}</div>
                       <div className="tournament-details-result-avatar-wrap">
                         <div className={`tournament-details-avatar-ring${row.rating ? " has-level" : ""}`}>
                           <div className="tournament-details-avatar tournament-details-avatar--result">
@@ -1051,6 +1080,10 @@ export function TournamentDetailsModal({
                           <span>Н {formatNumberValue(row.draws)}</span>
                           <span className="is-loss">П {formatNumberValue(row.losses)}</span>
                         </div>
+                        {row.levelResult?.status === "applied" && <div className="tournament-details-result-level-change" role="group" aria-label={`Уровень до турнира: ${formatFprLevel(row.levelResult.before)}; после: ${formatFprLevel(row.levelResult.after)}`}>
+                          <span>Уровень</span> <span>{formatFprLevel(row.levelResult.before)}</span><span aria-hidden="true">→</span><span>{formatFprLevel(row.levelResult.after)}</span>
+                        </div>}
+                        {row.levelResult?.status === "not_awarded" && <div className="tournament-details-result-level-change">Уровень не начислялся</div>}
                       </div>
                       <div className="tournament-details-result-side tournament-details-result-side--points">
                         <div className={`tournament-details-result-point-diff ${getResultDeltaClass(pointsDiff)}`}>
@@ -1065,7 +1098,7 @@ export function TournamentDetailsModal({
                       <div className="tournament-details-result-side tournament-details-result-side--level">
                         <div className={`tournament-details-result-delta ${getResultDeltaClass(row.delta)}`}>
                           <span className="tournament-details-result-delta-marker" aria-hidden="true">Δ</span>
-                          <span>{formatSignedNumberValue(row.delta)}</span>
+                          <span aria-label={row.delta == null ? "Изменение уровня пока недоступно" : `Изменение уровня: ${row.levelResult ? formatFprLevel(row.delta, true) : formatSignedNumberValue(row.delta)}`}>{row.levelResult && row.delta != null ? formatFprLevel(row.delta, true) : formatSignedNumberValue(row.delta)}</span>
                         </div>
                       </div>
                     </div>

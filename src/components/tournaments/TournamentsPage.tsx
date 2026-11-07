@@ -1,5 +1,10 @@
+import { tournamentEventId, tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
+import { fprProjection, validateFprState } from "./fpr6x25";
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
 import { AvatarImage } from "../UI/AvatarImage";
+import { FprTournamentSetup, FprTournamentManager } from "./FprTournamentPanel";
+import type { FprState } from "./fpr6x25";
+import { useLkTournamentSession } from "../../utils/useLkTournamentSession";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
@@ -158,11 +163,12 @@ const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 const DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY = 365;
 const DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY = 365;
 
-type TournamentFamilyKey = "americano" | "mexicano";
+type TournamentFamilyKey = "americano" | "mexicano" | "fpr6x25";
 
 const TOURNAMENT_FAMILIES: Array<{ id: TournamentFamilyKey; label: string }> = [
   { id: "americano", label: "Американо" },
   { id: "mexicano", label: "Мексикано" },
+  { id: "fpr6x25", label: "ФПР 6×25" },
 ];
 
 const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
@@ -170,6 +176,7 @@ const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
   label: string;
   description?: string;
 }>> = {
+  fpr6x25: [{ id: "fpr_6x25", label: "Лига «Время на друзей»", description: "Регламент 1.1: шесть общих раундов, 25 очков на матч, индивидуальный зачёт и смена партнёров." }],
   americano: [
     {
       id: "americano_classic",
@@ -1154,6 +1161,7 @@ function normalizeTournamentTypeKey(value: string | null | undefined) {
 function getTournamentFamilyByType(value: string | null | undefined): TournamentFamilyKey | null {
   const typeKey = normalizeTournamentTypeKey(value);
   if (!typeKey) return null;
+  if (typeKey === "fpr_6x25") return "fpr6x25";
   if (
     typeKey === "americano"
     || typeKey === "americano_padelhub"
@@ -1169,6 +1177,7 @@ function getTournamentFamilyByType(value: string | null | undefined): Tournament
 
 function getTournamentTypeLabel(value: string | null | undefined) {
   const typeKey = normalizeTournamentTypeKey(value);
+  if (typeKey === "fpr_6x25") return "ФПР 6×25 · Время на друзей";
   if (typeKey === "americano" || typeKey === "americano_padelhub") return "Американо · ПадлхАБ";
   if (typeKey === "americano_classic") return "Американо · Классическое";
   if (typeKey === "americano_flex") return "Американо · Флекс";
@@ -1355,6 +1364,11 @@ function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
 
 function getTournamentProgressLabel(history: TournamentHistoryRecord | null | undefined): string | null {
   if (!history) return null;
+  if (history.tournamentType === "fpr_6x25") {
+    const fpr = history.params?.fpr6x25 as { status?: string; testMode?: boolean } | undefined;
+    return fpr?.status === "completed" ? `ФПР проведён${fpr.testMode ? " · тест" : ""}`
+      : fpr?.status === "incomplete" ? "ФПР не завершён" : fpr?.testMode ? "ФПР · тестовый протокол" : "ФПР";
+  }
   const params = history.params && typeof history.params === "object"
     ? history.params as Record<string, unknown>
     : null;
@@ -1396,6 +1410,7 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
     && typeKey !== "paired_americano"
     && typeKey !== "paired_mexicano"
     && typeKey !== "mexicano"
+    && typeKey !== "fpr_6x25"
   ) return null;
 
   return {
@@ -1465,6 +1480,11 @@ function buildTournamentHistoryRecordFromPayload(
     ? payload.params as Record<string, unknown>
     : null;
   const organizerName = String(payloadParams?.organizerName ?? "").trim();
+  let fprResult: ReturnType<typeof fprProjection> | null = null;
+  if (payload.tournamentType === "fpr_6x25") {
+    validateFprState(payloadParams?.fpr6x25);
+    fprResult = fprProjection(payloadParams.fpr6x25, payloadParams);
+  }
 
   return {
     id: payload.tournamentId,
@@ -1509,8 +1529,8 @@ function buildTournamentHistoryRecordFromPayload(
         : null),
     params: payload.params ?? previousHistory?.params ?? null,
     rounds: payload.rounds ?? [],
-    standings: previousHistory?.standings ?? [],
-    summary: previousHistory?.summary ?? null,
+    standings: fprResult?.standings ?? previousHistory?.standings ?? [],
+    summary: fprResult?.summary ?? previousHistory?.summary ?? null,
     totals: totals ?? previousHistory?.totals ?? null,
     playerLogs: playerLogs ?? previousHistory?.playerLogs ?? null,
     startRatingChanges: payload.startRatingChanges ?? previousHistory?.startRatingChanges ?? [],
@@ -1530,6 +1550,7 @@ interface TournamentDetailsModalProps {
   sourceDateKey?: string | null;
   canRefreshParticipantsFromViva: boolean;
   onSaved: (data: AmericanoTournamentPayload) => void;
+  initialFprPayload?: AmericanoTournamentPayload | null;
 }
 
 type TournamentParticipantEntry = ParticipantEntry & {
@@ -1626,7 +1647,10 @@ function TournamentDetailsModal({
   sourceDateKey = null,
   canRefreshParticipantsFromViva,
   onSaved,
+  initialFprPayload,
 }: TournamentDetailsModalProps) {
+  const initialFprState = initialFprPayload?.params?.fpr6x25 as FprState | undefined;
+  useLkTournamentSession(isOpen);
   const [loading, setLoading] = useState(false);
   const [participants, setParticipants] = useState<ExerciseBooking[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -1855,7 +1879,15 @@ function TournamentDetailsModal({
         ))
       : [];
     setPairedMexicanoPairs(restoredPairs);
-  }, [historyRecord, isOpen, tournament, tournament?.id]);
+    if (initialFprPayload) {
+      setSelectedFamily("fpr6x25");
+      setSelectedType("fpr_6x25");
+      setRosterMode("manual");
+      setManualParticipants(initialFprPayload.participants.map((p, i) => createTournamentManualParticipantDraft(i, p)));
+      setManualStationName(String(initialFprPayload.params?.stationName ?? ""));
+      setManualOrganizerName(initialFprPayload.organizer.name ?? "");
+    }
+  }, [historyRecord, isOpen, tournament, tournament?.id, initialFprPayload]);
 
   const applyCourtsCount = (count: number) => {
     setCourtNames((prev) =>
@@ -3936,7 +3968,7 @@ function TournamentDetailsModal({
 
         {selectedFamily && (
           <div className="tournament-section">
-            <div className="tournament-section-title">Тип {selectedFamily === "americano" ? "американо" : "мексикано"}</div>
+            <div className="tournament-section-title">Тип {selectedFamily === "fpr6x25" ? "ФПР" : selectedFamily === "americano" ? "американо" : "мексикано"}</div>
             <div className="tournament-type-list">
               {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => {
                 const isHintOpen = openTournamentTypeHintId === type.id;
@@ -3977,7 +4009,29 @@ function TournamentDetailsModal({
           </div>
         )}
 
-        {selectedType && (
+        {selectedType === "fpr_6x25" && (
+          <FprTournamentSetup
+            key={String(tournament?.id ?? draftTournamentId ?? "manual-fpr")}
+            players={sortedParticipants}
+            initialState={initialFprState}
+            onResume={initialFprPayload ? () => onSaved(initialFprPayload) : undefined}
+            context={{
+              tenantKey: TENANT_KEY,
+              organizer: { id: profile?.id ?? null, phone: profile?.phone ?? null, tenantKey: TENANT_KEY, name: profile ? [profile.firstName, profile.lastName].filter(Boolean).join(" ") : null },
+              sourceExerciseId: initialFprPayload ? initialFprState?.communityRating?.sourceExerciseId ?? undefined : tournament?.id,
+              stationName: initialFprPayload ? String(initialFprPayload.params?.stationName ?? manualStationName) : tournament?.studio?.name || manualStationName,
+              stationId: initialFprPayload ? typeof initialFprPayload.params?.stationId === "string" ? initialFprPayload.params.stationId : undefined : tournament?.studio?.id,
+              endsAt: initialFprState?.endsAt ?? tournament?.timeTo,
+              dateKey: initialFprPayload ? String(initialFprPayload.params?.localDateKey || sourceDateKey || formatDate(new Date())) : sourceDateKey || formatDate(new Date()),
+              communityBinding: historyRecord ? { ratingCommunityId: historyRecord.ratingCommunityId ?? null,
+                publishedCommunities: (historyRecord.publishedCommunities ?? []).map(p => ({ communityId: p.communityId,
+                  communityName: p.communityName ?? null, publicationId: p.publicationId ?? null,
+                  role: p.role === "RATING_PRIMARY" ? "RATING_PRIMARY" : "DISCOVERY_ONLY" })) } : null,
+            }}
+            onSaved={payload => { onSaved(payload); onClose(); }}
+          />
+        )}
+        {selectedType && selectedType !== "fpr_6x25" && (
           <div className="tournament-section">
             {selectedType === "mexicano" && (
               <div className="tournament-settings-hint">
@@ -4312,6 +4366,7 @@ function TournamentManagerModal({
   onEditSettings?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"tournament" | "table" | "stats">("tournament");
+  useLkTournamentSession(isOpen && Boolean(data));
   const [expertMode, setExpertMode] = useState(false);
   const [rounds, setRounds] = useState<TournamentRound[]>([]);
   const statsRef = useRef<HTMLDivElement | null>(null);
@@ -6845,6 +6900,7 @@ export default function TournamentsPage({
   const [profileLoading, setProfileLoading] = useState(true);
   const [selectedTournament, setSelectedTournament] = useState<Exercise | null>(null);
   const [managerData, setManagerData] = useState<AmericanoTournamentPayload | null>(null);
+  const [fprSettingsData, setFprSettingsData] = useState<AmericanoTournamentPayload | null>(null);
   const [managerTotals, setManagerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [managerPlayerLogs, setManagerPlayerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
   const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
@@ -7103,12 +7159,21 @@ export default function TournamentsPage({
         snapshot.totals,
         snapshot.playerLogs,
       );
-      next[snapshot.payload.tournamentId] = draftHistory;
+      tournamentIdentityKeys(draftHistory).forEach(id => { next[id] = draftHistory; });
     });
     return next;
   }, [currentProfileId, localDraftSnapshots]);
   const combinedHistoryById = useMemo(
-    () => ({ ...historyById, ...localDraftHistoryById }),
+    () => {
+      const next = { ...historyById, ...localDraftHistoryById };
+      for (const [id, history] of Object.entries(historyById)) {
+        if (history?.tournamentType !== "fpr_6x25") continue;
+        const serverRevision = (history.params?.fpr6x25 as FprState | undefined)?.revision ?? -1;
+        const localRevision = (next[id]?.params?.fpr6x25 as FprState | undefined)?.revision ?? -1;
+        if (serverRevision >= localRevision) next[id] = history;
+      }
+      return next;
+    },
     [historyById, localDraftHistoryById],
   );
   const serverTournaments = useMemo(
@@ -7266,7 +7331,11 @@ export default function TournamentsPage({
         }));
       } else {
         try {
-          const result = await apiFetchTournamentHistory(tournamentId);
+          const result = await apiFetchTournamentHistory(tournamentId, { forceRefresh: true });
+          if (result.error) {
+            if (result.status === 409 || result.status === 422) { setAutoOpenNotice(result.error.message); return; }
+            throw new Error(result.error.message);
+          }
           const freshHistory = pickLatestTournamentHistory(result.data);
           const freshHistoryIsNotStructurallyWorse = shouldPreferClassicMexicanoSnapshot(
             buildTournamentComparablePayloadFromHistory(freshHistory),
@@ -7285,7 +7354,11 @@ export default function TournamentsPage({
             ...prev,
             [tournamentId]: historyRecord,
           }));
-        } catch {
+        } catch (historyError) {
+          if (!historyRecord && !cachedHistory) {
+            setAutoOpenNotice(historyError instanceof Error ? historyError.message : "Не удалось загрузить турнир. Повторите открытие.");
+            return;
+          }
           if (!historyRecord && cachedHistory) {
             historyRecord = cachedHistory;
           }
@@ -7506,7 +7579,7 @@ export default function TournamentsPage({
     });
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: nextHistory,
+      ...Object.fromEntries(tournamentIdentityKeys(nextHistory).map(id => [id, nextHistory])),
     }));
     setManagerTotals(null);
     setManagerPlayerLogs(null);
@@ -7530,7 +7603,7 @@ export default function TournamentsPage({
     },
   ) => {
     const currentTournament =
-      visibleTournaments.find((item) => String(item.id) === payload.tournamentId) ?? selectedTournament ?? null;
+      visibleTournaments.find((item) => String(item.id) === tournamentEventId(payload)) ?? selectedTournament ?? null;
     const nextHistory = buildTournamentHistoryRecordFromPayload(
       payload,
       currentTournament,
@@ -7542,8 +7615,13 @@ export default function TournamentsPage({
     upsertLocalDraftSnapshot(payload, extras);
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: nextHistory,
+      ...Object.fromEntries(tournamentIdentityKeys(nextHistory).map(id => [id, nextHistory])),
     }));
+  };
+
+  const handleFprManagerDataChange = (payload: AmericanoTournamentPayload) => {
+    handleManagerDataChange(payload, { totals: null, playerLogs: null });
+    setManagerData(payload);
   };
 
   const handleManagerDataReplace = (
@@ -7554,8 +7632,8 @@ export default function TournamentsPage({
     },
   ) => {
     const replacementTournament =
-      visibleTournaments.find((item) => String(item.id) === payload.tournamentId)
-      ?? items.find((item) => String(item.id) === payload.tournamentId)
+      visibleTournaments.find((item) => String(item.id) === tournamentEventId(payload))
+      ?? items.find((item) => String(item.id) === tournamentEventId(payload))
       ?? (selectedTournament && String(selectedTournament.id) === payload.tournamentId
         ? selectedTournament
         : null)
@@ -7571,7 +7649,7 @@ export default function TournamentsPage({
     upsertLocalDraftSnapshot(payload, extras);
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: nextHistory,
+      ...Object.fromEntries(tournamentIdentityKeys(nextHistory).map(id => [id, nextHistory])),
     }));
     setSelectedTournament(replacementTournament);
     setManagerTotals(extras.totals);
@@ -7581,6 +7659,16 @@ export default function TournamentsPage({
 
   const handleManagerEditSettings = () => {
     if (!managerData?.tournamentId) return;
+    if (managerData.tournamentType === "fpr_6x25") {
+      const sourceId = (managerData.params?.fpr6x25 as FprState | undefined)?.communityRating?.sourceExerciseId;
+      const sourceTournament = [...visibleTournaments, ...serverTournaments].find(item => String(item.id) === sourceId)
+        ?? buildTournamentDraftExercise({ payload: managerData, totals: null, playerLogs: null, updatedAt: new Date().toISOString() });
+      setFprSettingsData(managerData);
+      setSelectedTournament(sourceTournament);
+      setManualTournamentCreationOpen(!sourceTournament);
+      setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null);
+      return;
+    }
     const currentTournament =
       visibleTournaments.find((item) => String(item.id) === managerData.tournamentId)
       ?? serverTournaments.find((item) => String(item.id) === managerData.tournamentId)
@@ -7894,19 +7982,29 @@ export default function TournamentsPage({
       </div>
 
       <TournamentDetailsModal
-        isOpen={Boolean(selectedTournament) || manualTournamentCreationOpen}
+        isOpen={!managerData && (Boolean(selectedTournament) || manualTournamentCreationOpen)}
         onClose={() => {
           setSelectedTournament(null);
           setManualTournamentCreationOpen(false);
+          setFprSettingsData(null);
         }}
         tournament={selectedTournament}
-        historyRecord={selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        historyRecord={fprSettingsData ? combinedHistoryById[fprSettingsData.tournamentId] ?? null : selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        initialFprPayload={fprSettingsData}
         sourceDateKey={selectedDateStr}
         canRefreshParticipantsFromViva={canHostTournaments}
         onSaved={handleTournamentCreated}
       />
 
-      <TournamentManagerModal
+      {managerData?.tournamentType === "fpr_6x25" ? (
+        <FprTournamentManager
+          key={managerData.tournamentId}
+          data={managerData}
+          onClose={() => { setManagerData(null); setManagerTotals(null); setManagerPlayerLogs(null); setSelectedTournament(null); setManualTournamentCreationOpen(false); setFprSettingsData(null); }}
+          onDataChange={handleFprManagerDataChange}
+          onEditSettings={handleManagerEditSettings}
+        />
+      ) : <TournamentManagerModal
         isOpen={Boolean(managerData)}
         onClose={() => {
           setManagerData(null);
@@ -7920,7 +8018,7 @@ export default function TournamentsPage({
         onDataChange={handleManagerDataChange}
         onReplaceData={handleManagerDataReplace}
         onEditSettings={handleManagerEditSettings}
-      />
+      />}
     </div>
   );
 }

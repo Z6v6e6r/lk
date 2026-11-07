@@ -14,7 +14,7 @@ test("tournaments page hydrates cached tournament history without eager network 
 });
 
 test("tournaments page keeps live tournament history fetch only for explicit open flow", () => {
-  const historyFetchMatches = Array.from(tournamentsPageSource.matchAll(/apiFetchTournamentHistory\(tournamentId\)/g));
+  const historyFetchMatches = Array.from(tournamentsPageSource.matchAll(/apiFetchTournamentHistory\(tournamentId, \{ forceRefresh: true \}\)/g));
   assert.equal(historyFetchMatches.length, 1);
 });
 

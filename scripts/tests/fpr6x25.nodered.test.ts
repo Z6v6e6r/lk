@@ -1,0 +1,307 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import crypto from "node:crypto";
+import { buildFprNodeFunction, FPR_PREFIX_END } from "../nodered_fpr6x25.mjs";
+import { patchFprFlow, fprSha256 } from "../patch_live_fpr6x25.mjs";
+import { createFprState, fprProjection } from "../../src/components/tournaments/fpr6x25.ts";
+import { isTournamentFinalized } from "../lib/tournamentFinalization.mjs";
+import { planCommunityTournamentClose } from "../lib/communityMonthlyFinalization.mjs";
+
+const legacyPrepare = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_prepare.js", "utf8");
+const legacyRecalculate = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_recalculate.js", "utf8");
+const legacyHistoryGuard = fs.readFileSync("scripts/nodered_games_nodes/fn_tournament_history_request_guard.js", "utf8");
+const legacyCommunityQuery = fs.readFileSync("scripts/nodered_tournament_community_nodes/fn_tournament_community_publications_query.js", "utf8");
+const prepare = new Function("msg", buildFprNodeFunction(legacyPrepare, "prepare"));
+const recalculate = new Function("msg", buildFprNodeFunction(legacyRecalculate, "recalculate"));
+function fixture() {
+  const state = createFprState({ tournamentId: `fpr-${crypto.randomUUID()}`, players: Array.from({ length: 8 }, (_, i) => ({
+    id: `p${i + 1}`, name: `Player ${i + 1}`, leaguePoints: 0, leaguePlace: null, level: 3,
+  })), courts: ["Court 1", "Court 2"], leagueSource: "League snapshot", now: new Date(Date.now() - 1000).toISOString(),
+  endsAt: new Date(Date.now() + 180 * 60_000).toISOString(), reserveAllowed: true });
+  return { _id: `fpr6x25:${state.tournamentId}`, tournamentId: state.tournamentId, tournamentType: "fpr_6x25", tenantKey: "test",
+    organizer: { id: "organizer" }, participants: state.players.map(p => ({ id: p.id, name: p.name })), ...fprProjection(state) };
+}
+function applyMongoSet<T>(document: T, update: { $set: Record<string, unknown> }): T {
+  const next = structuredClone(document);
+  for (const [key, value] of Object.entries(update.$set)) {
+    const parts = key.split(".");
+    let cursor = next as Record<string, unknown>;
+    for (const part of parts.slice(0, -1)) cursor = cursor[part] as Record<string, unknown>;
+    cursor[parts.at(-1)!] = structuredClone(value);
+  }
+  return next;
+}
+function update(document: ReturnType<typeof fixture>, action: Record<string, unknown>) {
+  const before = document.params.fpr6x25;
+  const out = recalculate({ payload: structuredClone(document), req: { body: {
+    results: [], params: { fprCommand: { id: crypto.randomUUID(), expectedRevision: before.revision, ...action } },
+  } } });
+  assert.equal(out.statusCode, 200, JSON.stringify(out.payload));
+  assert.equal(out.mongoQuery["params.fpr6x25.revision"], before.revision);
+  assert.equal(out.mongoQuery._id, document._id);
+  return applyMongoSet(document, out.mongoUpdate);
+}
+
+test("FPR create is canonical, insert-only, fixes the sum at 25, strips legacy completion and level events", () => {
+  const input = fixture();
+  input.params = { ...input.params, finished: true, published: true, status: "completed", broadcast: { active: true, stationId: "forged", operationId: "forged-claim" } };
+  const [out, error] = prepare({ payload: { ...input, targetScore: 99, startRatingChanges: [{ eventId: "unsafe" }] } });
+  assert.equal(error, null);
+  assert.equal(out.query._id, input._id);
+  assert.equal(out.query["params.fpr6x25"].revision, 0);
+  assert.equal(out.payload.$set, undefined);
+  assert.equal(out.payload.$setOnInsert.targetScore, 25);
+  assert.deepEqual(out.payload.$setOnInsert.startRatingChanges, []);
+  assert.equal(out.payload.$setOnInsert.params.finished, false);
+  assert.equal(out.payload.$setOnInsert.params.published, false);
+  assert.equal(out.payload.$setOnInsert.params.broadcast, undefined);
+  assert.equal(isTournamentFinalized(out.payload.$setOnInsert), false);
+});
+
+test("FPR create rejects changed seeds, roster mismatch, legacy event IDs and already started states", () => {
+  for (const change of [
+    (t: ReturnType<typeof fixture>) => { t.params.fpr6x25.players.reverse(); },
+    (t: ReturnType<typeof fixture>) => { t.participants.pop(); },
+    (t: ReturnType<typeof fixture>) => { t.tournamentId = "12345"; t.params.fpr6x25.tournamentId = "12345"; },
+    (t: ReturnType<typeof fixture>) => { t.params.fpr6x25.status = "in_progress"; },
+  ]) {
+    const input = fixture(); change(input);
+    const [mongo, out] = prepare({ payload: input });
+    assert.equal(mongo, null); assert.equal(out.statusCode, 422); assert.equal(out.query, undefined);
+  }
+});
+
+test("FPR commands use CAS and idempotency; legacy result/finish payload cannot bypass the reducer", () => {
+  let doc = fixture();
+  const before = structuredClone(doc);
+  const cmd = { id: "stable-start", expectedRevision: 0, action: "start_round" };
+  const run = (data: typeof doc, command: typeof cmd) => recalculate({ payload: data, req: { body: { params: { fprCommand: command } } } });
+  const out = run(doc, cmd);
+  assert.equal(out.statusCode, 200);
+  doc = applyMongoSet(doc, out.mongoUpdate);
+  const retry = run(doc, cmd);
+  assert.equal(retry.statusCode, 200);
+  assert.equal(retry.payload.params.fpr6x25.revision, 1);
+  assert.equal(retry.payload.params.fpr6x25.audit.length, 1);
+  const conflict = run(doc, { ...cmd, id: "other-start" });
+  assert.equal(conflict.statusCode, 409); assert.equal(conflict.mongoUpdate, undefined);
+  const bypass = recalculate({ payload: structuredClone(before), req: { body: { results: [{ score1: 25, score2: 0 }], params: { finished: true } } } });
+  assert.equal(bypass.statusCode, 422); assert.equal(bypass.mongoUpdate, undefined);
+});
+
+test("FPR result persistence preserves a broadcast claim and metadata written after its read", () => {
+  const snapshot = fixture();
+  const out = recalculate({ payload: structuredClone(snapshot), req: { body: { results: [], params: { fprCommand: { id: "race-start", expectedRevision: 0, action: "start_round" } } } } });
+  assert.equal(out.statusCode, 200);
+  const live = structuredClone(snapshot);
+  const broadcast = { active: true, status: "starting", operationId: "server-operation", activeTargets: ["right_arena"] };
+  live.params.broadcast = broadcast;
+  live.params.stationId = "canonical-station"; live.params.sourceExerciseId = "canonical-source";
+  live.params.foreignMetadata = { updated: "after-fpr-read" };
+  assert.equal(out.mongoQuery["params.fpr6x25.revision"], live.params.fpr6x25.revision);
+  assert.equal("params" in out.mongoUpdate.$set, false);
+  assert.equal("params.broadcast" in out.mongoUpdate.$set, false);
+  const persisted = applyMongoSet(live, out.mongoUpdate);
+  assert.deepEqual(persisted.params.broadcast, broadcast);
+  assert.deepEqual(persisted.params.foreignMetadata, live.params.foreignMetadata);
+  assert.equal(persisted.params.stationId, "canonical-station"); assert.equal(persisted.params.sourceExerciseId, "canonical-source");
+  assert.equal(persisted.params.fpr6x25.revision, 1); assert.deepEqual(persisted.rounds, []);
+  assert.equal(persisted.params.finished, false); assert.equal(persisted.params.published, false);
+});
+
+test("complete FPR event stays ineligible for both current rating workers and generic monthly closure", () => {
+  let doc = fixture();
+  for (let r = 1; r <= 6; r += 1) {
+    doc = update(doc, { action: "start_round" });
+    for (const m of doc.params.fpr6x25.attempts.at(-1)!.matches) {
+      doc = update(doc, { action: "score", matchId: m.id, score1: 13, score2: 12, confirmed1: true, confirmed2: true });
+    }
+    doc = update(doc, { action: "close_round" });
+  }
+  doc = update(doc, { action: "finish" });
+  assert.equal(doc.params.fpr6x25.status, "completed");
+  assert.equal(doc.params.fpr6x25.attempts.filter(a => a.status === "closed").length, 6);
+  assert.deepEqual(doc.rounds, []);
+  assert.equal(doc.summary.completedRounds, 0);
+  assert.equal(doc.summary.completedMatches, 0);
+  assert.equal(doc.summary.totalMatches, 0);
+  assert.equal(isTournamentFinalized(doc), false);
+  assert.ok(doc.standings.every((p: Record<string, unknown>) => !["ratingBefore", "ratingAfter", "ratingDelta", "deltaTotal"].some(key => key in p)));
+  assert.deepEqual(doc.totals, {});
+  const plan = planCommunityTournamentClose({ tournament: doc, now: new Date(Date.now() + 4 * 3600_000).toISOString() });
+  assert.equal(plan.close, false);
+
+  // After a backend rollback, a cached client can submit another FPR command to
+  // the original generic reducer. It must neither acknowledge it nor finalize.
+  const command = { id: "cached-client-after-rollback", expectedRevision: doc.params.fpr6x25.revision, action: "finish" };
+  const legacy = new Function("msg", legacyRecalculate)({ payload: structuredClone(doc),
+    req: { body: { results: [], params: { fprCommand: command } } } });
+  const afterRollback = { ...doc, ...legacy.mongoUpdate.$set };
+  assert.equal(afterRollback.summary.status, "in_progress");
+  assert.equal(isTournamentFinalized(afterRollback), false);
+  assert.deepEqual(afterRollback.params.fpr6x25, doc.params.fpr6x25);
+  assert.equal(afterRollback.params.fpr6x25.audit.some(entry => entry.id === command.id), false);
+  assert.equal(planCommunityTournamentClose({ tournament: afterRollback, now: new Date(Date.now() + 4 * 3600_000).toISOString() }).close, false);
+  const unsafe = { ...structuredClone(doc), rounds: doc.params.fpr6x25.attempts.filter(a => a.status === "closed").map(a => ({
+    id: a.id, index: a.round, byes: a.byes, matches: a.matches.map(m => ({ ...m, court: doc.params.fpr6x25.courts[m.courtIndex] })),
+  })) };
+  const control = new Function("msg", legacyRecalculate)({ payload: unsafe, req: { body: { results: [], params: { fprCommand: command } } } });
+  assert.equal(isTournamentFinalized({ ...unsafe, ...control.mongoUpdate.$set }), true);
+});
+
+test("guarded patch upgrades only four function bodies and preserves exact live legacy suffixes", () => {
+  const flow = [
+    { id: "prepare", type: "function", name: "Prepare", func: legacyPrepare, wires: [["db"], ["error"]] },
+    { id: "recalculate", type: "function", name: "Recalculate", func: legacyRecalculate, wires: [["persist"]] },
+    { id: "history_guard", type: "function", name: "History guard", func: legacyHistoryGuard, wires: [["response"], ["history-db"]] },
+    { id: "community_context", type: "function", name: "Community query", func: legacyCommunityQuery, wires: [["publications-db"]] },
+    { id: "route", type: "http in", url: "/lk/tournaments/americano", method: "post", wires: [["prepare"]] },
+  ];
+  const bytes = Buffer.from(JSON.stringify(flow));
+  const contract = { flowSha256: fprSha256(bytes), nodes: flow.slice(0, 4).map(n => ({ id: n.id, name: n.name, kind: n.id, sha256: fprSha256(n.func) })) };
+  const patched = patchFprFlow(bytes, contract);
+  assert.equal(patched.report.changes.length, 4);
+  const candidate = JSON.parse(patched.output);
+  for (let i = 0; i < 4; i += 1) assert.equal(candidate[i].func.split(FPR_PREFIX_END)[1], flow[i].func);
+  assert.deepEqual(candidate[4], flow[4]);
+  const upgradedBytes = Buffer.from(patched.output);
+  const upgradeContract = { flowSha256: fprSha256(upgradedBytes), nodes: candidate.slice(0, 4).map(n => ({ id: n.id, name: n.name, kind: n.id, sha256: fprSha256(n.func) })) };
+  // An identical upgrade has no four-function diff and is refused rather than
+  // fabricating another deployment or nesting a second prefix.
+  assert.throws(() => patchFprFlow(upgradedBytes, upgradeContract), /Unexpected flow/);
+  assert.throws(() => patchFprFlow(bytes, { ...contract, flowSha256: "0".repeat(64) }), /preimage/);
+  assert.throws(() => patchFprFlow(bytes, { ...contract, nodes: contract.nodes.map((n, i) => i ? n : { ...n, sha256: "0".repeat(64) }) }), /preimage/);
+  const focused = patchFprFlow(bytes, { ...contract, nodes: [contract.nodes[1]] });
+  assert.equal(focused.report.changes.length, 1);
+  const focusedFlow = JSON.parse(focused.output);
+  for (const index of [0, 2, 3, 4]) assert.deepEqual(focusedFlow[index], flow[index]);
+  assert.throws(() => patchFprFlow(bytes, { ...contract, nodes: [contract.nodes[1], contract.nodes[1]] }), /Unique scoped/);
+});
+
+test("community context reads work before a protocol exists and do not enter the normal history cache", () => {
+  const id = "9bbaeb68-c883-480d-a9a0-cd43267a679a";
+  const query = new Function("msg", buildFprNodeFunction(legacyCommunityQuery, "community_context"));
+  const attach = new Function("msg", fs.readFileSync("scripts/nodered_tournament_community_nodes/fn_tournament_community_publications_attach.js", "utf8"));
+  const msg = query({ payload: [], _tournamentHistoryCacheKey: `id:${id}`, req: { query: { tournamentId: id, fprCommunityContext: "1" } } });
+  assert.equal(msg._tournamentHistoryCacheKey, undefined);
+  assert.ok(msg.payload.$or.some((c: Record<string, unknown>) => c.relatedTournamentId === id));
+  msg.payload = [{ id: "post1", communityId: "club", communityName: "Club", kind: "TOURNAMENT", relatedTournamentId: id }];
+  const result = attach(msg);
+  assert.equal(result.payload[0].communityContextOnly, true); assert.equal(result.payload[0].ratingCommunityId, "club");
+  assert.equal(result.payload[0].tournamentId, id); assert.equal(result.payload[0].participants, undefined);
+});
+
+test("fresh FPR history bypasses only its cache entry while preserving legacy cache and rate limits", () => {
+  const fprId = `fpr-${crypto.randomUUID()}`;
+  const store: Record<string, unknown> = { lkTournamentHistoryResponseCache: {
+    [`id:${fprId}`]: { expiresAt: Date.now() + 10000, payload: [{ revision: "stale" }] },
+    "id:legacy": { expiresAt: Date.now() + 10000, payload: [{ marker: "legacy" }] },
+  } };
+  const flow = { get: (key: string) => store[key], set: (key: string, value: unknown) => { store[key] = value; } };
+  const run = new Function("msg", "flow", buildFprNodeFunction(legacyHistoryGuard, "history_guard"));
+  const fresh = run({ req: { query: { tournamentId: fprId, readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
+  assert.equal(fresh[0], null); assert.equal(fresh[1]._tournamentHistoryCacheKey, `id:${fprId}`);
+  const legacy = run({ req: { query: { tournamentId: "legacy", readback: "1" }, headers: { "x-real-ip": "test" } } }, flow);
+  assert.equal(legacy[0], null); assert.equal(legacy[1]._tournamentHistoryCacheKey, "id:legacy");
+  const contextRead = run({ req: { query: { tournamentId: "legacy", fprCommunityContext: "1" }, headers: { "x-real-ip": "context-test" } } }, flow);
+  assert.equal(contextRead[0], null); assert.equal(contextRead[1]._tournamentHistoryCacheKey, "id:legacy");
+  const invalidContext = run({ req: { query: { tournamentId: "../invalid", fprCommunityContext: "1" }, headers: {} } }, flow);
+  assert.equal(invalidContext[0].statusCode, 422); assert.equal(invalidContext[1], null);
+  let last;
+  for (let i = 0; i < 24; i += 1) last = run({ req: { query: { tournamentId: fprId, readback: String(i + 2) }, headers: { "x-real-ip": "test" } } }, flow);
+  assert.equal(last[0].statusCode, 429);
+});
+
+test("generic tournament preparation retains its values inside a FPR-protected event pipeline", () => {
+  const input = { payload: { tournamentId: "old-type-example", tournamentType: "americano_classic", createdAt: "2026-10-28T00:00:00Z", participants: [], rounds: [] } };
+  const legacy = new Function("msg", legacyPrepare)(structuredClone(input));
+  const wrapped = prepare(structuredClone(input));
+  const merge = wrapped[0].payload[1][0].$replaceRoot.newRoot.$cond[2].$mergeObjects;
+  delete legacy[0].payload.$set.updatedAt; delete merge[1].$literal.updatedAt;
+  assert.deepEqual(merge[1].$literal, legacy[0].payload.$set);
+  assert.equal(wrapped[0].payload[1][0].$replaceRoot.newRoot.$cond[1], "$$ROOT");
+  assert.deepEqual(wrapped[0].payload[1][1], { $set: { _id: { $ifNull: ["$_id", { $literal: "tournament:old-type-example" }] } } });
+  assert.ok(wrapped[0].query.$or.some((q: Record<string, unknown>) => q["params.fpr6x25.communityRating.sourceExerciseId"] === "old-type-example"));
+});
+
+test("generated backend commits first-save start and score with one CAS and preserves broadcast", () => {
+  const original = fixture();
+  original.params.broadcast = { active: true, operationId: 'existing-operation' };
+  const before = structuredClone(original);
+  const cmd = { id: 'atomic-first-score', expectedRevision: 0, action: 'score',
+    matchId: original.params.fpr6x25.attempts[0].matches[0].id,
+    score1: 13, score2: 12, confirmed1: true, confirmed2: true, startIfScheduled: true };
+  const run = (doc: typeof original, command = cmd) => recalculate({ payload: structuredClone(doc),
+    req: { body: { results: [], params: { fprCommand: command } } } });
+  const response = run(original);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.mongoQuery['params.fpr6x25.revision'], 0);
+  const next = applyMongoSet(original, response.mongoUpdate);
+  assert.equal(next.params.fpr6x25.revision, 1);
+  assert.equal(next.params.fpr6x25.audit.length, 1);
+  assert.equal(next.params.fpr6x25.attempts[0].status, 'running');
+  assert.equal(next.params.fpr6x25.attempts[0].matches[0].score1, 13);
+  assert.deepEqual(next.params.broadcast, before.params.broadcast);
+  assert.deepEqual(original, before);
+  const replay = run(next);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.payload.params.fpr6x25.revision, 1);
+  assert.equal(replay.payload.params.fpr6x25.attempts[0].startedAt, next.params.fpr6x25.attempts[0].startedAt);
+  const stale = run(next, { ...cmd, id: 'stale-first-save' });
+  assert.equal(stale.statusCode, 409); assert.equal(stale.mongoUpdate, undefined);
+  const invalid = run(original, { ...cmd, score2: 13 });
+  assert.equal(invalid.statusCode, 422); assert.equal(invalid.mongoUpdate, undefined);
+});
+
+test("generated first-save partials start once; deadline and reused flags produce no writes", () => {
+  const original = fixture();
+  const cmd = { id: 'partial-first-save', expectedRevision: 0, action: 'score',
+    matchId: original.params.fpr6x25.attempts[0].matches[0].id,
+    score1: 7, score2: 5, confirmed1: false, confirmed2: false, startIfScheduled: true };
+  const run = (doc: typeof original, command = cmd) => recalculate({ payload: structuredClone(doc),
+    req: { body: { params: { fprCommand: command } } } });
+  const response = run(original);
+  assert.equal(response.statusCode, 200);
+  const next = applyMongoSet(original, response.mongoUpdate);
+  assert.equal(next.params.fpr6x25.attempts[0].status, 'running');
+  assert.equal(next.params.fpr6x25.attempts[0].matches[0].confirmed1, false);
+  const reused = run(next, { ...cmd, startIfScheduled: false });
+  assert.equal(reused.statusCode, 409); assert.equal(reused.mongoUpdate, undefined);
+  const late = structuredClone(original);
+  late.params.fpr6x25.endsAt = new Date(Date.now() + 60_000).toISOString();
+  const rejected = run(late);
+  assert.equal(rejected.statusCode, 422); assert.equal(rejected.mongoUpdate, undefined);
+  assert.equal(rejected.payload.error, 'FPR_COMMAND_INVALID');
+});
+
+test("generated backend persists final score, closed round, standings and next draw in one CAS, once", () => {
+  let doc = fixture();
+  doc.params.broadcast = { active: true, operationId: "parallel-broadcast" };
+  const [first, second] = doc.params.fpr6x25.attempts[0].matches;
+  doc = update(doc, { action: "score", matchId: first.id, score1: 13, score2: 12,
+    confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true });
+  assert.equal(doc.params.fpr6x25.attempts[0].status, "running");
+  const before = structuredClone(doc);
+  const command = { id: "stable-auto-close", expectedRevision: 1, action: "score", matchId: second.id,
+    score1: 14, score2: 11, confirmed1: true, confirmed2: true, startIfScheduled: true, autoCloseRound: true };
+  const run = (document: typeof doc, cmd = command) => recalculate({ payload: structuredClone(document),
+    req: { body: { results: [], params: { fprCommand: cmd } } } });
+  const result = run(doc);
+  assert.equal(result.statusCode, 200); assert.equal(result.mongoQuery["params.fpr6x25.revision"], 1);
+  assert.equal(result.mongoQuery._id, doc._id);
+  doc = applyMongoSet(doc, result.mongoUpdate);
+  assert.equal(doc.params.fpr6x25.revision, 2); assert.equal(doc.params.fpr6x25.audit.length, 2);
+  assert.equal(doc.params.fpr6x25.attempts[0].status, "closed");
+  assert.equal(doc.params.fpr6x25.attempts[1].round, 2); assert.equal(doc.params.fpr6x25.attempts[1].status, "scheduled");
+  assert.equal(doc.standings.length, 8);
+  assert.equal(doc.standings.reduce((n: number, p: { matchesPlayed: number }) => n + p.matchesPlayed, 0), 8);
+  assert.deepEqual(doc.params.broadcast, before.params.broadcast);
+  const replay = run(doc);
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.payload.params.fpr6x25, doc.params.fpr6x25);
+  assert.equal(run(doc, { ...command, id: "stale-auto-close" }).statusCode, 409);
+  assert.equal(run(doc, { ...command, autoCloseRound: false }).statusCode, 409);
+  const invalid = run(before, { ...command, score2: 12 });
+  assert.equal(invalid.statusCode, 422); assert.equal(invalid.mongoUpdate, undefined);
+});
