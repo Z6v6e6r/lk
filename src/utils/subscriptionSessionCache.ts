@@ -36,6 +36,13 @@ export function invalidateSubscriptionSnapshot(): void {
   try { storage()?.removeItem(STORAGE_KEY); } catch { /* Storage can be disabled. */ }
 }
 
+/** Fence application after other async work, even if this read already completed. */
+export function captureSubscriptionSnapshotGuard(currentToken: () => string | null): () => boolean {
+  const token = currentToken();
+  const invalidation = state().invalidation;
+  return () => currentToken() === token && state().invalidation === invalidation;
+}
+
 /** Hash only for cache partitioning, never as proof of authentication. */
 async function accountScope(token: string): Promise<string | null> {
   if (!globalThis.crypto?.subtle) return null;
@@ -89,23 +96,40 @@ export async function readSubscriptionSnapshot<T>(options: {
   currentToken: () => string | null;
   load: () => Promise<Result<T>>;
   sanitize: (data: unknown) => T | null;
+  /** Live balances share in-flight reads only; never restore or persist a fulfilled snapshot. */
+  cacheResult?: boolean;
 }): Promise<Result<T>> {
   const snapshot = state();
   const stale = (): Result<T> => ({ data: null, error: { status: 409, message: "Данные абонементов изменились. Обновите список." }, status: 409 });
+  const forDisplay = (result: Result<T>, data: T | null): Result<T> => {
+    if (result.error) return { ...result, data: null };
+    if (result.status !== 200 || data === null) {
+      return { data: null, error: { status: 502, message: "Данные абонементов недоступны. Повторите загрузку." }, status: 502 };
+    }
+    return result;
+  };
+  const loadWithoutSnapshot = async () => {
+    const generation = snapshot.generation;
+    const result = await options.load();
+    return snapshot.generation === generation && options.currentToken() === options.token
+      ? forDisplay(result, !result.error && result.status === 200 ? options.sanitize(result.data) : null) : stale();
+  };
   if (!options.token) {
     invalidateSubscriptionSnapshot();
-    return options.load();
+    return loadWithoutSnapshot();
   }
   const invalidationBeforeScope = snapshot.invalidation;
   const scope = await accountScope(options.token);
   if (options.currentToken() !== options.token || snapshot.invalidation !== invalidationBeforeScope) return stale();
-  if (!scope) return options.load();
+  if (!scope) return loadWithoutSnapshot();
   restore(snapshot, scope);
+  const cacheResult = options.cacheResult !== false;
+  if (!cacheResult && snapshot.entries.delete(options.key)) persist(snapshot);
   const generation = snapshot.generation;
   const current = () => snapshot.generation === generation && snapshot.scope === scope
     && options.currentToken() === options.token;
   const cached = snapshot.entries.get(options.key);
-  if (cached && Date.now() - cached.savedAt < MAX_AGE_MS) {
+  if (cacheResult && cached && Date.now() - cached.savedAt < MAX_AGE_MS) {
     const data = options.sanitize(cached.data);
     if (data !== null) return { data: clone(data), error: null, status: 200 };
   }
@@ -118,12 +142,12 @@ export async function readSubscriptionSnapshot<T>(options: {
     const result = await options.load();
     if (!current()) return stale();
     const data = !result.error && result.status === 200 ? options.sanitize(result.data) : null;
-    if (data !== null) {
+    if (data !== null && cacheResult) {
       if (snapshot.entries.size >= MAX_ENTRIES) snapshot.entries.delete(snapshot.entries.keys().next().value!);
       snapshot.entries.set(options.key, { data: clone(data), savedAt: Date.now() });
       persist(snapshot);
     }
-    return result;
+    return forDisplay(result, data);
   })();
   snapshot.pending.set(options.key, promise);
   try { return await promise; }

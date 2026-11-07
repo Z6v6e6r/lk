@@ -1,7 +1,8 @@
 import PadelJumpCard from "../padel-jump/PadelJumpCard";
 import { canCreateGameAfterLookup } from "./bookingGameCreationGuard";
 import { AvatarImage } from "../UI/AvatarImage";
-import { invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
+import { captureSubscriptionSnapshotGuard, invalidateSubscriptionSnapshot } from "../../utils/subscriptionSessionCache";
+import { readAuthToken } from "../../utils/authTokenStorage";
 import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties } from "react";
 import { UserProfile } from "./UserProfile";
 import {
@@ -1630,6 +1631,12 @@ export function Cabinet({
   const [activeBookings, setActiveBookings] = useState<BookingsResponse | null>(null);
   const [loadingHistoryBookings, setLoadingHistoryBookings] = useState(false);
   const [userSubscriptions, setUserSubscriptions] = useState<SubscriptionResponse | null>(null);
+  const subscriptionLoadSequenceRef = useRef(0);
+  const beginSubscriptionLoad = useCallback(() => {
+    const sequence = ++subscriptionLoadSequenceRef.current;
+    const isCurrent = captureSubscriptionSnapshotGuard(readAuthToken);
+    return () => subscriptionLoadSequenceRef.current === sequence && isCurrent();
+  }, []);
   const [referralUserSubscriptions, setReferralUserSubscriptions] = useState<SubscriptionResponse | null>(null);
   const [referralSubscriptionNamesById, setReferralSubscriptionNamesById] = useState<Record<string, string>>({});
   const [referralInviteUrlByKey, setReferralInviteUrlByKey] = useState<Record<string, string>>({});
@@ -1686,6 +1693,7 @@ export function Cabinet({
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
+      const isCurrentSubscriptionLoad = beginSubscriptionLoad();
       setLoading(true);
       setLoadError(null);
       setHistoryBookings(null);
@@ -1735,8 +1743,10 @@ export function Cabinet({
         }
         setProfile(profileRes.data);
         setActiveBookings(activeRes?.data || null);
-        setUserSubscriptions(subsRes?.data || null);
-        setReferralUserSubscriptions(referralSubsRes?.data || subsRes?.data || null);
+        if (isCurrentSubscriptionLoad()) {
+          setUserSubscriptions(subsRes?.data || null);
+          setReferralUserSubscriptions(referralSubsRes?.data || subsRes?.data || null);
+        }
         trackAnalyticsEvent("cabinet_data_loaded", {
           activeBookingsCount: activeRes?.data?.content?.length ?? 0,
           historyBookingsLoaded: false,
@@ -1764,7 +1774,7 @@ export function Cabinet({
     };
     loadData();
     return () => { isMounted = false; };
-  }, [logout, reloadKey]);
+  }, [beginSubscriptionLoad, logout, reloadKey]);
 
   const referralSubscriptionSource = useMemo(() => {
     const finishedAwareContent = referralUserSubscriptions?.content;
@@ -2939,6 +2949,7 @@ export function Cabinet({
   }, [isRefreshingApp, profile?.id]);
 
   const loadBookings = async () => {
+    const isCurrentSubscriptionLoad = beginSubscriptionLoad();
     setPendingBookingRefreshes((count) => count + 1);
     setLoadedGamesIdentity(null);
     try {
@@ -2978,8 +2989,10 @@ export function Cabinet({
           : Promise.resolve(null),
       ]);
       if (activeBookingsData) setActiveBookings(activeBookingsData.data);
-      if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
-      setReferralUserSubscriptions(referralSubscriptionsData.data || userSubscriptionsData.data || null);
+      if (isCurrentSubscriptionLoad()) {
+        setUserSubscriptions(userSubscriptionsData.data || null);
+        setReferralUserSubscriptions(referralSubscriptionsData.data || userSubscriptionsData.data || null);
+      }
       if (activeGamesResult?.data || resultWindowGamesResult?.data) {
         const activeGames = activeGamesResult?.data?.games ?? [];
         const resultWindowGames = resultWindowGamesResult?.data?.games ?? [];
@@ -4159,7 +4172,7 @@ export function Cabinet({
       <SubscriptionInformation
         isOpen={isSubscriptionInfoOpen}
         onClose={() => SetSubscriptionInfoOpen(false)}
-        sub={currenSub}
+        sub={userSubscriptions?.content.find((sub) => sub.subscriptionId === currenSub?.subscriptionId) ?? null}
         subName={currenSubName}
       />
       <SupportChatWidget profile={profile} />

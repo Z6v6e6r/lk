@@ -30,8 +30,10 @@ export function SubscriptionsContainer({
           />
         ))
       ) : (
-        <div style={{ padding: "16px", fontSize: 14, color: "var(--text-secondary)" }}>
-          У вас пока нет абонементов
+        <div role="status" style={{ padding: "16px", fontSize: 14, color: "var(--text-secondary)" }}>
+          {UserSubscriptions === null
+            ? "Не удалось загрузить абонементы. Повторите обновление."
+            : "У вас пока нет абонементов"}
         </div>
       )}
 
