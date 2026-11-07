@@ -9,6 +9,8 @@ import {
   JOIN_V2_RECEIVER_BASE_COMMIT,
   JOIN_V2_RECEIVER_LIVE_FUNC_SHA256,
   OWNER_ROUTER_ID,
+  OWNER_PREPARE_ID,
+  OWNER_V2_GUARDS,
   PROBE_INSTALLED,
   PROBE_JOIN_V2,
 } from '../prepare_booked_operation_join_v2_live.mjs';
@@ -37,7 +39,10 @@ function syntheticInstalled() {
     { id: 'owner_tab', type: 'tab', label: 'Owner' },
     { id: CLIENT, type: 'mongodb4-client', name: 'synthetic' },
     { id: OWNER_ROUTER_ID, type: 'function', z: 'owner_tab', outputs: 1, wires: [[]],
-      func: 'const ownerProbeVersion = "1";\nconst ok = ' + PROBE_INSTALLED + ';\nreturn ok ? msg : null;' },
+      func: 'const ownerProbeVersion = "1";\nconst ok = ' + PROBE_INSTALLED + ';\n/*\n'
+        + OWNER_V2_GUARDS[OWNER_ROUTER_ID].join('\n') + '\n*/\nreturn ok ? msg : null;' },
+    { id: OWNER_PREPARE_ID, type: 'function', z: 'owner_tab', outputs: 1, wires: [[]],
+      func: '/*\n' + OWNER_V2_GUARDS[OWNER_PREPARE_ID].join('\n') + '\n*/\nreturn msg;' },
     { id: 'owner_find', type: 'mongodb4', z: 'owner_tab', collection: COLLECTION, operation: 'find', clientNode: CLIENT, wires: [[]] },
     { id: TAB_ID, type: 'tab', label: 'LK Booked Operation Receiver', disabled: false, info: '' },
     ...old,
@@ -68,8 +73,13 @@ test('synthetic installed receiver upgrades to the main receiver with exactly th
   const owner = r.candidate.find((n) => n.id === OWNER_ROUTER_ID).func;
   assert.ok(owner.includes(PROBE_JOIN_V2) && !owner.includes(PROBE_INSTALLED));
   validateReviewedFlowContract({ liveBytes: bytesOf(flow), candidateBytes: r.candidateBytes, contract: r.contract });
-  // Untouched nodes keep identity and position.
-  r.candidate.slice(0, flow.length).forEach((n, i) => assert.equal(n.id, flow[i].id));
+  // Untouched nodes keep identity, position and every field.
+  const changed = new Set(r.allowedChanges.map((c) => c.id));
+  r.candidate.slice(0, flow.length).forEach((n, i) => {
+    assert.equal(n.id, flow[i].id);
+    if (!changed.has(n.id)) assert.deepEqual(n, flow[i], n.id);
+    else assert.deepEqual([n.x, n.y], [flow[i].x, flow[i].y], n.id);
+  });
 });
 
 test('preimage, receiver source and owner probe drift refuse', () => {
@@ -100,6 +110,17 @@ test('unexpected installed field drift, store drift, foreign edges and re-instal
   const again = syntheticInstalled();
   again.push({ id: NODE_IDS.preflightIn, type: 'http in', z: TAB_ID, url: ROUTES.preflightV2, method: 'post', wires: [[]] });
   assert.throws(() => compose(again), /JOIN_V2_ALREADY_INSTALLED/);
+});
+
+test('probe 2 is not advertised unless the installed owner carries every MANAGED_JOIN_V2 guard', () => {
+  for (const [id, guards] of Object.entries(OWNER_V2_GUARDS)) {
+    for (const guard of guards) {
+      const flow = syntheticInstalled();
+      const node = flow.find((n) => n.id === id);
+      node.func = node.func.replace(guard, '');
+      assert.throws(() => compose(flow), /JOIN_V2_OWNER_GUARD_MISSING/, guard);
+    }
+  }
 });
 
 test('existing routes that would match the new v2 paths first refuse', () => {

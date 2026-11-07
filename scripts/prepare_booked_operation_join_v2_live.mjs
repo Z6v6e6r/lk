@@ -34,6 +34,25 @@ export const RECEIVER_MONGO_CLIENT_ID = '4e820638cc39c730';
 export const PROBE_INSTALLED = '["1"].includes(ownerProbeVersion) /* 2 needs the JOIN v2 receiver, 3 the SELF leave graph */';
 export const PROBE_JOIN_V2 = '["1", "2"].includes(ownerProbeVersion) /* 3 needs the SELF leave graph */';
 
+// Advertising contract 2 is a promise that the installed owner enforces MANAGED_JOIN_V2: legacy and
+// recovery-only calls never reserve or book, and a v2 booking needs the confirmed CUP entitlement.
+// These statements (main fn_subscription_booking_router/prepare) must be present before the flip.
+export const OWNER_PREPARE_ID = 'lk_subscription_booking_prepare_20260804';
+export const OWNER_V2_GUARDS = Object.freeze({
+  [OWNER_ROUTER_ID]: Object.freeze([
+    'if (ctx.lk2LegacyJoin === true || ctx.managedJoinV2RecoveryOnly || ctx.managedJoinV2RecoveryOperation) return managedJoinV2Pending(ctx);',
+    'if (ctx.managedJoinV2RecoveryOnly || ctx.managedJoinV2RecoveryOperation) return managedJoinV2Pending(ctx);',
+    'if (ctx.lk2LegacyJoin === true && ctx.managedEnforcement?.enabled === true) return managedJoinV2Pending(ctx);',
+    '|| !toStr(ctx.managedEntitlementOperationId) || !validEntitlementDecision(ctx, ctx.managedDecision)',
+    '|| ctx.managedDecision.money.finalPriceMinor !== 0 || !managedJoinV2Positive(ctx.managedDecision.usageUnits))) {',
+    'if (ctx.lk2LegacyJoin !== undefined && (ctx.lk2LegacyJoin !== true || ctx.managedJoinV2 !== undefined)) return managedJoinV2Pending(ctx);',
+  ]),
+  [OWNER_PREPARE_ID]: Object.freeze([
+    'if (body.managedJoinV2RecoveryOnly !== undefined && (!recoveryOnly || body.managedJoinV2 === undefined))',
+    '|| action !== "book" || Object.keys(body).sort().join(",") !== "clientSubscriptionId,exerciseId,lk2LegacyJoin,operationId"',
+  ]),
+});
+
 // Exactly these installed receiver fields move to main; anything else is drift.
 const EXPECTED_RECEIVER_CHANGES = Object.freeze({
   [NODE_IDS.admissionVerify]: ['func'],
@@ -130,6 +149,10 @@ export function composeJoinV2Live(liveBytes, deploymentId, pins = {}) {
   const owner = candidate.find((n) => n.id === OWNER_ROUTER_ID);
   if (owner?.type !== 'function' || hash(owner.func) !== ownerPin || owner.func.split(PROBE_INSTALLED).length !== 2) {
     throw new Error('JOIN_V2_OWNER_PROBE_DRIFT');
+  }
+  for (const [id, guards] of Object.entries(OWNER_V2_GUARDS)) {
+    const func = candidate.find((n) => n.id === id && n.type === 'function')?.func ?? '';
+    for (const guard of guards) if (!func.includes(guard)) throw new Error('JOIN_V2_OWNER_GUARD_MISSING: ' + id);
   }
   owner.func = owner.func.replace(PROBE_INSTALLED, PROBE_JOIN_V2);
   new Function('msg', 'global', 'node', 'env', owner.func);

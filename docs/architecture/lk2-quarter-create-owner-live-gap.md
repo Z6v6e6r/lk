@@ -281,6 +281,9 @@ v2 preflight, managed policy и owner читают Node-RED globals:
 ### План установки (⚠ — отдельное согласие владельца)
 
 1. Свежий pull только на чтение. Если sha ≠ `be3177e4…` — новый коммит пинов после проверки фактов.
+   Предусловие: в `/root/.node-red/settings.js` не задан `httpNodeRoot`/`httpRoot` (корень `/`; так
+   на 2026-11-07). Новый v1 сверяет `originalUrl` с подписанным путём: при другом корне каждая
+   подписанная v1-операция получила бы 403.
 2. `node scripts/prepare_booked_operation_join_v2_live.mjs /abs/workspace /abs/new/out`, затем LIVE-тесты
    (`LK1_JOIN_V2_LIVE_FLOW_FIXTURE`).
 3. ⚠ Stage: кандидат, контракт и runner.
@@ -293,5 +296,8 @@ v2 preflight, managed policy и owner читают Node-RED globals:
    - v2 preflight, admission и read без подписи → 401;
    - v1 admission без подписи → 401;
    - 15 мин логов.
-7. ⚠ Откат: `rollback --deployment-id … --flow-backup … --contract-backup …`. Документы v2 до появления
-   привязки CUP не создаются: preflight закрыт, а v2 admission требует `reservation_id` из preflight.
+7. ⚠ Откат: `rollback --deployment-id … --flow-backup … --contract-backup …`.
+   Перед откатом — только чтение: число документов `{contractVersion: 2}` в `lk_subscription_daily_booking_ops`.
+   Если оно больше нуля — остановиться и сверить. LK1 не сверяет `reservation_id` с preflight, поэтому
+   любая валидно подписанная v2 admission создаёт документ. Старый v1-роутер такие документы не портит,
+   но и не читает, и не сверяет.
