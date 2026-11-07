@@ -137,9 +137,72 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
 - A1b: training owner (`patch_nodered_training_registration_owner.mjs`), managed SELF leave и
   receiver JOIN v2 ожидают преимиджи, которых на живом нет. Их нужно так же перебазировать
   на результат A1, и только тогда включать probe `2`/`3` и GET-ветку training.
-- A2: поток подготовки CREATE (LK #273).
+- A2: поток подготовки CREATE (LK #273) — см. раздел «A2» ниже.
 - A3: перебазирование `patch_nodered_game_create_owner.mjs` на результат A1/A2. Guard
   `ctx.managedCreateBinding !== undefined` нужно поставить раньше живых LK1-обработчиков шагов.
   Ветка quarter-capability в prepare возвращает выход 3: подключить его до включения обёртки.
 - Перед apply: подтвердить, что LK2 считает любой 404 probe «недоступно». Split-оплата должна
   трактовать 202 PENDING_CONFIRMATION шага бронирования как неоднозначный результат без списания.
+
+## Состояние живого LK1 на 2026-11-07
+
+- A1 установлен 2026-11-06 в 17:07 MSK (`owner-live-rebase-8f1d15af78c1`, кандидат `76ed585f…`).
+- Затем другая задача поставила `fpr-start-bootstrap-20261106`: три узла турнирного старта,
+  `76ed585f…` → `6b822364…`.
+- P3 (2026-11-07): в pm2 env `node-red` заданы флаги приёмника и исполнения и делегация LK2
+  (issuer `https://lk2.padlhub.su`, kid `lk2-beta-2026-11`, SPKI `5196476e…`).
+- `LK1_BOOKED_OPERATION_OWNER_BASE_URL` и `LK1_BOOKED_OPERATION_OWNER_TENANT_KEY` не заданы,
+  поэтому executor бронирования отвечает 503 без вызова Viva.
+
+## A2 — приватный маршрут подготовки CREATE (LK #273)
+
+Исходники LK #273 (`3678c039`) уже в `main`. A2 добавляет только сборщик пакета под живой граф:
+`scripts/prepare_game_create_preparation_live.mjs`. Это чисто аддитивная установка: новая вкладка
+и 8 узлов в конце файла, `POST /lk/integrations/v1/game-create-preparations`. Существующие узлы,
+провода и маршруты не меняются; контракт — exact-graph с 0 изменений.
+
+Сборщик падает, если на живом графе нарушен любой из фактов:
+
+- whole-flow sha = `6b822364…`;
+- `serviceByStation` живого онбординга (`22ee96a6857b3a35`) совпадает с встроенной таблицей
+  (8 станций, master/sub);
+- есть активный узел `global.set('vivacrm_access_token')` — его использует админское чтение каталога;
+- есть активный маршрут приёмника admission;
+- ни один существующий POST/ALL-маршрут не перехватывает новый путь (Express нестрогий);
+- функции кандидата байт-в-байт равны исходникам `main`; нет узлов Mongo/inject/link.
+
+Тесты: `scripts/tests/gameCreatePreparationLive.test.mjs`.
+
+- 5 синтетических — в CI.
+- 3 LIVE — с приватной копией живого flows (`LK1_GAME_CREATE_LIVE_FLOW_FIXTURE`):
+  - граф не изменён;
+  - все 8 станций проходят только через GET;
+  - без флагов, ключа или подписи маршрут закрыт без чтений;
+  - без админского токена — только два чтения по токену игрока.
+
+**Важно для установки.** После P3 флаги приёмника и исполнения включены. Значит, маршрут
+начнёт работать сразу после apply для запросов, подписанных LK2:
+
+- до 6 ограниченных GET в Viva, в том числе каталог с админским токеном LK1;
+- без записи в Mongo и провайдера, без резерва и брони.
+
+Остановить маршрут без отката flow можно только общими флагами, а это остановит и приёмник.
+Поэтому быстрый стоп — откат шага 6.
+
+### План установки A2 (⚠ — отдельное согласие владельца)
+
+1. После merge в `main`: свежий pull живого flows только на чтение. Если sha ≠ `6b822364…` —
+   обновить пин после проверки, что факты выше не изменились, и пересобрать.
+2. `node scripts/prepare_game_create_preparation_live.mjs /abs/workspace /abs/new/out`.
+   Затем LIVE-тесты с этой копией.
+3. ⚠ Stage на сервере: кандидат, контракт и runner.
+4. ⚠ `preflight --deployment-id game-create-preparation-<sha12>`: `ok`, 0 изменений, 8 добавлений.
+5. ⚠ `apply --stamp <stamp>`: бэкап, атомарная запись, рестарт `node-red`, lease 15 мин.
+6. Проверка:
+   - readback = кандидат;
+   - `POST /lk/integrations/v1/game-create-preparations` без подписи → 401
+     `GAME_CREATE_PREPARATION_DELEGATION_INVALID`;
+   - smoke A1 и P3 без изменений;
+   - 15 мин логов без ошибок новых узлов.
+7. ⚠ Откат: `rollback --deployment-id … --flow-backup … --contract-backup …`.
+   Маршрут ничего не пишет, поэтому откат не оставляет состояния.
