@@ -1022,3 +1022,25 @@ test('a paid PRO durable operation leaves the next ordinary training first-free'
     assert.equal(result.findings[0].decision.subscriptionVisitCount, 1);
   }
 });
+
+test('composed Spanish-training preview exports the guard and returns no subscription benefits', () => {
+  const body = guardedBody + '\n' + read('../lib/spanishTrainingExclusion.mjs').replace(/^export /gm, '')
+    + '\n// SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE';
+  const composed = previewSources(syntheticFlow({ body, initialize: hubTransition().initialize }), { pins: syntheticPins(body) });
+  const composition = makeComposition(composed);
+  const exercise = proGroupExercise({ direction: { id: 9999, name: 'ИНДИВИДУАЛЬНАЯ/СПЛИТ ТРЕНИРОВКА ИСПАНСКИЙ ТРЕНЕР 🇪🇸' } });
+  const result = preview({ composition, groupExercise: exercise, subscriptions: [subscription(RA), subscription(FRIENDSHIP, { subscriptionId: uuid(21) })], planProducts: [RA, FRIENDSHIP] });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.error, undefined);
+  assert.equal(result.quotes.length, 0);
+  assert.equal(result.findings.length, 0, 'no allowance or free-first-event evaluation');
+  assert.equal(result.scope.canonical.isSpanishTrainingExercise(exercise), true);
+  assert.equal(result.scope.canonical.isSpanishTrainingExercise(proGroupExercise()), false);
+  assert.equal(soleQuote(groupPreview(RA, { composition })).amountMinor, 275000, 'PRO retains 50 percent');
+  assert.equal(soleQuote(groupPreview(RA, { composition, groupExercise: proGroupExercise({ direction: { id: 1001 } }) })).amountMinor, 0, 'ordinary training retains free-first benefit');
+});
+
+test('old booking generation cannot silently activate the Spanish-training preview exclusion', () => {
+  const scope = composition.createScope({ get: () => null }, { warn() {} });
+  assert.equal(scope.canonical.isSpanishTrainingExercise({ directionName: 'Индивидуальная/сплит тренировка Испанский тренер' }), false);
+});

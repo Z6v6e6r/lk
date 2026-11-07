@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 // PRO trainings (owner decision 2026-09-18) must leave the subscription contour on both
 // sides: the atomic booking gateway refuses a subscription booking of any product and the
 // advisory price preview quotes nothing. These cases drive the reviewed hook text itself,
@@ -72,6 +73,7 @@ function runExerciseHook(options = {}) {
     ctx: { caller: "http", tenantKey: "iSkq6G", clientSubscriptionId: "sub-1", managedAction: "BOOK_GROUP_TRAINING" },
     msg: {},
     isProTrainingExercise,
+    isSpanishTrainingExercise,
     isProTrainingEnergyPack,
     isProTrainingDiscountRule,
     // The Topokraty exclusion (2026-09-25) sits in the same reviewed step; these trainings are

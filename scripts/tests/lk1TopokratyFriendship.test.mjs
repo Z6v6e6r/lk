@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../lib/spanishTrainingExclusion.mjs";
 // «Дружба Топократы» in the LK1 contour (owner decision 2026-09-26).
 //
 // The club plan (Viva product 14692232-12be-4218-9fa1-2d5b79b62035) carries the five
@@ -777,6 +778,7 @@ function runExerciseHook(options = {}) {
     ctx: { caller: 'http', tenantKey: 'iSkq6G', clientSubscriptionId: 'sub-1', managedAction: 'JOIN_GAME' },
     msg: {},
     isProTrainingExercise: () => false,
+    isSpanishTrainingExercise,
     isProTrainingEnergyPack: () => false,
     isTopokratyExercise,
     isTopokratyClubPack,

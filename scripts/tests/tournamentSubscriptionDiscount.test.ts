@@ -1,3 +1,4 @@
+import { isSpanishTrainingExercise } from "../../src/utils/spanishTrainingExclusion.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -38,7 +39,7 @@ const params = {
 };
 
 function loadFunction(name: string, dependencies: Record<string, unknown> = {}) {
-  dependencies = { isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
+  dependencies = { isSpanishTrainingExercise, isTrialGroupTraining, TRIAL_GROUP_CHECKOUT_ENABLED: false, ...dependencies };
   const source = ts.createSourceFile("api.ts", fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(declaration, name);
@@ -146,7 +147,7 @@ test("group schedule accepts a valid zero-benefit preview without a validation e
       isAuthenticated: true, isRestoringSession: false, subscriptionUsageShadowEnabled: false,
       selectedId: quote.exerciseId, checkout: { profile: { id: quote.actorClientId },
         exercise: { timeFrom: quote.startsAt }, oneTimes: [product] },
-      registrationLoading: false, topokratyExcluded: false, patriotsTournamentSelected: true,
+      registrationLoading: false, topokratyExcluded: false, spanishTrainingSelected: false, patriotsTournamentSelected: true,
       AbortController, isGroupScheduleSubscriptionQuote,
       apiFetchTournamentSubscriptionDiscounts: async () => ({ data: { quotes: [zero] }, error: null }),
       apiFetchGroupSubscriptionDiscounts: async () => { throw new Error("wrong preview route"); },
@@ -186,7 +187,7 @@ test("server preview reproduces the old training-target refusal and accepts the 
       isObj, identityMoneyOwned: () => [], unwrapRecord: (value: unknown) => value,
       eventStartsAt: () => quote.startsAt, eventDurationMinutes: () => 120,
       resolveCategory, exerciseRoomId: () => exercise.room.id,
-      managedExternalEventTypeId: () => "viva:direction:6306:type:2349", isProTrainingExercise: () => false,
+      managedExternalEventTypeId: () => "viva:direction:6306:type:2349", isProTrainingExercise: () => false, isSpanishTrainingExercise,
     });
     if (eventCategory === "GROUP_TRAINING") assert.equal(ctx.error, "GROUP_DISCOUNT_TARGET_UNRESOLVED");
     else {

@@ -15,6 +15,9 @@ import {
   LK1_TRAIN_G1_REVERT_INITIALIZE_SHA256,
   LK1_TRAIN_G1_REVERT_POSTIMAGE_SHA256,
   LK1_TRAIN_G1_TARGET,
+  LK1_TRAIN_G1_REVIEWED_GATEWAY_SHA256,
+  LK1_TRAIN_G1_REVIEWED_HOOKS_SHA256,
+  g1ReviewedSource,
   LK1_TRAIN_G1_UPSTREAM_SHA256,
   buildLk1TrainG1Report,
   buildLk1TrainG1RevertReport,
@@ -449,3 +452,26 @@ test("the composed G1 club mandate resolves the co-pay and the dispatch proves a
         partialPriceCalculation: { hourlyCourtPriceMinor: 600000, perHourMinor: 150000, chargeableHours: 1 } } } });
     assert.equal(refused, null);
   });
+
+
+test("G1 retains original source pins while undoing only exact later Spanish-training guards", () => {
+  const rows = [
+    ["nodered_lk1_hub_nodes/gateway.js", LK1_TRAIN_G1_REVIEWED_GATEWAY_SHA256, "  if (isSpanishTrainingExercise(exercise)) return { code: \"SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE\" };\n"],
+    ["nodered_lk1_hub_nodes/gateway_hooks.js", LK1_TRAIN_G1_REVIEWED_HOOKS_SHA256, "// Refuse every subscription before legacy, visit-pack and managed-price paths.\nif (isSpanishTrainingExercise(exercise)) {\n  return finishError(ctx, 409, \"На индивидуальные/сплит тренировки с испанским тренером подписки не действуют. Выберите разовую оплату.\", {\n    code: \"SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE\",\n  });\n}\n"],
+  ];
+  for (const [relative, pin, delta] of rows) {
+    const current = fs.readFileSync(new URL("../" + relative, import.meta.url), "utf8");
+    const historical = current.replace(delta, "");
+    assert.notEqual(current, historical);
+    assert.equal(sha256(historical), pin);
+    assert.equal(g1ReviewedSource(historical, relative, pin, relative), historical);
+    assert.equal(g1ReviewedSource(current, relative, pin, relative), historical);
+    for (const changed of [current + delta, current.replace("SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE", "CHANGED"), current + "\n// unrelated drift"]) {
+      assert.throws(() => g1ReviewedSource(changed, relative, pin, relative), /Reviewed .* drift/);
+    }
+    assert.throws(() => g1ReviewedSource(current, "other.js", pin, relative), /Reviewed .* drift/);
+    assert.throws(() => g1ReviewedSource(current, relative, "0".repeat(64), relative), /Reviewed .* drift/);
+  }
+  const body = syntheticGatewayBody();
+  assert.equal(patchLk1TrainG1GatewayBody(body, syntheticTarget(body)).includes("SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE"), false);
+});
