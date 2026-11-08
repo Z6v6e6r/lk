@@ -2,7 +2,7 @@
 // this guard is acquired. Mongo's existing unique _id serializes all categories,
 // including different Node-RED processes; no index migration or expiring lock.
 const lk1DailyVisitKey = (ctx) => `lk1-daily-visit:${JSON.stringify([
-  ctx.tenantKey, ctx.clientSubscriptionId, ctx.serviceDate,
+  ctx.tenantKey, normalizeId(ctx.clientSubscriptionId), ctx.serviceDate,
 ])}`;
 const lk1DailyVisitConflict = (operation) => operation?.state === "FAILED"
   && operation.failure?.rawCode === "LK1_DAILY_VISIT_CHANGED"
@@ -19,7 +19,7 @@ const lk1DailyVisitAcquire = (ctx) => {
   msg._subscriptionBooking = ctx;
   // Deliberately no actorClientId/lk1.rule: a guard is not an allowance operation.
   msg.payload = [{ _id: lk1DailyVisitKey(ctx) }, { $setOnInsert: { kind: "LK1_DAILY_VISIT_V1",
-    tenantKey: ctx.tenantKey, clientSubscriptionId: ctx.clientSubscriptionId,
+    tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),
     serviceDate: ctx.serviceDate, ownerOperationKey: ctx.operationKey,
     ownerOperationId: ctx.operationId } }, { upsert: true, writeConcern: { w: "majority", j: true } }];
   delete msg.error;
@@ -67,7 +67,7 @@ if (ctx.step === "lk1_daily_visit_read") {
   }
   const guard = msg.payload[0];
   if (guard._id !== lk1DailyVisitKey(ctx) || guard.kind !== "LK1_DAILY_VISIT_V1"
-    || guard.tenantKey !== ctx.tenantKey || guard.clientSubscriptionId !== ctx.clientSubscriptionId
+    || guard.tenantKey !== ctx.tenantKey || guard.clientSubscriptionId !== normalizeId(ctx.clientSubscriptionId)
     || guard.serviceDate !== ctx.serviceDate || typeof guard.ownerOperationKey !== "string"
     || typeof guard.ownerOperationId !== "string") return lk1Stop(ctx, "LK1_DAILY_VISIT_BINDING_INVALID");
   if (guard.ownerOperationKey === ctx.operationKey) {
@@ -83,7 +83,7 @@ if (ctx.step === "lk1_daily_visit_owner") {
   }
   const owner = msg.payload[0], guard = ctx.lk1DailyVisitPrevious;
   if (!guard || owner._id !== guard.ownerOperationKey || owner.operationId !== guard.ownerOperationId
-    || owner.tenantKey !== ctx.tenantKey || owner.clientSubscriptionId !== ctx.clientSubscriptionId
+    || owner.tenantKey !== ctx.tenantKey || normalizeId(owner.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)
     || owner.serviceDate !== ctx.serviceDate || owner.lk1?.decision?.subscriptionVisitCount !== 1) {
     return lk1Stop(ctx, "LK1_DAILY_VISIT_BINDING_INVALID");
   }

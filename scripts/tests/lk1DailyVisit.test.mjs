@@ -118,6 +118,7 @@ const context = (operationId, changes = {}) => ({ tenantKey: 'fixture', actorCli
 function guardStep(ctx, payload, error) {
   const msg = { payload, error, _subscriptionBooking: ctx };
   const helpers = { ctx, msg, isValidDateKey: v => /^\d{4}-\d{2}-\d{2}$/.test(v),
+    normalizeId: value => typeof value === 'string' ? value.trim().toLowerCase() : null,
     lk1Stop: (_ctx, code) => ({ type: 'pending', code }),
     emit: type => ({ type, payload: msg.payload, step: ctx.step }), OUTPUT_MONGO_UPDATE: 'mongoUpdate',
     preparePreaccept: () => ({ type: 'preaccept' }), prepareBookingCreate: () => ({ type: 'booking' }),
@@ -161,6 +162,8 @@ test('lost acknowledgements and same-owner replay read the durable guard', () =>
   assert.notEqual(guardStep(other).payload[0]._id, inserted._id);
   const sibling = context('other', { clientSubscriptionId: 'subscription-b' });
   assert.notEqual(guardStep(sibling).payload[0]._id, inserted._id);
+  const sameInstance = context('case-variant', { clientSubscriptionId: 'SUBSCRIPTION-A' });
+  assert.equal(guardStep(sameInstance).payload[0]._id, inserted._id);
 });
 test('guard never expires; only proved terminal cancellation allows durable fenced takeover', () => {
   for (const state of ['PREPARED', 'PENDING_CONFIRMATION', 'CONFIRMED', 'FAILED', 'RELEASED']) {
@@ -243,6 +246,25 @@ test('frozen full gateway: Mongo route, old replay, fresh retry CAS and quote sa
   const input = usage('GROUP_TRAINING', [operation('GAME')]);
   const paid = decide(input);
   const target = { ...input.target, eventId: 'fixture-event', stationId: 'fixture-studio', priceProductId: 'fixture-tariff' };
+  const replay = context('replay', { step: 'lk1_operation_find', caller: 'http', action: 'book',
+    category: 'group_training', exerciseId: target.eventId, studioId: target.stationId,
+    managedAction: 'BOOK_GROUP_TRAINING', lk1: { rule, target } });
+  replay.operationKey = `lk1-product:${JSON.stringify([replay.tenantKey, replay.actorClientId, replay.operationId])}`;
+  const savedQuote = { rule, target, decision: { eligible: true, subscriptionVisitCount: 1,
+    benefit: { kind: 'FREE_ENTITLEMENT', finalPriceMinor: 0 } } };
+  savedQuote.fingerprint = JSON.stringify({ tenantKey: replay.tenantKey, actorClientId: replay.actorClientId,
+    clientSubscriptionId: replay.clientSubscriptionId, action: replay.managedAction, rule, target });
+  replay.lk1.fingerprint = savedQuote.fingerprint;
+  const saved = { _id: replay.operationKey, tenantKey: replay.tenantKey, actorClientId: replay.actorClientId,
+    clientSubscriptionId: replay.clientSubscriptionId, operationId: replay.operationId, exerciseId: target.eventId,
+    lk1: savedQuote, state: 'PREPARED', category: 'group_training', serviceDate: day };
+  result = run(replay, [saved]);
+  assert.equal(replay.step, 'lk1_daily_visit_conflict_saved', 'actual old PREPARED replay is fenced');
+  saved.state = 'FAILED'; saved.failure = { rawCode: 'LK1_DAILY_VISIT_CHANGED' };
+  replay.step = 'lk1_operation_find';
+  result = run(replay, [saved]);
+  assert.equal(replay.step, 'active_bookings', 'same-ID retry starts fresh provider usage reads');
+  assert.equal(replay.lk1DailyVisitRetry.fingerprint, savedQuote.fingerprint);
   const retry = context('retry', { step: 'lk1_policy_decision', caller: 'http', action: 'book',
     category: 'group_training', exerciseId: target.eventId, studioId: target.stationId,
     managedAction: 'BOOK_GROUP_TRAINING', lk1: { rule, target },
