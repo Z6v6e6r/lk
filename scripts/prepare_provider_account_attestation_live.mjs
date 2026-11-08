@@ -60,6 +60,18 @@ export function assertLiveAttestationFacts(flow) {
   if (!active(flow.find((n) => n.id === RECEIVER_ADMISSION_IN && n.type === 'http in'))) {
     throw new Error('ATTESTATION_LIVE_RECEIVER_MISSING');
   }
+  // The HUB JOIN pins compiled into the router must equal what the installed money gate and
+  // booking owner enforce.
+  const router = providerAccountAttestationSource('router');
+  for (const name of ['LK1_OVERLAY_HUB_PRODUCT_ID', 'MANAGED_ENFORCEMENT_PURCHASE_FROM']) {
+    const re = new RegExp('const ' + name + ' = "([^"]+)"');
+    const expected = router.match(re)?.[1];
+    const installed = flow.filter((n) => active(n) && n.type === 'function' && typeof n.func === 'string' && re.test(n.func))
+      .map((n) => n.func.match(re)[1]);
+    if (!expected || !installed.length || installed.some((value) => value !== expected)) {
+      throw new Error('ATTESTATION_LIVE_RULE_PIN_DRIFT');
+    }
+  }
   // Express registers the new routes last: no existing route may match the path first, or it
   // would receive the delegation and the actor token.
   for (const method of ['post', 'get']) {

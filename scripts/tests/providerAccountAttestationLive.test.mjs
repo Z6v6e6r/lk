@@ -17,6 +17,8 @@ const syntheticLive = () => [
     url: '/lk/integrations/v1/booked-operation-admissions', method: 'post', wires: [[]] },
   { id: 'param', type: 'http in', z: 'tab_lk1', url: '/lk/integrations/v1/station-memberships/operations/:operationId/',
     method: 'post', wires: [[]] },
+  { id: 'gw', type: 'function', z: 'tab_lk1', func: 'const LK1_OVERLAY_HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";', wires: [[]] },
+  { id: 'own', type: 'function', z: 'tab_lk1', func: 'const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01";', wires: [[]] },
 ];
 const bytesOf = (flow) => Buffer.from(JSON.stringify(flow, null, 2) + '\n');
 
@@ -40,6 +42,16 @@ test('receiver boundary must exist and be active', () => {
   const off = syntheticLive();
   off[1].d = true;
   assert.throws(() => assertLiveAttestationFacts(off), /ATTESTATION_LIVE_RECEIVER_MISSING/);
+});
+
+test('installed HUB pins must equal the compiled rule', () => {
+  for (const [id, func] of [['gw', 'const LK1_OVERLAY_HUB_PRODUCT_ID = "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e";'],
+    ['own', 'const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-10-01";']]) {
+    const flow = syntheticLive();
+    flow.find((n) => n.id === id).func = func;
+    assert.throws(() => assertLiveAttestationFacts(flow), /ATTESTATION_LIVE_RULE_PIN_DRIFT/, id);
+  }
+  assert.throws(() => assertLiveAttestationFacts(syntheticLive().filter((n) => n.id !== 'gw')), /ATTESTATION_LIVE_RULE_PIN_DRIFT/);
 });
 
 test('an earlier parameter, wildcard, case or slash variant route refuses (it would receive the tokens)', () => {
