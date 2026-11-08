@@ -430,6 +430,7 @@ jobs:
           scripts/tests/subscriptionProductIdentity.test.mjs
           scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts
           scripts/tests/subscriptionSharedDailyLimit.test.ts
+          scripts/tests/lk1DailyVisit.test.mjs
           scripts/tests/subscriptionCategoryDailyLimit.test.ts
           scripts/tests/subscriptionDailyLimit.test.ts
           scripts/tests/splitRouter.transactionAndSubscription.test.ts
