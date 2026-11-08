@@ -89,7 +89,7 @@ No Mongo, no global credential, no provider write.
     "remainingUnits": "<int >= 0>|null", "validUntil": "<ISO>|null" }],
   "attestedAt": "<ISO>",
   "targetProof": { "exerciseId": "<id>", "startsAt": "<ISO>", "durationMinutes": 90,
-    "ownedClientSubscriptionIds": ["<id>"] }
+    "ownedClientSubscriptionIds": ["<id>"], "eligibleClientSubscriptionIds": ["<id>"] }
 }
 ```
 
@@ -115,6 +115,20 @@ Field derivation from the Viva item:
 - `targetProof`: `eventStartsAt`, `eventDurationMinutes` and `findOwnedSubscriptions` from the
   booking owner, applied to every attested id (also those beyond the 50 listed), at most 50 ids.
 - Ids compare case-insensitively, as `normalizeId` does in the booking owner.
+- `targetProof.eligibleClientSubscriptionIds` (unique, at most 50, a subset of owned): owned ids
+  that pass the HUB JOIN rule for this exact exercise, all proved by this Viva read:
+  - exactly one product id (`collectExactProductIds`), equal to `LK1_OVERLAY_HUB_PRODUCT_ID`
+    (`nodered_lk1_hub_nodes/gateway.js`);
+  - exactly one purchase day (`collectSubscriptionPurchaseDateEvidence`, Moscow) on or after
+    `MANAGED_ENFORCEMENT_PURCHASE_FROM` (2026-09-01, booking owner);
+  - `status` `ACTIVE`, `variant` `BY_VISITS`, integer `visitsLeft >= 1`;
+  - activation (`lk1LifecycleInstant`) not after now and not after the game start;
+  - expiry (end of day) not before now and not before the game end;
+  - no `holdUntil`, `frozenUntil` or `isFrozen`.
+  The pins and helpers are extracted from those nodes, not copied. A missing field is not
+  eligible. If the Viva end-user list carries no product id (LK1's general reads note it may
+  not), nothing is eligible until a server-owned product identity is added; the post-install
+  signed smoke decides this.
 
 ## Errors
 

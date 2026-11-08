@@ -62,7 +62,8 @@ test('target adds a proof derived with the booking owner findOwnedSubscriptions'
   assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
   assertClean(h, r);
   assert.deepEqual(r.payload.targetProof, { exerciseId: 'synthetic-exercise-1', startsAt: '2035-04-02T09:00:00.000Z',
-    durationMinutes: 90, ownedClientSubscriptionIds: ['synthetic-client-subscription-active'] });
+    durationMinutes: 90, ownedClientSubscriptionIds: ['synthetic-client-subscription-active'],
+    eligibleClientSubscriptionIds: [] }, 'the reconstructed row proves no HUB product or purchase date: not eligible');
   assert.equal(h.calls.at(-1).url, 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/exercises/synthetic-exercise-1');
   const none = new Harness();
   none.body = h.body;
@@ -245,6 +246,58 @@ test('target proof covers subscriptions beyond the 50 shown; ids compare case-in
   assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
   assert.ok(!r.payload.subscriptions.some((s) => s.clientSubscriptionId === 'synthetic-sub-late'));
   assert.deepEqual(r.payload.targetProof.ownedClientSubscriptionIds, ['synthetic-sub-late']);
+});
+
+const HUB = 'db7a5250-7369-4f43-8ac5-9111be24bc74';
+const eligibleRow = (over = {}) => ({ subscriptionId: 'synthetic-hub-sub', clientId: 'synthetic-client-1', productId: HUB,
+  name: 'HUB', status: 'ACTIVE', variant: 'BY_VISITS', visitsLeft: 3, purchaseDate: '2026-09-01T10:00:00.000+03:00',
+  activationDate: '2035-03-01T10:00:00.000+03:00', expirationDate: '2035-04-30', holdUntil: null, ...over });
+const eligibleRun = (row, exerciseOver = {}) => {
+  const h = new Harness();
+  h.body = { contractVersion: 1, operationId: uuid(20), target: { exerciseId: 'synthetic-exercise-1' } };
+  h.subscriptions = [row];
+  Object.assign(h.exercise, { availableClientSubscriptions: [{ subscriptionId: row.subscriptionId }] }, exerciseOver);
+  const r = h.run();
+  assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
+  assert.ok(r.payload.targetProof.eligibleClientSubscriptionIds.every((id) => r.payload.targetProof.ownedClientSubscriptionIds.includes(id)));
+  return r.payload.targetProof.eligibleClientSubscriptionIds;
+};
+
+test('eligible: owned HUB BY_VISITS bought from 2026-09-01, active over the whole game, visits left', () => {
+  assert.deepEqual(eligibleRun(eligibleRow()), ['synthetic-hub-sub']);
+  assert.deepEqual(eligibleRun(eligibleRow({ productId: undefined, product: { id: HUB } })), ['synthetic-hub-sub']);
+  assert.deepEqual(eligibleRun(eligibleRow({ expirationDate: '2035-04-02', purchaseDate: '2026-08-31T21:30:00.000Z' })),
+    ['synthetic-hub-sub'], 'expiry day covers the game; 00:30 Moscow on 1 Sep counts');
+});
+
+test('not eligible: each HUB JOIN rule refuses on its own', () => {
+  const cases = {
+    'another product': { productId: '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e' },
+    'no product in the Viva row': { productId: undefined },
+    'two products': { product: { id: '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e' } },
+    'bought before 2026-09-01': { purchaseDate: '2026-08-31T23:59:59.000+03:00' },
+    'no purchase date': { purchaseDate: undefined },
+    'conflicting purchase dates': { purchaseAt: '2026-10-01T10:00:00.000+03:00' },
+    'FINISHED': { status: 'FINISHED' },
+    'NEW (not activated)': { status: 'NEW', activationDate: null },
+    'frozen': { isFrozen: true },
+    'hold': { holdUntil: '2035-04-10T00:00:00.000+03:00' },
+    'frozenUntil': { frozenUntil: '2035-04-10T00:00:00.000+03:00' },
+    'activated after now': { activationDate: '2035-04-01T13:00:00.000+03:00' },
+    'activated after game start': { activationDate: '2035-04-02T12:30:00.000+03:00' },
+    'activation unparsed': { activationDate: 'soon' },
+    'expires before game end': { expirationDate: '2035-04-02T12:00:00.000+03:00' },
+    'expired': { expirationDate: '2035-03-31' },
+    'visitsLeft 0': { visitsLeft: 0 },
+    'visitsLeft not a number': { visitsLeft: '3' },
+    'variant other than BY_VISITS': { variant: 'UNLIMITED' },
+  };
+  for (const [label, over] of Object.entries(cases)) {
+    const row = eligibleRow(over);
+    for (const [k, v] of Object.entries(over)) if (v === undefined) delete row[k];
+    assert.deepEqual(eligibleRun(row), [], label);
+  }
+  assert.deepEqual(eligibleRun(eligibleRow(), { availableClientSubscriptions: [] }), [], 'not owned for this exercise');
 });
 
 test('validity follows the LK1 money gate: Moscow wall time, date-only expiry is end of day', () => {

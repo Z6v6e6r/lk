@@ -88,6 +88,11 @@ if (ctx.step === "subscriptions") {
           : "FINISHED";
     projected.push({ clientSubscriptionId, productId, title: paTitle(paSelect.pickName(row)), state,
       remainingUnits, validUntil });
+    // Private eligibility evidence for the target proof; never returned.
+    ctx.eligibility = ctx.eligibility || {};
+    ctx.eligibility[clientSubscriptionId.toLowerCase()] = { products, purchase: paSelect.collectSubscriptionPurchaseDateEvidence(row),
+      status: row.status, variant: row.variant, visitsLeft, activationMs: paLifecycleInstant(row.activationDate),
+      expiryMs, paused: Boolean(row.holdUntil || row.frozenUntil || row.isFrozen === true) };
   }
   const rank = (s) => PA_STATES.indexOf(s.state);
   projected.sort((a, b) => rank(a) - rank(b)
@@ -107,13 +112,31 @@ if (ctx.step === "exercise") {
   const durationMinutes = paSelect.eventDurationMinutes(exercise);
   if (!ids.length || ids.some((v) => String(v).toLowerCase() !== ctx.body.target.exerciseId.toLowerCase()) || !startsAt
     || !Number.isSafeInteger(durationMinutes)) return reject(409, "PROVIDER_ACCOUNT_INVALID");
+  const owned = ctx.attestedIds.filter((id) => paSelect.findOwnedSubscriptions(exercise, id).length > 0);
+  const startMs = Date.parse(startsAt);
+  const endMs = startMs + durationMinutes * 60000;
+  const nowMs = Date.now();
+  // The HUB JOIN rule (same pins as the LK1 money gate and the managed selector). Every
+  // condition must be proved by this Viva read; a missing field is not eligible.
+  const eligible = owned.filter((id) => {
+    const e = (ctx.eligibility || {})[id.toLowerCase()];
+    return Boolean(e) && e.products.length === 1 && e.products[0] === paHub.productId
+      && !e.purchase.invalid && e.purchase.dates.length === 1
+      && e.purchase.dates[0] >= paSelect.MANAGED_ENFORCEMENT_PURCHASE_FROM
+      && e.status === "ACTIVE" && e.variant === "BY_VISITS"
+      && Number.isSafeInteger(e.visitsLeft) && e.visitsLeft >= 1
+      && Number.isFinite(e.activationMs) && e.activationMs <= nowMs && e.activationMs <= startMs
+      && Number.isFinite(e.expiryMs) && e.expiryMs >= nowMs && e.expiryMs >= endMs
+      && !e.paused;
+  });
   ctx.targetProof = {
     exerciseId: ctx.body.target.exerciseId,
     startsAt,
     durationMinutes,
-    ownedClientSubscriptionIds: ctx.attestedIds
-      .filter((id) => paSelect.findOwnedSubscriptions(exercise, id).length > 0).slice(0, PA_MAX_SUBSCRIPTIONS),
+    ownedClientSubscriptionIds: owned.slice(0, PA_MAX_SUBSCRIPTIONS),
+    eligibleClientSubscriptionIds: eligible.slice(0, PA_MAX_SUBSCRIPTIONS),
   };
+  delete ctx.eligibility;
   ctx.step = "done";
 }
 
