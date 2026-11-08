@@ -195,7 +195,8 @@ test('Viva 401/403 map to FORBIDDEN, other failures to closed codes', () => {
     assert.deepEqual(code(r), expected, step + status);
     assertClean(h, r);
   }
-  for (const options of [{ transportError: 'profile' }, { redirect: 'subscriptions' }]) {
+  for (const options of [{ transportError: 'profile' }, { transportError: 'subscriptions' }, { redirect: 'subscriptions' },
+    { rawBody: 'profile' }, { rawBody: 'subscriptions' }]) {
     const h = new Harness();
     assert.deepEqual(code(h.run(options)), [503, 'PROVIDER_ACCOUNT_UNAVAILABLE']);
   }
@@ -230,6 +231,33 @@ test('the client id comes only from the actor profile read; inconsistent provide
   const r = owned.run();
   assert.equal(r.statusCode, 200);
   assert.equal(r.payload.subscriptions[0].productId, 'b2e6a9d4-53b5-4f79-87ec-3fb076381e9b');
+});
+
+test('target proof covers subscriptions beyond the 50 shown; ids compare case-insensitively', () => {
+  const h = new Harness();
+  h.body = { contractVersion: 1, operationId: uuid(15), target: { exerciseId: 'Synthetic-Exercise-1' } };
+  h.subscriptions = Array.from({ length: 60 }, (_, i) => ({ subscriptionId: 'synthetic-sub-' + String(i).padStart(2, '0'),
+    status: 'ACTIVE', activationDate: '2035-01-01', expirationDate: '2035-12-31' }));
+  h.subscriptions[59] = { subscriptionId: 'synthetic-sub-late', status: 'FINISHED', expirationDate: '2034-01-01' };
+  h.exercise.id = 'synthetic-exercise-1';
+  h.exercise.availableClientSubscriptions = [{ subscriptionId: 'SYNTHETIC-SUB-LATE' }];
+  const r = h.run();
+  assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
+  assert.ok(!r.payload.subscriptions.some((s) => s.clientSubscriptionId === 'synthetic-sub-late'));
+  assert.deepEqual(r.payload.targetProof.ownedClientSubscriptionIds, ['synthetic-sub-late']);
+});
+
+test('validity follows the LK1 money gate: Moscow wall time, date-only expiry is end of day', () => {
+  const h = new Harness();
+  h.now = Date.parse('2035-04-01T20:30:00.000Z'); // 23:30 Moscow on 1 April
+  h.subscriptions = [{ subscriptionId: 'sub-a', status: 'ACTIVE', expirationDate: '2035-04-01' },
+    { subscriptionId: 'sub-b', status: 'ACTIVE', expirationDate: '2035-04-01T23:00:00' },
+    { subscriptionId: 'sub-c', status: 'ACTIVE', expirationDate: '2035-04-02T10:00:00.123456+03:00' }];
+  const r = h.run();
+  assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
+  const by = Object.fromEntries(r.payload.subscriptions.map((s) => [s.clientSubscriptionId, [s.state, s.validUntil]]));
+  assert.deepEqual(by, { 'sub-a': ['ACTIVE', '2035-04-01T20:59:59.999Z'], 'sub-b': ['FINISHED', '2035-04-01T20:00:00.000Z'],
+    'sub-c': ['ACTIVE', '2035-04-02T07:00:00.123Z'] });
 });
 
 test('bounds: at most 50 subscriptions, 120-character titles, 32 KiB', () => {

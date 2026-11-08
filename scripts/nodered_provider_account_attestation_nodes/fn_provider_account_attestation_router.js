@@ -42,6 +42,8 @@ if (status === 401 || status === 403) return reject(403, "PROVIDER_ACCOUNT_FORBI
 if (ctx.step === "exercise" && status === 404) return reject(409, "PROVIDER_ACCOUNT_INVALID");
 if (status !== 200) return reject(503, "PROVIDER_ACCOUNT_UNAVAILABLE");
 const p = msg.payload;
+// `ret: obj` leaves an unparseable body as a string: a provider fault, not account evidence.
+if (p === null || typeof p !== "object") return reject(503, "PROVIDER_ACCOUNT_UNAVAILABLE");
 
 if (ctx.step === "profile") {
   const profile = paSelect.unwrapRecord(p);
@@ -62,24 +64,27 @@ if (ctx.step === "subscriptions") {
     // Same explicit-id aliases the booking owner accepts in findOwnedSubscriptions.
     const aliases = [row.clientSubscriptionId, row.subscriptionId, row.clientSubId, row.clientSubscription?.id,
       row.clientSubscription?.clientSubscriptionId, row.clientSub?.id].filter((v) => v !== undefined && v !== null);
-    if (!aliases.length || !aliases.every(paId) || new Set(aliases).size !== 1) return reject(409, "PROVIDER_ACCOUNT_INVALID");
+    if (!aliases.length || !aliases.every(paId) || new Set(aliases.map((v) => v.toLowerCase())).size !== 1) {
+      return reject(409, "PROVIDER_ACCOUNT_INVALID");
+    }
     const owners = [row.clientId, row.client?.id].filter((v) => v !== undefined && v !== null);
-    if (owners.some((v) => String(v) !== ctx.providerClientId)) return reject(409, "PROVIDER_ACCOUNT_INVALID");
+    if (owners.some((v) => String(v).toLowerCase() !== ctx.providerClientId.toLowerCase())) return reject(409, "PROVIDER_ACCOUNT_INVALID");
     const clientSubscriptionId = aliases[0];
-    if (seen.has(clientSubscriptionId)) return reject(409, "PROVIDER_ACCOUNT_INVALID");
-    seen.add(clientSubscriptionId);
+    if (seen.has(clientSubscriptionId.toLowerCase())) return reject(409, "PROVIDER_ACCOUNT_INVALID");
+    seen.add(clientSubscriptionId.toLowerCase());
     const products = [...new Set(paSelect.collectExactProductIds(row))];
     const productId = products.length === 1 && paUuid(products[0]) ? products[0] : null;
     const visitsLeft = row.visitsLeft;
     const remainingUnits = typeof visitsLeft === "number" && Number.isSafeInteger(visitsLeft) && visitsLeft >= 0
       ? visitsLeft : null;
-    const validUntil = paInstant(row.expirationDate);
+    const expiryMs = paLifecycleInstant(row.expirationDate, true);
+    const validUntil = Number.isFinite(expiryMs) ? new Date(expiryMs).toISOString() : null;
     const providerStatus = String(row.status || "").trim().toUpperCase();
     const activation = String(row.activationDate || "").trim();
     // Presentation state only; every command re-verifies lifecycle on LK1 before a Viva write.
     const state = row.holdUntil || row.frozenUntil || row.isFrozen === true ? "PAUSED"
       : providerStatus === "NEW" && !activation ? "NOT_ACTIVATED"
-        : providerStatus === "ACTIVE" && validUntil && Date.parse(validUntil) >= nowMs ? "ACTIVE"
+        : providerStatus === "ACTIVE" && validUntil && expiryMs >= nowMs ? "ACTIVE"
           : "FINISHED";
     projected.push({ clientSubscriptionId, productId, title: paTitle(paSelect.pickName(row)), state,
       remainingUnits, validUntil });
@@ -89,6 +94,8 @@ if (ctx.step === "subscriptions") {
     || (Date.parse(b.validUntil || "") || 0) - (Date.parse(a.validUntil || "") || 0)
     || (a.clientSubscriptionId < b.clientSubscriptionId ? -1 : 1));
   ctx.subscriptions = projected.slice(0, PA_MAX_SUBSCRIPTIONS);
+  // The JOIN proof considers every attested subscription, not only the 50 shown.
+  ctx.attestedIds = projected.map((s) => s.clientSubscriptionId);
   if (ctx.body.target) return request("exercise", "/exercises/" + encodeURIComponent(ctx.body.target.exerciseId));
   ctx.step = "done";
 }
@@ -98,14 +105,14 @@ if (ctx.step === "exercise") {
   const ids = paObject(exercise) ? [exercise.id, exercise.exerciseId, exercise.uuid].filter((v) => v !== undefined && v !== null) : [];
   const startsAt = paSelect.eventStartsAt(exercise);
   const durationMinutes = paSelect.eventDurationMinutes(exercise);
-  if (!ids.length || ids.some((v) => String(v) !== ctx.body.target.exerciseId) || !startsAt
+  if (!ids.length || ids.some((v) => String(v).toLowerCase() !== ctx.body.target.exerciseId.toLowerCase()) || !startsAt
     || !Number.isSafeInteger(durationMinutes)) return reject(409, "PROVIDER_ACCOUNT_INVALID");
   ctx.targetProof = {
     exerciseId: ctx.body.target.exerciseId,
     startsAt,
     durationMinutes,
-    ownedClientSubscriptionIds: ctx.subscriptions.map((s) => s.clientSubscriptionId)
-      .filter((id) => paSelect.findOwnedSubscriptions(exercise, id).length > 0),
+    ownedClientSubscriptionIds: ctx.attestedIds
+      .filter((id) => paSelect.findOwnedSubscriptions(exercise, id).length > 0).slice(0, PA_MAX_SUBSCRIPTIONS),
   };
   ctx.step = "done";
 }

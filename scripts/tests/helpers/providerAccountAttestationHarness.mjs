@@ -101,12 +101,15 @@ export class Harness {
       this.calls.push({ step, url: msg.url, method: msg.method, auth: msg.headers.Authorization,
         followRedirects: msg.followRedirects, payload: msg.payload });
       if (options.transportError === step) {
-        msg.error = 'ETIMEDOUT';
+        // Node-RED http request with senderr:false: error code as status, text payload, no responseUrl.
+        msg.statusCode = 'ETIMEDOUT';
+        msg.payload = 'RequestError: timeout : ' + msg.url;
         continue;
       }
       msg.statusCode = this.statuses[step] ?? 200;
       msg.payload = structuredClone(this.provider(step));
       msg.responseUrl = options.redirect === step ? msg.url + '?x=1' : msg.url;
+      if (options.rawBody === step) msg.payload = '<html>not json</html>';
       options.mutate?.(msg, step);
     }
     return assert.fail('unbounded request loop');

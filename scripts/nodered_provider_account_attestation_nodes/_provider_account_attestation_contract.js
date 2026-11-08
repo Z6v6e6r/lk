@@ -68,11 +68,6 @@ const paCompleteList = (p) => {
     || (p.totalPages !== undefined && ![0, 1].includes(p.totalPages)) || p.hasNext === true) return null;
   return p.content;
 };
-const paInstant = (v) => {
-  if (typeof v !== "string" || !v.trim() || v.length > 64) return null;
-  const ms = Date.parse(v);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-};
 const paTitle = (v) => {
   if (typeof v !== "string") return null;
   const text = v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim();

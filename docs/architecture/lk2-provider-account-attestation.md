@@ -5,7 +5,7 @@ Status: source only. Not installed on lk-primary-147, flag off by default. CRITI
 ## Route
 
 `POST /lk/integrations/v1/provider-account-attestations` in its own additive tab
-(`scripts/patch_nodered_provider_account_attestation.mjs`). It reuses the receiver delegation
+(`scripts/patch_nodered_provider_account_attestation.mjs`, 9 nodes, no catch node). It reuses the receiver delegation
 prelude and key ring (`LK2_BOOKED_OPERATION_DELEGATION_*`) but not the receiver tab, so the
 reviewed receiver and the JOIN v2 live pins are unchanged.
 
@@ -57,6 +57,14 @@ on LK1), holds at most 10,000 entries and fails closed with 503 when full. A res
 the 60-second delegation lifetime bounds that window. An id is remembered only after every other
 check passes.
 
+lk2 must not rely on this registry to deduplicate its own operations: after expiry or a restart the
+same `operationId` with a new delegation is accepted again. That is safe because the route only
+reads.
+
+Trust boundary: LK1 proves that the presented Viva token reads this `providerClientId`. It cannot
+prove that the PadlHub `sub` owns that token. lk2 guarantees this by issuing the actor token and the
+delegation for the same session (`authService.issueVivaAccessToken`).
+
 ## Provider reads
 
 Only with the actor token, without redirects, 10 s each, re-checking expiry before every hop:
@@ -97,14 +105,16 @@ Field derivation from the Viva item:
   none, so expect `null`.
 - `title`: `pickName`, control characters removed, at most 120 characters.
 - `remainingUnits`: `visitsLeft` when a non-negative integer.
-- `validUntil`: `expirationDate` normalized to ISO.
+- `validUntil`: `expirationDate` read like the HUB money gate (`lk1LifecycleInstant`, end of day):
+  a date-only value is 23:59:59.999 Moscow time, a timestamp without an offset is Moscow time.
 - `state` (presentation only; every command re-verifies on LK1):
   - `PAUSED`: `holdUntil`, `frozenUntil` or `isFrozen`;
   - `NOT_ACTIVATED`: `status` `NEW` without `activationDate` (first use activates it);
   - `ACTIVE`: `status` `ACTIVE` and `expirationDate` not passed;
   - otherwise `FINISHED`.
 - `targetProof`: `eventStartsAt`, `eventDurationMinutes` and `findOwnedSubscriptions` from the
-  booking owner, applied to the attested ids only.
+  booking owner, applied to every attested id (also those beyond the 50 listed), at most 50 ids.
+- Ids compare case-insensitively, as `normalizeId` does in the booking owner.
 
 ## Errors
 
@@ -116,7 +126,7 @@ Body `{"code": "<code>"}`.
 | 401 | `PROVIDER_ACCOUNT_DELEGATION_REQUIRED`, `PROVIDER_ACCOUNT_DELEGATION_INVALID` |
 | 403 | `PROVIDER_ACCOUNT_FORBIDDEN` (Viva 401/403), `PROVIDER_ACCOUNT_CONTEXT_MISMATCH`, `PROVIDER_ACCOUNT_ACTOR_TOKEN_INVALID` |
 | 409 | `PROVIDER_ACCOUNT_INVALID` (inconsistent provider data, exercise 404, replay) |
-| 503 | `PROVIDER_ACCOUNT_UNAVAILABLE` (disabled, transport, other Viva status) |
+| 503 | `PROVIDER_ACCOUNT_UNAVAILABLE` (disabled, transport, unparseable body, other Viva status) |
 
 ## Probe
 
@@ -132,6 +142,9 @@ cabinet type (`src/utils/apiClient.ts`) and the live parsers, not captured. A re
 with a real test account replaces it before activation.
 
 ## Install
+
+The live packet builder must also refuse an existing `http in` whose Express pattern (parameter or
+wildcard) matches this path, because such a route would receive the delegation and the actor token.
 
 Not part of this change. It needs a live packet builder pinned to the then-current flows.json, the
 reviewed-flow runner, the env flag and the owner's direct approval.

@@ -10,7 +10,7 @@ import {
 export const PROVIDER_ACCOUNT_ROUTE = '/lk/integrations/v1/provider-account-attestations';
 export const providerAccountAttestationIds = Object.freeze(
   Object.fromEntries(
-    ['tab', 'in', 'probe_in', 'verify', 'router', 'http', 'probe', 'sanitize', 'response', 'catch'].map((k) => [
+    ['tab', 'in', 'probe_in', 'verify', 'router', 'http', 'probe', 'sanitize', 'response'].map((k) => [
       k,
       'lk_provider_account_attestation_' + k + '_20261108',
     ]),
@@ -48,6 +48,8 @@ export function composeProviderAccountAttestation(liveBytes, deploymentId) {
       url: PROVIDER_ACCOUNT_ROUTE, method: 'get', upload: false, wires: [[ids.probe]] },
     fn(ids.verify, 'verify', 'verify', 2, [[ids.router], [ids.sanitize]]),
     fn(ids.router, 'router', 'router', 2, [[ids.http], [ids.sanitize]]),
+    // senderr:false forwards transport errors and every status to the router exactly once, so
+    // there is no catch node (a catch would route the same failure a second time).
     { id: ids.http, type: 'http request', z: ids.tab, name: 'Provider account actor-token GET', method: 'use',
       ret: 'obj', url: '', paytoqs: 'ignore', requestTimeout: '10000', senderr: false, persist: false,
       authType: '', insecureHTTPParser: false, wires: [[ids.router]] },
@@ -55,8 +57,6 @@ export function composeProviderAccountAttestation(liveBytes, deploymentId) {
     fn(ids.sanitize, 'response', 'response', 1, [[ids.response]]),
     { id: ids.response, type: 'http response', z: ids.tab, name: 'Provider account response', statusCode: '',
       headers: {}, wires: [] },
-    { id: ids.catch, type: 'catch', z: ids.tab, name: 'Provider account transport refusal', uncaught: false,
-      scope: [ids.http], wires: [[ids.router]] },
   ];
   for (const n of additions.filter((x) => x.type === 'function')) {
     new Function('msg', 'env', 'global', 'context', 'nodeCrypto', n.func);

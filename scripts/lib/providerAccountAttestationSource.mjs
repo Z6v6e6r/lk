@@ -18,7 +18,23 @@ const selector = extractSubscriptionPricePreviewSource({
 if (selector.names.some((name) => /prepare|emit|finish|ctx|msg|global|flow|node/i.test(name))) {
   throw new Error('PROVIDER_ACCOUNT_SELECTOR_NOT_PURE');
 }
-const selectorSource = `const paSelect = (() => {\n${selector.source}\nreturn { ${PROVIDER_ACCOUNT_SELECTOR_ROOTS.join(', ')} };\n})();`;
+// Validity instants use the HUB money gate's reading (Moscow wall time, date-only expiry = end of day).
+const lifecycle = extractSubscriptionPricePreviewSource({
+  source: read('nodered_lk1_hub_nodes/gateway.js'),
+  label: 'provider account lifecycle instant',
+  roots: ['lk1LifecycleInstant'],
+});
+if (lifecycle.names.some((name) => /prepare|emit|finish|ctx|msg|global|flow|node/i.test(name))) {
+  throw new Error('PROVIDER_ACCOUNT_LIFECYCLE_NOT_PURE');
+}
+// gateway.js runs after the booking owner's calendar helpers; take `isValidDateKey` from there.
+const calendar = extractSubscriptionPricePreviewSource({
+  source: read('nodered_subscription_booking_nodes/fn_subscription_booking_router.js'),
+  label: 'provider account calendar',
+  roots: ['isValidDateKey'],
+});
+const selectorSource = `const paSelect = (() => {\n${selector.source}\nreturn { ${PROVIDER_ACCOUNT_SELECTOR_ROOTS.join(', ')} };\n})();\n`
+  + `const paLifecycleInstant = (() => {\n${calendar.source}\n${lifecycle.source}\nreturn lk1LifecycleInstant;\n})();`;
 export const providerAccountSelectorSha256 =
   'sha256:' + crypto.createHash('sha256').update(selectorSource).digest('hex');
 export const PROVIDER_ACCOUNT_NODE_NAMES = Object.freeze(['verify', 'router', 'response', 'probe']);
