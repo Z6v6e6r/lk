@@ -162,8 +162,26 @@ with a real test account replaces it before activation.
 
 ## Install
 
-The live packet builder must also refuse an existing `http in` whose Express pattern (parameter or
-wildcard) matches this path, because such a route would receive the delegation and the actor token.
+Packet builder: `scripts/prepare_provider_account_attestation_live.mjs <fresh-workspace> <new-out>`, pinned to
+the installed flows.json (`ATTESTATION_LIVE_SOURCE_SHA256`). It refuses:
+- a different preimage (pull fresh, re-pin after review);
+- a missing or disabled receiver admission route;
+- any earlier `http in` (POST, GET, all, use) whose Express pattern matches the path (parameter,
+  wildcard, case, trailing slash), because it would receive the delegation and the actor token;
+- installed `LK1_OVERLAY_HUB_PRODUCT_ID` / `MANAGED_ENFORCEMENT_PURCHASE_FROM` differing from the rule
+  compiled into the router;
+- any change to an existing node, or an addition outside the reviewed nine.
 
-Not part of this change. It needs a live packet builder pinned to the then-current flows.json, the
-reviewed-flow runner, the env flag and the owner's direct approval.
+Order (each ⚠ step needs the owner's direct approval): LK1 install, then the lk2 rollout, then the smoke.
+1. Fresh read-only pull; build the packet; run the LIVE tests (`LK1_ATTESTATION_LIVE_FLOW_FIXTURE`).
+2. ⚠ Stage the runner, contract module, candidate and contract; runner `preflight`.
+3. ⚠ Phase 1: runner `apply`. The flag is absent, so the probe and the POST answer 503; every existing
+   route is unchanged. Wait for the 15-minute soak lease to expire.
+4. ⚠ Phase 2: add `LK1_PROVIDER_ACCOUNT_ATTESTATION_ENABLED=true` to the stored pm2 env (backup first),
+   one `pm2 restart node-red --update-env`. Probe 200; unsigned POST 401.
+5. Signed read-only smoke through lk2 with one test account; replace the fixture from the LK1 response.
+
+Rollback: phase 2 sets the flag to `""` with the backed-up env (pm2 merges env and cannot delete
+keys; `""` reads as off). Phase 1 uses the runner `rollback` with its backups. The route stores
+nothing, so no data reconciliation is needed. `pm2 save` is not part of this install; a reboot
+drops the flag (and the receiver keys), which closes the route.
