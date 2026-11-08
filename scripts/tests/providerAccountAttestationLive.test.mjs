@@ -52,6 +52,11 @@ test('installed HUB pins must equal the compiled rule', () => {
     assert.throws(() => assertLiveAttestationFacts(flow), /ATTESTATION_LIVE_RULE_PIN_DRIFT/, id);
   }
   assert.throws(() => assertLiveAttestationFacts(syntheticLive().filter((n) => n.id !== 'gw')), /ATTESTATION_LIVE_RULE_PIN_DRIFT/);
+  for (const func of ["let LK1_OVERLAY_HUB_PRODUCT_ID = '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e';",
+    'var MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-10-01";']) {
+    const flow = [...syntheticLive(), { id: 'other', type: 'function', z: 'tab_lk1', func, wires: [[]] }];
+    assert.throws(() => assertLiveAttestationFacts(flow), /ATTESTATION_LIVE_RULE_PIN_DRIFT/, func);
+  }
 });
 
 test('an earlier parameter, wildcard, case or slash variant route refuses (it would receive the tokens)', () => {
@@ -60,6 +65,11 @@ test('an earlier parameter, wildcard, case or slash variant route refuses (it wo
     ['/lk/integrations/v1/:x?', 'use']]) {
     const flow = [...syntheticLive(), { id: 'shadow', type: 'http in', z: 'tab_lk1', url, method, wires: [[]] }];
     assert.throws(() => assertLiveAttestationFacts(flow), /ATTESTATION_LIVE_ROUTE_SHADOWED/, url + ' ' + method);
+  }
+  for (const url of ['/lk/integrations/v1/provider-:kind', '/lk/integrations/v1/provider-account-attestation(s)?',
+    '/lk/integrations/v1/provider-accoun+t-attestations']) {
+    const flow = [...syntheticLive(), { id: 'shadow', type: 'http in', z: 'tab_lk1', url, method: 'post', wires: [[]] }];
+    assert.throws(() => assertLiveAttestationFacts(flow), /ATTESTATION_LIVE_ROUTE_SHADOWED/, url);
   }
   const putOnly = [...syntheticLive(), { id: 'put', type: 'http in', z: 'tab_lk1', url: '/lk/integrations/v1/:x', method: 'put', wires: [[]] }];
   assert.doesNotThrow(() => assertLiveAttestationFacts(putOnly));

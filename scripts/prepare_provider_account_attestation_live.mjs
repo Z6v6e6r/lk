@@ -51,6 +51,10 @@ export const routePattern = (url) => new RegExp('^' + (('/' + url.replace(/^\/+/
   .replace(/\/:[^/]+/g, '/[^/]+')
   .replace(/\*/g, '.*') + '/?$', 'i');
 
+// Express 4 passes regex groups, quantifiers and mid-segment parameters through to the route
+// regex; routePattern cannot model them, so such a route counts as shadowing (fail closed).
+export const opaqueRoute = (url) => /[()+]|[^/]:|\?(?<!:[A-Za-z0-9_]+\?)/.test(url.replace(/\/:[A-Za-z0-9_]+\??/g, '/P'));
+
 // Facts of the installed graph the additive route relies on. Each one fails closed.
 export function assertLiveAttestationFacts(flow) {
   assertFlowArray(flow);
@@ -66,9 +70,13 @@ export function assertLiveAttestationFacts(flow) {
   for (const name of ['LK1_OVERLAY_HUB_PRODUCT_ID', 'MANAGED_ENFORCEMENT_PURCHASE_FROM']) {
     const re = new RegExp('const ' + name + ' = "([^"]+)"');
     const expected = router.match(re)?.[1];
-    const installed = flow.filter((n) => active(n) && n.type === 'function' && typeof n.func === 'string' && re.test(n.func))
-      .map((n) => n.func.match(re)[1]);
-    if (!expected || !installed.length || installed.some((value) => value !== expected)) {
+    const declared = new RegExp('\\b(?:let|var|const)\\s+' + name + '\\b');
+    const functions = flow.filter((n) => active(n) && n.type === 'function' && typeof n.func === 'string');
+    const installed = functions.filter((n) => re.test(n.func)).map((n) => n.func.match(re)[1]);
+    // Any other declaration form is unreadable here and refuses.
+    const unreadable = functions.some((n) => (n.func.match(new RegExp(declared.source, 'g')) || []).length
+      !== (n.func.match(new RegExp(re.source, 'g')) || []).length);
+    if (!expected || !installed.length || unreadable || installed.some((value) => value !== expected)) {
       throw new Error('ATTESTATION_LIVE_RULE_PIN_DRIFT');
     }
   }
@@ -77,7 +85,7 @@ export function assertLiveAttestationFacts(flow) {
   for (const method of ['post', 'get']) {
     if (flow.some((n) => n.type === 'http in' && typeof n.url === 'string'
       && [method, 'all', 'use'].includes(String(n.method).toLowerCase())
-      && routePattern(n.url).test(PROVIDER_ACCOUNT_ROUTE))) {
+      && (routePattern(n.url).test(PROVIDER_ACCOUNT_ROUTE) || opaqueRoute(n.url)))) {
       throw new Error('ATTESTATION_LIVE_ROUTE_SHADOWED');
     }
   }
