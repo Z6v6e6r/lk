@@ -209,3 +209,95 @@ split router 8f7bd5b482fe9763: d93de261c85ba62e3ba782acad1a364bc63e97433bcbebba8
    - 15 мин логов без ошибок новых узлов.
 7. ⚠ Откат: `rollback --deployment-id … --flow-backup … --contract-backup …`.
    Маршрут ничего не пишет, поэтому откат не оставляет состояния.
+
+## A1b-1 — managed JOIN v2 на живом LK1 (2026-11-07)
+
+Решение владельца (через поток A): сначала A1b. LK2 (`af57d175`) сначала зовёт v2 preflight. На 404
+он отвечает `ManagedJoinOwnerError` и не откатывается на v1. A1b разбит на три PR:
+
+1. **Этот PR — JOIN v2.** Обновление установленного приёмника и probe v2.
+2. Training owner: 13 узлов, 3 маршрута `/lk/integrations/v1/training-registration-*`; у `options` и
+   `prepare` появляется третий выход.
+3. SELF leave вместе с компенсацией #269 и fence #270. Это трёхстороннее перебазирование живого
+   потока выхода из игры, а он компенсирует визиты (деньги):
+   - примерно 12 функций `split_leave` на живом отличаются и от пинов патчей, и от `main`;
+   - моста компенсации и `leave_find` на живом нет.
+   Для JOIN v2 не нужен.
+
+Живой flows: `be3177e4…`. После A2-пула поставлен `lk1-spanish-training-subscriptions-20261107`:
+он менял `lk_subscription_booking_router` и роутер price preview.
+
+### Что делает пакет JOIN v2
+
+Сборщик: `scripts/prepare_booked_operation_join_v2_live.mjs`.
+
+- Пять функций установленного приёмника байт-в-байт равны сборке `57648b82` (LIVE-тест проверяет это
+  через `git show`). Своих правок на живом нет, поэтому обновление до `main` — чистая замена.
+- Целевой приёмник собирает рецензированный `buildReceiverCandidate`: на том же графе, но без
+  установленной вкладки. Поэтому действуют все его инварианты: provider-запрос идёт только из
+  executor, preflight-запрос изолирован, рёбра не выходят из вкладки.
+- Изменения:
+  - `func` у admission_verify, read_verify, router (+`libs`), executor, respond;
+  - `scope` у catch;
+  - в owner router список probe: `["1"]` → `["1", "2"]`. Контракт 3 (SELF leave) остаётся закрыт.
+- Добавления, 6 узлов: `POST /lk/integrations/v2/booked-operation-preflights`,
+  `POST /lk/integrations/v2/booked-operation-admissions`, `GET /lk/integrations/v2/booked-operations/:operationId`,
+  а также preflight verify, router и request.
+- Сборщик падает:
+  - на дрейфе whole-flow;
+  - на дрейфе любой из пяти функций приёмника или owner router;
+  - на другом Mongo-клиенте;
+  - на чужих рёбрах во вкладку;
+  - на любом поле установленного узла сверх ожидаемых;
+  - на перехвате новых путей;
+  - если v2 уже установлен.
+
+Изменения поведения v1 (намеренные, это пара main-приёмник + main-owner после A1):
+
+- путь запроса проверяется строго;
+- вызов owner из v1 executor несёт `lk2LegacyJoin: true`; owner A1 это обрабатывает.
+
+Подписи, claims и binding-хэши v1 не меняются.
+
+### Блокер: привязка CUP runtime не провижена
+
+v2 preflight, managed policy и owner читают Node-RED globals:
+
+- `subscriptions_runtime_environment=PROD`
+- `subscriptions_runtime_api_base_url=https://padlhub.su/api`
+- `subscriptions_runtime_context_integration_token`
+- `subscriptions_entitlement_integration_token`
+
+На живом их не ставит ни один узел. `contextStorage` в settings.js закомментирован,
+`functionGlobalContext` их не содержит. См. также `docs/LK1_SUBSCRIPTION_R4_ACTIVATION_PACKET_20260827.md`.
+
+Поэтому после установки этого пакета v2 preflight отвечает 503 `BOOKED_OPERATION_PREFLIGHT_UNAVAILABLE`
+ещё до первого запроса (это покрыто LIVE-тестом), и коммерческий JOIN из LK2 не пройдёт. Нужны:
+
+- провижининг этих globals: секреты от CUP, путь доставки, например pm2 env → `functionGlobalContext`
+  (это CRITICAL-изменение settings.js с отдельным одобрением);
+- переменные `LK1_BOOKED_OPERATION_OWNER_BASE_URL` и `LK1_BOOKED_OPERATION_OWNER_TENANT_KEY`.
+
+### План установки (⚠ — отдельное согласие владельца)
+
+1. Свежий pull только на чтение. Если sha ≠ `be3177e4…` — новый коммит пинов после проверки фактов.
+   Предусловие: в `/root/.node-red/settings.js` не задан `httpNodeRoot`/`httpRoot` (корень `/`; так
+   на 2026-11-07). Новый v1 сверяет `originalUrl` с подписанным путём: при другом корне каждая
+   подписанная v1-операция получила бы 403.
+2. `node scripts/prepare_booked_operation_join_v2_live.mjs /abs/workspace /abs/new/out`, затем LIVE-тесты
+   (`LK1_JOIN_V2_LIVE_FLOW_FIXTURE`).
+3. ⚠ Stage: кандидат, контракт и runner.
+4. ⚠ `node <stage>/deploy_reviewed_flow_147_remote.mjs preflight --candidate <stage>/candidate.flow.json --contract <stage>/contract.json --deployment-id join-v2-receiver-<sha12>`:
+   `ok`, 7 изменённых узлов, 6 добавлений.
+5. ⚠ `… apply --candidate … --contract … --deployment-id … --stamp YYYYMMDDTHHMMSS+0000`.
+6. Проверка:
+   - readback;
+   - probe v1 → 200, v2 → 200 `MANAGED_JOIN_V2`, v3 → 404;
+   - v2 preflight, admission и read без подписи → 401;
+   - v1 admission без подписи → 401;
+   - 15 мин логов.
+7. ⚠ Откат: `rollback --deployment-id … --flow-backup … --contract-backup …`.
+   Перед откатом — только чтение: число документов `{contractVersion: 2}` в `lk_subscription_daily_booking_ops`.
+   Если оно больше нуля — остановиться и сверить. LK1 не сверяет `reservation_id` с preflight, поэтому
+   любая валидно подписанная v2 admission создаёт документ. Старый v1-роутер такие документы не портит,
+   но и не читает, и не сверяет.
