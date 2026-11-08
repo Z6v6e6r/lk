@@ -279,7 +279,11 @@ test('not eligible: each HUB JOIN rule refuses on its own', () => {
     'no purchase date': { purchaseDate: undefined },
     'conflicting purchase dates': { purchaseAt: '2026-10-01T10:00:00.000+03:00' },
     'FINISHED': { status: 'FINISHED' },
-    'NEW (not activated)': { status: 'NEW', activationDate: null },
+    'NEW': { status: 'NEW' },
+    'lowercase active': { status: 'active' },
+    'row id names another instance': { id: 'synthetic-other-instance' },
+    'isFrozen as a string': { isFrozen: 'true' },
+    'isFrozen as 1': { isFrozen: 1 },
     'frozen': { isFrozen: true },
     'hold': { holdUntil: '2035-04-10T00:00:00.000+03:00' },
     'frozenUntil': { frozenUntil: '2035-04-10T00:00:00.000+03:00' },
@@ -298,6 +302,22 @@ test('not eligible: each HUB JOIN rule refuses on its own', () => {
     assert.deepEqual(eligibleRun(row), [], label);
   }
   assert.deepEqual(eligibleRun(eligibleRow(), { availableClientSubscriptions: [] }), [], 'not owned for this exercise');
+});
+
+test('eligible: case-insensitive product and id, matching row id, isFrozen false; always a subset of the 50 owned', () => {
+  assert.deepEqual(eligibleRun(eligibleRow({ productId: HUB.toUpperCase(), id: 'SYNTHETIC-HUB-SUB', isFrozen: false })),
+    ['synthetic-hub-sub']);
+  const h = new Harness();
+  h.body = { contractVersion: 1, operationId: uuid(21), target: { exerciseId: 'synthetic-exercise-1' } };
+  h.subscriptions = [...Array.from({ length: 50 }, (_, i) => eligibleRow({ subscriptionId: 'owned-' + String(i).padStart(2, '0'),
+    visitsLeft: 0 })), eligibleRow({ subscriptionId: 'owned-late' })];
+  h.exercise.availableClientSubscriptions = h.subscriptions.map((row) => ({ subscriptionId: row.subscriptionId }));
+  const r = h.run();
+  assert.equal(r.statusCode, 200, JSON.stringify(r.payload));
+  assert.equal(r.payload.targetProof.ownedClientSubscriptionIds.length, 50);
+  assert.ok(r.payload.targetProof.eligibleClientSubscriptionIds.every((id) => r.payload.targetProof.ownedClientSubscriptionIds.includes(id)));
+  assert.ok(!r.payload.targetProof.ownedClientSubscriptionIds.includes('owned-late'));
+  assert.deepEqual(r.payload.targetProof.eligibleClientSubscriptionIds, []);
 });
 
 test('validity follows the LK1 money gate: Moscow wall time, date-only expiry is end of day', () => {

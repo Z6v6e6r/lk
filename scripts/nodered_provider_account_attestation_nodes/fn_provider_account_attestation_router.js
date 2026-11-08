@@ -92,7 +92,9 @@ if (ctx.step === "subscriptions") {
     ctx.eligibility = ctx.eligibility || {};
     ctx.eligibility[clientSubscriptionId.toLowerCase()] = { products, purchase: paSelect.collectSubscriptionPurchaseDateEvidence(row),
       status: row.status, variant: row.variant, visitsLeft, activationMs: paLifecycleInstant(row.activationDate),
-      expiryMs, paused: Boolean(row.holdUntil || row.frozenUntil || row.isFrozen === true) };
+      expiryMs, paused: Boolean(row.holdUntil || row.frozenUntil) || (row.isFrozen != null && row.isFrozen !== false),
+      // The HUB money gate also refuses an instance whose own `id` names another instance.
+      idMismatch: row.id !== undefined && row.id !== null && String(row.id).toLowerCase() !== clientSubscriptionId.toLowerCase() };
   }
   const rank = (s) => PA_STATES.indexOf(s.state);
   projected.sort((a, b) => rank(a) - rank(b)
@@ -118,7 +120,8 @@ if (ctx.step === "exercise") {
   const nowMs = Date.now();
   // The HUB JOIN rule (same pins as the LK1 money gate and the managed selector). Every
   // condition must be proved by this Viva read; a missing field is not eligible.
-  const eligible = owned.filter((id) => {
+  const shown = owned.slice(0, PA_MAX_SUBSCRIPTIONS);
+  const eligible = shown.filter((id) => {
     const e = (ctx.eligibility || {})[id.toLowerCase()];
     return Boolean(e) && e.products.length === 1 && e.products[0] === paHub.productId
       && !e.purchase.invalid && e.purchase.dates.length === 1
@@ -127,14 +130,14 @@ if (ctx.step === "exercise") {
       && Number.isSafeInteger(e.visitsLeft) && e.visitsLeft >= 1
       && Number.isFinite(e.activationMs) && e.activationMs <= nowMs && e.activationMs <= startMs
       && Number.isFinite(e.expiryMs) && e.expiryMs >= nowMs && e.expiryMs >= endMs
-      && !e.paused;
+      && !e.paused && !e.idMismatch;
   });
   ctx.targetProof = {
     exerciseId: ctx.body.target.exerciseId,
     startsAt,
     durationMinutes,
-    ownedClientSubscriptionIds: owned.slice(0, PA_MAX_SUBSCRIPTIONS),
-    eligibleClientSubscriptionIds: eligible.slice(0, PA_MAX_SUBSCRIPTIONS),
+    ownedClientSubscriptionIds: shown,
+    eligibleClientSubscriptionIds: eligible,
   };
   delete ctx.eligibility;
   ctx.step = "done";

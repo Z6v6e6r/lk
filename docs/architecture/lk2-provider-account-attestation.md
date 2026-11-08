@@ -124,11 +124,16 @@ Field derivation from the Viva item:
   - `status` `ACTIVE`, `variant` `BY_VISITS`, integer `visitsLeft >= 1`;
   - activation (`lk1LifecycleInstant`) not after now and not after the game start;
   - expiry (end of day) not before now and not before the game end;
-  - no `holdUntil`, `frozenUntil` or `isFrozen`.
+  - no `holdUntil` or `frozenUntil`, and `isFrozen` absent or `false`;
+  - no row `id` naming another instance (the money gate's `instance_id_mismatch`).
   The pins and helpers are extracted from those nodes, not copied. A missing field is not
-  eligible. If the Viva end-user list carries no product id (LK1's general reads note it may
-  not), nothing is eligible until a server-owned product identity is added; the post-install
-  signed smoke decides this.
+  eligible. Eligible is computed from the (at most 50) owned ids returned, so it is always a
+  subset of them. **Expect it to be empty in practice:** the end-user list usually carries no
+  product id (see `productId` above), and then nothing is eligible until a server-owned product
+  identity is added. An empty list is the fail-closed outcome, not a defect; the post-install
+  signed smoke confirms which case applies.
+  Eligible does not mean "HUB-enforced at this station": station-level legacy/exclusion
+  (`lk1Config`) is not part of this rule, and the booking owner re-checks on the command.
 
 ## Errors
 
