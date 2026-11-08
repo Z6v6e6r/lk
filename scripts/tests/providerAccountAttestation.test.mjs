@@ -19,7 +19,7 @@ const noStore = (r) => {
 // No credential, claim identity, delegation or private provider field may leave LK1 or be logged.
 const assertClean = (h, r) => {
   const text = JSON.stringify(r);
-  for (const secret of [actor, 'PRIVATE_NAME', '+70000000000', 'private@example.invalid', 'eyJ', uuid(5), uuid(7)]) {
+  for (const secret of [actor, 'PRIVATE_NAME', 'PRIVATE_PHONE_VALUE', 'PRIVATE_EMAIL_VALUE', 'eyJ', uuid(5), uuid(7)]) {
     assert.ok(!text.includes(secret), secret);
   }
   assert.deepEqual(h.logs, []);
@@ -223,7 +223,7 @@ test('the client id comes only from the actor profile read; inconsistent provide
     assert.deepEqual(code(h.run()), [409, 'PROVIDER_ACCOUNT_INVALID'], String(mutate));
   }
   const wrapped = new Harness();
-  wrapped.profile = { data: { clientId: 'synthetic-client-1', phone: '+70000000000' } };
+  wrapped.profile = { data: { clientId: 'synthetic-client-1', phone: 'PRIVATE_PHONE_VALUE' } };
   assert.equal(wrapped.run().payload.providerClientId, 'synthetic-client-1');
   const owned = new Harness();
   owned.subscriptions.content[0].clientId = 'synthetic-client-1';

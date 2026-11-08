@@ -37,7 +37,7 @@ export class Harness {
     };
     this.fns = Object.fromEntries(Object.entries(sources).map(([k, src]) => [k,
       new Function('msg', 'env', 'global', 'context', 'nodeCrypto', 'Date', 'node', 'console', src)]));
-    this.profile = { id: 'synthetic-client-1', name: 'PRIVATE_NAME', phone: '+70000000000', email: 'private@example.invalid' };
+    this.profile = { id: 'synthetic-client-1', name: 'PRIVATE_NAME', phone: 'PRIVATE_PHONE_VALUE', email: 'PRIVATE_EMAIL_VALUE' };
     this.subscriptions = structuredClone(fixture.response);
     this.exercise = {
       id: 'synthetic-exercise-1', timeFrom: '2035-04-02T09:00:00.000Z', timeTo: '2035-04-02T10:30:00.000Z',
