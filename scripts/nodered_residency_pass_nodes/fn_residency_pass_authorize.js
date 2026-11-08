@@ -166,7 +166,11 @@ const nextHeaders = ctx.endpoint === "create"
     };
 
 msg._residentPass = Object.assign({}, ctx, { subject, tenantKey, verifiedAt: new Date().toISOString() });
-delete msg._residentPass.authorization;
+// Create needs the verified Bearer once more for the CUP call after the Viva
+// subscriptions read; the resolve node consumes and deletes it. Status ends here.
+if (ctx.endpoint !== "create") {
+  delete msg._residentPass.authorization;
+}
 msg.method = "GET";
 msg.url = nextUrl;
 msg.headers = nextHeaders;
