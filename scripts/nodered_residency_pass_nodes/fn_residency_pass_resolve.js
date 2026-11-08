@@ -154,7 +154,9 @@ msg.headers = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
-msg.payload = { clientSubscriptionId: requested };
+// Forward the exact Viva identifier of the matched subscription: CUP matches
+// clientSubscriptionId byte-for-byte, the case-insensitive compare is only for lookup.
+msg.payload = { clientSubscriptionId: toStr(subscription.subscriptionId) || toStr(subscription.id) };
 msg.requestTimeout = 8000;
 msg.followRedirects = false;
 msg.maxRedirects = 0;

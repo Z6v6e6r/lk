@@ -185,7 +185,9 @@ test("authorize routes create requests to Viva and status requests to CUP withou
   assert.ok(createMsg);
   assert.match(createMsg.url, /\/end-user\/api\/v1\/iSkq6G\/subscriptions\?includeFinished=false&size=100$/);
   assert.equal(createMsg.headers["X-Resident-Services-Integration-Token"], undefined);
-  assert.equal(createMsg._residentPass.authorization, undefined);
+  // Kept in-memory for the resolve node's CUP call; resolve deletes it.
+  assert.equal(createMsg._residentPass.authorization, BEARER);
+  assert.equal(createMsg.headers.Authorization, BEARER);
 
   const status = runFunction("fn_residency_pass_authorize.js", {
     ...baseMessage(),
@@ -208,6 +210,47 @@ test("authorize routes create requests to Viva and status requests to CUP withou
   );
   assert.equal(statusMsg.headers["X-Resident-Services-Integration-Token"], INTEGRATION_TOKEN);
   assert.equal(statusMsg.headers.Authorization, BEARER);
+});
+
+test("chained create flow keeps the Bearer through Viva read to the CUP call and forwards the exact Viva id", () => {
+  // Real flow order from lk_residency_pass.import.json; each http request node
+  // replaces msg.statusCode/payload (ret: txt) and keeps msg._residentPass.
+  const exactId = "6B1D2C3E-4F5A-4B6C-8D7E-9F0A1B2C3D4E";
+  const flow = createContextStore();
+  const prepared = runFunction(
+    "fn_residency_pass_create_prepare.js",
+    baseMessage({ payload: { clientSubscriptionId: exactId.toLowerCase() } }),
+    { flow },
+  ).result[0];
+  assert.ok(prepared, "prepare continues to userinfo");
+  const afterUserinfo = { ...prepared, statusCode: 200, payload: JSON.stringify({ sub: "sub-1", azp: "widget", tenantKey: "iSkq6G" }) };
+  const authorized = runFunction("fn_residency_pass_authorize.js", afterUserinfo, { flow }).result[0];
+  assert.ok(authorized, "authorize continues to the Viva subscriptions read");
+  const day = 86400000;
+  const afterViva = {
+    ...authorized,
+    statusCode: 200,
+    payload: JSON.stringify({
+      content: [{
+        subscriptionId: exactId,
+        status: "ACTIVE",
+        activationDate: new Date(Date.now() - day).toISOString(),
+        expirationDate: new Date(Date.now() + 30 * day).toISOString(),
+        holdUntil: null,
+      }],
+    }),
+  };
+  const resolved = runFunction("fn_residency_pass_resolve.js", afterViva, { flow });
+  const cupRequest = resolved.result[0];
+  assert.ok(cupRequest, "resolve must build the CUP request, got " + JSON.stringify(resolved.result[1]?.payload));
+  assert.equal(cupRequest.method, "POST");
+  assert.equal(cupRequest.url, "http://cup.internal:3010/api/internal/subscriptions/resident-passes");
+  assert.equal(cupRequest.headers.Authorization, BEARER);
+  assert.equal(cupRequest.headers["X-Resident-Services-Integration-Token"], INTEGRATION_TOKEN);
+  assert.deepEqual(cupRequest.payload, { clientSubscriptionId: exactId });
+  assert.equal(cupRequest._residentPass.authorization, undefined, "Bearer is scrubbed after the last use");
+  assertNoSecretsInJson(cupRequest._residentPass, "context after resolve");
+  for (const warning of resolved.warnings) assertNoSecretsInJson(warning, "resolve warning");
 });
 
 test("authorize rate limits pass creation but not status polling", () => {
