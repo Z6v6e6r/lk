@@ -1,9 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import fs from 'node:fs';
 import { eventJumpAdmission, addEventAdmissionRoutes } from '../lib/eventJumpAdmission.mjs';
 import { addCommunityPolicyAuth } from '../lib/communityPolicyAuth.mjs';
+import { patchCommunityTypesFlow } from '../patch_live_community_types.mjs';
 type FlowNode = { id: string; type: string; method?: string; url?: string; wires?: string[][]; operation?: string; func?: string };
+
+test('assembled admission rejects foreign normalized route ownership but preserves inactive and distinct-method routes', () => {
+  const source = fs.readFileSync('scripts/patch_nodered_communities_flow.mjs', 'utf8');
+  const common = source.split('const commonHelpers = String.raw`')[1].split('\n`;')[0];
+  const body = (name: string) => common + source.split('const ' + name + ' = `${commonHelpers}')[1].split('\n`;')[0];
+  const required = [
+    { id: 'create', name: 'Build community create docs', func: body('fnCreate') },
+    { id: 'update', name: 'Prepare community update', func: body('fnUpdatePrepare') },
+    { id: 'ranking', name: 'Use rating snapshot or fallback', func: body('fnRankingSnapshotResponse') },
+    { id: 'list', name: 'Prepare communities list query', func: common + fs.readFileSync('scripts/nodered_community_list_nodes/fn_list_prepare_tail.js', 'utf8') },
+    { id: 'autojoin', name: 'Prepare game station autojoin', func: 'return [msg, null];' },
+  ].map(node => ({ ...node, type: 'function', z: 'tab', outputs: 2, wires: [['foreign']] }));
+  const base = [...required, { id: 'tab', type: 'tab' }, { id: 'foreign', type: 'function', z: 'tab', func: 'return msg;', wires: [] },
+    { id: 'mongo', type: 'mongodb4', z: 'tab', collection: 'lk_communities', operation: 'find', clientNode: 'fixture-client', wires: [] }];
+  for (const [method, url] of [['get', '/lk/communities/:communityId/event-admission'], ['GET', '/lk/communities/:other/event-admission/']]) {
+    const input = [...base, { id: 'existing-admission', type: 'http in', z: 'tab', method, url, wires: [['foreign']] }];
+    const original = structuredClone(input);
+    assert.throws(() => patchCommunityTypesFlow(input, { eventAdmission: true }), /COMMUNITY_TYPES_AMBIGUOUS_ACTIVE_ROUTE/);
+    assert.deepEqual(input, original, 'rejection must not mutate the preimage');
+  }
+  for (const foreign of [
+    { id: 'existing-admission', type: 'http in', z: 'tab', method: 'get', url: '/lk/communities/:communityId/event-admission', d: true, wires: [['foreign']] },
+    { id: 'existing-admission', type: 'http in', z: 'tab', method: 'post', url: '/lk/communities/:communityId/event-admission', wires: [['foreign']] },
+  ]) {
+    const result = patchCommunityTypesFlow([...base, foreign], { eventAdmission: true });
+    assert.equal(result.flow.filter((node: FlowNode) => node.id === 'community-event-admission-v1-in').length, 1);
+    if (foreign.d) assert.deepEqual(result.flow.find((node: FlowNode) => node.id === foreign.id), foreign);
+    assert.equal(patchCommunityTypesFlow(result.flow, { eventAdmission: true }).changes.length, 0);
+  }
+});
 
 const policy = { version: 'event-registration-v1', responsibleName: 'Synthetic Organizer', contactEmail: ['organizer', 'example.invalid'].join('@'), startsAt: '2026-11-11T21:00:00.000Z', endsAt: '2026-11-13T21:00:00.000Z', retentionYears: 1 };
 const epoch = '2026-11-09T09:00:00.000Z', at = '2026-11-12T09:00:00.000Z';

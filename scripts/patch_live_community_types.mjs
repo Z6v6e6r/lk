@@ -17,6 +17,14 @@ function insertOnce(body, anchor, addition, marker) {
   if (body.split(anchor).length !== 2) throw new Error('COMMUNITY_TYPES_UNREVIEWED_FUNCTION_SHAPE');
   return body.replace(anchor, anchor + addition);
 }
+function assertUniqueCommunityRoutes(flow) {
+  const routeKeys = new Set();
+  for (const node of flow.filter(node => node.type === 'http in' && /^\/(?:lk\/)?communities(?:\/|$)/.test(node.url || ''))) {
+    const key = String(node.method).toLowerCase() + ' ' + node.url.replace(/:[^/]+/g,':param').replace(/\/$/,'');
+    if (routeKeys.has(key)) throw new Error('COMMUNITY_TYPES_AMBIGUOUS_ACTIVE_ROUTE');
+    routeKeys.add(key);
+  }
+}
 /** Focused function-body patch only. No graph regeneration, config edits or deploy. */
 export function patchCommunityTypesFlow(input, { eventGames = false, eventAdmission = false } = {}) {
   if (!Array.isArray(input) || new Set(input.map(node => node.id)).size !== input.length) throw new Error('COMMUNITY_TYPES_INVALID_FLOW');
@@ -26,12 +34,7 @@ export function patchCommunityTypesFlow(input, { eventGames = false, eventAdmiss
   for (const name of ['Build community create docs', 'Prepare community update', 'Use rating snapshot or fallback', 'Prepare communities list query', 'Prepare game station autojoin', 'Apply community join', 'Apply invite join', 'Prepare community join', 'Prepare invite join', 'Build member games query', 'Build invited member games query', 'Apply member management']) {
     if (flow.filter(node => node.type === 'function' && node.name === name).length > 1) throw new Error('COMMUNITY_TYPES_AMBIGUOUS_ACTIVE_FUNCTION');
   }
-  const routeKeys = new Set();
-  for (const node of flow.filter(node => node.type === 'http in' && /^\/(?:lk\/)?communities(?:\/|$)/.test(node.url || ''))) {
-    const key = String(node.method).toLowerCase() + ' ' + node.url.replace(/:[^/]+/g,':param').replace(/\/$/,'');
-    if (routeKeys.has(key)) throw new Error('COMMUNITY_TYPES_AMBIGUOUS_ACTIVE_ROUTE');
-    routeKeys.add(key);
-  }
+  assertUniqueCommunityRoutes(flow);
   const required = new Set(['Build community create docs', 'Prepare community update', 'Use rating snapshot or fallback', 'Prepare communities list query', 'Prepare game station autojoin']);
   for (const node of flow) {
     if (node.type !== 'function' || typeof node.func !== 'string') continue;
@@ -74,6 +77,7 @@ export function patchCommunityTypesFlow(input, { eventGames = false, eventAdmiss
   const registrationGraph = addEventRegistration(flow);
   const communityGraph = addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth(eventAdmission ? addEventAdmissionRoutes(registrationGraph) : registrationGraph)));
   const authenticated = eventGames ? addTypedCommunityResponseRedaction(addCommunityPolicyAuth(addEventGameRoutes(communityGraph))) : communityGraph;
+  assertUniqueCommunityRoutes(authenticated);
   const inactiveIds = new Set(input.filter(inactive).map(node => node.id));
   if (authenticated.some(node => inactiveIds.has(node.id))) throw new Error('COMMUNITY_TYPES_INACTIVE_ID_COLLISION');
   if (eventGames) {
