@@ -1010,6 +1010,9 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("jumpExhibition") === "1" && new URLSearchParams(window.location.search).get("padelJumpLive") === "1") {
+    return <PadelJumpHost mode="live" />;
+  }
   if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("padelJumpRace") === "1") {
     return <PadelJumpHost mode="race" />;
   }

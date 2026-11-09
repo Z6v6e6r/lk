@@ -26,8 +26,57 @@ Do not duplicate those records, map company into website, skip the EVENT form fo
 member, or repoint the team service. A five-life exhibition requires an event-scoped instance
 of the same game implementation, a PII-free canonical EVENT admission read, trusted player/board
 destinations, activation/policy-bound results and a compatible retention/erasure procedure.
-Those integration changes and the live topology are not implemented or authorized by this
-source-preparation change. The older endless EVENT game is not a fallback for the selected mode.
+The owner confirmed a separate instance and supplied the community invite on November 9:
+`community_1794221739126_корпспорт-падлхаб-2026` («КорпСпорт ПадлхАБ2026»). The last read-only
+production lookup found FRIENDS/OPEN/INSTANT, one OWNER, zero forms and no EVENT notice.
+That observation is not an activation or confirmation of the responsible party/contact.
+The older endless EVENT game is not a fallback for the selected mode.
+
+### Five-life integration source (not deployed)
+
+- `patch_live_community_types.mjs --event-admission` adds authenticated, own-actor-only
+  `GET /lk/communities/:communityId/event-admission`. It reads the canonical aggregate,
+  returns membership/current-registration/policy binding, never questionnaire fields, and
+  retains the existing verified-actor subflow and exact generated-graph guards.
+- `createLiveServer({ event })` selects `/jump-exhibition-api/`, canonical EVENT registration
+  and the same five-life replay engine. It does not create companion enrollment files and
+  rejects the team's API alias. Without `event`, the existing team mode remains unchanged.
+  `JUMP_EVENT_BINDING` is a strict JSON object with exactly `epoch`, `policyRevision`,
+  `startsAt`, `endsAt`, `retentionUntil` and `inviteCode`, taken from the approved activation.
+  Configuration itself never grants membership; start/finish require fresh own admission.
+- Results carry activation/revision/retention binding. The exhibition never loads team,
+  older-activation or other-policy receipts. New play stops at the exclusive closing instant.
+  Only a terminal score already accepted by the server before closing may retry durable
+  finish during the following ten minutes; that grace never accepts new movement. Result
+  reads and spectator poses stop at the inclusive retention cutoff. Completed receipts
+  survive service recreation; unfinished in-memory games do not survive process restart.
+- `jumpExhibition=1` selects fixed exhibition player/board destinations, not an arbitrary
+  client-chosen API. The actual EVENT full-name/company/email form is reused, including its
+  responsible/contact/retention notice. The selected community's feed and ranking use this
+  instance; neither its UI nor its backend falls back to the team or endless game.
+- The cabinet build input `PADLHUB_EXHIBITION_GAME_SOURCE` must be the full reviewed immutable
+  exhibition game source. Unset means closed, never the team's pinned module. Owner/purpose:
+  event organizer, November pilot. Activation criterion: published exact game/backend source,
+  verified notice/owner and complete phone acceptance. Review/remove the route binding after
+  November 13; removal does not erase stored forms or scores. The team's existing module pin
+  is unchanged. Cached game exports are keyed by module URL, not shared between targets.
+
+The second service/store/port/edge installation, physical erasure procedure for its result files,
+exact-source release and live phone acceptance remain activation work. Do not repoint or restart
+`padlhub-jump-live.service` (5193). The proposed exhibition target is separate loopback 5194,
+`/jump-exhibition-api/` and a new private result directory. The event-specific health identifies
+`event-retention-v1`; the team retains `permanent-v1`. Existing team packaging tools are not
+implicitly approved for this new target. Hiding expired scores is not physical erasure:
+canonical EVENT forms, separate game receipts/caches, private exports and backups must all be
+covered by the designated operator's exact-target erasure/retention procedure before activation.
+
+LOCAL evidence: canonical admission/access/HTTP and replay/finish tests use synthetic actors,
+policies and disposable directories, not Mongo or real registration. The real form was rendered
+at 390/1440 px: no horizontal overflow, 48 px actions, visible keyboard focus; one synthetic
+submit handed off to the five-life start screen with exactly fullName/company/email/revision.
+Scheduled/closed/pending/banned states expose no form. This is component evidence, not a real
+QR/login/Mongo/phone end-to-end or production readiness claim. Independent integration security
+review and exact-head CI are separate from the earlier bounded CSV-only review.
 
 The EVENT replay builder now pins and embeds its complete simulation closure: campaign,
 level layout and engine, using ordered filename-plus-NUL/source hashes. This repairs the

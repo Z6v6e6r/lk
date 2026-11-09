@@ -1,5 +1,6 @@
 import {validatePrivatePreparationPaths} from './lib/privatePreparationPaths.mjs';
 import { addEventRegistration, addEventGameRoutes } from './lib/eventCommunity.mjs';
+import { addEventAdmissionRoutes } from './lib/eventJumpAdmission.mjs';
 import { addTypedCommunityResponseRedaction } from './lib/communityResponseRedaction.mjs';
 import { addCommunityRosterWrites } from './lib/communityRosterWrites.mjs';
 import { addCommunityPolicyAuth } from './lib/communityPolicyAuth.mjs';
@@ -17,7 +18,7 @@ function insertOnce(body, anchor, addition, marker) {
   return body.replace(anchor, anchor + addition);
 }
 /** Focused function-body patch only. No graph regeneration, config edits or deploy. */
-export function patchCommunityTypesFlow(input, { eventGames = false } = {}) {
+export function patchCommunityTypesFlow(input, { eventGames = false, eventAdmission = false } = {}) {
   if (!Array.isArray(input) || new Set(input.map(node => node.id)).size !== input.length) throw new Error('COMMUNITY_TYPES_INVALID_FLOW');
   const disabledTabs = new Set(input.filter(node => node.type === 'tab' && node.disabled === true).map(node => node.id));
   const inactive = node => node.d === true || disabledTabs.has(node.z);
@@ -70,7 +71,8 @@ export function patchCommunityTypesFlow(input, { eventGames = false } = {}) {
     }
   }
   if (required.size) throw new Error('COMMUNITY_TYPES_REQUIRED_NODES_MISSING: ' + [...required].join(', '));
-  const communityGraph = addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth(addEventRegistration(flow))));
+  const registrationGraph = addEventRegistration(flow);
+  const communityGraph = addTypedCommunityResponseRedaction(addCommunityRosterWrites(addCommunityPolicyAuth(eventAdmission ? addEventAdmissionRoutes(registrationGraph) : registrationGraph)));
   const authenticated = eventGames ? addTypedCommunityResponseRedaction(addCommunityPolicyAuth(addEventGameRoutes(communityGraph))) : communityGraph;
   const inactiveIds = new Set(input.filter(inactive).map(node => node.id));
   if (authenticated.some(node => inactiveIds.has(node.id))) throw new Error('COMMUNITY_TYPES_INACTIVE_ID_COLLISION');
@@ -105,7 +107,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   validatePrivatePreparationPaths(source,target);
   validatePrivatePreparationPaths(source,target + '.changes.json');
   const sourceBytes = fs.readFileSync(source);
-  const result = patchCommunityTypesFlow(JSON.parse(sourceBytes), { eventGames: args.includes('--event-games') });
+  const result = patchCommunityTypesFlow(JSON.parse(sourceBytes), { eventGames: args.includes('--event-games'), eventAdmission: args.includes('--event-admission') });
   fs.writeFileSync(target, JSON.stringify(result.flow, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   fs.writeFileSync(target + '.changes.json', JSON.stringify(result.changes, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   console.log(JSON.stringify({ sourceSha256: digest(sourceBytes), changedNodes: result.changes.length, candidateSha256: digest(fs.readFileSync(target)), deployed: false }));

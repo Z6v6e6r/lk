@@ -2,24 +2,35 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createIdentityVerifier } from './identity.mjs';
 import { createEnrollment } from './enrollment.mjs';
+import { createEventAccess } from './event-access.mjs';
 import { createRegistry, fail, RESULT_STORAGE_POLICY, RANKING_V2_ACCEPT } from './registry.mjs';
 import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
 
-export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, authenticate = createIdentityVerifier({ communityId }), registry = createRegistry({ directory, communityId }), enrollment = createEnrollment({ authenticate, communityId, directory }) } = {}) {
+export function createLiveServer(options = {}) {
+  const { origin = 'http://127.0.0.1:5192', directory, requestLimit = 6000, communityId, event = null } = options;
+  const eventAccess = event ? createEventAccess({ communityId, event }) : null;
+  const authenticate = options.authenticate ?? eventAccess?.authenticate ?? createIdentityVerifier({ communityId });
+  const registry = options.registry ?? createRegistry({ directory, communityId, event });
+  const enrollment = options.enrollment ?? eventAccess?.enrollment ?? createEnrollment({ authenticate, communityId, directory });
+  const apiPrefix = event ? '/jump-exhibition-api/' : '/jump-live-api/';
   const viewers = new Set(), rates = new Map();
   let diagnosticAt = 0;
   const response = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(body)); };
   const server = createServer(async (req, res) => {
     try {
-      const url = new URL(req.url, origin), path = url.pathname;
+      const url = new URL(req.url, origin);
+      if (event && !url.pathname.startsWith(apiPrefix)) fail(404, 'NOT_FOUND');
+      const path = url.pathname.startsWith(apiPrefix) ? '/jump-live-api/' + url.pathname.slice(apiPrefix.length) : url.pathname;
       const at = Date.now(), key = req.socket.remoteAddress;
       for (const [k, rate] of rates) if (at - rate.at > 60000) rates.delete(k);
       if (rates.size >= 2048 && !rates.has(key)) fail(429, 'RATE_LIMIT');
       const rate = rates.get(key) ?? { at, count: 0 }; rates.set(key, rate); if (++rate.count > requestLimit) fail(429, 'RATE_LIMIT');
       // The cabinet hosts its own game UI/session. Only authenticated player APIs
-      // accept this exact origin; no cookie credentials, board or stream CORS.
+      // accept this exact origin; the separate exhibition wall is public/read-only.
       const playerRead = /^\/jump-live-api\/(?:me|entry)$/.test(path);
       const playerWrite = /^\/jump-live-api\/(?:enrollment|runs|runs\/[a-f0-9-]{36})$/.test(path);
+      const exhibitionWall = event && req.headers.origin === 'https://padlhub.ru' && req.method === 'GET' && ['/jump-live-api/board', '/jump-live-api/stream'].includes(path);
+      if (exhibitionWall) { res.setHeader('Vary', 'Origin'); res.setHeader('Access-Control-Allow-Origin', 'https://padlhub.ru'); }
       const cabinetRequest = req.headers.origin === 'https://padlhub.ru' && (playerRead || playerWrite);
       if (cabinetRequest) {
         const method = playerRead ? 'GET' : 'POST';
@@ -50,7 +61,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
         const actor = await authenticate(req);
         return response(res, 200, registry.communityRanking(actor, { allTime: req.headers.accept === RANKING_V2_ACCEPT }));
       }
-      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, lives: LIVE_LIVES, resultStoragePolicy: RESULT_STORAGE_POLICY, communityConfigured: !!communityId, persistence: !!directory });
+      if (path === '/jump-live-api/health' && req.method === 'GET') return response(res, 200, { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, sync: LIVE_SYNC, lives: LIVE_LIVES, resultStoragePolicy: event ? 'event-retention-v1' : RESULT_STORAGE_POLICY, communityConfigured: !!communityId, persistence: !!directory });
       if (path === '/jump-live-api/me' && req.method === 'GET') return response(res, 200, await authenticate(req));
       if (path === '/jump-live-api/entry' && req.method === 'GET') return response(res, 200, await enrollment.status(req));
       if (path === '/jump-live-api/board' && req.method === 'GET') {
@@ -65,7 +76,7 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
           scenes, acks, fresh: url.searchParams.get('fresh') === '1' }));
       }
       if (path === '/jump-live-api/stream' && req.method === 'GET') {
-        if (req.headers.origin && req.headers.origin !== origin) fail(403, 'ORIGIN_DENIED');
+        if (req.headers.origin && req.headers.origin !== origin && !exhibitionWall) fail(403, 'ORIGIN_DENIED');
         if (viewers.size >= 24) fail(429, 'VIEWER_LIMIT');
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'X-Content-Type-Options': 'nosniff' });
         res.write('data: ' + JSON.stringify(registry.board()) + '\n\n'); viewers.add(res); res.on('close', () => viewers.delete(res)); return;
@@ -105,7 +116,8 @@ export function createLiveServer({ origin = 'http://127.0.0.1:5192', directory, 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const origin = process.env.JUMP_PUBLIC_ORIGIN;
   if (!origin || !/^https?:\/\/[a-zA-Z0-9.:-]+$/.test(origin) || !process.env.JUMP_RESULTS_DIR) throw new Error('Explicit origin and isolated result directory required');
-  const server = createLiveServer({ origin, directory: process.env.JUMP_RESULTS_DIR, communityId: process.env.JUMP_COMMUNITY_ID });
+  const event = process.env.JUMP_EVENT_BINDING ? JSON.parse(process.env.JUMP_EVENT_BINDING) : null;
+  const server = createLiveServer({ origin, directory: process.env.JUMP_RESULTS_DIR, communityId: process.env.JUMP_COMMUNITY_ID, event });
   server.listen(Number(process.env.JUMP_PORT ?? 5193), '127.0.0.1');
   const stop = () => { server.close(); server.closeAllConnections(); };
   process.once('SIGTERM', stop); process.once('SIGINT', stop);

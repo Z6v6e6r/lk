@@ -48,7 +48,7 @@ test('direct cabinet module installs all screen CSS inside its owned mount gener
   const result = await build({ entryPoints: ['src/padel-jump-widget.tsx'], bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', external: ['react', 'react/jsx-runtime'], plugins: [{ name: 'isolated-mount', setup(builder) {
     builder.onResolve({ filter: /react-dom\/client/ }, () => ({ path: 'root', namespace: 'fixture' }));
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export function createRoot(){return {render(){},unmount(){}}}' }));
-    builder.onResolve({ filter: /components\/padel-jump\/(RaceEntry|PadelJump)$/ }, args => ({ path: args.path, namespace: 'screen' }));
+    builder.onResolve({ filter: /components\/padel-jump\/(RaceEntry|PadelJump|LiveScreen)$/ }, args => ({ path: args.path, namespace: 'screen' }));
     builder.onLoad({ filter: /.*/, namespace: 'screen' }, () => ({ contents: 'export default function Screen(){return null}' }));
     builder.onResolve({ filter: /\.css\?inline$/ }, args => ({ path: resolve(args.resolveDir, args.path.replace('?inline', '')), namespace: 'styles' }));
     builder.onLoad({ filter: /.*/, namespace: 'styles' }, args => ({ contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf8'))}` }));
@@ -63,6 +63,8 @@ test('direct cabinet module installs all screen CSS inside its owned mount gener
     module.exports.mount(target, 'race');
     const first = target.children[0], css = first.children[0].textContent;
     for (const file of ['live.css', 'padel-jump.css', 'jump-start.css']) assert.ok(css.includes(readFileSync(`src/components/padel-jump/${file}`, 'utf8')), `${file} must accompany direct JS mount`);
+    for (const file of ['spectator/spectator.css', 'spectator/spectator-ui-extra.css', 'spectator/scoreboard.css']) assert.ok(css.includes(readFileSync(`src/components/padel-jump/${file}`, 'utf8')), `${file} must accompany exhibition wall mount`);
+    assert.ok(css.includes(readFileSync('src/components/cabinet/event-community.css', 'utf8')));
     assert.match(css, /background: #f8d52c/);
     module.exports.mount(target, 'practice');
     await new Promise(queueMicrotask);

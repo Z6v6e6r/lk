@@ -2,12 +2,15 @@ import { readAuthToken } from '../../utils/authTokenStorage';
 import { LIVE_API, LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_SYNC, LIVE_LIVES } from './live-contract';
 import { createRaceTransport } from './race-connection';
 import type { LiveAck, LiveTicket } from './race-connection';
+import type { EventNotice } from '../../utils/communityApi';
+import { isExhibitionRoute, exhibitionApi } from './exhibition';
 export type { LiveAck, LiveTicket } from './race-connection';
 
-const playerApi = () => typeof window !== 'undefined' && window.location.origin === 'https://padlhub.ru'
+const playerApi = () => isExhibitionRoute() ? exhibitionApi() : typeof window !== 'undefined' && window.location.origin === 'https://padlhub.ru'
   ? 'https://padlhub.su/jump-live-api/' : LIVE_API;
 
 export const LIVE_ERRORS: Record<string, string> = {
+  EVENT_CLOSED: 'Мероприятие ещё не началось или уже завершено.', EVENT_DATA_EXPIRED: 'Срок хранения данных мероприятия завершён.', EVENT_BINDING_CHANGED: 'Условия мероприятия изменились. Обратись к организатору.', EVENT_REGISTRATION_REQUIRED: 'Заполни актуальную анкету мероприятия перед игрой.', EVENT_REGISTRATION_INVALID: 'Проверь ФИО, компанию и электронную почту.', EVENT_ADMISSION_INVALID: 'Не удалось подтвердить анкету мероприятия. Повтори проверку.',
   IDENTITY_UNAVAILABLE: 'Сервис профиля или сообщества временно недоступен. Повтори проверку.', IDENTITY_RESPONSE_INVALID: 'Сервис вернул неполные данные профиля. Повтори проверку.', MEMBERSHIP_NOT_VERIFIED: 'Не удалось получить полный список участников. Повтори проверку; вступать заново не нужно.',
   PROFILE_INVALID: 'Сервис не подтвердил идентификатор профиля. Выйди и войди заново.', PROFILE_NAME_MISSING: 'В профиле и сообществе не указано имя. Проверь данные в личном кабинете.', IDENTITY_BUSY: 'Проверок сейчас много. Повтори чуть позже.',
   ENROLLMENT_INVALID: 'Проверь имя, фамилию, почту, сайт компании и согласие на сохранение анкеты.', ENROLLMENT_STORAGE_UNAVAILABLE: 'Не удалось сохранить анкету. Вступление не подтверждено; повтори проверку.', ENROLLMENT_UNAVAILABLE: 'Регистрация пока недоступна. Повтори чуть позже.',
@@ -47,7 +50,7 @@ export async function raceProfile(signal: AbortSignal): Promise<{ id: string; na
   return data;
 }
 
-export type RaceEntryStatus = { state: 'ready' | 'form' | 'pending' | 'blocked' | 'confirming'; name: string; communityName: string; fields?: { firstName: string; lastName: string; email: string; companyWebsite: string } };
+export type RaceEntryStatus = { state: 'ready' | 'form' | 'pending' | 'blocked' | 'confirming' | 'scheduled' | 'closed'; name: string; communityName: string; registrationKind?: 'event'; eventNotice?: EventNotice; fields?: { firstName: string; lastName: string; email: string; companyWebsite: string } };
 export async function entryRequest<T>(path: 'entry' | 'enrollment', signal: AbortSignal, body?: unknown): Promise<T> {
   const token = readAuthToken();
   const response = await fetch(playerApi() + path, { signal, credentials: 'omit', cache: 'no-store', method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
