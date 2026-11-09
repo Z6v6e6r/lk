@@ -9,7 +9,54 @@ Owner: event organizer; audience: participants of «Корпоративный �
 - Every EVENT roster writer (LK join/invite/member management + CUP moderation) increments `eventRosterRevision`; game/roster filters contain numeric fences rather than profile arrays. New EVENT activation must wait until all writers are upgraded; stale cross-type moderation conflicts. Mutation success requires acknowledged=true, matchedCount=1, modifiedCount=1.
 - Private entries have epoch/revision/version and a server-computed one-calendar-year retention deadline. No provider write, mail, marketing opt-in, schema migration, new collection or rating-worker change.
 - Candidate patching excludes disabled tabs, rejects duplicate active names/routes, reserves inactive IDs, validates generated auth routes/active wires, and upgrades only known V1 function bytes. Archived graph copies stay byte-identical. Production currently has disabled Media2 copies and one active LK Communities graph (structural read only); this does not establish a deployable full candidate.
-- The synthetic fixture has no real owner/contact/policy and cannot open registration. The owner-provided dates/contact remain in the local launch draft, outside Git.
+- The synthetic fixture has no real owner/contact/policy and cannot open registration. Historical private launch drafts do not supply authority for a new activation; use the confirmed scope below and obtain the missing current contact/owner.
+
+## November exhibition: confirmed scope and open integration
+
+Owner selected the current five-life Jump and shared live wall, not the older endless EVENT
+game. The requested window is November 12, 2026 00:00 through November 14, 2026 00:00
+Europe/Moscow: `[2026-11-11T21:00:00.000Z, 2026-11-13T21:00:00.000Z)`.
+Responsible name/contact email and the exact community owner remain unconfirmed; registration
+must stay closed until the actual notice is supplied. Do not activate a synthetic policy.
+
+The existing team Jump is a separate single-community service with permanent result retention
+and a companion first-name/last-name/email/company-website form. EVENT owns a mandatory
+full-name/company/email registration in `lk_communities.eventEntries` with a one-year deadline.
+Do not duplicate those records, map company into website, skip the EVENT form for an existing
+member, or repoint the team service. A five-life exhibition requires an event-scoped instance
+of the same game implementation, a PII-free canonical EVENT admission read, trusted player/board
+destinations, activation/policy-bound results and a compatible retention/erasure procedure.
+Those integration changes and the live topology are not implemented or authorized by this
+source-preparation change. The older endless EVENT game is not a fallback for the selected mode.
+
+The EVENT replay builder now pins and embeds its complete simulation closure: campaign,
+level layout and engine, using ordered filename-plus-NUL/source hashes. This repairs the
+builder failure after shared engine changes; it does not convert endless EVENT into five-life
+Jump or change the running team engine. Old incompatible EVENT results are not reinterpreted.
+
+## Organizer questionnaire export (offline only)
+
+`event:registrations:export` reads one already-authorized private snapshot and produces a new
+mode-0600 UTF-8/BOM semicolon CSV containing only full name, company, email and registration
+timestamp. Only the current activation/policy entries are exported, once per actor, before the
+policy retention deadline. Missing policy, wrong target, malformed records or mismatched source
+hash fail closed. Spreadsheet-formula prefixes are escaped. Console receipts contain only a
+random operation ID, timestamp, revisions and count; no contact, participant or community ID.
+
+```sh
+npm run --silent event:registrations:export -- \
+  --input /private/event-export/snapshot.json --out /private/event-export/forms.csv \
+  --community-id EXACT_APPROVED_COMMUNITY_ID --expected-sha SNAPSHOT_SHA256 \
+  --now EXACT_UTC_ISO
+```
+
+The snapshot and CSV must remain outside Git/public serving paths in canonical mode-0700
+operator directories; input must be a mode-0600 single-link ordinary file, output must not
+exist. No Mongo client, provider access, public endpoint, email or automatic upload is added.
+Authorization to operate the tool and take a real snapshot remains separate from developing it.
+Transfer the CSV only to the designated organizer over an approved private channel. It is a PII
+copy subject to the same retention/erasure duty, including backup and downstream-copy handling;
+no automatic deletion is claimed. An operator-held CSV is not a CUP questionnaire-management UI.
 
 ## Edge candidate: build only
 

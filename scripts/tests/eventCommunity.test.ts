@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { eventRegistration, eventGameApplySource, EVENT_GAME_ACK } from '../lib/eventCommunity.mjs';
 import { patchCommunityTypesFlow } from '../patch_live_community_types.mjs';
 import { sanitizeTypedCommunityPayload } from '../lib/communityResponseRedaction.mjs';
+import { sanitizeTypedCommunityPayload as legacySanitizer } from '../fixtures/communityResponseRedactionV1.mjs';
 import { communityType, parseCommunityTypeSettings } from '../../src/services/community-policy.ts';
 import { createGame, stepGame, FIXED_STEP } from '../../src/components/padel-jump/engine.ts';
 
@@ -163,7 +164,8 @@ test('a previously patched four-type graph upgrades auth, registration barrier a
    node.func=node.func.replace(eventBarrier,legacyBarrier).replaceAll("'STATION','CORPORATE','LEAGUE','EVENT'","'STATION','CORPORATE','LEAGUE'").replaceAll("'STATION', 'CORPORATE', 'LEAGUE', 'EVENT'","'STATION', 'CORPORATE', 'LEAGUE'");
    if(node.func.includes('COMMUNITY_TYPED_RESPONSE_REDACTION')) {
     const a=node.func.indexOf('const redact = '), b=node.func.indexOf(';\nconst output = ',a);
-    node.func=node.func.slice(0,a)+'const redact = '+sanitizeTypedCommunityPayload.toString().replace("'LEAGUE', 'EVENT'","'LEAGUE'").split('\n').filter(line=>!line.includes("key === 'eventEntries'")).join('\n')+node.func.slice(b);
+    assert.equal(crypto.createHash('sha256').update(legacySanitizer.toString()).digest('hex'),'9ca1ae941b8cd7f01c1be2e1bc23c472676c1629e5baf48ea646e68e65aae152');
+    node.func=node.func.slice(0,a)+'const redact = '+legacySanitizer.toString()+node.func.slice(b);
    }
  }
  const upgraded=patchCommunityTypesFlow(old,{eventGames:true});

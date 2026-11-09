@@ -1,7 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {addCommunityPolicyAuth, COMMUNITY_AUTH_SUBFLOW} from './communityPolicyAuth.mjs';
 import { parseEventRegistrationPolicy, eventRetentionUntil } from '../../src/services/community-policy.ts';
-import { EVENT_JUMP_ENGINE_VERSION } from '../../src/services/eventJumpContract.ts';
+import { EVENT_JUMP_ENGINE_FILES, EVENT_JUMP_ENGINE_VERSION } from '../../src/services/eventJumpContract.ts';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
@@ -76,9 +76,11 @@ export function addEventRegistration(input) {
 }
 
 function engineSource() {
-  const digest = createHash('sha256').update(fs.readFileSync(fileURLToPath(new URL('../../src/components/padel-jump/campaign.ts', import.meta.url)))).update(fs.readFileSync(fileURLToPath(new URL('../../src/components/padel-jump/engine.ts', import.meta.url)))).digest('hex');
-  if (digest !== EVENT_JUMP_ENGINE_VERSION) throw new Error('EVENT_ENGINE_VERSION_DRIFT');
-  return ['campaign.ts', 'engine.ts'].map(name => stripTypeScriptTypes(fs.readFileSync(fileURLToPath(new URL('../../src/components/padel-jump/' + name, import.meta.url)), 'utf8'))
+  const sources = EVENT_JUMP_ENGINE_FILES.map(name => fs.readFileSync(fileURLToPath(new URL('../../src/components/padel-jump/' + name, import.meta.url)), 'utf8'));
+  const hash = createHash('sha256');
+  for (const [index, source] of sources.entries()) hash.update(EVENT_JUMP_ENGINE_FILES[index] + '\0').update(source);
+  if (hash.digest('hex') !== EVENT_JUMP_ENGINE_VERSION) throw new Error('EVENT_ENGINE_VERSION_DRIFT');
+  return sources.map(source => stripTypeScriptTypes(source)
     .replace(/^import .*;\s*$/gm, '').replace(/^export /gm, '')).join('\n');
 }
 export const EVENT_GAME_PREPARE = String.raw`
