@@ -349,6 +349,81 @@ class ExhibitionReceiptErasure(unittest.TestCase):
             for value in ['fixture-player', self.community, 'Private Alias', 'actorId']: self.assertNotIn(value, json.dumps(receipt))
             with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
 
+    def test_writer_crash_then_cold_registry_requires_sealed_link_reconciliation_before_erasure(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve(); base.chmod(0o700); root = base / 'receipts'; root.mkdir(); names = self.fixture(root)
+            script = '''
+import fs from 'node:fs'; import vm from 'node:vm'; import { join } from 'node:path'; import { randomUUID } from 'node:crypto';
+import { LIVE_ENGINE_VERSION, LIVE_RULE } from './src/components/padel-jump/live-contract.ts';
+const [directory, communityId] = process.argv.slice(1);
+const row = {id: randomUUID(), communityId, actorId:'crash-player', alias:'Fixture Player', stars:1, elapsedMs:1000, playMs:1000, failures:5,
+  engine:LIVE_ENGINE_VERSION, rule:LIVE_RULE, finishedAt:'2026-11-12T09:00:00.000Z', eventEpoch:'2026-11-09T09:00:00.000Z', policyRevision:2, retentionUntil:'2027-11-13T21:00:00.000Z'};
+const source = fs.readFileSync('games/padel-jump/live/registry.mjs','utf8'), start = source.indexOf('  function persist(row) {'), end = source.indexOf('  function publishResult', start);
+if (start < 0 || end < start) throw new Error('PERSIST_SOURCE_SHAPE');
+vm.runInNewContext('('+source.slice(start,end)+')(row)', {...fs, directory, row, join, randomUUID,
+  linkSync(...args) { fs.linkSync(...args); process.exit(73); }});
+throw new Error('CRASH_NOT_INJECTED');
+'''
+            cwd = Path(__file__).resolve().parents[2]; node = shutil.which('node') or 'node'
+            writer = subprocess.run([node, '--experimental-strip-types', '--input-type=module', '-e', script, str(root), self.community], cwd=cwd, text=True, capture_output=True)
+            self.assertEqual(writer.returncode, 73, writer.stderr)
+            pending = next(p for p in root.iterdir() if p.stat().st_nlink == 2 and p.name.startswith('.pending-'))
+            final = next(p for p in root.iterdir() if p.stat().st_ino == pending.stat().st_ino and p.name.endswith('.json'))
+            original = final.read_bytes(); self.assertEqual(final.stat().st_nlink, 2)
+            reader = '''
+import {createRegistry} from './games/padel-jump/live/registry.mjs';
+const [directory,communityId]=process.argv.slice(1);
+const event={epoch:'2026-11-09T09:00:00.000Z',policyRevision:2,startsAt:'2026-11-11T21:00:00.000Z',endsAt:'2026-11-13T21:00:00.000Z',retentionUntil:'2027-11-13T21:00:00.000Z',inviteCode:'fixture-invite'};
+process.stdout.write(JSON.stringify(createRegistry({directory,communityId,event,wall:()=>Date.parse('2026-11-12T09:00:00.000Z')}).board().results.length));
+'''
+            restarted = subprocess.run([node, '--experimental-strip-types', '--input-type=module', '-e', reader, str(root), self.community], cwd=cwd, text=True, capture_output=True)
+            self.assertEqual(restarted.returncode, 0, restarted.stderr); self.assertEqual(json.loads(restarted.stdout), 1)
+            with self.assertRaisesRegex(RuntimeError, 'FILE_INVALID'): module.prepare(root, self.community, actor='fixture-player')
+            output = base / 'reconcile.json'
+            planned = subprocess.run([sys.executable, str(module.__file__), 'plan', '--directory', str(root), '--community-id', self.community, '--reconcile', '--output', str(output)], text=True, capture_output=True)
+            self.assertEqual(planned.returncode, 0, planned.stderr)
+            plan = json.loads(output.read_bytes()); self.assertEqual(plan['mode'], 'reconcile'); self.assertEqual(len(plan['files']), 1)
+            digest = hashlib.sha256(output.read_bytes()).hexdigest()
+            preview = subprocess.run([sys.executable, str(module.__file__), 'dry-run', '--directory', str(root), '--plan', str(output), '--expected-sha', digest], text=True, capture_output=True)
+            self.assertEqual(preview.returncode, 0, preview.stderr); self.assertEqual(len(list(root.iterdir())), 6)
+            receipt = module.execute(plan, root, apply=True)
+            self.assertEqual(receipt['status'], 'LINKS_RECONCILED_REPLAN_REQUIRED'); self.assertEqual(receipt['removedCount'], 1)
+            self.assertFalse(pending.exists()); self.assertEqual(final.stat().st_nlink, 1); self.assertEqual(final.read_bytes(), original)
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+            self.assertEqual(module.execute(module.prepare(root, self.community, actor='fixture-player'), root, apply=True)['removedCount'], 3)
+            self.assertEqual(final.read_bytes(), original)
+            self.assertEqual(module.execute(module.prepare(root, self.community, actor='crash-player'), root, apply=True)['removedCount'], 1)
+            self.assertEqual([p.name for p in root.iterdir()], [names[2]])
+            after = subprocess.run([node, '--experimental-strip-types', '--input-type=module', '-e', reader, str(root), self.community], cwd=cwd, text=True, capture_output=True)
+            self.assertEqual(after.returncode, 0, after.stderr); self.assertEqual(json.loads(after.stdout), 0)
+
+    def test_reconciliation_refuses_external_links_and_unproven_pending_pairs(self):
+        module = self.module()
+        for kind in ['outside', 'third-link', 'two-pending']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory).resolve(); root = base / 'receipts'; root.mkdir(); names = self.fixture(root)
+                final = root / names[0]; pending = root / ('.pending-' + str(uuid.uuid4()))
+                if kind == 'outside': os.link(final, base / 'outside')
+                elif kind == 'third-link': os.link(final, pending); os.link(final, base / 'outside')
+                else: final.rename(pending); os.link(pending, root / ('.pending-' + str(uuid.uuid4())))
+                before = {p.name: (p.read_bytes(), p.stat().st_nlink) for p in root.iterdir()}
+                with self.assertRaisesRegex(RuntimeError, 'ERASURE_(LINKS|FILE)_INVALID'): module.prepare(root, self.community, reconcile=True)
+                self.assertEqual({p.name: (p.read_bytes(), p.stat().st_nlink) for p in root.iterdir()}, before)
+
+    def test_partial_link_reconciliation_keeps_final_bytes_and_requires_a_new_plan(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root); final = root / names[0]; original = final.read_bytes()
+            pending = root / ('.pending-' + str(uuid.uuid4())); os.link(final, pending)
+            plan = module.prepare(root, self.community, reconcile=True)
+            with patch.object(module.os, 'fsync', side_effect=OSError('synthetic-directory-sync-failure')):
+                with self.assertRaises(module.PartialErasure) as caught: module.execute(plan, root, apply=True)
+            self.assertEqual(caught.exception.receipt['removedCount'], 1); self.assertFalse(pending.exists())
+            self.assertEqual(final.read_bytes(), original); self.assertEqual(final.stat().st_nlink, 1)
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+            fresh = module.prepare(root, self.community, reconcile=True); self.assertEqual(fresh['files'], [])
+
     def test_expired_receipts_use_fresh_execution_time_and_the_inclusive_cutoff(self):
         module = self.module()
         with tempfile.TemporaryDirectory() as directory:

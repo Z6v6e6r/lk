@@ -36,9 +36,9 @@ def iso(value):
         return False
 
 
-def selector(community, actor, expired, now):
+def selector(community, actor, expired, now, reconcile=False):
     if not isinstance(community, str) or not re.fullmatch(r'[\w-]{1,120}', community) or not iso(now): fail('ERASURE_SCOPE_INVALID')
-    if bool(actor) == expired or actor and (not isinstance(actor, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,120}', actor)): fail('ERASURE_SCOPE_INVALID')
+    if type(expired) is not bool or type(reconcile) is not bool or sum([bool(actor), expired, reconcile]) != 1 or reconcile and actor is not None or actor and (not isinstance(actor, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,120}', actor)): fail('ERASURE_SCOPE_INVALID')
 
 
 def root_fd(directory):
@@ -52,13 +52,13 @@ def root_fd(directory):
     return fd
 
 
-def read_record(fd, name, community):
+def read_record(fd, name, community, reconcile=False):
     if not isinstance(name, str) or not FILE.fullmatch(name): fail('ERASURE_FILE_INVALID')
     try:
         file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
         with os.fdopen(file_fd, 'rb') as stream:
             meta = os.fstat(stream.fileno())
-            if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_uid != os.fstat(fd).st_uid or meta.st_size > 8192: fail('ERASURE_FILE_INVALID')
+            if not stat.S_ISREG(meta.st_mode) or meta.st_nlink not in ([1, 2] if reconcile else [1]) or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_uid != os.fstat(fd).st_uid or meta.st_size > 8192: fail('ERASURE_FILE_INVALID')
             raw = stream.read(8193)
             if len(raw) > 8192: fail('ERASURE_FILE_INVALID')
         row = json.loads(raw)
@@ -66,34 +66,41 @@ def read_record(fd, name, community):
         fail('ERASURE_FILE_INVALID')
     if not isinstance(row, dict) or not re.fullmatch(UUID, str(row.get('id', ''))) or row.get('communityId') != community or not isinstance(row.get('actorId'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,120}', row['actorId']) or not iso(row.get('eventEpoch')) or type(row.get('policyRevision')) is not int or row['policyRevision'] < 1 or not iso(row.get('retentionUntil')): fail('ERASURE_ROW_INVALID')
     if name.endswith('.json') and name != row['id'] + '.json': fail('ERASURE_ROW_INVALID')
-    return {'name': name, 'sha256': hashlib.sha256(raw).hexdigest(), 'actorId': row['actorId'], 'retentionUntil': row['retentionUntil'], 'inode': meta.st_ino, 'device': meta.st_dev}
+    return {'name': name, 'sha256': hashlib.sha256(raw).hexdigest(), 'actorId': row['actorId'], 'retentionUntil': row['retentionUntil'], 'inode': meta.st_ino, 'device': meta.st_dev, 'links': meta.st_nlink}
 
 
-def inventory(fd, community):
+def inventory(fd, community, reconcile=False):
     names = []
     with os.scandir(fd) as entries:
         for entry in entries:
             names.append(entry.name)
             if len(names) > MAX_FILES: fail('ERASURE_INVENTORY_LIMIT')
-    rows = [read_record(fd, name, community) for name in sorted(names)]
-    digest = hashlib.sha256(''.join(row['name'] + '\0' + row['sha256'] + '\n' for row in rows).encode()).hexdigest()
+    rows = [read_record(fd, name, community, reconcile) for name in sorted(names)]
+    if reconcile:
+        groups = {}
+        for row in rows: groups.setdefault((row['device'], row['inode']), []).append(row)
+        for group in groups.values():
+            if any(row['links'] != len(group) for row in group): fail('ERASURE_LINKS_INVALID')
+            if len(group) == 2 and (sum(row['name'].endswith('.json') for row in group) != 1 or group[0]['sha256'] != group[1]['sha256']): fail('ERASURE_LINKS_INVALID')
+    digest = hashlib.sha256(''.join(row['name'] + '\0' + row['sha256'] + ('\0' + str(row['device']) + ':' + str(row['inode']) + ':' + str(row['links']) if reconcile else '') + '\n' for row in rows).encode()).hexdigest()
     return rows, digest
 
 
-def selected(rows, actor, expired, now):
+def selected(rows, actor, expired, now, reconcile=False):
+    if reconcile: return [row for row in rows if row['links'] == 2 and row['name'].startswith('.pending-')]
     return [row for row in rows if row['retentionUntil'] <= now] if expired else [row for row in rows if row['actorId'] == actor]
 
 
-def prepare(directory, community, *, actor=None, expired=False, now=None):
+def prepare(directory, community, *, actor=None, expired=False, now=None, reconcile=False):
     now = execution_now() if now is None else now
-    selector(community, actor, expired, now)
+    selector(community, actor, expired, now, reconcile)
     fd = root_fd(directory)
     try:
-        rows, digest = inventory(fd, community)
+        rows, digest = inventory(fd, community, reconcile)
         return {'schema': 'event-jump-receipt-erasure-v1', 'operationId': str(uuid.uuid4()), 'communityId': community,
-                'mode': 'expired' if expired else 'participant', 'actorId': actor, 'preparedAt': now,
+                'mode': 'reconcile' if reconcile else 'expired' if expired else 'participant', 'actorId': actor, 'preparedAt': now,
                 'inventorySha256': digest, 'beforeCount': len(rows),
-                'files': [{'name': row['name'], 'sha256': row['sha256']} for row in selected(rows, actor, expired, now)]}
+                'files': [{'name': row['name'], 'sha256': row['sha256']} for row in selected(rows, actor, expired, now, reconcile)]}
     finally:
         os.close(fd)
 
@@ -105,35 +112,39 @@ class PartialErasure(RuntimeError):
 
 
 def execute(plan, directory, *, apply=False):
-    if not isinstance(plan, dict) or set(plan) != {'schema', 'operationId', 'communityId', 'mode', 'actorId', 'preparedAt', 'inventorySha256', 'beforeCount', 'files'} or plan['schema'] != 'event-jump-receipt-erasure-v1' or not re.fullmatch(UUID, str(plan['operationId'])) or plan['mode'] not in ['expired', 'participant']: fail('ERASURE_PLAN_INVALID')
-    expired = plan['mode'] == 'expired'
-    selector(plan['communityId'], plan['actorId'], expired, plan['preparedAt'])
+    if not isinstance(plan, dict) or set(plan) != {'schema', 'operationId', 'communityId', 'mode', 'actorId', 'preparedAt', 'inventorySha256', 'beforeCount', 'files'} or plan['schema'] != 'event-jump-receipt-erasure-v1' or not re.fullmatch(UUID, str(plan['operationId'])) or plan['mode'] not in ['expired', 'participant', 'reconcile']: fail('ERASURE_PLAN_INVALID')
+    expired, reconcile = plan['mode'] == 'expired', plan['mode'] == 'reconcile'
+    selector(plan['communityId'], plan['actorId'], expired, plan['preparedAt'], reconcile)
     fd = root_fd(directory)
     try:
-        rows, digest = inventory(fd, plan['communityId'])
+        rows, digest = inventory(fd, plan['communityId'], reconcile)
         if digest != plan['inventorySha256'] or len(rows) != plan['beforeCount']: fail('ERASURE_INVENTORY_DRIFT')
-        targets = selected(rows, plan['actorId'], expired, plan['preparedAt'])
+        targets = selected(rows, plan['actorId'], expired, plan['preparedAt'], reconcile)
+        finals = {(row['device'], row['inode']): row for row in rows if row['links'] == 2 and row['name'].endswith('.json')}
         if plan['files'] != [{'name': row['name'], 'sha256': row['sha256']} for row in targets]: fail('ERASURE_PLAN_INVALID')
         at = execution_now()
         if expired and any(row['retentionUntil'] > at for row in targets): fail('ERASURE_NOT_EXPIRED')
         receipt = {'schema': 'event-jump-receipt-erasure-result-v1', 'operationId': plan['operationId'], 'executedAt': at,
-                   'status': 'DRY_RUN', 'eligibleCount': len(targets), 'removedCount': 0, 'beforeCount': len(rows), 'afterCount': len(rows),
+                   'status': 'DRY_RUN', 'mode': plan['mode'], 'eligibleCount': len(targets), 'removedCount': 0, 'beforeCount': len(rows), 'afterCount': len(rows),
                    'separateScopesRequireReadback': ['canonical-event-entries', 'private-exports', 'backups-and-downstream-copies']}
         if not apply: return receipt
         try:
             for row in targets:
                 if expired and row['retentionUntil'] > execution_now(): fail('ERASURE_NOT_EXPIRED')
-                current = read_record(fd, row['name'], plan['communityId'])
+                current = read_record(fd, row['name'], plan['communityId'], reconcile)
                 if current != row: fail('ERASURE_FILE_DRIFT')
+                if reconcile:
+                    final = finals[(row['device'], row['inode'])]
+                    if read_record(fd, final['name'], plan['communityId'], reconcile) != final: fail('ERASURE_FILE_DRIFT')
                 named = os.stat(row['name'], dir_fd=fd, follow_symlinks=False)
-                if named.st_ino != current['inode'] or named.st_dev != current['device']: fail('ERASURE_FILE_DRIFT')
+                if named.st_ino != current['inode'] or named.st_dev != current['device'] or named.st_nlink != current['links']: fail('ERASURE_FILE_DRIFT')
                 os.unlink(row['name'], dir_fd=fd); receipt['removedCount'] += 1
                 os.fsync(fd)
             after, _ = inventory(fd, plan['communityId'])
             removed = {row['name'] for row in targets}
             expected = {row['name']: row['sha256'] for row in rows if row['name'] not in removed}
             if {row['name']: row['sha256'] for row in after} != expected: fail('ERASURE_READBACK_DRIFT')
-            receipt.update(status='FILES_ERASED', afterCount=len(after))
+            receipt.update(status='LINKS_RECONCILED_REPLAN_REQUIRED' if reconcile else 'FILES_ERASED', afterCount=len(after))
             return receipt
         except (OSError, RuntimeError):
             receipt.update(status='PARTIAL_RECONCILE', afterCount=None)
@@ -197,7 +208,7 @@ def main():
     plan_args = operations.add_parser('plan')
     plan_args.add_argument('--directory', required=True, type=Path); plan_args.add_argument('--community-id', required=True)
     group = plan_args.add_mutually_exclusive_group(required=True)
-    group.add_argument('--actor'); group.add_argument('--expired', action='store_true')
+    group.add_argument('--actor'); group.add_argument('--expired', action='store_true'); group.add_argument('--reconcile', action='store_true')
     plan_args.add_argument('--output', required=True, type=Path)
     preview = operations.add_parser('dry-run'); preview.add_argument('--directory', required=True, type=Path)
     live = operations.add_parser('apply'); live.add_argument('--apply', action='store_true'); live.add_argument('--receipt', type=Path)
@@ -206,7 +217,7 @@ def main():
     args = parser.parse_args(); os.umask(0o077)
     if args.operation == 'plan':
         target = private_path(args.output, new=True, archive=args.directory)
-        plan = prepare(args.directory, args.community_id, actor=args.actor, expired=args.expired)
+        plan = prepare(args.directory, args.community_id, actor=args.actor, expired=args.expired, reconcile=args.reconcile)
         fd = new_output(target)
         try: write_journal(fd, plan)
         finally: os.close(fd)

@@ -231,11 +231,20 @@ membership, provider, canonical Mongo collection, exports or backups.
    no stop/start command is issued by the eraser. A new private journal is persisted before
    unlink; interruption leaves an explicit reconciliation requirement, not an assumed success.
 5. The plan seals the entire bounded inventory and selected file hashes. All epochs and valid
-   `.pending-*` score receipts for the verified actor are included. Symlinks, hard links,
+   `.pending-*` score receipts for the verified actor are included. Symlinks, unexplained hard links,
    wrong owner/mode, malformed/foreign rows, unknown filenames and timestamps stop before
    deletion. Expiry rechecks fresh execution time, including the exact cutoff; a future or
    stale preparation timestamp is not deletion authority. Files are read/unlinked relative
    to the owned directory descriptor, fsynced and read back; other actors' bytes are preserved.
+   A writer crash after hard-link publication can leave a valid final/pending pair. With the
+   exhibition still stopped, prepare a separate `plan --reconcile` (mutually exclusive with
+   actor/expiry planning), seal its hash and dry-run it before the approved apply. Only a
+   valid final plus pending name with matching inode/device/content/owner/mode and exactly
+   two total links is admissible; outside links, two pending names and third links fail closed.
+   This stage unlinks only the duplicate pending name, preserving all final receipt bytes.
+   `LINKS_RECONCILED_REPLAN_REQUIRED` is not erasure success: prepare a **new** sealed participant
+   or expiry inventory/plan afterward. The same live target, stopped-unit, journal and lock
+   guards apply. No reconciliation runs implicitly during planning or registry startup.
 6. Any partial unlink/fsync/readback failure produces `PARTIAL_RECONCILE`. Keep exhibition
    stopped, compare the frozen plan with physical state, and prepare a reviewed remaining
    operation; the stale plan cannot be blindly replayed after inventory drift. Never restore
@@ -247,7 +256,9 @@ membership, provider, canonical Mongo collection, exports or backups.
    Reapply erasure tombstones after a backup restore before exposing data again.
 
 LOCAL tests execute actual private CLI planning/dry-run and disposable file unlinks, including
-old epochs, complete pending files, actor isolation, inventory drift, malformed UTC timestamps,
+old epochs, complete pending files, actual writer-process exit after link publication followed
+by a separate cold registry process, sealed duplicate-link reconciliation, actor isolation,
+inventory drift, malformed UTC timestamps,
 inclusive expiry and interrupted deletion. Live CLI wrong-target refusal is exercised without
 systemd, live files, root role changes or shared-state mutation. Actual Linux custody/service
 checks, physical production erasure and all downstream-copy signoffs remain separate evidence.
