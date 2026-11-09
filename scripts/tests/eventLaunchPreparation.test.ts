@@ -68,6 +68,13 @@ test('retention cutoff is inclusive, preserves later entries and works after typ
  assert.throws(()=>prepareEventErasure(doc(),{actorId:'synthetic-a',expired:true,now:'2027-10-24T20:59:59.999Z'}));
 });
 
+test('erasure preserves the exact Cyrillic exhibition community ID and still rejects unsafe identifiers',()=>{
+ const document={...doc(),id:'community_1794221739126_корпспорт-падлхаб-2026'};
+ const plan=prepareEventErasure(document,{actorId:'synthetic-a',now:'2026-11-12T09:00:00.000Z'});
+ assert.equal(plan.command.filter.id,document.id);assert.equal(plan.receipt.removedCount,2);
+ for(const id of ['bad/id','bad id','bad\nname','x'.repeat(121)]) assert.throws(()=>prepareEventErasure({...document,id},{actorId:'synthetic-a',now:'2026-11-12T09:00:00.000Z'}),/PREIMAGE_INVALID/);
+});
+
 test('erasure plans require a private external workspace and random unlinkable receipt id',()=>{
  const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'event-erasure-test-'));fs.chmodSync(root,0o700);
  const input=path.join(root,'input.json'),output=path.join(root,'plan.json');fs.writeFileSync(input,JSON.stringify(doc()),{mode:0o600});

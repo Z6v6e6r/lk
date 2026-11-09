@@ -13,6 +13,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('publisher', Path(__file__).resolve().parents[1] / 'padel_jump_live_147.py')
@@ -304,6 +305,118 @@ class JumpDeployment(unittest.TestCase):
                 self.assertEqual(json.loads((upload / 'receipt.json').read_text())['status'], 'PUBLISHED')
                 with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): frontend.apply(upload)
                 run.assert_not_called()
+
+class ExhibitionReceiptErasure(unittest.TestCase):
+    community = 'community_fixture_выставка'
+    cutoff = '2027-11-13T21:00:00.000Z'
+
+    def module(self):
+        source = Path(__file__).resolve().parents[1] / 'erase_event_jump_receipts.py'
+        self.assertTrue(source.is_file(), 'Canonical form erasure must also have a bounded separate-receipt path')
+        spec = importlib.util.spec_from_file_location('event_receipt_erasure', source)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+
+    def fixture(self, root):
+        root.chmod(0o700); names = []
+        for index in range(4):
+            record_id = str(uuid.uuid4()); name = ('.pending-' + str(uuid.uuid4())) if index == 3 else record_id + '.json'
+            row = {'id': record_id, 'communityId': self.community, 'actorId': 'fixture-other' if index == 2 else 'fixture-player', 'alias': 'Private Alias',
+                   'eventEpoch': '2026-11-09T09:00:00.000Z' if index != 1 else '2026-11-08T09:00:00.000Z', 'policyRevision': 2,
+                   'retentionUntil': '2028-11-13T21:00:00.000Z' if index == 2 else self.cutoff}
+            target = root / name; target.write_text(json.dumps(row)); target.chmod(0o600); names.append(name)
+        return names
+
+    def test_actor_erasure_covers_all_epochs_and_pending_receipts_without_touching_other_players(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root); other = (root / names[2]).read_bytes()
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            self.assertEqual(len(plan['files']), 3)
+            preview = module.execute(plan, root)
+            self.assertEqual(preview['status'], 'DRY_RUN'); self.assertEqual(len(list(root.iterdir())), 4)
+            receipt = module.execute(plan, root, apply=True)
+            self.assertEqual(receipt['status'], 'FILES_ERASED'); self.assertEqual(receipt['removedCount'], 3)
+            self.assertEqual([p.name for p in root.iterdir()], [names[2]]); self.assertEqual((root / names[2]).read_bytes(), other)
+            for value in ['fixture-player', self.community, 'Private Alias', 'actorId']: self.assertNotIn(value, json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+
+    def test_expired_receipts_use_fresh_execution_time_and_the_inclusive_cutoff(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            plan = module.prepare(root, self.community, expired=True, now='2027-11-14T09:00:00.000Z')
+            with patch.object(module, 'execution_now', return_value='2027-11-13T20:59:59.999Z'):
+                with self.assertRaisesRegex(RuntimeError, 'NOT_EXPIRED'): module.execute(plan, root, apply=True)
+            self.assertEqual(len(list(root.iterdir())), 4)
+            with patch.object(module, 'execution_now', return_value=self.cutoff):
+                self.assertEqual(module.execute(plan, root, apply=True)['removedCount'], 3)
+            self.assertEqual([p.name for p in root.iterdir()], [names[2]])
+
+    def test_inventory_drift_or_symlinks_stop_before_any_deletion(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            changed = root / names[0]; changed.write_text(changed.read_text() + ' ')
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+            self.assertEqual(len(list(root.iterdir())), 4)
+            changed.unlink(); changed.symlink_to(root / names[2])
+            with self.assertRaises(RuntimeError): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            self.assertTrue((root / names[2]).is_file())
+
+    def test_ambiguous_timestamp_is_not_an_expiry_authority(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            target = root / names[0]; row = json.loads(target.read_text()); row['retentionUntil'] = self.cutoff.removesuffix('Z'); target.write_text(json.dumps(row))
+            with self.assertRaisesRegex(RuntimeError, 'ROW_INVALID'): module.prepare(root, self.community, expired=True, now='2027-11-14T09:00:00.000Z')
+
+    def test_hardlinks_public_modes_and_foreign_rows_cannot_be_an_erasure_preimage(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve(); root = base / 'receipts'; root.mkdir(); names = self.fixture(root)
+            target = root / names[0]; linked = base / 'hardlink'; os.link(target, linked)
+            with self.assertRaisesRegex(RuntimeError, 'FILE_INVALID'): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            linked.unlink(); target.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'FILE_INVALID'): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            target.chmod(0o600); row = json.loads(target.read_text()); row['communityId'] = 'foreign-community'; target.write_text(json.dumps(row))
+            with self.assertRaisesRegex(RuntimeError, 'ROW_INVALID'): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            self.assertEqual(len(list(root.iterdir())), 4)
+
+    def test_actual_cli_prepares_private_plan_and_only_dry_runs_offline(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve(); base.chmod(0o700); root = base / 'receipts'; root.mkdir(); self.fixture(root)
+            output = base / 'plan.json'
+            command = [sys.executable, str(module.__file__), 'plan', '--directory', str(root), '--community-id', self.community, '--actor', 'fixture-player', '--output', str(output)]
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(output.is_file(), 'CLI must create the real sealed plan, not just define helpers')
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600); self.assertNotIn('fixture-player', result.stdout + result.stderr)
+            digest = hashlib.sha256(output.read_bytes()).hexdigest()
+            preview = subprocess.run([sys.executable, str(module.__file__), 'dry-run', '--directory', str(root), '--plan', str(output), '--expected-sha', digest], text=True, capture_output=True)
+            self.assertEqual(preview.returncode, 0, preview.stderr); self.assertEqual(json.loads(preview.stdout)['status'], 'DRY_RUN')
+            denied = subprocess.run([sys.executable, str(module.__file__), 'apply', '--plan', str(output), '--expected-sha', digest, '--apply', '--receipt', str(base / 'result.json')], text=True, capture_output=True)
+            self.assertNotEqual(denied.returncode, 0); self.assertFalse((base / 'result.json').exists()); self.assertEqual(len(list(root.iterdir())), 4)
+
+    def test_partial_unlink_is_explicit_and_the_old_plan_cannot_be_blindly_retried(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); self.fixture(root)
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            original = os.unlink; calls = 0
+            def unlink(name, *, dir_fd=None):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError('synthetic-unlink-failure')
+                return original(name, dir_fd=dir_fd)
+            with patch.object(module.os, 'unlink', side_effect=unlink):
+                with self.assertRaises(module.PartialErasure) as caught: module.execute(plan, root, apply=True)
+            self.assertEqual(caught.exception.receipt['status'], 'PARTIAL_RECONCILE')
+            self.assertEqual(caught.exception.receipt['removedCount'], 1); self.assertEqual(len(list(root.iterdir())), 3)
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+
 
 class JumpUpdate(unittest.TestCase):
     def module(self):

@@ -62,7 +62,7 @@ The older endless EVENT game is not a fallback for the selected mode.
   November 13; removal does not erase stored forms or scores. The team's existing module pin
   is unchanged. Cached game exports are keyed by module URL, not shared between targets.
 
-The second service/store/port/edge installation, physical erasure procedure for its result files,
+The second service/store/port/edge installation, live erasure/backup acceptance for its result files,
 exact-source release and live phone acceptance remain activation work. Do not repoint or restart
 `padlhub-jump-live.service` (5193). The proposed exhibition target is separate loopback 5194,
 `/jump-exhibition-api/` and a new private result directory. The event-specific health identifies
@@ -192,6 +192,65 @@ node scripts/prepare_event_erasure.mjs \
 Actor deletion removes every epoch and run/result for that actor, leaves other entries and roster untouched, works after type rollback, and makes game access require new registration. Expiry removes only records with a known expired server deadline; a legacy/malformed deadline is a stop. Missing target is a no-op with no revision bump. Filter fences exact community/type, activation, policy revision and numeric entry revision; no full private array enters the filter. Mutation is one `$pull` plus revision increment, `upsert:false`. Any acknowledgement other than acknowledged + matched=1 + modified=1 stops; do not blindly retry. Read the exact record back and inspect counts in memory; log only operation ID, reason, revisions/counts and timestamp. Identifier-bearing command operands must remain out of profiler/driver logs.
 
 Physical live erasure is intentionally irreversible and not authorized here. A real executor must use the existing guarded operator path with separate exact-target authority, this frozen plan, fresh identity/revisions and the strict acknowledgement check. The tool creates no PII backup. Existing backups have their own retention/access boundary: inventory them, establish expiry, record erasure tombstones outside participant payloads, and reapply erasure after any separately authorized restore before reopening. Restoring an old backup can resurrect deleted data; never treat source rollback as data rollback.
+
+### Separate five-life score receipts and process caches
+
+The canonical planner now accepts the exact Cyrillic community ID without transliteration.
+It still does **not** delete the separate five-life filesystem archive. The bounded operator
+tool `scripts/erase_event_jump_receipts.py` supplies that file-only scope; it is source, not an
+installed job or approval to delete anything. It never touches the team archive, profile,
+membership, provider, canonical Mongo collection, exports or backups.
+
+1. Resolve the verified account ID and approve the exact erasure scope. For expiry, use each
+   stored inclusive retention deadline; the confirmed notice ends retention at
+   `2027-11-13T21:00:00.000Z`. Assign the responsible operator and backup/export lifecycle before
+   activation. No retention cron/timer has been installed by this task.
+2. Under a separately approved ordered operation, stop only `padlhub-jump-exhibition.service`
+   and confirm it is inactive with MainPID=0. This retires the registry/spectator/admission
+   caches and prevents score writes. Do not restart or stop the team service. Apply the exact
+   canonical Mongo plan through the approved operator path, require strict acknowledged CAS
+   and fresh readback, then prepare/verify the separate score plan against the actual stopped
+   archive. A copy may be used for offline rehearsal, not as proof that live deletion occurred.
+3. Offline example, with new external 0700 workspace / 0600 plan and a private receipt copy:
+
+   ```sh
+   python3 scripts/erase_event_jump_receipts.py plan \
+     --directory /private/event-erasure/receipts --community-id EXACT_COMMUNITY_ID \
+     --actor VERIFIED_ACTOR_ID --output /private/event-erasure/score-plan.json
+   python3 scripts/erase_event_jump_receipts.py dry-run \
+     --directory /private/event-erasure/receipts --plan /private/event-erasure/score-plan.json \
+     --expected-sha PLAN_SHA256
+   # --expired replaces --actor for expiry planning. CLI has no --now override.
+   ```
+
+4. Live file execution uses the separately approved immutable script/plan hashes and private
+   operator path, **not** an arbitrary directory option. `apply` is dry-run unless `--apply`
+   is explicitly supplied. The mutating CLI is restricted to root on the exact 147 host,
+   the confirmed exhibition community, its hash-derived exhibition store/account and an
+   already stopped exhibition unit. It holds the same lock as first activation/recovery;
+   no stop/start command is issued by the eraser. A new private journal is persisted before
+   unlink; interruption leaves an explicit reconciliation requirement, not an assumed success.
+5. The plan seals the entire bounded inventory and selected file hashes. All epochs and valid
+   `.pending-*` score receipts for the verified actor are included. Symlinks, hard links,
+   wrong owner/mode, malformed/foreign rows, unknown filenames and timestamps stop before
+   deletion. Expiry rechecks fresh execution time, including the exact cutoff; a future or
+   stale preparation timestamp is not deletion authority. Files are read/unlinked relative
+   to the owned directory descriptor, fsynced and read back; other actors' bytes are preserved.
+6. Any partial unlink/fsync/readback failure produces `PARTIAL_RECONCILE`. Keep exhibition
+   stopped, compare the frozen plan with physical state, and prepare a reviewed remaining
+   operation; the stale plan cannot be blindly replayed after inventory drift. Never restore
+   deleted contacts/scores as automatic recovery. After confirmed canonical/file erasure,
+   cover private snapshots, CSVs, backups and downstream copies separately. File receipts
+   explicitly retain those separate-readback duties and do not assert whole-person erasure.
+7. Before any separately approved restart, verify fresh canonical absence (or a genuinely new
+   registration), remaining file counts/hashes and the public board after a cold process start.
+   Reapply erasure tombstones after a backup restore before exposing data again.
+
+LOCAL tests execute actual private CLI planning/dry-run and disposable file unlinks, including
+old epochs, complete pending files, actor isolation, inventory drift, malformed UTC timestamps,
+inclusive expiry and interrupted deletion. Live CLI wrong-target refusal is exercised without
+systemd, live files, root role changes or shared-state mutation. Actual Linux custody/service
+checks, physical production erasure and all downstream-copy signoffs remain separate evidence.
 
 ## Remaining activation gates (no operation authorized by this document)
 
