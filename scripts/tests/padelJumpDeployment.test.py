@@ -4,13 +4,16 @@ import json
 import contextlib
 import os
 import shutil
+import subprocess
 import importlib.util
 import sys
+from types import SimpleNamespace
 sys.dont_write_bytecode = True
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('publisher', Path(__file__).resolve().parents[1] / 'padel_jump_live_147.py')
@@ -18,6 +21,172 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 
 class JumpDeployment(unittest.TestCase):
+    def test_both_packet_and_publisher_clis_expose_only_the_closed_instance_selector(self):
+        for name in ['package_padel_jump_live_147.py', 'padel_jump_live_147.py']:
+            output = subprocess.check_output([sys.executable, str(Path(__file__).resolve().parents[1] / name), '--help'], text=True)
+            self.assertIn('--instance {team,exhibition}', output)
+
+    def packager_module(self):
+        spec = importlib.util.spec_from_file_location('packager', Path(__file__).resolve().parents[1] / 'package_padel_jump_live_147.py')
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+
+    def test_exhibition_packet_renders_isolated_ops_without_rewriting_team_defaults(self):
+        packager = self.packager_module()
+        self.assertTrue(hasattr(packager, 'render_ops'), 'Instance-specific ops must be rendered before packaging')
+        source = 'a' * 40; community = 'fixture-event'
+        team = publisher.instance_config('team'); event = publisher.instance_config('exhibition')
+        anchor = publisher.ANCHOR.encode(); team_mark = ('    include ' + team['snippet'] + ';\n').encode()
+        binding = {'epoch': '2026-11-09T09:00:00.000Z', 'policyRevision': 2, 'startsAt': '2026-11-11T21:00:00.000Z', 'endsAt': '2026-11-13T21:00:00.000Z', 'retentionUntil': '2027-11-13T21:00:00.000Z', 'inviteCode': 'fixture-invite'}
+        original = b'server {\n' + anchor + team_mark + b'}\n'
+        ops = packager.render_ops(event, source, community, binding, original)
+        for name in ['ops/unit.service', 'ops/api.conf', 'ops/env.conf']: self.assertNotIn(b'padlhub-jump-live', ops[name])
+        self.assertIn(b'127.0.0.1:5194;', ops['ops/api.conf']); self.assertIn(b'/jump-exhibition-api/', ops['ops/api.conf'])
+        self.assertEqual(ops['ops/nginx.candidate.conf'].count(team_mark), 1)
+        event_mark = ('    include ' + event['snippet'] + ';\n').encode()
+        self.assertEqual(ops['ops/nginx.candidate.conf'].replace(event_mark, b''), original)
+        line = next(line for line in ops['ops/env.conf'].decode().splitlines() if line.startswith('JUMP_EVENT_BINDING='))
+        self.assertEqual(json.loads(line.split('=', 1)[1].strip("'")), binding)
+        team_ops = packager.render_ops(team, source, community, None, b'server {\n' + anchor + b'}\n')
+        expected = Path('games/padel-jump/live/deploy/unit.service.in').read_bytes().replace(b'@SOURCE@', source.encode()).replace(b'@COMMUNITY_HASH@', hashlib.sha256(community.encode()).hexdigest()[:16].encode())
+        self.assertEqual(team_ops['ops/unit.service'], expected)
+        self.assertEqual(team_ops['ops/api.conf'], Path('games/padel-jump/live/deploy/api.nginx.conf').read_bytes())
+        with self.assertRaises(RuntimeError): packager.render_ops(event, source, community, binding, b'server {\n' + anchor + b'}\n')
+        with self.assertRaises(RuntimeError): packager.render_ops(event, source, community, None, original)
+
+    def test_packet_binding_uses_canonical_policy_and_refuses_unactivated_or_incomplete_notice(self):
+        packager = self.packager_module()
+        self.assertTrue(hasattr(packager, 'event_binding'), 'Packet must validate the actual canonical EVENT activation')
+        policy = {'version': 'event-registration-v1', 'responsibleName': 'Synthetic Organizer', 'contactEmail': 'organizer' + '@' + 'example.invalid', 'startsAt': '2026-11-11T21:00:00.000Z', 'endsAt': '2026-11-13T21:00:00.000Z', 'retentionYears': 1}
+        community = {'id': 'fixture-event', 'communityType': 'EVENT', 'typeSettingsEffectiveAt': '2026-11-09T09:00:00.000Z', 'typeSettingsRevision': 2, 'inviteCode': 'fixture-invite', 'typeSettings': {'gameIds': ['padel-jump'], 'registrationPolicy': policy}}
+        binding = packager.event_binding(community)
+        self.assertEqual(binding['policyRevision'], 2); self.assertEqual(binding['retentionUntil'], '2027-11-13T21:00:00.000Z')
+        self.assertNotIn('contactEmail', binding)
+        for override in [{'communityType': 'FRIENDS'}, {'typeSettingsRevision': 0}, {'typeSettingsEffectiveAt': 'invalid'}, {'typeSettings': {'gameIds': ['padel-jump'], 'registrationPolicy': {**policy, 'contactEmail': ''}}}]:
+            with self.assertRaisesRegex(RuntimeError, 'EVENT_BINDING_INVALID'): packager.event_binding({**community, **override})
+
+    def test_instance_selection_is_closed_and_exhibition_never_targets_team(self):
+        self.assertTrue(hasattr(publisher, 'instance_config'), 'Second instance needs an explicit closed target contract')
+        team = publisher.instance_config('team'); event = publisher.instance_config('exhibition')
+        self.assertEqual(team['service'], 'padlhub-jump-live.service'); self.assertEqual(team['port'], 5193)
+        self.assertEqual(event['service'], 'padlhub-jump-exhibition.service'); self.assertEqual(event['port'], 5194)
+        self.assertEqual(event['api'], '/jump-exhibition-api/'); self.assertEqual(event['staticPrefix'], 'padel-jump-exhibition-')
+        for key in ['account', 'backendRoot', 'dataRoot', 'unit', 'env', 'snippet']: self.assertNotEqual(team[key], event[key])
+        for name in ['', 'TEAM', '../team', 'custom']:
+            with self.assertRaises(RuntimeError): publisher.instance_config(name)
+
+    def test_wrong_instance_plan_stops_before_snapshot_or_host_writes(self):
+        with patch.object(publisher, 'snapshot') as snapshot, patch.object(publisher, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'INSTANCE_MISMATCH'):
+                publisher.apply({'instance': 'exhibition', 'preimage': {}}, Path('/unused'))
+            snapshot.assert_not_called(); run.assert_not_called()
+
+    def test_exhibition_contract_rejects_team_storage_or_admission_in_either_manifest(self):
+        self.assertTrue(hasattr(publisher, 'check_exhibition_contract'))
+        publisher.use_instance('exhibition')
+        try:
+            plan = {'instance': 'exhibition', 'target': publisher.instance_config('exhibition'), 'sourceCommit': 'a' * 40, 'engine': 'e' * 64,
+                    'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'resultStoragePolicy': 'event-retention-v1', 'admissionContract': 'canonical-event-v1'}
+            manifest = {**plan, 'sourceDirty': False}
+            publisher.check_exhibition_contract(plan, manifest)
+            for field, value in [('instance', 'team'), ('lives', 4), ('sync', 'old-sync'), ('resultStoragePolicy', 'permanent-v1'), ('admissionContract', 'companion-v1'), ('sourceDirty', True)]:
+                with self.assertRaises(RuntimeError): publisher.check_exhibition_contract(plan, {**manifest, field: value})
+                if field != 'sourceDirty':
+                    with self.assertRaises(RuntimeError): publisher.check_exhibition_contract({**plan, field: value}, {**manifest, field: value})
+        finally: publisher.use_instance('team')
+
+    def test_exhibition_recovery_disconnects_only_exhibition_and_keeps_team_include(self):
+        publisher.use_instance('exhibition')
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                upload = Path(root); ops = upload / 'unpacked/ops'; ops.mkdir(parents=True)
+                team_mark = '    include ' + publisher.instance_config('team')['snippet'] + ';\n'
+                original = (publisher.ANCHOR + team_mark).encode(); candidate = original + publisher.MARK.encode()
+                (ops / 'nginx.candidate.conf').write_bytes(candidate)
+                site = upload / 'site'; site.write_bytes(candidate)
+                snippet = upload / 'snippet'; snippet.write_bytes(b'event-api')
+                unit = upload / 'unit'; unit.write_bytes(b'event-unit')
+                env = upload / 'env'; env.write_bytes(b'event-env')
+                plan = {'instance': 'exhibition', 'target': publisher.instance_config('exhibition'), 'sourceCommit': 'a' * 40,
+                        'preimage': {'nginx': hashlib.sha256(original).hexdigest()},
+                        'files': {'ops/api.conf': publisher.sha(snippet), 'ops/unit.service': publisher.sha(unit), 'ops/env.conf': publisher.sha(env)}}
+                with patch.object(publisher, 'SITE', site), patch.object(publisher, 'SNIPPET', snippet), patch.object(publisher, 'UNIT', unit), patch.object(publisher, 'ENV', env), patch.object(publisher, 'check_protected'), patch.object(publisher, 'run', return_value='') as run:
+                    publisher.recover(plan, upload)
+                    self.assertEqual(site.read_bytes(), original)
+                    self.assertIn(('systemctl', 'disable', '--now', 'padlhub-jump-exhibition.service'), [call.args for call in run.call_args_list])
+                    self.assertTrue(all('padlhub-jump-live.service' not in call.args for call in run.call_args_list))
+                    self.assertEqual(env.read_bytes(), b'event-env')
+        finally: publisher.use_instance('team')
+
+    def test_exhibition_protection_rejects_a_team_restart_even_when_files_match(self):
+        publisher.use_instance('exhibition')
+        try:
+            before = {'protected': {}, 'lkPointer': 'unchanged', 'teamRuntime': {'pid': 41, 'restarts': 0}}
+            after = {**before, 'teamRuntime': {'pid': 42, 'restarts': 1}}
+            with patch.object(publisher, 'snapshot', return_value=after):
+                with self.assertRaisesRegex(RuntimeError, 'TEAM_RUNTIME_DRIFT'): publisher.check_protected(before)
+        finally: publisher.use_instance('team')
+
+    def exhibition_rehearsal(self, bad_env=False, bad_ops=None):
+        publisher.use_instance('exhibition')
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                base = Path(root); web = base / 'web'; web.mkdir(); upload = base / 'upload'; upload.mkdir()
+                old = web / 'padel-jump-team-existing'; old.mkdir(); (old / 'keep.js').write_bytes(b'unchanged-team')
+                site = base / 'site'; site.write_text(publisher.ANCHOR + '    include /etc/nginx/snippets/padlhub-jump-live.conf;\n')
+                source = 'a' * 40; config = publisher.instance_config('exhibition')
+                binding = {'epoch': '2026-11-09T09:00:00.000Z', 'policyRevision': 2, 'startsAt': '2026-11-11T21:00:00.000Z', 'endsAt': '2026-11-13T21:00:00.000Z', 'retentionUntil': '2027-11-13T21:00:00.000Z', 'inviteCode': 'fixture-invite'}
+                before = {'nginx': publisher.sha(site), 'portFree': True, 'account': None, 'group': None, 'absent': {'target': True}, 'node': 'v22.23.2', 'instance': 'exhibition', 'teamRuntime': {'pid': 41, 'restarts': 0}}
+                plan = {'instance': 'exhibition', 'target': config, 'sourceCommit': source, 'communityId': 'fixture-event', 'eventBinding': binding,
+                        'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'resultStoragePolicy': 'event-retention-v1', 'admissionContract': 'canonical-event-v1', 'preimage': before}
+                release = {key: value for key, value in plan.items() if key in ['instance', 'sourceCommit', 'engine', 'sync', 'rule', 'lives', 'resultStoragePolicy', 'admissionContract']}
+                release['sourceDirty'] = False
+                files = {name: b'synthetic-frontend' for name in ['frontend/padel-jump.html', 'frontend/padel-jump-race.html', 'frontend/padel-jump-live.html', 'frontend/assets/cabinet.js']}
+                files.update({'frontend/release.json': json.dumps(release).encode(), 'backend/server.mjs': b'synthetic-backend', 'backend/release.json': json.dumps({**release, 'files': {'server.mjs': {'sha256': hashlib.sha256(b'synthetic-backend').hexdigest()}}}).encode()})
+                files.update(self.packager_module().render_ops(config, source, 'fixture-event', binding, site.read_bytes()))
+                if bad_env: files['ops/env.conf'] = files['ops/env.conf'].replace(b'JUMP_PORT=5194', b'JUMP_PORT=5193')
+                if bad_ops == 'unit': files['ops/unit.service'] = files['ops/unit.service'].replace(b'User=padlhub-jump-exhibition', b'User=padlhub-jump-live')
+                if bad_ops == 'api': files['ops/api.conf'] = files['ops/api.conf'].replace(b'/jump-exhibition-api/', b'/jump-live-api/')
+                if bad_ops == 'source-exec': files['ops/unit.service'] = files['ops/unit.service'].replace(('/releases/' + source + '/server.mjs').encode(), b'/releases/@SOURCE@/server.mjs')
+                if bad_ops == 'source-working': files['ops/unit.service'] = files['ops/unit.service'].replace(('WorkingDirectory=/opt/padlhub-jump-exhibition/releases/' + source).encode(), b'WorkingDirectory=/opt/padlhub-jump-exhibition/releases/@SOURCE@')
+                if bad_ops == 'store': files['ops/unit.service'] = files['ops/unit.service'].replace(hashlib.sha256(b'fixture-event').hexdigest()[:16].encode(), b'@COMMUNITY_HASH@')
+                if bad_ops == 'all': files['ops/unit.service'] = Path('games/padel-jump/live/deploy/unit.service.in').read_bytes().replace(b'padlhub-jump-live', b'padlhub-jump-exhibition')
+                with tarfile.open(upload / 'payload.tar', 'w') as archive:
+                    for name, data in files.items():
+                        member = tarfile.TarInfo(name); member.size = len(data); archive.addfile(member, io.BytesIO(data))
+                plan.update({'archiveSha256': publisher.sha(upload / 'payload.tar'), 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}})
+                class Libc:
+                    def renameat2(self, source_fd, source_path, target_fd, target_path, flags):
+                        if flags != 1 or os.path.lexists(target_path): return -1
+                        os.rename(source_path, target_path); return 0
+                health = {'engine': 'e' * 64, 'sync': 'full-game-v1', 'rule': 'five-lives-stars-v2', 'lives': 5, 'resultStoragePolicy': 'event-retention-v1', 'communityConfigured': True, 'persistence': True}
+                account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+                with patch.multiple(publisher, WEB=web, SITE=site, UNIT=base / 'unit', ENV=base / 'env', SNIPPET=base / 'snippet', BACKEND_ROOT=base / 'backend', DATA_ROOT=base / 'data'), patch.object(publisher, 'snapshot', return_value=before), patch.object(publisher, 'check_protected'), patch.object(publisher, 'verify', return_value={'sourceCommit': source, 'health': health}), patch.object(publisher, 'get_json', return_value=health), patch.object(publisher, 'run', return_value='') as run, patch.object(publisher.pwd, 'getpwnam', return_value=account), patch.object(publisher.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=os.getegid())), patch.object(Path, 'resolve', lambda p: p), patch('ctypes.CDLL', return_value=Libc()):
+                    if bad_env or bad_ops:
+                        reason = 'EXHIBITION_API_DRIFT' if bad_ops == 'api' else 'EXHIBITION_UNIT_DRIFT' if bad_ops else 'EXHIBITION_ENV_MISMATCH'
+                        with self.assertRaisesRegex(RuntimeError, reason): publisher.apply(plan, upload)
+                        run.assert_not_called(); self.assertFalse((base / 'backend').exists())
+                    else:
+                        receipt = publisher.apply(plan, upload)
+                        self.assertEqual(receipt['status'], 'ACTIVATED')
+                        self.assertIn(('systemctl', 'enable', '--now', 'padlhub-jump-exhibition.service'), [call.args for call in run.call_args_list])
+                        self.assertTrue((web / ('padel-jump-exhibition-' + source[:8]) / 'assets/cabinet.js').is_file())
+                        self.assertTrue((base / 'backend/releases' / source / 'server.mjs').is_file())
+                        self.assertEqual((base / 'env').stat().st_mode & 0o777, 0o600)
+                    self.assertEqual((old / 'keep.js').read_bytes(), b'unchanged-team')
+                    self.assertTrue(all('padlhub-jump-live.service' not in call.args for call in run.call_args_list))
+        finally: publisher.use_instance('team')
+
+    def test_first_exhibition_activation_uses_only_exhibition_paths_and_commands_in_disposable_rehearsal(self): self.exhibition_rehearsal()
+    def test_wrong_exhibition_env_is_rejected_before_account_or_runtime_mutation(self): self.exhibition_rehearsal(bad_env=True)
+    def test_mixed_team_unit_or_api_cannot_hide_behind_template_normalization(self):
+        for kind in ['unit', 'api']:
+            with self.subTest(kind=kind): self.exhibition_rehearsal(bad_ops=kind)
+
+    def test_unresolved_unit_placeholders_stop_before_account_or_runtime_mutation(self):
+        for kind in ['source-exec', 'source-working', 'store', 'all']:
+            with self.subTest(kind=kind): self.exhibition_rehearsal(bad_ops=kind)
+
     def test_durable_creation_never_overwrites_an_existing_file(self):
         with tempfile.TemporaryDirectory() as root:
             p = Path(root) / 'receipt'
@@ -144,6 +313,211 @@ class JumpDeployment(unittest.TestCase):
                 self.assertEqual(json.loads((upload / 'receipt.json').read_text())['status'], 'PUBLISHED')
                 with self.assertRaisesRegex(RuntimeError, 'TARGET_EXISTS'): frontend.apply(upload)
                 run.assert_not_called()
+
+class ExhibitionReceiptErasure(unittest.TestCase):
+    community = 'community_fixture_выставка'
+    cutoff = '2027-11-13T21:00:00.000Z'
+
+    def module(self):
+        source = Path(__file__).resolve().parents[1] / 'erase_event_jump_receipts.py'
+        self.assertTrue(source.is_file(), 'Canonical form erasure must also have a bounded separate-receipt path')
+        spec = importlib.util.spec_from_file_location('event_receipt_erasure', source)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+
+    def fixture(self, root):
+        root.chmod(0o700); names = []
+        for index in range(4):
+            record_id = str(uuid.uuid4()); name = ('.pending-' + str(uuid.uuid4())) if index == 3 else record_id + '.json'
+            row = {'id': record_id, 'communityId': self.community, 'actorId': 'fixture-other' if index == 2 else 'fixture-player', 'alias': 'Private Alias',
+                   'eventEpoch': '2026-11-09T09:00:00.000Z' if index != 1 else '2026-11-08T09:00:00.000Z', 'policyRevision': 2,
+                   'retentionUntil': '2028-11-13T21:00:00.000Z' if index == 2 else self.cutoff}
+            target = root / name; target.write_text(json.dumps(row)); target.chmod(0o600); names.append(name)
+        return names
+
+    def test_actor_erasure_covers_all_epochs_and_pending_receipts_without_touching_other_players(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root); other = (root / names[2]).read_bytes()
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            self.assertEqual(len(plan['files']), 3)
+            preview = module.execute(plan, root)
+            self.assertEqual(preview['status'], 'DRY_RUN'); self.assertEqual(len(list(root.iterdir())), 4)
+            receipt = module.execute(plan, root, apply=True)
+            self.assertEqual(receipt['status'], 'FILES_ERASED'); self.assertEqual(receipt['removedCount'], 3)
+            self.assertEqual([p.name for p in root.iterdir()], [names[2]]); self.assertEqual((root / names[2]).read_bytes(), other)
+            for value in ['fixture-player', self.community, 'Private Alias', 'actorId']: self.assertNotIn(value, json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+
+    def test_writer_crash_then_cold_registry_requires_sealed_link_reconciliation_before_erasure(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve(); base.chmod(0o700); root = base / 'receipts'; root.mkdir(); names = self.fixture(root)
+            script = '''
+import fs from 'node:fs'; import vm from 'node:vm'; import { join } from 'node:path'; import { randomUUID } from 'node:crypto';
+import { LIVE_ENGINE_VERSION, LIVE_RULE } from './src/components/padel-jump/live-contract.ts';
+const [directory, communityId] = process.argv.slice(1);
+const row = {id: randomUUID(), communityId, actorId:'crash-player', alias:'Fixture Player', stars:1, elapsedMs:1000, playMs:1000, failures:5,
+  engine:LIVE_ENGINE_VERSION, rule:LIVE_RULE, finishedAt:'2026-11-12T09:00:00.000Z', eventEpoch:'2026-11-09T09:00:00.000Z', policyRevision:2, retentionUntil:'2027-11-13T21:00:00.000Z'};
+const source = fs.readFileSync('games/padel-jump/live/registry.mjs','utf8'), start = source.indexOf('  function persist(row) {'), end = source.indexOf('  function publishResult', start);
+if (start < 0 || end < start) throw new Error('PERSIST_SOURCE_SHAPE');
+vm.runInNewContext('('+source.slice(start,end)+')(row)', {...fs, directory, row, join, randomUUID,
+  linkSync(...args) { fs.linkSync(...args); process.exit(73); }});
+throw new Error('CRASH_NOT_INJECTED');
+'''
+            cwd = Path(__file__).resolve().parents[2]; node = shutil.which('node') or 'node'
+            writer = subprocess.run([node, '--experimental-strip-types', '--input-type=module', '-e', script, str(root), self.community], cwd=cwd, text=True, capture_output=True)
+            self.assertEqual(writer.returncode, 73, writer.stderr)
+            pending = next(p for p in root.iterdir() if p.stat().st_nlink == 2 and p.name.startswith('.pending-'))
+            final = next(p for p in root.iterdir() if p.stat().st_ino == pending.stat().st_ino and p.name.endswith('.json'))
+            original = final.read_bytes(); self.assertEqual(final.stat().st_nlink, 2)
+            reader = '''
+import {createRegistry} from './games/padel-jump/live/registry.mjs';
+const [directory,communityId]=process.argv.slice(1);
+const event={epoch:'2026-11-09T09:00:00.000Z',policyRevision:2,startsAt:'2026-11-11T21:00:00.000Z',endsAt:'2026-11-13T21:00:00.000Z',retentionUntil:'2027-11-13T21:00:00.000Z',inviteCode:'fixture-invite'};
+process.stdout.write(JSON.stringify(createRegistry({directory,communityId,event,wall:()=>Date.parse('2026-11-12T09:00:00.000Z')}).board().results.length));
+'''
+            restarted = subprocess.run([node, '--experimental-strip-types', '--input-type=module', '-e', reader, str(root), self.community], cwd=cwd, text=True, capture_output=True)
+            self.assertEqual(restarted.returncode, 0, restarted.stderr); self.assertEqual(json.loads(restarted.stdout), 1)
+            with self.assertRaisesRegex(RuntimeError, 'FILE_INVALID'): module.prepare(root, self.community, actor='fixture-player')
+            output = base / 'reconcile.json'
+            planned = subprocess.run([sys.executable, str(module.__file__), 'plan', '--directory', str(root), '--community-id', self.community, '--reconcile', '--output', str(output)], text=True, capture_output=True)
+            self.assertEqual(planned.returncode, 0, planned.stderr)
+            plan = json.loads(output.read_bytes()); self.assertEqual(plan['mode'], 'reconcile'); self.assertEqual(len(plan['files']), 1)
+            digest = hashlib.sha256(output.read_bytes()).hexdigest()
+            preview = subprocess.run([sys.executable, str(module.__file__), 'dry-run', '--directory', str(root), '--plan', str(output), '--expected-sha', digest], text=True, capture_output=True)
+            self.assertEqual(preview.returncode, 0, preview.stderr); self.assertEqual(len(list(root.iterdir())), 6)
+            receipt = module.execute(plan, root, apply=True)
+            self.assertEqual(receipt['status'], 'LINKS_RECONCILED_REPLAN_REQUIRED'); self.assertEqual(receipt['removedCount'], 1)
+            self.assertFalse(pending.exists()); self.assertEqual(final.stat().st_nlink, 1); self.assertEqual(final.read_bytes(), original)
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+            self.assertEqual(module.execute(module.prepare(root, self.community, actor='fixture-player'), root, apply=True)['removedCount'], 3)
+            self.assertEqual(final.read_bytes(), original)
+            self.assertEqual(module.execute(module.prepare(root, self.community, actor='crash-player'), root, apply=True)['removedCount'], 1)
+            self.assertEqual([p.name for p in root.iterdir()], [names[2]])
+            after = subprocess.run([node, '--experimental-strip-types', '--input-type=module', '-e', reader, str(root), self.community], cwd=cwd, text=True, capture_output=True)
+            self.assertEqual(after.returncode, 0, after.stderr); self.assertEqual(json.loads(after.stdout), 0)
+
+    def test_reconciliation_refuses_external_links_and_unproven_pending_pairs(self):
+        module = self.module()
+        for kind in ['outside', 'third-link', 'two-pending']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory).resolve(); root = base / 'receipts'; root.mkdir(); names = self.fixture(root)
+                final = root / names[0]; pending = root / ('.pending-' + str(uuid.uuid4()))
+                if kind == 'outside': os.link(final, base / 'outside')
+                elif kind == 'third-link': os.link(final, pending); os.link(final, base / 'outside')
+                else: final.rename(pending); os.link(pending, root / ('.pending-' + str(uuid.uuid4())))
+                before = {p.name: (p.read_bytes(), p.stat().st_nlink) for p in root.iterdir()}
+                with self.assertRaisesRegex(RuntimeError, 'ERASURE_(LINKS|FILE)_INVALID'): module.prepare(root, self.community, reconcile=True)
+                self.assertEqual({p.name: (p.read_bytes(), p.stat().st_nlink) for p in root.iterdir()}, before)
+
+    def test_partial_link_reconciliation_keeps_final_bytes_and_requires_a_new_plan(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root); final = root / names[0]; original = final.read_bytes()
+            pending = root / ('.pending-' + str(uuid.uuid4())); os.link(final, pending)
+            plan = module.prepare(root, self.community, reconcile=True)
+            with patch.object(module.os, 'fsync', side_effect=OSError('synthetic-directory-sync-failure')):
+                with self.assertRaises(module.PartialErasure) as caught: module.execute(plan, root, apply=True)
+            self.assertEqual(caught.exception.receipt['removedCount'], 1); self.assertFalse(pending.exists())
+            self.assertEqual(final.read_bytes(), original); self.assertEqual(final.stat().st_nlink, 1)
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+            fresh = module.prepare(root, self.community, reconcile=True); self.assertEqual(fresh['files'], [])
+
+    def test_expired_receipts_use_fresh_execution_time_and_the_inclusive_cutoff(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            plan = module.prepare(root, self.community, expired=True, now='2027-11-14T09:00:00.000Z')
+            with patch.object(module, 'execution_now', return_value='2027-11-13T20:59:59.999Z'):
+                with self.assertRaisesRegex(RuntimeError, 'NOT_EXPIRED'): module.execute(plan, root, apply=True)
+            self.assertEqual(len(list(root.iterdir())), 4)
+            with patch.object(module, 'execution_now', return_value=self.cutoff):
+                self.assertEqual(module.execute(plan, root, apply=True)['removedCount'], 3)
+            self.assertEqual([p.name for p in root.iterdir()], [names[2]])
+
+    def test_inventory_drift_or_symlinks_stop_before_any_deletion(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            changed = root / names[0]; changed.write_text(changed.read_text() + ' ')
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+            self.assertEqual(len(list(root.iterdir())), 4)
+            changed.unlink(); changed.symlink_to(root / names[2])
+            with self.assertRaises(RuntimeError): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            self.assertTrue((root / names[2]).is_file())
+
+    def test_ambiguous_timestamp_is_not_an_expiry_authority(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            target = root / names[0]; row = json.loads(target.read_text()); row['retentionUntil'] = self.cutoff.removesuffix('Z'); target.write_text(json.dumps(row))
+            with self.assertRaisesRegex(RuntimeError, 'ROW_INVALID'): module.prepare(root, self.community, expired=True, now='2027-11-14T09:00:00.000Z')
+
+    def test_hardlinks_public_modes_and_foreign_rows_cannot_be_an_erasure_preimage(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve(); root = base / 'receipts'; root.mkdir(); names = self.fixture(root)
+            target = root / names[0]; linked = base / 'hardlink'; os.link(target, linked)
+            with self.assertRaisesRegex(RuntimeError, 'FILE_INVALID'): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            linked.unlink(); target.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'FILE_INVALID'): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            target.chmod(0o600); row = json.loads(target.read_text()); row['communityId'] = 'foreign-community'; target.write_text(json.dumps(row))
+            with self.assertRaisesRegex(RuntimeError, 'ROW_INVALID'): module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            self.assertEqual(len(list(root.iterdir())), 4)
+
+    def test_actual_cli_prepares_private_plan_and_only_dry_runs_offline(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve(); base.chmod(0o700); root = base / 'receipts'; root.mkdir(); self.fixture(root)
+            output = base / 'plan.json'
+            command = [sys.executable, str(module.__file__), 'plan', '--directory', str(root), '--community-id', self.community, '--actor', 'fixture-player', '--output', str(output)]
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(output.is_file(), 'CLI must create the real sealed plan, not just define helpers')
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600); self.assertNotIn('fixture-player', result.stdout + result.stderr)
+            digest = hashlib.sha256(output.read_bytes()).hexdigest()
+            preview = subprocess.run([sys.executable, str(module.__file__), 'dry-run', '--directory', str(root), '--plan', str(output), '--expected-sha', digest], text=True, capture_output=True)
+            self.assertEqual(preview.returncode, 0, preview.stderr); self.assertEqual(json.loads(preview.stdout)['status'], 'DRY_RUN')
+            denied = subprocess.run([sys.executable, str(module.__file__), 'apply', '--plan', str(output), '--expected-sha', digest, '--apply', '--receipt', str(base / 'result.json')], text=True, capture_output=True)
+            self.assertNotEqual(denied.returncode, 0); self.assertFalse((base / 'result.json').exists()); self.assertEqual(len(list(root.iterdir())), 4)
+
+    def test_partial_unlink_is_explicit_and_the_old_plan_cannot_be_blindly_retried(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); self.fixture(root)
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            original = os.unlink; calls = 0
+            def unlink(name, *, dir_fd=None):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError('synthetic-unlink-failure')
+                return original(name, dir_fd=dir_fd)
+            with patch.object(module.os, 'unlink', side_effect=unlink):
+                with self.assertRaises(module.PartialErasure) as caught: module.execute(plan, root, apply=True)
+            self.assertEqual(caught.exception.receipt['status'], 'PARTIAL_RECONCILE')
+            self.assertEqual(caught.exception.receipt['removedCount'], 1); self.assertEqual(len(list(root.iterdir())), 3)
+            with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
+
+
+    def test_final_readback_cannot_certify_changed_bytes_of_an_unselected_player(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            original = os.unlink; changed = False
+            def unlink(name, *, dir_fd=None):
+                nonlocal changed
+                result = original(name, dir_fd=dir_fd)
+                if not changed:
+                    changed = True; other = root / names[2]; row = json.loads(other.read_text()); row['alias'] = 'Changed by another writer'; other.write_text(json.dumps(row))
+                return result
+            with patch.object(module.os, 'unlink', side_effect=unlink):
+                with self.assertRaises(module.PartialErasure) as caught: module.execute(plan, root, apply=True)
+            self.assertEqual(caught.exception.receipt['status'], 'PARTIAL_RECONCILE')
+            self.assertEqual(caught.exception.receipt['removedCount'], 3)
+
 
 class JumpUpdate(unittest.TestCase):
     def module(self):

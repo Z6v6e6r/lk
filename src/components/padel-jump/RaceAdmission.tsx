@@ -3,6 +3,9 @@ import { entryRequest } from './live-client';
 import type { RaceEntryStatus } from './live-client';
 import { normalizeEnrollment } from './enrollment-form';
 import type { EnrollmentFields } from './enrollment-form';
+import { EventRegistrationForm } from '../cabinet/EventRegistrationForm';
+import type { EventRegistration } from '../../utils/communityApi';
+import { isExhibitionRoute } from './exhibition';
 import RaceJump from './RaceJump';
 import logo from '../../assets/logo-hab-compact.svg';
 
@@ -25,7 +28,7 @@ export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: ()
   const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
   const accept = (value: RaceEntryStatus) => {
-    if (!['ready', 'form', 'pending', 'blocked', 'confirming'].includes(value?.state)) throw new Error('Не удалось подтвердить доступ к игре.');
+    if (!['ready', 'form', 'pending', 'blocked', 'confirming', 'scheduled', 'closed'].includes(value?.state) || isExhibitionRoute() && value.registrationKind !== 'event') throw new Error('Не удалось подтвердить доступ к игре.');
     setEntry(value);
   };
   useEffect(() => {
@@ -33,7 +36,7 @@ export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: ()
     void entryRequest<RaceEntryStatus>('entry', controller.signal).then(value => { if (!controller.signal.aborted) accept(value); }).catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Не удалось проверить сообщество.'); }).finally(() => { if (!controller.signal.aborted) setBusy(false); });
     return () => { controller.abort(); request.current?.abort(); };
   }, [attempt]);
-  const submit = async (data: EnrollmentFields & { consent: true }) => {
+  const submit = async (data: (EnrollmentFields & { consent: true }) | EventRegistration) => {
     if (busy) return;
     setBusy(true); setError(''); const controller = new AbortController(); request.current = controller;
     try { accept(await entryRequest<RaceEntryStatus>('enrollment', controller.signal, data)); }
@@ -44,7 +47,12 @@ export default function RaceAdmission({ onChangeProfile }: { onChangeProfile: ()
   return <main className="pj-race-auth pj-admission"><img className="auth-brand-logo" src={logo} alt="ПадлхАБ" /><h1>ПадлхАБ Jump - займи свое место в рейтинге</h1>
     {!entry && busy && <p role="status">Проверяем профиль и участие в сообществе…</p>}
     {entry && <p className="pj-admission-community">{entry.communityName}</p>}
-      {entry?.state === 'form' && <EnrollmentForm fields={entry.fields} busy={busy} onSubmit={data => void submit(data)} />}
+      {entry?.state === 'form' && (entry.registrationKind === 'event'
+        ? <EventRegistrationForm key={entry.eventNotice?.revision} notice={entry.eventNotice} onCancel={() => setAttempt(n => n + 1)} onSubmit={async data => { await submit(data); return null; }} />
+        : <EnrollmentForm fields={entry.fields} busy={busy} onSubmit={data => void submit(data)} />)}
+
+      {entry?.state === 'scheduled' && <p role="status">Мероприятие ещё не началось. Регистрация и игра откроются {entry.eventNotice && new Date(entry.eventNotice.policy.startsAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} (МСК).</p>}
+      {entry?.state === 'closed' && <p role="status">Мероприятие завершено. Новые анкеты и заезды закрыты.</p>}
 
       {entry?.state === 'pending' && <p role="status">Заявка на вступление ожидает подтверждения организатором. Игра откроется после подтверждения.</p>}
       {entry?.state === 'blocked' && <p role="alert">Участие в сообществе ограничено. Обратись к организатору.</p>}

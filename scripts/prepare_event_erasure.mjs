@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 export function prepareEventErasure(doc, {actorId, expired = false, now}) {
   const instant = new Date(now);
   if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== now) throw new Error('EVENT_ERASURE_TIME_INVALID');
-  if (!doc || typeof doc.id !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(doc.id) ||
+  if (!doc || typeof doc.id !== 'string' || !/^[\p{L}\p{N}_-]{1,120}$/u.test(doc.id) ||
       !['FRIENDS','STATION','CORPORATE','LEAGUE','EVENT'].includes(doc.communityType) ||
       !Number.isSafeInteger(doc.typeSettingsRevision) || doc.typeSettingsRevision < 1 ||
       (doc.eventEntriesRevision !== undefined && (!Number.isSafeInteger(doc.eventEntriesRevision) || doc.eventEntriesRevision < 0 || doc.eventEntriesRevision >= Number.MAX_SAFE_INTEGER)) ||

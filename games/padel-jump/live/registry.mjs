@@ -5,6 +5,7 @@ import { createCampaignGame, stepGame, drainEvents, FIXED_STEP } from '../../../
 import { nextSection } from '../../../src/components/padel-jump/campaign.ts';
 import { LIVE_ENGINE_VERSION, LIVE_RULE, LIVE_LIMIT, LIVE_SYNC, LIVE_LIVES } from '../../../src/components/padel-jump/live-contract.ts';
 import { createSpectatorChannel } from './spectator.mjs';
+import { parseEventBinding } from './event-binding.mjs';
 
 export const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 export const RESULT_STORAGE_POLICY = 'permanent-v1';
@@ -23,7 +24,11 @@ function cleanGame(game) {
 }
 
 /** One isolated event; no LK accounts, community writes or client-supplied score/time. */
-export function createRegistry({ now = () => performance.now(), wall = () => Date.now(), directory, communityId = null } = {}) {
+export function createRegistry({ now = () => performance.now(), wall = () => Date.now(), directory, communityId = null, event = null } = {}) {
+  const binding = event ? parseEventBinding(event) : null;
+  const retained = () => !binding || wall() < Date.parse(binding.retentionUntil);
+  const eventOpen = () => !binding || wall() >= Date.parse(binding.startsAt) && wall() < Date.parse(binding.endsAt);
+  const verifyEventActor = actor => { if (binding && (actor?.eventEpoch !== binding.epoch || actor?.policyRevision !== binding.policyRevision)) fail(409, 'EVENT_BINDING_CHANGED'); };
   const spectator = createSpectatorChannel({ now });
   const runs = new Map(), best = new Map();
   const rank = (a, b) => b.stars - a.stars || a.elapsedMs - b.elapsedMs || a.finishedAt.localeCompare(b.finishedAt) || a.id.localeCompare(b.id);
@@ -49,7 +54,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
         }
         continue;
       }
-      if (row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isSafeInteger(row.stars) && row.stars >= 0 && Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0 && Number.isFinite(Date.parse(row.finishedAt))) visit(row);
+      if ((!binding || row.eventEpoch === binding.epoch && row.policyRevision === binding.policyRevision && row.retentionUntil === binding.retentionUntil) && row.engine === LIVE_ENGINE_VERSION && row.rule === LIVE_RULE && row.communityId === communityId && typeof row.actorId === 'string' && row.id + '.json' === name && Number.isSafeInteger(row.stars) && row.stars >= 0 && Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0 && Number.isFinite(Date.parse(row.finishedAt))) visit(row);
     } } finally { entries.closeSync(); }
   }
   if (directory) {
@@ -57,7 +62,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     scanResults(remember, true);
   }
   const elapsed = run => run.finalMs ?? run.activeMs + (run.paused || run.finished ? 0 : Math.max(0, now() - run.segment));
-  const sweep = () => { for (const [id, run] of runs) if (now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) { runs.delete(id); spectator.remove(id); } };
+  const sweep = () => { for (const [id, run] of runs) if (!retained() || now() - run.seen > ((run.completed === 33 || run.failures >= LIVE_LIVES) && !run.finished ? 600000 : ttl)) { runs.delete(id); spectator.remove(id); } if (!retained()) { best.clear(); legacyCache = null; } };
   const publicResult = row => ({ id: row.id, alias: row.alias, elapsedMs: row.elapsedMs, playMs: row.playMs, failures: row.failures, stars: row.stars, finishedAt: row.finishedAt, engine: row.engine, rule: row.rule });
   const player = (run, full = false) => ({ id: run.id, alias: run.alias, slot: run.slot, state: run.finished ? 'finished' : run.failures >= LIVE_LIVES ? 'eliminated' : run.paused ? 'paused' : run.game.mode === 'over' ? 'retry' : run.game.mode === 'complete' ? 'checkpoint' : 'playing',
     elapsedMs: Math.round(elapsed(run)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, livesRemaining: Math.max(0, LIVE_LIVES - run.failures), stars: run.claimed.size, completedParts: run.completed, game: full ? structuredClone(run.game) : cleanGame(run.game) });
@@ -97,12 +102,14 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
   }
 
   function publishResult(run) {
+    if (!retained()) fail(410, 'EVENT_DATA_EXPIRED');
     if (!directory) fail(503, 'RESULT_STORE_UNAVAILABLE');
-    const row = run.finishRow ?? { id: run.id, alias: run.alias, actorId: run.actorId, communityId: run.communityId, elapsedMs: Math.max(Math.round(elapsed(run)), Math.round(run.ticks * FIXED_STEP * 1000)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, stars: run.claimed.size, finishedAt: new Date(wall()).toISOString(), engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE };
+    const row = run.finishRow ?? { id: run.id, alias: run.alias, actorId: run.actorId, communityId: run.communityId, elapsedMs: Math.max(Math.round(elapsed(run)), Math.round(run.ticks * FIXED_STEP * 1000)), playMs: Math.round(run.ticks * FIXED_STEP * 1000), failures: run.failures, stars: run.claimed.size, finishedAt: new Date(wall()).toISOString(), engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE,
+      ...(binding ? { eventEpoch: binding.epoch, policyRevision: binding.policyRevision, retentionUntil: binding.retentionUntil, terminalAt: new Date(run.terminalAt).toISOString() } : {}) };
     run.finishRow = row; persist(row); remember(row); legacyCache = null;
   }
 
-  const bestResults = () => [...best.values()].sort(rank);
+  const bestResults = () => retained() ? [...best.values()].sort(rank) : [];
   // Compatibility view for already-open v1 pages only. The archive is never
   // pruned; scanning streams files and retains one recent best per profile.
   function legacyResults() {
@@ -126,6 +133,9 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
   return {
     join(body, actor) {
       sweep();
+      if (!retained()) fail(410, 'EVENT_DATA_EXPIRED');
+      if (!eventOpen()) fail(409, 'EVENT_CLOSED');
+      verifyEventActor(actor);
       if (!body || Object.keys(body).some(k => !['consent', 'engine', 'rule'].includes(k)) || body.engine !== LIVE_ENGINE_VERSION || body.rule !== LIVE_RULE) fail(409, 'RULES_CHANGED');
       if (body.consent !== true) fail(422, 'DISPLAY_CONSENT_REQUIRED');
       if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id || typeof actor.communityId !== 'string' || !actor.communityId) fail(403, 'VERIFIED_PROFILE_REQUIRED');
@@ -154,10 +164,13 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
       if (now() - (run.rateAt ?? 0) > 60000) { run.rateAt = now(); run.rateCount = 0; }
       run.rateCount = (run.rateCount ?? 0) + 1; if (run.rateCount > 480) fail(429, 'COMMAND_RATE_LIMIT');
       if (!actor || actor.id !== run.actorId || actor.communityId !== run.communityId) fail(403, 'PROFILE_RUN_MISMATCH');
+      verifyEventActor(actor);
       if (!body || Object.keys(body).some(k => !['seq', 'command', 'inputs'].includes(k)) || !Number.isSafeInteger(body.seq) || body.seq < 1) fail(422, 'COMMAND_INVALID');
       const digest = createHash('sha256').update(JSON.stringify(body)).digest('hex');
       if (body.seq === run.seq) { if (digest !== run.digest) fail(409, 'SEQUENCE_CONFLICT'); run.seen = now(); return run.ack; }
       if (body.seq !== run.seq + 1) fail(409, 'SEQUENCE_CONFLICT');
+      // Only an already server-accepted terminal score may finish after closing.
+      if (!eventOpen() && !(body.command === 'finish' && run.terminalAt !== undefined && run.terminalAt < Date.parse(binding.endsAt) && wall() < Date.parse(binding.endsAt) + 600000)) fail(409, 'EVENT_CLOSED');
       if (run.finished) fail(409, 'RUN_FINISHED');
       if (run.failures >= LIVE_LIVES && body.command !== 'finish' && (body.command !== 'inputs' || !Array.isArray(body.inputs) || body.inputs.length)) fail(409, 'RUN_ELIMINATED');
       let g = structuredClone(run.game); const claimed = new Set(run.claimed); let ticks = 0, failures = run.failures, completed = run.completed;
@@ -191,7 +204,7 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
         publishResult(run);
       } else fail(422, 'COMMAND_INVALID');
       // Commit only after complete validation and durable result publication.
-      if (completed === 33 && run.completed !== 33 || failures >= LIVE_LIVES && run.failures < LIVE_LIVES) run.finalMs = Math.max(Math.round(elapsed(run)), Math.round((run.ticks + ticks) * FIXED_STEP * 1000));
+      if (completed === 33 && run.completed !== 33 || failures >= LIVE_LIVES && run.failures < LIVE_LIVES) { run.finalMs = Math.max(Math.round(elapsed(run)), Math.round((run.ticks + ticks) * FIXED_STEP * 1000)); if (binding) run.terminalAt = wall(); }
       run.game = g; run.claimed = claimed; run.ticks += ticks; run.failures = failures; run.completed = completed;
       if (command === 'pause' || command === 'finish') { run.activeMs = elapsed(run); run.paused = command === 'pause'; run.finished = command === 'finish'; }
       if (command === 'resume') { run.paused = false; run.segment = now(); }
@@ -201,9 +214,11 @@ export function createRegistry({ now = () => performance.now(), wall = () => Dat
     },
     board() { sweep(); return { engine: LIVE_ENGINE_VERSION, rule: LIVE_RULE, now: wall(), players: [...runs.values()].filter(r => now() - r.seen <= ttl).sort((a, b) => a.slot - b.slot).map(run => player(run)),
       results: bestResults().slice(0, 100).map(publicResult) }; },
-    spectator(options) { return spectator.read(options, this.board()); },
+    spectator(options) { if (!retained()) fail(410, 'EVENT_DATA_EXPIRED'); return spectator.read(options, this.board()); },
     spectatorStats() { return spectator.stats(); },
     communityRanking(actor, { allTime = false } = {}) {
+      if (!retained()) fail(410, 'EVENT_DATA_EXPIRED');
+      verifyEventActor(actor);
       if (!actor || actor.communityId !== communityId || typeof actor.id !== 'string' || !actor.id) fail(403, 'VERIFIED_PROFILE_REQUIRED');
       sweep(); const ranked = allTime ? bestResults() : legacyResults();
       const row = (value, index) => ({ id: value.id, rank: index + 1, name: value.alias, stars: value.stars, elapsedMs: value.elapsedMs, isCurrentUser: value.actorId === actor.id });

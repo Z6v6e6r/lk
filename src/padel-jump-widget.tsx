@@ -5,15 +5,20 @@ import PadelJump from './components/padel-jump/PadelJump';
 import liveStyles from './components/padel-jump/live.css?inline';
 import practiceStyles from './components/padel-jump/padel-jump.css?inline';
 import startStyles from './components/padel-jump/jump-start.css?inline';
+import eventStyles from './components/cabinet/event-community.css?inline';
+import spectatorStyles from './components/padel-jump/spectator/spectator.css?inline';
+import spectatorExtraStyles from './components/padel-jump/spectator/spectator-ui-extra.css?inline';
+import scoreboardStyles from './components/padel-jump/spectator/scoreboard.css?inline';
+import LiveScreen from './components/padel-jump/LiveScreen';
 
 const mounts = new WeakMap<HTMLElement, () => void>();
 
 /** No tokens or profile data cross this boundary; the module runs in the cabinet document. */
-export function mount(target: HTMLElement, mode: 'race' | 'practice') {
+export function mount(target: HTMLElement, mode: 'race' | 'practice' | 'live') {
   unmount(target);
   const owner = document.createElement('div');
   const style = document.createElement('style');
-  style.textContent = `${liveStyles}\n${practiceStyles}\n${startStyles}`;
+  style.textContent = `${liveStyles}\n${practiceStyles}\n${startStyles}\n${eventStyles}\n${spectatorStyles}\n${spectatorExtraStyles}\n${scoreboardStyles}`;
   const content = document.createElement('div');
   owner.append(style, content);
   target.append(owner);
@@ -23,7 +28,7 @@ export function mount(target: HTMLElement, mode: 'race' | 'practice') {
     // disposal asynchronous and confined to this generation's owned element.
     queueMicrotask(() => { root.unmount(); owner.remove(); });
   });
-  root.render(<StrictMode>{mode === 'race' ? <RaceEntry /> : <PadelJump onBack={() => {
+  root.render(<StrictMode>{mode === 'race' ? <RaceEntry /> : mode === 'live' ? <LiveScreen /> : <PadelJump onBack={() => {
     const url = new URL(window.location.href);
     url.searchParams.delete('padelJump');
     window.location.assign(url.toString());

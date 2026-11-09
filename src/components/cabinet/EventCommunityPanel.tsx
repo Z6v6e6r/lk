@@ -5,11 +5,22 @@ import { apiEventGame } from '../../utils/communityApi';
 import type { CommunityRecord, EventReplay } from '../../utils/communityApi';
 import { Modal } from '../UI/Modal';
 import { getServ2Origin } from '../../utils/apiClient';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_GAME_URL, EXHIBITION_LIVE_URL } from '../padel-jump/exhibition';
 const EventJump = lazy(() => import('../padel-jump/EventJump').then(module => ({default: module.EventJump})));
 type Run = {runId: string; seed: number; engineVersion: string; completed: boolean};
 type Row = {rank: number; name: string; score: number};
 
 export function EventCommunityPanel({ community, onRegister }: {community: CommunityRecord; onRegister: () => void}) {
+  if (community.id !== EXHIBITION_COMMUNITY_ID) return <EndlessEventCommunityPanel community={community} onRegister={onRegister} />;
+  return <section className="community-ranking-box community-event-panel" aria-label="Игры и рейтинг мероприятия">
+    <h2>ПадлхАБ Jump — 5 жизней</h2><p>Анкета мероприятия обязательна для каждого участника. На общем экране — имя профиля и результат; ФИО, компания и email остаются у организатора.</p>
+    <a className="btn-primary" href={EXHIBITION_GAME_URL}>Заполнить анкету и играть</a>
+    <a className="btn-secondary" href={EXHIBITION_LIVE_URL} target="_blank" rel="noopener noreferrer">Общий экран ↗</a>
+    <p>Результаты — во вкладке «Рейтинг». Больше звёзд — выше место; при равенстве сравнивается время.</p>
+  </section>;
+}
+
+function EndlessEventCommunityPanel({ community, onRegister }: {community: CommunityRecord; onRegister: () => void}) {
   const [rows,setRows] = useState<Row[]>([]), [loading,setLoading] = useState(true), [error,setError] = useState<string | null>(null);
   const [run,setRun] = useState<Run | null>(null), [busy,setBusy] = useState(false), [result,setResult] = useState<string | null>(null);
   const [pending,setPending] = useState<{runId: string; inputs: EventReplay; requestId: string} | null>(null);

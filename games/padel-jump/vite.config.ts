@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   base: './',
-  server: { proxy: { '/jump-live-api': 'http://127.0.0.1:5193' } },
+  server: { proxy: { '/jump-live-api': 'http://127.0.0.1:5193', '/jump-exhibition-api': 'http://127.0.0.1:5194' } },
   build: {
     outDir: 'dist/padel-jump',
     emptyOutDir: true,
