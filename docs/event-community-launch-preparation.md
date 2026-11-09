@@ -16,8 +16,9 @@ Owner: event organizer; audience: participants of «Корпоративный �
 Owner selected the current five-life Jump and shared live wall, not the older endless EVENT
 game. The requested window is November 12, 2026 00:00 through November 14, 2026 00:00
 Europe/Moscow: `[2026-11-11T21:00:00.000Z, 2026-11-13T21:00:00.000Z)`.
-Responsible name/contact email and the exact community owner remain unconfirmed; registration
-must stay closed until the actual notice is supplied. Do not activate a synthetic policy.
+Responsible name/contact email were supplied privately on November 9; the owner confirmed
+preserving the community's current OWNER. Do not commit those notice inputs or activate a
+synthetic policy. Their receipt is not a production configuration change.
 
 The existing team Jump is a separate single-community service with permanent result retention
 and a companion first-name/last-name/email/company-website form. EVENT owns a mandatory
@@ -29,7 +30,7 @@ destinations, activation/policy-bound results and a compatible retention/erasure
 The owner confirmed a separate instance and supplied the community invite on November 9:
 `community_1794221739126_корпспорт-падлхаб-2026` («КорпСпорт ПадлхАБ2026»). The last read-only
 production lookup found FRIENDS/OPEN/INSTANT, one OWNER, zero forms and no EVENT notice.
-That observation is not an activation or confirmation of the responsible party/contact.
+That observation is not an activation; the later responsible/contact confirmation remains private.
 The older endless EVENT game is not a fallback for the selected mode.
 
 ### Five-life integration source (not deployed)
@@ -69,6 +70,49 @@ exact-source release and live phone acceptance remain activation work. Do not re
 implicitly approved for this new target. Hiding expired scores is not physical erasure:
 canonical EVENT forms, separate game receipts/caches, private exports and backups must all be
 covered by the designated operator's exact-target erasure/retention procedure before activation.
+
+### Second-instance delivery source (not executed)
+
+The existing first-activation packet/publisher now has a closed `--instance team|exhibition`
+selector; default team unit/API/env template bytes remain unchanged. Exhibition selects
+`padlhub-jump-exhibition.service`, its dedicated account, 5194, `/jump-exhibition-api/`,
+`/opt/padlhub-jump-exhibition/releases/<source>`,
+`/var/lib/padlhub-jump-exhibition/<community-hash>`,
+`/etc/padlhub-jump-exhibition.env` and `padel-jump-exhibition-<source8>` static namespace.
+Direct HTML under that owned exhibition namespace stays exhibition-scoped even without a query
+flag. Existing team HTML and the cabinet's team module pin remain team-scoped.
+
+- `scripts/package_padel_jump_live_147.py --instance exhibition` keeps clean/pushed exact source,
+  successful exact-head CI, own fresh builds, private packet and source/hash custody gates.
+  It accepts both repository task-branch prefixes (`codex/`, `agent/`). It requires approved
+  public production build inputs and an external mode-0700 output parent; missing inputs fail
+  rather than generating a guessed production artifact.
+- Its projected community input must already contain the approved canonical EVENT policy,
+  exact activation/revision and invite. The shared JS policy/binding parsers validate it over
+  stdin without logging the notice. Do not supply a full participant dump or synthesize an
+  activation timestamp to make packaging pass. Complete Node-RED/CUP writer upgrades before
+  separately approved community activation, then take the exact bounded readback projection.
+- `build:jump-live -- --instance exhibition` marks both archive/manifests with canonical-event-v1
+  admission and event-retention-v1; publisher rejects team/permanent/old-rule contract drift.
+  It validates the exact selected env, raw target names/prefix/port and pinned baseline unit/API
+  template hashes **before** account/service/publication mutations. A mixed team field cannot
+  disappear behind template normalization.
+- Nginx preparation requires and preserves the existing team include. Publication/recovery
+  operate only on the selected service/include/private paths. The original shared-vhost lock
+  remains shared across both modes; recovery never restores an arbitrary stale full vhost.
+- Exhibition inventory/protected checks fence existing team unit/env/backend and all existing
+  game static releases, plus team PID/restarts/executable/hash/health. Only this exact new
+  exhibition static namespace may be added; unrelated changes abort. This is source logic,
+  not proof of a fresh production preimage, port availability or successful Linux installation.
+- Do not use `update_padel_jump_live_147.py` or the team-only standalone frontend publisher for
+  initial exhibition activation. They have not been generalized or executed for this target.
+  The cabinet build's separate immutable exhibition pin and actual invite-page loader still
+  need their own verified static publication in the approved ordered release.
+
+LOCAL deployment tests include disposable-filesystem first activation/recovery and negative
+instance/contract/env/mixed-unit/API cases, with systemd/nginx/account/runtime calls doubled.
+They do not establish real host permissions, nginx syntax/reload or process restart acceptance.
+Do not turn the test fixture's synthetic CI or runtime values into release receipts.
 
 LOCAL evidence: canonical admission/access/HTTP and replay/finish tests use synthetic actors,
 policies and disposable directories, not Mongo or real registration. The real form was rendered

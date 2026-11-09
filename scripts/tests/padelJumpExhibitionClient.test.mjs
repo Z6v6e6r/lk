@@ -22,6 +22,10 @@ test('exhibition client and navigation stay in the fixed separate target without
     assert.equal(navigation.racePageUrl('race'), 'https://padlhub.ru/lk_new?authMode=viva&padelJumpRace=1&jumpExhibition=1');
     assert.equal(navigation.racePageUrl('live'), 'https://padlhub.ru/lk_new?authMode=viva&padelJumpLive=1&jumpExhibition=1');
     assert.equal(navigation.racePageUrl('practice'), 'https://padlhub.ru/lk_new?authMode=viva&padelJump=1&jumpExhibition=1');
+    globalThis.window.location.search = '';
+    globalThis.window.location.pathname = '/lk/padel-jump-exhibition-aaaaaaaa/padel-jump-race.html';
+    await client.raceProfile(new AbortController().signal);
+    assert.equal(calls.at(-1).url, 'https://padlhub.su/jump-exhibition-api/me', 'Direct exhibition HTML must not silently fall back to the team');
     assert.ok(calls.every(call => call.options.headers.Authorization === 'Bearer fixture-access' && !call.url.includes('fixture-access') && !call.url.includes('evil.invalid')));
   } finally {
     for (const name of ['window', 'document', 'fetch']) { if (previous[name] === undefined) delete globalThis[name]; else globalThis[name] = previous[name]; }
