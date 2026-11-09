@@ -418,6 +418,24 @@ class ExhibitionReceiptErasure(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'INVENTORY_DRIFT'): module.execute(plan, root, apply=True)
 
 
+    def test_final_readback_cannot_certify_changed_bytes_of_an_unselected_player(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); names = self.fixture(root)
+            plan = module.prepare(root, self.community, actor='fixture-player', now='2026-11-12T09:00:00.000Z')
+            original = os.unlink; changed = False
+            def unlink(name, *, dir_fd=None):
+                nonlocal changed
+                result = original(name, dir_fd=dir_fd)
+                if not changed:
+                    changed = True; other = root / names[2]; row = json.loads(other.read_text()); row['alias'] = 'Changed by another writer'; other.write_text(json.dumps(row))
+                return result
+            with patch.object(module.os, 'unlink', side_effect=unlink):
+                with self.assertRaises(module.PartialErasure) as caught: module.execute(plan, root, apply=True)
+            self.assertEqual(caught.exception.receipt['status'], 'PARTIAL_RECONCILE')
+            self.assertEqual(caught.exception.receipt['removedCount'], 3)
+
+
 class JumpUpdate(unittest.TestCase):
     def module(self):
         spec = importlib.util.spec_from_file_location('update', Path(__file__).resolve().parents[1] / 'update_padel_jump_live_147.py')

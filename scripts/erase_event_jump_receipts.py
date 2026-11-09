@@ -130,7 +130,9 @@ def execute(plan, directory, *, apply=False):
                 os.unlink(row['name'], dir_fd=fd); receipt['removedCount'] += 1
                 os.fsync(fd)
             after, _ = inventory(fd, plan['communityId'])
-            if {row['name'] for row in after} != {row['name'] for row in rows} - {row['name'] for row in targets}: fail('ERASURE_READBACK_DRIFT')
+            removed = {row['name'] for row in targets}
+            expected = {row['name']: row['sha256'] for row in rows if row['name'] not in removed}
+            if {row['name']: row['sha256'] for row in after} != expected: fail('ERASURE_READBACK_DRIFT')
             receipt.update(status='FILES_ERASED', afterCount=len(after))
             return receipt
         except (OSError, RuntimeError):
