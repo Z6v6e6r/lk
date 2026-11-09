@@ -91,6 +91,10 @@ def check_exhibition_ops(plan, unpacked):
     api = raw_api.replace(b'/jump-exhibition-api/', b'/jump-live-api/').replace(b'127.0.0.1:5194', b'127.0.0.1:5193')
     # Pin original template bytes after fencing the selected raw target first.
     require(hashlib.sha256(unit).hexdigest() == 'f71583d55b83ea87ae478539a88a929f21e99ee0a26d8559039799f17b8468f6', 'EXHIBITION_UNIT_DRIFT')
+    # Authenticate the recovered template, then require its exact forward render.
+    # A template hash alone also accepts unresolved placeholders in supplied bytes.
+    expected_unit = unit.replace(b'@SOURCE@', plan['sourceCommit'].encode()).replace(b'@COMMUNITY_HASH@', community_hash.encode()).replace(b'padlhub-jump-live', config['account'].encode())
+    require(raw_unit == expected_unit, 'EXHIBITION_UNIT_DRIFT')
     require(hashlib.sha256(api).hexdigest() == 'd85718b0b14b6a322b776934f81a2a6ca73459f4974b35a9eda13c2386202720', 'EXHIBITION_API_DRIFT')
 
 def sha(path):

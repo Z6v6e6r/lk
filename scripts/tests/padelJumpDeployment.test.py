@@ -147,6 +147,10 @@ class JumpDeployment(unittest.TestCase):
                 if bad_env: files['ops/env.conf'] = files['ops/env.conf'].replace(b'JUMP_PORT=5194', b'JUMP_PORT=5193')
                 if bad_ops == 'unit': files['ops/unit.service'] = files['ops/unit.service'].replace(b'User=padlhub-jump-exhibition', b'User=padlhub-jump-live')
                 if bad_ops == 'api': files['ops/api.conf'] = files['ops/api.conf'].replace(b'/jump-exhibition-api/', b'/jump-live-api/')
+                if bad_ops == 'source-exec': files['ops/unit.service'] = files['ops/unit.service'].replace(('/releases/' + source + '/server.mjs').encode(), b'/releases/@SOURCE@/server.mjs')
+                if bad_ops == 'source-working': files['ops/unit.service'] = files['ops/unit.service'].replace(('WorkingDirectory=/opt/padlhub-jump-exhibition/releases/' + source).encode(), b'WorkingDirectory=/opt/padlhub-jump-exhibition/releases/@SOURCE@')
+                if bad_ops == 'store': files['ops/unit.service'] = files['ops/unit.service'].replace(hashlib.sha256(b'fixture-event').hexdigest()[:16].encode(), b'@COMMUNITY_HASH@')
+                if bad_ops == 'all': files['ops/unit.service'] = Path('games/padel-jump/live/deploy/unit.service.in').read_bytes().replace(b'padlhub-jump-live', b'padlhub-jump-exhibition')
                 with tarfile.open(upload / 'payload.tar', 'w') as archive:
                     for name, data in files.items():
                         member = tarfile.TarInfo(name); member.size = len(data); archive.addfile(member, io.BytesIO(data))
@@ -159,7 +163,7 @@ class JumpDeployment(unittest.TestCase):
                 account = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
                 with patch.multiple(publisher, WEB=web, SITE=site, UNIT=base / 'unit', ENV=base / 'env', SNIPPET=base / 'snippet', BACKEND_ROOT=base / 'backend', DATA_ROOT=base / 'data'), patch.object(publisher, 'snapshot', return_value=before), patch.object(publisher, 'check_protected'), patch.object(publisher, 'verify', return_value={'sourceCommit': source, 'health': health}), patch.object(publisher, 'get_json', return_value=health), patch.object(publisher, 'run', return_value='') as run, patch.object(publisher.pwd, 'getpwnam', return_value=account), patch.object(publisher.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=os.getegid())), patch.object(Path, 'resolve', lambda p: p), patch('ctypes.CDLL', return_value=Libc()):
                     if bad_env or bad_ops:
-                        reason = 'EXHIBITION_UNIT_DRIFT' if bad_ops == 'unit' else 'EXHIBITION_API_DRIFT' if bad_ops == 'api' else 'EXHIBITION_ENV_MISMATCH'
+                        reason = 'EXHIBITION_API_DRIFT' if bad_ops == 'api' else 'EXHIBITION_UNIT_DRIFT' if bad_ops else 'EXHIBITION_ENV_MISMATCH'
                         with self.assertRaisesRegex(RuntimeError, reason): publisher.apply(plan, upload)
                         run.assert_not_called(); self.assertFalse((base / 'backend').exists())
                     else:
@@ -177,6 +181,10 @@ class JumpDeployment(unittest.TestCase):
     def test_wrong_exhibition_env_is_rejected_before_account_or_runtime_mutation(self): self.exhibition_rehearsal(bad_env=True)
     def test_mixed_team_unit_or_api_cannot_hide_behind_template_normalization(self):
         for kind in ['unit', 'api']:
+            with self.subTest(kind=kind): self.exhibition_rehearsal(bad_ops=kind)
+
+    def test_unresolved_unit_placeholders_stop_before_account_or_runtime_mutation(self):
+        for kind in ['source-exec', 'source-working', 'store', 'all']:
             with self.subTest(kind=kind): self.exhibition_rehearsal(bad_ops=kind)
 
     def test_durable_creation_never_overwrites_an_existing_file(self):
