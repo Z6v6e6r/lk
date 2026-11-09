@@ -8,6 +8,12 @@ import {
 } from './nodered_reviewed_flow_deploy/runtime_contract.mjs';
 
 export const PROVIDER_ACCOUNT_ROUTE = '/lk/integrations/v1/provider-account-attestations';
+// The LK1 games database client the receiver and the game nodes already use.
+export const PROVIDER_ACCOUNT_GAMES_CLIENT = '4e820638cc39c730';
+export const providerAccountAttestationGameIds = Object.freeze({
+  find: 'lk_provider_account_attestation_game_find_20261109',
+  catch: 'lk_provider_account_attestation_game_catch_20261109',
+});
 export const providerAccountAttestationIds = Object.freeze(
   Object.fromEntries(
     ['tab', 'in', 'probe_in', 'verify', 'router', 'http', 'probe', 'sanitize', 'response'].map((k) => [
@@ -22,9 +28,10 @@ export const providerAccountAttestationIds = Object.freeze(
 export function composeProviderAccountAttestation(liveBytes, deploymentId) {
   const flow = JSON.parse(Buffer.from(liveBytes).toString('utf8'));
   const ids = providerAccountAttestationIds;
+  const gameIds = providerAccountAttestationGameIds;
   if (!Array.isArray(flow) || flow.some((n) => !n || typeof n.id !== 'string' || !n.id)
     || new Set(flow.map((n) => n.id)).size !== flow.length) throw new Error('PROVIDER_ACCOUNT_GRAPH_INVALID');
-  const reserved = new Set(Object.values(ids));
+  const reserved = new Set([...Object.values(ids), ...Object.values(gameIds)]);
   if (flow.some((n) => reserved.has(n.id) || (n.type === 'http in' && typeof n.url === 'string'
     && n.url.replace(/^\/*/, '/').replace(/\/+$/, '').toLowerCase() === PROVIDER_ACCOUNT_ROUTE))) {
     throw new Error('PROVIDER_ACCOUNT_ROUTE_COLLISION');
@@ -47,7 +54,7 @@ export function composeProviderAccountAttestation(liveBytes, deploymentId) {
     { id: ids.probe_in, type: 'http in', z: ids.tab, name: 'Provider account attestation probe',
       url: PROVIDER_ACCOUNT_ROUTE, method: 'get', upload: false, wires: [[ids.probe]] },
     fn(ids.verify, 'verify', 'verify', 2, [[ids.router], [ids.sanitize]]),
-    fn(ids.router, 'router', 'router', 2, [[ids.http], [ids.sanitize]]),
+    fn(ids.router, 'router', 'router', 3, [[ids.http], [ids.sanitize], [gameIds.find]]),
     // senderr:false forwards transport errors and every status to the router exactly once, so
     // there is no catch node (a catch would route the same failure a second time).
     { id: ids.http, type: 'http request', z: ids.tab, name: 'Provider account actor-token GET', method: 'use',
@@ -57,6 +64,13 @@ export function composeProviderAccountAttestation(liveBytes, deploymentId) {
     fn(ids.sanitize, 'response', 'response', 1, [[ids.response]]),
     { id: ids.response, type: 'http response', z: ids.tab, name: 'Provider account response', statusCode: '',
       headers: {}, wires: [] },
+    // Read-only lookup of one LK1 game record (legacyGameId target). The router sets the filter.
+    { id: gameIds.find, type: 'mongodb4', z: ids.tab, name: 'Provider account LK1 game (read-only)',
+      clientNode: PROVIDER_ACCOUNT_GAMES_CLIENT, mode: 'collection', collection: 'lk_games', operation: 'find',
+      output: 'toArray', maxTimeMS: '5000', handleDocId: false, wires: [[ids.router]] },
+    // A failed find must answer (503) instead of leaving the request open.
+    { id: gameIds.catch, type: 'catch', z: ids.tab, name: 'Provider account game lookup failure', uncaught: false,
+      scope: [gameIds.find], wires: [[ids.router]] },
   ];
   for (const n of additions.filter((x) => x.type === 'function')) {
     new Function('msg', 'env', 'global', 'context', 'nodeCrypto', n.func);
@@ -64,7 +78,7 @@ export function composeProviderAccountAttestation(liveBytes, deploymentId) {
   const candidate = [...flow, ...additions];
   const candidateBytes = Buffer.from(JSON.stringify(candidate, null, 2) + '\n');
   const contract = buildExactGraphContract({ liveBytes, candidateBytes, deploymentId, allowedChanges: [],
-    allowedAdditionIds: Object.values(ids) });
+    allowedAdditionIds: additions.map((n) => n.id) });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidate, candidateBytes, contract, selectorRevision: providerAccountSelectorSha256 };
 }

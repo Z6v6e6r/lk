@@ -45,11 +45,16 @@ Claims, exactly this set:
 | `actor_token_sha256` | `sha256:` + hex SHA-256 of the exact `X-Subscription-Actor-Token` |
 | `actor_token_expires_at` | canonical ISO, later than now + clock skew |
 
-Body: `{"contractVersion":1,"operationId":"<uuid>"}`, optionally with
-`"target":{"exerciseId":"<id>"}`. No other keys. `operationId` equals the `operation_id` claim.
+Body: `{"contractVersion":1,"operationId":"<uuid>"}`, optionally with exactly one target:
+- `"target":{"legacyGameId":"pay_<lowercase uuid>"}` — the LK1 game id (the lk2
+  `LK_LEGACY_SNAPSHOT/game` alias). LK1 resolves the Viva exercise itself; preferred.
+- `"target":{"exerciseId":"<viva exercise id>"}` — kept for the transition only.
+
+No other keys. `operationId` equals the `operation_id` claim.
 
 `request_sha256 = "sha256:" + hex(sha256("provider-account-attestation:v1\u0000" +
-JSON.stringify({contractVersion, operationId, target: target ? {exerciseId} : null})))`.
+JSON.stringify({contractVersion, operationId, target})))` where `target` is `{legacyGameId}`,
+`{exerciseId}` or `null`, in exactly that key order.
 
 Replay: the verify node remembers `operation_id` and `jti` until `exp` + clock skew. A second use
 returns 409 `PROVIDER_ACCOUNT_INVALID`. The registry is in memory (Node-RED context storage is off
@@ -71,9 +76,14 @@ Only with the actor token, without redirects, 10 s each, re-checking expiry befo
 
 1. `GET https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile`: `id`/`clientId` (one value).
 2. `GET …/subscriptions?includeFinished=true&size=1000`: a bare array or one complete page.
-3. With a target, `GET …/exercises/{exerciseId}`.
+3. With `legacyGameId`, first one read-only `lk_games` find `{id, archived: {$ne: true}}` (limit 2,
+   games client `4e820638cc39c730`, 5 s). Exactly one record with that `id`, `tenantKey` absent or
+   `iSkq6G`, not archived, and exactly one Viva exercise id across its aliases (`exerciseId`,
+   `vivaExerciseId`, `booking.*`, `metadata.*`, `metadata.splitPayment.*`, `dedupeKey viva:<id>`);
+   anything else is 409. A database failure is 503 (catch node). The record is never returned.
+4. With a target, `GET …/exercises/{exerciseId}` (the given or the resolved id).
 
-No Mongo, no global credential, no provider write.
+No global credential, no provider write, no database write.
 
 ## Response 200
 
@@ -90,6 +100,8 @@ No Mongo, no global credential, no provider write.
   "attestedAt": "<ISO>",
   "targetProof": { "exerciseId": "<id>", "startsAt": "<ISO>", "durationMinutes": 90,
     "ownedClientSubscriptionIds": ["<id>"], "eligibleClientSubscriptionIds": ["<id>"] }
+  // with a legacyGameId target, "legacyGameId": "pay_<uuid>" replaces "exerciseId":
+  // the raw Viva exercise id is not returned.
 }
 ```
 
