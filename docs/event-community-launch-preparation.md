@@ -39,15 +39,15 @@ Jump or change the running team engine. Old incompatible EVENT results are not r
 `event:registrations:export` reads one already-authorized private snapshot and produces a new
 mode-0600 UTF-8/BOM semicolon CSV containing only full name, company, email and registration
 timestamp. Only the current activation/policy entries are exported, once per actor, before the
-policy retention deadline. Missing policy, wrong target, malformed records or mismatched source
+policy retention deadline, using fresh execution time (not a caller-supplied historical clock).
+Missing policy, wrong target, malformed records or mismatched source
 hash fail closed. Spreadsheet-formula prefixes are escaped. Console receipts contain only a
 random operation ID, timestamp, revisions and count; no contact, participant or community ID.
 
 ```sh
 npm run --silent event:registrations:export -- \
   --input /private/event-export/snapshot.json --out /private/event-export/forms.csv \
-  --community-id EXACT_APPROVED_COMMUNITY_ID --expected-sha SNAPSHOT_SHA256 \
-  --now EXACT_UTC_ISO
+  --community-id EXACT_APPROVED_COMMUNITY_ID --expected-sha SNAPSHOT_SHA256
 ```
 
 The snapshot and CSV must remain outside Git/public serving paths in canonical mode-0700

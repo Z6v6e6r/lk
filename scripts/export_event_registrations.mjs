@@ -34,7 +34,7 @@ export function eventRegistrationCsv(document, { communityId, now }) {
   return { csv, receipt: { operationId: randomUUID(), preparedAt: now, exportedCount: rows.length, policyRevision: document.typeSettingsRevision, entriesRevision: document.eventEntriesRevision } };
 }
 
-export function exportEventRegistrations({ input, output, communityId, expectedSha, now }) {
+export function exportEventRegistrations({ input, output, communityId, expectedSha }) {
   validatePrivatePreparationPaths(input, output);
   const fd = fs.openSync(input, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   let bytes;
@@ -44,7 +44,8 @@ export function exportEventRegistrations({ input, output, communityId, expectedS
     bytes = fs.readFileSync(fd);
   } finally { fs.closeSync(fd); }
   if (!/^[a-f0-9]{64}$/.test(expectedSha || '') || createHash('sha256').update(bytes).digest('hex') !== expectedSha) throw new Error('EVENT_EXPORT_SHA_MISMATCH');
-  const result = eventRegistrationCsv(JSON.parse(bytes.toString('utf8')), { communityId, now });
+  // Only the pure formatter accepts injected time. A file export always uses its execution clock.
+  const result = eventRegistrationCsv(JSON.parse(bytes.toString('utf8')), { communityId, now: new Date().toISOString() });
   const target = fs.openSync(output, 'wx', 0o600);
   try { fs.writeFileSync(target, result.csv); fs.fsyncSync(target); } finally { fs.closeSync(target); }
   const parent = fs.openSync(path.dirname(output), 'r');
@@ -54,9 +55,9 @@ export function exportEventRegistrations({ input, output, communityId, expectedS
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    const { values, tokens } = parseArgs({ options: Object.fromEntries(['input', 'out', 'community-id', 'expected-sha', 'now'].map(key => [key, { type: 'string' }])), tokens: true });
-    if (Object.keys(values).length !== 5 || tokens.length !== 5) throw new Error('EVENT_EXPORT_ARGUMENTS_INVALID');
-    const receipt = exportEventRegistrations({ input: values.input, output: values.out, communityId: values['community-id'], expectedSha: values['expected-sha'], now: values.now });
+    const { values, tokens } = parseArgs({ options: Object.fromEntries(['input', 'out', 'community-id', 'expected-sha'].map(key => [key, { type: 'string' }])), tokens: true });
+    if (Object.keys(values).length !== 4 || tokens.length !== 4) throw new Error('EVENT_EXPORT_ARGUMENTS_INVALID');
+    const receipt = exportEventRegistrations({ input: values.input, output: values.out, communityId: values['community-id'], expectedSha: values['expected-sha'] });
     console.log(JSON.stringify(receipt));
   } catch (error) {
     const code = /^(?:EVENT_(?:EXPORT|REGISTRATION|POLICY)_[A-Z_]+|PREPARATION_[A-Z_]+)$/.test(error.message) ? error.message : 'EVENT_EXPORT_FAILED';
