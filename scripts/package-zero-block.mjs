@@ -10,6 +10,7 @@ await writeFile(join(destination, 'padlhub-zero-block.js'), source);
 await writeFile(join(destination, 'ИНСТРУКЦИЯ.md'), instruction);
 const css = '<style>[data-ph-zero-root] [data-ph-hidden="true"]{display:none!important}[data-ph-zero-root] [aria-disabled="true"]{opacity:.55;cursor:not-allowed}[data-ph-zero-root] [aria-busy="true"]{cursor:progress}</style>';
 for (const [name, keys] of [
+  ['T123-Резидентство-и-Дружба-2.0.html', ['residency','friendship-two-hours']],
   ['T123-обычные.html', ['friendship','academy','ra']],
   ['T123-Питер.html', ['friendship-promo','academy-promo','ra-promo']],
 ]) {

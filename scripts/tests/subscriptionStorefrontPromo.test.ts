@@ -202,12 +202,25 @@ function loadRegularPayment(topocratyProductId: string) {
   });
 }
 const regularPayment = loadRegularPayment('14692232-12be-4218-9fa1-2d5b79b62035');
+const liveProductFixture = (key: string, changes: Record<string, unknown> = {}) => ({
+  id: key === 'residency' ? '4037a3a3-e551-4f9a-a9db-1410e46b8635' : '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',
+  cost: key === 'residency' ? 79000 : 1980000, validityDays: 30, visits: 30,
+  activationDays: key === 'residency' ? 0 : 1, type: 'GROUP', variant: 'BY_VISITS', appliesTo: 'BOOKING',
+  hasStudioLimitation: false, hasDirectionLimitation: key !== 'residency',
+  availableDirections: key === 'residency' ? [] : [4588, 5278].map(id => ({ id })),
+  hasTypeLimitation: true, availableTypes: (key === 'residency' ? [2572] : [1613, 839]).map(id => ({ id })),
+  ...changes,
+});
+
 function zeroFixture(overrides: Record<string, unknown> = {}) {
   const f = paymentFixture();
   let result: any = { data: { paymentUrl: 'https://bank.example/zero', toPay: 680000 }, error: null };
   let confirmation: any = { data: { paid: true, failed: false, status: 'PAID' } };
   let price = 980000;
   let availability = true;
+  const liveProducts = { residency: liveProductFixture('residency'), 'friendship-two-hours': liveProductFixture('friendship-two-hours') };
+  let twoHourStatus: Record<string, unknown> = { counterKey: 'friendship_two_hours', productId: liveProducts['friendship-two-hours'].id,
+    priceMinor: 1980000, canPurchase: true, bindingReady: true, unlimited: true, totalLimit: 0, remainingCount: 0 };
   let patriotProduct: Record<string, unknown> = {
     id: '37ab3713-4431-4815-96ba-d7ece76a9241', cost: 680000, validityDays: 30, visits: 30,
     // Live Viva redemption scope: 5278/839 has a booking discount, not a visit debit.
@@ -235,6 +248,9 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     getServ2Origin: () => 'https://fixture.invalid',
     request: async (path: string) => {
       counterRequests.push(path);
+      const live = Object.values(liveProducts).find(product => path.endsWith('/products/subscriptions/' + product.id));
+      if (live) return { data: live, error: null };
+      if (path.includes('counterKey=friendship_two_hours')) return { data: { plans: [twoHourStatus] } };
       if (path.includes('/products/subscriptions/')) return { data: patriotProduct, error: null };
       return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] };
     },
@@ -245,6 +261,8 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   }, { ...f.globals, setTimeout, clearTimeout });
   return { ...f, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
+    setLiveProduct: (key: 'residency' | 'friendship-two-hours', changes: Record<string, unknown>) => { liveProducts[key] = { ...liveProducts[key], ...changes }; },
+    setTwoHourStatus: (changes: Record<string, unknown>) => { twoHourStatus = { ...twoHourStatus, ...changes }; },
     setPatriotProduct: (value: Record<string, unknown>) => { patriotProduct = value; },
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
 }
@@ -503,4 +521,150 @@ test('Zero Block loader rejects preloaded wrong channel and legacy runtime; comp
     assert.equal(resumed, checkoutChannel === 'prod' ? 1 : 0);
     assert.equal(instance.destroy(), true);
   }
+});
+
+
+for (const key of ['residency', 'friendship-two-hours'] as const) {
+  test(`Zero Block ${key} reads the exact public product and live price without admin-only fields or writes`, async () => {
+    const f = zeroFixture();
+    const offer = f.adapter.resolveZeroOffer(key)!;
+    assert.equal(offer.liveProductId, liveProductFixture(key).id);
+    assert.equal(offer.target, null);
+    assert.equal(offer.billingOptionId, key === 'residency' ? 'monthly' : 'monthly-two-hours');
+    const quote = await f.adapter.loadZeroOfferQuote(key);
+    assert.equal(quote.priceMinor, liveProductFixture(key).cost);
+    assert.equal(quote.activationDays, liveProductFixture(key).activationDays);
+    f.setLiveProduct(key, { cost: 123456 });
+    if (key !== 'residency') f.setTwoHourStatus({ priceMinor: 123456 });
+    assert.equal(await f.adapter.loadZeroOfferPrice(key), 123456);
+    assert.ok(f.counterRequests.some(url => url.endsWith('/products/subscriptions/' + offer.liveProductId)));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  });
+
+  test(`Zero Block ${key} rejects malformed terms before writes or attempt markers`, async () => {
+    for (const change of [{ cost: 0 }, { cost: -1 }, { cost: 1.1 }, { cost: '79000' }, { cost: NaN },
+      { validityDays: 31 }, { visits: 0 }, { activationDays: undefined }, { activationDays: -1 }, { activationDays: 1.1 },
+      { type: 'INDIVIDUAL' }, { variant: 'BY_MINUTES' }, { appliesTo: null }, { showToUser: false }, { productType: 'ONE_TIME' }]) {
+      const f = zeroFixture(); f.setLiveProduct(key, change);
+      await assert.rejects(f.adapter.loadZeroOfferPrice(key));
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, 79000, () => true));
+      assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+    }
+    const f = zeroFixture();
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture(key, { id: 'foreign' }), key));
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture(key), 'constructor'));
+  });
+
+  test(`Zero Block ${key} rechecks price and activation after confirmation, before the first POST`, async () => {
+    for (const change of [{ cost: 1990000 }, { activationDays: 15 }]) {
+      const f = zeroFixture(); const shown = await f.adapter.loadZeroOfferQuote(key);
+      f.setLiveProduct(key, change);
+      if (key !== 'residency' && change.cost) f.setTwoHourStatus({ priceMinor: change.cost });
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, shown.priceMinor, () => true, shown), /измен|подтвердить/);
+      assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+    }
+    const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key);
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => false, quote));
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  });
+
+  test(`Zero Block ${key} uses one exact direct transaction and marker; return/confirm never purchases`, async () => {
+    const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key);
+    f.setResult({ data: { paymentUrl: 'https://bank.example/zero', toPay: quote.priceMinor } });
+    const outcomes = await Promise.allSettled([1, 2].map(() => f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote)));
+    assert.equal(outcomes.filter(row => row.status === 'fulfilled').length, 1);
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.writes[0][0], liveProductFixture(key).id);
+    assert.equal(f.writes[0][2].retries, 0);
+    const url = new URL(f.writes[0][2].successUrl);
+    assert.equal(url.searchParams.get('phCheckoutReturn'), key);
+    assert.equal(url.searchParams.has('code'), false);
+    assert.equal((await f.adapter.confirmZeroPayment(key)).status, 'pending');
+    assert.equal(f.confirms.length, 0); assert.equal(f.writes.length, 1);
+    assert.equal(f.stored.size, 1); assert.ok(!JSON.stringify([...f.stored]).includes(fixturePhone));
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+    assert.equal(f.writes.length, 1);
+  });
+
+  test(`Zero Block ${key} keeps ambiguous attempts and never redirects a mismatched transaction amount`, async () => {
+    for (const data of [{ toPay: undefined }, { toPay: 1 }, { toPay: '79000' }]) {
+      const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key);
+      f.setResult({ data: { paymentUrl: 'https://bank.example/zero', ...data } });
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+      await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+      assert.equal(f.writes.length, 1); assert.equal(f.stored.size, 1);
+    }
+    const f = zeroFixture(); const quote = await f.adapter.loadZeroOfferQuote(key); f.breakTransport();
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+    await assert.rejects(f.adapter.createZeroPayment(key, fixturePhone, quote.priceMinor, () => true, quote));
+    assert.equal(f.writes.length, 1);
+  });
+}
+
+test('new live products preserve residency-only and two-hour coverage and exact booking readiness', async () => {
+  const f = zeroFixture();
+  for (const change of [{ hasStudioLimitation: true }, { hasDirectionLimitation: true }, { availableTypes: [{ id: 839 }] },
+    { availableTypes: [{ id: 2572 }, { id: 839 }] }]) {
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture('residency', change), 'residency'));
+  }
+  for (const change of [{ availableDirections: [{ id: 4588 }] }, { hasDirectionLimitation: undefined },
+    { availableTypes: [{ id: 1613 }] }, { hasTypeLimitation: null }]) {
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture('friendship-two-hours', change), 'friendship-two-hours'));
+  }
+  for (const change of [{ counterKey: 'friendship' }, { productId: 'foreign' }, { bindingReady: false },
+    { canPurchase: false }, { priceMinor: 1980001 }, { unlimited: undefined }]) {
+    const f = zeroFixture(); f.setTwoHourStatus(change);
+    await assert.rejects(f.adapter.loadZeroOfferPrice('friendship-two-hours'));
+    await assert.rejects(f.adapter.createZeroPayment('friendship-two-hours', fixturePhone, 1980000, () => true, { priceMinor: 1980000, activationDays: 1 }));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  }
+});
+
+test('Zero Block adapter reads new prices through a supporting runtime and rejects old runtime without fallback', async () => {
+  const source = readFileSync(new URL('../../docs/zero-block/padlhub-zero-block.js', import.meta.url), 'utf8');
+  for (const support of [true, false]) {
+    const opened: string[] = [], reads: string[] = [], navigation: string[] = [];
+    const attributes = new Map<string, string>();
+    const button = { tagName: 'BUTTON', matches: () => true,
+      getAttribute: (name: string) => attributes.get(name) ?? null,
+      setAttribute: (name: string, value: string) => attributes.set(name, value),
+      removeAttribute: (name: string) => attributes.delete(name) };
+    const document = { querySelectorAll: (selector: string) => selector.includes('.ph-buy-residency') ? [button] : [], dispatchEvent: () => {}, addEventListener: () => {}, removeEventListener: () => {}, hidden: false };
+    const window: any = { document, location: { href: 'https://padlhub.ru/new', search: '', hash: '', assign: (url: string) => navigation.push(url) },
+      setTimeout: () => 1, clearTimeout: () => {}, addEventListener: () => {}, removeEventListener: () => {},
+      localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null },
+      fetch: () => { throw new Error('No raw product fetch in the adapter'); },
+      LKWidgetSubscriptionStorefront: { checkoutVersion: 1, checkoutChannel: 'prod', openCheckout: (key: string) => opened.push(key),
+        closeCheckout: () => true, resumeCheckout: () => {}, supportsCheckoutOffer: () => support,
+        loadCheckoutOfferPrice: async (key: string) => { reads.push(key); return key === 'residency' ? 79001 : 1980000; } } };
+    vm.runInNewContext(source, { window, document, URL, URLSearchParams, AbortController, CustomEvent: class {} });
+    const instance = window.PadlHubZeroBlock.init({ offerKeys: ['residency', 'friendship-two-hours'], lazyCheckout: true, fallbackToCatalog: true });
+    await instance.refresh();
+    assert.equal(attributes.has('disabled'), !support);
+    assert.equal(attributes.get('tabindex'), support ? '0' : '-1');
+    for (const key of ['residency', 'friendship-two-hours']) {
+      assert.equal(instance.getState(key).status, support ? 'ready' : 'error');
+      if (support) { assert.equal(instance.getState(key).checkoutReady, true); assert.equal(instance.getState(key).data.remaining, null); assert.equal(instance.getState(key).data.total, null); }
+      await instance.openCheckout(key);
+    }
+    assert.deepEqual(opened, support ? ['residency', 'friendship-two-hours'] : []);
+    assert.equal(reads.length > 0, support); assert.deepEqual(navigation, []);
+    assert.equal(instance.destroy(), true);
+  }
+});
+
+
+test('new public product quotes use an explicit discounted price without computing or rounding money', async () => {
+  const f = zeroFixture();
+  assert.equal(f.adapter.parseZeroLiveProductQuote(liveProductFixture('residency', { discountPrice: 65432 }), 'residency').priceMinor, 65432);
+  for (const discountPrice of [0, -1, 79001, '79000', 1.5, NaN]) {
+    assert.throws(() => f.adapter.parseZeroLiveProductQuote(liveProductFixture('residency', { discountPrice }), 'residency'));
+  }
+  const options: RequestInit[] = [];
+  const fresh = zeroFixture({ request: async (_url: string, init: RequestInit) => {
+    options.push(init); return { data: liveProductFixture('residency') };
+  } });
+  await fresh.adapter.loadZeroOfferQuote('residency');
+  assert.equal(options[0].cache, 'no-store');
 });
