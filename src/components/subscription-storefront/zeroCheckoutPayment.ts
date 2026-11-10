@@ -7,7 +7,7 @@ import { API_BASE, TENANT_KEY } from '../../consts/api_config';
 import { resolveStorefrontBillingTarget, resolveStorefrontPromoTarget, StorefrontPaymentError } from './payment';
 import { createStorefrontPromoPayment, hasPromoPaymentAttempt } from './promoPayment';
 import { resolveStorefrontPromo } from './promo';
-import { ATLANTY_ANNUAL_PRICE_MINOR, ATLANTY_MONTHLY_PRICE_MINOR, PATRIOTS_MONTHLY_PRICE_MINOR, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
+import { ATLANTY_ANNUAL_PRICE_MINOR, ATLANTY_MONTHLY_PRICE_MINOR, PATRIOTS_MONTHLY_PRICE_MINOR, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID, VSK_PRODUCT_ID } from './catalog';
 
 export const ZERO_CHECKOUT_RETURN = 'phCheckoutReturn';
 const ATTEMPT_PREFIX = 'padlhub_zero_checkout_attempt_v1:';
@@ -61,6 +61,7 @@ export interface ZeroOffer {
 }
 
 const liveProductIds: Record<string, string> = {
+  vsk: VSK_PRODUCT_ID,
   residency: '4037a3a3-e551-4f9a-a9db-1410e46b8635',
   'friendship-two-hours': '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',
 };
@@ -90,7 +91,15 @@ export function parseZeroLiveProductQuote(payload: unknown, key: string): ZeroOf
     const ids = value.map(row => row && typeof row === 'object' ? row.id : row);
     return ids.every(id => Number.isSafeInteger(id)) && required.every(id => ids.includes(id));
   }
-  if (key === 'friendship-two-hours') {
+  if (key === 'vsk') {
+    const ids = (value: unknown) => Array.isArray(value) ? value.map(row => row && typeof row === 'object' ? row.id : row).sort((a, b) => a - b) : [];
+    if (product.hasStudioLimitation !== false || product.hasDirectionLimitation !== true || product.hasTypeLimitation !== true
+      || JSON.stringify(ids(product.availableDirections)) !== JSON.stringify([4588, 6975])
+      || JSON.stringify(ids(product.availableTypes)) !== JSON.stringify([1613, 2349])
+      || product.hasDayLimitation !== false || product.hasTimeRangeLimitation !== false || product.hasDayTimeLimitation !== false) {
+      throw new Error('VSK product coverage mismatch');
+    }
+  } else if (key === 'friendship-two-hours') {
     if (!scope(product.hasDirectionLimitation, product.availableDirections, [4588, 5278])
       || !scope(product.hasTypeLimitation, product.availableTypes, [1613, 839])) throw new Error('Product coverage mismatch');
   } else if (product.activationDays !== 0 || product.hasStudioLimitation !== false || product.hasDirectionLimitation !== false
@@ -103,9 +112,9 @@ export function parseZeroLiveProductQuote(payload: unknown, key: string): ZeroOf
 
 export function resolveZeroOffer(key: string): ZeroOffer | null {
   if (Object.prototype.hasOwnProperty.call(liveProductIds, key)) return {
-    key, label: key === 'residency' ? 'Резидентство ПадлхАБ' : 'Дружба 2.0', period: '30 дней',
-    planId: key === 'residency' ? key : 'friendship',
-    billingOptionId: key === 'residency' ? 'monthly' : 'monthly-two-hours',
+    key, label: key === 'vsk' ? 'Дружба.ВСК' : key === 'residency' ? 'Резидентство ПадлхАБ' : 'Дружба 2.0', period: '30 дней',
+    planId: key === 'vsk' || key === 'residency' ? key : 'friendship',
+    billingOptionId: key === 'vsk' || key === 'residency' ? 'monthly' : 'monthly-two-hours',
     target: null, promo: null, liveProductId: liveProductIds[key],
   };
   const promo = resolveStorefrontPromo(key);

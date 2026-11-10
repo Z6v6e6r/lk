@@ -216,3 +216,6 @@ export function scopedStorefrontStatuses<T extends StorefrontStatus>(statuses: T
     ? status.counterKey === counterKey
     : status.counterKey !== 'network_friendship' && status.counterKey !== 'friendship_two_hours');
 }
+
+/** Exact monthly corporate product; annual VSK is intentionally unavailable. */
+export const VSK_PRODUCT_ID = '94e32355-1c69-462b-9f2a-77f2817cb24c';

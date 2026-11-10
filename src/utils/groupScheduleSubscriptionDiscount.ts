@@ -14,6 +14,12 @@ import type { TournamentVivaProduct } from "./tournamentSignupApi.ts";
 export type GroupScheduleSubscriptionQuote = GroupSubscriptionQuote | TournamentSubscriptionDiscountQuote;
 
 /** Corporate events share the schedule UI; this exact Viva pair uses tournament pricing. */
+export function isGroupScheduleTournament(value: { directionId: number | null; typeId: number | null } | null): boolean {
+  return (value?.directionId === 6306 && value.typeId === 2349)
+    || (value?.directionId === 5278 && value.typeId === 839);
+}
+
+/** Compatibility name for the original corporate tournament predicate. */
 export function isPatriotsTournament(value: { directionId: number | null; typeId: number | null } | null): boolean {
   return value?.directionId === 6306 && value.typeId === 2349;
 }

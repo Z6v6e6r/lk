@@ -3,6 +3,7 @@ import { apiFetchAtlantyEvents } from "../../utils/atlantyScheduleApi";
 import {
   ATLANTY_DEFAULT_PILL_LABEL,
   normalizeAtlantyBookingMode,
+  resolveAtlantyEventBookingMode,
   normalizeAtlantyCategories,
   resolveAtlantyBookingDirectionIds,
   resolveAtlantyBookingTypeIds,
@@ -66,6 +67,8 @@ export type AtlantyScheduleConfig = {
    * "disabled" — карточки видны, запись недоступна до подтверждения условий.
    */
   booking?: string | null;
+  /** Keep unverified categories visible without starting a booking. */
+  bookingDisabledCategoryKeys?: readonly string[] | null;
   /** Типы занятий для окна LK1; по умолчанию — typeId категорий витрины. */
   bookingAllowedTypeIds?: ReadonlyArray<number | string> | null;
   /** Направления окна LK1; по умолчанию — directionId категорий витрины. */
@@ -541,7 +544,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
           pillLabel={pillLabel}
           vivaInstance={vivaInstance}
           onClose={() => setOpenEvent(null)}
-          bookingMode={bookingMode}
+          bookingMode={resolveAtlantyEventBookingMode(bookingMode, config.bookingDisabledCategoryKeys, openEvent.event.categoryKey)}
           bookingDirectionIds={bookingDirectionIds}
           bookingDirectionLabel={title || null}
           bookingAllowedTypeIds={bookingAllowedTypeIds}
@@ -564,7 +567,7 @@ export default function AtlantySchedulePage({ config = {} }: { config?: AtlantyS
                   pick: imagePick,
                 })}
                 onOpen={detailModalEnabled ? handleOpenEvent : undefined}
-                showVivaAnchor={bookingMode !== "disabled"}
+                showVivaAnchor={resolveAtlantyEventBookingMode(bookingMode, config.bookingDisabledCategoryKeys, event.categoryKey) !== "disabled"}
                 vivaInstance={vivaInstance}
               />
             ))}

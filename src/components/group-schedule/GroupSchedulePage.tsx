@@ -64,7 +64,7 @@ import { isPartialSubscriptionEventDiscountQuote } from "../../utils/groupSubscr
 import {
   buildGroupScheduleSubscriptionDiscountProduct,
   isGroupScheduleSubscriptionQuote,
-  isPatriotsTournament,
+  isGroupScheduleTournament,
   matchGroupScheduleSubscriptionDiscount,
   type GroupScheduleSubscriptionQuote,
 } from "../../utils/groupScheduleSubscriptionDiscount";
@@ -421,7 +421,7 @@ export default function GroupSchedulePage({
   const topokratyClubOwned = Boolean(checkout
     && (checkout.clientSubscriptions ?? []).some((row) => isTopokratyClubPack(row)));
   const topokratyExcluded = topokratyTrainingSelected && !topokratyClubOwned;
-  const patriotsTournamentSelected = isPatriotsTournament(selectedDetail);
+  const patriotsTournamentSelected = isGroupScheduleTournament(selectedDetail);
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -804,7 +804,7 @@ export default function GroupSchedulePage({
 
   const previewSubscriptionDiscount = useCallback(async (training: GroupTrainingSummary) => {
     await subscriptionUsageShadowPreview({
-      action: isPatriotsTournament(training) ? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING",
+      action: isGroupScheduleTournament(training) ? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING",
       target: { targetKind: "EVENT_AGGREGATE", eventId: training.id },
     });
   }, [subscriptionUsageShadowPreview]);
