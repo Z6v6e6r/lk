@@ -173,6 +173,8 @@ The nginx admission cap also covers the normalized bare `/lk/communities/event-a
 
 Bind the profile deadline through `msg.requestTimeout = 10000` before dispatch and restore the original field and own-property presence with the rest of the raw request. Installed Node-RED 4.0.9 reads this message field; a `requestTimeout` property on the HTTP node alone does not establish that deadline. Verify the installed HTTP request implementation before using the 15-second dispatch window as concurrency evidence.
 
+With `senderr: true`, that HTTP implementation sends transport failures to Catch only, not its normal output. Keep the auth subflow's Catch scoped to the profile HTTP node, sanitize the captured failure to 503 before auth-response restoration, and remove its diagnostic error object; a stale caller status such as 401 must not turn an outage into invalid credentials. Existing generated auth graphs must contain every required definition or fail closed as drift. The pinned official-consumer fixture tests effective timeout options and this error dispatch with owned RED/got stubs; it is not a full Node-RED runtime or measured provider/network timeout.
+
 Local rehearsal uses the existing cached immutable nginx image without a network:
 
 ```sh

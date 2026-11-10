@@ -105,6 +105,8 @@ export function addCommunityPolicyAuth(input) {
     { id: id + '-prepare', type: 'function', z: id, name: 'Verify optional community Bearer', func: COMMUNITY_AUTH_PREPARE, outputs: 3, wires: [[id + '-profile-budget'], [], [id + '-error']] },
     { id: id + '-profile-budget', type: 'function', z: id, name: 'Bound shared community profile calls', func: COMMUNITY_PROFILE_BUDGET, outputs: 2, wires: [[id + '-http'],[id + '-response']] },
     { id: id + '-http', type: 'http request', z: id, name: 'Community actor Viva profile', method: 'use', ret: 'obj', paytoqs: 'ignore', url: '', requestTimeout: '10000', persist: false, senderr: true, followRedirects: false, wires: [[id + '-response']] },
+    { id: id + '-http-catch', type: 'catch', z: id, name: 'Community profile transport failure', scope: [id + '-http'], uncaught: false, wires: [[id + '-http-unavailable']] },
+    { id: id + '-http-unavailable', type: 'function', z: id, name: 'Sanitize community profile failure', func: 'msg.statusCode=503;msg.payload=null;delete msg.error;return msg;', outputs: 1, wires: [[id + '-response']] },
     { id: id + '-response', type: 'function', z: id, name: 'Bind community actor to verified profile', func: COMMUNITY_AUTH_RESPONSE, outputs: 2, wires: [[], [id + '-error']] },
     { id: id + '-error', type: 'http response', z: id, name: 'Community auth failure', statusCode: '', headers: {}, wires: [] },
   ];
@@ -136,9 +138,10 @@ export function addCommunityPolicyAuth(input) {
     node.wires = [[ingressId]];
   }
   if (instances.length && !byId.has(id)) flow.push(...definitions);
+  const hasExistingDefinitions=definitions.some(expected=>byId.has(expected.id));
   for (const expected of definitions) {
     const existing = byId.get(expected.id);
-    if (existing && !isDeepStrictEqual(existing,expected)) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
+    if (hasExistingDefinitions && (!existing || !isDeepStrictEqual(existing,expected))) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
   }
   flow.push(...instances);
   const allNodes = new Map(flow.map(node => [node.id, node]));

@@ -150,3 +150,10 @@ test('all community auth entries share a bounded dispatch gate before the profil
   assert.doesNotMatch(JSON.stringify([...shared]),/Bearer|fixture-/);
   assert.deepEqual(addCommunityPolicyAuth(graph),graph);
 });
+test('an existing auth subflow cannot silently omit a required guard or response definition',()=>{
+  const graph=addCommunityPolicyAuth([{id:'in',type:'http in',z:'tab',method:'get',url:'/lk/communities',wires:[['target']]},{id:'target',type:'function',z:'tab',name:'Target',func:'return msg;',wires:[]}]);
+  for(const suffix of ['-profile-budget','-http','-response','-http-catch','-http-unavailable']) {
+    const incomplete=graph.filter(n=>n.id!=='community-policy-verified-actor-v1'+suffix);
+    assert.throws(()=>addCommunityPolicyAuth(incomplete),/COMMUNITY_AUTH_SUBFLOW_DRIFT/);
+  }
+});
