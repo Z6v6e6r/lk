@@ -1,3 +1,4 @@
+import { authSessionIdentity } from '../utils/authSessionIdentity';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AUTH_RUNTIME_KEYCLOAK_BASE,
@@ -35,6 +36,7 @@ import {
   shouldRestoreVivaSession,
 } from "../utils/vivaAuthStorage";
 import {
+  completeVivaOAuthContinuation,
   cleanupVivaOAuthCallbackUrl,
   clearPendingVivaOAuth,
   readPendingVivaOAuth,
@@ -83,7 +85,7 @@ function resolvePhoneFromToken(token: string | null | undefined) {
   return extractJwtStringClaim(token, ["phone_number", "phoneNumber", "phone"]) || "";
 }
 
-export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { children: React.ReactNode; oauthCallbackMode?: "cabinet" | "current-page" }) {
+export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oauthContinuationId, onInteractiveSession }: { children: React.ReactNode; oauthCallbackMode?: "cabinet" | "current-page"; oauthContinuationId?: string; onInteractiveSession?: (identity: string | null) => void }) {
   const initialToken = useMemo(() => readVivaAccessToken(), []);
   const initialOAuthCallback = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -391,11 +393,12 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         clearPendingVivaOAuth();
         cleanupVivaOAuthCallbackUrl();
         applyTokenState(data);
-        await syncPendingAuthConsents({
+        const consentsSynced = await syncPendingAuthConsents({
           authMethod: pending.provider,
           bindingType: "oauth-state",
           bindingValue: pending.state,
         });
+        if (consentsSynced) await completeVivaOAuthContinuation(pending, data.access_token);
         trackAnalyticsEvent("auth_oauth_success", {
           authMode: "viva",
           provider: pending.provider,
@@ -467,6 +470,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
   }, [clearError]);
 
   const login = useCallback(async (phoneNumber: string, code: string) => {
+    const sessionAtStart = readVivaAccessToken(), refreshAtStart = readVivaRefreshToken();
     clearError();
     setIsLoading(true);
     identifyAnalyticsUser({ phone: phoneNumber });
@@ -494,8 +498,9 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         throw new Error(data?.error_description ?? data?.error ?? `HTTP ${res.status}`);
       }
 
+      if (onInteractiveSession && (readVivaAccessToken() !== sessionAtStart || readVivaRefreshToken() !== refreshAtStart)) throw new Error('Checkout session changed during login');
       applyTokenState(data, phoneNumber);
-      await syncPendingAuthConsents({
+      const synced = await syncPendingAuthConsents({
         authMethod: "sms",
         bindingType: "sms-phone",
         bindingValue: phoneNumber,
@@ -507,6 +512,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         realm: VIVA_REALM,
         status: res.status,
       });
+      if (synced) onInteractiveSession?.(authSessionIdentity(data.access_token, 'viva'));
       return true;
     } catch (loginError) {
       trackClientError(
@@ -520,7 +526,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
     } finally {
       setIsLoading(false);
     }
-  }, [applyTokenState, clearError, scheduleRefresh]);
+  }, [applyTokenState, clearError, scheduleRefresh, onInteractiveSession]);
 
   const startOAuth = useCallback((provider: VivaOAuthProvider) => {
     clearError();
@@ -539,6 +545,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         bindingValue: pending.state,
       }),
       oauthCallbackMode,
+      oauthContinuationId,
     ).catch((oauthStartError) => {
       setIsLoading(false);
       trackClientError(
@@ -549,7 +556,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
       );
       setError("Не удалось открыть вход через внешний провайдер");
     });
-  }, [clearError, oauthCallbackMode]);
+  }, [clearError, oauthCallbackMode, oauthContinuationId]);
 
   const sendPhoneVerificationCode = useCallback(async (phoneNumber: string, channel = "cascade") => {
     clearError();
@@ -593,6 +600,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
   const verifyPhone = useCallback(async (phoneNumber: string, code: string) => {
     clearError();
     const accessToken = readVivaAccessToken();
+    const refreshAtStart = readVivaRefreshToken();
     if (!accessToken) {
       setError("Сессия истекла, войдите снова");
       return false;
@@ -611,6 +619,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         throw new Error(`HTTP ${verifyRes.status}`);
       }
 
+      if (onInteractiveSession && (readVivaAccessToken() !== accessToken || readVivaRefreshToken() !== refreshAtStart)) throw new Error('Checkout session changed during verification');
       const refreshed = await refreshTokens();
       if (!refreshed) {
         throw new Error("refresh_failed");
@@ -624,6 +633,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
         phone: phoneNumber,
       });
       await scheduleRefresh();
+      onInteractiveSession?.(authSessionIdentity(accessToken, 'viva'));
       return true;
     } catch (verifyError) {
       trackClientError(
@@ -637,7 +647,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet" }: { 
     } finally {
       setIsLoading(false);
     }
-  }, [clearError, refreshTokens, scheduleRefresh]);
+  }, [clearError, refreshTokens, scheduleRefresh, onInteractiveSession]);
 
   const logout = useCallback(() => {
     const refreshToken = readVivaRefreshToken();

@@ -9,7 +9,7 @@ import { AuthProvider } from './context/AuthContext';
 import { CABINET_URL, IS_DEV_RELEASE_CHANNEL } from './consts/api_config';
 import { installGlobalErrorTracking, trackAnalyticsEvent } from './utils/analytics';
 import './components/subscription-storefront/storefront-idle-guard.css';
-import { openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen } from './components/subscription-storefront/zeroCheckoutMount';
+import { openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, startCheckout } from './components/subscription-storefront/zeroCheckoutMount';
 import { loadZeroOfferPrice, resolveZeroOffer } from './components/subscription-storefront/zeroCheckoutPayment';
 
 type MountData = { previewView?: SubscriptionStorefrontView; cabinetUrl?: string | null; variant?: string | null };
@@ -69,12 +69,13 @@ declare global { interface Window { LKWidgetSubscriptionStorefront?: {
   checkoutVersion: 1; checkoutIsolationVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout; isCheckoutOpen: typeof isCheckoutOpen;
   supportsCheckoutOffer: (offerKey: string) => boolean;
   loadCheckoutOfferPrice: typeof loadZeroOfferPrice;
+  directCheckoutVersion: 1; startCheckout: typeof startCheckout;
   /** Page variants this bundle can render; blocks must fail closed on a missing one. */
   storefrontVariants: readonly string[];
 } } }
 window.LKWidgetSubscriptionStorefront = {
   mount, unmount, checkoutVersion: 1, checkoutIsolationVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
-  openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, loadCheckoutOfferPrice: loadZeroOfferPrice, supportsCheckoutOffer: (offerKey: string) => {
+  openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, directCheckoutVersion: 1, startCheckout, loadCheckoutOfferPrice: loadZeroOfferPrice, supportsCheckoutOffer: (offerKey: string) => {
     const offer = resolveZeroOffer(offerKey);
     return Boolean(offer && (offer.promo || offer.target || offer.liveProductId));
   },
