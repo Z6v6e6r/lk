@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>FFC — личный кабинет академии</title>
+    <style>
+      body { margin: 0; background: #11121a; color: #fff; font-family: Arial, sans-serif; }
+      .academy-bootstrap { max-width: 420px; margin: 15vh auto; padding: 24px; line-height: 1.5; }
+      .academy-bootstrap a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div class="academy-bootstrap" role="status">Загружаем кабинет академии…</div></div>
+    <script>
+      (async function () {
+        var baseUrl = new URL(".", window.location.href).href.replace(/\/$/, "");
+        window.__LK_AUTH_MODE__ = "viva";
+        window.__LK_ACTIVE_BASE_URL__ = baseUrl;
+        window.__LK_BASE_URLS__ = [baseUrl];
+        try {
+          var response = await fetch(baseUrl + "/release-ffc-academy-dev.json?t=" + Date.now(), { cache: "no-store" });
+          if (!response.ok) throw new Error("Release unavailable");
+          var release = await response.json();
+          if (typeof release.version !== "string" || !release.version.trim()) throw new Error("Invalid release");
+          window.__LK_RELEASE_VERSION__ = release.version;
+          var script = document.createElement("script");
+          script.src = baseUrl + "/ffc-academy-lk-dev.js?v=" + encodeURIComponent(release.version);
+          script.onerror = showLoadError;
+          document.head.appendChild(script);
+        } catch {
+          showLoadError();
+        }
+        function showLoadError() {
+          var message = document.createElement("div");
+          message.className = "academy-bootstrap";
+          message.setAttribute("role", "alert");
+          message.textContent = "Не удалось загрузить кабинет академии. ";
+          var retry = document.createElement("a");
+          retry.href = window.location.pathname;
+          retry.textContent = "Обновить страницу";
+          message.appendChild(retry);
+          document.getElementById("root").replaceChildren(message);
+        }
+      })();
+    </script>
+  </body>
+</html>
