@@ -1,14 +1,13 @@
-import { useState } from 'react';
-import { CheckoutAuthProvider } from '../components/subscription-storefront/CheckoutAuthProvider';
-import { ZeroCheckoutDialog } from '../components/subscription-storefront/ZeroCheckoutDialog';
+import { useEffect, useState } from 'react';
+import { resumeCheckout, startCheckout } from '../components/subscription-storefront/zeroCheckoutMount';
 import { RESIDENCY_OFFER_KEY } from './residencyPurchase';
+import '../components/subscription-storefront/storefront-auth-overlay.css';
 import './residency-purchase.css';
 
-/** Opening or returning to this route only opens UI; payment needs confirmation. */
+/** The card click is the confirmation; page loads and bank returns only resume recovery. */
 export function ResidencyPurchasePage() {
-  const [open, setOpen] = useState(() =>
-    typeof window !== 'undefined'
-      && new URLSearchParams(window.location.search).get('phCheckoutReturn') === RESIDENCY_OFFER_KEY);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { resumeCheckout(RESIDENCY_OFFER_KEY); }, []);
   return <main className="ph-residency-purchase">
     <article className="ph-residency-card" aria-labelledby="ph-residency-title">
       <h1 id="ph-residency-title" className="ph-residency-badge">
@@ -28,9 +27,12 @@ export function ResidencyPurchasePage() {
           <li><span>Полотенце</span><span className="ph-residency-included"><span className="ph-residency-sr-only">Включено</span></span></li>
         </ul>
       </section>
-      <button className="ph-residency-cta" type="button" onClick={() => setOpen(true)}>Стать резидентом</button>
+      <button className="ph-residency-cta" type="button" data-ph-buy={RESIDENCY_OFFER_KEY} onClick={event => {
+        setError(null);
+        try { startCheckout(RESIDENCY_OFFER_KEY, 79000, event.nativeEvent); }
+        catch (failure) { setError(failure instanceof Error ? failure.message : 'Не удалось открыть оформление.'); }
+      }}>Стать резидентом</button>
     </article>
-    {open && <CheckoutAuthProvider><ZeroCheckoutDialog offerKey={RESIDENCY_OFFER_KEY}
-      onClose={() => setOpen(false)} onBusy={() => {}} /></CheckoutAuthProvider>}
+    {error && <p role="alert">{error}</p>}
   </main>;
 }
