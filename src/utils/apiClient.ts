@@ -5867,7 +5867,7 @@ function writeProdTournamentHistoryCache(
   });
 }
 
-async function fetchTournamentHistoryUncached(tournamentId: string, forceRefresh = false): Promise<TournamentHistoryApiResult> {
+async function fetchTournamentHistoryUncached(tournamentId: string, forceRefresh = false, signal?: AbortSignal): Promise<TournamentHistoryApiResult> {
   const base = getServ2Origin();
   const pageUrl = typeof window !== "undefined" ? window.location.href : null;
   if (shouldBlockLocalProductionTournamentHistoryRequest({
@@ -5887,6 +5887,7 @@ async function fetchTournamentHistoryUncached(tournamentId: string, forceRefresh
   const result = await request<unknown>(
     `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}${forceRefresh ? `&readback=${Date.now()}` : ""}`,
     {
+      signal,
       method: "GET",
       retries: 1,
       ...(IS_DEV_RELEASE_CHANNEL && !forceRefresh
@@ -5916,9 +5917,9 @@ async function fetchTournamentHistoryUncached(tournamentId: string, forceRefresh
   };
 }
 
-export async function apiFetchTournamentHistory(tournamentId: string, options?: { forceRefresh?: boolean }): Promise<TournamentHistoryApiResult> {
+export async function apiFetchTournamentHistory(tournamentId: string, options?: { forceRefresh?: boolean; signal?: AbortSignal }): Promise<TournamentHistoryApiResult> {
   const normalizedTournamentId = String(tournamentId || "").trim();
-  if (options?.forceRefresh) return fetchTournamentHistoryUncached(normalizedTournamentId, true);
+  if (options?.forceRefresh || options?.signal) return fetchTournamentHistoryUncached(normalizedTournamentId, options.forceRefresh, options.signal);
   const cachedResult = !IS_DEV_RELEASE_CHANNEL
     ? readProdTournamentHistoryCache(normalizedTournamentId)
     : null;
