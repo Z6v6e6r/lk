@@ -679,6 +679,17 @@ jobs:
           npm run test:frontend-bootstrap-guard
           npm run test:frontend-static-nginx
 
+      - name: Tournament input and started-day regressions
+        if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
+        run: >-
+          node --experimental-strip-types --test
+          scripts/tests/fprBackgroundRefresh.test.mjs
+          scripts/tests/fprScoreDraft.test.ts
+          scripts/tests/tournamentDaySchedule.test.ts
+          scripts/tests/tournamentMechanicsExercises.test.ts
+          scripts/tests/tournamentVivaManualRefresh.test.ts
+          scripts/tests/fprManagerContinuity.test.mjs
+
       - name: Typecheck
         if: steps.route.outputs.profile != 'docs' && steps.route.outputs.profile != ''
         env:

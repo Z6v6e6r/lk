@@ -21,12 +21,13 @@ test("manual Viva refresh is one authenticated non-fallback day mutation", () =>
   assert.match(functionSource, /JSON\.stringify\(\{\s*date\s*\}\)/);
 });
 
-test("organizer button applies the direct Viva response only for the selected day", () => {
+test("organizer refresh reads current/past days before the future-day Viva mutation", () => {
   const handlerSource = pageSource.match(
     /const handleVivaRefresh = useCallback\(async \(\) => \{([\s\S]*?)\n\s{2}\}, \[canHostTournaments/,
   )?.[1];
 
   assert.ok(handlerSource, "manual refresh handler must exist");
+  assert.match(handlerSource, /if \(includePastTournaments\) \{[\s\S]*loadMechanicsSchedule\(requestedDate, true, previous\)[\s\S]*return;[\s\S]*apiRefreshTournamentMechanicsFromViva\(requestedDate\)/);
   assert.match(handlerSource, /apiRefreshTournamentMechanicsFromViva\(requestedDate\)/);
   assert.match(
     handlerSource,
@@ -56,6 +57,6 @@ test("manual Viva refresh invalidates an older automatic load for the same day",
 
   assert.ok(autoLoadSource, "automatic day load must own a request generation");
   assert.match(autoLoadSource, /const isCurrentRequest = \(\) => \(/);
-  assert.equal((autoLoadSource.match(/if \(!isCurrentRequest\(\)\) return;/g) || []).length >= 4, true);
-  assert.match(autoLoadSource, /if \(!isCurrentRequest\(\) \|\| appliedFreshItems \|\| !cachedItems\) return;/);
+  assert.equal((autoLoadSource.match(/if \(!isCurrentRequest\(\)\) return;/g) || []).length >= 3, true);
+  assert.match(autoLoadSource, /if \(!isCurrentRequest\(\) \|\| appliedFreshItems \|\| !cachedItems\?\.length\) return;/);
 });
