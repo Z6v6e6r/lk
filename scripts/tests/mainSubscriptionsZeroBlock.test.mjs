@@ -347,8 +347,11 @@ test('checkout auth selects the existing protocol without installing page-wide t
   const compiled = ts.transpileModule(body, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   for (const mode of ['viva', 'legacy']) {
     const exported = {};
-    vm.runInNewContext(compiled, { exports: exported, resolveConfiguredAuthMode: () => mode, VivaAuthProvider: 'viva-provider', LegacyAuthProvider: 'legacy-provider', require: () => ({ jsx: (type, props) => ({ type, props }) }) });
-    const view = exported.CheckoutAuthProvider({ children: 'form' }); assert.equal(view.type, mode + '-provider'); assert.equal(view.props.children, 'form');
+    vm.runInNewContext(compiled, { exports: exported, createContext: value => value, useRef: current => ({ current }), useCallback: fn => fn, resolveConfiguredAuthMode: () => mode, VivaAuthProvider: 'viva-provider', LegacyAuthProvider: 'legacy-provider', require: () => ({ jsx: (type, props) => ({ type, props }) }) });
+    const view = exported.CheckoutAuthProvider({ children: 'form' }); assert.equal(view.type, mode + '-provider'); assert.equal(view.props.children.props.children, 'form');
+    assert.equal(view.props.onInteractiveSession, undefined);
+    const fast = exported.CheckoutAuthProvider({ children: 'form', intentId: 'fixture-intent', initialIdentity: 'identity-A' });
+    if (mode === 'viva') assert.equal(fast.props.initialCheckoutIdentity, 'identity-A');
   }
   assert.doesNotMatch(source, /installGlobalErrorTracking|useGlobalClickAnalytics|installLkIdleDataGuard/);
 });

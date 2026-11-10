@@ -1,5 +1,5 @@
 /* global window, document */
-/* PadlHub Zero Block adapter v2.2.0 — scoped bindings + optional lazy checkout/fallback. */
+/* PadlHub Zero Block adapter v2.3.0 — scoped bindings + optional lazy checkout/fallback. */
 (function (window, document) {
   'use strict';
   if (window.PadlHubZeroBlock) return;
@@ -181,7 +181,8 @@
     }
     function supported(api, key) {
       return api && (!definitions[key].runtimePrice || (typeof api.supportsCheckoutOffer === 'function'
-        && api.supportsCheckoutOffer(key) === true && typeof api.loadCheckoutOfferPrice === 'function'));
+        && api.supportsCheckoutOffer(key) === true && typeof api.loadCheckoutOfferPrice === 'function'
+        && (options.directCheckout !== true || api.directCheckoutVersion === 1 && typeof api.startCheckout === 'function')));
     }
     function requireOffer(api, key) {
       if (!supported(api, key)) throw new Error('Обновите модуль оформления: предложение ещё не поддерживается.');
@@ -252,7 +253,7 @@
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || (event.button !== undefined && event.button !== 0)) return;
       if (lazy) {
         event.preventDefault(); event.stopImmediatePropagation();
-        void open(key, event.target.closest('a,button') || event.target.closest(selector('buy', key)));
+        void open(key, event.target.closest('a,button') || event.target.closest(selector('buy', key)), false, event);
         return;
       }
       var state = states[key];
@@ -263,12 +264,22 @@
       try {
         var trigger = event.target.closest('a,button') || event.target.closest(selector('buy', key));
         if (trigger && typeof trigger.focus === 'function') trigger.focus();
-        checkout.openCheckout(key);
+        if (options.directCheckout === true && definitions[key].runtimePrice) checkout.startCheckout(key, state.data.priceMinor, event);
+        else checkout.openCheckout(key);
       } catch (error) { text('status', key, error.message || 'Не удалось открыть оформление'); }
     }
     function onKey(event) {
       var key = matchTarget(event);
       if (!key || event.target.closest('button') || (event.target.closest('a') && event.key === 'Enter') || (event.key !== 'Enter' && event.key !== ' ')) return;
+      if (options.directCheckout === true && definitions[key].runtimePrice) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (lazy) void open(key, event.target, false, event);
+        else if (supported(checkout, key) && states[key].status === 'ready' && states[key].data.canPurchase) {
+          try { checkout.startCheckout(key, states[key].data.priceMinor, event); }
+          catch (error) { text('status', key, error.message || 'Не удалось открыть оформление'); }
+        }
+        return;
+      }
       event.preventDefault();
       event.target.click();
     }
@@ -334,13 +345,14 @@
       try { return window.localStorage.getItem('padlhub_zero_checkout_attempt_v1:' + key) !== null; }
       catch { return true; } // Unknown custody must never cause an automatic alternative purchase path.
     }
-    function open(key, trigger, resume) {
+    function open(key, trigger, resume, gesture) {
       if (!active || keys.indexOf(key) < 0 || opening) return Promise.resolve();
       if (checkout && typeof checkout.isCheckoutOpen === 'function' && checkout.isCheckoutOpen()) {
         try { requireOffer(checkout, key).openCheckout(key); } catch (error) { text('status', key, error.message); }
         return Promise.resolve();
       }
       var state = states[key];
+      var chosenPrice = state.data && state.data.priceMinor;
       var recovery = resume || hasAttempt(key);
       if (!recovery && !definitions[key].promo && state.status === 'ready' && !state.data.canPurchase) return Promise.resolve();
       var generation = ++intent;
@@ -371,7 +383,9 @@
         window.clearTimeout(intentTimer); opening = null;
         keys.forEach(render);
         if (trigger && typeof trigger.focus === 'function') trigger.focus();
-        if (resume) checkout.resumeCheckout(key); else checkout.openCheckout(key);
+        if (resume) checkout.resumeCheckout(key);
+        else if (gesture && options.directCheckout === true && definitions[key].runtimePrice) checkout.startCheckout(key, chosenPrice, gesture);
+        else checkout.openCheckout(key);
       }).catch(failed);
     }
     function hashKey() {
@@ -447,5 +461,5 @@
     }
     return api;
   }
-  window.PadlHubZeroBlock = Object.freeze({ version: '2.2.0', init: init });
+  window.PadlHubZeroBlock = Object.freeze({ version: '2.3.0', init: init });
 })(window, document);

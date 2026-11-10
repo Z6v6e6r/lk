@@ -7,8 +7,8 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 const port = Number(process.env.PREVIEW_PORT || 5197);
-const fixturePhone = `+${'7'}${'900000000'}`;
-const token = [Buffer.from('{"alg":"none"}').toString('base64url'), Buffer.from(JSON.stringify({ phone_number: fixturePhone, exp: Math.floor(Date.now() / 1000) + 3600, sub: 'zero-fixture' })).toString('base64url'), 'fixture'].join('.');
+const fixturePhone = `+${'7'}${'9000000000'}`;
+const token = [Buffer.from('{"alg":"none"}').toString('base64url'), Buffer.from(JSON.stringify({ phone_number: fixturePhone, exp: Math.floor(Date.now() / 1000) + 3600, sub: 'zero-fixture', iss: 'https://kc.vivacrm.ru/realms/clients', azp: 'widget', scope: 'openid profile', tenantKey: 'iSkq6G' })).toString('base64url'), 'fixture'].join('.');
 const files = {
   '/subscription-storefront.js': new URL('../dist/subscription-storefront/subscription-storefront.js', import.meta.url),
   '/main.js': new URL('../docs/zero-block/padlhub-main-subscriptions.js', import.meta.url),
@@ -31,11 +31,13 @@ ${main ? '<button id="show-subscriptions">Открыть подписки</butto
 const query=new URLSearchParams(location.search);
 window.__LK_AUTH_MODE__='viva';
 const token=${JSON.stringify(token)};
+if(query.has('auth')&&!sessionStorage.getItem('padlhub_oauth_receipt_v1')) {
 localStorage.removeItem('padlhub_viva_auth_access_token_v1');
 localStorage.removeItem('padlhub_viva_auth_refresh_token_v1');
 localStorage.removeItem('padlhub_auth_token_v1');
 localStorage.removeItem('padlhub_refresh_token_v1');
 document.cookie.split(';').forEach(part=>{const name=part.split('=')[0].trim();if(/(?:AuthToken|RefreshToken)$/.test(name))document.cookie=name+'=; Max-Age=0; path=/';});
+}
 function note(text){document.getElementById('log').textContent+=text+'\\n';}
 function login(){
   localStorage.setItem('padlhub_auth_token_v1',JSON.stringify({token:token,expiresAt:Date.now()+3600000}));
@@ -68,8 +70,13 @@ window.fetch=async function(input,init={}){
   if(url.includes('/profile')){note('GET synthetic profile');return reply({id:'zero-fixture',phone:${JSON.stringify(fixturePhone)}});}
   if(url.includes('/transactions')||url.includes('summer-subscription/purchase')){
     note('POST purchase (fixture only) '+String(JSON.parse(init.body||'{}').id||''));
+    sessionStorage.setItem('fixture_purchase_count',String(Number(sessionStorage.getItem('fixture_purchase_count')||0)+1));
     if(query.get('fail')==='slow') await new Promise(resolve=>setTimeout(resolve,6000));
     if(query.get('fail')==='timeout') throw new Error('fixture timeout');
+    if(query.get('bank')==='1') {
+      const body=JSON.parse(init.body||'{}');sessionStorage.setItem('fixture_bank_return',body.successUrl);
+      return reply({paymentUrl:'https://bank.example/zero',toPay:body.id==='4037a3a3-e551-4f9a-a9db-1410e46b8635'?window.fixturePrices.residency:window.fixturePrices['friendship-two-hours']});
+    }
     return reply({});
   }
   if(url.includes('summer-subscription/confirm')){note('POST confirm existing ref (fixture only)');return reply({paid:query.get('paid')==='1',failed:false,status:query.get('paid')==='1'?'PAID':'PENDING'});}
@@ -97,12 +104,12 @@ document.getElementById('reset').onclick=()=>{
 </script>
 ${main ? '' : '<script src="/subscription-storefront.js"></script>'}<script src="/bindings.js"></script>
 ${main ? '<script src="/main.js"></script>' : ''}
-<script>window.fixture=${main ? 'window.phSubscriptions' : `PadlHubZeroBlock.init({offerKeys:${JSON.stringify(keys)},lazyCheckout:query.get('lazy')==='1'})`};document.getElementById('destroy').onclick=()=>note('destroy='+fixture.destroy());</script>
+<script>window.fixture=${main ? 'window.phSubscriptions' : `PadlHubZeroBlock.init({offerKeys:${JSON.stringify(keys)},directCheckout:location.pathname==='/direct'||query.get('fast')==='1',lazyCheckout:query.get('lazy')==='1'})`};document.getElementById('destroy').onclick=()=>note('destroy='+fixture.destroy());</script>
 </html>`;
 }
 createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://127.0.0.1:${port}`);
-  if (url.pathname === '/') { response.writeHead(200, {'content-type':'text/html; charset=utf-8'}).end(page(url.searchParams.get('main') === '1', url.searchParams.get('live') === '1')); return; }
+  if (['/','/direct','/lk_new'].includes(url.pathname)) { response.writeHead(200, {'content-type':'text/html; charset=utf-8'}).end(page(url.searchParams.get('main') === '1', url.searchParams.get('live') === '1' || ['/direct','/lk_new'].includes(url.pathname))); return; }
   const file = files[url.pathname];
   if (!file) { response.writeHead(404).end(); return; }
   try { response.writeHead(200, {'content-type':'text/javascript; charset=utf-8'}).end(await readFile(file)); }

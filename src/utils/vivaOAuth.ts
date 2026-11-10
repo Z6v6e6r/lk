@@ -1,3 +1,5 @@
+import { authSessionIdentity, sessionIdentityBinding } from './authSessionIdentity.ts';
+import { bindOAuthContinuation, hasArmedOAuthContinuation, completeOAuthContinuation, type OAuthContinuation } from './oauthContinuation.ts';
 import {
   AUTH_RUNTIME_CABINET_URL,
   AUTH_RUNTIME_KEYCLOAK_BASE,
@@ -14,6 +16,7 @@ export type PendingVivaOAuth = {
   codeVerifier: string;
   redirectUri: string;
   returnTo: string;
+  continuation?: OAuthContinuation;
 };
 
 function canUseSessionStorage() {
@@ -142,19 +145,27 @@ export async function startVivaOAuthRedirect(
   tenantKey: string,
   onPending?: (pending: PendingVivaOAuth) => Promise<boolean> | boolean,
   callbackMode: VivaOAuthCallbackMode = "cabinet",
+  continuationId?: string,
+  initialCheckoutIdentity?: string | null,
 ) {
+  const continuationAtStart = continuationId && hasArmedOAuthContinuation(continuationId) ? continuationId : undefined;
   const codeVerifier = generateRandomBase64Url(32);
   const codeChallenge = await createCodeChallenge(codeVerifier);
   const state = generateRandomBase64Url(16);
   const redirectUri = buildVivaOAuthCallbackUrl(callbackMode);
   const returnTo = buildVivaOAuthReturnUrl();
 
+  const initialBinding = continuationAtStart && initialCheckoutIdentity
+    ? await sessionIdentityBinding(continuationAtStart, initialCheckoutIdentity) : 'guest';
+  const continuation = bindOAuthContinuation(continuationAtStart, state, returnTo, initialBinding);
+  if (continuationAtStart && !continuation) throw new Error("Checkout was cancelled before OAuth redirect");
   const pending: PendingVivaOAuth = {
     provider,
     state,
     codeVerifier,
     redirectUri,
     returnTo,
+    continuation,
   };
 
   try {
@@ -165,8 +176,13 @@ export async function startVivaOAuthRedirect(
   } catch { throw new Error("OAuth session could not be stored before redirect"); }
 
   if (onPending && !await onPending(pending)) {
-    clearPendingVivaOAuth();
+    if (readPendingVivaOAuth()?.state === state) clearPendingVivaOAuth();
     throw new Error("Auth consent could not be stored before OAuth redirect");
+  }
+
+  if (continuationAtStart && !hasArmedOAuthContinuation(continuationAtStart, state)) {
+    if (readPendingVivaOAuth()?.state === state) clearPendingVivaOAuth();
+    throw new Error("Checkout was cancelled before OAuth redirect");
   }
 
   const params = new URLSearchParams({
@@ -182,4 +198,9 @@ export async function startVivaOAuthRedirect(
   });
 
   window.location.href = `${AUTH_RUNTIME_KEYCLOAK_BASE}/realms/${VIVA_REALM}/protocol/openid-connect/auth?${params.toString()}`;
+}
+
+/** Call only from the verified authorization-code success branch. */
+export function completeVivaOAuthContinuation(pending: PendingVivaOAuth, token: string) {
+  return completeOAuthContinuation(pending.continuation, pending.state, pending.returnTo, authSessionIdentity(token, 'viva'));
 }

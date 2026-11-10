@@ -14,7 +14,7 @@ for (const [name, keys] of [
   ['T123-обычные.html', ['friendship','academy','ra']],
   ['T123-Питер.html', ['friendship-promo','academy-promo','ra-promo']],
 ]) {
-  await writeFile(join(destination, name), `${css}\n<script>\n${source}\n</script>\n<script>\nwindow.phSubscriptions = window.PadlHubZeroBlock.init({ offerKeys: ${JSON.stringify(keys)}, channel: 'prod', refreshMs: 30000 });\n</script>\n`);
+  await writeFile(join(destination, name), `${css}\n<script>\n${source}\n</script>\n<script>\nwindow.phSubscriptions = window.PadlHubZeroBlock.init({ offerKeys: ${JSON.stringify(keys)}, channel: 'prod', ${keys.includes('residency') ? 'directCheckout: true, ' : ''}refreshMs: 30000 });\n</script>\n`);
 }
 await writeFile(join(destination, 'T123-Главная.html'), `${css}\n<script>\n${source}\n</script>\n<script>\n${main}\n</script>\n`);
 console.log(`Designer kit written to ${destination}. Requires checkout-capable storefront publication.`);
