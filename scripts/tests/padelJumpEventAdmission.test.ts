@@ -81,3 +81,89 @@ test('generated admission is GET-only, verified-actor bound, read-only and rejec
   const drift = structuredClone(graph); drift.find(n => n.id === 'community-event-admission-v1-apply')!.func = 'return msg;';
   assert.throws(() => addEventAdmissionRoutes(drift), /EVENT_ADMISSION_GRAPH_DRIFT/);
 });
+test('direct admission has a bounded gate before profile authentication even with rotating credentials', () => {
+  const input = [{ id: 'tab', type: 'tab' }, { id: 'mongo', type: 'mongodb4', z: 'tab', collection: 'lk_communities', operation: 'find', clientNode: 'fixture-client', wires: [] }];
+  const graph: FlowNode[] = addCommunityPolicyAuth(addEventAdmissionRoutes(input));
+  const route = graph.find(n => n.id === 'community-event-admission-v1-in')!;
+  const gate = graph.find(n => n.id === route.wires![0][0])!;
+  assert.equal(gate.type, 'function', 'budget must execute before the auth subflow, not after it');
+  const auth = graph.find(n => n.id === gate.wires![0][0])!;
+  assert.match(auth.type, /^subflow:community-policy-verified-actor/);
+  assert.deepEqual(auth.wires, [['community-event-admission-v1-prepare']]);
+  assert.deepEqual(gate.wires![1], ['community-event-admission-v1-response']);
+  const stored = new Map<string, unknown>();
+  const context = { get: (key: string) => stored.get(key), set: (key: string, value: unknown) => stored.set(key, value) };
+  let admitted = 0, rejected = 0;
+  for (let i = 0; i < 60; i++) {
+    const msg = { req: { method: 'GET', params: { communityId: 'fixture-event' }, query: {}, headers: { authorization: 'Bearer fixture-' + i, 'x-forwarded-for': 'spoof-' + i } }, payload: {} };
+    const result = vm.runInNewContext('(function(msg){' + gate.func + '\n})(msg)', { msg, context, Date: { now: () => 1000 } });
+    if (result[0]) admitted++;
+    else { rejected++; assert.equal(result[1].statusCode, 429); assert.equal(result[1].payload.error, 'EVENT_ADMISSION_RATE_LIMITED'); }
+  }
+  assert.equal(admitted, 10); assert.equal(rejected, 50);
+  assert.doesNotMatch(JSON.stringify([...stored]), /Bearer|fixture-|spoof-/);
+  assert.deepEqual(addCommunityPolicyAuth(addEventAdmissionRoutes(graph)), graph);
+});
+function admissionBudgetFixture() {
+  const graph: FlowNode[] = addCommunityPolicyAuth(addEventAdmissionRoutes([{ id: 'tab', type: 'tab' }, { id: 'mongo', type: 'mongodb4', z: 'tab', collection: 'lk_communities', operation: 'find', clientNode: 'fixture-client', wires: [] }]));
+  const gate = graph.find(n => n.id === 'community-policy-verified-actor-v1-budget-community-event-admission-v1-in')!;
+  assert.equal(gate.type,'function');
+  const stored = new Map<string, unknown>();
+  const context = { get: (key: string) => stored.get(key), set: (key: string, value: unknown) => stored.set(key, value) };
+  const run = (at: number, patch: Record<string, unknown> = {}) => {
+    const msg = { req: { method: 'GET', params: { communityId: 'fixture-event' }, query: {}, headers: { authorization: 'Bearer fixture' }, ...patch }, payload: {} };
+    return vm.runInNewContext('(function(msg){' + gate.func + '\n})(msg)', { msg, context, Date: { now: () => at } });
+  };
+  return {graph,gate,stored,context,run};
+}
+test('direct admission bounds dispatches across the entire provider timeout, with inclusive expiry and fail-closed clock rollback', () => {
+  const fixture=admissionBudgetFixture();
+  for(const at of [1000,2000,3000]) for(let i=0;i<10;i++) assert.ok(fixture.run(at)[0]);
+  for(const at of [4000,15999]) {
+    const result=fixture.run(at);assert.equal(result[0],null,'no more than30 dispatches in any15 seconds');assert.equal(result[1].statusCode,429);
+  }
+  for(let i=0;i<10;i++) assert.ok(fixture.run(16000)[0]);
+  const rollback=fixture.run(15999);assert.equal(rollback[0],null);assert.equal(rollback[1].statusCode,503);
+  const timestamps=fixture.stored.get('eventAdmissionProviderBudgetV1') as number[];
+  assert.equal(timestamps.length,30);assert.ok(timestamps.every(Number.isSafeInteger));
+});
+test('admission budget cannot be bypassed or rewired to another auth continuation', () => {
+  const {graph,gate}=admissionBudgetFixture();
+  for(const mutate of [
+    (flow: FlowNode[]) => { flow.find(n=>n.id===gate.id)!.func+='\n// drift'; },
+    (flow: FlowNode[]) => { flow.find(n=>n.id===gate.id)!.wires=[['community-event-admission-v1-prepare'],['community-event-admission-v1-response']]; },
+    (flow: FlowNode[]) => { flow.find(n=>n.id==='community-event-admission-v1-in')!.wires=[gate.wires![0]]; },
+    (flow: FlowNode[]) => { flow.find(n=>n.id===gate.wires![0][0])!.wires=[['mongo']]; },
+  ]) {
+    const drift=structuredClone(graph);mutate(drift);const original=structuredClone(drift);
+    assert.throws(()=>addCommunityPolicyAuth(addEventAdmissionRoutes(drift)),/COMMUNITY_AUTH_.*DRIFT/);
+    assert.deepEqual(drift,original);
+  }
+});
+test('admission pre-auth validation rejects malformed requests without dispatch or retained identities', () => {
+  for(const [patch,status] of [
+    [{method:'HEAD'},405], [{params:{communityId:'bad/target'}},400], [{query:{clientId:'spoof'}},400],
+    [{headers:{}},403], [{headers:{authorization:'invalid'}},401],
+    [{headers:{authorization:'Bearer fixture','content-length':'8193'}},413],
+    [{headers:{authorization:'Bearer fixture','transfer-encoding':'chunked'}},400],
+  ] as [Record<string,unknown>,number][]) {
+    const fixture=admissionBudgetFixture(), result=fixture.run(1000,patch);
+    assert.equal(result[0],null);assert.equal(result[1].statusCode,status);assert.equal(fixture.stored.size,0);
+  }
+  const fixture=admissionBudgetFixture();
+  assert.ok(fixture.run(1000,{params:{communityId:'community_корпспорт-2026'},headers:{authorization:'Bearer fixture','content-length':'8192'}})[0]);
+  for(const invalid of [null,{},Array(31).fill(0),[1000,999],[NaN]]) {
+    const fixture=admissionBudgetFixture();fixture.stored.set('eventAdmissionProviderBudgetV1',invalid);
+    const result=fixture.run(1000);assert.equal(result[0],null);assert.equal(result[1].statusCode,503);
+  }
+});
+test('admission fails closed with a sanitized response if its budget store is unavailable', () => {
+  for(const method of ['get','set'] as const) {
+    const fixture=admissionBudgetFixture();
+    fixture.context[method]=()=>{throw new Error('PRIVATE_STORAGE_SENTINEL');};
+    assert.doesNotThrow(()=>{
+      const result=fixture.run(1000);assert.equal(result[0],null);assert.equal(result[1].statusCode,503);
+      assert.doesNotMatch(JSON.stringify(result[1].payload),/PRIVATE_STORAGE_SENTINEL/);
+    });
+  }
+});

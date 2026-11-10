@@ -67,7 +67,7 @@ export function addEventAdmissionRoutes(input) {
   if (managed.length !== definitions.length) throw new Error('EVENT_ADMISSION_GRAPH_DRIFT');
   for (const expected of definitions) {
     const actual=managed.find(n=>n.id===expected.id), comparable=structuredClone(expected);
-    if (expected.type==='http in' && actual?.wires?.[0]?.[0]===COMMUNITY_AUTH_SUBFLOW+'-entry-'+expected.id) comparable.wires=actual.wires;
+    if (expected.type==='http in' && [COMMUNITY_AUTH_SUBFLOW+'-entry-'+expected.id,COMMUNITY_AUTH_SUBFLOW+'-budget-'+expected.id].includes(actual?.wires?.[0]?.[0])) comparable.wires=actual.wires;
     if (!isDeepStrictEqual(actual,comparable)) throw new Error('EVENT_ADMISSION_GRAPH_DRIFT');
   }
   return flow;
