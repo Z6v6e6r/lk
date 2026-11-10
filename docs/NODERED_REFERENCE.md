@@ -407,6 +407,7 @@ npm run nodered:modular:build
 - `GET /lk/communities/:communityId/event-admission` — только текущий verified actor; query-параметры идентичности запрещены. Читает один `lk_communities`, возвращает собственный membership/current-registration, activation/policy binding и notice, но не ФИО/компанию/email участника или массив анкет.
 - Source: `scripts/lib/eventJumpAdmission.mjs`; opt-in builder: `scripts/patch_live_community_types.mjs --event-admission`. Ноды `community-event-admission-v1-*` используют общий verified-actor auth subflow; Mongo только `find`, неизвестный graph drift отклоняется. Это не deploy/import approval.
 - Отдельный пятижизненный backend использует `/jump-exhibition-api/` и `JUMP_EVENT_BINDING`; командный `/jump-live-api/` не перенастраивается. Активация и границы evidence: `docs/event-community-launch-preparation.md`.
+- `Apply community join` / `Apply invite join` (`scripts/lib/eventCommunity.mjs`, guard V3): для точного выставочного community ID канонические join/invite до `registrationPolicy.startsAt` возвращают `409/EVENT_NOT_STARTED` без анкеты, roster и производных записей; обычные EVENT сохраняют предрегистрацию. Известные V1/V2 блоки обновляются с проверкой bytes, неизвестный или изменённый guard отклоняется.
 
 ### Сообщества публикации турнира
 

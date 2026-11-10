@@ -8,7 +8,7 @@ Owner: event organizer; audience: participants of «Корпоративный �
 - Shared strict notice policy; draft settings without it remain closed. Direct, invited, existing and pending participants require a current policy-bound registration.
 - Every EVENT roster writer (LK join/invite/member management + CUP moderation) increments `eventRosterRevision`; game/roster filters contain numeric fences rather than profile arrays. New EVENT activation must wait until all writers are upgraded; stale cross-type moderation conflicts. Mutation success requires acknowledged=true, matchedCount=1, modifiedCount=1.
 - Private entries have epoch/revision/version and a server-computed one-calendar-year retention deadline. No provider write, mail, marketing opt-in, schema migration, new collection or rating-worker change.
-- Candidate patching excludes disabled tabs, rejects duplicate active names/routes (normalized method/path uniqueness is checked both before and after graph assembly), reserves inactive IDs, validates generated auth routes/active wires, and upgrades only known V1 function bytes. Archived graph copies stay byte-identical. Production currently has disabled Media2 copies and one active LK Communities graph (structural read only); this does not establish a deployable full candidate.
+- Candidate patching excludes disabled tabs, rejects duplicate active names/routes (normalized method/path uniqueness is checked both before and after graph assembly), reserves inactive IDs, validates generated auth routes/active wires, and upgrades only known historical function bytes. Archived graph copies stay byte-identical. Production currently has disabled Media2 copies and one active LK Communities graph (structural read only); this does not establish a deployable full candidate.
 - The synthetic fixture has no real owner/contact/policy and cannot open registration. Historical private launch drafts do not supply authority for a new activation; use the confirmed scope below and obtain the missing current contact/owner.
 
 ## November exhibition: confirmed scope and open integration
@@ -32,6 +32,17 @@ The owner confirmed a separate instance and supplied the community invite on Nov
 production lookup found FRIENDS/OPEN/INSTANT, one OWNER, zero forms and no EVENT notice.
 That observation is not an activation; the later responsible/contact confirmation remains private.
 The older endless EVENT game is not a fallback for the selected mode.
+
+For this exact exhibition community, canonical direct and invite joins must reject with
+`409/EVENT_NOT_STARTED` before the canonical policy's `startsAt`, including existing members
+and already registered actors. No registration, roster or derived write is emitted in that
+state. The start is inclusive and `endsAt` remains exclusive; no earlier phone acceptance is
+authorized. Other EVENT communities retain their existing pre-registration behavior. The
+scheduled exhibition UI alone is not a collection barrier. `EVENT_REGISTRATION_GUARD_V3`
+enforces this narrow server rule; upgrade accepts only the pinned historical V1/V2 block,
+and both current and historical guard drift fail closed. The frozen V2 fixture was captured
+from actual `90533ec3` bytes, not fabricated from the new implementation. Review this
+pilot-specific community binding after November 13; removing it does not erase stored data.
 
 ### Five-life integration source (not deployed)
 
@@ -173,7 +184,7 @@ The nginx admission cap also covers the normalized bare `/lk/communities/event-a
 
 Bind the profile deadline through `msg.requestTimeout = 10000` before dispatch and restore the original field and own-property presence with the rest of the raw request. Installed Node-RED 4.0.9 reads this message field; a `requestTimeout` property on the HTTP node alone does not establish that deadline. Verify the installed HTTP request implementation before using the 15-second dispatch window as concurrency evidence.
 
-With `senderr: true`, that HTTP implementation sends transport failures to Catch only, not its normal output. Keep the auth subflow's Catch scoped to the profile HTTP node, sanitize the captured failure to 503 before auth-response restoration, and remove its diagnostic error object; a stale caller status such as 401 must not turn an outage into invalid credentials. Existing generated auth graphs must contain every required definition or fail closed as drift. The pinned official-consumer fixture tests effective timeout options and this error dispatch with owned RED/got stubs; it is not a full Node-RED runtime or measured provider/network timeout.
+With `senderr: true`, that HTTP implementation sends transport failures to Catch only, not its normal output. Keep the auth subflow's Catch scoped to the profile HTTP node, sanitize the captured failure to 503 before auth-response restoration, and remove its diagnostic error object; a stale caller status such as 401 must not turn an outage into invalid credentials. If any generated auth definition is present, every required definition must match or patching fails closed as drift. Follow-up finding: deleting all definitions while retaining an old instance is an inherited unsupported completeness edge case; it is not covered by that partial-definition guard. First-activation preparation must verify the fresh preimage has neither definitions nor instances, and the final candidate contains all expected definitions. The pinned official-consumer fixture tests effective timeout options and this error dispatch with owned RED/got stubs; it is not a full Node-RED runtime or measured provider/network timeout.
 
 Local rehearsal uses the existing cached immutable nginx image without a network:
 
