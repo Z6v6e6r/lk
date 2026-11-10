@@ -470,6 +470,8 @@ jobs:
           scripts/tests/tournamentSubscription.summer.nodered.test.ts
           scripts/tests/subscriptionStorefront.test.ts
           scripts/tests/subscriptionStorefrontPromo.test.ts
+          scripts/tests/atlantySchedule.test.ts
+          scripts/tests/atlantyLkBookingWindow.test.ts
           scripts/tests/subscriptionPromoCode.test.ts
           scripts/tests/mainSubscriptionsZeroBlock.test.mjs
           scripts/tests/tournamentSubscriptionCatalog.test.ts
@@ -509,6 +511,8 @@ jobs:
           scripts/tests/lk1ActiveBookingLimit.test.mjs
           scripts/tests/pulkovoFriendship.test.mjs
           scripts/tests/patriotsFriendshipParity.test.mjs
+          scripts/tests/vskFriendship.test.mjs
+          scripts/tests/vskTilda.test.mjs
           scripts/tests/lk1PlanRulesResolver.test.mjs
           scripts/tests/lk1PlanRulesPreview.test.mjs
           scripts/tests/subscriptionPricePreviewSources.test.mjs
