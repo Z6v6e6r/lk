@@ -29,7 +29,10 @@ function Preview() {
   const [privileges, setPrivileges] = useState<string>(matrix.profile.id);
   const [subscriptionFits, setSubscriptionFits] = useState(matrix.applicability.subscription);
   const [passFits, setPassFits] = useState(matrix.applicability.pass);
-  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0' });
+  const [subscriptionPlan, setSubscriptionPlan] = useState<string>(matrix.subscriptionPlan);
+  const [dailyQuota, setDailyQuota] = useState<string>(matrix.dailyQuota);
+  const [excludedGroups, setExcludedGroups] = useState(matrix.excludedGroups);
+  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota, groupCategory: excludedGroups ? 'excluded' : 'standard' });
   const frameUrl = `/dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const updateUrl = (key: string, value: string) => {
     query.set(key, value);
@@ -74,13 +77,24 @@ function Preview() {
           {PRIVILEGE_PROFILES.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
         </select></label>
         <div className="preview-applicability">
-          <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Подписка подходит</label>
+          <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Тариф подходит к событию</label>
           <label><input type="checkbox" checked={passFits} onChange={event => { setPassFits(event.target.checked); updateUrl('passFits', event.target.checked ? '1' : '0'); }} />Абонемент подходит</label>
+        </div>
+        <div className="preview-subscription-rules">
+          <label>Тариф подписки<select value={subscriptionPlan} onChange={event => { setSubscriptionPlan(event.target.value); updateUrl('subscriptionPlan', event.target.value); }}>
+            <option value="daily-training">1 бесплатная тренировка в день</option><option value="daily-hour">1 бесплатный час в день</option>
+          </select></label>
+          <label>Дневной бесплатный лимит<select value={dailyQuota} onChange={event => { setDailyQuota(event.target.value); updateUrl('dailyQuota', event.target.value); }}>
+            <option value="available">Доступен</option><option value="used">Уже использован</option>
+          </select></label>
+          <label>Категория групповых<select value={excludedGroups ? 'excluded' : 'standard'} onChange={event => { setExcludedGroups(event.target.value === 'excluded'); updateUrl('groupCategory', event.target.value); }}>
+            <option value="standard">Обычная</option><option value="excluded">Без подписки и Резидентства</option>
+          </select></label>
         </div>
         <span>Игра 4 000 ₽ · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
       </section>
       <div className={`preview-stage preview-stage--${width}`}>
-        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}`} src={frameUrl} title="Интерфейс записи PadlHub"
+        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}`} src={frameUrl} title="Интерфейс записи PadlHub"
           sandbox="allow-scripts allow-same-origin" />
       </div>
     </main>

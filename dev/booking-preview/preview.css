@@ -46,3 +46,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .preview-sidebar nav button.is-active { background: #eee7f8; border-color: #ddd0ed; color: #69459a; }
 .preview-shell { background: #f0eef4; }
 @media(max-width: 700px) { .preview-privileges { padding: 14px 16px; } .preview-privileges > label { width: 100%; } .preview-privileges > span { margin-left: 0; } .preview-privileges select { width: 100%; min-width: 0; } }
+.preview-subscription-rules { display: flex; flex-wrap: wrap; gap: 12px 20px; width: 100%; }
+.preview-subscription-rules label { display: grid; gap: 6px; font-size: 11px; }
+.preview-subscription-rules select { min-width: 190px; }
+@media(max-width: 700px) { .preview-subscription-rules label { width: 100%; } .preview-subscription-rules select { min-width: 0; width: 100%; } }

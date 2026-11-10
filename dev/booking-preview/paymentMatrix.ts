@@ -2,18 +2,26 @@ export type ServiceKind = 'game' | 'training' | 'tournament';
 export type PaymentKind = 'full' | 'residency' | 'subscription' | 'pass';
 export type Privileges = { residency: boolean; subscription: boolean; pass: boolean };
 export type Applicability = { subscription: boolean; pass: boolean };
+export type SubscriptionPlan = 'daily-training' | 'daily-hour';
+export type DailyQuota = 'available' | 'used';
+export type PaymentContext = { subscriptionPlan: SubscriptionPlan; dailyQuota: DailyQuota; excludedGroups: boolean; durationMinutes: number };
+export type SubscriptionBenefit = 'free-training' | 'free-hour' | 'partial-hour' | 'discount';
 export type PaymentOption = {
   kind: PaymentKind;
-  mode: 'book' | 'offer' | 'unavailable' | 'reference';
+  mode: 'book' | 'offer' | 'unavailable' | 'reference' | 'quote';
   amount: number | null;
+  benefit?: SubscriptionBenefit;
+  reason?: 'excluded-group' | 'not-applicable' | 'training-only' | 'unknown-duration';
+  freeMinutes?: number;
+  paidMinutes?: number;
 };
 
 // Display examples supplied by the owner. This is a local prototype, not an API
 // quote or authorization to charge, discount, or debit a production account.
 export const SERVICES = {
-  game: { name: 'Игра 2×2', price: 4000, residentPrice: 2800, discount: 30 },
-  training: { name: 'Групповая тренировка', price: 5500, residentPrice: 2750, discount: 50 },
-  tournament: { name: 'Турнир', price: 8000, residentPrice: 4000, discount: 50 },
+  game: { name: 'Игра 2×2', price: 4000, residentPrice: 2800, discount: 30, durationMinutes: 90 },
+  training: { name: 'Групповая тренировка', price: 5500, residentPrice: 2750, discount: 50, durationMinutes: 90 },
+  tournament: { name: 'Турнир', price: 8000, residentPrice: 4000, discount: 50, durationMinutes: 180 },
 } as const;
 
 export const PRIVILEGE_PROFILES = [
@@ -31,22 +39,47 @@ export function readMatrixSettings(params: URLSearchParams) {
   return {
     profile: PRIVILEGE_PROFILES.find(profile => profile.id === params.get('privileges')) || PRIVILEGE_PROFILES[0],
     applicability: { subscription: params.get('subscriptionFits') !== '0', pass: params.get('passFits') !== '0' },
+    subscriptionPlan: params.get('subscriptionPlan') === 'daily-hour' ? 'daily-hour' as const : 'daily-training' as const,
+    dailyQuota: params.get('dailyQuota') === 'used' ? 'used' as const : 'available' as const,
+    excludedGroups: params.get('groupCategory') === 'excluded',
   };
 }
 
-export function buildPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability): PaymentOption[] {
+export function buildPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}): PaymentOption[] {
   const price = SERVICES[service];
-  const hasApplicablePrivilege = privileges.residency || (privileges.subscription && fits.subscription) || (privileges.pass && fits.pass);
+  const plan = context.subscriptionPlan || 'daily-training';
+  const quota = context.dailyQuota || 'available';
+  const duration = context.durationMinutes ?? price.durationMinutes;
+  const excluded = service === 'training' && context.excludedGroups === true;
+  let subscription: PaymentOption;
+  if (excluded || !fits.subscription) {
+    subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: excluded ? 'excluded-group' : 'not-applicable' };
+  } else if (quota === 'used') {
+    subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: price.residentPrice, benefit: 'discount' };
+  } else if (plan === 'daily-training' && service !== 'training') {
+    subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: 'training-only' };
+  } else if (plan === 'daily-hour' && (!Number.isFinite(duration) || duration <= 0)) {
+    subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: 'unknown-duration' };
+  } else if (plan === 'daily-hour' && duration > 60) {
+    // The owner confirmed partial coverage, but has not specified the copay
+    // formula. Never invent a zero or proportionate price for the remainder.
+    subscription = { kind: 'subscription', mode: privileges.subscription ? 'quote' : 'offer', amount: null,
+      benefit: 'partial-hour', freeMinutes: 60, paidMinutes: duration - 60 };
+  } else {
+    subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: 0,
+      benefit: plan === 'daily-training' ? 'free-training' : 'free-hour', freeMinutes: plan === 'daily-hour' ? duration : undefined };
+  }
+  const residency: PaymentOption = { kind: 'residency', mode: excluded ? 'unavailable' : privileges.residency ? 'book' : 'offer',
+    amount: excluded ? null : price.residentPrice, ...(excluded ? { reason: 'excluded-group' as const } : {}) };
+  const pass: PaymentOption = { kind: 'pass', mode: !fits.pass ? 'unavailable' : privileges.pass ? 'book' : 'offer', amount: null };
+  const hasApplicablePrivilege = [subscription, residency, pass].some(option => option.mode === 'book');
   const options: Record<PaymentKind, PaymentOption> = {
-    full: { kind: 'full', mode: hasApplicablePrivilege ? 'reference' : 'book', amount: price.price },
-    residency: { kind: 'residency', mode: privileges.residency ? 'book' : 'offer', amount: price.residentPrice },
-    subscription: { kind: 'subscription', mode: !fits.subscription ? 'unavailable' : privileges.subscription ? 'book' : 'offer', amount: 0 },
-    pass: { kind: 'pass', mode: !fits.pass ? 'unavailable' : privileges.pass ? 'book' : 'offer', amount: null },
+    full: { kind: 'full', mode: hasApplicablePrivilege ? 'reference' : 'book', amount: price.price }, residency, subscription, pass,
   };
-  const order: PaymentKind[] = privileges.subscription && fits.subscription
-    ? (privileges.pass && fits.pass ? ['full', 'subscription', 'pass', 'residency'] : ['full', 'subscription', 'residency', 'pass'])
-    : privileges.pass && fits.pass
-      ? ['full', 'pass', ...(privileges.residency ? ['residency', 'subscription'] as const : ['subscription', 'residency'] as const)]
+  const order: PaymentKind[] = subscription.mode === 'book'
+    ? (pass.mode === 'book' ? ['full', 'subscription', 'pass', 'residency'] : ['full', 'subscription', 'residency', 'pass'])
+    : pass.mode === 'book'
+      ? ['full', 'pass', ...(residency.mode === 'book' ? ['residency', 'subscription'] as const : ['subscription', 'residency'] as const)]
       : ['full', 'residency', 'subscription', 'pass'];
   return order.map(kind => options[kind]);
 }

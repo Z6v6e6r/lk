@@ -68,3 +68,6 @@
   .matrix-comparison .matrix-option-value { text-align: left; max-width: none; }
   .matrix-comparison .matrix-option-value strong { font-size: 14px; }
 }
+.matrix-option.is-quote { cursor: default; background: #fffbef; border-color: #eadbad; }
+.matrix-option.is-quote .matrix-option-value { color: #96712c; }
+.matrix-copay-note { margin: 12px 0 0; padding: 10px; border-radius: 8px; background: #fffbef; color: #93752e; font-size: 11px; line-height: 1.5; }

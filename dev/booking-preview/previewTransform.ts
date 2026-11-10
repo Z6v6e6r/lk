@@ -2,15 +2,15 @@ import ts from 'typescript';
 
 const rules: Record<string, Array<{ className: string; replacement: string }>> = {
   'GamesPage.tsx': [
-    { className: 'details-action-row details-join-action-row', replacement: '<MatrixPaymentOptions service="game" eventKey={activeGameRecord?.id || "demo-game"} />' },
-    { className: 'game-payment-stack', replacement: '<MatrixPaymentOptions service="game" eventKey="demo-game-create" disabled={!canProceedToPayment} />' },
+    { className: 'details-action-row details-join-action-row', replacement: '<MatrixPaymentOptions service="game" eventKey={activeGameRecord?.id || "demo-game"} durationMinutes={activeGameRecord?.booking?.durationMinutes ?? 90} />' },
+    { className: 'game-payment-stack', replacement: '<MatrixPaymentOptions service="game" eventKey="demo-game-create" durationMinutes={duration} disabled={!canProceedToPayment} />' },
     { className: 'team-card game-create-payment-card', replacement: '<p className="matrix-step-note">На следующем шаге выберите способ записи: полная цена, Резидентство, подписка или абонемент.</p>' },
   ],
   'GroupSchedulePage.tsx': [
-    { className: 'tournament-signup-registration group-schedule-registration group-schedule-registration--trainer', replacement: '<MatrixPaymentOptions key={selectedTraining.id} service="training" eventKey={selectedTraining.id} />' },
+    { className: 'tournament-signup-registration group-schedule-registration group-schedule-registration--trainer', replacement: '<MatrixPaymentOptions key={selectedTraining.id} service="training" eventKey={selectedTraining.id} excludesPrivileges={selectedTraining.raw.previewPrivilegesExcluded === true} durationMinutes={(Date.parse(selectedTraining.timeTo) - Date.parse(selectedTraining.timeFrom)) / 60000} />' },
   ],
   'TournamentSignupPage.tsx': [
-    { className: 'tournament-signup-register-stack', replacement: '<MatrixPaymentOptions key={selectedExerciseId} service="tournament" eventKey={selectedExerciseId || "demo-tournament"} />' },
+    { className: 'tournament-signup-register-stack', replacement: '<MatrixPaymentOptions key={selectedExerciseId} service="tournament" eventKey={selectedExerciseId || "demo-tournament"} durationMinutes={selectedTournament?.startsAt && selectedTournament?.endsAt ? (Date.parse(selectedTournament.endsAt) - Date.parse(selectedTournament.startsAt)) / 60000 : 180} />' },
   ],
 };
 

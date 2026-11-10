@@ -49,7 +49,7 @@ function registration(id: string): TournamentRegistrationState {
     canCancel: registered, message: registered ? 'Вы записаны' : scenario === 'full' ? 'Свободных мест нет' : null };
 }
 function trainings(date = eventDate): GroupTrainingSummary[] {
-  return ['Групповая тренировка', 'Игра + тренер', 'Тренировка для начинающих'].map((title, index) => ({
+  return ['Групповая тренировка', 'Игра + тренер', 'Тренировка для начинающих', 'Групповая тренировка без льгот'].map((title, index) => ({
     id: `demo-training-${index + 1}`, title, typeId: index === 1 ? 847 : 843,
     typeName: index === 1 ? 'Игра + тренер' : 'Групповая тренировка', typeColor: '#b6d87d',
     directionId: 100 + index, directionName: title,
@@ -65,7 +65,7 @@ function trainings(date = eventDate): GroupTrainingSummary[] {
     levelLabel: index === 2 ? 'D / D+' : 'C / C+',
     inBooking: registration(`demo-training-${index + 1}`).status === 'REGISTERED', inWaitlist: false, inReserve: false,
     cancellationDeadline: null,
-    raw: { id: `demo-training-${index + 1}`, title, typeId: index === 1 ? 847 : 843, description: 'Тестовая тренировка', price: 5500, studioId: studios[index % studios.length].id },
+    raw: { id: `demo-training-${index + 1}`, title, previewPrivilegesExcluded: index === 3 || readMatrixSettings(new URLSearchParams(location.search)).excludedGroups, typeId: index === 1 ? 847 : 843, description: 'Тестовая тренировка', price: 5500, studioId: studios[index % studios.length].id },
   }));
 }
 function tournaments(date = eventDate): TournamentSignupDetail[] {
