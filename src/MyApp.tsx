@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
 import PadelJumpHost from "./components/padel-jump/PadelJumpHost";
@@ -30,6 +30,7 @@ import {
   TOURNAMENTS_BUNDLE_URL,
 } from "./consts/api_config";
 import { loadWidget, type WidgetGlobalName, type WidgetModule } from "./utils/widgetLoader";
+import { createOverlayLifecycle, type OverlaySession } from "./utils/overlayLifecycle";
 import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
 import { PAYMENT_REF_QUERY_KEY, processPendingPaymentSyncQueue } from "./utils/paymentSync";
 import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish";
@@ -101,7 +102,7 @@ function notifyGamesUpdated(records: PadelGameRecord[], source: string): void {
 }
 
 const OVERLAY_ID = "lk-overlay";
-let overlayRoot: ReturnType<typeof createRoot> | null = null;
+const overlayLifecycle = createOverlayLifecycle((cleanup) => requestAnimationFrame(cleanup));
 let activeOverlayModule: OverlayModuleName | null = null;
 
 function ensureOverlayContainer() {
@@ -122,37 +123,23 @@ function showOverlay() {
   return el;
 }
 
-function hideOverlay() {
+function hideOverlay(session?: OverlaySession) {
+  if (!(session ? session.close() : overlayLifecycle.close())) return;
   if (activeOverlayModule) {
     trackAnalyticsEvent("module_closed", {
       module: activeOverlayModule,
     });
     activeOverlayModule = null;
   }
-
-  const el = document.getElementById(OVERLAY_ID);
-  if (el) {
-    el.classList.remove("open");
-  }
+  document.getElementById(OVERLAY_ID)?.classList.remove("open");
   document.body.classList.remove("lk-overlay-open");
+}
 
-  const root = overlayRoot;
-  overlayRoot = null;
-
-  const cleanup = () => {
-    if (root) {
-      try {
-        root.unmount();
-      } catch (err) {
-        console.warn("Overlay unmount failed", err);
-      }
-    }
-    if (el) {
-      el.textContent = "";
-    }
-  };
-
-  requestAnimationFrame(cleanup);
+function showOverlayError(container: HTMLElement, message: string) {
+  const error = document.createElement("div");
+  error.className = "overlay-loading";
+  error.textContent = message;
+  container.replaceChildren(error);
 }
 
 function normalizeInviteCabinetUrl(value: string | null | undefined): string {
@@ -523,14 +510,6 @@ function AppContent() {
       source: "overlay",
     });
 
-    if (activeOverlayModule) {
-      trackAnalyticsEvent("module_closed", {
-        module: activeOverlayModule,
-        reason: "switch",
-      });
-      activeOverlayModule = null;
-    }
-
     if (!src || !globalName) {
       console.warn("Overlay module URL is not configured");
       if (!import.meta.env.DEV) {
@@ -541,24 +520,28 @@ function AppContent() {
         return;
       }
     }
-    const container = showOverlay();
-    if (overlayRoot) {
-      overlayRoot.unmount();
-      overlayRoot = null;
+    if (activeOverlayModule) {
+      trackAnalyticsEvent("module_closed", {
+        module: activeOverlayModule,
+        reason: "switch",
+      });
+      activeOverlayModule = null;
     }
+
+    const session = overlayLifecycle.begin();
+    if (!session.isCurrent()) return;
+    const container = showOverlay();
+    session.own(() => { container.textContent = ""; });
     container.innerHTML = '<div class="overlay-loading">Загрузка...</div>';
 
     if (import.meta.env.DEV) {
       try {
-        const onBack = () => {
-          hideOverlay();
-        };
-        container.innerHTML = "";
-        overlayRoot = createRoot(container);
+        const onBack = () => hideOverlay(session);
+        let content: ReactNode;
         if (module === "games") {
           const mod = await import("./components/games/GamesPage");
           const gamesData = data as GamesMountData | undefined;
-          overlayRoot.render(
+          content = (
             <OverlayScopeProvider value>
               <mod.default
                 onBack={onBack}
@@ -567,12 +550,12 @@ function AppContent() {
                 createFromBooking={gamesData?.createFromBooking ?? null}
                 initialGameRecord={gamesData?.initialGameRecord ?? null}
               />
-            </OverlayScopeProvider>,
+            </OverlayScopeProvider>
           );
         } else if (module === "tournaments") {
           const mod = await import("./components/tournaments/TournamentsPage");
           const tournamentsData = data as TournamentsMountData | undefined;
-          overlayRoot.render(
+          content = (
             <OverlayScopeProvider value>
               <mod.default
                 onBack={onBack}
@@ -580,23 +563,23 @@ function AppContent() {
                 initialOpenTournamentSlug={tournamentsData?.tournamentSlug ?? null}
                 initialOpenDate={tournamentsData?.date ?? null}
               />
-            </OverlayScopeProvider>,
+            </OverlayScopeProvider>
           );
         } else if (module === "levels-info") {
           const mod = await import("./components/levels-info/LevelsInfoOverlayPage");
           const levelsInfoData = data as LevelsInfoMountData | undefined;
-          overlayRoot.render(
+          content = (
             <OverlayScopeProvider value>
               <mod.LevelsInfoOverlayPage
                 onBack={onBack}
                 data={levelsInfoData}
               />
-            </OverlayScopeProvider>,
+            </OverlayScopeProvider>
           );
         } else {
           const mod = await import("./components/onboarding/OnboardingPage");
           const onboardingData = data as OnboardingMountData | undefined;
-          overlayRoot.render(
+          content = (
             <OverlayScopeProvider value>
               <mod.default
                 onBack={onBack}
@@ -605,9 +588,19 @@ function AppContent() {
                 trainingLink={onboardingData?.trainingLink || "#"}
                 tournamentsLink={onboardingData?.tournamentsLink || "#"}
               />
-            </OverlayScopeProvider>,
+            </OverlayScopeProvider>
           );
         }
+        if (!session.isCurrent()) return;
+        session.clear();
+        if (!session.isCurrent()) return;
+        const root = createRoot(container);
+        session.own(() => {
+          root.unmount();
+          container.textContent = "";
+        });
+        root.render(content);
+        if (!session.isCurrent()) return;
         activeOverlayModule = module;
         trackAnalyticsEvent("module_opened", {
           module,
@@ -615,8 +608,12 @@ function AppContent() {
         });
         return;
       } catch (err) {
+        if (!session.isCurrent()) return;
+        session.clear();
+        if (!session.isCurrent()) return;
+        session.own(() => { container.textContent = ""; });
         const message = err instanceof Error ? err.message : "Ошибка загрузки";
-        container.innerHTML = `<div class="overlay-loading">${message}</div>`;
+        showOverlayError(container, message);
         trackClientError(
           "overlay.module_open_failed.dev_import",
           err,
@@ -635,22 +632,31 @@ function AppContent() {
 
     try {
       const widget = await loadWidget(src!, globalName!, { forceReload: module === "games" });
+      if (!session.isCurrent()) return;
+      session.clear();
+      if (!session.isCurrent()) return;
+      session.own(() => {
+        widget.unmount?.(OVERLAY_ID);
+        container.textContent = "";
+      });
       widget.mount({
         targetId: OVERLAY_ID,
-        onClose: () => {
-          widget.unmount?.(OVERLAY_ID);
-          hideOverlay();
-        },
+        onClose: () => hideOverlay(session),
         data,
       });
+      if (!session.isCurrent()) return;
       activeOverlayModule = module;
       trackAnalyticsEvent("module_opened", {
         module,
         mode: "remote_bundle",
       });
     } catch (err) {
+      if (!session.isCurrent()) return;
+      session.clear();
+      if (!session.isCurrent()) return;
+      session.own(() => { container.textContent = ""; });
       const message = err instanceof Error ? err.message : "Ошибка загрузки";
-      container.innerHTML = `<div class="overlay-loading">${message}</div>`;
+      showOverlayError(container, message);
       trackClientError(
         "overlay.module_open_failed.remote_bundle",
         err,
