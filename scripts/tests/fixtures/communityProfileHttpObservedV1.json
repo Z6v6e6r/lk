@@ -1,0 +1,23 @@
+{
+  "sourceFlowSha256": "f3b860cadac4b0ea74acb5a112daa99adc151f03b83f5dc728634beb0567c78f",
+  "nodeSha256": "77daa395a3b6df9b26e4f87016f96c5d5c599f859277d2b7a10321e66bd5259e",
+  "node": {
+    "id": "community-policy-verified-actor-v1-http",
+    "type": "http request",
+    "z": "community-policy-verified-actor-v1",
+    "name": "Community actor Viva profile",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "persist": false,
+    "senderr": true,
+    "x": 0,
+    "y": 0,
+    "wires": [
+      [
+        "community-policy-verified-actor-v1-response"
+      ]
+    ]
+  }
+}

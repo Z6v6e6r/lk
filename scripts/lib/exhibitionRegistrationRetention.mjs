@@ -1,4 +1,4 @@
-import {isDeepStrictEqual} from 'node:util';
+import {sameRuntimeNode} from './communityRuntimeNode.mjs';
 import crypto from 'node:crypto';
 import {prepareEventErasure, verifyEventErasureAck} from '../prepare_event_erasure.mjs';
 import {eventRetentionUntil} from '../../src/services/community-policy.ts';
@@ -98,6 +98,6 @@ node.warn('EXHIBITION_REGISTRATION_RETENTION_V1 '+JSON.stringify(out));return nu
   ];
   const actual=flow.filter(node=>node.id.startsWith(PREFIX));
   if(!actual.length) flow.push(...definitions);
-  else if(actual.length!==definitions.length || definitions.some(expected=>!isDeepStrictEqual(actual.find(node=>node.id===expected.id),expected))) throw new Error('EXHIBITION_RETENTION_GRAPH_DRIFT');
+  else if(actual.length!==definitions.length || definitions.some(expected=>!sameRuntimeNode(actual.find(node=>node.id===expected.id),expected))) throw new Error('EXHIBITION_RETENTION_GRAPH_DRIFT');
   return flow;
 }

@@ -1,4 +1,4 @@
-import { isDeepStrictEqual } from 'node:util';
+import { sameRuntimeNode } from './communityRuntimeNode.mjs';
 import { createHash } from 'node:crypto';
 import { parseEventRegistrationPolicy, eventRetentionUntil } from '../../src/services/community-policy.ts';
 import { COMMUNITY_AUTH_SUBFLOW } from './communityPolicyAuth.mjs';
@@ -75,7 +75,7 @@ export function addEventAdmissionRoutes(input) {
     if (expected.type==='http in' && [COMMUNITY_AUTH_SUBFLOW+'-entry-'+expected.id,COMMUNITY_AUTH_SUBFLOW+'-budget-'+expected.id].includes(actual?.wires?.[0]?.[0])) comparable.wires=actual.wires;
     if (expected.id === prefix+'-apply' && typeof actual?.func === 'string' &&
         createHash('sha256').update(actual.func).digest('hex') === '3c351e3e45f2a15f879f66d93e3273eb2c984ad799153d7985bf5947f0baedcc') comparable.func=actual.func;
-    if (!isDeepStrictEqual(actual,comparable)) throw new Error('EVENT_ADMISSION_GRAPH_DRIFT');
+    if (!sameRuntimeNode(actual,comparable)) throw new Error('EVENT_ADMISSION_GRAPH_DRIFT');
   }
   flow.find(n=>n.id===prefix+'-apply').func=APPLY;
   return flow;

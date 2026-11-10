@@ -50,6 +50,18 @@ has the same mode and a server-derived individual `retentionUntil`. Only known V
 bytes can upgrade, while modified or unknown guards fail closed. V2 and V3 fixtures are frozen
 from actual predecessor source, not reconstructed by editing the new guard.
 
+Candidate graph comparisons preserve finite top-level Node-RED editor `x`/`y` values and
+ignore only those two positions when matching managed definitions. All other fields,
+including nested wiring, code, clients, disabled state, libraries and Catch scope, remain
+exact. The profile HTTP node additionally accepts only the frozen observed predecessor
+`communityProfileHttpObservedV1.json` (source digest and node digest pinned in code), which
+omitted both `requestTimeout`/`followRedirects` node properties; the builder restores both
+explicit source properties and preserves its positions. One missing property, different
+values or any other runtime field change is rejected. Actual Node-RED 4.0.9 dispatch still
+uses the unchanged message-level `requestTimeout=10000` and `followRedirects=false`; node
+property restoration alone is not proof of transport behavior. This is source compatibility,
+not permission to admit unknown live drift or to skip fresh preimage/review/rollback gates.
+
 The owner separately authorized a temporary full-client game test on November 10. This does
 not permanently open the game or move the final November 12–13 game window. Any test-only
 game opening must be bounded and closed afterwards; **do not close the community afterwards**.
