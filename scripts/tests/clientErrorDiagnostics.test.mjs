@@ -23,6 +23,8 @@ test('pending resend keeps event ID; legacy preserves untrusted device time; no 
  const api = load(read('src/utils/analytics.ts'), {
    react: { useEffect() {} }, './errorDiagnostics': helpers, './errorDiagnosticsCore.mjs': core, './diagnosticBudget.mjs': budget,
    '../consts/api_config': { SERV2: 'https://synthetic.invalid', TENANT_KEY: 'synthetic' },
+   '../consts/tenantIntegrations.ts': { IS_ACADEMY_TENANT: false, academyEndpoint: () => { throw new Error('Primary diagnostics must not use academy transport'); } },
+   './authTokenStorage.ts': { readAuthToken: () => { throw new Error('Primary diagnostics must not read academy authorization'); } },
    './firebase': { trackFirebaseAnalyticsEvent: (...args) => firebase.push(args) },
    './lkApiBaseUrls': { resolveLkApiBaseUrlCandidates: () => ['https://synthetic.invalid'], buildProjectUrlCandidates: v => [v] },
    './lkIdleDataGuard': { isLkIdleRequestPaused: () => false },
@@ -80,6 +82,8 @@ test('legacy migration keeps a session-stable event ID even if localStorage writ
  const api = load(read('src/utils/analytics.ts'), {
   react: { useEffect() {} }, './errorDiagnostics': helpers, './errorDiagnosticsCore.mjs': core, './diagnosticBudget.mjs': budget,
   '../consts/api_config': { SERV2: 'https://synthetic.invalid', TENANT_KEY: 'synthetic' },
+   '../consts/tenantIntegrations.ts': { IS_ACADEMY_TENANT: false, academyEndpoint: () => { throw new Error('Primary diagnostics must not use academy transport'); } },
+   './authTokenStorage.ts': { readAuthToken: () => { throw new Error('Primary diagnostics must not read academy authorization'); } },
   './firebase': { trackFirebaseAnalyticsEvent() {} },
   './lkApiBaseUrls': { resolveLkApiBaseUrlCandidates: () => ['https://synthetic.invalid'], buildProjectUrlCandidates: v => [v] },
   './lkIdleDataGuard': { isLkIdleRequestPaused: () => false },
@@ -96,6 +100,8 @@ test('browser error burst bounds online delivery and retains exact aggregate sup
  const api = load(read('src/utils/analytics.ts'), {
   react: { useEffect() {} }, './errorDiagnostics': helpers, './errorDiagnosticsCore.mjs': core, './diagnosticBudget.mjs': budget,
   '../consts/api_config': { SERV2: 'https://synthetic.invalid', TENANT_KEY: 'synthetic' },
+   '../consts/tenantIntegrations.ts': { IS_ACADEMY_TENANT: false, academyEndpoint: () => { throw new Error('Primary diagnostics must not use academy transport'); } },
+   './authTokenStorage.ts': { readAuthToken: () => { throw new Error('Primary diagnostics must not read academy authorization'); } },
   './firebase': { trackFirebaseAnalyticsEvent() {} },
   './lkApiBaseUrls': { resolveLkApiBaseUrlCandidates: () => ['https://synthetic.invalid'], buildProjectUrlCandidates: v => [v] },
   './lkIdleDataGuard': { isLkIdleRequestPaused: () => false },
