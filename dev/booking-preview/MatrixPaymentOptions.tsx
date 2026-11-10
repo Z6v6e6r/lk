@@ -15,8 +15,10 @@ function PaymentIcon({ kind }: { kind: PaymentKind }) {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[kind]} /></svg>;
 }
 
+const ENERGY_PASS_PRICE = 19800;
+
 const optionNames: Record<PaymentKind, string> = {
-  full: 'Полная цена', residency: 'С Резидентством', subscription: 'По подписке', pass: 'По абонементу',
+  full: 'Полная цена', residency: 'С Резидентством', subscription: 'По подписке', pass: 'По абонементу Энергия 5',
 };
 
 export function MatrixPaymentOptions({ service, eventKey, disabled = false, excludesPrivileges = false, durationMinutes }: { service: ServiceKind; eventKey: string; disabled?: boolean; excludesPrivileges?: boolean; durationMinutes?: number }) {
@@ -42,6 +44,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
 
   const title = (option: PaymentOption) => {
     if (option.kind !== 'subscription') return optionNames[option.kind];
+    if (!settings.profile.subscription && !excludedGroup) return 'Бесплатно при наличии подписки';
     if (option.benefit === 'discount') return `По подписке · скидка ${price.discount}%`;
     if (option.benefit === 'partial-hour') return 'По подписке · 60 минут бесплатно';
     if (option.benefit === 'free-training') return 'По подписке · 1 тренировка в день';
@@ -62,11 +65,11 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       if (option.benefit === 'free-hour') return `${prefix}Дневной лимит доступен · запись на ${option.freeMinutes} мин. без доплаты`;
       return `${prefix}Дневная бесплатная тренировка доступна · без списания абонемента`;
     }
-    return option.mode === 'offer' ? 'Если выбрать подходящий пакет посещений' : 'Осталось 3 посещения · спишется одно';
+    return option.mode === 'offer' ? 'Пакет из 5 посещений · для записи нужен подходящий абонемент' : 'Осталось 3 посещения · спишется одно';
   };
   const amount = (option: PaymentOption) => option.mode === 'unavailable' ? 'Не действует'
     : option.benefit === 'partial-hour' ? 'Нужен расчёт'
-      : option.kind === 'pass' ? '1 посещение' : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
+      : option.kind === 'pass' ? option.mode === 'offer' ? formatRubles(ENERGY_PASS_PRICE) : '1 посещение' : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
   const confirmText = choice?.kind === 'subscription' ? choice.benefit === 'discount' ? `Записаться по подписке за ${formatRubles(choice.amount!)}` : 'Записаться по подписке бесплатно'
     : choice?.kind === 'pass' ? 'Списать 1 посещение и записаться'
       : `Записаться за ${formatRubles(choice?.amount || price.price)}`;
@@ -101,7 +104,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
           if (option.mode === 'book') return <label className={classes} key={option.kind}>
             <input type="radio" name={`${groupId}-method`} value={option.kind} checked={choice?.kind === option.kind} disabled={locked} onChange={() => setSelected(option.kind)} />{copy}
           </label>;
-          if (option.mode === 'offer') return <button type="button" className={classes} key={option.kind} onClick={() => setInformation(option.kind)} aria-label={`Подробнее: ${title(option)}`}>{copy}</button>;
+          if (option.mode === 'offer') return <button type="button" className={classes} key={option.kind} onClick={() => setInformation(option.kind)} aria-label={`Подробнее: ${title(option)}${option.kind === 'pass' ? ` — ${formatRubles(ENERGY_PASS_PRICE)}` : ''}`}>{copy}</button>;
           return <div className={classes} key={option.kind} aria-disabled="true">{copy}</div>;
         })}
       </fieldset>
@@ -110,12 +113,12 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
       <p className="matrix-payment-footnote">Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.</p>
     </>}
-    <Modal isOpen={information !== null} onClose={() => setInformation(null)} title={information === 'residency' ? 'Резидентство' : information === 'pass' ? 'Абонемент' : 'Подписка'} variant="dialog">
+    <Modal isOpen={information !== null} onClose={() => setInformation(null)} title={information === 'residency' ? 'Резидентство' : information === 'pass' ? 'Абонемент Энергия 5' : 'Подписка'} variant="dialog">
       <div className="matrix-information">
         {information === 'residency' ? <><h3>{formatRubles(price.residentPrice)} вместо {formatRubles(price.price)}</h3><p>С Резидентством скидка на игры — 30%, на турниры и групповые тренировки — 50%.</p><p>Тапочки, полотенце и ракетка — бесплатно.</p></>
           : information === 'subscription' ? <><h3>Запись по условиям подписки</h3><p>Тариф может включать одну бесплатную тренировку или один бесплатный час в день. После использования дневного лимита действуют скидки по подписке: 30% на игры, 50% на групповые и турниры. Исключённые категории групповых не участвуют. При частичном покрытии часа доплата рассчитывается отдельно.</p></>
-            : <><h3>Пакет посещений</h3><p>Выберите абонемент, подходящий к этому событию. Запись списывает одно доступное посещение.</p></>}
-        <p className="matrix-information-note">Условия и стоимость оформления уточняются отдельно. Этот вариант не активирует привилегию автоматически.</p>
+            : <><h3>Энергия 5 — {formatRubles(ENERGY_PASS_PRICE)}</h3><p>Пакет из 5 посещений. Запись на подходящее событие списывает одно доступное посещение. Это стоимость всего абонемента, а не одной записи.</p></>}
+        <p className="matrix-information-note">{information === 'pass' ? 'Абонемент применяется только к подходящим событиям. Покупка абонемента и запись на событие — отдельные действия.' : 'Условия и стоимость оформления уточняются отдельно. Этот вариант не активирует привилегию автоматически.'}</p>
         <button type="button" className="matrix-confirm" onClick={() => setInformation(null)}>Понятно</button>
       </div>
     </Modal>
