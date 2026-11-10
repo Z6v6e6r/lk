@@ -1,4 +1,4 @@
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { useAuth, AuthProvider } from './auth';
 import { AppErrorBoundary } from '../../src/components/UI/AppErrorBoundary';
 import { OverlayScopeProvider } from '../../src/context/OverlayScopeContext';
@@ -7,6 +7,7 @@ import GamesPage from '../../src/components/games/GamesPage';
 import FindGamePage from '../../src/components/games/FindGamePage';
 import GroupSchedulePage from '../../src/components/group-schedule/GroupSchedulePage';
 import TournamentSignupPage from '../../src/components/tournament-signup/TournamentSignupPage';
+import { MatrixPaymentOptions } from './MatrixPaymentOptions';
 import { eventDate } from './fixtures';
 import '../../src/index.css';
 import '../../src/MyApp.css';
@@ -35,6 +36,7 @@ function Screen() {
   const back = () => navigate(screen.includes('training') ? 'training-booking' : screen.includes('tournament') ? 'tournament-booking' : 'game-list');
   if (!isAuthenticated && (screen === 'game-booking' || screen === 'game-join')) return <AuthForm onLogin={() => {}} />;
   switch (screen) {
+    case 'matrix': return <div className="matrix-comparison"><h1>Способы записи на услуги</h1><p>Выберите привилегии в панели стенда — варианты обновятся для всех трёх услуг.</p><div>{(['game', 'training', 'tournament'] as const).map(service => <MatrixPaymentOptions key={service} service={service} eventKey={`demo-comparison-${service}`} />)}</div></div>;
     case 'game-booking': return <GamesPage onBack={back} publicCreateEntry />;
     case 'game-join': return <GamesPage onBack={back} openGameId="demo-game" />;
     case 'game-list': return <FindGamePage onBack={back} cabinetUrl="?screen=game-list" includeGamePlusTrainer />;
@@ -46,7 +48,10 @@ function Screen() {
   }
 }
 
-createRoot(document.getElementById('root')!).render(
+// Preserve the React root when shared fixture/model edits re-evaluate an entry.
+const previewRoot: Root = import.meta.hot?.data.previewRoot || createRoot(document.getElementById('root')!);
+if (import.meta.hot) import.meta.hot.data.previewRoot = previewRoot;
+previewRoot.render(
   <AppErrorBoundary module="booking-preview"><OverlayScopeProvider value={false}>
     <AuthProvider><Screen /></AuthProvider>
   </OverlayScopeProvider></AppErrorBoundary>,

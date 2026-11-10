@@ -1,6 +1,7 @@
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { useState } from 'react';
 import './preview.css';
+import { PRIVILEGE_PROFILES, readMatrixSettings } from './paymentMatrix';
 
 const screens = [
   ['game-booking', 'Игра', 'Выбор станции, корта и времени'],
@@ -10,6 +11,7 @@ const screens = [
   ['training-join', 'К тренировке', 'Детали и варианты записи'],
   ['tournament-join', 'К турниру', 'Состав, регламент и запись'],
   ['game-list', 'Поиск игр', 'Открытые игры и игра с тренером'],
+  ['matrix', 'Сравнить услуги', 'Все способы записи рядом'],
 ] as const;
 const states = [
   ['ready', 'Есть места'], ['full', 'Нет мест'], ['registered', 'Уже записан'],
@@ -23,7 +25,11 @@ function Preview() {
   const [state, setState] = useState(params.get('state') || 'ready');
   const [width, setWidth] = useState(params.get('width') === 'mobile' ? 'mobile' : 'desktop');
   const [revision, setRevision] = useState(0);
-  const query = new URLSearchParams({ screen, state, width });
+  const matrix = readMatrixSettings(params);
+  const [privileges, setPrivileges] = useState<string>(matrix.profile.id);
+  const [subscriptionFits, setSubscriptionFits] = useState(matrix.applicability.subscription);
+  const [passFits, setPassFits] = useState(matrix.applicability.pass);
+  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0' });
   const frameUrl = `/dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const updateUrl = (key: string, value: string) => {
     query.set(key, value);
@@ -63,12 +69,25 @@ function Preview() {
           <a href={frameUrl} target="_blank" rel="noreferrer">Открыть экран ↗</a>
         </div>
       </header>
+      <section className="preview-privileges" aria-label="Условия матрицы">
+        <label>Ваши привилегии <select value={privileges} onChange={event => { setPrivileges(event.target.value); updateUrl('privileges', event.target.value); }}>
+          {PRIVILEGE_PROFILES.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+        </select></label>
+        <div className="preview-applicability">
+          <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Подписка подходит</label>
+          <label><input type="checkbox" checked={passFits} onChange={event => { setPassFits(event.target.checked); updateUrl('passFits', event.target.checked ? '1' : '0'); }} />Абонемент подходит</label>
+        </div>
+        <span>Игра 4 000 ₽ · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
+      </section>
       <div className={`preview-stage preview-stage--${width}`}>
-        <iframe key={`${screen}-${state}-${revision}`} src={frameUrl} title="Интерфейс записи PadlHub"
+        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}`} src={frameUrl} title="Интерфейс записи PadlHub"
           sandbox="allow-scripts allow-same-origin" />
       </div>
     </main>
   </div>;
 }
 
-createRoot(document.getElementById('root')!).render(<Preview />);
+// Preserve the React root when shared fixture/model edits re-evaluate an entry.
+const previewRoot: Root = import.meta.hot?.data.previewRoot || createRoot(document.getElementById('root')!);
+if (import.meta.hot) import.meta.hot.data.previewRoot = previewRoot;
+previewRoot.render(<Preview />);
