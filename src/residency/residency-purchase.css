@@ -1,7 +1,43 @@
-.ph-residency-purchase { box-sizing: border-box; max-width: 560px; margin: 32px auto; padding: 24px; font: 16px/1.5 Arial, sans-serif; color: #1a1a1a; }
-.ph-residency-purchase > h1 { font-size: 28px; line-height: 1.2; }
-.ph-residency-purchase > button { padding: 12px 18px; border: 0; border-radius: 8px; background: #252525; color: white; font: inherit; cursor: pointer; }
-.ph-residency-purchase > button:focus-visible { outline: 2px solid #7353d9; outline-offset: 3px; }
+@font-face {
+  font-family: 'Residency Dewi';
+  src: url('../fonts/rf-dewi-ultrabold.woff2') format('woff2');
+  font-weight: 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Residency Expanded';
+  src: url('../fonts/rf-dewi-expanded-ultrabold-italic.woff2') format('woff2');
+  font-weight: 800;
+  font-style: italic;
+  font-display: swap;
+}
+.ph-residency-purchase { box-sizing: border-box; width: 100%; max-width: 608px; margin: 0 auto; padding: 24px; font: 16px/1.4 Arial, sans-serif; color: #363636; }
+.ph-residency-purchase .ph-residency-card { box-sizing: border-box; display: flex; flex-direction: column; min-height: 700px; padding: 40px 28px 24px; border-radius: 32px; background: #fff; }
+.ph-residency-purchase .ph-residency-badge { display: flex; align-items: center; align-self: flex-start; gap: 8px; max-width: 100%; box-sizing: border-box; margin: 0; padding: 0 16px 2px 10px; border-radius: 7px; background: #ad71ff; color: #fff; font: italic 800 clamp(20px, 5.7vw, 32px)/1.35 'Residency Expanded', Arial, sans-serif; text-transform: uppercase; transform: skewX(-12deg); }
+.ph-residency-purchase .ph-residency-badge > span { transform: skewX(12deg); }
+.ph-residency-purchase .ph-residency-plus { font: italic 800 1.5em/.9 Arial, sans-serif; }
+.ph-residency-purchase .ph-residency-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin: 36px 0 28px; }
+.ph-residency-purchase .ph-residency-price strong { color: #000; font: 800 clamp(46px, 12vw, 76px)/1 'Residency Dewi', Arial, sans-serif; letter-spacing: -2px; white-space: nowrap; }
+.ph-residency-purchase .ph-residency-price > span { color: #b4b4b4; font-size: clamp(17px, 4vw, 25px); white-space: nowrap; }
+.ph-residency-purchase .ph-residency-divider { width: 100%; margin: 0 0 44px; border: 0; border-top: 1px solid #b48aff; }
+.ph-residency-purchase .ph-residency-benefits { display: grid; gap: 16px; margin: 0; padding: 0; list-style: none; }
+.ph-residency-purchase .ph-residency-benefits li { display: flex; align-items: baseline; gap: 10px; }
+.ph-residency-purchase .ph-residency-benefits strong { flex: 0 0 auto; padding: 2px 8px; border-radius: 20px; background: #efe6ff; color: #650cbd; font-size: 14px; line-height: 1.3; }
+.ph-residency-purchase .ph-residency-equipment { margin: 52px 12px 48px; }
+.ph-residency-purchase .ph-residency-equipment h2 { margin: 0 0 12px; color: #222; font-size: 16px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; }
+.ph-residency-purchase .ph-residency-equipment ul { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.ph-residency-purchase .ph-residency-equipment li { display: flex; justify-content: space-between; align-items: center; gap: 16px; font-size: 20px; }
+.ph-residency-purchase .ph-residency-included { display: inline-flex; flex: 0 0 auto; justify-content: flex-end; align-items: center; box-sizing: border-box; width: 44px; height: 24px; padding: 2px; border-radius: 24px; background: #7e2bc4; }
+.ph-residency-purchase .ph-residency-included::after { content: ''; width: 20px; height: 20px; border-radius: 50%; background: #fff; }
+.ph-residency-purchase .ph-residency-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ph-residency-purchase .ph-residency-cta { width: 100%; min-height: 52px; margin-top: auto; padding: 14px 18px; border: 0; border-radius: 14px; background: #7e2bc4; color: #fff; font: 700 17px/1.4 Arial, sans-serif; cursor: pointer; }
+.ph-residency-purchase .ph-residency-cta:hover { background: #6921aa; }
+.ph-residency-purchase .ph-residency-cta:focus-visible { outline: 3px solid #7353d9; outline-offset: 4px; }
+@media (max-width: 400px) {
+  .ph-residency-purchase { padding: 16px 12px; }
+  .ph-residency-purchase .ph-residency-card { min-height: 660px; padding: 32px 20px 20px; border-radius: 26px; }
+  .ph-residency-purchase .ph-residency-equipment { margin-inline: 8px; }
+}
 .ph-residency-purchase .ph-zero-dialog { position: fixed; margin: auto; padding: 20px; border: 1px solid #ededed; border-radius: 18px; background: white; overflow: auto; }
 .ph-residency-purchase .subscription-auth-close { position: absolute; top: 8px; right: 8px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: #f5f5f7; color: #353436; font-size: 26px; line-height: 1; cursor: pointer; }
 .ph-residency-purchase .ph-zero-dialog .auth-wrapper { min-height: auto; padding: 0; background: transparent; justify-content: flex-start; }
