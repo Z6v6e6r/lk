@@ -9,8 +9,8 @@ async function load(entry,tenant='005JDA',extra={}){
 }
 function browser(){
  const cookies=new Map([['padlhubAuthToken','primary-access'],['padlhubRefreshToken','primary-refresh']]);
- const local=new Map([['padlhub_auth_token_v1',JSON.stringify({token:'primary-local',expiresAt:null})],['padlhub_refresh_token_v1',JSON.stringify({token:'primary-refresh-local',expiresAt:null})]]);
- const session=new Map([['padlhub_viva_oauth_pending_v1','primary-oauth'],['padlhub_subscription_snapshot_v1','primary-snapshot'],['padlhub_tournament_pending_v1:fixture','primary-payment']]);
+ const local=new Map([['padlhub_auth_token_v1',JSON.stringify({token:'primary-local',expiresAt:null})],['padlhub_refresh_token_v1',JSON.stringify({token:'primary-refresh-local',expiresAt:null})],['padlhub:tournament-payment:fixture','primary-payment']]);
+ const session=new Map([['padlhub_viva_oauth_pending_v1','primary-oauth'],['padlhub_subscription_snapshot_v1','primary-snapshot']]);
  const storage=map=>({getItem:k=>map.get(k)??null,setItem:(k,v)=>map.set(k,String(v)),removeItem:k=>map.delete(k),key:i=>[...map.keys()][i]??null,get length(){return map.size}});
  const previous={window:globalThis.window,document:globalThis.document};
  const doc={};Object.defineProperty(doc,'cookie',{get:()=>[...cookies].map(([k,v])=>k+'='+v).join('; '),set:value=>{const [pair]=value.split(';'),[k,...v]=pair.split('=');if(value.includes('expires=Thu, 01 Jan 1970'))cookies.delete(k);else cookies.set(k,v.join('='));}});
@@ -22,11 +22,11 @@ test('005JDA read/write/logout never adopts or clears primary tenant credentials
   const auth=await load('src/utils/vivaAuthStorage.ts');assert.equal(auth.readVivaAccessToken(),null);assert.equal(auth.readVivaRefreshToken(),null);
   auth.persistVivaAuthTokens('academy-access',300,'academy-refresh',600);assert.equal(auth.readVivaAccessToken(),'academy-access');assert.equal(b.cookies.get('padlhubAuthToken'),'primary-access');assert.equal(b.cookies.get('005JDAAuthToken'),'academy-access');
   const mode=await load('src/utils/authMode.ts');assert.equal(mode.getVivaOAuthStorageKey(),'lk_005JDA_viva_oauth_pending_v1');assert.equal(mode.hasPendingVivaOAuthState(),false);
-  auth.clearVivaAuthTokens();assert.equal(auth.readVivaAccessToken(),null);assert.equal(b.cookies.get('padlhubAuthToken'),'primary-access');assert.equal(b.cookies.get('padlhubRefreshToken'),'primary-refresh');assert.ok(b.local.has('padlhub_auth_token_v1'));assert.equal(b.session.get('padlhub_subscription_snapshot_v1'),'primary-snapshot');assert.equal(b.session.get('padlhub_tournament_pending_v1:fixture'),'primary-payment');
+  auth.clearVivaAuthTokens();assert.equal(auth.readVivaAccessToken(),null);assert.equal(b.cookies.get('padlhubAuthToken'),'primary-access');assert.equal(b.cookies.get('padlhubRefreshToken'),'primary-refresh');assert.ok(b.local.has('padlhub_auth_token_v1'));assert.equal(b.session.get('padlhub_subscription_snapshot_v1'),'primary-snapshot');assert.equal(b.local.get('padlhub:tournament-payment:fixture'),'primary-payment');
  }finally{b.restore();}
 });
 test('primary tenant continues using exact canonical and legacy cookie names',async()=>{
- const b=browser();try{const auth=await load('src/utils/vivaAuthStorage.ts','iSkq6G');assert.equal(auth.readVivaAccessToken(),'primary-access');auth.persistVivaAuthTokens('primary-next',300,'primary-next-refresh',600);assert.equal(b.cookies.get('padlhubAuthToken'),'primary-next');assert.equal(b.cookies.get('iSkq6GAuthToken'),'primary-next');const mode=await load('src/utils/authMode.ts','iSkq6G');assert.equal(mode.getVivaOAuthStorageKey(),'padlhub_viva_oauth_pending_v1');}finally{b.restore();}
+ const b=browser();try{const auth=await load('src/utils/vivaAuthStorage.ts','iSkq6G');assert.equal(auth.readVivaAccessToken(),'primary-access');auth.persistVivaAuthTokens('primary-next',300,'primary-next-refresh',600);assert.equal(b.cookies.get('padlhubAuthToken'),'primary-next');assert.equal(b.cookies.get('iSkq6GAuthToken'),'primary-next');const mode=await load('src/utils/authMode.ts','iSkq6G');assert.equal(mode.getVivaOAuthStorageKey(),'padlhub_viva_oauth_pending_v1');auth.clearVivaAuthTokens();assert.equal(b.local.has('padlhub:tournament-payment:fixture'),false);}finally{b.restore();}
 });
 test('Rodina canonical consent documents and endpoint never fall back to PadlHub',async()=>{
  const c=await load('src/utils/authConsents.ts');assert.equal(c.AUTH_CONSENT_DOCUMENT_SET_VERSION,'2026-11-10-rodina');assert.deepEqual(c.AUTH_CONSENT_DOCUMENTS.map(d=>d.url),['https://cg178013.tw1.ru/docs/service-rules.pdf','https://cg178013.tw1.ru/docs/privacy-policy.pdf']);

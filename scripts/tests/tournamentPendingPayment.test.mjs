@@ -60,10 +60,10 @@ test('F5/F6 binding, expiry, logout and unchanged valid recovery', async () => {
   }
 });
 
-test('payment action rechecks expiry and auth; logout clears every payment partition', () => {
+test('payment action rechecks expiry and auth; primary logout clears every payment partition', () => {
   const page = fs.readFileSync(new URL('../../src/components/tournament-signup/TournamentSignupPage.tsx', import.meta.url), 'utf8');
   const auth = fs.readFileSync(new URL('../../src/utils/authTokenStorage.ts', import.meta.url), 'utf8');
   assert.match(page, /registrationSessionIdentity !== tournamentPaymentSessionIdentity\(readAuthToken\(\)\) \|\| !canPayTournamentPending\(registration\)/);
   assert.match(page, /tournamentPaymentSessionIdentity\(paymentToken\) !== tournamentPaymentSessionIdentity\(readAuthToken\(\)\)/);
-  assert.match(auth, /export function clearAuthTokens\(\) \{\s*clearTournamentPendingPayments\(\)/);
+  assert.match(auth, /export function clearAuthTokens\(\) \{\s*if \(TENANT_STORAGE.primary\) clearTournamentPendingPayments\(\)/);
 });

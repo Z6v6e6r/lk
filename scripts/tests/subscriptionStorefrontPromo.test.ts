@@ -178,7 +178,7 @@ test('shared API preserves legacy retry behavior and honors the promo no-retry o
   const start = source.indexOf('export async function apiBuySubscroption(');
   const end = source.indexOf('const TOURNAMENT_SUBSCRIPTION_PLAN_TYPES', start);
   const calls: [string, { retries: number; auth: boolean; body: string }][] = [];
-  const context = { exports: {} as Pick<typeof import('../../src/utils/apiClient'), 'apiBuySubscroption'>, API_BASE: 'https://fixture.invalid', TENANT_KEY: 'fixture', SUCCESS_URL: '/ok', FAIL_URL: '/fail',
+  const context = { exports: {} as Pick<typeof import('../../src/utils/apiClient'), 'apiBuySubscroption'>, IS_ACADEMY_TENANT: false, API_BASE: 'https://fixture.invalid', TENANT_KEY: 'fixture', SUCCESS_URL: '/ok', FAIL_URL: '/fail',
     request: async (...args: [string, { retries: number; auth: boolean; body: string }]) => { calls.push(args); return {}; },
   };
   vm.runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
