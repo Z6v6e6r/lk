@@ -94,7 +94,7 @@ test('community logo absence produces no requests; explicit legacy and modern UR
 
 function sender(fetch, paused = false) {
   return extractedFunction('src/utils/analytics.ts', 'async function sendEvent(', 'async function flushPendingEvents(', {
-    fetch, isLkIdleRequestPaused: () => paused,
+    IS_ACADEMY_TENANT: false, fetch, isLkIdleRequestPaused: () => paused,
     resolveAnalyticsEndpoints: () => ['https://example.test/lk/analytics/events'],
     NON_RETRYABLE_HTTP_STATUSES: new Set([400, 401, 403, 404, 405, 413, 415, 422]),
     navigator: { sendBeacon: () => { throw new Error('Must observe HTTP delivery'); } },

@@ -169,7 +169,7 @@ test('real subscription create serializes the exact promo code and disables retr
   const start = source.indexOf('export async function apiBuySubscroption(');
   const end = source.indexOf('\nconst TOURNAMENT_SUBSCRIPTION_PLAN_TYPES', start);
   const calls: { options: { body: string; retries: number } }[] = [];
-  const exports = load('', { API_BASE: 'https://provider.example', TENANT_KEY: 'synthetic-tenant', SUCCESS_URL: 'https://return.example/success', FAIL_URL: 'https://return.example/fail',
+  const exports = load('', { IS_ACADEMY_TENANT: false, API_BASE: 'https://provider.example', TENANT_KEY: 'synthetic-tenant', SUCCESS_URL: 'https://return.example/success', FAIL_URL: 'https://return.example/fail',
     request: async (_url: string, options: never) => { calls.push({ options }); return { data: null, error: null }; },
   }, {}, source.slice(start, end));
   await exports.apiBuySubscroption(price.productId, phone, { promoCode: ' SYNTHETIC ', retries: 1 });

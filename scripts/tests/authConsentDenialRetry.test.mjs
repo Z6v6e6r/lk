@@ -23,6 +23,8 @@ function client({ status = 401, saved = storage(), crypto = webcrypto } = {}) {
       setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id) },
     fetch: async (url, options) => { calls.push({ url, options }); return { ok: status >= 200 && status < 300, status }; },
     require: id => {
+      if (id.endsWith('tenantIntegrations.ts')) return { IS_ACADEMY_TENANT: false, academyEndpoint: () => { throw new Error('Academy endpoint must not serve primary-tenant consent'); } };
+      if (id.endsWith('academyTenantContract.ts')) return { ACADEMY_TENANT_CONTRACT: {} };
       if (id.endsWith('api_config')) return { SERV2: 'https://api.example.test', SERV2_FALLBACK: 'https://fallback.example.test', TENANT_KEY: 'fixture' };
       if (id.endsWith('authTokenStorage')) return { readAuthToken: () => token };
       if (id.endsWith('analytics')) return { trackAnalyticsEvent: () => {}, trackClientError: (...args) => telemetry.push(args) };

@@ -13,6 +13,7 @@ import {
 import { apiFetchCommunities, type CommunityRecord } from "../utils/communityApi";
 import { trackAnalyticsEvent } from "../utils/analytics";
 import { ACADEMY_NEWS, type AcademyNewsDefinition } from "./content";
+import { AcademyBrand } from "./AcademyBrand";
 
 type AcademySnapshot = {
   profile: UserProfileType;
@@ -327,10 +328,7 @@ export function AcademyCabinet() {
   return (
     <div className="academy-page">
       <div className="academy-frame">
-        <div className="academy-glow academy-glow--top-left" aria-hidden="true" />
-        <div className="academy-glow academy-glow--left-rail" aria-hidden="true" />
-        <div className="academy-glow academy-glow--mid" aria-hidden="true" />
-        <div className="academy-glow academy-glow--bottom-right" aria-hidden="true" />
+        <div className="academy-brand-bar"><AcademyBrand /></div>
 
         <header className="academy-profile-header">
           <div className="academy-profile-main">
@@ -361,7 +359,6 @@ export function AcademyCabinet() {
           <section className="academy-main-banner">
             <div className="academy-subscription-block">
               <div className="academy-subscription-card">
-                <div className="academy-subscription-noise" aria-hidden="true" />
                 <div className="academy-subscription-content">
                   <div className="academy-status-pill">{subscriptionStatus}</div>
                   <h1 className="academy-subscription-title">{subscriptionTitle}</h1>
@@ -466,16 +463,13 @@ export function AcademyCabinet() {
             </div>
           </section>
         </main>
-
-        <div className="academy-homebar" aria-hidden="true">
-          <span className="academy-homebar-indicator" />
-        </div>
       </div>
 
       <BuySupscription
         isOpen={isBuyModalOpen}
         onClose={() => setIsBuyModalOpen(false)}
         phone={snapshot.profile.phone}
+        bodyClassName="academy-purchase-body"
       />
     </div>
   );

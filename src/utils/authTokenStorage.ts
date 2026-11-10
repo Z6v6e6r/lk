@@ -2,11 +2,13 @@ import { clearTournamentPendingPayments } from "./tournamentPendingPayment";
 import { invalidateSubscriptionSnapshot } from "./subscriptionSessionCache";
 import { deleteCookie, setCookie } from "./cookies.ts";
 import { AUTH_RUNTIME_TENANT_KEY } from "../consts/authRuntime.ts";
+import { tenantStorageKeys } from "./tenantStorageKeys.ts";
 
-const AUTH_TOKEN_COOKIE_NAME = "padlhubAuthToken";
-const REFRESH_TOKEN_COOKIE_NAME = "padlhubRefreshToken";
-const AUTH_TOKEN_STORAGE_KEY = "padlhub_auth_token_v1";
-const REFRESH_TOKEN_STORAGE_KEY = "padlhub_refresh_token_v1";
+const TENANT_STORAGE = tenantStorageKeys(AUTH_RUNTIME_TENANT_KEY);
+const AUTH_TOKEN_COOKIE_NAME = TENANT_STORAGE.accessCookie;
+const REFRESH_TOKEN_COOKIE_NAME = TENANT_STORAGE.refreshCookie;
+const AUTH_TOKEN_STORAGE_KEY = TENANT_STORAGE.accessStorage;
+const REFRESH_TOKEN_STORAGE_KEY = TENANT_STORAGE.refreshStorage;
 
 type StoredTokenEnvelope = {
   token: string;
@@ -173,7 +175,7 @@ export function persistAuthTokens(
 }
 
 export function clearAuthTokens() {
-  clearTournamentPendingPayments();
+  if (TENANT_STORAGE.primary) clearTournamentPendingPayments();
   invalidateSubscriptionSnapshot();
   clearAuthSessionTokens();
 }

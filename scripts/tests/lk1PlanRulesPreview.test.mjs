@@ -1061,8 +1061,10 @@ const residencyRouterBody=composeResidencyPreview(router);
 const residencyComposition=makeComposition({...composed,router:composeResidencyPreview(composed.router)},residencyRouterBody.slice(residencyRouterBody.indexOf('// Diagnostic observer:')));
 const residencyGlobals={subscriptions_residency_booking_enabled:true,subscriptions_runtime_environment:'PROD',
   subscriptions_runtime_api_base_url:'https://padlhub.su/api',subscriptions_runtime_context_integration_token:'fixture-token-'.repeat(4)};
+// Keep these ordinary-discount fixtures within one Moscow day at every CI hour.
+const nextMoscowMorning = () => new Date(Date.now()+86400000+10800000).toISOString().slice(0,10)+'T10:00:00+03:00';
 test('residency advisory uses CUP with zero visits and never falls back to a local rule',()=>{
-  const date=new Date(Math.ceil((Date.now()+3600000)/1800000)*1800000+10800000).toISOString().slice(0,19)+'+03:00';
+  const date=nextMoscowMorning();
   const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});
   const result=preview({composition:residencyComposition,subscriptions:[row],globals:{...residencyGlobals,subscriptions_residency_booking_enabled:false,subscriptions_residency_preview_enabled:true},
     target:{startsAt:date},residencyContext:({id})=>{const v=residencyFixture({stationId:station,clientSubscriptionId:id,startsAt:date});delete v.startsAt;return v;}});
@@ -1076,7 +1078,7 @@ test('residency advisory uses CUP with zero visits and never falls back to a loc
 });
 
 test('residency group preview applies 50 percent without visit-redemption eligibility',()=>{
-  const date=new Date(Math.ceil((Date.now()+3600000)/1800000)*1800000+10800000).toISOString().slice(0,19)+'+03:00';
+  const date=nextMoscowMorning();
   const exercise={id:uuid(98),studio:{id:station},room:{id:room},direction:{id:6307},type:{id:2349},
     timeFrom:date,timeTo:new Date(Date.parse(date)+3600000).toISOString(),availableClientSubscriptions:[]};
   const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});

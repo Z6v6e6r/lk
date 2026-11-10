@@ -1,6 +1,10 @@
+import { AUTH_RUNTIME_TENANT_KEY } from "../consts/authRuntime.ts";
+import { tenantStorageKeys } from "./tenantStorageKeys.ts";
+
 /** Display snapshots only. Booking/price decisions must always use the server. */
-const STORAGE_KEY = "padlhub_subscription_snapshot_v1";
-const GLOBAL_KEY = "__padlhubSubscriptionSnapshotV1";
+const TENANT_STORAGE = tenantStorageKeys(AUTH_RUNTIME_TENANT_KEY);
+const STORAGE_KEY = TENANT_STORAGE.subscriptionStorage;
+const GLOBAL_KEY = TENANT_STORAGE.subscriptionGlobal;
 const MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const MAX_ENTRIES = 100;
 
@@ -20,7 +24,7 @@ function storage() {
 }
 
 function state(): Snapshot {
-  const host = globalThis as typeof globalThis & { [GLOBAL_KEY]?: Snapshot };
+  const host = globalThis as typeof globalThis & Record<string, Snapshot | undefined>;
   if (!host[GLOBAL_KEY]) {
     host[GLOBAL_KEY] = { scope: "", generation: 0, invalidation: 0, entries: new Map(), pending: new Map() };
   }

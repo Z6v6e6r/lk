@@ -1,3 +1,4 @@
+import { IS_ACADEMY_TENANT, academyEndpoint } from "../consts/tenantIntegrations.ts";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import {
   PushNotifications,
@@ -8,8 +9,8 @@ import {
   type Token,
 } from "@capacitor/push-notifications";
 import {
-  PUSH_REGISTRATION_URL,
-  PUSH_UNREGISTRATION_URL,
+  PUSH_REGISTRATION_URL as PRIMARY_PUSH_REGISTRATION_URL,
+  PUSH_UNREGISTRATION_URL as PRIMARY_PUSH_UNREGISTRATION_URL,
   SERV2,
   SERV2_FALLBACK,
   TENANT_KEY,
@@ -18,6 +19,9 @@ import { readAuthToken } from "./authTokenStorage";
 import { trackAnalyticsEvent, trackClientError } from "./analytics";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
 import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
+
+const PUSH_REGISTRATION_URL = IS_ACADEMY_TENANT ? academyEndpoint("push/register") : PRIMARY_PUSH_REGISTRATION_URL;
+const PUSH_UNREGISTRATION_URL = IS_ACADEMY_TENANT ? academyEndpoint("push/unregister") : PRIMARY_PUSH_UNREGISTRATION_URL;
 
 type PushSyncReason = "token_received" | "auth_changed" | "logout" | "manual";
 
@@ -42,6 +46,7 @@ type FirebaseAvailabilityPlugin = {
 declare global {
   interface Window {
     __LK_PUSH_RUNTIME__?: PushRuntimeState;
+    __LK_PUSH_RUNTIME_005JDA__?: PushRuntimeState;
   }
 }
 
@@ -140,9 +145,9 @@ function resolveRuntimeState(): PushRuntimeState {
     };
   }
 
-  if (window.__LK_PUSH_RUNTIME__) {
-    return window.__LK_PUSH_RUNTIME__;
-  }
+  const runtimeKey = IS_ACADEMY_TENANT ? "__LK_PUSH_RUNTIME_005JDA__" : "__LK_PUSH_RUNTIME__";
+  const existing = window[runtimeKey];
+  if (existing) return existing;
 
   const state: PushRuntimeState = {
     initialized: false,
@@ -151,7 +156,7 @@ function resolveRuntimeState(): PushRuntimeState {
     syncedToken: normalizeToken(readStorage(PUSH_SYNCED_TOKEN_STORAGE_KEY)),
     syncInFlight: null,
   };
-  window.__LK_PUSH_RUNTIME__ = state;
+  window[runtimeKey] = state;
   return state;
 }
 
@@ -238,7 +243,7 @@ function buildRegistrationPayload(token: string) {
 function resolvePushEndpointCandidates(endpointRaw: string | null | undefined) {
   const endpoint = String(endpointRaw || "").trim();
   if (!endpoint) return [];
-  return buildProjectUrlCandidates(endpoint, SERV2, SERV2_FALLBACK);
+  return IS_ACADEMY_TENANT ? [endpoint] : buildProjectUrlCandidates(endpoint, SERV2, SERV2_FALLBACK);
 }
 
 async function postPushPayload(

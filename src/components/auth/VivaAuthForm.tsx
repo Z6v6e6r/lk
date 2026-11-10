@@ -1,3 +1,4 @@
+import { IS_ACADEMY_TENANT } from "../../consts/tenantIntegrations.ts";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import logoHabBlack from "../../assets/logo hab black.svg";
 import resendImg from "../../assets/resend.png";
@@ -138,11 +139,13 @@ export function VivaAuthForm({
   allowPhoneLogin = true,
   allowOAuth = true,
   oauthProviders = ["vkid", "yandex"],
+  brandLogo,
 }: {
   onLogin: () => void;
   allowPhoneLogin?: boolean;
   allowOAuth?: boolean;
   oauthProviders?: readonly VivaOAuthProvider[];
+  brandLogo?: { src: string; alt: string };
 }) {
   const {
     phone,
@@ -326,7 +329,7 @@ export function VivaAuthForm({
     <div className="auth-wrapper">
       <div className="auth-card auth-card-chooser">
         <div className="auth-brand-lockup">
-          <img src={logoHabBlack} alt="ПадлхАБ" className="auth-brand-logo" />
+          <img src={brandLogo?.src ?? logoHabBlack} alt={brandLogo?.alt ?? "ПадлхАБ"} className="auth-brand-logo" />
           <p className="auth-title auth-title--brand">войти в личный кабинет</p>
         </div>
         {allowOAuth && <>{oauthProviders.includes("vkid") && <OAuthButton
@@ -355,14 +358,14 @@ export function VivaAuthForm({
               onChange={(event) => setHasAcceptedOffer(event.target.checked)}
             />
             <label htmlFor={offerConsentId} className="auth-consent__label">
-              Принимаю условия{" "}
+              {IS_ACADEMY_TENANT ? "Принимаю " : "Принимаю условия "}
               <a
                 href={AUTH_CONSENT_DOCUMENTS[0].url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="auth-consent__link"
               >
-                публичной оферты
+                {IS_ACADEMY_TENANT ? "правила оказания услуг" : "публичной оферты"}
               </a>
             </label>
           </div>
