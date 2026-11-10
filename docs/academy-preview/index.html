@@ -23,10 +23,10 @@
           var response = await fetch(baseUrl + "/release-ffc-academy-dev.json?t=" + Date.now(), { cache: "no-store" });
           if (!response.ok) throw new Error("Release unavailable");
           var release = await response.json();
-          if (typeof release.version !== "string" || !release.version.trim()) throw new Error("Invalid release");
+          if (typeof release.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(release.version)) throw new Error("Invalid release");
           window.__LK_RELEASE_VERSION__ = release.version;
           var script = document.createElement("script");
-          script.src = baseUrl + "/ffc-academy-lk-dev.js?v=" + encodeURIComponent(release.version);
+          script.src = baseUrl + "/releases/" + release.version + "/ffc-academy-lk-dev.js";
           script.onerror = showLoadError;
           document.head.appendChild(script);
         } catch {

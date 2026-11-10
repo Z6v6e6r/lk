@@ -2,7 +2,44 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import vm from 'node:vm';
+import { materializeImmutableAcademyBundle } from '../lib/academyReleaseAssets.mjs';
 const require=createRequire(import.meta.url);
+test('academy release paths are immutable and reject unsafe or reused version names',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'academy-assets-'));
+ try{
+  fs.writeFileSync(path.join(dir,'ffc-academy-lk-dev.js'),'first');
+  const first=materializeImmutableAcademyBundle(dir,'20261110T171547Z');
+  assert.equal(first.path,'releases/20261110T171547Z/ffc-academy-lk-dev.js');
+  assert.deepEqual(materializeImmutableAcademyBundle(dir,'20261110T171547Z'),first);
+  fs.writeFileSync(path.join(dir,'ffc-academy-lk-dev.js'),'second');
+  assert.throws(()=>materializeImmutableAcademyBundle(dir,'20261110T171547Z'),/different bytes/);
+  assert.equal(fs.readFileSync(path.join(dir,first.path),'utf8'),'first');
+  const second=materializeImmutableAcademyBundle(dir,'20261110T183347Z');
+  assert.notEqual(first.sha256,second.sha256);
+  for(const version of ['../foreign','',null,'v?query','v/name','v'.repeat(81)])assert.throws(()=>materializeImmutableAcademyBundle(dir,version),/Invalid academy release version/);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+async function previewLoader(version){
+ const html=fs.readFileSync('docs/academy-preview/index.html','utf8'),script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+ const loaded=[],errors=[],requests=[];
+ const document={createElement:tag=>({tag,appendChild(){},setAttribute(){}}),head:{appendChild:node=>loaded.push(node.src)},getElementById:()=>({replaceChildren:node=>errors.push(node.textContent)})};
+ await vm.runInNewContext(script,{URL,Date,window:{location:{href:'https://academy.invalid/lk/academy-preview/index.html',pathname:'/lk/academy-preview/index.html'}},document,fetch:async(url,options)=>{requests.push({url,options});return{ok:true,json:async()=>({version})};}});
+ return{loaded,errors,requests};
+}
+test('new preview HTML loads the manifest generation even across publication and rollback',async()=>{
+ for(const version of ['20261110T171547Z','20261110T183347Z']){
+  const result=await previewLoader(version);
+  assert.deepEqual(result.loaded,[`https://academy.invalid/lk/academy-preview/releases/${version}/ffc-academy-lk-dev.js`]);
+  assert.equal(result.requests[0].options.cache,'no-store');assert.equal(result.errors.length,0);
+ }
+});
+test('preview loader refuses a manifest version that could escape its immutable directory',async()=>{
+ for(const version of ['../foreign','v/name','v?query',null]){const result=await previewLoader(version);assert.equal(result.loaded.length,0);assert.equal(result.errors.length,1);}
+});
 async function load(entry,tenant='005JDA',extra={}){
  const result=await build({entryPoints:[entry],bundle:true,write:false,platform:'node',format:'cjs',jsx:'automatic',define:{'import.meta.env':JSON.stringify({MODE:'dev',VITE_TENANT_KEY:tenant,VITE_ACADEMY_BACKEND_BASE:'https://academy.invalid/lk/analytics/academy-005JDA',...extra})},loader:{'.svg':'text','.png':'dataurl','.webp':'dataurl','.css':'empty'},external:['react','react/jsx-runtime','react-dom'],logLevel:'silent'});
  const m={exports:{}};new Function('require','module','exports',result.outputFiles[0].text)(require,m,m.exports);return m.exports;

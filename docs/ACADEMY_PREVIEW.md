@@ -1,62 +1,43 @@
-# Academy preview with ordinary authorization
+# Rodina academy preview
 
-Owner: PadlHub. Audience: people receiving the review link. The preview uses the
-existing FFC academy application and Viva sign-in, and displays the signed-in
-user's real profile, bookings and subscriptions. It is not a sandbox: the existing
-purchase, consent and push behavior is retained. Freeze/schedule buttons remain
-prototype handlers; publishing does not implement those features.
+Current public URL:
+https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/index.html
 
-The standalone page is `docs/academy-preview/index.html`. Keep the original bundle
-name and a separate academy manifest in the same directory. The page pins its
-active asset base to that directory so releaseGuard cannot select an old manifest
-from the shared `/lk` directory. Backend URLs remain the existing root endpoints.
+The published build7717cf89 has Rodina branding and still uses the primary Viva
+tenant iSkq6G. The prepared tenant005JDA configuration and isolated backend are
+not activated by building the project. Follow [ACADEMY_HANDOFF.md](ACADEMY_HANDOFF.md)
+for the current build, backend, provider callback and deployment requirements.
 
-## Build and verification
+## Release loading and recovery
 
-Use a clean task checkout from pushed source, installed lockfile dependencies and
-the existing ignored public dev build configuration. Set `VITE_CABINET_URL`,
-`VITE_SUCCESS_URL` and `VITE_FAIL_URL` to the exact preview URL for this build so
-OAuth and purchase returns land on the academy page. Never include `.env` files,
-source maps or private exports in the upload.
+`docs/academy-preview/index.html` pins the asset base to its own directory,
+fetches `release-ffc-academy-dev.json` without cache and validates its version as
+one safe path component. It loads `releases/<version>/ffc-academy-lk-dev.js`.
+`build_academy_tenant.mjs` materializes this write-once path and records its SHA256.
+The root bundle copy exists only for compatibility with existing local build
+preflight; do not overwrite the old public root bundle on an existing preview.
 
-```sh
-node scripts/assert-build-env.mjs dev
-npx tsc -b
-npx vite build --config vite.config.academy.ts --mode dev --base ./ --outDir dist/academy-preview
-node scripts/write-release.mjs dist/academy-preview release-ffc-academy-dev.json
-cp docs/academy-preview/index.html dist/academy-preview/index.html
-node scripts/assert-clean-deploy.mjs dist/academy-preview/release-ffc-academy-dev.json
-```
+Before activating the new HTML on an existing URL, seed the old versioned bundle
+from the verified old root bundle. Preserve both immutable versions and the old
+root alias. Upload and verify the new versioned JS before replacing manifest and
+HTML; replace each mutable file atomically, HTML last, with no-store caching.
+Two HTTP requests can cross a release switch, so a directory swap alone is not
+a generation guarantee. A reused version path with different bytes must stop the
+release. Existing old HTML keeps using the old root alias until page refresh.
 
-The proposed target is reserve host `89`, directory
-`/var/www/html/lk/academy-preview`, URL
-`https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/index.html`.
-Confirm that the directory is absent immediately before first publication.
-Publishing to this target requires explicit approval of the prepared release.
-No nginx, auth allowlist, backend, shared LK bundle or shared manifest change is
-needed. A new deployment to an existing directory needs a fresh preimage and
-replacement/recovery plan.
+Rollback restores the saved HTML and manifest first, retaining all bundle
+versions and the old root alias, then disables only the owned backend tab if
+appropriate. Keep consent evidence and foreign flow changes. Do not create real
+purchases or bookings merely to validate publication.
 
-Before publication verify Keycloak accepts the exact callback using the existing
-`widget` client, tenant and identity-provider hint, without signing in. A redirect
-to the provider only verifies callback acceptance, not completion of a real login.
-Verify loading, failure/retry and mobile layout locally. Inspect the outgoing diff
-and packet for secrets/PII and compare local, server and public SHA256 hashes.
-
-For first publication upload assets and the manifest first, and expose index.html
-last. Stop on unexpected existing files, hash mismatch, invalid OAuth redirect,
-API failures or failure to render. Recovery disables only this new preview by
-moving its index.html outside the web root; it must not touch shared LK files.
-Perform authorized browser smoke through a verified route. A real login, profile
-load, provider purchase and payment are separate acceptance evidence; do not create
-bookings or payments merely to validate publication.
+The preview uses real Viva data and purchase endpoints. The transfer guide lists
+prototype UI features and native push delivery prerequisites. Actual login,
+provider purchase, Mongo writes and push delivery require separate acceptance
+evidence. Publishing a prepared tenant cutover needs explicit target approval.
 
 ## Rodina visual identity
 
-The academy uses the navy `#000e18` / `#001522`, cyan `#00b9ed` and white
-identity from https://cg178013.tw1.ru/. Original SVG marks are stored in
-`src/academy/assets/rodina-mark.svg` and `rodina-mark-white.svg` (downloaded from
-the site's `/assets/` URLs) and bundled locally; runtime does not depend on the
-reference site. The theme is scoped to `.academy-shell`. Shared sign-in keeps its
-original logo unless the academy passes the presentation-only `brandLogo` prop.
-The existing API, consent, OAuth, subscription and purchase behavior is unchanged.
+The academy uses navy `#000e18` / `#001522`, cyan `#00b9ed` and white from
+https://cg178013.tw1.ru/. Original SVG marks in `src/academy/assets/` are bundled
+locally. The theme is scoped to `.academy-shell`; shared sign-in receives the
+academy presentation through the existing branding props.
