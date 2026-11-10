@@ -40,6 +40,17 @@ test('auth success, rejected credentials, provider outage and redirect restore t
     { id: 'list', type: 'function', z: 'tab', name: 'List', func: 'return msg;', wires: [[]] }]);
   assert.equal(flow.find(x => x.id.endsWith('-http')).followRedirects, false);
 });
+test('profile verification sets the actual Node-RED message timeout and restores the original own field',()=>{
+  for(const original of [{},{requestTimeout:undefined},{requestTimeout:250000}]) {
+    const msg={...original,req:{headers:{authorization:'Bearer fixture'}},payload:{kept:true}};
+    assert.equal(run(COMMUNITY_AUTH_PREPARE,msg)[0],msg);
+    assert.equal(msg.requestTimeout,10000,'Node-RED4.0.9 reads msg.requestTimeout, not the node config field');
+    msg.statusCode=200;msg.payload={id:'fixture-player'};
+    const restored=run(COMMUNITY_AUTH_RESPONSE,msg)[0];
+    assert.equal(Object.hasOwn(restored,'requestTimeout'),Object.hasOwn(original,'requestTimeout'));
+    assert.equal(restored.requestTimeout,original.requestTimeout);assert.deepEqual(json(restored.payload),{kept:true});
+  }
+});
 
 test('FRIENDS retains requested identity on success and 401/503/redirect; typed reads fail closed', () => {
   for (const status of [200, 401, 302, 503]) {
@@ -112,4 +123,37 @@ test('actual player-rating source and known legacy graph upgrade keep EVENT clos
     }
   }
   assert.throws(()=>patched(current.replace("'AUTH_SERVICE_UNAVAILABLE'", "'DRIFTED'"),2,1),/COMMUNITY_PLAYER_RATING_ACCESS_SHAPE_DRIFT/);
+});
+test('all community auth entries share a bounded dispatch gate before the profile HTTP node',()=>{
+  const graph=addCommunityPolicyAuth([
+    {id:'one',type:'http in',z:'tab',method:'get',url:'/lk/communities',wires:[['target']]},
+    {id:'two',type:'http in',z:'tab',method:'post',url:'/lk/communities/join-by-invite',wires:[['join']]},
+    {id:'target',type:'function',z:'tab',name:'Target',func:'return msg;',wires:[]},
+    {id:'join',type:'function',z:'tab',name:'Prepare invite join',func:'return msg;',wires:[]},
+  ]);
+  const prepare=graph.find(n=>n.id==='community-policy-verified-actor-v1-prepare');
+  const budget=graph.find(n=>n.id===prepare.wires[0][0]);
+  assert.equal(budget.type,'function','all routes must budget before the expensive HTTP request');
+  assert.deepEqual(budget.wires,[['community-policy-verified-actor-v1-http'],['community-policy-verified-actor-v1-response']]);
+  const shared=new Map(), global={get:key=>shared.get(key),set:(key,value)=>shared.set(key,value)};
+  let dispatched=0,denied=0;
+  for(let i=0;i<60;i++) {
+    const msg={req:{headers:{authorization:'Bearer fixture-'+i}},_communityPolicyAuth:{payload:{kept:true},own:['payload']}};
+    const result=vm.runInNewContext('(function(msg){'+budget.func+'\n})(msg)',{msg,global,context:{},Date:{now:()=>1000}});
+    if(result[0]) dispatched++;
+    else {
+      denied++;const restored=run(COMMUNITY_AUTH_RESPONSE,result[1])[0];
+      assert.equal(restored._communityPolicyAuthFailure,'UNAVAILABLE');assert.deepEqual(json(restored.payload),{kept:true});
+    }
+  }
+  assert.equal(dispatched,10);assert.equal(denied,50);
+  assert.doesNotMatch(JSON.stringify([...shared]),/Bearer|fixture-/);
+  assert.deepEqual(addCommunityPolicyAuth(graph),graph);
+});
+test('an existing auth subflow cannot silently omit a required guard or response definition',()=>{
+  const graph=addCommunityPolicyAuth([{id:'in',type:'http in',z:'tab',method:'get',url:'/lk/communities',wires:[['target']]},{id:'target',type:'function',z:'tab',name:'Target',func:'return msg;',wires:[]}]);
+  for(const suffix of ['-profile-budget','-http','-response','-http-catch','-http-unavailable']) {
+    const incomplete=graph.filter(n=>n.id!=='community-policy-verified-actor-v1'+suffix);
+    assert.throws(()=>addCommunityPolicyAuth(incomplete),/COMMUNITY_AUTH_SUBFLOW_DRIFT/);
+  }
 });
