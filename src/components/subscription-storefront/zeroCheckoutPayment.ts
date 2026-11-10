@@ -142,7 +142,7 @@ export async function loadResidencyPurchaseTerms(signal?: AbortSignal): Promise<
   try {
     if (result.error) throw new Error('Product unavailable');
     return parseResidencyPurchaseTerms(result.data);
-  } catch { throw new StorefrontPaymentError('Условия резидентства и онлайн-продажа пока не подтверждены. Попробуйте позже.'); }
+  } catch { throw new StorefrontPaymentError('Условия резидентства пока не подтверждены. Попробуйте позже.'); }
 }
 
 type Attempt = { key: string; paymentRef: string; state: 'pending' | 'paid' | 'failed' };

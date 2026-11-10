@@ -7,17 +7,29 @@ export interface ResidencyPurchaseTerms {
   activationDays: number;
 }
 
-/** The catalog card alone is not evidence that this product is sold online. */
+/** Actual Viva end-user DTO. Visibility flags are absent in this contract;
+ * online sale is checked separately in Viva's product settings before release.
+ * If a provider starts returning those flags, conflicting values fail closed.
+ */
 export function parseResidencyPurchaseTerms(payload: unknown): ResidencyPurchaseTerms {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Product unavailable');
   const product = payload as Record<string, unknown>;
-  if (product.id !== RESIDENCY_PRODUCT_ID || product.productType !== 'SUBSCRIPTION'
-    || product.showToUser !== true || product.cost !== RESIDENCY_PRICE_MINOR
+  const types = product.availableTypes;
+  if (product.id !== RESIDENCY_PRODUCT_ID
+    || (product.productType !== undefined && product.productType !== 'SUBSCRIPTION')
+    || (product.showToUser !== undefined && product.showToUser !== true)
+    || product.cost !== RESIDENCY_PRICE_MINOR
     || product.validityDays !== 30 || product.visits !== 30
-    || !Number.isSafeInteger(product.activationDays) || Number(product.activationDays) < 0) {
+    || product.activationDays !== 0 || product.freezingDays !== 0
+    || product.type !== 'GROUP' || product.variant !== 'BY_VISITS' || product.appliesTo !== 'BOOKING'
+    || product.hasTypeLimitation !== true || !Array.isArray(types) || types.length !== 1
+    || types[0]?.id !== 2572
+    || product.hasStudioLimitation !== false || product.hasDirectionLimitation !== false
+    || product.hasDayLimitation !== false || product.hasTimeRangeLimitation !== false
+    || product.hasDayTimeLimitation !== false) {
     throw new Error('Residency product terms unavailable');
   }
-  return { priceMinor: RESIDENCY_PRICE_MINOR, activationDays: Number(product.activationDays) };
+  return { priceMinor: RESIDENCY_PRICE_MINOR, activationDays: 0 };
 }
 
 /** Purchase and QR/pass issuance have separate entry points. No arbitrary product IDs. */

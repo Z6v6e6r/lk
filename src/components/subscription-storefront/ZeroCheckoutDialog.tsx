@@ -58,7 +58,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
     void priceRequest.then(value => {
       if (active) { setPrice(value); setLoading(false); }
     }).catch(() => {
-      if (active) { setError('Не удалось подтвердить цену и доступность. Обновите данные.'); setLoading(false); }
+      if (active) { setError(isResidency ? 'Не удалось подтвердить условия резидентства. Обновите данные.' : 'Не удалось подтвердить цену и доступность. Обновите данные.'); setLoading(false); }
     }).finally(() => clearTimeout(timeout));
     return () => { active = false; controller.abort(); clearTimeout(timeout); };
   }, [offerKey, revision, isResidency]);
@@ -98,7 +98,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
     <h2 id="ph-zero-title">Оформление подписки</h2>
     <p className="ph-zero-summary">{offer.label} · {offer.period}</p>
     <p className="ph-zero-price">{price === null ? 'Проверяем предложение…' : `${new Intl.NumberFormat('ru-RU').format(price / 100)} ₽`}</p>
-    {isResidency && residencyTerms && price !== null && <p>30 записей на 30 дней. Срок активации — {residencyTerms.activationDays} дней.</p>}
+    {isResidency && residencyTerms && price !== null && <p>30 записей на 30 дней. Автоматическая активация отключена.</p>}
     {offer.promo && <p>Акционная цена. Применимость предложения проверяется при оформлении.</p>}
     {patriotsPendingBenefits && <p>Подписка содержит 30 посещений на 30 дней. Бесплатный час и скидки при записи пока не действуют; дата запуска не определена. «Время на друзей» не списывает посещения из подписки.</p>}
     {error && <p className="auth-error" role="alert">{error}</p>}
