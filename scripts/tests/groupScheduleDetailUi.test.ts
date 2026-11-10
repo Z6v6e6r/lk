@@ -186,7 +186,7 @@ test("an owned plan outside the money contour keeps a booking option of its own"
   assert.match(groupSchedulePageSource, /getGroupScheduleOwnedSubscriptions\(checkout\.clientSubscriptions, discountPending \? null : currentDiscountQuotes\)/);
   assert.match(groupSchedulePageSource, /ownedSubscriptions\.map\(product => \(/);
   assert.match(groupSchedulePageSource, /validityPrefix: "действует до"/);
-  assert.match(groupSchedulePageSource, /ownedSubscriptions\.length === 0 && purchasableProducts\.length === 0/);
+  assert.match(groupSchedulePageSource, /ownedSubscriptions\.length === 0 && ownedOneTimes\.length === 0 && purchasableProducts\.length === 0/);
   assert.match(groupSchedulePageSource, /aria-label="Ваши абонементы"/);
 });
 

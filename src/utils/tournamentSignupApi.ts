@@ -177,6 +177,7 @@ export interface TournamentVivaCheckout {
   clientSubscriptions: TournamentVivaProduct[];
   oneTimes: TournamentVivaProduct[];
   subscriptions: TournamentVivaProduct[];
+  tariffErrors?: string[];
 }
 
 export interface TournamentVivaTransactionResult {
@@ -2584,6 +2585,10 @@ export async function apiFetchTournamentVivaCheckout(
       clientSubscriptions: resolvedClientSubscriptions,
       oneTimes,
       subscriptions,
+      tariffErrors: [
+        ...(oneTimesResult.error ? ["Не удалось загрузить тарифы разовых посещений."] : []),
+        ...(subscriptionsResult.error ? ["Не удалось загрузить тарифы абонементов."] : []),
+      ],
     },
     error: null,
     status: exerciseResult.status || profileResult.status,
@@ -2722,6 +2727,10 @@ export async function apiFetchTournamentVivaPublicCheckout(
       clientSubscriptions: [],
       oneTimes,
       subscriptions,
+      tariffErrors: [
+        ...(oneTimesResult.error ? ["Не удалось загрузить тарифы разовых посещений."] : []),
+        ...(subscriptionsResult.error ? ["Не удалось загрузить тарифы абонементов."] : []),
+      ],
     },
     error: null,
     status: exerciseResult.status || oneTimesResult.status || subscriptionsResult.status,

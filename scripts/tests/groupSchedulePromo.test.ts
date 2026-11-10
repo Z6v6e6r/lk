@@ -52,6 +52,7 @@ test("limits group promo to purchasable one-time products", () => {
 
 test("accepts only a provider preview with a real discount", () => {
   assert.equal(isGroupSchedulePromoPreviewApplicable(preview()), true);
+  assert.equal(isGroupSchedulePromoPreviewApplicable(preview({ discountMinor: 550_000, toPayMinor: 0 })), true);
   assert.equal(isGroupSchedulePromoPreviewApplicable(preview({ discountMinor: 0 })), false);
   assert.equal(isGroupSchedulePromoPreviewApplicable(preview({ toPayMinor: 550_000 })), false);
 });
@@ -60,11 +61,23 @@ test("binds an applied promo quote to the exact Viva product", () => {
   const quote = preview();
   const promo: AppliedGroupSchedulePromo = {
     code: "PIK-PADELHUB",
+    exerciseId: "exercise-1",
+    clientId: "actor-1",
     previewsByProductId: { "one-time-1": quote },
   };
 
-  assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("one-time")), quote);
-  assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("one-time", "one-time-2")), null);
-  assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("subscription")), null);
-  assert.equal(getAppliedGroupSchedulePromoPreview(null, product("one-time")), null);
+  const context = { exerciseId: "exercise-1", clientId: "actor-1" };
+  assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("one-time"), context), quote);
+  assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("one-time", "one-time-2"), context), null);
+  assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("subscription"), context), null);
+  assert.equal(getAppliedGroupSchedulePromoPreview(null, product("one-time"), context), null);
+});
+
+test("promo quote cannot move to another client or training", () => {
+  const promo: AppliedGroupSchedulePromo = { code: "FIXTURE", exerciseId: "exercise-1", clientId: "actor-1",
+    previewsByProductId: { "one-time-1": preview() } };
+  for (const context of [{ exerciseId: "exercise-2", clientId: "actor-1" },
+    { exerciseId: "exercise-1", clientId: "actor-2" }, { exerciseId: "exercise-1", clientId: undefined }]) {
+    assert.equal(getAppliedGroupSchedulePromoPreview(promo, product("one-time"), context), null);
+  }
 });
