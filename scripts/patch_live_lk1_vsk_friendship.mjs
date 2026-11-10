@@ -12,7 +12,7 @@ import { buildExactGraphContract, validateReviewedFlowContract } from './nodered
 
 export const VSK_FRIENDSHIP_PRODUCT_ID = '94e32355-1c69-462b-9f2a-77f2817cb24c';
 export const ORDINARY_FRIENDSHIP_PRODUCT_ID = 'b2e6a9d4-53b5-4f79-87ec-3fb076381e9b';
-export const VSK_FRIENDSHIP_SOURCE_SHA256 = '1a9fefe1b58ea56c1eb8b7b35514414ee7a59f6c1ecd415fbdb34e0d29f62308';
+export const VSK_FRIENDSHIP_SOURCE_SHA256 = '6d723c8c13aceabce73537b0a46b25d2992501526bbfea776cdc16656c51aae4';
 export const VSK_FRIENDSHIP_NODE_IDS = Object.freeze({
   gateway: 'lk_subscription_booking_router_20260804',
   preview: 'lk_subscription_price_preview_20260908_router',
