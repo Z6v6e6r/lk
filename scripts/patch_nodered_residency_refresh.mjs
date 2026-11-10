@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {verifyWorkspace} from './verify_nodered_source_origin.mjs';
 import {assertResidencyOutputPath} from './patch_nodered_residency_booking.mjs';
-import {residencySetting} from './lib/residencyBookingContext.mjs';
+import {residencySetting,residencyTransportConfig} from './lib/residencyBookingContext.mjs';
 
 // Reviewed installed residency functions from the fresh 147 snapshot, 2026-11-10.
 // The updater preserves the live paid owner; it does not regenerate an older gateway.
@@ -19,7 +19,10 @@ const reader="residencyTransportConfig(key=>residencySetting(key,k=>global.get(k
 export function refreshResidencyFunction(source,kind,routes) {
   if(source.includes('function residencySetting(') || source.split('residency-booking-context').length!==routes+1
     || source.split('function residencyTransportConfig(read) {').length!==2) throw Error('RESIDENCY_REFRESH_SOURCE_DRIFT');
-  source=source.replace('function residencyTransportConfig(read) {',residencySetting.toString()+'\nfunction residencyTransportConfig(read) {');
+  const helperStart=source.indexOf('function residencyTransportConfig(read) {');
+  const helperEnd=source.indexOf('\n\n// Durable operation identity',helperStart);
+  if(helperEnd<0) throw Error('RESIDENCY_REFRESH_HELPER_DRIFT');
+  source=source.slice(0,helperStart)+residencySetting.toString()+'\n'+residencyTransportConfig.toString()+source.slice(helperEnd);
   source=source.replaceAll('residency-booking-context','residency-booking-refresh');
   if(kind==='gateway') {
     const start=source.indexOf('const residencyConfig = (ctx) => {'),end=source.indexOf('const residencyEnsure = ',start);
@@ -28,7 +31,7 @@ export function refreshResidencyFunction(source,kind,routes) {
   } else if(kind==='preview') {
     const old='residencyTransportConfig(key=>global.get(key))';
     if(source.split(old).length!==3) throw Error('RESIDENCY_REFRESH_PREVIEW_DRIFT');
-    source=source.replaceAll(old,reader);
+    source=source.replaceAll(old,reader.slice(0,-1)+",'preview')");
   } else if(kind!=='evaluator') throw Error('RESIDENCY_REFRESH_KIND_INVALID');
   new Function('msg','node','env','global',source);
   return source;

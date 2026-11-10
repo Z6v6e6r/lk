@@ -1064,7 +1064,7 @@ const residencyGlobals={subscriptions_residency_booking_enabled:true,subscriptio
 test('residency advisory uses CUP with zero visits and never falls back to a local rule',()=>{
   const date=new Date(Math.ceil((Date.now()+3600000)/1800000)*1800000+10800000).toISOString().slice(0,19)+'+03:00';
   const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});
-  const result=preview({composition:residencyComposition,subscriptions:[row],globals:residencyGlobals,
+  const result=preview({composition:residencyComposition,subscriptions:[row],globals:{...residencyGlobals,subscriptions_residency_booking_enabled:false,subscriptions_residency_preview_enabled:true},
     target:{startsAt:date},residencyContext:({id})=>{const v=residencyFixture({stationId:station,clientSubscriptionId:id,startsAt:date});delete v.startsAt;return v;}});
   assert.equal(result.quotes[0].status,'AVAILABLE');
   assert.equal(result.quotes[0].freeMinutes,0);
@@ -1080,7 +1080,7 @@ test('residency group preview applies 50 percent without visit-redemption eligib
   const exercise={id:uuid(98),studio:{id:station},room:{id:room},direction:{id:6307},type:{id:2349},
     timeFrom:date,timeTo:new Date(Date.parse(date)+3600000).toISOString(),availableClientSubscriptions:[]};
   const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});
-  const result=preview({composition:residencyComposition,subscriptions:[row],groupExercise:exercise,globals:residencyGlobals,
+  const result=preview({composition:residencyComposition,subscriptions:[row],groupExercise:exercise,globals:{...residencyGlobals,subscriptions_residency_booking_enabled:false,subscriptions_residency_preview_enabled:true},
     residencyContext:({id})=>{const v=residencyFixture({clientSubscriptionId:id});delete v.startsAt;return v;}});
   assert.equal(result.quotes[0].status,'AVAILABLE');
   assert.equal(result.quotes[0].kind,'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1');

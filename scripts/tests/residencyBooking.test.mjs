@@ -65,6 +65,21 @@ test('residency-only environment fallback preserves explicit global denial and c
   assert.equal(residencyTransportConfig(read({subscriptions_runtime_api_base_url:'https://evil.example/api'})),null);
   assert.equal(residencySetting('OTHER_SECRET',()=>{throw Error('must not read');},()=>{throw Error('must not read');}),undefined);
 });
+test('preview-only transport never enables booking and explicit preview denial wins',()=>{
+  const config={subscriptions_residency_booking_enabled:false,subscriptions_residency_preview_enabled:true,
+    subscriptions_runtime_environment:'PROD',subscriptions_runtime_api_base_url:'https://padlhub.su/api',
+    subscriptions_runtime_context_integration_token:'synthetic-token-'.repeat(3)};
+  const read=k=>config[k];
+  assert.ok(residencyTransportConfig(read,'preview'));
+  assert.equal(residencyTransportConfig(read),null);
+  assert.equal(residencyTransportConfig(read,'unreviewed-mode'),null);
+  config.subscriptions_residency_booking_enabled=true;
+  config.subscriptions_residency_preview_enabled=false;
+  assert.equal(residencyTransportConfig(read,'preview'),null);
+  assert.ok(residencyTransportConfig(read));
+  const env={SUBSCRIPTIONS_RESIDENCY_PREVIEW_ENABLED:'true'};
+  assert.equal(residencySetting('subscriptions_residency_preview_enabled',()=>false,k=>env[k]),false);
+});
 test('private candidate output refuses this and other Git worktrees before writing',()=>{
   const external=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'residency-output-test-'));
   try {
@@ -173,6 +188,12 @@ for(const envOnly of [false,true]) test('actual composed gateway uses owned disc
       assert.equal(allowed.message._subscriptionBooking.step,'booking_create',JSON.stringify(allowed.message.payload));
       assert.equal(allowed.message.payload.paymentType,'ON_PLACE');
       assert.equal(allowed.message.payload.clientSubscriptionId,undefined);
+      globals.subscriptions_residency_booking_enabled=false;
+      globals.subscriptions_residency_preview_enabled=true;
+      assert.equal(recheck().port,4,'preview-only must not admit a new provider write');
+      delete globals.subscriptions_residency_preview_enabled;
+      if(envOnly) delete globals.subscriptions_residency_booking_enabled;
+      else globals.subscriptions_residency_booking_enabled=true;
       for(const change of [
         proof=>{proof.context.policyDigest='sha256:'+'b'.repeat(64);},
         proof=>{proof.validUntil=new Date(Date.now()-1).toISOString();},

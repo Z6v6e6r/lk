@@ -87,7 +87,7 @@ and Viva evidence, publication and activation are not claimed by these tests.
 
 ## Refresh transport and the installed flow
 
-The shared residency reader takes the four existing global keys first. Only
+The shared residency reader takes the five residency global keys first. Only
 undefined/null values may fall back to these four process/flow environment keys:
 
 - `SUBSCRIPTIONS_RESIDENCY_BOOKING_ENABLED`
@@ -112,3 +112,13 @@ HTTP timeout. Each preview and prewrite refreshes source evidence; failures refu
 new work. Stable CONFIRMED/PENDING replay still precedes provider refresh and
 admission checks. Local private-snapshot tests exercise the actual updated gateway,
 zero visits, 30/50 prices, immutable binding, prewrite drift and flag-off replay.
+
+Preview acceptance has its own default-off `subscriptions_residency_preview_enabled`
+/ `SUBSCRIPTIONS_RESIDENCY_PREVIEW_ENABLED`. When set, it controls only the advisory
+preview router; the booking/prewrite gateway still requires the booking flag.
+An unset preview flag retains the previous booking-flag behavior. An explicit
+false preview flag is never overridden by environment or enabled booking.
+For acceptance, enable preview with booking OFF, use the genuine authenticated LK
+price-preview route for game/group quotes, then enable booking only after PASS.
+Stopping admission via the native environment file requires a guarded PM2 restart
+and effective-child readback; no automatic recovery may restore an ON flag.
