@@ -21,7 +21,7 @@ merge, deploy, изменение Viva и реальные покупки не �
 
 `scripts/patch_live_lk1_vsk_friendship.mjs` строит точечный кандидат из
 fresh live flow 147, SHA256
-`f3b860cadac4b0ea74acb5a112daa99adc151f03b83f5dc728634beb0567c78f`.
+`1a9fefe1b58ea56c1eb8b7b35514414ee7a59f6c1ecd415fbdb34e0d29f62308`.
 
 Копируется установленное правило обычной «Дружбы», меняется только productId:
 60 бесплатных минут, максимум 8 активных записей с льготой,
