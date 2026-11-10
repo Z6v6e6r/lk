@@ -9,27 +9,41 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const settings = readMatrixSettings(new URLSearchParams(location.search));
   const options = buildGamePaymentOptions(courtAmount, 'quarter', settings.profile, settings.applicability, { ...settings, durationMinutes });
   const subscription = options.find(option => option.kind === 'subscription');
-  const selectedBenefit = subscription?.mode === 'quote' ? subscription : options.find(option => option.mode === 'book');
+  const residency = options.find(option => option.kind === 'residency');
   const personalBase = courtAmount != null && Number.isFinite(courtAmount) && courtAmount > 0 ? Math.round(courtAmount * 100 / 4) / 100 : null;
-  const label = (option: PaymentOption | undefined) => {
-    if (option?.benefit === 'partial-hour') return `${option.freeMinutes} мин бесплатно + ${option.paidMinutes} мин с доплатой`;
-    if (option?.kind === 'subscription') return option.benefit === 'discount' ? 'Скидка 30% по подписке · дневной лимит использован' : 'По подписке · дневной бесплатный лимит доступен';
-    if (option?.kind === 'residency') return 'С Резидентством · скидка 30%';
-    if (option?.kind === 'pass') return 'По абонементу Энергия 5';
-    return 'Ваша доля — ¼ стоимости корта';
+  const price = (option: PaymentOption | undefined) => {
+    if (personalBase == null) return 'Цена уточняется';
+    if (!option || option.mode === 'unavailable') return 'Не действует';
+    if (option.mode === 'quote' || option.amount == null) return 'Нужен расчёт';
+    return formatRubles(option.amount);
   };
-  const price = selectedBenefit?.mode === 'quote' || !selectedBenefit ? 'Нужен расчёт'
-    : selectedBenefit.kind === 'pass' ? '1 посещение' : formatRubles(selectedBenefit.amount!);
-  const discounted = personalBase != null && selectedBenefit?.amount != null && selectedBenefit.amount < personalBase;
-  const residency = options.find(option => option.kind === 'residency' && option.mode === 'book');
+  const subscriptionNote = subscription?.reason === 'training-only' ? 'Тариф даёт бесплатную тренировку; скидка на игру — после использования дневного лимита'
+    : subscription?.mode === 'unavailable' ? 'Тариф не подходит к этому событию'
+      : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно + ${subscription.paidMinutes} мин с доплатой; сумма уточняется`
+        : subscription?.benefit === 'discount' ? 'Скидка 30% · дневной лимит использован'
+          : settings.profile.subscription ? 'Дневной бесплатный лимит доступен' : 'Бесплатно при наличии подписки';
+  const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
+    && option.amount > 0 && option.amount < personalBase;
   return <fieldset className="matrix-game-payers">
     <legend>Кто оплачивает игру?</legend>
-    <label className={`matrix-payer ${value === 'split' ? 'is-selected' : ''}`}>
+    <label className={`matrix-payer matrix-payer--personal ${value === 'split' ? 'is-selected' : ''}`}>
       <input type="radio" name={name} checked={value === 'split'} onChange={() => onChange('split')} value="split" />
-      <span className="matrix-payer-copy"><strong>Плачу за себя</strong><span>¼ стоимости · 1 из 4 игроков</span><em>{label(selectedBenefit)}</em>
-        {selectedBenefit?.mode === 'quote' && residency?.amount != null && <span>Или с Резидентством — {formatRubles(residency.amount)}</span>}
+      <span className="matrix-payer-copy"><strong>Плачу за себя</strong><span>1 из 4 игроков · все варианты личной оплаты</span>
+        <span className="matrix-quarter-prices" role="group" aria-label="Три варианта стоимости личной доли">
+          <span className="matrix-quarter-row matrix-quarter-row--base">
+            <span><b>¼ стоимости корта</b><small>Без применения льгот</small></span>
+            <span className="matrix-quarter-price"><strong>{personalBase != null ? formatRubles(personalBase) : 'Цена уточняется'}</strong></span>
+          </span>
+          <span className={`matrix-quarter-row matrix-quarter-row--subscription ${subscription?.mode === 'unavailable' ? 'is-unavailable' : ''}`}>
+            <span><b>По подписке</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionNote}</small></span>
+            <span className="matrix-quarter-price">{discount(subscription) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscription)}</strong></span>
+          </span>
+          <span className="matrix-quarter-row matrix-quarter-row--residency">
+            <span><b>С Резидентством</b><small>{settings.profile.residency ? 'Ваша скидка 30%' : 'Скидка 30% при наличии Резидентства'}</small></span>
+            <span className="matrix-quarter-price">{discount(residency) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(residency)}</strong></span>
+          </span>
+        </span>
       </span>
-      <span className="matrix-payer-price">{discounted && <del>{formatRubles(personalBase!)}</del>}<strong>{price}</strong></span>
     </label>
     <label className={`matrix-payer ${value === 'self' ? 'is-selected' : ''}`}>
       <input type="radio" name={name} checked={value === 'self'} onChange={() => onChange('self')} value="self" />
