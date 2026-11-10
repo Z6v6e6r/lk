@@ -3,6 +3,9 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { isResidencyPurchaseRoute, RESIDENCY_PRODUCT_ID } from '../../src/residency/residencyPurchase.ts';
+import { buildVivaOAuthReturnUrl, readPendingVivaOAuth } from '../../src/utils/vivaOAuth.ts';
+import { getVivaOAuthStorageKey } from '../../src/utils/authMode.ts';
 
 function loadModule<T>(file: string, stubs: Record<string, unknown> = {}, globals: Record<string, unknown> = {}): T {
   const source = readFileSync(new URL(`../../src/${file}`, import.meta.url), 'utf8')
@@ -667,4 +670,36 @@ test('new public product quotes use an explicit discounted price without computi
   } });
   await fresh.adapter.loadZeroOfferQuote('residency');
   assert.equal(options[0].cache, 'no-store');
+});
+
+test('only the explicit residency purchase and bank-return routes open checkout', () => {
+  for (const query of ['?buyResidency=1', '?buyResidency=1&authMode=viva', '?phCheckoutReturn=residency']) {
+    assert.equal(isResidencyPurchaseRoute(query), true);
+  }
+  for (const query of ['', '?residency=1&stationId=123', '?buyResidency=0', '?buyResidency=1&buyResidency=0',
+    '?phCheckoutReturn=friendship', '?phCheckoutReturn=residency&phCheckoutReturn=friendship',
+    '?buyResidency=1&phCheckoutReturn=foreign', '?productId=' + RESIDENCY_PRODUCT_ID]) {
+    assert.equal(isResidencyPurchaseRoute(query), false);
+  }
+});
+
+test('OAuth returns to the selected residency route after the cabinet callback', () => {
+  const previousWindow = globalThis.window;
+  const href = 'https://padlhub.ru/lk_new?buyResidency=1&authMode=viva&code=old&state=old';
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    location: { href, origin: 'https://padlhub.ru', search: new URL(href).search },
+    sessionStorage: { getItem: (key: string) => storage.get(key) ?? null },
+  } });
+  try {
+    const returnTo = buildVivaOAuthReturnUrl();
+    assert.equal(isResidencyPurchaseRoute(new URL(returnTo).search), true);
+    assert.equal(new URL(returnTo).searchParams.has('code'), false);
+    storage.set(getVivaOAuthStorageKey(), JSON.stringify({ provider: 'yandex', state: 'fixture', codeVerifier: 'fixture',
+      redirectUri: 'https://padlhub.ru/lk_new?authMode=viva', returnTo }));
+    assert.equal(readPendingVivaOAuth()?.returnTo, returnTo);
+  } finally {
+    if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow });
+  }
 });

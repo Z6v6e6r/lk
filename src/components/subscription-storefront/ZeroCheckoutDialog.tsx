@@ -92,7 +92,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
     <h2 id="ph-zero-title">Оформление подписки</h2>
     <p className="ph-zero-summary">{offer.label} · {offer.period}</p>
     <p className="ph-zero-price">{price === null ? 'Проверяем предложение…' : `${new Intl.NumberFormat('ru-RU').format(price / 100)} ₽`}</p>
-    {offer.liveProductId && quote && <p>{offerKey === 'residency' ? '30 дней со дня покупки.'
+    {offer.liveProductId && quote && <p>{offerKey === 'residency' ? '30 записей на 30 дней. Автоматическая активация отключена.'
       : `Срок действия — 30 дней. На активацию — ${quote.activationDays} дн.`}</p>}
     {offer.promo && <p>Акционная цена. Применимость предложения проверяется при оформлении.</p>}
     {patriotsPendingBenefits && <p>Подписка содержит 30 посещений на 30 дней. Бесплатный час и скидки при записи пока не действуют; дата запуска не определена. «Время на друзей» не списывает посещения из подписки.</p>}
