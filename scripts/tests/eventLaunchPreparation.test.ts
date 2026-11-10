@@ -31,6 +31,15 @@ test('nginx candidate is exact-source guarded, scoped, bounded, offline and idem
  for(const [input,hash,allow] of [[source,'wrong',origins],[source,sha256(source),['https://padlhub.ru/']],[source,sha256(source),['http://padlhub.ru']],[source.replace('proxy_pass','include'),sha256(source.replace('proxy_pass','include')),origins]])assert.throws(()=>buildEventCommunityGuard(input,hash,allow));
  assert.throws(()=>buildEventCommunityGuard(source+source,sha256(source+source),origins));
 });
+test('canonical admission is bounded before profile verification without capturing unrelated reads',()=>{
+ const result=buildEventCommunityGuard(source,sha256(source),['https://padlhub.ru','https://padlhub.su']);
+ const locations=[...result.candidate.matchAll(/location ~ ([^\n]+) \{\n\s+client_max_body_size (\d+)k;\n\s+include \/etc\/nginx\/snippets\/lk-event-community-proxy.conf;/g)];
+ const selected=(uri:string)=>locations.filter(match=>new RegExp(match[1]).test(uri));
+ assert.equal(selected('/lk/communities/fixture/event-admission').length,1);
+ assert.equal(selected('/lk/communities/fixture/event-admission')[0][2],'8');
+ for(const uri of ['/lk/communities/fixture/detail','/lk/communities/fixture/event-admission/extra','/lk/communities/fixture/event-admission-other']) assert.equal(selected(uri).length,0);
+ assert.match(result.common,/limit_req zone=lk_community_ip/);assert.match(result.common,/limit_req zone=lk_community_global/);
+});
 function doc() {return {...structuredClone(fixture),eventEntriesRevision:4,eventEntries:[
  {playerId:'synthetic-a',epoch:'old',fullName:'Synthetic A',company:'Synthetic',email:['a','example.invalid'].join('@'),retentionUntil:'2027-10-24T20:59:59.999Z'},
  {playerId:'synthetic-a',epoch:'current',run:{id:'run'},bestScore:12,retentionUntil:'2027-10-24T20:59:59.999Z'},
