@@ -179,6 +179,26 @@ academy_005JDA_analytics
 только добавленную вкладку при совпадении её ожидаемых хешей. Записанные согласия
 и другие данные не удаляйте. Чужие изменения в flow не перезаписывайте.
 
+## Cache headers на сервере 89
+
+В HTTPS-vhost preview должны быть `Cache-Control: no-store` для HTML и манифеста.
+Если их нет, offline-генератор готовит точечный кандидат от приватного preimage:
+
+```sh
+node scripts/nginx/prepare_academy_preview_cache.mjs \
+  /private/nginx.source.conf EXPECTED_SOURCE_SHA256 /private/nginx.candidate.conf
+```
+
+Он добавляет только два exact static location в единственный HTTPS server для
+`lk-reserve.89-108-64-209.sslip.io`, сохраняет остальные байты и сам ничего не
+публикует. API proxy, JS и другие сайты не меняются. Private vhost не входит в Git.
+Перед разрешённой установкой проверьте candidate через отдельный `nginx -t`,
+под одним writer lock сохраните backup и повторно сравните source SHA. После
+атомарной установки нужны обычный `nginx -t`, reload и публичные проверки обоих
+cache headers. Откат разрешён только при совпадении ожидаемого candidate SHA;
+чужую конфигурацию не перезаписывайте. Это отдельный операторский шаг, а не часть
+frontend build.
+
 ## Проверки разработчика
 
 ```sh
