@@ -38,8 +38,3 @@
   .ph-residency-purchase .ph-residency-card { min-height: 660px; padding: 32px 20px 20px; border-radius: 26px; }
   .ph-residency-purchase .ph-residency-equipment { margin-inline: 8px; }
 }
-.ph-residency-purchase .ph-zero-dialog { position: fixed; margin: auto; padding: 20px; border: 1px solid #ededed; border-radius: 18px; background: white; overflow: auto; }
-.ph-residency-purchase .subscription-auth-close { position: absolute; top: 8px; right: 8px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: #f5f5f7; color: #353436; font-size: 26px; line-height: 1; cursor: pointer; }
-.ph-residency-purchase .ph-zero-dialog .auth-wrapper { min-height: auto; padding: 0; background: transparent; justify-content: flex-start; }
-.ph-residency-purchase .ph-zero-dialog .auth-card { max-width: none; }
-@media (max-width: 640px) { .ph-residency-purchase .ph-zero-dialog { padding: 16px 14px; } }
