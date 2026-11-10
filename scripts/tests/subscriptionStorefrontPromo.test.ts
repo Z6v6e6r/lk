@@ -22,6 +22,15 @@ function loadModule<T>(file: string, stubs: Record<string, unknown> = {}, global
 const catalog = loadModule<typeof import('../../src/utils/tournamentSubscriptionCatalog')>('utils/tournamentSubscriptionCatalog.ts');
 const promo = loadModule<typeof import('../../src/components/subscription-storefront/promo')>('components/subscription-storefront/promo.ts', catalog);
 const fixturePhone = `+${'7'}${'900000000'}`;
+// Sanitized public product observed through Yandex on 2026-11-10. The end-user
+// DTO has neither productType nor showToUser; those are administrative fields.
+const residencyPublicProduct = {
+  id: residency.RESIDENCY_PRODUCT_ID, cost: 79000, validityDays: 30, visits: 30,
+  activationDays: 0, freezingDays: 0, type: 'GROUP', variant: 'BY_VISITS', appliesTo: 'BOOKING',
+  hasTypeLimitation: true, availableTypes: [{ id: 2572, name: 'Резидентство' }],
+  hasStudioLimitation: false, hasDirectionLimitation: false, hasDayLimitation: false,
+  hasTimeRangeLimitation: false, hasDayTimeLimitation: false,
+};
 
 function paymentFixture() {
   const calls: { productId: string; phone: string; options: Record<string, unknown> }[] = [];
@@ -218,10 +227,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     hasDirectionLimitation: true, availableDirections: [4588, 6181, 6306, 6307].map(id => ({ id })),
     hasTypeLimitation: true, availableTypes: [1613, 2349].map(id => ({ id })),
   };
-  let residencyProduct: Record<string, unknown> = {
-    id: residency.RESIDENCY_PRODUCT_ID, productType: 'SUBSCRIPTION', showToUser: true,
-    cost: 79000, validityDays: 30, visits: 30, activationDays: 7,
-  };
+  let residencyProduct: Record<string, unknown> = { ...residencyPublicProduct };
   let broken = false;
   let storageFails = false;
   const writes: any[] = [], confirms: any[] = [], counterRequests: string[] = [];
@@ -260,13 +266,13 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
 }
 
-test('residency reads its exact online product, then creates only that subscription without retries', async () => {
+test('residency accepts the actual public DTO without invented flags and buys only that product without retries', async () => {
   const f = zeroFixture();
   assert.equal(f.adapter.resolveZeroOffer('residency')?.directProductId, residency.RESIDENCY_PRODUCT_ID);
   assert.equal(f.adapter.resolveZeroOffer(residency.RESIDENCY_PRODUCT_ID), null);
   const terms = await f.adapter.loadResidencyPurchaseTerms();
   assert.equal(terms.priceMinor, 79000);
-  assert.equal(terms.activationDays, 7);
+  assert.equal(terms.activationDays, 0);
   assert.equal(f.writes.length, 0);
   f.setResult({ data: { paymentUrl: 'https://bank.example/residency', toPay: 79000 }, error: null });
   f.globals.window.location.href = 'https://padlhub.ru/lk_new?buyResidency=1&authMode=viva&code=private';
@@ -288,12 +294,17 @@ test('residency reads its exact online product, then creates only that subscript
 
 test('unavailable residency, changed activation or missing shown terms never creates a transaction', async () => {
   for (const change of [{ id: 'foreign' }, { productType: 'ONE_TIME' }, { showToUser: false },
-    { showToUser: undefined }, { cost: 790 }, { validityDays: 31 }, { visits: 29 },
-    { activationDays: undefined }, { activationDays: -1 }, { activationDays: '7' }]) {
+    { cost: 790 }, { validityDays: 31 }, { visits: 29 },
+    { activationDays: undefined }, { activationDays: -1 }, { activationDays: '0' }, { activationDays: 7 },
+    { type: 'INDIVIDUAL' }, { variant: 'BY_TIME' }, { appliesTo: 'EXECUTOR' },
+    { hasTypeLimitation: false }, { availableTypes: [] }, { availableTypes: [{ id: 1613 }] },
+    { availableTypes: [{ id: 2572 }, { id: 1613 }] }, { hasStudioLimitation: true },
+    { hasDirectionLimitation: true }, { hasDayLimitation: true }, { hasTimeRangeLimitation: true },
+    { hasDayTimeLimitation: true }, { freezingDays: 30 }]) {
     const f = zeroFixture();
     f.setResidencyProduct(change);
     await assert.rejects(f.adapter.loadZeroOfferPrice('residency'));
-    await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, { priceMinor: 79000, activationDays: 7 }));
+    await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, { priceMinor: 79000, activationDays: 0 }));
     assert.equal(f.writes.length, 0);
     assert.equal(f.stored.size, 0);
   }
@@ -593,9 +604,8 @@ test('only the explicit residency purchase and bank-return routes open checkout'
 });
 
 test('terms have to come from the exact online Viva subscription', () => {
-  const product = { id: RESIDENCY_PRODUCT_ID, productType: 'SUBSCRIPTION', showToUser: true,
-    cost: 79000, validityDays: 30, visits: 30, activationDays: 7 };
-  assert.deepEqual(parseResidencyPurchaseTerms(product), { priceMinor: 79000, activationDays: 7 });
+  const product = residencyPublicProduct;
+  assert.deepEqual(parseResidencyPurchaseTerms(product), { priceMinor: 79000, activationDays: 0 });
   for (const value of [null, [], {}, { ...product, activationDays: 0.5 }, { ...product, showToUser: 'true' }]) {
     assert.throws(() => parseResidencyPurchaseTerms(value));
   }
