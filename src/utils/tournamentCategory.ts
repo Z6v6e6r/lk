@@ -13,7 +13,8 @@ const TOURNAMENT_DIRECTION_IDS = new Set([2617, 4769, 5278]);
 // 1013 is Viva's dedicated special-tournament type. The broader 839 type is
 // intentionally excluded because it is also used by non-mechanics exercises.
 const TOURNAMENT_TYPE_IDS = new Set([1013]);
-const SPECIAL_TOURNAMENT_CATEGORY_NAMES = new Set([
+const TOURNAMENT_CATEGORY_NAMES = new Set([
+  "детский турнир",
   "падел турнир (особый)",
   "падел турнир особый",
   "padel tournament (special)",
@@ -29,9 +30,9 @@ function normalizeTournamentCategoryName(value: unknown): string {
     .replace(/\s+/g, " ");
 }
 
-function isSpecialTournamentCategoryName(value: unknown): boolean {
+function isTournamentCategoryName(value: unknown): boolean {
   const normalized = normalizeTournamentCategoryName(value);
-  return Boolean(normalized) && SPECIAL_TOURNAMENT_CATEGORY_NAMES.has(normalized);
+  return Boolean(normalized) && TOURNAMENT_CATEGORY_NAMES.has(normalized);
 }
 
 export function isTournamentDirectionId(value: unknown): boolean {
@@ -53,7 +54,7 @@ export function isTournamentExerciseCategory(
   }
 
   return (
-    isSpecialTournamentCategoryName(exercise.direction?.name)
-    || isSpecialTournamentCategoryName(exercise.type?.name)
+    isTournamentCategoryName(exercise.direction?.name)
+    || isTournamentCategoryName(exercise.type?.name)
   );
 }
