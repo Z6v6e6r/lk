@@ -34,11 +34,11 @@ function CheckoutAuthBridge({ children, intentId, proof }: { children: ReactNode
 }
 
 /** Normal auth protocol, without page-wide tracking/idle hooks or new callback routes. */
-export function CheckoutAuthProvider({ children, intentId }: { children: ReactNode; intentId?: string }) {
+export function CheckoutAuthProvider({ children, intentId, initialIdentity }: { children: ReactNode; intentId?: string; initialIdentity?: string | null }) {
   const proof = useRef<string | null>(null);
   const verified = useCallback((identity: string | null) => { proof.current = identity; }, []);
   const content = <CheckoutAuthBridge intentId={intentId} proof={proof}>{children}</CheckoutAuthBridge>;
   return resolveConfiguredAuthMode() === 'viva'
-    ? <VivaAuthProvider oauthContinuationId={intentId} onInteractiveSession={intentId ? verified : undefined}>{content}</VivaAuthProvider>
+    ? <VivaAuthProvider oauthContinuationId={intentId} initialCheckoutIdentity={initialIdentity} onInteractiveSession={intentId ? verified : undefined}>{content}</VivaAuthProvider>
     : <LegacyAuthProvider onInteractiveSession={intentId ? verified : undefined}>{content}</LegacyAuthProvider>;
 }

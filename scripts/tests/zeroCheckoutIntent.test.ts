@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { sessionIdentityBinding } from '../../src/utils/authSessionIdentity.ts';
 import { createFastIntent, readFastIntent, bindFastQuote, claimFastIntent, cancelFastIntent, takeFastOAuthIntent } from '../../src/components/subscription-storefront/zeroCheckoutIntent.ts';
 import { bindOAuthContinuation, completeOAuthContinuation, takeOAuthContinuation, OAUTH_CONTINUATION_KEY, OAUTH_RECEIPT_KEY } from '../../src/utils/oauthContinuation.ts';
 
@@ -91,4 +92,31 @@ test('optional OAuth receipt needs opt-in state binding and verified callback; s
     h.breakStorage(); assert.equal(await completeOAuthContinuation(c, 'state', h.w.location.href, 'identity-A'), false);
     assert.equal(h.values.has(OAUTH_RECEIPT_KEY), false);
   } finally { h.restore(); }
+});
+
+
+test('OAuth keeps the card account across redirect: another actor needs manual confirmation', async () => {
+  for (const mode of ['same-account', 'other-account', 'guest', 'missing-binding', 'changed-binding']) {
+    const h = harness(); try {
+      const v = createFastIntent('residency', 79000, h.event()); bindFastQuote(v.id, quote);
+      const initialBinding = mode === 'guest' ? 'guest' : await sessionIdentityBinding(v.id, 'identity-A');
+      const c = bindOAuthContinuation(v.id, 'verified-state', h.w.location.href, initialBinding)!;
+      assert.equal(bindOAuthContinuation(v.id, 'replacement-state', h.w.location.href, 'guest') !== undefined, mode === 'guest');
+      // Keep the original state for this callback, including the guest retry case.
+      bindOAuthContinuation(v.id, 'verified-state', h.w.location.href, initialBinding);
+      if (mode === 'missing-binding' || mode === 'changed-binding') {
+        const armed = JSON.parse(h.values.get(OAUTH_CONTINUATION_KEY)!);
+        if (mode === 'missing-binding') delete armed.initialBinding;
+        else armed.initialBinding = 'guest';
+        h.values.set(OAUTH_CONTINUATION_KEY, JSON.stringify(armed));
+      }
+      const identity = mode === 'other-account' || mode === 'guest' ? 'identity-B' : 'identity-A';
+      const expected = mode === 'same-account' || mode === 'guest';
+      assert.equal(await completeOAuthContinuation(c, 'verified-state', h.w.location.href, identity), expected);
+      const resumed = takeFastOAuthIntent('residency');
+      assert.equal(Boolean(resumed), expected);
+      assert.equal(readFastIntent(v.id)?.phase, 'armed'); // No claim/POST before verified continuation.
+      if (resumed) assert.equal(claimFastIntent(resumed.id, quote), true);
+    } finally { h.restore(); }
+  }
 });

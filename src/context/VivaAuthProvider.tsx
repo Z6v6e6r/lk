@@ -85,7 +85,7 @@ function resolvePhoneFromToken(token: string | null | undefined) {
   return extractJwtStringClaim(token, ["phone_number", "phoneNumber", "phone"]) || "";
 }
 
-export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oauthContinuationId, onInteractiveSession }: { children: React.ReactNode; oauthCallbackMode?: "cabinet" | "current-page"; oauthContinuationId?: string; onInteractiveSession?: (identity: string | null) => void }) {
+export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oauthContinuationId, initialCheckoutIdentity, onInteractiveSession }: { children: React.ReactNode; oauthCallbackMode?: "cabinet" | "current-page"; oauthContinuationId?: string; initialCheckoutIdentity?: string | null; onInteractiveSession?: (identity: string | null) => void }) {
   const initialToken = useMemo(() => readVivaAccessToken(), []);
   const initialOAuthCallback = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -546,6 +546,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oaut
       }),
       oauthCallbackMode,
       oauthContinuationId,
+      initialCheckoutIdentity,
     ).catch((oauthStartError) => {
       setIsLoading(false);
       trackClientError(
@@ -556,7 +557,7 @@ export function VivaAuthProvider({ children, oauthCallbackMode = "cabinet", oaut
       );
       setError("Не удалось открыть вход через внешний провайдер");
     });
-  }, [clearError, oauthCallbackMode, oauthContinuationId]);
+  }, [clearError, oauthCallbackMode, oauthContinuationId, initialCheckoutIdentity]);
 
   const sendPhoneVerificationCode = useCallback(async (phoneNumber: string, channel = "cascade") => {
     clearError();

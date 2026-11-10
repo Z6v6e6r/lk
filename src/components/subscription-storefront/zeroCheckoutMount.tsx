@@ -46,7 +46,7 @@ function mountCheckout(offerKey: string, fast?: FastCheckoutSession): boolean {
   host.className = 'ph-zero-checkout-host';
   document.body.appendChild(host);
   checkoutRoot = createRoot(host);
-  checkoutRoot.render(<CheckoutBoundary><CheckoutAuthProvider intentId={fast?.id}><ZeroCheckoutDialog fast={fast} offerKey={offerKey} onClose={closeCheckout} onBusy={setBusy} /></CheckoutAuthProvider></CheckoutBoundary>);
+  checkoutRoot.render(<CheckoutBoundary><CheckoutAuthProvider intentId={fast?.id} initialIdentity={fast?.initialIdentity}><ZeroCheckoutDialog fast={fast} offerKey={offerKey} onClose={closeCheckout} onBusy={setBusy} /></CheckoutAuthProvider></CheckoutBoundary>);
   return true;
 }
 

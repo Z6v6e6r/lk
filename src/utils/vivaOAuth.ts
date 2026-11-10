@@ -1,4 +1,4 @@
-import { authSessionIdentity } from './authSessionIdentity.ts';
+import { authSessionIdentity, sessionIdentityBinding } from './authSessionIdentity.ts';
 import { bindOAuthContinuation, hasArmedOAuthContinuation, completeOAuthContinuation, type OAuthContinuation } from './oauthContinuation.ts';
 import {
   AUTH_RUNTIME_CABINET_URL,
@@ -146,6 +146,7 @@ export async function startVivaOAuthRedirect(
   onPending?: (pending: PendingVivaOAuth) => Promise<boolean> | boolean,
   callbackMode: VivaOAuthCallbackMode = "cabinet",
   continuationId?: string,
+  initialCheckoutIdentity?: string | null,
 ) {
   const continuationAtStart = continuationId && hasArmedOAuthContinuation(continuationId) ? continuationId : undefined;
   const codeVerifier = generateRandomBase64Url(32);
@@ -154,7 +155,9 @@ export async function startVivaOAuthRedirect(
   const redirectUri = buildVivaOAuthCallbackUrl(callbackMode);
   const returnTo = buildVivaOAuthReturnUrl();
 
-  const continuation = bindOAuthContinuation(continuationAtStart, state, returnTo);
+  const initialBinding = continuationAtStart && initialCheckoutIdentity
+    ? await sessionIdentityBinding(continuationAtStart, initialCheckoutIdentity) : 'guest';
+  const continuation = bindOAuthContinuation(continuationAtStart, state, returnTo, initialBinding);
   if (continuationAtStart && !continuation) throw new Error("Checkout was cancelled before OAuth redirect");
   const pending: PendingVivaOAuth = {
     provider,
