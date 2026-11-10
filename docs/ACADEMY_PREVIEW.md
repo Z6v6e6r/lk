@@ -50,3 +50,13 @@ moving its index.html outside the web root; it must not touch shared LK files.
 Perform authorized browser smoke through a verified route. A real login, profile
 load, provider purchase and payment are separate acceptance evidence; do not create
 bookings or payments merely to validate publication.
+
+## Rodina visual identity
+
+The academy uses the navy `#000e18` / `#001522`, cyan `#00b9ed` and white
+identity from https://cg178013.tw1.ru/. Original SVG marks are stored in
+`src/academy/assets/rodina-mark.svg` and `rodina-mark-white.svg` (downloaded from
+the site's `/assets/` URLs) and bundled locally; runtime does not depend on the
+reference site. The theme is scoped to `.academy-shell`. Shared sign-in keeps its
+original logo unless the academy passes the presentation-only `brandLogo` prop.
+The existing API, consent, OAuth, subscription and purchase behavior is unchanged.

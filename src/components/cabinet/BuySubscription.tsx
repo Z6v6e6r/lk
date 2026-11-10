@@ -12,6 +12,7 @@ interface BuySubscriptionProps {
   onClose: () => void;
   phone: string;
   subscriptionId?: string;
+  bodyClassName?: string;
 }
 
 export function BuySupscription({
@@ -19,6 +20,7 @@ export function BuySupscription({
   onClose,
   phone,
   subscriptionId,
+  bodyClassName,
 }: BuySubscriptionProps) {
   const [subscriptions, setSubscriptions] = useState<apiSubscription[] | null>(
     null,
@@ -75,7 +77,7 @@ export function BuySupscription({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Абонементы">
+    <Modal isOpen={isOpen} onClose={onClose} title="Абонементы" bodyClassName={bodyClassName}>
       {purchaseError && <p role="alert">{purchaseError}</p>}
       {loading ? (
         <p>Загрузка абонементов...</p>

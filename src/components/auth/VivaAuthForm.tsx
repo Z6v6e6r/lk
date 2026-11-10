@@ -138,11 +138,13 @@ export function VivaAuthForm({
   allowPhoneLogin = true,
   allowOAuth = true,
   oauthProviders = ["vkid", "yandex"],
+  brandLogo,
 }: {
   onLogin: () => void;
   allowPhoneLogin?: boolean;
   allowOAuth?: boolean;
   oauthProviders?: readonly VivaOAuthProvider[];
+  brandLogo?: { src: string; alt: string };
 }) {
   const {
     phone,
@@ -326,7 +328,7 @@ export function VivaAuthForm({
     <div className="auth-wrapper">
       <div className="auth-card auth-card-chooser">
         <div className="auth-brand-lockup">
-          <img src={logoHabBlack} alt="ПадлхАБ" className="auth-brand-logo" />
+          <img src={brandLogo?.src ?? logoHabBlack} alt={brandLogo?.alt ?? "ПадлхАБ"} className="auth-brand-logo" />
           <p className="auth-title auth-title--brand">войти в личный кабинет</p>
         </div>
         {allowOAuth && <>{oauthProviders.includes("vkid") && <OAuthButton
