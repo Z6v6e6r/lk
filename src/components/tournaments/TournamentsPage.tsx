@@ -1,3 +1,4 @@
+import { tournamentAutoFinishNotice } from "./tournamentAutoFinish";
 import { tournamentEventId, tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
 import { fprProjection, validateFprState } from "./fpr6x25";
 import { searchTournamentRosterPlayers, resolveTournamentRosterPhone, isStableTournamentClientId } from '../../utils/tournamentRosterSearch';
@@ -4465,9 +4466,40 @@ function TournamentManagerModal({
     () => (data?.tournamentType === "mexicano" ? parseMexicanoOptions(data.params) : null),
     [data?.params, data?.tournamentType],
   );
+  const [serverLifecycle, setServerLifecycle] = useState<{ tournamentId: string; params: Record<string, unknown> } | null>(null);
+  const lifecycleParams = serverLifecycle?.tournamentId === data?.tournamentId
+    ? serverLifecycle!.params : data?.params;
+  useEffect(() => { if (!isOpen) setServerLifecycle(null); }, [isOpen]);
+  const autoFinishCurrentRef = useRef({ data, onDataChange, lifecycleParams });
+  useEffect(() => { autoFinishCurrentRef.current = { data, onDataChange, lifecycleParams }; }, [data, onDataChange, lifecycleParams]);
+  useEffect(() => {
+    if (!isOpen || !data?.tournamentId) return;
+    let stopped = false;
+    let loading = false;
+    const refresh = async () => {
+      if (loading || navigator.onLine === false) return;
+      loading = true;
+      try {
+        const response = await apiFetchTournamentHistory(data.tournamentId, { forceRefresh: true });
+        const record = response.data?.find(row => row.tournamentId === data.tournamentId);
+        const current = autoFinishCurrentRef.current;
+        if (!stopped && record?.params?.autoFinish && current.data
+          && JSON.stringify(record.params.autoFinish) !== JSON.stringify(current.lifecycleParams?.autoFinish)) {
+          setServerLifecycle({ tournamentId: data.tournamentId, params: record.params });
+          setServerTotals(record.totals); setServerLogs(record.playerLogs);
+          current.onDataChange?.({ ...current.data, params: record.params, rounds: buildTournamentPayloadFromHistory(record)?.rounds ?? current.data.rounds }, {
+            totals: record.totals, playerLogs: record.playerLogs,
+          });
+        }
+      } catch { /* Keep local drafts available during a network failure. */ } finally { loading = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [isOpen, data?.tournamentId]);
   const tournamentFinished = useMemo(
-    () => isTournamentMarkedFinished(data?.params, null),
-    [data?.params],
+    () => isTournamentMarkedFinished(lifecycleParams, null),
+    [lifecycleParams],
   );
   const draftDataSignature = useMemo(() => {
     if (!data) return null;
@@ -4502,7 +4534,7 @@ function TournamentManagerModal({
       { mode: resolveAmericanoScheduleMode(data.tournamentType) },
     );
     let nextRounds = hydratedRounds;
-    if (data.tournamentType === "mexicano" && !tournamentFinished) {
+    if (data.tournamentType === "mexicano" && !isTournamentMarkedFinished(data.params, null)) {
       const partiallySavedRound = hydratedRounds.find((round) => {
         const savedMatches = round.matches.reduce((sum, match) => sum + (isTournamentMatchSaved(match) ? 1 : 0), 0);
         return savedMatches > 0 && savedMatches < round.matches.length;
@@ -4579,7 +4611,7 @@ function TournamentManagerModal({
       setBroadcastError(null);
     }
     draftHydratedSignatureRef.current = draftDataSignature;
-  }, [applyBroadcastServerState, data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
+  }, [applyBroadcastServerState, data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions]);
 
   useEffect(() => {
     if (!isOpen || !data?.tournamentId || !isOnline) return;
@@ -4806,6 +4838,7 @@ function TournamentManagerModal({
         {
           tournamentId: data.tournamentId,
           results,
+          params: lifecycleParams?.autoFinish ? { autoFinish: lifecycleParams.autoFinish } : undefined,
         },
         {
           tournamentId: data.tournamentId,
@@ -4922,6 +4955,7 @@ function TournamentManagerModal({
         return;
       }
 
+      if (submission.reason === "review_required") await refreshPendingTournamentQueue();
       const res = submission.response;
       if (res?.data) {
         if (!Array.isArray(res.data.rounds)) {
@@ -5052,7 +5086,7 @@ function TournamentManagerModal({
     setFinishTournamentError(null);
 
     const finishedAt = new Date().toISOString();
-    const currentParams = data.params && typeof data.params === "object" ? data.params as Record<string, unknown> : {};
+    const currentParams = lifecycleParams && typeof lifecycleParams === "object" ? lifecycleParams as Record<string, unknown> : {};
     const isLocalManualTournament =
       currentParams.manualTournament === true
       || currentParams.createdOffline === true
@@ -5084,6 +5118,7 @@ function TournamentManagerModal({
         source: "tournament_finish",
       });
 
+      if (submission.reason === "review_required") await refreshPendingTournamentQueue();
       const res = submission.response;
 
       if (submission.mode === "queued") {
@@ -5159,7 +5194,7 @@ function TournamentManagerModal({
     setResumeTournamentError(null);
     setFinishTournamentError(null);
 
-    const resumeParams = buildTournamentResumeParams(data.params);
+    const resumeParams = buildTournamentResumeParams(lifecycleParams);
 
     try {
       const submission = await submitTournamentResultsWithOfflineFallback(
@@ -5190,6 +5225,7 @@ function TournamentManagerModal({
         return;
       }
 
+      if (submission.reason === "review_required") await refreshPendingTournamentQueue();
       const res = submission.response;
       if (!res?.data) {
         setResumeTournamentError(res?.error?.message || "Не удалось возобновить турнир");
@@ -5201,6 +5237,7 @@ function TournamentManagerModal({
       const nextParams = res.data.params && typeof res.data.params === "object"
         ? res.data.params as Record<string, unknown>
         : resumeParams;
+      setServerLifecycle({ tournamentId: data.tournamentId, params: nextParams });
       const nextRounds = Array.isArray(res.data.rounds)
         ? hydrateAmericanoRounds(
             res.data.rounds,
@@ -5577,10 +5614,10 @@ function TournamentManagerModal({
     tournamentFinished,
   ]);
   const tournamentParams = useMemo(() => (
-    data?.params && typeof data.params === "object"
-      ? data.params as Record<string, unknown>
+    lifecycleParams && typeof lifecycleParams === "object"
+      ? lifecycleParams as Record<string, unknown>
       : {}
-  ), [data?.params]);
+  ), [lifecycleParams]);
   const broadcastStationId = resolveTournamentBroadcastStationId(
     broadcastServerStationId,
     tournamentParams.stationId,
@@ -5623,6 +5660,9 @@ function TournamentManagerModal({
   );
   const finishTournamentNote = useMemo(() => {
     if (tournamentFinished) {
+      if ((tournamentParams.autoFinish as { reason?: string } | undefined)?.reason === "time_limit") {
+        return "Турнир завершён автоматически. Возобновление сохранит результаты и даст ещё 3 часа.";
+      }
       return canResumeTournament
         ? "Турнир завершен вручную. Возобновление сохранит сетку и уже введенные результаты."
         : "Турнир завершен вручную.";
@@ -5643,6 +5683,7 @@ function TournamentManagerModal({
   }, [
     canFinishTournament,
     canResumeTournament,
+    tournamentParams.autoFinish,
     data?.tournamentType,
     hasPartiallyCompletedRound,
     standingsSnapshot.completedMatches,
@@ -6099,7 +6140,7 @@ function TournamentManagerModal({
       ?? syncedWithVivaNotice
       ?? localConductedNotice
       ?? createdOfflineNotice
-      ?? (pendingQueueRecords.length > 0
+      ?? (pendingQueueRecords.some(record => !record.reviewRequired)
         ? "Есть локально сохраненные результаты. Они будут отправлены при появлении связи."
         : null);
   const broadcastTargetOptions = getTournamentBroadcastTargetOptions(broadcastStationId);
@@ -6151,6 +6192,8 @@ function TournamentManagerModal({
             ))}
           </div>
         )}
+        {tournamentAutoFinishNotice(lifecycleParams) && <p role="status" className="tournaments-sync-notice">{tournamentAutoFinishNotice(lifecycleParams)}</p>}
+        {pendingQueueRecords.some(record => record.reviewRequired) && <p role="alert" className="tournaments-sync-notice">Есть поздние результаты, сохранённые на устройстве. Требуется проверка организатором; автоматическая отправка остановлена.</p>}
         {offlineNotice && <div className="tournaments-sync-notice">{offlineNotice}</div>}
         <div className="tournament-tabs">
           {[
@@ -6343,6 +6386,7 @@ function TournamentManagerModal({
                           </span>
                           <input
                             className="tournament-score-input"
+                            disabled={tournamentFinished}
                             type="number"
                             min={0}
                             max={data.targetScore}
@@ -6366,6 +6410,7 @@ function TournamentManagerModal({
                           </span>
                           <input
                             className="tournament-score-input"
+                            disabled={tournamentFinished}
                             type="number"
                             min={0}
                             max={data.targetScore}
