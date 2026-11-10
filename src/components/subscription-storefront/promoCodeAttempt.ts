@@ -1,3 +1,6 @@
+import { parseZeroAttempt } from './zeroCheckoutCustody';
+import { legacyZeroOffersForProduct } from './zeroCheckoutProducts';
+import { apiConfirmTournamentSubscriptionPurchase } from '../../utils/apiClient';
 import { readAuthToken } from '../../utils/authTokenStorage';
 import { readSubscriptionPromoTransactionPaid } from '../../utils/subscriptionPromoCode';
 
@@ -13,16 +16,51 @@ export async function subscriptionPromoAttemptKey(productId: string, phone: stri
 export async function hasSubscriptionPromoAttempt(productId: string, phone: string): Promise<boolean> {
   try {
     const actor = readAuthToken();
-    if (!Object.keys(window.localStorage).some(key => key.startsWith(ATTEMPT_PREFIX))) return false;
     const key = await subscriptionPromoAttemptKey(productId, phone);
     const raw = window.localStorage.getItem(key);
+    let record: Record<string, unknown> | null = null;
+    if (raw !== null) { try { record = JSON.parse(raw); } catch { return true; } }
+    const represented: { key: string; raw: string }[] = [];
+    for (const offer of legacyZeroOffersForProduct(productId)) {
+      const zeroKey = 'padlhub_zero_checkout_attempt_v1:' + offer;
+      const zeroRaw = window.localStorage.getItem(zeroKey);
+      if (zeroRaw === null) continue;
+      const zero = parseZeroAttempt(zeroRaw, offer);
+      if (!zero) return true;
+      if (zero.state === 'paid') continue;
+      if (zero?.state !== 'pending' || record?.kind !== 'ordinary'
+        || !(typeof record.paymentRef === 'string' && record.paymentRef === zero.paymentRef
+          || typeof record.transactionId === 'string' && record.transactionId === zero.transactionId)) return true;
+      represented.push({ key: zeroKey, raw: zeroRaw });
+    }
     if (raw === null) return false;
+    async function releaseProvenPaid(): Promise<boolean> {
+      for (const zero of represented) {
+        if (!navigator.locks) return false;
+        const updated = await navigator.locks.request(zero.key, { ifAvailable: true }, lock => {
+          if (!lock || readAuthToken() !== actor || window.localStorage.getItem(zero.key) !== zero.raw) return false;
+          window.localStorage.setItem(zero.key, JSON.stringify({ ...JSON.parse(zero.raw), state: 'paid' }));
+          return true;
+        });
+        if (!updated) return false;
+      }
+      if (readAuthToken() !== actor || window.localStorage.getItem(key) !== raw) return false;
+      window.localStorage.removeItem(key); return true;
+    }
     let transactionId: unknown;
-    try { transactionId = JSON.parse(raw)?.transactionId; } catch { return true; }
+    try {
+      const record = JSON.parse(raw);
+      transactionId = record?.transactionId;
+      if (record?.kind === 'ordinary' && (record.paid === true || record.counterKey && record.paymentRef)) {
+        const response = record.paid === true ? null : await apiConfirmTournamentSubscriptionPurchase(record.paymentRef, { counterKey: record.counterKey, planType: record.annual ? null : 'friendship' });
+        if ((record.paid === true || !response?.error && response?.data?.paid === true && response.data.status === 'PAID' && !response.data.failed) && readAuthToken() === actor) {
+          return !await releaseProvenPaid();
+        }
+      }
+    } catch { return true; }
     if (typeof transactionId === 'string' && transactionId.trim() && await readSubscriptionPromoTransactionPaid(transactionId) && readAuthToken() === actor) {
       // A completed prior purchase no longer blocks a later renewal.
-      window.localStorage.removeItem(key);
-      return false;
+      return !await releaseProvenPaid();
     }
     return true;
   } catch { return true; }
@@ -40,4 +78,13 @@ export async function withSubscriptionPromoLock<T>(productId: string, phone: str
     if (!lock || await hasSubscriptionPromoAttempt(productId, phone)) throw new Error(SUBSCRIPTION_PROMO_PENDING_MESSAGE);
     return create();
   });
+}
+
+
+/** Called while holding the shared product/phone lock, before the ordinary POST. */
+export async function recordOrdinarySubscriptionAttempt(productId: string, phone: string, evidence: { transactionId?: string; paymentRef?: string; counterKey?: string; annual?: boolean; paid?: boolean } = {}): Promise<void> {
+  const key = await subscriptionPromoAttemptKey(productId, phone);
+  const raw = JSON.stringify({ kind: 'ordinary', ...evidence });
+  window.localStorage.setItem(key, raw);
+  if (window.localStorage.getItem(key) !== raw) throw new Error('Не удалось сохранить попытку оплаты.');
 }

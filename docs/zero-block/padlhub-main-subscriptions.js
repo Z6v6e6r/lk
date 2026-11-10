@@ -6,7 +6,7 @@
     if (window.phSubscriptions || window.PADLHUB_MAIN_CHECKOUT_DISABLED === true) return;
     // Missing/new Tilda block or another adapter must leave the real catalog links working.
     var root = document.getElementById('rec4807682401');
-    if (!root || !window.PadlHubZeroBlock || !['2.1.0', '2.2.0', '2.3.0'].includes(window.PadlHubZeroBlock.version)) return;
+    if (!root || !window.PadlHubZeroBlock || !['2.1.0', '2.2.0', '2.3.0', '2.4.0'].includes(window.PadlHubZeroBlock.version)) return;
     var period = 'month';
     var restorers = [];
     function rememberAttribute(element, name) {
@@ -69,6 +69,7 @@
       root: root,
       offerKeys: ['friendship', 'friendship-year', 'ra', 'academy', 'energy5'],
       channel: 'prod',
+      directCheckout: true,
       lazyCheckout: true,
       fallbackToCatalog: true,
       requireIsolation: true,

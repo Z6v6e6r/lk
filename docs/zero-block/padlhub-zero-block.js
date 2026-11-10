@@ -1,5 +1,5 @@
 /* global window, document */
-/* PadlHub Zero Block adapter v2.3.0 — scoped bindings + optional lazy checkout/fallback. */
+/* PadlHub Zero Block adapter v2.4.0 — scoped bindings + optional lazy checkout/fallback. */
 (function (window, document) {
   'use strict';
   if (window.PadlHubZeroBlock) return;
@@ -80,6 +80,10 @@
   var definitions = {
     residency: { runtimePrice: true, label: 'Резидентство ПадлхАБ' },
     'friendship-two-hours': { runtimePrice: true, label: 'Дружба 2.0' },
+    atlanty: { runtimePrice: true, label: 'ДРУЖБА.АТЛАНТЫ' },
+    'atlanty-year': { runtimePrice: true, label: 'ДРУЖБА.АТЛАНТЫ — год' },
+    topocraty: { runtimePrice: true, label: 'ДРУЖБА.ТОПОКРАТЫ' },
+    patriots: { runtimePrice: true, label: 'ДРУЖБА.ПАТРИОТЫ' },
     friendship: { counterKey: 'friendship', label: 'Дружба' },
     'friendship-year': { counterKey: 'network_friendship', label: 'Дружба — год' },
     academy: { counterKey: 'academy', label: 'Академия' },
@@ -180,9 +184,12 @@
       root.dispatchEvent(new CustomEvent('padlhub:subscription', { detail: { key: key, state: { status: states[key].status, data: states[key].data ? Object.assign({}, states[key].data) : null } } }));
     }
     function supported(api, key) {
+      var direct = options.directCheckout === true;
+      var originalFast = key === 'residency' || key === 'friendship-two-hours';
       return api && (!definitions[key].runtimePrice || (typeof api.supportsCheckoutOffer === 'function'
-        && api.supportsCheckoutOffer(key) === true && typeof api.loadCheckoutOfferPrice === 'function'
-        && (options.directCheckout !== true || api.directCheckoutVersion === 1 && typeof api.startCheckout === 'function')));
+        && api.supportsCheckoutOffer(key) === true && typeof api.loadCheckoutOfferPrice === 'function'))
+        && (!direct || api.directCheckoutVersion === 1 && typeof api.startCheckout === 'function'
+          && (originalFast || api.directCheckoutAllOffersVersion === 1 && typeof api.supportsDirectCheckoutOffer === 'function' && api.supportsDirectCheckoutOffer(key)));
     }
     function requireOffer(api, key) {
       if (!supported(api, key)) throw new Error('Обновите модуль оформления: предложение ещё не поддерживается.');
@@ -264,14 +271,14 @@
       try {
         var trigger = event.target.closest('a,button') || event.target.closest(selector('buy', key));
         if (trigger && typeof trigger.focus === 'function') trigger.focus();
-        if (options.directCheckout === true && definitions[key].runtimePrice) checkout.startCheckout(key, state.data.priceMinor, event);
+        if (options.directCheckout === true) checkout.startCheckout(key, state.data.priceMinor, event);
         else checkout.openCheckout(key);
       } catch (error) { text('status', key, error.message || 'Не удалось открыть оформление'); }
     }
     function onKey(event) {
       var key = matchTarget(event);
       if (!key || event.target.closest('button') || (event.target.closest('a') && event.key === 'Enter') || (event.key !== 'Enter' && event.key !== ' ')) return;
-      if (options.directCheckout === true && definitions[key].runtimePrice) {
+      if (options.directCheckout === true) {
         event.preventDefault(); event.stopImmediatePropagation();
         if (lazy) void open(key, event.target, false, event);
         else if (supported(checkout, key) && states[key].status === 'ready' && states[key].data.canPurchase) {
@@ -384,7 +391,7 @@
         keys.forEach(render);
         if (trigger && typeof trigger.focus === 'function') trigger.focus();
         if (resume) checkout.resumeCheckout(key);
-        else if (gesture && options.directCheckout === true && definitions[key].runtimePrice) checkout.startCheckout(key, chosenPrice, gesture);
+        else if (gesture && options.directCheckout === true && chosenPrice) checkout.startCheckout(key, chosenPrice, gesture);
         else checkout.openCheckout(key);
       }).catch(failed);
     }
@@ -461,5 +468,5 @@
     }
     return api;
   }
-  window.PadlHubZeroBlock = Object.freeze({ version: '2.3.0', init: init });
+  window.PadlHubZeroBlock = Object.freeze({ version: '2.4.0', init: init });
 })(window, document);

@@ -12,8 +12,8 @@ export function hasPromoPaymentAttempt(offerKey: string): boolean {
   catch { return true; }
 }
 
-export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string): Promise<
-  { status: 'redirect'; paymentUrl: string } | { status: 'settled'; message: string }
+export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string, expectedPrice?: number): Promise<
+  { status: 'redirect'; paymentUrl: string; transactionId?: string } | { status: 'settled'; message: string; transactionId?: string }
 > {
   const offer = resolveStorefrontPromo(offerKey);
   if (!offer || !phone.trim()) throw new StorefrontPaymentError('Не удалось определить акционное предложение или профиль.');
@@ -44,10 +44,14 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
       });
       if (result.error || !result.data) throw new Error('Purchase outcome unavailable');
       const { paymentUrl, paid, toPay } = result.data;
+      if (expectedPrice !== undefined && toPay !== expectedPrice && !(paid === true && toPay === 0)) throw new Error('Price mismatch');
+      const ids = [result.data.transactionId, result.data.id].filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+        if (new Set(ids).size > 1) throw new Error('Conflicting transaction ids');
+        const transactionId = ids[0];
       if (typeof paymentUrl === 'string' && paymentUrl.trim()) {
         const url = new URL(paymentUrl);
         if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid payment URL');
-        return { status: 'redirect', paymentUrl: url.toString() };
+        return { status: 'redirect', paymentUrl: url.toString(), ...(transactionId ? { transactionId } : {}) };
       }
       if ((paid === true && !(typeof toPay === 'number' && toPay > 0))
         || (paid !== false && typeof toPay === 'number' && Number.isFinite(toPay) && toPay === 0)) {

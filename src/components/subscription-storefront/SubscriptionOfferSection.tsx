@@ -8,7 +8,7 @@ export function SubscriptionOfferSection(props: {
   readonly section: SubscriptionOfferSectionView;
   readonly selectedBillingOptions: Readonly<Record<string, string>>;
   readonly onBillingOptionChange: (planId: string, optionId: string) => void;
-  readonly onChoose: (selection: SubscriptionPlanSelection) => void;
+  readonly onChoose: (selection: SubscriptionPlanSelection, gesture?: Event) => void;
   readonly renderCheckoutAddon?: (selection: SubscriptionPlanSelection, disabled: boolean) => ReactNode;
 }): React.JSX.Element {
   const railRef = useRef<HTMLDivElement>(null);
@@ -133,8 +133,8 @@ export function SubscriptionOfferSection(props: {
                 selectedBillingOptionId={selectedBillingOptionId}
                 checkoutAddon={props.renderCheckoutAddon?.({ planId: plan.id, billingOptionId: selectedBillingOptionId }, Boolean(plan.ctaDisabled || plan.billingOptions.find(option => option.id === selectedBillingOptionId)?.ctaDisabled))}
                 onBillingOptionChange={(optionId) => props.onBillingOptionChange(plan.id, optionId)}
-                onChoose={() =>
-                  props.onChoose({ planId: plan.id, billingOptionId: selectedBillingOptionId })
+                onChoose={event =>
+                  props.onChoose({ planId: plan.id, billingOptionId: selectedBillingOptionId }, event.nativeEvent)
                 }
               />
             </div>

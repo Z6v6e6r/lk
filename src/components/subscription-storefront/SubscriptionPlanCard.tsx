@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { fastOfferKey } from './zeroCheckoutOffers';
+import type { ReactNode, MouseEvent } from 'react';
 import type { CSSProperties } from 'react';
 
 import type { SubscriptionBenefitIcon, SubscriptionBillingOption, SubscriptionPlanView } from './model.js';
@@ -9,7 +10,7 @@ type TagCssProperties = CSSProperties & { '--subscription-tag-tone'?: string };
 type CardCssProperties = CSSProperties & { '--subscription-card-frame'?: string };
 
 function rubles(priceMinor: number): string {
-  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(priceMinor / 100);
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(priceMinor / 100);
 }
 
 function progressLabel(progress: NonNullable<SubscriptionBillingOption['progress']>): string {
@@ -167,7 +168,7 @@ function PlanCardBody(props: {
   readonly plan: SubscriptionPlanView;
   readonly selectedOption: SubscriptionBillingOption;
   readonly onBillingOptionChange: (optionId: string) => void;
-  readonly onChoose: () => void;
+  readonly onChoose: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly checkoutAddon?: ReactNode;
 }): React.JSX.Element {
   return (
@@ -222,6 +223,7 @@ function PlanCardBody(props: {
       <div className="subscription-card__body">
         <button
           className="subscription-card__cta"
+          data-ph-buy={fastOfferKey(props.plan.id, props.selectedOption.id) ?? undefined}
           type="button"
           disabled={props.plan.ctaDisabled === true || props.selectedOption.ctaDisabled === true || props.selectedOption.priceMinor === null}
           onClick={props.onChoose}
@@ -263,7 +265,7 @@ export function SubscriptionPlanCard(props: {
   readonly plan: SubscriptionPlanView;
   readonly selectedBillingOptionId: string;
   readonly onBillingOptionChange: (optionId: string) => void;
-  readonly onChoose: () => void;
+  readonly onChoose: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly checkoutAddon?: ReactNode;
 }): React.JSX.Element {
   const selectedOption =

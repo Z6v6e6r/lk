@@ -24,7 +24,7 @@ test('fast payment requires a recent real card gesture for exactly one of the tw
     for (const change of [{ isTrusted: false }, { type: 'submit' }, { timeStamp: performance.now() - 16000 }, { type: 'keydown', key: 'Escape' }, { target: new h.w.Element('friendship-two-hours') }]) {
       assert.throws(() => createFastIntent('residency', 79000, Object.assign(h.event(), change)));
     }
-    for (const key of ['friendship', 'friendship-year', 'patriots', 'friendship_two_hours', '__proto__']) assert.throws(() => createFastIntent(key, 79000, h.event()));
+    for (const key of ['friendship_two_hours', '__proto__', 'unknown']) assert.throws(() => createFastIntent(key, 79000, h.event()));
     for (const price of [0, -1, 1.5, NaN]) assert.throws(() => createFastIntent('residency', price, h.event()));
     const v = createFastIntent('residency', 79000, h.event()); assert.equal(v.phase, 'created');
     assert.equal(claimFastIntent(v.id, quote), false); // Quote not armed yet.
@@ -118,5 +118,32 @@ test('OAuth keeps the card account across redirect: another actor needs manual c
       assert.equal(readFastIntent(v.id)?.phase, 'armed'); // No claim/POST before verified continuation.
       if (resumed) assert.equal(claimFastIntent(resumed.id, quote), true);
     } finally { h.restore(); }
+  }
+});
+
+
+test('all explicit offers bind non-live quotes without inventing activation days', async () => {
+  const { FAST_OFFER_KEYS, fastOfferKey, isCheckoutReturn } = await import('../../src/components/subscription-storefront/zeroCheckoutOffers.ts');
+  for (const key of FAST_OFFER_KEYS) {
+    const h = harness(); try {
+      const event = Object.assign(h.event(), { target: new h.w.Element(key) });
+      const intent = createFastIntent(key, 980000, event);
+      const live = key === 'residency' || key === 'friendship-two-hours';
+      const q = { priceMinor: 980000, ...(live ? { activationDays: key === 'residency' ? 0 : 1 } : {}) };
+      if (live) assert.throws(() => bindFastQuote(intent.id, { priceMinor: 980000 }));
+      const armed = bindFastQuote(intent.id, q);
+      assert.equal(armed.activationDays, live ? q.activationDays : null);
+      assert.equal(claimFastIntent(intent.id, q), true);
+      assert.equal(claimFastIntent(intent.id, q), false);
+    } finally { h.restore(); }
+  }
+  assert.equal(fastOfferKey('friendship', 'annual'), 'friendship-year');
+  assert.equal(fastOfferKey('friendship', 'monthly-two-hours'), 'friendship-two-hours');
+  assert.equal(fastOfferKey('academy-promo', 'promo'), 'academy-promo');
+  assert.equal(fastOfferKey('atlanty', 'annual'), 'atlanty-year');
+  for (const pair of [['ra','annual'],['friendship-year','monthly'],['ra','promo'],['unknown','monthly']]) assert.equal(fastOfferKey(...pair as [string,string]), null);
+  for (const param of ['phCheckoutReturn','summerPaymentRef','promoPaymentReturn','subscriptionPromoReturn']) {
+    assert.equal(isCheckoutReturn('https://padlhub.ru/sub_hab?'+param+'=fixture'), true);
+    const h = harness();try { h.w.location.href+='&'+param+'=fixture';assert.throws(()=>createFastIntent('residency',79000,h.event())); } finally {h.restore();}
   }
 });

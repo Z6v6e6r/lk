@@ -1,3 +1,4 @@
+import { parseZeroAttempt } from '../../src/components/subscription-storefront/zeroCheckoutCustody.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -40,7 +41,7 @@ function payment(options: { fresh?: typeof price; result?: unknown; reject?: boo
     if (active.has(key)) return run(null);
     active.add(key); try { return await run({}); } finally { active.delete(key); }
   } } };
-  const attempt = load('src/components/subscription-storefront/promoCodeAttempt.ts', { readAuthToken: () => 'synthetic-actor', readSubscriptionPromoTransactionPaid: async () => options.paidStatus === true }, { window, navigator });
+  const attempt = load('src/components/subscription-storefront/promoCodeAttempt.ts', { parseZeroAttempt, legacyZeroOffersForProduct: (id: string) => [id === FRIENDSHIP_MONTHLY_PRODUCT_ID ? 'friendship' : 'academy'], apiConfirmTournamentSubscriptionPurchase: async () => ({ data: { paid: options.paidStatus === true, failed: false, status: options.paidStatus ? 'PAID' : 'PENDING' } }), readAuthToken: () => 'synthetic-actor', readSubscriptionPromoTransactionPaid: async () => options.paidStatus === true }, { window, navigator });
   const exports = load('src/components/subscription-storefront/promoCodePayment.ts', {
     apiCreateTournamentSubscriptionPurchase: async (params: Record<string, unknown>) => {
       calls.push({ productId: String(params.productId), phone: String(params.clientPhone), options: params });
@@ -306,4 +307,40 @@ test('real Viva preview kopeck fields authorize only the exact agreed quote', ()
     assert.equal(invalid[2].statusCode, 409);
     assert.equal(invalid[2].payload.promoAttempt.providerAttempted, false);
   }
+});
+
+
+test('coupon cannot bypass historical unresolved zero custody without the new shared marker', async () => {
+  for (const raw of ['malformed', JSON.stringify({state:'pending'}), JSON.stringify({state:'failed'}), JSON.stringify({key:'academy',paymentRef:'zero-00000000-0000-4000-8000-000000000001',state:'failed'}), JSON.stringify({state:'paid'}), JSON.stringify({key:'foreign',paymentRef:'zero-00000000-0000-4000-8000-000000000001',state:'paid'})]) {
+    const f=payment();f.storage['padlhub_zero_checkout_attempt_v1:academy']=raw;
+    await assert.rejects(f.pay());assert.equal(f.calls.length,0);
+  }
+  const paid=payment();paid.storage['padlhub_zero_checkout_attempt_v1:academy']=JSON.stringify({key:'academy',paymentRef:'zero-00000000-0000-4000-8000-000000000001',state:'paid'});
+  await paid.pay();assert.equal(paid.calls.length,1);
+  const other=payment();other.storage['padlhub_zero_checkout_attempt_v1:friendship']=JSON.stringify({state:'pending'});
+  await other.pay();assert.equal(other.calls.length,1);
+});
+
+test('shared ordinary receipt blocks coupon while uncertain and releases only verified paid custody', async () => {
+  const options={paidStatus:false};const f=payment(options);
+  const key='padlhub_zero_checkout_attempt_v1:academy';
+  f.storage[key]=JSON.stringify({key:'academy',paymentRef:'zero-00000000-0000-4000-8000-000000000001',transactionId:'receipt-A',state:'pending'});
+  await f.attempt.recordOrdinarySubscriptionAttempt(price.productId,phone,{transactionId:'receipt-A'});
+  await assert.rejects(f.pay());assert.equal(f.calls.length,0);
+  options.paidStatus=true;await f.pay();assert.equal(f.calls.length,1);
+  assert.equal(JSON.parse(String(f.storage[key])).state,'paid');
+  // The new coupon attempt is independent and remains guarded despite the old PAID marker.
+  options.paidStatus=false;await assert.rejects(f.pay());assert.equal(f.calls.length,1);
+});
+
+test('ordinary counter evidence permits renewal only after exact PAID confirmation', async () => {
+  const options={paidStatus:false};const f=payment(options);const product=FRIENDSHIP_MONTHLY_PRODUCT_ID;
+  const key='padlhub_zero_checkout_attempt_v1:friendship';
+  f.storage[key]=JSON.stringify({key:'friendship',paymentRef:'zero-00000000-0000-4000-8000-000000000001',state:'pending'});
+  await f.attempt.recordOrdinarySubscriptionAttempt(product,phone,{paymentRef:'zero-00000000-0000-4000-8000-000000000001',counterKey:'friendship',annual:false});
+  let creates=0;
+  await assert.rejects(f.attempt.withSubscriptionPromoLock(product,phone,async()=>{creates++;}));assert.equal(creates,0);
+  options.paidStatus=true;
+  await f.attempt.withSubscriptionPromoLock(product,phone,async()=>{creates++;});
+  assert.equal(creates,1);assert.equal(JSON.parse(String(f.storage[key])).state,'paid');
 });

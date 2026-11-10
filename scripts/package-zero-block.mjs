@@ -11,10 +11,11 @@ await writeFile(join(destination, 'ИНСТРУКЦИЯ.md'), instruction);
 const css = '<style>[data-ph-zero-root] [data-ph-hidden="true"]{display:none!important}[data-ph-zero-root] [aria-disabled="true"]{opacity:.55;cursor:not-allowed}[data-ph-zero-root] [aria-busy="true"]{cursor:progress}</style>';
 for (const [name, keys] of [
   ['T123-Резидентство-и-Дружба-2.0.html', ['residency','friendship-two-hours']],
-  ['T123-обычные.html', ['friendship','academy','ra']],
+  ['T123-обычные.html', ['friendship','friendship-year','academy','ra','energy5']],
   ['T123-Питер.html', ['friendship-promo','academy-promo','ra-promo']],
+  ['T123-клубные.html', ['atlanty','topocraty','patriots']],
 ]) {
-  await writeFile(join(destination, name), `${css}\n<script>\n${source}\n</script>\n<script>\nwindow.phSubscriptions = window.PadlHubZeroBlock.init({ offerKeys: ${JSON.stringify(keys)}, channel: 'prod', ${keys.includes('residency') ? 'directCheckout: true, ' : ''}refreshMs: 30000 });\n</script>\n`);
+  await writeFile(join(destination, name), `${css}\n<script>\n${source}\n</script>\n<script>\nwindow.phSubscriptions = window.PadlHubZeroBlock.init({ offerKeys: ${JSON.stringify(keys)}, channel: 'prod', directCheckout: true, refreshMs: 30000 });\n</script>\n`);
 }
 await writeFile(join(destination, 'T123-Главная.html'), `${css}\n<script>\n${source}\n</script>\n<script>\n${main}\n</script>\n`);
 console.log(`Designer kit written to ${destination}. Requires checkout-capable storefront publication.`);

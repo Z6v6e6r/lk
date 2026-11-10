@@ -15,8 +15,8 @@ const files = {
   '/bindings.js': new URL('../docs/zero-block/padlhub-zero-block.js', import.meta.url),
 };
 const runtimeIntegrity = 'sha384-' + createHash('sha384').update(await readFile(files['/subscription-storefront.js'])).digest('base64');
-function page(main = false, live = false) {
-  const keys = live ? ['residency', 'friendship-two-hours'] : ['friendship','friendship-year','academy','ra-promo'];
+function page(main = false, live = false, catalog = false, all = false) {
+  const keys = all ? ['friendship','friendship-year','academy','ra','energy5','friendship-promo','academy-promo','ra-promo','atlanty','topocraty','patriots','residency','friendship-two-hours','atlanty-year'] : live ? ['residency', 'friendship-two-hours'] : ['friendship','friendship-year','academy','ra-promo'];
   return `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,"><title>Zero Block · локальная проверка</title>
 <style>[hidden]{display:none!important}body{margin:24px;font:16px Arial}main{display:flex;flex-wrap:wrap;gap:20px}.card{padding:20px;border:1px solid #ccc;border-radius:16px;width:230px}.card a{display:block;padding:14px;background:#eee;margin-top:16px}[data-ph-hidden=true]{display:none!important}[aria-disabled=true]{opacity:.5}#log{white-space:pre-wrap;font:12px monospace;overflow-wrap:anywhere}</style>
@@ -25,7 +25,7 @@ function page(main = false, live = false) {
 <div id="external-form"><button class="auth-btn" id="external-button">Внешняя кнопка сайта</button></div>
 <button id="check-isolation">Проверить изоляцию</button>
 ${main ? '<button id="show-subscriptions">Открыть подписки</button>' : ''}
-<main ${main ? 'id="rec4807682401" hidden' : ''}>${main ? '<div class="ph-period-month"><div class="tn-atom">месяц</div></div><div class="ph-period-year"><div class="tn-atom">год</div></div><p class="ph-period-label">/ мес</p>' : ''}${(main ? ['friendship','ra','academy','energy5'] : keys).map(key => `<section class="card ph-card-${key}"><h2>${key}</h2><div class="ph-price-${key}"><div class="tn-atom">—</div></div><p class="ph-status-${key}">Загрузка</p><div class="ph-buy-${key}"><a class="tn-atom" href="https://padlhub.ru/sub_hab">Оформить ${key}</a></div></section>`).join('')}</main>
+${catalog ? '<div id="catalog"></div>' : ''}<main style="${catalog ? 'display:none' : ''}" ${main ? 'id="rec4807682401" hidden' : ''}>${main ? '<div class="ph-period-month"><div class="tn-atom">месяц</div></div><div class="ph-period-year"><div class="tn-atom">год</div></div><p class="ph-period-label">/ мес</p>' : ''}${(main ? ['friendship','ra','academy','energy5'] : keys).map(key => `<section class="card ph-card-${key}"><h2>${key}</h2><div class="ph-price-${key}"><div class="tn-atom">—</div></div><p class="ph-status-${key}">Загрузка</p><div class="ph-buy-${key}"><a class="tn-atom" href="https://padlhub.ru/sub_hab">Оформить ${key}</a></div></section>`).join('')}</main>
 <p><button id="reset">Сбросить только тестовые попытки</button> <button id="destroy">Отключить блок</button></p><pre id="log"></pre>
 <script>
 const query=new URLSearchParams(location.search);
@@ -44,12 +44,13 @@ function login(){
   localStorage.setItem('padlhub_viva_auth_access_token_v1',JSON.stringify({token:token,expiresAt:Date.now()+3600000}));
 }
 if(query.get('auth')==='1') login();
-window.fixturePrices={residency:79000,'friendship-two-hours':1980000};
+window.fixturePrices={residency:79000,'friendship-two-hours':1980000,friendship:query.get('fractional')==='1'?980055:980000,'friendship-year':6800000,ra:2380000,academy:2380000,energy5:1980000};
 const reply=data=>Promise.resolve(new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}}));
 window.fetch=async function(input,init={}){
   const url=String(typeof input==='string'?input:input.url||input);
   if(url.includes('subscription-storefront/release')){note('GET manifest (fixture only)');if(query.get('fail')==='module')return new Response('{}',{status:503});return reply({version:'fixture',checkoutVersion:1,checkoutIsolationVersion:1,checkoutChannel:'prod',script:{fileName:'subscription-storefront.js',integrity:${JSON.stringify(runtimeIntegrity)}}});}
   if(url.includes('/products/subscriptions/')) {
+    if(url.endsWith('/37ab3713-4431-4815-96ba-d7ece76a9241'))return reply({id:'37ab3713-4431-4815-96ba-d7ece76a9241',cost:680000,validityDays:30,visits:30,hasDirectionLimitation:true,hasTypeLimitation:true,availableDirections:[6181,6306,6307].map(id=>({id})),availableTypes:[2349].map(id=>({id}))});
     const residency=url.endsWith('/4037a3a3-e551-4f9a-a9db-1410e46b8635');
     const key=residency?'residency':'friendship-two-hours';
     note('GET synthetic product '+key);
@@ -61,13 +62,16 @@ window.fetch=async function(input,init={}){
       hasTypeLimitation:true,availableTypes:(residency?[2572]:[1613,839]).map(id=>({id}))});
   }
   if(url.includes('summer-subscription/status')) {
-    const key=new URL(url,location.href).searchParams.get('counterKey')||'friendship';
+    const requested=new URL(url,location.href).searchParams.get('counterKey');
+    const key=requested||'friendship';
     note('GET counter '+key);
     if(query.get('fail')==='status')return new Response('{}',{status:503});
     if(key==='friendship_two_hours')return reply([{counterKey:key,productId:'6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',priceMinor:window.fixturePrices['friendship-two-hours'],canPurchase:true,bindingReady:true,unlimited:true,totalLimit:0,remainingCount:0}]);
-    return reply([{counterKey:key,priceMinor:({network_friendship:6800000,friendship:980000,ra:2380000,academy:2380000,energy5:1980000})[key]||980000,canPurchase:true,bindingReady:true,unlimited:false,totalLimit:10,remainingCount:3}]);
+    if(!requested)return reply(['friendship','ra','academy','energy5'].map(counterKey=>({counterKey,priceMinor:window.fixturePrices[counterKey],canPurchase:true,bindingReady:true,unlimited:false,totalLimit:10,remainingCount:3})));
+    return reply([{counterKey:key,priceMinor:({network_friendship:6800000,friendship:query.get('fractional')==='1'?980055:980000,ra:2380000,academy:2380000,energy5:1980000})[key]||980000,canPurchase:true,bindingReady:true,unlimited:false,totalLimit:10,remainingCount:3}]);
   }
   if(url.includes('/profile')){note('GET synthetic profile');return reply({id:'zero-fixture',phone:${JSON.stringify(fixturePhone)}});}
+  if(url.includes('/transactions/')&&new URL(url,location.href).pathname.endsWith('/status'))return reply({transactionStatus:query.get('paid')==='1'?'PAID':'PENDING'});
   if(url.includes('/transactions')||url.includes('summer-subscription/purchase')){
     note('POST purchase (fixture only) '+String(JSON.parse(init.body||'{}').id||''));
     sessionStorage.setItem('fixture_purchase_count',String(Number(sessionStorage.getItem('fixture_purchase_count')||0)+1));
@@ -75,7 +79,8 @@ window.fetch=async function(input,init={}){
     if(query.get('fail')==='timeout') throw new Error('fixture timeout');
     if(query.get('bank')==='1') {
       const body=JSON.parse(init.body||'{}');sessionStorage.setItem('fixture_bank_return',body.successUrl);
-      return reply({paymentUrl:'https://bank.example/zero',toPay:body.id==='4037a3a3-e551-4f9a-a9db-1410e46b8635'?window.fixturePrices.residency:window.fixturePrices['friendship-two-hours']});
+      const price=body.counterKey?window.fixturePrices[body.counterKey==='network_friendship'?'friendship-year':body.counterKey]:body.id==='4037a3a3-e551-4f9a-a9db-1410e46b8635'?window.fixturePrices.residency:body.id==='6b98e7e3-5bd3-4e94-9dc3-7723ea52513e'?window.fixturePrices['friendship-two-hours']:({'dfa72adf-233b-4285-8d69-e5eab4234fbe':1980000,'c079dc82-c716-4f0e-b9ad-6aab62fb789e':490000,'6bda152b-0a9c-4308-82d0-3cd4e6aa680d':1190000,'3b4806f1-6f9a-46df-a7d7-45075b4e7274':1190000,'3907d127-a6b0-419e-a933-4a2857f26356':680000,'14692232-12be-4218-9fa1-2d5b79b62035':680000,'37ab3713-4431-4815-96ba-d7ece76a9241':680000})[body.id]||2380000;
+      return reply({paymentUrl:'https://bank.example/zero',toPay:price,toPayMinor:price,id:'fixture-transaction',paymentRef:body.paymentRef});
     }
     return reply({});
   }
@@ -104,12 +109,12 @@ document.getElementById('reset').onclick=()=>{
 </script>
 ${main ? '' : '<script src="/subscription-storefront.js"></script>'}<script src="/bindings.js"></script>
 ${main ? '<script src="/main.js"></script>' : ''}
-<script>window.fixture=${main ? 'window.phSubscriptions' : `PadlHubZeroBlock.init({offerKeys:${JSON.stringify(keys)},directCheckout:location.pathname==='/direct'||query.get('fast')==='1',lazyCheckout:query.get('lazy')==='1'})`};document.getElementById('destroy').onclick=()=>note('destroy='+fixture.destroy());</script>
+<script>window.fixture=${catalog ? `({destroy:()=>LKWidgetSubscriptionStorefront.unmount(),mounted:LKWidgetSubscriptionStorefront.mount({targetId:'catalog',data:{variant:query.get('variant')}})})` : main ? 'window.phSubscriptions' : `PadlHubZeroBlock.init({offerKeys:${JSON.stringify(keys)},directCheckout:location.pathname==='/direct'||query.get('fast')==='1',lazyCheckout:query.get('lazy')==='1'})`};document.getElementById('destroy').onclick=()=>note('destroy='+fixture.destroy());</script>
 </html>`;
 }
 createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://127.0.0.1:${port}`);
-  if (['/','/direct','/lk_new'].includes(url.pathname)) { response.writeHead(200, {'content-type':'text/html; charset=utf-8'}).end(page(url.searchParams.get('main') === '1', url.searchParams.get('live') === '1' || ['/direct','/lk_new'].includes(url.pathname))); return; }
+  if (['/','/direct','/lk_new','/catalog'].includes(url.pathname)) { response.writeHead(200, {'content-type':'text/html; charset=utf-8'}).end(page(url.searchParams.get('main') === '1', url.searchParams.get('live') === '1' || ['/direct','/lk_new'].includes(url.pathname),url.pathname==='/catalog',url.searchParams.get('offers')==='all')); return; }
   const file = files[url.pathname];
   if (!file) { response.writeHead(404).end(); return; }
   try { response.writeHead(200, {'content-type':'text/javascript; charset=utf-8'}).end(await readFile(file)); }
