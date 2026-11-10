@@ -149,6 +149,7 @@
     "test:runtime-config": "node --experimental-strip-types --test scripts/tests/overlayBundleUrl.test.ts scripts/tests/supportEventPayload.apiClient.test.ts",
     "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
     "test:hung-claim-release": "node --test scripts/tests/hungClaimRelease.test.mjs",
+    "test:tournament-auto-finish": "node --experimental-strip-types --test scripts/tests/tournamentAutoFinish.test.mjs",
     "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
     "test:tff-community-backfill": "node --experimental-strip-types --test scripts/tests/timeForFriendsCommunityBackfill.test.mjs",
     "test:published-tournament-membership-plan": "node --test scripts/tests/publishedTournamentMembershipPlan.test.mjs",
