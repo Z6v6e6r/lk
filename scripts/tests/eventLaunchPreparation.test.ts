@@ -35,8 +35,8 @@ test('canonical admission is bounded before profile verification without capturi
  const result=buildEventCommunityGuard(source,sha256(source),['https://padlhub.ru','https://padlhub.su']);
  const locations=[...result.candidate.matchAll(/location (~\*?) ([^\n]+) \{\n\s+client_max_body_size (\d+)k;\n\s+include \/etc\/nginx\/snippets\/lk-event-community-proxy.conf;/g)];
  const selected=(uri:string)=>locations.filter(match=>new RegExp(match[2],match[1]==='~*'?'i':'').test(uri));
- for(const uri of ['/lk/communities/fixture/event-admission','/lk/communities/fixture/event-admission/','/lk/communities/fixture/EVENT-ADMISSION','/lk/communities/fixture/part/event-admission']) {
-  assert.equal(selected(uri).length,1);assert.equal(selected(uri)[0][3],'8');
+ for(const uri of ['/lk/communities/fixture/event-admission','/lk/communities/fixture/event-admission/','/lk/communities/fixture/EVENT-ADMISSION','/lk/communities/fixture/part/event-admission','/lk/communities/event-admission','/lk/communities/a\nb/event-admission']) {
+  assert.equal(selected(uri).length,1,uri);assert.equal(selected(uri)[0][3],'8');
  }
  for(const uri of ['/lk/communities/fixture/detail','/lk/communities/fixture/event-admission/extra','/lk/communities/fixture/event-admission-other']) assert.equal(selected(uri).length,0);
  assert.match(result.common,/limit_req zone=lk_community_ip/);assert.match(result.common,/limit_req zone=lk_community_global/);

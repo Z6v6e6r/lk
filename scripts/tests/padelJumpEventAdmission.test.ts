@@ -142,7 +142,7 @@ test('admission budget cannot be bypassed or rewired to another auth continuatio
 });
 test('admission pre-auth validation rejects malformed requests without dispatch or retained identities', () => {
   for(const [patch,status] of [
-    [{method:'HEAD'},405], [{params:{communityId:'bad/target'}},400], [{query:{clientId:'spoof'}},400],
+    [{method:'HEAD'},405], [{params:{communityId:'bad/target'}},400], [{params:{communityId:'/'}},400], [{params:{communityId:'a\nb'}},400], [{query:{clientId:'spoof'}},400],
     [{headers:{}},403], [{headers:{authorization:'invalid'}},401],
     [{headers:{authorization:'Bearer fixture','content-length':'8193'}},413],
     [{headers:{authorization:'Bearer fixture','transfer-encoding':'chunked'}},400],

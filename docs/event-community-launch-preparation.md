@@ -169,6 +169,8 @@ CORS uses an explicit exact-origin allowlist for protected routes, Vary: Origin,
 
 Direct Node-RED access is not an exemption from provider budgets. The generated community-auth subflow places a process-global dispatch gate before its profile HTTP request, shared by every subflow instance and route. It permits at most 10 dispatches in any 1 second and 30 in any 15 seconds; the latter window exceeds the pinned 10-second provider request timeout. Budget denial restores the original request through the existing auth response: typed access fails closed as unavailable and FRIENDS retains its existing compatibility behavior. A separate admission ingress gate validates the GET, community ID, empty query, authorization shape and 8 KiB declared body bound before auth. Its graph and continuation are exact-shape guarded. Both budgets retain at most 30 numeric timestamps, never token/IP/actor keys; corrupt state, clock rollback or unavailable storage fails closed. These are local source/fixture properties until the reviewed graph is installed and read back; nginx alone is not protection when port 1880 is reachable directly.
 
+The nginx admission cap also covers the normalized bare `/lk/communities/event-admission` path: an encoded slash-only ID can collapse to it. Decoded linefeeds must not evade the pattern either. These malformed aliases receive the same edge body/rate budgets, and the Node-RED admission gate independently rejects their invalid decoded IDs before profile verification. Keep both raw `%2F`-only and `%0A` regressions in the real nginx fixture; a regex-only check does not prove which upstream receives the original URI.
+
 Local rehearsal uses the existing cached immutable nginx image without a network:
 
 ```sh
