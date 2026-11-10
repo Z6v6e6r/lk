@@ -11,7 +11,7 @@ export type PaymentOption = {
   mode: 'book' | 'offer' | 'unavailable' | 'reference' | 'quote';
   amount: number | null;
   benefit?: SubscriptionBenefit;
-  reason?: 'excluded-group' | 'not-applicable' | 'training-only' | 'unknown-duration';
+  reason?: 'excluded-group' | 'not-applicable' | 'training-only' | 'unknown-duration' | 'unknown-price';
   freeMinutes?: number;
   paidMinutes?: number;
 };
@@ -86,4 +86,20 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
 
 export function formatRubles(amount: number) {
   return `${amount.toLocaleString('ru-RU')} ₽`;
+}
+
+export type GamePaymentScope = 'quarter' | 'court';
+
+export function buildGamePaymentOptions(courtAmount: number | null, scope: GamePaymentScope, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}): PaymentOption[] {
+  if (courtAmount == null || !Number.isFinite(courtAmount) || courtAmount <= 0) {
+    return [{ kind: 'full', mode: 'quote', amount: null, reason: 'unknown-price' }];
+  }
+  // Paying for everybody never consumes a benefit or discounts the court.
+  if (scope === 'court') return [{ kind: 'full', mode: 'book', amount: courtAmount }];
+  const personalAmount = Math.round(courtAmount * 100 / 4) / 100;
+  return buildPaymentOptions('game', privileges, fits, context).map(option => ({
+    ...option,
+    amount: option.amount == null ? null : option.amount === 0 ? 0
+      : option.kind === 'full' ? personalAmount : Math.round(personalAmount * 0.7 * 100) / 100,
+  }));
 }

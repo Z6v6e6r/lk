@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
-import { buildPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
+import { buildGamePaymentOptions, buildPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
 import './matrix.css';
 
 function PaymentIcon({ kind }: { kind: PaymentKind }) {
@@ -21,12 +21,17 @@ const optionNames: Record<PaymentKind, string> = {
   full: 'Полная цена', residency: 'С Резидентством', subscription: 'По подписке', pass: 'По абонементу Энергия 5',
 };
 
-export function MatrixPaymentOptions({ service, eventKey, disabled = false, excludesPrivileges = false, durationMinutes }: { service: ServiceKind; eventKey: string; disabled?: boolean; excludesPrivileges?: boolean; durationMinutes?: number }) {
+export function MatrixPaymentOptions({ service, eventKey, disabled = false, excludesPrivileges = false, durationMinutes, gamePaymentScope, courtAmount = null }: { service: ServiceKind; eventKey: string; disabled?: boolean; excludesPrivileges?: boolean; durationMinutes?: number; gamePaymentScope?: GamePaymentScope; courtAmount?: number | null }) {
   const params = new URLSearchParams(location.search);
   const settings = readMatrixSettings(params);
   const excludedGroup = service === 'training' && (excludesPrivileges || settings.excludedGroups);
   const duration = durationMinutes ?? SERVICES[service].durationMinutes;
-  const options = buildPaymentOptions(service, settings.profile, settings.applicability, { ...settings, excludedGroups: excludedGroup, durationMinutes: duration });
+  const paymentContext = { ...settings, excludedGroups: excludedGroup, durationMinutes: duration };
+  const isWholeCourt = service === 'game' && gamePaymentScope === 'court';
+  const isPersonalGame = service === 'game' && gamePaymentScope === 'quarter';
+  const options = service === 'game' && gamePaymentScope
+    ? buildGamePaymentOptions(courtAmount, gamePaymentScope, settings.profile, settings.applicability, paymentContext)
+    : buildPaymentOptions(service, settings.profile, settings.applicability, paymentContext);
   const available = options.filter(option => option.mode === 'book');
   const [selected, setSelected] = useState<PaymentKind>(available[0]?.kind || 'full');
   const [information, setInformation] = useState<PaymentKind | null>(null);
@@ -41,8 +46,13 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const choice = available.find(option => option.kind === selected) || available[0];
   const reference = options.find(option => option.mode === 'reference');
   const locked = disabled || full || busy;
+  const displayBaseAmount = options.find(option => option.kind === 'full')?.amount ?? price.price;
+  const displayResidencyAmount = options.find(option => option.kind === 'residency')?.amount ?? price.residentPrice;
+  const referenceAmount = reference?.amount ?? displayBaseAmount;
 
   const title = (option: PaymentOption) => {
+    if (isWholeCourt && option.kind === 'full') return 'Полная оплата за 4 игроков';
+    if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
     if (option.kind !== 'subscription') return optionNames[option.kind];
     if (!settings.profile.subscription && !excludedGroup) return 'Бесплатно при наличии подписки';
     if (option.benefit === 'discount') return `По подписке · скидка ${price.discount}%`;
@@ -54,9 +64,10 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const detail = (option: PaymentOption) => {
     if (option.reason === 'excluded-group') return option.kind === 'residency' ? 'Резидентство не действует на эту категорию групповых' : 'Подписка не действует на эту категорию групповых';
     if (option.reason === 'training-only') return 'Бесплатная тренировка ещё доступна. Скидки на другие услуги — после использования дневного лимита';
+    if (option.reason === 'unknown-price') return 'Стоимость корта уточняется';
     if (option.reason === 'unknown-duration') return 'Нужно уточнить длительность события';
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
-    if (option.kind === 'full') return 'Разовая запись без привилегий';
+    if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
     if (option.kind === 'residency') return `Скидка ${price.discount}%${option.mode === 'offer' ? ' · можно оформить Резидентство' : ' · Резидентство уже действует'}`;
     if (option.kind === 'subscription') {
       const prefix = option.mode === 'offer' ? 'Если оформить подходящий тариф. ' : '';
@@ -67,10 +78,10 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     }
     return option.mode === 'offer' ? 'Пакет из 5 посещений · для записи нужен подходящий абонемент' : 'Осталось 3 посещения · спишется одно';
   };
-  const amount = (option: PaymentOption) => option.mode === 'unavailable' ? 'Не действует'
+  const amount = (option: PaymentOption) => option.reason === 'unknown-price' ? 'Нужен расчёт' : option.mode === 'unavailable' ? 'Не действует'
     : option.benefit === 'partial-hour' ? 'Нужен расчёт'
       : option.kind === 'pass' ? option.mode === 'offer' ? formatRubles(ENERGY_PASS_PRICE) : '1 посещение' : option.amount === 0 ? 'Бесплатно' : formatRubles(option.amount!);
-  const confirmText = choice?.kind === 'subscription' ? choice.benefit === 'discount' ? `Записаться по подписке за ${formatRubles(choice.amount!)}` : 'Записаться по подписке бесплатно'
+  const confirmText = !choice ? 'Стоимость уточняется' : isWholeCourt ? `Оплатить весь корт · ${choice?.amount != null ? formatRubles(choice.amount) : 'цена уточняется'}` : choice?.kind === 'subscription' ? choice.benefit === 'discount' ? `Записаться по подписке за ${formatRubles(choice.amount!)}` : 'Записаться по подписке бесплатно'
     : choice?.kind === 'pass' ? 'Списать 1 посещение и записаться'
       : `Записаться за ${formatRubles(choice?.amount || price.price)}`;
   const confirm = async () => {
@@ -85,13 +96,14 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   };
 
   return <section className="matrix-payment" aria-label={`Способы записи: ${price.name}`} data-service={service} data-event={eventKey}>
-    <header className="matrix-payment-heading"><div><h2>{registered ? 'Ваша запись' : 'Выберите способ записи'}</h2><p>{price.name}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}</p></div>
-      {reference && !registered && <div className="matrix-base-price"><span>Полная цена</span><del>{formatRubles(price.price)}</del></div>}
+    <header className="matrix-payment-heading"><div><h2>{registered ? 'Ваша запись' : 'Выберите способ записи'}</h2><p>{price.name}{isPersonalGame ? ' · моя доля ¼' : isWholeCourt ? ' · плачу за всех' : ''}{Number.isFinite(duration) && duration > 0 ? ` · ${duration} мин` : ''}</p></div>
+      {reference && !registered && <div className="matrix-base-price"><span>Полная цена</span><del>{formatRubles(referenceAmount)}</del></div>}
     </header>
     {registered ? <div className="matrix-success" role="status">
       <strong>Вы записаны</strong><p>{submittedOption ? `${title(submittedOption)}${submittedOption.kind === 'pass' ? ' · осталось 2 посещения' : submittedOption.amount != null ? ` · ${amount(submittedOption)}` : ''}` : 'Место за вами. Детали записи доступны в личном кабинете.'}</p>
       <button type="button" onClick={() => { setRegistered(false); setSubmittedOption(null); }}>Отменить запись</button>
     </div> : <>
+      {isWholeCourt && <p className="matrix-notice">Полная оплата корта: подписка, Резидентство и абонементы не применяются.</p>}
       {excludedGroup && <p className="matrix-notice">Для этой категории групповых не действуют подписки и Резидентство.</p>}
       {full && <p className="matrix-notice" role="status">Все места заняты. Запись на это событие недоступна.</p>}
       <fieldset className="matrix-options" disabled={busy}>
@@ -108,14 +120,14 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
           return <div className={classes} key={option.kind} aria-disabled="true">{copy}</div>;
         })}
       </fieldset>
-      {settings.profile.residency && !excludedGroup && <p className="matrix-resident-perks"><PaymentIcon kind="residency" />По Резидентству: ракетка, полотенце и тапочки бесплатно</p>}
-      {options.some(option => option.mode === 'quote') && <p className="matrix-copay-note" role="status">Стоимость доплаты пока не определена. Запись с использованием бесплатного часа станет доступна после расчёта.</p>}
+      {settings.profile.residency && !excludedGroup && !isWholeCourt && <p className="matrix-resident-perks"><PaymentIcon kind="residency" />По Резидентству: ракетка, полотенце и тапочки бесплатно</p>}
+      {options.some(option => option.benefit === 'partial-hour' && option.mode === 'quote') && <p className="matrix-copay-note" role="status">Стоимость доплаты пока не определена. Запись с использованием бесплатного часа станет доступна после расчёта.</p>}
       <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
-      <p className="matrix-payment-footnote">Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.</p>
+      <p className="matrix-payment-footnote">{isWholeCourt ? 'Стоимость оплачивается полностью за всех игроков. Льготы не расходуются.' : 'Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.'}</p>
     </>}
     <Modal isOpen={information !== null} onClose={() => setInformation(null)} title={information === 'residency' ? 'Резидентство' : information === 'pass' ? 'Абонемент Энергия 5' : 'Подписка'} variant="dialog">
       <div className="matrix-information">
-        {information === 'residency' ? <><h3>{formatRubles(price.residentPrice)} вместо {formatRubles(price.price)}</h3><p>С Резидентством скидка на игры — 30%, на турниры и групповые тренировки — 50%.</p><p>Тапочки, полотенце и ракетка — бесплатно.</p></>
+        {information === 'residency' ? <><h3>{formatRubles(displayResidencyAmount)} вместо {formatRubles(displayBaseAmount)}</h3><p>С Резидентством скидка на игры — 30%, на турниры и групповые тренировки — 50%.</p><p>Тапочки, полотенце и ракетка — бесплатно.</p></>
           : information === 'subscription' ? <><h3>Запись по условиям подписки</h3><p>Тариф может включать одну бесплатную тренировку или один бесплатный час в день. После использования дневного лимита действуют скидки по подписке: 30% на игры, 50% на групповые и турниры. Исключённые категории групповых не участвуют. При частичном покрытии часа доплата рассчитывается отдельно.</p></>
             : <><h3>Энергия 5 — {formatRubles(ENERGY_PASS_PRICE)}</h3><p>Пакет из 5 посещений. Запись на подходящее событие списывает одно доступное посещение. Это стоимость всего абонемента, а не одной записи.</p></>}
         <p className="matrix-information-note">{information === 'pass' ? 'Абонемент применяется только к подходящим событиям. Покупка абонемента и запись на событие — отдельные действия.' : 'Условия и стоимость оформления уточняются отдельно. Этот вариант не активирует привилегию автоматически.'}</p>

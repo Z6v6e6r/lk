@@ -36,7 +36,7 @@ let game: PadelGameRecord = {
   waitlist: [], invite: { maxPlayers: 4, waitlistEnabled: true },
   booking: { studioId: studios[0].id, studioName: studios[0].name, roomId: 'demo-court-1', roomName: 'Корт 1', date: eventDate, timeFrom: '19:00', timeTo: '20:30', durationMinutes: 90 },
   payment: { amount: 4000, paymentUrl: null, paid: true },
-  metadata: { joinPrice: 4000 },
+  metadata: { joinPrice: 1000 },
 };
 const registrations = new Map<string, boolean>();
 function roster(count: number): PadelGamePlayer[] {

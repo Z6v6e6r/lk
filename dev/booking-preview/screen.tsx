@@ -8,6 +8,7 @@ import FindGamePage from '../../src/components/games/FindGamePage';
 import GroupSchedulePage from '../../src/components/group-schedule/GroupSchedulePage';
 import TournamentSignupPage from '../../src/components/tournament-signup/TournamentSignupPage';
 import { MatrixPaymentOptions } from './MatrixPaymentOptions';
+import { SERVICES } from './paymentMatrix';
 import { eventDate } from './fixtures';
 import '../../src/index.css';
 import '../../src/MyApp.css';
@@ -36,7 +37,7 @@ function Screen() {
   const back = () => navigate(screen.includes('training') ? 'training-booking' : screen.includes('tournament') ? 'tournament-booking' : 'game-list');
   if (!isAuthenticated && (screen === 'game-booking' || screen === 'game-join')) return <AuthForm onLogin={() => {}} />;
   switch (screen) {
-    case 'matrix': return <div className="matrix-comparison"><h1>Способы записи на услуги</h1><p>Выберите привилегии в панели стенда — варианты обновятся для всех трёх услуг.</p><div>{(['game', 'training', 'tournament'] as const).map(service => <MatrixPaymentOptions key={service} service={service} eventKey={`demo-comparison-${service}`} />)}</div></div>;
+    case 'matrix': return <div className="matrix-comparison"><h1>Способы записи на услуги</h1><p>Выберите привилегии в панели стенда — варианты обновятся для всех трёх услуг.</p><div>{(['game', 'training', 'tournament'] as const).map(service => <MatrixPaymentOptions key={service} service={service} gamePaymentScope={service === 'game' ? 'quarter' : undefined} courtAmount={service === 'game' ? SERVICES.game.price : undefined} eventKey={`demo-comparison-${service}`} />)}</div></div>;
     case 'game-booking': return <GamesPage onBack={back} publicCreateEntry />;
     case 'game-join': return <GamesPage onBack={back} openGameId="demo-game" />;
     case 'game-list': return <FindGamePage onBack={back} cabinetUrl="?screen=game-list" includeGamePlusTrainer />;

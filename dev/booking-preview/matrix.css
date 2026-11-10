@@ -45,7 +45,6 @@
 .matrix-information { font: 14px/1.6 system-ui, sans-serif; padding: 12px 4px; color: #44374e; }
 .matrix-information h3 { font-size: 20px; margin: 0 0 14px; color: #2c2036; }
 .matrix-information-note { font-size: 12px; color: #95889f; }
-.matrix-step-note { color: #91849e; font-size: 12px; padding: 8px 0; line-height: 1.6; }
 .matrix-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media(max-width: 450px) { .matrix-payment { padding: 16px 12px; border-radius: 15px; } .matrix-payment h2 { font-size: 16px; } .matrix-option { padding: 12px 10px; gap: 8px; } .matrix-option .matrix-icon { width: 26px; height: 26px; padding: 5px; flex-basis: 26px; } .matrix-option-value strong { font-size: 12px; } .matrix-option-copy strong { font-size: 12px; } .matrix-option-copy > span { font-size: 10px; } .matrix-base-price del { font-size: 13px; } }
 @media(prefers-reduced-motion: reduce) { .matrix-option { transition: none; } }
@@ -71,3 +70,17 @@
 .matrix-option.is-quote { cursor: default; background: #fffbef; border-color: #eadbad; }
 .matrix-option.is-quote .matrix-option-value { color: #96712c; }
 .matrix-copay-note { margin: 12px 0 0; padding: 10px; border-radius: 8px; background: #fffbef; color: #93752e; font-size: 11px; line-height: 1.5; }
+.matrix-game-payers { padding: 0; margin: 18px 0; border: 0; min-width: 0; font: 14px/1.45 system-ui, sans-serif; color: #292132; display: grid; gap: 12px; }
+.matrix-game-payers legend { font-size: 17px; font-weight: 700; padding: 0 0 12px; }
+.matrix-payer { display: flex; align-items: center; gap: 12px; padding: 16px; border-radius: 15px; border: 1px solid #e2dceb; background: #fff; cursor: pointer; min-width: 0; }
+.matrix-payer.is-selected { border-color: #8852e9; box-shadow: 0 0 0 1px #8852e9; background: #f8f4ff; }
+.matrix-payer input { width: 17px; height: 17px; flex: 0 0 17px; margin: 0; accent-color: #7d46e3; }
+.matrix-payer-copy { min-width: 0; flex: 1; display: grid; gap: 6px; }
+.matrix-payer-copy strong { font-size: 15px; }
+.matrix-payer-copy span { font-size: 12px; color: #8b8096; }
+.matrix-payer-copy em { font-size: 11px; font-style: normal; color: #8461ac; }
+.matrix-payer-price { display: grid; text-align: right; gap: 5px; max-width: 36%; }
+.matrix-payer-price strong { font-size: 17px; }
+.matrix-payer-price del { color: #9b90a5; font-size: 12px; }
+.matrix-payer:has(input:focus-visible) { outline: 3px solid #b291ee; outline-offset: 3px; }
+@media(max-width: 450px) { .matrix-payer { padding: 13px 10px; gap: 8px; } .matrix-payer-copy strong { font-size: 14px; } .matrix-payer-price strong { font-size: 14px; } }

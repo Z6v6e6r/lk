@@ -91,7 +91,7 @@ function Preview() {
             <option value="standard">Обычная</option><option value="excluded">Без подписки и Резидентства</option>
           </select></label>
         </div>
-        <span>Игра 4 000 ₽ · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
+        <span>Корт 4 000 ₽ · моя ¼ — 1 000 ₽ · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
       </section>
       <div className={`preview-stage preview-stage--${width}`}>
         <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}`} src={frameUrl} title="Интерфейс записи PadlHub"

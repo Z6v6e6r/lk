@@ -9,6 +9,12 @@ for (const [path, count] of [['games/GamesPage.tsx', 2], ['group-schedule/GroupS
     const transformed = transformPreviewPayments(original, path.split('/').pop()!);
     assert.equal(transformed?.match(/<MatrixPaymentOptions\b/g)?.length, count);
     assert.ok(transformed?.includes('import { MatrixPaymentOptions }'));
+    if (path === 'games/GamesPage.tsx') {
+      assert.equal(transformed?.match(/<GamePayerChoice\b/g)?.length, 1);
+      assert.ok(transformed?.includes('gamePaymentScope={paymentMode === "split" ? "quarter" : "court"}'));
+      assert.ok(!transformed?.includes('game-create-payment-method-card'), 'The legacy split checkout must not render beside the new one');
+      assert.ok(!transformed?.includes('На следующем шаге выберите способ записи'));
+    }
     assert.equal(readFileSync(new URL(`../../src/components/${path}`, import.meta.url), 'utf8'), original);
   });
 }

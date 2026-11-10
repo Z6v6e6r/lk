@@ -2,9 +2,10 @@ import ts from 'typescript';
 
 const rules: Record<string, Array<{ className: string; replacement: string }>> = {
   'GamesPage.tsx': [
-    { className: 'details-action-row details-join-action-row', replacement: '<MatrixPaymentOptions service="game" eventKey={activeGameRecord?.id || "demo-game"} durationMinutes={activeGameRecord?.booking?.durationMinutes ?? 90} />' },
-    { className: 'game-payment-stack', replacement: '<MatrixPaymentOptions service="game" eventKey="demo-game-create" durationMinutes={duration} disabled={!canProceedToPayment} />' },
-    { className: 'team-card game-create-payment-card', replacement: '<p className="matrix-step-note">На следующем шаге выберите способ записи: полная цена, Резидентство, подписка или абонемент.</p>' },
+    { className: 'details-action-row details-join-action-row', replacement: '<MatrixPaymentOptions service="game" eventKey={activeGameRecord?.id || "demo-game"} durationMinutes={activeGameRecord?.booking?.durationMinutes ?? 90} gamePaymentScope="quarter" courtAmount={activeGameRecord?.payment?.amount ?? null} />' },
+    { className: 'game-payment-stack', replacement: '<MatrixPaymentOptions key={paymentMode} service="game" eventKey="demo-game-create" gamePaymentScope={paymentMode === "split" ? "quarter" : "court"} courtAmount={basePaymentAmount} durationMinutes={duration} disabled={!canProceedToPayment} />' },
+    { className: 'team-card game-create-payment-card', replacement: '<GamePayerChoice value={paymentMode} onChange={(next) => { setPaymentMode(next); if (next === "self") setIsPrivate(false); }} courtAmount={basePaymentAmount} durationMinutes={duration} />' },
+    { className: 'team-card game-create-payment-method-card', replacement: '<></>' },
   ],
   'GroupSchedulePage.tsx': [
     { className: 'tournament-signup-registration group-schedule-registration group-schedule-registration--trainer', replacement: '<MatrixPaymentOptions key={selectedTraining.id} service="training" eventKey={selectedTraining.id} excludesPrivileges={selectedTraining.raw.previewPrivilegesExcluded === true} durationMinutes={(Date.parse(selectedTraining.timeTo) - Date.parse(selectedTraining.timeFrom)) / 60000} />' },
@@ -45,5 +46,5 @@ export function transformPreviewPayments(source: string, filename: string) {
   for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
     result = result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
   }
-  return 'import { MatrixPaymentOptions } from "/dev/booking-preview/MatrixPaymentOptions.tsx";\n' + result;
+  return 'import { GamePayerChoice } from "/dev/booking-preview/GamePayerChoice.tsx";\nimport { MatrixPaymentOptions } from "/dev/booking-preview/MatrixPaymentOptions.tsx";\n' + result;
 }
