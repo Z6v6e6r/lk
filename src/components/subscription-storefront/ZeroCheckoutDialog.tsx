@@ -5,8 +5,7 @@ import { CABINET_URL } from '../../consts/api_config';
 import { resolvePaymentPhone, StorefrontPaymentError } from './payment';
 import { resolvePromoCabinetUrl } from './promo';
 import { PATRIOTS_PLAN_ID } from './catalog';
-import { confirmZeroPayment, createZeroPayment, hasZeroAttempt, loadZeroOfferPrice, loadResidencyPurchaseTerms, resolveZeroOffer, withZeroDeadline, ZERO_PENDING_MESSAGE } from './zeroCheckoutPayment';
-import { RESIDENCY_OFFER_KEY, type ResidencyPurchaseTerms } from '../../residency/residencyPurchase';
+import { confirmZeroPayment, createZeroPayment, hasZeroAttempt, loadZeroOfferQuote, type ZeroOfferQuote, resolveZeroOffer, withZeroDeadline, ZERO_PENDING_MESSAGE } from './zeroCheckoutPayment';
 import './zero-checkout.css';
 
 export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
@@ -15,8 +14,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
   const auth = useAuth();
   const offer = resolveZeroOffer(offerKey)!;
   const patriotsPendingBenefits = offerKey === PATRIOTS_PLAN_ID;
-  const isResidency = offerKey === RESIDENCY_OFFER_KEY;
-  const [residencyTerms, setResidencyTerms] = useState<ResidencyPurchaseTerms | null>(null);
+  const [quote, setQuote] = useState<ZeroOfferQuote | null>(null);
   const [price, setPrice] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,17 +49,13 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12_000);
     let active = true;
-    const priceRequest = isResidency ? loadResidencyPurchaseTerms(controller.signal).then(value => {
-      if (active) setResidencyTerms(value);
-      return value.priceMinor;
-    }) : loadZeroOfferPrice(offerKey, controller.signal);
-    void priceRequest.then(value => {
-      if (active) { setPrice(value); setLoading(false); }
+    void loadZeroOfferQuote(offerKey, controller.signal).then(value => {
+      if (active) { setQuote(value); setPrice(value.priceMinor); setLoading(false); }
     }).catch(() => {
-      if (active) { setError(isResidency ? 'Не удалось подтвердить условия резидентства. Обновите данные.' : 'Не удалось подтвердить цену и доступность. Обновите данные.'); setLoading(false); }
+      if (active) { setError('Не удалось подтвердить цену и доступность. Обновите данные.'); setLoading(false); }
     }).finally(() => clearTimeout(timeout));
     return () => { active = false; controller.abort(); clearTimeout(timeout); };
-  }, [offerKey, revision, isResidency]);
+  }, [offerKey, revision]);
 
   async function submit(checkOnly = false) {
     if (!authenticated || busy.current || (!checkOnly && (blocked || loading || price === null || ((offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms)))) return;
@@ -75,7 +69,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
       }
       const phone = await withZeroDeadline(resolvePaymentPhone(), 12_000);
       if (!alive.current || !authReady.current) return;
-      const result = await withZeroDeadline(createZeroPayment(offerKey, phone, price!, () => operationActive && alive.current && authReady.current, residencyTerms));
+      const result = await withZeroDeadline(createZeroPayment(offerKey, phone, price!, () => operationActive && alive.current && authReady.current, quote));
       if (!alive.current) return;
       setBlocked(true);
       if (result.status === 'redirect') window.location.assign(result.paymentUrl);
@@ -98,7 +92,8 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
     <h2 id="ph-zero-title">Оформление подписки</h2>
     <p className="ph-zero-summary">{offer.label} · {offer.period}</p>
     <p className="ph-zero-price">{price === null ? 'Проверяем предложение…' : `${new Intl.NumberFormat('ru-RU').format(price / 100)} ₽`}</p>
-    {isResidency && residencyTerms && price !== null && <p>30 записей на 30 дней. Автоматическая активация отключена.</p>}
+    {offer.liveProductId && quote && <p>{offerKey === 'residency' ? '30 записей на 30 дней. Автоматическая активация отключена.'
+      : `Срок действия — 30 дней. На активацию — ${quote.activationDays} дн.`}</p>}
     {offer.promo && <p>Акционная цена. Применимость предложения проверяется при оформлении.</p>}
     {patriotsPendingBenefits && <p>Подписка содержит 30 посещений на 30 дней. Бесплатный час и скидки при записи пока не действуют; дата запуска не определена. «Время на друзей» не списывает посещения из подписки.</p>}
     {error && <p className="auth-error" role="alert">{error}</p>}
@@ -119,7 +114,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy }: {
         {processing ? 'Проверяем статус…' : 'Проверить статус оплаты'}
       </button>}
     </>}
-    {!blocked && !loading && !processing && <button className="ph-zero-refresh" type="button" onClick={() => { setError(null); setPrice(null); setLoading(true); setRevision(value => value + 1); }}>Обновить данные</button>}
+    {!blocked && !loading && !processing && <button className="ph-zero-refresh" type="button" onClick={() => { setError(null); setQuote(null); setPrice(null); setLoading(true); setRevision(value => value + 1); }}>Обновить данные</button>}
     <p className="ph-zero-caption">{processing ? 'Дождитесь результата. Не закрывайте страницу.' : blocked ? 'Проверка статуса не создаёт новую покупку.' : 'После подтверждения откроется защищённая страница банка.'}</p>
     <a className="ph-zero-cabinet" href={resolvePromoCabinetUrl(window.location.href, CABINET_URL)}>Личный кабинет</a>
   </dialog>;

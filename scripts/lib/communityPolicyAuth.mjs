@@ -2,6 +2,45 @@ import {isDeepStrictEqual} from 'node:util';
 // Source-only optional Viva-profile authentication subflow. Guest reads retain
 // the legacy FRIENDS contract; typed private reads and typed writes require it.
 export const COMMUNITY_AUTH_SUBFLOW = 'community-policy-verified-actor-v1';
+const EVENT_ADMISSION_ROUTE = 'community-event-admission-v1-in';
+const CLAIM_PROFILE_BUDGET = String.raw`
+function claimProfileBudget(store,key,now) {
+  try {
+    const previous=store.get(key);
+    if (!Number.isSafeInteger(now) || now<0 || (previous !== undefined && (!Array.isArray(previous) || previous.length>30 || previous.some((at,i)=>!Number.isSafeInteger(at) || at<0 || at>now || (i>0 && at<previous[i-1]))))) return 503;
+    // At most30 dispatches per15s bounds the existing10s profile request timeout.
+    const recent=(previous || []).filter(at=>now-at<15000);
+    if (recent.length>=30 || recent.filter(at=>now-at<1000).length>=10) return 429;
+    store.set(key,[...recent,now]);return 0;
+  } catch { return 503; }
+}
+`;
+const EVENT_ADMISSION_BUDGET = CLAIM_PROFILE_BUDGET + String.raw`
+// EVENT_ADMISSION_PREAUTH_BUDGET_V1: one global budget, never caller-controlled keys.
+const deny = (statusCode,error) => [null,Object.assign({},msg,{statusCode,headers:{'Content-Type':'application/json','Cache-Control':'private, no-store',...(statusCode===429?{'Retry-After':'1'}:{})},payload:{error}})];
+if (msg.req?.method !== 'GET') return deny(405,'EVENT_ADMISSION_METHOD_INVALID');
+if (typeof msg.req?.params?.communityId !== 'string' || !/^[\p{L}\p{N}_-]{1,120}$/u.test(msg.req.params.communityId) || Object.keys(msg.req.query || {}).length) return deny(400,'EVENT_ADMISSION_REQUEST_INVALID');
+const header = msg.req?.headers?.authorization;
+if (!header) return deny(403,'COMMUNITY_AUTH_REQUIRED');
+if (typeof header !== 'string' || !/^Bearer[ \t]+[^\s]{1,8192}$/i.test(header.trim())) return deny(401,'AUTH_TOKEN_INVALID');
+const length = msg.req?.headers?.['content-length'];
+if (msg.req?.headers?.['transfer-encoding'] || (length !== undefined && (typeof length !== 'string' || !/^\d{1,9}$/.test(length)))) return deny(400,'EVENT_ADMISSION_REQUEST_INVALID');
+if (length !== undefined && Number(length)>8192) return deny(413,'EVENT_ADMISSION_REQUEST_TOO_LARGE');
+const status=claimProfileBudget(context,'eventAdmissionProviderBudgetV1',Date.now());
+if (status) return deny(status,status===429?'EVENT_ADMISSION_RATE_LIMITED':'EVENT_ADMISSION_BUDGET_UNAVAILABLE');
+return [msg,null];
+`;
+const COMMUNITY_PROFILE_BUDGET = CLAIM_PROFILE_BUDGET + String.raw`
+// Shared across subflow instances and routes; never allocate per actor/token/IP.
+if (claimProfileBudget(global,'communityProfileProviderBudgetV1',Date.now())) {
+  // Existing auth response restores the raw request and treats this as unavailable.
+  msg.statusCode=503;msg.payload=null;return [null,msg];
+}
+return [msg,null];
+`;
+function eventAdmissionBudgetNode(route, instanceId) {
+  return {id:COMMUNITY_AUTH_SUBFLOW+'-budget-'+route.id,type:'function',z:route.z,name:'Bound event admission before profile verification',func:EVENT_ADMISSION_BUDGET,outputs:2,wires:[[instanceId],['community-event-admission-v1-response']]};
+}
 export const COMMUNITY_AUTH_PREPARE = String.raw`
 delete msg._verifiedCommunityActor;
 delete msg._communityPolicyAuthFailure;
@@ -10,17 +49,19 @@ if (!header) return [null, msg];
 if (!/^Bearer[ \t]+[^ \t]+$/i.test(header)) {
   msg._communityPolicyAuthFailure = 'INVALID'; return [null, msg, null];
 }
-msg._communityPolicyAuth = { payload: msg.payload, method: msg.method, url: msg.url, headers: msg.headers, followRedirects: msg.followRedirects, statusCode: msg.statusCode, own: ['payload','method','url','headers','followRedirects','statusCode'].filter(key => Object.prototype.hasOwnProperty.call(msg,key)) };
+msg._communityPolicyAuth = { payload: msg.payload, method: msg.method, url: msg.url, headers: msg.headers, followRedirects: msg.followRedirects, requestTimeout: msg.requestTimeout, statusCode: msg.statusCode, own: ['payload','method','url','headers','followRedirects','requestTimeout','statusCode'].filter(key => Object.prototype.hasOwnProperty.call(msg,key)) };
 msg.method = 'GET'; msg.url = 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile';
 msg.headers = { Authorization: header, Accept: 'application/json' }; msg.payload = undefined;
 msg.followRedirects = false;
+// Node-RED4.0.9 applies this message field, not a requestTimeout node property.
+msg.requestTimeout = 10000;
 return [msg, null, null];
 `;
 export const COMMUNITY_AUTH_RESPONSE = String.raw`
 const status = Number(msg.statusCode), profile = msg.payload, saved = msg._communityPolicyAuth;
 delete msg._communityPolicyAuth;
 if (!saved) throw new Error('COMMUNITY_AUTH_CONTEXT_MISSING');
-for (const key of ['payload','method','url','headers','followRedirects','statusCode']) {
+for (const key of ['payload','method','url','headers','followRedirects','requestTimeout','statusCode']) {
   if (saved.own ? saved.own.includes(key) : saved[key] !== undefined) msg[key] = saved[key];
   else delete msg[key];
 }
@@ -61,8 +102,11 @@ export function addCommunityPolicyAuth(input) {
   const id = COMMUNITY_AUTH_SUBFLOW;
   const definitions = [
     { id, type: 'subflow', name: 'Community verified actor', in: [{ x: 40, y: 80, wires: [{ id: id + '-prepare' }] }], out: [{ x: 650, y: 80, wires: [{ id: id + '-prepare', port: 1 }, { id: id + '-response', port: 0 }] }] },
-    { id: id + '-prepare', type: 'function', z: id, name: 'Verify optional community Bearer', func: COMMUNITY_AUTH_PREPARE, outputs: 3, wires: [[id + '-http'], [], [id + '-error']] },
+    { id: id + '-prepare', type: 'function', z: id, name: 'Verify optional community Bearer', func: COMMUNITY_AUTH_PREPARE, outputs: 3, wires: [[id + '-profile-budget'], [], [id + '-error']] },
+    { id: id + '-profile-budget', type: 'function', z: id, name: 'Bound shared community profile calls', func: COMMUNITY_PROFILE_BUDGET, outputs: 2, wires: [[id + '-http'],[id + '-response']] },
     { id: id + '-http', type: 'http request', z: id, name: 'Community actor Viva profile', method: 'use', ret: 'obj', paytoqs: 'ignore', url: '', requestTimeout: '10000', persist: false, senderr: true, followRedirects: false, wires: [[id + '-response']] },
+    { id: id + '-http-catch', type: 'catch', z: id, name: 'Community profile transport failure', scope: [id + '-http'], uncaught: false, wires: [[id + '-http-unavailable']] },
+    { id: id + '-http-unavailable', type: 'function', z: id, name: 'Sanitize community profile failure', func: 'msg.statusCode=503;msg.payload=null;delete msg.error;return msg;', outputs: 1, wires: [[id + '-response']] },
     { id: id + '-response', type: 'function', z: id, name: 'Bind community actor to verified profile', func: COMMUNITY_AUTH_RESPONSE, outputs: 2, wires: [[], [id + '-error']] },
     { id: id + '-error', type: 'http response', z: id, name: 'Community auth failure', statusCode: '', headers: {}, wires: [] },
   ];
@@ -70,24 +114,34 @@ export function addCommunityPolicyAuth(input) {
   for (const node of flow) {
     if (node.type !== 'http in' || !/^\/(?:lk\/)?communities(?:\/|$)/.test(node.url || '') || /\/public(?:\/|$)/.test(node.url)) continue;
     const instanceId = id + '-entry-' + node.id;
+    const protectedAdmission = node.id === EVENT_ADMISSION_ROUTE;
+    if (protectedAdmission && (node.url !== '/lk/communities/:communityId/event-admission' || node.method !== 'get' || byId.get('community-event-admission-v1-response')?.type !== 'http response' || byId.get('community-event-admission-v1-response')?.z !== node.z)) throw new Error('COMMUNITY_AUTH_ADMISSION_ROUTE_DRIFT');
+    const budget = protectedAdmission ? eventAdmissionBudgetNode(node,instanceId) : null;
+    const ingressId = budget?.id || instanceId;
     if (byId.has(instanceId)) {
       const instance = byId.get(instanceId);
       if (instance.type !== 'subflow:' + id || instance.z !== node.z || instance.d === true || !Array.isArray(instance.wires) || instance.wires.length !== 1 || !Array.isArray(instance.wires[0]) || instance.wires[0].length !== 1 || instance.wires[0].some(target => !byId.has(target))) throw new Error('COMMUNITY_AUTH_INSTANCE_DRIFT');
+      if (protectedAdmission && instance.wires[0][0] !== 'community-event-admission-v1-prepare') throw new Error('COMMUNITY_AUTH_ADMISSION_TARGET_DRIFT');
       const expectedPrepare = /\/add-member$/.test(node.url) ? 'Prepare community join' : /\/join-by-invite$/.test(node.url) ? 'Prepare invite join' : null;
       if (expectedPrepare && (byId.get(instance.wires[0][0])?.type !== 'function' || byId.get(instance.wires[0][0])?.name !== expectedPrepare)) throw new Error('COMMUNITY_AUTH_JOIN_TARGET_DRIFT');
-      if (node.wires?.[0]?.length !== 1 || node.wires?.[0]?.[0] !== instanceId) throw new Error('COMMUNITY_AUTH_INGRESS_DRIFT');
+      if (budget && !isDeepStrictEqual(byId.get(budget.id),budget)) throw new Error('COMMUNITY_AUTH_ADMISSION_BUDGET_DRIFT');
+      if ((protectedAdmission && node.wires?.length !== 1) || node.wires?.[0]?.length !== 1 || node.wires?.[0]?.[0] !== ingressId) throw new Error('COMMUNITY_AUTH_INGRESS_DRIFT');
       continue;
     }
     if (node.wires?.length !== 1 || node.wires[0]?.length !== 1 || !byId.has(node.wires[0][0])) throw new Error('COMMUNITY_AUTH_INGRESS_TARGET_DRIFT');
+    if (protectedAdmission && node.wires[0][0] !== 'community-event-admission-v1-prepare') throw new Error('COMMUNITY_AUTH_ADMISSION_TARGET_DRIFT');
+    if (budget && byId.has(budget.id)) throw new Error('COMMUNITY_AUTH_ADMISSION_BUDGET_DRIFT');
     const expectedPrepare = /\/add-member$/.test(node.url) ? 'Prepare community join' : /\/join-by-invite$/.test(node.url) ? 'Prepare invite join' : null;
     if (expectedPrepare && (byId.get(node.wires[0][0])?.type !== 'function' || byId.get(node.wires[0][0])?.name !== expectedPrepare)) throw new Error('COMMUNITY_AUTH_JOIN_TARGET_DRIFT');
     instances.push({ id: instanceId, type: 'subflow:' + id, z: node.z, name: 'Verify community caller', wires: structuredClone(node.wires), x: (node.x || 0) + 100, y: node.y || 0 });
-    node.wires = [[instanceId]];
+    if (budget) instances.push(budget);
+    node.wires = [[ingressId]];
   }
   if (instances.length && !byId.has(id)) flow.push(...definitions);
+  const hasExistingDefinitions=definitions.some(expected=>byId.has(expected.id));
   for (const expected of definitions) {
     const existing = byId.get(expected.id);
-    if (existing && !isDeepStrictEqual(existing,expected)) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
+    if (hasExistingDefinitions && (!existing || !isDeepStrictEqual(existing,expected))) throw new Error('COMMUNITY_AUTH_SUBFLOW_DRIFT');
   }
   flow.push(...instances);
   const allNodes = new Map(flow.map(node => [node.id, node]));

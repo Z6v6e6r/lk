@@ -24,7 +24,7 @@ export function eventRegistration(value) {
 }
 
 export const EVENT_JOIN_GUARD = `
-// EVENT_REGISTRATION_GUARD_V2
+// EVENT_REGISTRATION_GUARD_V3
 if (community.communityType === 'EVENT') {
   const actor = msg._verifiedCommunityActor;
   if (!actor?.id) return [null, null, null, null, withJson(msg, 403, { error: 'COMMUNITY_AUTH_REQUIRED' }), null];
@@ -33,6 +33,8 @@ if (community.communityType === 'EVENT') {
   let policy;
   try { policy = (${parseEventRegistrationPolicy.toString()})(community.typeSettings?.registrationPolicy); }
   catch { return [null, null, null, null, withJson(msg, 409, {error:'EVENT_POLICY_NOT_READY'}), null]; }
+  // Only this exhibition forbids canonical pre-registration; other EVENTs keep it.
+  if (community.id === 'community_1794221739126_корпспорт-падлхаб-2026' && !(Date.now() >= Date.parse(policy.startsAt))) return [null, null, null, null, withJson(msg, 409, {error:'EVENT_NOT_STARTED'}), null];
   if (Date.now() >= Date.parse(policy.endsAt)) return [null, null, null, null, withJson(msg, 409, {error:'EVENT_CLOSED'}), null];
   const notice = {policy, revision: community.typeSettingsRevision};
   // Public identities come from the verified profile, never from the private form.
@@ -61,13 +63,22 @@ export function addEventRegistration(input) {
       node.func = node.func.replace(anchor, anchor + '\n  eventRegistration: body.eventRegistration,');
     }
     if (['Prepare community join', 'Prepare invite join', 'Build member games query', 'Build invited member games query'].includes(node.name)) node.func = node.func.replaceAll('return [msg, null, msg];', 'return [msg, null, null];');
-    if (['Apply community join', 'Apply invite join'].includes(node.name) && !node.func.includes('EVENT_REGISTRATION_GUARD_V2')) {
+    if (['Apply community join', 'Apply invite join'].includes(node.name)) {
       const anchor = 'const memberStats = buildMemberGameStats(memberGames, member);';
       if (node.func.split(anchor).length !== 2) throw new Error('EVENT_JOIN_APPLY_DRIFT');
-      if (node.func.includes('EVENT_REGISTRATION_GUARD_V1')) {
-        const begin = node.func.indexOf('// EVENT_REGISTRATION_GUARD_V1');
+      const guards = [...node.func.matchAll(/\/\/ EVENT_REGISTRATION_GUARD_V(\d+)/g)];
+      if (guards.length > 1) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
+      if (guards.length) {
+        const begin = guards[0].index;
         const end = node.func.indexOf(anchor, begin);
-        if (begin < 0 || end < 0 || createHash('sha256').update(node.func.slice(begin,end).trim()).digest('hex') !== '267d963acec70c2c7ce98321e1ac763c33c190c4fac89e76567f6068ec6ac096') throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
+        if (end < 0) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
+        const raw = node.func.slice(begin,end).trim();
+        if (guards[0][1] === '3') {
+          if (raw !== EVENT_JOIN_GUARD.trim()) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
+          continue;
+        }
+        const known = {1:'267d963acec70c2c7ce98321e1ac763c33c190c4fac89e76567f6068ec6ac096',2:'7928ff7852ec86b79132eaaacea891332031f31a5c9a731c8f6ed9cd71fb8f7b'};
+        if (createHash('sha256').update(raw).digest('hex') !== known[guards[0][1]]) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
         node.func = node.func.slice(0, begin) + EVENT_JOIN_GUARD + '\n' + node.func.slice(end);
       } else node.func = node.func.replace(anchor, EVENT_JOIN_GUARD + '\n' + anchor);
     }
