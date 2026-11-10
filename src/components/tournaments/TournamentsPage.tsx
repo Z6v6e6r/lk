@@ -91,6 +91,7 @@ import {
   getTournamentProgressState,
   isTournamentManuallyFinished,
   isTournamentMarkedFinished,
+  resolveTournamentLifecycleParams,
 } from "./tournamentLifecycle";
 import {
   buildPairedTournamentStandingsGroups,
@@ -4467,8 +4468,7 @@ function TournamentManagerModal({
     [data?.params, data?.tournamentType],
   );
   const [serverLifecycle, setServerLifecycle] = useState<{ tournamentId: string; params: Record<string, unknown> } | null>(null);
-  const lifecycleParams = serverLifecycle?.tournamentId === data?.tournamentId
-    ? serverLifecycle!.params : data?.params;
+  const lifecycleParams = resolveTournamentLifecycleParams(data, serverLifecycle);
   useEffect(() => { if (!isOpen) setServerLifecycle(null); }, [isOpen]);
   const autoFinishCurrentRef = useRef({ data, onDataChange, lifecycleParams });
   useEffect(() => { autoFinishCurrentRef.current = { data, onDataChange, lifecycleParams }; }, [data, onDataChange, lifecycleParams]);
