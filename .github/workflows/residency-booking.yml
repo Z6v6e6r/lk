@@ -1,7 +1,7 @@
 name: Residency booking safety
 on:
   pull_request:
-    paths: ['scripts/lib/residencyBooking*', 'scripts/nodered_residency_booking_nodes/**', 'scripts/patch_nodered_residency_booking.mjs', 'scripts/tests/residencyBooking*', 'scripts/tests/fixtures/residency-booking-context.mjs', 'scripts/tests/lk1PlanRulesPreview.test.mjs', '.github/workflows/residency-booking.yml']
+    paths: ['scripts/lib/residencyBooking*', 'scripts/nodered_residency_booking_nodes/**', 'scripts/patch_nodered_residency*.mjs', 'scripts/tests/residencyBooking*', 'scripts/tests/fixtures/residency-booking-context.mjs', 'scripts/tests/lk1PlanRulesPreview.test.mjs', '.github/workflows/residency-booking.yml']
 permissions:
   contents: read
 jobs:

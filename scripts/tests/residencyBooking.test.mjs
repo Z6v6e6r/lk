@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import {RESIDENCY_PRODUCT_ID,validateResidencyBookingContext,residencyTransportConfig} from '../lib/residencyBookingContext.mjs';
+import {RESIDENCY_PRODUCT_ID,validateResidencyBookingContext,residencyTransportConfig,residencySetting} from '../lib/residencyBookingContext.mjs';
 import {composeResidencyEvaluator,composeResidencyGateway,composeResidencyPreview} from '../lib/residencyBookingSources.mjs';
 import {extractSubscriptionPricePreviewSource} from '../lib/subscriptionPricePreviewSources.mjs';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import os from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {composeResidencyFlow,RESIDENCY_TARGETS,assertResidencyOutputPath} from '../patch_nodered_residency_booking.mjs';
 import {residencyFixture} from './fixtures/residency-booking-context.mjs';
+import {composeResidencyRefreshFlow,refreshResidencyFunction} from '../patch_nodered_residency_refresh.mjs';
 const evaluator=composeResidencyEvaluator(fs.readFileSync(new URL('../nodered_lk1_hub_nodes/evaluator.js',import.meta.url),'utf8'));
 function input(category='GAME',durationMinutes=60,basePriceMinor=100000) {
   const now=Date.now(),evidence=residencyFixture({now});
@@ -55,6 +56,30 @@ test('transport is default-off and cannot redirect the integration credential to
   assert.ok(residencyTransportConfig(k=>config[k]));
   for(const url of ['https://evil.example/api','https://padlhub.su/api?x=1','http://padlhub.su/api']) assert.equal(residencyTransportConfig(k=>k==='subscriptions_runtime_api_base_url'?url:config[k]),null);
 });
+test('residency-only environment fallback preserves explicit global denial and cannot read arbitrary secrets',()=>{
+  const env={SUBSCRIPTIONS_RESIDENCY_BOOKING_ENABLED:'true',SUBSCRIPTIONS_RUNTIME_ENVIRONMENT:'PROD',
+    SUBSCRIPTIONS_RUNTIME_API_BASE_URL:'https://padlhub.su/api',SUBSCRIPTIONS_RUNTIME_CONTEXT_INTEGRATION_TOKEN:'synthetic-token-'.repeat(3)};
+  const read=globals=>key=>residencySetting(key,k=>globals[k],k=>env[k]);
+  assert.equal(residencyTransportConfig(read({})).url,'https://padlhub.su/api/internal/subscriptions/residency-booking-refresh');
+  for(const value of [false,'false','',0,'invalid']) assert.equal(residencyTransportConfig(read({subscriptions_residency_booking_enabled:value})),null);
+  assert.equal(residencyTransportConfig(read({subscriptions_runtime_api_base_url:'https://evil.example/api'})),null);
+  assert.equal(residencySetting('OTHER_SECRET',()=>{throw Error('must not read');},()=>{throw Error('must not read');}),undefined);
+});
+test('preview-only transport never enables booking and explicit preview denial wins',()=>{
+  const config={subscriptions_residency_booking_enabled:false,subscriptions_residency_preview_enabled:true,
+    subscriptions_runtime_environment:'PROD',subscriptions_runtime_api_base_url:'https://padlhub.su/api',
+    subscriptions_runtime_context_integration_token:'synthetic-token-'.repeat(3)};
+  const read=k=>config[k];
+  assert.ok(residencyTransportConfig(read,'preview'));
+  assert.equal(residencyTransportConfig(read),null);
+  assert.equal(residencyTransportConfig(read,'unreviewed-mode'),null);
+  config.subscriptions_residency_booking_enabled=true;
+  config.subscriptions_residency_preview_enabled=false;
+  assert.equal(residencyTransportConfig(read,'preview'),null);
+  assert.ok(residencyTransportConfig(read));
+  const env={SUBSCRIPTIONS_RESIDENCY_PREVIEW_ENABLED:'true'};
+  assert.equal(residencySetting('subscriptions_residency_preview_enabled',()=>false,k=>env[k]),false);
+});
 test('private candidate output refuses this and other Git worktrees before writing',()=>{
   const external=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'residency-output-test-'));
   try {
@@ -71,8 +96,13 @@ test('candidate rejects unreviewed function preimages before composing anything'
   assert.throws(()=>composeResidencyFlow([]),/PREIMAGE_DRIFT/);
 });
 const live=process.env.RESIDENCY_LIVE_FIXTURE;
-test('private live snapshot composes only four function bodies, preserving graph and configuration',{skip:!live},()=>{
-  const flow=JSON.parse(fs.readFileSync(live));const packet=composeResidencyFlow(flow);
+const refreshLive=process.env.RESIDENCY_REFRESH_LIVE_FIXTURE;
+test('refresh rejects unknown generations before constructing a candidate',()=>{
+  assert.throws(()=>composeResidencyRefreshFlow([]),/PREIMAGE_DRIFT/);
+  assert.throws(()=>refreshResidencyFunction('unrelated body','gateway',2),/SOURCE_DRIFT/);
+});
+test('private live snapshot composes only four function bodies, preserving graph and configuration',{skip:!live&&!refreshLive},()=>{
+  const flow=JSON.parse(fs.readFileSync(refreshLive||live));const packet=refreshLive?composeResidencyRefreshFlow(flow):composeResidencyFlow(flow);
   assert.equal(packet.candidate.length,flow.length);
   const changed=[];for(let n=0;n<flow.length;n++) {
     const before=flow[n],after=packet.candidate[n];
@@ -82,16 +112,23 @@ test('private live snapshot composes only four function bodies, preserving graph
   for(const compose of [composeResidencyGateway,composeResidencyPreview]) assert.throws(()=>compose('unrelated body'),/anchor drift/);
 });
 
-test('actual composed gateway uses owned discount-only residency before a split-game decision',{skip:!live},()=>{
-  const flow=JSON.parse(fs.readFileSync(live));
-  const body=composeResidencyGateway(flow.find(n=>n.id===RESIDENCY_TARGETS[0].id).func);
+for(const envOnly of [false,true]) test('actual composed gateway uses owned discount-only residency: '+(envOnly?'private environment':'globals'),
+  {skip:(!live&&!refreshLive)||(envOnly&&!refreshLive)},()=>{
+  const flow=JSON.parse(fs.readFileSync(refreshLive||live));
+  const preparedFlow=refreshLive?composeResidencyRefreshFlow(flow).candidate:null;
+  const body=preparedFlow?preparedFlow.find(n=>n.id===RESIDENCY_TARGETS[0].id).func:composeResidencyGateway(flow.find(n=>n.id===RESIDENCY_TARGETS[0].id).func);
   const run=new Function('msg','node','env','global',body);
-  const evaluatorBody=composeResidencyEvaluator(flow.find(n=>n.id===RESIDENCY_TARGETS[2].id).func);
+  const evaluatorBody=preparedFlow?preparedFlow.find(n=>n.id===RESIDENCY_TARGETS[2].id).func:composeResidencyEvaluator(flow.find(n=>n.id===RESIDENCY_TARGETS[2].id).func);
   const globals={vivacrm_access_token:'fixture-admin',vivacrm_token_expires_at:Date.now()+60000,subscriptions_residency_booking_enabled:true,subscriptions_runtime_environment:'PROD',
     subscriptions_runtime_api_base_url:'https://padlhub.su/api',subscriptions_runtime_context_integration_token:'fixture-token-'.repeat(4)};
-  const host={get:k=>globals[k]};
+  const environment={};
+  if(envOnly) for(const key of Object.keys(globals).filter(k=>k.startsWith('subscriptions_'))) {
+    environment[key.toUpperCase()]=globals[key];delete globals[key];
+  }
+  const runtimeEnv={get:k=>environment[k]},host={get:k=>globals[k]};
   const now=Date.now(),station='00000000-0000-4000-8000-000000000002',room='00000000-0000-4000-8000-000000000003';
   const evidence=residencyFixture({now,stationId:station});
+  if(envOnly) evidence.context.instance.homeStationId=null;
   const exercise={id:'exercise:fixture',studio:{id:station},room:{id:room},direction:{id:4588},type:{id:1613},
     timeFrom:evidence.startsAt,timeTo:new Date(Date.parse(evidence.startsAt)+3600000).toISOString(),availableClientSubscriptions:[]};
   const owned={subscriptionId:'instance:fixture',clientId:'client:fixture',productId:RESIDENCY_PRODUCT_ID,product:{id:RESIDENCY_PRODUCT_ID},
@@ -104,7 +141,7 @@ test('actual composed gateway uses owned discount-only residency before a split-
   let msg={_subscriptionBooking:ctx,payload:exercise,statusCode:200};
   let reads=0;const trace=[];
   for(let hop=0;hop<35;hop++) {
-    const outputs=run(msg,{warn(){},error(){}},{get(){}},host);
+    const outputs=run(msg,{warn(){},error(){}},runtimeEnv,host);
     const index=outputs.findIndex(Boolean);trace.push([ctx.step,index,ctx.lk1MoneyReadbackPhase]);assert.ok(index>=0);
     msg=outputs[index];
     if(index===4) assert.fail('Gateway stopped: '+JSON.stringify(msg.payload)+' trace='+JSON.stringify(trace));
@@ -115,7 +152,7 @@ test('actual composed gateway uses owned discount-only residency before a split-
       assert.equal(msg._managedSubscriptionPolicyDecision.benefit.finalPriceMinor,70000);
       assert.ok(reads>=1);
       // Let the real router persist its PREPARED intent (mocked Mongo output only).
-      const prepared=run(msg,{warn(){},error(){}},{get(){}},host).find(Boolean);
+      const prepared=run(msg,{warn(){},error(){}},runtimeEnv,host).find(Boolean);
       assert.equal(prepared._subscriptionBooking.lk1.decision.subscriptionVisitCount,0);
       const saved=structuredClone(prepared._subscriptionBooking);
       const extracted=extractSubscriptionPricePreviewSource({source:body,label:'residency replay',roots:['lk1Fingerprint','lk1ReplayIdentityMatches']});
@@ -139,7 +176,7 @@ test('actual composed gateway uses owned discount-only residency before a split-
         let current={_subscriptionBooking:state,payload:exercise,statusCode:200};
         const proof=structuredClone(evidence);if(change) change(proof,state);
         for(let n=0;n<20;n++) {
-          const out=run(current,{warn(){},error(){}},{get(){}},host);const port=out.findIndex(Boolean);current=out[port];
+          const out=run(current,{warn(){},error(){}},runtimeEnv,host);const port=out.findIndex(Boolean);current=out[port];
           if(port===4 || (state.step==='booking_create' && current.method==='POST')) return {port,message:current};
           if(state.step==='residency_context') current={...current,payload:proof,statusCode:200,responseUrl:current.url};
           else if(['lk1_money_owned_subscriptions','product_owned_recheck'].includes(state.step)) current={...current,payload:{content:[owned],totalElements:1},statusCode:200,responseUrl:current.url};
@@ -151,6 +188,12 @@ test('actual composed gateway uses owned discount-only residency before a split-
       assert.equal(allowed.message._subscriptionBooking.step,'booking_create',JSON.stringify(allowed.message.payload));
       assert.equal(allowed.message.payload.paymentType,'ON_PLACE');
       assert.equal(allowed.message.payload.clientSubscriptionId,undefined);
+      globals.subscriptions_residency_booking_enabled=false;
+      globals.subscriptions_residency_preview_enabled=true;
+      assert.equal(recheck().port,4,'preview-only must not admit a new provider write');
+      delete globals.subscriptions_residency_preview_enabled;
+      if(envOnly) delete globals.subscriptions_residency_booking_enabled;
+      else globals.subscriptions_residency_booking_enabled=true;
       for(const change of [
         proof=>{proof.context.policyDigest='sha256:'+'b'.repeat(64);},
         proof=>{proof.validUntil=new Date(Date.now()-1).toISOString();},
