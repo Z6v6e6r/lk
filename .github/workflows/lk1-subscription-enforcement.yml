@@ -426,6 +426,7 @@ jobs:
           scripts/tests/publicCreateFlow.devRouting.test.ts
           scripts/tests/splitSubscriptionAvailability.test.ts
           scripts/tests/subscriptionAuditFixes.test.mjs
+          scripts/tests/tournamentAutoFinish.test.mjs
           scripts/tests/tournamentPendingPayment.test.mjs
           scripts/tests/subscriptionProductIdentity.test.mjs
           scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts

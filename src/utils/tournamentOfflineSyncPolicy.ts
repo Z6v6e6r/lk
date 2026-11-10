@@ -60,6 +60,12 @@ export function shouldQueueTournamentResultError(
   return typeof error.status === "number" && error.status >= 500;
 }
 
+export function tournamentResultNeedsReview(error: TournamentResultErrorLike | null | undefined): boolean {
+  if (error?.status !== 409 || !error.raw || typeof error.raw !== "object") return false;
+  const code = (error.raw as Record<string, unknown>).error;
+  return ["TOURNAMENT_CLOSED", "TOURNAMENT_DEADLINE_REACHED", "TOURNAMENT_SESSION_CHANGED"].includes(String(code));
+}
+
 export function getTournamentOfflineResultQueueScope(
   payload: TournamentOfflineResultsPayloadLike,
 ): string {
