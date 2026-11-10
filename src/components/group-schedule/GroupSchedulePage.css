@@ -700,6 +700,11 @@
   font-weight: 700;
 }
 
+.group-schedule-registration .group-schedule-promo-success .tournament-signup-payment-option strong {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .group-schedule-registration .group-schedule-promo-price {
   display: inline-flex;
   align-items: flex-end;
