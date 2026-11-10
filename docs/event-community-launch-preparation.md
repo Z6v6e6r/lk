@@ -33,16 +33,26 @@ production lookup found FRIENDS/OPEN/INSTANT, one OWNER, zero forms and no EVENT
 That observation is not an activation; the later responsible/contact confirmation remains private.
 The older endless EVENT game is not a fallback for the selected mode.
 
-For this exact exhibition community, canonical direct and invite joins must reject with
-`409/EVENT_NOT_STARTED` before the canonical policy's `startsAt`, including existing members
-and already registered actors. No registration, roster or derived write is emitted in that
-state. The start is inclusive and `endsAt` remains exclusive; no earlier phone acceptance is
-authorized. Other EVENT communities retain their existing pre-registration behavior. The
-scheduled exhibition UI alone is not a collection barrier. `EVENT_REGISTRATION_GUARD_V3`
-enforces this narrow server rule; upgrade accepts only the pinned historical V1/V2 block,
-and both current and historical guard drift fail closed. The frozen V2 fixture was captured
-from actual `90533ec3` bytes, not fabricated from the new implementation. Review this
-pilot-specific community binding after November 13; removing it does not erase stored data.
+On November 10 the owner superseded the earlier V3 no-pre-registration rule: **this exact
+community remains available for joining at any time**, including after the game ends.
+Full name, company and email remain mandatory; questionnaire retention is one calendar year
+from the server's `registeredAt`, not from the game closing date. Normal visits and membership
+retries do not slide that deadline. An expired entry requires a genuinely new submission.
+The V1 shared LK/CUP policy parser is unchanged; for this selected community its dates still
+bound the game, not community joining. Other EVENT communities retain their existing
+pre-registration/closing and event-end-based retention behavior.
+
+`EVENT_REGISTRATION_GUARD_V4` keeps verified identity, invite/banned checks, OWNER preservation
+and the acknowledged canonical CAS. The server supplies `eventNotice.retentionMode` as
+`submitted-year-v1`; the form must show the changed terms and explicitly send that mode back.
+An old client cannot silently collect under its old event-end notice. The stored private entry
+has the same mode and a server-derived individual `retentionUntil`. Only known V1/V2/V3 guard
+bytes can upgrade, while modified or unknown guards fail closed. V2 and V3 fixtures are frozen
+from actual predecessor source, not reconstructed by editing the new guard.
+
+The owner separately authorized a temporary full-client game test on November 10. This does
+not permanently open the game or move the final November 12–13 game window. Any test-only
+game opening must be bounded and closed afterwards; **do not close the community afterwards**.
 
 ### Five-life integration source (not deployed)
 
@@ -125,13 +135,23 @@ instance/contract/env/mixed-unit/API cases, with systemd/nginx/account/runtime c
 They do not establish real host permissions, nginx syntax/reload or process restart acceptance.
 Do not turn the test fixture's synthetic CI or runtime values into release receipts.
 
-LOCAL evidence: canonical admission/access/HTTP and replay/finish tests use synthetic actors,
+Prior LOCAL evidence: canonical admission/access/HTTP and replay/finish tests use synthetic actors,
 policies and disposable directories, not Mongo or real registration. The real form was rendered
 at 390/1440 px: no horizontal overflow, 48 px actions, visible keyboard focus; one synthetic
 submit handed off to the five-life start screen with exactly fullName/company/email/revision.
-Scheduled/closed/pending/banned states expose no form. This is component evidence, not a real
+Those earlier scheduled/closed/pending/banned game screens expose no form.
+This is component evidence, not a real
 QR/login/Mongo/phone end-to-end or production readiness claim. Independent integration security
 review and exact-head CI are separate from the earlier bounded CSV-only review.
+
+Current perpetual-registration LOCAL browser evidence uses the real React form, Modal and
+project CSS/fonts at 390×844 and 1440×1000 with a synthetic clock after the game dates.
+The form stays available, shows one year from submission and its actual submit callback
+receives only fullName/company/email/policyRevision plus `retentionMode:submitted-year-v1`.
+No horizontal overflow; form controls and this modal's close target are at least 48px, keyboard
+focus is visible, and close/remount does not auto-submit. The regular EVENT fixture still
+closes after its dates. This is a local callback, not an authenticated HTTP submission or
+production phone acceptance.
 
 The EVENT replay builder now pins and embeds its complete simulation closure: campaign,
 level layout and engine, using ordered filename-plus-NUL/source hashes. This repairs the
@@ -212,6 +232,46 @@ Actor deletion removes every epoch and run/result for that actor, leaves other e
 
 Physical live erasure is intentionally irreversible and not authorized here. A real executor must use the existing guarded operator path with separate exact-target authority, this frozen plan, fresh identity/revisions and the strict acknowledgement check. The tool creates no PII backup. Existing backups have their own retention/access boundary: inventory them, establish expiry, record erasure tombstones outside participant payloads, and reapply erasure after any separately authorized restore before reopening. Restoring an old backup can resurrect deleted data; never treat source rollback as data rollback.
 
+### Perpetual community: canonical expiry worker (source, not installed)
+
+`scripts/lib/exhibitionRegistrationRetention.mjs` adds an internal canonical Node-RED worker
+only when the existing candidate builder receives **both** `--event-admission` and
+`--event-retention`. Source generation is not live deletion authority. The exact target is
+the confirmed Cyrillic community ID above; there is no caller-selected community, URI,
+collection or public cleanup route. The Mongo client is taken from the canonical admission
+reader, never from an unrelated first connection.
+
+- An inject runs 30 seconds after startup and hourly thereafter. Collection is not considered
+  retention-ready until the first actual automatic tick is read back after authorized install.
+- Reads project only activation/revision and entry metadata, excluding full name, company,
+  email, runs and result values. Each rolling deadline is checked against `registeredAt` plus
+  one calendar year; malformed metadata, foreign targets and clock rollback stop before writes.
+- The existing `prepareEventErasure` creates the same exact aggregate/revision CAS and
+  `$pull`/revision increment with `upsert:false`. The execution clock is the server clock,
+  never an inject payload or an offline `--now`. Find/update operations have 5-second Mongo
+  execution limits. No expired rows means no write or revision bump. Archiving or changing
+  the community type does not cancel the remaining entries' stored retention duties.
+- A strict acknowledgement is followed by a fresh metadata readback and expected-state digest.
+  Only both together report `PURGED`. Lost acknowledgement, CAS conflict or readback drift
+  reports `RECONCILE_REQUIRED`, never an automatic write replay or a false success. The next
+  hourly attempt reads a fresh aggregate rather than replaying a stale command.
+- The `EXHIBITION_REGISTRATION_RETENTION_V1` audit contains only an operation UUID, timestamp,
+  counts, revisions and status. It carries no actor identifiers, contacts or document snapshot,
+  and creates no PII backup. Unknown/partial worker graphs are rejected before patching.
+
+Questionnaire use/export ends at each inclusive individual cutoff; physical removal from the
+canonical collection follows on the next successful hourly tick. An unavailable worker is an
+operational retention incident, not permission to extend the lifetime. Incident recovery uses
+the existing reviewed flow/known-preimage procedure; hold new collection if retention cannot
+be restored. Never switch to FRIENDS merely to bypass the mandatory form or restore erased
+data as automatic recovery. Participant-request erasure, private CSVs, existing database backups
+and restored-copy tombstones remain separately scoped operator duties.
+
+LOCAL worker tests execute the generated functions over owned in-memory Mongo transport doubles,
+including inclusive expiry, preserved unexpired values/OWNER, no-op ticks, type rollback,
+forged deadlines, clock rollback, missing acknowledgement and readback conflict. They are not
+evidence of a real Mongo deletion, an installed scheduler or backup/export erasure.
+
 ### Separate five-life score receipts and process caches
 
 The canonical planner now accepts the exact Cyrillic community ID without transliteration.
@@ -221,9 +281,11 @@ installed job or approval to delete anything. It never touches the team archive,
 membership, provider, canonical Mongo collection, exports or backups.
 
 1. Resolve the verified account ID and approve the exact erasure scope. For expiry, use each
-   stored inclusive retention deadline; the confirmed notice ends retention at
-   `2027-11-13T21:00:00.000Z`. Assign the responsible operator and backup/export lifecycle before
-   activation. No retention cron/timer has been installed by this task.
+   stored inclusive retention deadline. Game score receipts retain their separate event-end
+   cutoff `2027-11-13T21:00:00.000Z`; questionnaires in the perpetual selected community expire
+   individually one calendar year after submission. Assign the responsible operator and
+   backup/export lifecycle before activation. No retention cron/timer is installed merely
+   by adding its source or generating a candidate.
 2. Under a separately approved ordered operation, stop only `padlhub-jump-exhibition.service`
    and confirm it is inactive with MainPID=0. This retires the registry/spectator/admission
    caches and prevents score writes. Do not restart or stop the team service. Apply the exact

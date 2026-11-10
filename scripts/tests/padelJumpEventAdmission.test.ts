@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import fs from 'node:fs';
+import {createHash} from 'node:crypto';
 import { eventJumpAdmission, addEventAdmissionRoutes } from '../lib/eventJumpAdmission.mjs';
 import { addCommunityPolicyAuth } from '../lib/communityPolicyAuth.mjs';
 import { patchCommunityTypesFlow } from '../patch_live_community_types.mjs';
@@ -51,6 +52,21 @@ test('canonical admission binds current own registration and policy without retu
   assert.deepEqual(response.actor, { id: actor.id, name: actor.name });
   assert.doesNotMatch(JSON.stringify(response), /Private Questionnaire|Private Company|private@|9990000001|eventEntries|playerId/);
 });
+test('perpetual exhibition admission accepts rolling forms without changing the game window or receipt retention', () => {
+  const value=doc();value.id='community_1794221739126_корпспорт-падлхаб-2026';
+  Object.assign(value.eventEntries[0],{registeredAt:'2026-11-10T14:00:00.000Z',retentionUntil:'2027-11-10T14:00:00.000Z',retentionMode:'submitted-year-v1'});
+  const response=eventJumpAdmission(value,actor,at);
+  assert.equal(response.registration,'CURRENT');assert.equal(response.state,'ready');
+  assert.equal(response.retentionUntil,'2027-11-13T21:00:00.000Z','game receipts keep their independent event retention');
+  assert.equal(response.eventNotice.retentionMode,'submitted-year-v1');
+  assert.equal(eventJumpAdmission(value,actor,'2026-11-10T14:00:00.000Z').playOpen,false);
+  assert.equal(eventJumpAdmission(value,actor,policy.endsAt).playOpen,false);
+  value.typeSettings.registrationPolicy.startsAt='2027-11-09T21:00:00.000Z';
+  value.typeSettings.registrationPolicy.endsAt='2027-11-13T21:00:00.000Z';
+  assert.equal(eventJumpAdmission(value,actor,'2027-11-10T13:59:59.999Z').registration,'CURRENT');
+  assert.equal(eventJumpAdmission(value,actor,'2027-11-10T14:00:00.000Z').registration,'REQUIRED','a form expires at its own inclusive cutoff');
+  assert.doesNotMatch(JSON.stringify(response),/Private Questionnaire|Private Company|private@|9990000001|eventEntries|playerId/);
+});
 test('existing members need a current questionnaire; bans and pending membership cannot become ready', () => {
   for (const change of [() => [], () => [{ ...doc().eventEntries[0], policyRevision: 1 }], () => [{ ...doc().eventEntries[0], epoch: '2026-11-08T09:00:00.000Z' }]]) {
     const value = doc(); value.eventEntries = change(); assert.equal(eventJumpAdmission(value, actor, at).state, 'form');
@@ -80,6 +96,20 @@ test('generated admission is GET-only, verified-actor bound, read-only and rejec
   assert.deepEqual(addCommunityPolicyAuth(addEventAdmissionRoutes(graph)), graph);
   const drift = structuredClone(graph); drift.find(n => n.id === 'community-event-admission-v1-apply')!.func = 'return msg;';
   assert.throws(() => addEventAdmissionRoutes(drift), /EVENT_ADMISSION_GRAPH_DRIFT/);
+});
+test('historical admission reader upgrades only known bytes and preserves verified graph ownership',()=>{
+  const previous=JSON.parse(fs.readFileSync('scripts/tests/fixtures/eventAdmissionApplyV1.json','utf8'));
+  assert.equal(previous.sourceCommit,'a4e156f3686cae4fc7cb0ceebc33eb186f8696bf');
+  assert.equal(createHash('sha256').update(previous.func).digest('hex'),'3c351e3e45f2a15f879f66d93e3273eb2c984ad799153d7985bf5947f0baedcc');
+  const input=[{id:'tab',type:'tab'},{id:'mongo',type:'mongodb4',z:'tab',collection:'lk_communities',operation:'find',clientNode:'fixture-client',wires:[]}];
+  const old=addCommunityPolicyAuth(addEventAdmissionRoutes(input));
+  old.find((n:FlowNode)=>n.id==='community-event-admission-v1-apply').func=previous.func;
+  const upgraded=addCommunityPolicyAuth(addEventAdmissionRoutes(old));
+  assert.notEqual(createHash('sha256').update(upgraded.find((n:FlowNode)=>n.id==='community-event-admission-v1-apply').func).digest('hex'),previous.sha256);
+  for(const node of old) if(node.id!=='community-event-admission-v1-apply') assert.deepEqual(upgraded.find((n:FlowNode)=>n.id===node.id),node);
+  assert.deepEqual(addCommunityPolicyAuth(addEventAdmissionRoutes(upgraded)),upgraded);
+  old.find((n:FlowNode)=>n.id==='community-event-admission-v1-apply').func+='\n// unknown';
+  assert.throws(()=>addEventAdmissionRoutes(old),/EVENT_ADMISSION_GRAPH_DRIFT/);
 });
 test('direct admission has a bounded gate before profile authentication even with rotating credentials', () => {
   const input = [{ id: 'tab', type: 'tab' }, { id: 'mongo', type: 'mongodb4', z: 'tab', collection: 'lk_communities', operation: 'find', clientNode: 'fixture-client', wires: [] }];
