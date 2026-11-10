@@ -43,6 +43,35 @@ test("does not broadly classify every Padel Tournament type", () => {
   );
 });
 
+test("recognizes children's tournament direction with an unknown Viva id", () => {
+  assert.equal(
+    isTournamentExerciseCategory({
+      direction: { id: 9999, name: "Детский турнир" },
+      type: { id: 839, name: "Падел Турнир" },
+    }),
+    true,
+  );
+});
+
+test("recognizes children's tournament category in type with normalized whitespace and case", () => {
+  assert.equal(
+    isTournamentExerciseCategory({
+      type: { id: "9999", name: "  ДЕТСКИЙ\u00a0  ТУРНИР  " },
+    }),
+    true,
+  );
+});
+
+test("does not include children's trainings or partial tournament category names", () => {
+  for (const name of ["Детская тренировка", "Детский турнир тренировка", "Подготовка: Детский турнир"]) {
+    assert.equal(
+      isTournamentExerciseCategory({ direction: { id: 9999, name } }),
+      false,
+      name,
+    );
+  }
+});
+
 test("recognizes special tournament type when a new Viva direction is used", () => {
   assert.equal(
     isTournamentExerciseCategory({
