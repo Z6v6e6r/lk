@@ -40,6 +40,17 @@ test('auth success, rejected credentials, provider outage and redirect restore t
     { id: 'list', type: 'function', z: 'tab', name: 'List', func: 'return msg;', wires: [[]] }]);
   assert.equal(flow.find(x => x.id.endsWith('-http')).followRedirects, false);
 });
+test('profile verification sets the actual Node-RED message timeout and restores the original own field',()=>{
+  for(const original of [{},{requestTimeout:undefined},{requestTimeout:250000}]) {
+    const msg={...original,req:{headers:{authorization:'Bearer fixture'}},payload:{kept:true}};
+    assert.equal(run(COMMUNITY_AUTH_PREPARE,msg)[0],msg);
+    assert.equal(msg.requestTimeout,10000,'Node-RED4.0.9 reads msg.requestTimeout, not the node config field');
+    msg.statusCode=200;msg.payload={id:'fixture-player'};
+    const restored=run(COMMUNITY_AUTH_RESPONSE,msg)[0];
+    assert.equal(Object.hasOwn(restored,'requestTimeout'),Object.hasOwn(original,'requestTimeout'));
+    assert.equal(restored.requestTimeout,original.requestTimeout);assert.deepEqual(json(restored.payload),{kept:true});
+  }
+});
 
 test('FRIENDS retains requested identity on success and 401/503/redirect; typed reads fail closed', () => {
   for (const status of [200, 401, 302, 503]) {

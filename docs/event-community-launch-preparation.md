@@ -171,6 +171,8 @@ Direct Node-RED access is not an exemption from provider budgets. The generated 
 
 The nginx admission cap also covers the normalized bare `/lk/communities/event-admission` path: an encoded slash-only ID can collapse to it. Decoded linefeeds must not evade the pattern either. These malformed aliases receive the same edge body/rate budgets, and the Node-RED admission gate independently rejects their invalid decoded IDs before profile verification. Keep both raw `%2F`-only and `%0A` regressions in the real nginx fixture; a regex-only check does not prove which upstream receives the original URI.
 
+Bind the profile deadline through `msg.requestTimeout = 10000` before dispatch and restore the original field and own-property presence with the rest of the raw request. Installed Node-RED 4.0.9 reads this message field; a `requestTimeout` property on the HTTP node alone does not establish that deadline. Verify the installed HTTP request implementation before using the 15-second dispatch window as concurrency evidence.
+
 Local rehearsal uses the existing cached immutable nginx image without a network:
 
 ```sh

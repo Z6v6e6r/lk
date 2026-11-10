@@ -49,17 +49,19 @@ if (!header) return [null, msg];
 if (!/^Bearer[ \t]+[^ \t]+$/i.test(header)) {
   msg._communityPolicyAuthFailure = 'INVALID'; return [null, msg, null];
 }
-msg._communityPolicyAuth = { payload: msg.payload, method: msg.method, url: msg.url, headers: msg.headers, followRedirects: msg.followRedirects, statusCode: msg.statusCode, own: ['payload','method','url','headers','followRedirects','statusCode'].filter(key => Object.prototype.hasOwnProperty.call(msg,key)) };
+msg._communityPolicyAuth = { payload: msg.payload, method: msg.method, url: msg.url, headers: msg.headers, followRedirects: msg.followRedirects, requestTimeout: msg.requestTimeout, statusCode: msg.statusCode, own: ['payload','method','url','headers','followRedirects','requestTimeout','statusCode'].filter(key => Object.prototype.hasOwnProperty.call(msg,key)) };
 msg.method = 'GET'; msg.url = 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile';
 msg.headers = { Authorization: header, Accept: 'application/json' }; msg.payload = undefined;
 msg.followRedirects = false;
+// Node-RED4.0.9 applies this message field, not a requestTimeout node property.
+msg.requestTimeout = 10000;
 return [msg, null, null];
 `;
 export const COMMUNITY_AUTH_RESPONSE = String.raw`
 const status = Number(msg.statusCode), profile = msg.payload, saved = msg._communityPolicyAuth;
 delete msg._communityPolicyAuth;
 if (!saved) throw new Error('COMMUNITY_AUTH_CONTEXT_MISSING');
-for (const key of ['payload','method','url','headers','followRedirects','statusCode']) {
+for (const key of ['payload','method','url','headers','followRedirects','requestTimeout','statusCode']) {
   if (saved.own ? saved.own.includes(key) : saved[key] !== undefined) msg[key] = saved[key];
   else delete msg[key];
 }
