@@ -1,7 +1,8 @@
 // Private Node-RED child. No credentials, contacts or raw errors cross stdout.
 import fs from 'node:fs';import crypto from 'node:crypto';import {spawnSync} from 'node:child_process';import {createRequire} from 'node:module';
 /* global __FPR_START_WORKER_HASHES__ */
-import {initializeFprStarts} from './lib/fprStartBootstrap.mjs';
+import {initializeFprStartsWithViva} from './lib/fprStartBootstrap.mjs';
+import {createFprVivaStartReader} from './lib/fprStartVivaLevel.mjs';
 let client,lock;
 try{
  if(process.getuid()!==0)throw Error('FPR_START_UNAVAILABLE');
@@ -30,7 +31,7 @@ try{
   if(!['clientId','playerKey'].every(k=>indexes.some(i=>i.unique&&Object.keys(i.key).length===1&&i.key[k]===1&&(!i.partialFilterExpression||JSON.stringify(i.partialFilterExpression)===JSON.stringify({[k]:{$type:'string'}})))))throw Error('FPR_START_INDEXES_REQUIRED');}
  const indexes=await db.collection('rating_events').indexes();
  if(!indexes.some(i=>i.unique&&Object.keys(i.key).length===1&&i.key.idempotencyKey===1&&!i.partialFilterExpression))throw Error('FPR_START_INDEXES_REQUIRED');
- const result=await initializeFprStarts(db,client,input.clientIds,input.actorId,new Date().toISOString(),{dryRun:input.dryRun===true});
+ const result=await initializeFprStartsWithViva(db,client,input.clientIds,input.actorId,createFprVivaStartReader(),{dryRun:input.dryRun===true});
  console.log(JSON.stringify({ok:true,...result}));
 }catch(e){console.log(JSON.stringify({ok:false,error:/^FPR_START_[A-Z_]+$/.test(e.message)?e.message:'FPR_START_UNAVAILABLE',
  ...(typeof e.playerId==='string'?{playerId:e.playerId}:{})}));process.exitCode=1;

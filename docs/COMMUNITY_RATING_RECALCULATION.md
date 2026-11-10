@@ -87,6 +87,42 @@ The worker creates rating indexes before writes unless `--skip-indexes` is passe
 - snapshots expose `dataThrough`, `sourceVersion` and `calculationVersion`.
 - when a versioned snapshot is missing, API returns degraded `503 RATING_SNAPSHOT_NOT_READY`; the old game/tournament-only fallback is not used because it omits visits and canonical level events.
 
+## Missing canonical levels at FPR roster preparation
+
+The FPR start helper preserves an existing canonical state, a complete valid ledger
+history, or an exact numeric compatibility value. Missing CUP data alone never
+authorizes an unrated baseline. The server helper reads the exact Viva client using
+the existing root-only worker service configuration and imports a valid numeric
+level with its original precision. Only a successfully verified profile with both
+level fields empty permits baseline 1. Provider failures, invalid or ambiguous
+fields, a grade without a numeric level, and contradictory known local levels
+fail the whole roster with a participant-specific error and no rating writes.
+Provider reads happen before the retriable transaction; evidence expires after
+15 seconds and is checked again before writes. Browser input cannot supply levels
+or provider evidence. Existing canonical players do not require a Viva lookup.
+
+`scripts/build_fpr_start_bootstrap.mjs` packages the clean-source helper and binds
+it to the installed worker's nine formula/replay module hashes. A helper-only
+release does not change Node-RED nodes or require a Node-RED restart. Verify its
+manifest, live dry-run, exact worker hashes and previous symlink before an
+authorized switch; keep the previous release for guarded rollback.
+
+For an erroneous default-1 bootstrap in a still-open, unawarded FPR protocol,
+`scripts/build_fpr_bootstrap_recovery.mjs` builds the private root-only recovery
+runner. Its `prepare -> rehearse -> apply -> postcheck` sequence uses the common
+worker lock, server-private durable preimages, an aborted transaction rehearsal,
+exact-source guards and one atomic correction. The request names one client,
+protocol and preincident community level. It preserves the original bootstrap,
+adds an evidenced effective-time correction, repairs the frozen start and its
+canonical version, and advances revision together with an admin audit entry.
+Scores, pairings, seed, rest lot, standings and sports timestamps stay unchanged.
+A real metadata fence protects the source community evidence; member data and
+the community's activity timestamp are preserved. Finalized protocols, additional
+history or awards, active projections and changed preimages require a new review.
+After an ambiguous commit, use the existing packet's postcheck/readback rather
+than repeating apply. Legitimate scoring after commit may invalidate the strict
+source postcheck and requires reading the later state, not rolling back blindly.
+
 ## Training Visit Sync
 
 `lk_training_visits` is filled by `scripts/sync_training_visits_from_viva.mjs`.
