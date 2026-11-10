@@ -471,6 +471,9 @@ jobs:
           scripts/tests/tournamentSignupAvailability.test.ts
           scripts/tests/tournamentSignupVivaBookingIdentity.test.ts
           scripts/tests/groupScheduleApi.test.ts
+          scripts/tests/groupScheduleCheckout.test.mjs
+          scripts/tests/groupSchedulePromo.test.ts
+          scripts/tests/groupScheduleDetailUi.test.ts
           scripts/tests/groupEventPayment.test.mjs
           scripts/tests/trialGroupEligibility.test.mjs
           scripts/tests/trialGroupBooking.nodered.test.mjs

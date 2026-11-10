@@ -5,6 +5,8 @@ import type {
 
 export interface AppliedGroupSchedulePromo {
   code: string;
+  exerciseId: string;
+  clientId: string;
   previewsByProductId: Record<string, TournamentVivaTransactionPreview>;
 }
 
@@ -25,7 +27,9 @@ export function isGroupSchedulePromoPreviewApplicable(
 export function getAppliedGroupSchedulePromoPreview(
   promo: AppliedGroupSchedulePromo | null,
   product: TournamentVivaProduct,
+  context: { exerciseId: string; clientId: string | undefined },
 ): TournamentVivaTransactionPreview | null {
-  if (!promo || !isGroupSchedulePromoProduct(product)) return null;
+  if (!promo || !isGroupSchedulePromoProduct(product)
+    || promo.exerciseId !== context.exerciseId || promo.clientId !== context.clientId) return null;
   return promo.previewsByProductId[product.id] ?? null;
 }

@@ -371,6 +371,7 @@ export default function GroupSchedulePage({
   const [detailRosterLoading, setDetailRosterLoading] = useState(false);
   const [detailRosterError, setDetailRosterError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
+  const [checkoutLoadError, setCheckoutLoadError] = useState<string | null>(null);
   const [trialEligibility, setTrialEligibility] = useState<(TrialGroupEligibilityDecision & { key: string }) | null>(null);
   const [trialEligibilityRetry, setTrialEligibilityRetry] = useState(0);
   const [subscriptionOffer, setSubscriptionOffer] = useState<{ owner: string | null; show: boolean } | null>(null);
@@ -539,6 +540,7 @@ export default function GroupSchedulePage({
     if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled) return;
     const requestId = ++registrationRequestIdRef.current;
     setCheckout(null);
+    setCheckoutLoadError(null);
     setRegistrationLoading(true);
     setDetailError(null);
     const [registrationResult, checkoutResult] = await Promise.all([
@@ -558,7 +560,7 @@ export default function GroupSchedulePage({
     setRegistration(registrationResult.data ?? null);
     if (checkoutResult.error || !checkoutResult.data) {
       setCheckout(null);
-      setDetailError(getErrorMessage(checkoutResult.error, "Не удалось получить способы записи."));
+      setCheckoutLoadError(getErrorMessage(checkoutResult.error, "Не удалось получить способы записи."));
     } else {
       setCheckout(checkoutResult.data);
     }
@@ -567,6 +569,7 @@ export default function GroupSchedulePage({
 
   useEffect(() => {
     registrationRequestIdRef.current += 1;
+    setCheckoutLoadError(null);
     return () => { registrationRequestIdRef.current += 1; };
   }, [selectedId, selectedDetail, isAuthenticated, isRestoringSession, phone]);
 
@@ -651,7 +654,7 @@ export default function GroupSchedulePage({
     return () => {
       promoRequestIdRef.current += 1;
     };
-  }, [isAuthenticated, selectedId]);
+  }, [isAuthenticated, isRestoringSession, phone, selectedId, checkout]);
 
   useEffect(() => {
     setSubscriptionOffer(null);
@@ -736,6 +739,7 @@ export default function GroupSchedulePage({
   const currentDiscountQuotes = !spanishTrainingSelected && discountResolvedFor === discountContextKey ? discountQuotes : [];
   const isRegistered = Boolean(registration && registration.status !== "NONE");
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
+  const ownedOneTimes = checkout?.purchasedProducts.filter(product => product.source === "client-one-time") ?? [];
   const requiresTrialEligibility = TRIAL_GROUP_CHECKOUT_ENABLED && isTrialGroupTraining(selectedTraining);
   const trialEligibilityKey = requiresTrialEligibility && selectedId && checkout?.profile?.id
     && checkout.exercise.id === selectedId && !isRegistered && !registrationLoading
@@ -815,7 +819,7 @@ export default function GroupSchedulePage({
       setAppliedPromo(null);
       return;
     }
-    if (!activeCheckout.profile?.phone) {
+    if (!activeCheckout.profile?.phone || !activeCheckout.profile.id) {
       setPromoError("Не удалось получить телефон профиля Viva.");
       setAppliedPromo(null);
       return;
@@ -846,7 +850,11 @@ export default function GroupSchedulePage({
         exercise: activeCheckout.exercise,
         tournament: training.raw,
         promoCode: code,
-      }),
+      }).catch(() => ({
+        data: null,
+        error: { status: null, message: "Не удалось проверить промокод. Повторите попытку." },
+        status: null,
+      })),
     })));
     if (promoRequestIdRef.current !== requestId) return;
 
@@ -866,7 +874,12 @@ export default function GroupSchedulePage({
       return;
     }
 
-    setAppliedPromo({ code, previewsByProductId });
+    setAppliedPromo({
+      code,
+      exerciseId: training.id,
+      clientId: activeCheckout.profile.id,
+      previewsByProductId,
+    });
   }, [promoInput, subscriptionUsageShadowEnabled, subscriptionUsageShadowReject]);
 
   const completeRegistration = useCallback(async (
@@ -1300,6 +1313,21 @@ export default function GroupSchedulePage({
                     {!subscriptionUsageShadowEnabled && registrationLoading && (
                       <div className="tournament-signup-muted">Проверяем доступные варианты...</div>
                     )}
+                    {!subscriptionUsageShadowEnabled && !registrationLoading
+                      && (checkoutLoadError || (checkout?.tariffErrors?.length ?? 0) > 0) && (
+                      <div className="group-schedule-promo-error" role="alert">
+                        {checkoutLoadError && <p>{checkoutLoadError}</p>}
+                        {checkout?.tariffErrors?.map(message => <p key={message}>{message}</p>)}
+                        <button
+                          type="button"
+                          className="section-cta"
+                          onClick={() => void loadRegistrationState(selectedTraining)}
+                          disabled={actionLoading}
+                        >
+                          Повторить загрузку тарифов
+                        </button>
+                      </div>
+                    )}
                     {!subscriptionUsageShadowEnabled && requiresTrialEligibility && !isRegistered && checkout && !registrationLoading && (
                       <div className="tournament-signup-muted" role="status" aria-live="polite">
                         {!currentTrialEligibility && "Проверяем возможность пробной тренировки…"}
@@ -1356,6 +1384,22 @@ export default function GroupSchedulePage({
                       && !trialBookingBlocked
                       && checkout && (
                       <div className="tournament-signup-payment-options">
+                        {ownedOneTimes.length > 0 && (
+                          <div className="tournament-signup-payment-group" aria-label="Ваши разовые посещения">
+                            {ownedOneTimes.map(product => (
+                              <button
+                                key={`${product.source}-${product.id}`}
+                                className="tournament-signup-payment-option"
+                                type="button"
+                                onClick={() => void completeRegistration(selectedTraining, checkout, product)}
+                                disabled={actionLoading || promoLoading}
+                              >
+                                <span>{product.name}</span>
+                                <strong>Использовать разовое посещение</strong>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         {ownedSubscriptions.length > 0 && (
                           <div className="tournament-signup-payment-group" aria-label="Ваши абонементы">
                             {ownedSubscriptions.map(product => (
@@ -1385,7 +1429,10 @@ export default function GroupSchedulePage({
                           <div className="tournament-signup-payment-group">
                             <div className="tournament-signup-payment-purchase-list">
                               {purchasableProducts.map((product) => {
-                                const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
+                                const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product, {
+                                  exerciseId: selectedTraining.id,
+                                  clientId: checkout.profile?.id,
+                                });
                                 const discount = !promoPreview ? matchGroupSubscriptionDiscount(currentDiscountQuotes, product, selectedTraining.directionId) : null;
                                 const bookingProduct: TournamentVivaProduct = discount ? {
                                   id: discount.subscriptionId, name: discount.subscriptionName, source: "client-subscription", type: "SUBSCRIPTION",
@@ -1403,7 +1450,7 @@ export default function GroupSchedulePage({
                                       bookingProduct,
                                       promoPreview ? appliedPromo?.code : null,
                                     )}
-                                    disabled={actionLoading || promoLoading || discountPending}
+                                    disabled={actionLoading || promoLoading || (!promoPreview && discountPending)}
                                   >
                                     <span className="group-schedule-discount-label">
                                       <span>{product.name}</span>
@@ -1509,8 +1556,29 @@ export default function GroupSchedulePage({
                                 </div>
                                 {promoError && <div className="group-schedule-promo-error">{promoError}</div>}
                                 {appliedPromo && (
-                                  <div className="group-schedule-promo-success">
+                                  <div className="group-schedule-promo-success" role="status">
                                     Промокод применён. Viva подтвердила специальную цену.
+                                    {checkout.oneTimes.map(product => {
+                                      const preview = getAppliedGroupSchedulePromoPreview(appliedPromo, product, {
+                                        exerciseId: selectedTraining.id,
+                                        clientId: checkout.profile?.id,
+                                      });
+                                      if (!preview) return null;
+                                      return (
+                                        <button
+                                          key={product.id}
+                                          type="button"
+                                          className="tournament-signup-payment-option"
+                                          onClick={() => void completeRegistration(selectedTraining, checkout, product, appliedPromo.code)}
+                                          disabled={actionLoading || promoLoading}
+                                        >
+                                          <span>{product.name}</span>
+                                          <strong>{preview.toPayMinor === 0
+                                            ? "Записаться бесплатно"
+                                            : `Записаться за ${formatMoneyMinor(preview.toPayMinor)}`}</strong>
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 )}
                               </div>
@@ -1518,7 +1586,8 @@ export default function GroupSchedulePage({
                           </>
                         )}
 
-                        {ownedSubscriptions.length === 0 && purchasableProducts.length === 0 && (
+                        {ownedSubscriptions.length === 0 && ownedOneTimes.length === 0 && purchasableProducts.length === 0
+                          && !checkout.tariffErrors?.length && (
                           <div className="tournament-signup-muted">Нет доступных способов записи.</div>
                         )}
                       </div>
