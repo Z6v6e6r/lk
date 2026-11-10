@@ -1,0 +1,24 @@
+<!-- Replace content of T123 rec5171155001. Activate only with the reviewed backend/frontend release. -->
+<script>
+window.PHVSK_CONFIG = {
+  company: "ВСК",
+  contacts: {}, // Preserve the public contacts already present in the page markup.
+  links: { cabinet: "https://padlhub.ru/lk_new?authMode=viva", community: "", allEvents: "https://padlhub.ru/vsk#vsk-events" },
+  subscription: {
+    confirmed: true, name: "Дружба.ВСК",
+    monthly: { priceRub: 6800, durationDays: 30, checkoutUrl: "", offerKey: "vsk" },
+    dailyMinutes: 60, gameDiscountPercent: 30, eventDiscountPercent: 50, activeBookingsLimit: 8,
+    storefrontScript: "https://padlhub.su/lk/subscription-storefront/subscription-storefront.js"
+  },
+  schedule: {
+    enabled: true, booking: "lk",
+    categories: [
+      { directionId: 6975, typeId: 2349, label: "ВСК игра", badge: "Запись уточняется" },
+      { directionId: 6975, typeId: 1613, label: "ВСК игра", badge: "Запись уточняется" },
+      { directionId: 5278, typeId: 839, label: "Время на друзей", badge: "Скидка по активной подписке" }
+    ],
+    scriptUrl: "https://padlhub.su/lk/atlanty-schedule.js", maxEvents: 18, daysAhead: 120,
+    viva: { enabled: false, instance: "vsk" }
+  }
+};
+</script>

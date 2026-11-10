@@ -284,6 +284,11 @@ export function buildAtlantyCategoryKey(category: AtlantyCategory) {
 /** Способ записи с карточки: официальный попап Viva, окно ЛК1 или показ без записи. */
 export type AtlantyBookingMode = "viva" | "lk" | "disabled";
 
+/** A category can remain visible while its booking tariff/route is not ready. */
+export function resolveAtlantyEventBookingMode(mode: unknown, disabledCategoryKeys: readonly string[] | null | undefined, categoryKey: string): AtlantyBookingMode {
+  return disabledCategoryKeys?.includes(categoryKey) ? "disabled" : normalizeAtlantyBookingMode(mode);
+}
+
 export function normalizeAtlantyBookingMode(value: unknown): AtlantyBookingMode {
   const mode = String(value ?? "").trim().toLowerCase();
   return mode === "lk" || mode === "disabled" ? mode : "viva";

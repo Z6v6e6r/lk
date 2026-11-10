@@ -201,6 +201,7 @@ function loadRegularPayment(topocratyProductId: string) {
     TOPOCRATY_PRODUCT_ID: topocratyProductId,
     TOPOCRATY_PLAN_ID: 'topocraty',
     PATRIOTS_PRODUCT_ID: '37ab3713-4431-4815-96ba-d7ece76a9241',
+    VSK_PRODUCT_ID: '94e32355-1c69-462b-9f2a-77f2817cb24c',
     PATRIOTS_PLAN_ID: 'patriots',
     apiBuySubscroption: () => {}, apiConfirmTournamentSubscriptionPurchase: () => {},
     apiCreateTournamentSubscriptionPurchase: () => {}, apiFetchProfile: () => {}, appendCurrentAuthModeToNavigableUrl: (url: URL) => url,
@@ -208,12 +209,13 @@ function loadRegularPayment(topocratyProductId: string) {
 }
 const regularPayment = loadRegularPayment('14692232-12be-4218-9fa1-2d5b79b62035');
 const liveProductFixture = (key: string, changes: Record<string, unknown> = {}) => ({
-  id: key === 'residency' ? '4037a3a3-e551-4f9a-a9db-1410e46b8635' : '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',
-  cost: key === 'residency' ? 79000 : 1980000, validityDays: 30, visits: 30,
-  activationDays: key === 'residency' ? 0 : 1, type: 'GROUP', variant: 'BY_VISITS', appliesTo: 'BOOKING',
+  id: key === 'vsk' ? '94e32355-1c69-462b-9f2a-77f2817cb24c' : key === 'residency' ? '4037a3a3-e551-4f9a-a9db-1410e46b8635' : '6b98e7e3-5bd3-4e94-9dc3-7723ea52513e',
+  cost: key === 'vsk' ? 680000 : key === 'residency' ? 79000 : 1980000, validityDays: 30, visits: 30,
+  activationDays: key === 'vsk' || key === 'residency' ? 0 : 1, type: 'GROUP', variant: 'BY_VISITS', appliesTo: 'BOOKING',
   hasStudioLimitation: false, hasDirectionLimitation: key !== 'residency',
-  availableDirections: key === 'residency' ? [] : [4588, 5278].map(id => ({ id })),
-  hasTypeLimitation: true, availableTypes: (key === 'residency' ? [2572] : [1613, 839]).map(id => ({ id })),
+  availableDirections: key === 'vsk' ? [4588, 6975].map(id => ({ id })) : key === 'residency' ? [] : [4588, 5278].map(id => ({ id })),
+  hasTypeLimitation: true, availableTypes: (key === 'vsk' ? [1613, 2349] : key === 'residency' ? [2572] : [1613, 839]).map(id => ({ id })),
+  hasDayLimitation: false, hasTimeRangeLimitation: false, hasDayTimeLimitation: false,
   ...changes,
 });
 
@@ -223,7 +225,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   let confirmation: any = { data: { paid: true, failed: false, status: 'PAID' } };
   let price = 980000;
   let availability = true;
-  const liveProducts = { residency: liveProductFixture('residency'), 'friendship-two-hours': liveProductFixture('friendship-two-hours') };
+  const liveProducts = { vsk: liveProductFixture('vsk'), residency: liveProductFixture('residency'), 'friendship-two-hours': liveProductFixture('friendship-two-hours') };
   let twoHourStatus: Record<string, unknown> = { counterKey: 'friendship_two_hours', productId: liveProducts['friendship-two-hours'].id,
     priceMinor: 1980000, canPurchase: true, bindingReady: true, unlimited: true, totalLimit: 0, remainingCount: 0 };
   let patriotProduct: Record<string, unknown> = {
@@ -251,6 +253,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     PATRIOTS_MONTHLY_PRICE_MINOR: 680000,
     PATRIOTS_PLAN_ID: 'patriots',
     PATRIOTS_PRODUCT_ID: '37ab3713-4431-4815-96ba-d7ece76a9241',
+    VSK_PRODUCT_ID: '94e32355-1c69-462b-9f2a-77f2817cb24c',
     API_BASE: 'https://api.vivacrm.ru', TENANT_KEY: 'iSkq6G',
     canContinue: (row: any) => row.canPurchase && row.bindingReady && row.priceMinor > 0 && row.remainingCount > 0,
     appendCurrentAuthModeToNavigableUrl: (url: URL) => { url.searchParams.set('authMode', 'viva'); return url; },
@@ -270,7 +273,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   }, { ...f.globals, setTimeout, clearTimeout });
   return { ...f, setPromoResult: f.setResult, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
-    setLiveProduct: (key: 'residency' | 'friendship-two-hours', changes: Record<string, unknown>) => { liveProducts[key] = { ...liveProducts[key], ...changes }; },
+    setLiveProduct: (key: 'vsk' | 'residency' | 'friendship-two-hours', changes: Record<string, unknown>) => { liveProducts[key] = { ...liveProducts[key], ...changes }; },
     setTwoHourStatus: (changes: Record<string, unknown>) => { twoHourStatus = { ...twoHourStatus, ...changes }; },
     setPatriotProduct: (value: Record<string, unknown>) => { patriotProduct = value; },
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
@@ -759,4 +762,57 @@ test('every direct/counter amount and conflicting transaction id fails closed af
   await assert.rejects(f.adapter.createZeroPayment('atlanty',fixturePhone,680000,()=>true));
   assert.equal(f.writes.length,1);
   assert.equal(JSON.parse([...f.stored.values()][0]).transactionId,undefined);
+});
+
+
+test('VSK sells only its exact live monthly product, without annual or arbitrary aliases', async () => {
+  const f = zeroFixture();
+  const offer = f.adapter.resolveZeroOffer('vsk')!;
+  assert.equal(offer.label, 'Дружба.ВСК');
+  assert.equal(offer.billingOptionId, 'monthly');
+  assert.equal(offer.liveProductId, '94e32355-1c69-462b-9f2a-77f2817cb24c');
+  for (const key of ['vsk-year', 'vsk-annual', offer.liveProductId!, 'VSK']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+  const quote = await f.adapter.loadZeroOfferQuote('vsk');
+  assert.equal(quote.priceMinor, 680000);
+  assert.equal(f.writes.length, 0);
+  const outcomes = await Promise.allSettled([1, 2].map(() => f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote)));
+  assert.equal(outcomes.filter(value => value.status === 'fulfilled').length, 1);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0][0], offer.liveProductId);
+  assert.equal(f.writes[0][2].retries, 0);
+  assert.ok(!f.counterRequests.some(url => url.includes('counterKey=')));
+  await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+  assert.equal(f.writes.length, 1);
+});
+
+test('VSK rejects wrong product, changed terms/scope and hidden products before purchase', async () => {
+  for (const change of [{ id: 'foreign' }, { validityDays: 365 }, { visits: 31 }, { showToUser: false },
+    { hasDirectionLimitation: false }, { availableDirections: [{ id: 4588 }, { id: 6180 }] },
+    { availableDirections: [{ id: 4588 }, { id: 6975 }, { id: 5278 }] },
+    { availableTypes: [{ id: 839 }, { id: 2349 }] }, { hasDayLimitation: true },
+    { hasTimeRangeLimitation: true }, { hasDayTimeLimitation: true }]) {
+    const f = zeroFixture(); f.setLiveProduct('vsk', change);
+    await assert.rejects(f.adapter.loadZeroOfferQuote('vsk'));
+    await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, { priceMinor: 680000, activationDays: 0 }));
+    assert.equal(f.writes.length, 0); assert.equal(f.stored.size, 0);
+  }
+  for (const change of [{ cost: 690000 }, { activationDays: 1 }]) {
+    const f = zeroFixture(), quote = await f.adapter.loadZeroOfferQuote('vsk');
+    f.setLiveProduct('vsk', change);
+    await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test('VSK retains uncertain payments and returns only to its own landing', async () => {
+  const f = zeroFixture(), quote = await f.adapter.loadZeroOfferQuote('vsk');
+  f.globals.window.location.href = 'https://padlhub.ru/vsk?authMode=viva&autoPurchase=1&code=fixture';
+  assert.equal(new URL(f.adapter.buildZeroReturnUrl('vsk')).pathname, '/vsk');
+  assert.equal(new URL(f.adapter.buildZeroReturnUrl('vsk')).searchParams.has('autoPurchase'), false);
+  assert.equal((await f.adapter.confirmZeroPayment('vsk')).status, 'pending');
+  assert.equal(f.writes.length, 0);
+  f.breakTransport();
+  await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+  await assert.rejects(f.adapter.createZeroPayment('vsk', fixturePhone, 680000, () => true, quote));
+  assert.equal(f.writes.length, 1);
 });

@@ -16,6 +16,7 @@ import {
   buildGroupScheduleSubscriptionDiscountProduct,
   isGroupScheduleSubscriptionQuote,
   isPatriotsTournament,
+  isGroupScheduleTournament,
   matchGroupScheduleSubscriptionDiscount,
 } from "../../src/utils/groupScheduleSubscriptionDiscount.ts";
 import { getGroupScheduleOwnedSubscriptions } from "../../src/utils/groupScheduleOwnedPacks.ts";
@@ -122,7 +123,7 @@ test("group schedule fetches the matching route, keys async quotes by category, 
   assert.match(page, /const discountContextKey = `\$\{selectedId\}:\$\{checkout\?\.profile\?\.id\}:\$\{patriotsTournamentSelected\}`/);
   assert.match(page, /!promoPreview \? matchGroupScheduleSubscriptionDiscount/);
   assert.match(page, /buildGroupScheduleSubscriptionDiscountProduct\(discount\)/);
-  assert.match(page, /action: isPatriotsTournament\(training\) \? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING"/);
+  assert.match(page, /action: isGroupScheduleTournament\(training\) \? "BOOK_TOURNAMENT" : "BOOK_GROUP_TRAINING"/);
 });
 
 test("group schedule accepts a valid zero-benefit preview without a validation error", async () => {
@@ -411,4 +412,13 @@ test("automatic tournament offer prefers free then cheapest and keeps the exact 
   const tie = { ...quote, subscriptionId: "000-first" };
   assert.equal(matchTournamentSubscriptionDiscount([quote, tie], product), tie);
   assert.equal(matchTournamentSubscriptionDiscount([tie, quote], product), tie);
+});
+
+
+test('Friends direction in the corporate schedule uses tournament quotes without widening other pairs', () => {
+  assert.equal(isGroupScheduleTournament({ directionId: 5278, typeId: 839 }), true);
+  assert.equal(isGroupScheduleTournament({ directionId: 6306, typeId: 2349 }), true);
+  for (const target of [null, { directionId: 5278, typeId: 2349 }, { directionId: 6975, typeId: 2349 }, { directionId: 6152, typeId: 2349 }]) {
+    assert.equal(isGroupScheduleTournament(target), false);
+  }
 });
