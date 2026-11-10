@@ -1,3 +1,5 @@
 dist/
 node_modules/
 audit/public/
+src/assets/
+src/docs/

@@ -3,8 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { build } from 'esbuild';
+import { ensureAssets } from './ensure-assets.mjs';
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+await ensureAssets(project);
 const src = path.join(project, 'src');
 const dist = path.join(project, 'dist');
 fs.mkdirSync(path.join(dist, 'tilda'), { recursive: true });
