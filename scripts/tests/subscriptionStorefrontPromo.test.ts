@@ -1,3 +1,4 @@
+import { parseZeroAttempt } from '../../src/components/subscription-storefront/zeroCheckoutCustody.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -194,6 +195,7 @@ test('shared API preserves legacy retry behavior and honors the promo no-retry o
 function loadRegularPayment(topocratyProductId: string) {
   return loadModule<typeof import('../../src/components/subscription-storefront/payment')>('components/subscription-storefront/payment.ts', {
     ...catalog,
+    FRIENDSHIP_MONTHLY_PRODUCT_ID: 'c348a02b-1ffa-4bef-9c65-39b3b27b8e25',
     ATLANTY_MONTHLY_PRODUCT_ID: '3907d127-a6b0-419e-a933-4a2857f26356',
     ATLANTY_ANNUAL_PRODUCT_ID: '',
     TOPOCRATY_PRODUCT_ID: topocratyProductId,
@@ -238,7 +240,11 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   const setItem = f.globals.window.localStorage.setItem;
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
-    ...regularPayment, ...promo, ...f.adapter,
+    parseZeroAttempt, ...regularPayment, ...promo, ...f.adapter,
+    withSubscriptionPromoLock: async (_id: string, _phone: string, create: () => Promise<unknown>) => create(),
+    recordOrdinarySubscriptionAttempt: async () => {},
+    readSubscriptionPromoTransactionPaid: async () => false,
+    ATLANTY_ANNUAL_PRICE_MINOR: 6800000,
     ATLANTY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_PLAN_ID: 'topocraty',
@@ -258,11 +264,11 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
       return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] };
     },
     apiBuySubscroption: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
-    apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return result; },
+    apiCreateTournamentSubscriptionPurchase: async (...args: any[]) => { writes.push(args); if (broken) throw new Error('timeout'); return { ...result, data: result.data ? { toPayMinor: price, ...result.data } : result.data }; },
     apiConfirmTournamentSubscriptionPurchase: async (...args: any[]) => { confirms.push(args); return confirmation; },
     ...overrides,
   }, { ...f.globals, setTimeout, clearTimeout });
-  return { ...f, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
+  return { ...f, setPromoResult: f.setResult, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
     setLiveProduct: (key: 'residency' | 'friendship-two-hours', changes: Record<string, unknown>) => { liveProducts[key] = { ...liveProducts[key], ...changes }; },
     setTwoHourStatus: (changes: Record<string, unknown>) => { twoHourStatus = { ...twoHourStatus, ...changes }; },
@@ -272,10 +278,11 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
 
 test('Zero Block resolves exact monthly, annual and promo products; rejects arbitrary IDs', () => {
   const f = zeroFixture();
+  assert.equal(f.adapter.resolveZeroOffer('atlanty-year')?.target, null);
   assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.target?.counterKey, 'network_friendship');
   assert.equal(f.adapter.resolveZeroOffer('friendship-year')?.billingOptionId, 'annual');
   assert.equal(f.adapter.resolveZeroOffer('energy5')?.period, '60 дней, 5 занятий');
-  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown', 'atlanty-year']) assert.equal(f.adapter.resolveZeroOffer(key), null);
+  for (const key of ['constructor', '__proto__', 'sport-promo', 'unknown']) assert.equal(f.adapter.resolveZeroOffer(key), null);
 });
 
 test('Zero Block sells the Atlanty club offer from the catalogue price, never the friendship counter', async () => {
@@ -464,7 +471,8 @@ test('Zero Block confirmation uses only stored exact ref; missing local evidence
   assert.equal(f.confirms[0][0], f.writes[0][0].paymentRef);
   f.setConfirmation({ data: { status: 'PAID', paid: true, failed: false } });
   assert.equal((await f.adapter.confirmZeroPayment('friendship')).status, 'paid');
-  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), false);
+  assert.equal(f.adapter.hasRecordedZeroAttempt('friendship'), true);
   await f.adapter.confirmZeroPayment('academy');
   assert.equal(f.confirms.length, 2);
 });
@@ -480,6 +488,7 @@ test('Zero Block empty counter create requires confirmation, never interprets mi
 
 test('Zero Block promo uses the existing product/guard and returns to the landing page', async () => {
   const f = zeroFixture();
+  f.setPromoResult({ data: { paymentUrl: 'https://bank.example/promo', toPay: 1190000 }, error: null });
   const result = await f.adapter.createZeroPayment('ra-promo', fixturePhone, 1190000, () => true);
   assert.equal(result.status, 'redirect');
   assert.equal(f.calls.length, 1);
@@ -702,4 +711,52 @@ test('OAuth returns to the selected residency route after the cabinet callback',
     if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
     else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow });
   }
+});
+
+
+test('known paid counter payment permits a fresh renewal; uncertain legacy refs never age out', async () => {
+  const f = zeroFixture();
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  assert.equal((await f.adapter.confirmZeroPayment('friendship')).status, 'paid');
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), false);
+  await f.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.adapter.hasZeroAttempt('friendship'), true);
+  const legacy = zeroFixture();
+  legacy.stored.set('padlhub_tournament_subscription_pending_refs', JSON.stringify([{paymentRef:'legacy-ref',counterKey:'friendship',planId:'annual',createdAt:'2000-01-01'}]));
+  await assert.rejects(legacy.adapter.createZeroPayment('friendship', fixturePhone, 980000, () => true));
+  assert.equal(legacy.writes.length, 0);
+  assert.equal(legacy.adapter.hasZeroAttempt('friendship-year'), false);
+});
+
+test('delayed confirmation cannot overwrite a newer pending payment or authorize a third create', async () => {
+  let entered!:()=>void, release!:(v: unknown)=>void;
+  const started = new Promise<void>(r=>{entered=r;});
+  const response = new Promise(r=>{release=r;});
+  const f = zeroFixture({apiConfirmTournamentSubscriptionPurchase:()=>{entered();return response;}});
+  await f.adapter.createZeroPayment('friendship',fixturePhone,980000,()=>true);
+  const pending=f.adapter.confirmZeroPayment('friendship'); await started;
+  const key='padlhub_zero_checkout_attempt_v1:friendship';
+  const newer={key:'friendship',paymentRef:'zero-00000000-0000-4000-8000-000000000002',state:'pending'};
+  f.stored.set(key,JSON.stringify(newer));
+  await assert.rejects(f.adapter.createZeroPayment('friendship',fixturePhone,980000,()=>true));
+  release({data:{paid:true,failed:false,status:'PAID'}});
+  assert.equal((await pending).status,'pending');
+  assert.deepEqual(JSON.parse(f.stored.get(key)!),newer);
+  await assert.rejects(f.adapter.createZeroPayment('friendship',fixturePhone,980000,()=>true));
+  assert.equal(f.writes.length,1);
+});
+
+test('every direct/counter amount and conflicting transaction id fails closed after one POST', async () => {
+  for(const counter of [true,false])for(const change of [undefined,1]){
+    const f=zeroFixture();if(!counter)f.setPrice(2380000);
+    f.setResult({data:{paymentUrl:'https://bank.example/pay',...(counter?{toPayMinor:change}:{toPay:change})}});
+    await assert.rejects(f.adapter.createZeroPayment(counter?'friendship':'academy',fixturePhone,counter?980000:2380000,()=>true));
+    assert.equal(f.writes.length,1);assert.equal(f.adapter.hasZeroAttempt(counter?'friendship':'academy'),true);
+  }
+  const f=zeroFixture();f.setResult({data:{paymentUrl:'https://bank.example/pay',toPay:680000,id:'old-paid',transactionId:'new-pending'}});
+  await assert.rejects(f.adapter.createZeroPayment('atlanty',fixturePhone,680000,()=>true));
+  assert.equal(f.writes.length,1);
+  assert.equal(JSON.parse([...f.stored.values()][0]).transactionId,undefined);
 });

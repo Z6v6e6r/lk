@@ -1,10 +1,11 @@
+import { isCheckoutReturn } from './zeroCheckoutOffers';
 import { createRoot, type Root } from 'react-dom/client';
 import { Component, type ReactNode } from 'react';
 import { CheckoutAuthProvider } from './CheckoutAuthProvider';
 import { ZeroCheckoutDialog } from './ZeroCheckoutDialog';
 import { checkoutSessionIdentity, type FastCheckoutSession } from './zeroCheckoutSession';
 import { cancelFastIntent, createFastIntent, takeFastOAuthIntent } from './zeroCheckoutIntent';
-import { hasZeroAttempt, resolveZeroOffer, ZERO_CHECKOUT_RETURN } from './zeroCheckoutPayment';
+import { hasZeroAttempt, hasRecordedZeroAttempt, resolveZeroOffer, ZERO_CHECKOUT_RETURN } from './zeroCheckoutPayment';
 
 const SELECTION_KEY = 'padlhub_zero_checkout_selection_v1';
 let checkoutRoot: Root | null = null;
@@ -56,6 +57,8 @@ export function openCheckout(offerKey: string): boolean { return mountCheckout(o
 /** A live trusted card gesture is the explicit purchase confirmation. */
 export function startCheckout(offerKey: string, expectedPrice: number, event: Event): boolean {
   if (checkoutRoot) { host?.querySelector<HTMLDialogElement>('dialog')?.focus(); return false; }
+  const offer = resolveZeroOffer(offerKey);
+  if (!offer || !(offer.target || offer.promo || offer.liveProductId)) throw new Error('Предложение недоступно.');
   if (hasZeroAttempt(offerKey)) return openCheckout(offerKey);
   const intent = createFastIntent(offerKey, expectedPrice, event);
   try { return mountCheckout(offerKey, { id: intent.id, initialIdentity: checkoutSessionIdentity() }); }
@@ -69,8 +72,9 @@ export function resumeCheckout(expectedOfferKey?: string): boolean {
     cancelFastIntent();
     const key = keys[0];
     return keys.length === 1 && (!expectedOfferKey || key === expectedOfferKey)
-      && Boolean(resolveZeroOffer(key)) && hasZeroAttempt(key) ? openCheckout(key) : false;
+      && Boolean(resolveZeroOffer(key)) && hasRecordedZeroAttempt(key) ? openCheckout(key) : false;
   }
+  if (isCheckoutReturn()) { cancelFastIntent(); return false; }
   try {
     const selected = JSON.parse(window.sessionStorage.getItem(SELECTION_KEY) || 'null');
     if (selected && typeof selected.key === 'string' && (!expectedOfferKey || selected.key === expectedOfferKey)

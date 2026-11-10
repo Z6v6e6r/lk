@@ -7,8 +7,31 @@ import {
   getTournamentProgressState,
   isTournamentManuallyFinished,
   isTournamentMarkedFinished,
+  resolveTournamentLifecycleParams,
 } from "../../src/components/tournaments/tournamentLifecycle.ts";
 import type { TournamentHistoryRecord } from "../../src/utils/apiClient.ts";
+
+test("opening the tournament module without a selected tournament has no lifecycle params", () => {
+  assert.equal(resolveTournamentLifecycleParams(null, null), undefined);
+  assert.equal(resolveTournamentLifecycleParams(null, {
+    tournamentId: "previous-tournament", params: { finished: true },
+  }), undefined);
+});
+
+test("lifecycle params use local data until server state for the same tournament arrives", () => {
+  const localParams = { autoFinish: { session: 1 } };
+  const serverParams = { autoFinish: { session: 1, reason: "time_limit" } };
+  const data = { tournamentId: "current-tournament", params: localParams };
+  assert.equal(resolveTournamentLifecycleParams(data, null), localParams);
+  assert.equal(resolveTournamentLifecycleParams(data, {
+    tournamentId: "previous-tournament", params: serverParams,
+  }), localParams);
+  assert.equal(resolveTournamentLifecycleParams(data, {
+    tournamentId: data.tournamentId, params: serverParams,
+  }), serverParams);
+  assert.equal(resolveTournamentLifecycleParams({ tournamentId: data.tournamentId }, null), undefined);
+  assert.equal(resolveTournamentLifecycleParams({ ...data, params: null }, null), null);
+});
 
 function createHistoryRecord(overrides: Partial<TournamentHistoryRecord> = {}): TournamentHistoryRecord {
   return {

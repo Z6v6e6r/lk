@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCheckoutAuthEvent } from './CheckoutAuthProvider';
+import { isCheckoutReturn } from './zeroCheckoutOffers';
 import { bindFastQuote, cancelFastIntent, claimFastIntent, readFastIntent } from './zeroCheckoutIntent';
 import { checkoutSessionToken, verifyFastCheckoutSession, type FastCheckoutSession } from './zeroCheckoutSession';
 import { useAuth } from '../../context/AuthContext';
@@ -28,7 +29,7 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast }: {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
-  const [blocked, setBlocked] = useState(() => hasZeroAttempt(offerKey));
+  const [blocked, setBlocked] = useState(() => hasZeroAttempt(offerKey) || isCheckoutReturn());
   const [terms, setTerms] = useState(false);
   const [revision, setRevision] = useState(0);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -120,14 +121,15 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast }: {
     if (!fast.initialIdentity && !fast.sessionBinding && !authEvent.interactiveIdentity) {
       cancelFastIntent(fast.id); setFastActive(false); return;
     }
+    if ((offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms) return;
     fastStarted.current = true;
     void submit(false, true);
-  }, [fast, fastActive, blocked, loading, quote, authenticated, authEvent.pending, authEvent.interactiveIdentity, foreground, submit]);
+  }, [fast, fastActive, blocked, loading, quote, authenticated, authEvent.pending, authEvent.interactiveIdentity, foreground, submit, offer.billingOptionId, patriotsPendingBenefits, terms]);
 
   return <dialog ref={dialog} className="subscription-auth-block ph-zero-dialog" aria-labelledby="ph-zero-title"
     onCancel={event => { event.preventDefault(); if (!busy.current) onClose(); }}>
     <button type="button" className="subscription-auth-close" aria-label="Закрыть оформление" disabled={processing} onClick={onClose}>×</button>
-    <h2 id="ph-zero-title">{fastActive ? authenticated || auth.isRestoringSession ? 'Готовим оплату' : 'Вход для оплаты' : 'Оформление подписки'}</h2>
+    <h2 id="ph-zero-title">{fastActive ? authenticated && (offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms ? 'Подтвердите условия' : authenticated || auth.isRestoringSession ? 'Готовим оплату' : 'Вход для оплаты' : 'Оформление подписки'}</h2>
     <p className="ph-zero-summary">{offer.label} · {offer.period}</p>
     <p className="ph-zero-price">{price === null ? 'Проверяем предложение…' : `${new Intl.NumberFormat('ru-RU').format(price / 100)} ₽`}</p>
     {offer.liveProductId && quote && <p>{offerKey === 'residency' ? 'Срок действия — 30 дней со дня покупки.'
@@ -145,11 +147,11 @@ export function ZeroCheckoutDialog({ offerKey, onClose, onBusy, fast }: {
         <input type="checkbox" checked={terms} disabled={processing} onChange={event => setTerms(event.target.checked)} />
         <span>Я понимаю, что бесплатный час и скидки пока не действуют, а дата запуска не определена.</span>
       </label>}
-      {!blocked && fastActive && <p role="status">{processing ? 'Готовим ссылку банка…' : 'Проверяем предложение и вход…'}</p>}
+      {!blocked && fastActive && <p role="status">{processing ? 'Готовим ссылку банка…' : (offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms ? 'Подтвердите условия — затем откроется банк.' : 'Проверяем предложение и вход…'}</p>}
       {!blocked && !fastActive && <button className="auth-btn" type="button" disabled={loading || price === null || processing || ((offer.billingOptionId === 'annual' || patriotsPendingBenefits) && !terms)} onClick={() => { void submit(); }}>
         {processing ? 'Создаём оплату…' : fast ? `Оплатить ${new Intl.NumberFormat('ru-RU').format((price || 0) / 100)} ₽` : 'Перейти к оплате'}
       </button>}
-      {blocked && offer.target && !offer.target.directProductId && <button className="auth-btn" type="button" disabled={processing} onClick={() => { void submit(true); }}>
+      {blocked && !offer.promo && <button className="auth-btn" type="button" disabled={processing} onClick={() => { void submit(true); }}>
         {processing ? 'Проверяем статус…' : 'Проверить статус оплаты'}
       </button>}
     </>}

@@ -3,7 +3,7 @@ const residencyPreviewTarget = exercise => ({resolutionSource:'SERVER',category:
   startsAt:new Date(ctx.target.startsAt).toISOString(),durationMinutes:ctx.target.durationMinutes});
 if (ctx.step==='residency_context') {
   const pending=ctx.residencyPending;
-  const config=residencyTransportConfig(key=>global.get(key));
+  const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
   if (!config || !pending || msg.error || msg.statusCode!==200 || msg.method!=='POST'
     || msg.url!==config.url || msg.responseUrl!==config.url) return stop('RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE');
   try {validateResidencyBookingContext(msg.payload,pending.id,Date.now(),pending.target,pending.action);}
@@ -16,7 +16,7 @@ if (ctx.step==='residency_context') {
 }
 // RESIDENCY_PREVIEW_BRANCH
 if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
-  const config=residencyTransportConfig(key=>global.get(key));
+  const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
   if (!config) {quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_BOOKING_NOT_CONFIGURED');continue;}
   const target=residencyPreviewTarget(exercise);
   const action=eventRoute?eventRoute.action:ctx.existingGame?'JOIN_GAME':'CREATE_GAME';

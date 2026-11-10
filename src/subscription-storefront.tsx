@@ -9,6 +9,7 @@ import { AuthProvider } from './context/AuthContext';
 import { CABINET_URL, IS_DEV_RELEASE_CHANNEL } from './consts/api_config';
 import { installGlobalErrorTracking, trackAnalyticsEvent } from './utils/analytics';
 import './components/subscription-storefront/storefront-idle-guard.css';
+import { isFastOffer } from './components/subscription-storefront/zeroCheckoutOffers';
 import { openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, startCheckout } from './components/subscription-storefront/zeroCheckoutMount';
 import { loadZeroOfferPrice, resolveZeroOffer } from './components/subscription-storefront/zeroCheckoutPayment';
 
@@ -33,7 +34,10 @@ function resolveCabinetUrl(data?: MountData): string {
   return fromQuery || CABINET_URL || '';
 }
 
-function unmount() { root?.unmount(); root = null; restoreScope?.(); restoreScope = null; }
+function unmount(): boolean {
+  if (isCheckoutOpen() && !closeCheckout()) return false;
+  root?.unmount(); root = null; restoreScope?.(); restoreScope = null; return true;
+}
 
 function mount(options: MountOptions = {}) {
   const container = document.getElementById(options.targetId ?? 'padlhub-subscriptions');
@@ -43,7 +47,7 @@ function mount(options: MountOptions = {}) {
   const offerKey = readStorefrontPromoKey(window.location.search);
   installGlobalErrorTracking();
   trackAnalyticsEvent('widget_bundle_loaded', { entry: 'subscription-storefront' });
-  unmount();
+  if (!unmount()) throw new Error('Дождитесь результата оплаты перед новым открытием.');
   root = createRoot(container);
   const hadScope = container.classList.contains('subscription-storefront-runtime');
   restoreScope = () => { if (!hadScope) container.classList.remove('subscription-storefront-runtime'); };
@@ -62,6 +66,7 @@ function mount(options: MountOptions = {}) {
       </Boundary>
     </StrictMode>,
   );
+  if (!localPreview || !options.data?.previewView) resumeCheckout();
 }
 
 declare global { interface Window { LKWidgetSubscriptionStorefront?: {
@@ -69,13 +74,14 @@ declare global { interface Window { LKWidgetSubscriptionStorefront?: {
   checkoutVersion: 1; checkoutIsolationVersion: 1; checkoutChannel: 'prod' | 'dev'; openCheckout: typeof openCheckout; closeCheckout: typeof closeCheckout; resumeCheckout: typeof resumeCheckout; isCheckoutOpen: typeof isCheckoutOpen;
   supportsCheckoutOffer: (offerKey: string) => boolean;
   loadCheckoutOfferPrice: typeof loadZeroOfferPrice;
+  directCheckoutAllOffersVersion: 1; supportsDirectCheckoutOffer: (key: string) => boolean;
   directCheckoutVersion: 1; startCheckout: typeof startCheckout;
   /** Page variants this bundle can render; blocks must fail closed on a missing one. */
   storefrontVariants: readonly string[];
 } } }
 window.LKWidgetSubscriptionStorefront = {
   mount, unmount, checkoutVersion: 1, checkoutIsolationVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
-  openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, directCheckoutVersion: 1, startCheckout, loadCheckoutOfferPrice: loadZeroOfferPrice, supportsCheckoutOffer: (offerKey: string) => {
+  openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, directCheckoutAllOffersVersion: 1, supportsDirectCheckoutOffer: (key: string) => { const o = resolveZeroOffer(key); return isFastOffer(key) && !!(o?.target || o?.promo || o?.liveProductId); }, directCheckoutVersion: 1, startCheckout, loadCheckoutOfferPrice: loadZeroOfferPrice, supportsCheckoutOffer: (offerKey: string) => {
     const offer = resolveZeroOffer(offerKey);
     return Boolean(offer && (offer.promo || offer.target || offer.liveProductId));
   },
