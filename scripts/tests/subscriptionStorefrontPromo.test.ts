@@ -3,6 +3,10 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as residency from '../../src/residency/residencyPurchase.ts';
+import { buildVivaOAuthReturnUrl, readPendingVivaOAuth } from '../../src/utils/vivaOAuth.ts';
+import { getVivaOAuthStorageKey } from '../../src/utils/authMode.ts';
+const { isResidencyPurchaseRoute, parseResidencyPurchaseTerms, RESIDENCY_PRODUCT_ID } = residency;
 
 function loadModule<T>(file: string, stubs: Record<string, unknown> = {}, globals: Record<string, unknown> = {}): T {
   const source = readFileSync(new URL(`../../src/${file}`, import.meta.url), 'utf8')
@@ -214,6 +218,10 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     hasDirectionLimitation: true, availableDirections: [4588, 6181, 6306, 6307].map(id => ({ id })),
     hasTypeLimitation: true, availableTypes: [1613, 2349].map(id => ({ id })),
   };
+  let residencyProduct: Record<string, unknown> = {
+    id: residency.RESIDENCY_PRODUCT_ID, productType: 'SUBSCRIPTION', showToUser: true,
+    cost: 79000, validityDays: 30, visits: 30, activationDays: 7,
+  };
   let broken = false;
   let storageFails = false;
   const writes: any[] = [], confirms: any[] = [], counterRequests: string[] = [];
@@ -223,6 +231,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   f.globals.window.localStorage.setItem = (key, value) => { if (storageFails) throw new Error('storage disabled'); setItem(key, value); };
   const adapter = loadModule<typeof import('../../src/components/subscription-storefront/zeroCheckoutPayment')>('components/subscription-storefront/zeroCheckoutPayment.ts', {
     ...regularPayment, ...promo, ...f.adapter,
+    ...residency,
     ATLANTY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_MONTHLY_PRICE_MINOR: 680000,
     TOPOCRATY_PLAN_ID: 'topocraty',
@@ -235,6 +244,7 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
     getServ2Origin: () => 'https://fixture.invalid',
     request: async (path: string) => {
       counterRequests.push(path);
+      if (path.endsWith('/' + residency.RESIDENCY_PRODUCT_ID)) return { data: residencyProduct, error: null };
       if (path.includes('/products/subscriptions/')) return { data: patriotProduct, error: null };
       return { data: [{ counterKey: new URL(path, 'https://fixture.invalid').searchParams.get('counterKey'), priceMinor: price, canPurchase: availability, bindingReady: true, remainingCount: 2, totalLimit: 10, unlimited: false }] };
     },
@@ -246,8 +256,74 @@ function zeroFixture(overrides: Record<string, unknown> = {}) {
   return { ...f, adapter, writes, confirms, counterRequests, setResult: (value: any) => { result = value; },
     setConfirmation: (value: any) => { confirmation = value; }, setPrice: (value: number) => { price = value; },
     setPatriotProduct: (value: Record<string, unknown>) => { patriotProduct = value; },
+    setResidencyProduct: (change: Record<string, unknown>) => { residencyProduct = { ...residencyProduct, ...change }; },
     unavailable: () => { availability = false; }, breakTransport: () => { broken = true; }, failWrite: () => { storageFails = true; } };
 }
+
+test('residency reads its exact online product, then creates only that subscription without retries', async () => {
+  const f = zeroFixture();
+  assert.equal(f.adapter.resolveZeroOffer('residency')?.directProductId, residency.RESIDENCY_PRODUCT_ID);
+  assert.equal(f.adapter.resolveZeroOffer(residency.RESIDENCY_PRODUCT_ID), null);
+  const terms = await f.adapter.loadResidencyPurchaseTerms();
+  assert.equal(terms.priceMinor, 79000);
+  assert.equal(terms.activationDays, 7);
+  assert.equal(f.writes.length, 0);
+  f.setResult({ data: { paymentUrl: 'https://bank.example/residency', toPay: 79000 }, error: null });
+  f.globals.window.location.href = 'https://padlhub.ru/lk_new?buyResidency=1&authMode=viva&code=private';
+  await f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, terms);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.counterRequests.length, 2, 'fresh read immediately before POST');
+  assert.equal(f.writes[0][0], residency.RESIDENCY_PRODUCT_ID);
+  assert.equal(f.writes[0][2].retries, 0);
+  const returned = new URL(f.writes[0][2].successUrl);
+  assert.equal(residency.isResidencyPurchaseRoute(returned.search), true);
+  assert.equal(returned.searchParams.get('authMode'), 'viva');
+  assert.equal(returned.searchParams.has('code'), false);
+  assert.equal(returned.searchParams.has('buyResidency'), false);
+  await f.adapter.confirmZeroPayment('residency');
+  assert.equal(f.confirms.length, 0, 'no summer campaign confirmation for direct residency');
+  await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, terms));
+  assert.equal(f.writes.length, 1);
+});
+
+test('unavailable residency, changed activation or missing shown terms never creates a transaction', async () => {
+  for (const change of [{ id: 'foreign' }, { productType: 'ONE_TIME' }, { showToUser: false },
+    { showToUser: undefined }, { cost: 790 }, { validityDays: 31 }, { visits: 29 },
+    { activationDays: undefined }, { activationDays: -1 }, { activationDays: '7' }]) {
+    const f = zeroFixture();
+    f.setResidencyProduct(change);
+    await assert.rejects(f.adapter.loadZeroOfferPrice('residency'));
+    await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, { priceMinor: 79000, activationDays: 7 }));
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.stored.size, 0);
+  }
+  const f = zeroFixture();
+  const shown = await f.adapter.loadResidencyPurchaseTerms();
+  f.setResidencyProduct({ activationDays: 14 });
+  await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, shown));
+  await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true));
+  await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => false, { priceMinor: 79000, activationDays: 14 }));
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.stored.size, 0);
+});
+
+test('residency does not redirect or retry when amount is missing, mismatched or result is ambiguous', async () => {
+  for (const toPay of [undefined, 790, 80000, 0]) {
+    const f = zeroFixture();
+    const terms = await f.adapter.loadResidencyPurchaseTerms();
+    f.setResult({ data: { paymentUrl: 'https://bank.example/residency', toPay }, error: null });
+    await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, terms));
+    await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, terms));
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.stored.size, 1);
+  }
+  const f = zeroFixture();
+  const terms = await f.adapter.loadResidencyPurchaseTerms();
+  f.breakTransport();
+  await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, terms));
+  await assert.rejects(f.adapter.createZeroPayment('residency', fixturePhone, 79000, () => true, terms));
+  assert.equal(f.writes.length, 1);
+});
 
 test('Zero Block resolves exact monthly, annual and promo products; rejects arbitrary IDs', () => {
   const f = zeroFixture();
@@ -502,5 +578,46 @@ test('Zero Block loader rejects preloaded wrong channel and legacy runtime; comp
     assert.equal(instance.getState('ra-promo').checkoutReady, checkoutChannel === 'prod');
     assert.equal(resumed, checkoutChannel === 'prod' ? 1 : 0);
     assert.equal(instance.destroy(), true);
+  }
+});
+
+test('only the explicit residency purchase and bank-return routes open checkout', () => {
+  for (const query of ['?buyResidency=1', '?buyResidency=1&authMode=viva', '?phCheckoutReturn=residency']) {
+    assert.equal(isResidencyPurchaseRoute(query), true);
+  }
+  for (const query of ['', '?residency=1&stationId=123', '?buyResidency=0', '?buyResidency=1&buyResidency=0',
+    '?phCheckoutReturn=friendship', '?phCheckoutReturn=residency&phCheckoutReturn=friendship',
+    '?buyResidency=1&phCheckoutReturn=foreign', '?productId=' + RESIDENCY_PRODUCT_ID]) {
+    assert.equal(isResidencyPurchaseRoute(query), false);
+  }
+});
+
+test('terms have to come from the exact online Viva subscription', () => {
+  const product = { id: RESIDENCY_PRODUCT_ID, productType: 'SUBSCRIPTION', showToUser: true,
+    cost: 79000, validityDays: 30, visits: 30, activationDays: 7 };
+  assert.deepEqual(parseResidencyPurchaseTerms(product), { priceMinor: 79000, activationDays: 7 });
+  for (const value of [null, [], {}, { ...product, activationDays: 0.5 }, { ...product, showToUser: 'true' }]) {
+    assert.throws(() => parseResidencyPurchaseTerms(value));
+  }
+});
+
+test('OAuth returns to the selected residency route after the cabinet callback', () => {
+  const previousWindow = globalThis.window;
+  const href = 'https://padlhub.ru/lk_new?buyResidency=1&authMode=viva&code=old&state=old';
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    location: { href, origin: 'https://padlhub.ru', search: new URL(href).search },
+    sessionStorage: { getItem: (key: string) => storage.get(key) ?? null },
+  } });
+  try {
+    const returnTo = buildVivaOAuthReturnUrl();
+    assert.equal(isResidencyPurchaseRoute(new URL(returnTo).search), true);
+    assert.equal(new URL(returnTo).searchParams.has('code'), false);
+    storage.set(getVivaOAuthStorageKey(), JSON.stringify({ provider: 'yandex', state: 'fixture', codeVerifier: 'fixture',
+      redirectUri: 'https://padlhub.ru/lk_new?authMode=viva', returnTo }));
+    assert.equal(readPendingVivaOAuth()?.returnTo, returnTo);
+  } finally {
+    if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow });
   }
 });

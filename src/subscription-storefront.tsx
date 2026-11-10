@@ -75,7 +75,7 @@ window.LKWidgetSubscriptionStorefront = {
   mount, unmount, checkoutVersion: 1, checkoutIsolationVersion: 1, checkoutChannel: IS_DEV_RELEASE_CHANNEL ? 'dev' : 'prod',
   openCheckout, closeCheckout, resumeCheckout, isCheckoutOpen, supportsCheckoutOffer: (offerKey: string) => {
     const offer = resolveZeroOffer(offerKey);
-    return Boolean(offer && (offer.promo || offer.target));
+    return Boolean(offer && (offer.promo || offer.target || offer.directProductId));
   },
   storefrontVariants: ['atlanty'],
 };
