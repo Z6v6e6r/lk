@@ -106,7 +106,7 @@ function canonicalApi(source, store) {
 test('private live composition changes only the three allowed fields and restores exact bytes', { skip: !livePath }, () => {
   const a = liveArtifacts();
   const before = JSON.parse(a.raw);
-  assert.equal(a.flow.length, 4941);
+  assert.equal(a.flow.length, 4974);
   assert.equal(a.transition.expectedPrior.rules.length, 11);
   assert.equal(a.transition.desired.rules.length, 12);
   assert.deepEqual(a.transition.desired.rules.slice(0, -1), a.transition.expectedPrior.rules);

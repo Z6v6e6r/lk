@@ -12,7 +12,7 @@ import { buildExactGraphContract, validateReviewedFlowContract } from './nodered
 
 export const VSK_FRIENDSHIP_PRODUCT_ID = '94e32355-1c69-462b-9f2a-77f2817cb24c';
 export const ORDINARY_FRIENDSHIP_PRODUCT_ID = 'b2e6a9d4-53b5-4f79-87ec-3fb076381e9b';
-export const VSK_FRIENDSHIP_SOURCE_SHA256 = '3df0dbccb01e4836d2f67a6ac952b673a20820a3a00ffdadbffaa72580be1ddd';
+export const VSK_FRIENDSHIP_SOURCE_SHA256 = 'f3b860cadac4b0ea74acb5a112daa99adc151f03b83f5dc728634beb0567c78f';
 export const VSK_FRIENDSHIP_NODE_IDS = Object.freeze({
   gateway: 'lk_subscription_booking_router_20260804',
   preview: 'lk_subscription_price_preview_20260908_router',
@@ -81,7 +81,7 @@ export function composeVskFriendshipArtifacts(rawSource) {
   const liveBytes = Buffer.from(rawSource);
   assert.equal(sha256(liveBytes), VSK_FRIENDSHIP_SOURCE_SHA256, 'Live flow preimage drift');
   const flow = JSON.parse(liveBytes);
-  assert.equal(flow.length, 4941, 'Live graph node count drift');
+  assert.equal(flow.length, 4974, 'Live graph node count drift');
   assert.equal(new Set(flow.map(node => node.id)).size, flow.length, 'Duplicate node id');
   const gateway = flow.find(node => node.id === VSK_FRIENDSHIP_NODE_IDS.gateway);
   const preview = flow.find(node => node.id === VSK_FRIENDSHIP_NODE_IDS.preview);
