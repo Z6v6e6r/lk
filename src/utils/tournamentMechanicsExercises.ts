@@ -231,10 +231,10 @@ function buildSyntheticTournamentExercise(summary: TournamentSignupSummary): Exe
   } as Exercise;
 }
 
-export function buildTournamentMechanicsFallbackExercises(items: TournamentSignupSummary[]) {
+export function buildTournamentMechanicsFallbackExercises(items: TournamentSignupSummary[], options: { includeCancelled?: boolean } = {}) {
   const byId = new Map<string, Exercise>();
   items.forEach((summary) => {
-    if (!summary?.exerciseId || summary.status === "CANCELLED") return;
+    if (!summary?.exerciseId || (summary.status === "CANCELLED" && !options.includeCancelled)) return;
     byId.set(summary.exerciseId, buildSyntheticTournamentExercise(summary));
   });
   return Array.from(byId.values());

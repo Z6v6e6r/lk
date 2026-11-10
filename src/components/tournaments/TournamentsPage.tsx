@@ -1,3 +1,4 @@
+import { loadTournamentDaySchedule } from "../../utils/tournamentDaySchedule";
 import { tournamentAutoFinishNotice } from "./tournamentAutoFinish";
 import { tournamentEventId, tournamentIdentityKeys } from "../../utils/tournamentEventIdentity";
 import { fprProjection, validateFprState } from "./fpr6x25";
@@ -472,32 +473,6 @@ function readTournamentSlugFromLocation() {
   );
 }
 
-function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], dateKey: string) {
-  const merged = new Map<string, Exercise>();
-
-  primary.forEach((exercise) => {
-    const id = String(exercise?.id || "").trim();
-    if (!id) return;
-    merged.set(id, exercise);
-  });
-
-  bookings.forEach((booking) => {
-    const exercise = booking.exercise ?? null;
-    const id = String(exercise?.id || "").trim();
-    if (!exercise || !id) return;
-    if (getExerciseDateKey(exercise) !== dateKey) return;
-    if (!merged.has(id)) {
-      merged.set(id, exercise);
-    }
-  });
-
-  return Array.from(merged.values()).sort((left, right) => {
-    const leftTs = new Date(left.timeFrom || 0).getTime();
-    const rightTs = new Date(right.timeFrom || 0).getTime();
-    return leftTs - rightTs;
-  });
-}
-
 function getTournamentBookingItems(result: Awaited<ReturnType<typeof apiFetchBookings>> | null | undefined) {
   return result?.data?.content ?? [];
 }
@@ -517,9 +492,23 @@ async function fetchTournamentBookingItems(includePastTournaments: boolean): Pro
 }
 
 async function fetchTournamentMechanicsSourceItems(dateKey: string) {
-  return apiFetchTournamentMechanicsSourceList({ from: dateKey, to: dateKey })
-    .then((result) => result?.data ?? [])
-    .catch(() => []);
+  const result = await apiFetchTournamentMechanicsSourceList({ from: dateKey, to: dateKey });
+  return {
+    ...result,
+    data: result.data ? buildTournamentMechanicsFallbackExercises(result.data, { includeCancelled: true }) : null,
+  };
+}
+
+async function loadMechanicsSchedule(dateKey: string, includePast: boolean, previous: Exercise[], onAvailable?: (items: Exercise[]) => void) {
+  return loadTournamentDaySchedule({
+    dateKey,
+    previous,
+    onAvailable,
+    loadExercises: () => apiFetchExercisesByVisibleDate(dateKey, { includePast, includeAdjacentDays: false }),
+    loadSource: () => fetchTournamentMechanicsSourceItems(dateKey),
+    loadBookings: async () => (await fetchTournamentBookingItems(includePast))
+      .flatMap(booking => booking.exercise ? [booking.exercise] : []),
+  });
 }
 
 function getClientName(booking: ExerciseBooking, index: number) {
@@ -7028,9 +7017,9 @@ export default function TournamentsPage({
     setLoading(true);
     setError(null);
     setCacheNotice(null);
-
-    void loadCachedTournamentSchedule(selectedDateStr).then((cachedItems) => {
-      if (!isCurrentRequest() || appliedFreshItems || !cachedItems) return;
+    const cachedPromise = loadCachedTournamentSchedule(selectedDateStr);
+    void cachedPromise.then(cachedItems => {
+      if (!isCurrentRequest() || appliedFreshItems || !cachedItems?.length) return;
       setItems(cachedItems);
       setCacheNotice("Показываем сохраненное расписание. Обновляем список...");
       setLoading(false);
@@ -7038,55 +7027,32 @@ export default function TournamentsPage({
 
     void (async () => {
       try {
-        const bookingItemsPromise = fetchTournamentBookingItems(includePastTournaments);
-        const sourceTournamentItemsPromise = fetchTournamentMechanicsSourceItems(tournamentMechanicsLookupDate);
-        const exercisesResult = await apiFetchExercisesByVisibleDate(selectedDateStr, {
-          includePast: includePastTournaments,
-          includeAdjacentDays: false,
+        const cachedItems = await cachedPromise;
+        const result = await loadMechanicsSchedule(selectedDateStr, includePastTournaments, cachedItems ?? [], available => {
+          if (!isCurrentRequest()) return;
+          appliedFreshItems = true;
+          setItems(available);
+          setLoading(false);
         });
-
         if (!isCurrentRequest()) return;
-        if (exercisesResult.error && !exercisesResult.data) {
-          throw new Error(exercisesResult.error.message || "Не удалось загрузить упражнения турниров");
-        }
-
         appliedFreshItems = true;
-        const baseItems = mergeTournamentMechanicsExercises(
-          exercisesResult.data ?? [],
-          [],
-          selectedDateStr,
-        );
-        setItems(baseItems);
-        setCacheNotice(null);
+        setItems(result.items);
+        setCacheNotice(result.partial || result.retainedStarted
+          ? "Список обновлён. Уже начавшиеся турниры сохранены из доступного расписания."
+          : null);
         setLoading(false);
-        void saveCachedTournamentSchedule(selectedDateStr, baseItems);
-
-        const [bookingItems, sourceTournamentItems] = await Promise.all([
-          bookingItemsPromise,
-          sourceTournamentItemsPromise,
-        ]);
-        if (!isCurrentRequest()) return;
-
-        const fallbackExercises = buildTournamentMechanicsFallbackExercises(sourceTournamentItems);
-        const mergedExercises = mergeTournamentMechanicsExercises(
-          exercisesResult.data ?? [],
-          fallbackExercises,
-          selectedDateStr,
-        );
-        const finalItems = mergeTournamentExercises(mergedExercises, bookingItems, selectedDateStr);
-        setItems(finalItems);
-        void saveCachedTournamentSchedule(selectedDateStr, finalItems);
+        void saveCachedTournamentSchedule(selectedDateStr, result.items);
       } catch {
         if (!isCurrentRequest()) return;
-        const cachedItems = await loadCachedTournamentSchedule(selectedDateStr);
+        const cachedItems = await cachedPromise;
         if (!isCurrentRequest()) return;
-        if (cachedItems) {
+        if (cachedItems?.length) {
           setItems(cachedItems);
           setCacheNotice("Показываем сохраненное расписание. Синхронизация восстановится при появлении связи.");
-          setLoading(false);
-          return;
+        } else {
+          setItems([]);
+          setError("Не удалось загрузить список турниров");
         }
-        setError("Не удалось загрузить список турниров");
         setLoading(false);
       }
     })();
@@ -7138,6 +7104,20 @@ export default function TournamentsPage({
     setVivaRefreshError(null);
 
     try {
+      if (includePastTournaments) {
+        const cachedItems = await loadCachedTournamentSchedule(requestedDate);
+        const previous = mergeTournamentMechanicsExercises(items, cachedItems ?? [], requestedDate);
+        const refreshed = await loadMechanicsSchedule(requestedDate, true, previous);
+        if (selectedDateKeyRef.current !== requestedDate || scheduleRequestGenerationRef.current !== requestGeneration) return;
+        setItems(refreshed.items);
+        setError(null);
+        setCacheNotice(refreshed.partial || refreshed.retainedStarted
+          ? "Уже начавшиеся турниры сохранены из доступного расписания." : null);
+        void saveCachedTournamentSchedule(requestedDate, refreshed.items);
+        setVivaRefreshNotice(`Список обновлён, турниров: ${refreshed.items.filter(isTournamentExerciseCategory).length}.`);
+        return;
+      }
+
       const result = await apiRefreshTournamentMechanicsFromViva(requestedDate);
       if (result.error || !result.data) {
         throw new Error(result.error?.message || "Не удалось обновить турниры из Viva");
@@ -7185,7 +7165,7 @@ export default function TournamentsPage({
     } finally {
       setVivaRefreshPending(false);
     }
-  }, [canHostTournaments, selectedDateStr, vivaRefreshPending]);
+  }, [canHostTournaments, selectedDateStr, vivaRefreshPending, includePastTournaments, items]);
   const currentProfileId = profile?.id ?? null;
   const localDraftExercises = useMemo(
     () => localDraftSnapshots
@@ -7867,7 +7847,7 @@ export default function TournamentsPage({
                 aria-busy={vivaRefreshPending}
               >
                 <span className="tournaments-viva-refresh-icon" aria-hidden="true">↻</span>
-                <span>{vivaRefreshPending ? "Обновляем из Viva..." : "Обновить из Viva"}</span>
+                <span>{vivaRefreshPending ? "Обновляем..." : includePastTournaments ? "Обновить список" : "Обновить из Viva"}</span>
               </button>
               <span className="tournaments-viva-refresh-hint">
                 Только выбранный день
