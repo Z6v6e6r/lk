@@ -1,3 +1,5 @@
+import { tournamentResultNeedsReview } from "../../utils/tournamentOfflineSyncPolicy";
+import { tournamentAutoFinishNotice } from "./tournamentAutoFinish";
 import { formatFprStartError } from "./fprCanonicalStart";
 import { tournamentEventId } from "../../utils/tournamentEventIdentity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -312,6 +314,14 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   onEditSettings?: () => void;
 }) {
   const pendingKey = `padlhub:fpr-command:${data.tournamentId}`;
+  const reviewKey = `${pendingKey}:review`;
+  const [lateCommands, setLateCommands] = useState<FprCommand[]>(() => {
+    try { return JSON.parse(localStorage.getItem(reviewKey) || "[]") as FprCommand[]; } catch { return []; }
+  });
+  const preserveLateCommand = (command: FprCommand) => {
+    const retained = [...lateCommands.filter(item => item.id !== command.id), command];
+    localStorage.setItem(reviewKey, JSON.stringify(retained)); setLateCommands(retained);
+  };
   useLkTournamentSession(true);
   const [state, setState] = useState<FprState | null>(() => {
     try { validateFprState(data.params?.fpr6x25); return data.params.fpr6x25; } catch { return null; }
@@ -351,13 +361,14 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
     try {
       localStorage.setItem(pendingKey, JSON.stringify(command)); setPending(command);
       const response = await apiUpdateAmericanoResults({ tournamentId: data.tournamentId, results: [], params: { fprCommand: command } });
+      if (tournamentResultNeedsReview(response.error)) preserveLateCommand(command);
       if (isRejectedFprCommand(response)) clearPending();
       if (response.status == null || response.status < 200 || response.status >= 300) throw new Error(response.error?.message || "Сохранение не подтверждено. Повторите эту команду или проверьте сервер.");
       const next = response.data?.params?.fpr6x25;
       validateFprState(next);
       if (next.tournamentId !== data.tournamentId || !next.audit.some(a => a.id === command.id)
         || next.revision <= command.expectedRevision) throw new Error("Сервер вернул протокол без подтверждения этой команды. Проверьте актуальный протокол перед повтором.");
-      applyResponse(next); clearPending(); setReason(""); setFinishConfirmation(false);
+      applyResponse(next, { ...data, params: { ...data.params, ...response.data?.params } }); clearPending(); setReason(""); setFinishConfirmation(false);
       if (command.action === "score" && command.autoCloseRound === true) {
         const scoredAttempt = next.attempts.find(a => a.matches.some(m => m.id === command.matchId));
         if (scoredAttempt?.status === "running" && scoredAttempt.matches.every(m => m.confirmed1 && m.confirmed2)) {
@@ -381,14 +392,25 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
       const record = response.data?.find(p => p.tournamentId === data.tournamentId);
       const next = record?.params?.fpr6x25;
       validateFprState(next);
-      applyResponse(next);
+      applyResponse(next, { ...data, params: record?.params ?? data.params });
       if (pending && (next.audit.some(a => a.id === pending.id) || next.revision !== pending.expectedRevision)) {
-        if (!next.audit.some(a => a.id === pending.id)) setError("Другой организатор изменил протокол. Ожидавшая команда не применена; проверьте таблицу и введите её заново.");
+        if (!next.audit.some(a => a.id === pending.id)) {
+          if (next.status === "completed" || next.status === "incomplete") preserveLateCommand(pending);
+          setError("Другой организатор изменил протокол. Ожидавшая команда не применена; проверьте таблицу и введите её заново.");
+        }
         clearPending();
       }
     } catch (e) { setError(message(e)); }
     finally { busyRef.current = false; setBusy(false); }
   };
+  const autoReloadRef = useRef(reload);
+  useEffect(() => { autoReloadRef.current = reload; });
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (navigator.onLine && !busyRef.current) void autoReloadRef.current();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const current = state ? fprCurrentAttempt(state) : null;
   const completed = state ? fprCompletedRounds(state) : 0;
   const finished = state?.status === "completed" || state?.status === "incomplete";
@@ -396,7 +418,7 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
   const name = (id: string) => state?.players.find(p => p.id === id)?.name ?? id;
   const disabled = busy || Boolean(pending);
   const supplementaryControls = <>
-    {state && <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>}
+    {state && <button type="button" onClick={() => download({ kind: "fpr6x25-protocol", state, pendingCommand: pending, lateCommands, standings: fprStandings(state) }, `${data.tournamentId}-protocol.json`)}>Скачать протокол и таблицу JSON</button>}
     <button type="button" disabled={busy} onClick={() => void reload()}>{busy ? "Проверяем…" : "Прочитать актуальный протокол с сервера"}</button>
     <TournamentBroadcastControl key={data.tournamentId} tournamentId={data.tournamentId} stationId={data.params?.stationId} initialState={data.params?.broadcast} onDialogChange={setBroadcastSelectionOpen} />
   </>;
@@ -410,6 +432,8 @@ export function FprTournamentManager({ data, onClose, onDataChange, onEditSettin
     <div className="tournament-manager fpr-panel">
       {!state ? <p role="alert">Протокол ФПР повреждён или имеет другую версию. Загрузите его с сервера.</p> : <>
         <div className="tournament-manager-meta"><span className="tournament-manager-chip strong">ФПР 6×25</span><span className="tournament-manager-chip">25 очков на матч</span><span className="tournament-manager-chip">{state.players.length} игроков</span><span className="tournament-manager-chip">Кортов: {state.courts.length}</span></div>
+        {lateCommands.length > 0 && <p role="alert">Поздняя команда сохранена на устройстве и включена в экспорт протокола. Требуется проверка организатором.</p>}
+        {tournamentAutoFinishNotice(data.params) && <p role="status">{tournamentAutoFinishNotice(data.params)}</p>}
         {!finished && Date.parse(now) >= Date.parse(state.endsAt) - 180_000 && <p role="alert" className="fpr-error">Время турнира закончилось. Сохраните сыгранные результаты и завершите турнир.</p>}
         <div className="tournament-tabs" role="group" aria-label="Раздел протокола">
           {([["round", "Турнир"], ["table", "Таблица"], ["protocol", "Протокол"]] as const).map(([key, label]) => <button className={`tournament-tab${tab === key ? " active" : ""}`} type="button" key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}
