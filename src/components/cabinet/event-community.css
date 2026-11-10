@@ -9,3 +9,6 @@
 .pj-event p { text-align: center; margin-bottom: 12px; }
 .community-event-registration > label { display: flex; flex-direction: column; gap: 6px; }
 .community-event-registration .form-input { width: 100%; box-sizing: border-box; }
+.community-event-registration .form-input,
+.community-event-registration .form-actions button { min-height: 48px; }
+.modal-content:has(.community-event-registration) .modal-close { min-width: 48px; min-height: 48px; }

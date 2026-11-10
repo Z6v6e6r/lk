@@ -58,6 +58,17 @@ test('current policy exports every current questionnaire once without stale epoc
   assert.equal(result.csv.split('\r\n').length, 4);
 });
 
+test('perpetual exhibition exports only unexpired submissions even after the game retention cutoff',()=>{
+  const doc=document();doc.id='community_1794221739126_корпспорт-падлхаб-2026';
+  Object.assign(doc.eventEntries[0],{retentionMode:'submitted-year-v1',retentionUntil:'2027-11-12T09:00:00.000Z'});
+  doc.eventEntries.push({...doc.eventEntries[0],playerId:'synthetic-new',fullName:'Fresh Participant',email:otherEmail,registeredAt:'2027-11-14T09:00:00.000Z',retentionUntil:'2028-11-14T09:00:00.000Z'});
+  const result=eventRegistrationCsv(doc,{communityId:doc.id,now:'2027-11-14T10:00:00.000Z'});
+  assert.equal(result.receipt.exportedCount,1);assert.match(result.csv,/Fresh Participant/);
+  assert.doesNotMatch(result.csv,/Synthetic Participant|participant@example/);
+  assert.equal(eventRegistrationCsv(doc,{communityId:doc.id,now:'2028-11-14T09:00:00.000Z'}).receipt.exportedCount,0);
+  doc.eventEntries[1].retentionUntil='2099-01-01T00:00:00.000Z';
+  assert.throws(()=>eventRegistrationCsv(doc,{communityId:doc.id,now:'2027-11-14T10:00:00.000Z'}),/EVENT_EXPORT_ENTRY_INVALID/);
+});
 test('wrong target, missing policy, duplicate actors, malformed contacts and inconsistent retention fail closed', () => {
   for (const mutate of [
     (d: ReturnType<typeof document>) => { d.id = 'wrong-community'; },

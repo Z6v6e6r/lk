@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 import { parseEventRegistrationPolicy, eventRetentionUntil } from '../../src/services/community-policy.ts';
 import { COMMUNITY_AUTH_SUBFLOW } from './communityPolicyAuth.mjs';
 
@@ -10,6 +11,7 @@ export function eventJumpAdmission(community, actor, now) {
   if (!iso(now) || !iso(community.typeSettingsEffectiveAt) || !Number.isSafeInteger(community.typeSettingsRevision) || community.typeSettingsRevision < 1 ||
       !Array.isArray(community.members) || ['pendingMembers', 'bannedMembers', 'eventEntries'].some(key => community[key] !== undefined && !Array.isArray(community[key]))) throw new Error('EVENT_POLICY_NOT_READY');
   const policy = parseEventRegistrationPolicy(community.typeSettings?.registrationPolicy);
+  const perpetual = community.id === 'community_1794221739126_корпспорт-падлхаб-2026';
   const retentionUntil = eventRetentionUntil(policy.endsAt);
   if (now >= retentionUntil) throw new Error('EVENT_DATA_EXPIRED');
   if (!Array.isArray(community.typeSettings?.gameIds) || !community.typeSettings.gameIds.includes('padel-jump')) throw new Error('EVENT_GAME_DISABLED');
@@ -20,15 +22,18 @@ export function eventJumpAdmission(community, actor, now) {
   if (members.length > 1 || members.some(row => row.status && !['ACTIVE', 'PENDING'].includes(row.status))) throw new Error('MEMBERSHIP_NOT_VERIFIED');
   const membership = banned ? 'BANNED' : members[0]?.status === 'PENDING' || rows('pendingMembers').some(row => row.id === actor.id) ? 'PENDING' : members.length ? 'ACTIVE' : 'NONE';
   const entries = rows('eventEntries').filter(row => row.playerId === actor.id && row.epoch === community.typeSettingsEffectiveAt && row.policyRevision === community.typeSettingsRevision && row.policyVersion === policy.version);
-  if (entries.length > 1 || entries.some(row => row.retentionUntil !== retentionUntil || !iso(row.registeredAt))) throw new Error('EVENT_POLICY_NOT_READY');
-  const registration = entries.length ? 'CURRENT' : 'REQUIRED';
+  if (entries.length > 1 || entries.some(row => !iso(row.registeredAt) ||
+      (perpetual && row.retentionMode !== undefined && row.retentionMode !== 'submitted-year-v1') ||
+      (perpetual && row.retentionMode === 'submitted-year-v1' && row.registeredAt > now) ||
+      row.retentionUntil !== eventRetentionUntil(perpetual && row.retentionMode === 'submitted-year-v1' ? row.registeredAt : policy.endsAt))) throw new Error('EVENT_POLICY_NOT_READY');
+  const registration = entries.length && (!perpetual || entries[0].retentionMode === 'submitted-year-v1' && now < entries[0].retentionUntil) ? 'CURRENT' : 'REQUIRED';
   const playOpen = now >= policy.startsAt && now < policy.endsAt;
   const state = membership === 'BANNED' ? 'blocked' : membership === 'PENDING' ? 'pending' : now < policy.startsAt ? 'scheduled' : now >= policy.endsAt ? 'closed' : registration !== 'CURRENT' || membership !== 'ACTIVE' ? 'form' : 'ready';
   const clean = value => typeof value === 'string' ? value.replace(/[\p{C}<>]/gu, '').trim().slice(0, 48) : '';
   return { schema: 'event-jump-admission-v1', communityId: community.id, communityName: clean(community.name) || 'Мероприятие',
     actor: { id: actor.id, name: clean(actor.name) || 'Игрок' }, membership, registration, state, playOpen,
     epoch: community.typeSettingsEffectiveAt, policyRevision: community.typeSettingsRevision,
-    eventNotice: { policy, revision: community.typeSettingsRevision }, retentionUntil };
+    eventNotice: { policy, revision: community.typeSettingsRevision, ...(perpetual ? {retentionMode:'submitted-year-v1'} : {}) }, retentionUntil };
 }
 
 const PREPARE = String.raw`
@@ -68,7 +73,10 @@ export function addEventAdmissionRoutes(input) {
   for (const expected of definitions) {
     const actual=managed.find(n=>n.id===expected.id), comparable=structuredClone(expected);
     if (expected.type==='http in' && [COMMUNITY_AUTH_SUBFLOW+'-entry-'+expected.id,COMMUNITY_AUTH_SUBFLOW+'-budget-'+expected.id].includes(actual?.wires?.[0]?.[0])) comparable.wires=actual.wires;
+    if (expected.id === prefix+'-apply' && typeof actual?.func === 'string' &&
+        createHash('sha256').update(actual.func).digest('hex') === '3c351e3e45f2a15f879f66d93e3273eb2c984ad799153d7985bf5947f0baedcc') comparable.func=actual.func;
     if (!isDeepStrictEqual(actual,comparable)) throw new Error('EVENT_ADMISSION_GRAPH_DRIFT');
   }
+  flow.find(n=>n.id===prefix+'-apply').func=APPLY;
   return flow;
 }

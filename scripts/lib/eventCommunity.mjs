@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 // This pure function is also embedded in Node-RED. No data or provider access.
 export function eventRegistration(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('EVENT_REGISTRATION_REQUIRED');
-  if (Object.keys(value).some(key => !['fullName','company','email','policyRevision'].includes(key))) throw new Error('EVENT_REGISTRATION_INVALID');
+  if (Object.keys(value).some(key => !['fullName','company','email','policyRevision','retentionMode'].includes(key)) ||
+      (value.retentionMode !== undefined && value.retentionMode !== 'submitted-year-v1')) throw new Error('EVENT_REGISTRATION_INVALID');
   const clean = (key, max) => {
     const raw = typeof value[key] === 'string' ? value[key] : '';
     if ([...raw].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) throw new Error('EVENT_REGISTRATION_INVALID');
@@ -24,7 +25,7 @@ export function eventRegistration(value) {
 }
 
 export const EVENT_JOIN_GUARD = `
-// EVENT_REGISTRATION_GUARD_V3
+// EVENT_REGISTRATION_GUARD_V4
 if (community.communityType === 'EVENT') {
   const actor = msg._verifiedCommunityActor;
   if (!actor?.id) return [null, null, null, null, withJson(msg, 403, { error: 'COMMUNITY_AUTH_REQUIRED' }), null];
@@ -33,10 +34,10 @@ if (community.communityType === 'EVENT') {
   let policy;
   try { policy = (${parseEventRegistrationPolicy.toString()})(community.typeSettings?.registrationPolicy); }
   catch { return [null, null, null, null, withJson(msg, 409, {error:'EVENT_POLICY_NOT_READY'}), null]; }
-  // Only this exhibition forbids canonical pre-registration; other EVENTs keep it.
-  if (community.id === 'community_1794221739126_корпспорт-падлхаб-2026' && !(Date.now() >= Date.parse(policy.startsAt))) return [null, null, null, null, withJson(msg, 409, {error:'EVENT_NOT_STARTED'}), null];
-  if (Date.now() >= Date.parse(policy.endsAt)) return [null, null, null, null, withJson(msg, 409, {error:'EVENT_CLOSED'}), null];
-  const notice = {policy, revision: community.typeSettingsRevision};
+  // This named community remains open; game admission retains its own dates.
+  const perpetual = community.id === 'community_1794221739126_корпспорт-падлхаб-2026';
+  if (!perpetual && Date.now() >= Date.parse(policy.endsAt)) return [null, null, null, null, withJson(msg, 409, {error:'EVENT_CLOSED'}), null];
+  const notice = {policy, revision: community.typeSettingsRevision, ...(perpetual ? {retentionMode:'submitted-year-v1'} : {})};
   // Public identities come from the verified profile, never from the private form.
   member.id = actor.id; member.name = actor.name || 'Игрок'; member.phone = actor.phone || null;
   const entries = toArray(community.eventEntries);
@@ -44,10 +45,13 @@ if (community.communityType === 'EVENT') {
   const entry = entries.find(item => item.playerId === actor.id && item.epoch === epoch);
   const banned = toArray(community.bannedMembers).some(item => item.id === actor.id || (actor.phone && normPhone(item.phone || item.phoneNorm) === normPhone(actor.phone)));
   if (banned) return [null, null, null, null, withJson(msg, 403, { error: 'COMMUNITY_ACCESS_DENIED' }), null];
-  if (!entry || entry.policyRevision !== community.typeSettingsRevision || entry.policyVersion !== policy.version) {
+  const currentRollingEntry = entry && entry.retentionMode === 'submitted-year-v1' && typeof entry.registeredAt === 'string' &&
+    Number.isFinite(Date.parse(entry.registeredAt)) && new Date(entry.registeredAt).toISOString() === entry.registeredAt &&
+    Date.parse(entry.registeredAt) <= Date.now() && entry.retentionUntil === (${eventRetentionUntil.toString()})(entry.registeredAt) && Date.now() < Date.parse(entry.retentionUntil);
+  if (!entry || entry.policyRevision !== community.typeSettingsRevision || entry.policyVersion !== policy.version || (perpetual && !currentRollingEntry)) {
     if (entries.length >= 500 && !entries.some(item => item.playerId === actor.id)) return [null, null, null, null, withJson(msg, 409, { error: 'EVENT_REGISTRATION_LIMIT' }), null];
-    if (ctx.eventRegistration?.policyRevision !== community.typeSettingsRevision) return [null, null, null, null, withJson(msg, 422, {error:'EVENT_REGISTRATION_REQUIRED', eventNotice: notice}), null];
-    try { msg._eventEntry = Object.assign({ playerId: actor.id, epoch, registeredAt: nowIso, policyRevision: community.typeSettingsRevision, policyVersion: policy.version, retentionUntil: (${eventRetentionUntil.toString()})(policy.endsAt) }, (${eventRegistration.toString()})(ctx.eventRegistration)); }
+    if (ctx.eventRegistration?.policyRevision !== community.typeSettingsRevision || (perpetual && ctx.eventRegistration?.retentionMode !== 'submitted-year-v1')) return [null, null, null, null, withJson(msg, 422, {error:'EVENT_REGISTRATION_REQUIRED', eventNotice: notice}), null];
+    try { msg._eventEntry = Object.assign({ playerId: actor.id, epoch, registeredAt: nowIso, policyRevision: community.typeSettingsRevision, policyVersion: policy.version, retentionUntil: (${eventRetentionUntil.toString()})(perpetual ? nowIso : policy.endsAt), ...(perpetual ? {retentionMode:'submitted-year-v1'} : {}) }, (${eventRegistration.toString()})(ctx.eventRegistration)); }
     catch (error) { return [null, null, null, null, withJson(msg, 422, { error: error.message, communityId: community.id, eventNotice: notice }), null]; }
   }
 }
@@ -73,11 +77,11 @@ export function addEventRegistration(input) {
         const end = node.func.indexOf(anchor, begin);
         if (end < 0) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
         const raw = node.func.slice(begin,end).trim();
-        if (guards[0][1] === '3') {
+        if (guards[0][1] === '4') {
           if (raw !== EVENT_JOIN_GUARD.trim()) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
           continue;
         }
-        const known = {1:'267d963acec70c2c7ce98321e1ac763c33c190c4fac89e76567f6068ec6ac096',2:'7928ff7852ec86b79132eaaacea891332031f31a5c9a731c8f6ed9cd71fb8f7b'};
+        const known = {1:'267d963acec70c2c7ce98321e1ac763c33c190c4fac89e76567f6068ec6ac096',2:'7928ff7852ec86b79132eaaacea891332031f31a5c9a731c8f6ed9cd71fb8f7b',3:'cf657801baa0e033d43bc50ff70c251e8b19df5bb2ff98841005391b63024322'};
         if (createHash('sha256').update(raw).digest('hex') !== known[guards[0][1]]) throw new Error('EVENT_JOIN_UPGRADE_DRIFT');
         node.func = node.func.slice(0, begin) + EVENT_JOIN_GUARD + '\n' + node.func.slice(end);
       } else node.func = node.func.replace(anchor, EVENT_JOIN_GUARD + '\n' + anchor);
