@@ -101,6 +101,8 @@ try:
     before=count()
     assert request(admission,'OPTIONS',{'Origin':'https://padlhub.ru'})[0]==204 and count()==before
     assert request(admission,'GET',body=b'x'*8193)[0]==413 and count()==before
+    for alias in [admission+'/', '/lk/communities/synthetic/EVENT-ADMISSION', '/lk/communities/synthetic%2Fpart/event-admission']:
+        assert request(alias,'GET',body=b'x'*8193)[0]==413 and count()==before
     admission_statuses=burst(admission,'GET')
     admission_upstream=count()-before
     assert 429 in admission_statuses and admission_upstream<30 and all(s in (200,429) for s in admission_statuses)

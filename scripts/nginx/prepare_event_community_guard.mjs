@@ -67,7 +67,7 @@ export function buildEventCommunityGuard(source, expectedSha256, origins) {
     proxy_pass http://127.0.0.1:1880;
 `;
   const marker = '# EVENT_COMMUNITY_LOCATIONS_V1';
-  const nested = `\n    ${marker}\n    location ~ ^/lk/communities/[^/]+/event-game/finish$ {\n        client_max_body_size 192k;\n        include /etc/nginx/snippets/lk-event-community-proxy.conf;\n    }\n    location ~ ^/lk/communities/(?:[^/]+/add-member|join-by-invite|[^/]+/event-admission|[^/]+/event-game/(?:start|ranking))$ {\n        client_max_body_size 8k;\n        include /etc/nginx/snippets/lk-event-community-proxy.conf;\n    }\n`;
+  const nested = `\n    ${marker}\n    location ~ ^/lk/communities/[^/]+/event-game/finish$ {\n        client_max_body_size 192k;\n        include /etc/nginx/snippets/lk-event-community-proxy.conf;\n    }\n    location ~ ^/lk/communities/(?:[^/]+/add-member|join-by-invite|[^/]+/event-game/(?:start|ranking))$ {\n        client_max_body_size 8k;\n        include /etc/nginx/snippets/lk-event-community-proxy.conf;\n    }\n    location ~* ^/lk/communities/.+/event-admission/?$ {\n        client_max_body_size 8k;\n        include /etc/nginx/snippets/lk-event-community-proxy.conf;\n    }\n`;
   const targets = [range(source, '=\\s+/lk/communities'), range(source, '\\^~\\s+/lk/communities/')].sort((a,b)=>b.start-a.start);
   let candidate = source;
   for (const target of targets) {
