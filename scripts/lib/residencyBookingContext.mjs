@@ -3,13 +3,24 @@ export const RESIDENCY_PRODUCT_ID = '4037a3a3-e551-4f9a-a9db-1410e46b8635';
 export const RESIDENCY_BOOKING_COMPATIBILITY = Object.freeze({adapterId:'LK1_RESIDENCY_BOOKING',contractVersion:1,
   capabilityDigest:'sha256:1311a8250083728a2912793d8b6f32ca2d8145920b48c3fbf64280cd0e5da42e'});
 
+// Only these four residency settings can use process/flow environment. Explicit globals fail closed.
+export function residencySetting(key, globalRead, envRead) {
+  const keys={subscriptions_residency_booking_enabled:'SUBSCRIPTIONS_RESIDENCY_BOOKING_ENABLED',
+    subscriptions_runtime_environment:'SUBSCRIPTIONS_RUNTIME_ENVIRONMENT',
+    subscriptions_runtime_api_base_url:'SUBSCRIPTIONS_RUNTIME_API_BASE_URL',
+    subscriptions_runtime_context_integration_token:'SUBSCRIPTIONS_RUNTIME_CONTEXT_INTEGRATION_TOKEN'};
+  if (!Object.prototype.hasOwnProperty.call(keys,key)) return undefined;
+  const value=globalRead(key);
+  return value===undefined || value===null ? envRead(keys[key]) : value;
+}
+
 export function residencyTransportConfig(read) {
   if (![true,'true','1','yes'].includes(read('subscriptions_residency_booking_enabled'))
     || read('subscriptions_runtime_environment') !== 'PROD'
     || read('subscriptions_runtime_api_base_url') !== 'https://padlhub.su/api') return null;
   const token=read('subscriptions_runtime_context_integration_token');
   return typeof token==='string' && token.length>=32
-    ? {url:'https://padlhub.su/api/internal/subscriptions/residency-booking-context',token} : null;
+    ? {url:'https://padlhub.su/api/internal/subscriptions/residency-booking-refresh',token} : null;
 }
 
 // Durable operation identity survives a lost response, entitlement expiry and flag-off.

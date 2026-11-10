@@ -420,7 +420,7 @@ function preview(options = {}) {
     assert.ok(ctx, `Preview lost its state machine at hop ${hop}`);
     if (ctx.step === 'residency_context') {
       assert.equal(message.method,'POST');
-      assert.equal(message.url,'https://padlhub.su/api/internal/subscriptions/residency-booking-context');
+      assert.equal(message.url,'https://padlhub.su/api/internal/subscriptions/residency-booking-refresh');
       const evidence=options.residencyContext(ctx.residencyPending);
       message={...message,payload:evidence,statusCode:200,responseUrl:message.url};
       findings.push({residencyRead:true});

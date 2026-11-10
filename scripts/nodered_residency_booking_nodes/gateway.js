@@ -5,10 +5,8 @@ const residencyTarget = (ctx,exercise) => ({resolutionSource:'SERVER',category:m
   startsAt:finiteDate(eventStartsAt(exercise))?.toISOString(),durationMinutes:eventDurationMinutes(exercise)});
 const residencyConfig = (ctx) => {
   try {
-    const enabled = global.get('subscriptions_residency_booking_enabled');
-    if (![true,'true','1','yes'].includes(enabled)) return null;
-    const config=readManagedRuntimeApiConfig(), token=readGlobal('subscriptions_runtime_context_integration_token');
-    return config.ok && Buffer.byteLength(token || '', 'utf8')>=32 ? {url:config.apiBase+'/internal/subscriptions/residency-booking-context',token} : null;
+    return residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),
+      k=>typeof env!=='undefined'?env.get(k):undefined));
   } catch {return null;}
 };
 const residencyEnsure = (ctx,exercise,phase) => {
