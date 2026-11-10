@@ -26,7 +26,8 @@ try {
   const uri = `mongodb://${published}/?directConnection=true&replicaSet=fprLevelTest`;
   const client = new MongoClient(uri, { serverSelectionTimeoutMS: 15000 });
   try { await client.connect(); await client.db('admin').command({ ping: 1 }); } finally { await client.close(); }
-  const result = spawnSync(process.execPath, ['--experimental-strip-types', '--test', 'scripts/tests/fprLevelLedger.mongo.test.mjs', 'scripts/tests/fprStartBootstrap.mongo.test.mjs'],
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', '--test', 'scripts/tests/fprLevelLedger.mongo.test.mjs', 'scripts/tests/fprStartBootstrap.mongo.test.mjs',
+    'scripts/tests/fprStartVivaLevel.test.mjs', 'scripts/tests/fprBootstrapRecovery.test.mjs'],
     { stdio: 'inherit', env: { ...process.env, FPR_LEVEL_TEST_MONGO_URI: uri } });
   if (result.status !== 0) process.exitCode = result.status || 1;
 } finally {

@@ -1062,7 +1062,8 @@ const residencyComposition=makeComposition({...composed,router:composeResidencyP
 const residencyGlobals={subscriptions_residency_booking_enabled:true,subscriptions_runtime_environment:'PROD',
   subscriptions_runtime_api_base_url:'https://padlhub.su/api',subscriptions_runtime_context_integration_token:'fixture-token-'.repeat(4)};
 test('residency advisory uses CUP with zero visits and never falls back to a local rule',()=>{
-  const date=new Date(Math.ceil((Date.now()+3600000)/1800000)*1800000+10800000).toISOString().slice(0,19)+'+03:00';
+  // Keep the 90-minute fixture within one Moscow day even when CI runs late at night.
+  const date=new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00:00+03:00';
   const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});
   const result=preview({composition:residencyComposition,subscriptions:[row],globals:{...residencyGlobals,subscriptions_residency_booking_enabled:false,subscriptions_residency_preview_enabled:true},
     target:{startsAt:date},residencyContext:({id})=>{const v=residencyFixture({stationId:station,clientSubscriptionId:id,startsAt:date});delete v.startsAt;return v;}});
