@@ -5,6 +5,7 @@ import { resolveStorefrontBillingTarget, StorefrontPaymentError } from './paymen
 import { createStorefrontPromoPayment, hasPromoPaymentAttempt } from './promoPayment';
 import { resolveStorefrontPromo } from './promo';
 import { ATLANTY_MONTHLY_PRICE_MINOR, PATRIOTS_MONTHLY_PRICE_MINOR, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
+import { parseResidencyPurchaseTerms, RESIDENCY_OFFER_KEY, RESIDENCY_PRODUCT_ID, type ResidencyPurchaseTerms } from '../../residency/residencyPurchase';
 
 export const ZERO_CHECKOUT_RETURN = 'phCheckoutReturn';
 const ATTEMPT_PREFIX = 'padlhub_zero_checkout_attempt_v1:';
@@ -53,9 +54,13 @@ export interface ZeroOffer {
   promo: ReturnType<typeof resolveStorefrontPromo> | null;
   /** Catalogue price for direct products the status API does not know about. */
   staticPriceMinor?: number;
+  /** Exact direct product, without a summer-campaign counter or plan alias. */
+  directProductId?: string;
 }
 
 export function resolveZeroOffer(key: string): ZeroOffer | null {
+  if (key === RESIDENCY_OFFER_KEY) return { key, label: 'Резидентство ПадлхАБ', period: '30 дней',
+    planId: key, billingOptionId: 'monthly', target: null, promo: null, directProductId: RESIDENCY_PRODUCT_ID };
   const promo = resolveStorefrontPromo(key);
   if (promo) return { key, label: `${promo.planKey === 'friendship' ? 'Дружба' : promo.planKey === 'academy' ? 'Академия' : 'РА'} · Питер`,
     period: '30 дней', promo, planId: promo.planKey, billingOptionId: 'monthly', target: null };
@@ -102,6 +107,7 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
   const offer = resolveZeroOffer(key);
   if (!offer) throw new StorefrontPaymentError('Предложение не найдено.');
   if (offer.promo) return offer.promo.priceMinor;
+  if (key === RESIDENCY_OFFER_KEY) return (await loadResidencyPurchaseTerms(signal)).priceMinor;
   // A direct product without an issued id must fail closed before any price is
   // shown: otherwise the dialog opens, the visitor starts a purchase and the
   // durable attempt marker blocks this browser for nothing.
@@ -126,6 +132,17 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
     if (result.error) throw new Error('Status unavailable');
     return parseZeroPrice(result.data, offer.target.counterKey);
   } catch { throw new StorefrontPaymentError('Не удалось подтвердить доступность подписки. Обновите данные или попробуйте позже.'); }
+}
+
+export async function loadResidencyPurchaseTerms(signal?: AbortSignal): Promise<ResidencyPurchaseTerms> {
+  const result = await request<unknown>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/products/subscriptions/${RESIDENCY_PRODUCT_ID}`,
+    { method: 'GET', signal, retries: 0 },
+  );
+  try {
+    if (result.error) throw new Error('Product unavailable');
+    return parseResidencyPurchaseTerms(result.data);
+  } catch { throw new StorefrontPaymentError('Условия резидентства и онлайн-продажа пока не подтверждены. Попробуйте позже.'); }
 }
 
 type Attempt = { key: string; paymentRef: string; state: 'pending' | 'paid' | 'failed' };
@@ -176,15 +193,20 @@ function bankUrl(value: string): string {
 /** All creates happen only after an explicit authenticated confirmation in the dialog.
  * Durable markers contain no phone, access token or bank URL and never expire on ambiguity.
  */
-export async function createZeroPayment(key: string, phone: string, expectedPrice: number, canProceed: () => boolean) {
+export async function createZeroPayment(key: string, phone: string, expectedPrice: number, canProceed: () => boolean, residencyTerms?: ResidencyPurchaseTerms | null) {
   const offer = resolveZeroOffer(key);
   if (!offer || !phone.trim() || !Number.isSafeInteger(expectedPrice) || expectedPrice <= 0) throw new StorefrontPaymentError('Проверьте предложение и профиль.');
   if (!navigator.locks || !window.crypto?.randomUUID) throw new StorefrontPaymentError('Для оформления откройте страницу в актуальном Safari или Chrome по HTTPS.');
   return navigator.locks.request(ATTEMPT_PREFIX + key, { ifAvailable: true }, async lock => {
     if (!lock || hasZeroAttempt(key)) throw new StorefrontPaymentError(ZERO_PENDING_MESSAGE);
-    const price = await loadZeroOfferPrice(key);
+    const freshResidency = key === RESIDENCY_OFFER_KEY ? await loadResidencyPurchaseTerms() : null;
+    const price = freshResidency?.priceMinor ?? await loadZeroOfferPrice(key);
     if (!canProceed()) throw new StorefrontPaymentError('Оформление закрыто.');
     if (price !== expectedPrice) throw new StorefrontPaymentError('Цена изменилась. Обновите данные и подтвердите новую цену.');
+    if (freshResidency && (!residencyTerms || residencyTerms.priceMinor !== price
+      || residencyTerms.activationDays !== freshResidency.activationDays)) {
+      throw new StorefrontPaymentError('Условия активации изменились. Обновите данные перед оплатой.');
+    }
     const attempt: Attempt = { key, paymentRef: `zero-${window.crypto.randomUUID()}`, state: 'pending' };
     const returnUrl = buildZeroReturnUrl(key);
     try { saveAttempt(attempt); }
@@ -194,16 +216,16 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
         // Share the existing promo lock/marker with sub_hab. Only return URL differs.
         return await createStorefrontPromoPayment(key, phone, returnUrl);
       }
-      const target = offer.target!;
-      if (target.directProductId) {
-        const result = await apiBuySubscroption(target.directProductId, phone, {
+      const directProductId = offer.directProductId ?? offer.target?.directProductId;
+      if (directProductId) {
+        const result = await apiBuySubscroption(directProductId, phone, {
           baseRedirectUrl: returnUrl, successUrl: returnUrl, failUrl: returnUrl, retries: 0,
         });
         if (result.error || !result.data) throw new Error('Unknown result');
         const { paymentUrl, paid, toPay } = result.data;
         // The read-only product check precedes the write; the transaction response
         // must still confirm the amount before the visitor is sent to the bank.
-        if (key === PATRIOTS_PLAN_ID && toPay !== price) throw new Error('Transaction price mismatch');
+        if ((key === PATRIOTS_PLAN_ID || key === RESIDENCY_OFFER_KEY) && toPay !== price) throw new Error('Transaction price mismatch');
         if (paymentUrl) return { status: 'redirect' as const, paymentUrl: bankUrl(paymentUrl) };
         if (paid === true && (toPay == null || toPay === 0)) {
           saveAttempt({ ...attempt, state: 'paid' });
@@ -211,6 +233,7 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
         }
         throw new Error('Unknown result');
       }
+      const target = offer.target!;
       const result = await apiCreateTournamentSubscriptionPurchase({
         clientPhone: phone, counterKey: target.counterKey, planType: target.planType,
         paymentRef: attempt.paymentRef, baseRedirectUrl: returnUrl, successUrl: returnUrl, failUrl: returnUrl,

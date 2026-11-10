@@ -37,6 +37,8 @@ import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish"
 import { resolveCommunityJoinRouteData } from "./utils/communityJoinRoute";
 import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import { readPostAuthReturnUrl } from "./utils/authReturn";
+import { ResidencyPurchasePage } from "./residency/ResidencyPurchasePage";
+import { isResidencyPurchaseRoute } from "./residency/residencyPurchase";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
 import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
 import type { OpenTournamentsOptions, TournamentsMountData } from "./types/tournamentsOverlay";
@@ -1010,6 +1012,9 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== "undefined" && isResidencyPurchaseRoute(window.location.search)) {
+    return <ResidencyPurchasePage />;
+  }
   if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("jumpExhibition") === "1" && new URLSearchParams(window.location.search).get("padelJumpLive") === "1") {
     return <PadelJumpHost mode="live" />;
   }
