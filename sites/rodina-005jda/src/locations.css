@@ -1,0 +1,90 @@
+.arena-option { min-height:90px; }
+.arena-item:not([hidden]) { display:flex; flex-direction:column; min-width:0; }
+.arena-item > .arena-option { flex:1; }
+.arena-route:not([hidden]) {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  min-height:44px;
+  margin-top:4px;
+  padding:6px 8px;
+  border:1px solid #638c9d88;
+  border-radius:2px;
+  background:#001b2b;
+  color:#a8e8fb;
+  font:700 11px/1.35 Montserrat,Arial,sans-serif;
+  text-align:center;
+  text-decoration:none;
+}
+.arena-route:is(:hover,:focus-visible) { border-color:#00b9ed; color:#fff; }
+.arena-option[hidden], .metro-choices[hidden], .arena-search-result[hidden] { display:none; }
+.arena-search { display:grid; gap:8px; margin:0 0 16px; color:#84b7ca; font-size:9px; font-weight:800; letter-spacing:.08em; }
+.arena-search input { width:100%; min-height:45px; padding:0 15px; border:1px solid #638c9d88; border-radius:2px; outline:none; background:#001b2b; color:#fff; font:600 13px Montserrat,Arial,sans-serif; }
+.arena-search input::placeholder { color:#7195a6; }
+.arena-search input:focus { border-color:#00b9ed; }
+.metro-choices { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+.metro-choices button { min-height:40px; padding:8px 12px; border:1px solid #638c9d88; border-radius:2px; background:#001b2b; color:#d7edf5; text-align:left; font:600 12px Montserrat,Arial,sans-serif; }
+.metro-choices button:is(:hover,:focus-visible) { border-color:#00b9ed; }
+.arena-search-result { margin:0 0 14px; color:#b6d6e5; font-size:12px; line-height:1.6; }
+.arena-thumbnail { position:relative; display:block; flex:0 0 86px; min-height:88px; overflow:hidden; background:#092e40; }
+.arena-thumbnail img { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:cover; }
+.arena-details { flex:1; align-self:center; padding:13px 12px; }
+.arena-name { font-size:13px; line-height:1.45; }
+.arena-meta { margin-top:5px; overflow:visible; white-space:normal; text-overflow:clip; font-size:10px; line-height:1.6; }
+.arena-distance:not([hidden]) { display:block; margin-top:5px; color:#8edbf0; font-size:10px; line-height:1.4; }
+.arena-option .arrow { padding:10px; }
+.venue-address { margin:0 0 16px; color:#a2c2d1; font-size:12px; line-height:1.7; }
+.arena-cover { position:relative; display:block; width:100%; padding:0; overflow:hidden; border:1px solid #638c9d66; border-radius:2px; background:#00121e; color:#fff; }
+.arena-cover img { display:block; width:100%; aspect-ratio:3/2; object-fit:cover; }
+.arena-cover span { position:absolute; right:10px; bottom:10px; padding:8px 10px; background:#001522d9; border:1px solid #c5eaff44; font-size:9px; font-weight:700; }
+.venue-time-title { margin:23px 0 12px; color:#fff; font:400 29px/1.1 Rodina,Impact,sans-serif; text-transform:uppercase; }
+.photo-popup { width:min(96vw,1280px); max-height:94svh; padding:18px; overflow:auto; border:1px solid #00b9ed88; border-radius:3px; background:#001522; color:#fff; }
+.photo-popup::backdrop { background:#000d; backdrop-filter:blur(5px); }
+.photo-popup .quote-top { margin-bottom:16px; }
+.photo-popup h2 { margin:0; font:400 30px/1 Rodina,Impact,sans-serif; text-transform:uppercase; }
+.photo-popup img { display:block; width:100%; max-height:77svh; object-fit:contain; }
+.pickup-list { display:grid; gap:18px; }
+.pickup-card { overflow:hidden; border:1px solid #638c9d77; border-radius:2px; background:#032537; }
+.pickup-card-photo { position:relative; isolation:isolate; overflow:hidden; min-height:176px; padding:17px 18px; display:flex; flex-direction:column; justify-content:space-between; gap:22px; }
+.pickup-card-photo::after { content:''; position:absolute; z-index:-1; inset:0; background:linear-gradient(180deg,#00152275,#00152200 20%,#001522b0); }
+.pickup-card-photo img { position:absolute; z-index:-2; inset:0; width:100%; height:100%; object-fit:cover; }
+.pickup-card-photo > span { align-self:flex-start; max-width:100%; padding:6px 8px; border:1px solid #b7e7fa66; background:#001522b8; color:#d6f3ff; font-size:8px; font-weight:700; letter-spacing:.06em; }
+.pickup-card-photo > strong { font:400 65px/.9 Rodina,Impact,sans-serif; letter-spacing:.005em; color:#fff; text-shadow:0 2px 15px #0008; }
+.pickup-body { padding:20px 18px; }
+.pickup-date { margin:0 0 10px; font-size:10px; color:#00b9ed; font-weight:700; }
+.pickup-body h3 { margin:0 0 9px; font:400 35px/1 Rodina,Impact,sans-serif; text-transform:uppercase; letter-spacing:.005em; }
+.pickup-address { margin:0; color:#9abccc; font-size:11px; line-height:1.7; }
+.pickup-price { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:20px; padding-top:17px; border-top:1px solid #638c9d55; font-size:10px; line-height:1.7; color:#9ebfce; }
+.pickup-price strong { max-width:55%; text-align:right; color:#d3eefa; font-size:12px; }
+.pickup-body .primary { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; margin-top:17px; }
+.participation-photo { display:block; margin-top:18px; width:100%; aspect-ratio:3/2; object-fit:cover; border:1px solid #638c9d55; }
+.participation-pay { display:flex; align-items:center; justify-content:center; padding:15px; text-decoration:none; }
+.quote-total dd { overflow-wrap:anywhere; }
+body:has(.photo-popup[open]) { overflow:hidden; }
+@media (max-width:540px) {
+  .arena-thumbnail { flex-basis:74px; min-height:88px; }
+  .arena-details { padding:12px 10px; }
+  .arena-name { font-size:12px; }
+  .arena-meta { font-size:9px; line-height:1.6; }
+  .arena-option .arrow { padding:8px; }
+  .venue-address { font-size:11px; }
+  .photo-popup { padding:12px; }
+  .photo-popup h2 { font-size:25px; }
+  .pickup-card-photo { min-height:172px; }
+}
+@media (max-width:1023px) {
+  #mobileExperience .arena-search input { font-size:16px; }
+  #mobileExperience .booking-card:has(.arena-list) .card-eyebrow,
+  #mobileExperience .booking-card:has(.arena-list) .step-title,
+  #mobileExperience .booking-card:has(.arena-list) .step-description,
+  #mobileExperience .booking-card:has(.arena-list) .step-line { display:none; }
+  #mobileExperience .arena-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #mobileExperience .arena-option { display:flex; flex-direction:column; min-height:190px; }
+  #mobileExperience .arena-option[hidden] { display:none; }
+  #mobileExperience .arena-thumbnail { flex:none; width:100%; height:113px; min-height:0; }
+  #mobileExperience .arena-details { align-self:stretch; padding:10px; }
+  #mobileExperience .arena-name { font:400 clamp(14px,4vw,21px)/1.05 Rodina,Impact,sans-serif; text-transform:uppercase; overflow-wrap:anywhere; }
+  #mobileExperience .arena-meta { margin-top:5px; font-size:8px; line-height:1.4; }
+  #mobileExperience .arena-option .arrow { display:none; }
+}

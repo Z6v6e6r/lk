@@ -1,0 +1,53 @@
+@font-face { font-family:Rodina; src:url('/assets/rodina-bold.woff2') format('woff2'); font-weight:400 900; font-display:swap; }
+@font-face { font-family:Montserrat; src:url('/assets/montserrat.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
+.desktop-site { display:none; }
+
+@media (min-width:1024px) {
+  #mobileExperience { display:none; }
+  body { background:radial-gradient(ellipse at 65% 4%,#063148 0,transparent 58%),#000e18; }
+  .desktop-site { display:block; min-height:100vh; font-family:Montserrat,Arial,sans-serif; color:#fff; --cyan:#00b9ed; }
+  .desktop-header { min-height:88px; padding:18px 3.4%; display:flex; align-items:center; justify-content:space-between; gap:24px; border-bottom:1px solid #638c9d40; background:#000e18a1; }
+  .desktop-brands { display:flex; align-items:center; gap:24px; text-decoration:none; color:#fff; }
+  .desktop-academy { display:flex; align-items:center; gap:12px; font-size:11px; line-height:1.4; font-weight:800; text-transform:uppercase; }
+  .desktop-academy img { display:block; width:43px; height:43px; }
+  .desktop-brand-divider { width:1px; height:32px; background:#2a5465; }
+  .desktop-rodina { display:flex; align-items:center; gap:10px; color:var(--cyan); }
+  .desktop-rodina > span { font:28px/.9 Rodina,Impact,sans-serif; letter-spacing:.025em; }
+  .desktop-rodina small { display:block; margin-top:5px; font:600 7px/1.2 Montserrat,Arial,sans-serif; letter-spacing:.15em; }
+  .desktop-rodina img { width:35px; height:46px; object-fit:contain; }
+  .desktop-header-actions { display:flex; align-items:center; gap:10px; }
+  .desktop-telegram { display:flex; align-items:center; min-height:42px; padding:10px 16px; color:#00b9ed; text-decoration:none; font-size:11px; font-weight:700; border:1px solid #00b9ed88; border-radius:2px; }
+  .desktop-telegram:hover { border-color:var(--cyan); background:#00b9ed18; }
+  .desktop-back { display:flex; align-items:center; min-height:42px; padding:10px 16px; color:#c0d9e4; text-decoration:none; font-size:11px; font-weight:600; border:1px solid #638c9d55; border-radius:2px; }
+  .desktop-back:hover { border-color:var(--cyan); color:var(--cyan); }
+  .desktop-main { max-width:1800px; margin:auto; padding:18px 3.4% 0; }
+  .desktop-columns { display:grid; gap:24px; }
+  .desktop-panel { min-width:0; border:1px solid #719eae55; background:linear-gradient(145deg,#062539,#001420); }
+  .desktop-quick { border-color:#00b9edaa; }
+  .desktop-build { border-color:#719eae55; }
+  .desktop-panel-cover { position:relative; isolation:isolate; overflow:hidden; min-height:156px; padding:20px 28px; background:#03263a; }
+  .desktop-cover-photo { position:absolute; inset:0; z-index:-2; width:100%; height:100%; object-fit:cover; object-position:65% 48%; }
+  .desktop-panel-cover::after { content:""; position:absolute; inset:0; z-index:-1; background:linear-gradient(90deg,#001522dc,#00152270),linear-gradient(0deg,#001522 0,transparent 95%); }
+  .desktop-build .desktop-cover-photo { object-position:10% 24%; transform:scale(1.12); }
+  .desktop-build .desktop-panel-cover::after { background:linear-gradient(90deg,#003352df,#001b2d99),linear-gradient(0deg,#001522 0,transparent 95%); }
+  .desktop-panel-top { display:flex; justify-content:space-between; align-items:center; gap:12px; color:#c3dce6; font-size:9px; font-weight:700; letter-spacing:.04em; }
+  .desktop-tag { padding:6px 9px; border:1px solid #b2deed66; color:#d3e6ee; font-size:8px; white-space:nowrap; background:#00172460; }
+  .desktop-panel-cover :is(h1,h2) { max-width:none; margin:16px 0 8px; font:400 clamp(48px,4.3vw,67px)/.9 Rodina,Impact,sans-serif; text-transform:uppercase; letter-spacing:.005em; }
+  .desktop-panel-cover :is(h1,h2) span { color:var(--cyan); }
+  .desktop-build .desktop-panel-cover { min-height:138px; }
+  .desktop-build .desktop-panel-cover h2 { font-size:48px; }
+  .desktop-panel-cover p { margin:0; max-width:440px; color:#c3d7e0; font-size:11px; line-height:1.7; }
+  .desktop-panel-route { display:flex; align-items:center; justify-content:flex-start; gap:28px; padding:12px 28px; border-top:1px solid #638c9d30; border-bottom:1px solid #638c9d40; color:#a8c6d3; background:#00131f; font-size:9px; font-weight:700; }
+  .desktop-panel-route i { color:#00b9ed; font-style:normal; }
+  .desktop-footer { max-width:1800px; margin:32px auto 0; display:flex; justify-content:space-between; flex-wrap:wrap; gap:16px 24px; padding:24px 3.4%; border-top:1px solid #638c9d55; color:#7c9ba8; font-size:10px; line-height:1.6; }
+  .desktop-footer nav { display:flex; flex-wrap:wrap; gap:12px 20px; }
+  .desktop-footer a { color:#a9c7d4; text-decoration:underline; text-underline-offset:3px; }
+  .desktop-footer a:hover { color:var(--cyan); }
+}
+@media (min-width:1024px) and (max-width:1200px) {
+  .desktop-panel-cover { padding:20px 22px; min-height:156px; }
+  .desktop-quick .desktop-panel-cover h2 { font-size:52px; }
+  .desktop-panel-top { font-size:8px; }
+  .desktop-tag { font-size:7px; padding:5px 7px; }
+  .desktop-panel-route { padding:12px 22px; font-size:8px; }
+}

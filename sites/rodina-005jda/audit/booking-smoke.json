@@ -1,0 +1,221 @@
+{
+  "checkedAt": "2026-11-10T18:12:41.168Z",
+  "tenant": "005JDA",
+  "readOnly": true,
+  "results": [
+    {
+      "arenaId": "aleks",
+      "name": "Алексеевская",
+      "day": "2026-11-11",
+      "availableIntervals": 0,
+      "quote": null,
+      "ok": true
+    },
+    {
+      "arenaId": "gagarina",
+      "name": "Площадь Гагарина",
+      "day": "2026-11-11",
+      "availableIntervals": 1,
+      "quote": {
+        "timeFrom": "2026-11-11T23:00:00+03:00",
+        "timeTo": "2026-11-12T00:00:00+03:00",
+        "amount": 12000,
+        "currency": "RUB"
+      },
+      "ok": true
+    },
+    {
+      "arenaId": "novatorov",
+      "name": "Новаторская",
+      "day": "2026-11-11",
+      "availableIntervals": 3,
+      "quote": {
+        "timeFrom": "2026-11-11T22:00:00+03:00",
+        "timeTo": "2026-11-11T23:00:00+03:00",
+        "amount": 12000,
+        "currency": "RUB"
+      },
+      "ok": true
+    },
+    {
+      "arenaId": "sevastopolskaya",
+      "name": "Севастопольская",
+      "day": "2026-11-11",
+      "availableIntervals": 2,
+      "quote": {
+        "timeFrom": "2026-11-11T22:00:00+03:00",
+        "timeTo": "2026-11-11T23:00:00+03:00",
+        "amount": 12000,
+        "currency": "RUB"
+      },
+      "ok": true
+    },
+    {
+      "arenaId": "kurkino",
+      "name": "Куркино",
+      "day": "2026-11-11",
+      "availableIntervals": 0,
+      "quote": null,
+      "ok": true
+    },
+    {
+      "arenaId": "bratislavskaya",
+      "name": "Братиславская",
+      "day": "2026-11-11",
+      "availableIntervals": 0,
+      "quote": null,
+      "ok": true
+    },
+    {
+      "arenaId": "polezhaevskaya",
+      "name": "Полежаевская",
+      "day": "2026-11-11",
+      "availableIntervals": 0,
+      "quote": null,
+      "ok": true
+    },
+    {
+      "arenaId": "kantemirovskaya",
+      "name": "Кантемировская",
+      "day": "2026-11-11",
+      "availableIntervals": 0,
+      "quote": null,
+      "ok": true
+    },
+    {
+      "arenaId": "belorusskaya",
+      "name": "Белорусская",
+      "day": "2026-11-11",
+      "availableIntervals": 0,
+      "quote": null,
+      "ok": true
+    }
+  ],
+  "requests": [
+    {
+      "url": "https://api.vivacrm.ru/api/v1/time?timeZone=UTC",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/dc47234e-3bf6-4e52-a825-f14b4af66769/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/dc47234e-3bf6-4e52-a825-f14b4af66769/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/f5a48954-c4bc-412d-81d4-fa4a6a0492b0/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/f5a48954-c4bc-412d-81d4-fa4a6a0492b0/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/f5a48954-c4bc-412d-81d4-fa4a6a0492b0/timeslots/validate",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v2/005JDA/products/master-services/f5a48954-c4bc-412d-81d4-fa4a6a0492b0/price?studioId=e33ba544-5b54-4700-8bd5-87dae0bdf617&roomId=d157d6ff-8308-40d4-8cf0-f034ca73db94&subServiceIds=f722eadd-cb50-4c49-bbc8-27821923aedd&fromDate=2026-11-11&toDate=2026-11-12&fromTime=23%3A00&toTime=00%3A00",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/36cf489c-dacf-41e9-b704-ee5afce153ee/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/36cf489c-dacf-41e9-b704-ee5afce153ee/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/36cf489c-dacf-41e9-b704-ee5afce153ee/timeslots/validate",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v2/005JDA/products/master-services/36cf489c-dacf-41e9-b704-ee5afce153ee/price?studioId=7d606dee-bf4e-424d-a469-59c81ce0fa53&roomId=cdb498d2-23c7-4435-9d68-28dd647fb8da&subServiceIds=14418d42-364a-4cb0-9caa-cd94a481d1d8&fromDate=2026-11-11&toDate=2026-11-11&fromTime=22%3A00&toTime=23%3A00",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/85679784-019d-4822-89db-0aab82ac66f2/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/85679784-019d-4822-89db-0aab82ac66f2/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/85679784-019d-4822-89db-0aab82ac66f2/timeslots/validate",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v2/005JDA/products/master-services/85679784-019d-4822-89db-0aab82ac66f2/price?studioId=985ae91b-c262-436a-a03c-253da06a0a75&roomId=1045731f-e9ab-4300-8ea3-61339c2e9215&subServiceIds=bdfa3cb3-f0ee-41fe-90da-e719d47956a9&fromDate=2026-11-11&toDate=2026-11-11&fromTime=22%3A00&toTime=23%3A00",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/cfde20cd-ce9a-439b-b888-253ddecdfb16/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/cfde20cd-ce9a-439b-b888-253ddecdfb16/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/71d1e7dd-ae72-4533-9d34-f122f332db4e/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/71d1e7dd-ae72-4533-9d34-f122f332db4e/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/78b867ca-34d2-4587-937e-ba5056578bf4/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/78b867ca-34d2-4587-937e-ba5056578bf4/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/7917c0d3-b561-46fb-9f2f-070ef8f7ddc4/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/7917c0d3-b561-46fb-9f2f-070ef8f7ddc4/timeslots",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/5146ef69-d45d-4fb2-a5b1-7665beee8787/meta",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "url": "https://api.vivacrm.ru/end-user/api/v1/005JDA/products/master-services/5146ef69-d45d-4fb2-a5b1-7665beee8787/timeslots",
+      "method": "POST",
+      "status": 200
+    }
+  ]
+}

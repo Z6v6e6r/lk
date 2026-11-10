@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#001522" />
+    <title>Родина — футбольные манежи в Москве</title>
+    <link rel="preload" href="/assets/rodina-bold.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/montserrat.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/style.css?v=fixed-booking" />
+    <link rel="stylesheet" href="/desktop.css" />
+    <link rel="stylesheet" href="/inquiries.css" />
+    <link rel="stylesheet" href="/mobile.css?v=events-only" />
+    <link rel="stylesheet" href="/locations.css?v=arena-routes" />
+    <link rel="stylesheet" href="/landing.css?v=booking-scroll-progress" />
+    <link rel="stylesheet" href="/footer.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body>
+    <section class="landing-hero" id="top" aria-labelledby="landingTitle">
+      <picture class="landing-picture">
+        <source media="(orientation: portrait)" srcset="/assets/hero-rodina-arena-centered-mobile.webp" />
+        <img class="landing-photo" src="/assets/hero-rodina-arena-aligned.webp" alt="" fetchpriority="high" />
+      </picture>
+      <a class="landing-crest" href="https://rodina.moscow/" target="_blank" rel="noopener noreferrer" aria-label="Родина — открыть сайт клуба">
+        <img src="/assets/rodina-mark-white.svg" width="310" height="410" alt="" />
+      </a>
+      <h1 class="landing-title" id="landingTitle">Родина — футбольные манежи</h1>
+    </section>
+    <a class="floating-booking" id="floatingBooking" href="#booking-start">Выбрать манеж</a>
+    <div id="booking-start"></div>
+    <div id="mobileExperience">
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand-lockup mobile-brands" href="#booking-start" id="homeLink" aria-label="Родина — выбрать манеж">
+          <span class="mobile-rodina"><span>РОДИНА<small>ФУТБОЛЬНЫЕ МАНЕЖИ</small></span><img src="/assets/rodina-mark.svg" alt="Герб Родины" /></span>
+        </a>
+        <div class="mobile-header-actions">
+          <a class="mobile-telegram" href="https://t.me/ffc_manager" target="_blank" rel="noopener noreferrer" aria-label="Написать менеджеру в Telegram">Telegram ↗</a>
+          <button class="help-button" id="helpButton" type="button">?</button>
+        </div>
+      </header>
+
+      <nav id="scenarioNav" class="scenario-nav" aria-label="Выберите формат">
+        <button type="button" class="scenario-card scenario-main active" data-scenario="rent" aria-pressed="true"><span class="scenario-kicker">01 / ИГРА С ДРУЗЬЯМИ</span><strong>Выбрать <em>манеж</em></strong><span class="scenario-detail">9 площадок · свободное время без входа</span><b aria-hidden="true">↗</b></button>
+        <button type="button" class="scenario-card" data-scenario="events" aria-pressed="false"><span class="scenario-kicker">02 / ВАШ ПОВОД</span><strong>Мероприятия</strong><b aria-hidden="true">↗</b></button>
+      </nav>
+      <nav class="home-nav" id="homeNav" aria-label="Навигация по приложению" hidden>
+        <button class="home-nav-button" id="homeButton" type="button">← К началу раздела</button>
+      </nav>
+
+      <section class="booking-card" aria-live="polite" tabindex="-1">
+        <div class="step-line" id="stepLine" hidden><span id="stepLabel">01 / 03</span><div><i id="progressBar"></i></div></div>
+        <div id="bookingContent"></div>
+      </section>
+
+      <button type="button" class="mobile-manager-link" data-manager><span>ЕСТЬ ВОПРОС ИЛИ СВОЯ ИДЕЯ?</span><strong>Обсудить с менеджером ↗</strong></button>
+      <p class="support">Родина · Свободное время и стоимость — по расписанию Viva. Запрос ссылки на оплату — через Viva.</p>
+    </main>
+
+    <div class="toast" id="toast" role="status"></div>
+    <dialog id="quotePopup" class="quote-popup" aria-labelledby="quoteTitle"></dialog>
+    <dialog id="inquiryPopup" class="inquiry-popup" aria-labelledby="inquiryTitle"></dialog>
+    <dialog id="photoPopup" class="photo-popup" aria-labelledby="photoTitle"></dialog>
+    </div>
+    <div class="desktop-site" id="desktopExperience">
+      <header class="desktop-header">
+        <a class="desktop-brands" href="#top" aria-label="Родина — к началу сайта">
+          <span class="desktop-rodina"><span>РОДИНА<small>ФУТБОЛЬНЫЕ МАНЕЖИ</small></span><img src="/assets/rodina-mark.svg" alt="Герб Родины"></span>
+        </a>
+        <nav class="desktop-header-actions" aria-label="Связь и навигация"><a class="desktop-telegram" href="https://t.me/ffc_manager" target="_blank" rel="noopener noreferrer">Telegram ↗</a><a class="desktop-back" id="arenaListLink" href="#desktopRentApp">На главную</a></nav>
+      </header>
+      <main class="desktop-main">
+        <div class="desktop-columns">
+          <section class="desktop-panel desktop-quick" aria-labelledby="quick-title">
+            <header class="desktop-panel-cover">
+              <img class="desktop-cover-photo" src="/assets/blue-pitch.webp" alt="" fetchpriority="high">
+              <div class="desktop-panel-top"><span>[ 01 ] / ИГРА ДЛЯ ВАШЕЙ КОМАНДЫ</span><span class="desktop-tag">9 манежей в Москве</span></div>
+              <h2 id="quick-title">Выбрать <span>манеж</span></h2>
+              <p>Выбери площадку и время. Вход в Viva понадобится для оплаты.</p>
+            </header>
+            <div class="desktop-panel-route" aria-label="Этапы записи на игру"><span>01 / Площадка</span><i>→</i><span>02 / Время</span><i>→</i><span>03 / Вход и оплата</span></div>
+            <div id="desktopRentApp" class="desktop-app" tabindex="-1"></div>
+          </section>
+          <section class="desktop-panel desktop-build" aria-labelledby="build-title">
+            <header class="desktop-panel-cover">
+              <img class="desktop-cover-photo" src="/assets/blue-pitch.webp" alt="">
+              <div class="desktop-panel-top"><span>[ 02 ] / ВАШ ПОВОД</span><span class="desktop-tag">Больше, чем просто матч</span></div>
+              <h2 id="build-title">Мероприятия</h2>
+              <p>Корпоративный спорт, дни рождения и футбольные праздники.</p>
+            </header>
+            <div class="desktop-panel-route" aria-label="Организация игры"><span>Твоя идея</span><i>→</i><span>Твой формат</span><i>→</i><span>Помощь менеджера</span></div>
+            <div id="desktopEventsApp" class="desktop-app"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+    <footer class="site-footer" aria-label="Контакты и направления">
+      <div class="site-footer-inner">
+        <div class="site-footer-brand">
+          <a class="site-footer-logo" href="#top" aria-label="Родина — наверх"><img src="/assets/rodina-mark.svg" alt="" /><span>РОДИНА<small>ФУТБОЛЬНЫЕ МАНЕЖИ</small></span></a>
+          <p>Футбольные манежи в Москве.<br />Выберите площадку и выходите на поле.</p>
+          <div class="site-footer-contact"><a class="site-footer-telegram" href="https://t.me/ffc_manager" target="_blank" rel="noopener noreferrer">Написать нам в Telegram ↗</a><a class="site-footer-email" href="mailto:info@ffc.team">info@ffc.team</a></div>
+        </div>
+        <nav class="site-footer-nav" aria-label="Направления"><h2>НАПРАВЛЕНИЯ</h2><a href="#booking-start">Выбрать манеж <span>↗</span></a><a href="https://rodina.school/manezhi/" target="_blank" rel="noopener noreferrer">Футбольная школа «Родина» <span>↗</span></a></nav>
+        <nav class="site-footer-nav" aria-label="Организация"><h2>ОРГАНИЗАЦИЯ</h2><a href="https://ffc.team/events" target="_blank" rel="noopener noreferrer">Мероприятия <span>↗</span></a><a href="https://ffc.team/construction" target="_blank" rel="noopener noreferrer">Строительство <span>↗</span></a><a href="https://t.me/ffc_manager" target="_blank" rel="noopener noreferrer">Работать с нами <span>↗</span></a></nav>
+      </div>
+      <div class="site-footer-bottom"><span>© 2026 Родина</span><span>ООО «Современная Спортивная Инфраструктура»</span><nav aria-label="Документы"><a href="/docs/privacy-policy.pdf" target="_blank" rel="noopener noreferrer">Политика обработки персональных данных</a><a href="/docs/service-rules.pdf" target="_blank" rel="noopener noreferrer">Правила оказания услуг</a></nav></div>
+    </footer>
+    <script type="module" src="/entry.js?v=slot-first"></script>
+  </body>
+</html>
