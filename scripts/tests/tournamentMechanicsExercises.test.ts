@@ -7,6 +7,7 @@ import {
 import { isTournamentExerciseCategory } from "../../src/utils/tournamentCategory.ts";
 import type { Exercise } from "../../src/utils/apiClient.ts";
 import type { TournamentSignupSummary } from "../../src/utils/tournamentSignupApi.ts";
+import { filterVisibleTournamentExercises } from "../../src/components/tournaments/tournamentVisibility.ts";
 
 function makeSummary(overrides: Partial<TournamentSignupSummary> = {}): TournamentSignupSummary {
   return {
@@ -105,6 +106,31 @@ test("preserves direct trainer id returned by the bounded Viva refresh", () => {
   ]);
 
   assert.equal(exercise.trainers[0]?.id, "trainer-direct-42");
+});
+
+test("a skinned children's tournament keeps its Viva identity and assigned trainer in mechanics", () => {
+  const summary = makeSummary({
+    title: "Юные чемпионы",
+    raw: {
+      direction: { id: 9999, name: "Детский турнир" },
+      type: { id: 839, name: "Падел Турнир" },
+      trainerId: "trainer-kids",
+      skin: { title: "Юные чемпионы", imageUrl: "https://example.test/kids.png" },
+    },
+  });
+  const fallback = buildTournamentMechanicsFallbackExercises([summary]);
+  const tournament = makePrimaryExercise();
+  tournament.direction = { id: 9999, name: "Детский турнир" };
+  tournament.type = { id: 839, name: "Падел Турнир", color: "#000", format: "TOURNAMENT" };
+
+  const merged = mergeTournamentMechanicsExercises([tournament], fallback, "2026-06-07");
+  const mechanics = merged.filter(isTournamentExerciseCategory);
+
+  assert.equal(mechanics.length, 1);
+  assert.equal(mechanics[0].id, summary.exerciseId);
+  assert.equal((mechanics[0] as Exercise & { tournamentId: string }).tournamentId, summary.id);
+  assert.equal(filterVisibleTournamentExercises(mechanics, "trainer-kids", false, true).length, 1);
+  assert.equal(filterVisibleTournamentExercises(mechanics, "other-trainer", false, true).length, 0);
 });
 
 test("keeps Piter special tournament visible when the mechanics source supplies a new direction", () => {
