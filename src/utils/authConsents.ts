@@ -1,3 +1,5 @@
+import { IS_ACADEMY_TENANT, academyEndpoint } from "../consts/tenantIntegrations.ts";
+import { ACADEMY_TENANT_CONTRACT } from "../services/academyTenantContract.ts";
 import { SERV2, SERV2_FALLBACK, TENANT_KEY } from "../consts/api_config";
 import { readAuthToken } from "./authTokenStorage";
 import { trackAnalyticsEvent, trackClientError } from "./analytics";
@@ -5,8 +7,8 @@ import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
 import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { extractJwtStringClaim } from "./vivaAuthJwt";
 
-export const AUTH_CONSENT_DOCUMENT_SET_VERSION = "2026-07-14";
-export const AUTH_CONSENT_DOCUMENTS = [
+export const AUTH_CONSENT_DOCUMENT_SET_VERSION = IS_ACADEMY_TENANT ? ACADEMY_TENANT_CONTRACT.documentSetVersion : "2026-07-14";
+const PRIMARY_AUTH_CONSENT_DOCUMENTS = [
   {
     id: "public-offer",
     title: "Публичная оферта",
@@ -20,6 +22,7 @@ export const AUTH_CONSENT_DOCUMENTS = [
     url: "https://padlhub.ru/politica",
   },
 ] as const;
+export const AUTH_CONSENT_DOCUMENTS = IS_ACADEMY_TENANT ? ACADEMY_TENANT_CONTRACT.documents : PRIMARY_AUTH_CONSENT_DOCUMENTS;
 
 type AuthConsentMethod = "sms" | "vkid" | "yandex";
 
@@ -179,6 +182,7 @@ function buildConsentEndpoint() {
 }
 
 function resolveEndpointCandidates() {
+  if (IS_ACADEMY_TENANT) return [academyEndpoint("auth-consents")];
   return buildProjectUrlCandidates(buildConsentEndpoint(), SERV2, SERV2_FALLBACK);
 }
 
@@ -322,7 +326,7 @@ export async function syncPendingAuthConsents(attempt?: AuthConsentAttempt): Pro
     )) return false;
 
     const endpoints = resolveEndpointCandidates();
-    const deadline = Date.now() + 2_500;
+    const deadline = Date.now() + (IS_ACADEMY_TENANT ? 8_000 : 2_500);
     let lastError: unknown = null;
     let shouldRetry = false;
     for (const endpoint of endpoints) {

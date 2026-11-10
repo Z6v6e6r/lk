@@ -1,3 +1,4 @@
+import { IS_ACADEMY_TENANT } from "../../consts/tenantIntegrations.ts";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import logoHabBlack from "../../assets/logo hab black.svg";
 import resendImg from "../../assets/resend.png";
@@ -357,14 +358,14 @@ export function VivaAuthForm({
               onChange={(event) => setHasAcceptedOffer(event.target.checked)}
             />
             <label htmlFor={offerConsentId} className="auth-consent__label">
-              Принимаю условия{" "}
+              {IS_ACADEMY_TENANT ? "Принимаю " : "Принимаю условия "}
               <a
                 href={AUTH_CONSENT_DOCUMENTS[0].url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="auth-consent__link"
               >
-                публичной оферты
+                {IS_ACADEMY_TENANT ? "правила оказания услуг" : "публичной оферты"}
               </a>
             </label>
           </div>

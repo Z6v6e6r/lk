@@ -1,0 +1,21 @@
+{
+  "VITE_API_BASE": "https://api.vivacrm.ru",
+  "VITE_KEYCLOAK_BASE": "https://kc.vivacrm.ru",
+  "VITE_TENANT_KEY": "005JDA",
+  "VITE_ACADEMY_BACKEND_BASE": "https://lk-reserve.89-108-64-209.sslip.io/lk/analytics/academy-005JDA",
+  "VITE_SERV2": "https://lk-reserve.89-108-64-209.sslip.io/lk/analytics/academy-005JDA",
+  "VITE_SERV2_FALLBACK": "https://lk-reserve.89-108-64-209.sslip.io/lk/analytics/academy-005JDA",
+  "VITE_SUPPORT_API_BASE": "https://lk-reserve.89-108-64-209.sslip.io/lk/analytics/academy-005JDA",
+  "VITE_SUCCESS_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/index.html",
+  "VITE_FAIL_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/index.html",
+  "VITE_CABINET_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/index.html",
+  "VITE_LK_ASSET_FALLBACK_BASE_URLS": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview",
+  "VITE_PUSH_REGISTRATION_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/analytics/academy-005JDA/push/register",
+  "VITE_PUSH_UNREGISTRATION_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/analytics/academy-005JDA/push/unregister",
+  "VITE_FIREBASE_ANALYTICS_ENABLED": "false",
+  "VITE_GAMES_BUNDLE_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/games-dev.js",
+  "VITE_TOURNAMENTS_BUNDLE_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/tournaments-dev.js",
+  "VITE_ONBOARDING_BUNDLE_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/onboarding-dev.js",
+  "VITE_LEVELS_INFO_BUNDLE_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/levels-info-dev.js",
+  "VITE_COMMUNITIES_BUNDLE_URL": "https://lk-reserve.89-108-64-209.sslip.io/lk/academy-preview/communities-dev.js"
+}

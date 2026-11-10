@@ -1,3 +1,4 @@
+import { IS_PRIMARY_TENANT } from "../consts/tenantIntegrations.ts";
 import { getApp, getApps, initializeApp, type FirebaseApp, type FirebaseOptions } from "firebase/app";
 import {
   getAnalytics,
@@ -27,7 +28,7 @@ const firebaseConfig: FirebaseOptions = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID ?? "G-R8NG2E9S0E",
 };
 
-const FIREBASE_DISABLED =
+const FIREBASE_DISABLED = !IS_PRIMARY_TENANT ||
   String(import.meta.env.VITE_FIREBASE_ANALYTICS_ENABLED ?? "true").toLowerCase() === "false";
 const REDACTED_PARAM_VALUE = "[redacted]";
 const MAX_PARAM_STRING_LENGTH = 100;

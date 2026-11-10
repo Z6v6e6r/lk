@@ -1,3 +1,4 @@
+import { IS_PRIMARY_TENANT } from "../consts/tenantIntegrations.ts";
 import { useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "../context/AuthContext";
 import { AuthForm } from "../components/auth/AuthForm";
@@ -17,7 +18,7 @@ function AcademyAppContent() {
   }, [isAuthenticated, isRestoringSession]);
 
   useEffect(() => {
-    void processPendingPaymentSyncQueue();
+    if (IS_PRIMARY_TENANT) void processPendingPaymentSyncQueue();
   }, []);
 
   useEffect(() => {

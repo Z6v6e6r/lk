@@ -1,3 +1,5 @@
+import { IS_ACADEMY_TENANT, academyEndpoint } from "../consts/tenantIntegrations.ts";
+import { readAuthToken } from "./authTokenStorage.ts";
 import { useEffect } from "react";
 import { createDiagnosticBudget } from "./diagnosticBudget.mjs";
 import { clientDiagnostic } from "./errorDiagnostics";
@@ -214,6 +216,7 @@ function dedupeEndpoints(values: Array<string | null | undefined>) {
 }
 
 function resolveAnalyticsEndpoints(): string[] {
+  if (IS_ACADEMY_TENANT) return [academyEndpoint("events")];
   const explicit = trimString(import.meta.env.VITE_ANALYTICS_URL as string | undefined);
   const explicitFallback = trimString(
     import.meta.env.VITE_ANALYTICS_FALLBACK_URL as string | undefined,
@@ -371,6 +374,10 @@ function disableAnalyticsTransport(reason: string) {
 async function sendEvent(
   serializedEvent: string,
 ): Promise<SendEventResult> {
+  if (IS_ACADEMY_TENANT && !readAuthToken()) {
+    // Do not send pre-login identifiers to any collector for the academy tenant.
+    return { delivered: true, retryable: false, status: null, paused: false };
+  }
   if (isLkIdleRequestPaused()) {
     return {
       delivered: false,
@@ -405,7 +412,7 @@ async function sendEvent(
     try {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(IS_ACADEMY_TENANT ? { Authorization: `Bearer ${readAuthToken()}` } : {}) },
         body: serializedEvent,
         keepalive: true,
         credentials: "omit",

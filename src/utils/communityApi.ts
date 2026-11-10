@@ -1,3 +1,4 @@
+import { IS_ACADEMY_TENANT, academyEndpoint } from "../consts/tenantIntegrations.ts";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { eventGameCommandBody } from '../services/eventJumpContract';
 import { readAuthToken } from "./authTokenStorage";
@@ -1438,6 +1439,12 @@ export async function apiFetchCommunities(params: {
   forceFresh?: boolean;
   view?: "summary";
 }) {
+  if (IS_ACADEMY_TENANT) {
+    const response = await request<unknown>(academyEndpoint("communities"), {
+      method: "GET", auth: true, retries: 0, cache: "no-store", fallbackBaseUrls: [],
+    });
+    return { ...response, data: response.error ? { communities: [], connections: [] } : extractCommunityListResponse(response.data) };
+  }
   const query = new URLSearchParams();
   const phone = normalizePhone(params.phone);
   const clientId = params.clientId?.trim() || null;

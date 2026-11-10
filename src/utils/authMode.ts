@@ -1,7 +1,9 @@
 import type { AuthMode } from "../context/authShared";
+import { AUTH_RUNTIME_TENANT_KEY } from "../consts/authRuntime.ts";
+import { tenantStorageKeys } from "./tenantStorageKeys.ts";
 
 const AUTH_MODE_QUERY_PARAM = "authMode";
-const VIVA_OAUTH_STORAGE_KEY = "padlhub_viva_oauth_pending_v1";
+const VIVA_OAUTH_STORAGE_KEY = tenantStorageKeys(AUTH_RUNTIME_TENANT_KEY).oauthStorage;
 const DEFAULT_NAVIGATION_URL_PARAMS = ["cabinetUrl", "returnUrl"] as const;
 
 function normalizeAuthMode(value: string | null | undefined): AuthMode | null {

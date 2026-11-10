@@ -1,3 +1,4 @@
+import { IS_ACADEMY_TENANT } from "../consts/tenantIntegrations.ts";
 import { readFprLevelResults, fprLevelExcludedPlayerIds, type FprLevelResults } from "../services/player-rating/fprLevelResults";
 import { messageSendError, MESSAGE_DELIVERY_UNCONFIRMED } from "./messageDelivery";
 import { restorePartnerBookingBindings } from "./partnerRosterProjection";
@@ -10374,7 +10375,7 @@ export async function apiBuySubscroption(
     {
       method: "POST",
       auth: true,
-      retries: options.promoCode?.trim() ? 0 : options.retries ?? 1,
+      retries: IS_ACADEMY_TENANT || options.promoCode?.trim() ? 0 : options.retries ?? 1,
       body: JSON.stringify({
         clientPhone: phone,
         ...(options.promoCode?.trim() ? { promoCode: options.promoCode.trim() } : {}),
@@ -11198,6 +11199,11 @@ export async function apiConfirmReferralSubscriptionPurchase(
 }
 
 export async function apiGetSubscriptionsForSale() {
+  if (IS_ACADEMY_TENANT) {
+    return request<apiSubscription[]>(`${API_BASE}/end-user/api/v2/${TENANT_KEY}/products/subscriptions/list`, {
+      method: "GET", auth: true, retries: 0, fallbackBaseUrls: [],
+    });
+  }
   const candidates = buildProjectUrlCandidates(`${SERV2}?type=sub_for_sale`, SERV2, SERV2_FALLBACK);
   return requestAbsoluteUrlCandidates<apiSubscription[]>(candidates, {
     method: "GET",
