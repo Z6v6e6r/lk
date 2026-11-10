@@ -152,3 +152,41 @@ test('legacy community invitation code is not an OAuth callback, but real respon
   assert.equal(isVivaOAuthCallbackUrl('https://padlhub.ru/lk_new?code=fixture-code&state=fixture-state'), true);
   assert.equal(isVivaOAuthCallbackUrl('https://padlhub.su/lk/padel-jump-team-86cdb47d/padel-jump-race.html?code=fixture-code', 'current-page'), true);
 });
+
+
+test('checkout cancellation during async consent staging never redirects later', async () => {
+  const mock = installWindowMock('https://padlhub.ru/checkout');
+  const { armOAuthContinuation, clearOAuthContinuation } = await import('../../src/utils/oauthContinuation.ts');
+  const { startVivaOAuthRedirect } = await import('../../src/utils/vivaOAuth.ts');
+  try {
+    const id = '00000000-0000-4000-8000-000000000001', createdAt = Date.now();
+    armOAuthContinuation({ kind: 'zero-checkout', id, createdAt, expiresAt: createdAt + 600000, returnPath: 'https://padlhub.ru/checkout' });
+    let entered!: () => void, release!: (ok: boolean) => void;
+    const waiting = new Promise<void>(r => { entered = r; });
+    const consent = new Promise<boolean>(r => { release = r; });
+    const original = window.location.href;
+    const redirect = startVivaOAuthRedirect('yandex', 'widget', 'fixture-tenant', () => { entered(); return consent; }, 'cabinet', id);
+    await waiting; clearOAuthContinuation(id); release(true);
+    await assert.rejects(redirect, /cancelled/);
+    assert.equal(window.location.href, original);
+    assert.equal(readPendingVivaOAuth(), null);
+  } finally { mock.restore(); }
+});
+
+
+test('late failed consent staging cannot erase a newer OAuth pending session', async () => {
+  const mock = installWindowMock('https://padlhub.ru/checkout');
+  const { startVivaOAuthRedirect } = await import('../../src/utils/vivaOAuth.ts');
+  try {
+    let entered!: () => void, release!: (ok: boolean) => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const consent = new Promise<boolean>(resolve => { release = resolve; });
+    const older = startVivaOAuthRedirect('yandex', 'widget', 'fixture-tenant', () => { entered(); return consent; });
+    await waiting;
+    await startVivaOAuthRedirect('vkid', 'widget', 'fixture-tenant', () => true);
+    const newer = readPendingVivaOAuth();
+    release(false);
+    await assert.rejects(older, /consent could not be stored/);
+    assert.deepEqual(readPendingVivaOAuth(), newer);
+  } finally { mock.restore(); }
+});

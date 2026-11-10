@@ -1,3 +1,4 @@
+import { authSessionIdentity } from '../utils/authSessionIdentity';
 import { useEffect, useState } from "react";
 import { TENANT_KEY, KEYCLOAK_BASE } from "../consts/api_config";
 import { AuthContext } from "./authShared";
@@ -17,7 +18,7 @@ import {
   readAuthToken,
 } from "../utils/authTokenStorage";
 
-export function LegacyAuthProvider({ children }: { children: React.ReactNode }) {
+export function LegacyAuthProvider({ children, onInteractiveSession }: { children: React.ReactNode; onInteractiveSession?: (identity: string | null) => void }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +100,7 @@ export function LegacyAuthProvider({ children }: { children: React.ReactNode }) 
   };
 
   const login = async (phoneNumber: string, code: string): Promise<boolean> => {
+    const sessionAtStart = readAuthToken();
     clearError();
     const formData = new URLSearchParams();
     formData.append("grant_type", "password");
@@ -122,6 +124,7 @@ export function LegacyAuthProvider({ children }: { children: React.ReactNode }) 
 
       const data = await res.json();
       if (res.ok && data.access_token) {
+        if (onInteractiveSession && readAuthToken() !== sessionAtStart) throw new Error('Checkout session changed during login');
         persistAuthTokens(
           data.access_token,
           data.expires_in,
@@ -136,6 +139,7 @@ export function LegacyAuthProvider({ children }: { children: React.ReactNode }) 
           status: res.status,
           authMode: "legacy",
         });
+        onInteractiveSession?.(authSessionIdentity(data.access_token, 'legacy'));
         return true;
       }
 
