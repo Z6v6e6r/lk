@@ -1,10 +1,13 @@
+import { parseZeroAttempt, type ZeroPaymentAttempt as Attempt } from './zeroCheckoutCustody';
+import { withSubscriptionPromoLock, recordOrdinarySubscriptionAttempt } from './promoCodeAttempt';
+import { readSubscriptionPromoTransactionPaid } from '../../utils/subscriptionPromoCode';
 import { apiBuySubscroption, apiConfirmTournamentSubscriptionPurchase, apiCreateTournamentSubscriptionPurchase, request, getServ2Origin } from '../../utils/apiClient';
 import { appendCurrentAuthModeToNavigableUrl } from '../../utils/authMode';
 import { API_BASE, TENANT_KEY } from '../../consts/api_config';
-import { resolveStorefrontBillingTarget, StorefrontPaymentError } from './payment';
+import { resolveStorefrontBillingTarget, resolveStorefrontPromoTarget, StorefrontPaymentError } from './payment';
 import { createStorefrontPromoPayment, hasPromoPaymentAttempt } from './promoPayment';
 import { resolveStorefrontPromo } from './promo';
-import { ATLANTY_MONTHLY_PRICE_MINOR, PATRIOTS_MONTHLY_PRICE_MINOR, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
+import { ATLANTY_ANNUAL_PRICE_MINOR, ATLANTY_MONTHLY_PRICE_MINOR, PATRIOTS_MONTHLY_PRICE_MINOR, PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID, TOPOCRATY_MONTHLY_PRICE_MINOR, TOPOCRATY_PLAN_ID } from './catalog';
 
 export const ZERO_CHECKOUT_RETURN = 'phCheckoutReturn';
 const ATTEMPT_PREFIX = 'padlhub_zero_checkout_attempt_v1:';
@@ -110,9 +113,9 @@ export function resolveZeroOffer(key: string): ZeroOffer | null {
     period: '30 дней', promo, planId: promo.planKey, billingOptionId: 'monthly', target: null };
   // The club subscription is a direct product without a counter: its price is the
   // catalogue price, so it must never be looked up through the status API.
-  if (key === 'atlanty') return { key, label: 'ДРУЖБА.АТЛАНТЫ', period: '30 дней', planId: 'atlanty',
-    billingOptionId: 'monthly', target: resolveStorefrontBillingTarget('atlanty', 'monthly'), promo: null,
-    staticPriceMinor: ATLANTY_MONTHLY_PRICE_MINOR };
+  if (key === 'atlanty' || key === 'atlanty-year') return { key, label: 'ДРУЖБА.АТЛАНТЫ', period: key === 'atlanty-year' ? 'год' : '30 дней', planId: 'atlanty',
+    billingOptionId: key === 'atlanty-year' ? 'annual' : 'monthly', target: resolveStorefrontBillingTarget('atlanty', key === 'atlanty-year' ? 'annual' : 'monthly'), promo: null,
+    staticPriceMinor: key === 'atlanty-year' ? ATLANTY_ANNUAL_PRICE_MINOR : ATLANTY_MONTHLY_PRICE_MINOR };
   // Клубная подписка Топократов — такой же прямой продукт без счётчика LK.
   if (key === TOPOCRATY_PLAN_ID) return { key, label: 'ДРУЖБА.ТОПОКРАТЫ', period: '30 дней', planId: TOPOCRATY_PLAN_ID,
     billingOptionId: 'monthly', target: resolveStorefrontBillingTarget(TOPOCRATY_PLAN_ID, 'monthly'), promo: null,
@@ -180,7 +183,7 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
   if (key === PATRIOTS_PLAN_ID) {
     const result = await request<unknown>(
       `${API_BASE}/end-user/api/v1/${TENANT_KEY}/products/subscriptions/${encodeURIComponent(PATRIOTS_PRODUCT_ID)}`,
-      { method: 'GET', signal, retries: 0 },
+      { method: 'GET', cache: 'no-store', signal, retries: 0 },
     );
     try {
       if (result.error) throw new Error('Product unavailable');
@@ -192,14 +195,13 @@ export async function loadZeroOfferPrice(key: string, signal?: AbortSignal): Pro
     return offer.staticPriceMinor;
   }
   const result = await request<unknown>('/lk/tournaments/summer-subscription/status?counterKey=' + encodeURIComponent(offer.target.counterKey),
-    { method: 'GET', baseUrl: getServ2Origin() || '', signal, retries: 0 });
+    { method: 'GET', cache: 'no-store', baseUrl: getServ2Origin() || '', signal, retries: 0 });
   try {
     if (result.error) throw new Error('Status unavailable');
     return parseZeroPrice(result.data, offer.target.counterKey);
   } catch { throw new StorefrontPaymentError('Не удалось подтвердить доступность подписки. Обновите данные или попробуйте позже.'); }
 }
 
-type Attempt = { key: string; paymentRef: string; state: 'pending' | 'paid' | 'failed' };
 
 function saveAttempt(attempt: Attempt) {
   const value = JSON.stringify(attempt);
@@ -207,21 +209,30 @@ function saveAttempt(attempt: Attempt) {
   if (window.localStorage.getItem(ATTEMPT_PREFIX + attempt.key) !== value) throw new Error('Storage unavailable');
 }
 
+/** Never discard an ambiguous legacy pending entry based on its age. */
+function hasLegacyPending(key: string): boolean {
+  const offer = resolveZeroOffer(key), target = offer?.target;
+  if (!target) return false;
+  const raw = window.localStorage.getItem('padlhub_tournament_subscription_pending_refs');
+  if (!raw) return false;
+  const entries: unknown = JSON.parse(raw);
+  if (!Array.isArray(entries)) return true;
+  return entries.some(e => !e || typeof e !== 'object' || !e.counterKey
+    || e.counterKey === target.counterKey);
+}
+export function hasRecordedZeroAttempt(key: string): boolean {
+  try { return window.localStorage.getItem(ATTEMPT_PREFIX + key) !== null; } catch { return true; }
+}
 export function hasZeroAttempt(key: string): boolean {
-  try { return window.localStorage.getItem(ATTEMPT_PREFIX + key) !== null
-    || (Boolean(resolveZeroOffer(key)?.promo) && hasPromoPaymentAttempt(key)); }
-  catch { return true; }
+  try {
+    const recorded = hasRecordedZeroAttempt(key);
+    return (recorded && readAttempt(key)?.state !== 'paid') || hasLegacyPending(key)
+      || (Boolean(resolveZeroOffer(key)?.promo) && hasPromoPaymentAttempt(key));
+  } catch { return true; }
 }
 
 function readAttempt(key: string): Attempt | null {
-  try {
-    const value: unknown = JSON.parse(window.localStorage.getItem(ATTEMPT_PREFIX + key) || 'null');
-    if (!value || typeof value !== 'object') return null;
-    const row = value as Attempt;
-    if (row.key !== key || typeof row.paymentRef !== 'string' || !/^zero-[a-z0-9-]{36}$/.test(row.paymentRef)
-      || !['pending', 'paid', 'failed'].includes(row.state)) return null;
-    return row;
-  } catch { return null; }
+  try { return parseZeroAttempt(window.localStorage.getItem(ATTEMPT_PREFIX + key), key); } catch { return null; }
 }
 
 export function buildZeroReturnUrl(key: string): string {
@@ -232,6 +243,9 @@ export function buildZeroReturnUrl(key: string): string {
     const value = url.searchParams.get(name);
     if (value && value.length <= 500) query.set(name, value);
   }
+  for (const name of ['offer', 'offerKey']) { const value = url.searchParams.get(name); if (value && resolveStorefrontPromo(value)) query.set(name, value); }
+  if (url.searchParams.get('variant') === 'atlanty') query.set('variant', 'atlanty');
+  if (url.searchParams.get('plans') === 'ra,academy') query.set('plans', 'ra,academy');
   query.set(ZERO_CHECKOUT_RETURN, key);
   url.search = query.toString();
   url.hash = '';
@@ -244,14 +258,15 @@ function bankUrl(value: string): string {
   return url.toString();
 }
 
-/** All creates happen only after an explicit authenticated confirmation in the dialog.
+/** All creates follow an explicit trusted card gesture or authenticated dialog confirmation.
  * Durable markers contain no phone, access token or bank URL and never expire on ambiguity.
  */
 export async function createZeroPayment(key: string, phone: string, expectedPrice: number, canProceed: () => boolean, expectedQuote?: ZeroOfferQuote | null) {
   const offer = resolveZeroOffer(key);
   if (!offer || !phone.trim() || !Number.isSafeInteger(expectedPrice) || expectedPrice <= 0) throw new StorefrontPaymentError('Проверьте предложение и профиль.');
   if (!navigator.locks || !window.crypto?.randomUUID) throw new StorefrontPaymentError('Для оформления откройте страницу в актуальном Safari или Chrome по HTTPS.');
-  return navigator.locks.request(ATTEMPT_PREFIX + key, { ifAvailable: true }, async lock => {
+  const sharedProductId = offer.liveProductId || offer.promo?.productId || resolveStorefrontPromoTarget(offer.planId, offer.billingOptionId)?.directProductId;
+  const create = () => navigator.locks.request(ATTEMPT_PREFIX + key, { ifAvailable: true }, async lock => {
     if (!lock || hasZeroAttempt(key)) throw new StorefrontPaymentError(ZERO_PENDING_MESSAGE);
     const quote = await loadZeroOfferQuote(key);
     const price = quote.priceMinor;
@@ -266,9 +281,13 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
     try { saveAttempt(attempt); }
     catch { throw new StorefrontPaymentError('Разрешите сохранение данных сайта, чтобы продолжить оформление.'); }
     try {
+      if (sharedProductId) await recordOrdinarySubscriptionAttempt(sharedProductId, phone, { paymentRef: attempt.paymentRef, ...(!offer.promo && !offer.liveProductId && !offer.target?.directProductId && offer.target ? { counterKey: offer.target.counterKey, annual: offer.billingOptionId === 'annual' } : {}) });
+      if (!canProceed()) throw new Error('Checkout cancelled');
       if (offer.promo) {
         // Share the existing promo lock/marker with sub_hab. Only return URL differs.
-        return await createStorefrontPromoPayment(key, phone, returnUrl);
+        const result = await createStorefrontPromoPayment(key, phone, returnUrl, expectedPrice);
+        if (result.transactionId) saveAttempt({ ...attempt, transactionId: result.transactionId });
+        return result;
       }
       const target = offer.target;
       const directProductId = offer.liveProductId || target?.directProductId;
@@ -278,12 +297,17 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
         });
         if (result.error || !result.data) throw new Error('Unknown result');
         const { paymentUrl, paid, toPay } = result.data;
+        const ids = [result.data.transactionId, result.data.id].filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+        if (new Set(ids).size > 1) throw new Error('Conflicting transaction ids');
+        const transactionId = ids[0];
+        if (transactionId) { saveAttempt({ ...attempt, transactionId }); if (sharedProductId) await recordOrdinarySubscriptionAttempt(sharedProductId, phone, { transactionId }); }
         // The read-only product check precedes the write; the transaction response
         // must still confirm the amount before the visitor is sent to the bank.
-        if ((offer.liveProductId || key === PATRIOTS_PLAN_ID) && toPay !== price) throw new Error('Transaction price mismatch');
+        if (toPay !== price && !(paid === true && toPay === 0)) throw new Error('Transaction price mismatch');
         if (paymentUrl) return { status: 'redirect' as const, paymentUrl: bankUrl(paymentUrl) };
         if (paid === true && (toPay == null || toPay === 0)) {
-          saveAttempt({ ...attempt, state: 'paid' });
+          saveAttempt({ ...attempt, state: 'paid', ...(transactionId ? { transactionId } : {}) });
+          if (sharedProductId) await recordOrdinarySubscriptionAttempt(sharedProductId, phone, { paid: true });
           return { status: 'settled' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
         }
         throw new Error('Unknown result');
@@ -294,27 +318,47 @@ export async function createZeroPayment(key: string, phone: string, expectedPric
         paymentRef: attempt.paymentRef, baseRedirectUrl: returnUrl, successUrl: returnUrl, failUrl: returnUrl,
       });
       if (result.error || !result.data || (result.data.paymentRef && result.data.paymentRef !== attempt.paymentRef)) throw new Error('Unknown result');
-      if (result.data.paymentUrl) return { status: 'redirect' as const, paymentUrl: bankUrl(result.data.paymentUrl) };
+      if (result.data.paymentUrl) {
+        if (result.data.toPayMinor !== price) throw new Error('Transaction price mismatch');
+        return { status: 'redirect' as const, paymentUrl: bankUrl(result.data.paymentUrl) };
+      }
       // Missing price/URL is never payment evidence. Confirm the already stored ref.
-      const confirmed = await confirmZeroPayment(key);
+      const confirmed = await confirmZeroPaymentOwned(key);
       return { status: 'settled' as const, message: confirmed.message };
     } catch {
       throw new StorefrontPaymentError('Не удалось подтвердить результат покупки. Не повторяйте оплату: проверьте статус или обратитесь в поддержку.');
     }
   });
+  return sharedProductId ? withSubscriptionPromoLock(sharedProductId, phone, create, true) : create();
 }
 
 export async function confirmZeroPayment(key: string) {
+  if (!navigator.locks) return { status: 'pending' as const, message: ZERO_PENDING_MESSAGE };
+  return navigator.locks.request(ATTEMPT_PREFIX + key, { ifAvailable: true }, lock => lock
+    ? confirmZeroPaymentOwned(key) : Promise.resolve({ status: 'pending' as const, message: ZERO_PENDING_MESSAGE }));
+}
+/** Caller holds the same offer lock used by create/renewal. */
+async function confirmZeroPaymentOwned(key: string) {
   const offer = resolveZeroOffer(key);
   const attempt = readAttempt(key);
+  if (attempt?.state === 'paid') return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
+  if (offer && attempt?.state === 'pending' && attempt.transactionId) {
+    const paid = await readSubscriptionPromoTransactionPaid(attempt.transactionId);
+    if (readAttempt(key)?.paymentRef !== attempt.paymentRef) return { status: 'pending' as const, message: ZERO_PENDING_MESSAGE };
+    if (paid) {
+      saveAttempt({ ...attempt, state: 'paid' });
+      return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };
+    }
+  }
   if (!offer || !attempt || !offer.target || offer.target.directProductId) {
     return { status: 'pending' as const, message: ZERO_PENDING_MESSAGE };
   }
   if (attempt.state !== 'pending') return { status: attempt.state,
-    message: attempt.state === 'paid' ? 'Оплата подтверждена. Подписка оформлена.' : 'Оплата не прошла. Обратитесь в поддержку перед новой попыткой.' };
+    message: 'Оплата не прошла. Обратитесь в поддержку перед новой попыткой.' };
   const result = await apiConfirmTournamentSubscriptionPurchase(attempt.paymentRef, {
     counterKey: offer.target.counterKey, planType: offer.billingOptionId === 'annual' ? null : 'friendship',
   });
+  if (readAttempt(key)?.paymentRef !== attempt.paymentRef) return { status: 'pending' as const, message: ZERO_PENDING_MESSAGE };
   if (!result.error && result.data?.paid === true && result.data.status === 'PAID' && !result.data.failed) {
     saveAttempt({ ...attempt, state: 'paid' });
     return { status: 'paid' as const, message: 'Оплата подтверждена. Подписка оформлена.' };

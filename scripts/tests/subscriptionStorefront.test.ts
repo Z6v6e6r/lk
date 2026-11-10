@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import {
-  billingFromStatus, canContinue, energy5BillingOptions, friendshipBillingOptions, requiresAnnualTermsConsent,
+  billingFromStatus, canContinue, energy5BillingOptions, friendshipBillingOptions,
   scopedStorefrontStatuses, atlantyBillingOptions, ATLANTY_PLAN_ID, ATLANTY_VARIANT, normalizeStorefrontVariant,
   ATLANTY_MONTHLY_PRODUCT_ID, ATLANTY_ANNUAL_PRODUCT_ID, TOPOCRATY_PLAN_ID, TOPOCRATY_PRODUCT_ID,
   PATRIOTS_PLAN_ID, PATRIOTS_PRODUCT_ID,
@@ -165,42 +165,20 @@ test('storefront CTA creates the payment in the widget instead of navigating to 
   const paymentSource = readFileSync(new URL('../../src/components/subscription-storefront/payment.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(catalogSource, /ab_leto|autoPurchase|subscriptionCheckoutUrl/);
   assert.doesNotMatch(pageSource, /ab_leto|subscriptionCheckoutUrl/);
-  assert.match(pageSource, /createStorefrontSubscriptionPayment/);
-  assert.match(pageSource, /<AuthForm onLogin=/);
+  assert.match(pageSource, /startCheckout\(key, option.priceMinor, gesture\)/);
+  assert.doesNotMatch(pageSource, /Продолжить оплату|<AuthForm/);
   assert.doesNotMatch(pageSource, /StorefrontLogin/);
   assert.match(paymentSource, /apiCreateTournamentSubscriptionPurchase/);
   assert.match(paymentSource, /apiBuySubscroption/);
-  assert.match(pageSource, /window\.location\.href = outcome\.paymentUrl/);
+  assert.match(readFileSync(new URL('../../src/components/subscription-storefront/ZeroCheckoutDialog.tsx', import.meta.url), 'utf8'), /window\.location\.assign\(result.paymentUrl\)/);
 });
 
-test('annual terms are confirmed only after the CTA press, never above the storefront', () => {
-  const pageSource = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
-  const storefrontIndex = pageSource.indexOf('<SubscriptionStorefront');
-  const consentIndex = pageSource.indexOf('className="subscription-consent"');
-  assert.ok(storefrontIndex > 0, 'the storefront render disappeared');
-  assert.ok(consentIndex > storefrontIndex, 'the terms row must not render above the storefront');
-  // The row is inside the dialog that the CTA opens, not in the initial page.
-  assert.match(pageSource, /const \[consentRequested, setConsentRequested\] = useState\(false\)/);
-  assert.match(pageSource, /consentRequested && isAuthenticated/);
-  assert.match(pageSource, /aria-labelledby="subscription-consent-title"/);
-  assert.match(pageSource, /requiresAnnualTermsConsent\(billingOptionId, annualTermsAccepted\)/);
-  assert.equal(
-    pageSource.slice(storefrontIndex).match(/className="subscription-consent"/g)?.length,
-    1,
-    'the terms row must exist once, in the confirmation dialog',
-  );
-  for (const [optionId, accepted, expected] of [
-    ['annual', false, true],
-    ['annual', true, false],
-    ['monthly', false, false],
-    ['monthly-two-hours', false, false],
-  ] as const) {
-    assert.equal(
-      requiresAnnualTermsConsent(optionId, accepted),
-      expected,
-      `${optionId} with accepted=${accepted}`,
-    );
-  }
+test('annual terms stay inside the shared checkout and gate automatic submit before claiming', () => {
+  const page = readFileSync(new URL('../../src/components/subscription-storefront/SubscriptionPage.tsx', import.meta.url), 'utf8');
+  const dialog = readFileSync(new URL('../../src/components/subscription-storefront/ZeroCheckoutDialog.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /className="subscription-consent"|Продолжить оплату/);
+  assert.match(dialog, /Я ознакомился\(ась\) и согласен\(на\) с условиями годовой подписки/);
+  assert.ok(dialog.indexOf("&& !terms) return;\n    fastStarted.current = true;") > 0);
 });
 
 test('storefront ships the cabinet idle-data guard and hides status errors', () => {
@@ -684,7 +662,7 @@ test('storefront page owns the atlanty variant instead of the shared catalogue',
   assert.match(pageSource, /\(normalizeStorefrontVariant\(variant\) \?\? normalizeStorefrontVariant\(searchVariant\)\) === ATLANTY_VARIANT/);
   assert.match(pageSource, /atlantyBillingOptions\(\)/);
   assert.match(pageSource, /id: ATLANTY_PLAN_ID/);
-  assert.match(pageSource, /ctaLabel: processing \? 'Создаём оплату…' : 'Оформить подписку'/);
+  assert.match(pageSource, /ctaLabel: 'Оплатить'/);
   // The club card must not depend on the counter status feed at all.
   assert.match(pageSource, /if \(previewView \|\| isAtlantyVariant\) return;/);
   const entrySource = readFileSync(new URL('../../src/subscription-storefront.tsx', import.meta.url), 'utf8');

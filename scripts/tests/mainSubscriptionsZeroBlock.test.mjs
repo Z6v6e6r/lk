@@ -69,9 +69,11 @@ async function fixture({ failed = false, unavailable = false, binding = true, du
     querySelectorAll: selector => [...elements, outside].filter(element => element.matches(selector)),
     createElement: tag => new Element('', tag.toUpperCase()),
   });
-  const opened = [], resumed = [], navigated = [], requests = [], scripts = [], timers = new Map();
+  const started = [], opened = [], resumed = [], navigated = [], requests = [], scripts = [], timers = new Map();
   let timerId = 0, observe, dialogOpen = false, closeAllowed = true;
   const runtimeApi = {
+    directCheckoutVersion: 1, directCheckoutAllOffersVersion: 1, supportsDirectCheckoutOffer: () => true,
+    startCheckout: (key, price, event) => { started.push({key,price,event}); if (dialogOpen) return false; opened.push(key); dialogOpen = true; return true; },
     checkoutVersion: 1, checkoutIsolationVersion: isolated ? 1 : undefined, checkoutChannel: runtime,
     openCheckout: key => { if (dialogOpen) return false; opened.push(key); dialogOpen = true; return true; },
     resumeCheckout: key => { resumed.push(key); dialogOpen = true; return true; },
@@ -104,7 +106,7 @@ async function fixture({ failed = false, unavailable = false, binding = true, du
   await flush();
   const fire = (name, target, extra = {}) => root.dispatchEvent({ type: name, target, ...extra });
   return {
-    window, document, root, context, twins, month, year, label, count, outside, requests, opened, resumed, navigated, scripts, timers,
+    window, document, root, context, twins, month, year, label, count, outside, requests, opened, started, resumed, navigated, scripts, timers,
     click: (target, extra) => fire('click', target, { button: 0, ...extra }), key: (target, key) => fire('keydown', target, { key }),
     visible: async value => { observe?.([{ isIntersecting: value }]); await flush(); },
     hash: async value => { window.location.hash = value; window.dispatchEvent({ type: 'hashchange' }); await flush(); },
@@ -379,4 +381,17 @@ test('kit keeps native fallback guidance and ships main script without auto-purc
   assert.ok(html.includes(adapter)); assert.ok(html.includes(bootstrap));
   assert.ok(html.includes('[data-ph-zero-root] [data-ph-hidden'));
   assert.doesNotMatch(bootstrap, /checkoutUrl|autoPurchase/);
+});
+
+
+test('main fast checkout carries the selected period, exact displayed price and original gesture; old runtime fails closed', async () => {
+  const f=await fixture();await f.visible(true);
+  f.click(f.twins[0].buy.child);await flush();
+  assert.equal(f.started.length,1);assert.equal(f.started[0].key,'friendship');assert.equal(f.started[0].price,980000);
+  assert.equal(f.started[0].event.target,f.twins[0].buy.child);
+  const old=await fixture();delete old.window.LKWidgetSubscriptionStorefront.directCheckoutAllOffersVersion;
+  await old.visible(true);old.click(old.twins[0].buy.child);await flush();
+  assert.equal(old.started.length,0);assert.equal(old.navigated[0],'https://padlhub.ru/sub_hab');
+  const annual=await fixture();await annual.visible(true);annual.click(annual.year);annual.click(annual.twins[0].buy.child);await flush();
+  assert.equal(annual.started[0].key,'friendship-year');assert.equal(annual.started[0].price,6800000);
 });
