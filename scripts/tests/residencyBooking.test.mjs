@@ -5,6 +5,8 @@ import {RESIDENCY_PRODUCT_ID,validateResidencyBookingContext,residencyTransportC
 import {composeResidencyEvaluator,composeResidencyGateway,composeResidencyPreview} from '../lib/residencyBookingSources.mjs';
 import {extractSubscriptionPricePreviewSource} from '../lib/subscriptionPricePreviewSources.mjs';
 import path from 'node:path';
+import os from 'node:os';
+import {execFileSync} from 'node:child_process';
 import {composeResidencyFlow,RESIDENCY_TARGETS,assertResidencyOutputPath} from '../patch_nodered_residency_booking.mjs';
 import {residencyFixture} from './fixtures/residency-booking-context.mjs';
 const evaluator=composeResidencyEvaluator(fs.readFileSync(new URL('../nodered_lk1_hub_nodes/evaluator.js',import.meta.url),'utf8'));
@@ -54,7 +56,16 @@ test('transport is default-off and cannot redirect the integration credential to
   for(const url of ['https://evil.example/api','https://padlhub.su/api?x=1','http://padlhub.su/api']) assert.equal(residencyTransportConfig(k=>k==='subscriptions_runtime_api_base_url'?url:config[k]),null);
 });
 test('private candidate output refuses this and other Git worktrees before writing',()=>{
-  for(const parent of [process.cwd(),path.dirname(process.cwd())]) assert.throws(()=>assertResidencyOutputPath(path.join(parent,'residency-private-should-not-exist')),/outside every Git/);
+  const external=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'residency-output-test-'));
+  try {
+    const other=path.join(external,'other-checkout');
+    fs.mkdirSync(other);
+    execFileSync('git',['init','--quiet',other]);
+    for(const parent of [process.cwd(),other,path.join(other,'.git')]) {
+      assert.throws(()=>assertResidencyOutputPath(path.join(parent,'residency-private-should-not-exist')),/outside every Git/);
+    }
+    assert.equal(assertResidencyOutputPath(path.join(external,'private-candidate')),path.join(external,'private-candidate'));
+  } finally {fs.rmSync(external,{recursive:true,force:true});}
 });
 test('candidate rejects unreviewed function preimages before composing anything',()=>{
   assert.throws(()=>composeResidencyFlow([]),/PREIMAGE_DRIFT/);
