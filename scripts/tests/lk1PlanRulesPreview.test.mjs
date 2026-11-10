@@ -1,3 +1,6 @@
+import {composeResidencyPreview} from '../lib/residencyBookingSources.mjs';
+import {RESIDENCY_PRODUCT_ID} from '../lib/residencyBookingContext.mjs';
+import {residencyFixture} from './fixtures/residency-booking-context.mjs';
 // Preview == booking: the advisory preview resolves the plan rule with the same
 // shared resolver the booking gateway embeds (scripts/lib/lk1PlanRules.mjs) and
 // hands the evaluator exactly the policy input the write path would hand it.
@@ -282,21 +285,23 @@ test('a reviewed generation with step-local coverage still composes and executes
     { covered: true, usedEventsToday: 0, visitsLeft: 3 });
 });
 
-const makeComposition = (composed) => {
+const makeComposition = (composed, expectedRouter = router) => {
 
   if (!composed) return null;
-  assert.ok(composed.router.endsWith(router), 'The composed node must end with the preview router body');
+  assert.ok(composed.router.endsWith(expectedRouter), 'The composed node must end with the expected preview router body');
   // The allowance recompute reaches the node through the same paid-join
   // transformation the booking gateway applies, on the installed block shape.
   assert.ok(composed.router.includes('activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY"'),
     'The composed allowance must stay instance-scoped');
   assert.ok(composed.router.includes('benefitBookings'), 'The composed allowance must count paid benefits');
   const canonicalPrefix = composed.router.slice(0, composed.router.indexOf('\nconst pricing'));
-  const nodePrefix = composed.router.slice(0, composed.router.length - router.length);
+  const bodyIndex=composed.router.indexOf('// Diagnostic observer:');
+  const nodePrefix = composed.router.slice(0,bodyIndex);
+  const routerBody=composed.router.slice(bodyIndex);
   const factorySource = `${nodePrefix}
 const lk1PlanTrace = (code, stepName) => { if (global.__trace) global.__trace.push([code, stepName]); };
 const __router = (msg, global, node) => {
-${router
+${routerBody
   .replace("const stop = (code, status = 503) => {",
     "const stop = (code, status = 503) => { if (typeof lk1PlanTrace === 'function') lk1PlanTrace('STOP ' + code);")}
 };
@@ -373,7 +378,7 @@ function preview(options = {}) {
     // An absent exclusion global is the released runtime's "no exclusions" state.
     [STATION_EXCLUSIONS_GLOBAL]: options.stationExclusions,
     // The game router reads the room/studio tariff through the admin service token.
-    vivacrm_access_token: 'fixture-admin', vivacrm_token_expires_at: Date.now() + 60000 };
+    vivacrm_access_token: 'fixture-admin', vivacrm_token_expires_at: Date.now() + 60000, ...options.globals };
   const host = { get: key => globals[key], __trace: [] };
   const scope = (options.composition || (options.groupExercise ? guardedComposition : composition)).createScope(host, { warn() {} });
   const instanceKey = id => JSON.stringify(['instance', 'iSkq6G', actor, id]);
@@ -413,7 +418,14 @@ function preview(options = {}) {
   for (let hop = 0; hop < 200; hop++) {
     const ctx = message._subscriptionPricePreview;
     assert.ok(ctx, `Preview lost its state machine at hop ${hop}`);
-    if (ctx.step === 'profile') message = { ...message, statusCode: 200, payload: { id: actor } };
+    if (ctx.step === 'residency_context') {
+      assert.equal(message.method,'POST');
+      assert.equal(message.url,'https://padlhub.su/api/internal/subscriptions/residency-booking-context');
+      const evidence=options.residencyContext(ctx.residencyPending);
+      message={...message,payload:evidence,statusCode:200,responseUrl:message.url};
+      findings.push({residencyRead:true});
+    }
+    else if (ctx.step === 'profile') message = { ...message, statusCode: 200, payload: { id: actor } };
     else if (ctx.step === 'evaluate') {
       const decided = evaluate(message._managedSubscriptionPolicyInput);
       findings.push({ input: message._managedSubscriptionPolicyInput, decision: decided });
@@ -1043,4 +1055,37 @@ test('composed Spanish-training preview exports the guard and returns no subscri
 test('old booking generation cannot silently activate the Spanish-training preview exclusion', () => {
   const scope = composition.createScope({ get: () => null }, { warn() {} });
   assert.equal(scope.canonical.isSpanishTrainingExercise({ directionName: 'Индивидуальная/сплит тренировка Испанский тренер' }), false);
+});
+
+const residencyRouterBody=composeResidencyPreview(router);
+const residencyComposition=makeComposition({...composed,router:composeResidencyPreview(composed.router)},residencyRouterBody.slice(residencyRouterBody.indexOf('// Diagnostic observer:')));
+const residencyGlobals={subscriptions_residency_booking_enabled:true,subscriptions_runtime_environment:'PROD',
+  subscriptions_runtime_api_base_url:'https://padlhub.su/api',subscriptions_runtime_context_integration_token:'fixture-token-'.repeat(4)};
+test('residency advisory uses CUP with zero visits and never falls back to a local rule',()=>{
+  const date=new Date(Math.ceil((Date.now()+3600000)/1800000)*1800000+10800000).toISOString().slice(0,19)+'+03:00';
+  const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});
+  const result=preview({composition:residencyComposition,subscriptions:[row],globals:residencyGlobals,
+    target:{startsAt:date},residencyContext:({id})=>{const v=residencyFixture({stationId:station,clientSubscriptionId:id,startsAt:date});delete v.startsAt;return v;}});
+  assert.equal(result.quotes[0].status,'AVAILABLE');
+  assert.equal(result.quotes[0].freeMinutes,0);
+  assert.equal(result.quotes[0].amountMinor,result.quotes[0].basePriceMinor-Math.floor(result.quotes[0].basePriceMinor*30/100));
+  assert.equal(result.findings.filter(f=>f.residencyRead).length,1);
+  const disabled=preview({composition:residencyComposition,subscriptions:[row],target:{startsAt:date}});
+  assert.equal(disabled.quotes[0].status,'UNAVAILABLE');
+  assert.equal(disabled.quotes[0].reasonCode,'RESIDENCY_BOOKING_NOT_CONFIGURED');
+});
+
+test('residency group preview applies 50 percent without visit-redemption eligibility',()=>{
+  const date=new Date(Math.ceil((Date.now()+3600000)/1800000)*1800000+10800000).toISOString().slice(0,19)+'+03:00';
+  const exercise={id:uuid(98),studio:{id:station},room:{id:room},direction:{id:6307},type:{id:2349},
+    timeFrom:date,timeTo:new Date(Date.parse(date)+3600000).toISOString(),availableClientSubscriptions:[]};
+  const row=subscription(RESIDENCY_PRODUCT_ID,{visitsLeft:0});
+  const result=preview({composition:residencyComposition,subscriptions:[row],groupExercise:exercise,globals:residencyGlobals,
+    residencyContext:({id})=>{const v=residencyFixture({clientSubscriptionId:id});delete v.startsAt;return v;}});
+  assert.equal(result.quotes[0].status,'AVAILABLE');
+  assert.equal(result.quotes[0].kind,'GROUP_TRAINING_SUBSCRIPTION_DISCOUNT_V1');
+  assert.equal(result.quotes[0].discountPercent,50);
+  assert.equal(result.quotes[0].amountMinor,275000);
+  assert.equal(result.quotes[0].freeMinutes,0);
+  assert.equal(result.findings.filter(f=>f.residencyRead).length,1);
 });
