@@ -9,12 +9,12 @@ const exact=d=>({...Object.fromEntries(Object.entries(d).map(([k,v])=>[k,{$eq:v,
 const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=1&&n<=7;
 const query=id=>({$or:[{clientId:id},{'identityAliases.clientIds':id},{playerKey:'client:'+id},{'identityAliases.playerKeys':'client:'+id}]});
 
-/** Staff-only caller holds the real worker flock. One transaction covers the complete roster. */
+/** Writes require the shared data flock. Canonical-only reads use one roster snapshot. */
 export async function initializeFprStarts(db,client,ids,actorId,now=new Date().toISOString(),
-  {dryRun=false,discoverMissing=false,verifiedVivaLevels=new Map(),evidenceClock=()=>new Date().toISOString()}={}){
+  {dryRun=false,discoverMissing=false,verifiedVivaLevels=new Map(),evidenceClock=()=>new Date().toISOString(),canonicalOnly=false}={}){
   if(!Array.isArray(ids)||ids.length<1||ids.length>28||new Set(ids).size!==ids.length
     ||ids.some(id=>typeof id!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(id))
-    ||typeof actorId!=='string'||!actorId||actorId.length>128||discoverMissing&&!dryRun)fail('FPR_START_ARGUMENTS');
+    ||typeof actorId!=='string'||!actorId||actorId.length>128||discoverMissing&&!dryRun||canonicalOnly&&!dryRun)fail('FPR_START_ARGUMENTS');
   const freshEvidence=fetchedAt=>{
     const checkedAt=Date.parse(evidenceClock()),fetched=Date.parse(fetchedAt);
     return Number.isFinite(checkedAt)&&Number.isFinite(fetched)&&Math.abs(checkedAt-fetched)<=15000;
@@ -47,6 +47,7 @@ export async function initializeFprStarts(db,client,ids,actorId,now=new Date().t
             fail('FPR_START_INVALID_CANONICAL',id);
           plans.push({id,state:current,unchanged:true});continue;
         }
+        if(canonicalOnly){result=null;return;}
         const events=await db.collection('rating_events').find({$or:[{'player.clientId':{$in:aliases}},{'player.key':{$in:keys}},
           ...(phones.length?[{'player.phoneNorm':{$in:phones}}]:[])]},options).limit(20001).toArray();
         if(events.length>20000)fail('FPR_START_HISTORY_INVALID',id);
@@ -137,4 +138,12 @@ export async function initializeFprStartsWithViva(db,client,ids,actorId,readViva
   const discovery=await initializeFprStarts(db,client,ids,actorId,clock(),{dryRun:true,discoverMissing:true});
   const verifiedVivaLevels=discovery.missingClientIds.length?await readVivaLevels(discovery.missingClientIds):new Map();
   return initializeFprStarts(db,client,ids,actorId,clock(),{dryRun,verifiedVivaLevels,evidenceClock:clock});
+}
+
+/** Existing canonical rosters never wait for scheduled writers or fetch Viva.
+ * Missing players are re-read under the writer lock before any initialization. */
+export async function prepareFprStarts(db,client,ids,actorId,readVivaLevels,{withWriteLock,dryRun=false,clock=()=>new Date().toISOString()}={}){
+  const snapshot=await initializeFprStarts(db,client,ids,actorId,clock(),{dryRun:true,canonicalOnly:true});
+  if(snapshot)return snapshot;
+  return withWriteLock(()=>initializeFprStartsWithViva(db,client,ids,actorId,readVivaLevels,{dryRun,clock}));
 }

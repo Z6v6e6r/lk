@@ -153,6 +153,17 @@ test('isolated replica-set: atomic apply, retry, CAS drift, rollback, later game
       };
       assert.equal((await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false)).synced, 1);
       assert.equal(sends, 1);
+      // A new roster can supersede an enumerated pending send before its row lock.
+      await db.collection('rating_projection_outbox').updateMany({ fprProjection: true }, { $set: { status: 'SUPERSEDED' } });
+      const queued = await db.collection('rating_projection_outbox').findOne({ clientId: 'p0' });
+      await db.collection('rating_projection_outbox').updateOne({ _id: queued._id }, { $set: { status: 'PENDING', nextAttemptAt: now } });
+      let rowLocks = 0;
+      const skipSuperseded = await processFprProjectionOutbox(db, 'http://127.0.0.1/synthetic', now, false, async work => {
+        rowLocks++;
+        await db.collection('rating_projection_outbox').updateOne({ _id: queued._id }, { $set: { status: 'SUPERSEDED' } });
+        return work();
+      });
+      assert.equal(rowLocks, 1);assert.equal(skipSuperseded.synced, 0);assert.equal(sends, 1);
       const compatibility = await db.collection('player_ratings').findOne({ clientId: 'p0' });
       assert.equal(compatibility.ratingNumeric, after.ratingNumeric);
 

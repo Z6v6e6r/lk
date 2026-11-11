@@ -89,7 +89,7 @@ test("real reports-only wrapper keeps its lock throughout the timed child", { sk
   const bin = path.join(root, "bin"); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, "node"), '#!/usr/bin/env bash\nset -eu\ntest "$RATING_WORKER_SHARED_LOCK_HELD" = 1\nif flock -n "$RATING_WORKER_LOCK_FILE" -c true; then exit 88; fi\nreadlink /proc/self/fd/9 > "$LOCK_RECEIPT"\n', { mode: 0o755 });
   const lock = path.join(root, "shared.lock"), receipt = path.join(root, "lock-receipt");
-  const result = spawnSync("bash", [wrapper], { encoding: "utf8", timeout: 10000, env: { ...process.env, PATH: bin + ":" + process.env.PATH, RATING_WORKER_LOCK_FILE: lock, LOCK_RECEIPT: receipt } });
+  const result = spawnSync("bash", [wrapper], { encoding: "utf8", timeout: 10000, env: { ...process.env, PATH: bin + ":" + process.env.PATH, RATING_WORKER_LOCK_FILE: lock, RATING_WORKER_SCHEDULE_LOCK_FILE: path.join(root, "schedule.lock"), LOCK_RECEIPT: receipt } });
   assert.equal(result.status, 0, result.stderr); assert.equal(fs.readFileSync(receipt, "utf8").trim(), lock);
   assert.equal(spawnSync("flock", ["-n", lock, "-c", "true"]).status, 0);
 });
