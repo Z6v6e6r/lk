@@ -12,7 +12,7 @@ export function hasPromoPaymentAttempt(offerKey: string): boolean {
   catch { return true; }
 }
 
-export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string, expectedPrice?: number): Promise<
+export async function createStorefrontPromoPayment(offerKey: string, phone: string, checkoutReturnUrl?: string, expectedPrice?: number, canProceed: () => boolean = () => true): Promise<
   { status: 'redirect'; paymentUrl: string; transactionId?: string } | { status: 'settled'; message: string; transactionId?: string }
 > {
   const offer = resolveStorefrontPromo(offerKey);
@@ -22,6 +22,7 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
   }
   // A browser-wide lock prevents two tabs from crossing the check/write boundary.
   return navigator.locks.request(`${ATTEMPT_PREFIX}${offer.key}`, { ifAvailable: true }, async lock => {
+    if (!canProceed()) throw new StorefrontPaymentError('Аккаунт изменился. Подтвердите покупку заново.');
     if (!lock || hasPromoPaymentAttempt(offer.key)) throw new StorefrontPaymentError(PROMO_PENDING_MESSAGE);
     const returnUrl = appendCurrentAuthModeToNavigableUrl(new URL(buildPromoReturnUrl(window.location.href))).toString();
     const requestedReturn = checkoutReturnUrl ? new URL(checkoutReturnUrl) : null;
@@ -39,6 +40,7 @@ export async function createStorefrontPromoPayment(offerKey: string, phone: stri
     // This API has no idempotency/confirm contract. Once sent, any uncertainty
     // retains the browser marker; neither reload nor bank return retries create.
     try {
+      if (!canProceed()) throw new Error('Checkout actor changed');
       const result = await apiBuySubscroption(offer.productId, phone, {
         baseRedirectUrl: paymentReturnUrl, successUrl: paymentReturnUrl, failUrl: paymentReturnUrl, retries: 0,
       });

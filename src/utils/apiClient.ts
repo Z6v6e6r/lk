@@ -3754,6 +3754,7 @@ export interface TournamentSubscriptionConfirmResult {
   failed: boolean;
   paymentUrl: string | null;
   expiresAt: string | null;
+  checkoutReset?: unknown;
   updatedAt: string | null;
 }
 
@@ -10617,6 +10618,7 @@ function normalizeTournamentSubscriptionConfirmResult(
     failed: data.failed === true || normalizedStatus.includes("FAIL"),
     paymentUrl: extractPaymentUrl(data),
     expiresAt: pickString(data, ["expiresAt", "paymentExpiresAt", "paymentDueDate"]),
+    checkoutReset: data.checkoutReset ?? null,
     updatedAt: pickString(data, ["updatedAt"]),
   };
 }
