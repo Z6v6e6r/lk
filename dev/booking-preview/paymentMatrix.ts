@@ -97,9 +97,26 @@ export function buildGamePaymentOptions(courtAmount: number | null, scope: GameP
   // Paying for everybody never consumes a benefit or discounts the court.
   if (scope === 'court') return [{ kind: 'full', mode: 'book', amount: courtAmount }];
   const personalAmount = Math.round(courtAmount * 100 / 4) / 100;
-  return buildPaymentOptions('game', privileges, fits, context).map(option => ({
-    ...option,
-    amount: option.amount == null ? null : option.amount === 0 ? 0
-      : option.kind === 'full' ? personalAmount : Math.round(personalAmount * 0.7 * 100) / 100,
-  }));
+  const options: PaymentOption[] = buildPaymentOptions('game', privileges, fits, context).map(option => {
+    if (option.benefit === 'partial-hour' && option.paidMinutes && context.durationMinutes) {
+      return { ...option, mode: option.mode === 'quote' ? 'book' : option.mode,
+        amount: Math.round(personalAmount * option.paidMinutes / context.durationMinutes * 100) / 100 };
+    }
+    return { ...option,
+      amount: option.amount == null ? null : option.amount === 0 ? 0
+        : option.kind === 'full' ? personalAmount : Math.round(personalAmount * 0.7 * 100) / 100 };
+  });
+  return options.map(option => option.kind === 'full' && options.some(other => other.kind !== 'full' && other.mode === 'book')
+    ? { ...option, mode: 'reference' } : option);
+}
+
+// A missing product can be purchased for this event. Applicability toggles
+// describe existing products; excluded groups still reject subscription offers.
+export function buildBookingPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}, gameScope?: GamePaymentScope, courtAmount: number | null = null): PaymentOption[] {
+  const purchaseFits = { subscription: !privileges.subscription || fits.subscription, pass: !privileges.pass || fits.pass };
+  const options = service === 'game' && gameScope
+    ? buildGamePaymentOptions(courtAmount, gameScope, privileges, purchaseFits, context)
+    : buildPaymentOptions(service, privileges, purchaseFits, context);
+  return options.map(option => !privileges.subscription && option.reason === 'training-only'
+    ? { ...option, mode: 'offer' } : option);
 }

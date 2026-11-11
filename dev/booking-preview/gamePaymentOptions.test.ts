@@ -30,15 +30,27 @@ test('an unused applicable daily hour makes my covered participation free', () =
   assert.equal(option.mode, 'book');
   assert.equal(option.amount, 0);
 });
-test('extra time requires a copay quote and never becomes a free full booking', () => {
+test('extra game time charges only the personal share beyond the free hour', () => {
   const options = buildGamePaymentOptions(4000, 'quarter', PRIVILEGE_PROFILES[2], fits, { ...hour, durationMinutes: 90 });
   const option = options.find(option => option.kind === 'subscription')!;
-  assert.equal(option.mode, 'quote');
-  assert.equal(option.amount, null);
+  assert.equal(option.mode, 'book');
+  assert.equal(option.amount, 333.33);
   assert.equal(option.freeMinutes, 60);
   assert.equal(option.paidMinutes, 30);
   assert.equal(options[0].amount, 1000);
-  assert.equal(options[0].mode, 'book');
+  assert.equal(options[0].mode, 'reference');
+});
+test('final game prices match the payer comparison for every duration and ownership', () => {
+  for (const [court, durationMinutes, personal, residency, copay] of [[4000, 60, 1000, 700, 0], [6000, 90, 1500, 1050, 500], [8000, 120, 2000, 1400, 1000]]) {
+    for (const profile of PRIVILEGE_PROFILES) {
+      const options = buildGamePaymentOptions(court, 'quarter', profile, fits, { ...hour, durationMinutes });
+      assert.equal(options.find(option => option.kind === 'full')?.amount, personal);
+      assert.equal(options.find(option => option.kind === 'residency')?.amount, residency);
+      const subscription = options.find(option => option.kind === 'subscription')!;
+      assert.equal(subscription.amount, copay);
+      assert.equal(subscription.mode, profile.subscription ? 'book' : 'offer');
+    }
+  }
 });
 test('after daily use the subscription discounts my quarter by 30 percent', () => {
   const option = buildGamePaymentOptions(4000, 'quarter', PRIVILEGE_PROFILES[2], fits, { ...hour, dailyQuota: 'used' }).find(option => option.kind === 'subscription')!;
