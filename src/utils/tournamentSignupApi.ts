@@ -19,6 +19,7 @@ import {
   type UserProfileType,
 } from "./apiClient";
 import { readAuthToken } from "./authTokenStorage";
+import { SubscriptionRejoinTracker } from "./subscriptionRejoin";
 import { isTrialGroupTraining, trialGroupCheckoutOperationId, clearTrialGroupCheckoutOperations } from "./trialGroupTraining";
 import { appendCurrentAuthModeToNavigableUrl } from "./authMode";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
@@ -2956,6 +2957,16 @@ function normalizeConfirmedSubscriptionBookingPayment(payload: unknown): Tournam
     paymentExpiresAt: null, raw: payload };
 }
 
+let tournamentSubscriptionRejoinTracker: SubscriptionRejoinTracker | null = null;
+function getTournamentSubscriptionRejoinTracker(): SubscriptionRejoinTracker {
+  if (!tournamentSubscriptionRejoinTracker) {
+    let storage: Storage | null = null;
+    try { if (typeof window !== "undefined") storage = window.localStorage; } catch { /* memory fallback */ }
+    tournamentSubscriptionRejoinTracker = new SubscriptionRejoinTracker(storage);
+  }
+  return tournamentSubscriptionRejoinTracker;
+}
+
 async function apiCreateTournamentVivaBookingFromSubscription(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -3017,7 +3028,8 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     }
     return (hash >>> 0).toString(36);
   };
-  const idempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
+  const baseIdempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
+  const idempotencyKey = getTournamentSubscriptionRejoinTracker().resolve(baseIdempotencyKey);
   const bookingRequest = () => request<unknown>(
     `/lk/subscription-bookings?operationId=${encodeURIComponent(idempotencyKey)}`,
     {
@@ -3049,6 +3061,9 @@ async function apiCreateTournamentVivaBookingFromSubscription(
   );
   const response = await pollSubscriptionBookingConfirmation(bookingRequest);
   if (response.error) {
+    // Keep this submission/poll on its original ID. Only a later explicit
+    // submission may use the server-proved successor.
+    getTournamentSubscriptionRejoinTracker().rememberReleased(idempotencyKey, response.status, response.error.raw);
     return { data: null, error: response.error, status: response.status };
   }
   const gatewayState = pickString(response.data, ["state"]);

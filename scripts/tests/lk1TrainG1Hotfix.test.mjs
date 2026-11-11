@@ -454,14 +454,15 @@ test("the composed G1 club mandate resolves the co-pay and the dispatch proves a
   });
 
 
-test("G1 retains original source pins while undoing only exact later Spanish/Friendship changes", () => {
+test("G1 retains original source pins while undoing only exact later Spanish/Friendship/cancellation changes", async () => {
+  const { restorePreCancelledAllowanceSource } = await import('../patch_live_cancelled_day_allowance.mjs');
   const rows = [
     ["nodered_lk1_hub_nodes/gateway.js", LK1_TRAIN_G1_REVIEWED_GATEWAY_SHA256, "  if (isSpanishTrainingExercise(exercise)) return { code: \"SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE\" };\n"],
     ["nodered_lk1_hub_nodes/gateway_hooks.js", LK1_TRAIN_G1_REVIEWED_HOOKS_SHA256, "// Refuse every subscription before legacy, visit-pack and managed-price paths.\nif (isSpanishTrainingExercise(exercise)) {\n  return finishError(ctx, 409, \"На индивидуальные/сплит тренировки с испанским тренером подписки не действуют. Выберите разовую оплату.\", {\n    code: \"SPANISH_TRAINING_SUBSCRIPTION_UNAVAILABLE\",\n  });\n}\n"],
   ];
   for (const [relative, pin, delta] of rows) {
     const current = fs.readFileSync(new URL("../" + relative, import.meta.url), "utf8");
-    let historical = current.replace(delta, "");
+    let historical = restorePreCancelledAllowanceSource(current, relative).replace(delta, "");
     if (relative.endsWith("/gateway.js")) historical = historical
       .replace("  // «Время на друзей» session, including «Время на друзей (особый)» (2026-11-11).\n  // Other tournament directions keep their configured discount.\n",
         "  // «Время на друзей» session. Only that direction is covered, so the direction scope\n  // below keeps a ПадлхАБ tournament of the same category on its plain discount.\n")

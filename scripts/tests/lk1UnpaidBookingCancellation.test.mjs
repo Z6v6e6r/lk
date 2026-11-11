@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { classifyLk1Transaction, classifyLk1Booking, eligibleLk1UnpaidOperation,
-  reconcileLk1UnpaidBooking, createLk1VivaCancellationProvider,
+  reconcileLk1UnpaidBooking, releaseAlreadyCancelledLk1Allowance, createLk1VivaCancellationProvider,
   buildLk1UnpaidScanQuery } from '../lib/lk1UnpaidBookingCancellation.mjs';
 import { createLk1VivaServiceToken } from '../lib/lk1VivaServiceToken.mjs';
 import { createLk1LiveGatewayGuard, lk1VivaBinding } from '../lib/lk1LiveGatewayGuard.mjs';
@@ -673,4 +673,57 @@ test('settings adapter preserves editor auth and rejects drift or competing auth
   assert.throws(() => buildFlowReadAuthSettings({ source, expectedSha256, modulePath: '/tmp/auth.cjs' }), /PATH_INVALID/);
   assert.throws(() => buildFlowReadAuthSettings({ source: built.candidate,
     expectedSha256: built.candidateSha256, modulePath }), /SOURCE_INVALID/);
+});
+
+
+test('already cancelled zero-visit checkout: dry-run and exact frozen CAS, never a Viva PUT', async () => {
+  const seed = fixture(); seed.op.serviceDate = '2099-01-01'; seed.booking.isCancelled = true;
+  const provider = fakeProvider(seed), calls = [], before = structuredClone(seed.op);
+  const operations = {async updateOne(query, update, options) {calls.push({query, update, options});
+    return {acknowledged:true,matchedCount:1,modifiedCount:1};}};
+  const args = {op:seed.op, operations, provider, cohortFrom:cohort, now:()=>instant};
+  assert.equal((await releaseAlreadyCancelledLk1Allowance(args)).state, 'WOULD_RELEASE_CANCELLED');
+  assert.equal(calls.length,0);
+  let backedUp = false;
+  assert.equal((await releaseAlreadyCancelledLk1Allowance({...args,mode:'ENFORCE_NEW',backup:async op=>{
+    assert.deepEqual(op,before);backedUp=true;}})).state,'RELEASED_CANCELLED');
+  assert.ok(backedUp); assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].query.lk1,before.lk1);
+  assert.equal(calls[0].query.updatedAt,before.updatedAt);
+  assert.deepEqual(calls[0].options,{writeConcern:{w:'majority',j:true}});
+  assert.equal(calls[0].update.$set.state,'RELEASED');
+  assert.equal(calls[0].update.$set['lk1.cancelledAllowanceRelease'].bookingId,'booking');
+  assert.deepEqual(seed.op,before);
+  assert.ok(!provider.calls.includes('cancel') && !provider.calls.includes('options'));
+});
+
+test('cancelled release rejects visit/refund/paid/processing/foreign/active and changed fresh evidence', async () => {
+  const changes = [s=>{s.op.lk1.decision.subscriptionVisitCount=1;},s=>{s.op.lk1.visitJob={};},
+    s=>{s.transaction.status='PAID';},s=>{s.transaction.refundedAt=instant;},
+    s=>{s.transaction.cardPaymentInfo={status:'PROCESSING'};},s=>{s.booking.clientId='other';},
+    s=>{s.booking.isCancelled=false;},s=>{s.op.lk1.unpaidCancellation={phase:'INTENT'};},
+    s=>{s.op.serviceDate='2099-01-02';}];
+  for(const change of changes) {
+    const seed=fixture();seed.op.serviceDate='2099-01-01';seed.booking.isCancelled=true;change(seed);
+    const provider=fakeProvider(seed);let writes=0;
+    const result=await releaseAlreadyCancelledLk1Allowance({op:seed.op,operations:{async updateOne(){writes++;}},
+      provider,cohortFrom:cohort,mode:'ENFORCE_NEW',now:()=>instant});
+    assert.equal(result.state,'SKIPPED');assert.equal(writes,0);
+  }
+  const seed=fixture();seed.op.serviceDate='2099-01-01';seed.booking.isCancelled=true;
+  const provider=fakeProvider(seed);let writes=0;
+  const result=await releaseAlreadyCancelledLk1Allowance({op:seed.op,operations:{async updateOne(){writes++;}},
+    provider,cohortFrom:cohort,mode:'ENFORCE_NEW',now:()=>instant,
+    backup:async()=>{provider.state.transaction.status='PAID';}});
+  assert.equal(result.reason,'PAID');assert.equal(writes,0);
+});
+
+test('cancelled release requires modifiedCount=1 and a stop after backup prevents mutation', async () => {
+  const seed=fixture();seed.op.serviceDate='2099-01-01';seed.booking.isCancelled=true;
+  const args={op:seed.op,provider:fakeProvider(seed),cohortFrom:cohort,mode:'ENFORCE_NEW',now:()=>instant,
+    operations:{async updateOne(){return {acknowledged:true,matchedCount:1,modifiedCount:0};}}};
+  assert.equal((await releaseAlreadyCancelledLk1Allowance(args)).state,'RETRY_STORE');
+  let stopped=false;
+  assert.equal((await releaseAlreadyCancelledLk1Allowance({...args,shouldStop:()=>stopped,
+    backup:async()=>{stopped=true;}})).state,'STOPPED');
 });

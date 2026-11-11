@@ -3,11 +3,13 @@ import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 import { isTournamentCapacityError } from '../../src/utils/tournamentCapacityError.ts';
+import { isSubscriptionBookingReleased } from '../../src/utils/subscriptionRejoin.ts';
 
 const source = ts.createSourceFile('signup.tsx', fs.readFileSync(
   'src/components/tournament-signup/TournamentSignupPage.tsx', 'utf8'),
 ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function hook(name, dependencies) {
+  dependencies = { isSubscriptionBookingReleased, ...dependencies };
   let callback;
   function visit(node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) {

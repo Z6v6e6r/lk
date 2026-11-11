@@ -459,6 +459,8 @@ if (ctx.lk1 && ctx.action !== "release") {
       || (bookingClientId(booking) && normalizeId(bookingClientId(booking)) !== normalizeId(ctx.actorClientId)))) {
       return lk1Stop(ctx, "LK1_ACTOR_BOOKINGS_UNRESOLVED");
     }
+    ctx.lk1.cancellationSnapshot = { observedAt: ctx.bookingsObservedAt,
+      active: extractItems(activeBookingsPayload), history: extractItems(msg.payload) };
     ctx.lk1.bookings = bookings;
     ctx.lk1.activeBookings = mergeBookings(activeBookingsPayload, []).filter((booking) => !isInactiveBooking(booking));
     return lk1Find(ctx, "lk1_usage_operations", { tenantKey: ctx.tenantKey,
