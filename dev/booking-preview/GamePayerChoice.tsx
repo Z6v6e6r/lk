@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { buildGamePaymentOptions, formatRubles, readMatrixSettings, type PaymentOption } from './paymentMatrix';
 import { gameSubscriptionComparison } from './gameSubscriptionComparison';
+import { eligibleSubscriptionOffers, subscriptionOfferQuote } from './subscriptionOffers';
 import './matrix.css';
 
 type Props = { value: 'self' | 'split'; onChange: (value: 'self' | 'split') => void; courtAmount: number | null; durationMinutes: number };
@@ -9,7 +10,11 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const name = useId();
   const settings = readMatrixSettings(new URLSearchParams(location.search));
   const options = buildGamePaymentOptions(courtAmount, 'quarter', settings.profile, settings.applicability, { ...settings, durationMinutes });
-  const subscription = gameSubscriptionComparison(courtAmount, { ...settings, durationMinutes });
+  const context = { ...settings, durationMinutes };
+  const cheapestSubscription = eligibleSubscriptionOffers('game', context)[0];
+  const subscription = !settings.profile.subscription && cheapestSubscription
+    ? subscriptionOfferQuote(cheapestSubscription, 'game', context, 'quarter', courtAmount)
+    : gameSubscriptionComparison(courtAmount, context);
   const residency = options.find(option => option.kind === 'residency');
   const personalBase = courtAmount != null && Number.isFinite(courtAmount) && courtAmount > 0 ? Math.round(courtAmount * 100 / 4) / 100 : null;
   const price = (option: PaymentOption | undefined) => {

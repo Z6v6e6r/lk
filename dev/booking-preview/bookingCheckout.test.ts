@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, createPreviewOrder, isSelectableMethod, readResidencyPrice } from './bookingCheckout.ts';
+import { bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, type PaymentOption } from './paymentMatrix.ts';
 
 test('selecting an unowned residency is possible and uses the event discount on the primary button', () => {
@@ -46,4 +46,26 @@ test('residency price is a validated local setting and decimals add as cents', (
   assert.equal(readResidencyPrice(new URLSearchParams('residencyPrice=790')), 790);
   assert.equal(readResidencyPrice(new URLSearchParams()), 790);
   assert.equal(createPreviewOrder({ kind: 'residency', mode: 'offer', amount: 0.1 }, 0.2)?.total, 0.3);
+});
+test('subscription purchase requires a valid product price and a known participation quote', () => {
+  const free: PaymentOption = { kind: 'subscription', mode: 'offer', amount: 0 };
+  assert.equal(createPreviewOrder(free, null, 23800)?.product, 'subscription');
+  for (const price of [null, 0, -1, NaN, Infinity, Number.MAX_VALUE]) assert.equal(createPreviewOrder(free, null, price), null);
+  assert.equal(createPreviewOrder({ ...free, amount: null }, null, 23800), null);
+  assert.equal(createPreviewOrder({ ...free, mode: 'book' }, null, 23800)?.total, 0, 'An owned subscription is never bought again');
+});
+test('Energy 5 balance is validated and displayed as remaining training sessions', () => {
+  assert.equal(readPassRemaining(new URLSearchParams()), 3);
+  for (const count of [0, 1, 3, 5]) assert.equal(readPassRemaining(new URLSearchParams({ passRemaining: String(count) })), count);
+  for (const value of ['', '-1', '6', '2.5', 'no', 'Infinity']) assert.equal(readPassRemaining(new URLSearchParams({ passRemaining: value })), 0);
+  assert.equal(passBalanceText(3), 'Осталось 3 тренировки');
+  assert.equal(passBalanceText(1), 'Осталась 1 тренировка');
+  assert.equal(trainingCount(5), '5 тренировок');
+});
+test('an exhausted owned pack offers a replacement and keeps the paid fallback selectable', () => {
+  const options = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[4], { subscription: false, pass: true });
+  assert.equal(withPassBalance(options, 0).find(option => option.kind === 'pass')?.mode, 'offer');
+  assert.equal(withPassBalance(options, 0).find(option => option.kind === 'full')?.mode, 'book');
+  assert.equal(withPassBalance(options, 3).find(option => option.kind === 'pass')?.mode, 'book');
+  assert.equal(bookingButtonText(options.find(option => option.kind === 'pass')), 'Списать 1 тренировку и записаться');
 });

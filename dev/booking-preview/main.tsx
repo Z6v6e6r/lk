@@ -33,8 +33,10 @@ function Preview() {
   const [subscriptionPlan, setSubscriptionPlan] = useState<string>(matrix.subscriptionPlan);
   const [dailyQuota, setDailyQuota] = useState<string>(matrix.dailyQuota);
   const [excludedGroups, setExcludedGroups] = useState(matrix.excludedGroups);
+  const [raFits, setRaFits] = useState(matrix.raFits);
+  const [passRemaining, setPassRemaining] = useState(params.get('passRemaining') ?? '3');
   const [residencyPrice, setResidencyPrice] = useState(params.get('residencyPrice') ?? String(PREVIEW_RESIDENCY_PRICE));
-  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota, groupCategory: excludedGroups ? 'excluded' : 'standard', residencyPrice });
+  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota, groupCategory: excludedGroups ? 'excluded' : 'standard', residencyPrice, raFits: raFits ? '1' : '0', passRemaining });
   const frameUrl = `/dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const updateUrl = (key: string, value: string) => {
     query.set(key, value);
@@ -81,10 +83,11 @@ function Preview() {
         <div className="preview-applicability">
           <label><input type="checkbox" checked={subscriptionFits} onChange={event => { setSubscriptionFits(event.target.checked); updateUrl('subscriptionFits', event.target.checked ? '1' : '0'); }} />Тариф подходит к событию</label>
           <label><input type="checkbox" checked={passFits} onChange={event => { setPassFits(event.target.checked); updateUrl('passFits', event.target.checked ? '1' : '0'); }} />Абонемент подходит</label>
+          <label><input type="checkbox" checked={raFits} onChange={event => { setRaFits(event.target.checked); updateUrl('raFits', event.target.checked ? '1' : '0'); }} />РА действует на событие</label>
         </div>
         <div className="preview-subscription-rules">
           <label>Тариф подписки<select value={subscriptionPlan} onChange={event => { setSubscriptionPlan(event.target.value); updateUrl('subscriptionPlan', event.target.value); }}>
-            <option value="daily-training">1 бесплатная тренировка в день</option><option value="daily-hour">1 бесплатный час в день</option>
+            <option value="daily-training">1 бесплатная тренировка в день</option><option value="daily-hour">1 бесплатный час в день</option><option value="ra">РА · занятие бесплатно</option>
           </select></label>
           <label>Дневной бесплатный лимит<select value={dailyQuota} onChange={event => { setDailyQuota(event.target.value); updateUrl('dailyQuota', event.target.value); }}>
             <option value="available">Доступен</option><option value="used">Уже использован</option>
@@ -93,11 +96,12 @@ function Preview() {
             <option value="standard">Обычная</option><option value="excluded">Без подписки и Резидентства</option>
           </select></label>
           <label>Стоимость Резидентства, ₽<input type="number" min="0.01" step="0.01" value={residencyPrice} onChange={event => { setResidencyPrice(event.target.value); updateUrl('residencyPrice', event.target.value); }} /></label>
+          <label>Остаток тренировок Энергии 5<input type="number" min="0" max="5" step="1" value={passRemaining} onChange={event => { setPassRemaining(event.target.value); updateUrl('passRemaining', event.target.value); }} /></label>
         </div>
         <span>Корт 4 000 ₽/ч · моя ¼ — 1 000 ₽/ч · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
       </section>
       <div className={`preview-stage preview-stage--${width}`}>
-        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}-${residencyPrice}`} src={frameUrl} title="Интерфейс записи PadlHub"
+        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}-${residencyPrice}-${raFits}-${passRemaining}`} src={frameUrl} title="Интерфейс записи PadlHub"
           sandbox="allow-scripts allow-same-origin" />
       </div>
     </main>

@@ -2,10 +2,10 @@ export type ServiceKind = 'game' | 'training' | 'tournament';
 export type PaymentKind = 'full' | 'residency' | 'subscription' | 'pass';
 export type Privileges = { residency: boolean; subscription: boolean; pass: boolean };
 export type Applicability = { subscription: boolean; pass: boolean };
-export type SubscriptionPlan = 'daily-training' | 'daily-hour';
+export type SubscriptionPlan = 'daily-training' | 'daily-hour' | 'ra';
 export type DailyQuota = 'available' | 'used';
-export type PaymentContext = { subscriptionPlan: SubscriptionPlan; dailyQuota: DailyQuota; excludedGroups: boolean; durationMinutes: number };
-export type SubscriptionBenefit = 'free-training' | 'free-hour' | 'partial-hour' | 'discount';
+export type PaymentContext = { subscriptionPlan: SubscriptionPlan; dailyQuota: DailyQuota; excludedGroups: boolean; durationMinutes: number; raFits?: boolean };
+export type SubscriptionBenefit = 'free-training' | 'free-hour' | 'partial-hour' | 'discount' | 'free-event';
 export type PaymentOption = {
   kind: PaymentKind;
   mode: 'book' | 'offer' | 'unavailable' | 'reference' | 'quote';
@@ -39,9 +39,10 @@ export function readMatrixSettings(params: URLSearchParams) {
   return {
     profile: PRIVILEGE_PROFILES.find(profile => profile.id === params.get('privileges')) || PRIVILEGE_PROFILES[0],
     applicability: { subscription: params.get('subscriptionFits') !== '0', pass: params.get('passFits') !== '0' },
-    subscriptionPlan: params.get('subscriptionPlan') === 'daily-hour' ? 'daily-hour' as const : 'daily-training' as const,
+    subscriptionPlan: params.get('subscriptionPlan') === 'ra' ? 'ra' as const : params.get('subscriptionPlan') === 'daily-hour' ? 'daily-hour' as const : 'daily-training' as const,
     dailyQuota: params.get('dailyQuota') === 'used' ? 'used' as const : 'available' as const,
     excludedGroups: params.get('groupCategory') === 'excluded',
+    raFits: params.get('raFits') !== '0',
   };
 }
 
@@ -52,10 +53,12 @@ export function buildPaymentOptions(service: ServiceKind, privileges: Privileges
   const duration = context.durationMinutes ?? price.durationMinutes;
   const excluded = service === 'training' && context.excludedGroups === true;
   let subscription: PaymentOption;
-  if (excluded || !fits.subscription) {
+  if (excluded || !fits.subscription || (plan === 'ra' && context.raFits === false)) {
     subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: excluded ? 'excluded-group' : 'not-applicable' };
   } else if (quota === 'used') {
     subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: price.residentPrice, benefit: 'discount' };
+  } else if (plan === 'ra') {
+    subscription = { kind: 'subscription', mode: privileges.subscription ? 'book' : 'offer', amount: 0, benefit: 'free-event' };
   } else if (plan === 'daily-training' && service !== 'training') {
     subscription = { kind: 'subscription', mode: 'unavailable', amount: null, reason: 'training-only' };
   } else if (plan === 'daily-hour' && (!Number.isFinite(duration) || duration <= 0)) {
