@@ -413,6 +413,7 @@ jobs:
           scripts/tests/subscriptionPricePreviewHook.test.mjs
           scripts/tests/subscriptionPricePreview.apiClient.test.mjs
           scripts/tests/subscriptionPricePreviewBackend.test.mjs
+          scripts/tests/friendshipSpecialResidencyPreview.test.mjs
           scripts/tests/productionErrorCauses.test.mjs
           scripts/tests/lk1ErrorSourceFixes.test.mjs
           scripts/tests/lk1R03ResponseLifecycle.test.mjs

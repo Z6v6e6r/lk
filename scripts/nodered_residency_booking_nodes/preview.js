@@ -3,19 +3,38 @@ const residencyPreviewTarget = exercise => ({resolutionSource:'SERVER',category:
   startsAt:new Date(ctx.target.startsAt).toISOString(),durationMinutes:ctx.target.durationMinutes});
 if (ctx.step==='residency_context') {
   const pending=ctx.residencyPending;
-  const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
-  if (!config || !pending || msg.error || msg.statusCode!==200 || msg.method!=='POST'
-    || msg.url!==config.url || msg.responseUrl!==config.url) return stop('RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE');
-  try {validateResidencyBookingContext(msg.payload,pending.id,Date.now(),pending.target,pending.action);}
-  catch {return stop('RESIDENCY_BOOKING_CONTEXT_INVALID');}
-  ctx.residencyContexts=ctx.residencyContexts || {};
-  ctx.residencyContexts[pending.id]=msg.payload;
-  ctx.pending.unshift(pending.id);
+  // A failed optional benefit can only be attributed to an already owned instance.
+  if (!pending || typeof pending.id!=='string' || !Array.isArray(ctx.requestedIds) || !ctx.requestedIds.includes(pending.id)
+    || !ctx.subscriptions?.[pending.id] || typeof ctx.metadata?.[pending.id]?.productId!=='string'
+    || ctx.metadata[pending.id].productId.toLowerCase()!==RESIDENCY_PRODUCT_ID
+    || !Array.isArray(ctx.pending) || ctx.pending.includes(pending.id)) return stop('RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE');
+  let failure=null;
+  try {
+    const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
+    if (!config || msg.error || msg.statusCode!==200 || msg.method!=='POST'
+      || msg.url!==config.url || msg.responseUrl!==config.url) failure='RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE';
+    else {
+      try {validateResidencyBookingContext(msg.payload,pending.id,Date.now(),pending.target,pending.action);}
+      catch {failure='RESIDENCY_BOOKING_CONTEXT_INVALID';}
+    }
+  } catch {failure='RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE';}
+  if (failure) {
+    delete ctx.residencyContexts?.[pending.id];
+    quote(pending.id,'UNAVAILABLE',null,0,0,failure);
+  } else {
+    ctx.residencyContexts=ctx.residencyContexts || {};
+    ctx.residencyContexts[pending.id]=msg.payload;
+    ctx.pending.unshift(pending.id);
+  }
   delete ctx.residencyPending;
+  delete msg.error;delete msg.statusCode;delete msg.responseUrl;
+  delete msg.url;delete msg.method;delete msg.headers;delete msg.payload;
   ctx.step='next';
 }
 // RESIDENCY_PREVIEW_BRANCH
 if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
+  // Residency covers games and group training only; tournaments have no such benefit.
+  if (eventCategory==='TOURNAMENT') {quote(id,'UNAVAILABLE',null,0,0,'EVENT_NOT_INCLUDED');continue;}
   const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
   if (!config) {quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_BOOKING_NOT_CONFIGURED');continue;}
   const target=residencyPreviewTarget(exercise);

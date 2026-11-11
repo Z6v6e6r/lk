@@ -23,15 +23,15 @@ const LK1_FREE_FIRST_EVENT_PRODUCTS = Object.freeze({
   "9eb8a7a4-c195-492a-95e4-3fb82899ac10": Object.freeze(["group_training"]),
   "6bda152b-0a9c-4308-82d0-3cd4e6aa680d": Object.freeze(["group_training"]),
   // «Дружба 2 часа» (owner decision 2026-09-30): the day's covered event may also be a
-  // «Время на друзей» session. Only that direction is covered, so the direction scope
-  // below keeps a ПадлхАБ tournament of the same category on its plain discount.
+  // «Время на друзей» session, including «Время на друзей (особый)» (2026-11-11).
+  // Other tournament directions keep their configured discount.
   "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze(["tournament"]),
 });
 // A product listed here covers only the named directions of its categories; a product
 // absent from this table keeps the whole category covered.
 const LK1_FREE_FIRST_EVENT_DIRECTION_SCOPES = Object.freeze({
-  // «Время на друзей» of the club.
-  "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze([5278]),
+  // «Время на друзей» and «Время на друзей (особый)» of the club.
+  "6b98e7e3-5bd3-4e94-9dc3-7723ea52513e": Object.freeze([5278, 5280]),
 });
 const lk1Fields = ["maxActiveBookings", "freeGameMinutesPerDay", "gameOverageDiscountPercent",
   "groupTrainingDiscountPercent", "tournamentDiscountPercent"];
