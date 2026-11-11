@@ -38,17 +38,26 @@ const lk1SafeCancelledUnpaidSuccessor = operation => {
     && (!previousId || (operation.rejoinPredecessor?.rootOperationId === identity.base
       && operation.rejoinPredecessor?.operationId === previousId));
 };
+const lk1HttpReleaseAllowsRejoin = operation => {
+  if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;
+  const identity = lk1HttpRejoinIdentity(operation.operationId);
+  const previous = lk1HttpRejoinPrevious(operation.operationId);
+  return identity && identity.generation < 1000
+    && typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)
+    && (!previous || (operation.rejoinPredecessor?.rootOperationId === identity.base
+      && operation.rejoinPredecessor?.operationId === previous));
+};
 if (ctx.step === "lk1_http_rejoin_predecessor_find") {
   const previousId = lk1HttpRejoinPrevious(ctx.operationId);
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
     || !lk1HttpRejoinRequest(ctx) || !previousId
     || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)
-    || !lk1SafeCancelledUnpaidSuccessor(msg.payload[0])) {
+    || !lk1HttpReleaseAllowsRejoin(msg.payload[0])) {
     return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
   }
   const previous = msg.payload[0];
   ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,
-    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease.proofId,
+    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey,
     releasedAt: previous.releasedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";

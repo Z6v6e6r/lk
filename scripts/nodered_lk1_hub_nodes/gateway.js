@@ -258,6 +258,7 @@ const lk1RejoinPreviousId = (id) => {
     ? (value.generation === 1 ? value.base : `${value.base}:rejoin:${value.generation - 1}`) : null;
 };
 const lk1ReleasedWithoutPayment = (operation) => {
+  if (typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)) return true;
   const presentId = value => typeof value === "string" && value.trim().length > 0;
   const bookingIds = [operation.bookingId, operation.upstreamBookingId].filter(value => value != null);
   return operation.state === "RELEASED" && operation.releaseSource === "GAME_LEAVE"
@@ -296,7 +297,76 @@ const lk1ReplayIdentityMatches = (ctx, operation, operationId = ctx.operationId)
 };
 // REJOIN_HELPERS_END
 
+// lk1Free* pure protocol is embedded from lib/lk1FreeCancellation.mjs.
+const lk1FreeServiceToken = () => {
+  try {
+    const token = toStr(readGlobal('vivacrm_access_token'));
+    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+    return typeof claims.exp === 'number' && claims.exp * 1000 > Date.now() + 60_000 ? token : null;
+  } catch (_) { return null; }
+};
+const lk1FreeApplyEffect = (ctx, effect) => {
+  if (effect.kind === 'reply') {
+    delete ctx.lk1FreeCancellation;
+    if (effect.status >= 400) return finishError(ctx, effect.status, effect.payload.message, effect.payload.details);
+    msg._subscriptionBooking = ctx; msg.statusCode = effect.status;
+    msg.headers = responseHeaders(); msg.payload = effect.payload;
+    return emit(OUTPUT_FINAL);
+  }
+  if (effect.kind === 'find') {
+    delete ctx.lk1FreeExpectedHttp;
+    return lk1Find(ctx, 'lk1_free_cancel_effect', effect.query);
+  }
+  if (effect.kind === 'update') {
+    delete ctx.lk1FreeExpectedHttp;
+    if (effect.change.$set?.phase === 'CANCEL_INTENT' && !lk1FreeServiceToken()) {
+      return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation, { error: true }));
+    }
+    ctx.step = 'lk1_free_cancel_effect'; msg._subscriptionBooking = ctx;
+    msg.payload = [effect.query, effect.change, effect.options]; delete msg.error;
+    return emit(OUTPUT_MONGO_UPDATE);
+  }
+  if (effect.kind === 'http') {
+    const token = lk1FreeServiceToken();
+    if (!token) return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation, { error: true }));
+    ctx.lk1FreeExpectedHttp = { method: effect.method, url: VIVA_API_BASE + effect.path };
+    return prepareHttp(ctx, 'lk1_free_cancel_effect', effect.method, VIVA_API_BASE + effect.path,
+      effect.body, { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' });
+  }
+  return lk1Stop(ctx, 'LK1_FREE_CANCEL_EFFECT_INVALID');
+};
+const lk1FreeStart = (ctx, verifyOnly = false) => {
+  const begun = lk1FreeBegin({ tenantKey: ctx.tenantKey, actorClientId: ctx.actorClientId,
+    bookingId: ctx.releaseBookingId, requestId: verifyOnly ? null : ctx.operationId, verifyOnly });
+  ctx.lk1FreeCancellation = begun.state;
+  return lk1FreeApplyEffect(ctx, begun.effect);
+};
+const lk1FreePrewriteGate = (ctx, continuation) => {
+  ctx.lk1FreeGateContinuation = continuation;
+  return lk1Find(ctx, 'lk1_free_cancel_booking_gate', { kind: 'LK1_FREE_CANCEL_JOB_V1',
+    tenantKey: ctx.tenantKey, clientSubscriptionId: normalizeId(ctx.clientSubscriptionId),
+    phase: { $in: lk1FreePending } });
+};
+
 // HUB_STEPS
+if (ctx.step === 'lk1_profile_continue' && ctx.action === 'cancel-free') return lk1FreeStart(ctx);
+if (ctx.step === 'lk1_free_cancel_effect') {
+  if (!ctx.lk1FreeCancellation) return lk1Stop(ctx, 'LK1_FREE_CANCEL_CONTEXT_MISSING');
+  const expected = ctx.lk1FreeExpectedHttp;
+  const provenanceError = expected && (msg.method !== expected.method || msg.url !== expected.url || msg.responseUrl !== expected.url);
+  delete ctx.lk1FreeExpectedHttp;
+  return lk1FreeApplyEffect(ctx, lk1FreeStep(ctx.lk1FreeCancellation,
+    { payload: msg.payload, status: msg.statusCode, error: !!msg.error || !!provenanceError }));
+}
+if (ctx.step === 'lk1_free_cancel_booking_gate') {
+  if (msg.error || !Array.isArray(msg.payload)) return lk1Stop(ctx, 'LK1_FREE_CANCEL_GATE_READ_UNAVAILABLE');
+  if (msg.payload.length) return finishError(ctx, 409,
+    'Дождитесь подтверждения возврата посещения по отменяемой записи.', { code: 'LK1_FREE_CANCEL_RETURN_PENDING' });
+  const continuation = ctx.lk1FreeGateContinuation;
+  delete ctx.lk1FreeGateContinuation; ctx.lk1FreeGateCleared = true;
+  return continuation === 'booking' ? prepareBookingCreate(ctx) : preparePreaccept(ctx);
+}
+
 // A stored attempt whose provider write was cleanly refused, or that never reached the
 // provider at all, is terminal and unambiguous. The request id is deterministic
 // (clientId|subscription|exercise), so without this reclaim a single refusal would make the
@@ -376,17 +446,26 @@ const lk1SafeCancelledUnpaidSuccessor = operation => {
     && (!previousId || (operation.rejoinPredecessor?.rootOperationId === identity.base
       && operation.rejoinPredecessor?.operationId === previousId));
 };
+const lk1HttpReleaseAllowsRejoin = operation => {
+  if (lk1SafeCancelledUnpaidSuccessor(operation)) return true;
+  const identity = lk1HttpRejoinIdentity(operation.operationId);
+  const previous = lk1HttpRejoinPrevious(operation.operationId);
+  return identity && identity.generation < 1000
+    && typeof lk1FreeReturnedOperation === "function" && lk1FreeReturnedOperation(operation)
+    && (!previous || (operation.rejoinPredecessor?.rootOperationId === identity.base
+      && operation.rejoinPredecessor?.operationId === previous));
+};
 if (ctx.step === "lk1_http_rejoin_predecessor_find") {
   const previousId = lk1HttpRejoinPrevious(ctx.operationId);
   if (msg.error || !Array.isArray(msg.payload) || msg.payload.length !== 1
     || !lk1HttpRejoinRequest(ctx) || !previousId
     || !lk1ReplayIdentityMatches(ctx, msg.payload[0], previousId)
-    || !lk1SafeCancelledUnpaidSuccessor(msg.payload[0])) {
+    || !lk1HttpReleaseAllowsRejoin(msg.payload[0])) {
     return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
   }
   const previous = msg.payload[0];
   ctx.lk1Rejoin = { operationId: previousId, rootOperationId: lk1HttpRejoinIdentity(ctx.operationId).base,
-    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease.proofId,
+    bookingId: previous.bookingId, releaseOperationId: previous.lk1.cancelledAllowanceRelease?.proofId || previous.lk1.freeCancellationReturn?.jobKey,
     releasedAt: previous.releasedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";
@@ -423,7 +502,7 @@ if (ctx.step === "lk1_ingress_operation_find") {
     }
     const quote = operation.lk1;
     if (operation.state === "RELEASED" && lk1HttpRejoinRequest(ctx)) {
-      if (!lk1SafeCancelledUnpaidSuccessor(operation)) return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
+      if (!lk1HttpReleaseAllowsRejoin(operation)) return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
       const identity = lk1HttpRejoinIdentity(ctx.operationId);
       return finishError(ctx, 409, "Предыдущая запись отменена. Обновите варианты и запишитесь снова.", {
         code: "SUBSCRIPTION_BOOKING_RELEASED", operationId: ctx.operationId,
@@ -649,7 +728,7 @@ if (ctx.step === "lk1_rejoin_predecessor_find") {
     return lk1Stop(ctx, "LK1_RELEASE_RECONCILIATION_REQUIRED");
   }
   const previous = msg.payload[0];
-  ctx.lk1Rejoin = { operationId: previousId, releaseOperationId: previous.releaseOperationId,
+  ctx.lk1Rejoin = { operationId: previousId, releaseOperationId: previous.releaseOperationId || previous.lk1?.freeCancellationReturn?.jobKey,
     bookingId: previous.releaseBookingId, releasedAt: previous.releasedAt };
   delete ctx.lk1IngressReplay;
   ctx.step = "lk1_profile_continue";

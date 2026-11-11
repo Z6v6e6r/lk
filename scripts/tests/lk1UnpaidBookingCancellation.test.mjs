@@ -143,6 +143,14 @@ test('scan cursors persist across restarts and reject cohort changes', async t =
   const restarted = await openLk1UnpaidScanCursor(config);
   assert.equal(restarted.afterId('UNCLAIMED'), 'lk1-product:later-page');
   assert.equal(restarted.afterId('INTENT'), 'lk1-product:pending-intent');
+  // An installed schema-1 cursor gains the free-cancellation phase without resetting older scans.
+  assert.equal(restarted.afterId('FREE'), null);
+  await restarted.advance('FREE', 'lk1-free-cancel-job:fixture');
+  const withFree = await openLk1UnpaidScanCursor(config);
+  assert.equal(withFree.afterId('FREE'), 'lk1-free-cancel-job:fixture');
+  assert.equal(withFree.afterId('INTENT'), 'lk1-product:pending-intent');
+  assert.equal(withFree.afterId('UNCLAIMED'), 'lk1-product:later-page');
+  await assert.rejects(withFree.advance('FREE', 'lk1-product:wrong-contour'), /SCAN_CURSOR_ADVANCE_INVALID/);
   await assert.rejects(openLk1UnpaidScanCursor({ ...config,
     cohortFrom: '2099-01-02T00:00:00.000Z' }), /SCAN_CURSOR_COHORT_DRIFT/);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
