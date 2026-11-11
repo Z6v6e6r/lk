@@ -34,6 +34,22 @@ if (ctx?.step === "lk1_tariff_required" && responseStatus === 200 && payload.sta
   return [msg, null];
 }
 if (ctx?.lk1) {
+  const capacity = ctx.lk1CapacityRefusal;
+  if (capacity?.persisted === true && ctx.step === "operation_fail"
+    && ctx.caller === "http" && ctx.action === "book" && ctx.managedAction === "BOOK_TOURNAMENT"
+    && capacity.binding === JSON.stringify([ctx.operationKey, ctx.operationId, ctx.actorClientId,
+      ctx.clientSubscriptionId, ctx.exerciseId, ctx.lk1.fingerprint])
+    && ctx.finalFailure?.statusCode === 409 && ctx.finalFailure.rawCode === "CONFLICT"
+    && ctx.finalFailure.message === "Нет свободных мест"
+    && responseStatus === 409 && payload.error === "Нет свободных мест"
+    && payload.details?.code === "CAPACITY_FULL") {
+    // Refresh the shared public cache as well as the browser's roster copy.
+    const epochKey = "lkTournamentParticipantEpochV1";
+    const epochs = global.get(epochKey) || {};
+    epochs[ctx.exerciseId] = Math.max(0, Number(epochs[ctx.exerciseId]) || 0) + 1;
+    global.set(epochKey, epochs);
+    return [null, msg];
+  }
   const split = msg._splitCtx;
   const ack = ctx.lk1CreateAck;
   if (ctx.caller === "split" && ctx.lk1BeforeCreate === true && ctx.step === "lk1_create_attempt_saved"

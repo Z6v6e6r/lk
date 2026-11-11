@@ -1,4 +1,5 @@
 import { readAuthToken } from "../../utils/authTokenStorage";
+import { isTournamentCapacityError } from "../../utils/tournamentCapacityError";
 import { canPayTournamentPending, tournamentPaymentSessionIdentity, clearTournamentPendingPayments as clearStoredPendingPayment, mergeTournamentPendingPayment, storeTournamentPendingPayment } from "../../utils/tournamentPendingPayment";
 import { AvatarImage } from "../UI/AvatarImage";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1188,7 +1189,14 @@ export default function TournamentSignupPage({
     if (cachedRoster && !options.force) return cachedRoster;
 
     const inFlight = publicRosterRequestsRef.current.get(normalizedExerciseId);
-    if (inFlight) return inFlight;
+    if (inFlight && !options.force) return inFlight;
+    if (inFlight) {
+      // An earlier GET may predate the refusal/cache invalidation. Wait for it,
+      // then fetch again; concurrent forced callers share the newer request.
+      await inFlight.catch(() => null);
+      const newerRequest = publicRosterRequestsRef.current.get(normalizedExerciseId);
+      if (newerRequest && newerRequest !== inFlight) return newerRequest;
+    }
 
     const requestPromise = apiFetchTournamentParticipants(normalizedExerciseId, {
       auth: false,
@@ -1546,6 +1554,12 @@ export default function TournamentSignupPage({
       });
       if (checkoutRequestIdRef.current !== requestId || tournamentPaymentSessionIdentity(paymentToken) !== tournamentPaymentSessionIdentity(readAuthToken())) return;
       if (result.error || !result.data) {
+        if (isTournamentCapacityError(result.error)) {
+          setError("Нет свободных мест");
+          setCheckout(null);
+          await loadPublicRoster(selectedExerciseId, { force: true }).catch(() => null);
+          return;
+        }
         if (result.status === 202 && subscriptionProductKey) {
           setError(null);
           setSubscriptionConfirmationNotice(
