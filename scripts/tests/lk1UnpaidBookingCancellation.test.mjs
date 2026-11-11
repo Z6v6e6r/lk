@@ -72,6 +72,33 @@ function fakeProvider(seed) {
 const run = (op, store, provider, mode = 'ENFORCE_NEW') => reconcileLk1UnpaidBooking({
   op, operations: store, provider, cohortFrom: cohort, mode, now: () => instant });
 
+test('Viva offsetless cancellationDate corroborates only explicit canceled state', async () => {
+  const { op, booking } = fixture();
+  const localDate = '2099-01-01T11:59:59.123456';
+  assert.equal(classifyLk1Booking(op, { ...booking, isCancelled: true,
+    cancellationDate: localDate }).reason, 'CANCELLED');
+  for (const change of [
+    { isCancelled: false }, { isCancelled: undefined }, { cancelled: false },
+    { status: 'ACTIVE' }, { cancellationDate: '2099-02-30T11:59:59' },
+    { cancellationDate: '2099-01-01T24:00:00' },
+    { cancellationDate: '2099-01-01T11:59' },
+    { cancellationDate: '2099-01-01T11:59:59.1234567890' },
+    { cancellationDate: null, cancelledAt: localDate },
+    { cancellationDate: null, canceledAt: localDate },
+    { paid: true }, { paymentStatus: 'PAID' },
+  ]) assert.notEqual(classifyLk1Booking(op, { ...booking, isCancelled: true,
+    cancellationDate: localDate, ...change }).reason, 'CANCELLED');
+  const seed = fixture(), store = fakeStore(seed.op), provider = fakeProvider(seed);
+  const cancel = provider.cancelBooking;
+  provider.cancelBooking = async () => { const result = await cancel();
+    provider.state.booking.cancellationDate = localDate; return result; };
+  assert.deepEqual(await run(seed.op, store, provider), { state: 'CANCELLED' });
+  assert.equal(provider.calls.filter(call => call === 'cancel').length, 1);
+  assert.equal(store.row.state, 'RELEASED');
+  assert.equal(classifyLk1Transaction(op, { ...seed.transaction,
+    paymentDueDate: localDate }, instant).reason, 'DEADLINE_INVALID');
+});
+
 test('only a post-cutoff LK1 money event with no visit debit is eligible', () => {
   const { op } = fixture();
   assert.equal(eligibleLk1UnpaidOperation(op, cohort, instant).reason, 'ELIGIBLE');

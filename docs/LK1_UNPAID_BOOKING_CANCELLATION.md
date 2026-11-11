@@ -24,6 +24,11 @@ An unqualified rejection, unknown outcome or processing/paid alias still blocks
 cancellation. The November 11 recovery rebinds the worker to the reviewed capacity
 generation; it does not activate a historical backlog by moving the service cutoff.
 
+Viva Admin can return a timezone-free `cancellationDate`. The booking classifier
+accepts its strict calendar/time syntax only as corroboration of explicit
+`isCancelled=true`; contradictory active aliases still block release. It does
+not infer a timezone or relax transaction deadlines.
+
 ## Operation and recovery
 
 `scripts/run_lk1_unpaid_booking_cancellation.mjs` is a long-running 120-second

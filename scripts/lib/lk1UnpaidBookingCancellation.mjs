@@ -168,7 +168,13 @@ export function classifyLk1Booking(op, booking) {
   const evidence = [...flags, ...statuses.map(value => ['CANCELLED', 'CANCELED'].includes(value))];
   for (const field of ['cancellationDate', 'cancelledAt', 'canceledAt']) {
     if (booking[field] !== undefined && booking[field] !== null && booking[field] !== '') {
-      if (iso(booking[field]) === null) return { reason: 'BOOKING_STATE_INVALID' };
+      // Admin Viva returns cancellationDate without a timezone. It is only
+      // corroborating metadata for an explicit canceled flag, never a deadline.
+      const localCancellationDate = field === 'cancellationDate'
+        && booking.isCancelled === true && typeof booking[field] === 'string'
+        && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?$/.test(booking[field])
+        && iso(`${booking[field]}Z`) !== null;
+      if (iso(booking[field]) === null && !localCancellationDate) return { reason: 'BOOKING_STATE_INVALID' };
       evidence.push(true);
     }
   }
