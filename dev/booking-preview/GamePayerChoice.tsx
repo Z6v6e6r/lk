@@ -17,6 +17,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
     : gameSubscriptionComparison(courtAmount, context);
   const residency = options.find(option => option.kind === 'residency');
   const boost = options.find(option => option.kind === 'boost' && option.mode !== 'unavailable');
+  const boostParent = settings.profile.subscription ? 'subscription' : settings.profile.residency ? 'residency' : null;
   const personalBase = courtAmount != null && Number.isFinite(courtAmount) && courtAmount > 0 ? Math.round(courtAmount * 100 / 4) / 100 : null;
   const price = (option: PaymentOption | undefined) => {
     if (personalBase == null) return 'Цена уточняется';
@@ -31,6 +32,10 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
           : 'С подходящей подпиской · дневной бесплатный лимит доступен';
   const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
     && option.amount > 0 && option.amount < personalBase;
+  const boostDetails = boost && <span className="matrix-quarter-boost" aria-label={boostParent === 'subscription' ? 'Буст к подписке' : 'Буст к Резидентству'}>
+    <span><b>{boost.amount === 0 ? 'С Бустом — бесплатно' : 'С Бустом'}</b><small>{boost.benefit === 'partial-hour' ? `${boost.freeMinutes} мин бесплатно · доплата за ${boost.paidMinutes} мин со скидкой 30%` : boost.benefit === 'discount' ? 'Бесплатный лимит недоступен · скидка 30%' : 'Дневной лимит Буста доступен'}</small></span>
+    <span className="matrix-quarter-price">{discount(boost) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(boost)}</strong></span>
+  </span>;
   return <fieldset className="matrix-game-payers">
     <legend>Кто оплачивает игру?</legend>
     <label className={`matrix-payer matrix-payer--personal ${value === 'split' ? 'is-selected' : ''}`}>
@@ -44,15 +49,13 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
           <span className={`matrix-quarter-row matrix-quarter-row--subscription ${subscription?.mode === 'unavailable' ? 'is-unavailable' : ''}`}>
             <span><b>По подписке</b><small>{personalBase == null ? 'Дождитесь расчёта стоимости корта' : subscriptionNote}</small></span>
             <span className="matrix-quarter-price">{discount(subscription) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(subscription)}</strong></span>
+            {boostParent === 'subscription' && boostDetails}
           </span>
           <span className="matrix-quarter-row matrix-quarter-row--residency">
             <span><b>С Резидентством</b><small>{settings.profile.residency ? 'Ваша скидка 30%' : 'Скидка 30% при наличии Резидентства'}</small></span>
             <span className="matrix-quarter-price">{discount(residency) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(residency)}</strong></span>
+            {boostParent === 'residency' && boostDetails}
           </span>
-          {boost && <span className="matrix-quarter-row matrix-quarter-row--boost">
-            <span><b>{boost.amount === 0 ? 'С Бустом — бесплатно' : 'С Бустом'}</b><small>{boost.benefit === 'partial-hour' ? `${boost.freeMinutes} мин бесплатно · доплата за ${boost.paidMinutes} мин со скидкой 30%` : boost.benefit === 'discount' ? 'Бесплатный лимит недоступен · скидка 30%' : 'Дневной лимит Буста доступен'}</small></span>
-            <span className="matrix-quarter-price">{discount(boost) && <del>{formatRubles(personalBase!)}</del>}<strong>{price(boost)}</strong></span>
-          </span>}
         </span>
       </span>
     </label>

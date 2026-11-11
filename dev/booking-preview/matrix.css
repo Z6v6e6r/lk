@@ -96,7 +96,9 @@
 .matrix-quarter-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 10px; border-radius: 9px; }
 .matrix-quarter-row--base { background: #f4f3f6; }
 .matrix-quarter-row--subscription { background: #f0f6e8; }
-.matrix-quarter-row--boost { background: #e9f5ee; }
+.matrix-quarter-boost { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; border-top: 1px solid #d7ded2; padding-top: 9px; margin-top: 2px; }
+.matrix-quarter-boost > span:first-child { display: grid; gap: 4px; min-width: 0; }
+.matrix-quarter-boost b { color: #34664a; }
 .matrix-option--boost { background: #edf8f0; }
 .matrix-icon--boost { color: #28734c; background: #d4eddd; }
 .matrix-option--boost.is-selected { border-color: #37815a; box-shadow: 0 0 0 1px #37815a; background: #e5f4e9; }
