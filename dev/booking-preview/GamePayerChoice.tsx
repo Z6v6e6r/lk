@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { buildGamePaymentOptions, formatRubles, readMatrixSettings, type PaymentOption } from './paymentMatrix';
 import { gameSubscriptionComparison } from './gameSubscriptionComparison';
-import { eligibleSubscriptionOffers, subscriptionOfferQuote } from './subscriptionOffers';
+import { recommendedSubscriptionChoice, subscriptionPurchaseChoices } from './subscriptionOffers';
 import './matrix.css';
 
 type Props = { value: 'self' | 'split'; onChange: (value: 'self' | 'split') => void; courtAmount: number | null; durationMinutes: number };
@@ -11,9 +11,9 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
   const settings = readMatrixSettings(new URLSearchParams(location.search));
   const options = buildGamePaymentOptions(courtAmount, 'quarter', settings.profile, settings.applicability, { ...settings, durationMinutes });
   const context = { ...settings, durationMinutes };
-  const cheapestSubscription = eligibleSubscriptionOffers('game', context)[0];
-  const subscription = !settings.profile.subscription && cheapestSubscription
-    ? subscriptionOfferQuote(cheapestSubscription, 'game', context, 'quarter', courtAmount)
+  const recommendedSubscription = recommendedSubscriptionChoice(subscriptionPurchaseChoices('game', context, 'quarter', courtAmount));
+  const subscription = !settings.profile.subscription && recommendedSubscription
+    ? recommendedSubscription.option
     : gameSubscriptionComparison(courtAmount, context);
   const residency = options.find(option => option.kind === 'residency');
   const boost = options.find(option => option.kind === 'boost' && option.mode !== 'unavailable');
@@ -31,7 +31,7 @@ export function GamePayerChoice({ value, onChange, courtAmount, durationMinutes 
     : subscription?.mode === 'unavailable' ? 'Тариф не подходит к этому событию'
       : subscription?.benefit === 'partial-hour' ? `${subscription.freeMinutes} мин бесплатно · доплата за ${subscription.paidMinutes} мин${subscription.overtimeDiscount ? ' со скидкой 30%' : ''}`
         : subscription?.benefit === 'discount' ? `Скидка 30%${settings.activeLimitExceeded ? ' · больше 8 активных записей' : ' · дневной лимит использован'}`
-          : 'С подходящей подпиской · дневной бесплатный лимит доступен';
+          : !settings.profile.subscription && recommendedSubscription ? `При оформлении ${recommendedSubscription.offer.name} · дневной бесплатный лимит доступен` : 'С подходящей подпиской · дневной бесплатный лимит доступен';
   const discount = (option: PaymentOption | undefined) => personalBase != null && option?.amount != null
     && option.amount > 0 && option.amount < personalBase;
   const boostNote = boost?.benefit === 'partial-hour' ? `${boost.freeMinutes} мин бесплатно · доплата за ${boost.paidMinutes} мин со скидкой 30%` : boost?.benefit === 'discount' ? 'Бесплатный лимит недоступен · скидка 30%' : 'Дневной лимит Буста доступен';

@@ -49,9 +49,17 @@
 .matrix-information { font: 14px/1.6 system-ui, sans-serif; padding: 12px 4px; color: #44374e; }
 .matrix-information h3 { font-size: 20px; margin: 0 0 14px; color: #2c2036; }
 .matrix-information-note { font-size: 12px; color: #95889f; }
-.matrix-product-plan { display: grid; gap: 6px; margin: 12px 0; }
-.matrix-product-plan select { width: 100%; min-width: 0; padding: 10px; border: 1px solid #d9d0e5; border-radius: 8px; background: #fff; color: inherit; font: inherit; }
-.matrix-product-plan select:focus-visible { outline: 3px solid #ab88f5; outline-offset: 2px; }
+.matrix-subscription-plans { display: grid; gap: 10px; min-width: 0; padding: 0; margin: 16px 0; border: 0; }
+.matrix-subscription-plans legend { padding: 0 0 10px; font-weight: 650; }
+.matrix-subscription-plan { display: grid; grid-template-columns: 16px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 1px solid #e1d9eb; border-radius: 12px; padding: 12px 10px; cursor: pointer; background: #fff; }
+.matrix-subscription-plan.is-selected { border-color: #8755ee; box-shadow: 0 0 0 1px #8755ee; background: #f5f0fe; }
+.matrix-subscription-plan input { width: 16px; height: 16px; margin: 0; accent-color: #7442eb; }
+.matrix-subscription-plan-copy, .matrix-subscription-plan-total { display: grid; gap: 3px; min-width: 0; }
+.matrix-subscription-plan-copy strong { font-size: 14px; }
+.matrix-subscription-plan-copy > span, .matrix-subscription-plan-total > span { font-size: 11px; color: #82788e; line-height: 1.4; }
+.matrix-subscription-plan-total { text-align: right; }
+.matrix-subscription-plan-total strong { font-size: 13px; white-space: nowrap; }
+.matrix-subscription-plan:has(input:focus-visible) { outline: 3px solid #ab88f5; outline-offset: 3px; }
 .matrix-order-lines { display: grid; gap: 12px; margin: 18px 0; }
 .matrix-order-lines > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .matrix-order-lines dt { min-width: 0; }

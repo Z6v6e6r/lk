@@ -4,7 +4,7 @@ import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
 import { ENERGY_PASS_PRICE, bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, type PreviewOrder } from './bookingCheckout';
-import { eligibleSubscriptionOffers, subscriptionOfferQuote, type SubscriptionOffer } from './subscriptionOffers';
+import { recommendedSubscriptionChoice, subscriptionPurchaseChoices, type SubscriptionOffer } from './subscriptionOffers';
 import './matrix.css';
 
 function PaymentIcon({ kind }: { kind: PaymentKind }) {
@@ -39,11 +39,14 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const paymentContext = { ...settings, subscriptionPlan: purchasedSubscription?.plan || settings.subscriptionPlan, excludedGroups: excludedGroup, durationMinutes: duration };
   const isWholeCourt = service === 'game' && gamePaymentScope === 'court';
   const isPersonalGame = service === 'game' && gamePaymentScope === 'quarter';
-  const subscriptionOffers = eligibleSubscriptionOffers(service, paymentContext);
-  const cheapestSubscription = subscriptionOffers[0];
-  const cheapestSubscriptionQuote = cheapestSubscription && subscriptionOfferQuote(cheapestSubscription, service, paymentContext, gamePaymentScope, courtAmount);
+  const subscriptionChoices = subscriptionPurchaseChoices(service, paymentContext, gamePaymentScope, courtAmount);
+  const recommendedSubscription = recommendedSubscriptionChoice(subscriptionChoices);
+  const [purchaseSubscriptionId, setPurchaseSubscriptionId] = useState(recommendedSubscription?.offer.id || '');
+  const purchaseSubscriptionChoice = subscriptionChoices.find(choice => choice.offer.id === purchaseSubscriptionId) || recommendedSubscription;
+  const purchaseSubscription = purchaseSubscriptionChoice?.offer;
+  const subscriptionPurchaseOption = purchaseSubscriptionChoice?.option;
   const paymentOptions = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
-    .flatMap(option => option.kind === 'subscription' && !profile.subscription ? cheapestSubscriptionQuote ? [cheapestSubscriptionQuote] : [] : [option]);
+    .flatMap(option => option.kind === 'subscription' && !profile.subscription ? subscriptionPurchaseOption ? [subscriptionPurchaseOption] : [] : [option]);
   const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
   const available = options.filter(isSelectableMethod);
   const defaultChoice = defaultPaymentOption(options);
@@ -54,7 +57,6 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const [checkoutSubscription, setCheckoutSubscription] = useState<SubscriptionOffer | null>(null);
   const [paidOrder, setPaidOrder] = useState<PreviewOrder | null>(null);
   const [purchase, setPurchase] = useState<'subscription' | 'pass' | null>(null);
-  const [purchaseSubscriptionId, setPurchaseSubscriptionId] = useState(cheapestSubscription?.id || '');
   const [loginOpen, setLoginOpen] = useState(false);
   const [registered, setRegistered] = useState(params.get('state') === 'registered');
   const [busy, setBusy] = useState(false);
@@ -69,10 +71,8 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const displayResidencyAmount = options.find(option => option.kind === 'residency')?.amount ?? price.residentPrice;
   const referenceAmount = options.find(option => option.kind === 'full')?.amount ?? null;
   const purchaseOption = options.find(option => option.kind === purchase);
-  const purchaseSubscription = subscriptionOffers.find(offer => offer.id === purchaseSubscriptionId) || cheapestSubscription;
-  const subscriptionPurchaseOption = purchaseSubscription && subscriptionOfferQuote(purchaseSubscription, service, paymentContext, gamePaymentScope, courtAmount);
   const subscriptionOrder = subscriptionPurchaseOption && purchaseSubscription ? createPreviewOrder(subscriptionPurchaseOption, null, purchaseSubscription.price) : null;
-  const openPurchase = (kind: 'subscription' | 'pass') => { setPurchaseSubscriptionId(cheapestSubscription?.id || ''); setPurchase(kind); };
+  const openPurchase = (kind: 'subscription' | 'pass') => setPurchase(kind);
   const startCheckout = (order: PreviewOrder, option: PaymentOption, subscription: SubscriptionOffer | null = null) => {
     setCheckout(order); setCheckoutOption(option); setCheckoutSubscription(subscription);
   };
@@ -83,6 +83,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
     if (isPersonalGame && profile.subscription && option.kind === 'subscription' && option.mode === 'book') return 'Моя доля · по подписке';
     if (option.kind !== 'subscription') return optionNames[option.kind];
+    if (option.mode === 'offer' && option.amount === 0) return 'По подписке — бесплатно';
     if (option.benefit === 'free-event') return `По подписке ${option.subscriptionPlan === 'friendship-2' ? 'Дружба 2.0' : 'РА'} — бесплатно`;
     if (option.benefit === 'discount') return `По подписке · скидка ${price.discount}%`;
     if (option.benefit === 'partial-hour') return `По подписке · ${option.freeMinutes} минут бесплатно`;
@@ -98,9 +99,9 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.reason === 'unknown-duration') return 'Нужно уточнить длительность события';
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
     if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
-    if (option.kind === 'residency') return `Скидка ${price.discount}%${option.mode === 'offer' ? ' · можно оформить Резидентство' : ' · Резидентство уже действует'}`;
+    if (option.kind === 'residency') return option.mode === 'offer' ? `Скидка ${price.discount}% при оформлении Резидентства` : `Скидка ${price.discount}% · Резидентство уже действует`;
     if (option.kind === 'subscription' || option.kind === 'boost') {
-      const prefix = option.mode === 'offer' ? 'Если оформить подходящий тариф. ' : '';
+      const prefix = option.mode === 'offer' ? `При оформлении подписки ${purchaseSubscription?.name || 'подходящего тарифа'}. ` : '';
       const source = option.kind === 'boost' ? 'Буст' : option.subscriptionPlan === 'friendship-2' ? 'Дружбу 2.0' : 'РА';
       if (option.benefit === 'free-event') return `${prefix}Занятие входит в ${source} · без доплаты за участие${paymentContext.proDirection ? ' · ПРО: 1 событие в день' : ''}`;
       if (option.benefit === 'discount') return `${prefix}${option.reason === 'active-limit' ? 'Больше 8 активных записей. ' : paymentContext.dailyQuota === 'used' ? 'Дневной бесплатный лимит использован. ' : ''}Скидка ${price.discount}% на запись`;
@@ -211,8 +212,15 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
         <p>{price.name} · {duration} мин{isPersonalGame ? ' · моя доля ¼' : ''}</p>
         {purchase === 'pass' ? <><p>Пакет из 5 тренировок. Первая используется для этой записи, останется 4.</p><p><strong>К оплате: {formatRubles(ENERGY_PASS_PRICE)}</strong><br />Запись включена в стоимость абонемента.</p>
           <button type="button" className="matrix-confirm" disabled={locked || purchaseOption?.mode !== 'offer'} onClick={() => void confirmPassPurchase()}>{busy ? 'Оформляем…' : isAuthenticated ? `Добавить Энергию 5 за ${formatRubles(ENERGY_PASS_PRICE)}` : 'Войти для оформления'}</button></>
-          : <><label className="matrix-product-plan">Подходящая подписка<select value={purchaseSubscription?.id || ''} onChange={event => setPurchaseSubscriptionId(event.target.value)}>{subscriptionOffers.map(offer => <option key={offer.id} value={offer.id}>{offer.name} — {formatRubles(offer.price)}</option>)}</select></label>
-            <p>Сначала выбрана минимальная стоимость среди подходящих подписок.</p>{subscriptionPurchaseOption && <p>{detail(subscriptionPurchaseOption)}</p>}
+          : <><fieldset className="matrix-subscription-plans"><legend>Выберите подписку</legend>{subscriptionChoices.map(({ offer, option }) => {
+            const order = createPreviewOrder(option, null, offer.price);
+            return <label key={offer.id} className={`matrix-subscription-plan ${purchaseSubscription?.id === offer.id ? 'is-selected' : ''}`}>
+              <input type="radio" name={`${groupId}-subscription`} value={offer.id} checked={purchaseSubscription?.id === offer.id} onChange={() => setPurchaseSubscriptionId(offer.id)} disabled={locked} />
+              <span className="matrix-subscription-plan-copy"><strong>{offer.name}</strong><span>Подписка: {formatRubles(offer.price)}</span><span>{option.amount === 0 ? 'Участие бесплатно' : option.amount != null ? option.benefit === 'partial-hour' ? `${option.freeMinutes} мин бесплатно · ${option.paidMinutes} мин: ${formatRubles(option.amount)}` : `Доплата за участие: ${formatRubles(option.amount)}` : 'Стоимость участия уточняется'}</span></span>
+              <span className="matrix-subscription-plan-total"><span>Итого</span><strong>{order ? formatRubles(order.total) : 'Нужен расчёт'}</strong></span>
+            </label>;
+          })}</fieldset>
+            <p className="matrix-information-note">Бесплатное участие зависит от выбранного тарифа.</p>
             <dl className="matrix-order-lines"><div><dt>Участие</dt><dd>{subscriptionPurchaseOption ? amount(subscriptionPurchaseOption) : 'Нужен расчёт'}</dd></div>
               <div><dt>Подписка {purchaseSubscription?.name}</dt><dd>{purchaseSubscription ? formatRubles(purchaseSubscription.price) : 'Цена уточняется'}</dd></div>
               {subscriptionOrder && <div className="matrix-order-total"><dt>Итого</dt><dd>{formatRubles(subscriptionOrder.total)}</dd></div>}</dl>

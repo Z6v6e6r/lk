@@ -24,3 +24,16 @@ export function subscriptionOfferQuote(offer: SubscriptionOffer, service: Servic
   return buildBookingPaymentOptions(service, { residency: false, subscription: false, pass: false }, { subscription: true, pass: false },
     { ...context, subscriptionPlan: offer.plan }, gameScope, courtAmount).find(option => option.kind === 'subscription' && option.mode === 'offer');
 }
+
+export function subscriptionPurchaseChoices(service: ServiceKind, context: Partial<PaymentContext>, gameScope?: GamePaymentScope, courtAmount: number | null = null, offers = SUBSCRIPTION_OFFERS) {
+  return eligibleSubscriptionOffers(service, context, offers).flatMap(offer => {
+    const option = subscriptionOfferQuote(offer, service, context, gameScope, courtAmount);
+    return option ? [{ offer, option }] : [];
+  });
+}
+
+// Prefer the least expensive plan that includes participation in full. A paid
+// copay remains visible when no eligible plan can cover the selected event.
+export function recommendedSubscriptionChoice(choices: ReturnType<typeof subscriptionPurchaseChoices>) {
+  return choices.find(choice => choice.option.amount === 0) || choices[0];
+}
