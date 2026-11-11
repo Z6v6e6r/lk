@@ -1,7 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription } from './bookingCheckout.ts';
+import { bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, readMatrixSettings, type PaymentOption } from './paymentMatrix.ts';
+
+test('residency is preselected for every profile and subscription plan, including purchase offers', () => {
+  for (const profile of PRIVILEGE_PROFILES) for (const subscriptionPlan of ['friendship', 'friendship-2', 'ra'] as const) {
+    for (const service of ['game', 'training', 'tournament'] as const) {
+      const options = buildBookingPaymentOptions(service, profile, { subscription: true, pass: true },
+        { subscriptionPlan, durationMinutes: 90, boost: true }, service === 'game' ? 'quarter' : undefined, 6000);
+      const choice = defaultPaymentOption(service === 'game' ? withPersonalSubscription(options, profile.subscription) : options)!;
+      assert.equal(choice.kind, 'residency');
+      assert.equal(choice.mode, profile.residency ? 'book' : 'offer');
+    }
+  }
+});
+
+test('default selection skips unavailable residency and retains safe fallbacks', () => {
+  const full: PaymentOption = { kind: 'full', mode: 'book', amount: 8000 };
+  for (const mode of ['unavailable', 'quote', 'reference'] as const) {
+    assert.equal(defaultPaymentOption([{ kind: 'residency', mode, amount: null }, full]), full);
+  }
+  assert.equal(defaultPaymentOption([]), undefined);
+  const excluded = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[0], { subscription: true, pass: false }, { excludedGroups: true });
+  assert.equal(defaultPaymentOption(excluded)?.kind, 'full');
+  const pro = buildBookingPaymentOptions('tournament', PRIVILEGE_PROFILES[0], { subscription: true, pass: false }, { subscriptionPlan: 'friendship', proDirection: true });
+  assert.equal(defaultPaymentOption(pro)?.kind, 'full');
+  const court = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[7], { subscription: true, pass: true }, {}, 'court', 8000);
+  assert.deepEqual(defaultPaymentOption(court), full);
+});
 
 test('selecting an unowned residency is possible and uses the event discount on the primary button', () => {
   const options = buildBookingPaymentOptions('training', PRIVILEGE_PROFILES[0], { subscription: false, pass: false });

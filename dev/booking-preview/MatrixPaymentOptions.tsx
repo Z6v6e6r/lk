@@ -3,7 +3,7 @@ import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
-import { ENERGY_PASS_PRICE, bookingButtonText, createPreviewOrder, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, type PreviewOrder } from './bookingCheckout';
+import { ENERGY_PASS_PRICE, bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, type PreviewOrder } from './bookingCheckout';
 import { eligibleSubscriptionOffers, subscriptionOfferQuote, type SubscriptionOffer } from './subscriptionOffers';
 import './matrix.css';
 
@@ -46,7 +46,8 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     .flatMap(option => option.kind === 'subscription' && !profile.subscription ? cheapestSubscriptionQuote ? [cheapestSubscriptionQuote] : [] : [option]);
   const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
   const available = options.filter(isSelectableMethod);
-  const [selected, setSelected] = useState<PaymentKind>(available[0]?.kind || 'full');
+  const defaultChoice = defaultPaymentOption(options);
+  const [selected, setSelected] = useState<PaymentKind>(defaultChoice?.kind || 'full');
   const [residencyOfferOpen, setResidencyOfferOpen] = useState(false);
   const [checkout, setCheckout] = useState<PreviewOrder | null>(null);
   const [checkoutOption, setCheckoutOption] = useState<PaymentOption | null>(null);
@@ -62,7 +63,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const groupId = useId();
   const price = SERVICES[service];
   const full = params.get('state') === 'full';
-  const choice = available.find(option => option.kind === selected) || available[0];
+  const choice = available.find(option => option.kind === selected) || defaultChoice;
   const locked = disabled || full || busy;
   const displayBaseAmount = options.find(option => option.kind === 'full')?.amount ?? price.price;
   const displayResidencyAmount = options.find(option => option.kind === 'residency')?.amount ?? price.residentPrice;

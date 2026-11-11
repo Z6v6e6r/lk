@@ -8,6 +8,10 @@ export function isSelectableMethod(option: PaymentOption) {
   return option.mode === 'book' || option.mode === 'offer';
 }
 
+export function defaultPaymentOption(options: PaymentOption[]): PaymentOption | undefined {
+  return options.find(option => option.kind === 'residency' && isSelectableMethod(option)) || options.find(isSelectableMethod);
+}
+
 // Keep the actual subscription method (and its quote) behind the personal-share
 // row. The full quarter remains only a crossed-out price reference.
 export function withPersonalSubscription(options: PaymentOption[], hasSubscription: boolean): PaymentOption[] {
