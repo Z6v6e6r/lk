@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
 import { withRatingDataLock } from '../lib/ratingDataLock.mjs';
 const linux = process.platform === 'linux';
-const watchdog = new URL('../../deploy/rating-worker/run-with-watchdog.sh',import.meta.url).pathname;
+const watchdog = fileURLToPath(new URL('../../deploy/rating-worker/run-with-watchdog.sh',import.meta.url));
 const helper = new URL('../lib/ratingDataLock.mjs',import.meta.url).href;
 const probe = lock => spawnSync('flock',['-n',lock,'true']).status;
 
