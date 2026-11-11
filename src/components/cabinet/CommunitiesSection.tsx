@@ -1666,13 +1666,18 @@ export function CommunitiesSection({
     eventRecoveryRef.current = value; updateEventRecovery(value);
   }, []);
   const setEventJoin = useCallback((value: EventJoinForm | null) => {
+    const pending = eventRegistrationPendingRef.current;
+    if (pending?.profileKey === eventProfileRef.current) {
+      setEventRecovery(eventRecoveryRef.current?.profileKey === pending.profileKey ? eventRecoveryRef.current : {profileKey: pending.profileKey});
+      if (value) return;
+    }
     if (value && eventRecoveryRef.current?.profileKey === eventProfileRef.current) {
       updateEventRecovery(eventRecoveryRef.current); return;
     }
     eventJoinGenerationRef.current++;
     const next = value ? {...value, profileKey: eventProfileRef.current} : null;
     eventJoinRef.current = next; updateEventJoin(next);
-  }, []);
+  }, [setEventRecovery]);
   useEffect(() => {
     setEventJoin(null); setEventRecovery(null); setJoiningCommunityId(null); setInviteSubmitting(false);
   }, [eventProfileKey, setEventJoin, setEventRecovery]);
@@ -3828,7 +3833,7 @@ export function CommunitiesSection({
   const handleEventRegistration = async (registration: EventRegistration): Promise<string | null> => {
     const form = eventJoin;
     const valid = () => !!form && eventJoinRef.current === form && eventProfileRef.current === form.profileKey;
-    if (!form || !valid() || eventRecoveryRef.current?.profileKey === form.profileKey || eventRegistrationPendingRef.current === form) return 'Откройте актуальную анкету заново.';
+    if (!form || !valid() || eventRecoveryRef.current?.profileKey === form.profileKey || eventRegistrationPendingRef.current?.profileKey === form.profileKey) return 'Откройте актуальную анкету заново.';
     eventRegistrationPendingRef.current = form;
     const reconcile = (message: string) => {
       setEventJoin(null); setEventRecovery({profileKey: form.profileKey}); setAccessMessage(message);
@@ -3838,7 +3843,11 @@ export function CommunitiesSection({
       const response = form.community
         ? await apiAddCommunityMember(form.community.id, {member: currentMember, eventRegistration: registration})
         : await apiJoinCommunityByInvite({inviteCode: form.inviteCode, inviteLink: form.inviteLink, member: currentMember, eventRegistration: registration}, {allowFallback:false});
-      if (!valid()) return 'Форма изменилась. Откройте актуальную анкету заново.';
+      if (eventRegistrationPendingRef.current === form) eventRegistrationPendingRef.current = null;
+      if (!valid()) {
+        if (eventProfileRef.current === form.profileKey) setEventRecovery({profileKey: form.profileKey});
+        return 'Форма изменилась. Сначала проверьте статус анкеты.';
+      }
       if (response.error) {
         const freshNotice = response.data?.eventNotice;
         if (response.status === 422 && freshNotice) {
@@ -3858,8 +3867,10 @@ export function CommunitiesSection({
       setAccessMessage(response.data.message || 'Анкета сохранена.');
       return null;
     } catch {
+      if (eventRegistrationPendingRef.current === form) eventRegistrationPendingRef.current = null;
       if (valid()) return reconcile('Сохранение анкеты не подтверждено. Сначала проверьте статус; повторно анкету не отправляем.');
-      return 'Форма изменилась. Откройте актуальную анкету заново.';
+      if (eventProfileRef.current === form.profileKey) setEventRecovery({profileKey: form.profileKey});
+      return 'Форма изменилась. Сначала проверьте статус анкеты.';
     } finally {
       if (eventRegistrationPendingRef.current === form) eventRegistrationPendingRef.current = null;
     }
@@ -3868,6 +3879,7 @@ export function CommunitiesSection({
   const handleEventRegistrationStatus = async () => {
     const recovery = eventRecoveryRef.current;
     if (!recovery || recovery.profileKey !== eventProfileRef.current) return;
+    if (eventRegistrationPendingRef.current?.profileKey === recovery.profileKey) { setAccessMessage('Ожидаем ответ на отправленную анкету. После завершения запроса проверьте статус.'); return; }
     try {
       const response = await apiFetchCommunities({clientId: currentMember.id, phone: currentMember.phone, view: 'summary', forceFresh: true});
       if (eventRecoveryRef.current !== recovery || eventProfileRef.current !== recovery.profileKey) return;

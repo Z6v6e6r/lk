@@ -14,7 +14,7 @@ function load(name, bindings) {
 const policy = { version: 'event-registration-v1', responsibleName: 'Synthetic Organizer A', contactEmail: ['organizer', 'example.invalid'].join('@'), startsAt: '2026-11-11T21:00:00.000Z', endsAt: '2026-11-13T21:00:00.000Z', retentionYears: 1 };
 const notice = { policy, revision: 1, retentionMode: 'submitted-year-v1' };
 const registration = { fullName: 'Synthetic Participant', company: 'Synthetic Company', email: ['participant', 'example.invalid'].join('@'), policyRevision: 1, retentionMode: 'submitted-year-v1' };
-function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
+function deferred() { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
 function harness(result, readResult = { data: { communities: [] }, error: null }) {
   let state = { community: { id: 'synthetic-community-a' }, notice, profileKey: 'synthetic-profile' }, applied = 0;
   const origin = state, requests = [], reads = [], selected = [], messages = [];
@@ -118,7 +118,7 @@ test('the actual form setter invalidates a cancelled form synchronously and keep
   const code = transformSync(source.slice(start, end), { loader: 'tsx' }).code;
   const eventJoinRef = { current: null }, eventRecoveryRef = { current: null }, eventProfileRef = { current: 'synthetic-profile' }, eventJoinGenerationRef = { current: 0 };
   let visible, shownRecovery;
-  const bindings = { useCallback: fn => fn, eventJoinRef, eventRecoveryRef, eventProfileRef, eventJoinGenerationRef, updateEventJoin: value => { visible = value; }, updateEventRecovery: value => { shownRecovery = value; } };
+  const bindings = { useCallback: fn => fn, eventJoinRef, eventRecoveryRef, eventProfileRef, eventJoinGenerationRef, eventRegistrationPendingRef: {current:null}, setEventRecovery: value => {eventRecoveryRef.current=value;shownRecovery=value;}, updateEventJoin: value => { visible = value; }, updateEventRecovery: value => { shownRecovery = value; } };
   const set = new Function(...Object.keys(bindings), code + '\nreturn setEventJoin;')(...Object.values(bindings));
   set({ community: { id: 'synthetic-community-a' }, notice });
   assert.equal(eventJoinRef.current, visible);
@@ -161,3 +161,51 @@ test('rapid duplicate submits share the pending-form guard', async () => {
   pending.resolve({ status: 422, error: { message: 'EVENT_REGISTRATION_REQUIRED' }, data: { eventNotice: notice } });
   await first;
 });
+
+function actualController() {
+  const pending = deferred();
+  let state = {community:{id:'synthetic-community-a'},notice,profileKey:'synthetic-profile'}, mutations=0, reads=0;
+  const eventJoinRef={current:state}, eventRecoveryRef={current:null}, eventProfileRef={current:'synthetic-profile'}, eventJoinGenerationRef={current:0}, eventRegistrationPendingRef={current:null};
+  const bindings={useCallback:fn=>fn,eventJoinRef,eventRecoveryRef,eventProfileRef,eventJoinGenerationRef,eventRegistrationPendingRef,currentMember:{id:'synthetic-player'},
+    updateEventJoin:value=>{state=value;},updateEventRecovery(){},setEventRecovery:value=>{eventRecoveryRef.current=value;},
+    setAccessMessage(){},setJoiningCommunityId(){},setDetailError(){},applyActionResponse(){},setFocusedCommunityId(){},setSelectedCommunityId(){},setIsInviteOpen(){},setInviteValue(){},
+    redirectToInviteCabinet:()=>false,communityErrorMessage:()=>'',
+    apiAddCommunityMember:async(id,payload)=>{
+      if(!payload.eventRegistration)return{status:422,error:{message:'EVENT_REGISTRATION_REQUIRED'},data:{eventNotice:notice}};
+      mutations++;return mutations===1?pending.promise:{status:503,error:{message:'UNAVAILABLE'}};
+    },
+    apiFetchCommunities:async()=>{reads++;return{data:{communities:[]},error:null};},
+  };
+  const start=source.indexOf('  const setEventJoin ='),end=source.indexOf('\n  useEffect(',start);
+  const setter=transformSync(source.slice(start,end),{loader:'tsx'}).code;
+  bindings.setEventJoin=new Function(...Object.keys(bindings),setter+'\nreturn setEventJoin;')(...Object.values(bindings));
+  return{pending,state:()=>state,mutations:()=>mutations,reads:()=>reads,
+    submit:()=>load('handleEventRegistration',{...bindings,eventJoin:state})(registration),
+    close:()=>{bindings.setEventJoin(null);bindings.updateEventRecovery(null);},
+    open:()=>load('handleJoinOpenCommunity',bindings)({id:'synthetic-community-a'}),
+    status:()=>load('handleEventRegistrationStatus',bindings)(),
+  };
+}
+
+for(const exception of [false,true]){
+  test('actual dismissal during a pending questionnaire retains GET-first recovery after '+(exception?'late exception':'late 503'),async()=>{
+    const h=actualController(),request=h.submit();
+    h.close();
+    await h.status();
+    assert.equal(h.reads(),0,'a read before the outstanding write settles cannot reconcile it');
+    if(exception)h.pending.reject(new Error('SYNTHETIC_NETWORK_FAILURE'));
+    else h.pending.resolve({status:503,error:{message:'UNAVAILABLE'}});
+    await request;
+    await h.open();
+    assert.equal(h.state(),null,'dismissing the UI must not permit a fresh PII form');
+    await h.submit();
+    assert.equal(h.mutations(),1);
+    assert.equal(h.reads(),0);
+    await h.status();
+    assert.equal(h.reads(),1);
+    await h.open();
+    assert.ok(h.state()?.notice);
+    await h.submit();
+    assert.equal(h.mutations(),2,'a new explicit submission is allowed only after the fresh read');
+  });
+}
