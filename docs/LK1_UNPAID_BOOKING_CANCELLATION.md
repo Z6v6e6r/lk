@@ -177,9 +177,14 @@ changes; payment classifier/worker logic and its prior acceptance stay unchanged
 Rollback restores exact settings/env/current and rebinds the guard; after the old
 session expires it cannot promise ENFORCE and must leave the worker stopped if
 service authentication is unavailable.
-The current
-reviewed full-flow SHA is
-`3d454ddace61985d4a1d6d92790fcfd25aa7ac8f26911c145c50bd83394e8383`.
+The worker for the coordinated Friendship-special/residency release pins full-flow
+`9260954f988dd396c0b22f3dbe792a2b45e5244c2e07c9485cca76b555a80fc6` and gateway
+`bca5774dc55b6a0d4eb271496a0c14b8b5aea2c80d7c1f94a67eb3771f3bbd89`.
+Build/install this clean pushed bundle together with that reviewed flow; the old
+bundle remains paired with source flow `3d454ddace61985d4a1d6d92790fcfd25aa7ac8f26911c145c50bd83394e8383` for rollback.
+Stop the existing worker and wait for exit before switching either side. Preserve
+its prior mode, cohort, cursor, binding and protected token. This coordinated
+source-only pin refresh does not authorize a new cohort or mode activation.
 
 The unit defaults to `OFF`. Activate `SHADOW` with a root-owned mode-0600
 `/etc/padlhub/lk1-unpaid-cancel.env` containing only mode, tenant, and a fresh

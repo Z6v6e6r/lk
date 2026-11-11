@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import {LK1_UNPAID_FLOW_SHA256,LK1_UNPAID_GATEWAY_SHA256} from '../lib/lk1LiveGatewayGuard.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import {execFileSync} from 'node:child_process';
@@ -231,6 +233,8 @@ test('installed candidate isolates residency401 in both subscription orders and 
 test('exact live candidate changes only four func fields and keeps all historical pins', {skip:!fixture},()=>{
   const bytes=fs.readFileSync(fixture),before=JSON.parse(bytes);const packet=composeFriendshipSpecialArtifacts(bytes);
   const after=JSON.parse(packet.candidateBytes);assert.equal(after.length,before.length);
+  assert.equal(packet.candidateSha256,LK1_UNPAID_FLOW_SHA256);
+  assert.equal(crypto.createHash('sha256').update(after.find(n=>n.id===FRIENDSHIP_SPECIAL_TARGETS.gateway.id).func).digest('hex'),LK1_UNPAID_GATEWAY_SHA256);
   const changed=[];
   for(let i=0;i<before.length;i++)if(JSON.stringify(before[i])!==JSON.stringify(after[i])){
     changed.push(before[i].id);assert.deepEqual({...after[i],func:before[i].func},before[i]);
