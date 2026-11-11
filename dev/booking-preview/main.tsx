@@ -2,6 +2,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useState } from 'react';
 import './preview.css';
 import { PRIVILEGE_PROFILES, readMatrixSettings } from './paymentMatrix';
+import { PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
 
 const screens = [
   ['game-booking', 'Игра', 'Выбор станции, корта и времени'],
@@ -32,7 +33,8 @@ function Preview() {
   const [subscriptionPlan, setSubscriptionPlan] = useState<string>(matrix.subscriptionPlan);
   const [dailyQuota, setDailyQuota] = useState<string>(matrix.dailyQuota);
   const [excludedGroups, setExcludedGroups] = useState(matrix.excludedGroups);
-  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota, groupCategory: excludedGroups ? 'excluded' : 'standard' });
+  const [residencyPrice, setResidencyPrice] = useState(params.get('residencyPrice') ?? String(PREVIEW_RESIDENCY_PRICE));
+  const query = new URLSearchParams({ screen, state, width, privileges, subscriptionFits: subscriptionFits ? '1' : '0', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota, groupCategory: excludedGroups ? 'excluded' : 'standard', residencyPrice });
   const frameUrl = `/dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const updateUrl = (key: string, value: string) => {
     query.set(key, value);
@@ -90,11 +92,12 @@ function Preview() {
           <label>Категория групповых<select value={excludedGroups ? 'excluded' : 'standard'} onChange={event => { setExcludedGroups(event.target.value === 'excluded'); updateUrl('groupCategory', event.target.value); }}>
             <option value="standard">Обычная</option><option value="excluded">Без подписки и Резидентства</option>
           </select></label>
+          <label>Стоимость Резидентства, ₽<input type="number" min="0.01" step="0.01" value={residencyPrice} onChange={event => { setResidencyPrice(event.target.value); updateUrl('residencyPrice', event.target.value); }} /></label>
         </div>
         <span>Корт 4 000 ₽/ч · моя ¼ — 1 000 ₽/ч · тренировка 5 500 ₽ · турнир 8 000 ₽</span>
       </section>
       <div className={`preview-stage preview-stage--${width}`}>
-        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}`} src={frameUrl} title="Интерфейс записи PadlHub"
+        <iframe key={`${screen}-${state}-${revision}-${privileges}-${subscriptionFits}-${passFits}-${subscriptionPlan}-${dailyQuota}-${excludedGroups}-${residencyPrice}`} src={frameUrl} title="Интерфейс записи PadlHub"
           sandbox="allow-scripts allow-same-origin" />
       </div>
     </main>

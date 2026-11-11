@@ -49,4 +49,5 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .preview-subscription-rules { display: flex; flex-wrap: wrap; gap: 12px 20px; width: 100%; }
 .preview-subscription-rules label { display: grid; gap: 6px; font-size: 11px; }
 .preview-subscription-rules select { min-width: 190px; }
+.preview-subscription-rules input[type="number"] { width: 190px; max-width: 100%; padding: 8px 10px; border: 1px solid #d9cee9; border-radius: 7px; background: white; color: #51415f; font: inherit; }
 @media(max-width: 700px) { .preview-subscription-rules label { width: 100%; } .preview-subscription-rules select { min-width: 0; width: 100%; } }
