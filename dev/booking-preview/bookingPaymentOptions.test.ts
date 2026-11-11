@@ -18,7 +18,22 @@ test('purchase offers never turn an owned inapplicable product into a bookable e
   for (const service of ['game', 'training', 'tournament'] as const) {
     const options = buildBookingPaymentOptions(service, PRIVILEGE_PROFILES[7], doesNotFit, hour, service === 'game' ? 'quarter' : undefined, 4000);
     assert.equal(options.find(option => option.kind === 'subscription')?.mode, 'unavailable');
-    assert.equal(options.find(option => option.kind === 'pass')?.mode, 'unavailable');
+    assert.equal(options.find(option => option.kind === 'pass')?.mode, service === 'game' ? undefined : 'unavailable');
+  }
+});
+test('games hide inapplicable Energy 5 for every privilege profile instead of offering purchase', () => {
+  for (const profile of PRIVILEGE_PROFILES) {
+    const options = buildBookingPaymentOptions('game', profile, doesNotFit, hour, 'quarter', 4000);
+    assert.ok(!options.some(option => option.kind === 'pass'));
+    assert.ok(options.some(option => option.kind === 'full'));
+    assert.ok(options.some(option => option.kind === 'residency'));
+    assert.ok(options.some(option => option.kind === 'subscription'));
+  }
+});
+test('applicable Energy 5 remains available for purchase or a visit debit in games', () => {
+  for (const profile of PRIVILEGE_PROFILES) {
+    const option = buildBookingPaymentOptions('game', profile, { ...doesNotFit, pass: true }, hour, 'quarter', 4000).find(option => option.kind === 'pass');
+    assert.equal(option?.mode, profile.pass ? 'book' : 'offer');
   }
 });
 test('excluded groups reject subscription purchases but still offer an eligible visit pack', () => {

@@ -111,12 +111,15 @@ export function buildGamePaymentOptions(courtAmount: number | null, scope: GameP
 }
 
 // A missing product can be purchased for this event. Applicability toggles
-// describe existing products; excluded groups still reject subscription offers.
+// describe existing products; for games pass applicability also controls
+// whether Energy 5 is offered at all. Excluded groups reject subscriptions.
 export function buildBookingPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}, gameScope?: GamePaymentScope, courtAmount: number | null = null): PaymentOption[] {
-  const purchaseFits = { subscription: !privileges.subscription || fits.subscription, pass: !privileges.pass || fits.pass };
+  const purchaseFits = { subscription: !privileges.subscription || fits.subscription,
+    pass: service === 'game' ? fits.pass : !privileges.pass || fits.pass };
   const options = service === 'game' && gameScope
     ? buildGamePaymentOptions(courtAmount, gameScope, privileges, purchaseFits, context)
     : buildPaymentOptions(service, privileges, purchaseFits, context);
-  return options.map(option => !privileges.subscription && option.reason === 'training-only'
+  return options.filter(option => !(service === 'game' && option.kind === 'pass' && option.mode === 'unavailable'))
+    .map(option => !privileges.subscription && option.reason === 'training-only'
     ? { ...option, mode: 'offer' } : option);
 }
