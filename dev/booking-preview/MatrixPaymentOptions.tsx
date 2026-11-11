@@ -195,7 +195,6 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
           return <div className={classes} key={option.kind} aria-disabled="true">{copy}</div>;
         })}
       </fieldset>
-      {profile.residency && !excludedGroup && !isWholeCourt && <p className="matrix-resident-perks"><PaymentIcon kind="residency" />По Резидентству: ракетка, полотенце и тапочки бесплатно</p>}
       {options.some(option => option.benefit === 'partial-hour' && option.mode === 'quote') && <p className="matrix-copay-note" role="status">Стоимость доплаты пока не определена. Запись с использованием бесплатного часа станет доступна после расчёта.</p>}
       <button className="matrix-confirm" type="button" disabled={locked || !choice} onClick={() => void confirm()}>{busy ? 'Подтверждаем запись…' : full ? 'Мест нет' : !isAuthenticated ? 'Войти для записи' : confirmText}</button>
       <p className="matrix-payment-footnote">{isWholeCourt ? 'Стоимость оплачивается полностью за всех игроков. Льготы не расходуются.' : 'Выбран один способ записи. Скидки подписки и Резидентства не суммируются. Абонемент списывается только при выборе абонемента.'}</p>
@@ -217,7 +216,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     <Modal isOpen={residencyOfferOpen} onClose={() => setResidencyOfferOpen(false)} title="Добавьте Резидентство" variant="dialog">
       <div className="matrix-information">
         <h3>{formatRubles(displayResidencyAmount)} вместо <del>{formatRubles(displayBaseAmount)}</del></h3>
-        <p>Скидка 30% на игры и 50% на групповые тренировки и турниры. Ракетка, полотенце и тапочки — бесплатно.</p>
+        <p>Скидка 30% на игры и 50% на групповые тренировки и турниры.</p>
         <dl className="matrix-order-lines"><div><dt>Запись с Резидентством</dt><dd>{formatRubles(displayResidencyAmount)}</dd></div>
           <div><dt>Резидентство</dt><dd>{residencyPrice != null ? formatRubles(residencyPrice) : 'Цена уточняется'}</dd></div>
           {choice && createPreviewOrder(choice, residencyPrice) && <div className="matrix-order-total"><dt>Итого</dt><dd>{formatRubles(createPreviewOrder(choice, residencyPrice)!.total)}</dd></div>}</dl>
