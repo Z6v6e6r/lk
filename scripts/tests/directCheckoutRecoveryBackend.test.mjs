@@ -9,7 +9,7 @@ const id='00000000-0000-4000-8000-000000000001',client='00000000-0000-4000-8000-
 const phone='+'+'7'+'9000000000';
 const transaction={id,status:'UNPAID',client:{id:client,phone},products:[{id:tools.DCR_PRODUCT,type:'SUBSCRIPTION',count:1,cost:1980000,discount:0,used:false,refunded:false}],sum:1980000,discount:0,toPay:1980000,deposit:0,createDate:'2026-10-31T00:00:00Z',paymentDueDate:'2026-10-31T00:20:00Z',processingStatus:null,possibleDoublePayment:false,receiptPending:false,acquiringAuthCode:null,acquiringRrnCode:null,paymentMethod:'WIDGET',paymentLegs:[{source:'CARD',amountKopecks:1980000}],purchasedServices:[],receipts:[],executedSurcharges:[],paidByOtherSaleBookingIds:[],transactionRefunds:[],cardPaymentInfo:{paymentId:'fixture-payment-1',paymentUrl:'https://pay.vivacrm.ru/SYNTHETICcheckout000000000',status:'REJECTED',declineOutcome:'EXPIRED',declineReason:'OTHER',declineMessage:null}};
 const sha=s=>crypto.createHash('sha256').update(s).digest('hex'),domain=tools.DCR_DOMAIN;
-const proof={ownerBinding:sha(domain+id+'\0'+client+'\0'+tools.dcrOwner(transaction).phone),paymentBinding:sha(domain+id+'\0'+transaction.cardPaymentInfo.paymentId+'\0'+transaction.cardPaymentInfo.paymentUrl),legsBinding:sha(domain+id+'\0'+JSON.stringify({paymentMethod:transaction.paymentMethod,paymentLegs:transaction.paymentLegs})),createdAt:transaction.createDate,expiresAt:transaction.paymentDueDate};
+const proof={ownerBinding:sha(domain+id+'\0'+client+'\0'+tools.dcrOwner(transaction).phone),paymentBinding:sha(domain+id+'\0'+transaction.cardPaymentInfo.paymentId+'\0'+transaction.cardPaymentInfo.paymentUrl),legsBinding:sha(domain+id+'\0'+JSON.stringify({paymentMethod:transaction.paymentMethod,paymentLegs:transaction.paymentLegs,discountMinor:transaction.discount,toPayMinor:transaction.toPay})),createdAt:transaction.createDate,expiresAt:transaction.paymentDueDate};
 const config={schemaVersion:1,productId:tools.DCR_PRODUCT,cutoff:'2026-11-01T12:00:00.000Z',observedAt:'2026-11-01T12:26:00.000Z',operationId,proofs:{[sha(domain+id)]:proof}};
 const run=(kind,msg,settings={})=>new Function('msg','env','Buffer',directRecoveryPrefix(kind,config)+'; return "legacy";')(msg,{get:key=>settings[key]??({VIVA_SERVICE_USERNAME:'fixture-user',VIVA_SERVICE_PASSWORD:'fixture-password',VIVA_SERVICE_CLIENT_ID:'fixture-client'})[key]},Buffer);
 const incoming=body=>({_msgid:'fixture',req:{headers:{authorization:'Bearer '+'u'.repeat(32)}},res:{fixture:true},payload:body});
@@ -78,4 +78,13 @@ test('live preparation rejects changed writes, debug wiring and catch custody', 
  for (const mutate of [f => { f[3].operation = 'updateOne'; }, f => { f[4].wires[0] = ['debug']; }, f => { f.push({ ...commonTab, type: 'catch', scope: null }); }, f => { f[5].httpProxy = 'foreign'; }, f => { f.push({ ...commonTab, type: 'catch', scope: ['1da9af2cb4f7db52'] }); }, f => { f[7].type = 'debug'; }]) {
   const changed = structuredClone(flow); mutate(changed); assert.throws(() => verifyDirectTopology(changed,sha('[]')));
  }
+});
+
+test('expired promo invoices require their own exact frozen discount and amount', () => {
+ const promo = structuredClone(transaction); promo.products[0].discount = 990000; promo.discount = 990000; promo.toPay = 990000;
+ assert.equal(tools.dcrFacts(promo,tools.dcrOwner(promo),proof,config.cutoff,Date.now()),false);
+ const frozen = { ...proof, legsBinding: sha(domain+id+'\0'+JSON.stringify({paymentMethod:promo.paymentMethod,paymentLegs:promo.paymentLegs,discountMinor:promo.discount,toPayMinor:promo.toPay})) };
+ assert.equal(tools.dcrFacts(promo,tools.dcrOwner(promo),frozen,config.cutoff,Date.now()),true);
+ promo.products[0].discount = 1000000; promo.discount = 1000000; promo.toPay = 980000;
+ assert.equal(tools.dcrFacts(promo,tools.dcrOwner(promo),frozen,config.cutoff,Date.now()),false);
 });

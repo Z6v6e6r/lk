@@ -37,14 +37,15 @@ function dcrFacts(t,actor,proof,cutoff,now) {
   if(dcrExact([t.id,t.uuid,t.transactionId])!==id||dcrExact([t.status,t.state,t.paymentStatus,t.transactionStatus])!=='UNPAID')return false;
   if(!owner||owner.id!==actor.id||owner.phone!==actor.phone||dcrSha(DCR_DOMAIN+id+'\0'+owner.id+'\0'+owner.phone)!==proof.ownerBinding)return false;
   if(!Array.isArray(t.products)||t.products.length!==1||!dcrObject(line)||dcrExact([line.id,line.uuid,line.productId,line.product?.id,t.productId])!==DCR_PRODUCT||line.type!=='SUBSCRIPTION'||line.count!==1)return false;
-  if(line.cost!==1980000||line.discount!==0||t.sum!==1980000||t.discount!==0||t.toPay!==1980000||t.deposit!==0)return false;
+  if(line.cost!==1980000||!Number.isSafeInteger(line.discount)||line.discount<0||line.discount>=line.cost
+    ||t.sum!==line.cost||t.discount!==line.discount||t.toPay!==line.cost-line.discount||t.deposit!==0)return false;
   for(const key of ['paymentDate','paidAt','refundDate','refundedAt','refundSum','refundedAmount','paidAmount','paidAmountMinor','paidAmountKopecks','clientSubscriptionId'])if(t[key])return false;
   if(t.paid===true||line.used===true||line.refunded===true||line.clientSubscriptionId||t.clientSubscription?.id||line.clientSubscription?.id)return false;
   if(!dcrObject(card)||Object.keys(card).some(k=>!['paymentId','paymentUrl','status','declineOutcome','declineReason','declineMessage'].includes(k)))return false;
   if(card.status!=='REJECTED'||card.declineOutcome!=='EXPIRED'||card.declineReason!=='OTHER'||card.declineMessage!==null||typeof card.paymentId!=='string'||!/^[a-zA-Z0-9-]{1,100}$/.test(card.paymentId))return false;
   if(typeof card.paymentUrl!=='string'||!/^https:\/\/pay\.vivacrm\.ru\/[A-Za-z0-9_/?=&.%~-]+$/.test(card.paymentUrl)||card.paymentUrl.length>4096)return false;
   if(dcrSha(DCR_DOMAIN+id+'\0'+card.paymentId+'\0'+card.paymentUrl)!==proof.paymentBinding)return false;
-  if(!['SMS','WIDGET','CARD'].includes(t.paymentMethod)||!Array.isArray(t.paymentLegs)||dcrSha(DCR_DOMAIN+id+'\0'+JSON.stringify({paymentMethod:t.paymentMethod,paymentLegs:t.paymentLegs}))!==proof.legsBinding)return false;
+  if(!['SMS','WIDGET','CARD'].includes(t.paymentMethod)||!Array.isArray(t.paymentLegs)||dcrSha(DCR_DOMAIN+id+'\0'+JSON.stringify({paymentMethod:t.paymentMethod,paymentLegs:t.paymentLegs,discountMinor:t.discount,toPayMinor:t.toPay}))!==proof.legsBinding)return false;
   if(t.processingStatus!==null||t.possibleDoublePayment!==false||t.receiptPending!==false||t.acquiringAuthCode||t.acquiringRrnCode)return false;
   for(const key of ['purchasedServices','receipts','executedSurcharges','paidByOtherSaleBookingIds','transactionRefunds'])if(!Array.isArray(t[key])||t[key].length)return false;
   for(const key of ['cardPaymentStatus','payments','cardPayments','paymentAttempts','payment','paymentInfo'])if(t[key]!=null)return false;
