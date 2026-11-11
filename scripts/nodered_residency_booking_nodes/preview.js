@@ -33,8 +33,6 @@ if (ctx.step==='residency_context') {
 }
 // RESIDENCY_PREVIEW_BRANCH
 if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
-  // Residency covers games and group training only; tournaments have no such benefit.
-  if (eventCategory==='TOURNAMENT') {quote(id,'UNAVAILABLE',null,0,0,'EVENT_NOT_INCLUDED');continue;}
   const config=residencyTransportConfig(key=>residencySetting(key,k=>global.get(k),k=>typeof env!=='undefined'?env.get(k):undefined),'preview');
   if (!config) {quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_BOOKING_NOT_CONFIGURED');continue;}
   const target=residencyPreviewTarget(exercise);
@@ -52,7 +50,8 @@ if (productId.toLowerCase()===RESIDENCY_PRODUCT_ID) {
   try {proof=validateResidencyBookingContext(evidence,id,Date.now(),target,action);}
   catch {quote(id,'UNAVAILABLE',null,0,0,'RESIDENCY_BOOKING_CONTEXT_INVALID');continue;}
   if (!Number.isSafeInteger(ctx.basePriceMinor) || ctx.basePriceMinor<=0) return stop('BASE_PRICE_UNRESOLVED');
-  const percent=target.category==='GAME'?30:50;
+  const percent=target.category==='GAME'?proof.rule.gameOverageDiscountPercent
+    :target.category==='TOURNAMENT'?proof.rule.tournamentDiscountPercent:proof.rule.groupTrainingDiscountPercent;
   ctx.groupDiscountPercent=percent;
   quote(id,'AVAILABLE',ctx.basePriceMinor-Math.floor(ctx.basePriceMinor*percent/100),0,ctx.target.durationMinutes);
   ctx.quotes[ctx.quotes.length-1].expiresAt=Math.min(ctx.quotes[ctx.quotes.length-1].expiresAt,proof.validUntil);

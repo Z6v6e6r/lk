@@ -1,5 +1,7 @@
 // Preparation only. Preserve the installed owner, historical pins and every graph edge.
 import crypto from 'node:crypto';
+import ts from 'typescript';
+import { validateResidencyBookingContext, RESIDENCY_TOURNAMENT_COMPATIBILITY } from './lib/residencyBookingContext.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +12,10 @@ export const FRIENDSHIP_SPECIAL_SOURCE_SHA256 = '3d454ddace61985d4a1d6d92790fcfd
 export const FRIENDSHIP_SPECIAL_TARGETS = Object.freeze({
   gateway: { id: 'lk_subscription_booking_router_20260804', outputs: 8,
     sha256: '933afa01e4fdf075bd5234e5db4b45b6cfae664ab953df2c30a681b7ce156e3c' },
+  evaluator: { id: 'lk_subscription_managed_policy_20260820', outputs: 2,
+    sha256: '810184ae7973582378bbd7171afced53b483775eeb80982e2d3c7645019ab8c8' },
+  previewEvaluator: { id: 'lk_subscription_price_preview_20260908_evaluate', outputs: 2,
+    sha256: '24ce7395b32356a6e7f239bd4fedfb6e71f8c53f208549d1e7be5a9bae15e9d8' },
   preview: { id: 'lk_subscription_price_preview_20260908_router', outputs: 6,
     sha256: 'dc6be3085e41e86ad675c221c51ba3b8a1373062cb4a5f75adf5948ce73c9b95' },
 });
@@ -57,6 +63,16 @@ export function patchInstalledResidencyPreview(source) {
   new Function('msg', 'node', 'global', 'env', out);
   return out;
 }
+export function patchResidencyTournamentContext(source) {
+  if (source.includes('const RESIDENCY_TOURNAMENT_COMPATIBILITY =')) throw new Error('Residency tournament context already patched');
+  const file = ts.createSourceFile('residency.js', source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const declarations = file.statements.filter(n => ts.isFunctionDeclaration(n) && n.name?.text === 'validateResidencyBookingContext');
+  if (declarations.length !== 1) throw new Error('Residency validator declaration drift');
+  const declaration = declarations[0];
+  return source.slice(0, declaration.getStart(file))
+    + `const RESIDENCY_TOURNAMENT_COMPATIBILITY = Object.freeze(${JSON.stringify(RESIDENCY_TOURNAMENT_COMPATIBILITY)});\n`
+    + validateResidencyBookingContext.toString() + source.slice(declaration.end);
+}
 export function composeFriendshipSpecialArtifacts(liveBytes, options = {}) {
   if (hash(liveBytes) !== (options.expectedSourceSha256 ?? FRIENDSHIP_SPECIAL_SOURCE_SHA256)) throw new Error('Friendship special whole-flow preimage drift');
   const flow = JSON.parse(liveBytes);
@@ -67,8 +83,9 @@ export function composeFriendshipSpecialArtifacts(liveBytes, options = {}) {
     const node = flow.find(n => n.id === target.id);
     if (node?.type !== 'function' || node.d === true || node.disabled === true || node.outputs !== target.outputs
       || node.wires?.length !== node.outputs || hash(node.func) !== target.sha256) throw new Error('Friendship special node preimage drift');
-    node.func = patchFriendshipSpecialCoverage(node.func);
+    if (kind === 'gateway' || kind === 'preview') node.func = patchFriendshipSpecialCoverage(node.func);
     if (kind === 'preview') node.func = patchInstalledResidencyPreview(node.func);
+    node.func = patchResidencyTournamentContext(node.func);
     new Function('msg', 'node', 'global', 'env', 'flow', node.func);
   }
   const candidateBytes = Buffer.from(`${JSON.stringify(flow, null, 2)}\n`);
@@ -76,7 +93,7 @@ export function composeFriendshipSpecialArtifacts(liveBytes, options = {}) {
     allowedChanges: Object.values(targets).map(t => ({ id: t.id, fields: ['func'] })), allowedAdditionIds: [] });
   validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
   return { candidateBytes, contract, sourceSha256: hash(liveBytes), candidateSha256: hash(candidateBytes),
-    nodeCount: flow.length, changedNodeCount: 2, addedNodeCount: 0 };
+    nodeCount: flow.length, changedNodeCount: 4, addedNodeCount: 0 };
 }
 
 async function main() {
@@ -103,7 +120,7 @@ async function main() {
   fs.writeFileSync(outputs[0], built.candidateBytes, { flag: 'wx', mode: 0o600 });
   fs.writeFileSync(outputs[1], `${JSON.stringify(built.contract, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify({ sourceSha256: built.sourceSha256, candidateSha256: built.candidateSha256,
-    changedNodeCount: 2, addedNodeCount: 0, deploymentPerformed: false }));
+    changedNodeCount: 4, addedNodeCount: 0, deploymentPerformed: false }));
 }
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) main().catch(error => {
   console.error(error.message); process.exitCode = 1;

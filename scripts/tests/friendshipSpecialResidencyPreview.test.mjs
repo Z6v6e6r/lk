@@ -5,7 +5,7 @@ import os from 'node:os';
 import {execFileSync} from 'node:child_process';
 import test from 'node:test';
 import {composeResidencyPreview} from '../lib/residencyBookingSources.mjs';
-import {RESIDENCY_PRODUCT_ID,residencyTransportConfig} from '../lib/residencyBookingContext.mjs';
+import {RESIDENCY_PRODUCT_ID,residencyTransportConfig,validateResidencyBookingContext,RESIDENCY_BOOKING_COMPATIBILITY,RESIDENCY_TOURNAMENT_COMPATIBILITY} from '../lib/residencyBookingContext.mjs';
 import {residencyFixture} from './fixtures/residency-booking-context.mjs';
 import {extractSubscriptionPricePreviewSource} from '../lib/subscriptionPricePreviewSources.mjs';
 import {patchDailyVisitUsage,patchDailyVisitEvaluator} from '../patch_live_lk1_daily_visit.mjs';
@@ -66,12 +66,13 @@ function execute(ctx,response={}) {
   }
   assert.fail('Preview did not terminate');
 }
-for(const order of [[friend,resident],[resident,friend]]) test(`tournament skips residency HTTP and preserves free Friendship: ${order[0]===friend?'friend first':'resident first'}`,()=>{
-  const ctx=context(order);const result=execute(ctx);
-  assert.equal(result.port,4);assert.equal(ctx.statusCode,200,ctx.error);assert.ok(!result.ports.includes(0));
+for(const order of [[friend,resident],[resident,friend]]) test(`tournament residency401 preserves free Friendship: ${order[0]===friend?'friend first':'resident first'}`,()=>{
+  const ctx=context(order);const request=execute(ctx);assert.equal(request.port,0);
+  const result=execute(ctx,{...request.msg,statusCode:401,payload:{}});
+  assert.equal(result.port,4);assert.equal(ctx.statusCode,200,ctx.error);
   assert.equal(ctx.quotes.length,2);
   const q=ctx.quotes.find(q=>q.subscriptionId===friend);assert.equal(q.status,'AVAILABLE');assert.equal(q.amountMinor,0);assert.equal(q.discountPercent,100);
-  const r=ctx.quotes.find(q=>q.subscriptionId===resident);assert.equal(r.status,'UNAVAILABLE');assert.equal(r.reasonCode,'EVENT_NOT_INCLUDED');
+  const r=ctx.quotes.find(q=>q.subscriptionId===resident);assert.equal(r.status,'UNAVAILABLE');assert.equal(r.reasonCode,'RESIDENCY_BOOKING_CONTEXT_UNAVAILABLE');
 });
 function pendingContext() {
   const ctx=context([resident],'GROUP_TRAINING');ctx.pending=[];ctx.step='residency_context';
@@ -125,6 +126,39 @@ test('two residency instances cannot retry one another or erase another benefit'
   assert.equal(reads,2);assert.equal(ctx.statusCode,200,ctx.error);assert.equal(ctx.quotes.length,3);
   assert.deepEqual(ctx.quotes.map(q=>q.status),['AVAILABLE','UNAVAILABLE','UNAVAILABLE']);
 });
+function assertTournamentDiscount(order=[resident]) {
+  const evidence=residencyFixture({clientSubscriptionId:resident,tournaments:true});
+  const ctx=context(order);for(const id of order)ctx.subscriptions[id].productId=ctx.metadata[id].productId;
+  ctx.target.startsAt=evidence.startsAt;ctx.exercise.timeFrom=evidence.startsAt;
+  ctx.exercise.timeTo=new Date(Date.parse(evidence.startsAt)+90*60000).toISOString();
+  const request=execute(ctx);assert.equal(request.port,0,ctx.error);
+  const result=execute(ctx,{...request.msg,statusCode:200,responseUrl:request.msg.url,payload:evidence});
+  assert.equal(result.port,4);assert.equal(ctx.statusCode,200,ctx.error);
+  const q=ctx.quotes.find(q=>q.subscriptionId===resident);
+  assert.equal(q.status,'AVAILABLE');assert.equal(q.discountPercent,50);
+  assert.equal(q.amountMinor,200000);assert.equal(q.freeMinutes,0);
+  if(order.includes(friend))assert.equal(ctx.quotes.find(q=>q.subscriptionId===friend).amountMinor,0);
+}
+for(const order of [[resident],[friend,resident],[resident,friend]]) test('V2 tournament50 and Friendship0: '+order.join(','),()=>assertTournamentDiscount(order));
+test('legacy and V2 residency proofs cannot exchange capability digests or widen event scope',()=>{
+  for(const tournaments of [false,true]){
+    const evidence=residencyFixture({clientSubscriptionId:resident,tournaments});
+    const target={resolutionSource:'SERVER',category:'TOURNAMENT',stationId:station,
+      externalEventTypeId:'viva:direction:5280:type:1013',startsAt:evidence.startsAt,durationMinutes:90};
+    if(!tournaments)assert.throws(()=>validateResidencyBookingContext(evidence,resident,Date.now(),target,'BOOK_TOURNAMENT'));
+    else assert.equal(validateResidencyBookingContext(evidence,resident,Date.now(),target,'BOOK_TOURNAMENT').rule.tournamentDiscountPercent,50);
+    evidence.runtimeCompatibility={...(tournaments?RESIDENCY_BOOKING_COMPATIBILITY:RESIDENCY_TOURNAMENT_COMPATIBILITY)};
+    assert.throws(()=>validateResidencyBookingContext(evidence,resident,Date.now()));
+  }
+  for(const mutate of [p=>p.benefitRules[2].percentage=100,p=>p.benefitRules[2].actions=['BOOK_GROUP_TRAINING'],
+    p=>p.benefitRules[2].stationIds=[station],p=>p.benefitRules.push({...p.benefitRules[2]})]){
+    const e=residencyFixture({clientSubscriptionId:resident,tournaments:true});mutate(e.context.policy);
+    assert.throws(()=>validateResidencyBookingContext(e,resident,Date.now()));
+  }
+  const evidence=residencyFixture({clientSubscriptionId:resident,tournaments:true});
+  assert.throws(()=>validateResidencyBookingContext(evidence,resident,Date.now(),{resolutionSource:'SERVER',category:'TOURNAMENT',stationId:station,
+    externalEventTypeId:'viva:direction:9999:type:1013',startsAt:evidence.startsAt,durationMinutes:90},'BOOK_TOURNAMENT'));
+});
 test('residency-only failure returns one UNAVAILABLE quote',()=>{
   const ctx=pendingContext();ctx.quotes=[];execute(ctx,{statusCode:401});
   assert.equal(ctx.statusCode,200);assert.equal(ctx.quotes.length,1);assert.equal(ctx.quotes[0].status,'UNAVAILABLE');
@@ -177,7 +211,7 @@ for(const state of ['FAILED','RELEASED']) test('terminal '+state+' cannot consum
   execute(ctx);assert.equal(ctx.error,undefined,ctx.error);assert.equal(ctx.quotes[0].amountMinor,0);
 });
 const fixture=process.env.FRIENDSHIP_SPECIAL_LIVE_FLOW;
-test('installed candidate executes both subscription orders without residency HTTP and quotes5280 free', {skip:!fixture},()=>{
+test('installed candidate isolates residency401 in both subscription orders and quotes5280 free', {skip:!fixture},()=>{
   const packet=composeFriendshipSpecialArtifacts(fs.readFileSync(fixture));
   const body=JSON.parse(packet.candidateBytes).find(n=>n.id===FRIENDSHIP_SPECIAL_TARGETS.preview.id).func;
   const installed=new Function('msg','node','global','env',body), priorRun=run;
@@ -186,13 +220,15 @@ test('installed candidate executes both subscription orders without residency HT
     run=(msg,_canonical,_usage,node,global,env)=>installed(msg,node,global,env);
     for(const order of [[friend,resident],[resident,friend]]){
       const ctx=context(order);for(const id of order)ctx.subscriptions[id].productId=ctx.metadata[id].productId;
-      const result=execute(ctx);assert.equal(result.port,4);assert.equal(ctx.statusCode,200,ctx.error);
-      assert.ok(!result.ports.includes(0));assert.equal(ctx.quotes.find(q=>q.subscriptionId===friend).amountMinor,0);
+      const request=execute(ctx);assert.equal(request.port,0);
+      const result=execute(ctx,{...request.msg,statusCode:401,payload:{}});assert.equal(result.port,4);assert.equal(ctx.statusCode,200,ctx.error);
+      assert.equal(ctx.quotes.find(q=>q.subscriptionId===friend).amountMinor,0);
       assert.equal(ctx.quotes.find(q=>q.subscriptionId===resident).status,'UNAVAILABLE');
+      assertTournamentDiscount(order);
     }
   }finally{run=priorRun;delete globals.subscriptions_lk1_plan_rules;}
 });
-test('exact live candidate changes only two func fields and keeps all historical pins', {skip:!fixture},()=>{
+test('exact live candidate changes only four func fields and keeps all historical pins', {skip:!fixture},()=>{
   const bytes=fs.readFileSync(fixture),before=JSON.parse(bytes);const packet=composeFriendshipSpecialArtifacts(bytes);
   const after=JSON.parse(packet.candidateBytes);assert.equal(after.length,before.length);
   const changed=[];

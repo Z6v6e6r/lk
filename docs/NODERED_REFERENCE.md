@@ -467,16 +467,22 @@ npm run nodered:modular:build
 лимит 8 активных записей и одно посещение на московскую дату по всем категориям.
 Остальные турнирные направления сохраняют скидку по тарифу.
 
-Preview `POST /lk/subscriptions/game-price-preview` не запрашивает контекст резидентства
-для турниров: этот продукт покрывает только игры и групповые тренировки. Ошибка
-refresh/proof одного подтверждённого экземпляра резидентства даёт ему `UNAVAILABLE`,
+Резидентство поддерживает турнирную скидку 50% через явное правило `TOURNAMENT` /
+`BOOK_TOURNAMENT` опубликованной политики CUP и capability contract v2 (digest
+`sha256:63be8d476b73583c8b80f55cf7016abe571a2b8159dbb7e8db2f07010f614104`).
+Старый v1 остаётся неизменным: игры 30%, групповые тренировки 50%; турнир без нового
+правила не допускается. Льготы не дают бесплатных минут или посещений. Preview
+`POST /lk/subscriptions/game-price-preview` изолирует ошибку refresh/proof: ошибка одного подтверждённого экземпляра резидентства даёт ему `UNAVAILABLE`,
 сохраняя расчёт остальных абонементов. Ошибки общей авторизации, ownership, тарифов,
 истории и общий deadline остаются отказами всего запроса. Write-путь резидентства
 по-прежнему требует свежий валидный контекст перед provider-действием.
 
 Подготовка кандидата: `scripts/patch_live_friendship_special_residency_preview.mjs`
 принимает свежий приватный verified workspace и меняет только `func` узлов
-`lk_subscription_booking_router_20260804` и `lk_subscription_price_preview_20260908_router`.
+`lk_subscription_booking_router_20260804`, `lk_subscription_price_preview_20260908_router`,
+`lk_subscription_managed_policy_20260820`, `lk_subscription_price_preview_20260908_evaluate`.
+В обоих evaluator обновляется только встроенный validator capability; scope таблица
+«Дружбы» меняется только в gateway и preview.
 Точные whole-flow/function preimages и graph contract защищают от дрейфа. Кандидат
 и contract хранятся вне всех Git worktree; скрипт не импортирует flow и не деплоит.
 При реальном применении нужны отдельное разрешение, повторная проверка live preimage,
@@ -488,6 +494,14 @@ refresh/proof одного подтверждённого экземпляра �
 негативные проверки; stop method — не применять кандидат. Уже созданные paid checkout
 не перепрайсиваются: для прежних `CONFIRMED` операций сначала нужна отдельная сверка
 provider/payment state. Откат к прежнему reviewed flow не отменяет сделанных записей.
+
+Порядок активации резидентства: совместимые CUP readers и четыре LK функции, затем
+проверка аутентификации refresh без ослабления проверки интеграционного токена, затем
+отдельно разрешённая публикация политики v2 с reviewed canonical tournament IDs.
+Привязанные к v1 экземпляры не переходят на v2 автоматически: нужна отдельная
+согласованная операция. После публикации v2 rollback должен сохранять v2 readers;
+отключение новых admission безопаснее возврата несовместимого reader. Изменение
+source не исправляет само по себе боевую конфигурационную причину HTTP 401.
 
 ### Чат
 - `GET /api/game-chat/:gameId` — список чатов

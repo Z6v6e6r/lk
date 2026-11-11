@@ -10,12 +10,13 @@ import {execFileSync} from 'node:child_process';
 import {composeResidencyFlow,RESIDENCY_TARGETS,assertResidencyOutputPath} from '../patch_nodered_residency_booking.mjs';
 import {residencyFixture} from './fixtures/residency-booking-context.mjs';
 import {composeResidencyRefreshFlow,refreshResidencyFunction} from '../patch_nodered_residency_refresh.mjs';
+import {composeFriendshipSpecialArtifacts} from '../patch_live_friendship_special_residency_preview.mjs';
 const evaluator=composeResidencyEvaluator(fs.readFileSync(new URL('../nodered_lk1_hub_nodes/evaluator.js',import.meta.url),'utf8'));
 function input(category='GAME',durationMinutes=60,basePriceMinor=100000) {
-  const now=Date.now(),evidence=residencyFixture({now});
-  const target={resolutionSource:'SERVER',category,stationId:'station:fixture',externalEventTypeId:category==='GAME'?'viva:direction:4588:type:1613':'viva:direction:6307:type:2349',
+  const now=Date.now(),evidence=residencyFixture({now,tournaments:category==='TOURNAMENT'});
+  const target={resolutionSource:'SERVER',category,stationId:'station:fixture',externalEventTypeId:category==='GAME'?'viva:direction:4588:type:1613':category==='TOURNAMENT'?'viva:direction:5280:type:1013':'viva:direction:6307:type:2349',
     durationMinutes,startsAt:evidence.startsAt,basePriceMinor,currency:'RUB',priceSource:'VIVA_EXISTING_TARIFF'};
-  const action=category==='GAME'?'JOIN_GAME':'BOOK_GROUP_TRAINING';
+  const action=category==='GAME'?'JOIN_GAME':category==='TOURNAMENT'?'BOOK_TOURNAMENT':'BOOK_GROUP_TRAINING';
   const rule=validateResidencyBookingContext(evidence,'instance:fixture',now,target,action).rule;
   delete evidence.startsAt;
   return {evaluatedAt:new Date(now).toISOString(),action,target,residencyContext:evidence,
@@ -25,7 +26,7 @@ function input(category='GAME',durationMinutes=60,basePriceMinor=100000) {
 }
 const decide=i=>{const msg={_managedSubscriptionPolicyInput:i};new Function('msg',evaluator)(msg);return msg._managedSubscriptionPolicyDecision;};
 test('residency prices all supported durations without a visit, including rounded minor amounts',()=>{
-  for(const category of ['GAME','GROUP_TRAINING']) for(const minutes of [60,90,120]) for(const price of [100000,12345]) {
+  for(const category of ['GAME','GROUP_TRAINING','TOURNAMENT']) for(const minutes of [60,90,120]) for(const price of [100000,12345]) {
     const i=input(category,minutes,price),r=decide(i);
     assert.equal(r.eligible,true,JSON.stringify(r.blockers));assert.equal(r.subscriptionVisitCount,0);
     assert.equal(r.benefit.finalPriceMinor,price-Math.floor(price*(category==='GAME'?30:50)/100));
@@ -97,6 +98,7 @@ test('candidate rejects unreviewed function preimages before composing anything'
 });
 const live=process.env.RESIDENCY_LIVE_FIXTURE;
 const refreshLive=process.env.RESIDENCY_REFRESH_LIVE_FIXTURE;
+const friendshipLive=process.env.FRIENDSHIP_SPECIAL_LIVE_FLOW;
 test('refresh rejects unknown generations before constructing a candidate',()=>{
   assert.throws(()=>composeResidencyRefreshFlow([]),/PREIMAGE_DRIFT/);
   assert.throws(()=>refreshResidencyFunction('unrelated body','gateway',2),/SOURCE_DRIFT/);
@@ -112,10 +114,10 @@ test('private live snapshot composes only four function bodies, preserving graph
   for(const compose of [composeResidencyGateway,composeResidencyPreview]) assert.throws(()=>compose('unrelated body'),/anchor drift/);
 });
 
-for(const envOnly of [false,true]) test('actual composed gateway uses owned discount-only residency: '+(envOnly?'private environment':'globals'),
-  {skip:(!live&&!refreshLive)||(envOnly&&!refreshLive)},()=>{
-  const flow=JSON.parse(fs.readFileSync(refreshLive||live));
-  const preparedFlow=refreshLive?composeResidencyRefreshFlow(flow).candidate:null;
+for(const envOnly of [false,true]) for(const tournament of friendshipLive?[false,true]:[false]) test('actual composed gateway uses owned discount-only residency: '+(tournament?'tournament / ':'game / ')+(envOnly?'private environment':'globals'),
+  {skip:!friendshipLive&&((!live&&!refreshLive)||(envOnly&&!refreshLive))},()=>{
+  const flow=JSON.parse(fs.readFileSync(friendshipLive||refreshLive||live));
+  const preparedFlow=friendshipLive?JSON.parse(composeFriendshipSpecialArtifacts(fs.readFileSync(friendshipLive)).candidateBytes):refreshLive?composeResidencyRefreshFlow(flow).candidate:null;
   const body=preparedFlow?preparedFlow.find(n=>n.id===RESIDENCY_TARGETS[0].id).func:composeResidencyGateway(flow.find(n=>n.id===RESIDENCY_TARGETS[0].id).func);
   const run=new Function('msg','node','env','global',body);
   const evaluatorBody=preparedFlow?preparedFlow.find(n=>n.id===RESIDENCY_TARGETS[2].id).func:composeResidencyEvaluator(flow.find(n=>n.id===RESIDENCY_TARGETS[2].id).func);
@@ -127,14 +129,15 @@ for(const envOnly of [false,true]) test('actual composed gateway uses owned disc
   }
   const runtimeEnv={get:k=>environment[k]},host={get:k=>globals[k]};
   const now=Date.now(),station='00000000-0000-4000-8000-000000000002',room='00000000-0000-4000-8000-000000000003';
-  const evidence=residencyFixture({now,stationId:station});
+  const evidence=residencyFixture({now,tournaments:tournament});
+  const action=tournament?'BOOK_TOURNAMENT':'JOIN_GAME';
   if(envOnly) evidence.context.instance.homeStationId=null;
-  const exercise={id:'exercise:fixture',studio:{id:station},room:{id:room},direction:{id:4588},type:{id:1613},
+  const exercise={id:'exercise:fixture',studio:{id:station},room:{id:room},direction:{id:tournament?5280:4588},type:{id:tournament?1013:1613},
     timeFrom:evidence.startsAt,timeTo:new Date(Date.parse(evidence.startsAt)+3600000).toISOString(),availableClientSubscriptions:[]};
   const owned={subscriptionId:'instance:fixture',clientId:'client:fixture',productId:RESIDENCY_PRODUCT_ID,product:{id:RESIDENCY_PRODUCT_ID},
     status:'ACTIVE',purchaseDate:evidence.purchasedAt,activationDate:evidence.context.instance.activeFrom,expirationDate:evidence.context.instance.activeTo,visitsLeft:0};
   delete evidence.startsAt;
-  const ctx={step:'exercise',caller:'split',action:'book',managedAction:'JOIN_GAME',tenantKey:'iSkq6G',actorClientId:'client:fixture',clientSubscriptionId:'instance:fixture',
+  const ctx={step:'exercise',caller:'split',action:'book',managedAction:action,tenantKey:'iSkq6G',actorClientId:'client:fixture',clientSubscriptionId:'instance:fixture',
     operationId:'operation:residency-fixture',exerciseId:exercise.id,authHeader:'Bearer fixture-token',
     lk1ProductIdentity:{tenantKey:'iSkq6G',actorClientId:'client:fixture',subscriptionId:'instance:fixture',productId:RESIDENCY_PRODUCT_ID,name:'Резидентство',purchaseDate:owned.purchaseDate,subscription:owned},
     lk1TariffProof:{source:'VIVA_EXISTING_TARIFF',amountMinor:100000,stationId:station,roomId:room,durationMinutes:60,startsAt:exercise.timeFrom,observedAt:now}};
@@ -149,7 +152,7 @@ for(const envOnly of [false,true]) test('actual composed gateway uses owned disc
       new Function('msg',evaluatorBody)(msg);
       assert.equal(msg._managedSubscriptionPolicyDecision.eligible,true,JSON.stringify(msg._managedSubscriptionPolicyDecision.blockers));
       assert.equal(msg._managedSubscriptionPolicyDecision.subscriptionVisitCount,0);
-      assert.equal(msg._managedSubscriptionPolicyDecision.benefit.finalPriceMinor,70000);
+      assert.equal(msg._managedSubscriptionPolicyDecision.benefit.finalPriceMinor,tournament?50000:70000);
       assert.ok(reads>=1);
       // Let the real router persist its PREPARED intent (mocked Mongo output only).
       const prepared=run(msg,{warn(){},error(){}},runtimeEnv,host).find(Boolean);
@@ -158,9 +161,9 @@ for(const envOnly of [false,true]) test('actual composed gateway uses owned disc
       const extracted=extractSubscriptionPricePreviewSource({source:body,label:'residency replay',roots:['lk1Fingerprint','lk1ReplayIdentityMatches']});
       const replay=new Function(extracted.source+';return {lk1Fingerprint,lk1ReplayIdentityMatches};')();
       const retry={tenantKey:ctx.tenantKey,actorClientId:ctx.actorClientId,clientSubscriptionId:ctx.clientSubscriptionId,
-        operationId:ctx.operationId,managedAction:'JOIN_GAME',caller:'split',exerciseId:ctx.exerciseId};
+        operationId:ctx.operationId,managedAction:action,caller:'split',exerciseId:ctx.exerciseId};
       const operation={_id:ctx.operationKey,tenantKey:ctx.tenantKey,actorClientId:ctx.actorClientId,
-        operationId:ctx.operationId,clientSubscriptionId:ctx.clientSubscriptionId,exerciseId:ctx.exerciseId,category:'open_game',lk1:saved.lk1};
+        operationId:ctx.operationId,clientSubscriptionId:ctx.clientSubscriptionId,exerciseId:ctx.exerciseId,category:tournament?'tournament':'open_game',lk1:saved.lk1};
       for(const state of ['CONFIRMED','PENDING_CONFIRMATION']) {
         operation.state=state;
         globals.subscriptions_residency_booking_enabled=false;
