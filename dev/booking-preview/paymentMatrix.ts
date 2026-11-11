@@ -138,12 +138,16 @@ export function buildGamePaymentOptions(courtAmount: number | null, scope: GameP
     ? { ...option, mode: 'reference' } : option);
 }
 
+export function energyPassApplies(service: ServiceKind, fits: boolean, context: Partial<PaymentContext> = {}) {
+  return (service === 'tournament' && !context.proDirection) || fits;
+}
+
 // A missing product can be purchased for this event. Applicability toggles
 // describe existing products; for games pass applicability also controls
 // whether Energy 5 is offered at all. Excluded groups reject subscriptions.
 export function buildBookingPaymentOptions(service: ServiceKind, privileges: Privileges, fits: Applicability, context: Partial<PaymentContext> = {}, gameScope?: GamePaymentScope, courtAmount: number | null = null): PaymentOption[] {
   const purchaseFits = { subscription: !privileges.subscription || fits.subscription,
-    pass: service === 'game' ? fits.pass : !privileges.pass || fits.pass };
+    pass: service === 'game' ? fits.pass : !privileges.pass || energyPassApplies(service, fits.pass, context) };
   const options = service === 'game' && gameScope
     ? buildGamePaymentOptions(courtAmount, gameScope, privileges, purchaseFits, context)
     : buildPaymentOptions(service, privileges, purchaseFits, context);

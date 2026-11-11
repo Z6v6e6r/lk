@@ -1,4 +1,4 @@
-import { readMatrixSettings } from './paymentMatrix';
+import { energyPassApplies, readMatrixSettings } from './paymentMatrix';
 import { PREVIEW_COURT_HOURLY_PRICE, previewCourtPrice } from './gamePreviewPrice';
 import { readPassRemaining } from './bookingCheckout';
 import type { GameTimeSlot, PadelGamePlayer, PadelGameRecord, Studio, UserProfileType } from '../../src/utils/apiClient';
@@ -93,8 +93,9 @@ const pass: TournamentVivaProduct = {
 const oneTime: TournamentVivaProduct = { id: 'demo-one-time', name: 'Разовое участие', type: 'SERVICE', cost: 550000, visitsTotal: null, source: 'one-time', raw: {} };
 function checkout(id: string): TournamentVivaCheckout {
   const matrix = readMatrixSettings(new URLSearchParams(location.search));
+  const passFits = energyPassApplies(id.includes('training') ? 'training' : 'tournament', matrix.applicability.pass, matrix);
   return { profile: authenticated ? profile : null, exercise: { id, name: 'Участие', studioId: studios[0].id }, studioId: studios[0].id,
-    customPricing: null, purchasedProducts: [], clientSubscriptions: matrix.profile.pass && matrix.applicability.pass ? [{ ...pass, raw: { ...input(pass.raw), visitsLeft: readPassRemaining(new URLSearchParams(location.search)), visitsUsed: 5 - readPassRemaining(new URLSearchParams(location.search)) } }] : [], oneTimes: [{ ...oneTime, cost: id.includes('training') ? 550000 : 800000 }], subscriptions: [] };
+    customPricing: null, purchasedProducts: [], clientSubscriptions: matrix.profile.pass && passFits ? [{ ...pass, raw: { ...input(pass.raw), visitsLeft: readPassRemaining(new URLSearchParams(location.search)), visitsUsed: 5 - readPassRemaining(new URLSearchParams(location.search)) } }] : [], oneTimes: [{ ...oneTime, cost: id.includes('training') ? 550000 : 800000 }], subscriptions: [] };
 }
 const input = (value: unknown): Record<string, unknown> => typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
 const slots = (date: string): GameTimeSlot[] => [1, 2, 3].flatMap(court => ['09:00', '11:00', '14:00', '18:00', '19:00', '20:30', '22:00'].map(time => ({

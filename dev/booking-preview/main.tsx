@@ -42,6 +42,7 @@ function Preview() {
   const [passRemaining, setPassRemaining] = useState(params.get('passRemaining') ?? '3');
   const [residencyPrice, setResidencyPrice] = useState(params.get('residencyPrice') ?? String(PREVIEW_RESIDENCY_PRICE));
   const boostAllowed = subscription || residency;
+  const standardTournament = (screen === 'tournament-booking' || screen === 'tournament-join') && groupCategory !== 'pro';
   const hasPro = subscription && (subscriptionPlan === 'ra' || subscriptionPlan === 'friendship-2');
   const proQuotaUsed = DAILY_USAGE.some(usage => usage.id === dailyUsage && 'pro' in usage && usage.pro);
   const query = new URLSearchParams({ screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
@@ -109,7 +110,8 @@ function Preview() {
           <fieldset className="preview-product"><legend>3. Абонемент Энергия 5</legend>
             <label className="preview-check"><input type="checkbox" checked={pass} onChange={event => setPass(event.target.checked)} />Есть Энергия 5</label>
             <label className="preview-field">Остаток тренировок<input type="number" min="0" max="5" step="1" value={passRemaining} onChange={event => setPassRemaining(event.target.value)} /></label>
-            <label className="preview-check"><input type="checkbox" checked={passFits} onChange={event => setPassFits(event.target.checked)} />Энергия 5 подходит к событию</label>
+            <label className="preview-check"><input type="checkbox" checked={standardTournament || passFits} disabled={standardTournament} onChange={event => setPassFits(event.target.checked)} />Энергия 5 подходит к событию</label>
+            {standardTournament && <small>Обычные турниры доступны по Энергии 5.</small>}
           </fieldset>
           <fieldset className="preview-product preview-product--boost"><legend>4. РАбуста</legend>
             <label className="preview-check"><input type="checkbox" checked={boost && boostAllowed} disabled={!boostAllowed} onChange={event => setBoost(event.target.checked)} />Есть Буст</label>
