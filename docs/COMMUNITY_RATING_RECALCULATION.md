@@ -102,10 +102,36 @@ Provider reads happen before the retriable transaction; evidence expires after
 or provider evidence. Existing canonical players do not require a Viva lookup.
 
 `scripts/build_fpr_start_bootstrap.mjs` packages the clean-source helper and binds
-it to the installed worker's nine formula/replay module hashes. A helper-only
+it to the installed worker's eleven formula/replay/locking module hashes. A helper-only
 release does not change Node-RED nodes or require a Node-RED restart. Verify its
 manifest, live dry-run, exact worker hashes and previous symlink before an
 authorized switch; keep the previous release for guarded rollback.
+
+FPR roster preparation first reads all existing canonical players in one read-only
+snapshot transaction, preserving identity/alias checks, precision and event versions.
+This path takes no worker lock and calls no provider. A missing canonical player
+switches to initialization: acquire the original data lock and re-read the whole
+roster before planning or writing. Initialization remains an atomic transaction;
+competing initializers cannot create duplicate baselines or partial rosters.
+
+Scheduled jobs now hold `/var/lock/padlhub-rating-schedule.lock` for their whole run.
+The existing `/var/lock/padlhub-rating-worker.lock` protects only personal-rating
+planning, mutation and individual outbox sends. Viva attendance sync, community
+policy/network work and community table recalculation hold only the schedule lock.
+Each queued outbox row is re-read under the data lock before sending, so a roster
+initialization can supersede a pending row between sends. New players may still
+briefly wait for an actual personal-rating write/send; they no longer wait for
+community table recalculation. Existing canonical rosters never wait for either.
+
+Release this change as a coordinated worker + helper update from clean, pushed
+source. Keep scheduled jobs quiescent during the guarded worker `current` switch;
+verify the original data lock and schedule lock are both free before switching.
+Install and verify the worker (including `scripts/lib/ratingDataLock.mjs`) before
+building/verifying/switching the helper against its eleven runtime hashes. Do not run
+old and new schedule wrappers concurrently during rollout. Existing Node-RED
+endpoints, initializer nodes and the 25-second child deadline remain unchanged.
+Rollback uses the retained worker/helper pair under the same quiescence checks;
+there are no schema changes or corrective data operations in this release.
 
 For an erroneous default-1 bootstrap in a still-open, unawarded FPR protocol,
 `scripts/build_fpr_bootstrap_recovery.mjs` builds the private root-only recovery

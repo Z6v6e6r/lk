@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import crypto from 'node:crypto';import {MongoClient} from 'mongodb';
 import {buildFprProjectionOutbox,fprLevelHash} from '../lib/fprLevelLedger.mjs';
-import {initializeFprStarts as initializeWithoutViva,initializeFprStartsWithViva} from '../lib/fprStartBootstrap.mjs';
+import {initializeFprStarts as initializeWithoutViva,initializeFprStartsWithViva,prepareFprStarts} from '../lib/fprStartBootstrap.mjs';
 import {parseFprVivaStartLevel} from '../lib/fprStartVivaLevel.mjs';
 const uri=process.env.FPR_LEVEL_TEST_MONGO_URI;
 const now='2026-11-06T14:00:00.000Z';
@@ -108,5 +108,45 @@ test('missing CUP imports verified Viva numeric, defaults only on verified empty
    evidenceClock:()=>++checks===1?now:'2026-11-06T14:01:00.000Z',
   }),e=>e.message==='FPR_START_VIVA_REQUIRED');
   assert.equal(await db.collection('rating_events').countDocuments(),2);
+ }finally{await db.dropDatabase();await client.close();}
+});
+
+
+test('canonical roster is read-only without flock or Viva; missing players re-read under the data lock',
+ {skip:uri?false:'Requires isolated replica set'},async()=>{
+ const client=new MongoClient(uri),db=client.db('test_fpr_nonblocking_'+crypto.randomBytes(8).toString('hex'));
+ try{
+  await client.connect();
+  for(const name of ['player_rating_state','player_ratings']){
+   await db.collection(name).createIndex({clientId:1},{unique:true});
+   await db.collection(name).createIndex({playerKey:1},{unique:true});
+  }
+  await db.collection('rating_events').createIndex({idempotencyKey:1},{unique:true});
+  const canonical={_id:'client:ready',clientId:'ready',playerKey:'client:ready',ownership:'CUP_CANONICAL',ratingNumeric:3.65432,lastEventId:'base:ready'};
+  await db.collection('player_rating_state').insertOne(canonical);
+  const noCall=()=>{throw Error('must not acquire writer lock or call Viva');};
+  const snapshot=await prepareFprStarts(db,client,['ready'],'host',noCall,{clock:()=>now,withWriteLock:noCall});
+  assert.equal(snapshot.states[0].ratingNumeric,3.65432);assert.deepEqual(snapshot.initialized,[]);
+  assert.deepEqual(await db.collection('player_rating_state').findOne({_id:canonical._id}),canonical);
+  assert.equal(await db.collection('rating_events').countDocuments(),0);
+  assert.equal(await db.collection('rating_projection_outbox').countDocuments(),0);
+  // Simulate a competing writer winning before we obtain the data lock.
+  let locks=0;
+  const withWriteLock=async work=>{
+   locks++;await initializeFprStarts(db,client,['new'],'other-host',now);return work();
+  };
+  const mixed=await prepareFprStarts(db,client,['ready','new'],'host',noCall,{clock:()=>now,withWriteLock});
+  assert.equal(locks,1);assert.equal(mixed.initialized.length,0);
+  assert.equal(await db.collection('rating_events').countDocuments({'player.clientId':'new'}),1);
+  await db.collection('player_rating_state').updateOne({_id:canonical._id},{$set:{ownership:'VIVA'}});
+  await assert.rejects(prepareFprStarts(db,client,['ready'],'host',noCall,{clock:()=>now,withWriteLock:noCall}),/FPR_START_INVALID_CANONICAL/);
+  await db.collection('player_rating_state').updateOne({_id:canonical._id},{$set:{ownership:'CUP_CANONICAL',identityAliases:{clientIds:['ready','alias']}}});
+  await assert.rejects(prepareFprStarts(db,client,['ready','alias'],'host',noCall,{clock:()=>now,withWriteLock:noCall}),/FPR_START_IDENTITY_CONFLICT/);
+  const mixedNew=await prepareFprStarts(db,client,['ready','brand-new'],'host',verifiedUnrated,{clock:()=>now,withWriteLock:work=>work()});
+  assert.equal(mixedNew.initialized.length,1);
+  assert.equal(await db.collection('rating_projection_outbox').countDocuments(),2);
+  await db.collection('player_ratings').insertOne({_id:'bad',clientId:'bad',ratingNumeric:'invalid'});
+  await assert.rejects(prepareFprStarts(db,client,['rollback-new','bad'],'host',verifiedUnrated,{clock:()=>now,withWriteLock:work=>work()}),/FPR_START_INVALID_LEVEL/);
+  assert.equal(await db.collection('player_rating_state').countDocuments({clientId:'rollback-new'}),0);
  }finally{await db.dropDatabase();await client.close();}
 });

@@ -45,7 +45,7 @@ test("rating-worker release packages the Viva User-Agent helper used by attendan
   assert.equal(helperEntries.length, 1);
   assert.equal(fs.existsSync(helperPath), true);
   assert.equal(helperEntries[0].sha256, sha256File(helperPath));
-  for (const relative of ["src/components/tournaments/fpr6x25.ts", "src/services/community-rating/fpr.ts"]) {
+  for (const relative of ["scripts/lib/ratingDataLock.mjs", "src/components/tournaments/fpr6x25.ts", "src/services/community-rating/fpr.ts"]) {
     const entry = manifest.files.find(({ path: filePath }) => filePath === relative);
     assert.ok(entry, `FPR runtime dependency missing: ${relative}`);
     assert.equal(entry.sha256, sha256File(path.join(releaseDir, relative)));

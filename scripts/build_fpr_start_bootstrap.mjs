@@ -2,7 +2,7 @@ import fs from 'node:fs';import crypto from 'node:crypto';import {build} from 'e
 import {readRepositoryProvenance} from './lib/release-provenance.mjs';
 const output=process.argv[2];if(!output||fs.existsSync(output))throw Error('New output directory required');
 const provenance=readRepositoryProvenance(process.cwd());if(provenance.sourceDirty)throw Error('Clean source required');
-const files=['scripts/lib/fprLevelLedger.mjs','scripts/lib/fprLevelIdentity.mjs','scripts/lib/tournamentFinalization.mjs',
+const files=['scripts/lib/ratingWorkerChildProcess.mjs','scripts/lib/ratingDataLock.mjs','scripts/lib/fprLevelLedger.mjs','scripts/lib/fprLevelIdentity.mjs','scripts/lib/tournamentFinalization.mjs',
  'src/services/player-rating/fprRatingReplay.ts','src/services/player-rating/ledger.ts','src/services/player-rating/fprTournamentRating.ts',
  'src/services/player-rating/fprLevelResults.ts','src/services/player-rating/tournamentExclusionGuard.ts','src/components/tournaments/fpr6x25.ts'];
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');

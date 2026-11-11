@@ -226,3 +226,18 @@ reconcile explicitly; never blindly restore an old tournament over newer results
 The HTTP routes deny closed communities and do not accept caller-supplied member
 identity as permission. Missing current-month data returns 503, rather than the
 previous month's ranking.
+
+## FPR start and scheduled calculation locks
+
+The watchdog holds `RATING_WORKER_SCHEDULE_LOCK_FILE` (default
+`/var/lock/padlhub-rating-schedule.lock`) across the complete background run.
+`RATING_WORKER_LOCK_FILE` still identifies the original personal-rating data lock
+(`/var/lock/padlhub-rating-worker.lock`), now acquired inside canonical mutation
+phases and for each outbox send. The reports-only wrapper acquires schedule then
+data lock, in the same order. Game-result children keep the data lock for their
+whole operation. Community recalculation and provider attendance reads do not
+hold the personal-rating lock. Keep both paths distinct.
+
+See `docs/COMMUNITY_RATING_RECALCULATION.md` for the coordinated worker/helper
+rollout and guarded rollback. Updating a cron wrapper without its matching worker
+is unsafe: only the worker now acquires the data lock before canonical writes.

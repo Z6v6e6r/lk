@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import { withRatingDataLock } from "./lib/ratingDataLock.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -52,13 +53,14 @@ function readMongoUriFromFlow() {
   return candidates.find((item) => item.includes("/games")) || candidates[0] || "";
 }
 
-function runNode(args, env, outPath) {
+function runNode(args, env, outPath, lockFd) {
   const timeoutMs = resolveRatingWorkerChildTimeoutMs(env);
   const result = spawnRatingWorkerChild(args, {
     cwd: rootDir,
     env,
     maxBuffer: 200 * 1024 * 1024,
     timeoutMs,
+    lockFd,
   });
   fs.writeFileSync(outPath, result.stdout || "", { mode: 0o600 });
   if (result.stderr) fs.writeFileSync(`${outPath}.stderr`, result.stderr, { mode: 0o600 });
@@ -119,7 +121,7 @@ if (monthlyOnly) {
     process.exit(0);
   }
   const monthlyOut = path.join(outDir, `community-monthly-${runStamp}.json`);
-  const result = runNode(["--experimental-strip-types", path.join(rootDir, "scripts/community_monthly_worker.mjs"), "--apply"], runtimeEnv, `${monthlyOut}.stdout`);
+  const result = await withRatingDataLock(lockFd => runNode(["--experimental-strip-types", path.join(rootDir, "scripts/community_monthly_worker.mjs"), "--apply"], { ...runtimeEnv, RATING_WORKER_SHARED_LOCK_HELD: "1" }, `${monthlyOut}.stdout`, lockFd));
   console.log(JSON.stringify(result));
   process.exit(0);
 }
@@ -131,13 +133,13 @@ let gameResults = {
 if (gameResultWorkerEnabled) {
   const gameResultOut = path.join(outDir, `game-result-rating-worker-${runStamp}.json`);
   try {
-    gameResults = runNode([
+    gameResults = await withRatingDataLock(lockFd => runNode([
       "--experimental-strip-types",
       path.join(rootDir, "scripts/game_result_rating_worker.mjs"),
       "--apply",
       "--limit", runtimeEnv.GAME_RESULT_RATING_WORKER_LIMIT || "20",
       "--out", gameResultOut,
-    ], runtimeEnv, `${gameResultOut}.stdout`);
+    ], runtimeEnv, `${gameResultOut}.stdout`, lockFd));
   } catch (error) {
     gameResults = {
       ok: false,
