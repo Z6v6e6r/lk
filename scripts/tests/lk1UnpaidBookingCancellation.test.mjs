@@ -182,6 +182,51 @@ test('UNPAID is not due while its 25-minute payment link may still work', () => 
   assert.equal(classifyLk1Transaction(op, nanoZone, '2099-01-01T11:56:00.123Z').reason, 'DUE');
 });
 
+test('a closed rejected card requires an exact terminal outcome in its own envelope', () => {
+  const { op, transaction } = fixture();
+  for (const key of ['cardPaymentInfo', 'cardPaymentStatus']) {
+    for (const declineOutcome of ['CANCELLED', 'EXPIRED']) {
+      const changed = { ...transaction, [key]: { status: 'REJECTED', declineOutcome } };
+      assert.equal(classifyLk1Transaction(op, changed, instant).reason, 'DUE');
+      assert.equal(classifyLk1Transaction(op, { ...changed, status: 'PAID' }, instant).reason, 'PAID');
+      assert.equal(classifyLk1Transaction(op, { ...changed, paymentDate: instant }, instant).reason, 'PAYMENT_OR_REFUND_EVIDENCE');
+      assert.equal(classifyLk1Transaction(op, { ...changed,
+        [key]: { ...changed[key], paidAmountMinor: 1 } }, instant).reason, 'PAYMENT_OR_REFUND_EVIDENCE');
+      assert.equal(classifyLk1Transaction(op, { ...changed,
+        [key]: { ...changed[key], refundedAt: instant } }, instant).reason, 'PAYMENT_OR_REFUND_EVIDENCE');
+      assert.equal(classifyLk1Transaction(op, { ...changed,
+        createDate: '2099-01-01T11:40:00.000Z' }, instant).reason, 'NOT_DUE');
+    }
+    for (const declineOutcome of [undefined, '', 'UNKNOWN', 'PROCESSING', 'cancelled']) {
+      const changed = { ...transaction, declineOutcome: 'CANCELLED',
+        [key]: { status: 'REJECTED', declineOutcome } };
+      assert.equal(classifyLk1Transaction(op, changed, instant).reason, 'PAYMENT_CARD_STATE_UNSAFE');
+    }
+  }
+  for (const status of ['PAID', 'WAITING', 'PROCESSING', 'UNKNOWN']) {
+    assert.equal(classifyLk1Transaction(op, { ...transaction,
+      cardPaymentInfo: { status: 'REJECTED', declineOutcome: 'CANCELLED' },
+      cardPaymentStatus: { status } }, instant).reason, 'PAYMENT_CARD_STATE_UNSAFE');
+  }
+  assert.equal(classifyLk1Transaction(op, { ...transaction,
+    cardPaymentInfo: { status: 'REJECTED' },
+    cardPaymentStatus: { status: 'REJECTED', declineOutcome: 'CANCELLED' } }, instant).reason,
+  'PAYMENT_CARD_STATE_UNSAFE');
+});
+
+test('terminal rejected unpaid checkout supports shadow, one cancel and exact release readback', async () => {
+  const seed = fixture();
+  seed.transaction.cardPaymentInfo = { status: 'REJECTED', declineOutcome: 'CANCELLED' };
+  const store = fakeStore(seed.op), provider = fakeProvider(seed);
+  assert.deepEqual(await run(seed.op, store, provider, 'SHADOW'), { state: 'ELIGIBLE' });
+  assert.equal(store.calls.length, 0);
+  assert.equal(provider.calls.includes('cancel'), false);
+  assert.deepEqual(await run(seed.op, store, provider), { state: 'CANCELLED' });
+  assert.equal(provider.calls.filter(value => value === 'cancel').length, 1);
+  assert.equal(store.row.state, 'RELEASED');
+  assert.deepEqual(await run(store.row, store, provider), { state: 'SKIPPED', reason: 'OUT_OF_SCOPE' });
+});
+
 test('booking requires exact owner, exercise, ON_PLACE carrier and explicit cancellation proof', () => {
   const { op, booking } = fixture();
   assert.equal(classifyLk1Booking(op, booking).reason, 'ACTIVE');

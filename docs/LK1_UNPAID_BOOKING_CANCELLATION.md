@@ -17,6 +17,13 @@ valid zoned `paymentDueDate` at least 60 seconds in the past, plus a valid
 or refund evidence. Unknown, partial, `WAITING`, and `PAID` statuses never cancel.
 The event must not have started when a new cancellation is claimed.
 
+Viva also represents a closed unpaid attempt as card `REJECTED` with the exact
+`declineOutcome` `CANCELLED` or `EXPIRED` in that same card envelope. These terminal
+shapes retain every transaction, amount, deadline and no-payment/no-refund check.
+An unqualified rejection, unknown outcome or processing/paid alias still blocks
+cancellation. The November 11 recovery rebinds the worker to the reviewed capacity
+generation; it does not activate a historical backlog by moving the service cutoff.
+
 ## Operation and recovery
 
 `scripts/run_lk1_unpaid_booking_cancellation.mjs` is a long-running 120-second
@@ -140,7 +147,7 @@ read-only `GET /flows`. Never write or log credential values in a release
 artifact. Without that file, `ENFORCE_NEW` stops before Mongo or Viva access.
 The current
 reviewed full-flow SHA is
-`d9764f7b6a883a644ee319a6fed44c1b087e701d030aef2c7d7c718751840087`.
+`3d454ddace61985d4a1d6d92790fcfd25aa7ac8f26911c145c50bd83394e8383`.
 
 The unit defaults to `OFF`. Activate `SHADOW` with a root-owned mode-0600
 `/etc/padlhub/lk1-unpaid-cancel.env` containing only mode, tenant, and a fresh
