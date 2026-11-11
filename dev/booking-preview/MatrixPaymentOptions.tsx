@@ -122,11 +122,10 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <button type="button" onClick={() => { setRegistered(false); setSubmittedOption(null); setSubmittedPurchase(null); }}>Отменить запись</button>
     </div> : <>
       {isWholeCourt && <p className="matrix-notice">Полная оплата корта: подписка, Резидентство и абонементы не применяются.</p>}
-      {excludedGroup && <p className="matrix-notice">Для этой категории групповых не действуют подписки и Резидентство.</p>}
       {full && <p className="matrix-notice" role="status">Все места заняты. Запись на это событие недоступна.</p>}
       <fieldset className="matrix-options" disabled={busy}>
         <legend className="matrix-sr-only">Способы записи</legend>
-        {options.filter(option => option.mode !== 'reference').map(option => {
+        {options.filter(option => option.mode !== 'reference' && option.mode !== 'unavailable').map(option => {
           const copy = <><span className={`matrix-icon matrix-icon--${option.kind}`}><PaymentIcon kind={option.kind} /></span>
             <span className="matrix-option-copy"><strong>{title(option)}</strong><span>{detail(option)}</span></span>
             <span className="matrix-option-value"><strong>{amount(option)}</strong>{option.mode === 'offer' && <span>{option.kind === 'subscription' || option.kind === 'pass' ? 'Купить и записаться →' : 'Подробнее →'}</span>}</span></>;
