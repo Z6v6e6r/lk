@@ -1,4 +1,4 @@
-import { formatRubles, type PaymentKind, type PaymentOption } from './paymentMatrix.ts';
+import { formatRubles, type PaymentKind, type PaymentOption, type Privileges } from './paymentMatrix.ts';
 
 export const ENERGY_PASS_PRICE = 19800;
 export const PREVIEW_RESIDENCY_PRICE = 790;
@@ -9,7 +9,18 @@ export function isSelectableMethod(option: PaymentOption) {
 }
 
 export function defaultPaymentOption(options: PaymentOption[]): PaymentOption | undefined {
-  return options.find(option => option.kind === 'residency' && isSelectableMethod(option)) || options.find(isSelectableMethod);
+  return options.find(option => (option.kind === 'residency' || option.withResidency) && isSelectableMethod(option)) || options.find(isSelectableMethod);
+}
+
+// Keep Boost as the actual booking method; only combine its presentation with
+// the owned residency that enables it. Subscription-backed Boost stays separate.
+export function combineResidencyBoost(options: PaymentOption[], privileges: Privileges): PaymentOption[] {
+  if (!privileges.residency || privileges.subscription) return options;
+  const residency = options.find(option => option.kind === 'residency' && option.mode === 'book');
+  const boost = options.find(option => option.kind === 'boost' && option.mode === 'book'
+    && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
+  if (!residency || !boost) return options;
+  return options.filter(option => option.kind !== 'boost').map(option => option === residency ? { ...boost, withResidency: true } : option);
 }
 
 // An existing subscription should cover the event without using Boost when

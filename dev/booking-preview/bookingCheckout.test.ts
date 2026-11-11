@@ -1,7 +1,65 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost } from './bookingCheckout.ts';
+import { bookingButtonText, combineResidencyBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, readMatrixSettings, type PaymentOption } from './paymentMatrix.ts';
+
+test('residency-backed Boost is one default final method with the actual duration-dependent quote', () => {
+  const profile = PRIVILEGE_PROFILES[1];
+  for (const [durationMinutes, expected] of [[60, 0], [90, 350], [120, 700]]) {
+    const raw = buildBookingPaymentOptions('game', profile, { subscription: true, pass: false },
+      { subscriptionPlan: 'friendship-2', boost: true, dailyQuota: 'available', durationMinutes }, 'quarter', durationMinutes / 60 * 4000);
+    const options = combineResidencyBoost(raw, profile);
+    assert.equal(options.filter(option => option.kind === 'boost').length, 1);
+    assert.equal(options.some(option => option.kind === 'residency'), false);
+    const choice = defaultPaymentOption(options)!;
+    assert.equal(choice.kind, 'boost', 'Presentation must not change the actual entitlement method to residency');
+    assert.equal(choice.withResidency, true);
+    assert.equal(choice.amount, expected);
+    assert.deepEqual(createPreviewOrder(choice), { method: 'boost', bookingAmount: expected, product: null, productAmount: 0, total: expected });
+    assert.equal(raw.some(option => option.withResidency), false, 'Source quotes must remain unchanged');
+  }
+});
+
+test('residency-backed Boost also combines event quotes and retains discounts after use', () => {
+  for (const [service, price] of [['training', 2750], ['tournament', 4000]] as const) {
+    for (const dailyQuota of ['available', 'used'] as const) {
+      const profile = PRIVILEGE_PROFILES[1];
+      const raw = buildBookingPaymentOptions(service, profile, { subscription: true, pass: false },
+        { boost: true, subscriptionPlan: 'ra', dailyQuota, dailyUsage: dailyQuota === 'used' ? 'training' : 'none' });
+      const options = combineResidencyBoost(raw, profile);
+      assert.equal(options.filter(option => option.withResidency).length, 1);
+      assert.equal(defaultPaymentOption(options)?.amount, dailyQuota === 'used' ? price : 0);
+      assert.ok(!options.some(option => option.kind === 'residency'));
+    }
+  }
+});
+
+test('subscription-backed Boost, missing residency, exclusions and whole-court payment keep their own methods', () => {
+  for (const profile of [PRIVILEGE_PROFILES[0], PRIVILEGE_PROFILES[2], PRIVILEGE_PROFILES[3]]) {
+    const raw = buildBookingPaymentOptions('game', profile, { subscription: true, pass: false }, { boost: true, subscriptionPlan: 'ra', durationMinutes: 120 }, 'quarter', 8000);
+    assert.equal(combineResidencyBoost(raw, profile), raw);
+  }
+  for (const proDirection of [false, true]) {
+    const profile = PRIVILEGE_PROFILES[1];
+    const raw = buildBookingPaymentOptions('training', profile, { subscription: true, pass: false }, { boost: true, subscriptionPlan: 'ra', excludedGroups: !proDirection, proDirection });
+    assert.equal(combineResidencyBoost(raw, profile), raw);
+  }
+  const raw = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[1], { subscription: true, pass: false }, { boost: true }, 'court', 8000);
+  assert.deepEqual(defaultPaymentOption(combineResidencyBoost(raw, PRIVILEGE_PROFILES[1])), { kind: 'full', mode: 'book', amount: 8000 });
+});
+
+test('unknown Boost prices or unavailable Boost never replace a priced residency fallback', () => {
+  const residency: PaymentOption = { kind: 'residency', mode: 'book', amount: 700 };
+  for (const amount of [null, NaN, Infinity, -1]) {
+    const options: PaymentOption[] = [residency, { kind: 'boost', mode: 'book', amount }];
+    assert.equal(combineResidencyBoost(options, PRIVILEGE_PROFILES[1]), options);
+    assert.equal(defaultPaymentOption(options), residency);
+  }
+  for (const mode of ['quote', 'offer', 'unavailable', 'reference'] as const) {
+    const options: PaymentOption[] = [residency, { kind: 'boost', mode, amount: 0 }];
+    assert.equal(combineResidencyBoost(options, PRIVILEGE_PROFILES[1]), options);
+  }
+});
 
 test('Friendship 2.0 hides duplicate free Boost in games while retaining its extra free group/tournament option', () => {
   const settings = readMatrixSettings(new URLSearchParams('subscription=1&residency=0&pass=0&boost=1&subscriptionPlan=friendship-2&dailyQuota=available'));

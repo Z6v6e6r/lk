@@ -3,7 +3,7 @@ import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
-import { ENERGY_PASS_PRICE, bookingButtonText, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost, type PreviewOrder } from './bookingCheckout';
+import { ENERGY_PASS_PRICE, bookingButtonText, combineResidencyBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost, type PreviewOrder } from './bookingCheckout';
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices, type SubscriptionOffer } from './subscriptionOffers';
 import './matrix.css';
 
@@ -47,7 +47,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const subscriptionPurchaseOption = purchaseSubscriptionChoice?.option;
   const rawPaymentOptions = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
     .flatMap(option => option.kind === 'subscription' && !profile.subscription ? subscriptionPurchaseOption ? [subscriptionPurchaseOption] : [] : [option]);
-  const paymentOptions = withoutRedundantBoost(rawPaymentOptions);
+  const paymentOptions = combineResidencyBoost(withoutRedundantBoost(rawPaymentOptions), profile);
   const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
   const available = options.filter(isSelectableMethod);
   const defaultChoice = defaultPaymentOption(options);
@@ -80,6 +80,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   };
 
   const title = (option: PaymentOption) => {
+    if (option.withResidency) return `С Резидентством и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
     if (option.kind === 'boost') return option.amount === 0 ? 'С Бустом — бесплатно' : option.benefit === 'partial-hour' ? `С Бустом · ${option.freeMinutes} минут бесплатно` : `С Бустом · скидка ${price.discount}%`;
     if (isWholeCourt && option.kind === 'full') return 'Полная оплата за 4 игроков';
     if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
@@ -102,6 +103,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.mode === 'unavailable') return option.kind === 'subscription' ? 'Тариф подписки не подходит к этому событию' : 'Нет подходящего абонемента с доступными посещениями';
     if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
     if (option.kind === 'residency') return option.mode === 'offer' ? `Скидка ${price.discount}% при оформлении Резидентства` : `Скидка ${price.discount}%`;
+    if (option.withResidency && (option.benefit === 'free-hour' || option.benefit === 'free-event')) return 'Дневной лимит РАбуста доступен';
     if (option.kind === 'subscription' && option.mode === 'offer' && option.amount === 0) return purchaseSubscription?.name || 'Подписка';
     if (option.kind === 'subscription' || option.kind === 'boost') {
       const prefix = option.mode === 'offer' ? `При оформлении подписки ${purchaseSubscription?.name || 'подходящего тарифа'}. ` : '';
@@ -193,12 +195,13 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <fieldset className="matrix-options" disabled={busy}>
         <legend className="matrix-sr-only">Способы записи</legend>
         {options.filter(option => option.mode !== 'reference' && option.mode !== 'unavailable').map(option => {
+          const displayKind = option.withResidency ? 'residency' : option.kind;
           const showBasePrice = (option.kind === 'residency' || option.kind === 'subscription' || option.kind === 'boost')
             && referenceAmount != null && option.amount != null && option.amount >= 0 && option.amount < referenceAmount;
-          const copy = <><span className={`matrix-icon matrix-icon--${option.kind}`}><PaymentIcon kind={option.kind} /></span>
+          const copy = <><span className={`matrix-icon matrix-icon--${displayKind}`}><PaymentIcon kind={displayKind} /></span>
             <span className="matrix-option-copy"><strong>{title(option)}</strong><span>{detail(option)}</span></span>
             <span className="matrix-option-value">{showBasePrice && <span className="matrix-base-price matrix-option-base-price"><span>Полная цена</span><del>{formatRubles(referenceAmount!)}</del></span>}<strong>{amount(option)}</strong></span></>;
-          const classes = `matrix-option matrix-option--${option.kind} ${choice?.kind === option.kind ? 'is-selected' : ''} ${option.mode === 'quote' ? 'is-quote' : ''}`;
+          const classes = `matrix-option matrix-option--${displayKind} ${choice?.kind === option.kind ? 'is-selected' : ''} ${option.mode === 'quote' ? 'is-quote' : ''}`;
           if (isSelectableMethod(option)) return <label className={classes} key={option.kind}>
             <input type="radio" name={`${groupId}-method`} value={option.kind} checked={choice?.kind === option.kind} disabled={locked} onChange={() => setSelected(option.kind)} />{copy}
           </label>;
