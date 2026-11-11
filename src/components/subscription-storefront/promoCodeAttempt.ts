@@ -1,3 +1,5 @@
+import { checkoutSessionToken } from './zeroCheckoutSession';
+import { DIRECT_RECOVERY_PRODUCT, readClosedDirectCheckout } from './directCheckoutRecovery';
 import { parseZeroAttempt } from './zeroCheckoutCustody';
 import { legacyZeroOffersForProduct } from './zeroCheckoutProducts';
 import { apiConfirmTournamentSubscriptionPurchase } from '../../utils/apiClient';
@@ -13,21 +15,23 @@ export async function subscriptionPromoAttemptKey(productId: string, phone: stri
   return ATTEMPT_PREFIX + Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export async function hasSubscriptionPromoAttempt(productId: string, phone: string): Promise<boolean> {
+export async function hasSubscriptionPromoAttempt(productId: string, phone: string, allowClosedRelease = false): Promise<boolean> {
   try {
     const actor = readAuthToken();
+    const checkoutActor = productId === DIRECT_RECOVERY_PRODUCT ? checkoutSessionToken() : null;
     const key = await subscriptionPromoAttemptKey(productId, phone);
     const raw = window.localStorage.getItem(key);
     let record: Record<string, unknown> | null = null;
     if (raw !== null) { try { record = JSON.parse(raw); } catch { return true; } }
     const represented: { key: string; raw: string }[] = [];
+    let locallyPaid = false;
     for (const offer of legacyZeroOffersForProduct(productId)) {
       const zeroKey = 'padlhub_zero_checkout_attempt_v1:' + offer;
       const zeroRaw = window.localStorage.getItem(zeroKey);
       if (zeroRaw === null) continue;
       const zero = parseZeroAttempt(zeroRaw, offer);
       if (!zero) return true;
-      if (zero.state === 'paid') continue;
+      if (zero.state === 'paid') { locallyPaid = true; continue; }
       if (zero?.state !== 'pending' || record?.kind !== 'ordinary'
         || !(typeof record.paymentRef === 'string' && record.paymentRef === zero.paymentRef
           || typeof record.transactionId === 'string' && record.transactionId === zero.transactionId)) return true;
@@ -62,6 +66,23 @@ export async function hasSubscriptionPromoAttempt(productId: string, phone: stri
       // A completed prior purchase no longer blocks a later renewal.
       return !await releaseProvenPaid();
     }
+    if (allowClosedRelease && navigator.locks && checkoutActor && !locallyPaid && productId === DIRECT_RECOVERY_PRODUCT
+      && record?.kind === 'ordinary' && record.paid !== true && typeof transactionId === 'string') {
+      // The caller holds the account/product lock. Never adopt an explicit different transaction.
+      if (represented.some(row => { const zero = parseZeroAttempt(row.raw, row.key.replace('padlhub_zero_checkout_attempt_v1:', '')); return zero?.transactionId && zero.transactionId !== transactionId; })) return true;
+      const unchanged = () => readAuthToken() === actor && checkoutSessionToken() === checkoutActor && window.localStorage.getItem(key) === raw
+        && represented.every(row => window.localStorage.getItem(row.key) === row.raw);
+      if (await readClosedDirectCheckout(productId, transactionId, unchanged) && unchanged()) {
+        const clear = async (index: number): Promise<boolean> => {
+          if (index < represented.length) return navigator.locks.request(represented[index].key, { ifAvailable: true }, lock => lock ? clear(index + 1) : false);
+          if (!unchanged()) return false;
+          for (const row of represented) window.localStorage.removeItem(row.key);
+          window.localStorage.removeItem(key);
+          return window.localStorage.getItem(key) === null && represented.every(row => window.localStorage.getItem(row.key) === null);
+        };
+        return !await clear(0);
+      }
+    }
     return true;
   } catch { return true; }
 }
@@ -75,7 +96,7 @@ export async function withSubscriptionPromoLock<T>(productId: string, phone: str
   }
   const key = await subscriptionPromoAttemptKey(productId, phone);
   return navigator.locks.request(key, { ifAvailable: true }, async lock => {
-    if (!lock || await hasSubscriptionPromoAttempt(productId, phone)) throw new Error(SUBSCRIPTION_PROMO_PENDING_MESSAGE);
+    if (!lock || await hasSubscriptionPromoAttempt(productId, phone, true)) throw new Error(SUBSCRIPTION_PROMO_PENDING_MESSAGE);
     return create();
   });
 }

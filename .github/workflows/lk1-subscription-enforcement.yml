@@ -473,6 +473,8 @@ jobs:
           scripts/tests/atlantySchedule.test.ts
           scripts/tests/atlantyLkBookingWindow.test.ts
           scripts/tests/subscriptionPromoCode.test.ts
+          scripts/tests/directCheckoutRecovery.test.ts
+          scripts/tests/directCheckoutRecoveryBackend.test.mjs
           scripts/tests/mainSubscriptionsZeroBlock.test.mjs
           scripts/tests/tournamentSubscriptionCatalog.test.ts
           scripts/tests/tournamentSubscriptionSalesCandidate.test.mjs

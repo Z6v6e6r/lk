@@ -190,3 +190,15 @@ test('fresh purchase after verified reset keeps the current trusted monthly pric
     assert.equal(claimFastRestart(intent.id, { priceMinor: 980000 }), false);
   } finally { h.restore(); }
 });
+
+test('2.0 restart requires the same displayed price and exact one-day activation term once', async () => {
+  const h = harness(); try {
+    const intent = createFastIntent('friendship-two-hours', 1980000, Object.assign(h.event(), { target: new h.w.Element('friendship-two-hours') }), true);
+    assert.equal(armFastResume(intent.id), true); assert.equal(claimFastResume(intent.id), true);
+    const { claimFastRestart } = await import('../../src/components/subscription-storefront/zeroCheckoutIntent.ts');
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 1980000, activationDays: 0 }), false);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 1990000, activationDays: 1 }), false);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 1980000, activationDays: 1 }), true);
+    assert.equal(claimFastRestart(intent.id, { priceMinor: 1980000, activationDays: 1 }), false);
+  } finally { h.restore(); }
+});
