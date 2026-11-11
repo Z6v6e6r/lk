@@ -360,7 +360,7 @@ test("scheduled wrapper isolates game-result worker failures from canonical rati
     "utf8",
   );
 
-  const gameResultRun = wrapperSource.indexOf("gameResults = runNode([");
+  const gameResultRun = wrapperSource.indexOf("gameResults = await withRatingDataLock(lockFd => runNode([");
   const isolatedFailure = wrapperSource.indexOf('reason: "GAME_RESULT_RATING_WORKER_FAILED"');
   const canonicalRun = wrapperSource.indexOf('path.join(rootDir, "scripts/rating_worker.mjs")');
   assert.ok(gameResultRun >= 0);
