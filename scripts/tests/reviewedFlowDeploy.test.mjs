@@ -1896,3 +1896,45 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const failure of ['restart', 'online-readback', 'publication-fsync', 'lease-refresh']) {
+  test(`forward-only apply retains candidate and blocking custody after ${failure}`, t => {
+    const prepared = prepareRuntime(t, { failFirstRestart: failure === 'restart' || failure === 'lease-refresh' });
+    if (failure === 'publication-fsync') failAfterLiveRename(t, prepared);
+    if (failure === 'online-readback') {
+      const read = fs.readFileSync; let failed = false;
+      t.mock.method(fs, 'readFileSync', (file, ...args) => {
+        if (!failed && file === prepared.liveFlowPath && prepared.restartPreviousValues.length) {
+          failed = true; throw new Error('synthetic online readback failure');
+        }
+        return read(file, ...args);
+      });
+    }
+    if (failure === 'lease-refresh') {
+      const rename = fs.renameSync;
+      t.mock.method(fs, 'renameSync', (from, to) => {
+        if (to === prepared.deploymentLeasePath) throw new Error('synthetic lease refresh failure');
+        return rename(from, to);
+      });
+    }
+    const common = { candidatePath: prepared.candidatePath, contractPath: prepared.contractPath,
+      deploymentId: prepared.contract.deploymentId };
+    assert.throws(() => prepared.runtime.apply({ ...common, stamp: '20260820T120000+0300',
+      failureRecovery: 'retain-candidate' }), /forward recovery; source rollback disabled; retainedSha256=[a-f0-9]{64}; restartAttempted=(true|false); runtime=UNVERIFIED/);
+    assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
+    assert.deepEqual(prepared.restartPreviousValues, failure === 'publication-fsync' ? [] : [10]);
+    assert.equal(JSON.parse(fs.readFileSync(prepared.deploymentLeasePath)).phase, 'applying');
+    prepared.advanceTime(60 * 60 * 1000);
+    assert.throws(() => prepared.runtime.preflight(common), /lease is active/);
+  });
+}
+test('unknown failure recovery policy is rejected before backup or publication', t => {
+  const prepared = prepareRuntime(t);
+  assert.throws(() => prepared.runtime.apply({ candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath, deploymentId: prepared.contract.deploymentId,
+    stamp: '20260820T120000+0300', failureRecovery: 'unknown' }), /Invalid apply failure recovery/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.equal(fs.existsSync(prepared.backupDirectory), false);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+});

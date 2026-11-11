@@ -41,7 +41,8 @@ Before paired deployment, audit unpaid INTENT/REVIEW and native free job
 QUEUED/CANCEL_INTENT/RETURN_PENDING; do not stop over unresolved provider work. Preserve
 cohort, cursor, service-token custody and permanent flow-read authorization. Hold the shared
 reviewed-flow lock through stop, flow publication, runtime verification and worker rebind.
-Once a new native intent exists, an old worker/flow rollback is unsafe: retain the compatible
+Use apply `--failure-recovery retain-candidate` so a restart/publication failure retains compatible source and a non-expiring applying lease instead of automatically restoring old source. Verify the effective systemd unit and new bundle unit agree before starting.
+Once a new native intent can exist, an old worker/flow rollback is unsafe: retain the compatible
 GET reconciliation path and resolve pending work before considering rollback. Frontend
 publication preserves every installed artifact lineage and checks public hashes separately.
 
