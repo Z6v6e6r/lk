@@ -4,6 +4,7 @@ import {
   apiFetchCommunities,
   apiJoinCommunityByInvite,
   buildCommunityInviteLink,
+  buildCommunityLogoCandidates,
   communityErrorMessage,
   extractCommunityInviteCode,
   type CommunityRecord,
@@ -11,7 +12,7 @@ import {
   type EventRegistration,
 } from "../../utils/communityApi";
 import { EventRegistrationForm } from '../cabinet/EventRegistrationForm';
-import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_INVITE_HEADING, EXHIBITION_INVITE_NOTE, isExhibitionInvite, readExhibitionBrandOverride } from '../padel-jump/exhibition';
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
   CUSTOM_FIELD_IDS,
@@ -194,6 +195,7 @@ export default function CommunityJoinPage({
   currentContext.current = context;
   const mounted = useRef(false);
   const activeAction = useRef(false);
+  const exhibitionAutoJoin = useRef<string | null>(null);
   const [loadedContext, setLoadedContext] = useState<typeof context | null>(null);
   useEffect(() => {
     mounted.current = true;
@@ -338,13 +340,34 @@ export default function CommunityJoinPage({
 
   const handleReload = async () => {
     if (activeAction.current) return;
+    exhibitionAutoJoin.current = null;
     activeAction.current = true; setSubmitting("reload");
     try { await reload(true); }
     finally { activeAction.current = false; if (mounted.current) setSubmitting(null); }
   };
 
+  const brand = useMemo(() => {
+    if (community?.id !== EXHIBITION_COMMUNITY_ID && !isExhibitionInvite(normalizedInviteCode)) return undefined;
+    const override = readExhibitionBrandOverride();
+    return {
+      heading: override.heading ?? EXHIBITION_INVITE_HEADING,
+      note: EXHIBITION_INVITE_NOTE,
+      logoUrl: override.logoUrl ?? buildCommunityLogoCandidates(community)[0] ?? null,
+    };
+  }, [community, normalizedInviteCode]);
   const current = loadedContext === context;
   const visibleState = !current || loading ? "checking" : state;
+  const exhibition = Boolean(brand);
+  // The exhibition invitation must open the questionnaire right after authentication:
+  // one canonical preflight command obtains the server notice, then the form replaces this state.
+  useEffect(() => {
+    if (!exhibition || !authenticated || !current || loading || visibleState !== "unverified") return;
+    if (eventNotice || submitting) return;
+    const key = `${normalizedInviteCode || ""}:${profile?.id || ""}`;
+    if (exhibitionAutoJoin.current === key) return;
+    exhibitionAutoJoin.current = key;
+    void handleJoin();
+  }, [authenticated, current, eventNotice, exhibition, handleJoin, loading, normalizedInviteCode, profile?.id, submitting, visibleState]);
   const primary = visibleState === "guest" ? () => { if (authenticated) logout(); setShowLogin(true); }
     : visibleState === "error" || visibleState === "pending" ? () => { void handleReload(); }
     : () => { void handleJoin(); };
@@ -352,6 +375,7 @@ export default function CommunityJoinPage({
     busy={Boolean(submitting) || loading}
     busyLabel={submitting === "join" ? alreadyMember ? "Открываем…" : "Вступаем…" : submitting === "decline" ? "Переходим…" : "Проверяем…"}
     error={current ? actionError || loadError : null} reason={actionError}
+    brand={brand} preflight={exhibition && current && authenticated && visibleState === "unverified" && !eventNotice}
     onPrimary={primary} onSecondary={handleDecline}>
     {visibleState === "guest" && showLogin ? <AuthForm onLogin={onLogin} />
       : current && eventNotice ? <EventRegistrationForm notice={eventNotice} onSubmit={handleJoin} onCancel={() => setEventNotice(null)} /> : null}

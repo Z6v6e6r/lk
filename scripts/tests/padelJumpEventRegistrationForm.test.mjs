@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { build, transformSync } from 'esbuild';
 import { parseEventRegistrationPolicy } from '../../src/services/community-policy.ts';
-import { EXHIBITION_COMMUNITY_ID } from '../../src/components/padel-jump/exhibition.ts';
+import { EXHIBITION_COMMUNITY_ID, readExhibitionBrandOverride } from '../../src/components/padel-jump/exhibition.ts';
 
 const require=createRequire(import.meta.url), React=require('react');
 const {renderToStaticMarkup}=require('react-dom/server');
@@ -34,16 +34,33 @@ async function formRenderer() {
   return value=>renderToStaticMarkup(React.createElement(module.exports.EventRegistrationForm,{notice:value,onSubmit:async()=>null,onCancel(){}}));
 }
 
-test('perpetual questionnaire renders after the game with truthful per-submission retention and required fields',async t=>{
+test('perpetual exhibition questionnaire is the short form with phone, notification opt-in and collapsed legal notice',async t=>{
   const render=await formRenderer();
   t.mock.timers.enable({apis:['Date'],now:Date.parse('2028-11-14T09:00:00.000Z')});
   const html=render(notice);
   assert.match(html,/<form/);
-  assert.match(html,/один календарный год с момента отправки/);
-  assert.doesNotMatch(html,/год после окончания|Регистрация пока закрыта/);
-  for(const name of ['fullName','company','email']) assert.match(html,new RegExp('<input(?=[^>]*name="'+name+'")(?=[^>]*required="")'));
+  assert.match(html,/Заполните, пожалуйста, Ваши данные/);
+  assert.match(html,/персональную презентацию/);
+  assert.match(html,/3 месячных подписки/);
+  assert.match(html,/Оповестить меня о результатах/);
+  assert.match(html,/<details[^>]*class="community-event-registration__legal"/);
+  for(const name of ['fullName','company','phone','email']) assert.match(html,new RegExp('<input(?=[^>]*name="'+name+'")(?=[^>]*required="")'));
+  assert.match(html,/<input(?=[^>]*name="phone")(?=[^>]*type="tel")/);
+  assert.match(html,/<input(?=[^>]*name="pushOptIn")(?=[^>]*type="checkbox")/);
   assert.match(html,/>Вступить<\/button>/);
   assert.doesNotMatch(render({policy,revision:2}),/<form/,'ordinary EVENT end dates remain enforced');
+});
+
+test('ordinary event questionnaires keep the full policy notice and do not collect phone or push consent',async ()=>{
+  const render=await formRenderer();
+  const html=render({policy,revision:2});
+  assert.match(html,/<form/);
+  assert.match(html,/Анкета используется/);
+  assert.match(html,/Хранение — один календарный год после окончания мероприятия/);
+  assert.doesNotMatch(html,/Заполните, пожалуйста, Ваши данные|Оповестить меня о результатах/);
+  for(const name of ['fullName','company','email']) assert.match(html,new RegExp('<input(?=[^>]*name="'+name+'")(?=[^>]*required="")'));
+  assert.doesNotMatch(html,/name="phone"/);
+  assert.doesNotMatch(html,/name="pushOptIn"/);
 });
 
 const section=readFileSync('src/components/cabinet/CommunitiesSection.tsx','utf8');
@@ -84,4 +101,21 @@ test('a changed canonical notice updates the open form without an automatic seco
   const message=await handle({fullName:'Synthetic Participant',company:'Synthetic Company',email:['participant','example.invalid'].join('@'),policyRevision:1});
   assert.deepEqual(state.notice,notice);
   assert.equal(requests,1);assert.match(message,/Условия анкеты обновились/);
+});
+
+test('collected phone numbers normalize to the canonical RU form and reject unusable input', async () => {
+  const compiled = await build({ entryPoints: ['src/components/cabinet/EventRegistrationForm.tsx'], bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic', external: ['react', 'react/jsx-runtime'], loader: { '.css': 'empty' }, logLevel: 'silent' });
+  const module = { exports: {} };
+  new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(require, module, module.exports);
+  const normalize = module.exports.normalizeEventPhone;
+  for (const [value, expected] of [['+7 (999) 000-00-01', '79990000001'], ['8 999 000 00 01', '79990000001'], ['9990000001', '79990000001'], ['7-999-000-00-01', '79990000001']]) assert.equal(normalize(value), expected);
+  for (const value of ['', '12345', '+1 202 555 0147', '999000000', '799900000011']) assert.equal(normalize(value), null);
+});
+
+test('public guest hero accepts only a safe https or site-relative logo and a bounded title', () => {
+  assert.deepEqual(readExhibitionBrandOverride('?invite=x&brandLogo=https%3A%2F%2Fstatic.tildacdn.com%2Flogo.png&brandTitle=%D0%9A%D0%BE%D1%80%D0%BF%D0%A1%D0%BF%D0%BE%D1%80%D1%82'), { logoUrl: 'https://static.tildacdn.com/logo.png', heading: 'КорпСпорт' });
+  assert.deepEqual(readExhibitionBrandOverride('?logo=%2Fassets%2Flogo.svg'), { logoUrl: '/assets/logo.svg' });
+  assert.deepEqual(readExhibitionBrandOverride('?brandLogo=javascript%3Aalert(1)&brandTitle='), {});
+  assert.deepEqual(readExhibitionBrandOverride('?brandLogo=%2F%2Fevil.example%2Fx.png'), {});
+  assert.deepEqual(readExhibitionBrandOverride('?brandTitle=' + 'x'.repeat(121)), {});
 });

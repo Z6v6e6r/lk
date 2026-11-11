@@ -33,3 +33,21 @@ test('member and invitation render distinct actions, server metadata and no serv
   const guest = render('guest');assert.ok(guest.includes('Войти и продолжить'));assert.ok(guest.includes('Не сейчас'));
   const blocked = render('blocked');assert.match(blocked, /disabled=""/);assert.ok(blocked.includes('Вступление недоступно'));
 });
+
+test('exhibition invitation shows the community mark and access claim without the intermediate server-check screen', () => {
+  const brand = { heading: 'Вступай в сообщество КорпСпорт 2026', note: 'Все участники выставки КорпСпорт 2026.', logoUrl: null };
+  const render = props => renderToStaticMarkup(React.createElement(module.exports.CommunityInviteView, { community: null, onPrimary() {}, onSecondary() {}, ...props }));
+  const guest = render({ state: 'guest', brand });
+  assert.ok(guest.includes('Вступай в сообщество КорпСпорт 2026'));
+  assert.ok(guest.includes('Все участники выставки КорпСпорт 2026.'));
+  assert.ok(guest.includes('Войти и продолжить'));
+  assert.ok(!guest.includes('Приглашение в сообщество'));
+  assert.match(guest, /class="ph-community-invite__hero-badge"[^>]*>КС</);
+  const preflight = render({ state: 'unverified', brand, preflight: true });
+  assert.ok(preflight.includes('Загружаем анкету…'));
+  assert.ok(!preflight.includes('Условия вступления проверит сервер.'));
+  assert.ok(!preflight.includes('ph-community-invite__primary'));
+  const ready = render({ state: 'unverified', brand });
+  assert.ok(!ready.includes('Условия вступления проверит сервер.'));
+  assert.ok(ready.includes('Вступить в сообщество'));
+});

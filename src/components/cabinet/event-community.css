@@ -12,3 +12,12 @@
 .community-event-registration .form-input,
 .community-event-registration .form-actions button { min-height: 48px; }
 .modal-content:has(.community-event-registration) .modal-close { min-width: 48px; min-height: 48px; }
+
+/* Exhibition questionnaire: short marketing lead, phone, notification opt-in and collapsed legal notice. */
+.community-event-registration--exhibition { display: grid; gap: 12px; width: 100%; text-align: left; }
+.community-event-registration__lead { margin: 0; color: #201e25; font-size: 15px; line-height: 1.5; }
+.community-event-registration .community-event-registration__optin { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.45; }
+.community-event-registration__optin input[type="checkbox"] { flex: 0 0 auto; width: 20px; height: 20px; margin: 2px 0 0; accent-color: #7551dc; }
+.community-event-registration__legal { color: #6b6674; font-size: 12px; line-height: 1.45; }
+.community-event-registration__legal summary { cursor: pointer; }
+.community-event-registration__legal p { margin: 8px 0 0; }

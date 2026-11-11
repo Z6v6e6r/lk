@@ -118,7 +118,7 @@ test('the actual public-page composition preserves primary controls when no chil
   assert.ok(returnStart >= 0);
   const composition = transformSync('function compose() {' + source.slice(returnStart, source.lastIndexOf('\n}')) + '\n}', { loader: 'tsx', jsx: 'transform' }).code;
   for (const visibleState of ['guest', 'unverified', 'member', 'pending', 'error']) {
-    const bindings = { React, CommunityInviteView: module.exports.CommunityInviteView, visibleState, current: true, community: null, submitting: null, loading: false, alreadyMember: visibleState === 'member', actionError: null, loadError: null, primary() {}, handleDecline() {}, showLogin: false, onLogin() {}, eventNotice: null, handleJoin() {}, setEventNotice() {}, AuthForm: () => null, EventRegistrationForm: () => null };
+    const bindings = { React, CommunityInviteView: module.exports.CommunityInviteView, visibleState, current: true, community: null, submitting: null, loading: false, alreadyMember: visibleState === 'member', actionError: null, loadError: null, primary() {}, handleDecline() {}, showLogin: false, onLogin() {}, eventNotice: null, handleJoin() {}, setEventNotice() {}, AuthForm: () => null, EventRegistrationForm: () => null, brand: undefined, exhibition: false, authenticated: false };
     const compose = new Function(...Object.keys(bindings), composition + '\nreturn compose;')(...Object.values(bindings));
     const html = renderToStaticMarkup(React.createElement(compose));
     assert.match(html, /class="ph-community-invite__primary"/, visibleState);

@@ -913,7 +913,8 @@ function AppContent() {
     return (
       <CommunityJoinPage
         authenticated={isAuthenticated}
-        onLogin={() => setView("cabinet")}
+        // Stay on the public invitation: after sign-in it must open the questionnaire, not the cabinet.
+        onLogin={() => undefined}
         inviteCode={communityJoinRouteData.inviteCode}
         inviteLink={communityJoinRouteData.inviteLink}
         cabinetUrl={communityJoinRouteData.cabinetUrl}

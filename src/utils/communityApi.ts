@@ -332,7 +332,17 @@ export interface CreateCommunityPayload {
   creator: CommunityActorPayload;
 }
 
-export interface EventRegistration { fullName: string; company: string; email: string; policyRevision: number; retentionMode?: 'submitted-year-v1' }
+export interface EventRegistration {
+  fullName: string;
+  company: string;
+  email: string;
+  /** Normalized RU phone collected by the invitation questionnaire; private, never published. */
+  phone?: string;
+  /** Explicit consent to receive result notifications; private, never published. */
+  pushOptIn?: boolean;
+  policyRevision: number;
+  retentionMode?: 'submitted-year-v1';
+}
 
 export interface JoinCommunityPayload {
   eventRegistration?: EventRegistration;
