@@ -7,7 +7,11 @@ import {
   communityErrorMessage,
   extractCommunityInviteCode,
   type CommunityRecord,
+  type EventNotice,
+  type EventRegistration,
 } from "../../utils/communityApi";
+import { EventRegistrationForm } from '../cabinet/EventRegistrationForm';
+import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
 import { apiFetchProfile, type UserProfileType } from "../../utils/apiClient";
 import {
   CUSTOM_FIELD_IDS,
@@ -182,6 +186,8 @@ export default function CommunityJoinPage({
   const [showLogin, setShowLogin] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [eventNotice, setEventNotice] = useState<EventNotice | null>(null);
+  const [eventAdmissionConfirmed, setEventAdmissionConfirmed] = useState(false);
   const [submitting, setSubmitting] = useState<"join" | "decline" | "reload" | null>(null);
   const context = useMemo(() => ({ normalizedInviteCode, normalizedInviteLink, authenticated }), [normalizedInviteCode, normalizedInviteLink, authenticated]);
   const currentContext = useRef(context);
@@ -195,6 +201,7 @@ export default function CommunityJoinPage({
   }, []);
 
   const requireLogin = useCallback(() => {
+    setEventNotice(null); setEventAdmissionConfirmed(false);
     setProfile(null); setCommunity(null); setState("guest");
     setLoadError(null); setActionError(null); setShowLogin(false);
     setLoadedContext(context);
@@ -235,6 +242,7 @@ export default function CommunityJoinPage({
   useEffect(() => {
     let cancelled = false;
     setState("checking"); setCommunity(null); setProfile(null);
+    setEventNotice(null); setEventAdmissionConfirmed(false);
     void reload(false, () => !cancelled);
     return () => { cancelled = true; };
   }, [reload]);
@@ -260,59 +268,73 @@ export default function CommunityJoinPage({
     activeAction.current = false;
   }, [cabinetUrl]);
 
-  const handleJoin = useCallback(async () => {
-    if (activeAction.current || loading || loadedContext !== context) return;
+  const handleJoin = useCallback(async (registration?: EventRegistration): Promise<string | null> => {
+    if (activeAction.current || loading || loadedContext !== context || !mounted.current || currentContext.current !== context) return 'Дождитесь проверки приглашения.';
     if (!profile) {
       setActionError("Не удалось загрузить профиль для вступления.");
-      return;
+      return 'Не удалось загрузить профиль для вступления.';
     }
 
-    if (alreadyMember) {
+    const needsCanonicalAdmission = alreadyMember && community?.id === EXHIBITION_COMMUNITY_ID && !eventAdmissionConfirmed;
+    if (alreadyMember && !registration && !needsCanonicalAdmission) {
       activeAction.current = true;
       setSubmitting("join");
       if (community && redirectToCabinet(cabinetUrl, community.id)) {
-        return;
+        return null;
       }
 
       activeAction.current = false; setSubmitting(null);
       setActionError("Не удалось открыть сообщество.");
-      return;
+      return 'Не удалось открыть сообщество.';
     }
 
-    if (state !== "unverified" || (!normalizedInviteCode && !normalizedInviteLink)) {
+    if ((state !== "unverified" && !needsCanonicalAdmission && !eventNotice) || (!normalizedInviteCode && !normalizedInviteLink)) {
       setActionError("Ссылка приглашения повреждена.");
-      return;
+      return 'Ссылка приглашения повреждена.';
     }
 
     setActionError(null);
     setSubmitting("join");
     activeAction.current = true;
     try {
-      const response = await apiJoinCommunityByInvite({ inviteCode: normalizedInviteCode, inviteLink: normalizedInviteLink, member: buildCommunityActor(profile) }, { allowFallback: false });
-      if (!mounted.current || currentContext.current !== context) return;
-      if (response.status === 401) { requireLogin(); return; }
+      const response = await apiJoinCommunityByInvite({ inviteCode: normalizedInviteCode, inviteLink: normalizedInviteLink, member: buildCommunityActor(profile), eventRegistration: registration }, { allowFallback: false });
+      if (!mounted.current || currentContext.current !== context) return 'Приглашение изменилось. Проверьте его заново.';
+      if (response.status === 401) { requireLogin(); return 'Войдите в профиль ещё раз.'; }
       if (response.error) {
+        if (response.status === 422 && response.data?.eventNotice) {
+          const freshNotice = response.data.eventNotice;
+          setEventNotice(freshNotice);
+          return registration
+            ? freshNotice.revision !== registration.policyRevision || freshNotice.retentionMode !== registration.retentionMode
+              ? 'Условия анкеты обновились. Проверьте срок хранения и отправьте анкету ещё раз.'
+              : 'Проверьте ФИО, компанию и электронную почту.'
+            : null;
+        }
         if (response.status != null && response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+          setEventNotice(null);
           setState("blocked"); setActionError(communityErrorMessage(response.error, "Не удалось вступить в сообщество."));
-          return;
+          return communityErrorMessage(response.error, 'Не удалось вступить в сообщество.');
         }
         throw new Error("JOIN_OUTCOME_UNKNOWN");
       }
       const confirmed = response.data?.community;
       if (!confirmed || (community && confirmed.id !== community.id) || !findInviteCommunity([confirmed], normalizedInviteCode, normalizedInviteLink)) throw new Error("JOIN_SCOPE_UNKNOWN");
       setCommunity(confirmed);
-      if (isCommunityMember(confirmed, profile)) { setState("member"); return; }
-      if (isCommunityMember(confirmed, profile, "PENDING") || response.data?.membershipStatus === "PENDING") { setState("pending"); return; }
+      setEventNotice(null);
+      if (isCommunityMember(confirmed, profile)) { setEventAdmissionConfirmed(true); setState("member"); return null; }
+      if (isCommunityMember(confirmed, profile, "PENDING") || response.data?.membershipStatus === "PENDING") { setState("pending"); return null; }
       throw new Error("MEMBERSHIP_UNCONFIRMED");
     } catch {
       if (mounted.current && currentContext.current === context) {
+        setEventNotice(null); setEventAdmissionConfirmed(false);
         setState("error"); setActionError("Не удалось подтвердить вступление. Сначала проверьте статус.");
       }
+      return 'Не удалось подтвердить вступление. Сначала проверьте статус.';
     } finally {
       activeAction.current = false;
       if (mounted.current) setSubmitting(null);
     }
-  }, [alreadyMember, cabinetUrl, community, context, loadedContext, loading, normalizedInviteCode, normalizedInviteLink, profile, state, requireLogin]);
+  }, [alreadyMember, cabinetUrl, community, context, loadedContext, loading, normalizedInviteCode, normalizedInviteLink, profile, state, requireLogin, eventNotice, eventAdmissionConfirmed]);
 
   const handleReload = async () => {
     if (activeAction.current) return;
@@ -332,5 +354,6 @@ export default function CommunityJoinPage({
     error={current ? actionError || loadError : null} reason={actionError}
     onPrimary={primary} onSecondary={handleDecline}>
     {visibleState === "guest" && showLogin ? <AuthForm onLogin={onLogin} /> : null}
+    {current && eventNotice && <EventRegistrationForm notice={eventNotice} onSubmit={handleJoin} onCancel={() => setEventNotice(null)} />}
   </CommunityInviteView>;
 }

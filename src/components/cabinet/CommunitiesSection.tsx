@@ -1,4 +1,8 @@
 import { BuySupscription } from "./BuySubscription";
+import { EventRegistrationForm } from './EventRegistrationForm';
+import { EventCommunityPanel } from './EventCommunityPanel';
+import { EXHIBITION_COMMUNITY_ID } from '../padel-jump/exhibition';
+import type { EventNotice, EventRegistration } from '../../utils/communityApi';
 import { useCommunityRatingMonth } from "./community-feed/useCommunityRatingMonth";
 import { AvatarImage } from "../UI/AvatarImage";
 import {
@@ -1647,6 +1651,7 @@ export function CommunitiesSection({
   const [rankingRefreshLoadingId, setRankingRefreshLoadingId] = useState<string | null>(null);
   const [rankingRefreshError, setRankingRefreshError] = useState<string | null>(null);
   const [joiningCommunityId, setJoiningCommunityId] = useState<string | null>(null);
+  const [eventJoin, setEventJoin] = useState<{community?: CommunityRecord; inviteCode?: string; inviteLink?: string; notice?: EventNotice} | null>(null);
   const [activeCommunityTab, setActiveCommunityTab] = useState<CommunityDetailTab>("RANKING");
   const [activeRankingType, setActiveRankingType] = useState<CommunityRankingTypeId>("overall");
   const rankingMonthStartTs = useCommunityRatingMonth();
@@ -3761,6 +3766,10 @@ export function CommunitiesSection({
     setJoiningCommunityId(null);
 
     if (response.error) {
+      if (response.status === 422 && response.data?.eventNotice) {
+        setEventJoin({community,notice:response.data.eventNotice});
+        return;
+      }
       setAccessMessage(
         communityErrorMessage(response.error, "Не удалось вступить в сообщество"),
       );
@@ -3785,6 +3794,26 @@ export function CommunitiesSection({
     }
   }, [currentMember, redirectToInviteCabinet]);
 
+  const handleEventRegistration = async (registration: EventRegistration): Promise<string | null> => {
+    if (!eventJoin) return 'Выберите мероприятие заново.';
+    const response = eventJoin.community
+      ? await apiAddCommunityMember(eventJoin.community.id, {member: currentMember, eventRegistration: registration})
+      : await apiJoinCommunityByInvite({inviteCode: eventJoin.inviteCode, inviteLink: eventJoin.inviteLink, member: currentMember, eventRegistration: registration}, {allowFallback:false});
+    if (response.error) {
+      const freshNotice=response.data?.eventNotice;
+      if (response.status === 422 && freshNotice && (freshNotice.revision !== registration.policyRevision || freshNotice.retentionMode !== registration.retentionMode)) {
+        setEventJoin(current=>current ? {...current,notice:freshNotice} : current);
+        return 'Условия анкеты обновились. Проверьте срок хранения и отправьте анкету ещё раз.';
+      }
+      return response.status === 422 ? 'Проверьте ФИО, компанию и электронную почту.' : communityErrorMessage(response.error, 'Не удалось сохранить анкету. Повторите попытку.');
+    }
+    applyActionResponse(response.data);
+    if (response.data?.community) { setFocusedCommunityId(response.data.community.id); setSelectedCommunityId(response.data.community.id); }
+    setEventJoin(null); setIsInviteOpen(false); setInviteValue('');
+    setAccessMessage(response.data?.message || 'Анкета сохранена.');
+    return null;
+  };
+
   const handleInviteSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const inviteCode = extractInviteCode(inviteValue);
@@ -3805,6 +3834,7 @@ export function CommunitiesSection({
     setInviteSubmitting(false);
 
     if (response.error) {
+      if (response.status === 422 && response.data?.eventNotice) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink: inviteValue, notice: response.data.eventNotice}); return; }
       setInviteError(
         communityErrorMessage(response.error, "Не удалось войти по приглашению"),
       );
@@ -3851,6 +3881,7 @@ export function CommunitiesSection({
       setInviteSubmitting(false);
 
       if (response.error) {
+        if (response.status === 422 && response.data?.eventNotice) { setIsInviteOpen(false); setEventJoin({inviteCode, inviteLink, notice: response.data.eventNotice}); return; }
         setInviteError(
           communityErrorMessage(response.error, "Не удалось войти в сообщество по ссылке"),
         );
@@ -5187,6 +5218,10 @@ export function CommunitiesSection({
         ))}
       </div>
 
+      <Modal isOpen={!!eventJoin} onClose={() => setEventJoin(null)} title="Анкета участника сообщества">
+        {eventJoin && <EventRegistrationForm notice={eventJoin.notice} onSubmit={handleEventRegistration} onCancel={() => setEventJoin(null)} />}
+      </Modal>
+
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Создать сообщество">
         <form className="community-form" onSubmit={(event) => void handleCreateCommunity(event)}>
           <div className="community-form-intro">
@@ -5595,6 +5630,7 @@ export function CommunitiesSection({
 
             {activeCommunityTab === "FEED" && (
               <>
+                {selectedCommunity.id === EXHIBITION_COMMUNITY_ID && <EventCommunityPanel community={selectedCommunity} onRegister={() => void handleJoinOpenCommunity(selectedCommunity)} />}
                 {detailError && (
                   <div className="community-form-error">{detailError}</div>
                 )}

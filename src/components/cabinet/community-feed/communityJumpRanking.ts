@@ -1,4 +1,5 @@
 import { readAuthToken } from '../../../utils/authTokenStorage';
+import { EXHIBITION_COMMUNITY_ID, EXHIBITION_GAME_URL } from '../../padel-jump/exhibition';
 
 // Owner-selected exhibition pilot. Other communities keep their existing provider.
 export const JUMP_RANKING_COMMUNITY_ID = 'community_1793001495612_падлхаб-команда';
@@ -6,7 +7,8 @@ export const JUMP_GAME_URL = 'https://padlhub.ru/lk_new?authMode=viva&padelJumpR
 export const JUMP_RANKING_V2_ACCEPT = 'application/vnd.padlhub.jump-community-ranking.v2+json';
 const ENDPOINT = 'https://padlhub.su/jump-live-api/community-ranking';
 
-export const usesJumpRanking = (id: string | null | undefined) => id === JUMP_RANKING_COMMUNITY_ID;
+export const usesJumpRanking = (id: string | null | undefined) => id === JUMP_RANKING_COMMUNITY_ID || id === EXHIBITION_COMMUNITY_ID;
+export const jumpGameUrl = (id: string) => id === EXHIBITION_COMMUNITY_ID ? EXHIBITION_GAME_URL : JUMP_GAME_URL;
 export function formatJumpRankingTime(value: number) {
   const tenths = Math.floor(Math.max(0, value) / 100);
   return `${String(Math.floor(tenths / 600)).padStart(2, '0')}:${String(Math.floor(tenths / 10) % 60).padStart(2, '0')}.${tenths % 10}`;
@@ -44,7 +46,7 @@ export async function fetchCommunityJumpRanking(communityId: string, signal: Abo
   if (!usesJumpRanking(communityId)) throw new Error('Рейтинг Jump не подключён к этому сообществу.');
   const token = options.token ?? readAuthToken();
   if (!token) throw Object.assign(new Error('Войди в профиль ПадлхАБ, чтобы увидеть рейтинг Jump.'), { status: 401 });
-  const url = new URL(ENDPOINT); url.searchParams.set('communityId', communityId);
+  const url = new URL(communityId === EXHIBITION_COMMUNITY_ID ? 'https://padlhub.su/jump-exhibition-api/community-ranking' : ENDPOINT); url.searchParams.set('communityId', communityId);
   const controller = new AbortController(); let timedOut = false;
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
