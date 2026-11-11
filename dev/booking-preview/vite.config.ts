@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { transformPreviewPayments } from './previewTransform';
+import { transformPreviewNavigation, transformPreviewPayments } from './previewTransform';
+import { hostedPreviewConfig, writeHostedPreview } from './hostedPreview';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(directory, '../..');
+const hosting = hostedPreviewConfig(process.env);
 const modules: Record<string, string> = {
   apiClient: 'src/utils/apiClient.ts',
   tournamentSignupApi: 'src/utils/tournamentSignupApi.ts',
@@ -32,8 +34,8 @@ function previewApis(): Plugin {
     },
     transform(source, id) {
       const path = id.split('?')[0];
-      if (!path.includes('/src/components/')) return null;
-      return transformPreviewPayments(source, basename(path));
+      if (!path.includes('/src/') || !/\.tsx?$/.test(path)) return null;
+      return transformPreviewNavigation(transformPreviewPayments(source, basename(path)) || source, basename(path));
     },
     load(id) {
       if (!id.startsWith('\0booking-preview:')) return null;
@@ -70,11 +72,20 @@ function previewApis(): Plugin {
 
 export default defineConfig({
   root,
+  base: hosting.base,
   envDir: directory,
-  plugins: [previewApis(), react()],
+  plugins: [previewApis(), react(), {
+    name: 'booking-preview-hosted-output',
+    apply: 'build',
+    transformIndexHtml(html) {
+      return html.replace("connect-src 'self' ws://127.0.0.1:5173", "connect-src 'none'")
+        .replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
+    },
+    async closeBundle() { await writeHostedPreview(resolve(root, 'dist/booking-preview'), hosting); },
+  }],
   define: {
-    'import.meta.env.VITE_PUBLIC_INVITE_ORIGIN': JSON.stringify('http://127.0.0.1:5173'),
-    'import.meta.env.VITE_CABINET_URL': JSON.stringify('http://127.0.0.1:5173/lk_new'),
+    'import.meta.env.VITE_PUBLIC_INVITE_ORIGIN': JSON.stringify(''),
+    'import.meta.env.VITE_CABINET_URL': JSON.stringify(`${hosting.base}dev/booking-preview/frame.html?screen=game-list`),
   },
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
   build: {

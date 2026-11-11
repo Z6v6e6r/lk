@@ -1,5 +1,6 @@
 export type ServiceKind = 'game' | 'training' | 'tournament';
 import { currentBenefit, DAILY_USAGE, type DailyUsage } from './privilegeRules.ts';
+import { readPreviewStage } from './previewStage.ts';
 
 export type PaymentKind = 'full' | 'residency' | 'subscription' | 'pass' | 'boost';
 export type Privileges = { residency: boolean; subscription: boolean; pass: boolean };
@@ -56,7 +57,7 @@ export function readMatrixSettings(params: URLSearchParams) {
     dailyQuota: params.get('dailyQuota') === 'used' ? 'used' as const : 'available' as const,
     excludedGroups: params.get('groupCategory') === 'excluded',
     raFits: params.get('raFits') !== '0',
-    boost: params.get('boost') === '1' && (profile.residency || profile.subscription),
+    boost: readPreviewStage(params) === 'full' && params.get('boost') === '1' && (profile.residency || profile.subscription),
     activeLimitExceeded: params.get('activeLimitExceeded') === '1',
     proDirection: params.get('groupCategory') === 'pro',
     friendsTournament: params.get('friendsTournament') === '1',

@@ -18,6 +18,12 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .preview-sidebar button span { display: block; margin-top: 3px; color: #788174; font-size: 11px; }
 .preview-sidebar small { display: block; margin: 38px 10px 0; color: #828b7d; font-size: 11px; }
 .preview-main { min-width: 0; }
+.preview-release { padding: 16px 24px; background: #fff; border-bottom: 1px solid #dce2dc; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: #625674; font-size: 12px; }
+.preview-release-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.preview-release-options button { padding: 9px 12px; border: 1px solid #d9dfd4; border-radius: 7px; background: #fff; color: #344b35; }
+.preview-release-options button[aria-pressed=true] { background: #eee7f8; border-color: #8852d4; color: #69459a; }
+.preview-release p { flex-basis: 100%; margin: 0; line-height: 1.5; }
+.preview-release [role=status] { font-size: 11px; }
 .preview-toolbar { display: flex; min-height: 88px; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 24px; background: #f9faf7; border-bottom: 1px solid #dce2dc; }
 .preview-toolbar > div:first-child strong, .preview-toolbar > div:first-child span { display: block; }
 .preview-toolbar > div:first-child span { font-size: 11px; color: #828b7d; margin-top: 3px; }

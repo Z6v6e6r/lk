@@ -4,6 +4,7 @@ import './preview.css';
 import { readMatrixSettings, type SubscriptionPlan } from './paymentMatrix';
 import { PREVIEW_RESIDENCY_PRICE } from './bookingCheckout';
 import { DAILY_USAGE, SUBSCRIPTION_PLANS, type DailyUsage } from './privilegeRules';
+import { readPreviewStage, type PreviewStage } from './previewStage';
 
 const screens = [
   ['game-booking', 'Игра', 'Выбор станции, корта и времени'],
@@ -27,6 +28,8 @@ function Preview() {
   const [state, setState] = useState(params.get('state') || 'ready');
   const [width, setWidth] = useState(params.get('width') === 'desktop' ? 'desktop' : 'mobile');
   const [revision, setRevision] = useState(0);
+  const [stage, setStage] = useState<PreviewStage>(readPreviewStage(params));
+  const [copyStatus, setCopyStatus] = useState('');
   const matrix = readMatrixSettings(params);
   const [subscription, setSubscription] = useState(matrix.profile.subscription);
   const [residency, setResidency] = useState(matrix.profile.residency);
@@ -41,15 +44,15 @@ function Preview() {
   const [passFits, setPassFits] = useState(matrix.applicability.pass);
   const [passRemaining, setPassRemaining] = useState(params.get('passRemaining') ?? '3');
   const [residencyPrice, setResidencyPrice] = useState(params.get('residencyPrice') ?? String(PREVIEW_RESIDENCY_PRICE));
-  const boostAllowed = subscription || residency;
+  const boostAllowed = stage === 'full' && (subscription || residency);
   const standardTournament = (screen === 'tournament-booking' || screen === 'tournament-join') && groupCategory !== 'pro';
   const hasPro = subscription && (subscriptionPlan === 'ra' || subscriptionPlan === 'friendship-2');
   const proQuotaUsed = DAILY_USAGE.some(usage => usage.id === dailyUsage && 'pro' in usage && usage.pro);
-  const query = new URLSearchParams({ screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
+  const query = new URLSearchParams({ stage, screen, state, width, subscription: subscription ? '1' : '0', residency: residency ? '1' : '0', pass: pass ? '1' : '0',
     boost: boost && boostAllowed ? '1' : '0', subscriptionFits: '1', passFits: passFits ? '1' : '0', subscriptionPlan, dailyQuota,
     activeLimitExceeded: activeLimitExceeded ? '1' : '0', dailyUsage, proQuotaUsed: proQuotaUsed ? '1' : '0',
     groupCategory, friendsTournament: friendsTournament ? '1' : '0', residencyPrice, raFits: '1', passRemaining });
-  const frameUrl = `/dev/booking-preview/frame.html?${query}&reset=${revision}`;
+  const frameUrl = `${import.meta.env.BASE_URL}dev/booking-preview/frame.html?${query}&reset=${revision}`;
   const serialized = query.toString();
   useEffect(() => { history.replaceState(null, '', `?${serialized}`); }, [serialized]);
   const changeDailyUsage = (value: DailyUsage) => { setDailyUsage(value); setDailyQuota(value === 'none' ? 'available' : 'used'); };
@@ -57,10 +60,24 @@ function Preview() {
     setDailyQuota(used ? 'used' : 'available');
     setDailyUsage(used ? subscriptionPlan === 'friendship-2' ? 'game-two-hours' : 'game-hour' : 'none');
   };
+  const changeStage = (next: PreviewStage) => {
+    setStage(next);
+    setBoost(false);
+    setDailyUsage(dailyQuota === 'used' ? subscriptionPlan === 'friendship-2' ? 'game-two-hours' : 'game-hour' : 'none');
+    setCopyStatus('');
+  };
+  const copyScenario = async () => {
+    try {
+      await navigator.clipboard.writeText(`${location.origin}${location.pathname}?${serialized}`);
+      setCopyStatus('Ссылка скопирована. Пришлите её вместе с отзывом.');
+    } catch {
+      setCopyStatus('Скопируйте ссылку из адресной строки и приложите её к отзыву.');
+    }
+  };
 
   return <div className="preview-shell">
     <aside className="preview-sidebar">
-      <a className="preview-brand" href="/">padlhub<span>локальная мастерская</span></a>
+      <a className="preview-brand" href={import.meta.env.BASE_URL}>padlhub<span>стенд интерфейсов</span></a>
       <h1>Интерфейсы записи</h1>
       <p>Текущие компоненты ЛК<br />на тестовых данных</p>
       <nav aria-label="Сценарии">
@@ -74,11 +91,11 @@ function Preview() {
           </button>
         </div>)}
       </nav>
-      <small>Запись и оплата имитируются.<br />Изменения компонентов видны сразу.</small>
+      <small>Тестовые данные.<br />Запись и оплата имитируются.</small>
     </aside>
     <main className="preview-main">
       <header className="preview-toolbar">
-        <div><strong>{screens.find(([key]) => key === screen)?.[1]}</strong><span>Локальный просмотр</span></div>
+        <div><strong>{screens.find(([key]) => key === screen)?.[1]}</strong><span>Тестирование интерфейса</span></div>
         <div className="preview-controls">
           <label>Состояние <select value={state} onChange={event => setState(event.target.value)}>
             {states.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
@@ -91,6 +108,15 @@ function Preview() {
           <a href={frameUrl} target="_blank" rel="noreferrer">Открыть экран ↗</a>
         </div>
       </header>
+      <section className="preview-release" aria-label="Этап внедрения">
+        <div className="preview-release-options" role="group" aria-label="Версия интерфейса">
+          <button aria-pressed={stage === 'current'} onClick={() => changeStage('current')}>Сейчас · без РАбуста</button>
+          <button aria-pressed={stage === 'full'} onClick={() => changeStage('full')}>Полный вариант · с РАбуста</button>
+        </div>
+        <p>{stage === 'current' ? 'Этап до внедрения РАбуста: подписки, Резидентство и Энергия 5.' : 'Будущие условия с РАбуста. Включите Буст в настройках профиля для проверки сочетаний.'} Запись и оплата тестовые.</p>
+        <button className="preview-reset" onClick={copyScenario}>Скопировать ссылку на сценарий</button>
+        <span role="status">{copyStatus}</span>
+      </section>
       <section className="preview-privileges" aria-label="Условия матрицы">
         <div className="preview-products">
           <fieldset className="preview-product preview-product--subscription"><legend>1. Подписка</legend>
@@ -113,11 +139,11 @@ function Preview() {
             <label className="preview-check"><input type="checkbox" checked={standardTournament || passFits} disabled={standardTournament} onChange={event => setPassFits(event.target.checked)} />Энергия 5 подходит к событию</label>
             {standardTournament && <small>Обычные турниры доступны по Энергии 5.</small>}
           </fieldset>
-          <fieldset className="preview-product preview-product--boost"><legend>4. РАбуста</legend>
+          {stage === 'full' && <fieldset className="preview-product preview-product--boost"><legend>4. РАбуста</legend>
             <label className="preview-check"><input type="checkbox" checked={boost && boostAllowed} disabled={!boostAllowed} onChange={event => setBoost(event.target.checked)} />Есть Буст</label>
             <p>{!boostAllowed ? 'Нужны действующее Резидентство или любая подписка.' : !subscription ? 'С Резидентством — условия РА: 1 час игры или одно событие в день. ПРО не входит.' : subscriptionPlan === 'friendship-2' ? '2 часа игры + тренировка, турнир или ПРО. ПРО — не более 1 события в общем дневном лимите.' : subscriptionPlan === 'ra' ? '2 часа игры или два события, включая игру 1 час + тренировку / турнир. ПРО входит в общий лимит — не более 1 в день.' : '2 часа игры или две тренировки / турнира, либо игра 1 час + тренировка / турнир. ПРО не входит.'}</p>
             {boost && boostAllowed && <label className="preview-field">Уже использовано сегодня<select value={dailyUsage} onChange={event => changeDailyUsage(event.target.value as DailyUsage)}>{DAILY_USAGE.filter(usage => hasPro || !('pro' in usage) || usage.id === dailyUsage).map(usage => <option key={usage.id} value={usage.id}>{usage.name}</option>)}</select></label>}
-          </fieldset>
+          </fieldset>}
         </div>
         <div className="preview-event-rules"><label className="preview-field">Направление события<select value={groupCategory} onChange={event => setGroupCategory(event.target.value)}>
           <option value="standard">Обычное</option><option value="pro">ПРО</option><option value="excluded">Групповая без подписки и Резидентства</option>

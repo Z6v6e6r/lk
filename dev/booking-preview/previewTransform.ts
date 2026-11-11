@@ -1,5 +1,29 @@
 import ts from 'typescript';
 
+export function transformPreviewNavigation(source: string, filename: string) {
+  const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const replacements: Array<{ start: number; end: number; text: string }> = [];
+  const locations = ['location', 'window.location', 'window.top.location'];
+  function visit(node: ts.Node) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && locations.some(location => node.left.getText(file) === location + '.href')) {
+      replacements.push({ start: node.getStart(file), end: node.end, text: `navigatePreview(${node.right.getText(file)})` });
+      return;
+    }
+    if (ts.isCallExpression(node) && (node.expression.getText(file) === 'window.open'
+      || locations.some(location => ['assign', 'replace'].some(method => node.expression.getText(file) === `${location}.${method}`)))) {
+      replacements.push({ start: node.getStart(file), end: node.end, text: `navigatePreview(${node.arguments[0]?.getText(file) || 'undefined'})` });
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  if (!replacements.length) return source;
+  let result = source;
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) result = result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
+  return 'import { navigatePreview } from "/dev/booking-preview/previewNavigation.ts";\n' + result;
+}
+
 const rules: Record<string, Array<{ className: string; replacement: string }>> = {
   'GamesPage.tsx': [
     { className: 'details-action-row details-join-action-row', replacement: '<MatrixPaymentOptions service="game" eventKey={activeGameRecord?.id || "demo-game"} durationMinutes={activeGameRecord?.booking?.durationMinutes ?? 90} gamePaymentScope="quarter" courtAmount={activeGameRecord?.payment?.amount ?? null} />' },

@@ -10,6 +10,7 @@ import TournamentSignupPage from '../../src/components/tournament-signup/Tournam
 import { MatrixPaymentOptions } from './MatrixPaymentOptions';
 import { SERVICES } from './paymentMatrix';
 import { eventDate } from './fixtures';
+import { navigatePreview } from './previewNavigation';
 import '../../src/index.css';
 import '../../src/MyApp.css';
 
@@ -24,12 +25,8 @@ function navigate(nextScreen: string) {
 document.addEventListener('click', event => {
   const anchor = event.target instanceof Element ? event.target.closest('a') : null;
   if (!anchor?.href) return;
-  const url = new URL(anchor.href);
   event.preventDefault();
-  if (url.pathname.includes('game_join') || url.searchParams.has('joinGame')) navigate('game-join');
-  else if (url.pathname.includes('game_create')) navigate('game-booking');
-  else if (url.pathname.includes('group')) navigate('training-join');
-  else if (url.pathname.includes('tournament')) navigate('tournament-join');
+  navigatePreview(anchor.href);
 });
 
 function Screen() {
