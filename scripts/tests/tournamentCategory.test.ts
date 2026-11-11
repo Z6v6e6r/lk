@@ -100,3 +100,30 @@ test("does not classify regular trainings as tournaments", () => {
     false,
   );
 });
+
+test("recognizes the three corporate tournament directions in either Viva field", () => {
+  for (const name of ["ВСК турнир", "Предприниматели-патриоты турнир", "Пулково Турнир"]) {
+    assert.equal(isTournamentExerciseCategory({
+      direction: { id: 9999, name },
+      type: { id: 2349, name: "Корпоративные клиенты" },
+    }), true, name);
+    assert.equal(isTournamentExerciseCategory({
+      type: { id: "9999", name: `  ${name.toUpperCase().replace(/ /g, "\u00a0  ")}  ` },
+    }), true, name);
+  }
+});
+
+test("does not classify other corporate directions or partial tournament names", () => {
+  for (const name of [
+    "Атланты", "ВСК игра", "ВСК тренировка",
+    "Предприниматели-патриоты тренировка", "Предприниматели патриоты - игра",
+    "Пулково Игры", "Топократы игра", "Топократы тренировка + игра",
+    "ВСК турнир тренировка", "Подготовка: Предприниматели-патриоты турнир", "Пулково Турнир детский",
+  ]) {
+    assert.equal(isTournamentExerciseCategory({
+      direction: { id: 9999, name },
+      type: { id: 2349, name: "Корпоративные клиенты" },
+    }), false, name);
+  }
+  assert.equal(isTournamentExerciseCategory({ type: { id: 2349, name: "Корпоративные клиенты" } }), false);
+});
