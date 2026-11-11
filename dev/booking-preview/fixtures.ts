@@ -1,4 +1,5 @@
 import { readMatrixSettings } from './paymentMatrix';
+import { PREVIEW_COURT_HOURLY_PRICE, previewCourtPrice } from './gamePreviewPrice';
 import type { GameTimeSlot, PadelGamePlayer, PadelGameRecord, Studio, UserProfileType } from '../../src/utils/apiClient';
 import type { GroupTrainingSummary } from '../../src/utils/groupScheduleApi';
 import type { TournamentRegistrationState, TournamentSignupDetail, TournamentVivaCheckout, TournamentVivaProduct } from '../../src/utils/tournamentSignupApi';
@@ -97,7 +98,7 @@ function checkout(id: string): TournamentVivaCheckout {
 const input = (value: unknown): Record<string, unknown> => typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
 const slots = (date: string): GameTimeSlot[] => [1, 2, 3].flatMap(court => ['09:00', '11:00', '14:00', '18:00', '19:00', '20:30', '22:00'].map(time => ({
   id: `demo-slot-${court}-${time}`, roomId: `demo-court-${court}`, roomName: `Корт ${court}`, date, time,
-  price: 4000, subServiceIds: ['demo-service'], durationMinutes: 120, timeTo: `${Number(time.slice(0, 2)) + 2}:${time.slice(3)}`,
+  price: PREVIEW_COURT_HOURLY_PRICE * 2, subServiceIds: ['demo-service'], durationMinutes: 120, timeTo: `${(Number(time.slice(0, 2)) + 2) % 24}`.padStart(2, '0') + `:${time.slice(3)}`,
 })));
 
 const handlers: Record<string, (...args: unknown[]) => unknown> = {
@@ -119,7 +120,8 @@ const handlers: Record<string, (...args: unknown[]) => unknown> = {
   apiFetchPadelChatsByPhone: () => ({ chats: [] }), apiFetchPadelGameResultState: () => ({ game }), apiFetchPadelLiveRatings: () => [], apiSearchPadelPlayers: () => demoPlayers,
   apiFetchSubscriptioName: () => ({ name: 'Энергия 5' }),
   apiFetchMasterServiceGameModes: () => ({ doubles: { key: 'doubles', subServiceIds: ['demo-service'], preferredSubServiceId: 'demo-service', preferredRoomIds: [] }, singles: null }),
-  apiFetchMasterServiceTimeslots: date => slots(String(date)), apiFetchMasterServicePrice: () => 4000,
+  apiFetchMasterServiceTimeslots: date => slots(String(date)),
+  apiFetchMasterServicePrice: params => previewCourtPrice(input(params).fromTime, input(params).toTime),
   apiFetchPadelSplitPaymentPromoConfig: () => ({ enabled: false, pricingMode: 'PER_PARTICIPANT_HOUR', currency: 'RUB', stationIds: [], stationNameIncludes: [], roomIds: [], roomNameIncludes: [], shareAmounts: { twoTeams: 2000, fourPlayers: 1000 }, baseShareAmount: 4000, vivaDirectionId: 4588, vivaExerciseTypeId: 1613 }),
   apiFetchGroupTrainingsByDate: date => { trainingDate = String(date); return trainings(trainingDate); },
   apiFetchGroupTrainingDetail: id => trainings(trainingDate).find(training => training.id === id) || trainings(trainingDate)[0],
