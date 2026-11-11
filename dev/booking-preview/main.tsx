@@ -25,7 +25,7 @@ function Preview() {
   const initialScreen = params.get('screen') || 'game-booking';
   const [screen, setScreen] = useState(screens.some(([key]) => key === initialScreen) ? initialScreen : 'game-booking');
   const [state, setState] = useState(params.get('state') || 'ready');
-  const [width, setWidth] = useState(params.get('width') === 'mobile' ? 'mobile' : 'desktop');
+  const [width, setWidth] = useState(params.get('width') === 'desktop' ? 'desktop' : 'mobile');
   const [revision, setRevision] = useState(0);
   const matrix = readMatrixSettings(params);
   const [subscription, setSubscription] = useState(matrix.profile.subscription);
