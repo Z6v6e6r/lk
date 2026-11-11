@@ -14,6 +14,9 @@ const TOURNAMENT_DIRECTION_IDS = new Set([2617, 4769, 5278]);
 // intentionally excluded because it is also used by non-mechanics exercises.
 const TOURNAMENT_TYPE_IDS = new Set([1013]);
 const TOURNAMENT_CATEGORY_NAMES = new Set([
+  "вск турнир",
+  "предприниматели-патриоты турнир",
+  "пулково турнир",
   "детский турнир",
   "падел турнир (особый)",
   "падел турнир особый",
