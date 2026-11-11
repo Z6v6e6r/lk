@@ -1,7 +1,79 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingButtonText, combineResidencyBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost } from './bookingCheckout.ts';
+import { bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost } from './bookingCheckout.ts';
 import { buildBookingPaymentOptions, PRIVILEGE_PROFILES, readMatrixSettings, type PaymentOption } from './paymentMatrix.ts';
+
+test('subscription and Boost become one card using the lower quote and preserving the entitlement method', () => {
+  for (const subscriptionPlan of ['friendship', 'friendship-2', 'ra'] as const) {
+    for (const durationMinutes of [60, 90, 120]) {
+      const profile = PRIVILEGE_PROFILES[2];
+      const raw = buildBookingPaymentOptions('game', profile, { subscription: true, pass: false },
+        { subscriptionPlan, boost: true, durationMinutes }, 'quarter', durationMinutes / 60 * 4000);
+      const base = raw.find(option => option.kind === 'subscription')!;
+      const boost = raw.find(option => option.kind === 'boost')!;
+      const options = combineSubscriptionBoost(raw, profile);
+      const combined = options.find(option => option.withSubscription)!;
+      assert.equal(options.filter(option => option.kind === 'subscription' || option.kind === 'boost').length, 1);
+      assert.equal(combined.amount, Math.min(base.amount!, boost.amount!));
+      assert.equal(combined.kind, base.amount! <= boost.amount! ? 'subscription' : 'boost');
+      assert.equal(defaultPaymentOption(options)?.kind, 'residency', 'Residency retains the explicitly requested default');
+      assert.equal(createPreviewOrder(combined)?.method, combined.kind);
+      assert.equal(createPreviewOrder(combined)?.product, null, 'Owned products are never purchased again');
+      assert.equal(raw.some(option => option.withSubscription), false);
+    }
+  }
+});
+
+test('a combined subscription keeps the exact paid copay and uses Boost for expanded event coverage', () => {
+  const profile = PRIVILEGE_PROFILES[2];
+  const raw = buildBookingPaymentOptions('game', profile, { subscription: true, pass: false },
+    { subscriptionPlan: 'friendship-2', boost: true, durationMinutes: 90, dailyQuota: 'used', dailyUsage: 'game-hour' }, 'quarter', 6000);
+  const combined = combineSubscriptionBoost(raw, profile).find(option => option.withSubscription)!;
+  assert.equal(combined.amount, 350);
+  assert.deepEqual(createPreviewOrder(combined), { method: 'boost', bookingAmount: 350, product: null, productAmount: 0, total: 350 });
+  for (const service of ['training', 'tournament'] as const) {
+    const event = buildBookingPaymentOptions(service, profile, { subscription: true, pass: false }, { subscriptionPlan: 'friendship', boost: true });
+    const free = combineSubscriptionBoost(event, profile).find(option => option.withSubscription)!;
+    assert.equal(free.kind, 'boost');
+    assert.equal(free.amount, 0);
+  }
+  const pro = buildBookingPaymentOptions('training', profile, { subscription: true, pass: false }, { subscriptionPlan: 'ra', boost: true, proDirection: true });
+  assert.equal(pro.find(option => option.kind === 'subscription')?.mode, 'unavailable');
+  const freePro = combineSubscriptionBoost(pro, profile).find(option => option.withSubscription)!;
+  assert.equal(freePro.kind, 'boost');
+  assert.equal(freePro.amount, 0);
+});
+
+test('when both products give the same discount, the combined card keeps the subscription method', () => {
+  const profile = PRIVILEGE_PROFILES[3];
+  const raw = buildBookingPaymentOptions('game', profile, { subscription: true, pass: true },
+    { subscriptionPlan: 'ra', boost: true, durationMinutes: 90, dailyQuota: 'used', dailyUsage: 'two-events' }, 'quarter', 6000);
+  const options = combineResidencyBoost(combineSubscriptionBoost(raw, profile), profile);
+  const combined = options.find(option => option.withSubscription)!;
+  assert.equal(combined.kind, 'subscription');
+  assert.equal(combined.amount, 1050);
+  assert.equal(combined.withResidency, undefined);
+  assert.ok(options.some(option => option.kind === 'residency'));
+  const lower: PaymentOption[] = [{ kind: 'subscription', mode: 'book', amount: 0 }, { kind: 'boost', mode: 'book', amount: 350 }];
+  assert.equal(combineSubscriptionBoost(lower, profile).find(option => option.withSubscription)?.amount, 0);
+});
+
+test('combining a subscription never grants ownership, removes an unknown-price fallback or discounts a whole court', () => {
+  const paid: PaymentOption = { kind: 'subscription', mode: 'book', amount: 350 };
+  for (const amount of [null, NaN, Infinity, -1]) {
+    const options: PaymentOption[] = [paid, { kind: 'boost', mode: 'book', amount }];
+    assert.equal(combineSubscriptionBoost(options, PRIVILEGE_PROFILES[2]), options);
+  }
+  for (const mode of ['offer', 'quote', 'unavailable', 'reference'] as const) {
+    const options: PaymentOption[] = [paid, { kind: 'boost', mode, amount: 0 }];
+    assert.equal(combineSubscriptionBoost(options, PRIVILEGE_PROFILES[2]), options);
+  }
+  const unowned: PaymentOption[] = [{ kind: 'subscription', mode: 'offer', amount: 0 }, { kind: 'boost', mode: 'book', amount: 0 }];
+  assert.equal(combineSubscriptionBoost(unowned, PRIVILEGE_PROFILES[1]), unowned);
+  const court = buildBookingPaymentOptions('game', PRIVILEGE_PROFILES[7], { subscription: true, pass: true }, { boost: true }, 'court', 8000);
+  assert.equal(combineSubscriptionBoost(court, PRIVILEGE_PROFILES[7]), court);
+  assert.deepEqual(court, [{ kind: 'full', mode: 'book', amount: 8000 }]);
+});
 
 test('residency-backed Boost is one default final method with the actual duration-dependent quote', () => {
   const profile = PRIVILEGE_PROFILES[1];

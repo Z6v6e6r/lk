@@ -23,6 +23,20 @@ export function combineResidencyBoost(options: PaymentOption[], privileges: Priv
   return options.filter(option => option.kind !== 'boost').map(option => option === residency ? { ...boost, withResidency: true } : option);
 }
 
+// One subscription + Boost card uses the lower known quote. Equal prices keep
+// the subscription method so the same result does not use Boost unnecessarily.
+export function combineSubscriptionBoost(options: PaymentOption[], privileges: Privileges): PaymentOption[] {
+  if (!privileges.subscription) return options;
+  const subscription = options.find(option => option.kind === 'subscription');
+  const boost = options.find(option => option.kind === 'boost' && option.mode === 'book'
+    && option.amount != null && Number.isFinite(option.amount) && option.amount >= 0);
+  if (!subscription || !boost) return options;
+  const useSubscription = subscription.mode === 'book' && subscription.amount != null
+    && Number.isFinite(subscription.amount) && subscription.amount >= 0 && subscription.amount <= boost.amount!;
+  const chosen = useSubscription ? subscription : boost;
+  return options.filter(option => option.kind !== 'boost').map(option => option === subscription ? { ...chosen, withSubscription: true } : option);
+}
+
 // An existing subscription should cover the event without using Boost when
 // both give the exact same known participation price. Purchase offers and
 // visit packs remain distinct methods even if their displayed prices match.

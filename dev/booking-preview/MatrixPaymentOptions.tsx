@@ -3,8 +3,9 @@ import { Modal } from '../../src/components/UI/Modal';
 import { AuthForm } from '../../src/components/auth/AuthForm';
 import { useAuth } from './auth';
 import { buildBookingPaymentOptions, formatRubles, readMatrixSettings, SERVICES, type GamePaymentScope, type PaymentKind, type PaymentOption, type ServiceKind } from './paymentMatrix';
-import { ENERGY_PASS_PRICE, bookingButtonText, combineResidencyBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, withoutRedundantBoost, type PreviewOrder } from './bookingCheckout';
+import { ENERGY_PASS_PRICE, bookingButtonText, combineResidencyBoost, combineSubscriptionBoost, createPreviewOrder, defaultPaymentOption, isSelectableMethod, passBalanceText, readPassRemaining, readResidencyPrice, trainingCount, withPassBalance, withPersonalSubscription, type PreviewOrder } from './bookingCheckout';
 import { recommendedSubscriptionChoice, subscriptionPurchaseChoices, type SubscriptionOffer } from './subscriptionOffers';
+import { SUBSCRIPTION_PLANS } from './privilegeRules';
 import './matrix.css';
 
 function PaymentIcon({ kind }: { kind: PaymentKind }) {
@@ -47,7 +48,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const subscriptionPurchaseOption = purchaseSubscriptionChoice?.option;
   const rawPaymentOptions = withPassBalance(buildBookingPaymentOptions(service, profile, applicability, paymentContext, gamePaymentScope, courtAmount), passRemaining)
     .flatMap(option => option.kind === 'subscription' && !profile.subscription ? subscriptionPurchaseOption ? [subscriptionPurchaseOption] : [] : [option]);
-  const paymentOptions = combineResidencyBoost(withoutRedundantBoost(rawPaymentOptions), profile);
+  const paymentOptions = combineResidencyBoost(combineSubscriptionBoost(rawPaymentOptions, profile), profile);
   const options = isPersonalGame ? withPersonalSubscription(paymentOptions, profile.subscription) : paymentOptions;
   const available = options.filter(isSelectableMethod);
   const defaultChoice = defaultPaymentOption(options);
@@ -66,7 +67,8 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
   const groupId = useId();
   const price = SERVICES[service];
   const full = params.get('state') === 'full';
-  const selectedKind = selected === 'boost' && rawPaymentOptions.some(option => option.kind === 'boost') && !paymentOptions.some(option => option.kind === 'boost') ? 'subscription' : selected;
+  const combinedSubscription = available.find(option => option.withSubscription);
+  const selectedKind = (selected === 'boost' || selected === 'subscription') && combinedSubscription ? combinedSubscription.kind : selected;
   const choice = available.find(option => option.kind === selectedKind) || defaultChoice;
   const locked = disabled || full || busy;
   const displayBaseAmount = options.find(option => option.kind === 'full')?.amount ?? price.price;
@@ -81,6 +83,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
 
   const title = (option: PaymentOption) => {
     if (option.withResidency) return `С Резидентством и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
+    if (option.withSubscription) return `По подписке и РАбуста${option.amount === 0 ? ' — бесплатно' : ''}`;
     if (option.kind === 'boost') return option.amount === 0 ? 'С Бустом — бесплатно' : option.benefit === 'partial-hour' ? `С Бустом · ${option.freeMinutes} минут бесплатно` : `С Бустом · скидка ${price.discount}%`;
     if (isWholeCourt && option.kind === 'full') return 'Полная оплата за 4 игроков';
     if (isPersonalGame && option.kind === 'full') return 'Моя доля · ¼ стоимости';
@@ -104,6 +107,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
     if (option.kind === 'full') return isWholeCourt ? 'Оплата всего корта без применения льгот' : isPersonalGame ? 'Оплачиваете только своё участие, остальные игроки — своё' : 'Разовая запись без привилегий';
     if (option.kind === 'residency') return option.mode === 'offer' ? `Скидка ${price.discount}% при оформлении Резидентства` : `Скидка ${price.discount}%`;
     if (option.withResidency && (option.benefit === 'free-hour' || option.benefit === 'free-event')) return 'Дневной лимит РАбуста доступен';
+    if (option.withSubscription && (option.benefit === 'free-hour' || option.benefit === 'free-event')) return SUBSCRIPTION_PLANS.find(plan => plan.id === paymentContext.subscriptionPlan)?.name || 'Подписка';
     if (option.kind === 'subscription' && option.mode === 'offer' && option.amount === 0) return purchaseSubscription?.name || 'Подписка';
     if (option.kind === 'subscription' || option.kind === 'boost') {
       const prefix = option.mode === 'offer' ? `При оформлении подписки ${purchaseSubscription?.name || 'подходящего тарифа'}. ` : '';
@@ -195,7 +199,7 @@ export function MatrixPaymentOptions({ service, eventKey, disabled = false, excl
       <fieldset className="matrix-options" disabled={busy}>
         <legend className="matrix-sr-only">Способы записи</legend>
         {options.filter(option => option.mode !== 'reference' && option.mode !== 'unavailable').map(option => {
-          const displayKind = option.withResidency ? 'residency' : option.kind;
+          const displayKind = option.withResidency ? 'residency' : option.withSubscription ? 'subscription' : option.kind;
           const showBasePrice = (option.kind === 'residency' || option.kind === 'subscription' || option.kind === 'boost')
             && referenceAmount != null && option.amount != null && option.amount >= 0 && option.amount < referenceAmount;
           const copy = <><span className={`matrix-icon matrix-icon--${displayKind}`}><PaymentIcon kind={displayKind} /></span>

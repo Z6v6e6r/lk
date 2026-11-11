@@ -16,6 +16,7 @@ export type PaymentOption = {
   benefit?: SubscriptionBenefit;
   subscriptionPlan?: SubscriptionPlan;
   withResidency?: boolean;
+  withSubscription?: boolean;
   reason?: 'excluded-group' | 'not-applicable' | 'training-only' | 'unknown-duration' | 'unknown-price' | 'pro-direction' | 'active-limit' | 'daily-limit';
   freeMinutes?: number;
   paidMinutes?: number;
